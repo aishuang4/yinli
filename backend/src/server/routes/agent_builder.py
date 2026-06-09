@@ -57,7 +57,7 @@ class BuilderAgentDraft(BaseModel):
     role: BuilderAgentRole = "worker"
     description: str = ""
     system_prompt: str = Field(default="", alias="systemPrompt")
-    model_config: ModelConfig = Field(default_factory=ModelConfig, alias="modelConfig")
+    model_config_data: ModelConfig = Field(default_factory=ModelConfig, alias="modelConfig")
     mcp_tools: list[str] = Field(default_factory=list, alias="mcpTools")
     skills: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
@@ -138,7 +138,7 @@ async def apply_agent_team(data: BuilderApplyRequest) -> BuilderApplyResponse:
             name=draft.name,
             description=draft.description,
             system_prompt=draft.system_prompt or _default_agent_prompt(draft.name, draft.description),
-            modelConfig=draft.model_config,
+            modelConfig=draft.model_config_data,
             mcpTools=draft.mcp_tools,
             skills=draft.skills,
             tags=draft.tags,

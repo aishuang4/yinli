@@ -21,7 +21,7 @@ import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
 import { AgentCard } from '../features/agents/AgentCard';
 import { AgentEditor } from '../features/agents/AgentEditor';
-import type { AgentCreatePayload, ModelsResponse } from '../types/agent';
+import { DEFAULT_MODEL_CONFIG, type AgentCreatePayload, type ModelsResponse } from '../types/agent';
 import type { Agent } from '../types/agent';
 import type { BuilderMode, BuilderPlan } from '../types/agentBuilder';
 import type { TeamRecord } from '../types/team';
@@ -420,8 +420,8 @@ function AgentBuilderWizard({
   onApplyPlan: () => Promise<void>;
   onResetPlan: () => void;
 }) {
-  const missingToolCount = plan?.agents.reduce((total, agent) => total + agent.missingTools.length, 0) || 0;
-  const missingSkillCount = plan?.agents.reduce((total, agent) => total + agent.missingSkills.length, 0) || 0;
+  const missingToolCount = plan?.agents.reduce((total, agent) => total + (agent.missingTools || []).length, 0) || 0;
+  const missingSkillCount = plan?.agents.reduce((total, agent) => total + (agent.missingSkills || []).length, 0) || 0;
 
   return (
     <div className="grid max-h-[72vh] min-h-[560px] grid-cols-[330px_1fr] overflow-hidden">
@@ -566,8 +566,9 @@ function AgentBuilderWizard({
 }
 
 function BuilderAgentDraftCard({ agent }: { agent: BuilderPlan['agents'][number] }) {
-  const matchedTools = agent.recommendedTools.filter((item) => item.matched);
-  const matchedSkills = agent.recommendedSkills.filter((item) => item.matched);
+  const matchedTools = (agent.recommendedTools || []).filter((item) => item.matched);
+  const matchedSkills = (agent.recommendedSkills || []).filter((item) => item.matched);
+  const modelConfig = agent.modelConfig || DEFAULT_MODEL_CONFIG;
 
   return (
     <div className="rounded-md bg-[var(--color-bg-secondary)] p-4">
@@ -586,7 +587,7 @@ function BuilderAgentDraftCard({ agent }: { agent: BuilderPlan['agents'][number]
           </div>
         </div>
         <Tag size="small" color="transparent">
-          {agent.modelConfig.primary}
+          {modelConfig.primary}
         </Tag>
       </div>
 
@@ -598,12 +599,12 @@ function BuilderAgentDraftCard({ agent }: { agent: BuilderPlan['agents'][number]
         <CapabilityBlock
           title="MCP 工具"
           matched={matchedTools.map((item) => item.name)}
-          missing={agent.missingTools}
+          missing={agent.missingTools || []}
         />
         <CapabilityBlock
           title="Skills"
           matched={matchedSkills.map((item) => item.name)}
-          missing={agent.missingSkills}
+          missing={agent.missingSkills || []}
         />
       </div>
     </div>
