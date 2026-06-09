@@ -361,15 +361,6 @@ export function SkillsPage() {
                         <Button onClick={() => setSelectedSkill(skill)}>
                           详情
                         </Button>
-                        <Button
-                          type="text"
-                          danger
-                          loading={busy}
-                          onClick={() => setDeleteConfirm(skill)}
-                          aria-label="删除 Skill"
-                        >
-                          <Trash2 size={14} />
-                        </Button>
                         {installed ? (
                           <Button
                             danger
@@ -393,6 +384,15 @@ export function SkillsPage() {
                             安装
                           </Button>
                         )}
+                        <Button
+                          type="text"
+                          danger
+                          loading={busy}
+                          onClick={() => setDeleteConfirm(skill)}
+                          aria-label="删除 Skill"
+                        >
+                          <Trash2 size={14} />
+                        </Button>
                       </div>
                     </div>
                   </div>

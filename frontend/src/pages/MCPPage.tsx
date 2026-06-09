@@ -311,15 +311,6 @@ export function MCPPage() {
                         <Button onClick={() => setSelectedServer(server)}>
                           详情
                         </Button>
-                        <Button
-                          type="text"
-                          danger
-                          loading={busy}
-                          onClick={() => setDeleteConfirm(server)}
-                          aria-label="删除 MCP"
-                        >
-                          <Trash2 size={14} />
-                        </Button>
                         {installed ? (
                           <Button
                             danger
@@ -343,6 +334,15 @@ export function MCPPage() {
                             安装
                           </Button>
                         )}
+                        <Button
+                          type="text"
+                          danger
+                          loading={busy}
+                          onClick={() => setDeleteConfirm(server)}
+                          aria-label="删除 MCP"
+                        >
+                          <Trash2 size={14} />
+                        </Button>
                       </div>
                     </div>
                   </div>
