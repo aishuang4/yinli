@@ -548,7 +548,7 @@ function AgentBuilderWizard({
 
             <div className="grid gap-3">
               {plan.agents.map((agent) => (
-                <BuilderAgentDraftCard key={agent.tempId} agent={agent} />
+                <BuilderAgentDraftCard key={agent.tempId} agent={agent} mode={plan.mode} />
               ))}
             </div>
 
@@ -568,7 +568,13 @@ function AgentBuilderWizard({
   );
 }
 
-function BuilderAgentDraftCard({ agent }: { agent: BuilderPlan['agents'][number] }) {
+function BuilderAgentDraftCard({
+  agent,
+  mode,
+}: {
+  agent: BuilderPlan['agents'][number];
+  mode: BuilderMode;
+}) {
   const matchedTools = (agent.recommendedTools || []).filter((item) => item.matched);
   const matchedSkills = (agent.recommendedSkills || []).filter((item) => item.matched);
   const modelConfig = agent.modelConfig || DEFAULT_MODEL_CONFIG;
@@ -578,8 +584,8 @@ function BuilderAgentDraftCard({ agent }: { agent: BuilderPlan['agents'][number]
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <Tag size="small" color={agent.role === 'leader' ? 'blue' : 'mauve'}>
-              {agent.role === 'leader' ? 'Leader' : 'Worker'}
+            <Tag size="small" color={mode === 'agents' ? 'green' : agent.role === 'leader' ? 'blue' : 'mauve'}>
+              {mode === 'agents' ? 'Agent' : agent.role === 'leader' ? 'Leader' : 'Worker'}
             </Tag>
             <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
               {agent.name}

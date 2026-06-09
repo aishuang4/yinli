@@ -200,7 +200,8 @@ async def _generate_plan_with_model(data: BuilderPlanRequest) -> dict:
         f"Requirement:\n{data.requirement}",
         f"Available MCP tools:\n{available_tools or '(none)'}",
         f"Available Skills:\n{available_skills or '(none)'}",
-        "Generate 1 leader and 2-4 workers for team mode. Generate 1-3 standalone agents for agents mode.",
+        "For team mode, generate 1 leader and 2-4 workers.",
+        "For agents mode, generate exactly 1 standalone Agent. Do not create a leader/worker team.",
     ])
     model_name = data.preferred_model or settings.default_model
     agent = get_or_create_agent(
@@ -231,6 +232,8 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
         if not isinstance(item, dict):
             continue
         role = item.get("role")
+        if data.mode == "agents":
+            role = "worker"
         if role not in {"leader", "worker"}:
             role = "leader" if index == 0 and data.mode == "team" else "worker"
 
@@ -265,6 +268,10 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
 
     if not drafts:
         return _normalize_plan(data, _heuristic_plan(data))
+
+    if data.mode == "agents":
+        drafts = [drafts[0].model_copy(update={"role": "worker"})]
+        team_raw = {}
 
     if data.mode == "team" and not any(item.role == "leader" for item in drafts):
         drafts[0].role = "leader"
