@@ -77,9 +77,43 @@ interface StoredChatMessage {
   model_name: string | null;
   error: string | null;
   images: ChatImagePayload[];
-  skillCalls: SkillCallInfo[];
+  skillCalls?: SkillCallInfo[];
+  skill_calls?: SkillCallInfo[];
   teamActivities?: TeamActivityInfo[];
+  team_activities?: StoredTeamActivity[];
   created_at: string;
+}
+
+type StoredTeamActivity = Partial<TeamActivityInfo> & {
+  agent_id?: string;
+  agent_name?: string;
+  tool_calls?: ToolCallInfo[];
+  created_at?: string;
+};
+
+function normalizeStoredTeamActivities(activities: StoredTeamActivity[]): TeamActivityInfo[] {
+  return activities.map((activity) => ({
+    id: String(activity.id || crypto.randomUUID()),
+    agentId: String(activity.agentId || activity.agent_id || ''),
+    agentName: String(activity.agentName || activity.agent_name || 'Agent'),
+    role: String(activity.role || 'worker'),
+    status: (
+      activity.status === 'pending' ||
+      activity.status === 'running' ||
+      activity.status === 'waiting' ||
+      activity.status === 'completed' ||
+      activity.status === 'failed'
+        ? activity.status
+        : 'completed'
+    ),
+    task: String(activity.task || ''),
+    detail: String(activity.detail || ''),
+    output: String(activity.output || ''),
+    thinking: String(activity.thinking || ''),
+    currentEvent: String(activity.currentEvent || ''),
+    toolCalls: activity.toolCalls || activity.tool_calls || [],
+    createdAt: String(activity.createdAt || activity.created_at || ''),
+  }));
 }
 
 /**
@@ -175,14 +209,8 @@ export function ChatPage() {
       modelName: item.model_name || undefined,
       error: item.error || undefined,
       images: item.images,
-      skillCalls: item.skillCalls || [],
-      teamActivities: (item.teamActivities || []).map((activity) => ({
-        ...activity,
-        output: activity.output || '',
-        thinking: activity.thinking || '',
-        currentEvent: activity.currentEvent || '',
-        toolCalls: activity.toolCalls || [],
-      })),
+      skillCalls: item.skillCalls || item.skill_calls || [],
+      teamActivities: normalizeStoredTeamActivities(item.teamActivities || item.team_activities || []),
     })));
   }, []);
 
