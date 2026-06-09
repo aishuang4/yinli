@@ -48,7 +48,27 @@ class Guardrails(BaseModel):
     shell_blacklist: list[str] = Field(default_factory=lambda: ["rm -rf /", "sudo"], description="Shell 命令黑名单")
     network_enabled: bool = Field(default=True, description="是否允许网络访问")
     human_approval: bool = Field(default=False, description="是否启用人工审批")
+    tool_permission_mode: str = Field(
+        default="accept_edits",
+        alias="toolPermissionMode",
+        description="工具权限模式：ask_every_time/accept_edits/bypass",
+    )
     timeout_seconds: int = Field(default=300, gt=0, description="工具调用超时（秒）")
+
+    model_config = {"populate_by_name": True}
+
+
+class PlanConfig(BaseModel):
+    """Agent planning configuration."""
+
+    enabled: bool = Field(default=True, description="是否启用计划模型")
+    mode: str = Field(default="structured", description="计划模式：lightweight/structured/strict")
+    max_steps: int = Field(default=6, ge=1, le=20, alias="maxSteps", description="最大计划步骤数")
+    require_plan_before_tools: bool = Field(default=True, alias="requirePlanBeforeTools", description="调用工具前是否必须先形成计划")
+    require_user_approval: bool = Field(default=False, alias="requireUserApproval", description="执行计划前是否需要用户确认")
+    allow_replanning: bool = Field(default=True, alias="allowReplanning", description="执行中遇到新信息是否允许修订计划")
+
+    model_config = {"populate_by_name": True}
 
 
 class AgentCreate(BaseModel):
@@ -64,6 +84,7 @@ class AgentCreate(BaseModel):
     callable_agents: list[str] = Field(default_factory=list, alias="callableAgents", description="可调用的子 Agent ID 列表")
     max_depth: int = Field(default=2, ge=1, le=5, alias="maxDepth", description="最大调用深度")
     memory_enabled: bool = Field(default=True, alias="memoryEnabled", description="是否在运行时注入 Agent 记忆")
+    plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig", description="计划模型配置")
     guardrails: Guardrails = Field(default_factory=Guardrails, description="安全边界配置")
 
     model_config = {"populate_by_name": True}
@@ -82,6 +103,7 @@ class AgentUpdate(BaseModel):
     callable_agents: Optional[list[str]] = Field(None, alias="callableAgents")
     max_depth: Optional[int] = Field(None, ge=1, le=5, alias="maxDepth")
     memory_enabled: Optional[bool] = Field(None, alias="memoryEnabled")
+    plan_config: Optional[PlanConfig] = Field(None, alias="planConfig")
     guardrails: Optional[Guardrails] = None
 
     model_config = {"populate_by_name": True}
@@ -101,6 +123,7 @@ class AgentResponse(BaseModel):
     callable_agents: list[str] = Field(alias="callableAgents")
     max_depth: int = Field(alias="maxDepth")
     memory_enabled: bool = Field(default=True, alias="memoryEnabled")
+    plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig")
     guardrails: Guardrails
     status: str = "idle"
     created_at: str
@@ -251,6 +274,7 @@ async def create_agent(data: AgentCreate) -> AgentResponse:
         "callableAgents": data.callable_agents,
         "maxDepth": data.max_depth,
         "memoryEnabled": data.memory_enabled,
+        "planConfig": data.plan_config,
         "guardrails": data.guardrails,
         "status": "idle",
         "created_at": now,
@@ -312,6 +336,8 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
         update_dict["maxDepth"] = update_dict.pop("max_depth")
     if "memory_enabled" in update_dict:
         update_dict["memoryEnabled"] = update_dict.pop("memory_enabled")
+    if "plan_config" in update_dict:
+        update_dict["planConfig"] = update_dict.pop("plan_config")
 
     # 合并更新
     existing_dict = existing.model_dump(by_alias=True)

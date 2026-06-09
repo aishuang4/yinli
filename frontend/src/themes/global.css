@@ -42,6 +42,21 @@ body {
   outline-offset: 2px;
 }
 
+.spark-btn svg,
+.spark-btn .lucide,
+.ant-btn svg,
+.ant-btn .lucide,
+button[class*="-btn"] svg.lucide,
+button[class*="-btn"] .lucide {
+  width: 1em;
+  height: 1em;
+  min-width: 1em;
+  min-height: 1em;
+  max-width: 1em;
+  max-height: 1em;
+  flex: 0 0 auto;
+}
+
 /* 滚动条样式 */
 ::-webkit-scrollbar {
   width: 6px;

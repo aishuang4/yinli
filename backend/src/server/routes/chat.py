@@ -20,6 +20,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncGenerator
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -41,14 +42,21 @@ from agentscope.message import (
 )
 from agentscope.permission import PermissionMode
 
-from src.agents.factory import get_or_create_agent
+from src.agents.factory import (
+    AgentGuardrails,
+    AgentModelOptions,
+    McpRuntimeSpec,
+    get_or_create_agent,
+)
 from src.config.settings import settings
+from src.config.runtime_settings import MODEL_PROVIDERS, get_effective_model_settings
 from src.server.routes.agents import get_registered_agent
 from src.server.routes.memory import (
     append_agent_memory_event,
     build_agent_memory_system_prompt,
     maybe_summarize_agent_run,
 )
+from src.server.routes.mcp import resolve_mcp_runtime_servers
 from src.server.routes.skills import (
     build_skill_system_prompt_from_skills,
     list_skill_usage_details,
@@ -277,11 +285,20 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         """
         session_id = data.session_id or uuid.uuid4().hex
         agent_id = data.agent_id or "default"
-        agent_name = data.agent_name or "Assistant"
-        base_system_prompt = data.system_prompt or "You are a helpful AI assistant."
+        agent_config = get_registered_agent(agent_id)
+        agent_name = data.agent_name or (agent_config.name if agent_config else "Assistant")
+        base_system_prompt = (
+            data.system_prompt
+            or (agent_config.system_prompt if agent_config else None)
+            or "You are a helpful AI assistant."
+        )
+        runtime_context_prompt = _build_runtime_context_prompt()
+        plan_system_prompt = _build_agent_plan_prompt(agent_config)
         memory_system_prompt = _build_agent_memory_prompt(agent_id)
+        history_system_prompt = _build_conversation_history_prompt(session_id)
         team_system_prompt = _build_team_system_prompt(data.team_name, data.team_members)
-        used_skills = select_relevant_skills(data.skill_ids, data.message)
+        skill_ids = agent_config.skills if agent_config and not data.skill_ids else data.skill_ids
+        used_skills = select_relevant_skills(skill_ids, data.message)
         skill_system_prompt = build_skill_system_prompt_from_skills(used_skills)
         used_skill_details = list_skill_usage_details(used_skills)
         skill_runs = [
@@ -292,13 +309,29 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
             part
             for part in [
                 base_system_prompt,
+                runtime_context_prompt,
+                plan_system_prompt,
                 memory_system_prompt,
+                history_system_prompt,
                 team_system_prompt,
                 skill_system_prompt,
             ]
             if part
         )
-        model_name = data.model or settings.default_model
+        runtime_model_settings = get_effective_model_settings()
+        model_config_data = agent_config.model_config_data if agent_config else None
+        model_name = (
+            data.model
+            or (model_config_data.primary if model_config_data else None)
+            or runtime_model_settings.default_model
+        )
+        fallback_names = model_config_data.fallback if model_config_data else runtime_model_settings.fallback_models
+        model_options = AgentModelOptions(
+            temperature=model_config_data.temperature if model_config_data else None,
+            max_tokens=model_config_data.max_tokens if model_config_data else None,
+        )
+        guardrails = _build_runtime_guardrails(agent_config)
+        mcp_servers = _build_runtime_mcp_servers(agent_config)
         assistant_text = ""
         assistant_error: str | None = None
         worker_outputs: list[dict[str, str]] = []
@@ -392,8 +425,9 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
             return
 
         # 检查 API Key 是否配置
-        if not settings.dashscope_api_key:
-            assistant_error = "DashScope API Key 未配置。请在 backend/.env 中设置 AGENT_WORKSTATION_DASHSCOPE_API_KEY"
+        provider = MODEL_PROVIDERS.get(runtime_model_settings.provider)
+        if provider and provider.requires_api_key and not runtime_model_settings.api_key:
+            assistant_error = f"{provider.name} API Key 未配置。请在系统设置中配置模型供应商和 API Key。"
             failed_skill_runs = _set_skill_run_status(skill_runs, "failed")
             _append_assistant_message(
                 session_id=session_id,
@@ -448,14 +482,32 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     )
 
             skill_cache_key = ",".join(sorted(skill.id for skill in used_skills))
-            runtime_agent_id = f"{agent_id}:{session_id}:{model_name}:thinking-{data.deep_thinking}:skills-{skill_cache_key}:permission-default"
+            mcp_cache_key = ",".join(
+                f"{server.name}:{','.join(server.enable_tools)}"
+                for server in mcp_servers
+            )
+            guardrail_cache_key = (
+                f"scope-{guardrails.filesystem_scope}:"
+                f"net-{guardrails.network_enabled}:"
+                f"hitl-{guardrails.human_approval}:"
+                f"tool-permission-{guardrails.tool_permission_mode}:"
+                f"timeout-{guardrails.timeout_seconds}"
+            )
+            runtime_agent_id = (
+                f"{agent_id}:{session_id}:{model_name}:thinking-{data.deep_thinking}:"
+                f"skills-{skill_cache_key}:mcp-{mcp_cache_key}:guardrails-{guardrail_cache_key}"
+            )
             agent = get_or_create_agent(
                 agent_id=runtime_agent_id,
                 name=agent_name,
                 system_prompt=system_prompt,
                 model_name=model_name,
+                fallback_names=fallback_names,
                 thinking_enable=data.deep_thinking,
-                permission_mode=PermissionMode.DEFAULT,
+                permission_mode=_permission_mode_for_guardrails(guardrails),
+                model_options=model_options,
+                guardrails=guardrails,
+                mcp_servers=mcp_servers,
             )
         except Exception as e:
             assistant_error = f"Agent 创建失败: {str(e)}"
@@ -1352,6 +1404,73 @@ def _build_user_content(
     return blocks
 
 
+def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
+    guardrails = getattr(agent_config, "guardrails", None)
+    if not guardrails:
+        return AgentGuardrails()
+    return AgentGuardrails(
+        filesystem_scope=getattr(guardrails, "filesystem_scope", "/") or "/",
+        shell_blacklist=list(getattr(guardrails, "shell_blacklist", []) or []),
+        network_enabled=bool(getattr(guardrails, "network_enabled", True)),
+        human_approval=bool(getattr(guardrails, "human_approval", False)),
+        tool_permission_mode=str(getattr(guardrails, "tool_permission_mode", "accept_edits") or "accept_edits"),
+        timeout_seconds=int(getattr(guardrails, "timeout_seconds", 300) or 300),
+    )
+
+
+def _permission_mode_for_guardrails(guardrails: AgentGuardrails) -> PermissionMode:
+    if guardrails.human_approval:
+        return PermissionMode.DEFAULT
+
+    mode = (guardrails.tool_permission_mode or "accept_edits").strip().lower()
+    if mode == "ask_every_time":
+        return PermissionMode.DEFAULT
+    if mode == "bypass":
+        return PermissionMode.BYPASS
+    return PermissionMode.ACCEPT_EDITS
+
+
+def _build_runtime_mcp_servers(agent_config: object | None) -> list[McpRuntimeSpec]:
+    tool_ids = list(getattr(agent_config, "mcp_tools", []) or [])
+    specs: list[McpRuntimeSpec] = []
+    for item in resolve_mcp_runtime_servers(tool_ids):
+        specs.append(McpRuntimeSpec(
+            name=str(item.get("name") or ""),
+            transport=str(item.get("transport") or ""),
+            url=str(item.get("url") or ""),
+            command=str(item.get("command") or ""),
+            headers=dict(item.get("headers") or {}),
+            enable_tools=list(item.get("enable_tools") or []),
+        ))
+    return specs
+
+
+def _build_conversation_history_prompt(session_id: str | None, limit: int = 12) -> str:
+    if not session_id:
+        return ""
+
+    store = _load_store()
+    messages = store.messages.get(session_id, [])
+    if not messages:
+        return ""
+
+    recent = messages[-limit:]
+    lines = [
+        "## Conversation History",
+        "The following are recent messages from this session. Use them for continuity, but prioritize the latest user request.",
+    ]
+    for message in recent:
+        content = " ".join((message.content or "").split())
+        if not content:
+            continue
+        if len(content) > 1200:
+            content = content[:1200] + "..."
+        role = "User" if message.role == "user" else "Assistant"
+        lines.append(f"{role}: {content}")
+
+    return "\n".join(lines) if len(lines) > 2 else ""
+
+
 async def _run_team_workers(
     *,
     data: ChatMessage,
@@ -1392,16 +1511,28 @@ async def _run_team_workers(
         if activity is None:
             return
         worker_config = get_registered_agent(member.agent_id)
+        runtime_model_settings = get_effective_model_settings()
         worker_name = worker_config.name if worker_config else member.name
         worker_prompt = worker_config.system_prompt if worker_config else member.description
         worker_skill_ids = worker_config.skills if worker_config else []
+        worker_plan_prompt = _build_agent_plan_prompt(worker_config)
+        worker_model_config = worker_config.model_config_data if worker_config else None
+        worker_model_options = AgentModelOptions(
+            temperature=worker_model_config.temperature if worker_model_config else None,
+            max_tokens=worker_model_config.max_tokens if worker_model_config else None,
+        )
+        worker_guardrails = _build_runtime_guardrails(worker_config)
+        worker_mcp_servers = _build_runtime_mcp_servers(worker_config)
         worker_skills = select_relevant_skills(worker_skill_ids, data.message)
         worker_skill_prompt = build_skill_system_prompt_from_skills(worker_skills)
         worker_memory_prompt = _build_agent_memory_prompt(member.agent_id)
+        worker_runtime_context_prompt = _build_runtime_context_prompt()
         worker_system_prompt = "\n\n".join(
             part
             for part in [
                 worker_prompt or "You are a helpful worker agent.",
+                worker_runtime_context_prompt,
+                worker_plan_prompt,
                 worker_memory_prompt,
                 _build_worker_system_prompt(data.team_name, data.agent_name, member),
                 worker_skill_prompt,
@@ -1409,17 +1540,26 @@ async def _run_team_workers(
             if part
         )
         worker_cache_key = ",".join(sorted(skill.id for skill in worker_skills))
+        worker_mcp_cache_key = ",".join(
+            f"{server.name}:{','.join(server.enable_tools)}"
+            for server in worker_mcp_servers
+        )
         runtime_worker_id = (
             f"{member.agent_id}:{session_id}:{model_name}:team-worker:"
-            f"thinking-{data.deep_thinking}:skills-{worker_cache_key}:permission-default"
+            f"thinking-{data.deep_thinking}:skills-{worker_cache_key}:mcp-{worker_mcp_cache_key}:"
+            f"hitl-{worker_guardrails.human_approval}:tool-permission-{worker_guardrails.tool_permission_mode}"
         )
         worker_agent = get_or_create_agent(
             agent_id=runtime_worker_id,
             name=worker_name,
             system_prompt=worker_system_prompt,
             model_name=model_name,
+            fallback_names=worker_model_config.fallback if worker_model_config else runtime_model_settings.fallback_models,
             thinking_enable=data.deep_thinking,
-            permission_mode=PermissionMode.DEFAULT,
+            permission_mode=_permission_mode_for_guardrails(worker_guardrails),
+            model_options=worker_model_options,
+            guardrails=worker_guardrails,
+            mcp_servers=worker_mcp_servers,
         )
         worker_text = ""
         worker_thinking = ""
@@ -1618,6 +1758,69 @@ def _build_agent_memory_prompt(agent_id: str | None) -> str:
         return ""
 
     return build_agent_memory_system_prompt(agent_id)
+
+
+def _build_runtime_context_prompt() -> str:
+    """Build concrete runtime context that should be stable for every model call."""
+
+    shanghai_now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    utc_now = datetime.now(timezone.utc)
+    return "\n".join(
+        [
+            "## Runtime Context",
+            f"Current date/time: {shanghai_now.strftime('%Y-%m-%d %H:%M:%S %Z')} (Asia/Shanghai).",
+            f"Current UTC time: {utc_now.strftime('%Y-%m-%d %H:%M:%S UTC')}.",
+            'Treat the Asia/Shanghai date above as "today" unless the user specifies another timezone.',
+            "For current-events or web-search tasks, include the current year/date when useful, prefer recent sources, and verify freshness before answering.",
+        ]
+    )
+
+
+def _build_agent_plan_prompt(agent_config: object | None) -> str:
+    """Build runtime planning instructions from the Agent plan config."""
+
+    plan_config = getattr(agent_config, "plan_config", None)
+    if not plan_config or not getattr(plan_config, "enabled", True):
+        return ""
+
+    mode = str(getattr(plan_config, "mode", "structured") or "structured")
+    max_steps = int(getattr(plan_config, "max_steps", 6) or 6)
+    require_before_tools = bool(getattr(plan_config, "require_plan_before_tools", True))
+    require_user_approval = bool(getattr(plan_config, "require_user_approval", False))
+    allow_replanning = bool(getattr(plan_config, "allow_replanning", True))
+
+    lines = [
+        "## Agent Planning Contract",
+        "You have an explicit planning layer before and during execution.",
+        f"Planning mode: {mode}.",
+        f"Maximum plan steps: {max_steps}.",
+        "Represent plans as concise numbered steps with status markers: pending, active, completed, blocked.",
+        'Do not repeatedly output headings such as "Execution" after each tool call; keep tool-loop narration compact.',
+    ]
+    if require_before_tools:
+        lines.append("Before calling any tool or MCP, first produce a short plan unless the task is trivial and purely conversational.")
+    if require_user_approval:
+        lines.append("After drafting the initial plan, ask the user to approve or adjust it before executing non-read-only actions.")
+    if allow_replanning:
+        lines.append("When tool results materially change the situation, update the plan briefly before continuing.")
+    else:
+        lines.append("Do not change the plan unless the user explicitly asks you to.")
+
+    if mode == "lightweight":
+        lines.append("Use at most 3 plan steps and keep the plan compact.")
+    elif mode == "strict":
+        lines.extend([
+            "For complex tasks, provide one concise initial plan and one final result summary.",
+            "Do not mark a step completed until the required tool result or reasoning evidence is available.",
+            "If a step is blocked, stop and report the blocker instead of silently skipping it.",
+        ])
+    else:
+        lines.extend([
+            "For multi-step work, show the initial plan, then continue with execution.",
+            "Keep planning visible but concise; avoid long meta explanations.",
+        ])
+
+    return "\n".join(lines)
 
 
 def _build_team_system_prompt(

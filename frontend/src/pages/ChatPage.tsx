@@ -13,7 +13,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, BookOpenCheck, Users, CheckCircle2, Clock3 } from 'lucide-react';
+import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, BookOpenCheck, Users, CheckCircle2, Clock3, Copy, Check } from 'lucide-react';
 import { Button, Empty, Select, Spinner, Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { useEventStream, type HitlRequestInfo, type MemorySummaryInfo, type SkillCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
@@ -25,6 +25,8 @@ interface LocalMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /** 消息创建时间 */
+  createdAt?: string;
   /** 工具调用列表（仅 assistant 消息） */
   toolCalls?: ToolCallInfo[];
   /** Skill 应用列表（仅 assistant 消息） */
@@ -223,6 +225,7 @@ export function ChatPage() {
       id: item.id,
       role: item.role,
       content: item.content,
+      createdAt: item.created_at,
       modelName: item.model_name || undefined,
       error: item.error || undefined,
       images: item.images,
@@ -369,6 +372,7 @@ export function ChatPage() {
       id: `user-${Date.now()}`,
       role: 'user',
       content: userText,
+      createdAt: new Date().toISOString(),
       images,
     };
 
@@ -415,6 +419,7 @@ export function ChatPage() {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
         content: state.textContent,
+        createdAt: new Date().toISOString(),
         skillCalls: state.skillCalls.length > 0 ? state.skillCalls : undefined,
         toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
         teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,
@@ -635,6 +640,13 @@ export function ChatPage() {
             </div>
           )}
 
+          {state.hitlRequests.length > 0 && (
+            <HitlDock
+              requests={state.hitlRequests}
+              onResolve={resumeInteraction}
+            />
+          )}
+
           <div className="mx-auto max-w-4xl rounded-xl bg-[var(--color-bg-secondary)] shadow-md transition-shadow focus-within:shadow-lg">
             <input
               ref={imageInputRef}
@@ -757,7 +769,7 @@ export function ChatPage() {
         </div>
 
         <div
-          className="min-w-0 overflow-hidden"
+          className="h-full min-h-0 min-w-0 overflow-hidden"
           style={{
             opacity: selectedTeamActivity ? 1 : 0,
             transform: selectedTeamActivity ? 'translateX(0)' : 'translateX(16px)',
@@ -895,6 +907,10 @@ function MessageBubble({
           </div>
         )}
 
+        {!isUser && message.content && (
+          <MessageToolbar markdown={message.content} createdAt={message.createdAt} />
+        )}
+
         {/* Token 用量 */}
         {message.tokenUsage && (
           <div
@@ -1023,6 +1039,10 @@ function StreamingBubble({
           </div>
         )}
 
+        {textContent && (
+          <MessageToolbar markdown={textContent} createdAt={new Date().toISOString()} />
+        )}
+
         {/* 无内容时显示加载指示器 */}
         {!textContent && toolCalls.length === 0 && skillCalls.length === 0 && teamActivities.length === 0 && memorySummaries.length === 0 && hitlRequests.length === 0 && !thinkingContent && (
           <div
@@ -1040,6 +1060,71 @@ function StreamingBubble({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+}
+
+function formatMessageTime(value?: string): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function MessageToolbar({ markdown, createdAt }: { markdown: string; createdAt?: string }) {
+  const [copied, setCopied] = useState(false);
+  const messageTime = formatMessageTime(createdAt);
+
+  const handleCopyMarkdown = useCallback(async () => {
+    if (!markdown.trim()) return;
+    await copyTextToClipboard(markdown);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  }, [markdown]);
+
+  return (
+    <div className="flex items-center justify-between gap-2 px-1">
+      <Button
+        size="small"
+        type="text"
+        className="h-7 px-2 text-xs text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)]"
+        onClick={handleCopyMarkdown}
+        disabled={!markdown.trim()}
+        aria-label="复制文本"
+      >
+        {copied ? <Check size={13} /> : <Copy size={13} />}
+        <span>{copied ? '已复制' : '复制文本'}</span>
+      </Button>
+      {messageTime && (
+        <time
+          dateTime={createdAt}
+          className="shrink-0 text-xs text-[var(--color-text-tertiary)]"
+        >
+          {messageTime}
+        </time>
+      )}
     </div>
   );
 }
@@ -1200,7 +1285,7 @@ function TeamActivitySidebar({
   const isWaiting = activity.status === 'waiting';
 
   return (
-    <aside className="flex min-h-0 flex-col bg-[var(--color-bg-secondary)] shadow-inner">
+    <aside className="flex h-full min-h-0 flex-col bg-[var(--color-bg-secondary)] shadow-inner">
       <div className="flex items-start gap-3 px-4 py-4">
         <div
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white"
@@ -1384,6 +1469,42 @@ function HitlApprovalBlock({
             批准
           </Button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function HitlDock({
+  requests,
+  onResolve,
+}: {
+  requests: HitlRequestInfo[];
+  onResolve: (interactionId: string, action: 'approve' | 'reject') => Promise<void>;
+}) {
+  if (requests.length === 0) return null;
+
+  return (
+    <div className="mx-auto mb-3 max-w-4xl rounded-xl border border-[var(--color-warning)] bg-[var(--color-bg-primary)] p-3 shadow-lg">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
+          <AlertCircle size={15} color="var(--color-warning)" />
+          <span>需要人工审批</span>
+          <Tag size="small" color="warning">
+            {requests.length}
+          </Tag>
+        </div>
+        <div className="text-xs text-[var(--color-text-tertiary)]">
+          审批完成后 Agent 会继续执行
+        </div>
+      </div>
+      <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
+        {requests.map((request) => (
+          <HitlApprovalBlock
+            key={request.interactionId}
+            request={request}
+            onResolve={onResolve}
+          />
+        ))}
       </div>
     </div>
   );

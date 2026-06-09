@@ -57,11 +57,21 @@ interface AgentApiData {
   callableAgents: string[];
   maxDepth: number;
   memoryEnabled?: boolean;
+  planConfig?: {
+    enabled: boolean;
+    mode: 'lightweight' | 'structured' | 'strict';
+    maxSteps: number;
+    requirePlanBeforeTools: boolean;
+    requireUserApproval: boolean;
+    allowReplanning: boolean;
+  };
   guardrails: {
     filesystem_scope: string;
     shell_blacklist: string[];
     network_enabled: boolean;
     human_approval: boolean;
+    tool_permission_mode?: 'ask_every_time' | 'accept_edits' | 'bypass';
+    toolPermissionMode?: 'ask_every_time' | 'accept_edits' | 'bypass';
     timeout_seconds: number;
   };
   status: string;
@@ -91,11 +101,20 @@ function mapApiAgent(api: AgentApiData): Agent {
     callableAgents: api.callableAgents,
     maxDepth: api.maxDepth,
     memoryEnabled: api.memoryEnabled ?? true,
+    planConfig: {
+      enabled: api.planConfig?.enabled ?? true,
+      mode: api.planConfig?.mode ?? 'structured',
+      maxSteps: api.planConfig?.maxSteps ?? 6,
+      requirePlanBeforeTools: api.planConfig?.requirePlanBeforeTools ?? true,
+      requireUserApproval: api.planConfig?.requireUserApproval ?? false,
+      allowReplanning: api.planConfig?.allowReplanning ?? true,
+    },
     guardrails: {
       filesystemScope: api.guardrails.filesystem_scope,
       shellBlacklist: api.guardrails.shell_blacklist,
       networkEnabled: api.guardrails.network_enabled,
       humanApproval: api.guardrails.human_approval,
+      toolPermissionMode: api.guardrails.tool_permission_mode ?? api.guardrails.toolPermissionMode ?? 'accept_edits',
       timeoutSeconds: api.guardrails.timeout_seconds,
     },
     status: api.status as Agent['status'],
@@ -120,6 +139,16 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
   if ('callableAgents' in data && data.callableAgents !== undefined) result.callableAgents = data.callableAgents;
   if ('maxDepth' in data && data.maxDepth !== undefined) result.maxDepth = data.maxDepth;
   if ('memoryEnabled' in data && data.memoryEnabled !== undefined) result.memoryEnabled = data.memoryEnabled;
+  if ('planConfig' in data && data.planConfig) {
+    result.planConfig = {
+      enabled: data.planConfig.enabled,
+      mode: data.planConfig.mode,
+      maxSteps: data.planConfig.maxSteps,
+      requirePlanBeforeTools: data.planConfig.requirePlanBeforeTools,
+      requireUserApproval: data.planConfig.requireUserApproval,
+      allowReplanning: data.planConfig.allowReplanning,
+    };
+  }
 
   if ('modelConfig' in data && data.modelConfig) {
     result.modelConfig = {
@@ -136,6 +165,7 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
       shell_blacklist: data.guardrails.shellBlacklist,
       network_enabled: data.guardrails.networkEnabled,
       human_approval: data.guardrails.humanApproval,
+      tool_permission_mode: data.guardrails.toolPermissionMode,
       timeout_seconds: data.guardrails.timeoutSeconds,
     };
   }

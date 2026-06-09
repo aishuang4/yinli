@@ -11,7 +11,7 @@
  * - advanced-init-once: 初始化检查只做一次
  */
 
-import { useLayoutEffect } from 'react';
+import { useEffect, useLayoutEffect } from 'react';
 import { ConfigProvider, carbonDarkTheme, carbonTheme } from '@agentscope-ai/design';
 import { useAppStore } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
@@ -39,12 +39,44 @@ const VIEW_PAGES: Record<string, React.ComponentType> = {
  */
 export function App() {
   const currentView = useAppStore((s) => s.currentView);
+  const setBackendConnected = useAppStore((s) => s.setBackendConnected);
   const theme = useSettingsStore((s) => s.theme);
 
   // 同步主题到 DOM（useLayoutEffect 确保在绘制前应用，避免闪烁）
   useLayoutEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const checkBackend = async () => {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 3000);
+      try {
+        const response = await fetch('/api/health', {
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+        if (mounted) {
+          setBackendConnected(response.ok);
+        }
+      } catch {
+        if (mounted) {
+          setBackendConnected(false);
+        }
+      } finally {
+        window.clearTimeout(timeout);
+      }
+    };
+
+    void checkBackend();
+    const interval = window.setInterval(checkBackend, 10000);
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, [setBackendConnected]);
 
   // 根据当前视图获取页面组件
   const PageComponent = VIEW_PAGES[currentView] ?? ChatPage;
