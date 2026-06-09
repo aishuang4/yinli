@@ -17,6 +17,7 @@ interface UseSkillsReturn {
   importSkillArchive: (file: File) => Promise<Skill>;
   installSkill: (id: string) => Promise<Skill>;
   uninstallSkill: (id: string) => Promise<Skill>;
+  deleteSkill: (id: string) => Promise<void>;
   setSkillEnabled: (id: string, enabled: boolean) => Promise<Skill>;
 }
 
@@ -113,6 +114,15 @@ export function useSkills(): UseSkillsReturn {
     return skill;
   }, [updateSkill]);
 
+  const deleteSkill = useCallback(async (id: string) => {
+    const response = await fetch(`/api/skills/${id}`, { method: 'DELETE' });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${response.status}`);
+    }
+    setSkills((prev) => prev.filter((skill) => skill.id !== id));
+  }, []);
+
   const setSkillEnabled = useCallback(async (id: string, enabled: boolean) => {
     const skill = await requestJson<Skill>(`/api/skills/${id}/enable`, {
       method: 'POST',
@@ -137,6 +147,7 @@ export function useSkills(): UseSkillsReturn {
     importSkillArchive,
     installSkill,
     uninstallSkill,
+    deleteSkill,
     setSkillEnabled,
   };
 }

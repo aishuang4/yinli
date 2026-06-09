@@ -618,6 +618,21 @@ async def uninstall_skill(skill_id: str) -> Skill:
     return skill
 
 
+@router.delete("/{skill_id}", status_code=204)
+async def delete_skill(skill_id: str) -> None:
+    """删除用户注册或导入的 Skill。内置 Skill 只能卸载，不能删除。"""
+
+    if skill_id not in _skills:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    if skill_id in _builtin_skills:
+        raise HTTPException(status_code=409, detail="Built-in Skill cannot be deleted")
+
+    skill = _skills.pop(skill_id)
+    if skill.resource_path and os.path.exists(skill.resource_path):
+        shutil.rmtree(skill.resource_path)
+    _save_user_skills()
+
+
 @router.post("/{skill_id}/enable", response_model=Skill)
 async def set_skill_enabled(skill_id: str, data: SkillInstallRequest) -> Skill:
     """启用或停用已安装的 Skill。"""

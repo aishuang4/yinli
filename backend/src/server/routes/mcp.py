@@ -601,6 +601,19 @@ async def uninstall_mcp_server(server_id: str) -> McpServer:
     return server
 
 
+@router.delete("/{server_id}", status_code=204)
+async def delete_mcp_server(server_id: str) -> None:
+    """删除用户注册的 MCP Server。内置 Server 只能卸载，不能删除。"""
+
+    if server_id not in _mcp_servers:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    if server_id in _builtin_mcp_servers:
+        raise HTTPException(status_code=409, detail="Built-in MCP server cannot be deleted")
+
+    _mcp_servers.pop(server_id)
+    _save_user_mcp_servers()
+
+
 @router.post("/{server_id}/enable", response_model=McpServer)
 async def set_mcp_server_enabled(
     server_id: str,

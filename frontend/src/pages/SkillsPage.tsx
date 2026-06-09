@@ -5,7 +5,7 @@
  */
 
 import { useMemo, useRef, useState } from 'react';
-import { CheckCircle2, Package, Plus, RefreshCw, Search, Upload } from 'lucide-react';
+import { CheckCircle2, Package, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react';
 import {
   Button,
   Card,
@@ -60,6 +60,7 @@ export function SkillsPage() {
     importSkillArchive,
     installSkill,
     uninstallSkill,
+    deleteSkill,
     setSkillEnabled,
   } = useSkills();
 
@@ -68,6 +69,7 @@ export function SkillsPage() {
   const [installFilter, setInstallFilter] = useState<InstallFilter>('all');
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<Skill | null>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
   const [registering, setRegistering] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -163,6 +165,18 @@ export function SkillsPage() {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
+    }
+  }
+
+  async function handleDeleteSkill() {
+    if (!deleteConfirm) return;
+    try {
+      setBusyId(deleteConfirm.id);
+      await deleteSkill(deleteConfirm.id);
+      setSelectedSkill((current) => (current?.id === deleteConfirm.id ? null : current));
+      setDeleteConfirm(null);
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -347,6 +361,15 @@ export function SkillsPage() {
                         <Button onClick={() => setSelectedSkill(skill)}>
                           详情
                         </Button>
+                        <Button
+                          type="text"
+                          danger
+                          loading={busy}
+                          onClick={() => setDeleteConfirm(skill)}
+                          aria-label="删除 Skill"
+                        >
+                          <Trash2 size={14} />
+                        </Button>
                         {installed ? (
                           <Button
                             danger
@@ -436,6 +459,19 @@ export function SkillsPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        title="删除 Skill"
+        open={Boolean(deleteConfirm)}
+        onCancel={() => setDeleteConfirm(null)}
+        onOk={handleDeleteSkill}
+        confirmLoading={Boolean(deleteConfirm && busyId === deleteConfirm.id)}
+        okText="删除"
+        cancelText="取消"
+        okButtonProps={{ danger: true }}
+      >
+        确定要删除「{deleteConfirm?.name}」吗？内置 Skill 不能删除，只能卸载或停用。
       </Modal>
 
       <Modal

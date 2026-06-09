@@ -16,6 +16,7 @@ interface UseMcpReturn {
   registerServer: (payload: McpRegisterPayload) => Promise<McpServer>;
   installServer: (id: string) => Promise<McpServer>;
   uninstallServer: (id: string) => Promise<McpServer>;
+  deleteServer: (id: string) => Promise<void>;
   setServerEnabled: (id: string, enabled: boolean) => Promise<McpServer>;
 }
 
@@ -98,6 +99,15 @@ export function useMcp(): UseMcpReturn {
     return server;
   }, [updateServer]);
 
+  const deleteServer = useCallback(async (id: string) => {
+    const response = await fetch(`/api/mcp/${id}`, { method: 'DELETE' });
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${response.status}`);
+    }
+    setServers((prev) => prev.filter((server) => server.id !== id));
+  }, []);
+
   const setServerEnabled = useCallback(async (id: string, enabled: boolean) => {
     const server = await requestJson<McpServer>(`/api/mcp/${id}/enable`, {
       method: 'POST',
@@ -121,6 +131,7 @@ export function useMcp(): UseMcpReturn {
     registerServer,
     installServer,
     uninstallServer,
+    deleteServer,
     setServerEnabled,
   };
 }

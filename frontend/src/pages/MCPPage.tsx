@@ -52,6 +52,7 @@ export function MCPPage() {
     registerServer,
     installServer,
     uninstallServer,
+    deleteServer,
     setServerEnabled,
   } = useMcp();
 
@@ -60,6 +61,7 @@ export function MCPPage() {
   const [installFilter, setInstallFilter] = useState<InstallFilter>('all');
   const [selectedServer, setSelectedServer] = useState<McpServer | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<McpServer | null>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
   const [registering, setRegistering] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
@@ -136,6 +138,18 @@ export function MCPPage() {
       setRegisterError(err instanceof Error ? err.message : '注册 MCP 失败');
     } finally {
       setRegistering(false);
+    }
+  }
+
+  async function handleDeleteServer() {
+    if (!deleteConfirm) return;
+    try {
+      setBusyId(deleteConfirm.id);
+      await deleteServer(deleteConfirm.id);
+      setSelectedServer((current) => (current?.id === deleteConfirm.id ? null : current));
+      setDeleteConfirm(null);
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -297,6 +311,15 @@ export function MCPPage() {
                         <Button onClick={() => setSelectedServer(server)}>
                           详情
                         </Button>
+                        <Button
+                          type="text"
+                          danger
+                          loading={busy}
+                          onClick={() => setDeleteConfirm(server)}
+                          aria-label="删除 MCP"
+                        >
+                          <Trash2 size={14} />
+                        </Button>
                         {installed ? (
                           <Button
                             danger
@@ -394,6 +417,19 @@ export function MCPPage() {
             </section>
           </div>
         )}
+      </Modal>
+
+      <Modal
+        title="删除 MCP Server"
+        open={Boolean(deleteConfirm)}
+        onCancel={() => setDeleteConfirm(null)}
+        onOk={handleDeleteServer}
+        confirmLoading={Boolean(deleteConfirm && busyId === deleteConfirm.id)}
+        okText="删除"
+        cancelText="取消"
+        okButtonProps={{ danger: true }}
+      >
+        确定要删除「{deleteConfirm?.name}」吗？内置 MCP 不能删除，只能卸载或停用。
       </Modal>
 
       <Modal
