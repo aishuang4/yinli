@@ -137,6 +137,54 @@ def get_registered_agent(agent_id: str) -> AgentResponse | None:
     return _agents.get(agent_id)
 
 
+def remove_mcp_tools_from_agents(tool_ids: set[str]) -> int:
+    """Remove deleted MCP tool ids from all persisted Agents."""
+
+    if not tool_ids:
+        return 0
+
+    changed = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for agent_id, agent in list(_agents.items()):
+        next_tools = [tool_id for tool_id in agent.mcp_tools if tool_id not in tool_ids]
+        if len(next_tools) == len(agent.mcp_tools):
+            continue
+
+        updated_agent = agent.model_copy(update={
+            "mcp_tools": next_tools,
+            "updated_at": now,
+        })
+        _agents[agent_id] = updated_agent
+        invalidate_agent(agent_id)
+        upsert_agent(updated_agent.model_dump(by_alias=True))
+        changed += 1
+    return changed
+
+
+def remove_skills_from_agents(skill_ids: set[str]) -> int:
+    """Remove deleted Skill ids from all persisted Agents."""
+
+    if not skill_ids:
+        return 0
+
+    changed = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for agent_id, agent in list(_agents.items()):
+        next_skills = [skill_id for skill_id in agent.skills if skill_id not in skill_ids]
+        if len(next_skills) == len(agent.skills):
+            continue
+
+        updated_agent = agent.model_copy(update={
+            "skills": next_skills,
+            "updated_at": now,
+        })
+        _agents[agent_id] = updated_agent
+        invalidate_agent(agent_id)
+        upsert_agent(updated_agent.model_dump(by_alias=True))
+        changed += 1
+    return changed
+
+
 @router.get("/models")
 async def list_models() -> dict:
     """

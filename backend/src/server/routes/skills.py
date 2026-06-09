@@ -18,6 +18,7 @@ import yaml
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from src.server.routes.agents import remove_skills_from_agents
 from src.storage.database import (
     list_skills as db_list_skills,
     list_json_records,
@@ -628,6 +629,7 @@ async def delete_skill(skill_id: str) -> None:
         raise HTTPException(status_code=409, detail="Built-in Skill cannot be deleted")
 
     skill = _skills.pop(skill_id)
+    remove_skills_from_agents({skill_id})
     if skill.resource_path and os.path.exists(skill.resource_path):
         shutil.rmtree(skill.resource_path)
     _save_user_skills()

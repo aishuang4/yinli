@@ -21,6 +21,7 @@ from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, Field, HttpUrl
 
+from src.server.routes.agents import remove_mcp_tools_from_agents
 from src.storage.database import (
     list_mcp_servers as db_list_mcp_servers,
     list_json_records,
@@ -610,7 +611,8 @@ async def delete_mcp_server(server_id: str) -> None:
     if server_id in _builtin_mcp_servers:
         raise HTTPException(status_code=409, detail="Built-in MCP server cannot be deleted")
 
-    _mcp_servers.pop(server_id)
+    server = _mcp_servers.pop(server_id)
+    remove_mcp_tools_from_agents({tool.id for tool in server.tools})
     _save_user_mcp_servers()
 
 
