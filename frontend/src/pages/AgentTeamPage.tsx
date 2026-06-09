@@ -424,8 +424,11 @@ function AgentBuilderWizard({
   const missingSkillCount = plan?.agents.reduce((total, agent) => total + (agent.missingSkills || []).length, 0) || 0;
 
   return (
-    <div className="grid max-h-[72vh] min-h-[560px] grid-cols-[330px_1fr] overflow-hidden">
-      <div className="flex min-h-0 flex-col border-r border-[var(--color-border)] pr-4">
+    <div
+      className="grid min-h-0 grid-cols-[330px_1fr] overflow-hidden"
+      style={{ height: 'min(72vh, 720px)' }}
+    >
+      <div className="flex min-h-0 flex-col overflow-y-auto border-r border-[var(--color-border)] pr-4">
         <div className="mb-4 flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
           <Sparkles size={15} color="var(--color-accent)" />
           <span>从需求生成可审核草案</span>
@@ -504,7 +507,7 @@ function AgentBuilderWizard({
         </div>
       </div>
 
-      <div className="min-h-0 overflow-y-auto pl-4">
+      <div className="h-full min-h-0 overflow-y-auto pl-4 pr-1">
         {!plan ? (
           <div className="flex h-full items-center justify-center text-[var(--color-text-tertiary)]">
             <div className="text-center">
