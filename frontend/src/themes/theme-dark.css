@@ -1,0 +1,56 @@
+/**
+ * 暗色主题 — 颜色 Token 定义
+ *
+ * 通过 [data-theme="dark"] 选择器激活。
+ * 基于中性黑灰色系，确保暗色背景下的可读性和层次感。
+ */
+
+[data-theme="dark"] {
+  /* === 背景色 === */
+  --color-bg-primary: #171719;
+  --color-bg-secondary: #202023;
+  --color-bg-tertiary: #2b2b2f;
+  --color-bg-hover: #333337;
+  --color-bg-active: #3c3c41;
+  --color-bg-overlay: rgba(0, 0, 0, 0.58);
+
+  /* === 文字色 === */
+  --color-text-primary: #e5e5e7;
+  --color-text-secondary: #a7a7ad;
+  --color-text-tertiary: #7d7d85;
+  --color-text-inverse: #171719;
+  --color-text-link: #7aa7e6;
+
+  /* === 边框色 === */
+  --color-border: #343438;
+  --color-border-strong: #4a4a50;
+  --color-border-focus: #7aa7e6;
+
+  /* === 主题色 (Accent) === */
+  --color-accent: #7aa7e6;
+  --color-accent-hover: #9abdf0;
+  --color-accent-active: #b7d1f5;
+  --color-accent-bg: #253040;
+  --color-accent-text: #a9c8f3;
+
+  /* === 语义色 === */
+  --color-success: #6fcf97;
+  --color-success-bg: #1f3d31;
+  --color-warning: #e6b85c;
+  --color-warning-bg: #4a3820;
+  --color-error: #e68181;
+  --color-error-bg: #4a2528;
+  --color-info: #7aa7e6;
+  --color-info-bg: #253040;
+
+  /* === Agent 类型色 === */
+  --color-agent-leader: #9f8fe0;
+  --color-agent-worker: #66c3d1;
+  --color-agent-specialist: #d69a69;
+
+  /* === 阴影 (暗色模式更深) === */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.16);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.22);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.38);
+}
