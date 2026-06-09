@@ -594,8 +594,8 @@ export function ChatPage() {
             </div>
             {showScrollToBottom && (
               <Button
-                type="primary"
-                className="absolute bottom-4 left-1/2 h-9 w-9 -translate-x-1/2 rounded-full p-0 shadow-md"
+                type="text"
+                className="absolute bottom-4 left-1/2 h-9 w-9 -translate-x-1/2 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-primary)]/70 p-0 text-[var(--color-text-secondary)] shadow-sm backdrop-blur hover:bg-[var(--color-bg-hover)]"
                 onClick={() => scrollToBottom('smooth')}
                 aria-label="滚动到底部"
               >
