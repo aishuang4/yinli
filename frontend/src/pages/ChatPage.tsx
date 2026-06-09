@@ -594,12 +594,12 @@ export function ChatPage() {
             </div>
             {showScrollToBottom && (
               <Button
-                size="small"
                 type="primary"
-                className="absolute bottom-4 right-6 shadow-md"
+                className="absolute bottom-4 left-1/2 h-9 w-9 -translate-x-1/2 rounded-full p-0 shadow-md"
                 onClick={() => scrollToBottom('smooth')}
+                aria-label="滚动到底部"
               >
-                滚动到底部
+                <ChevronDown size={16} />
               </Button>
             )}
           </div>
