@@ -12,7 +12,7 @@
  * @see css-modern-layouts: Sidebar + Main
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { AlertCircle, Bot, CheckCircle2, Plus, Sparkles, Trash2, Users, WandSparkles } from 'lucide-react';
 import { Button, Empty, Input, Modal, Select, Spinner, Tag } from '@agentscope-ai/design';
 import { useAgentMemory } from '../hooks/useAgentMemory';
@@ -222,10 +222,10 @@ export function AgentTeamPage() {
                 key={team.id}
                 type="button"
                 onClick={() => setSelectedTeamId(team.id)}
-                className={`w-full rounded-md px-3 py-2 text-left transition-colors ${
+                className={`w-full rounded-md px-3 py-2 text-left transition-all duration-300 ease-out ${
                   selectedTeamId === team.id
                     ? 'bg-[var(--color-bg-secondary)] ring-1 ring-[var(--color-accent)]'
-                    : 'hover:bg-[var(--color-bg-hover)]'
+                    : 'hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] hover:shadow-sm'
                 }`}
               >
                 <div className="flex items-start gap-2">
@@ -652,7 +652,42 @@ function CapabilityBlock({
 }
 
 function AgentMemoryPanel({ agent }: { agent: Agent }) {
-  const { memory, loading, error } = useAgentMemory(agent.id);
+  const { memory, loading, error, refresh } = useAgentMemory(agent.id);
+  const [mainDraft, setMainDraft] = useState('');
+  const [savingMain, setSavingMain] = useState(false);
+  const [busyCandidateId, setBusyCandidateId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMainDraft(memory?.main_memory || '');
+  }, [memory?.main_memory]);
+
+  const saveMainMemory = async () => {
+    setSavingMain(true);
+    try {
+      const response = await fetch(`/api/agent-memory/${agent.id}/main`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: mainDraft }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await refresh();
+    } finally {
+      setSavingMain(false);
+    }
+  };
+
+  const resolveCandidate = async (candidateId: string, action: 'approve' | 'reject') => {
+    setBusyCandidateId(candidateId);
+    try {
+      const response = await fetch(`/api/agent-memory/${agent.id}/candidates/${candidateId}/${action}`, {
+        method: 'POST',
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await refresh();
+    } finally {
+      setBusyCandidateId(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -668,8 +703,71 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
 
   return (
     <div className="h-full overflow-y-auto p-4">
+      {memory?.main_memory_path && (
+        <div className="mb-4 rounded-md bg-[var(--color-bg-secondary)] p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium text-[var(--color-text-primary)]">主记忆 MEMORY.md</div>
+              <div className="mt-1 break-all text-xs text-[var(--color-text-tertiary)]">
+                {memory.main_memory_path}
+              </div>
+            </div>
+            <Button size="small" type="primary" loading={savingMain} onClick={saveMainMemory}>
+              保存
+            </Button>
+          </div>
+          <Input.TextArea
+            value={mainDraft}
+            onChange={(event) => setMainDraft(event.target.value)}
+            rows={10}
+            className="mt-3"
+            style={{ fontFamily: 'var(--font-mono)' }}
+          />
+        </div>
+      )}
+
       <div className="mb-4">
-        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">长期记忆</h3>
+        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">候选记忆</h3>
+        <div className="mt-2 space-y-2">
+          {memory?.candidates.length ? memory.candidates.map((candidate) => (
+            <div key={candidate.id} className="rounded-md bg-[var(--color-bg-secondary)] p-3">
+              <div className="text-sm font-medium text-[var(--color-text-primary)]">{candidate.title}</div>
+              <div className="mt-1 whitespace-pre-wrap text-xs text-[var(--color-text-secondary)]">
+                {candidate.content}
+              </div>
+              {candidate.tags.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {candidate.tags.map((tag) => (
+                    <Tag key={tag} size="small" color="transparent">{tag}</Tag>
+                  ))}
+                </div>
+              )}
+              <div className="mt-3 flex justify-end gap-2">
+                <Button
+                  size="small"
+                  loading={busyCandidateId === candidate.id}
+                  onClick={() => resolveCandidate(candidate.id, 'reject')}
+                >
+                  忽略
+                </Button>
+                <Button
+                  size="small"
+                  type="primary"
+                  loading={busyCandidateId === candidate.id}
+                  onClick={() => resolveCandidate(candidate.id, 'approve')}
+                >
+                  写入主记忆
+                </Button>
+              </div>
+            </div>
+          )) : (
+            <Empty type="noData" description="暂无候选记忆" />
+          )}
+        </div>
+      </div>
+
+      <div className="mb-4">
+        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">已确认事实</h3>
         <div className="mt-2 space-y-2">
           {memory?.facts.length ? memory.facts.map((fact) => (
             <div key={fact.id} className="rounded-md bg-[var(--color-bg-secondary)] p-3">
@@ -677,13 +775,13 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
               <div className="mt-1 text-xs text-[var(--color-text-secondary)]">{fact.content}</div>
             </div>
           )) : (
-            <Empty type="noData" description="暂无长期记忆" />
+            <Empty type="noData" description="暂无已确认事实" />
           )}
         </div>
       </div>
 
       <div>
-        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">事件记忆</h3>
+        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">运行历史</h3>
         <div className="mt-2 space-y-2">
           {memory?.events.length ? memory.events.map((event) => (
             <div key={event.id} className="rounded-md bg-[var(--color-bg-secondary)] p-3">
@@ -698,7 +796,7 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
               </div>
             </div>
           )) : (
-            <Empty type="noData" description="暂无事件记忆" />
+            <Empty type="noData" description="暂无运行历史" />
           )}
         </div>
       </div>

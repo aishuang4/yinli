@@ -41,9 +41,9 @@
   --radius-full: 9999px;
 
   /* === 动效时长 === */
-  --duration-fast: 100ms;
-  --duration-normal: 200ms;
-  --duration-slow: 300ms;
+  --duration-fast: 160ms;
+  --duration-normal: 320ms;
+  --duration-slow: 460ms;
 
   /* === 缓动曲线 === */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);

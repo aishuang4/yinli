@@ -132,6 +132,7 @@ export function ChatPage() {
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const [selectedTeamActivityId, setSelectedTeamActivityId] = useState<string | null>(null);
+  const [renderedTeamActivity, setRenderedTeamActivity] = useState<TeamActivityInfo | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -188,6 +189,19 @@ export function ChatPage() {
   const selectedTeamActivity = useMemo(() => (
     visibleTeamActivities.find((activity) => activity.id === selectedTeamActivityId) || null
   ), [selectedTeamActivityId, visibleTeamActivities]);
+
+  useEffect(() => {
+    if (selectedTeamActivity) {
+      setRenderedTeamActivity(selectedTeamActivity);
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setRenderedTeamActivity(null);
+    }, 360);
+
+    return () => window.clearTimeout(timer);
+  }, [selectedTeamActivity]);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -458,10 +472,10 @@ export function ChatPage() {
                   key={session.id}
                   type="button"
                   onClick={() => handleSelectSession(session)}
-                  className={`group w-full rounded-lg px-3 py-2 text-left shadow-sm transition-colors ${
+                  className={`group w-full rounded-lg px-3 py-2 text-left shadow-sm transition-all duration-300 ease-out ${
                     activeSessionId === session.id
                       ? 'bg-[var(--color-bg-secondary)] ring-1 ring-[var(--color-accent)]'
-                      : 'bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-hover)]'
+                      : 'bg-[var(--color-bg-secondary)] hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)]'
                   }`}
                 >
                   <div className="flex items-start gap-2">
@@ -477,7 +491,7 @@ export function ChatPage() {
                     <span
                       role="button"
                       tabIndex={0}
-                      className="rounded p-1 text-[var(--color-text-tertiary)] opacity-0 hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-error)] group-hover:opacity-100"
+                      className="rounded p-1 text-[var(--color-text-tertiary)] opacity-0 transition-all duration-300 ease-out hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-error)] group-hover:opacity-100"
                       onClick={(event) => {
                         event.stopPropagation();
                         handleDeleteSession(session.id);
@@ -502,9 +516,13 @@ export function ChatPage() {
       </aside>
 
       <section
-        className={`grid min-h-0 overflow-hidden rounded-xl bg-[var(--color-bg-primary)] shadow-sm ${
-          selectedTeamActivity ? 'grid-cols-[minmax(0,1fr)_360px]' : 'grid-cols-[minmax(0,1fr)]'
-        }`}
+        className="grid min-h-0 overflow-hidden rounded-xl bg-[var(--color-bg-primary)] shadow-sm"
+        style={{
+          gridTemplateColumns: selectedTeamActivity
+            ? 'minmax(0, 1fr) 360px'
+            : 'minmax(0, 1fr) 0px',
+          transition: 'grid-template-columns 360ms var(--ease-out)',
+        }}
       >
         <div className="grid min-h-0 grid-rows-[auto_1fr_auto] overflow-hidden">
           <header className="flex items-center gap-4 px-5 py-4">
@@ -547,61 +565,66 @@ export function ChatPage() {
           <div className="relative min-h-0 overflow-hidden">
             <div
               ref={messagesContainerRef}
-              className="flex h-full min-h-0 flex-col gap-4 overflow-auto px-5 py-4"
+              className="h-full min-h-0 overflow-auto px-5 py-4"
               onScroll={handleMessagesScroll}
               role="log"
               aria-live="polite"
               aria-label="对话消息"
             >
-              {messages.length === 0 && !state.isStreaming ? (
-                <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-[var(--color-text-tertiary)]">
-                  <Bot size={48} strokeWidth={1} color="var(--color-text-tertiary)" />
-                  <div className="text-lg font-medium">开始对话</div>
-                  <div className="max-w-[420px] text-sm">
-                    先选择一个主 Agent，再输入消息开始协作。系统会保存会话历史，方便后续继续查看。
+              <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4">
+                {messages.length === 0 && !state.isStreaming ? (
+                  <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-[var(--color-text-tertiary)]">
+                    <Bot size={48} strokeWidth={1} color="var(--color-text-tertiary)" />
+                    <div className="text-lg font-medium">开始对话</div>
+                    <div className="max-w-[420px] text-sm">
+                      先选择一个主 Agent，再输入消息开始协作。系统会保存会话历史，方便后续继续查看。
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <>
-                  {messages.map((msg) => (
-                    <MessageBubble
-                      key={msg.id}
-                      message={msg}
-                      selectedTeamActivityId={selectedTeamActivityId}
-                      onSelectTeamActivity={setSelectedTeamActivityId}
-                    />
-                  ))}
+                ) : (
+                  <>
+                    {messages.map((msg) => (
+                      <MessageBubble
+                        key={msg.id}
+                        message={msg}
+                        selectedTeamActivityId={selectedTeamActivityId}
+                        onSelectTeamActivity={setSelectedTeamActivityId}
+                      />
+                    ))}
 
-                  {(state.isStreaming || state.hitlRequests.length > 0) && (
-                    <StreamingBubble
-                      textContent={state.textContent}
-                      thinkingContent={state.thinkingContent}
-                      skillCalls={state.skillCalls}
-                      teamActivities={state.teamActivities}
-                      memorySummaries={state.memorySummaries}
-                      hitlRequests={state.hitlRequests}
-                      onResolveHitl={resumeInteraction}
-                      selectedTeamActivityId={selectedTeamActivityId}
-                      onSelectTeamActivity={setSelectedTeamActivityId}
-                      toolCalls={state.toolCalls}
-                      modelName={state.modelName}
-                    />
-                  )}
+                    {(state.isStreaming || state.hitlRequests.length > 0) && (
+                      <StreamingBubble
+                        textContent={state.textContent}
+                        thinkingContent={state.thinkingContent}
+                        skillCalls={state.skillCalls}
+                        teamActivities={state.teamActivities}
+                        memorySummaries={state.memorySummaries}
+                        hitlRequests={state.hitlRequests}
+                        onResolveHitl={resumeInteraction}
+                        selectedTeamActivityId={selectedTeamActivityId}
+                        onSelectTeamActivity={setSelectedTeamActivityId}
+                        toolCalls={state.toolCalls}
+                        modelName={state.modelName}
+                      />
+                    )}
 
-                  <div ref={messagesEndRef} />
-                </>
-              )}
+                    <div ref={messagesEndRef} />
+                  </>
+                )}
+              </div>
             </div>
-            {showScrollToBottom && (
-              <Button
-                type="text"
-                className="absolute bottom-4 left-1/2 h-9 w-9 -translate-x-1/2 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-primary)]/70 p-0 text-[var(--color-text-secondary)] shadow-sm backdrop-blur hover:bg-[var(--color-bg-hover)]"
-                onClick={() => scrollToBottom('smooth')}
-                aria-label="滚动到底部"
-              >
-                <ChevronDown size={16} />
-              </Button>
-            )}
+            <Button
+              type="text"
+              className={`absolute bottom-4 left-1/2 h-9 w-9 -translate-x-1/2 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-primary)]/70 p-0 text-[var(--color-text-secondary)] shadow-sm backdrop-blur transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] ${
+                showScrollToBottom
+                  ? 'pointer-events-auto opacity-100'
+                  : 'pointer-events-none translate-y-2 opacity-0'
+              }`}
+              onClick={() => scrollToBottom('smooth')}
+              aria-label="滚动到底部"
+              aria-hidden={!showScrollToBottom}
+            >
+              <ChevronDown size={16} />
+            </Button>
           </div>
 
           <div className="px-5 pb-5 pt-2">
@@ -733,12 +756,23 @@ export function ChatPage() {
           </div>
         </div>
 
-        {selectedTeamActivity && (
-          <TeamActivitySidebar
-            activity={selectedTeamActivity}
-            onClose={() => setSelectedTeamActivityId(null)}
-          />
-        )}
+        <div
+          className="min-w-0 overflow-hidden"
+          style={{
+            opacity: selectedTeamActivity ? 1 : 0,
+            transform: selectedTeamActivity ? 'translateX(0)' : 'translateX(16px)',
+            transition: 'opacity 280ms var(--ease-out), transform 360ms var(--ease-out)',
+            pointerEvents: selectedTeamActivity ? 'auto' : 'none',
+          }}
+          aria-hidden={!selectedTeamActivity}
+        >
+          {renderedTeamActivity && (
+            <TeamActivitySidebar
+              activity={renderedTeamActivity}
+              onClose={() => setSelectedTeamActivityId(null)}
+            />
+          )}
+        </div>
       </section>
     </div>
   );
@@ -763,35 +797,19 @@ function MessageBubble({
       style={{
         display: 'flex',
         flexDirection: isUser ? 'row-reverse' : 'row',
-        gap: '10px',
         alignItems: 'flex-start',
       }}
     >
-      {/* 头像 */}
+      {/* 消息内容 */}
       <div
         style={{
-          width: '28px',
-          height: '28px',
-          borderRadius: 'var(--radius-full)',
-          backgroundColor: isUser
-            ? 'var(--color-accent)'
-            : 'var(--color-agent-worker)',
+          width: isUser ? 'auto' : '100%',
+          maxWidth: isUser ? '75%' : '100%',
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'white',
-          flexShrink: 0,
+          flexDirection: 'column',
+          gap: '6px',
         }}
       >
-        {isUser ? (
-          <span style={{ fontSize: '12px', fontWeight: 600 }}>U</span>
-        ) : (
-          <Bot size={14} strokeWidth={2} />
-        )}
-      </div>
-
-      {/* 消息内容 */}
-      <div style={{ maxWidth: '75%', display: 'flex', flexDirection: 'column', gap: '6px' }}>
         {/* 错误提示 */}
         {message.error && (
           <div
@@ -932,31 +950,14 @@ function StreamingBubble({
     <div
       style={{
         display: 'flex',
-        gap: '10px',
         alignItems: 'flex-start',
       }}
     >
-      {/* Agent 头像 */}
-      <div
-        style={{
-          width: '28px',
-          height: '28px',
-          borderRadius: 'var(--radius-full)',
-          backgroundColor: 'var(--color-agent-worker)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'white',
-          flexShrink: 0,
-        }}
-      >
-        <Bot size={14} strokeWidth={2} />
-      </div>
-
       {/* 内容区域 */}
       <div
         style={{
-          maxWidth: '75%',
+          width: '100%',
+          maxWidth: '100%',
           display: 'flex',
           flexDirection: 'column',
           gap: '6px',
@@ -1118,8 +1119,8 @@ function TeamActivityCard({
     <button
       type="button"
       onClick={onSelect}
-      className={`min-h-[132px] rounded-md bg-[var(--color-bg-primary)] p-3 text-left transition ${
-        selected ? 'ring-1 ring-[var(--color-accent)]' : 'hover:bg-[var(--color-bg-hover)]'
+      className={`min-h-[132px] rounded-md bg-[var(--color-bg-primary)] p-3 text-left transition-all duration-300 ease-out ${
+        selected ? 'ring-1 ring-[var(--color-accent)]' : 'hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)]'
       }`}
     >
       <div className="mb-2 flex w-full items-center gap-2 text-left">
@@ -1288,7 +1289,7 @@ function MemorySummaryBlock({ summaries }: { summaries: MemorySummaryInfo[] }) {
       <div className="flex items-center justify-between gap-3 px-3 py-2">
         <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
           <BookOpenCheck size={14} color="var(--color-success)" />
-          <span>自动记忆总结</span>
+          <span>候选记忆生成</span>
         </div>
         <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
           {factCount} 条

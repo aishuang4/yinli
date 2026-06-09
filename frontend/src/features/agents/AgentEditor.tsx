@@ -22,9 +22,9 @@ import {
   Modal,
   Select,
   Slider,
-  Switch,
   Tag,
 } from '@agentscope-ai/design';
+import { ToggleButton } from '../../components/ToggleButton';
 import type {
   Agent,
   AgentCreatePayload,
@@ -98,6 +98,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
         tags: [...agent.tags],
         callableAgents: [...agent.callableAgents],
         maxDepth: agent.maxDepth,
+        memoryEnabled: agent.memoryEnabled,
         guardrails: { ...agent.guardrails },
       });
     } else {
@@ -263,6 +264,26 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
             </div>
           </div>
           <div className="space-y-4">
+            <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 transition-all duration-300 ease-out">
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-[var(--color-text-primary)]">
+                    注入 Agent 记忆
+                  </div>
+                  <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                    开启后，每次运行都会把该 Agent 的主记忆文件作为长期上下文注入。
+                  </div>
+                </div>
+                <ToggleButton
+                  checked={form.memoryEnabled}
+                  checkedLabel="开启"
+                  uncheckedLabel="关闭"
+                  ariaLabel="注入 Agent 记忆"
+                  onChange={(checked) => setForm({ ...form, memoryEnabled: checked })}
+                />
+              </div>
+            </div>
+
             {/* 默认工具（锁定） */}
             <div>
               <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
@@ -501,7 +522,9 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
           </div>
           <div className="space-y-3">
             {/* 网络访问 */}
-            <Switch
+            <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
+              <div className="text-sm text-[var(--color-text-primary)]">允许网络访问</div>
+              <ToggleButton
                 checked={form.guardrails.networkEnabled}
                 onChange={(checked) =>
                   setForm({
@@ -509,11 +532,16 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                     guardrails: { ...form.guardrails, networkEnabled: checked },
                   })
                 }
-              label="允许网络访问"
-            />
+                checkedLabel="开启"
+                uncheckedLabel="关闭"
+                ariaLabel="允许网络访问"
+              />
+            </div>
 
             {/* 人工审批 */}
-            <Switch
+            <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
+              <div className="text-sm text-[var(--color-text-primary)]">启用人工审批</div>
+              <ToggleButton
                 checked={form.guardrails.humanApproval}
                 onChange={(checked) =>
                   setForm({
@@ -521,8 +549,11 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                     guardrails: { ...form.guardrails, humanApproval: checked },
                   })
                 }
-              label="启用人工审批"
-            />
+                checkedLabel="开启"
+                uncheckedLabel="关闭"
+                ariaLabel="启用人工审批"
+              />
+            </div>
 
             {/* 超时 */}
             <div>

@@ -31,8 +31,8 @@ export function AgentCard({ agent, selected, onSelect, onDelete }: AgentCardProp
       onClick={onSelect}
       className={cn(
         'group relative',
-        'p-4 rounded-lg border cursor-pointer transition-all',
-        'hover:bg-[var(--color-bg-hover)]',
+        'p-4 rounded-lg border cursor-pointer transition-all duration-300 ease-out',
+        'hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] hover:shadow-md',
         selected
           ? 'border-[var(--color-accent)] bg-[var(--color-accent-bg)]'
           : 'border-[var(--color-border)] bg-[var(--color-bg-primary)]'
@@ -68,7 +68,7 @@ export function AgentCard({ agent, selected, onSelect, onDelete }: AgentCardProp
             onDelete();
           }}
           className={cn(
-            'p-1.5 rounded-md transition-opacity',
+            'p-1.5 rounded-md transition-all duration-300 ease-out',
             'hover:bg-[var(--color-error-bg)] hover:text-[var(--color-error)]',
             'opacity-0 group-hover:opacity-100'
           )}

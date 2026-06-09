@@ -14,9 +14,9 @@ import {
   Modal,
   Select,
   Spinner,
-  Switch,
   Tag,
 } from '@agentscope-ai/design';
+import { ToggleButton } from '../components/ToggleButton';
 import { useSkills } from '../hooks/useSkills';
 import type { Skill } from '../types/skill';
 
@@ -288,7 +288,7 @@ export function SkillsPage() {
               return (
                 <Card
                   key={skill.id}
-                  className="h-[400px] overflow-hidden"
+                  className="h-[400px] overflow-hidden transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg"
                   bodyStyle={{ height: '100%', padding: 0 }}
                 >
                   <div className="grid h-full grid-rows-[minmax(0,62px)_minmax(0,58px)_minmax(0,32px)_minmax(0,66px)_minmax(0,34px)_minmax(0,1fr)_minmax(0,62px)] overflow-hidden">
@@ -342,10 +342,12 @@ export function SkillsPage() {
 
                     <div className="flex min-h-0 items-center justify-between gap-3 self-end px-4 py-3">
                       {installed ? (
-                        <Switch
+                        <ToggleButton
                           checked={skill.enabled}
-                          label={skill.enabled ? '启用中' : '已停用'}
+                          checkedLabel="启用中"
+                          uncheckedLabel="已停用"
                           disabled={busy}
+                          ariaLabel={`${skill.name} 启停状态`}
                           onChange={(enabled) => runSkillAction(
                             skill.id,
                             () => setSkillEnabled(skill.id, enabled),

@@ -78,6 +78,7 @@ def ensure_db() -> None:
                     tags TEXT NOT NULL,
                     callable_agents TEXT NOT NULL,
                     max_depth INTEGER NOT NULL,
+                    memory_enabled INTEGER NOT NULL DEFAULT 1,
                     guardrails TEXT NOT NULL,
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
@@ -181,7 +182,26 @@ def ensure_db() -> None:
                     metadata TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS memory_candidates (
+                    id TEXT PRIMARY KEY,
+                    agent_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    tags TEXT NOT NULL,
+                    source_session_id TEXT,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
             """)
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(agents)").fetchall()
+            }
+            if "memory_enabled" not in columns:
+                conn.execute(
+                    "ALTER TABLE agents ADD COLUMN memory_enabled INTEGER NOT NULL DEFAULT 1"
+                )
             conn.commit()
         _initialized = True
 
@@ -342,6 +362,7 @@ def list_agents() -> list[dict[str, Any]]:
             "tags": _loads(row["tags"], []),
             "callableAgents": _loads(row["callable_agents"], []),
             "maxDepth": row["max_depth"],
+            "memoryEnabled": bool(row["memory_enabled"]),
             "guardrails": _loads(row["guardrails"], {}),
             "status": row["status"],
             "created_at": row["created_at"],
@@ -356,13 +377,14 @@ def upsert_agent(data: dict[str, Any]) -> None:
     with _lock, _connect() as conn:
         conn.execute(
             """
-            INSERT INTO agents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO agents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name, avatar=excluded.avatar,
                 description=excluded.description, system_prompt=excluded.system_prompt,
                 model_config=excluded.model_config, mcp_tools=excluded.mcp_tools,
                 skills=excluded.skills, tags=excluded.tags,
                 callable_agents=excluded.callable_agents, max_depth=excluded.max_depth,
+                memory_enabled=excluded.memory_enabled,
                 guardrails=excluded.guardrails, status=excluded.status,
                 updated_at=excluded.updated_at
             """,
@@ -372,6 +394,7 @@ def upsert_agent(data: dict[str, Any]) -> None:
                 _dumps(data.get("modelConfig", {})), _dumps(data.get("mcpTools", [])),
                 _dumps(data.get("skills", [])), _dumps(data.get("tags", [])),
                 _dumps(data.get("callableAgents", [])), data.get("maxDepth", 2),
+                1 if data.get("memoryEnabled", True) else 0,
                 _dumps(data.get("guardrails", {})), data.get("status", "idle"),
                 data.get("created_at") or _utc_now(), data.get("updated_at") or _utc_now(),
             ),
@@ -732,11 +755,92 @@ def save_agent_memory(data: dict[str, Any]) -> None:
         conn.commit()
 
 
+def list_memory_candidates(agent_id: str, status: str | None = None) -> list[dict[str, Any]]:
+    ensure_db()
+    query = "SELECT * FROM memory_candidates WHERE agent_id = ?"
+    params: list[Any] = [agent_id]
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY created_at DESC"
+    with _lock, _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "agent_id": row["agent_id"],
+            "title": row["title"],
+            "content": row["content"],
+            "tags": _loads(row["tags"], []),
+            "source_session_id": row["source_session_id"],
+            "status": row["status"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
+def upsert_memory_candidate(data: dict[str, Any]) -> None:
+    ensure_db()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO memory_candidates VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                title=excluded.title, content=excluded.content,
+                tags=excluded.tags, source_session_id=excluded.source_session_id,
+                status=excluded.status, updated_at=excluded.updated_at
+            """,
+            (
+                data["id"], data["agent_id"], data["title"], data["content"],
+                _dumps(data.get("tags", [])), data.get("source_session_id"),
+                data.get("status", "pending"),
+                data.get("created_at") or _utc_now(),
+                data.get("updated_at") or _utc_now(),
+            ),
+        )
+        conn.commit()
+
+
+def update_memory_candidate_status(agent_id: str, candidate_id: str, status: str) -> dict[str, Any] | None:
+    ensure_db()
+    now = _utc_now()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE memory_candidates
+            SET status = ?, updated_at = ?
+            WHERE agent_id = ? AND id = ?
+            """,
+            (status, now, agent_id, candidate_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM memory_candidates WHERE agent_id = ? AND id = ?",
+            (agent_id, candidate_id),
+        ).fetchone()
+        conn.commit()
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "agent_id": row["agent_id"],
+        "title": row["title"],
+        "content": row["content"],
+        "tags": _loads(row["tags"], []),
+        "source_session_id": row["source_session_id"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
 def normalized_table_counts() -> dict[str, int]:
     ensure_db()
     tables = [
         "agents", "teams", "team_members", "mcp_servers", "skills",
         "chat_sessions", "chat_messages", "memory_facts", "memory_events",
+        "memory_candidates",
     ]
     with _lock, _connect() as conn:
         return {

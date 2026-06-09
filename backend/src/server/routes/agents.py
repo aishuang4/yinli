@@ -63,6 +63,7 @@ class AgentCreate(BaseModel):
     tags: list[str] = Field(default_factory=list, description="标签")
     callable_agents: list[str] = Field(default_factory=list, alias="callableAgents", description="可调用的子 Agent ID 列表")
     max_depth: int = Field(default=2, ge=1, le=5, alias="maxDepth", description="最大调用深度")
+    memory_enabled: bool = Field(default=True, alias="memoryEnabled", description="是否在运行时注入 Agent 记忆")
     guardrails: Guardrails = Field(default_factory=Guardrails, description="安全边界配置")
 
     model_config = {"populate_by_name": True}
@@ -80,6 +81,7 @@ class AgentUpdate(BaseModel):
     tags: Optional[list[str]] = None
     callable_agents: Optional[list[str]] = Field(None, alias="callableAgents")
     max_depth: Optional[int] = Field(None, ge=1, le=5, alias="maxDepth")
+    memory_enabled: Optional[bool] = Field(None, alias="memoryEnabled")
     guardrails: Optional[Guardrails] = None
 
     model_config = {"populate_by_name": True}
@@ -98,6 +100,7 @@ class AgentResponse(BaseModel):
     tags: list[str]
     callable_agents: list[str] = Field(alias="callableAgents")
     max_depth: int = Field(alias="maxDepth")
+    memory_enabled: bool = Field(default=True, alias="memoryEnabled")
     guardrails: Guardrails
     status: str = "idle"
     created_at: str
@@ -247,6 +250,7 @@ async def create_agent(data: AgentCreate) -> AgentResponse:
         "tags": data.tags,
         "callableAgents": data.callable_agents,
         "maxDepth": data.max_depth,
+        "memoryEnabled": data.memory_enabled,
         "guardrails": data.guardrails,
         "status": "idle",
         "created_at": now,
@@ -306,6 +310,8 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
         update_dict["callableAgents"] = update_dict.pop("callable_agents")
     if "max_depth" in update_dict:
         update_dict["maxDepth"] = update_dict.pop("max_depth")
+    if "memory_enabled" in update_dict:
+        update_dict["memoryEnabled"] = update_dict.pop("memory_enabled")
 
     # 合并更新
     existing_dict = existing.model_dump(by_alias=True)

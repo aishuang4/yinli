@@ -58,6 +58,8 @@ export interface Agent {
   callableAgents: string[];
   /** 最大调用深度 */
   maxDepth: number;
+  /** 是否在运行时注入 Agent 自己的长期记忆 */
+  memoryEnabled: boolean;
   /** 安全边界 */
   guardrails: Guardrails;
   /** 当前运行状态 */
@@ -117,6 +119,7 @@ export function createEmptyAgentForm(): AgentCreatePayload {
     tags: [],
     callableAgents: [],
     maxDepth: 2,
+    memoryEnabled: true,
     guardrails: { ...DEFAULT_GUARDRAILS },
   };
 }

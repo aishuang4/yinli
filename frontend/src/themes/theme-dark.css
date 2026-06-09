@@ -2,55 +2,55 @@
  * 暗色主题 — 颜色 Token 定义
  *
  * 通过 [data-theme="dark"] 选择器激活。
- * 基于 Slate 色系，确保暗色背景下的可读性和层次感。
+ * 基于中性黑灰色系，确保暗色背景下的可读性和层次感。
  */
 
 [data-theme="dark"] {
   /* === 背景色 === */
-  --color-bg-primary: #0f172a;
-  --color-bg-secondary: #1e293b;
-  --color-bg-tertiary: #334155;
-  --color-bg-hover: #334155;
-  --color-bg-active: #475569;
-  --color-bg-overlay: rgba(0, 0, 0, 0.6);
+  --color-bg-primary: #171719;
+  --color-bg-secondary: #202023;
+  --color-bg-tertiary: #2b2b2f;
+  --color-bg-hover: #333337;
+  --color-bg-active: #3c3c41;
+  --color-bg-overlay: rgba(0, 0, 0, 0.58);
 
   /* === 文字色 === */
-  --color-text-primary: #f1f5f9;
-  --color-text-secondary: #94a3b8;
-  --color-text-tertiary: #64748b;
-  --color-text-inverse: #0f172a;
-  --color-text-link: #60a5fa;
+  --color-text-primary: #e5e5e7;
+  --color-text-secondary: #a7a7ad;
+  --color-text-tertiary: #7d7d85;
+  --color-text-inverse: #171719;
+  --color-text-link: #7aa7e6;
 
   /* === 边框色 === */
-  --color-border: #334155;
-  --color-border-strong: #475569;
-  --color-border-focus: #60a5fa;
+  --color-border: #343438;
+  --color-border-strong: #4a4a50;
+  --color-border-focus: #7aa7e6;
 
   /* === 主题色 (Accent) === */
-  --color-accent: #60a5fa;
-  --color-accent-hover: #93c5fd;
-  --color-accent-active: #bfdbfe;
-  --color-accent-bg: #1e3a5f;
-  --color-accent-text: #93c5fd;
+  --color-accent: #7aa7e6;
+  --color-accent-hover: #9abdf0;
+  --color-accent-active: #b7d1f5;
+  --color-accent-bg: #253040;
+  --color-accent-text: #a9c8f3;
 
   /* === 语义色 === */
-  --color-success: #34d399;
-  --color-success-bg: #064e3b;
-  --color-warning: #fbbf24;
-  --color-warning-bg: #78350f;
-  --color-error: #f87171;
-  --color-error-bg: #7f1d1d;
-  --color-info: #60a5fa;
-  --color-info-bg: #1e3a5f;
+  --color-success: #6fcf97;
+  --color-success-bg: #1f3d31;
+  --color-warning: #e6b85c;
+  --color-warning-bg: #4a3820;
+  --color-error: #e68181;
+  --color-error-bg: #4a2528;
+  --color-info: #7aa7e6;
+  --color-info-bg: #253040;
 
   /* === Agent 类型色 === */
-  --color-agent-leader: #a78bfa;
-  --color-agent-worker: #22d3ee;
-  --color-agent-specialist: #fb923c;
+  --color-agent-leader: #9f8fe0;
+  --color-agent-worker: #66c3d1;
+  --color-agent-specialist: #d69a69;
 
   /* === 阴影 (暗色模式更深) === */
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.16);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.22);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.38);
 }

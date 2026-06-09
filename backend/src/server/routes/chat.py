@@ -44,7 +44,11 @@ from agentscope.permission import PermissionMode
 from src.agents.factory import get_or_create_agent
 from src.config.settings import settings
 from src.server.routes.agents import get_registered_agent
-from src.server.routes.memory import append_agent_memory_event, maybe_summarize_agent_run
+from src.server.routes.memory import (
+    append_agent_memory_event,
+    build_agent_memory_system_prompt,
+    maybe_summarize_agent_run,
+)
 from src.server.routes.skills import (
     build_skill_system_prompt_from_skills,
     list_skill_usage_details,
@@ -275,6 +279,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         agent_id = data.agent_id or "default"
         agent_name = data.agent_name or "Assistant"
         base_system_prompt = data.system_prompt or "You are a helpful AI assistant."
+        memory_system_prompt = _build_agent_memory_prompt(agent_id)
         team_system_prompt = _build_team_system_prompt(data.team_name, data.team_members)
         used_skills = select_relevant_skills(data.skill_ids, data.message)
         skill_system_prompt = build_skill_system_prompt_from_skills(used_skills)
@@ -284,7 +289,14 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
             for skill_detail in used_skill_details
         ]
         system_prompt = "\n\n".join(
-            part for part in [base_system_prompt, team_system_prompt, skill_system_prompt] if part
+            part
+            for part in [
+                base_system_prompt,
+                memory_system_prompt,
+                team_system_prompt,
+                skill_system_prompt,
+            ]
+            if part
         )
         model_name = data.model or settings.default_model
         assistant_text = ""
@@ -547,7 +559,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     "skillIds": [item.id for item in completed_skill_runs],
                 },
             )
-            memory_facts = maybe_summarize_agent_run(
+            memory_facts = await maybe_summarize_agent_run(
                 agent_id=agent_id,
                 agent_name=agent_name,
                 session_id=session_id,
@@ -776,7 +788,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         "resumedFromHitl": True,
                     },
                 )
-                worker_memory_facts = maybe_summarize_agent_run(
+                worker_memory_facts = await maybe_summarize_agent_run(
                     agent_id=worker_member.agent_id,
                     agent_name=interaction.agent_name,
                     session_id=interaction.session_id,
@@ -913,7 +925,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         "resumedFromWorkerHitl": True,
                     },
                 )
-                memory_facts = maybe_summarize_agent_run(
+                memory_facts = await maybe_summarize_agent_run(
                     agent_id=leader_agent_id,
                     agent_name=leader_agent_name,
                     session_id=interaction.session_id,
@@ -995,7 +1007,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     "resumedFromHitl": True,
                 },
             )
-            memory_facts = maybe_summarize_agent_run(
+            memory_facts = await maybe_summarize_agent_run(
                 agent_id=interaction.agent_id,
                 agent_name=interaction.agent_name,
                 session_id=interaction.session_id,
@@ -1385,10 +1397,12 @@ async def _run_team_workers(
         worker_skill_ids = worker_config.skills if worker_config else []
         worker_skills = select_relevant_skills(worker_skill_ids, data.message)
         worker_skill_prompt = build_skill_system_prompt_from_skills(worker_skills)
+        worker_memory_prompt = _build_agent_memory_prompt(member.agent_id)
         worker_system_prompt = "\n\n".join(
             part
             for part in [
                 worker_prompt or "You are a helpful worker agent.",
+                worker_memory_prompt,
                 _build_worker_system_prompt(data.team_name, data.agent_name, member),
                 worker_skill_prompt,
             ]
@@ -1530,7 +1544,7 @@ async def _run_team_workers(
                     "model": model_name,
                 },
             )
-            worker_memory_facts = maybe_summarize_agent_run(
+            worker_memory_facts = await maybe_summarize_agent_run(
                 agent_id=member.agent_id,
                 agent_name=worker_name,
                 session_id=session_id,
@@ -1592,6 +1606,18 @@ async def _run_team_workers(
         yield item
 
     await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _build_agent_memory_prompt(agent_id: str | None) -> str:
+    """Build memory context for an Agent when its configuration enables it."""
+    if not agent_id or agent_id == "default":
+        return ""
+
+    agent_config = get_registered_agent(agent_id)
+    if not agent_config or not agent_config.memory_enabled:
+        return ""
+
+    return build_agent_memory_system_prompt(agent_id)
 
 
 def _build_team_system_prompt(

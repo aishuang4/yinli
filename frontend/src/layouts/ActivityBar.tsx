@@ -66,7 +66,7 @@ const navButtonStyle = {
   border: 'none',
   cursor: 'pointer',
   fontSize: '18px',
-  transition: 'background-color var(--duration-fast) ease',
+  transition: 'background-color var(--duration-normal) var(--ease-out), color var(--duration-normal) var(--ease-out), transform var(--duration-normal) var(--ease-out)',
   WebkitAppRegion: 'no-drag', // Electron: 按钮区域不可拖拽
 } as const;
 

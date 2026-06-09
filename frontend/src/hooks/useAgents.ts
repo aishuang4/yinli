@@ -56,6 +56,7 @@ interface AgentApiData {
   tags: string[];
   callableAgents: string[];
   maxDepth: number;
+  memoryEnabled?: boolean;
   guardrails: {
     filesystem_scope: string;
     shell_blacklist: string[];
@@ -89,6 +90,7 @@ function mapApiAgent(api: AgentApiData): Agent {
     tags: api.tags,
     callableAgents: api.callableAgents,
     maxDepth: api.maxDepth,
+    memoryEnabled: api.memoryEnabled ?? true,
     guardrails: {
       filesystemScope: api.guardrails.filesystem_scope,
       shellBlacklist: api.guardrails.shell_blacklist,
@@ -117,6 +119,7 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
   if ('mcpTools' in data && data.mcpTools !== undefined) result.mcpTools = data.mcpTools;
   if ('callableAgents' in data && data.callableAgents !== undefined) result.callableAgents = data.callableAgents;
   if ('maxDepth' in data && data.maxDepth !== undefined) result.maxDepth = data.maxDepth;
+  if ('memoryEnabled' in data && data.memoryEnabled !== undefined) result.memoryEnabled = data.memoryEnabled;
 
   if ('modelConfig' in data && data.modelConfig) {
     result.modelConfig = {
