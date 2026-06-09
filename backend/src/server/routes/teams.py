@@ -12,6 +12,7 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from src.server.routes.agents import get_registered_agent
 from src.storage.database import (
     list_json_records,
     list_teams as db_list_teams,
@@ -111,25 +112,27 @@ def _build_members(
     leader_agent_id: str,
     worker_agent_ids: list[str],
 ) -> list[TeamMember]:
+    leader_agent = get_registered_agent(leader_agent_id)
     members = [
         TeamMember.model_validate({
             "id": uuid.uuid4().hex,
             "agentId": leader_agent_id,
-            "name": "Leader",
+            "name": leader_agent.name if leader_agent else "Leader",
             "role": "leader",
-            "description": "Team leader session",
+            "description": leader_agent.description if leader_agent else "Team leader session",
             "status": "idle",
         })
     ]
     for index, agent_id in enumerate(worker_agent_ids, start=1):
         if agent_id == leader_agent_id:
             continue
+        worker_agent = get_registered_agent(agent_id)
         members.append(TeamMember.model_validate({
             "id": uuid.uuid4().hex,
             "agentId": agent_id,
-            "name": f"Worker {index}",
+            "name": worker_agent.name if worker_agent else f"Worker {index}",
             "role": "worker",
-            "description": "Team worker session",
+            "description": worker_agent.description if worker_agent else "Team worker session",
             "status": "idle",
         }))
     return members
