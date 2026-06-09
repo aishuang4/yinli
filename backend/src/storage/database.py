@@ -19,6 +19,24 @@ from src.config.settings import settings
 _lock = RLock()
 _initialized = False
 
+DEFAULT_GUARDRAILS = {
+    "filesystem_scope": "/",
+    "shell_blacklist": ["rm -rf /", "sudo"],
+    "network_enabled": True,
+    "human_approval": False,
+    "tool_permission_mode": "accept_edits",
+    "timeout_seconds": 300,
+}
+
+DEFAULT_PLAN_CONFIG = {
+    "enabled": True,
+    "mode": "structured",
+    "maxSteps": 6,
+    "requirePlanBeforeTools": True,
+    "requireUserApproval": False,
+    "allowReplanning": True,
+}
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -79,6 +97,7 @@ def ensure_db() -> None:
                     callable_agents TEXT NOT NULL,
                     max_depth INTEGER NOT NULL,
                     memory_enabled INTEGER NOT NULL DEFAULT 1,
+                    plan_config TEXT NOT NULL DEFAULT '{}',
                     guardrails TEXT NOT NULL,
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
@@ -203,7 +222,14 @@ def ensure_db() -> None:
                     "ALTER TABLE agents ADD COLUMN memory_enabled INTEGER NOT NULL DEFAULT 1"
                 )
             conn.commit()
-        _initialized = True
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(agents)").fetchall()
+            }
+            if "plan_config" not in columns:
+                conn.execute("ALTER TABLE agents ADD COLUMN plan_config TEXT NOT NULL DEFAULT '{}'")
+                conn.commit()
+            _initialized = True
 
 
 def _dumps(value: Any) -> str:
@@ -363,7 +389,16 @@ def list_agents() -> list[dict[str, Any]]:
             "callableAgents": _loads(row["callable_agents"], []),
             "maxDepth": row["max_depth"],
             "memoryEnabled": bool(row["memory_enabled"]),
-            "guardrails": _loads(row["guardrails"], {}),
+            "planConfig": (
+                {**DEFAULT_PLAN_CONFIG, **plan_config}
+                if isinstance((plan_config := _loads(row["plan_config"], {})), dict)
+                else DEFAULT_PLAN_CONFIG
+            ),
+            "guardrails": (
+                {**DEFAULT_GUARDRAILS, **guardrails}
+                if isinstance((guardrails := _loads(row["guardrails"], {})), dict)
+                else DEFAULT_GUARDRAILS
+            ),
             "status": row["status"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
@@ -377,7 +412,13 @@ def upsert_agent(data: dict[str, Any]) -> None:
     with _lock, _connect() as conn:
         conn.execute(
             """
-            INSERT INTO agents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO agents(
+                id, name, avatar, description, system_prompt, model_config,
+                mcp_tools, skills, tags, callable_agents, max_depth,
+                memory_enabled, plan_config, guardrails, status, created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name, avatar=excluded.avatar,
                 description=excluded.description, system_prompt=excluded.system_prompt,
@@ -385,6 +426,7 @@ def upsert_agent(data: dict[str, Any]) -> None:
                 skills=excluded.skills, tags=excluded.tags,
                 callable_agents=excluded.callable_agents, max_depth=excluded.max_depth,
                 memory_enabled=excluded.memory_enabled,
+                plan_config=excluded.plan_config,
                 guardrails=excluded.guardrails, status=excluded.status,
                 updated_at=excluded.updated_at
             """,
@@ -395,6 +437,7 @@ def upsert_agent(data: dict[str, Any]) -> None:
                 _dumps(data.get("skills", [])), _dumps(data.get("tags", [])),
                 _dumps(data.get("callableAgents", [])), data.get("maxDepth", 2),
                 1 if data.get("memoryEnabled", True) else 0,
+                _dumps(data.get("planConfig", DEFAULT_PLAN_CONFIG)),
                 _dumps(data.get("guardrails", {})), data.get("status", "idle"),
                 data.get("created_at") or _utc_now(), data.get("updated_at") or _utc_now(),
             ),

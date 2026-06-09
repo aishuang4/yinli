@@ -99,6 +99,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
         callableAgents: [...agent.callableAgents],
         maxDepth: agent.maxDepth,
         memoryEnabled: agent.memoryEnabled,
+        planConfig: { ...agent.planConfig },
         guardrails: { ...agent.guardrails },
       });
     } else {
@@ -514,6 +515,128 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
         <section className="rounded-xl bg-[var(--color-bg-primary)] p-4 shadow-sm">
           <div className="mb-4">
             <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
+              计划模型
+            </h3>
+            <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+              控制 Agent 在调用工具前如何制定、展示和修订任务计划。
+            </div>
+          </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
+              <div className="min-w-0">
+                <div className="text-sm text-[var(--color-text-primary)]">启用计划层</div>
+                <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                  开启后，Agent 会在复杂任务中先形成计划，再进入 ReAct 工具循环。
+                </div>
+              </div>
+              <ToggleButton
+                checked={form.planConfig.enabled}
+                onChange={(checked) =>
+                  setForm({
+                    ...form,
+                    planConfig: { ...form.planConfig, enabled: checked },
+                  })
+                }
+                checkedLabel="开启"
+                uncheckedLabel="关闭"
+                ariaLabel="启用计划层"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
+                计划模式
+              </label>
+              <Select
+                value={form.planConfig.mode}
+                disabled={!form.planConfig.enabled}
+                onChange={(value) =>
+                  setForm({
+                    ...form,
+                    planConfig: { ...form.planConfig, mode: value },
+                  })
+                }
+                options={[
+                  { label: '轻量计划 - 简短 1-3 步', value: 'lightweight' },
+                  { label: '结构化计划 - 默认推荐', value: 'structured' },
+                  { label: '严格计划 - 强约束步骤状态', value: 'strict' },
+                ]}
+                style={{ width: '100%' }}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
+                最大计划步骤
+              </label>
+              <InputNumber
+                min={1}
+                max={20}
+                value={form.planConfig.maxSteps}
+                disabled={!form.planConfig.enabled}
+                onChange={(value) =>
+                  setForm({
+                    ...form,
+                    planConfig: { ...form.planConfig, maxSteps: Number(value ?? 1) },
+                  })
+                }
+                style={{ width: 128 }}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
+                <div className="text-sm text-[var(--color-text-primary)]">工具调用前必须先计划</div>
+                <ToggleButton
+                  checked={form.planConfig.requirePlanBeforeTools}
+                  onChange={(checked) =>
+                    setForm({
+                      ...form,
+                      planConfig: { ...form.planConfig, requirePlanBeforeTools: checked },
+                    })
+                  }
+                  checkedLabel="开启"
+                  uncheckedLabel="关闭"
+                  ariaLabel="工具调用前必须先计划"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
+                <div className="text-sm text-[var(--color-text-primary)]">执行计划前需要用户确认</div>
+                <ToggleButton
+                  checked={form.planConfig.requireUserApproval}
+                  onChange={(checked) =>
+                    setForm({
+                      ...form,
+                      planConfig: { ...form.planConfig, requireUserApproval: checked },
+                    })
+                  }
+                  checkedLabel="开启"
+                  uncheckedLabel="关闭"
+                  ariaLabel="执行计划前需要用户确认"
+                />
+              </div>
+              <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
+                <div className="text-sm text-[var(--color-text-primary)]">允许执行中修订计划</div>
+                <ToggleButton
+                  checked={form.planConfig.allowReplanning}
+                  onChange={(checked) =>
+                    setForm({
+                      ...form,
+                      planConfig: { ...form.planConfig, allowReplanning: checked },
+                    })
+                  }
+                  checkedLabel="开启"
+                  uncheckedLabel="关闭"
+                  ariaLabel="允许执行中修订计划"
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-xl bg-[var(--color-bg-primary)] p-4 shadow-sm">
+          <div className="mb-4">
+            <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
               安全边界
             </h3>
             <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
@@ -540,7 +663,12 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
 
             {/* 人工审批 */}
             <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
-              <div className="text-sm text-[var(--color-text-primary)]">启用人工审批</div>
+              <div>
+                <div className="text-sm text-[var(--color-text-primary)]">强制人工审批</div>
+                <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                  开启后会覆盖下方权限范围，工具调用按每次确认处理。
+                </div>
+              </div>
               <ToggleButton
                 checked={form.guardrails.humanApproval}
                 onChange={(checked) =>
@@ -553,6 +681,35 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                 uncheckedLabel="关闭"
                 ariaLabel="启用人工审批"
               />
+            </div>
+
+            {/* 工具权限范围 */}
+            <div>
+              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
+                工具权限范围
+              </label>
+              <Select
+                value={form.guardrails.toolPermissionMode}
+                disabled={form.guardrails.humanApproval}
+                onChange={(value) =>
+                  setForm({
+                    ...form,
+                    guardrails: {
+                      ...form.guardrails,
+                      toolPermissionMode: value as 'ask_every_time' | 'accept_edits' | 'bypass',
+                    },
+                  })
+                }
+                options={[
+                  { label: '常规开发放行 - 推荐', value: 'accept_edits' },
+                  { label: '每次工具调用都确认', value: 'ask_every_time' },
+                  { label: '完全信任并自动放行', value: 'bypass' },
+                ]}
+                style={{ width: '100%' }}
+              />
+              <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                常规开发放行会减少 MCP 和文件工具的确认弹窗；完全信任适合沙箱环境。
+              </div>
             </div>
 
             {/* 超时 */}

@@ -56,7 +56,6 @@ export function StatusBar() {
 
       {/* 右侧：版本信息 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-        <span>AgentScope 2.0</span>
         <span>v{appVersion}</span>
       </div>
     </div>

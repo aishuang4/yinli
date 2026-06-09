@@ -18,8 +18,8 @@ from agentscope.message import UserMsg
 from agentscope.permission import PermissionMode
 
 from src.agents.factory import get_or_create_agent
-from src.config.settings import settings
-from src.server.routes.agents import AgentCreate, AgentResponse, Guardrails, ModelConfig, create_agent
+from src.config.runtime_settings import MODEL_PROVIDERS, get_effective_model_settings
+from src.server.routes.agents import AgentCreate, AgentResponse, Guardrails, ModelConfig, PlanConfig, create_agent
 from src.server.routes.mcp import _mcp_servers
 from src.server.routes.skills import _skills
 from src.server.routes.teams import TeamCreate, TeamRecord, create_team
@@ -58,6 +58,7 @@ class BuilderAgentDraft(BaseModel):
     description: str = ""
     system_prompt: str = Field(default="", alias="systemPrompt")
     model_config_data: ModelConfig = Field(default_factory=ModelConfig, alias="modelConfig")
+    plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig")
     mcp_tools: list[str] = Field(default_factory=list, alias="mcpTools")
     skills: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
@@ -109,13 +110,15 @@ async def plan_agent_team(data: BuilderPlanRequest) -> BuilderPlanResponse:
 
     warnings: list[str] = []
     raw_plan: dict | None = None
-    if settings.dashscope_api_key:
+    runtime_settings = get_effective_model_settings()
+    provider = MODEL_PROVIDERS.get(runtime_settings.provider)
+    if not provider or not provider.requires_api_key or runtime_settings.api_key:
         try:
             raw_plan = await _generate_plan_with_model(data)
         except Exception as exc:
             warnings.append(f"模型规划失败，已使用本地规则生成草案: {exc}")
     else:
-        warnings.append("DashScope API Key 未配置，已使用本地规则生成草案。")
+        warnings.append(f"{provider.name} API Key 未配置，已使用本地规则生成草案。")
 
     if raw_plan is None:
         raw_plan = _heuristic_plan(data)
@@ -139,6 +142,7 @@ async def apply_agent_team(data: BuilderApplyRequest) -> BuilderApplyResponse:
             description=draft.description,
             system_prompt=draft.system_prompt or _default_agent_prompt(draft.name, draft.description),
             modelConfig=draft.model_config_data,
+            planConfig=draft.plan_config,
             mcpTools=draft.mcp_tools,
             skills=draft.skills,
             tags=draft.tags,
@@ -203,13 +207,15 @@ async def _generate_plan_with_model(data: BuilderPlanRequest) -> dict:
         "For team mode, generate 1 leader and 2-4 workers.",
         "For agents mode, generate exactly 1 standalone Agent. Do not create a leader/worker team.",
     ])
-    model_name = data.preferred_model or settings.default_model
+    runtime_settings = get_effective_model_settings()
+    model_name = data.preferred_model or runtime_settings.default_model
     agent = get_or_create_agent(
         agent_id=f"agent-builder:{model_name}",
         name="Agent Builder",
         system_prompt=system_prompt,
         model_name=model_name,
         thinking_enable=False,
+        fallback_names=runtime_settings.fallback_models,
         permission_mode=PermissionMode.BYPASS,
     )
     text = ""
@@ -246,16 +252,25 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
 
         name = str(item.get("name") or ("Team Leader" if role == "leader" else f"Worker {index + 1}")).strip()
         description = str(item.get("description") or "").strip()
+        runtime_settings = get_effective_model_settings()
         drafts.append(BuilderAgentDraft(
             name=name[:50],
             role=role,
             description=description[:200],
             systemPrompt=str(item.get("systemPrompt") or item.get("system_prompt") or _default_agent_prompt(name, description)),
             modelConfig=ModelConfig(
-                primary=data.preferred_model or settings.default_model,
-                fallback=settings.fallback_models[:3] or ["qwen-turbo"],
+                primary=data.preferred_model or runtime_settings.default_model,
+                fallback=runtime_settings.fallback_models[:3] or ["qwen-turbo"],
                 temperature=0.7,
                 max_tokens=4096,
+            ),
+            planConfig=PlanConfig(
+                enabled=True,
+                mode="structured" if role == "worker" else "strict",
+                maxSteps=6 if role == "worker" else 8,
+                requirePlanBeforeTools=True,
+                requireUserApproval=False,
+                allowReplanning=True,
             ),
             mcpTools=[item.id for item in resolved_tools if item.id],
             skills=[item.id for item in resolved_skills if item.id],

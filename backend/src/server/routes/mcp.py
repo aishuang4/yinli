@@ -465,6 +465,35 @@ def _persist_if_user_server(server_id: str) -> None:
         _save_user_mcp_servers()
 
 
+def resolve_mcp_runtime_servers(tool_ids: list[str]) -> list[dict[str, object]]:
+    """Resolve selected MCP tool ids into server specs for Agent runtime."""
+
+    selected = set(tool_ids)
+    if not selected:
+        return []
+
+    runtime_servers: list[dict[str, object]] = []
+    for server in _mcp_servers.values():
+        if server.status != "installed" or not server.enabled:
+            continue
+        enabled_tool_names = [
+            tool.name
+            for tool in server.tools
+            if tool.id in selected
+        ]
+        if not enabled_tool_names:
+            continue
+        runtime_servers.append({
+            "name": _slugify(server.id).replace("-", "_"),
+            "transport": server.transport,
+            "url": server.url,
+            "command": server.command,
+            "headers": server.headers,
+            "enable_tools": enabled_tool_names,
+        })
+    return runtime_servers
+
+
 @router.get("", response_model=list[McpServer])
 async def list_mcp_servers(
     q: str = "",

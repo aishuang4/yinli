@@ -14,7 +14,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.server.routes import agent_builder, agents, chat, health, mcp, memory, skills, teams
+from src.server.routes import agent_builder, agents, chat, health, mcp, memory, settings as settings_routes, skills, teams
 from src.config.settings import settings
 from src.storage.database import init_db, close_db
 
@@ -66,3 +66,4 @@ app.include_router(mcp.router, prefix="/api/mcp", tags=["MCP 管理"])
 app.include_router(skills.router, prefix="/api/skills", tags=["Skills 管理"])
 app.include_router(memory.router, prefix="/api/agent-memory", tags=["Agent Memory"])
 app.include_router(teams.router, prefix="/api/teams", tags=["Team 管理"])
+app.include_router(settings_routes.router, prefix="/api/settings", tags=["系统设置"])

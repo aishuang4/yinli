@@ -10,21 +10,40 @@ Agent 工厂模块 — 从配置创建 AgentScope 2.0 Agent 实例
 """
 
 import os
+from dataclasses import dataclass, field
 from typing import Optional
 
 from pydantic import SecretStr
 
 from agentscope.agent import Agent
 from agentscope.agent._config import ModelConfig
-from agentscope.model import DashScopeChatModel
+from agentscope.model import (
+    AnthropicChatModel,
+    DashScopeChatModel,
+    DeepSeekChatModel,
+    GeminiChatModel,
+    MoonshotChatModel,
+    OllamaChatModel,
+    OpenAIChatModel,
+)
 from agentscope.credential import DashScopeCredential
+from agentscope.credential import (
+    AnthropicCredential,
+    DeepSeekCredential,
+    GeminiCredential,
+    MoonshotCredential,
+    OllamaCredential,
+    OpenAICredential,
+)
+from agentscope.mcp import HttpMCPConfig, MCPClient
 from agentscope.tool import Toolkit, Bash, Read, Write, Edit, Grep, Glob
 from agentscope.state import AgentState
-from agentscope.permission import PermissionContext
+from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.permission._types import PermissionMode
 from agentscope.workspace import LocalWorkspace
 
 from src.config.settings import settings
+from src.config.runtime_settings import get_effective_model_settings
 
 
 # ============================================================================
@@ -39,11 +58,44 @@ WORKSPACE_DIR = os.path.expanduser("~")
 _agent_cache: dict[str, Agent] = {}
 
 
+@dataclass(frozen=True)
+class AgentModelOptions:
+    """Runtime model parameters selected from the persisted Agent config."""
+
+    temperature: float | None = None
+    max_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class AgentGuardrails:
+    """Runtime guardrails used while constructing the Agent."""
+
+    filesystem_scope: str = WORKSPACE_DIR
+    shell_blacklist: list[str] = field(default_factory=list)
+    network_enabled: bool = True
+    human_approval: bool = False
+    tool_permission_mode: str = "accept_edits"
+    timeout_seconds: int = 300
+
+
+@dataclass(frozen=True)
+class McpRuntimeSpec:
+    """Serializable MCP server selection passed from route code to factory."""
+
+    name: str
+    transport: str
+    url: str = ""
+    command: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    enable_tools: list[str] = field(default_factory=list)
+
+
 def _create_model(
     model_name: str,
     stream: bool = True,
     thinking_enable: bool = False,
-) -> DashScopeChatModel:
+    model_options: AgentModelOptions | None = None,
+):
     """
     创建 DashScope 聊天模型实例
 
@@ -54,15 +106,80 @@ def _create_model(
     Returns:
         DashScopeChatModel: 配置好的模型实例
     """
+    parameters: dict[str, object] = {
+        "thinking_enable": thinking_enable,
+    }
+    if model_options:
+        if model_options.temperature is not None:
+            parameters["temperature"] = model_options.temperature
+        if model_options.max_tokens is not None:
+            parameters["max_tokens"] = model_options.max_tokens
+
+    runtime = get_effective_model_settings()
+    api_key = SecretStr(runtime.api_key)
+    base_url = runtime.base_url or None
+
+    if runtime.adapter == "openai":
+        return OpenAIChatModel(
+            credential=OpenAICredential(api_key=api_key, base_url=base_url),
+            model=model_name,
+            parameters=OpenAIChatModel.Parameters(**parameters),
+            stream=stream,
+            max_retries=3,
+        )
+    if runtime.adapter == "deepseek":
+        return DeepSeekChatModel(
+            credential=DeepSeekCredential(api_key=api_key, base_url=runtime.base_url or "https://api.deepseek.com"),
+            model=model_name,
+            parameters=DeepSeekChatModel.Parameters(**parameters),
+            stream=stream,
+            max_retries=3,
+        )
+    if runtime.adapter == "moonshot":
+        return MoonshotChatModel(
+            credential=MoonshotCredential(api_key=api_key, base_url=runtime.base_url or "https://api.moonshot.cn/v1"),
+            model=model_name,
+            parameters=MoonshotChatModel.Parameters(**parameters),
+            stream=stream,
+            max_retries=3,
+        )
+    if runtime.adapter == "gemini":
+        return GeminiChatModel(
+            credential=GeminiCredential(api_key=api_key),
+            model=model_name,
+            parameters=GeminiChatModel.Parameters(**parameters),
+            stream=stream,
+            max_retries=3,
+        )
+    if runtime.adapter == "anthropic":
+        anthropic_parameters = {
+            key: value
+            for key, value in parameters.items()
+            if key in AnthropicChatModel.Parameters.model_fields
+        }
+        return AnthropicChatModel(
+            credential=AnthropicCredential(api_key=api_key, base_url=base_url),
+            model=model_name,
+            parameters=AnthropicChatModel.Parameters(**anthropic_parameters),
+            stream=stream,
+            max_retries=3,
+        )
+    if runtime.adapter == "ollama":
+        return OllamaChatModel(
+            credential=OllamaCredential(host=runtime.base_url or None),
+            model=model_name,
+            parameters=OllamaChatModel.Parameters(**parameters),
+            stream=stream,
+            max_retries=3,
+        )
+
     return DashScopeChatModel(
         credential=DashScopeCredential(
-            api_key=SecretStr(settings.dashscope_api_key),
-            base_url=settings.dashscope_base_url,
+            api_key=api_key,
+            base_url=runtime.base_url or settings.dashscope_base_url,
         ),
         model=model_name,
-        parameters=DashScopeChatModel.Parameters(
-            thinking_enable=thinking_enable,
-        ),
+        parameters=DashScopeChatModel.Parameters(**parameters),
         stream=stream,
         max_retries=3,
     )
@@ -71,6 +188,7 @@ def _create_model(
 def _create_fallback_model(
     fallback_names: list[str],
     thinking_enable: bool = False,
+    model_options: AgentModelOptions | None = None,
 ) -> Optional[DashScopeChatModel]:
     """
     创建 Fallback 模型（取第一个作为 fallback_model）
@@ -88,10 +206,86 @@ def _create_fallback_model(
         return None
 
     # 取第一个 fallback 模型
-    return _create_model(fallback_names[0], stream=True, thinking_enable=thinking_enable)
+    return _create_model(
+        fallback_names[0],
+        stream=True,
+        thinking_enable=thinking_enable,
+        model_options=model_options,
+    )
 
 
-def _create_default_toolkit() -> Toolkit:
+class GuardedBash(Bash):
+    """Bash with user-configured blacklist checks."""
+
+    def __init__(self, shell_blacklist: list[str], timeout_seconds: int) -> None:
+        super().__init__()
+        self.shell_blacklist = [item.strip() for item in shell_blacklist if item.strip()]
+        self.timeout_seconds = timeout_seconds
+
+    async def check_permissions(self, tool_input: dict, context: PermissionContext) -> PermissionDecision:
+        command = str(tool_input.get("command") or "")
+        for blocked in self.shell_blacklist:
+            if blocked and blocked in command:
+                return PermissionDecision(
+                    behavior=PermissionBehavior.DENY,
+                    message=f"Command blocked by Agent guardrails: {blocked}",
+                    decision_reason="Agent shell blacklist matched",
+                    bypass_immune=True,
+                )
+
+        timeout_ms = int(tool_input.get("timeout") or 0)
+        max_timeout_ms = max(1, self.timeout_seconds) * 1000
+        if timeout_ms > max_timeout_ms:
+            tool_input["timeout"] = max_timeout_ms
+
+        return await super().check_permissions(tool_input, context)
+
+
+def _safe_workspace_dir(guardrails: AgentGuardrails | None) -> str:
+    scope = (guardrails.filesystem_scope if guardrails else WORKSPACE_DIR) or WORKSPACE_DIR
+    expanded = os.path.abspath(os.path.expanduser(scope))
+    if expanded == os.path.abspath(os.sep):
+        return WORKSPACE_DIR
+    return expanded
+
+
+def _create_mcp_clients(
+    mcp_servers: list[McpRuntimeSpec],
+    guardrails: AgentGuardrails | None,
+) -> list[MCPClient]:
+    clients: list[MCPClient] = []
+    for server in mcp_servers:
+        if server.transport in {"sse", "websocket"} or server.url:
+            if guardrails and not guardrails.network_enabled:
+                continue
+            if not server.url:
+                continue
+            clients.append(
+                MCPClient(
+                    name=server.name,
+                    is_stateful=False,
+                    mcp_config=HttpMCPConfig(
+                        url=server.url,
+                        headers=server.headers or None,
+                        timeout=float((guardrails.timeout_seconds if guardrails else 300) or 300),
+                    ),
+                    enable_tools=server.enable_tools or None,
+                    execution_timeout=float((guardrails.timeout_seconds if guardrails else 300) or 300),
+                )
+            )
+            continue
+
+        # AgentScope requires stateful stdio MCP clients to be connected before
+        # Toolkit construction. Route-level Agent creation is synchronous today,
+        # so stdio servers remain represented by the local default tools until
+        # the factory becomes async.
+    return clients
+
+
+def _create_default_toolkit(
+    guardrails: AgentGuardrails | None = None,
+    mcp_servers: list[McpRuntimeSpec] | None = None,
+) -> Toolkit:
     """
     创建默认工具集
 
@@ -106,15 +300,27 @@ def _create_default_toolkit() -> Toolkit:
     Returns:
         Toolkit: 包含默认工具的 Toolkit 实例
     """
+    local_tools = [
+        Read(),
+        Write(),
+        Edit(),
+        Grep(),
+        Glob(),
+    ]
+    if not guardrails or guardrails.network_enabled:
+        local_tools.append(
+            GuardedBash(
+                shell_blacklist=guardrails.shell_blacklist if guardrails else [],
+                timeout_seconds=guardrails.timeout_seconds if guardrails else 300,
+            )
+        )
+
+    mcp_clients = _create_mcp_clients(mcp_servers or [], guardrails)
     return Toolkit(
         tools=[
-            Read(),
-            Write(),
-            Edit(),
-            Grep(),
-            Glob(),
-            Bash(),
-        ]
+            *local_tools,
+        ],
+        mcps=mcp_clients,
     )
 
 
@@ -126,6 +332,9 @@ def get_or_create_agent(
     fallback_names: list[str] | None = None,
     thinking_enable: bool = False,
     permission_mode: PermissionMode = PermissionMode.BYPASS,
+    model_options: AgentModelOptions | None = None,
+    guardrails: AgentGuardrails | None = None,
+    mcp_servers: list[McpRuntimeSpec] | None = None,
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -147,15 +356,24 @@ def get_or_create_agent(
         return _agent_cache[agent_id]
 
     # 使用配置默认值
-    primary_model = model_name or settings.default_model
-    fallbacks = fallback_names if fallback_names is not None else settings.fallback_models
+    runtime = get_effective_model_settings()
+    primary_model = model_name or runtime.default_model
+    fallbacks = fallback_names if fallback_names is not None else runtime.fallback_models
 
     # 创建模型
-    main_model = _create_model(primary_model, thinking_enable=thinking_enable)
-    fallback_model = _create_fallback_model(fallbacks, thinking_enable=thinking_enable)
+    main_model = _create_model(
+        primary_model,
+        thinking_enable=thinking_enable,
+        model_options=model_options,
+    )
+    fallback_model = _create_fallback_model(
+        fallbacks,
+        thinking_enable=thinking_enable,
+        model_options=model_options,
+    )
 
     # 创建 LocalWorkspace — Agent 工具执行的隔离环境
-    workspace = LocalWorkspace(workdir=WORKSPACE_DIR)
+    workspace = LocalWorkspace(workdir=_safe_workspace_dir(guardrails))
 
     # 创建 AgentState — 设置 BYPASS 权限模式
     # BYPASS 模式：跳过所有权限检查，工具自动执行无需确认
@@ -170,7 +388,7 @@ def get_or_create_agent(
         name=name,
         system_prompt=system_prompt,
         model=main_model,
-        toolkit=_create_default_toolkit(),
+        toolkit=_create_default_toolkit(guardrails=guardrails, mcp_servers=mcp_servers),
         state=agent_state,
         offloader=workspace,
         model_config=ModelConfig(

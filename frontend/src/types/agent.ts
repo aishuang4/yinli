@@ -30,8 +30,26 @@ export interface Guardrails {
   networkEnabled: boolean;
   /** 是否启用人工审批 */
   humanApproval: boolean;
+  /** 工具权限模式 */
+  toolPermissionMode: 'ask_every_time' | 'accept_edits' | 'bypass';
   /** 工具调用超时（秒） */
   timeoutSeconds: number;
+}
+
+/** 计划模型配置 */
+export interface PlanConfig {
+  /** 是否启用计划层 */
+  enabled: boolean;
+  /** 计划模式 */
+  mode: 'lightweight' | 'structured' | 'strict';
+  /** 最大计划步骤数 */
+  maxSteps: number;
+  /** 调用工具前是否先产出计划 */
+  requirePlanBeforeTools: boolean;
+  /** 执行计划前是否需要用户确认 */
+  requireUserApproval: boolean;
+  /** 执行中是否允许修订计划 */
+  allowReplanning: boolean;
 }
 
 /** Agent 完整配置 */
@@ -60,6 +78,8 @@ export interface Agent {
   maxDepth: number;
   /** 是否在运行时注入 Agent 自己的长期记忆 */
   memoryEnabled: boolean;
+  /** 计划模型配置 */
+  planConfig: PlanConfig;
   /** 安全边界 */
   guardrails: Guardrails;
   /** 当前运行状态 */
@@ -103,7 +123,18 @@ export const DEFAULT_GUARDRAILS: Guardrails = {
   shellBlacklist: ['rm -rf /', 'sudo'],
   networkEnabled: true,
   humanApproval: false,
+  toolPermissionMode: 'accept_edits',
   timeoutSeconds: 300,
+};
+
+/** 默认计划模型配置 */
+export const DEFAULT_PLAN_CONFIG: PlanConfig = {
+  enabled: true,
+  mode: 'structured',
+  maxSteps: 6,
+  requirePlanBeforeTools: true,
+  requireUserApproval: false,
+  allowReplanning: true,
 };
 
 /** 创建空 Agent 表单数据 */
@@ -120,6 +151,7 @@ export function createEmptyAgentForm(): AgentCreatePayload {
     callableAgents: [],
     maxDepth: 2,
     memoryEnabled: true,
+    planConfig: { ...DEFAULT_PLAN_CONFIG },
     guardrails: { ...DEFAULT_GUARDRAILS },
   };
 }
