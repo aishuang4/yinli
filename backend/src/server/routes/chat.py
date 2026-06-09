@@ -1222,7 +1222,7 @@ def _load_store() -> ChatStore:
 
 def _save_store(store: ChatStore) -> None:
     """写入对话存储文件"""
-    save_chat_store(store.model_dump(mode="json"))
+    save_chat_store(store.model_dump(mode="json", by_alias=True))
 
 
 def _append_user_message(

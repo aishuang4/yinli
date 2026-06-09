@@ -646,8 +646,8 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     item["id"], session_id, item["role"], item.get("content", ""),
                     item.get("agent_id"), item.get("agent_name"), item.get("model_name"),
                     item.get("error"), _dumps(item.get("images", [])),
-                    _dumps(item.get("skillCalls", [])),
-                    _dumps(item.get("teamActivities", [])),
+                    _dumps(item.get("skillCalls", item.get("skill_calls", []))),
+                    _dumps(item.get("teamActivities", item.get("team_activities", []))),
                     item["created_at"], index,
                 ))
         conn.executemany(
