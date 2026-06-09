@@ -132,6 +132,7 @@ export function ChatPage() {
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const [selectedTeamActivityId, setSelectedTeamActivityId] = useState<string | null>(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -230,14 +231,22 @@ export function ChatPage() {
     const container = messagesContainerRef.current;
     if (!container) return;
     const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    shouldAutoScrollRef.current = distanceToBottom < 80;
+    const nearBottom = distanceToBottom < 80;
+    shouldAutoScrollRef.current = nearBottom;
+    setShowScrollToBottom(!nearBottom);
+  }, []);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+    shouldAutoScrollRef.current = true;
+    setShowScrollToBottom(false);
+    messagesEndRef.current?.scrollIntoView({ behavior });
   }, []);
 
   /** 只有用户停留在底部附近时才自动滚动 */
   useEffect(() => {
     if (!shouldAutoScrollRef.current) return;
-    messagesEndRef.current?.scrollIntoView({ behavior: state.isStreaming ? 'auto' : 'smooth' });
-  }, [messages, state.isStreaming, state.textContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities, state.memorySummaries]);
+    scrollToBottom(state.isStreaming ? 'auto' : 'smooth');
+  }, [messages, scrollToBottom, state.isStreaming, state.textContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities, state.memorySummaries]);
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
@@ -247,6 +256,7 @@ export function ChatPage() {
     setChatError(null);
     setSelectedTeamActivityId(null);
     shouldAutoScrollRef.current = true;
+    setShowScrollToBottom(false);
     reset();
   }, [reset, state.isStreaming]);
 
@@ -264,6 +274,7 @@ export function ChatPage() {
     setChatError(null);
     setSelectedTeamActivityId(null);
     shouldAutoScrollRef.current = true;
+    setShowScrollToBottom(false);
     reset();
     await loadSessionMessages(session.id);
   }, [loadSessionMessages, reset, state.isStreaming]);
@@ -349,6 +360,7 @@ export function ChatPage() {
 
     setActiveSessionId(sessionId);
     shouldAutoScrollRef.current = true;
+    setShowScrollToBottom(false);
     setMessages((prev) => [...prev, userMessage]);
     setInputValue('');
     setImageAttachments([]);
@@ -532,52 +544,64 @@ export function ChatPage() {
           </div>
           </header>
 
-          <div
-            ref={messagesContainerRef}
-            className="flex min-h-0 flex-col gap-4 overflow-auto px-5 py-4"
-            onScroll={handleMessagesScroll}
-            role="log"
-            aria-live="polite"
-            aria-label="对话消息"
-          >
-          {messages.length === 0 && !state.isStreaming ? (
-            <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-[var(--color-text-tertiary)]">
-              <Bot size={48} strokeWidth={1} color="var(--color-text-tertiary)" />
-              <div className="text-lg font-medium">开始对话</div>
-              <div className="max-w-[420px] text-sm">
-                先选择一个主 Agent，再输入消息开始协作。系统会保存会话历史，方便后续继续查看。
-              </div>
-            </div>
-          ) : (
-            <>
-              {messages.map((msg) => (
-                <MessageBubble
-                  key={msg.id}
-                  message={msg}
-                  selectedTeamActivityId={selectedTeamActivityId}
-                  onSelectTeamActivity={setSelectedTeamActivityId}
-                />
-              ))}
+          <div className="relative min-h-0 overflow-hidden">
+            <div
+              ref={messagesContainerRef}
+              className="flex h-full min-h-0 flex-col gap-4 overflow-auto px-5 py-4"
+              onScroll={handleMessagesScroll}
+              role="log"
+              aria-live="polite"
+              aria-label="对话消息"
+            >
+              {messages.length === 0 && !state.isStreaming ? (
+                <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-[var(--color-text-tertiary)]">
+                  <Bot size={48} strokeWidth={1} color="var(--color-text-tertiary)" />
+                  <div className="text-lg font-medium">开始对话</div>
+                  <div className="max-w-[420px] text-sm">
+                    先选择一个主 Agent，再输入消息开始协作。系统会保存会话历史，方便后续继续查看。
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {messages.map((msg) => (
+                    <MessageBubble
+                      key={msg.id}
+                      message={msg}
+                      selectedTeamActivityId={selectedTeamActivityId}
+                      onSelectTeamActivity={setSelectedTeamActivityId}
+                    />
+                  ))}
 
-              {(state.isStreaming || state.hitlRequests.length > 0) && (
-                <StreamingBubble
-                  textContent={state.textContent}
-                  thinkingContent={state.thinkingContent}
-                  skillCalls={state.skillCalls}
-                  teamActivities={state.teamActivities}
-                  memorySummaries={state.memorySummaries}
-                  hitlRequests={state.hitlRequests}
-                  onResolveHitl={resumeInteraction}
-                  selectedTeamActivityId={selectedTeamActivityId}
-                  onSelectTeamActivity={setSelectedTeamActivityId}
-                  toolCalls={state.toolCalls}
-                  modelName={state.modelName}
-                />
+                  {(state.isStreaming || state.hitlRequests.length > 0) && (
+                    <StreamingBubble
+                      textContent={state.textContent}
+                      thinkingContent={state.thinkingContent}
+                      skillCalls={state.skillCalls}
+                      teamActivities={state.teamActivities}
+                      memorySummaries={state.memorySummaries}
+                      hitlRequests={state.hitlRequests}
+                      onResolveHitl={resumeInteraction}
+                      selectedTeamActivityId={selectedTeamActivityId}
+                      onSelectTeamActivity={setSelectedTeamActivityId}
+                      toolCalls={state.toolCalls}
+                      modelName={state.modelName}
+                    />
+                  )}
+
+                  <div ref={messagesEndRef} />
+                </>
               )}
-
-              <div ref={messagesEndRef} />
-            </>
-          )}
+            </div>
+            {showScrollToBottom && (
+              <Button
+                size="small"
+                type="primary"
+                className="absolute bottom-4 right-6 shadow-md"
+                onClick={() => scrollToBottom('smooth')}
+              >
+                滚动到底部
+              </Button>
+            )}
           </div>
 
           <div className="px-5 pb-5 pt-2">
