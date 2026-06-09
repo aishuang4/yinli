@@ -132,7 +132,9 @@ export function ChatPage() {
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const [selectedTeamActivityId, setSelectedTeamActivityId] = useState<string | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const shouldAutoScrollRef = useRef(true);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
   const { state, sendMessage, resumeInteraction, abort, reset } = useEventStream();
@@ -224,10 +226,18 @@ export function ChatPage() {
     }
   }, [selectedTeamId, targetMode, teams]);
 
-  /** 自动滚动到底部 */
+  const handleMessagesScroll = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    shouldAutoScrollRef.current = distanceToBottom < 80;
+  }, []);
+
+  /** 只有用户停留在底部附近时才自动滚动 */
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, state.textContent, state.toolCalls, state.skillCalls, state.teamActivities, state.memorySummaries]);
+    if (!shouldAutoScrollRef.current) return;
+    messagesEndRef.current?.scrollIntoView({ behavior: state.isStreaming ? 'auto' : 'smooth' });
+  }, [messages, state.isStreaming, state.textContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities, state.memorySummaries]);
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
@@ -236,6 +246,7 @@ export function ChatPage() {
     setImageAttachments([]);
     setChatError(null);
     setSelectedTeamActivityId(null);
+    shouldAutoScrollRef.current = true;
     reset();
   }, [reset, state.isStreaming]);
 
@@ -252,6 +263,7 @@ export function ChatPage() {
     setImageAttachments([]);
     setChatError(null);
     setSelectedTeamActivityId(null);
+    shouldAutoScrollRef.current = true;
     reset();
     await loadSessionMessages(session.id);
   }, [loadSessionMessages, reset, state.isStreaming]);
@@ -336,6 +348,7 @@ export function ChatPage() {
     };
 
     setActiveSessionId(sessionId);
+    shouldAutoScrollRef.current = true;
     setMessages((prev) => [...prev, userMessage]);
     setInputValue('');
     setImageAttachments([]);
@@ -520,7 +533,9 @@ export function ChatPage() {
           </header>
 
           <div
+            ref={messagesContainerRef}
             className="flex min-h-0 flex-col gap-4 overflow-auto px-5 py-4"
+            onScroll={handleMessagesScroll}
             role="log"
             aria-live="polite"
             aria-label="对话消息"
