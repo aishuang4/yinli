@@ -14,7 +14,8 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.server.routes import agent_builder, agents, chat, health, mcp, memory, settings as settings_routes, skills, teams
+from src.server.routes import agent_builder, agents, chat, health, mcp, memory, settings as settings_routes, skills, teams, tools
+from src.agents.agentscope_usage_patch import patch_agentscope_usage_events
 from src.config.settings import settings
 from src.storage.database import init_db, close_db
 
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     关闭时：关闭数据库连接、清理资源
     """
     # === 启动 ===
+    patch_agentscope_usage_events()
     await init_db()
     print(f"[Server] Agent Workstation Backend started on port {settings.port}")
     key_display = ("***" + settings.dashscope_api_key[-4:]) if settings.dashscope_api_key else "NOT SET"
@@ -63,6 +65,7 @@ app.include_router(agents.router, prefix="/api/agents", tags=["Agent 管理"])
 app.include_router(agent_builder.router, prefix="/api/agent-builder", tags=["Agent 智能编排"])
 app.include_router(chat.router, prefix="/api/chat", tags=["对话"])
 app.include_router(mcp.router, prefix="/api/mcp", tags=["MCP 管理"])
+app.include_router(tools.router, prefix="/api/tools", tags=["工具管理"])
 app.include_router(skills.router, prefix="/api/skills", tags=["Skills 管理"])
 app.include_router(memory.router, prefix="/api/agent-memory", tags=["Agent Memory"])
 app.include_router(teams.router, prefix="/api/teams", tags=["Team 管理"])

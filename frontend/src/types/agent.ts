@@ -68,6 +68,8 @@ export interface Agent {
   modelConfig: ModelConfig;
   /** MCP 工具 ID 列表 */
   mcpTools: string[];
+  /** 知识库 HTTP 工具 ID 列表 */
+  knowledgeTools: string[];
   /** Skills ID 列表 */
   skills: string[];
   /** 标签 */
@@ -146,6 +148,7 @@ export function createEmptyAgentForm(): AgentCreatePayload {
     systemPrompt: 'You are a helpful assistant.',
     modelConfig: { ...DEFAULT_MODEL_CONFIG },
     mcpTools: [],
+    knowledgeTools: [],
     skills: [],
     tags: [],
     callableAgents: [],

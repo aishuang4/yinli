@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
+import { createId } from '../utils/id';
 
 /** SSE 事件类型 */
 export interface SSEEvent {
@@ -40,8 +41,12 @@ export interface StreamState {
   teamActivities: TeamActivityInfo[];
   /** 自动记忆总结 */
   memorySummaries: MemorySummaryInfo[];
+  /** 模型缓存事件 */
+  modelCaches: ModelCacheInfo[];
   /** 待人工处理的交互 */
   hitlRequests: HitlRequestInfo[];
+  /** 待用户补充信息的反问 */
+  clarificationRequests: ClarificationRequestInfo[];
   /** 当前正在调用的模型名称 */
   modelName: string;
   /** Token 用量 */
@@ -89,6 +94,7 @@ export interface TeamActivityInfo {
   thinking: string;
   currentEvent: string;
   toolCalls: ToolCallInfo[];
+  dependsOn: string[];
   createdAt: string;
 }
 
@@ -102,6 +108,17 @@ export interface MemorySummaryInfo {
     content: string;
     tags: string[];
   }>;
+}
+
+/** 模型缓存信息 */
+export interface ModelCacheInfo {
+  id: string;
+  modelName: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number;
+  cacheInputTokens: number;
+  createdAt: string;
 }
 
 /** 人机交互请求 */
@@ -119,6 +136,23 @@ export interface HitlRequestInfo {
     name: string;
     input: string;
   }>;
+  createdAt: string;
+}
+
+export interface ClarificationQuestionInfo {
+  id: string;
+  type: 'choice' | 'multi_choice' | 'text';
+  label: string;
+  options: string[];
+  placeholder: string;
+  required: boolean;
+}
+
+export interface ClarificationRequestInfo {
+  id: string;
+  title: string;
+  description: string;
+  questions: ClarificationQuestionInfo[];
   createdAt: string;
 }
 
@@ -173,7 +207,9 @@ const INITIAL_STATE: StreamState = {
   skillCalls: [],
   teamActivities: [],
   memorySummaries: [],
+  modelCaches: [],
   hitlRequests: [],
+  clarificationRequests: [],
   modelName: '',
   tokenUsage: null,
   error: null,
@@ -187,9 +223,13 @@ const INITIAL_STATE: StreamState = {
 export function useEventStream(): UseEventStreamReturn {
   const [state, setState] = useState<StreamState>(INITIAL_STATE);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const suppressClarificationTextRef = useRef(false);
+  const suppressClarificationThinkingRef = useRef(false);
 
   /** 重置状态到初始值 */
   const reset = useCallback(() => {
+    suppressClarificationTextRef.current = false;
+    suppressClarificationThinkingRef.current = false;
     setState(INITIAL_STATE);
   }, []);
 
@@ -213,6 +253,8 @@ export function useEventStream(): UseEventStreamReturn {
       // 创建新的 AbortController
       const controller = new AbortController();
       abortControllerRef.current = controller;
+      suppressClarificationTextRef.current = false;
+      suppressClarificationThinkingRef.current = false;
 
       // 重置状态并开始
       setState({
@@ -407,19 +449,32 @@ export function useEventStream(): UseEventStreamReturn {
     setState((prev) => {
       switch (event.type) {
         // === 文本内容增量 ===
-        case 'TEXT_BLOCK_DELTA':
+        case 'TEXT_BLOCK_DELTA': {
+          if (suppressClarificationTextRef.current) return prev;
+          const nextText = prev.textContent + (event.data.delta as string || '');
+          const clarificationIndex = findClarificationStartIndex(nextText);
+          if (clarificationIndex >= 0) {
+            suppressClarificationTextRef.current = true;
+          }
           return {
             ...prev,
-            textContent: prev.textContent + (event.data.delta as string || ''),
+            textContent: clarificationIndex >= 0 ? nextText.slice(0, clarificationIndex).trimEnd() : nextText,
           };
+        }
 
         // === 思考链增量 ===
-        case 'THINKING_BLOCK_DELTA':
+        case 'THINKING_BLOCK_DELTA': {
+          if (suppressClarificationThinkingRef.current) return prev;
+          const nextThinking = prev.thinkingContent + (event.data.delta as string || '');
+          const clarificationIndex = findClarificationStartIndex(nextThinking);
+          if (clarificationIndex >= 0) {
+            suppressClarificationThinkingRef.current = true;
+          }
           return {
             ...prev,
-            thinkingContent:
-              prev.thinkingContent + (event.data.delta as string || ''),
+            thinkingContent: clarificationIndex >= 0 ? nextThinking.slice(0, clarificationIndex).trimEnd() : nextThinking,
           };
+        }
 
         // === 工具调用开始 ===
         case 'TOOL_CALL_START':
@@ -445,7 +500,7 @@ export function useEventStream(): UseEventStreamReturn {
             skillCalls: skills.map((item) => {
               const skill = item as Record<string, unknown>;
               return {
-                id: String(skill.id || skill.name || crypto.randomUUID()),
+                id: String(skill.id || skill.name || createId()),
                 name: String(skill.name || skill.id || 'Skill'),
                 description: String(skill.description || ''),
                 trigger: String(skill.trigger || ''),
@@ -491,7 +546,7 @@ export function useEventStream(): UseEventStreamReturn {
                   const record = toolCall as Record<string, unknown>;
                   const toolStatus = String(record.status || 'calling');
                   return {
-                    id: String(record.id || crypto.randomUUID()),
+                    id: String(record.id || createId()),
                     name: String(record.name || 'tool'),
                     args: String(record.args || ''),
                     result: String(record.result || ''),
@@ -504,7 +559,7 @@ export function useEventStream(): UseEventStreamReturn {
                 })
                 : existing?.toolCalls || [];
               return {
-                id: String(activity.id || crypto.randomUUID()),
+                id: String(activity.id || createId()),
                 agentId: String(activity.agentId || ''),
                 agentName: String(activity.agentName || 'Agent'),
                 role: String(activity.role || 'worker'),
@@ -519,6 +574,9 @@ export function useEventStream(): UseEventStreamReturn {
                 thinking: String(activity.thinking || existing?.thinking || ''),
                 currentEvent: existing?.currentEvent || '',
                 toolCalls,
+                dependsOn: Array.isArray(activity.dependsOn)
+                  ? activity.dependsOn.map((item) => String(item))
+                  : existing?.dependsOn || [],
                 createdAt: String(activity.createdAt || ''),
               };
             }),
@@ -567,7 +625,7 @@ export function useEventStream(): UseEventStreamReturn {
                   toolCalls: [
                     ...activity.toolCalls,
                     {
-                      id: String(memberEvent.tool_call_id || crypto.randomUUID()),
+                      id: String(memberEvent.tool_call_id || createId()),
                       name: String(memberEvent.tool_call_name || 'tool'),
                       args: '',
                       result: '',
@@ -657,7 +715,7 @@ export function useEventStream(): UseEventStreamReturn {
                 facts: facts.map((item) => {
                   const fact = item as Record<string, unknown>;
                   return {
-                    id: String(fact.id || crypto.randomUUID()),
+                    id: String(fact.id || createId()),
                     title: String(fact.title || '自动记忆'),
                     content: String(fact.content || ''),
                     tags: Array.isArray(fact.tags) ? fact.tags.map((tag) => String(tag)) : [],
@@ -689,7 +747,7 @@ export function useEventStream(): UseEventStreamReturn {
                 toolCalls: toolCalls.map((item) => {
                   const toolCall = item as Record<string, unknown>;
                   return {
-                    id: String(toolCall.id || crypto.randomUUID()),
+                    id: String(toolCall.id || createId()),
                     name: String(toolCall.name || 'tool'),
                     input: String(toolCall.input || ''),
                   };
@@ -762,13 +820,48 @@ export function useEventStream(): UseEventStreamReturn {
           };
 
         // === 模型调用结束（Token 用量） ===
-        case 'MODEL_CALL_END':
+        case 'MODEL_CALL_END': {
+          const inputTokens = (event.data.input_tokens as number) || 0;
+          const outputTokens = (event.data.output_tokens as number) || 0;
+          const cacheCreationInputTokens = (event.data.cache_creation_input_tokens as number) || 0;
+          const cacheInputTokens = (event.data.cache_input_tokens as number) || 0;
+          const modelCache: ModelCacheInfo = {
+            id: `provider-cache-${Date.now()}`,
+            modelName: prev.modelName,
+            inputTokens,
+            outputTokens,
+            cacheCreationInputTokens,
+            cacheInputTokens,
+            createdAt: new Date().toISOString(),
+          };
           return {
             ...prev,
             tokenUsage: {
-              input: (event.data.input_tokens as number) || 0,
-              output: (event.data.output_tokens as number) || 0,
+              input: inputTokens,
+              output: outputTokens,
             },
+            modelCaches: [...prev.modelCaches, modelCache],
+          };
+        }
+
+        case 'CLARIFICATION_REQUIRED':
+          suppressClarificationTextRef.current = false;
+          suppressClarificationThinkingRef.current = false;
+          return {
+            ...prev,
+            isStreaming: false,
+            textContent: '',
+            thinkingContent: '',
+            clarificationRequests: [
+              ...prev.clarificationRequests,
+              {
+                id: String(event.data.id || Date.now()),
+                title: String(event.data.title || '需要补充信息'),
+                description: String(event.data.description || ''),
+                questions: (event.data.questions as ClarificationQuestionInfo[]) || [],
+                createdAt: String(event.data.createdAt || new Date().toISOString()),
+              },
+            ],
           };
 
         // === 错误事件 ===
@@ -791,4 +884,12 @@ export function useEventStream(): UseEventStreamReturn {
   }
 
   return { state, sendMessage, resumeInteraction, abort, reset };
+}
+
+function findClarificationStartIndex(text: string): number {
+  const tagIndex = text.indexOf('<clarification');
+  if (tagIndex >= 0) return tagIndex;
+
+  const jsonMatch = text.match(/\{\s*"title"\s*:/);
+  return jsonMatch?.index ?? -1;
 }

@@ -16,6 +16,7 @@
 
 import json
 import asyncio
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +46,7 @@ from agentscope.permission import PermissionMode
 from src.agents.factory import (
     AgentGuardrails,
     AgentModelOptions,
+    KnowledgeToolRuntimeSpec,
     McpRuntimeSpec,
     get_or_create_agent,
 )
@@ -57,6 +59,7 @@ from src.server.routes.memory import (
     maybe_summarize_agent_run,
 )
 from src.server.routes.mcp import resolve_mcp_runtime_servers
+from src.server.routes.tools import get_enabled_knowledge_tools
 from src.server.routes.skills import (
     build_skill_system_prompt_from_skills,
     list_skill_usage_details,
@@ -91,10 +94,14 @@ class ChatImagePayload(BaseModel):
 class ChatTeamMemberPayload(BaseModel):
     """前端传入的 Team 成员摘要"""
 
+    id: str = ""
     agent_id: str = Field(alias="agentId")
     name: str
     role: str
     description: str = ""
+    execution_mode: str = Field(default="parallel", alias="executionMode")
+    depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
+    handoff_prompt: str = Field(default="", alias="handoffPrompt")
 
     model_config = {"populate_by_name": True}
 
@@ -137,6 +144,7 @@ class ChatTeamActivity(BaseModel):
     output: str = ""
     thinking: str = ""
     tool_calls: list[ChatToolRun] = Field(default_factory=list, alias="toolCalls")
+    depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
     created_at: str = Field(alias="createdAt")
 
     model_config = {"populate_by_name": True}
@@ -258,6 +266,81 @@ class ChatMessage(BaseModel):
     """图片输入（base64，不含 data URL 前缀）"""
 
 
+class TeamWorkerSelectionRequest(BaseModel):
+    """Ask a model to preselect relevant Team workers for one user task."""
+
+    message: str
+    agent_id: str | None = Field(default=None, alias="agentId")
+    agent_name: str | None = Field(default=None, alias="agentName")
+    team_name: str | None = Field(default=None, alias="teamName")
+    team_members: list[ChatTeamMemberPayload] = Field(default_factory=list, alias="teamMembers")
+    model: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class TeamWorkerSelectionResponse(BaseModel):
+    selected_agent_ids: list[str] = Field(alias="selectedAgentIds")
+    reason: str = ""
+
+    model_config = {"populate_by_name": True}
+
+
+@router.post("/team-worker-selection", response_model=TeamWorkerSelectionResponse)
+async def select_team_workers(data: TeamWorkerSelectionRequest) -> TeamWorkerSelectionResponse:
+    """Use the leader model to preselect relevant workers for a single Team run."""
+
+    workers = [
+        member
+        for member in data.team_members
+        if member.role != "leader" and member.agent_id != data.agent_id
+    ]
+    if not workers:
+        return TeamWorkerSelectionResponse(selectedAgentIds=[], reason="当前 Team 没有可选择的 Worker。")
+
+    runtime_model_settings = get_effective_model_settings()
+    model_name = data.model or runtime_model_settings.default_model
+    agent = get_or_create_agent(
+        agent_id=f"team-worker-selector:{uuid.uuid4().hex}",
+        name="TeamWorkerSelector",
+        system_prompt="\n".join([
+            "You select which worker agents should participate in one Team run.",
+            "Return only a compact JSON object. Do not call tools. Do not write markdown.",
+            'Schema: {"selectedAgentIds":["agent-id"],"reason":"short reason"}',
+            "Select only workers that are materially relevant to the user task.",
+            "If the task is simple and no worker is needed, return an empty selectedAgentIds array.",
+            "If a selected worker depends on another worker, include the dependency worker too.",
+        ]),
+        model_name=model_name,
+        permission_mode=PermissionMode.BYPASS,
+    )
+    worker_lines = []
+    for member in workers:
+        dependencies = ", ".join(member.depends_on) if member.depends_on else "none"
+        worker_lines.append(
+            f"- agentId={member.agent_id}; name={member.name}; role={member.role}; "
+            f"description={member.description or 'none'}; executionMode={member.execution_mode}; "
+            f"dependsOn={dependencies}; handoffPrompt={member.handoff_prompt or 'none'}"
+        )
+    prompt = "\n\n".join([
+        f"Team: {data.team_name or 'Unnamed Team'}",
+        "User task:",
+        data.message,
+        "Available workers:",
+        "\n".join(worker_lines),
+    ])
+
+    text = ""
+    async for event in agent.reply_stream(UserMsg(name="user", content=prompt)):
+        event_data = event.model_dump(mode="json")
+        event_type = event_data.pop("type", "UNKNOWN")
+        if event_type == "TEXT_BLOCK_DELTA":
+            text += str(event_data.get("delta", ""))
+
+    selected, reason = _parse_worker_selection(text, {member.agent_id for member in workers})
+    return TeamWorkerSelectionResponse(selectedAgentIds=selected, reason=reason)
+
+
 @router.post("/send")
 async def send_message(data: ChatMessage) -> StreamingResponse:
     """
@@ -300,6 +383,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         skill_ids = agent_config.skills if agent_config and not data.skill_ids else data.skill_ids
         used_skills = select_relevant_skills(skill_ids, data.message)
         skill_system_prompt = build_skill_system_prompt_from_skills(used_skills)
+        clarification_system_prompt = _build_clarification_system_prompt()
         used_skill_details = list_skill_usage_details(used_skills)
         skill_runs = [
             ChatSkillRun.model_validate({**skill_detail, "status": "running"})
@@ -315,6 +399,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 history_system_prompt,
                 team_system_prompt,
                 skill_system_prompt,
+                clarification_system_prompt,
             ]
             if part
         )
@@ -332,7 +417,9 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         )
         guardrails = _build_runtime_guardrails(agent_config)
         mcp_servers = _build_runtime_mcp_servers(agent_config)
+        knowledge_tools = _build_runtime_knowledge_tools(agent_config)
         assistant_text = ""
+        assistant_thinking = ""
         assistant_error: str | None = None
         worker_outputs: list[dict[str, str]] = []
         team_activities = _build_team_activities(
@@ -470,22 +557,35 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     yield worker_event
                 if any(activity.status == "waiting" for activity in team_activities):
                     return
-                worker_outputs = _collect_worker_outputs(team_activities)
-                if worker_outputs:
-                    system_prompt = "\n\n".join(
-                        part
-                        for part in [
-                            system_prompt,
-                            _build_worker_outputs_system_prompt(worker_outputs),
-                        ]
-                        if part
+            worker_outputs = _collect_worker_outputs(team_activities)
+            if worker_outputs:
+                system_prompt = "\n\n".join(
+                    part
+                    for part in [
+                        system_prompt,
+                        _build_worker_outputs_system_prompt(worker_outputs),
+                    ]
+                    if part
+                )
+                leader_activity = _find_team_activity(team_activities, agent_id)
+                if leader_activity:
+                    _replace_team_activity(
+                        team_activities,
+                        leader_activity.model_copy(update={
+                            "status": "running",
+                            "detail": "Worker 已完成，Leader 正在基于 Worker 输出生成最终回复。",
+                        }),
                     )
+                    yield _sse_event("TEAM_ACTIVITY", {
+                        "activities": [item.model_dump(by_alias=True) for item in team_activities],
+                    })
 
             skill_cache_key = ",".join(sorted(skill.id for skill in used_skills))
             mcp_cache_key = ",".join(
                 f"{server.name}:{','.join(server.enable_tools)}"
                 for server in mcp_servers
             )
+            knowledge_cache_key = ",".join(tool.id for tool in knowledge_tools)
             guardrail_cache_key = (
                 f"scope-{guardrails.filesystem_scope}:"
                 f"net-{guardrails.network_enabled}:"
@@ -495,7 +595,8 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
             )
             runtime_agent_id = (
                 f"{agent_id}:{session_id}:{model_name}:thinking-{data.deep_thinking}:"
-                f"skills-{skill_cache_key}:mcp-{mcp_cache_key}:guardrails-{guardrail_cache_key}"
+                f"skills-{skill_cache_key}:mcp-{mcp_cache_key}:knowledge-{knowledge_cache_key}:"
+                f"guardrails-{guardrail_cache_key}"
             )
             agent = get_or_create_agent(
                 agent_id=runtime_agent_id,
@@ -508,6 +609,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 model_options=model_options,
                 guardrails=guardrails,
                 mcp_servers=mcp_servers,
+                knowledge_tools=knowledge_tools,
             )
         except Exception as e:
             assistant_error = f"Agent 创建失败: {str(e)}"
@@ -540,7 +642,13 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
             return
 
         # 构建用户消息
-        user_msg = UserMsg(name="user", content=_build_user_content(data.message, data.images))
+        user_msg = UserMsg(
+            name="user",
+            content=_build_user_content(
+                _build_leader_user_message(data.message, worker_outputs),
+                data.images,
+            ),
+        )
 
         # 调用 AgentScope 真实 Agent 的 reply_stream
         try:
@@ -550,6 +658,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
 
                 # 提取事件类型（EventType 枚举值）
                 event_type = event_data.pop("type", "UNKNOWN")
+                _attach_provider_cache_usage(event_type, event_data)
                 if event_type in HITL_EVENT_TYPES:
                     interaction = _create_pending_interaction(
                         interaction_type=event_type,
@@ -569,6 +678,8 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     return
                 if event_type == "TEXT_BLOCK_DELTA":
                     assistant_text += str(event_data.get("delta", ""))
+                elif event_type == "THINKING_BLOCK_DELTA":
+                    assistant_thinking += str(event_data.get("delta", ""))
 
                 if event_type == "REPLY_END" and skill_runs:
                     completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
@@ -581,7 +692,16 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 yield _sse_event(event_type, event_data)
 
             completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
-            completed_team_activities = _set_team_activity_status(team_activities, "completed")
+            completed_team_activities = _finalize_team_activities(
+                team_activities,
+                leader_agent_id=agent_id,
+                leader_output=assistant_text,
+            )
+            clarification = _extract_clarification_request(assistant_text) or _extract_clarification_request(assistant_thinking)
+            if clarification:
+                yield _sse_event("CLARIFICATION_REQUIRED", clarification)
+                return
+
             _append_assistant_message(
                 session_id=session_id,
                 agent_id=agent_id,
@@ -735,6 +855,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 async for event in agent.reply_stream(resume_event):
                     event_data = event.model_dump(mode="json")
                     event_type = event_data.pop("type", "UNKNOWN")
+                    _attach_provider_cache_usage(event_type, event_data)
                     if event_type in HITL_EVENT_TYPES:
                         next_interaction = _create_pending_interaction(
                             interaction_type=event_type,
@@ -913,11 +1034,15 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
 
                 user_msg = UserMsg(
                     name="user",
-                    content=_build_user_content(chat_data.message, chat_data.images),
+                    content=_build_user_content(
+                        _build_leader_user_message(chat_data.message, worker_outputs),
+                        chat_data.images,
+                    ),
                 )
                 async for event in leader_agent.reply_stream(user_msg):
                     event_data = event.model_dump(mode="json")
                     event_type = event_data.pop("type", "UNKNOWN")
+                    _attach_provider_cache_usage(event_type, event_data)
                     if event_type in HITL_EVENT_TYPES:
                         next_interaction = _create_pending_interaction(
                             interaction_type=event_type,
@@ -948,7 +1073,11 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     yield _sse_event(event_type, event_data)
 
                 completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
-                completed_team_activities = _set_team_activity_status(team_activities, "completed")
+                completed_team_activities = _finalize_team_activities(
+                    team_activities,
+                    leader_agent_id=leader_agent_id,
+                    leader_output=assistant_text,
+                )
                 _append_assistant_message(
                     session_id=interaction.session_id,
                     agent_id=leader_agent_id,
@@ -1003,6 +1132,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
             async for event in agent.reply_stream(resume_event):
                 event_data = event.model_dump(mode="json")
                 event_type = event_data.pop("type", "UNKNOWN")
+                _attach_provider_cache_usage(event_type, event_data)
                 if event_type in HITL_EVENT_TYPES:
                     next_interaction = _create_pending_interaction(
                         interaction_type=event_type,
@@ -1035,7 +1165,11 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 yield _sse_event(event_type, event_data)
 
             completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
-            completed_team_activities = _set_team_activity_status(team_activities, "completed")
+            completed_team_activities = _finalize_team_activities(
+                team_activities,
+                leader_agent_id=interaction.agent_id,
+                leader_output=assistant_text,
+            )
             _append_assistant_message(
                 session_id=interaction.session_id,
                 agent_id=interaction.agent_id,
@@ -1046,6 +1180,10 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 skill_calls=completed_skill_runs,
                 team_activities=completed_team_activities,
             )
+            if team_activities:
+                yield _sse_event("TEAM_ACTIVITY", {
+                    "activities": [item.model_dump(by_alias=True) for item in completed_team_activities],
+                })
             append_agent_memory_event(
                 agent_id=interaction.agent_id,
                 event_type="assistant_message",
@@ -1155,6 +1293,27 @@ def _sse_event(event_type: str, data: dict) -> str:
     """
     json_str = json.dumps(data, ensure_ascii=False, default=str)
     return f"event: {event_type}\ndata: {json_str}\n\n"
+
+
+def _attach_provider_cache_usage(event_type: str, event_data: dict) -> None:
+    """Expose provider-side prompt cache usage on MODEL_CALL_END events."""
+
+    if event_type != "MODEL_CALL_END":
+        return
+
+    metadata = event_data.get("metadata")
+    if not isinstance(metadata, dict):
+        return
+
+    cache_creation = int(metadata.get("cache_creation_input_tokens") or 0)
+    cache_read = int(metadata.get("cache_input_tokens") or 0)
+    event_data["cache_creation_input_tokens"] = cache_creation
+    event_data["cache_input_tokens"] = cache_read
+    event_data["provider_cache"] = {
+        "created_tokens": cache_creation,
+        "hit_tokens": cache_read,
+        "available": bool(cache_creation or cache_read),
+    }
 
 
 def _create_pending_interaction(
@@ -1445,6 +1604,23 @@ def _build_runtime_mcp_servers(agent_config: object | None) -> list[McpRuntimeSp
     return specs
 
 
+def _build_runtime_knowledge_tools(agent_config: object | None) -> list[KnowledgeToolRuntimeSpec]:
+    tool_ids = list(getattr(agent_config, "knowledge_tools", []) or [])
+    specs: list[KnowledgeToolRuntimeSpec] = []
+    for item in get_enabled_knowledge_tools(tool_ids):
+        specs.append(KnowledgeToolRuntimeSpec(
+            id=str(item.get("id") or ""),
+            name=str(item.get("name") or "KnowledgeBase"),
+            description=str(item.get("description") or ""),
+            url=str(item.get("url") or ""),
+            authorization=str(item.get("authorization") or ""),
+            headers=dict(item.get("headers") or {}),
+            default_payload=dict(item.get("defaultPayload") or item.get("default_payload") or {}),
+            parameter_instructions=str(item.get("parameterInstructions") or item.get("parameter_instructions") or ""),
+        ))
+    return specs
+
+
 def _build_conversation_history_prompt(session_id: str | None, limit: int = 12) -> str:
     if not session_id:
         return ""
@@ -1500,13 +1676,31 @@ async def _run_team_workers(
     for member in workers:
         activity = _find_team_activity(team_activities, member.agent_id)
         if activity:
-            _replace_team_activity(team_activities, activity.model_copy(update={"status": "running"}))
+            waiting_for = [
+                dep
+                for dep in _member_dependency_ids(member, workers)
+                if dep in {worker.agent_id for worker in workers}
+            ]
+            _replace_team_activity(
+                team_activities,
+                activity.model_copy(update={
+                    "status": "pending" if waiting_for else "running",
+                    "detail": (
+                        f"等待依赖 Worker 完成：{', '.join(_member_names(waiting_for, workers))}"
+                        if waiting_for
+                        else activity.detail
+                    ),
+                }),
+            )
 
     yield _sse_event("TEAM_ACTIVITY", {
         "activities": [item.model_dump(by_alias=True) for item in team_activities],
     })
 
-    async def run_worker(member: ChatTeamMemberPayload) -> None:
+    async def run_worker(
+        member: ChatTeamMemberPayload,
+        dependency_outputs: list[dict[str, str]],
+    ) -> None:
         activity = _find_team_activity(team_activities, member.agent_id)
         if activity is None:
             return
@@ -1523,6 +1717,7 @@ async def _run_team_workers(
         )
         worker_guardrails = _build_runtime_guardrails(worker_config)
         worker_mcp_servers = _build_runtime_mcp_servers(worker_config)
+        worker_knowledge_tools = _build_runtime_knowledge_tools(worker_config)
         worker_skills = select_relevant_skills(worker_skill_ids, data.message)
         worker_skill_prompt = build_skill_system_prompt_from_skills(worker_skills)
         worker_memory_prompt = _build_agent_memory_prompt(member.agent_id)
@@ -1544,9 +1739,11 @@ async def _run_team_workers(
             f"{server.name}:{','.join(server.enable_tools)}"
             for server in worker_mcp_servers
         )
+        worker_knowledge_cache_key = ",".join(tool.id for tool in worker_knowledge_tools)
         runtime_worker_id = (
             f"{member.agent_id}:{session_id}:{model_name}:team-worker:"
             f"thinking-{data.deep_thinking}:skills-{worker_cache_key}:mcp-{worker_mcp_cache_key}:"
+            f"knowledge-{worker_knowledge_cache_key}:"
             f"hitl-{worker_guardrails.human_approval}:tool-permission-{worker_guardrails.tool_permission_mode}"
         )
         worker_agent = get_or_create_agent(
@@ -1560,6 +1757,7 @@ async def _run_team_workers(
             model_options=worker_model_options,
             guardrails=worker_guardrails,
             mcp_servers=worker_mcp_servers,
+            knowledge_tools=worker_knowledge_tools,
         )
         worker_text = ""
         worker_thinking = ""
@@ -1569,13 +1767,14 @@ async def _run_team_workers(
             worker_msg = UserMsg(
                 name="team_leader",
                 content=_build_user_content(
-                    _build_worker_user_message(data.message, member),
+                    _build_worker_user_message(data.message, member, dependency_outputs),
                     data.images,
                 ),
             )
             async for event in worker_agent.reply_stream(worker_msg):
                 event_data = event.model_dump(mode="json")
                 event_type = event_data.pop("type", "UNKNOWN")
+                _attach_provider_cache_usage(event_type, event_data)
                 if event_type in HITL_EVENT_TYPES:
                     activity = _find_team_activity(team_activities, member.agent_id)
                     if activity:
@@ -1598,7 +1797,7 @@ async def _run_team_workers(
                         model_name=model_name,
                         reply_id=str(event_data.get("reply_id") or ""),
                         tool_calls=list(event_data.get("tool_calls") or []),
-                        message=_build_worker_user_message(data.message, member),
+                        message=_build_worker_user_message(data.message, member, dependency_outputs),
                         assistant_text="",
                         skill_runs=skill_runs,
                         team_activities=team_activities,
@@ -1688,7 +1887,7 @@ async def _run_team_workers(
                 agent_id=member.agent_id,
                 agent_name=worker_name,
                 session_id=session_id,
-                user_message=_build_worker_user_message(data.message, member),
+                user_message=_build_worker_user_message(data.message, member, dependency_outputs),
                 assistant_text=worker_text,
                 metadata={
                     "teamId": data.team_id,
@@ -1726,26 +1925,142 @@ async def _run_team_workers(
         finally:
             await queue.put(None)
 
-    tasks = [asyncio.create_task(run_worker(member)) for member in workers]
-    remaining = len(tasks)
-    while remaining:
+    pending: dict[str, ChatTeamMemberPayload] = {member.agent_id: member for member in workers}
+    running: dict[asyncio.Task[None], str] = {}
+    completed_outputs: dict[str, dict[str, str]] = {}
+    failed_workers: set[str] = set()
+
+    def start_ready_workers() -> None:
+        worker_ids = set(pending)
+        ready: list[ChatTeamMemberPayload] = []
+        for member in list(pending.values()):
+            dependencies = _member_dependency_ids(member, workers)
+            failed_dependencies = [dep for dep in dependencies if dep in failed_workers]
+            if failed_dependencies:
+                pending.pop(member.agent_id, None)
+                activity = _find_team_activity(team_activities, member.agent_id)
+                if activity:
+                    _replace_team_activity(
+                        team_activities,
+                        activity.model_copy(update={
+                            "status": "failed",
+                            "detail": f"上游 Worker 失败，跳过执行：{', '.join(_member_names(failed_dependencies, workers))}",
+                        }),
+                    )
+                failed_workers.add(member.agent_id)
+                continue
+            blocking = [dep for dep in dependencies if dep not in completed_outputs and dep not in failed_workers]
+            if blocking:
+                activity = _find_team_activity(team_activities, member.agent_id)
+                if activity:
+                    _replace_team_activity(
+                        team_activities,
+                        activity.model_copy(update={
+                            "status": "pending",
+                            "detail": f"等待依赖 Worker 完成：{', '.join(_member_names(blocking, workers))}",
+                        }),
+                    )
+                continue
+            ready.append(member)
+
+        for member in ready:
+            pending.pop(member.agent_id, None)
+            dependencies = _member_dependency_ids(member, workers)
+            dependency_outputs = [
+                completed_outputs[dep]
+                for dep in dependencies
+                if dep in completed_outputs
+            ]
+            activity = _find_team_activity(team_activities, member.agent_id)
+            if activity:
+                _replace_team_activity(
+                    team_activities,
+                    activity.model_copy(update={
+                        "status": "running",
+                        "detail": (
+                            f"依赖已满足，开始执行。已接收 {len(dependency_outputs)} 个上游输出。"
+                            if dependency_outputs
+                            else activity.detail
+                        ),
+                    }),
+                )
+            task = asyncio.create_task(run_worker(member, dependency_outputs))
+            running[task] = member.agent_id
+
+        unresolved = [
+            member
+            for member in pending.values()
+            if all(dep not in worker_ids for dep in _member_dependency_ids(member, workers))
+        ]
+        for member in unresolved:
+            pending.pop(member.agent_id, None)
+            activity = _find_team_activity(team_activities, member.agent_id)
+            if activity:
+                _replace_team_activity(
+                    team_activities,
+                    activity.model_copy(update={
+                        "status": "failed",
+                        "detail": "依赖配置无效：找不到指定的上游 Worker。",
+                    }),
+                )
+            failed_workers.add(member.agent_id)
+
+    start_ready_workers()
+    await queue.put(_sse_event("TEAM_ACTIVITY", {
+        "activities": [item.model_dump(by_alias=True) for item in team_activities],
+    }))
+
+    while running or pending:
+        if not running and pending:
+            for member in list(pending.values()):
+                activity = _find_team_activity(team_activities, member.agent_id)
+                if activity:
+                    _replace_team_activity(
+                        team_activities,
+                        activity.model_copy(update={
+                            "status": "failed",
+                            "detail": "依赖配置形成循环或上游 Worker 失败，无法继续调度。",
+                        }),
+                    )
+                failed_workers.add(member.agent_id)
+            pending.clear()
+            yield _sse_event("TEAM_ACTIVITY", {
+                "activities": [item.model_dump(by_alias=True) for item in team_activities],
+            })
+            break
+
         item = await queue.get()
         if item is None:
-            remaining -= 1
+            done_tasks = [task for task in running if task.done()]
+            for task in done_tasks:
+                worker_id = running.pop(task)
+                activity = _find_team_activity(team_activities, worker_id)
+                if activity and activity.status == "completed":
+                    completed_outputs[worker_id] = {
+                        "agentId": activity.agent_id,
+                        "name": activity.agent_name,
+                        "output": activity.output,
+                    }
+                elif activity and activity.status in {"failed", "waiting"}:
+                    failed_workers.add(worker_id)
             if pause_event.is_set():
-                for task in tasks:
+                for task in running:
                     if not task.done():
                         task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
+                await asyncio.gather(*running.keys(), return_exceptions=True)
                 while not queue.empty():
                     queued = queue.get_nowait()
                     if queued is not None:
                         yield queued
                 return
+            start_ready_workers()
+            yield _sse_event("TEAM_ACTIVITY", {
+                "activities": [item.model_dump(by_alias=True) for item in team_activities],
+            })
             continue
         yield item
 
-    await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.gather(*running.keys(), return_exceptions=True)
 
 
 def _build_agent_memory_prompt(agent_id: str | None) -> str:
@@ -1774,6 +2089,111 @@ def _build_runtime_context_prompt() -> str:
             "For current-events or web-search tasks, include the current year/date when useful, prefer recent sources, and verify freshness before answering.",
         ]
     )
+
+
+def _build_clarification_system_prompt() -> str:
+    """Instructions for asking the user for missing information."""
+
+    return "\n".join([
+        "## Clarification Contract",
+        "If the user's request cannot be executed reliably because required information is missing, ask for clarification instead of guessing.",
+        "When clarification is required, the first output token must be <clarification>. Output only one clarification block and no other text before or after it:",
+        '<clarification>{"title":"需要补充信息","description":"简短说明为什么需要这些信息","questions":[{"id":"target","type":"choice","label":"请选择目标","options":["选项 A","选项 B"]},{"id":"needs","type":"multi_choice","label":"请选择需要的能力","options":["能力 A","能力 B"]},{"id":"details","type":"text","label":"请补充具体要求","placeholder":"输入补充信息"}]}</clarification>',
+        "Supported question types are: choice, multi_choice, text.",
+        "Use at most 3 questions. For choice and multi_choice, provide 2-5 concise options.",
+        "Only use clarification when the missing information blocks meaningful progress.",
+    ])
+
+
+def _extract_clarification_request(text: str) -> dict | None:
+    """Extract a structured clarification request from assistant text."""
+
+    match = re.search(r"<clarification>\s*(.*?)\s*</clarification>", text, re.DOTALL)
+    raw_text = match.group(1) if match else _extract_raw_clarification_json(text)
+    if not raw_text:
+        return None
+
+    try:
+        raw = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return None
+
+    questions: list[dict[str, object]] = []
+    for index, item in enumerate(raw.get("questions") or []):
+        if not isinstance(item, dict):
+            continue
+        question_type = str(item.get("type") or "").strip()
+        if question_type not in {"choice", "multi_choice", "text"}:
+            continue
+        question_id = str(item.get("id") or f"q{index + 1}").strip()
+        label = str(item.get("label") or item.get("question") or "").strip()
+        if not question_id or not label:
+            continue
+        options = [
+            str(option).strip()
+            for option in (item.get("options") or [])
+            if str(option).strip()
+        ][:5]
+        if question_type in {"choice", "multi_choice"} and len(options) < 2:
+            continue
+        questions.append({
+            "id": question_id,
+            "type": question_type,
+            "label": label,
+            "options": options,
+            "placeholder": str(item.get("placeholder") or "").strip(),
+            "required": bool(item.get("required", True)),
+        })
+
+    if not questions:
+        return None
+
+    return {
+        "id": uuid.uuid4().hex,
+        "title": str(raw.get("title") or "需要补充信息").strip(),
+        "description": str(raw.get("description") or "").strip(),
+        "questions": questions[:3],
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _extract_raw_clarification_json(text: str) -> str | None:
+    """Extract a bare clarification JSON object when the model omits tags."""
+
+    if '"questions"' not in text or '"title"' not in text:
+        return None
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    return text[start:end + 1]
+
+
+def _parse_worker_selection(text: str, allowed_agent_ids: set[str]) -> tuple[list[str], str]:
+    """Parse model JSON for worker selection and filter unknown ids."""
+
+    raw = text.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?", "", raw, flags=re.IGNORECASE).strip()
+        raw = re.sub(r"```$", "", raw).strip()
+    if "{" in raw and "}" in raw:
+        raw = raw[raw.find("{"): raw.rfind("}") + 1]
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return [], "模型未返回有效选择，保持人工选择。"
+
+    raw_ids = data.get("selectedAgentIds") or data.get("selected_agent_ids") or []
+    selected: list[str] = []
+    if isinstance(raw_ids, list):
+        for item in raw_ids:
+            agent_id = str(item).strip()
+            if agent_id in allowed_agent_ids and agent_id not in selected:
+                selected.append(agent_id)
+
+    reason = str(data.get("reason") or "").strip()
+    return selected, reason
 
 
 def _build_agent_plan_prompt(agent_config: object | None) -> str:
@@ -1839,8 +2259,14 @@ def _build_team_system_prompt(
         "Available team members:",
     ]
     for member in members:
+        dependency_note = (
+            f" depends on {', '.join(member.depends_on)}"
+            if member.role != "leader" and member.depends_on
+            else ""
+        )
         lines.append(
             f"- {member.role}: {member.name} ({member.agent_id})"
+            + dependency_note
             + (f" - {member.description}" if member.description else "")
         )
     return "\n".join(lines)
@@ -1861,24 +2287,86 @@ def _build_worker_system_prompt(
     ])
 
 
-def _build_worker_user_message(user_message: str, member: ChatTeamMemberPayload) -> str:
+def _build_worker_user_message(
+    user_message: str,
+    member: ChatTeamMemberPayload,
+    dependency_outputs: list[dict[str, str]] | None = None,
+) -> str:
     """Build the delegated task sent to a worker."""
-    return "\n\n".join([
+    parts = [
         "Leader delegated this user request to you:",
         user_message,
         "Your assignment:",
         member.description or "Analyze this request from your role and provide actionable findings.",
-        "Return your worker result clearly. Do not write the final team answer; the leader will synthesize it.",
-    ])
+    ]
+    if member.handoff_prompt:
+        parts.extend([
+            "Handoff instructions:",
+            member.handoff_prompt,
+        ])
+    if dependency_outputs:
+        parts.append("Upstream worker outputs you must use:")
+        for item in dependency_outputs:
+            parts.append(f"### {item.get('name') or item.get('agentId')}")
+            parts.append(item.get("output") or "(No output)")
+    parts.append("Return your worker result clearly. Do not write the final team answer; the leader will synthesize it.")
+    return "\n\n".join(parts)
+
+
+def _member_dependency_ids(
+    member: ChatTeamMemberPayload,
+    workers: list[ChatTeamMemberPayload],
+) -> list[str]:
+    """Normalize dependency identifiers to worker agent ids."""
+    if member.execution_mode != "depends_on":
+        return []
+
+    by_member_id = {getattr(worker, "id", ""): worker.agent_id for worker in workers}
+    by_agent_id = {worker.agent_id: worker.agent_id for worker in workers}
+    normalized: list[str] = []
+    for raw_id in member.depends_on:
+        dep_id = by_agent_id.get(raw_id) or by_member_id.get(raw_id) or raw_id
+        if dep_id and dep_id != member.agent_id and dep_id not in normalized:
+            normalized.append(dep_id)
+    return normalized
+
+
+def _member_names(
+    agent_ids: list[str],
+    workers: list[ChatTeamMemberPayload],
+) -> list[str]:
+    names = []
+    for agent_id in agent_ids:
+        worker = next((item for item in workers if item.agent_id == agent_id), None)
+        names.append(worker.name if worker else agent_id)
+    return names
 
 
 def _build_worker_outputs_system_prompt(worker_outputs: list[dict[str, str]]) -> str:
     """Build a leader-visible summary of actual worker outputs."""
-    lines = ["## Worker ReAct Outputs"]
+    lines = [
+        "## Worker ReAct Outputs",
+        "The following worker outputs are authoritative context for your final team response.",
+        "You must synthesize them explicitly. If a worker reports missing data, say so instead of inventing details.",
+    ]
     for item in worker_outputs:
         lines.append(f"### {item['name']}")
         lines.append(item["output"] or "(No output)")
     return "\n\n".join(lines)
+
+
+def _build_leader_user_message(user_message: str, worker_outputs: list[dict[str, str]]) -> str:
+    """Build the final leader task with worker outputs in the user-visible turn."""
+    if not worker_outputs:
+        return user_message
+
+    return "\n\n".join([
+        "Original user request:",
+        user_message,
+        _build_worker_outputs_system_prompt(worker_outputs),
+        "Leader instruction:",
+        "Produce the final answer based on the worker outputs above. Mention the useful worker findings and do not ignore them.",
+    ])
 
 
 def _collect_worker_outputs(activities: list[ChatTeamActivity]) -> list[dict[str, str]]:
@@ -1935,6 +2423,7 @@ def _build_team_activities(
             detail=member.description or "等待 Leader 协调上下文。",
             output="",
             thinking="",
+            dependsOn=member.depends_on,
             createdAt=now,
         ))
     return activities
@@ -1958,6 +2447,31 @@ def _set_team_activity_status(
         item.model_copy(update={"status": status})
         for item in activities
     ]
+
+
+def _finalize_team_activities(
+    activities: list[ChatTeamActivity],
+    *,
+    leader_agent_id: str,
+    leader_output: str,
+) -> list[ChatTeamActivity]:
+    """Mark normal Team activities complete while preserving failed/waiting states."""
+    finalized: list[ChatTeamActivity] = []
+    for item in activities:
+        if item.status in {"failed", "waiting"}:
+            finalized.append(item)
+            continue
+        if item.agent_id == leader_agent_id or item.role == "leader":
+            finalized.append(item.model_copy(update={
+                "status": "completed",
+                "detail": "Leader 已完成最终汇总。",
+                "output": leader_output,
+            }))
+        else:
+            finalized.append(item.model_copy(update={"status": "completed"}))
+
+    activities[:] = finalized
+    return finalized
 
 
 def _set_team_worker_status(

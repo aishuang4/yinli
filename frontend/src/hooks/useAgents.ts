@@ -52,6 +52,7 @@ interface AgentApiData {
     max_tokens: number;
   };
   mcpTools: string[];
+  knowledgeTools?: string[];
   skills: string[];
   tags: string[];
   callableAgents: string[];
@@ -96,6 +97,7 @@ function mapApiAgent(api: AgentApiData): Agent {
       maxTokens: api.modelConfig.max_tokens,
     },
     mcpTools: api.mcpTools,
+    knowledgeTools: api.knowledgeTools ?? [],
     skills: api.skills,
     tags: api.tags,
     callableAgents: api.callableAgents,
@@ -136,6 +138,7 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
   if ('tags' in data && data.tags !== undefined) result.tags = data.tags;
   if ('skills' in data && data.skills !== undefined) result.skills = data.skills;
   if ('mcpTools' in data && data.mcpTools !== undefined) result.mcpTools = data.mcpTools;
+  if ('knowledgeTools' in data && data.knowledgeTools !== undefined) result.knowledgeTools = data.knowledgeTools;
   if ('callableAgents' in data && data.callableAgents !== undefined) result.callableAgents = data.callableAgents;
   if ('maxDepth' in data && data.maxDepth !== undefined) result.maxDepth = data.maxDepth;
   if ('memoryEnabled' in data && data.memoryEnabled !== undefined) result.memoryEnabled = data.memoryEnabled;

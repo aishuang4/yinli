@@ -17,6 +17,7 @@ class ModelSettingsUpdate(BaseModel):
     base_url: str = Field(default="", alias="baseUrl")
     default_model: str = Field(..., alias="defaultModel")
     fallback_models: list[str] = Field(default_factory=list, alias="fallbackModels")
+    custom_models: list[str] = Field(default_factory=list, alias="customModels")
 
     model_config = {"populate_by_name": True}
 
