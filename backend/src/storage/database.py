@@ -92,6 +92,7 @@ def ensure_db() -> None:
                     system_prompt TEXT NOT NULL,
                     model_config TEXT NOT NULL,
                     mcp_tools TEXT NOT NULL,
+                    knowledge_tools TEXT NOT NULL DEFAULT '[]',
                     skills TEXT NOT NULL,
                     tags TEXT NOT NULL,
                     callable_agents TEXT NOT NULL,
@@ -119,6 +120,9 @@ def ensure_db() -> None:
                     name TEXT NOT NULL,
                     role TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
+                    execution_mode TEXT NOT NULL DEFAULT 'parallel',
+                    depends_on TEXT NOT NULL DEFAULT '[]',
+                    handoff_prompt TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
                     sort_order INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE
@@ -229,6 +233,24 @@ def ensure_db() -> None:
             if "plan_config" not in columns:
                 conn.execute("ALTER TABLE agents ADD COLUMN plan_config TEXT NOT NULL DEFAULT '{}'")
                 conn.commit()
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(agents)").fetchall()
+            }
+            if "knowledge_tools" not in columns:
+                conn.execute("ALTER TABLE agents ADD COLUMN knowledge_tools TEXT NOT NULL DEFAULT '[]'")
+                conn.commit()
+            member_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(team_members)").fetchall()
+            }
+            if "execution_mode" not in member_columns:
+                conn.execute("ALTER TABLE team_members ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'parallel'")
+            if "depends_on" not in member_columns:
+                conn.execute("ALTER TABLE team_members ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'")
+            if "handoff_prompt" not in member_columns:
+                conn.execute("ALTER TABLE team_members ADD COLUMN handoff_prompt TEXT NOT NULL DEFAULT ''")
+            conn.commit()
             _initialized = True
 
 
@@ -384,6 +406,7 @@ def list_agents() -> list[dict[str, Any]]:
             "system_prompt": row["system_prompt"],
             "modelConfig": _loads(row["model_config"], {}),
             "mcpTools": _loads(row["mcp_tools"], []),
+            "knowledgeTools": _loads(row["knowledge_tools"], []),
             "skills": _loads(row["skills"], []),
             "tags": _loads(row["tags"], []),
             "callableAgents": _loads(row["callable_agents"], []),
@@ -414,15 +437,16 @@ def upsert_agent(data: dict[str, Any]) -> None:
             """
             INSERT INTO agents(
                 id, name, avatar, description, system_prompt, model_config,
-                mcp_tools, skills, tags, callable_agents, max_depth,
+                mcp_tools, knowledge_tools, skills, tags, callable_agents, max_depth,
                 memory_enabled, plan_config, guardrails, status, created_at,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name, avatar=excluded.avatar,
                 description=excluded.description, system_prompt=excluded.system_prompt,
                 model_config=excluded.model_config, mcp_tools=excluded.mcp_tools,
+                knowledge_tools=excluded.knowledge_tools,
                 skills=excluded.skills, tags=excluded.tags,
                 callable_agents=excluded.callable_agents, max_depth=excluded.max_depth,
                 memory_enabled=excluded.memory_enabled,
@@ -434,6 +458,7 @@ def upsert_agent(data: dict[str, Any]) -> None:
                 data["id"], data["name"], data.get("avatar", ""),
                 data.get("description", ""), data.get("system_prompt", ""),
                 _dumps(data.get("modelConfig", {})), _dumps(data.get("mcpTools", [])),
+                _dumps(data.get("knowledgeTools", [])),
                 _dumps(data.get("skills", [])), _dumps(data.get("tags", [])),
                 _dumps(data.get("callableAgents", [])), data.get("maxDepth", 2),
                 1 if data.get("memoryEnabled", True) else 0,
@@ -476,6 +501,9 @@ def list_teams() -> list[dict[str, Any]]:
             "name": row["name"],
             "role": row["role"],
             "description": row["description"],
+            "executionMode": row["execution_mode"],
+            "dependsOn": _loads(row["depends_on"], []),
+            "handoffPrompt": row["handoff_prompt"],
             "status": row["status"],
         })
     return [
@@ -514,13 +542,17 @@ def upsert_team(data: dict[str, Any]) -> None:
         conn.executemany(
             """
             INSERT INTO team_members(
-                id, team_id, agent_id, name, role, description, status, sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                id, team_id, agent_id, name, role, description,
+                execution_mode, depends_on, handoff_prompt, status, sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     member["id"], data["id"], member["agentId"], member["name"],
                     member["role"], member.get("description", ""),
+                    member.get("executionMode", "parallel"),
+                    _dumps(member.get("dependsOn", [])),
+                    member.get("handoffPrompt", ""),
                     member.get("status", "idle"), index,
                 )
                 for index, member in enumerate(data.get("members", []))

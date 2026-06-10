@@ -29,6 +29,7 @@ TEAMS_NAMESPACE = "teams"
 
 TeamMemberRole = Literal["leader", "worker"]
 TeamStatus = Literal["idle", "running", "ended"]
+TeamExecutionMode = Literal["parallel", "depends_on"]
 
 
 class TeamMember(BaseModel):
@@ -39,6 +40,9 @@ class TeamMember(BaseModel):
     name: str
     role: TeamMemberRole
     description: str = ""
+    execution_mode: TeamExecutionMode = Field(default="parallel", alias="executionMode")
+    depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
+    handoff_prompt: str = Field(default="", alias="handoffPrompt")
     status: str = "idle"
 
     model_config = {"populate_by_name": True}
@@ -77,6 +81,7 @@ class TeamUpdate(BaseModel):
     description: str | None = None
     leader_agent_id: str | None = Field(default=None, alias="leaderAgentId")
     worker_agent_ids: list[str] | None = Field(default=None, alias="workerAgentIds")
+    members: list[TeamMember] | None = None
     status: TeamStatus | None = None
 
     model_config = {"populate_by_name": True}
@@ -120,6 +125,9 @@ def _build_members(
             "name": leader_agent.name if leader_agent else "Leader",
             "role": "leader",
             "description": leader_agent.description if leader_agent else "Team leader session",
+            "executionMode": "parallel",
+            "dependsOn": [],
+            "handoffPrompt": "",
             "status": "idle",
         })
     ]
@@ -133,6 +141,9 @@ def _build_members(
             "name": worker_agent.name if worker_agent else f"Worker {index}",
             "role": "worker",
             "description": worker_agent.description if worker_agent else "Team worker session",
+            "executionMode": "parallel",
+            "dependsOn": [],
+            "handoffPrompt": "",
             "status": "idle",
         }))
     return members
@@ -195,6 +206,8 @@ async def update_team(team_id: str, data: TeamUpdate) -> TeamRecord:
         )
         team_dict["leaderAgentId"] = leader_id
         team_dict["members"] = _build_members(leader_id, worker_ids)
+    elif "members" in update_data:
+        team_dict["members"] = update_data.pop("members")
 
     team_dict.update(update_data)
     team_dict["updatedAt"] = _utc_now()

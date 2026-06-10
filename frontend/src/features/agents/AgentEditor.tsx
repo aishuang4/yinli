@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Save, X } from 'lucide-react';
+import { Pencil, Plus, Save, Trash2, X } from 'lucide-react';
 import {
   Alert,
   Button,
@@ -33,6 +33,8 @@ import type {
 import { createEmptyAgentForm } from '../../types/agent';
 import { useMcp } from '../../hooks/useMcp';
 import { useEnabledSkills } from '../../hooks/useSkills';
+import { useKnowledgeTools } from '../../hooks/useKnowledgeTools';
+import type { KnowledgeTool } from '../../types/tool';
 
 interface AgentEditorProps {
   /** 编辑的 Agent（null 表示创建模式） */
@@ -57,8 +59,33 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
   const [error, setError] = useState<string | null>(null);
   const [mcpSelectorOpen, setMcpSelectorOpen] = useState(false);
   const [skillsSelectorOpen, setSkillsSelectorOpen] = useState(false);
+  const [knowledgeSelectorOpen, setKnowledgeSelectorOpen] = useState(false);
+  const [knowledgeEditorOpen, setKnowledgeEditorOpen] = useState(false);
+  const [editingKnowledgeTool, setEditingKnowledgeTool] = useState<KnowledgeTool | null>(null);
+  const [knowledgeDraft, setKnowledgeDraft] = useState({
+    name: 'KnowledgeBaseSearch',
+    description: '检索外部知识库并返回命中文档片段。',
+    url: 'http://localhost:8080/search/knowledgeBaseSearch',
+    authorization: '',
+    headersJson: '{}',
+    defaultPayloadJson: JSON.stringify({
+      query: '',
+      filename_pattern: '',
+      filterCategories: [],
+      searchMode: '',
+    }, null, 2),
+    parameterInstructions: 'query 是检索问题；filename_pattern 用于按文件名过滤；filterCategories 是分类过滤数组；searchMode 是检索模式。',
+    enabled: true,
+  });
   const { servers: mcpServers, loading: mcpServersLoading } = useMcp();
   const { skills: enabledSkills, loading: skillsLoading } = useEnabledSkills();
+  const {
+    tools: knowledgeTools,
+    loading: knowledgeToolsLoading,
+    createTool: createKnowledgeTool,
+    updateTool: updateKnowledgeTool,
+    deleteTool: deleteKnowledgeTool,
+  } = useKnowledgeTools();
 
   const enabledMcpServers = useMemo(() => (
     mcpServers.filter((server) => (
@@ -75,6 +102,22 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
       .flatMap((server) => server.tools)
       .filter((tool) => selectedMcpToolSet.has(tool.id))
   ), [enabledMcpServers, selectedMcpToolSet]);
+
+  const selectedKnowledgeToolSet = useMemo(() => (
+    new Set(form.knowledgeTools)
+  ), [form.knowledgeTools]);
+
+  const selectedKnowledgeTools = useMemo(() => (
+    knowledgeTools.filter((tool) => selectedKnowledgeToolSet.has(tool.id))
+  ), [knowledgeTools, selectedKnowledgeToolSet]);
+
+  const primaryModelOptions = useMemo(() => {
+    return models?.primary ?? [];
+  }, [models?.primary]);
+
+  const fallbackModelOptions = useMemo(() => {
+    return models?.fallback ?? [];
+  }, [models?.fallback]);
 
   const selectedSkillSet = useMemo(() => (
     new Set(form.skills)
@@ -94,6 +137,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
         systemPrompt: agent.systemPrompt,
         modelConfig: { ...agent.modelConfig },
         mcpTools: [...agent.mcpTools],
+        knowledgeTools: [...agent.knowledgeTools],
         skills: [...agent.skills],
         tags: [...agent.tags],
         callableAgents: [...agent.callableAgents],
@@ -154,6 +198,76 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
 
     setMcpToolSelection(form.mcpTools.filter((id) => id !== toolId));
   }, [form.mcpTools, setMcpToolSelection]);
+
+  const toggleKnowledgeTool = useCallback((toolId: string, checked: boolean) => {
+    if (checked) {
+      setForm((current) => ({
+        ...current,
+        knowledgeTools: Array.from(new Set([...current.knowledgeTools, toolId])),
+      }));
+      return;
+    }
+
+    setForm((current) => ({
+      ...current,
+      knowledgeTools: current.knowledgeTools.filter((id) => id !== toolId),
+    }));
+  }, []);
+
+  const openKnowledgeEditor = useCallback((tool: KnowledgeTool | null = null) => {
+    setEditingKnowledgeTool(tool);
+    setKnowledgeDraft({
+      name: tool?.name ?? 'KnowledgeBaseSearch',
+      description: tool?.description ?? '检索外部知识库并返回命中文档片段。',
+      url: tool?.url ?? 'http://localhost:8080/search/knowledgeBaseSearch',
+      authorization: tool?.authorization ?? '',
+      headersJson: JSON.stringify(tool?.headers ?? {}, null, 2),
+      defaultPayloadJson: JSON.stringify(tool?.defaultPayload ?? {
+        query: '',
+        filename_pattern: '',
+        filterCategories: [],
+        searchMode: '',
+      }, null, 2),
+      parameterInstructions: tool?.parameterInstructions ?? 'query 是检索问题；filename_pattern 用于按文件名过滤；filterCategories 是分类过滤数组；searchMode 是检索模式。',
+      enabled: tool?.enabled ?? true,
+    });
+    setKnowledgeEditorOpen(true);
+  }, []);
+
+  const handleSaveKnowledgeTool = useCallback(async () => {
+    try {
+      const headers = JSON.parse(knowledgeDraft.headersJson || '{}');
+      const defaultPayload = JSON.parse(knowledgeDraft.defaultPayloadJson || '{}');
+      const payload = {
+        name: knowledgeDraft.name,
+        description: knowledgeDraft.description,
+        url: knowledgeDraft.url,
+        authorization: knowledgeDraft.authorization,
+        headers,
+        defaultPayload,
+        parameterInstructions: knowledgeDraft.parameterInstructions,
+        enabled: knowledgeDraft.enabled,
+      };
+      const saved = editingKnowledgeTool
+        ? await updateKnowledgeTool(editingKnowledgeTool.id, payload)
+        : await createKnowledgeTool(payload);
+      if (!editingKnowledgeTool) {
+        toggleKnowledgeTool(saved.id, true);
+      }
+      setKnowledgeEditorOpen(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存知识库工具失败，请检查 JSON 格式');
+    }
+  }, [createKnowledgeTool, editingKnowledgeTool, knowledgeDraft, toggleKnowledgeTool, updateKnowledgeTool]);
+
+  const handleDeleteKnowledgeTool = useCallback(async (toolId: string) => {
+    await deleteKnowledgeTool(toolId);
+    setForm((current) => ({
+      ...current,
+      knowledgeTools: current.knowledgeTools.filter((id) => id !== toolId),
+    }));
+  }, [deleteKnowledgeTool]);
 
   const toggleSkill = useCallback((skillId: string, checked: boolean) => {
     if (checked) {
@@ -291,7 +405,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                 默认工具（已锁定）
               </label>
               <div className="flex flex-wrap gap-2">
-                {['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash'].map((tool) => (
+                {['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'HttpRequest'].map((tool) => (
                   <Tag
                     key={tool}
                     color="transparent"
@@ -346,6 +460,58 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
               </div>
               <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
                 已选择 {form.mcpTools.length} 个 MCP 工具
+              </div>
+            </div>
+
+            {/* 知识库工具 */}
+            <div>
+              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
+                知识库 HTTP 工具
+              </label>
+              <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 text-sm text-[var(--color-text-secondary)]">
+                    {selectedKnowledgeTools.length > 0
+                      ? `已选择 ${selectedKnowledgeTools.length} 个知识库工具`
+                      : '未选择知识库工具'}
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <Button
+                      loading={knowledgeToolsLoading}
+                      onClick={() => setKnowledgeSelectorOpen(true)}
+                    >
+                      选择工具
+                    </Button>
+                    <Button
+                      type="primary"
+                      icon={<Plus size={14} />}
+                      onClick={() => openKnowledgeEditor(null)}
+                    >
+                      新增
+                    </Button>
+                  </div>
+                </div>
+                {selectedKnowledgeTools.length > 0 ? (
+                  <div className="mt-3 flex max-h-[72px] flex-wrap gap-2 overflow-hidden">
+                    {selectedKnowledgeTools.slice(0, 8).map((tool) => (
+                      <Tag key={tool.id} size="small" color="green">
+                        {tool.name}
+                      </Tag>
+                    ))}
+                    {selectedKnowledgeTools.length > 8 && (
+                      <Tag size="small" color="transparent">
+                        +{selectedKnowledgeTools.length - 8}
+                      </Tag>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
+                    可以新增一个知识库 HTTP 工具，然后选择注入到当前 Agent。
+                  </div>
+                )}
+              </div>
+              <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                已选择 {form.knowledgeTools.length} 个知识库工具
               </div>
             </div>
 
@@ -410,6 +576,12 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
             </div>
           </div>
           <div className="space-y-3">
+            {primaryModelOptions.length === 0 && (
+              <Alert
+                type="warning"
+                message="当前系统设置中的供应商未配置可用模型。请先到系统设置为当前供应商配置 API Key 和模型。"
+              />
+            )}
             <div>
               <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
                 主模型
@@ -422,7 +594,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                     modelConfig: { ...form.modelConfig, primary: value },
                   })
                 }
-                options={models?.primary.map((m) => ({
+                options={primaryModelOptions.map((m) => ({
                   label: `${m.name} - ${m.description}`,
                   value: m.id,
                 }))}
@@ -447,7 +619,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                           modelConfig: { ...form.modelConfig, fallback: newFallback },
                         });
                       }}
-                      options={models?.fallback.map((m) => ({
+                      options={fallbackModelOptions.map((m) => ({
                         label: m.name,
                         value: m.id,
                       }))}
@@ -829,6 +1001,166 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
             })}
           </div>
         )}
+      </Modal>
+
+      <Modal
+        title="选择知识库 HTTP 工具"
+        open={knowledgeSelectorOpen}
+        onCancel={() => setKnowledgeSelectorOpen(false)}
+        onOk={() => setKnowledgeSelectorOpen(false)}
+        okText="完成"
+        cancelText="关闭"
+        width={760}
+      >
+        {knowledgeTools.length === 0 ? (
+          <div className="py-8 text-center text-sm text-[var(--color-text-tertiary)]">
+            暂无知识库工具。可以先点击新增，配置你的知识库检索接口。
+          </div>
+        ) : (
+          <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
+            {knowledgeTools.map((tool) => (
+              <div
+                key={tool.id}
+                className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-4 py-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <Checkbox
+                    checked={selectedKnowledgeToolSet.has(tool.id)}
+                    disabled={!tool.enabled}
+                    onChange={(event) => toggleKnowledgeTool(tool.id, event.target.checked)}
+                  >
+                    <span className="font-medium text-[var(--color-text-primary)]">
+                      {tool.name}
+                    </span>
+                  </Checkbox>
+                  <div className="flex shrink-0 gap-1">
+                    <Button
+                      type="text"
+                      icon={<Pencil size={14} />}
+                      onClick={() => openKnowledgeEditor(tool)}
+                      aria-label="编辑知识库工具"
+                    />
+                    <Button
+                      danger
+                      type="text"
+                      icon={<Trash2 size={14} />}
+                      onClick={() => handleDeleteKnowledgeTool(tool.id)}
+                      aria-label="删除知识库工具"
+                    />
+                  </div>
+                </div>
+                <div className="mt-2 line-clamp-2 text-xs text-[var(--color-text-secondary)]">
+                  {tool.description || tool.parameterInstructions}
+                </div>
+                <div className="mt-2 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
+                  <Tag size="small" color={tool.enabled ? 'green' : 'transparent'}>
+                    {tool.enabled ? '已启用' : '已停用'}
+                  </Tag>
+                  <span className="truncate">{tool.url}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        title={editingKnowledgeTool ? '编辑知识库 HTTP 工具' : '新增知识库 HTTP 工具'}
+        open={knowledgeEditorOpen}
+        onCancel={() => setKnowledgeEditorOpen(false)}
+        onOk={handleSaveKnowledgeTool}
+        okText="保存"
+        cancelText="取消"
+        width={780}
+      >
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              工具名称
+            </label>
+            <Input
+              value={knowledgeDraft.name}
+              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, name: event.target.value })}
+              placeholder="如：公司知识库检索"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              是否启用
+            </label>
+            <ToggleButton
+              checked={knowledgeDraft.enabled}
+              checkedLabel="启用"
+              uncheckedLabel="停用"
+              ariaLabel="启用知识库工具"
+              onChange={(checked) => setKnowledgeDraft({ ...knowledgeDraft, enabled: checked })}
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              接口地址
+            </label>
+            <Input
+              value={knowledgeDraft.url}
+              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, url: event.target.value })}
+              placeholder="http://localhost:8080/search/knowledgeBaseSearch"
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              Authorization
+            </label>
+            <Input
+              value={knowledgeDraft.authorization}
+              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, authorization: event.target.value })}
+              placeholder="直接填写 Authorization header 的完整值"
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              工具描述
+            </label>
+            <Input.TextArea
+              rows={3}
+              value={knowledgeDraft.description}
+              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, description: event.target.value })}
+              placeholder="告诉模型什么时候应该调用这个知识库工具"
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              参数说明
+            </label>
+            <Input.TextArea
+              rows={3}
+              value={knowledgeDraft.parameterInstructions}
+              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, parameterInstructions: event.target.value })}
+              placeholder="说明 query、filename_pattern、filterCategories、searchMode 应该如何填写"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              Headers JSON
+            </label>
+            <Input.TextArea
+              rows={7}
+              value={knowledgeDraft.headersJson}
+              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, headersJson: event.target.value })}
+              style={{ fontFamily: 'var(--font-mono)' }}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              默认请求体 JSON
+            </label>
+            <Input.TextArea
+              rows={7}
+              value={knowledgeDraft.defaultPayloadJson}
+              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, defaultPayloadJson: event.target.value })}
+              style={{ fontFamily: 'var(--font-mono)' }}
+            />
+          </div>
+        </div>
       </Modal>
 
       <Modal

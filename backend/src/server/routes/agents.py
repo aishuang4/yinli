@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import uuid
 
 from src.agents.factory import invalidate_agent
+from src.config.runtime_settings import get_current_model_options
 from src.storage.database import (
     delete_agent as db_delete_agent,
     list_agents as db_list_agents,
@@ -79,6 +80,7 @@ class AgentCreate(BaseModel):
     system_prompt: str = Field(default="You are a helpful assistant.", description="系统提示词")
     model_config_data: ModelConfig = Field(default_factory=ModelConfig, alias="modelConfig", description="模型配置")
     mcp_tools: list[str] = Field(default_factory=list, alias="mcpTools", description="MCP 工具 ID 列表")
+    knowledge_tools: list[str] = Field(default_factory=list, alias="knowledgeTools", description="知识库 HTTP 工具 ID 列表")
     skills: list[str] = Field(default_factory=list, description="Skills ID 列表")
     tags: list[str] = Field(default_factory=list, description="标签")
     callable_agents: list[str] = Field(default_factory=list, alias="callableAgents", description="可调用的子 Agent ID 列表")
@@ -98,6 +100,7 @@ class AgentUpdate(BaseModel):
     system_prompt: Optional[str] = None
     model_config_data: Optional[ModelConfig] = Field(None, alias="modelConfig")
     mcp_tools: Optional[list[str]] = Field(None, alias="mcpTools")
+    knowledge_tools: Optional[list[str]] = Field(None, alias="knowledgeTools")
     skills: Optional[list[str]] = None
     tags: Optional[list[str]] = None
     callable_agents: Optional[list[str]] = Field(None, alias="callableAgents")
@@ -118,6 +121,7 @@ class AgentResponse(BaseModel):
     system_prompt: str
     model_config_data: ModelConfig = Field(alias="modelConfig")
     mcp_tools: list[str] = Field(alias="mcpTools")
+    knowledge_tools: list[str] = Field(default_factory=list, alias="knowledgeTools")
     skills: list[str]
     tags: list[str]
     callable_agents: list[str] = Field(alias="callableAgents")
@@ -219,23 +223,11 @@ async def list_models() -> dict:
     Returns:
         dict: 模型列表（按类别分组）
     """
-    return {
-        "primary": [
-            {"id": "qwen3.7-max", "name": "Qwen 3.7 Max", "description": "深度思考，非多模态模型"},
-            {"id": "qwen3.7-plus", "name": "Qwen 3.7 Plus", "description": "深度思考，多模态图片输入"},
-            {"id": "qwen-max", "name": "Qwen Max", "description": "最强性能，复杂任务"},
-            {"id": "qwen-plus", "name": "Qwen Plus", "description": "均衡性能，日常任务"},
-            {"id": "qwen-turbo", "name": "Qwen Turbo", "description": "快速响应，简单任务"},
-        ],
-        "fallback": [
-            {"id": "qwen3.7-max", "name": "Qwen 3.7 Max", "description": "强能力降级选项，非多模态"},
-            {"id": "qwen3.7-plus", "name": "Qwen 3.7 Plus", "description": "多模态降级选项"},
-            {"id": "qwen-max", "name": "Qwen Max", "description": "高质量降级选项"},
-            {"id": "qwen-plus", "name": "Qwen Plus", "description": "均衡降级选项"},
-            {"id": "qwen-turbo", "name": "Qwen Turbo", "description": "快速降级选项"},
-            {"id": "qwen-long", "name": "Qwen Long", "description": "长文本降级选项"},
-        ],
-    }
+    options = [
+        {"id": model, "name": model, "description": "系统设置中的可用模型"}
+        for model in get_current_model_options()
+    ]
+    return {"primary": options, "fallback": options}
 
 
 @router.get("", response_model=list[AgentResponse])
@@ -269,6 +261,7 @@ async def create_agent(data: AgentCreate) -> AgentResponse:
         "system_prompt": data.system_prompt,
         "modelConfig": data.model_config_data,
         "mcpTools": data.mcp_tools,
+        "knowledgeTools": data.knowledge_tools,
         "skills": data.skills,
         "tags": data.tags,
         "callableAgents": data.callable_agents,
@@ -330,6 +323,8 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
         update_dict["modelConfig"] = update_dict.pop("model_config_data")
     if "mcp_tools" in update_dict:
         update_dict["mcpTools"] = update_dict.pop("mcp_tools")
+    if "knowledge_tools" in update_dict:
+        update_dict["knowledgeTools"] = update_dict.pop("knowledge_tools")
     if "callable_agents" in update_dict:
         update_dict["callableAgents"] = update_dict.pop("callable_agents")
     if "max_depth" in update_dict:
@@ -349,6 +344,30 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
     invalidate_agent(agent_id)
     upsert_agent(updated_agent.model_dump(by_alias=True))
     return updated_agent
+
+
+def remove_knowledge_tools_from_agents(tool_ids: set[str]) -> int:
+    """Remove deleted knowledge tool ids from all persisted Agents."""
+
+    if not tool_ids:
+        return 0
+
+    changed = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for agent_id, agent in list(_agents.items()):
+        next_tools = [tool_id for tool_id in agent.knowledge_tools if tool_id not in tool_ids]
+        if len(next_tools) == len(agent.knowledge_tools):
+            continue
+
+        updated_agent = agent.model_copy(update={
+            "knowledge_tools": next_tools,
+            "updated_at": now,
+        })
+        _agents[agent_id] = updated_agent
+        invalidate_agent(agent_id)
+        upsert_agent(updated_agent.model_dump(by_alias=True))
+        changed += 1
+    return changed
 
 
 @router.delete("/{agent_id}", status_code=204)

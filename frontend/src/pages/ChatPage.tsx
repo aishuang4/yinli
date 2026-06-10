@@ -16,9 +16,12 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, BookOpenCheck, Users, CheckCircle2, Clock3, Copy, Check } from 'lucide-react';
 import { Button, Empty, Select, Spinner, Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../components/MarkdownContent';
-import { useEventStream, type HitlRequestInfo, type MemorySummaryInfo, type SkillCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
+import { useEventStream, type ClarificationRequestInfo, type HitlRequestInfo, type MemorySummaryInfo, type ModelCacheInfo, type SkillCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
+import { createId } from '../utils/id';
+import type { Agent } from '../types/agent';
+import type { TeamMember } from '../types/team';
 
 /** 本地消息记录 */
 interface LocalMessage {
@@ -58,6 +61,13 @@ interface ChatImageAttachment extends ChatImagePayload {
   previewUrl: string;
 }
 
+interface PendingTeamSelection {
+  message: string;
+  images: ChatImagePayload[];
+  selectedAgentIds: string[];
+  reason: string;
+}
+
 interface ChatSession {
   id: string;
   title: string;
@@ -95,7 +105,7 @@ type StoredTeamActivity = Partial<TeamActivityInfo> & {
 
 function normalizeStoredTeamActivities(activities: StoredTeamActivity[]): TeamActivityInfo[] {
   return activities.map((activity) => ({
-    id: String(activity.id || crypto.randomUUID()),
+    id: String(activity.id || createId()),
     agentId: String(activity.agentId || activity.agent_id || ''),
     agentName: String(activity.agentName || activity.agent_name || 'Agent'),
     role: String(activity.role || 'worker'),
@@ -114,6 +124,7 @@ function normalizeStoredTeamActivities(activities: StoredTeamActivity[]): TeamAc
     thinking: String(activity.thinking || ''),
     currentEvent: String(activity.currentEvent || ''),
     toolCalls: activity.toolCalls || activity.tool_calls || [],
+    dependsOn: activity.dependsOn || [],
     createdAt: String(activity.createdAt || activity.created_at || ''),
   }));
 }
@@ -129,6 +140,8 @@ export function ChatPage() {
   const [targetMode, setTargetMode] = useState<'agent' | 'team'>('agent');
   const [selectedAgentId, setSelectedAgentId] = useState<string>('default');
   const [selectedTeamId, setSelectedTeamId] = useState<string>('');
+  const [selectingTeamWorkers, setSelectingTeamWorkers] = useState(false);
+  const [pendingTeamSelection, setPendingTeamSelection] = useState<PendingTeamSelection | null>(null);
   const [inputValue, setInputValue] = useState('');
   const [deepThinking, setDeepThinking] = useState(false);
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
@@ -205,6 +218,15 @@ export function ChatPage() {
     return () => window.clearTimeout(timer);
   }, [selectedTeamActivity]);
 
+  const buildTeamMembersForRun = useCallback((workerAgentIds: string[] | null) => {
+    if (!selectedTeam) return [];
+    if (workerAgentIds === null) return selectedTeam.members;
+    const selectedWorkers = new Set(workerAgentIds);
+    return selectedTeam.members.filter((member) => (
+      member.role === 'leader' || selectedWorkers.has(member.agentId)
+    ));
+  }, [selectedTeam]);
+
   const loadSessions = useCallback(async () => {
     try {
       setSessionsLoading(true);
@@ -263,7 +285,7 @@ export function ChatPage() {
   useEffect(() => {
     if (!shouldAutoScrollRef.current) return;
     scrollToBottom(state.isStreaming ? 'auto' : 'smooth');
-  }, [messages, scrollToBottom, state.isStreaming, state.textContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities, state.memorySummaries]);
+  }, [messages, scrollToBottom, state.isStreaming, state.textContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities, state.memorySummaries, state.modelCaches]);
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
@@ -322,7 +344,7 @@ export function ChatPage() {
           const previewUrl = String(reader.result);
           const [, data = ''] = previewUrl.split(',', 2);
           resolve({
-            id: crypto.randomUUID(),
+            id: createId(),
             name: file.name,
             media_type: file.type || 'image/png',
             data,
@@ -345,6 +367,48 @@ export function ChatPage() {
     setImageAttachments((current) => current.filter((item) => item.id !== id));
   }, []);
 
+  const prepareTeamSelection = useCallback(async (message: string, images: ChatImagePayload[]) => {
+    if (!selectedTeam || targetMode !== 'team') return;
+    setSelectingTeamWorkers(true);
+    setPendingTeamSelection(null);
+    try {
+      const response = await fetch('/api/chat/team-worker-selection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          agentId: runtimeAgent?.id,
+          agentName: runtimeAgent?.name,
+          teamName: selectedTeam.name,
+          teamMembers: selectedTeam.members,
+          model: runtimeAgent?.modelConfig.primary,
+        }),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${response.status}`);
+      }
+      const result = await response.json() as { selectedAgentIds?: string[]; reason?: string };
+      setPendingTeamSelection({
+        message,
+        images,
+        selectedAgentIds: result.selectedAgentIds || [],
+        reason: result.reason || '模型已完成 Worker 预选。',
+      });
+    } catch (err) {
+      setPendingTeamSelection({
+        message,
+        images,
+        selectedAgentIds: selectedTeam.members
+          .filter((member) => member.role === 'worker')
+          .map((member) => member.agentId),
+        reason: err instanceof Error ? `AI 选择失败，默认使用全部 Worker：${err.message}` : 'AI 选择失败，默认使用全部 Worker。',
+      });
+    } finally {
+      setSelectingTeamWorkers(false);
+    }
+  }, [runtimeAgent, selectedTeam, targetMode]);
+
   /** 发送消息 */
   const handleSend = useCallback(async () => {
     if ((!inputValue.trim() && imageAttachments.length === 0) || state.isStreaming) return;
@@ -362,12 +426,17 @@ export function ChatPage() {
     }
 
     const userText = inputValue.trim() || '请分析这张图片。';
-    const sessionId = activeSessionId || crypto.randomUUID();
+    const sessionId = activeSessionId || createId();
     const images = imageAttachments.map(({ name, media_type, data }) => ({
       name,
       media_type,
       data,
     }));
+    if (targetMode === 'team') {
+      await prepareTeamSelection(userText, images);
+      return;
+    }
+
     const userMessage: LocalMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -388,23 +457,100 @@ export function ChatPage() {
       sessionId,
       agentId: runtimeAgent?.id,
       agentName: runtimeAgent?.name,
-      teamId: targetMode === 'team' ? selectedTeam?.id : undefined,
-      teamName: targetMode === 'team' ? selectedTeam?.name : undefined,
-      teamMembers: targetMode === 'team'
-        ? selectedTeam?.members.map((member) => ({
-          agentId: member.agentId,
-          name: agents.find((agent) => agent.id === member.agentId)?.name || member.name,
-          role: member.role,
-          description: member.description,
-        }))
-        : undefined,
       systemPrompt: runtimeAgent?.systemPrompt,
       model: runtimeAgent?.modelConfig.primary,
       skillIds: runtimeAgent?.skills,
       deepThinking,
       images,
     });
-  }, [activeSessionId, agents, deepThinking, imageAttachments, inputValue, runtimeAgent, selectedModelId, selectedModelSupportsImages, selectedTeam, sendMessage, state.isStreaming, targetMode, teamLeaderAgent]);
+  }, [activeSessionId, deepThinking, imageAttachments, inputValue, prepareTeamSelection, runtimeAgent, selectedModelId, selectedModelSupportsImages, selectedTeam, sendMessage, state.isStreaming, targetMode, teamLeaderAgent]);
+
+  const handleSubmitClarification = useCallback(async (content: string) => {
+    if (!content.trim() || state.isStreaming) return;
+    const sessionId = activeSessionId || createId();
+    const userMessage: LocalMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content,
+      createdAt: new Date().toISOString(),
+      images: [],
+    };
+
+    setActiveSessionId(sessionId);
+    shouldAutoScrollRef.current = true;
+    setShowScrollToBottom(false);
+    setMessages((prev) => [...prev, userMessage]);
+    setChatError(null);
+
+    await sendMessage(content, {
+      sessionId,
+      agentId: runtimeAgent?.id,
+      agentName: runtimeAgent?.name,
+      teamId: targetMode === 'team' ? selectedTeam?.id : undefined,
+      teamName: targetMode === 'team' ? selectedTeam?.name : undefined,
+      teamMembers: targetMode === 'team'
+        ? buildTeamMembersForRun(null).map((member) => ({
+          id: member.id,
+          agentId: member.agentId,
+          name: agents.find((agent) => agent.id === member.agentId)?.name || member.name,
+          role: member.role,
+          description: member.description,
+          executionMode: member.executionMode,
+          dependsOn: member.dependsOn,
+          handoffPrompt: member.handoffPrompt,
+        }))
+        : undefined,
+      systemPrompt: runtimeAgent?.systemPrompt,
+      model: runtimeAgent?.modelConfig.primary,
+      skillIds: runtimeAgent?.skills,
+      deepThinking,
+      images: [],
+    });
+  }, [activeSessionId, agents, buildTeamMembersForRun, deepThinking, runtimeAgent, selectedTeam, sendMessage, state.isStreaming, targetMode]);
+
+  const confirmTeamSelection = useCallback(async (workerAgentIds: string[]) => {
+    if (!pendingTeamSelection || state.isStreaming) return;
+    const sessionId = activeSessionId || createId();
+    const userMessage: LocalMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: pendingTeamSelection.message,
+      createdAt: new Date().toISOString(),
+      images: pendingTeamSelection.images,
+    };
+
+    setActiveSessionId(sessionId);
+    shouldAutoScrollRef.current = true;
+    setShowScrollToBottom(false);
+    setMessages((prev) => [...prev, userMessage]);
+    setInputValue('');
+    setImageAttachments([]);
+    setChatError(null);
+    setPendingTeamSelection(null);
+
+    await sendMessage(pendingTeamSelection.message, {
+      sessionId,
+      agentId: runtimeAgent?.id,
+      agentName: runtimeAgent?.name,
+      teamId: selectedTeam?.id,
+      teamName: selectedTeam?.name,
+      teamMembers: buildTeamMembersForRun(workerAgentIds).map((member) => ({
+        id: member.id,
+        agentId: member.agentId,
+        name: agents.find((agent) => agent.id === member.agentId)?.name || member.name,
+        role: member.role,
+        description: member.description,
+        executionMode: member.executionMode,
+        dependsOn: member.dependsOn,
+        handoffPrompt: member.handoffPrompt,
+      })),
+      systemPrompt: runtimeAgent?.systemPrompt,
+      model: runtimeAgent?.modelConfig.primary,
+      skillIds: runtimeAgent?.skills,
+      deepThinking,
+      images: pendingTeamSelection.images,
+    });
+  }, [activeSessionId, agents, buildTeamMembersForRun, deepThinking, pendingTeamSelection, runtimeAgent, selectedTeam, sendMessage, state.isStreaming]);
 
   // 当流结束时，将 assistant 回复加入消息历史
   useEffect(() => {
@@ -530,7 +676,7 @@ export function ChatPage() {
         }}
       >
         <div className="grid min-h-0 grid-rows-[auto_1fr_auto] overflow-hidden">
-          <header className="flex items-center gap-4 px-5 py-4">
+          <header className="px-5 py-4">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-agent-leader)] text-white">
               <Bot size={18} strokeWidth={1.5} />
@@ -593,6 +739,7 @@ export function ChatPage() {
                         message={msg}
                         selectedTeamActivityId={selectedTeamActivityId}
                         onSelectTeamActivity={setSelectedTeamActivityId}
+                        onSubmitClarification={handleSubmitClarification}
                       />
                     ))}
 
@@ -603,6 +750,7 @@ export function ChatPage() {
                         skillCalls={state.skillCalls}
                         teamActivities={state.teamActivities}
                         memorySummaries={state.memorySummaries}
+                        modelCaches={state.modelCaches}
                         hitlRequests={state.hitlRequests}
                         onResolveHitl={resumeInteraction}
                         selectedTeamActivityId={selectedTeamActivityId}
@@ -640,10 +788,28 @@ export function ChatPage() {
             </div>
           )}
 
+          {(selectingTeamWorkers || pendingTeamSelection) && (
+            <TeamSelectionDock
+              pending={pendingTeamSelection}
+              selecting={selectingTeamWorkers}
+              agents={agents}
+              members={selectedTeam?.members || []}
+              onConfirm={(workerIds) => void confirmTeamSelection(workerIds)}
+              onCancel={() => setPendingTeamSelection(null)}
+            />
+          )}
+
           {state.hitlRequests.length > 0 && (
             <HitlDock
               requests={state.hitlRequests}
               onResolve={resumeInteraction}
+            />
+          )}
+
+          {state.clarificationRequests.length > 0 && (
+            <ClarificationDock
+              requests={state.clarificationRequests}
+              onSubmit={handleSubmitClarification}
             />
           )}
 
@@ -666,9 +832,9 @@ export function ChatPage() {
               onCompositionEnd={() => {
                 isComposingRef.current = false;
               }}
-              placeholder={state.isStreaming ? 'Agent 正在回复中...' : '输入消息...'}
+              placeholder={state.isStreaming ? 'Agent 正在回复中...' : selectingTeamWorkers ? 'AI 正在选择 Worker...' : '输入消息...'}
               rows={3}
-              disabled={state.isStreaming}
+              disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
               className="block min-h-[96px] max-h-[180px] w-full resize-none rounded-t-lg border-0 bg-transparent px-4 py-3 text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:bg-[var(--color-bg-tertiary)]"
               aria-label="消息输入框"
             />
@@ -703,7 +869,7 @@ export function ChatPage() {
                 <Button
                   size="small"
                   type={targetMode === 'agent' ? 'primary' : 'text'}
-                  disabled={state.isStreaming}
+                  disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
                   onClick={() => setTargetMode('agent')}
                 >
                   单 Agent
@@ -711,7 +877,7 @@ export function ChatPage() {
                 <Button
                   size="small"
                   type={targetMode === 'team' ? 'primary' : 'text'}
-                  disabled={state.isStreaming}
+                  disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
                   onClick={() => setTargetMode('team')}
                 >
                   Team
@@ -723,7 +889,7 @@ export function ChatPage() {
                   onChange={(value) => setSelectedAgentId(value)}
                   options={agentOptions}
                   loading={agentsLoading}
-                  disabled={state.isStreaming}
+                  disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
                   style={{ width: 260 }}
                 />
               ) : (
@@ -732,7 +898,7 @@ export function ChatPage() {
                   onChange={(value) => setSelectedTeamId(value)}
                   options={teamOptions}
                   loading={teamsLoading}
-                  disabled={state.isStreaming}
+                  disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
                   placeholder="选择 Team"
                   style={{ width: 260 }}
                 />
@@ -747,7 +913,7 @@ export function ChatPage() {
               <div className="ml-auto flex items-center gap-2">
                 <Button
                   onClick={() => imageInputRef.current?.click()}
-                  disabled={state.isStreaming || imageAttachments.length >= 4}
+                  disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection) || imageAttachments.length >= 4}
                 >
                   <ImagePlus size={16} />
                 </Button>
@@ -757,7 +923,7 @@ export function ChatPage() {
                     停止
                   </Button>
                 ) : (
-                  <Button type="primary" onClick={handleSend} disabled={!inputValue.trim() && imageAttachments.length === 0}>
+                  <Button type="primary" onClick={handleSend} disabled={selectingTeamWorkers || Boolean(pendingTeamSelection) || (!inputValue.trim() && imageAttachments.length === 0)}>
                     <Send size={16} />
                     发送
                   </Button>
@@ -793,16 +959,70 @@ export function ChatPage() {
 /**
  * MessageBubble — 历史消息气泡（已完成的消息）
  */
+function extractClarificationFromText(content: string): ClarificationRequestInfo | null {
+  const match = content.match(/<clarification>\s*([\s\S]*?)\s*<\/clarification>/);
+  const rawText = match?.[1] ?? extractRawClarificationJson(content);
+  if (!rawText) return null;
+
+  try {
+    const raw = JSON.parse(rawText);
+    const questions = Array.isArray(raw.questions)
+      ? raw.questions
+        .map((question: Record<string, unknown>, index: number) => {
+          const type = String(question.type || '');
+          if (!['choice', 'multi_choice', 'text'].includes(type)) return null;
+          const id = String(question.id || `q${index + 1}`);
+          const label = String(question.label || question.question || '');
+          if (!id || !label) return null;
+          const options = Array.isArray(question.options)
+            ? question.options.map((option) => String(option).trim()).filter(Boolean).slice(0, 5)
+            : [];
+          if ((type === 'choice' || type === 'multi_choice') && options.length < 2) return null;
+          return {
+            id,
+            type: type as 'choice' | 'multi_choice' | 'text',
+            label,
+            options,
+            placeholder: String(question.placeholder || ''),
+            required: question.required !== false,
+          };
+        })
+        .filter(Boolean)
+      : [];
+    if (questions.length === 0) return null;
+    return {
+      id: `clarification-${Date.now()}`,
+      title: String(raw.title || '需要补充信息'),
+      description: String(raw.description || ''),
+      questions: questions as ClarificationRequestInfo['questions'],
+      createdAt: new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function extractRawClarificationJson(content: string): string | null {
+  if (!content.includes('"title"') || !content.includes('"questions"')) return null;
+  const start = content.indexOf('{');
+  const end = content.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  return content.slice(start, end + 1);
+}
+
 function MessageBubble({
   message,
   selectedTeamActivityId,
   onSelectTeamActivity,
+  onSubmitClarification,
 }: {
   message: LocalMessage;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
+  onSubmitClarification: (content: string) => Promise<void>;
 }) {
   const isUser = message.role === 'user';
+  const clarification = !isUser ? extractClarificationFromText(message.content) : null;
 
   return (
     <div
@@ -886,7 +1106,14 @@ function MessageBubble({
         )}
 
         {/* 文本内容 */}
-        {message.content && (
+        {clarification && (
+          <ClarificationBlock
+            request={clarification}
+            onSubmit={onSubmitClarification}
+          />
+        )}
+
+        {message.content && !clarification && (
           <div
             style={{
               padding: '10px 14px',
@@ -907,7 +1134,7 @@ function MessageBubble({
           </div>
         )}
 
-        {!isUser && message.content && (
+        {!isUser && message.content && !clarification && (
           <MessageToolbar markdown={message.content} createdAt={message.createdAt} />
         )}
 
@@ -943,6 +1170,7 @@ function StreamingBubble({
   skillCalls,
   teamActivities,
   memorySummaries,
+  modelCaches,
   hitlRequests,
   onResolveHitl,
   selectedTeamActivityId,
@@ -955,6 +1183,7 @@ function StreamingBubble({
   skillCalls: SkillCallInfo[];
   teamActivities: TeamActivityInfo[];
   memorySummaries: MemorySummaryInfo[];
+  modelCaches: ModelCacheInfo[];
   hitlRequests: HitlRequestInfo[];
   onResolveHitl: (interactionId: string, action: 'approve' | 'reject') => Promise<void>;
   selectedTeamActivityId: string | null;
@@ -996,6 +1225,10 @@ function StreamingBubble({
 
         {memorySummaries.length > 0 && (
           <MemorySummaryBlock summaries={memorySummaries} />
+        )}
+
+        {modelCaches.length > 0 && (
+          <ModelCacheBlock caches={modelCaches} />
         )}
 
         {hitlRequests.map((request) => (
@@ -1044,7 +1277,7 @@ function StreamingBubble({
         )}
 
         {/* 无内容时显示加载指示器 */}
-        {!textContent && toolCalls.length === 0 && skillCalls.length === 0 && teamActivities.length === 0 && memorySummaries.length === 0 && hitlRequests.length === 0 && !thinkingContent && (
+        {!textContent && toolCalls.length === 0 && skillCalls.length === 0 && teamActivities.length === 0 && memorySummaries.length === 0 && modelCaches.length === 0 && hitlRequests.length === 0 && !thinkingContent && (
           <div
             style={{
               display: 'flex',
@@ -1321,6 +1554,19 @@ function TeamActivitySidebar({
           </div>
         </section>
 
+        {activity.dependsOn.length > 0 && (
+          <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
+            <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">依赖 Worker</div>
+            <div className="flex flex-wrap gap-1">
+              {activity.dependsOn.map((dependency) => (
+                <Tag key={dependency} size="small" color="transparent">
+                  {dependency}
+                </Tag>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
           <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">任务</div>
           <div className="whitespace-pre-wrap break-words text-sm text-[var(--color-text-secondary)]">
@@ -1366,6 +1612,76 @@ function TeamActivitySidebar({
   );
 }
 
+function TeamSelectionDock({
+  pending,
+  selecting,
+  agents,
+  members,
+  onConfirm,
+  onCancel,
+}: {
+  pending: PendingTeamSelection | null;
+  selecting: boolean;
+  agents: Agent[];
+  members: TeamMember[];
+  onConfirm: (workerIds: string[]) => void;
+  onCancel: () => void;
+}) {
+  const workerMembers = members.filter((member) => member.role === 'worker');
+  const allWorkerIds = workerMembers.map((member) => member.agentId);
+  const selected = new Set(pending?.selectedAgentIds || []);
+  const selectedNames = workerMembers
+    .filter((member) => selected.has(member.agentId))
+    .map((member) => agents.find((agent) => agent.id === member.agentId)?.name || member.name);
+
+  return (
+    <div className="mx-auto mb-3 max-w-4xl rounded-xl bg-[var(--color-bg-secondary)] p-3 shadow-md">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
+            {selecting && <Loader2 size={14} className="animate-spin text-[var(--color-accent)]" />}
+            <span>{selecting ? 'AI 正在选择本轮 Worker' : '确认本轮 Team 协作'}</span>
+          </div>
+          <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+            {selecting
+              ? '系统会根据当前任务和 Worker 职责预选相关子 Agent。'
+              : pending?.reason || '模型已给出建议，可确认或改用全部 Worker。'}
+          </div>
+          {!selecting && (
+            <div className="mt-2 text-xs text-[var(--color-text-secondary)]">
+              {selectedNames.length > 0
+                ? `建议参与：${selectedNames.join('、')}`
+                : '建议仅由 Leader 处理，不启动 Worker。'}
+            </div>
+          )}
+        </div>
+        {!selecting && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md px-2 py-1 text-xs text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)]"
+          >
+            取消
+          </button>
+        )}
+      </div>
+      {!selecting && pending && (
+        <div className="mt-3 flex flex-wrap justify-end gap-2">
+          <Button onClick={() => onConfirm([])}>
+            仅 Leader
+          </Button>
+          <Button onClick={() => onConfirm(allWorkerIds)}>
+            全部 Worker
+          </Button>
+          <Button type="primary" onClick={() => onConfirm(pending.selectedAgentIds)}>
+            确认协作
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MemorySummaryBlock({ summaries }: { summaries: MemorySummaryInfo[] }) {
   const factCount = summaries.reduce((total, summary) => total + summary.facts.length, 0);
 
@@ -1398,6 +1714,54 @@ function MemorySummaryBlock({ summaries }: { summaries: MemorySummaryInfo[] }) {
                 </div>
               ))}
             </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ModelCacheBlock({ caches }: { caches: ModelCacheInfo[] }) {
+  return (
+    <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
+      <div className="flex items-center justify-between gap-3 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
+          <Clock3 size={14} color="var(--color-accent)" />
+          <span>服务端 Prompt Cache</span>
+        </div>
+        <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
+          {caches.length} 次调用
+        </span>
+      </div>
+      <div className="space-y-2 px-3 pb-3">
+        {caches.map((cache) => (
+          <div
+            key={cache.id}
+            className="rounded-md bg-[var(--color-bg-primary)] px-3 py-2"
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate text-sm text-[var(--color-text-primary)]">
+                  {cache.modelName || 'model'}
+                </div>
+                <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                  输入 {cache.inputTokens} · 输出 {cache.outputTokens}
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                <Tag size="small" color={cache.cacheCreationInputTokens > 0 ? 'blue' : 'transparent'}>
+                  创建 {cache.cacheCreationInputTokens}
+                </Tag>
+                <Tag size="small" color={cache.cacheInputTokens > 0 ? 'success' : 'transparent'}>
+                  命中 {cache.cacheInputTokens}
+                </Tag>
+              </div>
+            </div>
+            {cache.cacheCreationInputTokens === 0 && cache.cacheInputTokens === 0 && (
+              <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
+                本次模型响应未返回服务端缓存用量。
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -1505,6 +1869,163 @@ function HitlDock({
             onResolve={onResolve}
           />
         ))}
+      </div>
+    </div>
+  );
+}
+
+function ClarificationDock({
+  requests,
+  onSubmit,
+}: {
+  requests: ClarificationRequestInfo[];
+  onSubmit: (content: string) => Promise<void>;
+}) {
+  if (requests.length === 0) return null;
+
+  return (
+    <div className="mx-auto mb-3 max-w-4xl rounded-xl border border-[var(--color-accent)] bg-[var(--color-bg-primary)] p-3 shadow-lg">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
+          <AlertCircle size={15} color="var(--color-accent)" />
+          <span>需要补充信息</span>
+          <Tag size="small" color="blue">
+            {requests.length}
+          </Tag>
+        </div>
+        <div className="text-xs text-[var(--color-text-tertiary)]">
+          提交后 Agent 会继续处理
+        </div>
+      </div>
+      <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
+        {requests.map((request) => (
+          <ClarificationBlock
+            key={request.id}
+            request={request}
+            onSubmit={onSubmit}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ClarificationBlock({
+  request,
+  onSubmit,
+}: {
+  request: ClarificationRequestInfo;
+  onSubmit: (content: string) => Promise<void>;
+}) {
+  const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
+  const [submitting, setSubmitting] = useState(false);
+
+  const setAnswer = (id: string, value: string | string[]) => {
+    setAnswers((current) => ({ ...current, [id]: value }));
+  };
+
+  const toggleMulti = (id: string, option: string) => {
+    const current = Array.isArray(answers[id]) ? answers[id] as string[] : [];
+    setAnswer(
+      id,
+      current.includes(option)
+        ? current.filter((item) => item !== option)
+        : [...current, option],
+    );
+  };
+
+  const handleSubmit = async () => {
+    const missing = request.questions.some((question) => {
+      if (!question.required) return false;
+      const value = answers[question.id];
+      return Array.isArray(value) ? value.length === 0 : !String(value || '').trim();
+    });
+    if (missing) return;
+
+    const lines = request.questions.map((question) => {
+      const value = answers[question.id];
+      const answer = Array.isArray(value) ? value.join('、') : String(value || '').trim();
+      return `- ${question.label}: ${answer || '未填写'}`;
+    });
+    setSubmitting(true);
+    try {
+      await onSubmit(`补充信息：\n${lines.join('\n')}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg bg-[var(--color-bg-secondary)] p-3 shadow-sm">
+      <div className="text-sm font-medium text-[var(--color-text-primary)]">
+        {request.title}
+      </div>
+      {request.description && (
+        <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+          {request.description}
+        </div>
+      )}
+      <div className="mt-3 space-y-3">
+        {request.questions.map((question) => (
+          <div key={question.id}>
+            <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">
+              {question.label}
+            </div>
+            {question.type === 'choice' && (
+              <div className="flex flex-wrap gap-2">
+                {question.options.map((option) => (
+                  <Button
+                    key={option}
+                    size="small"
+                    type={answers[question.id] === option ? 'primary' : 'default'}
+                    onClick={() => setAnswer(question.id, option)}
+                  >
+                    {option}
+                  </Button>
+                ))}
+              </div>
+            )}
+            {question.type === 'multi_choice' && (
+              <div className="flex flex-wrap gap-2">
+                {question.options.map((option) => {
+                  const selected = Array.isArray(answers[question.id]) && (answers[question.id] as string[]).includes(option);
+                  return (
+                    <label
+                      key={option}
+                      className={`flex cursor-pointer items-center gap-2 rounded-md border px-2 py-1 text-xs transition ${
+                        selected
+                          ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-text-inverse)]'
+                          : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)]'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-3 w-3"
+                        checked={selected}
+                        onChange={() => toggleMulti(question.id, option)}
+                      />
+                      {option}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            {question.type === 'text' && (
+              <textarea
+                value={String(answers[question.id] || '')}
+                onChange={(event) => setAnswer(question.id, event.target.value)}
+                placeholder={question.placeholder || '请输入补充信息'}
+                rows={3}
+                className="w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+              />
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex justify-end">
+        <Button type="primary" loading={submitting} onClick={handleSubmit}>
+          提交补充信息
+        </Button>
       </div>
     </div>
   );

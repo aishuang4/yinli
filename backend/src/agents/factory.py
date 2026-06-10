@@ -3,7 +3,7 @@ Agent 工厂模块 — 从配置创建 AgentScope 2.0 Agent 实例
 
 职责：
 1. 根据 Agent 配置创建 DashScope 模型（主模型 + Fallback 链）
-2. 注入默认工具集（Read/Write/Edit/Grep/Glob/Bash）
+2. 注入默认工具集（Read/Write/Edit/Grep/Glob/Bash/HttpRequest）
 3. 配置 LocalWorkspace 作为工具执行环境
 4. 设置 BYPASS 权限模式（工具自动执行，无需确认）
 5. 管理 Agent 实例缓存（避免重复创建）
@@ -44,6 +44,8 @@ from agentscope.workspace import LocalWorkspace
 
 from src.config.settings import settings
 from src.config.runtime_settings import get_effective_model_settings
+from src.tools.http_request import HttpRequest
+from src.tools.knowledge_base_search import KnowledgeBaseSearch
 
 
 # ============================================================================
@@ -88,6 +90,20 @@ class McpRuntimeSpec:
     command: str = ""
     headers: dict[str, str] = field(default_factory=dict)
     enable_tools: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class KnowledgeToolRuntimeSpec:
+    """Serializable knowledge base tool selection passed from route code to factory."""
+
+    id: str
+    name: str
+    description: str = ""
+    url: str = ""
+    authorization: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    default_payload: dict[str, object] = field(default_factory=dict)
+    parameter_instructions: str = ""
 
 
 def _create_model(
@@ -285,6 +301,7 @@ def _create_mcp_clients(
 def _create_default_toolkit(
     guardrails: AgentGuardrails | None = None,
     mcp_servers: list[McpRuntimeSpec] | None = None,
+    knowledge_tools: list[KnowledgeToolRuntimeSpec] | None = None,
 ) -> Toolkit:
     """
     创建默认工具集
@@ -296,6 +313,7 @@ def _create_default_toolkit(
     - Grep: 搜索文件内容
     - Glob: 按模式查找文件
     - Bash: 执行 Shell 命令
+    - HttpRequest: 调用 HTTP 接口
 
     Returns:
         Toolkit: 包含默认工具的 Toolkit 实例
@@ -308,12 +326,29 @@ def _create_default_toolkit(
         Glob(),
     ]
     if not guardrails or guardrails.network_enabled:
-        local_tools.append(
-            GuardedBash(
-                shell_blacklist=guardrails.shell_blacklist if guardrails else [],
-                timeout_seconds=guardrails.timeout_seconds if guardrails else 300,
-            )
+        local_tools.extend(
+            [
+                GuardedBash(
+                    shell_blacklist=guardrails.shell_blacklist if guardrails else [],
+                    timeout_seconds=guardrails.timeout_seconds if guardrails else 300,
+                ),
+                HttpRequest(),
+            ]
         )
+        for tool in knowledge_tools or []:
+            local_tools.append(
+                KnowledgeBaseSearch(
+                    tool_id=tool.id,
+                    name=tool.name,
+                    description=tool.description,
+                    url=tool.url,
+                    authorization=tool.authorization,
+                    headers=tool.headers,
+                    default_payload=tool.default_payload,
+                    parameter_instructions=tool.parameter_instructions,
+                    timeout_seconds=guardrails.timeout_seconds if guardrails else 300,
+                )
+            )
 
     mcp_clients = _create_mcp_clients(mcp_servers or [], guardrails)
     return Toolkit(
@@ -335,6 +370,7 @@ def get_or_create_agent(
     model_options: AgentModelOptions | None = None,
     guardrails: AgentGuardrails | None = None,
     mcp_servers: list[McpRuntimeSpec] | None = None,
+    knowledge_tools: list[KnowledgeToolRuntimeSpec] | None = None,
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -388,7 +424,11 @@ def get_or_create_agent(
         name=name,
         system_prompt=system_prompt,
         model=main_model,
-        toolkit=_create_default_toolkit(guardrails=guardrails, mcp_servers=mcp_servers),
+        toolkit=_create_default_toolkit(
+            guardrails=guardrails,
+            mcp_servers=mcp_servers,
+            knowledge_tools=knowledge_tools,
+        ),
         state=agent_state,
         offloader=workspace,
         model_config=ModelConfig(
@@ -400,6 +440,12 @@ def get_or_create_agent(
     # 缓存并返回
     _agent_cache[agent_id] = agent
     return agent
+
+
+def has_cached_agent(agent_id: str) -> bool:
+    """Return whether a runtime Agent instance already exists in cache."""
+
+    return agent_id in _agent_cache
 
 
 def invalidate_agent(agent_id: str) -> None:

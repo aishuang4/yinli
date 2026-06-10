@@ -24,14 +24,14 @@ import { AgentEditor } from '../features/agents/AgentEditor';
 import { DEFAULT_MODEL_CONFIG, type AgentCreatePayload, type ModelsResponse } from '../types/agent';
 import type { Agent } from '../types/agent';
 import type { BuilderMode, BuilderPlan } from '../types/agentBuilder';
-import type { TeamRecord } from '../types/team';
+import type { TeamMember, TeamRecord } from '../types/team';
 
 /**
  * AgentTeamPage 组件
  */
 export function AgentTeamPage() {
   const { agents, loading, models, createAgent, updateAgent, deleteAgent, refresh: refreshAgents } = useAgents();
-  const { teams, loading: teamsLoading, createTeam, deleteTeam, refresh: refreshTeams } = useTeams();
+  const { teams, loading: teamsLoading, createTeam, updateTeam, deleteTeam, refresh: refreshTeams } = useTeams();
   const { planning, applying, error: builderError, createPlan, applyPlan } = useAgentBuilder();
   const [mode, setMode] = useState<'agents' | 'teams'>('agents');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -272,6 +272,9 @@ export function AgentTeamPage() {
           <TeamDetailPanel
             team={selectedTeam}
             agents={agents}
+            onUpdate={async (members) => {
+              await updateTeam(selectedTeam.id, { members });
+            }}
             onDelete={async () => {
               await deleteTeam(selectedTeam.id);
               setSelectedTeamId(null);
@@ -807,13 +810,44 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
 function TeamDetailPanel({
   team,
   agents,
+  onUpdate,
   onDelete,
 }: {
   team: TeamRecord;
   agents: Agent[];
+  onUpdate: (members: TeamMember[]) => Promise<void>;
   onDelete: () => Promise<void>;
 }) {
   const agentNameById = new Map(agents.map((agent) => [agent.id, agent.name]));
+  const [memberDrafts, setMemberDrafts] = useState<TeamMember[]>(team.members);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setMemberDrafts(team.members);
+  }, [team.members]);
+
+  const workerMembers = memberDrafts.filter((member) => member.role === 'worker');
+
+  const updateMember = (memberId: string, patch: Partial<TeamMember>) => {
+    setMemberDrafts((current) => current.map((member) => (
+      member.id === memberId
+        ? {
+            ...member,
+            ...patch,
+            dependsOn: patch.executionMode === 'parallel' ? [] : patch.dependsOn ?? member.dependsOn,
+          }
+        : member
+    )));
+  };
+
+  const saveTeamMembers = async () => {
+    setSaving(true);
+    try {
+      await onUpdate(memberDrafts);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="h-full overflow-y-auto p-5">
@@ -824,14 +858,26 @@ function TeamDetailPanel({
             {team.description || '暂无描述'}
           </div>
         </div>
-        <Button danger onClick={onDelete}>
-          <Trash2 size={14} />
-          删除
-        </Button>
+        <div className="flex shrink-0 gap-2">
+          <Button type="primary" loading={saving} onClick={saveTeamMembers}>
+            保存调度
+          </Button>
+          <Button danger icon={<Trash2 size={14} />} onClick={onDelete}>
+            删除
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-3">
-        {team.members.map((member) => (
+        {memberDrafts.map((member) => {
+          const dependencyOptions = workerMembers
+            .filter((worker) => worker.id !== member.id && worker.agentId !== member.agentId)
+            .map((worker) => ({
+              label: agentNameById.get(worker.agentId) || worker.name,
+              value: worker.agentId,
+            }));
+
+          return (
           <div key={member.id} className="rounded-md bg-[var(--color-bg-secondary)] p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
@@ -849,8 +895,55 @@ function TeamDetailPanel({
               </div>
               <Tag size="small" color="transparent">{member.status}</Tag>
             </div>
+
+            {member.role === 'worker' && (
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+                    执行方式
+                  </label>
+                  <Select
+                    value={member.executionMode || 'parallel'}
+                    onChange={(value) => updateMember(member.id, {
+                      executionMode: value as TeamMember['executionMode'],
+                    })}
+                    options={[
+                      { label: '并行执行', value: 'parallel' },
+                      { label: '等待依赖 Worker', value: 'depends_on' },
+                    ]}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+                    依赖 Worker
+                  </label>
+                  <Select
+                    mode="multiple"
+                    value={member.dependsOn || []}
+                    disabled={member.executionMode !== 'depends_on'}
+                    onChange={(value) => updateMember(member.id, { dependsOn: value })}
+                    options={dependencyOptions}
+                    placeholder="选择上游 Worker"
+                    style={{ width: '100%' }}
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+                    交接提示
+                  </label>
+                  <Input.TextArea
+                    value={member.handoffPrompt || ''}
+                    onChange={(event) => updateMember(member.id, { handoffPrompt: event.target.value })}
+                    rows={2}
+                    placeholder="告诉该 Worker 如何使用上游 Worker 的输出"
+                  />
+                </div>
+              </div>
+            )}
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
