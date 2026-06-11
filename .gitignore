@@ -4,6 +4,7 @@ node_modules/
 
 # Build output
 frontend/dist/
+frontend/.vite/
 electron/dist/
 
 # IDE

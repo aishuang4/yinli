@@ -338,6 +338,7 @@ async def select_team_workers(data: TeamWorkerSelectionRequest) -> TeamWorkerSel
             text += str(event_data.get("delta", ""))
 
     selected, reason = _parse_worker_selection(text, {member.agent_id for member in workers})
+    selected = _expand_selected_workers_with_dependencies(selected, workers)
     return TeamWorkerSelectionResponse(selectedAgentIds=selected, reason=reason)
 
 
@@ -691,16 +692,22 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 # 发送 SSE 事件
                 yield _sse_event(event_type, event_data)
 
+            clarification = _extract_clarification_request(assistant_text) or _extract_clarification_request(assistant_thinking)
+            if clarification:
+                _mark_team_leader_waiting_for_clarification(team_activities, agent_id)
+                if team_activities:
+                    yield _sse_event("TEAM_ACTIVITY", {
+                        "activities": [item.model_dump(by_alias=True) for item in team_activities],
+                    })
+                yield _sse_event("CLARIFICATION_REQUIRED", clarification)
+                return
+
             completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
             completed_team_activities = _finalize_team_activities(
                 team_activities,
                 leader_agent_id=agent_id,
                 leader_output=assistant_text,
             )
-            clarification = _extract_clarification_request(assistant_text) or _extract_clarification_request(assistant_thinking)
-            if clarification:
-                yield _sse_event("CLARIFICATION_REQUIRED", clarification)
-                return
 
             _append_assistant_message(
                 session_id=session_id,
@@ -1929,12 +1936,26 @@ async def _run_team_workers(
     running: dict[asyncio.Task[None], str] = {}
     completed_outputs: dict[str, dict[str, str]] = {}
     failed_workers: set[str] = set()
+    all_worker_ids = {member.agent_id for member in workers}
 
     def start_ready_workers() -> None:
-        worker_ids = set(pending)
         ready: list[ChatTeamMemberPayload] = []
         for member in list(pending.values()):
             dependencies = _member_dependency_ids(member, workers)
+            invalid_dependencies = [dep for dep in dependencies if dep not in all_worker_ids]
+            if invalid_dependencies:
+                pending.pop(member.agent_id, None)
+                activity = _find_team_activity(team_activities, member.agent_id)
+                if activity:
+                    _replace_team_activity(
+                        team_activities,
+                        activity.model_copy(update={
+                            "status": "failed",
+                            "detail": "依赖配置无效：找不到指定的上游 Worker。",
+                        }),
+                    )
+                failed_workers.add(member.agent_id)
+                continue
             failed_dependencies = [dep for dep in dependencies if dep in failed_workers]
             if failed_dependencies:
                 pending.pop(member.agent_id, None)
@@ -1986,24 +2007,6 @@ async def _run_team_workers(
                 )
             task = asyncio.create_task(run_worker(member, dependency_outputs))
             running[task] = member.agent_id
-
-        unresolved = [
-            member
-            for member in pending.values()
-            if all(dep not in worker_ids for dep in _member_dependency_ids(member, workers))
-        ]
-        for member in unresolved:
-            pending.pop(member.agent_id, None)
-            activity = _find_team_activity(team_activities, member.agent_id)
-            if activity:
-                _replace_team_activity(
-                    team_activities,
-                    activity.model_copy(update={
-                        "status": "failed",
-                        "detail": "依赖配置无效：找不到指定的上游 Worker。",
-                    }),
-                )
-            failed_workers.add(member.agent_id)
 
     start_ready_workers()
     await queue.put(_sse_event("TEAM_ACTIVITY", {
@@ -2331,6 +2334,30 @@ def _member_dependency_ids(
     return normalized
 
 
+def _expand_selected_workers_with_dependencies(
+    selected_agent_ids: list[str],
+    workers: list[ChatTeamMemberPayload],
+) -> list[str]:
+    """Ensure a selected downstream worker also runs its upstream dependencies."""
+    worker_by_agent_id = {worker.agent_id: worker for worker in workers}
+    expanded: list[str] = []
+    visited: set[str] = set()
+
+    def add_with_dependencies(agent_id: str) -> None:
+        if agent_id in visited or agent_id not in worker_by_agent_id:
+            return
+        visited.add(agent_id)
+        member = worker_by_agent_id[agent_id]
+        for dep_id in _member_dependency_ids(member, workers):
+            add_with_dependencies(dep_id)
+        expanded.append(agent_id)
+
+    for agent_id in selected_agent_ids:
+        add_with_dependencies(agent_id)
+
+    return expanded
+
+
 def _member_names(
     agent_ids: list[str],
     workers: list[ChatTeamMemberPayload],
@@ -2347,10 +2374,14 @@ def _build_worker_outputs_system_prompt(worker_outputs: list[dict[str, str]]) ->
     lines = [
         "## Worker ReAct Outputs",
         "The following worker outputs are authoritative context for your final team response.",
-        "You must synthesize them explicitly. If a worker reports missing data, say so instead of inventing details.",
+        "You must synthesize completed worker outputs explicitly. If a worker failed or is waiting, say what data is missing instead of inventing details.",
     ]
     for item in worker_outputs:
-        lines.append(f"### {item['name']}")
+        status = item.get("status") or "unknown"
+        detail = item.get("detail") or ""
+        lines.append(f"### {item['name']} ({status})")
+        if detail:
+            lines.append(f"Status detail: {detail}")
         lines.append(item["output"] or "(No output)")
     return "\n\n".join(lines)
 
@@ -2370,15 +2401,18 @@ def _build_leader_user_message(user_message: str, worker_outputs: list[dict[str,
 
 
 def _collect_worker_outputs(activities: list[ChatTeamActivity]) -> list[dict[str, str]]:
-    """Collect completed worker outputs for the leader."""
+    """Collect worker states for the leader."""
     return [
         {
             "agentId": activity.agent_id,
             "name": activity.agent_name,
+            "status": activity.status,
+            "detail": activity.detail,
             "output": activity.output,
         }
         for activity in activities
         if activity.role != "leader"
+        and activity.status in {"completed", "failed", "waiting"}
     ]
 
 
@@ -2472,6 +2506,25 @@ def _finalize_team_activities(
 
     activities[:] = finalized
     return finalized
+
+
+def _mark_team_leader_waiting_for_clarification(
+    activities: list[ChatTeamActivity],
+    leader_agent_id: str,
+) -> None:
+    """Keep Team state non-terminal when the leader needs user input."""
+    if not activities:
+        return
+    updated: list[ChatTeamActivity] = []
+    for item in activities:
+        if item.agent_id == leader_agent_id or item.role == "leader":
+            updated.append(item.model_copy(update={
+                "status": "waiting",
+                "detail": "Leader 需要用户补充信息后继续。",
+            }))
+        else:
+            updated.append(item)
+    activities[:] = updated
 
 
 def _set_team_worker_status(
