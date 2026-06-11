@@ -13,7 +13,7 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
-import { AlertCircle, Bot, CheckCircle2, Plus, Sparkles, Trash2, Users, WandSparkles } from 'lucide-react';
+import { AlertCircle, Bot, CheckCircle2, Plus, Sparkles, Trash2, UserPlus, Users, WandSparkles, X } from 'lucide-react';
 import { Button, Empty, Input, Modal, Select, Spinner, Tag } from '@agentscope-ai/design';
 import { useAgentMemory } from '../hooks/useAgentMemory';
 import { useAgentBuilder } from '../hooks/useAgentBuilder';
@@ -25,6 +25,7 @@ import { DEFAULT_MODEL_CONFIG, type AgentCreatePayload, type ModelsResponse } fr
 import type { Agent } from '../types/agent';
 import type { BuilderMode, BuilderPlan } from '../types/agentBuilder';
 import type { TeamMember, TeamRecord } from '../types/team';
+import { createId } from '../utils/id';
 
 /**
  * AgentTeamPage 组件
@@ -124,11 +125,11 @@ export function AgentTeamPage() {
   }, [applyPlan, builderPlan, refreshAgents, refreshTeams]);
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[280px_1fr] overflow-hidden">
+    <div className="grid h-full min-h-0 grid-cols-[280px_1fr] gap-4 overflow-hidden p-4">
       {/* 左侧列表 */}
-      <div className="flex min-h-0 flex-col border-r border-[var(--color-border)]">
+      <div className="flex min-h-0 flex-col rounded-md bg-[var(--color-bg-primary)] shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
         {/* 列表头部 */}
-        <div className="p-4 border-b border-[var(--color-border)]">
+        <div className="p-4">
           <div className="mb-3 grid grid-cols-2 gap-2">
             <Button
               type={mode === 'agents' ? 'primary' : 'default'}
@@ -222,10 +223,10 @@ export function AgentTeamPage() {
                 key={team.id}
                 type="button"
                 onClick={() => setSelectedTeamId(team.id)}
-                className={`w-full rounded-md px-3 py-2 text-left transition-all duration-300 ease-out ${
+                className={`w-full rounded-md border px-3 py-2 text-left transition-all duration-300 ease-out ${
                   selectedTeamId === team.id
-                    ? 'bg-[var(--color-bg-secondary)] ring-1 ring-[var(--color-accent)]'
-                    : 'hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] hover:shadow-sm'
+                    ? 'border-[var(--color-accent)] bg-[var(--color-accent-bg)] shadow-sm'
+                    : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] hover:shadow-md'
                 }`}
               >
                 <div className="flex items-start gap-2">
@@ -246,7 +247,7 @@ export function AgentTeamPage() {
       </div>
 
       {/* 右侧编辑器 */}
-      <div className="h-full min-h-0 overflow-hidden">
+      <div className="h-full min-h-0 overflow-hidden rounded-md bg-[var(--color-bg-primary)] shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
         {creating ? (
           <AgentEditor
             agent={null}
@@ -255,7 +256,7 @@ export function AgentTeamPage() {
             onCancel={() => setCreating(false)}
           />
         ) : mode === 'agents' && selectedAgent ? (
-          <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_360px]">
+          <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_360px] gap-4 p-4">
             <div className="min-h-0 overflow-hidden">
               <AgentEditor
                 agent={selectedAgent}
@@ -264,7 +265,7 @@ export function AgentTeamPage() {
                 onCancel={() => setSelectedId(null)}
               />
             </div>
-            <div className="min-h-0 border-l border-[var(--color-border)]">
+            <div className="min-h-0 rounded-md bg-[var(--color-bg-secondary)] shadow-sm">
               <AgentMemoryPanel agent={selectedAgent} />
             </div>
           </div>
@@ -428,10 +429,10 @@ function AgentBuilderWizard({
 
   return (
     <div
-      className="grid min-h-0 grid-cols-[330px_1fr] overflow-hidden"
+      className="grid min-h-0 grid-cols-[330px_1fr] gap-4 overflow-hidden"
       style={{ height: 'min(72vh, 720px)' }}
     >
-      <div className="flex min-h-0 flex-col overflow-y-auto border-r border-[var(--color-border)] pr-4">
+      <div className="flex min-h-0 flex-col overflow-y-auto rounded-md bg-[var(--color-bg-secondary)] p-4 shadow-sm">
         <div className="mb-4 flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
           <Sparkles size={15} color="var(--color-accent)" />
           <span>从需求生成可审核草案</span>
@@ -487,12 +488,12 @@ function AgentBuilderWizard({
                 if (plan) onResetPlan();
               }}
               placeholder="例如：我需要一个能做产品需求分析、技术方案设计、代码实现和测试验证的团队。"
-              className="h-52 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+              className="h-52 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none transition-colors duration-300 focus:border-[var(--color-accent)]"
             />
           </div>
 
           {error && (
-            <div className="rounded-md bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-error)]">
+            <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-error)]">
               {error}
             </div>
           )}
@@ -510,7 +511,7 @@ function AgentBuilderWizard({
         </div>
       </div>
 
-      <div className="h-full min-h-0 overflow-y-auto pl-4 pr-1">
+      <div className="h-full min-h-0 overflow-y-auto rounded-md bg-[var(--color-bg-secondary)] p-4 shadow-sm">
         {!plan ? (
           <div className="flex h-full items-center justify-center text-[var(--color-text-tertiary)]">
             <div className="text-center">
@@ -539,7 +540,7 @@ function AgentBuilderWizard({
             </div>
 
             {plan.warnings.length > 0 && (
-              <div className="space-y-2 rounded-md bg-[var(--color-bg-secondary)] p-3">
+              <div className="space-y-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
                 {plan.warnings.map((warning) => (
                   <div key={warning} className="flex items-start gap-2 text-xs text-[var(--color-warning)]">
                     <AlertCircle size={13} className="mt-0.5 shrink-0" />
@@ -555,7 +556,7 @@ function AgentBuilderWizard({
               ))}
             </div>
 
-            <div className="flex justify-end gap-2 border-t border-[var(--color-border)] pt-4">
+            <div className="flex justify-end gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 shadow-sm">
               <Button disabled={applying || planning} onClick={onResetPlan}>
                 重新填写
               </Button>
@@ -583,7 +584,7 @@ function BuilderAgentDraftCard({
   const modelConfig = agent.modelConfig || DEFAULT_MODEL_CONFIG;
 
   return (
-    <div className="rounded-md bg-[var(--color-bg-secondary)] p-4">
+    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -603,7 +604,7 @@ function BuilderAgentDraftCard({
         </Tag>
       </div>
 
-      <div className="mb-3 line-clamp-3 whitespace-pre-wrap rounded bg-[var(--color-bg-primary)] p-3 text-xs text-[var(--color-text-tertiary)]">
+      <div className="mb-3 line-clamp-3 whitespace-pre-wrap rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 text-xs text-[var(--color-text-tertiary)]">
         {agent.systemPrompt}
       </div>
 
@@ -707,7 +708,7 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
   return (
     <div className="h-full overflow-y-auto p-4">
       {memory?.main_memory_path && (
-        <div className="mb-4 rounded-md bg-[var(--color-bg-secondary)] p-3">
+        <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-sm font-medium text-[var(--color-text-primary)]">主记忆 MEMORY.md</div>
@@ -733,7 +734,7 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
         <h3 className="text-sm font-medium text-[var(--color-text-primary)]">候选记忆</h3>
         <div className="mt-2 space-y-2">
           {memory?.candidates.length ? memory.candidates.map((candidate) => (
-            <div key={candidate.id} className="rounded-md bg-[var(--color-bg-secondary)] p-3">
+            <div key={candidate.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
               <div className="text-sm font-medium text-[var(--color-text-primary)]">{candidate.title}</div>
               <div className="mt-1 whitespace-pre-wrap text-xs text-[var(--color-text-secondary)]">
                 {candidate.content}
@@ -773,7 +774,7 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
         <h3 className="text-sm font-medium text-[var(--color-text-primary)]">已确认事实</h3>
         <div className="mt-2 space-y-2">
           {memory?.facts.length ? memory.facts.map((fact) => (
-            <div key={fact.id} className="rounded-md bg-[var(--color-bg-secondary)] p-3">
+            <div key={fact.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
               <div className="text-sm font-medium text-[var(--color-text-primary)]">{fact.title}</div>
               <div className="mt-1 text-xs text-[var(--color-text-secondary)]">{fact.content}</div>
             </div>
@@ -787,7 +788,7 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
         <h3 className="text-sm font-medium text-[var(--color-text-primary)]">运行历史</h3>
         <div className="mt-2 space-y-2">
           {memory?.events.length ? memory.events.map((event) => (
-            <div key={event.id} className="rounded-md bg-[var(--color-bg-secondary)] p-3">
+            <div key={event.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
               <div className="flex items-center gap-2">
                 <Tag size="small" color="transparent">{event.type}</Tag>
                 <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
@@ -820,13 +821,24 @@ function TeamDetailPanel({
 }) {
   const agentNameById = new Map(agents.map((agent) => [agent.id, agent.name]));
   const [memberDrafts, setMemberDrafts] = useState<TeamMember[]>(team.members);
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(team.members[0]?.id || null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setMemberDrafts(team.members);
-  }, [team.members]);
+    setSelectedMemberId((current) => (
+      current && team.members.some((member) => member.id === current)
+        ? current
+        : team.members[0]?.id || null
+    ));
+  }, [team.id, team.members]);
 
   const workerMembers = memberDrafts.filter((member) => member.role === 'worker');
+  const selectedMember = memberDrafts.find((member) => member.id === selectedMemberId) || null;
+  const existingAgentIds = new Set(memberDrafts.map((member) => member.agentId));
+  const addableAgentOptions = agents
+    .filter((agent) => !existingAgentIds.has(agent.id))
+    .map((agent) => ({ label: agent.name, value: agent.id }));
 
   const updateMember = (memberId: string, patch: Partial<TeamMember>) => {
     setMemberDrafts((current) => current.map((member) => (
@@ -840,6 +852,43 @@ function TeamDetailPanel({
     )));
   };
 
+  const addWorker = (agentId: string) => {
+    const agent = agents.find((item) => item.id === agentId);
+    if (!agent) return;
+
+    const nextMember: TeamMember = {
+      id: createId('member'),
+      agentId: agent.id,
+      name: agent.name,
+      role: 'worker',
+      description: agent.description || 'Team worker session',
+      executionMode: 'parallel',
+      dependsOn: [],
+      handoffPrompt: '',
+      status: 'idle',
+    };
+
+    setMemberDrafts((current) => [...current, nextMember]);
+    setSelectedMemberId(nextMember.id);
+  };
+
+  const removeWorker = (memberId: string) => {
+    const removed = memberDrafts.find((member) => member.id === memberId);
+    if (!removed || removed.role === 'leader') return;
+
+    setMemberDrafts((current) => current
+      .filter((member) => member.id !== memberId)
+      .map((member) => ({
+        ...member,
+        dependsOn: (member.dependsOn || []).filter((dependency) => dependency !== removed.agentId && dependency !== removed.id),
+      })));
+    setSelectedMemberId((current) => (
+      current === memberId
+        ? memberDrafts.find((member) => member.id !== memberId)?.id || null
+        : current
+    ));
+  };
+
   const saveTeamMembers = async () => {
     setSaving(true);
     try {
@@ -850,7 +899,8 @@ function TeamDetailPanel({
   };
 
   return (
-    <div className="h-full overflow-y-auto p-5">
+    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_380px] gap-4 overflow-hidden p-4">
+      <div className="min-h-0 overflow-y-auto rounded-md bg-[var(--color-bg-primary)] p-5 shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
           <h2 className="text-lg font-medium text-[var(--color-text-primary)]">{team.name}</h2>
@@ -868,17 +918,38 @@ function TeamDetailPanel({
         </div>
       </div>
 
+      <div className="mb-4 rounded-md bg-[var(--color-bg-secondary)] p-3 shadow-sm">
+        <label className="mb-2 flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
+          <UserPlus size={13} />
+          添加 Worker
+        </label>
+        <Select
+          key={memberDrafts.length}
+          value={undefined}
+          onChange={(value) => addWorker(String(value))}
+          options={addableAgentOptions}
+          placeholder={addableAgentOptions.length ? '选择一个 Agent 加入 Team' : '没有可添加的 Agent'}
+          disabled={addableAgentOptions.length === 0}
+          style={{ width: '100%' }}
+        />
+      </div>
+
       <div className="grid gap-3">
         {memberDrafts.map((member) => {
-          const dependencyOptions = workerMembers
-            .filter((worker) => worker.id !== member.id && worker.agentId !== member.agentId)
-            .map((worker) => ({
-              label: agentNameById.get(worker.agentId) || worker.name,
-              value: worker.agentId,
-            }));
+          const selected = member.id === selectedMemberId;
 
           return (
-          <div key={member.id} className="rounded-md bg-[var(--color-bg-secondary)] p-4">
+          <button
+            key={member.id}
+            type="button"
+            onClick={() => setSelectedMemberId(member.id)}
+            className={[
+              'w-full rounded-md border p-4 text-left transition-all duration-300',
+              selected
+                ? 'border-[var(--color-accent)] bg-[var(--color-accent-bg)] shadow-sm'
+                : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] hover:shadow-md',
+            ].join(' ')}
+          >
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -893,58 +964,176 @@ function TeamDetailPanel({
                   {member.description}
                 </div>
               </div>
-              <Tag size="small" color="transparent">{member.status}</Tag>
-            </div>
-
-            {member.role === 'worker' && (
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-                    执行方式
-                  </label>
-                  <Select
-                    value={member.executionMode || 'parallel'}
-                    onChange={(value) => updateMember(member.id, {
-                      executionMode: value as TeamMember['executionMode'],
-                    })}
-                    options={[
-                      { label: '并行执行', value: 'parallel' },
-                      { label: '等待依赖 Worker', value: 'depends_on' },
-                    ]}
-                    style={{ width: '100%' }}
+              <div className="flex shrink-0 items-center gap-2">
+                <Tag size="small" color="transparent">{member.status}</Tag>
+                {member.role === 'worker' && (
+                  <Button
+                    size="small"
+                    danger
+                    icon={<Trash2 size={13} />}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      removeWorker(member.id);
+                    }}
+                    aria-label="移除成员"
                   />
-                </div>
-                <div>
-                  <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-                    依赖 Worker
-                  </label>
-                  <Select
-                    mode="multiple"
-                    value={member.dependsOn || []}
-                    disabled={member.executionMode !== 'depends_on'}
-                    onChange={(value) => updateMember(member.id, { dependsOn: value })}
-                    options={dependencyOptions}
-                    placeholder="选择上游 Worker"
-                    style={{ width: '100%' }}
-                  />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-                    交接提示
-                  </label>
-                  <Input.TextArea
-                    value={member.handoffPrompt || ''}
-                    onChange={(event) => updateMember(member.id, { handoffPrompt: event.target.value })}
-                    rows={2}
-                    placeholder="告诉该 Worker 如何使用上游 Worker 的输出"
-                  />
-                </div>
+                )}
               </div>
-            )}
-          </div>
+            </div>
+          </button>
           );
         })}
       </div>
+      </div>
+
+      <div className="min-h-0 rounded-md bg-[var(--color-bg-primary)] shadow-[0_12px_30px_rgba(0,0,0,0.08)] transition-all duration-300">
+        <div className="flex h-full min-h-0 flex-col">
+          <div className="flex items-center justify-between p-4">
+            <div>
+              <h3 className="text-sm font-medium text-[var(--color-text-primary)]">成员设置</h3>
+              <div className="mt-1 text-xs text-[var(--color-text-secondary)]">
+                点击左侧成员后编辑本轮协作参数
+              </div>
+            </div>
+            {selectedMember && (
+              <Button
+                size="small"
+                icon={<X size={14} />}
+                onClick={() => setSelectedMemberId(null)}
+                aria-label="关闭成员设置"
+              />
+            )}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {selectedMember ? (
+              <TeamMemberSettings
+                member={selectedMember}
+                workerMembers={workerMembers}
+                agentNameById={agentNameById}
+                onUpdate={(patch) => updateMember(selectedMember.id, patch)}
+                onRemove={selectedMember.role === 'worker' ? () => removeWorker(selectedMember.id) : undefined}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center">
+                <Empty type="noData" description="选择成员后编辑设置" />
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TeamMemberSettings({
+  member,
+  workerMembers,
+  agentNameById,
+  onUpdate,
+  onRemove,
+}: {
+  member: TeamMember;
+  workerMembers: TeamMember[];
+  agentNameById: Map<string, string>;
+  onUpdate: (patch: Partial<TeamMember>) => void;
+  onRemove?: () => void;
+}) {
+  const dependencyOptions = workerMembers
+    .filter((worker) => worker.id !== member.id && worker.agentId !== member.agentId)
+    .map((worker) => ({
+      label: agentNameById.get(worker.agentId) || worker.name,
+      value: worker.agentId,
+    }));
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Tag size="small" color={member.role === 'leader' ? 'blue' : 'mauve'}>
+                {member.role}
+              </Tag>
+              <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
+                {agentNameById.get(member.agentId) || member.name}
+              </div>
+            </div>
+            <div className="mt-2 text-xs text-[var(--color-text-secondary)]">
+              {member.agentId}
+            </div>
+          </div>
+          {onRemove && (
+            <Button size="small" danger icon={<Trash2 size={13} />} onClick={onRemove}>
+              移除
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+          成员职责说明
+        </label>
+        <Input.TextArea
+          value={member.description || ''}
+          onChange={(event) => onUpdate({ description: event.target.value })}
+          rows={4}
+          placeholder="描述该成员在 Team 中负责什么"
+        />
+      </div>
+
+      {member.role === 'worker' ? (
+        <>
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              执行方式
+            </label>
+            <Select
+              value={member.executionMode || 'parallel'}
+              onChange={(value) => onUpdate({
+                executionMode: value as TeamMember['executionMode'],
+              })}
+              options={[
+                { label: '并行执行', value: 'parallel' },
+                { label: '等待依赖 Worker', value: 'depends_on' },
+              ]}
+              style={{ width: '100%' }}
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              依赖 Worker
+            </label>
+            <Select
+              mode="multiple"
+              value={member.dependsOn || []}
+              disabled={member.executionMode !== 'depends_on'}
+              onChange={(value) => onUpdate({ dependsOn: value })}
+              options={dependencyOptions}
+              placeholder="选择上游 Worker"
+              style={{ width: '100%' }}
+            />
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              交接提示
+            </label>
+            <Input.TextArea
+              value={member.handoffPrompt || ''}
+              onChange={(event) => onUpdate({ handoffPrompt: event.target.value })}
+              rows={5}
+              placeholder="告诉该 Worker 如何使用上游 Worker 的输出"
+            />
+          </div>
+        </>
+      ) : (
+        <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4 text-sm text-[var(--color-text-secondary)]">
+          Leader 负责拆解任务和汇总结果；成员增删请通过 Worker 列表管理。
+        </div>
+      )}
     </div>
   );
 }
