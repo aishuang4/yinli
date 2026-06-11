@@ -161,6 +161,7 @@ class StoredChatMessage(BaseModel):
     model_name: str | None = None
     error: str | None = None
     images: list[ChatImagePayload] = Field(default_factory=list)
+    tool_calls: list[ChatToolRun] = Field(default_factory=list, alias="toolCalls")
     skill_calls: list[ChatSkillRun] = Field(default_factory=list, alias="skillCalls")
     team_activities: list[ChatTeamActivity] = Field(default_factory=list, alias="teamActivities")
     created_at: str
@@ -653,6 +654,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
 
         # 调用 AgentScope 真实 Agent 的 reply_stream
         try:
+            assistant_tool_calls: list[ChatToolRun] = []
             async for event in agent.reply_stream(user_msg):
                 # 将 Pydantic 事件模型序列化为 dict
                 event_data = event.model_dump(mode="json")
@@ -660,6 +662,13 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 # 提取事件类型（EventType 枚举值）
                 event_type = event_data.pop("type", "UNKNOWN")
                 _attach_provider_cache_usage(event_type, event_data)
+                next_tool_calls = _update_worker_tool_calls(
+                    assistant_tool_calls,
+                    event_type,
+                    event_data,
+                )
+                if next_tool_calls is not assistant_tool_calls:
+                    assistant_tool_calls = next_tool_calls
                 if event_type in HITL_EVENT_TYPES:
                     interaction = _create_pending_interaction(
                         interaction_type=event_type,
@@ -717,6 +726,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 content=assistant_text,
                 error=assistant_error,
                 skill_calls=completed_skill_runs,
+                tool_calls=assistant_tool_calls,
                 team_activities=completed_team_activities,
             )
             if team_activities:
@@ -1046,10 +1056,18 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         chat_data.images,
                     ),
                 )
+                assistant_tool_calls: list[ChatToolRun] = []
                 async for event in leader_agent.reply_stream(user_msg):
                     event_data = event.model_dump(mode="json")
                     event_type = event_data.pop("type", "UNKNOWN")
                     _attach_provider_cache_usage(event_type, event_data)
+                    next_tool_calls = _update_worker_tool_calls(
+                        assistant_tool_calls,
+                        event_type,
+                        event_data,
+                    )
+                    if next_tool_calls is not assistant_tool_calls:
+                        assistant_tool_calls = next_tool_calls
                     if event_type in HITL_EVENT_TYPES:
                         next_interaction = _create_pending_interaction(
                             interaction_type=event_type,
@@ -1093,6 +1111,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     content=assistant_text,
                     error=assistant_error,
                     skill_calls=completed_skill_runs,
+                    tool_calls=assistant_tool_calls,
                     team_activities=completed_team_activities,
                 )
                 yield _sse_event("TEAM_ACTIVITY", {
@@ -1136,10 +1155,18 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     })
                 return
 
+            assistant_tool_calls: list[ChatToolRun] = []
             async for event in agent.reply_stream(resume_event):
                 event_data = event.model_dump(mode="json")
                 event_type = event_data.pop("type", "UNKNOWN")
                 _attach_provider_cache_usage(event_type, event_data)
+                next_tool_calls = _update_worker_tool_calls(
+                    assistant_tool_calls,
+                    event_type,
+                    event_data,
+                )
+                if next_tool_calls is not assistant_tool_calls:
+                    assistant_tool_calls = next_tool_calls
                 if event_type in HITL_EVENT_TYPES:
                     next_interaction = _create_pending_interaction(
                         interaction_type=event_type,
@@ -1185,6 +1212,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 content=assistant_text,
                 error=assistant_error,
                 skill_calls=completed_skill_runs,
+                tool_calls=assistant_tool_calls,
                 team_activities=completed_team_activities,
             )
             if team_activities:
@@ -1515,6 +1543,7 @@ def _append_assistant_message(
     content: str,
     error: str | None,
     skill_calls: list[ChatSkillRun] | None = None,
+    tool_calls: list[ChatToolRun] | None = None,
     team_activities: list[ChatTeamActivity] | None = None,
 ) -> None:
     """追加助手消息，并更新会话摘要"""
@@ -1529,6 +1558,7 @@ def _append_assistant_message(
         agent_name=agent_name,
         model_name=model_name,
         error=error,
+        tool_calls=tool_calls or [],
         skill_calls=skill_calls or [],
         team_activities=team_activities or [],
         created_at=now,

@@ -69,6 +69,55 @@ export interface ToolCallInfo {
   status: 'calling' | 'running' | 'completed' | 'failed';
 }
 
+function normalizeToolStatus(status: unknown): ToolCallInfo['status'] {
+  const value = String(status || 'calling');
+  return (
+    value === 'running' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'calling'
+      ? value
+      : 'calling'
+  );
+}
+
+function normalizeToolCallRecord(record: Record<string, unknown>): ToolCallInfo {
+  return {
+    id: String(record.id || record.tool_call_id || createId()),
+    name: String(record.name || record.tool_call_name || 'tool'),
+    args: String(record.args || ''),
+    result: String(record.result || ''),
+    status: normalizeToolStatus(record.status),
+  };
+}
+
+function mergeToolCalls(current: ToolCallInfo[], incoming: ToolCallInfo[]): ToolCallInfo[] {
+  const merged = [...current];
+  for (const next of incoming) {
+    const existingIndex = merged.findIndex((item) => (
+      item.id === next.id ||
+      (
+        item.name === next.name &&
+        item.args === next.args &&
+        item.result === next.result
+      )
+    ));
+    if (existingIndex === -1) {
+      merged.push(next);
+      continue;
+    }
+    const existing = merged[existingIndex];
+    merged[existingIndex] = {
+      ...existing,
+      ...next,
+      args: next.args || existing.args,
+      result: next.result || existing.result,
+      status: next.status || existing.status,
+    };
+  }
+  return merged;
+}
+
 /** Skill 应用信息 */
 export interface SkillCallInfo {
   id: string;
@@ -480,16 +529,13 @@ export function useEventStream(): UseEventStreamReturn {
         case 'TOOL_CALL_START':
           return {
             ...prev,
-            toolCalls: [
-              ...prev.toolCalls,
-              {
-                id: event.data.tool_call_id as string,
-                name: event.data.tool_call_name as string,
-                args: '',
-                result: '',
-                status: 'calling',
-              },
-            ],
+            toolCalls: mergeToolCalls(prev.toolCalls, [{
+              id: String(event.data.tool_call_id || createId()),
+              name: String(event.data.tool_call_name || 'tool'),
+              args: '',
+              result: '',
+              status: 'calling',
+            }]),
           };
 
         // === Skill 上下文注入 ===
@@ -542,21 +588,10 @@ export function useEventStream(): UseEventStreamReturn {
               ));
               const status = String(activity.status || 'pending');
               const toolCalls = Array.isArray(activity.toolCalls)
-                ? activity.toolCalls.map((toolCall) => {
-                  const record = toolCall as Record<string, unknown>;
-                  const toolStatus = String(record.status || 'calling');
-                  return {
-                    id: String(record.id || createId()),
-                    name: String(record.name || 'tool'),
-                    args: String(record.args || ''),
-                    result: String(record.result || ''),
-                    status: (
-                      toolStatus === 'running' || toolStatus === 'completed' || toolStatus === 'failed'
-                        ? toolStatus
-                        : 'calling'
-                    ) as ToolCallInfo['status'],
-                  };
-                })
+                ? mergeToolCalls(
+                  existing?.toolCalls || [],
+                  activity.toolCalls.map((toolCall) => normalizeToolCallRecord(toolCall as Record<string, unknown>))
+                )
                 : existing?.toolCalls || [];
               return {
                 id: String(activity.id || createId()),
@@ -622,16 +657,13 @@ export function useEventStream(): UseEventStreamReturn {
                   ...activity,
                   status: 'running',
                   currentEvent: `调用工具 ${String(memberEvent.tool_call_name || 'tool')}`,
-                  toolCalls: [
-                    ...activity.toolCalls,
-                    {
-                      id: String(memberEvent.tool_call_id || createId()),
-                      name: String(memberEvent.tool_call_name || 'tool'),
-                      args: '',
-                      result: '',
-                      status: 'calling',
-                    },
-                  ],
+                  toolCalls: mergeToolCalls(activity.toolCalls, [{
+                    id: String(memberEvent.tool_call_id || createId()),
+                    name: String(memberEvent.tool_call_name || 'tool'),
+                    args: '',
+                    result: '',
+                    status: 'calling',
+                  }]),
                 };
               }
               if (eventType === 'TOOL_CALL_DELTA') {
