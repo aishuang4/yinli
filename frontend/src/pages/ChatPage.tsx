@@ -89,6 +89,8 @@ interface StoredChatMessage {
   model_name: string | null;
   error: string | null;
   images: ChatImagePayload[];
+  toolCalls?: ToolCallInfo[];
+  tool_calls?: ToolCallInfo[];
   skillCalls?: SkillCallInfo[];
   skill_calls?: SkillCallInfo[];
   teamActivities?: TeamActivityInfo[];
@@ -102,6 +104,34 @@ type StoredTeamActivity = Partial<TeamActivityInfo> & {
   tool_calls?: ToolCallInfo[];
   created_at?: string;
 };
+
+function normalizeStoredToolCalls(toolCalls: ToolCallInfo[] | undefined): ToolCallInfo[] {
+  const seen = new Set<string>();
+  const normalized: ToolCallInfo[] = [];
+
+  for (const toolCall of toolCalls || []) {
+    const id = String(toolCall.id || `${toolCall.name}-${normalized.length}`);
+    const key = id || `${toolCall.name}-${toolCall.args}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push({
+      id,
+      name: String(toolCall.name || 'tool'),
+      args: String(toolCall.args || ''),
+      result: String(toolCall.result || ''),
+      status: (
+        toolCall.status === 'calling' ||
+        toolCall.status === 'running' ||
+        toolCall.status === 'completed' ||
+        toolCall.status === 'failed'
+          ? toolCall.status
+          : 'completed'
+      ),
+    });
+  }
+
+  return normalized;
+}
 
 function normalizeStoredTeamActivities(activities: StoredTeamActivity[]): TeamActivityInfo[] {
   return activities.map((activity) => ({
@@ -123,7 +153,7 @@ function normalizeStoredTeamActivities(activities: StoredTeamActivity[]): TeamAc
     output: String(activity.output || ''),
     thinking: String(activity.thinking || ''),
     currentEvent: String(activity.currentEvent || ''),
-    toolCalls: activity.toolCalls || activity.tool_calls || [],
+    toolCalls: normalizeStoredToolCalls(activity.toolCalls || activity.tool_calls || []),
     dependsOn: activity.dependsOn || [],
     createdAt: String(activity.createdAt || activity.created_at || ''),
   }));
@@ -251,6 +281,7 @@ export function ChatPage() {
       modelName: item.model_name || undefined,
       error: item.error || undefined,
       images: item.images,
+      toolCalls: normalizeStoredToolCalls(item.toolCalls || item.tool_calls || []),
       skillCalls: item.skillCalls || item.skill_calls || [],
       teamActivities: normalizeStoredTeamActivities(item.teamActivities || item.team_activities || []),
     })));
@@ -1420,7 +1451,7 @@ function TeamActivityCard({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const toolCalls = activity.toolCalls || [];
+  const toolCalls = normalizeStoredToolCalls(activity.toolCalls || []);
   const isRunning = activity.status === 'running';
   const isWaiting = activity.status === 'waiting';
   const isCompleted = activity.status === 'completed';
@@ -1489,16 +1520,20 @@ function TeamActivityCard({
         </div>
       )}
       {toolCalls.length > 0 && (
-        <div className="mt-2 flex max-h-7 flex-wrap gap-1 overflow-hidden">
-          {toolCalls.slice(0, 3).map((toolCall) => (
-            <Tag key={toolCall.id} size="small" color="transparent">
+        <div className="mt-2 flex min-w-0 items-center gap-1 overflow-hidden">
+          {toolCalls.slice(0, 2).map((toolCall) => (
+            <span
+              key={toolCall.id}
+              className="min-w-0 max-w-[160px] truncate rounded border border-[var(--color-border)] px-1.5 py-0.5 text-xs text-[var(--color-text-tertiary)]"
+              title={toolCall.name}
+            >
               {toolCall.name}
-            </Tag>
+            </span>
           ))}
-          {toolCalls.length > 3 && (
-            <Tag size="small" color="transparent">
-              +{toolCalls.length - 3}
-            </Tag>
+          {toolCalls.length > 2 && (
+            <span className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-xs text-[var(--color-text-tertiary)]">
+              +{toolCalls.length - 2}
+            </span>
           )}
         </div>
       )}
@@ -1513,7 +1548,7 @@ function TeamActivitySidebar({
   activity: TeamActivityInfo;
   onClose: () => void;
 }) {
-  const toolCalls = activity.toolCalls || [];
+  const toolCalls = normalizeStoredToolCalls(activity.toolCalls || []);
   const isRunning = activity.status === 'running';
   const isWaiting = activity.status === 'waiting';
 
@@ -2069,6 +2104,7 @@ function ThinkingBlock({ content }: { content: string }) {
           alignItems: 'center',
           gap: '6px',
           width: '100%',
+          minWidth: 0,
           padding: '6px 10px',
           border: 'none',
           backgroundColor: 'var(--color-bg-tertiary)',
@@ -2272,17 +2308,29 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
           textAlign: 'start',
         }}
       >
-        {isRunning ? (
-          <Loader2 size={12} className="animate-spin" style={{ color: 'var(--color-accent)' }} />
+          {isRunning ? (
+          <Loader2 size={12} className="shrink-0 animate-spin" style={{ color: 'var(--color-accent)' }} />
         ) : (
-          <Wrench size={12} style={{ color: 'var(--color-success)' }} />
+          <Wrench size={12} className="shrink-0" style={{ color: 'var(--color-success)' }} />
         )}
-        <span style={{ fontWeight: 500 }}>{toolCall.name}</span>
+        <span
+          title={toolCall.name}
+          style={{
+            minWidth: 0,
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontWeight: 500,
+          }}
+        >
+          {toolCall.name}
+        </span>
         <span
           style={{
             fontSize: 'var(--text-xs)',
             color: isRunning ? 'var(--color-accent)' : 'var(--color-text-tertiary)',
-            marginLeft: 'auto',
+            flexShrink: 0,
           }}
         >
           {isRunning ? '执行中...' : '完成'}
