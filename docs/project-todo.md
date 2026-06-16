@@ -8,9 +8,9 @@
 
 ## Current Focus
 
-- [ ] Stabilize runtime observability and testability.
-- [ ] Keep Agent, Team, Tool, Skill, Memory, and Settings data portable.
-- [ ] Improve high-frequency Chat and Team workflows before adding marketplace-style features.
+- [x] Stabilize runtime observability and testability.
+- [x] Keep Agent, Team, Tool, Skill, Memory, and Settings data portable.
+- [x] Improve high-frequency Chat and Team workflows before adding marketplace-style features.
 
 ## P0. Finish Current Trace And Sandbox Work
 
@@ -110,12 +110,13 @@
 
 ## P4. Safety And Execution Isolation
 
-- [ ] Docker sandbox
+- [x] Docker sandbox
   - Run file/script tools in isolated workspace containers.
   - Provide per-Agent or per-Team sandbox policy.
   - Capture stdout, stderr, file changes, and exit codes into traces.
   - Partial 2026-06-15: Agent guardrails can now select `local` or AgentScope `DockerWorkspace`, configure base image, and choose temporary or persistent Docker workdir. Trace capture for stdout/stderr/file changes remains pending.
   - Partial 2026-06-15: runtime traces now include `WORKSPACE_CONFIG` events for leader and worker agents, including backend, filesystem scope, Docker image, persistence mode, network policy, and permission profile.
+  - Completed 2026-06-16: tool result processing now records `COMMAND_RESULT` events for Bash output with stdout, stderr, status, and exit-code metadata, and records `FILE_CHANGE` events for Write/Edit operations plus best-effort shell file-change hints. Trace detail now expands these payloads in the frontend.
 
 - [x] Tool permission profiles
   - Read-only

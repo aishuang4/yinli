@@ -778,6 +778,18 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 )
                 if next_tool_calls is not assistant_tool_calls:
                     assistant_tool_calls = next_tool_calls
+                _record_tool_execution_artifacts(
+                    session_id=session_id,
+                    event_type=event_type,
+                    event_data=event_data,
+                    persist=persist_run,
+                    scope="leader",
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    team_activity_id=None,
+                    guardrails=guardrails,
+                    tool_calls=assistant_tool_calls,
+                )
                 if event_type in HITL_EVENT_TYPES:
                     interaction = _create_pending_interaction(
                         interaction_type=event_type,
@@ -1022,6 +1034,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 worker_text = interaction.worker_text
                 worker_thinking = interaction.worker_thinking
                 worker_tool_calls = interaction.worker_tool_calls
+                worker_guardrails = _build_runtime_guardrails(get_registered_agent(worker_member.agent_id))
 
                 activity = _find_team_activity(team_activities, worker_member.agent_id)
                 if activity:
@@ -1096,6 +1109,19 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     )
                     if next_tool_calls is not worker_tool_calls:
                         worker_tool_calls = next_tool_calls
+                    activity = _find_team_activity(team_activities, worker_member.agent_id)
+                    _record_tool_execution_artifacts(
+                        session_id=interaction.session_id,
+                        event_type=event_type,
+                        event_data=event_data,
+                        persist=True,
+                        scope="worker",
+                        agent_id=worker_member.agent_id,
+                        agent_name=interaction.agent_name,
+                        team_activity_id=activity.id if activity else None,
+                        guardrails=worker_guardrails,
+                        tool_calls=worker_tool_calls,
+                    )
 
                     activity = _find_team_activity(team_activities, worker_member.agent_id)
                     if activity:
@@ -1228,6 +1254,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     ),
                 )
                 assistant_tool_calls: list[ChatToolRun] = []
+                leader_guardrails = _build_runtime_guardrails(get_registered_agent(leader_agent_id))
                 async for event in leader_agent.reply_stream(user_msg):
                     event_data = event.model_dump(mode="json")
                     event_type = event_data.pop("type", "UNKNOWN")
@@ -1239,6 +1266,18 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     )
                     if next_tool_calls is not assistant_tool_calls:
                         assistant_tool_calls = next_tool_calls
+                    _record_tool_execution_artifacts(
+                        session_id=interaction.session_id,
+                        event_type=event_type,
+                        event_data=event_data,
+                        persist=True,
+                        scope="leader",
+                        agent_id=leader_agent_id,
+                        agent_name=leader_agent_name,
+                        team_activity_id=None,
+                        guardrails=leader_guardrails,
+                        tool_calls=assistant_tool_calls,
+                    )
                     if event_type in HITL_EVENT_TYPES:
                         next_interaction = _create_pending_interaction(
                             interaction_type=event_type,
@@ -1327,6 +1366,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 return
 
             assistant_tool_calls: list[ChatToolRun] = []
+            interaction_guardrails = _build_runtime_guardrails(get_registered_agent(interaction.agent_id))
             async for event in agent.reply_stream(resume_event):
                 event_data = event.model_dump(mode="json")
                 event_type = event_data.pop("type", "UNKNOWN")
@@ -1338,6 +1378,18 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 )
                 if next_tool_calls is not assistant_tool_calls:
                     assistant_tool_calls = next_tool_calls
+                _record_tool_execution_artifacts(
+                    session_id=interaction.session_id,
+                    event_type=event_type,
+                    event_data=event_data,
+                    persist=True,
+                    scope=interaction.scope,
+                    agent_id=interaction.agent_id,
+                    agent_name=interaction.agent_name,
+                    team_activity_id=activity.id if activity else None,
+                    guardrails=interaction_guardrails,
+                    tool_calls=assistant_tool_calls,
+                )
                 if event_type in HITL_EVENT_TYPES:
                     next_interaction = _create_pending_interaction(
                         interaction_type=event_type,
@@ -1691,6 +1743,211 @@ def _record_agent_scope_event(
                 "estimatedSavedInputTokens": hit_tokens,
             },
         )
+
+
+def _record_tool_execution_artifacts(
+    *,
+    session_id: str,
+    persist: bool,
+    scope: str,
+    agent_id: str,
+    agent_name: str,
+    team_activity_id: str | None,
+    guardrails: AgentGuardrails,
+    event_type: str,
+    event_data: dict,
+    tool_calls: list["ChatToolRun"],
+) -> None:
+    """Persist command output and explicit file-change artifacts into traces."""
+
+    if event_type != "TOOL_RESULT_END":
+        return
+
+    tool_call_id = str(event_data.get("tool_call_id") or "")
+    if not tool_call_id:
+        return
+    tool_call = next((item for item in tool_calls if item.id == tool_call_id), None)
+    if tool_call is None:
+        return
+
+    tool_name = _normalize_tool_event_name(tool_call.name)
+    status = _tool_result_status(event_data)
+    args = _parse_tool_args(tool_call.args)
+
+    if tool_name == "Bash":
+        command_payload = _build_command_result_payload(
+            command=str(args.get("command") or ""),
+            result=tool_call.result,
+            status=status,
+            guardrails=guardrails,
+        )
+        _record_run_event(
+            session_id=session_id,
+            event_type="COMMAND_RESULT",
+            persist=persist,
+            scope=scope,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            team_activity_id=team_activity_id,
+            status=status,
+            title="Command execution result",
+            content=_trim_text(command_payload.get("summary", ""), 600),
+            payload=command_payload,
+        )
+        if _command_may_change_files(command_payload["command"]):
+            _record_run_event(
+                session_id=session_id,
+                event_type="FILE_CHANGE",
+                persist=persist,
+                scope=scope,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                team_activity_id=team_activity_id,
+                status="observed",
+                title="Shell command may have changed files",
+                content=_trim_text(command_payload["command"], 600),
+                payload={
+                    "operation": "shell",
+                    "toolName": tool_name,
+                    "toolCallId": tool_call_id,
+                    "command": command_payload["command"],
+                    "changedFiles": [],
+                    "changeDetection": "not_available_for_shell_commands",
+                    "workspace": _workspace_trace_payload(guardrails),
+                },
+            )
+        return
+
+    if tool_name not in {"Write", "Edit"}:
+        return
+
+    file_path = str(args.get("file_path") or "")
+    operation = "write" if tool_name == "Write" else "edit"
+    payload = {
+        "operation": operation,
+        "toolName": tool_name,
+        "toolCallId": tool_call_id,
+        "filePath": file_path,
+        "status": status,
+        "workspace": _workspace_trace_payload(guardrails),
+        "result": _trim_text(tool_call.result, 1200),
+    }
+    if tool_name == "Write":
+        content = str(args.get("content") or "")
+        payload["lineCount"] = len(content.splitlines()) if content else 0
+        payload["contentBytes"] = len(content.encode("utf-8"))
+    else:
+        payload["replaceAll"] = bool(args.get("replace_all"))
+        payload["oldStringBytes"] = len(str(args.get("old_string") or "").encode("utf-8"))
+        payload["newStringBytes"] = len(str(args.get("new_string") or "").encode("utf-8"))
+
+    _record_run_event(
+        session_id=session_id,
+        event_type="FILE_CHANGE",
+        persist=persist,
+        scope=scope,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        team_activity_id=team_activity_id,
+        status=status,
+        title=f"{tool_name} file operation",
+        content=file_path,
+        payload=payload,
+    )
+
+
+def _normalize_tool_event_name(name: str) -> str:
+    """Normalize repeated display names like `A_A` back to one tool name."""
+
+    raw = str(name or "tool").strip() or "tool"
+    if "_" in raw:
+        left, right = raw.split("_", 1)
+        if left and left == right:
+            return left
+    return raw
+
+
+def _tool_result_status(event_data: dict) -> str:
+    state = str(event_data.get("state") or "").lower()
+    return "failed" if state in {"error", "failed"} else "completed"
+
+
+def _parse_tool_args(raw: str) -> dict:
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _build_command_result_payload(
+    *,
+    command: str,
+    result: str,
+    status: str,
+    guardrails: AgentGuardrails,
+) -> dict:
+    stdout = result
+    stderr = ""
+    exit_code: int | None = 0 if status == "completed" else 1
+    exit_code_known = status == "completed"
+    summary = result
+
+    failed_match = re.match(
+        r"Command failed: (?P<command>.*?)\n(?:\nStdout:\n(?P<stdout>.*?))?(?:\nStderr:\n(?P<stderr>.*))?$",
+        result,
+        flags=re.DOTALL,
+    )
+    if failed_match:
+        command = command or failed_match.group("command") or ""
+        stdout = failed_match.group("stdout") or ""
+        stderr = failed_match.group("stderr") or ""
+        summary = stderr or stdout or result
+        exit_code_known = False
+    elif result.startswith("Command timed out"):
+        stdout = ""
+        stderr = result
+        summary = result
+        exit_code = None
+        exit_code_known = False
+
+    return {
+        "command": command,
+        "stdout": _trim_text(stdout, 12000),
+        "stderr": _trim_text(stderr, 12000),
+        "exitCode": exit_code,
+        "exitCodeKnown": exit_code_known,
+        "status": status,
+        "summary": _trim_text(summary, 1200),
+        "workspace": _workspace_trace_payload(guardrails),
+    }
+
+
+def _command_may_change_files(command: str) -> bool:
+    """Best-effort shell heuristic; explicit Write/Edit events are exact."""
+
+    lowered = f" {command.lower()} "
+    patterns = [
+        " >",
+        ">>",
+        " tee ",
+        " touch ",
+        " mkdir ",
+        " mv ",
+        " cp ",
+        " rm ",
+        " sed -i",
+        " python ",
+        " python3 ",
+        " node ",
+        " npm ",
+        " pnpm ",
+        " yarn ",
+    ]
+    return any(pattern in lowered for pattern in patterns)
 
 
 def _attach_provider_cache_usage(event_type: str, event_data: dict) -> None:
@@ -2412,8 +2669,21 @@ async def _run_team_workers(
                         "detail": f"Worker 执行失败: {exc}",
                         "output": worker_text,
                         "thinking": worker_thinking,
-                        "tool_calls": worker_tool_calls,
-                    }),
+                                "tool_calls": worker_tool_calls,
+                            }),
+                        )
+                activity = _find_team_activity(team_activities, member.agent_id)
+                _record_tool_execution_artifacts(
+                    session_id=session_id,
+                    event_type=event_type,
+                    event_data=event_data,
+                    persist=not data.sandbox,
+                    scope="worker",
+                    agent_id=member.agent_id,
+                    agent_name=worker_name,
+                    team_activity_id=activity.id if activity else None,
+                    guardrails=worker_guardrails,
+                    tool_calls=worker_tool_calls,
                 )
             _record_run_event(
                 session_id=session_id,
@@ -3098,7 +3368,7 @@ def _update_worker_tool_calls(
             "status": "running",
         })
     elif event_type == "TOOL_RESULT_END":
-        next_calls[index] = current.model_copy(update={"status": "completed"})
+        next_calls[index] = current.model_copy(update={"status": _tool_result_status(event_data)})
     else:
         return tool_calls
 
