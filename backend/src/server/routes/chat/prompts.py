@@ -1,0 +1,320 @@
+"""系统提示词构建，以及 clarification / worker-selection 文本解析。"""
+
+import json
+import re
+import uuid
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+from src.server.routes.agents import get_registered_agent
+from src.server.routes.memory import build_agent_memory_system_prompt
+
+from src.server.routes.chat.models import ChatTeamMemberPayload
+from src.server.routes.chat.store import _load_store
+
+
+def _build_conversation_history_prompt(session_id: str | None, limit: int = 12) -> str:
+    if not session_id:
+        return ""
+
+    store = _load_store()
+    messages = store.messages.get(session_id, [])
+    if not messages:
+        return ""
+
+    recent = messages[-limit:]
+    lines = [
+        "## Conversation History",
+        "The following are recent messages from this session. Use them for continuity, but prioritize the latest user request.",
+    ]
+    for message in recent:
+        content = " ".join((message.content or "").split())
+        if not content:
+            continue
+        if len(content) > 1200:
+            content = content[:1200] + "..."
+        role = "User" if message.role == "user" else "Assistant"
+        lines.append(f"{role}: {content}")
+
+    return "\n".join(lines) if len(lines) > 2 else ""
+
+
+def _build_agent_memory_prompt(agent_id: str | None) -> str:
+    """Build memory context for an Agent when its configuration enables it."""
+    if not agent_id or agent_id == "default":
+        return ""
+
+    agent_config = get_registered_agent(agent_id)
+    if not agent_config or not agent_config.memory_enabled:
+        return ""
+
+    return build_agent_memory_system_prompt(agent_id)
+
+
+def _build_runtime_context_prompt() -> str:
+    """Build concrete runtime context that should be stable for every model call."""
+
+    shanghai_now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    utc_now = datetime.now(timezone.utc)
+    return "\n".join(
+        [
+            "## Runtime Context",
+            f"Current date/time: {shanghai_now.strftime('%Y-%m-%d %H:%M:%S %Z')} (Asia/Shanghai).",
+            f"Current UTC time: {utc_now.strftime('%Y-%m-%d %H:%M:%S UTC')}.",
+            'Treat the Asia/Shanghai date above as "today" unless the user specifies another timezone.',
+            "For current-events or web-search tasks, include the current year/date when useful, prefer recent sources, and verify freshness before answering.",
+        ]
+    )
+
+
+def _build_clarification_system_prompt() -> str:
+    """Instructions for asking the user for missing information."""
+
+    return "\n".join([
+        "## Clarification Contract",
+        "If the user's request cannot be executed reliably because required information is missing, ask for clarification instead of guessing.",
+        "When clarification is required, the first output token must be <clarification>. Output only one clarification block and no other text before or after it:",
+        '<clarification>{"title":"需要补充信息","description":"简短说明为什么需要这些信息","questions":[{"id":"target","type":"choice","label":"请选择目标","options":["选项 A","选项 B"]},{"id":"needs","type":"multi_choice","label":"请选择需要的能力","options":["能力 A","能力 B"]},{"id":"details","type":"text","label":"请补充具体要求","placeholder":"输入补充信息"}]}</clarification>',
+        "Supported question types are: choice, multi_choice, text.",
+        "Use at most 3 questions. For choice and multi_choice, provide 2-5 concise options.",
+        "Only use clarification when the missing information blocks meaningful progress.",
+    ])
+
+
+def _extract_clarification_request(text: str) -> dict | None:
+    """Extract a structured clarification request from assistant text."""
+
+    match = re.search(r"<clarification>\s*(.*?)\s*</clarification>", text, re.DOTALL)
+    raw_text = match.group(1) if match else _extract_raw_clarification_json(text)
+    if not raw_text:
+        return None
+
+    try:
+        raw = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return None
+
+    questions: list[dict[str, object]] = []
+    for index, item in enumerate(raw.get("questions") or []):
+        if not isinstance(item, dict):
+            continue
+        question_type = str(item.get("type") or "").strip()
+        if question_type not in {"choice", "multi_choice", "text"}:
+            continue
+        question_id = str(item.get("id") or f"q{index + 1}").strip()
+        label = str(item.get("label") or item.get("question") or "").strip()
+        if not question_id or not label:
+            continue
+        options = [
+            str(option).strip()
+            for option in (item.get("options") or [])
+            if str(option).strip()
+        ][:5]
+        if question_type in {"choice", "multi_choice"} and len(options) < 2:
+            continue
+        questions.append({
+            "id": question_id,
+            "type": question_type,
+            "label": label,
+            "options": options,
+            "placeholder": str(item.get("placeholder") or "").strip(),
+            "required": bool(item.get("required", True)),
+        })
+
+    if not questions:
+        return None
+
+    return {
+        "id": uuid.uuid4().hex,
+        "title": str(raw.get("title") or "需要补充信息").strip(),
+        "description": str(raw.get("description") or "").strip(),
+        "questions": questions[:3],
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _extract_raw_clarification_json(text: str) -> str | None:
+    """Extract a bare clarification JSON object when the model omits tags."""
+
+    if '"questions"' not in text or '"title"' not in text:
+        return None
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    return text[start:end + 1]
+
+
+def _parse_worker_selection(text: str, allowed_agent_ids: set[str]) -> tuple[list[str], str]:
+    """Parse model JSON for worker selection and filter unknown ids."""
+
+    raw = text.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?", "", raw, flags=re.IGNORECASE).strip()
+        raw = re.sub(r"```$", "", raw).strip()
+    if "{" in raw and "}" in raw:
+        raw = raw[raw.find("{"): raw.rfind("}") + 1]
+
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return [], "模型未返回有效选择，保持人工选择。"
+
+    raw_ids = data.get("selectedAgentIds") or data.get("selected_agent_ids") or []
+    selected: list[str] = []
+    if isinstance(raw_ids, list):
+        for item in raw_ids:
+            agent_id = str(item).strip()
+            if agent_id in allowed_agent_ids and agent_id not in selected:
+                selected.append(agent_id)
+
+    reason = str(data.get("reason") or "").strip()
+    return selected, reason
+
+
+def _build_agent_plan_prompt(agent_config: object | None) -> str:
+    """Build runtime planning instructions from the Agent plan config."""
+
+    plan_config = getattr(agent_config, "plan_config", None)
+    if not plan_config or not getattr(plan_config, "enabled", True):
+        return ""
+
+    mode = str(getattr(plan_config, "mode", "structured") or "structured")
+    max_steps = int(getattr(plan_config, "max_steps", 6) or 6)
+    require_before_tools = bool(getattr(plan_config, "require_plan_before_tools", True))
+    require_user_approval = bool(getattr(plan_config, "require_user_approval", False))
+    allow_replanning = bool(getattr(plan_config, "allow_replanning", True))
+
+    lines = [
+        "## Agent Planning Contract",
+        "You have an explicit planning layer before and during execution.",
+        f"Planning mode: {mode}.",
+        f"Maximum plan steps: {max_steps}.",
+        "Represent plans as concise numbered steps with status markers: pending, active, completed, blocked.",
+        'Do not repeatedly output headings such as "Execution" after each tool call; keep tool-loop narration compact.',
+    ]
+    if require_before_tools:
+        lines.append("Before calling any tool or MCP, first produce a short plan unless the task is trivial and purely conversational.")
+    if require_user_approval:
+        lines.append("After drafting the initial plan, ask the user to approve or adjust it before executing non-read-only actions.")
+    if allow_replanning:
+        lines.append("When tool results materially change the situation, update the plan briefly before continuing.")
+    else:
+        lines.append("Do not change the plan unless the user explicitly asks you to.")
+
+    if mode == "lightweight":
+        lines.append("Use at most 3 plan steps and keep the plan compact.")
+    elif mode == "strict":
+        lines.extend([
+            "For complex tasks, provide one concise initial plan and one final result summary.",
+            "Do not mark a step completed until the required tool result or reasoning evidence is available.",
+            "If a step is blocked, stop and report the blocker instead of silently skipping it.",
+        ])
+    else:
+        lines.extend([
+            "For multi-step work, show the initial plan, then continue with execution.",
+            "Keep planning visible but concise; avoid long meta explanations.",
+        ])
+
+    return "\n".join(lines)
+
+
+def _build_team_system_prompt(
+    team_name: str | None,
+    members: list[ChatTeamMemberPayload],
+) -> str:
+    """Build Team context for the leader Agent."""
+    if not team_name and not members:
+        return ""
+
+    lines = [
+        "## Team Runtime Context",
+        f"You are acting as the leader of Team: {team_name or 'Unnamed Team'}.",
+        "Coordinate the worker agents according to their roles.",
+        "Worker agents are executed in independent ReAct loops before your final response. Use their outputs as grounded team context and produce the final leader response.",
+        "Available team members:",
+    ]
+    for member in members:
+        dependency_note = (
+            f" depends on {', '.join(member.depends_on)}"
+            if member.role != "leader" and member.depends_on
+            else ""
+        )
+        lines.append(
+            f"- {member.role}: {member.name} ({member.agent_id})"
+            + dependency_note
+            + (f" - {member.description}" if member.description else "")
+        )
+    return "\n".join(lines)
+
+
+def _build_worker_system_prompt(
+    team_name: str | None,
+    leader_name: str | None,
+    member: ChatTeamMemberPayload,
+) -> str:
+    """Build Team context for a worker Agent."""
+    return "\n".join([
+        "## Team Worker Runtime Context",
+        f"You are a worker agent in Team: {team_name or 'Unnamed Team'}.",
+        f"Leader: {leader_name or 'Leader'}.",
+        f"Your team role: {member.name}.",
+        "Run your own ReAct loop. Use tools when needed, stay within the shared workspace context, and return a focused contribution for the leader.",
+    ])
+
+
+def _build_worker_user_message(
+    user_message: str,
+    member: ChatTeamMemberPayload,
+    dependency_outputs: list[dict[str, str]] | None = None,
+) -> str:
+    """Build the delegated task sent to a worker."""
+    parts = [
+        "Leader delegated this user request to you:",
+        user_message,
+        "Your assignment:",
+        member.description or "Analyze this request from your role and provide actionable findings.",
+    ]
+    if member.handoff_prompt:
+        parts.extend([
+            "Handoff instructions:",
+            member.handoff_prompt,
+        ])
+    if dependency_outputs:
+        parts.append("Upstream worker outputs you must use:")
+        for item in dependency_outputs:
+            parts.append(f"### {item.get('name') or item.get('agentId')}")
+            parts.append(item.get("output") or "(No output)")
+    parts.append("Return your worker result clearly. Do not write the final team answer; the leader will synthesize it.")
+    return "\n\n".join(parts)
+
+
+def _build_worker_outputs_system_prompt(worker_outputs: list[dict[str, str]]) -> str:
+    """Build a leader-visible summary of actual worker outputs."""
+    lines = [
+        "## Worker ReAct Outputs",
+        "The following worker outputs are authoritative context for your final team response.",
+        "You must synthesize completed worker outputs explicitly. If a worker failed or is waiting, say what data is missing instead of inventing details.",
+    ]
+    for item in worker_outputs:
+        status = item.get("status") or "unknown"
+        detail = item.get("detail") or ""
+        lines.append(f"### {item['name']} ({status})")
+        if detail:
+            lines.append(f"Status detail: {detail}")
+        lines.append(item["output"] or "(No output)")
+    return "\n\n".join(lines)
+
+
+def _build_leader_user_message(user_message: str, worker_outputs: list[dict[str, str]]) -> str:
+    """Build the final leader task with worker outputs in the user-visible turn."""
+    if not worker_outputs:
+        return user_message
+
+    return "\n\n".join([
+        "Original user request:",
+        user_message,
+        _build_worker_outputs_system_prompt(worker_outputs),
+        "Leader instruction:",
+        "Produce the final answer based on the worker outputs above. Mention the useful worker findings and do not ignore them.",
+    ])

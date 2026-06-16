@@ -1,0 +1,427 @@
+"""Trace 记录 — 运行事件、fallback、workspace、AgentScope 事件与工具产物。
+
+所有 trace 记录都不允许因可观测性失败而中断主执行流。
+"""
+
+import json
+import re
+
+from src.agents.factory import AgentGuardrails
+from src.storage.database import append_run_event
+
+from src.server.routes.chat.helpers import _trim_text
+from src.server.routes.chat.models import ChatToolRun, TRACE_EVENT_TYPES
+from src.server.routes.chat.team_state import _tool_result_status
+
+
+def _record_run_event(
+    *,
+    session_id: str,
+    event_type: str,
+    persist: bool,
+    scope: str = "leader",
+    agent_id: str | None = None,
+    agent_name: str | None = None,
+    team_activity_id: str | None = None,
+    status: str = "",
+    title: str = "",
+    content: str = "",
+    payload: dict | None = None,
+) -> None:
+    """Persist trace events without allowing observability to break execution."""
+    if not persist:
+        return
+    try:
+        append_run_event(
+            session_id=session_id,
+            event_type=event_type,
+            scope=scope,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            team_activity_id=team_activity_id,
+            status=status,
+            title=title,
+            content=content,
+            payload=payload or {},
+        )
+    except Exception as exc:
+        print(f"[Trace] Failed to record run event {event_type}: {exc}")
+
+
+def _make_fallback_trace_recorder(
+    *,
+    session_id: str,
+    persist: bool,
+    scope: str,
+    agent_id: str,
+    agent_name: str,
+    team_activity_id: str | None = None,
+):
+    """Create a callback that records application-level fallback attempts."""
+
+    def record(event: dict) -> None:
+        event_kind = str(event.get("type") or "attempt")
+        model = str(event.get("model") or "")
+        status = {
+            "attempt": "running",
+            "success": "completed",
+            "failure": "failed",
+        }.get(event_kind, "running")
+        title = {
+            "attempt": f"Trying model: {model}",
+            "success": f"Model succeeded: {model}",
+            "failure": f"Model failed: {model}",
+        }.get(event_kind, f"Model fallback event: {model}")
+        _record_run_event(
+            session_id=session_id,
+            event_type=f"MODEL_FALLBACK_{event_kind.upper()}",
+            persist=persist,
+            scope=scope,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            team_activity_id=team_activity_id,
+            status=status,
+            title=title,
+            content=str(event.get("error") or ""),
+            payload=event,
+        )
+
+    return record
+
+
+def _workspace_trace_payload(guardrails: AgentGuardrails) -> dict:
+    """Build trace payload for local/Docker execution workspace config."""
+    return {
+        "backend": guardrails.execution_backend,
+        "filesystemScope": guardrails.filesystem_scope,
+        "networkEnabled": guardrails.network_enabled,
+        "toolPermissionProfile": guardrails.tool_permission_profile,
+        "timeoutSeconds": guardrails.timeout_seconds,
+        "dockerImage": guardrails.docker_image if guardrails.execution_backend == "docker" else "",
+        "persistentSandbox": guardrails.persistent_sandbox if guardrails.execution_backend == "docker" else False,
+    }
+
+
+def _record_workspace_event(
+    *,
+    session_id: str,
+    persist: bool,
+    scope: str,
+    agent_id: str,
+    agent_name: str,
+    guardrails: AgentGuardrails,
+    team_activity_id: str | None = None,
+) -> None:
+    payload = _workspace_trace_payload(guardrails)
+    title = (
+        f"Docker workspace: {guardrails.docker_image}"
+        if guardrails.execution_backend == "docker"
+        else "Local workspace"
+    )
+    _record_run_event(
+        session_id=session_id,
+        event_type="WORKSPACE_CONFIG",
+        persist=persist,
+        scope=scope,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        team_activity_id=team_activity_id,
+        status="configured",
+        title=title,
+        content=(
+            f"{payload['backend']} · scope={payload['filesystemScope']} · "
+            f"profile={payload['toolPermissionProfile']}"
+        ),
+        payload=payload,
+    )
+
+
+def _record_agent_scope_event(
+    *,
+    session_id: str,
+    event_type: str,
+    event_data: dict,
+    persist: bool,
+    scope: str,
+    agent_id: str,
+    agent_name: str,
+    team_activity_id: str | None = None,
+) -> None:
+    """Record selected AgentScope events as compact trace events."""
+    if event_type not in TRACE_EVENT_TYPES:
+        return
+    tool_name = str(event_data.get("tool_call_name") or "")
+    model_name = str(event_data.get("model_name") or "")
+    title = {
+        "REPLY_START": "Reply started",
+        "REPLY_END": "Reply completed",
+        "MODEL_CALL_START": f"Model call started{f': {model_name}' if model_name else ''}",
+        "MODEL_CALL_END": f"Model call completed{f': {model_name}' if model_name else ''}",
+        "TOOL_CALL_START": f"Tool call started{f': {tool_name}' if tool_name else ''}",
+        "TOOL_CALL_END": f"Tool call ended{f': {tool_name}' if tool_name else ''}",
+        "TOOL_RESULT_START": f"Tool result started{f': {tool_name}' if tool_name else ''}",
+        "TOOL_RESULT_END": f"Tool result completed{f': {tool_name}' if tool_name else ''}",
+    }.get(event_type, event_type)
+    status = (
+        "completed"
+        if event_type in {"REPLY_END", "MODEL_CALL_END", "TOOL_RESULT_END"}
+        else "running"
+    )
+    payload = dict(event_data)
+    if "delta" in payload:
+        payload["delta"] = _trim_text(str(payload.get("delta") or ""), 240)
+    _record_run_event(
+        session_id=session_id,
+        event_type=event_type,
+        persist=persist,
+        scope=scope,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        team_activity_id=team_activity_id,
+        status=status,
+        title=title,
+        payload=payload,
+    )
+    provider_cache = payload.get("provider_cache")
+    if event_type == "MODEL_CALL_END" and isinstance(provider_cache, dict) and provider_cache.get("available"):
+        created_tokens = int(provider_cache.get("created_tokens") or 0)
+        hit_tokens = int(provider_cache.get("hit_tokens") or 0)
+        _record_run_event(
+            session_id=session_id,
+            event_type="MODEL_CACHE_USAGE",
+            persist=persist,
+            scope=scope,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            team_activity_id=team_activity_id,
+            status="completed",
+            title="Provider prompt cache usage",
+            content=f"created={created_tokens}, hit={hit_tokens}",
+            payload={
+                "model": model_name,
+                "createdTokens": created_tokens,
+                "hitTokens": hit_tokens,
+                "estimatedSavedInputTokens": hit_tokens,
+            },
+        )
+
+
+def _record_tool_execution_artifacts(
+    *,
+    session_id: str,
+    persist: bool,
+    scope: str,
+    agent_id: str,
+    agent_name: str,
+    team_activity_id: str | None,
+    guardrails: AgentGuardrails,
+    event_type: str,
+    event_data: dict,
+    tool_calls: list["ChatToolRun"],
+) -> None:
+    """Persist command output and explicit file-change artifacts into traces."""
+
+    if event_type != "TOOL_RESULT_END":
+        return
+
+    tool_call_id = str(event_data.get("tool_call_id") or "")
+    if not tool_call_id:
+        return
+    tool_call = next((item for item in tool_calls if item.id == tool_call_id), None)
+    if tool_call is None:
+        return
+
+    tool_name = _normalize_tool_event_name(tool_call.name)
+    status = _tool_result_status(event_data)
+    args = _parse_tool_args(tool_call.args)
+
+    if tool_name == "Bash":
+        command_payload = _build_command_result_payload(
+            command=str(args.get("command") or ""),
+            result=tool_call.result,
+            status=status,
+            guardrails=guardrails,
+        )
+        _record_run_event(
+            session_id=session_id,
+            event_type="COMMAND_RESULT",
+            persist=persist,
+            scope=scope,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            team_activity_id=team_activity_id,
+            status=status,
+            title="Command execution result",
+            content=_trim_text(command_payload.get("summary", ""), 600),
+            payload=command_payload,
+        )
+        if _command_may_change_files(command_payload["command"]):
+            _record_run_event(
+                session_id=session_id,
+                event_type="FILE_CHANGE",
+                persist=persist,
+                scope=scope,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                team_activity_id=team_activity_id,
+                status="observed",
+                title="Shell command may have changed files",
+                content=_trim_text(command_payload["command"], 600),
+                payload={
+                    "operation": "shell",
+                    "toolName": tool_name,
+                    "toolCallId": tool_call_id,
+                    "command": command_payload["command"],
+                    "changedFiles": [],
+                    "changeDetection": "not_available_for_shell_commands",
+                    "workspace": _workspace_trace_payload(guardrails),
+                },
+            )
+        return
+
+    if tool_name not in {"Write", "Edit"}:
+        return
+
+    file_path = str(args.get("file_path") or "")
+    operation = "write" if tool_name == "Write" else "edit"
+    payload = {
+        "operation": operation,
+        "toolName": tool_name,
+        "toolCallId": tool_call_id,
+        "filePath": file_path,
+        "status": status,
+        "workspace": _workspace_trace_payload(guardrails),
+        "result": _trim_text(tool_call.result, 1200),
+    }
+    if tool_name == "Write":
+        content = str(args.get("content") or "")
+        payload["lineCount"] = len(content.splitlines()) if content else 0
+        payload["contentBytes"] = len(content.encode("utf-8"))
+    else:
+        payload["replaceAll"] = bool(args.get("replace_all"))
+        payload["oldStringBytes"] = len(str(args.get("old_string") or "").encode("utf-8"))
+        payload["newStringBytes"] = len(str(args.get("new_string") or "").encode("utf-8"))
+
+    _record_run_event(
+        session_id=session_id,
+        event_type="FILE_CHANGE",
+        persist=persist,
+        scope=scope,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        team_activity_id=team_activity_id,
+        status=status,
+        title=f"{tool_name} file operation",
+        content=file_path,
+        payload=payload,
+    )
+
+
+def _normalize_tool_event_name(name: str) -> str:
+    """Normalize repeated display names like `A_A` back to one tool name."""
+
+    raw = str(name or "tool").strip() or "tool"
+    if "_" in raw:
+        left, right = raw.split("_", 1)
+        if left and left == right:
+            return left
+    return raw
+
+
+def _parse_tool_args(raw: str) -> dict:
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _build_command_result_payload(
+    *,
+    command: str,
+    result: str,
+    status: str,
+    guardrails: AgentGuardrails,
+) -> dict:
+    stdout = result
+    stderr = ""
+    exit_code: int | None = 0 if status == "completed" else 1
+    exit_code_known = status == "completed"
+    summary = result
+
+    failed_match = re.match(
+        r"Command failed: (?P<command>.*?)\n(?:\nStdout:\n(?P<stdout>.*?))?(?:\nStderr:\n(?P<stderr>.*))?$",
+        result,
+        flags=re.DOTALL,
+    )
+    if failed_match:
+        command = command or failed_match.group("command") or ""
+        stdout = failed_match.group("stdout") or ""
+        stderr = failed_match.group("stderr") or ""
+        summary = stderr or stdout or result
+        exit_code_known = False
+    elif result.startswith("Command timed out"):
+        stdout = ""
+        stderr = result
+        summary = result
+        exit_code = None
+        exit_code_known = False
+
+    return {
+        "command": command,
+        "stdout": _trim_text(stdout, 12000),
+        "stderr": _trim_text(stderr, 12000),
+        "exitCode": exit_code,
+        "exitCodeKnown": exit_code_known,
+        "status": status,
+        "summary": _trim_text(summary, 1200),
+        "workspace": _workspace_trace_payload(guardrails),
+    }
+
+
+def _command_may_change_files(command: str) -> bool:
+    """Best-effort shell heuristic; explicit Write/Edit events are exact."""
+
+    lowered = f" {command.lower()} "
+    patterns = [
+        " >",
+        ">>",
+        " tee ",
+        " touch ",
+        " mkdir ",
+        " mv ",
+        " cp ",
+        " rm ",
+        " sed -i",
+        " python ",
+        " python3 ",
+        " node ",
+        " npm ",
+        " pnpm ",
+        " yarn ",
+    ]
+    return any(pattern in lowered for pattern in patterns)
+
+
+def _attach_provider_cache_usage(event_type: str, event_data: dict) -> None:
+    """Expose provider-side prompt cache usage on MODEL_CALL_END events."""
+
+    if event_type != "MODEL_CALL_END":
+        return
+
+    metadata = event_data.get("metadata")
+    if not isinstance(metadata, dict):
+        return
+
+    cache_creation = int(metadata.get("cache_creation_input_tokens") or 0)
+    cache_read = int(metadata.get("cache_input_tokens") or 0)
+    event_data["cache_creation_input_tokens"] = cache_creation
+    event_data["cache_input_tokens"] = cache_read
+    event_data["provider_cache"] = {
+        "created_tokens": cache_creation,
+        "hit_tokens": cache_read,
+        "available": bool(cache_creation or cache_read),
+    }
