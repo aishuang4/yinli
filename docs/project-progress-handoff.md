@@ -246,10 +246,12 @@ Agent Workstation 是一个基于 AgentScope 2.0 的多 Agent 协作工作台，
   - HITL_REQUIRED / HITL_RESOLVED
   - provider cache usage
   - workspace config
+  - Bash 命令 stdout / stderr / exit-code metadata
+  - Write / Edit 文件操作
+  - shell 命令潜在文件变更提示
 
 待补：
 
-- stdout / stderr / exit code / 文件变化的完整捕获。
 - Trace 页面更细的筛选能力。
 
 ### 3.10 测试沙盒 Sandbox
@@ -427,7 +429,6 @@ backend/data/agent_workstation.db
 
 ### 高优先级
 
-- Docker sandbox 只完成基础接入，还未完整捕获 stdout / stderr / exit code / 文件变化。
 - Trace 页面筛选能力还不完整。
 - 后端缺少正式 pytest 测试套件。
 - Team 复杂 DAG 执行需要更多测试，尤其是 worker 跳过、依赖等待、leader 汇总上下文。
@@ -530,4 +531,3 @@ backend/data/agent_workstation.db
 - `docs/agent-workstation-frontend-design.md`：前端设计说明
 - `docs/project-todo.md`：当前任务排期和状态
 - `docs/project-progress-handoff.md`：当前项目进展与协作交接
-

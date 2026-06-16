@@ -261,6 +261,8 @@ function shouldShowTracePayload(event: TraceEvent) {
   return (
     event.eventType === 'WORKSPACE_CONFIG' ||
     event.eventType === 'MODEL_CACHE_USAGE' ||
+    event.eventType === 'COMMAND_RESULT' ||
+    event.eventType === 'FILE_CHANGE' ||
     event.eventType.startsWith('MODEL_FALLBACK_')
   );
 }
