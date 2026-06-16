@@ -13,7 +13,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, BookOpenCheck, Users, CheckCircle2, Clock3, Copy, Check } from 'lucide-react';
+import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, XCircle, BookOpenCheck, Users, CheckCircle2, Clock3, Copy, Check, GitBranch } from 'lucide-react';
 import { Button, Empty, Select, Spinner, Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { useEventStream, type ClarificationRequestInfo, type HitlRequestInfo, type MemorySummaryInfo, type ModelCacheInfo, type SkillCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
@@ -116,7 +116,7 @@ function normalizeStoredToolCalls(toolCalls: ToolCallInfo[] | undefined): ToolCa
     seen.add(key);
     normalized.push({
       id,
-      name: String(toolCall.name || 'tool'),
+      name: normalizeToolDisplayName(String(toolCall.name || 'tool')),
       args: String(toolCall.args || ''),
       result: String(toolCall.result || ''),
       status: (
@@ -131,6 +131,15 @@ function normalizeStoredToolCalls(toolCalls: ToolCallInfo[] | undefined): ToolCa
   }
 
   return normalized;
+}
+
+function normalizeToolDisplayName(name: string): string {
+  const value = String(name || 'tool');
+  const parts = value.split('_');
+  if (parts.length === 2 && parts[0] && parts[0] === parts[1]) {
+    return parts[0];
+  }
+  return value;
 }
 
 function normalizeStoredTeamActivities(activities: StoredTeamActivity[]): TeamActivityInfo[] {
@@ -154,7 +163,11 @@ function normalizeStoredTeamActivities(activities: StoredTeamActivity[]): TeamAc
     thinking: String(activity.thinking || ''),
     currentEvent: String(activity.currentEvent || ''),
     toolCalls: normalizeStoredToolCalls(activity.toolCalls || activity.tool_calls || []),
+    executionMode: String(activity.executionMode || 'parallel'),
     dependsOn: activity.dependsOn || [],
+    waitReason: String(activity.waitReason || ''),
+    dependencyOutputCount: Number(activity.dependencyOutputCount || 0),
+    leaderContextCount: Number(activity.leaderContextCount || 0),
     createdAt: String(activity.createdAt || activity.created_at || ''),
   }));
 }
@@ -177,7 +190,6 @@ export function ChatPage() {
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const [selectedTeamActivityId, setSelectedTeamActivityId] = useState<string | null>(null);
-  const [renderedTeamActivity, setRenderedTeamActivity] = useState<TeamActivityInfo | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -234,19 +246,6 @@ export function ChatPage() {
   const selectedTeamActivity = useMemo(() => (
     visibleTeamActivities.find((activity) => activity.id === selectedTeamActivityId) || null
   ), [selectedTeamActivityId, visibleTeamActivities]);
-
-  useEffect(() => {
-    if (selectedTeamActivity) {
-      setRenderedTeamActivity(selectedTeamActivity);
-      return undefined;
-    }
-
-    const timer = window.setTimeout(() => {
-      setRenderedTeamActivity(null);
-    }, 360);
-
-    return () => window.clearTimeout(timer);
-  }, [selectedTeamActivity]);
 
   const buildTeamMembersForRun = useCallback((workerAgentIds: string[] | null) => {
     if (!selectedTeam) return [];
@@ -975,9 +974,9 @@ export function ChatPage() {
           }}
           aria-hidden={!selectedTeamActivity}
         >
-          {renderedTeamActivity && (
+          {selectedTeamActivity && (
             <TeamActivitySidebar
-              activity={renderedTeamActivity}
+              activity={selectedTeamActivity}
               onClose={() => setSelectedTeamActivityId(null)}
             />
           )}
@@ -1061,6 +1060,8 @@ function MessageBubble({
         display: 'flex',
         flexDirection: isUser ? 'row-reverse' : 'row',
         alignItems: 'flex-start',
+        contentVisibility: 'auto',
+        containIntrinsicSize: isUser ? '88px' : '220px',
       }}
     >
       {/* 消息内容 */}
@@ -1421,6 +1422,15 @@ function TeamActivityPanel({
         </span>
       </div>
 
+      {workers.length > 0 && (
+        <TeamExecutionGraph
+          leader={leader || null}
+          workers={workers}
+          selectedActivityId={selectedActivityId}
+          onSelectActivity={onSelectActivity}
+        />
+      )}
+
       <div className="grid gap-2 px-3 pb-3 md:grid-cols-2">
         {leader && (
           <TeamActivityCard
@@ -1437,6 +1447,91 @@ function TeamActivityPanel({
             onSelect={() => onSelectActivity(activity.id)}
           />
         ))}
+      </div>
+    </div>
+  );
+}
+
+function TeamExecutionGraph({
+  leader,
+  workers,
+  selectedActivityId,
+  onSelectActivity,
+}: {
+  leader: TeamActivityInfo | null;
+  workers: TeamActivityInfo[];
+  selectedActivityId: string | null;
+  onSelectActivity: (id: string) => void;
+}) {
+  const nameByAgentId = new Map(workers.map((worker) => [worker.agentId, worker.agentName]));
+  const parallelCount = workers.filter((worker) => worker.executionMode !== 'depends_on').length;
+  const waitingCount = workers.filter((worker) => worker.status === 'pending' && worker.waitReason).length;
+
+  return (
+    <div className="px-3 pb-3">
+      <div className="rounded-md bg-[var(--color-bg-primary)] p-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-text-secondary)]">
+            <GitBranch size={13} color="var(--color-accent)" />
+            <span>执行图</span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            <Tag size="small" color="transparent">并行 {parallelCount}</Tag>
+            <Tag size="small" color={waitingCount > 0 ? 'orange' : 'green'}>等待 {waitingCount}</Tag>
+            {leader && leader.leaderContextCount > 0 && (
+              <Tag size="small" color="blue">Leader 使用 {leader.leaderContextCount} 个输出</Tag>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-stretch gap-2">
+          {workers.map((worker) => {
+            const dependencyNames = worker.dependsOn.map((dependency) => nameByAgentId.get(dependency) || dependency);
+            const selected = selectedActivityId === worker.id;
+            const statusColor = worker.status === 'completed'
+              ? 'var(--color-success)'
+              : worker.status === 'failed'
+                ? 'var(--color-error)'
+                : worker.status === 'running'
+                  ? 'var(--color-accent)'
+                  : 'var(--color-text-tertiary)';
+            return (
+              <button
+                key={worker.id}
+                type="button"
+                onClick={() => onSelectActivity(worker.id)}
+                className={`ui-card-transition min-w-[180px] max-w-[260px] flex-1 rounded-md border bg-[var(--color-bg-secondary)] p-2 text-left ${
+                  selected ? 'border-[var(--color-accent)] shadow-sm' : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0 truncate text-xs font-medium text-[var(--color-text-primary)]">
+                    {worker.agentName}
+                  </div>
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: statusColor }} />
+                </div>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  <Tag size="small" color={worker.executionMode === 'depends_on' ? 'blue' : 'transparent'}>
+                    {worker.executionMode === 'depends_on' ? '依赖执行' : '并行'}
+                  </Tag>
+                  {worker.dependencyOutputCount > 0 && (
+                    <Tag size="small" color="green">收到 {worker.dependencyOutputCount}</Tag>
+                  )}
+                </div>
+                {dependencyNames.length > 0 && (
+                  <div className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">
+                    依赖：{dependencyNames.join(' -> ')}
+                  </div>
+                )}
+                {(worker.waitReason || worker.detail) && (
+                  <div className="mt-1 line-clamp-2 text-[11px] text-[var(--color-text-tertiary)]">
+                    {worker.waitReason || worker.detail}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -1468,7 +1563,7 @@ function TeamActivityCard({
     <button
       type="button"
       onClick={onSelect}
-      className={`min-h-[132px] rounded-md bg-[var(--color-bg-primary)] p-3 text-left transition-all duration-300 ease-out ${
+      className={`ui-card-transition min-h-[132px] rounded-md bg-[var(--color-bg-primary)] p-3 text-left ${
         selected ? 'ring-1 ring-[var(--color-accent)]' : 'hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)]'
       }`}
     >
@@ -1587,6 +1682,26 @@ function TeamActivitySidebar({
             {isWaiting && <AlertCircle size={13} className="text-[var(--color-warning)]" />}
             <span>{activity.currentEvent || getTeamActivityStatusText(activity.status)}</span>
           </div>
+          <div className="mt-2 flex flex-wrap gap-1">
+            <Tag size="small" color={activity.executionMode === 'depends_on' ? 'blue' : 'transparent'}>
+              {activity.role === 'leader'
+                ? 'Leader 汇总'
+                : activity.executionMode === 'depends_on'
+                  ? '依赖执行'
+                  : '并行执行'}
+            </Tag>
+            {activity.dependencyOutputCount > 0 && (
+              <Tag size="small" color="green">上游输出 {activity.dependencyOutputCount}</Tag>
+            )}
+            {activity.leaderContextCount > 0 && (
+              <Tag size="small" color="blue">Worker 输出 {activity.leaderContextCount}</Tag>
+            )}
+          </div>
+          {activity.waitReason && (
+            <div className="mt-2 text-xs text-[var(--color-warning)]">
+              {activity.waitReason}
+            </div>
+          )}
         </section>
 
         {activity.dependsOn.length > 0 && (
@@ -1637,9 +1752,11 @@ function TeamActivitySidebar({
         {toolCalls.length > 0 && (
           <section className="space-y-2 rounded-lg bg-[var(--color-bg-primary)] p-3">
             <div className="text-xs text-[var(--color-text-tertiary)]">工具调用</div>
-            {toolCalls.map((toolCall) => (
-              <ToolCallBlock key={toolCall.id} toolCall={toolCall} />
-            ))}
+            <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+              {toolCalls.map((toolCall) => (
+                <ToolCallBlock key={toolCall.id} toolCall={toolCall} />
+              ))}
+            </div>
           </section>
         )}
       </div>
@@ -1662,6 +1779,7 @@ function TeamSelectionDock({
   onConfirm: (workerIds: string[]) => void;
   onCancel: () => void;
 }) {
+  const [showDetails, setShowDetails] = useState(false);
   const workerMembers = members.filter((member) => member.role === 'worker');
   const allWorkerIds = workerMembers.map((member) => member.agentId);
   const selected = new Set(pending?.selectedAgentIds || []);
@@ -1670,36 +1788,44 @@ function TeamSelectionDock({
     .map((member) => agents.find((agent) => agent.id === member.agentId)?.name || member.name);
 
   return (
-    <div className="mx-auto mb-3 max-w-4xl rounded-xl bg-[var(--color-bg-secondary)] p-3 shadow-md">
-      <div className="flex items-start justify-between gap-3">
+    <div className="mx-auto mb-3 max-w-4xl rounded-xl bg-[var(--color-bg-secondary)] p-3 shadow-md transition-all duration-300 ease-out">
+      <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
             {selecting && <Loader2 size={14} className="animate-spin text-[var(--color-accent)]" />}
-            <span>{selecting ? 'AI 正在选择本轮 Worker' : '确认本轮 Team 协作'}</span>
+            <span>{selecting ? '正在准备 Team 协作' : '确认 Team 协作'}</span>
           </div>
           <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
             {selecting
-              ? '系统会根据当前任务和 Worker 职责预选相关子 Agent。'
-              : pending?.reason || '模型已给出建议，可确认或改用全部 Worker。'}
-          </div>
-          {!selecting && (
-            <div className="mt-2 text-xs text-[var(--color-text-secondary)]">
-              {selectedNames.length > 0
-                ? `建议参与：${selectedNames.join('、')}`
+              ? '系统正在根据当前任务准备相关 Worker。'
+              : selectedNames.length > 0
+                ? `建议使用 ${selectedNames.length} 个 Worker，可直接确认或调整为全部/仅 Leader。`
                 : '建议仅由 Leader 处理，不启动 Worker。'}
-            </div>
-          )}
+          </div>
         </div>
         {!selecting && (
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-md px-2 py-1 text-xs text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)]"
-          >
-            取消
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button size="small" type="text" onClick={() => setShowDetails((value) => !value)}>
+              {showDetails ? '收起' : '查看建议'}
+            </Button>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-md px-2 py-1 text-xs text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)]"
+            >
+              取消
+            </button>
+          </div>
         )}
       </div>
+      {!selecting && pending && showDetails && (
+        <div className="mt-2 rounded-md bg-[var(--color-bg-primary)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+          <div className="text-[var(--color-text-tertiary)]">{pending.reason || '模型已给出 Worker 建议。'}</div>
+          <div className="mt-1">
+            {selectedNames.length > 0 ? selectedNames.join('、') : '仅 Leader'}
+          </div>
+        </div>
+      )}
       {!selecting && pending && (
         <div className="mt-3 flex flex-wrap justify-end gap-2">
           <Button onClick={() => onConfirm([])}>
@@ -1782,6 +1908,11 @@ function ModelCacheBlock({ caches }: { caches: ModelCacheInfo[] }) {
                 <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
                   输入 {cache.inputTokens} · 输出 {cache.outputTokens}
                 </div>
+                {(cache.cacheCreationInputTokens > 0 || cache.cacheInputTokens > 0) && (
+                  <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                    命中率 {Math.round(cache.cacheHitRate * 100)}% · 约节省输入 {cache.estimatedSavedInputTokens} token
+                  </div>
+                )}
               </div>
               <div className="flex shrink-0 flex-wrap justify-end gap-1">
                 <Tag size="small" color={cache.cacheCreationInputTokens > 0 ? 'blue' : 'transparent'}>
@@ -2281,13 +2412,22 @@ function SkillCallBlock({ skillCall }: { skillCall: SkillCallInfo }) {
  */
 function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
   const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState<'args' | 'result' | null>(null);
   const isRunning = toolCall.status === 'calling' || toolCall.status === 'running';
+  const isFailed = toolCall.status === 'failed';
+
+  const handleCopyToolText = useCallback(async (kind: 'args' | 'result', value: string) => {
+    if (!value.trim()) return;
+    await copyTextToClipboard(value);
+    setCopied(kind);
+    window.setTimeout(() => setCopied(null), 1200);
+  }, []);
 
   return (
     <div
       style={{
         borderRadius: 'var(--radius-lg)',
-        border: `1px solid ${isRunning ? 'var(--color-accent)' : 'var(--color-border)'}`,
+        border: `1px solid ${isFailed ? 'var(--color-error)' : isRunning ? 'var(--color-accent)' : 'var(--color-border)'}`,
         overflow: 'hidden',
         fontSize: 'var(--text-sm)',
       }}
@@ -2308,8 +2448,10 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
           textAlign: 'start',
         }}
       >
-          {isRunning ? (
+        {isRunning ? (
           <Loader2 size={12} className="shrink-0 animate-spin" style={{ color: 'var(--color-accent)' }} />
+        ) : isFailed ? (
+          <XCircle size={12} className="shrink-0" style={{ color: 'var(--color-error)' }} />
         ) : (
           <Wrench size={12} className="shrink-0" style={{ color: 'var(--color-success)' }} />
         )}
@@ -2329,11 +2471,11 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
         <span
           style={{
             fontSize: 'var(--text-xs)',
-            color: isRunning ? 'var(--color-accent)' : 'var(--color-text-tertiary)',
+            color: isFailed ? 'var(--color-error)' : isRunning ? 'var(--color-accent)' : 'var(--color-text-tertiary)',
             flexShrink: 0,
           }}
         >
-          {isRunning ? '执行中...' : '完成'}
+          {isFailed ? '失败' : isRunning ? '执行中...' : '完成'}
         </span>
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
       </button>
@@ -2356,7 +2498,17 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
                   marginBottom: '2px',
                 }}
               >
-                参数
+                <div className="flex items-center justify-between gap-2">
+                  <span>参数</span>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
+                    onClick={() => void handleCopyToolText('args', toolCall.args)}
+                  >
+                    {copied === 'args' ? <Check size={12} /> : <Copy size={12} />}
+                    {copied === 'args' ? '已复制' : '复制'}
+                  </button>
+                </div>
               </div>
               <pre
                 style={{
@@ -2381,7 +2533,17 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
                   marginBottom: '2px',
                 }}
               >
-                结果
+                <div className="flex items-center justify-between gap-2">
+                  <span>结果</span>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
+                    onClick={() => void handleCopyToolText('result', toolCall.result)}
+                  >
+                    {copied === 'result' ? <Check size={12} /> : <Copy size={12} />}
+                    {copied === 'result' ? '已复制' : '复制'}
+                  </button>
+                </div>
               </div>
               <pre
                 style={{

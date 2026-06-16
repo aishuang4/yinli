@@ -66,6 +66,7 @@ from src.server.routes.skills import (
     select_relevant_skills,
 )
 from src.storage.database import (
+    append_run_event,
     get_json_record,
     load_chat_store,
     migrate_json_object_file,
@@ -79,6 +80,16 @@ CHAT_NAMESPACE = "chat_store"
 CHAT_STORE_KEY = "default"
 MULTIMODAL_MODELS = {"qwen3.7-plus"}
 HITL_EVENT_TYPES = {"REQUIRE_USER_CONFIRM", "REQUIRE_EXTERNAL_EXECUTION"}
+TRACE_EVENT_TYPES = {
+    "REPLY_START",
+    "REPLY_END",
+    "MODEL_CALL_START",
+    "MODEL_CALL_END",
+    "TOOL_CALL_START",
+    "TOOL_CALL_END",
+    "TOOL_RESULT_START",
+    "TOOL_RESULT_END",
+}
 PENDING_INTERACTIONS: dict[str, "PendingInteraction"] = {}
 PENDING_AGENTS: dict[str, object] = {}
 
@@ -144,7 +155,11 @@ class ChatTeamActivity(BaseModel):
     output: str = ""
     thinking: str = ""
     tool_calls: list[ChatToolRun] = Field(default_factory=list, alias="toolCalls")
+    execution_mode: str = Field(default="parallel", alias="executionMode")
     depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
+    wait_reason: str = Field(default="", alias="waitReason")
+    dependency_output_count: int = Field(default=0, alias="dependencyOutputCount")
+    leader_context_count: int = Field(default=0, alias="leaderContextCount")
     created_at: str = Field(alias="createdAt")
 
     model_config = {"populate_by_name": True}
@@ -265,6 +280,9 @@ class ChatMessage(BaseModel):
 
     images: list[ChatImagePayload] = Field(default_factory=list)
     """图片输入（base64，不含 data URL 前缀）"""
+
+    sandbox: bool = False
+    """沙盒运行：不写入历史对话和 Agent 记忆"""
 
 
 class TeamWorkerSelectionRequest(BaseModel):
@@ -415,6 +433,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         fallback_names = model_config_data.fallback if model_config_data else runtime_model_settings.fallback_models
         model_options = AgentModelOptions(
             temperature=model_config_data.temperature if model_config_data else None,
+            top_p=model_config_data.top_p if model_config_data else None,
             max_tokens=model_config_data.max_tokens if model_config_data else None,
         )
         guardrails = _build_runtime_guardrails(agent_config)
@@ -424,6 +443,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         assistant_thinking = ""
         assistant_error: str | None = None
         worker_outputs: list[dict[str, str]] = []
+        persist_run = not data.sandbox
         team_activities = _build_team_activities(
             team_name=data.team_name,
             leader_agent_id=agent_id,
@@ -432,70 +452,134 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
             user_message=data.message,
         )
 
-        _append_user_message(
-            session_id=session_id,
-            agent_id=agent_id,
-            agent_name=agent_name,
-            team_id=data.team_id,
-            team_name=data.team_name,
-            model_name=model_name,
-            content=data.message,
-            images=data.images,
-        )
-        append_agent_memory_event(
-            agent_id=agent_id,
-            event_type="user_message",
-            title=_make_session_title(data.message),
-            content=data.message,
-            session_id=session_id,
-            metadata={
-                "agentName": agent_name,
-                "teamId": data.team_id,
-                "teamName": data.team_name,
-                "model": model_name,
-                "imageCount": len(data.images),
-            },
-        )
+        if persist_run:
+            _append_user_message(
+                session_id=session_id,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                team_id=data.team_id,
+                team_name=data.team_name,
+                model_name=model_name,
+                content=data.message,
+                images=data.images,
+            )
+            append_agent_memory_event(
+                agent_id=agent_id,
+                event_type="user_message",
+                title=_make_session_title(data.message),
+                content=data.message,
+                session_id=session_id,
+                metadata={
+                    "agentName": agent_name,
+                    "teamId": data.team_id,
+                    "teamName": data.team_name,
+                    "model": model_name,
+                    "imageCount": len(data.images),
+                    "sandbox": data.sandbox,
+                },
+            )
+            _record_run_event(
+                session_id=session_id,
+                event_type="USER_MESSAGE",
+                persist=persist_run,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                status="completed",
+                title="User message",
+                content=data.message,
+                payload={
+                    "teamId": data.team_id,
+                    "teamName": data.team_name,
+                    "model": model_name,
+                    "imageCount": len(data.images),
+                },
+            )
 
         yield _sse_event("SESSION", {
             "session_id": session_id,
         })
+        _record_run_event(
+            session_id=session_id,
+            event_type="SESSION",
+            persist=persist_run,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            status="running",
+            title="Run started",
+            payload={
+                "teamId": data.team_id,
+                "teamName": data.team_name,
+                "model": model_name,
+                "sandbox": data.sandbox,
+                "workspace": _workspace_trace_payload(guardrails),
+            },
+        )
+        _record_workspace_event(
+            session_id=session_id,
+            persist=persist_run,
+            scope="leader",
+            agent_id=agent_id,
+            agent_name=agent_name,
+            guardrails=guardrails,
+        )
 
         if team_activities:
             yield _sse_event("TEAM_ACTIVITY", {
                 "activities": [item.model_dump(by_alias=True) for item in team_activities],
             })
+            _record_run_event(
+                session_id=session_id,
+                event_type="TEAM_ACTIVITY",
+                persist=persist_run,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                status="running",
+                title="Team initialized",
+                payload={"activities": [item.model_dump(by_alias=True) for item in team_activities]},
+            )
 
         if used_skill_details:
             yield _sse_event("SKILL_CONTEXT", {
                 "skills": used_skill_details,
             })
+            _record_run_event(
+                session_id=session_id,
+                event_type="SKILL_CONTEXT",
+                persist=persist_run,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                status="running",
+                title="Skills injected",
+                payload={"skills": used_skill_details},
+            )
             for skill_detail in used_skill_details:
-                append_agent_memory_event(
-                    agent_id=agent_id,
-                    event_type="skill_use",
-                    title=f"使用 Skill: {skill_detail.get('name', 'Skill')}",
-                    content=str(skill_detail.get("content", "")),
-                    session_id=session_id,
-                    metadata={
-                        "skillId": skill_detail.get("id"),
-                        "skillName": skill_detail.get("name"),
-                    },
-                )
+                if persist_run:
+                    append_agent_memory_event(
+                        agent_id=agent_id,
+                        event_type="skill_use",
+                        title=f"使用 Skill: {skill_detail.get('name', 'Skill')}",
+                        content=str(skill_detail.get("content", "")),
+                        session_id=session_id,
+                        metadata={
+                            "skillId": skill_detail.get("id"),
+                            "skillName": skill_detail.get("name"),
+                        },
+                    )
 
         if data.images and model_name not in MULTIMODAL_MODELS:
             assistant_error = f"{model_name} 不支持图片输入，请切换到 qwen3.7-plus。"
             failed_skill_runs = _set_skill_run_status(skill_runs, "failed")
-            _append_assistant_message(
-                session_id=session_id,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                model_name=model_name,
-                content="",
-                error=assistant_error,
-                skill_calls=failed_skill_runs,
-                team_activities=_set_team_activity_status(team_activities, "failed"),
-            )
+            if persist_run:
+                _append_assistant_message(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    model_name=model_name,
+                    content="",
+                    error=assistant_error,
+                    skill_calls=failed_skill_runs,
+                    team_activities=_set_team_activity_status(team_activities, "failed"),
+                )
             if team_activities:
                 yield _sse_event("TEAM_ACTIVITY", {
                     "activities": [
@@ -518,16 +602,17 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         if provider and provider.requires_api_key and not runtime_model_settings.api_key:
             assistant_error = f"{provider.name} API Key 未配置。请在系统设置中配置模型供应商和 API Key。"
             failed_skill_runs = _set_skill_run_status(skill_runs, "failed")
-            _append_assistant_message(
-                session_id=session_id,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                model_name=model_name,
-                content="",
-                error=assistant_error,
-                skill_calls=failed_skill_runs,
-                team_activities=_set_team_activity_status(team_activities, "failed"),
-            )
+            if persist_run:
+                _append_assistant_message(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    model_name=model_name,
+                    content="",
+                    error=assistant_error,
+                    skill_calls=failed_skill_runs,
+                    team_activities=_set_team_activity_status(team_activities, "failed"),
+                )
             if team_activities:
                 yield _sse_event("TEAM_ACTIVITY", {
                     "activities": [
@@ -575,7 +660,8 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                         team_activities,
                         leader_activity.model_copy(update={
                             "status": "running",
-                            "detail": "Worker 已完成，Leader 正在基于 Worker 输出生成最终回复。",
+                            "detail": f"Worker 已完成，Leader 正在基于 {len(worker_outputs)} 个 Worker 输出生成最终回复。",
+                            "leader_context_count": len(worker_outputs),
                         }),
                     )
                     yield _sse_event("TEAM_ACTIVITY", {
@@ -583,6 +669,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     })
 
             skill_cache_key = ",".join(sorted(skill.id for skill in used_skills))
+            fallback_cache_key = ",".join(fallback_names)
             mcp_cache_key = ",".join(
                 f"{server.name}:{','.join(server.enable_tools)}"
                 for server in mcp_servers
@@ -593,10 +680,15 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 f"net-{guardrails.network_enabled}:"
                 f"hitl-{guardrails.human_approval}:"
                 f"tool-permission-{guardrails.tool_permission_mode}:"
+                f"tool-profile-{guardrails.tool_permission_profile}:"
+                f"exec-{guardrails.execution_backend}:"
+                f"docker-{guardrails.docker_image}:"
+                f"persist-sandbox-{guardrails.persistent_sandbox}:"
                 f"timeout-{guardrails.timeout_seconds}"
             )
             runtime_agent_id = (
                 f"{agent_id}:{session_id}:{model_name}:thinking-{data.deep_thinking}:"
+                f"fallbacks-{fallback_cache_key}:"
                 f"skills-{skill_cache_key}:mcp-{mcp_cache_key}:knowledge-{knowledge_cache_key}:"
                 f"guardrails-{guardrail_cache_key}"
             )
@@ -612,20 +704,28 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 guardrails=guardrails,
                 mcp_servers=mcp_servers,
                 knowledge_tools=knowledge_tools,
+                on_fallback_event=_make_fallback_trace_recorder(
+                    session_id=session_id,
+                    persist=persist_run,
+                    scope="leader",
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                ),
             )
         except Exception as e:
             assistant_error = f"Agent 创建失败: {str(e)}"
             failed_skill_runs = _set_skill_run_status(skill_runs, "failed")
-            _append_assistant_message(
-                session_id=session_id,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                model_name=model_name,
-                content="",
-                error=assistant_error,
-                skill_calls=failed_skill_runs,
-                team_activities=_set_team_activity_status(team_activities, "failed"),
-            )
+            if persist_run:
+                _append_assistant_message(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    model_name=model_name,
+                    content="",
+                    error=assistant_error,
+                    skill_calls=failed_skill_runs,
+                    team_activities=_set_team_activity_status(team_activities, "failed"),
+                )
             if team_activities:
                 yield _sse_event("TEAM_ACTIVITY", {
                     "activities": [
@@ -662,6 +762,15 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 # 提取事件类型（EventType 枚举值）
                 event_type = event_data.pop("type", "UNKNOWN")
                 _attach_provider_cache_usage(event_type, event_data)
+                _record_agent_scope_event(
+                    session_id=session_id,
+                    event_type=event_type,
+                    event_data=event_data,
+                    persist=persist_run,
+                    scope="leader",
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                )
                 next_tool_calls = _update_worker_tool_calls(
                     assistant_tool_calls,
                     event_type,
@@ -683,6 +792,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                         assistant_text=assistant_text,
                         skill_runs=skill_runs,
                         team_activities=team_activities,
+                        persist=persist_run,
                     )
                     yield _sse_event("HITL_REQUIRED", _hitl_payload(interaction))
                     return
@@ -708,6 +818,17 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     yield _sse_event("TEAM_ACTIVITY", {
                         "activities": [item.model_dump(by_alias=True) for item in team_activities],
                     })
+                _record_run_event(
+                    session_id=session_id,
+                    event_type="CLARIFICATION_REQUIRED",
+                    persist=persist_run,
+                    scope="leader",
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    status="waiting",
+                    title=str(clarification.get("title") or "Clarification required"),
+                    payload=clarification,
+                )
                 yield _sse_event("CLARIFICATION_REQUIRED", clarification)
                 return
 
@@ -718,17 +839,34 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 leader_output=assistant_text,
             )
 
-            _append_assistant_message(
-                session_id=session_id,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                model_name=model_name,
-                content=assistant_text,
-                error=assistant_error,
-                skill_calls=completed_skill_runs,
-                tool_calls=assistant_tool_calls,
-                team_activities=completed_team_activities,
-            )
+            if persist_run:
+                _append_assistant_message(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    model_name=model_name,
+                    content=assistant_text,
+                    error=assistant_error,
+                    skill_calls=completed_skill_runs,
+                    tool_calls=assistant_tool_calls,
+                    team_activities=completed_team_activities,
+                )
+                _record_run_event(
+                    session_id=session_id,
+                    event_type="ASSISTANT_MESSAGE",
+                    persist=persist_run,
+                    scope="leader",
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    status="completed" if not assistant_error else "failed",
+                    title="Assistant response",
+                    content=_trim_text(assistant_text, 1200),
+                    payload={
+                        "model": model_name,
+                        "toolCallCount": len(assistant_tool_calls),
+                        "skillIds": [item.id for item in completed_skill_runs],
+                    },
+                )
             if team_activities:
                 yield _sse_event("TEAM_ACTIVITY", {
                     "activities": [
@@ -736,66 +874,80 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                         for item in completed_team_activities
                     ],
                 })
-            append_agent_memory_event(
-                agent_id=agent_id,
-                event_type="assistant_message",
-                title="Assistant 回复",
-                content=assistant_text,
-                session_id=session_id,
-                metadata={
-                    "agentName": agent_name,
-                    "model": model_name,
-                    "skillIds": [item.id for item in completed_skill_runs],
-                },
-            )
-            memory_facts = await maybe_summarize_agent_run(
-                agent_id=agent_id,
-                agent_name=agent_name,
-                session_id=session_id,
-                user_message=data.message,
-                assistant_text=assistant_text,
-                metadata={
-                    "agentName": agent_name,
-                    "teamId": data.team_id,
-                    "teamName": data.team_name,
-                    "model": model_name,
-                    "skillIds": [item.id for item in completed_skill_runs],
-                },
-            )
-            if memory_facts:
-                yield _sse_event("MEMORY_SUMMARY", {
-                    "agentId": agent_id,
-                    "agentName": agent_name,
-                    "facts": [fact.model_dump(mode="json") for fact in memory_facts],
-                })
+            if persist_run:
+                append_agent_memory_event(
+                    agent_id=agent_id,
+                    event_type="assistant_message",
+                    title="Assistant 回复",
+                    content=assistant_text,
+                    session_id=session_id,
+                    metadata={
+                        "agentName": agent_name,
+                        "model": model_name,
+                        "skillIds": [item.id for item in completed_skill_runs],
+                    },
+                )
+                memory_facts = await maybe_summarize_agent_run(
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    session_id=session_id,
+                    user_message=data.message,
+                    assistant_text=assistant_text,
+                    metadata={
+                        "agentName": agent_name,
+                        "teamId": data.team_id,
+                        "teamName": data.team_name,
+                        "model": model_name,
+                        "skillIds": [item.id for item in completed_skill_runs],
+                    },
+                )
+                if memory_facts:
+                    yield _sse_event("MEMORY_SUMMARY", {
+                        "agentId": agent_id,
+                        "agentName": agent_name,
+                        "facts": [fact.model_dump(mode="json") for fact in memory_facts],
+                    })
 
         except Exception as e:
             # Agent 执行过程中的异常处理
             assistant_error = f"Agent 执行异常: {str(e)}"
             failed_skill_runs = _set_skill_run_status(skill_runs, "failed")
-            _append_assistant_message(
+            _record_run_event(
                 session_id=session_id,
+                event_type="ERROR",
+                persist=persist_run,
+                scope="leader",
                 agent_id=agent_id,
                 agent_name=agent_name,
-                model_name=model_name,
-                content=assistant_text,
-                error=assistant_error,
-                skill_calls=failed_skill_runs,
-                team_activities=_set_team_activity_status(team_activities, "failed"),
+                status="failed",
+                title="Agent execution failed",
+                content=assistant_error,
+                payload={"model": model_name},
             )
-            append_agent_memory_event(
-                agent_id=agent_id,
-                event_type="assistant_message",
-                title="Assistant 异常回复",
-                content=assistant_text or assistant_error,
-                session_id=session_id,
-                metadata={
-                    "agentName": agent_name,
-                    "model": model_name,
-                    "error": assistant_error,
-                    "skillIds": [item.id for item in failed_skill_runs],
-                },
-            )
+            if persist_run:
+                _append_assistant_message(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    model_name=model_name,
+                    content=assistant_text,
+                    error=assistant_error,
+                    skill_calls=failed_skill_runs,
+                    team_activities=_set_team_activity_status(team_activities, "failed"),
+                )
+                append_agent_memory_event(
+                    agent_id=agent_id,
+                    event_type="assistant_message",
+                    title="Assistant 异常回复",
+                    content=assistant_text or assistant_error,
+                    session_id=session_id,
+                    metadata={
+                        "agentName": agent_name,
+                        "model": model_name,
+                        "error": assistant_error,
+                        "skillIds": [item.id for item in failed_skill_runs],
+                    },
+                )
             if failed_skill_runs:
                 yield _sse_event("SKILL_END", {
                     "skills": [item.model_dump(by_alias=True) for item in failed_skill_runs],
@@ -844,6 +996,24 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
         assistant_error: str | None = None
         skill_runs = interaction.skill_runs
         team_activities = interaction.team_activities
+        activity = _find_team_activity(team_activities, interaction.agent_id)
+        _record_run_event(
+            session_id=interaction.session_id,
+            event_type="HITL_RESOLVED",
+            persist=True,
+            scope=interaction.scope,
+            agent_id=interaction.agent_id,
+            agent_name=interaction.agent_name,
+            team_activity_id=activity.id if activity else None,
+            status="completed" if data.action == "approve" else "rejected",
+            title=f"{interaction.scope.title()} human approval {data.action}",
+            payload={
+                "interactionId": interaction.id,
+                "interactionType": interaction.type,
+                "action": data.action,
+                "externalResultCount": len(data.external_results),
+            },
+        )
 
         try:
             if interaction.scope == "worker":
@@ -1042,7 +1212,8 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         team_activities,
                         leader_activity.model_copy(update={
                             "status": "running",
-                            "detail": "Worker 已完成，Leader 正在汇总最终回复。",
+                            "detail": f"Worker 已完成，Leader 正在基于 {len(worker_outputs)} 个 Worker 输出汇总最终回复。",
+                            "leader_context_count": len(worker_outputs),
                         }),
                     )
                     yield _sse_event("TEAM_ACTIVITY", {
@@ -1330,6 +1501,198 @@ def _sse_event(event_type: str, data: dict) -> str:
     return f"event: {event_type}\ndata: {json_str}\n\n"
 
 
+def _record_run_event(
+    *,
+    session_id: str,
+    event_type: str,
+    persist: bool,
+    scope: str = "leader",
+    agent_id: str | None = None,
+    agent_name: str | None = None,
+    team_activity_id: str | None = None,
+    status: str = "",
+    title: str = "",
+    content: str = "",
+    payload: dict | None = None,
+) -> None:
+    """Persist trace events without allowing observability to break execution."""
+    if not persist:
+        return
+    try:
+        append_run_event(
+            session_id=session_id,
+            event_type=event_type,
+            scope=scope,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            team_activity_id=team_activity_id,
+            status=status,
+            title=title,
+            content=content,
+            payload=payload or {},
+        )
+    except Exception as exc:
+        print(f"[Trace] Failed to record run event {event_type}: {exc}")
+
+
+def _make_fallback_trace_recorder(
+    *,
+    session_id: str,
+    persist: bool,
+    scope: str,
+    agent_id: str,
+    agent_name: str,
+    team_activity_id: str | None = None,
+):
+    """Create a callback that records application-level fallback attempts."""
+
+    def record(event: dict) -> None:
+        event_kind = str(event.get("type") or "attempt")
+        model = str(event.get("model") or "")
+        status = {
+            "attempt": "running",
+            "success": "completed",
+            "failure": "failed",
+        }.get(event_kind, "running")
+        title = {
+            "attempt": f"Trying model: {model}",
+            "success": f"Model succeeded: {model}",
+            "failure": f"Model failed: {model}",
+        }.get(event_kind, f"Model fallback event: {model}")
+        _record_run_event(
+            session_id=session_id,
+            event_type=f"MODEL_FALLBACK_{event_kind.upper()}",
+            persist=persist,
+            scope=scope,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            team_activity_id=team_activity_id,
+            status=status,
+            title=title,
+            content=str(event.get("error") or ""),
+            payload=event,
+        )
+
+    return record
+
+
+def _workspace_trace_payload(guardrails: AgentGuardrails) -> dict:
+    """Build trace payload for local/Docker execution workspace config."""
+    return {
+        "backend": guardrails.execution_backend,
+        "filesystemScope": guardrails.filesystem_scope,
+        "networkEnabled": guardrails.network_enabled,
+        "toolPermissionProfile": guardrails.tool_permission_profile,
+        "timeoutSeconds": guardrails.timeout_seconds,
+        "dockerImage": guardrails.docker_image if guardrails.execution_backend == "docker" else "",
+        "persistentSandbox": guardrails.persistent_sandbox if guardrails.execution_backend == "docker" else False,
+    }
+
+
+def _record_workspace_event(
+    *,
+    session_id: str,
+    persist: bool,
+    scope: str,
+    agent_id: str,
+    agent_name: str,
+    guardrails: AgentGuardrails,
+    team_activity_id: str | None = None,
+) -> None:
+    payload = _workspace_trace_payload(guardrails)
+    title = (
+        f"Docker workspace: {guardrails.docker_image}"
+        if guardrails.execution_backend == "docker"
+        else "Local workspace"
+    )
+    _record_run_event(
+        session_id=session_id,
+        event_type="WORKSPACE_CONFIG",
+        persist=persist,
+        scope=scope,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        team_activity_id=team_activity_id,
+        status="configured",
+        title=title,
+        content=(
+            f"{payload['backend']} · scope={payload['filesystemScope']} · "
+            f"profile={payload['toolPermissionProfile']}"
+        ),
+        payload=payload,
+    )
+
+
+def _record_agent_scope_event(
+    *,
+    session_id: str,
+    event_type: str,
+    event_data: dict,
+    persist: bool,
+    scope: str,
+    agent_id: str,
+    agent_name: str,
+    team_activity_id: str | None = None,
+) -> None:
+    """Record selected AgentScope events as compact trace events."""
+    if event_type not in TRACE_EVENT_TYPES:
+        return
+    tool_name = str(event_data.get("tool_call_name") or "")
+    model_name = str(event_data.get("model_name") or "")
+    title = {
+        "REPLY_START": "Reply started",
+        "REPLY_END": "Reply completed",
+        "MODEL_CALL_START": f"Model call started{f': {model_name}' if model_name else ''}",
+        "MODEL_CALL_END": f"Model call completed{f': {model_name}' if model_name else ''}",
+        "TOOL_CALL_START": f"Tool call started{f': {tool_name}' if tool_name else ''}",
+        "TOOL_CALL_END": f"Tool call ended{f': {tool_name}' if tool_name else ''}",
+        "TOOL_RESULT_START": f"Tool result started{f': {tool_name}' if tool_name else ''}",
+        "TOOL_RESULT_END": f"Tool result completed{f': {tool_name}' if tool_name else ''}",
+    }.get(event_type, event_type)
+    status = (
+        "completed"
+        if event_type in {"REPLY_END", "MODEL_CALL_END", "TOOL_RESULT_END"}
+        else "running"
+    )
+    payload = dict(event_data)
+    if "delta" in payload:
+        payload["delta"] = _trim_text(str(payload.get("delta") or ""), 240)
+    _record_run_event(
+        session_id=session_id,
+        event_type=event_type,
+        persist=persist,
+        scope=scope,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        team_activity_id=team_activity_id,
+        status=status,
+        title=title,
+        payload=payload,
+    )
+    provider_cache = payload.get("provider_cache")
+    if event_type == "MODEL_CALL_END" and isinstance(provider_cache, dict) and provider_cache.get("available"):
+        created_tokens = int(provider_cache.get("created_tokens") or 0)
+        hit_tokens = int(provider_cache.get("hit_tokens") or 0)
+        _record_run_event(
+            session_id=session_id,
+            event_type="MODEL_CACHE_USAGE",
+            persist=persist,
+            scope=scope,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            team_activity_id=team_activity_id,
+            status="completed",
+            title="Provider prompt cache usage",
+            content=f"created={created_tokens}, hit={hit_tokens}",
+            payload={
+                "model": model_name,
+                "createdTokens": created_tokens,
+                "hitTokens": hit_tokens,
+                "estimatedSavedInputTokens": hit_tokens,
+            },
+        )
+
+
 def _attach_provider_cache_usage(event_type: str, event_data: dict) -> None:
     """Expose provider-side prompt cache usage on MODEL_CALL_END events."""
 
@@ -1372,6 +1735,7 @@ def _create_pending_interaction(
     worker_text: str = "",
     worker_thinking: str = "",
     worker_tool_calls: list[ChatToolRun] | None = None,
+    persist: bool = True,
 ) -> PendingInteraction:
     """Create and cache an in-process human interaction."""
     interaction = PendingInteraction(
@@ -1397,6 +1761,19 @@ def _create_pending_interaction(
     )
     PENDING_INTERACTIONS[interaction.id] = interaction
     PENDING_AGENTS[interaction.id] = agent
+    activity = _find_team_activity(interaction.team_activities, interaction.agent_id)
+    _record_run_event(
+        session_id=interaction.session_id,
+        event_type="HITL_REQUIRED",
+        persist=persist,
+        scope=interaction.scope,
+        agent_id=interaction.agent_id,
+        agent_name=interaction.agent_name,
+        team_activity_id=activity.id if activity else None,
+        status="waiting",
+        title=f"{interaction.scope.title()} human approval required",
+        payload=_hitl_payload(interaction),
+    )
     return interaction
 
 
@@ -1610,13 +1987,37 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
         network_enabled=bool(getattr(guardrails, "network_enabled", True)),
         human_approval=bool(getattr(guardrails, "human_approval", False)),
         tool_permission_mode=str(getattr(guardrails, "tool_permission_mode", "accept_edits") or "accept_edits"),
+        tool_permission_profile=str(
+            getattr(guardrails, "tool_permission_profile", "")
+            or _profile_from_legacy_tool_mode(getattr(guardrails, "tool_permission_mode", "accept_edits"))
+        ),
+        execution_backend=str(getattr(guardrails, "execution_backend", "local") or "local"),
+        docker_image=str(getattr(guardrails, "docker_image", "python:3.11-slim") or "python:3.11-slim"),
+        persistent_sandbox=bool(getattr(guardrails, "persistent_sandbox", False)),
         timeout_seconds=int(getattr(guardrails, "timeout_seconds", 300) or 300),
     )
+
+
+def _profile_from_legacy_tool_mode(mode: object) -> str:
+    value = str(mode or "accept_edits").strip().lower()
+    if value == "ask_every_time":
+        return "ask_every_time"
+    if value == "bypass":
+        return "trusted_tools"
+    return "confirm_destructive"
 
 
 def _permission_mode_for_guardrails(guardrails: AgentGuardrails) -> PermissionMode:
     if guardrails.human_approval:
         return PermissionMode.DEFAULT
+
+    profile = (guardrails.tool_permission_profile or "").strip().lower()
+    if profile == "ask_every_time":
+        return PermissionMode.DEFAULT
+    if profile in {"trusted_tools", "read_only"}:
+        return PermissionMode.BYPASS
+    if profile == "confirm_destructive":
+        return PermissionMode.ACCEPT_EDITS
 
     mode = (guardrails.tool_permission_mode or "accept_edits").strip().lower()
     if mode == "ask_every_time":
@@ -1720,11 +2121,17 @@ async def _run_team_workers(
             ]
             _replace_team_activity(
                 team_activities,
-                activity.model_copy(update={
-                    "status": "pending" if waiting_for else "running",
-                    "detail": (
-                        f"等待依赖 Worker 完成：{', '.join(_member_names(waiting_for, workers))}"
-                        if waiting_for
+                        activity.model_copy(update={
+                            "status": "pending" if waiting_for else "running",
+                            "execution_mode": member.execution_mode,
+                            "wait_reason": (
+                                f"等待依赖 Worker 完成：{', '.join(_member_names(waiting_for, workers))}"
+                                if waiting_for
+                                else ""
+                            ),
+                            "detail": (
+                                f"等待依赖 Worker 完成：{', '.join(_member_names(waiting_for, workers))}"
+                                if waiting_for
                         else activity.detail
                     ),
                 }),
@@ -1750,6 +2157,7 @@ async def _run_team_workers(
         worker_model_config = worker_config.model_config_data if worker_config else None
         worker_model_options = AgentModelOptions(
             temperature=worker_model_config.temperature if worker_model_config else None,
+            top_p=worker_model_config.top_p if worker_model_config else None,
             max_tokens=worker_model_config.max_tokens if worker_model_config else None,
         )
         worker_guardrails = _build_runtime_guardrails(worker_config)
@@ -1772,6 +2180,8 @@ async def _run_team_workers(
             if part
         )
         worker_cache_key = ",".join(sorted(skill.id for skill in worker_skills))
+        worker_fallback_names = worker_model_config.fallback if worker_model_config else runtime_model_settings.fallback_models
+        worker_fallback_cache_key = ",".join(worker_fallback_names)
         worker_mcp_cache_key = ",".join(
             f"{server.name}:{','.join(server.enable_tools)}"
             for server in worker_mcp_servers
@@ -1779,22 +2189,43 @@ async def _run_team_workers(
         worker_knowledge_cache_key = ",".join(tool.id for tool in worker_knowledge_tools)
         runtime_worker_id = (
             f"{member.agent_id}:{session_id}:{model_name}:team-worker:"
-            f"thinking-{data.deep_thinking}:skills-{worker_cache_key}:mcp-{worker_mcp_cache_key}:"
+            f"thinking-{data.deep_thinking}:fallbacks-{worker_fallback_cache_key}:"
+            f"skills-{worker_cache_key}:mcp-{worker_mcp_cache_key}:"
             f"knowledge-{worker_knowledge_cache_key}:"
             f"hitl-{worker_guardrails.human_approval}:tool-permission-{worker_guardrails.tool_permission_mode}"
+            f":tool-profile-{worker_guardrails.tool_permission_profile}"
+            f":exec-{worker_guardrails.execution_backend}:docker-{worker_guardrails.docker_image}"
+            f":persist-sandbox-{worker_guardrails.persistent_sandbox}"
         )
         worker_agent = get_or_create_agent(
             agent_id=runtime_worker_id,
             name=worker_name,
             system_prompt=worker_system_prompt,
             model_name=model_name,
-            fallback_names=worker_model_config.fallback if worker_model_config else runtime_model_settings.fallback_models,
+            fallback_names=worker_fallback_names,
             thinking_enable=data.deep_thinking,
             permission_mode=_permission_mode_for_guardrails(worker_guardrails),
             model_options=worker_model_options,
             guardrails=worker_guardrails,
             mcp_servers=worker_mcp_servers,
             knowledge_tools=worker_knowledge_tools,
+            on_fallback_event=_make_fallback_trace_recorder(
+                session_id=session_id,
+                persist=not data.sandbox,
+                scope="worker",
+                agent_id=member.agent_id,
+                agent_name=worker_name,
+                team_activity_id=activity.id if activity else None,
+            ),
+        )
+        _record_workspace_event(
+            session_id=session_id,
+            persist=not data.sandbox,
+            scope="worker",
+            agent_id=member.agent_id,
+            agent_name=worker_name,
+            team_activity_id=activity.id if activity else None,
+            guardrails=worker_guardrails,
         )
         worker_text = ""
         worker_thinking = ""
@@ -1812,8 +2243,18 @@ async def _run_team_workers(
                 event_data = event.model_dump(mode="json")
                 event_type = event_data.pop("type", "UNKNOWN")
                 _attach_provider_cache_usage(event_type, event_data)
+                activity = _find_team_activity(team_activities, member.agent_id)
+                _record_agent_scope_event(
+                    session_id=session_id,
+                    event_type=event_type,
+                    event_data=event_data,
+                    persist=not data.sandbox,
+                    scope="worker",
+                    agent_id=member.agent_id,
+                    agent_name=worker_name,
+                    team_activity_id=activity.id if activity else None,
+                )
                 if event_type in HITL_EVENT_TYPES:
-                    activity = _find_team_activity(team_activities, member.agent_id)
                     if activity:
                         _replace_team_activity(
                             team_activities,
@@ -1845,6 +2286,7 @@ async def _run_team_workers(
                         worker_text=worker_text,
                         worker_thinking=worker_thinking,
                         worker_tool_calls=worker_tool_calls,
+                        persist=not data.sandbox,
                     )
                     await queue.put(_sse_event("TEAM_ACTIVITY", {
                         "activities": [item.model_dump(by_alias=True) for item in team_activities],
@@ -1907,39 +2349,56 @@ async def _run_team_workers(
                     "detail": _trim_text(worker_text, 160) or "Worker 已完成本轮 ReAct 循环。",
                 })
                 _replace_team_activity(team_activities, completed)
-            append_agent_memory_event(
-                agent_id=member.agent_id,
-                event_type="team_message",
-                title=f"Team Worker 输出: {worker_name}",
-                content=worker_text,
-                session_id=session_id,
-                metadata={
-                    "teamId": data.team_id,
-                    "teamName": data.team_name,
-                    "leaderAgentId": data.agent_id,
-                    "model": model_name,
-                },
-            )
-            worker_memory_facts = await maybe_summarize_agent_run(
-                agent_id=member.agent_id,
-                agent_name=worker_name,
-                session_id=session_id,
-                user_message=_build_worker_user_message(data.message, member, dependency_outputs),
-                assistant_text=worker_text,
-                metadata={
-                    "teamId": data.team_id,
-                    "teamName": data.team_name,
-                    "leaderAgentId": data.agent_id,
-                    "model": model_name,
-                    "skillIds": [skill.id for skill in worker_skills],
-                },
-            )
-            if worker_memory_facts:
-                await queue.put(_sse_event("MEMORY_SUMMARY", {
-                    "agentId": member.agent_id,
-                    "agentName": worker_name,
-                    "facts": [fact.model_dump(mode="json") for fact in worker_memory_facts],
-                }))
+                _record_run_event(
+                    session_id=session_id,
+                    event_type="WORKER_COMPLETED",
+                    persist=not data.sandbox,
+                    scope="worker",
+                    agent_id=member.agent_id,
+                    agent_name=worker_name,
+                    team_activity_id=activity.id,
+                    status="completed",
+                    title=f"Worker completed: {worker_name}",
+                    content=_trim_text(worker_text, 1200),
+                    payload={
+                        "toolCallCount": len(worker_tool_calls),
+                        "dependencyCount": len(dependency_outputs),
+                    },
+                )
+            if not data.sandbox:
+                append_agent_memory_event(
+                    agent_id=member.agent_id,
+                    event_type="team_message",
+                    title=f"Team Worker 输出: {worker_name}",
+                    content=worker_text,
+                    session_id=session_id,
+                    metadata={
+                        "teamId": data.team_id,
+                        "teamName": data.team_name,
+                        "leaderAgentId": data.agent_id,
+                        "model": model_name,
+                    },
+                )
+                worker_memory_facts = await maybe_summarize_agent_run(
+                    agent_id=member.agent_id,
+                    agent_name=worker_name,
+                    session_id=session_id,
+                    user_message=_build_worker_user_message(data.message, member, dependency_outputs),
+                    assistant_text=worker_text,
+                    metadata={
+                        "teamId": data.team_id,
+                        "teamName": data.team_name,
+                        "leaderAgentId": data.agent_id,
+                        "model": model_name,
+                        "skillIds": [skill.id for skill in worker_skills],
+                    },
+                )
+                if worker_memory_facts:
+                    await queue.put(_sse_event("MEMORY_SUMMARY", {
+                        "agentId": member.agent_id,
+                        "agentName": worker_name,
+                        "facts": [fact.model_dump(mode="json") for fact in worker_memory_facts],
+                    }))
             await queue.put(_sse_event("TEAM_ACTIVITY", {
                 "activities": [item.model_dump(by_alias=True) for item in team_activities],
             }))
@@ -1956,6 +2415,19 @@ async def _run_team_workers(
                         "tool_calls": worker_tool_calls,
                     }),
                 )
+            _record_run_event(
+                session_id=session_id,
+                event_type="WORKER_FAILED",
+                persist=not data.sandbox,
+                scope="worker",
+                agent_id=member.agent_id,
+                agent_name=worker_name,
+                team_activity_id=activity.id if activity else None,
+                status="failed",
+                title=f"Worker failed: {worker_name}",
+                content=str(exc),
+                payload={"toolCallCount": len(worker_tool_calls)},
+            )
             await queue.put(_sse_event("TEAM_ACTIVITY", {
                 "activities": [item.model_dump(by_alias=True) for item in team_activities],
             }))
@@ -1982,6 +2454,7 @@ async def _run_team_workers(
                         activity.model_copy(update={
                             "status": "failed",
                             "detail": "依赖配置无效：找不到指定的上游 Worker。",
+                            "wait_reason": "依赖配置无效：找不到指定的上游 Worker。",
                         }),
                     )
                 failed_workers.add(member.agent_id)
@@ -1996,6 +2469,7 @@ async def _run_team_workers(
                         activity.model_copy(update={
                             "status": "failed",
                             "detail": f"上游 Worker 失败，跳过执行：{', '.join(_member_names(failed_dependencies, workers))}",
+                            "wait_reason": f"上游 Worker 失败：{', '.join(_member_names(failed_dependencies, workers))}",
                         }),
                     )
                 failed_workers.add(member.agent_id)
@@ -2009,6 +2483,7 @@ async def _run_team_workers(
                         activity.model_copy(update={
                             "status": "pending",
                             "detail": f"等待依赖 Worker 完成：{', '.join(_member_names(blocking, workers))}",
+                            "wait_reason": f"等待依赖 Worker 完成：{', '.join(_member_names(blocking, workers))}",
                         }),
                     )
                 continue
@@ -2028,6 +2503,8 @@ async def _run_team_workers(
                     team_activities,
                     activity.model_copy(update={
                         "status": "running",
+                        "wait_reason": "",
+                        "dependency_output_count": len(dependency_outputs),
                         "detail": (
                             f"依赖已满足，开始执行。已接收 {len(dependency_outputs)} 个上游输出。"
                             if dependency_outputs
@@ -2053,6 +2530,7 @@ async def _run_team_workers(
                         activity.model_copy(update={
                             "status": "failed",
                             "detail": "依赖配置形成循环或上游 Worker 失败，无法继续调度。",
+                            "wait_reason": "依赖配置形成循环或上游 Worker 失败。",
                         }),
                     )
                 failed_workers.add(member.agent_id)
@@ -2469,6 +2947,7 @@ def _build_team_activities(
             status="running",
             task=f"拆解任务并汇总 Team: {team_name or 'Unnamed Team'}",
             detail=f"正在组织成员围绕「{summary}」协作，并生成最终回复。",
+            executionMode="leader",
             createdAt=now,
         )
     ]
@@ -2487,7 +2966,13 @@ def _build_team_activities(
             detail=member.description or "等待 Leader 协调上下文。",
             output="",
             thinking="",
+            executionMode=member.execution_mode,
             dependsOn=member.depends_on,
+            waitReason=(
+                f"等待依赖 Worker 完成：{', '.join(member.depends_on)}"
+                if member.execution_mode == "depends_on" and member.depends_on
+                else ""
+            ),
             createdAt=now,
         ))
     return activities

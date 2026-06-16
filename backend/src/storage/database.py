@@ -25,6 +25,10 @@ DEFAULT_GUARDRAILS = {
     "network_enabled": True,
     "human_approval": False,
     "tool_permission_mode": "accept_edits",
+    "tool_permission_profile": "confirm_destructive",
+    "execution_backend": "local",
+    "docker_image": "python:3.11-slim",
+    "persistent_sandbox": False,
     "timeout_seconds": 300,
 }
 
@@ -60,6 +64,21 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    """Add a SQLite column when upgrading an existing development database."""
+    columns = {
+        row["name"]
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def ensure_db() -> None:
@@ -180,18 +199,41 @@ def ensure_db() -> None:
                     model_name TEXT,
                     error TEXT,
                     images TEXT NOT NULL,
+                    tool_calls TEXT NOT NULL DEFAULT '[]',
                     skill_calls TEXT NOT NULL,
                     team_activities TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     sort_order INTEGER NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS run_events (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    scope TEXT NOT NULL DEFAULT 'leader',
+                    agent_id TEXT,
+                    agent_name TEXT,
+                    team_activity_id TEXT,
+                    status TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    content TEXT NOT NULL DEFAULT '',
+                    payload TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_run_events_session_order
+                    ON run_events(session_id, sort_order, created_at);
                 CREATE TABLE IF NOT EXISTS memory_facts (
                     id TEXT PRIMARY KEY,
                     agent_id TEXT NOT NULL,
                     title TEXT NOT NULL,
                     content TEXT NOT NULL,
                     tags TEXT NOT NULL,
+                    pinned INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    access_count INTEGER NOT NULL DEFAULT 0,
+                    last_accessed_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -211,12 +253,23 @@ def ensure_db() -> None:
                     title TEXT NOT NULL,
                     content TEXT NOT NULL,
                     tags TEXT NOT NULL,
+                    category TEXT NOT NULL DEFAULT 'general',
+                    confidence REAL NOT NULL DEFAULT 0,
                     source_session_id TEXT,
                     status TEXT NOT NULL,
+                    reject_reason TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
             """)
+            _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
+            _ensure_column(conn, "memory_facts", "pinned", "INTEGER NOT NULL DEFAULT 0")
+            _ensure_column(conn, "memory_facts", "status", "TEXT NOT NULL DEFAULT 'active'")
+            _ensure_column(conn, "memory_facts", "access_count", "INTEGER NOT NULL DEFAULT 0")
+            _ensure_column(conn, "memory_facts", "last_accessed_at", "TEXT")
+            _ensure_column(conn, "memory_candidates", "category", "TEXT NOT NULL DEFAULT 'general'")
+            _ensure_column(conn, "memory_candidates", "confidence", "REAL NOT NULL DEFAULT 0")
+            _ensure_column(conn, "memory_candidates", "reject_reason", "TEXT NOT NULL DEFAULT ''")
             columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(agents)").fetchall()
@@ -694,6 +747,7 @@ def load_chat_store() -> dict[str, Any]:
             "model_name": row["model_name"],
             "error": row["error"],
             "images": _loads(row["images"], []),
+            "toolCalls": _loads(row["tool_calls"], []),
             "skillCalls": _loads(row["skill_calls"], []),
             "teamActivities": _loads(row["team_activities"], []),
             "created_at": row["created_at"],
@@ -744,24 +798,131 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     item["id"], session_id, item["role"], item.get("content", ""),
                     item.get("agent_id"), item.get("agent_name"), item.get("model_name"),
                     item.get("error"), _dumps(item.get("images", [])),
+                    _dumps(item.get("toolCalls", item.get("tool_calls", []))),
                     _dumps(item.get("skillCalls", item.get("skill_calls", []))),
                     _dumps(item.get("teamActivities", item.get("team_activities", []))),
                     item["created_at"], index,
                 ))
         conn.executemany(
             """
-            INSERT INTO chat_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO chat_messages (
+                id, session_id, role, content, agent_id, agent_name, model_name,
+                error, images, tool_calls, skill_calls, team_activities, created_at,
+                sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
         conn.commit()
 
 
+def append_run_event(
+    *,
+    session_id: str,
+    event_type: str,
+    scope: str = "leader",
+    agent_id: str | None = None,
+    agent_name: str | None = None,
+    team_activity_id: str | None = None,
+    status: str = "",
+    title: str = "",
+    content: str = "",
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Append one normalized runtime event for trace inspection."""
+    ensure_db()
+    event_id = f"evt-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+    created_at = _utc_now()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM run_events WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        sort_order = int(row["next_order"] if row else 0)
+        conn.execute(
+            """
+            INSERT INTO run_events (
+                id, session_id, event_type, scope, agent_id, agent_name,
+                team_activity_id, status, title, content, payload, created_at,
+                sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                session_id,
+                event_type,
+                scope,
+                agent_id,
+                agent_name,
+                team_activity_id,
+                status,
+                title,
+                content,
+                _dumps(payload or {}),
+                created_at,
+                sort_order,
+            ),
+        )
+        conn.commit()
+    return {
+        "id": event_id,
+        "sessionId": session_id,
+        "eventType": event_type,
+        "scope": scope,
+        "agentId": agent_id,
+        "agentName": agent_name,
+        "teamActivityId": team_activity_id,
+        "status": status,
+        "title": title,
+        "content": content,
+        "payload": payload or {},
+        "createdAt": created_at,
+        "sortOrder": sort_order,
+    }
+
+
+def list_run_events(session_id: str | None = None) -> list[dict[str, Any]]:
+    """List normalized runtime events, optionally scoped to one session."""
+    ensure_db()
+    with _lock, _connect() as conn:
+        if session_id:
+            rows = conn.execute(
+                "SELECT * FROM run_events WHERE session_id = ? ORDER BY sort_order ASC, created_at ASC",
+                (session_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM run_events ORDER BY created_at DESC, sort_order DESC"
+            ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "sessionId": row["session_id"],
+            "eventType": row["event_type"],
+            "scope": row["scope"],
+            "agentId": row["agent_id"],
+            "agentName": row["agent_name"],
+            "teamActivityId": row["team_activity_id"],
+            "status": row["status"],
+            "title": row["title"],
+            "content": row["content"],
+            "payload": _loads(row["payload"], {}),
+            "createdAt": row["created_at"],
+            "sortOrder": row["sort_order"],
+        }
+        for row in rows
+    ]
+
+
 def load_agent_memory(agent_id: str) -> dict[str, Any] | None:
     ensure_db()
     with _lock, _connect() as conn:
         facts = conn.execute(
-            "SELECT * FROM memory_facts WHERE agent_id = ? ORDER BY created_at ASC",
+            """
+            SELECT * FROM memory_facts
+            WHERE agent_id = ?
+            ORDER BY pinned DESC, updated_at DESC, created_at ASC
+            """,
             (agent_id,),
         ).fetchall()
         events = conn.execute(
@@ -779,6 +940,10 @@ def load_agent_memory(agent_id: str) -> dict[str, Any] | None:
                 "title": row["title"],
                 "content": row["content"],
                 "tags": _loads(row["tags"], []),
+                "pinned": bool(row["pinned"]),
+                "status": row["status"] or "active",
+                "access_count": int(row["access_count"] or 0),
+                "last_accessed_at": row["last_accessed_at"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             }
@@ -807,11 +972,22 @@ def save_agent_memory(data: dict[str, Any]) -> None:
         conn.execute("DELETE FROM memory_facts WHERE agent_id = ?", (agent_id,))
         conn.execute("DELETE FROM memory_events WHERE agent_id = ?", (agent_id,))
         conn.executemany(
-            "INSERT INTO memory_facts VALUES (?, ?, ?, ?, ?, ?, ?)",
+            """
+            INSERT INTO memory_facts (
+                id, agent_id, title, content, tags, pinned, status,
+                access_count, last_accessed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             [
                 (
                     item["id"], agent_id, item["title"], item["content"],
-                    _dumps(item.get("tags", [])), item["created_at"], item["updated_at"],
+                    _dumps(item.get("tags", [])),
+                    1 if item.get("pinned") else 0,
+                    item.get("status") or "active",
+                    int(item.get("access_count") or 0),
+                    item.get("last_accessed_at"),
+                    item["created_at"],
+                    item["updated_at"],
                 )
                 for item in data.get("facts", [])
             ],
@@ -847,8 +1023,11 @@ def list_memory_candidates(agent_id: str, status: str | None = None) -> list[dic
             "title": row["title"],
             "content": row["content"],
             "tags": _loads(row["tags"], []),
+            "category": row["category"] or "general",
+            "confidence": float(row["confidence"] or 0),
             "source_session_id": row["source_session_id"],
             "status": row["status"],
+            "reject_reason": row["reject_reason"] or "",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -861,16 +1040,26 @@ def upsert_memory_candidate(data: dict[str, Any]) -> None:
     with _lock, _connect() as conn:
         conn.execute(
             """
-            INSERT INTO memory_candidates VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO memory_candidates (
+                id, agent_id, title, content, tags, category, confidence,
+                source_session_id, status, reject_reason, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 title=excluded.title, content=excluded.content,
-                tags=excluded.tags, source_session_id=excluded.source_session_id,
-                status=excluded.status, updated_at=excluded.updated_at
+                tags=excluded.tags, category=excluded.category,
+                confidence=excluded.confidence,
+                source_session_id=excluded.source_session_id,
+                status=excluded.status, reject_reason=excluded.reject_reason,
+                updated_at=excluded.updated_at
             """,
             (
                 data["id"], data["agent_id"], data["title"], data["content"],
-                _dumps(data.get("tags", [])), data.get("source_session_id"),
+                _dumps(data.get("tags", [])),
+                data.get("category") or "general",
+                float(data.get("confidence") or 0),
+                data.get("source_session_id"),
                 data.get("status", "pending"),
+                data.get("reject_reason") or "",
                 data.get("created_at") or _utc_now(),
                 data.get("updated_at") or _utc_now(),
             ),
@@ -878,17 +1067,22 @@ def upsert_memory_candidate(data: dict[str, Any]) -> None:
         conn.commit()
 
 
-def update_memory_candidate_status(agent_id: str, candidate_id: str, status: str) -> dict[str, Any] | None:
+def update_memory_candidate_status(
+    agent_id: str,
+    candidate_id: str,
+    status: str,
+    reject_reason: str = "",
+) -> dict[str, Any] | None:
     ensure_db()
     now = _utc_now()
     with _lock, _connect() as conn:
         conn.execute(
             """
             UPDATE memory_candidates
-            SET status = ?, updated_at = ?
+            SET status = ?, reject_reason = ?, updated_at = ?
             WHERE agent_id = ? AND id = ?
             """,
-            (status, now, agent_id, candidate_id),
+            (status, reject_reason, now, agent_id, candidate_id),
         )
         row = conn.execute(
             "SELECT * FROM memory_candidates WHERE agent_id = ? AND id = ?",
@@ -903,11 +1097,14 @@ def update_memory_candidate_status(agent_id: str, candidate_id: str, status: str
         "title": row["title"],
         "content": row["content"],
         "tags": _loads(row["tags"], []),
+        "category": row["category"] or "general",
+        "confidence": float(row["confidence"] or 0),
         "source_session_id": row["source_session_id"],
         "status": row["status"],
+        "reject_reason": row["reject_reason"] or "",
         "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
+            "updated_at": row["updated_at"],
+        }
 
 
 def normalized_table_counts() -> dict[str, int]:

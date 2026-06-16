@@ -35,7 +35,7 @@ class KnowledgeBaseSearch(ToolBase):
         max_response_chars: int = 16000,
     ) -> None:
         safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", name).strip("_") or "default"
-        self.name = f"KnowledgeBaseSearch_{safe_name}"[:64]
+        self.name = (safe_name if safe_name == "KnowledgeBaseSearch" else f"KnowledgeBaseSearch_{safe_name}")[:64]
         self.tool_id = tool_id
         self.description = "\n".join(
             part

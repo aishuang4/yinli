@@ -40,6 +40,7 @@ class ModelConfig(BaseModel):
     primary: str = Field(default="qwen-plus", description="主模型")
     fallback: list[str] = Field(default_factory=lambda: ["qwen-turbo"], description="降级模型链")
     temperature: float = Field(default=0.7, ge=0, le=2, description="温度参数")
+    top_p: float = Field(default=0.8, ge=0, le=1, description="核采样参数")
     max_tokens: int = Field(default=4096, gt=0, description="最大输出 token 数")
 
 
@@ -53,6 +54,26 @@ class Guardrails(BaseModel):
         default="accept_edits",
         alias="toolPermissionMode",
         description="工具权限模式：ask_every_time/accept_edits/bypass",
+    )
+    tool_permission_profile: str = Field(
+        default="confirm_destructive",
+        alias="toolPermissionProfile",
+        description="工具权限配置：read_only/trusted_tools/confirm_destructive/ask_every_time",
+    )
+    execution_backend: str = Field(
+        default="local",
+        alias="executionBackend",
+        description="工具执行后端：local/docker",
+    )
+    docker_image: str = Field(
+        default="python:3.11-slim",
+        alias="dockerImage",
+        description="Docker 沙盒基础镜像",
+    )
+    persistent_sandbox: bool = Field(
+        default=False,
+        alias="persistentSandbox",
+        description="Docker 沙盒是否持久化工作目录",
     )
     timeout_seconds: int = Field(default=300, gt=0, description="工具调用超时（秒）")
 
@@ -136,6 +157,32 @@ class AgentResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class AgentExportPackage(BaseModel):
+    """Portable Agent export package."""
+
+    schema_version: str = Field(default="agent-workstation.agent.v1", alias="schemaVersion")
+    exported_at: str = Field(alias="exportedAt")
+    agent: AgentResponse
+
+    model_config = {"populate_by_name": True}
+
+
+class AgentImportRequest(BaseModel):
+    """Import one Agent from a portable package."""
+
+    package: AgentExportPackage
+    conflict_strategy: str = Field(default="new_id", alias="conflictStrategy")
+
+    model_config = {"populate_by_name": True}
+
+
+class AgentImportResponse(BaseModel):
+    """Result of importing one Agent."""
+
+    agent: AgentResponse
+    warnings: list[str] = Field(default_factory=list)
+
+
 # 内存存储 + JSON 持久化（后续替换为 SQLite）
 _agents: dict[str, AgentResponse] = {}
 
@@ -165,6 +212,11 @@ _load_agents()
 def get_registered_agent(agent_id: str) -> AgentResponse | None:
     """Return a persisted Agent configuration by id."""
     return _agents.get(agent_id)
+
+
+def list_registered_agents() -> list[AgentResponse]:
+    """Return persisted Agent configurations for internal matching logic."""
+    return list(_agents.values())
 
 
 def remove_mcp_tools_from_agents(tool_ids: set[str]) -> int:
@@ -239,6 +291,51 @@ async def list_agents() -> list[AgentResponse]:
         list[AgentResponse]: Agent 列表
     """
     return list(_agents.values())
+
+
+@router.get("/{agent_id}/export", response_model=AgentExportPackage)
+async def export_agent(agent_id: str) -> AgentExportPackage:
+    """Export one Agent as a portable JSON package."""
+    if agent_id not in _agents:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return AgentExportPackage(
+        exportedAt=datetime.now(timezone.utc).isoformat(),
+        agent=_agents[agent_id],
+    )
+
+
+@router.post("/import", response_model=AgentImportResponse, status_code=201)
+async def import_agent(data: AgentImportRequest) -> AgentImportResponse:
+    """Import one Agent package, creating a new Agent by default."""
+    if data.package.schema_version != "agent-workstation.agent.v1":
+        raise HTTPException(status_code=400, detail="Unsupported Agent export schema")
+
+    source = data.package.agent
+    warnings: list[str] = []
+    now = datetime.now(timezone.utc).isoformat()
+    next_id = source.id
+    if data.conflict_strategy not in {"new_id", "keep_id"}:
+        raise HTTPException(status_code=400, detail="Unsupported conflict strategy")
+    if data.conflict_strategy == "new_id" or next_id in _agents:
+        if next_id in _agents:
+            warnings.append("Agent ID already exists; imported with a new ID.")
+        next_id = str(uuid.uuid4())
+
+    next_name = source.name
+    if any(agent.name == next_name for agent in _agents.values()):
+        next_name = f"{source.name} Copy"
+        warnings.append("Agent name already exists; imported name was suffixed with Copy.")
+
+    imported = source.model_copy(update={
+        "id": next_id,
+        "name": next_name,
+        "status": "idle",
+        "created_at": now,
+        "updated_at": now,
+    })
+    _agents[imported.id] = imported
+    upsert_agent(imported.model_dump(by_alias=True))
+    return AgentImportResponse(agent=imported, warnings=warnings)
 
 
 @router.post("", response_model=AgentResponse, status_code=201)

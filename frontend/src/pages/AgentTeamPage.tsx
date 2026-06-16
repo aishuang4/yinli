@@ -12,8 +12,8 @@
  * @see css-modern-layouts: Sidebar + Main
  */
 
-import { useState, useCallback, useEffect } from 'react';
-import { AlertCircle, Bot, CheckCircle2, Plus, Sparkles, Trash2, UserPlus, Users, WandSparkles, X } from 'lucide-react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { AlertCircle, Archive, Bot, CheckCircle2, Download, Pencil, Pin, PinOff, Plus, RotateCcw, Save, Sparkles, Trash2, Upload, UserPlus, Users, WandSparkles, X } from 'lucide-react';
 import { Button, Empty, Input, Modal, Select, Spinner, Tag } from '@agentscope-ai/design';
 import { useAgentMemory } from '../hooks/useAgentMemory';
 import { useAgentBuilder } from '../hooks/useAgentBuilder';
@@ -24,8 +24,28 @@ import { AgentEditor } from '../features/agents/AgentEditor';
 import { DEFAULT_MODEL_CONFIG, type AgentCreatePayload, type ModelsResponse } from '../types/agent';
 import type { Agent } from '../types/agent';
 import type { BuilderMode, BuilderPlan } from '../types/agentBuilder';
+import type { MemoryFact } from '../types/memory';
 import type { TeamMember, TeamRecord } from '../types/team';
 import { createId } from '../utils/id';
+
+interface TeamTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  builtin: boolean;
+  members: Array<{
+    name: string;
+    role: 'leader' | 'worker';
+    agentId: string;
+    keywords: string[];
+    executionMode: 'parallel' | 'depends_on';
+    dependsOn: string[];
+    handoffPrompt: string;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+}
 
 /**
  * AgentTeamPage 组件
@@ -51,10 +71,25 @@ export function AgentTeamPage() {
     leaderAgentId: '',
     workerAgentIds: [] as string[],
   });
+  const importAgentInputRef = useRef<HTMLInputElement | null>(null);
+  const importTeamInputRef = useRef<HTMLInputElement | null>(null);
+  const [teamTemplates, setTeamTemplates] = useState<TeamTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
+  const [templateTeamName, setTemplateTeamName] = useState('');
 
   // 获取选中的 Agent
   const selectedAgent = agents.find((a) => a.id === selectedId) || null;
   const selectedTeam = teams.find((team) => team.id === selectedTeamId) || null;
+
+  const refreshTeamTemplates = useCallback(async () => {
+    const response = await fetch('/api/teams/templates');
+    if (!response.ok) return;
+    setTeamTemplates(await response.json());
+  }, []);
+
+  useEffect(() => {
+    void refreshTeamTemplates();
+  }, [refreshTeamTemplates]);
 
   /** 创建新 Agent */
   const handleCreate = useCallback(async (data: AgentCreatePayload) => {
@@ -124,6 +159,108 @@ export function AgentTeamPage() {
     setBuilderRequirement('');
   }, [applyPlan, builderPlan, refreshAgents, refreshTeams]);
 
+  const handleExportAgent = useCallback(async () => {
+    if (!selectedAgent) return;
+    const response = await fetch(`/api/agents/${selectedAgent.id}/export`);
+    if (!response.ok) return;
+    const data = await response.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${selectedAgent.name || 'agent'}-${selectedAgent.id}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [selectedAgent]);
+
+  const handleImportAgentFile = useCallback(async (file: File) => {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const response = await fetch('/api/agents/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        package: parsed,
+        conflictStrategy: 'new_id',
+      }),
+    });
+    if (!response.ok) return;
+    const result = await response.json();
+    await refreshAgents();
+    if (result.agent?.id) {
+      setMode('agents');
+      setSelectedId(result.agent.id);
+      setSelectedTeamId(null);
+    }
+  }, [refreshAgents]);
+
+  const handleExportTeam = useCallback(async () => {
+    if (!selectedTeam) return;
+    const response = await fetch(`/api/teams/${selectedTeam.id}/export`);
+    if (!response.ok) return;
+    const data = await response.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${selectedTeam.name || 'team'}-${selectedTeam.id}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [selectedTeam]);
+
+  const handleImportTeamFile = useCallback(async (file: File) => {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const response = await fetch('/api/teams/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        package: parsed,
+        conflictStrategy: 'new_id',
+      }),
+    });
+    if (!response.ok) return;
+    const result = await response.json();
+    await refreshTeams();
+    if (result.team?.id) {
+      setMode('teams');
+      setSelectedTeamId(result.team.id);
+      setSelectedId(null);
+    }
+  }, [refreshTeams]);
+
+  const handleCreateTeamFromTemplate = useCallback(async () => {
+    if (!selectedTemplateId) return;
+    const response = await fetch(`/api/teams/templates/${selectedTemplateId}/instantiate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: templateTeamName || undefined }),
+    });
+    if (!response.ok) return;
+    const result = await response.json();
+    await refreshTeams();
+    if (result.team?.id) {
+      setMode('teams');
+      setSelectedTeamId(result.team.id);
+      setSelectedId(null);
+      setTemplateTeamName('');
+    }
+  }, [refreshTeams, selectedTemplateId, templateTeamName]);
+
+  const handleSaveSelectedTeamAsTemplate = useCallback(async () => {
+    if (!selectedTeam) return;
+    const response = await fetch(`/api/teams/templates/from-team/${selectedTeam.id}`, {
+      method: 'POST',
+    });
+    if (response.ok) {
+      await refreshTeamTemplates();
+    }
+  }, [refreshTeamTemplates, selectedTeam]);
+
   return (
     <div className="grid h-full min-h-0 grid-cols-[280px_1fr] gap-4 overflow-hidden p-4">
       {/* 左侧列表 */}
@@ -144,6 +281,82 @@ export function AgentTeamPage() {
               Teams
             </Button>
           </div>
+
+          {mode === 'agents' && (
+            <div className="mb-3 grid grid-cols-2 gap-2">
+              <Button size="small" disabled={!selectedAgent} onClick={() => void handleExportAgent()}>
+                <Download size={13} />
+                导出
+              </Button>
+              <Button size="small" onClick={() => importAgentInputRef.current?.click()}>
+                <Upload size={13} />
+                导入
+              </Button>
+              <input
+                ref={importAgentInputRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = '';
+                  if (file) void handleImportAgentFile(file);
+                }}
+              />
+            </div>
+          )}
+
+          {mode === 'teams' && (
+            <div className="mb-3 space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <Button size="small" disabled={!selectedTeam} onClick={() => void handleExportTeam()}>
+                  <Download size={13} />
+                  导出
+                </Button>
+                <Button size="small" onClick={() => importTeamInputRef.current?.click()}>
+                  <Upload size={13} />
+                  导入
+                </Button>
+                <input
+                  ref={importTeamInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = '';
+                    if (file) void handleImportTeamFile(file);
+                  }}
+                />
+              </div>
+              <Select
+                value={selectedTemplateId || undefined}
+                onChange={(value) => setSelectedTemplateId(String(value))}
+                options={teamTemplates.map((template) => ({
+                  label: `${template.name}${template.builtin ? ' · 内置' : ''}`,
+                  value: template.id,
+                }))}
+                style={{ width: '100%' }}
+                placeholder="选择 Team 模板"
+              />
+              <input
+                value={templateTeamName}
+                onChange={(event) => setTemplateTeamName(event.target.value)}
+                className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                placeholder="新 Team 名称（可选）"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <Button size="small" disabled={!selectedTemplateId} onClick={() => void handleCreateTeamFromTemplate()}>
+                  <Plus size={13} />
+                  用模板创建
+                </Button>
+                <Button size="small" disabled={!selectedTeam} onClick={() => void handleSaveSelectedTeamAsTemplate()}>
+                  <Sparkles size={13} />
+                  存为模板
+                </Button>
+              </div>
+            </div>
+          )}
           <div className="flex items-center justify-between mb-2">
             <h2 className="text-base font-medium text-[var(--color-text-primary)]">
               {mode === 'agents' ? 'Agents' : 'Teams'}
@@ -660,6 +873,11 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
   const [mainDraft, setMainDraft] = useState('');
   const [savingMain, setSavingMain] = useState(false);
   const [busyCandidateId, setBusyCandidateId] = useState<string | null>(null);
+  const [mergingCandidates, setMergingCandidates] = useState(false);
+  const [busyCleanupId, setBusyCleanupId] = useState<string | null>(null);
+  const [busyFactId, setBusyFactId] = useState<string | null>(null);
+  const [editingFactId, setEditingFactId] = useState<string | null>(null);
+  const [factDraft, setFactDraft] = useState({ title: '', content: '', tags: '' });
 
   useEffect(() => {
     setMainDraft(memory?.main_memory || '');
@@ -681,15 +899,101 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
   };
 
   const resolveCandidate = async (candidateId: string, action: 'approve' | 'reject') => {
+    const reason = action === 'reject'
+      ? window.prompt('拒绝原因（可选）：') ?? ''
+      : '';
     setBusyCandidateId(candidateId);
     try {
       const response = await fetch(`/api/agent-memory/${agent.id}/candidates/${candidateId}/${action}`, {
         method: 'POST',
+        headers: action === 'reject' ? { 'Content-Type': 'application/json' } : undefined,
+        body: action === 'reject' ? JSON.stringify({ reason }) : undefined,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       await refresh();
     } finally {
       setBusyCandidateId(null);
+    }
+  };
+
+  const mergeDuplicateCandidates = async () => {
+    setMergingCandidates(true);
+    try {
+      const response = await fetch(`/api/agent-memory/${agent.id}/candidates/merge-duplicates`, {
+        method: 'POST',
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await refresh();
+    } finally {
+      setMergingCandidates(false);
+    }
+  };
+
+  const startEditFact = (fact: MemoryFact) => {
+    setEditingFactId(fact.id);
+    setFactDraft({
+      title: fact.title,
+      content: fact.content,
+      tags: fact.tags.join(', '),
+    });
+  };
+
+  const patchFact = async (factId: string, patch: Partial<MemoryFact>) => {
+    setBusyFactId(factId);
+    try {
+      const response = await fetch(`/api/agent-memory/${agent.id}/facts/${factId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await refresh();
+    } finally {
+      setBusyFactId(null);
+    }
+  };
+
+  const saveFactEdit = async (factId: string) => {
+    const tags = factDraft.tags
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+      .slice(0, 8);
+    await patchFact(factId, {
+      title: factDraft.title.trim(),
+      content: factDraft.content.trim(),
+      tags,
+    });
+    setEditingFactId(null);
+  };
+
+  const deleteFact = async (factId: string) => {
+    if (!window.confirm('确定删除这条记忆事实吗？')) return;
+    setBusyFactId(factId);
+    try {
+      const response = await fetch(`/api/agent-memory/${agent.id}/facts/${factId}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await refresh();
+    } finally {
+      setBusyFactId(null);
+    }
+  };
+
+  const applyCleanupSuggestion = async (suggestionId: string, keepFactId?: string | null) => {
+    if (!window.confirm('确认执行这条记忆清理建议吗？相关记忆会被标记为过期，不会被删除。')) return;
+    setBusyCleanupId(suggestionId);
+    try {
+      const response = await fetch(`/api/agent-memory/${agent.id}/cleanup/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ suggestionId, keepFactId }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      await refresh();
+    } finally {
+      setBusyCleanupId(null);
     }
   };
 
@@ -731,14 +1035,39 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
       )}
 
       <div className="mb-4">
-        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">候选记忆</h3>
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-medium text-[var(--color-text-primary)]">候选记忆</h3>
+          <Button
+            size="small"
+            loading={mergingCandidates}
+            disabled={!memory?.candidates.length}
+            onClick={() => void mergeDuplicateCandidates()}
+          >
+            合并重复
+          </Button>
+        </div>
         <div className="mt-2 space-y-2">
           {memory?.candidates.length ? memory.candidates.map((candidate) => (
             <div key={candidate.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-              <div className="text-sm font-medium text-[var(--color-text-primary)]">{candidate.title}</div>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 text-sm font-medium text-[var(--color-text-primary)]">
+                  {candidate.title}
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Tag size="small" color="transparent">{candidate.category || 'general'}</Tag>
+                  <Tag size="small" color={(candidate.confidence || 0) >= 0.7 ? 'green' : 'orange'}>
+                    {Math.round((candidate.confidence || 0) * 100)}%
+                  </Tag>
+                </div>
+              </div>
               <div className="mt-1 whitespace-pre-wrap text-xs text-[var(--color-text-secondary)]">
                 {candidate.content}
               </div>
+              {candidate.source_session_id && (
+                <div className="mt-2 truncate text-[11px] text-[var(--color-text-tertiary)]">
+                  来源会话：{candidate.source_session_id}
+                </div>
+              )}
               {candidate.tags.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1">
                   {candidate.tags.map((tag) => (
@@ -771,12 +1100,144 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
       </div>
 
       <div className="mb-4">
+        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">清理建议</h3>
+        <div className="mt-2 space-y-2">
+          {memory?.cleanup_suggestions.length ? memory.cleanup_suggestions.map((suggestion) => (
+            <div key={suggestion.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Tag size="small" color={suggestion.type === 'duplicate' ? 'blue' : suggestion.type === 'conflict' ? 'orange' : 'transparent'}>
+                      {suggestion.type === 'duplicate' ? '重复' : suggestion.type === 'conflict' ? '疑似冲突' : '长期未更新'}
+                    </Tag>
+                    <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
+                      {suggestion.title}
+                    </div>
+                  </div>
+                  <div className="mt-2 text-xs text-[var(--color-text-secondary)]">
+                    {suggestion.description}
+                  </div>
+                  <div className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">
+                    涉及 {suggestion.fact_ids.length} 条记忆 · 置信度 {Math.round(suggestion.confidence * 100)}%
+                  </div>
+                </div>
+                <Button
+                  size="small"
+                  loading={busyCleanupId === suggestion.id}
+                  onClick={() => void applyCleanupSuggestion(suggestion.id, suggestion.keep_fact_id)}
+                >
+                  确认清理
+                </Button>
+              </div>
+            </div>
+          )) : (
+            <Empty type="noData" description="暂无清理建议" />
+          )}
+        </div>
+      </div>
+
+      <div className="mb-4">
         <h3 className="text-sm font-medium text-[var(--color-text-primary)]">已确认事实</h3>
         <div className="mt-2 space-y-2">
           {memory?.facts.length ? memory.facts.map((fact) => (
             <div key={fact.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-              <div className="text-sm font-medium text-[var(--color-text-primary)]">{fact.title}</div>
-              <div className="mt-1 text-xs text-[var(--color-text-secondary)]">{fact.content}</div>
+              {editingFactId === fact.id ? (
+                <div className="space-y-2">
+                  <Input
+                    value={factDraft.title}
+                    onChange={(event) => setFactDraft((current) => ({ ...current, title: event.target.value }))}
+                    placeholder="记忆标题"
+                  />
+                  <Input.TextArea
+                    value={factDraft.content}
+                    onChange={(event) => setFactDraft((current) => ({ ...current, content: event.target.value }))}
+                    rows={4}
+                    placeholder="记忆内容"
+                  />
+                  <Input
+                    value={factDraft.tags}
+                    onChange={(event) => setFactDraft((current) => ({ ...current, tags: event.target.value }))}
+                    placeholder="标签，用英文逗号分隔"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <Button size="small" icon={<X size={13} />} onClick={() => setEditingFactId(null)}>
+                      取消
+                    </Button>
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<Save size={13} />}
+                      loading={busyFactId === fact.id}
+                      disabled={!factDraft.title.trim() || !factDraft.content.trim()}
+                      onClick={() => void saveFactEdit(fact.id)}
+                    >
+                      保存
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-2">
+                        {fact.pinned && <Pin size={13} className="shrink-0 text-[var(--color-primary)]" />}
+                        <div className={`truncate text-sm font-medium ${fact.status === 'outdated' ? 'text-[var(--color-text-tertiary)] line-through' : 'text-[var(--color-text-primary)]'}`}>
+                          {fact.title}
+                        </div>
+                      </div>
+                      <div className="mt-1 whitespace-pre-wrap break-words text-xs text-[var(--color-text-secondary)]">
+                        {fact.content}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        size="small"
+                        icon={fact.pinned ? <PinOff size={13} /> : <Pin size={13} />}
+                        loading={busyFactId === fact.id}
+                        onClick={() => void patchFact(fact.id, { pinned: !fact.pinned })}
+                        aria-label={fact.pinned ? '取消置顶' : '置顶'}
+                      />
+                      <Button
+                        size="small"
+                        icon={<Pencil size={13} />}
+                        onClick={() => startEditFact(fact)}
+                        aria-label="编辑"
+                      />
+                      <Button
+                        size="small"
+                        icon={fact.status === 'outdated' ? <RotateCcw size={13} /> : <Archive size={13} />}
+                        loading={busyFactId === fact.id}
+                        onClick={() => void patchFact(fact.id, { status: fact.status === 'outdated' ? 'active' : 'outdated' })}
+                        aria-label={fact.status === 'outdated' ? '恢复有效' : '标记过期'}
+                      />
+                      <Button
+                        size="small"
+                        danger
+                        icon={<Trash2 size={13} />}
+                        loading={busyFactId === fact.id}
+                        onClick={() => void deleteFact(fact.id)}
+                        aria-label="删除"
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-1">
+                    <Tag size="small" color={fact.status === 'active' ? 'green' : 'orange'}>
+                      {fact.status === 'active' ? '有效' : '已过期'}
+                    </Tag>
+                    <Tag size="small" color="transparent">
+                      注入 {fact.access_count || 0} 次
+                    </Tag>
+                    {fact.tags.map((tag) => (
+                      <Tag key={tag} size="small" color="transparent">{tag}</Tag>
+                    ))}
+                  </div>
+                  {fact.last_accessed_at && (
+                    <div className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">
+                      最后注入：{new Date(fact.last_accessed_at).toLocaleString()}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )) : (
             <Empty type="noData" description="暂无已确认事实" />
@@ -944,7 +1405,7 @@ function TeamDetailPanel({
             type="button"
             onClick={() => setSelectedMemberId(member.id)}
             className={[
-              'w-full rounded-md border p-4 text-left transition-all duration-300',
+              'ui-card-transition w-full rounded-md border p-4 text-left',
               selected
                 ? 'border-[var(--color-accent)] bg-[var(--color-accent-bg)] shadow-sm'
                 : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] hover:shadow-md',

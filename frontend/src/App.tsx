@@ -11,23 +11,29 @@
  * - advanced-init-once: 初始化检查只做一次
  */
 
-import { useEffect, useLayoutEffect } from 'react';
-import { ConfigProvider, carbonDarkTheme, carbonTheme } from '@agentscope-ai/design';
+import { lazy, Suspense, useEffect, useLayoutEffect, type ComponentType } from 'react';
+import { ConfigProvider, Spinner, carbonDarkTheme, carbonTheme } from '@agentscope-ai/design';
 import { useAppStore } from './stores/appStore';
+import type { ViewType } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { AppLayout } from './layouts/AppLayout';
-import { ChatPage } from './pages/ChatPage';
-import { AgentTeamPage } from './pages/AgentTeamPage';
-import { MCPPage } from './pages/MCPPage';
-import { SkillsPage } from './pages/SkillsPage';
-import { SettingsPage } from './pages/SettingsPage';
+
+const ChatPage = lazy(() => import('./pages/ChatPage').then((module) => ({ default: module.ChatPage })));
+const TracePage = lazy(() => import('./pages/TracePage').then((module) => ({ default: module.TracePage })));
+const SandboxPage = lazy(() => import('./pages/SandboxPage').then((module) => ({ default: module.SandboxPage })));
+const AgentTeamPage = lazy(() => import('./pages/AgentTeamPage').then((module) => ({ default: module.AgentTeamPage })));
+const MCPPage = lazy(() => import('./pages/MCPPage').then((module) => ({ default: module.MCPPage })));
+const SkillsPage = lazy(() => import('./pages/SkillsPage').then((module) => ({ default: module.SkillsPage })));
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })));
 
 /**
  * 视图 → 页面组件映射表
  * 使用对象映射代替 switch/if，遵循 js-index-maps 规则
  */
-const VIEW_PAGES: Record<string, React.ComponentType> = {
+const VIEW_PAGES: Record<ViewType, ComponentType> = {
   chat: ChatPage,
+  traces: TracePage,
+  sandbox: SandboxPage,
   agents: AgentTeamPage,
   mcp: MCPPage,
   skills: SkillsPage,
@@ -85,8 +91,21 @@ export function App() {
   return (
     <ConfigProvider {...sparkTheme}>
       <AppLayout>
-        <PageComponent />
+        <Suspense fallback={<PageSkeleton />}>
+          <PageComponent />
+        </Suspense>
       </AppLayout>
     </ConfigProvider>
+  );
+}
+
+function PageSkeleton() {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center">
+      <div className="flex items-center gap-2 rounded-lg bg-[var(--color-bg-secondary)] px-4 py-3 text-sm text-[var(--color-text-secondary)] shadow-sm">
+        <Spinner />
+        页面加载中
+      </div>
+    </div>
   );
 }

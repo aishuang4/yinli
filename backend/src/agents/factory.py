@@ -11,7 +11,7 @@ Agent 工厂模块 — 从配置创建 AgentScope 2.0 Agent 实例
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, AsyncGenerator, Callable
 
 from pydantic import SecretStr
 
@@ -19,6 +19,8 @@ from agentscope.agent import Agent
 from agentscope.agent._config import ModelConfig
 from agentscope.model import (
     AnthropicChatModel,
+    ChatModelBase,
+    ChatResponse,
     DashScopeChatModel,
     DeepSeekChatModel,
     GeminiChatModel,
@@ -36,11 +38,11 @@ from agentscope.credential import (
     OpenAICredential,
 )
 from agentscope.mcp import HttpMCPConfig, MCPClient
-from agentscope.tool import Toolkit, Bash, Read, Write, Edit, Grep, Glob
+from agentscope.tool import Toolkit, Bash, Read, Write, Edit, Grep, Glob, ToolChoice
 from agentscope.state import AgentState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.permission._types import PermissionMode
-from agentscope.workspace import LocalWorkspace
+from agentscope.workspace import DockerWorkspace, LocalWorkspace
 
 from src.config.settings import settings
 from src.config.runtime_settings import get_effective_model_settings
@@ -58,6 +60,7 @@ WORKSPACE_DIR = os.path.expanduser("~")
 # Agent 实例缓存 — 按 agent_id 缓存，避免重复创建
 # ============================================================================
 _agent_cache: dict[str, Agent] = {}
+FallbackEventCallback = Callable[[dict[str, Any]], None]
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,7 @@ class AgentModelOptions:
     """Runtime model parameters selected from the persisted Agent config."""
 
     temperature: float | None = None
+    top_p: float | None = None
     max_tokens: int | None = None
 
 
@@ -77,6 +81,10 @@ class AgentGuardrails:
     network_enabled: bool = True
     human_approval: bool = False
     tool_permission_mode: str = "accept_edits"
+    tool_permission_profile: str = "confirm_destructive"
+    execution_backend: str = "local"
+    docker_image: str = "python:3.11-slim"
+    persistent_sandbox: bool = False
     timeout_seconds: int = 300
 
 
@@ -128,6 +136,8 @@ def _create_model(
     if model_options:
         if model_options.temperature is not None:
             parameters["temperature"] = model_options.temperature
+        if model_options.top_p is not None:
+            parameters["top_p"] = model_options.top_p
         if model_options.max_tokens is not None:
             parameters["max_tokens"] = model_options.max_tokens
 
@@ -201,33 +211,104 @@ def _create_model(
     )
 
 
-def _create_fallback_model(
-    fallback_names: list[str],
+class FallbackChainModel(ChatModelBase):
+    """Application-level multi-step fallback model chain."""
+
+    def __init__(
+        self,
+        models: list[ChatModelBase],
+        on_event: FallbackEventCallback | None = None,
+    ) -> None:
+        if not models:
+            raise ValueError("FallbackChainModel requires at least one model")
+        self.models = models
+        self.on_event = on_event
+        super().__init__(
+            credential=models[0].credential,
+            model=" -> ".join(model.model for model in models),
+            parameters=models[0].parameters,
+            stream=models[0].stream,
+            max_retries=0,
+            context_size=models[0].context_size,
+        )
+
+    async def __call__(
+        self,
+        messages: list,
+        tools: list[dict] | None = None,
+        tool_choice: ToolChoice | None = None,
+        **kwargs: Any,
+    ) -> ChatResponse | AsyncGenerator[ChatResponse, None]:
+        last_error: Exception | None = None
+        total = len(self.models)
+        for index, model in enumerate(self.models):
+            self._emit({
+                "type": "attempt",
+                "model": model.model,
+                "index": index,
+                "total": total,
+            })
+            try:
+                response = await model(
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    **kwargs,
+                )
+                self._emit({
+                    "type": "success",
+                    "model": model.model,
+                    "index": index,
+                    "total": total,
+                })
+                return response
+            except Exception as exc:
+                last_error = exc
+                self._emit({
+                    "type": "failure",
+                    "model": model.model,
+                    "index": index,
+                    "total": total,
+                    "error": str(exc),
+                })
+        if last_error:
+            raise last_error
+        raise RuntimeError("Fallback chain failed without an exception")
+
+    async def _call_api(self, *args: Any, **kwargs: Any) -> ChatResponse | AsyncGenerator[ChatResponse, None]:
+        raise NotImplementedError("FallbackChainModel overrides __call__ directly")
+
+    def _emit(self, event: dict[str, Any]) -> None:
+        if not self.on_event:
+            return
+        try:
+            self.on_event(event)
+        except Exception:
+            pass
+
+
+def _create_model_chain(
+    model_names: list[str],
     thinking_enable: bool = False,
     model_options: AgentModelOptions | None = None,
-) -> Optional[DashScopeChatModel]:
-    """
-    创建 Fallback 模型（取第一个作为 fallback_model）
-
-    AgentScope 2.0 的 ModelConfig 只支持单个 fallback_model，
-    因此取列表第一个作为 fallback。后续可扩展为链式。
-
-    Args:
-        fallback_names: Fallback 模型名称列表（有序）
-
-    Returns:
-        最外层 Fallback 模型，如果列表为空则返回 None
-    """
-    if not fallback_names:
-        return None
-
-    # 取第一个 fallback 模型
-    return _create_model(
-        fallback_names[0],
-        stream=True,
-        thinking_enable=thinking_enable,
-        model_options=model_options,
-    )
+    on_fallback_event: FallbackEventCallback | None = None,
+) -> ChatModelBase:
+    """Create a primary + fallback chain as one AgentScope-compatible model."""
+    cleaned_names = [name for name in model_names if name]
+    if not cleaned_names:
+        raise ValueError("At least one model name is required")
+    models = [
+        _create_model(
+            name,
+            stream=True,
+            thinking_enable=thinking_enable,
+            model_options=model_options,
+        )
+        for name in cleaned_names
+    ]
+    if len(models) == 1:
+        return models[0]
+    return FallbackChainModel(models, on_event=on_fallback_event)
 
 
 class GuardedBash(Bash):
@@ -318,14 +399,18 @@ def _create_default_toolkit(
     Returns:
         Toolkit: 包含默认工具的 Toolkit 实例
     """
+    profile = (guardrails.tool_permission_profile if guardrails else "confirm_destructive").strip().lower()
+    read_only = profile == "read_only"
+
     local_tools = [
         Read(),
-        Write(),
-        Edit(),
         Grep(),
         Glob(),
     ]
-    if not guardrails or guardrails.network_enabled:
+    if not read_only:
+        local_tools.extend([Write(), Edit()])
+
+    if (not guardrails or guardrails.network_enabled) and not read_only:
         local_tools.extend(
             [
                 GuardedBash(
@@ -350,7 +435,7 @@ def _create_default_toolkit(
                 )
             )
 
-    mcp_clients = _create_mcp_clients(mcp_servers or [], guardrails)
+    mcp_clients = [] if read_only else _create_mcp_clients(mcp_servers or [], guardrails)
     return Toolkit(
         tools=[
             *local_tools,
@@ -371,6 +456,7 @@ def get_or_create_agent(
     guardrails: AgentGuardrails | None = None,
     mcp_servers: list[McpRuntimeSpec] | None = None,
     knowledge_tools: list[KnowledgeToolRuntimeSpec] | None = None,
+    on_fallback_event: FallbackEventCallback | None = None,
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -396,20 +482,27 @@ def get_or_create_agent(
     primary_model = model_name or runtime.default_model
     fallbacks = fallback_names if fallback_names is not None else runtime.fallback_models
 
-    # 创建模型
-    main_model = _create_model(
-        primary_model,
+    # 创建应用层模型链：primary -> fallback1 -> fallback2 ...
+    main_model = _create_model_chain(
+        [primary_model, *fallbacks],
         thinking_enable=thinking_enable,
         model_options=model_options,
-    )
-    fallback_model = _create_fallback_model(
-        fallbacks,
-        thinking_enable=thinking_enable,
-        model_options=model_options,
+        on_fallback_event=on_fallback_event,
     )
 
-    # 创建 LocalWorkspace — Agent 工具执行的隔离环境
-    workspace = LocalWorkspace(workdir=_safe_workspace_dir(guardrails))
+    # 创建 Workspace — local 默认，docker 用 AgentScope 内置容器沙盒
+    if guardrails and guardrails.execution_backend == "docker":
+        workspace = DockerWorkspace(
+            workspace_id=f"agent-{agent_id}".replace(":", "-")[:120],
+            base_image=guardrails.docker_image or "python:3.11-slim",
+            workdir=(
+                os.path.join(_safe_workspace_dir(guardrails), ".agent-workstation-sandbox", agent_id.replace(":", "-"))
+                if guardrails.persistent_sandbox
+                else None
+            ),
+        )
+    else:
+        workspace = LocalWorkspace(workdir=_safe_workspace_dir(guardrails))
 
     # 创建 AgentState — 设置 BYPASS 权限模式
     # BYPASS 模式：跳过所有权限检查，工具自动执行无需确认
@@ -433,7 +526,7 @@ def get_or_create_agent(
         offloader=workspace,
         model_config=ModelConfig(
             max_retries=3,
-            fallback_model=fallback_model,
+            fallback_model=None,
         ),
     )
 
