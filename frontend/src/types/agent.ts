@@ -16,11 +16,15 @@ export interface ModelConfig {
   fallback: string[];
   /** 温度参数 (0-2) */
   temperature: number;
+  /** 核采样参数 (0-1) */
+  topP: number;
   /** 最大输出 token 数 */
   maxTokens: number;
 }
 
 /** 安全边界配置 */
+export type ToolPermissionProfile = 'read_only' | 'trusted_tools' | 'confirm_destructive' | 'ask_every_time';
+
 export interface Guardrails {
   /** 文件系统访问范围 */
   filesystemScope: string;
@@ -32,6 +36,14 @@ export interface Guardrails {
   humanApproval: boolean;
   /** 工具权限模式 */
   toolPermissionMode: 'ask_every_time' | 'accept_edits' | 'bypass';
+  /** 工具权限配置 */
+  toolPermissionProfile: ToolPermissionProfile;
+  /** 工具执行后端 */
+  executionBackend: 'local' | 'docker';
+  /** Docker 沙盒基础镜像 */
+  dockerImage: string;
+  /** Docker 沙盒是否持久化 */
+  persistentSandbox: boolean;
   /** 工具调用超时（秒） */
   timeoutSeconds: number;
 }
@@ -116,6 +128,7 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
   primary: 'qwen-plus',
   fallback: ['qwen-turbo'],
   temperature: 0.7,
+  topP: 0.8,
   maxTokens: 4096,
 };
 
@@ -126,6 +139,10 @@ export const DEFAULT_GUARDRAILS: Guardrails = {
   networkEnabled: true,
   humanApproval: false,
   toolPermissionMode: 'accept_edits',
+  toolPermissionProfile: 'confirm_destructive',
+  executionBackend: 'local',
+  dockerImage: 'python:3.11-slim',
+  persistentSandbox: false,
   timeoutSeconds: 300,
 };
 

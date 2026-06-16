@@ -84,11 +84,20 @@ function normalizeToolStatus(status: unknown): ToolCallInfo['status'] {
 function normalizeToolCallRecord(record: Record<string, unknown>): ToolCallInfo {
   return {
     id: String(record.id || record.tool_call_id || createId()),
-    name: String(record.name || record.tool_call_name || 'tool'),
+    name: normalizeToolDisplayName(String(record.name || record.tool_call_name || 'tool')),
     args: String(record.args || ''),
     result: String(record.result || ''),
     status: normalizeToolStatus(record.status),
   };
+}
+
+function normalizeToolDisplayName(name: string): string {
+  const value = String(name || 'tool');
+  const parts = value.split('_');
+  if (parts.length === 2 && parts[0] && parts[0] === parts[1]) {
+    return parts[0];
+  }
+  return value;
 }
 
 function mergeToolCalls(current: ToolCallInfo[], incoming: ToolCallInfo[]): ToolCallInfo[] {
@@ -143,7 +152,11 @@ export interface TeamActivityInfo {
   thinking: string;
   currentEvent: string;
   toolCalls: ToolCallInfo[];
+  executionMode: string;
   dependsOn: string[];
+  waitReason: string;
+  dependencyOutputCount: number;
+  leaderContextCount: number;
   createdAt: string;
 }
 
@@ -167,6 +180,8 @@ export interface ModelCacheInfo {
   outputTokens: number;
   cacheCreationInputTokens: number;
   cacheInputTokens: number;
+  cacheHitRate: number;
+  estimatedSavedInputTokens: number;
   createdAt: string;
 }
 
@@ -230,16 +245,21 @@ interface SendMessageOptions {
   teamId?: string;
   teamName?: string;
   teamMembers?: Array<{
+    id?: string;
     agentId: string;
     name: string;
     role: string;
     description: string;
+    executionMode?: string;
+    dependsOn?: string[];
+    handoffPrompt?: string;
   }>;
   systemPrompt?: string;
   model?: string;
   sessionId?: string;
   skillIds?: string[];
   deepThinking?: boolean;
+  sandbox?: boolean;
   images?: Array<{
     name: string;
     media_type: string;
@@ -327,6 +347,7 @@ export function useEventStream(): UseEventStreamReturn {
             session_id: options?.sessionId,
             skill_ids: options?.skillIds,
             deep_thinking: options?.deepThinking,
+            sandbox: options?.sandbox,
             images: options?.images,
           }),
           signal: controller.signal,
@@ -531,7 +552,7 @@ export function useEventStream(): UseEventStreamReturn {
             ...prev,
             toolCalls: mergeToolCalls(prev.toolCalls, [{
               id: String(event.data.tool_call_id || createId()),
-              name: String(event.data.tool_call_name || 'tool'),
+              name: normalizeToolDisplayName(String(event.data.tool_call_name || 'tool')),
               args: '',
               result: '',
               status: 'calling',
@@ -609,9 +630,13 @@ export function useEventStream(): UseEventStreamReturn {
                 thinking: String(activity.thinking || existing?.thinking || ''),
                 currentEvent: existing?.currentEvent || '',
                 toolCalls,
+                executionMode: String(activity.executionMode || existing?.executionMode || 'parallel'),
                 dependsOn: Array.isArray(activity.dependsOn)
                   ? activity.dependsOn.map((item) => String(item))
                   : existing?.dependsOn || [],
+                waitReason: String(activity.waitReason || existing?.waitReason || ''),
+                dependencyOutputCount: Number(activity.dependencyOutputCount ?? existing?.dependencyOutputCount ?? 0),
+                leaderContextCount: Number(activity.leaderContextCount ?? existing?.leaderContextCount ?? 0),
                 createdAt: String(activity.createdAt || ''),
               };
             }),
@@ -656,10 +681,10 @@ export function useEventStream(): UseEventStreamReturn {
                 return {
                   ...activity,
                   status: 'running',
-                  currentEvent: `调用工具 ${String(memberEvent.tool_call_name || 'tool')}`,
+                  currentEvent: `调用工具 ${normalizeToolDisplayName(String(memberEvent.tool_call_name || 'tool'))}`,
                   toolCalls: mergeToolCalls(activity.toolCalls, [{
                     id: String(memberEvent.tool_call_id || createId()),
-                    name: String(memberEvent.tool_call_name || 'tool'),
+                    name: normalizeToolDisplayName(String(memberEvent.tool_call_name || 'tool')),
                     args: '',
                     result: '',
                     status: 'calling',
@@ -780,7 +805,7 @@ export function useEventStream(): UseEventStreamReturn {
                   const toolCall = item as Record<string, unknown>;
                   return {
                     id: String(toolCall.id || createId()),
-                    name: String(toolCall.name || 'tool'),
+                    name: normalizeToolDisplayName(String(toolCall.name || 'tool')),
                     input: String(toolCall.input || ''),
                   };
                 }),
@@ -857,6 +882,7 @@ export function useEventStream(): UseEventStreamReturn {
           const outputTokens = (event.data.output_tokens as number) || 0;
           const cacheCreationInputTokens = (event.data.cache_creation_input_tokens as number) || 0;
           const cacheInputTokens = (event.data.cache_input_tokens as number) || 0;
+          const cacheBaseTokens = inputTokens + cacheInputTokens;
           const modelCache: ModelCacheInfo = {
             id: `provider-cache-${Date.now()}`,
             modelName: prev.modelName,
@@ -864,6 +890,8 @@ export function useEventStream(): UseEventStreamReturn {
             outputTokens,
             cacheCreationInputTokens,
             cacheInputTokens,
+            cacheHitRate: cacheBaseTokens > 0 ? cacheInputTokens / cacheBaseTokens : 0,
+            estimatedSavedInputTokens: cacheInputTokens,
             createdAt: new Date().toISOString(),
           };
           return {

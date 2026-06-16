@@ -681,6 +681,46 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                 <span>创意 (2)</span>
               </div>
             </div>
+
+            <div>
+              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
+                Top P: {form.modelConfig.topP.toFixed(2)}
+              </label>
+              <Slider
+                min={0}
+                max={1}
+                step={0.05}
+                value={form.modelConfig.topP}
+                onChange={(value) =>
+                  setForm({
+                    ...form,
+                    modelConfig: { ...form.modelConfig, topP: value },
+                  })
+                }
+              />
+              <div className="flex justify-between text-xs text-[var(--color-text-tertiary)]">
+                <span>保守 (0)</span>
+                <span>多样 (1)</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
+                最大输出 Token
+              </label>
+              <InputNumber
+                min={256}
+                max={128000}
+                value={form.modelConfig.maxTokens}
+                onChange={(value) =>
+                  setForm({
+                    ...form,
+                    modelConfig: { ...form.modelConfig, maxTokens: Number(value ?? 4096) },
+                  })
+                }
+                style={{ width: 160 }}
+              />
+            </div>
           </div>
         </section>
 
@@ -833,6 +873,66 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
               />
             </div>
 
+            {/* 执行隔离 */}
+            <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-3">
+              <div className="mb-2">
+                <div className="text-sm text-[var(--color-text-primary)]">执行隔离</div>
+                <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                  Docker 会把工具运行放入容器工作区，需要本机 Docker 可用。
+                </div>
+              </div>
+              <Select
+                value={form.guardrails.executionBackend}
+                onChange={(value) =>
+                  setForm({
+                    ...form,
+                    guardrails: {
+                      ...form.guardrails,
+                      executionBackend: value as 'local' | 'docker',
+                    },
+                  })
+                }
+                options={[
+                  { label: '本地工作区', value: 'local' },
+                  { label: 'Docker 沙盒', value: 'docker' },
+                ]}
+                style={{ width: '100%' }}
+              />
+              {form.guardrails.executionBackend === 'docker' && (
+                <div className="mt-3 grid grid-cols-[1fr_auto] gap-3">
+                  <div>
+                    <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+                      Docker 基础镜像
+                    </label>
+                    <Input
+                      value={form.guardrails.dockerImage}
+                      onChange={(event) =>
+                        setForm({
+                          ...form,
+                          guardrails: { ...form.guardrails, dockerImage: event.target.value },
+                        })
+                      }
+                      placeholder="python:3.11-slim"
+                    />
+                  </div>
+                  <div className="flex items-end pb-1">
+                    <ToggleButton
+                      checked={form.guardrails.persistentSandbox}
+                      onChange={(checked) =>
+                        setForm({
+                          ...form,
+                          guardrails: { ...form.guardrails, persistentSandbox: checked },
+                        })
+                      }
+                      checkedLabel="持久"
+                      uncheckedLabel="临时"
+                      ariaLabel="Docker 沙盒持久化"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* 人工审批 */}
             <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
               <div>
@@ -861,26 +961,28 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                 工具权限范围
               </label>
               <Select
-                value={form.guardrails.toolPermissionMode}
+                value={form.guardrails.toolPermissionProfile}
                 disabled={form.guardrails.humanApproval}
                 onChange={(value) =>
                   setForm({
                     ...form,
                     guardrails: {
                       ...form.guardrails,
-                      toolPermissionMode: value as 'ask_every_time' | 'accept_edits' | 'bypass',
+                      toolPermissionProfile: value as typeof form.guardrails.toolPermissionProfile,
+                      toolPermissionMode: legacyModeFromProfile(String(value)),
                     },
                   })
                 }
                 options={[
-                  { label: '常规开发放行 - 推荐', value: 'accept_edits' },
+                  { label: '只读工具 - 仅读取/搜索文件', value: 'read_only' },
+                  { label: '可信工具 - 自动放行', value: 'trusted_tools' },
+                  { label: '破坏性操作确认 - 推荐', value: 'confirm_destructive' },
                   { label: '每次工具调用都确认', value: 'ask_every_time' },
-                  { label: '完全信任并自动放行', value: 'bypass' },
                 ]}
                 style={{ width: '100%' }}
               />
               <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-                常规开发放行会减少 MCP 和文件工具的确认弹窗；完全信任适合沙箱环境。
+                只读模式会移除写入、Bash、HTTP 和 MCP；可信工具适合受控沙箱；破坏性确认适合日常开发。
               </div>
             </div>
 
@@ -1211,4 +1313,10 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
       </Modal>
     </div>
   );
+}
+
+function legacyModeFromProfile(profile: string): 'ask_every_time' | 'accept_edits' | 'bypass' {
+  if (profile === 'ask_every_time') return 'ask_every_time';
+  if (profile === 'trusted_tools' || profile === 'read_only') return 'bypass';
+  return 'accept_edits';
 }

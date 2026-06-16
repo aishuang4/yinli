@@ -11,7 +11,7 @@
  * - 使用 Lucide 线性图标
  */
 
-import { MessageSquare, Bot, Plug, Package, Settings, Sun, Moon } from 'lucide-react';
+import { MessageSquare, Bot, Plug, Package, Settings, Sun, Moon, Activity, FlaskConical } from 'lucide-react';
 import { useAppStore, type ViewType } from '../stores/appStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { cn } from '../utils/cn';
@@ -32,6 +32,16 @@ const NAV_ITEMS: NavItem[] = [
     id: 'chat',
     label: '对话',
     icon: MessageSquare,
+  },
+  {
+    id: 'traces',
+    label: '运行轨迹',
+    icon: Activity,
+  },
+  {
+    id: 'sandbox',
+    label: '测试沙盒',
+    icon: FlaskConical,
   },
   {
     id: 'agents',

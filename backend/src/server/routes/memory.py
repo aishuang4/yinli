@@ -43,6 +43,7 @@ MemoryEventType = Literal[
     "team_message",
     "note",
 ]
+MemoryFactStatus = Literal["active", "outdated"]
 
 
 class MemoryFact(BaseModel):
@@ -52,6 +53,10 @@ class MemoryFact(BaseModel):
     title: str
     content: str
     tags: list[str] = Field(default_factory=list)
+    pinned: bool = False
+    status: MemoryFactStatus = "active"
+    access_count: int = 0
+    last_accessed_at: str | None = None
     created_at: str
     updated_at: str
 
@@ -75,6 +80,7 @@ class AgentMemory(BaseModel):
     facts: list[MemoryFact] = Field(default_factory=list)
     events: list[MemoryEvent] = Field(default_factory=list)
     candidates: list["MemoryCandidate"] = Field(default_factory=list)
+    cleanup_suggestions: list["MemoryCleanupSuggestion"] = Field(default_factory=list)
     main_memory: str = ""
     main_memory_path: str = ""
     updated_at: str
@@ -86,6 +92,18 @@ class MemoryFactCreate(BaseModel):
     title: str
     content: str
     tags: list[str] = Field(default_factory=list)
+    pinned: bool = False
+    status: MemoryFactStatus = "active"
+
+
+class MemoryFactUpdate(BaseModel):
+    """Patch an existing long-term memory fact."""
+
+    title: str | None = None
+    content: str | None = None
+    tags: list[str] | None = None
+    pinned: bool | None = None
+    status: MemoryFactStatus | None = None
 
 
 class MemoryCandidate(BaseModel):
@@ -96,8 +114,11 @@ class MemoryCandidate(BaseModel):
     title: str
     content: str
     tags: list[str] = Field(default_factory=list)
+    category: str = "general"
+    confidence: float = 0
     source_session_id: str | None = None
     status: str = "pending"
+    reject_reason: str = ""
     created_at: str = ""
     updated_at: str = ""
 
@@ -106,6 +127,31 @@ class MainMemoryUpdate(BaseModel):
     """Replace an Agent's editable main MEMORY.md content."""
 
     content: str
+
+
+class MemoryCandidateReject(BaseModel):
+    """Reject a memory candidate with an optional reason."""
+
+    reason: str = ""
+
+
+class MemoryCleanupSuggestion(BaseModel):
+    """A user-approved cleanup action suggested from existing facts."""
+
+    id: str
+    type: Literal["duplicate", "conflict", "stale"]
+    title: str
+    description: str
+    fact_ids: list[str] = Field(default_factory=list)
+    keep_fact_id: str | None = None
+    confidence: float = 0
+
+
+class MemoryCleanupApply(BaseModel):
+    """Apply one cleanup suggestion after user confirmation."""
+
+    suggestion_id: str = Field(alias="suggestionId")
+    keep_fact_id: str | None = Field(default=None, alias="keepFactId")
 
 
 AgentMemory.model_rebuild()
@@ -167,6 +213,7 @@ def _attach_main_memory(memory: AgentMemory) -> AgentMemory:
     ]
     memory.main_memory = content
     memory.main_memory_path = path
+    memory.cleanup_suggestions = _build_memory_cleanup_suggestions(memory)
     return memory
 
 
@@ -202,7 +249,19 @@ def build_agent_memory_system_prompt(agent_id: str | None, *, max_chars: int = 5
 
     memory = _load_memory(agent_id)
     content_parts = [memory.main_memory.strip()]
-    confirmed_facts = sorted(memory.facts, key=lambda item: item.updated_at, reverse=True)[:20]
+    confirmed_facts = sorted(
+        [fact for fact in memory.facts if fact.status == "active"],
+        key=lambda item: (item.pinned, item.updated_at),
+        reverse=True,
+    )[:20]
+    if confirmed_facts:
+        now = _utc_now()
+        used_ids = {fact.id for fact in confirmed_facts}
+        for fact in memory.facts:
+            if fact.id in used_ids:
+                fact.access_count += 1
+                fact.last_accessed_at = now
+        _save_memory(memory)
     if confirmed_facts:
         content_parts.extend([
             "",
@@ -358,7 +417,11 @@ def _build_memory_hook_context(
     metadata: dict[str, Any],
     memory: AgentMemory,
 ) -> str:
-    confirmed_facts = sorted(memory.facts, key=lambda item: item.updated_at, reverse=True)[:20]
+    confirmed_facts = sorted(
+        [fact for fact in memory.facts if fact.status == "active"],
+        key=lambda item: (item.pinned, item.updated_at),
+        reverse=True,
+    )[:20]
     fact_text = "\n".join(
         f"- {fact.title}: {_compact_text(fact.content, 240)}"
         for fact in confirmed_facts
@@ -427,6 +490,8 @@ async def _extract_memory_candidates_with_agents(
                 title=title,
                 content=content,
                 tags=[str(tag) for tag in tags][:8],
+                category=_candidate_category([str(tag) for tag in tags]),
+                confidence=confidence,
             ))
     return candidates
 
@@ -499,6 +564,8 @@ async def maybe_summarize_agent_run(
             title=candidate.title[:120],
             content=_compact_memory_candidate_content(candidate.content, 260),
             tags=candidate.tags[:8],
+            category=candidate.category or _candidate_category(candidate.tags),
+            confidence=candidate.confidence or 0.5,
             source_session_id=session_id,
             status="pending",
             created_at=now,
@@ -553,6 +620,8 @@ def _extract_memory_candidates(
                     title="用户偏好",
                     content=content,
                     tags=["preference", "auto"],
+                    category="preference",
+                    confidence=0.72,
                 ))
 
     identity_patterns = [
@@ -567,6 +636,8 @@ def _extract_memory_candidates(
                     title="Agent 称呼设定",
                     content=content,
                     tags=["identity", "preference", "auto"],
+                    category="identity",
+                    confidence=0.8,
                 ))
 
     if any(keyword in user_text for keyword in ["项目", "后端", "前端", "sqlite", "Agent", "Team", "MCP", "Skills"]):
@@ -577,6 +648,8 @@ def _extract_memory_candidates(
                     f"已处理项目相关需求：{_compact_text(user_text, 160)}"
                 ),
                 tags=["project", "implementation", "auto"],
+                category="project",
+                confidence=0.55,
             ))
 
     skill_ids = metadata.get("skillIds") or []
@@ -585,6 +658,8 @@ def _extract_memory_candidates(
             title="Skill 使用经验",
             content=f"{agent_name} 在本轮任务中成功使用 Skills: {', '.join(map(str, skill_ids))}。",
             tags=["skill", "auto"],
+            category="workflow",
+            confidence=0.62,
         ))
 
     team_name = metadata.get("teamName")
@@ -593,6 +668,8 @@ def _extract_memory_candidates(
             title="Team 协作经验",
             content=f"{agent_name} 在 Team「{team_name}」中完成协作任务：{_compact_text(user_text, 220)}",
             tags=["team", "auto"],
+            category="workflow",
+            confidence=0.58,
         ))
 
     if not candidates and len(user_text) >= 4 and len(assistant_summary) >= 20:
@@ -602,6 +679,8 @@ def _extract_memory_candidates(
                 f"本轮用户请求：{_compact_text(user_text, 160)}"
             ),
             tags=["run", "auto"],
+            category="run",
+            confidence=0.5,
         ))
 
     return candidates[:5]
@@ -625,6 +704,105 @@ def _compact_text(text: str, limit: int) -> str:
 
 def _normalize_memory_key(title: str, content: str) -> str:
     return re.sub(r"\s+", "", f"{title}:{content}".lower())[:240]
+
+
+def _normalize_fact_title(title: str) -> str:
+    return re.sub(r"[\s:：,，。.!！?？\-_*#]+", "", title.lower())[:120]
+
+
+def _parse_memory_time(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _build_memory_cleanup_suggestions(memory: AgentMemory) -> list[MemoryCleanupSuggestion]:
+    """Build conservative cleanup suggestions without mutating memory."""
+    active_facts = [fact for fact in memory.facts if fact.status == "active"]
+    suggestions: list[MemoryCleanupSuggestion] = []
+
+    by_exact: dict[str, list[MemoryFact]] = {}
+    for fact in active_facts:
+        by_exact.setdefault(_normalize_memory_key(fact.title, fact.content), []).append(fact)
+
+    for key, facts in by_exact.items():
+        if len(facts) < 2:
+            continue
+        keep = sorted(facts, key=lambda item: (item.pinned, item.updated_at), reverse=True)[0]
+        suggestions.append(MemoryCleanupSuggestion(
+            id=f"duplicate:{key}",
+            type="duplicate",
+            title="重复记忆",
+            description=f"发现 {len(facts)} 条标题和内容完全一致的记忆，可保留最新/置顶的一条，其余标记过期。",
+            fact_ids=[fact.id for fact in facts],
+            keep_fact_id=keep.id,
+            confidence=0.95,
+        ))
+
+    by_title: dict[str, list[MemoryFact]] = {}
+    for fact in active_facts:
+        normalized_title = _normalize_fact_title(fact.title)
+        if normalized_title:
+            by_title.setdefault(normalized_title, []).append(fact)
+
+    for key, facts in by_title.items():
+        unique_contents = {
+            re.sub(r"\s+", "", fact.content.lower())[:220]
+            for fact in facts
+        }
+        if len(facts) < 2 or len(unique_contents) < 2:
+            continue
+        keep = sorted(facts, key=lambda item: (item.pinned, item.updated_at), reverse=True)[0]
+        suggestions.append(MemoryCleanupSuggestion(
+            id=f"conflict:{key}",
+            type="conflict",
+            title="疑似冲突记忆",
+            description=f"发现 {len(facts)} 条标题相同但内容不同的记忆，需要确认保留哪一条。",
+            fact_ids=[fact.id for fact in facts],
+            keep_fact_id=keep.id,
+            confidence=0.68,
+        ))
+
+    now = datetime.now(timezone.utc)
+    for fact in active_facts:
+        if fact.pinned:
+            continue
+        updated_at = _parse_memory_time(fact.updated_at)
+        if not updated_at:
+            continue
+        if (now - updated_at).days >= 120:
+            last_accessed = _parse_memory_time(fact.last_accessed_at or "")
+            access_note = (
+                "且从未被运行上下文使用"
+                if fact.access_count == 0
+                else f"最近使用于 {fact.last_accessed_at}"
+                if last_accessed
+                else ""
+            )
+            suggestions.append(MemoryCleanupSuggestion(
+                id=f"stale:{fact.id}",
+                type="stale",
+                title="长期未更新记忆",
+                description=f"这条记忆已超过 120 天未更新{access_note}，如已不再适用，可标记为过期。",
+                fact_ids=[fact.id],
+                keep_fact_id=fact.id,
+                confidence=0.72 if fact.access_count == 0 else 0.55,
+            ))
+
+    return sorted(suggestions, key=lambda item: item.confidence, reverse=True)[:12]
+
+
+def _candidate_category(tags: list[str]) -> str:
+    known = {
+        "identity", "preference", "project", "workflow", "risk",
+        "self_improvement", "run", "skill", "team",
+    }
+    for tag in tags:
+        normalized = str(tag).strip().lower()
+        if normalized in known:
+            return normalized
+    return "general"
 
 
 def _write_main_memory(agent_id: str, content: str) -> tuple[str, str]:
@@ -654,6 +832,7 @@ async def get_agent_memory(agent_id: str) -> AgentMemory:
     memory = _load_memory(agent_id)
     memory.events = sorted(memory.events, key=lambda item: item.created_at, reverse=True)
     memory.facts = sorted(memory.facts, key=lambda item: item.updated_at, reverse=True)
+    memory.facts = sorted(memory.facts, key=lambda item: (item.status != "active", not item.pinned))
     return memory
 
 
@@ -673,6 +852,8 @@ async def create_memory_fact(agent_id: str, data: MemoryFactCreate) -> MemoryFac
         title=data.title,
         content=data.content,
         tags=data.tags[:8],
+        pinned=data.pinned,
+        status=data.status,
         created_at=now,
         updated_at=now,
     )
@@ -682,12 +863,93 @@ async def create_memory_fact(agent_id: str, data: MemoryFactCreate) -> MemoryFac
     return fact
 
 
+@router.patch("/{agent_id}/facts/{fact_id}", response_model=MemoryFact)
+async def update_memory_fact(agent_id: str, fact_id: str, data: MemoryFactUpdate) -> MemoryFact:
+    """Patch a long-term memory fact."""
+    memory = _load_memory(agent_id)
+    fact = next((item for item in memory.facts if item.id == fact_id), None)
+    if fact is None:
+        raise HTTPException(status_code=404, detail="Memory fact not found")
+
+    if data.title is not None:
+        fact.title = data.title[:120]
+    if data.content is not None:
+        fact.content = data.content[:1200]
+    if data.tags is not None:
+        fact.tags = data.tags[:8]
+    if data.pinned is not None:
+        fact.pinned = data.pinned
+    if data.status is not None:
+        fact.status = data.status
+    fact.updated_at = _utc_now()
+    _save_memory(memory)
+    return fact
+
+
 @router.delete("/{agent_id}/facts/{fact_id}", status_code=204)
 async def delete_memory_fact(agent_id: str, fact_id: str) -> None:
     """Delete a long-term memory fact."""
     memory = _load_memory(agent_id)
+    original_count = len(memory.facts)
     memory.facts = [fact for fact in memory.facts if fact.id != fact_id]
+    if len(memory.facts) == original_count:
+        raise HTTPException(status_code=404, detail="Memory fact not found")
     _save_memory(memory)
+
+
+@router.post("/{agent_id}/cleanup/apply", response_model=AgentMemory)
+async def apply_memory_cleanup(agent_id: str, data: MemoryCleanupApply) -> AgentMemory:
+    """Apply one cleanup suggestion after explicit user approval."""
+    memory = _load_memory(agent_id)
+    suggestions = _build_memory_cleanup_suggestions(memory)
+    suggestion = next((item for item in suggestions if item.id == data.suggestion_id), None)
+    if suggestion is None:
+        raise HTTPException(status_code=404, detail="Memory cleanup suggestion not found")
+
+    fact_by_id = {fact.id: fact for fact in memory.facts}
+    keep_fact_id = data.keep_fact_id or suggestion.keep_fact_id
+    changed_fact_ids: list[str] = []
+    now = _utc_now()
+
+    if suggestion.type in {"duplicate", "conflict"}:
+        if keep_fact_id not in suggestion.fact_ids:
+            raise HTTPException(status_code=400, detail="keepFactId is not part of this suggestion")
+        for fact_id in suggestion.fact_ids:
+            if fact_id == keep_fact_id:
+                continue
+            fact = fact_by_id.get(fact_id)
+            if fact and fact.status != "outdated":
+                fact.status = "outdated"
+                fact.updated_at = now
+                changed_fact_ids.append(fact.id)
+    elif suggestion.type == "stale":
+        for fact_id in suggestion.fact_ids:
+            fact = fact_by_id.get(fact_id)
+            if fact and fact.status != "outdated":
+                fact.status = "outdated"
+                fact.updated_at = now
+                changed_fact_ids.append(fact.id)
+
+    if not changed_fact_ids:
+        return await get_agent_memory(agent_id)
+
+    memory.events.append(MemoryEvent(
+        id=uuid.uuid4().hex,
+        type="note",
+        title=f"执行记忆清理：{suggestion.title}",
+        content=f"{suggestion.description} 已标记 {len(changed_fact_ids)} 条记忆为过期。",
+        metadata={
+            "source": "memory_cleanup",
+            "suggestionId": suggestion.id,
+            "suggestionType": suggestion.type,
+            "changedFactIds": changed_fact_ids,
+            "keepFactId": keep_fact_id,
+        },
+        created_at=now,
+    ))
+    memory.events = memory.events[-500:]
+    _save_memory(memory)
+    return await get_agent_memory(agent_id)
 
 
 @router.post("/{agent_id}/candidates/{candidate_id}/approve", response_model=AgentMemory)
@@ -716,6 +978,8 @@ async def approve_memory_candidate(agent_id: str, candidate_id: str) -> AgentMem
             title=candidate.title[:120],
             content=candidate.content[:1200],
             tags=candidate.tags[:8],
+            pinned=False,
+            status="active",
             created_at=now,
             updated_at=now,
         ))
@@ -735,10 +999,73 @@ async def approve_memory_candidate(agent_id: str, candidate_id: str) -> AgentMem
     return await get_agent_memory(agent_id)
 
 
+@router.post("/{agent_id}/candidates/merge-duplicates", response_model=AgentMemory)
+async def merge_duplicate_memory_candidates(agent_id: str) -> AgentMemory:
+    """Merge exact duplicate pending candidates and mark duplicates as merged."""
+    pending = list_memory_candidates(agent_id, "pending")
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in pending:
+        grouped.setdefault(_normalize_memory_key(item["title"], item["content"]), []).append(item)
+
+    merged_count = 0
+    for items in grouped.values():
+        if len(items) < 2:
+            continue
+        primary = max(items, key=lambda item: (float(item.get("confidence") or 0), item.get("created_at") or ""))
+        tags: list[str] = []
+        source_session_ids: list[str] = []
+        for item in items:
+            for tag in item.get("tags", []):
+                if tag not in tags:
+                    tags.append(tag)
+            if item.get("source_session_id") and item["source_session_id"] not in source_session_ids:
+                source_session_ids.append(item["source_session_id"])
+
+        primary["tags"] = tags[:8]
+        primary["category"] = primary.get("category") or _candidate_category(tags)
+        primary["confidence"] = max(float(item.get("confidence") or 0) for item in items)
+        primary["reject_reason"] = ""
+        primary["updated_at"] = _utc_now()
+        upsert_memory_candidate(primary)
+        for item in items:
+            if item["id"] == primary["id"]:
+                continue
+            update_memory_candidate_status(
+                agent_id,
+                item["id"],
+                "merged",
+                f"已合并到候选记忆 {primary['id']}",
+            )
+            merged_count += 1
+
+    if merged_count:
+        memory = _load_memory(agent_id)
+        memory.events.append(MemoryEvent(
+            id=uuid.uuid4().hex,
+            type="note",
+            title="合并重复候选记忆",
+            content=f"已合并 {merged_count} 条重复候选记忆。",
+            metadata={"source": "memory_candidate_merge", "mergedCount": merged_count},
+            created_at=_utc_now(),
+        ))
+        memory.events = memory.events[-500:]
+        _save_memory(memory)
+    return await get_agent_memory(agent_id)
+
+
 @router.post("/{agent_id}/candidates/{candidate_id}/reject", response_model=AgentMemory)
-async def reject_memory_candidate(agent_id: str, candidate_id: str) -> AgentMemory:
+async def reject_memory_candidate(
+    agent_id: str,
+    candidate_id: str,
+    data: MemoryCandidateReject | None = None,
+) -> AgentMemory:
     """Reject a pending memory candidate."""
-    updated = update_memory_candidate_status(agent_id, candidate_id, "rejected")
+    updated = update_memory_candidate_status(
+        agent_id,
+        candidate_id,
+        "rejected",
+        (data.reason if data else "")[:300],
+    )
     if updated is None:
         raise HTTPException(status_code=404, detail="Memory candidate not found")
     return await get_agent_memory(agent_id)

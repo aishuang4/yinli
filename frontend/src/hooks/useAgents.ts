@@ -49,6 +49,7 @@ interface AgentApiData {
     primary: string;
     fallback: string[];
     temperature: number;
+    top_p?: number;
     max_tokens: number;
   };
   mcpTools: string[];
@@ -73,6 +74,14 @@ interface AgentApiData {
     human_approval: boolean;
     tool_permission_mode?: 'ask_every_time' | 'accept_edits' | 'bypass';
     toolPermissionMode?: 'ask_every_time' | 'accept_edits' | 'bypass';
+    tool_permission_profile?: 'read_only' | 'trusted_tools' | 'confirm_destructive' | 'ask_every_time';
+    toolPermissionProfile?: 'read_only' | 'trusted_tools' | 'confirm_destructive' | 'ask_every_time';
+    execution_backend?: 'local' | 'docker';
+    executionBackend?: 'local' | 'docker';
+    docker_image?: string;
+    dockerImage?: string;
+    persistent_sandbox?: boolean;
+    persistentSandbox?: boolean;
     timeout_seconds: number;
   };
   status: string;
@@ -94,6 +103,7 @@ function mapApiAgent(api: AgentApiData): Agent {
       primary: api.modelConfig.primary,
       fallback: api.modelConfig.fallback,
       temperature: api.modelConfig.temperature,
+      topP: api.modelConfig.top_p ?? 0.8,
       maxTokens: api.modelConfig.max_tokens,
     },
     mcpTools: api.mcpTools,
@@ -117,6 +127,12 @@ function mapApiAgent(api: AgentApiData): Agent {
       networkEnabled: api.guardrails.network_enabled,
       humanApproval: api.guardrails.human_approval,
       toolPermissionMode: api.guardrails.tool_permission_mode ?? api.guardrails.toolPermissionMode ?? 'accept_edits',
+      toolPermissionProfile: api.guardrails.tool_permission_profile
+        ?? api.guardrails.toolPermissionProfile
+        ?? profileFromLegacyToolMode(api.guardrails.tool_permission_mode ?? api.guardrails.toolPermissionMode),
+      executionBackend: api.guardrails.execution_backend ?? api.guardrails.executionBackend ?? 'local',
+      dockerImage: api.guardrails.docker_image ?? api.guardrails.dockerImage ?? 'python:3.11-slim',
+      persistentSandbox: api.guardrails.persistent_sandbox ?? api.guardrails.persistentSandbox ?? false,
       timeoutSeconds: api.guardrails.timeout_seconds,
     },
     status: api.status as Agent['status'],
@@ -158,6 +174,7 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
       primary: data.modelConfig.primary,
       fallback: data.modelConfig.fallback,
       temperature: data.modelConfig.temperature,
+      top_p: data.modelConfig.topP,
       max_tokens: data.modelConfig.maxTokens,
     };
   }
@@ -169,11 +186,21 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
       network_enabled: data.guardrails.networkEnabled,
       human_approval: data.guardrails.humanApproval,
       tool_permission_mode: data.guardrails.toolPermissionMode,
+      tool_permission_profile: data.guardrails.toolPermissionProfile,
+      execution_backend: data.guardrails.executionBackend,
+      docker_image: data.guardrails.dockerImage,
+      persistent_sandbox: data.guardrails.persistentSandbox,
       timeout_seconds: data.guardrails.timeoutSeconds,
     };
   }
 
   return result;
+}
+
+function profileFromLegacyToolMode(mode: string | undefined): 'read_only' | 'trusted_tools' | 'confirm_destructive' | 'ask_every_time' {
+  if (mode === 'ask_every_time') return 'ask_every_time';
+  if (mode === 'bypass') return 'trusted_tools';
+  return 'confirm_destructive';
 }
 
 /**
