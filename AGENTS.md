@@ -23,6 +23,8 @@ uv run pytest test/test_example.py::test_always_passes           # 运行单个�
 # 前端（在 frontend/ 目录）
 npm install
 npm run dev      # Vite dev server
+npm run electron:dev      # 开发模式启动 Electron 桌面窗口
+npm run electron:compile  # 编译 Electron 主进程和 preload
 npm run build    # tsc -b && vite build
 npm run lint     # eslint
 ```
@@ -70,6 +72,7 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 ## 约定
 
 - 代码注释和文档用中文，技术术语和标识符保持英文。
+- TODO 文档和待办事项统一用中文编写，便于团队协作和后续交接。
 - 文件均带中文 docstring 说明职责，遵循既有风格。
 - 前端遵循若干约定（见 `App.tsx` 注释）：派生状态不用 effect、对象映射表代替 switch、初始化只做一次。
 - 项目现状与待办见 `docs/project-progress-handoff.md` 和 `docs/project-todo.md`；设计文档见 `docs/agent-workstation-design.md` 与 `docs/agent-workstation-frontend-design.md`。

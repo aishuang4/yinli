@@ -1,6 +1,6 @@
 # Agent Workstation TODO
 
-> Last updated: 2026-06-15
+> Last updated: 2026-06-17
 >
 > This file is the working TODO for the project. Use it as the source of truth
 > for upcoming implementation order. When a feature is completed, update the
@@ -37,6 +37,14 @@
   - Implemented 2026-06-14: repeated calls remain visible, duplicated names are normalized, panels are height-limited, copy actions were added, and failed status is highlighted.
 
 ## P1. Portability And Configuration
+
+- [x] Electron 开发期桌面窗口支持
+  - 增加专用开发命令，在后端和 Vite 前端启动后拉起 Electron 桌面壳。
+  - 将 `electron/main.ts` 和 `electron/preload.ts` 编译到 `electron/dist`，并纳入开发启动链路。
+  - 确保 Electron 窗口加载 Vite 开发服务，使用自定义 `TitleBar`，并保留 DevTools 方便桌面端调试。
+  - 按需接入 `window.electronAPI`，让桌面模式可以读取后端地址、应用版本和平台信息，减少硬编码假设。
+  - 当前范围只做开发期桌面窗口支持。生产打包、内置 Python 运行时、安装器、签名和自动更新等能力，等核心开发稳定后再处理。
+  - 实现于 2026-06-17：新增 `npm run electron:dev` 和 `npm run electron:compile`，开发脚本会复用或启动后端/Vite 服务，编译 Electron 主进程后拉起桌面窗口；前端启动时会读取 Electron preload 暴露的后端地址和版本号。
 
 - [x] Agent import/export
   - Export Agent config as JSON.
