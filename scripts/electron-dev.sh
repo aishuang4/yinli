@@ -14,6 +14,25 @@ FRONTEND_URL="http://localhost:5173"
 BACKEND_PID=""
 FRONTEND_PID=""
 
+# Electron 42 / Vite 8 需要 Node 20.19+。开发机若默认是 Node 18，
+# 优先切 nvm Node 24；Codex 环境下再回退到捆绑 Node。
+export NVM_DIR="$HOME/.nvm"
+if [ -s "$NVM_DIR/nvm.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$NVM_DIR/nvm.sh"
+  nvm use 24 >/dev/null 2>&1 || true
+fi
+
+if command -v node >/dev/null 2>&1; then
+  NODE_MAJOR="$(node -p "Number(process.versions.node.split('.')[0])")"
+else
+  NODE_MAJOR=0
+fi
+
+if [ "$NODE_MAJOR" -lt 20 ] && [ -x "$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node" ]; then
+  export PATH="$HOME/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH"
+fi
+
 cleanup() {
   if [ -n "$BACKEND_PID" ]; then
     kill "$BACKEND_PID" 2>/dev/null || true
