@@ -878,6 +878,10 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
   const [busyFactId, setBusyFactId] = useState<string | null>(null);
   const [editingFactId, setEditingFactId] = useState<string | null>(null);
   const [factDraft, setFactDraft] = useState({ title: '', content: '', tags: '' });
+  const [rejectCandidateId, setRejectCandidateId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [deleteFactId, setDeleteFactId] = useState<string | null>(null);
+  const [cleanupConfirm, setCleanupConfirm] = useState<{ suggestionId: string; keepFactId?: string | null } | null>(null);
 
   useEffect(() => {
     setMainDraft(memory?.main_memory || '');
@@ -898,10 +902,7 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
     }
   };
 
-  const resolveCandidate = async (candidateId: string, action: 'approve' | 'reject') => {
-    const reason = action === 'reject'
-      ? window.prompt('拒绝原因（可选）：') ?? ''
-      : '';
+  const resolveCandidate = async (candidateId: string, action: 'approve' | 'reject', reason = '') => {
     setBusyCandidateId(candidateId);
     try {
       const response = await fetch(`/api/agent-memory/${agent.id}/candidates/${candidateId}/${action}`, {
@@ -913,6 +914,10 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
       await refresh();
     } finally {
       setBusyCandidateId(null);
+      if (action === 'reject') {
+        setRejectCandidateId(null);
+        setRejectReason('');
+      }
     }
   };
 
@@ -968,7 +973,6 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
   };
 
   const deleteFact = async (factId: string) => {
-    if (!window.confirm('确定删除这条记忆事实吗？')) return;
     setBusyFactId(factId);
     try {
       const response = await fetch(`/api/agent-memory/${agent.id}/facts/${factId}`, {
@@ -978,11 +982,11 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
       await refresh();
     } finally {
       setBusyFactId(null);
+      setDeleteFactId(null);
     }
   };
 
   const applyCleanupSuggestion = async (suggestionId: string, keepFactId?: string | null) => {
-    if (!window.confirm('确认执行这条记忆清理建议吗？相关记忆会被标记为过期，不会被删除。')) return;
     setBusyCleanupId(suggestionId);
     try {
       const response = await fetch(`/api/agent-memory/${agent.id}/cleanup/apply`, {
@@ -994,6 +998,7 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
       await refresh();
     } finally {
       setBusyCleanupId(null);
+      setCleanupConfirm(null);
     }
   };
 
@@ -1079,7 +1084,10 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
                 <Button
                   size="small"
                   loading={busyCandidateId === candidate.id}
-                  onClick={() => resolveCandidate(candidate.id, 'reject')}
+                  onClick={() => {
+                    setRejectCandidateId(candidate.id);
+                    setRejectReason('');
+                  }}
                 >
                   忽略
                 </Button>
@@ -1124,7 +1132,7 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
                 <Button
                   size="small"
                   loading={busyCleanupId === suggestion.id}
-                  onClick={() => void applyCleanupSuggestion(suggestion.id, suggestion.keep_fact_id)}
+                  onClick={() => setCleanupConfirm({ suggestionId: suggestion.id, keepFactId: suggestion.keep_fact_id })}
                 >
                   确认清理
                 </Button>
@@ -1215,7 +1223,7 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
                         danger
                         icon={<Trash2 size={13} />}
                         loading={busyFactId === fact.id}
-                        onClick={() => void deleteFact(fact.id)}
+                        onClick={() => setDeleteFactId(fact.id)}
                         aria-label="删除"
                       />
                     </div>
@@ -1265,6 +1273,62 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
           )}
         </div>
       </div>
+
+      <Modal
+        title="忽略候选记忆"
+        open={Boolean(rejectCandidateId)}
+        onCancel={() => {
+          setRejectCandidateId(null);
+          setRejectReason('');
+        }}
+        onOk={() => rejectCandidateId && void resolveCandidate(rejectCandidateId, 'reject', rejectReason)}
+        okText="确认忽略"
+        cancelText="取消"
+        confirmLoading={Boolean(rejectCandidateId && busyCandidateId === rejectCandidateId)}
+        width={420}
+      >
+        <div className="space-y-3">
+          <div className="text-sm text-[var(--color-text-secondary)]">
+            可填写忽略原因，便于后续审查记忆候选。
+          </div>
+          <Input.TextArea
+            value={rejectReason}
+            onChange={(event) => setRejectReason(event.target.value)}
+            rows={4}
+            placeholder="忽略原因（可选）"
+          />
+        </div>
+      </Modal>
+
+      <Modal
+        title="删除记忆事实"
+        open={Boolean(deleteFactId)}
+        onCancel={() => setDeleteFactId(null)}
+        onOk={() => deleteFactId && void deleteFact(deleteFactId)}
+        okText="确认删除"
+        cancelText="取消"
+        confirmLoading={Boolean(deleteFactId && busyFactId === deleteFactId)}
+        width={420}
+      >
+        <div className="text-sm text-[var(--color-text-secondary)]">
+          删除后这条已确认事实会从 Agent 记忆中移除。这个操作不会影响主记忆文件中的其他内容。
+        </div>
+      </Modal>
+
+      <Modal
+        title="执行记忆清理"
+        open={Boolean(cleanupConfirm)}
+        onCancel={() => setCleanupConfirm(null)}
+        onOk={() => cleanupConfirm && void applyCleanupSuggestion(cleanupConfirm.suggestionId, cleanupConfirm.keepFactId)}
+        okText="确认清理"
+        cancelText="取消"
+        confirmLoading={Boolean(cleanupConfirm && busyCleanupId === cleanupConfirm.suggestionId)}
+        width={460}
+      >
+        <div className="text-sm text-[var(--color-text-secondary)]">
+          相关记忆会被标记为过期，不会被删除。过期记忆仍可在面板中查看，但不会再注入 Agent 运行上下文。
+        </div>
+      </Modal>
     </div>
   );
 }

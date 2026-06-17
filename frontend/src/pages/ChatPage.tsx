@@ -630,9 +630,16 @@ export function ChatPage() {
             <h2 className="text-base font-medium text-[var(--color-text-primary)]">
               历史对话
             </h2>
-            <Button size="small" type="primary" onClick={handleNewSession} disabled={state.isStreaming}>
+            <button
+              type="button"
+              className="icon-button h-8 w-8 rounded-md bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-all duration-300 ease-out hover:-translate-y-0.5 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              onClick={handleNewSession}
+              disabled={state.isStreaming}
+              aria-label="新建会话"
+              title="新建会话"
+            >
               <Plus size={14} />
-            </Button>
+            </button>
           </div>
           <div className="text-xs text-[var(--color-text-tertiary)]">
             {sessions.length} 个会话
@@ -795,9 +802,9 @@ export function ChatPage() {
                 )}
               </div>
             </div>
-            <Button
-              type="text"
-              className={`absolute bottom-4 left-1/2 h-9 w-9 -translate-x-1/2 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-primary)]/70 p-0 text-[var(--color-text-secondary)] shadow-sm backdrop-blur transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] ${
+            <button
+              type="button"
+              className={`icon-button absolute bottom-4 left-1/2 h-9 w-9 -translate-x-1/2 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-primary)]/70 p-0 text-[var(--color-text-secondary)] shadow-sm backdrop-blur transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] ${
                 showScrollToBottom
                   ? 'pointer-events-auto opacity-100'
                   : 'pointer-events-none translate-y-2 opacity-0'
@@ -807,7 +814,7 @@ export function ChatPage() {
               aria-hidden={!showScrollToBottom}
             >
               <ChevronDown size={16} />
-            </Button>
+            </button>
           </div>
 
           <div className="px-5 pb-5 pt-2">
@@ -941,12 +948,16 @@ export function ChatPage() {
                 深度思考
               </Button>
               <div className="ml-auto flex items-center gap-2">
-                <Button
+                <button
+                  type="button"
+                  className="icon-button h-8 w-8 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
                   onClick={() => imageInputRef.current?.click()}
                   disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection) || imageAttachments.length >= 4}
+                  aria-label="上传图片"
+                  title="上传图片"
                 >
                   <ImagePlus size={16} />
-                </Button>
+                </button>
                 {state.isStreaming ? (
                   <Button danger onClick={abort}>
                     <Square size={16} />
@@ -1669,9 +1680,15 @@ function TeamActivitySidebar({
             <span>{getTeamActivityStatusText(activity.status)}</span>
           </div>
         </div>
-        <Button size="small" type="text" onClick={onClose}>
+        <button
+          type="button"
+          className="icon-button h-8 w-8 rounded-md text-[var(--color-text-secondary)] transition-all duration-300 ease-out hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+          onClick={onClose}
+          aria-label="关闭详情"
+          title="关闭详情"
+        >
           <X size={14} />
-        </Button>
+        </button>
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-auto px-4 pb-4">

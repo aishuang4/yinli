@@ -52,6 +52,28 @@ body {
     transform var(--duration-normal) var(--ease-out);
 }
 
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  appearance: none;
+  padding: 0;
+  line-height: 1;
+  font: inherit;
+  cursor: pointer;
+}
+
+.icon-button:disabled {
+  cursor: not-allowed;
+}
+
+.icon-button > svg,
+.icon-button > .lucide {
+  display: block;
+  flex: 0 0 auto;
+  margin: auto;
+}
+
 .spark-btn svg,
 .spark-btn .lucide,
 .ant-btn svg,
