@@ -6,6 +6,14 @@
     "outDir": "./dist",
     "rootDir": ".",
     "strict": true,
+    "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": {
+      "electron": ["../frontend/node_modules/electron"]
+    },
+    "ignoreDeprecations": "6.0",
+    "typeRoots": ["../frontend/node_modules/@types"],
+    "types": ["node"],
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,

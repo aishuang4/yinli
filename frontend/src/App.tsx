@@ -47,6 +47,9 @@ export function App() {
   const currentView = useAppStore((s) => s.currentView);
   const setBackendConnected = useAppStore((s) => s.setBackendConnected);
   const theme = useSettingsStore((s) => s.theme);
+  const backendUrl = useSettingsStore((s) => s.backendUrl);
+  const setBackendUrl = useSettingsStore((s) => s.setBackendUrl);
+  const setAppVersion = useSettingsStore((s) => s.setAppVersion);
 
   // 同步主题到 DOM（useLayoutEffect 确保在绘制前应用，避免闪烁）
   useLayoutEffect(() => {
@@ -54,13 +57,42 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
+    const electronAPI = window.electronAPI;
+    if (!electronAPI) {
+      return;
+    }
+
+    let mounted = true;
+
+    const loadDesktopRuntimeInfo = async () => {
+      const [runtimeBackendUrl, runtimeVersion] = await Promise.all([
+        electronAPI.getBackendUrl(),
+        electronAPI.getAppVersion(),
+      ]);
+
+      if (!mounted) {
+        return;
+      }
+
+      setBackendUrl(runtimeBackendUrl);
+      setAppVersion(runtimeVersion);
+    };
+
+    void loadDesktopRuntimeInfo();
+    return () => {
+      mounted = false;
+    };
+  }, [setAppVersion, setBackendUrl]);
+
+  useEffect(() => {
     let mounted = true;
 
     const checkBackend = async () => {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 3000);
+      const healthUrl = window.electronAPI ? `${backendUrl}/api/health` : '/api/health';
       try {
-        const response = await fetch('/api/health', {
+        const response = await fetch(healthUrl, {
           signal: controller.signal,
           cache: 'no-store',
         });
@@ -82,7 +114,7 @@ export function App() {
       mounted = false;
       window.clearInterval(interval);
     };
-  }, [setBackendConnected]);
+  }, [backendUrl, setBackendConnected]);
 
   // 根据当前视图获取页面组件
   const PageComponent = VIEW_PAGES[currentView] ?? ChatPage;

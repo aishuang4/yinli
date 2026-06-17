@@ -23,6 +23,8 @@ uv run pytest test/test_example.py::test_always_passes           # 运行单个�
 # 前端（在 frontend/ 目录）
 npm install
 npm run dev      # Vite dev server
+npm run electron:dev      # 开发模式启动 Electron 桌面窗口
+npm run electron:compile  # 编译 Electron 主进程和 preload
 npm run build    # tsc -b && vite build
 npm run lint     # eslint
 ```

@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron:compile": "tsc -p ../electron/tsconfig.json",
+    "electron:dev": "../scripts/electron-dev.sh"
   },
   "dependencies": {
     "@agentscope-ai/chat": "^1.1.67",
