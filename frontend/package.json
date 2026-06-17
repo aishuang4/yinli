@@ -2,14 +2,20 @@
   "name": "frontend",
   "private": true,
   "version": "0.0.0",
+  "description": "AgentScope 2.0 desktop multi-agent workstation",
+  "author": "Agent Workstation",
   "type": "module",
+  "main": "electron-dist/main.js",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "electron:compile": "tsc -p ../electron/tsconfig.json",
-    "electron:dev": "../scripts/electron-dev.sh"
+    "electron:compile": "tsc -p ../electron/tsconfig.json && node ../scripts/prepare-electron-dist.mjs",
+    "electron:dev": "../scripts/electron-dev.sh",
+    "electron:pack": "../scripts/electron-package.sh",
+    "electron:build:mac": "../scripts/electron-package.sh mac",
+    "electron:build:win": "../scripts/electron-package.sh win"
   },
   "dependencies": {
     "@agentscope-ai/chat": "^1.1.67",

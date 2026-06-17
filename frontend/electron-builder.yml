@@ -1,0 +1,43 @@
+appId: com.agentworkstation.desktop
+productName: Agent Workstation
+artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
+directories:
+  output: ../release
+files:
+  - dist/**/*
+  - electron-dist/**/*
+  - package.json
+extraResources:
+  - from: ../backend
+    to: backend
+    filter:
+      - src/**/*
+      - pyproject.toml
+      - uv.lock
+      - README.md
+      - .env.example
+      - '!**/__pycache__/**'
+      - '!**/*.pyc'
+      - '!data/**'
+      - '!.venv/**'
+      - '!.env'
+asar: true
+mac:
+  identity: null
+  target:
+    - dmg
+    - zip
+  category: public.app-category.developer-tools
+  hardenedRuntime: false
+  gatekeeperAssess: false
+win:
+  target:
+    - nsis
+  verifyUpdateCodeSignature: false
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+publish: null

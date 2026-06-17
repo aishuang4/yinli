@@ -170,6 +170,21 @@
 
 ## P7. Longer-Term Features
 
+- [x] Electron macOS/Windows 内测打包
+  - 参考 `docs/electron-packaging-plan.md` 完成第一阶段内测打包。
+  - 使用 `electron-builder` 输出 macOS `.dmg`/`.zip` 和 Windows `.exe` 安装包。
+  - 先允许依赖本机 Python/uv 或项目内 `.venv`，重点验证桌面壳、前端、后端健康检查和核心业务流程能跑通。
+  - 验证 SQLite、系统设置、Agent、Team、MCP、Skills、历史对话在桌面端重启后不丢失。
+  - 实现于 2026-06-17：新增 `electron-builder` 配置和 `npm run electron:pack` / `electron:build:mac` / `electron:build:win` 命令，内测包会携带前端产物、Electron 主进程和后端源码资源；生产模式后端数据写入 Electron `userData` 目录。
+  - 验证记录：`npm run build`、`npm run electron:compile`、脚本语法检查已通过；`electron-builder --dir` 在当前沙箱环境卡在 packaging 阶段，需要在本机终端或 CI 中继续验证真实产物。
+
+- [ ] Electron 正式打包与后端运行时内置
+  - 将 Python 后端打成 macOS/Windows 平台相关可执行文件，供 Electron 生产模式启动。
+  - 将运行时数据目录迁移到 Electron `userData` 路径，避免写入应用安装目录。
+  - 补齐后端异常展示、日志路径、子进程退出清理、安装包资源过滤和平台差异处理。
+  - 正式发布前再处理 macOS notarization、Windows 代码签名和安装包体积优化。
+  - 部分实现于 2026-06-17：新增 `backend/src/server/desktop_entry.py` 和 `scripts/build-backend-desktop.sh`，Electron 生产模式会优先启动内置 `backend-server` / `backend-server.exe`，找不到时回退到内测源码启动。仍需在 macOS 与 Windows 真机分别验证 PyInstaller 产物、签名、公证和安装包行为。
+
 - [ ] Milvus or vector database integration.
 - [ ] Memory decay and automatic memory reorganization.
   - Partial 2026-06-15: accepted memory facts now track `access_count` and `last_accessed_at` whenever they are injected into an Agent run. Cleanup suggestions use this signal to identify stale low-use facts; automatic reorganization remains behind user approval.
