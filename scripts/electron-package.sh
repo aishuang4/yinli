@@ -13,6 +13,7 @@ TARGET="${1:-}"
 
 export NVM_DIR="$HOME/.nvm"
 if [ -s "$NVM_DIR/nvm.sh" ]; then
+  unset npm_config_prefix
   # shellcheck source=/dev/null
   . "$NVM_DIR/nvm.sh"
   nvm use 24 >/dev/null 2>&1 || true

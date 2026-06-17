@@ -18,6 +18,7 @@ FRONTEND_PID=""
 # 优先切 nvm Node 24；Codex 环境下再回退到捆绑 Node。
 export NVM_DIR="$HOME/.nvm"
 if [ -s "$NVM_DIR/nvm.sh" ]; then
+  unset npm_config_prefix
   # shellcheck source=/dev/null
   . "$NVM_DIR/nvm.sh"
   nvm use 24 >/dev/null 2>&1 || true
