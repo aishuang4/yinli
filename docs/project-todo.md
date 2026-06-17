@@ -188,6 +188,11 @@
 - [ ] Milvus or vector database integration.
 - [ ] Memory decay and automatic memory reorganization.
   - Partial 2026-06-15: accepted memory facts now track `access_count` and `last_accessed_at` whenever they are injected into an Agent run. Cleanup suggestions use this signal to identify stale low-use facts; automatic reorganization remains behind user approval.
+- [ ] Dynamic Workflows 概念评估与技术预研。
+  - 参考 `docs/dynamic-workflows-plan.md`，后续评估是否引入动态编排模式。
+  - 暂不进入实现；先观察 Agent、Team、Trace、Sandbox、Electron 打包稳定性。
+  - 决策时重点比较三种路线：只增强 Team Runtime、先做固定 Workflow、直接做 Dynamic Workflow。
+  - 如果决定实现，第一版优先放在 Chat 的“动态编排模式”，复用现有 `run_events`、HITL、Team Activity 和 Sandbox。
 - [ ] Community Agent and Team template marketplace.
 - [ ] Multi-language UI support.
 - [ ] Desktop auto-update flow.
