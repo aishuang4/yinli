@@ -10,6 +10,7 @@
 
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
 
 /** 当前是否处于开发模式（Vite dev server 运行中） */
@@ -48,7 +49,7 @@ function createMainWindow(): void {
     mainWindow.loadURL(DEV_SERVER_URL);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../frontend/dist/index.html'));
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
   // 外部链接用系统浏览器打开
@@ -73,13 +74,33 @@ function startPythonBackend(): void {
     return;
   }
 
-  const backendPath = path.join(__dirname, '../backend');
-  const pythonBin = path.join(backendPath, '.venv/bin/python');
+  const backendProcess = resolvePackagedBackendProcess();
+  if (!backendProcess) {
+    console.error('[Electron] No packaged backend entry found');
+    return;
+  }
 
-  pythonProcess = spawn(pythonBin, ['-m', 'uvicorn', 'src.server.main:app', '--port', '8765'], {
-    cwd: backendPath,
-    env: { ...process.env, PYTHONUNBUFFERED: '1' },
+  const userDataPath = app.getPath('userData');
+  const dataPath = path.join(userDataPath, 'data');
+  const logsPath = path.join(userDataPath, 'logs');
+  fs.mkdirSync(dataPath, { recursive: true });
+  fs.mkdirSync(logsPath, { recursive: true });
+
+  const env = {
+    ...process.env,
+    PYTHONUNBUFFERED: '1',
+    AGENT_WORKSTATION_DESKTOP_MODE: '1',
+    AGENT_WORKSTATION_DATA_DIR: userDataPath,
+    AGENT_WORKSTATION_DATABASE_URL: `sqlite+aiosqlite:///${path.join(dataPath, 'agent_workstation.db')}`,
+    AGENT_WORKSTATION_PORT: '8765',
+    AGENT_WORKSTATION_CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000","null","file://"]',
+  };
+
+  pythonProcess = spawn(backendProcess.command, backendProcess.args, {
+    cwd: backendProcess.cwd,
+    env,
     stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
   });
 
   pythonProcess.stdout?.on('data', (data: Buffer) => {
@@ -94,6 +115,55 @@ function startPythonBackend(): void {
     console.log(`[Python] Process exited with code ${code}`);
     pythonProcess = null;
   });
+}
+
+interface BackendProcessConfig {
+  command: string;
+  args: string[];
+  cwd: string;
+}
+
+function resolvePackagedBackendProcess(): BackendProcessConfig | null {
+  const resourcesPath = process.resourcesPath;
+  const executableName = process.platform === 'win32' ? 'backend-server.exe' : 'backend-server';
+  const executableCandidates = [
+    path.join(resourcesPath, 'backend-server', executableName),
+    path.join(resourcesPath, executableName),
+  ];
+
+  for (const candidate of executableCandidates) {
+    if (fs.existsSync(candidate)) {
+      return {
+        command: candidate,
+        args: ['--host', '127.0.0.1', '--port', '8765'],
+        cwd: path.dirname(candidate),
+      };
+    }
+  }
+
+  const backendPath = path.join(resourcesPath, 'backend');
+  if (!fs.existsSync(backendPath)) {
+    return null;
+  }
+
+  const venvPython = process.platform === 'win32'
+    ? path.join(backendPath, '.venv', 'Scripts', 'python.exe')
+    : path.join(backendPath, '.venv', 'bin', 'python');
+
+  if (fs.existsSync(venvPython)) {
+    return {
+      command: venvPython,
+      args: ['-m', 'uvicorn', 'src.server.main:app', '--host', '127.0.0.1', '--port', '8765'],
+      cwd: backendPath,
+    };
+  }
+
+  const uvCommand = process.platform === 'win32' ? 'uv.cmd' : 'uv';
+  return {
+    command: uvCommand,
+    args: ['run', 'python', '-m', 'uvicorn', 'src.server.main:app', '--host', '127.0.0.1', '--port', '8765'],
+    cwd: backendPath,
+  };
 }
 
 /**

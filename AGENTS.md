@@ -25,8 +25,14 @@ npm install
 npm run dev      # Vite dev server
 npm run electron:dev      # 开发模式启动 Electron 桌面窗口
 npm run electron:compile  # 编译 Electron 主进程和 preload
+npm run electron:pack     # 当前平台 Electron 内测打包
+npm run electron:build:mac  # 生成 macOS 内测包
+npm run electron:build:win  # 生成 Windows 内测包
 npm run build    # tsc -b && vite build
 npm run lint     # eslint
+
+# 后端桌面端可执行文件（在目标平台分别执行）
+./scripts/build-backend-desktop.sh
 ```
 
 首次运行需 `cp backend/.env.example backend/.env` 并填入 `AGENT_WORKSTATION_DASHSCOPE_API_KEY`。环境要求：Node >= 20（dev.sh 优先用 nvm 切到 24）、Python >= 3.11、uv。

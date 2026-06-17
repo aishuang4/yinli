@@ -87,4 +87,4 @@ echo "编译 Electron 主进程..."
 npm run electron:compile
 
 echo "启动 Electron..."
-NODE_ENV=development ./node_modules/.bin/electron ../electron/dist/main.js
+NODE_ENV=development ./node_modules/.bin/electron electron-dist/main.js

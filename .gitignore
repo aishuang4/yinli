@@ -6,6 +6,11 @@ node_modules/
 frontend/dist/
 frontend/.vite/
 electron/dist/
+frontend/electron-dist/
+release/
+backend/build/
+backend/dist/
+backend/*.spec
 
 # IDE
 .vscode/
