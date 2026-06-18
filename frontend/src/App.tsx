@@ -139,7 +139,9 @@ export function App() {
 function nextCachedViews(current: ViewType[], activeView: ViewType): ViewType[] {
   const keepAliveViews = Array.from(KEEP_ALIVE_VIEWS);
   if (!CACHEABLE_VIEWS.has(activeView)) {
-    return keepAliveViews;
+    return KEEP_ALIVE_VIEWS.has(activeView)
+      ? keepAliveViews
+      : [...keepAliveViews, activeView];
   }
 
   const recentViews = current
@@ -164,14 +166,14 @@ interface CachedPagesProps {
 
 function CachedPages({ activeView, cachedViews }: CachedPagesProps) {
   return (
-    <div className="h-full min-h-0">
+    <div className="h-full min-h-0 overflow-hidden">
       {cachedViews.map((view) => {
         const PageComponent = VIEW_PAGES[view] ?? ChatPage;
         const active = view === activeView;
         return (
           <section
             key={view}
-            className="h-full min-h-0"
+            className="h-full min-h-0 overflow-hidden"
             style={{ display: active ? 'block' : 'none' }}
             aria-hidden={!active}
           >
