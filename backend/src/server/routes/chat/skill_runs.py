@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.server.routes.skills import Skill, get_installed_skill
-from src.storage.database import get_active_skill_run, upsert_skill_run
+from src.storage.database import get_active_skill_run, get_skill_run_by_pending_interaction, upsert_skill_run
 
 
 ACTIVE_STATUSES = {"active", "waiting_user"}
@@ -17,6 +17,14 @@ def get_active_session_skill_run(session_id: str, agent_id: str) -> dict[str, An
     if not session_id or not agent_id:
         return None
     return get_active_skill_run(session_id, agent_id)
+
+
+def get_skill_run_for_pending_interaction(interaction_id: str) -> dict[str, Any] | None:
+    """Return the SkillRun that was waiting on a specific HITL interaction."""
+
+    if not interaction_id:
+        return None
+    return get_skill_run_by_pending_interaction(interaction_id)
 
 
 def start_or_resume_skill_run(

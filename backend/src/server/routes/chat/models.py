@@ -77,6 +77,22 @@ class ChatToolRun(BaseModel):
     status: str = "calling"
 
 
+class ChatModelCacheRun(BaseModel):
+    """模型厂商侧 Prompt Cache 统计。"""
+
+    id: str
+    model_name: str = Field(default="", alias="modelName")
+    input_tokens: int = Field(default=0, alias="inputTokens")
+    output_tokens: int = Field(default=0, alias="outputTokens")
+    cache_creation_input_tokens: int = Field(default=0, alias="cacheCreationInputTokens")
+    cache_input_tokens: int = Field(default=0, alias="cacheInputTokens")
+    cache_hit_rate: float = Field(default=0, alias="cacheHitRate")
+    estimated_saved_input_tokens: int = Field(default=0, alias="estimatedSavedInputTokens")
+    created_at: str = Field(alias="createdAt")
+
+    model_config = {"populate_by_name": True}
+
+
 class ChatTeamActivity(BaseModel):
     """Team 协作活动记录"""
 
@@ -115,6 +131,7 @@ class StoredChatMessage(BaseModel):
     tool_calls: list[ChatToolRun] = Field(default_factory=list, alias="toolCalls")
     skill_calls: list[ChatSkillRun] = Field(default_factory=list, alias="skillCalls")
     team_activities: list[ChatTeamActivity] = Field(default_factory=list, alias="teamActivities")
+    model_caches: list[ChatModelCacheRun] = Field(default_factory=list, alias="modelCaches")
     created_at: str
 
     model_config = {"populate_by_name": True}

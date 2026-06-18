@@ -212,6 +212,7 @@ def ensure_db() -> None:
                     tool_calls TEXT NOT NULL DEFAULT '[]',
                     skill_calls TEXT NOT NULL,
                     team_activities TEXT NOT NULL,
+                    model_caches TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
                     sort_order INTEGER NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
@@ -289,6 +290,7 @@ def ensure_db() -> None:
             """)
             _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "memory_facts", "pinned", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "memory_facts", "status", "TEXT NOT NULL DEFAULT 'active'")
             _ensure_column(conn, "memory_facts", "access_count", "INTEGER NOT NULL DEFAULT 0")
@@ -771,8 +773,25 @@ def get_active_skill_run(session_id: str, agent_id: str) -> dict[str, Any] | Non
             """,
             (session_id, agent_id),
         ).fetchone()
-    if row is None:
-        return None
+    return _skill_run_from_row(row) if row else None
+
+
+def get_skill_run_by_pending_interaction(interaction_id: str) -> dict[str, Any] | None:
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM skill_runs
+            WHERE pending_interaction_id = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (interaction_id,),
+        ).fetchone()
+    return _skill_run_from_row(row) if row else None
+
+
+def _skill_run_from_row(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
         "sessionId": row["session_id"],
@@ -868,6 +887,7 @@ def load_chat_store() -> dict[str, Any]:
             "toolCalls": _loads(row["tool_calls"], []),
             "skillCalls": _loads(row["skill_calls"], []),
             "teamActivities": _loads(row["team_activities"], []),
+            "modelCaches": _loads(row["model_caches"], []),
             "created_at": row["created_at"],
         })
     return {
@@ -919,15 +939,16 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     _dumps(item.get("toolCalls", item.get("tool_calls", []))),
                     _dumps(item.get("skillCalls", item.get("skill_calls", []))),
                     _dumps(item.get("teamActivities", item.get("team_activities", []))),
+                    _dumps(item.get("modelCaches", item.get("model_caches", []))),
                     item["created_at"], index,
                 ))
         conn.executemany(
             """
             INSERT INTO chat_messages (
                 id, session_id, role, content, agent_id, agent_name, model_name,
-                error, thinking, images, tool_calls, skill_calls, team_activities, created_at,
+                error, thinking, images, tool_calls, skill_calls, team_activities, model_caches, created_at,
                 sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
