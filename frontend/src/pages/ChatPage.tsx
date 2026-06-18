@@ -13,10 +13,10 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, XCircle, BookOpenCheck, Users, CheckCircle2, Clock3, Copy, Check, GitBranch } from 'lucide-react';
+import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, XCircle, BookOpenCheck, Users, CheckCircle2, Clock3, Copy, Check, GitBranch, Download, FileText } from 'lucide-react';
 import { Button, Empty, Select, Spinner, Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../components/MarkdownContent';
-import { useEventStream, type ClarificationRequestInfo, type HitlRequestInfo, type MemorySummaryInfo, type ModelCacheInfo, type SkillCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
+import { useEventStream, type ClarificationQuestionInfo, type ClarificationRequestInfo, type HitlRequestInfo, type MemorySummaryInfo, type ModelCacheInfo, type SkillCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
 import { createId } from '../utils/id';
@@ -30,6 +30,10 @@ interface LocalMessage {
   content: string;
   /** 消息创建时间 */
   createdAt?: string;
+  /** Agent 处理开始时间 */
+  processStartedAt?: string;
+  /** Agent 处理结束时间 */
+  processCompletedAt?: string;
   /** 工具调用列表（仅 assistant 消息） */
   toolCalls?: ToolCallInfo[];
   /** Skill 应用列表（仅 assistant 消息） */
@@ -88,6 +92,7 @@ interface StoredChatMessage {
   agent_name: string | null;
   model_name: string | null;
   error: string | null;
+  thinking?: string;
   images: ChatImagePayload[];
   toolCalls?: ToolCallInfo[];
   tool_calls?: ToolCallInfo[];
@@ -233,7 +238,7 @@ export function ChatPage() {
     }))
   ), [teams]);
 
-  const selectedModelId = runtimeAgent?.modelConfig.primary || 'qwen-plus';
+  const selectedModelId = runtimeAgent?.modelConfig.primary || 'deepseek-chat';
   const selectedModelSupportsImages = selectedModelId === 'qwen3.7-plus';
   const hasLiveResponse = (
     state.isStreaming ||
@@ -291,6 +296,7 @@ export function ChatPage() {
       createdAt: item.created_at,
       modelName: item.model_name || undefined,
       error: item.error || undefined,
+      thinking: item.thinking || undefined,
       images: item.images,
       toolCalls: normalizeStoredToolCalls(item.toolCalls || item.tool_calls || []),
       skillCalls: item.skillCalls || item.skill_calls || [],
@@ -607,6 +613,8 @@ export function ChatPage() {
         role: 'assistant',
         content: state.textContent,
         createdAt: new Date().toISOString(),
+        processStartedAt: state.runStartedAt,
+        processCompletedAt: state.runCompletedAt || new Date().toISOString(),
         skillCalls: state.skillCalls.length > 0 ? state.skillCalls : undefined,
         toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
         teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,
@@ -620,7 +628,7 @@ export function ChatPage() {
       reset();
       loadSessions();
     }
-  }, [loadSessions, messages, reset, state.error, state.hitlRequests.length, state.isStreaming, state.memorySummaries, state.modelName, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
+  }, [loadSessions, messages, reset, state.error, state.hitlRequests.length, state.isStreaming, state.memorySummaries, state.modelName, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -737,10 +745,10 @@ export function ChatPage() {
               </div>
               <div className="truncate text-xs text-[var(--color-text-tertiary)]">
                 {state.isStreaming
-                  ? `${state.modelName || runtimeAgent?.modelConfig.primary || 'qwen-plus'} · 正在思考...`
+                  ? `${state.modelName || runtimeAgent?.modelConfig.primary || 'deepseek-chat'} · 正在思考...`
                   : targetMode === 'team'
                     ? `${teamLeaderAgent?.name || 'Leader'} · ${selectedTeam?.members.length || 0} 个成员`
-                    : runtimeAgent?.description || 'AgentScope 2.0 · 百炼 DashScope'}
+                    : runtimeAgent?.description || 'AgentScope 2.0 · DeepSeek'}
               </div>
             </div>
             {activeSessionId && (
@@ -805,6 +813,8 @@ export function ChatPage() {
                         onSelectTeamActivity={setSelectedTeamActivityId}
                         toolCalls={state.toolCalls}
                         modelName={state.modelName}
+                        runStartedAt={state.runStartedAt}
+                        runCompletedAt={state.runCompletedAt}
                       />
                     )}
 
@@ -1075,6 +1085,16 @@ function MessageBubble({
 }) {
   const isUser = message.role === 'user';
   const clarification = !isUser ? extractClarificationFromText(message.content) : null;
+  const generatedFiles = !isUser
+    ? collectGeneratedFiles(message.toolCalls || [], message.teamActivities || [])
+    : [];
+  const hasProcessDetails = !isUser && Boolean(
+    message.thinking ||
+    (message.teamActivities && message.teamActivities.length > 0) ||
+    (message.skillCalls && message.skillCalls.length > 0) ||
+    (message.memorySummaries && message.memorySummaries.length > 0) ||
+    (message.toolCalls && message.toolCalls.length > 0)
+  );
 
   return (
     <div
@@ -1128,35 +1148,21 @@ function MessageBubble({
           </div>
         )}
 
-        {!isUser && message.thinking && <ThinkingBlock content={message.thinking} />}
-
-        {!isUser && message.teamActivities && message.teamActivities.length > 0 && (
-          <TeamActivityPanel
-            activities={message.teamActivities}
-            selectedActivityId={selectedTeamActivityId}
-            onSelectActivity={onSelectTeamActivity}
+        {hasProcessDetails && (
+          <ProcessDetailsBlock
+            defaultExpanded={false}
+            hasFinalAnswer={Boolean(message.content && !clarification)}
+            processStartedAt={message.processStartedAt}
+            processCompletedAt={message.processCompletedAt}
+            thinkingContent={message.thinking || ''}
+            teamActivities={message.teamActivities || []}
+            skillCalls={message.skillCalls || []}
+            memorySummaries={message.memorySummaries || []}
+            modelCaches={[]}
+            toolCalls={message.toolCalls || []}
+            selectedTeamActivityId={selectedTeamActivityId}
+            onSelectTeamActivity={onSelectTeamActivity}
           />
-        )}
-
-        {!isUser && message.skillCalls && message.skillCalls.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {message.skillCalls.map((skill) => (
-              <SkillCallBlock key={skill.id} skillCall={skill} />
-            ))}
-          </div>
-        )}
-
-        {!isUser && message.memorySummaries && message.memorySummaries.length > 0 && (
-          <MemorySummaryBlock summaries={message.memorySummaries} />
-        )}
-
-        {/* 工具调用记录 */}
-        {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {message.toolCalls.map((tc) => (
-              <ToolCallBlock key={tc.id} toolCall={tc} />
-            ))}
-          </div>
         )}
 
         {/* 文本内容 */}
@@ -1186,6 +1192,10 @@ function MessageBubble({
           >
             {isUser ? message.content : <MarkdownContent content={message.content} />}
           </div>
+        )}
+
+        {!isUser && generatedFiles.length > 0 && (
+          <GeneratedFilesBlock files={generatedFiles} />
         )}
 
         {!isUser && message.content && !clarification && (
@@ -1231,6 +1241,8 @@ function StreamingBubble({
   onSelectTeamActivity,
   toolCalls,
   modelName,
+  runStartedAt,
+  runCompletedAt,
 }: {
   textContent: string;
   thinkingContent: string;
@@ -1239,12 +1251,24 @@ function StreamingBubble({
   memorySummaries: MemorySummaryInfo[];
   modelCaches: ModelCacheInfo[];
   hitlRequests: HitlRequestInfo[];
-  onResolveHitl: (interactionId: string, action: 'approve' | 'reject') => Promise<void>;
+  onResolveHitl: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
   toolCalls: ToolCallInfo[];
   modelName: string;
+  runStartedAt: string;
+  runCompletedAt: string;
 }) {
+  const generatedFiles = collectGeneratedFiles(toolCalls, teamActivities);
+  const hasProcessDetails = Boolean(
+    thinkingContent ||
+    teamActivities.length > 0 ||
+    skillCalls.length > 0 ||
+    memorySummaries.length > 0 ||
+    modelCaches.length > 0 ||
+    toolCalls.length > 0
+  );
+
   return (
     <div
       style={{
@@ -1262,27 +1286,21 @@ function StreamingBubble({
           gap: '6px',
         }}
       >
-        {/* 思考链（可折叠） */}
-        {thinkingContent && <ThinkingBlock content={thinkingContent} />}
-
-        {teamActivities.length > 0 && (
-          <TeamActivityPanel
-            activities={teamActivities}
-            selectedActivityId={selectedTeamActivityId}
-            onSelectActivity={onSelectTeamActivity}
+        {hasProcessDetails && (
+          <ProcessDetailsBlock
+            defaultExpanded={!textContent}
+            hasFinalAnswer={Boolean(textContent)}
+            processStartedAt={runStartedAt}
+            processCompletedAt={runCompletedAt}
+            thinkingContent={thinkingContent}
+            teamActivities={teamActivities}
+            skillCalls={skillCalls}
+            memorySummaries={memorySummaries}
+            modelCaches={modelCaches}
+            toolCalls={toolCalls}
+            selectedTeamActivityId={selectedTeamActivityId}
+            onSelectTeamActivity={onSelectTeamActivity}
           />
-        )}
-
-        {skillCalls.map((skill) => (
-          <SkillCallBlock key={skill.id} skillCall={skill} />
-        ))}
-
-        {memorySummaries.length > 0 && (
-          <MemorySummaryBlock summaries={memorySummaries} />
-        )}
-
-        {modelCaches.length > 0 && (
-          <ModelCacheBlock caches={modelCaches} />
         )}
 
         {hitlRequests.map((request) => (
@@ -1291,11 +1309,6 @@ function StreamingBubble({
             request={request}
             onResolve={onResolveHitl}
           />
-        ))}
-
-        {/* 工具调用 */}
-        {toolCalls.map((tc) => (
-          <ToolCallBlock key={tc.id} toolCall={tc} />
         ))}
 
         {/* 文本内容 */}
@@ -1326,12 +1339,16 @@ function StreamingBubble({
           </div>
         )}
 
+        {generatedFiles.length > 0 && (
+          <GeneratedFilesBlock files={generatedFiles} />
+        )}
+
         {textContent && (
           <MessageToolbar markdown={textContent} createdAt={new Date().toISOString()} />
         )}
 
         {/* 无内容时显示加载指示器 */}
-        {!textContent && toolCalls.length === 0 && skillCalls.length === 0 && teamActivities.length === 0 && memorySummaries.length === 0 && modelCaches.length === 0 && hitlRequests.length === 0 && !thinkingContent && (
+        {!textContent && generatedFiles.length === 0 && toolCalls.length === 0 && skillCalls.length === 0 && teamActivities.length === 0 && memorySummaries.length === 0 && modelCaches.length === 0 && hitlRequests.length === 0 && !thinkingContent && (
           <div
             style={{
               display: 'flex',
@@ -1378,6 +1395,21 @@ function formatMessageTime(value?: string): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function formatProcessDuration(startedAt?: string, completedAt?: string, fallbackNowMs = Date.now()): string {
+  if (!startedAt) return '';
+  const startMs = new Date(startedAt).getTime();
+  const endMs = completedAt ? new Date(completedAt).getTime() : fallbackNowMs;
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs < startMs) return '';
+
+  const totalSeconds = Math.max(1, Math.round((endMs - startMs) / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds} 秒`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds > 0 ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分`;
 }
 
 function MessageToolbar({ markdown, createdAt }: { markdown: string; createdAt?: string }) {
@@ -1871,6 +1903,140 @@ function TeamSelectionDock({
   );
 }
 
+function ProcessDetailsBlock({
+  defaultExpanded,
+  hasFinalAnswer,
+  processStartedAt,
+  processCompletedAt,
+  thinkingContent,
+  teamActivities,
+  skillCalls,
+  memorySummaries,
+  modelCaches,
+  toolCalls,
+  selectedTeamActivityId,
+  onSelectTeamActivity,
+}: {
+  defaultExpanded: boolean;
+  hasFinalAnswer: boolean;
+  processStartedAt?: string;
+  processCompletedAt?: string;
+  thinkingContent: string;
+  teamActivities: TeamActivityInfo[];
+  skillCalls: SkillCallInfo[];
+  memorySummaries: MemorySummaryInfo[];
+  modelCaches: ModelCacheInfo[];
+  toolCalls: ToolCallInfo[];
+  selectedTeamActivityId: string | null;
+  onSelectTeamActivity: (id: string) => void;
+}) {
+  const hasThinking = Boolean(thinkingContent.trim());
+  const [expanded, setExpanded] = useState(defaultExpanded && !hasFinalAnswer);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const hadFinalAnswerRef = useRef(hasFinalAnswer);
+  const processDuration = formatProcessDuration(processStartedAt, processCompletedAt, nowMs);
+  const memoryFactCount = memorySummaries.reduce((total, summary) => total + summary.facts.length, 0);
+  const detailCount = [
+    thinkingContent ? 1 : 0,
+    teamActivities.length,
+    skillCalls.length,
+    memoryFactCount,
+    modelCaches.length,
+    toolCalls.length,
+  ].reduce((total, count) => total + count, 0);
+
+  useEffect(() => {
+    if (hasThinking && !hasFinalAnswer) {
+      setExpanded(true);
+      hadFinalAnswerRef.current = hasFinalAnswer;
+      return;
+    }
+    if (!hadFinalAnswerRef.current && hasFinalAnswer) {
+      setExpanded(false);
+    }
+    hadFinalAnswerRef.current = hasFinalAnswer;
+  }, [hasFinalAnswer, hasThinking]);
+
+  useEffect(() => {
+    if (processCompletedAt || !processStartedAt) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [processCompletedAt, processStartedAt]);
+
+  if (detailCount === 0) return null;
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-sm">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition hover:bg-[var(--color-bg-hover)]"
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <GitBranch size={15} className="shrink-0 text-[var(--color-text-tertiary)]" />
+          <span className="truncate text-sm font-medium text-[var(--color-text-primary)]">已处理</span>
+          {processDuration && (
+            <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
+              耗时 {processDuration}
+            </span>
+          )}
+          <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
+            {detailCount} 项
+          </span>
+        </div>
+        {expanded ? (
+          <ChevronDown size={14} className="shrink-0 text-[var(--color-text-tertiary)]" />
+        ) : (
+          <ChevronRight size={14} className="shrink-0 text-[var(--color-text-tertiary)]" />
+        )}
+      </button>
+
+      {expanded && (
+        <div className="space-y-2 border-t border-[var(--color-border)] p-3">
+          {modelCaches.length > 0 && (
+            <ModelCacheBlock caches={modelCaches} />
+          )}
+
+          {thinkingContent && (
+            <ThinkingBlock
+              content={thinkingContent}
+              defaultExpanded={defaultExpanded && !hasFinalAnswer}
+            />
+          )}
+
+          {teamActivities.length > 0 && (
+            <TeamActivityPanel
+              activities={teamActivities}
+              selectedActivityId={selectedTeamActivityId}
+              onSelectActivity={onSelectTeamActivity}
+            />
+          )}
+
+          {skillCalls.length > 0 && (
+            <div className="space-y-1">
+              {skillCalls.map((skill) => (
+                <SkillCallBlock key={skill.id} skillCall={skill} />
+              ))}
+            </div>
+          )}
+
+          {memorySummaries.length > 0 && (
+            <MemorySummaryBlock summaries={memorySummaries} />
+          )}
+
+          {toolCalls.length > 0 && (
+            <div className="space-y-1">
+              {toolCalls.map((toolCall) => (
+                <ToolCallBlock key={toolCall.id} toolCall={toolCall} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MemorySummaryBlock({ summaries }: { summaries: MemorySummaryInfo[] }) {
   const factCount = summaries.reduce((total, summary) => total + summary.facts.length, 0);
 
@@ -1911,67 +2077,213 @@ function MemorySummaryBlock({ summaries }: { summaries: MemorySummaryInfo[] }) {
 }
 
 function ModelCacheBlock({ caches }: { caches: ModelCacheInfo[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const createdTokens = caches.reduce((total, cache) => total + cache.cacheCreationInputTokens, 0);
+  const hitTokens = caches.reduce((total, cache) => total + cache.cacheInputTokens, 0);
+
   return (
     <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
-      <div className="flex items-center justify-between gap-3 px-3 py-2">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition hover:bg-[var(--color-bg-hover)]"
+      >
         <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
           <Clock3 size={14} color="var(--color-accent)" />
           <span>服务端 Prompt Cache</span>
         </div>
-        <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
-          {caches.length} 次调用
-        </span>
-      </div>
-      <div className="space-y-2 px-3 pb-3">
-        {caches.map((cache) => (
-          <div
-            key={cache.id}
-            className="rounded-md bg-[var(--color-bg-primary)] px-3 py-2"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="truncate text-sm text-[var(--color-text-primary)]">
-                  {cache.modelName || 'model'}
-                </div>
-                <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-                  输入 {cache.inputTokens} · 输出 {cache.outputTokens}
-                </div>
-                {(cache.cacheCreationInputTokens > 0 || cache.cacheInputTokens > 0) && (
-                  <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-                    命中率 {Math.round(cache.cacheHitRate * 100)}% · 约节省输入 {cache.estimatedSavedInputTokens} token
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="text-xs text-[var(--color-text-tertiary)]">
+            创建 {createdTokens} · 命中 {hitTokens}
+          </span>
+          {expanded ? (
+            <ChevronDown size={14} className="text-[var(--color-text-tertiary)]" />
+          ) : (
+            <ChevronRight size={14} className="text-[var(--color-text-tertiary)]" />
+          )}
+        </div>
+      </button>
+      {expanded && (
+        <div className="space-y-2 px-3 pb-3">
+          {caches.map((cache) => (
+            <div
+              key={cache.id}
+              className="rounded-md bg-[var(--color-bg-primary)] px-3 py-2"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm text-[var(--color-text-primary)]">
+                    {cache.modelName || 'model'}
                   </div>
-                )}
+                  <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                    输入 {cache.inputTokens} · 输出 {cache.outputTokens}
+                  </div>
+                  {(cache.cacheCreationInputTokens > 0 || cache.cacheInputTokens > 0) && (
+                    <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                      命中率 {Math.round(cache.cacheHitRate * 100)}% · 约节省输入 {cache.estimatedSavedInputTokens} token
+                    </div>
+                  )}
+                </div>
+                <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                  <Tag size="small" color={cache.cacheCreationInputTokens > 0 ? 'blue' : 'transparent'}>
+                    创建 {cache.cacheCreationInputTokens}
+                  </Tag>
+                  <Tag size="small" color={cache.cacheInputTokens > 0 ? 'success' : 'transparent'}>
+                    命中 {cache.cacheInputTokens}
+                  </Tag>
+                </div>
               </div>
-              <div className="flex shrink-0 flex-wrap justify-end gap-1">
-                <Tag size="small" color={cache.cacheCreationInputTokens > 0 ? 'blue' : 'transparent'}>
-                  创建 {cache.cacheCreationInputTokens}
-                </Tag>
-                <Tag size="small" color={cache.cacheInputTokens > 0 ? 'success' : 'transparent'}>
-                  命中 {cache.cacheInputTokens}
-                </Tag>
-              </div>
+              {cache.cacheCreationInputTokens === 0 && cache.cacheInputTokens === 0 && (
+                <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
+                  本次模型响应未返回服务端缓存用量。
+                </div>
+              )}
             </div>
-            {cache.cacheCreationInputTokens === 0 && cache.cacheInputTokens === 0 && (
-              <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
-                本次模型响应未返回服务端缓存用量。
-              </div>
-            )}
+          ))}
+          <div className="text-xs text-[var(--color-text-tertiary)]">
+            共 {caches.length} 次模型调用返回缓存统计。
           </div>
-        ))}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
 
+/**
+ * ThinkingBlock — 可折叠的思考链展示
+ */
+function ThinkingBlock({ content, defaultExpanded = false }: { content: string; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
+  useEffect(() => {
+    if (defaultExpanded && content.trim()) {
+      setExpanded(true);
+    }
+  }, [content, defaultExpanded]);
+
+  return (
+    <div
+      style={{
+        borderRadius: 'var(--radius-lg)',
+        border: '1px solid var(--color-border)',
+        overflow: 'hidden',
+        fontSize: 'var(--text-sm)',
+      }}
+    >
+      <button
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          width: '100%',
+          minWidth: 0,
+          padding: '6px 10px',
+          border: 'none',
+          backgroundColor: 'var(--color-bg-tertiary)',
+          color: 'var(--color-text-secondary)',
+          cursor: 'pointer',
+          fontSize: 'var(--text-xs)',
+        }}
+      >
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        深度思考
+      </button>
+      {expanded && (
+        <div
+          style={{
+            padding: '8px 10px',
+            backgroundColor: 'var(--color-bg-secondary)',
+            color: 'var(--color-text-secondary)',
+            maxHeight: '200px',
+            overflow: 'auto',
+            fontSize: 'var(--text-xs)',
+            lineHeight: '1.6',
+          }}
+        >
+          <MarkdownContent content={content} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * SkillCallBlock — Skill 注入/应用反馈
+ */
+function SkillCallBlock({ skillCall }: { skillCall: SkillCallInfo }) {
+  const [expanded, setExpanded] = useState(false);
+  const statusText = skillCall.status === 'running'
+    ? '使用中'
+    : skillCall.status === 'failed'
+      ? '失败'
+      : '已使用';
+  const statusColor = skillCall.status === 'running'
+    ? 'blue'
+    : skillCall.status === 'failed'
+      ? 'danger'
+      : 'success';
+
+  return (
+    <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition hover:bg-[var(--color-bg-hover)]"
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <BookOpenCheck size={14} color="var(--color-success)" />
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
+              {skillCall.name}
+            </div>
+            <div className="truncate text-xs text-[var(--color-text-tertiary)]">
+              {skillCall.trigger || skillCall.description || '已注入 Skill 操作手册'}
+            </div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Tag size="small" color={statusColor}>
+            {statusText}
+          </Tag>
+          {expanded ? (
+            <ChevronDown size={14} className="text-[var(--color-text-tertiary)]" />
+          ) : (
+            <ChevronRight size={14} className="text-[var(--color-text-tertiary)]" />
+          )}
+        </div>
+      </button>
+      {expanded && (
+        <div className="space-y-2 px-3 pb-3">
+          {skillCall.content && (
+            <div className="max-h-72 overflow-auto rounded-md bg-[var(--color-bg-primary)] p-3 text-xs leading-6 text-[var(--color-text-secondary)]">
+              <MarkdownContent content={skillCall.content} />
+            </div>
+          )}
+          {skillCall.resources.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {skillCall.resources.slice(0, 8).map((resource) => (
+                <Tag key={resource} size="small" color="transparent">
+                  {resource}
+                </Tag>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 function HitlApprovalBlock({
   request,
   onResolve,
 }: {
   request: HitlRequestInfo;
-  onResolve: (interactionId: string, action: 'approve' | 'reject') => Promise<void>;
+  onResolve: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
 }) {
   const [submitting, setSubmitting] = useState<'approve' | 'reject' | null>(null);
   const isExternal = request.type === 'REQUIRE_EXTERNAL_EXECUTION';
+  const askUserToolCall = request.toolCalls.find((toolCall) => isAskUserToolName(toolCall.rawName || toolCall.name));
+  const askUserRequest = askUserToolCall ? buildClarificationRequestFromAskUser(askUserToolCall) : null;
 
   const handleResolve = async (action: 'approve' | 'reject') => {
     setSubmitting(action);
@@ -1981,6 +2293,25 @@ function HitlApprovalBlock({
       setSubmitting(null);
     }
   };
+
+  if (askUserToolCall && askUserRequest) {
+    return (
+      <ClarificationBlock
+        request={askUserRequest}
+        onSubmit={async (content) => {
+          setSubmitting('approve');
+          try {
+            await onResolve(request.interactionId, 'approve', {
+              [askUserToolCall.id]: content,
+            });
+          } finally {
+            setSubmitting(null);
+          }
+        }}
+        submittingOverride={submitting === 'approve'}
+      />
+    );
+  }
 
   return (
     <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
@@ -2032,12 +2363,63 @@ function HitlApprovalBlock({
   );
 }
 
+function isAskUserToolName(name: string) {
+  const normalized = name.replace(/\s+/g, '').toLowerCase();
+  return normalized === 'askuser' || normalized.endsWith('_askuser');
+}
+
+function buildClarificationRequestFromAskUser(toolCall: HitlRequestInfo['toolCalls'][number]): ClarificationRequestInfo {
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = JSON.parse(toolCall.input || '{}') as Record<string, unknown>;
+  } catch {
+    raw = {};
+  }
+
+  const questions = Array.isArray(raw.questions) ? raw.questions : [];
+  const parsedQuestions = questions.flatMap((item, index) => {
+    if (!item || typeof item !== 'object') return [];
+    const question = item as Record<string, unknown>;
+    const type = String(question.type || 'text');
+    if (!['choice', 'multi_choice', 'text'].includes(type)) return [];
+    const options = Array.isArray(question.options)
+      ? question.options.map((option) => String(option)).filter(Boolean).slice(0, 5)
+      : [];
+    if ((type === 'choice' || type === 'multi_choice') && options.length < 2) return [];
+    return [{
+      id: String(question.id || `q${index + 1}`),
+      type: type as ClarificationQuestionInfo['type'],
+      label: String(question.label || question.question || `问题 ${index + 1}`),
+      options,
+      placeholder: String(question.placeholder || ''),
+      required: question.required !== false,
+    }];
+  }).slice(0, 3);
+
+  return {
+    id: `ask-user-${toolCall.id}`,
+    title: String(raw.title || '需要补充信息'),
+    description: String(raw.description || 'Agent 需要这些信息后才能继续执行。'),
+    createdAt: new Date().toISOString(),
+    questions: parsedQuestions.length > 0
+      ? parsedQuestions
+      : [{
+        id: 'details',
+        type: 'text',
+        label: '请补充信息',
+        options: [],
+        placeholder: '输入后 Agent 会继续当前执行',
+        required: true,
+      }],
+  };
+}
+
 function HitlDock({
   requests,
   onResolve,
 }: {
   requests: HitlRequestInfo[];
-  onResolve: (interactionId: string, action: 'approve' | 'reject') => Promise<void>;
+  onResolve: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
 }) {
   if (requests.length === 0) return null;
 
@@ -2107,9 +2489,11 @@ function ClarificationDock({
 function ClarificationBlock({
   request,
   onSubmit,
+  submittingOverride,
 }: {
   request: ClarificationRequestInfo;
   onSubmit: (content: string) => Promise<void>;
+  submittingOverride?: boolean;
 }) {
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -2217,7 +2601,7 @@ function ClarificationBlock({
         ))}
       </div>
       <div className="mt-3 flex justify-end">
-        <Button type="primary" loading={submitting} onClick={handleSubmit}>
+        <Button type="primary" loading={submitting || submittingOverride} onClick={handleSubmit}>
           提交补充信息
         </Button>
       </div>
@@ -2242,202 +2626,98 @@ function getTeamActivityStatusText(status: TeamActivityInfo['status']) {
 }
 
 /**
- * ThinkingBlock — 可折叠的思考链展示
- */
-function ThinkingBlock({ content }: { content: string }) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div
-      style={{
-        borderRadius: 'var(--radius-lg)',
-        border: '1px solid var(--color-border)',
-        overflow: 'hidden',
-        fontSize: 'var(--text-sm)',
-      }}
-    >
-      <button
-        onClick={() => setExpanded(!expanded)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          width: '100%',
-          minWidth: 0,
-          padding: '6px 10px',
-          border: 'none',
-          backgroundColor: 'var(--color-bg-tertiary)',
-          color: 'var(--color-text-secondary)',
-          cursor: 'pointer',
-          fontSize: 'var(--text-xs)',
-        }}
-      >
-        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        思考过程
-      </button>
-      {expanded && (
-        <div
-          style={{
-            padding: '8px 10px',
-            backgroundColor: 'var(--color-bg-secondary)',
-            color: 'var(--color-text-secondary)',
-            maxHeight: '200px',
-            overflow: 'auto',
-            fontSize: 'var(--text-xs)',
-            lineHeight: '1.6',
-          }}
-        >
-          <MarkdownContent content={content} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * SkillCallBlock — Skill 注入/应用反馈
- */
-function SkillCallBlock({ skillCall }: { skillCall: SkillCallInfo }) {
-  const [expanded, setExpanded] = useState(false);
-  const statusText = skillCall.status === 'running'
-    ? '使用中'
-    : skillCall.status === 'failed'
-      ? '失败'
-      : '已完成';
-  const statusColor = skillCall.status === 'failed'
-    ? 'var(--color-error)'
-    : skillCall.status === 'running'
-      ? 'var(--color-accent)'
-      : 'var(--color-success)';
-
-  return (
-    <div
-      style={{
-        borderRadius: 'var(--radius-lg)',
-        border: '1px solid var(--color-border)',
-        overflow: 'hidden',
-        fontSize: 'var(--text-sm)',
-        backgroundColor: 'var(--color-bg-secondary)',
-      }}
-    >
-      <button
-        onClick={() => setExpanded(!expanded)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          width: '100%',
-          padding: '6px 10px',
-          border: 'none',
-          backgroundColor: 'transparent',
-          color: 'var(--color-text-primary)',
-          cursor: 'pointer',
-          textAlign: 'start',
-        }}
-      >
-        {skillCall.status === 'running' ? (
-          <Loader2 size={12} className="animate-spin" style={{ color: statusColor }} />
-        ) : (
-          <BookOpenCheck size={12} style={{ color: statusColor }} />
-        )}
-        <span style={{ fontWeight: 500 }}>{skillCall.name}</span>
-        <span
-          style={{
-            fontSize: 'var(--text-xs)',
-            color: statusColor,
-            marginLeft: 'auto',
-          }}
-        >
-          {statusText}
-        </span>
-        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-      </button>
-      {skillCall.description && (
-        <div
-          style={{
-            borderTop: '1px solid var(--color-border)',
-            padding: '6px 10px',
-            color: 'var(--color-text-tertiary)',
-            fontSize: 'var(--text-xs)',
-          }}
-        >
-          {skillCall.description}
-        </div>
-      )}
-      {expanded && (
-        <div
-          style={{
-            borderTop: '1px solid var(--color-border)',
-            padding: '8px 10px',
-            backgroundColor: 'var(--color-bg-primary)',
-          }}
-        >
-          {skillCall.trigger && (
-            <div style={{ marginBottom: '8px' }}>
-              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">触发条件</div>
-              <div className="text-xs text-[var(--color-text-secondary)]">{skillCall.trigger}</div>
-            </div>
-          )}
-          {skillCall.resourcePath && (
-            <div style={{ marginBottom: '8px' }}>
-              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">资源路径</div>
-              <code className="block break-all rounded bg-[var(--color-bg-tertiary)] px-2 py-1 text-xs text-[var(--color-text-secondary)]">
-                {skillCall.resourcePath}
-              </code>
-            </div>
-          )}
-          {skillCall.resources.length > 0 && (
-            <div style={{ marginBottom: '8px' }}>
-              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">资源文件</div>
-              <div className="flex max-h-16 flex-wrap gap-1 overflow-hidden">
-                {skillCall.resources.slice(0, 8).map((resource) => (
-                  <Tag key={resource} size="small" color="transparent">
-                    {resource}
-                  </Tag>
-                ))}
-                {skillCall.resources.length > 8 && (
-                  <Tag size="small" color="transparent">
-                    +{skillCall.resources.length - 8}
-                  </Tag>
-                )}
-              </div>
-            </div>
-          )}
-          {skillCall.content && (
-            <div>
-              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">SKILL.md</div>
-              <pre
-                style={{
-                  margin: 0,
-                  maxHeight: '260px',
-                  overflow: 'auto',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  borderRadius: 'var(--radius-md)',
-                  backgroundColor: 'var(--color-bg-tertiary)',
-                  padding: '8px',
-                  color: 'var(--color-text-secondary)',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 'var(--text-xs)',
-                  lineHeight: '1.6',
-                }}
-              >
-                {skillCall.content}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
  * ToolCallBlock — 工具调用展示组件
  *
  * 显示工具名称、参数和执行结果。
  * 可展开/折叠查看详情。
  */
+type GeneratedFileInfo = {
+  path: string;
+  name: string;
+  extension: string;
+};
+
+function getGeneratedFileInfo(toolCall: ToolCallInfo): GeneratedFileInfo | null {
+  const toolName = normalizeToolDisplayName(toolCall.name).toLowerCase();
+  if ((toolName !== 'write' && toolName !== 'edit') || toolCall.status !== 'completed') {
+    return null;
+  }
+  const args = parseToolCallArgs(toolCall.args);
+  const filePath = String(args.file_path || args.path || '').trim();
+  if (!filePath) {
+    return null;
+  }
+  const name = filePath.split(/[\\/]/).filter(Boolean).pop() || 'generated-file';
+  const extension = name.includes('.') ? name.split('.').pop()?.toUpperCase() || 'FILE' : 'FILE';
+  return { path: filePath, name, extension };
+}
+
+function collectGeneratedFiles(toolCalls: ToolCallInfo[] = [], teamActivities: TeamActivityInfo[] = []): GeneratedFileInfo[] {
+  const files: GeneratedFileInfo[] = [];
+  const seen = new Set<string>();
+  const addFile = (toolCall: ToolCallInfo) => {
+    const file = getGeneratedFileInfo(toolCall);
+    if (!file || seen.has(file.path)) return;
+    seen.add(file.path);
+    files.push(file);
+  };
+
+  toolCalls.forEach(addFile);
+  teamActivities.forEach((activity) => {
+    (activity.toolCalls || []).forEach(addFile);
+  });
+  return files;
+}
+
+function parseToolCallArgs(raw: string): Record<string, unknown> {
+  const value = raw.trim();
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function GeneratedFilesBlock({ files }: { files: GeneratedFileInfo[] }) {
+  if (files.length === 0) return null;
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-sm">
+      {files.map((file, index) => (
+        <div
+          key={file.path}
+          className={`flex min-w-0 items-center gap-3 px-4 py-3 ${index > 0 ? 'border-t border-[var(--color-border)]' : ''}`}
+        >
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-primary)] text-[var(--color-text-tertiary)]">
+            <FileText size={21} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-semibold text-[var(--color-text-primary)]" title={file.name}>
+              {file.name}
+            </div>
+            <div className="mt-0.5 truncate text-xs text-[var(--color-text-tertiary)]" title={file.path}>
+              文档 · {file.extension}
+            </div>
+          </div>
+          <a
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-hover)]"
+            href={`/api/tools/files/download?path=${encodeURIComponent(file.path)}`}
+            download={file.name}
+            title={file.path}
+          >
+            <Download size={15} />
+            下载
+          </a>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState<'args' | 'result' | null>(null);

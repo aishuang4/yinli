@@ -32,8 +32,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     patch_agentscope_usage_events()
     await init_db()
     print(f"[Server] Agent Workstation Backend started on port {settings.port}")
-    key_display = ("***" + settings.dashscope_api_key[-4:]) if settings.dashscope_api_key else "NOT SET"
-    print(f"[Server] DashScope API Key: {key_display}")
+    deepseek_key_display = ("***" + settings.deepseek_api_key[-4:]) if settings.deepseek_api_key else "NOT SET"
+    print(f"[Server] DeepSeek API Key: {deepseek_key_display}")
 
     yield  # 应用运行中
 

@@ -20,7 +20,7 @@ cd frontend && npm install && cd ..
 
 # 2. 配置后端环境变量
 cp backend/.env.example backend/.env
-# 编辑 backend/.env，填入百炼 API Key
+# 编辑 backend/.env，填入 DeepSeek API Key
 
 # 3. 安装后端依赖
 cd backend && uv sync && cd ..
@@ -43,7 +43,7 @@ cd backend && uv sync && cd ..
 | 前端 | React 19 + TypeScript + Vite |
 | UI 组件 | @agentscope-ai/design + @agentscope-ai/chat |
 | 后端 | Python + FastAPI + AgentScope 2.0 |
-| 模型 | 阿里百炼 DashScope |
+| 模型 | DeepSeek 默认，可在系统设置切换 OpenAI 兼容供应商 |
 | 存储 | SQLite (MVP) + Milvus (预留) |
 | 容器 | AgentScope Workspace (Docker) |
 

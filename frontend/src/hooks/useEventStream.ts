@@ -31,6 +31,10 @@ export interface StreamState {
   isStreaming: boolean;
   /** 当前后台 Run ID */
   currentRunId: string;
+  /** 当前 Run 开始时间 */
+  runStartedAt: string;
+  /** 当前 Run 结束时间 */
+  runCompletedAt: string;
   /** 累积的文本内容 */
   textContent: string;
   /** 思考链内容（thinking tokens） */
@@ -201,6 +205,7 @@ export interface HitlRequestInfo {
     id: string;
     name: string;
     input: string;
+    rawName?: string;
   }>;
   createdAt: string;
 }
@@ -273,6 +278,8 @@ interface SendMessageOptions {
 const INITIAL_STATE: StreamState = {
   isStreaming: false,
   currentRunId: '',
+  runStartedAt: '',
+  runCompletedAt: '',
   textContent: '',
   thinkingContent: '',
   toolCalls: [],
@@ -332,6 +339,7 @@ export function useEventStream(): UseEventStreamReturn {
       setState({
         ...INITIAL_STATE,
         isStreaming: true,
+        runStartedAt: new Date().toISOString(),
       });
 
       try {
@@ -390,12 +398,20 @@ export function useEventStream(): UseEventStreamReturn {
           }
         }
 
-        // 流结束
-        setState((prev) => ({ ...prev, isStreaming: false }));
+        // SSE 结束才代表本轮流程全部完成；REPLY_END 后仍可能有记忆总结等后处理事件。
+        setState((prev) => ({
+          ...prev,
+          isStreaming: false,
+          runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
+        }));
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') {
           // 用户主动中止
-          setState((prev) => ({ ...prev, isStreaming: false }));
+          setState((prev) => ({
+            ...prev,
+            isStreaming: false,
+            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
+          }));
         } else {
           // 其他错误
           const errorMessage = err instanceof Error ? err.message : String(err);
@@ -403,6 +419,7 @@ export function useEventStream(): UseEventStreamReturn {
             ...prev,
             isStreaming: false,
             error: errorMessage,
+            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
           }));
         }
       }
@@ -465,16 +482,25 @@ export function useEventStream(): UseEventStreamReturn {
             }
           }
         }
-        setState((prev) => ({ ...prev, isStreaming: false }));
+        setState((prev) => ({
+          ...prev,
+          isStreaming: false,
+          runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
+        }));
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') {
-          setState((prev) => ({ ...prev, isStreaming: false }));
+          setState((prev) => ({
+            ...prev,
+            isStreaming: false,
+            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
+          }));
         } else {
           const errorMessage = err instanceof Error ? err.message : String(err);
           setState((prev) => ({
             ...prev,
             isStreaming: false,
             error: errorMessage,
+            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
           }));
         }
       }
@@ -525,6 +551,7 @@ export function useEventStream(): UseEventStreamReturn {
           return {
             ...prev,
             currentRunId: String(event.data.run_id || ''),
+            runStartedAt: String(event.data.created_at || event.data.createdAt || prev.runStartedAt || new Date().toISOString()),
           };
 
         // === 文本内容增量 ===
@@ -795,9 +822,19 @@ export function useEventStream(): UseEventStreamReturn {
         // === 人机交互请求 ===
         case 'HITL_REQUIRED': {
           const toolCalls = Array.isArray(event.data.toolCalls) ? event.data.toolCalls : [];
+          const stringifyToolInput = (input: unknown) => {
+            if (typeof input === 'string') return input;
+            if (input === null || input === undefined) return '';
+            try {
+              return JSON.stringify(input);
+            } catch {
+              return String(input);
+            }
+          };
           return {
             ...prev,
             isStreaming: false,
+            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
             hitlRequests: [
               ...prev.hitlRequests,
               {
@@ -812,10 +849,12 @@ export function useEventStream(): UseEventStreamReturn {
                 createdAt: String(event.data.createdAt || ''),
                 toolCalls: toolCalls.map((item) => {
                   const toolCall = item as Record<string, unknown>;
+                  const rawName = String(toolCall.name || 'tool');
                   return {
                     id: String(toolCall.id || createId()),
-                    name: normalizeToolDisplayName(String(toolCall.name || 'tool')),
-                    input: String(toolCall.input || ''),
+                    name: normalizeToolDisplayName(rawName),
+                    rawName,
+                    input: stringifyToolInput(toolCall.input),
                   };
                 }),
               },
@@ -919,6 +958,7 @@ export function useEventStream(): UseEventStreamReturn {
           return {
             ...prev,
             isStreaming: false,
+            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
             textContent: '',
             thinkingContent: '',
             clarificationRequests: [
@@ -938,12 +978,13 @@ export function useEventStream(): UseEventStreamReturn {
           return {
             ...prev,
             isStreaming: false,
+            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
             error: (event.data.message as string) || 'Unknown error',
           };
 
         // === 回复结束 ===
         case 'REPLY_END':
-          return { ...prev, isStreaming: false };
+          return prev;
 
         // === 其他事件（REPLY_START, TEXT_BLOCK_START 等）— 不需要特殊处理 ===
         default:

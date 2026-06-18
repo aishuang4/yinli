@@ -51,6 +51,8 @@ interface AgentApiData {
     temperature: number;
     top_p?: number;
     max_tokens: number;
+    max_react_iters?: number;
+    maxReactIters?: number;
   };
   mcpTools: string[];
   knowledgeTools?: string[];
@@ -105,6 +107,7 @@ function mapApiAgent(api: AgentApiData): Agent {
       temperature: api.modelConfig.temperature,
       topP: api.modelConfig.top_p ?? 0.8,
       maxTokens: api.modelConfig.max_tokens,
+      maxReactIters: api.modelConfig.max_react_iters ?? api.modelConfig.maxReactIters ?? 40,
     },
     mcpTools: api.mcpTools,
     knowledgeTools: api.knowledgeTools ?? [],
@@ -176,6 +179,7 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
       temperature: data.modelConfig.temperature,
       top_p: data.modelConfig.topP,
       max_tokens: data.modelConfig.maxTokens,
+      max_react_iters: data.modelConfig.maxReactIters,
     };
   }
 

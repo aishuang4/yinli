@@ -20,6 +20,8 @@ export interface ModelConfig {
   topP: number;
   /** 最大输出 token 数 */
   maxTokens: number;
+  /** ReAct 最大循环次数 */
+  maxReactIters: number;
 }
 
 /** 安全边界配置 */
@@ -125,11 +127,12 @@ export interface ModelsResponse {
 
 /** 默认模型配置 */
 export const DEFAULT_MODEL_CONFIG: ModelConfig = {
-  primary: 'qwen-plus',
-  fallback: ['qwen-turbo'],
+  primary: 'deepseek-chat',
+  fallback: ['deepseek-reasoner'],
   temperature: 0.7,
   topP: 0.8,
   maxTokens: 4096,
+  maxReactIters: 40,
 };
 
 /** 默认安全边界 */

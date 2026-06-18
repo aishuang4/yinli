@@ -1,10 +1,12 @@
 """Configurable local tools."""
 
 from datetime import datetime, timezone
+from pathlib import Path
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from src.server.routes.agents import remove_knowledge_tools_from_agents
@@ -71,6 +73,14 @@ class KnowledgeToolResponse(KnowledgeToolCreate):
     updated_at: str
 
 
+class GeneratedFilePreviewResponse(BaseModel):
+    path: str
+    name: str
+    size: int
+    content: str
+    truncated: bool = False
+
+
 def _records() -> list[KnowledgeToolResponse]:
     return [
         KnowledgeToolResponse.model_validate(item)
@@ -85,6 +95,18 @@ def get_enabled_knowledge_tools(tool_ids: list[str]) -> list[dict[str, Any]]:
         for item in _records()
         if item.enabled and item.id in selected
     ]
+
+
+def _resolve_downloadable_file(path: str) -> Path:
+    file_path = Path(path).expanduser().resolve()
+    home_path = Path.home().resolve()
+    try:
+        file_path.relative_to(home_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Only files under the user home directory can be accessed") from exc
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return file_path
 
 
 @router.get("/knowledge-base", response_model=list[KnowledgeToolResponse])
@@ -128,3 +150,37 @@ async def delete_knowledge_tool(tool_id: str) -> None:
 
     delete_json_record(KNOWLEDGE_TOOLS_NAMESPACE, tool_id)
     remove_knowledge_tools_from_agents({tool_id})
+
+
+@router.get("/files/download")
+async def download_generated_file(path: str = Query(..., min_length=1)) -> FileResponse:
+    """下载 Agent 工具生成的本地文件。"""
+    file_path = _resolve_downloadable_file(path)
+    return FileResponse(
+        path=str(file_path),
+        filename=file_path.name,
+        media_type="application/octet-stream",
+    )
+
+
+@router.get("/files/preview", response_model=GeneratedFilePreviewResponse)
+async def preview_generated_file(path: str = Query(..., min_length=1)) -> GeneratedFilePreviewResponse:
+    """预览 Agent 工具生成的文本文件。"""
+    file_path = _resolve_downloadable_file(path)
+    max_preview_bytes = 200 * 1024
+    size = file_path.stat().st_size
+    raw = file_path.read_bytes()[: max_preview_bytes + 1]
+    truncated = len(raw) > max_preview_bytes
+    if truncated:
+        raw = raw[:max_preview_bytes]
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        content = raw.decode("utf-8", errors="replace")
+    return GeneratedFilePreviewResponse(
+        path=str(file_path),
+        name=file_path.name,
+        size=size,
+        content=content,
+        truncated=truncated or size > max_preview_bytes,
+    )

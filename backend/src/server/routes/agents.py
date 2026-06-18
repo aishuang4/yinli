@@ -37,11 +37,14 @@ AGENTS_NAMESPACE = "agents"
 
 class ModelConfig(BaseModel):
     """模型配置"""
-    primary: str = Field(default="qwen-plus", description="主模型")
-    fallback: list[str] = Field(default_factory=lambda: ["qwen-turbo"], description="降级模型链")
+    primary: str = Field(default="deepseek-chat", description="主模型")
+    fallback: list[str] = Field(default_factory=lambda: ["deepseek-reasoner"], description="降级模型链")
     temperature: float = Field(default=0.7, ge=0, le=2, description="温度参数")
     top_p: float = Field(default=0.8, ge=0, le=1, description="核采样参数")
     max_tokens: int = Field(default=4096, gt=0, description="最大输出 token 数")
+    max_react_iters: int = Field(default=40, ge=1, le=120, alias="maxReactIters", description="ReAct 最大循环次数")
+
+    model_config = {"populate_by_name": True}
 
 
 class Guardrails(BaseModel):

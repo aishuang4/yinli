@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。用户在 Chat 界面选择单个 Agent 或 Team 协作完成任务，支持 MCP 工具、Skills 技能、HTTP 知识库工具、三层记忆系统、权限控制与容器沙箱执行。
 
-技术栈：Electron 壳 + React 19/TypeScript/Vite 前端 + Python/FastAPI/AgentScope 2.0 后端 + SQLite 存储。模型默认接阿里百炼 DashScope，运行时可切换至 OpenAI、Anthropic、DeepSeek、Gemini、Ollama 等十余个供应商。
+技术栈：Electron 壳 + React 19/TypeScript/Vite 前端 + Python/FastAPI/AgentScope 2.0 后端 + SQLite 存储。模型默认接 DeepSeek，运行时可切换至 OpenAI、Anthropic、DashScope、Gemini、Ollama、自定义 OpenAI 兼容等十余个供应商。
 
 ## 常用命令
 
@@ -35,7 +35,7 @@ npm run lint     # eslint
 ./scripts/build-backend-desktop.sh
 ```
 
-首次运行需 `cp backend/.env.example backend/.env` 并填入 `AGENT_WORKSTATION_DASHSCOPE_API_KEY`。环境要求：Node >= 20（dev.sh 优先用 nvm 切到 24）、Python >= 3.11、uv。
+首次运行需 `cp backend/.env.example backend/.env` 并填入 `AGENT_WORKSTATION_DEEPSEEK_API_KEY`。环境要求：Node >= 20（dev.sh 优先用 nvm 切到 24）、Python >= 3.11、uv。
 
 ## 架构要点
 
@@ -60,7 +60,7 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 
 ### 配置分层
 
-- `config/settings.py` — `pydantic-settings`，环境变量前缀 `AGENT_WORKSTATION_`，从 `.env` 加载。属启动期静态配置（端口、DB URL、CORS、默认 DashScope key）。
+- `config/settings.py` — `pydantic-settings`，环境变量前缀 `AGENT_WORKSTATION_`，从 `.env` 加载。属启动期静态配置（端口、DB URL、CORS、默认 DeepSeek key）。
 - `config/runtime_settings.py` — 运行时可变的模型供应商配置，持久化在 `json_store`。`MODEL_PROVIDERS` 定义各供应商的 adapter/默认 model/base_url。`get_effective_model_settings()` 是工厂取当前生效模型的入口；公开给前端时 API key 用 `_mask_secret()` 脱敏。
 
 ### 前端

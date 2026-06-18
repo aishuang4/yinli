@@ -37,7 +37,7 @@ interface ModelSettings {
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<ModelSettings | null>(null);
-  const [provider, setProvider] = useState('dashscope');
+  const [provider, setProvider] = useState('deepseek');
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [defaultModel, setDefaultModel] = useState('');
@@ -49,6 +49,7 @@ export function SettingsPage() {
   const [notice, setNotice] = useState('');
 
   const selectedProvider = settings?.providers.find((item) => item.id === provider);
+  const apiKeyEditable = selectedProvider?.requiresApiKey || selectedProvider?.id === 'custom_openai';
   const modelOptions = useMemo(() => {
     const providerModels = selectedProvider?.models ?? [];
     return Array.from(new Set([
@@ -273,8 +274,8 @@ export function SettingsPage() {
                 <Input.Password
                   value={apiKey}
                   onChange={(event) => setApiKey(event.target.value)}
-                  placeholder={selectedProvider?.requiresApiKey ? '输入新的 API Key；留空则保持当前 Key' : '当前供应商不需要 API Key'}
-                  disabled={!selectedProvider?.requiresApiKey}
+                  placeholder={selectedProvider?.requiresApiKey ? '输入新的 API Key；留空则保持当前 Key' : '本地模型可留空；需要鉴权的网关可填写 Key'}
+                  disabled={!apiKeyEditable}
                 />
               </label>
 

@@ -110,6 +110,7 @@ class StoredChatMessage(BaseModel):
     agent_name: str | None = None
     model_name: str | None = None
     error: str | None = None
+    thinking: str = ""
     images: list[ChatImagePayload] = Field(default_factory=list)
     tool_calls: list[ChatToolRun] = Field(default_factory=list, alias="toolCalls")
     skill_calls: list[ChatSkillRun] = Field(default_factory=list, alias="skillCalls")
