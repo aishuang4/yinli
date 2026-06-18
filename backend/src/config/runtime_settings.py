@@ -141,6 +141,7 @@ MODEL_PROVIDERS: dict[str, ModelProvider] = {
         default_base_url="",
         default_model="",
         models=(),
+        requires_api_key=False,
         adapter="openai",
     ),
 }
@@ -168,14 +169,22 @@ def _mask_secret(value: str) -> str:
 
 def _default_model_settings() -> dict[str, Any]:
     return {
-        "provider": "dashscope",
+        "provider": "deepseek",
         "providerConfigs": {
+            "deepseek": {
+                "providerName": MODEL_PROVIDERS["deepseek"].name,
+                "apiKey": settings.deepseek_api_key,
+                "baseUrl": settings.deepseek_base_url,
+                "defaultModel": settings.default_model,
+                "fallbackModels": settings.fallback_models,
+                "customModels": [],
+            },
             "dashscope": {
                 "providerName": MODEL_PROVIDERS["dashscope"].name,
                 "apiKey": settings.dashscope_api_key,
                 "baseUrl": settings.dashscope_base_url,
-                "defaultModel": settings.default_model,
-                "fallbackModels": settings.fallback_models,
+                "defaultModel": MODEL_PROVIDERS["dashscope"].default_model,
+                "fallbackModels": ["qwen-turbo", "qwen-long"],
                 "customModels": [],
             }
         },
@@ -194,10 +203,18 @@ def _clean_model_list(items: Any) -> list[str]:
     return result
 
 
+def _default_provider_api_key(provider_id: str) -> str:
+    if provider_id == "deepseek":
+        return settings.deepseek_api_key
+    if provider_id == "dashscope":
+        return settings.dashscope_api_key
+    return ""
+
+
 def _default_provider_config(provider: ModelProvider) -> dict[str, Any]:
     return {
         "providerName": provider.name,
-        "apiKey": "",
+        "apiKey": _default_provider_api_key(provider.id),
         "baseUrl": provider.default_base_url,
         "defaultModel": provider.default_model,
         "fallbackModels": [],
@@ -216,7 +233,7 @@ def _provider_configs_from_stored(stored: dict[str, Any], defaults: dict[str, An
             base = _default_provider_config(provider)
             result[provider_id] = {
                 "providerName": str(raw.get("providerName") or base["providerName"]),
-                "apiKey": str(raw.get("apiKey") or ""),
+                "apiKey": str(raw.get("apiKey") or base["apiKey"]),
                 "baseUrl": str(raw.get("baseUrl") or base["baseUrl"]),
                 "defaultModel": str(raw.get("defaultModel") or base["defaultModel"]),
                 "fallbackModels": _clean_model_list(raw.get("fallbackModels") or []),
@@ -233,7 +250,7 @@ def _provider_configs_from_stored(stored: dict[str, Any], defaults: dict[str, An
     }
     result[provider.id] = {
         "providerName": str(stored.get("providerName") or provider.name),
-        "apiKey": str(stored.get("apiKey") or settings.dashscope_api_key or ""),
+        "apiKey": str(stored.get("apiKey") or _default_provider_api_key(provider.id) or ""),
         "baseUrl": str(stored.get("baseUrl") or provider.default_base_url),
         "defaultModel": str(stored.get("defaultModel") or provider.default_model),
         "fallbackModels": _clean_model_list(stored.get("fallbackModels") or settings.fallback_models or []),
@@ -289,6 +306,21 @@ def get_current_model_options() -> list[str]:
     ])
 
 
+def _is_provider_configured(provider: ModelProvider, config: dict[str, Any]) -> bool:
+    if provider.id == "custom_openai":
+        return bool(
+            str(config.get("baseUrl") or "").strip()
+            and (
+                str(config.get("defaultModel") or "").strip()
+                or _clean_model_list(config.get("customModels") or [])
+            )
+        )
+    return bool(
+        not provider.requires_api_key
+        or str(config.get("apiKey") or "").strip()
+    )
+
+
 def get_model_settings_public() -> dict[str, Any]:
     raw = get_model_settings_raw()
     provider = MODEL_PROVIDERS[raw["provider"]]
@@ -313,10 +345,7 @@ def get_model_settings_public() -> dict[str, Any]:
                 "models": list(item.models),
                 "requiresApiKey": item.requires_api_key,
                 "adapter": item.adapter,
-                "configured": bool(
-                    not item.requires_api_key
-                    or raw["providerConfigs"].get(item.id, {}).get("apiKey")
-                ),
+                "configured": _is_provider_configured(item, raw["providerConfigs"].get(item.id, {})),
                 "apiKeyConfigured": bool(raw["providerConfigs"].get(item.id, {}).get("apiKey")),
                 "apiKeyPreview": _mask_secret(str(raw["providerConfigs"].get(item.id, {}).get("apiKey") or "")),
                 "providerName": str(raw["providerConfigs"].get(item.id, {}).get("providerName") or item.name),

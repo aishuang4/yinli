@@ -36,6 +36,7 @@ from src.server.routes.chat.prompts import (
 )
 from src.server.routes.chat.router import router
 from src.server.routes.chat.runtime import _build_runtime_guardrails, _build_user_content
+from src.server.routes.chat.skill_runs import get_active_session_skill_run, update_skill_run_status
 from src.server.routes.chat.store import _append_assistant_message
 from src.server.routes.chat.team import _run_team_workers
 from src.server.routes.chat.team_state import (
@@ -71,10 +72,28 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
             return
 
         assistant_text = interaction.assistant_text
+        assistant_thinking = ""
         assistant_error: str | None = None
         skill_runs = interaction.skill_runs
         team_activities = interaction.team_activities
         activity = _find_team_activity(team_activities, interaction.agent_id)
+
+        def _mark_persistent_skill_run(
+            agent_id: str,
+            *,
+            status: str,
+            current_step: str,
+            pending_interaction_id: str = "",
+        ) -> None:
+            run = get_active_session_skill_run(interaction.session_id, agent_id)
+            if run:
+                update_skill_run_status(
+                    run,
+                    status=status,
+                    current_step=current_step,
+                    pending_interaction_id=pending_interaction_id,
+                )
+
         _record_run_event(
             session_id=interaction.session_id,
             event_type="HITL_RESOLVED",
@@ -123,6 +142,11 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     event_type = event_data.pop("type", "UNKNOWN")
                     _attach_provider_cache_usage(event_type, event_data)
                     if event_type in HITL_EVENT_TYPES:
+                        _mark_persistent_skill_run(
+                            worker_member.agent_id,
+                            status="waiting_user",
+                            current_step="waiting_hitl_resume",
+                        )
                         next_interaction = _create_pending_interaction(
                             interaction_type=event_type,
                             agent=agent,
@@ -211,6 +235,11 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         })
 
                 activity = _find_team_activity(team_activities, worker_member.agent_id)
+                _mark_persistent_skill_run(
+                    worker_member.agent_id,
+                    status="completed",
+                    current_step="completed",
+                )
                 if activity:
                     _replace_team_activity(
                         team_activities,
@@ -345,6 +374,11 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         tool_calls=assistant_tool_calls,
                     )
                     if event_type in HITL_EVENT_TYPES:
+                        _mark_persistent_skill_run(
+                            leader_agent_id,
+                            status="waiting_user",
+                            current_step="waiting_hitl_resume",
+                        )
                         next_interaction = _create_pending_interaction(
                             interaction_type=event_type,
                             agent=leader_agent,
@@ -365,6 +399,8 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         return
                     if event_type == "TEXT_BLOCK_DELTA":
                         assistant_text += str(event_data.get("delta", ""))
+                    elif event_type == "THINKING_BLOCK_DELTA":
+                        assistant_thinking += str(event_data.get("delta", ""))
                     if event_type == "REPLY_END" and skill_runs:
                         completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
                         yield _sse_event("SKILL_END", {
@@ -374,6 +410,11 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     yield _sse_event(event_type, event_data)
 
                 completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
+                _mark_persistent_skill_run(
+                    leader_agent_id,
+                    status="completed",
+                    current_step="completed",
+                )
                 completed_team_activities = _finalize_team_activities(
                     team_activities,
                     leader_agent_id=leader_agent_id,
@@ -386,6 +427,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     model_name=interaction.model_name,
                     content=assistant_text,
                     error=assistant_error,
+                    thinking=assistant_thinking,
                     skill_calls=completed_skill_runs,
                     tool_calls=assistant_tool_calls,
                     team_activities=completed_team_activities,
@@ -457,6 +499,11 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     tool_calls=assistant_tool_calls,
                 )
                 if event_type in HITL_EVENT_TYPES:
+                    _mark_persistent_skill_run(
+                        interaction.agent_id,
+                        status="waiting_user",
+                        current_step="waiting_hitl_resume",
+                    )
                     next_interaction = _create_pending_interaction(
                         interaction_type=event_type,
                         agent=agent,
@@ -477,6 +524,8 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
 
                 if event_type == "TEXT_BLOCK_DELTA":
                     assistant_text += str(event_data.get("delta", ""))
+                elif event_type == "THINKING_BLOCK_DELTA":
+                    assistant_thinking += str(event_data.get("delta", ""))
 
                 if event_type == "REPLY_END" and skill_runs:
                     completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
@@ -488,6 +537,11 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 yield _sse_event(event_type, event_data)
 
             completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
+            _mark_persistent_skill_run(
+                interaction.agent_id,
+                status="completed",
+                current_step="completed",
+            )
             completed_team_activities = _finalize_team_activities(
                 team_activities,
                 leader_agent_id=interaction.agent_id,
@@ -500,6 +554,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 model_name=interaction.model_name,
                 content=assistant_text,
                 error=assistant_error,
+                thinking=assistant_thinking,
                 skill_calls=completed_skill_runs,
                 tool_calls=assistant_tool_calls,
                 team_activities=completed_team_activities,
@@ -550,6 +605,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 model_name=interaction.model_name,
                 content=assistant_text,
                 error=assistant_error,
+                thinking=assistant_thinking,
                 skill_calls=_set_skill_run_status(skill_runs, "failed"),
                 team_activities=_set_team_activity_status(team_activities, "failed"),
             )

@@ -16,7 +16,7 @@ from typing import Any, AsyncGenerator, Callable
 from pydantic import SecretStr
 
 from agentscope.agent import Agent
-from agentscope.agent._config import ModelConfig
+from agentscope.agent._config import ModelConfig, ReActConfig
 from agentscope.model import (
     AnthropicChatModel,
     ChatModelBase,
@@ -46,6 +46,7 @@ from agentscope.workspace import DockerWorkspace, LocalWorkspace
 
 from src.config.settings import settings
 from src.config.runtime_settings import get_effective_model_settings
+from src.tools.ask_user import AskUser
 from src.tools.http_request import HttpRequest
 from src.tools.knowledge_base_search import KnowledgeBaseSearch
 
@@ -70,6 +71,7 @@ class AgentModelOptions:
     temperature: float | None = None
     top_p: float | None = None
     max_tokens: int | None = None
+    max_react_iters: int = 40
 
 
 @dataclass(frozen=True)
@@ -121,14 +123,14 @@ def _create_model(
     model_options: AgentModelOptions | None = None,
 ):
     """
-    创建 DashScope 聊天模型实例
+    创建当前运行供应商的聊天模型实例
 
     Args:
-        model_name: 模型名称（如 qwen-plus, qwen-max, qwen-turbo）
+        model_name: 模型名称（如 deepseek-chat、gpt-4.1、本地 OpenAI 兼容模型名）
         stream: 是否启用流式输出
 
     Returns:
-        DashScopeChatModel: 配置好的模型实例
+        ChatModelBase: 配置好的模型实例
     """
     parameters: dict[str, object] = {
         "thinking_enable": thinking_enable,
@@ -406,6 +408,7 @@ def _create_default_toolkit(
         Read(),
         Grep(),
         Glob(),
+        AskUser(),
     ]
     if not read_only:
         local_tools.extend([Write(), Edit()])
@@ -527,6 +530,9 @@ def get_or_create_agent(
         model_config=ModelConfig(
             max_retries=3,
             fallback_model=None,
+        ),
+        react_config=ReActConfig(
+            max_iters=max(1, min(int(model_options.max_react_iters if model_options else 40), 120)),
         ),
     )
 

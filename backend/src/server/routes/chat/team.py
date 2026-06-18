@@ -132,6 +132,7 @@ async def _run_team_workers(
             temperature=worker_model_config.temperature if worker_model_config else None,
             top_p=worker_model_config.top_p if worker_model_config else None,
             max_tokens=worker_model_config.max_tokens if worker_model_config else None,
+            max_react_iters=worker_model_config.max_react_iters if worker_model_config else 40,
         )
         worker_guardrails = _build_runtime_guardrails(worker_config)
         worker_mcp_servers = _build_runtime_mcp_servers(worker_config)

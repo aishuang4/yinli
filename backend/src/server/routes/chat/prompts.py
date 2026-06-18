@@ -71,13 +71,14 @@ def _build_clarification_system_prompt() -> str:
     """Instructions for asking the user for missing information."""
 
     return "\n".join([
-        "## Clarification Contract",
+        "## Human Input / Clarification Contract",
         "If the user's request cannot be executed reliably because required information is missing, ask for clarification instead of guessing.",
-        "When clarification is required, the first output token must be <clarification>. Output only one clarification block and no other text before or after it:",
+        "Prefer calling the AskUser tool when clarification is required. AskUser pauses the current AgentScope ReAct loop and resumes after the user answers.",
+        "AskUser questions must use at most 3 questions. Supported question types are: choice, multi_choice, text. For choice and multi_choice, provide 2-5 concise options.",
+        "Only use AskUser when the missing information blocks meaningful progress.",
+        "",
+        "Legacy fallback only: if tools are unavailable and clarification is required, the first output token must be <clarification>. Output only one clarification block and no other text before or after it:",
         '<clarification>{"title":"需要补充信息","description":"简短说明为什么需要这些信息","questions":[{"id":"target","type":"choice","label":"请选择目标","options":["选项 A","选项 B"]},{"id":"needs","type":"multi_choice","label":"请选择需要的能力","options":["能力 A","能力 B"]},{"id":"details","type":"text","label":"请补充具体要求","placeholder":"输入补充信息"}]}</clarification>',
-        "Supported question types are: choice, multi_choice, text.",
-        "Use at most 3 questions. For choice and multi_choice, provide 2-5 concise options.",
-        "Only use clarification when the missing information blocks meaningful progress.",
     ])
 
 

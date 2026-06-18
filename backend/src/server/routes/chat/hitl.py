@@ -139,8 +139,12 @@ def _build_resume_event(
                 ToolResultBlock(
                     id=str(tool_call.get("id", "")),
                     name=str(tool_call.get("name", "tool")),
-                    output=data.external_results.get(str(tool_call.get("id", "")), ""),
-                    state=ToolResultState.SUCCESS,
+                    output=(
+                        data.external_results.get(str(tool_call.get("id", "")), "")
+                        if data.action == "approve"
+                        else "用户拒绝或取消了这次外部执行/补充信息请求。"
+                    ),
+                    state=ToolResultState.SUCCESS if data.action == "approve" else ToolResultState.DENIED,
                 )
                 for tool_call in interaction.tool_calls
             ],

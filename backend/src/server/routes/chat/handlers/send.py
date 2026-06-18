@@ -51,6 +51,13 @@ from src.server.routes.chat.runtime import (
     _build_user_content,
     _permission_mode_for_guardrails,
 )
+from src.server.routes.chat.skill_runs import (
+    build_skill_run_system_prompt,
+    get_active_session_skill_run,
+    get_skill_for_run,
+    start_or_resume_skill_run,
+    update_skill_run_status,
+)
 from src.server.routes.chat.store import (
     _append_assistant_message,
     _append_user_message,
@@ -121,9 +128,28 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         memory_system_prompt = _build_agent_memory_prompt(agent_id)
         history_system_prompt = _build_conversation_history_prompt(session_id)
         team_system_prompt = _build_team_system_prompt(run_data.team_name, run_data.team_members)
+        persist_run = not run_data.sandbox
+        active_skill_run = get_active_session_skill_run(session_id, agent_id)
+        active_skill = get_skill_for_run(active_skill_run)
+        if active_skill_run and active_skill_run.get("status") == "waiting_user" and persist_run:
+            active_skill_run = update_skill_run_status(
+                active_skill_run,
+                status="active",
+                current_step="resumed_with_user_input",
+                pending_interaction_id="",
+            )
         skill_ids = agent_config.skills if agent_config and not run_data.skill_ids else run_data.skill_ids
-        used_skills = select_relevant_skills(skill_ids, run_data.message)
+        used_skills = [active_skill] if active_skill else select_relevant_skills(skill_ids, run_data.message)
+        if not active_skill_run and used_skills and persist_run:
+            active_skill_run = start_or_resume_skill_run(
+                session_id=session_id,
+                agent_id=agent_id,
+                skill=used_skills[0],
+                status="active",
+                current_step="started",
+            )
         skill_system_prompt = build_skill_system_prompt_from_skills(used_skills)
+        skill_run_system_prompt = build_skill_run_system_prompt(active_skill_run)
         clarification_system_prompt = _build_clarification_system_prompt()
         used_skill_details = list_skill_usage_details(used_skills)
         skill_runs = [
@@ -139,6 +165,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 memory_system_prompt,
                 history_system_prompt,
                 team_system_prompt,
+                skill_run_system_prompt,
                 skill_system_prompt,
                 clarification_system_prompt,
             ]
@@ -156,6 +183,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
             temperature=model_config_data.temperature if model_config_data else None,
             top_p=model_config_data.top_p if model_config_data else None,
             max_tokens=model_config_data.max_tokens if model_config_data else None,
+            max_react_iters=model_config_data.max_react_iters if model_config_data else 40,
         )
         guardrails = _build_runtime_guardrails(agent_config)
         mcp_servers = _build_runtime_mcp_servers(agent_config)
@@ -164,7 +192,6 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         assistant_thinking = ""
         assistant_error: str | None = None
         worker_outputs: list[dict[str, str]] = []
-        persist_run = not run_data.sandbox
         team_activities = _build_team_activities(
             team_name=run_data.team_name,
             leader_agent_id=agent_id,
@@ -512,6 +539,12 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     tool_calls=assistant_tool_calls,
                 )
                 if event_type in HITL_EVENT_TYPES:
+                    if active_skill_run and persist_run:
+                        active_skill_run = update_skill_run_status(
+                            active_skill_run,
+                            status="waiting_user",
+                            current_step="waiting_hitl_resume",
+                        )
                     interaction = _create_pending_interaction(
                         interaction_type=event_type,
                         agent=agent,
@@ -546,6 +579,13 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
 
             clarification = _extract_clarification_request(assistant_text) or _extract_clarification_request(assistant_thinking)
             if clarification:
+                if active_skill_run:
+                    active_skill_run = update_skill_run_status(
+                        active_skill_run,
+                        status="waiting_user",
+                        current_step=str(clarification.get("title") or "waiting_user"),
+                        pending_interaction_id=str(clarification.get("id") or ""),
+                    )
                 _mark_team_leader_waiting_for_clarification(team_activities, agent_id)
                 if team_activities:
                     yield _sse_event("TEAM_ACTIVITY", {
@@ -566,6 +606,13 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 return
 
             completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
+            if active_skill_run:
+                active_skill_run = update_skill_run_status(
+                    active_skill_run,
+                    status="completed",
+                    current_step="completed",
+                    pending_interaction_id="",
+                )
             completed_team_activities = _finalize_team_activities(
                 team_activities,
                 leader_agent_id=agent_id,
@@ -580,6 +627,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     model_name=model_name,
                     content=assistant_text,
                     error=assistant_error,
+                    thinking=assistant_thinking,
                     skill_calls=completed_skill_runs,
                     tool_calls=assistant_tool_calls,
                     team_activities=completed_team_activities,

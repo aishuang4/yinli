@@ -30,7 +30,7 @@ import type {
   AgentCreatePayload,
   ModelOption,
 } from '../../types/agent';
-import { createEmptyAgentForm } from '../../types/agent';
+import { DEFAULT_MODEL_CONFIG, createEmptyAgentForm } from '../../types/agent';
 import { useMcp } from '../../hooks/useMcp';
 import { useEnabledSkills } from '../../hooks/useSkills';
 import { useKnowledgeTools } from '../../hooks/useKnowledgeTools';
@@ -135,7 +135,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
         avatar: agent.avatar,
         description: agent.description,
         systemPrompt: agent.systemPrompt,
-        modelConfig: { ...agent.modelConfig },
+        modelConfig: { ...DEFAULT_MODEL_CONFIG, ...agent.modelConfig },
         mcpTools: [...agent.mcpTools],
         knowledgeTools: [...agent.knowledgeTools],
         skills: [...agent.skills],
@@ -650,7 +650,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                       ...form,
                       modelConfig: {
                         ...form.modelConfig,
-                        fallback: [...form.modelConfig.fallback, 'qwen-turbo'],
+                        fallback: [...form.modelConfig.fallback, 'deepseek-reasoner'],
                       },
                     })
                   }
@@ -720,6 +720,27 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                 }
                 style={{ width: 160 }}
               />
+            </div>
+
+            <div>
+              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
+                ReAct 最大循环次数
+              </label>
+              <InputNumber
+                min={1}
+                max={120}
+                value={form.modelConfig.maxReactIters}
+                onChange={(value) =>
+                  setForm({
+                    ...form,
+                    modelConfig: { ...form.modelConfig, maxReactIters: Number(value ?? 40) },
+                  })
+                }
+                style={{ width: 160 }}
+              />
+              <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+                复杂 Skills 或多工具任务建议 40-80；过高会增加耗时和费用。
+              </div>
             </div>
           </div>
         </section>

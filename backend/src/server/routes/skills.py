@@ -392,6 +392,14 @@ def list_skill_usage_details(skills: list[Skill]) -> list[dict[str, object]]:
     ]
 
 
+def get_installed_skill(skill_id: str) -> Skill | None:
+    """按 ID 获取已安装启用的 Skill。"""
+    skill = _skills.get(skill_id)
+    if not skill or skill.status != "installed" or not skill.enabled:
+        return None
+    return skill
+
+
 def select_relevant_skills(skill_ids: list[str], message: str) -> list[Skill]:
     """根据用户消息从 Agent 绑定的 Skills 中选择本次要使用的 Skill。"""
     loaded_skills = _get_loaded_skills(skill_ids)
@@ -435,7 +443,7 @@ def select_relevant_skills(skill_ids: list[str], message: str) -> list[Skill]:
             if score == top_score or score >= 4
         ][:3]
 
-    if explicit_skill_request and len(loaded_skills) == 1:
+    if len(loaded_skills) == 1 and explicit_skill_request:
         return loaded_skills
 
     return []

@@ -20,13 +20,17 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8765
 
+    # === DeepSeek 配置 ===
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+
     # === 百炼 DashScope 配置 ===
     dashscope_api_key: str = ""
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     # === 默认模型配置 ===
-    default_model: str = "qwen-plus"
-    fallback_models: list[str] = ["qwen-turbo", "qwen-long"]
+    default_model: str = "deepseek-chat"
+    fallback_models: list[str] = ["deepseek-reasoner"]
 
     # === 数据库 ===
     database_url: str = "sqlite+aiosqlite:///./data/agent_workstation.db"

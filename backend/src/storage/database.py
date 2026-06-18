@@ -41,6 +41,15 @@ DEFAULT_PLAN_CONFIG = {
     "allowReplanning": True,
 }
 
+DEFAULT_MODEL_CONFIG = {
+    "primary": "deepseek-chat",
+    "fallback": ["deepseek-reasoner"],
+    "temperature": 0.7,
+    "topP": 0.8,
+    "maxTokens": 4096,
+    "maxReactIters": 40,
+}
+
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -198,6 +207,7 @@ def ensure_db() -> None:
                     agent_name TEXT,
                     model_name TEXT,
                     error TEXT,
+                    thinking TEXT NOT NULL DEFAULT '',
                     images TEXT NOT NULL,
                     tool_calls TEXT NOT NULL DEFAULT '[]',
                     skill_calls TEXT NOT NULL,
@@ -261,8 +271,24 @@ def ensure_db() -> None:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS skill_runs (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    skill_id TEXT NOT NULL,
+                    skill_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    current_step TEXT NOT NULL DEFAULT '',
+                    collected_inputs TEXT NOT NULL DEFAULT '{}',
+                    pending_interaction_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_skill_runs_session_agent_status
+                    ON skill_runs(session_id, agent_id, status, updated_at);
             """)
             _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
+            _ensure_column(conn, "chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "memory_facts", "pinned", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "memory_facts", "status", "TEXT NOT NULL DEFAULT 'active'")
             _ensure_column(conn, "memory_facts", "access_count", "INTEGER NOT NULL DEFAULT 0")
@@ -457,7 +483,11 @@ def list_agents() -> list[dict[str, Any]]:
             "avatar": row["avatar"],
             "description": row["description"],
             "system_prompt": row["system_prompt"],
-            "modelConfig": _loads(row["model_config"], {}),
+            "modelConfig": (
+                {**DEFAULT_MODEL_CONFIG, **model_config}
+                if isinstance((model_config := _loads(row["model_config"], {})), dict)
+                else DEFAULT_MODEL_CONFIG
+            ),
             "mcpTools": _loads(row["mcp_tools"], []),
             "knowledgeTools": _loads(row["knowledge_tools"], []),
             "skills": _loads(row["skills"], []),
@@ -727,6 +757,93 @@ def replace_skills(records: dict[str, dict[str, Any]]) -> None:
         conn.commit()
 
 
+def get_active_skill_run(session_id: str, agent_id: str) -> dict[str, Any] | None:
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM skill_runs
+            WHERE session_id = ?
+              AND agent_id = ?
+              AND status IN ('active', 'waiting_user')
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (session_id, agent_id),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "sessionId": row["session_id"],
+        "agentId": row["agent_id"],
+        "skillId": row["skill_id"],
+        "skillName": row["skill_name"],
+        "status": row["status"],
+        "currentStep": row["current_step"],
+        "collectedInputs": _loads(row["collected_inputs"], {}),
+        "pendingInteractionId": row["pending_interaction_id"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def upsert_skill_run(record: dict[str, Any]) -> dict[str, Any]:
+    ensure_db()
+    now = _utc_now()
+    run_id = str(record.get("id") or f"skill-run-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}")
+    created_at = str(record.get("createdAt") or now)
+    payload = {
+        "id": run_id,
+        "session_id": str(record.get("sessionId") or record.get("session_id") or ""),
+        "agent_id": str(record.get("agentId") or record.get("agent_id") or ""),
+        "skill_id": str(record.get("skillId") or record.get("skill_id") or ""),
+        "skill_name": str(record.get("skillName") or record.get("skill_name") or ""),
+        "status": str(record.get("status") or "active"),
+        "current_step": str(record.get("currentStep") or record.get("current_step") or ""),
+        "collected_inputs": _dumps(record.get("collectedInputs") or record.get("collected_inputs") or {}),
+        "pending_interaction_id": str(record.get("pendingInteractionId") or record.get("pending_interaction_id") or ""),
+        "created_at": created_at,
+        "updated_at": now,
+    }
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO skill_runs (
+                id, session_id, agent_id, skill_id, skill_name, status,
+                current_step, collected_inputs, pending_interaction_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                status = excluded.status,
+                current_step = excluded.current_step,
+                collected_inputs = excluded.collected_inputs,
+                pending_interaction_id = excluded.pending_interaction_id,
+                updated_at = excluded.updated_at
+            """,
+            (
+                payload["id"], payload["session_id"], payload["agent_id"],
+                payload["skill_id"], payload["skill_name"], payload["status"],
+                payload["current_step"], payload["collected_inputs"],
+                payload["pending_interaction_id"], payload["created_at"],
+                payload["updated_at"],
+            ),
+        )
+        conn.commit()
+    return get_active_skill_run(payload["session_id"], payload["agent_id"]) or {
+        "id": payload["id"],
+        "sessionId": payload["session_id"],
+        "agentId": payload["agent_id"],
+        "skillId": payload["skill_id"],
+        "skillName": payload["skill_name"],
+        "status": payload["status"],
+        "currentStep": payload["current_step"],
+        "collectedInputs": _loads(payload["collected_inputs"], {}),
+        "pendingInteractionId": payload["pending_interaction_id"],
+        "createdAt": payload["created_at"],
+        "updatedAt": payload["updated_at"],
+    }
+
+
 def load_chat_store() -> dict[str, Any]:
     ensure_db()
     with _lock, _connect() as conn:
@@ -746,6 +863,7 @@ def load_chat_store() -> dict[str, Any]:
             "agent_name": row["agent_name"],
             "model_name": row["model_name"],
             "error": row["error"],
+            "thinking": row["thinking"],
             "images": _loads(row["images"], []),
             "toolCalls": _loads(row["tool_calls"], []),
             "skillCalls": _loads(row["skill_calls"], []),
@@ -797,7 +915,7 @@ def save_chat_store(data: dict[str, Any]) -> None:
                 rows.append((
                     item["id"], session_id, item["role"], item.get("content", ""),
                     item.get("agent_id"), item.get("agent_name"), item.get("model_name"),
-                    item.get("error"), _dumps(item.get("images", [])),
+                    item.get("error"), item.get("thinking", ""), _dumps(item.get("images", [])),
                     _dumps(item.get("toolCalls", item.get("tool_calls", []))),
                     _dumps(item.get("skillCalls", item.get("skill_calls", []))),
                     _dumps(item.get("teamActivities", item.get("team_activities", []))),
@@ -807,9 +925,9 @@ def save_chat_store(data: dict[str, Any]) -> None:
             """
             INSERT INTO chat_messages (
                 id, session_id, role, content, agent_id, agent_name, model_name,
-                error, images, tool_calls, skill_calls, team_activities, created_at,
+                error, thinking, images, tool_calls, skill_calls, team_activities, created_at,
                 sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
