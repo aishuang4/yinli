@@ -15,6 +15,7 @@ from src.server.routes.chat.models import (
     CHAT_NAMESPACE,
     CHAT_STORE_KEY,
     ChatImagePayload,
+    ChatModelCacheRun,
     ChatSession,
     ChatSkillRun,
     ChatStore,
@@ -110,6 +111,7 @@ def _append_assistant_message(
     skill_calls: list[ChatSkillRun] | None = None,
     tool_calls: list[ChatToolRun] | None = None,
     team_activities: list[ChatTeamActivity] | None = None,
+    model_caches: list[ChatModelCacheRun] | None = None,
 ) -> None:
     """追加助手消息，并更新会话摘要"""
     now = datetime.now(timezone.utc).isoformat()
@@ -127,6 +129,7 @@ def _append_assistant_message(
         tool_calls=tool_calls or [],
         skill_calls=skill_calls or [],
         team_activities=team_activities or [],
+        model_caches=model_caches or [],
         created_at=now,
     ))
 

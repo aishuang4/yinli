@@ -10,7 +10,7 @@ from src.agents.factory import AgentGuardrails
 from src.storage.database import append_run_event
 
 from src.server.routes.chat.helpers import _trim_text
-from src.server.routes.chat.models import ChatToolRun, TRACE_EVENT_TYPES
+from src.server.routes.chat.models import ChatModelCacheRun, ChatToolRun, TRACE_EVENT_TYPES
 from src.server.routes.chat.team_state import _tool_result_status
 
 
@@ -425,3 +425,26 @@ def _attach_provider_cache_usage(event_type: str, event_data: dict) -> None:
         "hit_tokens": cache_read,
         "available": bool(cache_creation or cache_read),
     }
+
+
+def _model_cache_from_event(event_data: dict, model_name: str) -> ChatModelCacheRun | None:
+    """Build provider prompt-cache stats from a MODEL_CALL_END payload."""
+
+    created_tokens = int(event_data.get("cache_creation_input_tokens") or 0)
+    hit_tokens = int(event_data.get("cache_input_tokens") or 0)
+    if created_tokens == 0 and hit_tokens == 0:
+        return None
+    input_tokens = int(event_data.get("input_tokens") or 0)
+    output_tokens = int(event_data.get("output_tokens") or 0)
+    cache_base = input_tokens + hit_tokens
+    return ChatModelCacheRun.model_validate({
+        "id": str(event_data.get("id") or ""),
+        "modelName": model_name,
+        "inputTokens": input_tokens,
+        "outputTokens": output_tokens,
+        "cacheCreationInputTokens": created_tokens,
+        "cacheInputTokens": hit_tokens,
+        "cacheHitRate": hit_tokens / cache_base if cache_base > 0 else 0,
+        "estimatedSavedInputTokens": hit_tokens,
+        "createdAt": str(event_data.get("created_at") or ""),
+    })

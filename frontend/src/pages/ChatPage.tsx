@@ -42,6 +42,8 @@ interface LocalMessage {
   teamActivities?: TeamActivityInfo[];
   /** 自动记忆总结 */
   memorySummaries?: MemorySummaryInfo[];
+  /** 模型厂商侧 Prompt Cache 统计 */
+  modelCaches?: ModelCacheInfo[];
   /** 思考链内容（仅 assistant 消息） */
   thinking?: string;
   /** Token 用量 */
@@ -100,6 +102,8 @@ interface StoredChatMessage {
   skill_calls?: SkillCallInfo[];
   teamActivities?: TeamActivityInfo[];
   team_activities?: StoredTeamActivity[];
+  modelCaches?: ModelCacheInfo[];
+  model_caches?: ModelCacheInfo[];
   created_at: string;
 }
 
@@ -301,6 +305,7 @@ export function ChatPage() {
       toolCalls: normalizeStoredToolCalls(item.toolCalls || item.tool_calls || []),
       skillCalls: item.skillCalls || item.skill_calls || [],
       teamActivities: normalizeStoredTeamActivities(item.teamActivities || item.team_activities || []),
+      modelCaches: item.modelCaches || item.model_caches || [],
     })));
   }, []);
 
@@ -619,6 +624,7 @@ export function ChatPage() {
         toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
         teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,
         memorySummaries: state.memorySummaries.length > 0 ? state.memorySummaries : undefined,
+        modelCaches: state.modelCaches.length > 0 ? state.modelCaches : undefined,
         thinking: state.thinkingContent || undefined,
         tokenUsage: state.tokenUsage,
         modelName: state.modelName,
@@ -1093,6 +1099,7 @@ function MessageBubble({
     (message.teamActivities && message.teamActivities.length > 0) ||
     (message.skillCalls && message.skillCalls.length > 0) ||
     (message.memorySummaries && message.memorySummaries.length > 0) ||
+    (message.modelCaches && message.modelCaches.length > 0) ||
     (message.toolCalls && message.toolCalls.length > 0)
   );
 
@@ -1158,7 +1165,7 @@ function MessageBubble({
             teamActivities={message.teamActivities || []}
             skillCalls={message.skillCalls || []}
             memorySummaries={message.memorySummaries || []}
-            modelCaches={[]}
+            modelCaches={message.modelCaches || []}
             toolCalls={message.toolCalls || []}
             selectedTeamActivityId={selectedTeamActivityId}
             onSelectTeamActivity={onSelectTeamActivity}
@@ -2308,7 +2315,16 @@ function HitlApprovalBlock({
             setSubmitting(null);
           }
         }}
+        onCancel={async () => {
+          setSubmitting('reject');
+          try {
+            await onResolve(request.interactionId, 'reject');
+          } finally {
+            setSubmitting(null);
+          }
+        }}
         submittingOverride={submitting === 'approve'}
+        cancelSubmittingOverride={submitting === 'reject'}
       />
     );
   }
@@ -2489,11 +2505,15 @@ function ClarificationDock({
 function ClarificationBlock({
   request,
   onSubmit,
+  onCancel,
   submittingOverride,
+  cancelSubmittingOverride,
 }: {
   request: ClarificationRequestInfo;
   onSubmit: (content: string) => Promise<void>;
+  onCancel?: () => Promise<void>;
   submittingOverride?: boolean;
+  cancelSubmittingOverride?: boolean;
 }) {
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -2600,7 +2620,17 @@ function ClarificationBlock({
           </div>
         ))}
       </div>
-      <div className="mt-3 flex justify-end">
+      <div className="mt-3 flex justify-end gap-2">
+        {onCancel && (
+          <Button
+            danger
+            loading={cancelSubmittingOverride}
+            disabled={submitting || submittingOverride}
+            onClick={onCancel}
+          >
+            取消请求
+          </Button>
+        )}
         <Button type="primary" loading={submitting || submittingOverride} onClick={handleSubmit}>
           提交补充信息
         </Button>

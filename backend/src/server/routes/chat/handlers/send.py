@@ -26,6 +26,7 @@ from src.server.routes.chat.models import (
     HITL_EVENT_TYPES,
     MULTIMODAL_MODELS,
     ChatMessage,
+    ChatModelCacheRun,
     ChatSkillRun,
 )
 from src.server.routes.chat.prompts import (
@@ -77,6 +78,7 @@ from src.server.routes.chat.team_state import (
 from src.server.routes.chat.trace_recorder import (
     _attach_provider_cache_usage,
     _make_fallback_trace_recorder,
+    _model_cache_from_event,
     _record_agent_scope_event,
     _record_run_event,
     _record_tool_execution_artifacts,
@@ -191,6 +193,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         assistant_text = ""
         assistant_thinking = ""
         assistant_error: str | None = None
+        assistant_model_caches: list[ChatModelCacheRun] = []
         worker_outputs: list[dict[str, str]] = []
         team_activities = _build_team_activities(
             team_name=run_data.team_name,
@@ -510,6 +513,10 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 # 提取事件类型（EventType 枚举值）
                 event_type = event_data.pop("type", "UNKNOWN")
                 _attach_provider_cache_usage(event_type, event_data)
+                if event_type == "MODEL_CALL_END":
+                    cache_entry = _model_cache_from_event(event_data, model_name)
+                    if cache_entry:
+                        assistant_model_caches.append(cache_entry)
                 _record_agent_scope_event(
                     session_id=session_id,
                     event_type=event_type,
@@ -631,6 +638,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     skill_calls=completed_skill_runs,
                     tool_calls=assistant_tool_calls,
                     team_activities=completed_team_activities,
+                    model_caches=assistant_model_caches,
                 )
                 _record_run_event(
                     session_id=session_id,
@@ -715,6 +723,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     error=assistant_error,
                     skill_calls=failed_skill_runs,
                     team_activities=_set_team_activity_status(team_activities, "failed"),
+                    model_caches=assistant_model_caches,
                 )
                 append_agent_memory_event(
                     agent_id=agent_id,

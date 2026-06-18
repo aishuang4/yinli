@@ -8,12 +8,15 @@ import asyncio
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from src.server.routes.chat.helpers import _sse_event
 
 
 EventStreamFactory = Callable[[], AsyncGenerator[str, None]]
+MAX_BACKGROUND_RUNS = 50
+MAX_EVENTS_PER_RUN = 1200
+COMPLETED_RUN_TTL = timedelta(hours=2)
 
 
 @dataclass
@@ -54,6 +57,7 @@ async def start_chat_background_run(
     """创建后台 Run 并启动执行 task。"""
     run = ChatBackgroundRun(id=f"run-{uuid.uuid4().hex}", session_id=session_id)
     async with _runs_lock:
+        _prune_runs_locked()
         _runs[run.id] = run
     run.task = asyncio.create_task(_consume_chat_events(run, factory), name=f"chat-run-{run.id}")
     return run
@@ -120,10 +124,14 @@ async def _consume_chat_events(run: ChatBackgroundRun, factory: EventStreamFacto
     finally:
         run.completed_at = datetime.now(timezone.utc).isoformat()
         await _close_subscribers(run)
+        async with _runs_lock:
+            _prune_runs_locked()
 
 
 async def _broadcast(run: ChatBackgroundRun, event: str) -> None:
     run.events.append(event)
+    if len(run.events) > MAX_EVENTS_PER_RUN:
+        run.events = run.events[-MAX_EVENTS_PER_RUN:]
     for queue in list(run.subscribers):
         await queue.put(event)
 
@@ -131,3 +139,37 @@ async def _broadcast(run: ChatBackgroundRun, event: str) -> None:
 async def _close_subscribers(run: ChatBackgroundRun) -> None:
     for queue in list(run.subscribers):
         await queue.put(None)
+
+
+def _prune_runs_locked() -> None:
+    """Drop old completed in-memory runs while keeping active runs available."""
+
+    now = datetime.now(timezone.utc)
+    removable_ids: list[str] = []
+    for run_id, run in _runs.items():
+        if run.status == "running" or run.subscribers:
+            continue
+        if run.completed_at:
+            try:
+                completed_at = datetime.fromisoformat(run.completed_at)
+            except ValueError:
+                completed_at = now
+            if now - completed_at > COMPLETED_RUN_TTL:
+                removable_ids.append(run_id)
+
+    for run_id in removable_ids:
+        _runs.pop(run_id, None)
+
+    if len(_runs) <= MAX_BACKGROUND_RUNS:
+        return
+
+    candidates = sorted(
+        [
+            run
+            for run in _runs.values()
+            if run.status != "running" and not run.subscribers
+        ],
+        key=lambda item: item.completed_at or item.created_at,
+    )
+    for run in candidates[: max(0, len(_runs) - MAX_BACKGROUND_RUNS)]:
+        _runs.pop(run.id, None)
