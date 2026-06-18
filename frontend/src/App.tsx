@@ -40,6 +40,10 @@ const VIEW_PAGES: Record<ViewType, ComponentType> = {
   settings: SettingsPage,
 };
 
+const KEEP_ALIVE_VIEWS = new Set<ViewType>(['chat']);
+const CACHEABLE_VIEWS = new Set<ViewType>(['chat', 'agents', 'traces', 'sandbox']);
+const MAX_CACHED_VIEWS = 3;
+
 /**
  * App 根组件
  */
@@ -118,9 +122,7 @@ export function App() {
   }, [backendUrl, setBackendConnected]);
 
   useEffect(() => {
-    setCachedViews((views) => (
-      views.includes(currentView) ? views : [...views, currentView]
-    ));
+    setCachedViews((views) => nextCachedViews(views, currentView));
   }, [currentView]);
 
   const sparkTheme = theme === 'dark' ? carbonDarkTheme : carbonTheme;
@@ -132,6 +134,27 @@ export function App() {
       </AppLayout>
     </ConfigProvider>
   );
+}
+
+function nextCachedViews(current: ViewType[], activeView: ViewType): ViewType[] {
+  const keepAliveViews = Array.from(KEEP_ALIVE_VIEWS);
+  if (!CACHEABLE_VIEWS.has(activeView)) {
+    return keepAliveViews;
+  }
+
+  const recentViews = current
+    .filter((view) => view !== activeView && !KEEP_ALIVE_VIEWS.has(view) && CACHEABLE_VIEWS.has(view));
+  const next = [...keepAliveViews, ...recentViews, activeView];
+  const keepAliveCount = keepAliveViews.length;
+  const overflow = Math.max(0, next.length - MAX_CACHED_VIEWS);
+  if (overflow === 0) {
+    return next;
+  }
+
+  return [
+    ...next.slice(0, keepAliveCount),
+    ...next.slice(keepAliveCount + overflow),
+  ];
 }
 
 interface CachedPagesProps {
