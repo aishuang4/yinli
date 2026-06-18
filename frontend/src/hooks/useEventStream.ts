@@ -29,6 +29,8 @@ export interface SSEEvent {
 export interface StreamState {
   /** 是否正在接收事件流 */
   isStreaming: boolean;
+  /** 当前后台 Run ID */
+  currentRunId: string;
   /** 累积的文本内容 */
   textContent: string;
   /** 思考链内容（thinking tokens） */
@@ -270,6 +272,7 @@ interface SendMessageOptions {
 /** 初始状态 */
 const INITIAL_STATE: StreamState = {
   isStreaming: false,
+  currentRunId: '',
   textContent: '',
   thinkingContent: '',
   toolCalls: [],
@@ -518,6 +521,12 @@ export function useEventStream(): UseEventStreamReturn {
   function handleEvent(event: SSEEvent) {
     setState((prev) => {
       switch (event.type) {
+        case 'RUN':
+          return {
+            ...prev,
+            currentRunId: String(event.data.run_id || ''),
+          };
+
         // === 文本内容增量 ===
         case 'TEXT_BLOCK_DELTA': {
           if (suppressClarificationTextRef.current) return prev;

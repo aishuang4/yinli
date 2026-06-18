@@ -98,6 +98,12 @@
 
 ## P3. Team Runtime And HITL
 
+- [x] Chat 后台 Run 生命周期第一版
+  - 参考 `docs/background-run-lifecycle-plan.md`，把 Agent/Team 执行从前端 SSE 订阅生命周期中解耦。
+  - `/api/chat/send` 创建进程内后台 run，SSE 连接只订阅事件；前端断开订阅不会直接取消后台执行。
+  - 新增 `/api/chat/runs/{run_id}/stream`，支持在同一后端进程内按 run 重新订阅事件。
+  - 实现于 2026-06-18：新增进程内 `background_runs` 管理器。后续还需补 run 状态持久化、前端自动重连、增量草稿消息和真正取消 run 的接口。
+
 - [x] Worker execution graph
   - Make mixed parallel/serial execution easier to inspect.
   - Show dependency wait reasons.

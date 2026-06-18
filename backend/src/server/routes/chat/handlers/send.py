@@ -40,6 +40,10 @@ from src.server.routes.chat.prompts import (
     _extract_clarification_request,
 )
 from src.server.routes.chat.router import router
+from src.server.routes.chat.background_runs import (
+    start_chat_background_run,
+    subscribe_chat_background_run,
+)
 from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
     _build_runtime_knowledge_tools,
@@ -92,6 +96,9 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         StreamingResponse: SSE 事件流（text/event-stream）
     """
 
+    session_id = data.session_id or uuid.uuid4().hex
+    run_data = data.model_copy(update={"session_id": session_id})
+
     async def event_stream() -> AsyncGenerator[str, None]:
         """
         生成 SSE 事件流
@@ -100,12 +107,12 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
           event: <EventType>
           data: <JSON>
         """
-        session_id = data.session_id or uuid.uuid4().hex
-        agent_id = data.agent_id or "default"
+        session_id = run_data.session_id or uuid.uuid4().hex
+        agent_id = run_data.agent_id or "default"
         agent_config = get_registered_agent(agent_id)
-        agent_name = data.agent_name or (agent_config.name if agent_config else "Assistant")
+        agent_name = run_data.agent_name or (agent_config.name if agent_config else "Assistant")
         base_system_prompt = (
-            data.system_prompt
+            run_data.system_prompt
             or (agent_config.system_prompt if agent_config else None)
             or "You are a helpful AI assistant."
         )
@@ -113,9 +120,9 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         plan_system_prompt = _build_agent_plan_prompt(agent_config)
         memory_system_prompt = _build_agent_memory_prompt(agent_id)
         history_system_prompt = _build_conversation_history_prompt(session_id)
-        team_system_prompt = _build_team_system_prompt(data.team_name, data.team_members)
-        skill_ids = agent_config.skills if agent_config and not data.skill_ids else data.skill_ids
-        used_skills = select_relevant_skills(skill_ids, data.message)
+        team_system_prompt = _build_team_system_prompt(run_data.team_name, run_data.team_members)
+        skill_ids = agent_config.skills if agent_config and not run_data.skill_ids else run_data.skill_ids
+        used_skills = select_relevant_skills(skill_ids, run_data.message)
         skill_system_prompt = build_skill_system_prompt_from_skills(used_skills)
         clarification_system_prompt = _build_clarification_system_prompt()
         used_skill_details = list_skill_usage_details(used_skills)
@@ -140,7 +147,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         runtime_model_settings = get_effective_model_settings()
         model_config_data = agent_config.model_config_data if agent_config else None
         model_name = (
-            data.model
+            run_data.model
             or (model_config_data.primary if model_config_data else None)
             or runtime_model_settings.default_model
         )
@@ -157,13 +164,13 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         assistant_thinking = ""
         assistant_error: str | None = None
         worker_outputs: list[dict[str, str]] = []
-        persist_run = not data.sandbox
+        persist_run = not run_data.sandbox
         team_activities = _build_team_activities(
-            team_name=data.team_name,
+            team_name=run_data.team_name,
             leader_agent_id=agent_id,
             leader_agent_name=agent_name,
-            members=data.team_members,
-            user_message=data.message,
+            members=run_data.team_members,
+            user_message=run_data.message,
         )
 
         if persist_run:
@@ -171,25 +178,25 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 session_id=session_id,
                 agent_id=agent_id,
                 agent_name=agent_name,
-                team_id=data.team_id,
-                team_name=data.team_name,
+                team_id=run_data.team_id,
+                team_name=run_data.team_name,
                 model_name=model_name,
-                content=data.message,
-                images=data.images,
+                content=run_data.message,
+                images=run_data.images,
             )
             append_agent_memory_event(
                 agent_id=agent_id,
                 event_type="user_message",
-                title=_make_session_title(data.message),
-                content=data.message,
+                title=_make_session_title(run_data.message),
+                content=run_data.message,
                 session_id=session_id,
                 metadata={
                     "agentName": agent_name,
-                    "teamId": data.team_id,
-                    "teamName": data.team_name,
+                    "teamId": run_data.team_id,
+                    "teamName": run_data.team_name,
                     "model": model_name,
-                    "imageCount": len(data.images),
-                    "sandbox": data.sandbox,
+                    "imageCount": len(run_data.images),
+                    "sandbox": run_data.sandbox,
                 },
             )
             _record_run_event(
@@ -200,12 +207,12 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 agent_name=agent_name,
                 status="completed",
                 title="User message",
-                content=data.message,
+                content=run_data.message,
                 payload={
-                    "teamId": data.team_id,
-                    "teamName": data.team_name,
+                    "teamId": run_data.team_id,
+                    "teamName": run_data.team_name,
                     "model": model_name,
-                    "imageCount": len(data.images),
+                    "imageCount": len(run_data.images),
                 },
             )
 
@@ -221,10 +228,10 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
             status="running",
             title="Run started",
             payload={
-                "teamId": data.team_id,
-                "teamName": data.team_name,
+                "teamId": run_data.team_id,
+                "teamName": run_data.team_name,
                 "model": model_name,
-                "sandbox": data.sandbox,
+                "sandbox": run_data.sandbox,
                 "workspace": _workspace_trace_payload(guardrails),
             },
         )
@@ -280,7 +287,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                         },
                     )
 
-        if data.images and model_name not in MULTIMODAL_MODELS:
+        if run_data.images and model_name not in MULTIMODAL_MODELS:
             assistant_error = f"{model_name} 不支持图片输入，请切换到 qwen3.7-plus。"
             failed_skill_runs = _set_skill_run_status(skill_runs, "failed")
             if persist_run:
@@ -348,7 +355,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         try:
             if team_activities:
                 async for worker_event in _run_team_workers(
-                    data=data,
+                    data=run_data,
                     session_id=session_id,
                     team_activities=team_activities,
                     model_name=model_name,
@@ -401,7 +408,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 f"timeout-{guardrails.timeout_seconds}"
             )
             runtime_agent_id = (
-                f"{agent_id}:{session_id}:{model_name}:thinking-{data.deep_thinking}:"
+                f"{agent_id}:{session_id}:{model_name}:thinking-{run_data.deep_thinking}:"
                 f"fallbacks-{fallback_cache_key}:"
                 f"skills-{skill_cache_key}:mcp-{mcp_cache_key}:knowledge-{knowledge_cache_key}:"
                 f"guardrails-{guardrail_cache_key}"
@@ -412,7 +419,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 system_prompt=system_prompt,
                 model_name=model_name,
                 fallback_names=fallback_names,
-                thinking_enable=data.deep_thinking,
+                thinking_enable=run_data.deep_thinking,
                 permission_mode=_permission_mode_for_guardrails(guardrails),
                 model_options=model_options,
                 guardrails=guardrails,
@@ -460,9 +467,9 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         # 构建用户消息
         user_msg = UserMsg(
             name="user",
-            content=_build_user_content(
-                _build_leader_user_message(data.message, worker_outputs),
-                data.images,
+                content=_build_user_content(
+                _build_leader_user_message(run_data.message, worker_outputs),
+                run_data.images,
             ),
         )
 
@@ -514,7 +521,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                         model_name=model_name,
                         reply_id=str(event_data.get("reply_id") or ""),
                         tool_calls=list(event_data.get("tool_calls") or []),
-                        message=data.message,
+                        message=run_data.message,
                         assistant_text=assistant_text,
                         skill_runs=skill_runs,
                         team_activities=team_activities,
@@ -617,12 +624,12 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     agent_id=agent_id,
                     agent_name=agent_name,
                     session_id=session_id,
-                    user_message=data.message,
+                    user_message=run_data.message,
                     assistant_text=assistant_text,
                     metadata={
                         "agentName": agent_name,
-                        "teamId": data.team_id,
-                        "teamName": data.team_name,
+                        "teamId": run_data.team_id,
+                        "teamName": run_data.team_name,
                         "model": model_name,
                         "skillIds": [item.id for item in completed_skill_runs],
                     },
@@ -690,8 +697,26 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 "message": assistant_error,
             })
 
+    run = await start_chat_background_run(
+        session_id=session_id,
+        factory=event_stream,
+    )
     return StreamingResponse(
-        event_stream(),
+        subscribe_chat_background_run(run.id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/runs/{run_id}/stream")
+async def stream_run(run_id: str) -> StreamingResponse:
+    """重新订阅后台 Chat Run 事件。"""
+    return StreamingResponse(
+        subscribe_chat_background_run(run_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
