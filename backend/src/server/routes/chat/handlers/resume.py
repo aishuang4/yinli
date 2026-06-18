@@ -54,6 +54,7 @@ from src.server.routes.chat.team_state import (
     _collect_worker_outputs,
     _find_team_activity,
     _finalize_team_activities,
+    _pending_tool_calls_to_runs,
     _replace_team_activity,
     _set_team_activity_status,
     _update_worker_tool_calls,
@@ -143,7 +144,10 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 worker_member = ChatTeamMemberPayload.model_validate(interaction.worker_member or {})
                 worker_text = interaction.worker_text
                 worker_thinking = interaction.worker_thinking
-                worker_tool_calls = interaction.worker_tool_calls
+                worker_tool_calls = _pending_tool_calls_to_runs(
+                    interaction.tool_calls,
+                    interaction.worker_tool_calls,
+                )
                 worker_guardrails = _build_runtime_guardrails(get_registered_agent(worker_member.agent_id))
 
                 activity = _find_team_activity(team_activities, worker_member.agent_id)
@@ -461,6 +465,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                             tool_calls=list(event_data.get("tool_calls") or []),
                             message=chat_data.message,
                             assistant_text=assistant_text,
+                            assistant_tool_calls=assistant_tool_calls,
                             skill_runs=skill_runs,
                             team_activities=team_activities,
                             chat_data=interaction.chat_data,
@@ -545,7 +550,10 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     })
                 return
 
-            assistant_tool_calls: list[ChatToolRun] = []
+            assistant_tool_calls = _pending_tool_calls_to_runs(
+                interaction.tool_calls,
+                interaction.assistant_tool_calls,
+            )
             interaction_guardrails = _build_runtime_guardrails(get_registered_agent(interaction.agent_id))
             async for event in agent.reply_stream(resume_event):
                 event_data = event.model_dump(mode="json")
@@ -591,6 +599,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         tool_calls=list(event_data.get("tool_calls") or []),
                         message=interaction.message,
                         assistant_text=assistant_text,
+                        assistant_tool_calls=assistant_tool_calls,
                         skill_runs=skill_runs,
                         team_activities=team_activities,
                     )

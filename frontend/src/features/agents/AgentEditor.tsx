@@ -12,11 +12,12 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Pencil, Plus, Save, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Pencil, Plus, Save, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import {
   Alert,
   Button,
   Checkbox,
+  Drawer,
   Input,
   InputNumber,
   Modal,
@@ -61,6 +62,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
   const [skillsSelectorOpen, setSkillsSelectorOpen] = useState(false);
   const [knowledgeSelectorOpen, setKnowledgeSelectorOpen] = useState(false);
   const [knowledgeEditorOpen, setKnowledgeEditorOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [editingKnowledgeTool, setEditingKnowledgeTool] = useState<KnowledgeTool | null>(null);
   const [knowledgeDraft, setKnowledgeDraft] = useState({
     name: 'KnowledgeBaseSearch',
@@ -314,8 +316,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
         </div>
 
         <div className="min-h-0 overflow-y-auto">
-          <div className="grid min-h-full grid-cols-[minmax(0,1fr)_360px] gap-4">
-            <div className="space-y-4">
+          <div className="mx-auto max-w-5xl space-y-4">
         {error && (
           <Alert type="error" message={error} showIcon />
         )}
@@ -324,10 +325,10 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
-                身份信息
+                基础配置
               </h3>
               <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-                定义 Agent 的名称、用途和行为边界。
+                只保留最常用的 Agent 信息；工具、权限、计划和模型参数放在高级设置中。
               </div>
             </div>
           </div>
@@ -355,6 +356,33 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
               />
             </div>
             <div className="col-span-2">
+              {primaryModelOptions.length === 0 && (
+                <div className="mb-3">
+                  <Alert
+                    type="warning"
+                    message="当前系统设置中的供应商未配置可用模型。请先到系统设置为当前供应商配置 API Key 和模型。"
+                  />
+                </div>
+              )}
+              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
+                使用模型
+              </label>
+              <Select
+                value={form.modelConfig.primary}
+                onChange={(value) =>
+                  setForm({
+                    ...form,
+                    modelConfig: { ...form.modelConfig, primary: value },
+                  })
+                }
+                options={primaryModelOptions.map((m) => ({
+                  label: `${m.name} - ${m.description}`,
+                  value: m.id,
+                }))}
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div className="col-span-2">
               <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
                 系统提示词
               </label>
@@ -368,6 +396,52 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
             </div>
           </div>
         </section>
+
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen((value) => !value)}
+          className="flex w-full items-center justify-between gap-3 rounded-xl bg-[var(--color-bg-primary)] px-4 py-3 text-left shadow-sm transition hover:bg-[var(--color-bg-hover)]"
+        >
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-secondary)] text-[var(--color-text-tertiary)]">
+              <SlidersHorizontal size={17} />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-[var(--color-text-primary)]">高级设置</div>
+              <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
+                模型参数、工具、Skills、记忆、权限、计划和协作配置。
+              </div>
+            </div>
+          </div>
+          {advancedOpen ? (
+            <ChevronDown size={16} className="shrink-0 text-[var(--color-text-tertiary)]" />
+          ) : (
+            <ChevronRight size={16} className="shrink-0 text-[var(--color-text-tertiary)]" />
+          )}
+        </button>
+
+        <Drawer
+          title="高级设置"
+          open={advancedOpen}
+          onClose={() => setAdvancedOpen(false)}
+          width={760}
+          showDivider={false}
+          destroyOnClose={false}
+          footer={(
+            <div className="flex justify-end gap-2">
+              <Button onClick={() => setAdvancedOpen(false)}>关闭</Button>
+              <Button
+                type="primary"
+                onClick={handleSave}
+                loading={saving}
+                icon={<Save size={14} />}
+              >
+                {saving ? '保存中...' : '保存'}
+              </Button>
+            </div>
+          )}
+        >
+          <div className="space-y-4 pb-4">
 
         <section className="rounded-xl bg-[var(--color-bg-primary)] p-4 shadow-sm">
           <div className="mb-4">
@@ -563,45 +637,16 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
           </div>
         </section>
 
-            </div>
-
-            <div className="space-y-4">
         <section className="rounded-xl bg-[var(--color-bg-primary)] p-4 shadow-sm">
           <div className="mb-4">
             <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
-              模型
+              模型高级参数
             </h3>
             <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-              选择主模型、降级模型链和生成参数。
+              配置降级模型链、生成随机性、输出长度和 ReAct 循环上限。
             </div>
           </div>
           <div className="space-y-3">
-            {primaryModelOptions.length === 0 && (
-              <Alert
-                type="warning"
-                message="当前系统设置中的供应商未配置可用模型。请先到系统设置为当前供应商配置 API Key 和模型。"
-              />
-            )}
-            <div>
-              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
-                主模型
-              </label>
-              <Select
-                value={form.modelConfig.primary}
-                onChange={(value) =>
-                  setForm({
-                    ...form,
-                    modelConfig: { ...form.modelConfig, primary: value },
-                  })
-                }
-                options={primaryModelOptions.map((m) => ({
-                  label: `${m.name} - ${m.description}`,
-                  value: m.id,
-                }))}
-                style={{ width: '100%' }}
-              />
-            </div>
-
             <div>
               <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
                 降级模型链
@@ -1048,7 +1093,8 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
             </div>
           </div>
         </section>
-            </div>
+          </div>
+        </Drawer>
           </div>
         </div>
       </div>

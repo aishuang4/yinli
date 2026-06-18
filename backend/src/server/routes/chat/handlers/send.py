@@ -563,6 +563,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                         tool_calls=list(event_data.get("tool_calls") or []),
                         message=run_data.message,
                         assistant_text=assistant_text,
+                        assistant_tool_calls=assistant_tool_calls,
                         skill_runs=skill_runs,
                         team_activities=team_activities,
                         persist=persist_run,

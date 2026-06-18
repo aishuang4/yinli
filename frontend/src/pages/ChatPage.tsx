@@ -123,11 +123,13 @@ function normalizeStoredToolCalls(toolCalls: ToolCallInfo[] | undefined): ToolCa
     const key = id || `${toolCall.name}-${toolCall.args}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    const args = String(toolCall.args || '');
+    const result = String(toolCall.result || '');
     normalized.push({
       id,
-      name: normalizeToolDisplayName(String(toolCall.name || 'tool')),
-      args: String(toolCall.args || ''),
-      result: String(toolCall.result || ''),
+      name: normalizeStoredToolName(String(toolCall.name || 'tool'), args, result),
+      args,
+      result,
       status: (
         toolCall.status === 'calling' ||
         toolCall.status === 'running' ||
@@ -140,6 +142,24 @@ function normalizeStoredToolCalls(toolCalls: ToolCallInfo[] | undefined): ToolCa
   }
 
   return normalized;
+}
+
+function normalizeStoredToolName(name: string, args: string, result: string): string {
+  const displayName = normalizeToolDisplayName(name);
+  if (displayName !== 'tool') {
+    return displayName;
+  }
+  const value = `${args}\n${result}`.toLowerCase();
+  if (
+    value.includes('补充信息') ||
+    value.includes('用户拒绝') ||
+    value.includes('human input') ||
+    value.includes('askuser') ||
+    value.includes('"questions"')
+  ) {
+    return 'AskUser';
+  }
+  return displayName;
 }
 
 function normalizeToolDisplayName(name: string): string {
@@ -375,6 +395,7 @@ export function ChatPage() {
     if (state.isStreaming) return;
     const response = await fetch(`/api/chat/sessions/${sessionId}`, { method: 'DELETE' });
     if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
+    setSessions((current) => current.filter((session) => session.id !== sessionId));
     if (activeSessionId === sessionId) {
       setActiveSessionId(null);
       setMessages([]);
@@ -383,8 +404,7 @@ export function ChatPage() {
       setSelectedTeamActivityId(null);
       reset();
     }
-    await loadSessions();
-  }, [activeSessionId, loadSessions, reset, state.isStreaming]);
+  }, [activeSessionId, reset, state.isStreaming]);
 
   const handleImageFiles = useCallback(async (files: FileList | null) => {
     if (!files || files.length === 0) return;
