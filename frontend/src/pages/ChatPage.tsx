@@ -235,6 +235,18 @@ export function ChatPage() {
 
   const selectedModelId = runtimeAgent?.modelConfig.primary || 'qwen-plus';
   const selectedModelSupportsImages = selectedModelId === 'qwen3.7-plus';
+  const hasLiveResponse = (
+    state.isStreaming ||
+    state.hitlRequests.length > 0 ||
+    state.clarificationRequests.length > 0 ||
+    Boolean(state.textContent) ||
+    Boolean(state.thinkingContent) ||
+    state.toolCalls.length > 0 ||
+    state.skillCalls.length > 0 ||
+    state.teamActivities.length > 0 ||
+    state.memorySummaries.length > 0 ||
+    state.modelCaches.length > 0
+  );
 
   const visibleTeamActivities = useMemo(() => (
     [
@@ -588,8 +600,7 @@ export function ChatPage() {
       !state.isStreaming &&
       state.hitlRequests.length === 0 &&
       (state.textContent || state.error) &&
-      messages.length > 0 &&
-      messages[messages.length - 1].role === 'user'
+      (messages.length === 0 || messages[messages.length - 1].role === 'user')
     ) {
       const assistantMessage: LocalMessage = {
         id: `assistant-${Date.now()}`,
@@ -760,7 +771,7 @@ export function ChatPage() {
               aria-label="对话消息"
             >
               <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4">
-                {messages.length === 0 && !state.isStreaming ? (
+                {messages.length === 0 && !hasLiveResponse ? (
                   <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-[var(--color-text-tertiary)]">
                     <Bot size={48} strokeWidth={1} color="var(--color-text-tertiary)" />
                     <div className="text-lg font-medium">开始对话</div>
@@ -780,7 +791,7 @@ export function ChatPage() {
                       />
                     ))}
 
-                    {(state.isStreaming || state.hitlRequests.length > 0) && (
+                    {hasLiveResponse && (
                       <StreamingBubble
                         textContent={state.textContent}
                         thinkingContent={state.thinkingContent}
