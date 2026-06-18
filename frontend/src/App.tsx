@@ -3,7 +3,7 @@
  *
  * 职责：
  * 1. 应用主题（通过 data-theme 属性同步到 DOM）
- * 2. 根据当前视图渲染对应页面
+ * 2. 缓存已访问页面并根据当前视图显示对应页面
  * 3. 包裹 AppLayout 提供全局布局
  *
  * 设计原则（vercel-react-best-practices）：
@@ -11,7 +11,7 @@
  * - advanced-init-once: 初始化检查只做一次
  */
 
-import { lazy, Suspense, useEffect, useLayoutEffect, type ComponentType } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useState, type ComponentType } from 'react';
 import { ConfigProvider, Spinner, carbonDarkTheme, carbonTheme } from '@agentscope-ai/design';
 import { useAppStore } from './stores/appStore';
 import type { ViewType } from './stores/appStore';
@@ -50,6 +50,7 @@ export function App() {
   const backendUrl = useSettingsStore((s) => s.backendUrl);
   const setBackendUrl = useSettingsStore((s) => s.setBackendUrl);
   const setAppVersion = useSettingsStore((s) => s.setAppVersion);
+  const [cachedViews, setCachedViews] = useState<ViewType[]>(['chat']);
 
   // 同步主题到 DOM（useLayoutEffect 确保在绘制前应用，避免闪烁）
   useLayoutEffect(() => {
@@ -116,18 +117,48 @@ export function App() {
     };
   }, [backendUrl, setBackendConnected]);
 
-  // 根据当前视图获取页面组件
-  const PageComponent = VIEW_PAGES[currentView] ?? ChatPage;
+  useEffect(() => {
+    setCachedViews((views) => (
+      views.includes(currentView) ? views : [...views, currentView]
+    ));
+  }, [currentView]);
+
   const sparkTheme = theme === 'dark' ? carbonDarkTheme : carbonTheme;
 
   return (
     <ConfigProvider {...sparkTheme}>
       <AppLayout>
-        <Suspense fallback={<PageSkeleton />}>
-          <PageComponent />
-        </Suspense>
+        <CachedPages activeView={currentView} cachedViews={cachedViews} />
       </AppLayout>
     </ConfigProvider>
+  );
+}
+
+interface CachedPagesProps {
+  activeView: ViewType;
+  cachedViews: ViewType[];
+}
+
+function CachedPages({ activeView, cachedViews }: CachedPagesProps) {
+  return (
+    <div className="h-full min-h-0">
+      {cachedViews.map((view) => {
+        const PageComponent = VIEW_PAGES[view] ?? ChatPage;
+        const active = view === activeView;
+        return (
+          <section
+            key={view}
+            className="h-full min-h-0"
+            style={{ display: active ? 'block' : 'none' }}
+            aria-hidden={!active}
+          >
+            <Suspense fallback={<PageSkeleton />}>
+              <PageComponent />
+            </Suspense>
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
