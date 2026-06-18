@@ -171,6 +171,7 @@ class PendingInteraction(BaseModel):
     tool_calls: list[dict]
     message: str
     assistant_text: str = ""
+    assistant_tool_calls: list[ChatToolRun] = Field(default_factory=list)
     skill_runs: list[ChatSkillRun] = Field(default_factory=list)
     team_activities: list[ChatTeamActivity] = Field(default_factory=list)
     scope: str = "leader"

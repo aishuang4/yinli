@@ -294,6 +294,24 @@ const INITIAL_STATE: StreamState = {
   error: null,
 };
 
+function hasPendingUserInteraction(state: StreamState): boolean {
+  return state.hitlRequests.length > 0 || state.clarificationRequests.length > 0;
+}
+
+function completeStreamIfNoPendingUserInteraction(state: StreamState): StreamState {
+  if (hasPendingUserInteraction(state)) {
+    return {
+      ...state,
+      isStreaming: false,
+    };
+  }
+  return {
+    ...state,
+    isStreaming: false,
+    runCompletedAt: state.runCompletedAt || new Date().toISOString(),
+  };
+}
+
 /**
  * useEventStream Hook
  *
@@ -399,19 +417,11 @@ export function useEventStream(): UseEventStreamReturn {
         }
 
         // SSE 结束才代表本轮流程全部完成；REPLY_END 后仍可能有记忆总结等后处理事件。
-        setState((prev) => ({
-          ...prev,
-          isStreaming: false,
-          runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
-        }));
+        setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') {
           // 用户主动中止
-          setState((prev) => ({
-            ...prev,
-            isStreaming: false,
-            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
-          }));
+          setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
         } else {
           // 其他错误
           const errorMessage = err instanceof Error ? err.message : String(err);
@@ -482,18 +492,10 @@ export function useEventStream(): UseEventStreamReturn {
             }
           }
         }
-        setState((prev) => ({
-          ...prev,
-          isStreaming: false,
-          runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
-        }));
+        setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') {
-          setState((prev) => ({
-            ...prev,
-            isStreaming: false,
-            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
-          }));
+          setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
         } else {
           const errorMessage = err instanceof Error ? err.message : String(err);
           setState((prev) => ({
@@ -834,7 +836,6 @@ export function useEventStream(): UseEventStreamReturn {
           return {
             ...prev,
             isStreaming: false,
-            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
             hitlRequests: [
               ...prev.hitlRequests,
               {
@@ -958,7 +959,6 @@ export function useEventStream(): UseEventStreamReturn {
           return {
             ...prev,
             isStreaming: false,
-            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
             textContent: '',
             thinkingContent: '',
             clarificationRequests: [

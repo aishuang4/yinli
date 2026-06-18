@@ -1,7 +1,9 @@
 """Team activity 纯状态操作、工具调用记录更新与成员依赖工具。"""
 
+import json
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 from src.server.routes.chat.helpers import _trim_text
 from src.server.routes.chat.models import (
@@ -15,6 +17,39 @@ from src.server.routes.chat.store import _make_session_title
 def _tool_result_status(event_data: dict) -> str:
     state = str(event_data.get("state") or "").lower()
     return "failed" if state in {"error", "failed"} else "completed"
+
+
+def _stringify_tool_input(value: Any) -> str:
+    """Serialize AgentScope tool input for chat history display."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except TypeError:
+        return str(value)
+
+
+def _pending_tool_calls_to_runs(
+    pending_tool_calls: list[dict],
+    existing_tool_calls: list[ChatToolRun] | None = None,
+) -> list[ChatToolRun]:
+    """Convert paused HITL tool calls into persisted chat tool records."""
+    next_calls = [item.model_copy() for item in existing_tool_calls or []]
+    seen_ids = {item.id for item in next_calls}
+    for tool_call in pending_tool_calls:
+        tool_call_id = str(tool_call.get("id") or "")
+        if not tool_call_id or tool_call_id in seen_ids:
+            continue
+        next_calls.append(ChatToolRun(
+            id=tool_call_id,
+            name=str(tool_call.get("name") or "tool"),
+            args=_stringify_tool_input(tool_call.get("input")),
+            status="running",
+        ))
+        seen_ids.add(tool_call_id)
+    return next_calls
 
 
 def _collect_worker_outputs(activities: list[ChatTeamActivity]) -> list[dict[str, str]]:

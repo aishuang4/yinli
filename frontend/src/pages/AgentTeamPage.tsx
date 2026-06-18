@@ -24,7 +24,7 @@ import { AgentEditor } from '../features/agents/AgentEditor';
 import { DEFAULT_MODEL_CONFIG, type AgentCreatePayload, type ModelsResponse } from '../types/agent';
 import type { Agent } from '../types/agent';
 import type { BuilderMode, BuilderPlan } from '../types/agentBuilder';
-import type { MemoryFact } from '../types/memory';
+import type { AgentMemory, MemoryFact } from '../types/memory';
 import type { TeamMember, TeamRecord } from '../types/team';
 import { createId } from '../utils/id';
 
@@ -869,7 +869,7 @@ function CapabilityBlock({
 }
 
 function AgentMemoryPanel({ agent }: { agent: Agent }) {
-  const { memory, loading, error, refresh } = useAgentMemory(agent.id);
+  const { memory, loading, error, updateMemory } = useAgentMemory(agent.id);
   const [mainDraft, setMainDraft] = useState('');
   const [savingMain, setSavingMain] = useState(false);
   const [busyCandidateId, setBusyCandidateId] = useState<string | null>(null);
@@ -887,6 +887,11 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
     setMainDraft(memory?.main_memory || '');
   }, [memory?.main_memory]);
 
+  const applyReturnedMemory = async (response: Response) => {
+    const nextMemory: AgentMemory = await response.json();
+    updateMemory(() => nextMemory);
+  };
+
   const saveMainMemory = async () => {
     setSavingMain(true);
     try {
@@ -896,7 +901,7 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
         body: JSON.stringify({ content: mainDraft }),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      await refresh();
+      await applyReturnedMemory(response);
     } finally {
       setSavingMain(false);
     }
@@ -911,7 +916,14 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
         body: action === 'reject' ? JSON.stringify({ reason }) : undefined,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      await refresh();
+      if (action === 'reject') {
+        updateMemory((current) => ({
+          ...current,
+          candidates: current.candidates.filter((candidate) => candidate.id !== candidateId),
+        }));
+      } else {
+        await applyReturnedMemory(response);
+      }
     } finally {
       setBusyCandidateId(null);
       if (action === 'reject') {
@@ -928,7 +940,7 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
         method: 'POST',
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      await refresh();
+      await applyReturnedMemory(response);
     } finally {
       setMergingCandidates(false);
     }
@@ -952,7 +964,14 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
         body: JSON.stringify(patch),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      await refresh();
+      const updatedFact: MemoryFact = await response.json();
+      updateMemory((current) => ({
+        ...current,
+        facts: current.facts.map((fact) => (fact.id === factId ? updatedFact : fact)),
+        cleanup_suggestions: current.cleanup_suggestions.filter((suggestion) => (
+          !suggestion.fact_ids.includes(factId)
+        )),
+      }));
     } finally {
       setBusyFactId(null);
     }
@@ -979,7 +998,13 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
         method: 'DELETE',
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      await refresh();
+      updateMemory((current) => ({
+        ...current,
+        facts: current.facts.filter((fact) => fact.id !== factId),
+        cleanup_suggestions: current.cleanup_suggestions.filter((suggestion) => (
+          !suggestion.fact_ids.includes(factId) && suggestion.keep_fact_id !== factId
+        )),
+      }));
     } finally {
       setBusyFactId(null);
       setDeleteFactId(null);
@@ -995,7 +1020,7 @@ function AgentMemoryPanel({ agent }: { agent: Agent }) {
         body: JSON.stringify({ suggestionId, keepFactId }),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      await refresh();
+      await applyReturnedMemory(response);
     } finally {
       setBusyCleanupId(null);
       setCleanupConfirm(null);

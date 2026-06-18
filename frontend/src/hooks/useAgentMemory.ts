@@ -6,6 +6,7 @@ interface UseAgentMemoryReturn {
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
+  updateMemory: (updater: (memory: AgentMemory) => AgentMemory) => void;
 }
 
 export function useAgentMemory(agentId: string | null): UseAgentMemoryReturn {
@@ -36,5 +37,9 @@ export function useAgentMemory(agentId: string | null): UseAgentMemoryReturn {
     refresh();
   }, [refresh]);
 
-  return { memory, loading, error, refresh };
+  const updateMemory = useCallback((updater: (memory: AgentMemory) => AgentMemory) => {
+    setMemory((current) => (current ? updater(current) : current));
+  }, []);
+
+  return { memory, loading, error, refresh, updateMemory };
 }

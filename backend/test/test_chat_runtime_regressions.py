@@ -1,6 +1,8 @@
 import asyncio
 
 from src.server.routes.chat.background_runs import ChatBackgroundRun, _broadcast
+from src.server.routes.chat.models import ChatToolRun
+from src.server.routes.chat.team_state import _pending_tool_calls_to_runs
 from src.server.routes.chat.trace_recorder import _model_cache_from_event
 from src.tools.ask_user import AskUser
 
@@ -47,6 +49,48 @@ def test_ask_user_is_external_tool_for_agentscope_resume():
     assert tool.name == "AskUser"
     assert tool.is_external_tool is True
     assert tool.input_schema["required"] == ["title", "questions"]
+
+
+def test_pending_hitl_tool_calls_seed_chat_history_tool_runs():
+    runs = _pending_tool_calls_to_runs([
+        {
+            "id": "call-1",
+            "name": "AskUser",
+            "input": {
+                "title": "补充信息",
+                "questions": [{"id": "target", "type": "text", "label": "目标"}],
+            },
+        },
+    ])
+
+    assert runs == [
+        ChatToolRun(
+            id="call-1",
+            name="AskUser",
+            args='{"title": "补充信息", "questions": [{"id": "target", "type": "text", "label": "目标"}]}',
+            status="running",
+        ),
+    ]
+
+
+def test_pending_hitl_tool_calls_preserve_existing_tool_history():
+    runs = _pending_tool_calls_to_runs(
+        [
+            {
+                "id": "call-ask",
+                "name": "AskUser",
+                "input": {"title": "补充信息", "questions": []},
+            },
+        ],
+        [
+            ChatToolRun(id="call-read", name="Read", args='{"file_path": "a.md"}', status="completed"),
+            ChatToolRun(id="call-grep", name="Grep", args='{"pattern": "todo"}', status="completed"),
+        ],
+    )
+
+    assert [item.name for item in runs] == ["Read", "Grep", "AskUser"]
+    assert runs[0].args == '{"file_path": "a.md"}'
+    assert runs[2].args == '{"title": "补充信息", "questions": []}'
 
 
 def test_background_run_event_buffer_is_bounded(monkeypatch):
