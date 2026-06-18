@@ -144,6 +144,10 @@ function nextCachedViews(current: ViewType[], activeView: ViewType): ViewType[] 
       : [...keepAliveViews, activeView];
   }
 
+  if (KEEP_ALIVE_VIEWS.has(activeView)) {
+    return keepAliveViews;
+  }
+
   const recentViews = current
     .filter((view) => view !== activeView && !KEEP_ALIVE_VIEWS.has(view) && CACHEABLE_VIEWS.has(view));
   const next = [...keepAliveViews, ...recentViews, activeView];
@@ -165,9 +169,10 @@ interface CachedPagesProps {
 }
 
 function CachedPages({ activeView, cachedViews }: CachedPagesProps) {
+  const uniqueCachedViews = Array.from(new Set(cachedViews));
   return (
     <div className="h-full min-h-0 overflow-hidden">
-      {cachedViews.map((view) => {
+      {uniqueCachedViews.map((view) => {
         const PageComponent = VIEW_PAGES[view] ?? ChatPage;
         const active = view === activeView;
         return (
