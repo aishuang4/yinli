@@ -1,6 +1,12 @@
 import asyncio
 
-from src.server.routes.chat.background_runs import ChatBackgroundRun, _broadcast
+from src.server.routes.chat.background_runs import (
+    ChatBackgroundRun,
+    _broadcast,
+    relay_chat_background_run_events,
+    start_chat_background_run,
+)
+from src.server.routes.chat.helpers import _sse_event
 from src.server.routes.chat.models import ChatToolRun
 from src.server.routes.chat.team_state import _pending_tool_calls_to_runs
 from src.server.routes.chat.trace_recorder import _model_cache_from_event
@@ -106,3 +112,57 @@ def test_background_run_event_buffer_is_bounded(monkeypatch):
     asyncio.run(emit_events())
 
     assert run.events == ["event-2", "event-3", "event-4"]
+
+
+def test_background_run_keeps_waiting_status_after_hitl_required():
+    async def run_waiting_case():
+        async def factory():
+            yield _sse_event("HITL_REQUIRED", {"id": "hitl-1"})
+
+        run = await start_chat_background_run(
+            session_id="session-waiting",
+            factory=factory,
+            task="需要人工确认的任务",
+            persist=False,
+        )
+        assert run.async_task is not None
+        await run.async_task
+        return run
+
+    run = asyncio.run(run_waiting_case())
+
+    assert run.status == "waiting"
+    assert run.completed_at is None
+
+
+def test_background_run_resume_relay_marks_original_run_completed():
+    async def run_resume_case():
+        async def initial_factory():
+            yield _sse_event("HITL_REQUIRED", {"id": "hitl-1"})
+
+        async def resume_factory():
+            yield _sse_event("TEXT_BLOCK_DELTA", {"block_id": "block-1", "delta": "done"})
+            yield _sse_event("REPLY_END", {"reply_id": "reply-1"})
+
+        run = await start_chat_background_run(
+            session_id="session-resume",
+            factory=initial_factory,
+            task="需要人工确认的任务",
+            persist=False,
+        )
+        assert run.async_task is not None
+        await run.async_task
+        assert run.status == "waiting"
+
+        replayed = [
+            event
+            async for event in relay_chat_background_run_events(run.id, resume_factory())
+        ]
+        return run, replayed
+
+    run, replayed = asyncio.run(run_resume_case())
+
+    assert run.status == "completed"
+    assert run.completed_at is not None
+    assert len(replayed) == 2
+    assert any("TEXT_BLOCK_DELTA" in event for event in run.events)

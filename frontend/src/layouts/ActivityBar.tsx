@@ -11,7 +11,7 @@
  * - 使用 Lucide 线性图标
  */
 
-import { MessageSquare, Bot, Plug, Package, Settings, Sun, Moon, Activity, FlaskConical } from 'lucide-react';
+import { MessageSquare, Bot, Plug, Package, Settings, Sun, Moon, Activity, FlaskConical, ListRestart } from 'lucide-react';
 import { useAppStore, type ViewType } from '../stores/appStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { cn } from '../utils/cn';
@@ -37,6 +37,11 @@ const NAV_ITEMS: NavItem[] = [
     id: 'traces',
     label: '运行轨迹',
     icon: Activity,
+  },
+  {
+    id: 'runs',
+    label: '运行任务',
+    icon: ListRestart,
   },
   {
     id: 'sandbox',

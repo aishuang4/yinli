@@ -77,7 +77,10 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 
 ## 约定
 
+- 开发必须遵循 `docs/development-guidelines.md`。该文件是正式开发规范，覆盖模块化、React/TypeScript、Python/FastAPI、SQLite、Agent Runtime、测试、Git 和文档要求。
+- 如果 `AGENTS.md` / `CLAUDE.md` 与 `docs/development-guidelines.md` 冲突，以更具体、更严格、更新的规范为准；不确定时先按 `docs/development-guidelines.md` 执行。
 - 代码注释和文档用中文，技术术语和标识符保持英文。
+- TODO 文档和待办事项统一用中文编写，便于团队协作和后续交接。
 - 文件均带中文 docstring 说明职责，遵循既有风格。
 - 前端遵循若干约定（见 `App.tsx` 注释）：派生状态不用 effect、对象映射表代替 switch、初始化只做一次。
-- 项目现状与待办见 `docs/project-progress-handoff.md` 和 `docs/project-todo.md`；设计文档见 `docs/agent-workstation-design.md` 与 `docs/agent-workstation-frontend-design.md`。
+- 项目现状与待办见 `docs/project-progress-handoff.md` 和 `docs/project-todo.md`；开发规范见 `docs/development-guidelines.md`；设计文档见 `docs/agent-workstation-design.md` 与 `docs/agent-workstation-frontend-design.md`。

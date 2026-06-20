@@ -168,6 +168,7 @@ class PendingInteraction(BaseModel):
     agent_name: str
     model_name: str
     reply_id: str
+    run_id: str = ""
     tool_calls: list[dict]
     message: str
     assistant_text: str = ""
