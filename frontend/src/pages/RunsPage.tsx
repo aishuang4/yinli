@@ -104,7 +104,7 @@ export function RunsPage() {
     } finally {
       setBusyRunId(null);
     }
-  }, [detail?.id, loadRunDetail]);
+  }, [detail, loadRunDetail]);
 
   useEffect(() => {
     void loadRuns();

@@ -654,7 +654,7 @@ export function ChatPage() {
       reset();
       loadSessions();
     }
-  }, [loadSessions, messages, reset, state.error, state.hitlRequests.length, state.isStreaming, state.memorySummaries, state.modelName, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
+  }, [loadSessions, messages, reset, state.error, state.hitlRequests.length, state.isStreaming, state.memorySummaries, state.modelCaches, state.modelName, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -2405,7 +2405,7 @@ function isAskUserToolName(name: string) {
 }
 
 function buildClarificationRequestFromAskUser(toolCall: HitlRequestInfo['toolCalls'][number]): ClarificationRequestInfo {
-  let raw: Record<string, unknown> = {};
+  let raw: Record<string, unknown>;
   try {
     raw = JSON.parse(toolCall.input || '{}') as Record<string, unknown>;
   } catch {

@@ -1,6 +1,6 @@
 # Agent Workstation TODO
 
-> Last updated: 2026-06-17
+> Last updated: 2026-06-20
 >
 > This file is the working TODO for the project. Use it as the source of truth
 > for upcoming implementation order. When a feature is completed, update the
@@ -103,6 +103,7 @@
   - `/api/chat/send` 创建进程内后台 run，SSE 连接只订阅事件；前端断开订阅不会直接取消后台执行。
   - 新增 `/api/chat/runs/{run_id}/stream`，支持在同一后端进程内按 run 重新订阅事件。
   - 实现于 2026-06-18：新增进程内 `background_runs` 管理器。后续还需补 run 状态持久化、前端自动重连、增量草稿消息和真正取消 run 的接口。
+  - 更新于 2026-06-20：Run 记录与原始 SSE 事件已落 SQLite（`chat_runs` / `chat_run_events`），HITL resume 会写回原 Run；运行任务中心改为看板式展示进度、当前阶段、参与者和完整结果。
 
 - [x] Worker execution graph
   - Make mixed parallel/serial execution easier to inspect.
@@ -209,13 +210,18 @@
 
 ### P0. 平台地基能力
 
-- [ ] 运行任务中心
+- [x] 运行任务中心
   - 新增统一 Run 列表页或 Chat 侧边运行中心，展示运行中、等待 HITL、已完成、失败、已取消任务。
   - 将后台 Run 状态持久化到 SQLite，后端重启后至少能恢复任务记录和最终状态。
-  - 支持重新订阅运行中任务、查看实时事件、查看最终产物。
-  - 支持取消任务、失败重试、从历史 Run 重新运行。
-  - 将 Chat、Team、Workflow、Sandbox 运行统一接入同一套 Run 生命周期。
-  - 第一版实现于 2026-06-19：新增运行任务页面和 `/api/chat/runs` 相关接口，可查看当前进程内后台 Run、事件缓存、订阅者数量，并支持取消运行中任务。SQLite 持久化、后端重启恢复、失败重试和从历史 Run 重新运行仍待补齐。
+  - 支持查看任务进度、当前阶段、参与 Agent / Team、Worker 完成数和最终结果。
+  - 支持取消运行中任务。
+  - 实现于 2026-06-19：新增运行任务页面和 `/api/chat/runs` 相关接口，可查看当前进程内后台 Run，并支持取消运行中任务。
+  - 更新于 2026-06-20：新增 `chat_runs` / `chat_run_events` SQLite 持久化；后端重启后可恢复任务记录、最终状态、原始事件和完整结果；Run Center 改为任务看板，底层事件细节交给运行轨迹页。
+  - 后续补充项：
+    - [ ] 失败重试。
+    - [ ] 从历史 Run 重新运行。
+    - [ ] 将 Sandbox / Workflow 运行统一接入同一套 Run 生命周期。
+    - [ ] 运行中任务跨后端重启恢复执行；当前只能恢复记录和最终状态，不能恢复已中断的 Python task。
 
 - [ ] 统一资源权限系统
   - 定义 Agent / Team / Tool / Skill / MCP / Knowledge Tool 的统一授权模型。
