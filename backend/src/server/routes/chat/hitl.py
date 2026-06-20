@@ -22,6 +22,7 @@ from src.server.routes.chat.models import (
     ChatToolRun,
     PendingInteraction,
 )
+from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.team_state import _find_team_activity
 from src.server.routes.chat.trace_recorder import _record_run_event
 
@@ -59,6 +60,7 @@ def _create_pending_interaction(
         agent_name=agent_name,
         model_name=model_name,
         reply_id=reply_id,
+        run_id=current_chat_background_run_id(),
         tool_calls=tool_calls,
         message=message,
         assistant_text=assistant_text,
@@ -106,6 +108,7 @@ def _hitl_payload(interaction: PendingInteraction) -> dict:
         "agentId": interaction.agent_id,
         "agentName": interaction.agent_name,
         "replyId": interaction.reply_id,
+        "runId": interaction.run_id,
         "toolCalls": interaction.tool_calls,
         "scope": interaction.scope,
         "teamActivityId": _find_team_activity(interaction.team_activities, interaction.agent_id).id

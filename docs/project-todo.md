@@ -203,6 +203,88 @@
 - [ ] Multi-language UI support.
 - [ ] Desktop auto-update flow.
 
+## P8. 大而全 Agent 平台补齐 TODO
+
+> 本节用于把当前工作台从“可用的多 Agent 协作工具”继续推进到“大而全的 Agent 平台”。优先级按平台地基能力排序，后续实现时优先从 P0 开始。
+
+### P0. 平台地基能力
+
+- [ ] 运行任务中心
+  - 新增统一 Run 列表页或 Chat 侧边运行中心，展示运行中、等待 HITL、已完成、失败、已取消任务。
+  - 将后台 Run 状态持久化到 SQLite，后端重启后至少能恢复任务记录和最终状态。
+  - 支持重新订阅运行中任务、查看实时事件、查看最终产物。
+  - 支持取消任务、失败重试、从历史 Run 重新运行。
+  - 将 Chat、Team、Workflow、Sandbox 运行统一接入同一套 Run 生命周期。
+  - 第一版实现于 2026-06-19：新增运行任务页面和 `/api/chat/runs` 相关接口，可查看当前进程内后台 Run、事件缓存、订阅者数量，并支持取消运行中任务。SQLite 持久化、后端重启恢复、失败重试和从历史 Run 重新运行仍待补齐。
+
+- [ ] 统一资源权限系统
+  - 定义 Agent / Team / Tool / Skill / MCP / Knowledge Tool 的统一授权模型。
+  - 支持 Agent 级文件目录访问范围、网络访问范围、工具调用权限范围。
+  - 支持不同工具的审批策略：自动放行、破坏性确认、每次确认、禁用。
+  - 保存每次权限决策和人工审批记录，进入 `run_events` 审计。
+  - 为后续多用户和组织空间预留 owner、workspace、role 字段。
+
+- [ ] Agent / Prompt / Team 版本管理
+  - Agent 每次保存生成新版本，保留 prompt、模型、工具、权限、记忆注入等配置快照。
+  - Team 运行时绑定成员 Agent 的具体版本，历史运行可还原当时配置。
+  - 支持版本 diff、回滚、复制为新 Agent、标记稳定版本。
+  - Chat / Trace / Sandbox 记录运行使用的 Agent 版本号。
+
+### P1. 编排、评测和知识能力
+
+- [ ] Workflow 固定编排第一版
+  - 提供可视化或表单化 Workflow 配置：步骤、依赖、输入输出、条件分支、人工节点。
+  - 步骤可选择 Agent、Team、Tool、Skill 或人工输入。
+  - 支持失败策略：终止、跳过、重试、转人工。
+  - 运行时复用现有 `run_events`、HITL、Trace、Sandbox。
+  - 第一版先做固定 Workflow，再评估是否升级到 Dynamic Workflows。
+
+- [ ] Dynamic Workflows 技术预研落地入口
+  - 基于 `docs/dynamic-workflows-plan.md` 设计动态编排模式入口。
+  - 让 Leader 可以根据任务动态选择 Worker、工具、步骤和依赖。
+  - 前端展示动态生成的执行图，并允许用户在关键节点确认。
+  - Sandbox 中支持保存一次动态编排结果作为固定 Workflow 模板。
+
+- [ ] 评测体系增强
+  - Sandbox 支持测试集批量运行。
+  - 支持断言类型：文本包含、JSON 字段、工具调用次数、是否命中特定知识、是否触发 HITL。
+  - 增加 LLM Judge 评分，记录正确性、完整性、格式、工具使用合理性。
+  - Agent / Team 修改后可批量回归测试，并生成对比报告。
+  - Trace 中关联测试结果，方便定位失败原因。
+
+- [ ] 平台内置知识库/RAG 模块
+  - 支持文件上传、文档解析、chunk、embedding、检索、rerank。
+  - 支持知识库集合、权限、标签、更新时间和引用来源。
+  - Chat 工具调用结果展示命中文档片段和引用。
+  - 提供检索调试页面：query、召回结果、rerank 分数、最终注入上下文。
+  - 第一版可先支持 SQLite + 本地向量索引，后续再接 Milvus / pgvector。
+
+### P2. 运营、市场和发布能力
+
+- [ ] 成本与用量中心
+  - 按 Agent、Team、Run、模型供应商统计 token、调用次数、Prompt Cache 命中、估算成本。
+  - 支持日/周/月趋势图和单次运行明细。
+  - 支持预算阈值提醒和单 Agent/Team 最大成本限制。
+  - 将工具调用耗时、模型耗时、Worker 等待时间纳入统计。
+
+- [ ] 模板与插件市场
+  - 建立 Agent 模板、Team 模板、Skill 包、MCP Server、Workflow 模板的统一市场页。
+  - 支持安装、卸载、启用、禁用、版本升级和依赖检查。
+  - 支持从本地 zip / git 仓库 / 远程 registry 导入。
+  - 模板安装后生成可编辑副本，避免直接污染内置模板。
+
+- [ ] 多用户与 Workspace 预留
+  - 增加 Workspace 概念，Agent、Team、Memory、Run、Tool 均归属某个 Workspace。
+  - 预留用户、角色、权限表结构。
+  - 支持本地单用户模式和未来服务端多用户模式共存。
+  - 操作审计记录用户、时间、资源、动作和结果。
+
+- [ ] 正式桌面发布完善
+  - 完成 macOS / Windows 后端可执行文件内置验证。
+  - 补齐 macOS 签名和公证、Windows 代码签名。
+  - 增加自动更新、崩溃日志、用户数据备份和恢复。
+  - 桌面端增加本地模型服务检测和后端异常恢复提示。
+
 ## Operating Rules
 
 - Complete one major feature before committing.

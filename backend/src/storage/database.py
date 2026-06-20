@@ -235,6 +235,32 @@ def ensure_db() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_run_events_session_order
                     ON run_events(session_id, sort_order, created_at);
+                CREATE TABLE IF NOT EXISTS chat_runs (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL DEFAULT '',
+                    agent_name TEXT NOT NULL DEFAULT '',
+                    team_id TEXT NOT NULL DEFAULT '',
+                    team_name TEXT NOT NULL DEFAULT '',
+                    task_text TEXT NOT NULL DEFAULT '',
+                    mode TEXT NOT NULL DEFAULT 'agent',
+                    status TEXT NOT NULL DEFAULT 'running',
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS chat_run_events (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    raw_event TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(run_id) REFERENCES chat_runs(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_runs_updated
+                    ON chat_runs(updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_chat_run_events_order
+                    ON chat_run_events(run_id, sort_order, created_at);
                 CREATE TABLE IF NOT EXISTS memory_facts (
                     id TEXT PRIMARY KEY,
                     agent_id TEXT NOT NULL,
@@ -331,6 +357,7 @@ def ensure_db() -> None:
                 conn.execute("ALTER TABLE team_members ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'")
             if "handoff_prompt" not in member_columns:
                 conn.execute("ALTER TABLE team_members ADD COLUMN handoff_prompt TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "chat_runs", "updated_at", "TEXT NOT NULL DEFAULT ''")
             conn.commit()
             _initialized = True
 
@@ -1051,6 +1078,159 @@ def list_run_events(session_id: str | None = None) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def upsert_chat_run(record: dict[str, Any]) -> dict[str, Any]:
+    """Insert or update one persisted Chat Run."""
+    ensure_db()
+    now = _utc_now()
+    created_at = record.get("createdAt") or record.get("created_at") or now
+    updated_at = record.get("updatedAt") or record.get("updated_at") or now
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO chat_runs (
+                id, session_id, agent_id, agent_name, team_id, team_name,
+                task_text, mode, status, created_at, completed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                session_id=excluded.session_id,
+                agent_id=excluded.agent_id,
+                agent_name=excluded.agent_name,
+                team_id=excluded.team_id,
+                team_name=excluded.team_name,
+                task_text=excluded.task_text,
+                mode=excluded.mode,
+                status=excluded.status,
+                completed_at=excluded.completed_at,
+                updated_at=excluded.updated_at
+            """,
+            (
+                record["id"],
+                record["sessionId"],
+                record.get("agentId", ""),
+                record.get("agentName", ""),
+                record.get("teamId", ""),
+                record.get("teamName", ""),
+                record.get("task", ""),
+                record.get("mode", "agent"),
+                record.get("status", "running"),
+                created_at,
+                record.get("completedAt"),
+                updated_at,
+            ),
+        )
+        conn.commit()
+    return {**record, "createdAt": created_at, "updatedAt": updated_at}
+
+
+def update_chat_run_status(run_id: str, status: str, completed_at: str | None = None) -> None:
+    """Update persisted Chat Run status."""
+    ensure_db()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE chat_runs
+            SET status = ?, completed_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (status, completed_at, _utc_now(), run_id),
+        )
+        conn.commit()
+
+
+def append_chat_run_event(run_id: str, raw_event: str) -> dict[str, Any]:
+    """Append one raw SSE event to a persisted Chat Run."""
+    ensure_db()
+    event_id = f"run-evt-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+    created_at = _utc_now()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM chat_run_events WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        sort_order = int(row["next_order"] if row else 0)
+        conn.execute(
+            """
+            INSERT INTO chat_run_events(id, run_id, raw_event, created_at, sort_order)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (event_id, run_id, raw_event, created_at, sort_order),
+        )
+        conn.execute(
+            "UPDATE chat_runs SET updated_at = ? WHERE id = ?",
+            (created_at, run_id),
+        )
+        conn.commit()
+    return {
+        "id": event_id,
+        "runId": run_id,
+        "rawEvent": raw_event,
+        "createdAt": created_at,
+        "sortOrder": sort_order,
+    }
+
+
+def list_chat_runs(limit: int = 50) -> list[dict[str, Any]]:
+    """List persisted Chat Runs with raw event arrays."""
+    ensure_db()
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM chat_runs ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        run_ids = [row["id"] for row in rows]
+        events_by_run: dict[str, list[str]] = {run_id: [] for run_id in run_ids}
+        if run_ids:
+            placeholders = ",".join("?" for _ in run_ids)
+            event_rows = conn.execute(
+                f"""
+                SELECT run_id, raw_event
+                FROM chat_run_events
+                WHERE run_id IN ({placeholders})
+                ORDER BY run_id ASC, sort_order ASC, created_at ASC
+                """,
+                run_ids,
+            ).fetchall()
+            for event_row in event_rows:
+                events_by_run.setdefault(event_row["run_id"], []).append(event_row["raw_event"])
+    return [_chat_run_from_row(row, events_by_run.get(row["id"], [])) for row in rows]
+
+
+def get_chat_run(run_id: str) -> dict[str, Any] | None:
+    """Read one persisted Chat Run with raw events."""
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT * FROM chat_runs WHERE id = ?", (run_id,)).fetchone()
+        if not row:
+            return None
+        event_rows = conn.execute(
+            """
+            SELECT raw_event FROM chat_run_events
+            WHERE run_id = ?
+            ORDER BY sort_order ASC, created_at ASC
+            """,
+            (run_id,),
+        ).fetchall()
+    return _chat_run_from_row(row, [event_row["raw_event"] for event_row in event_rows])
+
+
+def _chat_run_from_row(row: sqlite3.Row, events: list[str]) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "sessionId": row["session_id"],
+        "agentId": row["agent_id"],
+        "agentName": row["agent_name"],
+        "teamId": row["team_id"],
+        "teamName": row["team_name"],
+        "task": row["task_text"],
+        "mode": row["mode"],
+        "status": row["status"],
+        "createdAt": row["created_at"],
+        "completedAt": row["completed_at"],
+        "updatedAt": row["updated_at"],
+        "events": events,
+    }
 
 
 def load_agent_memory(agent_id: str) -> dict[str, Any] | None:

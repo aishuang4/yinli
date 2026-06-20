@@ -19,6 +19,7 @@ import { useSettingsStore } from './stores/settingsStore';
 import { AppLayout } from './layouts/AppLayout';
 
 const ChatPage = lazy(() => import('./pages/ChatPage').then((module) => ({ default: module.ChatPage })));
+const RunsPage = lazy(() => import('./pages/RunsPage').then((module) => ({ default: module.RunsPage })));
 const TracePage = lazy(() => import('./pages/TracePage').then((module) => ({ default: module.TracePage })));
 const SandboxPage = lazy(() => import('./pages/SandboxPage').then((module) => ({ default: module.SandboxPage })));
 const AgentTeamPage = lazy(() => import('./pages/AgentTeamPage').then((module) => ({ default: module.AgentTeamPage })));
@@ -32,6 +33,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => 
  */
 const VIEW_PAGES: Record<ViewType, ComponentType> = {
   chat: ChatPage,
+  runs: RunsPage,
   traces: TracePage,
   sandbox: SandboxPage,
   agents: AgentTeamPage,

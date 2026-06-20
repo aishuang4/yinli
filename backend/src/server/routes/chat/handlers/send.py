@@ -4,6 +4,7 @@ import uuid
 from typing import AsyncGenerator
 
 from fastapi.responses import StreamingResponse
+from fastapi import HTTPException
 
 from agentscope.message import UserMsg
 
@@ -42,6 +43,10 @@ from src.server.routes.chat.prompts import (
 )
 from src.server.routes.chat.router import router
 from src.server.routes.chat.background_runs import (
+    cancel_chat_background_run,
+    get_chat_background_run,
+    list_chat_background_runs,
+    serialize_chat_background_run,
     start_chat_background_run,
     subscribe_chat_background_run,
 )
@@ -758,6 +763,12 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
     run = await start_chat_background_run(
         session_id=session_id,
         factory=event_stream,
+        agent_id=run_data.agent_id or "default",
+        agent_name=run_data.agent_name or "",
+        team_id=run_data.team_id or "",
+        team_name=run_data.team_name or "",
+        task=run_data.message,
+        mode="team" if run_data.team_id else "agent",
     )
     return StreamingResponse(
         subscribe_chat_background_run(run.id),
@@ -782,3 +793,31 @@ async def stream_run(run_id: str) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/runs")
+async def list_runs() -> dict:
+    """列出当前进程内后台 Chat Run。"""
+    runs = await list_chat_background_runs()
+    return {"runs": [serialize_chat_background_run(run) for run in runs]}
+
+
+@router.get("/runs/{run_id}")
+async def get_run(run_id: str) -> dict:
+    """读取一个后台 Chat Run 的状态和事件缓存。"""
+    run = await get_chat_background_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {
+        **serialize_chat_background_run(run),
+        "events": run.events,
+    }
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(run_id: str) -> dict:
+    """取消一个仍在运行的后台 Chat Run。"""
+    run = await cancel_chat_background_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return serialize_chat_background_run(run)

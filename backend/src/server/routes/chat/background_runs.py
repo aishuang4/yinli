@@ -5,18 +5,31 @@
 """
 
 import asyncio
+import json
 import uuid
 from collections.abc import AsyncGenerator, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from src.server.routes.chat.helpers import _sse_event
+from src.storage.database import (
+    append_chat_run_event,
+    get_chat_run,
+    list_chat_runs,
+    update_chat_run_status,
+    upsert_chat_run,
+)
 
 
 EventStreamFactory = Callable[[], AsyncGenerator[str, None]]
 MAX_BACKGROUND_RUNS = 50
-MAX_EVENTS_PER_RUN = 1200
+MAX_EVENTS_PER_RUN = 5000
 COMPLETED_RUN_TTL = timedelta(hours=2)
+WAITING_EVENT_TYPES = {"HITL_REQUIRED", "CLARIFICATION_REQUIRED"}
+ACTIVE_RUN_STATUSES = {"running", "waiting", "cancelling"}
+TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
+CURRENT_BACKGROUND_RUN_ID: ContextVar[str] = ContextVar("current_chat_background_run_id", default="")
 
 
 @dataclass
@@ -25,12 +38,19 @@ class ChatBackgroundRun:
 
     id: str
     session_id: str
+    agent_id: str = ""
+    agent_name: str = ""
+    team_id: str = ""
+    team_name: str = ""
+    task_text: str = ""
+    mode: str = "agent"
     status: str = "running"
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     completed_at: str | None = None
     events: list[str] = field(default_factory=list)
     subscribers: set[asyncio.Queue[str | None]] = field(default_factory=set)
-    task: asyncio.Task | None = None
+    async_task: asyncio.Task | None = None
+    persisted: bool = False
 
 
 _runs: dict[str, ChatBackgroundRun] = {}
@@ -40,26 +60,142 @@ _runs_lock = asyncio.Lock()
 async def get_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
     """读取后台 Run 状态。"""
     async with _runs_lock:
-        return _runs.get(run_id)
+        run = _runs.get(run_id)
+    if run is not None:
+        return run
+    persisted = get_chat_run(run_id)
+    return _run_from_persisted_record(persisted) if persisted else None
 
 
 async def list_chat_background_runs() -> list[ChatBackgroundRun]:
     """列出当前进程内后台 Run。"""
     async with _runs_lock:
-        return sorted(_runs.values(), key=lambda item: item.created_at, reverse=True)
+        memory_runs = list(_runs.values())
+    by_id = {run.id: run for run in memory_runs}
+    for record in list_chat_runs(MAX_BACKGROUND_RUNS):
+        if record["id"] not in by_id:
+            by_id[record["id"]] = _run_from_persisted_record(record)
+    return sorted(
+        by_id.values(),
+        key=lambda item: item.completed_at or item.created_at,
+        reverse=True,
+    )
+
+
+async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
+    """取消一个仍在运行的后台 Run。"""
+    async with _runs_lock:
+        run = _runs.get(run_id)
+        if run is None:
+            return None
+        if run.status != "running":
+            return run
+        run.status = "cancelling"
+        task = run.async_task
+        update_chat_run_status(run.id, run.status, run.completed_at)
+
+    if task is not None and not task.done():
+        task.cancel()
+    return run
+
+
+def current_chat_background_run_id() -> str:
+    """读取当前事件流所属的后台 Run ID。"""
+    return CURRENT_BACKGROUND_RUN_ID.get()
+
+
+async def mark_chat_background_run_status(run_id: str, status: str) -> ChatBackgroundRun | None:
+    """手动更新后台 Run 状态。用于 HITL resume 后同步 Run Center。"""
+    async with _runs_lock:
+        run = _runs.get(run_id)
+        if run is None:
+            return None
+        run.status = status
+        if status == "running":
+            run.completed_at = None
+        elif status in TERMINAL_RUN_STATUSES:
+            run.completed_at = datetime.now(timezone.utc).isoformat()
+        update_chat_run_status(run.id, run.status, run.completed_at)
+        return run
+
+
+async def relay_chat_background_run_events(
+    run_id: str,
+    events: AsyncGenerator[str, None],
+) -> AsyncGenerator[str, None]:
+    """把 resume 流里的事件追加回原后台 Run，同时继续返回给前端。"""
+    run = await get_chat_background_run(run_id)
+    if run is None:
+        async for event in events:
+            yield event
+        return
+
+    await mark_chat_background_run_status(run_id, "running")
+    token = CURRENT_BACKGROUND_RUN_ID.set(run_id)
+    try:
+        async for event in events:
+            await _broadcast(run, event)
+            yield event
+        if run.status != "waiting":
+            await mark_chat_background_run_status(run_id, "completed")
+    except Exception:
+        await mark_chat_background_run_status(run_id, "failed")
+        raise
+    finally:
+        CURRENT_BACKGROUND_RUN_ID.reset(token)
+
+
+def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
+    """Serialize one in-memory Run for API responses."""
+    summary = _summarize_run_events(run)
+    return {
+        "id": run.id,
+        "sessionId": run.session_id,
+        "agentId": run.agent_id,
+        "agentName": run.agent_name,
+        "teamId": run.team_id,
+        "teamName": run.team_name,
+        "task": run.task_text,
+        "mode": run.mode,
+        "status": run.status,
+        "createdAt": run.created_at,
+        "completedAt": run.completed_at,
+        "eventCount": len(run.events),
+        "subscriberCount": len(run.subscribers),
+        "latestEvent": run.events[-1] if run.events else "",
+        **summary,
+    }
 
 
 async def start_chat_background_run(
     *,
     session_id: str,
     factory: EventStreamFactory,
+    agent_id: str = "",
+    agent_name: str = "",
+    team_id: str = "",
+    team_name: str = "",
+    task: str = "",
+    mode: str = "agent",
+    persist: bool = True,
 ) -> ChatBackgroundRun:
     """创建后台 Run 并启动执行 task。"""
-    run = ChatBackgroundRun(id=f"run-{uuid.uuid4().hex}", session_id=session_id)
+    run = ChatBackgroundRun(
+        id=f"run-{uuid.uuid4().hex}",
+        session_id=session_id,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        team_id=team_id,
+        team_name=team_name,
+        task_text=task,
+        mode=mode,
+    )
     async with _runs_lock:
         _prune_runs_locked()
         _runs[run.id] = run
-    run.task = asyncio.create_task(_consume_chat_events(run, factory), name=f"chat-run-{run.id}")
+    if persist:
+        _persist_run(run)
+    run.async_task = asyncio.create_task(_consume_chat_events(run, factory), name=f"chat-run-{run.id}")
     return run
 
 
@@ -76,7 +212,7 @@ async def subscribe_chat_background_run(run_id: str) -> AsyncGenerator[str, None
             replay_events = list(run.events)
             queue: asyncio.Queue[str | None] | None = asyncio.Queue()
             run.subscribers.add(queue)
-            already_finished = run.status in {"completed", "failed", "cancelled"}
+            already_finished = run.status in TERMINAL_RUN_STATUSES or run.status == "waiting"
 
     try:
         for event in replay_events:
@@ -99,13 +235,22 @@ async def _consume_chat_events(run: ChatBackgroundRun, factory: EventStreamFacto
     await _broadcast(run, _sse_event("RUN", {
         "run_id": run.id,
         "session_id": run.session_id,
+        "agent_id": run.agent_id,
+        "agent_name": run.agent_name,
+        "team_id": run.team_id,
+        "team_name": run.team_name,
+        "task": run.task_text,
+        "mode": run.mode,
         "status": run.status,
         "created_at": run.created_at,
     }))
+    token = CURRENT_BACKGROUND_RUN_ID.set(run.id)
     try:
         async for event in factory():
             await _broadcast(run, event)
-        run.status = "completed"
+        if run.status != "waiting":
+            run.status = "completed"
+            update_chat_run_status(run.id, run.status, run.completed_at)
     except asyncio.CancelledError:
         run.status = "cancelled"
         await _broadcast(run, _sse_event("ERROR", {
@@ -122,16 +267,24 @@ async def _consume_chat_events(run: ChatBackgroundRun, factory: EventStreamFacto
             "session_id": run.session_id,
         }))
     finally:
-        run.completed_at = datetime.now(timezone.utc).isoformat()
+        if run.status in TERMINAL_RUN_STATUSES:
+            run.completed_at = datetime.now(timezone.utc).isoformat()
+            update_chat_run_status(run.id, run.status, run.completed_at)
         await _close_subscribers(run)
         async with _runs_lock:
             _prune_runs_locked()
+        CURRENT_BACKGROUND_RUN_ID.reset(token)
 
 
 async def _broadcast(run: ChatBackgroundRun, event: str) -> None:
+    if _extract_sse_event_type(event) in WAITING_EVENT_TYPES:
+        run.status = "waiting"
+        update_chat_run_status(run.id, run.status, run.completed_at)
     run.events.append(event)
     if len(run.events) > MAX_EVENTS_PER_RUN:
         run.events = run.events[-MAX_EVENTS_PER_RUN:]
+    if run.persisted:
+        append_chat_run_event(run.id, event)
     for queue in list(run.subscribers):
         await queue.put(event)
 
@@ -147,7 +300,7 @@ def _prune_runs_locked() -> None:
     now = datetime.now(timezone.utc)
     removable_ids: list[str] = []
     for run_id, run in _runs.items():
-        if run.status == "running" or run.subscribers:
+        if run.status in ACTIVE_RUN_STATUSES or run.subscribers:
             continue
         if run.completed_at:
             try:
@@ -167,9 +320,169 @@ def _prune_runs_locked() -> None:
         [
             run
             for run in _runs.values()
-            if run.status != "running" and not run.subscribers
+            if run.status not in ACTIVE_RUN_STATUSES and not run.subscribers
         ],
         key=lambda item: item.completed_at or item.created_at,
     )
     for run in candidates[: max(0, len(_runs) - MAX_BACKGROUND_RUNS)]:
         _runs.pop(run.id, None)
+
+
+def _extract_sse_event_type(event: str) -> str:
+    """从 SSE 文本中提取事件类型。"""
+    for line in event.splitlines():
+        if line.startswith("event:"):
+            return line.removeprefix("event:").strip()
+    return ""
+
+
+def _persist_run(run: ChatBackgroundRun) -> None:
+    upsert_chat_run({
+        "id": run.id,
+        "sessionId": run.session_id,
+        "agentId": run.agent_id,
+        "agentName": run.agent_name,
+        "teamId": run.team_id,
+        "teamName": run.team_name,
+        "task": run.task_text,
+        "mode": run.mode,
+        "status": run.status,
+        "createdAt": run.created_at,
+        "completedAt": run.completed_at,
+    })
+    run.persisted = True
+
+
+def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
+    return ChatBackgroundRun(
+        id=record["id"],
+        session_id=record["sessionId"],
+        agent_id=record.get("agentId", ""),
+        agent_name=record.get("agentName", ""),
+        team_id=record.get("teamId", ""),
+        team_name=record.get("teamName", ""),
+        task_text=record.get("task", ""),
+        mode=record.get("mode", "agent"),
+        status=record.get("status", "completed"),
+        created_at=record.get("createdAt") or datetime.now(timezone.utc).isoformat(),
+        completed_at=record.get("completedAt"),
+        events=list(record.get("events") or []),
+        persisted=True,
+    )
+
+
+def _summarize_run_events(run: ChatBackgroundRun) -> dict:
+    """从底层 SSE 事件提炼任务中心摘要。"""
+    progress = _base_progress_for_status(run.status)
+    current_stage = _stage_for_status(run.status)
+    result_parts: list[str] = []
+    active_actors: list[str] = []
+    total_workers = 0
+    completed_workers = 0
+
+    for raw_event in run.events:
+        event_type, data = _parse_sse_event(raw_event)
+        if event_type == "MODEL_CALL_START":
+            progress = max(progress, 25)
+            current_stage = "模型正在思考"
+        elif event_type == "TOOL_CALL_START":
+            progress = max(progress, 40)
+            current_stage = "正在调用工具"
+        elif event_type == "TOOL_RESULT_END":
+            progress = max(progress, 55)
+            current_stage = "工具结果已返回"
+        elif event_type == "TEXT_BLOCK_DELTA":
+            progress = max(progress, 70)
+            result_parts.append(str(data.get("delta") or ""))
+            current_stage = "正在生成回复"
+        elif event_type == "TEAM_ACTIVITY":
+            activities = data.get("activities")
+            if isinstance(activities, list):
+                total_workers = len([item for item in activities if isinstance(item, dict) and item.get("role") == "worker"])
+                completed_workers = len([
+                    item
+                    for item in activities
+                    if isinstance(item, dict)
+                    and item.get("role") == "worker"
+                    and item.get("status") in {"completed", "failed"}
+                ])
+                active_actors = [
+                    str(item.get("agentName") or item.get("name") or item.get("agentId"))
+                    for item in activities
+                    if isinstance(item, dict) and item.get("status") in {"running", "waiting"}
+                ]
+                if total_workers:
+                    progress = max(progress, min(90, 20 + int((completed_workers / total_workers) * 55)))
+                    current_stage = f"Worker 协作中：{completed_workers}/{total_workers} 完成"
+        elif event_type in WAITING_EVENT_TYPES:
+            progress = max(progress, 65)
+            current_stage = "等待人工处理"
+        elif event_type == "REPLY_END":
+            progress = max(progress, 90)
+            current_stage = "回复已生成，正在收尾"
+        elif event_type == "ERROR":
+            current_stage = "执行异常"
+
+    if run.status == "completed":
+        progress = 100
+        current_stage = "已完成"
+    elif run.status == "failed":
+        progress = 100
+        current_stage = "失败"
+    elif run.status == "cancelled":
+        progress = 100
+        current_stage = "已取消"
+    elif run.status == "waiting":
+        current_stage = "等待人工处理"
+
+    result_text = "".join(result_parts).strip()
+    return {
+        "progress": progress,
+        "currentStage": current_stage,
+        "activeActors": active_actors[:6],
+        "resultPreview": result_text,
+        "resultLength": len(result_text),
+        "workerTotal": total_workers,
+        "workerCompleted": completed_workers,
+    }
+
+
+def _base_progress_for_status(status: str) -> int:
+    if status == "completed":
+        return 100
+    if status in {"failed", "cancelled"}:
+        return 100
+    if status == "waiting":
+        return 65
+    if status == "cancelling":
+        return 90
+    return 8
+
+
+def _stage_for_status(status: str) -> str:
+    if status == "waiting":
+        return "等待人工处理"
+    if status == "cancelling":
+        return "正在取消"
+    if status == "completed":
+        return "已完成"
+    if status == "failed":
+        return "失败"
+    if status == "cancelled":
+        return "已取消"
+    return "准备执行"
+
+
+def _parse_sse_event(raw_event: str) -> tuple[str, dict]:
+    event_type = ""
+    data_text = "{}"
+    for line in raw_event.splitlines():
+        if line.startswith("event:"):
+            event_type = line.removeprefix("event:").strip()
+        elif line.startswith("data:"):
+            data_text = line.removeprefix("data:").strip()
+    try:
+        data = json.loads(data_text)
+    except json.JSONDecodeError:
+        data = {}
+    return event_type, data if isinstance(data, dict) else {}

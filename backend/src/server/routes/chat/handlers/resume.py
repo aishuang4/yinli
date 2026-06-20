@@ -36,6 +36,7 @@ from src.server.routes.chat.prompts import (
     _build_worker_outputs_system_prompt,
 )
 from src.server.routes.chat.router import router
+from src.server.routes.chat.background_runs import relay_chat_background_run_events
 from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
     _build_runtime_knowledge_tools,
@@ -699,8 +700,15 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
             _clear_pending_interaction(interaction.id)
             yield _sse_event("ERROR", {"message": assistant_error})
 
+    pending_interaction = PENDING_INTERACTIONS.get(data.interaction_id)
+    stream = (
+        relay_chat_background_run_events(pending_interaction.run_id, event_stream())
+        if pending_interaction and pending_interaction.run_id
+        else event_stream()
+    )
+
     return StreamingResponse(
-        event_stream(),
+        stream,
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
