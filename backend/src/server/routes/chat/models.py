@@ -93,6 +93,46 @@ class ChatModelCacheRun(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ChatPlanStep(BaseModel):
+    """结构化计划步骤。"""
+
+    id: str
+    plan_id: str = Field(alias="planId")
+    step_index: int = Field(alias="stepIndex")
+    title: str
+    description: str = ""
+    status: str = "pending"
+    assigned_agent_id: str | None = Field(default=None, alias="assignedAgentId")
+    evidence: str = ""
+    result: str = ""
+    started_at: str | None = Field(default=None, alias="startedAt")
+    completed_at: str | None = Field(default=None, alias="completedAt")
+    updated_at: str = Field(alias="updatedAt")
+
+    model_config = {"populate_by_name": True}
+
+
+class ChatPlanRun(BaseModel):
+    """Plan Runtime 记录。"""
+
+    id: str
+    run_id: str = Field(default="", alias="runId")
+    session_id: str = Field(alias="sessionId")
+    agent_id: str = Field(alias="agentId")
+    team_id: str | None = Field(default=None, alias="teamId")
+    title: str
+    goal: str
+    status: str
+    markdown: str
+    current_step_id: str | None = Field(default=None, alias="currentStepId")
+    steps: list[ChatPlanStep] = Field(default_factory=list)
+    created_at: str = Field(alias="createdAt")
+    updated_at: str = Field(alias="updatedAt")
+    completed_at: str | None = Field(default=None, alias="completedAt")
+
+    model_config = {"populate_by_name": True}
+
+
 class ChatTeamActivity(BaseModel):
     """Team 协作活动记录"""
 
@@ -132,6 +172,7 @@ class StoredChatMessage(BaseModel):
     skill_calls: list[ChatSkillRun] = Field(default_factory=list, alias="skillCalls")
     team_activities: list[ChatTeamActivity] = Field(default_factory=list, alias="teamActivities")
     model_caches: list[ChatModelCacheRun] = Field(default_factory=list, alias="modelCaches")
+    plan_runs: list[ChatPlanRun] = Field(default_factory=list, alias="planRuns")
     created_at: str
 
     model_config = {"populate_by_name": True}

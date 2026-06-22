@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Input, Select, Tag } from '@agentscope-ai/design';
 import { KeyRound, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
 interface ModelProviderOption {
   id: string;
@@ -126,9 +127,13 @@ export function SettingsPage() {
         throw new Error(await response.text());
       }
       applySettings(await response.json());
-      setNotice(clearApiKey ? 'API Key 已清除。' : '模型设置已保存，下一轮对话生效。');
+      const nextNotice = clearApiKey ? 'API Key 已清除。' : '模型设置已保存，下一轮对话生效。';
+      setNotice(nextNotice);
+      notifySuccess(nextNotice);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
+      const message = getErrorMessage(error, '模型设置保存失败');
+      setNotice(message);
+      notifyError(`模型设置保存失败：${message}`);
     } finally {
       setSaving(false);
     }

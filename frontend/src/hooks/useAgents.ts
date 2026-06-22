@@ -14,6 +14,7 @@ import type {
   AgentUpdatePayload,
   ModelsResponse,
 } from '../types/agent';
+import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
 /** Hook 返回值 */
 interface UseAgentsReturn {
@@ -247,43 +248,61 @@ export function useAgents(): UseAgentsReturn {
 
   /** 创建 Agent */
   const createAgent = useCallback(async (payload: AgentCreatePayload): Promise<Agent> => {
-    const res = await fetch('/api/agents', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(mapToApiPayload(payload)),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${res.status}`);
+    try {
+      const res = await fetch('/api/agents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mapToApiPayload(payload)),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data: AgentApiData = await res.json();
+      const agent = mapApiAgent(data);
+      setAgents((prev) => [...prev, agent]);
+      notifySuccess('Agent 创建成功');
+      return agent;
+    } catch (err) {
+      notifyError(`Agent 创建失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
     }
-    const data: AgentApiData = await res.json();
-    const agent = mapApiAgent(data);
-    setAgents((prev) => [...prev, agent]);
-    return agent;
   }, []);
 
   /** 更新 Agent */
   const updateAgent = useCallback(async (id: string, payload: AgentUpdatePayload): Promise<Agent> => {
-    const res = await fetch(`/api/agents/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(mapToApiPayload(payload)),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${res.status}`);
+    try {
+      const res = await fetch(`/api/agents/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mapToApiPayload(payload)),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const data: AgentApiData = await res.json();
+      const agent = mapApiAgent(data);
+      setAgents((prev) => prev.map((a) => (a.id === id ? agent : a)));
+      notifySuccess('Agent 保存成功');
+      return agent;
+    } catch (err) {
+      notifyError(`Agent 保存失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
     }
-    const data: AgentApiData = await res.json();
-    const agent = mapApiAgent(data);
-    setAgents((prev) => prev.map((a) => (a.id === id ? agent : a)));
-    return agent;
   }, []);
 
   /** 删除 Agent */
   const deleteAgent = useCallback(async (id: string): Promise<void> => {
-    const res = await fetch(`/api/agents/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    setAgents((prev) => prev.filter((a) => a.id !== id));
+    try {
+      const res = await fetch(`/api/agents/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setAgents((prev) => prev.filter((a) => a.id !== id));
+      notifySuccess('Agent 删除成功');
+    } catch (err) {
+      notifyError(`Agent 删除失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
   }, []);
 
   /** 获取单个 Agent */

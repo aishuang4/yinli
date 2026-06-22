@@ -5,6 +5,7 @@ from typing import AsyncGenerator
 
 from fastapi.responses import StreamingResponse
 from fastapi import HTTPException
+from pydantic import BaseModel
 
 from agentscope.message import UserMsg
 
@@ -28,7 +29,19 @@ from src.server.routes.chat.models import (
     MULTIMODAL_MODELS,
     ChatMessage,
     ChatModelCacheRun,
+    ChatPlanRun,
     ChatSkillRun,
+)
+from src.server.routes.chat.plans import (
+    build_plan_context_prompt,
+    complete_runtime_plan,
+    create_plan_approval,
+    create_runtime_plan,
+    fail_runtime_plan,
+    mark_plan_tool_event,
+    resolve_plan_approval,
+    serialize_plan_for_event,
+    should_create_plan,
 )
 from src.server.routes.chat.prompts import (
     _build_agent_memory_prompt,
@@ -55,6 +68,7 @@ from src.server.routes.chat.runtime import (
     _build_runtime_knowledge_tools,
     _build_runtime_mcp_servers,
     _build_user_content,
+    _guardrail_cache_key,
     _permission_mode_for_guardrails,
 )
 from src.server.routes.chat.skill_runs import (
@@ -85,12 +99,32 @@ from src.server.routes.chat.trace_recorder import (
     _make_fallback_trace_recorder,
     _model_cache_from_event,
     _record_agent_scope_event,
+    _record_permission_decision,
     _record_run_event,
     _record_tool_execution_artifacts,
     _record_workspace_event,
     _trim_text,
     _workspace_trace_payload,
 )
+from src.storage.database import get_plan_record
+from src.tools.plan_runtime import PLAN_TOOL_NAMES
+
+
+class PlanApprovalDecision(BaseModel):
+    """计划审批决策。"""
+
+    action: str
+
+
+def _is_plan_runtime_tool_name(name: str) -> bool:
+    """判断工具名是否为 Plan Runtime 内部工具。"""
+
+    normalized = name.replace(" ", "").replace("-", "").replace("_", "").lower()
+    return any(
+        normalized == tool_name.lower()
+        or normalized.endswith(tool_name.lower())
+        for tool_name in PLAN_TOOL_NAMES
+    )
 
 
 @router.post("/send")
@@ -195,6 +229,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         guardrails = _build_runtime_guardrails(agent_config)
         mcp_servers = _build_runtime_mcp_servers(agent_config)
         knowledge_tools = _build_runtime_knowledge_tools(agent_config)
+        runtime_plan: dict | None = None
         assistant_text = ""
         assistant_thinking = ""
         assistant_error: str | None = None
@@ -207,6 +242,35 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
             members=run_data.team_members,
             user_message=run_data.message,
         )
+        if should_create_plan(
+            agent_config=agent_config,
+            message=run_data.message,
+            has_team=bool(team_activities),
+            has_tools=bool(mcp_servers or knowledge_tools),
+            has_skills=bool(skill_ids),
+            has_images=bool(run_data.images),
+        ):
+            plan_config = getattr(agent_config, "plan_config", None)
+            runtime_plan = create_runtime_plan(
+                session_id=session_id,
+                agent_id=agent_id,
+                team_id=run_data.team_id,
+                title=_make_session_title(run_data.message),
+                goal=run_data.message,
+                mode=str(getattr(plan_config, "mode", "structured") or "structured"),
+                max_steps=int(getattr(plan_config, "max_steps", 6) or 6),
+                team_members=run_data.team_members,
+                has_tools=bool(mcp_servers or knowledge_tools),
+                has_skills=bool(skill_ids),
+            )
+            system_prompt = "\n\n".join(
+                part
+                for part in [
+                    system_prompt,
+                    build_plan_context_prompt(runtime_plan),
+                ]
+                if part
+            )
 
         if persist_run:
             _append_user_message(
@@ -322,6 +386,102 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                         },
                     )
 
+        if runtime_plan:
+            yield _sse_event("PLAN_UPDATE", {
+                "plan": serialize_plan_for_event(runtime_plan),
+            })
+            _record_run_event(
+                session_id=session_id,
+                event_type="PLAN_UPDATE",
+                persist=persist_run,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                status=str(runtime_plan.get("status") or "running"),
+                title=str(runtime_plan.get("title") or "Plan Runtime"),
+                content=str(runtime_plan.get("markdown") or ""),
+                payload={"plan": serialize_plan_for_event(runtime_plan)},
+            )
+            plan_config = getattr(agent_config, "plan_config", None)
+            if bool(getattr(plan_config, "require_user_approval", False)):
+                approval_id, approval_future = create_plan_approval(runtime_plan)
+                approval_payload = {
+                    "interactionId": approval_id,
+                    "type": "PLAN_APPROVAL",
+                    "sessionId": session_id,
+                    "agentId": agent_id,
+                    "agentName": agent_name,
+                    "replyId": "",
+                    "runId": "",
+                    "scope": "leader",
+                    "teamActivityId": None,
+                    "createdAt": runtime_plan.get("createdAt"),
+                    "toolCalls": [{
+                        "id": str(runtime_plan.get("id")),
+                        "name": "Plan Runtime",
+                        "input": {
+                            "title": runtime_plan.get("title"),
+                            "goal": runtime_plan.get("goal"),
+                            "steps": [
+                                {
+                                    "title": step.get("title"),
+                                    "description": step.get("description"),
+                                    "status": step.get("status"),
+                                }
+                                for step in runtime_plan.get("steps", [])
+                            ],
+                        },
+                    }],
+                }
+                _record_run_event(
+                    session_id=session_id,
+                    event_type="PLAN_APPROVAL_REQUIRED",
+                    persist=persist_run,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    status="waiting",
+                    title="Plan approval required",
+                    payload=approval_payload,
+                )
+                yield _sse_event("PLAN_APPROVAL_REQUIRED", approval_payload)
+                approval_action = await approval_future
+                _record_run_event(
+                    session_id=session_id,
+                    event_type="PLAN_APPROVAL_RESOLVED",
+                    persist=persist_run,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    status="completed" if approval_action == "approve" else "rejected",
+                    title=f"Plan approval {approval_action}",
+                    payload={"interactionId": approval_id, "action": approval_action},
+                )
+                yield _sse_event("PLAN_APPROVAL_RESOLVED", {
+                    "interactionId": approval_id,
+                    "action": approval_action,
+                })
+                if approval_action != "approve":
+                    assistant_error = "用户拒绝计划，执行已停止。"
+                    runtime_plan = fail_runtime_plan(runtime_plan, error=assistant_error)
+                    yield _sse_event("PLAN_UPDATE", {
+                        "plan": serialize_plan_for_event(runtime_plan),
+                    })
+                    if persist_run:
+                        _append_assistant_message(
+                            session_id=session_id,
+                            agent_id=agent_id,
+                            agent_name=agent_name,
+                            model_name=model_name,
+                            content="计划未获批准，本轮执行已停止。",
+                            error=assistant_error,
+                            skill_calls=_set_skill_run_status(skill_runs, "failed"),
+                            team_activities=_set_team_activity_status(team_activities, "failed"),
+                            model_caches=assistant_model_caches,
+                            plan_runs=[
+                                ChatPlanRun.model_validate(runtime_plan)
+                            ] if runtime_plan else [],
+                        )
+                    yield _sse_event("ERROR", {"message": assistant_error})
+                    return
+
         if run_data.images and model_name not in MULTIMODAL_MODELS:
             assistant_error = f"{model_name} 不支持图片输入，请切换到 qwen3.7-plus。"
             failed_skill_runs = _set_skill_run_status(skill_runs, "failed")
@@ -431,21 +591,12 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 for server in mcp_servers
             )
             knowledge_cache_key = ",".join(tool.id for tool in knowledge_tools)
-            guardrail_cache_key = (
-                f"scope-{guardrails.filesystem_scope}:"
-                f"net-{guardrails.network_enabled}:"
-                f"hitl-{guardrails.human_approval}:"
-                f"tool-permission-{guardrails.tool_permission_mode}:"
-                f"tool-profile-{guardrails.tool_permission_profile}:"
-                f"exec-{guardrails.execution_backend}:"
-                f"docker-{guardrails.docker_image}:"
-                f"persist-sandbox-{guardrails.persistent_sandbox}:"
-                f"timeout-{guardrails.timeout_seconds}"
-            )
+            guardrail_cache_key = _guardrail_cache_key(guardrails)
             runtime_agent_id = (
                 f"{agent_id}:{session_id}:{model_name}:thinking-{run_data.deep_thinking}:"
                 f"fallbacks-{fallback_cache_key}:"
                 f"skills-{skill_cache_key}:mcp-{mcp_cache_key}:knowledge-{knowledge_cache_key}:"
+                f"plan-{runtime_plan.get('id') if runtime_plan else 'none'}:"
                 f"guardrails-{guardrail_cache_key}"
             )
             agent = get_or_create_agent(
@@ -460,6 +611,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 guardrails=guardrails,
                 mcp_servers=mcp_servers,
                 knowledge_tools=knowledge_tools,
+                plan_id=str(runtime_plan.get("id")) if runtime_plan else None,
                 on_fallback_event=_make_fallback_trace_recorder(
                     session_id=session_id,
                     persist=persist_run,
@@ -517,11 +669,38 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
 
                 # 提取事件类型（EventType 枚举值）
                 event_type = event_data.pop("type", "UNKNOWN")
+                tool_name = str(
+                    event_data.get("tool_call_name")
+                    or event_data.get("name")
+                    or event_data.get("tool_name")
+                    or "tool"
+                )
                 _attach_provider_cache_usage(event_type, event_data)
                 if event_type == "MODEL_CALL_END":
                     cache_entry = _model_cache_from_event(event_data, model_name)
                     if cache_entry:
                         assistant_model_caches.append(cache_entry)
+                updated_plan = mark_plan_tool_event(
+                    runtime_plan,
+                    event_type=event_type,
+                    tool_name=tool_name,
+                )
+                if updated_plan and updated_plan != runtime_plan:
+                    runtime_plan = updated_plan
+                    yield _sse_event("PLAN_UPDATE", {
+                        "plan": serialize_plan_for_event(runtime_plan),
+                    })
+                if (
+                    runtime_plan
+                    and event_type in {"TOOL_CALL_END", "TOOL_RESULT_END"}
+                    and _is_plan_runtime_tool_name(tool_name)
+                ):
+                    refreshed_plan = get_plan_record(str(runtime_plan.get("id")))
+                    if refreshed_plan and refreshed_plan != runtime_plan:
+                        runtime_plan = refreshed_plan
+                        yield _sse_event("PLAN_UPDATE", {
+                            "plan": serialize_plan_for_event(runtime_plan),
+                        })
                 _record_agent_scope_event(
                     session_id=session_id,
                     event_type=event_type,
@@ -530,6 +709,16 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     scope="leader",
                     agent_id=agent_id,
                     agent_name=agent_name,
+                )
+                _record_permission_decision(
+                    session_id=session_id,
+                    event_type=event_type,
+                    event_data=event_data,
+                    persist=persist_run,
+                    scope="leader",
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    guardrails=guardrails,
                 )
                 next_tool_calls = _update_worker_tool_calls(
                     assistant_tool_calls,
@@ -631,6 +820,11 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 leader_agent_id=agent_id,
                 leader_output=assistant_text,
             )
+            if runtime_plan:
+                runtime_plan = complete_runtime_plan(runtime_plan, result=assistant_text or "任务已完成。")
+                yield _sse_event("PLAN_UPDATE", {
+                    "plan": serialize_plan_for_event(runtime_plan),
+                })
 
             if persist_run:
                 _append_assistant_message(
@@ -645,6 +839,9 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     tool_calls=assistant_tool_calls,
                     team_activities=completed_team_activities,
                     model_caches=assistant_model_caches,
+                    plan_runs=[
+                        ChatPlanRun.model_validate(runtime_plan)
+                    ] if runtime_plan else [],
                 )
                 _record_run_event(
                     session_id=session_id,
@@ -706,6 +903,8 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         except Exception as e:
             # Agent 执行过程中的异常处理
             assistant_error = f"Agent 执行异常: {str(e)}"
+            if runtime_plan:
+                runtime_plan = fail_runtime_plan(runtime_plan, error=assistant_error)
             failed_skill_runs = _set_skill_run_status(skill_runs, "failed")
             _record_run_event(
                 session_id=session_id,
@@ -730,6 +929,9 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                     skill_calls=failed_skill_runs,
                     team_activities=_set_team_activity_status(team_activities, "failed"),
                     model_caches=assistant_model_caches,
+                    plan_runs=[
+                        ChatPlanRun.model_validate(runtime_plan)
+                    ] if runtime_plan else [],
                 )
                 append_agent_memory_event(
                     agent_id=agent_id,
@@ -812,6 +1014,15 @@ async def get_run(run_id: str) -> dict:
         **serialize_chat_background_run(run),
         "events": run.events,
     }
+
+
+@router.post("/plan-approvals/{approval_id}")
+async def decide_plan_approval(approval_id: str, data: PlanApprovalDecision) -> dict:
+    """处理 Plan Runtime 审批。"""
+    action = "approve" if data.action == "approve" else "reject"
+    if not resolve_plan_approval(approval_id, action):
+        raise HTTPException(status_code=404, detail="Plan approval not found")
+    return {"ok": True, "interactionId": approval_id, "action": action}
 
 
 @router.post("/runs/{run_id}/cancel")

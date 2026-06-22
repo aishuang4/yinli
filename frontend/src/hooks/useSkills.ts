@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { Skill, SkillRegisterPayload } from '../types/skill';
+import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
 interface UseSkillsReturn {
   skills: Skill[];
@@ -70,67 +71,103 @@ export function useSkills(): UseSkillsReturn {
   }, []);
 
   const registerSkill = useCallback(async (payload: SkillRegisterPayload) => {
-    const skill = await requestJson<Skill>('/api/skills/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    updateSkill(skill);
-    setCategories((prev) => (
-      prev.includes(skill.category) ? prev : [...prev, skill.category].sort()
-    ));
-    return skill;
+    try {
+      const skill = await requestJson<Skill>('/api/skills/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      updateSkill(skill);
+      setCategories((prev) => (
+        prev.includes(skill.category) ? prev : [...prev, skill.category].sort()
+      ));
+      notifySuccess('Skill 注册成功');
+      return skill;
+    } catch (err) {
+      notifyError(`Skill 注册失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
   }, [updateSkill]);
 
   const importSkillArchive = useCallback(async (file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    const skill = await requestJson<Skill>('/api/skills/import', {
-      method: 'POST',
-      body: formData,
-    });
-    updateSkill(skill);
-    setCategories((prev) => (
-      prev.includes(skill.category) ? prev : [...prev, skill.category].sort()
-    ));
-    return skill;
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const skill = await requestJson<Skill>('/api/skills/import', {
+        method: 'POST',
+        body: formData,
+      });
+      updateSkill(skill);
+      setCategories((prev) => (
+        prev.includes(skill.category) ? prev : [...prev, skill.category].sort()
+      ));
+      notifySuccess('Skill 导入成功');
+      return skill;
+    } catch (err) {
+      notifyError(`Skill 导入失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
   }, [updateSkill]);
 
   const installSkill = useCallback(async (id: string) => {
-    const skill = await requestJson<Skill>(`/api/skills/${id}/install`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: true }),
-    });
-    updateSkill(skill);
-    return skill;
+    try {
+      const skill = await requestJson<Skill>(`/api/skills/${id}/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true }),
+      });
+      updateSkill(skill);
+      notifySuccess('Skill 安装成功');
+      return skill;
+    } catch (err) {
+      notifyError(`Skill 安装失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
   }, [updateSkill]);
 
   const uninstallSkill = useCallback(async (id: string) => {
-    const skill = await requestJson<Skill>(`/api/skills/${id}/uninstall`, {
-      method: 'POST',
-    });
-    updateSkill(skill);
-    return skill;
+    try {
+      const skill = await requestJson<Skill>(`/api/skills/${id}/uninstall`, {
+        method: 'POST',
+      });
+      updateSkill(skill);
+      notifySuccess('Skill 卸载成功');
+      return skill;
+    } catch (err) {
+      notifyError(`Skill 卸载失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
   }, [updateSkill]);
 
   const deleteSkill = useCallback(async (id: string) => {
-    const response = await fetch(`/api/skills/${id}`, { method: 'DELETE' });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${response.status}`);
+    try {
+      const response = await fetch(`/api/skills/${id}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${response.status}`);
+      }
+      setSkills((prev) => prev.filter((skill) => skill.id !== id));
+      notifySuccess('Skill 删除成功');
+    } catch (err) {
+      notifyError(`Skill 删除失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
     }
-    setSkills((prev) => prev.filter((skill) => skill.id !== id));
   }, []);
 
   const setSkillEnabled = useCallback(async (id: string, enabled: boolean) => {
-    const skill = await requestJson<Skill>(`/api/skills/${id}/enable`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled }),
-    });
-    updateSkill(skill);
-    return skill;
+    try {
+      const skill = await requestJson<Skill>(`/api/skills/${id}/enable`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      updateSkill(skill);
+      notifySuccess(enabled ? 'Skill 已启用' : 'Skill 已停用');
+      return skill;
+    } catch (err) {
+      notifyError(`Skill 状态更新失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
   }, [updateSkill]);
 
   useEffect(() => {

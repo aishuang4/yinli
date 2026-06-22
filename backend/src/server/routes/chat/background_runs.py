@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from src.server.routes.chat.helpers import _sse_event
+from src.server.routes.chat.models import ChatPlanRun
+from src.server.routes.chat.store import _append_assistant_message
 from src.storage.database import (
     append_chat_run_event,
     get_chat_run,
@@ -26,7 +28,7 @@ EventStreamFactory = Callable[[], AsyncGenerator[str, None]]
 MAX_BACKGROUND_RUNS = 50
 MAX_EVENTS_PER_RUN = 5000
 COMPLETED_RUN_TTL = timedelta(hours=2)
-WAITING_EVENT_TYPES = {"HITL_REQUIRED", "CLARIFICATION_REQUIRED"}
+WAITING_EVENT_TYPES = {"HITL_REQUIRED", "CLARIFICATION_REQUIRED", "PLAN_APPROVAL_REQUIRED"}
 ACTIVE_RUN_STATUSES = {"running", "waiting", "cancelling"}
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 CURRENT_BACKGROUND_RUN_ID: ContextVar[str] = ContextVar("current_chat_background_run_id", default="")
@@ -87,8 +89,17 @@ async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
     async with _runs_lock:
         run = _runs.get(run_id)
         if run is None:
-            return None
-        if run.status != "running":
+            persisted = get_chat_run(run_id)
+            if not persisted:
+                return None
+            completed_at = datetime.now(timezone.utc).isoformat()
+            update_chat_run_status(run_id, "cancelled", completed_at)
+            return _run_from_persisted_record({
+                **persisted,
+                "status": "cancelled",
+                "completedAt": completed_at,
+            })
+        if run.status in TERMINAL_RUN_STATUSES:
             return run
         run.status = "cancelling"
         task = run.async_task
@@ -96,6 +107,8 @@ async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
 
     if task is not None and not task.done():
         task.cancel()
+    else:
+        await _finalize_cancelled_run(run)
     return run
 
 
@@ -252,12 +265,7 @@ async def _consume_chat_events(run: ChatBackgroundRun, factory: EventStreamFacto
             run.status = "completed"
             update_chat_run_status(run.id, run.status, run.completed_at)
     except asyncio.CancelledError:
-        run.status = "cancelled"
-        await _broadcast(run, _sse_event("ERROR", {
-            "message": "Run cancelled",
-            "run_id": run.id,
-            "session_id": run.session_id,
-        }))
+        await _finalize_cancelled_run(run)
         raise
     except Exception as exc:
         run.status = "failed"
@@ -277,8 +285,12 @@ async def _consume_chat_events(run: ChatBackgroundRun, factory: EventStreamFacto
 
 
 async def _broadcast(run: ChatBackgroundRun, event: str) -> None:
-    if _extract_sse_event_type(event) in WAITING_EVENT_TYPES:
+    event_type = _extract_sse_event_type(event)
+    if event_type in WAITING_EVENT_TYPES:
         run.status = "waiting"
+        update_chat_run_status(run.id, run.status, run.completed_at)
+    elif run.status == "waiting":
+        run.status = "running"
         update_chat_run_status(run.id, run.status, run.completed_at)
     run.events.append(event)
     if len(run.events) > MAX_EVENTS_PER_RUN:
@@ -287,6 +299,66 @@ async def _broadcast(run: ChatBackgroundRun, event: str) -> None:
         append_chat_run_event(run.id, event)
     for queue in list(run.subscribers):
         await queue.put(event)
+
+
+async def _finalize_cancelled_run(run: ChatBackgroundRun) -> None:
+    """将取消状态、事件和已生成内容落库，保证历史与任务中心一致。"""
+
+    if run.status == "cancelled":
+        return
+    run.status = "cancelled"
+    run.completed_at = datetime.now(timezone.utc).isoformat()
+    _append_cancelled_assistant_message(run)
+    await _broadcast(run, _sse_event("RUN_CANCELLED", {
+        "message": "Run cancelled",
+        "run_id": run.id,
+        "session_id": run.session_id,
+        "completed_at": run.completed_at,
+    }))
+    update_chat_run_status(run.id, run.status, run.completed_at)
+
+
+def _append_cancelled_assistant_message(run: ChatBackgroundRun) -> None:
+    """从已缓存事件恢复停止前输出，追加到会话历史。"""
+
+    text_parts: list[str] = []
+    thinking_parts: list[str] = []
+    latest_plan: dict | None = None
+    for raw_event in run.events:
+        event_type, data = _parse_sse_event(raw_event)
+        if event_type == "TEXT_BLOCK_DELTA":
+            text_parts.append(str(data.get("delta") or ""))
+        elif event_type == "THINKING_BLOCK_DELTA":
+            thinking_parts.append(str(data.get("delta") or ""))
+        elif event_type == "PLAN_UPDATE" and isinstance(data.get("plan"), dict):
+            latest_plan = data["plan"]
+
+    content = "".join(text_parts).strip()
+    thinking = "".join(thinking_parts).strip()
+    if not content and not thinking and not latest_plan:
+        content = "本轮执行已由用户停止。"
+
+    plan_runs: list[ChatPlanRun] = []
+    if latest_plan:
+        try:
+            plan_runs.append(ChatPlanRun.model_validate({
+                **latest_plan,
+                "status": "cancelled",
+                "completedAt": run.completed_at,
+            }))
+        except Exception:
+            plan_runs = []
+
+    _append_assistant_message(
+        session_id=run.session_id,
+        agent_id=run.agent_id,
+        agent_name=run.agent_name,
+        model_name="",
+        content=content,
+        error="用户已停止本轮执行。",
+        thinking=thinking,
+        plan_runs=plan_runs,
+    )
 
 
 async def _close_subscribers(run: ChatBackgroundRun) -> None:
@@ -416,7 +488,7 @@ def _summarize_run_events(run: ChatBackgroundRun) -> dict:
                     current_stage = f"Worker 协作中：{completed_workers}/{total_workers} 完成"
         elif event_type in WAITING_EVENT_TYPES:
             progress = max(progress, 65)
-            current_stage = "等待人工处理"
+            current_stage = "等待计划审批" if event_type == "PLAN_APPROVAL_REQUIRED" else "等待人工处理"
         elif event_type == "REPLY_END":
             progress = max(progress, 90)
             current_stage = "回复已生成，正在收尾"

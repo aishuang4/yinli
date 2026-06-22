@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Activity, Bot, CheckCircle2, Clock3, Copy, RefreshCw, Wrench, XCircle } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Activity, Bot, CheckCircle2, Clock3, Copy, RefreshCw, ShieldCheck, Wrench, XCircle } from 'lucide-react';
 import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../components/MarkdownContent';
 import type { TeamActivityInfo, ToolCallInfo } from '../hooks/useEventStream';
@@ -52,6 +52,16 @@ interface TraceDetail extends TraceSummary {
   messages: TraceMessage[];
   events: TraceEvent[];
 }
+
+type TraceEventFilter = 'all' | 'permissions' | 'tools' | 'models' | 'hitl';
+
+const TRACE_FILTERS: Array<{ key: TraceEventFilter; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'permissions', label: '权限审计' },
+  { key: 'tools', label: '工具' },
+  { key: 'models', label: '模型' },
+  { key: 'hitl', label: '人工介入' },
+];
 
 export function TracePage() {
   const [traces, setTraces] = useState<TraceSummary[]>([]);
@@ -200,6 +210,16 @@ function TraceDetailView({ trace }: { trace: TraceDetail }) {
 }
 
 function TraceEventTimeline({ events }: { events: TraceEvent[] }) {
+  const [filter, setFilter] = useState<TraceEventFilter>('all');
+  const filteredEvents = useMemo(
+    () => events.filter((event) => matchesTraceFilter(event, filter)),
+    [events, filter],
+  );
+  const permissionCount = useMemo(
+    () => events.filter((event) => matchesTraceFilter(event, 'permissions')).length,
+    [events],
+  );
+
   return (
     <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -207,12 +227,37 @@ function TraceEventTimeline({ events }: { events: TraceEvent[] }) {
           <Activity size={15} color="var(--color-accent)" />
           <span>事件时间线</span>
         </div>
-        <Tag size="small" color="transparent">{events.length} 事件</Tag>
+        <div className="flex items-center gap-2">
+          {permissionCount > 0 && <Tag size="small" color="green">{permissionCount} 权限</Tag>}
+          <Tag size="small" color="transparent">{filteredEvents.length}/{events.length} 事件</Tag>
+        </div>
+      </div>
+      <div className="mb-3 flex flex-wrap gap-2">
+        {TRACE_FILTERS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            onClick={() => setFilter(item.key)}
+            className={[
+              'ui-card-transition rounded-md px-3 py-1.5 text-xs',
+              filter === item.key
+                ? 'bg-[var(--color-accent-bg)] text-[var(--color-accent)]'
+                : 'bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]',
+            ].join(' ')}
+          >
+            {item.label}
+          </button>
+        ))}
       </div>
       <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-        {events.map((event) => (
+        {filteredEvents.map((event) => (
           <TraceEventRow key={event.id} event={event} />
         ))}
+        {filteredEvents.length === 0 && (
+          <div className="rounded-md bg-[var(--color-bg-primary)] p-6 text-center text-sm text-[var(--color-text-tertiary)]">
+            当前筛选下暂无事件
+          </div>
+        )}
       </div>
     </section>
   );
@@ -248,6 +293,7 @@ function TraceEventRow({ event }: { event: TraceEvent }) {
           {event.content}
         </div>
       )}
+      {isPermissionEvent(event) && <PermissionAuditSummary event={event} />}
       {shouldShowTracePayload(event) && (
         <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-[var(--color-bg-secondary)] p-2 text-[11px] text-[var(--color-text-tertiary)]">
           {JSON.stringify(event.payload, null, 2)}
@@ -257,14 +303,79 @@ function TraceEventRow({ event }: { event: TraceEvent }) {
   );
 }
 
+function PermissionAuditSummary({ event }: { event: TraceEvent }) {
+  const payload = event.payload;
+  const policy = getRecord(payload.policy);
+  const decision = String(payload.decision || event.status || '');
+  const resourceType = String(payload.resourceType || '');
+  const resourceId = String(payload.resourceId || '');
+  const action = String(payload.action || '');
+  const reason = String(payload.reason || '');
+  const toolPolicy = String(policy.toolPolicy || payload.toolPolicy || '');
+  const networkEnabled = policy.networkEnabled;
+
+  return (
+    <div className="mt-3 rounded-md bg-[var(--color-bg-secondary)] p-3">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <ShieldCheck size={14} color="var(--color-accent)" />
+        <Tag size="small" color={permissionDecisionColor(decision)}>{decision || 'configured'}</Tag>
+        {resourceType && <Tag size="small" color="transparent">{resourceType}</Tag>}
+        {action && <Tag size="small" color="transparent">{action}</Tag>}
+        {toolPolicy && <Tag size="small" color="blue">{toolPolicy}</Tag>}
+        {typeof networkEnabled === 'boolean' && (
+          <Tag size="small" color={networkEnabled ? 'green' : 'orange'}>
+            network {networkEnabled ? 'on' : 'off'}
+          </Tag>
+        )}
+      </div>
+      {resourceId && (
+        <div className="truncate text-sm font-medium text-[var(--color-text-primary)]" title={resourceId}>
+          {resourceId}
+        </div>
+      )}
+      {reason && (
+        <div className="mt-1 line-clamp-2 text-xs text-[var(--color-text-secondary)]">
+          {reason}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function shouldShowTracePayload(event: TraceEvent) {
   return (
     event.eventType === 'WORKSPACE_CONFIG' ||
+    event.eventType === 'PERMISSION_POLICY' ||
+    event.eventType === 'PERMISSION_DECISION' ||
     event.eventType === 'MODEL_CACHE_USAGE' ||
     event.eventType === 'COMMAND_RESULT' ||
     event.eventType === 'FILE_CHANGE' ||
     event.eventType.startsWith('MODEL_FALLBACK_')
   );
+}
+
+function matchesTraceFilter(event: TraceEvent, filter: TraceEventFilter) {
+  if (filter === 'all') return true;
+  if (filter === 'permissions') return isPermissionEvent(event);
+  if (filter === 'tools') return event.eventType.includes('TOOL') || event.eventType === 'COMMAND_RESULT' || event.eventType === 'FILE_CHANGE';
+  if (filter === 'models') return event.eventType.startsWith('MODEL_');
+  if (filter === 'hitl') return event.eventType.includes('HITL') || event.eventType.includes('CLARIFICATION');
+  return true;
+}
+
+function isPermissionEvent(event: TraceEvent) {
+  return event.eventType === 'PERMISSION_POLICY' || event.eventType === 'PERMISSION_DECISION';
+}
+
+function permissionDecisionColor(decision: string) {
+  if (decision === 'deny') return 'red';
+  if (decision === 'ask') return 'orange';
+  if (decision === 'allow' || decision === 'configured') return 'green';
+  return 'transparent';
+}
+
+function getRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function TraceMessageCard({ message }: { message: TraceMessage }) {
@@ -330,8 +441,10 @@ function TraceToolList({ title, toolCalls, compact = false }: { title: string; t
         <span>{title}</span>
       </div>
       <div className={`${compact ? 'max-h-72' : 'max-h-96'} grid gap-2 overflow-y-auto pr-1`}>
-        {toolCalls.map((toolCall) => (
-          <div key={toolCall.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-2">
+        {toolCalls.map((toolCall) => {
+          const httpSummary = parseHttpToolSummary(toolCall.result);
+          return (
+            <div key={toolCall.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-2">
             <div className="flex min-w-0 items-center justify-between gap-2">
               <span className="min-w-0 truncate text-sm font-medium text-[var(--color-text-primary)]" title={normalizeToolDisplayName(toolCall.name)}>
                 {normalizeToolDisplayName(toolCall.name)}
@@ -352,16 +465,42 @@ function TraceToolList({ title, toolCalls, compact = false }: { title: string; t
                 </Tag>
               </div>
             </div>
+            {httpSummary && (
+              <div className="mt-2 grid gap-1 rounded bg-[var(--color-bg-secondary)] px-2 py-1.5 text-xs text-[var(--color-text-tertiary)]">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Tag size="small" color="blue">{httpSummary.method}</Tag>
+                  <Tag size="small" color={httpSummary.statusCode >= 400 ? 'red' : 'green'}>{httpSummary.statusCode}</Tag>
+                  {httpSummary.durationMs > 0 && <span>{httpSummary.durationMs}ms</span>}
+                </div>
+                <div className="truncate" title={httpSummary.url}>{httpSummary.url}</div>
+              </div>
+            )}
             {!compact && (toolCall.args || toolCall.result) && (
               <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
                 {toolCall.result || toolCall.args}
               </pre>
             )}
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
+}
+
+function parseHttpToolSummary(text: string): { method: string; url: string; statusCode: number; durationMs: number } | null {
+  if (!text) return null;
+  try {
+    const data = JSON.parse(text);
+    const method = String(data.method || '');
+    const url = String(data.url || '');
+    const statusCode = Number(data.status_code || 0);
+    const durationMs = Number(data.duration_ms || 0);
+    if (!method || !url || !statusCode) return null;
+    return { method, url, statusCode, durationMs };
+  } catch {
+    return null;
+  }
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {

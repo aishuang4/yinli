@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { McpRegisterPayload, McpServer, McpTool } from '../types/mcp';
+import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
 interface UseMcpReturn {
   servers: McpServer[];
@@ -69,53 +70,83 @@ export function useMcp(): UseMcpReturn {
   }, []);
 
   const registerServer = useCallback(async (payload: McpRegisterPayload) => {
-    const server = await requestJson<McpServer>('/api/mcp/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    updateServer(server);
-    setCategories((prev) => (
-      prev.includes(server.category) ? prev : [...prev, server.category].sort()
-    ));
-    return server;
+    try {
+      const server = await requestJson<McpServer>('/api/mcp/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      updateServer(server);
+      setCategories((prev) => (
+        prev.includes(server.category) ? prev : [...prev, server.category].sort()
+      ));
+      notifySuccess('MCP 注册成功');
+      return server;
+    } catch (err) {
+      notifyError(`MCP 注册失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
   }, [updateServer]);
 
   const installServer = useCallback(async (id: string) => {
-    const server = await requestJson<McpServer>(`/api/mcp/${id}/install`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: true }),
-    });
-    updateServer(server);
-    return server;
+    try {
+      const server = await requestJson<McpServer>(`/api/mcp/${id}/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true }),
+      });
+      updateServer(server);
+      notifySuccess('MCP 安装成功');
+      return server;
+    } catch (err) {
+      notifyError(`MCP 安装失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
   }, [updateServer]);
 
   const uninstallServer = useCallback(async (id: string) => {
-    const server = await requestJson<McpServer>(`/api/mcp/${id}/uninstall`, {
-      method: 'POST',
-    });
-    updateServer(server);
-    return server;
+    try {
+      const server = await requestJson<McpServer>(`/api/mcp/${id}/uninstall`, {
+        method: 'POST',
+      });
+      updateServer(server);
+      notifySuccess('MCP 卸载成功');
+      return server;
+    } catch (err) {
+      notifyError(`MCP 卸载失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
   }, [updateServer]);
 
   const deleteServer = useCallback(async (id: string) => {
-    const response = await fetch(`/api/mcp/${id}`, { method: 'DELETE' });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${response.status}`);
+    try {
+      const response = await fetch(`/api/mcp/${id}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${response.status}`);
+      }
+      setServers((prev) => prev.filter((server) => server.id !== id));
+      notifySuccess('MCP 删除成功');
+    } catch (err) {
+      notifyError(`MCP 删除失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
     }
-    setServers((prev) => prev.filter((server) => server.id !== id));
   }, []);
 
   const setServerEnabled = useCallback(async (id: string, enabled: boolean) => {
-    const server = await requestJson<McpServer>(`/api/mcp/${id}/enable`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled }),
-    });
-    updateServer(server);
-    return server;
+    try {
+      const server = await requestJson<McpServer>(`/api/mcp/${id}/enable`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      updateServer(server);
+      notifySuccess(enabled ? 'MCP 已启用' : 'MCP 已停用');
+      return server;
+    } catch (err) {
+      notifyError(`MCP 状态更新失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
   }, [updateServer]);
 
   useEffect(() => {

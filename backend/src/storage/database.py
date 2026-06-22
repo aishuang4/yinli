@@ -172,6 +172,28 @@ def ensure_db() -> None:
                     installed_at TEXT,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS http_tools (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    category TEXT NOT NULL DEFAULT 'custom',
+                    method TEXT NOT NULL DEFAULT 'POST',
+                    url TEXT NOT NULL,
+                    auth_type TEXT NOT NULL DEFAULT 'none',
+                    auth_config TEXT NOT NULL DEFAULT '{}',
+                    headers TEXT NOT NULL DEFAULT '{}',
+                    query_template TEXT NOT NULL DEFAULT '{}',
+                    body_template TEXT NOT NULL DEFAULT '{}',
+                    parameter_schema TEXT NOT NULL DEFAULT '{}',
+                    parameter_instructions TEXT NOT NULL DEFAULT '',
+                    response_mode TEXT NOT NULL DEFAULT 'full',
+                    response_path TEXT NOT NULL DEFAULT '',
+                    readonly INTEGER NOT NULL DEFAULT 1,
+                    approval_policy TEXT NOT NULL DEFAULT 'inherit',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS skills (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -213,10 +235,55 @@ def ensure_db() -> None:
                     skill_calls TEXT NOT NULL,
                     team_activities TEXT NOT NULL,
                     model_caches TEXT NOT NULL DEFAULT '[]',
+                    plan_runs TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
                     sort_order INTEGER NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS plans (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL DEFAULT '',
+                    session_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    team_id TEXT,
+                    title TEXT NOT NULL,
+                    goal TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    markdown TEXT NOT NULL,
+                    current_step_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS plan_steps (
+                    id TEXT PRIMARY KEY,
+                    plan_id TEXT NOT NULL,
+                    step_index INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    assigned_agent_id TEXT,
+                    evidence TEXT NOT NULL DEFAULT '',
+                    result TEXT NOT NULL DEFAULT '',
+                    started_at TEXT,
+                    completed_at TEXT,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS plan_events (
+                    id TEXT PRIMARY KEY,
+                    plan_id TEXT NOT NULL,
+                    step_id TEXT,
+                    run_event_id TEXT,
+                    event_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_plans_session_updated
+                    ON plans(session_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_plan_steps_plan_order
+                    ON plan_steps(plan_id, step_index);
                 CREATE TABLE IF NOT EXISTS run_events (
                     id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
@@ -317,6 +384,7 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'")
+            _ensure_column(conn, "chat_messages", "plan_runs", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "memory_facts", "pinned", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "memory_facts", "status", "TEXT NOT NULL DEFAULT 'active'")
             _ensure_column(conn, "memory_facts", "access_count", "INTEGER NOT NULL DEFAULT 0")
@@ -741,6 +809,110 @@ def replace_mcp_servers(records: dict[str, dict[str, Any]]) -> None:
         conn.commit()
 
 
+def list_http_tools() -> list[dict[str, Any]]:
+    """List configurable HTTP tools."""
+    ensure_db()
+    with _lock, _connect() as conn:
+        rows = conn.execute("SELECT * FROM http_tools ORDER BY updated_at DESC").fetchall()
+    return [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "description": row["description"],
+            "category": row["category"],
+            "method": row["method"],
+            "url": row["url"],
+            "authType": row["auth_type"],
+            "authConfig": _loads(row["auth_config"], {}),
+            "headers": _loads(row["headers"], {}),
+            "queryTemplate": _loads(row["query_template"], {}),
+            "bodyTemplate": _loads(row["body_template"], {}),
+            "parameterSchema": _loads(row["parameter_schema"], {}),
+            "parameterInstructions": row["parameter_instructions"],
+            "responseMode": row["response_mode"],
+            "responsePath": row["response_path"],
+            "readonly": bool(row["readonly"]),
+            "approvalPolicy": row["approval_policy"],
+            "enabled": bool(row["enabled"]),
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
+def upsert_http_tool(data: dict[str, Any]) -> dict[str, Any]:
+    """Insert or update one configurable HTTP tool."""
+    ensure_db()
+    now = _utc_now()
+    created_at = data.get("createdAt") or now
+    updated_at = data.get("updatedAt") or now
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO http_tools(
+                id, name, description, category, method, url, auth_type,
+                auth_config, headers, query_template, body_template,
+                parameter_schema, parameter_instructions, response_mode,
+                response_path, readonly, approval_policy, enabled,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name=excluded.name,
+                description=excluded.description,
+                category=excluded.category,
+                method=excluded.method,
+                url=excluded.url,
+                auth_type=excluded.auth_type,
+                auth_config=excluded.auth_config,
+                headers=excluded.headers,
+                query_template=excluded.query_template,
+                body_template=excluded.body_template,
+                parameter_schema=excluded.parameter_schema,
+                parameter_instructions=excluded.parameter_instructions,
+                response_mode=excluded.response_mode,
+                response_path=excluded.response_path,
+                readonly=excluded.readonly,
+                approval_policy=excluded.approval_policy,
+                enabled=excluded.enabled,
+                updated_at=excluded.updated_at
+            """,
+            (
+                data["id"],
+                data["name"],
+                data.get("description", ""),
+                data.get("category", "custom"),
+                data.get("method", "POST").upper(),
+                data["url"],
+                data.get("authType", "none"),
+                _dumps(data.get("authConfig", {})),
+                _dumps(data.get("headers", {})),
+                _dumps(data.get("queryTemplate", {})),
+                _dumps(data.get("bodyTemplate", {})),
+                _dumps(data.get("parameterSchema", {})),
+                data.get("parameterInstructions", ""),
+                data.get("responseMode", "full"),
+                data.get("responsePath", ""),
+                1 if data.get("readonly", True) else 0,
+                data.get("approvalPolicy", "inherit"),
+                1 if data.get("enabled", True) else 0,
+                created_at,
+                updated_at,
+            ),
+        )
+        conn.commit()
+    return next(item for item in list_http_tools() if item["id"] == data["id"])
+
+
+def delete_http_tool(tool_id: str) -> bool:
+    """Delete one configurable HTTP tool."""
+    ensure_db()
+    with _lock, _connect() as conn:
+        cursor = conn.execute("DELETE FROM http_tools WHERE id = ?", (tool_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
 def list_skills() -> list[dict[str, Any]]:
     ensure_db()
     with _lock, _connect() as conn:
@@ -915,6 +1087,7 @@ def load_chat_store() -> dict[str, Any]:
             "skillCalls": _loads(row["skill_calls"], []),
             "teamActivities": _loads(row["team_activities"], []),
             "modelCaches": _loads(row["model_caches"], []),
+            "planRuns": _loads(row["plan_runs"], []),
             "created_at": row["created_at"],
         })
     return {
@@ -967,15 +1140,16 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     _dumps(item.get("skillCalls", item.get("skill_calls", []))),
                     _dumps(item.get("teamActivities", item.get("team_activities", []))),
                     _dumps(item.get("modelCaches", item.get("model_caches", []))),
+                    _dumps(item.get("planRuns", item.get("plan_runs", []))),
                     item["created_at"], index,
                 ))
         conn.executemany(
             """
             INSERT INTO chat_messages (
                 id, session_id, role, content, agent_id, agent_name, model_name,
-                error, thinking, images, tool_calls, skill_calls, team_activities, model_caches, created_at,
+                error, thinking, images, tool_calls, skill_calls, team_activities, model_caches, plan_runs, created_at,
                 sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -1424,6 +1598,238 @@ def update_memory_candidate_status(
         "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
+
+
+def _row_to_plan(row: sqlite3.Row, steps: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "runId": row["run_id"],
+        "sessionId": row["session_id"],
+        "agentId": row["agent_id"],
+        "teamId": row["team_id"],
+        "title": row["title"],
+        "goal": row["goal"],
+        "status": row["status"],
+        "markdown": row["markdown"],
+        "currentStepId": row["current_step_id"],
+        "steps": steps or [],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+        "completedAt": row["completed_at"],
+    }
+
+
+def _row_to_plan_step(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "planId": row["plan_id"],
+        "stepIndex": row["step_index"],
+        "title": row["title"],
+        "description": row["description"],
+        "status": row["status"],
+        "assignedAgentId": row["assigned_agent_id"],
+        "evidence": row["evidence"],
+        "result": row["result"],
+        "startedAt": row["started_at"],
+        "completedAt": row["completed_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def create_plan_record(plan: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any]:
+    """Create one structured runtime plan and its steps."""
+    ensure_db()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO plans (
+                id, run_id, session_id, agent_id, team_id, title, goal, status,
+                markdown, current_step_id, created_at, updated_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                plan["id"],
+                plan.get("runId", ""),
+                plan["sessionId"],
+                plan["agentId"],
+                plan.get("teamId"),
+                plan["title"],
+                plan["goal"],
+                plan["status"],
+                plan["markdown"],
+                plan.get("currentStepId"),
+                plan["createdAt"],
+                plan["updatedAt"],
+                plan.get("completedAt"),
+            ),
+        )
+        conn.executemany(
+            """
+            INSERT INTO plan_steps (
+                id, plan_id, step_index, title, description, status,
+                assigned_agent_id, evidence, result, started_at, completed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    step["id"],
+                    plan["id"],
+                    step["stepIndex"],
+                    step["title"],
+                    step["description"],
+                    step["status"],
+                    step.get("assignedAgentId"),
+                    step.get("evidence", ""),
+                    step.get("result", ""),
+                    step.get("startedAt"),
+                    step.get("completedAt"),
+                    step["updatedAt"],
+                )
+                for step in steps
+            ],
+        )
+        conn.commit()
+    return get_plan_record(plan["id"]) or {**plan, "steps": steps}
+
+
+def get_plan_record(plan_id: str) -> dict[str, Any] | None:
+    ensure_db()
+    with _lock, _connect() as conn:
+        plan_row = conn.execute("SELECT * FROM plans WHERE id = ?", (plan_id,)).fetchone()
+        if not plan_row:
+            return None
+        step_rows = conn.execute(
+            "SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY step_index ASC",
+            (plan_id,),
+        ).fetchall()
+    return _row_to_plan(plan_row, [_row_to_plan_step(row) for row in step_rows])
+
+
+def list_session_plans(session_id: str) -> list[dict[str, Any]]:
+    ensure_db()
+    with _lock, _connect() as conn:
+        plan_rows = conn.execute(
+            "SELECT * FROM plans WHERE session_id = ? ORDER BY created_at ASC",
+            (session_id,),
+        ).fetchall()
+        step_rows = conn.execute(
+            """
+            SELECT * FROM plan_steps
+            WHERE plan_id IN (SELECT id FROM plans WHERE session_id = ?)
+            ORDER BY plan_id ASC, step_index ASC
+            """,
+            (session_id,),
+        ).fetchall()
+    steps_by_plan: dict[str, list[dict[str, Any]]] = {}
+    for row in step_rows:
+        steps_by_plan.setdefault(row["plan_id"], []).append(_row_to_plan_step(row))
+    return [_row_to_plan(row, steps_by_plan.get(row["id"], [])) for row in plan_rows]
+
+
+def update_plan_record(
+    plan_id: str,
+    *,
+    status: str | None = None,
+    markdown: str | None = None,
+    current_step_id: str | None = None,
+    completed_at: str | None = None,
+) -> dict[str, Any] | None:
+    ensure_db()
+    existing = get_plan_record(plan_id)
+    if existing is None:
+        return None
+    now = _utc_now()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE plans
+            SET status = ?, markdown = ?, current_step_id = ?, completed_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                status if status is not None else existing["status"],
+                markdown if markdown is not None else existing["markdown"],
+                current_step_id if current_step_id is not None else existing.get("currentStepId"),
+                completed_at if completed_at is not None else existing.get("completedAt"),
+                now,
+                plan_id,
+            ),
+        )
+        conn.commit()
+    return get_plan_record(plan_id)
+
+
+def update_plan_step_record(
+    step_id: str,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    status: str | None = None,
+    evidence: str | None = None,
+    result: str | None = None,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+) -> dict[str, Any] | None:
+    ensure_db()
+    now = _utc_now()
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT * FROM plan_steps WHERE id = ?", (step_id,)).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            """
+            UPDATE plan_steps
+            SET title = ?, description = ?, status = ?, evidence = ?, result = ?, started_at = ?,
+                completed_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                title if title is not None else row["title"],
+                description if description is not None else row["description"],
+                status if status is not None else row["status"],
+                evidence if evidence is not None else row["evidence"],
+                result if result is not None else row["result"],
+                started_at if started_at is not None else row["started_at"],
+                completed_at if completed_at is not None else row["completed_at"],
+                now,
+                step_id,
+            ),
+        )
+        conn.commit()
+    with _lock, _connect() as conn:
+        next_row = conn.execute("SELECT * FROM plan_steps WHERE id = ?", (step_id,)).fetchone()
+    return _row_to_plan_step(next_row) if next_row else None
+
+
+def append_plan_event_record(
+    plan_id: str,
+    *,
+    step_id: str | None,
+    event_type: str,
+    content: str,
+    run_event_id: str | None = None,
+) -> dict[str, Any]:
+    ensure_db()
+    event_id = f"plan-evt-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+    created_at = _utc_now()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO plan_events(id, plan_id, step_id, run_event_id, event_type, content, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (event_id, plan_id, step_id, run_event_id, event_type, content, created_at),
+        )
+        conn.commit()
+    return {
+        "id": event_id,
+        "planId": plan_id,
+        "stepId": step_id,
+        "runEventId": run_event_id,
+        "eventType": event_type,
+        "content": content,
+        "createdAt": created_at,
+    }
 
 
 def normalized_table_counts() -> dict[str, int]:

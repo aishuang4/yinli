@@ -11,7 +11,7 @@
  * - 使用 Lucide 线性图标
  */
 
-import { MessageSquare, Bot, Plug, Package, Settings, Sun, Moon, Activity, FlaskConical, ListRestart } from 'lucide-react';
+import { MessageSquare, Bot, Wrench, Package, Settings, Sun, Moon, Activity, FlaskConical, ListRestart } from 'lucide-react';
 import { useAppStore, type ViewType } from '../stores/appStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { cn } from '../utils/cn';
@@ -54,9 +54,9 @@ const NAV_ITEMS: NavItem[] = [
     icon: Bot,
   },
   {
-    id: 'mcp',
-    label: 'MCP',
-    icon: Plug,
+    id: 'tools',
+    label: '工具管理',
+    icon: Wrench,
   },
   {
     id: 'skills',

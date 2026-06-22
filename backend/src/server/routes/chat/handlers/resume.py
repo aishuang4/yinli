@@ -42,6 +42,7 @@ from src.server.routes.chat.runtime import (
     _build_runtime_knowledge_tools,
     _build_runtime_mcp_servers,
     _build_user_content,
+    _guardrail_cache_key,
     _permission_mode_for_guardrails,
 )
 from src.server.routes.chat.skill_runs import (
@@ -63,6 +64,8 @@ from src.server.routes.chat.team_state import (
 from src.server.routes.chat.trace_recorder import (
     _attach_provider_cache_usage,
     _model_cache_from_event,
+    _record_agent_scope_event,
+    _record_permission_decision,
     _record_run_event,
     _record_tool_execution_artifacts,
 )
@@ -175,6 +178,27 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         cache_entry = _model_cache_from_event(event_data, interaction.model_name)
                         if cache_entry:
                             assistant_model_caches.append(cache_entry)
+                    _record_agent_scope_event(
+                        session_id=interaction.session_id,
+                        event_type=event_type,
+                        event_data=event_data,
+                        persist=True,
+                        scope="worker",
+                        agent_id=worker_member.agent_id,
+                        agent_name=interaction.agent_name,
+                        team_activity_id=activity.id if activity else None,
+                    )
+                    _record_permission_decision(
+                        session_id=interaction.session_id,
+                        event_type=event_type,
+                        event_data=event_data,
+                        persist=True,
+                        scope="worker",
+                        agent_id=worker_member.agent_id,
+                        agent_name=interaction.agent_name,
+                        team_activity_id=activity.id if activity else None,
+                        guardrails=worker_guardrails,
+                    )
                     if event_type in HITL_EVENT_TYPES:
                         _mark_persistent_skill_run(
                             worker_member.agent_id,
@@ -288,6 +312,22 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     yield _sse_event("TEAM_ACTIVITY", {
                         "activities": [item.model_dump(by_alias=True) for item in team_activities],
                     })
+                _record_run_event(
+                    session_id=interaction.session_id,
+                    event_type="WORKER_COMPLETED",
+                    persist=True,
+                    scope="worker",
+                    agent_id=worker_member.agent_id,
+                    agent_name=interaction.agent_name,
+                    team_activity_id=activity.id if activity else None,
+                    status="completed",
+                    title=f"Worker completed: {interaction.agent_name}",
+                    content=_trim_text(worker_text, 1200),
+                    payload={
+                        "toolCallCount": len(worker_tool_calls),
+                        "resumedFromHitl": True,
+                    },
+                )
 
                 append_agent_memory_event(
                     agent_id=worker_member.agent_id,
@@ -370,17 +410,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     for server in leader_mcp_servers
                 )
                 knowledge_cache_key = ",".join(tool.id for tool in leader_knowledge_tools)
-                guardrail_cache_key = (
-                    f"scope-{leader_guardrails.filesystem_scope}:"
-                    f"net-{leader_guardrails.network_enabled}:"
-                    f"hitl-{leader_guardrails.human_approval}:"
-                    f"tool-permission-{leader_guardrails.tool_permission_mode}:"
-                    f"tool-profile-{leader_guardrails.tool_permission_profile}:"
-                    f"exec-{leader_guardrails.execution_backend}:"
-                    f"docker-{leader_guardrails.docker_image}:"
-                    f"persist-sandbox-{leader_guardrails.persistent_sandbox}:"
-                    f"timeout-{leader_guardrails.timeout_seconds}"
-                )
+                guardrail_cache_key = _guardrail_cache_key(leader_guardrails)
                 runtime_agent_id = (
                     f"{leader_agent_id}:{interaction.session_id}:{interaction.model_name}:"
                     f"thinking-{chat_data.deep_thinking}:fallbacks-{fallback_cache_key}:"
@@ -430,6 +460,27 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         cache_entry = _model_cache_from_event(event_data, interaction.model_name)
                         if cache_entry:
                             assistant_model_caches.append(cache_entry)
+                    _record_agent_scope_event(
+                        session_id=interaction.session_id,
+                        event_type=event_type,
+                        event_data=event_data,
+                        persist=True,
+                        scope="leader",
+                        agent_id=leader_agent_id,
+                        agent_name=leader_agent_name,
+                        team_activity_id=None,
+                    )
+                    _record_permission_decision(
+                        session_id=interaction.session_id,
+                        event_type=event_type,
+                        event_data=event_data,
+                        persist=True,
+                        scope="leader",
+                        agent_id=leader_agent_id,
+                        agent_name=leader_agent_name,
+                        team_activity_id=None,
+                        guardrails=leader_guardrails,
+                    )
                     next_tool_calls = _update_worker_tool_calls(
                         assistant_tool_calls,
                         event_type,
@@ -510,6 +561,23 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     team_activities=completed_team_activities,
                     model_caches=assistant_model_caches,
                 )
+                _record_run_event(
+                    session_id=interaction.session_id,
+                    event_type="ASSISTANT_MESSAGE",
+                    persist=True,
+                    scope="leader",
+                    agent_id=leader_agent_id,
+                    agent_name=leader_agent_name,
+                    status="completed",
+                    title="Assistant response",
+                    content=_trim_text(assistant_text, 1200),
+                    payload={
+                        "model": interaction.model_name,
+                        "toolCallCount": len(assistant_tool_calls),
+                        "skillIds": [item.id for item in completed_skill_runs],
+                        "resumedFromWorkerHitl": True,
+                    },
+                )
                 yield _sse_event("TEAM_ACTIVITY", {
                     "activities": [item.model_dump(by_alias=True) for item in completed_team_activities],
                 })
@@ -564,6 +632,27 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     cache_entry = _model_cache_from_event(event_data, interaction.model_name)
                     if cache_entry:
                         assistant_model_caches.append(cache_entry)
+                _record_agent_scope_event(
+                    session_id=interaction.session_id,
+                    event_type=event_type,
+                    event_data=event_data,
+                    persist=True,
+                    scope=interaction.scope,
+                    agent_id=interaction.agent_id,
+                    agent_name=interaction.agent_name,
+                    team_activity_id=activity.id if activity else None,
+                )
+                _record_permission_decision(
+                    session_id=interaction.session_id,
+                    event_type=event_type,
+                    event_data=event_data,
+                    persist=True,
+                    scope=interaction.scope,
+                    agent_id=interaction.agent_id,
+                    agent_name=interaction.agent_name,
+                    team_activity_id=activity.id if activity else None,
+                    guardrails=interaction_guardrails,
+                )
                 next_tool_calls = _update_worker_tool_calls(
                     assistant_tool_calls,
                     event_type,
@@ -645,6 +734,24 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 tool_calls=assistant_tool_calls,
                 team_activities=completed_team_activities,
                 model_caches=assistant_model_caches,
+            )
+            _record_run_event(
+                session_id=interaction.session_id,
+                event_type="ASSISTANT_MESSAGE",
+                persist=True,
+                scope=interaction.scope,
+                agent_id=interaction.agent_id,
+                agent_name=interaction.agent_name,
+                team_activity_id=activity.id if activity else None,
+                status="completed",
+                title="Assistant response",
+                content=_trim_text(assistant_text, 1200),
+                payload={
+                    "model": interaction.model_name,
+                    "toolCallCount": len(assistant_tool_calls),
+                    "skillIds": [item.id for item in completed_skill_runs],
+                    "resumedFromHitl": True,
+                },
             )
             if team_activities:
                 yield _sse_event("TEAM_ACTIVITY", {
