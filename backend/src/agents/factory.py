@@ -16,7 +16,7 @@ from typing import Any, AsyncGenerator, Callable
 from pydantic import SecretStr
 
 from agentscope.agent import Agent
-from agentscope.agent._config import ModelConfig, ReActConfig
+from agentscope.agent._config import ContextConfig, ModelConfig, ReActConfig
 from agentscope.model import (
     AnthropicChatModel,
     ChatModelBase,
@@ -46,9 +46,16 @@ from agentscope.workspace import DockerWorkspace, LocalWorkspace
 
 from src.config.settings import settings
 from src.config.runtime_settings import get_effective_model_settings
+from src.security.permissions import (
+    ApprovalPolicy,
+    UnifiedPermissionProfile,
+    build_permission_profile,
+)
 from src.tools.ask_user import AskUser
 from src.tools.http_request import HttpRequest
+from src.tools.configured_http_tool import ConfiguredHttpTool
 from src.tools.knowledge_base_search import KnowledgeBaseSearch
+from src.tools.plan_runtime import create_plan_runtime_tools
 
 
 # ============================================================================
@@ -62,6 +69,9 @@ WORKSPACE_DIR = os.path.expanduser("~")
 # ============================================================================
 _agent_cache: dict[str, Agent] = {}
 FallbackEventCallback = Callable[[dict[str, Any]], None]
+
+CONTEXT_SUMMARY_FIELD_LIMIT = 2000
+CONTEXT_SUMMARY_NEXT_STEPS_LIMIT = 1200
 
 
 @dataclass(frozen=True)
@@ -88,6 +98,15 @@ class AgentGuardrails:
     docker_image: str = "python:3.11-slim"
     persistent_sandbox: bool = False
     timeout_seconds: int = 300
+    permission_profile: UnifiedPermissionProfile = field(default_factory=UnifiedPermissionProfile)
+
+    def __post_init__(self) -> None:
+        """兼容旧 guardrails 字段，自动补齐统一权限配置。"""
+
+        profile = self.permission_profile
+        if profile == UnifiedPermissionProfile():
+            profile = build_permission_profile(self)
+        object.__setattr__(self, "permission_profile", profile)
 
 
 @dataclass(frozen=True)
@@ -108,12 +127,14 @@ class KnowledgeToolRuntimeSpec:
 
     id: str
     name: str
+    kind: str = "legacy_knowledge"
     description: str = ""
     url: str = ""
     authorization: str = ""
     headers: dict[str, str] = field(default_factory=dict)
     default_payload: dict[str, object] = field(default_factory=dict)
     parameter_instructions: str = ""
+    config: dict[str, Any] = field(default_factory=dict)
 
 
 def _create_model(
@@ -213,6 +234,66 @@ def _create_model(
     )
 
 
+def _build_context_config() -> ContextConfig:
+    """创建 AgentScope 上下文压缩配置，避免默认摘要字段过短导致运行中断。"""
+
+    summary_schema = {
+        "title": "SummarySchema",
+        "description": "The compressed memory model, used to generate summary of old memories",
+        "type": "object",
+        "properties": {
+            "task_overview": {
+                "title": "Task Overview",
+                "type": "string",
+                "maxLength": CONTEXT_SUMMARY_FIELD_LIMIT,
+                "description": "用户核心请求、成功标准和明确约束。",
+            },
+            "current_state": {
+                "title": "Current State",
+                "type": "string",
+                "maxLength": CONTEXT_SUMMARY_FIELD_LIMIT,
+                "description": "已完成事项、修改过的文件路径和关键产物。",
+            },
+            "important_discoveries": {
+                "title": "Important Discoveries",
+                "type": "string",
+                "maxLength": CONTEXT_SUMMARY_FIELD_LIMIT,
+                "description": "关键技术发现、约束、决策原因、错误和解决方式。",
+            },
+            "next_steps": {
+                "title": "Next Steps",
+                "type": "string",
+                "maxLength": CONTEXT_SUMMARY_NEXT_STEPS_LIMIT,
+                "description": "下一步行动、阻塞点和优先级。",
+            },
+            "context_to_preserve": {
+                "title": "Context To Preserve",
+                "type": "string",
+                "maxLength": CONTEXT_SUMMARY_FIELD_LIMIT,
+                "description": "需要保留的用户偏好、项目约定和上下文。",
+            },
+        },
+        "required": [
+            "task_overview",
+            "current_state",
+            "important_discoveries",
+            "next_steps",
+            "context_to_preserve",
+        ],
+    }
+    return ContextConfig(
+        compression_prompt=(
+            "<system-hint>You are compressing the previous conversation so the "
+            "agent can continue reliably. Keep every field concise, factual, "
+            "and under the schema maxLength. Prefer compact Chinese bullets "
+            "when the conversation is Chinese. Do not copy long tool outputs "
+            "verbatim.</system-hint>"
+        ),
+        summary_schema=summary_schema,
+        tool_result_limit=4000,
+    )
+
+
 class FallbackChainModel(ChatModelBase):
     """Application-level multi-step fallback model chain."""
 
@@ -234,13 +315,16 @@ class FallbackChainModel(ChatModelBase):
             context_size=models[0].context_size,
         )
 
-    async def __call__(
+    async def _call_api(
         self,
+        model_name: str,
         messages: list,
         tools: list[dict] | None = None,
         tool_choice: ToolChoice | None = None,
         **kwargs: Any,
     ) -> ChatResponse | AsyncGenerator[ChatResponse, None]:
+        """按 AgentScope ChatModelBase 协议执行模型降级链。"""
+
         last_error: Exception | None = None
         total = len(self.models)
         for index, model in enumerate(self.models):
@@ -276,9 +360,6 @@ class FallbackChainModel(ChatModelBase):
         if last_error:
             raise last_error
         raise RuntimeError("Fallback chain failed without an exception")
-
-    async def _call_api(self, *args: Any, **kwargs: Any) -> ChatResponse | AsyncGenerator[ChatResponse, None]:
-        raise NotImplementedError("FallbackChainModel overrides __call__ directly")
 
     def _emit(self, event: dict[str, Any]) -> None:
         if not self.on_event:
@@ -385,6 +466,7 @@ def _create_default_toolkit(
     guardrails: AgentGuardrails | None = None,
     mcp_servers: list[McpRuntimeSpec] | None = None,
     knowledge_tools: list[KnowledgeToolRuntimeSpec] | None = None,
+    plan_id: str | None = None,
 ) -> Toolkit:
     """
     创建默认工具集
@@ -401,19 +483,20 @@ def _create_default_toolkit(
     Returns:
         Toolkit: 包含默认工具的 Toolkit 实例
     """
-    profile = (guardrails.tool_permission_profile if guardrails else "confirm_destructive").strip().lower()
-    read_only = profile == "read_only"
+    permission_profile = guardrails.permission_profile if guardrails else UnifiedPermissionProfile()
+    read_only = permission_profile.tool_policy == ApprovalPolicy.READ_ONLY
 
     local_tools = [
         Read(),
         Grep(),
         Glob(),
         AskUser(),
+        *create_plan_runtime_tools(plan_id),
     ]
     if not read_only:
         local_tools.extend([Write(), Edit()])
 
-    if (not guardrails or guardrails.network_enabled) and not read_only:
+    if permission_profile.can_use_network:
         local_tools.extend(
             [
                 GuardedBash(
@@ -424,19 +507,32 @@ def _create_default_toolkit(
             ]
         )
         for tool in knowledge_tools or []:
-            local_tools.append(
-                KnowledgeBaseSearch(
-                    tool_id=tool.id,
-                    name=tool.name,
-                    description=tool.description,
-                    url=tool.url,
-                    authorization=tool.authorization,
-                    headers=tool.headers,
-                    default_payload=tool.default_payload,
-                    parameter_instructions=tool.parameter_instructions,
-                    timeout_seconds=guardrails.timeout_seconds if guardrails else 300,
+            if tool.kind == "http":
+                local_tools.append(
+                    ConfiguredHttpTool(
+                        {
+                            **tool.config,
+                            "id": tool.id,
+                            "name": tool.name,
+                            "description": tool.description,
+                        },
+                        timeout_seconds=guardrails.timeout_seconds if guardrails else 300,
+                    )
                 )
-            )
+            else:
+                local_tools.append(
+                    KnowledgeBaseSearch(
+                        tool_id=tool.id,
+                        name=tool.name,
+                        description=tool.description,
+                        url=tool.url,
+                        authorization=tool.authorization,
+                        headers=tool.headers,
+                        default_payload=tool.default_payload,
+                        parameter_instructions=tool.parameter_instructions,
+                        timeout_seconds=guardrails.timeout_seconds if guardrails else 300,
+                    )
+                )
 
     mcp_clients = [] if read_only else _create_mcp_clients(mcp_servers or [], guardrails)
     return Toolkit(
@@ -459,6 +555,7 @@ def get_or_create_agent(
     guardrails: AgentGuardrails | None = None,
     mcp_servers: list[McpRuntimeSpec] | None = None,
     knowledge_tools: list[KnowledgeToolRuntimeSpec] | None = None,
+    plan_id: str | None = None,
     on_fallback_event: FallbackEventCallback | None = None,
 ) -> Agent:
     """
@@ -524,6 +621,7 @@ def get_or_create_agent(
             guardrails=guardrails,
             mcp_servers=mcp_servers,
             knowledge_tools=knowledge_tools,
+            plan_id=plan_id,
         ),
         state=agent_state,
         offloader=workspace,
@@ -531,6 +629,7 @@ def get_or_create_agent(
             max_retries=3,
             fallback_model=None,
         ),
+        context_config=_build_context_config(),
         react_config=ReActConfig(
             max_iters=max(1, min(int(model_options.max_react_iters if model_options else 40), 120)),
         ),

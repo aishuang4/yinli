@@ -49,6 +49,8 @@ export interface StreamState {
   memorySummaries: MemorySummaryInfo[];
   /** 模型缓存事件 */
   modelCaches: ModelCacheInfo[];
+  /** Plan Runtime 记录 */
+  planRuns: PlanRunInfo[];
   /** 待人工处理的交互 */
   hitlRequests: HitlRequestInfo[];
   /** 待用户补充信息的反问 */
@@ -191,6 +193,175 @@ export interface ModelCacheInfo {
   createdAt: string;
 }
 
+export interface PlanStepInfo {
+  id: string;
+  planId: string;
+  stepIndex: number;
+  title: string;
+  description: string;
+  status: 'pending' | 'active' | 'completed' | 'blocked' | 'skipped';
+  assignedAgentId: string | null;
+  evidence: string;
+  result: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  updatedAt: string;
+}
+
+export interface PlanRunInfo {
+  id: string;
+  runId: string;
+  sessionId: string;
+  agentId: string;
+  teamId: string | null;
+  title: string;
+  goal: string;
+  status: 'draft' | 'waiting_approval' | 'running' | 'replanning' | 'blocked' | 'completed' | 'failed' | 'cancelled';
+  markdown: string;
+  currentStepId: string | null;
+  steps: PlanStepInfo[];
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+
+function normalizePlanStep(record: Record<string, unknown>): PlanStepInfo {
+  const status = String(record.status || 'pending');
+  return {
+    id: String(record.id || createId()),
+    planId: String(record.planId || record.plan_id || ''),
+    stepIndex: Number(record.stepIndex ?? record.step_index ?? 0),
+    title: String(record.title || 'Step'),
+    description: String(record.description || ''),
+    status: (
+      status === 'active' ||
+      status === 'completed' ||
+      status === 'blocked' ||
+      status === 'skipped'
+        ? status
+        : 'pending'
+    ),
+    assignedAgentId: record.assignedAgentId || record.assigned_agent_id
+      ? String(record.assignedAgentId || record.assigned_agent_id)
+      : null,
+    evidence: String(record.evidence || ''),
+    result: String(record.result || ''),
+    startedAt: record.startedAt || record.started_at ? String(record.startedAt || record.started_at) : null,
+    completedAt: record.completedAt || record.completed_at ? String(record.completedAt || record.completed_at) : null,
+    updatedAt: String(record.updatedAt || record.updated_at || ''),
+  };
+}
+
+export function renderPlanMarkdown(plan: Omit<PlanRunInfo, 'markdown'> & { markdown?: string }): string {
+  const lines = [
+    `# Plan: ${plan.title || '任务计划'}`,
+    '',
+    '## Goal',
+    plan.goal || '',
+    '',
+    '## Status',
+    `- Overall: ${plan.status}`,
+    `- Current Step: ${plan.currentStepId || 'none'}`,
+    '',
+    '## Steps',
+  ];
+
+  plan.steps.forEach((step) => {
+    const checked = step.status === 'completed' ? 'x' : ' ';
+    lines.push(`- [${checked}] ${step.stepIndex + 1}. ${step.title || 'Step'} - ${step.status}`);
+    if (step.description) {
+      lines.push(`  - ${step.description}`);
+    }
+  });
+
+  lines.push('', '## Execution Log');
+  plan.steps.forEach((step) => {
+    lines.push('', `### Step ${step.stepIndex + 1}: ${step.title || 'Step'}`, `Status: ${step.status}`);
+    if (step.assignedAgentId) {
+      lines.push(`Assigned Agent: ${step.assignedAgentId}`);
+    }
+    if (step.evidence) {
+      lines.push('', 'Evidence:', step.evidence);
+    }
+    if (step.result) {
+      lines.push('', 'Result:', step.result);
+    }
+  });
+
+  return `${lines.join('\n').trim()}\n`;
+}
+
+function normalizePlanRun(record: Record<string, unknown>): PlanRunInfo {
+  const status = String(record.status || 'running');
+  const plan: PlanRunInfo = {
+    id: String(record.id || createId()),
+    runId: String(record.runId || record.run_id || ''),
+    sessionId: String(record.sessionId || record.session_id || ''),
+    agentId: String(record.agentId || record.agent_id || ''),
+    teamId: record.teamId || record.team_id ? String(record.teamId || record.team_id) : null,
+    title: String(record.title || 'Plan Runtime'),
+    goal: String(record.goal || ''),
+    status: (
+      status === 'draft' ||
+      status === 'waiting_approval' ||
+      status === 'replanning' ||
+      status === 'blocked' ||
+      status === 'completed' ||
+      status === 'cancelled' ||
+      status === 'failed'
+        ? status
+        : 'running'
+    ),
+    markdown: String(record.markdown || ''),
+    currentStepId: record.currentStepId || record.current_step_id ? String(record.currentStepId || record.current_step_id) : null,
+    steps: Array.isArray(record.steps)
+      ? record.steps.map((step) => normalizePlanStep(step as Record<string, unknown>))
+      : [],
+    createdAt: String(record.createdAt || record.created_at || ''),
+    updatedAt: String(record.updatedAt || record.updated_at || ''),
+    completedAt: record.completedAt || record.completed_at ? String(record.completedAt || record.completed_at) : null,
+  };
+  return {
+    ...plan,
+    markdown: renderPlanMarkdown(plan),
+  };
+}
+
+function mergePlanRuns(current: PlanRunInfo[], next: PlanRunInfo): PlanRunInfo[] {
+  return current.some((item) => item.id === next.id)
+    ? current.map((item) => (item.id === next.id ? next : item))
+    : [...current, next];
+}
+
+export function completeOpenPlans(plans: PlanRunInfo[], completedAt: string): PlanRunInfo[] {
+  return plans.map((plan) => {
+    if (plan.status !== 'running' && plan.status !== 'draft' && plan.status !== 'replanning') {
+      return plan;
+    }
+    const completedPlan: PlanRunInfo = {
+      ...plan,
+      status: 'completed',
+      currentStepId: null,
+      completedAt: plan.completedAt || completedAt,
+      updatedAt: completedAt,
+      steps: plan.steps.map((step) => (
+        step.status === 'completed'
+          ? step
+          : {
+              ...step,
+              status: 'completed',
+              completedAt: step.completedAt || completedAt,
+              updatedAt: completedAt,
+            }
+      )),
+    };
+    return {
+      ...completedPlan,
+      markdown: renderPlanMarkdown(completedPlan),
+    };
+  });
+}
+
 /** 人机交互请求 */
 export interface HitlRequestInfo {
   interactionId: string;
@@ -240,7 +411,7 @@ interface UseEventStreamReturn {
     externalResults?: Record<string, string>
   ) => Promise<void>;
   /** 中止当前流 */
-  abort: () => void;
+  abort: () => Promise<void>;
   /** 重置状态 */
   reset: () => void;
 }
@@ -287,6 +458,7 @@ const INITIAL_STATE: StreamState = {
   teamActivities: [],
   memorySummaries: [],
   modelCaches: [],
+  planRuns: [],
   hitlRequests: [],
   clarificationRequests: [],
   modelName: '',
@@ -309,6 +481,7 @@ function completeStreamIfNoPendingUserInteraction(state: StreamState): StreamSta
     ...state,
     isStreaming: false,
     runCompletedAt: state.runCompletedAt || new Date().toISOString(),
+    planRuns: completeOpenPlans(state.planRuns, state.runCompletedAt || new Date().toISOString()),
   };
 }
 
@@ -331,13 +504,28 @@ export function useEventStream(): UseEventStreamReturn {
   }, []);
 
   /** 中止当前流 */
-  const abort = useCallback(() => {
+  const abort = useCallback(async () => {
+    const runId = state.currentRunId;
+    if (runId) {
+      try {
+        await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/cancel`, {
+          method: 'POST',
+        });
+      } catch (error) {
+        console.warn('[SSE] Failed to cancel run:', error);
+      }
+    }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
-    setState((prev) => ({ ...prev, isStreaming: false }));
-  }, []);
+    setState((prev) => ({
+      ...prev,
+      isStreaming: false,
+      error: prev.error || '用户已停止本轮执行。',
+      runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
+    }));
+  }, [state.currentRunId]);
 
   /** 发送消息并开始接收事件流 */
   const sendMessage = useCallback(
@@ -444,6 +632,25 @@ export function useEventStream(): UseEventStreamReturn {
       action: 'approve' | 'reject',
       externalResults: Record<string, string> = {}
     ) => {
+      const pendingRequest = state.hitlRequests.find((item) => item.interactionId === interactionId);
+      if (pendingRequest?.type === 'PLAN_APPROVAL') {
+        setState((prev) => ({
+          ...prev,
+          isStreaming: true,
+          error: null,
+          hitlRequests: prev.hitlRequests.filter((item) => item.interactionId !== interactionId),
+        }));
+        const response = await fetch(`/api/chat/plan-approvals/${encodeURIComponent(interactionId)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action }),
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return;
+      }
+
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
@@ -507,7 +714,7 @@ export function useEventStream(): UseEventStreamReturn {
         }
       }
     },
-    []
+    [state.hitlRequests]
   );
 
   /**
@@ -632,6 +839,19 @@ export function useEventStream(): UseEventStreamReturn {
             skillCalls: prev.skillCalls.map((skill) => (
               endedIds.has(skill.id) ? { ...skill, status } : skill
             )),
+          };
+        }
+
+        case 'PLAN_UPDATE': {
+          const rawPlan = (
+            typeof event.data.plan === 'object' && event.data.plan !== null
+              ? event.data.plan
+              : event.data
+          ) as Record<string, unknown>;
+          const plan = normalizePlanRun(rawPlan);
+          return {
+            ...prev,
+            planRuns: mergePlanRuns(prev.planRuns, plan),
           };
         }
 
@@ -822,7 +1042,8 @@ export function useEventStream(): UseEventStreamReturn {
         }
 
         // === 人机交互请求 ===
-        case 'HITL_REQUIRED': {
+        case 'HITL_REQUIRED':
+        case 'PLAN_APPROVAL_REQUIRED': {
           const toolCalls = Array.isArray(event.data.toolCalls) ? event.data.toolCalls : [];
           const stringifyToolInput = (input: unknown) => {
             if (typeof input === 'string') return input;
@@ -840,7 +1061,7 @@ export function useEventStream(): UseEventStreamReturn {
               ...prev.hitlRequests,
               {
                 interactionId: String(event.data.interactionId || ''),
-                type: String(event.data.type || ''),
+                type: String(event.data.type || (event.type === 'PLAN_APPROVAL_REQUIRED' ? 'PLAN_APPROVAL' : '')),
                 sessionId: String(event.data.sessionId || ''),
                 agentId: String(event.data.agentId || ''),
                 agentName: String(event.data.agentName || 'Agent'),
@@ -862,6 +1083,13 @@ export function useEventStream(): UseEventStreamReturn {
             ],
           };
         }
+
+        case 'PLAN_APPROVAL_RESOLVED':
+          return {
+            ...prev,
+            isStreaming: true,
+            hitlRequests: prev.hitlRequests.filter((item) => item.interactionId !== String(event.data.interactionId || '')),
+          };
 
         // === 工具调用参数增量 ===
         case 'TOOL_CALL_DELTA':
@@ -980,6 +1208,14 @@ export function useEventStream(): UseEventStreamReturn {
             isStreaming: false,
             runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
             error: (event.data.message as string) || 'Unknown error',
+          };
+
+        case 'RUN_CANCELLED':
+          return {
+            ...prev,
+            isStreaming: false,
+            runCompletedAt: String(event.data.completed_at || event.data.completedAt || new Date().toISOString()),
+            error: '用户已停止本轮执行。',
           };
 
         // === 回复结束 ===

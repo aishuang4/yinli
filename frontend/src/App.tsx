@@ -12,17 +12,20 @@
  */
 
 import { lazy, Suspense, useEffect, useLayoutEffect, useState, type ComponentType } from 'react';
+import { App as AntdApp } from 'antd';
 import { ConfigProvider, Spinner, carbonDarkTheme, carbonTheme } from '@agentscope-ai/design';
 import { useAppStore } from './stores/appStore';
 import type { ViewType } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { AppLayout } from './layouts/AppLayout';
+import { FeedbackBridge } from './components/FeedbackBridge';
 
 const ChatPage = lazy(() => import('./pages/ChatPage').then((module) => ({ default: module.ChatPage })));
 const RunsPage = lazy(() => import('./pages/RunsPage').then((module) => ({ default: module.RunsPage })));
 const TracePage = lazy(() => import('./pages/TracePage').then((module) => ({ default: module.TracePage })));
 const SandboxPage = lazy(() => import('./pages/SandboxPage').then((module) => ({ default: module.SandboxPage })));
 const AgentTeamPage = lazy(() => import('./pages/AgentTeamPage').then((module) => ({ default: module.AgentTeamPage })));
+const ToolsPage = lazy(() => import('./pages/ToolsPage').then((module) => ({ default: module.ToolsPage })));
 const MCPPage = lazy(() => import('./pages/MCPPage').then((module) => ({ default: module.MCPPage })));
 const SkillsPage = lazy(() => import('./pages/SkillsPage').then((module) => ({ default: module.SkillsPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })));
@@ -37,6 +40,7 @@ const VIEW_PAGES: Record<ViewType, ComponentType> = {
   traces: TracePage,
   sandbox: SandboxPage,
   agents: AgentTeamPage,
+  tools: ToolsPage,
   mcp: MCPPage,
   skills: SkillsPage,
   settings: SettingsPage,
@@ -131,9 +135,12 @@ export function App() {
 
   return (
     <ConfigProvider {...sparkTheme}>
-      <AppLayout>
-        <CachedPages activeView={currentView} cachedViews={cachedViews} />
-      </AppLayout>
+      <AntdApp>
+        <FeedbackBridge />
+        <AppLayout>
+          <CachedPages activeView={currentView} cachedViews={cachedViews} />
+        </AppLayout>
+      </AntdApp>
     </ConfigProvider>
   );
 }

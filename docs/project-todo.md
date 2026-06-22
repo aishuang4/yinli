@@ -1,6 +1,6 @@
 # Agent Workstation TODO
 
-> Last updated: 2026-06-20
+> Last updated: 2026-06-22
 >
 > This file is the working TODO for the project. Use it as the source of truth
 > for upcoming implementation order. When a feature is completed, update the
@@ -229,6 +229,13 @@
   - 支持不同工具的审批策略：自动放行、破坏性确认、每次确认、禁用。
   - 保存每次权限决策和人工审批记录，进入 `run_events` 审计。
   - 为后续多用户和组织空间预留 owner、workspace、role 字段。
+  - 第一阶段实现于 2026-06-20：新增 `docs/unified-permission-system-plan.md` 和 `backend/src/security/permissions.py`，将旧 guardrails 归一化为 `UnifiedPermissionProfile`，运行时 AgentScope permission mode、工具注入、缓存 key 和 workspace trace 已统一读取该模型。
+  - 第二阶段实现于 2026-06-22：新增 `PERMISSION_POLICY` 和 `PERMISSION_DECISION` 运行事件；Agent/Worker 启动会记录权限策略快照，每次工具调用开始会记录资源类型、动作、策略、决策和原因，进入 `run_events` 审计。
+  - 第三阶段实现于 2026-06-22：Trace 页面新增权限审计筛选和权限事件摘要，可直接查看策略快照、工具资源类型、动作、allow/ask/deny 决策和原因。
+  - 后续补充项：
+    - [ ] 前端 Agent 高级设置改成资源权限视角，而不是散落的 guardrails 字段。
+    - [ ] 增加 Tool / Skill / MCP 级别的单项覆盖策略，例如某个 MCP 自动放行、某个 Bash 总是审批。
+    - [ ] 预留 Workspace / 用户 / 角色表结构，为多用户和组织空间做准备。
 
 - [ ] Agent / Prompt / Team 版本管理
   - Agent 每次保存生成新版本，保留 prompt、模型、工具、权限、记忆注入等配置快照。
@@ -278,6 +285,23 @@
   - 支持安装、卸载、启用、禁用、版本升级和依赖检查。
   - 支持从本地 zip / git 仓库 / 远程 registry 导入。
   - 模板安装后生成可编辑副本，避免直接污染内置模板。
+
+- [ ] 工具管理中心
+  - 参考 `docs/tools-management-plan.md`，建立统一 Tools 入口。
+  - 子界面包含 MCP、HTTP 工具、系统内部工具。
+  - HTTP 工具使用独立 `http_tools` 表和 `/api/tools/http` 业务接口，不再继续绑定知识库概念。
+  - 系统内部工具第一版只读展示工具说明、动作类型、风险等级和默认注入状态。
+  - 第一阶段实现于 2026-06-22：新增 Tools 页面、HTTP 工具 CRUD API、`http_tools` SQLite 表、系统工具只读 API。MCP Tab 复用现有 MCP 页面；旧 MCP 导航和知识库工具接口暂时保留兼容。
+  - 第二阶段实现于 2026-06-22：旧知识库工具会按原 ID 迁移为 HTTP 工具模板；Agent 高级设置已改为选择 HTTP 工具；运行时通过 `ConfiguredHttpTool` 按独立工具名注入；新增 HTTP 工具调试接口；Trace 可展示 HTTP URL、方法、状态、耗时摘要。
+  - 后续补充项：
+    - [x] 将现有知识库工具迁移为 HTTP 工具模板。
+    - [x] Agent 高级设置中把“知识库工具”升级为“HTTP 工具”选择。
+    - [x] 实现 `ConfiguredHttpTool`，让每个 HTTP 工具以独立工具名注入 Agent。
+    - [x] 增加 HTTP 工具调试请求和响应提取配置。
+    - [x] Trace 展示 HTTP 工具 URL、方法、耗时和响应摘要。
+    - [x] HTTP 工具编辑器补齐高级字段 UI：method、query/body 模板、parameter schema、responsePath、auth 类型。
+    - [x] 接入统一资源权限系统，支持 HTTP 工具单项覆盖策略。
+      - 实现于 2026-06-22：HTTP 工具支持 `approvalPolicy` 单项覆盖，可配置继承 Agent 权限、自动放行、每次确认或禁用；运行时 `ConfiguredHttpTool.check_permissions` 会执行该策略。
 
 - [ ] 多用户与 Workspace 预留
   - 增加 Workspace 概念，Agent、Team、Memory、Run、Tool 均归属某个 Workspace。

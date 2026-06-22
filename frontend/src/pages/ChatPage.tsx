@@ -13,13 +13,14 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, XCircle, BookOpenCheck, Users, CheckCircle2, Clock3, Copy, Check, GitBranch, Download, FileText } from 'lucide-react';
+import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, XCircle, BookOpenCheck, Users, CheckCircle2, Clock3, Copy, Check, GitBranch, ListChecks, Download, FileText } from 'lucide-react';
 import { Button, Empty, Select, Spinner, Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../components/MarkdownContent';
-import { useEventStream, type ClarificationQuestionInfo, type ClarificationRequestInfo, type HitlRequestInfo, type MemorySummaryInfo, type ModelCacheInfo, type SkillCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
+import { completeOpenPlans, useEventStream, type ClarificationQuestionInfo, type ClarificationRequestInfo, type HitlRequestInfo, type MemorySummaryInfo, type ModelCacheInfo, type PlanRunInfo, type SkillCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
 import { createId } from '../utils/id';
+import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import type { Agent } from '../types/agent';
 import type { TeamMember } from '../types/team';
 
@@ -44,6 +45,8 @@ interface LocalMessage {
   memorySummaries?: MemorySummaryInfo[];
   /** 模型厂商侧 Prompt Cache 统计 */
   modelCaches?: ModelCacheInfo[];
+  /** Plan Runtime 记录 */
+  planRuns?: PlanRunInfo[];
   /** 思考链内容（仅 assistant 消息） */
   thinking?: string;
   /** Token 用量 */
@@ -104,6 +107,8 @@ interface StoredChatMessage {
   team_activities?: StoredTeamActivity[];
   modelCaches?: ModelCacheInfo[];
   model_caches?: ModelCacheInfo[];
+  planRuns?: PlanRunInfo[];
+  plan_runs?: PlanRunInfo[];
   created_at: string;
 }
 
@@ -219,6 +224,7 @@ export function ChatPage() {
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const [selectedTeamActivityId, setSelectedTeamActivityId] = useState<string | null>(null);
+  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -274,7 +280,8 @@ export function ChatPage() {
     state.skillCalls.length > 0 ||
     state.teamActivities.length > 0 ||
     state.memorySummaries.length > 0 ||
-    state.modelCaches.length > 0
+    state.modelCaches.length > 0 ||
+    state.planRuns.length > 0
   );
 
   const visibleTeamActivities = useMemo(() => (
@@ -287,6 +294,27 @@ export function ChatPage() {
   const selectedTeamActivity = useMemo(() => (
     visibleTeamActivities.find((activity) => activity.id === selectedTeamActivityId) || null
   ), [selectedTeamActivityId, visibleTeamActivities]);
+
+  const visiblePlanRuns = useMemo(() => (
+    [
+      ...messages.flatMap((message) => message.planRuns || []),
+      ...state.planRuns,
+    ]
+  ), [messages, state.planRuns]);
+
+  const selectedPlan = useMemo(() => (
+    visiblePlanRuns.find((plan) => plan.id === selectedPlanId) || null
+  ), [selectedPlanId, visiblePlanRuns]);
+
+  const openPlanSidebar = useCallback((planId: string) => {
+    setSelectedTeamActivityId(null);
+    setSelectedPlanId(planId);
+  }, []);
+
+  const openTeamActivitySidebar = useCallback((activityId: string) => {
+    setSelectedPlanId(null);
+    setSelectedTeamActivityId(activityId);
+  }, []);
 
   const buildTeamMembersForRun = useCallback((workerAgentIds: string[] | null) => {
     if (!selectedTeam) return [];
@@ -326,6 +354,9 @@ export function ChatPage() {
       skillCalls: item.skillCalls || item.skill_calls || [],
       teamActivities: normalizeStoredTeamActivities(item.teamActivities || item.team_activities || []),
       modelCaches: item.modelCaches || item.model_caches || [],
+      planRuns: item.role === 'assistant' && item.content
+        ? completeOpenPlans(item.planRuns || item.plan_runs || [], item.created_at)
+        : item.planRuns || item.plan_runs || [],
     })));
   }, []);
 
@@ -358,7 +389,7 @@ export function ChatPage() {
   useEffect(() => {
     if (!shouldAutoScrollRef.current) return;
     scrollToBottom(state.isStreaming ? 'auto' : 'smooth');
-  }, [messages, scrollToBottom, state.isStreaming, state.textContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities, state.memorySummaries, state.modelCaches]);
+  }, [messages, scrollToBottom, state.isStreaming, state.textContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities, state.memorySummaries, state.modelCaches, state.planRuns]);
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
@@ -393,16 +424,22 @@ export function ChatPage() {
 
   const handleDeleteSession = useCallback(async (sessionId: string) => {
     if (state.isStreaming) return;
-    const response = await fetch(`/api/chat/sessions/${sessionId}`, { method: 'DELETE' });
-    if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
-    setSessions((current) => current.filter((session) => session.id !== sessionId));
-    if (activeSessionId === sessionId) {
-      setActiveSessionId(null);
-      setMessages([]);
-      setImageAttachments([]);
-      setChatError(null);
-      setSelectedTeamActivityId(null);
-      reset();
+    try {
+      const response = await fetch(`/api/chat/sessions/${sessionId}`, { method: 'DELETE' });
+      if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
+      setSessions((current) => current.filter((session) => session.id !== sessionId));
+      if (activeSessionId === sessionId) {
+        setActiveSessionId(null);
+        setMessages([]);
+        setImageAttachments([]);
+        setChatError(null);
+        setSelectedTeamActivityId(null);
+        reset();
+      }
+      notifySuccess('历史对话已删除');
+    } catch (err) {
+      notifyError(`删除历史对话失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
     }
   }, [activeSessionId, reset, state.isStreaming]);
 
@@ -645,6 +682,7 @@ export function ChatPage() {
         teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,
         memorySummaries: state.memorySummaries.length > 0 ? state.memorySummaries : undefined,
         modelCaches: state.modelCaches.length > 0 ? state.modelCaches : undefined,
+        planRuns: state.planRuns.length > 0 ? state.planRuns : undefined,
         thinking: state.thinkingContent || undefined,
         tokenUsage: state.tokenUsage,
         modelName: state.modelName,
@@ -654,7 +692,7 @@ export function ChatPage() {
       reset();
       loadSessions();
     }
-  }, [loadSessions, messages, reset, state.error, state.hitlRequests.length, state.isStreaming, state.memorySummaries, state.modelCaches, state.modelName, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
+  }, [loadSessions, messages, reset, state.error, state.hitlRequests.length, state.isStreaming, state.memorySummaries, state.modelCaches, state.modelName, state.planRuns, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -668,8 +706,8 @@ export function ChatPage() {
   );
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[280px_1fr] gap-4 bg-[var(--color-bg-secondary)] p-4">
-      <aside className="flex min-h-0 flex-col overflow-hidden rounded-xl bg-[var(--color-bg-primary)] shadow-sm">
+    <div className="chat-page-shell grid h-full min-h-0 grid-cols-[280px_1fr] gap-4 bg-[var(--color-bg-secondary)] p-4">
+      <aside className="chat-history-panel flex min-h-0 flex-col overflow-hidden rounded-xl bg-[var(--color-bg-primary)]">
         <div className="p-4">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-base font-medium text-[var(--color-text-primary)]">
@@ -705,9 +743,9 @@ export function ChatPage() {
                   key={session.id}
                   type="button"
                   onClick={() => handleSelectSession(session)}
-                  className={`group w-full rounded-lg px-3 py-2 text-left shadow-sm transition-all duration-300 ease-out ${
+                  className={`chat-session-item group w-full rounded-lg px-3 py-2 text-left transition-all duration-300 ease-out ${
                     activeSessionId === session.id
-                      ? 'bg-[var(--color-bg-secondary)] ring-1 ring-[var(--color-accent)]'
+                      ? 'chat-session-item--active bg-[var(--color-bg-secondary)]'
                       : 'bg-[var(--color-bg-secondary)] hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)]'
                   }`}
                 >
@@ -749,9 +787,9 @@ export function ChatPage() {
       </aside>
 
       <section
-        className="grid min-h-0 overflow-hidden rounded-xl bg-[var(--color-bg-primary)] shadow-sm"
+        className="chat-main-panel grid min-h-0 overflow-hidden rounded-xl bg-[var(--color-bg-primary)]"
         style={{
-          gridTemplateColumns: selectedTeamActivity
+          gridTemplateColumns: selectedTeamActivity || selectedPlan
             ? 'minmax(0, 1fr) 360px'
             : 'minmax(0, 1fr) 0px',
           transition: 'grid-template-columns 360ms var(--ease-out)',
@@ -806,8 +844,10 @@ export function ChatPage() {
             >
               <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4">
                 {messages.length === 0 && !hasLiveResponse ? (
-                  <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center text-[var(--color-text-tertiary)]">
-                    <Bot size={48} strokeWidth={1} color="var(--color-text-tertiary)" />
+                  <div className="chat-empty-state flex flex-1 flex-col items-center justify-center gap-3 text-center text-[var(--color-text-tertiary)]">
+                    <div className="chat-empty-state__icon">
+                      <Bot size={42} strokeWidth={1.2} />
+                    </div>
                     <div className="text-lg font-medium">开始对话</div>
                     <div className="max-w-[420px] text-sm">
                       先选择一个主 Agent，再输入消息开始协作。系统会保存会话历史，方便后续继续查看。
@@ -820,7 +860,8 @@ export function ChatPage() {
                         key={msg.id}
                         message={msg}
                         selectedTeamActivityId={selectedTeamActivityId}
-                        onSelectTeamActivity={setSelectedTeamActivityId}
+                        onSelectTeamActivity={openTeamActivitySidebar}
+                        onOpenPlan={openPlanSidebar}
                         onSubmitClarification={handleSubmitClarification}
                       />
                     ))}
@@ -833,10 +874,12 @@ export function ChatPage() {
                         teamActivities={state.teamActivities}
                         memorySummaries={state.memorySummaries}
                         modelCaches={state.modelCaches}
+                        planRuns={state.planRuns}
                         hitlRequests={state.hitlRequests}
                         onResolveHitl={resumeInteraction}
                         selectedTeamActivityId={selectedTeamActivityId}
-                        onSelectTeamActivity={setSelectedTeamActivityId}
+                        onSelectTeamActivity={openTeamActivitySidebar}
+                        onOpenPlan={openPlanSidebar}
                         toolCalls={state.toolCalls}
                         modelName={state.modelName}
                         runStartedAt={state.runStartedAt}
@@ -897,7 +940,7 @@ export function ChatPage() {
             />
           )}
 
-          <div className="mx-auto max-w-4xl rounded-xl bg-[var(--color-bg-secondary)] shadow-md transition-shadow focus-within:shadow-lg">
+          <div className="chat-composer mx-auto max-w-4xl rounded-xl bg-[var(--color-bg-secondary)] transition-shadow">
             <input
               ref={imageInputRef}
               type="file"
@@ -1025,19 +1068,24 @@ export function ChatPage() {
         <div
           className="h-full min-h-0 min-w-0 overflow-hidden"
           style={{
-            opacity: selectedTeamActivity ? 1 : 0,
-            transform: selectedTeamActivity ? 'translateX(0)' : 'translateX(16px)',
+            opacity: selectedTeamActivity || selectedPlan ? 1 : 0,
+            transform: selectedTeamActivity || selectedPlan ? 'translateX(0)' : 'translateX(16px)',
             transition: 'opacity 280ms var(--ease-out), transform 360ms var(--ease-out)',
-            pointerEvents: selectedTeamActivity ? 'auto' : 'none',
+            pointerEvents: selectedTeamActivity || selectedPlan ? 'auto' : 'none',
           }}
-          aria-hidden={!selectedTeamActivity}
+          aria-hidden={!selectedTeamActivity && !selectedPlan}
         >
-          {selectedTeamActivity && (
+          {selectedTeamActivity ? (
             <TeamActivitySidebar
               activity={selectedTeamActivity}
               onClose={() => setSelectedTeamActivityId(null)}
             />
-          )}
+          ) : selectedPlan ? (
+            <PlanRuntimeSidebar
+              plan={selectedPlan}
+              onClose={() => setSelectedPlanId(null)}
+            />
+          ) : null}
         </div>
       </section>
     </div>
@@ -1102,11 +1150,13 @@ function MessageBubble({
   message,
   selectedTeamActivityId,
   onSelectTeamActivity,
+  onOpenPlan,
   onSubmitClarification,
 }: {
   message: LocalMessage;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
+  onOpenPlan: (planId: string) => void;
   onSubmitClarification: (content: string) => Promise<void>;
 }) {
   const isUser = message.role === 'user';
@@ -1192,6 +1242,10 @@ function MessageBubble({
           />
         )}
 
+        {!isUser && message.planRuns && message.planRuns.length > 0 && (
+          <PlanOpenButton plan={message.planRuns[message.planRuns.length - 1]} onOpen={onOpenPlan} />
+        )}
+
         {/* 文本内容 */}
         {clarification && (
           <ClarificationBlock
@@ -1202,6 +1256,7 @@ function MessageBubble({
 
         {message.content && !clarification && (
           <div
+            className={`chat-message-content ${isUser ? 'chat-message-content--user' : 'chat-message-content--assistant'}`}
             style={{
               padding: '10px 14px',
               borderRadius: 'var(--radius-xl)',
@@ -1262,10 +1317,12 @@ function StreamingBubble({
   teamActivities,
   memorySummaries,
   modelCaches,
+  planRuns,
   hitlRequests,
   onResolveHitl,
   selectedTeamActivityId,
   onSelectTeamActivity,
+  onOpenPlan,
   toolCalls,
   modelName,
   runStartedAt,
@@ -1277,10 +1334,12 @@ function StreamingBubble({
   teamActivities: TeamActivityInfo[];
   memorySummaries: MemorySummaryInfo[];
   modelCaches: ModelCacheInfo[];
+  planRuns: PlanRunInfo[];
   hitlRequests: HitlRequestInfo[];
   onResolveHitl: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
+  onOpenPlan: (planId: string) => void;
   toolCalls: ToolCallInfo[];
   modelName: string;
   runStartedAt: string;
@@ -1330,6 +1389,10 @@ function StreamingBubble({
           />
         )}
 
+        {planRuns.length > 0 && (
+          <PlanOpenButton plan={planRuns[planRuns.length - 1]} onOpen={onOpenPlan} />
+        )}
+
         {hitlRequests.map((request) => (
           <HitlApprovalBlock
             key={request.interactionId}
@@ -1341,6 +1404,7 @@ function StreamingBubble({
         {/* 文本内容 */}
         {textContent && (
           <div
+            className="chat-message-content chat-message-content--assistant"
             style={{
               padding: '10px 14px',
               borderRadius: 'var(--radius-xl)',
@@ -2064,6 +2128,116 @@ function ProcessDetailsBlock({
   );
 }
 
+function PlanOpenButton({ plan, onOpen }: { plan: PlanRunInfo; onOpen: (planId: string) => void }) {
+  const completedSteps = plan.steps.filter((step) => step.status === 'completed').length;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(plan.id)}
+      className="flex w-fit max-w-full items-center gap-2 rounded-md bg-[var(--color-bg-secondary)] px-3 py-1.5 text-xs text-[var(--color-text-secondary)] shadow-sm transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+    >
+      <ListChecks size={13} className="shrink-0" />
+      <span className="truncate">查看计划</span>
+      <Tag size="small" color={plan.status === 'completed' ? 'green' : plan.status === 'failed' ? 'red' : 'blue'}>
+        {completedSteps}/{plan.steps.length}
+      </Tag>
+    </button>
+  );
+}
+
+function PlanRuntimeSidebar({ plan, onClose }: { plan: PlanRunInfo; onClose: () => void }) {
+  const completedSteps = plan.steps.filter((step) => step.status === 'completed').length;
+  const activeStep = plan.steps.find((step) => step.id === plan.currentStepId || step.status === 'active');
+
+  return (
+    <aside className="flex h-full min-h-0 flex-col bg-[var(--color-bg-secondary)] shadow-inner">
+      <div className="flex items-start gap-3 px-4 py-4">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-primary)] text-[var(--color-text-tertiary)]">
+          <ListChecks size={16} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-base font-medium text-[var(--color-text-primary)]">
+            Plan Runtime
+          </div>
+          <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
+            {completedSteps}/{plan.steps.length} 步 · {getPlanStatusText(plan.status)}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="icon-button h-8 w-8 rounded-md text-[var(--color-text-secondary)] transition-all duration-300 ease-out hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+          onClick={onClose}
+          aria-label="关闭计划"
+          title="关闭计划"
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-auto px-4 pb-4">
+        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
+          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">目标</div>
+          <div className="whitespace-pre-wrap break-words text-sm text-[var(--color-text-primary)]">
+            {plan.goal}
+          </div>
+          {activeStep && (
+            <div className="mt-3 rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+              当前步骤：{activeStep.title}
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
+          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">步骤</div>
+          <div className="space-y-2">
+            {plan.steps.map((step) => (
+              <div key={step.id} className="flex items-start gap-2 rounded-md bg-[var(--color-bg-secondary)] px-3 py-2">
+                <span className={[
+                  'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border text-[11px]',
+                  step.status === 'completed'
+                    ? 'border-[var(--color-success)] bg-[var(--color-success)] text-white'
+                    : step.status === 'active'
+                      ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
+                      : 'border-[var(--color-border)] text-[var(--color-text-tertiary)]',
+                ].join(' ')}>
+                  {step.status === 'completed' ? '✓' : step.stepIndex + 1}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-[var(--color-text-primary)]">{step.title}</div>
+                  {step.description && (
+                    <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">{step.description}</div>
+                  )}
+                  {step.evidence && (
+                    <div className="mt-2 whitespace-pre-wrap break-words text-xs text-[var(--color-text-secondary)]">{step.evidence}</div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
+          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">plan.md</div>
+          <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-bg-secondary)] p-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+            {plan.markdown}
+          </pre>
+        </section>
+      </div>
+    </aside>
+  );
+}
+
+function getPlanStatusText(status: PlanRunInfo['status']): string {
+  if (status === 'completed') return '已完成';
+  if (status === 'failed') return '失败';
+  if (status === 'cancelled') return '已取消';
+  if (status === 'blocked') return '阻塞';
+  if (status === 'waiting_approval') return '等待审批';
+  if (status === 'replanning') return '重规划';
+  return '运行中';
+}
+
 function MemorySummaryBlock({ summaries }: { summaries: MemorySummaryInfo[] }) {
   const factCount = summaries.reduce((total, summary) => total + summary.facts.length, 0);
 
@@ -2309,6 +2483,7 @@ function HitlApprovalBlock({
 }) {
   const [submitting, setSubmitting] = useState<'approve' | 'reject' | null>(null);
   const isExternal = request.type === 'REQUIRE_EXTERNAL_EXECUTION';
+  const isPlanApproval = request.type === 'PLAN_APPROVAL';
   const askUserToolCall = request.toolCalls.find((toolCall) => isAskUserToolName(toolCall.rawName || toolCall.name));
   const askUserRequest = askUserToolCall ? buildClarificationRequestFromAskUser(askUserToolCall) : null;
 
@@ -2353,8 +2528,12 @@ function HitlApprovalBlock({
     <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
       <div className="flex items-center justify-between gap-3 px-3 py-2">
         <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
-          <AlertCircle size={14} color="var(--color-warning)" />
-          <span>{isExternal ? '等待外部执行结果' : '等待人工确认'}</span>
+          {isPlanApproval ? (
+            <ListChecks size={14} color="var(--color-accent)" />
+          ) : (
+            <AlertCircle size={14} color="var(--color-warning)" />
+          )}
+          <span>{isPlanApproval ? '等待计划确认' : isExternal ? '等待外部执行结果' : '等待人工确认'}</span>
         </div>
         <Tag size="small" color="transparent">
           {request.scope === 'worker' ? 'Worker' : 'Leader'} · {request.agentName}
@@ -2364,7 +2543,11 @@ function HitlApprovalBlock({
         {request.toolCalls.map((toolCall) => (
           <div key={toolCall.id} className="rounded-md bg-[var(--color-bg-primary)] p-3">
             <div className="mb-2 flex items-center gap-2">
-              <Wrench size={13} color="var(--color-accent)" />
+              {isPlanApproval ? (
+                <ListChecks size={13} color="var(--color-accent)" />
+              ) : (
+                <Wrench size={13} color="var(--color-accent)" />
+              )}
               <span className="text-sm font-medium text-[var(--color-text-primary)]">
                 {toolCall.name}
               </span>
@@ -2383,7 +2566,7 @@ function HitlApprovalBlock({
             loading={submitting === 'reject'}
             onClick={() => handleResolve('reject')}
           >
-            拒绝
+            {isPlanApproval ? '拒绝计划' : '拒绝'}
           </Button>
           <Button
             type="primary"
@@ -2391,7 +2574,7 @@ function HitlApprovalBlock({
             loading={submitting === 'approve'}
             onClick={() => handleResolve('approve')}
           >
-            批准
+            {isPlanApproval ? '确认计划' : '批准'}
           </Button>
         </div>
       </div>
@@ -2458,19 +2641,24 @@ function HitlDock({
   onResolve: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
 }) {
   if (requests.length === 0) return null;
+  const onlyPlanApproval = requests.every((request) => request.type === 'PLAN_APPROVAL');
 
   return (
     <div className="mx-auto mb-3 max-w-4xl rounded-xl border border-[var(--color-warning)] bg-[var(--color-bg-primary)] p-3 shadow-lg">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
-          <AlertCircle size={15} color="var(--color-warning)" />
-          <span>需要人工审批</span>
+          {onlyPlanApproval ? (
+            <ListChecks size={15} color="var(--color-accent)" />
+          ) : (
+            <AlertCircle size={15} color="var(--color-warning)" />
+          )}
+          <span>{onlyPlanApproval ? '需要确认计划' : '需要人工审批'}</span>
           <Tag size="small" color="warning">
             {requests.length}
           </Tag>
         </div>
         <div className="text-xs text-[var(--color-text-tertiary)]">
-          审批完成后 Agent 会继续执行
+          {onlyPlanApproval ? '确认后 Agent 才会开始执行计划' : '审批完成后 Agent 会继续执行'}
         </div>
       </div>
       <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">

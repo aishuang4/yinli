@@ -116,15 +116,46 @@ def _trace_status(messages: list[object]) -> str:
         return "waiting"
     if any(activity.status == "running" for activity in activities):
         return "running"
-    return "completed" if messages else "empty"
+    if any(getattr(message, "role", "") == "assistant" for message in messages):
+        return "completed"
+    return "empty"
 
 
 def _event_trace_status(events: list[dict]) -> str:
     if any(event.get("status") == "failed" for event in events):
         return "failed"
-    if any(event.get("status") == "waiting" for event in events):
+
+    if any(
+        event.get("eventType") in {"ASSISTANT_MESSAGE", "REPLY_END"}
+        and event.get("status") in {"", "completed"}
+        for event in events
+    ):
+        return "completed"
+
+    latest_waiting = next(
+        (
+            event
+            for event in reversed(events)
+            if event.get("status") == "waiting"
+            or event.get("eventType") in {"HITL_REQUIRED", "CLARIFICATION_REQUIRED"}
+        ),
+        None,
+    )
+    latest_resolution = next(
+        (
+            event
+            for event in reversed(events)
+            if event.get("eventType") in {"HITL_RESOLVED", "ASSISTANT_MESSAGE", "REPLY_END", "ERROR"}
+        ),
+        None,
+    )
+    if latest_waiting and (
+        not latest_resolution
+        or int(latest_waiting.get("sortOrder") or 0) > int(latest_resolution.get("sortOrder") or 0)
+    ):
         return "waiting"
-    if events and not any(event.get("eventType") in {"ASSISTANT_MESSAGE", "ERROR"} for event in events):
+
+    if events and not any(event.get("eventType") in {"ASSISTANT_MESSAGE", "ERROR", "REPLY_END"} for event in events):
         return "running"
     return "completed" if events else "empty"
 
@@ -133,7 +164,13 @@ def _summary_from_session(session: object, messages: list[object]) -> TraceSumma
     events = list_run_events(session.id)
     tool_call_count = _event_tool_call_count(events) if events else _tool_call_count(messages)
     worker_count = _event_worker_count(events) if events else _worker_count(messages)
-    status = _event_trace_status(events) if events else _trace_status(messages)
+    event_status = _event_trace_status(events) if events else "empty"
+    message_status = _trace_status(messages)
+    status = (
+        message_status
+        if message_status in {"completed", "failed"} and event_status in {"empty", "running", "waiting"}
+        else event_status if events else message_status
+    )
     return TraceSummary(
         id=session.id,
         title=session.title,

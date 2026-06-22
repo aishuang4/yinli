@@ -34,8 +34,8 @@ import type {
 import { DEFAULT_MODEL_CONFIG, createEmptyAgentForm } from '../../types/agent';
 import { useMcp } from '../../hooks/useMcp';
 import { useEnabledSkills } from '../../hooks/useSkills';
-import { useKnowledgeTools } from '../../hooks/useKnowledgeTools';
-import type { KnowledgeTool } from '../../types/tool';
+import { useHttpTools } from '../../hooks/useKnowledgeTools';
+import type { HttpTool, HttpToolPayload } from '../../types/tool';
 
 interface AgentEditorProps {
   /** 编辑的 Agent（null 表示创建模式） */
@@ -51,6 +51,41 @@ interface AgentEditorProps {
   onCancel: () => void;
 }
 
+function SquareAddButton({
+  ariaLabel,
+  disabled = false,
+  loading = false,
+  onClick,
+}: {
+  ariaLabel: string;
+  disabled?: boolean;
+  loading?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="primary"
+      size="small"
+      icon={<Plus size={14} />}
+      loading={loading}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      onClick={onClick}
+    />
+  );
+}
+
+const DEFAULT_HTTP_PARAMETER_SCHEMA = {
+  type: 'object',
+  properties: {
+    query: { type: 'string', description: '检索问题或 API 查询参数。' },
+    filename_pattern: { type: 'string', description: '可选文件名过滤。' },
+    filterCategories: { type: 'array', items: { type: 'string' }, description: '可选分类过滤。' },
+    searchMode: { type: 'string', description: '可选检索模式。' },
+  },
+};
+
 /**
  * AgentEditor 组件
  */
@@ -63,19 +98,21 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
   const [knowledgeSelectorOpen, setKnowledgeSelectorOpen] = useState(false);
   const [knowledgeEditorOpen, setKnowledgeEditorOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [editingKnowledgeTool, setEditingKnowledgeTool] = useState<KnowledgeTool | null>(null);
+  const [editingKnowledgeTool, setEditingKnowledgeTool] = useState<HttpTool | null>(null);
   const [knowledgeDraft, setKnowledgeDraft] = useState({
     name: 'KnowledgeBaseSearch',
     description: '检索外部知识库并返回命中文档片段。',
+    method: 'POST' as HttpTool['method'],
     url: 'http://localhost:8080/search/knowledgeBaseSearch',
-    authorization: '',
     headersJson: '{}',
+    queryTemplateJson: '{}',
     defaultPayloadJson: JSON.stringify({
       query: '',
       filename_pattern: '',
       filterCategories: [],
       searchMode: '',
     }, null, 2),
+    parameterSchemaJson: JSON.stringify(DEFAULT_HTTP_PARAMETER_SCHEMA, null, 2),
     parameterInstructions: 'query 是检索问题；filename_pattern 用于按文件名过滤；filterCategories 是分类过滤数组；searchMode 是检索模式。',
     enabled: true,
   });
@@ -87,7 +124,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
     createTool: createKnowledgeTool,
     updateTool: updateKnowledgeTool,
     deleteTool: deleteKnowledgeTool,
-  } = useKnowledgeTools();
+  } = useHttpTools();
 
   const enabledMcpServers = useMemo(() => (
     mcpServers.filter((server) => (
@@ -216,20 +253,22 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
     }));
   }, []);
 
-  const openKnowledgeEditor = useCallback((tool: KnowledgeTool | null = null) => {
+  const openKnowledgeEditor = useCallback((tool: HttpTool | null = null) => {
     setEditingKnowledgeTool(tool);
     setKnowledgeDraft({
       name: tool?.name ?? 'KnowledgeBaseSearch',
       description: tool?.description ?? '检索外部知识库并返回命中文档片段。',
+      method: tool?.method ?? 'POST',
       url: tool?.url ?? 'http://localhost:8080/search/knowledgeBaseSearch',
-      authorization: tool?.authorization ?? '',
       headersJson: JSON.stringify(tool?.headers ?? {}, null, 2),
-      defaultPayloadJson: JSON.stringify(tool?.defaultPayload ?? {
+      queryTemplateJson: JSON.stringify(tool?.queryTemplate ?? {}, null, 2),
+      defaultPayloadJson: JSON.stringify(tool?.bodyTemplate ?? {
         query: '',
         filename_pattern: '',
         filterCategories: [],
         searchMode: '',
       }, null, 2),
+      parameterSchemaJson: JSON.stringify(tool?.parameterSchema ?? DEFAULT_HTTP_PARAMETER_SCHEMA, null, 2),
       parameterInstructions: tool?.parameterInstructions ?? 'query 是检索问题；filename_pattern 用于按文件名过滤；filterCategories 是分类过滤数组；searchMode 是检索模式。',
       enabled: tool?.enabled ?? true,
     });
@@ -239,15 +278,27 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
   const handleSaveKnowledgeTool = useCallback(async () => {
     try {
       const headers = JSON.parse(knowledgeDraft.headersJson || '{}');
-      const defaultPayload = JSON.parse(knowledgeDraft.defaultPayloadJson || '{}');
-      const payload = {
+      const queryTemplate = JSON.parse(knowledgeDraft.queryTemplateJson || '{}');
+      const bodyTemplate = JSON.parse(knowledgeDraft.defaultPayloadJson || '{}');
+      const parameterSchema = JSON.parse(knowledgeDraft.parameterSchemaJson || '{}');
+      const sendsBody = !['GET', 'DELETE'].includes(knowledgeDraft.method);
+      const payload: HttpToolPayload = {
         name: knowledgeDraft.name,
         description: knowledgeDraft.description,
+        category: 'custom',
+        method: knowledgeDraft.method,
         url: knowledgeDraft.url,
-        authorization: knowledgeDraft.authorization,
+        authType: 'none',
+        authConfig: {},
         headers,
-        defaultPayload,
+        queryTemplate,
+        bodyTemplate: sendsBody ? bodyTemplate : {},
+        parameterSchema,
         parameterInstructions: knowledgeDraft.parameterInstructions,
+        responseMode: 'full',
+        responsePath: '',
+        readonly: true,
+        approvalPolicy: 'inherit',
         enabled: knowledgeDraft.enabled,
       };
       const saved = editingKnowledgeTool
@@ -259,7 +310,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
       setKnowledgeEditorOpen(false);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '保存知识库工具失败，请检查 JSON 格式');
+      setError(err instanceof Error ? err.message : '保存 HTTP 工具失败，请检查 JSON 格式');
     }
   }, [createKnowledgeTool, editingKnowledgeTool, knowledgeDraft, toggleKnowledgeTool, updateKnowledgeTool]);
 
@@ -289,7 +340,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
   return (
     <div className="h-full min-h-0 bg-[var(--color-bg-secondary)] p-4">
       <div className="grid h-full min-h-0 grid-rows-[auto_1fr] gap-4">
-        <div className="rounded-xl bg-[var(--color-bg-primary)] px-5 py-4 shadow-sm">
+        <div className="mx-auto w-full max-w-5xl rounded-xl bg-[var(--color-bg-primary)] px-5 py-4 shadow-sm">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <h2 className="text-lg font-medium text-[var(--color-text-primary)]">
@@ -316,7 +367,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
         </div>
 
         <div className="min-h-0 overflow-y-auto">
-          <div className="mx-auto max-w-5xl space-y-4">
+          <div className="mx-auto w-full max-w-5xl space-y-4">
         {error && (
           <Alert type="error" message={error} showIcon />
         )}
@@ -503,13 +554,12 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                       ? `已选择 ${selectedMcpTools.length} 个 MCP 工具`
                       : '未选择 MCP 工具'}
                   </div>
-                  <Button
+                  <SquareAddButton
+                    ariaLabel="选择 MCP 工具"
                     loading={mcpServersLoading}
                     disabled={enabledMcpServers.length === 0}
                     onClick={() => setMcpSelectorOpen(true)}
-                  >
-                    选择 MCP
-                  </Button>
+                  />
                 </div>
                 {selectedMcpTools.length > 0 ? (
                   <div className="mt-3 flex max-h-[72px] flex-wrap gap-2 overflow-hidden">
@@ -537,32 +587,24 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
               </div>
             </div>
 
-            {/* 知识库工具 */}
+            {/* HTTP 工具 */}
             <div>
               <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
-                知识库 HTTP 工具
+                HTTP 工具
               </label>
               <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0 text-sm text-[var(--color-text-secondary)]">
                     {selectedKnowledgeTools.length > 0
-                      ? `已选择 ${selectedKnowledgeTools.length} 个知识库工具`
-                      : '未选择知识库工具'}
+                      ? `已选择 ${selectedKnowledgeTools.length} 个 HTTP 工具`
+                      : '未选择 HTTP 工具'}
                   </div>
                   <div className="flex shrink-0 gap-2">
-                    <Button
+                    <SquareAddButton
+                      ariaLabel="选择 HTTP 工具"
                       loading={knowledgeToolsLoading}
                       onClick={() => setKnowledgeSelectorOpen(true)}
-                    >
-                      选择工具
-                    </Button>
-                    <Button
-                      type="primary"
-                      icon={<Plus size={14} />}
-                      onClick={() => openKnowledgeEditor(null)}
-                    >
-                      新增
-                    </Button>
+                    />
                   </div>
                 </div>
                 {selectedKnowledgeTools.length > 0 ? (
@@ -580,12 +622,12 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                   </div>
                 ) : (
                   <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
-                    可以新增一个知识库 HTTP 工具，然后选择注入到当前 Agent。
+                    可以在工具管理中维护 HTTP 工具，然后选择注入到当前 Agent。
                   </div>
                 )}
               </div>
               <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-                已选择 {form.knowledgeTools.length} 个知识库工具
+                已选择 {form.knowledgeTools.length} 个 HTTP 工具
               </div>
             </div>
 
@@ -601,13 +643,12 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                       ? `已选择 ${selectedSkills.length} 个 Skill`
                       : '未选择 Skill'}
                   </div>
-                  <Button
+                  <SquareAddButton
+                    ariaLabel="选择 Skills"
                     loading={skillsLoading}
                     disabled={enabledSkills.length === 0}
                     onClick={() => setSkillsSelectorOpen(true)}
-                  >
-                    选择 Skills
-                  </Button>
+                  />
                 </div>
                 {selectedSkills.length > 0 ? (
                   <div className="mt-3 flex max-h-[72px] flex-wrap gap-2 overflow-hidden">
@@ -1173,7 +1214,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
       </Modal>
 
       <Modal
-        title="选择知识库 HTTP 工具"
+        title="选择 HTTP 工具"
         open={knowledgeSelectorOpen}
         onCancel={() => setKnowledgeSelectorOpen(false)}
         onOk={() => setKnowledgeSelectorOpen(false)}
@@ -1183,7 +1224,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
       >
         {knowledgeTools.length === 0 ? (
           <div className="py-8 text-center text-sm text-[var(--color-text-tertiary)]">
-            暂无知识库工具。可以先点击新增，配置你的知识库检索接口。
+            暂无 HTTP 工具。请先到工具管理中配置可注入 Agent 的 HTTP 工具。
           </div>
         ) : (
           <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
@@ -1207,14 +1248,14 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                       type="text"
                       icon={<Pencil size={14} />}
                       onClick={() => openKnowledgeEditor(tool)}
-                      aria-label="编辑知识库工具"
+                      aria-label="编辑 HTTP 工具"
                     />
                     <Button
                       danger
                       type="text"
                       icon={<Trash2 size={14} />}
                       onClick={() => handleDeleteKnowledgeTool(tool.id)}
-                      aria-label="删除知识库工具"
+                      aria-label="删除 HTTP 工具"
                     />
                   </div>
                 </div>
@@ -1234,15 +1275,24 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
       </Modal>
 
       <Modal
-        title={editingKnowledgeTool ? '编辑知识库 HTTP 工具' : '新增知识库 HTTP 工具'}
+        title={editingKnowledgeTool ? '编辑 HTTP 工具' : '新增 HTTP 工具'}
         open={knowledgeEditorOpen}
         onCancel={() => setKnowledgeEditorOpen(false)}
         onOk={handleSaveKnowledgeTool}
         okText="保存"
         cancelText="取消"
-        width={780}
+        width={840}
       >
-        <div className="grid grid-cols-2 gap-3">
+        {(() => {
+          const sendsBody = !['GET', 'DELETE'].includes(knowledgeDraft.method);
+          const methodDescription = sendsBody
+            ? '该请求会把 Body 模板作为 JSON 请求体发送；Query 模板会拼接到 URL 查询参数。'
+            : '该请求不会发送 Body，参数会合并到 Query 模板并拼接到 URL 查询参数。';
+          return (
+        <div className="http-tool-form">
+          <div className="http-tool-form__section">
+            <div className="http-tool-form__section-title">基础信息</div>
+            <div className="http-tool-form__grid">
           <div>
             <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
               工具名称
@@ -1261,10 +1311,40 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
               checked={knowledgeDraft.enabled}
               checkedLabel="启用"
               uncheckedLabel="停用"
-              ariaLabel="启用知识库工具"
+              ariaLabel="启用 HTTP 工具"
               onChange={(checked) => setKnowledgeDraft({ ...knowledgeDraft, enabled: checked })}
             />
           </div>
+            </div>
+          </div>
+          <div className="http-tool-form__section">
+            <div className="http-tool-form__section-title">请求配置</div>
+            <div className="http-tool-form__grid">
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              请求类型
+            </label>
+            <Select
+              value={knowledgeDraft.method}
+              onChange={(value) => setKnowledgeDraft({ ...knowledgeDraft, method: value as HttpTool['method'] })}
+              options={[
+                { label: 'GET - 查询读取', value: 'GET' },
+                { label: 'POST - 提交/检索', value: 'POST' },
+                { label: 'PUT - 整体更新', value: 'PUT' },
+                { label: 'PATCH - 局部更新', value: 'PATCH' },
+                { label: 'DELETE - 删除/撤销', value: 'DELETE' },
+              ]}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              发送方式
+            </label>
+            <div className="http-tool-form__hint">
+              {methodDescription}
+            </div>
+          </div>
+            </div>
           <div className="col-span-2">
             <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
               接口地址
@@ -1275,61 +1355,100 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
               placeholder="http://localhost:8080/search/knowledgeBaseSearch"
             />
           </div>
-          <div className="col-span-2">
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              Authorization
-            </label>
-            <Input
-              value={knowledgeDraft.authorization}
-              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, authorization: event.target.value })}
-              placeholder="直接填写 Authorization header 的完整值"
-            />
           </div>
-          <div className="col-span-2">
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              工具描述
-            </label>
-            <Input.TextArea
-              rows={3}
-              value={knowledgeDraft.description}
-              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, description: event.target.value })}
-              placeholder="告诉模型什么时候应该调用这个知识库工具"
-            />
-          </div>
-          <div className="col-span-2">
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              参数说明
-            </label>
-            <Input.TextArea
-              rows={3}
-              value={knowledgeDraft.parameterInstructions}
-              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, parameterInstructions: event.target.value })}
-              placeholder="说明 query、filename_pattern、filterCategories、searchMode 应该如何填写"
-            />
-          </div>
+          <div className="http-tool-form__section">
+            <div className="http-tool-form__section-title">请求头</div>
           <div>
             <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
               Headers JSON
             </label>
             <Input.TextArea
+              className="http-tool-form__json"
               rows={7}
               value={knowledgeDraft.headersJson}
               onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, headersJson: event.target.value })}
               style={{ fontFamily: 'var(--font-mono)' }}
             />
           </div>
+          </div>
+          <div className="http-tool-form__section">
+            <div className="http-tool-form__section-title">参数配置</div>
           <div>
             <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              默认请求体 JSON
+              工具描述
             </label>
             <Input.TextArea
+              className="http-tool-form__text"
+              rows={3}
+              value={knowledgeDraft.description}
+              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, description: event.target.value })}
+              placeholder="告诉模型什么时候应该调用这个 HTTP 工具"
+            />
+          </div>
+          <div className="mt-3">
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              参数说明
+            </label>
+            <Input.TextArea
+              className="http-tool-form__text"
+              rows={3}
+              value={knowledgeDraft.parameterInstructions}
+              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, parameterInstructions: event.target.value })}
+              placeholder="说明 query、filename_pattern、filterCategories、searchMode 应该如何填写"
+            />
+          </div>
+          <div className="http-tool-form__grid mt-3">
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              Query 参数模板 JSON
+            </label>
+            <Input.TextArea
+              className="http-tool-form__json"
               rows={7}
-              value={knowledgeDraft.defaultPayloadJson}
-              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, defaultPayloadJson: event.target.value })}
+              value={knowledgeDraft.queryTemplateJson}
+              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, queryTemplateJson: event.target.value })}
+              placeholder={'{\n  "query": "{{query}}"\n}'}
               style={{ fontFamily: 'var(--font-mono)' }}
             />
           </div>
+          <div>
+            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+              参数 Schema JSON
+            </label>
+            <Input.TextArea
+              className="http-tool-form__json"
+              rows={7}
+              value={knowledgeDraft.parameterSchemaJson}
+              onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, parameterSchemaJson: event.target.value })}
+              placeholder={JSON.stringify(DEFAULT_HTTP_PARAMETER_SCHEMA, null, 2)}
+              style={{ fontFamily: 'var(--font-mono)' }}
+            />
+          </div>
+          </div>
+          {sendsBody && (
+            <div className="col-span-2">
+              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
+                Body 请求体模板 JSON
+              </label>
+              <Input.TextArea
+                className="http-tool-form__json"
+                rows={7}
+                value={knowledgeDraft.defaultPayloadJson}
+                onChange={(event) => setKnowledgeDraft({ ...knowledgeDraft, defaultPayloadJson: event.target.value })}
+                placeholder={'{\n  "query": "{{query}}"\n}'}
+                style={{ fontFamily: 'var(--font-mono)' }}
+              />
+            </div>
+          )}
+          </div>
+          {!sendsBody && (
+            <div className="rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-xs text-[var(--color-text-tertiary)]">
+              当前请求类型不会发送 Body，请把需要传给接口的字段放到 Query 参数模板或 URL 模板中。
+            </div>
+          )}
         </div>
+          );
+        })()}
       </Modal>
 
       <Modal

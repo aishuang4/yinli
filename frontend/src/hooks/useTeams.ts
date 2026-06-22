@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { TeamCreatePayload, TeamRecord, TeamUpdatePayload } from '../types/team';
+import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
 interface UseTeamsReturn {
   teams: TeamRecord[];
@@ -31,39 +32,57 @@ export function useTeams(): UseTeamsReturn {
   }, []);
 
   const createTeam = useCallback(async (data: TeamCreatePayload) => {
-    const response = await fetch('/api/teams', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${response.status}`);
+    try {
+      const response = await fetch('/api/teams', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${response.status}`);
+      }
+      const team: TeamRecord = await response.json();
+      setTeams((current) => [team, ...current]);
+      notifySuccess('Team 创建成功');
+      return team;
+    } catch (err) {
+      notifyError(`Team 创建失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
     }
-    const team: TeamRecord = await response.json();
-    setTeams((current) => [team, ...current]);
-    return team;
   }, []);
 
   const deleteTeam = useCallback(async (id: string) => {
-    const response = await fetch(`/api/teams/${id}`, { method: 'DELETE' });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    setTeams((current) => current.filter((team) => team.id !== id));
+    try {
+      const response = await fetch(`/api/teams/${id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setTeams((current) => current.filter((team) => team.id !== id));
+      notifySuccess('Team 删除成功');
+    } catch (err) {
+      notifyError(`Team 删除失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
   }, []);
 
   const updateTeam = useCallback(async (id: string, data: TeamUpdatePayload) => {
-    const response = await fetch(`/api/teams/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${response.status}`);
+    try {
+      const response = await fetch(`/api/teams/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${response.status}`);
+      }
+      const team: TeamRecord = await response.json();
+      setTeams((current) => current.map((item) => (item.id === id ? team : item)));
+      notifySuccess('Team 保存成功');
+      return team;
+    } catch (err) {
+      notifyError(`Team 保存失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
     }
-    const team: TeamRecord = await response.json();
-    setTeams((current) => current.map((item) => (item.id === id ? team : item)));
-    return team;
   }, []);
 
   useEffect(() => {

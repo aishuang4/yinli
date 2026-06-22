@@ -7,6 +7,7 @@ import { useTeams } from '../hooks/useTeams';
 import { useEventStream, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
 import type { TeamMember } from '../types/team';
 import { createId } from '../utils/id';
+import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
 interface SandboxCase {
   id: string;
@@ -85,7 +86,12 @@ export function SandboxPage() {
         setCases((current) => [nextCase, ...current.filter((item) => item.id !== nextCase.id)]);
         setSelectedCaseId(nextCase.id);
         setCaseName('');
+        notifySuccess('测试用例保存成功');
+      } else {
+        throw new Error(`HTTP ${response.status}`);
       }
+    } catch (err) {
+      notifyError(`测试用例保存失败：${getErrorMessage(err, '未知错误')}`);
     } finally {
       setSavingCase(false);
     }
@@ -107,10 +113,14 @@ export function SandboxPage() {
 
   const deleteSelectedCase = async () => {
     if (!selectedCaseId) return;
-    const response = await fetch(`/api/sandbox/cases/${selectedCaseId}`, { method: 'DELETE' });
-    if (response.ok) {
+    try {
+      const response = await fetch(`/api/sandbox/cases/${selectedCaseId}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setCases((current) => current.filter((item) => item.id !== selectedCaseId));
       setSelectedCaseId('');
+      notifySuccess('测试用例删除成功');
+    } catch (err) {
+      notifyError(`测试用例删除失败：${getErrorMessage(err, '未知错误')}`);
     }
   };
 
@@ -169,25 +179,25 @@ export function SandboxPage() {
                 style={{ width: '100%' }}
                 placeholder="选择已保存用例"
               />
-              <div className="mt-2 grid grid-cols-[1fr_auto_auto] gap-2">
+              <div className="mt-2">
                 <input
                   value={caseName}
                   onChange={(event) => setCaseName(event.target.value)}
-                  className="min-w-0 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                  className="w-full min-w-0 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
                   placeholder="用例名称"
                 />
-                <Button size="small" disabled={!runtimeAgent || !message.trim()} loading={savingCase} onClick={() => void saveCurrentCase()}>
-                  <Save size={13} />
-                  保存
-                </Button>
-                <Button size="small" disabled={!selectedCaseId} onClick={() => void deleteSelectedCase()}>
-                  <Trash2 size={13} />
-                </Button>
-              </div>
-              <div className="mt-2">
-                <Button size="small" disabled={!selectedCaseId} onClick={loadSelectedCase}>
-                  加载用例
-                </Button>
+                <div className="mt-2 flex items-center gap-2">
+                  <Button size="small" disabled={!runtimeAgent || !message.trim()} loading={savingCase} onClick={() => void saveCurrentCase()}>
+                    <Save size={13} />
+                    保存
+                  </Button>
+                  <Button size="small" disabled={!selectedCaseId} onClick={loadSelectedCase}>
+                    加载用例
+                  </Button>
+                  <Button size="small" disabled={!selectedCaseId} onClick={() => void deleteSelectedCase()} title="删除用例">
+                    <Trash2 size={13} />
+                  </Button>
+                </div>
               </div>
             </div>
 

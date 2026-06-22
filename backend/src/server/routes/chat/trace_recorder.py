@@ -7,6 +7,11 @@ import json
 import re
 
 from src.agents.factory import AgentGuardrails
+from src.security.permissions import (
+    PermissionAction,
+    PermissionDecision,
+    ResourceType,
+)
 from src.storage.database import append_run_event
 
 from src.server.routes.chat.helpers import _trim_text
@@ -96,6 +101,7 @@ def _workspace_trace_payload(guardrails: AgentGuardrails) -> dict:
         "filesystemScope": guardrails.filesystem_scope,
         "networkEnabled": guardrails.network_enabled,
         "toolPermissionProfile": guardrails.tool_permission_profile,
+        "permissionProfile": guardrails.permission_profile.audit_payload(),
         "timeoutSeconds": guardrails.timeout_seconds,
         "dockerImage": guardrails.docker_image if guardrails.execution_backend == "docker" else "",
         "persistentSandbox": guardrails.persistent_sandbox if guardrails.execution_backend == "docker" else False,
@@ -134,6 +140,149 @@ def _record_workspace_event(
         ),
         payload=payload,
     )
+    _record_run_event(
+        session_id=session_id,
+        event_type="PERMISSION_POLICY",
+        persist=persist,
+        scope=scope,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        team_activity_id=team_activity_id,
+        status="configured",
+        title="Permission policy configured",
+        content=(
+            f"policy={guardrails.permission_profile.tool_policy.value} · "
+            f"network={guardrails.permission_profile.network_enabled}"
+        ),
+        payload={
+            "policy": guardrails.permission_profile.audit_payload(),
+            "legacy": {
+                "toolPermissionMode": guardrails.tool_permission_mode,
+                "toolPermissionProfile": guardrails.tool_permission_profile,
+            },
+        },
+    )
+
+
+def _record_permission_decision(
+    *,
+    session_id: str,
+    event_type: str,
+    event_data: dict,
+    persist: bool,
+    scope: str,
+    agent_id: str,
+    agent_name: str,
+    guardrails: AgentGuardrails,
+    team_activity_id: str | None = None,
+) -> None:
+    """Record a platform-level permission decision for tool execution."""
+
+    if event_type != "TOOL_CALL_START":
+        return
+
+    payload = _permission_decision_payload(event_data, guardrails)
+    decision = str(payload["decision"])
+    tool_name = str(payload["resourceId"])
+    action = str(payload["action"])
+    _record_run_event(
+        session_id=session_id,
+        event_type="PERMISSION_DECISION",
+        persist=persist,
+        scope=scope,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        team_activity_id=team_activity_id,
+        status=decision,
+        title=f"Permission {decision}: {tool_name}",
+        content=f"{payload['resourceType']}:{tool_name} · action={action}",
+        payload=payload,
+    )
+
+
+def _permission_decision_payload(event_data: dict, guardrails: AgentGuardrails) -> dict:
+    """Build a normalized permission-decision payload for one tool call."""
+
+    tool_name = _normalize_tool_event_name(str(event_data.get("tool_call_name") or "tool"))
+    resource_type = _resource_type_for_tool(tool_name)
+    action = _action_for_tool(tool_name)
+    decision = guardrails.permission_profile.decide(resource_type, action)
+    reason = _permission_reason(
+        decision=decision,
+        tool_name=tool_name,
+        resource_type=resource_type,
+        action=action,
+        guardrails=guardrails,
+    )
+    return {
+        "resourceType": resource_type.value,
+        "resourceId": tool_name,
+        "action": action.value,
+        "decision": decision.value,
+        "reason": reason,
+        "toolCallId": str(event_data.get("tool_call_id") or ""),
+        "policy": guardrails.permission_profile.audit_payload(),
+        "legacy": {
+            "toolPermissionMode": guardrails.tool_permission_mode,
+            "toolPermissionProfile": guardrails.tool_permission_profile,
+        },
+    }
+
+
+def _resource_type_for_tool(tool_name: str) -> ResourceType:
+    """Map AgentScope tool names to platform resource types."""
+
+    normalized = _normalize_tool_event_name(tool_name)
+    if (
+        normalized == "KnowledgeBaseSearch"
+        or normalized.endswith("KnowledgeBaseSearch")
+        or normalized.startswith("HttpTool_")
+    ):
+        return ResourceType.KNOWLEDGE_TOOL
+    if normalized in {"Read", "Grep", "Glob", "Write", "Edit", "Bash", "HttpRequest", "AskUser"}:
+        return ResourceType.TOOL
+    return ResourceType.MCP
+
+
+def _action_for_tool(tool_name: str) -> PermissionAction:
+    """Map tool names to a coarse platform action."""
+
+    normalized = _normalize_tool_event_name(tool_name)
+    if (
+        normalized in {"Read", "Grep", "Glob", "KnowledgeBaseSearch"}
+        or normalized.endswith("KnowledgeBaseSearch")
+        or normalized.startswith("HttpTool_")
+    ):
+        return PermissionAction.READ
+    if normalized in {"Write", "Edit"}:
+        return PermissionAction.WRITE
+    if normalized == "AskUser":
+        return PermissionAction.APPROVE
+    return PermissionAction.EXECUTE
+
+
+def _permission_reason(
+    *,
+    decision: PermissionDecision,
+    tool_name: str,
+    resource_type: ResourceType,
+    action: PermissionAction,
+    guardrails: AgentGuardrails,
+) -> str:
+    """Explain why the platform-level decision was made."""
+
+    profile = guardrails.permission_profile
+    if decision == PermissionDecision.DENY and profile.is_read_only:
+        return "read_only profile denies write/execute/configure actions"
+    if decision == PermissionDecision.DENY and resource_type in {ResourceType.MCP, ResourceType.KNOWLEDGE_TOOL}:
+        return "network resource denied by network policy"
+    if decision == PermissionDecision.ASK and profile.human_approval:
+        return "human approval is enabled for this Agent"
+    if decision == PermissionDecision.ASK:
+        return f"policy {profile.tool_policy.value} requires confirmation for {action.value}"
+    if decision == PermissionDecision.ALLOW:
+        return f"policy {profile.tool_policy.value} allows {tool_name}"
+    return "decision inherited from parent policy"
 
 
 def _record_agent_scope_event(

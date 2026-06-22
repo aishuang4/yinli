@@ -28,6 +28,10 @@ const installFilterOptions = [
   { label: '可安装', value: 'available' },
 ];
 
+interface MCPPageProps {
+  embedded?: boolean;
+}
+
 function serverMatchesQuery(server: McpServer, query: string): boolean {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return true;
@@ -42,7 +46,7 @@ function serverMatchesQuery(server: McpServer, query: string): boolean {
   ].some((value) => value.toLowerCase().includes(normalized));
 }
 
-export function MCPPage() {
+export function MCPPage({ embedded = false }: MCPPageProps) {
   const {
     servers,
     categories,
@@ -153,49 +157,66 @@ export function MCPPage() {
     }
   }
 
-  return (
-    <div className="h-full grid grid-rows-[auto_auto_1fr] min-h-0 bg-[var(--color-bg-primary)]">
-      <header className="px-5 py-4 border-b border-[var(--color-border)]">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Plug size={20} color="var(--color-accent)" />
-              <h1 className="text-lg font-semibold text-[var(--color-text-primary)]">
-                MCP Browser
-              </h1>
-            </div>
-            <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-              浏览、安装和管理 Agent 可用的 MCP Server 工具。
-            </p>
-          </div>
-          <div className="flex items-center gap-3 text-sm text-[var(--color-text-secondary)]">
-            <span>{servers.length} 个 Server</span>
-            <span>{installedCount} 个已安装</span>
-            <span>{enabledToolCount} 个可用工具</span>
-            <Button
-              type="primary"
-              onClick={() => {
-                setRegisterError(null);
-                setRegisterOpen(true);
-              }}
-            >
-              <span className="inline-flex items-center gap-1.5">
-                <Plus size={14} className="shrink-0" />
-                注册 MCP
-              </span>
-            </Button>
-            <Button
-              icon={<RefreshCw size={14} />}
-              onClick={refresh}
-              loading={loading}
-            >
-              刷新
-            </Button>
-          </div>
-        </div>
-      </header>
+  const actionBar = (
+    <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-[var(--color-text-secondary)]">
+      <div className="flex flex-wrap items-center gap-3">
+        <span>{servers.length} 个 Server</span>
+        <span>{installedCount} 个已安装</span>
+        <span>{enabledToolCount} 个可用工具</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button
+          type="primary"
+          onClick={() => {
+            setRegisterError(null);
+            setRegisterOpen(true);
+          }}
+        >
+          <span className="inline-flex items-center gap-1.5">
+            <Plus size={14} className="shrink-0" />
+            注册 MCP
+          </span>
+        </Button>
+        <Button
+          icon={<RefreshCw size={14} />}
+          onClick={refresh}
+          loading={loading}
+        >
+          刷新
+        </Button>
+      </div>
+    </div>
+  );
 
-      <section className="px-5 py-3 border-b border-[var(--color-border)]">
+  return (
+    <div className={[
+      'h-full grid min-h-0 bg-[var(--color-bg-primary)]',
+      embedded ? 'grid-rows-[auto_1fr]' : 'grid-rows-[auto_auto_1fr]',
+    ].join(' ')}>
+      {!embedded && (
+        <header className="px-5 py-4 border-b border-[var(--color-border)]">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Plug size={20} color="var(--color-accent)" />
+                <h1 className="text-lg font-semibold text-[var(--color-text-primary)]">
+                  MCP Browser
+                </h1>
+              </div>
+              <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
+                浏览、安装和管理 Agent 可用的 MCP Server 工具。
+              </p>
+            </div>
+            {actionBar}
+          </div>
+        </header>
+      )}
+
+      <section className={[
+        'px-5 py-3',
+        embedded ? '' : 'border-b border-[var(--color-border)]',
+      ].join(' ')}>
+        {embedded && <div className="mb-3">{actionBar}</div>}
         <div className="grid grid-cols-[minmax(240px,1fr)_180px_160px] gap-3">
           <Input
             value={query}

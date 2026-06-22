@@ -8,8 +8,9 @@ from src.agents.factory import (
     KnowledgeToolRuntimeSpec,
     McpRuntimeSpec,
 )
+from src.security.permissions import build_permission_profile
 from src.server.routes.mcp import resolve_mcp_runtime_servers
-from src.server.routes.tools import get_enabled_knowledge_tools
+from src.server.routes.tools import get_enabled_http_tools, get_enabled_knowledge_tools
 
 from src.server.routes.chat.models import ChatImagePayload
 
@@ -38,7 +39,7 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
     guardrails = getattr(agent_config, "guardrails", None)
     if not guardrails:
         return AgentGuardrails()
-    return AgentGuardrails(
+    runtime_guardrails = AgentGuardrails(
         filesystem_scope=getattr(guardrails, "filesystem_scope", "/") or "/",
         shell_blacklist=list(getattr(guardrails, "shell_blacklist", []) or []),
         network_enabled=bool(getattr(guardrails, "network_enabled", True)),
@@ -53,6 +54,19 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
         persistent_sandbox=bool(getattr(guardrails, "persistent_sandbox", False)),
         timeout_seconds=int(getattr(guardrails, "timeout_seconds", 300) or 300),
     )
+    return AgentGuardrails(
+        filesystem_scope=runtime_guardrails.filesystem_scope,
+        shell_blacklist=runtime_guardrails.shell_blacklist,
+        network_enabled=runtime_guardrails.network_enabled,
+        human_approval=runtime_guardrails.human_approval,
+        tool_permission_mode=runtime_guardrails.tool_permission_mode,
+        tool_permission_profile=runtime_guardrails.tool_permission_profile,
+        execution_backend=runtime_guardrails.execution_backend,
+        docker_image=runtime_guardrails.docker_image,
+        persistent_sandbox=runtime_guardrails.persistent_sandbox,
+        timeout_seconds=runtime_guardrails.timeout_seconds,
+        permission_profile=build_permission_profile(runtime_guardrails),
+    )
 
 
 def _profile_from_legacy_tool_mode(mode: object) -> str:
@@ -65,23 +79,20 @@ def _profile_from_legacy_tool_mode(mode: object) -> str:
 
 
 def _permission_mode_for_guardrails(guardrails: AgentGuardrails) -> PermissionMode:
-    if guardrails.human_approval:
-        return PermissionMode.DEFAULT
+    return guardrails.permission_profile.to_agentscope_permission_mode()
 
-    profile = (guardrails.tool_permission_profile or "").strip().lower()
-    if profile == "ask_every_time":
-        return PermissionMode.DEFAULT
-    if profile in {"trusted_tools", "read_only"}:
-        return PermissionMode.BYPASS
-    if profile == "confirm_destructive":
-        return PermissionMode.ACCEPT_EDITS
 
-    mode = (guardrails.tool_permission_mode or "accept_edits").strip().lower()
-    if mode == "ask_every_time":
-        return PermissionMode.DEFAULT
-    if mode == "bypass":
-        return PermissionMode.BYPASS
-    return PermissionMode.ACCEPT_EDITS
+def _guardrail_cache_key(guardrails: AgentGuardrails) -> str:
+    """生成影响 Agent 实例缓存的 guardrails key。"""
+
+    return (
+        f"{guardrails.permission_profile.cache_key()}:"
+        f"legacy-mode-{guardrails.tool_permission_mode}:"
+        f"legacy-profile-{guardrails.tool_permission_profile}:"
+        f"exec-{guardrails.execution_backend}:"
+        f"docker-{guardrails.docker_image}:"
+        f"persist-sandbox-{guardrails.persistent_sandbox}"
+    )
 
 
 def _build_runtime_mcp_servers(agent_config: object | None) -> list[McpRuntimeSpec]:
@@ -102,10 +113,23 @@ def _build_runtime_mcp_servers(agent_config: object | None) -> list[McpRuntimeSp
 def _build_runtime_knowledge_tools(agent_config: object | None) -> list[KnowledgeToolRuntimeSpec]:
     tool_ids = list(getattr(agent_config, "knowledge_tools", []) or [])
     specs: list[KnowledgeToolRuntimeSpec] = []
+    http_tool_ids: set[str] = set()
+    for item in get_enabled_http_tools(tool_ids):
+        http_tool_ids.add(str(item.get("id") or ""))
+        specs.append(KnowledgeToolRuntimeSpec(
+            id=str(item.get("id") or ""),
+            name=str(item.get("name") or "HttpTool"),
+            kind="http",
+            description=str(item.get("description") or ""),
+            config=dict(item),
+        ))
     for item in get_enabled_knowledge_tools(tool_ids):
+        if str(item.get("id") or "") in http_tool_ids:
+            continue
         specs.append(KnowledgeToolRuntimeSpec(
             id=str(item.get("id") or ""),
             name=str(item.get("name") or "KnowledgeBase"),
+            kind="legacy_knowledge",
             description=str(item.get("description") or ""),
             url=str(item.get("url") or ""),
             authorization=str(item.get("authorization") or ""),

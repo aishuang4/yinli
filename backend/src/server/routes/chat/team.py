@@ -39,6 +39,7 @@ from src.server.routes.chat.runtime import (
     _build_runtime_knowledge_tools,
     _build_runtime_mcp_servers,
     _build_user_content,
+    _guardrail_cache_key,
     _permission_mode_for_guardrails,
 )
 from src.server.routes.chat.team_state import (
@@ -52,6 +53,7 @@ from src.server.routes.chat.trace_recorder import (
     _attach_provider_cache_usage,
     _make_fallback_trace_recorder,
     _record_agent_scope_event,
+    _record_permission_decision,
     _record_run_event,
     _record_tool_execution_artifacts,
     _record_workspace_event,
@@ -166,10 +168,7 @@ async def _run_team_workers(
             f"thinking-{data.deep_thinking}:fallbacks-{worker_fallback_cache_key}:"
             f"skills-{worker_cache_key}:mcp-{worker_mcp_cache_key}:"
             f"knowledge-{worker_knowledge_cache_key}:"
-            f"hitl-{worker_guardrails.human_approval}:tool-permission-{worker_guardrails.tool_permission_mode}"
-            f":tool-profile-{worker_guardrails.tool_permission_profile}"
-            f":exec-{worker_guardrails.execution_backend}:docker-{worker_guardrails.docker_image}"
-            f":persist-sandbox-{worker_guardrails.persistent_sandbox}"
+            f"guardrails-{_guardrail_cache_key(worker_guardrails)}"
         )
         worker_agent = get_or_create_agent(
             agent_id=runtime_worker_id,
@@ -227,6 +226,17 @@ async def _run_team_workers(
                     agent_id=member.agent_id,
                     agent_name=worker_name,
                     team_activity_id=activity.id if activity else None,
+                )
+                _record_permission_decision(
+                    session_id=session_id,
+                    event_type=event_type,
+                    event_data=event_data,
+                    persist=not data.sandbox,
+                    scope="worker",
+                    agent_id=member.agent_id,
+                    agent_name=worker_name,
+                    team_activity_id=activity.id if activity else None,
+                    guardrails=worker_guardrails,
                 )
                 if event_type in HITL_EVENT_TYPES:
                     if activity:
