@@ -17,7 +17,8 @@
 - [ ] 收尾 Chat runtime 拆分的剩余边界。
   - [x] 拆出 Plan approval 流程，减少 `send.py` 中审批等待、拒绝计划和错误写入逻辑。实现于 2026-06-23：已下沉到 `completion.handle_plan_approval_if_required()`。
   - [x] 抽统一早期错误处理 helper，覆盖图片模型不支持、API Key 缺失、Agent 创建失败等重复路径。实现于 2026-06-23：已下沉到 `completion.emit_failed_startup_run()`。
-  - [ ] 让 `resume.py` 复用 `leader_stream.py`、`completion.py`、`orchestration.py`，避免 resume 和 send 再次分叉。
+  - [ ] 低优先级：让 `resume.py` 复用 `leader_stream.py`、`completion.py`、`orchestration.py`，避免 resume 和 send 再次分叉。
+    - 当前不影响主流程；除非后续 HITL resume 与正常 send 出现明显行为分叉，否则先不作为近期主线。
   - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 mode、skills、subagents、team workers 和 toolScope。
 
 ## P0. Finish Current Trace And Sandbox Work
@@ -265,6 +266,12 @@
   - 让 Leader 可以根据任务动态选择 Worker、工具、步骤和依赖。
   - 前端展示动态生成的执行图，并允许用户在关键节点确认。
   - Sandbox 中支持保存一次动态编排结果作为固定 Workflow 模板。
+
+- [ ] 低优先级：Team Plan 动态化增强
+  - 当前 Team Plan 已支持模型优先生成结构化 Plan，失败时使用规则模板兜底。
+  - 现阶段看起来像固定步骤，主要是因为 Team 场景会按成员职责收敛为“Worker 步骤 + Leader 汇总”。
+  - 后续如要增强，再做 Team 专用动态 Plan：允许模型决定是否跳过某些 Worker、是否增加跨 Worker 依赖、是否插入验证步骤。
+  - 该项暂不进入近期主线，优先保证 Subagent、权限、工具、运行任务中心等地基能力稳定。
 
 - [ ] 评测体系增强
   - Sandbox 支持测试集批量运行。

@@ -20,6 +20,7 @@ export interface BuilderAgentDraft {
   modelConfig: ModelConfig;
   mcpTools: string[];
   skills: string[];
+  callableAgentRefs: string[];
   tags: string[];
   recommendedTools: BuilderRecommendedItem[];
   recommendedSkills: BuilderRecommendedItem[];

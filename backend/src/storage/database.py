@@ -232,6 +232,7 @@ def ensure_db() -> None:
                     thinking TEXT NOT NULL DEFAULT '',
                     images TEXT NOT NULL,
                     tool_calls TEXT NOT NULL DEFAULT '[]',
+                    subagent_calls TEXT NOT NULL DEFAULT '[]',
                     skill_calls TEXT NOT NULL,
                     team_activities TEXT NOT NULL,
                     model_caches TEXT NOT NULL DEFAULT '[]',
@@ -382,6 +383,7 @@ def ensure_db() -> None:
                     ON skill_runs(session_id, agent_id, status, updated_at);
             """)
             _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
+            _ensure_column(conn, "chat_messages", "subagent_calls", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "plan_runs", "TEXT NOT NULL DEFAULT '[]'")
@@ -441,6 +443,17 @@ def _loads(value: str | None, default: Any) -> Any:
         return json.loads(value)
     except Exception:
         return default
+
+
+def _derive_subagent_calls(tool_calls: list[dict[str, Any]], subagent_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """旧消息没有 subagent_calls 列内容时，从 CallAgent 工具调用派生。"""
+
+    if subagent_calls:
+        return subagent_calls
+    return [
+        item for item in tool_calls
+        if str(item.get("name") or "").startswith(("CallAgent_", "子 Agent："))
+    ]
 
 
 def list_json_records(namespace: str) -> list[dict[str, Any]]:
@@ -1073,6 +1086,8 @@ def load_chat_store() -> dict[str, Any]:
         ).fetchall()
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in messages:
+        tool_calls = _loads(row["tool_calls"], [])
+        subagent_calls = _derive_subagent_calls(tool_calls, _loads(row["subagent_calls"], []))
         grouped.setdefault(row["session_id"], []).append({
             "id": row["id"],
             "role": row["role"],
@@ -1083,7 +1098,8 @@ def load_chat_store() -> dict[str, Any]:
             "error": row["error"],
             "thinking": row["thinking"],
             "images": _loads(row["images"], []),
-            "toolCalls": _loads(row["tool_calls"], []),
+            "toolCalls": tool_calls,
+            "subagentCalls": subagent_calls,
             "skillCalls": _loads(row["skill_calls"], []),
             "teamActivities": _loads(row["team_activities"], []),
             "modelCaches": _loads(row["model_caches"], []),
@@ -1137,6 +1153,7 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     item.get("agent_id"), item.get("agent_name"), item.get("model_name"),
                     item.get("error"), item.get("thinking", ""), _dumps(item.get("images", [])),
                     _dumps(item.get("toolCalls", item.get("tool_calls", []))),
+                    _dumps(item.get("subagentCalls", item.get("subagent_calls", []))),
                     _dumps(item.get("skillCalls", item.get("skill_calls", []))),
                     _dumps(item.get("teamActivities", item.get("team_activities", []))),
                     _dumps(item.get("modelCaches", item.get("model_caches", []))),
@@ -1147,9 +1164,9 @@ def save_chat_store(data: dict[str, Any]) -> None:
             """
             INSERT INTO chat_messages (
                 id, session_id, role, content, agent_id, agent_name, model_name,
-                error, thinking, images, tool_calls, skill_calls, team_activities, model_caches, plan_runs, created_at,
+                error, thinking, images, tool_calls, subagent_calls, skill_calls, team_activities, model_caches, plan_runs, created_at,
                 sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )

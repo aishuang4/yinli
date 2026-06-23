@@ -19,6 +19,7 @@ from src.server.routes.chat.models import (
     ChatPlanRun,
     ChatSession,
     ChatSkillRun,
+    ChatSubagentCall,
     ChatStore,
     ChatToolRun,
     ChatTeamActivity,
@@ -111,6 +112,7 @@ def _append_assistant_message(
     thinking: str = "",
     skill_calls: list[ChatSkillRun] | None = None,
     tool_calls: list[ChatToolRun] | None = None,
+    subagent_calls: list[ChatSubagentCall] | None = None,
     team_activities: list[ChatTeamActivity] | None = None,
     model_caches: list[ChatModelCacheRun] | None = None,
     plan_runs: list[ChatPlanRun] | None = None,
@@ -119,6 +121,12 @@ def _append_assistant_message(
     now = datetime.now(timezone.utc).isoformat()
     store = _load_store()
     messages = store.messages.setdefault(session_id, [])
+    incoming_tool_calls = tool_calls or []
+    final_subagent_calls = subagent_calls if subagent_calls is not None else _extract_subagent_calls(incoming_tool_calls)
+    final_tool_calls = [
+        tool_call for tool_call in incoming_tool_calls
+        if not _is_subagent_tool_name(tool_call.name)
+    ]
     messages.append(StoredChatMessage(
         id=uuid.uuid4().hex,
         role="assistant",
@@ -128,7 +136,8 @@ def _append_assistant_message(
         model_name=model_name,
         error=error,
         thinking=thinking,
-        tool_calls=tool_calls or [],
+        tool_calls=final_tool_calls,
+        subagent_calls=final_subagent_calls,
         skill_calls=skill_calls or [],
         team_activities=team_activities or [],
         model_caches=model_caches or [],
@@ -142,6 +151,27 @@ def _append_assistant_message(
         existing.message_count = len(messages)
 
     _save_store(store)
+
+
+def _extract_subagent_calls(tool_calls: list[ChatToolRun]) -> list[ChatSubagentCall]:
+    """从历史工具调用里派生子 Agent 调用记录，兼容旧运行链路。"""
+
+    subagent_calls: list[ChatSubagentCall] = []
+    for tool_call in tool_calls:
+        if not _is_subagent_tool_name(tool_call.name):
+            continue
+        subagent_calls.append(ChatSubagentCall(
+            id=tool_call.id,
+            name=tool_call.name,
+            args=tool_call.args,
+            result=tool_call.result,
+            status=tool_call.status,
+        ))
+    return subagent_calls
+
+
+def _is_subagent_tool_name(name: str) -> bool:
+    return name.startswith("CallAgent_") or name.startswith("子 Agent：")
 
 
 def _make_session_title(content: str) -> str:
