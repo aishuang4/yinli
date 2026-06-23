@@ -16,7 +16,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, XCircle, BookOpenCheck, Users, CheckCircle2, Clock3, Copy, Check, GitBranch, ListChecks, Download, FileText } from 'lucide-react';
 import { Button, Empty, Select, Spinner, Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../components/MarkdownContent';
-import { completeOpenPlans, useEventStream, type ClarificationQuestionInfo, type ClarificationRequestInfo, type HitlRequestInfo, type MemorySummaryInfo, type ModelCacheInfo, type PlanRunInfo, type SkillCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
+import { completeOpenPlans, normalizePlanRun, useEventStream, type ClarificationQuestionInfo, type ClarificationRequestInfo, type HitlRequestInfo, type MemorySummaryInfo, type ModelCacheInfo, type PlanRunInfo, type SkillCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
 import { createId } from '../utils/id';
@@ -57,6 +57,70 @@ interface LocalMessage {
   error?: string;
   /** 图片输入 */
   images?: ChatImagePayload[];
+}
+
+interface AssistantContentParts {
+  finalAnswer: string;
+  reactTrace: string;
+}
+
+function splitAssistantContent(content: string): AssistantContentParts {
+  const text = content.trim();
+  if (!text) return { finalAnswer: '', reactTrace: '' };
+
+  const processSentences = [
+    '现在让我',
+    '让我先',
+    '我先',
+    '我继续',
+    '继续查看',
+    '现在查看',
+    '现在进入',
+    '下面开始',
+  ];
+  const countProcessHits = (value: string) => (
+    processSentences.reduce((count, marker) => count + (value.split(marker).length - 1), 0)
+  );
+  const headingMatches = [...text.matchAll(/^#{1,3}\s+.*(?:报告|总结|结论|建议|方案|结果|最终|交付|完成).*$\n?/gim)];
+  const lateHeading = headingMatches.find((match) => {
+    const index = match.index || 0;
+    if (index <= 0) return false;
+    const prefix = text.slice(0, index).trim();
+    return prefix.length > 280 && countProcessHits(prefix) >= 2;
+  });
+  const startIndex = lateHeading?.index ?? -1;
+  if (startIndex > 0) {
+    return {
+      reactTrace: text.slice(0, startIndex).trim(),
+      finalAnswer: text.slice(startIndex).trim(),
+    };
+  }
+
+  const finalMarker = text.search(/(?:^|\n)(?:---\s*\n+)?(?:##\s*)?(?:✅\s*)?(?:最终|结论|总结|交付|建议|改进建议)/m);
+  if (finalMarker > 0) {
+    const prefix = text.slice(0, finalMarker).trim();
+    if (prefix.length <= 280 || countProcessHits(prefix) < 2) {
+      return { finalAnswer: text, reactTrace: '' };
+    }
+    return {
+      reactTrace: prefix,
+      finalAnswer: text.slice(finalMarker).trim(),
+    };
+  }
+
+  const processHitCount = countProcessHits(text);
+  if (processHitCount >= 4 && text.length > 500) {
+    const midpoint = Math.floor(text.length * 0.65);
+    const nextParagraph = text.indexOf('\n\n', midpoint);
+    if (nextParagraph > 0) {
+      return {
+        reactTrace: text.slice(0, nextParagraph).trim(),
+        finalAnswer: text.slice(nextParagraph).trim(),
+      };
+    }
+  }
+
+  return { finalAnswer: text, reactTrace: '' };
 }
 
 interface ChatImagePayload {
@@ -169,6 +233,10 @@ function normalizeStoredToolName(name: string, args: string, result: string): st
 
 function normalizeToolDisplayName(name: string): string {
   const value = String(name || 'tool');
+  if (value.startsWith('CallAgent_')) {
+    const agentName = value.slice('CallAgent_'.length).replace(/_/g, ' ').trim() || '子 Agent';
+    return `子 Agent：${agentName}`;
+  }
   const parts = value.split('_');
   if (parts.length === 2 && parts[0] && parts[0] === parts[1]) {
     return parts[0];
@@ -204,6 +272,10 @@ function normalizeStoredTeamActivities(activities: StoredTeamActivity[]): TeamAc
     leaderContextCount: Number(activity.leaderContextCount || 0),
     createdAt: String(activity.createdAt || activity.created_at || ''),
   }));
+}
+
+function normalizeStoredPlanRuns(planRuns: PlanRunInfo[] | undefined): PlanRunInfo[] {
+  return (planRuns || []).map((plan) => normalizePlanRun(plan as unknown as Record<string, unknown>));
 }
 
 /**
@@ -355,8 +427,8 @@ export function ChatPage() {
       teamActivities: normalizeStoredTeamActivities(item.teamActivities || item.team_activities || []),
       modelCaches: item.modelCaches || item.model_caches || [],
       planRuns: item.role === 'assistant' && item.content
-        ? completeOpenPlans(item.planRuns || item.plan_runs || [], item.created_at)
-        : item.planRuns || item.plan_runs || [],
+        ? completeOpenPlans(normalizeStoredPlanRuns(item.planRuns || item.plan_runs || []), item.created_at)
+        : normalizeStoredPlanRuns(item.planRuns || item.plan_runs || []),
     })));
   }, []);
 
@@ -1161,10 +1233,14 @@ function MessageBubble({
 }) {
   const isUser = message.role === 'user';
   const clarification = !isUser ? extractClarificationFromText(message.content) : null;
+  const contentParts = !isUser && !clarification
+    ? splitAssistantContent(message.content)
+    : { finalAnswer: message.content, reactTrace: '' };
   const generatedFiles = !isUser
     ? collectGeneratedFiles(message.toolCalls || [], message.teamActivities || [])
     : [];
   const hasProcessDetails = !isUser && Boolean(
+    contentParts.reactTrace ||
     message.thinking ||
     (message.teamActivities && message.teamActivities.length > 0) ||
     (message.skillCalls && message.skillCalls.length > 0) ||
@@ -1231,6 +1307,7 @@ function MessageBubble({
             hasFinalAnswer={Boolean(message.content && !clarification)}
             processStartedAt={message.processStartedAt}
             processCompletedAt={message.processCompletedAt}
+            reactTraceContent={contentParts.reactTrace}
             thinkingContent={message.thinking || ''}
             teamActivities={message.teamActivities || []}
             skillCalls={message.skillCalls || []}
@@ -1254,7 +1331,7 @@ function MessageBubble({
           />
         )}
 
-        {message.content && !clarification && (
+        {contentParts.finalAnswer && !clarification && (
           <div
             className={`chat-message-content ${isUser ? 'chat-message-content--user' : 'chat-message-content--assistant'}`}
             style={{
@@ -1272,7 +1349,7 @@ function MessageBubble({
               whiteSpace: isUser ? 'pre-wrap' : undefined,
             }}
           >
-            {isUser ? message.content : <MarkdownContent content={message.content} />}
+            {isUser ? message.content : <MarkdownContent content={contentParts.finalAnswer} />}
           </div>
         )}
 
@@ -1280,8 +1357,8 @@ function MessageBubble({
           <GeneratedFilesBlock files={generatedFiles} />
         )}
 
-        {!isUser && message.content && !clarification && (
-          <MessageToolbar markdown={message.content} createdAt={message.createdAt} />
+        {!isUser && contentParts.finalAnswer && !clarification && (
+          <MessageToolbar markdown={contentParts.finalAnswer} createdAt={message.createdAt} />
         )}
 
         {/* Token 用量 */}
@@ -1346,7 +1423,9 @@ function StreamingBubble({
   runCompletedAt: string;
 }) {
   const generatedFiles = collectGeneratedFiles(toolCalls, teamActivities);
+  const contentParts = splitAssistantContent(textContent);
   const hasProcessDetails = Boolean(
+    contentParts.reactTrace ||
     thinkingContent ||
     teamActivities.length > 0 ||
     skillCalls.length > 0 ||
@@ -1375,9 +1454,10 @@ function StreamingBubble({
         {hasProcessDetails && (
           <ProcessDetailsBlock
             defaultExpanded={!textContent}
-            hasFinalAnswer={Boolean(textContent)}
+            hasFinalAnswer={Boolean(contentParts.finalAnswer)}
             processStartedAt={runStartedAt}
             processCompletedAt={runCompletedAt}
+            reactTraceContent={contentParts.reactTrace}
             thinkingContent={thinkingContent}
             teamActivities={teamActivities}
             skillCalls={skillCalls}
@@ -1402,7 +1482,7 @@ function StreamingBubble({
         ))}
 
         {/* 文本内容 */}
-        {textContent && (
+        {contentParts.finalAnswer && (
           <div
             className="chat-message-content chat-message-content--assistant"
             style={{
@@ -1415,7 +1495,7 @@ function StreamingBubble({
               wordBreak: 'break-word',
             }}
           >
-            <MarkdownContent content={textContent} streaming />
+            <MarkdownContent content={contentParts.finalAnswer} streaming />
             <span
               style={{
                 display: 'inline-block',
@@ -1434,12 +1514,12 @@ function StreamingBubble({
           <GeneratedFilesBlock files={generatedFiles} />
         )}
 
-        {textContent && (
-          <MessageToolbar markdown={textContent} createdAt={new Date().toISOString()} />
+        {contentParts.finalAnswer && (
+          <MessageToolbar markdown={contentParts.finalAnswer} createdAt={new Date().toISOString()} />
         )}
 
         {/* 无内容时显示加载指示器 */}
-        {!textContent && generatedFiles.length === 0 && toolCalls.length === 0 && skillCalls.length === 0 && teamActivities.length === 0 && memorySummaries.length === 0 && modelCaches.length === 0 && hitlRequests.length === 0 && !thinkingContent && (
+        {!contentParts.finalAnswer && generatedFiles.length === 0 && toolCalls.length === 0 && skillCalls.length === 0 && teamActivities.length === 0 && memorySummaries.length === 0 && modelCaches.length === 0 && hitlRequests.length === 0 && !thinkingContent && !contentParts.reactTrace && (
           <div
             style={{
               display: 'flex',
@@ -1999,6 +2079,7 @@ function ProcessDetailsBlock({
   hasFinalAnswer,
   processStartedAt,
   processCompletedAt,
+  reactTraceContent,
   thinkingContent,
   teamActivities,
   skillCalls,
@@ -2012,6 +2093,7 @@ function ProcessDetailsBlock({
   hasFinalAnswer: boolean;
   processStartedAt?: string;
   processCompletedAt?: string;
+  reactTraceContent?: string;
   thinkingContent: string;
   teamActivities: TeamActivityInfo[];
   skillCalls: SkillCallInfo[];
@@ -2022,12 +2104,14 @@ function ProcessDetailsBlock({
   onSelectTeamActivity: (id: string) => void;
 }) {
   const hasThinking = Boolean(thinkingContent.trim());
+  const hasReactTrace = Boolean((reactTraceContent || '').trim());
   const [expanded, setExpanded] = useState(defaultExpanded && !hasFinalAnswer);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const hadFinalAnswerRef = useRef(hasFinalAnswer);
   const processDuration = formatProcessDuration(processStartedAt, processCompletedAt, nowMs);
   const memoryFactCount = memorySummaries.reduce((total, summary) => total + summary.facts.length, 0);
   const detailCount = [
+    hasReactTrace ? 1 : 0,
     thinkingContent ? 1 : 0,
     teamActivities.length,
     skillCalls.length,
@@ -2083,7 +2167,7 @@ function ProcessDetailsBlock({
       </button>
 
       {expanded && (
-        <div className="space-y-2 border-t border-[var(--color-border)] p-3">
+        <div className="max-h-[400px] space-y-2 overflow-y-auto border-t border-[var(--color-border)] p-3 pr-2">
           {modelCaches.length > 0 && (
             <ModelCacheBlock caches={modelCaches} />
           )}
@@ -2093,6 +2177,10 @@ function ProcessDetailsBlock({
               content={thinkingContent}
               defaultExpanded={defaultExpanded && !hasFinalAnswer}
             />
+          )}
+
+          {hasReactTrace && (
+            <ReactTraceBlock content={reactTraceContent || ''} />
           )}
 
           {teamActivities.length > 0 && (
@@ -2116,11 +2204,7 @@ function ProcessDetailsBlock({
           )}
 
           {toolCalls.length > 0 && (
-            <div className="space-y-1">
-              {toolCalls.map((toolCall) => (
-                <ToolCallBlock key={toolCall.id} toolCall={toolCall} />
-              ))}
-            </div>
+            <ToolCallsScrollBlock toolCalls={toolCalls} />
           )}
         </div>
       )}
@@ -2143,6 +2227,30 @@ function PlanOpenButton({ plan, onOpen }: { plan: PlanRunInfo; onOpen: (planId: 
         {completedSteps}/{plan.steps.length}
       </Tag>
     </button>
+  );
+}
+
+function ToolCallsScrollBlock({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
+  const visibleLimit = 6;
+  const overflowCount = Math.max(0, toolCalls.length - visibleLimit);
+
+  return (
+    <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
+      <div className="flex items-center justify-between gap-3 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
+          <Wrench size={14} color="var(--color-accent)" />
+          <span>工具调用</span>
+        </div>
+        <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
+          {toolCalls.length} 次{overflowCount > 0 ? ` · 滚动查看其余 ${overflowCount} 次` : ''}
+        </span>
+      </div>
+      <div className="max-h-[260px] space-y-1 overflow-y-auto px-3 pb-3 pr-2">
+        {toolCalls.map((toolCall) => (
+          <ToolCallBlock key={toolCall.id} toolCall={toolCall} />
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -2344,6 +2452,63 @@ function ModelCacheBlock({ caches }: { caches: ModelCacheInfo[] }) {
           <div className="text-xs text-[var(--color-text-tertiary)]">
             共 {caches.length} 次模型调用返回缓存统计。
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * ReactTraceBlock — ReAct 过程记录
+ */
+function ReactTraceBlock({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!content.trim()) return null;
+
+  return (
+    <div
+      style={{
+        borderRadius: 'var(--radius-lg)',
+        border: '1px solid var(--color-border)',
+        overflow: 'hidden',
+        fontSize: 'var(--text-sm)',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          width: '100%',
+          minWidth: 0,
+          padding: '6px 10px',
+          border: 'none',
+          backgroundColor: 'var(--color-bg-tertiary)',
+          color: 'var(--color-text-secondary)',
+          cursor: 'pointer',
+          fontSize: 'var(--text-xs)',
+        }}
+      >
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        过程记录
+      </button>
+      {expanded && (
+        <div
+          style={{
+            padding: '8px 10px',
+            backgroundColor: 'var(--color-bg-secondary)',
+            color: 'var(--color-text-secondary)',
+            maxHeight: '220px',
+            overflow: 'auto',
+            fontSize: 'var(--text-xs)',
+            lineHeight: '1.7',
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          {content}
         </div>
       )}
     </div>
@@ -2920,6 +3085,53 @@ function parseToolCallArgs(raw: string): Record<string, unknown> {
   }
 }
 
+function parseJsonObject(raw: string): Record<string, unknown> | null {
+  const value = raw.trim();
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isSubagentToolName(name: string): boolean {
+  return name.startsWith('子 Agent：') || name.startsWith('CallAgent_');
+}
+
+function formatSubagentInput(raw: string): string {
+  const parsed = parseJsonObject(raw);
+  if (!parsed) return raw;
+  const task = String(parsed.task || '').trim();
+  const context = String(parsed.context || '').trim();
+  const expectedOutput = String(parsed.expected_output || parsed.expectedOutput || '').trim();
+  return [
+    task ? `任务：${task}` : '',
+    context ? `上下文：${context}` : '',
+    expectedOutput ? `期望输出：${expectedOutput}` : '',
+  ].filter(Boolean).join('\n\n') || raw;
+}
+
+function formatSubagentResult(raw: string): string {
+  const parsed = parseJsonObject(raw);
+  if (!parsed) return raw;
+  const agentName = String(parsed.agentName || parsed.agent_name || '').trim();
+  const status = String(parsed.status || '').trim();
+  const durationMs = Number(parsed.durationMs ?? parsed.duration_ms ?? 0);
+  const output = String(parsed.output || '').trim();
+  const error = String(parsed.error || '').trim();
+  return [
+    agentName ? `子 Agent：${agentName}` : '',
+    status ? `状态：${status}` : '',
+    Number.isFinite(durationMs) && durationMs > 0 ? `耗时：${durationMs}ms` : '',
+    output ? `输出：\n${output}` : '',
+    error ? `错误：${error}` : '',
+  ].filter(Boolean).join('\n\n') || raw;
+}
+
 function GeneratedFilesBlock({ files }: { files: GeneratedFileInfo[] }) {
   if (files.length === 0) return null;
 
@@ -2961,6 +3173,9 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
   const [copied, setCopied] = useState<'args' | 'result' | null>(null);
   const isRunning = toolCall.status === 'calling' || toolCall.status === 'running';
   const isFailed = toolCall.status === 'failed';
+  const isSubagentCall = isSubagentToolName(toolCall.name);
+  const displayArgs = isSubagentCall ? formatSubagentInput(toolCall.args) : toolCall.args;
+  const displayResult = isSubagentCall ? formatSubagentResult(toolCall.result) : toolCall.result;
 
   const handleCopyToolText = useCallback(async (kind: 'args' | 'result', value: string) => {
     if (!value.trim()) return;
@@ -2998,6 +3213,8 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
           <Loader2 size={12} className="shrink-0 animate-spin" style={{ color: 'var(--color-accent)' }} />
         ) : isFailed ? (
           <XCircle size={12} className="shrink-0" style={{ color: 'var(--color-error)' }} />
+        ) : isSubagentCall ? (
+          <Bot size={12} className="shrink-0" style={{ color: 'var(--color-success)' }} />
         ) : (
           <Wrench size={12} className="shrink-0" style={{ color: 'var(--color-success)' }} />
         )}
@@ -3035,7 +3252,7 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
             backgroundColor: 'var(--color-bg-secondary)',
           }}
         >
-          {toolCall.args && (
+          {displayArgs && (
             <div style={{ marginBottom: '6px' }}>
               <div
                 style={{
@@ -3049,7 +3266,7 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
-                    onClick={() => void handleCopyToolText('args', toolCall.args)}
+                    onClick={() => void handleCopyToolText('args', displayArgs)}
                   >
                     {copied === 'args' ? <Check size={12} /> : <Copy size={12} />}
                     {copied === 'args' ? '已复制' : '复制'}
@@ -3064,13 +3281,15 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-all',
                   margin: 0,
+                  maxHeight: '120px',
+                  overflow: 'auto',
                 }}
               >
-                {toolCall.args}
+                {displayArgs}
               </pre>
             </div>
           )}
-          {toolCall.result && (
+          {displayResult && (
             <div>
               <div
                 style={{
@@ -3084,7 +3303,7 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
-                    onClick={() => void handleCopyToolText('result', toolCall.result)}
+                    onClick={() => void handleCopyToolText('result', displayResult)}
                   >
                     {copied === 'result' ? <Check size={12} /> : <Copy size={12} />}
                     {copied === 'result' ? '已复制' : '复制'}
@@ -3103,7 +3322,7 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
                   overflow: 'auto',
                 }}
               >
-                {toolCall.result}
+                {displayResult}
               </pre>
             </div>
           )}

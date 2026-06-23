@@ -1,6 +1,6 @@
 # Subagent 功能实现 TODO
 
-> 更新时间：2026-06-16
+> 更新时间：2026-06-23
 >
 > 参考设计文档：`docs/subagent-feature-plan.md`
 >
@@ -18,12 +18,9 @@
 
 缺失：
 
-- Agent 编辑器没有选择子 Agent 的 UI。
-- 后端没有校验 `callableAgents`。
-- Runtime 没有把子 Agent 包装成工具注入主 Agent。
-- Chat / Trace 没有 `SUBAGENT_CALL_*` 事件。
-- 没有循环检测、最大深度控制、调用次数限制。
 - 子 Agent 调用结束后没有触发自己的记忆候选提取。
+- Chat 还没有专用 Subagent 卡片，第一阶段先复用工具调用卡片。
+- 子 Agent 内部流式过程和 HITL resume 还未做专用前端反馈。
 
 ## 阶段 1：最小可用闭环
 
@@ -38,13 +35,13 @@
 
 TODO：
 
-- [ ] 在“协作”区域增加“可调用子 Agent”多选。
-- [ ] 候选列表排除当前正在编辑的 Agent。
-- [ ] 候选列表展示 Agent 名称、描述、模型、标签。
-- [ ] 已选择子 Agent 以列表项/卡片展示，并提供移除按钮。
-- [ ] 保持现有 UI 规则：外层容器无边框，子 Agent item 有边框。
-- [ ] 保存时把 `callableAgents` 原样提交到后端。
-- [ ] 刷新页面后能正确回显已选择子 Agent。
+- [x] 在“协作”区域增加“可调用子 Agent”多选。
+- [x] 候选列表排除当前正在编辑的 Agent。
+- [x] 候选列表展示 Agent 名称、描述、模型、标签。
+- [x] 已选择子 Agent 以列表项/卡片展示，并提供移除按钮。
+- [x] 保持现有 UI 规则：外层容器无边框，子 Agent item 有边框。
+- [x] 保存时把 `callableAgents` 原样提交到后端。
+- [x] 刷新页面后能正确回显已选择子 Agent。
 
 验收：
 
@@ -60,14 +57,14 @@ TODO：
 
 TODO：
 
-- [ ] 创建 Agent 时过滤重复的 `callableAgents`。
-- [ ] 更新 Agent 时过滤重复的 `callableAgents`。
-- [ ] 禁止 Agent 选择自己作为子 Agent。
-- [ ] 对不存在的 Agent ID 给出明确策略：
+- [x] 创建 Agent 时过滤重复的 `callableAgents`。
+- [x] 更新 Agent 时过滤重复的 `callableAgents`。
+- [x] 禁止 Agent 选择自己作为子 Agent。
+- [x] 对不存在的 Agent ID 给出明确策略：
   - 推荐第一阶段：过滤不存在的 ID，并返回正常结果。
   - 如果选择报错，前端要能显示错误。
-- [ ] 导入 Agent 时保留 `callableAgents`，但对缺失引用给 warning。
-- [ ] 删除 Agent 时，从其他 Agent 的 `callableAgents` 中移除该 Agent ID。
+- [x] 导入 Agent 时保留 `callableAgents`，但对缺失引用给 warning。
+- [x] 删除 Agent 时，从其他 Agent 的 `callableAgents` 中移除该 Agent ID。
 
 验收：
 
@@ -84,8 +81,8 @@ TODO：
 
 TODO：
 
-- [ ] 新增 `SubagentRuntimeSpec` dataclass。
-- [ ] 字段至少包含：
+- [x] 新增 `SubagentRuntimeSpec` dataclass。
+- [x] 字段至少包含：
   - `id`
   - `name`
   - `description`
@@ -96,8 +93,8 @@ TODO：
   - `knowledge_tools`
   - `skills`
   - `memory_enabled`
-- [ ] 在 `chat.py` 中从当前 Agent 的 `callableAgents` 构建 spec 列表。
-- [ ] 子 Agent 不存在时跳过，并写入 Trace warning。
+- [x] 在 `chat.py` 中从当前 Agent 的 `callableAgents` 构建 spec 列表。
+- [x] 子 Agent 不存在时跳过，并写入 Trace warning。
 
 验收：
 
@@ -111,10 +108,10 @@ TODO：
 
 TODO：
 
-- [ ] 新增 `CallAgentTool`。
-- [ ] 工具名格式：`CallAgent_<子Agent名称>`。
-- [ ] 工具 description 说明该子 Agent 的职责。
-- [ ] 工具输入 schema：
+- [x] 新增 `CallAgentTool`。
+- [x] 工具名格式：`CallAgent_<子Agent名称>`。
+- [x] 工具 description 说明该子 Agent 的职责。
+- [x] 工具输入 schema：
 
 ```json
 {
@@ -124,15 +121,15 @@ TODO：
 }
 ```
 
-- [ ] 工具输出包含：
+- [x] 工具输出包含：
   - `agentId`
   - `agentName`
   - `status`
   - `output`
   - `durationMs`
   - `error`
-- [ ] 输出文本做长度裁剪，第一阶段建议最大 8000 字符。
-- [ ] 子 Agent 调用失败时返回结构化错误，不让整个主 Agent 直接崩掉。
+- [x] 输出文本做长度裁剪，第一阶段建议最大 8000 字符。
+- [x] 子 Agent 调用失败时返回结构化错误，不让整个主 Agent 直接崩掉。
 
 验收：
 
@@ -149,7 +146,7 @@ TODO：
 
 TODO：
 
-- [ ] 设计并传递 subagent runtime context：
+- [x] 设计并传递 subagent runtime context：
 
 ```json
 {
@@ -160,10 +157,10 @@ TODO：
 }
 ```
 
-- [ ] `currentDepth >= maxDepth` 时，不再注入 subagent tools。
-- [ ] 目标子 Agent 已在 `callStack` 中时，拒绝调用。
-- [ ] 每轮最大 subagent 调用次数限制，第一阶段可设为 8。
-- [ ] 被拒绝时返回 `blocked` 状态，并写入 Trace。
+- [x] `currentDepth >= maxDepth` 时，不再注入 subagent tools。
+- [x] 目标子 Agent 已在 `callStack` 中时，拒绝调用。
+- [x] 每轮最大 subagent 调用次数限制，第一阶段可设为 8。
+- [x] 被拒绝时返回 `blocked` 状态，并写入 Trace。
 
 验收：
 
@@ -180,11 +177,11 @@ TODO：
 
 TODO：
 
-- [ ] 子 Agent 默认使用自己的 guardrails。
-- [ ] 如果主 Agent 是 `read_only`，子 Agent 强制降级为 `read_only`。
-- [ ] 如果主 Agent `networkEnabled = false`，子 Agent 也强制禁用网络。
-- [ ] 如果主 Agent 使用 Docker workspace，子 Agent 默认使用同样 workspace scope。
-- [ ] 子 Agent 只使用自己配置的 MCP / Skills / HTTP 工具，不继承主 Agent 的工具选择。
+- [x] 子 Agent 默认使用自己的 guardrails。
+- [x] 如果主 Agent 是 `read_only`，子 Agent 强制降级为 `read_only`。
+- [x] 如果主 Agent `networkEnabled = false`，子 Agent 也强制禁用网络。
+- [x] 如果主 Agent 使用 Docker workspace，子 Agent 默认使用同样 workspace scope。
+- [x] 子 Agent 只使用自己配置的 MCP / Skills / HTTP 工具，不继承主 Agent 的工具选择。
 
 验收：
 
@@ -201,10 +198,10 @@ TODO：
 
 TODO：
 
-- [ ] 扩展 `get_or_create_agent(...)` 参数，支持 `subagents` 和 `subagentContext`。
-- [ ] 主 Agent 创建时注入 subagent tools。
-- [ ] 子 Agent 创建时根据深度决定是否继续注入自己的 subagent tools。
-- [ ] Agent cache key 要包含 subagent 配置摘要，避免缓存复用旧工具列表。
+- [x] 扩展 `get_or_create_agent(...)` 参数，支持 `subagents` 和 `subagentContext`。
+- [x] 主 Agent 创建时注入 subagent tools。
+- [x] 子 Agent 创建时根据深度决定是否继续注入自己的 subagent tools。
+- [x] Agent cache key 要包含 subagent 配置摘要，避免缓存复用旧工具列表。
 
 验收：
 
@@ -221,11 +218,11 @@ TODO：
 
 TODO：
 
-- [ ] 新增 `SUBAGENT_CALL_START`。
-- [ ] 新增 `SUBAGENT_CALL_END`。
-- [ ] 新增 `SUBAGENT_CALL_FAILED`。
-- [ ] blocked 场景可以记录 `SUBAGENT_CALL_FAILED`，status 为 `blocked`。
-- [ ] payload 至少包含：
+- [x] 新增 `SUBAGENT_CALL_START`。
+- [x] 新增 `SUBAGENT_CALL_END`。
+- [x] 新增 `SUBAGENT_CALL_FAILED`。
+- [x] blocked 场景可以记录 `SUBAGENT_CALL_FAILED`，status 为 `blocked`。
+- [x] payload 至少包含：
 
 ```json
 {
@@ -242,7 +239,7 @@ TODO：
 }
 ```
 
-- [ ] Trace 页面展开 `SUBAGENT_CALL_*` payload。
+- [x] Trace 页面展开 `SUBAGENT_CALL_*` payload。
 
 验收：
 
@@ -260,11 +257,11 @@ TODO：
 
 TODO：
 
-- [ ] `CallAgent_xxx` 工具展示名改为 `子 Agent：xxx`。
-- [ ] 工具输入展示 task/context。
-- [ ] 工具结果展示子 Agent 输出摘要。
-- [ ] 历史消息中能回显子 Agent 调用。
-- [ ] 不要和 Team worker 展示混在一起。
+- [x] `CallAgent_xxx` 工具展示名改为 `子 Agent：xxx`。
+- [x] 工具输入展示 task/context。
+- [x] 工具结果展示子 Agent 输出摘要。
+- [x] 历史消息中能回显子 Agent 调用。
+- [x] 不要和 Team worker 展示混在一起。
 
 验收：
 
@@ -390,7 +387,7 @@ TODO：
 - [ ] A -> B -> A 循环调用被拒绝。
 - [ ] 超过 `maxDepth` 被拒绝。
 - [ ] read-only 主 Agent 强制子 Agent read-only。
-- [ ] `SUBAGENT_CALL_*` 写入 `run_events`。
+- [x] `SUBAGENT_CALL_*` 写入 `run_events`。
 - [ ] 子 Agent 调用失败不会导致主 Agent SSE 直接断流。
 
 ### 前端测试
@@ -399,9 +396,9 @@ TODO：
 - [ ] 当前 Agent 不出现在候选列表。
 - [ ] 已选子 Agent 可移除。
 - [ ] 保存后刷新仍回显。
-- [ ] Chat 展示子 Agent 调用。
-- [ ] 历史会话回显子 Agent 调用。
-- [ ] Trace 展开 subagent payload。
+- [x] Chat 展示子 Agent 调用。
+- [x] 历史会话回显子 Agent 调用。
+- [x] Trace 展开 subagent payload。
 
 ### 必跑命令
 
@@ -428,4 +425,3 @@ PATH=/Users/aishuang/.cache/codex-runtimes/codex-primary-runtime/dependencies/no
 - 不要把子 Agent 的完整记忆写入 Trace payload。
 - 子 Agent 输出必须裁剪，避免塞爆主 Agent 上下文。
 - 每完成一个阶段再提交，不要每个小改都提交。
-

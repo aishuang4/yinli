@@ -465,6 +465,7 @@ export function AgentTeamPage() {
           <AgentEditor
             agent={null}
             models={models}
+            availableAgents={agents}
             onSave={handleCreate}
             onCancel={() => setCreating(false)}
           />
@@ -474,6 +475,7 @@ export function AgentTeamPage() {
               <AgentEditor
                 agent={selectedAgent}
                 models={models}
+                availableAgents={agents}
                 onSave={handleUpdate}
                 onCancel={() => setSelectedId(null)}
               />

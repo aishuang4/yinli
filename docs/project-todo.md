@@ -1,6 +1,6 @@
 # Agent Workstation TODO
 
-> Last updated: 2026-06-22
+> Last updated: 2026-06-23
 >
 > This file is the working TODO for the project. Use it as the source of truth
 > for upcoming implementation order. When a feature is completed, update the
@@ -11,6 +11,14 @@
 - [x] Stabilize runtime observability and testability.
 - [x] Keep Agent, Team, Tool, Skill, Memory, and Settings data portable.
 - [x] Improve high-frequency Chat and Team workflows before adding marketplace-style features.
+- [x] 拆分前置意图路由，降低主 Agent 的规划、Skill、Subagent、Team 选择压力。
+  - 实现于 2026-06-23：新增 `docs/pre-agent-intent-router-design.md`、`intent_router.py`、`runtime_builder.py`、`orchestration.py`、`leader_stream.py`、`completion.py`，将 Plan/Skill/Subagent/Team/ToolScope/Clarification 前置路由和 runtime 组装从 `send.py` 拆出。
+  - 当前 `IntentRoute` 会写入 `INTENT_ROUTE` trace；Team worker 选择为规则优先、小模型兜底；主 Agent 工具注入受 `RuntimeToolScope` 裁剪。
+- [ ] 收尾 Chat runtime 拆分的剩余边界。
+  - [x] 拆出 Plan approval 流程，减少 `send.py` 中审批等待、拒绝计划和错误写入逻辑。实现于 2026-06-23：已下沉到 `completion.handle_plan_approval_if_required()`。
+  - [x] 抽统一早期错误处理 helper，覆盖图片模型不支持、API Key 缺失、Agent 创建失败等重复路径。实现于 2026-06-23：已下沉到 `completion.emit_failed_startup_run()`。
+  - [ ] 让 `resume.py` 复用 `leader_stream.py`、`completion.py`、`orchestration.py`，避免 resume 和 send 再次分叉。
+  - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 mode、skills、subagents、team workers 和 toolScope。
 
 ## P0. Finish Current Trace And Sandbox Work
 

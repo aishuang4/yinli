@@ -27,6 +27,7 @@ from src.server.routes.chat.models import (
     ChatTeamMemberPayload,
     ChatToolRun,
 )
+from src.server.routes.chat.plans import mark_plan_step_for_agent, serialize_plan_for_event
 from src.server.routes.chat.prompts import (
     _build_agent_memory_prompt,
     _build_agent_plan_prompt,
@@ -68,6 +69,7 @@ async def _run_team_workers(
     model_name: str,
     leader_system_prompt: str,
     skill_runs: list[ChatSkillRun],
+    runtime_plan: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """Run worker Agents concurrently and merge their SSE events."""
     workers = [
@@ -333,6 +335,16 @@ async def _run_team_workers(
                     "detail": _trim_text(worker_text, 160) or "Worker 已完成本轮 ReAct 循环。",
                 })
                 _replace_team_activity(team_activities, completed)
+                updated_plan = mark_plan_step_for_agent(
+                    runtime_plan,
+                    assigned_agent_id=member.agent_id,
+                    status="completed",
+                    result=_trim_text(worker_text, 2000) or f"{worker_name} 已完成本轮任务。",
+                )
+                if updated_plan and updated_plan != runtime_plan:
+                    await queue.put(_sse_event("PLAN_UPDATE", {
+                        "plan": serialize_plan_for_event(updated_plan),
+                    }))
                 _record_run_event(
                     session_id=session_id,
                     event_type="WORKER_COMPLETED",
@@ -400,6 +412,16 @@ async def _run_team_workers(
                             }),
                         )
                 activity = _find_team_activity(team_activities, member.agent_id)
+                updated_plan = mark_plan_step_for_agent(
+                    runtime_plan,
+                    assigned_agent_id=member.agent_id,
+                    status="blocked",
+                    result=f"Worker 执行失败: {exc}",
+                )
+                if updated_plan and updated_plan != runtime_plan:
+                    await queue.put(_sse_event("PLAN_UPDATE", {
+                        "plan": serialize_plan_for_event(updated_plan),
+                    }))
                 _record_tool_execution_artifacts(
                     session_id=session_id,
                     event_type=event_type,
@@ -454,6 +476,16 @@ async def _run_team_workers(
                             "wait_reason": "依赖配置无效：找不到指定的上游 Worker。",
                         }),
                     )
+                updated_plan = mark_plan_step_for_agent(
+                    runtime_plan,
+                    assigned_agent_id=member.agent_id,
+                    status="blocked",
+                    result="依赖配置无效：找不到指定的上游 Worker。",
+                )
+                if updated_plan and updated_plan != runtime_plan:
+                    queue.put_nowait(_sse_event("PLAN_UPDATE", {
+                        "plan": serialize_plan_for_event(updated_plan),
+                    }))
                 failed_workers.add(member.agent_id)
                 continue
             failed_dependencies = [dep for dep in dependencies if dep in failed_workers]
@@ -469,6 +501,16 @@ async def _run_team_workers(
                             "wait_reason": f"上游 Worker 失败：{', '.join(_member_names(failed_dependencies, workers))}",
                         }),
                     )
+                updated_plan = mark_plan_step_for_agent(
+                    runtime_plan,
+                    assigned_agent_id=member.agent_id,
+                    status="blocked",
+                    result=f"上游 Worker 失败，跳过执行：{', '.join(_member_names(failed_dependencies, workers))}",
+                )
+                if updated_plan and updated_plan != runtime_plan:
+                    queue.put_nowait(_sse_event("PLAN_UPDATE", {
+                        "plan": serialize_plan_for_event(updated_plan),
+                    }))
                 failed_workers.add(member.agent_id)
                 continue
             blocking = [dep for dep in dependencies if dep not in completed_outputs and dep not in failed_workers]
@@ -530,6 +572,16 @@ async def _run_team_workers(
                             "wait_reason": "依赖配置形成循环或上游 Worker 失败。",
                         }),
                     )
+                updated_plan = mark_plan_step_for_agent(
+                    runtime_plan,
+                    assigned_agent_id=member.agent_id,
+                    status="blocked",
+                    result="依赖配置形成循环或上游 Worker 失败，无法继续调度。",
+                )
+                if updated_plan and updated_plan != runtime_plan:
+                    yield _sse_event("PLAN_UPDATE", {
+                        "plan": serialize_plan_for_event(updated_plan),
+                    })
                 failed_workers.add(member.agent_id)
             pending.clear()
             yield _sse_event("TEAM_ACTIVITY", {

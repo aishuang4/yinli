@@ -101,6 +101,10 @@ function normalizeToolCallRecord(record: Record<string, unknown>): ToolCallInfo 
 
 function normalizeToolDisplayName(name: string): string {
   const value = String(name || 'tool');
+  if (value.startsWith('CallAgent_')) {
+    const agentName = value.slice('CallAgent_'.length).replace(/_/g, ' ').trim() || '子 Agent';
+    return `子 Agent：${agentName}`;
+  }
   const parts = value.split('_');
   if (parts.length === 2 && parts[0] && parts[0] === parts[1]) {
     return parts[0];
@@ -252,6 +256,31 @@ function normalizePlanStep(record: Record<string, unknown>): PlanStepInfo {
   };
 }
 
+function parsePlanStepsFromMarkdown(markdown: string, planId: string): PlanStepInfo[] {
+  const lines = markdown.split(/\r?\n/);
+  const steps: PlanStepInfo[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^- \[([ xX])\]\s+(\d+)\.\s+(.+?)\s+-\s+([a-z_]+)/);
+    if (!match) continue;
+    const nextLine = lines[index + 1]?.trim() || '';
+    steps.push({
+      id: `${planId}-markdown-step-${match[2]}`,
+      planId,
+      stepIndex: Math.max(0, Number(match[2]) - 1),
+      title: match[3].trim(),
+      description: nextLine.startsWith('- ') ? nextLine.slice(2).trim() : '',
+      status: match[1].toLowerCase() === 'x' ? 'completed' : normalizePlanStep({ status: match[4] }).status,
+      assignedAgentId: null,
+      evidence: '',
+      result: '',
+      startedAt: null,
+      completedAt: null,
+      updatedAt: '',
+    });
+  }
+  return steps;
+}
+
 export function renderPlanMarkdown(plan: Omit<PlanRunInfo, 'markdown'> & { markdown?: string }): string {
   const lines = [
     `# Plan: ${plan.title || '任务计划'}`,
@@ -291,10 +320,15 @@ export function renderPlanMarkdown(plan: Omit<PlanRunInfo, 'markdown'> & { markd
   return `${lines.join('\n').trim()}\n`;
 }
 
-function normalizePlanRun(record: Record<string, unknown>): PlanRunInfo {
+export function normalizePlanRun(record: Record<string, unknown>): PlanRunInfo {
   const status = String(record.status || 'running');
+  const rawMarkdown = String(record.markdown || '');
+  const id = String(record.id || createId());
+  const normalizedSteps = Array.isArray(record.steps)
+    ? record.steps.map((step) => normalizePlanStep(step as Record<string, unknown>))
+    : [];
   const plan: PlanRunInfo = {
-    id: String(record.id || createId()),
+    id,
     runId: String(record.runId || record.run_id || ''),
     sessionId: String(record.sessionId || record.session_id || ''),
     agentId: String(record.agentId || record.agent_id || ''),
@@ -312,18 +346,16 @@ function normalizePlanRun(record: Record<string, unknown>): PlanRunInfo {
         ? status
         : 'running'
     ),
-    markdown: String(record.markdown || ''),
+    markdown: rawMarkdown,
     currentStepId: record.currentStepId || record.current_step_id ? String(record.currentStepId || record.current_step_id) : null,
-    steps: Array.isArray(record.steps)
-      ? record.steps.map((step) => normalizePlanStep(step as Record<string, unknown>))
-      : [],
+    steps: normalizedSteps.length > 0 ? normalizedSteps : parsePlanStepsFromMarkdown(rawMarkdown, id),
     createdAt: String(record.createdAt || record.created_at || ''),
     updatedAt: String(record.updatedAt || record.updated_at || ''),
     completedAt: record.completedAt || record.completed_at ? String(record.completedAt || record.completed_at) : null,
   };
   return {
     ...plan,
-    markdown: renderPlanMarkdown(plan),
+    markdown: plan.steps.length > 0 ? renderPlanMarkdown(plan) : rawMarkdown,
   };
 }
 

@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { ChevronDown, ChevronRight, Pencil, Plus, Save, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, Pencil, Plus, Save, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import {
   Alert,
   Button,
@@ -45,6 +45,8 @@ interface AgentEditorProps {
     primary: ModelOption[];
     fallback: ModelOption[];
   } | null;
+  /** 当前已有 Agent，用于选择可调用子 Agent */
+  availableAgents?: Agent[];
   /** 保存回调 */
   onSave: (data: AgentCreatePayload) => Promise<void>;
   /** 取消回调 */
@@ -89,13 +91,14 @@ const DEFAULT_HTTP_PARAMETER_SCHEMA = {
 /**
  * AgentEditor 组件
  */
-export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProps) {
+export function AgentEditor({ agent, models, availableAgents = [], onSave, onCancel }: AgentEditorProps) {
   const [form, setForm] = useState<AgentCreatePayload>(createEmptyAgentForm());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mcpSelectorOpen, setMcpSelectorOpen] = useState(false);
   const [skillsSelectorOpen, setSkillsSelectorOpen] = useState(false);
   const [knowledgeSelectorOpen, setKnowledgeSelectorOpen] = useState(false);
+  const [subagentSelectorOpen, setSubagentSelectorOpen] = useState(false);
   const [knowledgeEditorOpen, setKnowledgeEditorOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [editingKnowledgeTool, setEditingKnowledgeTool] = useState<HttpTool | null>(null);
@@ -165,6 +168,24 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
   const selectedSkills = useMemo(() => (
     enabledSkills.filter((skill) => selectedSkillSet.has(skill.id))
   ), [enabledSkills, selectedSkillSet]);
+
+  const callableAgentOptions = useMemo(() => (
+    availableAgents.filter((item) => item.id !== agent?.id)
+  ), [agent?.id, availableAgents]);
+
+  const selectedCallableAgents = useMemo(() => {
+    const selected = new Set(form.callableAgents);
+    return callableAgentOptions.filter((item) => selected.has(item.id));
+  }, [callableAgentOptions, form.callableAgents]);
+
+  const toggleCallableAgent = useCallback((agentId: string, checked: boolean) => {
+    setForm((current) => ({
+      ...current,
+      callableAgents: checked
+        ? Array.from(new Set([...current.callableAgents, agentId]))
+        : current.callableAgents.filter((id) => id !== agentId),
+    }));
+  }, []);
 
   // 编辑模式：填充表单
   useEffect(() => {
@@ -1118,19 +1139,73 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
           <h3 className="mb-3 text-sm font-medium text-[var(--color-text-primary)]">
             协作
           </h3>
-          <div>
-            <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
-              最大调用深度
-            </label>
-            <InputNumber
-              min={1}
-              max={5}
-              value={form.maxDepth}
-              onChange={(value) => setForm({ ...form, maxDepth: Number(value ?? 1) })}
-              style={{ width: 96 }}
-            />
-            <div className="text-xs text-[var(--color-text-tertiary)] mt-1">
-              控制 Agent 调用子 Agent 的最大嵌套层级
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
+                可调用子 Agent
+              </label>
+              <div className="rounded-md bg-[var(--color-bg-secondary)] p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0 text-sm text-[var(--color-text-secondary)]">
+                    {selectedCallableAgents.length > 0
+                      ? `已选择 ${selectedCallableAgents.length} 个子 Agent`
+                      : '未选择子 Agent'}
+                  </div>
+                  <SquareAddButton
+                    ariaLabel="选择子 Agent"
+                    disabled={callableAgentOptions.length === 0}
+                    onClick={() => setSubagentSelectorOpen(true)}
+                  />
+                </div>
+                {selectedCallableAgents.length > 0 ? (
+                  <div className="mt-3 grid gap-2">
+                    {selectedCallableAgents.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex items-start justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3"
+                      >
+                        <div className="flex min-w-0 gap-2">
+                          <Bot size={16} className="mt-0.5 shrink-0 text-[var(--color-text-tertiary)]" />
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
+                              {item.name}
+                            </div>
+                            <div className="mt-1 line-clamp-2 text-xs text-[var(--color-text-tertiary)]">
+                              {item.description || '暂无描述'}
+                            </div>
+                          </div>
+                        </div>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<X size={14} />}
+                          aria-label={`移除 ${item.name}`}
+                          onClick={() => toggleCallableAgent(item.id, false)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
+                    主 Agent 可在 ReAct 过程中把任务委派给这些子 Agent。
+                  </div>
+                )}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
+                最大调用深度
+              </label>
+              <InputNumber
+                min={1}
+                max={5}
+                value={form.maxDepth}
+                onChange={(value) => setForm({ ...form, maxDepth: Number(value ?? 1) })}
+                style={{ width: 96 }}
+              />
+              <div className="text-xs text-[var(--color-text-tertiary)] mt-1">
+                控制 Agent 调用子 Agent 的最大嵌套层级
+              </div>
             </div>
           </div>
         </section>
@@ -1139,6 +1214,67 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
           </div>
         </div>
       </div>
+
+      <Modal
+        title="选择子 Agent"
+        open={subagentSelectorOpen}
+        onCancel={() => setSubagentSelectorOpen(false)}
+        onOk={() => setSubagentSelectorOpen(false)}
+        okText="完成"
+        cancelText="关闭"
+        width={720}
+      >
+        {callableAgentOptions.length === 0 ? (
+          <Alert
+            type="info"
+            message="暂无可选子 Agent"
+            description="创建至少两个 Agent 后，才能为当前 Agent 选择可调用的子 Agent。"
+          />
+        ) : (
+          <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
+            {callableAgentOptions.map((item) => {
+              const checked = form.callableAgents.includes(item.id);
+              return (
+                <label
+                  key={item.id}
+                  className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition ${
+                    checked
+                      ? 'border-[var(--color-accent)] bg-[var(--color-accent-bg)]'
+                      : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] hover:bg-[var(--color-bg-hover)]'
+                  }`}
+                >
+                  <Checkbox
+                    checked={checked}
+                    onChange={(event) => toggleCallableAgent(item.id, event.target.checked)}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-[var(--color-text-primary)]">
+                        {item.name}
+                      </span>
+                      <Tag size="small" color="transparent">
+                        {item.modelConfig.primary}
+                      </Tag>
+                    </div>
+                    <div className="mt-1 line-clamp-2 text-xs text-[var(--color-text-tertiary)]">
+                      {item.description || '暂无描述'}
+                    </div>
+                    {item.tags.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {item.tags.slice(0, 4).map((tag) => (
+                          <Tag key={tag} size="small" color="transparent">
+                            {tag}
+                          </Tag>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </Modal>
 
       <Modal
         title="选择 MCP 工具"
