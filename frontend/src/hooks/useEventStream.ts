@@ -41,6 +41,8 @@ export interface StreamState {
   thinkingContent: string;
   /** 工具调用列表 */
   toolCalls: ToolCallInfo[];
+  /** 子 Agent 调用列表 */
+  subagentCalls: SubagentCallInfo[];
   /** Skill 注入/应用列表 */
   skillCalls: SkillCallInfo[];
   /** Team 协作活动 */
@@ -77,6 +79,9 @@ export interface ToolCallInfo {
   status: 'calling' | 'running' | 'completed' | 'failed';
 }
 
+/** 子 Agent 调用信息 */
+export interface SubagentCallInfo extends ToolCallInfo {}
+
 function normalizeToolStatus(status: unknown): ToolCallInfo['status'] {
   const value = String(status || 'calling');
   return (
@@ -110,6 +115,10 @@ function normalizeToolDisplayName(name: string): string {
     return parts[0];
   }
   return value;
+}
+
+function isSubagentToolName(name: string): boolean {
+  return name.startsWith('CallAgent_') || name.startsWith('子 Agent：');
 }
 
 function mergeToolCalls(current: ToolCallInfo[], incoming: ToolCallInfo[]): ToolCallInfo[] {
@@ -486,6 +495,7 @@ const INITIAL_STATE: StreamState = {
   textContent: '',
   thinkingContent: '',
   toolCalls: [],
+  subagentCalls: [],
   skillCalls: [],
   teamActivities: [],
   memorySummaries: [],
@@ -825,6 +835,20 @@ export function useEventStream(): UseEventStreamReturn {
 
         // === 工具调用开始 ===
         case 'TOOL_CALL_START':
+          if (isSubagentToolName(String(event.data.tool_call_name || 'tool'))) {
+            const call = {
+              id: String(event.data.tool_call_id || createId()),
+              name: normalizeToolDisplayName(String(event.data.tool_call_name || 'tool')),
+              args: '',
+              result: '',
+              status: 'calling' as const,
+            };
+            return {
+              ...prev,
+              toolCalls: mergeToolCalls(prev.toolCalls, [call]),
+              subagentCalls: mergeToolCalls(prev.subagentCalls, [call]),
+            };
+          }
           return {
             ...prev,
             toolCalls: mergeToolCalls(prev.toolCalls, [{
@@ -1132,6 +1156,11 @@ export function useEventStream(): UseEventStreamReturn {
                 ? { ...tc, args: tc.args + (event.data.delta as string || '') }
                 : tc
             ),
+            subagentCalls: prev.subagentCalls.map((tc) =>
+              tc.id === event.data.tool_call_id
+                ? { ...tc, args: tc.args + (event.data.delta as string || '') }
+                : tc
+            ),
           };
 
         // === 工具调用结束 ===
@@ -1139,6 +1168,11 @@ export function useEventStream(): UseEventStreamReturn {
           return {
             ...prev,
             toolCalls: prev.toolCalls.map((tc) =>
+              tc.id === event.data.tool_call_id
+                ? { ...tc, status: 'running' }
+                : tc
+            ),
+            subagentCalls: prev.subagentCalls.map((tc) =>
               tc.id === event.data.tool_call_id
                 ? { ...tc, status: 'running' }
                 : tc
@@ -1154,6 +1188,11 @@ export function useEventStream(): UseEventStreamReturn {
                 ? { ...tc, status: 'running' }
                 : tc
             ),
+            subagentCalls: prev.subagentCalls.map((tc) =>
+              tc.id === event.data.tool_call_id
+                ? { ...tc, status: 'running' }
+                : tc
+            ),
           };
 
         // === 工具结果文本增量 ===
@@ -1165,6 +1204,11 @@ export function useEventStream(): UseEventStreamReturn {
                 ? { ...tc, result: tc.result + (event.data.delta as string || '') }
                 : tc
             ),
+            subagentCalls: prev.subagentCalls.map((tc) =>
+              tc.id === event.data.tool_call_id
+                ? { ...tc, result: tc.result + (event.data.delta as string || '') }
+                : tc
+            ),
           };
 
         // === 工具结果结束 ===
@@ -1172,6 +1216,11 @@ export function useEventStream(): UseEventStreamReturn {
           return {
             ...prev,
             toolCalls: prev.toolCalls.map((tc) =>
+              tc.id === event.data.tool_call_id
+                ? { ...tc, status: 'completed' }
+                : tc
+            ),
+            subagentCalls: prev.subagentCalls.map((tc) =>
               tc.id === event.data.tool_call_id
                 ? { ...tc, status: 'completed' }
                 : tc

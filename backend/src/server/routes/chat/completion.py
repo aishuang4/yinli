@@ -4,7 +4,7 @@ from typing import Any, AsyncGenerator
 
 from src.server.routes.memory import append_agent_memory_event, maybe_summarize_agent_run
 from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
-from src.server.routes.chat.models import ChatModelCacheRun, ChatPlanRun, ChatSkillRun, ChatTeamActivity, ChatToolRun
+from src.server.routes.chat.models import ChatModelCacheRun, ChatPlanRun, ChatSkillRun, ChatSubagentCall, ChatTeamActivity, ChatToolRun
 from src.server.routes.chat.plans import (
     complete_runtime_plan,
     create_plan_approval,
@@ -183,6 +183,23 @@ async def emit_failed_startup_run(
     })
 
 
+def _extract_subagent_calls(tool_calls: list[ChatToolRun]) -> list[ChatSubagentCall]:
+    """从工具调用中抽取独立 Subagent 调用记录。"""
+
+    calls: list[ChatSubagentCall] = []
+    for tool_call in tool_calls:
+        if not tool_call.name.startswith(("CallAgent_", "子 Agent：")):
+            continue
+        calls.append(ChatSubagentCall(
+            id=tool_call.id,
+            name=tool_call.name,
+            args=tool_call.args,
+            result=tool_call.result,
+            status=tool_call.status,
+        ))
+    return calls
+
+
 async def finalize_successful_leader_run(
     *,
     session_id: str,
@@ -217,6 +234,7 @@ async def finalize_successful_leader_run(
         leader_agent_id=agent_id,
         leader_output=assistant_text,
     )
+    assistant_subagent_calls = _extract_subagent_calls(assistant_tool_calls)
     if runtime_plan:
         runtime_plan = complete_runtime_plan(runtime_plan, result=assistant_text or "任务已完成。")
         yield _sse_event("PLAN_UPDATE", {
@@ -234,6 +252,7 @@ async def finalize_successful_leader_run(
             thinking=assistant_thinking,
             skill_calls=completed_skill_runs,
             tool_calls=assistant_tool_calls,
+            subagent_calls=assistant_subagent_calls,
             team_activities=completed_team_activities,
             model_caches=assistant_model_caches,
             plan_runs=[
@@ -253,6 +272,7 @@ async def finalize_successful_leader_run(
             payload={
                 "model": model_name,
                 "toolCallCount": len(assistant_tool_calls),
+                "subagentCallCount": len(assistant_subagent_calls),
                 "skillIds": [item.id for item in completed_skill_runs],
             },
         )

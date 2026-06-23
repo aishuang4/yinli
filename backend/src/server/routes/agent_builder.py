@@ -19,7 +19,7 @@ from agentscope.permission import PermissionMode
 
 from src.agents.factory import get_or_create_agent
 from src.config.runtime_settings import MODEL_PROVIDERS, get_effective_model_settings
-from src.server.routes.agents import AgentCreate, AgentResponse, Guardrails, ModelConfig, PlanConfig, create_agent
+from src.server.routes.agents import AgentCreate, AgentResponse, AgentUpdate, Guardrails, ModelConfig, PlanConfig, create_agent, update_agent
 from src.server.routes.mcp import _mcp_servers
 from src.server.routes.skills import _skills
 from src.server.routes.teams import TeamCreate, TeamRecord, create_team
@@ -61,6 +61,7 @@ class BuilderAgentDraft(BaseModel):
     plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig")
     mcp_tools: list[str] = Field(default_factory=list, alias="mcpTools")
     skills: list[str] = Field(default_factory=list)
+    callable_agent_refs: list[str] = Field(default_factory=list, alias="callableAgentRefs")
     tags: list[str] = Field(default_factory=list)
     recommended_tools: list[BuilderRecommendedItem] = Field(default_factory=list, alias="recommendedTools")
     recommended_skills: list[BuilderRecommendedItem] = Field(default_factory=list, alias="recommendedSkills")
@@ -145,11 +146,32 @@ async def apply_agent_team(data: BuilderApplyRequest) -> BuilderApplyResponse:
             planConfig=draft.plan_config,
             mcpTools=draft.mcp_tools,
             skills=draft.skills,
+            callableAgents=[],
             tags=draft.tags,
             guardrails=Guardrails(human_approval=True),
         ))
         temp_to_agent_id[draft.temp_id] = agent.id
         created_agents.append(agent)
+
+    if created_agents:
+        refreshed_agents: list[AgentResponse] = []
+        created_by_id = {agent.id: agent for agent in created_agents}
+        for draft in data.plan.agents:
+            agent_id = temp_to_agent_id.get(draft.temp_id)
+            if not agent_id:
+                continue
+            callable_ids = [
+                temp_to_agent_id[item]
+                for item in draft.callable_agent_refs
+                if item in temp_to_agent_id and temp_to_agent_id[item] != agent_id
+            ]
+            if not callable_ids:
+                refreshed_agents.append(created_by_id[agent_id])
+                continue
+            updated = await update_agent(agent_id, AgentUpdate(callableAgents=callable_ids))
+            refreshed_agents.append(updated)
+            created_by_id[agent_id] = updated
+        created_agents = refreshed_agents
 
     created_team: TeamRecord | None = None
     if data.plan.mode == "team" and data.plan.team and created_agents:
@@ -188,12 +210,14 @@ async def _generate_plan_with_model(data: BuilderPlanRequest) -> dict:
         "Design reviewable Agent drafts from the user requirement.",
         "Use existing MCP tool ids and Skill ids only when they match the role.",
         "If a needed capability is missing, put its natural-language name in missingTools or missingSkills.",
+        "For Subagent design, create a primary Agent plus specialist child Agents. Use callableAgents with target Agent names.",
         "JSON schema:",
         "{",
         '  "team": {"name": "...", "description": "..."},',
         '  "agents": [',
         '    {"name": "...", "role": "leader|worker", "description": "...", "systemPrompt": "...",',
         '     "recommendedTools": ["tool name"], "recommendedSkills": ["skill name"],',
+        '     "callableAgents": ["other generated agent name"],',
         '     "missingTools": ["..."], "missingSkills": ["..."], "tags": ["..."]}',
         "  ],",
         '  "warnings": ["..."]',
@@ -205,7 +229,7 @@ async def _generate_plan_with_model(data: BuilderPlanRequest) -> dict:
         f"Available MCP tools:\n{available_tools or '(none)'}",
         f"Available Skills:\n{available_skills or '(none)'}",
         "For team mode, generate 1 leader and 2-4 workers.",
-        "For agents mode, generate exactly 1 standalone Agent. Do not create a leader/worker team.",
+        "For agents mode, generate one primary standalone Agent and optional specialist Subagents when the requirement asks for experts or delegation. Do not create a Team.",
     ])
     runtime_settings = get_effective_model_settings()
     model_name = data.preferred_model or runtime_settings.default_model
@@ -234,6 +258,7 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
     warnings = [str(item) for item in raw.get("warnings", []) if str(item).strip()]
 
     drafts: list[BuilderAgentDraft] = []
+    pending_callable_names: dict[str, list[str]] = {}
     for index, item in enumerate(agents_raw):
         if not isinstance(item, dict):
             continue
@@ -253,7 +278,7 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
         name = str(item.get("name") or ("Team Leader" if role == "leader" else f"Worker {index + 1}")).strip()
         description = str(item.get("description") or "").strip()
         runtime_settings = get_effective_model_settings()
-        drafts.append(BuilderAgentDraft(
+        draft = BuilderAgentDraft(
             name=name[:50],
             role=role,
             description=description[:200],
@@ -279,17 +304,26 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
             recommendedSkills=resolved_skills,
             missingTools=_unique_nonempty(missing_tools),
             missingSkills=_unique_nonempty(missing_skills),
-        ))
+        )
+        drafts.append(draft)
+        pending_callable_names[draft.temp_id] = _as_string_list(
+            item.get("callableAgents")
+            or item.get("callable_agents")
+            or item.get("subagents")
+            or item.get("childAgents")
+        )
 
     if not drafts:
         return _normalize_plan(data, _heuristic_plan(data))
 
     if data.mode == "agents":
-        drafts = [drafts[0].model_copy(update={"role": "worker"})]
+        drafts = [draft.model_copy(update={"role": "worker"}) for draft in drafts]
         team_raw = {}
 
     if data.mode == "team" and not any(item.role == "leader" for item in drafts):
         drafts[0].role = "leader"
+
+    drafts = _attach_callable_agent_refs(data, drafts, pending_callable_names)
 
     for draft in drafts:
         if draft.missing_tools:
@@ -313,11 +347,116 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
     )
 
 
+def _attach_callable_agent_refs(
+    data: BuilderPlanRequest,
+    drafts: list[BuilderAgentDraft],
+    pending_callable_names: dict[str, list[str]],
+) -> list[BuilderAgentDraft]:
+    """把模型返回的子 Agent 名称解析为草案 tempId，并补齐规则兜底关系。"""
+
+    if not drafts:
+        return drafts
+    next_drafts: list[BuilderAgentDraft] = []
+    for draft in drafts:
+        refs: list[str] = []
+        for name in pending_callable_names.get(draft.temp_id, []):
+            target = _resolve_callable_target(name, drafts)
+            if target and target != draft.temp_id:
+                refs.append(target)
+        next_drafts.append(draft.model_copy(update={"callable_agent_refs": _unique_nonempty(refs)}))
+
+    if data.mode != "agents" or any(draft.callable_agent_refs for draft in next_drafts):
+        return next_drafts
+    if len(next_drafts) <= 1:
+        return next_drafts
+    if not _looks_like_subagent_requirement(data.requirement):
+        return next_drafts
+
+    primary = next_drafts[0]
+    child_refs = [draft.temp_id for draft in next_drafts[1:]]
+    return [
+        primary.model_copy(update={"callable_agent_refs": child_refs}),
+        *next_drafts[1:],
+    ]
+
+
+def _normalize_name_key(value: str) -> str:
+    return re.sub(r"\s+", "", value.strip().lower())
+
+
+def _resolve_callable_target(name: str, drafts: list[BuilderAgentDraft]) -> str | None:
+    key = _normalize_name_key(name)
+    if not key:
+        return None
+    for draft in drafts:
+        if _normalize_name_key(draft.name) == key:
+            return draft.temp_id
+    for draft in drafts:
+        draft_key = _normalize_name_key(draft.name)
+        if key in draft_key or draft_key in key:
+            return draft.temp_id
+    return None
+
+
+def _looks_like_subagent_requirement(requirement: str) -> bool:
+    text = requirement.lower()
+    return any(marker in text for marker in [
+        "子agent",
+        "子 agent",
+        "subagent",
+        "调用",
+        "委派",
+        "专家",
+        "架构专家",
+        "数据分析专家",
+    ])
+
+
 def _heuristic_plan(data: BuilderPlanRequest) -> dict:
     """Fallback draft when model planning is unavailable."""
 
     requirement = data.requirement
     if data.mode == "agents":
+        if _looks_like_subagent_requirement(requirement):
+            return {
+                "agents": [
+                    {
+                        "name": _make_title(requirement, "主 Agent"),
+                        "role": "worker",
+                        "description": "理解用户需求，按需委派专家子 Agent，并整合最终结果。",
+                        "systemPrompt": _default_agent_prompt("主 Agent", requirement),
+                        "recommendedTools": _guess_tool_names(requirement),
+                        "recommendedSkills": _guess_skill_names(requirement),
+                        "callableAgents": ["架构专家 Agent", "数据分析专家 Agent"],
+                        "missingTools": [],
+                        "missingSkills": [],
+                        "tags": ["primary", "subagent-orchestrator", "auto-built"],
+                    },
+                    {
+                        "name": "架构专家 Agent",
+                        "role": "worker",
+                        "description": "处理架构设计、技术选型、模块边界和工程风险。",
+                        "systemPrompt": _default_agent_prompt("架构专家 Agent", "Focus on architecture, technical design, module boundaries, and engineering risks."),
+                        "recommendedTools": _guess_tool_names(requirement),
+                        "recommendedSkills": _guess_skill_names("架构 方案 设计"),
+                        "missingTools": [],
+                        "missingSkills": [],
+                        "tags": ["architecture", "subagent", "auto-built"],
+                    },
+                    {
+                        "name": "数据分析专家 Agent",
+                        "role": "worker",
+                        "description": "处理指标、数据结构、分析口径和数据验证建议。",
+                        "systemPrompt": _default_agent_prompt("数据分析专家 Agent", "Focus on metrics, data structures, analysis dimensions, and validation suggestions."),
+                        "recommendedTools": _guess_tool_names(requirement),
+                        "recommendedSkills": _guess_skill_names("数据 分析 验证"),
+                        "missingTools": [],
+                        "missingSkills": [],
+                        "tags": ["data-analysis", "subagent", "auto-built"],
+                    },
+                ],
+                "warnings": ["模型规划不可用，已生成主 Agent + 专家子 Agent 草案。"],
+            }
         return {
             "agents": [
                 {

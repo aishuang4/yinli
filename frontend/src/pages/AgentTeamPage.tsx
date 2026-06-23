@@ -767,7 +767,12 @@ function AgentBuilderWizard({
 
             <div className="grid gap-3">
               {plan.agents.map((agent) => (
-                <BuilderAgentDraftCard key={agent.tempId} agent={agent} mode={plan.mode} />
+                <BuilderAgentDraftCard
+                  key={agent.tempId}
+                  agent={agent}
+                  agents={plan.agents}
+                  mode={plan.mode}
+                />
               ))}
             </div>
 
@@ -789,13 +794,18 @@ function AgentBuilderWizard({
 
 function BuilderAgentDraftCard({
   agent,
+  agents,
   mode,
 }: {
   agent: BuilderPlan['agents'][number];
+  agents: BuilderPlan['agents'];
   mode: BuilderMode;
 }) {
   const matchedTools = (agent.recommendedTools || []).filter((item) => item.matched);
   const matchedSkills = (agent.recommendedSkills || []).filter((item) => item.matched);
+  const callableAgents = (agent.callableAgentRefs || [])
+    .map((tempId) => agents.find((item) => item.tempId === tempId))
+    .filter((item): item is BuilderPlan['agents'][number] => Boolean(item));
   const modelConfig = agent.modelConfig || DEFAULT_MODEL_CONFIG;
 
   return (
@@ -835,6 +845,19 @@ function BuilderAgentDraftCard({
           missing={agent.missingSkills || []}
         />
       </div>
+
+      {callableAgents.length > 0 && (
+        <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
+          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">可调用子 Agent</div>
+          <div className="flex flex-wrap gap-1">
+            {callableAgents.map((item) => (
+              <Tag key={item.tempId} size="small" color="blue">
+                {item.name}
+              </Tag>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

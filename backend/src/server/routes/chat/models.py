@@ -156,6 +156,18 @@ class ChatTeamActivity(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ChatSubagentCall(BaseModel):
+    """子 Agent 调用记录"""
+
+    id: str
+    name: str
+    args: str = ""
+    result: str = ""
+    status: str = "completed"
+
+    model_config = {"populate_by_name": True}
+
+
 class StoredChatMessage(BaseModel):
     """持久化对话消息"""
 
@@ -169,6 +181,7 @@ class StoredChatMessage(BaseModel):
     thinking: str = ""
     images: list[ChatImagePayload] = Field(default_factory=list)
     tool_calls: list[ChatToolRun] = Field(default_factory=list, alias="toolCalls")
+    subagent_calls: list[ChatSubagentCall] = Field(default_factory=list, alias="subagentCalls")
     skill_calls: list[ChatSkillRun] = Field(default_factory=list, alias="skillCalls")
     team_activities: list[ChatTeamActivity] = Field(default_factory=list, alias="teamActivities")
     model_caches: list[ChatModelCacheRun] = Field(default_factory=list, alias="modelCaches")

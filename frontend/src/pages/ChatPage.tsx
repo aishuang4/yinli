@@ -16,7 +16,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, XCircle, BookOpenCheck, Users, CheckCircle2, Clock3, Copy, Check, GitBranch, ListChecks, Download, FileText } from 'lucide-react';
 import { Button, Empty, Select, Spinner, Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../components/MarkdownContent';
-import { completeOpenPlans, normalizePlanRun, useEventStream, type ClarificationQuestionInfo, type ClarificationRequestInfo, type HitlRequestInfo, type MemorySummaryInfo, type ModelCacheInfo, type PlanRunInfo, type SkillCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
+import { completeOpenPlans, normalizePlanRun, useEventStream, type ClarificationQuestionInfo, type ClarificationRequestInfo, type HitlRequestInfo, type MemorySummaryInfo, type ModelCacheInfo, type PlanRunInfo, type SkillCallInfo, type SubagentCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
 import { createId } from '../utils/id';
@@ -37,6 +37,8 @@ interface LocalMessage {
   processCompletedAt?: string;
   /** 工具调用列表（仅 assistant 消息） */
   toolCalls?: ToolCallInfo[];
+  /** 子 Agent 调用列表（仅 assistant 消息） */
+  subagentCalls?: SubagentCallInfo[];
   /** Skill 应用列表（仅 assistant 消息） */
   skillCalls?: SkillCallInfo[];
   /** Team 协作活动（仅 assistant 消息） */
@@ -165,6 +167,8 @@ interface StoredChatMessage {
   images: ChatImagePayload[];
   toolCalls?: ToolCallInfo[];
   tool_calls?: ToolCallInfo[];
+  subagentCalls?: SubagentCallInfo[];
+  subagent_calls?: SubagentCallInfo[];
   skillCalls?: SkillCallInfo[];
   skill_calls?: SkillCallInfo[];
   teamActivities?: TeamActivityInfo[];
@@ -297,6 +301,7 @@ export function ChatPage() {
   const [chatError, setChatError] = useState<string | null>(null);
   const [selectedTeamActivityId, setSelectedTeamActivityId] = useState<string | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
+  const [selectedSubagentCallId, setSelectedSubagentCallId] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -349,6 +354,7 @@ export function ChatPage() {
     Boolean(state.textContent) ||
     Boolean(state.thinkingContent) ||
     state.toolCalls.length > 0 ||
+    state.subagentCalls.length > 0 ||
     state.skillCalls.length > 0 ||
     state.teamActivities.length > 0 ||
     state.memorySummaries.length > 0 ||
@@ -378,14 +384,33 @@ export function ChatPage() {
     visiblePlanRuns.find((plan) => plan.id === selectedPlanId) || null
   ), [selectedPlanId, visiblePlanRuns]);
 
+  const visibleSubagentCalls = useMemo(() => (
+    [
+      ...messages.flatMap((message) => message.subagentCalls || []),
+      ...state.subagentCalls,
+    ].filter((toolCall) => isSubagentToolName(toolCall.name))
+  ), [messages, state.subagentCalls]);
+
+  const selectedSubagentCall = useMemo(() => (
+    visibleSubagentCalls.find((toolCall) => toolCall.id === selectedSubagentCallId) || null
+  ), [selectedSubagentCallId, visibleSubagentCalls]);
+
   const openPlanSidebar = useCallback((planId: string) => {
     setSelectedTeamActivityId(null);
+    setSelectedSubagentCallId(null);
     setSelectedPlanId(planId);
   }, []);
 
   const openTeamActivitySidebar = useCallback((activityId: string) => {
     setSelectedPlanId(null);
+    setSelectedSubagentCallId(null);
     setSelectedTeamActivityId(activityId);
+  }, []);
+
+  const openSubagentSidebar = useCallback((toolCallId: string) => {
+    setSelectedTeamActivityId(null);
+    setSelectedPlanId(null);
+    setSelectedSubagentCallId(toolCallId);
   }, []);
 
   const buildTeamMembersForRun = useCallback((workerAgentIds: string[] | null) => {
@@ -423,6 +448,7 @@ export function ChatPage() {
       thinking: item.thinking || undefined,
       images: item.images,
       toolCalls: normalizeStoredToolCalls(item.toolCalls || item.tool_calls || []),
+      subagentCalls: normalizeStoredToolCalls(item.subagentCalls || item.subagent_calls || item.toolCalls || item.tool_calls || []).filter((toolCall) => isSubagentToolName(toolCall.name)),
       skillCalls: item.skillCalls || item.skill_calls || [],
       teamActivities: normalizeStoredTeamActivities(item.teamActivities || item.team_activities || []),
       modelCaches: item.modelCaches || item.model_caches || [],
@@ -461,7 +487,7 @@ export function ChatPage() {
   useEffect(() => {
     if (!shouldAutoScrollRef.current) return;
     scrollToBottom(state.isStreaming ? 'auto' : 'smooth');
-  }, [messages, scrollToBottom, state.isStreaming, state.textContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities, state.memorySummaries, state.modelCaches, state.planRuns]);
+  }, [messages, scrollToBottom, state.isStreaming, state.textContent, state.thinkingContent, state.toolCalls, state.subagentCalls, state.skillCalls, state.teamActivities, state.memorySummaries, state.modelCaches, state.planRuns]);
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
@@ -470,6 +496,8 @@ export function ChatPage() {
     setImageAttachments([]);
     setChatError(null);
     setSelectedTeamActivityId(null);
+    setSelectedPlanId(null);
+    setSelectedSubagentCallId(null);
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
@@ -488,6 +516,8 @@ export function ChatPage() {
     setImageAttachments([]);
     setChatError(null);
     setSelectedTeamActivityId(null);
+    setSelectedPlanId(null);
+    setSelectedSubagentCallId(null);
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
@@ -506,6 +536,8 @@ export function ChatPage() {
         setImageAttachments([]);
         setChatError(null);
         setSelectedTeamActivityId(null);
+        setSelectedPlanId(null);
+        setSelectedSubagentCallId(null);
         reset();
       }
       notifySuccess('历史对话已删除');
@@ -742,6 +774,7 @@ export function ChatPage() {
       (state.textContent || state.error) &&
       (messages.length === 0 || messages[messages.length - 1].role === 'user')
     ) {
+      const regularToolCalls = state.toolCalls.filter((toolCall) => !isSubagentToolName(toolCall.name));
       const assistantMessage: LocalMessage = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
@@ -750,7 +783,8 @@ export function ChatPage() {
         processStartedAt: state.runStartedAt,
         processCompletedAt: state.runCompletedAt || new Date().toISOString(),
         skillCalls: state.skillCalls.length > 0 ? state.skillCalls : undefined,
-        toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
+        toolCalls: regularToolCalls.length > 0 ? regularToolCalls : undefined,
+        subagentCalls: state.subagentCalls.length > 0 ? state.subagentCalls : undefined,
         teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,
         memorySummaries: state.memorySummaries.length > 0 ? state.memorySummaries : undefined,
         modelCaches: state.modelCaches.length > 0 ? state.modelCaches : undefined,
@@ -764,7 +798,7 @@ export function ChatPage() {
       reset();
       loadSessions();
     }
-  }, [loadSessions, messages, reset, state.error, state.hitlRequests.length, state.isStreaming, state.memorySummaries, state.modelCaches, state.modelName, state.planRuns, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
+  }, [loadSessions, messages, reset, state.error, state.hitlRequests.length, state.isStreaming, state.memorySummaries, state.modelCaches, state.modelName, state.planRuns, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.subagentCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -861,7 +895,7 @@ export function ChatPage() {
       <section
         className="chat-main-panel grid min-h-0 overflow-hidden rounded-xl bg-[var(--color-bg-primary)]"
         style={{
-          gridTemplateColumns: selectedTeamActivity || selectedPlan
+          gridTemplateColumns: selectedTeamActivity || selectedPlan || selectedSubagentCall
             ? 'minmax(0, 1fr) 360px'
             : 'minmax(0, 1fr) 0px',
           transition: 'grid-template-columns 360ms var(--ease-out)',
@@ -933,6 +967,7 @@ export function ChatPage() {
                         message={msg}
                         selectedTeamActivityId={selectedTeamActivityId}
                         onSelectTeamActivity={openTeamActivitySidebar}
+                        onOpenSubagent={openSubagentSidebar}
                         onOpenPlan={openPlanSidebar}
                         onSubmitClarification={handleSubmitClarification}
                       />
@@ -951,8 +986,10 @@ export function ChatPage() {
                         onResolveHitl={resumeInteraction}
                         selectedTeamActivityId={selectedTeamActivityId}
                         onSelectTeamActivity={openTeamActivitySidebar}
+                        onOpenSubagent={openSubagentSidebar}
                         onOpenPlan={openPlanSidebar}
                         toolCalls={state.toolCalls}
+                        subagentCalls={state.subagentCalls}
                         modelName={state.modelName}
                         runStartedAt={state.runStartedAt}
                         runCompletedAt={state.runCompletedAt}
@@ -1140,12 +1177,12 @@ export function ChatPage() {
         <div
           className="h-full min-h-0 min-w-0 overflow-hidden"
           style={{
-            opacity: selectedTeamActivity || selectedPlan ? 1 : 0,
-            transform: selectedTeamActivity || selectedPlan ? 'translateX(0)' : 'translateX(16px)',
+            opacity: selectedTeamActivity || selectedPlan || selectedSubagentCall ? 1 : 0,
+            transform: selectedTeamActivity || selectedPlan || selectedSubagentCall ? 'translateX(0)' : 'translateX(16px)',
             transition: 'opacity 280ms var(--ease-out), transform 360ms var(--ease-out)',
-            pointerEvents: selectedTeamActivity || selectedPlan ? 'auto' : 'none',
+            pointerEvents: selectedTeamActivity || selectedPlan || selectedSubagentCall ? 'auto' : 'none',
           }}
-          aria-hidden={!selectedTeamActivity && !selectedPlan}
+          aria-hidden={!selectedTeamActivity && !selectedPlan && !selectedSubagentCall}
         >
           {selectedTeamActivity ? (
             <TeamActivitySidebar
@@ -1156,6 +1193,11 @@ export function ChatPage() {
             <PlanRuntimeSidebar
               plan={selectedPlan}
               onClose={() => setSelectedPlanId(null)}
+            />
+          ) : selectedSubagentCall ? (
+            <SubagentCallSidebar
+              toolCall={selectedSubagentCall}
+              onClose={() => setSelectedSubagentCallId(null)}
             />
           ) : null}
         </div>
@@ -1222,12 +1264,14 @@ function MessageBubble({
   message,
   selectedTeamActivityId,
   onSelectTeamActivity,
+  onOpenSubagent,
   onOpenPlan,
   onSubmitClarification,
 }: {
   message: LocalMessage;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
+  onOpenSubagent: (toolCallId: string) => void;
   onOpenPlan: (planId: string) => void;
   onSubmitClarification: (content: string) => Promise<void>;
 }) {
@@ -1246,6 +1290,7 @@ function MessageBubble({
     (message.skillCalls && message.skillCalls.length > 0) ||
     (message.memorySummaries && message.memorySummaries.length > 0) ||
     (message.modelCaches && message.modelCaches.length > 0) ||
+    (message.subagentCalls && message.subagentCalls.length > 0) ||
     (message.toolCalls && message.toolCalls.length > 0)
   );
 
@@ -1314,8 +1359,10 @@ function MessageBubble({
             memorySummaries={message.memorySummaries || []}
             modelCaches={message.modelCaches || []}
             toolCalls={message.toolCalls || []}
+            subagentCalls={message.subagentCalls || []}
             selectedTeamActivityId={selectedTeamActivityId}
             onSelectTeamActivity={onSelectTeamActivity}
+            onOpenSubagent={onOpenSubagent}
           />
         )}
 
@@ -1399,8 +1446,10 @@ function StreamingBubble({
   onResolveHitl,
   selectedTeamActivityId,
   onSelectTeamActivity,
+  onOpenSubagent,
   onOpenPlan,
   toolCalls,
+  subagentCalls,
   modelName,
   runStartedAt,
   runCompletedAt,
@@ -1416,8 +1465,10 @@ function StreamingBubble({
   onResolveHitl: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
+  onOpenSubagent: (toolCallId: string) => void;
   onOpenPlan: (planId: string) => void;
   toolCalls: ToolCallInfo[];
+  subagentCalls: SubagentCallInfo[];
   modelName: string;
   runStartedAt: string;
   runCompletedAt: string;
@@ -1431,6 +1482,7 @@ function StreamingBubble({
     skillCalls.length > 0 ||
     memorySummaries.length > 0 ||
     modelCaches.length > 0 ||
+    subagentCalls.length > 0 ||
     toolCalls.length > 0
   );
 
@@ -1464,8 +1516,10 @@ function StreamingBubble({
             memorySummaries={memorySummaries}
             modelCaches={modelCaches}
             toolCalls={toolCalls}
+            subagentCalls={subagentCalls}
             selectedTeamActivityId={selectedTeamActivityId}
             onSelectTeamActivity={onSelectTeamActivity}
+            onOpenSubagent={onOpenSubagent}
           />
         )}
 
@@ -1519,7 +1573,7 @@ function StreamingBubble({
         )}
 
         {/* 无内容时显示加载指示器 */}
-        {!contentParts.finalAnswer && generatedFiles.length === 0 && toolCalls.length === 0 && skillCalls.length === 0 && teamActivities.length === 0 && memorySummaries.length === 0 && modelCaches.length === 0 && hitlRequests.length === 0 && !thinkingContent && !contentParts.reactTrace && (
+        {!contentParts.finalAnswer && generatedFiles.length === 0 && toolCalls.length === 0 && subagentCalls.length === 0 && skillCalls.length === 0 && teamActivities.length === 0 && memorySummaries.length === 0 && modelCaches.length === 0 && hitlRequests.length === 0 && !thinkingContent && !contentParts.reactTrace && (
           <div
             style={{
               display: 'flex',
@@ -2086,8 +2140,10 @@ function ProcessDetailsBlock({
   memorySummaries,
   modelCaches,
   toolCalls,
+  subagentCalls,
   selectedTeamActivityId,
   onSelectTeamActivity,
+  onOpenSubagent,
 }: {
   defaultExpanded: boolean;
   hasFinalAnswer: boolean;
@@ -2100,11 +2156,14 @@ function ProcessDetailsBlock({
   memorySummaries: MemorySummaryInfo[];
   modelCaches: ModelCacheInfo[];
   toolCalls: ToolCallInfo[];
+  subagentCalls: SubagentCallInfo[];
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
+  onOpenSubagent: (toolCallId: string) => void;
 }) {
   const hasThinking = Boolean(thinkingContent.trim());
   const hasReactTrace = Boolean((reactTraceContent || '').trim());
+  const regularToolCalls = useMemo(() => toolCalls.filter((toolCall) => !isSubagentToolName(toolCall.name)), [toolCalls]);
   const [expanded, setExpanded] = useState(defaultExpanded && !hasFinalAnswer);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const hadFinalAnswerRef = useRef(hasFinalAnswer);
@@ -2115,9 +2174,10 @@ function ProcessDetailsBlock({
     thinkingContent ? 1 : 0,
     teamActivities.length,
     skillCalls.length,
+    subagentCalls.length,
     memoryFactCount,
     modelCaches.length,
-    toolCalls.length,
+    regularToolCalls.length,
   ].reduce((total, count) => total + count, 0);
 
   useEffect(() => {
@@ -2199,12 +2259,19 @@ function ProcessDetailsBlock({
             </div>
           )}
 
+          {subagentCalls.length > 0 && (
+            <SubagentCallsBlock
+              calls={subagentCalls}
+              onOpenSubagent={onOpenSubagent}
+            />
+          )}
+
           {memorySummaries.length > 0 && (
             <MemorySummaryBlock summaries={memorySummaries} />
           )}
 
-          {toolCalls.length > 0 && (
-            <ToolCallsScrollBlock toolCalls={toolCalls} />
+          {regularToolCalls.length > 0 && (
+            <ToolCallsScrollBlock toolCalls={regularToolCalls} />
           )}
         </div>
       )}
@@ -2251,6 +2318,83 @@ function ToolCallsScrollBlock({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function SubagentCallsBlock({
+  calls,
+  onOpenSubagent,
+}: {
+  calls: ToolCallInfo[];
+  onOpenSubagent: (toolCallId: string) => void;
+}) {
+  const overflowCount = Math.max(0, calls.length - 4);
+
+  return (
+    <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
+      <div className="flex items-center justify-between gap-3 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
+          <Bot size={14} color="var(--color-accent)" />
+          <span>子 Agent 调用</span>
+        </div>
+        <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
+          {calls.length} 次{overflowCount > 0 ? ` · 滚动查看其余 ${overflowCount} 次` : ''}
+        </span>
+      </div>
+      <div className="max-h-[240px] space-y-2 overflow-y-auto px-3 pb-3 pr-2">
+        {calls.map((toolCall) => (
+          <SubagentCallCard
+            key={toolCall.id}
+            toolCall={toolCall}
+            onOpen={() => onOpenSubagent(toolCall.id)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SubagentCallCard({ toolCall, onOpen }: { toolCall: ToolCallInfo; onOpen: () => void }) {
+  const summary = getSubagentCallSummary(toolCall);
+  const isRunning = toolCall.status === 'calling' || toolCall.status === 'running';
+  const isFailed = toolCall.status === 'failed' || summary.status === 'failed';
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className={[
+        'flex w-full items-start gap-3 rounded-lg border px-3 py-2 text-left transition hover:bg-[var(--color-bg-hover)]',
+        isFailed
+          ? 'border-[var(--color-error)]'
+          : isRunning
+            ? 'border-[var(--color-accent)]'
+            : 'border-[var(--color-border)]',
+      ].join(' ')}
+    >
+      <div className={[
+        'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
+        isFailed
+          ? 'bg-[var(--color-error-bg)] text-[var(--color-error)]'
+          : 'bg-[var(--color-bg-primary)] text-[var(--color-accent)]',
+      ].join(' ')}>
+        {isRunning ? <Loader2 size={14} className="animate-spin" /> : <Bot size={14} />}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-medium text-[var(--color-text-primary)]">
+            {summary.agentName}
+          </span>
+          <Tag size="small" color={isFailed ? 'red' : isRunning ? 'blue' : 'green'}>
+            {isFailed ? '失败' : isRunning ? '运行中' : '完成'}
+          </Tag>
+        </div>
+        <div className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
+          {summary.task || summary.outputPreview || '查看子 Agent 调用详情'}
+        </div>
+      </div>
+      <ChevronRight size={14} className="mt-1 shrink-0 text-[var(--color-text-tertiary)]" />
+    </button>
   );
 }
 
@@ -2329,6 +2473,105 @@ function PlanRuntimeSidebar({ plan, onClose }: { plan: PlanRunInfo; onClose: () 
           <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">plan.md</div>
           <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-bg-secondary)] p-3 text-xs leading-5 text-[var(--color-text-secondary)]">
             {plan.markdown}
+          </pre>
+        </section>
+      </div>
+    </aside>
+  );
+}
+
+function SubagentCallSidebar({ toolCall, onClose }: { toolCall: ToolCallInfo; onClose: () => void }) {
+  const summary = getSubagentCallSummary(toolCall);
+  const isRunning = toolCall.status === 'calling' || toolCall.status === 'running';
+  const isFailed = toolCall.status === 'failed' || summary.status === 'failed';
+  const statusText = isFailed ? '失败' : isRunning ? '运行中' : '已完成';
+
+  return (
+    <aside className="flex h-full min-h-0 flex-col bg-[var(--color-bg-secondary)] shadow-inner">
+      <div className="flex items-start gap-3 px-4 py-4">
+        <div className={[
+          'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
+          isFailed
+            ? 'bg-[var(--color-error-bg)] text-[var(--color-error)]'
+            : 'bg-[var(--color-bg-primary)] text-[var(--color-accent)]',
+        ].join(' ')}>
+          {isRunning ? <Loader2 size={16} className="animate-spin" /> : <Bot size={16} />}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-base font-medium text-[var(--color-text-primary)]">
+            {summary.agentName}
+          </div>
+          <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
+            子 Agent · {statusText}{summary.durationText ? ` · ${summary.durationText}` : ''}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="icon-button h-8 w-8 rounded-md text-[var(--color-text-secondary)] transition-all duration-300 ease-out hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+          onClick={onClose}
+          aria-label="关闭子 Agent 详情"
+          title="关闭子 Agent 详情"
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-auto px-4 pb-4">
+        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
+          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">委派任务</div>
+          <div className="whitespace-pre-wrap break-words text-sm leading-6 text-[var(--color-text-primary)]">
+            {summary.task || '未记录任务内容'}
+          </div>
+          {summary.context && (
+            <div className="mt-3 rounded-md bg-[var(--color-bg-secondary)] px-3 py-2">
+              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">上下文</div>
+              <div className="max-h-[160px] overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-[var(--color-text-secondary)]">
+                {summary.context}
+              </div>
+            </div>
+          )}
+          {summary.expectedOutput && (
+            <div className="mt-3 rounded-md bg-[var(--color-bg-secondary)] px-3 py-2">
+              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">期望输出</div>
+              <div className="whitespace-pre-wrap break-words text-xs leading-5 text-[var(--color-text-secondary)]">
+                {summary.expectedOutput}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="text-xs text-[var(--color-text-tertiary)]">执行结果</div>
+            <Tag size="small" color={isFailed ? 'red' : isRunning ? 'blue' : 'green'}>
+              {statusText}
+            </Tag>
+          </div>
+          {summary.error ? (
+            <div className="whitespace-pre-wrap break-words rounded-md bg-[var(--color-error-bg)] px-3 py-2 text-sm text-[var(--color-error)]">
+              {summary.error}
+            </div>
+          ) : summary.output ? (
+            <div className="max-h-[460px] overflow-auto rounded-md bg-[var(--color-bg-secondary)] px-3 py-2">
+              <MarkdownContent content={summary.output} />
+            </div>
+          ) : (
+            <div className="text-sm text-[var(--color-text-tertiary)]">
+              {isRunning ? '子 Agent 正在执行，结果会在完成后显示。' : '暂无输出。'}
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
+          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">原始调用</div>
+          <pre className="max-h-[240px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-bg-secondary)] p-3 text-xs leading-5 text-[var(--color-text-secondary)]">
+            {JSON.stringify({
+              id: toolCall.id,
+              name: toolCall.name,
+              status: toolCall.status,
+              args: parseJsonObject(toolCall.args) || toolCall.args,
+              result: parseJsonObject(toolCall.result) || toolCall.result,
+            }, null, 2)}
           </pre>
         </section>
       </div>
@@ -3100,6 +3343,52 @@ function parseJsonObject(raw: string): Record<string, unknown> | null {
 
 function isSubagentToolName(name: string): boolean {
   return name.startsWith('子 Agent：') || name.startsWith('CallAgent_');
+}
+
+interface SubagentCallSummary {
+  agentName: string;
+  status: string;
+  task: string;
+  context: string;
+  expectedOutput: string;
+  output: string;
+  outputPreview: string;
+  error: string;
+  durationText: string;
+}
+
+function getSubagentCallSummary(toolCall: ToolCallInfo): SubagentCallSummary {
+  const args = parseJsonObject(toolCall.args) || {};
+  const result = parseJsonObject(toolCall.result) || {};
+  const nameFromTool = normalizeToolDisplayName(toolCall.name).replace(/^子 Agent：/, '').trim();
+  const agentName = String(result.agentName || result.agent_name || nameFromTool || '子 Agent');
+  const durationMs = Number(result.durationMs ?? result.duration_ms ?? 0);
+  const output = String(result.output || '').trim();
+  const error = String(result.error || '').trim();
+  const task = String(args.task || '').trim();
+  const context = String(args.context || '').trim();
+  const expectedOutput = String(args.expected_output || args.expectedOutput || '').trim();
+
+  return {
+    agentName,
+    status: String(result.status || toolCall.status || '').trim(),
+    task,
+    context,
+    expectedOutput,
+    output,
+    outputPreview: output.slice(0, 160),
+    error,
+    durationText: Number.isFinite(durationMs) && durationMs > 0 ? formatDurationMs(durationMs) : '',
+  };
+}
+
+function formatDurationMs(durationMs: number): string {
+  if (durationMs < 1000) return `${durationMs}ms`;
+  const seconds = durationMs / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 0 : 1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds % 60);
+  return `${minutes}m ${rest}s`;
 }
 
 function formatSubagentInput(raw: string): string {

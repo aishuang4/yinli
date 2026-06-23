@@ -4,7 +4,7 @@
 >
 > 参考设计文档：`docs/subagent-feature-plan.md`
 >
-> 目标：补齐“主 Agent 可调用子 Agent”的能力。当前项目已经有 `callableAgents` 和 `maxDepth` 字段，但还没有运行时调用链路。本 TODO 用于同事接手实现。
+> 目标：补齐“主 Agent 可调用子 Agent”的能力。当前项目已经打通第一阶段运行链路，本 TODO 用于记录剩余增强项和后续协作事项。
 
 ## 当前状态
 
@@ -15,12 +15,27 @@
 - 前端 Agent 类型已有 `callableAgents` 和 `maxDepth`。
 - Agent 编辑器已有“最大调用深度”输入框。
 - Chat 已有工具调用展示、Trace、HITL、Memory、模型 fallback、权限配置等基础设施。
+- 主 Agent 通过 `CallAgent_<子Agent名称>` 工具显式委派子 Agent。
+- 子 Agent 使用自己的 system prompt、记忆、Skills、MCP / HTTP 工具和模型配置。
+- 子 Agent 前端已从普通工具调用中拆出，Chat 中有专用调用卡片，点击后可在右侧详情栏查看委派任务、上下文、期望输出、执行结果和原始调用。
 
 缺失：
 
-- 子 Agent 调用结束后没有触发自己的记忆候选提取。
-- Chat 还没有专用 Subagent 卡片，第一阶段先复用工具调用卡片。
-- 子 Agent 内部流式过程和 HITL resume 还未做专用前端反馈。
+- 子 Agent 记忆 hook 暂不实现：当前定位为隔离执行单元，只把结果返回主 Agent，不沉淀独立长期记忆。
+- 子 Agent 内部工具调用、Skills、token/cache 信息还没有独立详情模型，当前只展示子 Agent 最终输出和原始调用 JSON。
+- 子 Agent HITL resume 还未做专用前端反馈。
+
+## 上下文传递策略结论
+
+当前采用 **显式委派上下文**，暂不做“精简 / 摘要 / 最近 N 轮”的复杂策略配置。
+
+设计原则：
+
+- 不把主 Agent 的 system prompt 直接共享给子 Agent。
+- 子 Agent 的 system prompt 始终来自子 Agent 自己，并叠加子 Agent 自己的记忆和 Skills。
+- 主 Agent 通过 `CallAgent` 工具参数生成一次委派消息，包含当前场景、任务、必要上下文和期望输出。
+- 子 Agent 在隔离上下文中完成任务，只把最终结果返回给主 Agent。
+- 后续只有在真实使用中发现“子 Agent 缺少背景信息”时，再考虑增加摘要策略；近期不作为主线。
 
 ## 阶段 1：最小可用闭环
 
@@ -253,8 +268,6 @@ TODO：
 - `frontend/src/pages/ChatPage.tsx`
 - `frontend/src/hooks/useEventStream.ts`
 
-第一阶段策略：复用工具调用卡片。
-
 TODO：
 
 - [x] `CallAgent_xxx` 工具展示名改为 `子 Agent：xxx`。
@@ -262,6 +275,8 @@ TODO：
 - [x] 工具结果展示子 Agent 输出摘要。
 - [x] 历史消息中能回显子 Agent 调用。
 - [x] 不要和 Team worker 展示混在一起。
+- [x] Chat 中新增 Subagent 调用卡片。
+- [x] 点击 Subagent 卡片后，右侧详情栏展示子 Agent 输入、输出、状态、耗时和原始调用。
 
 验收：
 
@@ -269,34 +284,21 @@ TODO：
 - 子 Agent 输出不会把消息卡片撑爆。
 - 历史会话打开后仍能看到子 Agent 调用。
 
-### 10. 子 Agent 记忆 hook
+### 10. 子 Agent 记忆 hook（暂不实现）
 
-文件：
+决策：当前先砍掉该功能，不进入近期开发主线。
 
-- `backend/src/server/routes/memory.py`
-- `backend/src/server/routes/chat.py`
+原因：
 
-TODO：
+- 当前 Subagent 定位是隔离执行单元，不是长期自成长专家。
+- 子 Agent 每次执行只接收主 Agent 显式委派的场景、任务、上下文和期望输出，结束后把结果返回主 Agent 即可。
+- 如果对子 Agent 也做长期记忆，容易把一次性委派任务沉淀为长期事实，增加记忆污染和审核成本。
 
-- [ ] 子 Agent 调用结束后，如果子 Agent 开启记忆，则调用 `maybe_summarize_agent_run`。
-- [ ] metadata 增加：
+保留边界：
 
-```json
-{
-  "source": "subagent_call",
-  "parentAgentId": "...",
-  "parentAgentName": "...",
-  "rootSessionId": "..."
-}
-```
-
-- [ ] 记忆候选仍然进入子 Agent 自己的候选列表。
-- [ ] 不要把子 Agent 记忆直接写入主 Agent。
-
-验收：
-
-- 子 Agent 运行后能产生自己的记忆候选。
-- 主 Agent 记忆不会混入子 Agent 的私有事实。
+- 子 Agent 运行时仍然可以读取它自己已有的记忆。
+- 子 Agent 调用过程继续写 Trace / 工具调用记录。
+- 后续如果出现明确需求，例如“专家子 Agent 需要跨会话学习自己的工具使用经验”，再重新评估。
 
 ## 阶段 1 整体验收案例
 
@@ -329,14 +331,15 @@ TODO：
 
 TODO：
 
-- [ ] 新增 `subagentCalls` 前端类型。
-- [ ] Chat 中新增 Subagent 调用卡片。
-- [ ] 点击 Subagent 卡片后，右侧详情栏展示：
+- [x] 新增独立 `subagentCalls` 前端类型和后端持久化字段，不再长期复用 `toolCalls`。
+- [x] Chat 中新增 Subagent 调用卡片。
+- [x] 点击 Subagent 卡片后，右侧详情栏展示：
   - 子 Agent 输入
   - 子 Agent 输出
+  - 耗时
+- [ ] 右侧详情栏继续补充：
   - 子 Agent 工具调用
   - 子 Agent Skills
-  - 耗时
   - token/cache 信息
 - [ ] 子 Agent HITL 审批接入输入框 dock。
 - [ ] 子 Agent 失败时提供可读错误状态。
@@ -357,11 +360,19 @@ TODO：
 
 TODO：
 
-- [ ] Builder 识别“主 Agent + 专家子 Agent”需求。
-- [ ] 生成 Agent 草案时填充 `callableAgents` 建议。
-- [ ] 如果缺少合适子 Agent，提醒用户先创建。
-- [ ] Apply plan 时自动写入 `callableAgents`。
-- [ ] 前端 Builder 草案卡片展示子 Agent 关系。
+- [x] Builder 识别“主 Agent + 专家子 Agent”需求。
+- [x] 生成 Agent 草案时填充 `callableAgentRefs` 建议。
+- [x] 如果缺少合适工具或 Skill，继续通过 `missingTools` / `missingSkills` 提醒用户创建并手动注入。
+- [x] Apply plan 时自动把草案临时 ID 映射为真实 Agent ID，并回写主 Agent 的 `callableAgents`。
+- [x] 前端 Builder 草案卡片展示子 Agent 关系。
+
+实现说明：
+
+- `agents` 模式不创建 Team，但允许生成“主 Agent + 专家子 Agent”。
+- 模型规划可以通过 `callableAgents` 返回子 Agent 名称；后端会解析为草案 `tempId`。
+- 本地兜底在需求包含“子 Agent / 调用 / 委派 / 专家”等意图时，会生成主 Agent、架构专家 Agent、数据分析专家 Agent，并让主 Agent 可调用两个专家。
+- 新建完成后，子 Agent 仍是普通 Agent，可继续单独编辑工具、Skills、权限和提示词。
+- 已补后端回归测试 `backend/test/test_agent_builder_subagents.py`，覆盖草案生成和 Apply 后真实 Agent ID 回写。
 
 验收：
 
@@ -381,13 +392,15 @@ TODO：
 
 ### 后端 smoke / 单元测试
 
-- [ ] Agent 创建时过滤重复 `callableAgents`。
+- [x] Agent 创建时过滤重复 `callableAgents`。
 - [ ] Agent 更新时不能选择自己。
 - [ ] 删除子 Agent 后，父 Agent 引用被清理。
 - [ ] A -> B -> A 循环调用被拒绝。
 - [ ] 超过 `maxDepth` 被拒绝。
 - [ ] read-only 主 Agent 强制子 Agent read-only。
 - [x] `SUBAGENT_CALL_*` 写入 `run_events`。
+- [x] Agent Builder 在 agents 模式下生成主 Agent + 专家子 Agent 草案。
+- [x] Agent Builder Apply 时把草案 `callableAgentRefs` 映射为真实 `callableAgents`。
 - [ ] 子 Agent 调用失败不会导致主 Agent SSE 直接断流。
 
 ### 前端测试
@@ -420,8 +433,9 @@ PATH=/Users/aishuang/.cache/codex-runtimes/codex-primary-runtime/dependencies/no
 ## 开发注意事项
 
 - 不要把 Subagent 做成第二套 Team。
-- 第一阶段优先复用工具调用卡片，先打通闭环。
+- Subagent 第一阶段已经打通闭环，当前前端有专用卡片和右侧详情；底层已使用独立 `subagentCalls` 字段持久化，旧历史可从 `toolCalls` 兼容派生。
 - 不要让子 Agent 绕过主 Agent 的安全边界。
 - 不要把子 Agent 的完整记忆写入 Trace payload。
 - 子 Agent 输出必须裁剪，避免塞爆主 Agent 上下文。
+- 主 Agent 只通过委派消息告诉子 Agent 当前场景和任务，不直接共享主 Agent system prompt。
 - 每完成一个阶段再提交，不要每个小改都提交。
