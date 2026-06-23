@@ -222,6 +222,45 @@ def list_registered_agents() -> list[AgentResponse]:
     return list(_agents.values())
 
 
+def _normalize_callable_agents(agent_ids: list[str] | None, owner_id: str) -> list[str]:
+    """清理子 Agent 引用：去重、排除自己、过滤不存在的 Agent。"""
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_id in agent_ids or []:
+        agent_id = str(raw_id).strip()
+        if not agent_id or agent_id == owner_id or agent_id in seen:
+            continue
+        if agent_id not in _agents:
+            continue
+        seen.add(agent_id)
+        normalized.append(agent_id)
+    return normalized
+
+
+def remove_callable_agents_from_agents(agent_ids: set[str]) -> int:
+    """从所有 Agent 的 callableAgents 中移除已删除的 Agent 引用。"""
+
+    if not agent_ids:
+        return 0
+
+    changed = 0
+    now = datetime.now(timezone.utc).isoformat()
+    for owner_id, agent in list(_agents.items()):
+        next_callable = [item for item in agent.callable_agents if item not in agent_ids and item != owner_id]
+        if len(next_callable) == len(agent.callable_agents):
+            continue
+        updated_agent = agent.model_copy(update={
+            "callable_agents": next_callable,
+            "updated_at": now,
+        })
+        _agents[owner_id] = updated_agent
+        invalidate_agent(owner_id)
+        upsert_agent(updated_agent.model_dump(by_alias=True))
+        changed += 1
+    return changed
+
+
 def remove_mcp_tools_from_agents(tool_ids: set[str]) -> int:
     """Remove deleted MCP tool ids from all persisted Agents."""
 
@@ -329,13 +368,17 @@ async def import_agent(data: AgentImportRequest) -> AgentImportResponse:
         next_name = f"{source.name} Copy"
         warnings.append("Agent name already exists; imported name was suffixed with Copy.")
 
+    normalized_callable_agents = _normalize_callable_agents(source.callable_agents, next_id)
     imported = source.model_copy(update={
         "id": next_id,
         "name": next_name,
+        "callable_agents": normalized_callable_agents,
         "status": "idle",
         "created_at": now,
         "updated_at": now,
     })
+    if len(normalized_callable_agents) != len(source.callable_agents):
+        warnings.append("Some callable Agent references were duplicated, missing, or pointed to itself and were removed.")
     _agents[imported.id] = imported
     upsert_agent(imported.model_dump(by_alias=True))
     return AgentImportResponse(agent=imported, warnings=warnings)
@@ -353,8 +396,9 @@ async def create_agent(data: AgentCreate) -> AgentResponse:
         AgentResponse: 创建的 Agent 信息
     """
     now = datetime.now(timezone.utc).isoformat()
+    next_id = str(uuid.uuid4())
     agent = AgentResponse.model_validate({
-        "id": str(uuid.uuid4()),
+        "id": next_id,
         "name": data.name,
         "avatar": data.avatar,
         "description": data.description,
@@ -364,7 +408,7 @@ async def create_agent(data: AgentCreate) -> AgentResponse:
         "knowledgeTools": data.knowledge_tools,
         "skills": data.skills,
         "tags": data.tags,
-        "callableAgents": data.callable_agents,
+        "callableAgents": _normalize_callable_agents(data.callable_agents, next_id),
         "maxDepth": data.max_depth,
         "memoryEnabled": data.memory_enabled,
         "planConfig": data.plan_config,
@@ -426,7 +470,10 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
     if "knowledge_tools" in update_dict:
         update_dict["knowledgeTools"] = update_dict.pop("knowledge_tools")
     if "callable_agents" in update_dict:
-        update_dict["callableAgents"] = update_dict.pop("callable_agents")
+        update_dict["callableAgents"] = _normalize_callable_agents(
+            update_dict.pop("callable_agents"),
+            agent_id,
+        )
     if "max_depth" in update_dict:
         update_dict["maxDepth"] = update_dict.pop("max_depth")
     if "memory_enabled" in update_dict:
@@ -486,3 +533,4 @@ async def delete_agent(agent_id: str) -> None:
     del _agents[agent_id]
     invalidate_agent(agent_id)
     db_delete_agent(agent_id)
+    remove_callable_agents_from_agents({agent_id})

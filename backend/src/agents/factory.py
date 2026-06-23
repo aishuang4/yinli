@@ -9,7 +9,10 @@ Agent 工厂模块 — 从配置创建 AgentScope 2.0 Agent 实例
 5. 管理 Agent 实例缓存（避免重复创建）
 """
 
+import json
 import os
+import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Callable
 
@@ -38,7 +41,8 @@ from agentscope.credential import (
     OpenAICredential,
 )
 from agentscope.mcp import HttpMCPConfig, MCPClient
-from agentscope.tool import Toolkit, Bash, Read, Write, Edit, Grep, Glob, ToolChoice
+from agentscope.message import TextBlock, ToolResultState, UserMsg
+from agentscope.tool import Toolkit, Bash, Read, Write, Edit, Grep, Glob, ToolBase, ToolChoice, ToolChunk
 from agentscope.state import AgentState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.permission._types import PermissionMode
@@ -69,6 +73,7 @@ WORKSPACE_DIR = os.path.expanduser("~")
 # ============================================================================
 _agent_cache: dict[str, Agent] = {}
 FallbackEventCallback = Callable[[dict[str, Any]], None]
+SubagentEventCallback = Callable[[dict[str, Any]], None]
 
 CONTEXT_SUMMARY_FIELD_LIMIT = 2000
 CONTEXT_SUMMARY_NEXT_STEPS_LIMIT = 1200
@@ -135,6 +140,55 @@ class KnowledgeToolRuntimeSpec:
     default_payload: dict[str, object] = field(default_factory=dict)
     parameter_instructions: str = ""
     config: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SubagentRuntimeSpec:
+    """主 Agent 可调用的子 Agent 运行时配置。"""
+
+    id: str
+    name: str
+    description: str
+    system_prompt: str
+    model_name: str
+    fallback_names: list[str] = field(default_factory=list)
+    model_options: AgentModelOptions = field(default_factory=AgentModelOptions)
+    guardrails: AgentGuardrails = field(default_factory=AgentGuardrails)
+    mcp_servers: list[McpRuntimeSpec] = field(default_factory=list)
+    knowledge_tools: list[KnowledgeToolRuntimeSpec] = field(default_factory=list)
+    subagents: list["SubagentRuntimeSpec"] = field(default_factory=list)
+    max_depth: int = 2
+    memory_enabled: bool = True
+
+
+@dataclass
+class SubagentRuntimeContext:
+    """一次主 Agent 运行内共享的子 Agent 调用上下文。"""
+
+    root_agent_id: str
+    current_depth: int = 0
+    max_depth: int = 2
+    call_stack: list[str] = field(default_factory=list)
+    max_calls: int = 8
+    call_count: int = 0
+
+
+@dataclass(frozen=True)
+class RuntimeToolScope:
+    """本轮主 Agent 可见的工具范围。"""
+
+    allow_mcp: bool = True
+    allow_knowledge: bool = True
+    allow_bash: bool = True
+    allow_http: bool = True
+
+    def cache_key(self) -> str:
+        return (
+            f"mcp-{int(self.allow_mcp)}:"
+            f"knowledge-{int(self.allow_knowledge)}:"
+            f"bash-{int(self.allow_bash)}:"
+            f"http-{int(self.allow_http)}"
+        )
 
 
 def _create_model(
@@ -421,6 +475,310 @@ class GuardedBash(Bash):
         return await super().check_permissions(tool_input, context)
 
 
+def _safe_tool_suffix(name: str) -> str:
+    """把 Agent 名称转换为 AgentScope 工具名后缀。"""
+
+    suffix = re.sub(r"[^a-zA-Z0-9_]", "_", name).strip("_") or "Subagent"
+    return suffix[:48]
+
+
+def _trim_tool_text(value: Any, limit: int = 8000) -> str:
+    """裁剪工具输出，避免把超长子 Agent 回复塞回主 Agent 上下文。"""
+
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}\n...[truncated {len(text) - limit} chars]"
+
+
+def _is_read_only_guardrails(guardrails: AgentGuardrails | None) -> bool:
+    profile = guardrails.permission_profile if guardrails else UnifiedPermissionProfile()
+    return profile.tool_policy == ApprovalPolicy.READ_ONLY
+
+
+def _restrict_child_guardrails(parent: AgentGuardrails | None, child: AgentGuardrails) -> AgentGuardrails:
+    """按主 Agent 安全边界收紧子 Agent 权限。"""
+
+    profile_name = child.tool_permission_profile
+    if _is_read_only_guardrails(parent):
+        profile_name = "read_only"
+
+    network_enabled = child.network_enabled and bool(parent.network_enabled if parent else True)
+    execution_backend = child.execution_backend
+    filesystem_scope = child.filesystem_scope
+    docker_image = child.docker_image
+    persistent_sandbox = child.persistent_sandbox
+    if parent and parent.execution_backend == "docker":
+        execution_backend = "docker"
+        filesystem_scope = parent.filesystem_scope
+        docker_image = parent.docker_image
+        persistent_sandbox = parent.persistent_sandbox
+
+    restricted = AgentGuardrails(
+        filesystem_scope=filesystem_scope,
+        shell_blacklist=list({*child.shell_blacklist, *(parent.shell_blacklist if parent else [])}),
+        network_enabled=network_enabled,
+        human_approval=child.human_approval or bool(parent.human_approval if parent else False),
+        tool_permission_mode=child.tool_permission_mode,
+        tool_permission_profile=profile_name,
+        execution_backend=execution_backend,
+        docker_image=docker_image,
+        persistent_sandbox=persistent_sandbox,
+        timeout_seconds=min(
+            max(1, child.timeout_seconds),
+            max(1, parent.timeout_seconds if parent else child.timeout_seconds),
+        ),
+    )
+    return AgentGuardrails(
+        filesystem_scope=restricted.filesystem_scope,
+        shell_blacklist=restricted.shell_blacklist,
+        network_enabled=restricted.network_enabled,
+        human_approval=restricted.human_approval,
+        tool_permission_mode=restricted.tool_permission_mode,
+        tool_permission_profile=restricted.tool_permission_profile,
+        execution_backend=restricted.execution_backend,
+        docker_image=restricted.docker_image,
+        persistent_sandbox=restricted.persistent_sandbox,
+        timeout_seconds=restricted.timeout_seconds,
+        permission_profile=build_permission_profile(restricted),
+    )
+
+
+class CallAgentTool(ToolBase):
+    """把一个子 Agent 暴露为主 Agent 可调用工具。"""
+
+    is_mcp: bool = False
+    is_concurrency_safe: bool = False
+    is_read_only: bool = True
+    is_external_tool: bool = False
+    is_state_injected: bool = False
+
+    def __init__(
+        self,
+        *,
+        parent_agent_id: str,
+        parent_agent_name: str,
+        spec: SubagentRuntimeSpec,
+        parent_guardrails: AgentGuardrails | None,
+        context: SubagentRuntimeContext,
+        on_event: SubagentEventCallback | None = None,
+        output_limit: int = 8000,
+    ) -> None:
+        self.parent_agent_id = parent_agent_id
+        self.parent_agent_name = parent_agent_name
+        self.spec = spec
+        self.parent_guardrails = parent_guardrails
+        self.context = context
+        self.on_event = on_event
+        self.output_limit = output_limit
+        self.name = f"CallAgent_{_safe_tool_suffix(spec.name)}"[:64]
+        self.description = "\n".join(
+            part for part in [
+                f"Call subagent {spec.name} to complete a delegated task.",
+                spec.description,
+                "Use this when the task needs this subagent's role, tools, memory, or specialized prompt.",
+                "Input must include task; context and expected_output are optional.",
+            ] if part
+        )
+        self.input_schema = {
+            "type": "object",
+            "properties": {
+                "task": {
+                    "type": "string",
+                    "description": "要交给子 Agent 完成的具体任务。",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "必要上下文，可为空。",
+                },
+                "expected_output": {
+                    "type": "string",
+                    "description": "期望输出格式，可为空。",
+                },
+            },
+            "required": ["task"],
+            "additionalProperties": False,
+        }
+
+    async def check_permissions(
+        self,
+        tool_input: dict[str, Any],
+        context: PermissionContext,
+    ) -> PermissionDecision:
+        return PermissionDecision(
+            behavior=PermissionBehavior.PASSTHROUGH,
+            message=f"Subagent call requires normal permission evaluation: {self.spec.name}",
+            decision_reason="Subagent delegation",
+        )
+
+    async def check_read_only(self, tool_input: dict[str, Any]) -> bool:
+        return True
+
+    async def __call__(self, **kwargs: Any) -> ToolChunk:
+        task = str(kwargs.get("task") or "").strip()
+        context_text = str(kwargs.get("context") or "").strip()
+        expected_output = str(kwargs.get("expected_output") or "").strip()
+        if not task:
+            return self._chunk(self._blocked("missing_task", "Subagent task is required."), error=True)
+
+        blocked = self._blocked_reason()
+        if blocked:
+            return self._chunk(blocked, error=True)
+
+        self.context.call_count += 1
+        depth = self.context.current_depth + 1
+        started = time.perf_counter()
+        self._emit("SUBAGENT_CALL_START", {
+            "status": "running",
+            "task": task,
+            "depth": depth,
+            "maxDepth": self.context.max_depth,
+            "outputPreview": "",
+            "durationMs": 0,
+        })
+
+        child_guardrails = _restrict_child_guardrails(self.parent_guardrails, self.spec.guardrails)
+        child_context = SubagentRuntimeContext(
+            root_agent_id=self.context.root_agent_id,
+            current_depth=depth,
+            max_depth=self.context.max_depth,
+            call_stack=[*self.context.call_stack, self.spec.id],
+            max_calls=self.context.max_calls,
+            call_count=self.context.call_count,
+        )
+        child_subagents = self.spec.subagents if depth < self.context.max_depth else []
+        child_runtime_id = (
+            f"subagent:{self.context.root_agent_id}:{self.spec.id}:"
+            f"depth-{depth}:calls-{self.context.call_count}:stack-{','.join(child_context.call_stack)}"
+        )
+        prompt = "\n".join(
+            part for part in [
+                f"任务：{task}",
+                f"上下文：{context_text}" if context_text else "",
+                f"期望输出：{expected_output}" if expected_output else "",
+                "请只完成被委派的任务，并返回可被主 Agent 直接使用的结果。",
+            ] if part
+        )
+
+        try:
+            child_agent = get_or_create_agent(
+                agent_id=child_runtime_id,
+                name=self.spec.name,
+                system_prompt=self.spec.system_prompt,
+                model_name=self.spec.model_name,
+                fallback_names=self.spec.fallback_names,
+                thinking_enable=False,
+                permission_mode=child_guardrails.permission_profile.to_agentscope_permission_mode(),
+                model_options=self.spec.model_options,
+                guardrails=child_guardrails,
+                mcp_servers=self.spec.mcp_servers,
+                knowledge_tools=self.spec.knowledge_tools,
+                subagents=child_subagents,
+                subagent_context=child_context,
+                parent_agent_id=self.spec.id,
+                parent_agent_name=self.spec.name,
+                on_subagent_event=self.on_event,
+            )
+            output = ""
+            async for event in child_agent.reply_stream(UserMsg(name="user", content=prompt)):
+                event_data = event.model_dump(mode="json")
+                event_type = event_data.get("type")
+                if event_type == "TEXT_BLOCK_DELTA":
+                    output += str(event_data.get("delta") or "")
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            self.context.call_count = child_context.call_count
+            result = {
+                "agentId": self.spec.id,
+                "agentName": self.spec.name,
+                "status": "completed",
+                "output": _trim_tool_text(output, self.output_limit),
+                "durationMs": duration_ms,
+                "error": None,
+            }
+            self._emit("SUBAGENT_CALL_END", {
+                "status": "completed",
+                "task": task,
+                "depth": depth,
+                "maxDepth": self.context.max_depth,
+                "durationMs": duration_ms,
+                "outputPreview": _trim_tool_text(output, 1200),
+            })
+            return self._chunk(result)
+        except Exception as exc:
+            duration_ms = int((time.perf_counter() - started) * 1000)
+            result = {
+                "agentId": self.spec.id,
+                "agentName": self.spec.name,
+                "status": "failed",
+                "output": "",
+                "durationMs": duration_ms,
+                "error": str(exc),
+            }
+            self._emit("SUBAGENT_CALL_FAILED", {
+                "status": "failed",
+                "task": task,
+                "depth": depth,
+                "maxDepth": self.context.max_depth,
+                "durationMs": duration_ms,
+                "outputPreview": "",
+                "error": str(exc),
+            })
+            return self._chunk(result, error=True)
+
+    def _blocked_reason(self) -> dict[str, Any] | None:
+        if self.context.call_count >= self.context.max_calls:
+            return self._blocked("max_calls", f"Subagent call limit reached: {self.context.max_calls}.")
+        if self.context.current_depth >= self.context.max_depth:
+            return self._blocked("max_depth", f"Subagent max depth reached: {self.context.max_depth}.")
+        if self.spec.id in self.context.call_stack:
+            return self._blocked("cycle_detected", f"Subagent cycle detected: {self.spec.name}.")
+        return None
+
+    def _blocked(self, reason: str, message: str) -> dict[str, Any]:
+        payload = {
+            "agentId": self.spec.id,
+            "agentName": self.spec.name,
+            "status": "blocked",
+            "output": "",
+            "durationMs": 0,
+            "error": message,
+            "reason": reason,
+        }
+        self._emit("SUBAGENT_CALL_FAILED", {
+            "status": "blocked",
+            "task": "",
+            "depth": self.context.current_depth + 1,
+            "maxDepth": self.context.max_depth,
+            "durationMs": 0,
+            "outputPreview": "",
+            "error": message,
+            "reason": reason,
+        })
+        return payload
+
+    def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
+        if not self.on_event:
+            return
+        try:
+            self.on_event({
+                "eventType": event_type,
+                "parentAgentId": self.parent_agent_id,
+                "parentAgentName": self.parent_agent_name,
+                "subagentId": self.spec.id,
+                "subagentName": self.spec.name,
+                **payload,
+            })
+        except Exception:
+            pass
+
+    def _chunk(self, result: dict[str, Any], error: bool = False) -> ToolChunk:
+        return ToolChunk(
+            content=[TextBlock(text=json.dumps(result, ensure_ascii=False, indent=2))],
+            state=ToolResultState.ERROR if error else ToolResultState.SUCCESS,
+            is_last=True,
+        )
+
+
 def _safe_workspace_dir(guardrails: AgentGuardrails | None) -> str:
     scope = (guardrails.filesystem_scope if guardrails else WORKSPACE_DIR) or WORKSPACE_DIR
     expanded = os.path.abspath(os.path.expanduser(scope))
@@ -466,7 +824,13 @@ def _create_default_toolkit(
     guardrails: AgentGuardrails | None = None,
     mcp_servers: list[McpRuntimeSpec] | None = None,
     knowledge_tools: list[KnowledgeToolRuntimeSpec] | None = None,
+    subagents: list[SubagentRuntimeSpec] | None = None,
+    subagent_context: SubagentRuntimeContext | None = None,
+    parent_agent_id: str = "default",
+    parent_agent_name: str = "Assistant",
+    on_subagent_event: SubagentEventCallback | None = None,
     plan_id: str | None = None,
+    tool_scope: RuntimeToolScope | None = None,
 ) -> Toolkit:
     """
     创建默认工具集
@@ -485,6 +849,7 @@ def _create_default_toolkit(
     """
     permission_profile = guardrails.permission_profile if guardrails else UnifiedPermissionProfile()
     read_only = permission_profile.tool_policy == ApprovalPolicy.READ_ONLY
+    scope = tool_scope or RuntimeToolScope()
 
     local_tools = [
         Read(),
@@ -497,16 +862,19 @@ def _create_default_toolkit(
         local_tools.extend([Write(), Edit()])
 
     if permission_profile.can_use_network:
-        local_tools.extend(
-            [
+        network_tools = []
+        if scope.allow_bash:
+            network_tools.append(
                 GuardedBash(
                     shell_blacklist=guardrails.shell_blacklist if guardrails else [],
                     timeout_seconds=guardrails.timeout_seconds if guardrails else 300,
-                ),
-                HttpRequest(),
-            ]
-        )
-        for tool in knowledge_tools or []:
+                )
+            )
+        if scope.allow_http:
+            network_tools.append(HttpRequest())
+        local_tools.extend(network_tools)
+
+        for tool in (knowledge_tools or []) if scope.allow_knowledge else []:
             if tool.kind == "http":
                 local_tools.append(
                     ConfiguredHttpTool(
@@ -534,7 +902,20 @@ def _create_default_toolkit(
                     )
                 )
 
-    mcp_clients = [] if read_only else _create_mcp_clients(mcp_servers or [], guardrails)
+    if subagents and subagent_context and not read_only:
+        for spec in subagents:
+            local_tools.append(
+                CallAgentTool(
+                    parent_agent_id=parent_agent_id,
+                    parent_agent_name=parent_agent_name,
+                    spec=spec,
+                    parent_guardrails=guardrails,
+                    context=subagent_context,
+                    on_event=on_subagent_event,
+                )
+            )
+
+    mcp_clients = [] if read_only or not scope.allow_mcp else _create_mcp_clients(mcp_servers or [], guardrails)
     return Toolkit(
         tools=[
             *local_tools,
@@ -555,8 +936,14 @@ def get_or_create_agent(
     guardrails: AgentGuardrails | None = None,
     mcp_servers: list[McpRuntimeSpec] | None = None,
     knowledge_tools: list[KnowledgeToolRuntimeSpec] | None = None,
+    subagents: list[SubagentRuntimeSpec] | None = None,
+    subagent_context: SubagentRuntimeContext | None = None,
+    parent_agent_id: str | None = None,
+    parent_agent_name: str | None = None,
     plan_id: str | None = None,
+    tool_scope: RuntimeToolScope | None = None,
     on_fallback_event: FallbackEventCallback | None = None,
+    on_subagent_event: SubagentEventCallback | None = None,
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -621,7 +1008,13 @@ def get_or_create_agent(
             guardrails=guardrails,
             mcp_servers=mcp_servers,
             knowledge_tools=knowledge_tools,
+            subagents=subagents,
+            subagent_context=subagent_context,
+            parent_agent_id=parent_agent_id or agent_id,
+            parent_agent_name=parent_agent_name or name,
+            on_subagent_event=on_subagent_event,
             plan_id=plan_id,
+            tool_scope=tool_scope,
         ),
         state=agent_state,
         offloader=workspace,
