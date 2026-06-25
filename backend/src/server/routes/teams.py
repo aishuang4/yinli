@@ -185,6 +185,12 @@ def _save_teams() -> None:
     })
 
 
+def get_registered_team(team_id: str) -> TeamRecord | None:
+    """Return a persisted Team configuration by id."""
+
+    return _teams.get(team_id)
+
+
 def _build_members(
     leader_agent_id: str,
     worker_agent_ids: list[str],

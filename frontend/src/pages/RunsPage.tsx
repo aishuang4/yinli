@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Ban, Bot, CheckCircle2, Clock3, RefreshCw, Users } from 'lucide-react';
+import { Ban, Bot, CheckCircle2, Clock3, RefreshCw, RotateCcw, Users } from 'lucide-react';
 import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
 
 const ACTIVE_RUN_STATUSES = new Set(['running', 'waiting', 'cancelling']);
@@ -106,6 +106,24 @@ export function RunsPage() {
     }
   }, [detail, loadRunDetail]);
 
+  const rerunRun = useCallback(async (runId: string) => {
+    try {
+      setBusyRunId(runId);
+      const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/rerun`, {
+        method: 'POST',
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const created: RunSummary = await response.json();
+      setRuns((current) => [created, ...current.filter((run) => run.id !== created.id)]);
+      setSelectedRunId(created.id);
+      void loadRunDetail(created.id, false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '重新运行失败');
+    } finally {
+      setBusyRunId(null);
+    }
+  }, [loadRunDetail]);
+
   useEffect(() => {
     void loadRuns();
     const interval = window.setInterval(() => void loadRuns(), 5000);
@@ -170,6 +188,7 @@ export function RunsPage() {
                 busyRunId={busyRunId}
                 onSelect={setSelectedRunId}
                 onCancel={cancelRun}
+                onRerun={rerunRun}
               />
               <RunGroup
                 title="最近完成"
@@ -179,6 +198,7 @@ export function RunsPage() {
                 busyRunId={busyRunId}
                 onSelect={setSelectedRunId}
                 onCancel={cancelRun}
+                onRerun={rerunRun}
               />
             </div>
           )}
@@ -199,16 +219,30 @@ export function RunsPage() {
               </div>
             )}
           </div>
-          {selectedRun && selectedRun.status === 'running' && (
-            <Button
-              danger
-              size="small"
-              icon={<Ban size={14} />}
-              loading={busyRunId === selectedRun.id}
-              onClick={() => void cancelRun(selectedRun.id)}
-            >
-              取消运行
-            </Button>
+          {selectedRun && (
+            <div className="flex shrink-0 gap-2">
+              {selectedRun.status === 'running' && (
+                <Button
+                  danger
+                  size="small"
+                  icon={<Ban size={14} />}
+                  loading={busyRunId === selectedRun.id}
+                  onClick={() => void cancelRun(selectedRun.id)}
+                >
+                  取消运行
+                </Button>
+              )}
+              {!ACTIVE_RUN_STATUSES.has(selectedRun.status) && (
+                <Button
+                  size="small"
+                  icon={<RotateCcw size={14} />}
+                  loading={busyRunId === selectedRun.id}
+                  onClick={() => void rerunRun(selectedRun.id)}
+                >
+                  {selectedRun.status === 'failed' ? '重试' : '重新运行'}
+                </Button>
+              )}
+            </div>
           )}
         </div>
 
@@ -238,6 +272,7 @@ function RunGroup({
   busyRunId,
   onSelect,
   onCancel,
+  onRerun,
 }: {
   title: string;
   emptyText: string;
@@ -246,6 +281,7 @@ function RunGroup({
   busyRunId: string | null;
   onSelect: (runId: string) => void;
   onCancel: (runId: string) => void;
+  onRerun: (runId: string) => void;
 }) {
   return (
     <div>
@@ -267,6 +303,7 @@ function RunGroup({
               busy={busyRunId === run.id}
               onSelect={() => onSelect(run.id)}
               onCancel={() => void onCancel(run.id)}
+              onRerun={() => void onRerun(run.id)}
             />
           ))}
         </div>
@@ -281,12 +318,14 @@ function RunListItem({
   busy,
   onSelect,
   onCancel,
+  onRerun,
 }: {
   run: RunSummary;
   selected: boolean;
   busy: boolean;
   onSelect: () => void;
   onCancel: () => void;
+  onRerun: () => void;
 }) {
   const active = ACTIVE_RUN_STATUSES.has(run.status);
   return (
@@ -334,6 +373,21 @@ function RunListItem({
             }}
           >
             取消
+          </Button>
+        </div>
+      )}
+      {!active && (
+        <div className="mt-3 flex justify-end">
+          <Button
+            size="small"
+            icon={<RotateCcw size={13} />}
+            loading={busy}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRerun();
+            }}
+          >
+            {run.status === 'failed' ? '重试' : '重新运行'}
           </Button>
         </div>
       )}
