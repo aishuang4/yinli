@@ -13,6 +13,7 @@
 
 import { lazy, Suspense, useEffect, useLayoutEffect, useState, type ComponentType } from 'react';
 import { App as AntdApp } from 'antd';
+import { StyleProvider } from '@ant-design/cssinjs';
 import { ConfigProvider, Spinner, carbonDarkTheme, carbonTheme } from '@agentscope-ai/design';
 import { useAppStore } from './stores/appStore';
 import type { ViewType } from './stores/appStore';
@@ -134,14 +135,16 @@ export function App() {
   const sparkTheme = theme === 'dark' ? carbonDarkTheme : carbonTheme;
 
   return (
-    <ConfigProvider {...sparkTheme}>
-      <AntdApp>
-        <FeedbackBridge />
-        <AppLayout>
-          <CachedPages activeView={currentView} cachedViews={cachedViews} />
-        </AppLayout>
-      </AntdApp>
-    </ConfigProvider>
+    <StyleProvider linters={[]}>
+      <ConfigProvider {...sparkTheme}>
+        <AntdApp>
+          <FeedbackBridge />
+          <AppLayout>
+            <CachedPages activeView={currentView} cachedViews={cachedViews} />
+          </AppLayout>
+        </AntdApp>
+      </ConfigProvider>
+    </StyleProvider>
   );
 }
 

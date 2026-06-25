@@ -7,6 +7,7 @@
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import './utils/devConsoleFilters';
 import { App } from './App';
 import './themes/index.css';
 

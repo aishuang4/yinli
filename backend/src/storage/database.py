@@ -1406,6 +1406,46 @@ def get_chat_run(run_id: str) -> dict[str, Any] | None:
     return _chat_run_from_row(row, [event_row["raw_event"] for event_row in event_rows])
 
 
+def get_latest_user_chat_message(session_id: str, content: str | None = None) -> dict[str, Any] | None:
+    """读取某个会话里最近一条用户消息，可按内容精确匹配。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        if content is None:
+            row = conn.execute(
+                """
+                SELECT * FROM chat_messages
+                WHERE session_id = ? AND role = 'user'
+                ORDER BY sort_order DESC, created_at DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT * FROM chat_messages
+                WHERE session_id = ? AND role = 'user' AND content = ?
+                ORDER BY sort_order DESC, created_at DESC
+                LIMIT 1
+                """,
+                (session_id, content),
+            ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "sessionId": row["session_id"],
+        "role": row["role"],
+        "content": row["content"],
+        "agentId": row["agent_id"],
+        "agentName": row["agent_name"],
+        "modelName": row["model_name"],
+        "images": _loads(row["images"], []),
+        "createdAt": row["created_at"],
+    }
+
+
 def _chat_run_from_row(row: sqlite3.Row, events: list[str]) -> dict[str, Any]:
     return {
         "id": row["id"],
