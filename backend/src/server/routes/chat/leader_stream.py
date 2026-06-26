@@ -1,7 +1,7 @@
 """Leader Agent 事件流处理。"""
 
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator
+from typing import AsyncGenerator
 
 from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
 from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload
@@ -12,7 +12,6 @@ from src.server.routes.chat.models import (
     ChatTeamActivity,
     ChatToolRun,
 )
-from src.server.routes.chat.plans import mark_plan_tool_event, serialize_plan_for_event
 from src.server.routes.chat.prompts import _extract_clarification_request
 from src.server.routes.chat.skill_runs import update_skill_run_status
 from src.server.routes.chat.team_state import (
@@ -27,8 +26,6 @@ from src.server.routes.chat.trace_recorder import (
     _record_run_event,
     _record_tool_execution_artifacts,
 )
-from src.storage.database import get_plan_record
-from src.tools.plan_runtime import PLAN_TOOL_NAMES
 
 
 @dataclass
@@ -39,21 +36,9 @@ class LeaderStreamState:
     assistant_thinking: str = ""
     assistant_tool_calls: list[ChatToolRun] = field(default_factory=list)
     assistant_model_caches: list[ChatModelCacheRun] = field(default_factory=list)
-    runtime_plan: dict[str, Any] | None = None
     active_skill_run: dict | None = None
     stopped: bool = False
     stop_reason: str = ""
-
-
-def is_plan_runtime_tool_name(name: str) -> bool:
-    """判断工具名是否为 Plan Runtime 内部工具。"""
-
-    normalized = name.replace(" ", "").replace("-", "").replace("_", "").lower()
-    return any(
-        normalized == tool_name.lower()
-        or normalized.endswith(tool_name.lower())
-        for tool_name in PLAN_TOOL_NAMES
-    )
 
 
 async def stream_leader_agent_reply(
@@ -71,40 +56,16 @@ async def stream_leader_agent_reply(
     skill_runs: list[ChatSkillRun],
     team_activities: list[ChatTeamActivity],
 ) -> AsyncGenerator[str, None]:
-    """消费 Leader AgentScope 事件流，并处理 HITL / Plan / clarification 早停。"""
+    """消费 Leader AgentScope 事件流，并处理 HITL / clarification 早停。"""
 
     async for event in agent.reply_stream(user_msg):
         event_data = event.model_dump(mode="json")
         event_type = event_data.pop("type", "UNKNOWN")
-        tool_name = str(
-            event_data.get("tool_call_name")
-            or event_data.get("name")
-            or event_data.get("tool_name")
-            or "tool"
-        )
         _attach_provider_cache_usage(event_type, event_data)
         if event_type == "MODEL_CALL_END":
             cache_entry = _model_cache_from_event(event_data, model_name)
             if cache_entry:
                 state.assistant_model_caches.append(cache_entry)
-
-        updated_plan = mark_plan_tool_event(
-            state.runtime_plan,
-            event_type=event_type,
-            tool_name=tool_name,
-        )
-        if updated_plan and updated_plan != state.runtime_plan:
-            state.runtime_plan = updated_plan
-            yield _sse_event("PLAN_UPDATE", {
-                "plan": serialize_plan_for_event(state.runtime_plan),
-            })
-        if state.runtime_plan and event_type in {"TOOL_CALL_END", "TOOL_RESULT_END"}:
-            refreshed_plan = get_plan_record(str(state.runtime_plan.get("id")))
-            if refreshed_plan and refreshed_plan != state.runtime_plan:
-                state.runtime_plan = refreshed_plan
-                yield _sse_event("PLAN_UPDATE", {
-                    "plan": serialize_plan_for_event(state.runtime_plan),
-                })
 
         _record_agent_scope_event(
             session_id=session_id,

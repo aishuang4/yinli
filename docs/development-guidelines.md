@@ -1,6 +1,6 @@
-# Agent Workstation 开发规范草案
+# Agent Workstation 开发规范
 
-> 状态：草案。本文用于统一后续 React、Python、SQLite、Agent Runtime 和协作开发习惯，确认后再同步到 `AGENTS.md` / `CLAUDE.md`。
+> 状态：正式生效。本文用于统一后续 React、Python、SQLite、Agent Runtime 和协作开发习惯。
 
 ## 1. 总体原则
 
@@ -20,7 +20,7 @@
   - UI 展示放组件。
   - 类型定义放 `types/`。
   - 后端路由放 `routes/`。
-  - AgentScope 运行时门面放 `agents/factory.py`，模型创建、运行时类型和 Subagent 工具分别放 `agents/model_factory.py`、`agents/runtime_types.py`、`agents/subagent_tool.py`。
+  - AgentScope 运行时门面放 `agents/factory.py`，模型创建和运行时类型分别放 `agents/model_factory.py`、`agents/runtime_types.py`。
   - 工具实现放 `backend/src/tools/`。
 - 当一个文件同时承担“请求、状态、渲染、业务规则、数据转换”多种职责时，应优先拆分。
 - 模块边界要围绕业务域和变化原因设计，不按随意的工具函数堆积。
@@ -56,7 +56,7 @@
   - `routes -> runtime/service/helpers -> storage/tools/config`
   - `storage` 不反向依赖 `routes`。
   - `tools` 不直接依赖具体 API 路由。
-  - `agents/factory.py` 是 AgentScope 运行时入口，其他模块不要复制运行时构造逻辑；运行时类型、模型降级链和 Subagent 工具应复用 `agents/runtime_types.py`、`agents/model_factory.py`、`agents/subagent_tool.py`。
+  - `agents/factory.py` 是 AgentScope 运行时入口，其他模块不要复制运行时构造逻辑；运行时类型和模型降级链应复用 `agents/runtime_types.py`、`agents/model_factory.py`。
 - Electron 推荐依赖方向：
   - `main/preload -> compiled frontend/backend entry`
   - 前端通过 preload 暴露的安全 API 访问桌面能力，不直接使用 Node API。
@@ -110,7 +110,8 @@
 
 - API 路由按领域放在 `backend/src/server/routes/`。
 - Chat 复杂链路继续按 `routes/chat/handlers`、`runtime`、`team`、`store` 拆分，避免单文件膨胀。
-- AgentScope 运行时构造统一走 `backend/src/agents/factory.py`；类型定义、模型创建和 Subagent 工具分别维护在 `runtime_types.py`、`model_factory.py`、`subagent_tool.py`，不要重新塞回 factory。
+- AgentScope 运行时构造统一走 `backend/src/agents/factory.py`；类型定义和模型创建分别维护在 `runtime_types.py`、`model_factory.py`，不要重新塞回 factory。
+- Plan Runtime 与 Subagent Runtime 已下线，重新设计前不要在旧兼容字段或旧事件上继续扩展。
 - 工具实现放 `backend/src/tools/`，不要散落在路由里。
 - 存储访问集中在 `backend/src/storage/database.py` 或领域封装函数里。
 

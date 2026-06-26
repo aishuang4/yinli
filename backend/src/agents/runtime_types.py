@@ -9,7 +9,6 @@ from src.security.permissions import UnifiedPermissionProfile, build_permission_
 
 WORKSPACE_DIR = os.path.expanduser("~")
 FallbackEventCallback = Callable[[dict[str, Any]], None]
-SubagentEventCallback = Callable[[dict[str, Any]], None]
 
 
 @dataclass(frozen=True)
@@ -73,37 +72,6 @@ class KnowledgeToolRuntimeSpec:
     default_payload: dict[str, object] = field(default_factory=dict)
     parameter_instructions: str = ""
     config: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class SubagentRuntimeSpec:
-    """主 Agent 可调用的子 Agent 运行时配置。"""
-
-    id: str
-    name: str
-    description: str
-    system_prompt: str
-    model_name: str
-    fallback_names: list[str] = field(default_factory=list)
-    model_options: AgentModelOptions = field(default_factory=AgentModelOptions)
-    guardrails: AgentGuardrails = field(default_factory=AgentGuardrails)
-    mcp_servers: list[McpRuntimeSpec] = field(default_factory=list)
-    knowledge_tools: list[KnowledgeToolRuntimeSpec] = field(default_factory=list)
-    subagents: list["SubagentRuntimeSpec"] = field(default_factory=list)
-    max_depth: int = 2
-    memory_enabled: bool = True
-
-
-@dataclass
-class SubagentRuntimeContext:
-    """一次主 Agent 运行内共享的子 Agent 调用上下文。"""
-
-    root_agent_id: str
-    current_depth: int = 0
-    max_depth: int = 2
-    call_stack: list[str] = field(default_factory=list)
-    max_calls: int = 8
-    call_count: int = 0
 
 
 @dataclass(frozen=True)

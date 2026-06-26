@@ -4,7 +4,7 @@
  * 通过 fetch + ReadableStream 订阅后端 SSE 事件流，
  * 解析 AgentScope 2.0 的 EventType 并更新 UI 状态。
  *
- * 事件类型参考 AgentScope event/_event.py：
+ * 稳定事件契约见 docs/chat-sse-event-contract.md。底层会透传部分 AgentScope 事件：
  * - REPLY_START / REPLY_END
  * - TEXT_BLOCK_DELTA
  * - THINKING_BLOCK_DELTA
@@ -13,7 +13,7 @@
  * - MODEL_CALL_START / MODEL_CALL_END
  * - ERROR
  *
- * @see 前端设计文档 §5.1 Event Stream Hook
+ * @see docs/chat-sse-event-contract.md
  */
 
 import { useCallback, useRef, useState } from 'react';
@@ -41,18 +41,12 @@ export interface StreamState {
   thinkingContent: string;
   /** 工具调用列表 */
   toolCalls: ToolCallInfo[];
-  /** 子 Agent 调用列表 */
-  subagentCalls: SubagentCallInfo[];
   /** Skill 注入/应用列表 */
   skillCalls: SkillCallInfo[];
   /** Team 协作活动 */
   teamActivities: TeamActivityInfo[];
-  /** 自动记忆总结 */
-  memorySummaries: MemorySummaryInfo[];
   /** 模型缓存事件 */
   modelCaches: ModelCacheInfo[];
-  /** Plan Runtime 记录 */
-  planRuns: PlanRunInfo[];
   /** 待人工处理的交互 */
   hitlRequests: HitlRequestInfo[];
   /** 待用户补充信息的反问 */
@@ -79,9 +73,6 @@ export interface ToolCallInfo {
   status: 'calling' | 'running' | 'completed' | 'failed';
 }
 
-/** 子 Agent 调用信息 */
-export interface SubagentCallInfo extends ToolCallInfo {}
-
 function normalizeToolStatus(status: unknown): ToolCallInfo['status'] {
   const value = String(status || 'calling');
   return (
@@ -106,19 +97,11 @@ function normalizeToolCallRecord(record: Record<string, unknown>): ToolCallInfo 
 
 function normalizeToolDisplayName(name: string): string {
   const value = String(name || 'tool');
-  if (value.startsWith('CallAgent_')) {
-    const agentName = value.slice('CallAgent_'.length).replace(/_/g, ' ').trim() || '子 Agent';
-    return `子 Agent：${agentName}`;
-  }
   const parts = value.split('_');
   if (parts.length === 2 && parts[0] && parts[0] === parts[1]) {
     return parts[0];
   }
   return value;
-}
-
-function isSubagentToolName(name: string): boolean {
-  return name.startsWith('CallAgent_') || name.startsWith('子 Agent：');
 }
 
 function mergeToolCalls(current: ToolCallInfo[], incoming: ToolCallInfo[]): ToolCallInfo[] {
@@ -181,18 +164,6 @@ export interface TeamActivityInfo {
   createdAt: string;
 }
 
-/** 自动记忆总结信息 */
-export interface MemorySummaryInfo {
-  agentId: string;
-  agentName: string;
-  facts: Array<{
-    id: string;
-    title: string;
-    content: string;
-    tags: string[];
-  }>;
-}
-
 /** 模型缓存信息 */
 export interface ModelCacheInfo {
   id: string;
@@ -206,203 +177,6 @@ export interface ModelCacheInfo {
   createdAt: string;
 }
 
-export interface PlanStepInfo {
-  id: string;
-  planId: string;
-  stepIndex: number;
-  title: string;
-  description: string;
-  status: 'pending' | 'active' | 'completed' | 'blocked' | 'skipped';
-  assignedAgentId: string | null;
-  evidence: string;
-  result: string;
-  startedAt: string | null;
-  completedAt: string | null;
-  updatedAt: string;
-}
-
-export interface PlanRunInfo {
-  id: string;
-  runId: string;
-  sessionId: string;
-  agentId: string;
-  teamId: string | null;
-  title: string;
-  goal: string;
-  status: 'draft' | 'waiting_approval' | 'running' | 'replanning' | 'blocked' | 'completed' | 'failed' | 'cancelled';
-  markdown: string;
-  currentStepId: string | null;
-  steps: PlanStepInfo[];
-  createdAt: string;
-  updatedAt: string;
-  completedAt: string | null;
-}
-
-function normalizePlanStep(record: Record<string, unknown>): PlanStepInfo {
-  const status = String(record.status || 'pending');
-  return {
-    id: String(record.id || createId()),
-    planId: String(record.planId || record.plan_id || ''),
-    stepIndex: Number(record.stepIndex ?? record.step_index ?? 0),
-    title: String(record.title || 'Step'),
-    description: String(record.description || ''),
-    status: (
-      status === 'active' ||
-      status === 'completed' ||
-      status === 'blocked' ||
-      status === 'skipped'
-        ? status
-        : 'pending'
-    ),
-    assignedAgentId: record.assignedAgentId || record.assigned_agent_id
-      ? String(record.assignedAgentId || record.assigned_agent_id)
-      : null,
-    evidence: String(record.evidence || ''),
-    result: String(record.result || ''),
-    startedAt: record.startedAt || record.started_at ? String(record.startedAt || record.started_at) : null,
-    completedAt: record.completedAt || record.completed_at ? String(record.completedAt || record.completed_at) : null,
-    updatedAt: String(record.updatedAt || record.updated_at || ''),
-  };
-}
-
-function parsePlanStepsFromMarkdown(markdown: string, planId: string): PlanStepInfo[] {
-  const lines = markdown.split(/\r?\n/);
-  const steps: PlanStepInfo[] = [];
-  for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(/^- \[([ xX])\]\s+(\d+)\.\s+(.+?)\s+-\s+([a-z_]+)/);
-    if (!match) continue;
-    const nextLine = lines[index + 1]?.trim() || '';
-    steps.push({
-      id: `${planId}-markdown-step-${match[2]}`,
-      planId,
-      stepIndex: Math.max(0, Number(match[2]) - 1),
-      title: match[3].trim(),
-      description: nextLine.startsWith('- ') ? nextLine.slice(2).trim() : '',
-      status: match[1].toLowerCase() === 'x' ? 'completed' : normalizePlanStep({ status: match[4] }).status,
-      assignedAgentId: null,
-      evidence: '',
-      result: '',
-      startedAt: null,
-      completedAt: null,
-      updatedAt: '',
-    });
-  }
-  return steps;
-}
-
-export function renderPlanMarkdown(plan: Omit<PlanRunInfo, 'markdown'> & { markdown?: string }): string {
-  const lines = [
-    `# Plan: ${plan.title || '任务计划'}`,
-    '',
-    '## Goal',
-    plan.goal || '',
-    '',
-    '## Status',
-    `- Overall: ${plan.status}`,
-    `- Current Step: ${plan.currentStepId || 'none'}`,
-    '',
-    '## Steps',
-  ];
-
-  plan.steps.forEach((step) => {
-    const checked = step.status === 'completed' ? 'x' : ' ';
-    lines.push(`- [${checked}] ${step.stepIndex + 1}. ${step.title || 'Step'} - ${step.status}`);
-    if (step.description) {
-      lines.push(`  - ${step.description}`);
-    }
-  });
-
-  lines.push('', '## Execution Log');
-  plan.steps.forEach((step) => {
-    lines.push('', `### Step ${step.stepIndex + 1}: ${step.title || 'Step'}`, `Status: ${step.status}`);
-    if (step.assignedAgentId) {
-      lines.push(`Assigned Agent: ${step.assignedAgentId}`);
-    }
-    if (step.evidence) {
-      lines.push('', 'Evidence:', step.evidence);
-    }
-    if (step.result) {
-      lines.push('', 'Result:', step.result);
-    }
-  });
-
-  return `${lines.join('\n').trim()}\n`;
-}
-
-export function normalizePlanRun(record: Record<string, unknown>): PlanRunInfo {
-  const status = String(record.status || 'running');
-  const rawMarkdown = String(record.markdown || '');
-  const id = String(record.id || createId());
-  const normalizedSteps = Array.isArray(record.steps)
-    ? record.steps.map((step) => normalizePlanStep(step as Record<string, unknown>))
-    : [];
-  const plan: PlanRunInfo = {
-    id,
-    runId: String(record.runId || record.run_id || ''),
-    sessionId: String(record.sessionId || record.session_id || ''),
-    agentId: String(record.agentId || record.agent_id || ''),
-    teamId: record.teamId || record.team_id ? String(record.teamId || record.team_id) : null,
-    title: String(record.title || 'Plan Runtime'),
-    goal: String(record.goal || ''),
-    status: (
-      status === 'draft' ||
-      status === 'waiting_approval' ||
-      status === 'replanning' ||
-      status === 'blocked' ||
-      status === 'completed' ||
-      status === 'cancelled' ||
-      status === 'failed'
-        ? status
-        : 'running'
-    ),
-    markdown: rawMarkdown,
-    currentStepId: record.currentStepId || record.current_step_id ? String(record.currentStepId || record.current_step_id) : null,
-    steps: normalizedSteps.length > 0 ? normalizedSteps : parsePlanStepsFromMarkdown(rawMarkdown, id),
-    createdAt: String(record.createdAt || record.created_at || ''),
-    updatedAt: String(record.updatedAt || record.updated_at || ''),
-    completedAt: record.completedAt || record.completed_at ? String(record.completedAt || record.completed_at) : null,
-  };
-  return {
-    ...plan,
-    markdown: plan.steps.length > 0 ? renderPlanMarkdown(plan) : rawMarkdown,
-  };
-}
-
-function mergePlanRuns(current: PlanRunInfo[], next: PlanRunInfo): PlanRunInfo[] {
-  return current.some((item) => item.id === next.id)
-    ? current.map((item) => (item.id === next.id ? next : item))
-    : [...current, next];
-}
-
-export function completeOpenPlans(plans: PlanRunInfo[], completedAt: string): PlanRunInfo[] {
-  return plans.map((plan) => {
-    if (plan.status !== 'running' && plan.status !== 'draft' && plan.status !== 'replanning') {
-      return plan;
-    }
-    const completedPlan: PlanRunInfo = {
-      ...plan,
-      status: 'completed',
-      currentStepId: null,
-      completedAt: plan.completedAt || completedAt,
-      updatedAt: completedAt,
-      steps: plan.steps.map((step) => (
-        step.status === 'completed'
-          ? step
-          : {
-              ...step,
-              status: 'completed',
-              completedAt: step.completedAt || completedAt,
-              updatedAt: completedAt,
-            }
-      )),
-    };
-    return {
-      ...completedPlan,
-      markdown: renderPlanMarkdown(completedPlan),
-    };
-  });
-}
-
 /** 人机交互请求 */
 export interface HitlRequestInfo {
   interactionId: string;
@@ -410,6 +184,7 @@ export interface HitlRequestInfo {
   sessionId: string;
   agentId: string;
   agentName: string;
+  runId: string;
   scope: 'leader' | 'worker';
   teamActivityId: string | null;
   replyId: string;
@@ -495,12 +270,9 @@ const INITIAL_STATE: StreamState = {
   textContent: '',
   thinkingContent: '',
   toolCalls: [],
-  subagentCalls: [],
   skillCalls: [],
   teamActivities: [],
-  memorySummaries: [],
   modelCaches: [],
-  planRuns: [],
   hitlRequests: [],
   clarificationRequests: [],
   modelName: '',
@@ -523,7 +295,6 @@ function completeStreamIfNoPendingUserInteraction(state: StreamState): StreamSta
     ...state,
     isStreaming: false,
     runCompletedAt: state.runCompletedAt || new Date().toISOString(),
-    planRuns: completeOpenPlans(state.planRuns, state.runCompletedAt || new Date().toISOString()),
   };
 }
 
@@ -537,6 +308,33 @@ export function useEventStream(): UseEventStreamReturn {
   const abortControllerRef = useRef<AbortController | null>(null);
   const suppressClarificationTextRef = useRef(false);
   const suppressClarificationThinkingRef = useRef(false);
+
+  const readEventStream = useCallback(async (response: Response) => {
+    if (!response.body) {
+      throw new Error('Response body is null');
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';
+
+      for (const eventStr of events) {
+        if (!eventStr.trim()) continue;
+        const parsed = parseSSEEvent(eventStr);
+        if (parsed) {
+          handleEvent(parsed);
+        }
+      }
+    }
+  }, []);
 
   /** 重置状态到初始值 */
   const reset = useCallback(() => {
@@ -616,37 +414,9 @@ export function useEventStream(): UseEventStreamReturn {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        if (!response.body) {
-          throw new Error('Response body is null');
-        }
+        await readEventStream(response);
 
-        // 使用 ReadableStream 逐块读取 SSE 事件
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          // 解码并追加到 buffer
-          buffer += decoder.decode(value, { stream: true });
-
-          // 解析完整的 SSE 事件（以 \n\n 分隔）
-          const events = buffer.split('\n\n');
-          // 最后一段可能不完整，保留到下一次
-          buffer = events.pop() || '';
-
-          for (const eventStr of events) {
-            if (!eventStr.trim()) continue;
-            const parsed = parseSSEEvent(eventStr);
-            if (parsed) {
-              handleEvent(parsed);
-            }
-          }
-        }
-
-        // SSE 结束才代表本轮流程全部完成；REPLY_END 后仍可能有记忆总结等后处理事件。
+        // SSE 结束才代表本轮流程全部完成；REPLY_END 后仍可能有收尾事件。
         setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') {
@@ -664,7 +434,7 @@ export function useEventStream(): UseEventStreamReturn {
         }
       }
     },
-    []
+    [readEventStream]
   );
 
   /** 恢复暂停的人机交互 */
@@ -674,25 +444,6 @@ export function useEventStream(): UseEventStreamReturn {
       action: 'approve' | 'reject',
       externalResults: Record<string, string> = {}
     ) => {
-      const pendingRequest = state.hitlRequests.find((item) => item.interactionId === interactionId);
-      if (pendingRequest?.type === 'PLAN_APPROVAL') {
-        setState((prev) => ({
-          ...prev,
-          isStreaming: true,
-          error: null,
-          hitlRequests: prev.hitlRequests.filter((item) => item.interactionId !== interactionId),
-        }));
-        const response = await fetch(`/api/chat/plan-approvals/${encodeURIComponent(interactionId)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action }),
-        });
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        return;
-      }
-
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
@@ -720,27 +471,7 @@ export function useEventStream(): UseEventStreamReturn {
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
-        if (!response.body) {
-          throw new Error('Response body is null');
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const events = buffer.split('\n\n');
-          buffer = events.pop() || '';
-          for (const eventStr of events) {
-            if (!eventStr.trim()) continue;
-            const parsed = parseSSEEvent(eventStr);
-            if (parsed) {
-              handleEvent(parsed);
-            }
-          }
-        }
+        await readEventStream(response);
         setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') {
@@ -756,7 +487,7 @@ export function useEventStream(): UseEventStreamReturn {
         }
       }
     },
-    [state.hitlRequests]
+    [readEventStream]
   );
 
   /**
@@ -835,20 +566,6 @@ export function useEventStream(): UseEventStreamReturn {
 
         // === 工具调用开始 ===
         case 'TOOL_CALL_START':
-          if (isSubagentToolName(String(event.data.tool_call_name || 'tool'))) {
-            const call = {
-              id: String(event.data.tool_call_id || createId()),
-              name: normalizeToolDisplayName(String(event.data.tool_call_name || 'tool')),
-              args: '',
-              result: '',
-              status: 'calling' as const,
-            };
-            return {
-              ...prev,
-              toolCalls: mergeToolCalls(prev.toolCalls, [call]),
-              subagentCalls: mergeToolCalls(prev.subagentCalls, [call]),
-            };
-          }
           return {
             ...prev,
             toolCalls: mergeToolCalls(prev.toolCalls, [{
@@ -895,19 +612,6 @@ export function useEventStream(): UseEventStreamReturn {
             skillCalls: prev.skillCalls.map((skill) => (
               endedIds.has(skill.id) ? { ...skill, status } : skill
             )),
-          };
-        }
-
-        case 'PLAN_UPDATE': {
-          const rawPlan = (
-            typeof event.data.plan === 'object' && event.data.plan !== null
-              ? event.data.plan
-              : event.data
-          ) as Record<string, unknown>;
-          const plan = normalizePlanRun(rawPlan);
-          return {
-            ...prev,
-            planRuns: mergePlanRuns(prev.planRuns, plan),
           };
         }
 
@@ -1073,34 +777,10 @@ export function useEventStream(): UseEventStreamReturn {
           };
         }
 
-        // === 自动记忆总结 ===
-        case 'MEMORY_SUMMARY': {
-          const facts = Array.isArray(event.data.facts) ? event.data.facts : [];
-          return {
-            ...prev,
-            memorySummaries: [
-              ...prev.memorySummaries,
-              {
-                agentId: String(event.data.agentId || ''),
-                agentName: String(event.data.agentName || 'Agent'),
-                facts: facts.map((item) => {
-                  const fact = item as Record<string, unknown>;
-                  return {
-                    id: String(fact.id || createId()),
-                    title: String(fact.title || '自动记忆'),
-                    content: String(fact.content || ''),
-                    tags: Array.isArray(fact.tags) ? fact.tags.map((tag) => String(tag)) : [],
-                  };
-                }),
-              },
-            ],
-          };
-        }
-
         // === 人机交互请求 ===
-        case 'HITL_REQUIRED':
-        case 'PLAN_APPROVAL_REQUIRED': {
+        case 'HITL_REQUIRED': {
           const toolCalls = Array.isArray(event.data.toolCalls) ? event.data.toolCalls : [];
+          const interactionId = String(event.data.interactionId || '');
           const stringifyToolInput = (input: unknown) => {
             if (typeof input === 'string') return input;
             if (input === null || input === undefined) return '';
@@ -1113,14 +793,17 @@ export function useEventStream(): UseEventStreamReturn {
           return {
             ...prev,
             isStreaming: false,
-            hitlRequests: [
-              ...prev.hitlRequests,
+            hitlRequests: prev.hitlRequests.some((item) => item.interactionId === interactionId)
+              ? prev.hitlRequests
+              : [
+                  ...prev.hitlRequests,
               {
-                interactionId: String(event.data.interactionId || ''),
-                type: String(event.data.type || (event.type === 'PLAN_APPROVAL_REQUIRED' ? 'PLAN_APPROVAL' : '')),
+                interactionId,
+                type: String(event.data.type || ''),
                 sessionId: String(event.data.sessionId || ''),
                 agentId: String(event.data.agentId || ''),
                 agentName: String(event.data.agentName || 'Agent'),
+                runId: String(event.data.runId || event.data.run_id || prev.currentRunId || ''),
                 scope: event.data.scope === 'worker' ? 'worker' : 'leader',
                 teamActivityId: event.data.teamActivityId ? String(event.data.teamActivityId) : null,
                 replyId: String(event.data.replyId || ''),
@@ -1140,23 +823,11 @@ export function useEventStream(): UseEventStreamReturn {
           };
         }
 
-        case 'PLAN_APPROVAL_RESOLVED':
-          return {
-            ...prev,
-            isStreaming: true,
-            hitlRequests: prev.hitlRequests.filter((item) => item.interactionId !== String(event.data.interactionId || '')),
-          };
-
         // === 工具调用参数增量 ===
         case 'TOOL_CALL_DELTA':
           return {
             ...prev,
             toolCalls: prev.toolCalls.map((tc) =>
-              tc.id === event.data.tool_call_id
-                ? { ...tc, args: tc.args + (event.data.delta as string || '') }
-                : tc
-            ),
-            subagentCalls: prev.subagentCalls.map((tc) =>
               tc.id === event.data.tool_call_id
                 ? { ...tc, args: tc.args + (event.data.delta as string || '') }
                 : tc
@@ -1172,11 +843,6 @@ export function useEventStream(): UseEventStreamReturn {
                 ? { ...tc, status: 'running' }
                 : tc
             ),
-            subagentCalls: prev.subagentCalls.map((tc) =>
-              tc.id === event.data.tool_call_id
-                ? { ...tc, status: 'running' }
-                : tc
-            ),
           };
 
         // === 工具结果开始 ===
@@ -1184,11 +850,6 @@ export function useEventStream(): UseEventStreamReturn {
           return {
             ...prev,
             toolCalls: prev.toolCalls.map((tc) =>
-              tc.id === event.data.tool_call_id
-                ? { ...tc, status: 'running' }
-                : tc
-            ),
-            subagentCalls: prev.subagentCalls.map((tc) =>
               tc.id === event.data.tool_call_id
                 ? { ...tc, status: 'running' }
                 : tc
@@ -1204,11 +865,6 @@ export function useEventStream(): UseEventStreamReturn {
                 ? { ...tc, result: tc.result + (event.data.delta as string || '') }
                 : tc
             ),
-            subagentCalls: prev.subagentCalls.map((tc) =>
-              tc.id === event.data.tool_call_id
-                ? { ...tc, result: tc.result + (event.data.delta as string || '') }
-                : tc
-            ),
           };
 
         // === 工具结果结束 ===
@@ -1216,11 +872,6 @@ export function useEventStream(): UseEventStreamReturn {
           return {
             ...prev,
             toolCalls: prev.toolCalls.map((tc) =>
-              tc.id === event.data.tool_call_id
-                ? { ...tc, status: 'completed' }
-                : tc
-            ),
-            subagentCalls: prev.subagentCalls.map((tc) =>
               tc.id === event.data.tool_call_id
                 ? { ...tc, status: 'completed' }
                 : tc

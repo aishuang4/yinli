@@ -1,5 +1,7 @@
 # Agent Workstation 前端设计文档
 
+> 更新：2026-06-26 旧 Plan Runtime 与 Subagent Runtime 已下线，本文中涉及计划模型配置、可调用子 Agent 的页面设计仅供历史参考，当前前端不展示这些入口。
+>
 > 基于 vercel-react-best-practices / web-design-guidelines / vercel-composition-patterns / tailwind-guidelines / css-modern-layouts 五大 skill 的综合设计
 >
 > 技术栈：Electron + React 19 + TypeScript + Spark Design + Spark Chat

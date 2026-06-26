@@ -162,7 +162,7 @@ export function SandboxPage() {
           <FlaskConical size={18} color="var(--color-accent)" />
           <div>
             <h2 className="text-base font-medium text-[var(--color-text-primary)]">测试沙盒</h2>
-            <div className="text-xs text-[var(--color-text-secondary)]">不写历史，不更新记忆</div>
+            <div className="text-xs text-[var(--color-text-secondary)]">不写历史，仅用于临时验证</div>
           </div>
         </div>
 

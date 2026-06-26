@@ -6,9 +6,6 @@ import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from src.server.routes.agents import get_registered_agent
-from src.server.routes.memory import build_agent_memory_system_prompt
-
 from src.server.routes.chat.models import ChatTeamMemberPayload
 from src.server.routes.chat.store import _load_store
 
@@ -37,18 +34,6 @@ def _build_conversation_history_prompt(session_id: str | None, limit: int = 12) 
         lines.append(f"{role}: {content}")
 
     return "\n".join(lines) if len(lines) > 2 else ""
-
-
-def _build_agent_memory_prompt(agent_id: str | None) -> str:
-    """Build memory context for an Agent when its configuration enables it."""
-    if not agent_id or agent_id == "default":
-        return ""
-
-    agent_config = get_registered_agent(agent_id)
-    if not agent_config or not agent_config.memory_enabled:
-        return ""
-
-    return build_agent_memory_system_prompt(agent_id)
 
 
 def _build_runtime_context_prompt() -> str:
@@ -171,53 +156,6 @@ def _parse_worker_selection(text: str, allowed_agent_ids: set[str]) -> tuple[lis
 
     reason = str(data.get("reason") or "").strip()
     return selected, reason
-
-
-def _build_agent_plan_prompt(agent_config: object | None) -> str:
-    """Build runtime planning instructions from the Agent plan config."""
-
-    plan_config = getattr(agent_config, "plan_config", None)
-    if not plan_config or not getattr(plan_config, "enabled", True):
-        return ""
-
-    mode = str(getattr(plan_config, "mode", "structured") or "structured")
-    max_steps = int(getattr(plan_config, "max_steps", 6) or 6)
-    require_before_tools = bool(getattr(plan_config, "require_plan_before_tools", True))
-    require_user_approval = bool(getattr(plan_config, "require_user_approval", False))
-    allow_replanning = bool(getattr(plan_config, "allow_replanning", True))
-
-    lines = [
-        "## Agent Planning Contract",
-        "You have an explicit planning layer before and during execution.",
-        f"Planning mode: {mode}.",
-        f"Maximum plan steps: {max_steps}.",
-        "Represent plans as concise numbered steps with status markers: pending, active, completed, blocked.",
-        'Do not repeatedly output headings such as "Execution" after each tool call; keep tool-loop narration compact.',
-    ]
-    if require_before_tools:
-        lines.append("Before calling any tool or MCP, first produce a short plan unless the task is trivial and purely conversational.")
-    if require_user_approval:
-        lines.append("After drafting the initial plan, ask the user to approve or adjust it before executing non-read-only actions.")
-    if allow_replanning:
-        lines.append("When tool results materially change the situation, update the plan briefly before continuing.")
-    else:
-        lines.append("Do not change the plan unless the user explicitly asks you to.")
-
-    if mode == "lightweight":
-        lines.append("Use at most 3 plan steps and keep the plan compact.")
-    elif mode == "strict":
-        lines.extend([
-            "For complex tasks, provide one concise initial plan and one final result summary.",
-            "Do not mark a step completed until the required tool result or reasoning evidence is available.",
-            "If a step is blocked, stop and report the blocker instead of silently skipping it.",
-        ])
-    else:
-        lines.extend([
-            "For multi-step work, show the initial plan, then continue with execution.",
-            "Keep planning visible but concise; avoid long meta explanations.",
-        ])
-
-    return "\n".join(lines)
 
 
 def _build_team_system_prompt(

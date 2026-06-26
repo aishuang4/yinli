@@ -13,8 +13,6 @@ from src.agents.factory import (
     KnowledgeToolRuntimeSpec,
     McpRuntimeSpec,
     RuntimeToolScope,
-    SubagentRuntimeContext,
-    SubagentRuntimeSpec,
     get_or_create_agent,
 )
 from src.server.routes.chat.intent_router import (
@@ -22,8 +20,7 @@ from src.server.routes.chat.intent_router import (
     filter_team_members_for_route,
 )
 from src.server.routes.chat.models import ChatMessage, ChatTeamMemberPayload
-from src.server.routes.chat.plans import build_plan_context_prompt, create_model_first_runtime_plan
-from src.server.routes.chat.prompts import _build_agent_plan_prompt, _build_team_system_prompt
+from src.server.routes.chat.prompts import _build_team_system_prompt
 from src.server.routes.skills import Skill, get_installed_skill
 
 
@@ -46,14 +43,6 @@ class RoutedTeamContext:
 
 
 @dataclass(frozen=True)
-class PlanRuntimeBuildResult:
-    """Plan Runtime 构建结果。"""
-
-    system_prompt: str
-    runtime_plan: dict[str, Any] | None
-
-
-@dataclass(frozen=True)
 class MainAgentRuntimeSpec:
     """创建主 Agent 所需的稳定运行时规格。"""
 
@@ -67,11 +56,8 @@ class MainAgentRuntimeSpec:
     guardrails: AgentGuardrails
     mcp_servers: list[McpRuntimeSpec]
     knowledge_tools: list[KnowledgeToolRuntimeSpec]
-    subagents: list[SubagentRuntimeSpec]
-    subagent_context: SubagentRuntimeContext
     parent_agent_id: str
     parent_agent_name: str
-    plan_id: str | None
     tool_scope: RuntimeToolScope
 
 
@@ -145,54 +131,6 @@ def runtime_tool_scope_from_route(intent_route: IntentRoute) -> RuntimeToolScope
     )
 
 
-async def build_plan_runtime_context(
-    *,
-    intent_route: IntentRoute,
-    agent_config: object | None,
-    session_id: str,
-    agent_id: str,
-    team_id: str | None,
-    title: str,
-    goal: str,
-    team_members: list[ChatTeamMemberPayload],
-    has_tools: bool,
-    has_skills: bool,
-    system_prompt: str,
-    model_config: RuntimeModelConfig,
-) -> PlanRuntimeBuildResult:
-    """按 IntentRoute 创建 Plan Runtime，并把 Plan 上下文追加到系统提示词。"""
-
-    if not intent_route.should_create_plan:
-        return PlanRuntimeBuildResult(system_prompt=system_prompt, runtime_plan=None)
-
-    plan_config = getattr(agent_config, "plan_config", None)
-    runtime_plan = await create_model_first_runtime_plan(
-        session_id=session_id,
-        agent_id=agent_id,
-        team_id=team_id,
-        title=title,
-        goal=goal,
-        mode=str(getattr(plan_config, "mode", "structured") or "structured"),
-        max_steps=int(getattr(plan_config, "max_steps", 6) or 6),
-        team_members=team_members,
-        has_tools=has_tools,
-        has_skills=has_skills,
-        model_name=model_config.model_name,
-        fallback_names=model_config.fallback_names,
-        model_options=model_config.model_options,
-    )
-    next_system_prompt = "\n\n".join(
-        part
-        for part in [
-            system_prompt,
-            _build_agent_plan_prompt(agent_config),
-            build_plan_context_prompt(runtime_plan),
-        ]
-        if part
-    )
-    return PlanRuntimeBuildResult(system_prompt=next_system_prompt, runtime_plan=runtime_plan)
-
-
 def build_runtime_agent_cache_key(
     *,
     agent_id: str,
@@ -203,10 +141,7 @@ def build_runtime_agent_cache_key(
     used_skills: list[Skill],
     mcp_servers: list[McpRuntimeSpec],
     knowledge_tools: list[KnowledgeToolRuntimeSpec],
-    subagents: list[SubagentRuntimeSpec],
-    subagent_context: SubagentRuntimeContext,
     runtime_tool_scope: RuntimeToolScope,
-    runtime_plan: dict[str, Any] | None,
     guardrail_cache_key: str,
 ) -> str:
     """生成影响 Agent 实例缓存的稳定 key。"""
@@ -218,14 +153,11 @@ def build_runtime_agent_cache_key(
         for server in mcp_servers
     )
     knowledge_cache_key = ",".join(tool.id for tool in knowledge_tools)
-    subagent_cache_key = ",".join(f"{item.id}:{item.name}" for item in subagents)
     return (
         f"{agent_id}:{session_id}:{model_name}:thinking-{deep_thinking}:"
         f"fallbacks-{fallback_cache_key}:"
         f"skills-{skill_cache_key}:mcp-{mcp_cache_key}:knowledge-{knowledge_cache_key}:"
-        f"subagents-{subagent_cache_key}:depth-{subagent_context.max_depth}:"
         f"tools-{runtime_tool_scope.cache_key()}:"
-        f"plan-{runtime_plan.get('id') if runtime_plan else 'none'}:"
         f"guardrails-{guardrail_cache_key}"
     )
 
@@ -242,10 +174,7 @@ def build_main_agent_runtime_spec(
     guardrails: AgentGuardrails,
     mcp_servers: list[McpRuntimeSpec],
     knowledge_tools: list[KnowledgeToolRuntimeSpec],
-    subagents: list[SubagentRuntimeSpec],
-    subagent_context: SubagentRuntimeContext,
     runtime_tool_scope: RuntimeToolScope,
-    runtime_plan: dict[str, Any] | None,
     guardrail_cache_key: str,
 ) -> MainAgentRuntimeSpec:
     """构建主 Agent 工厂参数，不包含 trace 回调。"""
@@ -259,10 +188,7 @@ def build_main_agent_runtime_spec(
         used_skills=used_skills,
         mcp_servers=mcp_servers,
         knowledge_tools=knowledge_tools,
-        subagents=subagents,
-        subagent_context=subagent_context,
         runtime_tool_scope=runtime_tool_scope,
-        runtime_plan=runtime_plan,
         guardrail_cache_key=guardrail_cache_key,
     )
     return MainAgentRuntimeSpec(
@@ -276,11 +202,8 @@ def build_main_agent_runtime_spec(
         guardrails=guardrails,
         mcp_servers=mcp_servers,
         knowledge_tools=knowledge_tools,
-        subagents=subagents,
-        subagent_context=subagent_context,
         parent_agent_id=agent_id,
         parent_agent_name=agent_name,
-        plan_id=str(runtime_plan.get("id")) if runtime_plan else None,
         tool_scope=runtime_tool_scope,
     )
 
@@ -289,7 +212,6 @@ def create_main_agent_from_spec(
     spec: MainAgentRuntimeSpec,
     *,
     on_fallback_event: Callable[[dict[str, Any]], None] | None = None,
-    on_subagent_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> Any:
     """根据 MainAgentRuntimeSpec 创建或复用主 Agent。"""
 
@@ -305,12 +227,8 @@ def create_main_agent_from_spec(
         guardrails=spec.guardrails,
         mcp_servers=spec.mcp_servers,
         knowledge_tools=spec.knowledge_tools,
-        subagents=spec.subagents,
-        subagent_context=spec.subagent_context,
         parent_agent_id=spec.parent_agent_id,
         parent_agent_name=spec.parent_agent_name,
-        plan_id=spec.plan_id,
         tool_scope=spec.tool_scope,
         on_fallback_event=on_fallback_event,
-        on_subagent_event=on_subagent_event,
     )

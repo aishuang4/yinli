@@ -50,19 +50,19 @@ export interface Guardrails {
   timeoutSeconds: number;
 }
 
-/** 计划模型配置 */
+/** 历史 Plan 配置兼容字段：旧 Plan Runtime 已下线，当前运行时不消费。 */
 export interface PlanConfig {
-  /** 是否启用计划层 */
+  /** 历史兼容字段：旧计划层开关 */
   enabled: boolean;
-  /** 计划模式 */
+  /** 历史兼容字段：旧计划模式 */
   mode: 'lightweight' | 'structured' | 'strict';
-  /** 最大计划步骤数 */
+  /** 历史兼容字段：旧最大计划步骤数 */
   maxSteps: number;
-  /** 调用工具前是否先产出计划 */
+  /** 历史兼容字段：旧工具前计划开关 */
   requirePlanBeforeTools: boolean;
-  /** 执行计划前是否需要用户确认 */
+  /** 历史兼容字段：旧计划审批开关 */
   requireUserApproval: boolean;
-  /** 执行中是否允许修订计划 */
+  /** 历史兼容字段：旧重规划开关 */
   allowReplanning: boolean;
 }
 
@@ -88,13 +88,13 @@ export interface Agent {
   skills: string[];
   /** 标签 */
   tags: string[];
-  /** 可调用的子 Agent ID 列表 */
+  /** 历史兼容字段：旧可调用子 Agent ID 列表 */
   callableAgents: string[];
   /** 最大调用深度 */
   maxDepth: number;
-  /** 是否在运行时注入 Agent 自己的长期记忆 */
+  /** 历史兼容字段：当前运行时忽略 */
   memoryEnabled: boolean;
-  /** 计划模型配置 */
+  /** 历史 Plan 配置兼容字段 */
   planConfig: PlanConfig;
   /** 安全边界 */
   guardrails: Guardrails;
@@ -149,14 +149,14 @@ export const DEFAULT_GUARDRAILS: Guardrails = {
   timeoutSeconds: 300,
 };
 
-/** 默认计划模型配置 */
+/** 默认历史 Plan 配置兼容字段 */
 export const DEFAULT_PLAN_CONFIG: PlanConfig = {
-  enabled: true,
+  enabled: false,
   mode: 'structured',
   maxSteps: 6,
-  requirePlanBeforeTools: true,
+  requirePlanBeforeTools: false,
   requireUserApproval: false,
-  allowReplanning: true,
+  allowReplanning: false,
 };
 
 /** 创建空 Agent 表单数据 */

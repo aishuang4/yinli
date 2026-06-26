@@ -15,7 +15,7 @@ from typing import Any
 from agentscope.agent import Agent
 from agentscope.agent._config import ContextConfig, ModelConfig, ReActConfig
 from agentscope.mcp import HttpMCPConfig, MCPClient
-from agentscope.tool import Toolkit, Bash, Read, Write, Edit, Grep, Glob
+from agentscope.tool import Toolkit, Bash, Read, Write, Edit, Grep, Glob, ToolBase
 from agentscope.state import AgentState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.permission._types import PermissionMode
@@ -29,19 +29,14 @@ from src.agents.runtime_types import (
     KnowledgeToolRuntimeSpec,
     McpRuntimeSpec,
     RuntimeToolScope,
-    SubagentEventCallback,
-    SubagentRuntimeContext,
-    SubagentRuntimeSpec,
     WORKSPACE_DIR,
 )
-from src.agents.subagent_tool import CallAgentTool
 from src.config.runtime_settings import get_effective_model_settings
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.tools.ask_user import AskUser
 from src.tools.configured_http_tool import ConfiguredHttpTool
 from src.tools.http_request import HttpRequest
 from src.tools.knowledge_base_search import KnowledgeBaseSearch
-from src.tools.plan_runtime import create_plan_runtime_tools
 
 
 # ============================================================================
@@ -184,13 +179,10 @@ def _create_default_toolkit(
     guardrails: AgentGuardrails | None = None,
     mcp_servers: list[McpRuntimeSpec] | None = None,
     knowledge_tools: list[KnowledgeToolRuntimeSpec] | None = None,
-    subagents: list[SubagentRuntimeSpec] | None = None,
-    subagent_context: SubagentRuntimeContext | None = None,
     parent_agent_id: str = "default",
     parent_agent_name: str = "Assistant",
-    on_subagent_event: SubagentEventCallback | None = None,
-    plan_id: str | None = None,
     tool_scope: RuntimeToolScope | None = None,
+    extra_tools: list[ToolBase] | None = None,
 ) -> Toolkit:
     """
     创建默认工具集
@@ -216,7 +208,7 @@ def _create_default_toolkit(
         Grep(),
         Glob(),
         AskUser(),
-        *create_plan_runtime_tools(plan_id),
+        *(extra_tools or []),
     ]
     if not read_only:
         local_tools.extend([Write(), Edit()])
@@ -262,19 +254,6 @@ def _create_default_toolkit(
                     )
                 )
 
-    if subagents and subagent_context and not read_only:
-        for spec in subagents:
-            local_tools.append(
-                CallAgentTool(
-                    parent_agent_id=parent_agent_id,
-                    parent_agent_name=parent_agent_name,
-                    spec=spec,
-                    parent_guardrails=guardrails,
-                    context=subagent_context,
-                    on_event=on_subagent_event,
-                )
-            )
-
     mcp_clients = [] if read_only or not scope.allow_mcp else _create_mcp_clients(mcp_servers or [], guardrails)
     return Toolkit(
         tools=[
@@ -296,14 +275,11 @@ def get_or_create_agent(
     guardrails: AgentGuardrails | None = None,
     mcp_servers: list[McpRuntimeSpec] | None = None,
     knowledge_tools: list[KnowledgeToolRuntimeSpec] | None = None,
-    subagents: list[SubagentRuntimeSpec] | None = None,
-    subagent_context: SubagentRuntimeContext | None = None,
     parent_agent_id: str | None = None,
     parent_agent_name: str | None = None,
-    plan_id: str | None = None,
     tool_scope: RuntimeToolScope | None = None,
+    extra_tools: list[ToolBase] | None = None,
     on_fallback_event: FallbackEventCallback | None = None,
-    on_subagent_event: SubagentEventCallback | None = None,
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -368,13 +344,10 @@ def get_or_create_agent(
             guardrails=guardrails,
             mcp_servers=mcp_servers,
             knowledge_tools=knowledge_tools,
-            subagents=subagents,
-            subagent_context=subagent_context,
             parent_agent_id=parent_agent_id or agent_id,
             parent_agent_name=parent_agent_name or name,
-            on_subagent_event=on_subagent_event,
-            plan_id=plan_id,
             tool_scope=tool_scope,
+            extra_tools=extra_tools,
         ),
         state=agent_state,
         offloader=workspace,

@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from src.server.routes.chat.helpers import _sse_event
-from src.server.routes.chat.models import ChatPlanRun
 from src.server.routes.chat.store import _append_assistant_message
 from src.storage.database import (
     append_chat_run_event,
@@ -28,7 +27,7 @@ EventStreamFactory = Callable[[], AsyncGenerator[str, None]]
 MAX_BACKGROUND_RUNS = 50
 MAX_EVENTS_PER_RUN = 5000
 COMPLETED_RUN_TTL = timedelta(hours=2)
-WAITING_EVENT_TYPES = {"HITL_REQUIRED", "CLARIFICATION_REQUIRED", "PLAN_APPROVAL_REQUIRED"}
+WAITING_EVENT_TYPES = {"HITL_REQUIRED", "CLARIFICATION_REQUIRED"}
 ACTIVE_RUN_STATUSES = {"running", "waiting", "cancelling"}
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 CURRENT_BACKGROUND_RUN_ID: ContextVar[str] = ContextVar("current_chat_background_run_id", default="")
@@ -225,7 +224,7 @@ async def subscribe_chat_background_run(run_id: str) -> AsyncGenerator[str, None
             replay_events = list(run.events)
             queue: asyncio.Queue[str | None] | None = asyncio.Queue()
             run.subscribers.add(queue)
-            already_finished = run.status in TERMINAL_RUN_STATUSES or run.status == "waiting"
+            already_finished = run.status in TERMINAL_RUN_STATUSES
 
     try:
         for event in replay_events:
@@ -323,31 +322,17 @@ def _append_cancelled_assistant_message(run: ChatBackgroundRun) -> None:
 
     text_parts: list[str] = []
     thinking_parts: list[str] = []
-    latest_plan: dict | None = None
     for raw_event in run.events:
         event_type, data = _parse_sse_event(raw_event)
         if event_type == "TEXT_BLOCK_DELTA":
             text_parts.append(str(data.get("delta") or ""))
         elif event_type == "THINKING_BLOCK_DELTA":
             thinking_parts.append(str(data.get("delta") or ""))
-        elif event_type == "PLAN_UPDATE" and isinstance(data.get("plan"), dict):
-            latest_plan = data["plan"]
 
     content = "".join(text_parts).strip()
     thinking = "".join(thinking_parts).strip()
-    if not content and not thinking and not latest_plan:
+    if not content and not thinking:
         content = "本轮执行已由用户停止。"
-
-    plan_runs: list[ChatPlanRun] = []
-    if latest_plan:
-        try:
-            plan_runs.append(ChatPlanRun.model_validate({
-                **latest_plan,
-                "status": "cancelled",
-                "completedAt": run.completed_at,
-            }))
-        except Exception:
-            plan_runs = []
 
     _append_assistant_message(
         session_id=run.session_id,
@@ -357,7 +342,6 @@ def _append_cancelled_assistant_message(run: ChatBackgroundRun) -> None:
         content=content,
         error="用户已停止本轮执行。",
         thinking=thinking,
-        plan_runs=plan_runs,
     )
 
 
@@ -488,7 +472,7 @@ def _summarize_run_events(run: ChatBackgroundRun) -> dict:
                     current_stage = f"Worker 协作中：{completed_workers}/{total_workers} 完成"
         elif event_type in WAITING_EVENT_TYPES:
             progress = max(progress, 65)
-            current_stage = "等待计划审批" if event_type == "PLAN_APPROVAL_REQUIRED" else "等待人工处理"
+            current_stage = "等待人工处理"
         elif event_type == "REPLY_END":
             progress = max(progress, 90)
             current_stage = "回复已生成，正在收尾"

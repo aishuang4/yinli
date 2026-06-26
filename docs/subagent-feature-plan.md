@@ -1,5 +1,7 @@
 # Subagent 功能规划
 
+> 状态：历史设计。旧 Subagent Runtime 已于 2026-06-26 下线，当前代码仅保留 `callableAgents` / `subagentCalls` 等兼容字段。后续 Subagent 需要重新设计生命周期、事件契约和持久化模型。
+>
 > 更新时间：2026-06-16
 >
 > 本文档用于规划 Agent Workstation 的 Subagent 功能。当前代码中已经预留 `callableAgents` 和 `maxDepth` 字段，但运行时尚未把子 Agent 暴露为主 Agent 可调用能力。本文档定义功能边界、实现路径、数据结构、前后端改造点和测试验收标准。
@@ -612,4 +614,3 @@ Team 是显式协作，适合用户能看到每个成员执行过程的任务。
 4. Chat 注入 subagent tools。
 5. Trace 记录 `SUBAGENT_CALL_*`。
 6. 跑 smoke 测试和前端 build。
-

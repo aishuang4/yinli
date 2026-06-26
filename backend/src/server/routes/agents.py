@@ -84,14 +84,17 @@ class Guardrails(BaseModel):
 
 
 class PlanConfig(BaseModel):
-    """Agent planning configuration."""
+    """历史 Plan 配置兼容字段。
 
-    enabled: bool = Field(default=True, description="是否启用计划模型")
-    mode: str = Field(default="structured", description="计划模式：lightweight/structured/strict")
-    max_steps: int = Field(default=6, ge=1, le=20, alias="maxSteps", description="最大计划步骤数")
-    require_plan_before_tools: bool = Field(default=True, alias="requirePlanBeforeTools", description="调用工具前是否必须先形成计划")
-    require_user_approval: bool = Field(default=False, alias="requireUserApproval", description="执行计划前是否需要用户确认")
-    allow_replanning: bool = Field(default=True, alias="allowReplanning", description="执行中遇到新信息是否允许修订计划")
+    旧 Plan Runtime 已下线；该模型只用于读取和导出历史数据，当前运行时不消费。
+    """
+
+    enabled: bool = Field(default=False, description="历史兼容字段：旧 Plan Runtime 已下线")
+    mode: str = Field(default="structured", description="历史兼容字段：旧计划模式")
+    max_steps: int = Field(default=6, ge=1, le=20, alias="maxSteps", description="历史兼容字段：旧最大计划步骤数")
+    require_plan_before_tools: bool = Field(default=False, alias="requirePlanBeforeTools", description="历史兼容字段：旧工具前计划开关")
+    require_user_approval: bool = Field(default=False, alias="requireUserApproval", description="历史兼容字段：旧计划审批开关")
+    allow_replanning: bool = Field(default=False, alias="allowReplanning", description="历史兼容字段：旧重规划开关")
 
     model_config = {"populate_by_name": True}
 
@@ -107,10 +110,10 @@ class AgentCreate(BaseModel):
     knowledge_tools: list[str] = Field(default_factory=list, alias="knowledgeTools", description="知识库 HTTP 工具 ID 列表")
     skills: list[str] = Field(default_factory=list, description="Skills ID 列表")
     tags: list[str] = Field(default_factory=list, description="标签")
-    callable_agents: list[str] = Field(default_factory=list, alias="callableAgents", description="可调用的子 Agent ID 列表")
-    max_depth: int = Field(default=2, ge=1, le=5, alias="maxDepth", description="最大调用深度")
-    memory_enabled: bool = Field(default=True, alias="memoryEnabled", description="是否在运行时注入 Agent 记忆")
-    plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig", description="计划模型配置")
+    callable_agents: list[str] = Field(default_factory=list, alias="callableAgents", description="历史兼容字段：旧可调用子 Agent ID 列表")
+    max_depth: int = Field(default=2, ge=1, le=5, alias="maxDepth", description="历史兼容字段：旧子 Agent 最大调用深度")
+    memory_enabled: bool = Field(default=True, alias="memoryEnabled", description="历史兼容字段：当前运行时忽略")
+    plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig", description="历史兼容字段：旧计划模型配置")
     guardrails: Guardrails = Field(default_factory=Guardrails, description="安全边界配置")
 
     model_config = {"populate_by_name": True}

@@ -13,9 +13,8 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { AlertCircle, Archive, Bot, CheckCircle2, Download, Pencil, Pin, PinOff, Plus, RotateCcw, Save, Sparkles, Trash2, Upload, UserPlus, Users, WandSparkles, X } from 'lucide-react';
+import { AlertCircle, Bot, CheckCircle2, Download, Plus, Sparkles, Trash2, Upload, UserPlus, Users, WandSparkles, X } from 'lucide-react';
 import { Button, Empty, Input, Modal, Select, Spinner, Tag } from '@agentscope-ai/design';
-import { useAgentMemory } from '../hooks/useAgentMemory';
 import { useAgentBuilder } from '../hooks/useAgentBuilder';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
@@ -24,7 +23,6 @@ import { AgentEditor } from '../features/agents/AgentEditor';
 import { DEFAULT_MODEL_CONFIG, type AgentCreatePayload, type ModelsResponse } from '../types/agent';
 import type { Agent } from '../types/agent';
 import type { BuilderMode, BuilderPlan } from '../types/agentBuilder';
-import type { AgentMemory, MemoryFact } from '../types/memory';
 import type { TeamMember, TeamRecord } from '../types/team';
 import { createId } from '../utils/id';
 
@@ -470,19 +468,14 @@ export function AgentTeamPage() {
             onCancel={() => setCreating(false)}
           />
         ) : mode === 'agents' && selectedAgent ? (
-          <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_360px] gap-4 p-4">
-            <div className="min-h-0 overflow-hidden">
-              <AgentEditor
-                agent={selectedAgent}
-                models={models}
-                availableAgents={agents}
-                onSave={handleUpdate}
-                onCancel={() => setSelectedId(null)}
-              />
-            </div>
-            <div className="min-h-0 rounded-md bg-[var(--color-bg-secondary)] shadow-sm">
-              <AgentMemoryPanel agent={selectedAgent} />
-            </div>
+          <div className="h-full min-h-0 p-4">
+            <AgentEditor
+              agent={selectedAgent}
+              models={models}
+              availableAgents={agents}
+              onSave={handleUpdate}
+              onCancel={() => setSelectedId(null)}
+            />
           </div>
         ) : mode === 'teams' && selectedTeam ? (
           <TeamDetailPanel
@@ -770,7 +763,6 @@ function AgentBuilderWizard({
                 <BuilderAgentDraftCard
                   key={agent.tempId}
                   agent={agent}
-                  agents={plan.agents}
                   mode={plan.mode}
                 />
               ))}
@@ -794,18 +786,13 @@ function AgentBuilderWizard({
 
 function BuilderAgentDraftCard({
   agent,
-  agents,
   mode,
 }: {
   agent: BuilderPlan['agents'][number];
-  agents: BuilderPlan['agents'];
   mode: BuilderMode;
 }) {
   const matchedTools = (agent.recommendedTools || []).filter((item) => item.matched);
   const matchedSkills = (agent.recommendedSkills || []).filter((item) => item.matched);
-  const callableAgents = (agent.callableAgentRefs || [])
-    .map((tempId) => agents.find((item) => item.tempId === tempId))
-    .filter((item): item is BuilderPlan['agents'][number] => Boolean(item));
   const modelConfig = agent.modelConfig || DEFAULT_MODEL_CONFIG;
 
   return (
@@ -845,19 +832,6 @@ function BuilderAgentDraftCard({
           missing={agent.missingSkills || []}
         />
       </div>
-
-      {callableAgents.length > 0 && (
-        <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
-          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">可调用子 Agent</div>
-          <div className="flex flex-wrap gap-1">
-            {callableAgents.map((item) => (
-              <Tag key={item.tempId} size="small" color="blue">
-                {item.name}
-              </Tag>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -889,496 +863,6 @@ function CapabilityBlock({
           </Tag>
         ))}
       </div>
-    </div>
-  );
-}
-
-function AgentMemoryPanel({ agent }: { agent: Agent }) {
-  const { memory, loading, error, updateMemory } = useAgentMemory(agent.id);
-  const [mainDraft, setMainDraft] = useState('');
-  const [savingMain, setSavingMain] = useState(false);
-  const [busyCandidateId, setBusyCandidateId] = useState<string | null>(null);
-  const [mergingCandidates, setMergingCandidates] = useState(false);
-  const [busyCleanupId, setBusyCleanupId] = useState<string | null>(null);
-  const [busyFactId, setBusyFactId] = useState<string | null>(null);
-  const [editingFactId, setEditingFactId] = useState<string | null>(null);
-  const [factDraft, setFactDraft] = useState({ title: '', content: '', tags: '' });
-  const [rejectCandidateId, setRejectCandidateId] = useState<string | null>(null);
-  const [rejectReason, setRejectReason] = useState('');
-  const [deleteFactId, setDeleteFactId] = useState<string | null>(null);
-  const [cleanupConfirm, setCleanupConfirm] = useState<{ suggestionId: string; keepFactId?: string | null } | null>(null);
-
-  useEffect(() => {
-    setMainDraft(memory?.main_memory || '');
-  }, [memory?.main_memory]);
-
-  const applyReturnedMemory = async (response: Response) => {
-    const nextMemory: AgentMemory = await response.json();
-    updateMemory(() => nextMemory);
-  };
-
-  const saveMainMemory = async () => {
-    setSavingMain(true);
-    try {
-      const response = await fetch(`/api/agent-memory/${agent.id}/main`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: mainDraft }),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      await applyReturnedMemory(response);
-    } finally {
-      setSavingMain(false);
-    }
-  };
-
-  const resolveCandidate = async (candidateId: string, action: 'approve' | 'reject', reason = '') => {
-    setBusyCandidateId(candidateId);
-    try {
-      const response = await fetch(`/api/agent-memory/${agent.id}/candidates/${candidateId}/${action}`, {
-        method: 'POST',
-        headers: action === 'reject' ? { 'Content-Type': 'application/json' } : undefined,
-        body: action === 'reject' ? JSON.stringify({ reason }) : undefined,
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      if (action === 'reject') {
-        updateMemory((current) => ({
-          ...current,
-          candidates: current.candidates.filter((candidate) => candidate.id !== candidateId),
-        }));
-      } else {
-        await applyReturnedMemory(response);
-      }
-    } finally {
-      setBusyCandidateId(null);
-      if (action === 'reject') {
-        setRejectCandidateId(null);
-        setRejectReason('');
-      }
-    }
-  };
-
-  const mergeDuplicateCandidates = async () => {
-    setMergingCandidates(true);
-    try {
-      const response = await fetch(`/api/agent-memory/${agent.id}/candidates/merge-duplicates`, {
-        method: 'POST',
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      await applyReturnedMemory(response);
-    } finally {
-      setMergingCandidates(false);
-    }
-  };
-
-  const startEditFact = (fact: MemoryFact) => {
-    setEditingFactId(fact.id);
-    setFactDraft({
-      title: fact.title,
-      content: fact.content,
-      tags: fact.tags.join(', '),
-    });
-  };
-
-  const patchFact = async (factId: string, patch: Partial<MemoryFact>) => {
-    setBusyFactId(factId);
-    try {
-      const response = await fetch(`/api/agent-memory/${agent.id}/facts/${factId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const updatedFact: MemoryFact = await response.json();
-      updateMemory((current) => ({
-        ...current,
-        facts: current.facts.map((fact) => (fact.id === factId ? updatedFact : fact)),
-        cleanup_suggestions: current.cleanup_suggestions.filter((suggestion) => (
-          !suggestion.fact_ids.includes(factId)
-        )),
-      }));
-    } finally {
-      setBusyFactId(null);
-    }
-  };
-
-  const saveFactEdit = async (factId: string) => {
-    const tags = factDraft.tags
-      .split(',')
-      .map((tag) => tag.trim())
-      .filter(Boolean)
-      .slice(0, 8);
-    await patchFact(factId, {
-      title: factDraft.title.trim(),
-      content: factDraft.content.trim(),
-      tags,
-    });
-    setEditingFactId(null);
-  };
-
-  const deleteFact = async (factId: string) => {
-    setBusyFactId(factId);
-    try {
-      const response = await fetch(`/api/agent-memory/${agent.id}/facts/${factId}`, {
-        method: 'DELETE',
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      updateMemory((current) => ({
-        ...current,
-        facts: current.facts.filter((fact) => fact.id !== factId),
-        cleanup_suggestions: current.cleanup_suggestions.filter((suggestion) => (
-          !suggestion.fact_ids.includes(factId) && suggestion.keep_fact_id !== factId
-        )),
-      }));
-    } finally {
-      setBusyFactId(null);
-      setDeleteFactId(null);
-    }
-  };
-
-  const applyCleanupSuggestion = async (suggestionId: string, keepFactId?: string | null) => {
-    setBusyCleanupId(suggestionId);
-    try {
-      const response = await fetch(`/api/agent-memory/${agent.id}/cleanup/apply`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ suggestionId, keepFactId }),
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      await applyReturnedMemory(response);
-    } finally {
-      setBusyCleanupId(null);
-      setCleanupConfirm(null);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex justify-center py-8">
-        <Spinner />
-      </div>
-    );
-  }
-
-  if (error) {
-    return <div className="p-4 text-sm text-[var(--color-error)]">{error}</div>;
-  }
-
-  return (
-    <div className="h-full overflow-y-auto p-4">
-      {memory?.main_memory_path && (
-        <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-sm font-medium text-[var(--color-text-primary)]">主记忆 MEMORY.md</div>
-              <div className="mt-1 break-all text-xs text-[var(--color-text-tertiary)]">
-                {memory.main_memory_path}
-              </div>
-            </div>
-            <Button size="small" type="primary" loading={savingMain} onClick={saveMainMemory}>
-              保存
-            </Button>
-          </div>
-          <Input.TextArea
-            value={mainDraft}
-            onChange={(event) => setMainDraft(event.target.value)}
-            rows={10}
-            className="mt-3"
-            style={{ fontFamily: 'var(--font-mono)' }}
-          />
-        </div>
-      )}
-
-      <div className="mb-4">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-sm font-medium text-[var(--color-text-primary)]">候选记忆</h3>
-          <Button
-            size="small"
-            loading={mergingCandidates}
-            disabled={!memory?.candidates.length}
-            onClick={() => void mergeDuplicateCandidates()}
-          >
-            合并重复
-          </Button>
-        </div>
-        <div className="mt-2 space-y-2">
-          {memory?.candidates.length ? memory.candidates.map((candidate) => (
-            <div key={candidate.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 text-sm font-medium text-[var(--color-text-primary)]">
-                  {candidate.title}
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <Tag size="small" color="transparent">{candidate.category || 'general'}</Tag>
-                  <Tag size="small" color={(candidate.confidence || 0) >= 0.7 ? 'green' : 'orange'}>
-                    {Math.round((candidate.confidence || 0) * 100)}%
-                  </Tag>
-                </div>
-              </div>
-              <div className="mt-1 whitespace-pre-wrap text-xs text-[var(--color-text-secondary)]">
-                {candidate.content}
-              </div>
-              {candidate.source_session_id && (
-                <div className="mt-2 truncate text-[11px] text-[var(--color-text-tertiary)]">
-                  来源会话：{candidate.source_session_id}
-                </div>
-              )}
-              {candidate.tags.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {candidate.tags.map((tag) => (
-                    <Tag key={tag} size="small" color="transparent">{tag}</Tag>
-                  ))}
-                </div>
-              )}
-              <div className="mt-3 flex justify-end gap-2">
-                <Button
-                  size="small"
-                  loading={busyCandidateId === candidate.id}
-                  onClick={() => {
-                    setRejectCandidateId(candidate.id);
-                    setRejectReason('');
-                  }}
-                >
-                  忽略
-                </Button>
-                <Button
-                  size="small"
-                  type="primary"
-                  loading={busyCandidateId === candidate.id}
-                  onClick={() => resolveCandidate(candidate.id, 'approve')}
-                >
-                  写入主记忆
-                </Button>
-              </div>
-            </div>
-          )) : (
-            <Empty type="noData" description="暂无候选记忆" />
-          )}
-        </div>
-      </div>
-
-      <div className="mb-4">
-        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">清理建议</h3>
-        <div className="mt-2 space-y-2">
-          {memory?.cleanup_suggestions.length ? memory.cleanup_suggestions.map((suggestion) => (
-            <div key={suggestion.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Tag size="small" color={suggestion.type === 'duplicate' ? 'blue' : suggestion.type === 'conflict' ? 'orange' : 'transparent'}>
-                      {suggestion.type === 'duplicate' ? '重复' : suggestion.type === 'conflict' ? '疑似冲突' : '长期未更新'}
-                    </Tag>
-                    <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-                      {suggestion.title}
-                    </div>
-                  </div>
-                  <div className="mt-2 text-xs text-[var(--color-text-secondary)]">
-                    {suggestion.description}
-                  </div>
-                  <div className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">
-                    涉及 {suggestion.fact_ids.length} 条记忆 · 置信度 {Math.round(suggestion.confidence * 100)}%
-                  </div>
-                </div>
-                <Button
-                  size="small"
-                  loading={busyCleanupId === suggestion.id}
-                  onClick={() => setCleanupConfirm({ suggestionId: suggestion.id, keepFactId: suggestion.keep_fact_id })}
-                >
-                  确认清理
-                </Button>
-              </div>
-            </div>
-          )) : (
-            <Empty type="noData" description="暂无清理建议" />
-          )}
-        </div>
-      </div>
-
-      <div className="mb-4">
-        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">已确认事实</h3>
-        <div className="mt-2 space-y-2">
-          {memory?.facts.length ? memory.facts.map((fact) => (
-            <div key={fact.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-              {editingFactId === fact.id ? (
-                <div className="space-y-2">
-                  <Input
-                    value={factDraft.title}
-                    onChange={(event) => setFactDraft((current) => ({ ...current, title: event.target.value }))}
-                    placeholder="记忆标题"
-                  />
-                  <Input.TextArea
-                    value={factDraft.content}
-                    onChange={(event) => setFactDraft((current) => ({ ...current, content: event.target.value }))}
-                    rows={4}
-                    placeholder="记忆内容"
-                  />
-                  <Input
-                    value={factDraft.tags}
-                    onChange={(event) => setFactDraft((current) => ({ ...current, tags: event.target.value }))}
-                    placeholder="标签，用英文逗号分隔"
-                  />
-                  <div className="flex justify-end gap-2">
-                    <Button size="small" icon={<X size={13} />} onClick={() => setEditingFactId(null)}>
-                      取消
-                    </Button>
-                    <Button
-                      size="small"
-                      type="primary"
-                      icon={<Save size={13} />}
-                      loading={busyFactId === fact.id}
-                      disabled={!factDraft.title.trim() || !factDraft.content.trim()}
-                      onClick={() => void saveFactEdit(fact.id)}
-                    >
-                      保存
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex min-w-0 items-center gap-2">
-                        {fact.pinned && <Pin size={13} className="shrink-0 text-[var(--color-primary)]" />}
-                        <div className={`truncate text-sm font-medium ${fact.status === 'outdated' ? 'text-[var(--color-text-tertiary)] line-through' : 'text-[var(--color-text-primary)]'}`}>
-                          {fact.title}
-                        </div>
-                      </div>
-                      <div className="mt-1 whitespace-pre-wrap break-words text-xs text-[var(--color-text-secondary)]">
-                        {fact.content}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Button
-                        size="small"
-                        icon={fact.pinned ? <PinOff size={13} /> : <Pin size={13} />}
-                        loading={busyFactId === fact.id}
-                        onClick={() => void patchFact(fact.id, { pinned: !fact.pinned })}
-                        aria-label={fact.pinned ? '取消置顶' : '置顶'}
-                      />
-                      <Button
-                        size="small"
-                        icon={<Pencil size={13} />}
-                        onClick={() => startEditFact(fact)}
-                        aria-label="编辑"
-                      />
-                      <Button
-                        size="small"
-                        icon={fact.status === 'outdated' ? <RotateCcw size={13} /> : <Archive size={13} />}
-                        loading={busyFactId === fact.id}
-                        onClick={() => void patchFact(fact.id, { status: fact.status === 'outdated' ? 'active' : 'outdated' })}
-                        aria-label={fact.status === 'outdated' ? '恢复有效' : '标记过期'}
-                      />
-                      <Button
-                        size="small"
-                        danger
-                        icon={<Trash2 size={13} />}
-                        loading={busyFactId === fact.id}
-                        onClick={() => setDeleteFactId(fact.id)}
-                        aria-label="删除"
-                      />
-                    </div>
-                  </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-1">
-                    <Tag size="small" color={fact.status === 'active' ? 'green' : 'orange'}>
-                      {fact.status === 'active' ? '有效' : '已过期'}
-                    </Tag>
-                    <Tag size="small" color="transparent">
-                      注入 {fact.access_count || 0} 次
-                    </Tag>
-                    {fact.tags.map((tag) => (
-                      <Tag key={tag} size="small" color="transparent">{tag}</Tag>
-                    ))}
-                  </div>
-                  {fact.last_accessed_at && (
-                    <div className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">
-                      最后注入：{new Date(fact.last_accessed_at).toLocaleString()}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-          )) : (
-            <Empty type="noData" description="暂无已确认事实" />
-          )}
-        </div>
-      </div>
-
-      <div>
-        <h3 className="text-sm font-medium text-[var(--color-text-primary)]">运行历史</h3>
-        <div className="mt-2 space-y-2">
-          {memory?.events.length ? memory.events.map((event) => (
-            <div key={event.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-              <div className="flex items-center gap-2">
-                <Tag size="small" color="transparent">{event.type}</Tag>
-                <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-                  {event.title}
-                </div>
-              </div>
-              <div className="mt-2 line-clamp-3 text-xs text-[var(--color-text-secondary)]">
-                {event.content}
-              </div>
-            </div>
-          )) : (
-            <Empty type="noData" description="暂无运行历史" />
-          )}
-        </div>
-      </div>
-
-      <Modal
-        title="忽略候选记忆"
-        open={Boolean(rejectCandidateId)}
-        onCancel={() => {
-          setRejectCandidateId(null);
-          setRejectReason('');
-        }}
-        onOk={() => rejectCandidateId && void resolveCandidate(rejectCandidateId, 'reject', rejectReason)}
-        okText="确认忽略"
-        cancelText="取消"
-        confirmLoading={Boolean(rejectCandidateId && busyCandidateId === rejectCandidateId)}
-        width={420}
-      >
-        <div className="space-y-3">
-          <div className="text-sm text-[var(--color-text-secondary)]">
-            可填写忽略原因，便于后续审查记忆候选。
-          </div>
-          <Input.TextArea
-            value={rejectReason}
-            onChange={(event) => setRejectReason(event.target.value)}
-            rows={4}
-            placeholder="忽略原因（可选）"
-          />
-        </div>
-      </Modal>
-
-      <Modal
-        title="删除记忆事实"
-        open={Boolean(deleteFactId)}
-        onCancel={() => setDeleteFactId(null)}
-        onOk={() => deleteFactId && void deleteFact(deleteFactId)}
-        okText="确认删除"
-        cancelText="取消"
-        confirmLoading={Boolean(deleteFactId && busyFactId === deleteFactId)}
-        width={420}
-      >
-        <div className="text-sm text-[var(--color-text-secondary)]">
-          删除后这条已确认事实会从 Agent 记忆中移除。这个操作不会影响主记忆文件中的其他内容。
-        </div>
-      </Modal>
-
-      <Modal
-        title="执行记忆清理"
-        open={Boolean(cleanupConfirm)}
-        onCancel={() => setCleanupConfirm(null)}
-        onOk={() => cleanupConfirm && void applyCleanupSuggestion(cleanupConfirm.suggestionId, cleanupConfirm.keepFactId)}
-        okText="确认清理"
-        cancelText="取消"
-        confirmLoading={Boolean(cleanupConfirm && busyCleanupId === cleanupConfirm.suggestionId)}
-        width={460}
-      >
-        <div className="text-sm text-[var(--color-text-secondary)]">
-          相关记忆会被标记为过期，不会被删除。过期记忆仍可在面板中查看，但不会再注入 Agent 运行上下文。
-        </div>
-      </Modal>
     </div>
   );
 }

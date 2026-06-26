@@ -1,5 +1,7 @@
 # SubAgent 实现方案：Agent Workstation (Python + AgentScope 2.0)
 
+> 状态：历史方案。旧 Subagent Runtime 已于 2026-06-26 下线，本文不再代表当前实现。后续重启 Subagent 设计时必须以新的 Chat 事件契约和运行时生命周期为准。
+>
 > 基于 Agent Workstation 现有代码扩展，对齐掘金文章的 SubAgent 设计原则
 > 文章：《SubAgent 原理深度解析》 https://juejin.cn/post/7632162180318920745
 >

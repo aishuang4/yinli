@@ -1,25 +1,26 @@
 # Agent Workstation TODO
 
-> Last updated: 2026-06-23
+> 最后更新：2026-06-26
 >
-> This file is the working TODO for the project. Use it as the source of truth
-> for upcoming implementation order. When a feature is completed, update the
-> checkbox and add a short note if behavior changed.
+> 本文件是项目后续实现顺序的工作 TODO。功能完成后请更新勾选状态，并补一句行为变化说明。
 
 ## Current Focus
 
 - [x] Stabilize runtime observability and testability.
 - [x] Keep Agent, Team, Tool, Skill, Memory, and Settings data portable.
 - [x] Improve high-frequency Chat and Team workflows before adding marketplace-style features.
-- [x] 拆分前置意图路由，降低主 Agent 的规划、Skill、Subagent、Team 选择压力。
-  - 实现于 2026-06-23：新增 `docs/pre-agent-intent-router-design.md`、`intent_router.py`、`runtime_builder.py`、`orchestration.py`、`leader_stream.py`、`completion.py`，将 Plan/Skill/Subagent/Team/ToolScope/Clarification 前置路由和 runtime 组装从 `send.py` 拆出。
+- [x] 拆分前置意图路由，降低主 Agent 的 Skill、Team 选择和工具裁剪压力。
+  - 实现于 2026-06-23：新增 `docs/pre-agent-intent-router-design.md`、`intent_router.py`、`runtime_builder.py`、`orchestration.py`、`leader_stream.py`、`completion.py`，将 Skill/Team/ToolScope/Clarification 前置路由和 runtime 组装从 `send.py` 拆出。
   - 当前 `IntentRoute` 会写入 `INTENT_ROUTE` trace；Team worker 选择为规则优先、小模型兜底；主 Agent 工具注入受 `RuntimeToolScope` 裁剪。
+- [x] 下线旧 Plan Runtime 与 Subagent Runtime。
+  - 实现于 2026-06-26：删除旧 Plan 工具/路由和 Subagent 工具运行时，前端隐藏 Plan 配置入口。`planConfig`、`planRuns`、`callableAgents`、`subagentCalls` 等字段仅作为历史兼容保留，不再驱动 Chat 执行。
 - [ ] 收尾 Chat runtime 拆分的剩余边界。
-  - [x] 拆出 Plan approval 流程，减少 `send.py` 中审批等待、拒绝计划和错误写入逻辑。实现于 2026-06-23：已下沉到 `completion.handle_plan_approval_if_required()`。
+  - [x] 清理旧 Plan approval 流程，避免 `send.py` 中保留失效审批分支。实现于 2026-06-26：旧 Plan Runtime 已整体下线。
   - [x] 抽统一早期错误处理 helper，覆盖图片模型不支持、API Key 缺失、Agent 创建失败等重复路径。实现于 2026-06-23：已下沉到 `completion.emit_failed_startup_run()`。
+  - [ ] 固化 Chat SSE 事件契约，确保前后端只依赖文档化事件，不再继续引入临时事件名。
   - [ ] 低优先级：让 `resume.py` 复用 `leader_stream.py`、`completion.py`、`orchestration.py`，避免 resume 和 send 再次分叉。
     - 当前不影响主流程；除非后续 HITL resume 与正常 send 出现明显行为分叉，否则先不作为近期主线。
-  - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 mode、skills、subagents、team workers 和 toolScope。
+  - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 mode、skills、team workers 和 toolScope。
 
 ## P0. Finish Current Trace And Sandbox Work
 
@@ -268,11 +269,11 @@
   - 前端展示动态生成的执行图，并允许用户在关键节点确认。
   - Sandbox 中支持保存一次动态编排结果作为固定 Workflow 模板。
 
-- [ ] 低优先级：Team Plan 动态化增强
-  - 当前 Team Plan 已支持模型优先生成结构化 Plan，失败时使用规则模板兜底。
-  - 现阶段看起来像固定步骤，主要是因为 Team 场景会按成员职责收敛为“Worker 步骤 + Leader 汇总”。
-  - 后续如要增强，再做 Team 专用动态 Plan：允许模型决定是否跳过某些 Worker、是否增加跨 Worker 依赖、是否插入验证步骤。
-  - 该项暂不进入近期主线，优先保证 Subagent、权限、工具、运行任务中心等地基能力稳定。
+- [ ] 低优先级：重新设计 Plan / Subagent / Dynamic Workflow 的关系
+  - 旧 Plan Runtime 与 Subagent Runtime 已下线，避免继续修补错误设计。
+  - 新方案需要先明确生命周期、状态锁、审批恢复、事件契约和持久化模型，再进入实现。
+  - Team 动态编排暂归入 Workflow / Dynamic Workflows 方向统一评估，不再保留旧 Team Plan 路线。
+  - 该项暂不进入近期主线，优先保证 Chat 事件、权限、工具、运行任务中心等地基能力稳定。
 
 - [ ] 评测体系增强
   - Sandbox 支持测试集批量运行。

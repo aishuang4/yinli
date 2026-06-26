@@ -291,7 +291,9 @@ class ChatMessage(BaseModel):
     """图片输入（base64，不含 data URL 前缀）"""
 
     sandbox: bool = False
-    """沙盒运行：不写入历史对话和 Agent 记忆"""
+    """沙盒运行：不写入历史对话"""
+
+    model_config = {"populate_by_name": True}
 
 
 class TeamWorkerSelectionRequest(BaseModel):

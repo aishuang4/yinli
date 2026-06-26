@@ -118,12 +118,12 @@ function mapApiAgent(api: AgentApiData): Agent {
     maxDepth: api.maxDepth,
     memoryEnabled: api.memoryEnabled ?? true,
     planConfig: {
-      enabled: api.planConfig?.enabled ?? true,
+      enabled: api.planConfig?.enabled ?? false,
       mode: api.planConfig?.mode ?? 'structured',
       maxSteps: api.planConfig?.maxSteps ?? 6,
-      requirePlanBeforeTools: api.planConfig?.requirePlanBeforeTools ?? true,
+      requirePlanBeforeTools: api.planConfig?.requirePlanBeforeTools ?? false,
       requireUserApproval: api.planConfig?.requireUserApproval ?? false,
-      allowReplanning: api.planConfig?.allowReplanning ?? true,
+      allowReplanning: api.planConfig?.allowReplanning ?? false,
     },
     guardrails: {
       filesystemScope: api.guardrails.filesystem_scope,

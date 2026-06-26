@@ -7,20 +7,20 @@ from src.server.routes.chat.background_runs import (
     relay_chat_background_run_events,
     start_chat_background_run,
 )
-from src.server.routes.chat.handlers.send import _is_plan_runtime_tool_name
 from src.server.routes.chat.helpers import _sse_event
 from src.server.routes.chat.intent_router import (
+    IntentRoute,
     filter_team_members_for_route,
     refine_team_route_with_model,
     route_chat_message,
+    route_chat_message_with_model,
     route_trace_payload,
 )
-from src.server.routes.chat.models import ChatTeamMemberPayload, ChatToolRun
-from src.server.routes.chat.runtime import _build_runtime_subagents, _permission_mode_for_guardrails
+from src.server.routes.chat.models import ChatMessage, ChatTeamMemberPayload, ChatToolRun
+from src.server.routes.chat.runtime import _permission_mode_for_guardrails
 from src.server.routes.chat.runtime_builder import (
     RuntimeModelConfig,
     build_main_agent_runtime_spec,
-    build_plan_runtime_context,
     build_runtime_agent_cache_key,
     build_runtime_model_config,
     create_main_agent_from_spec,
@@ -36,9 +36,6 @@ from src.security.permissions import (
     build_permission_profile,
 )
 from src.tools.ask_user import AskUser
-from src.tools.plan_runtime import CompletePlanStep
-from src.server.routes.chat.plans import create_model_first_runtime_plan, create_runtime_plan, mark_plan_step_for_agent, should_create_plan
-from src.storage.database import get_plan_record
 
 
 def test_model_cache_from_event_ignores_non_cache_usage():
@@ -95,247 +92,7 @@ def test_ask_user_is_external_tool_for_agentscope_resume():
     assert tool.input_schema["required"] == ["title", "questions"]
 
 
-def test_complete_plan_step_updates_structured_plan_and_markdown():
-    plan = create_runtime_plan(
-        session_id="test-plan-session",
-        agent_id="test-agent",
-        team_id=None,
-        title="测试计划",
-        goal="验证 Plan 工具更新步骤",
-        mode="structured",
-        max_steps=3,
-        team_members=[],
-        has_tools=True,
-        has_skills=False,
-    )
-
-    asyncio.run(CompletePlanStep(plan["id"])(step_index=0, result="第一步完成", activate_next=True))
-
-    updated = get_plan_record(plan["id"])
-
-    assert updated is not None
-    assert updated["steps"][0]["status"] == "completed"
-    assert updated["steps"][0]["result"] == "第一步完成"
-    assert updated["steps"][1]["status"] == "active"
-    assert "第一步完成" in updated["markdown"]
-
-
-def test_plan_runtime_tool_name_detection_handles_prefixed_names():
-    assert _is_plan_runtime_tool_name("CompletePlanStep")
-    assert _is_plan_runtime_tool_name("agent_CompletePlanStep")
-    assert _is_plan_runtime_tool_name("plan-runtime-update_plan_step")
-    assert not _is_plan_runtime_tool_name("KnowledgeBaseSearch")
-
-
-def test_plan_runtime_does_not_trigger_for_conversation_with_tools():
-    agent_config = SimpleNamespace(plan_config=SimpleNamespace(enabled=True))
-
-    assert not should_create_plan(
-        agent_config=agent_config,
-        message="你好，今天我们先简单聊聊这个项目背景。",
-        has_team=False,
-        has_tools=True,
-        has_skills=False,
-        has_images=False,
-    )
-
-
-def test_plan_runtime_triggers_for_explicit_planning_intent():
-    agent_config = SimpleNamespace(plan_config=SimpleNamespace(enabled=True))
-
-    assert should_create_plan(
-        agent_config=agent_config,
-        message="请先帮我规划一下这个功能的实现步骤，然后等我确认。",
-        has_team=False,
-        has_tools=False,
-        has_skills=False,
-        has_images=False,
-    )
-
-
-def test_plan_runtime_triggers_for_tool_execution_intent():
-    agent_config = SimpleNamespace(plan_config=SimpleNamespace(enabled=True))
-
-    assert should_create_plan(
-        agent_config=agent_config,
-        message="请检查后端聊天接口代码并修复计划模式每轮误触发的问题。",
-        has_team=False,
-        has_tools=True,
-        has_skills=False,
-        has_images=False,
-    )
-
-
-def test_plan_runtime_respects_disabled_config():
-    agent_config = SimpleNamespace(plan_config=SimpleNamespace(enabled=False))
-
-    assert not should_create_plan(
-        agent_config=agent_config,
-        message="请规划一下实现步骤。",
-        has_team=True,
-        has_tools=True,
-        has_skills=True,
-        has_images=True,
-    )
-
-
-def test_runtime_plan_uses_task_specific_steps_for_code_work():
-    plan = create_runtime_plan(
-        session_id="test-plan-code-session",
-        agent_id="test-agent",
-        team_id=None,
-        title="修复计划模式",
-        goal="请检查后端聊天接口代码并修复计划模式每轮误触发的问题。",
-        mode="structured",
-        max_steps=6,
-        team_members=[],
-        has_tools=True,
-        has_skills=False,
-    )
-
-    titles = [step["title"] for step in plan["steps"]]
-
-    assert titles == ["定位相关代码和约束", "实施必要改动", "运行验证", "汇总变更与结果"]
-    assert "理解任务和约束" not in titles
-
-
-def test_model_first_plan_uses_valid_model_steps(monkeypatch):
-    async def fake_generate_plan_json_with_model(**kwargs):
-        return {
-            "title": "模型计划",
-            "steps": [
-                {"title": "读取现状", "description": "先确认已有实现", "assignedAgentId": "test-agent"},
-                {"title": "执行改造", "description": "按需求修改", "assignedAgentId": "test-agent"},
-            ],
-        }
-
-    monkeypatch.setattr(
-        "src.server.routes.chat.plans._generate_plan_json_with_model",
-        fake_generate_plan_json_with_model,
-    )
-
-    plan = asyncio.run(create_model_first_runtime_plan(
-        session_id="test-model-plan-session",
-        agent_id="test-agent",
-        team_id=None,
-        title="规则标题",
-        goal="请实现模型优先计划。",
-        mode="structured",
-        max_steps=6,
-        team_members=[],
-        has_tools=True,
-        has_skills=False,
-        model_name="test-model",
-        fallback_names=[],
-        model_options=AgentModelOptions(),
-    ))
-
-    assert plan["title"] == "模型计划"
-    assert [step["title"] for step in plan["steps"]] == ["读取现状", "执行改造"]
-
-
-def test_model_first_plan_falls_back_to_rule_steps(monkeypatch):
-    async def fake_generate_plan_json_with_model(**kwargs):
-        return {"title": "坏计划", "steps": []}
-
-    monkeypatch.setattr(
-        "src.server.routes.chat.plans._generate_plan_json_with_model",
-        fake_generate_plan_json_with_model,
-    )
-
-    plan = asyncio.run(create_model_first_runtime_plan(
-        session_id="test-model-plan-fallback-session",
-        agent_id="test-agent",
-        team_id=None,
-        title="兜底计划",
-        goal="请检查后端聊天接口代码并修复计划模式问题。",
-        mode="structured",
-        max_steps=6,
-        team_members=[],
-        has_tools=True,
-        has_skills=False,
-        model_name="test-model",
-        fallback_names=[],
-        model_options=AgentModelOptions(),
-    ))
-
-    assert [step["title"] for step in plan["steps"]] == ["定位相关代码和约束", "实施必要改动", "运行验证", "汇总变更与结果"]
-
-
-def test_rule_fallback_uses_task_dimensions_instead_of_fixed_code_template():
-    plan = create_runtime_plan(
-        session_id="test-plan-dimension-fallback-session",
-        agent_id="test-agent",
-        team_id=None,
-        title="HTTP 工具管理调研",
-        goal=(
-            "分析 agent-workstation 里 HTTP 工具管理功能还缺哪些完善点。"
-            "计划里需要包含前端、后端、测试、用户体验四个维度。"
-        ),
-        mode="structured",
-        max_steps=6,
-        team_members=[],
-        has_tools=True,
-        has_skills=False,
-    )
-
-    titles = [step["title"] for step in plan["steps"]]
-
-    assert titles == [
-        "界定调研目标和现状范围",
-        "前端入口与交互",
-        "后端接口与存储",
-        "测试与回归验证",
-        "用户体验与可用性",
-        "收敛改进建议和优先级",
-    ]
-    assert "定位相关代码和约束" not in titles
-
-
-def test_team_worker_completion_updates_assigned_plan_step():
-    members = [
-        SimpleNamespace(
-            agent_id="worker-a",
-            name="调研 Worker",
-            role="worker",
-            handoff_prompt="调研 HTTP 工具需求。",
-            description="调研",
-        ),
-        SimpleNamespace(
-            agent_id="leader",
-            name="Leader",
-            role="leader",
-            handoff_prompt="",
-            description="",
-        ),
-    ]
-    plan = create_runtime_plan(
-        session_id="test-team-plan-session",
-        agent_id="leader",
-        team_id="team-1",
-        title="Team Plan",
-        goal="团队协作完成 HTTP 工具调研。",
-        mode="structured",
-        max_steps=6,
-        team_members=members,
-        has_tools=True,
-        has_skills=False,
-    )
-
-    updated = mark_plan_step_for_agent(
-        plan,
-        assigned_agent_id="worker-a",
-        status="completed",
-        result="调研 Worker 已完成。",
-    )
-
-    worker_step = next(step for step in updated["steps"] if step["assignedAgentId"] == "worker-a")
-    assert worker_step["status"] == "completed"
-    assert worker_step["result"] == "调研 Worker 已完成。"
-    assert "调研 Worker 已完成。" in updated["markdown"]
-
-
-def test_intent_route_selects_matching_subagent(monkeypatch):
+def test_intent_route_ignores_configured_subagents(monkeypatch):
     parent = SimpleNamespace(
         callable_agents=["research-agent", "code-agent"],
         plan_config=SimpleNamespace(enabled=True),
@@ -370,40 +127,8 @@ def test_intent_route_selects_matching_subagent(monkeypatch):
         images=[],
     )
 
-    assert route.mode == "subagent_execution"
-    assert route.selected_subagent_ids == ["research-agent"]
-
-
-def test_runtime_subagents_respect_empty_route_selection():
-    parent = SimpleNamespace(
-        id="parent-agent",
-        callable_agents=["research-agent"],
-        max_depth=2,
-    )
-
-    assert _build_runtime_subagents(parent, selected_subagent_ids=[]) == []
-
-
-def test_runtime_subagents_warn_when_configured_child_is_missing(monkeypatch):
-    parent = SimpleNamespace(
-        id="parent-agent",
-        name="Parent Agent",
-        callable_agents=["missing-agent"],
-        max_depth=2,
-    )
-    warnings = []
-    monkeypatch.setattr(
-        "src.server.routes.agents.get_registered_agent",
-        lambda agent_id: None,
-    )
-
-    specs = _build_runtime_subagents(parent, on_warning=warnings.append)
-
-    assert specs == []
-    assert warnings[0]["eventType"] == "SUBAGENT_CALL_FAILED"
-    assert warnings[0]["reason"] == "missing_subagent"
-    assert warnings[0]["parentAgentId"] == "parent-agent"
-    assert warnings[0]["subagentId"] == "missing-agent"
+    assert route.mode == "agent_execution"
+    assert route.selected_subagent_ids == []
 
 
 def test_intent_route_trace_payload_uses_api_aliases():
@@ -608,6 +333,134 @@ def test_intent_route_tool_scope_enables_execution_and_research_tools():
     assert route.tool_scope.allow_knowledge is True
 
 
+def test_intent_route_ignores_plan_approval_when_user_explicitly_asks():
+    route = route_chat_message(
+        message="请规划并执行这个任务，执行前必须等我审批计划。",
+        agent_config=SimpleNamespace(
+            callable_agents=[],
+            plan_config=SimpleNamespace(enabled=True, require_user_approval=False),
+            mcp_tools=[],
+            knowledge_tools=[],
+        ),
+        skill_ids=[],
+        team_members=[],
+        images=[],
+    )
+
+    assert route.should_create_plan is False
+    assert route.require_plan_approval is False
+    assert route.mode == "agent_execution"
+
+
+class _FakeTextDeltaEvent:
+    def __init__(self, delta: str):
+        self.delta = delta
+
+    def model_dump(self, mode: str = "json"):
+        return {"type": "TEXT_BLOCK_DELTA", "delta": self.delta}
+
+
+class _FakeRouterAgent:
+    def __init__(self, text: str):
+        self.text = text
+
+    async def reply_stream(self, message):
+        yield _FakeTextDeltaEvent(self.text)
+
+
+def test_model_intent_route_ignores_plan_and_subagent_requests_but_keeps_tools(monkeypatch):
+    parent = SimpleNamespace(
+        id="parent-agent",
+        name="Parent",
+        description="",
+        callable_agents=["code-agent"],
+        plan_config=SimpleNamespace(enabled=True),
+        mcp_tools=[],
+        knowledge_tools=["kb-1"],
+    )
+    children = {
+        "code-agent": SimpleNamespace(
+            id="code-agent",
+            name="Code Agent",
+            description="负责代码实现、修复和测试。",
+            system_prompt="",
+        ),
+    }
+    router_json = """
+    {
+      "mode": "agent_execution",
+      "intent": "code_change",
+      "confidence": 0.91,
+      "reason": "需要修改代码并运行验证。",
+      "shouldCreatePlan": true,
+      "requireClarification": false,
+      "selectedSubagentIds": ["code-agent"],
+      "selectedSkillIds": [],
+      "selectedTeamMemberIds": [],
+      "toolScope": {
+        "allowMcp": true,
+        "allowKnowledge": true,
+        "allowBash": true,
+        "allowHttp": false,
+        "reason": "代码修改需要测试，且需要知识库上下文。"
+      }
+    }
+    """
+
+    monkeypatch.setattr(
+        "src.server.routes.agents.get_registered_agent",
+        lambda agent_id: children.get(agent_id),
+    )
+    monkeypatch.setattr(
+        "src.server.routes.chat.intent_router.get_or_create_agent",
+        lambda **kwargs: _FakeRouterAgent(router_json),
+    )
+
+    route = asyncio.run(route_chat_message_with_model(
+        message="请让代码 Agent 修复项目中的测试问题，并运行 pytest 验证。",
+        agent_config=parent,
+        skill_ids=[],
+        team_members=[],
+        images=[],
+        model_name="test-model",
+    ))
+
+    assert route.mode == "agent_execution"
+    assert route.should_create_plan is False
+    assert route.selected_subagent_ids == []
+    assert route.tool_scope.allow_bash is True
+    assert route.tool_scope.allow_knowledge is True
+    assert route.tool_scope.allow_mcp is False
+    model_decision = next(decision for decision in route.decisions if decision.name == "model_router")
+    assert model_decision.payload["intent"] == "code_change"
+
+
+def test_model_intent_route_falls_back_to_rules_on_invalid_json(monkeypatch):
+    monkeypatch.setattr(
+        "src.server.routes.chat.intent_router.get_or_create_agent",
+        lambda **kwargs: _FakeRouterAgent("not json"),
+    )
+
+    route = asyncio.run(route_chat_message_with_model(
+        message="请修复一下。",
+        agent_config=SimpleNamespace(
+            id="agent",
+            callable_agents=[],
+            plan_config=SimpleNamespace(enabled=True),
+            mcp_tools=[],
+            knowledge_tools=[],
+        ),
+        skill_ids=[],
+        team_members=[],
+        images=[],
+        model_name="test-model",
+    ))
+
+    assert route.mode == "clarification"
+    assert route.require_clarification is True
+    assert route.should_create_plan is False
+
+
 def test_runtime_tool_scope_cache_key_is_stable():
     scope = RuntimeToolScope(
         allow_mcp=False,
@@ -643,7 +496,7 @@ def test_runtime_builder_model_config_prefers_request_model():
     assert config.model_options.max_react_iters == 12
 
 
-def test_runtime_builder_cache_key_includes_tool_scope_and_plan():
+def test_runtime_builder_cache_key_includes_tool_scope():
     key = build_runtime_agent_cache_key(
         agent_id="agent",
         session_id="session",
@@ -653,110 +506,12 @@ def test_runtime_builder_cache_key_includes_tool_scope_and_plan():
         used_skills=[],
         mcp_servers=[],
         knowledge_tools=[],
-        subagents=[],
-        subagent_context=SimpleNamespace(max_depth=2),
         runtime_tool_scope=RuntimeToolScope(allow_mcp=False, allow_knowledge=False, allow_bash=True, allow_http=False),
-        runtime_plan={"id": "plan-1"},
         guardrail_cache_key="guardrails",
     )
 
     assert "tools-mcp-0:knowledge-0:bash-1:http-0" in key
-    assert "plan-plan-1" in key
-
-
-def test_plan_runtime_builder_skips_when_route_does_not_require_plan():
-    route = route_chat_message(
-        message="你好，简单聊聊。",
-        agent_config=SimpleNamespace(
-            callable_agents=[],
-            plan_config=SimpleNamespace(enabled=True),
-            mcp_tools=[],
-            knowledge_tools=[],
-        ),
-        skill_ids=[],
-        team_members=[],
-        images=[],
-    )
-
-    result = asyncio.run(build_plan_runtime_context(
-        intent_route=route,
-        agent_config=SimpleNamespace(plan_config=SimpleNamespace(mode="structured", max_steps=3)),
-        session_id="session-no-plan",
-        agent_id="agent",
-        team_id=None,
-        title="No plan",
-        goal="你好，简单聊聊。",
-        team_members=[],
-        has_tools=False,
-        has_skills=False,
-        system_prompt="base prompt",
-        model_config=RuntimeModelConfig(
-            model_name="test-model",
-            fallback_names=[],
-            model_options=AgentModelOptions(),
-        ),
-    ))
-
-    assert result.runtime_plan is None
-    assert result.system_prompt == "base prompt"
-
-
-def test_plan_runtime_builder_creates_plan_and_appends_prompt(monkeypatch):
-    async def fake_create_model_first_runtime_plan(**kwargs):
-        return create_runtime_plan(
-            session_id=kwargs["session_id"],
-            agent_id=kwargs["agent_id"],
-            team_id=kwargs["team_id"],
-            title=kwargs["title"],
-            goal=kwargs["goal"],
-            mode=kwargs["mode"],
-            max_steps=kwargs["max_steps"],
-            team_members=kwargs["team_members"],
-            has_tools=kwargs["has_tools"],
-            has_skills=kwargs["has_skills"],
-        )
-
-    monkeypatch.setattr(
-        "src.server.routes.chat.runtime_builder.create_model_first_runtime_plan",
-        fake_create_model_first_runtime_plan,
-    )
-
-    route = route_chat_message(
-        message="请规划一下实现步骤。",
-        agent_config=SimpleNamespace(
-            callable_agents=[],
-            plan_config=SimpleNamespace(enabled=True),
-            mcp_tools=[],
-            knowledge_tools=[],
-        ),
-        skill_ids=[],
-        team_members=[],
-        images=[],
-    )
-
-    result = asyncio.run(build_plan_runtime_context(
-        intent_route=route,
-        agent_config=SimpleNamespace(plan_config=SimpleNamespace(mode="structured", max_steps=3)),
-        session_id="session-with-plan",
-        agent_id="agent",
-        team_id=None,
-        title="计划",
-        goal="请规划一下实现步骤。",
-        team_members=[],
-        has_tools=True,
-        has_skills=False,
-        system_prompt="base prompt",
-        model_config=RuntimeModelConfig(
-            model_name="test-model",
-            fallback_names=[],
-            model_options=AgentModelOptions(),
-        ),
-    ))
-
-    assert result.runtime_plan is not None
-    assert result.runtime_plan["goal"] == "请规划一下实现步骤。"
-    assert "base prompt" in result.system_prompt
-    assert "Plan Runtime" in result.system_prompt
+    assert "plan-" not in key
 
 
 def test_main_agent_runtime_spec_wraps_factory_inputs():
@@ -776,19 +531,14 @@ def test_main_agent_runtime_spec_wraps_factory_inputs():
         guardrails=AgentGuardrails(),
         mcp_servers=[],
         knowledge_tools=[],
-        subagents=[],
-        subagent_context=SimpleNamespace(max_depth=2),
         runtime_tool_scope=tool_scope,
-        runtime_plan={"id": "plan-1"},
         guardrail_cache_key="guardrails",
     )
 
     assert spec.name == "Agent"
     assert spec.parent_agent_id == "agent"
-    assert spec.plan_id == "plan-1"
     assert spec.tool_scope is tool_scope
     assert "thinking-True" in spec.runtime_agent_id
-    assert "plan-plan-1" in spec.runtime_agent_id
 
 
 def test_create_main_agent_from_spec_delegates_to_factory(monkeypatch):
@@ -818,27 +568,21 @@ def test_create_main_agent_from_spec_delegates_to_factory(monkeypatch):
         guardrails=AgentGuardrails(),
         mcp_servers=[],
         knowledge_tools=[],
-        subagents=[],
-        subagent_context=SimpleNamespace(max_depth=2),
         runtime_tool_scope=tool_scope,
-        runtime_plan={"id": "plan-1"},
         guardrail_cache_key="guardrails",
     )
 
     result = create_main_agent_from_spec(
         spec,
         on_fallback_event=lambda event: None,
-        on_subagent_event=lambda event: None,
     )
 
     assert result == "agent-instance"
     assert calls["agent_id"] == spec.runtime_agent_id
     assert calls["name"] == "Agent"
     assert calls["model_name"] == "model"
-    assert calls["plan_id"] == "plan-1"
     assert calls["tool_scope"] is tool_scope
     assert callable(calls["on_fallback_event"])
-    assert callable(calls["on_subagent_event"])
 
 
 def test_unified_permission_profile_maps_legacy_bypass_to_trusted_tools():
