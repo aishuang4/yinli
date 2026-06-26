@@ -6,13 +6,12 @@
  * - ModelConfig: 模型选择、Fallback 链、温度参数
  * - Tools: 默认工具（锁定）+ MCP + Skills
  * - Guardrails: 安全边界
- * - Collaboration: 子 Agent 配置
  *
  * @see vercel-composition-patterns: architecture-compound-components
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Bot, ChevronDown, ChevronRight, Pencil, Plus, Save, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Pencil, Plus, Save, SlidersHorizontal, Trash2, X } from 'lucide-react';
 import {
   Alert,
   Button,
@@ -45,7 +44,7 @@ interface AgentEditorProps {
     primary: ModelOption[];
     fallback: ModelOption[];
   } | null;
-  /** 当前已有 Agent，用于选择可调用子 Agent */
+  /** 当前已有 Agent。保留字段兼容父组件调用。 */
   availableAgents?: Agent[];
   /** 保存回调 */
   onSave: (data: AgentCreatePayload) => Promise<void>;
@@ -91,14 +90,13 @@ const DEFAULT_HTTP_PARAMETER_SCHEMA = {
 /**
  * AgentEditor 组件
  */
-export function AgentEditor({ agent, models, availableAgents = [], onSave, onCancel }: AgentEditorProps) {
+export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProps) {
   const [form, setForm] = useState<AgentCreatePayload>(createEmptyAgentForm());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mcpSelectorOpen, setMcpSelectorOpen] = useState(false);
   const [skillsSelectorOpen, setSkillsSelectorOpen] = useState(false);
   const [knowledgeSelectorOpen, setKnowledgeSelectorOpen] = useState(false);
-  const [subagentSelectorOpen, setSubagentSelectorOpen] = useState(false);
   const [knowledgeEditorOpen, setKnowledgeEditorOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [editingKnowledgeTool, setEditingKnowledgeTool] = useState<HttpTool | null>(null);
@@ -168,24 +166,6 @@ export function AgentEditor({ agent, models, availableAgents = [], onSave, onCan
   const selectedSkills = useMemo(() => (
     enabledSkills.filter((skill) => selectedSkillSet.has(skill.id))
   ), [enabledSkills, selectedSkillSet]);
-
-  const callableAgentOptions = useMemo(() => (
-    availableAgents.filter((item) => item.id !== agent?.id)
-  ), [agent?.id, availableAgents]);
-
-  const selectedCallableAgents = useMemo(() => {
-    const selected = new Set(form.callableAgents);
-    return callableAgentOptions.filter((item) => selected.has(item.id));
-  }, [callableAgentOptions, form.callableAgents]);
-
-  const toggleCallableAgent = useCallback((agentId: string, checked: boolean) => {
-    setForm((current) => ({
-      ...current,
-      callableAgents: checked
-        ? Array.from(new Set([...current.callableAgents, agentId]))
-        : current.callableAgents.filter((id) => id !== agentId),
-    }));
-  }, []);
 
   // 编辑模式：填充表单
   useEffect(() => {
@@ -481,7 +461,7 @@ export function AgentEditor({ agent, models, availableAgents = [], onSave, onCan
             <div className="min-w-0">
               <div className="text-sm font-medium text-[var(--color-text-primary)]">高级设置</div>
               <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
-                模型参数、工具、Skills、记忆、权限、计划和协作配置。
+                模型参数、工具、Skills、权限、计划和协作配置。
               </div>
             </div>
           </div>
@@ -525,26 +505,6 @@ export function AgentEditor({ agent, models, availableAgents = [], onSave, onCan
             </div>
           </div>
           <div className="space-y-4">
-            <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 transition-all duration-300 ease-out">
-              <div className="flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium text-[var(--color-text-primary)]">
-                    注入 Agent 记忆
-                  </div>
-                  <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-                    开启后，每次运行都会把该 Agent 的主记忆文件作为长期上下文注入。
-                  </div>
-                </div>
-                <ToggleButton
-                  checked={form.memoryEnabled}
-                  checkedLabel="开启"
-                  uncheckedLabel="关闭"
-                  ariaLabel="注入 Agent 记忆"
-                  onChange={(checked) => setForm({ ...form, memoryEnabled: checked })}
-                />
-              </div>
-            </div>
-
             {/* 默认工具（锁定） */}
             <div>
               <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
@@ -855,128 +815,6 @@ export function AgentEditor({ agent, models, availableAgents = [], onSave, onCan
         <section className="rounded-xl bg-[var(--color-bg-primary)] p-4 shadow-sm">
           <div className="mb-4">
             <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
-              计划模型
-            </h3>
-            <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-              控制 Agent 在调用工具前如何制定、展示和修订任务计划。
-            </div>
-          </div>
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
-              <div className="min-w-0">
-                <div className="text-sm text-[var(--color-text-primary)]">启用计划层</div>
-                <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-                  开启后，Agent 会在复杂任务中先形成计划，再进入 ReAct 工具循环。
-                </div>
-              </div>
-              <ToggleButton
-                checked={form.planConfig.enabled}
-                onChange={(checked) =>
-                  setForm({
-                    ...form,
-                    planConfig: { ...form.planConfig, enabled: checked },
-                  })
-                }
-                checkedLabel="开启"
-                uncheckedLabel="关闭"
-                ariaLabel="启用计划层"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
-                计划模式
-              </label>
-              <Select
-                value={form.planConfig.mode}
-                disabled={!form.planConfig.enabled}
-                onChange={(value) =>
-                  setForm({
-                    ...form,
-                    planConfig: { ...form.planConfig, mode: value },
-                  })
-                }
-                options={[
-                  { label: '轻量计划 - 简短 1-3 步', value: 'lightweight' },
-                  { label: '结构化计划 - 默认推荐', value: 'structured' },
-                  { label: '严格计划 - 强约束步骤状态', value: 'strict' },
-                ]}
-                style={{ width: '100%' }}
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
-                最大计划步骤
-              </label>
-              <InputNumber
-                min={1}
-                max={20}
-                value={form.planConfig.maxSteps}
-                disabled={!form.planConfig.enabled}
-                onChange={(value) =>
-                  setForm({
-                    ...form,
-                    planConfig: { ...form.planConfig, maxSteps: Number(value ?? 1) },
-                  })
-                }
-                style={{ width: 128 }}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
-                <div className="text-sm text-[var(--color-text-primary)]">工具调用前必须先计划</div>
-                <ToggleButton
-                  checked={form.planConfig.requirePlanBeforeTools}
-                  onChange={(checked) =>
-                    setForm({
-                      ...form,
-                      planConfig: { ...form.planConfig, requirePlanBeforeTools: checked },
-                    })
-                  }
-                  checkedLabel="开启"
-                  uncheckedLabel="关闭"
-                  ariaLabel="工具调用前必须先计划"
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
-                <div className="text-sm text-[var(--color-text-primary)]">执行计划前需要用户确认</div>
-                <ToggleButton
-                  checked={form.planConfig.requireUserApproval}
-                  onChange={(checked) =>
-                    setForm({
-                      ...form,
-                      planConfig: { ...form.planConfig, requireUserApproval: checked },
-                    })
-                  }
-                  checkedLabel="开启"
-                  uncheckedLabel="关闭"
-                  ariaLabel="执行计划前需要用户确认"
-                />
-              </div>
-              <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
-                <div className="text-sm text-[var(--color-text-primary)]">允许执行中修订计划</div>
-                <ToggleButton
-                  checked={form.planConfig.allowReplanning}
-                  onChange={(checked) =>
-                    setForm({
-                      ...form,
-                      planConfig: { ...form.planConfig, allowReplanning: checked },
-                    })
-                  }
-                  checkedLabel="开启"
-                  uncheckedLabel="关闭"
-                  ariaLabel="允许执行中修订计划"
-                />
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-xl bg-[var(--color-bg-primary)] p-4 shadow-sm">
-          <div className="mb-4">
-            <h3 className="text-sm font-medium text-[var(--color-text-primary)]">
               安全边界
             </h3>
             <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
@@ -1135,146 +973,11 @@ export function AgentEditor({ agent, models, availableAgents = [], onSave, onCan
           </div>
         </section>
 
-        <section className="rounded-xl bg-[var(--color-bg-primary)] p-4 shadow-sm">
-          <h3 className="mb-3 text-sm font-medium text-[var(--color-text-primary)]">
-            协作
-          </h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
-                可调用子 Agent
-              </label>
-              <div className="rounded-md bg-[var(--color-bg-secondary)] p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0 text-sm text-[var(--color-text-secondary)]">
-                    {selectedCallableAgents.length > 0
-                      ? `已选择 ${selectedCallableAgents.length} 个子 Agent`
-                      : '未选择子 Agent'}
-                  </div>
-                  <SquareAddButton
-                    ariaLabel="选择子 Agent"
-                    disabled={callableAgentOptions.length === 0}
-                    onClick={() => setSubagentSelectorOpen(true)}
-                  />
-                </div>
-                {selectedCallableAgents.length > 0 ? (
-                  <div className="mt-3 grid gap-2">
-                    {selectedCallableAgents.map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex items-start justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3"
-                      >
-                        <div className="flex min-w-0 gap-2">
-                          <Bot size={16} className="mt-0.5 shrink-0 text-[var(--color-text-tertiary)]" />
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-                              {item.name}
-                            </div>
-                            <div className="mt-1 line-clamp-2 text-xs text-[var(--color-text-tertiary)]">
-                              {item.description || '暂无描述'}
-                            </div>
-                          </div>
-                        </div>
-                        <Button
-                          type="text"
-                          size="small"
-                          icon={<X size={14} />}
-                          aria-label={`移除 ${item.name}`}
-                          onClick={() => toggleCallableAgent(item.id, false)}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
-                    主 Agent 可在 ReAct 过程中把任务委派给这些子 Agent。
-                  </div>
-                )}
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs text-[var(--color-text-secondary)] mb-1">
-                最大调用深度
-              </label>
-              <InputNumber
-                min={1}
-                max={5}
-                value={form.maxDepth}
-                onChange={(value) => setForm({ ...form, maxDepth: Number(value ?? 1) })}
-                style={{ width: 96 }}
-              />
-              <div className="text-xs text-[var(--color-text-tertiary)] mt-1">
-                控制 Agent 调用子 Agent 的最大嵌套层级
-              </div>
-            </div>
-          </div>
-        </section>
           </div>
         </Drawer>
           </div>
         </div>
       </div>
-
-      <Modal
-        title="选择子 Agent"
-        open={subagentSelectorOpen}
-        onCancel={() => setSubagentSelectorOpen(false)}
-        onOk={() => setSubagentSelectorOpen(false)}
-        okText="完成"
-        cancelText="关闭"
-        width={720}
-      >
-        {callableAgentOptions.length === 0 ? (
-          <Alert
-            type="info"
-            message="暂无可选子 Agent"
-            description="创建至少两个 Agent 后，才能为当前 Agent 选择可调用的子 Agent。"
-          />
-        ) : (
-          <div className="max-h-[520px] space-y-2 overflow-y-auto pr-1">
-            {callableAgentOptions.map((item) => {
-              const checked = form.callableAgents.includes(item.id);
-              return (
-                <label
-                  key={item.id}
-                  className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition ${
-                    checked
-                      ? 'border-[var(--color-accent)] bg-[var(--color-accent-bg)]'
-                      : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] hover:bg-[var(--color-bg-hover)]'
-                  }`}
-                >
-                  <Checkbox
-                    checked={checked}
-                    onChange={(event) => toggleCallableAgent(item.id, event.target.checked)}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium text-[var(--color-text-primary)]">
-                        {item.name}
-                      </span>
-                      <Tag size="small" color="transparent">
-                        {item.modelConfig.primary}
-                      </Tag>
-                    </div>
-                    <div className="mt-1 line-clamp-2 text-xs text-[var(--color-text-tertiary)]">
-                      {item.description || '暂无描述'}
-                    </div>
-                    {item.tags.length > 0 && (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {item.tags.slice(0, 4).map((tag) => (
-                          <Tag key={tag} size="small" color="transparent">
-                            {tag}
-                          </Tag>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </label>
-              );
-            })}
-          </div>
-        )}
-      </Modal>
 
       <Modal
         title="选择 MCP 工具"

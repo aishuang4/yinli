@@ -8,10 +8,6 @@ from agentscope.message import UserMsg
 from src.agents.factory import AgentModelOptions, get_or_create_agent
 from src.config.runtime_settings import get_effective_model_settings
 from src.server.routes.agents import get_registered_agent
-from src.server.routes.memory import (
-    append_agent_memory_event,
-    maybe_summarize_agent_run,
-)
 from src.server.routes.skills import (
     build_skill_system_prompt_from_skills,
     select_relevant_skills,
@@ -27,10 +23,7 @@ from src.server.routes.chat.models import (
     ChatTeamMemberPayload,
     ChatToolRun,
 )
-from src.server.routes.chat.plans import mark_plan_step_for_agent, serialize_plan_for_event
 from src.server.routes.chat.prompts import (
-    _build_agent_memory_prompt,
-    _build_agent_plan_prompt,
     _build_runtime_context_prompt,
     _build_worker_system_prompt,
     _build_worker_user_message,
@@ -69,7 +62,6 @@ async def _run_team_workers(
     model_name: str,
     leader_system_prompt: str,
     skill_runs: list[ChatSkillRun],
-    runtime_plan: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """Run worker Agents concurrently and merge their SSE events."""
     workers = [
@@ -130,7 +122,6 @@ async def _run_team_workers(
         worker_name = worker_config.name if worker_config else member.name
         worker_prompt = worker_config.system_prompt if worker_config else member.description
         worker_skill_ids = worker_config.skills if worker_config else []
-        worker_plan_prompt = _build_agent_plan_prompt(worker_config)
         worker_model_config = worker_config.model_config_data if worker_config else None
         worker_model_options = AgentModelOptions(
             temperature=worker_model_config.temperature if worker_model_config else None,
@@ -143,15 +134,12 @@ async def _run_team_workers(
         worker_knowledge_tools = _build_runtime_knowledge_tools(worker_config)
         worker_skills = select_relevant_skills(worker_skill_ids, data.message)
         worker_skill_prompt = build_skill_system_prompt_from_skills(worker_skills)
-        worker_memory_prompt = _build_agent_memory_prompt(member.agent_id)
         worker_runtime_context_prompt = _build_runtime_context_prompt()
         worker_system_prompt = "\n\n".join(
             part
             for part in [
                 worker_prompt or "You are a helpful worker agent.",
                 worker_runtime_context_prompt,
-                worker_plan_prompt,
-                worker_memory_prompt,
                 _build_worker_system_prompt(data.team_name, data.agent_name, member),
                 worker_skill_prompt,
             ]
@@ -335,16 +323,6 @@ async def _run_team_workers(
                     "detail": _trim_text(worker_text, 160) or "Worker 已完成本轮 ReAct 循环。",
                 })
                 _replace_team_activity(team_activities, completed)
-                updated_plan = mark_plan_step_for_agent(
-                    runtime_plan,
-                    assigned_agent_id=member.agent_id,
-                    status="completed",
-                    result=_trim_text(worker_text, 2000) or f"{worker_name} 已完成本轮任务。",
-                )
-                if updated_plan and updated_plan != runtime_plan:
-                    await queue.put(_sse_event("PLAN_UPDATE", {
-                        "plan": serialize_plan_for_event(updated_plan),
-                    }))
                 _record_run_event(
                     session_id=session_id,
                     event_type="WORKER_COMPLETED",
@@ -361,40 +339,6 @@ async def _run_team_workers(
                         "dependencyCount": len(dependency_outputs),
                     },
                 )
-            if not data.sandbox:
-                append_agent_memory_event(
-                    agent_id=member.agent_id,
-                    event_type="team_message",
-                    title=f"Team Worker 输出: {worker_name}",
-                    content=worker_text,
-                    session_id=session_id,
-                    metadata={
-                        "teamId": data.team_id,
-                        "teamName": data.team_name,
-                        "leaderAgentId": data.agent_id,
-                        "model": model_name,
-                    },
-                )
-                worker_memory_facts = await maybe_summarize_agent_run(
-                    agent_id=member.agent_id,
-                    agent_name=worker_name,
-                    session_id=session_id,
-                    user_message=_build_worker_user_message(data.message, member, dependency_outputs),
-                    assistant_text=worker_text,
-                    metadata={
-                        "teamId": data.team_id,
-                        "teamName": data.team_name,
-                        "leaderAgentId": data.agent_id,
-                        "model": model_name,
-                        "skillIds": [skill.id for skill in worker_skills],
-                    },
-                )
-                if worker_memory_facts:
-                    await queue.put(_sse_event("MEMORY_SUMMARY", {
-                        "agentId": member.agent_id,
-                        "agentName": worker_name,
-                        "facts": [fact.model_dump(mode="json") for fact in worker_memory_facts],
-                    }))
             await queue.put(_sse_event("TEAM_ACTIVITY", {
                 "activities": [item.model_dump(by_alias=True) for item in team_activities],
             }))
@@ -412,16 +356,6 @@ async def _run_team_workers(
                             }),
                         )
                 activity = _find_team_activity(team_activities, member.agent_id)
-                updated_plan = mark_plan_step_for_agent(
-                    runtime_plan,
-                    assigned_agent_id=member.agent_id,
-                    status="blocked",
-                    result=f"Worker 执行失败: {exc}",
-                )
-                if updated_plan and updated_plan != runtime_plan:
-                    await queue.put(_sse_event("PLAN_UPDATE", {
-                        "plan": serialize_plan_for_event(updated_plan),
-                    }))
                 _record_tool_execution_artifacts(
                     session_id=session_id,
                     event_type=event_type,
@@ -476,16 +410,6 @@ async def _run_team_workers(
                             "wait_reason": "依赖配置无效：找不到指定的上游 Worker。",
                         }),
                     )
-                updated_plan = mark_plan_step_for_agent(
-                    runtime_plan,
-                    assigned_agent_id=member.agent_id,
-                    status="blocked",
-                    result="依赖配置无效：找不到指定的上游 Worker。",
-                )
-                if updated_plan and updated_plan != runtime_plan:
-                    queue.put_nowait(_sse_event("PLAN_UPDATE", {
-                        "plan": serialize_plan_for_event(updated_plan),
-                    }))
                 failed_workers.add(member.agent_id)
                 continue
             failed_dependencies = [dep for dep in dependencies if dep in failed_workers]
@@ -501,16 +425,6 @@ async def _run_team_workers(
                             "wait_reason": f"上游 Worker 失败：{', '.join(_member_names(failed_dependencies, workers))}",
                         }),
                     )
-                updated_plan = mark_plan_step_for_agent(
-                    runtime_plan,
-                    assigned_agent_id=member.agent_id,
-                    status="blocked",
-                    result=f"上游 Worker 失败，跳过执行：{', '.join(_member_names(failed_dependencies, workers))}",
-                )
-                if updated_plan and updated_plan != runtime_plan:
-                    queue.put_nowait(_sse_event("PLAN_UPDATE", {
-                        "plan": serialize_plan_for_event(updated_plan),
-                    }))
                 failed_workers.add(member.agent_id)
                 continue
             blocking = [dep for dep in dependencies if dep not in completed_outputs and dep not in failed_workers]
@@ -572,16 +486,6 @@ async def _run_team_workers(
                             "wait_reason": "依赖配置形成循环或上游 Worker 失败。",
                         }),
                     )
-                updated_plan = mark_plan_step_for_agent(
-                    runtime_plan,
-                    assigned_agent_id=member.agent_id,
-                    status="blocked",
-                    result="依赖配置形成循环或上游 Worker 失败，无法继续调度。",
-                )
-                if updated_plan and updated_plan != runtime_plan:
-                    yield _sse_event("PLAN_UPDATE", {
-                        "plan": serialize_plan_for_event(updated_plan),
-                    })
                 failed_workers.add(member.agent_id)
             pending.clear()
             yield _sse_event("TEAM_ACTIVITY", {

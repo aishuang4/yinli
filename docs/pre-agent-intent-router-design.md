@@ -1,6 +1,7 @@
 # 前置意图路由设计
 
 > 状态：设计草案  
+> 更新：2026-06-26 已下线旧 Plan Runtime 与 Subagent Runtime，本文中涉及 Plan/Subagent 注入的内容仅供历史参考；当前前置路由只驱动 Skill、Team worker、Clarification 和 ToolScope。
 > 目标：在主 Agent 执行前完成轻量意图识别和运行时编排决策，降低主 Agent 同时承担“理解、选路、执行、纠偏”的压力。
 
 ## 背景问题
@@ -200,4 +201,3 @@ Clarification 不应只依赖主 Agent 自己输出 `<clarification>`。路由�
 - Subagent 只在匹配任务时注入，不再默认把所有 callableAgents 压给主 Agent。
 - `run_events` 能看到本轮路由模式、启用能力、原因和置信度。
 - `send.py` 的前置决策代码显著减少，新增能力不再直接修改主链路。
-

@@ -43,11 +43,21 @@ npm run lint     # eslint
 
 `backend/src/server/main.py` 注册所有路由，前缀均为 `/api/*`。关键路径是对话流：
 
-1. **`routes/chat.py`** — `POST /api/chat/send` 通过 SSE 返回 AgentScope 2.0 事件流（`REPLY_START`/`MODEL_CALL_*`/`TEXT_BLOCK_*`/`THINKING_BLOCK_*`/`TOOL_CALL_*`/`TOOL_RESULT_*`）。它聚合 Agent 配置、记忆系统提示、Skills 选择、MCP 运行时服务器、知识库工具，再调用工厂创建 Agent 并消费事件流。同时处理 HITL（`REQUIRE_USER_CONFIRM`/`REQUIRE_EXTERNAL_EXECUTION`）和 Team 协作。
+1. **`routes/chat/handlers/send.py`** — `POST /api/chat/send` 是 Chat SSE 统一入口，只负责请求读取、用户消息写入、后台 Run 启动、前置错误处理和 SSE 编排。Plan Runtime 与 Subagent Runtime 已下线，后续重构前不要在旧链路上继续补丁式开发。
 
-2. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 `agent_id` 缓存实例；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件）。工具集在 `_create_default_toolkit()` 注入：Read/Grep/Glob 始终可用，Write/Edit/Bash/HttpRequest/知识库工具受 `tool_permission_profile`（如 `read_only`）和 `network_enabled` 控制。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是用户主目录 `~`）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
+2. **`routes/chat/intent_router.py`** — 主 Agent 前置路由层。模型语义路由优先、规则路由兜底，统一决定本轮 `mode`、Skill 选择、Team worker 选择、Clarification 是否前置，以及 `toolScope`（MCP/Knowledge/Bash/HTTP 是否注入）。路由结果写入 `INTENT_ROUTE` trace，便于排查每轮为何启用某些能力。当前 `selectedSubagentIds`、`shouldCreatePlan` 等字段仅为兼容保留，不驱动运行时。
 
-3. **`agents/agentscope_usage_patch.py`** — 启动时 `patch_agentscope_usage_events()` 给 AgentScope 打补丁以捕获 usage 事件。
+3. **`routes/chat/runtime_builder.py`** — IntentRoute 之后的运行时组装层。负责合成本轮模型配置、裁剪 Team 成员、选择本轮 Skill、把 `toolScope` 转为 `RuntimeToolScope`、生成主 Agent runtime cache key、构建 `MainAgentRuntimeSpec`，并通过 `create_main_agent_from_spec()` 委托工厂创建/复用 Agent。
+
+4. **`routes/chat/orchestration.py`** — Team worker 预执行编排。`prepare_leader_after_team_workers()` 负责运行被路由选中的 Worker、收集 Worker 输出、追加 Leader system prompt，并更新 Leader activity。
+
+5. **`routes/chat/leader_stream.py`** — Leader Agent 事件流处理。消费 `agent.reply_stream()`，维护 `LeaderStreamState`，处理模型 cache、trace、permission decision、tool artifacts、HITL 早停、流式文本/思考累计、Skill end 和模型输出后的 clarification 兜底。
+
+6. **`routes/chat/completion.py`** — Leader run 成功/失败收尾。负责完成 Skill/Team 状态、写 assistant message、写 trace、写 Agent memory event、触发 memory summarize，并输出 `TEAM_ACTIVITY` / `MEMORY_SUMMARY` / `ERROR` 等后续 SSE。
+
+7. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 `agent_id` 缓存实例；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件）。工具集在 `_create_default_toolkit()` 注入：Read/Grep/Glob/AskUser 始终可用，Write/Edit 受权限控制；Bash/HttpRequest/知识库工具/MCP 还受 `RuntimeToolScope` 裁剪。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是用户主目录 `~`）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
+
+8. **`agents/agentscope_usage_patch.py`** — 启动时 `patch_agentscope_usage_events()` 给 AgentScope 打补丁以捕获 usage 事件。
 
 ### 持久化
 
@@ -79,8 +89,10 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 
 - 开发必须遵循 `docs/development-guidelines.md`。该文件是正式开发规范，覆盖模块化、React/TypeScript、Python/FastAPI、SQLite、Agent Runtime、测试、Git 和文档要求。
 - 如果 `AGENTS.md` / `CLAUDE.md` 与 `docs/development-guidelines.md` 冲突，以更具体、更严格、更新的规范为准；不确定时先按 `docs/development-guidelines.md` 执行。
+- `AGENTS.md` 是开发代理记忆和项目协作规范的唯一真实来源；`CLAUDE.md` 只作为兼容入口，避免多份记忆漂移。
 - 代码注释和文档用中文，技术术语和标识符保持英文。
 - TODO 文档和待办事项统一用中文编写，便于团队协作和后续交接。
+- Chat SSE 事件新增或变更前必须先更新 `docs/chat-sse-event-contract.md`，前端只依赖该契约中的稳定事件。
 - 文件均带中文 docstring 说明职责，遵循既有风格。
 - 前端遵循若干约定（见 `App.tsx` 注释）：派生状态不用 effect、对象映射表代替 switch、初始化只做一次。
 - 项目现状与待办见 `docs/project-progress-handoff.md` 和 `docs/project-todo.md`；开发规范见 `docs/development-guidelines.md`；设计文档见 `docs/agent-workstation-design.md` 与 `docs/agent-workstation-frontend-design.md`。

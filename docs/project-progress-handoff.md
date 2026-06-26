@@ -68,7 +68,7 @@ Agent Workstation 是一个基于 AgentScope 2.0 的多 Agent 协作工作台，
 - Agent 持久化到 SQLite
 - Agent 导入 / 导出
 - 模型配置：主模型、降级模型链、temperature、top_p、max_tokens
-- Plan 配置：是否启用、模式、最大步骤、工具前计划、是否需要计划审批、是否允许重新规划
+- 兼容字段：`planConfig`、`callableAgents` 等历史字段仍可读写，但旧 Plan Runtime 与 Subagent Runtime 已于 2026-06-26 下线，前端不再展示对应配置入口
 - 记忆注入开关
 - MCP、Skills、HTTP 知识库工具选择
 - 工具权限配置：
@@ -159,6 +159,7 @@ Agent Workstation 是一个基于 AgentScope 2.0 的多 Agent 协作工作台，
 - Agent 中可选择 Skills
 - Chat 中在实际使用某个 Skill 时展示使用反馈
 - 删除 Skills 时会清理 Agent 已选择的关联 Skills
+- Chat SSE 稳定事件契约见 `docs/chat-sse-event-contract.md`，新增事件前必须先更新契约
 
 ### 3.6 HTTP 知识库工具
 

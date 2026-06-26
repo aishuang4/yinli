@@ -1,25 +1,20 @@
 """运行时配置构建 — guardrails、权限模式、MCP/知识库工具规格、用户消息内容。"""
 
-from typing import Any, Callable
+from typing import Any
 
 from agentscope.message import Base64Source, DataBlock, TextBlock
 from agentscope.permission import PermissionMode
 
 from src.agents.factory import (
     AgentGuardrails,
-    AgentModelOptions,
     KnowledgeToolRuntimeSpec,
     McpRuntimeSpec,
-    SubagentRuntimeContext,
-    SubagentRuntimeSpec,
 )
 from src.security.permissions import build_permission_profile
 from src.server.routes.mcp import resolve_mcp_runtime_servers
 from src.server.routes.tools import get_enabled_http_tools, get_enabled_knowledge_tools
 
 from src.server.routes.chat.models import ChatImagePayload
-from src.server.routes.chat.prompts import _build_agent_memory_prompt
-from src.server.routes.skills import build_skill_system_prompt
 
 
 def _build_user_content(
@@ -146,109 +141,3 @@ def _build_runtime_knowledge_tools(agent_config: object | None) -> list[Knowledg
         ))
     return specs
 
-
-def _build_runtime_subagents(
-    agent_config: object | None,
-    *,
-    selected_subagent_ids: list[str] | None = None,
-    max_depth: int | None = None,
-    current_depth: int = 0,
-    call_stack: list[str] | None = None,
-    on_warning: Callable[[dict[str, Any]], None] | None = None,
-) -> list[SubagentRuntimeSpec]:
-    """根据 Agent 的 callableAgents 构建可注入的子 Agent 运行时规格。"""
-
-    if not agent_config:
-        return []
-    from src.server.routes.agents import get_registered_agent
-
-    stack = list(call_stack or [])
-    parent_id = str(getattr(agent_config, "id", "") or "")
-    if parent_id and parent_id not in stack:
-        stack.append(parent_id)
-    depth_limit = int(max_depth or getattr(agent_config, "max_depth", 2) or 2)
-    if current_depth >= depth_limit:
-        return []
-
-    selected_ids = set(selected_subagent_ids or []) if current_depth == 0 and selected_subagent_ids is not None else None
-    specs: list[SubagentRuntimeSpec] = []
-    seen: set[str] = set()
-    for child_id in list(getattr(agent_config, "callable_agents", []) or []):
-        child_id = str(child_id)
-        if not child_id or child_id in seen or child_id in stack:
-            continue
-        if selected_ids is not None and child_id not in selected_ids:
-            continue
-        seen.add(child_id)
-        child = get_registered_agent(child_id)
-        if not child:
-            if callable(on_warning):
-                on_warning({
-                    "eventType": "SUBAGENT_CALL_FAILED",
-                    "parentAgentId": parent_id,
-                    "parentAgentName": str(getattr(agent_config, "name", "") or ""),
-                    "subagentId": child_id,
-                    "subagentName": child_id,
-                    "task": "",
-                    "depth": current_depth + 1,
-                    "maxDepth": depth_limit,
-                    "status": "blocked",
-                    "outputPreview": "",
-                    "durationMs": 0,
-                    "error": "Configured callable subagent does not exist.",
-                    "reason": "missing_subagent",
-                })
-            continue
-
-        child_model_config = getattr(child, "model_config_data", None)
-        child_skill_ids = list(getattr(child, "skills", []) or [])
-        child_prompt = "\n\n".join(
-            part
-            for part in [
-                str(getattr(child, "system_prompt", "") or "You are a helpful assistant."),
-                _build_agent_memory_prompt(child.id) if bool(getattr(child, "memory_enabled", True)) else "",
-                build_skill_system_prompt(child_skill_ids),
-            ]
-            if part
-        )
-        specs.append(SubagentRuntimeSpec(
-            id=child.id,
-            name=child.name,
-            description=child.description,
-            system_prompt=child_prompt,
-            model_name=str(getattr(child_model_config, "primary", "") or ""),
-            fallback_names=list(getattr(child_model_config, "fallback", []) or []),
-            model_options=AgentModelOptions(
-                temperature=getattr(child_model_config, "temperature", None),
-                top_p=getattr(child_model_config, "top_p", None),
-                max_tokens=getattr(child_model_config, "max_tokens", None),
-                max_react_iters=int(getattr(child_model_config, "max_react_iters", 40) or 40),
-            ),
-            guardrails=_build_runtime_guardrails(child),
-            mcp_servers=_build_runtime_mcp_servers(child),
-            knowledge_tools=_build_runtime_knowledge_tools(child),
-            subagents=_build_runtime_subagents(
-                child,
-                max_depth=depth_limit,
-                current_depth=current_depth + 1,
-                call_stack=[*stack, child.id],
-                on_warning=on_warning,
-            ),
-            max_depth=depth_limit,
-            memory_enabled=bool(getattr(child, "memory_enabled", True)),
-        ))
-    return specs
-
-
-def _build_subagent_context(agent_config: object | None) -> SubagentRuntimeContext:
-    """创建一次主 Agent 运行共享的子 Agent 调用上下文。"""
-
-    agent_id = str(getattr(agent_config, "id", "") or "default")
-    max_depth = int(getattr(agent_config, "max_depth", 2) or 2)
-    return SubagentRuntimeContext(
-        root_agent_id=agent_id,
-        current_depth=0,
-        max_depth=max(1, min(max_depth, 5)),
-        call_stack=[agent_id],
-        max_calls=8,
-    )

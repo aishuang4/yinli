@@ -9,10 +9,6 @@ from agentscope.message import UserMsg
 from src.agents.factory import AgentModelOptions, get_or_create_agent
 from src.config.runtime_settings import get_effective_model_settings
 from src.server.routes.agents import get_registered_agent
-from src.server.routes.memory import (
-    append_agent_memory_event,
-    maybe_summarize_agent_run,
-)
 
 from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event, _trim_text
 from src.server.routes.chat.hitl import (
@@ -329,41 +325,6 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     },
                 )
 
-                append_agent_memory_event(
-                    agent_id=worker_member.agent_id,
-                    event_type="team_message",
-                    title=f"Team Worker 输出: {interaction.agent_name}",
-                    content=worker_text,
-                    session_id=interaction.session_id,
-                    metadata={
-                        "teamId": chat_data.team_id,
-                        "teamName": chat_data.team_name,
-                        "leaderAgentId": chat_data.agent_id,
-                        "model": interaction.model_name,
-                        "resumedFromHitl": True,
-                    },
-                )
-                worker_memory_facts = await maybe_summarize_agent_run(
-                    agent_id=worker_member.agent_id,
-                    agent_name=interaction.agent_name,
-                    session_id=interaction.session_id,
-                    user_message=interaction.message,
-                    assistant_text=worker_text,
-                    metadata={
-                        "teamId": chat_data.team_id,
-                        "teamName": chat_data.team_name,
-                        "leaderAgentId": chat_data.agent_id,
-                        "model": interaction.model_name,
-                        "resumedFromHitl": True,
-                    },
-                )
-                if worker_memory_facts:
-                    yield _sse_event("MEMORY_SUMMARY", {
-                        "agentId": worker_member.agent_id,
-                        "agentName": interaction.agent_name,
-                        "facts": [fact.model_dump(mode="json") for fact in worker_memory_facts],
-                    })
-
                 _clear_pending_interaction(interaction.id)
                 async for worker_event in _run_team_workers(
                     data=chat_data,
@@ -581,42 +542,6 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 yield _sse_event("TEAM_ACTIVITY", {
                     "activities": [item.model_dump(by_alias=True) for item in completed_team_activities],
                 })
-                append_agent_memory_event(
-                    agent_id=leader_agent_id,
-                    event_type="assistant_message",
-                    title="Team Leader 回复",
-                    content=assistant_text,
-                    session_id=interaction.session_id,
-                    metadata={
-                        "agentName": leader_agent_name,
-                        "teamId": chat_data.team_id,
-                        "teamName": chat_data.team_name,
-                        "model": interaction.model_name,
-                        "skillIds": [item.id for item in completed_skill_runs],
-                        "resumedFromWorkerHitl": True,
-                    },
-                )
-                memory_facts = await maybe_summarize_agent_run(
-                    agent_id=leader_agent_id,
-                    agent_name=leader_agent_name,
-                    session_id=interaction.session_id,
-                    user_message=chat_data.message,
-                    assistant_text=assistant_text,
-                    metadata={
-                        "agentName": leader_agent_name,
-                        "teamId": chat_data.team_id,
-                        "teamName": chat_data.team_name,
-                        "model": interaction.model_name,
-                        "skillIds": [item.id for item in completed_skill_runs],
-                        "resumedFromWorkerHitl": True,
-                    },
-                )
-                if memory_facts:
-                    yield _sse_event("MEMORY_SUMMARY", {
-                        "agentId": leader_agent_id,
-                        "agentName": leader_agent_name,
-                        "facts": [fact.model_dump(mode="json") for fact in memory_facts],
-                    })
                 return
 
             assistant_tool_calls = _pending_tool_calls_to_runs(
@@ -756,38 +681,6 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
             if team_activities:
                 yield _sse_event("TEAM_ACTIVITY", {
                     "activities": [item.model_dump(by_alias=True) for item in completed_team_activities],
-                })
-            append_agent_memory_event(
-                agent_id=interaction.agent_id,
-                event_type="assistant_message",
-                title="Assistant 回复",
-                content=assistant_text,
-                session_id=interaction.session_id,
-                metadata={
-                    "agentName": interaction.agent_name,
-                    "model": interaction.model_name,
-                    "skillIds": [item.id for item in completed_skill_runs],
-                    "resumedFromHitl": True,
-                },
-            )
-            memory_facts = await maybe_summarize_agent_run(
-                agent_id=interaction.agent_id,
-                agent_name=interaction.agent_name,
-                session_id=interaction.session_id,
-                user_message=interaction.message,
-                assistant_text=assistant_text,
-                metadata={
-                    "agentName": interaction.agent_name,
-                    "model": interaction.model_name,
-                    "skillIds": [item.id for item in completed_skill_runs],
-                    "resumedFromHitl": True,
-                },
-            )
-            if memory_facts:
-                yield _sse_event("MEMORY_SUMMARY", {
-                    "agentId": interaction.agent_id,
-                    "agentName": interaction.agent_name,
-                    "facts": [fact.model_dump(mode="json") for fact in memory_facts],
                 })
             _clear_pending_interaction(interaction.id)
         except Exception as exc:

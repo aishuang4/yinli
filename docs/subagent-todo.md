@@ -1,5 +1,7 @@
 # Subagent 功能实现 TODO
 
+> 状态：历史文档。旧 Subagent Runtime 已于 2026-06-26 下线，本文只保留为设计演进记录。后续重新设计 Subagent 时必须新建 TODO，不要继续按本文勾选项实现。
+>
 > 更新时间：2026-06-23
 >
 > 参考设计文档：`docs/subagent-feature-plan.md`

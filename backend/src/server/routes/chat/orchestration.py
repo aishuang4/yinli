@@ -32,7 +32,6 @@ async def prepare_leader_after_team_workers(
     model_name: str,
     leader_agent_id: str,
     skill_runs: list[ChatSkillRun],
-    runtime_plan: dict | None = None,
 ) -> AsyncGenerator[str, None]:
     """执行 Team workers，并把 Worker 输出追加到 Leader system prompt。"""
 
@@ -46,7 +45,6 @@ async def prepare_leader_after_team_workers(
         model_name=model_name,
         leader_system_prompt=state.system_prompt,
         skill_runs=skill_runs,
-        runtime_plan=runtime_plan,
     ):
         yield worker_event
 

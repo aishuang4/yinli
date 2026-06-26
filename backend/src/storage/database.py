@@ -446,14 +446,9 @@ def _loads(value: str | None, default: Any) -> Any:
 
 
 def _derive_subagent_calls(tool_calls: list[dict[str, Any]], subagent_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """旧消息没有 subagent_calls 列内容时，从 CallAgent 工具调用派生。"""
+    """Subagent 已下线，仅保留旧字段读取兼容，不再从工具调用派生。"""
 
-    if subagent_calls:
-        return subagent_calls
-    return [
-        item for item in tool_calls
-        if str(item.get("name") or "").startswith(("CallAgent_", "子 Agent："))
-    ]
+    return subagent_calls
 
 
 def list_json_records(namespace: str) -> list[dict[str, Any]]:
@@ -1783,9 +1778,36 @@ def list_session_plans(session_id: str) -> list[dict[str, Any]]:
     return [_row_to_plan(row, steps_by_plan.get(row["id"], [])) for row in plan_rows]
 
 
+def get_active_session_plan_record(session_id: str, statuses: list[str] | tuple[str, ...]) -> dict[str, Any] | None:
+    """读取一个会话最新的未结束 Plan，用于 Plan Session 锁定。"""
+
+    if not statuses:
+        return None
+    ensure_db()
+    placeholders = ",".join("?" for _ in statuses)
+    with _lock, _connect() as conn:
+        plan_row = conn.execute(
+            f"""
+            SELECT * FROM plans
+            WHERE session_id = ? AND status IN ({placeholders})
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            (session_id, *statuses),
+        ).fetchone()
+        if not plan_row:
+            return None
+        step_rows = conn.execute(
+            "SELECT * FROM plan_steps WHERE plan_id = ? ORDER BY step_index ASC",
+            (plan_row["id"],),
+        ).fetchall()
+    return _row_to_plan(plan_row, [_row_to_plan_step(row) for row in step_rows])
+
+
 def update_plan_record(
     plan_id: str,
     *,
+    title: str | None = None,
     status: str | None = None,
     markdown: str | None = None,
     current_step_id: str | None = None,
@@ -1800,10 +1822,11 @@ def update_plan_record(
         conn.execute(
             """
             UPDATE plans
-            SET status = ?, markdown = ?, current_step_id = ?, completed_at = ?, updated_at = ?
+            SET title = ?, status = ?, markdown = ?, current_step_id = ?, completed_at = ?, updated_at = ?
             WHERE id = ?
             """,
             (
+                title if title is not None else existing["title"],
                 status if status is not None else existing["status"],
                 markdown if markdown is not None else existing["markdown"],
                 current_step_id if current_step_id is not None else existing.get("currentStepId"),

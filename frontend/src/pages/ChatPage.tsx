@@ -13,10 +13,10 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, XCircle, BookOpenCheck, Users, CheckCircle2, Clock3, Copy, Check, GitBranch, ListChecks, Download, FileText } from 'lucide-react';
+import { Bot, Send, Square, Loader2, Wrench, ChevronDown, ChevronRight, AlertCircle, Plus, Trash2, ImagePlus, X, XCircle, BookOpenCheck, Users, CheckCircle2, Clock3, Copy, Check, GitBranch, Download, FileText } from 'lucide-react';
 import { Button, Empty, Select, Spinner, Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../components/MarkdownContent';
-import { completeOpenPlans, normalizePlanRun, useEventStream, type ClarificationQuestionInfo, type ClarificationRequestInfo, type HitlRequestInfo, type MemorySummaryInfo, type ModelCacheInfo, type PlanRunInfo, type SkillCallInfo, type SubagentCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
+import { useEventStream, type ClarificationQuestionInfo, type ClarificationRequestInfo, type HitlRequestInfo, type ModelCacheInfo, type SkillCallInfo, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
 import { createId } from '../utils/id';
@@ -37,18 +37,12 @@ interface LocalMessage {
   processCompletedAt?: string;
   /** 工具调用列表（仅 assistant 消息） */
   toolCalls?: ToolCallInfo[];
-  /** 子 Agent 调用列表（仅 assistant 消息） */
-  subagentCalls?: SubagentCallInfo[];
   /** Skill 应用列表（仅 assistant 消息） */
   skillCalls?: SkillCallInfo[];
   /** Team 协作活动（仅 assistant 消息） */
   teamActivities?: TeamActivityInfo[];
-  /** 自动记忆总结 */
-  memorySummaries?: MemorySummaryInfo[];
   /** 模型厂商侧 Prompt Cache 统计 */
   modelCaches?: ModelCacheInfo[];
-  /** Plan Runtime 记录 */
-  planRuns?: PlanRunInfo[];
   /** 思考链内容（仅 assistant 消息） */
   thinking?: string;
   /** Token 用量 */
@@ -167,16 +161,12 @@ interface StoredChatMessage {
   images: ChatImagePayload[];
   toolCalls?: ToolCallInfo[];
   tool_calls?: ToolCallInfo[];
-  subagentCalls?: SubagentCallInfo[];
-  subagent_calls?: SubagentCallInfo[];
   skillCalls?: SkillCallInfo[];
   skill_calls?: SkillCallInfo[];
   teamActivities?: TeamActivityInfo[];
   team_activities?: StoredTeamActivity[];
   modelCaches?: ModelCacheInfo[];
   model_caches?: ModelCacheInfo[];
-  planRuns?: PlanRunInfo[];
-  plan_runs?: PlanRunInfo[];
   created_at: string;
 }
 
@@ -237,10 +227,6 @@ function normalizeStoredToolName(name: string, args: string, result: string): st
 
 function normalizeToolDisplayName(name: string): string {
   const value = String(name || 'tool');
-  if (value.startsWith('CallAgent_')) {
-    const agentName = value.slice('CallAgent_'.length).replace(/_/g, ' ').trim() || '子 Agent';
-    return `子 Agent：${agentName}`;
-  }
   const parts = value.split('_');
   if (parts.length === 2 && parts[0] && parts[0] === parts[1]) {
     return parts[0];
@@ -278,10 +264,6 @@ function normalizeStoredTeamActivities(activities: StoredTeamActivity[]): TeamAc
   }));
 }
 
-function normalizeStoredPlanRuns(planRuns: PlanRunInfo[] | undefined): PlanRunInfo[] {
-  return (planRuns || []).map((plan) => normalizePlanRun(plan as unknown as Record<string, unknown>));
-}
-
 /**
  * ChatPage 组件
  */
@@ -300,8 +282,6 @@ export function ChatPage() {
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const [selectedTeamActivityId, setSelectedTeamActivityId] = useState<string | null>(null);
-  const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
-  const [selectedSubagentCallId, setSelectedSubagentCallId] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -354,12 +334,8 @@ export function ChatPage() {
     Boolean(state.textContent) ||
     Boolean(state.thinkingContent) ||
     state.toolCalls.length > 0 ||
-    state.subagentCalls.length > 0 ||
     state.skillCalls.length > 0 ||
-    state.teamActivities.length > 0 ||
-    state.memorySummaries.length > 0 ||
-    state.modelCaches.length > 0 ||
-    state.planRuns.length > 0
+    state.teamActivities.length > 0 ||    state.modelCaches.length > 0
   );
 
   const visibleTeamActivities = useMemo(() => (
@@ -373,44 +349,8 @@ export function ChatPage() {
     visibleTeamActivities.find((activity) => activity.id === selectedTeamActivityId) || null
   ), [selectedTeamActivityId, visibleTeamActivities]);
 
-  const visiblePlanRuns = useMemo(() => (
-    [
-      ...messages.flatMap((message) => message.planRuns || []),
-      ...state.planRuns,
-    ]
-  ), [messages, state.planRuns]);
-
-  const selectedPlan = useMemo(() => (
-    visiblePlanRuns.find((plan) => plan.id === selectedPlanId) || null
-  ), [selectedPlanId, visiblePlanRuns]);
-
-  const visibleSubagentCalls = useMemo(() => (
-    [
-      ...messages.flatMap((message) => message.subagentCalls || []),
-      ...state.subagentCalls,
-    ].filter((toolCall) => isSubagentToolName(toolCall.name))
-  ), [messages, state.subagentCalls]);
-
-  const selectedSubagentCall = useMemo(() => (
-    visibleSubagentCalls.find((toolCall) => toolCall.id === selectedSubagentCallId) || null
-  ), [selectedSubagentCallId, visibleSubagentCalls]);
-
-  const openPlanSidebar = useCallback((planId: string) => {
-    setSelectedTeamActivityId(null);
-    setSelectedSubagentCallId(null);
-    setSelectedPlanId(planId);
-  }, []);
-
   const openTeamActivitySidebar = useCallback((activityId: string) => {
-    setSelectedPlanId(null);
-    setSelectedSubagentCallId(null);
     setSelectedTeamActivityId(activityId);
-  }, []);
-
-  const openSubagentSidebar = useCallback((toolCallId: string) => {
-    setSelectedTeamActivityId(null);
-    setSelectedPlanId(null);
-    setSelectedSubagentCallId(toolCallId);
   }, []);
 
   const buildTeamMembersForRun = useCallback((workerAgentIds: string[] | null) => {
@@ -448,13 +388,9 @@ export function ChatPage() {
       thinking: item.thinking || undefined,
       images: item.images,
       toolCalls: normalizeStoredToolCalls(item.toolCalls || item.tool_calls || []),
-      subagentCalls: normalizeStoredToolCalls(item.subagentCalls || item.subagent_calls || item.toolCalls || item.tool_calls || []).filter((toolCall) => isSubagentToolName(toolCall.name)),
       skillCalls: item.skillCalls || item.skill_calls || [],
       teamActivities: normalizeStoredTeamActivities(item.teamActivities || item.team_activities || []),
       modelCaches: item.modelCaches || item.model_caches || [],
-      planRuns: item.role === 'assistant' && item.content
-        ? completeOpenPlans(normalizeStoredPlanRuns(item.planRuns || item.plan_runs || []), item.created_at)
-        : normalizeStoredPlanRuns(item.planRuns || item.plan_runs || []),
     })));
   }, []);
 
@@ -487,7 +423,7 @@ export function ChatPage() {
   useEffect(() => {
     if (!shouldAutoScrollRef.current) return;
     scrollToBottom(state.isStreaming ? 'auto' : 'smooth');
-  }, [messages, scrollToBottom, state.isStreaming, state.textContent, state.thinkingContent, state.toolCalls, state.subagentCalls, state.skillCalls, state.teamActivities, state.memorySummaries, state.modelCaches, state.planRuns]);
+  }, [messages, scrollToBottom, state.isStreaming, state.textContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities, state.modelCaches]);
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
@@ -496,8 +432,6 @@ export function ChatPage() {
     setImageAttachments([]);
     setChatError(null);
     setSelectedTeamActivityId(null);
-    setSelectedPlanId(null);
-    setSelectedSubagentCallId(null);
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
@@ -516,8 +450,6 @@ export function ChatPage() {
     setImageAttachments([]);
     setChatError(null);
     setSelectedTeamActivityId(null);
-    setSelectedPlanId(null);
-    setSelectedSubagentCallId(null);
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
@@ -536,8 +468,6 @@ export function ChatPage() {
         setImageAttachments([]);
         setChatError(null);
         setSelectedTeamActivityId(null);
-        setSelectedPlanId(null);
-        setSelectedSubagentCallId(null);
         reset();
       }
       notifySuccess('历史对话已删除');
@@ -774,7 +704,6 @@ export function ChatPage() {
       (state.textContent || state.error) &&
       (messages.length === 0 || messages[messages.length - 1].role === 'user')
     ) {
-      const regularToolCalls = state.toolCalls.filter((toolCall) => !isSubagentToolName(toolCall.name));
       const assistantMessage: LocalMessage = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
@@ -783,12 +712,8 @@ export function ChatPage() {
         processStartedAt: state.runStartedAt,
         processCompletedAt: state.runCompletedAt || new Date().toISOString(),
         skillCalls: state.skillCalls.length > 0 ? state.skillCalls : undefined,
-        toolCalls: regularToolCalls.length > 0 ? regularToolCalls : undefined,
-        subagentCalls: state.subagentCalls.length > 0 ? state.subagentCalls : undefined,
-        teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,
-        memorySummaries: state.memorySummaries.length > 0 ? state.memorySummaries : undefined,
-        modelCaches: state.modelCaches.length > 0 ? state.modelCaches : undefined,
-        planRuns: state.planRuns.length > 0 ? state.planRuns : undefined,
+        toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
+        teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,        modelCaches: state.modelCaches.length > 0 ? state.modelCaches : undefined,
         thinking: state.thinkingContent || undefined,
         tokenUsage: state.tokenUsage,
         modelName: state.modelName,
@@ -798,7 +723,7 @@ export function ChatPage() {
       reset();
       loadSessions();
     }
-  }, [loadSessions, messages, reset, state.error, state.hitlRequests.length, state.isStreaming, state.memorySummaries, state.modelCaches, state.modelName, state.planRuns, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.subagentCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
+  }, [loadSessions, messages, reset, state.error, state.hitlRequests.length, state.isStreaming, state.modelCaches, state.modelName, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -895,7 +820,7 @@ export function ChatPage() {
       <section
         className="chat-main-panel grid min-h-0 overflow-hidden rounded-xl bg-[var(--color-bg-primary)]"
         style={{
-          gridTemplateColumns: selectedTeamActivity || selectedPlan || selectedSubagentCall
+          gridTemplateColumns: selectedTeamActivity
             ? 'minmax(0, 1fr) 360px'
             : 'minmax(0, 1fr) 0px',
           transition: 'grid-template-columns 360ms var(--ease-out)',
@@ -967,8 +892,6 @@ export function ChatPage() {
                         message={msg}
                         selectedTeamActivityId={selectedTeamActivityId}
                         onSelectTeamActivity={openTeamActivitySidebar}
-                        onOpenSubagent={openSubagentSidebar}
-                        onOpenPlan={openPlanSidebar}
                         onSubmitClarification={handleSubmitClarification}
                       />
                     ))}
@@ -978,18 +901,12 @@ export function ChatPage() {
                         textContent={state.textContent}
                         thinkingContent={state.thinkingContent}
                         skillCalls={state.skillCalls}
-                        teamActivities={state.teamActivities}
-                        memorySummaries={state.memorySummaries}
-                        modelCaches={state.modelCaches}
-                        planRuns={state.planRuns}
+                        teamActivities={state.teamActivities}                        modelCaches={state.modelCaches}
                         hitlRequests={state.hitlRequests}
                         onResolveHitl={resumeInteraction}
                         selectedTeamActivityId={selectedTeamActivityId}
                         onSelectTeamActivity={openTeamActivitySidebar}
-                        onOpenSubagent={openSubagentSidebar}
-                        onOpenPlan={openPlanSidebar}
                         toolCalls={state.toolCalls}
-                        subagentCalls={state.subagentCalls}
                         modelName={state.modelName}
                         runStartedAt={state.runStartedAt}
                         runCompletedAt={state.runCompletedAt}
@@ -1177,27 +1094,17 @@ export function ChatPage() {
         <div
           className="h-full min-h-0 min-w-0 overflow-hidden"
           style={{
-            opacity: selectedTeamActivity || selectedPlan || selectedSubagentCall ? 1 : 0,
-            transform: selectedTeamActivity || selectedPlan || selectedSubagentCall ? 'translateX(0)' : 'translateX(16px)',
+            opacity: selectedTeamActivity ? 1 : 0,
+            transform: selectedTeamActivity ? 'translateX(0)' : 'translateX(16px)',
             transition: 'opacity 280ms var(--ease-out), transform 360ms var(--ease-out)',
-            pointerEvents: selectedTeamActivity || selectedPlan || selectedSubagentCall ? 'auto' : 'none',
+            pointerEvents: selectedTeamActivity ? 'auto' : 'none',
           }}
-          aria-hidden={!selectedTeamActivity && !selectedPlan && !selectedSubagentCall}
+          aria-hidden={!selectedTeamActivity}
         >
           {selectedTeamActivity ? (
             <TeamActivitySidebar
               activity={selectedTeamActivity}
               onClose={() => setSelectedTeamActivityId(null)}
-            />
-          ) : selectedPlan ? (
-            <PlanRuntimeSidebar
-              plan={selectedPlan}
-              onClose={() => setSelectedPlanId(null)}
-            />
-          ) : selectedSubagentCall ? (
-            <SubagentCallSidebar
-              toolCall={selectedSubagentCall}
-              onClose={() => setSelectedSubagentCallId(null)}
             />
           ) : null}
         </div>
@@ -1264,15 +1171,11 @@ function MessageBubble({
   message,
   selectedTeamActivityId,
   onSelectTeamActivity,
-  onOpenSubagent,
-  onOpenPlan,
   onSubmitClarification,
 }: {
   message: LocalMessage;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
-  onOpenSubagent: (toolCallId: string) => void;
-  onOpenPlan: (planId: string) => void;
   onSubmitClarification: (content: string) => Promise<void>;
 }) {
   const isUser = message.role === 'user';
@@ -1287,10 +1190,7 @@ function MessageBubble({
     contentParts.reactTrace ||
     message.thinking ||
     (message.teamActivities && message.teamActivities.length > 0) ||
-    (message.skillCalls && message.skillCalls.length > 0) ||
-    (message.memorySummaries && message.memorySummaries.length > 0) ||
-    (message.modelCaches && message.modelCaches.length > 0) ||
-    (message.subagentCalls && message.subagentCalls.length > 0) ||
+    (message.skillCalls && message.skillCalls.length > 0) ||    (message.modelCaches && message.modelCaches.length > 0) ||
     (message.toolCalls && message.toolCalls.length > 0)
   );
 
@@ -1355,19 +1255,11 @@ function MessageBubble({
             reactTraceContent={contentParts.reactTrace}
             thinkingContent={message.thinking || ''}
             teamActivities={message.teamActivities || []}
-            skillCalls={message.skillCalls || []}
-            memorySummaries={message.memorySummaries || []}
-            modelCaches={message.modelCaches || []}
+            skillCalls={message.skillCalls || []}            modelCaches={message.modelCaches || []}
             toolCalls={message.toolCalls || []}
-            subagentCalls={message.subagentCalls || []}
             selectedTeamActivityId={selectedTeamActivityId}
             onSelectTeamActivity={onSelectTeamActivity}
-            onOpenSubagent={onOpenSubagent}
           />
-        )}
-
-        {!isUser && message.planRuns && message.planRuns.length > 0 && (
-          <PlanOpenButton plan={message.planRuns[message.planRuns.length - 1]} onOpen={onOpenPlan} />
         )}
 
         {/* 文本内容 */}
@@ -1438,18 +1330,12 @@ function StreamingBubble({
   textContent,
   thinkingContent,
   skillCalls,
-  teamActivities,
-  memorySummaries,
-  modelCaches,
-  planRuns,
+  teamActivities,  modelCaches,
   hitlRequests,
   onResolveHitl,
   selectedTeamActivityId,
   onSelectTeamActivity,
-  onOpenSubagent,
-  onOpenPlan,
   toolCalls,
-  subagentCalls,
   modelName,
   runStartedAt,
   runCompletedAt,
@@ -1457,18 +1343,12 @@ function StreamingBubble({
   textContent: string;
   thinkingContent: string;
   skillCalls: SkillCallInfo[];
-  teamActivities: TeamActivityInfo[];
-  memorySummaries: MemorySummaryInfo[];
-  modelCaches: ModelCacheInfo[];
-  planRuns: PlanRunInfo[];
+  teamActivities: TeamActivityInfo[];  modelCaches: ModelCacheInfo[];
   hitlRequests: HitlRequestInfo[];
   onResolveHitl: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
-  onOpenSubagent: (toolCallId: string) => void;
-  onOpenPlan: (planId: string) => void;
   toolCalls: ToolCallInfo[];
-  subagentCalls: SubagentCallInfo[];
   modelName: string;
   runStartedAt: string;
   runCompletedAt: string;
@@ -1479,10 +1359,7 @@ function StreamingBubble({
     contentParts.reactTrace ||
     thinkingContent ||
     teamActivities.length > 0 ||
-    skillCalls.length > 0 ||
-    memorySummaries.length > 0 ||
-    modelCaches.length > 0 ||
-    subagentCalls.length > 0 ||
+    skillCalls.length > 0 ||    modelCaches.length > 0 ||
     toolCalls.length > 0
   );
 
@@ -1513,18 +1390,11 @@ function StreamingBubble({
             thinkingContent={thinkingContent}
             teamActivities={teamActivities}
             skillCalls={skillCalls}
-            memorySummaries={memorySummaries}
             modelCaches={modelCaches}
             toolCalls={toolCalls}
-            subagentCalls={subagentCalls}
             selectedTeamActivityId={selectedTeamActivityId}
             onSelectTeamActivity={onSelectTeamActivity}
-            onOpenSubagent={onOpenSubagent}
           />
-        )}
-
-        {planRuns.length > 0 && (
-          <PlanOpenButton plan={planRuns[planRuns.length - 1]} onOpen={onOpenPlan} />
         )}
 
         {hitlRequests.map((request) => (
@@ -1573,7 +1443,7 @@ function StreamingBubble({
         )}
 
         {/* 无内容时显示加载指示器 */}
-        {!contentParts.finalAnswer && generatedFiles.length === 0 && toolCalls.length === 0 && subagentCalls.length === 0 && skillCalls.length === 0 && teamActivities.length === 0 && memorySummaries.length === 0 && modelCaches.length === 0 && hitlRequests.length === 0 && !thinkingContent && !contentParts.reactTrace && (
+        {!contentParts.finalAnswer && generatedFiles.length === 0 && toolCalls.length === 0 && skillCalls.length === 0 && teamActivities.length === 0 && modelCaches.length === 0 && hitlRequests.length === 0 && !thinkingContent && !contentParts.reactTrace && (
           <div
             style={{
               display: 'flex',
@@ -2136,14 +2006,10 @@ function ProcessDetailsBlock({
   reactTraceContent,
   thinkingContent,
   teamActivities,
-  skillCalls,
-  memorySummaries,
-  modelCaches,
+  skillCalls,  modelCaches,
   toolCalls,
-  subagentCalls,
   selectedTeamActivityId,
   onSelectTeamActivity,
-  onOpenSubagent,
 }: {
   defaultExpanded: boolean;
   hasFinalAnswer: boolean;
@@ -2153,29 +2019,23 @@ function ProcessDetailsBlock({
   thinkingContent: string;
   teamActivities: TeamActivityInfo[];
   skillCalls: SkillCallInfo[];
-  memorySummaries: MemorySummaryInfo[];
   modelCaches: ModelCacheInfo[];
   toolCalls: ToolCallInfo[];
-  subagentCalls: SubagentCallInfo[];
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
-  onOpenSubagent: (toolCallId: string) => void;
 }) {
   const hasThinking = Boolean(thinkingContent.trim());
   const hasReactTrace = Boolean((reactTraceContent || '').trim());
-  const regularToolCalls = useMemo(() => toolCalls.filter((toolCall) => !isSubagentToolName(toolCall.name)), [toolCalls]);
+  const regularToolCalls = toolCalls;
   const [expanded, setExpanded] = useState(defaultExpanded && !hasFinalAnswer);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const hadFinalAnswerRef = useRef(hasFinalAnswer);
   const processDuration = formatProcessDuration(processStartedAt, processCompletedAt, nowMs);
-  const memoryFactCount = memorySummaries.reduce((total, summary) => total + summary.facts.length, 0);
   const detailCount = [
     hasReactTrace ? 1 : 0,
     thinkingContent ? 1 : 0,
     teamActivities.length,
     skillCalls.length,
-    subagentCalls.length,
-    memoryFactCount,
     modelCaches.length,
     regularToolCalls.length,
   ].reduce((total, count) => total + count, 0);
@@ -2258,42 +2118,12 @@ function ProcessDetailsBlock({
               ))}
             </div>
           )}
-
-          {subagentCalls.length > 0 && (
-            <SubagentCallsBlock
-              calls={subagentCalls}
-              onOpenSubagent={onOpenSubagent}
-            />
-          )}
-
-          {memorySummaries.length > 0 && (
-            <MemorySummaryBlock summaries={memorySummaries} />
-          )}
-
           {regularToolCalls.length > 0 && (
             <ToolCallsScrollBlock toolCalls={regularToolCalls} />
           )}
         </div>
       )}
     </div>
-  );
-}
-
-function PlanOpenButton({ plan, onOpen }: { plan: PlanRunInfo; onOpen: (planId: string) => void }) {
-  const completedSteps = plan.steps.filter((step) => step.status === 'completed').length;
-
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(plan.id)}
-      className="flex w-fit max-w-full items-center gap-2 rounded-md bg-[var(--color-bg-secondary)] px-3 py-1.5 text-xs text-[var(--color-text-secondary)] shadow-sm transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-    >
-      <ListChecks size={13} className="shrink-0" />
-      <span className="truncate">查看计划</span>
-      <Tag size="small" color={plan.status === 'completed' ? 'green' : plan.status === 'failed' ? 'red' : 'blue'}>
-        {completedSteps}/{plan.steps.length}
-      </Tag>
-    </button>
   );
 }
 
@@ -2321,312 +2151,6 @@ function ToolCallsScrollBlock({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
   );
 }
 
-function SubagentCallsBlock({
-  calls,
-  onOpenSubagent,
-}: {
-  calls: ToolCallInfo[];
-  onOpenSubagent: (toolCallId: string) => void;
-}) {
-  const overflowCount = Math.max(0, calls.length - 4);
-
-  return (
-    <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
-      <div className="flex items-center justify-between gap-3 px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
-          <Bot size={14} color="var(--color-accent)" />
-          <span>子 Agent 调用</span>
-        </div>
-        <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
-          {calls.length} 次{overflowCount > 0 ? ` · 滚动查看其余 ${overflowCount} 次` : ''}
-        </span>
-      </div>
-      <div className="max-h-[240px] space-y-2 overflow-y-auto px-3 pb-3 pr-2">
-        {calls.map((toolCall) => (
-          <SubagentCallCard
-            key={toolCall.id}
-            toolCall={toolCall}
-            onOpen={() => onOpenSubagent(toolCall.id)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function SubagentCallCard({ toolCall, onOpen }: { toolCall: ToolCallInfo; onOpen: () => void }) {
-  const summary = getSubagentCallSummary(toolCall);
-  const isRunning = toolCall.status === 'calling' || toolCall.status === 'running';
-  const isFailed = toolCall.status === 'failed' || summary.status === 'failed';
-
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className={[
-        'flex w-full items-start gap-3 rounded-lg border px-3 py-2 text-left transition hover:bg-[var(--color-bg-hover)]',
-        isFailed
-          ? 'border-[var(--color-error)]'
-          : isRunning
-            ? 'border-[var(--color-accent)]'
-            : 'border-[var(--color-border)]',
-      ].join(' ')}
-    >
-      <div className={[
-        'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
-        isFailed
-          ? 'bg-[var(--color-error-bg)] text-[var(--color-error)]'
-          : 'bg-[var(--color-bg-primary)] text-[var(--color-accent)]',
-      ].join(' ')}>
-        {isRunning ? <Loader2 size={14} className="animate-spin" /> : <Bot size={14} />}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-            {summary.agentName}
-          </span>
-          <Tag size="small" color={isFailed ? 'red' : isRunning ? 'blue' : 'green'}>
-            {isFailed ? '失败' : isRunning ? '运行中' : '完成'}
-          </Tag>
-        </div>
-        <div className="mt-1 line-clamp-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
-          {summary.task || summary.outputPreview || '查看子 Agent 调用详情'}
-        </div>
-      </div>
-      <ChevronRight size={14} className="mt-1 shrink-0 text-[var(--color-text-tertiary)]" />
-    </button>
-  );
-}
-
-function PlanRuntimeSidebar({ plan, onClose }: { plan: PlanRunInfo; onClose: () => void }) {
-  const completedSteps = plan.steps.filter((step) => step.status === 'completed').length;
-  const activeStep = plan.steps.find((step) => step.id === plan.currentStepId || step.status === 'active');
-
-  return (
-    <aside className="flex h-full min-h-0 flex-col bg-[var(--color-bg-secondary)] shadow-inner">
-      <div className="flex items-start gap-3 px-4 py-4">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-primary)] text-[var(--color-text-tertiary)]">
-          <ListChecks size={16} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-base font-medium text-[var(--color-text-primary)]">
-            Plan Runtime
-          </div>
-          <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
-            {completedSteps}/{plan.steps.length} 步 · {getPlanStatusText(plan.status)}
-          </div>
-        </div>
-        <button
-          type="button"
-          className="icon-button h-8 w-8 rounded-md text-[var(--color-text-secondary)] transition-all duration-300 ease-out hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-          onClick={onClose}
-          aria-label="关闭计划"
-          title="关闭计划"
-        >
-          <X size={14} />
-        </button>
-      </div>
-
-      <div className="min-h-0 flex-1 space-y-3 overflow-auto px-4 pb-4">
-        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">目标</div>
-          <div className="whitespace-pre-wrap break-words text-sm text-[var(--color-text-primary)]">
-            {plan.goal}
-          </div>
-          {activeStep && (
-            <div className="mt-3 rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
-              当前步骤：{activeStep.title}
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">步骤</div>
-          <div className="space-y-2">
-            {plan.steps.map((step) => (
-              <div key={step.id} className="flex items-start gap-2 rounded-md bg-[var(--color-bg-secondary)] px-3 py-2">
-                <span className={[
-                  'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border text-[11px]',
-                  step.status === 'completed'
-                    ? 'border-[var(--color-success)] bg-[var(--color-success)] text-white'
-                    : step.status === 'active'
-                      ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-                      : 'border-[var(--color-border)] text-[var(--color-text-tertiary)]',
-                ].join(' ')}>
-                  {step.status === 'completed' ? '✓' : step.stepIndex + 1}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium text-[var(--color-text-primary)]">{step.title}</div>
-                  {step.description && (
-                    <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">{step.description}</div>
-                  )}
-                  {step.evidence && (
-                    <div className="mt-2 whitespace-pre-wrap break-words text-xs text-[var(--color-text-secondary)]">{step.evidence}</div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">plan.md</div>
-          <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-bg-secondary)] p-3 text-xs leading-5 text-[var(--color-text-secondary)]">
-            {plan.markdown}
-          </pre>
-        </section>
-      </div>
-    </aside>
-  );
-}
-
-function SubagentCallSidebar({ toolCall, onClose }: { toolCall: ToolCallInfo; onClose: () => void }) {
-  const summary = getSubagentCallSummary(toolCall);
-  const isRunning = toolCall.status === 'calling' || toolCall.status === 'running';
-  const isFailed = toolCall.status === 'failed' || summary.status === 'failed';
-  const statusText = isFailed ? '失败' : isRunning ? '运行中' : '已完成';
-
-  return (
-    <aside className="flex h-full min-h-0 flex-col bg-[var(--color-bg-secondary)] shadow-inner">
-      <div className="flex items-start gap-3 px-4 py-4">
-        <div className={[
-          'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg',
-          isFailed
-            ? 'bg-[var(--color-error-bg)] text-[var(--color-error)]'
-            : 'bg-[var(--color-bg-primary)] text-[var(--color-accent)]',
-        ].join(' ')}>
-          {isRunning ? <Loader2 size={16} className="animate-spin" /> : <Bot size={16} />}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-base font-medium text-[var(--color-text-primary)]">
-            {summary.agentName}
-          </div>
-          <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
-            子 Agent · {statusText}{summary.durationText ? ` · ${summary.durationText}` : ''}
-          </div>
-        </div>
-        <button
-          type="button"
-          className="icon-button h-8 w-8 rounded-md text-[var(--color-text-secondary)] transition-all duration-300 ease-out hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-          onClick={onClose}
-          aria-label="关闭子 Agent 详情"
-          title="关闭子 Agent 详情"
-        >
-          <X size={14} />
-        </button>
-      </div>
-
-      <div className="min-h-0 flex-1 space-y-3 overflow-auto px-4 pb-4">
-        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">委派任务</div>
-          <div className="whitespace-pre-wrap break-words text-sm leading-6 text-[var(--color-text-primary)]">
-            {summary.task || '未记录任务内容'}
-          </div>
-          {summary.context && (
-            <div className="mt-3 rounded-md bg-[var(--color-bg-secondary)] px-3 py-2">
-              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">上下文</div>
-              <div className="max-h-[160px] overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-[var(--color-text-secondary)]">
-                {summary.context}
-              </div>
-            </div>
-          )}
-          {summary.expectedOutput && (
-            <div className="mt-3 rounded-md bg-[var(--color-bg-secondary)] px-3 py-2">
-              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">期望输出</div>
-              <div className="whitespace-pre-wrap break-words text-xs leading-5 text-[var(--color-text-secondary)]">
-                {summary.expectedOutput}
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <div className="text-xs text-[var(--color-text-tertiary)]">执行结果</div>
-            <Tag size="small" color={isFailed ? 'red' : isRunning ? 'blue' : 'green'}>
-              {statusText}
-            </Tag>
-          </div>
-          {summary.error ? (
-            <div className="whitespace-pre-wrap break-words rounded-md bg-[var(--color-error-bg)] px-3 py-2 text-sm text-[var(--color-error)]">
-              {summary.error}
-            </div>
-          ) : summary.output ? (
-            <div className="max-h-[460px] overflow-auto rounded-md bg-[var(--color-bg-secondary)] px-3 py-2">
-              <MarkdownContent content={summary.output} />
-            </div>
-          ) : (
-            <div className="text-sm text-[var(--color-text-tertiary)]">
-              {isRunning ? '子 Agent 正在执行，结果会在完成后显示。' : '暂无输出。'}
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">原始调用</div>
-          <pre className="max-h-[240px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-bg-secondary)] p-3 text-xs leading-5 text-[var(--color-text-secondary)]">
-            {JSON.stringify({
-              id: toolCall.id,
-              name: toolCall.name,
-              status: toolCall.status,
-              args: parseJsonObject(toolCall.args) || toolCall.args,
-              result: parseJsonObject(toolCall.result) || toolCall.result,
-            }, null, 2)}
-          </pre>
-        </section>
-      </div>
-    </aside>
-  );
-}
-
-function getPlanStatusText(status: PlanRunInfo['status']): string {
-  if (status === 'completed') return '已完成';
-  if (status === 'failed') return '失败';
-  if (status === 'cancelled') return '已取消';
-  if (status === 'blocked') return '阻塞';
-  if (status === 'waiting_approval') return '等待审批';
-  if (status === 'replanning') return '重规划';
-  return '运行中';
-}
-
-function MemorySummaryBlock({ summaries }: { summaries: MemorySummaryInfo[] }) {
-  const factCount = summaries.reduce((total, summary) => total + summary.facts.length, 0);
-
-  return (
-    <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
-      <div className="flex items-center justify-between gap-3 px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
-          <BookOpenCheck size={14} color="var(--color-success)" />
-          <span>候选记忆生成</span>
-        </div>
-        <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
-          {factCount} 条
-        </span>
-      </div>
-      <div className="space-y-2 px-3 pb-3">
-        {summaries.map((summary) => (
-          <div key={`${summary.agentId}-${summary.facts.map((fact) => fact.id).join('-')}`} className="rounded-md bg-[var(--color-bg-primary)] p-3">
-            <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">
-              {summary.agentName}
-            </div>
-            <div className="space-y-2">
-              {summary.facts.map((fact) => (
-                <div key={fact.id}>
-                  <div className="text-sm font-medium text-[var(--color-text-primary)]">
-                    {fact.title}
-                  </div>
-                  <div className="mt-1 line-clamp-3 text-xs text-[var(--color-text-tertiary)]">
-                    {fact.content}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function ModelCacheBlock({ caches }: { caches: ModelCacheInfo[] }) {
   const [expanded, setExpanded] = useState(false);
@@ -2891,7 +2415,6 @@ function HitlApprovalBlock({
 }) {
   const [submitting, setSubmitting] = useState<'approve' | 'reject' | null>(null);
   const isExternal = request.type === 'REQUIRE_EXTERNAL_EXECUTION';
-  const isPlanApproval = request.type === 'PLAN_APPROVAL';
   const askUserToolCall = request.toolCalls.find((toolCall) => isAskUserToolName(toolCall.rawName || toolCall.name));
   const askUserRequest = askUserToolCall ? buildClarificationRequestFromAskUser(askUserToolCall) : null;
 
@@ -2936,12 +2459,8 @@ function HitlApprovalBlock({
     <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
       <div className="flex items-center justify-between gap-3 px-3 py-2">
         <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
-          {isPlanApproval ? (
-            <ListChecks size={14} color="var(--color-accent)" />
-          ) : (
-            <AlertCircle size={14} color="var(--color-warning)" />
-          )}
-          <span>{isPlanApproval ? '等待计划确认' : isExternal ? '等待外部执行结果' : '等待人工确认'}</span>
+          <AlertCircle size={14} color="var(--color-warning)" />
+          <span>{isExternal ? '等待外部执行结果' : '等待人工确认'}</span>
         </div>
         <Tag size="small" color="transparent">
           {request.scope === 'worker' ? 'Worker' : 'Leader'} · {request.agentName}
@@ -2949,13 +2468,9 @@ function HitlApprovalBlock({
       </div>
       <div className="space-y-2 px-3 pb-3">
         {request.toolCalls.map((toolCall) => (
-          <div key={toolCall.id} className="rounded-md bg-[var(--color-bg-primary)] p-3">
+            <div key={toolCall.id} className="rounded-md bg-[var(--color-bg-primary)] p-3">
             <div className="mb-2 flex items-center gap-2">
-              {isPlanApproval ? (
-                <ListChecks size={13} color="var(--color-accent)" />
-              ) : (
-                <Wrench size={13} color="var(--color-accent)" />
-              )}
+              <Wrench size={13} color="var(--color-accent)" />
               <span className="text-sm font-medium text-[var(--color-text-primary)]">
                 {toolCall.name}
               </span>
@@ -2974,7 +2489,7 @@ function HitlApprovalBlock({
             loading={submitting === 'reject'}
             onClick={() => handleResolve('reject')}
           >
-            {isPlanApproval ? '拒绝计划' : '拒绝'}
+            拒绝
           </Button>
           <Button
             type="primary"
@@ -2982,7 +2497,7 @@ function HitlApprovalBlock({
             loading={submitting === 'approve'}
             onClick={() => handleResolve('approve')}
           >
-            {isPlanApproval ? '确认计划' : '批准'}
+            批准
           </Button>
         </div>
       </div>
@@ -3049,24 +2564,19 @@ function HitlDock({
   onResolve: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
 }) {
   if (requests.length === 0) return null;
-  const onlyPlanApproval = requests.every((request) => request.type === 'PLAN_APPROVAL');
 
   return (
     <div className="mx-auto mb-3 max-w-4xl rounded-xl border border-[var(--color-warning)] bg-[var(--color-bg-primary)] p-3 shadow-lg">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
-          {onlyPlanApproval ? (
-            <ListChecks size={15} color="var(--color-accent)" />
-          ) : (
-            <AlertCircle size={15} color="var(--color-warning)" />
-          )}
-          <span>{onlyPlanApproval ? '需要确认计划' : '需要人工审批'}</span>
+          <AlertCircle size={15} color="var(--color-warning)" />
+          <span>需要人工审批</span>
           <Tag size="small" color="warning">
             {requests.length}
           </Tag>
         </div>
         <div className="text-xs text-[var(--color-text-tertiary)]">
-          {onlyPlanApproval ? '确认后 Agent 才会开始执行计划' : '审批完成后 Agent 会继续执行'}
+          审批完成后 Agent 会继续执行
         </div>
       </div>
       <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
@@ -3328,99 +2838,6 @@ function parseToolCallArgs(raw: string): Record<string, unknown> {
   }
 }
 
-function parseJsonObject(raw: string): Record<string, unknown> | null {
-  const value = raw.trim();
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function isSubagentToolName(name: string): boolean {
-  return name.startsWith('子 Agent：') || name.startsWith('CallAgent_');
-}
-
-interface SubagentCallSummary {
-  agentName: string;
-  status: string;
-  task: string;
-  context: string;
-  expectedOutput: string;
-  output: string;
-  outputPreview: string;
-  error: string;
-  durationText: string;
-}
-
-function getSubagentCallSummary(toolCall: ToolCallInfo): SubagentCallSummary {
-  const args = parseJsonObject(toolCall.args) || {};
-  const result = parseJsonObject(toolCall.result) || {};
-  const nameFromTool = normalizeToolDisplayName(toolCall.name).replace(/^子 Agent：/, '').trim();
-  const agentName = String(result.agentName || result.agent_name || nameFromTool || '子 Agent');
-  const durationMs = Number(result.durationMs ?? result.duration_ms ?? 0);
-  const output = String(result.output || '').trim();
-  const error = String(result.error || '').trim();
-  const task = String(args.task || '').trim();
-  const context = String(args.context || '').trim();
-  const expectedOutput = String(args.expected_output || args.expectedOutput || '').trim();
-
-  return {
-    agentName,
-    status: String(result.status || toolCall.status || '').trim(),
-    task,
-    context,
-    expectedOutput,
-    output,
-    outputPreview: output.slice(0, 160),
-    error,
-    durationText: Number.isFinite(durationMs) && durationMs > 0 ? formatDurationMs(durationMs) : '',
-  };
-}
-
-function formatDurationMs(durationMs: number): string {
-  if (durationMs < 1000) return `${durationMs}ms`;
-  const seconds = durationMs / 1000;
-  if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 0 : 1)}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = Math.round(seconds % 60);
-  return `${minutes}m ${rest}s`;
-}
-
-function formatSubagentInput(raw: string): string {
-  const parsed = parseJsonObject(raw);
-  if (!parsed) return raw;
-  const task = String(parsed.task || '').trim();
-  const context = String(parsed.context || '').trim();
-  const expectedOutput = String(parsed.expected_output || parsed.expectedOutput || '').trim();
-  return [
-    task ? `任务：${task}` : '',
-    context ? `上下文：${context}` : '',
-    expectedOutput ? `期望输出：${expectedOutput}` : '',
-  ].filter(Boolean).join('\n\n') || raw;
-}
-
-function formatSubagentResult(raw: string): string {
-  const parsed = parseJsonObject(raw);
-  if (!parsed) return raw;
-  const agentName = String(parsed.agentName || parsed.agent_name || '').trim();
-  const status = String(parsed.status || '').trim();
-  const durationMs = Number(parsed.durationMs ?? parsed.duration_ms ?? 0);
-  const output = String(parsed.output || '').trim();
-  const error = String(parsed.error || '').trim();
-  return [
-    agentName ? `子 Agent：${agentName}` : '',
-    status ? `状态：${status}` : '',
-    Number.isFinite(durationMs) && durationMs > 0 ? `耗时：${durationMs}ms` : '',
-    output ? `输出：\n${output}` : '',
-    error ? `错误：${error}` : '',
-  ].filter(Boolean).join('\n\n') || raw;
-}
-
 function GeneratedFilesBlock({ files }: { files: GeneratedFileInfo[] }) {
   if (files.length === 0) return null;
 
@@ -3462,9 +2879,8 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
   const [copied, setCopied] = useState<'args' | 'result' | null>(null);
   const isRunning = toolCall.status === 'calling' || toolCall.status === 'running';
   const isFailed = toolCall.status === 'failed';
-  const isSubagentCall = isSubagentToolName(toolCall.name);
-  const displayArgs = isSubagentCall ? formatSubagentInput(toolCall.args) : toolCall.args;
-  const displayResult = isSubagentCall ? formatSubagentResult(toolCall.result) : toolCall.result;
+  const displayArgs = toolCall.args;
+  const displayResult = toolCall.result;
 
   const handleCopyToolText = useCallback(async (kind: 'args' | 'result', value: string) => {
     if (!value.trim()) return;
@@ -3502,8 +2918,6 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCallInfo }) {
           <Loader2 size={12} className="shrink-0 animate-spin" style={{ color: 'var(--color-accent)' }} />
         ) : isFailed ? (
           <XCircle size={12} className="shrink-0" style={{ color: 'var(--color-error)' }} />
-        ) : isSubagentCall ? (
-          <Bot size={12} className="shrink-0" style={{ color: 'var(--color-success)' }} />
         ) : (
           <Wrench size={12} className="shrink-0" style={{ color: 'var(--color-success)' }} />
         )}
