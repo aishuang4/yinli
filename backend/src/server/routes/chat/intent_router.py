@@ -1,7 +1,7 @@
-"""Chat 前置意图路由。
+"""Chat 第一层运行线路路由。
 
-该模块以模型语义路由为主、规则路由为兜底。主链路根据 IntentRoute
-决定本轮要启用的 Skill、Team worker 和工具范围。
+该模块只判断本轮应该进入哪条运行线路：ReAct、Team 或前置追问。
+Skill、工具、Worker 裁剪暂时保留为兼容 hints，后续迁入具体 runtime。
 """
 
 import json
@@ -20,14 +20,16 @@ from src.server.routes.chat.team_state import _expand_selected_workers_with_depe
 from src.server.routes.skills import get_installed_skill, select_relevant_skills
 
 
-RouteMode = Literal[
-    "conversation",
-    "clarification",
-    "direct_answer",
-    "agent_execution",
-    "team_execution",
-    "skill_execution",
-]
+RuntimeKind = Literal["react", "team", "clarification"]
+
+
+class RuntimeRoute(BaseModel):
+    """第一层运行线路选择，后续可通过 config 扩展更多线路。"""
+
+    kind: RuntimeKind = "react"
+    confidence: float = 1.0
+    reason: str = ""
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class RouteDecision(BaseModel):
@@ -55,13 +57,11 @@ class ToolScope(BaseModel):
 class IntentRoute(BaseModel):
     """本轮 Chat 运行的前置路由结果。"""
 
-    mode: RouteMode = "conversation"
+    mode: RuntimeKind = "react"
+    runtime: RuntimeRoute = Field(default_factory=RuntimeRoute)
     decisions: list[RouteDecision] = Field(default_factory=list)
     selected_skill_ids: list[str] = Field(default_factory=list, alias="selectedSkillIds")
-    selected_subagent_ids: list[str] = Field(default_factory=list, alias="selectedSubagentIds")
     selected_team_member_ids: list[str] = Field(default_factory=list, alias="selectedTeamMemberIds")
-    should_create_plan: bool = Field(default=False, alias="shouldCreatePlan")
-    require_plan_approval: bool = Field(default=False, alias="requirePlanApproval")
     require_clarification: bool = Field(default=False, alias="requireClarification")
     clarification: dict[str, Any] | None = None
     tool_scope: ToolScope = Field(default_factory=ToolScope, alias="toolScope")
@@ -71,66 +71,33 @@ class IntentRoute(BaseModel):
 
 
 class ModelIntentRoutePayload(BaseModel):
-    """模型意图路由返回的结构化结果。"""
+    """模型第一层路由返回的结构化结果。"""
 
-    mode: RouteMode = "conversation"
-    intent: str = "general_conversation"
+    runtime: RuntimeRoute = Field(default_factory=RuntimeRoute)
+    intent: str = "react"
     confidence: float = 0.5
     reason: str = ""
-    should_create_plan: bool = Field(default=False, alias="shouldCreatePlan")
-    require_plan_approval: bool = Field(default=False, alias="requirePlanApproval")
     require_clarification: bool = Field(default=False, alias="requireClarification")
     clarification: dict[str, Any] | None = None
-    selected_skill_ids: list[str] = Field(default_factory=list, alias="selectedSkillIds")
-    selected_subagent_ids: list[str] = Field(default_factory=list, alias="selectedSubagentIds")
-    selected_team_member_ids: list[str] = Field(default_factory=list, alias="selectedTeamMemberIds")
-    tool_scope: ToolScope = Field(default_factory=ToolScope, alias="toolScope")
 
     model_config = {"populate_by_name": True, "extra": "ignore"}
 
 
 INTENT_CATALOG: list[dict[str, Any]] = [
     {
-        "name": "general_conversation",
-        "description": "普通问答、解释概念、轻量闲聊，不需要工具或计划。",
-        "modes": ["conversation", "direct_answer"],
+        "name": "react",
+        "description": "默认单 Agent ReAct 线路，适合普通问答、工具调用、Skills 执行和单 Agent 任务。",
+        "runtimeKind": "react",
     },
     {
         "name": "clarification",
-        "description": "用户目标、文件、系统、输入参数缺失，继续执行会产生明显歧义。",
-        "modes": ["clarification"],
+        "description": "执行前缺少关键目标、范围或参数，需要先向用户追问。",
+        "runtimeKind": "clarification",
     },
     {
-        "name": "execution_task",
-        "description": "多步骤执行、重构、调研、实现、端到端验证、跨资源协作。",
-        "modes": ["agent_execution", "team_execution"],
-    },
-    {
-        "name": "code_change",
-        "description": "修改、实现、修复、重构代码或运行测试构建。",
-        "modes": ["agent_execution"],
-        "defaultToolScope": {"allowBash": True},
-    },
-    {
-        "name": "research",
-        "description": "检索资料、知识库查询、网页/API 信息收集、竞品或方案调研。",
-        "modes": ["agent_execution", "team_execution"],
-        "defaultToolScope": {"allowKnowledge": True, "allowHttp": True, "allowMcp": True},
-    },
-    {
-        "name": "skill_task",
-        "description": "任务明确需要某个已安装 Skill 的操作手册或多轮技能流程。",
-        "modes": ["skill_execution", "agent_execution"],
-    },
-    {
-        "name": "team_collaboration",
-        "description": "需要 Team Leader 与多个 Worker 协作处理。",
-        "modes": ["team_execution"],
-    },
-    {
-        "name": "vision_task",
-        "description": "图片、截图、多模态输入分析。",
-        "modes": ["agent_execution"],
+        "name": "team",
+        "description": "用户已选择 Team 或明确需要 Team Leader/Worker 协作。",
+        "runtimeKind": "team",
     },
 ]
 
@@ -216,17 +183,6 @@ def route_chat_message(
         payload={"selectedSkillIds": selected_skill_ids},
     ))
 
-    decisions.append(RouteDecision(
-        name="subagent",
-        enabled=False,
-        confidence=1.0,
-        reason="Subagent 功能已下线，本轮不会注入可调用子 Agent。",
-        payload={
-            "availableSubagentIds": [],
-            "selectedSubagentIds": [],
-        },
-    ))
-
     selected_team_member_ids = _select_team_member_ids(message, team_members)
     has_team = bool(team_members)
     decisions.append(RouteDecision(
@@ -265,25 +221,27 @@ def route_chat_message(
         payload=tool_scope.model_dump(by_alias=True),
     ))
 
-    mode = _route_mode(
+    runtime = _route_runtime(
         has_team=has_team,
-        selected_skill_ids=selected_skill_ids,
         clarification=clarification,
-        message=message,
-        images=images,
     )
+    decisions.insert(0, RouteDecision(
+        name="runtime_route",
+        enabled=True,
+        confidence=runtime.confidence,
+        reason=runtime.reason,
+        payload=runtime.model_dump(),
+    ))
     return IntentRoute(
-        mode=mode,
+        mode=runtime.kind,
+        runtime=runtime,
         decisions=decisions,
         selectedSkillIds=selected_skill_ids,
-        selectedSubagentIds=[],
         selectedTeamMemberIds=selected_team_member_ids,
-        shouldCreatePlan=False,
-        requirePlanApproval=False,
         requireClarification=clarification is not None,
         clarification=clarification,
         toolScope=tool_scope,
-        mainAgentInstruction=_main_agent_instruction(mode),
+        mainAgentInstruction=_main_agent_instruction(runtime.kind),
     )
 
 
@@ -308,8 +266,9 @@ async def _run_model_intent_router(
     """调用轻量模型完成本轮意图识别。"""
 
     try:
+        router_agent_id = _intent_router_agent_id(model_name, fallback_names)
         agent = get_or_create_agent(
-            agent_id=f"intent-router:{model_name}:{uuid.uuid4().hex}",
+            agent_id=router_agent_id,
             name="IntentRouter",
             system_prompt=_build_model_router_system_prompt(),
             model_name=model_name,
@@ -347,43 +306,42 @@ async def _run_model_intent_router(
         return None
 
 
+def _intent_router_agent_id(model_name: str, fallback_names: list[str]) -> str:
+    """生成固定的系统意图识别 Agent 缓存键。"""
+
+    fallback_key = ",".join(fallback_names) if fallback_names else "none"
+    return f"system:intent-router:{model_name}:fallbacks-{fallback_key}"
+
+
 def _build_model_router_system_prompt() -> str:
     """构建模型意图路由器系统提示词。"""
 
     return "\n".join([
         "You are the intent router for an Agent workstation.",
         "Return only one compact valid JSON object. Do not call tools. Do not write markdown.",
-        "Your job is to select the run mode, needed tools, clarification need, skills, and team workers.",
-        "Use only IDs listed in the user prompt. If a resource is not listed, do not invent it.",
-        "Prefer precise minimal selection. Do not enable tools that are not materially needed.",
+        "Your only job is to select the first-layer runtime route.",
+        "Current supported runtime kinds are: react, team, clarification.",
+        "Do not select tools, skills, workers, or permissions.",
         "If the task lacks required target details, set requireClarification=true and provide concise questions.",
-        "For Team tasks, select only workers that are materially relevant; empty selectedTeamMemberIds means all workers may be kept by fallback behavior.",
-        "Plan mode is disabled. Always set shouldCreatePlan=false and requirePlanApproval=false.",
-        "Subagent mode is disabled. Always set selectedSubagentIds=[].",
+        "If teamContext.enabled is true and clarification is not required, prefer runtime.kind=team.",
+        "Otherwise prefer runtime.kind=react.",
         "Schema:",
         json.dumps(
             {
-                "mode": "conversation | clarification | direct_answer | agent_execution | team_execution | skill_execution",
-                "intent": "one intent name from catalog",
+                "runtime": {
+                    "kind": "react | team | clarification",
+                    "confidence": 0.0,
+                    "reason": "short Chinese reason",
+                    "config": {},
+                },
+                "intent": "react | team | clarification",
                 "confidence": 0.0,
                 "reason": "short Chinese reason",
-                "shouldCreatePlan": False,
-                "requirePlanApproval": False,
                 "requireClarification": False,
                 "clarification": {
                     "title": "short title",
                     "description": "short description",
                     "questions": [{"id": "target", "type": "text | choice", "label": "question"}],
-                },
-                "selectedSkillIds": [],
-                "selectedSubagentIds": [],
-                "selectedTeamMemberIds": [],
-                "toolScope": {
-                    "allowMcp": False,
-                    "allowKnowledge": False,
-                    "allowBash": False,
-                    "allowHttp": False,
-                    "reason": "short Chinese reason",
                 },
             },
             ensure_ascii=False,
@@ -427,18 +385,22 @@ def _build_model_router_user_prompt(
         "userMessage": message,
         "agent": agent_summary,
         "hasImages": bool(images),
-        "availableSkills": skills,
-        "availableSubagents": [],
-        "teamMembers": team_lines,
+        "teamContext": {
+            "enabled": bool(team_members),
+            "name": "selected team" if team_members else "",
+            "memberCount": len(team_members),
+        },
         "routingPolicy": {
-            "planMode": "disabled",
-            "subagentMode": "disabled",
-            "mcpRequiresConfiguredTools": True,
-            "knowledgeRequiresConfiguredTools": True,
-            "bashMayBeEnabledForCommandsTestsBuilds": True,
-            "httpMayBeEnabledForApiNetworkUrlResearch": True,
+            "supportedRuntimeKinds": ["react", "team", "clarification"],
+            "skillsAreSelectedInsideRuntime": True,
+            "toolsAreSelectedInsideRuntime": True,
+            "workersAreSelectedInsideTeamRuntime": True,
         },
     }
+    if skills:
+        payload["compatibilitySkillHints"] = skills
+    if team_lines:
+        payload["compatibilityTeamMemberHints"] = team_lines
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -452,29 +414,21 @@ def _sanitize_model_route(
     team_members: list[ChatTeamMemberPayload],
     images: list[ChatImagePayload],
 ) -> IntentRoute:
-    """后端裁剪模型意图路由，确保只启用当前 Agent 允许的资源。"""
+    """后端裁剪模型第一层路由，确保只进入当前支持的 runtime。"""
 
     available_skill_ids = {
         skill_id
         for skill_id in skill_ids
         if get_installed_skill(skill_id) is not None
     }
+    # Skill/工具选择后续会迁入 ReAct runtime。当前保留规则 hints，避免存量功能中断。
     selected_skill_ids = [
-        skill_id
-        for skill_id in payload.selected_skill_ids
-        if skill_id in available_skill_ids
+        skill.id
+        for skill in select_relevant_skills(skill_ids, message)
+        if skill.id in available_skill_ids
     ]
 
-    worker_ids = {
-        member.agent_id
-        for member in team_members
-        if member.role != "leader"
-    }
-    selected_team_member_ids = [
-        agent_id
-        for agent_id in payload.selected_team_member_ids
-        if agent_id in worker_ids
-    ][:8]
+    selected_team_member_ids = _select_team_member_ids(message, team_members)
     if selected_team_member_ids:
         selected_team_member_ids = _expand_selected_workers_with_dependencies(selected_team_member_ids, team_members)
 
@@ -486,25 +440,31 @@ def _sanitize_model_route(
             "questions": [{"id": "details", "type": "text", "label": "请补充需要处理的目标、范围或约束"}],
         }
 
-    tool_scope = _sanitize_tool_scope(payload.tool_scope, agent_config)
-    mode = _normalize_mode(
-        requested_mode=payload.mode,
-        has_team=bool(team_members),
-        selected_skill_ids=selected_skill_ids,
-        clarification=clarification,
+    tool_scope = _detect_tool_scope(
         message=message,
-        images=images,
+        agent_config=agent_config,
+        has_selected_skills=bool(selected_skill_ids),
+        has_team=bool(team_members),
+        has_images=bool(images),
+    )
+    runtime = _sanitize_runtime_route(
+        requested=payload.runtime,
+        fallback=fallback_route.runtime,
+        payload_confidence=payload.confidence,
+        payload_reason=payload.reason,
+        has_team=bool(team_members),
+        clarification=clarification,
     )
     decisions = [
         RouteDecision(
-            name="model_router",
+            name="runtime_route",
             enabled=True,
             confidence=max(0.0, min(float(payload.confidence), 1.0)),
-            reason=payload.reason or "模型完成本轮意图识别。",
+            reason=runtime.reason or payload.reason or "模型完成第一层运行线路识别。",
             payload={
                 "intent": payload.intent,
-                "requestedMode": payload.mode,
-                "sanitizedMode": mode,
+                "requestedRuntime": payload.runtime.model_dump(),
+                "sanitizedRuntime": runtime.model_dump(),
             },
         ),
         RouteDecision(
@@ -513,17 +473,6 @@ def _sanitize_model_route(
             confidence=0.86 if selected_skill_ids else 0.72,
             reason="模型选择了本轮相关 Skill。" if selected_skill_ids else "模型未选择 Skill。",
             payload={"selectedSkillIds": selected_skill_ids},
-        ),
-        RouteDecision(
-            name="subagent",
-            enabled=False,
-            confidence=1.0,
-            reason="Subagent 功能已下线，忽略模型返回的子 Agent 选择。",
-            payload={
-                "availableSubagentIds": [],
-                "selectedSubagentIds": [],
-                "requested": list(payload.selected_subagent_ids),
-            },
         ),
         RouteDecision(
             name="team",
@@ -552,75 +501,57 @@ def _sanitize_model_route(
         ),
     ]
     return IntentRoute(
-        mode=mode,
+        mode=runtime.kind,
+        runtime=runtime,
         decisions=decisions,
         selectedSkillIds=selected_skill_ids,
-        selectedSubagentIds=[],
         selectedTeamMemberIds=selected_team_member_ids,
-        shouldCreatePlan=False,
-        requirePlanApproval=False,
         requireClarification=clarification is not None,
         clarification=clarification,
         toolScope=tool_scope,
-        mainAgentInstruction=_main_agent_instruction(mode),
+        mainAgentInstruction=_main_agent_instruction(runtime.kind),
     )
 
 
-def _sanitize_tool_scope(scope: ToolScope, agent_config: object | None) -> ToolScope:
-    """裁剪模型请求的工具范围，避免开启未配置资源。"""
-
-    configured_mcp = bool(list(getattr(agent_config, "mcp_tools", []) or []))
-    configured_knowledge = bool(list(getattr(agent_config, "knowledge_tools", []) or []))
-    allow_mcp = bool(scope.allow_mcp and configured_mcp)
-    allow_knowledge = bool(scope.allow_knowledge and configured_knowledge)
-    allow_bash = bool(scope.allow_bash)
-    allow_http = bool(scope.allow_http)
-    reasons: list[str] = []
-    if allow_mcp:
-        reasons.append("模型判断需要 MCP 工具")
-    if allow_knowledge:
-        reasons.append("模型判断需要知识库工具")
-    if allow_bash:
-        reasons.append("模型判断需要命令/测试/构建能力")
-    if allow_http:
-        reasons.append("模型判断需要 HTTP/API/网络请求能力")
-    blocked: list[str] = []
-    if scope.allow_mcp and not configured_mcp:
-        blocked.append("MCP 未配置，已裁剪")
-    if scope.allow_knowledge and not configured_knowledge:
-        blocked.append("知识库未配置，已裁剪")
-    reason = "；".join(reasons + blocked) or scope.reason
-    return ToolScope(
-        allowMcp=allow_mcp,
-        allowKnowledge=allow_knowledge,
-        allowBash=allow_bash,
-        allowHttp=allow_http,
-        reason=reason,
-    )
-
-
-def _normalize_mode(
+def _sanitize_runtime_route(
     *,
-    requested_mode: RouteMode,
+    requested: RuntimeRoute,
+    fallback: RuntimeRoute,
+    payload_confidence: float,
+    payload_reason: str,
     has_team: bool,
-    selected_skill_ids: list[str],
     clarification: dict[str, Any] | None,
-    message: str,
-    images: list[ChatImagePayload],
-) -> RouteMode:
-    """根据实际可用资源和模型请求生成最终运行模式。"""
+) -> RuntimeRoute:
+    """把模型返回的 runtime route 裁剪成当前支持的第一层线路。"""
 
     if clarification:
-        return "clarification"
+        return RuntimeRoute(
+            kind="clarification",
+            confidence=max(0.0, min(float(payload_confidence), 1.0)),
+            reason=payload_reason or "模型判断执行前需要补充信息。",
+        )
     if has_team:
-        return "team_execution"
-    if selected_skill_ids:
-        return "skill_execution"
-    if requested_mode in {"conversation", "direct_answer", "agent_execution"}:
-        return requested_mode
-    if images or re.search(r"(创建|修改|实现|生成|分析|检查|测试|修复|运行|读取|查找|总结|规划|写)", message):
-        return "agent_execution"
-    return "conversation"
+        return RuntimeRoute(
+            kind="team",
+            confidence=max(0.0, min(float(requested.confidence or payload_confidence), 1.0)),
+            reason=requested.reason or payload_reason or "用户选择了 Team，进入 Team Runtime。",
+            config=requested.config,
+        )
+    if requested.kind not in {"react", "team", "clarification"}:
+        return fallback
+    if requested.kind == "team" and not has_team:
+        return RuntimeRoute(
+            kind="react",
+            confidence=max(0.0, min(float(requested.confidence or payload_confidence), 1.0)),
+            reason="未选择 Team，模型请求的 Team Runtime 已降级为 ReAct Runtime。",
+            config=requested.config,
+        )
+    return RuntimeRoute(
+        kind=requested.kind if requested.kind != "clarification" else "react",
+        confidence=max(0.0, min(float(requested.confidence or payload_confidence), 1.0)),
+        reason=requested.reason or payload_reason or "进入 ReAct Runtime。",
+        config=requested.config,
+    )
 
 
 def _normalize_clarification(value: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -756,12 +687,17 @@ async def refine_team_route_with_model(
         )
         for decision in route.decisions
     ]
-    mode: RouteMode = "team_execution"
+    runtime = RuntimeRoute(
+        kind="team",
+        confidence=0.82,
+        reason=reason or f"模型路由选择 Worker: {', '.join(selected)}",
+    )
     return route.model_copy(update={
-        "mode": mode,
+        "mode": runtime.kind,
+        "runtime": runtime,
         "decisions": decisions,
         "selected_team_member_ids": selected,
-        "main_agent_instruction": _main_agent_instruction(mode),
+        "main_agent_instruction": _main_agent_instruction(runtime.kind),
     })
 
 
@@ -857,16 +793,6 @@ def _select_team_member_ids(message: str, members: list[ChatTeamMemberPayload]) 
     return selected[:6]
 
 
-def _has_runtime_tools(agent_config: object | None) -> bool:
-    if not agent_config:
-        return False
-    return bool(
-        list(getattr(agent_config, "mcp_tools", []) or [])
-        or list(getattr(agent_config, "knowledge_tools", []) or [])
-        or list(getattr(agent_config, "callable_agents", []) or [])
-    )
-
-
 def _detect_tool_scope(
     *,
     message: str,
@@ -925,31 +851,36 @@ def _detect_missing_required_context(message: str) -> dict[str, Any] | None:
     return None
 
 
-def _route_mode(
+def _route_runtime(
     *,
     has_team: bool,
-    selected_skill_ids: list[str],
     clarification: dict[str, Any] | None,
-    message: str,
-    images: list[ChatImagePayload],
-) -> RouteMode:
+) -> RuntimeRoute:
+    """规则兜底的第一层运行线路。"""
+
     if clarification:
-        return "clarification"
+        return RuntimeRoute(
+            kind="clarification",
+            confidence=0.82,
+            reason="规则判断执行前需要补充信息。",
+        )
     if has_team:
-        return "team_execution"
-    if selected_skill_ids:
-        return "skill_execution"
-    if images or re.search(r"(创建|修改|实现|生成|分析|检查|测试|修复|运行|读取|查找|总结|规划|写)", message):
-        return "agent_execution"
-    return "conversation"
+        return RuntimeRoute(
+            kind="team",
+            confidence=0.8,
+            reason="用户选择了 Team，进入 Team Runtime。",
+        )
+    return RuntimeRoute(
+        kind="react",
+        confidence=0.78,
+        reason="进入默认 ReAct Runtime。",
+    )
 
 
-def _main_agent_instruction(mode: RouteMode) -> str:
-    if mode == "conversation":
-        return "本轮按普通对话处理，不要主动输出计划或调用子 Agent。"
-    if mode == "skill_execution":
-        return "本轮只加载匹配到的 Skills，并按 Skill 手册执行。"
-    if mode == "team_execution":
+def _main_agent_instruction(mode: RuntimeKind) -> str:
+    if mode == "react":
+        return "本轮按 ReAct Runtime 处理；不要主动输出计划或调用子 Agent。"
+    if mode == "team":
         return "本轮是 Team 协作任务，Leader 应基于 Worker 输出汇总。"
     if mode == "clarification":
         return "本轮存在信息缺口，优先补充必要信息后再执行。"
