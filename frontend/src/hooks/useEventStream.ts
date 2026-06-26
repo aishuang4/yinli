@@ -17,6 +17,11 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
+import {
+  CHAT_SSE_EVENTS,
+  RUNTIME_EVENT_TYPES,
+  type ChatRuntimeEvent,
+} from '../types/chatEvents';
 import { createId } from '../utils/id';
 
 /** SSE 事件类型 */
@@ -47,6 +52,8 @@ export interface StreamState {
   teamActivities: TeamActivityInfo[];
   /** 模型缓存事件 */
   modelCaches: ModelCacheInfo[];
+  /** 应用级运行事件 */
+  runtimeEvents: ChatRuntimeEvent[];
   /** 待人工处理的交互 */
   hitlRequests: HitlRequestInfo[];
   /** 待用户补充信息的反问 */
@@ -251,6 +258,7 @@ interface SendMessageOptions {
   systemPrompt?: string;
   model?: string;
   sessionId?: string;
+  displayMessage?: string;
   skillIds?: string[];
   deepThinking?: boolean;
   sandbox?: boolean;
@@ -273,6 +281,7 @@ const INITIAL_STATE: StreamState = {
   skillCalls: [],
   teamActivities: [],
   modelCaches: [],
+  runtimeEvents: [],
   hitlRequests: [],
   clarificationRequests: [],
   modelName: '',
@@ -296,6 +305,249 @@ function completeStreamIfNoPendingUserInteraction(state: StreamState): StreamSta
     isStreaming: false,
     runCompletedAt: state.runCompletedAt || new Date().toISOString(),
   };
+}
+
+function normalizeRuntimeEvent(data: Record<string, unknown>): ChatRuntimeEvent {
+  return {
+    id: String(data.id || createId()),
+    runId: String(data.runId || ''),
+    sessionId: String(data.sessionId || ''),
+    type: String(data.type || ''),
+    source: String(data.source || 'runtime'),
+    sourceEventType: data.sourceEventType ? String(data.sourceEventType) : null,
+    scope: String(data.scope || ''),
+    agentId: String(data.agentId || ''),
+    agentName: String(data.agentName || ''),
+    teamActivityId: data.teamActivityId ? String(data.teamActivityId) : null,
+    status: String(data.status || ''),
+    reason: String(data.reason || ''),
+    timestamp: String(data.timestamp || new Date().toISOString()),
+    durationMs: typeof data.durationMs === 'number' ? data.durationMs : null,
+    payload: (
+      typeof data.payload === 'object' && data.payload !== null
+        ? data.payload as Record<string, unknown>
+        : {}
+    ),
+  };
+}
+
+function appendRuntimeEventCompact(
+  current: ChatRuntimeEvent[],
+  incoming: ChatRuntimeEvent,
+): ChatRuntimeEvent[] {
+  const previous = current[current.length - 1];
+  if (previous && shouldMergeRuntimeDelta(previous, incoming)) {
+    const mergedPayload = {
+      ...previous.payload,
+      delta: `${String(previous.payload.delta || '')}${String(incoming.payload.delta || '')}`,
+    };
+    return [
+      ...current.slice(0, -1),
+      {
+        ...previous,
+        timestamp: incoming.timestamp,
+        payload: mergedPayload,
+      },
+    ];
+  }
+  return [...current, incoming].slice(-2000);
+}
+
+function shouldMergeRuntimeDelta(previous: ChatRuntimeEvent, incoming: ChatRuntimeEvent): boolean {
+  if (previous.type !== incoming.type) return false;
+  if (previous.scope !== incoming.scope) return false;
+  if (previous.agentId !== incoming.agentId) return false;
+  if (previous.teamActivityId !== incoming.teamActivityId) return false;
+  const mergeableTypes = new Set<string>([
+    RUNTIME_EVENT_TYPES.AGENT_OUTPUT_DELTA,
+    RUNTIME_EVENT_TYPES.AGENT_REASONING_DELTA,
+    RUNTIME_EVENT_TYPES.AGENT_FINAL_ANSWER_DELTA,
+    RUNTIME_EVENT_TYPES.AGENT_THINKING,
+    RUNTIME_EVENT_TYPES.TOOL_CALL_DELTA,
+    RUNTIME_EVENT_TYPES.TOOL_RESULT_DELTA,
+  ]);
+  if (!mergeableTypes.has(incoming.type)) {
+    return false;
+  }
+  const previousToolId = String(previous.payload.tool_call_id || '');
+  const incomingToolId = String(incoming.payload.tool_call_id || '');
+  return previousToolId === incomingToolId;
+}
+
+function getRuntimeEventDisplayText(event: ChatRuntimeEvent): string {
+  const toolName = normalizeToolDisplayName(String(event.payload.tool_call_name || ''));
+  const modelName = String(event.payload.model_name || '');
+  switch (event.type) {
+    case RUNTIME_EVENT_TYPES.TEAM_WORKER_QUEUED:
+      return '等待调度';
+    case RUNTIME_EVENT_TYPES.TEAM_WORKER_BLOCKED_BY_DEPENDENCY:
+      return '等待上游 Worker';
+    case RUNTIME_EVENT_TYPES.TEAM_WORKER_STARTED:
+      return '开始执行';
+    case RUNTIME_EVENT_TYPES.TEAM_WORKER_WAITING_HUMAN:
+    case RUNTIME_EVENT_TYPES.AGENT_WAITING_HUMAN:
+      return '等待人工确认';
+    case RUNTIME_EVENT_TYPES.TEAM_WORKER_COMPLETED:
+      return 'Worker 已完成';
+    case RUNTIME_EVENT_TYPES.TEAM_WORKER_FAILED:
+      return 'Worker 执行失败';
+    case RUNTIME_EVENT_TYPES.AGENT_MODEL_CALL_STARTED:
+      return `调用模型 ${modelName}`.trim();
+    case RUNTIME_EVENT_TYPES.TOOL_CALL_STARTED:
+      return `调用工具 ${toolName || 'tool'}`;
+    case RUNTIME_EVENT_TYPES.TOOL_RESULT_STARTED:
+      return '等待工具结果';
+    case RUNTIME_EVENT_TYPES.TOOL_RESULT_COMPLETED:
+      return '工具结果已返回';
+    case RUNTIME_EVENT_TYPES.AGENT_THINKING:
+      return '思考中';
+    case RUNTIME_EVENT_TYPES.AGENT_REASONING_DELTA:
+      return '推理中';
+    case RUNTIME_EVENT_TYPES.AGENT_FINAL_ANSWER_STARTED:
+      return '开始输出最终答案';
+    case RUNTIME_EVENT_TYPES.AGENT_FINAL_ANSWER_DELTA:
+      return '输出最终答案';
+    case RUNTIME_EVENT_TYPES.AGENT_OUTPUT_DELTA:
+      return '输出结论';
+    case RUNTIME_EVENT_TYPES.AGENT_COMPLETED:
+      return 'ReAct 循环完成';
+    case RUNTIME_EVENT_TYPES.ARTIFACT_CREATED:
+      return '生成文件产物';
+    case RUNTIME_EVENT_TYPES.ARTIFACT_UPDATED:
+      return '更新文件产物';
+    case RUNTIME_EVENT_TYPES.ARTIFACT_DELETED:
+      return '删除文件产物';
+    case RUNTIME_EVENT_TYPES.SANDBOX_STARTED:
+      return '沙盒开始运行';
+    case RUNTIME_EVENT_TYPES.SANDBOX_COMPLETED:
+      return '沙盒运行完成';
+    case RUNTIME_EVENT_TYPES.SANDBOX_FAILED:
+      return '沙盒运行失败';
+    case RUNTIME_EVENT_TYPES.MEMORY_SUMMARY_STARTED:
+      return '开始记忆总结';
+    case RUNTIME_EVENT_TYPES.MEMORY_SUMMARY_COMPLETED:
+      return '记忆总结完成';
+    case RUNTIME_EVENT_TYPES.MEMORY_SUMMARY_FAILED:
+      return '记忆总结失败';
+    case RUNTIME_EVENT_TYPES.MEMORY_CANDIDATE_CREATED:
+      return '生成候选记忆';
+    case RUNTIME_EVENT_TYPES.MEMORY_CANDIDATE_ACCEPTED:
+      return '候选记忆已接受';
+    case RUNTIME_EVENT_TYPES.MEMORY_CANDIDATE_IGNORED:
+      return '候选记忆已忽略';
+    default:
+      return '';
+  }
+}
+
+function statusFromRuntimeEvent(event: ChatRuntimeEvent): TeamActivityInfo['status'] | null {
+  if (
+    event.type === RUNTIME_EVENT_TYPES.TEAM_WORKER_BLOCKED_BY_DEPENDENCY ||
+    event.type === RUNTIME_EVENT_TYPES.TEAM_WORKER_QUEUED
+  ) {
+    return 'pending';
+  }
+  if (
+    event.type === RUNTIME_EVENT_TYPES.TEAM_WORKER_WAITING_HUMAN ||
+    event.type === RUNTIME_EVENT_TYPES.AGENT_WAITING_HUMAN
+  ) {
+    return 'waiting';
+  }
+  if (
+    event.type === RUNTIME_EVENT_TYPES.TEAM_WORKER_COMPLETED ||
+    event.type === RUNTIME_EVENT_TYPES.AGENT_COMPLETED
+  ) {
+    return 'completed';
+  }
+  if (
+    event.type === RUNTIME_EVENT_TYPES.TEAM_WORKER_FAILED ||
+    event.type === RUNTIME_EVENT_TYPES.AGENT_FAILED
+  ) {
+    return 'failed';
+  }
+  if (event.scope === 'worker' || event.scope === 'leader') {
+    return 'running';
+  }
+  return null;
+}
+
+function applyRuntimeEventToTeamActivity(
+  activity: TeamActivityInfo,
+  event: ChatRuntimeEvent,
+  status: TeamActivityInfo['status'] | null,
+  currentEvent: string
+): TeamActivityInfo {
+  const payload = event.payload;
+  const toolCallId = String(payload.tool_call_id || '');
+  const toolName = normalizeToolDisplayName(String(payload.tool_call_name || 'tool'));
+  const delta = String(payload.delta || '');
+  const base = {
+    ...activity,
+    status: status || activity.status,
+    currentEvent: currentEvent || activity.currentEvent,
+    waitReason: event.reason || activity.waitReason,
+  };
+
+  if (event.type === RUNTIME_EVENT_TYPES.AGENT_OUTPUT_DELTA) {
+    return {
+      ...base,
+      output: activity.output + delta,
+    };
+  }
+  if (event.type === RUNTIME_EVENT_TYPES.AGENT_THINKING) {
+    return {
+      ...base,
+      thinking: activity.thinking + delta,
+    };
+  }
+  if (event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_STARTED) {
+    return {
+      ...base,
+      toolCalls: mergeToolCalls(activity.toolCalls, [{
+        id: toolCallId || createId(),
+        name: toolName,
+        args: '',
+        result: '',
+        status: 'calling',
+      }]),
+    };
+  }
+  if (event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_DELTA) {
+    return {
+      ...base,
+      toolCalls: activity.toolCalls.map((toolCall) => (
+        toolCall.id === toolCallId ? { ...toolCall, args: toolCall.args + delta } : toolCall
+      )),
+    };
+  }
+  if (
+    event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_COMPLETED ||
+    event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_STARTED
+  ) {
+    return {
+      ...base,
+      toolCalls: activity.toolCalls.map((toolCall) => (
+        toolCall.id === toolCallId ? { ...toolCall, status: 'running' } : toolCall
+      )),
+    };
+  }
+  if (event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_DELTA) {
+    return {
+      ...base,
+      toolCalls: activity.toolCalls.map((toolCall) => (
+        toolCall.id === toolCallId ? { ...toolCall, result: toolCall.result + delta } : toolCall
+      )),
+    };
+  }
+  if (event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_COMPLETED) {
+    return {
+      ...base,
+      toolCalls: activity.toolCalls.map((toolCall) => (
+        toolCall.id === toolCallId ? { ...toolCall, status: 'completed' } : toolCall
+      )),
+    };
+  }
+  return base;
 }
 
 /**
@@ -394,6 +646,7 @@ export function useEventStream(): UseEventStreamReturn {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             message,
+            display_message: options?.displayMessage,
             agent_id: options?.agentId,
             agent_name: options?.agentName,
             team_id: options?.teamId,
@@ -529,12 +782,47 @@ export function useEventStream(): UseEventStreamReturn {
   function handleEvent(event: SSEEvent) {
     setState((prev) => {
       switch (event.type) {
-        case 'RUN':
+        case CHAT_SSE_EVENTS.RUN:
           return {
             ...prev,
             currentRunId: String(event.data.run_id || ''),
             runStartedAt: String(event.data.created_at || event.data.createdAt || prev.runStartedAt || new Date().toISOString()),
           };
+
+        case CHAT_SSE_EVENTS.RUNTIME_EVENT: {
+          const runtimeEvent = normalizeRuntimeEvent(event.data);
+          const currentEvent = getRuntimeEventDisplayText(runtimeEvent);
+          const status = statusFromRuntimeEvent(runtimeEvent);
+          return {
+            ...prev,
+            runtimeEvents: appendRuntimeEventCompact(prev.runtimeEvents, runtimeEvent),
+            teamActivities: runtimeEvent.scope === 'worker' || runtimeEvent.scope === 'leader'
+              ? prev.teamActivities.map((activity) => {
+                if (
+                  activity.id !== runtimeEvent.teamActivityId &&
+                  activity.agentId !== runtimeEvent.agentId
+                ) {
+                  return activity;
+                }
+                return applyRuntimeEventToTeamActivity(activity, runtimeEvent, status, currentEvent);
+              })
+              : prev.teamActivities,
+            isStreaming: (
+              runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_COMPLETED ||
+              runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_FAILED ||
+              runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_CANCELLED
+            )
+              ? false
+              : prev.isStreaming,
+            runCompletedAt: (
+              runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_COMPLETED ||
+              runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_FAILED ||
+              runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_CANCELLED
+            )
+              ? runtimeEvent.timestamp
+              : prev.runCompletedAt,
+          };
+        }
 
         // === 文本内容增量 ===
         case 'TEXT_BLOCK_DELTA': {
@@ -549,6 +837,18 @@ export function useEventStream(): UseEventStreamReturn {
             textContent: clarificationIndex >= 0 ? nextText.slice(0, clarificationIndex).trimEnd() : nextText,
           };
         }
+
+        case 'FINAL_ANSWER_DELTA': {
+          if (suppressClarificationTextRef.current) return prev;
+          const nextText = prev.textContent + (event.data.delta as string || '');
+          return {
+            ...prev,
+            textContent: nextText,
+          };
+        }
+
+        case 'REASONING_DELTA':
+          return prev;
 
         // === 思考链增量 ===
         case 'THINKING_BLOCK_DELTA': {
@@ -919,8 +1219,6 @@ export function useEventStream(): UseEventStreamReturn {
           return {
             ...prev,
             isStreaming: false,
-            textContent: '',
-            thinkingContent: '',
             clarificationRequests: [
               ...prev.clarificationRequests,
               {

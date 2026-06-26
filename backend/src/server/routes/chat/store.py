@@ -113,7 +113,10 @@ def _append_assistant_message(
     tool_calls: list[ChatToolRun] | None = None,
     team_activities: list[ChatTeamActivity] | None = None,
     model_caches: list[ChatModelCacheRun] | None = None,
+    runtime_events: list[dict] | None = None,
     plan_runs: list[ChatPlanRun] | None = None,
+    clarification_requests: list[dict] | None = None,
+    clarification_resolved: bool = False,
 ) -> None:
     """追加助手消息，并更新会话摘要"""
     now = datetime.now(timezone.utc).isoformat()
@@ -134,7 +137,10 @@ def _append_assistant_message(
         skill_calls=skill_calls or [],
         team_activities=team_activities or [],
         model_caches=model_caches or [],
+        runtime_events=runtime_events or [],
         plan_runs=plan_runs or [],
+        clarification_requests=clarification_requests or [],
+        clarification_resolved=clarification_resolved,
         created_at=now,
     ))
 

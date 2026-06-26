@@ -3,6 +3,7 @@
 from src.server.routes.chat.handlers import (  # noqa: F401
     resume,
     send,
+    runs,
     sessions,
     team_selection,
 )
