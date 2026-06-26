@@ -3,8 +3,10 @@
 import json
 import re
 import uuid
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
+
+# 上海全年固定 UTC+8、无夏令时，直接用固定偏移避免依赖系统 IANA 时区库（Windows 上常缺失）
+SHANGHAI_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
 
 from src.server.routes.agents import get_registered_agent
 from src.server.routes.memory import build_agent_memory_system_prompt
@@ -54,7 +56,7 @@ def _build_agent_memory_prompt(agent_id: str | None) -> str:
 def _build_runtime_context_prompt() -> str:
     """Build concrete runtime context that should be stable for every model call."""
 
-    shanghai_now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    shanghai_now = datetime.now(SHANGHAI_TZ)
     utc_now = datetime.now(timezone.utc)
     return "\n".join(
         [
