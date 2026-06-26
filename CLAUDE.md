@@ -45,7 +45,7 @@ npm run lint     # eslint
 
 1. **`routes/chat/handlers/send.py`** — `POST /api/chat/send` 是 Chat SSE 统一入口，只负责请求读取、用户消息写入、后台 Run 启动、前置错误处理和 SSE 编排。Plan Runtime 与 Subagent Runtime 已下线，后续重构前不要在旧链路上继续补丁式开发。
 
-2. **`routes/chat/intent_router.py`** — 主 Agent 前置路由层。模型语义路由优先、规则路由兜底，统一决定本轮 `mode`、Skill 选择、Team worker 选择、Clarification 是否前置，以及 `toolScope`（MCP/Knowledge/Bash/HTTP 是否注入）。路由结果写入 `INTENT_ROUTE` trace，便于排查每轮为何启用某些能力。当前 `selectedSubagentIds`、`shouldCreatePlan` 等字段仅为兼容保留，不驱动运行时。
+2. **`routes/chat/intent_router.py`** — Chat 第一层运行线路路由。模型语义路由优先、规则路由兜底，只决定本轮进入 `react`、`team` 或 `clarification` 哪条线路；Plan Runtime 与 Subagent Runtime 已砍掉，不再作为路由结果。当前 `selectedSkillIds`、`selectedTeamMemberIds` 与 `toolScope` 仅作为兼容 hints，后续应迁入具体 Runtime 内部策略。路由结果写入 `INTENT_ROUTE` trace，便于排查每轮为何进入某条线路。
 
 3. **`routes/chat/runtime_builder.py`** — IntentRoute 之后的运行时组装层。负责合成本轮模型配置、裁剪 Team 成员、选择本轮 Skill、把 `toolScope` 转为 `RuntimeToolScope`、生成主 Agent runtime cache key、构建 `MainAgentRuntimeSpec`，并通过 `create_main_agent_from_spec()` 委托工厂创建/复用 Agent。
 
