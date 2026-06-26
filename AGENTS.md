@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。用户在 Chat 界面选择单个 Agent 或 Team 协作完成任务，支持 MCP 工具、Skills 技能、HTTP 知识库工具、三层记忆系统、权限控制与容器沙箱执行。
+Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。用户在 Chat 界面选择单个 Agent 或 Team 协作完成任务，支持 MCP 工具、Skills 技能、HTTP 知识库工具、权限控制与容器沙箱执行。旧记忆模块已删除，后续需要重新设计后再接入。
 
 技术栈：Electron 壳 + React 19/TypeScript/Vite 前端 + Python/FastAPI/AgentScope 2.0 后端 + SQLite 存储。模型默认接 DeepSeek，运行时可切换至 OpenAI、Anthropic、DashScope、Gemini、Ollama、自定义 OpenAI 兼容等十余个供应商。
 
@@ -53,7 +53,7 @@ npm run lint     # eslint
 
 5. **`routes/chat/leader_stream.py`** — Leader Agent 事件流处理。消费 `agent.reply_stream()`，维护 `LeaderStreamState`，处理模型 cache、trace、permission decision、tool artifacts、HITL 早停、流式文本/思考累计、Skill end 和模型输出后的 clarification 兜底。
 
-6. **`routes/chat/completion.py`** — Leader run 成功/失败收尾。负责完成 Skill/Team 状态、写 assistant message、写 trace、写 Agent memory event、触发 memory summarize，并输出 `TEAM_ACTIVITY` / `MEMORY_SUMMARY` / `ERROR` 等后续 SSE。
+6. **`routes/chat/completion.py`** — Leader run 成功/失败收尾。负责完成 Skill/Team 状态、写 assistant message、写 trace，并输出 `TEAM_ACTIVITY` / `ERROR` 等后续 SSE。旧记忆模块已删除，当前不再触发 memory summarize。
 
 7. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 `agent_id` 缓存实例；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件）。工具集在 `_create_default_toolkit()` 注入：Read/Grep/Glob/AskUser 始终可用，Write/Edit 受权限控制；Bash/HttpRequest/知识库工具/MCP 还受 `RuntimeToolScope` 裁剪。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是用户主目录 `~`）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
 
@@ -63,7 +63,7 @@ npm run lint     # eslint
 
 `backend/src/storage/database.py` 用同步 `sqlite3`（线程锁 `RLock`）封装所有存储，尽管依赖里有 `aiosqlite`。两类存储模式：
 
-- **结构化表**：`agents`、`teams`、`team_members`、`mcp_servers`、`skills`、`chat_sessions`、`chat_messages`、`run_events`、`memory_facts`/`memory_events`/`memory_candidates`（三层记忆）。
+- **结构化表**：`agents`、`teams`、`team_members`、`mcp_servers`、`skills`、`chat_sessions`、`chat_messages`、`run_events`。历史库中可能仍残留 `memory_facts` / `memory_events` / `memory_candidates` 表，但旧记忆模块已删除，不再作为当前运行时能力。
 - **`json_store` 表**：`(namespace, key) -> JSON`，用于系统设置等 Pydantic 文档。运行时模型设置存于 namespace `system_settings`、key `model`，由 `config/runtime_settings.py` 读写。
 
 Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不用迁移框架。早期 JSON 文件（如 `data/chat_sessions.json`）通过 `migrate_json_*_file()` 一次性导入 SQLite。
@@ -90,6 +90,7 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 - 开发必须遵循 `docs/development-guidelines.md`。该文件是正式开发规范，覆盖模块化、React/TypeScript、Python/FastAPI、SQLite、Agent Runtime、测试、Git 和文档要求。
 - 如果 `AGENTS.md` / `CLAUDE.md` 与 `docs/development-guidelines.md` 冲突，以更具体、更严格、更新的规范为准；不确定时先按 `docs/development-guidelines.md` 执行。
 - `AGENTS.md` 是开发代理记忆和项目协作规范的唯一真实来源；小写 `agent.md` 与 `CLAUDE.md` 只作为兼容入口，避免多份记忆漂移。
+- 当前已删除/下线的旧设计：记忆模块、Plan Runtime、Subagent Runtime。后续不要在旧字段、旧事件或旧工具链上继续补丁式开发，只能重新设计后按新方案接入。
 - 代码注释和文档用中文，技术术语和标识符保持英文。
 - TODO 文档和待办事项统一用中文编写，便于团队协作和后续交接。
 - Chat SSE 事件新增或变更前必须先更新 `docs/chat-sse-event-contract.md`，前端只依赖该契约中的稳定事件。

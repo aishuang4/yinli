@@ -67,6 +67,18 @@ def _build_clarification_system_prompt() -> str:
     ])
 
 
+def _build_final_answer_system_prompt() -> str:
+    """Instructions for separating ReAct process text from final answer text."""
+
+    return "\n".join([
+        "## Final Answer Contract",
+        "During analysis, tool use, and intermediate reasoning, you may write brief progress text.",
+        "When you are ready to provide the final user-facing answer, you MUST first call the FinalAnswerStart tool exactly once.",
+        "Do not put the final answer inside FinalAnswerStart arguments. After the tool call succeeds, continue writing the final answer as normal assistant text.",
+        "Do not call FinalAnswerStart before required tool calls, clarification, or checks are complete.",
+    ])
+
+
 def _extract_clarification_request(text: str) -> dict | None:
     """Extract a structured clarification request from assistant text."""
 

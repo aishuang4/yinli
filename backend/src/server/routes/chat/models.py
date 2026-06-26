@@ -185,7 +185,10 @@ class StoredChatMessage(BaseModel):
     skill_calls: list[ChatSkillRun] = Field(default_factory=list, alias="skillCalls")
     team_activities: list[ChatTeamActivity] = Field(default_factory=list, alias="teamActivities")
     model_caches: list[ChatModelCacheRun] = Field(default_factory=list, alias="modelCaches")
+    runtime_events: list[dict] = Field(default_factory=list, alias="runtimeEvents")
     plan_runs: list[ChatPlanRun] = Field(default_factory=list, alias="planRuns")
+    clarification_requests: list[dict] = Field(default_factory=list, alias="clarificationRequests")
+    clarification_resolved: bool = Field(default=False, alias="clarificationResolved")
     created_at: str
 
     model_config = {"populate_by_name": True}
@@ -259,6 +262,9 @@ class ChatMessage(BaseModel):
 
     message: str
     """用户输入的消息文本"""
+
+    display_message: str | None = None
+    """前端历史展示用文本；为空时使用 message"""
 
     agent_id: str | None = None
     """目标 Agent ID（可选，默认使用 default Agent）"""

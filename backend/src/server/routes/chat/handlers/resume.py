@@ -41,6 +41,10 @@ from src.server.routes.chat.runtime import (
     _guardrail_cache_key,
     _permission_mode_for_guardrails,
 )
+from src.server.routes.chat.runtime_events import (
+    runtime_event_from_agentscope_sse,
+    runtime_event_sse,
+)
 from src.server.routes.chat.skill_runs import (
     get_active_session_skill_run,
     get_skill_run_for_pending_interaction,
@@ -59,6 +63,7 @@ from src.server.routes.chat.team_state import (
 )
 from src.server.routes.chat.trace_recorder import (
     _attach_provider_cache_usage,
+    build_tool_artifact_runtime_event,
     _model_cache_from_event,
     _record_agent_scope_event,
     _record_permission_decision,
@@ -137,6 +142,51 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 "externalResultCount": len(data.external_results),
             },
         )
+        yield runtime_event_sse(
+            "HITL_RESOLVED",
+            session_id=interaction.session_id,
+            run_id=interaction.run_id,
+            scope=interaction.scope,
+            agent_id=interaction.agent_id,
+            agent_name=interaction.agent_name,
+            team_activity_id=activity.id if activity else None,
+            status="completed" if data.action == "approve" else "failed",
+            payload={
+                "interactionId": interaction.id,
+                "interactionType": interaction.type,
+                "action": data.action,
+                "externalResultCount": len(data.external_results),
+            },
+        )
+        yield runtime_event_sse(
+            "RUN_RESUMED",
+            session_id=interaction.session_id,
+            run_id=interaction.run_id,
+            scope="run",
+            agent_id=interaction.agent_id,
+            agent_name=interaction.agent_name,
+            status="running",
+            payload={
+                "interactionId": interaction.id,
+                "interactionType": interaction.type,
+                "action": data.action,
+            },
+        )
+        yield runtime_event_sse(
+            "AGENT_RESUMED",
+            session_id=interaction.session_id,
+            run_id=interaction.run_id,
+            scope=interaction.scope,
+            agent_id=interaction.agent_id,
+            agent_name=interaction.agent_name,
+            team_activity_id=activity.id if activity else None,
+            status="running",
+            payload={
+                "interactionId": interaction.id,
+                "interactionType": interaction.type,
+                "action": data.action,
+            },
+        )
 
         try:
             if interaction.scope == "worker":
@@ -195,6 +245,17 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         team_activity_id=activity.id if activity else None,
                         guardrails=worker_guardrails,
                     )
+                    runtime_event = runtime_event_from_agentscope_sse(
+                        event_type,
+                        session_id=interaction.session_id,
+                        scope="worker",
+                        agent_id=worker_member.agent_id,
+                        agent_name=interaction.agent_name,
+                        team_activity_id=activity.id if activity else None,
+                        event_data=event_data,
+                    )
+                    if runtime_event:
+                        yield runtime_event
                     if event_type in HITL_EVENT_TYPES:
                         _mark_persistent_skill_run(
                             worker_member.agent_id,
@@ -238,6 +299,34 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                                 "activities": [item.model_dump(by_alias=True) for item in team_activities],
                             })
                         _clear_pending_interaction(interaction.id)
+                        yield runtime_event_sse(
+                            "TEAM_WORKER_WAITING_HUMAN",
+                            session_id=interaction.session_id,
+                            run_id=interaction.run_id,
+                            scope="worker",
+                            source="runtime",
+                            source_event_type=event_type,
+                            agent_id=worker_member.agent_id,
+                            agent_name=interaction.agent_name,
+                            team_activity_id=activity.id if activity else None,
+                            status="waiting",
+                            reason="hitl_required",
+                            payload={"interactionId": next_interaction.id, "interactionType": event_type},
+                        )
+                        yield runtime_event_sse(
+                            "AGENT_WAITING_HUMAN",
+                            session_id=interaction.session_id,
+                            run_id=interaction.run_id,
+                            scope="worker",
+                            source="runtime",
+                            source_event_type=event_type,
+                            agent_id=worker_member.agent_id,
+                            agent_name=interaction.agent_name,
+                            team_activity_id=activity.id if activity else None,
+                            status="waiting",
+                            reason="hitl_required",
+                            payload={"interactionId": next_interaction.id, "interactionType": event_type},
+                        )
                         yield _sse_event("HITL_REQUIRED", _hitl_payload(next_interaction))
                         return
 
@@ -266,6 +355,26 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         guardrails=worker_guardrails,
                         tool_calls=worker_tool_calls,
                     )
+                    artifact_event = build_tool_artifact_runtime_event(
+                        event_type=event_type,
+                        event_data=event_data,
+                        tool_calls=worker_tool_calls,
+                    )
+                    if artifact_event:
+                        artifact_type, artifact_payload = artifact_event
+                        yield runtime_event_sse(
+                            artifact_type,
+                            session_id=interaction.session_id,
+                            run_id=interaction.run_id,
+                            scope="artifact",
+                            source="runtime",
+                            source_event_type=event_type,
+                            agent_id=worker_member.agent_id,
+                            agent_name=interaction.agent_name,
+                            team_activity_id=activity.id if activity else None,
+                            status=str(artifact_payload.get("status") or "completed"),
+                            payload=artifact_payload,
+                        )
 
                     activity = _find_team_activity(team_activities, worker_member.agent_id)
                     if activity:
@@ -321,6 +430,21 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     content=_trim_text(worker_text, 1200),
                     payload={
                         "toolCallCount": len(worker_tool_calls),
+                        "resumedFromHitl": True,
+                    },
+                )
+                yield runtime_event_sse(
+                    "TEAM_WORKER_COMPLETED",
+                    session_id=interaction.session_id,
+                    run_id=interaction.run_id,
+                    scope="worker",
+                    agent_id=worker_member.agent_id,
+                    agent_name=interaction.agent_name,
+                    team_activity_id=activity.id if activity else None,
+                    status="completed",
+                    payload={
+                        "toolCallCount": len(worker_tool_calls),
+                        "outputPreview": _trim_text(worker_text, 240),
                         "resumedFromHitl": True,
                     },
                 )
@@ -442,6 +566,16 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         team_activity_id=None,
                         guardrails=leader_guardrails,
                     )
+                    runtime_event = runtime_event_from_agentscope_sse(
+                        event_type,
+                        session_id=interaction.session_id,
+                        scope="leader",
+                        agent_id=leader_agent_id,
+                        agent_name=leader_agent_name,
+                        event_data=event_data,
+                    )
+                    if runtime_event:
+                        yield runtime_event
                     next_tool_calls = _update_worker_tool_calls(
                         assistant_tool_calls,
                         event_type,
@@ -461,6 +595,25 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         guardrails=leader_guardrails,
                         tool_calls=assistant_tool_calls,
                     )
+                    artifact_event = build_tool_artifact_runtime_event(
+                        event_type=event_type,
+                        event_data=event_data,
+                        tool_calls=assistant_tool_calls,
+                    )
+                    if artifact_event:
+                        artifact_type, artifact_payload = artifact_event
+                        yield runtime_event_sse(
+                            artifact_type,
+                            session_id=interaction.session_id,
+                            run_id=interaction.run_id,
+                            scope="artifact",
+                            source="runtime",
+                            source_event_type=event_type,
+                            agent_id=leader_agent_id,
+                            agent_name=leader_agent_name,
+                            status=str(artifact_payload.get("status") or "completed"),
+                            payload=artifact_payload,
+                        )
                     if event_type in HITL_EVENT_TYPES:
                         _mark_persistent_skill_run(
                             leader_agent_id,
@@ -484,6 +637,19 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                             chat_data=interaction.chat_data,
                             leader_system_prompt=leader_system_prompt,
                         )
+                        yield runtime_event_sse(
+                            "AGENT_WAITING_HUMAN",
+                            session_id=interaction.session_id,
+                            run_id=interaction.run_id,
+                            scope="leader",
+                            source="runtime",
+                            source_event_type=event_type,
+                            agent_id=leader_agent_id,
+                            agent_name=leader_agent_name,
+                            status="waiting",
+                            reason="hitl_required",
+                            payload={"interactionId": next_interaction.id, "interactionType": event_type},
+                        )
                         yield _sse_event("HITL_REQUIRED", _hitl_payload(next_interaction))
                         return
                     if event_type == "TEXT_BLOCK_DELTA":
@@ -492,6 +658,17 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         assistant_thinking += str(event_data.get("delta", ""))
                     if event_type == "REPLY_END" and skill_runs:
                         completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
+                        for skill in completed_skill_runs:
+                            yield runtime_event_sse(
+                                "SKILL_COMPLETED",
+                                session_id=interaction.session_id,
+                                run_id=interaction.run_id,
+                                scope="skill",
+                                agent_id=leader_agent_id,
+                                agent_name=leader_agent_name,
+                                status="completed",
+                                payload=skill.model_dump(by_alias=True),
+                            )
                         yield _sse_event("SKILL_END", {
                             "skills": [item.model_dump(by_alias=True) for item in completed_skill_runs],
                             "status": "completed",
@@ -542,6 +719,26 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 yield _sse_event("TEAM_ACTIVITY", {
                     "activities": [item.model_dump(by_alias=True) for item in completed_team_activities],
                 })
+                yield runtime_event_sse(
+                    "TEAM_COMPLETED",
+                    session_id=interaction.session_id,
+                    run_id=interaction.run_id,
+                    scope="team",
+                    agent_id=leader_agent_id,
+                    agent_name=leader_agent_name,
+                    status="completed",
+                    payload={"workerCount": len(worker_outputs)},
+                )
+                yield runtime_event_sse(
+                    "RUN_COMPLETED",
+                    session_id=interaction.session_id,
+                    run_id=interaction.run_id,
+                    scope="run",
+                    agent_id=leader_agent_id,
+                    agent_name=leader_agent_name,
+                    status="completed",
+                    payload={"resumedFromWorkerHitl": True},
+                )
                 return
 
             assistant_tool_calls = _pending_tool_calls_to_runs(
@@ -578,6 +775,17 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     team_activity_id=activity.id if activity else None,
                     guardrails=interaction_guardrails,
                 )
+                runtime_event = runtime_event_from_agentscope_sse(
+                    event_type,
+                    session_id=interaction.session_id,
+                    scope=interaction.scope,
+                    agent_id=interaction.agent_id,
+                    agent_name=interaction.agent_name,
+                    team_activity_id=activity.id if activity else None,
+                    event_data=event_data,
+                )
+                if runtime_event:
+                    yield runtime_event
                 next_tool_calls = _update_worker_tool_calls(
                     assistant_tool_calls,
                     event_type,
@@ -597,6 +805,26 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     guardrails=interaction_guardrails,
                     tool_calls=assistant_tool_calls,
                 )
+                artifact_event = build_tool_artifact_runtime_event(
+                    event_type=event_type,
+                    event_data=event_data,
+                    tool_calls=assistant_tool_calls,
+                )
+                if artifact_event:
+                    artifact_type, artifact_payload = artifact_event
+                    yield runtime_event_sse(
+                        artifact_type,
+                        session_id=interaction.session_id,
+                        run_id=interaction.run_id,
+                        scope="artifact",
+                        source="runtime",
+                        source_event_type=event_type,
+                        agent_id=interaction.agent_id,
+                        agent_name=interaction.agent_name,
+                        team_activity_id=activity.id if activity else None,
+                        status=str(artifact_payload.get("status") or "completed"),
+                        payload=artifact_payload,
+                    )
                 if event_type in HITL_EVENT_TYPES:
                     _mark_persistent_skill_run(
                         interaction.agent_id,
@@ -619,6 +847,20 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         team_activities=team_activities,
                     )
                     _clear_pending_interaction(interaction.id)
+                    yield runtime_event_sse(
+                        "AGENT_WAITING_HUMAN",
+                        session_id=interaction.session_id,
+                        run_id=interaction.run_id,
+                        scope=interaction.scope,
+                        source="runtime",
+                        source_event_type=event_type,
+                        agent_id=interaction.agent_id,
+                        agent_name=interaction.agent_name,
+                        team_activity_id=activity.id if activity else None,
+                        status="waiting",
+                        reason="hitl_required",
+                        payload={"interactionId": next_interaction.id, "interactionType": event_type},
+                    )
                     yield _sse_event("HITL_REQUIRED", _hitl_payload(next_interaction))
                     return
 
@@ -629,6 +871,17 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
 
                 if event_type == "REPLY_END" and skill_runs:
                     completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
+                    for skill in completed_skill_runs:
+                        yield runtime_event_sse(
+                            "SKILL_COMPLETED",
+                            session_id=interaction.session_id,
+                            run_id=interaction.run_id,
+                            scope="skill",
+                            agent_id=interaction.agent_id,
+                            agent_name=interaction.agent_name,
+                            status="completed",
+                            payload=skill.model_dump(by_alias=True),
+                        )
                     yield _sse_event("SKILL_END", {
                         "skills": [item.model_dump(by_alias=True) for item in completed_skill_runs],
                         "status": "completed",
@@ -683,6 +936,16 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     "activities": [item.model_dump(by_alias=True) for item in completed_team_activities],
                 })
             _clear_pending_interaction(interaction.id)
+            yield runtime_event_sse(
+                "RUN_COMPLETED",
+                session_id=interaction.session_id,
+                run_id=interaction.run_id,
+                scope="run",
+                agent_id=interaction.agent_id,
+                agent_name=interaction.agent_name,
+                status="completed",
+                payload={"resumedFromHitl": True},
+            )
         except Exception as exc:
             assistant_error = f"Agent 恢复执行异常: {exc}"
             _append_assistant_message(
@@ -698,6 +961,17 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 model_caches=assistant_model_caches,
             )
             _clear_pending_interaction(interaction.id)
+            yield runtime_event_sse(
+                "RUN_FAILED",
+                session_id=interaction.session_id,
+                run_id=interaction.run_id,
+                scope="run",
+                agent_id=interaction.agent_id,
+                agent_name=interaction.agent_name,
+                status="failed",
+                reason="resume_error",
+                payload={"message": assistant_error},
+            )
             yield _sse_event("ERROR", {"message": assistant_error})
 
     pending_interaction = PENDING_INTERACTIONS.get(data.interaction_id)

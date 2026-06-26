@@ -466,6 +466,49 @@ def _record_tool_execution_artifacts(
     )
 
 
+def build_tool_artifact_runtime_event(
+    *,
+    event_type: str,
+    event_data: dict,
+    tool_calls: list["ChatToolRun"],
+) -> tuple[str, dict] | None:
+    """从工具结果中提取可交付产物 Runtime Event。"""
+
+    if event_type != "TOOL_RESULT_END":
+        return None
+    tool_call_id = str(event_data.get("tool_call_id") or "")
+    if not tool_call_id:
+        return None
+    tool_call = next((item for item in tool_calls if item.id == tool_call_id), None)
+    if tool_call is None:
+        return None
+    tool_name = _normalize_tool_event_name(tool_call.name)
+    if tool_name not in {"Write", "Edit"}:
+        return None
+    args = _parse_tool_args(tool_call.args)
+    file_path = str(args.get("file_path") or "")
+    if not file_path:
+        return None
+    operation = "write" if tool_name == "Write" else "edit"
+    runtime_type = "ARTIFACT_CREATED" if operation == "write" else "ARTIFACT_UPDATED"
+    payload = {
+        "operation": operation,
+        "toolName": tool_name,
+        "toolCallId": tool_call_id,
+        "filePath": file_path,
+        "downloadPath": file_path,
+        "status": _tool_result_status(event_data),
+        "result": _trim_text(tool_call.result, 1200),
+    }
+    if tool_name == "Write":
+        content = str(args.get("content") or "")
+        payload["lineCount"] = len(content.splitlines()) if content else 0
+        payload["contentBytes"] = len(content.encode("utf-8"))
+    else:
+        payload["replaceAll"] = bool(args.get("replace_all"))
+    return runtime_type, payload
+
+
 def _normalize_tool_event_name(name: str) -> str:
     """Normalize repeated display names like `A_A` back to one tool name."""
 

@@ -53,10 +53,11 @@ interface TraceDetail extends TraceSummary {
   events: TraceEvent[];
 }
 
-type TraceEventFilter = 'all' | 'permissions' | 'tools' | 'models' | 'hitl';
+type TraceEventFilter = 'all' | 'runtime' | 'permissions' | 'tools' | 'models' | 'hitl';
 
 const TRACE_FILTERS: Array<{ key: TraceEventFilter; label: string }> = [
   { key: 'all', label: '全部' },
+  { key: 'runtime', label: 'Runtime' },
   { key: 'permissions', label: '权限审计' },
   { key: 'tools', label: '工具' },
   { key: 'models', label: '模型' },
@@ -219,6 +220,10 @@ function TraceEventTimeline({ events }: { events: TraceEvent[] }) {
     () => events.filter((event) => matchesTraceFilter(event, 'permissions')).length,
     [events],
   );
+  const runtimeCount = useMemo(
+    () => events.filter((event) => matchesTraceFilter(event, 'runtime')).length,
+    [events],
+  );
 
   return (
     <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
@@ -228,6 +233,7 @@ function TraceEventTimeline({ events }: { events: TraceEvent[] }) {
           <span>事件时间线</span>
         </div>
         <div className="flex items-center gap-2">
+          {runtimeCount > 0 && <Tag size="small" color="blue">{runtimeCount} Runtime</Tag>}
           {permissionCount > 0 && <Tag size="small" color="green">{permissionCount} 权限</Tag>}
           <Tag size="small" color="transparent">{filteredEvents.length}/{events.length} 事件</Tag>
         </div>
@@ -281,6 +287,7 @@ function TraceEventRow({ event }: { event: TraceEvent }) {
           </div>
           <div className="mt-1 flex min-w-0 flex-wrap gap-2 text-xs text-[var(--color-text-tertiary)]">
             <span>{event.eventType}</span>
+            {isRuntimeEvent(event) && <span>{String(event.payload.type || '')}</span>}
             {event.agentName && <span>{event.agentName}</span>}
           </div>
         </div>
@@ -350,17 +357,23 @@ function shouldShowTracePayload(event: TraceEvent) {
     event.eventType === 'MODEL_CACHE_USAGE' ||
     event.eventType === 'COMMAND_RESULT' ||
     event.eventType === 'FILE_CHANGE' ||
+    event.eventType === 'RUNTIME_EVENT' ||
     event.eventType.startsWith('MODEL_FALLBACK_')
   );
 }
 
 function matchesTraceFilter(event: TraceEvent, filter: TraceEventFilter) {
   if (filter === 'all') return true;
+  if (filter === 'runtime') return isRuntimeEvent(event);
   if (filter === 'permissions') return isPermissionEvent(event);
   if (filter === 'tools') return event.eventType.includes('TOOL') || event.eventType === 'COMMAND_RESULT' || event.eventType === 'FILE_CHANGE';
   if (filter === 'models') return event.eventType.startsWith('MODEL_');
   if (filter === 'hitl') return event.eventType.includes('HITL') || event.eventType.includes('CLARIFICATION');
   return true;
+}
+
+function isRuntimeEvent(event: TraceEvent) {
+  return event.eventType === 'RUNTIME_EVENT';
 }
 
 function isPermissionEvent(event: TraceEvent) {

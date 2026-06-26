@@ -35,6 +35,7 @@ from src.config.runtime_settings import get_effective_model_settings
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.tools.ask_user import AskUser
 from src.tools.configured_http_tool import ConfiguredHttpTool
+from src.tools.final_answer import FinalAnswerStart
 from src.tools.http_request import HttpRequest
 from src.tools.knowledge_base_search import KnowledgeBaseSearch
 
@@ -208,6 +209,7 @@ def _create_default_toolkit(
         Grep(),
         Glob(),
         AskUser(),
+        FinalAnswerStart(),
         *(extra_tools or []),
     ]
     if not read_only:

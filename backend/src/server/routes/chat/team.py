@@ -36,6 +36,10 @@ from src.server.routes.chat.runtime import (
     _guardrail_cache_key,
     _permission_mode_for_guardrails,
 )
+from src.server.routes.chat.runtime_events import (
+    runtime_event_from_agentscope_sse,
+    runtime_event_sse,
+)
 from src.server.routes.chat.team_state import (
     _find_team_activity,
     _member_dependency_ids,
@@ -45,6 +49,7 @@ from src.server.routes.chat.team_state import (
 )
 from src.server.routes.chat.trace_recorder import (
     _attach_provider_cache_usage,
+    build_tool_artifact_runtime_event,
     _make_fallback_trace_recorder,
     _record_agent_scope_event,
     _record_permission_decision,
@@ -104,6 +109,20 @@ async def _run_team_workers(
                         else activity.detail
                     ),
                 }),
+            )
+            yield runtime_event_sse(
+                "TEAM_WORKER_BLOCKED_BY_DEPENDENCY" if waiting_for else "TEAM_WORKER_QUEUED",
+                session_id=session_id,
+                scope="worker",
+                agent_id=member.agent_id,
+                agent_name=member.name,
+                team_activity_id=activity.id,
+                status="pending" if waiting_for else "running",
+                reason="waiting_dependency" if waiting_for else "",
+                payload={
+                    "executionMode": member.execution_mode,
+                    "dependsOn": waiting_for,
+                },
             )
 
     yield _sse_event("TEAM_ACTIVITY", {
@@ -262,6 +281,32 @@ async def _run_team_workers(
                         worker_tool_calls=worker_tool_calls,
                         persist=not data.sandbox,
                     )
+                    await queue.put(runtime_event_sse(
+                        "TEAM_WORKER_WAITING_HUMAN",
+                        session_id=session_id,
+                        scope="worker",
+                        source="runtime",
+                        source_event_type=event_type,
+                        agent_id=member.agent_id,
+                        agent_name=worker_name,
+                        team_activity_id=activity.id if activity else None,
+                        status="waiting",
+                        reason="hitl_required",
+                        payload={"interactionId": interaction.id, "interactionType": event_type},
+                    ))
+                    await queue.put(runtime_event_sse(
+                        "AGENT_WAITING_HUMAN",
+                        session_id=session_id,
+                        scope="worker",
+                        source="runtime",
+                        source_event_type=event_type,
+                        agent_id=member.agent_id,
+                        agent_name=worker_name,
+                        team_activity_id=activity.id if activity else None,
+                        status="waiting",
+                        reason="hitl_required",
+                        payload={"interactionId": interaction.id, "interactionType": event_type},
+                    ))
                     await queue.put(_sse_event("TEAM_ACTIVITY", {
                         "activities": [item.model_dump(by_alias=True) for item in team_activities],
                     }))
@@ -304,6 +349,48 @@ async def _run_team_workers(
 
                 activity = _find_team_activity(team_activities, member.agent_id)
                 if activity:
+                    _record_tool_execution_artifacts(
+                        session_id=session_id,
+                        event_type=event_type,
+                        event_data=event_data,
+                        persist=not data.sandbox,
+                        scope="worker",
+                        agent_id=member.agent_id,
+                        agent_name=worker_name,
+                        team_activity_id=activity.id,
+                        guardrails=worker_guardrails,
+                        tool_calls=worker_tool_calls,
+                    )
+                    artifact_event = build_tool_artifact_runtime_event(
+                        event_type=event_type,
+                        event_data=event_data,
+                        tool_calls=worker_tool_calls,
+                    )
+                    if artifact_event:
+                        artifact_type, artifact_payload = artifact_event
+                        await queue.put(runtime_event_sse(
+                            artifact_type,
+                            session_id=session_id,
+                            scope="artifact",
+                            source="runtime",
+                            source_event_type=event_type,
+                            agent_id=member.agent_id,
+                            agent_name=worker_name,
+                            team_activity_id=activity.id,
+                            status=str(artifact_payload.get("status") or "completed"),
+                            payload=artifact_payload,
+                        ))
+                    runtime_event = runtime_event_from_agentscope_sse(
+                        event_type,
+                        session_id=session_id,
+                        scope="worker",
+                        agent_id=member.agent_id,
+                        agent_name=worker_name,
+                        team_activity_id=activity.id,
+                        event_data=event_data,
+                    )
+                    if runtime_event:
+                        await queue.put(runtime_event)
                     await queue.put(_sse_event("TEAM_MEMBER_EVENT", {
                         "activityId": activity.id,
                         "agentId": member.agent_id,
@@ -339,6 +426,19 @@ async def _run_team_workers(
                         "dependencyCount": len(dependency_outputs),
                     },
                 )
+                await queue.put(runtime_event_sse(
+                    "TEAM_WORKER_COMPLETED",
+                    session_id=session_id,
+                    scope="worker",
+                    agent_id=member.agent_id,
+                    agent_name=worker_name,
+                    team_activity_id=activity.id,
+                    status="completed",
+                    payload={
+                        "toolCallCount": len(worker_tool_calls),
+                        "outputPreview": _trim_text(worker_text, 240),
+                    },
+                ))
             await queue.put(_sse_event("TEAM_ACTIVITY", {
                 "activities": [item.model_dump(by_alias=True) for item in team_activities],
             }))
@@ -381,6 +481,17 @@ async def _run_team_workers(
                 content=str(exc),
                 payload={"toolCallCount": len(worker_tool_calls)},
             )
+            await queue.put(runtime_event_sse(
+                "TEAM_WORKER_FAILED",
+                session_id=session_id,
+                scope="worker",
+                agent_id=member.agent_id,
+                agent_name=worker_name,
+                team_activity_id=activity.id if activity else None,
+                status="failed",
+                reason="worker_error",
+                payload={"message": str(exc), "toolCallCount": len(worker_tool_calls)},
+            ))
             await queue.put(_sse_event("TEAM_ACTIVITY", {
                 "activities": [item.model_dump(by_alias=True) for item in team_activities],
             }))
@@ -410,6 +521,17 @@ async def _run_team_workers(
                             "wait_reason": "依赖配置无效：找不到指定的上游 Worker。",
                         }),
                     )
+                    queue.put_nowait(runtime_event_sse(
+                        "TEAM_WORKER_FAILED",
+                        session_id=session_id,
+                        scope="worker",
+                        agent_id=member.agent_id,
+                        agent_name=member.name,
+                        team_activity_id=activity.id,
+                        status="failed",
+                        reason="invalid_dependency",
+                        payload={"dependsOn": invalid_dependencies},
+                    ))
                 failed_workers.add(member.agent_id)
                 continue
             failed_dependencies = [dep for dep in dependencies if dep in failed_workers]
@@ -425,6 +547,17 @@ async def _run_team_workers(
                             "wait_reason": f"上游 Worker 失败：{', '.join(_member_names(failed_dependencies, workers))}",
                         }),
                     )
+                    queue.put_nowait(runtime_event_sse(
+                        "TEAM_WORKER_SKIPPED",
+                        session_id=session_id,
+                        scope="worker",
+                        agent_id=member.agent_id,
+                        agent_name=member.name,
+                        team_activity_id=activity.id,
+                        status="failed",
+                        reason="upstream_failed",
+                        payload={"dependsOn": failed_dependencies},
+                    ))
                 failed_workers.add(member.agent_id)
                 continue
             blocking = [dep for dep in dependencies if dep not in completed_outputs and dep not in failed_workers]
@@ -439,6 +572,17 @@ async def _run_team_workers(
                             "wait_reason": f"等待依赖 Worker 完成：{', '.join(_member_names(blocking, workers))}",
                         }),
                     )
+                    queue.put_nowait(runtime_event_sse(
+                        "TEAM_WORKER_BLOCKED_BY_DEPENDENCY",
+                        session_id=session_id,
+                        scope="worker",
+                        agent_id=member.agent_id,
+                        agent_name=member.name,
+                        team_activity_id=activity.id,
+                        status="pending",
+                        reason="waiting_dependency",
+                        payload={"dependsOn": blocking},
+                    ))
                 continue
             ready.append(member)
 
@@ -465,6 +609,19 @@ async def _run_team_workers(
                         ),
                     }),
                 )
+                queue.put_nowait(runtime_event_sse(
+                    "TEAM_WORKER_STARTED",
+                    session_id=session_id,
+                    scope="worker",
+                    agent_id=member.agent_id,
+                    agent_name=member.name,
+                    team_activity_id=activity.id,
+                    status="running",
+                    payload={
+                        "dependencyOutputCount": len(dependency_outputs),
+                        "executionMode": member.execution_mode,
+                    },
+                ))
             task = asyncio.create_task(run_worker(member, dependency_outputs))
             running[task] = member.agent_id
 

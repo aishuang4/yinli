@@ -236,6 +236,7 @@ def ensure_db() -> None:
                     skill_calls TEXT NOT NULL,
                     team_activities TEXT NOT NULL,
                     model_caches TEXT NOT NULL DEFAULT '[]',
+                    runtime_events TEXT NOT NULL DEFAULT '[]',
                     plan_runs TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
                     sort_order INTEGER NOT NULL,
@@ -386,6 +387,7 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_messages", "subagent_calls", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'")
+            _ensure_column(conn, "chat_messages", "runtime_events", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "plan_runs", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "memory_facts", "pinned", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "memory_facts", "status", "TEXT NOT NULL DEFAULT 'active'")
@@ -1098,6 +1100,7 @@ def load_chat_store() -> dict[str, Any]:
             "skillCalls": _loads(row["skill_calls"], []),
             "teamActivities": _loads(row["team_activities"], []),
             "modelCaches": _loads(row["model_caches"], []),
+            "runtimeEvents": _loads(row["runtime_events"], []),
             "planRuns": _loads(row["plan_runs"], []),
             "created_at": row["created_at"],
         })
@@ -1152,6 +1155,7 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     _dumps(item.get("skillCalls", item.get("skill_calls", []))),
                     _dumps(item.get("teamActivities", item.get("team_activities", []))),
                     _dumps(item.get("modelCaches", item.get("model_caches", []))),
+                    _dumps(item.get("runtimeEvents", item.get("runtime_events", []))),
                     _dumps(item.get("planRuns", item.get("plan_runs", []))),
                     item["created_at"], index,
                 ))
@@ -1159,9 +1163,9 @@ def save_chat_store(data: dict[str, Any]) -> None:
             """
             INSERT INTO chat_messages (
                 id, session_id, role, content, agent_id, agent_name, model_name,
-                error, thinking, images, tool_calls, subagent_calls, skill_calls, team_activities, model_caches, plan_runs, created_at,
+                error, thinking, images, tool_calls, subagent_calls, skill_calls, team_activities, model_caches, runtime_events, plan_runs, created_at,
                 sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )

@@ -1,0 +1,390 @@
+import { AlertCircle, Bot, CheckCircle2, ChevronRight, Clock3, GitBranch, Loader2, Users, X } from 'lucide-react';
+import { Tag } from '@agentscope-ai/design';
+import { MarkdownContent } from '../../components/MarkdownContent';
+import type { TeamActivityInfo } from '../../hooks/useEventStream';
+import { normalizeStoredToolCalls } from './formatters';
+import { ToolCallBlock } from './ToolArtifacts';
+
+/**
+ * TeamActivityPanel — Team 协作过程展示
+ */
+export function TeamActivityPanel({
+  activities,
+  selectedActivityId,
+  onSelectActivity,
+}: {
+  activities: TeamActivityInfo[];
+  selectedActivityId: string | null;
+  onSelectActivity: (id: string) => void;
+}) {
+  const leader = activities.find((item) => item.role === 'leader');
+  const workers = activities.filter((item) => item.role !== 'leader');
+  const completedCount = activities.filter((item) => item.status === 'completed').length;
+
+  return (
+    <div className="w-full overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
+      <div className="flex items-center justify-between gap-3 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
+          <Users size={14} color="var(--color-agent-leader)" />
+          <span>Team 协作</span>
+        </div>
+        <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
+          {completedCount}/{activities.length} 完成
+        </span>
+      </div>
+
+      {workers.length > 0 && (
+        <TeamExecutionGraph
+          leader={leader || null}
+          workers={workers}
+          selectedActivityId={selectedActivityId}
+          onSelectActivity={onSelectActivity}
+        />
+      )}
+
+      <div className="grid gap-2 px-3 pb-3 md:grid-cols-2">
+        {leader && (
+          <TeamActivityCard
+            activity={leader}
+            selected={selectedActivityId === leader.id}
+            onSelect={() => onSelectActivity(leader.id)}
+          />
+        )}
+        {workers.map((activity) => (
+          <TeamActivityCard
+            key={activity.id}
+            activity={activity}
+            selected={selectedActivityId === activity.id}
+            onSelect={() => onSelectActivity(activity.id)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TeamExecutionGraph({
+  leader,
+  workers,
+  selectedActivityId,
+  onSelectActivity,
+}: {
+  leader: TeamActivityInfo | null;
+  workers: TeamActivityInfo[];
+  selectedActivityId: string | null;
+  onSelectActivity: (id: string) => void;
+}) {
+  const nameByAgentId = new Map(workers.map((worker) => [worker.agentId, worker.agentName]));
+  const parallelCount = workers.filter((worker) => worker.executionMode !== 'depends_on').length;
+  const waitingCount = workers.filter((worker) => worker.status === 'pending' && worker.waitReason).length;
+
+  return (
+    <div className="px-3 pb-3">
+      <div className="rounded-md bg-[var(--color-bg-primary)] p-3">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-text-secondary)]">
+            <GitBranch size={13} color="var(--color-accent)" />
+            <span>执行图</span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            <Tag size="small" color="transparent">并行 {parallelCount}</Tag>
+            <Tag size="small" color={waitingCount > 0 ? 'orange' : 'green'}>等待 {waitingCount}</Tag>
+            {leader && leader.leaderContextCount > 0 && (
+              <Tag size="small" color="blue">Leader 使用 {leader.leaderContextCount} 个输出</Tag>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-stretch gap-2">
+          {workers.map((worker) => {
+            const dependencyNames = worker.dependsOn.map((dependency) => nameByAgentId.get(dependency) || dependency);
+            const selected = selectedActivityId === worker.id;
+            const statusColor = worker.status === 'completed'
+              ? 'var(--color-success)'
+              : worker.status === 'failed'
+                ? 'var(--color-error)'
+                : worker.status === 'running'
+                  ? 'var(--color-accent)'
+                  : 'var(--color-text-tertiary)';
+            return (
+              <button
+                key={worker.id}
+                type="button"
+                onClick={() => onSelectActivity(worker.id)}
+                className={`ui-card-transition min-w-[180px] max-w-[260px] flex-1 rounded-md border bg-[var(--color-bg-secondary)] p-2 text-left ${
+                  selected ? 'border-[var(--color-accent)] shadow-sm' : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0 truncate text-xs font-medium text-[var(--color-text-primary)]">
+                    {worker.agentName}
+                  </div>
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: statusColor }} />
+                </div>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  <Tag size="small" color={worker.executionMode === 'depends_on' ? 'blue' : 'transparent'}>
+                    {worker.executionMode === 'depends_on' ? '依赖执行' : '并行'}
+                  </Tag>
+                  {worker.dependencyOutputCount > 0 && (
+                    <Tag size="small" color="green">收到 {worker.dependencyOutputCount}</Tag>
+                  )}
+                </div>
+                {dependencyNames.length > 0 && (
+                  <div className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">
+                    依赖：{dependencyNames.join(' -> ')}
+                  </div>
+                )}
+                {(worker.waitReason || worker.detail) && (
+                  <div className="mt-1 line-clamp-2 text-[11px] text-[var(--color-text-tertiary)]">
+                    {worker.waitReason || worker.detail}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TeamActivityCard({
+  activity,
+  selected,
+  onSelect,
+}: {
+  activity: TeamActivityInfo;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const toolCalls = normalizeStoredToolCalls(activity.toolCalls || []);
+  const isRunning = activity.status === 'running';
+  const isWaiting = activity.status === 'waiting';
+  const isCompleted = activity.status === 'completed';
+  const isFailed = activity.status === 'failed';
+  const color = isFailed
+    ? 'var(--color-error)'
+    : isCompleted
+      ? 'var(--color-success)'
+      : isRunning || isWaiting
+        ? 'var(--color-accent)'
+        : 'var(--color-text-tertiary)';
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`ui-card-transition min-h-[132px] rounded-md bg-[var(--color-bg-primary)] p-3 text-left ${
+        selected ? 'ring-1 ring-[var(--color-accent)]' : 'hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)]'
+      }`}
+    >
+      <div className="mb-2 flex w-full items-center gap-2 text-left">
+        <div
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white"
+          style={{
+            backgroundColor: activity.role === 'leader'
+              ? 'var(--color-agent-leader)'
+              : 'var(--color-agent-worker)',
+          }}
+        >
+          <Bot size={13} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
+            {activity.agentName}
+          </div>
+          <div className="text-xs text-[var(--color-text-tertiary)]">
+            {activity.role === 'leader' ? 'Leader' : 'Worker'}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1 text-xs" style={{ color }}>
+          {isRunning ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : isWaiting ? (
+            <AlertCircle size={12} />
+          ) : isCompleted ? (
+            <CheckCircle2 size={12} />
+          ) : (
+            <Clock3 size={12} />
+          )}
+          <span>{getTeamActivityStatusText(activity.status)}</span>
+        </div>
+        <ChevronRight size={12} />
+      </div>
+      <div className="line-clamp-2 text-sm text-[var(--color-text-secondary)]">
+        {activity.task}
+      </div>
+      {activity.currentEvent && (
+        <div className="mt-1 flex items-center gap-1 text-xs text-[var(--color-accent)]">
+          {isRunning && <Loader2 size={11} className="animate-spin" />}
+          <span className="truncate">{activity.currentEvent}</span>
+        </div>
+      )}
+      {activity.detail && (
+        <div className="mt-1 line-clamp-2 text-xs text-[var(--color-text-tertiary)]">
+          {activity.detail}
+        </div>
+      )}
+      {toolCalls.length > 0 && (
+        <div className="mt-2 flex min-w-0 items-center gap-1 overflow-hidden">
+          {toolCalls.slice(0, 2).map((toolCall) => (
+            <span
+              key={toolCall.id}
+              className="min-w-0 max-w-[160px] truncate rounded border border-[var(--color-border)] px-1.5 py-0.5 text-xs text-[var(--color-text-tertiary)]"
+              title={toolCall.name}
+            >
+              {toolCall.name}
+            </span>
+          ))}
+          {toolCalls.length > 2 && (
+            <span className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-xs text-[var(--color-text-tertiary)]">
+              +{toolCalls.length - 2}
+            </span>
+          )}
+        </div>
+      )}
+    </button>
+  );
+}
+
+export function TeamActivitySidebar({
+  activity,
+  onClose,
+}: {
+  activity: TeamActivityInfo;
+  onClose: () => void;
+}) {
+  const toolCalls = normalizeStoredToolCalls(activity.toolCalls || []);
+  const isRunning = activity.status === 'running';
+  const isWaiting = activity.status === 'waiting';
+
+  return (
+    <aside className="flex h-full min-h-0 flex-col bg-[var(--color-bg-secondary)] shadow-inner">
+      <div className="flex items-start gap-3 px-4 py-4">
+        <div
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white"
+          style={{
+            backgroundColor: activity.role === 'leader'
+              ? 'var(--color-agent-leader)'
+              : 'var(--color-agent-worker)',
+          }}
+        >
+          <Bot size={16} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-base font-medium text-[var(--color-text-primary)]">
+            {activity.agentName}
+          </div>
+          <div className="mt-0.5 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
+            <span>{activity.role === 'leader' ? 'Leader' : 'Worker'}</span>
+            <span>{getTeamActivityStatusText(activity.status)}</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="icon-button h-8 w-8 rounded-md text-[var(--color-text-secondary)] transition-all duration-300 ease-out hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+          onClick={onClose}
+          aria-label="关闭详情"
+          title="关闭详情"
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-auto px-4 pb-4">
+        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
+          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">当前动作</div>
+          <div className="flex items-center gap-2 text-sm text-[var(--color-text-primary)]">
+            {isRunning && <Loader2 size={13} className="animate-spin text-[var(--color-accent)]" />}
+            {isWaiting && <AlertCircle size={13} className="text-[var(--color-warning)]" />}
+            <span>{activity.currentEvent || getTeamActivityStatusText(activity.status)}</span>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1">
+            <Tag size="small" color={activity.executionMode === 'depends_on' ? 'blue' : 'transparent'}>
+              {activity.role === 'leader'
+                ? 'Leader 汇总'
+                : activity.executionMode === 'depends_on'
+                  ? '依赖执行'
+                  : '并行执行'}
+            </Tag>
+            {activity.dependencyOutputCount > 0 && (
+              <Tag size="small" color="green">上游输出 {activity.dependencyOutputCount}</Tag>
+            )}
+            {activity.leaderContextCount > 0 && (
+              <Tag size="small" color="blue">Worker 输出 {activity.leaderContextCount}</Tag>
+            )}
+          </div>
+          {activity.waitReason && (
+            <div className="mt-2 text-xs text-[var(--color-warning)]">
+              {activity.waitReason}
+            </div>
+          )}
+        </section>
+
+        {activity.dependsOn.length > 0 && (
+          <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
+            <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">依赖 Worker</div>
+            <div className="flex flex-wrap gap-1">
+              {activity.dependsOn.map((dependency) => (
+                <Tag key={dependency} size="small" color="transparent">
+                  {dependency}
+                </Tag>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
+          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">任务</div>
+          <div className="whitespace-pre-wrap break-words text-sm text-[var(--color-text-secondary)]">
+            {activity.task}
+          </div>
+          {activity.detail && (
+            <div className="mt-2 whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
+              {activity.detail}
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
+          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">输出</div>
+          {activity.output ? (
+            <div className="max-h-80 overflow-auto text-xs text-[var(--color-text-secondary)]">
+              <MarkdownContent content={activity.output} />
+            </div>
+          ) : (
+            <div className="text-sm text-[var(--color-text-tertiary)]">暂无输出</div>
+          )}
+        </section>
+
+        {activity.thinking && (
+          <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
+            <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">思考</div>
+            <div className="max-h-60 overflow-auto text-xs text-[var(--color-text-tertiary)]">
+              <MarkdownContent content={activity.thinking} />
+            </div>
+          </section>
+        )}
+
+        {toolCalls.length > 0 && (
+          <section className="space-y-2 rounded-lg bg-[var(--color-bg-primary)] p-3">
+            <div className="text-xs text-[var(--color-text-tertiary)]">工具调用</div>
+            <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+              {toolCalls.map((toolCall) => (
+                <ToolCallBlock key={toolCall.id} toolCall={toolCall} />
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function getTeamActivityStatusText(status: TeamActivityInfo['status']) {
+  if (status === 'running') return '执行中';
+  if (status === 'waiting') return '等待确认';
+  if (status === 'completed') return '完成';
+  if (status === 'failed') return '失败';
+  return '等待';
+}
