@@ -26,6 +26,7 @@ import { HitlDock, isAskUserHitlRequest } from '../features/chat/HumanInteractio
 import { TeamSelectionDock } from '../features/chat/TeamSelectionDock';
 import { normalizeStoredTeamActivities, normalizeStoredToolCalls } from '../features/chat/formatters';
 import type { ChatImageAttachment, ChatImagePayload, ChatSession, LocalMessage, PendingTeamSelection, StoredChatMessage } from '../features/chat/types';
+import type { ChatRuntimeEvent } from '../types/chatEvents';
 
 
 export function ChatPage() {
@@ -96,7 +97,9 @@ export function ChatPage() {
     Boolean(state.thinkingContent) ||
     state.toolCalls.length > 0 ||
     state.skillCalls.length > 0 ||
-    state.teamActivities.length > 0 ||    state.modelCaches.length > 0
+    state.teamActivities.length > 0 ||
+    state.modelCaches.length > 0 ||
+    state.runtimeEvents.length > 0
   );
 
   const visibleTeamActivities = useMemo(() => (
@@ -126,6 +129,33 @@ export function ChatPage() {
       member.role === 'leader' || selectedWorkers.has(member.agentId)
     ));
   }, [selectedTeam]);
+
+  const buildCurrentRunOptions = useCallback((sessionId: string, approvedPlanId?: string) => ({
+    sessionId,
+    agentId: runtimeAgent?.id,
+    agentName: runtimeAgent?.name,
+    teamId: targetMode === 'team' ? selectedTeam?.id : undefined,
+    teamName: targetMode === 'team' ? selectedTeam?.name : undefined,
+    workerSelectorPrompt: targetMode === 'team' ? selectedTeam?.workerSelectorPrompt : undefined,
+    teamMembers: targetMode === 'team'
+      ? buildTeamMembersForRun(null).map((member) => ({
+        id: member.id,
+        agentId: member.agentId,
+        name: agents.find((agent) => agent.id === member.agentId)?.name || member.name,
+        role: member.role,
+        description: member.description,
+        executionMode: member.executionMode,
+        dependsOn: member.dependsOn,
+        handoffPrompt: member.handoffPrompt,
+      }))
+      : undefined,
+    systemPrompt: runtimeAgent?.systemPrompt,
+    model: runtimeAgent?.modelConfig.primary,
+    skillIds: runtimeAgent?.skills,
+    deepThinking,
+    images: [],
+    approvedPlanId,
+  }), [agents, buildTeamMembersForRun, deepThinking, runtimeAgent, selectedTeam, targetMode]);
 
   const loadSessions = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
@@ -476,6 +506,136 @@ export function ChatPage() {
     targetMode,
   ]);
 
+  const appendPlanRuntimeEventToMessages = useCallback((planId: string, runtimeEvent: ChatRuntimeEvent) => {
+    const stateHasPlan = state.runtimeEvents.some((event) => String(event.payload.planId || '') === planId);
+    setMessages((prev) => {
+      let matched = false;
+      const next = prev.map((message) => {
+        if (
+          message.role !== 'assistant' ||
+          !message.runtimeEvents?.some((event) => String(event.payload.planId || '') === planId)
+        ) {
+          return message;
+        }
+        matched = true;
+        if (message.runtimeEvents.some((event) => event.id === runtimeEvent.id)) {
+          return message;
+        }
+        return {
+          ...message,
+          runtimeEvents: [...message.runtimeEvents, runtimeEvent],
+        };
+      });
+      if (!matched && stateHasPlan) {
+        next.push({
+          id: `assistant-plan-${Date.now()}`,
+          role: 'assistant',
+          content: state.textContent,
+          createdAt: new Date().toISOString(),
+          processStartedAt: state.runStartedAt,
+          processCompletedAt: state.runCompletedAt || new Date().toISOString(),
+          skillCalls: state.skillCalls.length > 0 ? state.skillCalls : undefined,
+          toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
+          teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,
+          modelCaches: state.modelCaches.length > 0 ? state.modelCaches : undefined,
+          runtimeEvents: [...state.runtimeEvents, runtimeEvent],
+          thinking: state.thinkingContent || undefined,
+          tokenUsage: state.tokenUsage,
+          modelName: state.modelName,
+          error: state.error || undefined,
+        });
+      }
+      return next;
+    });
+    if (stateHasPlan) {
+      reset();
+    }
+  }, [
+    reset,
+    state.error,
+    state.modelCaches,
+    state.modelName,
+    state.runCompletedAt,
+    state.runStartedAt,
+    state.runtimeEvents,
+    state.skillCalls,
+    state.teamActivities,
+    state.textContent,
+    state.thinkingContent,
+    state.tokenUsage,
+    state.toolCalls,
+  ]);
+
+  const handleApprovePlan = useCallback(async (event: ChatRuntimeEvent) => {
+    const planId = String(event.payload.planId || '');
+    if (!planId || state.isStreaming) return;
+    const sessionId = activeSessionId || event.sessionId || createId();
+    try {
+      const response = await fetch(`/api/chat/plans/${encodeURIComponent(planId)}/approve`, {
+        method: 'POST',
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const result = await response.json();
+      if (result.runtimeEvent) {
+        appendPlanRuntimeEventToMessages(planId, result.runtimeEvent as ChatRuntimeEvent);
+      }
+
+      const visibleContent = '已批准计划，继续执行。';
+      const modelContent = '请按已批准的计划继续执行，直接进入 Build mode 并完成计划中的任务。';
+      setActiveSessionId(sessionId);
+      shouldAutoScrollRef.current = true;
+      setShowScrollToBottom(false);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `user-plan-approve-${Date.now()}`,
+          role: 'user',
+          content: visibleContent,
+          createdAt: new Date().toISOString(),
+          images: [],
+        },
+      ]);
+      setChatError(null);
+      notifySuccess('计划已批准，开始执行。');
+      await sendMessage(modelContent, {
+        ...buildCurrentRunOptions(sessionId, planId),
+        displayMessage: visibleContent,
+      });
+    } catch (err) {
+      const message = getErrorMessage(err, '批准计划失败');
+      setChatError(message);
+      notifyError(message);
+    }
+  }, [
+    activeSessionId,
+    appendPlanRuntimeEventToMessages,
+    buildCurrentRunOptions,
+    sendMessage,
+    state.isStreaming,
+  ]);
+
+  const handleDenyPlan = useCallback(async (event: ChatRuntimeEvent) => {
+    const planId = String(event.payload.planId || '');
+    if (!planId || state.isStreaming) return;
+    try {
+      const response = await fetch(`/api/chat/plans/${encodeURIComponent(planId)}/deny`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: '用户拒绝了该计划。' }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const result = await response.json();
+      if (result.runtimeEvent) {
+        appendPlanRuntimeEventToMessages(planId, result.runtimeEvent as ChatRuntimeEvent);
+      }
+      notifySuccess('计划已拒绝。');
+    } catch (err) {
+      const message = getErrorMessage(err, '拒绝计划失败');
+      setChatError(message);
+      notifyError(message);
+    }
+  }, [appendPlanRuntimeEventToMessages, state.isStreaming]);
+
   const confirmTeamSelection = useCallback(async (workerAgentIds: string[]) => {
     if (!pendingTeamSelection || state.isStreaming) return;
     const sessionId = activeSessionId || createId();
@@ -527,7 +687,7 @@ export function ChatPage() {
       !state.isStreaming &&
       state.hitlRequests.length === 0 &&
       state.clarificationRequests.length === 0 &&
-      (state.textContent || state.error) &&
+      (state.textContent || state.error || state.runtimeEvents.length > 0) &&
       (messages.length === 0 || messages[messages.length - 1].role === 'user')
     ) {
       const assistantMessage: LocalMessage = {
@@ -721,6 +881,8 @@ export function ChatPage() {
                         selectedTeamActivityId={selectedTeamActivityId}
                         onSelectTeamActivity={openTeamActivitySidebar}
                         onSubmitClarification={handleSubmitClarification}
+                        onApprovePlan={handleApprovePlan}
+                        onDenyPlan={handleDenyPlan}
                       />
                     ))}
 
@@ -742,6 +904,8 @@ export function ChatPage() {
                         modelName={state.modelName}
                         runStartedAt={state.runStartedAt}
                         runCompletedAt={state.runCompletedAt}
+                        onApprovePlan={handleApprovePlan}
+                        onDenyPlan={handleDenyPlan}
                       />
                     )}
 
