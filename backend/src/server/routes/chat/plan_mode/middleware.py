@@ -40,6 +40,9 @@ as the execution guide, then execute the task step by step until complete.
 Do not stop after merely producing the plan.
 When a plan step names an exact relative path, call Read/Edit on that path
 directly instead of searching the entire project with broad Glob patterns.
+After all plan steps are complete and before writing the user-facing result,
+call FinalAnswerStart exactly once, then continue with the final answer as
+normal assistant text.
 
 Approved plan:
 {markdown}

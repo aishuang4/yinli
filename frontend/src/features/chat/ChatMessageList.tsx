@@ -8,7 +8,7 @@ import type {
   TeamActivityInfo,
   ToolCallInfo,
 } from '../../hooks/useEventStream';
-import type { ChatRuntimeEvent } from '../../types/chatEvents';
+import { RUNTIME_EVENT_TYPES, type ChatRuntimeEvent } from '../../types/chatEvents';
 import type { LocalMessage } from './types';
 import { ClarificationBlock, HitlApprovalBlock, isAskUserHitlRequest } from './HumanInteractionBlocks';
 import { MessageContentBlock, MessageImages, StreamingPlaceholder } from './MessageAtoms';
@@ -319,6 +319,7 @@ function SingleAgentStreamingBubble({
   runCompletedAt: string;
 }) {
   const contentParts = splitAssistantContentByRuntimeEvents(textContent, runtimeEvents, { streaming: true });
+  const usesFinalAnswerFallback = hasMissingFinalAnswerFallback(runtimeEvents);
   const generatedFiles = collectGeneratedFiles(toolCalls, []);
   const hasProcessDetails = Boolean(
     contentParts.reactTrace ||
@@ -334,7 +335,7 @@ function SingleAgentStreamingBubble({
       {hasProcessDetails && (
         <ProcessDetailsBlock
           defaultExpanded={!textContent}
-          hasFinalAnswer={Boolean(contentParts.finalAnswer)}
+          hasFinalAnswer={Boolean(contentParts.finalAnswer) && !usesFinalAnswerFallback}
           processStartedAt={runStartedAt}
           processCompletedAt={runCompletedAt}
           reactTraceContent={contentParts.reactTrace}
@@ -379,6 +380,13 @@ function SingleAgentStreamingBubble({
         )}
     </MessageFrame>
   );
+}
+
+function hasMissingFinalAnswerFallback(runtimeEvents: ChatRuntimeEvent[]): boolean {
+  return runtimeEvents.some((event) => (
+    event.type === RUNTIME_EVENT_TYPES.AGENT_FINAL_ANSWER_DELTA &&
+    event.reason === 'missing_final_answer_marker_fallback'
+  ));
 }
 
 function TeamStreamingBubble({

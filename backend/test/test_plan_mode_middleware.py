@@ -50,6 +50,7 @@ def test_system_prompt_contains_build_hint_after_approval() -> None:
     assert "BUILD mode" in prompt
     assert manager.context.current_plan_file in prompt
     assert "instead of searching the entire project" in prompt
+    assert "FinalAnswerStart" in prompt
 
 
 def test_on_acting_denies_mutating_tool() -> None:
