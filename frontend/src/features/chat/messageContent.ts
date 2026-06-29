@@ -91,9 +91,6 @@ export function splitAssistantContentByRuntimeEvents(
       continue;
     }
     if (event.type === RUNTIME_EVENT_TYPES.AGENT_FINAL_ANSWER_DELTA) {
-      if (event.reason === 'missing_final_answer_marker_fallback') {
-        traceParts.length = 0;
-      }
       outputBuffer += String(event.payload.delta || '');
       sawActionAfterOutput = true;
       continue;
