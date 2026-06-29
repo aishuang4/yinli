@@ -26,6 +26,9 @@ run mutating commands, or otherwise change state. Record the plan with
 plan_write. When the plan is complete, call plan_exit to ask the user for
 approval. If you lack required information, ask one specific clarifying
 question instead of inventing details.
+When the user or context gives an exact relative path, call Read on that path
+directly. Avoid broad Glob patterns such as **/* unless you truly need project
+discovery; prefer scoped Grep/Glob inside the smallest known directory.
 </system-reminder>
 """
 
@@ -35,6 +38,8 @@ BUILD_MODE_HINT_TEMPLATE = """
 BUILD mode is active. The approved plan exists at {plan_file}. Read or use it
 as the execution guide, then execute the task step by step until complete.
 Do not stop after merely producing the plan.
+When a plan step names an exact relative path, call Read/Edit on that path
+directly instead of searching the entire project with broad Glob patterns.
 
 Approved plan:
 {markdown}

@@ -1295,7 +1295,10 @@ export function useEventStream(): UseEventStreamReturn {
         }
 
         // === 工具调用参数增量 ===
-        case 'TOOL_CALL_DELTA':
+        case 'TOOL_CALL_DELTA': {
+          if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
+            return prev;
+          }
           return {
             ...prev,
             toolCalls: prev.toolCalls.map((tc) =>
@@ -1304,9 +1307,13 @@ export function useEventStream(): UseEventStreamReturn {
                 : tc
             ),
           };
+        }
 
         // === 工具调用结束 ===
-        case 'TOOL_CALL_END':
+        case 'TOOL_CALL_END': {
+          if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
+            return prev;
+          }
           return {
             ...prev,
             toolCalls: prev.toolCalls.map((tc) =>
@@ -1315,9 +1322,13 @@ export function useEventStream(): UseEventStreamReturn {
                 : tc
             ),
           };
+        }
 
         // === 工具结果开始 ===
-        case 'TOOL_RESULT_START':
+        case 'TOOL_RESULT_START': {
+          if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
+            return prev;
+          }
           return {
             ...prev,
             toolCalls: prev.toolCalls.map((tc) =>
@@ -1326,9 +1337,13 @@ export function useEventStream(): UseEventStreamReturn {
                 : tc
             ),
           };
+        }
 
         // === 工具结果文本增量 ===
-        case 'TOOL_RESULT_TEXT_DELTA':
+        case 'TOOL_RESULT_TEXT_DELTA': {
+          if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
+            return prev;
+          }
           return {
             ...prev,
             toolCalls: prev.toolCalls.map((tc) =>
@@ -1337,9 +1352,13 @@ export function useEventStream(): UseEventStreamReturn {
                 : tc
             ),
           };
+        }
 
         // === 工具结果结束 ===
-        case 'TOOL_RESULT_END':
+        case 'TOOL_RESULT_END': {
+          if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
+            return prev;
+          }
           return {
             ...prev,
             toolCalls: prev.toolCalls.map((tc) =>
@@ -1348,6 +1367,7 @@ export function useEventStream(): UseEventStreamReturn {
                 : tc
             ),
           };
+        }
 
         // === 模型调用信息 ===
         case 'MODEL_CALL_START':
