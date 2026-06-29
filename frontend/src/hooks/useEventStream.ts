@@ -343,6 +343,13 @@ function failStreamWithError(state: StreamState, error: string): StreamState {
   };
 }
 
+function toolStatusFromResultState(value: unknown): ToolCallInfo['status'] {
+  const state = String(value || '').toLowerCase();
+  return state === 'error' || state === 'failed' || state === 'denied'
+    ? 'failed'
+    : 'completed';
+}
+
 function normalizeRuntimeEvent(data: Record<string, unknown>): ChatRuntimeEvent {
   return {
     id: String(data.id || createId()),
@@ -608,10 +615,13 @@ function applyRuntimeEventToTeamActivity(
     };
   }
   if (event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_COMPLETED) {
+    const nextStatus = event.status === 'failed'
+      ? 'failed'
+      : toolStatusFromResultState(event.payload.state);
     return {
       ...base,
       toolCalls: activity.toolCalls.map((toolCall) => (
-        toolCall.id === toolCallId ? { ...toolCall, status: 'completed' } : toolCall
+        toolCall.id === toolCallId ? { ...toolCall, status: nextStatus } : toolCall
       )),
     };
   }
@@ -696,8 +706,11 @@ function applyRuntimeEventToToolCalls(
   }
 
   if (event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_COMPLETED) {
+    const nextStatus = event.status === 'failed'
+      ? 'failed'
+      : toolStatusFromResultState(event.payload.state);
     return toolCalls.map((toolCall) => (
-      toolCall.id === toolCallId ? { ...toolCall, status: 'completed' } : toolCall
+      toolCall.id === toolCallId ? { ...toolCall, status: nextStatus } : toolCall
     ));
   }
 
@@ -1380,11 +1393,14 @@ export function useEventStream(): UseEventStreamReturn {
           if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
             return prev;
           }
+          const nextStatus = event.data.status === 'failed'
+            ? 'failed'
+            : toolStatusFromResultState(event.data.state);
           return {
             ...prev,
             toolCalls: prev.toolCalls.map((tc) =>
               tc.id === event.data.tool_call_id
-                ? { ...tc, status: 'completed' }
+                ? { ...tc, status: nextStatus }
                 : tc
             ),
           };
