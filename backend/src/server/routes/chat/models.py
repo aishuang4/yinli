@@ -310,6 +310,9 @@ class ChatMessage(BaseModel):
     sandbox: bool = False
     """沙盒运行：不写入历史对话"""
 
+    approved_plan_id: str | None = Field(default=None, alias="approvedPlanId")
+    """已批准计划 ID；存在时本轮进入 Build mode 并按该计划执行。"""
+
     model_config = {"populate_by_name": True}
 
 

@@ -35,6 +35,9 @@ BUILD_MODE_HINT_TEMPLATE = """
 BUILD mode is active. The approved plan exists at {plan_file}. Read or use it
 as the execution guide, then execute the task step by step until complete.
 Do not stop after merely producing the plan.
+
+Approved plan:
+{markdown}
 </system-reminder>
 """
 
@@ -56,6 +59,7 @@ class PlanModeMiddleware(MiddlewareBase):
         if self.manager.context.current_plan_file and self.manager.context.approved:
             return base + BUILD_MODE_HINT_TEMPLATE.format(
                 plan_file=self.manager.context.current_plan_file,
+                markdown=self.manager.context.markdown,
             )
         return base
 

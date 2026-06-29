@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from src.server.routes.chat.plan_mode.models import (
+    PLAN_STATUS_APPROVED,
     PLAN_STATUS_DRAFT,
     PLAN_STATUS_WAITING_APPROVAL,
     PlanModeContext,
@@ -115,6 +116,19 @@ class PlanModeManager:
                 event_type="PLAN_WAITING_APPROVAL",
                 content="Plan mode exited and waits for approval.",
             )
+        return self.context
+
+    def load_approved_plan(self, plan: dict) -> PlanModeContext:
+        """加载已批准计划，让下一轮 ReAct 进入 Build mode。"""
+
+        if plan.get("status") != PLAN_STATUS_APPROVED:
+            raise ValueError("Only approved plans can be loaded for Build mode.")
+        self.context.plan_id = str(plan.get("id") or "")
+        self.context.plan_active = False
+        self.context.waiting_approval = False
+        self.context.approved = True
+        self.context.current_plan_file = self._make_plan_file_path(self.context.plan_id)
+        self.context.markdown = str(plan.get("markdown") or "")
         return self.context
 
     def record_tool_denied(self, *, tool_call_id: str, tool_name: str, message: str) -> None:

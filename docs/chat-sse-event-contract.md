@@ -1,6 +1,6 @@
 # Chat SSE 事件契约
 
-> 状态：2026-06-26 收口版。本文定义 `/api/chat/send`、`/api/chat/resume` 与 `/api/chat/runs/{run_id}/stream` 可被前端依赖的事件。新增事件前必须先更新本文档。
+> 状态：2026-06-29 收口版。本文定义 `/api/chat/send`、`/api/chat/resume`、`/api/chat/plans/{plan_id}/approve`、`/api/chat/plans/{plan_id}/deny` 与 `/api/chat/runs/{run_id}/stream` 可被前端依赖的事件。新增事件前必须先更新本文档。
 
 ## 基本规则
 
@@ -62,6 +62,13 @@ Plan Mode 基于 AgentScope Middleware hooks 实现，不恢复旧 Plan Runtime�
 | `PLAN_APPROVED` | `completed` | `{ planId, planFile }` |
 | `PLAN_DENIED` | `failed` | `{ planId, planFile, reason }` |
 | `PLAN_TOOL_DENIED` | `completed` | `{ planId, toolCallId, toolName, message }` |
+
+## Plan Mode 审批与执行
+
+- `POST /api/chat/plans/{plan_id}/approve`：批准 `waiting_approval` 状态的 Plan，返回 `{ plan, runtimeEvent }`，其中 `runtimeEvent.type` 为 `PLAN_APPROVED`。
+- `POST /api/chat/plans/{plan_id}/deny`：拒绝 `waiting_approval` 状态的 Plan，body 为 `{ reason?: string }`，返回 `{ plan, runtimeEvent }`，其中 `runtimeEvent.type` 为 `PLAN_DENIED`。
+- 前端批准后发起新一轮 `/api/chat/send`，请求体带 `approvedPlanId`。后端在 ReAct Runtime 内加载该 approved plan，通过 Plan Mode middleware 注入 Build mode 提示和计划正文，然后由同一个主 Agent 按计划执行。
+- `approvedPlanId` 只表示“本轮按已批准计划执行”，不是新的 architecture runtime；`intent_router.runtime.kind` 仍为 `react`。
 
 ## Run 生命周期
 

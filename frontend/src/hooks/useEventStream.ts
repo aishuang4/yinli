@@ -271,6 +271,7 @@ interface SendMessageOptions {
   skillIds?: string[];
   deepThinking?: boolean;
   sandbox?: boolean;
+  approvedPlanId?: string;
   images?: Array<{
     name: string;
     media_type: string;
@@ -786,6 +787,7 @@ export function useEventStream(): UseEventStreamReturn {
             skill_ids: options?.skillIds,
             deep_thinking: options?.deepThinking,
             sandbox: options?.sandbox,
+            approvedPlanId: options?.approvedPlanId,
             images: options?.images,
           }),
           signal: controller.signal,

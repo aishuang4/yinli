@@ -35,6 +35,7 @@ from src.server.routes.chat.runtime_builder import (
     create_main_agent_from_spec,
 )
 from src.server.routes.chat.trace_recorder import _make_fallback_trace_recorder
+from src.storage.database import get_plan_record
 
 
 def _build_plan_mode_runtime_parts(
@@ -51,9 +52,15 @@ def _build_plan_mode_runtime_parts(
         team_id=run_data.team_id,
         persist=ctx.persist_run,
     )
+    runtime_features_cache_key = "plan-mode-v1"
+    if run_data.approved_plan_id:
+        plan = get_plan_record(run_data.approved_plan_id)
+        if plan and plan.get("status") == "approved":
+            manager.load_approved_plan(plan)
+            runtime_features_cache_key = f"plan-mode-v1:build-{run_data.approved_plan_id}"
     tools = build_plan_mode_tools(manager)
     middlewares = [PlanModeMiddleware(manager)]
-    return manager, "plan-mode-v1", tools, middlewares
+    return manager, runtime_features_cache_key, tools, middlewares
 
 
 async def execute_react_runtime(

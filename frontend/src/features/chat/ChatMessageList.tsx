@@ -31,17 +31,24 @@ type ClarificationSubmitProps = {
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
 };
 
+type PlanApprovalProps = {
+  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
+  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
+};
+
 export function MessageBubble({
   message,
   selectedTeamActivityId,
   onSelectTeamActivity,
   onSubmitClarification,
+  onApprovePlan,
+  onDenyPlan,
 }: {
   message: LocalMessage;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
-}) {
+} & PlanApprovalProps) {
   if (message.role === 'user') {
     return <UserMessageBubble message={message} />;
   }
@@ -63,6 +70,8 @@ export function MessageBubble({
       selectedTeamActivityId={selectedTeamActivityId}
       onSelectTeamActivity={onSelectTeamActivity}
       onSubmitClarification={onSubmitClarification}
+      onApprovePlan={onApprovePlan}
+      onDenyPlan={onDenyPlan}
     />
   );
 }
@@ -81,9 +90,11 @@ function SingleAgentMessageBubble({
   selectedTeamActivityId,
   onSelectTeamActivity,
   onSubmitClarification,
+  onApprovePlan,
+  onDenyPlan,
 }: {
   message: LocalMessage;
-} & TeamSelectionProps & ClarificationSubmitProps) {
+} & TeamSelectionProps & ClarificationSubmitProps & PlanApprovalProps) {
   const clarification = extractClarificationFromText(message.content);
   const clarificationRequests = message.clarificationRequests || (clarification ? [clarification] : []);
   const contentParts = splitAssistantContentByRuntimeEvents(
@@ -122,6 +133,8 @@ function SingleAgentMessageBubble({
           toolCalls={toolCalls}
           selectedTeamActivityId={selectedTeamActivityId}
           onSelectTeamActivity={onSelectTeamActivity}
+          onApprovePlan={onApprovePlan}
+          onDenyPlan={onDenyPlan}
         />
       )}
 
@@ -201,6 +214,8 @@ export function StreamingBubble({
   clarificationRequests,
   onSubmitClarification,
   onResolveHitl,
+  onApprovePlan,
+  onDenyPlan,
   selectedTeamActivityId,
   onSelectTeamActivity,
   toolCalls,
@@ -218,6 +233,8 @@ export function StreamingBubble({
   clarificationRequests: ClarificationRequestInfo[];
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
   onResolveHitl: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
+  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
+  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
   toolCalls: ToolCallInfo[];
@@ -258,6 +275,8 @@ export function StreamingBubble({
       runCompletedAt={runCompletedAt}
       selectedTeamActivityId={selectedTeamActivityId}
       onSelectTeamActivity={onSelectTeamActivity}
+      onApprovePlan={onApprovePlan}
+      onDenyPlan={onDenyPlan}
     />
   );
 }
@@ -272,6 +291,8 @@ function SingleAgentStreamingBubble({
   clarificationRequests,
   onSubmitClarification,
   onResolveHitl,
+  onApprovePlan,
+  onDenyPlan,
   selectedTeamActivityId,
   onSelectTeamActivity,
   toolCalls,
@@ -288,6 +309,8 @@ function SingleAgentStreamingBubble({
   clarificationRequests: ClarificationRequestInfo[];
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
   onResolveHitl: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
+  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
+  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
   toolCalls: ToolCallInfo[];
@@ -323,6 +346,8 @@ function SingleAgentStreamingBubble({
           toolCalls={toolCalls}
           selectedTeamActivityId={selectedTeamActivityId}
           onSelectTeamActivity={onSelectTeamActivity}
+          onApprovePlan={onApprovePlan}
+          onDenyPlan={onDenyPlan}
         />
       )}
 
@@ -375,6 +400,8 @@ function TeamStreamingBubble({
   clarificationRequests: ClarificationRequestInfo[];
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
   onResolveHitl: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
+  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
+  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
   modelName: string;

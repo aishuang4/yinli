@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { BookOpenCheck, Brain, ChevronDown, ChevronRight, Clock3, GitBranch, Wrench } from 'lucide-react';
+import { BookOpenCheck, Brain, CheckCircle, ChevronDown, ChevronRight, Clock3, GitBranch, Wrench, XCircle } from 'lucide-react';
 import { Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import type { ModelCacheInfo, SkillCallInfo, TeamActivityInfo, ToolCallInfo } from '../../hooks/useEventStream';
@@ -22,6 +22,8 @@ export function ProcessDetailsBlock({
   toolCalls,
   selectedTeamActivityId,
   onSelectTeamActivity,
+  onApprovePlan,
+  onDenyPlan,
 }: {
   defaultExpanded: boolean;
   hasFinalAnswer: boolean;
@@ -36,6 +38,8 @@ export function ProcessDetailsBlock({
   toolCalls: ToolCallInfo[];
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
+  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
+  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
 }) {
   const hasReactTrace = Boolean((reactTraceContent || '').trim());
   const [expanded, setExpanded] = useState(defaultExpanded && !hasFinalAnswer);
@@ -111,6 +115,8 @@ export function ProcessDetailsBlock({
           toolCalls={toolCalls}
           selectedTeamActivityId={selectedTeamActivityId}
           onSelectTeamActivity={onSelectTeamActivity}
+          onApprovePlan={onApprovePlan}
+          onDenyPlan={onDenyPlan}
         />
       )}
     </div>
@@ -127,6 +133,8 @@ function ReActTimeline({
   toolCalls,
   selectedTeamActivityId,
   onSelectTeamActivity,
+  onApprovePlan,
+  onDenyPlan,
 }: {
   reactTraceContent: string;
   thinkingContent: string;
@@ -137,11 +145,15 @@ function ReActTimeline({
   toolCalls: ToolCallInfo[];
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
+  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
+  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
 }) {
   const runtimeItems = buildTimelineItemsFromRuntimeEvents({
     runtimeEvents,
     toolCalls,
     skillCalls,
+    onApprovePlan,
+    onDenyPlan,
   });
   const fallbackReasoningSegments = splitReasoningSegments([thinkingContent, reactTraceContent].filter(Boolean).join('\n\n'));
   const fallbackActions = buildActionItems({
@@ -179,10 +191,14 @@ function buildTimelineItemsFromRuntimeEvents({
   runtimeEvents,
   toolCalls,
   skillCalls,
+  onApprovePlan,
+  onDenyPlan,
 }: {
   runtimeEvents: ChatRuntimeEvent[];
   toolCalls: ToolCallInfo[];
   skillCalls: SkillCallInfo[];
+  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
+  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
 }): Array<{ id: string; node: ReactNode }> {
   const items: Array<{ id: string; node: ReactNode }> = [];
   const renderedActions = new Set<string>();
@@ -198,7 +214,11 @@ function buildTimelineItemsFromRuntimeEvents({
           icon={<BookOpenCheck size={15} />}
           label="Plan Mode"
         >
-          <PlanModeRuntimeBlock events={planModeEvents} />
+          <PlanModeRuntimeBlock
+            events={planModeEvents}
+            onApprovePlan={onApprovePlan}
+            onDenyPlan={onDenyPlan}
+          />
         </ActionShell>
       ),
     });
@@ -285,11 +305,20 @@ function getPlanModeEvents(runtimeEvents: ChatRuntimeEvent[]): ChatRuntimeEvent[
   ));
 }
 
-function PlanModeRuntimeBlock({ events }: { events: ChatRuntimeEvent[] }) {
+function PlanModeRuntimeBlock({
+  events,
+  onApprovePlan,
+  onDenyPlan,
+}: {
+  events: ChatRuntimeEvent[];
+  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
+  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
+}) {
   const latest = events[events.length - 1];
   const markdown = typeof latest.payload.markdown === 'string' ? latest.payload.markdown : '';
   const planFile = typeof latest.payload.planFile === 'string' ? latest.payload.planFile : '';
   const status = latest.status || latest.type;
+  const waitingApproval = latest.type === RUNTIME_EVENT_TYPES.PLAN_WAITING_APPROVAL;
 
   return (
     <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
@@ -312,6 +341,28 @@ function PlanModeRuntimeBlock({ events }: { events: ChatRuntimeEvent[] }) {
         {markdown && (
           <div className="max-h-72 overflow-auto rounded-md bg-[var(--color-bg-primary)] p-3 text-xs leading-6 text-[var(--color-text-secondary)]">
             <MarkdownContent content={markdown} />
+          </div>
+        )}
+        {waitingApproval && (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void onApprovePlan?.(latest)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-transparent bg-[var(--color-primary)] px-3 text-xs font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!onApprovePlan}
+            >
+              <CheckCircle size={14} />
+              批准执行
+            </button>
+            <button
+              type="button"
+              onClick={() => void onDenyPlan?.(latest)}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 text-xs font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!onDenyPlan}
+            >
+              <XCircle size={14} />
+              拒绝
+            </button>
           </div>
         )}
       </div>
