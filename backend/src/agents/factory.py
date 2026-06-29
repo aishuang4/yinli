@@ -16,7 +16,7 @@ from agentscope.agent import Agent
 from agentscope.agent._config import ContextConfig, ModelConfig, ReActConfig
 from agentscope.mcp import HttpMCPConfig, MCPClient
 from agentscope.middleware import MiddlewareBase
-from agentscope.tool import Toolkit, Bash, Read, Write, Edit, Grep, ToolBase
+from agentscope.tool import Toolkit, Bash, ToolBase
 from agentscope.state import AgentState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.permission._types import PermissionMode
@@ -39,7 +39,11 @@ from src.tools.configured_http_tool import ConfiguredHttpTool
 from src.tools.final_answer import FinalAnswerStart
 from src.tools.http_request import HttpRequest
 from src.tools.knowledge_base_search import KnowledgeBaseSearch
+from src.tools.scoped_edit import ScopedEdit
 from src.tools.scoped_glob import ScopedGlob
+from src.tools.scoped_grep import ScopedGrep
+from src.tools.scoped_read import ScopedRead
+from src.tools.scoped_write import ScopedWrite
 
 
 # ============================================================================
@@ -211,8 +215,8 @@ def _create_default_toolkit(
 
     local_tools = [
         *((
-            Read(),
-            Grep(),
+            ScopedRead(),
+            ScopedGrep(),
             ScopedGlob(),
             AskUser(),
             FinalAnswerStart(),
@@ -220,7 +224,7 @@ def _create_default_toolkit(
         *(extra_tools or []),
     ]
     if include_default_tools and not read_only:
-        local_tools.extend([Write(), Edit()])
+        local_tools.extend([ScopedWrite(), ScopedEdit()])
 
     if permission_profile.can_use_network:
         network_tools = []

@@ -7,6 +7,9 @@ from agentscope.message import TextBlock
 from agentscope.tool import Glob
 from agentscope.tool._response import ToolChunk
 
+from src.agents.runtime_types import WORKSPACE_DIR
+from src.tools.scoped_paths import resolve_workspace_path
+
 
 class ScopedGlob(Glob):
     """带默认忽略目录和结果上限的 Glob。"""
@@ -113,7 +116,7 @@ class ScopedGlob(Glob):
     ) -> ToolChunk:
         """执行受控 Glob，并提示结果可能被截断。"""
 
-        base_dir = path if path else os.getcwd()
+        base_dir = resolve_workspace_path(path) if path else WORKSPACE_DIR
         if not os.path.exists(base_dir):
             return ToolChunk(
                 content=[TextBlock(text=f"Directory not found: {base_dir}")],
