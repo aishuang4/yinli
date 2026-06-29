@@ -15,6 +15,7 @@ from typing import Any
 from agentscope.agent import Agent
 from agentscope.agent._config import ContextConfig, ModelConfig, ReActConfig
 from agentscope.mcp import HttpMCPConfig, MCPClient
+from agentscope.middleware import MiddlewareBase
 from agentscope.tool import Toolkit, Bash, Read, Write, Edit, Grep, Glob, ToolBase
 from agentscope.state import AgentState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
@@ -288,6 +289,7 @@ def get_or_create_agent(
     extra_tools: list[ToolBase] | None = None,
     include_default_tools: bool = True,
     on_fallback_event: FallbackEventCallback | None = None,
+    middlewares: list[MiddlewareBase] | None = None,
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -360,6 +362,7 @@ def get_or_create_agent(
         ),
         state=agent_state,
         offloader=workspace,
+        middlewares=middlewares or [],
         model_config=ModelConfig(
             max_retries=3,
             fallback_model=None,

@@ -7,6 +7,9 @@
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from agentscope.middleware import MiddlewareBase
+from agentscope.tool import ToolBase
+
 from src.agents.factory import (
     AgentModelOptions,
     AgentGuardrails,
@@ -57,6 +60,8 @@ class MainAgentRuntimeSpec:
     parent_agent_id: str
     parent_agent_name: str
     tool_scope: RuntimeToolScope
+    extra_tools: list[ToolBase]
+    middlewares: list[MiddlewareBase]
 
 
 def build_runtime_model_config(
@@ -147,6 +152,7 @@ def build_runtime_agent_cache_key(
     knowledge_tools: list[KnowledgeToolRuntimeSpec],
     runtime_tool_scope: RuntimeToolScope,
     guardrail_cache_key: str,
+    runtime_features_cache_key: str = "none",
 ) -> str:
     """生成影响 Agent 实例缓存的稳定 key。"""
 
@@ -162,6 +168,7 @@ def build_runtime_agent_cache_key(
         f"fallbacks-{fallback_cache_key}:"
         f"skills-{skill_cache_key}:mcp-{mcp_cache_key}:knowledge-{knowledge_cache_key}:"
         f"tools-{runtime_tool_scope.cache_key()}:"
+        f"features-{runtime_features_cache_key}:"
         f"guardrails-{guardrail_cache_key}"
     )
 
@@ -180,6 +187,9 @@ def build_main_agent_runtime_spec(
     knowledge_tools: list[KnowledgeToolRuntimeSpec],
     runtime_tool_scope: RuntimeToolScope,
     guardrail_cache_key: str,
+    runtime_features_cache_key: str = "none",
+    extra_tools: list[ToolBase] | None = None,
+    middlewares: list[MiddlewareBase] | None = None,
 ) -> MainAgentRuntimeSpec:
     """构建主 Agent 工厂参数，不包含 trace 回调。"""
 
@@ -194,6 +204,7 @@ def build_main_agent_runtime_spec(
         knowledge_tools=knowledge_tools,
         runtime_tool_scope=runtime_tool_scope,
         guardrail_cache_key=guardrail_cache_key,
+        runtime_features_cache_key=runtime_features_cache_key,
     )
     return MainAgentRuntimeSpec(
         runtime_agent_id=runtime_agent_id,
@@ -209,6 +220,8 @@ def build_main_agent_runtime_spec(
         parent_agent_id=agent_id,
         parent_agent_name=agent_name,
         tool_scope=runtime_tool_scope,
+        extra_tools=extra_tools or [],
+        middlewares=middlewares or [],
     )
 
 
@@ -235,4 +248,6 @@ def create_main_agent_from_spec(
         parent_agent_name=spec.parent_agent_name,
         tool_scope=spec.tool_scope,
         on_fallback_event=on_fallback_event,
+        extra_tools=spec.extra_tools,
+        middlewares=spec.middlewares,
     )

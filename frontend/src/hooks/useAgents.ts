@@ -185,8 +185,7 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
   }
 
   if ('guardrails' in data && data.guardrails) {
-    result.guardrails = {
-      filesystem_scope: data.guardrails.filesystemScope,
+    const guardrails: Record<string, unknown> = {
       shell_blacklist: data.guardrails.shellBlacklist,
       network_enabled: data.guardrails.networkEnabled,
       human_approval: data.guardrails.humanApproval,
@@ -197,6 +196,10 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
       persistent_sandbox: data.guardrails.persistentSandbox,
       timeout_seconds: data.guardrails.timeoutSeconds,
     };
+    if (data.guardrails.filesystemScope.trim()) {
+      guardrails.filesystem_scope = data.guardrails.filesystemScope;
+    }
+    result.guardrails = guardrails;
   }
 
   return result;

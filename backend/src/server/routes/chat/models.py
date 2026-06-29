@@ -113,7 +113,7 @@ class ChatPlanStep(BaseModel):
 
 
 class ChatPlanRun(BaseModel):
-    """Plan Runtime 记录。"""
+    """Plan Mode/历史计划记录。"""
 
     id: str
     run_id: str = Field(default="", alias="runId")

@@ -9,7 +9,7 @@
 - 前端只消费本文档列出的稳定事件；调试类或 trace 类事件应进入 `run_events`，不要直接驱动 Chat UI。
 - 应用级状态统一通过 `RUNTIME_EVENT` 表达。AgentScope 原始事件只负责流式文本、思考和底层调试，不承载业务状态。
 - 新功能必须定义独立 Runtime Event 家族，不允许混用其他功能事件。例如记忆使用 `MEMORY_*`，产物使用 `ARTIFACT_*`，沙箱使用 `SANDBOX_*`。
-- Plan Runtime 与 Subagent Runtime 已下线，`PLAN_*`、`SUBAGENT_*` 事件不属于当前稳定契约。
+- 旧 Plan Runtime 与 Subagent Runtime 已下线，旧 `PLAN_*`、`SUBAGENT_*` 事件不属于当前稳定契约；新的 Plan Mode 事件只通过本文定义的 `RUNTIME_EVENT` 契约表达。
 
 ## Chat 路由分层
 
@@ -48,6 +48,20 @@
 - `MEMORY_*`：记忆总结与候选记忆生命周期。
 - `ARTIFACT_*`：文件、下载产物、生成内容等可交付产物生命周期。
 - `SANDBOX_*`：沙箱运行生命周期。
+- `PLAN_*`：Plan Mode 进入、更新、等待审批和工具拦截状态。
+
+## Plan Mode Runtime Events
+
+Plan Mode 基于 AgentScope Middleware hooks 实现，不恢复旧 Plan Runtime。所有事件都通过 `RUNTIME_EVENT` 发送，`scope` 使用 `plan`。
+
+| type | status | payload |
+| --- | --- | --- |
+| `PLAN_MODE_ENTERED` | `running` | `{ planId, planFile, mode }` |
+| `PLAN_UPDATED` | `running` | `{ planId, planFile, markdown, source }` |
+| `PLAN_WAITING_APPROVAL` | `waiting` | `{ planId, planFile, markdown }` |
+| `PLAN_APPROVED` | `completed` | `{ planId, planFile }` |
+| `PLAN_DENIED` | `failed` | `{ planId, planFile, reason }` |
+| `PLAN_TOOL_DENIED` | `completed` | `{ planId, toolCallId, toolName, message }` |
 
 ## Run 生命周期
 

@@ -188,6 +188,21 @@ function buildTimelineItemsFromRuntimeEvents({
   const renderedActions = new Set<string>();
   let outputBuffer = '';
   let thinkingBuffer = '';
+  const planModeEvents = getPlanModeEvents(runtimeEvents);
+  if (planModeEvents.length > 0) {
+    items.push({
+      id: 'plan-mode',
+      node: (
+        <ActionShell
+          key="plan-mode"
+          icon={<BookOpenCheck size={15} />}
+          label="Plan Mode"
+        >
+          <PlanModeRuntimeBlock events={planModeEvents} />
+        </ActionShell>
+      ),
+    });
+  }
 
   const flushReasoning = (reason: string) => {
     const content = [thinkingBuffer, outputBuffer].filter(Boolean).join('\n\n').trim();
@@ -257,6 +272,51 @@ function buildTimelineItemsFromRuntimeEvents({
   outputBuffer = '';
   flushReasoning('tail');
   return items;
+}
+
+function getPlanModeEvents(runtimeEvents: ChatRuntimeEvent[]): ChatRuntimeEvent[] {
+  return runtimeEvents.filter((event) => (
+    event.type === RUNTIME_EVENT_TYPES.PLAN_MODE_ENTERED ||
+    event.type === RUNTIME_EVENT_TYPES.PLAN_UPDATED ||
+    event.type === RUNTIME_EVENT_TYPES.PLAN_WAITING_APPROVAL ||
+    event.type === RUNTIME_EVENT_TYPES.PLAN_APPROVED ||
+    event.type === RUNTIME_EVENT_TYPES.PLAN_DENIED ||
+    event.type === RUNTIME_EVENT_TYPES.PLAN_TOOL_DENIED
+  ));
+}
+
+function PlanModeRuntimeBlock({ events }: { events: ChatRuntimeEvent[] }) {
+  const latest = events[events.length - 1];
+  const markdown = typeof latest.payload.markdown === 'string' ? latest.payload.markdown : '';
+  const planFile = typeof latest.payload.planFile === 'string' ? latest.payload.planFile : '';
+  const status = latest.status || latest.type;
+
+  return (
+    <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
+      <div className="space-y-2 px-3 py-2">
+        <div className="flex min-w-0 items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
+              {latest.type}
+            </div>
+            {planFile && (
+              <div className="mt-1 truncate font-mono text-xs text-[var(--color-text-tertiary)]">
+                {planFile}
+              </div>
+            )}
+          </div>
+          <Tag size="small" color={status === 'waiting' ? 'blue' : status === 'failed' ? 'danger' : 'success'}>
+            {status}
+          </Tag>
+        </div>
+        {markdown && (
+          <div className="max-h-72 overflow-auto rounded-md bg-[var(--color-bg-primary)] p-3 text-xs leading-6 text-[var(--color-text-secondary)]">
+            <MarkdownContent content={markdown} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function splitReasoningSegments(content: string): string[] {

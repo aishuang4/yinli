@@ -61,7 +61,7 @@ npm run lint     # eslint
 
 9. **`routes/chat/completion.py`** — Leader run 成功/失败收尾。负责完成 Skill/Team 状态、写 assistant message、写 trace，并输出 `TEAM_ACTIVITY` / `ERROR` 等后续 SSE。旧记忆模块已删除，当前不再触发 memory summarize。
 
-10. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 `agent_id` 缓存实例；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件）。工具集在 `_create_default_toolkit()` 注入：普通 Agent 默认拥有 Read/Grep/Glob/AskUser/FinalAnswerStart，Write/Edit 受权限控制；Bash/HttpRequest/知识库工具/MCP 受 `RuntimeToolScope` 裁剪。系统基础设施 Agent 可通过 `include_default_tools=False` 创建完全无工具实例。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是用户主目录 `~`）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
+10. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 `agent_id` 缓存实例；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件）。工具集在 `_create_default_toolkit()` 注入：普通 Agent 默认拥有 Read/Grep/Glob/AskUser/FinalAnswerStart，Write/Edit 受权限控制；Bash/HttpRequest/知识库工具/MCP 受 `RuntimeToolScope` 裁剪。系统基础设施 Agent 可通过 `include_default_tools=False` 创建完全无工具实例。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是项目根目录，避免 Glob/Grep 扫描用户主目录）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
 
 11. **`agents/agentscope_usage_patch.py`** — 启动时 `patch_agentscope_usage_events()` 给 AgentScope 打补丁以捕获 usage 事件。
 
@@ -97,6 +97,7 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 - 如果 `AGENTS.md` / `CLAUDE.md` 与 `docs/development-guidelines.md` 冲突，以更具体、更严格、更新的规范为准；不确定时先按 `docs/development-guidelines.md` 执行。
 - `AGENTS.md` 是开发代理记忆和项目协作规范的唯一真实来源；`CLAUDE.md` 只作为兼容入口，避免多份记忆漂移。
 - 当前已删除/下线的旧设计：记忆模块、Plan Runtime、Subagent Runtime。后续不要在旧字段、旧事件或旧工具链上继续补丁式开发，只能重新设计后按新方案接入。
+- 在本项目 AgentScope 语境中，`middleware` 按 AgentScope hooks / `MiddlewareBase` 理解；讨论 Plan Mode 等运行时增强时，优先考虑通过 middleware hooks（如 `on_system_prompt`、`on_acting`）接入，而不是恢复旧 Runtime 分支。
 - 代码注释和文档用中文，技术术语和标识符保持英文。
 - TODO 文档和待办事项统一用中文编写，便于团队协作和后续交接。
 - Chat SSE 事件新增或变更前必须先更新 `docs/chat-sse-event-contract.md`，前端只依赖该契约中的稳定事件。

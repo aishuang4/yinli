@@ -2,12 +2,13 @@
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from src.security.permissions import UnifiedPermissionProfile, build_permission_profile
 
 
-WORKSPACE_DIR = os.path.expanduser("~")
+WORKSPACE_DIR = str(Path(__file__).resolve().parents[3])
 FallbackEventCallback = Callable[[dict[str, Any]], None]
 
 
@@ -39,6 +40,12 @@ class AgentGuardrails:
 
     def __post_init__(self) -> None:
         """兼容旧 guardrails 字段，自动补齐统一权限配置。"""
+
+        filesystem_scope = self.filesystem_scope or WORKSPACE_DIR
+        expanded_scope = os.path.abspath(os.path.expanduser(filesystem_scope))
+        if expanded_scope == os.path.abspath(os.sep):
+            expanded_scope = WORKSPACE_DIR
+        object.__setattr__(self, "filesystem_scope", expanded_scope)
 
         profile = self.permission_profile
         if profile == UnifiedPermissionProfile():

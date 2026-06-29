@@ -12,6 +12,7 @@ from typing import AsyncGenerator
 
 from agentscope.message import UserMsg
 
+from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.completion import (
     emit_failed_startup_run,
     finalize_failed_leader_run,
@@ -19,6 +20,9 @@ from src.server.routes.chat.completion import (
 )
 from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
 from src.server.routes.chat.models import ChatMessage, ChatModelCacheRun
+from src.server.routes.chat.plan_mode.manager import PlanModeManager
+from src.server.routes.chat.plan_mode.middleware import PlanModeMiddleware
+from src.server.routes.chat.plan_mode.tools import build_plan_mode_tools
 from src.server.routes.chat.team_runtime import (
     TeamRuntimeState,
     prepare_leader_with_team_runtime,
@@ -31,6 +35,25 @@ from src.server.routes.chat.runtime_builder import (
     create_main_agent_from_spec,
 )
 from src.server.routes.chat.trace_recorder import _make_fallback_trace_recorder
+
+
+def _build_plan_mode_runtime_parts(
+    ctx: ChatRunContext,
+    run_data: ChatMessage,
+) -> tuple[PlanModeManager, str, list[object], list[object]]:
+    """构造 Plan Mode middleware 和控制工具。"""
+
+    manager = PlanModeManager(
+        session_id=ctx.session_id,
+        run_id=current_chat_background_run_id() or "",
+        agent_id=ctx.agent_id,
+        agent_name=ctx.agent_name,
+        team_id=run_data.team_id,
+        persist=ctx.persist_run,
+    )
+    tools = build_plan_mode_tools(manager)
+    middlewares = [PlanModeMiddleware(manager)]
+    return manager, "plan-mode-v1", tools, middlewares
 
 
 async def execute_react_runtime(
@@ -66,6 +89,12 @@ async def execute_react_runtime(
             system_prompt = team_state.leader_system_prompt
             worker_outputs = team_state.worker_reports
 
+        (
+            plan_mode_manager,
+            runtime_features_cache_key,
+            extra_tools,
+            middlewares,
+        ) = _build_plan_mode_runtime_parts(ctx, run_data)
         main_agent_spec = build_main_agent_runtime_spec(
             agent_id=ctx.agent_id,
             session_id=ctx.session_id,
@@ -79,6 +108,9 @@ async def execute_react_runtime(
             knowledge_tools=ctx.knowledge_tools,
             runtime_tool_scope=ctx.runtime_tool_scope,
             guardrail_cache_key=_guardrail_cache_key(ctx.guardrails),
+            runtime_features_cache_key=runtime_features_cache_key,
+            extra_tools=extra_tools,
+            middlewares=middlewares,
         )
         agent = create_main_agent_from_spec(
             main_agent_spec,
@@ -132,6 +164,7 @@ async def execute_react_runtime(
             stream_scope=stream_scope,
             skill_runs=ctx.skill_runs,
             team_activities=ctx.team_activities,
+            plan_mode_manager=plan_mode_manager,
         ):
             yield leader_event
         active_skill_run = leader_stream_state.active_skill_run

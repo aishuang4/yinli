@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 from src.server.routes.chat.background_runs import (
@@ -22,6 +23,9 @@ from src.server.routes.chat.intent_router import (
 from src.server.routes.chat.models import ChatMessage, ChatTeamActivity, ChatTeamMemberPayload, ChatToolRun
 from src.server.routes.chat.prompts import build_worker_assignment_text
 from src.server.routes.chat.runtime import _permission_mode_for_guardrails
+from src.agents.factory import _safe_workspace_dir
+from src.agents.runtime_types import WORKSPACE_DIR
+from src.storage.database import _normalize_guardrails
 from src.server.routes.chat.runtime_builder import (
     RuntimeModelConfig,
     build_main_agent_runtime_spec,
@@ -524,6 +528,29 @@ def test_unified_permission_profile_maps_legacy_bypass_to_trusted_tools():
 
     assert profile.tool_policy == "trusted_tools"
     assert profile.decide(ResourceType.TOOL, PermissionAction.READ) == PermissionDecision.ALLOW
+
+
+def test_default_workspace_dir_is_project_root_not_user_home():
+    """默认 LocalWorkspace 应收窄到项目根，避免 Glob/Grep 扫用户主目录。"""
+
+    assert WORKSPACE_DIR.endswith("agent-workstation")
+    assert WORKSPACE_DIR != str(Path.home())
+
+
+def test_legacy_root_filesystem_scope_maps_to_project_workspace():
+    """历史默认 filesystem_scope='/' 不应被映射到用户主目录。"""
+
+    guardrails = AgentGuardrails(filesystem_scope="/")
+
+    assert _safe_workspace_dir(guardrails) == WORKSPACE_DIR
+
+
+def test_storage_normalizes_legacy_root_filesystem_scope():
+    """历史库中保存的 '/' 读出时也展示为项目根目录。"""
+
+    guardrails = _normalize_guardrails({"filesystem_scope": "/"})
+
+    assert guardrails["filesystem_scope"] == WORKSPACE_DIR
 
 
 def test_unified_permission_profile_denies_write_in_read_only():
