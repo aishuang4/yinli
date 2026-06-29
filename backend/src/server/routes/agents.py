@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import uuid
 
 from src.agents.factory import invalidate_agent
+from src.agents.runtime_types import WORKSPACE_DIR
 from src.config.runtime_settings import get_current_model_options
 from src.storage.database import (
     delete_agent as db_delete_agent,
@@ -49,7 +50,7 @@ class ModelConfig(BaseModel):
 
 class Guardrails(BaseModel):
     """安全边界配置"""
-    filesystem_scope: str = Field(default="/", description="文件系统访问范围")
+    filesystem_scope: str = Field(default=WORKSPACE_DIR, description="文件系统访问范围")
     shell_blacklist: list[str] = Field(default_factory=lambda: ["rm -rf /", "sudo"], description="Shell 命令黑名单")
     network_enabled: bool = Field(default=True, description="是否允许网络访问")
     human_approval: bool = Field(default=False, description="是否启用人工审批")

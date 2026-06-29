@@ -66,12 +66,17 @@ async def stream_leader_agent_reply(
     stream_scope: str,
     skill_runs: list[ChatSkillRun],
     team_activities: list[ChatTeamActivity],
+    plan_mode_manager: object | None = None,
 ) -> AsyncGenerator[str, None]:
     """消费 Leader AgentScope 事件流，并处理 HITL / clarification 早停。"""
 
     async for event in agent.reply_stream(user_msg):
         event_data = event.model_dump(mode="json")
         event_type = event_data.pop("type", "UNKNOWN")
+        if plan_mode_manager is not None:
+            for runtime_event in plan_mode_manager.drain_runtime_events():
+                state.runtime_events.append(runtime_event)
+                yield _sse_event("RUNTIME_EVENT", runtime_event)
         if _is_final_answer_tool_event(event_type, event_data, state):
             if event_type == "TOOL_CALL_START":
                 state.final_answer_started = True

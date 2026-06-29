@@ -137,7 +137,7 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
 
 /** 默认安全边界 */
 export const DEFAULT_GUARDRAILS: Guardrails = {
-  filesystemScope: '/',
+  filesystemScope: '',
   shellBlacklist: ['rm -rf /', 'sudo'],
   networkEnabled: true,
   humanApproval: false,

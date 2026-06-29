@@ -19,7 +19,7 @@ from agentscope.permission import PermissionMode
 
 from src.agents.factory import get_or_create_agent
 from src.config.runtime_settings import MODEL_PROVIDERS, get_effective_model_settings
-from src.server.routes.agents import AgentCreate, AgentResponse, Guardrails, ModelConfig, PlanConfig, create_agent
+from src.server.routes.agents import AgentCreate, AgentResponse, Guardrails, ModelConfig, create_agent
 from src.server.routes.mcp import _mcp_servers
 from src.server.routes.skills import _skills
 from src.server.routes.teams import TeamCreate, TeamRecord, create_team
@@ -58,7 +58,6 @@ class BuilderAgentDraft(BaseModel):
     description: str = ""
     system_prompt: str = Field(default="", alias="systemPrompt")
     model_config_data: ModelConfig = Field(default_factory=ModelConfig, alias="modelConfig")
-    plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig")
     mcp_tools: list[str] = Field(default_factory=list, alias="mcpTools")
     skills: list[str] = Field(default_factory=list)
     callable_agent_refs: list[str] = Field(default_factory=list, alias="callableAgentRefs")
@@ -143,7 +142,6 @@ async def apply_agent_team(data: BuilderApplyRequest) -> BuilderApplyResponse:
             description=draft.description,
             system_prompt=draft.system_prompt or _default_agent_prompt(draft.name, draft.description),
             modelConfig=draft.model_config_data,
-            planConfig=draft.plan_config,
             mcpTools=draft.mcp_tools,
             skills=draft.skills,
             callableAgents=[],
@@ -267,14 +265,6 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
                 fallback=runtime_settings.fallback_models[:3] or ["deepseek-reasoner"],
                 temperature=0.7,
                 max_tokens=4096,
-            ),
-            planConfig=PlanConfig(
-                enabled=False,
-                mode="structured",
-                maxSteps=6,
-                requirePlanBeforeTools=False,
-                requireUserApproval=False,
-                allowReplanning=False,
             ),
             mcpTools=[item.id for item in resolved_tools if item.id],
             skills=[item.id for item in resolved_skills if item.id],

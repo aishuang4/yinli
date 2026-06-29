@@ -19,9 +19,10 @@ from src.config.settings import settings
 _lock = RLock()
 _initialized = False
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = BACKEND_ROOT.parent
 
 DEFAULT_GUARDRAILS = {
-    "filesystem_scope": "/",
+    "filesystem_scope": str(PROJECT_ROOT),
     "shell_blacklist": ["rm -rf /", "sudo"],
     "network_enabled": True,
     "human_approval": False,
@@ -33,13 +34,22 @@ DEFAULT_GUARDRAILS = {
     "timeout_seconds": 300,
 }
 
+
+def _normalize_guardrails(data: dict[str, Any]) -> dict[str, Any]:
+    """归一化历史 guardrails 默认值，避免旧 '/' 继续暴露给前端。"""
+
+    normalized = {**DEFAULT_GUARDRAILS, **data}
+    if str(normalized.get("filesystem_scope") or "").strip() == "/":
+        normalized["filesystem_scope"] = str(PROJECT_ROOT)
+    return normalized
+
 DEFAULT_PLAN_CONFIG = {
-    "enabled": True,
+    "enabled": False,
     "mode": "structured",
     "maxSteps": 6,
-    "requirePlanBeforeTools": True,
+    "requirePlanBeforeTools": False,
     "requireUserApproval": False,
-    "allowReplanning": True,
+    "allowReplanning": False,
 }
 
 DEFAULT_MODEL_CONFIG = {
@@ -618,7 +628,7 @@ def list_agents() -> list[dict[str, Any]]:
                 else DEFAULT_PLAN_CONFIG
             ),
             "guardrails": (
-                {**DEFAULT_GUARDRAILS, **guardrails}
+                _normalize_guardrails(guardrails)
                 if isinstance((guardrails := _loads(row["guardrails"], {})), dict)
                 else DEFAULT_GUARDRAILS
             ),
