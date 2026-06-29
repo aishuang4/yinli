@@ -1,5 +1,7 @@
 import asyncio
 
+from src.server.routes.chat.handlers import sessions
+from src.server.routes.chat.models import StoredChatMessage
 from src.server.routes.chat.plan_mode.approval import approve_plan, deny_plan
 from src.server.routes.chat.plan_mode.manager import PlanModeManager
 from src.server.routes.chat.plan_mode.middleware import PlanModeMiddleware
@@ -121,3 +123,44 @@ def test_manager_loads_approved_plan_for_build_mode_prompt():
     assert "BUILD mode is active" in prompt
     assert "# 计划" in prompt
     assert "修改代码" in prompt
+
+
+def test_history_synthesizes_waiting_plan_message(monkeypatch):
+    """历史消息缺少 assistant 收尾时，也应补回等待审批的 Plan 块。"""
+
+    monkeypatch.setattr(
+        sessions,
+        "list_session_plans",
+        lambda session_id: [{
+            "id": "plan-1",
+            "runId": "run-1",
+            "sessionId": session_id,
+            "agentId": "agent-1",
+            "teamId": "",
+            "title": "测试计划",
+            "goal": "验证刷新后可审批",
+            "status": "waiting_approval",
+            "markdown": "## Plan\n- 读取文件",
+            "createdAt": "2026-06-29T00:00:00+00:00",
+            "updatedAt": "2026-06-29T00:00:01+00:00",
+        }],
+        raising=False,
+    )
+
+    messages = sessions._normalize_history_messages(
+        "session-1",
+        [
+            StoredChatMessage(
+                id="user-1",
+                role="user",
+                content="请进入 Plan Mode",
+                created_at="2026-06-29T00:00:00+00:00",
+            ),
+        ],
+    )
+
+    synthetic = messages[-1]
+    assert synthetic.id == "plan-waiting-plan-1"
+    assert synthetic.role == "assistant"
+    assert synthetic.runtime_events[0]["type"] == "PLAN_WAITING_APPROVAL"
+    assert synthetic.runtime_events[0]["payload"]["planId"] == "plan-1"

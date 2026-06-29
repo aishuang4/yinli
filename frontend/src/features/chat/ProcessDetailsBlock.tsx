@@ -315,10 +315,26 @@ function PlanModeRuntimeBlock({
   onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
 }) {
   const latest = events[events.length - 1];
-  const markdown = typeof latest.payload.markdown === 'string' ? latest.payload.markdown : '';
-  const planFile = typeof latest.payload.planFile === 'string' ? latest.payload.planFile : '';
-  const status = latest.status || latest.type;
-  const waitingApproval = latest.type === RUNTIME_EVENT_TYPES.PLAN_WAITING_APPROVAL;
+  const latestPlanId = String(latest.payload.planId || '');
+  const relatedEvents = latestPlanId
+    ? events.filter((event) => String(event.payload.planId || '') === latestPlanId)
+    : events;
+  const latestRelated = relatedEvents[relatedEvents.length - 1] || latest;
+  const waitingEvent = [...relatedEvents].reverse().find((event) => (
+    event.type === RUNTIME_EVENT_TYPES.PLAN_WAITING_APPROVAL
+  ));
+  const terminalEvent = [...relatedEvents].reverse().find((event) => (
+    event.type === RUNTIME_EVENT_TYPES.PLAN_APPROVED ||
+    event.type === RUNTIME_EVENT_TYPES.PLAN_DENIED
+  ));
+  const markdownEvent = [...relatedEvents].reverse().find((event) => (
+    typeof event.payload.markdown === 'string' && event.payload.markdown
+  )) || latestRelated;
+  const markdown = typeof markdownEvent.payload.markdown === 'string' ? markdownEvent.payload.markdown : '';
+  const planFile = typeof latestRelated.payload.planFile === 'string' ? latestRelated.payload.planFile : '';
+  const waitingApproval = Boolean(waitingEvent && !terminalEvent);
+  const actionEvent = waitingEvent || latestRelated;
+  const status = terminalEvent?.status || (waitingApproval ? 'waiting' : latestRelated.status || latestRelated.type);
 
   return (
     <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
@@ -326,7 +342,7 @@ function PlanModeRuntimeBlock({
         <div className="flex min-w-0 items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-              {latest.type}
+              {latestRelated.type}
             </div>
             {planFile && (
               <div className="mt-1 truncate font-mono text-xs text-[var(--color-text-tertiary)]">
@@ -347,7 +363,7 @@ function PlanModeRuntimeBlock({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => void onApprovePlan?.(latest)}
+              onClick={() => void onApprovePlan?.(actionEvent)}
               className="inline-flex h-8 items-center gap-1.5 rounded-md border border-transparent bg-[var(--color-primary)] px-3 text-xs font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               disabled={!onApprovePlan}
             >
@@ -356,7 +372,7 @@ function PlanModeRuntimeBlock({
             </button>
             <button
               type="button"
-              onClick={() => void onDenyPlan?.(latest)}
+              onClick={() => void onDenyPlan?.(actionEvent)}
               className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 text-xs font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
               disabled={!onDenyPlan}
             >
