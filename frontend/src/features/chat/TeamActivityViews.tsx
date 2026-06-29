@@ -386,5 +386,6 @@ function getTeamActivityStatusText(status: TeamActivityInfo['status']) {
   if (status === 'waiting') return '等待确认';
   if (status === 'completed') return '完成';
   if (status === 'failed') return '失败';
+  if (status === 'skipped') return '跳过';
   return '等待';
 }

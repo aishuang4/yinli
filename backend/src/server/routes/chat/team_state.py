@@ -11,6 +11,7 @@ from src.server.routes.chat.models import (
     ChatTeamMemberPayload,
     ChatToolRun,
 )
+from src.server.routes.chat.prompts import build_worker_assignment_text
 from src.server.routes.chat.store import _make_session_title
 
 
@@ -100,6 +101,7 @@ def _build_team_activities(
         if member.role == "leader" or member.agent_id == leader_agent_id:
             continue
         status = "running" if member.role == "worker" else "pending"
+        assignment = build_worker_assignment_text(member)
         activities.append(ChatTeamActivity(
             id=f"team-{uuid.uuid4().hex}",
             agentId=member.agent_id,
@@ -107,7 +109,7 @@ def _build_team_activities(
             role=member.role,
             status=status,
             task=_make_member_task(member, summary),
-            detail=member.description or "等待 Leader 协调上下文。",
+            detail=assignment or "等待 Leader 协调上下文。",
             output="",
             thinking="",
             executionMode=member.execution_mode,
@@ -126,9 +128,7 @@ def _make_member_task(member: ChatTeamMemberPayload, summary: str) -> str:
     """Generate a compact task label for a Team member."""
     if member.role == "leader":
         return f"作为 Leader 汇总「{summary}」"
-    if member.description:
-        return f"按角色分析「{summary}」"
-    return f"处理分配任务「{summary}」"
+    return f"{build_worker_assignment_text(member)} 任务：「{summary}」"
 
 
 def _set_team_activity_status(

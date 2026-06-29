@@ -63,6 +63,7 @@ async def stream_leader_agent_reply(
     model_name: str,
     guardrails: object,
     message: str,
+    stream_scope: str,
     skill_runs: list[ChatSkillRun],
     team_activities: list[ChatTeamActivity],
 ) -> AsyncGenerator[str, None]:
@@ -77,7 +78,7 @@ async def stream_leader_agent_reply(
                 yield runtime_event_sse(
                     "AGENT_FINAL_ANSWER_STARTED",
                     session_id=session_id,
-                    scope="leader",
+                    scope=stream_scope,
                     source="runtime",
                     source_event_type=event_type,
                     agent_id=agent_id,
@@ -101,7 +102,7 @@ async def stream_leader_agent_reply(
             event_type=event_type,
             event_data=event_data,
             persist=persist,
-            scope="leader",
+            scope=stream_scope,
             agent_id=agent_id,
             agent_name=agent_name,
         )
@@ -110,7 +111,7 @@ async def stream_leader_agent_reply(
             event_type=event_type,
             event_data=event_data,
             persist=persist,
-            scope="leader",
+            scope=stream_scope,
             agent_id=agent_id,
             agent_name=agent_name,
             guardrails=guardrails,
@@ -127,7 +128,7 @@ async def stream_leader_agent_reply(
             event_type=event_type,
             event_data=event_data,
             persist=persist,
-            scope="leader",
+            scope=stream_scope,
             agent_id=agent_id,
             agent_name=agent_name,
             team_activity_id=None,
@@ -180,7 +181,7 @@ async def stream_leader_agent_reply(
             yield runtime_event_sse(
                 "AGENT_WAITING_HUMAN",
                 session_id=session_id,
-                scope="leader",
+                scope=stream_scope,
                 source="runtime",
                 source_event_type=event_type,
                 agent_id=agent_id,
@@ -202,7 +203,7 @@ async def stream_leader_agent_reply(
                 yield runtime_event_sse(
                     "AGENT_FINAL_ANSWER_DELTA",
                     session_id=session_id,
-                    scope="leader",
+                    scope=stream_scope,
                     source="runtime",
                     source_event_type=event_type,
                     agent_id=agent_id,
@@ -217,7 +218,7 @@ async def stream_leader_agent_reply(
                 yield runtime_event_sse(
                     "AGENT_REASONING_DELTA",
                     session_id=session_id,
-                    scope="leader",
+                    scope=stream_scope,
                     source="runtime",
                     source_event_type=event_type,
                     agent_id=agent_id,
@@ -238,7 +239,7 @@ async def stream_leader_agent_reply(
                 yield runtime_event_sse(
                     "AGENT_FINAL_ANSWER_DELTA",
                     session_id=session_id,
-                    scope="leader",
+                    scope=stream_scope,
                     source="runtime",
                     source_event_type="TEXT_BLOCK_DELTA",
                     agent_id=agent_id,
@@ -271,7 +272,7 @@ async def stream_leader_agent_reply(
         runtime_event = runtime_event_from_agentscope_sse(
             event_type,
             session_id=session_id,
-            scope="leader",
+            scope=stream_scope,
             agent_id=agent_id,
             agent_name=agent_name,
             event_data=event_data,
@@ -303,7 +304,7 @@ async def stream_leader_agent_reply(
             session_id=session_id,
             event_type="CLARIFICATION_REQUIRED",
             persist=persist,
-            scope="leader",
+            scope=stream_scope,
             agent_id=agent_id,
             agent_name=agent_name,
             status="waiting",
@@ -329,7 +330,7 @@ async def stream_leader_agent_reply(
         yield runtime_event_sse(
             "CLARIFICATION_WAITING",
             session_id=session_id,
-            scope="leader",
+            scope=stream_scope,
             agent_id=agent_id,
             agent_name=agent_name,
             status="waiting",

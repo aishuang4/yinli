@@ -481,8 +481,8 @@ export function AgentTeamPage() {
           <TeamDetailPanel
             team={selectedTeam}
             agents={agents}
-            onUpdate={async (members) => {
-              await updateTeam(selectedTeam.id, { members });
+            onUpdate={async (payload) => {
+              await updateTeam(selectedTeam.id, payload);
             }}
             onDelete={async () => {
               await deleteTeam(selectedTeam.id);
@@ -875,22 +875,24 @@ function TeamDetailPanel({
 }: {
   team: TeamRecord;
   agents: Agent[];
-  onUpdate: (members: TeamMember[]) => Promise<void>;
+  onUpdate: (payload: { members: TeamMember[]; workerSelectorPrompt: string }) => Promise<void>;
   onDelete: () => Promise<void>;
 }) {
   const agentNameById = new Map(agents.map((agent) => [agent.id, agent.name]));
   const [memberDrafts, setMemberDrafts] = useState<TeamMember[]>(team.members);
+  const [workerSelectorPrompt, setWorkerSelectorPrompt] = useState(team.workerSelectorPrompt || '');
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(team.members[0]?.id || null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setMemberDrafts(team.members);
+    setWorkerSelectorPrompt(team.workerSelectorPrompt || '');
     setSelectedMemberId((current) => (
       current && team.members.some((member) => member.id === current)
         ? current
         : team.members[0]?.id || null
     ));
-  }, [team.id, team.members]);
+  }, [team.id, team.members, team.workerSelectorPrompt]);
 
   const workerMembers = memberDrafts.filter((member) => member.role === 'worker');
   const selectedMember = memberDrafts.find((member) => member.id === selectedMemberId) || null;
@@ -951,7 +953,10 @@ function TeamDetailPanel({
   const saveTeamMembers = async () => {
     setSaving(true);
     try {
-      await onUpdate(memberDrafts);
+      await onUpdate({
+        members: memberDrafts,
+        workerSelectorPrompt,
+      });
     } finally {
       setSaving(false);
     }
@@ -991,6 +996,22 @@ function TeamDetailPanel({
           disabled={addableAgentOptions.length === 0}
           style={{ width: '100%' }}
         />
+      </div>
+
+      <div className="mb-4 rounded-md bg-[var(--color-bg-secondary)] p-3 shadow-sm">
+        <label className="mb-2 flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
+          <Sparkles size={13} />
+          Worker 自动选择提示词
+        </label>
+        <Input.TextArea
+          value={workerSelectorPrompt}
+          onChange={(event) => setWorkerSelectorPrompt(event.target.value)}
+          rows={8}
+          placeholder="控制系统内置 TeamWorkerSelector 如何选择本轮参与的 Worker"
+        />
+        <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
+          该提示词只注入系统内置 Worker Selector Agent，不会赋予工具、MCP 或 Skills 权限。
+        </div>
       </div>
 
       <div className="grid gap-3">

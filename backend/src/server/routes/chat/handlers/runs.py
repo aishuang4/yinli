@@ -107,6 +107,7 @@ def _build_rerun_chat_message(source_run) -> ChatMessage:
             team_id=team.id,
             team_name=team.name,
             team_members=[member.model_dump(by_alias=True) for member in team.members],
+            worker_selector_prompt=team.worker_selector_prompt,
             images=images,
         )
 

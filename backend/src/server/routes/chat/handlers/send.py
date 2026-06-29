@@ -16,10 +16,10 @@ from src.server.routes.chat.background_runs import (
     start_chat_background_run,
     subscribe_chat_background_run,
 )
-from src.server.routes.chat.main_agent_flow import execute_main_agent_flow
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.router import router
 from src.server.routes.chat.run_context import build_chat_run_context
+from src.server.routes.chat.runtime_dispatcher import execute_chat_runtime
 from src.server.routes.chat.startup_checks import get_startup_error
 
 
@@ -56,7 +56,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         persist_user_message_and_trace(ctx, run_data)
         async for start_event in emit_start_events(ctx, run_data):
             yield start_event
-        if ctx.intent_route.require_clarification and ctx.intent_route.clarification:
+        if not ctx.readiness.ready and ctx.readiness.clarification:
             async for clarification_event in emit_clarification_if_required(ctx):
                 yield clarification_event
             return
@@ -78,7 +78,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
                 yield failure_event
             return
 
-        async for main_event in execute_main_agent_flow(ctx=ctx, run_data=run_data):
+        async for main_event in execute_chat_runtime(ctx=ctx, run_data=run_data):
             yield main_event
 
     run = await start_chat_background_run(

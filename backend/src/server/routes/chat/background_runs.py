@@ -583,6 +583,8 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
         scope = str(data.get("scope") or "")
         agent_name = str(data.get("agentName") or data.get("agentId") or "")
         payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+        if runtime_type == "AGENT_FINAL_ANSWER_DELTA":
+            result_parts.append(str(payload.get("delta") or ""))
 
         if runtime_type in RUNTIME_WAITING_TYPES:
             progress = max(progress, 65)
@@ -597,7 +599,7 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
         elif runtime_type == "TOOL_RESULT_COMPLETED":
             progress = max(progress, 55)
             current_stage = "工具结果已返回"
-        elif runtime_type == "AGENT_OUTPUT_DELTA":
+        elif runtime_type in {"AGENT_OUTPUT_DELTA", "AGENT_FINAL_ANSWER_DELTA"}:
             progress = max(progress, 70)
             current_stage = "正在生成回复"
         elif runtime_type == "TEAM_WORKER_STARTED":
@@ -606,6 +608,9 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
         elif runtime_type == "TEAM_WORKER_COMPLETED":
             progress = max(progress, 75)
             current_stage = f"{agent_name or 'Worker'} 已完成"
+        elif runtime_type == "TEAM_WORKER_REPORTED":
+            progress = max(progress, 72)
+            current_stage = f"{agent_name or 'Worker'} 已提交报告"
         elif runtime_type == "TEAM_LEADER_SYNTHESIZING":
             progress = max(progress, 85)
             current_stage = "Leader 正在汇总"

@@ -160,6 +160,8 @@ def _should_merge_runtime_delta(previous: dict[str, Any], event: dict[str, Any])
         return False
     if event.get("type") not in {
         "AGENT_OUTPUT_DELTA",
+        "AGENT_REASONING_DELTA",
+        "AGENT_FINAL_ANSWER_DELTA",
         "AGENT_THINKING",
         "TOOL_CALL_DELTA",
         "TOOL_RESULT_DELTA",

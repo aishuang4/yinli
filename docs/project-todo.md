@@ -11,7 +11,8 @@
 - [x] Improve high-frequency Chat and Team workflows before adding marketplace-style features.
 - [x] 拆分前置意图路由，降低主 Agent 的 Skill、Team 选择和工具裁剪压力。
   - 实现于 2026-06-23：新增 `docs/pre-agent-intent-router-design.md`、`intent_router.py`、`runtime_builder.py`、`orchestration.py`、`leader_stream.py`、`completion.py`，将 Skill/Team/ToolScope/Clarification 前置路由和 runtime 组装从 `send.py` 拆出。
-  - 当前 `IntentRoute` 会写入 `INTENT_ROUTE` trace；Team worker 选择为规则优先、小模型兜底；主 Agent 工具注入受 `RuntimeToolScope` 裁剪。
+  - 更新于 2026-06-29：新增 `readiness_gate.py` 和系统内置 `ReadinessAgent`，将“信息是否足够”从 architecture router 拆出。`clarification` 不再是 `runtime.kind`，只作为进入 Runtime 前的等待补充状态；`IntentRoute` 继续写入 `INTENT_ROUTE` trace。
+  - 当前 Team worker 选择已下沉到 Team Runtime，模型选择优先，解析失败或调用异常时使用全部 Worker 兜底；主 Agent 工具注入受 `RuntimeToolScope` 裁剪。
 - [x] 下线旧 Plan Runtime 与 Subagent Runtime。
   - 实现于 2026-06-26：删除旧 Plan 工具/路由和 Subagent 工具运行时，前端隐藏 Plan 配置入口。`planConfig`、`planRuns`、`callableAgents`、`subagentCalls` 等字段仅作为历史兼容保留，不再驱动 Chat 执行。
 - [ ] 收尾 Chat runtime 拆分的剩余边界。

@@ -19,6 +19,7 @@ export interface TeamRecord {
   name: string;
   description: string;
   leaderAgentId: string;
+  workerSelectorPrompt: string;
   members: TeamMember[];
   status: TeamStatus;
   createdAt: string;
@@ -30,6 +31,7 @@ export interface TeamCreatePayload {
   description?: string;
   leaderAgentId: string;
   workerAgentIds: string[];
+  workerSelectorPrompt?: string;
 }
 
 export interface TeamUpdatePayload {
@@ -37,6 +39,7 @@ export interface TeamUpdatePayload {
   description?: string;
   leaderAgentId?: string;
   workerAgentIds?: string[];
+  workerSelectorPrompt?: string;
   members?: TeamMember[];
   status?: TeamStatus;
 }

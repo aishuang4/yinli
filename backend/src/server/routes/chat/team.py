@@ -1,61 +1,43 @@
-"""Team worker 并发编排 — 依赖调度、ReAct 执行、HITL 暂停与 SSE 事件合流。"""
+"""AgentScope-style Team worker 编排。
+
+本模块仍运行在工作台自己的 SQLite Team 配置之上，但语义向 AgentScope
+TeamCreate / AgentCreate / TeamSay 靠拢：
+- Leader 负责 dispatch。
+- Worker 在独立 ReAct 循环中执行。
+- Worker 完成后的最终输出视为发送给 Leader 的 TeamSay report。
+- Leader 只基于 worker reports 汇总最终答案。
+"""
 
 import asyncio
 from typing import AsyncGenerator
 
-from agentscope.message import UserMsg
-
-from src.agents.factory import AgentModelOptions, get_or_create_agent
-from src.config.runtime_settings import get_effective_model_settings
-from src.server.routes.agents import get_registered_agent
-from src.server.routes.skills import (
-    build_skill_system_prompt_from_skills,
-    select_relevant_skills,
-)
-
-from src.server.routes.chat.helpers import _sse_event, _trim_text
-from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload
+from src.server.routes.chat.helpers import _sse_event
 from src.server.routes.chat.models import (
-    HITL_EVENT_TYPES,
     ChatMessage,
     ChatSkillRun,
     ChatTeamActivity,
     ChatTeamMemberPayload,
-    ChatToolRun,
 )
-from src.server.routes.chat.prompts import (
-    _build_runtime_context_prompt,
-    _build_worker_system_prompt,
-    _build_worker_user_message,
-)
-from src.server.routes.chat.runtime import (
-    _build_runtime_guardrails,
-    _build_runtime_knowledge_tools,
-    _build_runtime_mcp_servers,
-    _build_user_content,
-    _guardrail_cache_key,
-    _permission_mode_for_guardrails,
-)
-from src.server.routes.chat.runtime_events import (
-    runtime_event_from_agentscope_sse,
-    runtime_event_sse,
+from src.server.routes.chat.runtime_events import runtime_event_sse
+from src.server.routes.chat.team_scheduler import (
+    TeamSchedulerState,
+    decide_worker_schedule,
 )
 from src.server.routes.chat.team_state import (
+    _expand_selected_workers_with_dependencies,
     _find_team_activity,
     _member_dependency_ids,
     _member_names,
     _replace_team_activity,
-    _update_worker_tool_calls,
 )
-from src.server.routes.chat.trace_recorder import (
-    _attach_provider_cache_usage,
-    build_tool_artifact_runtime_event,
-    _make_fallback_trace_recorder,
-    _record_agent_scope_event,
-    _record_permission_decision,
-    _record_run_event,
-    _record_tool_execution_artifacts,
-    _record_workspace_event,
+from src.server.routes.chat.team_worker_runtime import (
+    TeamWorkerRuntimeRequest,
+    run_team_worker,
+)
+from src.server.routes.chat.team_worker_selector import (
+    WORKER_SELECTION_PARSE_FAILED_REASON,
+    filter_team_members_for_runtime,
+    select_team_workers_for_route,
 )
 
 
@@ -69,6 +51,20 @@ async def _run_team_workers(
     skill_runs: list[ChatSkillRun],
 ) -> AsyncGenerator[str, None]:
     """Run worker Agents concurrently and merge their SSE events."""
+    runtime_members = await _select_runtime_team_members(
+        data=data,
+        model_name=model_name,
+    )
+    skipped_events = _mark_unselected_workers_skipped(
+        all_members=data.team_members,
+        runtime_members=runtime_members,
+        team_activities=team_activities,
+        session_id=session_id,
+    )
+    for skipped_event in skipped_events:
+        yield skipped_event
+    data = data.model_copy(update={"team_members": runtime_members})
+
     workers = [
         member
         for member in data.team_members
@@ -80,436 +76,37 @@ async def _run_team_workers(
         )
     ]
     if not workers:
+        yield _sse_event("TEAM_ACTIVITY", {
+            "activities": [item.model_dump(by_alias=True) for item in team_activities],
+        })
         return
 
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     pause_event = asyncio.Event()
 
-    for member in workers:
-        activity = _find_team_activity(team_activities, member.agent_id)
-        if activity:
-            waiting_for = [
-                dep
-                for dep in _member_dependency_ids(member, workers)
-                if dep in {worker.agent_id for worker in workers}
-            ]
-            _replace_team_activity(
-                team_activities,
-                        activity.model_copy(update={
-                            "status": "pending" if waiting_for else "running",
-                            "execution_mode": member.execution_mode,
-                            "wait_reason": (
-                                f"等待依赖 Worker 完成：{', '.join(_member_names(waiting_for, workers))}"
-                                if waiting_for
-                                else ""
-                            ),
-                            "detail": (
-                                f"等待依赖 Worker 完成：{', '.join(_member_names(waiting_for, workers))}"
-                                if waiting_for
-                        else activity.detail
-                    ),
-                }),
-            )
-            yield runtime_event_sse(
-                "TEAM_WORKER_BLOCKED_BY_DEPENDENCY" if waiting_for else "TEAM_WORKER_QUEUED",
-                session_id=session_id,
-                scope="worker",
-                agent_id=member.agent_id,
-                agent_name=member.name,
-                team_activity_id=activity.id,
-                status="pending" if waiting_for else "running",
-                reason="waiting_dependency" if waiting_for else "",
-                payload={
-                    "executionMode": member.execution_mode,
-                    "dependsOn": waiting_for,
-                },
-            )
+    for event in _initialize_worker_states(
+        workers=workers,
+        team_activities=team_activities,
+        session_id=session_id,
+    ):
+        yield event
 
     yield _sse_event("TEAM_ACTIVITY", {
         "activities": [item.model_dump(by_alias=True) for item in team_activities],
     })
 
-    async def run_worker(
-        member: ChatTeamMemberPayload,
-        dependency_outputs: list[dict[str, str]],
-    ) -> None:
-        activity = _find_team_activity(team_activities, member.agent_id)
-        if activity is None:
-            return
-        worker_config = get_registered_agent(member.agent_id)
-        runtime_model_settings = get_effective_model_settings()
-        worker_name = worker_config.name if worker_config else member.name
-        worker_prompt = worker_config.system_prompt if worker_config else member.description
-        worker_skill_ids = worker_config.skills if worker_config else []
-        worker_model_config = worker_config.model_config_data if worker_config else None
-        worker_model_options = AgentModelOptions(
-            temperature=worker_model_config.temperature if worker_model_config else None,
-            top_p=worker_model_config.top_p if worker_model_config else None,
-            max_tokens=worker_model_config.max_tokens if worker_model_config else None,
-            max_react_iters=worker_model_config.max_react_iters if worker_model_config else 40,
-        )
-        worker_guardrails = _build_runtime_guardrails(worker_config)
-        worker_mcp_servers = _build_runtime_mcp_servers(worker_config)
-        worker_knowledge_tools = _build_runtime_knowledge_tools(worker_config)
-        worker_skills = select_relevant_skills(worker_skill_ids, data.message)
-        worker_skill_prompt = build_skill_system_prompt_from_skills(worker_skills)
-        worker_runtime_context_prompt = _build_runtime_context_prompt()
-        worker_system_prompt = "\n\n".join(
-            part
-            for part in [
-                worker_prompt or "You are a helpful worker agent.",
-                worker_runtime_context_prompt,
-                _build_worker_system_prompt(data.team_name, data.agent_name, member),
-                worker_skill_prompt,
-            ]
-            if part
-        )
-        worker_cache_key = ",".join(sorted(skill.id for skill in worker_skills))
-        worker_fallback_names = worker_model_config.fallback if worker_model_config else runtime_model_settings.fallback_models
-        worker_fallback_cache_key = ",".join(worker_fallback_names)
-        worker_mcp_cache_key = ",".join(
-            f"{server.name}:{','.join(server.enable_tools)}"
-            for server in worker_mcp_servers
-        )
-        worker_knowledge_cache_key = ",".join(tool.id for tool in worker_knowledge_tools)
-        runtime_worker_id = (
-            f"{member.agent_id}:{session_id}:{model_name}:team-worker:"
-            f"thinking-{data.deep_thinking}:fallbacks-{worker_fallback_cache_key}:"
-            f"skills-{worker_cache_key}:mcp-{worker_mcp_cache_key}:"
-            f"knowledge-{worker_knowledge_cache_key}:"
-            f"guardrails-{_guardrail_cache_key(worker_guardrails)}"
-        )
-        worker_agent = get_or_create_agent(
-            agent_id=runtime_worker_id,
-            name=worker_name,
-            system_prompt=worker_system_prompt,
-            model_name=model_name,
-            fallback_names=worker_fallback_names,
-            thinking_enable=data.deep_thinking,
-            permission_mode=_permission_mode_for_guardrails(worker_guardrails),
-            model_options=worker_model_options,
-            guardrails=worker_guardrails,
-            mcp_servers=worker_mcp_servers,
-            knowledge_tools=worker_knowledge_tools,
-            on_fallback_event=_make_fallback_trace_recorder(
-                session_id=session_id,
-                persist=not data.sandbox,
-                scope="worker",
-                agent_id=member.agent_id,
-                agent_name=worker_name,
-                team_activity_id=activity.id if activity else None,
-            ),
-        )
-        _record_workspace_event(
-            session_id=session_id,
-            persist=not data.sandbox,
-            scope="worker",
-            agent_id=member.agent_id,
-            agent_name=worker_name,
-            team_activity_id=activity.id if activity else None,
-            guardrails=worker_guardrails,
-        )
-        worker_text = ""
-        worker_thinking = ""
-        worker_tool_calls: list[ChatToolRun] = []
-
-        try:
-            worker_msg = UserMsg(
-                name="team_leader",
-                content=_build_user_content(
-                    _build_worker_user_message(data.message, member, dependency_outputs),
-                    data.images,
-                ),
-            )
-            async for event in worker_agent.reply_stream(worker_msg):
-                event_data = event.model_dump(mode="json")
-                event_type = event_data.pop("type", "UNKNOWN")
-                _attach_provider_cache_usage(event_type, event_data)
-                activity = _find_team_activity(team_activities, member.agent_id)
-                _record_agent_scope_event(
-                    session_id=session_id,
-                    event_type=event_type,
-                    event_data=event_data,
-                    persist=not data.sandbox,
-                    scope="worker",
-                    agent_id=member.agent_id,
-                    agent_name=worker_name,
-                    team_activity_id=activity.id if activity else None,
-                )
-                _record_permission_decision(
-                    session_id=session_id,
-                    event_type=event_type,
-                    event_data=event_data,
-                    persist=not data.sandbox,
-                    scope="worker",
-                    agent_id=member.agent_id,
-                    agent_name=worker_name,
-                    team_activity_id=activity.id if activity else None,
-                    guardrails=worker_guardrails,
-                )
-                if event_type in HITL_EVENT_TYPES:
-                    if activity:
-                        _replace_team_activity(
-                            team_activities,
-                            activity.model_copy(update={
-                                "status": "waiting",
-                                "detail": "等待人工确认后继续 Worker ReAct。",
-                                "output": worker_text,
-                                "thinking": worker_thinking,
-                                "tool_calls": worker_tool_calls,
-                            }),
-                        )
-                    interaction = _create_pending_interaction(
-                        interaction_type=event_type,
-                        agent=worker_agent,
-                        session_id=session_id,
-                        agent_id=member.agent_id,
-                        agent_name=worker_name,
-                        model_name=model_name,
-                        reply_id=str(event_data.get("reply_id") or ""),
-                        tool_calls=list(event_data.get("tool_calls") or []),
-                        message=_build_worker_user_message(data.message, member, dependency_outputs),
-                        assistant_text="",
-                        skill_runs=skill_runs,
-                        team_activities=team_activities,
-                        scope="worker",
-                        chat_data=data.model_dump(mode="json"),
-                        leader_system_prompt=leader_system_prompt,
-                        worker_member=member.model_dump(by_alias=True),
-                        worker_text=worker_text,
-                        worker_thinking=worker_thinking,
-                        worker_tool_calls=worker_tool_calls,
-                        persist=not data.sandbox,
-                    )
-                    await queue.put(runtime_event_sse(
-                        "TEAM_WORKER_WAITING_HUMAN",
-                        session_id=session_id,
-                        scope="worker",
-                        source="runtime",
-                        source_event_type=event_type,
-                        agent_id=member.agent_id,
-                        agent_name=worker_name,
-                        team_activity_id=activity.id if activity else None,
-                        status="waiting",
-                        reason="hitl_required",
-                        payload={"interactionId": interaction.id, "interactionType": event_type},
-                    ))
-                    await queue.put(runtime_event_sse(
-                        "AGENT_WAITING_HUMAN",
-                        session_id=session_id,
-                        scope="worker",
-                        source="runtime",
-                        source_event_type=event_type,
-                        agent_id=member.agent_id,
-                        agent_name=worker_name,
-                        team_activity_id=activity.id if activity else None,
-                        status="waiting",
-                        reason="hitl_required",
-                        payload={"interactionId": interaction.id, "interactionType": event_type},
-                    ))
-                    await queue.put(_sse_event("TEAM_ACTIVITY", {
-                        "activities": [item.model_dump(by_alias=True) for item in team_activities],
-                    }))
-                    await queue.put(_sse_event("HITL_REQUIRED", _hitl_payload(interaction)))
-                    pause_event.set()
-                    return
-                if event_type == "TEXT_BLOCK_DELTA":
-                    worker_text += str(event_data.get("delta", ""))
-                    activity = _find_team_activity(team_activities, member.agent_id)
-                    if activity:
-                        _replace_team_activity(
-                            team_activities,
-                            activity.model_copy(update={
-                                "output": worker_text,
-                                "detail": _trim_text(worker_text, 120) or activity.detail,
-                            }),
-                        )
-                elif event_type == "THINKING_BLOCK_DELTA":
-                    worker_thinking += str(event_data.get("delta", ""))
-                    activity = _find_team_activity(team_activities, member.agent_id)
-                    if activity:
-                        _replace_team_activity(
-                            team_activities,
-                            activity.model_copy(update={"thinking": worker_thinking}),
-                        )
-
-                next_tool_calls = _update_worker_tool_calls(
-                    worker_tool_calls,
-                    event_type,
-                    event_data,
-                )
-                if next_tool_calls is not worker_tool_calls:
-                    worker_tool_calls = next_tool_calls
-                    activity = _find_team_activity(team_activities, member.agent_id)
-                    if activity:
-                        _replace_team_activity(
-                            team_activities,
-                            activity.model_copy(update={"tool_calls": worker_tool_calls}),
-                        )
-
-                activity = _find_team_activity(team_activities, member.agent_id)
-                if activity:
-                    _record_tool_execution_artifacts(
-                        session_id=session_id,
-                        event_type=event_type,
-                        event_data=event_data,
-                        persist=not data.sandbox,
-                        scope="worker",
-                        agent_id=member.agent_id,
-                        agent_name=worker_name,
-                        team_activity_id=activity.id,
-                        guardrails=worker_guardrails,
-                        tool_calls=worker_tool_calls,
-                    )
-                    artifact_event = build_tool_artifact_runtime_event(
-                        event_type=event_type,
-                        event_data=event_data,
-                        tool_calls=worker_tool_calls,
-                    )
-                    if artifact_event:
-                        artifact_type, artifact_payload = artifact_event
-                        await queue.put(runtime_event_sse(
-                            artifact_type,
-                            session_id=session_id,
-                            scope="artifact",
-                            source="runtime",
-                            source_event_type=event_type,
-                            agent_id=member.agent_id,
-                            agent_name=worker_name,
-                            team_activity_id=activity.id,
-                            status=str(artifact_payload.get("status") or "completed"),
-                            payload=artifact_payload,
-                        ))
-                    runtime_event = runtime_event_from_agentscope_sse(
-                        event_type,
-                        session_id=session_id,
-                        scope="worker",
-                        agent_id=member.agent_id,
-                        agent_name=worker_name,
-                        team_activity_id=activity.id,
-                        event_data=event_data,
-                    )
-                    if runtime_event:
-                        await queue.put(runtime_event)
-                    await queue.put(_sse_event("TEAM_MEMBER_EVENT", {
-                        "activityId": activity.id,
-                        "agentId": member.agent_id,
-                        "agentName": worker_name,
-                        "role": "worker",
-                        "eventType": event_type,
-                        "event": event_data,
-                    }))
-
-            activity = _find_team_activity(team_activities, member.agent_id)
-            if activity:
-                completed = activity.model_copy(update={
-                    "status": "completed",
-                    "output": worker_text,
-                    "thinking": worker_thinking,
-                    "tool_calls": worker_tool_calls,
-                    "detail": _trim_text(worker_text, 160) or "Worker 已完成本轮 ReAct 循环。",
-                })
-                _replace_team_activity(team_activities, completed)
-                _record_run_event(
-                    session_id=session_id,
-                    event_type="WORKER_COMPLETED",
-                    persist=not data.sandbox,
-                    scope="worker",
-                    agent_id=member.agent_id,
-                    agent_name=worker_name,
-                    team_activity_id=activity.id,
-                    status="completed",
-                    title=f"Worker completed: {worker_name}",
-                    content=_trim_text(worker_text, 1200),
-                    payload={
-                        "toolCallCount": len(worker_tool_calls),
-                        "dependencyCount": len(dependency_outputs),
-                    },
-                )
-                await queue.put(runtime_event_sse(
-                    "TEAM_WORKER_COMPLETED",
-                    session_id=session_id,
-                    scope="worker",
-                    agent_id=member.agent_id,
-                    agent_name=worker_name,
-                    team_activity_id=activity.id,
-                    status="completed",
-                    payload={
-                        "toolCallCount": len(worker_tool_calls),
-                        "outputPreview": _trim_text(worker_text, 240),
-                    },
-                ))
-            await queue.put(_sse_event("TEAM_ACTIVITY", {
-                "activities": [item.model_dump(by_alias=True) for item in team_activities],
-            }))
-        except Exception as exc:
-            activity = _find_team_activity(team_activities, member.agent_id)
-            if activity:
-                _replace_team_activity(
-                    team_activities,
-                    activity.model_copy(update={
-                        "status": "failed",
-                        "detail": f"Worker 执行失败: {exc}",
-                        "output": worker_text,
-                        "thinking": worker_thinking,
-                                "tool_calls": worker_tool_calls,
-                            }),
-                        )
-                activity = _find_team_activity(team_activities, member.agent_id)
-                _record_tool_execution_artifacts(
-                    session_id=session_id,
-                    event_type=event_type,
-                    event_data=event_data,
-                    persist=not data.sandbox,
-                    scope="worker",
-                    agent_id=member.agent_id,
-                    agent_name=worker_name,
-                    team_activity_id=activity.id if activity else None,
-                    guardrails=worker_guardrails,
-                    tool_calls=worker_tool_calls,
-                )
-            _record_run_event(
-                session_id=session_id,
-                event_type="WORKER_FAILED",
-                persist=not data.sandbox,
-                scope="worker",
-                agent_id=member.agent_id,
-                agent_name=worker_name,
-                team_activity_id=activity.id if activity else None,
-                status="failed",
-                title=f"Worker failed: {worker_name}",
-                content=str(exc),
-                payload={"toolCallCount": len(worker_tool_calls)},
-            )
-            await queue.put(runtime_event_sse(
-                "TEAM_WORKER_FAILED",
-                session_id=session_id,
-                scope="worker",
-                agent_id=member.agent_id,
-                agent_name=worker_name,
-                team_activity_id=activity.id if activity else None,
-                status="failed",
-                reason="worker_error",
-                payload={"message": str(exc), "toolCallCount": len(worker_tool_calls)},
-            ))
-            await queue.put(_sse_event("TEAM_ACTIVITY", {
-                "activities": [item.model_dump(by_alias=True) for item in team_activities],
-            }))
-        finally:
-            await queue.put(None)
-
     pending: dict[str, ChatTeamMemberPayload] = {member.agent_id: member for member in workers}
     running: dict[asyncio.Task[None], str] = {}
-    completed_outputs: dict[str, dict[str, str]] = {}
-    failed_workers: set[str] = set()
-    all_worker_ids = {member.agent_id for member in workers}
+    scheduler_state = TeamSchedulerState(
+        pending=pending,
+        all_worker_ids={member.agent_id for member in workers},
+    )
 
     def start_ready_workers() -> None:
         ready: list[ChatTeamMemberPayload] = []
         for member in list(pending.values()):
-            dependencies = _member_dependency_ids(member, workers)
-            invalid_dependencies = [dep for dep in dependencies if dep not in all_worker_ids]
-            if invalid_dependencies:
+            decision = decide_worker_schedule(member=member, workers=workers, state=scheduler_state)
+            if decision.status == "invalid_dependency":
                 pending.pop(member.agent_id, None)
                 activity = _find_team_activity(team_activities, member.agent_id)
                 if activity:
@@ -530,12 +127,11 @@ async def _run_team_workers(
                         team_activity_id=activity.id,
                         status="failed",
                         reason="invalid_dependency",
-                        payload={"dependsOn": invalid_dependencies},
+                        payload={"dependsOn": decision.dependencies},
                     ))
-                failed_workers.add(member.agent_id)
+                scheduler_state.failed_workers.add(member.agent_id)
                 continue
-            failed_dependencies = [dep for dep in dependencies if dep in failed_workers]
-            if failed_dependencies:
+            if decision.status == "upstream_failed":
                 pending.pop(member.agent_id, None)
                 activity = _find_team_activity(team_activities, member.agent_id)
                 if activity:
@@ -543,8 +139,8 @@ async def _run_team_workers(
                         team_activities,
                         activity.model_copy(update={
                             "status": "failed",
-                            "detail": f"上游 Worker 失败，跳过执行：{', '.join(_member_names(failed_dependencies, workers))}",
-                            "wait_reason": f"上游 Worker 失败：{', '.join(_member_names(failed_dependencies, workers))}",
+                            "detail": f"上游 Worker 失败，跳过执行：{', '.join(_member_names(decision.dependencies, workers))}",
+                            "wait_reason": f"上游 Worker 失败：{', '.join(_member_names(decision.dependencies, workers))}",
                         }),
                     )
                     queue.put_nowait(runtime_event_sse(
@@ -556,20 +152,19 @@ async def _run_team_workers(
                         team_activity_id=activity.id,
                         status="failed",
                         reason="upstream_failed",
-                        payload={"dependsOn": failed_dependencies},
+                        payload={"dependsOn": decision.dependencies},
                     ))
-                failed_workers.add(member.agent_id)
+                scheduler_state.failed_workers.add(member.agent_id)
                 continue
-            blocking = [dep for dep in dependencies if dep not in completed_outputs and dep not in failed_workers]
-            if blocking:
+            if decision.status == "waiting":
                 activity = _find_team_activity(team_activities, member.agent_id)
                 if activity:
                     _replace_team_activity(
                         team_activities,
                         activity.model_copy(update={
                             "status": "pending",
-                            "detail": f"等待依赖 Worker 完成：{', '.join(_member_names(blocking, workers))}",
-                            "wait_reason": f"等待依赖 Worker 完成：{', '.join(_member_names(blocking, workers))}",
+                            "detail": f"等待依赖 Worker 完成：{', '.join(_member_names(decision.dependencies, workers))}",
+                            "wait_reason": f"等待依赖 Worker 完成：{', '.join(_member_names(decision.dependencies, workers))}",
                         }),
                     )
                     queue.put_nowait(runtime_event_sse(
@@ -581,19 +176,15 @@ async def _run_team_workers(
                         team_activity_id=activity.id,
                         status="pending",
                         reason="waiting_dependency",
-                        payload={"dependsOn": blocking},
+                        payload={"dependsOn": decision.dependencies},
                     ))
                 continue
             ready.append(member)
 
         for member in ready:
             pending.pop(member.agent_id, None)
-            dependencies = _member_dependency_ids(member, workers)
-            dependency_outputs = [
-                completed_outputs[dep]
-                for dep in dependencies
-                if dep in completed_outputs
-            ]
+            decision = decide_worker_schedule(member=member, workers=workers, state=scheduler_state)
+            dependency_outputs = decision.dependency_outputs
             activity = _find_team_activity(team_activities, member.agent_id)
             if activity:
                 _replace_team_activity(
@@ -622,7 +213,18 @@ async def _run_team_workers(
                         "executionMode": member.execution_mode,
                     },
                 ))
-            task = asyncio.create_task(run_worker(member, dependency_outputs))
+            task = asyncio.create_task(run_team_worker(TeamWorkerRuntimeRequest(
+                data=data,
+                session_id=session_id,
+                team_activities=team_activities,
+                model_name=model_name,
+                leader_system_prompt=leader_system_prompt,
+                skill_runs=skill_runs,
+                member=member,
+                dependency_outputs=dependency_outputs,
+                queue=queue,
+                pause_event=pause_event,
+            )))
             running[task] = member.agent_id
 
     start_ready_workers()
@@ -643,7 +245,7 @@ async def _run_team_workers(
                             "wait_reason": "依赖配置形成循环或上游 Worker 失败。",
                         }),
                     )
-                failed_workers.add(member.agent_id)
+                scheduler_state.failed_workers.add(member.agent_id)
             pending.clear()
             yield _sse_event("TEAM_ACTIVITY", {
                 "activities": [item.model_dump(by_alias=True) for item in team_activities],
@@ -657,13 +259,13 @@ async def _run_team_workers(
                 worker_id = running.pop(task)
                 activity = _find_team_activity(team_activities, worker_id)
                 if activity and activity.status == "completed":
-                    completed_outputs[worker_id] = {
+                    scheduler_state.completed_outputs[worker_id] = {
                         "agentId": activity.agent_id,
                         "name": activity.agent_name,
                         "output": activity.output,
                     }
                 elif activity and activity.status in {"failed", "waiting"}:
-                    failed_workers.add(worker_id)
+                    scheduler_state.failed_workers.add(worker_id)
             if pause_event.is_set():
                 for task in running:
                     if not task.done():
@@ -682,3 +284,123 @@ async def _run_team_workers(
         yield item
 
     await asyncio.gather(*running.keys(), return_exceptions=True)
+
+
+async def _select_runtime_team_members(
+    *,
+    data: ChatMessage,
+    model_name: str,
+) -> list[ChatTeamMemberPayload]:
+    """在 Team Runtime 内选择本轮实际参与的成员。"""
+
+    try:
+        selected_member_ids, reason = await select_team_workers_for_route(
+            message=data.message,
+            agent_id=data.agent_id or "",
+            team_name=data.team_name,
+            team_members=data.team_members,
+            model_name=model_name,
+            selector_prompt=data.worker_selector_prompt,
+        )
+    except Exception:
+        return data.team_members
+
+    if not selected_member_ids and reason == WORKER_SELECTION_PARSE_FAILED_REASON:
+        return data.team_members
+
+    return filter_team_members_for_runtime(
+        members=data.team_members,
+        selected_member_ids=selected_member_ids,
+        leader_agent_id=data.agent_id or "",
+        keep_all_when_empty=False,
+    )
+
+
+def _mark_unselected_workers_skipped(
+    *,
+    all_members: list[ChatTeamMemberPayload],
+    runtime_members: list[ChatTeamMemberPayload],
+    team_activities: list[ChatTeamActivity],
+    session_id: str,
+) -> list[str]:
+    """把未被本轮 Team Runtime 选中的 Worker 标记为跳过。"""
+
+    runtime_ids = {member.agent_id for member in runtime_members}
+    events: list[str] = []
+    for member in all_members:
+        if member.role == "leader" or member.agent_id in runtime_ids:
+            continue
+        activity = _find_team_activity(team_activities, member.agent_id)
+        if not activity or activity.status in {"completed", "waiting"}:
+            continue
+        _replace_team_activity(
+            team_activities,
+            activity.model_copy(update={
+                "status": "skipped",
+                "detail": "Team Runtime 判断本轮任务不需要该 Worker 参与。",
+                "wait_reason": "",
+            }),
+        )
+        events.append(runtime_event_sse(
+            "TEAM_WORKER_SKIPPED",
+            session_id=session_id,
+            scope="worker",
+            agent_id=member.agent_id,
+            agent_name=member.name,
+            team_activity_id=activity.id,
+            status="completed",
+            reason="not_selected_for_task",
+            payload={"detail": "Team Runtime 判断本轮任务不需要该 Worker 参与。"},
+        ))
+    return events
+
+
+
+def _initialize_worker_states(
+    *,
+    workers: list[ChatTeamMemberPayload],
+    team_activities: list[ChatTeamActivity],
+    session_id: str,
+) -> list[str]:
+    """标记初始 Worker 队列状态，并返回对应 Runtime Event。"""
+
+    worker_ids = {worker.agent_id for worker in workers}
+    events: list[str] = []
+    for member in workers:
+        activity = _find_team_activity(team_activities, member.agent_id)
+        if not activity:
+            continue
+        waiting_for = [
+            dep
+            for dep in _member_dependency_ids(member, workers)
+            if dep in worker_ids
+        ]
+        wait_detail = (
+            f"等待依赖 Worker 完成：{', '.join(_member_names(waiting_for, workers))}"
+            if waiting_for
+            else ""
+        )
+        _replace_team_activity(
+            team_activities,
+            activity.model_copy(update={
+                "status": "pending" if waiting_for else "running",
+                "execution_mode": member.execution_mode,
+                "wait_reason": wait_detail,
+                "detail": wait_detail or activity.detail,
+            }),
+        )
+        events.append(runtime_event_sse(
+            "TEAM_WORKER_BLOCKED_BY_DEPENDENCY" if waiting_for else "TEAM_WORKER_QUEUED",
+            session_id=session_id,
+            scope="worker",
+            agent_id=member.agent_id,
+            agent_name=member.name,
+            team_activity_id=activity.id,
+            status="pending" if waiting_for else "running",
+            reason="waiting_dependency" if waiting_for else "",
+            payload={
+                "executionMode": member.execution_mode,
+                "dependsOn": waiting_for,
+            },
+        ))
+    return events

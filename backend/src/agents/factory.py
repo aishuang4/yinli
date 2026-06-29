@@ -86,22 +86,24 @@ def _build_context_config() -> ContextConfig:
                 "maxLength": CONTEXT_SUMMARY_FIELD_LIMIT,
                 "description": "需要保留的用户偏好、项目约定和上下文。",
             },
+            "summary": {
+                "title": "Legacy Summary",
+                "type": "string",
+                "maxLength": CONTEXT_SUMMARY_FIELD_LIMIT * 3,
+                "description": "兼容旧格式的单字段摘要。优先使用结构化字段；仅在模型无法稳定输出结构化字段时使用。",
+            },
         },
-        "required": [
-            "task_overview",
-            "current_state",
-            "important_discoveries",
-            "next_steps",
-            "context_to_preserve",
-        ],
+        "additionalProperties": False,
     }
     return ContextConfig(
         compression_prompt=(
             "<system-hint>You are compressing the previous conversation so the "
             "agent can continue reliably. Keep every field concise, factual, "
             "and under the schema maxLength. Prefer compact Chinese bullets "
-            "when the conversation is Chinese. Do not copy long tool outputs "
-            "verbatim.</system-hint>"
+            "when the conversation is Chinese. Output the structured fields "
+            "task_overview, current_state, important_discoveries, next_steps, "
+            "and context_to_preserve when possible. Do not copy long tool "
+            "outputs verbatim.</system-hint>"
         ),
         summary_schema=summary_schema,
         tool_result_limit=4000,
@@ -184,6 +186,7 @@ def _create_default_toolkit(
     parent_agent_name: str = "Assistant",
     tool_scope: RuntimeToolScope | None = None,
     extra_tools: list[ToolBase] | None = None,
+    include_default_tools: bool = True,
 ) -> Toolkit:
     """
     创建默认工具集
@@ -205,14 +208,16 @@ def _create_default_toolkit(
     scope = tool_scope or RuntimeToolScope()
 
     local_tools = [
-        Read(),
-        Grep(),
-        Glob(),
-        AskUser(),
-        FinalAnswerStart(),
+        *((
+            Read(),
+            Grep(),
+            Glob(),
+            AskUser(),
+            FinalAnswerStart(),
+        ) if include_default_tools else ()),
         *(extra_tools or []),
     ]
-    if not read_only:
+    if include_default_tools and not read_only:
         local_tools.extend([Write(), Edit()])
 
     if permission_profile.can_use_network:
@@ -281,6 +286,7 @@ def get_or_create_agent(
     parent_agent_name: str | None = None,
     tool_scope: RuntimeToolScope | None = None,
     extra_tools: list[ToolBase] | None = None,
+    include_default_tools: bool = True,
     on_fallback_event: FallbackEventCallback | None = None,
 ) -> Agent:
     """
@@ -350,6 +356,7 @@ def get_or_create_agent(
             parent_agent_name=parent_agent_name or name,
             tool_scope=tool_scope,
             extra_tools=extra_tools,
+            include_default_tools=include_default_tools,
         ),
         state=agent_state,
         offloader=workspace,

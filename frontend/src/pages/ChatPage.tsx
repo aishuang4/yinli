@@ -298,6 +298,7 @@ export function ChatPage() {
           agentName: runtimeAgent?.name,
           teamName: selectedTeam.name,
           teamMembers: selectedTeam.members,
+          workerSelectorPrompt: selectedTeam.workerSelectorPrompt,
           model: runtimeAgent?.modelConfig.primary,
         }),
       });
@@ -432,6 +433,7 @@ export function ChatPage() {
       agentName: runtimeAgent?.name,
       teamId: targetMode === 'team' ? selectedTeam?.id : undefined,
       teamName: targetMode === 'team' ? selectedTeam?.name : undefined,
+      workerSelectorPrompt: targetMode === 'team' ? selectedTeam?.workerSelectorPrompt : undefined,
       teamMembers: targetMode === 'team'
         ? buildTeamMembersForRun(null).map((member) => ({
           id: member.id,
@@ -500,6 +502,7 @@ export function ChatPage() {
       agentName: runtimeAgent?.name,
       teamId: selectedTeam?.id,
       teamName: selectedTeam?.name,
+      workerSelectorPrompt: selectedTeam?.workerSelectorPrompt,
       teamMembers: buildTeamMembersForRun(workerAgentIds).map((member) => ({
         id: member.id,
         agentId: member.agentId,

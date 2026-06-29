@@ -101,14 +101,27 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
     )
     _record_run_event(
         session_id=ctx.session_id,
+        event_type="READINESS_GATE",
+        persist=ctx.persist_run,
+        agent_id=ctx.agent_id,
+        agent_name=ctx.agent_name,
+        status="completed" if ctx.readiness.ready else "waiting",
+        title="Readiness gate",
+        content=ctx.readiness.reason,
+        payload=ctx.readiness.model_dump(),
+    )
+    _record_run_event(
+        session_id=ctx.session_id,
         event_type="INTENT_ROUTE",
         persist=ctx.persist_run,
         agent_id=ctx.agent_id,
         agent_name=ctx.agent_name,
         status=str(ctx.intent_route.mode),
-        title=f"Intent route: {ctx.intent_route.mode}",
+        title=f"Intent route: {ctx.intent_route.mode} / {ctx.intent_route.executor.kind}",
         content=(
-            f"skills={len(ctx.intent_route.selected_skill_ids)}; "
+            f"architecture={ctx.intent_route.mode}; "
+            f"executor={ctx.intent_route.executor.kind}; "
+            f"runtimeSkills={len(ctx.used_skills)}; "
             f"tools={ctx.runtime_tool_scope.cache_key()}"
         ),
         payload=route_trace_payload(ctx.intent_route),
@@ -124,11 +137,11 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
 
 
 async def emit_clarification_if_required(ctx: ChatRunContext) -> AsyncGenerator[str, None]:
-    """如果前置路由需要追问，输出 CLARIFICATION_REQUIRED 并停止主流程。"""
+    """如果 Readiness Gate 需要追问，输出 CLARIFICATION_REQUIRED 并停止主流程。"""
 
-    if not ctx.intent_route.require_clarification or not ctx.intent_route.clarification:
+    if ctx.readiness.ready or not ctx.readiness.clarification:
         return
-    clarification = ctx.intent_route.clarification
+    clarification = ctx.readiness.clarification
     if ctx.active_skill_run:
         ctx.active_skill_run = update_skill_run_status(
             ctx.active_skill_run,

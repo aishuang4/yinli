@@ -29,10 +29,10 @@ from src.server.routes.chat.models import (
 )
 from src.server.routes.chat.prompts import (
     _build_leader_user_message,
-    _build_worker_outputs_system_prompt,
 )
 from src.server.routes.chat.router import router
 from src.server.routes.chat.background_runs import relay_chat_background_run_events
+from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
 from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
     _build_runtime_knowledge_tools,
@@ -51,9 +51,11 @@ from src.server.routes.chat.skill_runs import (
     update_skill_run_status,
 )
 from src.server.routes.chat.store import _append_assistant_message
-from src.server.routes.chat.team import _run_team_workers
+from src.server.routes.chat.team_runtime import (
+    TeamRuntimeState,
+    prepare_leader_with_team_runtime,
+)
 from src.server.routes.chat.team_state import (
-    _collect_worker_outputs,
     _find_team_activity,
     _finalize_team_activities,
     _pending_tool_calls_to_runs,
@@ -70,6 +72,34 @@ from src.server.routes.chat.trace_recorder import (
     _record_run_event,
     _record_tool_execution_artifacts,
 )
+
+
+def _is_final_answer_text_scope(scope: str) -> bool:
+    """判断 resume 文本 delta 是否应作为最终答案输出。"""
+
+    return scope in {"single", "leader"}
+
+
+def _is_team_process_scope(scope: str) -> bool:
+    """判断 resume 原始事件是否属于 Team 内部过程，不应污染全局正文。"""
+
+    return scope in {"team", "worker", "leader"}
+
+
+def _should_wrap_resume_text_as_final(event_type: str, scope: str) -> bool:
+    """resume 阶段单 Agent/Leader 的 TEXT delta 统一转为最终答案事件。"""
+
+    return event_type == "TEXT_BLOCK_DELTA" and _is_final_answer_text_scope(scope)
+
+
+def _should_emit_raw_resume_event(event_type: str, scope: str) -> bool:
+    """过滤 resume 原始事件，避免 Team 过程文本进入前端最终答案或 thinking。"""
+
+    if event_type == "TEXT_BLOCK_DELTA":
+        return False
+    if event_type == "THINKING_BLOCK_DELTA" and _is_team_process_scope(scope):
+        return False
+    return True
 
 
 @router.post("/resume")
@@ -419,17 +449,33 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     })
                 _record_run_event(
                     session_id=interaction.session_id,
-                    event_type="WORKER_COMPLETED",
+                    event_type="TEAM_WORKER_REPORTED",
                     persist=True,
                     scope="worker",
                     agent_id=worker_member.agent_id,
                     agent_name=interaction.agent_name,
                     team_activity_id=activity.id if activity else None,
                     status="completed",
-                    title=f"Worker completed: {interaction.agent_name}",
+                    title=f"Worker reported: {interaction.agent_name}",
                     content=_trim_text(worker_text, 1200),
                     payload={
+                        "reportTo": chat_data.agent_name or "Leader",
                         "toolCallCount": len(worker_tool_calls),
+                        "resumedFromHitl": True,
+                    },
+                )
+                yield runtime_event_sse(
+                    "TEAM_WORKER_REPORTED",
+                    session_id=interaction.session_id,
+                    run_id=interaction.run_id,
+                    scope="worker",
+                    agent_id=worker_member.agent_id,
+                    agent_name=interaction.agent_name,
+                    team_activity_id=activity.id if activity else None,
+                    status="completed",
+                    payload={
+                        "to": chat_data.agent_name or "Leader",
+                        "reportPreview": _trim_text(worker_text, 240),
                         "resumedFromHitl": True,
                     },
                 )
@@ -450,29 +496,26 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 )
 
                 _clear_pending_interaction(interaction.id)
-                async for worker_event in _run_team_workers(
+                leader_agent_id = chat_data.agent_id or interaction.agent_id
+                leader_agent_name = chat_data.agent_name or "Leader"
+                team_state = TeamRuntimeState(
+                    leader_system_prompt=interaction.leader_system_prompt,
+                )
+                async for worker_event in prepare_leader_with_team_runtime(
+                    state=team_state,
                     data=chat_data,
                     session_id=interaction.session_id,
                     team_activities=team_activities,
                     model_name=interaction.model_name,
-                    leader_system_prompt=interaction.leader_system_prompt,
+                    leader_agent_id=leader_agent_id,
                     skill_runs=skill_runs,
                 ):
                     yield worker_event
-                if any(activity.status == "waiting" for activity in team_activities):
+                if team_state.waiting:
                     return
 
-                worker_outputs = _collect_worker_outputs(team_activities)
-                leader_system_prompt = "\n\n".join(
-                    part
-                    for part in [
-                        interaction.leader_system_prompt,
-                        _build_worker_outputs_system_prompt(worker_outputs),
-                    ]
-                    if part
-                )
-                leader_agent_id = chat_data.agent_id or interaction.agent_id
-                leader_agent_name = chat_data.agent_name or "Leader"
+                worker_outputs = team_state.worker_reports
+                leader_system_prompt = team_state.leader_system_prompt
                 leader_config = get_registered_agent(leader_agent_id)
                 runtime_model_settings = get_effective_model_settings()
                 leader_model_config = leader_config.model_config_data if leader_config else None
@@ -515,20 +558,6 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     mcp_servers=leader_mcp_servers,
                     knowledge_tools=leader_knowledge_tools,
                 )
-                leader_activity = _find_team_activity(team_activities, leader_agent_id)
-                if leader_activity:
-                    _replace_team_activity(
-                        team_activities,
-                        leader_activity.model_copy(update={
-                            "status": "running",
-                            "detail": f"Worker 已完成，Leader 正在基于 {len(worker_outputs)} 个 Worker 输出汇总最终回复。",
-                            "leader_context_count": len(worker_outputs),
-                        }),
-                    )
-                    yield _sse_event("TEAM_ACTIVITY", {
-                        "activities": [item.model_dump(by_alias=True) for item in team_activities],
-                    })
-
                 user_msg = UserMsg(
                     name="user",
                     content=_build_user_content(
@@ -536,144 +565,31 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         chat_data.images,
                     ),
                 )
-                assistant_tool_calls: list[ChatToolRun] = []
-                async for event in leader_agent.reply_stream(user_msg):
-                    event_data = event.model_dump(mode="json")
-                    event_type = event_data.pop("type", "UNKNOWN")
-                    _attach_provider_cache_usage(event_type, event_data)
-                    if event_type == "MODEL_CALL_END":
-                        cache_entry = _model_cache_from_event(event_data, interaction.model_name)
-                        if cache_entry:
-                            assistant_model_caches.append(cache_entry)
-                    _record_agent_scope_event(
-                        session_id=interaction.session_id,
-                        event_type=event_type,
-                        event_data=event_data,
-                        persist=True,
-                        scope="leader",
-                        agent_id=leader_agent_id,
-                        agent_name=leader_agent_name,
-                        team_activity_id=None,
-                    )
-                    _record_permission_decision(
-                        session_id=interaction.session_id,
-                        event_type=event_type,
-                        event_data=event_data,
-                        persist=True,
-                        scope="leader",
-                        agent_id=leader_agent_id,
-                        agent_name=leader_agent_name,
-                        team_activity_id=None,
-                        guardrails=leader_guardrails,
-                    )
-                    runtime_event = runtime_event_from_agentscope_sse(
-                        event_type,
-                        session_id=interaction.session_id,
-                        scope="leader",
-                        agent_id=leader_agent_id,
-                        agent_name=leader_agent_name,
-                        event_data=event_data,
-                    )
-                    if runtime_event:
-                        yield runtime_event
-                    next_tool_calls = _update_worker_tool_calls(
-                        assistant_tool_calls,
-                        event_type,
-                        event_data,
-                    )
-                    if next_tool_calls is not assistant_tool_calls:
-                        assistant_tool_calls = next_tool_calls
-                    _record_tool_execution_artifacts(
-                        session_id=interaction.session_id,
-                        event_type=event_type,
-                        event_data=event_data,
-                        persist=True,
-                        scope="leader",
-                        agent_id=leader_agent_id,
-                        agent_name=leader_agent_name,
-                        team_activity_id=None,
-                        guardrails=leader_guardrails,
-                        tool_calls=assistant_tool_calls,
-                    )
-                    artifact_event = build_tool_artifact_runtime_event(
-                        event_type=event_type,
-                        event_data=event_data,
-                        tool_calls=assistant_tool_calls,
-                    )
-                    if artifact_event:
-                        artifact_type, artifact_payload = artifact_event
-                        yield runtime_event_sse(
-                            artifact_type,
-                            session_id=interaction.session_id,
-                            run_id=interaction.run_id,
-                            scope="artifact",
-                            source="runtime",
-                            source_event_type=event_type,
-                            agent_id=leader_agent_id,
-                            agent_name=leader_agent_name,
-                            status=str(artifact_payload.get("status") or "completed"),
-                            payload=artifact_payload,
-                        )
-                    if event_type in HITL_EVENT_TYPES:
-                        _mark_persistent_skill_run(
-                            leader_agent_id,
-                            status="waiting_user",
-                            current_step="waiting_hitl_resume",
-                        )
-                        next_interaction = _create_pending_interaction(
-                            interaction_type=event_type,
-                            agent=leader_agent,
-                            session_id=interaction.session_id,
-                            agent_id=leader_agent_id,
-                            agent_name=leader_agent_name,
-                            model_name=interaction.model_name,
-                            reply_id=str(event_data.get("reply_id") or ""),
-                            tool_calls=list(event_data.get("tool_calls") or []),
-                            message=chat_data.message,
-                            assistant_text=assistant_text,
-                            assistant_tool_calls=assistant_tool_calls,
-                            skill_runs=skill_runs,
-                            team_activities=team_activities,
-                            chat_data=interaction.chat_data,
-                            leader_system_prompt=leader_system_prompt,
-                        )
-                        yield runtime_event_sse(
-                            "AGENT_WAITING_HUMAN",
-                            session_id=interaction.session_id,
-                            run_id=interaction.run_id,
-                            scope="leader",
-                            source="runtime",
-                            source_event_type=event_type,
-                            agent_id=leader_agent_id,
-                            agent_name=leader_agent_name,
-                            status="waiting",
-                            reason="hitl_required",
-                            payload={"interactionId": next_interaction.id, "interactionType": event_type},
-                        )
-                        yield _sse_event("HITL_REQUIRED", _hitl_payload(next_interaction))
-                        return
-                    if event_type == "TEXT_BLOCK_DELTA":
-                        assistant_text += str(event_data.get("delta", ""))
-                    elif event_type == "THINKING_BLOCK_DELTA":
-                        assistant_thinking += str(event_data.get("delta", ""))
-                    if event_type == "REPLY_END" and skill_runs:
-                        completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
-                        for skill in completed_skill_runs:
-                            yield runtime_event_sse(
-                                "SKILL_COMPLETED",
-                                session_id=interaction.session_id,
-                                run_id=interaction.run_id,
-                                scope="skill",
-                                agent_id=leader_agent_id,
-                                agent_name=leader_agent_name,
-                                status="completed",
-                                payload=skill.model_dump(by_alias=True),
-                            )
-                        yield _sse_event("SKILL_END", {
-                            "skills": [item.model_dump(by_alias=True) for item in completed_skill_runs],
-                            "status": "completed",
-                        })
-                    yield _sse_event(event_type, event_data)
+                leader_stream_state = LeaderStreamState(active_skill_run=None)
+                async for leader_event in stream_leader_agent_reply(
+                    agent=leader_agent,
+                    user_msg=user_msg,
+                    state=leader_stream_state,
+                    session_id=interaction.session_id,
+                    persist=True,
+                    agent_id=leader_agent_id,
+                    agent_name=leader_agent_name,
+                    model_name=interaction.model_name,
+                    guardrails=leader_guardrails,
+                    message=chat_data.message,
+                    stream_scope="leader",
+                    skill_runs=skill_runs,
+                    team_activities=team_activities,
+                ):
+                    yield leader_event
+                if leader_stream_state.stopped:
+                    _clear_pending_interaction(interaction.id)
+                    return
+                assistant_text = leader_stream_state.assistant_text
+                assistant_thinking = leader_stream_state.assistant_thinking
+                assistant_tool_calls = leader_stream_state.assistant_tool_calls
+                assistant_model_caches = leader_stream_state.assistant_model_caches
+                runtime_events = leader_stream_state.runtime_events
 
                 completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
                 _mark_persistent_skill_run(
@@ -698,6 +614,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     tool_calls=assistant_tool_calls,
                     team_activities=completed_team_activities,
                     model_caches=assistant_model_caches,
+                    runtime_events=runtime_events,
                 )
                 _record_run_event(
                     session_id=interaction.session_id,
@@ -775,17 +692,32 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     team_activity_id=activity.id if activity else None,
                     guardrails=interaction_guardrails,
                 )
-                runtime_event = runtime_event_from_agentscope_sse(
-                    event_type,
-                    session_id=interaction.session_id,
-                    scope=interaction.scope,
-                    agent_id=interaction.agent_id,
-                    agent_name=interaction.agent_name,
-                    team_activity_id=activity.id if activity else None,
-                    event_data=event_data,
-                )
-                if runtime_event:
-                    yield runtime_event
+                if _should_wrap_resume_text_as_final(event_type, interaction.scope):
+                    yield runtime_event_sse(
+                        "AGENT_FINAL_ANSWER_DELTA",
+                        session_id=interaction.session_id,
+                        run_id=interaction.run_id,
+                        scope=interaction.scope,
+                        source="runtime",
+                        source_event_type=event_type,
+                        agent_id=interaction.agent_id,
+                        agent_name=interaction.agent_name,
+                        team_activity_id=activity.id if activity else None,
+                        status="running",
+                        payload={"delta": str(event_data.get("delta", ""))},
+                    )
+                else:
+                    runtime_event = runtime_event_from_agentscope_sse(
+                        event_type,
+                        session_id=interaction.session_id,
+                        scope=interaction.scope,
+                        agent_id=interaction.agent_id,
+                        agent_name=interaction.agent_name,
+                        team_activity_id=activity.id if activity else None,
+                        event_data=event_data,
+                    )
+                    if runtime_event:
+                        yield runtime_event
                 next_tool_calls = _update_worker_tool_calls(
                     assistant_tool_calls,
                     event_type,
@@ -865,7 +797,10 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     return
 
                 if event_type == "TEXT_BLOCK_DELTA":
-                    assistant_text += str(event_data.get("delta", ""))
+                    delta = str(event_data.get("delta", ""))
+                    assistant_text += delta
+                    if _is_final_answer_text_scope(interaction.scope):
+                        yield _sse_event("FINAL_ANSWER_DELTA", {"delta": delta})
                 elif event_type == "THINKING_BLOCK_DELTA":
                     assistant_thinking += str(event_data.get("delta", ""))
 
@@ -887,7 +822,8 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         "status": "completed",
                     })
 
-                yield _sse_event(event_type, event_data)
+                if _should_emit_raw_resume_event(event_type, interaction.scope):
+                    yield _sse_event(event_type, event_data)
 
             completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
             _mark_persistent_skill_run(

@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to AI coding agents when working with code in this repository.
 
 ## 项目概述
 
@@ -45,19 +45,25 @@ npm run lint     # eslint
 
 1. **`routes/chat/handlers/send.py`** — `POST /api/chat/send` 是 Chat SSE 统一入口，只负责请求读取、用户消息写入、后台 Run 启动、前置错误处理和 SSE 编排。Plan Runtime 与 Subagent Runtime 已下线，后续重构前不要在旧链路上继续补丁式开发。
 
-2. **`routes/chat/intent_router.py`** — Chat 第一层运行线路路由。模型语义路由优先、规则路由兜底，只决定本轮进入 `react`、`team` 或 `clarification` 哪条线路；Plan Runtime 与 Subagent Runtime 已砍掉，不再作为路由结果。当前 `selectedSkillIds`、`selectedTeamMemberIds` 与 `toolScope` 仅作为兼容 hints，后续应迁入具体 Runtime 内部策略。路由结果写入 `INTENT_ROUTE` trace，便于排查每轮为何进入某条线路。
+2. **`routes/chat/readiness_gate.py`** — Chat 前置信息充足性判断。系统内置 `ReadinessAgent` 模型优先、规则兜底，只判断当前用户输入是否足够开始执行；信息不足时返回 clarification，不进入 Runtime。ReadinessAgent 不选择架构、不选择 Team、不选择 Skill、不决定 ToolScope。
 
-3. **`routes/chat/runtime_builder.py`** — IntentRoute 之后的运行时组装层。负责合成本轮模型配置、裁剪 Team 成员、选择本轮 Skill、把 `toolScope` 转为 `RuntimeToolScope`、生成主 Agent runtime cache key、构建 `MainAgentRuntimeSpec`，并通过 `create_main_agent_from_spec()` 委托工厂创建/复用 Agent。
+3. **`routes/chat/intent_router.py`** — Chat 第一层架构路由。仅在 readiness 通过后运行，模型语义路由优先、规则路由兜底；当前只决定本轮进入 `react`，Plan Runtime 与 Subagent Runtime 已砍掉，不再作为路由结果。`clarification` 不是 runtime.kind，只是 readiness 未通过后的等待状态。它不选择 Team、不裁剪 Worker、不选择 Skill、不决定 ToolScope。第二层 `executor` 由前端选择机械决定：选择单 Agent 时为 `single_agent`，选择 Team 时为 `team`。路由结果写入 `INTENT_ROUTE` trace，用于排查本轮为何进入某条架构线路。
 
-4. **`routes/chat/orchestration.py`** — Team worker 预执行编排。`prepare_leader_after_team_workers()` 负责运行被路由选中的 Worker、收集 Worker 输出、追加 Leader system prompt，并更新 Leader activity。
+4. **`routes/chat/runtime_dispatcher.py` / `routes/chat/react_runtime.py`** — Chat Runtime 分发与 ReAct 执行入口。`runtime_dispatcher.execute_chat_runtime()` 只按第一层 `runtime.kind` 分发；当前仅 `react` 在线，信息不足时已经在进入 Runtime 前由 send 直接返回反问事件。`react_runtime.execute_react_runtime()` 再按第二层 `executor.kind` 执行：`single_agent` 直接运行主 Agent，`team` 先运行 Team Worker，再把 Worker report 注入 Leader 上下文后运行 Leader。
 
-5. **`routes/chat/leader_stream.py`** — Leader Agent 事件流处理。消费 `agent.reply_stream()`，维护 `LeaderStreamState`，处理模型 cache、trace、permission decision、tool artifacts、HITL 早停、流式文本/思考累计、Skill end 和模型输出后的 clarification 兜底。
+5. **`routes/chat/runtime_builder.py`** — IntentRoute 之后的运行时组装层。负责合成本轮模型配置、完整 Team 上下文、主 Agent runtime cache key、`MainAgentRuntimeSpec`，并通过 `create_main_agent_from_spec()` 委托工厂创建/复用 Agent。它不再裁剪 Team 成员，不再从 IntentRoute 读取 Skill/ToolScope。Skill 选择由 `skill_selector.py` 处理；工具范围由 `tool_scope_resolver.py` 处理。
 
-6. **`routes/chat/completion.py`** — Leader run 成功/失败收尾。负责完成 Skill/Team 状态、写 assistant message、写 trace，并输出 `TEAM_ACTIVITY` / `ERROR` 等后续 SSE。旧记忆模块已删除，当前不再触发 memory summarize。
+6. **`routes/chat/team_runtime.py` / `routes/chat/team.py` / `routes/chat/team_worker_runtime.py`** — Team Runtime。当前是 AgentScope-style 适配层，保留本项目 SQLite Team 配置和前端活动面板，但执行语义收束为 `Leader dispatch -> Worker isolated ReAct -> Worker report -> Leader synthesize`。Worker 选择属于 Team Runtime 内部策略：优先使用系统内置 `TeamWorkerSelector` 模型选择本轮 Worker；模型输出解析失败或调用异常时使用全部 Worker 兜底；模型合法返回空数组时只保留 Leader，未参与 Worker 标记为 `skipped`。Worker 依赖调度纯逻辑在 `team_scheduler.py`，单个 Worker 的独立 ReAct 在 `team_worker_runtime.py`。
 
-7. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 `agent_id` 缓存实例；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件）。工具集在 `_create_default_toolkit()` 注入：Read/Grep/Glob/AskUser 始终可用，Write/Edit 受权限控制；Bash/HttpRequest/知识库工具/MCP 还受 `RuntimeToolScope` 裁剪。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是用户主目录 `~`）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
+7. **`routes/chat/team_worker_selector.py` / `routes/team_defaults.py`** — Team Worker Selector 系统 Agent。Selector 是内置基础设施 Agent，不是普通业务 Agent：无默认工具、无 MCP、无 Skills、无 Bash/HTTP/知识库工具，只输出结构化 JSON。每个 Team 有可持久化字段 `workerSelectorPrompt`，前端 Team 设置页可编辑，运行时动态注入 Selector Agent；默认提示词在 `routes/team_defaults.py`，避免路由之间循环 import。
 
-8. **`agents/agentscope_usage_patch.py`** — 启动时 `patch_agentscope_usage_events()` 给 AgentScope 打补丁以捕获 usage 事件。
+8. **`routes/chat/leader_stream.py`** — Leader/单 Agent 事件流处理。消费 `agent.reply_stream()`，维护 `LeaderStreamState`，处理模型 cache、trace、permission decision、tool artifacts、HITL 早停、流式文本/思考累计、Skill end 和模型输出后的 clarification 兜底。
+
+9. **`routes/chat/completion.py`** — Leader run 成功/失败收尾。负责完成 Skill/Team 状态、写 assistant message、写 trace，并输出 `TEAM_ACTIVITY` / `ERROR` 等后续 SSE。旧记忆模块已删除，当前不再触发 memory summarize。
+
+10. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 `agent_id` 缓存实例；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件）。工具集在 `_create_default_toolkit()` 注入：普通 Agent 默认拥有 Read/Grep/Glob/AskUser/FinalAnswerStart，Write/Edit 受权限控制；Bash/HttpRequest/知识库工具/MCP 受 `RuntimeToolScope` 裁剪。系统基础设施 Agent 可通过 `include_default_tools=False` 创建完全无工具实例。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是用户主目录 `~`）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
+
+11. **`agents/agentscope_usage_patch.py`** — 启动时 `patch_agentscope_usage_events()` 给 AgentScope 打补丁以捕获 usage 事件。
 
 ### 持久化
 
@@ -89,7 +95,7 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 
 - 开发必须遵循 `docs/development-guidelines.md`。该文件是正式开发规范，覆盖模块化、React/TypeScript、Python/FastAPI、SQLite、Agent Runtime、测试、Git 和文档要求。
 - 如果 `AGENTS.md` / `CLAUDE.md` 与 `docs/development-guidelines.md` 冲突，以更具体、更严格、更新的规范为准；不确定时先按 `docs/development-guidelines.md` 执行。
-- `AGENTS.md` 是开发代理记忆和项目协作规范的唯一真实来源；小写 `agent.md` 与 `CLAUDE.md` 只作为兼容入口，避免多份记忆漂移。
+- `AGENTS.md` 是开发代理记忆和项目协作规范的唯一真实来源；`CLAUDE.md` 只作为兼容入口，避免多份记忆漂移。
 - 当前已删除/下线的旧设计：记忆模块、Plan Runtime、Subagent Runtime。后续不要在旧字段、旧事件或旧工具链上继续补丁式开发，只能重新设计后按新方案接入。
 - 代码注释和文档用中文，技术术语和标识符保持英文。
 - TODO 文档和待办事项统一用中文编写，便于团队协作和后续交接。

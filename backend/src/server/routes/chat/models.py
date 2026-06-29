@@ -281,6 +281,9 @@ class ChatMessage(BaseModel):
     team_members: list[ChatTeamMemberPayload] = Field(default_factory=list)
     """Team 成员摘要（Team 模式下用于注入 Leader 上下文）"""
 
+    worker_selector_prompt: str = Field(default="", alias="workerSelectorPrompt")
+    """Team Worker Selector 专用提示词（Team 模式下动态注入系统内置选择器）"""
+
     system_prompt: str | None = None
     """Agent 系统提示词（可选，用于临时自定义）"""
 
@@ -310,6 +313,7 @@ class TeamWorkerSelectionRequest(BaseModel):
     agent_name: str | None = Field(default=None, alias="agentName")
     team_name: str | None = Field(default=None, alias="teamName")
     team_members: list[ChatTeamMemberPayload] = Field(default_factory=list, alias="teamMembers")
+    worker_selector_prompt: str = Field(default="", alias="workerSelectorPrompt")
     model: str | None = None
 
     model_config = {"populate_by_name": True}

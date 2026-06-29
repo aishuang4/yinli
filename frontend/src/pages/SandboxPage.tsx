@@ -133,6 +133,7 @@ export function SandboxPage() {
       agentName: runtimeAgent.name,
       teamId: mode === 'team' ? selectedTeam?.id : undefined,
       teamName: mode === 'team' ? selectedTeam?.name : undefined,
+      workerSelectorPrompt: mode === 'team' ? selectedTeam?.workerSelectorPrompt : undefined,
       teamMembers: mode === 'team'
         ? (selectedTeam?.members || []).map((member: TeamMember) => ({
           id: member.id,
