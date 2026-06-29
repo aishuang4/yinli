@@ -5,7 +5,8 @@ from fastapi import HTTPException
 from src.server.routes.chat.models import ChatSession, StoredChatMessage
 from src.server.routes.chat.router import router
 from src.server.routes.chat.store import _load_store, _save_store
-from src.storage.database import list_run_events
+from src.server.routes.chat.plan_mode.models import PLAN_STATUS_WAITING_APPROVAL
+from src.storage.database import list_run_events, list_session_plans
 
 
 @router.get("/sessions")
@@ -55,6 +56,23 @@ def _normalize_history_messages(
         if isinstance(request, dict)
     }
     synthetic_messages: list[StoredChatMessage] = []
+    existing_plan_ids = {
+        str(event.get("payload", {}).get("planId") or "")
+        for message in normalized
+        for event in message.runtime_events
+        if isinstance(event, dict) and isinstance(event.get("payload"), dict)
+    }
+    for plan in list_session_plans(session_id):
+        plan_id = str(plan.get("id") or "")
+        if (
+            not plan_id
+            or plan.get("status") != PLAN_STATUS_WAITING_APPROVAL
+            or plan_id in existing_plan_ids
+        ):
+            continue
+        synthetic_messages.append(_synthetic_waiting_plan_message(plan))
+        existing_plan_ids.add(plan_id)
+
     for event in list_run_events(session_id):
         if event.get("eventType") != "CLARIFICATION_REQUIRED":
             continue
@@ -103,3 +121,43 @@ def _normalize_legacy_clarification_answer(message: StoredChatMessage) -> Stored
         if answer:
             answers.append(answer)
     return message.model_copy(update={"content": "；".join(answers) or "已补充信息"})
+
+
+def _synthetic_waiting_plan_message(plan: dict) -> StoredChatMessage:
+    """为已落库但缺少 assistant 消息的等待审批 Plan 生成历史展示消息。"""
+
+    plan_id = str(plan.get("id") or "")
+    created_at = str(plan.get("updatedAt") or plan.get("createdAt") or "")
+    return StoredChatMessage(
+        id=f"plan-waiting-{plan_id}",
+        role="assistant",
+        content="",
+        agent_id=str(plan.get("agentId") or "") or None,
+        agent_name=None,
+        model_name=None,
+        error=None,
+        runtimeEvents=[{
+            "id": f"runtime-plan-waiting-{plan_id}",
+            "runId": str(plan.get("runId") or ""),
+            "sessionId": str(plan.get("sessionId") or ""),
+            "type": "PLAN_WAITING_APPROVAL",
+            "source": "runtime",
+            "sourceEventType": None,
+            "scope": "plan",
+            "agentId": str(plan.get("agentId") or ""),
+            "agentName": "",
+            "teamActivityId": None,
+            "status": "waiting",
+            "reason": "Plan waiting for user approval.",
+            "timestamp": created_at,
+            "durationMs": None,
+            "payload": {
+                "planId": plan_id,
+                "planFile": f".agent-workstation/plans/{plan.get('sessionId')}/{plan_id}.md",
+                "title": str(plan.get("title") or ""),
+                "goal": str(plan.get("goal") or ""),
+                "markdown": str(plan.get("markdown") or ""),
+            },
+        }],
+        created_at=created_at,
+    )

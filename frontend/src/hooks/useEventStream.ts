@@ -317,6 +317,32 @@ function completeStreamIfNoPendingUserInteraction(state: StreamState): StreamSta
   };
 }
 
+function markActiveToolCallsFailed(toolCalls: ToolCallInfo[]): ToolCallInfo[] {
+  return toolCalls.map((toolCall) => (
+    toolCall.status === 'calling' || toolCall.status === 'running'
+      ? { ...toolCall, status: 'failed' }
+      : toolCall
+  ));
+}
+
+function markActiveTeamToolCallsFailed(activities: TeamActivityInfo[]): TeamActivityInfo[] {
+  return activities.map((activity) => ({
+    ...activity,
+    toolCalls: markActiveToolCallsFailed(activity.toolCalls),
+  }));
+}
+
+function failStreamWithError(state: StreamState, error: string): StreamState {
+  return {
+    ...state,
+    isStreaming: false,
+    error,
+    toolCalls: markActiveToolCallsFailed(state.toolCalls),
+    teamActivities: markActiveTeamToolCallsFailed(state.teamActivities),
+    runCompletedAt: state.runCompletedAt || new Date().toISOString(),
+  };
+}
+
 function normalizeRuntimeEvent(data: Record<string, unknown>): ChatRuntimeEvent {
   return {
     id: String(data.id || createId()),
@@ -808,12 +834,7 @@ export function useEventStream(): UseEventStreamReturn {
         } else {
           // 其他错误
           const errorMessage = err instanceof Error ? err.message : String(err);
-          setState((prev) => ({
-            ...prev,
-            isStreaming: false,
-            error: errorMessage,
-            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
-          }));
+          setState((prev) => failStreamWithError(prev, errorMessage));
         }
       }
     },

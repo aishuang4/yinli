@@ -16,7 +16,7 @@ from agentscope.agent import Agent
 from agentscope.agent._config import ContextConfig, ModelConfig, ReActConfig
 from agentscope.mcp import HttpMCPConfig, MCPClient
 from agentscope.middleware import MiddlewareBase
-from agentscope.tool import Toolkit, Bash, Read, Write, Edit, Grep, Glob, ToolBase
+from agentscope.tool import Toolkit, Bash, Read, Write, Edit, Grep, ToolBase
 from agentscope.state import AgentState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.permission._types import PermissionMode
@@ -39,6 +39,7 @@ from src.tools.configured_http_tool import ConfiguredHttpTool
 from src.tools.final_answer import FinalAnswerStart
 from src.tools.http_request import HttpRequest
 from src.tools.knowledge_base_search import KnowledgeBaseSearch
+from src.tools.scoped_glob import ScopedGlob
 
 
 # ============================================================================
@@ -212,7 +213,7 @@ def _create_default_toolkit(
         *((
             Read(),
             Grep(),
-            Glob(),
+            ScopedGlob(),
             AskUser(),
             FinalAnswerStart(),
         ) if include_default_tools else ()),
