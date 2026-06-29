@@ -6,8 +6,8 @@ from src.server.routes.chat.models import (
     TeamWorkerSelectionRequest,
     TeamWorkerSelectionResponse,
 )
-from src.server.routes.chat.intent_router import select_team_workers_for_route
 from src.server.routes.chat.router import router
+from src.server.routes.chat.team_worker_selector import select_team_workers_for_route
 
 
 @router.post("/team-worker-selection", response_model=TeamWorkerSelectionResponse)
@@ -30,5 +30,6 @@ async def select_team_workers(data: TeamWorkerSelectionRequest) -> TeamWorkerSel
         team_name=data.team_name,
         team_members=data.team_members,
         model_name=model_name,
+        selector_prompt=data.worker_selector_prompt,
     )
     return TeamWorkerSelectionResponse(selectedAgentIds=selected, reason=reason)

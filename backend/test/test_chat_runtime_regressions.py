@@ -8,15 +8,19 @@ from src.server.routes.chat.background_runs import (
     start_chat_background_run,
 )
 from src.server.routes.chat.helpers import _sse_event
+from src.server.routes.chat.handlers.resume import (
+    _is_final_answer_text_scope,
+    _should_emit_raw_resume_event,
+    _should_wrap_resume_text_as_final,
+)
 from src.server.routes.chat.intent_router import (
     IntentRoute,
-    filter_team_members_for_route,
-    refine_team_route_with_model,
     route_chat_message,
     route_chat_message_with_model,
     route_trace_payload,
 )
 from src.server.routes.chat.models import ChatMessage, ChatTeamMemberPayload, ChatToolRun
+from src.server.routes.chat.prompts import build_worker_assignment_text
 from src.server.routes.chat.runtime import _permission_mode_for_guardrails
 from src.server.routes.chat.runtime_builder import (
     RuntimeModelConfig,
@@ -25,6 +29,8 @@ from src.server.routes.chat.runtime_builder import (
     build_runtime_model_config,
     create_main_agent_from_spec,
 )
+from src.server.routes.chat.team_worker_selector import filter_team_members_for_runtime
+from src.server.routes.chat.tool_scope_resolver import resolve_runtime_tool_scope
 from src.server.routes.chat.team_state import _pending_tool_calls_to_runs
 from src.server.routes.chat.trace_recorder import _model_cache_from_event, _permission_decision_payload
 from src.server.routes.traces import _event_trace_status, _trace_status
@@ -61,7 +67,43 @@ def test_context_compression_schema_allows_project_discovery_summaries():
 
     assert schema["properties"]["important_discoveries"]["maxLength"] >= 1000
     assert schema["properties"]["next_steps"]["maxLength"] >= 1000
+    assert "summary" in schema["properties"]
+    assert "required" not in schema
     assert "under the schema maxLength" in context_config.compression_prompt
+
+
+def test_resume_text_event_scopes_are_separated():
+    assert _is_final_answer_text_scope("single") is True
+    assert _is_final_answer_text_scope("leader") is True
+    assert _is_final_answer_text_scope("worker") is False
+    assert _should_wrap_resume_text_as_final("TEXT_BLOCK_DELTA", "leader") is True
+    assert _should_wrap_resume_text_as_final("TEXT_BLOCK_DELTA", "worker") is False
+    assert _should_emit_raw_resume_event("TEXT_BLOCK_DELTA", "leader") is False
+    assert _should_emit_raw_resume_event("TEXT_BLOCK_DELTA", "worker") is False
+    assert _should_emit_raw_resume_event("THINKING_BLOCK_DELTA", "leader") is False
+    assert _should_emit_raw_resume_event("THINKING_BLOCK_DELTA", "single") is True
+
+
+def test_worker_assignment_uses_member_identity_when_description_is_default():
+    research = ChatTeamMemberPayload.model_validate({
+        "agentId": "research-agent",
+        "name": "调研 Agent",
+        "role": "worker",
+        "description": "Team worker session",
+    })
+    developer = ChatTeamMemberPayload.model_validate({
+        "agentId": "dev-agent",
+        "name": "开发 Agent",
+        "role": "worker",
+        "description": "Team worker session",
+    })
+
+    research_assignment = build_worker_assignment_text(research)
+    developer_assignment = build_worker_assignment_text(developer)
+
+    assert research_assignment != developer_assignment
+    assert "调研" in research_assignment or "事实" in research_assignment
+    assert "实现" in developer_assignment or "代码" in developer_assignment
 
 
 def test_model_cache_from_event_maps_provider_cache_usage():
@@ -92,88 +134,47 @@ def test_ask_user_is_external_tool_for_agentscope_resume():
     assert tool.input_schema["required"] == ["title", "questions"]
 
 
-def test_intent_route_ignores_configured_subagents(monkeypatch):
-    parent = SimpleNamespace(
-        callable_agents=["research-agent", "code-agent"],
-        plan_config=SimpleNamespace(enabled=True),
-        mcp_tools=[],
-        knowledge_tools=[],
-    )
-    children = {
-        "research-agent": SimpleNamespace(
-            id="research-agent",
-            name="Research Agent",
-            description="负责市场调研、资料搜索和竞品分析。",
-            system_prompt="",
-        ),
-        "code-agent": SimpleNamespace(
-            id="code-agent",
-            name="Code Agent",
-            description="负责代码实现、修复和测试。",
-            system_prompt="",
-        ),
-    }
+def test_intent_route_only_selects_react_architecture_and_executor():
+    route = route_chat_message(team_members=[])
 
-    monkeypatch.setattr(
-        "src.server.routes.agents.get_registered_agent",
-        lambda agent_id: children.get(agent_id),
-    )
-
-    route = route_chat_message(
-        message="请交给 Research Agent 做竞品分析。",
-        agent_config=parent,
-        skill_ids=[],
-        team_members=[],
-        images=[],
-    )
-
-    assert route.mode == "agent_execution"
-    assert route.selected_subagent_ids == []
+    assert route.mode == "react"
+    assert route.runtime.kind == "react"
+    assert route.executor.kind == "single_agent"
+    assert not hasattr(route, "selected_subagent_ids")
+    assert not hasattr(route, "tool_scope")
 
 
 def test_intent_route_trace_payload_uses_api_aliases():
-    route = route_chat_message(
-        message="你好，简单聊聊。",
-        agent_config=SimpleNamespace(
-            callable_agents=[],
-            plan_config=SimpleNamespace(enabled=True),
-            mcp_tools=[],
-            knowledge_tools=[],
-        ),
-        skill_ids=[],
-        team_members=[],
-        images=[],
-    )
+    route = route_chat_message(team_members=[])
 
     payload = route_trace_payload(route)
 
-    assert payload["mode"] == "conversation"
-    assert payload["shouldCreatePlan"] is False
-    assert payload["selectedSkillIds"] == []
-    assert payload["selectedSubagentIds"] == []
+    assert payload["mode"] == "react"
+    assert payload["runtime"]["kind"] == "react"
+    assert payload["executor"]["kind"] == "single_agent"
+    assert "requireClarification" not in payload
+    assert "selectedSkillIds" not in payload
+    assert "selectedSubagentIds" not in payload
 
 
-def test_intent_route_clarification_blocks_plan_creation():
+def test_intent_route_team_executor_is_mechanical():
     route = route_chat_message(
-        message="请修复一下。",
-        agent_config=SimpleNamespace(
-            callable_agents=[],
-            plan_config=SimpleNamespace(enabled=True),
-            mcp_tools=[],
-            knowledge_tools=[],
-        ),
-        skill_ids=[],
-        team_members=[],
-        images=[],
+        team_members=[
+            ChatTeamMemberPayload(
+                id="member-worker",
+                agentId="worker-agent",
+                name="Worker",
+                role="worker",
+            ),
+        ],
     )
 
-    assert route.mode == "clarification"
-    assert route.require_clarification is True
-    assert route.should_create_plan is False
-    assert route.clarification["title"] == "需要补充目标对象"
+    assert route.mode == "react"
+    assert route.executor.kind == "team"
+    assert route.executor.payload["memberCount"] == 1
 
 
-def test_filter_team_members_for_route_keeps_leader_and_selected_workers():
+def test_filter_team_members_for_runtime_keeps_leader_and_selected_workers():
     members = [
         ChatTeamMemberPayload(
             id="member-leader",
@@ -207,8 +208,8 @@ def test_filter_team_members_for_route_keeps_leader_and_selected_workers():
         ),
     ]
 
-    routed = filter_team_members_for_route(
-        members,
+    routed = filter_team_members_for_runtime(
+        members=members,
         selected_member_ids=["research-agent"],
         leader_agent_id="leader-agent",
     )
@@ -216,140 +217,39 @@ def test_filter_team_members_for_route_keeps_leader_and_selected_workers():
     assert [member.agent_id for member in routed] == ["leader-agent", "research-agent"]
 
 
-def test_team_route_model_refinement_updates_selected_workers(monkeypatch):
-    async def fake_select_team_workers_for_route(**kwargs):
-        return ["research-agent"], "模型选择 Research worker。"
-
-    monkeypatch.setattr(
-        "src.server.routes.chat.intent_router.select_team_workers_for_route",
-        fake_select_team_workers_for_route,
-    )
-    route = route_chat_message(
-        message="请让团队处理这个需求。",
-        agent_config=SimpleNamespace(
-            callable_agents=[],
-            plan_config=SimpleNamespace(enabled=True),
-            mcp_tools=[],
-            knowledge_tools=[],
-        ),
-        skill_ids=[],
-        team_members=[
-            ChatTeamMemberPayload(
-                id="member-leader",
-                agentId="leader-agent",
-                name="Leader",
-                role="leader",
-                description="",
-                executionMode="serial",
-                dependsOn=[],
-                handoffPrompt="",
-            ),
-            ChatTeamMemberPayload(
-                id="member-research",
-                agentId="research-agent",
-                name="Research",
-                role="worker",
-                description="负责资料调研。",
-                executionMode="parallel",
-                dependsOn=[],
-                handoffPrompt="",
-            ),
-        ],
-        images=[],
-    )
-
-    refined = asyncio.run(refine_team_route_with_model(
-        route,
-        message="请让团队处理这个需求。",
-        agent_id="leader-agent",
-        team_name="Demo Team",
-        team_members=[
-            ChatTeamMemberPayload(
-                id="member-leader",
-                agentId="leader-agent",
-                name="Leader",
-                role="leader",
-                description="",
-                executionMode="serial",
-                dependsOn=[],
-                handoffPrompt="",
-            ),
-            ChatTeamMemberPayload(
-                id="member-research",
-                agentId="research-agent",
-                name="Research",
-                role="worker",
-                description="负责资料调研。",
-                executionMode="parallel",
-                dependsOn=[],
-                handoffPrompt="",
-            ),
-        ],
-        model_name="test-model",
-    ))
-
-    assert refined.mode == "team_execution"
-    assert refined.selected_team_member_ids == ["research-agent"]
-    team_decision = next(decision for decision in refined.decisions if decision.name == "team")
-    assert team_decision.payload["selector"] == "model"
-
-
 def test_intent_route_tool_scope_stays_minimal_for_conversation():
-    route = route_chat_message(
+    decision = resolve_runtime_tool_scope(
         message="你好，解释一下这个概念。",
         agent_config=SimpleNamespace(
-            callable_agents=[],
-            plan_config=SimpleNamespace(enabled=True),
             mcp_tools=["mcp-1"],
             knowledge_tools=["kb-1"],
         ),
-        skill_ids=[],
-        team_members=[],
-        images=[],
+        has_selected_skills=False,
+        has_team=False,
+        has_images=False,
     )
 
-    assert route.tool_scope.allow_mcp is False
-    assert route.tool_scope.allow_knowledge is False
-    assert route.tool_scope.allow_bash is False
-    assert route.tool_scope.allow_http is False
+    assert decision.scope.allow_mcp is False
+    assert decision.scope.allow_knowledge is False
+    assert decision.scope.allow_bash is False
+    assert decision.scope.allow_http is False
 
 
 def test_intent_route_tool_scope_enables_execution_and_research_tools():
-    route = route_chat_message(
+    decision = resolve_runtime_tool_scope(
         message="请运行 pytest 并搜索知识库资料分析失败原因。",
         agent_config=SimpleNamespace(
-            callable_agents=[],
-            plan_config=SimpleNamespace(enabled=True),
             mcp_tools=["mcp-1"],
             knowledge_tools=["kb-1"],
         ),
-        skill_ids=[],
-        team_members=[],
-        images=[],
+        has_selected_skills=False,
+        has_team=False,
+        has_images=False,
     )
 
-    assert route.tool_scope.allow_bash is True
-    assert route.tool_scope.allow_http is True
-    assert route.tool_scope.allow_knowledge is True
-
-
-def test_intent_route_ignores_plan_approval_when_user_explicitly_asks():
-    route = route_chat_message(
-        message="请规划并执行这个任务，执行前必须等我审批计划。",
-        agent_config=SimpleNamespace(
-            callable_agents=[],
-            plan_config=SimpleNamespace(enabled=True, require_user_approval=False),
-            mcp_tools=[],
-            knowledge_tools=[],
-        ),
-        skill_ids=[],
-        team_members=[],
-        images=[],
-    )
-
-    assert route.should_create_plan is False
-    assert route.require_plan_approval is False
-    assert route.mode == "agent_execution"
+    assert decision.scope.allow_bash is True
+    assert decision.scope.allow_http is True
+    assert decision.scope.allow_knowledge is True
 
 
 class _FakeTextDeltaEvent:
@@ -368,7 +268,7 @@ class _FakeRouterAgent:
         yield _FakeTextDeltaEvent(self.text)
 
 
-def test_model_intent_route_ignores_plan_and_subagent_requests_but_keeps_tools(monkeypatch):
+def test_model_intent_route_ignores_legacy_plan_subagent_and_tool_scope(monkeypatch):
     parent = SimpleNamespace(
         id="parent-agent",
         name="Parent",
@@ -419,19 +319,18 @@ def test_model_intent_route_ignores_plan_and_subagent_requests_but_keeps_tools(m
     route = asyncio.run(route_chat_message_with_model(
         message="请让代码 Agent 修复项目中的测试问题，并运行 pytest 验证。",
         agent_config=parent,
-        skill_ids=[],
         team_members=[],
         images=[],
         model_name="test-model",
     ))
 
-    assert route.mode == "agent_execution"
-    assert route.should_create_plan is False
-    assert route.selected_subagent_ids == []
-    assert route.tool_scope.allow_bash is True
-    assert route.tool_scope.allow_knowledge is True
-    assert route.tool_scope.allow_mcp is False
-    model_decision = next(decision for decision in route.decisions if decision.name == "model_router")
+    assert route.mode == "react"
+    assert route.runtime.kind == "react"
+    assert route.executor.kind == "single_agent"
+    assert not hasattr(route, "should_create_plan")
+    assert not hasattr(route, "selected_subagent_ids")
+    assert not hasattr(route, "tool_scope")
+    model_decision = next(decision for decision in route.decisions if decision.name == "architecture_route")
     assert model_decision.payload["intent"] == "code_change"
 
 
@@ -450,15 +349,14 @@ def test_model_intent_route_falls_back_to_rules_on_invalid_json(monkeypatch):
             mcp_tools=[],
             knowledge_tools=[],
         ),
-        skill_ids=[],
         team_members=[],
         images=[],
         model_name="test-model",
     ))
 
-    assert route.mode == "clarification"
-    assert route.require_clarification is True
-    assert route.should_create_plan is False
+    assert route.mode == "react"
+    assert route.runtime.kind == "react"
+    assert route.executor.kind == "single_agent"
 
 
 def test_runtime_tool_scope_cache_key_is_stable():

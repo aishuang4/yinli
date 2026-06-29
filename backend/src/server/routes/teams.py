@@ -13,6 +13,7 @@ import uuid
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from src.server.routes.agents import get_registered_agent, list_registered_agents
+from src.server.routes.team_defaults import DEFAULT_WORKER_SELECTOR_PROMPT
 from src.storage.database import (
     delete_json_record,
     get_json_record,
@@ -59,6 +60,7 @@ class TeamRecord(BaseModel):
     name: str
     description: str = ""
     leader_agent_id: str = Field(alias="leaderAgentId")
+    worker_selector_prompt: str = Field(default=DEFAULT_WORKER_SELECTOR_PROMPT, alias="workerSelectorPrompt")
     members: list[TeamMember] = Field(default_factory=list)
     status: TeamStatus = "idle"
     created_at: str = Field(alias="createdAt")
@@ -74,6 +76,7 @@ class TeamCreate(BaseModel):
     description: str = ""
     leader_agent_id: str = Field(alias="leaderAgentId")
     worker_agent_ids: list[str] = Field(default_factory=list, alias="workerAgentIds")
+    worker_selector_prompt: str = Field(default=DEFAULT_WORKER_SELECTOR_PROMPT, alias="workerSelectorPrompt")
 
     model_config = {"populate_by_name": True}
 
@@ -85,6 +88,7 @@ class TeamUpdate(BaseModel):
     description: str | None = None
     leader_agent_id: str | None = Field(default=None, alias="leaderAgentId")
     worker_agent_ids: list[str] | None = Field(default=None, alias="workerAgentIds")
+    worker_selector_prompt: str | None = Field(default=None, alias="workerSelectorPrompt")
     members: list[TeamMember] | None = None
     status: TeamStatus | None = None
 
@@ -438,6 +442,7 @@ async def instantiate_team_template(
         "name": data.name.strip() if data.name and data.name.strip() else template.name,
         "description": template.description,
         "leaderAgentId": leader_agent_id,
+        "workerSelectorPrompt": DEFAULT_WORKER_SELECTOR_PROMPT,
         "members": members,
         "status": "idle",
         "createdAt": now,
@@ -518,6 +523,7 @@ async def create_team(data: TeamCreate) -> TeamRecord:
         "name": data.name,
         "description": data.description,
         "leaderAgentId": data.leader_agent_id,
+        "workerSelectorPrompt": data.worker_selector_prompt or DEFAULT_WORKER_SELECTOR_PROMPT,
         "members": _build_members(data.leader_agent_id, data.worker_agent_ids),
         "status": "idle",
         "createdAt": now,

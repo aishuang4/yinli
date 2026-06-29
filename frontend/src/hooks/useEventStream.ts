@@ -156,7 +156,7 @@ export interface TeamActivityInfo {
   agentId: string;
   agentName: string;
   role: string;
-  status: 'pending' | 'running' | 'waiting' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'skipped';
   task: string;
   detail: string;
   output: string;
@@ -245,6 +245,7 @@ interface SendMessageOptions {
   agentName?: string;
   teamId?: string;
   teamName?: string;
+  workerSelectorPrompt?: string;
   teamMembers?: Array<{
     id?: string;
     agentId: string;
@@ -387,6 +388,8 @@ function getRuntimeEventDisplayText(event: ChatRuntimeEvent): string {
     case RUNTIME_EVENT_TYPES.TEAM_WORKER_WAITING_HUMAN:
     case RUNTIME_EVENT_TYPES.AGENT_WAITING_HUMAN:
       return '等待人工确认';
+    case RUNTIME_EVENT_TYPES.TEAM_WORKER_REPORTED:
+      return 'Worker 已回报';
     case RUNTIME_EVENT_TYPES.TEAM_WORKER_COMPLETED:
       return 'Worker 已完成';
     case RUNTIME_EVENT_TYPES.TEAM_WORKER_FAILED:
@@ -465,10 +468,40 @@ function statusFromRuntimeEvent(event: ChatRuntimeEvent): TeamActivityInfo['stat
   ) {
     return 'failed';
   }
+  if (event.type === RUNTIME_EVENT_TYPES.TEAM_WORKER_SKIPPED) {
+    return 'skipped';
+  }
   if (event.scope === 'worker' || event.scope === 'leader') {
     return 'running';
   }
   return null;
+}
+
+function isTeamTerminalRuntimeEvent(event: ChatRuntimeEvent): boolean {
+  return (
+    event.type === RUNTIME_EVENT_TYPES.TEAM_FAILED ||
+    event.type === RUNTIME_EVENT_TYPES.RUN_FAILED ||
+    event.type === RUNTIME_EVENT_TYPES.RUN_CANCELLED
+  );
+}
+
+function markNonTerminalTeamActivities(
+  activities: TeamActivityInfo[],
+  status: TeamActivityInfo['status'],
+  currentEvent: string,
+): TeamActivityInfo[] {
+  return activities.map((activity) => {
+    if (activity.status === 'completed' || activity.status === 'failed' || activity.status === 'skipped') {
+      return activity;
+    }
+    return {
+      ...activity,
+      status,
+      currentEvent,
+      waitReason: '',
+      detail: currentEvent || activity.detail,
+    };
+  });
 }
 
 function applyRuntimeEventToTeamActivity(
@@ -548,6 +581,92 @@ function applyRuntimeEventToTeamActivity(
     };
   }
   return base;
+}
+
+function isRuntimeToolEvent(event: ChatRuntimeEvent): boolean {
+  return (
+    event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_STARTED ||
+    event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_DELTA ||
+    event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_COMPLETED ||
+    event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_STARTED ||
+    event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_DELTA ||
+    event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_COMPLETED
+  );
+}
+
+function hasRuntimeToolEvent(runtimeEvents: ChatRuntimeEvent[], toolCallId: string): boolean {
+  if (!toolCallId) return false;
+  return runtimeEvents.some((event) => (
+    isRuntimeToolEvent(event) &&
+    String(event.payload.tool_call_id || '') === toolCallId
+  ));
+}
+
+function hasRuntimeActivityEvents(
+  runtimeEvents: ChatRuntimeEvent[],
+  activityId: string,
+  agentId: string,
+): boolean {
+  return runtimeEvents.some((event) => (
+    (activityId && event.teamActivityId === activityId) ||
+    (agentId && event.agentId === agentId && ['worker', 'leader', 'single'].includes(event.scope))
+  ));
+}
+
+function applyRuntimeEventToToolCalls(
+  toolCalls: ToolCallInfo[],
+  event: ChatRuntimeEvent,
+): ToolCallInfo[] {
+  if (!isRuntimeToolEvent(event)) return toolCalls;
+  if (event.scope === 'team' || event.scope === 'worker' || event.scope === 'leader') {
+    return toolCalls;
+  }
+
+  const toolCallId = String(event.payload.tool_call_id || '');
+  const toolName = normalizeToolDisplayName(String(event.payload.tool_call_name || 'tool'));
+  const delta = String(event.payload.delta || '');
+  if (!toolCallId && event.type !== RUNTIME_EVENT_TYPES.TOOL_CALL_STARTED) {
+    return toolCalls;
+  }
+
+  if (event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_STARTED) {
+    return mergeToolCalls(toolCalls, [{
+      id: toolCallId || createId(),
+      name: toolName,
+      args: '',
+      result: '',
+      status: 'calling',
+    }]);
+  }
+
+  if (event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_DELTA) {
+    return toolCalls.map((toolCall) => (
+      toolCall.id === toolCallId ? { ...toolCall, args: toolCall.args + delta } : toolCall
+    ));
+  }
+
+  if (
+    event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_COMPLETED ||
+    event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_STARTED
+  ) {
+    return toolCalls.map((toolCall) => (
+      toolCall.id === toolCallId ? { ...toolCall, status: 'running' } : toolCall
+    ));
+  }
+
+  if (event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_DELTA) {
+    return toolCalls.map((toolCall) => (
+      toolCall.id === toolCallId ? { ...toolCall, result: toolCall.result + delta } : toolCall
+    ));
+  }
+
+  if (event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_COMPLETED) {
+    return toolCalls.map((toolCall) => (
+      toolCall.id === toolCallId ? { ...toolCall, status: 'completed' } : toolCall
+    ));
+  }
+
+  return toolCalls;
 }
 
 /**
@@ -651,6 +770,7 @@ export function useEventStream(): UseEventStreamReturn {
             agent_name: options?.agentName,
             team_id: options?.teamId,
             team_name: options?.teamName,
+            workerSelectorPrompt: options?.workerSelectorPrompt,
             team_members: options?.teamMembers,
             system_prompt: options?.systemPrompt,
             model: options?.model,
@@ -793,20 +913,28 @@ export function useEventStream(): UseEventStreamReturn {
           const runtimeEvent = normalizeRuntimeEvent(event.data);
           const currentEvent = getRuntimeEventDisplayText(runtimeEvent);
           const status = statusFromRuntimeEvent(runtimeEvent);
+          const runtimeEvents = appendRuntimeEventCompact(prev.runtimeEvents, runtimeEvent);
           return {
             ...prev,
-            runtimeEvents: appendRuntimeEventCompact(prev.runtimeEvents, runtimeEvent),
-            teamActivities: runtimeEvent.scope === 'worker' || runtimeEvent.scope === 'leader'
-              ? prev.teamActivities.map((activity) => {
-                if (
-                  activity.id !== runtimeEvent.teamActivityId &&
-                  activity.agentId !== runtimeEvent.agentId
-                ) {
-                  return activity;
-                }
-                return applyRuntimeEventToTeamActivity(activity, runtimeEvent, status, currentEvent);
-              })
-              : prev.teamActivities,
+            runtimeEvents,
+            toolCalls: applyRuntimeEventToToolCalls(prev.toolCalls, runtimeEvent),
+            teamActivities: isTeamTerminalRuntimeEvent(runtimeEvent)
+              ? markNonTerminalTeamActivities(
+                prev.teamActivities,
+                runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_CANCELLED ? 'skipped' : 'failed',
+                runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_CANCELLED ? '运行已取消' : 'Team 执行失败',
+              )
+              : (runtimeEvent.scope === 'worker' || runtimeEvent.scope === 'leader'
+                ? prev.teamActivities.map((activity) => {
+                  if (
+                    activity.id !== runtimeEvent.teamActivityId &&
+                    activity.agentId !== runtimeEvent.agentId
+                  ) {
+                    return activity;
+                  }
+                  return applyRuntimeEventToTeamActivity(activity, runtimeEvent, status, currentEvent);
+                })
+                : prev.teamActivities),
             isStreaming: (
               runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_COMPLETED ||
               runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_FAILED ||
@@ -865,7 +993,10 @@ export function useEventStream(): UseEventStreamReturn {
         }
 
         // === 工具调用开始 ===
-        case 'TOOL_CALL_START':
+        case 'TOOL_CALL_START': {
+          if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
+            return prev;
+          }
           return {
             ...prev,
             toolCalls: mergeToolCalls(prev.toolCalls, [{
@@ -876,6 +1007,7 @@ export function useEventStream(): UseEventStreamReturn {
               status: 'calling',
             }]),
           };
+        }
 
         // === Skill 上下文注入 ===
         case 'SKILL_CONTEXT': {
@@ -925,6 +1057,11 @@ export function useEventStream(): UseEventStreamReturn {
               const existing = prev.teamActivities.find((current) => (
                 current.id === activity.id || current.agentId === activity.agentId
               ));
+              const hasRuntimeState = hasRuntimeActivityEvents(
+                prev.runtimeEvents,
+                String(activity.id || ''),
+                String(activity.agentId || ''),
+              );
               const status = String(activity.status || 'pending');
               const toolCalls = Array.isArray(activity.toolCalls)
                 ? mergeToolCalls(
@@ -932,22 +1069,33 @@ export function useEventStream(): UseEventStreamReturn {
                   activity.toolCalls.map((toolCall) => normalizeToolCallRecord(toolCall as Record<string, unknown>))
                 )
                 : existing?.toolCalls || [];
+              const normalizedStatus = (
+                status === 'running' ||
+                status === 'waiting' ||
+                status === 'completed' ||
+                status === 'failed' ||
+                status === 'skipped'
+                  ? status
+                  : 'pending'
+              );
+              const incomingTerminal = (
+                normalizedStatus === 'completed' ||
+                normalizedStatus === 'failed' ||
+                normalizedStatus === 'skipped'
+              );
+              const preserveRuntimeState = Boolean(hasRuntimeState && existing && !incomingTerminal);
               return {
                 id: String(activity.id || createId()),
                 agentId: String(activity.agentId || ''),
                 agentName: String(activity.agentName || 'Agent'),
                 role: String(activity.role || 'worker'),
-                status: (
-                  status === 'running' || status === 'waiting' || status === 'completed' || status === 'failed'
-                    ? status
-                    : 'pending'
-                ),
+                status: preserveRuntimeState && existing ? existing.status : normalizedStatus,
                 task: String(activity.task || ''),
-                detail: String(activity.detail || ''),
-                output: String(activity.output || existing?.output || ''),
-                thinking: String(activity.thinking || existing?.thinking || ''),
-                currentEvent: existing?.currentEvent || '',
-                toolCalls,
+                detail: preserveRuntimeState && existing ? existing.detail : String(activity.detail || existing?.detail || ''),
+                output: preserveRuntimeState && existing ? existing.output : String(activity.output || existing?.output || ''),
+                thinking: preserveRuntimeState && existing ? existing.thinking : String(activity.thinking || existing?.thinking || ''),
+                currentEvent: incomingTerminal ? String(activity.detail || existing?.currentEvent || '') : existing?.currentEvent || '',
+                toolCalls: preserveRuntimeState && existing ? existing.toolCalls : toolCalls,
                 executionMode: String(activity.executionMode || existing?.executionMode || 'parallel'),
                 dependsOn: Array.isArray(activity.dependsOn)
                   ? activity.dependsOn.map((item) => String(item))
@@ -965,6 +1113,9 @@ export function useEventStream(): UseEventStreamReturn {
         case 'TEAM_MEMBER_EVENT': {
           const activityId = String(event.data.activityId || '');
           const agentId = String(event.data.agentId || '');
+          if (hasRuntimeActivityEvents(prev.runtimeEvents, activityId, agentId)) {
+            return prev;
+          }
           const eventType = String(event.data.eventType || '');
           const memberEvent = (
             typeof event.data.event === 'object' && event.data.event !== null

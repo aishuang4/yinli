@@ -70,7 +70,8 @@ export function normalizeStoredTeamActivities(activities: StoredTeamActivity[]):
       activity.status === 'running' ||
       activity.status === 'waiting' ||
       activity.status === 'completed' ||
-      activity.status === 'failed'
+      activity.status === 'failed' ||
+      activity.status === 'skipped'
         ? activity.status
         : 'completed'
     ),

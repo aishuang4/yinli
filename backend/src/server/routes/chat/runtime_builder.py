@@ -15,13 +15,11 @@ from src.agents.factory import (
     RuntimeToolScope,
     get_or_create_agent,
 )
-from src.server.routes.chat.intent_router import (
-    IntentRoute,
-    filter_team_members_for_route,
-)
 from src.server.routes.chat.models import ChatMessage, ChatTeamMemberPayload
 from src.server.routes.chat.prompts import _build_team_system_prompt
-from src.server.routes.skills import Skill, get_installed_skill
+from src.server.routes.chat.skill_selector import select_runtime_skills
+from src.server.routes.chat.tool_scope_resolver import resolve_runtime_tool_scope
+from src.server.routes.skills import Skill
 
 
 @dataclass(frozen=True)
@@ -35,7 +33,7 @@ class RuntimeModelConfig:
 
 @dataclass(frozen=True)
 class RoutedTeamContext:
-    """按 IntentRoute 裁剪后的 Team 上下文。"""
+    """完整 Team 上下文。Worker 选择由 Team Runtime 内部处理。"""
 
     members: list[ChatTeamMemberPayload]
     run_data: ChatMessage
@@ -91,16 +89,11 @@ def build_runtime_model_config(
 def build_routed_team_context(
     *,
     run_data: ChatMessage,
-    intent_route: IntentRoute,
     leader_agent_id: str,
 ) -> RoutedTeamContext:
-    """根据路由结果生成本轮 Team 成员和 Leader 系统提示词。"""
+    """生成完整 Team 上下文和 Leader 系统提示词。"""
 
-    members = filter_team_members_for_route(
-        run_data.team_members,
-        intent_route.selected_team_member_ids,
-        leader_agent_id,
-    )
+    members = run_data.team_members
     return RoutedTeamContext(
         members=members,
         run_data=run_data.model_copy(update={"team_members": members}),
@@ -108,27 +101,38 @@ def build_routed_team_context(
     )
 
 
-def select_route_skills(intent_route: IntentRoute, active_skill: Skill | None) -> list[Skill]:
-    """按路由结果选择本轮 Skill；正在恢复的 Skill 优先。"""
+def build_runtime_skills(
+    *,
+    skill_ids: list[str],
+    message: str,
+    active_skill: Skill | None,
+) -> list[Skill]:
+    """选择本轮 Skill；正在恢复的 Skill 优先。"""
 
-    if active_skill:
-        return [active_skill]
-    return [
-        skill
-        for skill_id in intent_route.selected_skill_ids
-        if (skill := get_installed_skill(skill_id)) is not None
-    ]
-
-
-def runtime_tool_scope_from_route(intent_route: IntentRoute) -> RuntimeToolScope:
-    """把 API 层 ToolScope 转换为 Agent 工厂使用的 RuntimeToolScope。"""
-
-    return RuntimeToolScope(
-        allow_mcp=intent_route.tool_scope.allow_mcp,
-        allow_knowledge=intent_route.tool_scope.allow_knowledge,
-        allow_bash=intent_route.tool_scope.allow_bash,
-        allow_http=intent_route.tool_scope.allow_http,
+    return select_runtime_skills(
+        skill_ids=skill_ids,
+        message=message,
+        active_skill=active_skill,
     )
+
+
+def resolve_react_runtime_tool_scope(
+    *,
+    message: str,
+    agent_config: object | None,
+    has_selected_skills: bool,
+    has_team: bool,
+    has_images: bool,
+) -> RuntimeToolScope:
+    """解析 ReAct Runtime 使用的工具范围。"""
+
+    return resolve_runtime_tool_scope(
+        message=message,
+        agent_config=agent_config,
+        has_selected_skills=has_selected_skills,
+        has_team=has_team,
+        has_images=has_images,
+    ).scope
 
 
 def build_runtime_agent_cache_key(

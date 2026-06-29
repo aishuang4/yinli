@@ -204,13 +204,15 @@ def _build_worker_system_prompt(
     leader_name: str | None,
     member: ChatTeamMemberPayload,
 ) -> str:
-    """Build Team context for a worker Agent."""
+    """Build AgentScope-style Team context for a worker Agent."""
     return "\n".join([
-        "## Team Worker Runtime Context",
+        "## AgentScope-style Team Worker Runtime Context",
         f"You are a worker agent in Team: {team_name or 'Unnamed Team'}.",
         f"Leader: {leader_name or 'Leader'}.",
         f"Your team role: {member.name}.",
-        "Run your own ReAct loop. Use tools when needed, stay within the shared workspace context, and return a focused contribution for the leader.",
+        "Run your own isolated ReAct loop. Use tools when needed and stay within the shared workspace context.",
+        "When your assignment is complete, your final response is treated as a TeamSay report to the leader.",
+        "Report concrete findings, evidence, tool results, blockers, and confidence. Do not write the final team answer.",
     ])
 
 
@@ -220,32 +222,59 @@ def _build_worker_user_message(
     dependency_outputs: list[dict[str, str]] | None = None,
 ) -> str:
     """Build the delegated task sent to a worker."""
+    assignment = build_worker_assignment_text(member)
     parts = [
         "Leader delegated this user request to you:",
         user_message,
         "Your assignment:",
-        member.description or "Analyze this request from your role and provide actionable findings.",
+        assignment,
     ]
-    if member.handoff_prompt:
-        parts.extend([
-            "Handoff instructions:",
-            member.handoff_prompt,
-        ])
     if dependency_outputs:
         parts.append("Upstream worker outputs you must use:")
         for item in dependency_outputs:
             parts.append(f"### {item.get('name') or item.get('agentId')}")
             parts.append(item.get("output") or "(No output)")
-    parts.append("Return your worker result clearly. Do not write the final team answer; the leader will synthesize it.")
+    parts.append("Return a TeamSay-style report to the leader. Do not write the final team answer; the leader will synthesize it.")
     return "\n\n".join(parts)
 
 
+def build_worker_assignment_text(member: ChatTeamMemberPayload) -> str:
+    """Build a member-specific assignment used by both UI and worker prompt."""
+
+    handoff = member.handoff_prompt.strip()
+    if handoff:
+        return handoff
+
+    description = member.description.strip()
+    if description and description.lower() not in {"team worker session", "worker"}:
+        return description
+
+    name = member.name.strip() or "Worker"
+    lowered = name.lower()
+    if "调研" in name or "research" in lowered:
+        return "负责梳理用户视角流程、现状信息和关键事实，给 Leader 提供调研结论。"
+    if "架构" in name or "architect" in lowered:
+        return "负责检查系统架构、模块边界、事件链路和长期可维护性风险。"
+    if "开发" in name or "代码" in name or "developer" in lowered or "code" in lowered:
+        return "负责检查后端/前端实现链路、关键代码路径、运行状态和可落地修改建议。"
+    if "审查" in name or "review" in lowered:
+        return "负责从缺陷、回归风险、验证漏洞和测试缺口角度进行审查。"
+    if "测试" in name or "test" in lowered:
+        return "负责设计验证步骤、测试案例和验收标准，并指出未覆盖风险。"
+    if "文档" in name or "报告" in name or "doc" in lowered or "writer" in lowered:
+        return "负责整理结构化结论、输出报告草稿和可交付表达。"
+    if "知识" in name or "检索" in name or "search" in lowered:
+        return "负责检索相关知识和证据，并返回可引用的材料摘要。"
+
+    return f"作为 {name}，从你的专业角色出发分析用户请求，返回可供 Leader 汇总的明确发现。"
+
+
 def _build_worker_outputs_system_prompt(worker_outputs: list[dict[str, str]]) -> str:
-    """Build a leader-visible summary of actual worker outputs."""
+    """Build a leader-visible summary of actual worker reports."""
     lines = [
-        "## Worker ReAct Outputs",
-        "The following worker outputs are authoritative context for your final team response.",
-        "You must synthesize completed worker outputs explicitly. If a worker failed or is waiting, say what data is missing instead of inventing details.",
+        "## Worker TeamSay Reports",
+        "The following worker reports are authoritative context for your final team response.",
+        "You must synthesize completed worker reports explicitly. If a worker failed or is waiting, say what data is missing instead of inventing details.",
     ]
     for item in worker_outputs:
         status = item.get("status") or "unknown"

@@ -9,7 +9,7 @@ from typing import Any
 
 from src.config.runtime_settings import get_effective_model_settings
 from src.server.routes.agents import get_registered_agent
-from src.server.routes.chat.intent_router import IntentRoute, route_chat_message_with_model
+from src.server.routes.chat.intent_router import IntentRoute, route_chat_message, route_chat_message_with_model
 from src.server.routes.chat.models import ChatMessage, ChatSkillRun, ChatTeamActivity
 from src.server.routes.chat.prompts import (
     _build_clarification_system_prompt,
@@ -22,13 +22,14 @@ from src.server.routes.chat.runtime import (
     _build_runtime_knowledge_tools,
     _build_runtime_mcp_servers,
 )
+from src.server.routes.chat.readiness_gate import ReadinessDecision, check_message_readiness_with_model
 from src.server.routes.chat.runtime_builder import (
     RoutedTeamContext,
     RuntimeModelConfig,
+    build_runtime_skills,
     build_routed_team_context,
     build_runtime_model_config,
-    runtime_tool_scope_from_route,
-    select_route_skills,
+    resolve_react_runtime_tool_scope,
 )
 from src.server.routes.chat.skill_runs import (
     build_skill_run_system_prompt,
@@ -52,6 +53,7 @@ class ChatRunContext:
     persist_run: bool
     runtime_model_settings: Any
     runtime_model_config: RuntimeModelConfig
+    readiness: ReadinessDecision
     intent_route: IntentRoute
     routed_team: RoutedTeamContext
     effective_user_message: str
@@ -82,16 +84,6 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
     )
     persist_run = not run_data.sandbox
 
-    active_skill_run = get_active_session_skill_run(session_id, agent_id)
-    active_skill = get_skill_for_run(active_skill_run)
-    if active_skill_run and active_skill_run.get("status") == "waiting_user" and persist_run:
-        active_skill_run = update_skill_run_status(
-            active_skill_run,
-            status="active",
-            current_step="resumed_with_user_input",
-            pending_interaction_id="",
-        )
-
     skill_ids = agent_config.skills if agent_config and not run_data.skill_ids else run_data.skill_ids
     runtime_model_settings = get_effective_model_settings()
     runtime_model_config = build_runtime_model_config(
@@ -99,7 +91,7 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
         agent_config=agent_config,
         runtime_model_settings=runtime_model_settings,
     )
-    intent_route = await route_chat_message_with_model(
+    readiness = await check_message_readiness_with_model(
         message=run_data.message,
         agent_config=agent_config,
         skill_ids=skill_ids,
@@ -107,23 +99,48 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
         images=run_data.images,
         model_name=runtime_model_config.model_name,
         fallback_names=runtime_model_config.fallback_names,
-        team_name=run_data.team_name,
     )
+    if readiness.ready:
+        intent_route = await route_chat_message_with_model(
+            message=run_data.message,
+            agent_config=agent_config,
+            team_members=run_data.team_members,
+            images=run_data.images,
+            model_name=runtime_model_config.model_name,
+            fallback_names=runtime_model_config.fallback_names,
+        )
+    else:
+        intent_route = route_chat_message(team_members=run_data.team_members)
     routed_team = build_routed_team_context(
         run_data=run_data,
-        intent_route=intent_route,
         leader_agent_id=agent_id,
     )
 
-    used_skills = select_route_skills(intent_route, active_skill)
-    if not active_skill_run and used_skills and persist_run and not intent_route.require_clarification:
-        active_skill_run = start_or_resume_skill_run(
-            session_id=session_id,
-            agent_id=agent_id,
-            skill=used_skills[0],
-            status="active",
-            current_step="started",
+    active_skill_run = None
+    used_skills: list[Skill] = []
+    if readiness.ready:
+        active_skill_run = get_active_session_skill_run(session_id, agent_id)
+        active_skill = get_skill_for_run(active_skill_run)
+        if active_skill_run and active_skill_run.get("status") == "waiting_user" and persist_run:
+            active_skill_run = update_skill_run_status(
+                active_skill_run,
+                status="active",
+                current_step="resumed_with_user_input",
+                pending_interaction_id="",
+            )
+        used_skills = build_runtime_skills(
+            skill_ids=skill_ids,
+            message=run_data.message,
+            active_skill=active_skill,
         )
+        if not active_skill_run and used_skills and persist_run:
+            active_skill_run = start_or_resume_skill_run(
+                session_id=session_id,
+                agent_id=agent_id,
+                skill=used_skills[0],
+                status="active",
+                current_step="started",
+            )
 
     used_skill_details = list_skill_usage_details(used_skills)
     skill_runs = [
@@ -149,7 +166,13 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
     )
 
     guardrails = _build_runtime_guardrails(agent_config)
-    runtime_tool_scope = runtime_tool_scope_from_route(intent_route)
+    runtime_tool_scope = resolve_react_runtime_tool_scope(
+        message=run_data.message,
+        agent_config=agent_config,
+        has_selected_skills=bool(used_skills),
+        has_team=bool(routed_team.members),
+        has_images=bool(run_data.images),
+    )
     return ChatRunContext(
         session_id=session_id,
         agent_id=agent_id,
@@ -158,6 +181,7 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
         persist_run=persist_run,
         runtime_model_settings=runtime_model_settings,
         runtime_model_config=runtime_model_config,
+        readiness=readiness,
         intent_route=intent_route,
         routed_team=routed_team,
         effective_user_message=run_data.message,

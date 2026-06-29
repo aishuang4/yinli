@@ -84,7 +84,9 @@ export function splitAssistantContentByRuntimeEvents(
   const traceParts: string[] = [];
   let sawActionAfterOutput = false;
   for (const event of runtimeEvents) {
+    const isTeamProcessScope = event.scope === 'team' || event.scope === 'worker';
     if (event.type === RUNTIME_EVENT_TYPES.AGENT_REASONING_DELTA) {
+      if (isTeamProcessScope) continue;
       traceParts.push(String(event.payload.delta || '').trim());
       continue;
     }
@@ -97,7 +99,11 @@ export function splitAssistantContentByRuntimeEvents(
       continue;
     }
     if (event.type === RUNTIME_EVENT_TYPES.AGENT_OUTPUT_DELTA) {
-      outputBuffer += String(event.payload.delta || '');
+      // Worker/Team 普通过程输出只属于右侧协作详情，不属于 assistant 最终答案。
+      // 单 Agent 旧链路可能仍使用 AGENT_OUTPUT_DELTA，因此只兼容 single scope。
+      if (event.scope === 'single') {
+        outputBuffer += String(event.payload.delta || '');
+      }
       continue;
     }
     if (isRuntimeActionBoundary(event)) {
@@ -110,6 +116,12 @@ export function splitAssistantContentByRuntimeEvents(
   }
 
   if (!sawActionAfterOutput) {
+    if (options.streaming && content.trim()) {
+      return {
+        reactTrace: mergeTextParts(traceParts),
+        finalAnswer: content.trim(),
+      };
+    }
     return {
       reactTrace: content.trim(),
       finalAnswer: '',

@@ -11,6 +11,20 @@
 - 新功能必须定义独立 Runtime Event 家族，不允许混用其他功能事件。例如记忆使用 `MEMORY_*`，产物使用 `ARTIFACT_*`，沙箱使用 `SANDBOX_*`。
 - Plan Runtime 与 Subagent Runtime 已下线，`PLAN_*`、`SUBAGENT_*` 事件不属于当前稳定契约。
 
+## Chat 路由分层
+
+- Readiness Gate 是进入 architecture 前的前置判断，由系统内置 `ReadinessAgent` 判断本轮信息是否足够开始执行。若信息不足，后端直接返回 `CLARIFICATION_REQUIRED` 并停止进入 Runtime。
+- 第一层是 architecture，由前置意图识别决定。当前在线值为 `react`；`plan`、`subagent` 后续重新设计后再进入稳定契约。`clarification` 不是 architecture runtime，只是运行前等待补充信息的状态。
+- 第二层是 executor，由前端选择机械决定。选择单 Agent 时为 `single_agent`，选择 Team 时为 `team`，模型不得把单 Agent 改成 Team 或把 Team 改成单 Agent。
+- `INTENT_ROUTE` trace payload 必须包含 `runtime`、`executor` 与 `readiness_gate` decision，其中 `runtime.kind` 表示架构模式，`executor.kind` 表示执行主体。
+
+## ReAct Runtime 链路
+
+- `/api/chat/send` 只负责统一入口、构建 `ChatRunContext`、输出起始事件和启动校验。
+- `runtime_dispatcher.execute_chat_runtime()` 只按第一层 `runtime.kind` 分发。当前仅 `react` 在线；信息不足时在进入 Runtime 前由 send 直接返回反问事件。
+- `react_runtime.execute_react_runtime()` 是 ReAct 唯一执行入口。它先读取第二层 `executor.kind`：`single_agent` 直接进入主 Agent，`team` 先运行 Worker，再把 Worker 输出拼入 Leader 上下文。
+- ReAct Runtime 内部仍复用统一的 `LeaderStreamState`、`RUNTIME_EVENT`、成功/失败收尾与历史消息持久化，不为 Team 另开独立 SSE 契约。
+
 ## Runtime Event
 
 `RUNTIME_EVENT` 是业务状态事实日志，payload 固定为：
@@ -28,7 +42,7 @@
 - `RUN_*`：`RUN_STARTED`、`RUN_WAITING`、`RUN_RESUMED`、`RUN_COMPLETED`、`RUN_FAILED`、`RUN_CANCELLED`。
 - `AGENT_*`：模型调用、输出、等待人工、恢复、完成、失败等 Agent 状态。
 - `TOOL_*`：`TOOL_CALL_STARTED`、`TOOL_CALL_DELTA`、`TOOL_CALL_COMPLETED`、`TOOL_RESULT_STARTED`、`TOOL_RESULT_DELTA`、`TOOL_RESULT_COMPLETED`。
-- `TEAM_*`：Team 初始化、Worker 调度/等待/完成/失败、Leader 汇总、Team 完成/失败。
+- `TEAM_*`：Team 初始化、Worker 调度/等待/报告/完成/失败、Leader 汇总、Team 完成/失败。
 - `SKILL_*`：Skill 开始、完成、失败。
 - `HITL_*` / `CLARIFICATION_*`：人工确认与反问采集。
 - `MEMORY_*`：记忆总结与候选记忆生命周期。
@@ -76,6 +90,7 @@
 
 - `TEAM_ACTIVITY`：Team 成员状态快照。必须包含 `activities` 数组。前端按 `id` 或 `agentId` 合并同一成员状态。
 - `TEAM_MEMBER_EVENT`：兼容旧前端的 Worker ReAct 子事件。新代码应优先消费 `RUNTIME_EVENT` 中的 `AGENT_*` / `TOOL_*` / `TEAM_*`，不要再新增依赖。
+- `TEAM_WORKER_REPORTED`：Worker 已按 AgentScope TeamSay 语义向 Leader 提交报告。必须包含 `agentId`、`agentName`，payload 建议包含 `to` 与 `reportPreview`。
 
 ## 用户介入
 
