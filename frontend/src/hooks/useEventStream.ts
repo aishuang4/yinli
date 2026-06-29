@@ -163,6 +163,11 @@ export interface TeamActivityInfo {
   constraints: string;
   detail: string;
   output: string;
+  report: string;
+  skippedReason: string;
+  reportReviewStatus: string;
+  reportReviewNotes: string;
+  reportReviewGaps: string[];
   thinking: string;
   currentEvent: string;
   toolCalls: ToolCallInfo[];
@@ -1099,6 +1104,13 @@ export function useEventStream(): UseEventStreamReturn {
                 constraints: String(activity.constraints || existing?.constraints || ''),
                 detail: preserveRuntimeState && existing ? existing.detail : String(activity.detail || existing?.detail || ''),
                 output: preserveRuntimeState && existing ? existing.output : String(activity.output || existing?.output || ''),
+                report: preserveRuntimeState && existing ? existing.report : String(activity.report || existing?.report || ''),
+                skippedReason: String(activity.skippedReason || existing?.skippedReason || ''),
+                reportReviewStatus: String(activity.reportReviewStatus || existing?.reportReviewStatus || ''),
+                reportReviewNotes: String(activity.reportReviewNotes || existing?.reportReviewNotes || ''),
+                reportReviewGaps: Array.isArray(activity.reportReviewGaps)
+                  ? activity.reportReviewGaps.map((item) => String(item))
+                  : existing?.reportReviewGaps || [],
                 thinking: preserveRuntimeState && existing ? existing.thinking : String(activity.thinking || existing?.thinking || ''),
                 currentEvent: incomingTerminal ? String(activity.detail || existing?.currentEvent || '') : existing?.currentEvent || '',
                 toolCalls: preserveRuntimeState && existing ? existing.toolCalls : toolCalls,

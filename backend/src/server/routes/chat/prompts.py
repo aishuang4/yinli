@@ -286,16 +286,25 @@ def _build_worker_outputs_system_prompt(worker_outputs: list[dict[str, str]]) ->
     """Build a leader-visible summary of actual worker reports."""
     lines = [
         "## Worker TeamSay Reports",
-        "The following worker reports are authoritative context for your final team response.",
+        "The following formal worker reports are authoritative context for your final team response.",
         "You must synthesize completed worker reports explicitly. If a worker failed or is waiting, say what data is missing instead of inventing details.",
     ]
     for item in worker_outputs:
         status = item.get("status") or "unknown"
         detail = item.get("detail") or ""
+        review_status = item.get("reportReviewStatus") or ""
+        review_notes = item.get("reportReviewNotes") or ""
+        review_gaps = item.get("reportReviewGaps") or ""
         lines.append(f"### {item['name']} ({status})")
         if detail:
             lines.append(f"Status detail: {detail}")
-        lines.append(item["output"] or "(No output)")
+        if review_status:
+            lines.append(f"Report review: {review_status}")
+        if review_notes:
+            lines.append(f"Review notes: {review_notes}")
+        if review_gaps:
+            lines.append(f"Review gaps:\n{review_gaps}")
+        lines.append(item.get("report") or item.get("output") or "(No report)")
     return "\n\n".join(lines)
 
 

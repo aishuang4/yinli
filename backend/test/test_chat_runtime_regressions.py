@@ -19,7 +19,7 @@ from src.server.routes.chat.intent_router import (
     route_chat_message_with_model,
     route_trace_payload,
 )
-from src.server.routes.chat.models import ChatMessage, ChatTeamMemberPayload, ChatToolRun
+from src.server.routes.chat.models import ChatMessage, ChatTeamActivity, ChatTeamMemberPayload, ChatToolRun
 from src.server.routes.chat.prompts import build_worker_assignment_text
 from src.server.routes.chat.runtime import _permission_mode_for_guardrails
 from src.server.routes.chat.runtime_builder import (
@@ -31,7 +31,7 @@ from src.server.routes.chat.runtime_builder import (
 )
 from src.server.routes.chat.team_worker_selector import filter_team_members_for_runtime
 from src.server.routes.chat.tool_scope_resolver import resolve_runtime_tool_scope
-from src.server.routes.chat.team_state import _pending_tool_calls_to_runs
+from src.server.routes.chat.team_state import _collect_worker_outputs, _pending_tool_calls_to_runs
 from src.server.routes.chat.trace_recorder import _model_cache_from_event, _permission_decision_payload
 from src.server.routes.traces import _event_trace_status, _trace_status
 from src.agents.factory import AgentGuardrails, AgentModelOptions, RuntimeToolScope, _build_context_config
@@ -78,6 +78,37 @@ def test_resume_text_event_scopes_are_separated():
     assert _is_final_answer_text_scope("worker") is False
     assert _should_wrap_resume_text_as_final("TEXT_BLOCK_DELTA", "leader") is True
     assert _should_wrap_resume_text_as_final("TEXT_BLOCK_DELTA", "worker") is False
+
+
+def test_team_leader_collects_formal_worker_report_only():
+    """Leader 汇总只消费 Worker report，不读取运行过程 output 碎片。"""
+
+    outputs = _collect_worker_outputs([
+        ChatTeamActivity(
+            id="activity-worker",
+            agentId="worker-a",
+            agentName="调研 Worker",
+            role="worker",
+            status="completed",
+            task="调研任务",
+            output="过程碎片：正在读取资料...",
+            report="正式报告：用户流程已梳理完成。",
+            createdAt="2026-06-29T00:00:00+00:00",
+        ),
+    ])
+
+    assert outputs == [{
+        "agentId": "worker-a",
+        "name": "调研 Worker",
+        "status": "completed",
+        "detail": "",
+        "report": "正式报告：用户流程已梳理完成。",
+        "output": "正式报告：用户流程已梳理完成。",
+        "skippedReason": "",
+        "reportReviewStatus": "",
+        "reportReviewNotes": "",
+        "reportReviewGaps": "",
+    }]
     assert _should_emit_raw_resume_event("TEXT_BLOCK_DELTA", "leader") is False
     assert _should_emit_raw_resume_event("TEXT_BLOCK_DELTA", "worker") is False
     assert _should_emit_raw_resume_event("THINKING_BLOCK_DELTA", "leader") is False

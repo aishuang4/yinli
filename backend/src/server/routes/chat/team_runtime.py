@@ -16,7 +16,9 @@ from typing import AsyncGenerator
 from src.server.routes.chat.helpers import _sse_event
 from src.server.routes.chat.models import ChatMessage, ChatSkillRun, ChatTeamActivity
 from src.server.routes.chat.prompts import _build_worker_outputs_system_prompt
+from src.server.routes.chat.runtime_events import runtime_event_sse
 from src.server.routes.chat.team import _run_team_workers
+from src.server.routes.chat.team_report_reviewer import review_team_worker_reports
 from src.server.routes.chat.team_state import (
     _collect_worker_outputs,
     _find_team_activity,
@@ -61,6 +63,43 @@ async def prepare_leader_with_team_runtime(
     if any(activity.status == "waiting" for activity in team_activities):
         state.waiting = True
         return
+
+    reviews = await review_team_worker_reports(
+        message=data.message,
+        team_name=data.team_name,
+        activities=team_activities,
+        model_name=model_name,
+    )
+    for activity in list(team_activities):
+        review = reviews.get(activity.agent_id)
+        if not review:
+            continue
+        _replace_team_activity(
+            team_activities,
+            activity.model_copy(update={
+                "report_review_status": review.status,
+                "report_review_notes": review.notes,
+                "report_review_gaps": list(review.gaps),
+            }),
+        )
+    if reviews:
+        yield runtime_event_sse(
+            "TEAM_REPORT_REVIEWED",
+            session_id=session_id,
+            scope="team",
+            status=(
+                "completed"
+                if all(review.status == "accepted" for review in reviews.values())
+                else "waiting"
+            ),
+            payload={
+                "acceptedCount": len([review for review in reviews.values() if review.status == "accepted"]),
+                "needsRevisionCount": len([review for review in reviews.values() if review.status == "needs_revision"]),
+            },
+        )
+        yield _sse_event("TEAM_ACTIVITY", {
+            "activities": [item.model_dump(by_alias=True) for item in team_activities],
+        })
 
     state.worker_reports = _collect_worker_outputs(team_activities)
     if not state.worker_reports:

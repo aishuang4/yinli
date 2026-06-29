@@ -99,6 +99,10 @@ export type StoredTeamActivity = Partial<TeamActivityInfo> & {
   agent_id?: string;
   agent_name?: string;
   expected_output?: string;
+  skipped_reason?: string;
+  report_review_status?: string;
+  report_review_notes?: string;
+  report_review_gaps?: string[];
   tool_calls?: ToolCallInfo[];
   created_at?: string;
 };
