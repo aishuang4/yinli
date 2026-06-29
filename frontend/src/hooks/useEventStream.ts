@@ -158,6 +158,9 @@ export interface TeamActivityInfo {
   role: string;
   status: 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'skipped';
   task: string;
+  assignment: string;
+  expectedOutput: string;
+  constraints: string;
   detail: string;
   output: string;
   thinking: string;
@@ -1091,6 +1094,9 @@ export function useEventStream(): UseEventStreamReturn {
                 role: String(activity.role || 'worker'),
                 status: preserveRuntimeState && existing ? existing.status : normalizedStatus,
                 task: String(activity.task || ''),
+                assignment: String(activity.assignment || existing?.assignment || ''),
+                expectedOutput: String(activity.expectedOutput || existing?.expectedOutput || ''),
+                constraints: String(activity.constraints || existing?.constraints || ''),
                 detail: preserveRuntimeState && existing ? existing.detail : String(activity.detail || existing?.detail || ''),
                 output: preserveRuntimeState && existing ? existing.output : String(activity.output || existing?.output || ''),
                 thinking: preserveRuntimeState && existing ? existing.thinking : String(activity.thinking || existing?.thinking || ''),

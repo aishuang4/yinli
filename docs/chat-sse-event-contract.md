@@ -90,6 +90,7 @@
 
 - `TEAM_ACTIVITY`：Team 成员状态快照。必须包含 `activities` 数组。前端按 `id` 或 `agentId` 合并同一成员状态。
 - `TEAM_MEMBER_EVENT`：兼容旧前端的 Worker ReAct 子事件。新代码应优先消费 `RUNTIME_EVENT` 中的 `AGENT_*` / `TOOL_*` / `TEAM_*`，不要再新增依赖。
+- `TEAM_ASSIGNMENT_PLANNED`：Team 已完成本轮 Worker 分派。payload 必须包含 `workerCount`；具体分派内容以随后 `TEAM_ACTIVITY.activities[].assignment/expectedOutput/constraints` 为准。
 - `TEAM_WORKER_REPORTED`：Worker 已按 AgentScope TeamSay 语义向 Leader 提交报告。必须包含 `agentId`、`agentName`，payload 建议包含 `to` 与 `reportPreview`。
 
 ## 用户介入

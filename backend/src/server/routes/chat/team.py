@@ -19,6 +19,10 @@ from src.server.routes.chat.models import (
     ChatTeamMemberPayload,
 )
 from src.server.routes.chat.runtime_events import runtime_event_sse
+from src.server.routes.chat.team_assignment_planner import (
+    TeamWorkerAssignment,
+    plan_team_worker_assignments,
+)
 from src.server.routes.chat.team_scheduler import (
     TeamSchedulerState,
     decide_worker_schedule,
@@ -80,6 +84,25 @@ async def _run_team_workers(
             "activities": [item.model_dump(by_alias=True) for item in team_activities],
         })
         return
+
+    assignments = await plan_team_worker_assignments(
+        message=data.message,
+        team_name=data.team_name,
+        team_members=data.team_members,
+        model_name=model_name,
+    )
+    workers = _apply_worker_assignments(
+        workers=workers,
+        assignments=assignments,
+        team_activities=team_activities,
+    )
+    yield runtime_event_sse(
+        "TEAM_ASSIGNMENT_PLANNED",
+        session_id=session_id,
+        scope="team",
+        status="completed",
+        payload={"workerCount": len(assignments)},
+    )
 
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     pause_event = asyncio.Event()
@@ -353,6 +376,47 @@ def _mark_unselected_workers_skipped(
             payload={"detail": "Team Runtime 判断本轮任务不需要该 Worker 参与。"},
         ))
     return events
+
+
+def _apply_worker_assignments(
+    *,
+    workers: list[ChatTeamMemberPayload],
+    assignments: dict[str, TeamWorkerAssignment],
+    team_activities: list[ChatTeamActivity],
+) -> list[ChatTeamMemberPayload]:
+    """把本轮分派写入 Team 活动，供 UI 和 Worker prompt 共用。"""
+
+    updated_workers: list[ChatTeamMemberPayload] = []
+    for member in workers:
+        assignment = assignments.get(member.agent_id)
+        if not assignment:
+            updated_workers.append(member)
+            continue
+        member_dependencies = list(assignment.depends_on or member.depends_on)
+        updated_member = member.model_copy(update={"depends_on": member_dependencies})
+        updated_workers.append(updated_member)
+        activity = _find_team_activity(team_activities, member.agent_id)
+        if not activity:
+            continue
+
+        detail_parts = [assignment.task]
+        if assignment.expected_output:
+            detail_parts.append(f"期望输出：{assignment.expected_output}")
+        if assignment.constraints:
+            detail_parts.append(f"约束：{assignment.constraints}")
+
+        _replace_team_activity(
+            team_activities,
+            activity.model_copy(update={
+                "task": assignment.task,
+                "assignment": assignment.task,
+                "expected_output": assignment.expected_output,
+                "constraints": assignment.constraints,
+                "detail": "\n".join(detail_parts),
+                "depends_on": member_dependencies,
+            }),
+        )
+    return updated_workers
 
 
 

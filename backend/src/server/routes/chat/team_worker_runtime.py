@@ -171,7 +171,14 @@ async def run_team_worker(request: TeamWorkerRuntimeRequest) -> None:
         worker_msg = UserMsg(
             name="team_leader",
             content=_build_user_content(
-                _build_worker_user_message(data.message, member, request.dependency_outputs),
+                _build_worker_user_message(
+                    data.message,
+                    member,
+                    request.dependency_outputs,
+                    assignment=activity.assignment if activity else "",
+                    expected_output=activity.expected_output if activity else "",
+                    constraints=activity.constraints if activity else "",
+                ),
                 data.images,
             ),
         )
@@ -312,7 +319,14 @@ async def _pause_worker_for_hitl(
         model_name=request.model_name,
         reply_id=str(event_data.get("reply_id") or ""),
         tool_calls=list(event_data.get("tool_calls") or []),
-        message=_build_worker_user_message(data.message, member, request.dependency_outputs),
+        message=_build_worker_user_message(
+            data.message,
+            member,
+            request.dependency_outputs,
+            assignment=activity.assignment if activity else "",
+            expected_output=activity.expected_output if activity else "",
+            constraints=activity.constraints if activity else "",
+        ),
         assistant_text="",
         skill_runs=request.skill_runs,
         team_activities=request.team_activities,
