@@ -456,6 +456,7 @@ async def _complete_worker_report(
     completed = activity.model_copy(update={
         "status": "completed",
         "output": worker_text,
+        "report": worker_text,
         "thinking": worker_thinking,
         "tool_calls": worker_tool_calls,
         "detail": _trim_text(worker_text, 160) or "Worker 已完成本轮 ReAct 循环。",
@@ -532,6 +533,7 @@ async def _fail_worker(
                 "status": "failed",
                 "detail": f"Worker 执行失败: {error}",
                 "output": worker_text,
+                "report": worker_text,
                 "thinking": worker_thinking,
                 "tool_calls": worker_tool_calls,
             }),

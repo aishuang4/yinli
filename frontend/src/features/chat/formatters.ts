@@ -81,6 +81,15 @@ export function normalizeStoredTeamActivities(activities: StoredTeamActivity[]):
     constraints: String(activity.constraints || ''),
     detail: String(activity.detail || ''),
     output: String(activity.output || ''),
+    report: String(activity.report || ''),
+    skippedReason: String(activity.skippedReason || activity.skipped_reason || ''),
+    reportReviewStatus: String(activity.reportReviewStatus || activity.report_review_status || ''),
+    reportReviewNotes: String(activity.reportReviewNotes || activity.report_review_notes || ''),
+    reportReviewGaps: Array.isArray(activity.reportReviewGaps)
+      ? activity.reportReviewGaps.map((item) => String(item))
+      : Array.isArray(activity.report_review_gaps)
+        ? activity.report_review_gaps.map((item) => String(item))
+        : [],
     thinking: String(activity.thinking || ''),
     currentEvent: String(activity.currentEvent || ''),
     toolCalls: normalizeStoredToolCalls(activity.toolCalls || activity.tool_calls || []),

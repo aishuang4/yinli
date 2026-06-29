@@ -54,18 +54,24 @@ def _pending_tool_calls_to_runs(
 
 
 def _collect_worker_outputs(activities: list[ChatTeamActivity]) -> list[dict[str, str]]:
-    """Collect worker states for the leader."""
+    """Collect formal Worker reports for the leader."""
     return [
         {
             "agentId": activity.agent_id,
             "name": activity.agent_name,
             "status": activity.status,
             "detail": activity.detail,
-            "output": activity.output,
+            "report": activity.report,
+            "output": activity.report,
+            "skippedReason": activity.skipped_reason,
+            "reportReviewStatus": activity.report_review_status,
+            "reportReviewNotes": activity.report_review_notes,
+            "reportReviewGaps": "\n".join(activity.report_review_gaps),
         }
         for activity in activities
         if activity.role != "leader"
         and activity.status in {"completed", "failed", "waiting"}
+        and (activity.report or activity.status in {"failed", "waiting"})
     ]
 
 
@@ -112,6 +118,11 @@ def _build_team_activities(
             assignment=assignment,
             expectedOutput="返回可供 Leader 汇总的 TeamSay-style report。",
             constraints="不要直接生成最终团队答案，只报告你的专业发现、证据和风险。",
+            report="",
+            skippedReason="",
+            reportReviewStatus="",
+            reportReviewNotes="",
+            reportReviewGaps=[],
             detail=assignment or "等待 Leader 协调上下文。",
             output="",
             thinking="",

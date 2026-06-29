@@ -88,10 +88,11 @@
 
 ## Team 协作
 
-- `TEAM_ACTIVITY`：Team 成员状态快照。必须包含 `activities` 数组。前端按 `id` 或 `agentId` 合并同一成员状态。
+- `TEAM_ACTIVITY`：Team 成员状态快照。必须包含 `activities` 数组。前端按 `id` 或 `agentId` 合并同一成员状态。Worker 活动应区分 `output`（运行时过程输出）与 `report`（提交给 Leader 的正式 TeamSay 报告）；跳过成员使用 `skippedReason` 说明原因。
 - `TEAM_MEMBER_EVENT`：兼容旧前端的 Worker ReAct 子事件。新代码应优先消费 `RUNTIME_EVENT` 中的 `AGENT_*` / `TOOL_*` / `TEAM_*`，不要再新增依赖。
 - `TEAM_ASSIGNMENT_PLANNED`：Team 已完成本轮 Worker 分派。payload 必须包含 `workerCount`；具体分派内容以随后 `TEAM_ACTIVITY.activities[].assignment/expectedOutput/constraints` 为准。
 - `TEAM_WORKER_REPORTED`：Worker 已按 AgentScope TeamSay 语义向 Leader 提交报告。必须包含 `agentId`、`agentName`，payload 建议包含 `to` 与 `reportPreview`。
+- `TEAM_REPORT_REVIEWED`：Team 已完成 Worker report 质量检查。payload 必须包含 `acceptedCount` 与 `needsRevisionCount`；具体缺口以 `TEAM_ACTIVITY.activities[].reportReviewStatus/reportReviewNotes/reportReviewGaps` 为准。
 
 ## 用户介入
 

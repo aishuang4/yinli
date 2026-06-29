@@ -1,7 +1,11 @@
 """Team 调度器回归测试。"""
 
-from src.server.routes.chat.models import ChatTeamMemberPayload
+from src.server.routes.chat.models import ChatTeamActivity, ChatTeamMemberPayload
 from src.server.routes.chat.team_assignment_planner import parse_team_assignment_json
+from src.server.routes.chat.team_report_reviewer import (
+    _fallback_reviews,
+    parse_team_report_review_json,
+)
 from src.server.routes.chat.team_scheduler import TeamSchedulerState, decide_worker_schedule
 
 
@@ -96,3 +100,46 @@ def test_parse_team_assignment_json_returns_empty_for_invalid_text() -> None:
     """Planner 输出不是 JSON 时交给调用方走兜底分派。"""
 
     assert parse_team_assignment_json("我无法处理这个请求", {"worker-a"}) == {}
+
+
+def test_parse_team_report_review_json_filters_and_normalizes() -> None:
+    """Report Reviewer JSON 只保留允许 Worker，并规范状态值。"""
+
+    text = """
+    {
+      "overallStatus": "insufficient",
+      "reviews": [
+        {"agentId": "worker-a", "status": "accepted", "gaps": [], "notes": "可用"},
+        {"agentId": "worker-b", "status": "bad", "gaps": ["缺少证据"], "notes": "需要补充"},
+        {"agentId": "unknown", "status": "accepted"}
+      ]
+    }
+    """
+
+    reviews = parse_team_report_review_json(text, {"worker-a", "worker-b"})
+
+    assert reviews["worker-a"].status == "accepted"
+    assert reviews["worker-b"].status == "needs_revision"
+    assert reviews["worker-b"].gaps == ("缺少证据",)
+    assert "unknown" not in reviews
+
+
+def test_fallback_report_review_marks_short_report_as_needs_revision() -> None:
+    """模型 reviewer 不可用时，过短 report 会被标记为需要补充。"""
+
+    reviews = _fallback_reviews([
+        ChatTeamActivity(
+            id="activity-worker",
+            agentId="worker-a",
+            agentName="Worker A",
+            role="worker",
+            status="completed",
+            task="检查实现",
+            report="太短",
+            expectedOutput="实现链路、风险和证据",
+            createdAt="2026-06-29T00:00:00+00:00",
+        ),
+    ])
+
+    assert reviews["worker-a"].status == "needs_revision"
+    assert reviews["worker-a"].gaps

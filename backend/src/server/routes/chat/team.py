@@ -361,6 +361,7 @@ def _mark_unselected_workers_skipped(
             activity.model_copy(update={
                 "status": "skipped",
                 "detail": "Team Runtime 判断本轮任务不需要该 Worker 参与。",
+                "skipped_reason": "Team Runtime 判断本轮任务不需要该 Worker 参与。",
                 "wait_reason": "",
             }),
         )

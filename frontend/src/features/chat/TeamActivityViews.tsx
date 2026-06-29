@@ -42,7 +42,7 @@ export function TeamActivityPanel({
         />
       )}
 
-      <div className="grid gap-2 px-3 pb-3 md:grid-cols-2">
+      <div className="grid items-stretch gap-2 px-3 pb-3 md:grid-cols-2">
         {leader && (
           <TeamActivityCard
             activity={leader}
@@ -95,7 +95,7 @@ function TeamExecutionGraph({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-stretch gap-2">
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
           {workers.map((worker) => {
             const dependencyNames = worker.dependsOn.map((dependency) => nameByAgentId.get(dependency) || dependency);
             const selected = selectedActivityId === worker.id;
@@ -111,7 +111,7 @@ function TeamExecutionGraph({
                 key={worker.id}
                 type="button"
                 onClick={() => onSelectActivity(worker.id)}
-                className={`ui-card-transition min-w-[180px] max-w-[260px] flex-1 rounded-md border bg-[var(--color-bg-secondary)] p-2 text-left ${
+                className={`ui-card-transition flex h-[92px] min-w-0 flex-col rounded-md border bg-[var(--color-bg-secondary)] p-2 text-left ${
                   selected ? 'border-[var(--color-accent)] shadow-sm' : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'
                 }`}
               >
@@ -121,7 +121,7 @@ function TeamExecutionGraph({
                   </div>
                   <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: statusColor }} />
                 </div>
-                <div className="mt-1 flex flex-wrap gap-1">
+                <div className="mt-1 flex h-6 min-w-0 items-center gap-1 overflow-hidden">
                   <Tag size="small" color={worker.executionMode === 'depends_on' ? 'blue' : 'transparent'}>
                     {worker.executionMode === 'depends_on' ? '依赖执行' : '并行'}
                   </Tag>
@@ -129,16 +129,9 @@ function TeamExecutionGraph({
                     <Tag size="small" color="green">收到 {worker.dependencyOutputCount}</Tag>
                   )}
                 </div>
-                {dependencyNames.length > 0 && (
-                  <div className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">
-                    依赖：{dependencyNames.join(' -> ')}
-                  </div>
-                )}
-                {(worker.waitReason || worker.detail) && (
-                  <div className="mt-1 line-clamp-2 text-[11px] text-[var(--color-text-tertiary)]">
-                    {worker.waitReason || worker.detail}
-                  </div>
-                )}
+                <div className="mt-auto min-w-0 truncate text-[11px] text-[var(--color-text-tertiary)]">
+                  {worker.waitReason || (dependencyNames.length > 0 ? `依赖：${dependencyNames.join(' -> ')}` : worker.currentEvent || worker.detail || '')}
+                </div>
               </button>
             );
           })}
@@ -162,6 +155,10 @@ function TeamActivityCard({
   const isWaiting = activity.status === 'waiting';
   const isCompleted = activity.status === 'completed';
   const isFailed = activity.status === 'failed';
+  const summaryText = activity.report || activity.output || activity.detail || activity.currentEvent || '';
+  const reviewLabel = activity.reportReviewStatus && activity.role !== 'leader'
+    ? (activity.reportReviewStatus === 'accepted' ? '报告可用' : '需要补充')
+    : '';
   const color = isFailed
     ? 'var(--color-error)'
     : isCompleted
@@ -174,11 +171,11 @@ function TeamActivityCard({
     <button
       type="button"
       onClick={onSelect}
-      className={`ui-card-transition min-h-[132px] rounded-md bg-[var(--color-bg-primary)] p-3 text-left ${
+      className={`ui-card-transition flex h-[132px] min-w-0 flex-col rounded-md bg-[var(--color-bg-primary)] p-3 text-left ${
         selected ? 'ring-1 ring-[var(--color-accent)]' : 'hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)]'
       }`}
     >
-      <div className="mb-2 flex w-full items-center gap-2 text-left">
+      <div className="mb-2 flex h-8 w-full shrink-0 items-center gap-2 text-left">
         <div
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white"
           style={{
@@ -211,38 +208,43 @@ function TeamActivityCard({
         </div>
         <ChevronRight size={12} />
       </div>
-      <div className="line-clamp-2 text-sm text-[var(--color-text-secondary)]">
-        {activity.assignment || activity.task}
+      <div
+        className="h-5 min-w-0 truncate text-sm leading-5 text-[var(--color-text-secondary)]"
+        title={activity.assignment || activity.task || ''}
+      >
+        {activity.assignment || activity.task || ''}
       </div>
-      {activity.currentEvent && (
-        <div className="mt-1 flex items-center gap-1 text-xs text-[var(--color-accent)]">
-          {isRunning && <Loader2 size={11} className="animate-spin" />}
-          <span className="truncate">{activity.currentEvent}</span>
-        </div>
-      )}
-      {activity.detail && (
-        <div className="mt-1 line-clamp-2 text-xs text-[var(--color-text-tertiary)]">
-          {activity.detail}
-        </div>
-      )}
-      {toolCalls.length > 0 && (
-        <div className="mt-2 flex min-w-0 items-center gap-1 overflow-hidden">
+      <div
+        className="mt-1 h-5 min-w-0 truncate text-xs leading-5 text-[var(--color-text-tertiary)]"
+        title={summaryText}
+      >
+        {summaryText}
+      </div>
+      <div className="mt-auto flex h-7 min-w-0 items-center gap-1 overflow-hidden pt-1">
+        {reviewLabel && (
+          <Tag size="small" color={activity.reportReviewStatus === 'accepted' ? 'green' : 'orange'}>
+            {reviewLabel}
+          </Tag>
+        )}
+        {toolCalls.length > 0 && (
+          <>
           {toolCalls.slice(0, 2).map((toolCall) => (
             <span
               key={toolCall.id}
-              className="min-w-0 max-w-[160px] truncate rounded border border-[var(--color-border)] px-1.5 py-0.5 text-xs text-[var(--color-text-tertiary)]"
+              className="flex h-[22px] min-w-0 max-w-[160px] items-center truncate rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-1.5 text-xs text-[var(--color-text-tertiary)]"
               title={toolCall.name}
             >
               {toolCall.name}
             </span>
           ))}
           {toolCalls.length > 2 && (
-            <span className="shrink-0 rounded border border-[var(--color-border)] px-1.5 py-0.5 text-xs text-[var(--color-text-tertiary)]">
+            <span className="flex h-[22px] shrink-0 items-center rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-1.5 text-xs text-[var(--color-text-tertiary)]">
               +{toolCalls.length - 2}
             </span>
           )}
-        </div>
-      )}
+          </>
+        )}
+      </div>
     </button>
   );
 }
@@ -298,8 +300,8 @@ export function TeamActivitySidebar({
             {isRunning && <Loader2 size={13} className="animate-spin text-[var(--color-accent)]" />}
             {isWaiting && <AlertCircle size={13} className="text-[var(--color-warning)]" />}
             <span>{activity.currentEvent || getTeamActivityStatusText(activity.status)}</span>
-          </div>
-          <div className="mt-2 flex flex-wrap gap-1">
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1">
             <Tag size="small" color={activity.executionMode === 'depends_on' ? 'blue' : 'transparent'}>
               {activity.role === 'leader'
                 ? 'Leader 汇总'
@@ -312,6 +314,11 @@ export function TeamActivitySidebar({
             )}
             {activity.leaderContextCount > 0 && (
               <Tag size="small" color="blue">Worker 输出 {activity.leaderContextCount}</Tag>
+            )}
+            {activity.reportReviewStatus && (
+              <Tag size="small" color={activity.reportReviewStatus === 'accepted' ? 'green' : 'orange'}>
+                {activity.reportReviewStatus === 'accepted' ? '报告可用' : '需要补充'}
+              </Tag>
             )}
           </div>
           {activity.waitReason && (
@@ -360,13 +367,40 @@ export function TeamActivitySidebar({
               {activity.detail}
             </div>
           )}
+          {activity.skippedReason && (
+            <div className="mt-2 whitespace-pre-wrap break-words text-xs text-[var(--color-warning)]">
+              跳过原因：{activity.skippedReason}
+            </div>
+          )}
+          {activity.reportReviewStatus && activity.role !== 'leader' && (
+            <div className="mt-3 rounded-md bg-[var(--color-bg-secondary)] p-2">
+              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">报告质量</div>
+              <div className="text-xs text-[var(--color-text-secondary)]">
+                {activity.reportReviewStatus === 'accepted' ? '报告可用于 Leader 汇总' : '报告信息不足，Leader 会按缺口谨慎汇总'}
+              </div>
+              {activity.reportReviewNotes && (
+                <div className="mt-1 whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
+                  {activity.reportReviewNotes}
+                </div>
+              )}
+              {activity.reportReviewGaps.length > 0 && (
+                <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-[var(--color-warning)]">
+                  {activity.reportReviewGaps.map((gap, index) => (
+                    <li key={`${gap}-${index}`}>{gap}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </section>
 
         <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">输出</div>
-          {activity.output ? (
+          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">
+            {activity.role === 'leader' ? '输出' : 'Worker report'}
+          </div>
+          {activity.report || activity.output ? (
             <div className="max-h-80 overflow-auto text-xs text-[var(--color-text-secondary)]">
-              <MarkdownContent content={activity.output} />
+              <MarkdownContent content={activity.report || activity.output} />
             </div>
           ) : (
             <div className="text-sm text-[var(--color-text-tertiary)]">暂无输出</div>

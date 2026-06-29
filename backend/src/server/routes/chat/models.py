@@ -147,6 +147,11 @@ class ChatTeamActivity(BaseModel):
     constraints: str = ""
     detail: str = ""
     output: str = ""
+    report: str = ""
+    skipped_reason: str = Field(default="", alias="skippedReason")
+    report_review_status: str = Field(default="", alias="reportReviewStatus")
+    report_review_notes: str = Field(default="", alias="reportReviewNotes")
+    report_review_gaps: list[str] = Field(default_factory=list, alias="reportReviewGaps")
     thinking: str = ""
     tool_calls: list[ChatToolRun] = Field(default_factory=list, alias="toolCalls")
     execution_mode: str = Field(default="parallel", alias="executionMode")
