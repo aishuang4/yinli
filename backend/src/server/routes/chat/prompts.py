@@ -220,15 +220,28 @@ def _build_worker_user_message(
     user_message: str,
     member: ChatTeamMemberPayload,
     dependency_outputs: list[dict[str, str]] | None = None,
+    assignment: str = "",
+    expected_output: str = "",
+    constraints: str = "",
 ) -> str:
     """Build the delegated task sent to a worker."""
-    assignment = build_worker_assignment_text(member)
+    assignment = assignment.strip() or build_worker_assignment_text(member)
     parts = [
         "Leader delegated this user request to you:",
         user_message,
         "Your assignment:",
         assignment,
     ]
+    if expected_output.strip():
+        parts.extend([
+            "Expected output:",
+            expected_output.strip(),
+        ])
+    if constraints.strip():
+        parts.extend([
+            "Constraints:",
+            constraints.strip(),
+        ])
     if dependency_outputs:
         parts.append("Upstream worker outputs you must use:")
         for item in dependency_outputs:

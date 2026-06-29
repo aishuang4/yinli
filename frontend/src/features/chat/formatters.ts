@@ -76,6 +76,9 @@ export function normalizeStoredTeamActivities(activities: StoredTeamActivity[]):
         : 'completed'
     ),
     task: String(activity.task || ''),
+    assignment: String(activity.assignment || ''),
+    expectedOutput: String(activity.expectedOutput || activity.expected_output || ''),
+    constraints: String(activity.constraints || ''),
     detail: String(activity.detail || ''),
     output: String(activity.output || ''),
     thinking: String(activity.thinking || ''),

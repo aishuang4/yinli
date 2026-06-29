@@ -212,7 +212,7 @@ function TeamActivityCard({
         <ChevronRight size={12} />
       </div>
       <div className="line-clamp-2 text-sm text-[var(--color-text-secondary)]">
-        {activity.task}
+        {activity.assignment || activity.task}
       </div>
       {activity.currentEvent && (
         <div className="mt-1 flex items-center gap-1 text-xs text-[var(--color-accent)]">
@@ -335,10 +335,26 @@ export function TeamActivitySidebar({
         )}
 
         <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">任务</div>
+          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">分派任务</div>
           <div className="whitespace-pre-wrap break-words text-sm text-[var(--color-text-secondary)]">
-            {activity.task}
+            {activity.assignment || activity.task}
           </div>
+          {activity.expectedOutput && (
+            <div className="mt-3">
+              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">期望输出</div>
+              <div className="whitespace-pre-wrap break-words text-xs text-[var(--color-text-secondary)]">
+                {activity.expectedOutput}
+              </div>
+            </div>
+          )}
+          {activity.constraints && (
+            <div className="mt-3">
+              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">约束</div>
+              <div className="whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
+                {activity.constraints}
+              </div>
+            </div>
+          )}
           {activity.detail && (
             <div className="mt-2 whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
               {activity.detail}

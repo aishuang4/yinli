@@ -142,6 +142,9 @@ class ChatTeamActivity(BaseModel):
     role: str
     status: str
     task: str = ""
+    assignment: str = ""
+    expected_output: str = Field(default="", alias="expectedOutput")
+    constraints: str = ""
     detail: str = ""
     output: str = ""
     thinking: str = ""

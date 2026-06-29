@@ -98,6 +98,7 @@ export interface StoredChatMessage {
 export type StoredTeamActivity = Partial<TeamActivityInfo> & {
   agent_id?: string;
   agent_name?: string;
+  expected_output?: string;
   tool_calls?: ToolCallInfo[];
   created_at?: string;
 };
