@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { UIEvent } from 'react';
 import { Activity, Bot, CheckCircle2, Clock3, Copy, RefreshCw, ShieldCheck, Wrench, XCircle } from 'lucide-react';
 import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
-import { MarkdownContent } from '../components/MarkdownContent';
 import type { TeamActivityInfo, ToolCallInfo } from '../hooks/useEventStream';
+import { useAppStore } from '../stores/appStore';
 
 interface TraceSummary {
   id: string;
@@ -51,6 +52,7 @@ interface TraceEvent {
 interface TraceDetail extends TraceSummary {
   messages: TraceMessage[];
   events: TraceEvent[];
+  eventTotal: number;
 }
 
 type TraceEventFilter = 'all' | 'runtime' | 'permissions' | 'tools' | 'models' | 'hitl';
@@ -64,52 +66,121 @@ const TRACE_FILTERS: Array<{ key: TraceEventFilter; label: string }> = [
   { key: 'hitl', label: '人工介入' },
 ];
 
+const TRACE_RENDER_BATCH_SIZE = 30;
+const MAX_MESSAGE_PREVIEW_LENGTH = 2500;
+const MAX_PAYLOAD_PREVIEW_LENGTH = 3000;
+
 export function TracePage() {
+  const active = useAppStore((state) => state.currentView === 'traces');
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
   const [detail, setDetail] = useState<TraceDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [eventPageLoading, setEventPageLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const tracesAbortRef = useRef<AbortController | null>(null);
+  const detailRequestSeq = useRef(0);
+  const detailAbortRef = useRef<AbortController | null>(null);
 
   const loadTraces = useCallback(async () => {
+    if (!active) return;
+    tracesAbortRef.current?.abort();
+    const controller = new AbortController();
+    tracesAbortRef.current = controller;
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/traces');
+      const response = await fetch('/api/traces', { signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: TraceSummary[] = await response.json();
       setTraces(data);
       setSelectedId((current) => current || data[0]?.id || '');
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : '加载运行轨迹失败');
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [active]);
 
   const loadDetail = useCallback(async (traceId: string) => {
+    if (!active) return;
+    const requestSeq = detailRequestSeq.current + 1;
+    detailRequestSeq.current = requestSeq;
+    detailAbortRef.current?.abort();
     if (!traceId) {
       setDetail(null);
       return;
     }
+    const controller = new AbortController();
+    detailAbortRef.current = controller;
     setDetailLoading(true);
+    setDetail(null);
     try {
-      const response = await fetch(`/api/traces/${traceId}`);
+      const response = await fetch(`/api/traces/${traceId}`, { signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      setDetail(await response.json());
-    } finally {
+      const data = await response.json() as TraceDetail;
+      window.setTimeout(() => {
+        if (detailRequestSeq.current !== requestSeq) return;
+        setDetail(data);
+        setDetailLoading(false);
+      }, 0);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
+      if (detailRequestSeq.current !== requestSeq) return;
+      setError(err instanceof Error ? err.message : '加载运行轨迹详情失败');
       setDetailLoading(false);
     }
-  }, []);
+  }, [active]);
+
+  const loadMoreTraceEvents = useCallback(async () => {
+    if (!active || !detail || eventPageLoading || detail.events.length >= detail.eventTotal) return;
+    const offset = detail.events.length;
+    setEventPageLoading(true);
+    try {
+      const response = await fetch(`/api/traces/${encodeURIComponent(detail.id)}/events?offset=${offset}&limit=${TRACE_RENDER_BATCH_SIZE}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json() as { events: TraceEvent[]; total: number };
+      setDetail((current) => {
+        if (!current || current.id !== detail.id) return current;
+        const existingIds = new Set(current.events.map((event) => event.id));
+        const nextEvents = data.events.filter((event) => !existingIds.has(event.id));
+        return {
+          ...current,
+          events: [...current.events, ...nextEvents],
+          eventTotal: data.total,
+        };
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载运行轨迹事件失败');
+    } finally {
+      setEventPageLoading(false);
+    }
+  }, [active, detail, eventPageLoading]);
 
   useEffect(() => {
+    if (!active) return;
     void loadTraces();
-  }, [loadTraces]);
+  }, [active, loadTraces]);
 
   useEffect(() => {
+    if (!active) {
+      tracesAbortRef.current?.abort();
+      detailAbortRef.current?.abort();
+      setDetailLoading(false);
+      setEventPageLoading(false);
+      return;
+    }
     void loadDetail(selectedId);
-  }, [loadDetail, selectedId]);
+  }, [active, loadDetail, selectedId]);
+
+  useEffect(() => () => {
+    tracesAbortRef.current?.abort();
+    detailAbortRef.current?.abort();
+  }, []);
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[340px_1fr] gap-4 overflow-hidden p-4">
@@ -166,7 +237,11 @@ export function TracePage() {
         {detailLoading ? (
           <div className="flex h-full items-center justify-center"><Spinner /></div>
         ) : detail ? (
-          <TraceDetailView trace={detail} />
+          <TraceDetailView
+            trace={detail}
+            eventPageLoading={eventPageLoading}
+            onLoadMoreEvents={loadMoreTraceEvents}
+          />
         ) : (
           <div className="flex h-full items-center justify-center text-[var(--color-text-tertiary)]">
             <div className="text-center">
@@ -180,7 +255,15 @@ export function TracePage() {
   );
 }
 
-function TraceDetailView({ trace }: { trace: TraceDetail }) {
+function TraceDetailView({
+  trace,
+  eventPageLoading,
+  onLoadMoreEvents,
+}: {
+  trace: TraceDetail;
+  eventPageLoading: boolean;
+  onLoadMoreEvents: () => void;
+}) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="p-5">
@@ -200,7 +283,12 @@ function TraceDetailView({ trace }: { trace: TraceDetail }) {
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 pb-5">
         {trace.events && trace.events.length > 0 && (
-          <TraceEventTimeline events={trace.events} />
+          <TraceEventTimeline
+            events={trace.events}
+            eventTotal={trace.eventTotal}
+            loadingMore={eventPageLoading}
+            onLoadMore={onLoadMoreEvents}
+          />
         )}
         {trace.messages.map((message) => (
           <TraceMessageCard key={message.id} message={message} />
@@ -210,12 +298,29 @@ function TraceDetailView({ trace }: { trace: TraceDetail }) {
   );
 }
 
-function TraceEventTimeline({ events }: { events: TraceEvent[] }) {
+function TraceEventTimeline({
+  events,
+  eventTotal,
+  loadingMore,
+  onLoadMore,
+}: {
+  events: TraceEvent[];
+  eventTotal: number;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
   const [filter, setFilter] = useState<TraceEventFilter>('all');
+  const [visibleCount, setVisibleCount] = useState(TRACE_RENDER_BATCH_SIZE);
   const filteredEvents = useMemo(
     () => events.filter((event) => matchesTraceFilter(event, filter)),
     [events, filter],
   );
+  const visibleEvents = useMemo(
+    () => filteredEvents.slice(0, visibleCount),
+    [filteredEvents, visibleCount],
+  );
+  const hasMoreLocalEvents = visibleCount < filteredEvents.length;
+  const hasMoreRemoteEvents = events.length < eventTotal;
   const permissionCount = useMemo(
     () => events.filter((event) => matchesTraceFilter(event, 'permissions')).length,
     [events],
@@ -224,6 +329,25 @@ function TraceEventTimeline({ events }: { events: TraceEvent[] }) {
     () => events.filter((event) => matchesTraceFilter(event, 'runtime')).length,
     [events],
   );
+  const loadMoreEvents = useCallback(() => {
+    if (hasMoreLocalEvents) {
+      setVisibleCount((current) => Math.min(current + TRACE_RENDER_BATCH_SIZE, filteredEvents.length));
+      return;
+    }
+    if (hasMoreRemoteEvents && !loadingMore) {
+      onLoadMore();
+    }
+  }, [filteredEvents.length, hasMoreLocalEvents, hasMoreRemoteEvents, loadingMore, onLoadMore]);
+  const handleEventListScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    if (target.scrollTop + target.clientHeight >= target.scrollHeight - 80) {
+      loadMoreEvents();
+    }
+  }, [loadMoreEvents]);
+
+  useEffect(() => {
+    setVisibleCount(TRACE_RENDER_BATCH_SIZE);
+  }, [filter, events]);
 
   return (
     <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
@@ -235,7 +359,7 @@ function TraceEventTimeline({ events }: { events: TraceEvent[] }) {
         <div className="flex items-center gap-2">
           {runtimeCount > 0 && <Tag size="small" color="blue">{runtimeCount} Runtime</Tag>}
           {permissionCount > 0 && <Tag size="small" color="green">{permissionCount} 权限</Tag>}
-          <Tag size="small" color="transparent">{filteredEvents.length}/{events.length} 事件</Tag>
+          <Tag size="small" color="transparent">{events.length}/{eventTotal} 事件</Tag>
         </div>
       </div>
       <div className="mb-3 flex flex-wrap gap-2">
@@ -255,10 +379,22 @@ function TraceEventTimeline({ events }: { events: TraceEvent[] }) {
           </button>
         ))}
       </div>
-      <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
-        {filteredEvents.map((event) => (
+      <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1" onScroll={handleEventListScroll}>
+        {visibleEvents.map((event) => (
           <TraceEventRow key={event.id} event={event} />
         ))}
+        {(hasMoreLocalEvents || hasMoreRemoteEvents) && (
+          <button
+            type="button"
+            className="w-full rounded-md bg-[var(--color-bg-primary)] p-3 text-center text-xs text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)]"
+            onClick={loadMoreEvents}
+            disabled={loadingMore}
+          >
+            {loadingMore
+              ? '正在加载更多事件...'
+              : `已显示 ${visibleEvents.length}/${eventTotal} 条，继续滚动或点击加载 30 条`}
+          </button>
+        )}
         {filteredEvents.length === 0 && (
           <div className="rounded-md bg-[var(--color-bg-primary)] p-6 text-center text-sm text-[var(--color-text-tertiary)]">
             当前筛选下暂无事件
@@ -303,7 +439,7 @@ function TraceEventRow({ event }: { event: TraceEvent }) {
       {isPermissionEvent(event) && <PermissionAuditSummary event={event} />}
       {shouldShowTracePayload(event) && (
         <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-[var(--color-bg-secondary)] p-2 text-[11px] text-[var(--color-text-tertiary)]">
-          {JSON.stringify(event.payload, null, 2)}
+          {formatPayloadPreview(event.payload)}
         </pre>
       )}
     </div>
@@ -407,9 +543,9 @@ function TraceMessageCard({ message }: { message: TraceMessage }) {
       </div>
 
       {message.content && (
-        <div className="prose-sm max-w-none text-sm text-[var(--color-text-secondary)]">
-          <MarkdownContent content={message.content} />
-        </div>
+        <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-bg-primary)] p-3 text-sm text-[var(--color-text-secondary)]">
+          {formatLongTextPreview(message.content, MAX_MESSAGE_PREVIEW_LENGTH)}
+        </pre>
       )}
       {message.error && (
         <div className="mt-3 rounded-md border border-[var(--color-border)] p-3 text-sm text-[var(--color-error)]">
@@ -447,14 +583,34 @@ function TraceActivityCard({ activity }: { activity: TeamActivityInfo }) {
 }
 
 function TraceToolList({ title, toolCalls, compact = false }: { title: string; toolCalls: ToolCallInfo[]; compact?: boolean }) {
+  const [visibleCount, setVisibleCount] = useState(TRACE_RENDER_BATCH_SIZE);
+  const visibleToolCalls = useMemo(
+    () => toolCalls.slice(0, visibleCount),
+    [toolCalls, visibleCount],
+  );
+  const hasMoreTools = visibleCount < toolCalls.length;
+  const loadMoreTools = useCallback(() => {
+    setVisibleCount((current) => Math.min(current + TRACE_RENDER_BATCH_SIZE, toolCalls.length));
+  }, [toolCalls.length]);
+  const handleToolListScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    if (target.scrollTop + target.clientHeight >= target.scrollHeight - 80) {
+      loadMoreTools();
+    }
+  }, [loadMoreTools]);
+
+  useEffect(() => {
+    setVisibleCount(TRACE_RENDER_BATCH_SIZE);
+  }, [toolCalls]);
+
   return (
     <div className="mt-3 space-y-2">
       <div className="flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
         <Wrench size={12} />
         <span>{title}</span>
       </div>
-      <div className={`${compact ? 'max-h-72' : 'max-h-96'} grid gap-2 overflow-y-auto pr-1`}>
-        {toolCalls.map((toolCall) => {
+      <div className={`${compact ? 'max-h-72' : 'max-h-96'} grid gap-2 overflow-y-auto pr-1`} onScroll={handleToolListScroll}>
+        {visibleToolCalls.map((toolCall) => {
           const httpSummary = parseHttpToolSummary(toolCall.result);
           return (
             <div key={toolCall.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-2">
@@ -490,15 +646,35 @@ function TraceToolList({ title, toolCalls, compact = false }: { title: string; t
             )}
             {!compact && (toolCall.args || toolCall.result) && (
               <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
-                {toolCall.result || toolCall.args}
+                {formatLongTextPreview(toolCall.result || toolCall.args, 3000)}
               </pre>
             )}
           </div>
           );
         })}
+        {hasMoreTools && (
+          <button
+            type="button"
+            className="rounded-md bg-[var(--color-bg-primary)] p-2 text-center text-xs text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)]"
+            onClick={loadMoreTools}
+          >
+            已显示 {visibleToolCalls.length}/{toolCalls.length} 次，继续滚动或点击加载 30 次
+          </button>
+        )}
       </div>
     </div>
   );
+}
+
+function formatPayloadPreview(payload: Record<string, unknown>): string {
+  const text = JSON.stringify(payload || {}, null, 2);
+  return formatLongTextPreview(text, MAX_PAYLOAD_PREVIEW_LENGTH);
+}
+
+function formatLongTextPreview(text: string, limit: number): string {
+  const value = String(text || '');
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit)}\n\n...（内容过长，已在运行轨迹页截断）`;
 }
 
 function parseHttpToolSummary(text: string): { method: string; url: string; statusCode: number; durationMs: number } | null {
