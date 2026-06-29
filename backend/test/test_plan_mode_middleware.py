@@ -28,6 +28,8 @@ def test_system_prompt_contains_plan_banner_when_active() -> None:
 
     assert "PLAN MODE is active" in prompt
     assert manager.context.current_plan_file in prompt
+    assert "exact relative path" in prompt
+    assert "Avoid broad Glob patterns" in prompt
 
 
 def test_system_prompt_contains_build_hint_after_approval() -> None:
@@ -47,6 +49,7 @@ def test_system_prompt_contains_build_hint_after_approval() -> None:
 
     assert "BUILD mode" in prompt
     assert manager.context.current_plan_file in prompt
+    assert "instead of searching the entire project" in prompt
 
 
 def test_on_acting_denies_mutating_tool() -> None:
