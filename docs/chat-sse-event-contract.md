@@ -94,6 +94,7 @@ Plan Mode 基于 AgentScope Middleware hooks 实现，不恢复旧 Plan Runtime�
 - `TOOL_RESULT_START`：工具结果开始。必须包含 `tool_call_id`。
 - `TOOL_RESULT_TEXT_DELTA`：工具结果文本增量。必须包含 `tool_call_id`、`delta`。
 - `TOOL_RESULT_END`：工具结果结束。必须包含 `tool_call_id`。
+- `RUNTIME_EVENT:TOOL_RESULT_COMPLETED`：工具结果结束的应用级事件。若原始工具结果 `state=error|failed|denied`，`status` 必须为 `failed`，payload 需保留 `state`，前端据此在流式阶段将工具节点标记为失败。
 
 ## Final Answer 阶段切换
 

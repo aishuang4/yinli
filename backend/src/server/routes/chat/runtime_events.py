@@ -84,13 +84,17 @@ def runtime_event_from_agentscope_sse(
         agent_id=agent_id,
         agent_name=agent_name,
         team_activity_id=team_activity_id,
-        status=_status_for_runtime_event(runtime_type),
+        status=_status_for_runtime_event(runtime_type, event_data or {}),
         payload=_compact_agentscope_payload(source_event_type, event_data or {}),
         collect=collect,
     )
 
 
-def _status_for_runtime_event(event_type: str) -> str:
+def _status_for_runtime_event(event_type: str, event_data: dict[str, Any] | None = None) -> str:
+    if event_type == "TOOL_RESULT_COMPLETED":
+        state = str((event_data or {}).get("state") or "").lower()
+        if state in {"error", "failed", "denied"}:
+            return "failed"
     if event_type.endswith("_COMPLETED") or event_type in {"AGENT_COMPLETED", "TEAM_COMPLETED", "RUN_COMPLETED"}:
         return "completed"
     if event_type.endswith("_FAILED") or event_type in {"AGENT_FAILED", "TEAM_FAILED", "RUN_FAILED"}:
@@ -181,6 +185,7 @@ def _compact_agentscope_payload(source_event_type: str, event_data: dict[str, An
         "tool_call_name",
         "reply_id",
         "delta",
+        "state",
         "input_tokens",
         "output_tokens",
     ]

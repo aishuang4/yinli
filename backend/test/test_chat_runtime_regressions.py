@@ -33,6 +33,7 @@ from src.server.routes.chat.runtime_builder import (
     build_runtime_model_config,
     create_main_agent_from_spec,
 )
+from src.server.routes.chat.runtime_events import runtime_event_from_agentscope_sse
 from src.server.routes.chat.team_worker_selector import filter_team_members_for_runtime
 from src.server.routes.chat.tool_scope_resolver import resolve_runtime_tool_scope
 from src.server.routes.chat.team_state import _collect_worker_outputs, _pending_tool_calls_to_runs
@@ -62,6 +63,30 @@ def test_model_cache_from_event_ignores_non_cache_usage():
     )
 
     assert cache is None
+
+
+def test_tool_result_runtime_event_preserves_failed_state():
+    """工具结果失败时，流式 Runtime Event 应立即标记 failed。"""
+
+    raw = runtime_event_from_agentscope_sse(
+        "TOOL_RESULT_END",
+        session_id="session-1",
+        scope="single",
+        agent_id="agent-1",
+        agent_name="Agent",
+        event_data={
+            "tool_call_id": "call-edit",
+            "tool_call_name": "Edit",
+            "state": "error",
+        },
+    )
+
+    assert raw is not None
+    _, data = raw.split("data: ", 1)
+    event = __import__("json").loads(data)
+    assert event["type"] == "TOOL_RESULT_COMPLETED"
+    assert event["status"] == "failed"
+    assert event["payload"]["state"] == "error"
 
 
 def test_context_compression_schema_allows_project_discovery_summaries():
