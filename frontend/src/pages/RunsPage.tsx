@@ -5,9 +5,10 @@
  * 具体事件、工具调用和 block 级细节放到运行轨迹页面查看。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Ban, Bot, CheckCircle2, Clock3, RefreshCw, RotateCcw, Users } from 'lucide-react';
 import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
+import { MarkdownContent } from '../components/MarkdownContent';
 
 const ACTIVE_RUN_STATUSES = new Set(['running', 'waiting', 'cancelling']);
 
@@ -48,6 +49,7 @@ export function RunsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [busyRunId, setBusyRunId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const runsAbortRef = useRef<AbortController | null>(null);
 
   const selectedRun = useMemo(() => (
     runs.find((run) => run.id === selectedRunId) || null
@@ -60,32 +62,25 @@ export function RunsPage() {
   ), [runs]);
 
   const loadRuns = useCallback(async (showRefreshState = false) => {
+    runsAbortRef.current?.abort();
+    const controller = new AbortController();
+    runsAbortRef.current = controller;
     try {
       if (showRefreshState) setRefreshing(true);
       setError(null);
-      const response = await fetch('/api/chat/runs');
+      const response = await fetch('/api/chat/runs', { signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: { runs: RunSummary[] } = await response.json();
       setRuns(data.runs);
       setSelectedRunId((current) => current || data.runs[0]?.id || null);
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : '运行任务加载失败');
     } finally {
-      setInitialLoading(false);
-      if (showRefreshState) setRefreshing(false);
-    }
-  }, []);
-
-  const loadRunDetail = useCallback(async (runId: string, showLoading = true) => {
-    try {
-      if (showLoading) setDetailLoading(true);
-      const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      setDetail(await response.json());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '运行详情加载失败');
-    } finally {
-      if (showLoading) setDetailLoading(false);
+      if (!controller.signal.aborted) {
+        setInitialLoading(false);
+        if (showRefreshState) setRefreshing(false);
+      }
     }
   }, []);
 
@@ -98,13 +93,12 @@ export function RunsPage() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const updated: RunSummary = await response.json();
       setRuns((current) => current.map((run) => (run.id === runId ? updated : run)));
-      if (detail?.id === runId) void loadRunDetail(runId, false);
     } catch (err) {
       setError(err instanceof Error ? err.message : '取消运行失败');
     } finally {
       setBusyRunId(null);
     }
-  }, [detail, loadRunDetail]);
+  }, []);
 
   const rerunRun = useCallback(async (runId: string) => {
     try {
@@ -116,38 +110,31 @@ export function RunsPage() {
       const created: RunSummary = await response.json();
       setRuns((current) => [created, ...current.filter((run) => run.id !== created.id)]);
       setSelectedRunId(created.id);
-      void loadRunDetail(created.id, false);
     } catch (err) {
       setError(err instanceof Error ? err.message : '重新运行失败');
     } finally {
       setBusyRunId(null);
     }
-  }, [loadRunDetail]);
+  }, []);
 
   useEffect(() => {
     void loadRuns();
-    const interval = window.setInterval(() => void loadRuns(), 5000);
-    return () => window.clearInterval(interval);
-  }, [loadRuns]);
+    const intervalMs = runningRuns.length > 0 ? 5000 : 15000;
+    const interval = window.setInterval(() => void loadRuns(), intervalMs);
+    return () => {
+      window.clearInterval(interval);
+      runsAbortRef.current?.abort();
+    };
+  }, [loadRuns, runningRuns.length]);
 
   useEffect(() => {
-    if (!selectedRunId) {
+    if (!selectedRun) {
       setDetail(null);
       return;
     }
-    void loadRunDetail(selectedRunId);
-  }, [loadRunDetail, selectedRunId]);
-
-  useEffect(() => {
-    if (!selectedRun || !detail || selectedRun.id !== detail.id) return;
-    if (
-      selectedRun.eventCount !== detail.eventCount ||
-      selectedRun.status !== detail.status ||
-      selectedRun.completedAt !== detail.completedAt
-    ) {
-      void loadRunDetail(selectedRun.id, false);
-    }
-  }, [detail, loadRunDetail, selectedRun]);
+    setDetail({ ...selectedRun, events: [] });
+    setDetailLoading(false);
+  }, [selectedRun]);
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[390px_minmax(0,1fr)] gap-4 bg-[var(--color-bg-secondary)] p-4">
@@ -248,18 +235,26 @@ export function RunsPage() {
 
         <div className="min-h-0 overflow-y-auto px-5 pb-5">
           {!selectedRunId ? (
-            <Empty type="noData" description="选择左侧任务查看详情" />
+            <RunDetailEmpty description="选择左侧任务查看详情" />
           ) : detailLoading ? (
-            <div className="flex justify-center py-10">
+            <div className="flex h-full items-center justify-center">
               <Spinner />
             </div>
           ) : detail ? (
             <RunDashboard run={detail} />
           ) : (
-            <Empty type="noData" description="运行详情不存在" />
+            <RunDetailEmpty description="运行详情不存在" />
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+function RunDetailEmpty({ description }: { description: string }) {
+  return (
+    <div className="flex h-full min-h-[360px] items-center justify-center">
+      <Empty type="noData" description={description} />
     </div>
   );
 }
@@ -329,9 +324,16 @@ function RunListItem({
 }) {
   const active = ACTIVE_RUN_STATUSES.has(run.status);
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
       className={`w-full rounded-lg border px-3 py-3 text-left transition ${
         selected
           ? 'border-[var(--color-accent)] bg-[var(--color-accent-bg)]'
@@ -391,7 +393,7 @@ function RunListItem({
           </Button>
         </div>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -454,8 +456,8 @@ function RunDashboard({ run }: { run: RunDetail }) {
           )}
         </div>
         {run.resultPreview ? (
-          <div className="max-h-[360px] overflow-auto whitespace-pre-wrap rounded-lg bg-[var(--color-bg-primary)] px-3 py-3 text-sm leading-6 text-[var(--color-text-primary)]">
-            {run.resultPreview}
+          <div className="max-h-[360px] overflow-auto rounded-lg bg-[var(--color-bg-primary)] px-3 py-3 text-sm leading-6 text-[var(--color-text-primary)]">
+            <MarkdownContent content={run.resultPreview} />
           </div>
         ) : (
           <div className="rounded-lg border border-dashed border-[var(--color-border)] px-3 py-6 text-center text-sm text-[var(--color-text-tertiary)]">

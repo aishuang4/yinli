@@ -48,7 +48,7 @@ const VIEW_PAGES: Record<ViewType, ComponentType> = {
 };
 
 const KEEP_ALIVE_VIEWS = new Set<ViewType>(['chat']);
-const CACHEABLE_VIEWS = new Set<ViewType>(['chat', 'agents', 'traces', 'sandbox']);
+const CACHEABLE_VIEWS = new Set<ViewType>(['chat', 'agents', 'sandbox']);
 const MAX_CACHED_VIEWS = 3;
 
 /**

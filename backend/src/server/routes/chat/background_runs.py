@@ -17,6 +17,7 @@ from src.server.routes.chat.event_types import SSE_EVENT_RUNTIME
 from src.server.routes.chat.store import _append_assistant_message
 from src.storage.database import (
     append_chat_run_event,
+    get_latest_assistant_message_preview,
     get_chat_run,
     list_chat_runs,
     update_chat_run_status,
@@ -71,6 +72,7 @@ class ChatBackgroundRun:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     completed_at: str | None = None
     events: list[str] = field(default_factory=list)
+    event_count: int = 0
     subscribers: set[asyncio.Queue[str | None]] = field(default_factory=set)
     async_task: asyncio.Task | None = None
     persisted: bool = False
@@ -86,7 +88,7 @@ async def get_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
         run = _runs.get(run_id)
     if run is not None:
         return run
-    persisted = get_chat_run(run_id)
+    persisted = get_chat_run(run_id, event_limit=100)
     return _run_from_persisted_record(persisted) if persisted else None
 
 
@@ -95,8 +97,9 @@ async def list_chat_background_runs() -> list[ChatBackgroundRun]:
     async with _runs_lock:
         memory_runs = list(_runs.values())
     by_id = {run.id: run for run in memory_runs}
-    for record in list_chat_runs(MAX_BACKGROUND_RUNS):
+    for record in list_chat_runs(MAX_BACKGROUND_RUNS, include_events=False):
         if record["id"] not in by_id:
+            record = _normalize_stale_persisted_run(record)
             by_id[record["id"]] = _run_from_persisted_record(record)
     return sorted(
         by_id.values(),
@@ -105,12 +108,29 @@ async def list_chat_background_runs() -> list[ChatBackgroundRun]:
     )
 
 
+def _normalize_stale_persisted_run(record: dict) -> dict:
+    """把不可恢复的历史 active run 收口为 cancelled。
+
+    运行中的 run 只可靠保存在当前进程内；如果重启后仅剩持久化记录，
+    waiting/running/cancelling 都无法继续订阅或 resume，不能继续显示为活跃任务。
+    """
+    if record.get("status") not in ACTIVE_RUN_STATUSES:
+        return record
+    completed_at = record.get("completedAt") or datetime.now(timezone.utc).isoformat()
+    update_chat_run_status(str(record["id"]), "cancelled", completed_at)
+    return {
+        **record,
+        "status": "cancelled",
+        "completedAt": completed_at,
+    }
+
+
 async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
     """取消一个仍在运行的后台 Run。"""
     async with _runs_lock:
         run = _runs.get(run_id)
         if run is None:
-            persisted = get_chat_run(run_id)
+            persisted = get_chat_run(run_id, event_limit=100)
             if not persisted:
                 return None
             completed_at = datetime.now(timezone.utc).isoformat()
@@ -181,7 +201,8 @@ async def relay_chat_background_run_events(
 
 def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
     """Serialize one in-memory Run for API responses."""
-    summary = _summarize_run_events(run)
+    summary = _summarize_run_events(run) if run.events else _empty_run_summary(run)
+    summary = _fill_result_preview_from_history(run, summary)
     return {
         "id": run.id,
         "sessionId": run.session_id,
@@ -194,10 +215,39 @@ def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
         "status": run.status,
         "createdAt": run.created_at,
         "completedAt": run.completed_at,
-        "eventCount": len(run.events),
+        "eventCount": run.event_count or len(run.events),
         "subscriberCount": len(run.subscribers),
         "latestEvent": run.events[-1] if run.events else "",
         **summary,
+    }
+
+
+def _fill_result_preview_from_history(run: ChatBackgroundRun, summary: dict) -> dict:
+    """当事件摘要没有结果时，从历史 Assistant 消息补充轻量结果预览。"""
+    if summary.get("resultPreview"):
+        return summary
+    latest = get_latest_assistant_message_preview(run.session_id)
+    content = str((latest or {}).get("content") or "").strip()
+    if not content:
+        return summary
+    preview = content[:4000]
+    return {
+        **summary,
+        "resultPreview": preview,
+        "resultLength": len(content),
+    }
+
+
+def _empty_run_summary(run: ChatBackgroundRun) -> dict:
+    """Build a cheap summary when raw events are intentionally omitted."""
+    return {
+        "progress": _base_progress_for_status(run.status),
+        "currentStage": _stage_for_status(run.status),
+        "activeActors": [],
+        "resultPreview": "",
+        "resultLength": 0,
+        "workerTotal": 0,
+        "workerCompleted": 0,
     }
 
 
@@ -334,6 +384,7 @@ async def _broadcast(run: ChatBackgroundRun, event: str) -> None:
     elif run.status == "waiting":
         run.status = "running"
         update_chat_run_status(run.id, run.status, run.completed_at)
+    run.event_count += 1
     run.events.append(event)
     if len(run.events) > MAX_EVENTS_PER_RUN:
         run.events = run.events[-MAX_EVENTS_PER_RUN:]
@@ -478,6 +529,7 @@ def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
         created_at=record.get("createdAt") or datetime.now(timezone.utc).isoformat(),
         completed_at=record.get("completedAt"),
         events=list(record.get("events") or []),
+        event_count=int(record.get("eventCount") or len(record.get("events") or [])),
         persisted=True,
     )
 

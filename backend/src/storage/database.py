@@ -18,6 +18,7 @@ from src.config.settings import settings
 
 _lock = RLock()
 _initialized = False
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_GUARDRAILS = {
     "filesystem_scope": "/",
@@ -59,10 +60,19 @@ def _db_path() -> Path:
     url = settings.database_url
     prefix = "sqlite+aiosqlite:///"
     if url.startswith(prefix):
-        return Path(url[len(prefix):])
+        return _resolve_sqlite_path(url[len(prefix):])
     if url.startswith("sqlite:///"):
-        return Path(url[len("sqlite:///"):])
-    return Path("data/agent_workstation.db")
+        return _resolve_sqlite_path(url[len("sqlite:///"):])
+    return BACKEND_ROOT / "data/agent_workstation.db"
+
+
+def _resolve_sqlite_path(value: str) -> Path:
+    """把相对 SQLite 路径固定到 backend 目录，避免启动目录不同造成空库。"""
+
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return BACKEND_ROOT / path
 
 
 DB_PATH = _db_path()
@@ -1237,19 +1247,57 @@ def append_run_event(
     }
 
 
-def list_run_events(session_id: str | None = None) -> list[dict[str, Any]]:
+def list_run_events(
+    session_id: str | None = None,
+    *,
+    include_payload: bool = True,
+    limit: int | None = None,
+    offset: int = 0,
+    latest: bool = False,
+) -> list[dict[str, Any]]:
     """List normalized runtime events, optionally scoped to one session."""
     ensure_db()
+    safe_offset = max(0, int(offset or 0))
     with _lock, _connect() as conn:
         if session_id:
-            rows = conn.execute(
-                "SELECT * FROM run_events WHERE session_id = ? ORDER BY sort_order ASC, created_at ASC",
-                (session_id,),
-            ).fetchall()
+            if limit and limit > 0 and latest:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM (
+                        SELECT * FROM run_events
+                        WHERE session_id = ?
+                        ORDER BY sort_order DESC, created_at DESC
+                        LIMIT ? OFFSET ?
+                    )
+                    ORDER BY sort_order ASC, created_at ASC
+                    """,
+                    (session_id, limit, safe_offset),
+                ).fetchall()
+            elif limit and limit > 0:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM run_events
+                    WHERE session_id = ?
+                    ORDER BY sort_order ASC, created_at ASC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (session_id, limit, safe_offset),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM run_events WHERE session_id = ? ORDER BY sort_order ASC, created_at ASC",
+                    (session_id,),
+                ).fetchall()
         else:
-            rows = conn.execute(
-                "SELECT * FROM run_events ORDER BY created_at DESC, sort_order DESC"
-            ).fetchall()
+            if limit and limit > 0:
+                rows = conn.execute(
+                    "SELECT * FROM run_events ORDER BY created_at DESC, sort_order DESC LIMIT ? OFFSET ?",
+                    (limit, safe_offset),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM run_events ORDER BY created_at DESC, sort_order DESC"
+                ).fetchall()
     return [
         {
             "id": row["id"],
@@ -1262,12 +1310,23 @@ def list_run_events(session_id: str | None = None) -> list[dict[str, Any]]:
             "status": row["status"],
             "title": row["title"],
             "content": row["content"],
-            "payload": _loads(row["payload"], {}),
+            "payload": _loads(row["payload"], {}) if include_payload else {},
             "createdAt": row["created_at"],
             "sortOrder": row["sort_order"],
         }
         for row in rows
     ]
+
+
+def count_run_events(session_id: str) -> int:
+    """Count normalized runtime events for one session."""
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS total FROM run_events WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+    return int(row["total"] if row else 0)
 
 
 def upsert_chat_run(record: dict[str, Any]) -> dict[str, Any]:
@@ -1361,14 +1420,34 @@ def append_chat_run_event(run_id: str, raw_event: str) -> dict[str, Any]:
     }
 
 
-def list_chat_runs(limit: int = 50) -> list[dict[str, Any]]:
-    """List persisted Chat Runs with raw event arrays."""
+def list_chat_runs(limit: int = 50, *, include_events: bool = True) -> list[dict[str, Any]]:
+    """List persisted Chat Runs, optionally omitting raw event arrays for fast summaries."""
     ensure_db()
     with _lock, _connect() as conn:
         rows = conn.execute(
             "SELECT * FROM chat_runs ORDER BY updated_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
+        if not include_events:
+            run_ids = [row["id"] for row in rows]
+            event_counts: dict[str, int] = {run_id: 0 for run_id in run_ids}
+            if run_ids:
+                placeholders = ",".join("?" for _ in run_ids)
+                count_rows = conn.execute(
+                    f"""
+                    SELECT run_id, COUNT(*) AS total
+                    FROM chat_run_events
+                    WHERE run_id IN ({placeholders})
+                    GROUP BY run_id
+                    """,
+                    run_ids,
+                ).fetchall()
+                for count_row in count_rows:
+                    event_counts[count_row["run_id"]] = int(count_row["total"])
+            return [
+                _chat_run_from_row(row, [], event_count=event_counts.get(row["id"], 0))
+                for row in rows
+            ]
         run_ids = [row["id"] for row in rows]
         events_by_run: dict[str, list[str]] = {run_id: [] for run_id in run_ids}
         if run_ids:
@@ -1387,22 +1466,41 @@ def list_chat_runs(limit: int = 50) -> list[dict[str, Any]]:
     return [_chat_run_from_row(row, events_by_run.get(row["id"], [])) for row in rows]
 
 
-def get_chat_run(run_id: str) -> dict[str, Any] | None:
-    """Read one persisted Chat Run with raw events."""
+def get_chat_run(run_id: str, *, event_limit: int | None = None) -> dict[str, Any] | None:
+    """Read one persisted Chat Run with optionally limited raw events."""
     ensure_db()
     with _lock, _connect() as conn:
         row = conn.execute("SELECT * FROM chat_runs WHERE id = ?", (run_id,)).fetchone()
         if not row:
             return None
-        event_rows = conn.execute(
-            """
-            SELECT raw_event FROM chat_run_events
-            WHERE run_id = ?
-            ORDER BY sort_order ASC, created_at ASC
-            """,
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS total FROM chat_run_events WHERE run_id = ?",
             (run_id,),
-        ).fetchall()
-    return _chat_run_from_row(row, [event_row["raw_event"] for event_row in event_rows])
+        ).fetchone()
+        event_count = int(count_row["total"] if count_row else 0)
+        if event_limit and event_limit > 0:
+            event_rows = conn.execute(
+                """
+                SELECT raw_event FROM (
+                    SELECT raw_event, sort_order, created_at FROM chat_run_events
+                    WHERE run_id = ?
+                    ORDER BY sort_order DESC, created_at DESC
+                    LIMIT ?
+                )
+                ORDER BY sort_order ASC, created_at ASC
+                """,
+                (run_id, event_limit),
+            ).fetchall()
+        else:
+            event_rows = conn.execute(
+                """
+                SELECT raw_event FROM chat_run_events
+                WHERE run_id = ?
+                ORDER BY sort_order ASC, created_at ASC
+                """,
+                (run_id,),
+            ).fetchall()
+    return _chat_run_from_row(row, [event_row["raw_event"] for event_row in event_rows], event_count=event_count)
 
 
 def get_latest_user_chat_message(session_id: str, content: str | None = None) -> dict[str, Any] | None:
@@ -1445,7 +1543,35 @@ def get_latest_user_chat_message(session_id: str, content: str | None = None) ->
     }
 
 
-def _chat_run_from_row(row: sqlite3.Row, events: list[str]) -> dict[str, Any]:
+def get_latest_assistant_message_preview(session_id: str) -> dict[str, Any] | None:
+    """读取某个会话最近一条非空 Assistant 文本，用于轻量结果摘要。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, content, agent_name, model_name, created_at
+            FROM chat_messages
+            WHERE session_id = ?
+              AND role = 'assistant'
+              AND length(trim(content)) > 0
+            ORDER BY sort_order DESC, created_at DESC
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "content": row["content"],
+        "agentName": row["agent_name"],
+        "modelName": row["model_name"],
+        "createdAt": row["created_at"],
+    }
+
+
+def _chat_run_from_row(row: sqlite3.Row, events: list[str], event_count: int | None = None) -> dict[str, Any]:
     return {
         "id": row["id"],
         "sessionId": row["session_id"],
@@ -1460,6 +1586,7 @@ def _chat_run_from_row(row: sqlite3.Row, events: list[str]) -> dict[str, Any]:
         "completedAt": row["completed_at"],
         "updatedAt": row["updated_at"],
         "events": events,
+        "eventCount": len(events) if event_count is None else event_count,
     }
 
 
