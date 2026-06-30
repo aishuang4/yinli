@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { BookOpenCheck, Brain, CheckCircle, ChevronDown, ChevronRight, Clock3, GitBranch, Wrench, XCircle } from 'lucide-react';
+import { BookOpenCheck, Brain, CheckCircle, ChevronDown, ChevronRight, Clock3, GitBranch, ListChecks, Wrench, X, XCircle } from 'lucide-react';
 import { Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
-import type { ModelCacheInfo, SkillCallInfo, TeamActivityInfo, ToolCallInfo } from '../../hooks/useEventStream';
+import type { ChatRunPlanState, ModelCacheInfo, SkillCallInfo, TeamActivityInfo, ToolCallInfo } from '../../hooks/useEventStream';
 import { RUNTIME_EVENT_TYPES, type ChatRuntimeEvent } from '../../types/chatEvents';
 import { formatProcessDuration } from './chatUiUtils';
 import { TeamActivityPanel } from './TeamActivityViews';
@@ -22,8 +22,6 @@ export function ProcessDetailsBlock({
   toolCalls,
   selectedTeamActivityId,
   onSelectTeamActivity,
-  onApprovePlan,
-  onDenyPlan,
 }: {
   defaultExpanded: boolean;
   hasFinalAnswer: boolean;
@@ -38,14 +36,13 @@ export function ProcessDetailsBlock({
   toolCalls: ToolCallInfo[];
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
-  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
-  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
 }) {
   const hasReactTrace = Boolean((reactTraceContent || '').trim());
   const [expanded, setExpanded] = useState(defaultExpanded && !hasFinalAnswer);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const hadFinalAnswerRef = useRef(hasFinalAnswer);
   const processDuration = formatProcessDuration(processStartedAt, processCompletedAt, nowMs);
+  const detailRuntimeEvents = runtimeEvents.filter((event) => !isPlanModeRuntimeEvent(event));
   const detailCount = [
     hasReactTrace ? 1 : 0,
     thinkingContent ? 1 : 0,
@@ -53,7 +50,7 @@ export function ProcessDetailsBlock({
     skillCalls.length,
     modelCaches.length,
     toolCalls.length,
-    runtimeEvents.length > 0 ? 1 : 0,
+    detailRuntimeEvents.length > 0 ? 1 : 0,
   ].reduce((total, count) => total + count, 0);
   const hasProcessDetails = detailCount > 0;
 
@@ -111,12 +108,10 @@ export function ProcessDetailsBlock({
           teamActivities={teamActivities}
           skillCalls={skillCalls}
           modelCaches={modelCaches}
-          runtimeEvents={runtimeEvents}
+          runtimeEvents={detailRuntimeEvents}
           toolCalls={toolCalls}
           selectedTeamActivityId={selectedTeamActivityId}
           onSelectTeamActivity={onSelectTeamActivity}
-          onApprovePlan={onApprovePlan}
-          onDenyPlan={onDenyPlan}
         />
       )}
     </div>
@@ -133,8 +128,6 @@ function ReActTimeline({
   toolCalls,
   selectedTeamActivityId,
   onSelectTeamActivity,
-  onApprovePlan,
-  onDenyPlan,
 }: {
   reactTraceContent: string;
   thinkingContent: string;
@@ -145,15 +138,11 @@ function ReActTimeline({
   toolCalls: ToolCallInfo[];
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
-  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
-  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
 }) {
   const runtimeItems = buildTimelineItemsFromRuntimeEvents({
     runtimeEvents,
     toolCalls,
     skillCalls,
-    onApprovePlan,
-    onDenyPlan,
   });
   const fallbackReasoningSegments = splitReasoningSegments([thinkingContent, reactTraceContent].filter(Boolean).join('\n\n'));
   const fallbackActions = buildActionItems({
@@ -191,38 +180,15 @@ function buildTimelineItemsFromRuntimeEvents({
   runtimeEvents,
   toolCalls,
   skillCalls,
-  onApprovePlan,
-  onDenyPlan,
 }: {
   runtimeEvents: ChatRuntimeEvent[];
   toolCalls: ToolCallInfo[];
   skillCalls: SkillCallInfo[];
-  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
-  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
 }): Array<{ id: string; node: ReactNode }> {
   const items: Array<{ id: string; node: ReactNode }> = [];
   const renderedActions = new Set<string>();
   let outputBuffer = '';
   let thinkingBuffer = '';
-  const planModeEvents = getPlanModeEvents(runtimeEvents);
-  if (planModeEvents.length > 0) {
-    items.push({
-      id: 'plan-mode',
-      node: (
-        <ActionShell
-          key="plan-mode"
-          icon={<BookOpenCheck size={15} />}
-          label="Plan Mode"
-        >
-          <PlanModeRuntimeBlock
-            events={planModeEvents}
-            onApprovePlan={onApprovePlan}
-            onDenyPlan={onDenyPlan}
-          />
-        </ActionShell>
-      ),
-    });
-  }
 
   const flushReasoning = (reason: string) => {
     const content = [thinkingBuffer, outputBuffer].filter(Boolean).join('\n\n').trim();
@@ -294,32 +260,85 @@ function buildTimelineItemsFromRuntimeEvents({
   return items;
 }
 
-function getPlanModeEvents(runtimeEvents: ChatRuntimeEvent[]): ChatRuntimeEvent[] {
-  return runtimeEvents.filter((event) => (
+export function isPlanModeRuntimeEvent(event: ChatRuntimeEvent): boolean {
+  return (
     event.type === RUNTIME_EVENT_TYPES.PLAN_MODE_ENTERED ||
     event.type === RUNTIME_EVENT_TYPES.PLAN_UPDATED ||
     event.type === RUNTIME_EVENT_TYPES.PLAN_WAITING_APPROVAL ||
     event.type === RUNTIME_EVENT_TYPES.PLAN_APPROVED ||
     event.type === RUNTIME_EVENT_TYPES.PLAN_DENIED ||
-    event.type === RUNTIME_EVENT_TYPES.PLAN_TOOL_DENIED
-  ));
+    event.type === RUNTIME_EVENT_TYPES.PLAN_TOOL_DENIED ||
+    event.type === RUNTIME_EVENT_TYPES.PLAN_TASKS_UPDATED ||
+    event.type === RUNTIME_EVENT_TYPES.PLAN_TASK_OUTPUT
+  );
 }
 
-function PlanModeRuntimeBlock({
+export function getPlanModeEvents(runtimeEvents: ChatRuntimeEvent[]): ChatRuntimeEvent[] {
+  return runtimeEvents.filter(isPlanModeRuntimeEvent);
+}
+
+type PlanTaskStep = {
+  id?: unknown;
+  stepIndex?: unknown;
+  title?: unknown;
+  description?: unknown;
+  status?: unknown;
+  evidence?: unknown;
+  result?: unknown;
+};
+
+function planTaskStatusColor(status: string): string {
+  if (status === 'failed') return 'danger';
+  if (status === 'completed') return 'success';
+  if (status === 'running') return 'blue';
+  if (status === 'skipped') return 'transparent';
+  return 'orange';
+}
+
+export function PlanModeDock({
   events,
+  plans = [],
+  resolvedPlanIds,
   onApprovePlan,
   onDenyPlan,
 }: {
   events: ChatRuntimeEvent[];
+  plans?: ChatRunPlanState[];
+  resolvedPlanIds?: Set<string>;
   onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
   onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
 }) {
+  const [open, setOpen] = useState(false);
+  if (plans.length > 0) {
+    const latestPlan = plans[plans.length - 1];
+    const latestPlanId = latestPlan.planId;
+    const locallyResolved = Boolean(latestPlanId && resolvedPlanIds?.has(latestPlanId));
+    const waitingApproval = latestPlan.status === 'waiting' && !locallyResolved;
+    const actionEvent = runtimeEventFromPlanState(latestPlan);
+    return (
+      <PlanModeDockContent
+        open={open}
+        setOpen={setOpen}
+        planId={latestPlanId}
+        planFile={latestPlan.planFile}
+        markdown={latestPlan.markdown}
+        steps={latestPlan.steps}
+        status={locallyResolved ? 'completed' : latestPlan.status}
+        waitingApproval={waitingApproval}
+        actionEvent={actionEvent}
+        onApprovePlan={onApprovePlan}
+        onDenyPlan={onDenyPlan}
+      />
+    );
+  }
   const latest = events[events.length - 1];
+  if (!latest) return null;
   const latestPlanId = String(latest.payload.planId || '');
   const relatedEvents = latestPlanId
     ? events.filter((event) => String(event.payload.planId || '') === latestPlanId)
     : events;
   const latestRelated = relatedEvents[relatedEvents.length - 1] || latest;
+  const locallyResolved = Boolean(latestPlanId && resolvedPlanIds?.has(latestPlanId));
   const waitingEvent = [...relatedEvents].reverse().find((event) => (
     event.type === RUNTIME_EVENT_TYPES.PLAN_WAITING_APPROVAL
   ));
@@ -331,59 +350,219 @@ function PlanModeRuntimeBlock({
     typeof event.payload.markdown === 'string' && event.payload.markdown
   )) || latestRelated;
   const markdown = typeof markdownEvent.payload.markdown === 'string' ? markdownEvent.payload.markdown : '';
+  const stepsEvent = [...relatedEvents].reverse().find((event) => Array.isArray(event.payload.steps));
+  const steps = (Array.isArray(stepsEvent?.payload.steps) ? stepsEvent.payload.steps : []) as PlanTaskStep[];
   const planFile = typeof latestRelated.payload.planFile === 'string' ? latestRelated.payload.planFile : '';
-  const waitingApproval = Boolean(waitingEvent && !terminalEvent);
+  const waitingApproval = Boolean(waitingEvent && !terminalEvent && !locallyResolved);
   const actionEvent = waitingEvent || latestRelated;
-  const status = terminalEvent?.status || (waitingApproval ? 'waiting' : latestRelated.status || latestRelated.type);
+  const status = terminalEvent?.status || (locallyResolved ? 'completed' : waitingApproval ? 'waiting' : latestRelated.status || latestRelated.type);
+  return (
+    <PlanModeDockContent
+      open={open}
+      setOpen={setOpen}
+      planId={latestPlanId}
+      planFile={planFile}
+      markdown={markdown}
+      steps={steps}
+      status={status}
+      waitingApproval={waitingApproval}
+      actionEvent={actionEvent}
+      onApprovePlan={onApprovePlan}
+      onDenyPlan={onDenyPlan}
+    />
+  );
+}
+
+function PlanModeDockContent({
+  open,
+  setOpen,
+  planFile,
+  markdown,
+  steps,
+  status,
+  waitingApproval,
+  actionEvent,
+  onApprovePlan,
+  onDenyPlan,
+}: {
+  open: boolean;
+  setOpen: (value: boolean | ((current: boolean) => boolean)) => void;
+  planId: string;
+  planFile: string;
+  markdown: string;
+  steps: PlanTaskStep[];
+  status: string;
+  waitingApproval: boolean;
+  actionEvent: ChatRuntimeEvent;
+  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
+  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
+}) {
+  const completedCount = steps.filter((step) => {
+    const stepStatus = String(step.status || '');
+    return stepStatus === 'completed' || stepStatus === 'skipped';
+  }).length;
+  const runningIndex = steps.findIndex((step) => String(step.status || '') === 'running');
+  const currentStep = steps.length > 0
+    ? runningIndex >= 0
+      ? runningIndex + 1
+      : Math.min(completedCount + 1, steps.length)
+    : 0;
+  const progressLabel = steps.length > 0
+    ? completedCount >= steps.length
+      ? `${completedCount}/${steps.length} 完成`
+      : `第 ${currentStep}/${steps.length} 步`
+    : waitingApproval
+      ? '待审批'
+      : String(status || 'plan');
+  const statusLabel = waitingApproval
+    ? '待审批'
+    : status === 'completed'
+      ? '执行中'
+      : status === 'failed'
+        ? '已拒绝'
+        : String(status || 'Plan');
 
   return (
-    <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
-      <div className="space-y-2 px-3 py-2">
-        <div className="flex min-w-0 items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-              {latestRelated.type}
+    <div className="pointer-events-none absolute bottom-16 left-1/2 z-40 flex max-w-[calc(100%-40px)] -translate-x-1/2 flex-col items-center gap-2">
+      {open && (
+        <div className="pointer-events-auto w-[min(560px,calc(100vw-72px))] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] shadow-xl">
+          <div className="flex min-w-0 items-center justify-between gap-3 border-b border-[var(--color-border)] px-3 py-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <ListChecks size={15} className="shrink-0 text-[var(--color-text-secondary)]" />
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">Plan Mode</div>
+                {planFile && (
+                  <div className="truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">
+                    {planFile}
+                  </div>
+                )}
+              </div>
             </div>
-            {planFile && (
-              <div className="mt-1 truncate font-mono text-xs text-[var(--color-text-tertiary)]">
-                {planFile}
+            <div className="flex shrink-0 items-center gap-2">
+              <Tag size="small" color={waitingApproval ? 'blue' : status === 'failed' ? 'danger' : 'success'}>
+                {statusLabel}
+              </Tag>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+                aria-label="关闭计划面板"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+          <div className="max-h-[420px] space-y-3 overflow-auto p-3">
+            {steps.length > 0 && (
+              <div className="space-y-2">
+                {steps.map((step, index) => {
+                  const statusText = String(step.status || 'pending');
+                  const descriptionText = String(step.description || '');
+                  const resultText = String(step.result || step.evidence || '');
+                  return (
+                    <div
+                      key={String(step.id || index)}
+                      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-2"
+                    >
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <div className="min-w-0 truncate text-xs font-medium text-[var(--color-text-primary)]">
+                          {Number(step.stepIndex ?? index) + 1}. {String(step.title || 'Untitled task')}
+                        </div>
+                        <Tag size="small" color={planTaskStatusColor(statusText)}>
+                          {statusText}
+                        </Tag>
+                      </div>
+                      {descriptionText && (
+                        <div className="mt-1 line-clamp-2 text-xs text-[var(--color-text-tertiary)]">
+                          {descriptionText}
+                        </div>
+                      )}
+                      {resultText && (
+                        <div className="mt-1 line-clamp-2 text-xs text-[var(--color-text-secondary)]">
+                          {resultText}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {markdown && (
+              <div className="max-h-64 overflow-auto rounded-lg bg-[var(--color-bg-secondary)] p-3 text-xs leading-6 text-[var(--color-text-secondary)]">
+                <MarkdownContent content={markdown} />
               </div>
             )}
           </div>
-          <Tag size="small" color={status === 'waiting' ? 'blue' : status === 'failed' ? 'danger' : 'success'}>
-            {status}
-          </Tag>
         </div>
-        {markdown && (
-          <div className="max-h-72 overflow-auto rounded-md bg-[var(--color-bg-primary)] p-3 text-xs leading-6 text-[var(--color-text-secondary)]">
-            <MarkdownContent content={markdown} />
-          </div>
-        )}
+      )}
+      <div className="pointer-events-auto flex max-w-full items-center overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-bg-primary)]/90 shadow-lg backdrop-blur">
         {waitingApproval && (
-          <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void onDenyPlan?.(actionEvent)}
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 px-3 text-xs font-medium text-[var(--color-error)] transition hover:bg-[var(--color-error-bg)] disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={!onDenyPlan}
+          >
+            <XCircle size={14} />
+            拒绝
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className={`inline-flex h-9 min-w-0 items-center gap-2 px-3 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-hover)] ${
+            waitingApproval ? 'border-x border-[var(--color-border)]' : ''
+          }`}
+        >
+          <ListChecks size={15} className="shrink-0" />
+          <span className="truncate">计划</span>
+          <span className="shrink-0 rounded-full bg-[var(--color-bg-tertiary)] px-2 py-0.5 text-xs text-[var(--color-text-secondary)]">
+            {progressLabel}
+          </span>
+        </button>
+        {waitingApproval && (
             <button
               type="button"
               onClick={() => void onApprovePlan?.(actionEvent)}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-transparent bg-[var(--color-primary)] px-3 text-xs font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 px-3 text-xs font-medium text-[var(--color-success)] transition hover:bg-[var(--color-success-bg)] disabled:cursor-not-allowed disabled:opacity-50"
               disabled={!onApprovePlan}
             >
               <CheckCircle size={14} />
               批准执行
             </button>
-            <button
-              type="button"
-              onClick={() => void onDenyPlan?.(actionEvent)}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 text-xs font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={!onDenyPlan}
-            >
-              <XCircle size={14} />
-              拒绝
-            </button>
-          </div>
         )}
       </div>
     </div>
   );
+}
+
+function runtimeEventFromPlanState(plan: ChatRunPlanState): ChatRuntimeEvent {
+  return {
+    id: `plan-state-${plan.planId}-${plan.updatedAt || 'latest'}`,
+    runId: '',
+    sessionId: '',
+    type: plan.status === 'waiting'
+      ? RUNTIME_EVENT_TYPES.PLAN_WAITING_APPROVAL
+      : plan.status === 'failed'
+        ? RUNTIME_EVENT_TYPES.PLAN_DENIED
+        : RUNTIME_EVENT_TYPES.PLAN_UPDATED,
+    source: 'run_state',
+    sourceEventType: null,
+    scope: 'plan',
+    agentId: '',
+    agentName: '',
+    teamActivityId: null,
+    status: plan.status,
+    reason: '',
+    timestamp: plan.updatedAt || new Date().toISOString(),
+    durationMs: null,
+    payload: {
+      planId: plan.planId,
+      planFile: plan.planFile,
+      markdown: plan.markdown,
+      steps: plan.steps,
+    },
+  };
 }
 
 function splitReasoningSegments(content: string): string[] {

@@ -13,6 +13,7 @@ from src.server.routes.chat.background_runs import (
     list_chat_background_runs,
     serialize_chat_background_run,
     subscribe_chat_background_run,
+    subscribe_chat_run_state,
 )
 from src.server.routes.chat.handlers.send import send_message
 from src.server.routes.chat.models import ChatMessage
@@ -22,11 +23,11 @@ from src.storage.database import get_latest_user_chat_message
 
 
 @router.get("/runs/{run_id}/stream")
-async def stream_run(run_id: str) -> StreamingResponse:
+async def stream_run(run_id: str, replay: bool = True) -> StreamingResponse:
     """重新订阅后台 Chat Run 事件。"""
 
     return StreamingResponse(
-        subscribe_chat_background_run(run_id),
+        subscribe_chat_background_run(run_id, replay=replay),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -55,6 +56,37 @@ async def get_run(run_id: str) -> dict:
         **serialize_chat_background_run(run),
         "events": run.events,
     }
+
+
+@router.get("/runs/{run_id}/state")
+async def get_run_state(run_id: str) -> dict:
+    """读取一个后台 Chat Run 的前端状态快照。"""
+
+    run = await get_chat_background_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if not run.state:
+        from src.server.routes.chat.event_hub import initial_run_state
+
+        return initial_run_state(run)
+    from src.server.routes.chat.event_hub import normalize_run_state
+
+    return normalize_run_state(run.state)
+
+
+@router.get("/runs/{run_id}/state/stream")
+async def stream_run_state(run_id: str) -> StreamingResponse:
+    """订阅 RunState 中间层状态流。"""
+
+    return StreamingResponse(
+        subscribe_chat_run_state(run_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/runs/{run_id}/rerun")

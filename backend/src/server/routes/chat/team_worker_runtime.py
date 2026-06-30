@@ -14,7 +14,7 @@ from src.agents.factory import AgentModelOptions, get_or_create_agent
 from src.config.runtime_settings import get_effective_model_settings
 from src.server.routes.agents import get_registered_agent
 from src.server.routes.chat.helpers import _sse_event, _trim_text
-from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload
+from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload, _merge_hitl_tool_calls
 from src.server.routes.chat.models import (
     HITL_EVENT_TYPES,
     ChatMessage,
@@ -310,6 +310,7 @@ async def _pause_worker_for_hitl(
                 "tool_calls": worker_tool_calls,
             }),
         )
+    agentscope_waiting_tool_calls = list(event_data.get("tool_calls") or [])
     interaction = _create_pending_interaction(
         interaction_type=event_type,
         agent=worker_agent,
@@ -318,7 +319,11 @@ async def _pause_worker_for_hitl(
         agent_name=worker_name,
         model_name=request.model_name,
         reply_id=str(event_data.get("reply_id") or ""),
-        tool_calls=list(event_data.get("tool_calls") or []),
+        tool_calls=_merge_hitl_tool_calls(
+            agentscope_waiting_tool_calls,
+            worker_tool_calls,
+        ),
+        resume_tool_calls=agentscope_waiting_tool_calls,
         message=_build_worker_user_message(
             data.message,
             member,

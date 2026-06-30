@@ -1,6 +1,6 @@
 # Agent Workstation TODO
 
-> 最后更新：2026-06-26
+> 最后更新：2026-06-30
 >
 > 本文件是项目后续实现顺序的工作 TODO。功能完成后请更新勾选状态，并补一句行为变化说明。
 
@@ -18,7 +18,9 @@
 - [ ] 收尾 Chat runtime 拆分的剩余边界。
   - [x] 清理旧 Plan approval 流程，避免 `send.py` 中保留失效审批分支。实现于 2026-06-26：旧 Plan Runtime 已整体下线。
   - [x] 抽统一早期错误处理 helper，覆盖图片模型不支持、API Key 缺失、Agent 创建失败等重复路径。实现于 2026-06-23：已下沉到 `completion.emit_failed_startup_run()`。
-  - [ ] 固化 Chat SSE 事件契约，确保前后端只依赖文档化事件，不再继续引入临时事件名。
+  - [x] 固化 Chat SSE 事件契约，确保前后端只依赖文档化事件，不再继续引入临时事件名。
+    - 更新于 2026-06-30：`docs/chat-sse-event-contract.md` 已明确 Chat live 主链路只消费 RunState 中间层；补充 raw event -> RunState -> 前端状态映射表；等待用户输入的 `waiting` 状态会在快照/patch 发送后关闭 `state/stream`，避免前端一直转圈。
+    - 更新于 2026-06-30：启动 RunState 契约硬化专项，新增后端 `run_state_schema.py` 与前端 `types/runState.ts`，`RUN_STATE_PATCH` 必须携带枚举化 `kind`；Plan Mode 内部事件收束为 `PlanDomainEvent -> RUNTIME_EVENT`，减少 middleware / 工具结果 / 前端状态之间的数据结构串扰。
   - [ ] 低优先级：让 `resume.py` 复用 `leader_stream.py`、`completion.py`、`orchestration.py`，避免 resume 和 send 再次分叉。
     - 当前不影响主流程；除非后续 HITL resume 与正常 send 出现明显行为分叉，否则先不作为近期主线。
   - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 mode、skills、team workers 和 toolScope。
@@ -115,6 +117,7 @@
   - 新增 `/api/chat/runs/{run_id}/stream`，支持在同一后端进程内按 run 重新订阅事件。
   - 实现于 2026-06-18：新增进程内 `background_runs` 管理器。后续还需补 run 状态持久化、前端自动重连、增量草稿消息和真正取消 run 的接口。
   - 更新于 2026-06-20：Run 记录与原始 SSE 事件已落 SQLite（`chat_runs` / `chat_run_events`），HITL resume 会写回原 Run；运行任务中心改为看板式展示进度、当前阶段、参与者和完整结果。
+  - 更新于 2026-06-30：新增 RunState 中间层（`chat_run_states`、`/api/chat/runs/{run_id}/state`、`/api/chat/runs/{run_id}/state/stream`）、`/api/chat/send/start` 和 `/api/chat/resume/start`。Chat 主界面 live handler 只消费 `RUN_STATE` / `RUN_STATE_PATCH`、错误和取消事件，不再直接解析原始 Runtime/SSE 事件恢复运行中任务；工具结果只进入轻量 Tool Summary，Plan Dock、Team activity、Skill、模型用量和 clarification live 状态均读取 RunState 结构化字段，完整 Observation 留给 Trace/Artifact。
 
 - [x] Worker execution graph
   - Make mixed parallel/serial execution easier to inspect.

@@ -107,11 +107,124 @@ class PlanExitTool(_PlanToolBase):
         })
 
 
+class TodoWriteTool(_PlanToolBase):
+    """写入结构化任务列表。"""
+
+    name: str = "todo_write"
+    description: str = "Create or replace the structured task list for the active plan."
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "description": "Structured plan tasks in execution order.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Short task title."},
+                        "description": {"type": "string", "description": "Task details."},
+                        "status": {
+                            "type": "string",
+                            "description": "Task status.",
+                            "enum": ["pending", "running", "completed", "failed", "skipped"],
+                        },
+                        "assignedAgentId": {"type": "string", "description": "Optional assigned agent id."},
+                        "evidence": {"type": "string", "description": "Evidence collected for this task."},
+                        "result": {"type": "string", "description": "Task result summary."},
+                    },
+                    "required": ["title"],
+                },
+            },
+        },
+        "required": ["items"],
+    }
+
+    async def __call__(self, items: list[dict[str, Any]]) -> ToolChunk:
+        context = self.manager.write_tasks(items=items)
+        return self._success({
+            "planId": context.plan_id,
+            "planFile": context.current_plan_file,
+            "steps": context.steps,
+        })
+
+
+class TaskListTool(_PlanToolBase):
+    """读取当前结构化任务列表。"""
+
+    name: str = "task_list"
+    description: str = "List structured tasks for the current plan."
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    }
+
+    async def __call__(self) -> ToolChunk:
+        steps = self.manager.list_tasks()
+        return self._success({
+            "planId": self.manager.context.plan_id,
+            "planFile": self.manager.context.current_plan_file,
+            "steps": steps,
+        })
+
+
+class TaskOutputTool(_PlanToolBase):
+    """更新某个结构化任务的状态与输出。"""
+
+    name: str = "task_output"
+    description: str = "Update one structured plan task with status, evidence, and result."
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "stepId": {"type": "string", "description": "Structured task id."},
+            "stepIndex": {"type": "integer", "description": "Zero-based task index."},
+            "status": {
+                "type": "string",
+                "description": "Task status.",
+                "enum": ["pending", "running", "completed", "failed", "skipped"],
+            },
+            "evidence": {"type": "string", "description": "Evidence collected for this task."},
+            "result": {"type": "string", "description": "Task result summary."},
+        },
+        "required": ["status"],
+    }
+
+    async def __call__(
+        self,
+        status: str,
+        stepId: str | None = None,
+        stepIndex: int | None = None,
+        evidence: str = "",
+        result: str = "",
+    ) -> ToolChunk:
+        context = self.manager.record_task_output(
+            step_id=stepId,
+            step_index=stepIndex,
+            status=status,
+            evidence=evidence,
+            result=result,
+        )
+        step = next((
+            item for item in context.steps
+            if (stepId and str(item.get("id") or "") == stepId)
+            or (stepIndex is not None and int(item.get("stepIndex") or 0) == stepIndex)
+        ), None)
+        return self._success({
+            "planId": context.plan_id,
+            "planFile": context.current_plan_file,
+            "step": step or {},
+            "steps": context.steps,
+        })
+
+
 def build_plan_mode_tools(manager: PlanModeManager) -> list[ToolBase]:
     """构造 Plan Mode 控制工具。"""
 
     return [
         PlanEnterTool(manager),
         PlanWriteTool(manager),
+        TodoWriteTool(manager),
+        TaskListTool(manager),
+        TaskOutputTool(manager),
         PlanExitTool(manager),
     ]

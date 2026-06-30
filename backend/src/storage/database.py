@@ -346,6 +346,12 @@ def ensure_db() -> None:
                     sort_order INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY(run_id) REFERENCES chat_runs(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS chat_run_states (
+                    run_id TEXT PRIMARY KEY,
+                    state TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES chat_runs(id) ON DELETE CASCADE
+                );
                 CREATE INDEX IF NOT EXISTS idx_chat_runs_updated
                     ON chat_runs(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_chat_run_events_order
@@ -1430,6 +1436,42 @@ def append_chat_run_event(run_id: str, raw_event: str) -> dict[str, Any]:
     }
 
 
+def upsert_chat_run_state(run_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    """保存一个 RunState 快照。"""
+
+    ensure_db()
+    updated_at = _utc_now()
+    payload = {**state, "updatedAt": state.get("updatedAt") or updated_at}
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO chat_run_states(run_id, state, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+                state=excluded.state,
+                updated_at=excluded.updated_at
+            """,
+            (run_id, _dumps(payload), updated_at),
+        )
+        conn.commit()
+    return payload
+
+
+def get_chat_run_state(run_id: str) -> dict[str, Any] | None:
+    """读取一个 RunState 快照。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT state FROM chat_run_states WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    if not row:
+        return None
+    state = _loads(row["state"], {})
+    return state if isinstance(state, dict) else {}
+
+
 def list_chat_runs(limit: int = 50, *, include_events: bool = True) -> list[dict[str, Any]]:
     """List persisted Chat Runs, optionally omitting raw event arrays for fast summaries."""
     ensure_db()
@@ -2020,6 +2062,47 @@ def update_plan_step_record(
     with _lock, _connect() as conn:
         next_row = conn.execute("SELECT * FROM plan_steps WHERE id = ?", (step_id,)).fetchone()
     return _row_to_plan_step(next_row) if next_row else None
+
+
+def replace_plan_steps_record(plan_id: str, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Replace all structured steps for a plan."""
+
+    ensure_db()
+    now = _utc_now()
+    with _lock, _connect() as conn:
+        conn.execute("DELETE FROM plan_steps WHERE plan_id = ?", (plan_id,))
+        conn.execute(
+            "UPDATE plans SET current_step_id = NULL, updated_at = ? WHERE id = ?",
+            (now, plan_id),
+        )
+        conn.executemany(
+            """
+            INSERT INTO plan_steps (
+                id, plan_id, step_index, title, description, status,
+                assigned_agent_id, evidence, result, started_at, completed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    step["id"],
+                    plan_id,
+                    step["stepIndex"],
+                    step["title"],
+                    step.get("description", ""),
+                    step.get("status", "pending"),
+                    step.get("assignedAgentId"),
+                    step.get("evidence", ""),
+                    step.get("result", ""),
+                    step.get("startedAt"),
+                    step.get("completedAt"),
+                    step.get("updatedAt") or now,
+                )
+                for step in steps
+            ],
+        )
+        conn.commit()
+    plan = get_plan_record(plan_id)
+    return list((plan or {}).get("steps") or [])
 
 
 def append_plan_event_record(

@@ -83,6 +83,7 @@ export function splitAssistantContentByRuntimeEvents(
   let outputBuffer = '';
   const traceParts: string[] = [];
   let sawActionAfterOutput = false;
+  let sawFinalAnswerDelta = false;
   for (const event of runtimeEvents) {
     const isTeamProcessScope = event.scope === 'team' || event.scope === 'worker';
     if (event.type === RUNTIME_EVENT_TYPES.AGENT_REASONING_DELTA) {
@@ -93,6 +94,7 @@ export function splitAssistantContentByRuntimeEvents(
     if (event.type === RUNTIME_EVENT_TYPES.AGENT_FINAL_ANSWER_DELTA) {
       outputBuffer += String(event.payload.delta || '');
       sawActionAfterOutput = true;
+      sawFinalAnswerDelta = true;
       continue;
     }
     if (event.type === RUNTIME_EVENT_TYPES.AGENT_OUTPUT_DELTA) {
@@ -119,13 +121,23 @@ export function splitAssistantContentByRuntimeEvents(
         finalAnswer: content.trim(),
       };
     }
+    if (content.trim()) {
+      return splitAssistantContent(content);
+    }
     return {
-      reactTrace: content.trim(),
+      reactTrace: mergeTextParts(traceParts),
       finalAnswer: '',
     };
   }
 
   const finalAnswer = outputBuffer.trim();
+  if (!finalAnswer && !sawFinalAnswerDelta && content.trim() && !options.streaming) {
+    const fallbackParts = splitAssistantContent(content);
+    return {
+      reactTrace: mergeTextParts([mergeTextParts(traceParts), fallbackParts.reactTrace]),
+      finalAnswer: fallbackParts.finalAnswer,
+    };
+  }
   return {
     reactTrace: mergeTextParts(traceParts),
     finalAnswer,
