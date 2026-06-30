@@ -13,7 +13,7 @@ import type { LocalMessage } from './types';
 import { ClarificationBlock, HitlApprovalBlock, isAskUserHitlRequest } from './HumanInteractionBlocks';
 import { MessageContentBlock, MessageImages, StreamingPlaceholder } from './MessageAtoms';
 import { MessageToolbar } from './MessageToolbar';
-import { ProcessDetailsBlock } from './ProcessDetailsBlock';
+import { isPlanModeRuntimeEvent, ProcessDetailsBlock } from './ProcessDetailsBlock';
 import { TeamActivityPanel } from './TeamActivityViews';
 import { GeneratedFilesBlock, collectGeneratedFiles } from './ToolArtifacts';
 import {
@@ -31,24 +31,17 @@ type ClarificationSubmitProps = {
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
 };
 
-type PlanApprovalProps = {
-  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
-  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
-};
-
 export function MessageBubble({
   message,
   selectedTeamActivityId,
   onSelectTeamActivity,
   onSubmitClarification,
-  onApprovePlan,
-  onDenyPlan,
 }: {
   message: LocalMessage;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
-} & PlanApprovalProps) {
+}) {
   if (message.role === 'user') {
     return <UserMessageBubble message={message} />;
   }
@@ -70,8 +63,6 @@ export function MessageBubble({
       selectedTeamActivityId={selectedTeamActivityId}
       onSelectTeamActivity={onSelectTeamActivity}
       onSubmitClarification={onSubmitClarification}
-      onApprovePlan={onApprovePlan}
-      onDenyPlan={onDenyPlan}
     />
   );
 }
@@ -90,11 +81,9 @@ function SingleAgentMessageBubble({
   selectedTeamActivityId,
   onSelectTeamActivity,
   onSubmitClarification,
-  onApprovePlan,
-  onDenyPlan,
 }: {
   message: LocalMessage;
-} & TeamSelectionProps & ClarificationSubmitProps & PlanApprovalProps) {
+} & TeamSelectionProps & ClarificationSubmitProps) {
   const clarification = extractClarificationFromText(message.content);
   const clarificationRequests = message.clarificationRequests || (clarification ? [clarification] : []);
   const contentParts = splitAssistantContentByRuntimeEvents(
@@ -103,6 +92,7 @@ function SingleAgentMessageBubble({
   );
   const toolCalls = message.toolCalls || [];
   const runtimeEvents = message.runtimeEvents || [];
+  const detailRuntimeEvents = runtimeEvents.filter((event) => !isPlanModeRuntimeEvent(event));
   const generatedFiles = collectGeneratedFiles(toolCalls, []);
   const hasProcessDetails = Boolean(
     contentParts.reactTrace ||
@@ -110,7 +100,7 @@ function SingleAgentMessageBubble({
     (message.skillCalls && message.skillCalls.length > 0) ||
     (message.modelCaches && message.modelCaches.length > 0) ||
     toolCalls.length > 0 ||
-    runtimeEvents.length > 0
+    detailRuntimeEvents.length > 0
   );
 
   return (
@@ -129,12 +119,10 @@ function SingleAgentMessageBubble({
           teamActivities={[]}
           skillCalls={message.skillCalls || []}
           modelCaches={message.modelCaches || []}
-          runtimeEvents={runtimeEvents}
+          runtimeEvents={detailRuntimeEvents}
           toolCalls={toolCalls}
           selectedTeamActivityId={selectedTeamActivityId}
           onSelectTeamActivity={onSelectTeamActivity}
-          onApprovePlan={onApprovePlan}
-          onDenyPlan={onDenyPlan}
         />
       )}
 
@@ -205,6 +193,8 @@ function TeamMessageBubble({
 
 export function StreamingBubble({
   textContent,
+  reasoningContent,
+  finalAnswerContent,
   thinkingContent,
   skillCalls,
   teamActivities,
@@ -214,8 +204,6 @@ export function StreamingBubble({
   clarificationRequests,
   onSubmitClarification,
   onResolveHitl,
-  onApprovePlan,
-  onDenyPlan,
   selectedTeamActivityId,
   onSelectTeamActivity,
   toolCalls,
@@ -224,6 +212,8 @@ export function StreamingBubble({
   runCompletedAt,
 }: {
   textContent: string;
+  reasoningContent: string;
+  finalAnswerContent: string;
   thinkingContent: string;
   skillCalls: SkillCallInfo[];
   teamActivities: TeamActivityInfo[];
@@ -233,8 +223,6 @@ export function StreamingBubble({
   clarificationRequests: ClarificationRequestInfo[];
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
   onResolveHitl: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
-  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
-  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
   toolCalls: ToolCallInfo[];
@@ -243,7 +231,7 @@ export function StreamingBubble({
   runCompletedAt: string;
 }) {
   const sharedProps = {
-    textContent,
+    finalAnswerContent,
     hitlRequests,
     clarificationRequests,
     onSubmitClarification,
@@ -256,7 +244,6 @@ export function StreamingBubble({
       <TeamStreamingBubble
         {...sharedProps}
         teamActivities={teamActivities}
-        runtimeEvents={runtimeEvents}
         selectedTeamActivityId={selectedTeamActivityId}
         onSelectTeamActivity={onSelectTeamActivity}
       />
@@ -266,7 +253,9 @@ export function StreamingBubble({
   return (
     <SingleAgentStreamingBubble
       {...sharedProps}
+      textContent={textContent}
       thinkingContent={thinkingContent}
+      reasoningContent={reasoningContent}
       skillCalls={skillCalls}
       modelCaches={modelCaches}
       runtimeEvents={runtimeEvents}
@@ -275,14 +264,14 @@ export function StreamingBubble({
       runCompletedAt={runCompletedAt}
       selectedTeamActivityId={selectedTeamActivityId}
       onSelectTeamActivity={onSelectTeamActivity}
-      onApprovePlan={onApprovePlan}
-      onDenyPlan={onDenyPlan}
     />
   );
 }
 
 function SingleAgentStreamingBubble({
   textContent,
+  reasoningContent,
+  finalAnswerContent,
   thinkingContent,
   skillCalls,
   modelCaches,
@@ -291,8 +280,6 @@ function SingleAgentStreamingBubble({
   clarificationRequests,
   onSubmitClarification,
   onResolveHitl,
-  onApprovePlan,
-  onDenyPlan,
   selectedTeamActivityId,
   onSelectTeamActivity,
   toolCalls,
@@ -301,6 +288,8 @@ function SingleAgentStreamingBubble({
   runCompletedAt,
 }: {
   textContent: string;
+  reasoningContent: string;
+  finalAnswerContent: string;
   thinkingContent: string;
   skillCalls: SkillCallInfo[];
   modelCaches: ModelCacheInfo[];
@@ -309,8 +298,6 @@ function SingleAgentStreamingBubble({
   clarificationRequests: ClarificationRequestInfo[];
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
   onResolveHitl: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
-  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
-  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
   toolCalls: ToolCallInfo[];
@@ -318,16 +305,18 @@ function SingleAgentStreamingBubble({
   runStartedAt: string;
   runCompletedAt: string;
 }) {
-  const contentParts = splitAssistantContentByRuntimeEvents(textContent, runtimeEvents, { streaming: true });
+  const finalAnswer = finalAnswerContent.trim();
+  const reactTraceContent = reasoningContent.trim();
   const usesFinalAnswerFallback = hasMissingFinalAnswerFallback(runtimeEvents);
+  const detailRuntimeEvents = runtimeEvents.filter((event) => !isPlanModeRuntimeEvent(event));
   const generatedFiles = collectGeneratedFiles(toolCalls, []);
   const hasProcessDetails = Boolean(
-    contentParts.reactTrace ||
+    reactTraceContent ||
     thinkingContent ||
     skillCalls.length > 0 ||
     modelCaches.length > 0 ||
     toolCalls.length > 0 ||
-    runtimeEvents.length > 0
+    detailRuntimeEvents.length > 0
   );
 
   return (
@@ -335,20 +324,18 @@ function SingleAgentStreamingBubble({
       {hasProcessDetails && (
         <ProcessDetailsBlock
           defaultExpanded={!textContent}
-          hasFinalAnswer={Boolean(contentParts.finalAnswer) && !usesFinalAnswerFallback}
+          hasFinalAnswer={Boolean(finalAnswer) && !usesFinalAnswerFallback}
           processStartedAt={runStartedAt}
           processCompletedAt={runCompletedAt}
-          reactTraceContent={contentParts.reactTrace}
+          reactTraceContent={reactTraceContent}
           thinkingContent={thinkingContent}
           teamActivities={[]}
           skillCalls={skillCalls}
           modelCaches={modelCaches}
-          runtimeEvents={runtimeEvents}
+          runtimeEvents={detailRuntimeEvents}
           toolCalls={toolCalls}
           selectedTeamActivityId={selectedTeamActivityId}
           onSelectTeamActivity={onSelectTeamActivity}
-          onApprovePlan={onApprovePlan}
-          onDenyPlan={onDenyPlan}
         />
       )}
 
@@ -359,15 +346,15 @@ function SingleAgentStreamingBubble({
         onResolveHitl={onResolveHitl}
       />
 
-      <MessageContentBlock content={contentParts.finalAnswer} role="assistant" streaming />
+      <MessageContentBlock content={finalAnswer} role="assistant" streaming />
 
       {generatedFiles.length > 0 && <GeneratedFilesBlock files={generatedFiles} />}
 
-      {contentParts.finalAnswer && (
-        <MessageToolbar markdown={contentParts.finalAnswer} createdAt={new Date().toISOString()} />
+      {finalAnswer && (
+        <MessageToolbar markdown={finalAnswer} createdAt={new Date().toISOString()} />
       )}
 
-      {!contentParts.finalAnswer &&
+      {!finalAnswer &&
         generatedFiles.length === 0 &&
         toolCalls.length === 0 &&
         skillCalls.length === 0 &&
@@ -375,7 +362,7 @@ function SingleAgentStreamingBubble({
         hitlRequests.length === 0 &&
         clarificationRequests.length === 0 &&
         !thinkingContent &&
-        !contentParts.reactTrace && (
+        !reactTraceContent && (
           <StreamingPlaceholder modelName={modelName} />
         )}
     </MessageFrame>
@@ -390,9 +377,8 @@ function hasMissingFinalAnswerFallback(runtimeEvents: ChatRuntimeEvent[]): boole
 }
 
 function TeamStreamingBubble({
-  textContent,
+  finalAnswerContent,
   teamActivities,
-  runtimeEvents,
   hitlRequests,
   clarificationRequests,
   onSubmitClarification,
@@ -401,20 +387,17 @@ function TeamStreamingBubble({
   onSelectTeamActivity,
   modelName,
 }: {
-  textContent: string;
+  finalAnswerContent: string;
   teamActivities: TeamActivityInfo[];
-  runtimeEvents: ChatRuntimeEvent[];
   hitlRequests: HitlRequestInfo[];
   clarificationRequests: ClarificationRequestInfo[];
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
   onResolveHitl: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
-  onApprovePlan?: (event: ChatRuntimeEvent) => Promise<void>;
-  onDenyPlan?: (event: ChatRuntimeEvent) => Promise<void>;
   selectedTeamActivityId: string | null;
   onSelectTeamActivity: (id: string) => void;
   modelName: string;
 }) {
-  const contentParts = splitAssistantContentByRuntimeEvents(textContent, runtimeEvents, { streaming: true });
+  const finalAnswer = finalAnswerContent.trim();
   const generatedFiles = collectGeneratedFiles([], teamActivities);
 
   return (
@@ -432,15 +415,15 @@ function TeamStreamingBubble({
         onResolveHitl={onResolveHitl}
       />
 
-      <MessageContentBlock content={contentParts.finalAnswer} role="assistant" streaming />
+      <MessageContentBlock content={finalAnswer} role="assistant" streaming />
 
       {generatedFiles.length > 0 && <GeneratedFilesBlock files={generatedFiles} />}
 
-      {contentParts.finalAnswer && (
-        <MessageToolbar markdown={contentParts.finalAnswer} createdAt={new Date().toISOString()} />
+      {finalAnswer && (
+        <MessageToolbar markdown={finalAnswer} createdAt={new Date().toISOString()} />
       )}
 
-      {!contentParts.finalAnswer &&
+      {!finalAnswer &&
         generatedFiles.length === 0 &&
         hitlRequests.length === 0 &&
         clarificationRequests.length === 0 &&

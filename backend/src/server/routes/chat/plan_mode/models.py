@@ -1,12 +1,25 @@
 """Plan Mode 状态模型。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 PLAN_STATUS_DRAFT = "draft"
 PLAN_STATUS_WAITING_APPROVAL = "waiting_approval"
 PLAN_STATUS_APPROVED = "approved"
 PLAN_STATUS_DENIED = "denied"
+
+PLAN_STEP_STATUS_PENDING = "pending"
+PLAN_STEP_STATUS_RUNNING = "running"
+PLAN_STEP_STATUS_COMPLETED = "completed"
+PLAN_STEP_STATUS_FAILED = "failed"
+PLAN_STEP_STATUS_SKIPPED = "skipped"
+PLAN_STEP_STATUSES = frozenset({
+    PLAN_STEP_STATUS_PENDING,
+    PLAN_STEP_STATUS_RUNNING,
+    PLAN_STEP_STATUS_COMPLETED,
+    PLAN_STEP_STATUS_FAILED,
+    PLAN_STEP_STATUS_SKIPPED,
+})
 
 
 @dataclass
@@ -23,3 +36,4 @@ class PlanModeContext:
     approved: bool = False
     current_plan_file: str = ""
     markdown: str = ""
+    steps: list[dict] = field(default_factory=list)

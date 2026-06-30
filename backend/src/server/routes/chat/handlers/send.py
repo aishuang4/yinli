@@ -14,6 +14,7 @@ from src.server.routes.chat.initial_events import (
 )
 from src.server.routes.chat.background_runs import (
     start_chat_background_run,
+    serialize_chat_background_run,
     subscribe_chat_background_run,
 )
 from src.server.routes.chat.models import ChatMessage
@@ -40,6 +41,29 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
     Returns:
         StreamingResponse: SSE 事件流（text/event-stream）
     """
+
+    run = await start_chat_run(data)
+    return StreamingResponse(
+        subscribe_chat_background_run(run.id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/send/start")
+async def start_message(data: ChatMessage) -> dict:
+    """创建后台 Run 并返回元数据，前端随后订阅 RunState stream。"""
+
+    run = await start_chat_run(data)
+    return {"run": serialize_chat_background_run(run)}
+
+
+async def start_chat_run(data: ChatMessage):
+    """创建后台 Chat Run。"""
 
     session_id = data.session_id or uuid.uuid4().hex
     run_data = data.model_copy(update={"session_id": session_id})
@@ -81,7 +105,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         async for main_event in execute_chat_runtime(ctx=ctx, run_data=run_data):
             yield main_event
 
-    run = await start_chat_background_run(
+    return await start_chat_background_run(
         session_id=session_id,
         factory=event_stream,
         agent_id=run_data.agent_id or "default",
@@ -90,13 +114,4 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         team_name=run_data.team_name or "",
         task=run_data.message,
         mode="team" if run_data.team_id else "agent",
-    )
-    return StreamingResponse(
-        subscribe_chat_background_run(run.id),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
     )

@@ -23,6 +23,7 @@ import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList';
 import { TeamActivitySidebar } from '../features/chat/TeamActivityViews';
 import { HitlDock, isAskUserHitlRequest } from '../features/chat/HumanInteractionBlocks';
+import { getPlanModeEvents, PlanModeDock } from '../features/chat/ProcessDetailsBlock';
 import { TeamSelectionDock } from '../features/chat/TeamSelectionDock';
 import { normalizeStoredTeamActivities, normalizeStoredToolCalls } from '../features/chat/formatters';
 import type { ChatImageAttachment, ChatImagePayload, ChatSession, LocalMessage, PendingTeamSelection, StoredChatMessage } from '../features/chat/types';
@@ -45,12 +46,14 @@ export function ChatPage() {
   const [chatError, setChatError] = useState<string | null>(null);
   const [selectedTeamActivityId, setSelectedTeamActivityId] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [resolvedPlanIds, setResolvedPlanIds] = useState<Set<string>>(() => new Set());
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
-  const { state, sendMessage, resumeInteraction, abort, reset } = useEventStream();
+  const recoveredRunRef = useRef<string>('');
+  const { state, sendMessage, resumeInteraction, subscribeRun, abort, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
   const { teams, loading: teamsLoading } = useTeams();
 
@@ -93,12 +96,14 @@ export function ChatPage() {
     state.isStreaming ||
     state.hitlRequests.length > 0 ||
     state.clarificationRequests.length > 0 ||
-    Boolean(state.textContent) ||
+    Boolean(state.finalAnswerContent) ||
+    Boolean(state.reasoningContent) ||
     Boolean(state.thinkingContent) ||
     state.toolCalls.length > 0 ||
     state.skillCalls.length > 0 ||
     state.teamActivities.length > 0 ||
     state.modelCaches.length > 0 ||
+    state.plans.length > 0 ||
     state.runtimeEvents.length > 0
   );
 
@@ -116,6 +121,11 @@ export function ChatPage() {
     () => state.hitlRequests.filter((request) => !isAskUserHitlRequest(request)),
     [state.hitlRequests],
   );
+  const conversationPlanEvents = useMemo(() => (
+    state.plans.length > 0
+      ? []
+      : getPlanModeEvents(messages.flatMap((message) => message.runtimeEvents || []))
+  ), [messages, state.plans.length]);
 
   const openTeamActivitySidebar = useCallback((activityId: string) => {
     setSelectedTeamActivityId(activityId);
@@ -202,6 +212,39 @@ export function ChatPage() {
   }, [loadSessions]);
 
   useEffect(() => {
+    if (!activeSessionId || hasLiveResponse) return;
+    let cancelled = false;
+
+    async function recoverActiveRun() {
+      try {
+        const response = await fetch('/api/chat/runs');
+        if (!response.ok) return;
+        const data = await response.json();
+        const runs = Array.isArray(data.runs) ? data.runs : [];
+        const activeRun = runs.find((run: Record<string, unknown>) => {
+          const sessionId = String(run.sessionId || run.session_id || '');
+          const status = String(run.status || '');
+          return (
+            sessionId === activeSessionId &&
+            (status === 'running' || status === 'waiting' || status === 'cancelling')
+          );
+        });
+        const runId = String(activeRun?.id || '');
+        if (!runId || cancelled || recoveredRunRef.current === runId) return;
+        recoveredRunRef.current = runId;
+        await subscribeRun(runId);
+      } catch (error) {
+        console.warn('[Chat] Failed to recover active run:', error);
+      }
+    }
+
+    void recoverActiveRun();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId, hasLiveResponse, subscribeRun]);
+
+  useEffect(() => {
     if (targetMode === 'team' && !selectedTeamId && teams.length > 0) {
       setSelectedTeamId(teams[0].id);
     }
@@ -226,15 +269,17 @@ export function ChatPage() {
   useEffect(() => {
     if (!shouldAutoScrollRef.current) return;
     scrollToBottom(state.isStreaming ? 'auto' : 'smooth');
-  }, [messages, scrollToBottom, state.isStreaming, state.textContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities, state.modelCaches]);
+  }, [messages, scrollToBottom, state.isStreaming, state.finalAnswerContent, state.reasoningContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities, state.modelCaches]);
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
+    recoveredRunRef.current = '';
     setActiveSessionId(null);
     setMessages([]);
     setImageAttachments([]);
     setChatError(null);
     setSelectedTeamActivityId(null);
+    setResolvedPlanIds(new Set());
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
@@ -242,6 +287,8 @@ export function ChatPage() {
 
   const handleSelectSession = useCallback(async (session: ChatSession) => {
     if (state.isStreaming) return;
+    recoveredRunRef.current = '';
+    reset();
     setActiveSessionId(session.id);
     if (session.team_id) {
       setTargetMode('team');
@@ -253,6 +300,7 @@ export function ChatPage() {
     setImageAttachments([]);
     setChatError(null);
     setSelectedTeamActivityId(null);
+    setResolvedPlanIds(new Set());
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
@@ -266,11 +314,13 @@ export function ChatPage() {
       if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
       setSessions((current) => current.filter((session) => session.id !== sessionId));
       if (activeSessionId === sessionId) {
+        recoveredRunRef.current = '';
         setActiveSessionId(null);
         setMessages([]);
         setImageAttachments([]);
         setChatError(null);
         setSelectedTeamActivityId(null);
+        setResolvedPlanIds(new Set());
         reset();
       }
       notifySuccess('历史对话已删除');
@@ -429,7 +479,7 @@ export function ChatPage() {
       ? {
         id: `assistant-clarification-${Date.now()}`,
         role: 'assistant',
-        content: state.textContent || '',
+        content: state.finalAnswerContent || state.textContent || '',
         createdAt: new Date().toISOString(),
         processStartedAt: state.runStartedAt,
         processCompletedAt: state.runCompletedAt || new Date().toISOString(),
@@ -499,6 +549,7 @@ export function ChatPage() {
     state.runtimeEvents,
     state.skillCalls,
     state.teamActivities,
+    state.finalAnswerContent,
     state.textContent,
     state.thinkingContent,
     state.tokenUsage,
@@ -507,7 +558,10 @@ export function ChatPage() {
   ]);
 
   const appendPlanRuntimeEventToMessages = useCallback((planId: string, runtimeEvent: ChatRuntimeEvent) => {
-    const stateHasPlan = state.runtimeEvents.some((event) => String(event.payload.planId || '') === planId);
+    const stateHasPlan = (
+      state.plans.some((plan) => plan.planId === planId) ||
+      state.runtimeEvents.some((event) => String(event.payload.planId || '') === planId)
+    );
     setMessages((prev) => {
       let matched = false;
       const next = prev.map((message) => {
@@ -530,7 +584,7 @@ export function ChatPage() {
         next.push({
           id: `assistant-plan-${Date.now()}`,
           role: 'assistant',
-          content: state.textContent,
+          content: state.finalAnswerContent || state.textContent,
           createdAt: new Date().toISOString(),
           processStartedAt: state.runStartedAt,
           processCompletedAt: state.runCompletedAt || new Date().toISOString(),
@@ -555,11 +609,13 @@ export function ChatPage() {
     state.error,
     state.modelCaches,
     state.modelName,
+    state.plans,
     state.runCompletedAt,
     state.runStartedAt,
     state.runtimeEvents,
     state.skillCalls,
     state.teamActivities,
+    state.finalAnswerContent,
     state.textContent,
     state.thinkingContent,
     state.tokenUsage,
@@ -574,8 +630,14 @@ export function ChatPage() {
       const response = await fetch(`/api/chat/plans/${encodeURIComponent(planId)}/approve`, {
         method: 'POST',
       });
+      if (response.status === 409) {
+        setResolvedPlanIds((current) => new Set(current).add(planId));
+        notifySuccess('计划状态已更新。');
+        return;
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const result = await response.json();
+      setResolvedPlanIds((current) => new Set(current).add(planId));
       if (result.runtimeEvent) {
         appendPlanRuntimeEventToMessages(planId, result.runtimeEvent as ChatRuntimeEvent);
       }
@@ -623,8 +685,14 @@ export function ChatPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: '用户拒绝了该计划。' }),
       });
+      if (response.status === 409) {
+        setResolvedPlanIds((current) => new Set(current).add(planId));
+        notifySuccess('计划状态已更新。');
+        return;
+      }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const result = await response.json();
+      setResolvedPlanIds((current) => new Set(current).add(planId));
       if (result.runtimeEvent) {
         appendPlanRuntimeEventToMessages(planId, result.runtimeEvent as ChatRuntimeEvent);
       }
@@ -687,13 +755,13 @@ export function ChatPage() {
       !state.isStreaming &&
       state.hitlRequests.length === 0 &&
       state.clarificationRequests.length === 0 &&
-      (state.textContent || state.error || state.runtimeEvents.length > 0) &&
+      (state.finalAnswerContent || state.reasoningContent || state.textContent || state.error || state.plans.length > 0 || state.runtimeEvents.length > 0) &&
       (messages.length === 0 || messages[messages.length - 1].role === 'user')
     ) {
       const assistantMessage: LocalMessage = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
-        content: state.textContent,
+        content: state.finalAnswerContent || state.textContent,
         createdAt: new Date().toISOString(),
         processStartedAt: state.runStartedAt,
         processCompletedAt: state.runCompletedAt || new Date().toISOString(),
@@ -711,7 +779,7 @@ export function ChatPage() {
       reset();
       loadSessions({ silent: true });
     }
-  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.error, state.hitlRequests.length, state.isStreaming, state.modelCaches, state.modelName, state.runCompletedAt, state.runStartedAt, state.runtimeEvents, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
+  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.error, state.finalAnswerContent, state.hitlRequests.length, state.isStreaming, state.modelCaches, state.modelName, state.plans.length, state.reasoningContent, state.runCompletedAt, state.runStartedAt, state.runtimeEvents, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -881,14 +949,14 @@ export function ChatPage() {
                         selectedTeamActivityId={selectedTeamActivityId}
                         onSelectTeamActivity={openTeamActivitySidebar}
                         onSubmitClarification={handleSubmitClarification}
-                        onApprovePlan={handleApprovePlan}
-                        onDenyPlan={handleDenyPlan}
                       />
                     ))}
 
                     {hasLiveResponse && (
                       <StreamingBubble
                         textContent={state.textContent}
+                        reasoningContent={state.reasoningContent}
+                        finalAnswerContent={state.finalAnswerContent}
                         thinkingContent={state.thinkingContent}
                         skillCalls={state.skillCalls}
                         teamActivities={state.teamActivities}
@@ -904,8 +972,6 @@ export function ChatPage() {
                         modelName={state.modelName}
                         runStartedAt={state.runStartedAt}
                         runCompletedAt={state.runCompletedAt}
-                        onApprovePlan={handleApprovePlan}
-                        onDenyPlan={handleDenyPlan}
                       />
                     )}
 
@@ -927,6 +993,13 @@ export function ChatPage() {
             >
               <ChevronDown size={16} />
             </button>
+            <PlanModeDock
+              events={conversationPlanEvents}
+              plans={state.plans}
+              resolvedPlanIds={resolvedPlanIds}
+              onApprovePlan={handleApprovePlan}
+              onDenyPlan={handleDenyPlan}
+            />
           </div>
 
           <div className="px-5 pb-5 pt-2">

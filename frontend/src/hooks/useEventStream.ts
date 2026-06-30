@@ -1,28 +1,29 @@
 /**
- * useEventStream — AgentScope SSE 事件流 Hook
+ * useEventStream — Chat RunState 事件流 Hook
  *
- * 通过 fetch + ReadableStream 订阅后端 SSE 事件流，
- * 解析 AgentScope 2.0 的 EventType 并更新 UI 状态。
+ * Chat 主链路订阅 RunState 中间层 SSE：
+ * - RUN_STATE
+ * - RUN_STATE_PATCH
  *
- * 稳定事件契约见 docs/chat-sse-event-contract.md。底层会透传部分 AgentScope 事件：
- * - REPLY_START / REPLY_END
- * - TEXT_BLOCK_DELTA
- * - THINKING_BLOCK_DELTA
- * - TOOL_CALL_START / TOOL_CALL_END
- * - TOOL_RESULT_START / TOOL_RESULT_TEXT_DELTA / TOOL_RESULT_END
- * - MODEL_CALL_START / MODEL_CALL_END
- * - ERROR
+ * AgentScope raw SSE 只在后端投影为 RunState 和 Trace。
+ * 新 Chat UI 功能不得直接依赖 raw SSE 作为 live 状态来源。
  *
  * @see docs/chat-sse-event-contract.md
  */
 
 import { useCallback, useRef, useState } from 'react';
-import {
-  CHAT_SSE_EVENTS,
-  RUNTIME_EVENT_TYPES,
-  type ChatRuntimeEvent,
-} from '../types/chatEvents';
+import type { ChatRuntimeEvent } from '../types/chatEvents';
+import type {
+  ChatRunPlanState,
+  ChatRunPlanStep,
+  ChatRunStatePatch,
+  ChatRunStateSnapshot,
+  RunStateApprovalSummary,
+  RunStateToolSummary,
+} from '../types/runState';
 import { createId } from '../utils/id';
+
+export type { ChatRunPlanState, ChatRunPlanStep } from '../types/runState';
 
 /** SSE 事件类型 */
 export interface SSEEvent {
@@ -42,6 +43,10 @@ export interface StreamState {
   runCompletedAt: string;
   /** 累积的文本内容 */
   textContent: string;
+  /** ReAct 过程文本内容 */
+  reasoningContent: string;
+  /** 最终答案文本内容 */
+  finalAnswerContent: string;
   /** 思考链内容（thinking tokens） */
   thinkingContent: string;
   /** 工具调用列表 */
@@ -54,6 +59,8 @@ export interface StreamState {
   modelCaches: ModelCacheInfo[];
   /** 应用级运行事件 */
   runtimeEvents: ChatRuntimeEvent[];
+  /** RunState 投影出的 Plan Mode 状态 */
+  plans: ChatRunPlanState[];
   /** 待人工处理的交互 */
   hitlRequests: HitlRequestInfo[];
   /** 待用户补充信息的反问 */
@@ -241,6 +248,8 @@ interface UseEventStreamReturn {
     action: 'approve' | 'reject',
     externalResults?: Record<string, string>
   ) => Promise<void>;
+  /** 重新订阅一个仍在后台运行或等待人工处理的 Run */
+  subscribeRun: (runId: string) => Promise<void>;
   /** 中止当前流 */
   abort: () => Promise<void>;
   /** 重置状态 */
@@ -286,12 +295,15 @@ const INITIAL_STATE: StreamState = {
   runStartedAt: '',
   runCompletedAt: '',
   textContent: '',
+  reasoningContent: '',
+  finalAnswerContent: '',
   thinkingContent: '',
   toolCalls: [],
   skillCalls: [],
   teamActivities: [],
   modelCaches: [],
   runtimeEvents: [],
+  plans: [],
   hitlRequests: [],
   clarificationRequests: [],
   modelName: '',
@@ -343,11 +355,311 @@ function failStreamWithError(state: StreamState, error: string): StreamState {
   };
 }
 
-function toolStatusFromResultState(value: unknown): ToolCallInfo['status'] {
-  const state = String(value || '').toLowerCase();
-  return state === 'error' || state === 'failed' || state === 'denied'
-    ? 'failed'
-    : 'completed';
+function streamStateFromRunState(snapshot: ChatRunStateSnapshot): StreamState {
+  const runStatus = String(snapshot.status || '');
+  const hitlRequests = (snapshot.approvals || [])
+    .filter((approval) => approval.status === 'waiting' && !isClarificationApproval(approval))
+    .map((approval): HitlRequestInfo => ({
+      interactionId: String(approval.interactionId || ''),
+      type: String(approval.type || 'tool_approval'),
+      sessionId: String(snapshot.sessionId || ''),
+      agentId: String(approval.agentId || ''),
+      agentName: String(approval.agentName || ''),
+      runId: String(snapshot.runId || ''),
+      scope: 'leader',
+      teamActivityId: null,
+      replyId: '',
+      toolCalls: (approval.toolCalls || []).map((toolCall) => ({
+        id: String(toolCall.id || createId()),
+        name: normalizeToolDisplayName(String(toolCall.name || 'tool')),
+        input: String(toolCall.input || ''),
+        rawName: toolCall.rawName ? String(toolCall.rawName) : undefined,
+      })),
+      createdAt: String(approval.createdAt || new Date().toISOString()),
+    }));
+  const clarificationRequests = (snapshot.approvals || [])
+    .filter((approval) => approval.status === 'waiting' && isClarificationApproval(approval))
+    .map((approval) => clarificationRequestFromRunStateApproval(approval));
+  return {
+    ...INITIAL_STATE,
+    isStreaming: ['running', 'cancelling'].includes(String(snapshot.status || '')),
+    currentRunId: String(snapshot.runId || ''),
+    runStartedAt: String(snapshot.createdAt || ''),
+    runCompletedAt: String(snapshot.completedAt || ''),
+    textContent: String(snapshot.finalAnswer || ''),
+    reasoningContent: String(snapshot.reasoning || ''),
+    finalAnswerContent: String(snapshot.finalAnswer || ''),
+    thinkingContent: String(snapshot.thinking || ''),
+    toolCalls: (snapshot.tools || []).map((tool) => ({
+      id: String(tool.id || createId()),
+      name: normalizeToolDisplayName(String(tool.name || 'tool')),
+      args: String(tool.inputPreview || ''),
+      result: String(tool.error || tool.outputPreview || ''),
+      status: normalizeToolStatusForRun(tool.status, runStatus),
+    })),
+    teamActivities: normalizeTeamActivities(snapshot.teamActivities || [], [], []),
+    skillCalls: normalizeRunStateSkillCalls(snapshot.skillCalls || []),
+    modelCaches: normalizeRunStateModelCaches(snapshot.modelCaches || []),
+    modelName: String(snapshot.modelName || ''),
+    tokenUsage: snapshot.tokenUsage || null,
+    runtimeEvents: (snapshot.runtimeEvents || []).map((event) => normalizeRuntimeEvent(event)),
+    plans: normalizeRunStatePlans(snapshot.plans || []),
+    hitlRequests,
+    clarificationRequests,
+    error: String(snapshot.error || ''),
+  };
+}
+
+function applyRunStatePatch(state: StreamState, patch: ChatRunStatePatch): StreamState {
+  const patchKind = patch.kind || 'snapshot_meta';
+  const finalAnswerDelta = patchKind === 'final_answer_delta' ? String(patch.finalAnswerDelta || '') : '';
+  const reasoningDelta = patchKind === 'reasoning_delta' ? String(patch.reasoningDelta || '') : '';
+  const thinkingDelta = patchKind === 'thinking_delta' ? String(patch.thinkingDelta || '') : '';
+  const nextStatus = String(patch.status || '');
+  const isTerminal = ['completed', 'failed', 'cancelled'].includes(nextStatus);
+  const isWaiting = nextStatus === 'waiting';
+  let runtimeEvents = state.runtimeEvents;
+  if (patch.runtimeEvent) {
+    runtimeEvents = appendRuntimeEventCompact(runtimeEvents, normalizeRuntimeEvent(patch.runtimeEvent));
+  }
+  let toolCalls = patchKind === 'tool' && patch.tool
+    ? mergeToolCalls(state.toolCalls, [toolCallFromRunStateTool(patch.tool)])
+    : state.toolCalls;
+  if (isTerminal) {
+    toolCalls = markActiveToolCallsFailed(toolCalls);
+  }
+  let hitlRequests = state.hitlRequests;
+  let clarificationRequests = state.clarificationRequests;
+  if (patchKind === 'approval_resolved' && patch.resolvedApprovalId) {
+    hitlRequests = hitlRequests.filter((item) => item.interactionId !== patch.resolvedApprovalId);
+    clarificationRequests = clarificationRequests.filter((item) => item.id !== patch.resolvedApprovalId);
+  } else if (patchKind === 'approval' && patch.approval && isClarificationApproval(patch.approval)) {
+    clarificationRequests = mergeClarificationRequests(
+      clarificationRequests,
+      clarificationRequestFromRunStateApproval(patch.approval),
+    );
+  } else if (patchKind === 'approval' && patch.approval) {
+    hitlRequests = mergeHitlRequests(
+      hitlRequests,
+      hitlRequestFromRunStateApproval(patch, patch.approval),
+    );
+  }
+  return {
+    ...state,
+    currentRunId: String(patch.runId || state.currentRunId),
+    runCompletedAt: String(patch.completedAt || state.runCompletedAt || ''),
+    textContent: state.textContent + finalAnswerDelta,
+    finalAnswerContent: state.finalAnswerContent + finalAnswerDelta,
+    reasoningContent: state.reasoningContent + reasoningDelta,
+    thinkingContent: state.thinkingContent + thinkingDelta,
+    toolCalls,
+    teamActivities: patchKind === 'team_activities' && Array.isArray(patch.teamActivities)
+      ? normalizeTeamActivities(patch.teamActivities, state.teamActivities, runtimeEvents)
+      : state.teamActivities,
+    skillCalls: patchKind === 'skill_calls' && Array.isArray(patch.skillCalls)
+      ? normalizeRunStateSkillCalls(patch.skillCalls)
+      : state.skillCalls,
+    modelCaches: patchKind === 'model_usage' && Array.isArray(patch.modelCaches)
+      ? normalizeRunStateModelCaches(patch.modelCaches)
+      : state.modelCaches,
+    modelName: patchKind === 'model_usage' && typeof patch.modelName === 'string'
+      ? patch.modelName
+      : state.modelName,
+    tokenUsage: patchKind === 'model_usage' && patch.tokenUsage !== undefined ? patch.tokenUsage : state.tokenUsage,
+    hitlRequests,
+    clarificationRequests,
+    plans: patchKind === 'plans' && Array.isArray(patch.plans) ? normalizeRunStatePlans(patch.plans) : state.plans,
+    runtimeEvents,
+    isStreaming: isTerminal || isWaiting ? false : state.isStreaming,
+    error: patchKind === 'error' ? String(patch.error || state.error || '') : String(state.error || ''),
+  };
+}
+
+function normalizeToolStatusForRun(status: unknown, runStatus: string): ToolCallInfo['status'] {
+  const normalized = normalizeToolStatus(status);
+  if (
+    ['completed', 'failed', 'cancelled'].includes(runStatus) &&
+    (normalized === 'calling' || normalized === 'running')
+  ) {
+    return 'failed';
+  }
+  return normalized;
+}
+
+function clarificationRequestFromRunStateApproval(
+  approval: RunStateApprovalSummary,
+): ClarificationRequestInfo {
+  return {
+    id: String(approval.interactionId || ''),
+    title: String(approval.title || '需要补充信息'),
+    description: String(approval.description || ''),
+    questions: normalizeRunStateClarificationQuestions(approval.questions || []),
+    createdAt: String(approval.createdAt || new Date().toISOString()),
+  };
+}
+
+function normalizeRunStateClarificationQuestions(questions: Array<Record<string, unknown>>): ClarificationQuestionInfo[] {
+  return questions.map((question, index) => {
+    const rawType = String(question.type || 'text');
+    const type = (
+      rawType === 'choice' || rawType === 'multi_choice' || rawType === 'text'
+        ? rawType
+        : 'text'
+    ) as ClarificationQuestionInfo['type'];
+    return {
+      id: String(question.id || `question-${index + 1}`),
+      type,
+      label: String(question.label || question.title || `问题 ${index + 1}`),
+      options: Array.isArray(question.options) ? question.options.map((option) => String(option)) : [],
+      placeholder: String(question.placeholder || ''),
+      required: question.required === undefined ? true : Boolean(question.required),
+    };
+  });
+}
+
+function isClarificationApproval(approval: RunStateApprovalSummary): boolean {
+  return (
+    approval.kind === 'clarification' ||
+    approval.type === 'clarification' ||
+    (
+      Array.isArray(approval.questions) &&
+      approval.questions.length > 0 &&
+      (!approval.toolCalls || approval.toolCalls.length === 0)
+    )
+  );
+}
+
+function mergeClarificationRequests(
+  current: ClarificationRequestInfo[],
+  incoming: ClarificationRequestInfo,
+): ClarificationRequestInfo[] {
+  if (!incoming.id) return current;
+  const index = current.findIndex((item) => item.id === incoming.id);
+  if (index === -1) {
+    return [...current, incoming];
+  }
+  return current.map((item, itemIndex) => (
+    itemIndex === index ? { ...item, ...incoming } : item
+  ));
+}
+
+function normalizeRunStateSkillCalls(skillCalls: unknown[]): SkillCallInfo[] {
+  return skillCalls.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const skill = item as Record<string, unknown>;
+    return [{
+      id: String(skill.id || skill.name || createId()),
+      name: String(skill.name || skill.id || 'Skill'),
+      description: String(skill.description || ''),
+      trigger: String(skill.trigger || ''),
+      content: String(skill.content || ''),
+      resourcePath: String(skill.resourcePath || ''),
+      resources: Array.isArray(skill.resources) ? skill.resources.map((resource) => String(resource)) : [],
+      status: (
+        skill.status === 'completed' ||
+        skill.status === 'failed' ||
+        skill.status === 'running'
+          ? skill.status
+          : 'running'
+      ) as SkillCallInfo['status'],
+    }];
+  });
+}
+
+function normalizeRunStateModelCaches(modelCaches: unknown[]): ModelCacheInfo[] {
+  return modelCaches.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const cache = item as Record<string, unknown>;
+    return [{
+      id: String(cache.id || createId()),
+      modelName: String(cache.modelName || ''),
+      inputTokens: Number(cache.inputTokens || 0),
+      outputTokens: Number(cache.outputTokens || 0),
+      cacheCreationInputTokens: Number(cache.cacheCreationInputTokens || 0),
+      cacheInputTokens: Number(cache.cacheInputTokens || 0),
+      cacheHitRate: Number(cache.cacheHitRate || 0),
+      estimatedSavedInputTokens: Number(cache.estimatedSavedInputTokens || 0),
+      createdAt: String(cache.createdAt || ''),
+    }];
+  });
+}
+
+function normalizeRunStatePlans(plans: unknown[]): ChatRunPlanState[] {
+  return plans.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const plan = item as Record<string, unknown>;
+    return [{
+      planId: String(plan.planId || ''),
+      planFile: String(plan.planFile || ''),
+      status: String(plan.status || 'running'),
+      markdown: String(plan.markdown || ''),
+      steps: Array.isArray(plan.steps) ? plan.steps.map(normalizeRunStatePlanStep) : [],
+      updatedAt: String(plan.updatedAt || ''),
+    }];
+  }).filter((plan) => plan.planId);
+}
+
+function normalizeRunStatePlanStep(step: unknown): ChatRunPlanStep {
+  if (!step || typeof step !== 'object') return {};
+  const record = step as Record<string, unknown>;
+  return {
+    id: record.id ? String(record.id) : undefined,
+    planId: record.planId ? String(record.planId) : undefined,
+    stepIndex: typeof record.stepIndex === 'number' ? record.stepIndex : Number(record.stepIndex || 0),
+    title: record.title ? String(record.title) : undefined,
+    description: record.description ? String(record.description) : undefined,
+    status: record.status ? String(record.status) : undefined,
+    evidence: record.evidence ? String(record.evidence) : undefined,
+    result: record.result ? String(record.result) : undefined,
+  };
+}
+
+function toolCallFromRunStateTool(tool: RunStateToolSummary): ToolCallInfo {
+  return {
+    id: String(tool.id || createId()),
+    name: normalizeToolDisplayName(String(tool.name || 'tool')),
+    args: String(tool.inputPreview || ''),
+    result: String(tool.error || tool.outputPreview || ''),
+    status: normalizeToolStatus(tool.status),
+  };
+}
+
+function hitlRequestFromRunStateApproval(
+  patch: ChatRunStatePatch,
+  approval: RunStateApprovalSummary,
+): HitlRequestInfo {
+  return {
+    interactionId: String(approval.interactionId || ''),
+    type: String(approval.type || 'tool_approval'),
+    sessionId: String(patch.sessionId || ''),
+    agentId: String(approval.agentId || ''),
+    agentName: String(approval.agentName || ''),
+    runId: String(patch.runId || ''),
+    scope: 'leader',
+    teamActivityId: null,
+    replyId: '',
+    toolCalls: (approval.toolCalls || []).map((toolCall) => ({
+      id: String(toolCall.id || createId()),
+      name: normalizeToolDisplayName(String(toolCall.name || 'tool')),
+      input: String(toolCall.input || ''),
+      rawName: toolCall.rawName ? String(toolCall.rawName) : undefined,
+    })),
+    createdAt: String(approval.createdAt || new Date().toISOString()),
+  };
+}
+
+function mergeHitlRequests(
+  current: HitlRequestInfo[],
+  incoming: HitlRequestInfo,
+): HitlRequestInfo[] {
+  if (!incoming.interactionId) return current;
+  const index = current.findIndex((item) => item.interactionId === incoming.interactionId);
+  if (index === -1) {
+    return [...current, incoming];
+  }
+  return current.map((item, itemIndex) => (
+    itemIndex === index ? { ...item, ...incoming } : item
+  ));
 }
 
 function normalizeRuntimeEvent(data: Record<string, unknown>): ChatRuntimeEvent {
@@ -402,12 +714,12 @@ function shouldMergeRuntimeDelta(previous: ChatRuntimeEvent, incoming: ChatRunti
   if (previous.agentId !== incoming.agentId) return false;
   if (previous.teamActivityId !== incoming.teamActivityId) return false;
   const mergeableTypes = new Set<string>([
-    RUNTIME_EVENT_TYPES.AGENT_OUTPUT_DELTA,
-    RUNTIME_EVENT_TYPES.AGENT_REASONING_DELTA,
-    RUNTIME_EVENT_TYPES.AGENT_FINAL_ANSWER_DELTA,
-    RUNTIME_EVENT_TYPES.AGENT_THINKING,
-    RUNTIME_EVENT_TYPES.TOOL_CALL_DELTA,
-    RUNTIME_EVENT_TYPES.TOOL_RESULT_DELTA,
+    'AGENT_OUTPUT_DELTA',
+    'AGENT_REASONING_DELTA',
+    'AGENT_FINAL_ANSWER_DELTA',
+    'AGENT_THINKING',
+    'TOOL_CALL_DELTA',
+    'TOOL_RESULT_DELTA',
   ]);
   if (!mergeableTypes.has(incoming.type)) {
     return false;
@@ -415,236 +727,6 @@ function shouldMergeRuntimeDelta(previous: ChatRuntimeEvent, incoming: ChatRunti
   const previousToolId = String(previous.payload.tool_call_id || '');
   const incomingToolId = String(incoming.payload.tool_call_id || '');
   return previousToolId === incomingToolId;
-}
-
-function getRuntimeEventDisplayText(event: ChatRuntimeEvent): string {
-  const toolName = normalizeToolDisplayName(String(event.payload.tool_call_name || ''));
-  const modelName = String(event.payload.model_name || '');
-  switch (event.type) {
-    case RUNTIME_EVENT_TYPES.TEAM_WORKER_QUEUED:
-      return '等待调度';
-    case RUNTIME_EVENT_TYPES.TEAM_WORKER_BLOCKED_BY_DEPENDENCY:
-      return '等待上游 Worker';
-    case RUNTIME_EVENT_TYPES.TEAM_WORKER_STARTED:
-      return '开始执行';
-    case RUNTIME_EVENT_TYPES.TEAM_WORKER_WAITING_HUMAN:
-    case RUNTIME_EVENT_TYPES.AGENT_WAITING_HUMAN:
-      return '等待人工确认';
-    case RUNTIME_EVENT_TYPES.TEAM_WORKER_REPORTED:
-      return 'Worker 已回报';
-    case RUNTIME_EVENT_TYPES.TEAM_WORKER_COMPLETED:
-      return 'Worker 已完成';
-    case RUNTIME_EVENT_TYPES.TEAM_WORKER_FAILED:
-      return 'Worker 执行失败';
-    case RUNTIME_EVENT_TYPES.AGENT_MODEL_CALL_STARTED:
-      return `调用模型 ${modelName}`.trim();
-    case RUNTIME_EVENT_TYPES.TOOL_CALL_STARTED:
-      return `调用工具 ${toolName || 'tool'}`;
-    case RUNTIME_EVENT_TYPES.TOOL_RESULT_STARTED:
-      return '等待工具结果';
-    case RUNTIME_EVENT_TYPES.TOOL_RESULT_COMPLETED:
-      return '工具结果已返回';
-    case RUNTIME_EVENT_TYPES.AGENT_THINKING:
-      return '思考中';
-    case RUNTIME_EVENT_TYPES.AGENT_REASONING_DELTA:
-      return '推理中';
-    case RUNTIME_EVENT_TYPES.AGENT_FINAL_ANSWER_STARTED:
-      return '开始输出最终答案';
-    case RUNTIME_EVENT_TYPES.AGENT_FINAL_ANSWER_DELTA:
-      return '输出最终答案';
-    case RUNTIME_EVENT_TYPES.AGENT_OUTPUT_DELTA:
-      return '输出结论';
-    case RUNTIME_EVENT_TYPES.AGENT_COMPLETED:
-      return 'ReAct 循环完成';
-    case RUNTIME_EVENT_TYPES.ARTIFACT_CREATED:
-      return '生成文件产物';
-    case RUNTIME_EVENT_TYPES.ARTIFACT_UPDATED:
-      return '更新文件产物';
-    case RUNTIME_EVENT_TYPES.ARTIFACT_DELETED:
-      return '删除文件产物';
-    case RUNTIME_EVENT_TYPES.SANDBOX_STARTED:
-      return '沙盒开始运行';
-    case RUNTIME_EVENT_TYPES.SANDBOX_COMPLETED:
-      return '沙盒运行完成';
-    case RUNTIME_EVENT_TYPES.SANDBOX_FAILED:
-      return '沙盒运行失败';
-    case RUNTIME_EVENT_TYPES.MEMORY_SUMMARY_STARTED:
-      return '开始记忆总结';
-    case RUNTIME_EVENT_TYPES.MEMORY_SUMMARY_COMPLETED:
-      return '记忆总结完成';
-    case RUNTIME_EVENT_TYPES.MEMORY_SUMMARY_FAILED:
-      return '记忆总结失败';
-    case RUNTIME_EVENT_TYPES.MEMORY_CANDIDATE_CREATED:
-      return '生成候选记忆';
-    case RUNTIME_EVENT_TYPES.MEMORY_CANDIDATE_ACCEPTED:
-      return '候选记忆已接受';
-    case RUNTIME_EVENT_TYPES.MEMORY_CANDIDATE_IGNORED:
-      return '候选记忆已忽略';
-    default:
-      return '';
-  }
-}
-
-function statusFromRuntimeEvent(event: ChatRuntimeEvent): TeamActivityInfo['status'] | null {
-  if (
-    event.type === RUNTIME_EVENT_TYPES.TEAM_WORKER_BLOCKED_BY_DEPENDENCY ||
-    event.type === RUNTIME_EVENT_TYPES.TEAM_WORKER_QUEUED
-  ) {
-    return 'pending';
-  }
-  if (
-    event.type === RUNTIME_EVENT_TYPES.TEAM_WORKER_WAITING_HUMAN ||
-    event.type === RUNTIME_EVENT_TYPES.AGENT_WAITING_HUMAN
-  ) {
-    return 'waiting';
-  }
-  if (
-    event.type === RUNTIME_EVENT_TYPES.TEAM_WORKER_COMPLETED ||
-    event.type === RUNTIME_EVENT_TYPES.AGENT_COMPLETED
-  ) {
-    return 'completed';
-  }
-  if (
-    event.type === RUNTIME_EVENT_TYPES.TEAM_WORKER_FAILED ||
-    event.type === RUNTIME_EVENT_TYPES.AGENT_FAILED
-  ) {
-    return 'failed';
-  }
-  if (event.type === RUNTIME_EVENT_TYPES.TEAM_WORKER_SKIPPED) {
-    return 'skipped';
-  }
-  if (event.scope === 'worker' || event.scope === 'leader') {
-    return 'running';
-  }
-  return null;
-}
-
-function isTeamTerminalRuntimeEvent(event: ChatRuntimeEvent): boolean {
-  return (
-    event.type === RUNTIME_EVENT_TYPES.TEAM_FAILED ||
-    event.type === RUNTIME_EVENT_TYPES.RUN_FAILED ||
-    event.type === RUNTIME_EVENT_TYPES.RUN_CANCELLED
-  );
-}
-
-function markNonTerminalTeamActivities(
-  activities: TeamActivityInfo[],
-  status: TeamActivityInfo['status'],
-  currentEvent: string,
-): TeamActivityInfo[] {
-  return activities.map((activity) => {
-    if (activity.status === 'completed' || activity.status === 'failed' || activity.status === 'skipped') {
-      return activity;
-    }
-    return {
-      ...activity,
-      status,
-      currentEvent,
-      waitReason: '',
-      detail: currentEvent || activity.detail,
-    };
-  });
-}
-
-function applyRuntimeEventToTeamActivity(
-  activity: TeamActivityInfo,
-  event: ChatRuntimeEvent,
-  status: TeamActivityInfo['status'] | null,
-  currentEvent: string
-): TeamActivityInfo {
-  const payload = event.payload;
-  const toolCallId = String(payload.tool_call_id || '');
-  const toolName = normalizeToolDisplayName(String(payload.tool_call_name || 'tool'));
-  const delta = String(payload.delta || '');
-  const base = {
-    ...activity,
-    status: status || activity.status,
-    currentEvent: currentEvent || activity.currentEvent,
-    waitReason: event.reason || activity.waitReason,
-  };
-
-  if (event.type === RUNTIME_EVENT_TYPES.AGENT_OUTPUT_DELTA) {
-    return {
-      ...base,
-      output: activity.output + delta,
-    };
-  }
-  if (event.type === RUNTIME_EVENT_TYPES.AGENT_THINKING) {
-    return {
-      ...base,
-      thinking: activity.thinking + delta,
-    };
-  }
-  if (event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_STARTED) {
-    return {
-      ...base,
-      toolCalls: mergeToolCalls(activity.toolCalls, [{
-        id: toolCallId || createId(),
-        name: toolName,
-        args: '',
-        result: '',
-        status: 'calling',
-      }]),
-    };
-  }
-  if (event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_DELTA) {
-    return {
-      ...base,
-      toolCalls: activity.toolCalls.map((toolCall) => (
-        toolCall.id === toolCallId ? { ...toolCall, args: toolCall.args + delta } : toolCall
-      )),
-    };
-  }
-  if (
-    event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_COMPLETED ||
-    event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_STARTED
-  ) {
-    return {
-      ...base,
-      toolCalls: activity.toolCalls.map((toolCall) => (
-        toolCall.id === toolCallId ? { ...toolCall, status: 'running' } : toolCall
-      )),
-    };
-  }
-  if (event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_DELTA) {
-    return {
-      ...base,
-      toolCalls: activity.toolCalls.map((toolCall) => (
-        toolCall.id === toolCallId ? { ...toolCall, result: toolCall.result + delta } : toolCall
-      )),
-    };
-  }
-  if (event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_COMPLETED) {
-    const nextStatus = event.status === 'failed'
-      ? 'failed'
-      : toolStatusFromResultState(event.payload.state);
-    return {
-      ...base,
-      toolCalls: activity.toolCalls.map((toolCall) => (
-        toolCall.id === toolCallId ? { ...toolCall, status: nextStatus } : toolCall
-      )),
-    };
-  }
-  return base;
-}
-
-function isRuntimeToolEvent(event: ChatRuntimeEvent): boolean {
-  return (
-    event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_STARTED ||
-    event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_DELTA ||
-    event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_COMPLETED ||
-    event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_STARTED ||
-    event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_DELTA ||
-    event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_COMPLETED
-  );
-}
-
-function hasRuntimeToolEvent(runtimeEvents: ChatRuntimeEvent[], toolCallId: string): boolean {
-  if (!toolCallId) return false;
-  return runtimeEvents.some((event) => (
-    isRuntimeToolEvent(event) &&
-    String(event.payload.tool_call_id || '') === toolCallId
-  ));
 }
 
 function hasRuntimeActivityEvents(
@@ -658,63 +740,74 @@ function hasRuntimeActivityEvents(
   ));
 }
 
-function applyRuntimeEventToToolCalls(
-  toolCalls: ToolCallInfo[],
-  event: ChatRuntimeEvent,
-): ToolCallInfo[] {
-  if (!isRuntimeToolEvent(event)) return toolCalls;
-  if (event.scope === 'team' || event.scope === 'worker' || event.scope === 'leader') {
-    return toolCalls;
-  }
-
-  const toolCallId = String(event.payload.tool_call_id || '');
-  const toolName = normalizeToolDisplayName(String(event.payload.tool_call_name || 'tool'));
-  const delta = String(event.payload.delta || '');
-  if (!toolCallId && event.type !== RUNTIME_EVENT_TYPES.TOOL_CALL_STARTED) {
-    return toolCalls;
-  }
-
-  if (event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_STARTED) {
-    return mergeToolCalls(toolCalls, [{
-      id: toolCallId || createId(),
-      name: toolName,
-      args: '',
-      result: '',
-      status: 'calling',
-    }]);
-  }
-
-  if (event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_DELTA) {
-    return toolCalls.map((toolCall) => (
-      toolCall.id === toolCallId ? { ...toolCall, args: toolCall.args + delta } : toolCall
+function normalizeTeamActivities(
+  activities: Array<Record<string, unknown>>,
+  current: TeamActivityInfo[],
+  runtimeEvents: ChatRuntimeEvent[],
+): TeamActivityInfo[] {
+  return activities.map((activity) => {
+    const existing = current.find((item) => (
+      item.id === activity.id || item.agentId === activity.agentId
     ));
-  }
-
-  if (
-    event.type === RUNTIME_EVENT_TYPES.TOOL_CALL_COMPLETED ||
-    event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_STARTED
-  ) {
-    return toolCalls.map((toolCall) => (
-      toolCall.id === toolCallId ? { ...toolCall, status: 'running' } : toolCall
-    ));
-  }
-
-  if (event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_DELTA) {
-    return toolCalls.map((toolCall) => (
-      toolCall.id === toolCallId ? { ...toolCall, result: toolCall.result + delta } : toolCall
-    ));
-  }
-
-  if (event.type === RUNTIME_EVENT_TYPES.TOOL_RESULT_COMPLETED) {
-    const nextStatus = event.status === 'failed'
-      ? 'failed'
-      : toolStatusFromResultState(event.payload.state);
-    return toolCalls.map((toolCall) => (
-      toolCall.id === toolCallId ? { ...toolCall, status: nextStatus } : toolCall
-    ));
-  }
-
-  return toolCalls;
+    const hasRuntimeState = hasRuntimeActivityEvents(
+      runtimeEvents,
+      String(activity.id || ''),
+      String(activity.agentId || ''),
+    );
+    const status = String(activity.status || 'pending');
+    const toolCalls = Array.isArray(activity.toolCalls)
+      ? mergeToolCalls(
+        existing?.toolCalls || [],
+        activity.toolCalls.map((toolCall) => normalizeToolCallRecord(toolCall as Record<string, unknown>))
+      )
+      : existing?.toolCalls || [];
+    const normalizedStatus = (
+      status === 'running' ||
+      status === 'waiting' ||
+      status === 'completed' ||
+      status === 'failed' ||
+      status === 'skipped'
+        ? status
+        : 'pending'
+    );
+    const incomingTerminal = (
+      normalizedStatus === 'completed' ||
+      normalizedStatus === 'failed' ||
+      normalizedStatus === 'skipped'
+    );
+    const preserveRuntimeState = Boolean(hasRuntimeState && existing && !incomingTerminal);
+    return {
+      id: String(activity.id || createId()),
+      agentId: String(activity.agentId || ''),
+      agentName: String(activity.agentName || 'Agent'),
+      role: String(activity.role || 'worker'),
+      status: preserveRuntimeState && existing ? existing.status : normalizedStatus,
+      task: String(activity.task || ''),
+      assignment: String(activity.assignment || existing?.assignment || ''),
+      expectedOutput: String(activity.expectedOutput || existing?.expectedOutput || ''),
+      constraints: String(activity.constraints || existing?.constraints || ''),
+      detail: preserveRuntimeState && existing ? existing.detail : String(activity.detail || existing?.detail || ''),
+      output: preserveRuntimeState && existing ? existing.output : String(activity.output || existing?.output || ''),
+      report: preserveRuntimeState && existing ? existing.report : String(activity.report || existing?.report || ''),
+      skippedReason: String(activity.skippedReason || existing?.skippedReason || ''),
+      reportReviewStatus: String(activity.reportReviewStatus || existing?.reportReviewStatus || ''),
+      reportReviewNotes: String(activity.reportReviewNotes || existing?.reportReviewNotes || ''),
+      reportReviewGaps: Array.isArray(activity.reportReviewGaps)
+        ? activity.reportReviewGaps.map((item) => String(item))
+        : existing?.reportReviewGaps || [],
+      thinking: preserveRuntimeState && existing ? existing.thinking : String(activity.thinking || existing?.thinking || ''),
+      currentEvent: incomingTerminal ? String(activity.detail || existing?.currentEvent || '') : existing?.currentEvent || '',
+      toolCalls: preserveRuntimeState && existing ? existing.toolCalls : toolCalls,
+      executionMode: String(activity.executionMode || existing?.executionMode || 'parallel'),
+      dependsOn: Array.isArray(activity.dependsOn)
+        ? activity.dependsOn.map((item) => String(item))
+        : existing?.dependsOn || [],
+      waitReason: String(activity.waitReason || existing?.waitReason || ''),
+      dependencyOutputCount: Number(activity.dependencyOutputCount ?? existing?.dependencyOutputCount ?? 0),
+      leaderContextCount: Number(activity.leaderContextCount ?? existing?.leaderContextCount ?? 0),
+      createdAt: String(activity.createdAt || ''),
+    };
+  });
 }
 
 /**
@@ -725,8 +818,6 @@ function applyRuntimeEventToToolCalls(
 export function useEventStream(): UseEventStreamReturn {
   const [state, setState] = useState<StreamState>(INITIAL_STATE);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const suppressClarificationTextRef = useRef(false);
-  const suppressClarificationThinkingRef = useRef(false);
 
   const readEventStream = useCallback(async (response: Response) => {
     if (!response.body) {
@@ -757,8 +848,10 @@ export function useEventStream(): UseEventStreamReturn {
 
   /** 重置状态到初始值 */
   const reset = useCallback(() => {
-    suppressClarificationTextRef.current = false;
-    suppressClarificationThinkingRef.current = false;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
     setState(INITIAL_STATE);
   }, []);
 
@@ -786,6 +879,48 @@ export function useEventStream(): UseEventStreamReturn {
     }));
   }, [state.currentRunId]);
 
+  /** 重新订阅仍在后台运行或等待人工处理的 Run */
+  const subscribeRun = useCallback(async (runId: string) => {
+    if (!runId) return;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    setState((prev) => {
+      const isDifferentRun = Boolean(prev.currentRunId && prev.currentRunId !== runId);
+      return {
+        ...(isDifferentRun ? INITIAL_STATE : prev),
+        currentRunId: runId,
+        isStreaming: true,
+        error: null,
+      };
+    });
+
+    try {
+      const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/state/stream`, {
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      await readEventStream(response);
+      setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        return;
+      }
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      setState((prev) => ({
+        ...prev,
+        isStreaming: false,
+        error: errorMessage,
+        runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
+      }));
+    }
+  }, [readEventStream]);
+
   /** 发送消息并开始接收事件流 */
   const sendMessage = useCallback(
     async (message: string, options?: SendMessageOptions) => {
@@ -797,8 +932,6 @@ export function useEventStream(): UseEventStreamReturn {
       // 创建新的 AbortController
       const controller = new AbortController();
       abortControllerRef.current = controller;
-      suppressClarificationTextRef.current = false;
-      suppressClarificationThinkingRef.current = false;
 
       // 重置状态并开始
       setState({
@@ -808,7 +941,7 @@ export function useEventStream(): UseEventStreamReturn {
       });
 
       try {
-        const response = await fetch('/api/chat/send', {
+        const response = await fetch('/api/chat/send/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -836,10 +969,12 @@ export function useEventStream(): UseEventStreamReturn {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        await readEventStream(response);
-
-        // SSE 结束才代表本轮流程全部完成；REPLY_END 后仍可能有收尾事件。
-        setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
+        const payload = await response.json();
+        const runId = String(payload?.run?.id || payload?.runId || '');
+        if (!runId) {
+          throw new Error('Run was not started');
+        }
+        await subscribeRun(runId);
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') {
           // 用户主动中止
@@ -851,7 +986,7 @@ export function useEventStream(): UseEventStreamReturn {
         }
       }
     },
-    [readEventStream]
+    [subscribeRun]
   );
 
   /** 恢复暂停的人机交互 */
@@ -875,7 +1010,7 @@ export function useEventStream(): UseEventStreamReturn {
       }));
 
       try {
-        const response = await fetch('/api/chat/resume', {
+        const response = await fetch('/api/chat/resume/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -888,8 +1023,12 @@ export function useEventStream(): UseEventStreamReturn {
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
-        await readEventStream(response);
-        setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
+        const payload = await response.json();
+        const runId = String(payload?.runId || '');
+        if (!runId) {
+          throw new Error('Run was not resumed');
+        }
+        await subscribeRun(runId);
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') {
           setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
@@ -904,7 +1043,7 @@ export function useEventStream(): UseEventStreamReturn {
         }
       }
     },
-    [readEventStream]
+    [subscribeRun]
   );
 
   /**
@@ -938,7 +1077,10 @@ export function useEventStream(): UseEventStreamReturn {
   }
 
   /**
-   * 处理单个 SSE 事件 — 根据事件类型更新状态
+   * 处理单个 SSE 事件。
+   *
+   * 主链路只处理 RUN_STATE / RUN_STATE_PATCH。
+   * 旧 raw SSE 仅进入后端 RunState 投影和 Trace，不再直接驱动 Chat UI。
    *
    * 遵循 rerender-functional-setstate 规则：
    * 使用函数式 setState 确保基于最新状态更新
@@ -946,520 +1088,12 @@ export function useEventStream(): UseEventStreamReturn {
   function handleEvent(event: SSEEvent) {
     setState((prev) => {
       switch (event.type) {
-        case CHAT_SSE_EVENTS.RUN:
-          return {
-            ...prev,
-            currentRunId: String(event.data.run_id || ''),
-            runStartedAt: String(event.data.created_at || event.data.createdAt || prev.runStartedAt || new Date().toISOString()),
-          };
+        case 'RUN_STATE':
+          return streamStateFromRunState(event.data as unknown as ChatRunStateSnapshot);
 
-        case CHAT_SSE_EVENTS.RUNTIME_EVENT: {
-          const runtimeEvent = normalizeRuntimeEvent(event.data);
-          const currentEvent = getRuntimeEventDisplayText(runtimeEvent);
-          const status = statusFromRuntimeEvent(runtimeEvent);
-          const runtimeEvents = appendRuntimeEventCompact(prev.runtimeEvents, runtimeEvent);
-          return {
-            ...prev,
-            runtimeEvents,
-            toolCalls: applyRuntimeEventToToolCalls(prev.toolCalls, runtimeEvent),
-            teamActivities: isTeamTerminalRuntimeEvent(runtimeEvent)
-              ? markNonTerminalTeamActivities(
-                prev.teamActivities,
-                runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_CANCELLED ? 'skipped' : 'failed',
-                runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_CANCELLED ? '运行已取消' : 'Team 执行失败',
-              )
-              : (runtimeEvent.scope === 'worker' || runtimeEvent.scope === 'leader'
-                ? prev.teamActivities.map((activity) => {
-                  if (
-                    activity.id !== runtimeEvent.teamActivityId &&
-                    activity.agentId !== runtimeEvent.agentId
-                  ) {
-                    return activity;
-                  }
-                  return applyRuntimeEventToTeamActivity(activity, runtimeEvent, status, currentEvent);
-                })
-                : prev.teamActivities),
-            isStreaming: (
-              runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_COMPLETED ||
-              runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_FAILED ||
-              runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_CANCELLED
-            )
-              ? false
-              : prev.isStreaming,
-            runCompletedAt: (
-              runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_COMPLETED ||
-              runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_FAILED ||
-              runtimeEvent.type === RUNTIME_EVENT_TYPES.RUN_CANCELLED
-            )
-              ? runtimeEvent.timestamp
-              : prev.runCompletedAt,
-          };
-        }
+        case 'RUN_STATE_PATCH':
+          return applyRunStatePatch(prev, event.data as unknown as ChatRunStatePatch);
 
-        // === 文本内容增量 ===
-        case 'TEXT_BLOCK_DELTA': {
-          if (suppressClarificationTextRef.current) return prev;
-          const nextText = prev.textContent + (event.data.delta as string || '');
-          const clarificationIndex = findClarificationStartIndex(nextText);
-          if (clarificationIndex >= 0) {
-            suppressClarificationTextRef.current = true;
-          }
-          return {
-            ...prev,
-            textContent: clarificationIndex >= 0 ? nextText.slice(0, clarificationIndex).trimEnd() : nextText,
-          };
-        }
-
-        case 'FINAL_ANSWER_DELTA': {
-          if (suppressClarificationTextRef.current) return prev;
-          const nextText = prev.textContent + (event.data.delta as string || '');
-          return {
-            ...prev,
-            textContent: nextText,
-          };
-        }
-
-        case 'REASONING_DELTA':
-          return prev;
-
-        // === 思考链增量 ===
-        case 'THINKING_BLOCK_DELTA': {
-          if (suppressClarificationThinkingRef.current) return prev;
-          const nextThinking = prev.thinkingContent + (event.data.delta as string || '');
-          const clarificationIndex = findClarificationStartIndex(nextThinking);
-          if (clarificationIndex >= 0) {
-            suppressClarificationThinkingRef.current = true;
-          }
-          return {
-            ...prev,
-            thinkingContent: clarificationIndex >= 0 ? nextThinking.slice(0, clarificationIndex).trimEnd() : nextThinking,
-          };
-        }
-
-        // === 工具调用开始 ===
-        case 'TOOL_CALL_START': {
-          if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
-            return prev;
-          }
-          return {
-            ...prev,
-            toolCalls: mergeToolCalls(prev.toolCalls, [{
-              id: String(event.data.tool_call_id || createId()),
-              name: normalizeToolDisplayName(String(event.data.tool_call_name || 'tool')),
-              args: '',
-              result: '',
-              status: 'calling',
-            }]),
-          };
-        }
-
-        // === Skill 上下文注入 ===
-        case 'SKILL_CONTEXT': {
-          const skills = Array.isArray(event.data.skills) ? event.data.skills : [];
-          return {
-            ...prev,
-            skillCalls: skills.map((item) => {
-              const skill = item as Record<string, unknown>;
-              return {
-                id: String(skill.id || skill.name || createId()),
-                name: String(skill.name || skill.id || 'Skill'),
-                description: String(skill.description || ''),
-                trigger: String(skill.trigger || ''),
-                content: String(skill.content || ''),
-                resourcePath: String(skill.resourcePath || ''),
-                resources: Array.isArray(skill.resources)
-                  ? skill.resources.map((item) => String(item))
-                  : [],
-                status: 'running' as const,
-              };
-            }),
-          };
-        }
-
-        // === Skill 使用结束 ===
-        case 'SKILL_END': {
-          const status = event.data.status === 'failed' ? 'failed' : 'completed';
-          const skills = Array.isArray(event.data.skills) ? event.data.skills : [];
-          const endedIds = new Set(
-            skills.map((item) => String((item as Record<string, unknown>).id || ''))
-          );
-          return {
-            ...prev,
-            skillCalls: prev.skillCalls.map((skill) => (
-              endedIds.has(skill.id) ? { ...skill, status } : skill
-            )),
-          };
-        }
-
-        // === Team 协作活动 ===
-        case 'TEAM_ACTIVITY': {
-          const activities = Array.isArray(event.data.activities) ? event.data.activities : [];
-          return {
-            ...prev,
-            teamActivities: activities.map((item) => {
-              const activity = item as Record<string, unknown>;
-              const existing = prev.teamActivities.find((current) => (
-                current.id === activity.id || current.agentId === activity.agentId
-              ));
-              const hasRuntimeState = hasRuntimeActivityEvents(
-                prev.runtimeEvents,
-                String(activity.id || ''),
-                String(activity.agentId || ''),
-              );
-              const status = String(activity.status || 'pending');
-              const toolCalls = Array.isArray(activity.toolCalls)
-                ? mergeToolCalls(
-                  existing?.toolCalls || [],
-                  activity.toolCalls.map((toolCall) => normalizeToolCallRecord(toolCall as Record<string, unknown>))
-                )
-                : existing?.toolCalls || [];
-              const normalizedStatus = (
-                status === 'running' ||
-                status === 'waiting' ||
-                status === 'completed' ||
-                status === 'failed' ||
-                status === 'skipped'
-                  ? status
-                  : 'pending'
-              );
-              const incomingTerminal = (
-                normalizedStatus === 'completed' ||
-                normalizedStatus === 'failed' ||
-                normalizedStatus === 'skipped'
-              );
-              const preserveRuntimeState = Boolean(hasRuntimeState && existing && !incomingTerminal);
-              return {
-                id: String(activity.id || createId()),
-                agentId: String(activity.agentId || ''),
-                agentName: String(activity.agentName || 'Agent'),
-                role: String(activity.role || 'worker'),
-                status: preserveRuntimeState && existing ? existing.status : normalizedStatus,
-                task: String(activity.task || ''),
-                assignment: String(activity.assignment || existing?.assignment || ''),
-                expectedOutput: String(activity.expectedOutput || existing?.expectedOutput || ''),
-                constraints: String(activity.constraints || existing?.constraints || ''),
-                detail: preserveRuntimeState && existing ? existing.detail : String(activity.detail || existing?.detail || ''),
-                output: preserveRuntimeState && existing ? existing.output : String(activity.output || existing?.output || ''),
-                report: preserveRuntimeState && existing ? existing.report : String(activity.report || existing?.report || ''),
-                skippedReason: String(activity.skippedReason || existing?.skippedReason || ''),
-                reportReviewStatus: String(activity.reportReviewStatus || existing?.reportReviewStatus || ''),
-                reportReviewNotes: String(activity.reportReviewNotes || existing?.reportReviewNotes || ''),
-                reportReviewGaps: Array.isArray(activity.reportReviewGaps)
-                  ? activity.reportReviewGaps.map((item) => String(item))
-                  : existing?.reportReviewGaps || [],
-                thinking: preserveRuntimeState && existing ? existing.thinking : String(activity.thinking || existing?.thinking || ''),
-                currentEvent: incomingTerminal ? String(activity.detail || existing?.currentEvent || '') : existing?.currentEvent || '',
-                toolCalls: preserveRuntimeState && existing ? existing.toolCalls : toolCalls,
-                executionMode: String(activity.executionMode || existing?.executionMode || 'parallel'),
-                dependsOn: Array.isArray(activity.dependsOn)
-                  ? activity.dependsOn.map((item) => String(item))
-                  : existing?.dependsOn || [],
-                waitReason: String(activity.waitReason || existing?.waitReason || ''),
-                dependencyOutputCount: Number(activity.dependencyOutputCount ?? existing?.dependencyOutputCount ?? 0),
-                leaderContextCount: Number(activity.leaderContextCount ?? existing?.leaderContextCount ?? 0),
-                createdAt: String(activity.createdAt || ''),
-              };
-            }),
-          };
-        }
-
-        // === Team 成员自己的 ReAct 事件 ===
-        case 'TEAM_MEMBER_EVENT': {
-          const activityId = String(event.data.activityId || '');
-          const agentId = String(event.data.agentId || '');
-          if (hasRuntimeActivityEvents(prev.runtimeEvents, activityId, agentId)) {
-            return prev;
-          }
-          const eventType = String(event.data.eventType || '');
-          const memberEvent = (
-            typeof event.data.event === 'object' && event.data.event !== null
-              ? event.data.event as Record<string, unknown>
-              : {}
-          );
-
-          return {
-            ...prev,
-            teamActivities: prev.teamActivities.map((activity) => {
-              if (activity.id !== activityId && activity.agentId !== agentId) {
-                return activity;
-              }
-
-              if (eventType === 'TEXT_BLOCK_DELTA') {
-                return {
-                  ...activity,
-                  status: 'running',
-                  output: activity.output + String(memberEvent.delta || ''),
-                  currentEvent: '输出结论',
-                };
-              }
-              if (eventType === 'THINKING_BLOCK_DELTA') {
-                return {
-                  ...activity,
-                  status: 'running',
-                  thinking: activity.thinking + String(memberEvent.delta || ''),
-                  currentEvent: '思考中',
-                };
-              }
-              if (eventType === 'TOOL_CALL_START') {
-                return {
-                  ...activity,
-                  status: 'running',
-                  currentEvent: `调用工具 ${normalizeToolDisplayName(String(memberEvent.tool_call_name || 'tool'))}`,
-                  toolCalls: mergeToolCalls(activity.toolCalls, [{
-                    id: String(memberEvent.tool_call_id || createId()),
-                    name: normalizeToolDisplayName(String(memberEvent.tool_call_name || 'tool')),
-                    args: '',
-                    result: '',
-                    status: 'calling',
-                  }]),
-                };
-              }
-              if (eventType === 'TOOL_CALL_DELTA') {
-                return {
-                  ...activity,
-                  toolCalls: activity.toolCalls.map((toolCall) => (
-                    toolCall.id === memberEvent.tool_call_id
-                      ? { ...toolCall, args: toolCall.args + String(memberEvent.delta || '') }
-                      : toolCall
-                  )),
-                };
-              }
-              if (eventType === 'TOOL_CALL_END' || eventType === 'TOOL_RESULT_START') {
-                return {
-                  ...activity,
-                  currentEvent: '等待工具结果',
-                  toolCalls: activity.toolCalls.map((toolCall) => (
-                    toolCall.id === memberEvent.tool_call_id
-                      ? { ...toolCall, status: 'running' }
-                      : toolCall
-                  )),
-                };
-              }
-              if (eventType === 'TOOL_RESULT_TEXT_DELTA') {
-                return {
-                  ...activity,
-                  currentEvent: '读取工具结果',
-                  toolCalls: activity.toolCalls.map((toolCall) => (
-                    toolCall.id === memberEvent.tool_call_id
-                      ? { ...toolCall, result: toolCall.result + String(memberEvent.delta || '') }
-                      : toolCall
-                  )),
-                };
-              }
-              if (eventType === 'TOOL_RESULT_END') {
-                return {
-                  ...activity,
-                  toolCalls: activity.toolCalls.map((toolCall) => (
-                    toolCall.id === memberEvent.tool_call_id
-                      ? { ...toolCall, status: 'completed' }
-                      : toolCall
-                  )),
-                };
-              }
-              if (eventType === 'MODEL_CALL_START') {
-                return {
-                  ...activity,
-                  status: 'running',
-                  currentEvent: `调用模型 ${String(memberEvent.model_name || '')}`.trim(),
-                };
-              }
-              if (eventType === 'REPLY_START') {
-                return {
-                  ...activity,
-                  status: 'running',
-                  currentEvent: '开始 ReAct 循环',
-                };
-              }
-              if (eventType === 'REPLY_END') {
-                return {
-                  ...activity,
-                  status: 'completed',
-                  currentEvent: 'ReAct 循环完成',
-                };
-              }
-              return activity;
-            }),
-          };
-        }
-
-        // === 人机交互请求 ===
-        case 'HITL_REQUIRED': {
-          const toolCalls = Array.isArray(event.data.toolCalls) ? event.data.toolCalls : [];
-          const interactionId = String(event.data.interactionId || '');
-          const stringifyToolInput = (input: unknown) => {
-            if (typeof input === 'string') return input;
-            if (input === null || input === undefined) return '';
-            try {
-              return JSON.stringify(input);
-            } catch {
-              return String(input);
-            }
-          };
-          return {
-            ...prev,
-            isStreaming: false,
-            hitlRequests: prev.hitlRequests.some((item) => item.interactionId === interactionId)
-              ? prev.hitlRequests
-              : [
-                  ...prev.hitlRequests,
-              {
-                interactionId,
-                type: String(event.data.type || ''),
-                sessionId: String(event.data.sessionId || ''),
-                agentId: String(event.data.agentId || ''),
-                agentName: String(event.data.agentName || 'Agent'),
-                runId: String(event.data.runId || event.data.run_id || prev.currentRunId || ''),
-                scope: event.data.scope === 'worker' ? 'worker' : 'leader',
-                teamActivityId: event.data.teamActivityId ? String(event.data.teamActivityId) : null,
-                replyId: String(event.data.replyId || ''),
-                createdAt: String(event.data.createdAt || ''),
-                toolCalls: toolCalls.map((item) => {
-                  const toolCall = item as Record<string, unknown>;
-                  const rawName = String(toolCall.name || 'tool');
-                  return {
-                    id: String(toolCall.id || createId()),
-                    name: normalizeToolDisplayName(rawName),
-                    rawName,
-                    input: stringifyToolInput(toolCall.input),
-                  };
-                }),
-              },
-            ],
-          };
-        }
-
-        // === 工具调用参数增量 ===
-        case 'TOOL_CALL_DELTA': {
-          if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
-            return prev;
-          }
-          return {
-            ...prev,
-            toolCalls: prev.toolCalls.map((tc) =>
-              tc.id === event.data.tool_call_id
-                ? { ...tc, args: tc.args + (event.data.delta as string || '') }
-                : tc
-            ),
-          };
-        }
-
-        // === 工具调用结束 ===
-        case 'TOOL_CALL_END': {
-          if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
-            return prev;
-          }
-          return {
-            ...prev,
-            toolCalls: prev.toolCalls.map((tc) =>
-              tc.id === event.data.tool_call_id
-                ? { ...tc, status: 'running' }
-                : tc
-            ),
-          };
-        }
-
-        // === 工具结果开始 ===
-        case 'TOOL_RESULT_START': {
-          if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
-            return prev;
-          }
-          return {
-            ...prev,
-            toolCalls: prev.toolCalls.map((tc) =>
-              tc.id === event.data.tool_call_id
-                ? { ...tc, status: 'running' }
-                : tc
-            ),
-          };
-        }
-
-        // === 工具结果文本增量 ===
-        case 'TOOL_RESULT_TEXT_DELTA': {
-          if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
-            return prev;
-          }
-          return {
-            ...prev,
-            toolCalls: prev.toolCalls.map((tc) =>
-              tc.id === event.data.tool_call_id
-                ? { ...tc, result: tc.result + (event.data.delta as string || '') }
-                : tc
-            ),
-          };
-        }
-
-        // === 工具结果结束 ===
-        case 'TOOL_RESULT_END': {
-          if (hasRuntimeToolEvent(prev.runtimeEvents, String(event.data.tool_call_id || ''))) {
-            return prev;
-          }
-          const nextStatus = event.data.status === 'failed'
-            ? 'failed'
-            : toolStatusFromResultState(event.data.state);
-          return {
-            ...prev,
-            toolCalls: prev.toolCalls.map((tc) =>
-              tc.id === event.data.tool_call_id
-                ? { ...tc, status: nextStatus }
-                : tc
-            ),
-          };
-        }
-
-        // === 模型调用信息 ===
-        case 'MODEL_CALL_START':
-          return {
-            ...prev,
-            modelName: (event.data.model_name as string) || prev.modelName,
-          };
-
-        // === 模型调用结束（Token 用量） ===
-        case 'MODEL_CALL_END': {
-          const inputTokens = (event.data.input_tokens as number) || 0;
-          const outputTokens = (event.data.output_tokens as number) || 0;
-          const cacheCreationInputTokens = (event.data.cache_creation_input_tokens as number) || 0;
-          const cacheInputTokens = (event.data.cache_input_tokens as number) || 0;
-          const cacheBaseTokens = inputTokens + cacheInputTokens;
-          const modelCache: ModelCacheInfo = {
-            id: `provider-cache-${Date.now()}`,
-            modelName: prev.modelName,
-            inputTokens,
-            outputTokens,
-            cacheCreationInputTokens,
-            cacheInputTokens,
-            cacheHitRate: cacheBaseTokens > 0 ? cacheInputTokens / cacheBaseTokens : 0,
-            estimatedSavedInputTokens: cacheInputTokens,
-            createdAt: new Date().toISOString(),
-          };
-          return {
-            ...prev,
-            tokenUsage: {
-              input: inputTokens,
-              output: outputTokens,
-            },
-            modelCaches: [...prev.modelCaches, modelCache],
-          };
-        }
-
-        case 'CLARIFICATION_REQUIRED':
-          suppressClarificationTextRef.current = false;
-          suppressClarificationThinkingRef.current = false;
-          return {
-            ...prev,
-            isStreaming: false,
-            clarificationRequests: [
-              ...prev.clarificationRequests,
-              {
-                id: String(event.data.id || Date.now()),
-                title: String(event.data.title || '需要补充信息'),
-                description: String(event.data.description || ''),
-                questions: (event.data.questions as ClarificationQuestionInfo[]) || [],
-                createdAt: String(event.data.createdAt || new Date().toISOString()),
-              },
-            ],
-          };
-
-        // === 错误事件 ===
         case 'ERROR':
           return {
             ...prev,
@@ -1476,24 +1110,11 @@ export function useEventStream(): UseEventStreamReturn {
             error: '用户已停止本轮执行。',
           };
 
-        // === 回复结束 ===
-        case 'REPLY_END':
-          return prev;
-
-        // === 其他事件（REPLY_START, TEXT_BLOCK_START 等）— 不需要特殊处理 ===
         default:
           return prev;
       }
     });
   }
 
-  return { state, sendMessage, resumeInteraction, abort, reset };
-}
-
-function findClarificationStartIndex(text: string): number {
-  const tagIndex = text.indexOf('<clarification');
-  if (tagIndex >= 0) return tagIndex;
-
-  const jsonMatch = text.match(/\{\s*"title"\s*:/);
-  return jsonMatch?.index ?? -1;
+  return { state, sendMessage, resumeInteraction, subscribeRun, abort, reset };
 }

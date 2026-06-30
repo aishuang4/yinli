@@ -14,6 +14,8 @@ PLAN_CONTROL_TOOL_NAMES = frozenset({
     "plan_write",
     "plan_exit",
     "todo_write",
+    "task_list",
+    "task_output",
     "FinalAnswerStart",
 })
 

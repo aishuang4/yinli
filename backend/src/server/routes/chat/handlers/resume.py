@@ -1,7 +1,9 @@
 """POST /resume — 人工确认或外部执行结果后恢复 Agent / Team 运行。"""
 
+import asyncio
 from typing import AsyncGenerator
 
+from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from agentscope.message import UserMsg
@@ -16,6 +18,7 @@ from src.server.routes.chat.hitl import (
     _clear_pending_interaction,
     _create_pending_interaction,
     _hitl_payload,
+    _merge_hitl_tool_calls,
 )
 from src.server.routes.chat.models import (
     PENDING_AGENTS,
@@ -31,8 +34,16 @@ from src.server.routes.chat.prompts import (
     _build_leader_user_message,
 )
 from src.server.routes.chat.router import router
-from src.server.routes.chat.background_runs import relay_chat_background_run_events
-from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
+from src.server.routes.chat.background_runs import (
+    mark_chat_background_run_resuming,
+    relay_chat_background_run_events,
+)
+from src.server.routes.chat.leader_stream import (
+    LeaderStreamState,
+    _is_final_answer_tool_event,
+    _plan_runtime_event_from_tool_result,
+    stream_leader_agent_reply,
+)
 from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
     _build_runtime_knowledge_tools,
@@ -86,10 +97,14 @@ def _is_team_process_scope(scope: str) -> bool:
     return scope in {"team", "worker", "leader"}
 
 
-def _should_wrap_resume_text_as_final(event_type: str, scope: str) -> bool:
-    """resume 阶段单 Agent/Leader 的 TEXT delta 统一转为最终答案事件。"""
+def _should_wrap_resume_text_as_final(
+    event_type: str,
+    scope: str,
+    final_answer_started: bool,
+) -> bool:
+    """判断 resume 阶段 TEXT delta 是否已经进入最终答案阶段。"""
 
-    return event_type == "TEXT_BLOCK_DELTA" and _is_final_answer_text_scope(scope)
+    return final_answer_started and event_type == "TEXT_BLOCK_DELTA" and _is_final_answer_text_scope(scope)
 
 
 def _should_emit_raw_resume_event(event_type: str, scope: str) -> bool:
@@ -132,9 +147,11 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
             return
 
         assistant_text = interaction.assistant_text
+        assistant_reasoning_text = ""
         assistant_thinking = ""
         assistant_error: str | None = None
         assistant_model_caches: list[ChatModelCacheRun] = []
+        runtime_events: list[dict] = []
         skill_runs = interaction.skill_runs
         team_activities = interaction.team_activities
         activity = _find_team_activity(team_activities, interaction.agent_id)
@@ -292,6 +309,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                             status="waiting_user",
                             current_step="waiting_hitl_resume",
                         )
+                        agentscope_waiting_tool_calls = list(event_data.get("tool_calls") or [])
                         next_interaction = _create_pending_interaction(
                             interaction_type=event_type,
                             agent=agent,
@@ -300,7 +318,11 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                             agent_name=interaction.agent_name,
                             model_name=interaction.model_name,
                             reply_id=str(event_data.get("reply_id") or ""),
-                            tool_calls=list(event_data.get("tool_calls") or []),
+                            tool_calls=_merge_hitl_tool_calls(
+                                agentscope_waiting_tool_calls,
+                                worker_tool_calls,
+                            ),
+                            resume_tool_calls=agentscope_waiting_tool_calls,
                             message=interaction.message,
                             assistant_text="",
                             skill_runs=skill_runs,
@@ -662,6 +684,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 interaction.tool_calls,
                 interaction.assistant_tool_calls,
             )
+            resume_stream_state = LeaderStreamState()
             interaction_guardrails = _build_runtime_guardrails(get_registered_agent(interaction.agent_id))
             async for event in agent.reply_stream(resume_event):
                 event_data = event.model_dump(mode="json")
@@ -671,6 +694,26 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     cache_entry = _model_cache_from_event(event_data, interaction.model_name)
                     if cache_entry:
                         assistant_model_caches.append(cache_entry)
+                if _is_final_answer_tool_event(event_type, event_data, resume_stream_state):
+                    if event_type == "TOOL_CALL_START":
+                        resume_stream_state.final_answer_started = True
+                        yield runtime_event_sse(
+                            "AGENT_FINAL_ANSWER_STARTED",
+                            session_id=interaction.session_id,
+                            run_id=interaction.run_id,
+                            scope=interaction.scope,
+                            source="runtime",
+                            source_event_type=event_type,
+                            agent_id=interaction.agent_id,
+                            agent_name=interaction.agent_name,
+                            team_activity_id=activity.id if activity else None,
+                            status="running",
+                            payload={
+                                "tool_call_id": str(event_data.get("tool_call_id") or ""),
+                                "tool_call_name": str(event_data.get("tool_call_name") or "FinalAnswerStart"),
+                            },
+                        )
+                    continue
                 _record_agent_scope_event(
                     session_id=interaction.session_id,
                     event_type=event_type,
@@ -692,7 +735,11 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     team_activity_id=activity.id if activity else None,
                     guardrails=interaction_guardrails,
                 )
-                if _should_wrap_resume_text_as_final(event_type, interaction.scope):
+                if _should_wrap_resume_text_as_final(
+                    event_type,
+                    interaction.scope,
+                    resume_stream_state.final_answer_started,
+                ):
                     yield runtime_event_sse(
                         "AGENT_FINAL_ANSWER_DELTA",
                         session_id=interaction.session_id,
@@ -725,6 +772,17 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 )
                 if next_tool_calls is not assistant_tool_calls:
                     assistant_tool_calls = next_tool_calls
+                plan_event = _plan_runtime_event_from_tool_result(
+                    tool_calls=assistant_tool_calls,
+                    runtime_events=runtime_events,
+                    event_type=event_type,
+                    event_data=event_data,
+                    session_id=interaction.session_id,
+                    agent_id=interaction.agent_id,
+                    agent_name=interaction.agent_name,
+                )
+                if plan_event:
+                    yield plan_event
                 _record_tool_execution_artifacts(
                     session_id=interaction.session_id,
                     event_type=event_type,
@@ -763,6 +821,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         status="waiting_user",
                         current_step="waiting_hitl_resume",
                     )
+                    agentscope_waiting_tool_calls = list(event_data.get("tool_calls") or [])
                     next_interaction = _create_pending_interaction(
                         interaction_type=event_type,
                         agent=agent,
@@ -771,12 +830,17 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         agent_name=interaction.agent_name,
                         model_name=interaction.model_name,
                         reply_id=str(event_data.get("reply_id") or ""),
-                        tool_calls=list(event_data.get("tool_calls") or []),
+                        tool_calls=_merge_hitl_tool_calls(
+                            agentscope_waiting_tool_calls,
+                            assistant_tool_calls,
+                        ),
+                        resume_tool_calls=agentscope_waiting_tool_calls,
                         message=interaction.message,
                         assistant_text=assistant_text,
                         assistant_tool_calls=assistant_tool_calls,
                         skill_runs=skill_runs,
                         team_activities=team_activities,
+                        scope=interaction.scope,
                     )
                     _clear_pending_interaction(interaction.id)
                     yield runtime_event_sse(
@@ -798,11 +862,41 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
 
                 if event_type == "TEXT_BLOCK_DELTA":
                     delta = str(event_data.get("delta", ""))
-                    assistant_text += delta
-                    if _is_final_answer_text_scope(interaction.scope):
+                    if resume_stream_state.final_answer_started:
+                        assistant_text += delta
+                    else:
+                        assistant_reasoning_text += delta
+                    if _should_wrap_resume_text_as_final(
+                        event_type,
+                        interaction.scope,
+                        resume_stream_state.final_answer_started,
+                    ):
                         yield _sse_event("FINAL_ANSWER_DELTA", {"delta": delta})
                 elif event_type == "THINKING_BLOCK_DELTA":
                     assistant_thinking += str(event_data.get("delta", ""))
+
+                if (
+                    event_type == "REPLY_END" and
+                    not resume_stream_state.final_answer_started and
+                    assistant_reasoning_text.strip()
+                ):
+                    assistant_text = assistant_reasoning_text
+                    yield runtime_event_sse(
+                        "AGENT_FINAL_ANSWER_DELTA",
+                        session_id=interaction.session_id,
+                        run_id=interaction.run_id,
+                        scope=interaction.scope,
+                        source="runtime",
+                        source_event_type="TEXT_BLOCK_DELTA",
+                        agent_id=interaction.agent_id,
+                        agent_name=interaction.agent_name,
+                        team_activity_id=activity.id if activity else None,
+                        status="running",
+                        reason="missing_final_answer_marker_fallback",
+                        payload={"delta": assistant_reasoning_text},
+                    )
+                    if _is_final_answer_text_scope(interaction.scope):
+                        yield _sse_event("FINAL_ANSWER_DELTA", {"delta": assistant_reasoning_text})
 
                 if event_type == "REPLY_END" and skill_runs:
                     completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
@@ -848,6 +942,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 tool_calls=assistant_tool_calls,
                 team_activities=completed_team_activities,
                 model_caches=assistant_model_caches,
+                runtime_events=runtime_events,
             )
             _record_run_event(
                 session_id=interaction.session_id,
@@ -926,3 +1021,38 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/resume/start")
+async def start_resume_interaction(data: ChatResumeRequest) -> dict:
+    """后台恢复 HITL Run，并返回原 Run ID 供前端订阅 RunState。"""
+
+    pending_interaction = PENDING_INTERACTIONS.get(data.interaction_id)
+    if pending_interaction is None or not pending_interaction.run_id:
+        raise HTTPException(status_code=404, detail="Pending interaction not found")
+    await mark_chat_background_run_resuming(
+        pending_interaction.run_id,
+        interaction_id=pending_interaction.id,
+        action=data.action,
+    )
+    response = await resume_interaction(data)
+    asyncio.create_task(
+        _drain_resume_stream(response.body_iterator),
+        name=f"chat-resume-{pending_interaction.run_id}",
+    )
+    return {
+        "runId": pending_interaction.run_id,
+        "sessionId": pending_interaction.session_id,
+        "interactionId": pending_interaction.id,
+    }
+
+
+async def _drain_resume_stream(stream) -> None:
+    """消费旧 resume SSE 生成器，让事件进入后台 RunState 中间层。"""
+
+    try:
+        async for _ in stream:
+            pass
+    except Exception:
+        # 后台恢复流内部已经尽量发出 RUN_FAILED/ERROR；这里兜底避免 task 异常泄漏。
+        return

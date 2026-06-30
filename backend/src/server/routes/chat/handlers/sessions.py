@@ -5,7 +5,11 @@ from fastapi import HTTPException
 from src.server.routes.chat.models import ChatSession, StoredChatMessage
 from src.server.routes.chat.router import router
 from src.server.routes.chat.store import _load_store, _save_store
-from src.server.routes.chat.plan_mode.models import PLAN_STATUS_WAITING_APPROVAL
+from src.server.routes.chat.plan_mode.models import (
+    PLAN_STATUS_APPROVED,
+    PLAN_STATUS_DENIED,
+    PLAN_STATUS_WAITING_APPROVAL,
+)
 from src.storage.database import list_run_events, list_session_plans
 
 
@@ -48,7 +52,15 @@ def _normalize_history_messages(
 ) -> list[StoredChatMessage]:
     """读取历史时补齐旧 clarification 记录，并隐藏内部续写 prompt。"""
 
-    normalized = [_normalize_legacy_clarification_answer(message) for message in messages]
+    session_plans = list_session_plans(session_id)
+    plans_by_id = {str(plan.get("id") or ""): plan for plan in session_plans}
+    normalized = [
+        _normalize_plan_terminal_events(
+            _normalize_legacy_clarification_answer(message),
+            plans_by_id,
+        )
+        for message in messages
+    ]
     existing_request_ids = {
         str(request.get("id") or "")
         for message in normalized
@@ -62,7 +74,7 @@ def _normalize_history_messages(
         for event in message.runtime_events
         if isinstance(event, dict) and isinstance(event.get("payload"), dict)
     }
-    for plan in list_session_plans(session_id):
+    for plan in session_plans:
         plan_id = str(plan.get("id") or "")
         if (
             not plan_id
@@ -123,6 +135,81 @@ def _normalize_legacy_clarification_answer(message: StoredChatMessage) -> Stored
     return message.model_copy(update={"content": "；".join(answers) or "已补充信息"})
 
 
+def _normalize_plan_terminal_events(
+    message: StoredChatMessage,
+    plans_by_id: dict[str, dict],
+) -> StoredChatMessage:
+    """读取历史时为旧 Plan waiting 事件补齐 approved/denied 终态事件。"""
+
+    runtime_events = list(message.runtime_events or [])
+    if not runtime_events:
+        return message
+    existing_terminal_plan_ids = {
+        str(event.get("payload", {}).get("planId") or "")
+        for event in runtime_events
+        if (
+            isinstance(event, dict)
+            and event.get("type") in {"PLAN_APPROVED", "PLAN_DENIED"}
+            and isinstance(event.get("payload"), dict)
+        )
+    }
+    next_events = list(runtime_events)
+    changed = False
+    for event in runtime_events:
+        if not isinstance(event, dict) or event.get("type") != "PLAN_WAITING_APPROVAL":
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        plan_id = str(payload.get("planId") or "")
+        plan = plans_by_id.get(plan_id)
+        if not plan or plan_id in existing_terminal_plan_ids:
+            continue
+        plan_status = str(plan.get("status") or "")
+        if plan_status not in {PLAN_STATUS_APPROVED, PLAN_STATUS_DENIED}:
+            continue
+        next_events.append(_synthetic_plan_terminal_event(plan, plan_status))
+        existing_terminal_plan_ids.add(plan_id)
+        changed = True
+    if not changed:
+        return message
+    return message.model_copy(update={"runtime_events": next_events})
+
+
+def _synthetic_plan_terminal_event(plan: dict, plan_status: str) -> dict:
+    """按 plans 表状态构造历史展示用 Plan 终态 Runtime Event。"""
+
+    plan_id = str(plan.get("id") or "")
+    event_type = "PLAN_APPROVED" if plan_status == PLAN_STATUS_APPROVED else "PLAN_DENIED"
+    status = "completed" if plan_status == PLAN_STATUS_APPROVED else "failed"
+    reason = "Plan already approved." if plan_status == PLAN_STATUS_APPROVED else "Plan already denied."
+    timestamp = str(plan.get("updatedAt") or plan.get("completedAt") or plan.get("createdAt") or "")
+    return {
+        "id": f"runtime-plan-terminal-{plan_id}-{plan_status}",
+        "runId": str(plan.get("runId") or ""),
+        "sessionId": str(plan.get("sessionId") or ""),
+        "type": event_type,
+        "source": "runtime",
+        "sourceEventType": None,
+        "scope": "plan",
+        "agentId": str(plan.get("agentId") or ""),
+        "agentName": "",
+        "teamActivityId": None,
+        "status": status,
+        "reason": reason,
+        "timestamp": timestamp,
+        "durationMs": None,
+        "payload": {
+            "planId": plan_id,
+            "planFile": f".agent-workstation/plans/{plan.get('sessionId')}/{plan_id}.md",
+            "title": str(plan.get("title") or ""),
+            "goal": str(plan.get("goal") or ""),
+            "markdown": str(plan.get("markdown") or ""),
+            "steps": list(plan.get("steps") or []),
+        },
+    }
+
+
 def _synthetic_waiting_plan_message(plan: dict) -> StoredChatMessage:
     """为已落库但缺少 assistant 消息的等待审批 Plan 生成历史展示消息。"""
 
@@ -157,6 +244,7 @@ def _synthetic_waiting_plan_message(plan: dict) -> StoredChatMessage:
                 "title": str(plan.get("title") or ""),
                 "goal": str(plan.get("goal") or ""),
                 "markdown": str(plan.get("markdown") or ""),
+                "steps": list(plan.get("steps") or []),
             },
         }],
         created_at=created_at,

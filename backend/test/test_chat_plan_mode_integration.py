@@ -46,7 +46,14 @@ def test_plan_mode_tools_and_middleware_are_constructed_together() -> None:
     tools = build_plan_mode_tools(manager)
     middleware = PlanModeMiddleware(manager)
 
-    assert [tool.name for tool in tools] == ["plan_enter", "plan_write", "plan_exit"]
+    assert [tool.name for tool in tools] == [
+        "plan_enter",
+        "plan_write",
+        "todo_write",
+        "task_list",
+        "task_output",
+        "plan_exit",
+    ]
     assert middleware.manager is manager
 
 

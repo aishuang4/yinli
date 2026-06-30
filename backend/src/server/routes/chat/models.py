@@ -235,6 +235,7 @@ class PendingInteraction(BaseModel):
     reply_id: str
     run_id: str = ""
     tool_calls: list[dict]
+    resume_tool_calls: list[dict] | None = None
     message: str
     assistant_text: str = ""
     assistant_tool_calls: list[ChatToolRun] = Field(default_factory=list)

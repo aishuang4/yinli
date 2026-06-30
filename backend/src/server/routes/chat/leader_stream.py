@@ -1,10 +1,11 @@
 """Leader Agent 事件流处理。"""
 
+import json
 from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
 from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
-from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload
+from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload, _merge_hitl_tool_calls
 from src.server.routes.chat.models import (
     HITL_EVENT_TYPES,
     ChatModelCacheRun,
@@ -49,6 +50,15 @@ class LeaderStreamState:
     active_skill_run: dict | None = None
     stopped: bool = False
     stop_reason: str = ""
+
+
+_PLAN_TOOL_RUNTIME_EVENTS = {
+    "plan_enter": ("PLAN_MODE_ENTERED", "running"),
+    "plan_write": ("PLAN_UPDATED", "running"),
+    "plan_exit": ("PLAN_WAITING_APPROVAL", "waiting"),
+    "todo_write": ("PLAN_TASKS_UPDATED", "running"),
+    "task_output": ("PLAN_TASK_OUTPUT", ""),
+}
 
 
 async def stream_leader_agent_reply(
@@ -128,6 +138,17 @@ async def stream_leader_agent_reply(
         )
         if next_tool_calls is not state.assistant_tool_calls:
             state.assistant_tool_calls = next_tool_calls
+        plan_event = _plan_runtime_event_from_tool_result(
+            tool_calls=state.assistant_tool_calls,
+            runtime_events=state.runtime_events,
+            event_type=event_type,
+            event_data=event_data,
+            session_id=session_id,
+            agent_id=agent_id,
+            agent_name=agent_name,
+        )
+        if plan_event:
+            yield plan_event
         _record_tool_execution_artifacts(
             session_id=session_id,
             event_type=event_type,
@@ -167,6 +188,7 @@ async def stream_leader_agent_reply(
                     status="waiting_user",
                     current_step="waiting_hitl_resume",
                 )
+            agentscope_waiting_tool_calls = list(event_data.get("tool_calls") or [])
             interaction = _create_pending_interaction(
                 interaction_type=event_type,
                 agent=agent,
@@ -175,12 +197,17 @@ async def stream_leader_agent_reply(
                 agent_name=agent_name,
                 model_name=model_name,
                 reply_id=str(event_data.get("reply_id") or ""),
-                tool_calls=list(event_data.get("tool_calls") or []),
+                tool_calls=_merge_hitl_tool_calls(
+                    agentscope_waiting_tool_calls,
+                    state.assistant_tool_calls,
+                ),
+                resume_tool_calls=agentscope_waiting_tool_calls,
                 message=message,
                 assistant_text=state.assistant_text,
                 assistant_tool_calls=state.assistant_tool_calls,
                 skill_runs=skill_runs,
                 team_activities=team_activities,
+                scope=stream_scope,
                 persist=persist,
             )
             yield runtime_event_sse(
@@ -363,3 +390,123 @@ def _is_final_answer_tool_event(
             state.final_answer_tool_call_ids.add(tool_call_id)
         return True
     return bool(tool_call_id and tool_call_id in state.final_answer_tool_call_ids and event_type.startswith("TOOL_"))
+
+
+def _plan_runtime_event_from_tool_result(
+    *,
+    tool_calls: list[ChatToolRun],
+    runtime_events: list[dict],
+    event_type: str,
+    event_data: dict,
+    session_id: str,
+    agent_id: str,
+    agent_name: str,
+) -> str | None:
+    """从 Plan 控制工具结果兜底生成实时 Runtime Event。"""
+
+    if event_type != "TOOL_RESULT_END":
+        return None
+    tool_call_id = str(event_data.get("tool_call_id") or "")
+    tool_call = next((item for item in tool_calls if item.id == tool_call_id), None)
+    if not tool_call:
+        return None
+    tool_name = tool_call.name
+    runtime_info = _PLAN_TOOL_RUNTIME_EVENTS.get(tool_name)
+    if not runtime_info:
+        return None
+    try:
+        result = json.loads(tool_call.result or "{}")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(result, dict):
+        return None
+
+    plan_id = str(result.get("planId") or "")
+    if not plan_id:
+        return None
+    runtime_type, default_status = runtime_info
+    if _has_existing_plan_tool_runtime_event(
+        runtime_events,
+        runtime_type=runtime_type,
+        plan_id=plan_id,
+        tool_call_id=tool_call_id,
+        result=result,
+    ):
+        return None
+
+    payload = {
+        "planId": plan_id,
+        "planFile": str(result.get("planFile") or ""),
+        "toolCallId": tool_call_id,
+    }
+    if tool_name == "plan_enter":
+        payload["mode"] = "plan"
+    if "markdown" in result:
+        payload["markdown"] = str(result.get("markdown") or "")
+    if "steps" in result:
+        payload["steps"] = result.get("steps") or []
+    if "step" in result:
+        payload["step"] = result.get("step") or {}
+    status = default_status or _runtime_status_from_plan_tool_result(result)
+    return runtime_event_sse(
+        runtime_type,
+        session_id=session_id,
+        scope="plan",
+        source="runtime",
+        source_event_type=event_type,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        status=status,
+        reason="Plan waiting for user approval." if runtime_type == "PLAN_WAITING_APPROVAL" else "",
+        payload=payload,
+        collect=runtime_events,
+    )
+
+
+def _has_existing_plan_tool_runtime_event(
+    runtime_events: list[dict],
+    *,
+    runtime_type: str,
+    plan_id: str,
+    tool_call_id: str,
+    result: dict,
+) -> bool:
+    """判断工具结果是否已经由 manager 原生事件实时发送过。"""
+
+    result_step_id = str((result.get("step") or {}).get("id") or "")
+    result_steps = result.get("steps") if isinstance(result.get("steps"), list) else None
+    for event in runtime_events:
+        payload = event.get("payload", {})
+        if event.get("type") != runtime_type or str(payload.get("planId") or "") != plan_id:
+            continue
+        if tool_call_id and str(payload.get("toolCallId") or "") == tool_call_id:
+            return True
+        if payload.get("toolCallId"):
+            continue
+        if runtime_type == "PLAN_TASK_OUTPUT":
+            payload_step_id = str((payload.get("step") or {}).get("id") or "")
+            if result_step_id and payload_step_id == result_step_id:
+                return True
+            continue
+        if runtime_type == "PLAN_TASKS_UPDATED":
+            if result_steps is None:
+                return True
+            payload_steps = payload.get("steps")
+            if isinstance(payload_steps, list):
+                # 比较 JSON 序列化字符串，避免因对象引用不同导致误判
+                if json.dumps(payload_steps, sort_keys=True, default=str) == json.dumps(
+                    result_steps, sort_keys=True, default=str
+                ):
+                    return True
+            continue
+        return True
+    return False
+
+
+def _runtime_status_from_plan_tool_result(result: dict) -> str:
+    status = str((result.get("step") or {}).get("status") or "").lower()
+    if status == "failed":
+        return "failed"
+    if status in {"completed", "skipped"}:
+        return "completed"
+    return "running"

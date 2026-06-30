@@ -23,9 +23,11 @@ PLAN_BANNER_TEMPLATE = """
 PLAN MODE is active (read-only). Plan file: {plan_file}
 Investigate the problem and draft a concrete plan, but do NOT modify files,
 run mutating commands, or otherwise change state. Record the plan with
-plan_write. When the plan is complete, call plan_exit to ask the user for
-approval. If you lack required information, ask one specific clarifying
-question instead of inventing details.
+plan_write. After writing the plan, use todo_write to create a structured
+task list so the user and BUILD mode agent can track progress step by step.
+When the plan is complete, call plan_exit to ask the user for approval.
+If you lack required information, ask one specific clarifying question
+instead of inventing details.
 When the user or context gives an exact relative path, call Read on that path
 directly. Avoid broad Glob patterns such as **/* unless you truly need project
 discovery; prefer scoped Grep/Glob inside the smallest known directory.
@@ -38,6 +40,17 @@ BUILD_MODE_HINT_TEMPLATE = """
 BUILD mode is active. The approved plan exists at {plan_file}. Read or use it
 as the execution guide, then execute the task step by step until complete.
 Do not stop after merely producing the plan.
+
+You have three structured task-progress tools available:
+- todo_write — Create or replace the structured task list for the active plan.
+  Use this in the PLAN phase to write steps. In BUILD mode the steps are
+  typically already written; use it only if you need to adjust the task list.
+- task_list — List the structured tasks for the current plan. Call this before
+  executing to see what tasks are defined and their current status.
+- task_output — Update one structured plan task with status, evidence, and
+  result. Call this after each meaningful step so the user can track progress
+  in the UI. Do not skip task_output calls; each completed step must be reported.
+
 When a plan step names an exact relative path, call Read/Edit on that path
 directly instead of searching the entire project with broad Glob patterns.
 After all plan steps are complete and before writing the user-facing result,
