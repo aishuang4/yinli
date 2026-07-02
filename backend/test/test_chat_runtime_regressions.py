@@ -499,22 +499,25 @@ def test_run_state_projection_builds_single_agent_display_snapshot():
     )
     state = project_event(state, "FINAL_ANSWER_DELTA", {"delta": "完成"}, run)
 
+    actors = state["displaySnapshot"]["actors"]
     blocks = state["displaySnapshot"]["blocks"]
-    assert [block["block"] for block in blocks] == ["process", "answer", "files"]
+    assert state["displaySnapshot"]["mode"] == "single_agent"
+    assert len(actors) == 1
+    assert [block["block"] for block in blocks] == ["answer", "files"]
 
-    process = blocks[0]
-    assert process["id"] == "process"
-    assert process["items"][0]["event"] == "reasoning.delta"
-    assert process["items"][0]["targetId"].startswith("reasoning-")
-    assert process["items"][0]["data"]["text"] == "先分析"
-    assert process["items"][1]["targetId"] == "call-write"
+    actor = actors[0]
+    assert actor["role"] == "single"
+    assert actor["items"][0]["event"] == "reasoning.delta"
+    assert actor["items"][0]["targetId"].startswith("reasoning-")
+    assert actor["items"][0]["data"]["text"] == "先分析"
+    assert actor["items"][1]["targetId"] == "call-write"
 
-    final_answer = blocks[1]
+    final_answer = blocks[0]
     assert final_answer["id"] == "answer"
     assert final_answer["data"]["content"] == "完成"
     assert final_answer["data"]["started"] is True
 
-    generated_files = blocks[2]
+    generated_files = blocks[1]
     assert generated_files["data"]["files"] == [
         {"path": "docs/result.md", "name": "result.md", "extension": "MD"}
     ]
@@ -593,12 +596,12 @@ def test_run_state_process_timeline_splits_reasoning_around_tools():
     state = project_event(state, "REASONING_DELTA", {"delta": "再分析"}, run)
     second_reasoning_event = consume_run_state_display_events(state)[0]
 
-    process = next(block for block in state["displaySnapshot"]["blocks"] if block["block"] == "process")
+    actor = state["displaySnapshot"]["actors"][0]
 
     assert first_reasoning_event["targetId"] != second_reasoning_event["targetId"]
     assert [
         (item["event"], item["targetId"], item["data"].get("text") or item["data"].get("name"))
-        for item in process["items"]
+        for item in actor["items"]
     ] == [
         ("reasoning.delta", first_reasoning_event["targetId"], "先分析"),
         ("tool.completed", "call-read", "Read"),
@@ -677,12 +680,14 @@ def test_completed_background_run_persists_history_display_snapshot(tmp_path, mo
 
     store = chat_store._load_store()
     assistant = [message for message in store.messages[run.session_id] if message.role == "assistant"][-1]
+    actors = assistant.display_snapshot["actors"]
     blocks = assistant.display_snapshot["blocks"]
 
-    assert [block["block"] for block in blocks] == ["process", "answer"]
-    assert blocks[0]["status"] == "completed"
-    assert [item["event"] for item in blocks[0]["items"]] == ["reasoning.delta", "tool.completed"]
-    assert blocks[1]["data"]["content"] == "完成"
+    assert assistant.display_snapshot["mode"] == "single_agent"
+    assert [block["block"] for block in blocks] == ["answer"]
+    assert actors[0]["status"] == "completed"
+    assert [item["event"] for item in actors[0]["items"]] == ["reasoning.delta", "tool.completed"]
+    assert blocks[0]["data"]["content"] == "完成"
 
 
 def test_run_state_projection_does_not_duplicate_runtime_text_delta():
@@ -1309,8 +1314,8 @@ def test_projector_event_matrix_for_run_state_v2_contract():
     )
     assert normalized["plans"][0]["planId"] == "plan-1"
     assert normalized["plans"][0]["steps"][0]["title"] == "测试"
+    assert normalized["displaySnapshot"]["actors"][0]["items"][0]["event"] == "tool.completed"
     assert [block["block"] for block in normalized["displaySnapshot"]["blocks"]] == [
-        "process",
         "feedback",
         "plan",
         "answer",

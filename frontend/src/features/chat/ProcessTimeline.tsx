@@ -14,6 +14,7 @@ import {
 import { MarkdownContent } from '../../components/MarkdownContent';
 import type { SkillCallInfo } from '../../hooks/useEventStream';
 import type { ChatDisplayStatus, ChatProcessItem } from './chatDisplayTypes';
+import { useSmoothStreamingText } from './useSmoothStreamingText';
 
 export function AccordionProcessTimeline({
   items,
@@ -23,6 +24,7 @@ export function AccordionProcessTimeline({
   rightChildren,
   defaultOpen,
   accordionKey,
+  alwaysOpen = false,
 }: {
   items: ChatProcessItem[];
   autoScroll?: boolean;
@@ -31,6 +33,7 @@ export function AccordionProcessTimeline({
   rightChildren?: ReactElement;
   defaultOpen: boolean;
   accordionKey: string;
+  alwaysOpen?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -67,6 +70,7 @@ export function AccordionProcessTimeline({
       title={title}
       status={toAccordionStatus(status)}
       defaultOpen={defaultOpen}
+      open={alwaysOpen ? true : undefined}
       rightChildren={rightChildren}
     >
       <div
@@ -180,11 +184,30 @@ function textStepFromProcessItem(
     children: (
       <Accordion.BodyContent>
         <div className="p-3 text-sm leading-7 text-[var(--color-text-primary)]">
-          <MarkdownContent content={item.content} className="w-full" />
+          <StreamingProcessMarkdown content={item.content} streaming={isGenerating} />
         </div>
       </Accordion.BodyContent>
     ),
   };
+}
+
+function StreamingProcessMarkdown({
+  content,
+  streaming,
+}: {
+  content: string;
+  streaming: boolean;
+}) {
+  const visibleContent = useSmoothStreamingText(content, streaming, {
+    charsPerSecond: 112,
+    maxCharsPerFrame: 18,
+  });
+  return (
+    <>
+      <MarkdownContent content={visibleContent} className="w-full" />
+      {streaming && <span className="chat-stream-caret chat-stream-caret--subtle" aria-hidden="true" />}
+    </>
+  );
 }
 
 function textItemDisplayStatus(

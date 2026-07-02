@@ -33,7 +33,7 @@ PENDING_AGENTS: dict[str, object] = {}
 def _empty_display_snapshot() -> dict[str, Any]:
     """创建空的 Chat 展示快照。"""
 
-    return {"version": 2, "blocks": []}
+    return {"version": 3, "mode": "single_agent", "actors": [], "blocks": []}
 
 
 class ChatImagePayload(BaseModel):

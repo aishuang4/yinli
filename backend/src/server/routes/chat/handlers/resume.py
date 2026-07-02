@@ -92,7 +92,7 @@ from src.server.routes.chat.trace_recorder import (
 def _is_final_answer_text_scope(scope: str) -> bool:
     """判断 resume 文本 delta 是否应作为最终答案输出。"""
 
-    return scope in {"single", "leader"}
+    return scope in {"single", "single_agent", "leader"}
 
 
 def _is_team_process_scope(scope: str) -> bool:

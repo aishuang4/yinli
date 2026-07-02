@@ -1,25 +1,27 @@
 import { AlertCircle, Bot, CheckCircle2, ChevronRight, Clock3, GitBranch, Loader2, Users, X } from 'lucide-react';
 import { Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
-import type { TeamActivityInfo } from '../../hooks/useEventStream';
+import type { SkillCallInfo, TeamActorInfo, ToolCallInfo } from '../../hooks/useEventStream';
+import { DISPLAY_EVENTS, type DisplayItem } from '../../types/displayEvents';
 import { normalizeStoredToolCalls } from './formatters';
-import { ToolCallBlock } from './ToolArtifacts';
+import { AccordionProcessTimeline } from './ProcessTimeline';
+import type { ChatDisplayStatus, ChatProcessItem } from './chatDisplayTypes';
 
 /**
- * TeamActivityPanel — Team 协作过程展示
+ * TeamDisplayBlock — Team 协作过程展示
  */
-export function TeamActivityPanel({
-  activities,
-  selectedActivityId,
-  onSelectActivity,
+export function TeamDisplayBlock({
+  actors,
+  selectedActorId,
+  onSelectActor,
 }: {
-  activities: TeamActivityInfo[];
-  selectedActivityId: string | null;
-  onSelectActivity: (id: string) => void;
+  actors: TeamActorInfo[];
+  selectedActorId: string | null;
+  onSelectActor: (id: string) => void;
 }) {
-  const leader = activities.find((item) => item.role === 'leader');
-  const workers = activities.filter((item) => item.role !== 'leader');
-  const completedCount = activities.filter((item) => item.status === 'completed').length;
+  const leader = actors.find((item) => item.role === 'leader');
+  const workers = actors.filter((item) => item.role !== 'leader');
+  const completedCount = actors.filter((item) => item.status === 'completed').length;
 
   return (
     <div className="w-full overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
@@ -29,7 +31,7 @@ export function TeamActivityPanel({
           <span>Team 协作</span>
         </div>
         <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
-          {completedCount}/{activities.length} 完成
+          {completedCount}/{actors.length} 完成
         </span>
       </div>
 
@@ -37,25 +39,25 @@ export function TeamActivityPanel({
         <TeamExecutionGraph
           leader={leader || null}
           workers={workers}
-          selectedActivityId={selectedActivityId}
-          onSelectActivity={onSelectActivity}
+          selectedActorId={selectedActorId}
+          onSelectActor={onSelectActor}
         />
       )}
 
       <div className="grid items-stretch gap-2 px-3 pb-3 md:grid-cols-2">
         {leader && (
-          <TeamActivityCard
-            activity={leader}
-            selected={selectedActivityId === leader.id}
-            onSelect={() => onSelectActivity(leader.id)}
+          <TeamActorCard
+            actor={leader}
+            selected={selectedActorId === leader.id}
+            onSelect={() => onSelectActor(leader.id)}
           />
         )}
-        {workers.map((activity) => (
-          <TeamActivityCard
-            key={activity.id}
-            activity={activity}
-            selected={selectedActivityId === activity.id}
-            onSelect={() => onSelectActivity(activity.id)}
+        {workers.map((actor) => (
+          <TeamActorCard
+            key={actor.id}
+            actor={actor}
+            selected={selectedActorId === actor.id}
+            onSelect={() => onSelectActor(actor.id)}
           />
         ))}
       </div>
@@ -66,13 +68,13 @@ export function TeamActivityPanel({
 function TeamExecutionGraph({
   leader,
   workers,
-  selectedActivityId,
-  onSelectActivity,
+  selectedActorId,
+  onSelectActor,
 }: {
-  leader: TeamActivityInfo | null;
-  workers: TeamActivityInfo[];
-  selectedActivityId: string | null;
-  onSelectActivity: (id: string) => void;
+  leader: TeamActorInfo | null;
+  workers: TeamActorInfo[];
+  selectedActorId: string | null;
+  onSelectActor: (id: string) => void;
 }) {
   const nameByAgentId = new Map(workers.map((worker) => [worker.agentId, worker.agentName]));
   const parallelCount = workers.filter((worker) => worker.executionMode !== 'depends_on').length;
@@ -98,7 +100,7 @@ function TeamExecutionGraph({
         <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
           {workers.map((worker) => {
             const dependencyNames = worker.dependsOn.map((dependency) => nameByAgentId.get(dependency) || dependency);
-            const selected = selectedActivityId === worker.id;
+            const selected = selectedActorId === worker.id;
             const statusColor = worker.status === 'completed'
               ? 'var(--color-success)'
               : worker.status === 'failed'
@@ -110,7 +112,7 @@ function TeamExecutionGraph({
               <button
                 key={worker.id}
                 type="button"
-                onClick={() => onSelectActivity(worker.id)}
+                onClick={() => onSelectActor(worker.id)}
                 className={`ui-card-transition flex h-[92px] min-w-0 flex-col rounded-md border bg-[var(--color-bg-secondary)] p-2 text-left ${
                   selected ? 'border-[var(--color-accent)] shadow-sm' : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'
                 }`}
@@ -141,23 +143,23 @@ function TeamExecutionGraph({
   );
 }
 
-function TeamActivityCard({
-  activity,
+function TeamActorCard({
+  actor,
   selected,
   onSelect,
 }: {
-  activity: TeamActivityInfo;
+  actor: TeamActorInfo;
   selected: boolean;
   onSelect: () => void;
 }) {
-  const toolCalls = normalizeStoredToolCalls(activity.toolCalls || []);
-  const isRunning = activity.status === 'running';
-  const isWaiting = activity.status === 'waiting';
-  const isCompleted = activity.status === 'completed';
-  const isFailed = activity.status === 'failed';
-  const summaryText = activity.report || activity.output || activity.detail || activity.currentEvent || '';
-  const reviewLabel = activity.reportReviewStatus && activity.role !== 'leader'
-    ? (activity.reportReviewStatus === 'accepted' ? '报告可用' : '需要补充')
+  const toolCalls = normalizeStoredToolCalls(actor.toolCalls || []);
+  const isRunning = actor.status === 'running';
+  const isWaiting = actor.status === 'waiting';
+  const isCompleted = actor.status === 'completed';
+  const isFailed = actor.status === 'failed';
+  const summaryText = actor.report || actor.output || actor.detail || actor.currentEvent || '';
+  const reviewLabel = actor.reportReviewStatus && actor.role !== 'leader'
+    ? (actor.reportReviewStatus === 'accepted' ? '报告可用' : '需要补充')
     : '';
   const color = isFailed
     ? 'var(--color-error)'
@@ -179,7 +181,7 @@ function TeamActivityCard({
         <div
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white"
           style={{
-            backgroundColor: activity.role === 'leader'
+            backgroundColor: actor.role === 'leader'
               ? 'var(--color-agent-leader)'
               : 'var(--color-agent-worker)',
           }}
@@ -188,10 +190,10 @@ function TeamActivityCard({
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-            {activity.agentName}
+            {actor.agentName}
           </div>
           <div className="text-xs text-[var(--color-text-tertiary)]">
-            {activity.role === 'leader' ? 'Leader' : 'Worker'}
+            {actor.role === 'leader' ? 'Leader' : 'Worker'}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1 text-xs" style={{ color }}>
@@ -204,15 +206,15 @@ function TeamActivityCard({
           ) : (
             <Clock3 size={12} />
           )}
-          <span>{getTeamActivityStatusText(activity.status)}</span>
+          <span>{getTeamActivityStatusText(actor.status)}</span>
         </div>
         <ChevronRight size={12} />
       </div>
       <div
         className="h-5 min-w-0 truncate text-sm leading-5 text-[var(--color-text-secondary)]"
-        title={activity.assignment || activity.task || ''}
+        title={actor.assignment || actor.task || ''}
       >
-        {activity.assignment || activity.task || ''}
+        {actor.assignment || actor.task || ''}
       </div>
       <div
         className="mt-1 h-5 min-w-0 truncate text-xs leading-5 text-[var(--color-text-tertiary)]"
@@ -222,7 +224,7 @@ function TeamActivityCard({
       </div>
       <div className="mt-auto flex h-7 min-w-0 items-center gap-1 overflow-hidden pt-1">
         {reviewLabel && (
-          <Tag size="small" color={activity.reportReviewStatus === 'accepted' ? 'green' : 'orange'}>
+          <Tag size="small" color={actor.reportReviewStatus === 'accepted' ? 'green' : 'orange'}>
             {reviewLabel}
           </Tag>
         )}
@@ -249,16 +251,16 @@ function TeamActivityCard({
   );
 }
 
-export function TeamActivitySidebar({
-  activity,
+export function TeamActorSidebar({
+  actor,
   onClose,
 }: {
-  activity: TeamActivityInfo;
+  actor: TeamActorInfo;
   onClose: () => void;
 }) {
-  const toolCalls = normalizeStoredToolCalls(activity.toolCalls || []);
-  const isRunning = activity.status === 'running';
-  const isWaiting = activity.status === 'waiting';
+  const processItems = buildActorProcessItems(actor);
+  const isRunning = actor.status === 'running';
+  const isWaiting = actor.status === 'waiting';
 
   return (
     <aside className="flex h-full min-h-0 flex-col bg-[var(--color-bg-secondary)] shadow-inner">
@@ -266,7 +268,7 @@ export function TeamActivitySidebar({
         <div
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white"
           style={{
-            backgroundColor: activity.role === 'leader'
+            backgroundColor: actor.role === 'leader'
               ? 'var(--color-agent-leader)'
               : 'var(--color-agent-worker)',
           }}
@@ -275,11 +277,11 @@ export function TeamActivitySidebar({
         </div>
         <div className="min-w-0 flex-1">
           <div className="truncate text-base font-medium text-[var(--color-text-primary)]">
-            {activity.agentName}
+            {actor.agentName}
           </div>
           <div className="mt-0.5 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-            <span>{activity.role === 'leader' ? 'Leader' : 'Worker'}</span>
-            <span>{getTeamActivityStatusText(activity.status)}</span>
+            <span>{actor.role === 'leader' ? 'Leader' : 'Worker'}</span>
+            <span>{getTeamActivityStatusText(actor.status)}</span>
           </div>
         </div>
         <button
@@ -299,40 +301,40 @@ export function TeamActivitySidebar({
           <div className="flex items-center gap-2 text-sm text-[var(--color-text-primary)]">
             {isRunning && <Loader2 size={13} className="animate-spin text-[var(--color-accent)]" />}
             {isWaiting && <AlertCircle size={13} className="text-[var(--color-warning)]" />}
-            <span>{activity.currentEvent || getTeamActivityStatusText(activity.status)}</span>
+            <span>{actor.currentEvent || getTeamActivityStatusText(actor.status)}</span>
         </div>
         <div className="mt-2 flex flex-wrap gap-1">
-            <Tag size="small" color={activity.executionMode === 'depends_on' ? 'blue' : 'transparent'}>
-              {activity.role === 'leader'
+            <Tag size="small" color={actor.executionMode === 'depends_on' ? 'blue' : 'transparent'}>
+              {actor.role === 'leader'
                 ? 'Leader 汇总'
-                : activity.executionMode === 'depends_on'
+                : actor.executionMode === 'depends_on'
                   ? '依赖执行'
                   : '并行执行'}
             </Tag>
-            {activity.dependencyOutputCount > 0 && (
-              <Tag size="small" color="green">上游输出 {activity.dependencyOutputCount}</Tag>
+            {actor.dependencyOutputCount > 0 && (
+              <Tag size="small" color="green">上游输出 {actor.dependencyOutputCount}</Tag>
             )}
-            {activity.leaderContextCount > 0 && (
-              <Tag size="small" color="blue">Worker 输出 {activity.leaderContextCount}</Tag>
+            {actor.leaderContextCount > 0 && (
+              <Tag size="small" color="blue">Worker 输出 {actor.leaderContextCount}</Tag>
             )}
-            {activity.reportReviewStatus && (
-              <Tag size="small" color={activity.reportReviewStatus === 'accepted' ? 'green' : 'orange'}>
-                {activity.reportReviewStatus === 'accepted' ? '报告可用' : '需要补充'}
+            {actor.reportReviewStatus && (
+              <Tag size="small" color={actor.reportReviewStatus === 'accepted' ? 'green' : 'orange'}>
+                {actor.reportReviewStatus === 'accepted' ? '报告可用' : '需要补充'}
               </Tag>
             )}
           </div>
-          {activity.waitReason && (
+          {actor.waitReason && (
             <div className="mt-2 text-xs text-[var(--color-warning)]">
-              {activity.waitReason}
+              {actor.waitReason}
             </div>
           )}
         </section>
 
-        {activity.dependsOn.length > 0 && (
+        {actor.dependsOn.length > 0 && (
           <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
             <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">依赖 Worker</div>
             <div className="flex flex-wrap gap-1">
-              {activity.dependsOn.map((dependency) => (
+              {actor.dependsOn.map((dependency) => (
                 <Tag key={dependency} size="small" color="transparent">
                   {dependency}
                 </Tag>
@@ -344,48 +346,48 @@ export function TeamActivitySidebar({
         <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
           <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">分派任务</div>
           <div className="whitespace-pre-wrap break-words text-sm text-[var(--color-text-secondary)]">
-            {activity.assignment || activity.task}
+            {actor.assignment || actor.task}
           </div>
-          {activity.expectedOutput && (
+          {actor.expectedOutput && (
             <div className="mt-3">
               <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">期望输出</div>
               <div className="whitespace-pre-wrap break-words text-xs text-[var(--color-text-secondary)]">
-                {activity.expectedOutput}
+                {actor.expectedOutput}
               </div>
             </div>
           )}
-          {activity.constraints && (
+          {actor.constraints && (
             <div className="mt-3">
               <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">约束</div>
               <div className="whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
-                {activity.constraints}
+                {actor.constraints}
               </div>
             </div>
           )}
-          {activity.detail && (
+          {actor.detail && (
             <div className="mt-2 whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
-              {activity.detail}
+              {actor.detail}
             </div>
           )}
-          {activity.skippedReason && (
+          {actor.skippedReason && (
             <div className="mt-2 whitespace-pre-wrap break-words text-xs text-[var(--color-warning)]">
-              跳过原因：{activity.skippedReason}
+              跳过原因：{actor.skippedReason}
             </div>
           )}
-          {activity.reportReviewStatus && activity.role !== 'leader' && (
+          {actor.reportReviewStatus && actor.role !== 'leader' && (
             <div className="mt-3 rounded-md bg-[var(--color-bg-secondary)] p-2">
               <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">报告质量</div>
               <div className="text-xs text-[var(--color-text-secondary)]">
-                {activity.reportReviewStatus === 'accepted' ? '报告可用于 Leader 汇总' : '报告信息不足，Leader 会按缺口谨慎汇总'}
+                {actor.reportReviewStatus === 'accepted' ? '报告可用于 Leader 汇总' : '报告信息不足，Leader 会按缺口谨慎汇总'}
               </div>
-              {activity.reportReviewNotes && (
+              {actor.reportReviewNotes && (
                 <div className="mt-1 whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
-                  {activity.reportReviewNotes}
+                  {actor.reportReviewNotes}
                 </div>
               )}
-              {activity.reportReviewGaps.length > 0 && (
+              {actor.reportReviewGaps.length > 0 && (
                 <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-[var(--color-warning)]">
-                  {activity.reportReviewGaps.map((gap, index) => (
+                  {actor.reportReviewGaps.map((gap, index) => (
                     <li key={`${gap}-${index}`}>{gap}</li>
                   ))}
                 </ul>
@@ -396,42 +398,145 @@ export function TeamActivitySidebar({
 
         <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
           <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">
-            {activity.role === 'leader' ? '输出' : 'Worker report'}
+            {actor.role === 'leader' ? '输出' : 'Worker report'}
           </div>
-          {activity.report || activity.output ? (
+          {actor.report || actor.output ? (
             <div className="max-h-80 overflow-auto text-xs text-[var(--color-text-secondary)]">
-              <MarkdownContent content={activity.report || activity.output} />
+              <MarkdownContent content={actor.report || actor.output} />
             </div>
           ) : (
             <div className="text-sm text-[var(--color-text-tertiary)]">暂无输出</div>
           )}
         </section>
 
-        {activity.thinking && (
-          <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-            <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">思考</div>
-            <div className="max-h-60 overflow-auto text-xs text-[var(--color-text-tertiary)]">
-              <MarkdownContent content={activity.thinking} />
-            </div>
-          </section>
-        )}
-
-        {toolCalls.length > 0 && (
-          <section className="space-y-2 rounded-lg bg-[var(--color-bg-primary)] p-3">
-            <div className="text-xs text-[var(--color-text-tertiary)]">工具调用</div>
-            <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
-              {toolCalls.map((toolCall) => (
-                <ToolCallBlock key={toolCall.id} toolCall={toolCall} />
-              ))}
-            </div>
-          </section>
+        {processItems.length > 0 && (
+          <AccordionProcessTimeline
+            accordionKey={`team-actor-process-${actor.id}-${actor.status}`}
+            items={processItems}
+            autoScroll={actor.status === 'running' || actor.status === 'waiting'}
+            title="运行过程"
+            status={actorProcessStatus(actor.status)}
+            rightChildren={(
+              <span className="text-xs text-[var(--color-text-tertiary)]">
+                {processItems.length} 项
+              </span>
+            )}
+            defaultOpen
+            alwaysOpen
+          />
         )}
       </div>
     </aside>
   );
 }
 
-function getTeamActivityStatusText(status: TeamActivityInfo['status']) {
+function buildActorProcessItems(actor: TeamActorInfo): ChatProcessItem[] {
+  const items = Array.isArray(actor.items) ? actor.items : [];
+  const processItems = items
+    .map(actorDisplayItemToProcessItem)
+    .filter((item): item is ChatProcessItem => Boolean(item));
+  if (processItems.length > 0) return processItems;
+  return normalizeStoredToolCalls(actor.toolCalls || []).map((toolCall): ChatProcessItem => ({
+    id: `tool-${toolCall.id}`,
+    type: 'tool',
+    toolCall,
+    status: toolCall.status,
+    updatedAt: actor.createdAt,
+  }));
+}
+
+function actorDisplayItemToProcessItem(item: DisplayItem): ChatProcessItem | null {
+  const status = String(item.status || 'running') as ChatDisplayStatus;
+  if (item.event === DISPLAY_EVENTS.REASONING_DELTA || item.targetId === 'reasoning') {
+    const content = pickDisplayItemString(item, ['text', 'content', 'delta']);
+    return content ? { id: item.id, type: 'reasoning', content, status, updatedAt: item.updatedAt } : null;
+  }
+  if (item.event === DISPLAY_EVENTS.THINKING_DELTA || item.targetId === 'thinking') {
+    const content = pickDisplayItemString(item, ['text', 'content', 'delta']);
+    return content ? { id: item.id, type: 'thinking', content, status, updatedAt: item.updatedAt } : null;
+  }
+  if (item.event.startsWith('tool.') || item.targetId.includes(':tool:') || item.targetId.startsWith('tool')) {
+    return {
+      id: item.id,
+      type: 'tool',
+      toolCall: toolCallFromDisplayItem(item),
+      status,
+      updatedAt: item.updatedAt,
+    };
+  }
+  if (item.event.startsWith('skill.') || item.targetId.includes(':skill:') || item.targetId.startsWith('skill')) {
+    return {
+      id: item.id,
+      type: 'skill',
+      skillCall: skillCallFromDisplayItem(item),
+      status,
+      updatedAt: item.updatedAt,
+    };
+  }
+  return null;
+}
+
+function toolCallFromDisplayItem(item: DisplayItem): ToolCallInfo {
+  return {
+    id: item.targetId || item.id,
+    name: normalizeToolDisplayName(pickDisplayItemString(item, ['name', 'toolName', 'rawName']) || 'tool'),
+    args: pickDisplayItemString(item, ['inputPreview', 'input', 'args']),
+    result: pickDisplayItemString(item, ['outputPreview', 'output', 'result', 'error']),
+    status: normalizeToolStatus(item.status || item.data.status),
+  };
+}
+
+function skillCallFromDisplayItem(item: DisplayItem): SkillCallInfo {
+  const status = String(item.status || item.data.status || 'running');
+  return {
+    id: item.targetId || item.id,
+    name: pickDisplayItemString(item, ['name']) || 'Skill',
+    description: pickDisplayItemString(item, ['description']),
+    trigger: pickDisplayItemString(item, ['trigger']),
+    content: pickDisplayItemString(item, ['content']),
+    resourcePath: pickDisplayItemString(item, ['resourcePath']),
+    resources: Array.isArray(item.data.resources) ? item.data.resources.map((resource) => String(resource)) : [],
+    status: (
+      status === 'completed' || status === 'failed' || status === 'running'
+        ? status
+        : 'running'
+    ) as SkillCallInfo['status'],
+  };
+}
+
+function pickDisplayItemString(item: DisplayItem, keys: string[]): string {
+  for (const key of keys) {
+    const value = item.data[key];
+    if (value === undefined || value === null) continue;
+    const text = String(value);
+    if (text) return text;
+  }
+  return '';
+}
+
+function normalizeToolStatus(status: unknown): ToolCallInfo['status'] {
+  const value = String(status || 'calling');
+  if (value === 'running' || value === 'completed' || value === 'failed' || value === 'calling') {
+    return value;
+  }
+  return 'calling';
+}
+
+function normalizeToolDisplayName(name: string): string {
+  const value = String(name || 'tool');
+  const parts = value.split('_');
+  if (parts.length === 2 && parts[0] && parts[0] === parts[1]) {
+    return parts[0];
+  }
+  return value;
+}
+
+function actorProcessStatus(status: TeamActorInfo['status']): ChatDisplayStatus {
+  if (status === 'skipped') return 'completed';
+  return status;
+}
+
+function getTeamActivityStatusText(status: TeamActorInfo['status']) {
   if (status === 'running') return '执行中';
   if (status === 'waiting') return '等待确认';
   if (status === 'completed') return '完成';

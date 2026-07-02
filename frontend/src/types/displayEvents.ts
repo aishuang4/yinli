@@ -1,5 +1,6 @@
 export const DISPLAY_BLOCKS = {
   PROCESS: 'process',
+  TEAM: 'team',
   PLAN: 'plan',
   FEEDBACK: 'feedback',
   ANSWER: 'answer',
@@ -27,6 +28,7 @@ export const DISPLAY_EVENTS = {
   SKILL_UPDATED: 'skill.updated',
   SKILL_COMPLETED: 'skill.completed',
   SKILL_FAILED: 'skill.failed',
+  TEAM_ACTORS_UPDATED: 'team.actors.updated',
   ANSWER_STARTED: 'answer.started',
   ANSWER_DELTA: 'answer.delta',
   ANSWER_COMPLETED: 'answer.completed',
@@ -43,9 +45,12 @@ export const DISPLAY_EVENTS = {
 
 export const DISPLAY_EVENT_SCOPES = {
   SINGLE_AGENT: 'single_agent',
+  TEAM: 'team',
+  LEADER: 'leader',
+  WORKER: 'worker',
 } as const;
 
-export const DISPLAY_SNAPSHOT_VERSION = 2;
+export const DISPLAY_SNAPSHOT_VERSION = 3;
 
 type ValueOf<T> = T[keyof T];
 
@@ -84,8 +89,42 @@ export interface DisplayBlock {
   data: DisplayData;
 }
 
+export type DisplayMode = 'single_agent' | 'team' | string;
+
+export interface DisplayActor {
+  id: string;
+  role: 'single' | 'leader' | 'worker' | string;
+  agentId: string;
+  agentName: string;
+  activityId?: string | null;
+  status: DisplayStatus;
+  task: string;
+  assignment: string;
+  expectedOutput: string;
+  constraints: string;
+  detail: string;
+  output: string;
+  report: string;
+  skippedReason: string;
+  reportReviewStatus: string;
+  reportReviewNotes: string;
+  reportReviewGaps: string[];
+  executionMode: string;
+  dependsOn: string[];
+  waitReason: string;
+  dependencyOutputCount: number;
+  leaderContextCount: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+  items: DisplayItem[];
+  data: DisplayData;
+}
+
 export interface DisplaySnapshot {
   version: typeof DISPLAY_SNAPSHOT_VERSION;
+  mode: DisplayMode;
+  actors: DisplayActor[];
   blocks: DisplayBlock[];
 }
 
@@ -100,11 +139,13 @@ export interface DisplayEvent {
   event: DisplayEventName;
   op: DisplayEventOp;
   targetId?: string;
+  actorId?: string;
   status?: DisplayStatus;
   data?: DisplayData;
 }
 
 export const DISPLAY_BLOCK_ORDER: DisplayBlockType[] = [
+  DISPLAY_BLOCKS.TEAM,
   DISPLAY_BLOCKS.PROCESS,
   DISPLAY_BLOCKS.PLAN,
   DISPLAY_BLOCKS.FEEDBACK,

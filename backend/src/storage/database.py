@@ -60,7 +60,7 @@ DEFAULT_MODEL_CONFIG = {
     "maxTokens": 4096,
     "maxReactIters": 40,
 }
-EMPTY_DISPLAY_SNAPSHOT = {"version": 2, "blocks": []}
+EMPTY_DISPLAY_SNAPSHOT = {"version": 3, "mode": "single_agent", "actors": [], "blocks": []}
 
 
 def _utc_now() -> str:
@@ -259,7 +259,7 @@ def ensure_db() -> None:
                     model_caches TEXT NOT NULL DEFAULT '[]',
                     runtime_events TEXT NOT NULL DEFAULT '[]',
                     plan_runs TEXT NOT NULL DEFAULT '[]',
-                    display_snapshot TEXT NOT NULL DEFAULT '{"version":2,"blocks":[]}',
+                    display_snapshot TEXT NOT NULL DEFAULT '{"version":3,"mode":"single_agent","actors":[],"blocks":[]}',
                     created_at TEXT NOT NULL,
                     sort_order INTEGER NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
@@ -474,12 +474,6 @@ def _loads(value: str | None, default: Any) -> Any:
         return json.loads(value)
     except Exception:
         return default
-
-
-def _derive_subagent_calls(tool_calls: list[dict[str, Any]], subagent_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Subagent 已下线，仅保留旧字段读取兼容，不再从工具调用派生。"""
-
-    return subagent_calls
 
 
 def list_json_records(namespace: str) -> list[dict[str, Any]]:
@@ -1112,8 +1106,6 @@ def load_chat_store() -> dict[str, Any]:
         ).fetchall()
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in messages:
-        tool_calls = _loads(row["tool_calls"], [])
-        subagent_calls = _derive_subagent_calls(tool_calls, _loads(row["subagent_calls"], []))
         grouped.setdefault(row["session_id"], []).append({
             "id": row["id"],
             "role": row["role"],
@@ -1124,13 +1116,6 @@ def load_chat_store() -> dict[str, Any]:
             "error": row["error"],
             "thinking": row["thinking"],
             "images": _loads(row["images"], []),
-            "toolCalls": tool_calls,
-            "subagentCalls": subagent_calls,
-            "skillCalls": _loads(row["skill_calls"], []),
-            "teamActivities": _loads(row["team_activities"], []),
-            "modelCaches": _loads(row["model_caches"], []),
-            "runtimeEvents": _loads(row["runtime_events"], []),
-            "planRuns": _loads(row["plan_runs"], []),
             "displaySnapshot": _loads(row["display_snapshot"], EMPTY_DISPLAY_SNAPSHOT),
             "created_at": row["created_at"],
         })
@@ -1180,13 +1165,13 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     item["id"], session_id, item["role"], item.get("content", ""),
                     item.get("agent_id"), item.get("agent_name"), item.get("model_name"),
                     item.get("error"), item.get("thinking", ""), _dumps(item.get("images", [])),
-                    _dumps(item.get("toolCalls", item.get("tool_calls", []))),
-                    _dumps(item.get("subagentCalls", item.get("subagent_calls", []))),
-                    _dumps(item.get("skillCalls", item.get("skill_calls", []))),
-                    _dumps(item.get("teamActivities", item.get("team_activities", []))),
-                    _dumps(item.get("modelCaches", item.get("model_caches", []))),
-                    _dumps(item.get("runtimeEvents", item.get("runtime_events", []))),
-                    _dumps(item.get("planRuns", item.get("plan_runs", []))),
+                    _dumps([]),
+                    _dumps([]),
+                    _dumps([]),
+                    _dumps([]),
+                    _dumps([]),
+                    _dumps([]),
+                    _dumps([]),
                     _dumps(item.get("displaySnapshot", item.get("display_snapshot", EMPTY_DISPLAY_SNAPSHOT))),
                     item["created_at"], index,
                 ))

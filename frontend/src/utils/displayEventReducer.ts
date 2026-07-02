@@ -5,6 +5,7 @@ import {
   DISPLAY_EVENTS,
   DISPLAY_SNAPSHOT_VERSION,
   type DisplayBlock,
+  type DisplayActor,
   type DisplayData,
   type DisplayEvent,
   type DisplayItem,
@@ -14,6 +15,8 @@ import {
 export function createEmptyDisplaySnapshot(): DisplaySnapshot {
   return {
     version: DISPLAY_SNAPSHOT_VERSION,
+    mode: 'single_agent',
+    actors: [],
     blocks: [],
   };
 }
@@ -25,6 +28,8 @@ export function normalizeDisplaySnapshot(snapshot: DisplaySnapshot | null | unde
 
   return {
     version: DISPLAY_SNAPSHOT_VERSION,
+    mode: String(snapshot.mode || inferDisplayMode(snapshot.blocks, snapshot.actors)),
+    actors: normalizeDisplayActors(snapshot.actors, snapshot.blocks),
     blocks: sortDisplayBlocks(snapshot.blocks.flatMap(normalizeDisplayBlock)),
   };
 }
@@ -33,6 +38,14 @@ export function applyDisplayEvent(snapshot: DisplaySnapshot, event: DisplayEvent
   if (!event) return normalizeDisplaySnapshot(snapshot);
   const current = normalizeDisplaySnapshot(snapshot);
   const blockId = resolveBlockId(event);
+
+  if (event.block === DISPLAY_BLOCKS.TEAM) {
+    return applyTeamEvent(current, event);
+  }
+
+  if (event.block === DISPLAY_BLOCKS.PROCESS && event.actorId) {
+    return applyActorProcessEvent(current, event);
+  }
 
   if (event.op === DISPLAY_EVENT_OPS.REMOVE) {
     return {
@@ -59,6 +72,149 @@ export function applyDisplayEvent(snapshot: DisplaySnapshot, event: DisplayEvent
   return {
     ...current,
     blocks: sortDisplayBlocks(blocks),
+  };
+}
+
+function inferDisplayMode(blocks?: DisplayBlock[], actors?: DisplayActor[]): string {
+  if (Array.isArray(actors) && actors.some((actor) => actor.role === 'leader' || actor.role === 'worker')) {
+    return 'team';
+  }
+  if (Array.isArray(blocks) && blocks.some((block) => block.block === DISPLAY_BLOCKS.TEAM)) {
+    return 'team';
+  }
+  return 'single_agent';
+}
+
+function normalizeDisplayActors(actors: unknown, blocks?: DisplayBlock[]): DisplayActor[] {
+  if (Array.isArray(actors) && actors.length > 0) {
+    return actors.flatMap(normalizeDisplayActor);
+  }
+
+  const processBlock = Array.isArray(blocks)
+    ? blocks.find((block) => block?.block === DISPLAY_BLOCKS.PROCESS)
+    : undefined;
+  if (!processBlock || !Array.isArray(processBlock.items) || processBlock.items.length === 0) {
+    return [];
+  }
+  return normalizeDisplayActor({
+    id: 'single-agent',
+    role: 'single',
+    status: processBlock.status || 'running',
+    updatedAt: processBlock.updatedAt || '',
+    items: processBlock.items,
+  });
+}
+
+function normalizeDisplayActor(actor: unknown): DisplayActor[] {
+  if (!actor || typeof actor !== 'object') return [];
+  const record = actor as Partial<DisplayActor> & Record<string, unknown>;
+  const id = String(record.id || record.activityId || record.agentId || '');
+  if (!id) return [];
+  return [{
+    id,
+    role: String(record.role || 'single'),
+    agentId: String(record.agentId || ''),
+    agentName: String(record.agentName || 'Agent'),
+    activityId: record.activityId === undefined || record.activityId === null ? null : String(record.activityId),
+    status: String(record.status || 'running'),
+    task: String(record.task || ''),
+    assignment: String(record.assignment || ''),
+    expectedOutput: String(record.expectedOutput || ''),
+    constraints: String(record.constraints || ''),
+    detail: String(record.detail || ''),
+    output: String(record.output || ''),
+    report: String(record.report || ''),
+    skippedReason: String(record.skippedReason || ''),
+    reportReviewStatus: String(record.reportReviewStatus || ''),
+    reportReviewNotes: String(record.reportReviewNotes || ''),
+    reportReviewGaps: Array.isArray(record.reportReviewGaps) ? record.reportReviewGaps.map((item) => String(item)) : [],
+    executionMode: String(record.executionMode || ''),
+    dependsOn: Array.isArray(record.dependsOn) ? record.dependsOn.map((item) => String(item)) : [],
+    waitReason: String(record.waitReason || ''),
+    dependencyOutputCount: Number(record.dependencyOutputCount || 0),
+    leaderContextCount: Number(record.leaderContextCount || 0),
+    createdAt: String(record.createdAt || record.updatedAt || ''),
+    updatedAt: String(record.updatedAt || record.createdAt || ''),
+    completedAt: String(record.completedAt || ''),
+    items: Array.isArray(record.items) ? record.items.flatMap(normalizeDisplayItem) : [],
+    data: normalizeDisplayData(record.data),
+  }];
+}
+
+function applyTeamEvent(snapshot: DisplaySnapshot, event: DisplayEvent): DisplaySnapshot {
+  const actors = Array.isArray(event.data?.actors)
+    ? event.data.actors.flatMap(normalizeDisplayActor)
+    : snapshot.actors;
+  return {
+    ...snapshot,
+    mode: String(event.data?.mode || 'team'),
+    actors,
+  };
+}
+
+function applyActorProcessEvent(snapshot: DisplaySnapshot, event: DisplayEvent): DisplaySnapshot {
+  const actorId = String(event.actorId || '');
+  if (!actorId) return snapshot;
+  const existingActor = snapshot.actors.find((actor) => actor.id === actorId);
+  const actor = applyProcessEventToActor(existingActor || buildActorFromProcessEvent(event), event);
+  const actors = existingActor
+    ? snapshot.actors.map((current) => (current.id === actorId ? actor : current))
+    : [...snapshot.actors, actor];
+  return {
+    ...snapshot,
+    mode: snapshot.mode || (event.scope === 'team' || event.scope === 'leader' || event.scope === 'worker' ? 'team' : 'single_agent'),
+    actors,
+  };
+}
+
+function buildActorFromProcessEvent(event: DisplayEvent): DisplayActor {
+  const actorId = String(event.actorId || 'single-agent');
+  return {
+    id: actorId,
+    role: event.scope === 'leader' || event.scope === 'worker' ? event.scope : 'single',
+    agentId: String(event.data?.agentId || ''),
+    agentName: String(event.data?.agentName || 'Agent'),
+    activityId: event.data?.activityId ? String(event.data.activityId) : null,
+    status: event.status || 'running',
+    task: '',
+    assignment: '',
+    expectedOutput: '',
+    constraints: '',
+    detail: '',
+    output: '',
+    report: '',
+    skippedReason: '',
+    reportReviewStatus: '',
+    reportReviewNotes: '',
+    reportReviewGaps: [],
+    executionMode: '',
+    dependsOn: [],
+    waitReason: '',
+    dependencyOutputCount: 0,
+    leaderContextCount: 0,
+    createdAt: event.createdAt,
+    updatedAt: event.createdAt,
+    completedAt: '',
+    items: [],
+    data: {},
+  };
+}
+
+function applyProcessEventToActor(actor: DisplayActor, event: DisplayEvent): DisplayActor {
+  const block: DisplayBlock = {
+    id: actor.id,
+    block: DISPLAY_BLOCKS.PROCESS,
+    status: actor.status,
+    updatedAt: actor.updatedAt,
+    items: actor.items,
+    data: actor.data,
+  };
+  const nextBlock = applyProcessEvent(block, event);
+  return {
+    ...actor,
+    status: event.status || actor.status,
+    updatedAt: event.createdAt || actor.updatedAt,
+    items: nextBlock.items,
   };
 }
 
