@@ -1,6 +1,8 @@
 """受控 Glob 工具，避免宽泛模式扫描项目重目录。"""
 
 import os
+import re
+from fnmatch import translate
 from typing import ClassVar
 
 from agentscope.message import TextBlock
@@ -35,6 +37,20 @@ class ScopedGlob(Glob):
 
     def _is_ignored_directory(self, path: str) -> bool:
         return os.path.basename(os.path.normpath(path)) in self.ignored_directories
+
+    def glob_part_to_regex(self, part: str) -> re.Pattern[str]:
+        """把单段 glob pattern 编译为正则，避免依赖 AgentScope 内部实现。"""
+
+        return re.compile(translate(part))
+
+    def glob_match(self, pattern: str, base_dir: str) -> list[str]:
+        """在指定目录执行受控 glob 匹配。"""
+
+        normalized = pattern.replace("\\", "/").strip("/")
+        parts = [part for part in normalized.split("/") if part]
+        results: list[str] = []
+        self.match_parts(parts, 0, base_dir, results)
+        return results
 
     def collect_all(self, current_dir: str, results: list[str]) -> None:
         """递归收集文件时跳过常见重目录。"""
@@ -154,6 +170,6 @@ class ScopedGlob(Glob):
                     ),
                 ),
             ],
-            state=chunk.state,
-            is_last=chunk.is_last,
+            state="running",
+            is_last=True,
         )

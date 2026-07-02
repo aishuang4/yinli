@@ -32,7 +32,7 @@ def test_system_prompt_contains_plan_banner_when_active() -> None:
     assert "Avoid broad Glob patterns" in prompt
 
 
-def test_system_prompt_contains_build_hint_after_approval() -> None:
+def test_system_prompt_does_not_inject_build_hint_after_plan_finalized() -> None:
     manager = PlanModeManager(
         session_id="session-1",
         run_id="run-1",
@@ -41,16 +41,12 @@ def test_system_prompt_contains_build_hint_after_approval() -> None:
         persist=False,
     )
     manager.enter(goal="制定计划")
-    manager.context.plan_active = False
-    manager.context.approved = True
+    manager.finalize()
     middleware = PlanModeMiddleware(manager)
 
     prompt = asyncio.run(middleware.on_system_prompt(SimpleNamespace(name="Agent"), "base"))
 
-    assert "BUILD mode" in prompt
-    assert manager.context.current_plan_file in prompt
-    assert "instead of searching the entire project" in prompt
-    assert "FinalAnswerStart" in prompt
+    assert prompt == "base"
 
 
 def test_on_acting_denies_mutating_tool() -> None:

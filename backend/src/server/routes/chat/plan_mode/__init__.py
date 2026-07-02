@@ -2,7 +2,7 @@
 
 核心组件:
 - PlanModeContext / PlanModeManager — 状态协调与持久化
-- PlanModeMiddleware — AgentScope hooks, 注入只读/构建模式提示
+- PlanModeMiddleware — AgentScope hooks, 注入只读规划提示
 - PlanEnterTool / PlanWriteTool / PlanExitTool — 控制工具
 - is_plan_mode_tool_allowed — 工具准入策略
 - build_plan_event — 运行时事件构造
@@ -24,9 +24,7 @@ from src.server.routes.chat.plan_mode.events import build_plan_event
 from src.server.routes.chat.plan_mode.models import (
     PlanModeContext,
     PLAN_STATUS_DRAFT,
-    PLAN_STATUS_WAITING_APPROVAL,
-    PLAN_STATUS_APPROVED,
-    PLAN_STATUS_DENIED,
+    PLAN_STATUS_FINALIZED,
 )
 
 __all__ = [
@@ -43,7 +41,5 @@ __all__ = [
     "build_plan_event",
     "PlanModeContext",
     "PLAN_STATUS_DRAFT",
-    "PLAN_STATUS_WAITING_APPROVAL",
-    "PLAN_STATUS_APPROVED",
-    "PLAN_STATUS_DENIED",
+    "PLAN_STATUS_FINALIZED",
 ]

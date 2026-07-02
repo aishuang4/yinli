@@ -87,10 +87,10 @@ class PlanWriteTool(_PlanToolBase):
 
 
 class PlanExitTool(_PlanToolBase):
-    """退出计划模式并等待用户审批。"""
+    """退出计划模式并将计划作为最终答复。"""
 
     name: str = "plan_exit"
-    description: str = "Exit PLAN mode and ask the user to approve the written plan."
+    description: str = "Exit PLAN mode and return the written plan as the final answer."
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {},
@@ -98,11 +98,10 @@ class PlanExitTool(_PlanToolBase):
     }
 
     async def __call__(self) -> ToolChunk:
-        context = self.manager.exit_for_approval()
+        context = self.manager.finalize()
         return self._success({
             "planId": context.plan_id,
             "planFile": context.current_plan_file,
-            "waitingApproval": context.waiting_approval,
             "markdown": context.markdown,
         })
 

@@ -6,6 +6,7 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -27,6 +28,12 @@ TRACE_EVENT_TYPES = {
 }
 PENDING_INTERACTIONS: dict[str, "PendingInteraction"] = {}
 PENDING_AGENTS: dict[str, object] = {}
+
+
+def _empty_display_snapshot() -> dict[str, Any]:
+    """创建空的 Chat 展示快照。"""
+
+    return {"version": 2, "blocks": []}
 
 
 class ChatImagePayload(BaseModel):
@@ -195,6 +202,7 @@ class StoredChatMessage(BaseModel):
     model_caches: list[ChatModelCacheRun] = Field(default_factory=list, alias="modelCaches")
     runtime_events: list[dict] = Field(default_factory=list, alias="runtimeEvents")
     plan_runs: list[ChatPlanRun] = Field(default_factory=list, alias="planRuns")
+    display_snapshot: dict[str, Any] = Field(default_factory=_empty_display_snapshot, alias="displaySnapshot")
     clarification_requests: list[dict] = Field(default_factory=list, alias="clarificationRequests")
     clarification_resolved: bool = Field(default=False, alias="clarificationResolved")
     created_at: str
@@ -310,9 +318,6 @@ class ChatMessage(BaseModel):
 
     sandbox: bool = False
     """沙盒运行：不写入历史对话"""
-
-    approved_plan_id: str | None = Field(default=None, alias="approvedPlanId")
-    """已批准计划 ID；存在时本轮进入 Build mode 并按该计划执行。"""
 
     model_config = {"populate_by_name": True}
 

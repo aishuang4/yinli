@@ -23,7 +23,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentscope", specifier = ">=2.0.1" },
+    { name = "agentscope", specifier = "==2.0.3" },
     { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "fastapi", specifier = ">=0.136.3" },
     { name = "pydantic-settings", specifier = ">=2.14.1" },
@@ -34,7 +34,7 @@ requires-dist = [
 
 [[package]]
 name = "agentscope"
-version = "2.0.1"
+version = "2.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -62,9 +62,9 @@ dependencies = [
     { name = "tree-sitter" },
     { name = "tree-sitter-bash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/36/27/8c66102f6afbda017a946304a4e9c5fcf8f6e53b78b968be010929ece8d8/agentscope-2.0.1.tar.gz", hash = "sha256:1f6035eb67a71a433f3a679cf8d79415185150d5f2be2e7e1d8ee1e2f1f0637a", size = 351393, upload-time = "2026-06-05T12:14:23.083Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/97/12/4ed72815f9bb06fd869eaf3c22765421ec263364ca52efc506fcad5cc997/agentscope-2.0.3.tar.gz", hash = "sha256:6359380e2dd0995a025d824468c4ab1b0464f92077d38333b561ab635c2956ce", size = 521636, upload-time = "2026-06-29T02:09:14.13Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/16/f2/e4c8c1c97c8cf18d9d8b81d3ecabcfe02392b9c4f6811f57203e3665f013/agentscope-2.0.1-py3-none-any.whl", hash = "sha256:8ec54aa13c0fae0944116d3e2875528d126f86588085b801d46907c22c253db5", size = 478644, upload-time = "2026-06-05T12:14:21.735Z" },
+    { url = "https://files.pythonhosted.org/packages/da/0b/9698adbd8b0887e8ce2162a356dc1be8f9f4d090be5255234ed8a2550edd/agentscope-2.0.3-py3-none-any.whl", hash = "sha256:070cc4cec54aa0fb0fc66afaaa41cde2c04b18af6c3755a075c4bc7853ab9766", size = 697856, upload-time = "2026-06-29T02:09:12.366Z" },
 ]
 
 [[package]]

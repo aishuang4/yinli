@@ -11,6 +11,21 @@ from src.server.routes.chat.team_state import _finalize_team_activities, _set_te
 from src.server.routes.chat.trace_recorder import _record_run_event, _trim_text
 
 
+def missing_final_answer_error() -> str:
+    """生成没有最终答案时返回给前端的错误说明。"""
+
+    return (
+        "Agent 执行已停止，但没有产生最终答案。"
+        "可能已达到最大 ReAct 迭代次数，或模型没有调用 FinalAnswerStart 后输出最终回复。"
+    )
+
+
+def max_react_iterations_error() -> str:
+    """生成达到最大 ReAct 迭代次数时返回给前端的错误说明。"""
+
+    return "Agent 已达到最大 ReAct 迭代次数，执行已停止。请缩小任务范围或提高最大迭代次数后重试。"
+
+
 async def emit_failed_startup_run(
     *,
     session_id: str,

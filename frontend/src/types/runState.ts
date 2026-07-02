@@ -1,25 +1,20 @@
 /**
- * Chat RunState v1 前端契约。
+ * Chat RunState v2 前端契约。
  *
  * 字段名与后端 run_state_schema.py 保持一致。Chat 主链路只能消费
  * RUN_STATE / RUN_STATE_PATCH，不直接依赖 AgentScope raw SSE。
  */
 
+import type { DisplayEvent, DisplaySnapshot } from './displayEvents';
+
 export type RunStateStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'cancelling' | string;
 
 export type RunStatePatchKind =
   | 'snapshot_meta'
-  | 'reasoning_delta'
-  | 'final_answer_delta'
-  | 'thinking_delta'
-  | 'tool'
   | 'team_activities'
-  | 'skill_calls'
   | 'model_usage'
-  | 'approval'
   | 'approval_resolved'
-  | 'runtime_event'
-  | 'plans'
+  | 'display_event'
   | 'error';
 
 export interface RunStateToolSummary {
@@ -78,6 +73,12 @@ export interface ChatRunPlanState {
   updatedAt: string;
 }
 
+export interface RunStateGeneratedFile {
+  path: string;
+  name: string;
+  extension: string;
+}
+
 export interface ChatRunStateSnapshot {
   version?: number;
   runId: string;
@@ -91,12 +92,11 @@ export interface ChatRunStateSnapshot {
   tools: RunStateToolSummary[];
   teamActivities: Array<Record<string, unknown>>;
   skillCalls: Array<Record<string, unknown>>;
-  modelCaches: Array<Record<string, unknown>>;
   modelName: string;
   tokenUsage: { input: number; output: number } | null;
   approvals: RunStateApprovalSummary[];
   plans: ChatRunPlanState[];
-  runtimeEvents: Array<Record<string, unknown>>;
+  displaySnapshot?: DisplaySnapshot;
   error: string;
 }
 
@@ -107,18 +107,12 @@ export interface ChatRunStatePatch {
   status: RunStateStatus;
   updatedAt: string;
   completedAt: string | null;
-  reasoningDelta?: string;
-  finalAnswerDelta?: string;
-  thinkingDelta?: string;
-  tool?: RunStateToolSummary;
   teamActivities?: Array<Record<string, unknown>>;
-  skillCalls?: Array<Record<string, unknown>>;
-  modelCaches?: Array<Record<string, unknown>>;
   modelName?: string;
   tokenUsage?: { input: number; output: number } | null;
-  approval?: RunStateApprovalSummary;
-  runtimeEvent?: Record<string, unknown>;
-  plans?: ChatRunPlanState[];
+  displayEvent?: DisplayEvent;
   resolvedApprovalId?: string;
   error?: string;
 }
+
+export type { DisplayBlock, DisplayEvent, DisplayItem, DisplaySnapshot } from './displayEvents';

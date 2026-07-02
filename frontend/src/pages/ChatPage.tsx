@@ -14,7 +14,12 @@
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { AlertCircle, Bot, ChevronDown, ImagePlus, Plus, Send, Square, Trash2, X } from 'lucide-react';
-import { Button, Empty, Select, Spinner, Tag } from '@agentscope-ai/design';
+import {
+  SparkDeepThinkLine,
+  SparkReinforcementLearningLine,
+  SparkRenyizhuanrenyiAnyToanyLine,
+} from '@agentscope-ai/icons';
+import { Empty, Select, Spinner, Tag, Tooltip } from '@agentscope-ai/design';
 import { useEventStream } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
@@ -22,12 +27,10 @@ import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList';
 import { TeamActivitySidebar } from '../features/chat/TeamActivityViews';
-import { HitlDock, isAskUserHitlRequest } from '../features/chat/HumanInteractionBlocks';
-import { getPlanModeEvents, PlanModeDock } from '../features/chat/ProcessDetailsBlock';
 import { TeamSelectionDock } from '../features/chat/TeamSelectionDock';
+import { FloatingPlanDock } from '../features/chat/FloatingPlanDock';
 import { normalizeStoredTeamActivities, normalizeStoredToolCalls } from '../features/chat/formatters';
 import type { ChatImageAttachment, ChatImagePayload, ChatSession, LocalMessage, PendingTeamSelection, StoredChatMessage } from '../features/chat/types';
-import type { ChatRuntimeEvent } from '../types/chatEvents';
 
 
 export function ChatPage() {
@@ -46,7 +49,6 @@ export function ChatPage() {
   const [chatError, setChatError] = useState<string | null>(null);
   const [selectedTeamActivityId, setSelectedTeamActivityId] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
-  const [resolvedPlanIds, setResolvedPlanIds] = useState<Set<string>>(() => new Set());
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -78,14 +80,14 @@ export function ChatPage() {
   const agentOptions = useMemo(() => [
     { label: 'Assistant - 默认助手', value: 'default' },
     ...agents.map((agent) => ({
-      label: `${agent.name}${agent.description ? ` - ${agent.description}` : ''}`,
+      label: agent.name,
       value: agent.id,
     })),
   ], [agents]);
 
   const teamOptions = useMemo(() => (
     teams.map((team) => ({
-      label: `${team.name} - ${team.members.length} 个成员`,
+      label: team.name,
       value: team.id,
     }))
   ), [teams]);
@@ -102,9 +104,8 @@ export function ChatPage() {
     state.toolCalls.length > 0 ||
     state.skillCalls.length > 0 ||
     state.teamActivities.length > 0 ||
-    state.modelCaches.length > 0 ||
-    state.plans.length > 0 ||
-    state.runtimeEvents.length > 0
+    state.displaySnapshot.blocks.length > 0 ||
+    state.plans.length > 0
   );
 
   const visibleTeamActivities = useMemo(() => (
@@ -117,16 +118,6 @@ export function ChatPage() {
   const selectedTeamActivity = useMemo(() => (
     visibleTeamActivities.find((activity) => activity.id === selectedTeamActivityId) || null
   ), [selectedTeamActivityId, visibleTeamActivities]);
-  const approvalHitlRequests = useMemo(
-    () => state.hitlRequests.filter((request) => !isAskUserHitlRequest(request)),
-    [state.hitlRequests],
-  );
-  const conversationPlanEvents = useMemo(() => (
-    state.plans.length > 0
-      ? []
-      : getPlanModeEvents(messages.flatMap((message) => message.runtimeEvents || []))
-  ), [messages, state.plans.length]);
-
   const openTeamActivitySidebar = useCallback((activityId: string) => {
     setSelectedTeamActivityId(activityId);
   }, []);
@@ -139,33 +130,6 @@ export function ChatPage() {
       member.role === 'leader' || selectedWorkers.has(member.agentId)
     ));
   }, [selectedTeam]);
-
-  const buildCurrentRunOptions = useCallback((sessionId: string, approvedPlanId?: string) => ({
-    sessionId,
-    agentId: runtimeAgent?.id,
-    agentName: runtimeAgent?.name,
-    teamId: targetMode === 'team' ? selectedTeam?.id : undefined,
-    teamName: targetMode === 'team' ? selectedTeam?.name : undefined,
-    workerSelectorPrompt: targetMode === 'team' ? selectedTeam?.workerSelectorPrompt : undefined,
-    teamMembers: targetMode === 'team'
-      ? buildTeamMembersForRun(null).map((member) => ({
-        id: member.id,
-        agentId: member.agentId,
-        name: agents.find((agent) => agent.id === member.agentId)?.name || member.name,
-        role: member.role,
-        description: member.description,
-        executionMode: member.executionMode,
-        dependsOn: member.dependsOn,
-        handoffPrompt: member.handoffPrompt,
-      }))
-      : undefined,
-    systemPrompt: runtimeAgent?.systemPrompt,
-    model: runtimeAgent?.modelConfig.primary,
-    skillIds: runtimeAgent?.skills,
-    deepThinking,
-    images: [],
-    approvedPlanId,
-  }), [agents, buildTeamMembersForRun, deepThinking, runtimeAgent, selectedTeam, targetMode]);
 
   const loadSessions = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
@@ -200,8 +164,8 @@ export function ChatPage() {
       toolCalls: normalizeStoredToolCalls(item.toolCalls || item.tool_calls || []),
       skillCalls: item.skillCalls || item.skill_calls || [],
       teamActivities: normalizeStoredTeamActivities(item.teamActivities || item.team_activities || []),
-      modelCaches: item.modelCaches || item.model_caches || [],
       runtimeEvents: item.runtimeEvents || item.runtime_events || [],
+      displaySnapshot: item.displaySnapshot || item.display_snapshot,
       clarificationRequests: item.clarificationRequests || item.clarification_requests || [],
       clarificationResolved: item.clarificationResolved || item.clarification_resolved || false,
     })));
@@ -269,7 +233,7 @@ export function ChatPage() {
   useEffect(() => {
     if (!shouldAutoScrollRef.current) return;
     scrollToBottom(state.isStreaming ? 'auto' : 'smooth');
-  }, [messages, scrollToBottom, state.isStreaming, state.finalAnswerContent, state.reasoningContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities, state.modelCaches]);
+  }, [messages, scrollToBottom, state.isStreaming, state.finalAnswerContent, state.reasoningContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities]);
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
@@ -279,7 +243,6 @@ export function ChatPage() {
     setImageAttachments([]);
     setChatError(null);
     setSelectedTeamActivityId(null);
-    setResolvedPlanIds(new Set());
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
@@ -300,7 +263,6 @@ export function ChatPage() {
     setImageAttachments([]);
     setChatError(null);
     setSelectedTeamActivityId(null);
-    setResolvedPlanIds(new Set());
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
@@ -320,7 +282,6 @@ export function ChatPage() {
         setImageAttachments([]);
         setChatError(null);
         setSelectedTeamActivityId(null);
-        setResolvedPlanIds(new Set());
         reset();
       }
       notifySuccess('历史对话已删除');
@@ -486,8 +447,9 @@ export function ChatPage() {
         skillCalls: state.skillCalls.length > 0 ? state.skillCalls : undefined,
         toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
         teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,
-        modelCaches: state.modelCaches.length > 0 ? state.modelCaches : undefined,
         runtimeEvents: state.runtimeEvents.length > 0 ? state.runtimeEvents : undefined,
+        displaySnapshot: state.displaySnapshot.blocks.length > 0 ? state.displaySnapshot : undefined,
+        reasoning: state.reasoningContent || undefined,
         thinking: state.thinkingContent || undefined,
         tokenUsage: state.tokenUsage,
         modelName: state.modelName,
@@ -541,9 +503,10 @@ export function ChatPage() {
     selectedTeam,
     sendMessage,
     state.clarificationRequests,
+    state.displaySnapshot,
     state.isStreaming,
-    state.modelCaches,
     state.modelName,
+    state.reasoningContent,
     state.runCompletedAt,
     state.runStartedAt,
     state.runtimeEvents,
@@ -556,153 +519,6 @@ export function ChatPage() {
     state.toolCalls,
     targetMode,
   ]);
-
-  const appendPlanRuntimeEventToMessages = useCallback((planId: string, runtimeEvent: ChatRuntimeEvent) => {
-    const stateHasPlan = (
-      state.plans.some((plan) => plan.planId === planId) ||
-      state.runtimeEvents.some((event) => String(event.payload.planId || '') === planId)
-    );
-    setMessages((prev) => {
-      let matched = false;
-      const next = prev.map((message) => {
-        if (
-          message.role !== 'assistant' ||
-          !message.runtimeEvents?.some((event) => String(event.payload.planId || '') === planId)
-        ) {
-          return message;
-        }
-        matched = true;
-        if (message.runtimeEvents.some((event) => event.id === runtimeEvent.id)) {
-          return message;
-        }
-        return {
-          ...message,
-          runtimeEvents: [...message.runtimeEvents, runtimeEvent],
-        };
-      });
-      if (!matched && stateHasPlan) {
-        next.push({
-          id: `assistant-plan-${Date.now()}`,
-          role: 'assistant',
-          content: state.finalAnswerContent || state.textContent,
-          createdAt: new Date().toISOString(),
-          processStartedAt: state.runStartedAt,
-          processCompletedAt: state.runCompletedAt || new Date().toISOString(),
-          skillCalls: state.skillCalls.length > 0 ? state.skillCalls : undefined,
-          toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
-          teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,
-          modelCaches: state.modelCaches.length > 0 ? state.modelCaches : undefined,
-          runtimeEvents: [...state.runtimeEvents, runtimeEvent],
-          thinking: state.thinkingContent || undefined,
-          tokenUsage: state.tokenUsage,
-          modelName: state.modelName,
-          error: state.error || undefined,
-        });
-      }
-      return next;
-    });
-    if (stateHasPlan) {
-      reset();
-    }
-  }, [
-    reset,
-    state.error,
-    state.modelCaches,
-    state.modelName,
-    state.plans,
-    state.runCompletedAt,
-    state.runStartedAt,
-    state.runtimeEvents,
-    state.skillCalls,
-    state.teamActivities,
-    state.finalAnswerContent,
-    state.textContent,
-    state.thinkingContent,
-    state.tokenUsage,
-    state.toolCalls,
-  ]);
-
-  const handleApprovePlan = useCallback(async (event: ChatRuntimeEvent) => {
-    const planId = String(event.payload.planId || '');
-    if (!planId || state.isStreaming) return;
-    const sessionId = activeSessionId || event.sessionId || createId();
-    try {
-      const response = await fetch(`/api/chat/plans/${encodeURIComponent(planId)}/approve`, {
-        method: 'POST',
-      });
-      if (response.status === 409) {
-        setResolvedPlanIds((current) => new Set(current).add(planId));
-        notifySuccess('计划状态已更新。');
-        return;
-      }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const result = await response.json();
-      setResolvedPlanIds((current) => new Set(current).add(planId));
-      if (result.runtimeEvent) {
-        appendPlanRuntimeEventToMessages(planId, result.runtimeEvent as ChatRuntimeEvent);
-      }
-
-      const visibleContent = '已批准计划，继续执行。';
-      const modelContent = '请按已批准的计划继续执行，直接进入 Build mode 并完成计划中的任务。';
-      setActiveSessionId(sessionId);
-      shouldAutoScrollRef.current = true;
-      setShowScrollToBottom(false);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `user-plan-approve-${Date.now()}`,
-          role: 'user',
-          content: visibleContent,
-          createdAt: new Date().toISOString(),
-          images: [],
-        },
-      ]);
-      setChatError(null);
-      notifySuccess('计划已批准，开始执行。');
-      await sendMessage(modelContent, {
-        ...buildCurrentRunOptions(sessionId, planId),
-        displayMessage: visibleContent,
-      });
-    } catch (err) {
-      const message = getErrorMessage(err, '批准计划失败');
-      setChatError(message);
-      notifyError(message);
-    }
-  }, [
-    activeSessionId,
-    appendPlanRuntimeEventToMessages,
-    buildCurrentRunOptions,
-    sendMessage,
-    state.isStreaming,
-  ]);
-
-  const handleDenyPlan = useCallback(async (event: ChatRuntimeEvent) => {
-    const planId = String(event.payload.planId || '');
-    if (!planId || state.isStreaming) return;
-    try {
-      const response = await fetch(`/api/chat/plans/${encodeURIComponent(planId)}/deny`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: '用户拒绝了该计划。' }),
-      });
-      if (response.status === 409) {
-        setResolvedPlanIds((current) => new Set(current).add(planId));
-        notifySuccess('计划状态已更新。');
-        return;
-      }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const result = await response.json();
-      setResolvedPlanIds((current) => new Set(current).add(planId));
-      if (result.runtimeEvent) {
-        appendPlanRuntimeEventToMessages(planId, result.runtimeEvent as ChatRuntimeEvent);
-      }
-      notifySuccess('计划已拒绝。');
-    } catch (err) {
-      const message = getErrorMessage(err, '拒绝计划失败');
-      setChatError(message);
-      notifyError(message);
-    }
-  }, [appendPlanRuntimeEventToMessages, state.isStreaming]);
 
   const confirmTeamSelection = useCallback(async (workerAgentIds: string[]) => {
     if (!pendingTeamSelection || state.isStreaming) return;
@@ -755,7 +571,7 @@ export function ChatPage() {
       !state.isStreaming &&
       state.hitlRequests.length === 0 &&
       state.clarificationRequests.length === 0 &&
-      (state.finalAnswerContent || state.reasoningContent || state.textContent || state.error || state.plans.length > 0 || state.runtimeEvents.length > 0) &&
+      (state.finalAnswerContent || state.reasoningContent || state.textContent || state.error || state.displaySnapshot.blocks.length > 0 || state.plans.length > 0) &&
       (messages.length === 0 || messages[messages.length - 1].role === 'user')
     ) {
       const assistantMessage: LocalMessage = {
@@ -768,8 +584,9 @@ export function ChatPage() {
         skillCalls: state.skillCalls.length > 0 ? state.skillCalls : undefined,
         toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
         teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,
-        modelCaches: state.modelCaches.length > 0 ? state.modelCaches : undefined,
         runtimeEvents: state.runtimeEvents.length > 0 ? state.runtimeEvents : undefined,
+        displaySnapshot: state.displaySnapshot.blocks.length > 0 ? state.displaySnapshot : undefined,
+        reasoning: state.reasoningContent || undefined,
         thinking: state.thinkingContent || undefined,
         tokenUsage: state.tokenUsage,
         modelName: state.modelName,
@@ -779,7 +596,7 @@ export function ChatPage() {
       reset();
       loadSessions({ silent: true });
     }
-  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.error, state.finalAnswerContent, state.hitlRequests.length, state.isStreaming, state.modelCaches, state.modelName, state.plans.length, state.reasoningContent, state.runCompletedAt, state.runStartedAt, state.runtimeEvents, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
+  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.displaySnapshot, state.error, state.finalAnswerContent, state.hitlRequests.length, state.isStreaming, state.modelName, state.plans.length, state.reasoningContent, state.runCompletedAt, state.runStartedAt, state.runtimeEvents, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -954,22 +771,26 @@ export function ChatPage() {
 
                     {hasLiveResponse && (
                       <StreamingBubble
+                        isStreaming={state.isStreaming}
+                        currentRunId={state.currentRunId}
                         textContent={state.textContent}
                         reasoningContent={state.reasoningContent}
                         finalAnswerContent={state.finalAnswerContent}
                         thinkingContent={state.thinkingContent}
+                        displaySnapshot={state.displaySnapshot}
                         skillCalls={state.skillCalls}
                         teamActivities={state.teamActivities}
-                        modelCaches={state.modelCaches}
-                        runtimeEvents={state.runtimeEvents}
                         hitlRequests={state.hitlRequests}
                         clarificationRequests={state.clarificationRequests}
+                        plans={state.plans}
                         onSubmitClarification={handleSubmitClarification}
                         onResolveHitl={resumeInteraction}
                         selectedTeamActivityId={selectedTeamActivityId}
                         onSelectTeamActivity={openTeamActivitySidebar}
                         toolCalls={state.toolCalls}
                         modelName={state.modelName}
+                        tokenUsage={state.tokenUsage}
+                        error={state.error}
                         runStartedAt={state.runStartedAt}
                         runCompletedAt={state.runCompletedAt}
                       />
@@ -993,13 +814,7 @@ export function ChatPage() {
             >
               <ChevronDown size={16} />
             </button>
-            <PlanModeDock
-              events={conversationPlanEvents}
-              plans={state.plans}
-              resolvedPlanIds={resolvedPlanIds}
-              onApprovePlan={handleApprovePlan}
-              onDenyPlan={handleDenyPlan}
-            />
+            <FloatingPlanDock plans={state.plans} />
           </div>
 
           <div className="px-5 pb-5 pt-2">
@@ -1021,14 +836,7 @@ export function ChatPage() {
             />
           )}
 
-          {approvalHitlRequests.length > 0 && (
-            <HitlDock
-              requests={approvalHitlRequests}
-              onResolve={resumeInteraction}
-            />
-          )}
-
-          <div className="chat-composer mx-auto max-w-4xl rounded-xl bg-[var(--color-bg-secondary)] transition-shadow">
+          <div className="chat-composer mx-auto max-w-4xl rounded-xl bg-[var(--color-bg-secondary)]">
             <input
               ref={imageInputRef}
               type="file"
@@ -1048,9 +856,9 @@ export function ChatPage() {
                 isComposingRef.current = false;
               }}
               placeholder={state.isStreaming ? 'Agent 正在回复中...' : selectingTeamWorkers ? 'AI 正在选择 Worker...' : '输入消息...'}
-              rows={3}
+              rows={2}
               disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
-              className="block min-h-[96px] max-h-[180px] w-full resize-none rounded-t-lg border-0 bg-transparent px-4 py-3 text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:bg-[var(--color-bg-tertiary)]"
+              className="block max-h-[180px] w-full resize-none rounded-t-lg border-0 bg-transparent px-4 pb-0 pt-3 text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:bg-[var(--color-bg-tertiary)]"
               aria-label="消息输入框"
             />
 
@@ -1080,23 +888,56 @@ export function ChatPage() {
             )}
 
             <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+              <Tooltip title="上传图片" placement="top" mode="dark">
+                <span className="inline-flex">
+                  <button
+                    type="button"
+                    className="icon-button h-8 w-8 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+                    onClick={() => imageInputRef.current?.click()}
+                    disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection) || imageAttachments.length >= 4}
+                    aria-label="上传图片"
+                  >
+                    <ImagePlus size={16} />
+                  </button>
+                </span>
+              </Tooltip>
               <div className="flex rounded-md bg-[var(--color-bg-primary)] p-1">
-                <Button
-                  size="small"
-                  type={targetMode === 'agent' ? 'primary' : 'text'}
-                  disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
-                  onClick={() => setTargetMode('agent')}
-                >
-                  单 Agent
-                </Button>
-                <Button
-                  size="small"
-                  type={targetMode === 'team' ? 'primary' : 'text'}
-                  disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
-                  onClick={() => setTargetMode('team')}
-                >
-                  Team
-                </Button>
+                <Tooltip title="单 Agent" placement="top" mode="dark">
+                  <span className="inline-flex">
+                    <button
+                      type="button"
+                      className={`icon-button h-8 w-8 rounded-sm border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
+                        targetMode === 'agent'
+                          ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
+                          : 'border-transparent bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
+                      }`}
+                      disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
+                      onClick={() => setTargetMode('agent')}
+                      aria-label="单 Agent"
+                      aria-pressed={targetMode === 'agent'}
+                    >
+                      <SparkReinforcementLearningLine size={16} />
+                    </button>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Team" placement="top" mode="dark">
+                  <span className="inline-flex">
+                    <button
+                      type="button"
+                      className={`icon-button h-8 w-8 rounded-sm border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
+                        targetMode === 'team'
+                          ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
+                          : 'border-transparent bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
+                      }`}
+                      disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
+                      onClick={() => setTargetMode('team')}
+                      aria-label="Team"
+                      aria-pressed={targetMode === 'team'}
+                    >
+                      <SparkRenyizhuanrenyiAnyToanyLine size={16} />
+                    </button>
+                  </span>
+                </Tooltip>
               </div>
               {targetMode === 'agent' ? (
                 <Select
@@ -1105,7 +946,7 @@ export function ChatPage() {
                   options={agentOptions}
                   loading={agentsLoading}
                   disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
-                  style={{ width: 260 }}
+                  style={{ width: 160 }}
                 />
               ) : (
                 <Select
@@ -1115,37 +956,55 @@ export function ChatPage() {
                   loading={teamsLoading}
                   disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
                   placeholder="选择 Team"
-                  style={{ width: 260 }}
+                  style={{ width: 160 }}
                 />
               )}
-              <Button
-                type={deepThinking ? 'primary' : 'default'}
-                disabled={state.isStreaming}
-                onClick={() => setDeepThinking((value) => !value)}
-              >
-                深度思考
-              </Button>
               <div className="ml-auto flex items-center gap-2">
-                <button
-                  type="button"
-                  className="icon-button h-8 w-8 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-                  onClick={() => imageInputRef.current?.click()}
-                  disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection) || imageAttachments.length >= 4}
-                  aria-label="上传图片"
-                  title="上传图片"
-                >
-                  <ImagePlus size={16} />
-                </button>
+                <Tooltip title={deepThinking ? '深度思考已开启' : '开启深度思考'} placement="top" mode="dark">
+                  <span className="inline-flex">
+                    <button
+                      type="button"
+                      className={`icon-button h-8 w-8 rounded-md border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
+                        deepThinking
+                          ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
+                          : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
+                      }`}
+                      onClick={() => setDeepThinking((value) => !value)}
+                      disabled={state.isStreaming}
+                      aria-label={deepThinking ? '关闭深度思考' : '开启深度思考'}
+                      aria-pressed={deepThinking}
+                    >
+                      <SparkDeepThinkLine size={16} />
+                    </button>
+                  </span>
+                </Tooltip>
                 {state.isStreaming ? (
-                  <Button danger onClick={abort}>
-                    <Square size={16} />
-                    停止
-                  </Button>
+                  <Tooltip title="停止回复" placement="top" mode="dark">
+                    <span className="inline-flex">
+                      <button
+                        type="button"
+                        className="icon-button h-8 w-8 rounded-md border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-opacity duration-200 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                        onClick={abort}
+                        aria-label="停止回复"
+                      >
+                        <Square size={16} />
+                      </button>
+                    </span>
+                  </Tooltip>
                 ) : (
-                  <Button type="primary" onClick={handleSend} disabled={selectingTeamWorkers || Boolean(pendingTeamSelection) || (!inputValue.trim() && imageAttachments.length === 0)}>
-                    <Send size={16} />
-                    发送
-                  </Button>
+                  <Tooltip title="发送消息" placement="top" mode="dark">
+                    <span className="inline-flex">
+                      <button
+                        type="button"
+                        className="icon-button h-8 w-8 rounded-md border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-opacity duration-200 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                        onClick={handleSend}
+                        disabled={selectingTeamWorkers || Boolean(pendingTeamSelection) || (!inputValue.trim() && imageAttachments.length === 0)}
+                        aria-label="发送消息"
+                      >
+                        <Send size={16} />
+                      </button>
+                    </span>
+                  </Tooltip>
                 )}
               </div>
             </div>

@@ -13,8 +13,8 @@ from src.server.routes.chat.plan_mode.policy import is_plan_mode_tool_allowed
 DENY_MESSAGE = (
     "Blocked: you are in PLAN mode (read-only). You may investigate and run "
     "read-only tools, record your plan with plan_write, and call plan_exit "
-    "when ready to request approval. Do not modify files or run mutating "
-    "commands until the plan is approved."
+    "when ready to return the plan. Do not modify files or run mutating "
+    "commands while PLAN mode is active."
 )
 
 PLAN_BANNER_TEMPLATE = """
@@ -24,8 +24,10 @@ PLAN MODE is active (read-only). Plan file: {plan_file}
 Investigate the problem and draft a concrete plan, but do NOT modify files,
 run mutating commands, or otherwise change state. Record the plan with
 plan_write. After writing the plan, use todo_write to create a structured
-task list so the user and BUILD mode agent can track progress step by step.
-When the plan is complete, call plan_exit to ask the user for approval.
+task list so the user can review the intended execution steps.
+When the plan is complete, call plan_exit to return the plan as the final
+answer for this run. The user will decide whether to modify or execute the
+plan in a later message.
 If you lack required information, ask one specific clarifying question
 instead of inventing details.
 When the user or context gives an exact relative path, call Read on that path
@@ -34,37 +36,9 @@ discovery; prefer scoped Grep/Glob inside the smallest known directory.
 </system-reminder>
 """
 
-BUILD_MODE_HINT_TEMPLATE = """
-
-<system-reminder>
-BUILD mode is active. The approved plan exists at {plan_file}. Read or use it
-as the execution guide, then execute the task step by step until complete.
-Do not stop after merely producing the plan.
-
-You have three structured task-progress tools available:
-- todo_write — Create or replace the structured task list for the active plan.
-  Use this in the PLAN phase to write steps. In BUILD mode the steps are
-  typically already written; use it only if you need to adjust the task list.
-- task_list — List the structured tasks for the current plan. Call this before
-  executing to see what tasks are defined and their current status.
-- task_output — Update one structured plan task with status, evidence, and
-  result. Call this after each meaningful step so the user can track progress
-  in the UI. Do not skip task_output calls; each completed step must be reported.
-
-When a plan step names an exact relative path, call Read/Edit on that path
-directly instead of searching the entire project with broad Glob patterns.
-After all plan steps are complete and before writing the user-facing result,
-call FinalAnswerStart exactly once, then continue with the final answer as
-normal assistant text.
-
-Approved plan:
-{markdown}
-</system-reminder>
-"""
-
 
 class PlanModeMiddleware(MiddlewareBase):
-    """通过 AgentScope hooks 实现 Plan/Build 动态模式。"""
+    """通过 AgentScope hooks 实现 Plan Mode 只读规划。"""
 
     def __init__(self, manager: PlanModeManager) -> None:
         self.manager = manager
@@ -76,11 +50,6 @@ class PlanModeMiddleware(MiddlewareBase):
         if self.manager.context.plan_active:
             return base + PLAN_BANNER_TEMPLATE.format(
                 plan_file=self.manager.plan_file_path(),
-            )
-        if self.manager.context.current_plan_file and self.manager.context.approved:
-            return base + BUILD_MODE_HINT_TEMPLATE.format(
-                plan_file=self.manager.context.current_plan_file,
-                markdown=self.manager.context.markdown,
             )
         return base
 

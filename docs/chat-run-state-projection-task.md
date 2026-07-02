@@ -42,7 +42,7 @@
 - 前端只订阅 RunState update，不再直接处理原始 AgentScope 事件作为 Chat 主状态。
 - Plan Dock 从 RunState `plans` 读取 live 状态；历史消息继续兼容旧 `runtimeEvents`。
 - Team activity 从 RunState `teamActivities` 读取 live 状态；旧 `TEAM_ACTIVITY` 原始事件只进入后端投影和 Trace。
-- Skill、模型调用、clarification 也进入 RunState 字段：`skillCalls`、`modelName`、`modelCaches`、`tokenUsage`、`approvals`。
+- Skill、模型调用、clarification 也进入 RunState 字段：`skillCalls`、`modelName`、`tokenUsage`、`approvals`。
 - 原始事件只进入 Trace 和调试页。
 
 ## 验收标准

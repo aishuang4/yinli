@@ -38,9 +38,13 @@ from src.server.routes.chat.background_runs import (
     mark_chat_background_run_resuming,
     relay_chat_background_run_events,
 )
+from src.server.routes.chat.completion import max_react_iterations_error, missing_final_answer_error
 from src.server.routes.chat.leader_stream import (
     LeaderStreamState,
+    _PLAN_FINAL_ANSWER_CHUNK_DELAY_SECONDS,
+    _iter_plan_final_answer_deltas,
     _is_final_answer_tool_event,
+    _plan_final_answer_from_sse,
     _plan_runtime_event_from_tool_result,
     stream_leader_agent_reply,
 )
@@ -147,7 +151,6 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
             return
 
         assistant_text = interaction.assistant_text
-        assistant_reasoning_text = ""
         assistant_thinking = ""
         assistant_error: str | None = None
         assistant_model_caches: list[ChatModelCacheRun] = []
@@ -604,7 +607,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     team_activities=team_activities,
                 ):
                     yield leader_event
-                if leader_stream_state.stopped:
+                if leader_stream_state.stopped and leader_stream_state.stop_reason != "plan_finalized":
                     _clear_pending_interaction(interaction.id)
                     return
                 assistant_text = leader_stream_state.assistant_text
@@ -612,6 +615,59 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 assistant_tool_calls = leader_stream_state.assistant_tool_calls
                 assistant_model_caches = leader_stream_state.assistant_model_caches
                 runtime_events = leader_stream_state.runtime_events
+                if leader_stream_state.exceeded_max_iters or not assistant_text.strip():
+                    assistant_error = (
+                        max_react_iterations_error()
+                        if leader_stream_state.exceeded_max_iters
+                        else missing_final_answer_error()
+                    )
+                    failed_skill_runs = _set_skill_run_status(skill_runs, "failed")
+                    _mark_persistent_skill_run(
+                        leader_agent_id,
+                        status="failed",
+                        current_step=(
+                            "max_react_iterations"
+                            if leader_stream_state.exceeded_max_iters
+                            else "missing_final_answer"
+                        ),
+                    )
+                    failed_team_activities = _set_team_activity_status(team_activities, "failed")
+                    _append_assistant_message(
+                        session_id=interaction.session_id,
+                        agent_id=leader_agent_id,
+                        agent_name=leader_agent_name,
+                        model_name=interaction.model_name,
+                        content="",
+                        error=assistant_error,
+                        thinking=assistant_thinking,
+                        skill_calls=failed_skill_runs,
+                        tool_calls=assistant_tool_calls,
+                        team_activities=failed_team_activities,
+                        model_caches=assistant_model_caches,
+                        runtime_events=runtime_events,
+                    )
+                    if team_activities:
+                        yield _sse_event("TEAM_ACTIVITY", {
+                            "activities": [item.model_dump(by_alias=True) for item in failed_team_activities],
+                        })
+                    _clear_pending_interaction(interaction.id)
+                    yield runtime_event_sse(
+                        "RUN_FAILED",
+                        session_id=interaction.session_id,
+                        run_id=interaction.run_id,
+                        scope="run",
+                        agent_id=leader_agent_id,
+                        agent_name=leader_agent_name,
+                        status="failed",
+                        reason=(
+                            "max_react_iterations"
+                            if leader_stream_state.exceeded_max_iters
+                            else "missing_final_answer"
+                        ),
+                        payload={"message": assistant_error},
+                    )
+                    yield _sse_event("ERROR", {"message": assistant_error})
+                    return
 
                 completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
                 _mark_persistent_skill_run(
@@ -689,6 +745,26 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
             async for event in agent.reply_stream(resume_event):
                 event_data = event.model_dump(mode="json")
                 event_type = event_data.pop("type", "UNKNOWN")
+                if event_type == "EXCEED_MAX_ITERS":
+                    resume_stream_state.exceeded_max_iters = True
+                    yield runtime_event_sse(
+                        "AGENT_FAILED",
+                        session_id=interaction.session_id,
+                        run_id=interaction.run_id,
+                        scope=interaction.scope,
+                        source="agentscope",
+                        source_event_type=event_type,
+                        agent_id=interaction.agent_id,
+                        agent_name=interaction.agent_name,
+                        team_activity_id=activity.id if activity else None,
+                        status="failed",
+                        reason="max_react_iterations",
+                        payload={
+                            "replyId": str(event_data.get("reply_id") or ""),
+                            "name": str(event_data.get("name") or interaction.agent_name),
+                        },
+                    )
+                    break
                 _attach_provider_cache_usage(event_type, event_data)
                 if event_type == "MODEL_CALL_END":
                     cache_entry = _model_cache_from_event(event_data, interaction.model_name)
@@ -783,6 +859,31 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 )
                 if plan_event:
                     yield plan_event
+                    plan_answer = _plan_final_answer_from_sse(plan_event)
+                    if plan_answer:
+                        resume_stream_state.final_answer_started = True
+                        assistant_text += plan_answer
+                        deltas = _iter_plan_final_answer_deltas(plan_answer)
+                        for index, delta in enumerate(deltas):
+                            yield _sse_event("FINAL_ANSWER_DELTA", {"delta": delta})
+                            yield runtime_event_sse(
+                                "AGENT_FINAL_ANSWER_DELTA",
+                                session_id=interaction.session_id,
+                                run_id=interaction.run_id,
+                                scope=interaction.scope,
+                                source="runtime",
+                                source_event_type="PLAN_FINALIZED",
+                                agent_id=interaction.agent_id,
+                                agent_name=interaction.agent_name,
+                                team_activity_id=activity.id if activity else None,
+                                status="completed",
+                                payload={"delta": delta},
+                            )
+                            if index < len(deltas) - 1:
+                                await asyncio.sleep(_PLAN_FINAL_ANSWER_CHUNK_DELAY_SECONDS)
+                        resume_stream_state.stopped = True
+                        resume_stream_state.stop_reason = "plan_finalized"
+                        break
                 _record_tool_execution_artifacts(
                     session_id=interaction.session_id,
                     event_type=event_type,
@@ -864,8 +965,6 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     delta = str(event_data.get("delta", ""))
                     if resume_stream_state.final_answer_started:
                         assistant_text += delta
-                    else:
-                        assistant_reasoning_text += delta
                     if _should_wrap_resume_text_as_final(
                         event_type,
                         interaction.scope,
@@ -874,29 +973,6 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         yield _sse_event("FINAL_ANSWER_DELTA", {"delta": delta})
                 elif event_type == "THINKING_BLOCK_DELTA":
                     assistant_thinking += str(event_data.get("delta", ""))
-
-                if (
-                    event_type == "REPLY_END" and
-                    not resume_stream_state.final_answer_started and
-                    assistant_reasoning_text.strip()
-                ):
-                    assistant_text = assistant_reasoning_text
-                    yield runtime_event_sse(
-                        "AGENT_FINAL_ANSWER_DELTA",
-                        session_id=interaction.session_id,
-                        run_id=interaction.run_id,
-                        scope=interaction.scope,
-                        source="runtime",
-                        source_event_type="TEXT_BLOCK_DELTA",
-                        agent_id=interaction.agent_id,
-                        agent_name=interaction.agent_name,
-                        team_activity_id=activity.id if activity else None,
-                        status="running",
-                        reason="missing_final_answer_marker_fallback",
-                        payload={"delta": assistant_reasoning_text},
-                    )
-                    if _is_final_answer_text_scope(interaction.scope):
-                        yield _sse_event("FINAL_ANSWER_DELTA", {"delta": assistant_reasoning_text})
 
                 if event_type == "REPLY_END" and skill_runs:
                     completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
@@ -918,6 +994,60 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
 
                 if _should_emit_raw_resume_event(event_type, interaction.scope):
                     yield _sse_event(event_type, event_data)
+
+            if resume_stream_state.exceeded_max_iters or not assistant_text.strip():
+                assistant_error = (
+                    max_react_iterations_error()
+                    if resume_stream_state.exceeded_max_iters
+                    else missing_final_answer_error()
+                )
+                failed_skill_runs = _set_skill_run_status(skill_runs, "failed")
+                _mark_persistent_skill_run(
+                    interaction.agent_id,
+                    status="failed",
+                    current_step=(
+                        "max_react_iterations"
+                        if resume_stream_state.exceeded_max_iters
+                        else "missing_final_answer"
+                    ),
+                )
+                failed_team_activities = _set_team_activity_status(team_activities, "failed")
+                _append_assistant_message(
+                    session_id=interaction.session_id,
+                    agent_id=interaction.agent_id,
+                    agent_name=interaction.agent_name,
+                    model_name=interaction.model_name,
+                    content="",
+                    error=assistant_error,
+                    thinking=assistant_thinking,
+                    skill_calls=failed_skill_runs,
+                    tool_calls=assistant_tool_calls,
+                    team_activities=failed_team_activities,
+                    model_caches=assistant_model_caches,
+                    runtime_events=runtime_events,
+                )
+                if team_activities:
+                    yield _sse_event("TEAM_ACTIVITY", {
+                        "activities": [item.model_dump(by_alias=True) for item in failed_team_activities],
+                    })
+                _clear_pending_interaction(interaction.id)
+                yield runtime_event_sse(
+                    "RUN_FAILED",
+                    session_id=interaction.session_id,
+                    run_id=interaction.run_id,
+                    scope="run",
+                    agent_id=interaction.agent_id,
+                    agent_name=interaction.agent_name,
+                    status="failed",
+                    reason=(
+                        "max_react_iterations"
+                        if resume_stream_state.exceeded_max_iters
+                        else "missing_final_answer"
+                    ),
+                    payload={"message": assistant_error},
+                )
+                yield _sse_event("ERROR", {"message": assistant_error})
+                return
 
             completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
             _mark_persistent_skill_run(

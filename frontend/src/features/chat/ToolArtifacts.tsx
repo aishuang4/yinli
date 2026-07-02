@@ -1,8 +1,8 @@
 import { useCallback, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Copy, Download, FileText, Loader2, Wrench, XCircle } from 'lucide-react';
-import type { TeamActivityInfo, ToolCallInfo } from '../../hooks/useEventStream';
-import { normalizeToolDisplayName } from './formatters';
+import type { ToolCallInfo } from '../../hooks/useEventStream';
 import { copyTextToClipboard } from './chatUiUtils';
+import type { GeneratedFileInfo } from './generatedFiles';
 
 /**
  * ToolCallBlock — 工具调用展示组件
@@ -10,57 +10,6 @@ import { copyTextToClipboard } from './chatUiUtils';
  * 显示工具名称、参数和执行结果。
  * 可展开/折叠查看详情。
  */
-export type GeneratedFileInfo = {
-  path: string;
-  name: string;
-  extension: string;
-};
-
-function getGeneratedFileInfo(toolCall: ToolCallInfo): GeneratedFileInfo | null {
-  const toolName = normalizeToolDisplayName(toolCall.name).toLowerCase();
-  if ((toolName !== 'write' && toolName !== 'edit') || toolCall.status !== 'completed') {
-    return null;
-  }
-  const args = parseToolCallArgs(toolCall.args);
-  const filePath = String(args.file_path || args.path || '').trim();
-  if (!filePath) {
-    return null;
-  }
-  const name = filePath.split(/[\\/]/).filter(Boolean).pop() || 'generated-file';
-  const extension = name.includes('.') ? name.split('.').pop()?.toUpperCase() || 'FILE' : 'FILE';
-  return { path: filePath, name, extension };
-}
-
-export function collectGeneratedFiles(toolCalls: ToolCallInfo[] = [], teamActivities: TeamActivityInfo[] = []): GeneratedFileInfo[] {
-  const files: GeneratedFileInfo[] = [];
-  const seen = new Set<string>();
-  const addFile = (toolCall: ToolCallInfo) => {
-    const file = getGeneratedFileInfo(toolCall);
-    if (!file || seen.has(file.path)) return;
-    seen.add(file.path);
-    files.push(file);
-  };
-
-  toolCalls.forEach(addFile);
-  teamActivities.forEach((activity) => {
-    (activity.toolCalls || []).forEach(addFile);
-  });
-  return files;
-}
-
-function parseToolCallArgs(raw: string): Record<string, unknown> {
-  const value = raw.trim();
-  if (!value) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
-  } catch {
-    return {};
-  }
-}
-
 export function GeneratedFilesBlock({ files }: { files: GeneratedFileInfo[] }) {
   if (files.length === 0) return null;
 

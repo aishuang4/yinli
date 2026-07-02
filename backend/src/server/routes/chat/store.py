@@ -115,6 +115,7 @@ def _append_assistant_message(
     model_caches: list[ChatModelCacheRun] | None = None,
     runtime_events: list[dict] | None = None,
     plan_runs: list[ChatPlanRun] | None = None,
+    display_snapshot: dict | None = None,
     clarification_requests: list[dict] | None = None,
     clarification_resolved: bool = False,
 ) -> None:
@@ -139,6 +140,7 @@ def _append_assistant_message(
         model_caches=model_caches or [],
         runtime_events=runtime_events or [],
         plan_runs=plan_runs or [],
+        display_snapshot=display_snapshot or {"version": 2, "blocks": []},
         clarification_requests=clarification_requests or [],
         clarification_resolved=clarification_resolved,
         created_at=now,
@@ -150,6 +152,27 @@ def _append_assistant_message(
         existing.message_count = len(messages)
 
     _save_store(store)
+
+
+def _update_latest_assistant_display_snapshot(
+    *,
+    session_id: str,
+    display_snapshot: dict,
+    min_created_at: str = "",
+) -> None:
+    """把当前 RunState 展示快照写回最近一条 Assistant 消息。"""
+
+    store = _load_store()
+    messages = store.messages.get(session_id) or []
+    for message in reversed(messages):
+        if message.role != "assistant":
+            continue
+        if min_created_at and message.created_at < min_created_at:
+            return
+        message.display_snapshot = display_snapshot
+        _save_store(store)
+        return
+
 
 def _make_session_title(content: str) -> str:
     """用首条用户消息生成会话标题"""

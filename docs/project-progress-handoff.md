@@ -132,7 +132,7 @@ Agent Workstation 是一个基于 AgentScope 2.0 的多 Agent 协作工作台，
   - `/api/chat/runs/{run_id}/state` 返回可恢复的前端状态快照。
   - `/api/chat/runs/{run_id}/state/stream` 首包输出 `RUN_STATE`，后续输出 `RUN_STATE_PATCH`，Chat 主界面用它恢复 running/waiting Run 并接收轻量增量。
   - 前端 live handler 只处理 `RUN_STATE` / `RUN_STATE_PATCH`、错误和取消事件；原始 Runtime/SSE 事件只进入后端投影、Trace 或调试入口。
-  - Plan Dock 优先读取 RunState `plans`，Team activity 优先读取 RunState `teamActivities`，Skill、模型用量和 clarification 分别读取 `skillCalls`、`modelName/modelCaches/tokenUsage`、`approvals`；历史消息仍可用旧 `runtimeEvents` 回显。
+  - Plan Dock 优先读取 RunState `plans`，Team activity 优先读取 RunState `teamActivities`，Skill、模型用量和 clarification 分别读取 `skillCalls`、`modelName/tokenUsage`、`approvals`；历史消息仍可用旧 `runtimeEvents` 回显。
   - 原始 `/api/chat/send`、`/api/chat/resume` 与 `/api/chat/runs/{run_id}/stream` 保留为兼容和调试入口。
   - 工具结果在 Chat 主界面只保留摘要，不保留完整 Observation；大体积 Read/Glob/Bash/HTTP/MCP 输出后续通过 Trace 或 Artifact 按需查看。
   - 更新于 2026-06-30：RunState `waiting` 状态统一收口。`CLARIFICATION_REQUIRED`、`HITL_REQUIRED`、`PLAN_WAITING_APPROVAL` 进入 waiting 后，`state/stream` 会先发送可恢复快照/patch，再结束连接，避免前端长时间保持 streaming。`approvals[]` 新增稳定 `kind` 字段，clarification 的 `kind/type` 均固定为 `clarification`，不会被问题或原始 payload 的 `type` 覆盖。

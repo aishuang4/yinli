@@ -17,6 +17,8 @@ from src.server.routes.chat.completion import (
     emit_failed_startup_run,
     finalize_failed_leader_run,
     finalize_successful_leader_run,
+    max_react_iterations_error,
+    missing_final_answer_error,
 )
 from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
 from src.server.routes.chat.models import ChatMessage, ChatModelCacheRun
@@ -35,7 +37,6 @@ from src.server.routes.chat.runtime_builder import (
     create_main_agent_from_spec,
 )
 from src.server.routes.chat.trace_recorder import _make_fallback_trace_recorder
-from src.storage.database import get_plan_record
 
 
 def _build_plan_mode_runtime_parts(
@@ -53,11 +54,6 @@ def _build_plan_mode_runtime_parts(
         persist=ctx.persist_run,
     )
     runtime_features_cache_key = "plan-mode-v1"
-    if run_data.approved_plan_id:
-        plan = get_plan_record(run_data.approved_plan_id)
-        if plan and plan.get("status") == "approved":
-            manager.load_approved_plan(plan)
-            runtime_features_cache_key = f"plan-mode-v1:build-{run_data.approved_plan_id}"
     tools = build_plan_mode_tools(manager)
     middlewares = [PlanModeMiddleware(manager)]
     return manager, runtime_features_cache_key, tools, middlewares
@@ -180,7 +176,39 @@ async def execute_react_runtime(
         assistant_tool_calls = leader_stream_state.assistant_tool_calls
         assistant_model_caches = leader_stream_state.assistant_model_caches
         runtime_events = leader_stream_state.runtime_events
-        if leader_stream_state.stopped:
+        if leader_stream_state.stopped and leader_stream_state.stop_reason != "plan_finalized":
+            return
+        if leader_stream_state.exceeded_max_iters:
+            async for completion_event in finalize_failed_leader_run(
+                session_id=ctx.session_id,
+                persist=ctx.persist_run,
+                agent_id=ctx.agent_id,
+                agent_name=ctx.agent_name,
+                model_name=ctx.model_name,
+                assistant_text="",
+                assistant_error=max_react_iterations_error(),
+                assistant_model_caches=assistant_model_caches,
+                skill_runs=ctx.skill_runs,
+                team_activities=ctx.team_activities,
+                sandbox=run_data.sandbox,
+            ):
+                yield completion_event
+            return
+        if not assistant_text.strip():
+            async for completion_event in finalize_failed_leader_run(
+                session_id=ctx.session_id,
+                persist=ctx.persist_run,
+                agent_id=ctx.agent_id,
+                agent_name=ctx.agent_name,
+                model_name=ctx.model_name,
+                assistant_text="",
+                assistant_error=missing_final_answer_error(),
+                assistant_model_caches=assistant_model_caches,
+                skill_runs=ctx.skill_runs,
+                team_activities=ctx.team_activities,
+                sandbox=run_data.sandbox,
+            ):
+                yield completion_event
             return
         async for completion_event in finalize_successful_leader_run(
             session_id=ctx.session_id,
@@ -202,7 +230,6 @@ async def execute_react_runtime(
             sandbox=run_data.sandbox,
         ):
             yield completion_event
-
     except Exception as exc:
         assistant_error = f"Agent 执行异常: {exc}"
         async for completion_event in finalize_failed_leader_run(

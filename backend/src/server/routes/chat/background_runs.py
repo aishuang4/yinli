@@ -14,9 +14,15 @@ from datetime import datetime, timedelta, timezone
 
 from src.server.routes.chat.helpers import _sse_event
 from src.server.routes.chat.event_types import SSE_EVENT_RUNTIME
-from src.server.routes.chat.event_hub import initial_run_state, normalize_run_state, project_event
+from src.server.routes.chat.event_hub import (
+    consume_run_state_display_events,
+    initial_run_state,
+    normalize_run_state,
+    project_event,
+    refresh_run_state_display_snapshot,
+)
 from src.server.routes.chat.run_state_schema import dump_run_state, dump_run_state_patch
-from src.server.routes.chat.store import _append_assistant_message
+from src.server.routes.chat.store import _append_assistant_message, _update_latest_assistant_display_snapshot
 from src.storage.database import (
     append_chat_run_event,
     get_chat_run_state,
@@ -40,7 +46,6 @@ RUNTIME_WAITING_TYPES = {
     "TEAM_WORKER_WAITING_HUMAN",
     "CLARIFICATION_WAITING",
     "HITL_REQUIRED",
-    "PLAN_WAITING_APPROVAL",
 }
 RUNTIME_RUNNING_TYPES = {
     "RUN_STARTED",
@@ -55,6 +60,13 @@ RUNTIME_TERMINAL_STATUS = {
     "RUN_COMPLETED": "completed",
     "RUN_FAILED": "failed",
     "RUN_CANCELLED": "cancelled",
+}
+RUN_STATE_METADATA_PATCH_EVENTS = {
+    "RUN",
+    "TEAM_ACTIVITY",
+    "MODEL_CALL_START",
+    "MODEL_CALL_END",
+    "RUN_CANCELLED",
 }
 ACTIVE_RUN_STATUSES = {"running", "waiting", "cancelling"}
 TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
@@ -218,6 +230,7 @@ async def mark_chat_background_run_resuming(
                 else:
                     approvals.append(item)
             state["approvals"] = approvals
+        refresh_run_state_display_snapshot(state)
         if run.persisted:
             run.state = upsert_chat_run_state(run.id, state)
         else:
@@ -236,6 +249,20 @@ async def mark_chat_background_run_resuming(
         }
         if interaction_id:
             patch["resolvedApprovalId"] = interaction_id
+            patch["displayEvent"] = {
+                "id": f"{run.id}-{run.state.get('eventCount') or run.event_count}-feedback-resolved-{interaction_id}",
+                "runId": run.id,
+                "sessionId": run.session_id,
+                "seq": int(run.state.get("eventCount") or run.event_count or 0),
+                "createdAt": now,
+                "scope": "single_agent",
+                "block": "feedback",
+                "event": "feedback.resolved",
+                "op": "remove",
+                "targetId": interaction_id,
+                "status": "completed",
+                "data": {},
+            }
         patch_event = _sse_event("RUN_STATE_PATCH", dump_run_state_patch(patch))
         queues = list(run.state_subscribers)
 
@@ -442,7 +469,7 @@ async def _consume_chat_events(run: ChatBackgroundRun, factory: EventStreamFacto
     try:
         async for event in factory():
             await _broadcast(run, event)
-        if run.status != "waiting":
+        if run.status not in TERMINAL_RUN_STATUSES and run.status != "waiting":
             run.status = "completed"
             update_chat_run_status(run.id, run.status, run.completed_at)
     except asyncio.CancelledError:
@@ -496,15 +523,26 @@ async def _broadcast(run: ChatBackgroundRun, event: str) -> None:
     run.events.append(event)
     if len(run.events) > MAX_EVENTS_PER_RUN:
         run.events = run.events[-MAX_EVENTS_PER_RUN:]
+    next_state = project_event(run.state, event_type, event_data, run)
+    display_events = consume_run_state_display_events(next_state)
     if run.persisted:
         append_chat_run_event(run.id, event)
-        run.state = upsert_chat_run_state(run.id, project_event(run.state, event_type, event_data, run))
+        run.state = upsert_chat_run_state(run.id, next_state)
     else:
-        run.state = project_event(run.state, event_type, event_data, run)
-    state_patch = _run_state_patch_sse(run, event_type, event_data)
-    for queue in list(run.state_subscribers):
-        await queue.put(state_patch)
-    if _run_state_patch_should_close(state_patch):
+        run.state = next_state
+    _persist_latest_assistant_display_snapshot(run, event_type)
+    state_patches = [
+        _run_state_patch_sse(run, event_type, event_data, display_event=display_event)
+        for display_event in display_events
+    ]
+    if not state_patches and _should_emit_run_state_metadata_patch(event_type, event_data):
+        state_patches = [_run_state_patch_sse(run, event_type, event_data)]
+    should_close_state_stream = False
+    for state_patch in state_patches:
+        for queue in list(run.state_subscribers):
+            await queue.put(state_patch)
+        should_close_state_stream = should_close_state_stream or _run_state_patch_should_close(state_patch)
+    if should_close_state_stream:
         for queue in list(run.state_subscribers):
             await queue.put(None)
     for queue in list(run.subscribers):
@@ -568,6 +606,21 @@ def _append_cancelled_assistant_message(run: ChatBackgroundRun) -> None:
     )
 
 
+def _persist_latest_assistant_display_snapshot(run: ChatBackgroundRun, event_type: str) -> None:
+    """在 RunState 到达可回放节点后，把展示快照写回本轮 Assistant 消息。"""
+
+    if event_type != "CLARIFICATION_REQUIRED" and run.status not in TERMINAL_RUN_STATUSES:
+        return
+    snapshot = normalize_run_state(run.state).get("displaySnapshot")
+    if not isinstance(snapshot, dict):
+        return
+    _update_latest_assistant_display_snapshot(
+        session_id=run.session_id,
+        display_snapshot=snapshot,
+        min_created_at=run.created_at,
+    )
+
+
 async def _close_subscribers(run: ChatBackgroundRun) -> None:
     for queue in list(run.subscribers):
         await queue.put(None)
@@ -590,7 +643,11 @@ def _run_state_patch_should_close(patch_event: str) -> bool:
         return True
     if status != "waiting":
         return False
-    return bool(patch.get("approval") or patch.get("plans"))
+    display_event = patch.get("displayEvent") if isinstance(patch.get("displayEvent"), dict) else {}
+    return (
+        display_event.get("block") == "feedback"
+        or display_event.get("block") == "plan" and display_event.get("status") == "waiting"
+    )
 
 
 def _run_state_has_actionable_waiting_state(state: dict) -> bool:
@@ -602,7 +659,16 @@ def _run_state_has_actionable_waiting_state(state: dict) -> bool:
     if any(isinstance(item, dict) and item.get("status") == "waiting" for item in approvals):
         return True
     plans = state.get("plans") if isinstance(state.get("plans"), list) else []
-    return any(isinstance(item, dict) and item.get("status") == "waiting" for item in plans)
+    if any(isinstance(item, dict) and item.get("status") == "waiting" for item in plans):
+        return True
+    snapshot = state.get("displaySnapshot") if isinstance(state.get("displaySnapshot"), dict) else {}
+    blocks = snapshot.get("blocks") if isinstance(snapshot.get("blocks"), list) else []
+    return any(
+        isinstance(block, dict)
+        and block.get("status") == "waiting"
+        and block.get("block") in {"feedback", "plan"}
+        for block in blocks
+    )
 
 
 def _prune_runs_locked() -> None:
@@ -949,12 +1015,18 @@ def _run_state_sse(run: ChatBackgroundRun) -> str:
     return _sse_event("RUN_STATE", dump_run_state(normalize_run_state(state)))
 
 
-def _run_state_patch_sse(run: ChatBackgroundRun, event_type: str, data: dict) -> str:
+def _run_state_patch_sse(
+    run: ChatBackgroundRun,
+    event_type: str,
+    data: dict,
+    *,
+    display_event: dict | None = None,
+) -> str:
     """把单次事件转换为轻量 RunState patch。"""
 
     state = run.state or initial_run_state(run)
     patch: dict[str, object] = {
-        "kind": _run_state_patch_kind(event_type, data),
+        "kind": "display_event" if display_event else _run_state_patch_kind(event_type, data),
         "runId": run.id,
         "sessionId": run.session_id,
         "status": state.get("status") or run.status,
@@ -964,99 +1036,65 @@ def _run_state_patch_sse(run: ChatBackgroundRun, event_type: str, data: dict) ->
         "lastEventType": event_type,
         "eventCount": state.get("eventCount") or run.event_count,
     }
-    if event_type == "REASONING_DELTA":
-        patch["reasoningDelta"] = str(data.get("delta") or "")
-    elif event_type == "FINAL_ANSWER_DELTA":
-        patch["finalAnswerDelta"] = str(data.get("delta") or "")
-    elif event_type == "TEXT_BLOCK_DELTA":
-        patch["reasoningDelta"] = str(data.get("delta") or "")
-    elif event_type == "THINKING_BLOCK_DELTA":
-        patch["thinkingDelta"] = str(data.get("delta") or "")
-    elif event_type in {
-        "TOOL_CALL_START",
-        "TOOL_CALL_DELTA",
-        "TOOL_CALL_END",
-        "TOOL_RESULT_TEXT_DELTA",
-        "TOOL_RESULT_END",
-    }:
-        tool_id = str(data.get("tool_call_id") or data.get("toolCallId") or data.get("id") or "")
-        tool = _find_run_state_tool(state, tool_id)
-        if tool:
-            patch["tool"] = tool
-    elif event_type in {"HITL_REQUIRED", "CLARIFICATION_REQUIRED"}:
-        interaction_id = str(data.get("interactionId") or data.get("id") or "")
-        approval = _find_run_state_approval(state, interaction_id)
-        if approval:
-            patch["approval"] = approval
-    elif event_type == "TEAM_ACTIVITY":
+    if display_event:
+        patch["displayEvent"] = display_event
+    if event_type == "TEAM_ACTIVITY":
         patch["teamActivities"] = state.get("teamActivities") or []
-    elif event_type in {"SKILL_CONTEXT", "SKILL_END"}:
-        patch["skillCalls"] = state.get("skillCalls") or []
     elif event_type in {"MODEL_CALL_START", "MODEL_CALL_END"}:
         patch["modelName"] = state.get("modelName") or ""
-        patch["modelCaches"] = state.get("modelCaches") or []
         patch["tokenUsage"] = state.get("tokenUsage")
     elif event_type == SSE_EVENT_RUNTIME:
-        patch["runtimeEvent"] = data
         runtime_type = str(data.get("type") or "")
         payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
         if runtime_type == "HITL_RESOLVED":
             interaction_id = str(payload.get("interactionId") or data.get("interactionId") or "")
             if interaction_id:
                 patch["resolvedApprovalId"] = interaction_id
-        if runtime_type.startswith("PLAN_"):
-            patch["plans"] = state.get("plans") or []
     elif event_type == "ERROR":
         patch["error"] = str(data.get("message") or state.get("error") or "执行失败")
     return _sse_event("RUN_STATE_PATCH", dump_run_state_patch(patch))
 
 
+def _should_emit_run_state_metadata_patch(event_type: str, data: dict) -> bool:
+    """判断没有展示事件时，是否仍需通知前端状态变化。"""
+
+    if event_type in RUN_STATE_METADATA_PATCH_EVENTS:
+        return True
+    if event_type == SSE_EVENT_RUNTIME:
+        return str(data.get("type") or "") == "HITL_RESOLVED"
+    return False
+
+
 def _run_state_patch_kind(event_type: str, data: dict) -> str:
     """把原始事件归类为前端可稳定分支的 patch kind。"""
 
-    if event_type in {"REASONING_DELTA", "TEXT_BLOCK_DELTA"}:
-        return "reasoning_delta"
-    if event_type == "FINAL_ANSWER_DELTA":
-        return "final_answer_delta"
-    if event_type == "THINKING_BLOCK_DELTA":
-        return "thinking_delta"
     if event_type in {
+        "REASONING_DELTA",
+        "TEXT_BLOCK_DELTA",
+        "FINAL_ANSWER_DELTA",
+        "THINKING_BLOCK_DELTA",
         "TOOL_CALL_START",
         "TOOL_CALL_DELTA",
         "TOOL_CALL_END",
         "TOOL_RESULT_TEXT_DELTA",
         "TOOL_RESULT_END",
+        "SKILL_CONTEXT",
+        "SKILL_END",
+        "HITL_REQUIRED",
+        "CLARIFICATION_REQUIRED",
     }:
-        return "tool"
+        return "display_event"
     if event_type == "TEAM_ACTIVITY":
         return "team_activities"
-    if event_type in {"SKILL_CONTEXT", "SKILL_END"}:
-        return "skill_calls"
     if event_type in {"MODEL_CALL_START", "MODEL_CALL_END"}:
         return "model_usage"
-    if event_type in {"HITL_REQUIRED", "CLARIFICATION_REQUIRED"}:
-        return "approval"
     if event_type == SSE_EVENT_RUNTIME:
         runtime_type = str(data.get("type") or "")
         if runtime_type == "HITL_RESOLVED":
             return "approval_resolved"
         if runtime_type.startswith("PLAN_"):
-            return "plans"
-        return "runtime_event"
+            return "display_event"
+        return "snapshot_meta"
     if event_type == "ERROR":
-        return "error"
+        return "display_event"
     return "snapshot_meta"
-
-
-def _find_run_state_tool(state: dict, tool_id: str) -> dict | None:
-    for tool in state.get("tools") or []:
-        if isinstance(tool, dict) and str(tool.get("id") or "") == tool_id:
-            return tool
-    return None
-
-
-def _find_run_state_approval(state: dict, interaction_id: str) -> dict | None:
-    for approval in state.get("approvals") or []:
-        if isinstance(approval, dict) and str(approval.get("interactionId") or "") == interaction_id:
-            return approval
-    return None
