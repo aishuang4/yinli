@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { Accordion } from '@agentscope-ai/chat';
 import { formatProcessDuration } from './chatUiUtils';
-import { ProcessTimeline } from './ProcessTimeline';
+import { AccordionProcessTimeline } from './ProcessTimeline';
 import type { ChatProcessBlock } from './chatDisplayTypes';
 
 export function ProcessDisplayBlock({
@@ -19,6 +19,18 @@ export function ProcessDisplayBlock({
   const processDuration = formatProcessDuration(block.startedAt, block.completedAt, nowMs);
   const detailCount = block.items.length;
   const hasProcessDetails = detailCount > 0;
+  const isTerminalStatus = block.status === 'completed' || block.status === 'failed' || block.status === 'cancelled';
+  const displayStatus = hasFinalAnswer && !isTerminalStatus ? 'completed' : block.status;
+  const isProcessDone = Boolean(block.completedAt) || hasFinalAnswer || isTerminalStatus;
+  const processTitle = isProcessDone
+    ? '已处理'
+    : <Accordion.SoftLightTitle>处理中</Accordion.SoftLightTitle>;
+  const processMeta = (
+    <span className="flex shrink-0 items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
+      {processDuration && <span>耗时 {processDuration}</span>}
+      <span>{detailCount} 项</span>
+    </span>
+  );
 
   useEffect(() => {
     if (hasProcessDetails && !hasFinalAnswer) {
@@ -33,46 +45,22 @@ export function ProcessDisplayBlock({
   }, [hasFinalAnswer, hasProcessDetails]);
 
   useEffect(() => {
-    if (block.completedAt || !block.startedAt) return;
+    if (isProcessDone || !block.startedAt) return;
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [block.completedAt, block.startedAt]);
+  }, [block.startedAt, isProcessDone]);
 
   if (!hasProcessDetails) return null;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-sm">
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition hover:bg-[var(--color-bg-hover)]"
-      >
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-            {block.completedAt ? '已处理' : '处理中'}
-          </span>
-          {processDuration && (
-            <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
-              耗时 {processDuration}
-            </span>
-          )}
-          <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
-            {detailCount} 项
-          </span>
-        </div>
-        {expanded ? (
-          <ChevronDown size={14} className="shrink-0 text-[var(--color-text-tertiary)]" />
-        ) : (
-          <ChevronRight size={14} className="shrink-0 text-[var(--color-text-tertiary)]" />
-        )}
-      </button>
-
-      {expanded && (
-        <ProcessTimeline
-          items={block.items}
-          autoScroll={block.status === 'running' || block.status === 'pending'}
-        />
-      )}
-    </div>
+    <AccordionProcessTimeline
+      accordionKey={`${block.id}-${hasFinalAnswer ? 'answer' : 'process'}`}
+      items={block.items}
+      autoScroll={!isProcessDone && (block.status === 'running' || block.status === 'pending')}
+      title={processTitle}
+      status={displayStatus}
+      rightChildren={processMeta}
+      defaultOpen={!hasFinalAnswer && expanded}
+    />
   );
 }

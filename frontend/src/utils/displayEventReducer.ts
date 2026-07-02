@@ -212,11 +212,21 @@ function mergeDisplayItem(current: DisplayItem, incoming: DisplayItem, event: Di
     event: incoming.event || current.event,
     status: incoming.status || current.status,
     updatedAt: incoming.updatedAt || current.updatedAt,
-    data: {
-      ...current.data,
-      ...incoming.data,
-    },
+    data: mergeItemData(current.data, incoming.data),
   };
+}
+
+function mergeItemData(current: DisplayData, incoming: DisplayData): DisplayData {
+  const merged = {
+    ...current,
+    ...incoming,
+  };
+  for (const key of ['inputPreview', 'outputPreview', 'error']) {
+    if (String(incoming[key] ?? '') === '' && String(current[key] ?? '') !== '') {
+      merged[key] = current[key];
+    }
+  }
+  return merged;
 }
 
 function applyBlockData(current: DisplayData, event: DisplayEvent): DisplayData {

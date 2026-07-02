@@ -1,17 +1,36 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { BookOpenCheck, Brain, ChevronDown, ChevronRight, Lightbulb, Wrench } from 'lucide-react';
+import { useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { BookOpenCheck, ChevronDown, ChevronRight } from 'lucide-react';
+import { Accordion, type IAccordionProps } from '@agentscope-ai/chat';
 import { Tag } from '@agentscope-ai/design';
+import {
+  SparkBookLine,
+  SparkCheckCircleLine,
+  SparkDeepThinkLine,
+  SparkErrorCircleLine,
+  SparkLoadingLine,
+  SparkTimeLine,
+  SparkToolLine,
+} from '@agentscope-ai/icons';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import type { SkillCallInfo } from '../../hooks/useEventStream';
-import { ToolCallBlock } from './ToolArtifacts';
-import type { ChatProcessItem } from './chatDisplayTypes';
+import type { ChatDisplayStatus, ChatProcessItem } from './chatDisplayTypes';
 
-export function ProcessTimeline({
+export function AccordionProcessTimeline({
   items,
   autoScroll = false,
+  title,
+  status,
+  rightChildren,
+  defaultOpen,
+  accordionKey,
 }: {
   items: ChatProcessItem[];
   autoScroll?: boolean;
+  title: string | ReactElement;
+  status: ChatDisplayStatus;
+  rightChildren?: ReactElement;
+  defaultOpen: boolean;
+  accordionKey: string;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -19,6 +38,9 @@ export function ProcessTimeline({
     () => items.map((item) => `${item.id}:${item.status}:${item.updatedAt}:${processItemContentLength(item)}`).join('|'),
     [items],
   );
+  const steps = useMemo(() => items
+    .map((item, index) => processItemToAccordionStep(item, index === items.length - 1, status))
+    .filter((step): step is IAccordionProps => Boolean(step)), [items, status]);
 
   useLayoutEffect(() => {
     if (!autoScroll || !shouldStickToBottomRef.current) return;
@@ -40,17 +62,25 @@ export function ProcessTimeline({
   };
 
   return (
-    <div
-      ref={scrollRef}
-      onScroll={handleScroll}
-      className="max-h-[400px] overflow-y-auto border-t border-[var(--color-border)] px-3 py-3 pr-2"
+    <Accordion
+      key={accordionKey}
+      title={title}
+      status={toAccordionStatus(status)}
+      defaultOpen={defaultOpen}
+      rightChildren={rightChildren}
     >
-      <div className="space-y-4">
-        {items.map((item) => (
-          <ProcessTimelineItem key={`${item.type}-${item.id}`} item={item} />
-        ))}
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="max-h-[400px] overflow-y-auto px-2 py-2 pr-1"
+      >
+        <div className="space-y-1">
+          {steps.map((step) => (
+            <Accordion key={step.id} {...step} />
+          ))}
+        </div>
       </div>
-    </div>
+    </Accordion>
   );
 }
 
@@ -67,66 +97,214 @@ function processItemContentLength(item: ChatProcessItem): number {
   return 0;
 }
 
-function ProcessTimelineItem({ item }: { item: ChatProcessItem }) {
+function processItemToAccordionStep(
+  item: ChatProcessItem,
+  isLast: boolean,
+  processStatus: ChatDisplayStatus,
+): IAccordionProps | null {
   if (item.type === 'reasoning') {
-    return <TextStep icon={<Brain size={15} />} content={item.content} />;
+    return textStepFromProcessItem(item, 'Reasoning', <SparkTimeLine size={14} />, isLast, processStatus);
   }
   if (item.type === 'thinking') {
-    return <TextStep icon={<Lightbulb size={15} />} content={item.content} />;
+    return textStepFromProcessItem(item, 'Thinking', <SparkDeepThinkLine size={14} />, isLast, processStatus);
   }
   if (item.type === 'tool') {
-    return (
-      <ActionShell icon={<Wrench size={15} />} label={`Action · ${item.toolCall.name}`}>
-        <ToolCallBlock toolCall={item.toolCall} />
-      </ActionShell>
-    );
+    const toolStatus = item.toolCall.status || item.status;
+    if (isPlanExitTool(item.toolCall.name)) {
+      return {
+        id: `${item.type}-${item.id}`,
+        title: 'Plan · 完成计划',
+        status: 'finished',
+        icon: <SparkCheckCircleLine size={14} />,
+        iconLine: !isLast,
+        rightChildren: <StepStatusText status="completed" />,
+      };
+    }
+    return {
+      id: `${item.type}-${item.id}`,
+      title: titleForStatus(`Action · ${item.toolCall.name}`, toolStatus),
+      status: toAccordionStatus(toolStatus),
+      icon: toolIconForStatus(toolStatus),
+      iconLine: !isLast,
+      defaultOpen: item.toolCall.status === 'calling' || item.toolCall.status === 'running' || item.toolCall.status === 'failed',
+      rightChildren: <StepStatusText status={toolStatus} />,
+      children: (
+        <ToolInputOutputPanels input={item.toolCall.args} output={item.toolCall.result} />
+      ),
+    };
   }
   if (item.type === 'skill') {
-    return (
-      <ActionShell icon={<BookOpenCheck size={15} />} label={`Skill · ${item.skillCall.name}`}>
-        <SkillCallBlock skillCall={item.skillCall} />
-      </ActionShell>
-    );
+    const skillStatus = item.skillCall.status || item.status;
+    return {
+      id: `${item.type}-${item.id}`,
+      title: titleForStatus(`Skill · ${item.skillCall.name}`, skillStatus),
+      status: toAccordionStatus(skillStatus),
+      icon: iconForStatus(skillStatus, <SparkBookLine size={14} />),
+      iconLine: !isLast,
+      defaultOpen: item.skillCall.status === 'running' || item.skillCall.status === 'failed',
+      rightChildren: <StepStatusText status={skillStatus} />,
+      children: (
+        <Accordion.BodyContent>
+          <div className="p-2">
+            <SkillCallBlock skillCall={item.skillCall} />
+          </div>
+        </Accordion.BodyContent>
+      ),
+    };
   }
   return null;
 }
 
-function TextStep({ icon, content }: { icon: ReactNode; content: string }) {
-  if (!content.trim()) return null;
+function isPlanExitTool(name: string): boolean {
+  return String(name || '').trim().toLowerCase() === 'plan_exit';
+}
+
+function textStepFromProcessItem(
+  item: Extract<ChatProcessItem, { type: 'reasoning' | 'thinking' }>,
+  title: string,
+  fallbackIcon: ReactElement,
+  isLast: boolean,
+  processStatus: ChatDisplayStatus,
+): IAccordionProps | null {
+  if (!item.content.trim()) return null;
+  const displayStatus = textItemDisplayStatus(item.status, processStatus, isLast);
+  const isGenerating = toAccordionStatus(displayStatus) === 'generating';
+  return {
+    id: `${item.type}-${item.id}`,
+    title: isGenerating ? <Accordion.SoftLightTitle>{title}</Accordion.SoftLightTitle> : title,
+    status: toAccordionStatus(displayStatus),
+    icon: iconForStatus(displayStatus, fallbackIcon),
+    iconLine: !isLast,
+    defaultOpen: true,
+    rightChildren: <StepStatusText status={displayStatus} />,
+    children: (
+      <Accordion.BodyContent>
+        <div className="p-3 text-sm leading-7 text-[var(--color-text-primary)]">
+          <MarkdownContent content={item.content} className="w-full" />
+        </div>
+      </Accordion.BodyContent>
+    ),
+  };
+}
+
+function textItemDisplayStatus(
+  itemStatus: ChatDisplayStatus | string | undefined,
+  processStatus: ChatDisplayStatus | string | undefined,
+  isLast: boolean,
+): ChatDisplayStatus | string {
+  if (processStatus === 'failed' || processStatus === 'cancelled') return processStatus;
+  if (processStatus === 'completed') return 'completed';
+  if (!isLast) return 'completed';
+  return itemStatus || processStatus || 'running';
+}
+
+function toAccordionStatus(status: ChatDisplayStatus | string | undefined): IAccordionProps['status'] {
+  if (status === 'completed') return 'finished';
+  if (status === 'failed') return 'error';
+  if (status === 'cancelled') return 'interrupted';
+  if (status === 'running' || status === 'pending' || status === 'waiting' || status === 'calling') {
+    return 'generating';
+  }
+  return undefined;
+}
+
+function iconForStatus(status: ChatDisplayStatus | string | undefined, fallbackIcon: ReactElement): ReactElement {
+  const accordionStatus = toAccordionStatus(status);
+  if (accordionStatus === 'generating') {
+    return <SparkLoadingLine size={14} spin />;
+  }
+  if (accordionStatus === 'finished') {
+    return <SparkCheckCircleLine size={14} />;
+  }
+  if (accordionStatus === 'error') {
+    return <SparkErrorCircleLine size={14} className="text-[var(--color-error)]" />;
+  }
+  return fallbackIcon;
+}
+
+function toolIconForStatus(status: ChatDisplayStatus | string | undefined): ReactElement {
+  const accordionStatus = toAccordionStatus(status);
+  if (accordionStatus === 'generating') {
+    return <SparkLoadingLine size={14} spin />;
+  }
+  if (accordionStatus === 'error') {
+    return <SparkErrorCircleLine size={14} className="text-[var(--color-error)]" />;
+  }
+  return <SparkToolLine size={14} />;
+}
+
+function titleForStatus(title: string, status: ChatDisplayStatus | string | undefined): string | ReactElement {
+  if (toAccordionStatus(status) !== 'error') return title;
   return (
-    <div className="flex items-start gap-3">
-      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--color-text-tertiary)]">
-        {icon}
-      </div>
-      <div className="flex min-h-6 min-w-0 flex-1 items-center text-sm leading-7 text-[var(--color-text-primary)]">
-        <MarkdownContent content={content} className="w-full" />
-      </div>
+    <span className="text-[var(--color-error)]">
+      {title}
+    </span>
+  );
+}
+
+function StepStatusText({ status }: { status: ChatDisplayStatus | string | undefined }) {
+  const accordionStatus = toAccordionStatus(status);
+  const text = accordionStatus === 'generating'
+    ? '进行中'
+    : accordionStatus === 'error'
+      ? '失败'
+      : accordionStatus === 'interrupted'
+        ? '已停止'
+        : accordionStatus === 'finished'
+          ? '完成'
+          : '';
+  if (!text) return null;
+  return (
+    <span className={`text-xs ${accordionStatus === 'error' ? 'text-[var(--color-error)]' : 'text-[var(--color-text-tertiary)]'}`}>
+      {text}
+    </span>
+  );
+}
+
+function ToolInputOutputPanels({ input, output }: { input: string; output: string }) {
+  const hasInput = Boolean(input.trim());
+  const hasOutput = Boolean(output.trim());
+  if (!hasInput && !hasOutput) {
+    return (
+      <Accordion.BodyContent>
+        <div className="p-3 text-xs text-[var(--color-text-tertiary)]">
+          暂无工具输入或输出
+        </div>
+      </Accordion.BodyContent>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {hasInput && (
+        <Accordion.BodyContent headerLeft="Input">
+          <ToolPreBlock value={input} />
+        </Accordion.BodyContent>
+      )}
+      {hasOutput && (
+        <Accordion.BodyContent headerLeft="Output">
+          <ToolPreBlock value={output} />
+        </Accordion.BodyContent>
+      )}
     </div>
   );
 }
 
-function ActionShell({
-  icon,
-  label,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  children: ReactNode;
-}) {
+function ToolPreBlock({ value }: { value: string }) {
+  const formatted = formatToolTextValue(value);
   return (
-    <div className="flex gap-3">
-      <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-tertiary)]">
-        {icon}
-      </div>
-      <div className="min-w-0 flex-1">
-        <h6 className="mb-1 text-xs font-semibold leading-5 text-[var(--color-text-tertiary)]">
-          {label}
-        </h6>
-        {children}
-      </div>
-    </div>
+    <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words bg-[var(--color-bg-primary)] p-3 font-mono text-xs leading-5 text-[var(--color-text-secondary)]">
+      {formatted}
+    </pre>
   );
+}
+
+function formatToolTextValue(value: string): string {
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2);
+  } catch {
+    return value;
+  }
 }
 
 function SkillCallBlock({ skillCall }: { skillCall: SkillCallInfo }) {
