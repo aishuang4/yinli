@@ -271,7 +271,9 @@ function inferRunStatus(state: StreamState): ChatDisplayStatus {
 function pickDisplayString(data: Record<string, unknown>, keys: string[]): string {
   for (const key of keys) {
     const value = data[key];
-    if (value !== undefined && value !== null) return String(value);
+    if (value === undefined || value === null) continue;
+    const text = String(value);
+    if (text) return text;
   }
   return '';
 }
@@ -300,8 +302,8 @@ function toolCallFromDisplayItem(item: DisplayItem): ToolCallInfo {
     id: item.targetId || item.id || createId(),
     name: normalizeToolDisplayName(pickDisplayString(item.data, ['name', 'toolName', 'rawName']) || 'tool'),
     args: pickDisplayString(item.data, ['inputPreview', 'input', 'args']),
-    result: pickDisplayString(item.data, ['error', 'outputPreview', 'output', 'result']),
-    status: normalizeToolStatus(item.status || item.data.status),
+    result: pickDisplayString(item.data, ['outputPreview', 'output', 'result', 'error']),
+    status: normalizeToolStatus(toolStatusFromDisplayItem(item)),
   };
 }
 
@@ -440,6 +442,12 @@ function normalizeToolDisplayName(name: string): string {
     return parts[0];
   }
   return name;
+}
+
+function toolStatusFromDisplayItem(item: DisplayItem): string {
+  if (item.event === DISPLAY_EVENTS.TOOL_COMPLETED) return 'completed';
+  if (item.event === DISPLAY_EVENTS.TOOL_FAILED) return 'failed';
+  return String(item.status || item.data.status || 'calling');
 }
 
 function normalizeToolStatus(status: unknown): ToolCallInfo['status'] {

@@ -524,7 +524,9 @@ function deriveStateFromDisplaySnapshot(
 function pickDisplayString(data: Record<string, unknown>, keys: string[]): string {
   for (const key of keys) {
     const value = data[key];
-    if (value !== undefined && value !== null) return String(value);
+    if (value === undefined || value === null) continue;
+    const text = String(value);
+    if (text) return text;
   }
   return '';
 }
@@ -534,7 +536,7 @@ function toolCallFromDisplayItem(item: DisplayBlock['items'][number]): ToolCallI
     id: item.targetId || item.id || createId(),
     name: normalizeToolDisplayName(pickDisplayString(item.data, ['name', 'toolName', 'rawName']) || 'tool'),
     args: pickDisplayString(item.data, ['inputPreview', 'input', 'args']),
-    result: pickDisplayString(item.data, ['error', 'outputPreview', 'output', 'result']),
+    result: pickDisplayString(item.data, ['outputPreview', 'output', 'result', 'error']),
     status: normalizeToolStatus(item.status || item.data.status),
   };
 }
