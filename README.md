@@ -2,7 +2,6 @@
 
 > 基于 AgentScope 2.0 + Electron + Spark Design 的开源桌面 Agent 工作台
 
-类似 Codex 的多 Agent 协作工具，支持 MCP 工具集成、Skills 技能加载、三层记忆系统。
 
 ## 快速开始
 
@@ -47,10 +46,6 @@ cd backend && uv sync && cd ..
 | 存储 | SQLite (MVP) + Milvus (预留) |
 | 容器 | AgentScope Workspace (Docker) |
 
-## 需求与设计文档
-
-- [Agent Workstation 设计文档](./docs/agent-workstation-design.md)
-- [Agent Workstation 前端设计文档](./docs/agent-workstation-frontend-design.md)
 
 ## License
 
