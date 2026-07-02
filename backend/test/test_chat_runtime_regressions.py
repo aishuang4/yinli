@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,7 +10,12 @@ from src.server.routes.chat.background_runs import (
     relay_chat_background_run_events,
     start_chat_background_run,
 )
-from src.server.routes.chat.event_hub import initial_run_state, normalize_run_state, project_event
+from src.server.routes.chat.event_hub import (
+    consume_run_state_display_events,
+    initial_run_state,
+    normalize_run_state,
+    project_event,
+)
 from src.server.routes.chat.helpers import _sse_event
 from src.server.routes.chat.hitl import PENDING_AGENTS, PENDING_INTERACTIONS, _build_resume_event, _create_pending_interaction
 from src.server.routes.chat.handlers.resume import (
@@ -34,6 +40,8 @@ from src.server.routes.chat.models import (
 from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
 from src.server.routes.chat.prompts import build_worker_assignment_text
 from src.server.routes.chat.runtime import _permission_mode_for_guardrails
+from src.server.routes.chat.react_runtime import execute_react_runtime
+from src.server.routes.chat.run_context import ChatRunContext
 from src.agents.factory import _safe_workspace_dir
 from src.agents.runtime_types import WORKSPACE_DIR
 from src.storage.database import _normalize_guardrails
@@ -66,6 +74,19 @@ class _FakeAgentScopeEvent:
 
     def model_dump(self, mode: str = "json") -> dict:
         return dict(self.payload)
+
+
+def _sse_payload(event: str) -> dict:
+    _, data = event.split("data: ", 1)
+    return json.loads(data)
+
+
+def _final_answer_deltas(events: list[str]) -> list[str]:
+    return [
+        str(_sse_payload(event).get("delta") or "")
+        for event in events
+        if event.startswith("event: FINAL_ANSWER_DELTA")
+    ]
 
 
 def _projection_run() -> ChatBackgroundRun:
@@ -182,7 +203,36 @@ class _FakeResumeFinalAnswerAgent:
         })
 
 
+class _FakeNoFinalAnswerAgent:
+    async def reply_stream(self, user_msg):
+        yield _FakeAgentScopeEvent({
+            "type": "TEXT_BLOCK_DELTA",
+            "reply_id": "reply-no-final",
+            "delta": "只应该作为过程展示",
+        })
+        yield _FakeAgentScopeEvent({
+            "type": "REPLY_END",
+            "reply_id": "reply-no-final",
+        })
+
+
+class _FakeExceedMaxItersAgent:
+    async def reply_stream(self, user_msg):
+        yield _FakeAgentScopeEvent({
+            "type": "TEXT_BLOCK_DELTA",
+            "reply_id": "reply-max-iters",
+            "delta": "还在继续分析",
+        })
+        yield _FakeAgentScopeEvent({
+            "type": "EXCEED_MAX_ITERS",
+            "reply_id": "reply-max-iters",
+            "name": "Agent",
+        })
+
+
 class _FakePlanExitAgent:
+    plan_markdown = "# 计划\n\n- [ ] 修改文件\n- [ ] 验证前端流式输出\n- [ ] 总结结果"
+
     async def reply_stream(self, user_msg):
         yield _FakeAgentScopeEvent({
             "type": "TOOL_CALL_START",
@@ -200,10 +250,11 @@ class _FakePlanExitAgent:
             "type": "TOOL_RESULT_TEXT_DELTA",
             "reply_id": "reply-1",
             "tool_call_id": "call-plan-exit",
-            "delta": (
-                '{"planId":"plan-1","planFile":".agent-workstation/plans/session-1/plan-1.md",'
-                '"waitingApproval":true,"markdown":"# 计划\\n\\n- [ ] 修改文件"}'
-            ),
+            "delta": json.dumps({
+                "planId": "plan-1",
+                "planFile": ".agent-workstation/plans/session-1/plan-1.md",
+                "markdown": self.plan_markdown,
+            }, ensure_ascii=False),
         })
         yield _FakeAgentScopeEvent({
             "type": "TOOL_RESULT_END",
@@ -214,6 +265,56 @@ class _FakePlanExitAgent:
         yield _FakeAgentScopeEvent({
             "type": "REPLY_END",
             "reply_id": "reply-1",
+        })
+
+
+class _FakeNativePlanFinalizedManager:
+    """模拟 plan_exit 工具刚执行完、manager 先产出 PLAN_FINALIZED 的真实路径。"""
+
+    def __init__(self) -> None:
+        self.drain_count = 0
+
+    def drain_runtime_events(self) -> list[dict]:
+        self.drain_count += 1
+        if self.drain_count != 3:
+            return []
+        return [{
+            "id": "runtime-plan-finalized",
+            "runId": "run-1",
+            "sessionId": "session-1",
+            "type": "PLAN_FINALIZED",
+            "source": "runtime",
+            "sourceEventType": None,
+            "scope": "plan",
+            "agentId": "agent-1",
+            "agentName": "Agent",
+            "teamActivityId": None,
+            "status": "completed",
+            "reason": "Plan finalized as final answer.",
+            "timestamp": "2026-07-01T00:00:00+00:00",
+            "durationMs": None,
+            "payload": {
+                "planId": "plan-1",
+                "planFile": ".agent-workstation/plans/session-1/plan-1.md",
+                "markdown": _FakePlanExitAgent.plan_markdown,
+            },
+        }]
+
+
+class _FakePlanExitThenContinuesAgent(_FakePlanExitAgent):
+    async def reply_stream(self, user_msg):
+        async for event in super().reply_stream(user_msg):
+            yield event
+        yield _FakeAgentScopeEvent({
+            "type": "TEXT_BLOCK_DELTA",
+            "reply_id": "reply-1",
+            "delta": "不应该继续输出",
+        })
+        yield _FakeAgentScopeEvent({
+            "type": "TOOL_CALL_START",
+            "reply_id": "reply-1",
+            "tool_call_id": "call-write-after-plan-exit",
+            "tool_call_name": "Write",
         })
 
 
@@ -372,6 +473,218 @@ def test_run_state_projection_restores_final_answer_and_hitl():
     assert state["approvals"][0]["interactionId"] == "hitl-1"
 
 
+def test_run_state_projection_builds_single_agent_display_snapshot():
+    """RunState 必须投影单 Agent 主展示快照，前端不再扫描 runtimeEvents 拼主界面。"""
+
+    run = _projection_run()
+    state = initial_run_state(run)
+    state = project_event(state, "REASONING_DELTA", {"delta": "先分析"}, run)
+    state = project_event(
+        state,
+        "TOOL_CALL_START",
+        {"tool_call_id": "call-write", "tool_call_name": "Write"},
+        run,
+    )
+    state = project_event(
+        state,
+        "TOOL_CALL_DELTA",
+        {"tool_call_id": "call-write", "delta": '{"file_path":"docs/result.md"}'},
+        run,
+    )
+    state = project_event(
+        state,
+        "TOOL_RESULT_END",
+        {"tool_call_id": "call-write", "state": "success"},
+        run,
+    )
+    state = project_event(state, "FINAL_ANSWER_DELTA", {"delta": "完成"}, run)
+
+    blocks = state["displaySnapshot"]["blocks"]
+    assert [block["block"] for block in blocks] == ["process", "answer", "files"]
+
+    process = blocks[0]
+    assert process["id"] == "process"
+    assert process["items"][0]["event"] == "reasoning.delta"
+    assert process["items"][0]["targetId"].startswith("reasoning-")
+    assert process["items"][0]["data"]["text"] == "先分析"
+    assert process["items"][1]["targetId"] == "call-write"
+
+    final_answer = blocks[1]
+    assert final_answer["id"] == "answer"
+    assert final_answer["data"]["content"] == "完成"
+    assert final_answer["data"]["started"] is True
+
+    generated_files = blocks[2]
+    assert generated_files["data"]["files"] == [
+        {"path": "docs/result.md", "name": "result.md", "extension": "MD"}
+    ]
+
+
+def test_run_state_display_snapshot_keeps_only_current_human_feedback():
+    """feedback 展示块只放当前等待项，不保留已 resolved 的历史交互。"""
+
+    run = _projection_run()
+    state = initial_run_state(run)
+    state = project_event(
+        state,
+        "HITL_REQUIRED",
+        {
+            "interactionId": "hitl-1",
+            "type": "tool_approval",
+            "toolCalls": [{"id": "call-bash", "name": "Bash"}],
+        },
+        run,
+    )
+    state = project_event(
+        state,
+        "RUNTIME_EVENT",
+        {
+            "type": "HITL_RESOLVED",
+            "status": "completed",
+            "payload": {"interactionId": "hitl-1"},
+        },
+        run,
+    )
+    state = project_event(
+        state,
+        "CLARIFICATION_REQUIRED",
+        {
+            "id": "clarify-1",
+            "title": "需要信息",
+            "questions": [{"id": "q1", "type": "text"}],
+        },
+        run,
+    )
+
+    human_feedback = next(block for block in state["displaySnapshot"]["blocks"] if block["block"] == "feedback")
+    assert human_feedback["data"]["approval"]["interactionId"] == "clarify-1"
+    assert human_feedback["status"] == "waiting"
+
+
+def test_run_state_process_timeline_splits_reasoning_around_tools():
+    """reasoning -> tool -> reasoning 必须按发生顺序保留为独立 process items。"""
+
+    run = _projection_run()
+    state = initial_run_state(run)
+
+    state = project_event(state, "REASONING_DELTA", {"delta": "先分析"}, run)
+    first_reasoning_event = consume_run_state_display_events(state)[0]
+    state = project_event(
+        state,
+        "TOOL_CALL_START",
+        {"tool_call_id": "call-read", "tool_call_name": "Read"},
+        run,
+    )
+    consume_run_state_display_events(state)
+    state = project_event(
+        state,
+        "TOOL_CALL_DELTA",
+        {"tool_call_id": "call-read", "delta": '{"file_path":"README.md"}'},
+        run,
+    )
+    consume_run_state_display_events(state)
+    state = project_event(
+        state,
+        "TOOL_RESULT_END",
+        {"tool_call_id": "call-read", "state": "success"},
+        run,
+    )
+    consume_run_state_display_events(state)
+    state = project_event(state, "REASONING_DELTA", {"delta": "再分析"}, run)
+    second_reasoning_event = consume_run_state_display_events(state)[0]
+
+    process = next(block for block in state["displaySnapshot"]["blocks"] if block["block"] == "process")
+
+    assert first_reasoning_event["targetId"] != second_reasoning_event["targetId"]
+    assert [
+        (item["event"], item["targetId"], item["data"].get("text") or item["data"].get("name"))
+        for item in process["items"]
+    ] == [
+        ("reasoning.delta", first_reasoning_event["targetId"], "先分析"),
+        ("tool.completed", "call-read", "Read"),
+        ("reasoning.delta", second_reasoning_event["targetId"], "再分析"),
+    ]
+
+
+def test_completed_background_run_persists_history_display_snapshot(tmp_path, monkeypatch):
+    """Run 完成后，历史 assistant 消息必须保存可直接回放的 displaySnapshot。"""
+
+    from src.server.routes.chat import store as chat_store
+    from src.storage import database
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+
+    run = ChatBackgroundRun(
+        id="run-history-snapshot",
+        session_id="session-history-snapshot",
+        agent_id="agent-1",
+        agent_name="Agent",
+        task_text="测试历史快照",
+        created_at="2026-01-01T00:00:00+00:00",
+        persisted=True,
+    )
+    database.upsert_chat_run({
+        "id": run.id,
+        "sessionId": run.session_id,
+        "agentId": run.agent_id,
+        "agentName": run.agent_name,
+        "task": run.task_text,
+        "mode": run.mode,
+        "status": run.status,
+        "createdAt": run.created_at,
+    })
+    run.state = database.upsert_chat_run_state(run.id, initial_run_state(run))
+
+    chat_store._append_user_message(
+        session_id=run.session_id,
+        agent_id=run.agent_id,
+        agent_name=run.agent_name,
+        team_id=None,
+        team_name=None,
+        model_name="model",
+        content="请测试历史快照",
+        images=[],
+    )
+    asyncio.run(_broadcast(run, _sse_event("REASONING_DELTA", {"delta": "先分析"})))
+    asyncio.run(_broadcast(run, _sse_event(
+        "TOOL_CALL_START",
+        {"tool_call_id": "call-read", "tool_call_name": "Read"},
+    )))
+    asyncio.run(_broadcast(run, _sse_event(
+        "TOOL_RESULT_END",
+        {"tool_call_id": "call-read", "state": "success"},
+    )))
+    asyncio.run(_broadcast(run, _sse_event("FINAL_ANSWER_DELTA", {"delta": "完成"})))
+    chat_store._append_assistant_message(
+        session_id=run.session_id,
+        agent_id=run.agent_id,
+        agent_name=run.agent_name,
+        model_name="model",
+        content="完成",
+        error=None,
+    )
+    asyncio.run(_broadcast(run, runtime_event_sse(
+        "RUN_COMPLETED",
+        run_id=run.id,
+        session_id=run.session_id,
+        scope="run",
+        agent_id=run.agent_id,
+        agent_name=run.agent_name,
+        status="completed",
+        payload={},
+    )))
+
+    store = chat_store._load_store()
+    assistant = [message for message in store.messages[run.session_id] if message.role == "assistant"][-1]
+    blocks = assistant.display_snapshot["blocks"]
+
+    assert [block["block"] for block in blocks] == ["process", "answer"]
+    assert blocks[0]["status"] == "completed"
+    assert [item["event"] for item in blocks[0]["items"]] == ["reasoning.delta", "tool.completed"]
+    assert blocks[1]["data"]["content"] == "完成"
+
+
 def test_run_state_projection_does_not_duplicate_runtime_text_delta():
     """Runtime 文本增量只记录事件，正文累计以稳定文本事件为准。"""
 
@@ -391,6 +704,29 @@ def test_run_state_projection_does_not_duplicate_runtime_text_delta():
 
     assert state["finalAnswer"] == "结果"
     assert state["runtimeEvents"][0]["type"] == "AGENT_FINAL_ANSWER_DELTA"
+
+
+def test_run_state_snapshot_contract_does_not_expose_runtime_events():
+    """RunState 对前端只暴露展示快照，不再携带内部 runtimeEvents。"""
+
+    from src.server.routes.chat.run_state_schema import dump_run_state
+
+    run = _projection_run()
+    state = project_event(
+        initial_run_state(run),
+        "RUNTIME_EVENT",
+        {
+            "type": "AGENT_REASONING_DELTA",
+            "status": "running",
+            "payload": {"delta": "过程"},
+        },
+        run,
+    )
+
+    payload = dump_run_state(state)
+
+    assert "runtimeEvents" not in payload
+    assert state["runtimeEvents"][0]["type"] == "AGENT_REASONING_DELTA"
 
 
 def test_run_state_projection_tracks_team_activity_snapshot():
@@ -496,7 +832,7 @@ def test_run_state_projection_tracks_skill_lifecycle():
 
 
 def test_run_state_projection_tracks_model_usage():
-    """模型调用与 token/cache 用量进入 RunState，前端不再直接消费 MODEL_CALL_*。"""
+    """模型调用与 token 用量进入 RunState，前端不再直接消费 MODEL_CALL_*。"""
 
     run = _projection_run()
     state = project_event(
@@ -520,8 +856,7 @@ def test_run_state_projection_tracks_model_usage():
 
     assert state["modelName"] == "deepseek-chat"
     assert state["tokenUsage"] == {"input": 100, "output": 20}
-    assert state["modelCaches"][0]["cacheInputTokens"] == 40
-    assert state["modelCaches"][0]["cacheCreationInputTokens"] == 10
+    assert "modelCaches" not in normalize_run_state(state)
 
 
 def test_run_state_projection_preserves_clarification_questions():
@@ -642,7 +977,10 @@ def test_subscribe_run_state_stream_emits_snapshot_and_patch_updates():
     assert "event: RUN_STATE" in first
     assert '"finalAnswer": ""' in first
     assert "event: RUN_STATE_PATCH" in second
-    assert '"finalAnswerDelta": "结果"' in second
+    assert '"kind": "display_event"' in second
+    assert '"block": "answer"' in second
+    assert '"event": "answer.delta"' in second
+    assert '"content": "结果"' in second
 
 
 def test_subscribe_run_state_stream_closes_for_waiting_run():
@@ -734,60 +1072,50 @@ def test_subscribe_run_state_stream_closes_after_waiting_patch():
 
 
 def test_run_state_stream_waits_for_actionable_hitl_patch_before_closing():
-    """AGENT_WAITING_HUMAN 只是预告等待，必须等 HITL_REQUIRED 携带 approval 后再收口。"""
+    """AGENT_WAITING_HUMAN 只是内部状态，不再向前端发送 runtime_event patch。"""
 
     async def run_case():
-        from src.server.routes.chat import background_runs
-        from src.server.routes.chat.background_runs import subscribe_chat_run_state
-
         run = ChatBackgroundRun(
             id="run-state-hitl-actionable-1",
             session_id="session-state-hitl-actionable-1",
             state={},
         )
         run.state = initial_run_state(run)
-        async with background_runs._runs_lock:
-            background_runs._runs[run.id] = run
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        run.state_subscribers.add(queue)
 
-        stream = subscribe_chat_run_state(run.id)
+        await _broadcast(run, runtime_event_sse(
+            "AGENT_WAITING_HUMAN",
+            session_id=run.session_id,
+            run_id=run.id,
+            scope="single",
+            status="waiting",
+            payload={"interactionId": "hitl-1"},
+        ))
         try:
-            first = await asyncio.wait_for(stream.__anext__(), timeout=0.1)
-            await _broadcast(run, runtime_event_sse(
-                "AGENT_WAITING_HUMAN",
-                session_id=run.session_id,
-                run_id=run.id,
-                scope="single",
-                status="waiting",
-                payload={"interactionId": "hitl-1"},
-            ))
-            second = await asyncio.wait_for(stream.__anext__(), timeout=0.1)
-            await _broadcast(run, _sse_event("HITL_REQUIRED", {
-                "interactionId": "hitl-1",
-                "type": "REQUIRE_USER_CONFIRM",
-                "sessionId": run.session_id,
-                "agentId": "agent-1",
-                "agentName": "Agent",
-                "toolCalls": [{"id": "call-bash", "name": "Bash"}],
-            }))
-            third = await asyncio.wait_for(stream.__anext__(), timeout=0.1)
-            try:
-                fourth = await asyncio.wait_for(stream.__anext__(), timeout=0.05)
-            except StopAsyncIteration:
-                fourth = ""
-        finally:
-            await stream.aclose()
-            async with background_runs._runs_lock:
-                background_runs._runs.pop(run.id, None)
-        return first, second, third, fourth
+            runtime_patch = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            runtime_patch = ""
 
-    first, second, third, fourth = asyncio.run(run_case())
-    assert "event: RUN_STATE" in first
-    assert "event: RUN_STATE_PATCH" in second
-    assert '"runtimeEvent"' in second
-    assert '"approval"' not in second
-    assert "event: RUN_STATE_PATCH" in third
-    assert '"approval"' in third
-    assert fourth == ""
+        await _broadcast(run, _sse_event("HITL_REQUIRED", {
+            "interactionId": "hitl-1",
+            "type": "REQUIRE_USER_CONFIRM",
+            "sessionId": run.session_id,
+            "agentId": "agent-1",
+            "agentName": "Agent",
+            "toolCalls": [{"id": "call-bash", "name": "Bash"}],
+        }))
+        hitl_patch = await asyncio.wait_for(queue.get(), timeout=0.1)
+        stream_close = await asyncio.wait_for(queue.get(), timeout=0.1)
+        return runtime_patch, hitl_patch, stream_close
+
+    runtime_patch, hitl_patch, stream_close = asyncio.run(run_case())
+    assert runtime_patch == ""
+    assert hitl_patch is not None
+    assert "event: RUN_STATE_PATCH" in hitl_patch
+    assert '"kind": "display_event"' in hitl_patch
+    assert '"approval"' in hitl_patch
+    assert stream_close is None
 
 
 def test_mark_run_resuming_clears_actionable_hitl_before_state_resubscribe():
@@ -858,8 +1186,8 @@ def test_run_state_patch_has_stable_kind_for_tool_plan_hitl_and_final_answer():
     run.state = initial_run_state(run)
 
     cases = [
-        ("FINAL_ANSWER_DELTA", {"delta": "完成"}, "final_answer_delta"),
-        ("TOOL_CALL_START", {"tool_call_id": "call-1", "tool_call_name": "Read"}, "tool"),
+        ("FINAL_ANSWER_DELTA", {"delta": "完成"}, "display_event"),
+        ("TOOL_CALL_START", {"tool_call_id": "call-1", "tool_call_name": "Read"}, "display_event"),
         (
             "HITL_REQUIRED",
             {
@@ -867,27 +1195,63 @@ def test_run_state_patch_has_stable_kind_for_tool_plan_hitl_and_final_answer():
                 "type": "REQUIRE_USER_CONFIRM",
                 "toolCalls": [{"id": "call-bash", "name": "Bash"}],
             },
-            "approval",
+            "display_event",
         ),
         (
             "RUNTIME_EVENT",
             {
-                "type": "PLAN_WAITING_APPROVAL",
-                "status": "waiting",
-                "payload": {"planId": "plan-1", "planFile": ".agent-workstation/plans/s/plan-1.md"},
+                "type": "PLAN_FINALIZED",
+                "status": "completed",
+                "payload": {
+                    "planId": "plan-1",
+                    "planFile": ".agent-workstation/plans/s/plan-1.md",
+                    "markdown": "# 计划",
+                },
             },
-            "plans",
+            "display_event",
         ),
     ]
 
     for event_type, data, expected_kind in cases:
         run.state = project_event(run.state, event_type, data, run)
-        patch = background_runs._run_state_patch_sse(run, event_type, data)
+        display_events = consume_run_state_display_events(run.state)
+        patch = background_runs._run_state_patch_sse(
+            run,
+            event_type,
+            data,
+            display_event=display_events[0] if display_events else None,
+        )
         assert f'"kind": "{expected_kind}"' in patch
 
 
-def test_projector_event_matrix_for_run_state_v1_contract():
-    """Projector 必须把核心事件矩阵稳定投影成 RunState v1。"""
+def test_run_state_patch_sends_single_display_event():
+    """RunState patch 只携带一个 displayEvent，前端用 reducer 聚合。"""
+
+    from src.server.routes.chat import background_runs
+
+    run = _projection_run()
+    run.state = initial_run_state(run)
+    run.state = project_event(run.state, "REASONING_DELTA", {"delta": "分析"}, run)
+    run.state = project_event(run.state, "FINAL_ANSWER_DELTA", {"delta": "结果"}, run)
+    display_events = consume_run_state_display_events(run.state)
+
+    patch = background_runs._run_state_patch_sse(
+        run,
+        "FINAL_ANSWER_DELTA",
+        {"delta": "结果"},
+        display_event=display_events[0],
+    )
+    _, raw_data = patch.split("data: ", 1)
+    data = __import__("json").loads(raw_data)
+
+    assert "displayEvents" not in data
+    assert data["displayEvent"]["block"] == "answer"
+    assert data["displayEvent"]["event"] == "answer.delta"
+    assert data["displayEvent"]["data"]["content"] == "结果"
+
+
+def test_projector_event_matrix_for_run_state_v2_contract():
+    """Projector 必须把核心事件矩阵稳定投影成 RunState v2。"""
 
     run = _projection_run()
     state = initial_run_state(run)
@@ -931,7 +1295,7 @@ def test_projector_event_matrix_for_run_state_v1_contract():
 
     normalized = normalize_run_state(state)
 
-    assert normalized["version"] == 1
+    assert normalized["version"] == 2
     assert normalized["tools"][0]["id"] == "call-read"
     assert normalized["tools"][0]["status"] == "completed"
     assert normalized["finalAnswer"] == "最终答案"
@@ -945,6 +1309,12 @@ def test_projector_event_matrix_for_run_state_v1_contract():
     )
     assert normalized["plans"][0]["planId"] == "plan-1"
     assert normalized["plans"][0]["steps"][0]["title"] == "测试"
+    assert [block["block"] for block in normalized["displaySnapshot"]["blocks"]] == [
+        "process",
+        "feedback",
+        "plan",
+        "answer",
+    ]
 
 
 def test_tool_result_runtime_event_preserves_failed_state():
@@ -1006,6 +1376,165 @@ def test_single_agent_hitl_pending_interaction_keeps_stream_scope():
     finally:
         PENDING_INTERACTIONS.clear()
         PENDING_AGENTS.clear()
+
+
+def test_single_agent_without_final_answer_marker_does_not_fallback_to_final_answer():
+    """没有 FinalAnswerStart 时，过程文本只能留在 reasoning，不能兜底复制到最终答案。"""
+
+    async def run_case():
+        return [
+            event
+            async for event in stream_leader_agent_reply(
+                agent=_FakeNoFinalAnswerAgent(),
+                user_msg=object(),
+                state=LeaderStreamState(),
+                session_id="session-no-final",
+                persist=False,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="deepseek-chat",
+                guardrails=[],
+                message="只输出过程",
+                stream_scope="single",
+                skill_runs=[],
+                team_activities=[],
+            )
+        ]
+
+    events = asyncio.run(run_case())
+
+    assert any(event.startswith("event: REASONING_DELTA") for event in events)
+    assert not any(event.startswith("event: FINAL_ANSWER_DELTA") for event in events)
+    assert not any("missing_final_answer_marker_fallback" in event for event in events)
+
+
+def test_react_runtime_fails_when_agent_ends_without_final_answer(monkeypatch):
+    """Agent 自然结束但没有最终答案时必须失败，避免最大迭代停止后前端无反馈。"""
+
+    def fake_create_main_agent_from_spec(*args, **kwargs):
+        return _FakeNoFinalAnswerAgent()
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.react_runtime.create_main_agent_from_spec",
+        fake_create_main_agent_from_spec,
+    )
+
+    async def run_case():
+        ctx = ChatRunContext(
+            session_id="session-missing-final",
+            agent_id="agent-1",
+            agent_name="Agent",
+            agent_config=None,
+            persist_run=False,
+            runtime_model_settings=SimpleNamespace(default_model="model", fallback_models=[]),
+            runtime_model_config=RuntimeModelConfig(
+                model_name="model",
+                fallback_names=[],
+                model_options=AgentModelOptions(max_react_iters=40),
+            ),
+            readiness=SimpleNamespace(ready=True),
+            intent_route=IntentRoute(),
+            routed_team=SimpleNamespace(members=[], run_data=None, system_prompt=""),
+            effective_user_message="测试最大迭代停止",
+            used_skills=[],
+            used_skill_details=[],
+            skill_runs=[],
+            active_skill_run=None,
+            model_name="model",
+            system_prompt="prompt",
+            guardrails=AgentGuardrails(),
+            runtime_tool_scope=RuntimeToolScope(
+                allow_mcp=False,
+                allow_knowledge=False,
+                allow_bash=False,
+                allow_http=False,
+            ),
+            mcp_servers=[],
+            knowledge_tools=[],
+            team_activities=[],
+        )
+        run_data = ChatMessage(
+            session_id=ctx.session_id,
+            message="测试最大迭代停止",
+            agent_id=ctx.agent_id,
+            agent_name=ctx.agent_name,
+        )
+        return [
+            event
+            async for event in execute_react_runtime(ctx=ctx, run_data=run_data)
+        ]
+
+    events = asyncio.run(run_case())
+
+    assert any(event.startswith("event: REASONING_DELTA") for event in events)
+    assert any("RUN_FAILED" in event for event in events)
+    assert any(event.startswith("event: ERROR") for event in events)
+    assert not any("RUN_COMPLETED" in event for event in events)
+
+
+def test_react_runtime_reports_agentscope_max_iters(monkeypatch):
+    """收到 AgentScope EXCEED_MAX_ITERS 时必须用明确原因失败收口。"""
+
+    def fake_create_main_agent_from_spec(*args, **kwargs):
+        return _FakeExceedMaxItersAgent()
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.react_runtime.create_main_agent_from_spec",
+        fake_create_main_agent_from_spec,
+    )
+
+    async def run_case():
+        ctx = ChatRunContext(
+            session_id="session-max-iters",
+            agent_id="agent-1",
+            agent_name="Agent",
+            agent_config=None,
+            persist_run=False,
+            runtime_model_settings=SimpleNamespace(default_model="model", fallback_models=[]),
+            runtime_model_config=RuntimeModelConfig(
+                model_name="model",
+                fallback_names=[],
+                model_options=AgentModelOptions(max_react_iters=40),
+            ),
+            readiness=SimpleNamespace(ready=True),
+            intent_route=IntentRoute(),
+            routed_team=SimpleNamespace(members=[], run_data=None, system_prompt=""),
+            effective_user_message="测试最大迭代停止",
+            used_skills=[],
+            used_skill_details=[],
+            skill_runs=[],
+            active_skill_run=None,
+            model_name="model",
+            system_prompt="prompt",
+            guardrails=AgentGuardrails(),
+            runtime_tool_scope=RuntimeToolScope(
+                allow_mcp=False,
+                allow_knowledge=False,
+                allow_bash=False,
+                allow_http=False,
+            ),
+            mcp_servers=[],
+            knowledge_tools=[],
+            team_activities=[],
+        )
+        run_data = ChatMessage(
+            session_id=ctx.session_id,
+            message="测试最大迭代停止",
+            agent_id=ctx.agent_id,
+            agent_name=ctx.agent_name,
+        )
+        return [
+            event
+            async for event in execute_react_runtime(ctx=ctx, run_data=run_data)
+        ]
+
+    events = asyncio.run(run_case())
+
+    assert any(event.startswith("event: REASONING_DELTA") for event in events)
+    assert any('"reason": "max_react_iterations"' in event for event in events)
+    assert any("RUN_FAILED" in event for event in events)
+    assert any(event.startswith("event: ERROR") and "最大 ReAct 迭代次数" in event for event in events)
+    assert not any("RUN_COMPLETED" in event for event in events)
 
 
 def test_single_agent_hitl_merges_same_reply_running_tool_calls():
@@ -1154,8 +1683,56 @@ def test_resume_text_before_final_answer_marker_stays_out_of_final_body():
         PENDING_AGENTS.clear()
 
 
-def test_plan_exit_tool_result_emits_waiting_approval_runtime_event():
-    """plan_exit 工具结果必须实时转成 PLAN_WAITING_APPROVAL，避免刷新后才出现审批入口。"""
+def test_resume_without_final_answer_marker_does_not_fallback_to_final_answer():
+    """resume 阶段没有 FinalAnswerStart 时，也不能把过程文本兜底成最终答案。"""
+
+    async def run_case():
+        PENDING_INTERACTIONS.clear()
+        PENDING_AGENTS.clear()
+        interaction = _create_pending_interaction(
+            interaction_type="REQUIRE_USER_CONFIRM",
+            agent=_FakeNoFinalAnswerAgent(),
+            session_id="session-resume-no-final",
+            agent_id="agent-1",
+            agent_name="Agent",
+            model_name="deepseek-chat",
+            reply_id="reply-1",
+            tool_calls=[{
+                "id": "call-read",
+                "name": "Read",
+                "input": '{"file_path":"README.md"}',
+                "state": "asking",
+            }],
+            message="读取文件后回答",
+            assistant_text="",
+            skill_runs=[],
+            team_activities=[],
+            scope="single",
+            persist=False,
+        )
+        response = await resume_interaction(
+            ChatResumeRequest.model_validate({
+                "interactionId": interaction.id,
+                "action": "approve",
+            })
+        )
+        return [chunk async for chunk in response.body_iterator]
+
+    events = asyncio.run(run_case())
+
+    try:
+        assert not any(event.startswith("event: FINAL_ANSWER_DELTA") for event in events)
+        assert not any("missing_final_answer_marker_fallback" in event for event in events)
+        assert any("RUN_FAILED" in event for event in events)
+        assert any(event.startswith("event: ERROR") for event in events)
+        assert not any("RUN_COMPLETED" in event for event in events)
+    finally:
+        PENDING_INTERACTIONS.clear()
+        PENDING_AGENTS.clear()
+
+
+def test_plan_exit_tool_result_becomes_final_answer():
+    """plan_exit 工具结果必须转成最终答案，而不是等待审批事件。"""
 
     async def run_case():
         events = [
@@ -1180,12 +1757,93 @@ def test_plan_exit_tool_result_emits_waiting_approval_runtime_event():
 
     events = asyncio.run(run_case())
 
-    assert any('"type": "PLAN_WAITING_APPROVAL"' in event for event in events)
+    assert any('"type": "PLAN_FINALIZED"' in event for event in events)
+    assert any(event.startswith("event: FINAL_ANSWER_DELTA") and "# 计划" in event for event in events)
     assert any('"planId": "plan-1"' in event for event in events)
+    final_deltas = _final_answer_deltas(events)
+    assert len(final_deltas) > 1
+    assert "".join(final_deltas) == _FakePlanExitAgent.plan_markdown
+    assert all(delta != _FakePlanExitAgent.plan_markdown for delta in final_deltas)
 
 
-def test_resume_plan_exit_tool_result_emits_waiting_approval_runtime_event():
-    """HITL resume 后执行 plan_exit，也必须实时显示计划审批入口。"""
+def test_plan_exit_stops_leader_stream_after_final_answer():
+    """plan_exit 后必须输出计划最终答案并停止当前 Agent 流。"""
+
+    async def run_case():
+        state = LeaderStreamState()
+        events = [
+            event
+            async for event in stream_leader_agent_reply(
+                agent=_FakePlanExitThenContinuesAgent(),
+                user_msg=object(),
+                state=state,
+                session_id="session-1",
+                persist=False,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="deepseek-chat",
+                guardrails=AgentGuardrails(),
+                message="制定计划",
+                stream_scope="single",
+                skill_runs=[],
+                team_activities=[],
+            )
+        ]
+        return state, events
+
+    state, events = asyncio.run(run_case())
+
+    assert state.stopped is True
+    assert state.stop_reason == "plan_finalized"
+    assert any(event.startswith("event: FINAL_ANSWER_DELTA") and "# 计划" in event for event in events)
+    assert "".join(_final_answer_deltas(events)) == _FakePlanExitAgent.plan_markdown
+    assert not any("不应该继续输出" in event for event in events)
+    assert not any("call-write-after-plan-exit" in event for event in events)
+
+
+def test_native_plan_finalized_waits_for_tool_result_end_before_stopping():
+    """manager 原生 PLAN_FINALIZED 必须等 plan_exit TOOL_RESULT_END 后再停流。"""
+
+    async def run_case():
+        state = LeaderStreamState()
+        events = [
+            event
+            async for event in stream_leader_agent_reply(
+                agent=_FakePlanExitThenContinuesAgent(),
+                user_msg=object(),
+                state=state,
+                session_id="session-1",
+                persist=False,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="deepseek-chat",
+                guardrails=AgentGuardrails(),
+                message="制定计划",
+                stream_scope="single",
+                skill_runs=[],
+                team_activities=[],
+                plan_mode_manager=_FakeNativePlanFinalizedManager(),
+            )
+        ]
+        return state, events
+
+    state, events = asyncio.run(run_case())
+
+    tool_result_end_index = next(index for index, event in enumerate(events) if event.startswith("event: TOOL_RESULT_END"))
+    final_answer_index = next(index for index, event in enumerate(events) if event.startswith("event: FINAL_ANSWER_DELTA"))
+    assert tool_result_end_index < final_answer_index
+    final_deltas = _final_answer_deltas(events)
+    assert len(final_deltas) > 1
+    assert "".join(final_deltas) == _FakePlanExitAgent.plan_markdown
+    assert state.assistant_tool_calls[0].id == "call-plan-exit"
+    assert state.assistant_tool_calls[0].status == "completed"
+    assert state.stopped is True
+    assert state.stop_reason == "plan_finalized"
+    assert not any("call-write-after-plan-exit" in event for event in events)
+
+
+def test_resume_plan_exit_tool_result_becomes_final_answer():
+    """HITL resume 后执行 plan_exit，也必须输出最终答案并完成本轮。"""
 
     async def run_case():
         PENDING_INTERACTIONS.clear()
@@ -1222,8 +1880,11 @@ def test_resume_plan_exit_tool_result_emits_waiting_approval_runtime_event():
     events = asyncio.run(run_case())
 
     try:
-        assert any('"type": "PLAN_WAITING_APPROVAL"' in event for event in events)
+        assert any('"type": "PLAN_FINALIZED"' in event for event in events)
+        assert any(event.startswith("event: FINAL_ANSWER_DELTA") and "# 计划" in event for event in events)
+        assert "".join(_final_answer_deltas(events)) == _FakePlanExitAgent.plan_markdown
         assert any('"planId": "plan-1"' in event for event in events)
+        assert any("RUN_COMPLETED" in event for event in events)
     finally:
         PENDING_INTERACTIONS.clear()
         PENDING_AGENTS.clear()
@@ -1941,22 +2602,64 @@ def test_background_run_keeps_waiting_status_after_hitl_required():
     assert run.completed_at is None
 
 
-def test_background_run_keeps_waiting_status_after_plan_approval_required():
-    """Plan 等待审批必须进入 waiting，避免审批入口只靠刷新历史消息恢复。"""
+def test_background_run_preserves_failed_status_after_run_failed_event():
+    """RUN_FAILED 已经把后台 Run 标为 failed 时，消费结束不能覆盖成 completed。"""
 
-    async def run_waiting_case():
+    async def run_failed_case():
         async def factory():
             yield runtime_event_sse(
-                "PLAN_WAITING_APPROVAL",
-                session_id="session-plan-waiting",
-                run_id="run-plan-waiting",
+                "RUN_FAILED",
+                session_id="session-run-failed",
+                run_id="run-run-failed",
+                scope="run",
+                status="failed",
+                reason="agent_error",
+                payload={"message": "模型请求失败"},
+            )
+            yield _sse_event("ERROR", {"message": "模型请求失败"})
+
+        run = await start_chat_background_run(
+            session_id="session-run-failed",
+            factory=factory,
+            task="触发失败",
+            persist=False,
+        )
+        assert run.async_task is not None
+        await run.async_task
+        return run
+
+    run = asyncio.run(run_failed_case())
+
+    assert run.status == "failed"
+    assert run.completed_at is not None
+    assert run.state["status"] == "failed"
+
+
+def test_background_run_completes_after_plan_finalized():
+    """Plan finalized 是本轮正常完成，不再进入 waiting。"""
+
+    async def run_finalized_case():
+        async def factory():
+            yield runtime_event_sse(
+                "PLAN_FINALIZED",
+                session_id="session-plan-finalized",
+                run_id="run-plan-finalized",
                 scope="plan",
-                status="waiting",
+                status="completed",
                 payload={"planId": "plan-1", "markdown": "# 计划"},
+            )
+            yield _sse_event("FINAL_ANSWER_DELTA", {"delta": "# 计划"})
+            yield runtime_event_sse(
+                "RUN_COMPLETED",
+                session_id="session-plan-finalized",
+                run_id="run-plan-finalized",
+                scope="run",
+                status="completed",
+                payload={"resultLength": 4},
             )
 
         run = await start_chat_background_run(
-            session_id="session-plan-waiting",
+            session_id="session-plan-finalized",
             factory=factory,
             task="制定计划",
             persist=False,
@@ -1965,31 +2668,78 @@ def test_background_run_keeps_waiting_status_after_plan_approval_required():
         await run.async_task
         return run
 
-    run = asyncio.run(run_waiting_case())
+    run = asyncio.run(run_finalized_case())
 
-    assert run.status == "waiting"
-    assert run.completed_at is None
+    assert run.status == "completed"
+    assert run.completed_at is not None
+    assert run.state["status"] == "completed"
 
 
-def test_background_run_waiting_status_survives_plan_tail_events():
-    """Plan 等待审批后的工具尾事件不能把 Run 冲回 running/completed。"""
+def test_plan_finalized_runtime_event_updates_run_state():
+    """PLAN_FINALIZED 必须投影为 completed plan block。"""
 
-    async def run_waiting_case():
+    run = _projection_run()
+    state = project_event(
+        initial_run_state(run),
+        "RUNTIME_EVENT",
+        {
+            "id": "runtime-plan-finalized",
+            "runId": run.id,
+            "sessionId": run.session_id,
+            "type": "PLAN_FINALIZED",
+            "source": "runtime",
+            "sourceEventType": None,
+            "scope": "plan",
+            "agentId": "agent-1",
+            "agentName": "Agent",
+            "teamActivityId": None,
+            "status": "completed",
+            "reason": "Plan finalized as final answer.",
+            "timestamp": "2026-07-01T00:00:01+00:00",
+            "durationMs": None,
+            "payload": {
+                "planId": "plan-1",
+                "planFile": ".agent-workstation/plans/session/plan-1.md",
+                "markdown": "# 计划",
+            },
+        },
+        run,
+    )
+
+    assert state["plans"][0]["status"] == "completed"
+    plan_block = next(block for block in state["displaySnapshot"]["blocks"] if block["block"] == "plan")
+    assert plan_block["status"] == "completed"
+    assert plan_block["data"]["planId"] == "plan-1"
+
+
+def test_background_run_plan_tail_events_do_not_break_completed_status():
+    """Plan finalized 后的工具尾事件不能把 Run 冲回 running。"""
+
+    async def run_finalized_case():
         async def factory():
             yield runtime_event_sse(
-                "PLAN_WAITING_APPROVAL",
+                "PLAN_FINALIZED",
                 session_id="session-plan-tail",
                 run_id="run-plan-tail",
                 scope="plan",
-                status="waiting",
+                status="completed",
                 payload={"planId": "plan-1", "markdown": "# 计划"},
             )
+            yield _sse_event("FINAL_ANSWER_DELTA", {"delta": "# 计划"})
             yield _sse_event("TOOL_RESULT_END", {
                 "tool_call_id": "call-plan-exit",
                 "tool_call_name": "plan_exit",
                 "state": "success",
             })
             yield _sse_event("REPLY_END", {"reply_id": "reply-1"})
+            yield runtime_event_sse(
+                "RUN_COMPLETED",
+                session_id="session-plan-tail",
+                run_id="run-plan-tail",
+                scope="run",
+                status="completed",
+                payload={"resultLength": 4},
+            )
 
         run = await start_chat_background_run(
             session_id="session-plan-tail",
@@ -2001,11 +2751,11 @@ def test_background_run_waiting_status_survives_plan_tail_events():
         await run.async_task
         return run
 
-    run = asyncio.run(run_waiting_case())
+    run = asyncio.run(run_finalized_case())
 
-    assert run.status == "waiting"
-    assert run.completed_at is None
-    assert run.state["status"] == "waiting"
+    assert run.status == "completed"
+    assert run.completed_at is not None
+    assert run.state["status"] == "completed"
 
 
 def test_background_run_resume_relay_marks_original_run_completed():

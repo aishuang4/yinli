@@ -1,4 +1,4 @@
-"""Chat RunState v1 schema。
+"""Chat RunState v2 schema。
 
 该模块是后端到前端 Chat 主链路的稳定契约。AgentScope raw event、
 RuntimeEvent 和 middleware 内部事件都必须先投影成这里定义的结构，
@@ -13,19 +13,15 @@ from pydantic import BaseModel, Field
 RunStateStatus = Literal["running", "waiting", "completed", "failed", "cancelled", "cancelling"]
 RunStatePatchKind = Literal[
     "snapshot_meta",
-    "reasoning_delta",
-    "final_answer_delta",
-    "thinking_delta",
-    "tool",
+    "display_event",
     "team_activities",
-    "skill_calls",
     "model_usage",
-    "approval",
     "approval_resolved",
-    "runtime_event",
-    "plans",
     "error",
 ]
+DisplayBlockKind = Literal["process", "plan", "feedback", "answer", "files", "error"]
+DisplayEventOp = Literal["append", "upsert", "replace", "remove", "clear"]
+DisplayScope = Literal["single_agent"]
 
 
 class RunStateToolSummary(BaseModel):
@@ -87,10 +83,61 @@ class RunStatePlanSummary(BaseModel):
     updatedAt: str = ""
 
 
-class RunStateSnapshot(BaseModel):
-    """RunState v1 完整快照。"""
+class RunStateDisplayItem(BaseModel):
+    """DisplaySnapshot 中的有序展示 item。"""
 
-    version: int = 1
+    id: str
+    event: str
+    targetId: str
+    status: str | None = None
+    createdAt: str | None = None
+    updatedAt: str = ""
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunStateDisplayBlock(BaseModel):
+    """DisplaySnapshot 中的展示 block。"""
+
+    id: str
+    block: DisplayBlockKind
+    status: str
+    updatedAt: str = ""
+    items: list[RunStateDisplayItem] = Field(default_factory=list)
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunStateDisplaySnapshot(BaseModel):
+    """单 Agent Chat 主展示完整快照。"""
+
+    version: int = 2
+    blocks: list[RunStateDisplayBlock] = Field(default_factory=list)
+
+
+class RunStateDisplayEvent(BaseModel):
+    """单 Agent Chat 主展示增量事件。
+
+    一个 RUN_STATE_PATCH 只携带一个 DisplayEvent，前端通过 reducer 聚合到
+    DisplaySnapshot。
+    """
+
+    id: str
+    runId: str
+    sessionId: str
+    seq: int = 0
+    createdAt: str = ""
+    scope: DisplayScope = "single_agent"
+    block: DisplayBlockKind
+    event: str
+    op: DisplayEventOp
+    targetId: str | None = None
+    status: str | None = None
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunStateSnapshot(BaseModel):
+    """RunState v2 完整快照。"""
+
+    version: int = 2
     runId: str = ""
     sessionId: str = ""
     agentId: str = ""
@@ -112,19 +159,18 @@ class RunStateSnapshot(BaseModel):
     tools: list[RunStateToolSummary] = Field(default_factory=list)
     teamActivities: list[dict[str, Any]] = Field(default_factory=list)
     skillCalls: list[dict[str, Any]] = Field(default_factory=list)
-    modelCaches: list[dict[str, Any]] = Field(default_factory=list)
     modelName: str = ""
     tokenUsage: dict[str, Any] | None = None
     plans: list[RunStatePlanSummary] = Field(default_factory=list)
+    displaySnapshot: RunStateDisplaySnapshot = Field(default_factory=RunStateDisplaySnapshot)
     approvals: list[RunStateApprovalSummary] = Field(default_factory=list)
-    runtimeEvents: list[dict[str, Any]] = Field(default_factory=list)
     error: str = ""
     lastEventType: str = ""
     eventCount: int = 0
 
 
 class RunStatePatch(BaseModel):
-    """RunState v1 增量 patch。"""
+    """RunState v2 增量 patch。"""
 
     kind: RunStatePatchKind
     runId: str
@@ -135,19 +181,11 @@ class RunStatePatch(BaseModel):
     completedAt: str | None = None
     lastEventType: str = ""
     eventCount: int = 0
-    reasoningDelta: str | None = None
-    finalAnswerDelta: str | None = None
-    thinkingDelta: str | None = None
-    tool: RunStateToolSummary | None = None
     teamActivities: list[dict[str, Any]] | None = None
-    skillCalls: list[dict[str, Any]] | None = None
-    modelCaches: list[dict[str, Any]] | None = None
     modelName: str | None = None
     tokenUsage: dict[str, Any] | None = None
-    approval: RunStateApprovalSummary | None = None
     resolvedApprovalId: str | None = None
-    runtimeEvent: dict[str, Any] | None = None
-    plans: list[RunStatePlanSummary] | None = None
+    displayEvent: RunStateDisplayEvent | None = None
     error: str | None = None
 
 

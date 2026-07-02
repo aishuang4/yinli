@@ -1,6 +1,6 @@
 # Chat SSE 事件契约
 
-> 状态：2026-06-30 RunState 中间层过渡版。本文定义 `/api/chat/send/start`、`/api/chat/send`、`/api/chat/resume/start`、`/api/chat/resume`、`/api/chat/plans/{plan_id}/approve`、`/api/chat/plans/{plan_id}/deny`、`/api/chat/runs/{run_id}/stream`、`/api/chat/runs/{run_id}/state` 与 `/api/chat/runs/{run_id}/state/stream` 可被前端依赖的事件和状态。新增事件前必须先更新本文档。
+> 状态：2026-07-01 RunState + DisplaySnapshot v2。本文定义 `/api/chat/send/start`、`/api/chat/send`、`/api/chat/resume/start`、`/api/chat/resume`、`/api/chat/runs/{run_id}/stream`、`/api/chat/runs/{run_id}/state` 与 `/api/chat/runs/{run_id}/state/stream` 可被前端依赖的事件和状态。新增事件前必须先更新本文档。
 
 ## 基本规则
 
@@ -55,7 +55,7 @@
 - `MEMORY_*`：记忆总结与候选记忆生命周期。
 - `ARTIFACT_*`：文件、下载产物、生成内容等可交付产物生命周期。
 - `SANDBOX_*`：沙箱运行生命周期。
-- `PLAN_*`：Plan Mode 进入、更新、等待审批和工具拦截状态。
+- `PLAN_*`：Plan Mode 进入、更新、最终计划输出和工具拦截状态。
 
 ## Plan Mode Runtime Events
 
@@ -67,34 +67,27 @@ Plan Mode 内部只产生 `PlanDomainEvent`；跨出 Plan middleware / Plan tool
 | --- | --- | --- |
 | `PLAN_MODE_ENTERED` | `running` | `{ planId, planFile, mode }` |
 | `PLAN_UPDATED` | `running` | `{ planId, planFile, markdown, source }` |
-| `PLAN_WAITING_APPROVAL` | `waiting` | `{ planId, planFile, markdown }` |
-| `PLAN_APPROVED` | `completed` | `{ planId, planFile }` |
-| `PLAN_DENIED` | `failed` | `{ planId, planFile, reason }` |
+| `PLAN_FINALIZED` | `completed` | `{ planId, planFile, markdown }` |
 | `PLAN_TOOL_DENIED` | `completed` | `{ planId, toolCallId, toolName, message }` |
 | `PLAN_TASKS_UPDATED` | `running` | `{ planId, planFile, steps }` |
 | `PLAN_TASK_OUTPUT` | `running|completed|failed` | `{ planId, planFile, step, steps }` |
 
 `steps` 使用现有 `ChatPlanStep` camelCase 字段：`id`、`planId`、`stepIndex`、`title`、`description`、`status`、`assignedAgentId`、`evidence`、`result`、`startedAt`、`completedAt`、`updatedAt`。
 
-### Plan Mode 审批与执行
+### Plan Mode 收口与后续执行
 
-- `POST /api/chat/plans/{plan_id}/approve`：批准 `waiting_approval` 状态的 Plan，返回 `{ plan, runtimeEvent }`，其中 `runtimeEvent.type` 为 `PLAN_APPROVED`。
-- `POST /api/chat/plans/{plan_id}/deny`：拒绝 `waiting_approval` 状态的 Plan，body 为 `{ reason?: string }`，返回 `{ plan, runtimeEvent }`，其中 `runtimeEvent.type` 为 `PLAN_DENIED`。
-- 前端批准后发起新一轮 `/api/chat/send`，请求体带 `approvedPlanId`。后端在 ReAct Runtime 内加载该 approved plan，通过 Plan Mode middleware 注入 Build mode 提示和计划正文，然后由同一个主 Agent 按计划执行。
-- `approvedPlanId` 只表示"本轮按已批准计划执行"，不是新的 architecture runtime；`intent_router.runtime.kind` 仍为 `react`。
+- `plan_exit` 不进入人工审批状态，也不触发 approve/deny HTTP 端点。
+- Agent 调用 `plan_exit` 后，后端发送 `RUNTIME_EVENT:PLAN_FINALIZED`，随后通过分片 `FINAL_ANSWER_DELTA` / `AGENT_FINAL_ANSWER_DELTA` 将当前计划 markdown 作为本轮 assistant 最终答案，禁止把完整计划作为单个超大 delta 一次性发给前端。
+- 本轮 Run 继续走正常成功收尾并发送 `RUN_COMPLETED`。前端不得展示手动批准/拒绝按钮。
+- 用户通过下一条自然语言消息决定后续动作，例如“修改这个计划”或“按这个计划执行”。该下一轮仍由普通 Chat 路由进入 ReAct Runtime，不携带旧 Plan 审批字段。
 
 ### Plan Mode 执行链路详解
 
 1. **调查与计划阶段（Plan Mode）**：Agent 调用 `plan_enter` 进入 Plan Mode。该模式下，`PlanModeMiddleware.on_acting` 拦截变更型工具（`Write`、`Edit`、`Bash` 变更命令等），阻止其真实执行，并发送 `PLAN_TOOL_DENIED` Runtime Event 告知前端。Agent 只能执行只读工具（`Read`、`Grep`、`Glob`、只读 `Bash`/`HttpRequest`）和计划控制工具（`plan_enter`、`plan_write`、`plan_exit`、`FinalAnswerStart`）。
 
-2. **请求审批**：Agent 调用 `plan_exit` 将计划置为 `waiting_approval` 状态，发送 `PLAN_WAITING_APPROVAL` Runtime Event。此后 Agent 停止本轮执行，前端展示审批操作入口（批准/拒绝）。
+2. **计划收口**：Agent 调用 `plan_exit` 后，后端将计划置为 `finalized` 状态，发送 `PLAN_FINALIZED` Runtime Event，把计划 markdown 输出为最终答案，并停止当前 Agent 流。
 
-3. **审批执行阶段（Build Mode）**：
-   - 用户批准后，前端调用 `POST /api/chat/plans/{plan_id}/approve`，后端返回 `PLAN_APPROVED`。
-   - 前端发起新一轮 `/api/chat/send`，请求体携带 `approvedPlanId`。
-   - 后端 ReAct Runtime 加载该 approved plan，`PlanModeMiddleware` 将 system prompt 切换为 Build mode（放行所有工具），并将计划正文注入 Leader 上下文。
-   - 主 Agent 按计划执行，此时无工具拦截，所有工具调用真实生效。
-   - 用户拒绝时，前端调用 `POST /api/chat/plans/{plan_id}/deny`，后端返回 `PLAN_DENIED`，本轮计划作废。
+3. **下一轮决策**：前端只展示计划和最终答案，不显示审批入口。用户下一条消息决定修改计划或执行计划；后续执行能力需独立设计，不复用旧 approve/deny 或 Build mode 字段。
 
 ## Run 生命周期
 
@@ -112,19 +105,15 @@ Plan Mode 内部只产生 `PlanDomainEvent`；跨出 Plan middleware / Plan tool
 
 `RUN_STATE_PATCH` 用于连接中的实时更新，允许丢失；网络断开、页面刷新或前端怀疑状态不一致时，应重新订阅并以新的 `RUN_STATE` 快照为准。每个 patch 必须包含 `kind`，前端必须优先按 `kind` 分支处理，不得再靠猜测可选字段判断 patch 语义。稳定字段包括：
 
-- `kind`：稳定 patch 类型，当前值为 `snapshot_meta|reasoning_delta|final_answer_delta|thinking_delta|tool|team_activities|skill_calls|model_usage|approval|approval_resolved|runtime_event|plans|error`。
+- `kind`：稳定 patch 类型，当前值为 `snapshot_meta|display_event|team_activities|model_usage|approval_resolved|error`。普通 Runtime Event 不得作为 `RUN_STATE_PATCH` 发送到 Chat 主界面。
 - `runId`、`sessionId`、`status`、`currentStage`、`updatedAt`、`completedAt`、`lastEventType`、`eventCount`。
-- `reasoningDelta`、`finalAnswerDelta`、`thinkingDelta`：文本增量。
-- `tool`：一个轻量工具摘要，字段同 RunState `tools[]`。
-- `teamActivities`：Team 活动快照，仅在 Team 活动变化时出现。
-- `approval`：一个等待处理的用户介入摘要，字段同 RunState `approvals[]`。
-- `runtimeEvent`：最近一个应用级 Runtime Event，用于 Plan Dock、Team 面板等兼容展示。
-- `plans`：Plan Mode 当前计划摘要数组，仅在 Plan 事件变化时出现。
-- `skillCalls`：Skill 注入/完成状态数组，仅在 Skill 事件变化时出现。
-- `modelName`、`modelCaches`、`tokenUsage`：模型调用与用量摘要，仅在模型事件变化时出现。
+- `displayEvent`：一个单 Agent 展示增量事件。patch 中只允许携带一个 `displayEvent`，前端用 reducer 聚合到 `displaySnapshot`。
+- `teamActivities`：Team 活动快照，仅在 Team 活动变化时出现。Team 当前不进入 `displaySnapshot`。
+- `approvalResolvedId` / `resolvedApprovalId`：用户介入完成后的等待项 ID。
+- `modelName`、`tokenUsage`：模型调用与用量摘要。
 - `error`：错误摘要。
 
-为避免同一段文本被 `RUNTIME_EVENT:AGENT_*_DELTA` 与 `FINAL_ANSWER_DELTA` / `REASONING_DELTA` 重复累计，RunState 正文投影只以稳定文本事件作为正文增量来源；Runtime delta 只保留在 `runtimeEvent` 中用于过程展示和调试。
+为避免同一段文本被 `RUNTIME_EVENT:AGENT_*_DELTA` 与 `FINAL_ANSWER_DELTA` / `REASONING_DELTA` 重复累计，RunState 正文投影只以稳定文本事件作为正文增量来源；Runtime Event 只保留在后端内部状态、Trace 或原始兼容流中，不进入 Chat 主界面的 RunState 契约。
 
 后端必须用 `backend/src/server/routes/chat/run_state_schema.py` 校验 `RUN_STATE` 和 `RUN_STATE_PATCH` 输出；前端必须用 `frontend/src/types/runState.ts` 作为主链路类型来源。新增字段时先更新本文档、后端 Pydantic schema、前端 TypeScript 类型，再更新 projector 和测试矩阵。
 
@@ -132,7 +121,7 @@ Plan Mode 内部只产生 `PlanDomainEvent`；跨出 Plan middleware / Plan tool
 
 RunState 稳定字段：
 
-- `version`：状态版本，当前为 `1`。
+- `version`：状态版本，当前为 `2`。
 - `runId`、`sessionId`、`agentId`、`agentName`、`teamId`、`teamName`、`mode`、`task`。
 - `status`：`running|waiting|completed|failed|cancelled|cancelling`。
 - `currentStage`：面向用户的当前阶段。
@@ -142,10 +131,10 @@ RunState 稳定字段：
 - `tools`：轻量工具摘要数组，不包含完整 Observation。
 - `teamActivities`：Team worker/leader 当前活动摘要，字段沿用 Chat `TeamActivityInfo` camelCase 结构。
 - `skillCalls`：本轮注入/使用的 Skill 摘要。
-- `modelName`、`modelCaches`、`tokenUsage`：模型调用与 token/cache 用量摘要。
+- `modelName`、`tokenUsage`：模型调用与 token 用量摘要。
 - `plans`：Plan Mode 当前计划摘要。
+- `displaySnapshot`：单 Agent Chat 主展示完整快照，结构为 `{ version: 2, blocks: DisplayBlock[] }`。用于刷新、断线恢复和历史消息回放。当前 Team 不进入该字段，后续单独设计 Team 展示事件。
 - `approvals`：等待用户处理的 HITL / clarification 摘要；每项必须包含 `interactionId`、`kind`、`type`、`status`、`createdAt`。`kind` 表示 UI 交互大类，稳定值为 `hitl|clarification`；`type` 表示该大类内部的交互子类型。clarification 的 `kind` 与 `type` 都必须为 `clarification`，并保留 `title`、`description`、`questions`，不得被问题字段或原始 payload 中的 `type` 覆盖。
-- `runtimeEvents`：最近少量应用级事件，用于 Plan Dock、Team 面板等兼容展示。
 - `error`、`lastEventType`、`eventCount`、`createdAt`、`updatedAt`、`completedAt`。
 
 `tools[]` 稳定字段：
@@ -158,20 +147,98 @@ RunState 稳定字段：
 
 Chat 主界面不得依赖完整工具结果。大体积 Read、Glob、Bash、HTTP、MCP 输出必须通过 Trace 或 Artifact 按需查看，不进入 RunState 常驻状态。
 
+### 单 Agent DisplaySnapshot v2
+
+`displaySnapshot` / `displayEvent` 是 Chat 主界面展示层契约，只表达“前端现在应该显示什么”。它不替代 `RUNTIME_EVENT` 事实日志；事实事件仍用于 Trace 和审计。
+
+`RUN_STATE` 必须返回完整快照：
+
+```ts
+displaySnapshot: {
+  version: 2;
+  blocks: DisplayBlock[];
+}
+```
+
+`RUN_STATE_PATCH` 必须返回单个展示事件：
+
+```ts
+displayEvent: {
+  id: string;
+  runId: string;
+  sessionId: string;
+  seq: number;
+  createdAt: string;
+  scope: "single_agent";
+  block: "process" | "plan" | "feedback" | "answer" | "files" | "error";
+  event: string;
+  op: "append" | "upsert" | "replace" | "remove" | "clear";
+  targetId?: string;
+  status?: "pending" | "running" | "waiting" | "completed" | "failed" | "cancelled";
+  data?: Record<string, unknown>;
+}
+```
+
+`DisplayBlock` / `DisplayItem` 使用通用结构，避免后端输出组件形状：
+
+```ts
+type DisplayBlock = {
+  id: string;
+  block: "process" | "plan" | "feedback" | "answer" | "files" | "error";
+  status: string;
+  updatedAt: string;
+  items: DisplayItem[];
+  data: Record<string, unknown>;
+};
+
+type DisplayItem = {
+  id: string;
+  event: string;
+  targetId: string;
+  status?: string;
+  createdAt?: string;
+  updatedAt: string;
+  data: Record<string, unknown>;
+};
+```
+
+当前稳定展示事件：
+
+- `process`：ReAct 过程块，使用 `items[]` 按顺序表达 `reasoning.delta`、`thinking.delta`、`tool.*`、`skill.*`。连续 reasoning / thinking delta 使用同一个 `targetId` 追加；如果中间出现 tool / skill，再出现 reasoning / thinking 时必须使用新的 `targetId`，避免前端把非连续过程合并成一个 item。
+- `plan`：Plan Mode 展示块，使用 `data.planId`、`data.planFile`、`data.markdown`、`data.steps`。`PLAN_FINALIZED` 使用 `status=completed`。
+- `feedback`：当前等待用户处理的人机交互，使用 `data.approval`。只放当前等待项，不保留历史已完成项。
+- `answer`：最终答案展示，使用 `data.content`。没有 `FinalAnswerStart` 时，后端不得把 reasoning 兜底复制成最终答案；如果 Agent 流自然结束但没有产生最终答案，后端必须发送 `RUN_FAILED` 和 `ERROR`，并投影为 `error` 展示块，常见原因包括达到最大 ReAct 迭代次数。
+- `files`：生成文件下载，使用 `data.files`，每项至少包含 `path`、`name`、`extension`。
+- `error`：错误展示块，使用 `data.message` 或 `data.error`。
+
+当前前端登记的事件名集中维护在 `frontend/src/types/displayEvents.ts`。新增事件时先扩展该文件，再更新本文档、后端 Pydantic schema、前端 projector 和测试矩阵。
+
+Team 当前不进入 `displaySnapshot`，后续独立设计 Team 展示事件。
+
+### 历史消息回放
+
+`GET /api/chat/sessions/{session_id}/messages` 返回的 assistant 消息必须携带 `displaySnapshot`。前端历史消息只从该字段恢复单 Agent 主展示块，不从 `toolCalls`、`runtimeEvents`、`planRuns` 等旧字段反推 reasoning、tools、plan、files 或 feedback。
+
+后端在 RunState 到达可回放节点后，把当前 `displaySnapshot` 写回本轮最新 assistant 消息：
+
+- `RUN_COMPLETED` / `RUN_FAILED` / `RUN_CANCELLED` 后保存终态快照。
+- `CLARIFICATION_REQUIRED` 后保存等待用户补充信息的快照。
+- 没有 `displaySnapshot` 的旧历史消息不做回填，前端可仅按 `content` 显示最终答案。
+
 ### Raw Event 到 RunState 到前端状态映射
 
 | 后端原始事件 / Runtime Event | RunState 字段 | `RUN_STATE_PATCH` 字段 | 前端 live 状态 | 流语义 |
 | --- | --- | --- | --- | --- |
-| `CLARIFICATION_REQUIRED` / `CLARIFICATION_WAITING` | `status=waiting`、`approvals[]` | `status=waiting`、`approval` | `clarificationRequests[]` | `CLARIFICATION_REQUIRED` 带 `approval` 后结束，等待用户补充 |
-| `HITL_REQUIRED` / `AGENT_WAITING_HUMAN` | `status=waiting`、`approvals[]` | `status=waiting`、`approval` | `hitlRequests[]` | `HITL_REQUIRED` 带 `approval` 后结束，等待用户审批 |
-| `PLAN_WAITING_APPROVAL` | `plans[]`、`runtimeEvents[]` | `plans`、`runtimeEvent` | `plans[]` / Plan Dock | 本轮可结束，等待用户批准计划 |
-| `PLAN_APPROVED` / `PLAN_DENIED` | `plans[]`、`runtimeEvents[]` | `plans`、`runtimeEvent` | `plans[]` / Plan Dock | 由前端发起下一轮执行或结束 |
-| `TOOL_CALL_*` / `TOOL_RESULT_*` | `tools[]` 摘要 | `tool` | `toolCalls[]` | running 继续，终态工具不可保留 running |
-| `REASONING_DELTA` | `reasoning` | `reasoningDelta` | `reasoningContent` | running 继续 |
-| `FINAL_ANSWER_DELTA` | `finalAnswer` | `finalAnswerDelta` | `finalAnswerContent` | running 继续 |
-| `TEAM_ACTIVITY` / `TEAM_*` | `teamActivities[]`、`runtimeEvents[]` | `teamActivities`、`runtimeEvent` | `teamActivities[]` | running 继续 |
-| `SKILL_CONTEXT` / `SKILL_END` | `skillCalls[]` | `skillCalls` | `skillCalls[]` | running 继续 |
-| `MODEL_CALL_*` | `modelName`、`modelCaches[]`、`tokenUsage` | `modelName`、`modelCaches`、`tokenUsage` | 模型与用量展示 | running 继续 |
+| `CLARIFICATION_REQUIRED` | `displaySnapshot.blocks[]`、`approvals[]` | `displayEvent(block=feedback,event=feedback.waiting)` | `displaySnapshot: feedback block` | `CLARIFICATION_REQUIRED` 带 `feedback` 后结束，等待用户补充；`CLARIFICATION_WAITING` 只作内部预告，不单独发 RunState patch |
+| `HITL_REQUIRED` | `displaySnapshot.blocks[]`、`approvals[]` | `displayEvent(block=feedback,event=feedback.waiting)` | `displaySnapshot: feedback block` | `HITL_REQUIRED` 带 `feedback` 后结束，等待用户审批；`AGENT_WAITING_HUMAN` 只作内部预告，不单独发 RunState patch |
+| `PLAN_FINALIZED` | `displaySnapshot.blocks[]`、`finalAnswer` | `displayEvent(block=plan,event=plan.completed)`，随后 `displayEvent(block=answer,event=answer.delta)` | `displaySnapshot: plan block + answer block` | 本轮正常完成，用户下一条普通消息决定修改或执行 |
+| `TOOL_CALL_*` / `TOOL_RESULT_*` | `displaySnapshot.blocks[]`、`tools[]` 摘要 | `displayEvent(block=process,event=tool.*)` | `displaySnapshot: process item` | running 继续，终态工具不可保留 running |
+| `REASONING_DELTA` | `displaySnapshot.blocks[]`、`reasoning` | `displayEvent(block=process,event=reasoning.delta)` | `displaySnapshot: process item` | running 继续 |
+| `FINAL_ANSWER_DELTA` | `displaySnapshot.blocks[]`、`finalAnswer` | `displayEvent(block=answer,event=answer.delta)` | `displaySnapshot: answer block` | running 继续 |
+| Agent 流结束但没有最终答案 | `status=failed`、`error` | `displayEvent(block=error,event=error.raised)` | `displaySnapshot: error block` | 发送后结束 |
+| `TEAM_ACTIVITY` | `teamActivities[]` | `teamActivities` | `teamActivities[]` | running 继续 |
+| `SKILL_CONTEXT` / `SKILL_END` | `displaySnapshot.blocks[]`、`skillCalls[]` | `displayEvent(block=process,event=skill.*)` | `displaySnapshot: process item` | running 继续 |
+| `MODEL_CALL_*` | `modelName`、`tokenUsage` | `modelName`、`tokenUsage` | 模型与用量状态 | running 继续 |
 | `RUN_COMPLETED` / `RUN_FAILED` / `RUN_CANCELLED` | `status`、`completedAt`、`error` | `status`、`completedAt`、`error` | 停止 streaming | 发送后结束 |
 
 ## 模型与文本输出

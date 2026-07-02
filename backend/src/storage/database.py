@@ -60,6 +60,7 @@ DEFAULT_MODEL_CONFIG = {
     "maxTokens": 4096,
     "maxReactIters": 40,
 }
+EMPTY_DISPLAY_SNAPSHOT = {"version": 2, "blocks": []}
 
 
 def _utc_now() -> str:
@@ -258,6 +259,7 @@ def ensure_db() -> None:
                     model_caches TEXT NOT NULL DEFAULT '[]',
                     runtime_events TEXT NOT NULL DEFAULT '[]',
                     plan_runs TEXT NOT NULL DEFAULT '[]',
+                    display_snapshot TEXT NOT NULL DEFAULT '{"version":2,"blocks":[]}',
                     created_at TEXT NOT NULL,
                     sort_order INTEGER NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
@@ -415,6 +417,7 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "runtime_events", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "plan_runs", "TEXT NOT NULL DEFAULT '[]'")
+            _ensure_column(conn, "chat_messages", "display_snapshot", "TEXT NOT NULL DEFAULT '{\"version\":2,\"blocks\":[]}'")
             _ensure_column(conn, "memory_facts", "pinned", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "memory_facts", "status", "TEXT NOT NULL DEFAULT 'active'")
             _ensure_column(conn, "memory_facts", "access_count", "INTEGER NOT NULL DEFAULT 0")
@@ -1128,6 +1131,7 @@ def load_chat_store() -> dict[str, Any]:
             "modelCaches": _loads(row["model_caches"], []),
             "runtimeEvents": _loads(row["runtime_events"], []),
             "planRuns": _loads(row["plan_runs"], []),
+            "displaySnapshot": _loads(row["display_snapshot"], EMPTY_DISPLAY_SNAPSHOT),
             "created_at": row["created_at"],
         })
     return {
@@ -1183,15 +1187,18 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     _dumps(item.get("modelCaches", item.get("model_caches", []))),
                     _dumps(item.get("runtimeEvents", item.get("runtime_events", []))),
                     _dumps(item.get("planRuns", item.get("plan_runs", []))),
+                    _dumps(item.get("displaySnapshot", item.get("display_snapshot", EMPTY_DISPLAY_SNAPSHOT))),
                     item["created_at"], index,
                 ))
         conn.executemany(
             """
             INSERT INTO chat_messages (
                 id, session_id, role, content, agent_id, agent_name, model_name,
-                error, thinking, images, tool_calls, subagent_calls, skill_calls, team_activities, model_caches, runtime_events, plan_runs, created_at,
+                error, thinking, images, tool_calls, subagent_calls, skill_calls,
+                team_activities, model_caches, runtime_events, plan_runs,
+                display_snapshot, created_at,
                 sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )

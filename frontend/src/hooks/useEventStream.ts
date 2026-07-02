@@ -13,17 +13,18 @@
 
 import { useCallback, useRef, useState } from 'react';
 import type { ChatRuntimeEvent } from '../types/chatEvents';
+import { DISPLAY_BLOCKS, DISPLAY_EVENTS, type DisplayBlock, type DisplaySnapshot } from '../types/displayEvents';
 import type {
   ChatRunPlanState,
   ChatRunPlanStep,
   ChatRunStatePatch,
   ChatRunStateSnapshot,
   RunStateApprovalSummary,
-  RunStateToolSummary,
 } from '../types/runState';
+import { applyDisplayEvent, createEmptyDisplaySnapshot, normalizeDisplaySnapshot } from '../utils/displayEventReducer';
 import { createId } from '../utils/id';
 
-export type { ChatRunPlanState, ChatRunPlanStep } from '../types/runState';
+export type { ChatRunPlanState, ChatRunPlanStep, DisplaySnapshot } from '../types/runState';
 
 /** SSE 事件类型 */
 export interface SSEEvent {
@@ -55,12 +56,12 @@ export interface StreamState {
   skillCalls: SkillCallInfo[];
   /** Team 协作活动 */
   teamActivities: TeamActivityInfo[];
-  /** 模型缓存事件 */
-  modelCaches: ModelCacheInfo[];
   /** 应用级运行事件 */
   runtimeEvents: ChatRuntimeEvent[];
   /** RunState 投影出的 Plan Mode 状态 */
   plans: ChatRunPlanState[];
+  /** 单 Agent 主展示快照 */
+  displaySnapshot: DisplaySnapshot;
   /** 待人工处理的交互 */
   hitlRequests: HitlRequestInfo[];
   /** 待用户补充信息的反问 */
@@ -186,19 +187,6 @@ export interface TeamActivityInfo {
   createdAt: string;
 }
 
-/** 模型缓存信息 */
-export interface ModelCacheInfo {
-  id: string;
-  modelName: string;
-  inputTokens: number;
-  outputTokens: number;
-  cacheCreationInputTokens: number;
-  cacheInputTokens: number;
-  cacheHitRate: number;
-  estimatedSavedInputTokens: number;
-  createdAt: string;
-}
-
 /** 人机交互请求 */
 export interface HitlRequestInfo {
   interactionId: string;
@@ -280,7 +268,6 @@ interface SendMessageOptions {
   skillIds?: string[];
   deepThinking?: boolean;
   sandbox?: boolean;
-  approvedPlanId?: string;
   images?: Array<{
     name: string;
     media_type: string;
@@ -301,9 +288,9 @@ const INITIAL_STATE: StreamState = {
   toolCalls: [],
   skillCalls: [],
   teamActivities: [],
-  modelCaches: [],
   runtimeEvents: [],
   plans: [],
+  displaySnapshot: createEmptyDisplaySnapshot(),
   hitlRequests: [],
   clarificationRequests: [],
   modelName: '',
@@ -312,7 +299,11 @@ const INITIAL_STATE: StreamState = {
 };
 
 function hasPendingUserInteraction(state: StreamState): boolean {
-  return state.hitlRequests.length > 0 || state.clarificationRequests.length > 0;
+  return (
+    state.hitlRequests.length > 0 ||
+    state.clarificationRequests.length > 0 ||
+    state.plans.some((plan) => plan.status === 'waiting')
+  );
 }
 
 function completeStreamIfNoPendingUserInteraction(state: StreamState): StreamState {
@@ -357,6 +348,12 @@ function failStreamWithError(state: StreamState, error: string): StreamState {
 
 function streamStateFromRunState(snapshot: ChatRunStateSnapshot): StreamState {
   const runStatus = String(snapshot.status || '');
+  const displaySnapshot = normalizeDisplaySnapshot(snapshot.displaySnapshot);
+  const displayState = deriveStateFromDisplaySnapshot(
+    displaySnapshot,
+    String(snapshot.runId || ''),
+    String(snapshot.sessionId || ''),
+  );
   const hitlRequests = (snapshot.approvals || [])
     .filter((approval) => approval.status === 'waiting' && !isClarificationApproval(approval))
     .map((approval): HitlRequestInfo => ({
@@ -386,45 +383,42 @@ function streamStateFromRunState(snapshot: ChatRunStateSnapshot): StreamState {
     currentRunId: String(snapshot.runId || ''),
     runStartedAt: String(snapshot.createdAt || ''),
     runCompletedAt: String(snapshot.completedAt || ''),
-    textContent: String(snapshot.finalAnswer || ''),
-    reasoningContent: String(snapshot.reasoning || ''),
-    finalAnswerContent: String(snapshot.finalAnswer || ''),
-    thinkingContent: String(snapshot.thinking || ''),
-    toolCalls: (snapshot.tools || []).map((tool) => ({
-      id: String(tool.id || createId()),
-      name: normalizeToolDisplayName(String(tool.name || 'tool')),
-      args: String(tool.inputPreview || ''),
-      result: String(tool.error || tool.outputPreview || ''),
+    textContent: displayState.finalAnswerContent || ((snapshot.teamActivities || []).length > 0 ? String(snapshot.finalAnswer || '') : ''),
+    reasoningContent: displayState.reasoningContent,
+    finalAnswerContent: displayState.finalAnswerContent || ((snapshot.teamActivities || []).length > 0 ? String(snapshot.finalAnswer || '') : ''),
+    thinkingContent: displayState.thinkingContent,
+    toolCalls: displayState.toolCalls.map((tool) => ({
+      ...tool,
       status: normalizeToolStatusForRun(tool.status, runStatus),
     })),
     teamActivities: normalizeTeamActivities(snapshot.teamActivities || [], [], []),
-    skillCalls: normalizeRunStateSkillCalls(snapshot.skillCalls || []),
-    modelCaches: normalizeRunStateModelCaches(snapshot.modelCaches || []),
+    skillCalls: displayState.skillCalls,
     modelName: String(snapshot.modelName || ''),
     tokenUsage: snapshot.tokenUsage || null,
-    runtimeEvents: (snapshot.runtimeEvents || []).map((event) => normalizeRuntimeEvent(event)),
-    plans: normalizeRunStatePlans(snapshot.plans || []),
-    hitlRequests,
-    clarificationRequests,
-    error: String(snapshot.error || ''),
+    runtimeEvents: [],
+    plans: displayState.plans,
+    displaySnapshot,
+    hitlRequests: displayState.hitlRequests.length > 0 ? displayState.hitlRequests : hitlRequests,
+    clarificationRequests: displayState.clarificationRequests.length > 0 ? displayState.clarificationRequests : clarificationRequests,
+    error: displayState.error || String(snapshot.error || ''),
   };
 }
 
 function applyRunStatePatch(state: StreamState, patch: ChatRunStatePatch): StreamState {
   const patchKind = patch.kind || 'snapshot_meta';
-  const finalAnswerDelta = patchKind === 'final_answer_delta' ? String(patch.finalAnswerDelta || '') : '';
-  const reasoningDelta = patchKind === 'reasoning_delta' ? String(patch.reasoningDelta || '') : '';
-  const thinkingDelta = patchKind === 'thinking_delta' ? String(patch.thinkingDelta || '') : '';
   const nextStatus = String(patch.status || '');
   const isTerminal = ['completed', 'failed', 'cancelled'].includes(nextStatus);
   const isWaiting = nextStatus === 'waiting';
-  let runtimeEvents = state.runtimeEvents;
-  if (patch.runtimeEvent) {
-    runtimeEvents = appendRuntimeEventCompact(runtimeEvents, normalizeRuntimeEvent(patch.runtimeEvent));
-  }
-  let toolCalls = patchKind === 'tool' && patch.tool
-    ? mergeToolCalls(state.toolCalls, [toolCallFromRunStateTool(patch.tool)])
-    : state.toolCalls;
+  const displaySnapshot = patch.displayEvent
+    ? applyDisplayEvent(state.displaySnapshot, patch.displayEvent)
+    : state.displaySnapshot;
+  const hasDisplaySnapshot = displaySnapshot.blocks.length > 0;
+  const displayState = deriveStateFromDisplaySnapshot(
+    displaySnapshot,
+    String(patch.runId || state.currentRunId),
+    String(patch.sessionId || ''),
+  );
+  let toolCalls = hasDisplaySnapshot ? displayState.toolCalls : state.toolCalls;
   if (isTerminal) {
     toolCalls = markActiveToolCallsFailed(toolCalls);
   }
@@ -433,45 +427,224 @@ function applyRunStatePatch(state: StreamState, patch: ChatRunStatePatch): Strea
   if (patchKind === 'approval_resolved' && patch.resolvedApprovalId) {
     hitlRequests = hitlRequests.filter((item) => item.interactionId !== patch.resolvedApprovalId);
     clarificationRequests = clarificationRequests.filter((item) => item.id !== patch.resolvedApprovalId);
-  } else if (patchKind === 'approval' && patch.approval && isClarificationApproval(patch.approval)) {
-    clarificationRequests = mergeClarificationRequests(
-      clarificationRequests,
-      clarificationRequestFromRunStateApproval(patch.approval),
-    );
-  } else if (patchKind === 'approval' && patch.approval) {
-    hitlRequests = mergeHitlRequests(
-      hitlRequests,
-      hitlRequestFromRunStateApproval(patch, patch.approval),
-    );
   }
   return {
     ...state,
     currentRunId: String(patch.runId || state.currentRunId),
     runCompletedAt: String(patch.completedAt || state.runCompletedAt || ''),
-    textContent: state.textContent + finalAnswerDelta,
-    finalAnswerContent: state.finalAnswerContent + finalAnswerDelta,
-    reasoningContent: state.reasoningContent + reasoningDelta,
-    thinkingContent: state.thinkingContent + thinkingDelta,
+    textContent: hasDisplaySnapshot ? displayState.finalAnswerContent : state.textContent,
+    finalAnswerContent: hasDisplaySnapshot ? displayState.finalAnswerContent : state.finalAnswerContent,
+    reasoningContent: hasDisplaySnapshot ? displayState.reasoningContent : state.reasoningContent,
+    thinkingContent: hasDisplaySnapshot ? displayState.thinkingContent : state.thinkingContent,
     toolCalls,
     teamActivities: patchKind === 'team_activities' && Array.isArray(patch.teamActivities)
-      ? normalizeTeamActivities(patch.teamActivities, state.teamActivities, runtimeEvents)
+      ? normalizeTeamActivities(patch.teamActivities, state.teamActivities, state.runtimeEvents)
       : state.teamActivities,
-    skillCalls: patchKind === 'skill_calls' && Array.isArray(patch.skillCalls)
-      ? normalizeRunStateSkillCalls(patch.skillCalls)
+    skillCalls: hasDisplaySnapshot
+      ? displayState.skillCalls
       : state.skillCalls,
-    modelCaches: patchKind === 'model_usage' && Array.isArray(patch.modelCaches)
-      ? normalizeRunStateModelCaches(patch.modelCaches)
-      : state.modelCaches,
     modelName: patchKind === 'model_usage' && typeof patch.modelName === 'string'
       ? patch.modelName
       : state.modelName,
     tokenUsage: patchKind === 'model_usage' && patch.tokenUsage !== undefined ? patch.tokenUsage : state.tokenUsage,
-    hitlRequests,
-    clarificationRequests,
-    plans: patchKind === 'plans' && Array.isArray(patch.plans) ? normalizeRunStatePlans(patch.plans) : state.plans,
-    runtimeEvents,
+    hitlRequests: hasDisplaySnapshot ? displayState.hitlRequests : hitlRequests,
+    clarificationRequests: hasDisplaySnapshot ? displayState.clarificationRequests : clarificationRequests,
+    plans: hasDisplaySnapshot
+      ? displayState.plans
+      : state.plans,
+    displaySnapshot,
+    runtimeEvents: state.runtimeEvents,
     isStreaming: isTerminal || isWaiting ? false : state.isStreaming,
-    error: patchKind === 'error' ? String(patch.error || state.error || '') : String(state.error || ''),
+    error: hasDisplaySnapshot
+      ? displayState.error || (patchKind === 'error' ? String(patch.error || state.error || '') : String(state.error || ''))
+      : patchKind === 'error' ? String(patch.error || state.error || '') : String(state.error || ''),
+  };
+}
+
+interface DisplayDerivedState {
+  reasoningContent: string;
+  thinkingContent: string;
+  finalAnswerContent: string;
+  toolCalls: ToolCallInfo[];
+  skillCalls: SkillCallInfo[];
+  plans: ChatRunPlanState[];
+  hitlRequests: HitlRequestInfo[];
+  clarificationRequests: ClarificationRequestInfo[];
+  error: string;
+}
+
+function deriveStateFromDisplaySnapshot(
+  snapshot: DisplaySnapshot,
+  runId: string,
+  sessionId: string,
+): DisplayDerivedState {
+  const processBlocks = snapshot.blocks.filter((block) => block.block === DISPLAY_BLOCKS.PROCESS);
+  const processItems = processBlocks.flatMap((block) => block.items);
+  const reasoningContent = processItems
+    .filter((item) => item.event === DISPLAY_EVENTS.REASONING_DELTA || item.targetId === 'reasoning')
+    .map((item) => pickDisplayString(item.data, ['text', 'content', 'delta']))
+    .filter(Boolean)
+    .join('\n\n');
+  const thinkingContent = processItems
+    .filter((item) => item.event === DISPLAY_EVENTS.THINKING_DELTA || item.targetId === 'thinking')
+    .map((item) => pickDisplayString(item.data, ['text', 'content', 'delta']))
+    .filter(Boolean)
+    .join('\n\n');
+  const toolCalls = processItems
+    .filter((item) => item.event.startsWith('tool.') || item.targetId.startsWith('tool'))
+    .map(toolCallFromDisplayItem);
+  const skillCalls = processItems
+    .filter((item) => item.event.startsWith('skill.') || item.targetId.startsWith('skill'))
+    .map(skillCallFromDisplayItem);
+  const answerBlock = snapshot.blocks.find((block) => block.block === DISPLAY_BLOCKS.ANSWER);
+  const feedbackBlock = snapshot.blocks.find((block) => block.block === DISPLAY_BLOCKS.FEEDBACK);
+  const errorBlock = snapshot.blocks.find((block) => block.block === DISPLAY_BLOCKS.ERROR);
+  const approvals = feedbackBlock ? approvalsFromDisplayBlock(feedbackBlock) : [];
+
+  return {
+    reasoningContent,
+    thinkingContent,
+    finalAnswerContent: answerBlock ? pickDisplayString(answerBlock.data, ['content', 'text']) : '',
+    toolCalls,
+    skillCalls,
+    plans: snapshot.blocks
+      .filter((block) => block.block === DISPLAY_BLOCKS.PLAN)
+      .map(planStateFromDisplayBlock)
+      .filter((plan) => plan.planId),
+    hitlRequests: approvals
+      .filter((approval) => approval.status === 'waiting' && !isClarificationApproval(approval))
+      .map((approval) => hitlRequestFromApprovalContext(runId, sessionId, approval)),
+    clarificationRequests: approvals
+      .filter((approval) => approval.status === 'waiting' && isClarificationApproval(approval))
+      .map((approval) => clarificationRequestFromRunStateApproval(approval)),
+    error: errorBlock ? pickDisplayString(errorBlock.data, ['message', 'error']) : '',
+  };
+}
+
+function pickDisplayString(data: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = data[key];
+    if (value !== undefined && value !== null) return String(value);
+  }
+  return '';
+}
+
+function toolCallFromDisplayItem(item: DisplayBlock['items'][number]): ToolCallInfo {
+  return {
+    id: item.targetId || item.id || createId(),
+    name: normalizeToolDisplayName(pickDisplayString(item.data, ['name', 'toolName', 'rawName']) || 'tool'),
+    args: pickDisplayString(item.data, ['inputPreview', 'input', 'args']),
+    result: pickDisplayString(item.data, ['error', 'outputPreview', 'output', 'result']),
+    status: normalizeToolStatus(item.status || item.data.status),
+  };
+}
+
+function skillCallFromDisplayItem(item: DisplayBlock['items'][number]): SkillCallInfo {
+  const status = String(item.status || item.data.status || 'running');
+  return {
+    id: item.targetId || item.id || createId(),
+    name: pickDisplayString(item.data, ['name']) || 'Skill',
+    description: pickDisplayString(item.data, ['description']),
+    trigger: pickDisplayString(item.data, ['trigger']),
+    content: pickDisplayString(item.data, ['content']),
+    resourcePath: pickDisplayString(item.data, ['resourcePath']),
+    resources: Array.isArray(item.data.resources) ? item.data.resources.map((resource) => String(resource)) : [],
+    status: (
+      status === 'completed' || status === 'failed' || status === 'running'
+        ? status
+        : 'running'
+    ) as SkillCallInfo['status'],
+  };
+}
+
+function planStateFromDisplayBlock(block: DisplayBlock): ChatRunPlanState {
+  return {
+    planId: pickDisplayString(block.data, ['planId']) || block.id.replace(/^plan-/, ''),
+    planFile: pickDisplayString(block.data, ['planFile']),
+    status: String(block.status || block.data.status || 'running'),
+    markdown: pickDisplayString(block.data, ['markdown', 'content']),
+    steps: Array.isArray(block.data.steps) ? block.data.steps.map(normalizeRunStatePlanStep) : [],
+    updatedAt: block.updatedAt,
+  };
+}
+
+function approvalsFromDisplayBlock(block: DisplayBlock): RunStateApprovalSummary[] {
+  const approvalSource = block.data.approval ?? block.data.request ?? block.data.current;
+  if (approvalSource) {
+    const approval = normalizeDisplayApproval(approvalSource, block);
+    return approval ? [approval] : [];
+  }
+  if (Array.isArray(block.data.approvals)) {
+    return block.data.approvals.flatMap((item) => {
+      const approval = normalizeDisplayApproval(item, block);
+      return approval ? [approval] : [];
+    });
+  }
+  const approval = normalizeDisplayApproval(block.data, block);
+  return approval ? [approval] : [];
+}
+
+function normalizeDisplayApproval(source: unknown, block: DisplayBlock): RunStateApprovalSummary | null {
+  if (!source || typeof source !== 'object') return null;
+  const record = source as Record<string, unknown>;
+  const interactionId = String(record.interactionId || record.id || block.id || '');
+  if (!interactionId) return null;
+  return {
+    interactionId,
+    kind: record.kind ? String(record.kind) : undefined,
+    type: String(record.type || 'tool_approval'),
+    status: String(record.status || block.status || 'waiting'),
+    agentId: String(record.agentId || ''),
+    agentName: String(record.agentName || 'Agent'),
+    toolCalls: Array.isArray(record.toolCalls)
+      ? record.toolCalls.map((toolCall) => normalizeApprovalToolCall(toolCall))
+      : [],
+    title: record.title ? String(record.title) : undefined,
+    description: record.description ? String(record.description) : undefined,
+    questions: Array.isArray(record.questions)
+      ? record.questions.flatMap((question) => (
+        question && typeof question === 'object' ? [question as Record<string, unknown>] : []
+      ))
+      : undefined,
+    createdAt: String(record.createdAt || block.updatedAt || new Date().toISOString()),
+  };
+}
+
+function normalizeApprovalToolCall(toolCall: unknown): RunStateApprovalSummary['toolCalls'][number] {
+  if (!toolCall || typeof toolCall !== 'object') {
+    return {};
+  }
+  const record = toolCall as Record<string, unknown>;
+  return {
+    id: record.id ? String(record.id) : undefined,
+    name: record.name ? String(record.name) : undefined,
+    input: record.input ? String(record.input) : undefined,
+    rawName: record.rawName ? String(record.rawName) : undefined,
+  };
+}
+
+function hitlRequestFromApprovalContext(
+  runId: string,
+  sessionId: string,
+  approval: RunStateApprovalSummary,
+): HitlRequestInfo {
+  return {
+    interactionId: String(approval.interactionId || ''),
+    type: String(approval.type || 'tool_approval'),
+    sessionId,
+    agentId: String(approval.agentId || ''),
+    agentName: String(approval.agentName || ''),
+    runId,
+    scope: 'leader',
+    teamActivityId: null,
+    replyId: '',
+    toolCalls: (approval.toolCalls || []).map((toolCall) => ({
+      id: String(toolCall.id || createId()),
+      name: normalizeToolDisplayName(String(toolCall.name || 'tool')),
+      input: String(toolCall.input || ''),
+      rawName: toolCall.rawName ? String(toolCall.rawName) : undefined,
+    })),
+    createdAt: String(approval.createdAt || new Date().toISOString()),
   };
 }
 
@@ -529,76 +702,6 @@ function isClarificationApproval(approval: RunStateApprovalSummary): boolean {
   );
 }
 
-function mergeClarificationRequests(
-  current: ClarificationRequestInfo[],
-  incoming: ClarificationRequestInfo,
-): ClarificationRequestInfo[] {
-  if (!incoming.id) return current;
-  const index = current.findIndex((item) => item.id === incoming.id);
-  if (index === -1) {
-    return [...current, incoming];
-  }
-  return current.map((item, itemIndex) => (
-    itemIndex === index ? { ...item, ...incoming } : item
-  ));
-}
-
-function normalizeRunStateSkillCalls(skillCalls: unknown[]): SkillCallInfo[] {
-  return skillCalls.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
-    const skill = item as Record<string, unknown>;
-    return [{
-      id: String(skill.id || skill.name || createId()),
-      name: String(skill.name || skill.id || 'Skill'),
-      description: String(skill.description || ''),
-      trigger: String(skill.trigger || ''),
-      content: String(skill.content || ''),
-      resourcePath: String(skill.resourcePath || ''),
-      resources: Array.isArray(skill.resources) ? skill.resources.map((resource) => String(resource)) : [],
-      status: (
-        skill.status === 'completed' ||
-        skill.status === 'failed' ||
-        skill.status === 'running'
-          ? skill.status
-          : 'running'
-      ) as SkillCallInfo['status'],
-    }];
-  });
-}
-
-function normalizeRunStateModelCaches(modelCaches: unknown[]): ModelCacheInfo[] {
-  return modelCaches.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
-    const cache = item as Record<string, unknown>;
-    return [{
-      id: String(cache.id || createId()),
-      modelName: String(cache.modelName || ''),
-      inputTokens: Number(cache.inputTokens || 0),
-      outputTokens: Number(cache.outputTokens || 0),
-      cacheCreationInputTokens: Number(cache.cacheCreationInputTokens || 0),
-      cacheInputTokens: Number(cache.cacheInputTokens || 0),
-      cacheHitRate: Number(cache.cacheHitRate || 0),
-      estimatedSavedInputTokens: Number(cache.estimatedSavedInputTokens || 0),
-      createdAt: String(cache.createdAt || ''),
-    }];
-  });
-}
-
-function normalizeRunStatePlans(plans: unknown[]): ChatRunPlanState[] {
-  return plans.flatMap((item) => {
-    if (!item || typeof item !== 'object') return [];
-    const plan = item as Record<string, unknown>;
-    return [{
-      planId: String(plan.planId || ''),
-      planFile: String(plan.planFile || ''),
-      status: String(plan.status || 'running'),
-      markdown: String(plan.markdown || ''),
-      steps: Array.isArray(plan.steps) ? plan.steps.map(normalizeRunStatePlanStep) : [],
-      updatedAt: String(plan.updatedAt || ''),
-    }];
-  }).filter((plan) => plan.planId);
-}
-
 function normalizeRunStatePlanStep(step: unknown): ChatRunPlanStep {
   if (!step || typeof step !== 'object') return {};
   const record = step as Record<string, unknown>;
@@ -612,121 +715,6 @@ function normalizeRunStatePlanStep(step: unknown): ChatRunPlanStep {
     evidence: record.evidence ? String(record.evidence) : undefined,
     result: record.result ? String(record.result) : undefined,
   };
-}
-
-function toolCallFromRunStateTool(tool: RunStateToolSummary): ToolCallInfo {
-  return {
-    id: String(tool.id || createId()),
-    name: normalizeToolDisplayName(String(tool.name || 'tool')),
-    args: String(tool.inputPreview || ''),
-    result: String(tool.error || tool.outputPreview || ''),
-    status: normalizeToolStatus(tool.status),
-  };
-}
-
-function hitlRequestFromRunStateApproval(
-  patch: ChatRunStatePatch,
-  approval: RunStateApprovalSummary,
-): HitlRequestInfo {
-  return {
-    interactionId: String(approval.interactionId || ''),
-    type: String(approval.type || 'tool_approval'),
-    sessionId: String(patch.sessionId || ''),
-    agentId: String(approval.agentId || ''),
-    agentName: String(approval.agentName || ''),
-    runId: String(patch.runId || ''),
-    scope: 'leader',
-    teamActivityId: null,
-    replyId: '',
-    toolCalls: (approval.toolCalls || []).map((toolCall) => ({
-      id: String(toolCall.id || createId()),
-      name: normalizeToolDisplayName(String(toolCall.name || 'tool')),
-      input: String(toolCall.input || ''),
-      rawName: toolCall.rawName ? String(toolCall.rawName) : undefined,
-    })),
-    createdAt: String(approval.createdAt || new Date().toISOString()),
-  };
-}
-
-function mergeHitlRequests(
-  current: HitlRequestInfo[],
-  incoming: HitlRequestInfo,
-): HitlRequestInfo[] {
-  if (!incoming.interactionId) return current;
-  const index = current.findIndex((item) => item.interactionId === incoming.interactionId);
-  if (index === -1) {
-    return [...current, incoming];
-  }
-  return current.map((item, itemIndex) => (
-    itemIndex === index ? { ...item, ...incoming } : item
-  ));
-}
-
-function normalizeRuntimeEvent(data: Record<string, unknown>): ChatRuntimeEvent {
-  return {
-    id: String(data.id || createId()),
-    runId: String(data.runId || ''),
-    sessionId: String(data.sessionId || ''),
-    type: String(data.type || ''),
-    source: String(data.source || 'runtime'),
-    sourceEventType: data.sourceEventType ? String(data.sourceEventType) : null,
-    scope: String(data.scope || ''),
-    agentId: String(data.agentId || ''),
-    agentName: String(data.agentName || ''),
-    teamActivityId: data.teamActivityId ? String(data.teamActivityId) : null,
-    status: String(data.status || ''),
-    reason: String(data.reason || ''),
-    timestamp: String(data.timestamp || new Date().toISOString()),
-    durationMs: typeof data.durationMs === 'number' ? data.durationMs : null,
-    payload: (
-      typeof data.payload === 'object' && data.payload !== null
-        ? data.payload as Record<string, unknown>
-        : {}
-    ),
-  };
-}
-
-function appendRuntimeEventCompact(
-  current: ChatRuntimeEvent[],
-  incoming: ChatRuntimeEvent,
-): ChatRuntimeEvent[] {
-  const previous = current[current.length - 1];
-  if (previous && shouldMergeRuntimeDelta(previous, incoming)) {
-    const mergedPayload = {
-      ...previous.payload,
-      delta: `${String(previous.payload.delta || '')}${String(incoming.payload.delta || '')}`,
-    };
-    return [
-      ...current.slice(0, -1),
-      {
-        ...previous,
-        timestamp: incoming.timestamp,
-        payload: mergedPayload,
-      },
-    ];
-  }
-  return [...current, incoming].slice(-2000);
-}
-
-function shouldMergeRuntimeDelta(previous: ChatRuntimeEvent, incoming: ChatRuntimeEvent): boolean {
-  if (previous.type !== incoming.type) return false;
-  if (previous.scope !== incoming.scope) return false;
-  if (previous.agentId !== incoming.agentId) return false;
-  if (previous.teamActivityId !== incoming.teamActivityId) return false;
-  const mergeableTypes = new Set<string>([
-    'AGENT_OUTPUT_DELTA',
-    'AGENT_REASONING_DELTA',
-    'AGENT_FINAL_ANSWER_DELTA',
-    'AGENT_THINKING',
-    'TOOL_CALL_DELTA',
-    'TOOL_RESULT_DELTA',
-  ]);
-  if (!mergeableTypes.has(incoming.type)) {
-    return false;
-  }
-  const previousToolId = String(previous.payload.tool_call_id || '');
-  const incomingToolId = String(incoming.payload.tool_call_id || '');
-  return previousToolId === incomingToolId;
 }
 
 function hasRuntimeActivityEvents(
@@ -959,7 +947,6 @@ export function useEventStream(): UseEventStreamReturn {
             skill_ids: options?.skillIds,
             deep_thinking: options?.deepThinking,
             sandbox: options?.sandbox,
-            approvedPlanId: options?.approvedPlanId,
             images: options?.images,
           }),
           signal: controller.signal,

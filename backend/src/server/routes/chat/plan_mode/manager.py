@@ -6,9 +6,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.server.routes.chat.plan_mode.models import (
-    PLAN_STATUS_APPROVED,
     PLAN_STATUS_DRAFT,
-    PLAN_STATUS_WAITING_APPROVAL,
+    PLAN_STATUS_FINALIZED,
     PLAN_STEP_STATUS_COMPLETED,
     PLAN_STEP_STATUS_FAILED,
     PLAN_STEP_STATUS_PENDING,
@@ -78,7 +77,6 @@ class PlanModeManager:
         markdown = self.context.markdown or f"# {title}\n\n## Goal\n{goal}\n"
         self.context.plan_id = plan_id
         self.context.plan_active = True
-        self.context.waiting_approval = False
         self.context.current_plan_file = plan_file
         self.context.markdown = markdown
         self._append_runtime_event(
@@ -209,40 +207,25 @@ class PlanModeManager:
         )
         return self.context
 
-    def exit_for_approval(self) -> PlanModeContext:
-        """退出只读计划阶段并等待用户审批。"""
+    def finalize(self) -> PlanModeContext:
+        """退出只读计划阶段并将计划作为本轮最终答复。"""
 
         self.context.plan_active = False
-        self.context.waiting_approval = True
         self._append_runtime_event(
-            "PLAN_WAITING_APPROVAL",
-            status="waiting",
+            "PLAN_FINALIZED",
+            status="completed",
             payload={"markdown": self.context.markdown},
         )
         if self.persist and self.context.plan_id:
             from src.storage.database import append_plan_event_record, update_plan_record
 
-            update_plan_record(self.context.plan_id, status=PLAN_STATUS_WAITING_APPROVAL)
+            update_plan_record(self.context.plan_id, status=PLAN_STATUS_FINALIZED)
             append_plan_event_record(
                 self.context.plan_id,
                 step_id=None,
-                event_type="PLAN_WAITING_APPROVAL",
-                content="Plan mode exited and waits for approval.",
+                event_type="PLAN_FINALIZED",
+                content="Plan mode exited and returned the plan as final answer.",
             )
-        return self.context
-
-    def load_approved_plan(self, plan: dict) -> PlanModeContext:
-        """加载已批准计划，让下一轮 ReAct 进入 Build mode。"""
-
-        if plan.get("status") != PLAN_STATUS_APPROVED:
-            raise ValueError("Only approved plans can be loaded for Build mode.")
-        self.context.plan_id = str(plan.get("id") or "")
-        self.context.plan_active = False
-        self.context.waiting_approval = False
-        self.context.approved = True
-        self.context.current_plan_file = self._make_plan_file_path(self.context.plan_id)
-        self.context.markdown = str(plan.get("markdown") or "")
-        self.context.steps = list(plan.get("steps") or [])
         return self.context
 
     def record_tool_denied(self, *, tool_call_id: str, tool_name: str, message: str) -> None:

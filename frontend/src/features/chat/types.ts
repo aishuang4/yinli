@@ -1,4 +1,4 @@
-import type { ClarificationRequestInfo, ModelCacheInfo, SkillCallInfo, TeamActivityInfo, ToolCallInfo } from '../../hooks/useEventStream';
+import type { ClarificationRequestInfo, DisplaySnapshot, SkillCallInfo, TeamActivityInfo, ToolCallInfo } from '../../hooks/useEventStream';
 import type { ChatRuntimeEvent } from '../../types/chatEvents';
 
 /** 本地消息记录 */
@@ -18,12 +18,14 @@ export interface LocalMessage {
   skillCalls?: SkillCallInfo[];
   /** Team 协作活动（仅 assistant 消息） */
   teamActivities?: TeamActivityInfo[];
-  /** 模型厂商侧 Prompt Cache 统计 */
-  modelCaches?: ModelCacheInfo[];
   /** 本轮 Runtime Event 时间线 */
   runtimeEvents?: ChatRuntimeEvent[];
+  /** 后端投影后的消息展示快照 */
+  displaySnapshot?: DisplaySnapshot;
   /** 思考链内容（仅 assistant 消息） */
   thinking?: string;
+  /** ReAct 过程文本（仅本地 live run 收口消息） */
+  reasoning?: string;
   /** Token 用量 */
   tokenUsage?: { input: number; output: number } | null;
   /** 使用的模型 */
@@ -84,10 +86,10 @@ export interface StoredChatMessage {
   skill_calls?: SkillCallInfo[];
   teamActivities?: TeamActivityInfo[];
   team_activities?: StoredTeamActivity[];
-  modelCaches?: ModelCacheInfo[];
-  model_caches?: ModelCacheInfo[];
   runtimeEvents?: ChatRuntimeEvent[];
   runtime_events?: ChatRuntimeEvent[];
+  displaySnapshot?: DisplaySnapshot;
+  display_snapshot?: DisplaySnapshot;
   clarificationRequests?: ClarificationRequestInfo[];
   clarification_requests?: ClarificationRequestInfo[];
   clarificationResolved?: boolean;

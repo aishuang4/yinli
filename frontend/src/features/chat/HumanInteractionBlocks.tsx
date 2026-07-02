@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AlertCircle, Wrench } from 'lucide-react';
 import { Button, Tag } from '@agentscope-ai/design';
 import type { ClarificationQuestionInfo, ClarificationRequestInfo, HitlRequestInfo } from '../../hooks/useEventStream';
+import { isAskUserToolName } from './humanInteractionUtils';
 
 export function HitlApprovalBlock({
   request,
@@ -102,15 +103,6 @@ export function HitlApprovalBlock({
   );
 }
 
-function isAskUserToolName(name: string) {
-  const normalized = name.replace(/\s+/g, '').toLowerCase();
-  return normalized === 'askuser' || normalized.endsWith('_askuser');
-}
-
-export function isAskUserHitlRequest(request: HitlRequestInfo): boolean {
-  return request.toolCalls.some((toolCall) => isAskUserToolName(toolCall.rawName || toolCall.name));
-}
-
 function buildClarificationRequestFromAskUser(toolCall: HitlRequestInfo['toolCalls'][number]): ClarificationRequestInfo {
   let raw: Record<string, unknown>;
   try {
@@ -155,42 +147,6 @@ function buildClarificationRequestFromAskUser(toolCall: HitlRequestInfo['toolCal
         required: true,
       }],
   };
-}
-
-export function HitlDock({
-  requests,
-  onResolve,
-}: {
-  requests: HitlRequestInfo[];
-  onResolve: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
-}) {
-  if (requests.length === 0) return null;
-
-  return (
-    <div className="mx-auto mb-3 max-w-4xl rounded-xl border border-[var(--color-warning)] bg-[var(--color-bg-primary)] p-3 shadow-lg">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
-          <AlertCircle size={15} color="var(--color-warning)" />
-          <span>需要人工审批</span>
-          <Tag size="small" color="warning">
-            {requests.length}
-          </Tag>
-        </div>
-        <div className="text-xs text-[var(--color-text-tertiary)]">
-          审批完成后 Agent 会继续执行
-        </div>
-      </div>
-      <div className="max-h-[320px] space-y-2 overflow-y-auto pr-1">
-        {requests.map((request) => (
-          <HitlApprovalBlock
-            key={request.interactionId}
-            request={request}
-            onResolve={onResolve}
-          />
-        ))}
-      </div>
-    </div>
-  );
 }
 
 export function ClarificationBlock({

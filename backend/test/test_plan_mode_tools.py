@@ -32,10 +32,9 @@ def test_manager_enters_updates_and_exits_plan_mode() -> None:
     assert updated.markdown == "# Plan\n\n- [ ] Step 1"
     assert manager.context.current_plan_file == entered.current_plan_file
 
-    waiting = manager.exit_for_approval()
-    assert waiting.plan_active is False
-    assert waiting.waiting_approval is True
-    assert waiting.approved is False
+    finalized = manager.finalize()
+    assert finalized.plan_active is False
+    assert finalized.markdown == "# Plan\n\n- [ ] Step 1"
 
 
 def test_manager_enter_is_idempotent_for_same_run() -> None:
@@ -91,7 +90,12 @@ def test_plan_tools_update_manager_context() -> None:
 
     exit_result = asyncio.run(PlanExitTool(manager)())
     assert exit_result.state == ToolResultState.SUCCESS
-    assert manager.context.waiting_approval is True
+    exit_payload = json.loads(exit_result.content[0].text)
+    assert exit_payload == {
+        "planId": manager.context.plan_id,
+        "planFile": manager.context.current_plan_file,
+        "markdown": "# 调查计划\n\n- [ ] 读取代码",
+    }
 
 
 def test_manager_writes_structured_plan_tasks() -> None:
@@ -148,8 +152,8 @@ def test_manager_records_task_output() -> None:
     assert events[-1]["payload"]["step"]["result"] == "工具返回结构化步骤。"
 
 
-def test_e2e_plan_enter_todo_write_exit_approve_task_output() -> None:
-    """端到端集成测试：plan_enter → todo_write → plan_exit → load_approved_plan → task_output。"""
+def test_e2e_plan_enter_todo_write_exit_finalizes_plan() -> None:
+    """端到端集成测试：plan_enter → todo_write → plan_exit。"""
     manager = PlanModeManager(
         session_id="session-e2e",
         run_id="run-e2e",
@@ -177,34 +181,21 @@ def test_e2e_plan_enter_todo_write_exit_approve_task_output() -> None:
     assert tasks_events[-1]["type"] == "PLAN_TASKS_UPDATED"
     assert len(tasks_events[-1]["payload"]["steps"]) == 2
 
-    # 3. plan_exit — 等待审批
-    waiting = manager.exit_for_approval()
-    assert waiting.plan_active is False
-    assert waiting.waiting_approval is True
-    assert waiting.approved is False
+    # 3. plan_exit — 将计划作为本轮最终答复
+    finalized = manager.finalize()
+    assert finalized.plan_active is False
+    assert finalized.markdown
     exit_events = manager.drain_runtime_events()
-    assert exit_events[-1]["type"] == "PLAN_WAITING_APPROVAL"
+    assert exit_events[-1]["type"] == "PLAN_FINALIZED"
+    assert exit_events[-1]["status"] == "completed"
+    assert exit_events[-1]["payload"]["markdown"] == finalized.markdown
 
-    # 4. 模拟审批通过 + load_approved_plan
-    plan_record = {
-        "id": entered.plan_id,
-        "status": "approved",
-        "markdown": "# E2E Test\n\n- [ ] 步骤 A\n- [ ] 步骤 B",
-        "steps": context.steps,
-    }
-    loaded = manager.load_approved_plan(plan_record)
-    assert loaded.approved is True
-    assert loaded.plan_active is False
-    assert loaded.waiting_approval is False
-    assert loaded.current_plan_file
-    assert len(loaded.steps) == 2
-
-    # 5. task_list — 在 Build Mode 中读取当前步骤
+    # 4. task_list — 仍可读取当前结构化步骤
     steps = manager.list_tasks()
     assert len(steps) == 2
     assert steps[0]["status"] == "pending"
 
-    # 6. task_output — 更新步骤状态
+    # 5. task_output — 更新步骤状态
     step_a = steps[0]
     context = manager.record_task_output(
         step_id=step_a["id"],
@@ -221,7 +212,7 @@ def test_e2e_plan_enter_todo_write_exit_approve_task_output() -> None:
     assert output_events[-1]["status"] == "completed"
     assert output_events[-1]["payload"]["step"]["result"] == "步骤 A 完成"
 
-    # 7. 验证 task_list 能读取到更新后的步骤
+    # 6. 验证 task_list 能读取到更新后的步骤
     updated_steps = manager.list_tasks()
     assert updated_steps[0]["status"] == "completed"
     assert updated_steps[1]["status"] == "pending"

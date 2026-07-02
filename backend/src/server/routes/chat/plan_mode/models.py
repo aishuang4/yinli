@@ -4,9 +4,7 @@ from dataclasses import dataclass, field
 
 
 PLAN_STATUS_DRAFT = "draft"
-PLAN_STATUS_WAITING_APPROVAL = "waiting_approval"
-PLAN_STATUS_APPROVED = "approved"
-PLAN_STATUS_DENIED = "denied"
+PLAN_STATUS_FINALIZED = "finalized"
 
 PLAN_STEP_STATUS_PENDING = "pending"
 PLAN_STEP_STATUS_RUNNING = "running"
@@ -32,8 +30,6 @@ class PlanModeContext:
     agent_name: str
     plan_id: str = ""
     plan_active: bool = False
-    waiting_approval: bool = False
-    approved: bool = False
     current_plan_file: str = ""
     markdown: str = ""
     steps: list[dict] = field(default_factory=list)

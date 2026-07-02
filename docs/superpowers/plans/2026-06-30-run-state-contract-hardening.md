@@ -163,7 +163,6 @@ class RunStateSnapshot(BaseModel):
     tools: list[RunStateToolSummary] = Field(default_factory=list)
     teamActivities: list[dict[str, Any]] = Field(default_factory=list)
     skillCalls: list[dict[str, Any]] = Field(default_factory=list)
-    modelCaches: list[dict[str, Any]] = Field(default_factory=list)
     modelName: str = ""
     tokenUsage: dict[str, Any] | None = None
     plans: list[RunStatePlanSummary] = Field(default_factory=list)
@@ -184,13 +183,9 @@ class RunStatePatch(BaseModel):
     completedAt: str | None = None
     lastEventType: str = ""
     eventCount: int = 0
-    reasoningDelta: str | None = None
-    finalAnswerDelta: str | None = None
-    thinkingDelta: str | None = None
     tool: RunStateToolSummary | None = None
     teamActivities: list[dict[str, Any]] | None = None
     skillCalls: list[dict[str, Any]] | None = None
-    modelCaches: list[dict[str, Any]] | None = None
     modelName: str | None = None
     tokenUsage: dict[str, Any] | None = None
     approval: RunStateApprovalSummary | None = None

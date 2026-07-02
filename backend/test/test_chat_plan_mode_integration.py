@@ -57,28 +57,9 @@ def test_plan_mode_tools_and_middleware_are_constructed_together() -> None:
     assert middleware.manager is manager
 
 
-def test_react_runtime_loads_approved_plan_into_build_mode(monkeypatch) -> None:
-    """approvedPlanId 会把下一轮 ReAct 变成 Build mode。"""
+def test_react_runtime_constructs_plan_mode_without_approval_state() -> None:
+    """ReAct Runtime 始终只构造 Plan Mode 只读增强，不加载旧审批状态。"""
 
-    plan = {
-        "id": "plan-1",
-        "sessionId": "session-1",
-        "agentId": "agent-1",
-        "teamId": None,
-        "title": "计划",
-        "goal": "实现功能",
-        "status": "approved",
-        "markdown": "# 计划\n\n- [ ] 修改代码",
-        "currentStepId": None,
-        "createdAt": "2026-06-29T00:00:00+00:00",
-        "updatedAt": "2026-06-29T00:00:00+00:00",
-        "completedAt": None,
-        "steps": [],
-    }
-    monkeypatch.setattr(
-        "src.server.routes.chat.react_runtime.get_plan_record",
-        lambda plan_id: plan if plan_id == "plan-1" else None,
-    )
     ctx = type("Ctx", (), {
         "session_id": "session-1",
         "agent_id": "agent-1",
@@ -88,9 +69,9 @@ def test_react_runtime_loads_approved_plan_into_build_mode(monkeypatch) -> None:
 
     manager, cache_key, _tools, _middlewares = _build_plan_mode_runtime_parts(
         ctx,
-        ChatMessage(message="继续执行计划", approvedPlanId="plan-1"),
+        ChatMessage(message="请先制定计划"),
     )
 
-    assert cache_key == "plan-mode-v1:build-plan-1"
-    assert manager.context.approved is True
-    assert manager.context.markdown == "# 计划\n\n- [ ] 修改代码"
+    assert cache_key == "plan-mode-v1"
+    assert manager.context.plan_active is False
+    assert manager.context.markdown == ""
