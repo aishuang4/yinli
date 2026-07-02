@@ -1,6 +1,4 @@
-import type { TeamActivityInfo, ToolCallInfo } from '../../hooks/useEventStream';
-import type { StoredTeamActivity } from './types';
-import { createId } from '../../utils/id';
+import type { ToolCallInfo } from '../../hooks/useEventStream';
 
 export function normalizeStoredToolCalls(toolCalls: ToolCallInfo[] | undefined): ToolCallInfo[] {
   const seen = new Set<string>();
@@ -58,50 +56,3 @@ export function normalizeToolDisplayName(name: string): string {
   }
   return value;
 }
-
-export function normalizeStoredTeamActivities(activities: StoredTeamActivity[]): TeamActivityInfo[] {
-  return activities.map((activity) => ({
-    id: String(activity.id || createId()),
-    agentId: String(activity.agentId || activity.agent_id || ''),
-    agentName: String(activity.agentName || activity.agent_name || 'Agent'),
-    role: String(activity.role || 'worker'),
-    status: (
-      activity.status === 'pending' ||
-      activity.status === 'running' ||
-      activity.status === 'waiting' ||
-      activity.status === 'completed' ||
-      activity.status === 'failed' ||
-      activity.status === 'skipped'
-        ? activity.status
-        : 'completed'
-    ),
-    task: String(activity.task || ''),
-    assignment: String(activity.assignment || ''),
-    expectedOutput: String(activity.expectedOutput || activity.expected_output || ''),
-    constraints: String(activity.constraints || ''),
-    detail: String(activity.detail || ''),
-    output: String(activity.output || ''),
-    report: String(activity.report || ''),
-    skippedReason: String(activity.skippedReason || activity.skipped_reason || ''),
-    reportReviewStatus: String(activity.reportReviewStatus || activity.report_review_status || ''),
-    reportReviewNotes: String(activity.reportReviewNotes || activity.report_review_notes || ''),
-    reportReviewGaps: Array.isArray(activity.reportReviewGaps)
-      ? activity.reportReviewGaps.map((item) => String(item))
-      : Array.isArray(activity.report_review_gaps)
-        ? activity.report_review_gaps.map((item) => String(item))
-        : [],
-    thinking: String(activity.thinking || ''),
-    currentEvent: String(activity.currentEvent || ''),
-    toolCalls: normalizeStoredToolCalls(activity.toolCalls || activity.tool_calls || []),
-    executionMode: String(activity.executionMode || 'parallel'),
-    dependsOn: activity.dependsOn || [],
-    waitReason: String(activity.waitReason || ''),
-    dependencyOutputCount: Number(activity.dependencyOutputCount || 0),
-    leaderContextCount: Number(activity.leaderContextCount || 0),
-    createdAt: String(activity.createdAt || activity.created_at || ''),
-  }));
-}
-
-/**
- * ChatPage 组件
- */

@@ -4,21 +4,19 @@ import type {
   DisplaySnapshot,
   HitlRequestInfo,
   SkillCallInfo,
-  TeamActivityInfo,
   ToolCallInfo,
 } from '../../hooks/useEventStream';
 import { MessageImages, StreamingPlaceholder } from './MessageAtoms';
 import type { LocalMessage } from './types';
 import { ChatDisplayRenderer } from './ChatDisplayRenderer';
 import { MessageFrame, TokenUsage } from './MessageFrame';
-import { TeamMessageBubble, TeamStreamingBubble } from './TeamMessageBubbles';
 import { buildLiveChatDisplayMessage, buildStoredChatDisplayMessage } from './chatDisplayProjector';
 
 type ResolveHitl = (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
 
 type TeamSelectionProps = {
-  selectedTeamActivityId: string | null;
-  onSelectTeamActivity: (id: string) => void;
+  selectedTeamActorId: string | null;
+  onSelectTeamActor: (id: string) => void;
 };
 
 type ClarificationSubmitProps = {
@@ -27,8 +25,8 @@ type ClarificationSubmitProps = {
 
 export function MessageBubble({
   message,
-  selectedTeamActivityId,
-  onSelectTeamActivity,
+  selectedTeamActorId,
+  onSelectTeamActor,
   onSubmitClarification,
 }: {
   message: LocalMessage;
@@ -37,20 +35,11 @@ export function MessageBubble({
     return <UserMessageBubble message={message} />;
   }
 
-  if (isTeamAssistantMessage(message)) {
-    return (
-      <TeamMessageBubble
-        message={message}
-        selectedTeamActivityId={selectedTeamActivityId}
-        onSelectTeamActivity={onSelectTeamActivity}
-        onSubmitClarification={onSubmitClarification}
-      />
-    );
-  }
-
   return (
       <SingleAgentMessageBubble
         message={message}
+        selectedTeamActorId={selectedTeamActorId}
+        onSelectTeamActor={onSelectTeamActor}
         onSubmitClarification={onSubmitClarification}
       />
   );
@@ -69,10 +58,12 @@ function UserMessageBubble({ message }: { message: LocalMessage }) {
 
 function SingleAgentMessageBubble({
   message,
+  selectedTeamActorId,
+  onSelectTeamActor,
   onSubmitClarification,
 }: {
   message: LocalMessage;
-} & ClarificationSubmitProps) {
+} & TeamSelectionProps & ClarificationSubmitProps) {
   const displayMessage = buildStoredChatDisplayMessage(message);
 
   return (
@@ -85,6 +76,8 @@ function SingleAgentMessageBubble({
         toolbarCreatedAt={message.createdAt || new Date().toISOString()}
         showToolbar={Boolean(displayMessage.finalAnswer) && !displayMessage.blocks.some((block) => block.type === 'human_feedback')}
         onSubmitClarification={onSubmitClarification}
+        selectedTeamActorId={selectedTeamActorId}
+        onSelectTeamActor={onSelectTeamActor}
       />
 
       <TokenUsage message={message} />
@@ -101,14 +94,13 @@ export function StreamingBubble({
   thinkingContent,
   displaySnapshot,
   skillCalls,
-  teamActivities,
   hitlRequests,
   clarificationRequests,
   plans,
   onSubmitClarification,
   onResolveHitl,
-  selectedTeamActivityId,
-  onSelectTeamActivity,
+  selectedTeamActorId,
+  onSelectTeamActor,
   toolCalls,
   modelName,
   tokenUsage,
@@ -124,14 +116,13 @@ export function StreamingBubble({
   thinkingContent: string;
   displaySnapshot: DisplaySnapshot;
   skillCalls: SkillCallInfo[];
-  teamActivities: TeamActivityInfo[];
   hitlRequests: HitlRequestInfo[];
   clarificationRequests: ClarificationRequestInfo[];
   plans: ChatRunPlanState[];
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
   onResolveHitl: ResolveHitl;
-  selectedTeamActivityId: string | null;
-  onSelectTeamActivity: (id: string) => void;
+  selectedTeamActorId: string | null;
+  onSelectTeamActor: (id: string) => void;
   toolCalls: ToolCallInfo[];
   modelName: string;
   tokenUsage: { input: number; output: number } | null;
@@ -139,22 +130,6 @@ export function StreamingBubble({
   runStartedAt: string;
   runCompletedAt: string;
 }) {
-  if (teamActivities.length > 0) {
-    return (
-      <TeamStreamingBubble
-        finalAnswerContent={finalAnswerContent}
-        teamActivities={teamActivities}
-        hitlRequests={hitlRequests}
-        clarificationRequests={clarificationRequests}
-        onSubmitClarification={onSubmitClarification}
-        onResolveHitl={onResolveHitl}
-        selectedTeamActivityId={selectedTeamActivityId}
-        onSelectTeamActivity={onSelectTeamActivity}
-        modelName={modelName}
-      />
-    );
-  }
-
   const displayMessage = buildLiveChatDisplayMessage({
     isStreaming,
     currentRunId,
@@ -166,8 +141,7 @@ export function StreamingBubble({
     thinkingContent,
     toolCalls,
     skillCalls,
-    teamActivities: [],
-    runtimeEvents: [],
+    teamActors: [],
     plans,
     displaySnapshot,
     hitlRequests,
@@ -186,6 +160,8 @@ export function StreamingBubble({
         showToolbar={Boolean(displayMessage.finalAnswer)}
         onSubmitClarification={onSubmitClarification}
         onResolveHitl={onResolveHitl}
+        selectedTeamActorId={selectedTeamActorId}
+        onSelectTeamActor={onSelectTeamActor}
       />
 
       {displayMessage.blocks.length === 0 && (
@@ -193,8 +169,4 @@ export function StreamingBubble({
       )}
     </MessageFrame>
   );
-}
-
-function isTeamAssistantMessage(message: LocalMessage): boolean {
-  return message.role === 'assistant' && Boolean(message.teamActivities && message.teamActivities.length > 0);
 }

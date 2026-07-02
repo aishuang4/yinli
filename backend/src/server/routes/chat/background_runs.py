@@ -63,7 +63,6 @@ RUNTIME_TERMINAL_STATUS = {
 }
 RUN_STATE_METADATA_PATCH_EVENTS = {
     "RUN",
-    "TEAM_ACTIVITY",
     "MODEL_CALL_START",
     "MODEL_CALL_END",
     "RUN_CANCELLED",
@@ -905,7 +904,7 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
             progress = max(progress, 96)
             current_stage = "记忆总结完成"
 
-        if scope in {"worker", "leader", "single"} and agent_name and str(data.get("status") or "") in {"running", "waiting"}:
+        if scope in {"worker", "leader", "single", "single_agent"} and agent_name and str(data.get("status") or "") in {"running", "waiting"}:
             if agent_name not in active_actors:
                 active_actors.append(agent_name)
 
@@ -1038,9 +1037,7 @@ def _run_state_patch_sse(
     }
     if display_event:
         patch["displayEvent"] = display_event
-    if event_type == "TEAM_ACTIVITY":
-        patch["teamActivities"] = state.get("teamActivities") or []
-    elif event_type in {"MODEL_CALL_START", "MODEL_CALL_END"}:
+    if event_type in {"MODEL_CALL_START", "MODEL_CALL_END"}:
         patch["modelName"] = state.get("modelName") or ""
         patch["tokenUsage"] = state.get("tokenUsage")
     elif event_type == SSE_EVENT_RUNTIME:
@@ -1084,8 +1081,6 @@ def _run_state_patch_kind(event_type: str, data: dict) -> str:
         "CLARIFICATION_REQUIRED",
     }:
         return "display_event"
-    if event_type == "TEAM_ACTIVITY":
-        return "team_activities"
     if event_type in {"MODEL_CALL_START", "MODEL_CALL_END"}:
         return "model_usage"
     if event_type == SSE_EVENT_RUNTIME:

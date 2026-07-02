@@ -20,17 +20,100 @@ import {
   SparkRenyizhuanrenyiAnyToanyLine,
 } from '@agentscope-ai/icons';
 import { Empty, Select, Spinner, Tag, Tooltip } from '@agentscope-ai/design';
-import { useEventStream } from '../hooks/useEventStream';
+import { useEventStream, type TeamActorInfo, type ToolCallInfo } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList';
-import { TeamActivitySidebar } from '../features/chat/TeamActivityViews';
+import { TeamActorSidebar } from '../features/chat/TeamDisplayBlock';
 import { TeamSelectionDock } from '../features/chat/TeamSelectionDock';
 import { FloatingPlanDock } from '../features/chat/FloatingPlanDock';
-import { normalizeStoredTeamActivities, normalizeStoredToolCalls } from '../features/chat/formatters';
 import type { ChatImageAttachment, ChatImagePayload, ChatSession, LocalMessage, PendingTeamSelection, StoredChatMessage } from '../features/chat/types';
+import { DISPLAY_EVENTS, type DisplayActor, type DisplayItem } from '../types/displayEvents';
+
+
+function teamActorsFromMessageSnapshot(message: LocalMessage): TeamActorInfo[] {
+  const snapshot = message.displaySnapshot;
+  if (!snapshot || snapshot.mode !== 'team') return [];
+  return snapshot.actors.map(teamActorFromDisplayActor);
+}
+
+function teamActorFromDisplayActor(actor: DisplayActor): TeamActorInfo {
+  return {
+    id: actor.activityId || actor.id,
+    agentId: actor.agentId,
+    agentName: actor.agentName,
+    role: actor.role,
+    status: normalizeTeamActorStatus(actor.status),
+    task: actor.task,
+    assignment: actor.assignment,
+    expectedOutput: actor.expectedOutput,
+    constraints: actor.constraints,
+    detail: actor.detail,
+    output: actor.output,
+    report: actor.report,
+    skippedReason: actor.skippedReason,
+    reportReviewStatus: actor.reportReviewStatus,
+    reportReviewNotes: actor.reportReviewNotes,
+    reportReviewGaps: actor.reportReviewGaps,
+    thinking: actor.items
+      .filter((item) => item.event === DISPLAY_EVENTS.THINKING_DELTA)
+      .map((item) => pickDisplayItemString(item, ['text', 'content', 'delta']))
+      .join('\n\n'),
+    currentEvent: actor.detail,
+    items: actor.items,
+    toolCalls: actor.items
+      .filter((item) => item.event.startsWith('tool.') || item.targetId.startsWith('tool'))
+      .map(toolCallFromDisplayItem),
+    executionMode: actor.executionMode,
+    dependsOn: actor.dependsOn,
+    waitReason: actor.waitReason,
+    dependencyOutputCount: actor.dependencyOutputCount,
+    leaderContextCount: actor.leaderContextCount,
+    createdAt: actor.createdAt,
+  };
+}
+
+function normalizeTeamActorStatus(status: string): TeamActorInfo['status'] {
+  if (
+    status === 'running' ||
+    status === 'waiting' ||
+    status === 'completed' ||
+    status === 'failed' ||
+    status === 'skipped'
+  ) {
+    return status;
+  }
+  return 'pending';
+}
+
+function toolCallFromDisplayItem(item: DisplayItem): ToolCallInfo {
+  return {
+    id: item.targetId || item.id,
+    name: pickDisplayItemString(item, ['name', 'toolName', 'rawName']) || 'tool',
+    args: pickDisplayItemString(item, ['inputPreview', 'input', 'args']),
+    result: pickDisplayItemString(item, ['outputPreview', 'output', 'result', 'error']),
+    status: normalizeToolCallStatus(String(item.status || item.data.status || 'running')),
+  };
+}
+
+function normalizeToolCallStatus(status: string): ToolCallInfo['status'] {
+  if (status === 'running' || status === 'completed' || status === 'failed' || status === 'calling') {
+    return status;
+  }
+  return 'running';
+}
+
+function pickDisplayItemString(item: DisplayItem, keys: string[]): string {
+  for (const key of keys) {
+    const value = item.data[key];
+    if (value === undefined || value === null) continue;
+    const text = String(value);
+    if (text) return text;
+  }
+  return '';
+}
 
 
 export function ChatPage() {
@@ -47,7 +130,7 @@ export function ChatPage() {
   const [deepThinking, setDeepThinking] = useState(false);
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
-  const [selectedTeamActivityId, setSelectedTeamActivityId] = useState<string | null>(null);
+  const [selectedTeamActorId, setSelectedTeamActorId] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -103,23 +186,23 @@ export function ChatPage() {
     Boolean(state.thinkingContent) ||
     state.toolCalls.length > 0 ||
     state.skillCalls.length > 0 ||
-    state.teamActivities.length > 0 ||
+    state.teamActors.length > 0 ||
     state.displaySnapshot.blocks.length > 0 ||
     state.plans.length > 0
   );
 
-  const visibleTeamActivities = useMemo(() => (
+  const visibleTeamActors = useMemo(() => (
     [
-      ...messages.flatMap((message) => message.teamActivities || []),
-      ...state.teamActivities,
+      ...messages.flatMap((message) => teamActorsFromMessageSnapshot(message)),
+      ...state.teamActors,
     ]
-  ), [messages, state.teamActivities]);
+  ), [messages, state.teamActors]);
 
-  const selectedTeamActivity = useMemo(() => (
-    visibleTeamActivities.find((activity) => activity.id === selectedTeamActivityId) || null
-  ), [selectedTeamActivityId, visibleTeamActivities]);
-  const openTeamActivitySidebar = useCallback((activityId: string) => {
-    setSelectedTeamActivityId(activityId);
+  const selectedTeamActor = useMemo(() => (
+    visibleTeamActors.find((activity) => activity.id === selectedTeamActorId) || null
+  ), [selectedTeamActorId, visibleTeamActors]);
+  const openTeamActorSidebar = useCallback((actorId: string) => {
+    setSelectedTeamActorId(actorId);
   }, []);
 
   const buildTeamMembersForRun = useCallback((workerAgentIds: string[] | null) => {
@@ -161,10 +244,6 @@ export function ChatPage() {
       error: item.error || undefined,
       thinking: item.thinking || undefined,
       images: item.images,
-      toolCalls: normalizeStoredToolCalls(item.toolCalls || item.tool_calls || []),
-      skillCalls: item.skillCalls || item.skill_calls || [],
-      teamActivities: normalizeStoredTeamActivities(item.teamActivities || item.team_activities || []),
-      runtimeEvents: item.runtimeEvents || item.runtime_events || [],
       displaySnapshot: item.displaySnapshot || item.display_snapshot,
       clarificationRequests: item.clarificationRequests || item.clarification_requests || [],
       clarificationResolved: item.clarificationResolved || item.clarification_resolved || false,
@@ -233,7 +312,7 @@ export function ChatPage() {
   useEffect(() => {
     if (!shouldAutoScrollRef.current) return;
     scrollToBottom(state.isStreaming ? 'auto' : 'smooth');
-  }, [messages, scrollToBottom, state.isStreaming, state.finalAnswerContent, state.reasoningContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActivities]);
+  }, [messages, scrollToBottom, state.isStreaming, state.finalAnswerContent, state.reasoningContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActors]);
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
@@ -242,7 +321,7 @@ export function ChatPage() {
     setMessages([]);
     setImageAttachments([]);
     setChatError(null);
-    setSelectedTeamActivityId(null);
+    setSelectedTeamActorId(null);
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
@@ -262,7 +341,7 @@ export function ChatPage() {
     }
     setImageAttachments([]);
     setChatError(null);
-    setSelectedTeamActivityId(null);
+    setSelectedTeamActorId(null);
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
@@ -281,7 +360,7 @@ export function ChatPage() {
         setMessages([]);
         setImageAttachments([]);
         setChatError(null);
-        setSelectedTeamActivityId(null);
+        setSelectedTeamActorId(null);
         reset();
       }
       notifySuccess('历史对话已删除');
@@ -444,11 +523,7 @@ export function ChatPage() {
         createdAt: new Date().toISOString(),
         processStartedAt: state.runStartedAt,
         processCompletedAt: state.runCompletedAt || new Date().toISOString(),
-        skillCalls: state.skillCalls.length > 0 ? state.skillCalls : undefined,
-        toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
-        teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,
-        runtimeEvents: state.runtimeEvents.length > 0 ? state.runtimeEvents : undefined,
-        displaySnapshot: state.displaySnapshot.blocks.length > 0 ? state.displaySnapshot : undefined,
+        displaySnapshot: state.displaySnapshot.blocks.length > 0 || state.displaySnapshot.actors.length > 0 ? state.displaySnapshot : undefined,
         reasoning: state.reasoningContent || undefined,
         thinking: state.thinkingContent || undefined,
         tokenUsage: state.tokenUsage,
@@ -509,14 +584,10 @@ export function ChatPage() {
     state.reasoningContent,
     state.runCompletedAt,
     state.runStartedAt,
-    state.runtimeEvents,
-    state.skillCalls,
-    state.teamActivities,
     state.finalAnswerContent,
     state.textContent,
     state.thinkingContent,
     state.tokenUsage,
-    state.toolCalls,
     targetMode,
   ]);
 
@@ -581,11 +652,7 @@ export function ChatPage() {
         createdAt: new Date().toISOString(),
         processStartedAt: state.runStartedAt,
         processCompletedAt: state.runCompletedAt || new Date().toISOString(),
-        skillCalls: state.skillCalls.length > 0 ? state.skillCalls : undefined,
-        toolCalls: state.toolCalls.length > 0 ? state.toolCalls : undefined,
-        teamActivities: state.teamActivities.length > 0 ? state.teamActivities : undefined,
-        runtimeEvents: state.runtimeEvents.length > 0 ? state.runtimeEvents : undefined,
-        displaySnapshot: state.displaySnapshot.blocks.length > 0 ? state.displaySnapshot : undefined,
+        displaySnapshot: state.displaySnapshot.blocks.length > 0 || state.displaySnapshot.actors.length > 0 ? state.displaySnapshot : undefined,
         reasoning: state.reasoningContent || undefined,
         thinking: state.thinkingContent || undefined,
         tokenUsage: state.tokenUsage,
@@ -596,7 +663,7 @@ export function ChatPage() {
       reset();
       loadSessions({ silent: true });
     }
-  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.displaySnapshot, state.error, state.finalAnswerContent, state.hitlRequests.length, state.isStreaming, state.modelName, state.plans.length, state.reasoningContent, state.runCompletedAt, state.runStartedAt, state.runtimeEvents, state.skillCalls, state.teamActivities, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
+  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.displaySnapshot, state.error, state.finalAnswerContent, state.hitlRequests.length, state.isStreaming, state.modelName, state.plans.length, state.reasoningContent, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamActors, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -693,7 +760,7 @@ export function ChatPage() {
       <section
         className="chat-main-panel grid min-h-0 overflow-hidden rounded-xl bg-[var(--color-bg-primary)]"
         style={{
-          gridTemplateColumns: selectedTeamActivity
+          gridTemplateColumns: selectedTeamActor
             ? 'minmax(0, 1fr) 360px'
             : 'minmax(0, 1fr) 0px',
           transition: 'grid-template-columns 360ms var(--ease-out)',
@@ -763,8 +830,8 @@ export function ChatPage() {
                       <MessageBubble
                         key={msg.id}
                         message={msg}
-                        selectedTeamActivityId={selectedTeamActivityId}
-                        onSelectTeamActivity={openTeamActivitySidebar}
+                        selectedTeamActorId={selectedTeamActorId}
+                        onSelectTeamActor={openTeamActorSidebar}
                         onSubmitClarification={handleSubmitClarification}
                       />
                     ))}
@@ -779,14 +846,13 @@ export function ChatPage() {
                         thinkingContent={state.thinkingContent}
                         displaySnapshot={state.displaySnapshot}
                         skillCalls={state.skillCalls}
-                        teamActivities={state.teamActivities}
                         hitlRequests={state.hitlRequests}
                         clarificationRequests={state.clarificationRequests}
                         plans={state.plans}
                         onSubmitClarification={handleSubmitClarification}
                         onResolveHitl={resumeInteraction}
-                        selectedTeamActivityId={selectedTeamActivityId}
-                        onSelectTeamActivity={openTeamActivitySidebar}
+                        selectedTeamActorId={selectedTeamActorId}
+                        onSelectTeamActor={openTeamActorSidebar}
                         toolCalls={state.toolCalls}
                         modelName={state.modelName}
                         tokenUsage={state.tokenUsage}
@@ -1015,17 +1081,17 @@ export function ChatPage() {
         <div
           className="h-full min-h-0 min-w-0 overflow-hidden"
           style={{
-            opacity: selectedTeamActivity ? 1 : 0,
-            transform: selectedTeamActivity ? 'translateX(0)' : 'translateX(16px)',
+            opacity: selectedTeamActor ? 1 : 0,
+            transform: selectedTeamActor ? 'translateX(0)' : 'translateX(16px)',
             transition: 'opacity 280ms var(--ease-out), transform 360ms var(--ease-out)',
-            pointerEvents: selectedTeamActivity ? 'auto' : 'none',
+            pointerEvents: selectedTeamActor ? 'auto' : 'none',
           }}
-          aria-hidden={!selectedTeamActivity}
+          aria-hidden={!selectedTeamActor}
         >
-          {selectedTeamActivity ? (
-            <TeamActivitySidebar
-              activity={selectedTeamActivity}
-              onClose={() => setSelectedTeamActivityId(null)}
+          {selectedTeamActor ? (
+            <TeamActorSidebar
+              actor={selectedTeamActor}
+              onClose={() => setSelectedTeamActorId(null)}
             />
           ) : null}
         </div>

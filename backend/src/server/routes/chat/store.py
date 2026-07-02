@@ -15,13 +15,8 @@ from src.server.routes.chat.models import (
     CHAT_NAMESPACE,
     CHAT_STORE_KEY,
     ChatImagePayload,
-    ChatModelCacheRun,
-    ChatPlanRun,
     ChatSession,
-    ChatSkillRun,
     ChatStore,
-    ChatToolRun,
-    ChatTeamActivity,
     StoredChatMessage,
 )
 
@@ -109,12 +104,12 @@ def _append_assistant_message(
     content: str,
     error: str | None,
     thinking: str = "",
-    skill_calls: list[ChatSkillRun] | None = None,
-    tool_calls: list[ChatToolRun] | None = None,
-    team_activities: list[ChatTeamActivity] | None = None,
-    model_caches: list[ChatModelCacheRun] | None = None,
+    skill_calls: list | None = None,
+    tool_calls: list | None = None,
+    team_activities: list | None = None,
+    model_caches: list | None = None,
     runtime_events: list[dict] | None = None,
-    plan_runs: list[ChatPlanRun] | None = None,
+    plan_runs: list | None = None,
     display_snapshot: dict | None = None,
     clarification_requests: list[dict] | None = None,
     clarification_resolved: bool = False,
@@ -123,7 +118,7 @@ def _append_assistant_message(
     now = datetime.now(timezone.utc).isoformat()
     store = _load_store()
     messages = store.messages.setdefault(session_id, [])
-    incoming_tool_calls = tool_calls or []
+    _ = skill_calls, tool_calls, team_activities, model_caches, runtime_events, plan_runs
     messages.append(StoredChatMessage(
         id=uuid.uuid4().hex,
         role="assistant",
@@ -133,14 +128,14 @@ def _append_assistant_message(
         model_name=model_name,
         error=error,
         thinking=thinking,
-        tool_calls=incoming_tool_calls,
+        tool_calls=[],
         subagent_calls=[],
-        skill_calls=skill_calls or [],
-        team_activities=team_activities or [],
-        model_caches=model_caches or [],
-        runtime_events=runtime_events or [],
-        plan_runs=plan_runs or [],
-        display_snapshot=display_snapshot or {"version": 2, "blocks": []},
+        skill_calls=[],
+        team_activities=[],
+        model_caches=[],
+        runtime_events=[],
+        plan_runs=[],
+        display_snapshot=display_snapshot or {"version": 3, "mode": "single_agent", "actors": [], "blocks": []},
         clarification_requests=clarification_requests or [],
         clarification_resolved=clarification_resolved,
         created_at=now,

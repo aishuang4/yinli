@@ -1,4 +1,4 @@
-"""Chat RunState v2 schema。
+"""Chat RunState v2 / DisplaySnapshot v3 schema。
 
 该模块是后端到前端 Chat 主链路的稳定契约。AgentScope raw event、
 RuntimeEvent 和 middleware 内部事件都必须先投影成这里定义的结构，
@@ -14,14 +14,14 @@ RunStateStatus = Literal["running", "waiting", "completed", "failed", "cancelled
 RunStatePatchKind = Literal[
     "snapshot_meta",
     "display_event",
-    "team_activities",
     "model_usage",
     "approval_resolved",
     "error",
 ]
-DisplayBlockKind = Literal["process", "plan", "feedback", "answer", "files", "error"]
+DisplayBlockKind = Literal["process", "team", "plan", "feedback", "answer", "files", "error"]
 DisplayEventOp = Literal["append", "upsert", "replace", "remove", "clear"]
-DisplayScope = Literal["single_agent"]
+DisplayMode = Literal["single_agent", "team"]
+DisplayScope = Literal["single_agent", "team", "leader", "worker"]
 
 
 class RunStateToolSummary(BaseModel):
@@ -95,6 +95,38 @@ class RunStateDisplayItem(BaseModel):
     data: dict[str, Any] = Field(default_factory=dict)
 
 
+class RunStateDisplayActor(BaseModel):
+    """DisplaySnapshot v3 中的统一执行主体。"""
+
+    id: str
+    role: str = "single"
+    agentId: str = ""
+    agentName: str = ""
+    activityId: str | None = None
+    status: str = "running"
+    task: str = ""
+    assignment: str = ""
+    expectedOutput: str = ""
+    constraints: str = ""
+    detail: str = ""
+    output: str = ""
+    report: str = ""
+    skippedReason: str = ""
+    reportReviewStatus: str = ""
+    reportReviewNotes: str = ""
+    reportReviewGaps: list[str] = Field(default_factory=list)
+    executionMode: str = ""
+    dependsOn: list[str] = Field(default_factory=list)
+    waitReason: str = ""
+    dependencyOutputCount: int = 0
+    leaderContextCount: int = 0
+    createdAt: str = ""
+    updatedAt: str = ""
+    completedAt: str = ""
+    items: list[RunStateDisplayItem] = Field(default_factory=list)
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
 class RunStateDisplayBlock(BaseModel):
     """DisplaySnapshot 中的展示 block。"""
 
@@ -107,9 +139,11 @@ class RunStateDisplayBlock(BaseModel):
 
 
 class RunStateDisplaySnapshot(BaseModel):
-    """单 Agent Chat 主展示完整快照。"""
+    """Chat 主展示完整快照。"""
 
-    version: int = 2
+    version: int = 3
+    mode: DisplayMode | str = "single_agent"
+    actors: list[RunStateDisplayActor] = Field(default_factory=list)
     blocks: list[RunStateDisplayBlock] = Field(default_factory=list)
 
 
@@ -130,6 +164,7 @@ class RunStateDisplayEvent(BaseModel):
     event: str
     op: DisplayEventOp
     targetId: str | None = None
+    actorId: str | None = None
     status: str | None = None
     data: dict[str, Any] = Field(default_factory=dict)
 
@@ -157,7 +192,6 @@ class RunStateSnapshot(BaseModel):
     finalAnswerTruncated: bool = False
     thinking: str = ""
     tools: list[RunStateToolSummary] = Field(default_factory=list)
-    teamActivities: list[dict[str, Any]] = Field(default_factory=list)
     skillCalls: list[dict[str, Any]] = Field(default_factory=list)
     modelName: str = ""
     tokenUsage: dict[str, Any] | None = None
@@ -181,7 +215,6 @@ class RunStatePatch(BaseModel):
     completedAt: str | None = None
     lastEventType: str = ""
     eventCount: int = 0
-    teamActivities: list[dict[str, Any]] | None = None
     modelName: str | None = None
     tokenUsage: dict[str, Any] | None = None
     resolvedApprovalId: str | None = None

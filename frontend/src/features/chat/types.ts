@@ -1,5 +1,4 @@
-import type { ClarificationRequestInfo, DisplaySnapshot, SkillCallInfo, TeamActivityInfo, ToolCallInfo } from '../../hooks/useEventStream';
-import type { ChatRuntimeEvent } from '../../types/chatEvents';
+import type { ClarificationRequestInfo, DisplaySnapshot } from '../../hooks/useEventStream';
 
 /** 本地消息记录 */
 export interface LocalMessage {
@@ -12,14 +11,6 @@ export interface LocalMessage {
   processStartedAt?: string;
   /** Agent 处理结束时间 */
   processCompletedAt?: string;
-  /** 工具调用列表（仅 assistant 消息） */
-  toolCalls?: ToolCallInfo[];
-  /** Skill 应用列表（仅 assistant 消息） */
-  skillCalls?: SkillCallInfo[];
-  /** Team 协作活动（仅 assistant 消息） */
-  teamActivities?: TeamActivityInfo[];
-  /** 本轮 Runtime Event 时间线 */
-  runtimeEvents?: ChatRuntimeEvent[];
   /** 后端投影后的消息展示快照 */
   displaySnapshot?: DisplaySnapshot;
   /** 思考链内容（仅 assistant 消息） */
@@ -80,14 +71,6 @@ export interface StoredChatMessage {
   error: string | null;
   thinking?: string;
   images: ChatImagePayload[];
-  toolCalls?: ToolCallInfo[];
-  tool_calls?: ToolCallInfo[];
-  skillCalls?: SkillCallInfo[];
-  skill_calls?: SkillCallInfo[];
-  teamActivities?: TeamActivityInfo[];
-  team_activities?: StoredTeamActivity[];
-  runtimeEvents?: ChatRuntimeEvent[];
-  runtime_events?: ChatRuntimeEvent[];
   displaySnapshot?: DisplaySnapshot;
   display_snapshot?: DisplaySnapshot;
   clarificationRequests?: ClarificationRequestInfo[];
@@ -96,15 +79,3 @@ export interface StoredChatMessage {
   clarification_resolved?: boolean;
   created_at: string;
 }
-
-export type StoredTeamActivity = Partial<TeamActivityInfo> & {
-  agent_id?: string;
-  agent_name?: string;
-  expected_output?: string;
-  skipped_reason?: string;
-  report_review_status?: string;
-  report_review_notes?: string;
-  report_review_gaps?: string[];
-  tool_calls?: ToolCallInfo[];
-  created_at?: string;
-};

@@ -11,7 +11,6 @@ export type RunStateStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'c
 
 export type RunStatePatchKind =
   | 'snapshot_meta'
-  | 'team_activities'
   | 'model_usage'
   | 'approval_resolved'
   | 'display_event'
@@ -90,7 +89,6 @@ export interface ChatRunStateSnapshot {
   finalAnswer: string;
   thinking: string;
   tools: RunStateToolSummary[];
-  teamActivities: Array<Record<string, unknown>>;
   skillCalls: Array<Record<string, unknown>>;
   modelName: string;
   tokenUsage: { input: number; output: number } | null;
@@ -107,7 +105,6 @@ export interface ChatRunStatePatch {
   status: RunStateStatus;
   updatedAt: string;
   completedAt: string | null;
-  teamActivities?: Array<Record<string, unknown>>;
   modelName?: string;
   tokenUsage?: { input: number; output: number } | null;
   displayEvent?: DisplayEvent;

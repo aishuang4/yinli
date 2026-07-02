@@ -1,4 +1,4 @@
-import { DISPLAY_BLOCKS, DISPLAY_EVENTS, type DisplayBlock, type DisplayItem } from '../../types/displayEvents';
+import { DISPLAY_BLOCKS, DISPLAY_EVENTS, type DisplayActor, type DisplayBlock, type DisplayItem } from '../../types/displayEvents';
 import type {
   ChatRunPlanStep,
   ClarificationQuestionInfo,
@@ -6,6 +6,7 @@ import type {
   HitlRequestInfo,
   SkillCallInfo,
   StreamState,
+  TeamActorInfo,
   ToolCallInfo,
 } from '../../hooks/useEventStream';
 import type { RunStateApprovalSummary } from '../../types/runState';
@@ -77,10 +78,17 @@ export function buildChatDisplayMessage(input: ChatDisplayMessageInput): ChatDis
 }
 
 function buildDisplayBlocks(blocks: DisplayBlock[], input: ChatDisplayMessageInput): ChatDisplayBlock[] {
-  const displayBlocks = blocks
+  const snapshot = normalizeDisplaySnapshot(input.displaySnapshot);
+  const actorBlocks = buildActorDisplayBlocks(snapshot.actors, snapshot.mode, input);
+  const hasActorProcessBlock = actorBlocks.some((block) => block.type === 'process' && block.items.length > 0);
+  const displayBlocks = [
+    ...actorBlocks,
+    ...blocks
+    .filter((block) => !(hasActorProcessBlock && block.block === DISPLAY_BLOCKS.PROCESS))
     .map((block) => blockFromDisplayBlock(block, input))
     .filter((block): block is ChatDisplayBlock => Boolean(block))
-    .filter(isVisibleBlock);
+    .filter(isVisibleBlock),
+  ];
 
   if (displayBlocks.length === 0 && input.fallbackAnswer?.trim()) {
     return [{
@@ -93,6 +101,95 @@ function buildDisplayBlocks(blocks: DisplayBlock[], input: ChatDisplayMessageInp
   }
 
   return displayBlocks;
+}
+
+function buildActorDisplayBlocks(
+  actors: DisplayActor[],
+  mode: string,
+  input: ChatDisplayMessageInput,
+): ChatDisplayBlock[] {
+  if (mode === 'team') {
+    const teamActors = actors.map(teamActorFromDisplayActor);
+    return teamActors.length > 0
+      ? [{
+        id: 'team',
+        type: 'team',
+        status: input.status,
+        actors: teamActors,
+        updatedAt: actors.reduce((latest, actor) => actor.updatedAt || latest, ''),
+      }]
+      : [];
+  }
+
+  const actor = actors[0];
+  if (!actor || actor.items.length === 0) return [];
+  return [processBlockFromActor(actor, input)];
+}
+
+function processBlockFromActor(actor: DisplayActor, input: ChatDisplayMessageInput): ChatProcessBlock {
+  const items = normalizeProcessItems(
+    actor.items
+      .map(processItemFromDisplayItem)
+      .filter((item): item is ChatProcessItem => Boolean(item)),
+  );
+  return {
+    id: actor.id || 'process',
+    type: 'process',
+    status: actor.status,
+    startedAt: input.startedAt || actor.createdAt,
+    completedAt: input.completedAt || actor.completedAt,
+    updatedAt: actor.updatedAt,
+    items,
+  };
+}
+
+function teamActorFromDisplayActor(actor: DisplayActor): TeamActorInfo {
+  return {
+    id: actor.activityId || actor.id,
+    agentId: actor.agentId,
+    agentName: actor.agentName,
+    role: actor.role,
+    status: normalizeTeamActorStatus(actor.status),
+    task: actor.task,
+    assignment: actor.assignment,
+    expectedOutput: actor.expectedOutput,
+    constraints: actor.constraints,
+    detail: actor.detail,
+    output: actor.output,
+    report: actor.report,
+    skippedReason: actor.skippedReason,
+    reportReviewStatus: actor.reportReviewStatus,
+    reportReviewNotes: actor.reportReviewNotes,
+    reportReviewGaps: actor.reportReviewGaps,
+    thinking: actor.items
+      .filter((item) => item.event === DISPLAY_EVENTS.THINKING_DELTA)
+      .map((item) => pickDisplayString(item.data, ['text', 'content', 'delta']))
+      .join('\n\n'),
+    currentEvent: actor.detail,
+    items: actor.items,
+    toolCalls: actor.items
+      .filter((item) => item.event.startsWith('tool.') || item.targetId.startsWith('tool'))
+      .map(toolCallFromDisplayItem),
+    executionMode: actor.executionMode,
+    dependsOn: actor.dependsOn,
+    waitReason: actor.waitReason,
+    dependencyOutputCount: actor.dependencyOutputCount,
+    leaderContextCount: actor.leaderContextCount,
+    createdAt: actor.createdAt,
+  };
+}
+
+function normalizeTeamActorStatus(status: string): TeamActorInfo['status'] {
+  if (
+    status === 'running' ||
+    status === 'waiting' ||
+    status === 'completed' ||
+    status === 'failed' ||
+    status === 'skipped'
+  ) {
+    return status;
+  }
+  return 'pending';
 }
 
 function blockFromDisplayBlock(
@@ -121,9 +218,11 @@ function blockFromDisplayBlock(
 }
 
 function processBlockFromDisplayBlock(block: DisplayBlock, input: ChatDisplayMessageInput): ChatProcessBlock | null {
-  const items = block.items
-    .map(processItemFromDisplayItem)
-    .filter((item): item is ChatProcessItem => Boolean(item));
+  const items = normalizeProcessItems(
+    block.items
+      .map(processItemFromDisplayItem)
+      .filter((item): item is ChatProcessItem => Boolean(item)),
+  );
   if (items.length === 0) return null;
   return {
     id: block.id,
@@ -165,6 +264,37 @@ function processItemFromDisplayItem(item: DisplayItem): ChatProcessItem | null {
     };
   }
   return null;
+}
+
+function normalizeProcessItems(items: ChatProcessItem[]): ChatProcessItem[] {
+  return items.reduce<ChatProcessItem[]>((normalized, item) => {
+    const previous = normalized[normalized.length - 1];
+    if (previous && isTextProcessItem(previous) && isTextProcessItem(item) && previous.type === item.type) {
+      normalized[normalized.length - 1] = {
+        ...previous,
+        status: item.status || previous.status,
+        updatedAt: item.updatedAt || previous.updatedAt,
+        content: mergeAdjacentTextContent(previous.content, item.content),
+      };
+      return normalized;
+    }
+    normalized.push(item);
+    return normalized;
+  }, []);
+}
+
+function isTextProcessItem(
+  item: ChatProcessItem,
+): item is Extract<ChatProcessItem, { type: 'reasoning' | 'thinking' }> {
+  return item.type === 'reasoning' || item.type === 'thinking';
+}
+
+function mergeAdjacentTextContent(current: string, next: string): string {
+  if (!current) return next;
+  if (!next) return current;
+  if (current === next || current.endsWith(next)) return current;
+  if (next.startsWith(current)) return next;
+  return `${current}\n\n${next}`;
 }
 
 function planBlockFromDisplayBlock(block: DisplayBlock): ChatPlanBlock | null {
@@ -247,6 +377,7 @@ function errorBlockFromDisplayBlock(block: DisplayBlock): ChatDisplayBlock | nul
 }
 
 function isVisibleBlock(block: ChatDisplayBlock): boolean {
+  if (block.type === 'team') return block.actors.length > 0;
   if (block.type === 'process') return block.items.length > 0;
   if (block.type === 'plan') return Boolean(block.planId || block.markdown.trim() || block.steps.length);
   if (block.type === 'human_feedback') return block.hitlRequests.length > 0 || block.clarificationRequests.length > 0;

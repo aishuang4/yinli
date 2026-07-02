@@ -59,6 +59,21 @@ def _build_plan_mode_runtime_parts(
     return manager, runtime_features_cache_key, tools, middlewares
 
 
+def _build_runtime_feature_parts(
+    ctx: ChatRunContext,
+    run_data: ChatMessage,
+) -> tuple[PlanModeManager | None, str, list[object], list[object]]:
+    """构造主 Agent 运行时增强能力。
+
+    Team Runtime 暂不支持 Plan Mode：Team 自身已经包含 Leader 分派、
+    Worker 执行和 Leader 汇总语义，Plan Mode 只在单 Agent 路径注入。
+    """
+
+    if ctx.intent_route.executor.kind == "team":
+        return None, "none", [], []
+    return _build_plan_mode_runtime_parts(ctx, run_data)
+
+
 async def execute_react_runtime(
     *,
     ctx: ChatRunContext,
@@ -72,7 +87,7 @@ async def execute_react_runtime(
     worker_outputs: list[dict[str, str]] = []
     active_skill_run = ctx.active_skill_run
     system_prompt = ctx.system_prompt
-    stream_scope = "leader" if ctx.intent_route.executor.kind == "team" else "single"
+    stream_scope = "leader" if ctx.intent_route.executor.kind == "team" else "single_agent"
 
     try:
         if ctx.intent_route.executor.kind == "team":
@@ -97,7 +112,7 @@ async def execute_react_runtime(
             runtime_features_cache_key,
             extra_tools,
             middlewares,
-        ) = _build_plan_mode_runtime_parts(ctx, run_data)
+        ) = _build_runtime_feature_parts(ctx, run_data)
         main_agent_spec = build_main_agent_runtime_spec(
             agent_id=ctx.agent_id,
             session_id=ctx.session_id,

@@ -20,9 +20,10 @@ TOOL_INPUT_PREVIEW_MAX_CHARS = 2_000
 TOOL_OUTPUT_PREVIEW_MAX_CHARS = 4_000
 REASONING_MAX_CHARS = 100_000
 FINAL_ANSWER_MAX_CHARS = 300_000
-DISPLAY_SNAPSHOT_VERSION = 2
+DISPLAY_SNAPSHOT_VERSION = 3
 DISPLAY_EVENT_SCOPE = "single_agent"
 PROCESS_TIMELINE_KEY = "_processTimelineItems"
+ACTOR_TIMELINE_KEY = "_actorTimelineItems"
 
 
 def initial_run_state(run: Any) -> dict[str, Any]:
@@ -188,6 +189,8 @@ def project_event(state: dict[str, Any] | None, event_type: str, data: dict[str,
 def _empty_display_snapshot() -> dict[str, Any]:
     return {
         "version": DISPLAY_SNAPSHOT_VERSION,
+        "mode": "single_agent",
+        "actors": [],
         "blocks": [],
     }
 
@@ -195,28 +198,10 @@ def _empty_display_snapshot() -> dict[str, Any]:
 def _build_display_snapshot(state: dict[str, Any]) -> dict[str, Any]:
     status = str(state.get("status") or "running")
     updated_at = str(state.get("updatedAt") or _utc_now())
+    mode = _display_mode(state)
+    actors = _build_display_actors(state, status, updated_at)
     blocks: list[dict[str, Any]] = []
-    reasoning = str(state.get("reasoning") or "")
-    thinking = str(state.get("thinking") or "")
     tools = [tool for tool in state.get("tools") or [] if isinstance(tool, dict)]
-    skill_calls = [skill for skill in state.get("skillCalls") or [] if isinstance(skill, dict)]
-    process_items = _build_process_items_from_timeline(state, status, updated_at) or _build_process_items(
-        reasoning,
-        thinking,
-        tools,
-        skill_calls,
-        status,
-        updated_at,
-    )
-    if process_items:
-        blocks.append({
-            "id": "process",
-            "block": "process",
-            "status": status,
-            "updatedAt": updated_at,
-            "items": process_items,
-            "data": {},
-        })
 
     waiting_feedback_items = [
         approval
@@ -295,8 +280,202 @@ def _build_display_snapshot(state: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "version": DISPLAY_SNAPSHOT_VERSION,
+        "mode": mode,
+        "actors": actors,
         "blocks": blocks,
     }
+
+
+def _display_mode(state: dict[str, Any]) -> str:
+    """根据 RunState 判断展示形态。"""
+
+    if str(state.get("mode") or "") == "team":
+        return "team"
+    if state.get("teamId") or state.get("teamName"):
+        return "team"
+    if state.get("teamActivities"):
+        return "team"
+    return "single_agent"
+
+
+def _build_display_actors(state: dict[str, Any], status: str, updated_at: str) -> list[dict[str, Any]]:
+    """构建统一 actor 列表。"""
+
+    if _display_mode(state) == "team":
+        actors = [
+            _display_actor_from_team_activity(activity, state, updated_at)
+            for activity in state.get("teamActivities") or []
+            if isinstance(activity, dict)
+        ]
+        if actors:
+            return actors
+    return [_display_actor_from_single_agent(state, status, updated_at)]
+
+
+def _display_actor_from_single_agent(state: dict[str, Any], status: str, updated_at: str) -> dict[str, Any]:
+    """把单 Agent RunState 转成统一 actor。"""
+
+    actor_id = _default_actor_id(state)
+    return _normalize_display_actor({
+        "id": actor_id,
+        "role": "leader" if _display_mode(state) == "team" else "single",
+        "agentId": str(state.get("agentId") or ""),
+        "agentName": str(state.get("agentName") or "Agent"),
+        "activityId": None,
+        "status": status,
+        "task": str(state.get("task") or ""),
+        "detail": str(state.get("currentStage") or ""),
+        "output": str(state.get("finalAnswer") or ""),
+        "createdAt": str(state.get("createdAt") or updated_at),
+        "updatedAt": updated_at,
+        "completedAt": str(state.get("completedAt") or ""),
+        "items": _build_actor_process_items(state, status, updated_at),
+    })
+
+
+def _display_actor_from_team_activity(activity: dict[str, Any], state: dict[str, Any], updated_at: str) -> dict[str, Any]:
+    """把 TeamActivity 转成统一 actor。"""
+
+    activity_id = str(activity.get("id") or "")
+    role = str(activity.get("role") or "worker")
+    agent_id = str(activity.get("agentId") or activity.get("agent_id") or "")
+    actor_id = activity_id or (f"{role}-{agent_id}" if agent_id else f"{role}-actor")
+    items = _build_actor_items_from_team_activity(state, activity, updated_at)
+    if role == "leader":
+        leader_items = _build_actor_process_items(state, str(activity.get("status") or state.get("status") or "running"), updated_at)
+        if leader_items:
+            items = leader_items
+    return _normalize_display_actor({
+        "id": actor_id,
+        "role": role,
+        "agentId": agent_id,
+        "agentName": str(activity.get("agentName") or activity.get("agent_name") or "Agent"),
+        "activityId": activity_id,
+        "status": str(activity.get("status") or "pending"),
+        "task": str(activity.get("task") or ""),
+        "assignment": str(activity.get("assignment") or ""),
+        "expectedOutput": str(activity.get("expectedOutput") or activity.get("expected_output") or ""),
+        "constraints": str(activity.get("constraints") or ""),
+        "detail": str(activity.get("detail") or ""),
+        "output": str(activity.get("output") or ""),
+        "report": str(activity.get("report") or ""),
+        "skippedReason": str(activity.get("skippedReason") or activity.get("skipped_reason") or ""),
+        "reportReviewStatus": str(activity.get("reportReviewStatus") or activity.get("report_review_status") or ""),
+        "reportReviewNotes": str(activity.get("reportReviewNotes") or activity.get("report_review_notes") or ""),
+        "reportReviewGaps": activity.get("reportReviewGaps") or activity.get("report_review_gaps") or [],
+        "executionMode": str(activity.get("executionMode") or activity.get("execution_mode") or ""),
+        "dependsOn": activity.get("dependsOn") or activity.get("depends_on") or [],
+        "waitReason": str(activity.get("waitReason") or activity.get("wait_reason") or ""),
+        "dependencyOutputCount": int(activity.get("dependencyOutputCount") or activity.get("dependency_output_count") or 0),
+        "leaderContextCount": int(activity.get("leaderContextCount") or activity.get("leader_context_count") or 0),
+        "createdAt": str(activity.get("createdAt") or activity.get("created_at") or updated_at),
+        "updatedAt": updated_at,
+        "completedAt": str(activity.get("completedAt") or activity.get("completed_at") or ""),
+        "items": items,
+    })
+
+
+def _normalize_display_actor(actor: dict[str, Any]) -> dict[str, Any]:
+    """补齐 actor 默认字段，保持前端 schema 稳定。"""
+
+    return {
+        "id": str(actor.get("id") or ""),
+        "role": str(actor.get("role") or "single"),
+        "agentId": str(actor.get("agentId") or ""),
+        "agentName": str(actor.get("agentName") or "Agent"),
+        "activityId": actor.get("activityId"),
+        "status": str(actor.get("status") or "running"),
+        "task": str(actor.get("task") or ""),
+        "assignment": str(actor.get("assignment") or ""),
+        "expectedOutput": str(actor.get("expectedOutput") or ""),
+        "constraints": str(actor.get("constraints") or ""),
+        "detail": str(actor.get("detail") or ""),
+        "output": str(actor.get("output") or ""),
+        "report": str(actor.get("report") or ""),
+        "skippedReason": str(actor.get("skippedReason") or ""),
+        "reportReviewStatus": str(actor.get("reportReviewStatus") or ""),
+        "reportReviewNotes": str(actor.get("reportReviewNotes") or ""),
+        "reportReviewGaps": [
+            str(item)
+            for item in (actor.get("reportReviewGaps") if isinstance(actor.get("reportReviewGaps"), list) else [])
+        ],
+        "executionMode": str(actor.get("executionMode") or ""),
+        "dependsOn": [
+            str(item)
+            for item in (actor.get("dependsOn") if isinstance(actor.get("dependsOn"), list) else [])
+        ],
+        "waitReason": str(actor.get("waitReason") or ""),
+        "dependencyOutputCount": int(actor.get("dependencyOutputCount") or 0),
+        "leaderContextCount": int(actor.get("leaderContextCount") or 0),
+        "createdAt": str(actor.get("createdAt") or ""),
+        "updatedAt": str(actor.get("updatedAt") or ""),
+        "completedAt": str(actor.get("completedAt") or ""),
+        "items": actor.get("items") if isinstance(actor.get("items"), list) else [],
+        "data": actor.get("data") if isinstance(actor.get("data"), dict) else {},
+    }
+
+
+def _build_actor_process_items(state: dict[str, Any], status: str, updated_at: str) -> list[dict[str, Any]]:
+    actor_items = _build_actor_items_from_timeline(state, _default_actor_id(state), updated_at)
+    if actor_items:
+        return actor_items
+    reasoning = str(state.get("reasoning") or "")
+    thinking = str(state.get("thinking") or "")
+    tools = [tool for tool in state.get("tools") or [] if isinstance(tool, dict)]
+    skill_calls = [skill for skill in state.get("skillCalls") or [] if isinstance(skill, dict)]
+    return _build_process_items_from_timeline(state, status, updated_at) or _build_process_items(
+        reasoning,
+        thinking,
+        tools,
+        skill_calls,
+        status,
+        updated_at,
+    )
+
+
+def _build_actor_items_from_team_activity(state: dict[str, Any], activity: dict[str, Any], updated_at: str) -> list[dict[str, Any]]:
+    """从 TeamActivity 的 thinking/toolCalls 还原 actor 内部过程。"""
+
+    actor_id = str(activity.get("id") or "")
+    actor_items = _build_actor_items_from_timeline(state, actor_id, updated_at)
+    if actor_items:
+        return actor_items
+    items: list[dict[str, Any]] = []
+    thinking = str(activity.get("thinking") or "")
+    if thinking:
+        items.append({
+            "id": f"{activity.get('id') or 'activity'}-thinking",
+            "event": "thinking.delta",
+            "targetId": f"{activity.get('id') or 'activity'}-thinking",
+            "status": str(activity.get("status") or "running"),
+            "createdAt": str(activity.get("createdAt") or activity.get("created_at") or updated_at),
+            "updatedAt": updated_at,
+            "data": {"text": thinking},
+        })
+    for tool in activity.get("toolCalls") or activity.get("tool_calls") or []:
+        if not isinstance(tool, dict):
+            continue
+        tool_id = str(tool.get("id") or "")
+        if not tool_id:
+            continue
+        tool_status = str(tool.get("status") or "running")
+        items.append({
+            "id": tool_id,
+            "event": _tool_display_event_name({"status": tool_status}),
+            "targetId": tool_id,
+            "status": tool_status,
+            "createdAt": str(activity.get("createdAt") or activity.get("created_at") or updated_at),
+            "updatedAt": updated_at,
+            "data": {
+                "name": str(tool.get("name") or "tool"),
+                "inputPreview": str(tool.get("args") or tool.get("inputPreview") or ""),
+                "outputPreview": str(tool.get("result") or tool.get("outputPreview") or ""),
+                "outputSize": len(str(tool.get("result") or tool.get("outputPreview") or "")),
+                "outputTruncated": False,
+                "error": str(tool.get("error") or ""),
+            },
+        })
+    return items
 
 
 def _build_process_items_from_timeline(
@@ -528,7 +707,14 @@ def _upsert_process_timeline_item(state: dict[str, Any], item: dict[str, Any]) -
     if existing_index == -1:
         items.append(item)
     else:
-        items[existing_index] = {**items[existing_index], **item}
+        current = items[existing_index]
+        current_data = current.get("data") if isinstance(current.get("data"), dict) else {}
+        incoming_data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        merged_data = {**current_data, **incoming_data}
+        for key in ("inputPreview", "outputPreview", "error"):
+            if str(incoming_data.get(key) or "") == "" and str(current_data.get(key) or "") != "":
+                merged_data[key] = current_data[key]
+        items[existing_index] = {**current, **item, "data": merged_data}
 
 
 def _latest_process_text_target_id(state: dict[str, Any], event_name: str, fallback: str) -> str:
@@ -538,10 +724,134 @@ def _latest_process_text_target_id(state: dict[str, Any], event_name: str, fallb
     return fallback
 
 
+def _actor_timeline_items(state: dict[str, Any], actor_id: str) -> list[dict[str, Any]]:
+    timelines = state.get(ACTOR_TIMELINE_KEY)
+    if not isinstance(timelines, dict):
+        timelines = {}
+    items = timelines.get(actor_id)
+    if not isinstance(items, list):
+        items = []
+    normalized = [item for item in items if isinstance(item, dict)]
+    timelines[actor_id] = normalized
+    state[ACTOR_TIMELINE_KEY] = timelines
+    return normalized
+
+
+def _build_actor_items_from_timeline(state: dict[str, Any], actor_id: str, updated_at: str) -> list[dict[str, Any]]:
+    if not actor_id:
+        return []
+    timelines = state.get(ACTOR_TIMELINE_KEY)
+    if not isinstance(timelines, dict):
+        return []
+    items = timelines.get(actor_id)
+    if not isinstance(items, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or item.get("targetId") or "")
+        event_name = str(item.get("event") or "")
+        if not item_id or not event_name:
+            continue
+        normalized.append({
+            "id": item_id,
+            "event": event_name,
+            "targetId": str(item.get("targetId") or item_id),
+            "status": str(item.get("status") or "running"),
+            "createdAt": str(item.get("createdAt") or updated_at),
+            "updatedAt": str(item.get("updatedAt") or updated_at),
+            "data": item.get("data") if isinstance(item.get("data"), dict) else {},
+        })
+    return normalized
+
+
+def _append_actor_text_timeline_item(
+    state: dict[str, Any],
+    actor_id: str,
+    *,
+    event_name: str,
+    target_prefix: str,
+    text: str,
+) -> str:
+    if not actor_id or not text:
+        return ""
+    items = _actor_timeline_items(state, actor_id)
+    updated_at = str(state.get("updatedAt") or _utc_now())
+    last_item = items[-1] if items else None
+    if (
+        isinstance(last_item, dict)
+        and str(last_item.get("event") or "") == event_name
+        and str(last_item.get("targetId") or "").startswith(f"{actor_id}:{target_prefix}-")
+    ):
+        data = last_item.get("data") if isinstance(last_item.get("data"), dict) else {}
+        current_text = str(data.get("text") or "")
+        last_item["data"] = {**data, "text": current_text + text}
+        last_item["status"] = "running"
+        last_item["updatedAt"] = updated_at
+        return str(last_item.get("targetId") or "")
+
+    target_id = f"{actor_id}:{target_prefix}-{int(state.get('eventCount') or 0)}"
+    items.append({
+        "id": target_id,
+        "event": event_name,
+        "targetId": target_id,
+        "status": "running",
+        "createdAt": updated_at,
+        "updatedAt": updated_at,
+        "data": {"text": text},
+    })
+    return target_id
+
+
+def _upsert_actor_timeline_item(state: dict[str, Any], actor_id: str, item: dict[str, Any]) -> None:
+    if not actor_id:
+        return
+    items = _actor_timeline_items(state, actor_id)
+    target_id = str(item.get("targetId") or item.get("id") or "")
+    existing_index = next((
+        index
+        for index, current in enumerate(items)
+        if str(current.get("targetId") or current.get("id") or "") == target_id
+    ), -1)
+    if existing_index == -1:
+        items.append(item)
+    else:
+        items[existing_index] = {**items[existing_index], **item}
+
+
+def _append_actor_item_data(
+    state: dict[str, Any],
+    actor_id: str,
+    target_id: str,
+    key: str,
+    delta: str,
+) -> None:
+    if not actor_id or not target_id or not delta:
+        return
+    items = _actor_timeline_items(state, actor_id)
+    for item in items:
+        if str(item.get("targetId") or item.get("id") or "") != target_id:
+            continue
+        data = item.get("data") if isinstance(item.get("data"), dict) else {}
+        item["data"] = {**data, key: str(data.get(key) or "") + delta}
+        item["updatedAt"] = str(state.get("updatedAt") or _utc_now())
+        item["status"] = "running"
+        return
+
+
+def _latest_actor_text_target_id(state: dict[str, Any], actor_id: str, event_name: str, fallback: str) -> str:
+    for item in reversed(_actor_timeline_items(state, actor_id)):
+        if str(item.get("event") or "") == event_name:
+            return str(item.get("targetId") or item.get("id") or fallback)
+    return fallback
+
+
 def _project_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None:
     runtime_type = str(event.get("type") or "")
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     state["runtimeEvents"] = [*state.get("runtimeEvents", [])[-199:], event]
+    _project_actor_timeline_from_runtime_event(state, event)
     if runtime_type == "HITL_RESOLVED":
         interaction_id = str(payload.get("interactionId") or event.get("interactionId") or "")
         if interaction_id:
@@ -559,11 +869,121 @@ def _project_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None
         }[runtime_type]
 
 
+def _project_actor_timeline_from_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None:
+    """把 worker/leader Runtime Event 投影到对应 actor 的 ReAct timeline。"""
+
+    actor_id = _actor_id_from_runtime_event(state, event)
+    if not actor_id:
+        return
+    runtime_type = str(event.get("type") or "")
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    status = str(event.get("status") or "running")
+    updated_at = str(state.get("updatedAt") or _utc_now())
+
+    if runtime_type == "AGENT_OUTPUT_DELTA":
+        _append_actor_text_timeline_item(
+            state,
+            actor_id,
+            event_name="reasoning.delta",
+            target_prefix="reasoning",
+            text=str(payload.get("delta") or ""),
+        )
+        return
+    if runtime_type == "AGENT_THINKING":
+        _append_actor_text_timeline_item(
+            state,
+            actor_id,
+            event_name="thinking.delta",
+            target_prefix="thinking",
+            text=str(payload.get("delta") or ""),
+        )
+        return
+    if runtime_type in {
+        "TOOL_CALL_STARTED",
+        "TOOL_CALL_DELTA",
+        "TOOL_CALL_COMPLETED",
+        "TOOL_RESULT_STARTED",
+        "TOOL_RESULT_DELTA",
+        "TOOL_RESULT_COMPLETED",
+    }:
+        tool_id = _runtime_tool_target_id(actor_id, payload)
+        if not tool_id:
+            return
+        tool_name = str(payload.get("tool_call_name") or payload.get("toolName") or "tool")
+        if runtime_type == "TOOL_CALL_DELTA":
+            _append_actor_item_data(state, actor_id, tool_id, "inputPreview", str(payload.get("delta") or ""))
+            return
+        if runtime_type == "TOOL_RESULT_DELTA":
+            _append_actor_item_data(state, actor_id, tool_id, "outputPreview", str(payload.get("delta") or ""))
+            return
+        event_name = "tool.started"
+        item_status = "running"
+        if runtime_type == "TOOL_RESULT_COMPLETED":
+            item_status = "failed" if status == "failed" else "completed"
+            event_name = "tool.failed" if item_status == "failed" else "tool.completed"
+        _upsert_actor_timeline_item(state, actor_id, {
+            "id": tool_id,
+            "event": event_name,
+            "targetId": tool_id,
+            "status": item_status,
+            "createdAt": updated_at,
+            "updatedAt": updated_at,
+            "data": {
+                "name": tool_name,
+                "inputPreview": "",
+                "outputPreview": "",
+                "outputSize": 0,
+                "outputTruncated": False,
+                "error": str(payload.get("state") or "") if item_status == "failed" else "",
+            },
+        })
+
+
+def _actor_id_from_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> str:
+    scope = str(event.get("scope") or "")
+    if scope not in {"leader", "worker", "single", "single_agent"}:
+        return ""
+    activity_id = str(event.get("teamActivityId") or "")
+    if activity_id:
+        return activity_id
+    if scope in {"single", "single_agent"}:
+        return _default_actor_id(state)
+    agent_id = str(event.get("agentId") or "")
+    if agent_id:
+        for activity in state.get("teamActivities") or []:
+            if isinstance(activity, dict) and str(activity.get("agentId") or activity.get("agent_id") or "") == agent_id:
+                return str(activity.get("id") or "")
+    return _default_actor_id(state) if scope == "leader" else ""
+
+
+def _runtime_tool_target_id(actor_id: str, payload: dict[str, Any]) -> str:
+    tool_call_id = str(payload.get("tool_call_id") or payload.get("toolCallId") or "")
+    return f"{actor_id}:tool:{tool_call_id}" if tool_call_id else ""
+
+
 def _build_display_events_for_raw_event(
     state: dict[str, Any],
     event_type: str,
     data: dict[str, Any],
 ) -> list[dict[str, Any]]:
+    if event_type == "TEAM_ACTIVITY":
+        return [_display_event(
+            state,
+            block="team",
+            event="team.actors.updated",
+            op="replace",
+            target_id="team",
+            status=str(state.get("status") or "running"),
+            data={
+                "mode": "team",
+                "actors": _build_display_actors(
+                    state,
+                    str(state.get("status") or "running"),
+                    str(state.get("updatedAt") or _utc_now()),
+                ),
+            },
+            scope="team",
+        )]
     if event_type in {"REASONING_DELTA", "TEXT_BLOCK_DELTA"}:
         target_id = _latest_process_text_target_id(state, "reasoning.delta", "reasoning")
         return [_display_event(
@@ -717,6 +1137,9 @@ def _skill_display_events_for_raw_event(state: dict[str, Any], event_type: str) 
 def _runtime_display_events_for_raw_event(state: dict[str, Any], event: dict[str, Any]) -> list[dict[str, Any]]:
     runtime_type = str(event.get("type") or "")
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    actor_event = _actor_display_event_for_runtime_event(state, event)
+    if actor_event:
+        return [actor_event]
     if runtime_type == "HITL_RESOLVED":
         interaction_id = str(payload.get("interactionId") or event.get("interactionId") or "")
         return [_display_event(
@@ -779,6 +1202,105 @@ def _runtime_display_events_for_raw_event(state: dict[str, Any], event: dict[str
     return []
 
 
+def _actor_display_event_for_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> dict[str, Any] | None:
+    """把 worker/leader Runtime Event 转成前端 actor process 增量。"""
+
+    actor_id = _actor_id_from_runtime_event(state, event)
+    if not actor_id:
+        return None
+    runtime_type = str(event.get("type") or "")
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    status = str(event.get("status") or "running")
+    scope = _normalize_display_scope(str(event.get("scope") or ""))
+
+    if runtime_type == "AGENT_OUTPUT_DELTA":
+        target_id = _latest_actor_text_target_id(state, actor_id, "reasoning.delta", f"{actor_id}:reasoning")
+        return _display_event(
+            state,
+            block="process",
+            event="reasoning.delta",
+            op="append",
+            target_id=target_id,
+            actor_id=actor_id,
+            scope=scope,
+            status="running",
+            data={"text": str(payload.get("delta") or "")},
+        )
+    if runtime_type == "AGENT_THINKING":
+        target_id = _latest_actor_text_target_id(state, actor_id, "thinking.delta", f"{actor_id}:thinking")
+        return _display_event(
+            state,
+            block="process",
+            event="thinking.delta",
+            op="append",
+            target_id=target_id,
+            actor_id=actor_id,
+            scope=scope,
+            status="running",
+            data={"text": str(payload.get("delta") or "")},
+        )
+    if runtime_type in {
+        "TOOL_CALL_STARTED",
+        "TOOL_CALL_DELTA",
+        "TOOL_CALL_COMPLETED",
+        "TOOL_RESULT_STARTED",
+        "TOOL_RESULT_DELTA",
+        "TOOL_RESULT_COMPLETED",
+    }:
+        tool_id = _runtime_tool_target_id(actor_id, payload)
+        if not tool_id:
+            return None
+        tool_name = str(payload.get("tool_call_name") or "tool")
+        if runtime_type == "TOOL_CALL_DELTA":
+            return _display_event(
+                state,
+                block="process",
+                event="tool.input.delta",
+                op="append",
+                target_id=tool_id,
+                actor_id=actor_id,
+                scope=scope,
+                status="running",
+                data={"name": tool_name, "inputPreview": str(payload.get("delta") or "")},
+            )
+        if runtime_type == "TOOL_RESULT_DELTA":
+            return _display_event(
+                state,
+                block="process",
+                event="tool.output.delta",
+                op="append",
+                target_id=tool_id,
+                actor_id=actor_id,
+                scope=scope,
+                status="running",
+                data={"name": tool_name, "outputPreview": str(payload.get("delta") or "")},
+            )
+        item_status = "running"
+        event_name = "tool.started"
+        if runtime_type == "TOOL_RESULT_COMPLETED":
+            item_status = "failed" if status == "failed" else "completed"
+            event_name = "tool.failed" if item_status == "failed" else "tool.completed"
+        return _display_event(
+            state,
+            block="process",
+            event=event_name,
+            op="upsert",
+            target_id=tool_id,
+            actor_id=actor_id,
+            scope=scope,
+            status=item_status,
+            data={
+                "name": tool_name,
+                "inputPreview": "",
+                "outputPreview": "",
+                "outputSize": 0,
+                "outputTruncated": False,
+                "error": str(payload.get("state") or "") if item_status == "failed" else "",
+            },
+        )
+    return None
+
+
 def _display_event(
     state: dict[str, Any],
     *,
@@ -788,16 +1310,18 @@ def _display_event(
     target_id: str,
     status: str,
     data: dict[str, Any],
+    actor_id: str | None = None,
+    scope: str | None = None,
 ) -> dict[str, Any]:
     seq = int(state.get("eventCount") or 0)
     created_at = str(state.get("updatedAt") or _utc_now())
-    return {
+    display_event = {
         "id": f"{state.get('runId') or 'run'}-{seq}-{block}-{event}-{target_id}",
         "runId": str(state.get("runId") or ""),
         "sessionId": str(state.get("sessionId") or ""),
         "seq": seq,
         "createdAt": created_at,
-        "scope": DISPLAY_EVENT_SCOPE,
+        "scope": _normalize_display_scope(scope or _default_display_scope(state)),
         "block": block,
         "event": event,
         "op": op,
@@ -805,6 +1329,42 @@ def _display_event(
         "status": status,
         "data": data,
     }
+    resolved_actor_id = actor_id or _default_actor_id(state)
+    if resolved_actor_id:
+        display_event["actorId"] = resolved_actor_id
+    return display_event
+
+
+def _default_display_scope(state: dict[str, Any]) -> str:
+    if _display_mode(state) != "team":
+        return DISPLAY_EVENT_SCOPE
+    for activity in state.get("teamActivities") or []:
+        if isinstance(activity, dict) and str(activity.get("role") or "") == "leader":
+            return "leader"
+    return "team"
+
+
+def _normalize_display_scope(scope: str) -> str:
+    """把内部旧 scope 转成 DisplayEvent v3 稳定 scope。"""
+
+    if scope == "single":
+        return DISPLAY_EVENT_SCOPE
+    if scope in {"single_agent", "team", "leader", "worker"}:
+        return scope
+    return DISPLAY_EVENT_SCOPE
+
+
+def _default_actor_id(state: dict[str, Any]) -> str:
+    """返回当前主 Agent/Leader 的 actor id。"""
+
+    if _display_mode(state) == "team":
+        for activity in state.get("teamActivities") or []:
+            if not isinstance(activity, dict):
+                continue
+            if str(activity.get("role") or "") == "leader":
+                return str(activity.get("id") or "")
+    agent_id = str(state.get("agentId") or "")
+    return f"single-{agent_id}" if agent_id else "single-agent"
 
 
 def _upsert_tool(state: dict[str, Any], data: dict[str, Any], *, status: str) -> dict[str, Any]:

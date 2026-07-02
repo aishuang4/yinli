@@ -1,6 +1,6 @@
 # Chat SSE 事件契约
 
-> 状态：2026-07-01 RunState + DisplaySnapshot v2。本文定义 `/api/chat/send/start`、`/api/chat/send`、`/api/chat/resume/start`、`/api/chat/resume`、`/api/chat/runs/{run_id}/stream`、`/api/chat/runs/{run_id}/state` 与 `/api/chat/runs/{run_id}/state/stream` 可被前端依赖的事件和状态。新增事件前必须先更新本文档。
+> 状态：2026-07-02 RunState v2 + DisplaySnapshot v3。本文定义 `/api/chat/send/start`、`/api/chat/send`、`/api/chat/resume/start`、`/api/chat/resume`、`/api/chat/runs/{run_id}/stream`、`/api/chat/runs/{run_id}/state` 与 `/api/chat/runs/{run_id}/state/stream` 可被前端依赖的事件和状态。新增事件前必须先更新本文档。
 
 ## 基本规则
 
@@ -59,7 +59,7 @@
 
 ## Plan Mode Runtime Events
 
-Plan Mode 基于 AgentScope Middleware hooks 实现，不恢复旧 Plan Runtime。所有事件都通过 `RUNTIME_EVENT` 发送，`scope` 使用 `plan`。
+Plan Mode 基于 AgentScope Middleware hooks 实现，不恢复旧 Plan Runtime。所有事件都通过 `RUNTIME_EVENT` 发送，`scope` 使用 `plan`。当前 Plan Mode 只支持 `executor.kind=single_agent`；当 `executor.kind=team` 时，后端不得注入 Plan Mode middleware，也不得向 Leader 或 Worker 注入 `plan_enter`、`plan_write`、`plan_exit`、`todo_write`、`task_output` 等 Plan 控制工具。
 
 Plan Mode 内部只产生 `PlanDomainEvent`；跨出 Plan middleware / Plan tools 边界前，必须统一转换为 `RUNTIME_EVENT`。前端不得依赖 middleware 内部事件结构，也不得直接解析 Plan 工具结果作为主状态来源。
 
@@ -77,6 +77,7 @@ Plan Mode 内部只产生 `PlanDomainEvent`；跨出 Plan middleware / Plan tool
 ### Plan Mode 收口与后续执行
 
 - `plan_exit` 不进入人工审批状态，也不触发 approve/deny HTTP 端点。
+- Team Runtime 不支持 Plan Mode。用户如需“先规划再由 Team 执行”，应先用单 Agent 生成计划，再在下一轮选择 Team 普通执行。
 - Agent 调用 `plan_exit` 后，后端发送 `RUNTIME_EVENT:PLAN_FINALIZED`，随后通过分片 `FINAL_ANSWER_DELTA` / `AGENT_FINAL_ANSWER_DELTA` 将当前计划 markdown 作为本轮 assistant 最终答案，禁止把完整计划作为单个超大 delta 一次性发给前端。
 - 本轮 Run 继续走正常成功收尾并发送 `RUN_COMPLETED`。前端不得展示手动批准/拒绝按钮。
 - 用户通过下一条自然语言消息决定后续动作，例如“修改这个计划”或“按这个计划执行”。该下一轮仍由普通 Chat 路由进入 ReAct Runtime，不携带旧 Plan 审批字段。
@@ -105,10 +106,9 @@ Plan Mode 内部只产生 `PlanDomainEvent`；跨出 Plan middleware / Plan tool
 
 `RUN_STATE_PATCH` 用于连接中的实时更新，允许丢失；网络断开、页面刷新或前端怀疑状态不一致时，应重新订阅并以新的 `RUN_STATE` 快照为准。每个 patch 必须包含 `kind`，前端必须优先按 `kind` 分支处理，不得再靠猜测可选字段判断 patch 语义。稳定字段包括：
 
-- `kind`：稳定 patch 类型，当前值为 `snapshot_meta|display_event|team_activities|model_usage|approval_resolved|error`。普通 Runtime Event 不得作为 `RUN_STATE_PATCH` 发送到 Chat 主界面。
+- `kind`：稳定 patch 类型，当前值为 `snapshot_meta|display_event|model_usage|approval_resolved|error`。普通 Runtime Event 不得作为 `RUN_STATE_PATCH` 发送到 Chat 主界面。
 - `runId`、`sessionId`、`status`、`currentStage`、`updatedAt`、`completedAt`、`lastEventType`、`eventCount`。
 - `displayEvent`：一个单 Agent 展示增量事件。patch 中只允许携带一个 `displayEvent`，前端用 reducer 聚合到 `displaySnapshot`。
-- `teamActivities`：Team 活动快照，仅在 Team 活动变化时出现。Team 当前不进入 `displaySnapshot`。
 - `approvalResolvedId` / `resolvedApprovalId`：用户介入完成后的等待项 ID。
 - `modelName`、`tokenUsage`：模型调用与用量摘要。
 - `error`：错误摘要。
@@ -129,11 +129,10 @@ RunState 稳定字段：
 - `finalAnswer`、`finalAnswerTruncated`：最终答案文本。可截断，完整最终结果以 `chat_messages` 为准。
 - `thinking`：深度思考摘要。
 - `tools`：轻量工具摘要数组，不包含完整 Observation。
-- `teamActivities`：Team worker/leader 当前活动摘要，字段沿用 Chat `TeamActivityInfo` camelCase 结构。
 - `skillCalls`：本轮注入/使用的 Skill 摘要。
 - `modelName`、`tokenUsage`：模型调用与 token 用量摘要。
 - `plans`：Plan Mode 当前计划摘要。
-- `displaySnapshot`：单 Agent Chat 主展示完整快照，结构为 `{ version: 2, blocks: DisplayBlock[] }`。用于刷新、断线恢复和历史消息回放。当前 Team 不进入该字段，后续单独设计 Team 展示事件。
+- `displaySnapshot`：Chat 主展示完整快照，结构为 `{ version: 3, mode, actors, blocks }`。用于刷新、断线恢复和历史消息回放。单 Agent 与 Team 都必须进入该字段。
 - `approvals`：等待用户处理的 HITL / clarification 摘要；每项必须包含 `interactionId`、`kind`、`type`、`status`、`createdAt`。`kind` 表示 UI 交互大类，稳定值为 `hitl|clarification`；`type` 表示该大类内部的交互子类型。clarification 的 `kind` 与 `type` 都必须为 `clarification`，并保留 `title`、`description`、`questions`，不得被问题字段或原始 payload 中的 `type` 覆盖。
 - `error`、`lastEventType`、`eventCount`、`createdAt`、`updatedAt`、`completedAt`。
 
@@ -147,15 +146,24 @@ RunState 稳定字段：
 
 Chat 主界面不得依赖完整工具结果。大体积 Read、Glob、Bash、HTTP、MCP 输出必须通过 Trace 或 Artifact 按需查看，不进入 RunState 常驻状态。
 
-### 单 Agent DisplaySnapshot v2
+### Chat DisplaySnapshot v3
 
 `displaySnapshot` / `displayEvent` 是 Chat 主界面展示层契约，只表达“前端现在应该显示什么”。它不替代 `RUNTIME_EVENT` 事实日志；事实事件仍用于 Trace 和审计。
+
+DisplaySnapshot v3 的核心原则：
+
+- 外层 `mode` 描述本轮展示形态：`single_agent|team`。
+- 内层 `actors[]` 统一描述执行主体。单 Agent 是一个 `role=single` 的 actor；Team 是一个 `role=leader` actor 加多个 `role=worker` actor。
+- `blocks[]` 只放整轮 Run 级展示块，例如 Plan、人工反馈、最终答案、生成文件和错误。
+- actor 内部 `items[]` 统一承载 reasoning、thinking、tool、skill 的有序 ReAct 过程。前端根据 `mode` 决定用单 Agent 过程组件还是 Team 组件渲染，但数据结构一致。
 
 `RUN_STATE` 必须返回完整快照：
 
 ```ts
 displaySnapshot: {
-  version: 2;
+  version: 3;
+  mode: "single_agent" | "team";
+  actors: DisplayActor[];
   blocks: DisplayBlock[];
 }
 ```
@@ -169,22 +177,53 @@ displayEvent: {
   sessionId: string;
   seq: number;
   createdAt: string;
-  scope: "single_agent";
-  block: "process" | "plan" | "feedback" | "answer" | "files" | "error";
+  scope: "single_agent" | "team" | "leader" | "worker";
+  block: "process" | "team" | "plan" | "feedback" | "answer" | "files" | "error";
   event: string;
   op: "append" | "upsert" | "replace" | "remove" | "clear";
   targetId?: string;
+  actorId?: string;
   status?: "pending" | "running" | "waiting" | "completed" | "failed" | "cancelled";
   data?: Record<string, unknown>;
 }
 ```
 
-`DisplayBlock` / `DisplayItem` 使用通用结构，避免后端输出组件形状：
+`DisplayActor` / `DisplayBlock` / `DisplayItem` 使用通用结构，避免后端输出组件形状：
 
 ```ts
+type DisplayActor = {
+  id: string;
+  role: "single" | "leader" | "worker";
+  agentId: string;
+  agentName: string;
+  activityId?: string;
+  status: "pending" | "running" | "waiting" | "completed" | "failed" | "skipped" | "cancelled";
+  task: string;
+  assignment: string;
+  expectedOutput: string;
+  constraints: string;
+  detail: string;
+  output: string;
+  report: string;
+  skippedReason: string;
+  reportReviewStatus: string;
+  reportReviewNotes: string;
+  reportReviewGaps: string[];
+  executionMode: string;
+  dependsOn: string[];
+  waitReason: string;
+  dependencyOutputCount: number;
+  leaderContextCount: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string;
+  items: DisplayItem[];
+  data: Record<string, unknown>;
+};
+
 type DisplayBlock = {
   id: string;
-  block: "process" | "plan" | "feedback" | "answer" | "files" | "error";
+  block: "process" | "team" | "plan" | "feedback" | "answer" | "files" | "error";
   status: string;
   updatedAt: string;
   items: DisplayItem[];
@@ -204,7 +243,8 @@ type DisplayItem = {
 
 当前稳定展示事件：
 
-- `process`：ReAct 过程块，使用 `items[]` 按顺序表达 `reasoning.delta`、`thinking.delta`、`tool.*`、`skill.*`。连续 reasoning / thinking delta 使用同一个 `targetId` 追加；如果中间出现 tool / skill，再出现 reasoning / thinking 时必须使用新的 `targetId`，避免前端把非连续过程合并成一个 item。
+- `process`：ReAct 过程事件，投影到对应 actor 的 `items[]`。连续 reasoning / thinking delta 使用同一个 `targetId` 追加；如果中间出现 tool / skill，再出现 reasoning / thinking 时必须使用新的 `targetId`，避免前端把非连续过程合并成一个 item。
+- `team`：Team actor 状态更新事件。后端可以由旧 `TEAM_ACTIVITY` 内部状态投影而来，但 Chat 主界面只依赖 `displaySnapshot.actors[]`。
 - `plan`：Plan Mode 展示块，使用 `data.planId`、`data.planFile`、`data.markdown`、`data.steps`。`PLAN_FINALIZED` 使用 `status=completed`。
 - `feedback`：当前等待用户处理的人机交互，使用 `data.approval`。只放当前等待项，不保留历史已完成项。
 - `answer`：最终答案展示，使用 `data.content`。没有 `FinalAnswerStart` 时，后端不得把 reasoning 兜底复制成最终答案；如果 Agent 流自然结束但没有产生最终答案，后端必须发送 `RUN_FAILED` 和 `ERROR`，并投影为 `error` 展示块，常见原因包括达到最大 ReAct 迭代次数。
@@ -213,7 +253,7 @@ type DisplayItem = {
 
 当前前端登记的事件名集中维护在 `frontend/src/types/displayEvents.ts`。新增事件时先扩展该文件，再更新本文档、后端 Pydantic schema、前端 projector 和测试矩阵。
 
-Team 当前不进入 `displaySnapshot`，后续独立设计 Team 展示事件。
+Team 必须进入 `displaySnapshot.actors[]`。Chat 主界面不得依赖顶层 `teamActivities` 或 `team_activities` 旧字段。
 
 ### 历史消息回放
 
@@ -236,7 +276,7 @@ Team 当前不进入 `displaySnapshot`，后续独立设计 Team 展示事件。
 | `REASONING_DELTA` | `displaySnapshot.blocks[]`、`reasoning` | `displayEvent(block=process,event=reasoning.delta)` | `displaySnapshot: process item` | running 继续 |
 | `FINAL_ANSWER_DELTA` | `displaySnapshot.blocks[]`、`finalAnswer` | `displayEvent(block=answer,event=answer.delta)` | `displaySnapshot: answer block` | running 继续 |
 | Agent 流结束但没有最终答案 | `status=failed`、`error` | `displayEvent(block=error,event=error.raised)` | `displaySnapshot: error block` | 发送后结束 |
-| `TEAM_ACTIVITY` | `teamActivities[]` | `teamActivities` | `teamActivities[]` | running 继续 |
+| `TEAM_ACTIVITY` | `displaySnapshot.actors[]` | `displayEvent(block=team,event=team.actors.updated)` | `displaySnapshot.actors[] -> TeamDisplayBlock` | running 继续 |
 | `SKILL_CONTEXT` / `SKILL_END` | `displaySnapshot.blocks[]`、`skillCalls[]` | `displayEvent(block=process,event=skill.*)` | `displaySnapshot: process item` | running 继续 |
 | `MODEL_CALL_*` | `modelName`、`tokenUsage` | `modelName`、`tokenUsage` | 模型与用量状态 | running 继续 |
 | `RUN_COMPLETED` / `RUN_FAILED` / `RUN_CANCELLED` | `status`、`completedAt`、`error` | `status`、`completedAt`、`error` | 停止 streaming | 发送后结束 |

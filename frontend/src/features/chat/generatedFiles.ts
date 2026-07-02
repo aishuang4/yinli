@@ -1,4 +1,4 @@
-import type { TeamActivityInfo, ToolCallInfo } from '../../hooks/useEventStream';
+import type { TeamActorInfo, ToolCallInfo } from '../../hooks/useEventStream';
 import { normalizeToolDisplayName } from './formatters';
 
 export type GeneratedFileInfo = {
@@ -7,7 +7,7 @@ export type GeneratedFileInfo = {
   extension: string;
 };
 
-export function collectGeneratedFiles(toolCalls: ToolCallInfo[] = [], teamActivities: TeamActivityInfo[] = []): GeneratedFileInfo[] {
+export function collectGeneratedFiles(toolCalls: ToolCallInfo[] = [], teamActors: TeamActorInfo[] = []): GeneratedFileInfo[] {
   const files: GeneratedFileInfo[] = [];
   const seen = new Set<string>();
   const addFile = (toolCall: ToolCallInfo) => {
@@ -18,8 +18,8 @@ export function collectGeneratedFiles(toolCalls: ToolCallInfo[] = [], teamActivi
   };
 
   toolCalls.forEach(addFile);
-  teamActivities.forEach((activity) => {
-    (activity.toolCalls || []).forEach(addFile);
+  teamActors.forEach((actor) => {
+    (actor.toolCalls || []).forEach(addFile);
   });
   return files;
 }

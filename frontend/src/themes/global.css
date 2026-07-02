@@ -243,6 +243,34 @@ button[class*="-btn"] .lucide {
   50% { opacity: 0; }
 }
 
+@keyframes stream-caret-breathe {
+  0%, 100% {
+    opacity: 0.28;
+    transform: translateY(1px) scale(0.82);
+  }
+  50% {
+    opacity: 0.9;
+    transform: translateY(1px) scale(1);
+  }
+}
+
+.chat-stream-caret {
+  display: inline-block;
+  width: 0.44em;
+  height: 0.44em;
+  margin-left: 0.26em;
+  border-radius: 999px;
+  background: var(--color-accent);
+  vertical-align: baseline;
+  animation: stream-caret-breathe 1.15s ease-in-out infinite;
+}
+
+.chat-stream-caret--subtle {
+  width: 0.38em;
+  height: 0.38em;
+  opacity: 0.78;
+}
+
 /* 旋转加载动画 */
 @keyframes spin {
   from { transform: rotate(0deg); }
@@ -266,6 +294,10 @@ button[class*="-btn"] .lucide {
 
 .markdown-content > :last-of-type {
   margin-bottom: 0;
+}
+
+.chat-message-content--assistant .markdown-content > hr:first-child {
+  display: none;
 }
 
 .markdown-content p,

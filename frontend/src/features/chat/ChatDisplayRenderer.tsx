@@ -4,6 +4,7 @@ import { MessageToolbar } from './MessageToolbar';
 import { GeneratedFilesBlock } from './ToolArtifacts';
 import { HumanFeedbackDisplayBlock } from './HumanFeedbackDisplayBlock';
 import { ProcessDisplayBlock } from './ProcessDisplayBlock';
+import { TeamDisplayBlock } from './TeamDisplayBlock';
 import type { ChatDisplayMessage } from './chatDisplayTypes';
 
 type ResolveHitl = (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
@@ -15,6 +16,8 @@ export function ChatDisplayRenderer({
   showToolbar,
   onSubmitClarification,
   onResolveHitl,
+  selectedTeamActorId,
+  onSelectTeamActor,
 }: {
   message: ChatDisplayMessage;
   defaultProcessExpanded: boolean;
@@ -22,6 +25,8 @@ export function ChatDisplayRenderer({
   showToolbar: boolean;
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
   onResolveHitl?: ResolveHitl;
+  selectedTeamActorId?: string | null;
+  onSelectTeamActor?: (id: string) => void;
 }) {
   const hasFinalAnswer = message.blocks.some((block) => (
     block.type === 'final_answer' && Boolean(block.content.trim())
@@ -30,6 +35,17 @@ export function ChatDisplayRenderer({
   return (
     <>
       {message.blocks.map((block) => {
+        if (block.type === 'team') {
+          return (
+            <TeamDisplayBlock
+              key={block.id}
+              actors={block.actors}
+              selectedActorId={selectedTeamActorId || null}
+              onSelectActor={onSelectTeamActor || (() => {})}
+            />
+          );
+        }
+
         if (block.type === 'process') {
           return (
             <ProcessDisplayBlock

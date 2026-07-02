@@ -2,6 +2,7 @@ import { Loader2 } from 'lucide-react';
 
 import { MarkdownContent } from '../../components/MarkdownContent';
 import type { ChatImagePayload } from './types';
+import { useSmoothStreamingText } from './useSmoothStreamingText';
 
 export function MessageImages({
   images,
@@ -35,9 +36,13 @@ export function MessageContentBlock({
   role: 'user' | 'assistant';
   streaming?: boolean;
 }) {
+  const isUser = role === 'user';
+  const visibleContent = useSmoothStreamingText(content, streaming && !isUser, {
+    charsPerSecond: 76,
+    maxCharsPerFrame: 12,
+  });
   if (!content) return null;
 
-  const isUser = role === 'user';
   return (
     <div
       className={`chat-message-content ${isUser ? 'chat-message-content--user' : 'chat-message-content--assistant'}`}
@@ -47,6 +52,10 @@ export function MessageContentBlock({
         backgroundColor: isUser
           ? 'var(--color-accent)'
           : 'var(--color-bg-secondary)',
+        border: '0',
+        boxShadow: 'none',
+        outline: 'none',
+        backgroundClip: 'padding-box',
         color: isUser
           ? 'var(--color-text-inverse)'
           : 'var(--color-text-primary)',
@@ -56,19 +65,9 @@ export function MessageContentBlock({
         whiteSpace: isUser ? 'pre-wrap' : undefined,
       }}
     >
-      {isUser ? content : <MarkdownContent content={content} streaming={streaming} />}
+      {isUser ? content : <MarkdownContent content={visibleContent} />}
       {streaming && (
-        <span
-          style={{
-            display: 'inline-block',
-            width: '2px',
-            height: '14px',
-            backgroundColor: 'var(--color-accent)',
-            marginLeft: '2px',
-            verticalAlign: 'text-bottom',
-            animation: 'blink 1s infinite',
-          }}
-        />
+        <span className="chat-stream-caret" aria-hidden="true" />
       )}
     </div>
   );

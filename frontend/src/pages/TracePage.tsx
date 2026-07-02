@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { UIEvent } from 'react';
 import { Activity, Bot, CheckCircle2, Clock3, Copy, RefreshCw, ShieldCheck, Wrench, XCircle } from 'lucide-react';
 import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
-import type { TeamActivityInfo, ToolCallInfo } from '../hooks/useEventStream';
+import type { TeamActorInfo, ToolCallInfo } from '../hooks/useEventStream';
 import { useAppStore } from '../stores/appStore';
 
 interface TraceSummary {
@@ -29,7 +29,7 @@ interface TraceMessage {
   modelName: string | null;
   error: string | null;
   toolCalls: ToolCallInfo[];
-  teamActivities: TeamActivityInfo[];
+  teamActivities: TeamActorInfo[];
   createdAt: string;
 }
 
@@ -566,7 +566,7 @@ function TraceMessageCard({ message }: { message: TraceMessage }) {
   );
 }
 
-function TraceActivityCard({ activity }: { activity: TeamActivityInfo }) {
+function TraceActivityCard({ activity }: { activity: TeamActorInfo }) {
   return (
     <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
       <div className="mb-2 flex items-center justify-between gap-3">

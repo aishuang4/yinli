@@ -12,8 +12,7 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
-import type { ChatRuntimeEvent } from '../types/chatEvents';
-import { DISPLAY_BLOCKS, DISPLAY_EVENTS, type DisplayBlock, type DisplaySnapshot } from '../types/displayEvents';
+import { DISPLAY_BLOCKS, DISPLAY_EVENTS, type DisplayActor, type DisplayBlock, type DisplayItem, type DisplaySnapshot } from '../types/displayEvents';
 import type {
   ChatRunPlanState,
   ChatRunPlanStep,
@@ -54,10 +53,8 @@ export interface StreamState {
   toolCalls: ToolCallInfo[];
   /** Skill 注入/应用列表 */
   skillCalls: SkillCallInfo[];
-  /** Team 协作活动 */
-  teamActivities: TeamActivityInfo[];
-  /** 应用级运行事件 */
-  runtimeEvents: ChatRuntimeEvent[];
+  /** Team actor 视图数据，由 displaySnapshot.actors 派生 */
+  teamActors: TeamActorInfo[];
   /** RunState 投影出的 Plan Mode 状态 */
   plans: ChatRunPlanState[];
   /** 单 Agent 主展示快照 */
@@ -100,16 +97,6 @@ function normalizeToolStatus(status: unknown): ToolCallInfo['status'] {
   );
 }
 
-function normalizeToolCallRecord(record: Record<string, unknown>): ToolCallInfo {
-  return {
-    id: String(record.id || record.tool_call_id || createId()),
-    name: normalizeToolDisplayName(String(record.name || record.tool_call_name || 'tool')),
-    args: String(record.args || ''),
-    result: String(record.result || ''),
-    status: normalizeToolStatus(record.status),
-  };
-}
-
 function normalizeToolDisplayName(name: string): string {
   const value = String(name || 'tool');
   const parts = value.split('_');
@@ -117,33 +104,6 @@ function normalizeToolDisplayName(name: string): string {
     return parts[0];
   }
   return value;
-}
-
-function mergeToolCalls(current: ToolCallInfo[], incoming: ToolCallInfo[]): ToolCallInfo[] {
-  const merged = [...current];
-  for (const next of incoming) {
-    const existingIndex = merged.findIndex((item) => (
-      item.id === next.id ||
-      (
-        item.name === next.name &&
-        item.args === next.args &&
-        item.result === next.result
-      )
-    ));
-    if (existingIndex === -1) {
-      merged.push(next);
-      continue;
-    }
-    const existing = merged[existingIndex];
-    merged[existingIndex] = {
-      ...existing,
-      ...next,
-      args: next.args || existing.args,
-      result: next.result || existing.result,
-      status: next.status || existing.status,
-    };
-  }
-  return merged;
 }
 
 /** Skill 应用信息 */
@@ -158,8 +118,8 @@ export interface SkillCallInfo {
   status: 'running' | 'completed' | 'failed';
 }
 
-/** Team 协作活动信息 */
-export interface TeamActivityInfo {
+/** Team 执行主体信息 */
+export interface TeamActorInfo {
   id: string;
   agentId: string;
   agentName: string;
@@ -178,6 +138,7 @@ export interface TeamActivityInfo {
   reportReviewGaps: string[];
   thinking: string;
   currentEvent: string;
+  items: DisplayItem[];
   toolCalls: ToolCallInfo[];
   executionMode: string;
   dependsOn: string[];
@@ -287,8 +248,7 @@ const INITIAL_STATE: StreamState = {
   thinkingContent: '',
   toolCalls: [],
   skillCalls: [],
-  teamActivities: [],
-  runtimeEvents: [],
+  teamActors: [],
   plans: [],
   displaySnapshot: createEmptyDisplaySnapshot(),
   hitlRequests: [],
@@ -328,10 +288,10 @@ function markActiveToolCallsFailed(toolCalls: ToolCallInfo[]): ToolCallInfo[] {
   ));
 }
 
-function markActiveTeamToolCallsFailed(activities: TeamActivityInfo[]): TeamActivityInfo[] {
-  return activities.map((activity) => ({
-    ...activity,
-    toolCalls: markActiveToolCallsFailed(activity.toolCalls),
+function markActiveTeamToolCallsFailed(actors: TeamActorInfo[]): TeamActorInfo[] {
+  return actors.map((actor) => ({
+    ...actor,
+    toolCalls: markActiveToolCallsFailed(actor.toolCalls),
   }));
 }
 
@@ -341,7 +301,7 @@ function failStreamWithError(state: StreamState, error: string): StreamState {
     isStreaming: false,
     error,
     toolCalls: markActiveToolCallsFailed(state.toolCalls),
-    teamActivities: markActiveTeamToolCallsFailed(state.teamActivities),
+    teamActors: markActiveTeamToolCallsFailed(state.teamActors),
     runCompletedAt: state.runCompletedAt || new Date().toISOString(),
   };
 }
@@ -383,19 +343,18 @@ function streamStateFromRunState(snapshot: ChatRunStateSnapshot): StreamState {
     currentRunId: String(snapshot.runId || ''),
     runStartedAt: String(snapshot.createdAt || ''),
     runCompletedAt: String(snapshot.completedAt || ''),
-    textContent: displayState.finalAnswerContent || ((snapshot.teamActivities || []).length > 0 ? String(snapshot.finalAnswer || '') : ''),
+    textContent: displayState.finalAnswerContent,
     reasoningContent: displayState.reasoningContent,
-    finalAnswerContent: displayState.finalAnswerContent || ((snapshot.teamActivities || []).length > 0 ? String(snapshot.finalAnswer || '') : ''),
+    finalAnswerContent: displayState.finalAnswerContent,
     thinkingContent: displayState.thinkingContent,
     toolCalls: displayState.toolCalls.map((tool) => ({
       ...tool,
       status: normalizeToolStatusForRun(tool.status, runStatus),
     })),
-    teamActivities: normalizeTeamActivities(snapshot.teamActivities || [], [], []),
+    teamActors: displayState.teamActors,
     skillCalls: displayState.skillCalls,
     modelName: String(snapshot.modelName || ''),
     tokenUsage: snapshot.tokenUsage || null,
-    runtimeEvents: [],
     plans: displayState.plans,
     displaySnapshot,
     hitlRequests: displayState.hitlRequests.length > 0 ? displayState.hitlRequests : hitlRequests,
@@ -412,7 +371,7 @@ function applyRunStatePatch(state: StreamState, patch: ChatRunStatePatch): Strea
   const displaySnapshot = patch.displayEvent
     ? applyDisplayEvent(state.displaySnapshot, patch.displayEvent)
     : state.displaySnapshot;
-  const hasDisplaySnapshot = displaySnapshot.blocks.length > 0;
+  const hasDisplaySnapshot = displaySnapshot.blocks.length > 0 || displaySnapshot.actors.length > 0;
   const displayState = deriveStateFromDisplaySnapshot(
     displaySnapshot,
     String(patch.runId || state.currentRunId),
@@ -437,9 +396,7 @@ function applyRunStatePatch(state: StreamState, patch: ChatRunStatePatch): Strea
     reasoningContent: hasDisplaySnapshot ? displayState.reasoningContent : state.reasoningContent,
     thinkingContent: hasDisplaySnapshot ? displayState.thinkingContent : state.thinkingContent,
     toolCalls,
-    teamActivities: patchKind === 'team_activities' && Array.isArray(patch.teamActivities)
-      ? normalizeTeamActivities(patch.teamActivities, state.teamActivities, state.runtimeEvents)
-      : state.teamActivities,
+    teamActors: hasDisplaySnapshot ? displayState.teamActors : state.teamActors,
     skillCalls: hasDisplaySnapshot
       ? displayState.skillCalls
       : state.skillCalls,
@@ -453,7 +410,6 @@ function applyRunStatePatch(state: StreamState, patch: ChatRunStatePatch): Strea
       ? displayState.plans
       : state.plans,
     displaySnapshot,
-    runtimeEvents: state.runtimeEvents,
     isStreaming: isTerminal || isWaiting ? false : state.isStreaming,
     error: hasDisplaySnapshot
       ? displayState.error || (patchKind === 'error' ? String(patch.error || state.error || '') : String(state.error || ''))
@@ -466,6 +422,7 @@ interface DisplayDerivedState {
   thinkingContent: string;
   finalAnswerContent: string;
   toolCalls: ToolCallInfo[];
+  teamActors: TeamActorInfo[];
   skillCalls: SkillCallInfo[];
   plans: ChatRunPlanState[];
   hitlRequests: HitlRequestInfo[];
@@ -478,8 +435,7 @@ function deriveStateFromDisplaySnapshot(
   runId: string,
   sessionId: string,
 ): DisplayDerivedState {
-  const processBlocks = snapshot.blocks.filter((block) => block.block === DISPLAY_BLOCKS.PROCESS);
-  const processItems = processBlocks.flatMap((block) => block.items);
+  const processItems = snapshot.actors.flatMap((actor) => actor.items);
   const reasoningContent = processItems
     .filter((item) => item.event === DISPLAY_EVENTS.REASONING_DELTA || item.targetId === 'reasoning')
     .map((item) => pickDisplayString(item.data, ['text', 'content', 'delta']))
@@ -506,6 +462,7 @@ function deriveStateFromDisplaySnapshot(
     thinkingContent,
     finalAnswerContent: answerBlock ? pickDisplayString(answerBlock.data, ['content', 'text']) : '',
     toolCalls,
+    teamActors: snapshot.mode === 'team' ? snapshot.actors.map(teamActorFromDisplayActor) : [],
     skillCalls,
     plans: snapshot.blocks
       .filter((block) => block.block === DISPLAY_BLOCKS.PLAN)
@@ -539,6 +496,55 @@ function toolCallFromDisplayItem(item: DisplayBlock['items'][number]): ToolCallI
     result: pickDisplayString(item.data, ['outputPreview', 'output', 'result', 'error']),
     status: normalizeToolStatus(item.status || item.data.status),
   };
+}
+
+function teamActorFromDisplayActor(actor: DisplayActor): TeamActorInfo {
+  return {
+    id: actor.activityId || actor.id,
+    agentId: actor.agentId,
+    agentName: actor.agentName,
+    role: actor.role,
+    status: normalizeTeamActorStatus(actor.status),
+    task: actor.task,
+    assignment: actor.assignment,
+    expectedOutput: actor.expectedOutput,
+    constraints: actor.constraints,
+    detail: actor.detail,
+    output: actor.output,
+    report: actor.report,
+    skippedReason: actor.skippedReason,
+    reportReviewStatus: actor.reportReviewStatus,
+    reportReviewNotes: actor.reportReviewNotes,
+    reportReviewGaps: actor.reportReviewGaps,
+    thinking: actor.items
+      .filter((item) => item.event === DISPLAY_EVENTS.THINKING_DELTA)
+      .map((item) => pickDisplayString(item.data, ['text', 'content', 'delta']))
+      .join('\n\n'),
+    currentEvent: actor.detail,
+    items: actor.items,
+    toolCalls: actor.items
+      .filter((item) => item.event.startsWith('tool.') || item.targetId.startsWith('tool'))
+      .map(toolCallFromDisplayItem),
+    executionMode: actor.executionMode,
+    dependsOn: actor.dependsOn,
+    waitReason: actor.waitReason,
+    dependencyOutputCount: actor.dependencyOutputCount,
+    leaderContextCount: actor.leaderContextCount,
+    createdAt: actor.createdAt,
+  };
+}
+
+function normalizeTeamActorStatus(status: string): TeamActorInfo['status'] {
+  if (
+    status === 'running' ||
+    status === 'waiting' ||
+    status === 'completed' ||
+    status === 'failed' ||
+    status === 'skipped'
+  ) {
+    return status;
+  }
+  return 'pending';
 }
 
 function skillCallFromDisplayItem(item: DisplayBlock['items'][number]): SkillCallInfo {
@@ -717,87 +723,6 @@ function normalizeRunStatePlanStep(step: unknown): ChatRunPlanStep {
     evidence: record.evidence ? String(record.evidence) : undefined,
     result: record.result ? String(record.result) : undefined,
   };
-}
-
-function hasRuntimeActivityEvents(
-  runtimeEvents: ChatRuntimeEvent[],
-  activityId: string,
-  agentId: string,
-): boolean {
-  return runtimeEvents.some((event) => (
-    (activityId && event.teamActivityId === activityId) ||
-    (agentId && event.agentId === agentId && ['worker', 'leader', 'single'].includes(event.scope))
-  ));
-}
-
-function normalizeTeamActivities(
-  activities: Array<Record<string, unknown>>,
-  current: TeamActivityInfo[],
-  runtimeEvents: ChatRuntimeEvent[],
-): TeamActivityInfo[] {
-  return activities.map((activity) => {
-    const existing = current.find((item) => (
-      item.id === activity.id || item.agentId === activity.agentId
-    ));
-    const hasRuntimeState = hasRuntimeActivityEvents(
-      runtimeEvents,
-      String(activity.id || ''),
-      String(activity.agentId || ''),
-    );
-    const status = String(activity.status || 'pending');
-    const toolCalls = Array.isArray(activity.toolCalls)
-      ? mergeToolCalls(
-        existing?.toolCalls || [],
-        activity.toolCalls.map((toolCall) => normalizeToolCallRecord(toolCall as Record<string, unknown>))
-      )
-      : existing?.toolCalls || [];
-    const normalizedStatus = (
-      status === 'running' ||
-      status === 'waiting' ||
-      status === 'completed' ||
-      status === 'failed' ||
-      status === 'skipped'
-        ? status
-        : 'pending'
-    );
-    const incomingTerminal = (
-      normalizedStatus === 'completed' ||
-      normalizedStatus === 'failed' ||
-      normalizedStatus === 'skipped'
-    );
-    const preserveRuntimeState = Boolean(hasRuntimeState && existing && !incomingTerminal);
-    return {
-      id: String(activity.id || createId()),
-      agentId: String(activity.agentId || ''),
-      agentName: String(activity.agentName || 'Agent'),
-      role: String(activity.role || 'worker'),
-      status: preserveRuntimeState && existing ? existing.status : normalizedStatus,
-      task: String(activity.task || ''),
-      assignment: String(activity.assignment || existing?.assignment || ''),
-      expectedOutput: String(activity.expectedOutput || existing?.expectedOutput || ''),
-      constraints: String(activity.constraints || existing?.constraints || ''),
-      detail: preserveRuntimeState && existing ? existing.detail : String(activity.detail || existing?.detail || ''),
-      output: preserveRuntimeState && existing ? existing.output : String(activity.output || existing?.output || ''),
-      report: preserveRuntimeState && existing ? existing.report : String(activity.report || existing?.report || ''),
-      skippedReason: String(activity.skippedReason || existing?.skippedReason || ''),
-      reportReviewStatus: String(activity.reportReviewStatus || existing?.reportReviewStatus || ''),
-      reportReviewNotes: String(activity.reportReviewNotes || existing?.reportReviewNotes || ''),
-      reportReviewGaps: Array.isArray(activity.reportReviewGaps)
-        ? activity.reportReviewGaps.map((item) => String(item))
-        : existing?.reportReviewGaps || [],
-      thinking: preserveRuntimeState && existing ? existing.thinking : String(activity.thinking || existing?.thinking || ''),
-      currentEvent: incomingTerminal ? String(activity.detail || existing?.currentEvent || '') : existing?.currentEvent || '',
-      toolCalls: preserveRuntimeState && existing ? existing.toolCalls : toolCalls,
-      executionMode: String(activity.executionMode || existing?.executionMode || 'parallel'),
-      dependsOn: Array.isArray(activity.dependsOn)
-        ? activity.dependsOn.map((item) => String(item))
-        : existing?.dependsOn || [],
-      waitReason: String(activity.waitReason || existing?.waitReason || ''),
-      dependencyOutputCount: Number(activity.dependencyOutputCount ?? existing?.dependencyOutputCount ?? 0),
-      leaderContextCount: Number(activity.leaderContextCount ?? existing?.leaderContextCount ?? 0),
-      createdAt: String(activity.createdAt || ''),
-    };
-  });
 }
 
 /**

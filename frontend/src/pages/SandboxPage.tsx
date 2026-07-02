@@ -4,7 +4,7 @@ import { Button, Select, Spinner, Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
-import { useEventStream, type TeamActivityInfo, type ToolCallInfo } from '../hooks/useEventStream';
+import { useEventStream, type TeamActorInfo, type ToolCallInfo } from '../hooks/useEventStream';
 import type { TeamMember } from '../types/team';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
@@ -291,7 +291,7 @@ export function SandboxPage() {
 }
 
 function SandboxResult({ state }: { state: ReturnType<typeof useEventStream>['state'] }) {
-  if (!state.isStreaming && !state.textContent && !state.error && state.toolCalls.length === 0 && state.teamActivities.length === 0 && state.skillCalls.length === 0) {
+  if (!state.isStreaming && !state.textContent && !state.error && state.toolCalls.length === 0 && state.teamActors.length === 0 && state.skillCalls.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-[var(--color-text-tertiary)]">
         <div className="text-center">
@@ -321,11 +321,11 @@ function SandboxResult({ state }: { state: ReturnType<typeof useEventStream>['st
           </div>
         </section>
       )}
-      {state.teamActivities.length > 0 && (
+      {state.teamActors.length > 0 && (
         <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
           <div className="mb-3 text-sm font-medium text-[var(--color-text-primary)]">Team 轨迹</div>
           <div className="grid gap-2 md:grid-cols-2">
-            {state.teamActivities.map((activity) => (
+            {state.teamActors.map((activity) => (
               <SandboxActivityCard key={activity.id} activity={activity} />
             ))}
           </div>
@@ -347,7 +347,7 @@ function SandboxResult({ state }: { state: ReturnType<typeof useEventStream>['st
   );
 }
 
-function SandboxActivityCard({ activity }: { activity: TeamActivityInfo }) {
+function SandboxActivityCard({ activity }: { activity: TeamActorInfo }) {
   const toolCalls = activity.toolCalls || [];
 
   return (
