@@ -1,6 +1,31 @@
-# 记忆系统重设计方案
+# 记忆系统设计与实现进度
 
-> 状态：草案，2026-07-03。本文用于重新规划记忆模块，不复用旧三层记忆模块、旧 `memory_*` 事件或旧运行时补丁。
+> 状态：MVP 实现中，2026-07-03。本文记录新记忆系统的设计、已实现边界和后续任务。不复用旧三层记忆模块、旧 `memory_*` 事件或旧运行时补丁。
+
+## 当前实现快照
+
+已完成：
+
+- 旧记忆模块清理，不再创建或读写旧 `memory_facts` / `memory_events` / `memory_candidates` 语义。
+- 新增 `memory_nodes` SQLite 主表和 `/api/memory/nodes*` 路由。
+- 新增全局 `VectorStoreBackend` 抽象，支持 `disabled` 和 `zvec` provider；`VECTOR_STORE_PROVIDER` 只在首次初始化时写入 `VectorStorePolicy`。
+- Zvec provider 已可落盘、创建 / 打开 collection、写入文档、删除和查询；没有 embedding 时降级到标量字段与 BM25 / 稀疏检索。
+- 新增 `memory_node_tree` / `memory_node_query` 普通 Agent 工具。
+- 新增 user / agent / global Markdown 记忆文件存储和 API，默认文件名为 `user_memory.md`、`agent_memory.md`、`global_memory.md`，不兼容旧 `default.md`。
+- 运行前在 readiness 通过后注入 Skill prompt 之后的记忆上下文：user / agent / global Markdown 摘要、最近 30 天节点树和查询工具提示。
+- 运行后在 `completion.py` 成功收尾后后台执行记忆提炼，不阻塞主对话。
+- 新增并行 `UserMemoryReflectionAgent`、`AgentMemoryReflectionAgent`、`GlobalMemoryReflectionAgent`，三者分别绑定唯一 Markdown 文件，并使用 `memory_read` / `memory_add` / `memory_update` / `memory_delete`。
+- 三层 Markdown 提炼提示词已区分职责：user 记用户偏好和画像，agent 记当前 Agent 的解决方法 / 反面案例 / 行为边界，global 记所有 Agent 共享规则。
+- 新增 `SkillEvolutionAgent` 与 `skill_draft_propose` 草稿工具；当前只生成草稿候选，不持久化、不注册、不绑定 Agent。
+- 运行后长期节点持久化只保存用户输入和 Agent 最终输出，不保存工具调用过程。
+
+仍未完成：
+
+- `MEMORY_*` Runtime Event 契约、Trace 审计和前端 Memory 页面。
+- Memory 设置模型、使用审计、Skill 自进化记录表。
+- Markdown 记忆压缩摘要、去重增强、敏感信息过滤增强和失败重试。
+- Team Worker 记忆注入策略。
+- Skill 自进化完整闭环：`SkillEvolutionRouterGate`、`WorkflowEvidenceBuilder`、成功 / 失败工具链摘要、颗粒度 gate、变量流抽象、候选持久化、标准 Skill 注册和去重合并。
 
 ## 目标
 
@@ -28,13 +53,13 @@
 
 记忆系统按“长期节点记忆 + Markdown 长期记忆”双轨设计。向量存储只保存长期节点记忆；用户记忆、Agent 迭代记忆和全局偏好记忆以 Markdown 文件存储，并通过压缩摘要控制上下文体积。
 
-### 四层记忆
+### 记忆层与技能自进化产物
 
 1. **长期节点记忆（memory nodes）**：按 Agent + 日期聚合当天协作过程，只记录用户输入、Agent 最终输出和压缩摘要，不记录工具调用过程。节点进入向量库，用于按日期、范围和语义检索。
 2. **用户单独记忆（user memory）**：记录当前用户的长期信息、偏好、协作习惯、常用项目和表达方式。以 Markdown 文件存储，并定期压缩摘要。
 3. **Agent 迭代记忆（agent memory）**：记录某个 Agent 自己在协作中沉淀出的经验、被纠正过的规则、能力边界、工作准则和 persona 演进。以 Markdown 文件存储，并只影响对应 Agent。
 4. **全局偏好记忆（global preference memory）**：记录整个工作台或 Workspace 的默认偏好和协作规范，例如输出语言、文档风格、通用开发约定、废弃能力禁用规则。以 Markdown 文件存储。
-5. **技能自进化记忆（skill evolution memory）**：Agent 与人完成一整个工作后，由系统判断该工作是否有复用价值；如果可复用，就自动生成一个标准 Skill，让它进入现有 Skills 系统并像普通 Skill 一样被编辑、禁用、删除和统计。系统只负责注册 Skill，不自动绑定到任何 Agent；用户需要进入 Agent 配置手动添加该 Skill。
+5. **技能自进化产物（skill evolution artifact）**：Agent 与人完成一整个工作后，由系统判断该工作是否有复用价值；如果可复用，就自动生成一个标准 Skill，让它进入现有 Skills 系统并像普通 Skill 一样被编辑、禁用、删除和统计。它不是普通 memory item，也不注入长期记忆上下文。系统只负责注册 Skill，不自动绑定到任何 Agent；用户需要进入 Agent 配置手动添加该 Skill。
 
 ### 生命周期状态
 
@@ -171,8 +196,10 @@ Agent 运行完后
 
 ```text
 一整个工作完成
--> SkillEvolutionHook 读取完整工作过程摘要
--> SkillEvolutionAgent 判断是否可复用
+-> SkillEvolutionRouterGate 先判断本轮是否值得进入 Skill 自进化
+-> WorkflowEvidenceBuilder 从 RunState / Trace 提取工具调用链路摘要
+-> SkillEvolutionHook 读取用户目标、最终产出和 workflow evidence
+-> SkillEvolutionAgent 判断是否可复用、是否原子化、是否需要拆分为 Workflow
 -> SkillEvolutionPipeline 生成 Skill 生成记录
 -> skill_draft_create 生成标准 Skill 草稿
 -> MemorySanitizer / Skill 安全校验
@@ -183,6 +210,48 @@ Agent 运行完后
 ```
 
 Skill 自进化的输出是标准 Skill，不是普通 memory item。系统不得自动把新 Skill 绑定到任何 Agent。
+
+Skill 自进化必须先经过 router gate，再进入提炼 Agent。router gate 只做是否值得继续分析的粗筛，不生成 Skill 内容，不决定注册结果。它至少需要确认：
+
+- 本轮 Run 已成功完成，不是失败、取消、clarification-only 或用户中断。
+- 本轮存在可复用的工作成果，例如实现流程、排查方法、设计方案、迁移步骤、测试策略或稳定操作规范。
+- 本轮不是一次性闲聊、纯偏好记忆、短问答、临时路径处理或高度私有客户上下文。
+- 本轮没有明显敏感信息、密钥、token、客户隐私或不可脱敏内容。
+- 本轮具备足够过程证据；如果缺少工具链或产出证据，必须降低置信度或跳过 Skill 自进化。
+
+router gate 通过后，必须构建 `workflowEvidence` 再调用 SkillEvolutionAgent。`workflowEvidence` 只保存摘要，不保存原始 tool observation、chain-of-thought、长文件内容或敏感值。建议结构包括：
+
+- `successfulToolChain`：最终有效的成功工具链路，按执行顺序记录工具名、目的、输入摘要、输出变量摘要和结果摘要。
+- `usefulFailures`：少量有复用价值的失败教训，例如稳定约束、错误 API 参数、无效方案或未来容易踩坑的反面案例。
+- `discardedFailures`：只记录被丢弃失败的数量和原因分类，不保存具体噪音。
+- `changedFiles` / `artifacts` / `tests`：可选记录改动文件、产物和验证命令摘要。
+- `variableFlow`：记录工具之间的上下文依赖，例如 `search_user.user_id -> send_email.user_id`。
+
+失败工具调用默认不进入 Skill 主步骤。只有失败暴露稳定约束、帮助形成最终正确方案、被用户明确纠正，或未来复用时很容易再次踩坑时，才允许进入 `usefulFailures` 并转写为反面案例 / 注意事项。
+
+Skill 颗粒度必须受控。SkillEvolutionAgent 需要判断 `granularity`：
+
+- `too_small`：只是一次命令、一次局部文件修改、一次临时修复，不生成 Skill。
+- `atomic`：单一目标、单一触发条件、输入输出边界清晰，可以生成标准 Skill。
+- `too_broad`：包含多个目标、多个业务阶段或多个独立能力，不生成超级 Skill，只给出 `suggestedSplit` 和 `requiresWorkflow=true`。
+
+系统禁止生成 `do_everything_*` 这类超级 Skill。一次工作如果包含多个可复用能力，应该拆成多个原子 Skill 候选；跨阶段组合由未来 Workflow 编排器负责。
+
+Skill 草稿必须正确抽象上下文依赖，禁止硬编码本轮具体返回值。工具链中如果存在“先查询 ID，再用 ID 调用下一步”的依赖，Skill 内容必须写成变量传递：
+
+```text
+1. 调用 search_user 查找目标用户，保存返回的 user_id。
+2. 将上一步返回的 user_id 作为 send_email 的 user_id 参数。
+```
+
+不得写成：
+
+```text
+1. 调用 search_user 查找目标用户。
+2. 使用 user_id=12345 调用 send_email。
+```
+
+需要参数化的典型值包括 session id、message id、user id、数据库主键、临时 URL、本地临时路径、运行时返回值、token、一次性文件名和环境特定配置。无法确认变量来源时，SkillEvolutionAgent 必须降低 confidence 或拒绝生成 Skill。
 
 ### 冲突与优先级
 
@@ -203,7 +272,7 @@ Skill 自进化的输出是标准 Skill，不是普通 memory item。系统不�
 
 ### 可扩展层
 
-首版以四层记忆为主，同时在 schema 和 UI 筛选上预留扩展：
+首版以长期节点记忆、三类 Markdown 记忆和 Skill 自进化产物为主，同时在 schema 和 UI 筛选上预留扩展：
 
 - **Project / Workspace 记忆**：记录某个项目或工作区的架构事实、命令、流程和禁用规则。
 - **Team 记忆**：记录 Team 协作模式、Worker 组合和 Leader 分派经验，后续可辅助 Worker Selector。
@@ -243,12 +312,19 @@ Skill 自进化的输出是标准 Skill，不是普通 memory item。系统不�
 - 未来相似任务可能复用。
 - 可以抽象成 Skill 描述、触发条件、执行步骤、禁用场景和输出格式。
 - 不依赖本次私有上下文、密钥、客户数据或一次性路径。
+- 先通过 `SkillEvolutionRouterGate`，确认值得进入 Skill 自进化链路。
+- 具备摘要化 `workflowEvidence`，能说明最终成功路径、验证结果和必要变量流。
+- 颗粒度为 `atomic`：只解决一个稳定目标，有单一触发条件和清晰输入输出边界。
+- 如果颗粒度为 `too_broad`，只能记录拆分建议和 `requiresWorkflow=true`，不能注册为单个超级 Skill。
+- 工具调用依赖必须抽象为变量传递，不能把本轮具体 ID、路径、URL 或返回值硬编码进 Skill。
 
 忽略条件：
 
 - 临时上下文、闲聊、一次性路径、临时 token、密钥、隐私数据。
 - 与已有 Markdown 记忆重复且没有新增信息。
 - 置信度低或模型无法说明来源。
+- 缺少工具链 / 产出 / 验证证据，无法确认工作真的完成。
+- 只能形成过大 Workflow 或多个独立能力，且无法拆出稳定原子 Skill。
 
 ### Markdown 文件模板
 
@@ -709,15 +785,20 @@ SQLite 的 `memory_nodes` 是长期节点记忆主表。向量数据库的 `memo
 
 用户记忆、Agent 迭代记忆和全局偏好记忆以 Markdown 文件保存，便于人类阅读、版本管理和直接编辑。
 
-建议路径：
+当前实现路径：
 
-- `data/memory/user/{user_id}.md`
-- `data/memory/agents/{agent_id}.md`
-- `data/memory/global/preferences.md`
+- 默认用户记忆：`backend/data/memory/users/user_memory.md`
+- 默认 Agent 记忆：`backend/data/memory/agents/agent_memory.md`
+- 默认全局记忆：`backend/data/memory/global/global_memory.md`
+- 指定用户记忆：`backend/data/memory/users/{user_id}/user_memory.md`
+- 指定 Agent 记忆：`backend/data/memory/agents/{agent_id}/agent_memory.md`
+- 指定 Workspace 全局记忆：`backend/data/memory/global/{workspace_id}/global_memory.md`
+
+系统不兼容读取旧 `default.md`。如本地仍有旧文件，应删除或手动迁移到上述明确命名文件。
 
 Markdown 文件采用懒创建策略：
 
-- Agent 创建时不创建 `data/memory/agents/{agent_id}.md`。
+- Agent 创建时不创建 `backend/data/memory/agents/{agent_id}/agent_memory.md`。
 - 首次读取不存在的 Agent 记忆时返回默认空模板，但不落盘。
 - 首次保存或自动写入 Agent 记忆时才创建文件。
 - Agent 删除时 MVP 不自动删除 Markdown 记忆，后续通过归档或孤儿记忆清理处理。
@@ -852,8 +933,10 @@ Skill 自进化不是把经验写成一条普通记忆，而是把一次完成�
 
 ```text
 Run / 工作完成
--> SkillEvolutionHook 观察完整过程
--> SkillEvolutionAgent 判断是否可复用
+-> SkillEvolutionRouterGate 判断是否值得进入 Skill 自进化
+-> WorkflowEvidenceBuilder 汇总成功工具链、有价值失败、变量流和验证结果
+-> SkillEvolutionHook 观察摘要化完整过程
+-> SkillEvolutionAgent 判断是否可复用、是否原子化、是否需要拆分
 -> skill_draft_create 生成 Skill 草稿
 -> skill_register 注册为标准 Skill
 -> 用户进入 Agent 配置手动添加该 Skill
@@ -867,6 +950,31 @@ Run / 工作完成
 - 方法对未来相似任务有复用价值。
 - 可以抽象出触发描述、使用边界、执行步骤和产物格式。
 - 草稿不会泄漏密钥、隐私、客户数据或项目敏感内容。
+- router gate 已确认本轮值得进入 Skill 自进化；SkillEvolutionAgent 不能绕过 gate。
+- 工具链证据显示工作已完成，并能区分成功路径和有价值失败教训。
+- Skill 颗粒度必须是原子化能力；一个 Skill 只解决一个稳定目标。
+- 如果一次工作包含多个目标，例如查机票、订酒店、打车和做攻略，不能生成 `do_everything_for_travel` 这类超级 Skill，只能建议拆成 `search_flights`、`book_hotel` 等原子 Skill，并交给 Workflow 编排器组合。
+- 工具调用上下文依赖必须被参数化，例如把 `search_user` 返回的 `user_id` 作为变量传给 `send_email`，不能硬编码本轮具体数字。
+
+SkillEvolutionAgent 建议输出字段：
+
+- `reusable`：是否有复用价值。
+- `confidence`：置信度。
+- `granularity`：`too_small | atomic | too_broad`。
+- `requiresWorkflow`：是否应该由 Workflow 编排器组合多个原子 Skill。
+- `reason`：中文判断理由。
+- `draft`：仅当 `granularity=atomic` 且通过安全校验时生成。
+- `suggestedSplit`：当 `granularity=too_broad` 时给出原子 Skill 拆分建议。
+- `variableFlow`：记录需要在 Skill 中保留的变量传递关系。
+
+Skill 草稿内容必须包含：
+
+- 单一触发条件。
+- 输入变量和来源。
+- 成功工具链抽象后的步骤。
+- 失败教训 / 注意事项，且只保留有复用价值的失败。
+- 禁止硬编码的运行时值列表。
+- 输出格式或完成判定。
 
 注册后的 Skill 必须和手动创建的 Skill 一样：
 
@@ -993,9 +1101,12 @@ Chat 主界面 MVP 不需要依赖完整记忆事件，只展示“已更新记�
 
 ### Phase 4：Skill 自进化
 
-- 实现 `SkillEvolutionHook`。
+- 实现 `SkillEvolutionRouterGate`，先判断是否值得进入 Skill 自进化链路。
+- 实现 `WorkflowEvidenceBuilder`，从 RunState / Trace 中提取成功工具链、有价值失败、变量流、改动文件和验证结果摘要。
+- 扩展 `SkillEvolutionAgent` schema，加入 `granularity`、`requiresWorkflow`、`suggestedSplit` 和 `variableFlow`。
 - 实现 `skill_evolution_evaluate`、`skill_draft_create`、`skill_register` 内部 tools。
-- 将可复用工作自动生成标准 Skill，并接入现有 Skills 系统。
+- 只将 `granularity=atomic` 且通过安全校验的候选自动生成标准 Skill，并接入现有 Skills 系统。
+- 对 `too_broad` 结果只保存拆分建议，不注册超级 Skill；未来由 Workflow 编排器组合原子 Skill。
 - 补 Skill 草稿安全校验、启用策略和回归测试。
 
 ### Phase 5：前端 Memory 页面

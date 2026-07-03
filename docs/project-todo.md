@@ -48,7 +48,8 @@
 
 ## P6. 记忆系统重设计
 
-- [ ] 评审并冻结 `docs/memory-system-design.md`，重点确认四层记忆、hooks/tools 接入、运行前注入、运行后自动写入、Skill 自进化和冲突优先级。
+- [x] 将 `docs/memory-system-design.md` 更新到当前 MVP 进度，记录已实现能力、未完成闭环和 Skill 自进化约束。
+- [ ] 评审并冻结 `docs/memory-system-design.md`，重点确认长期节点记忆、Markdown 记忆、hooks/tools 接入、运行前注入、运行后自动写入、Skill 自进化和冲突优先级。
 - [ ] 正式定义 `MEMORY_*` Runtime Event，并更新 `docs/chat-sse-event-contract.md`、后端 schema、前端类型和 projector。
 - [x] 新增长期节点记忆 `memory_nodes` 数据模型、SQLite schema、Pydantic schema 和 `/api/memory/nodes*` 路由。
 - [x] 新增 Agent Markdown 记忆懒创建存储与 `/api/memory/markdown/agent/{agent_id}` 读写接口。
@@ -60,7 +61,7 @@
 - [x] 向量检索分级策略：Level 0 禁用、Level 1 Zvec + BM25 / 稀疏检索、Level 2 embedding + 稠密向量混合召回。
 - [x] 完成 Zvec provider 适配层：collection 创建/打开、`Doc` 写入、删除、向量/FTS 查询和结果映射。
 - [x] 安装 `zvec` 真实依赖并补充端到端集成测试，验证本机 collection 落盘、FTS/BM25 和 dense vector 查询。
-- [ ] 记忆模块必须通过 hooks 和 tools 接入，不新增 `memory` Runtime 分支。
+- [ ] 记忆模块必须继续通过 hooks / tools / 后处理服务接入，不新增 `memory` Runtime 分支。
 - [x] 新增 `memory_node_tree` / `memory_node_query` Agent 工具，默认注入普通 Agent，基础设施 Agent 可排除。
 - [x] 记忆采用双轨存储：向量库只保存长期节点记忆 `memory_nodes`；用户记忆、Agent 迭代记忆和全局偏好记忆以 Markdown 文件保存并压缩摘要。
 - [x] 实现 `MemoryRetrievalHook` 首版：模型运行前注入 Agent Markdown 摘要、最近 30 天节点树和 memory 查询工具提示。
@@ -70,10 +71,14 @@
 - [ ] 实现 `MemoryReflectionHook`：Agent 完成运行后判断是否提炼 user memory、agent memory，以及是否生成标准 Skill。
   - [x] 规则型首版：成功运行后提炼明确长期意图，写入 user / agent / global Markdown。
   - [x] 新增并行 `UserMemoryReflectionAgent` / `AgentMemoryReflectionAgent` / `GlobalMemoryReflectionAgent` 与 `SkillEvolutionAgent`，并配置文件绑定的 `memory_read`、`memory_add`、`memory_update`、`memory_delete` 与 `skill_draft_propose` 内部工具。
+  - [ ] 实现 `SkillEvolutionRouterGate`，先判断本轮是否值得进入 Skill 自进化链路。
+  - [ ] 实现 `WorkflowEvidenceBuilder`，汇总成功工具链、有价值失败、变量流、改动文件和验证结果摘要。
+  - [ ] 强化 Skill 颗粒度控制：只注册原子 Skill，过大流程只保存拆分建议并交给 Workflow 编排器。
+  - [ ] 强化上下文依赖抽象：工具返回值必须作为变量传递，禁止硬编码本轮具体 ID、路径、URL 或返回值。
   - [ ] 去重增强、敏感信息过滤增强、Trace 审计和标准 Skill 注册流程。
 - [x] 实现 `MemoryNodePersistHook` 首版：Agent 成功运行完后只用用户输入和 Agent 最终输出写入当天节点并同步向量库。
 - [ ] 扩展 `MemoryNodePersistHook`：接入反思模型摘要、去重、敏感信息过滤、Trace 事件和异步失败重试。
-- [ ] 新增 Memory 页面，支持四层记忆管理、Skill 自进化队列、设置和审计查看。
+- [ ] 新增 Memory 页面，支持长期节点记忆、三类 Markdown 记忆、Skill 自进化队列、设置和审计查看。
 - [x] 明确旧 `memory_facts` / `memory_events` / `memory_candidates` 表的迁移或废弃策略：当前代码不再创建/读写旧表，已有本地库不自动 drop。
 - [ ] 新方案必须先更新架构文档和 Chat 事件契约，再接入 Runtime。
 

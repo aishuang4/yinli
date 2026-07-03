@@ -1,6 +1,6 @@
 # Agent Workstation
 
-基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。
+基于 AgentScope 2.0 + Electron + React 的多 Agent 协作工作台。
 
 ## 快速开始
 
@@ -54,10 +54,11 @@ npm run electron:pack
 - `docs/architecture-overview.md`：当前架构总览。
 - `docs/chat-sse-event-contract.md`：Chat / RunState 稳定事件契约。
 - `docs/development-guidelines.md`：开发规范。
+- `docs/memory-system-design.md`：新记忆系统设计与实现进度。
 - `docs/project-progress-handoff.md`：项目状态交接。
 - `docs/project-todo.md`：后续任务。
 
-旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线。历史兼容字段仍可能存在，但不再作为当前运行时能力。
+旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线。历史兼容字段仍可能存在，但不再作为当前运行时能力。新记忆系统 MVP 已部分接入，后续实现以 `docs/memory-system-design.md` 为准。
 
 ## License
 

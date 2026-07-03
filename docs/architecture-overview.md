@@ -4,9 +4,9 @@
 
 ## 项目定位
 
-Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。用户在 Chat 中选择单个 Agent 或 Team 执行任务，运行时支持 MCP、Skills、HTTP 工具、权限控制、HITL、Trace 和容器沙箱。
+Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。用户在 Chat 中选择单个 Agent 或 Team 执行任务，运行时支持 MCP、Skills、HTTP 工具、权限控制、HITL、Trace、容器沙箱和新记忆系统 MVP。
 
-旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线。相关字段仅作为历史 SQLite / API 兼容保留，不能继续扩展旧链路。
+旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线。相关字段仅作为历史 SQLite / API 兼容保留，不能继续扩展旧链路。当前记忆能力是新方案：通过运行前上下文注入、运行后后台提炼、长期节点记忆和 memory tools 接入 ReAct，不新增 `memory` runtime.kind。
 
 ## 技术栈
 
@@ -25,9 +25,10 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 5. `runtime_dispatcher.py` 只按 architecture 分发；当前只分发到 ReAct。
 6. `react_runtime.py` 按 executor 执行单 Agent 或 Team。
 7. `runtime_builder.py` 组装模型配置、Team 上下文、Skill、ToolScope 和主 Agent runtime spec。
-8. `leader_stream.py` 消费 AgentScope `reply_stream()`，转换文本、工具、权限、Plan Mode、Skill 和 HITL 事件。
-9. `completion.py` 完成消息落库、Trace、Team / Skill 状态和错误收尾。
-10. `background_runs.py` 将后台 Run 与前端 SSE 订阅解耦，并维护 RunState。
+8. `run_context.py` 在 readiness 通过后注入 Skill prompt 和记忆上下文；记忆注入位于 Skill prompt 后、clarification / final answer 规则前。
+9. `leader_stream.py` 消费 AgentScope `reply_stream()`，转换文本、工具、权限、Plan Mode、Skill 和 HITL 事件。
+10. `completion.py` 完成消息落库、Trace、Team / Skill 状态和错误收尾，并后台触发 Markdown 记忆提炼和长期节点记忆持久化。
+11. `background_runs.py` 将后台 Run 与前端 SSE 订阅解耦，并维护 RunState。
 
 ## Team Runtime
 
@@ -62,6 +63,18 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 - `plan_exit` 将计划 finalized，并把计划 markdown 作为本轮最终答案输出。
 - 前端不再显示旧 approve / deny 审批入口，用户下一条自然语言消息决定修改或执行计划。
 
+## 记忆系统 MVP
+
+当前在线的是新记忆系统首版，不是旧 memory summarize：
+
+- **运行前注入**：`memory/retrieval.py` 读取 user / agent / global Markdown 摘要和最近 30 天节点树；`run_context.py` 在 readiness 通过后注入。
+- **长期节点记忆**：`memory_nodes` 只保存用户输入、Agent 最终输出和摘要索引，不保存工具调用过程；写入后同步到 `VectorStoreBackend` 的 `memory_nodes` collection。
+- **Markdown 长期记忆**：user memory、agent memory、global preference memory 分别保存为 `user_memory.md`、`agent_memory.md`、`global_memory.md`，没有旧 `default.md` 兼容读取。
+- **记忆查询工具**：普通 Agent 默认注入 `memory_node_tree` 和 `memory_node_query`，需要详情时由 Agent 主动查询。
+- **运行后提炼**：`completion.py` 成功收尾后后台并行调用 `UserMemoryReflectionAgent`、`AgentMemoryReflectionAgent`、`GlobalMemoryReflectionAgent`，通过绑定文件的 `memory_read` / `memory_add` / `memory_update` / `memory_delete` 操作 Markdown 记忆，不阻塞主对话。
+- **Skill 自进化现状**：已有 `SkillEvolutionAgent` 和 `skill_draft_propose` 草稿工具，但完整闭环未完成；仍缺 router gate、workflow evidence、颗粒度 gate、变量流抽象、候选持久化和标准 Skill 注册。
+- **向量存储**：全局 `VectorStoreBackend` 抽象已支持 `disabled` / `zvec`，`VECTOR_STORE_PROVIDER` 仅首次初始化生效，之后按持久化 `VectorStorePolicy` 启动。
+
 ## 存储
 
 `backend/src/storage/database.py` 使用同步 `sqlite3 + RLock`。核心结构化表包括：
@@ -78,6 +91,7 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 - `chat_run_events`
 - `chat_run_states`
 - `run_events`
+- `memory_nodes`
 
 历史开发库可能仍有 `memory_facts`、`memory_events`、`memory_candidates`，但旧记忆模块已删除，不再代表当前运行时能力。
 
