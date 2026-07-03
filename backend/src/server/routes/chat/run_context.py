@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.config.runtime_settings import get_effective_model_settings
+from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
 from src.server.routes.agents import get_registered_agent
 from src.server.routes.chat.intent_router import IntentRoute, route_chat_message, route_chat_message_with_model
 from src.server.routes.chat.models import ChatMessage, ChatSkillRun, ChatTeamActivity
@@ -149,6 +150,16 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
     ]
     model_name = runtime_model_config.model_name
     team_system_prompt = routed_team.system_prompt
+    memory_prompt = (
+        build_memory_injection_text(
+            MemoryRetrievalContext(
+                agent_id=agent_id,
+                agent_name=agent_name,
+            ),
+        )
+        if readiness.ready
+        else ""
+    )
     system_prompt = "\n\n".join(
         part
         for part in [
@@ -159,6 +170,7 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
             team_system_prompt,
             build_skill_run_system_prompt(active_skill_run),
             build_skill_system_prompt_from_skills(used_skills),
+            memory_prompt,
             _build_clarification_system_prompt(),
             _build_final_answer_system_prompt(),
         ]

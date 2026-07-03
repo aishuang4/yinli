@@ -50,15 +50,22 @@
 
 - [ ] 评审并冻结 `docs/memory-system-design.md`，重点确认四层记忆、hooks/tools 接入、运行前注入、运行后自动写入、Skill 自进化和冲突优先级。
 - [ ] 正式定义 `MEMORY_*` Runtime Event，并更新 `docs/chat-sse-event-contract.md`、后端 schema、前端类型和 projector。
-- [ ] 新增记忆模块数据模型、SQLite schema、Pydantic schema 和 `/api/memory/*` 路由。
-- [ ] MVP 全局向量存储 provider 默认选择 Zvec；首次初始化时由 `VECTOR_STORE_PROVIDER` 环境变量决定并写入 `VectorStorePolicy`，所有业务模块通过 `VectorStoreBackend` 按 collection 接入。
-- [ ] `VECTOR_STORE_PROVIDER` 只在首次初始化时生效；初始化后持久化 `VectorStorePolicy`，后续 provider、collection schema、embedding 维度只能通过显式迁移 / rebuild 改变。
-- [ ] 向量检索分级降级：无 embedding 时使用 Zvec 标量过滤 + BM25 / 稀疏检索，有 embedding 时启用稠密向量混合召回。
+- [x] 新增长期节点记忆 `memory_nodes` 数据模型、SQLite schema、Pydantic schema 和 `/api/memory/nodes*` 路由。
+- [x] 新增 Agent Markdown 记忆懒创建存储与 `/api/memory/markdown/agent/{agent_id}` 读写接口。
+- [ ] 新增 User / Global Markdown 记忆文件存储、使用审计、Skill 自进化记录和 Memory 设置数据模型。
+- [x] 新增全局 `VectorStoreBackend` 抽象、provider registry、`VectorStorePolicy` 持久化和 `disabled` 降级 backend。
+- [x] `VECTOR_STORE_PROVIDER` 只在首次初始化时生效；初始化后持久化 `VectorStorePolicy`，后续 provider、collection schema、embedding 维度只能通过显式迁移 / rebuild 改变。
+- [x] 向量检索分级策略：Level 0 禁用、Level 1 Zvec + BM25 / 稀疏检索、Level 2 embedding + 稠密向量混合召回。
+- [x] 完成 Zvec provider 适配层：collection 创建/打开、`Doc` 写入、删除、向量/FTS 查询和结果映射。
+- [x] 安装 `zvec` 真实依赖并补充端到端集成测试，验证本机 collection 落盘、FTS/BM25 和 dense vector 查询。
 - [ ] 记忆模块必须通过 hooks 和 tools 接入，不新增 `memory` Runtime 分支。
+- [x] 新增 `memory_node_tree` / `memory_node_query` Agent 工具，默认注入普通 Agent，基础设施 Agent 可排除。
 - [ ] 记忆采用双轨存储：向量库只保存长期节点记忆 `memory_nodes`；用户记忆、Agent 迭代记忆和全局偏好记忆以 Markdown 文件保存并压缩摘要。
-- [ ] 实现 `MemoryRetrievalHook`：模型运行前查询 user / agent / global Markdown 摘要和最近 30 天节点树并注入。
+- [x] 实现 `MemoryRetrievalHook` 首版：模型运行前注入 Agent Markdown 摘要、最近 30 天节点树和 memory 查询工具提示。
+- [ ] 扩展 `MemoryRetrievalHook`：加入 user / global Markdown 摘要、Team Worker 策略和 Trace payload。
 - [ ] 实现 `MemoryReflectionHook`：Agent 完成运行后判断是否提炼 user memory、agent memory，以及是否生成标准 Skill。
-- [ ] 实现 `MemoryNodePersistHook`：Agent 运行完后只用用户输入和 Agent 最终输出聚合当天节点并同步向量库，不保存工具调用过程。
+- [x] 实现 `MemoryNodePersistHook` 首版：Agent 成功运行完后只用用户输入和 Agent 最终输出写入当天节点并同步向量库。
+- [ ] 扩展 `MemoryNodePersistHook`：接入反思模型摘要、去重、敏感信息过滤、Trace 事件和异步失败重试。
 - [ ] 新增 Memory 页面，支持四层记忆管理、Skill 自进化队列、设置和审计查看。
 - [x] 明确旧 `memory_facts` / `memory_events` / `memory_candidates` 表的迁移或废弃策略：当前代码不再创建/读写旧表，已有本地库不自动 drop。
 - [ ] 新方案必须先更新架构文档和 Chat 事件契约，再接入 Runtime。

@@ -372,6 +372,42 @@ def ensure_db() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_skill_runs_session_agent_status
                     ON skill_runs(session_id, agent_id, status, updated_at);
+                CREATE TABLE IF NOT EXISTS memory_nodes (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL DEFAULT 'default',
+                    project_id TEXT NOT NULL DEFAULT '',
+                    agent_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL DEFAULT 'default',
+                    node_date TEXT NOT NULL,
+                    date_range_start TEXT NOT NULL,
+                    date_range_end TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    conversation_digest TEXT NOT NULL DEFAULT '',
+                    search_text TEXT NOT NULL DEFAULT '',
+                    user_inputs TEXT NOT NULL DEFAULT '[]',
+                    agent_final_outputs TEXT NOT NULL DEFAULT '[]',
+                    tags TEXT NOT NULL DEFAULT '[]',
+                    source TEXT NOT NULL DEFAULT 'chat_run',
+                    source_session_id TEXT NOT NULL DEFAULT '',
+                    source_run_id TEXT NOT NULL DEFAULT '',
+                    source_message_id TEXT NOT NULL DEFAULT '',
+                    confidence REAL NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    pinned INTEGER NOT NULL DEFAULT 0,
+                    vector_status TEXT NOT NULL DEFAULT 'pending',
+                    vector_error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_used_at TEXT,
+                    use_count INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_memory_nodes_scope_date
+                    ON memory_nodes(workspace_id, project_id, agent_id, node_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_memory_nodes_status_date
+                    ON memory_nodes(status, node_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_memory_nodes_source_run
+                    ON memory_nodes(source_run_id);
             """)
             _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "subagent_calls", "TEXT NOT NULL DEFAULT '[]'")
@@ -1576,6 +1612,251 @@ def _chat_run_from_row(row: sqlite3.Row, events: list[str], event_count: int | N
     }
 
 
+def _memory_node_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "workspace_id": row["workspace_id"],
+        "project_id": row["project_id"],
+        "agent_id": row["agent_id"],
+        "user_id": row["user_id"],
+        "node_date": row["node_date"],
+        "date_range_start": row["date_range_start"],
+        "date_range_end": row["date_range_end"],
+        "title": row["title"],
+        "summary": row["summary"],
+        "conversation_digest": row["conversation_digest"],
+        "search_text": row["search_text"],
+        "user_inputs": _loads(row["user_inputs"], []),
+        "agent_final_outputs": _loads(row["agent_final_outputs"], []),
+        "tags": _loads(row["tags"], []),
+        "source": row["source"],
+        "source_session_id": row["source_session_id"],
+        "source_run_id": row["source_run_id"],
+        "source_message_id": row["source_message_id"],
+        "confidence": float(row["confidence"] or 0),
+        "status": row["status"],
+        "pinned": bool(row["pinned"]),
+        "vector_status": row["vector_status"],
+        "vector_error": row["vector_error"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "last_used_at": row["last_used_at"],
+        "use_count": int(row["use_count"] or 0),
+    }
+
+
+def upsert_memory_node(data: dict[str, Any]) -> dict[str, Any]:
+    """写入或更新长期节点记忆主表。"""
+
+    ensure_db()
+    now = _utc_now()
+    created_at = data.get("created_at") or now
+    updated_at = data.get("updated_at") or now
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO memory_nodes (
+                id, workspace_id, project_id, agent_id, user_id, node_date,
+                date_range_start, date_range_end, title, summary, conversation_digest,
+                search_text, user_inputs, agent_final_outputs, tags, source,
+                source_session_id, source_run_id, source_message_id, confidence, status,
+                pinned, vector_status, vector_error, created_at, updated_at,
+                last_used_at, use_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                workspace_id=excluded.workspace_id,
+                project_id=excluded.project_id,
+                agent_id=excluded.agent_id,
+                user_id=excluded.user_id,
+                node_date=excluded.node_date,
+                date_range_start=excluded.date_range_start,
+                date_range_end=excluded.date_range_end,
+                title=excluded.title,
+                summary=excluded.summary,
+                conversation_digest=excluded.conversation_digest,
+                search_text=excluded.search_text,
+                user_inputs=excluded.user_inputs,
+                agent_final_outputs=excluded.agent_final_outputs,
+                tags=excluded.tags,
+                source=excluded.source,
+                source_session_id=excluded.source_session_id,
+                source_run_id=excluded.source_run_id,
+                source_message_id=excluded.source_message_id,
+                confidence=excluded.confidence,
+                status=excluded.status,
+                pinned=excluded.pinned,
+                vector_status=excluded.vector_status,
+                vector_error=excluded.vector_error,
+                updated_at=excluded.updated_at
+            """,
+            (
+                data["id"],
+                data.get("workspace_id") or "default",
+                data.get("project_id") or "",
+                data["agent_id"],
+                data.get("user_id") or "default",
+                data["node_date"],
+                data.get("date_range_start") or data["node_date"],
+                data.get("date_range_end") or data["node_date"],
+                data.get("title") or "未命名记忆节点",
+                data.get("summary") or "",
+                data.get("conversation_digest") or "",
+                data.get("search_text") or "",
+                _dumps(data.get("user_inputs", [])),
+                _dumps(data.get("agent_final_outputs", [])),
+                _dumps(data.get("tags", [])),
+                data.get("source") or "chat_run",
+                data.get("source_session_id") or "",
+                data.get("source_run_id") or "",
+                data.get("source_message_id") or "",
+                float(data.get("confidence", 1)),
+                data.get("status") or "active",
+                1 if data.get("pinned") else 0,
+                data.get("vector_status") or "pending",
+                data.get("vector_error") or "",
+                created_at,
+                updated_at,
+                data.get("last_used_at"),
+                int(data.get("use_count") or 0),
+            ),
+        )
+        row = conn.execute("SELECT * FROM memory_nodes WHERE id = ?", (data["id"],)).fetchone()
+        conn.commit()
+    return _memory_node_from_row(row)
+
+
+def get_memory_node(node_id: str) -> dict[str, Any] | None:
+    """读取单个长期节点记忆。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT * FROM memory_nodes WHERE id = ?", (node_id,)).fetchone()
+    return _memory_node_from_row(row) if row else None
+
+
+def list_memory_nodes(
+    *,
+    workspace_id: str = "default",
+    project_id: str = "",
+    agent_id: str | None = None,
+    user_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str = "active",
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """按作用域和日期列出长期节点记忆。"""
+
+    ensure_db()
+    query = """
+        SELECT * FROM memory_nodes
+        WHERE workspace_id = ? AND project_id = ? AND status = ?
+    """
+    params: list[Any] = [workspace_id, project_id, status]
+    if agent_id:
+        query += " AND agent_id = ?"
+        params.append(agent_id)
+    if user_id:
+        query += " AND user_id = ?"
+        params.append(user_id)
+    if date_from:
+        query += " AND node_date >= ?"
+        params.append(date_from)
+    if date_to:
+        query += " AND node_date <= ?"
+        params.append(date_to)
+    query += " ORDER BY pinned DESC, node_date DESC, updated_at DESC LIMIT ?"
+    params.append(max(1, min(limit, 500)))
+    with _lock, _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [_memory_node_from_row(row) for row in rows]
+
+
+def search_memory_nodes(
+    *,
+    workspace_id: str = "default",
+    project_id: str = "",
+    agent_id: str | None = None,
+    user_id: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    query_text: str = "",
+    status: str = "active",
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """SQLite 关键词降级检索长期节点记忆。"""
+
+    ensure_db()
+    query = """
+        SELECT * FROM memory_nodes
+        WHERE workspace_id = ? AND project_id = ? AND status = ?
+    """
+    params: list[Any] = [workspace_id, project_id, status]
+    if agent_id:
+        query += " AND agent_id = ?"
+        params.append(agent_id)
+    if user_id:
+        query += " AND user_id = ?"
+        params.append(user_id)
+    if date_from:
+        query += " AND node_date >= ?"
+        params.append(date_from)
+    if date_to:
+        query += " AND node_date <= ?"
+        params.append(date_to)
+    if query_text.strip():
+        query += " AND search_text LIKE ?"
+        params.append(f"%{query_text.strip()}%")
+    query += " ORDER BY pinned DESC, node_date DESC, updated_at DESC LIMIT ?"
+    params.append(max(1, min(limit, 100)))
+    with _lock, _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [_memory_node_from_row(row) for row in rows]
+
+
+def update_memory_node_vector_state(
+    node_id: str,
+    *,
+    vector_status: str,
+    vector_error: str = "",
+) -> dict[str, Any] | None:
+    """更新长期节点记忆的向量索引同步状态。"""
+
+    ensure_db()
+    now = _utc_now()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE memory_nodes
+            SET vector_status = ?, vector_error = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (vector_status, vector_error, now, node_id),
+        )
+        row = conn.execute("SELECT * FROM memory_nodes WHERE id = ?", (node_id,)).fetchone()
+        conn.commit()
+    return _memory_node_from_row(row) if row else None
+
+
+def mark_memory_node_used(node_id: str) -> dict[str, Any] | None:
+    """记录长期节点记忆被查询使用。"""
+
+    ensure_db()
+    now = _utc_now()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE memory_nodes
+            SET use_count = use_count + 1, last_used_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (now, now, node_id),
+        )
+        row = conn.execute("SELECT * FROM memory_nodes WHERE id = ?", (node_id,)).fetchone()
+        conn.commit()
+    return _memory_node_from_row(row) if row else None
+
+
 def _row_to_plan(row: sqlite3.Row, steps: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {
         "id": row["id"],
@@ -1881,7 +2162,7 @@ def normalized_table_counts() -> dict[str, int]:
     ensure_db()
     tables = [
         "agents", "teams", "team_members", "mcp_servers", "skills",
-        "chat_sessions", "chat_messages",
+        "chat_sessions", "chat_messages", "memory_nodes",
     ]
     with _lock, _connect() as conn:
         return {

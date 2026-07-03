@@ -39,6 +39,7 @@ from src.tools.configured_http_tool import ConfiguredHttpTool
 from src.tools.final_answer import FinalAnswerStart
 from src.tools.http_request import HttpRequest
 from src.tools.knowledge_base_search import KnowledgeBaseSearch
+from src.tools.memory_nodes import MemoryNodeQuery, MemoryNodeTree
 from src.tools.scoped_edit import ScopedEdit
 from src.tools.scoped_glob import ScopedGlob
 from src.tools.scoped_grep import ScopedGrep
@@ -220,6 +221,8 @@ def _create_default_toolkit(
             ScopedGlob(),
             AskUser(),
             FinalAnswerStart(),
+            MemoryNodeTree(),
+            MemoryNodeQuery(),
         ) if include_default_tools else ()),
         *(extra_tools or []),
     ]

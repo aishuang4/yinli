@@ -42,6 +42,7 @@ from src.server.routes.chat.prompts import _build_final_answer_system_prompt, bu
 from src.server.routes.chat.runtime import _permission_mode_for_guardrails
 from src.server.routes.chat.react_runtime import execute_react_runtime
 from src.server.routes.chat.run_context import ChatRunContext
+from src.server.routes.chat.run_context import build_chat_run_context
 from src.agents.factory import _safe_workspace_dir
 from src.agents.runtime_types import WORKSPACE_DIR
 from src.storage.database import _normalize_guardrails
@@ -2758,6 +2759,51 @@ def test_runtime_builder_cache_key_includes_tool_scope():
     assert "tools-mcp-0:knowledge-0:bash-1:http-0" in key
     assert "plan-" not in key
     assert "prompt-" in key
+
+
+def test_chat_run_context_includes_memory_prompt(monkeypatch):
+    async def fake_readiness(**kwargs):
+        return SimpleNamespace(ready=True)
+
+    async def fake_route(**kwargs):
+        return IntentRoute(
+            runtime={"kind": "react"},
+            executor={"kind": "single_agent"},
+            main_agent_instruction="",
+            trace_payload={},
+        )
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.run_context.check_message_readiness_with_model",
+        fake_readiness,
+    )
+    monkeypatch.setattr(
+        "src.server.routes.chat.run_context.route_chat_message_with_model",
+        fake_route,
+    )
+    monkeypatch.setattr(
+        "src.server.routes.chat.run_context.get_effective_model_settings",
+        lambda: SimpleNamespace(default_model="model", fallback_models=[]),
+    )
+    monkeypatch.setattr(
+        "src.server.routes.chat.run_context.build_memory_injection_text",
+        lambda context: "# Memory\n记忆注入片段",
+    )
+
+    ctx = asyncio.run(
+        build_chat_run_context(
+            ChatMessage(
+                session_id="session-1",
+                message="继续推进",
+                agent_id="agent-1",
+                agent_name="Agent",
+                system_prompt="base prompt",
+            ),
+        ),
+    )
+
+    assert "base prompt" in ctx.system_prompt
+    assert "# Memory\n记忆注入片段" in ctx.system_prompt
 
 
 def test_runtime_builder_cache_key_changes_with_system_prompt():

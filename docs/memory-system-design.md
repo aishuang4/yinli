@@ -690,6 +690,13 @@ SQLite 的 `memory_nodes` 是长期节点记忆主表。向量数据库的 `memo
 - `data/memory/agents/{agent_id}.md`
 - `data/memory/global/preferences.md`
 
+Markdown 文件采用懒创建策略：
+
+- Agent 创建时不创建 `data/memory/agents/{agent_id}.md`。
+- 首次读取不存在的 Agent 记忆时返回默认空模板，但不落盘。
+- 首次保存或自动写入 Agent 记忆时才创建文件。
+- Agent 删除时 MVP 不自动删除 Markdown 记忆，后续通过归档或孤儿记忆清理处理。
+
 每个 Markdown 文件包含：
 
 - 原始长期记忆条目。
