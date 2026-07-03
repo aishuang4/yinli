@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Loader2 } from 'lucide-react';
 
 import { MarkdownContent } from '../../components/MarkdownContent';
@@ -31,16 +32,25 @@ export function MessageContentBlock({
   content,
   role,
   streaming = false,
+  animateOnMount = false,
+  onAnimationChange,
 }: {
   content: string;
   role: 'user' | 'assistant';
   streaming?: boolean;
+  animateOnMount?: boolean;
+  onAnimationChange?: (isAnimating: boolean) => void;
 }) {
   const isUser = role === 'user';
-  const visibleContent = useSmoothStreamingText(content, streaming && !isUser, {
+  const visible = useSmoothStreamingText(content, streaming && !isUser, {
+    animateOnMount: animateOnMount && !isUser,
     charsPerSecond: 76,
     maxCharsPerFrame: 12,
   });
+  useEffect(() => {
+    onAnimationChange?.(visible.isAnimating);
+  }, [onAnimationChange, visible.isAnimating]);
+
   if (!content) return null;
 
   return (
@@ -65,8 +75,8 @@ export function MessageContentBlock({
         whiteSpace: isUser ? 'pre-wrap' : undefined,
       }}
     >
-      {isUser ? content : <MarkdownContent content={visibleContent} />}
-      {streaming && (
+      {isUser ? content : <MarkdownContent content={visible.content} />}
+      {visible.isAnimating && (
         <span className="chat-stream-caret" aria-hidden="true" />
       )}
     </div>

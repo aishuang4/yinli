@@ -6,7 +6,9 @@
 
 import json
 import re
+import uuid
 from typing import Any
+from datetime import datetime, timezone
 
 from agentscope.message import UserMsg
 from agentscope.permission import PermissionMode
@@ -261,10 +263,16 @@ def _normalize_clarification(value: dict[str, Any] | None) -> dict[str, Any] | N
         })
     if not normalized_questions:
         return None
+    interaction_id = uuid.uuid4().hex
     return {
+        "id": interaction_id,
+        "interactionId": interaction_id,
+        "kind": "clarification",
+        "type": "clarification",
         "title": str(value.get("title") or "需要补充信息")[:80],
         "description": str(value.get("description") or "")[:240],
         "questions": normalized_questions,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
     }
 
 

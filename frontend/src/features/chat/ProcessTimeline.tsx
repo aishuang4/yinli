@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { BookOpenCheck, ChevronDown, ChevronRight } from 'lucide-react';
 import { Accordion, type IAccordionProps } from '@agentscope-ai/chat';
 import { Tag } from '@agentscope-ai/design';
@@ -41,9 +41,65 @@ export function AccordionProcessTimeline({
     () => items.map((item) => `${item.id}:${item.status}:${item.updatedAt}:${processItemContentLength(item)}`).join('|'),
     [items],
   );
-  const steps = useMemo(() => items
-    .map((item, index) => processItemToAccordionStep(item, index === items.length - 1, status))
-    .filter((step): step is IAccordionProps => Boolean(step)), [items, status]);
+  const sequentialReveal = autoScroll && toAccordionStatus(status) === 'generating';
+  const itemOrderSignature = useMemo(() => items.map((item) => item.id).join('|'), [items]);
+  const revealedItemCountRef = useRef(sequentialReveal ? Math.min(1, items.length) : items.length);
+  const [, forceRevealRender] = useReducerVersion();
+
+  useEffect(() => {
+    if (!sequentialReveal) {
+      if (revealedItemCountRef.current !== items.length) {
+        revealedItemCountRef.current = items.length;
+        forceRevealRender();
+      }
+      return;
+    }
+    const nextCount = items.length === 0
+      ? 0
+      : Math.min(Math.max(revealedItemCountRef.current || 1, 1), items.length);
+    if (revealedItemCountRef.current !== nextCount) {
+      revealedItemCountRef.current = nextCount;
+      forceRevealRender();
+    }
+  }, [forceRevealRender, itemOrderSignature, items.length, sequentialReveal]);
+
+  const revealNextItem = useCallback(() => {
+    if (revealedItemCountRef.current >= items.length) return;
+    revealedItemCountRef.current += 1;
+    forceRevealRender();
+  }, [forceRevealRender, items.length]);
+
+  const handleTextAnimationChange = useCallback((itemId: string, isAnimating: boolean) => {
+    if (!sequentialReveal || isAnimating) return;
+    const itemIndex = items.findIndex((item) => item.id === itemId);
+    if (itemIndex === revealedItemCountRef.current - 1) {
+      revealNextItem();
+    }
+  }, [items, revealNextItem, sequentialReveal]);
+
+  useEffect(() => {
+    if (!sequentialReveal) return;
+    const current = items[revealedItemCountRef.current - 1];
+    if (!current || revealedItemCountRef.current >= items.length) return;
+    if ((current.type === 'reasoning' || current.type === 'thinking') && current.content.trim()) return;
+    const timer = window.setTimeout(revealNextItem, 160);
+    return () => window.clearTimeout(timer);
+  }, [items, revealNextItem, scrollSignature, sequentialReveal]);
+
+  const visibleItems = sequentialReveal
+    ? items.slice(0, revealedItemCountRef.current)
+    : items;
+  const visibleScrollSignature = sequentialReveal
+    ? `${scrollSignature}:visible-${revealedItemCountRef.current}`
+    : scrollSignature;
+  const steps = useMemo(() => visibleItems
+    .map((item) => processItemToAccordionStep(
+      item,
+      items.findIndex((source) => source.id === item.id) === items.length - 1,
+      status,
+      handleTextAnimationChange,
+    ))
+    .filter((step): step is IAccordionProps => Boolean(step)), [handleTextAnimationChange, items, status, visibleItems]);
 
   useLayoutEffect(() => {
     if (!autoScroll || !shouldStickToBottomRef.current) return;
@@ -55,7 +111,7 @@ export function AccordionProcessTimeline({
       node.scrollTop = node.scrollHeight;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [autoScroll, scrollSignature]);
+  }, [autoScroll, visibleScrollSignature]);
 
   const handleScroll = () => {
     const node = scrollRef.current;
@@ -105,12 +161,13 @@ function processItemToAccordionStep(
   item: ChatProcessItem,
   isLast: boolean,
   processStatus: ChatDisplayStatus,
+  onTextAnimationChange?: (itemId: string, isAnimating: boolean) => void,
 ): IAccordionProps | null {
   if (item.type === 'reasoning') {
-    return textStepFromProcessItem(item, 'Reasoning', <SparkTimeLine size={14} />, isLast, processStatus);
+    return textStepFromProcessItem(item, 'Reasoning', <SparkTimeLine size={14} />, isLast, processStatus, onTextAnimationChange);
   }
   if (item.type === 'thinking') {
-    return textStepFromProcessItem(item, 'Thinking', <SparkDeepThinkLine size={14} />, isLast, processStatus);
+    return textStepFromProcessItem(item, 'Thinking', <SparkDeepThinkLine size={14} />, isLast, processStatus, onTextAnimationChange);
   }
   if (item.type === 'tool') {
     const toolStatus = item.toolCall.status || item.status;
@@ -169,6 +226,7 @@ function textStepFromProcessItem(
   fallbackIcon: ReactElement,
   isLast: boolean,
   processStatus: ChatDisplayStatus,
+  onTextAnimationChange?: (itemId: string, isAnimating: boolean) => void,
 ): IAccordionProps | null {
   if (!item.content.trim()) return null;
   const displayStatus = textItemDisplayStatus(item.status, processStatus, isLast);
@@ -184,7 +242,12 @@ function textStepFromProcessItem(
     children: (
       <Accordion.BodyContent>
         <div className="p-3 text-sm leading-7 text-[var(--color-text-primary)]">
-          <StreamingProcessMarkdown content={item.content} streaming={isGenerating} />
+          <StreamingProcessMarkdown
+            key={item.id}
+            content={item.content}
+            streaming={isGenerating}
+            onAnimationChange={(isAnimating) => onTextAnimationChange?.(item.id, isAnimating)}
+          />
         </div>
       </Accordion.BodyContent>
     ),
@@ -194,20 +257,36 @@ function textStepFromProcessItem(
 function StreamingProcessMarkdown({
   content,
   streaming,
+  onAnimationChange,
 }: {
   content: string;
   streaming: boolean;
+  onAnimationChange?: (isAnimating: boolean) => void;
 }) {
-  const visibleContent = useSmoothStreamingText(content, streaming, {
+  const visible = useSmoothStreamingText(content, streaming, {
     charsPerSecond: 112,
     maxCharsPerFrame: 18,
   });
+  useEffect(() => {
+    onAnimationChange?.(visible.isAnimating);
+  }, [onAnimationChange, visible.isAnimating]);
+
   return (
     <>
-      <MarkdownContent content={visibleContent} className="w-full" />
-      {streaming && <span className="chat-stream-caret chat-stream-caret--subtle" aria-hidden="true" />}
+      <MarkdownContent content={visible.content} className="w-full" />
+      {visible.isAnimating && <span className="chat-stream-caret chat-stream-caret--subtle" aria-hidden="true" />}
     </>
   );
+}
+
+function useReducerVersion(): [number, () => void] {
+  const versionRef = useRef(0);
+  const [, setVersion] = useState(0);
+  const bump = useCallback(() => {
+    versionRef.current += 1;
+    setVersion(versionRef.current);
+  }, []);
+  return [versionRef.current, bump];
 }
 
 function textItemDisplayStatus(

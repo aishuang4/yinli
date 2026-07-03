@@ -46,6 +46,7 @@ from src.server.routes.chat.leader_stream import (
     _is_final_answer_tool_event,
     _plan_final_answer_from_sse,
     _plan_runtime_event_from_tool_result,
+    _stream_final_answer_recovery_events,
     stream_leader_agent_reply,
 )
 from src.server.routes.chat.runtime import (
@@ -965,6 +966,9 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     delta = str(event_data.get("delta", ""))
                     if resume_stream_state.final_answer_started:
                         assistant_text += delta
+                        resume_stream_state.assistant_text += delta
+                    else:
+                        resume_stream_state.assistant_reasoning_text += delta
                     if _should_wrap_resume_text_as_final(
                         event_type,
                         interaction.scope,
@@ -994,6 +998,36 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
 
                 if _should_emit_raw_resume_event(event_type, interaction.scope):
                     yield _sse_event(event_type, event_data)
+
+            if not assistant_text.strip() and (
+                resume_stream_state.exceeded_max_iters
+                or resume_stream_state.assistant_reasoning_text.strip()
+                or assistant_thinking.strip()
+                or assistant_tool_calls
+            ):
+                resume_stream_state.assistant_text = assistant_text
+                resume_stream_state.assistant_thinking = assistant_thinking
+                resume_stream_state.assistant_tool_calls = assistant_tool_calls
+                resume_stream_state.assistant_model_caches = assistant_model_caches
+                resume_stream_state.runtime_events = runtime_events
+                async for recovery_event in _stream_final_answer_recovery_events(
+                    agent=agent,
+                    state=resume_stream_state,
+                    session_id=interaction.session_id,
+                    persist=True,
+                    agent_id=interaction.agent_id,
+                    agent_name=interaction.agent_name,
+                    model_name=interaction.model_name,
+                    guardrails=interaction_guardrails,
+                    message=interaction.message,
+                    stream_scope=interaction.scope,
+                ):
+                    yield recovery_event
+                assistant_text = resume_stream_state.assistant_text
+                assistant_thinking = resume_stream_state.assistant_thinking
+                assistant_tool_calls = resume_stream_state.assistant_tool_calls
+                assistant_model_caches = resume_stream_state.assistant_model_caches
+                runtime_events = resume_stream_state.runtime_events
 
             if resume_stream_state.exceeded_max_iters or not assistant_text.strip():
                 assistant_error = (

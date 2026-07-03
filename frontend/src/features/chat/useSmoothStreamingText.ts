@@ -3,50 +3,61 @@ import { useEffect, useRef, useState } from 'react';
 const FRAME_MS = 32;
 
 type SmoothStreamingTextOptions = {
+  animateOnMount?: boolean;
   charsPerSecond?: number;
   maxCharsPerFrame?: number;
+};
+
+export type SmoothStreamingTextState = {
+  content: string;
+  isAnimating: boolean;
 };
 
 export function useSmoothStreamingText(
   content: string,
   streaming: boolean,
   options: SmoothStreamingTextOptions = {},
-): string {
-  const { charsPerSecond = 84, maxCharsPerFrame = 14 } = options;
-  const [displayedContent, setDisplayedContent] = useState(() => (streaming ? '' : content));
-  const displayedRef = useRef(streaming ? '' : content);
+): SmoothStreamingTextState {
+  const { animateOnMount = false, charsPerSecond = 84, maxCharsPerFrame = 14 } = options;
+  const shouldAnimateInitialContent = streaming || (animateOnMount && content.length > 0);
+  const [displayedContent, setDisplayedContent] = useState(() => (shouldAnimateInitialContent ? '' : content));
+  const [isAnimating, setIsAnimating] = useState(() => shouldAnimateInitialContent);
+  const displayedRef = useRef(shouldAnimateInitialContent ? '' : content);
   const targetRef = useRef(content);
   const carryRef = useRef(0);
 
   useEffect(() => {
     targetRef.current = content;
 
-    if (!streaming) {
-      displayedRef.current = content;
+    if (!content.startsWith(displayedRef.current)) {
+      displayedRef.current = streaming ? '' : content;
       carryRef.current = 0;
-      setDisplayedContent(content);
+      setDisplayedContent(displayedRef.current);
+      setIsAnimating(streaming);
       return;
     }
 
-    if (!content.startsWith(displayedRef.current)) {
-      displayedRef.current = '';
-      carryRef.current = 0;
-      setDisplayedContent('');
-    }
+    setIsAnimating(streaming || displayedRef.current !== content);
   }, [content, streaming]);
 
   useEffect(() => {
-    if (!streaming) return;
+    if (!isAnimating) return;
 
     const timer = window.setInterval(() => {
       const current = displayedRef.current;
       const target = targetRef.current;
-      if (current === target) return;
+      if (current === target) {
+        carryRef.current = 0;
+        if (!streaming) setIsAnimating(false);
+        return;
+      }
 
       const remaining = target.length - current.length;
       if (remaining <= 0 || !target.startsWith(current)) {
         displayedRef.current = target;
+        carryRef.current = 0;
         setDisplayedContent(target);
+        if (!streaming) setIsAnimating(false);
         return;
       }
 
@@ -61,10 +72,17 @@ export function useSmoothStreamingText(
       const next = target.slice(0, current.length + Math.min(remaining, nextCount));
       displayedRef.current = next;
       setDisplayedContent(next);
+      if (next === target && !streaming) {
+        carryRef.current = 0;
+        setIsAnimating(false);
+      }
     }, FRAME_MS);
 
     return () => window.clearInterval(timer);
-  }, [charsPerSecond, maxCharsPerFrame, streaming]);
+  }, [charsPerSecond, isAnimating, maxCharsPerFrame, streaming]);
 
-  return displayedContent;
+  return {
+    content: displayedContent,
+    isAnimating: streaming || isAnimating,
+  };
 }

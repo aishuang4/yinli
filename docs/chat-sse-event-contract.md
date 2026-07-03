@@ -247,7 +247,7 @@ type DisplayItem = {
 - `team`：Team actor 状态更新事件。后端可以由旧 `TEAM_ACTIVITY` 内部状态投影而来，但 Chat 主界面只依赖 `displaySnapshot.actors[]`。
 - `plan`：Plan Mode 展示块，使用 `data.planId`、`data.planFile`、`data.markdown`、`data.steps`。`PLAN_FINALIZED` 使用 `status=completed`。
 - `feedback`：当前等待用户处理的人机交互，使用 `data.approval`。只放当前等待项，不保留历史已完成项。
-- `answer`：最终答案展示，使用 `data.content`。没有 `FinalAnswerStart` 时，后端不得把 reasoning 兜底复制成最终答案；如果 Agent 流自然结束但没有产生最终答案，后端必须发送 `RUN_FAILED` 和 `ERROR`，并投影为 `error` 展示块，常见原因包括达到最大 ReAct 迭代次数。
+- `answer`：最终答案展示，使用 `data.content`。没有 `FinalAnswerStart` 时，后端不得把 reasoning 兜底复制成最终答案；如果 Agent 流自然结束但没有产生最终答案，后端可以先执行一次受限 Final Answer Recovery，恢复轮必须重新生成 `FINAL_ANSWER_DELTA`。恢复失败后必须发送 `RUN_FAILED` 和 `ERROR`，并投影为 `error` 展示块，常见原因包括达到最大 ReAct 迭代次数。
 - `files`：生成文件下载，使用 `data.files`，每项至少包含 `path`、`name`、`extension`。
 - `error`：错误展示块，使用 `data.message` 或 `data.error`。
 
@@ -275,7 +275,7 @@ Team 必须进入 `displaySnapshot.actors[]`。Chat 主界面不得依赖顶层 
 | `TOOL_CALL_*` / `TOOL_RESULT_*` | `displaySnapshot.blocks[]`、`tools[]` 摘要 | `displayEvent(block=process,event=tool.*)` | `displaySnapshot: process item` | running 继续，终态工具不可保留 running |
 | `REASONING_DELTA` | `displaySnapshot.blocks[]`、`reasoning` | `displayEvent(block=process,event=reasoning.delta)` | `displaySnapshot: process item` | running 继续 |
 | `FINAL_ANSWER_DELTA` | `displaySnapshot.blocks[]`、`finalAnswer` | `displayEvent(block=answer,event=answer.delta)` | `displaySnapshot: answer block` | running 继续 |
-| Agent 流结束但没有最终答案 | `status=failed`、`error` | `displayEvent(block=error,event=error.raised)` | `displaySnapshot: error block` | 发送后结束 |
+| Agent 流结束但没有最终答案 | 恢复成功时写入 `finalAnswer`；恢复失败时 `status=failed`、`error` | 恢复成功时 `displayEvent(block=answer,event=answer.delta)`；恢复失败时 `displayEvent(block=error,event=error.raised)` | `displaySnapshot: answer block` 或 `error block` | 后端最多执行一次受限 Final Answer Recovery；恢复失败后结束 |
 | `TEAM_ACTIVITY` | `displaySnapshot.actors[]` | `displayEvent(block=team,event=team.actors.updated)` | `displaySnapshot.actors[] -> TeamDisplayBlock` | running 继续 |
 | `SKILL_CONTEXT` / `SKILL_END` | `displaySnapshot.blocks[]`、`skillCalls[]` | `displayEvent(block=process,event=skill.*)` | `displaySnapshot: process item` | running 继续 |
 | `MODEL_CALL_*` | `modelName`、`tokenUsage` | `modelName`、`tokenUsage` | 模型与用量状态 | running 继续 |
@@ -308,6 +308,8 @@ Team 必须进入 `displaySnapshot.actors[]`。Chat 主界面不得依赖顶层 
 - Agent 在完成分析、工具调用、反问等步骤后，必须先调用 `FinalAnswerStart`，随后再输出最终答案正文。
 - `FinalAnswerStart` 只负责阶段切换，不承载最终答案内容，不在 Chat 工具调用列表中展示。
 - 调用该工具前的普通文本会转换为 `REASONING_DELTA` / `AGENT_REASONING_DELTA`；调用后的普通文本会转换为 `FINAL_ANSWER_DELTA` / `AGENT_FINAL_ANSWER_DELTA`。
+- 如果 AgentScope 自然结束但没有调用 `FinalAnswerStart`，后端可执行一次受限 Final Answer Recovery：内部强制调用 `FinalAnswerStart`，随后禁止工具调用并重新生成最终答案正文。Recovery 不得把既有 reasoning 原样提升为 final answer；既有 reasoning 仍保留为过程文本。
+- Recovery 仍未产生最终答案时，本轮按失败收口。
 
 ## Skills
 

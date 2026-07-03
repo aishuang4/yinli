@@ -817,7 +817,24 @@ def _upsert_actor_timeline_item(state: dict[str, Any], actor_id: str, item: dict
     if existing_index == -1:
         items.append(item)
     else:
-        items[existing_index] = {**items[existing_index], **item}
+        items[existing_index] = _merge_actor_timeline_item(items[existing_index], item)
+
+
+def _merge_actor_timeline_item(current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    """合并 actor timeline item，避免终态 Runtime Event 覆盖真实工具名。"""
+
+    current_data = current.get("data") if isinstance(current.get("data"), dict) else {}
+    incoming_data = incoming.get("data") if isinstance(incoming.get("data"), dict) else {}
+    merged_data = {**current_data, **incoming_data}
+    for key in ("inputPreview", "outputPreview", "error"):
+        if str(incoming_data.get(key) or "") == "" and str(current_data.get(key) or "") != "":
+            merged_data[key] = current_data[key]
+    if (
+        str(incoming_data.get("name") or "") in {"", "tool"}
+        and str(current_data.get("name") or "") not in {"", "tool"}
+    ):
+        merged_data["name"] = current_data["name"]
+    return {**current, **incoming, "data": merged_data}
 
 
 def _append_actor_item_data(
@@ -872,6 +889,8 @@ def _project_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None
 def _project_actor_timeline_from_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None:
     """把 worker/leader Runtime Event 投影到对应 actor 的 ReAct timeline。"""
 
+    if _runtime_event_has_raw_main_stream_pair(event):
+        return
     actor_id = _actor_id_from_runtime_event(state, event)
     if not actor_id:
         return
@@ -1205,6 +1224,8 @@ def _runtime_display_events_for_raw_event(state: dict[str, Any], event: dict[str
 def _actor_display_event_for_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> dict[str, Any] | None:
     """把 worker/leader Runtime Event 转成前端 actor process 增量。"""
 
+    if _runtime_event_has_raw_main_stream_pair(event):
+        return None
     actor_id = _actor_id_from_runtime_event(state, event)
     if not actor_id:
         return None
@@ -1299,6 +1320,31 @@ def _actor_display_event_for_runtime_event(state: dict[str, Any], event: dict[st
             },
         )
     return None
+
+
+def _runtime_event_has_raw_main_stream_pair(event: dict[str, Any]) -> bool:
+    """判断 Runtime Event 是否已有主 Agent 原始事件负责展示。
+
+    单 Agent 和 Leader 的 AgentScope 事件会紧跟着以原始事件进入 RunState；
+    如果 Runtime Event 也投影到 actor timeline，会生成同一 tool_call_id 的
+    第二个过程项。Worker 没有同等原始主流事件，仍由 Runtime Event 投影。
+    """
+
+    scope = str(event.get("scope") or "")
+    if scope not in {"single", "single_agent", "leader"}:
+        return False
+    runtime_type = str(event.get("type") or "")
+    return runtime_type in {
+        "AGENT_OUTPUT_DELTA",
+        "AGENT_REASONING_DELTA",
+        "AGENT_THINKING",
+        "TOOL_CALL_STARTED",
+        "TOOL_CALL_DELTA",
+        "TOOL_CALL_COMPLETED",
+        "TOOL_RESULT_STARTED",
+        "TOOL_RESULT_DELTA",
+        "TOOL_RESULT_COMPLETED",
+    }
 
 
 def _display_event(

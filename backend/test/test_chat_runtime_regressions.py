@@ -38,7 +38,7 @@ from src.server.routes.chat.models import (
     ChatToolRun,
 )
 from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
-from src.server.routes.chat.prompts import build_worker_assignment_text
+from src.server.routes.chat.prompts import _build_final_answer_system_prompt, build_worker_assignment_text
 from src.server.routes.chat.runtime import _permission_mode_for_guardrails
 from src.server.routes.chat.react_runtime import execute_react_runtime
 from src.server.routes.chat.run_context import ChatRunContext
@@ -66,6 +66,7 @@ from src.security.permissions import (
     build_permission_profile,
 )
 from src.tools.ask_user import AskUser
+from src.server.routes.agent_builder import _default_agent_prompt
 
 
 class _FakeAgentScopeEvent:
@@ -87,6 +88,18 @@ def _final_answer_deltas(events: list[str]) -> list[str]:
         for event in events
         if event.startswith("event: FINAL_ANSWER_DELTA")
     ]
+
+
+def test_final_answer_prompt_strongly_requires_phase_marker():
+    prompt = _build_final_answer_system_prompt()
+    assert "FinalAnswerStart" in prompt
+    assert "only valid way to finish a successful run" in prompt
+    assert "A response that ends without this tool is invalid" in prompt
+
+
+def test_default_agent_prompt_mentions_final_answer_marker():
+    prompt = _default_agent_prompt("Assistant", "Help the user.")
+    assert "FinalAnswerStart" in prompt
 
 
 def _projection_run() -> ChatBackgroundRun:
@@ -216,6 +229,67 @@ class _FakeNoFinalAnswerAgent:
         })
 
 
+class _FakeRecoverableNoFinalAnswerAgent:
+    def __init__(self):
+        self.state = SimpleNamespace(reply_id="", cur_iter=0)
+
+    async def reply_stream(self, user_msg):
+        yield _FakeAgentScopeEvent({
+            "type": "TEXT_BLOCK_DELTA",
+            "reply_id": "reply-no-final",
+            "delta": "工具后的过程总结",
+        })
+        yield _FakeAgentScopeEvent({
+            "type": "REPLY_END",
+            "reply_id": "reply-no-final",
+        })
+
+    async def _handle_incoming_messages(self, msgs):
+        self.recovery_message = msgs
+
+    async def _reasoning(self, tool_choice=None):
+        if getattr(tool_choice, "mode", "") == "FinalAnswerStart":
+            yield _FakeAgentScopeEvent({
+                "type": "TOOL_CALL_START",
+                "reply_id": "reply-recovery-marker",
+                "tool_call_id": "call-recovery-final",
+                "tool_call_name": "FinalAnswerStart",
+            })
+            yield _FakeAgentScopeEvent({
+                "type": "TOOL_CALL_END",
+                "reply_id": "reply-recovery-marker",
+                "tool_call_id": "call-recovery-final",
+            })
+            return
+        if getattr(tool_choice, "mode", "") == "none":
+            yield _FakeAgentScopeEvent({
+                "type": "TEXT_BLOCK_DELTA",
+                "reply_id": "reply-recovery-answer",
+                "delta": "恢复后的最终答案",
+            })
+            yield _FakeAgentScopeEvent({
+                "type": "REPLY_END",
+                "reply_id": "reply-recovery-answer",
+            })
+
+    async def _batch_tool_calls(self):
+        return [SimpleNamespace(type="concurrent", tool_calls=[SimpleNamespace(id="call-recovery-final")])]
+
+    async def _execute_concurrent_tool_calls(self, tool_calls):
+        yield _FakeAgentScopeEvent({
+            "type": "TOOL_RESULT_START",
+            "reply_id": "reply-recovery-marker",
+            "tool_call_id": "call-recovery-final",
+            "tool_call_name": "FinalAnswerStart",
+        })
+        yield _FakeAgentScopeEvent({
+            "type": "TOOL_RESULT_END",
+            "reply_id": "reply-recovery-marker",
+            "tool_call_id": "call-recovery-final",
+            "state": "success",
+        })
+
+
 class _FakeExceedMaxItersAgent:
     async def reply_stream(self, user_msg):
         yield _FakeAgentScopeEvent({
@@ -226,6 +300,29 @@ class _FakeExceedMaxItersAgent:
         yield _FakeAgentScopeEvent({
             "type": "EXCEED_MAX_ITERS",
             "reply_id": "reply-max-iters",
+            "name": "Agent",
+        })
+
+
+class _FakeRecoverableExceedMaxItersAgent(_FakeRecoverableNoFinalAnswerAgent):
+    async def reply_stream(self, user_msg):
+        yield _FakeAgentScopeEvent({
+            "type": "TEXT_BLOCK_DELTA",
+            "reply_id": "reply-max-iters-recoverable",
+            "delta": "达到迭代上限前的过程总结",
+        })
+        yield _FakeAgentScopeEvent({
+            "type": "EXCEED_MAX_ITERS",
+            "reply_id": "reply-max-iters-recoverable",
+            "name": "Agent",
+        })
+
+
+class _FakeRecoverableBareExceedMaxItersAgent(_FakeRecoverableNoFinalAnswerAgent):
+    async def reply_stream(self, user_msg):
+        yield _FakeAgentScopeEvent({
+            "type": "EXCEED_MAX_ITERS",
+            "reply_id": "reply-max-iters-bare",
             "name": "Agent",
         })
 
@@ -609,6 +706,91 @@ def test_run_state_process_timeline_splits_reasoning_around_tools():
     ]
 
 
+def test_run_state_ignores_main_runtime_tool_when_raw_tool_event_follows():
+    """主 Agent RuntimeEvent 与原始工具事件同源时，只展示原始工具过程项。"""
+
+    run = _projection_run()
+    state = initial_run_state(run)
+
+    state = project_event(state, "RUNTIME_EVENT", {
+        "type": "TOOL_CALL_STARTED",
+        "scope": "single_agent",
+        "agentId": "default",
+        "agentName": "Assistant",
+        "status": "running",
+        "payload": {
+            "tool_call_id": "call-read",
+            "tool_call_name": "Read",
+        },
+    }, run)
+    assert consume_run_state_display_events(state) == []
+
+    state = project_event(state, "TOOL_CALL_START", {"tool_call_id": "call-read", "tool_call_name": "Read"}, run)
+    consume_run_state_display_events(state)
+    state = project_event(state, "TOOL_CALL_DELTA", {"tool_call_id": "call-read", "delta": '{"file_path":"README.md"}'}, run)
+    consume_run_state_display_events(state)
+    state = project_event(state, "TOOL_RESULT_TEXT_DELTA", {"tool_call_id": "call-read", "delta": "hello"}, run)
+    consume_run_state_display_events(state)
+    state = project_event(state, "RUNTIME_EVENT", {
+        "type": "TOOL_RESULT_COMPLETED",
+        "scope": "single_agent",
+        "agentId": "default",
+        "agentName": "Assistant",
+        "status": "completed",
+        "payload": {
+            "tool_call_id": "call-read",
+            "state": "success",
+        },
+    }, run)
+    assert consume_run_state_display_events(state) == []
+    state = project_event(state, "TOOL_RESULT_END", {"tool_call_id": "call-read", "state": "success"}, run)
+    consume_run_state_display_events(state)
+
+    actor_items = state["displaySnapshot"]["actors"][0]["items"]
+    tool_items = [item for item in actor_items if item["event"].startswith("tool.")]
+    assert len(tool_items) == 1
+    assert tool_items[0]["targetId"] == "call-read"
+    assert tool_items[0]["data"]["name"] == "Read"
+    assert tool_items[0]["data"]["inputPreview"] == '{"file_path":"README.md"}'
+    assert tool_items[0]["data"]["outputPreview"] == "hello"
+
+
+def test_run_state_keeps_worker_runtime_tool_actor_item():
+    """Worker 没有主原始工具流时，仍由 RuntimeEvent 投影 actor 工具过程。"""
+
+    run = _projection_run()
+    run.mode = "team"
+    run.team_id = "team-1"
+    run.team_name = "Team"
+    state = initial_run_state(run)
+    state["teamActivities"] = [{
+        "id": "activity-worker",
+        "role": "worker",
+        "agentId": "worker-1",
+        "agentName": "Worker",
+        "status": "running",
+    }]
+
+    state = project_event(state, "RUNTIME_EVENT", {
+        "type": "TOOL_CALL_STARTED",
+        "scope": "worker",
+        "agentId": "worker-1",
+        "agentName": "Worker",
+        "teamActivityId": "activity-worker",
+        "status": "running",
+        "payload": {
+            "tool_call_id": "call-read",
+            "tool_call_name": "Read",
+        },
+    }, run)
+    display_events = consume_run_state_display_events(state)
+
+    actor = state["displaySnapshot"]["actors"][0]
+    assert display_events[0]["actorId"] == "activity-worker"
+    assert actor["items"][0]["targetId"] == "activity-worker:tool:call-read"
+    assert actor["items"][0]["data"]["name"] == "Read"
+
+
 def test_completed_background_run_persists_history_display_snapshot(tmp_path, monkeypatch):
     """Run 完成后，历史 assistant 消息必须保存可直接回放的 displaySnapshot。"""
 
@@ -919,6 +1101,28 @@ def test_run_state_clarification_keeps_approval_kind_when_payload_has_type():
     assert approval["kind"] == "clarification"
     assert approval["type"] == "clarification"
     assert approval["questions"][0]["type"] == "text"
+
+
+def test_readiness_gate_normalizes_clarification_identity():
+    """Readiness 追问必须带稳定身份，才能被前端识别为 clarification。"""
+
+    from src.server.routes.chat.readiness_gate import _normalize_clarification
+
+    clarification = _normalize_clarification({
+        "title": "需要补充信息",
+        "description": "请选择目标文件",
+        "questions": [{
+            "id": "target",
+            "type": "text",
+            "label": "目标文件",
+        }],
+    })
+
+    assert clarification is not None
+    assert clarification["kind"] == "clarification"
+    assert clarification["type"] == "clarification"
+    assert clarification["id"] == clarification["interactionId"]
+    assert clarification["questions"][0]["id"] == "target"
 
 
 def test_subscribe_background_run_can_skip_replay():
@@ -1413,6 +1617,39 @@ def test_single_agent_without_final_answer_marker_does_not_fallback_to_final_ans
     assert not any("missing_final_answer_marker_fallback" in event for event in events)
 
 
+def test_single_agent_recovers_missing_final_answer_marker_with_extra_call():
+    """漏调 FinalAnswerStart 时，通过受限恢复轮重新生成最终答案。"""
+
+    async def run_case():
+        return [
+            event
+            async for event in stream_leader_agent_reply(
+                agent=_FakeRecoverableNoFinalAnswerAgent(),
+                user_msg=object(),
+                state=LeaderStreamState(),
+                session_id="session-recover-final",
+                persist=False,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="deepseek-chat",
+                guardrails=[],
+                message="总结工具结果",
+                stream_scope="single",
+                skill_runs=[],
+                team_activities=[],
+            )
+        ]
+
+    events = asyncio.run(run_case())
+
+    reasoning_events = [event for event in events if event.startswith("event: REASONING_DELTA")]
+    final_events = [event for event in events if event.startswith("event: FINAL_ANSWER_DELTA")]
+    assert any("工具后的过程总结" in event for event in reasoning_events)
+    assert not any("工具后的过程总结" in event for event in final_events)
+    assert any("恢复后的最终答案" in event for event in final_events)
+    assert any("recover_missing_final_answer_marker" in event for event in events)
+
+
 def test_react_runtime_fails_when_agent_ends_without_final_answer(monkeypatch):
     """Agent 自然结束但没有最终答案时必须失败，避免最大迭代停止后前端无反馈。"""
 
@@ -1540,6 +1777,138 @@ def test_react_runtime_reports_agentscope_max_iters(monkeypatch):
     assert any("RUN_FAILED" in event for event in events)
     assert any(event.startswith("event: ERROR") and "最大 ReAct 迭代次数" in event for event in events)
     assert not any("RUN_COMPLETED" in event for event in events)
+
+
+def test_react_runtime_recovers_final_answer_after_max_iters(monkeypatch):
+    """达到最大迭代但已有过程文本时，仍先尝试最终答案恢复。"""
+
+    def fake_create_main_agent_from_spec(*args, **kwargs):
+        return _FakeRecoverableExceedMaxItersAgent()
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.react_runtime.create_main_agent_from_spec",
+        fake_create_main_agent_from_spec,
+    )
+
+    async def run_case():
+        ctx = ChatRunContext(
+            session_id="session-max-iters-recover",
+            agent_id="agent-1",
+            agent_name="Agent",
+            agent_config=None,
+            persist_run=False,
+            runtime_model_settings=SimpleNamespace(default_model="model", fallback_models=[]),
+            runtime_model_config=RuntimeModelConfig(
+                model_name="model",
+                fallback_names=[],
+                model_options=AgentModelOptions(max_react_iters=40),
+            ),
+            readiness=SimpleNamespace(ready=True),
+            intent_route=IntentRoute(),
+            routed_team=SimpleNamespace(members=[], run_data=None, system_prompt=""),
+            effective_user_message="测试最大迭代后收口",
+            used_skills=[],
+            used_skill_details=[],
+            skill_runs=[],
+            active_skill_run=None,
+            model_name="model",
+            system_prompt="prompt",
+            guardrails=AgentGuardrails(),
+            runtime_tool_scope=RuntimeToolScope(
+                allow_mcp=False,
+                allow_knowledge=False,
+                allow_bash=False,
+                allow_http=False,
+            ),
+            mcp_servers=[],
+            knowledge_tools=[],
+            team_activities=[],
+        )
+        run_data = ChatMessage(
+            session_id=ctx.session_id,
+            message="测试最大迭代后收口",
+            agent_id=ctx.agent_id,
+            agent_name=ctx.agent_name,
+        )
+        return [
+            event
+            async for event in execute_react_runtime(ctx=ctx, run_data=run_data)
+        ]
+
+    events = asyncio.run(run_case())
+
+    assert any(event.startswith("event: REASONING_DELTA") for event in events)
+    assert any(event.startswith("event: FINAL_ANSWER_DELTA") and "恢复后的最终答案" in event for event in events)
+    assert any("RUN_COMPLETED" in event for event in events)
+    assert not any("RUN_FAILED" in event for event in events)
+    assert not any(event.startswith("event: ERROR") for event in events)
+
+
+def test_react_runtime_forces_final_answer_after_bare_max_iters(monkeypatch):
+    """即使最大迭代事件前没有 reasoning 文本，也要强制追加最终答案收口调用。"""
+
+    agent = _FakeRecoverableBareExceedMaxItersAgent()
+
+    def fake_create_main_agent_from_spec(*args, **kwargs):
+        return agent
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.react_runtime.create_main_agent_from_spec",
+        fake_create_main_agent_from_spec,
+    )
+
+    async def run_case():
+        ctx = ChatRunContext(
+            session_id="session-max-iters-bare-recover",
+            agent_id="agent-1",
+            agent_name="Agent",
+            agent_config=None,
+            persist_run=False,
+            runtime_model_settings=SimpleNamespace(default_model="model", fallback_models=[]),
+            runtime_model_config=RuntimeModelConfig(
+                model_name="model",
+                fallback_names=[],
+                model_options=AgentModelOptions(max_react_iters=40),
+            ),
+            readiness=SimpleNamespace(ready=True),
+            intent_route=IntentRoute(),
+            routed_team=SimpleNamespace(members=[], run_data=None, system_prompt=""),
+            effective_user_message="测试空过程最大迭代后收口",
+            used_skills=[],
+            used_skill_details=[],
+            skill_runs=[],
+            active_skill_run=None,
+            model_name="model",
+            system_prompt="prompt",
+            guardrails=AgentGuardrails(),
+            runtime_tool_scope=RuntimeToolScope(
+                allow_mcp=False,
+                allow_knowledge=False,
+                allow_bash=False,
+                allow_http=False,
+            ),
+            mcp_servers=[],
+            knowledge_tools=[],
+            team_activities=[],
+        )
+        run_data = ChatMessage(
+            session_id=ctx.session_id,
+            message="测试空过程最大迭代后收口",
+            agent_id=ctx.agent_id,
+            agent_name=ctx.agent_name,
+        )
+        return [
+            event
+            async for event in execute_react_runtime(ctx=ctx, run_data=run_data)
+        ]
+
+    events = asyncio.run(run_case())
+
+    assert any(event.startswith("event: FINAL_ANSWER_DELTA") and "恢复后的最终答案" in event for event in events)
+    assert any("RUN_COMPLETED" in event for event in events)
+    assert not any("RUN_FAILED" in event for event in events)
+    assert not any(event.startswith("event: ERROR") for event in events)
+    assert "maximum iteration limit" in str(agent.recovery_message)
 
 
 def test_single_agent_hitl_merges_same_reply_running_tool_calls():
@@ -1731,6 +2100,57 @@ def test_resume_without_final_answer_marker_does_not_fallback_to_final_answer():
         assert any("RUN_FAILED" in event for event in events)
         assert any(event.startswith("event: ERROR") for event in events)
         assert not any("RUN_COMPLETED" in event for event in events)
+    finally:
+        PENDING_INTERACTIONS.clear()
+        PENDING_AGENTS.clear()
+
+
+def test_resume_recovers_missing_final_answer_marker_with_extra_call():
+    """resume 阶段漏调 FinalAnswerStart 时，也通过受限恢复轮重新生成最终答案。"""
+
+    async def run_case():
+        PENDING_INTERACTIONS.clear()
+        PENDING_AGENTS.clear()
+        interaction = _create_pending_interaction(
+            interaction_type="REQUIRE_USER_CONFIRM",
+            agent=_FakeRecoverableNoFinalAnswerAgent(),
+            session_id="session-resume-recover-final",
+            agent_id="agent-1",
+            agent_name="Agent",
+            model_name="deepseek-chat",
+            reply_id="reply-1",
+            tool_calls=[{
+                "id": "call-read",
+                "name": "Read",
+                "input": '{"file_path":"README.md"}',
+                "state": "asking",
+            }],
+            message="读取文件后回答",
+            assistant_text="",
+            skill_runs=[],
+            team_activities=[],
+            scope="single",
+            persist=False,
+        )
+        response = await resume_interaction(
+            ChatResumeRequest.model_validate({
+                "interactionId": interaction.id,
+                "action": "approve",
+            })
+        )
+        return [chunk async for chunk in response.body_iterator]
+
+    events = asyncio.run(run_case())
+
+    try:
+        final_events = [
+            event for event in events
+            if event.startswith("event: FINAL_ANSWER_DELTA")
+        ]
+        assert not any("工具后的过程总结" in event for event in final_events)
+        assert any("恢复后的最终答案" in event for event in final_events)
+        assert any("RUN_COMPLETED" in event for event in events)
+        assert not any("RUN_FAILED" in event for event in events)
     finally:
         PENDING_INTERACTIONS.clear()
         PENDING_AGENTS.clear()
@@ -2324,6 +2744,7 @@ def test_runtime_builder_cache_key_includes_tool_scope():
     key = build_runtime_agent_cache_key(
         agent_id="agent",
         session_id="session",
+        system_prompt="prompt-a",
         model_name="model",
         deep_thinking=False,
         fallback_names=["fallback"],
@@ -2336,6 +2757,26 @@ def test_runtime_builder_cache_key_includes_tool_scope():
 
     assert "tools-mcp-0:knowledge-0:bash-1:http-0" in key
     assert "plan-" not in key
+    assert "prompt-" in key
+
+
+def test_runtime_builder_cache_key_changes_with_system_prompt():
+    base_kwargs = dict(
+        agent_id="agent",
+        session_id="session",
+        model_name="model",
+        deep_thinking=False,
+        fallback_names=["fallback"],
+        used_skills=[],
+        mcp_servers=[],
+        knowledge_tools=[],
+        runtime_tool_scope=RuntimeToolScope(allow_mcp=False, allow_knowledge=False, allow_bash=True, allow_http=False),
+        guardrail_cache_key="guardrails",
+    )
+    key_a = build_runtime_agent_cache_key(system_prompt="prompt-a", **base_kwargs)
+    key_b = build_runtime_agent_cache_key(system_prompt="prompt-b", **base_kwargs)
+
+    assert key_a != key_b
 
 
 def test_main_agent_runtime_spec_wraps_factory_inputs():
@@ -2363,6 +2804,7 @@ def test_main_agent_runtime_spec_wraps_factory_inputs():
     assert spec.parent_agent_id == "agent"
     assert spec.tool_scope is tool_scope
     assert "thinking-True" in spec.runtime_agent_id
+    assert "prompt-" in spec.runtime_agent_id
 
 
 def test_create_main_agent_from_spec_delegates_to_factory(monkeypatch):

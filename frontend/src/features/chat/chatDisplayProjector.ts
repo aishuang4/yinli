@@ -237,15 +237,7 @@ function processBlockFromDisplayBlock(block: DisplayBlock, input: ChatDisplayMes
 
 function processItemFromDisplayItem(item: DisplayItem): ChatProcessItem | null {
   const status = String(item.status || 'running');
-  if (item.event === DISPLAY_EVENTS.REASONING_DELTA || item.targetId === 'reasoning') {
-    const content = pickDisplayString(item.data, ['text', 'content', 'delta']);
-    return content ? { id: item.id, type: 'reasoning', content, status, updatedAt: item.updatedAt } : null;
-  }
-  if (item.event === DISPLAY_EVENTS.THINKING_DELTA || item.targetId === 'thinking') {
-    const content = pickDisplayString(item.data, ['text', 'content', 'delta']);
-    return content ? { id: item.id, type: 'thinking', content, status, updatedAt: item.updatedAt } : null;
-  }
-  if (item.event.startsWith('tool.') || item.targetId.startsWith('tool')) {
+  if (isToolDisplayItem(item)) {
     return {
       id: item.id,
       type: 'tool',
@@ -254,7 +246,7 @@ function processItemFromDisplayItem(item: DisplayItem): ChatProcessItem | null {
       updatedAt: item.updatedAt,
     };
   }
-  if (item.event.startsWith('skill.') || item.targetId.startsWith('skill')) {
+  if (isSkillDisplayItem(item)) {
     return {
       id: item.id,
       type: 'skill',
@@ -263,7 +255,35 @@ function processItemFromDisplayItem(item: DisplayItem): ChatProcessItem | null {
       updatedAt: item.updatedAt,
     };
   }
+  if (isReasoningDisplayItem(item)) {
+    const content = pickDisplayString(item.data, ['text', 'content', 'delta']);
+    return content ? { id: item.id, type: 'reasoning', content, status, updatedAt: item.updatedAt } : null;
+  }
+  if (isThinkingDisplayItem(item)) {
+    const content = pickDisplayString(item.data, ['text', 'content', 'delta']);
+    return content ? { id: item.id, type: 'thinking', content, status, updatedAt: item.updatedAt } : null;
+  }
   return null;
+}
+
+function isToolDisplayItem(item: DisplayItem): boolean {
+  const targetId = String(item.targetId || item.id || '');
+  return item.event.startsWith('tool.') || targetId.includes(':tool:') || targetId.startsWith('tool');
+}
+
+function isSkillDisplayItem(item: DisplayItem): boolean {
+  const targetId = String(item.targetId || item.id || '');
+  return item.event.startsWith('skill.') || targetId.includes(':skill:') || targetId.startsWith('skill');
+}
+
+function isReasoningDisplayItem(item: DisplayItem): boolean {
+  const targetId = String(item.targetId || '');
+  return item.event === DISPLAY_EVENTS.REASONING_DELTA || targetId === 'reasoning' || targetId.endsWith(':reasoning') || targetId.startsWith('reasoning-');
+}
+
+function isThinkingDisplayItem(item: DisplayItem): boolean {
+  const targetId = String(item.targetId || '');
+  return item.event === DISPLAY_EVENTS.THINKING_DELTA || targetId === 'thinking' || targetId.endsWith(':thinking') || targetId.startsWith('thinking-');
 }
 
 function normalizeProcessItems(items: ChatProcessItem[]): ChatProcessItem[] {
@@ -277,6 +297,16 @@ function normalizeProcessItems(items: ChatProcessItem[]): ChatProcessItem[] {
         content: mergeAdjacentTextContent(previous.content, item.content),
       };
       return normalized;
+    }
+    if (item.type === 'tool') {
+      const toolKey = canonicalToolProcessKey(item);
+      const existingIndex = normalized.findIndex((current) => (
+        current.type === 'tool' && canonicalToolProcessKey(current) === toolKey
+      ));
+      if (existingIndex >= 0) {
+        normalized[existingIndex] = mergeToolProcessItem(normalized[existingIndex], item);
+        return normalized;
+      }
     }
     normalized.push(item);
     return normalized;
@@ -295,6 +325,68 @@ function mergeAdjacentTextContent(current: string, next: string): string {
   if (current === next || current.endsWith(next)) return current;
   if (next.startsWith(current)) return next;
   return `${current}\n\n${next}`;
+}
+
+function canonicalToolProcessKey(item: ChatProcessItem): string {
+  if (item.type !== 'tool') return item.id;
+  return canonicalToolCallId(item.toolCall.id || item.id);
+}
+
+function canonicalToolCallId(id: string): string {
+  const value = String(id || '');
+  if (value.includes(':tool:')) {
+    return value.split(':tool:').pop() || value;
+  }
+  return value.replace(/^tool[:-]/, '') || value;
+}
+
+function mergeToolProcessItem(current: ChatProcessItem, incoming: ChatProcessItem): ChatProcessItem {
+  if (current.type !== 'tool' || incoming.type !== 'tool') return incoming;
+  const currentTool = current.toolCall;
+  const incomingTool = incoming.toolCall;
+  const canonicalId = canonicalToolCallId(incomingTool.id || currentTool.id || incoming.id || current.id);
+  const name = preferToolName(currentTool.name, incomingTool.name);
+  const args = preferLongerText(currentTool.args, incomingTool.args);
+  const result = preferLongerText(currentTool.result, incomingTool.result);
+  const status = preferToolStatus(currentTool.status, incomingTool.status);
+  return {
+    ...current,
+    id: canonicalId || incoming.id || current.id,
+    status,
+    updatedAt: incoming.updatedAt || current.updatedAt,
+    toolCall: {
+      ...currentTool,
+      ...incomingTool,
+      id: canonicalId || incomingTool.id || currentTool.id,
+      name,
+      args,
+      result,
+      status,
+    },
+  };
+}
+
+function preferToolName(current: string, incoming: string): string {
+  const currentName = normalizeToolDisplayName(String(current || 'tool'));
+  const incomingName = normalizeToolDisplayName(String(incoming || 'tool'));
+  if (incomingName !== 'tool') return incomingName;
+  if (currentName !== 'tool') return currentName;
+  return incomingName || currentName || 'tool';
+}
+
+function preferLongerText(current: string, incoming: string): string {
+  const currentText = String(current || '');
+  const incomingText = String(incoming || '');
+  return incomingText.length >= currentText.length ? incomingText : currentText;
+}
+
+function preferToolStatus(
+  current: ToolCallInfo['status'],
+  incoming: ToolCallInfo['status'],
+): ToolCallInfo['status'] {
+  if (incoming === 'failed' || incoming === 'completed') return incoming;
+  if (current === 'failed' || current === 'completed') return current;
+  return incoming || current;
 }
 
 function planBlockFromDisplayBlock(block: DisplayBlock): ChatPlanBlock | null {

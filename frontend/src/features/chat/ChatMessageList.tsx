@@ -101,6 +101,7 @@ export function StreamingBubble({
   onResolveHitl,
   selectedTeamActorId,
   onSelectTeamActor,
+  onFinalAnswerAnimationChange,
   toolCalls,
   modelName,
   tokenUsage,
@@ -123,6 +124,7 @@ export function StreamingBubble({
   onResolveHitl: ResolveHitl;
   selectedTeamActorId: string | null;
   onSelectTeamActor: (id: string) => void;
+  onFinalAnswerAnimationChange?: (isAnimating: boolean) => void;
   toolCalls: ToolCallInfo[];
   modelName: string;
   tokenUsage: { input: number; output: number } | null;
@@ -162,6 +164,8 @@ export function StreamingBubble({
         onResolveHitl={onResolveHitl}
         selectedTeamActorId={selectedTeamActorId}
         onSelectTeamActor={onSelectTeamActor}
+        animateStreamingText
+        onFinalAnswerAnimationChange={onFinalAnswerAnimationChange}
       />
 
       {displayMessage.blocks.length === 0 && (

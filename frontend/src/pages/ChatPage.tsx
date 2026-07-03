@@ -12,7 +12,7 @@
  * @see 前端设计文档 §8.1 Chat 对话流程
  */
 
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo, type WheelEvent } from 'react';
 import { AlertCircle, Bot, ChevronDown, ImagePlus, Plus, Send, Square, Trash2, X } from 'lucide-react';
 import {
   SparkDeepThinkLine,
@@ -135,9 +135,13 @@ export function ChatPage() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
+  const programmaticScrollRef = useRef(false);
+  const programmaticScrollTimerRef = useRef<number | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
   const recoveredRunRef = useRef<string>('');
+  const completedVisualRunRef = useRef<string>('');
+  const [visualCompletionVersion, setVisualCompletionVersion] = useState(0);
   const { state, sendMessage, resumeInteraction, subscribeRun, abort, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
   const { teams, loading: teamsLoading } = useTeams();
@@ -204,6 +208,22 @@ export function ChatPage() {
   const openTeamActorSidebar = useCallback((actorId: string) => {
     setSelectedTeamActorId(actorId);
   }, []);
+
+  const handleFinalAnswerAnimationChange = useCallback((isAnimating: boolean) => {
+    const runId = state.currentRunId;
+    if (!runId) return;
+    if (isAnimating) {
+      if (completedVisualRunRef.current === runId) {
+        completedVisualRunRef.current = '';
+        setVisualCompletionVersion((version) => version + 1);
+      }
+      return;
+    }
+    if (completedVisualRunRef.current !== runId) {
+      completedVisualRunRef.current = runId;
+      setVisualCompletionVersion((version) => version + 1);
+    }
+  }, [state.currentRunId]);
 
   const buildTeamMembersForRun = useCallback((workerAgentIds: string[] | null) => {
     if (!selectedTeam) return [];
@@ -298,14 +318,49 @@ export function ChatPage() {
     if (!container) return;
     const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
     const nearBottom = distanceToBottom < 80;
+    if (programmaticScrollRef.current) {
+      shouldAutoScrollRef.current = true;
+      setShowScrollToBottom(false);
+      if (nearBottom) {
+        programmaticScrollRef.current = false;
+      }
+      return;
+    }
     shouldAutoScrollRef.current = nearBottom;
     setShowScrollToBottom(!nearBottom);
   }, []);
 
+  const cancelProgrammaticScroll = useCallback(() => {
+    programmaticScrollRef.current = false;
+    if (programmaticScrollTimerRef.current !== null) {
+      window.clearTimeout(programmaticScrollTimerRef.current);
+      programmaticScrollTimerRef.current = null;
+    }
+  }, []);
+
+  const handleMessagesWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
+    if (event.deltaY < 0) {
+      cancelProgrammaticScroll();
+    }
+  }, [cancelProgrammaticScroll]);
+
   const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
     shouldAutoScrollRef.current = true;
+    programmaticScrollRef.current = true;
     setShowScrollToBottom(false);
-    messagesEndRef.current?.scrollIntoView({ behavior });
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior });
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior });
+    }
+    if (programmaticScrollTimerRef.current !== null) {
+      window.clearTimeout(programmaticScrollTimerRef.current);
+    }
+    programmaticScrollTimerRef.current = window.setTimeout(() => {
+      programmaticScrollRef.current = false;
+      programmaticScrollTimerRef.current = null;
+    }, behavior === 'smooth' ? 700 : 80);
   }, []);
 
   /** 只有用户停留在底部附近时才自动滚动 */
@@ -313,6 +368,24 @@ export function ChatPage() {
     if (!shouldAutoScrollRef.current) return;
     scrollToBottom(state.isStreaming ? 'auto' : 'smooth');
   }, [messages, scrollToBottom, state.isStreaming, state.finalAnswerContent, state.reasoningContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActors]);
+
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    const content = container?.firstElementChild;
+    if (!container || !content || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (!shouldAutoScrollRef.current) return;
+      scrollToBottom('auto');
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [scrollToBottom]);
+
+  useEffect(() => () => {
+    if (programmaticScrollTimerRef.current !== null) {
+      window.clearTimeout(programmaticScrollTimerRef.current);
+    }
+  }, []);
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
@@ -638,8 +711,14 @@ export function ChatPage() {
 
   // 当流结束时，将 assistant 回复加入消息历史
   useEffect(() => {
+    const waitingForFinalAnswerAnimation = Boolean(
+      state.currentRunId &&
+      state.finalAnswerContent &&
+      completedVisualRunRef.current !== state.currentRunId,
+    );
     if (
       !state.isStreaming &&
+      !waitingForFinalAnswerAnimation &&
       state.hitlRequests.length === 0 &&
       state.clarificationRequests.length === 0 &&
       (state.finalAnswerContent || state.reasoningContent || state.textContent || state.error || state.displaySnapshot.blocks.length > 0 || state.plans.length > 0) &&
@@ -663,7 +742,7 @@ export function ChatPage() {
       reset();
       loadSessions({ silent: true });
     }
-  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.displaySnapshot, state.error, state.finalAnswerContent, state.hitlRequests.length, state.isStreaming, state.modelName, state.plans.length, state.reasoningContent, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamActors, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls]);
+  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.currentRunId, state.displaySnapshot, state.error, state.finalAnswerContent, state.hitlRequests.length, state.isStreaming, state.modelName, state.plans.length, state.reasoningContent, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamActors, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls, visualCompletionVersion]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -809,6 +888,8 @@ export function ChatPage() {
               ref={messagesContainerRef}
               className="h-full min-h-0 overflow-auto px-5 py-4"
               onScroll={handleMessagesScroll}
+              onWheel={handleMessagesWheel}
+              onPointerDown={cancelProgrammaticScroll}
               role="log"
               aria-live="polite"
               aria-label="对话消息"
@@ -853,6 +934,7 @@ export function ChatPage() {
                         onResolveHitl={resumeInteraction}
                         selectedTeamActorId={selectedTeamActorId}
                         onSelectTeamActor={openTeamActorSidebar}
+                        onFinalAnswerAnimationChange={handleFinalAnswerAnimationChange}
                         toolCalls={state.toolCalls}
                         modelName={state.modelName}
                         tokenUsage={state.tokenUsage}

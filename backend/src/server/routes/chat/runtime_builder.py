@@ -5,6 +5,7 @@
 """
 
 from dataclasses import dataclass
+import hashlib
 from typing import Any, Callable
 
 from agentscope.middleware import MiddlewareBase
@@ -144,6 +145,7 @@ def build_runtime_agent_cache_key(
     *,
     agent_id: str,
     session_id: str,
+    system_prompt: str,
     model_name: str,
     deep_thinking: bool,
     fallback_names: list[str],
@@ -163,11 +165,13 @@ def build_runtime_agent_cache_key(
         for server in mcp_servers
     )
     knowledge_cache_key = ",".join(tool.id for tool in knowledge_tools)
+    system_prompt_cache_key = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
     return (
         f"{agent_id}:{session_id}:{model_name}:thinking-{deep_thinking}:"
         f"fallbacks-{fallback_cache_key}:"
         f"skills-{skill_cache_key}:mcp-{mcp_cache_key}:knowledge-{knowledge_cache_key}:"
         f"tools-{runtime_tool_scope.cache_key()}:"
+        f"prompt-{system_prompt_cache_key}:"
         f"features-{runtime_features_cache_key}:"
         f"guardrails-{guardrail_cache_key}"
     )
@@ -196,6 +200,7 @@ def build_main_agent_runtime_spec(
     runtime_agent_id = build_runtime_agent_cache_key(
         agent_id=agent_id,
         session_id=session_id,
+        system_prompt=system_prompt,
         model_name=model_config.model_name,
         deep_thinking=deep_thinking,
         fallback_names=model_config.fallback_names,

@@ -545,4 +545,5 @@ def _default_agent_prompt(name: str, description: str) -> str:
         description or "Work carefully according to your assigned responsibility.",
         "Use bound MCP tools and Skills when they are relevant.",
         "When working inside a Team, complete your own ReAct loop and return focused output for the leader.",
+        "When you are ready to answer the user, call FinalAnswerStart exactly once before writing the final answer.",
     ])

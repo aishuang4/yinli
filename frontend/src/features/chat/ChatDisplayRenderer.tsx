@@ -18,6 +18,8 @@ export function ChatDisplayRenderer({
   onResolveHitl,
   selectedTeamActorId,
   onSelectTeamActor,
+  animateStreamingText = false,
+  onFinalAnswerAnimationChange,
 }: {
   message: ChatDisplayMessage;
   defaultProcessExpanded: boolean;
@@ -27,6 +29,8 @@ export function ChatDisplayRenderer({
   onResolveHitl?: ResolveHitl;
   selectedTeamActorId?: string | null;
   onSelectTeamActor?: (id: string) => void;
+  animateStreamingText?: boolean;
+  onFinalAnswerAnimationChange?: (isAnimating: boolean) => void;
 }) {
   const hasFinalAnswer = message.blocks.some((block) => (
     block.type === 'final_answer' && Boolean(block.content.trim())
@@ -77,6 +81,8 @@ export function ChatDisplayRenderer({
               content={block.content}
               role="assistant"
               streaming={message.isStreaming}
+              animateOnMount={animateStreamingText}
+              onAnimationChange={onFinalAnswerAnimationChange}
             />
           );
         }
