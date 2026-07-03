@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -133,6 +134,47 @@ def test_successful_completion_ignores_memory_persist_failure(isolated_db, monke
     )
 
     assert any("RUN_COMPLETED" in event for event in events)
+
+
+def test_successful_completion_does_not_wait_for_memory_reflection(isolated_db, monkeypatch):
+    async def slow_reflection(*args, **kwargs):
+        await asyncio.sleep(0.2)
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.completion.reflect_completed_run_memory_with_agents",
+        slow_reflection,
+    )
+    monkeypatch.setattr(
+        "src.server.routes.chat.completion.persist_completed_run_memory_node",
+        lambda item: {"id": "node-1"},
+    )
+
+    started = time.monotonic()
+    events = asyncio.run(
+        _collect_async(
+            finalize_successful_leader_run(
+                session_id="session-1",
+                persist=True,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="model",
+                user_message="以后默认用中文回答。",
+                assistant_text="最终回答",
+                assistant_thinking="",
+                assistant_tool_calls=[],
+                assistant_model_caches=[],
+                runtime_events=[],
+                skill_runs=[],
+                active_skill_run=None,
+                team_activities=[],
+                team_id=None,
+                team_name=None,
+            ),
+        ),
+    )
+
+    assert any("RUN_COMPLETED" in event for event in events)
+    assert time.monotonic() - started < 0.15
 
 
 async def _collect_async(generator):

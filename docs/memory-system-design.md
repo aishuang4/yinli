@@ -445,6 +445,8 @@ Hooks 负责被动生命周期事件，只做“运行前查询注入、运行�
 
 运行时给每个 Agent 配置专用内部工具，并把工具绑定到它自己的具体 Markdown 记忆文件；模型不能传入任意路径，也不能越权操作其他记忆文件。
 
+三路 Markdown 提炼 Agent 在 Chat 成功收尾后以后台任务启动，不阻塞 assistant message 持久化、`RUN_COMPLETED` 输出或主对话线路。后台提炼失败只影响本次记忆写入，不得把已成功完成的 Chat Run 改成失败。
+
 - `memory_read`：读取当前绑定记忆文件的完整 Markdown 内容。
 - `memory_add`：向当前绑定记忆文件的指定章节添加一条记忆。
 - `memory_update`：精确替换当前绑定记忆文件中的某一条或某一段文本。

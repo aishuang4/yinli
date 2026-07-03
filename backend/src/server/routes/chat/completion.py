@@ -1,5 +1,6 @@
 """Chat 运行完成/失败后的持久化与收尾。"""
 
+import asyncio
 from typing import AsyncGenerator
 
 from src.memory.node_persist import MemoryNodePersistInput, persist_completed_run_memory_node
@@ -170,19 +171,16 @@ async def finalize_successful_leader_run(
                 "skillIds": [item.id for item in completed_skill_runs],
             },
         )
-        try:
-            await reflect_completed_run_memory_with_agents(
-                MemoryReflectionInput(
-                    session_id=session_id,
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    user_message=user_message,
-                    assistant_text=assistant_text,
-                ),
-                model_name=model_name,
-            )
-        except Exception:
-            pass
+        _schedule_memory_reflection(
+            MemoryReflectionInput(
+                session_id=session_id,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                user_message=user_message,
+                assistant_text=assistant_text,
+            ),
+            model_name=model_name,
+        )
         try:
             persist_completed_run_memory_node(
                 MemoryNodePersistInput(
@@ -240,6 +238,29 @@ async def finalize_successful_leader_run(
                 "teamName": team_name,
             },
         )
+
+
+def _schedule_memory_reflection(item: MemoryReflectionInput, *, model_name: str) -> None:
+    """后台触发 Markdown 记忆提炼，不阻塞 Chat 成功收尾。"""
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(
+            _run_memory_reflection_background(item, model_name=model_name),
+            name=f"memory-reflection-{item.session_id}-{item.agent_id}",
+        )
+    except RuntimeError:
+        # 极端情况下没有运行中的事件循环时，直接跳过后台记忆提炼，不能影响主流程。
+        pass
+
+
+async def _run_memory_reflection_background(item: MemoryReflectionInput, *, model_name: str) -> None:
+    """后台运行三路记忆提炼 Agent，异常只记录为内部失败。"""
+
+    try:
+        await reflect_completed_run_memory_with_agents(item, model_name=model_name)
+    except Exception:
+        pass
 
 
 async def finalize_failed_leader_run(
