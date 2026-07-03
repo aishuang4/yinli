@@ -28,8 +28,8 @@ MemorySection = Literal[
 ]
 MemoryOperation = Literal["append", "update", "delete", "skip"]
 
-MEMORY_REFLECTION_PROMPT_VERSION = "2026-07-03-v1"
-SKILL_EVOLUTION_PROMPT_VERSION = "2026-07-03-v1"
+MEMORY_REFLECTION_PROMPT_VERSION = "2026-07-03-v2"
+SKILL_EVOLUTION_PROMPT_VERSION = "2026-07-03-v2"
 
 
 class MemoryExtractionItem(BaseModel):
@@ -225,45 +225,47 @@ def _memory_agent_identity(scope: str) -> tuple[str, str]:
 
 def _scope_policy(scope: str) -> str:
     if scope == "agent":
-        return "Only edit agent memory: behavior, corrections, working style, persona, and boundaries for this specific agent."
+        return "只编辑 agent memory：记录这个具体 Agent 的行为规则、纠正、工作方式、persona 和能力边界。"
     if scope == "global_preference":
-        return "Only edit global preference memory: workspace-wide rules useful across agents, teams, or projects."
-    return "Only edit user memory: stable user preferences, profile, communication habits, and cross-agent user facts."
+        return "只编辑 global preference memory：记录对多个 Agent、Team 或项目都有效的工作台全局规则。"
+    return "只编辑 user memory：记录用户稳定偏好、用户画像、沟通习惯和跨 Agent 有用的用户事实。"
 
 
 def _build_memory_reflection_system_prompt(scope: str) -> str:
     _, name = _memory_agent_identity(scope)
     return "\n".join([
-        f"You are {name}, a background infrastructure agent.",
-        "Return only one compact valid JSON object. Do not call tools. Do not write markdown fences.",
-        "You are editing exactly one bound Markdown memory file.",
+        f"你是 {name}，一个后台基础设施 Agent。",
+        "只返回一个紧凑、合法的 JSON 对象。不要写 markdown fence。",
+        "你正在编辑且只能编辑一个已绑定的 Markdown 记忆文件。",
         _scope_policy(scope),
-        "Extract only durable, useful memory from the completed turn.",
-        "Never store secrets, tokens, passwords, private keys, cookies, one-time codes, or large copied content.",
-        "Do not store tool calls, observations, chain-of-thought, or implementation noise.",
-        "Before changing memory, call memory_read and inspect the current file content.",
-        "Use memory_add to add a new memory, memory_update to precisely replace an existing item, and memory_delete to remove an obsolete item.",
-        "The memory tools are already bound to one file path; never ask for or invent another path.",
-        "Do not edit if the new turn is temporary, duplicate, low confidence, or unrelated to the bound memory scope.",
-        "A memory must be useful in future runs and must not conflict with the user's latest instruction.",
-        f"The only allowed scope for this agent is: {scope}.",
-        "Sections: Stable Preferences, Stable Behaviors, Profile, Workspace Rules, Corrections, Negative Rules.",
-        "If you used memory tools successfully, return a minimal JSON summary after tool calls.",
+        "所有新增、修改后的记忆内容、note、reason、摘要和 Skill 草稿都必须使用中文记录。",
+        "英文技术名词、代码标识符、文件名、API 名称、环境变量可以保留原文，但解释性文本必须是中文。",
+        "只提取本轮已完成对话中长期稳定、未来有用的信息。",
+        "禁止记录 secrets、tokens、passwords、private keys、cookies、一次性验证码或大段复制内容。",
+        "不要记录工具调用过程、observation、chain-of-thought 或实现噪音。",
+        "修改记忆前必须先调用 memory_read 查看当前文件内容。",
+        "使用 memory_add 添加新记忆，使用 memory_update 精确替换已有条目，使用 memory_delete 删除过期条目。",
+        "这些 memory tools 已绑定唯一文件路径；禁止要求、猜测或编造其他路径。",
+        "如果本轮信息是临时的、重复的、低置信度的，或与当前绑定 scope 无关，不要编辑。",
+        "记忆必须对未来运行有帮助，并且不能与用户最新指令冲突。",
+        f"这个 Agent 唯一允许的 scope 是：{scope}。",
+        "可用章节：Stable Preferences, Stable Behaviors, Profile, Workspace Rules, Corrections, Negative Rules。",
+        "如果已经成功使用 memory tools，工具调用后只返回一个最小 JSON 摘要。",
         "Schema:",
         json.dumps(
             {
                 "shouldWrite": True,
-                "reason": "short Chinese reason",
+                "reason": "简短中文理由",
                 "memories": [
                     {
                         "scope": "user | agent | global_preference",
                         "section": "Stable Preferences | Stable Behaviors | Profile | Workspace Rules | Corrections | Negative Rules",
                         "operation": "append | update | delete | skip",
-                        "note": "one concise Chinese memory sentence",
-                        "exactText": "text changed or deleted when applicable",
-                        "replacementText": "replacement when applicable",
+                        "note": "一条简短中文记忆",
+                        "exactText": "需要修改或删除的原文，如适用",
+                        "replacementText": "中文替换文本，如适用",
                         "confidence": 0.0,
-                        "reason": "why this is durable",
+                        "reason": "为什么这是长期稳定记忆",
                     },
                 ],
             },
@@ -295,6 +297,8 @@ def _build_memory_reflection_user_prompt(
             "skipIfTemporary": True,
             "skipIfSensitive": True,
             "mustUseBoundMemoryToolsForWrite": True,
+            "outputLanguage": "zh-CN",
+            "notesAndReasonsMustBeChinese": True,
         },
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -302,25 +306,27 @@ def _build_memory_reflection_user_prompt(
 
 def _build_skill_evolution_system_prompt() -> str:
     return "\n".join([
-        "You are SkillEvolutionAgent, a background infrastructure agent.",
-        "Return only one compact valid JSON object. Do not call tools. Do not write markdown fences.",
-        "Decide whether the completed work should become a reusable standard Skill.",
-        "A reusable Skill needs a repeatable goal, trigger, steps, constraints, and output shape.",
-        "Reject one-off chat, private customer data, secrets, temporary paths, incomplete work, and project-specific details that cannot generalize.",
-        "The output is a Skill draft only. Do not bind it to any agent.",
-        "Prefer calling skill_draft_propose to submit the candidate; the tool does not register or bind the Skill.",
+        "你是 SkillEvolutionAgent，一个后台基础设施 Agent。",
+        "只返回一个紧凑、合法的 JSON 对象。不要写 markdown fence。",
+        "判断本次已完成工作是否应该沉淀为可复用的标准 Skill。",
+        "所有 Skill 草稿字段必须使用中文记录：name、description、trigger、content、reason 都必须是中文。",
+        "英文技术名词、代码标识符、文件名、API 名称可以保留原文，但说明性文字必须是中文。",
+        "可复用 Skill 必须有可重复目标、触发条件、步骤、约束和输出形态。",
+        "拒绝一次性闲聊、私有客户数据、密钥、临时路径、未完成工作，以及无法泛化的项目细节。",
+        "输出只能是 Skill 草稿，不要绑定到任何 Agent。",
+        "优先调用 skill_draft_propose 提交候选；该工具不会注册 Skill，也不会绑定 Agent。",
         "Schema:",
         json.dumps(
             {
                 "reusable": True,
                 "confidence": 0.0,
-                "reason": "short Chinese reason",
+                "reason": "简短中文理由",
                 "draft": {
-                    "name": "short Skill name",
-                    "description": "what this Skill does",
-                    "trigger": "when to use this Skill",
-                    "content": "SKILL.md style concise instructions",
-                    "tags": ["memory", "example"],
+                    "name": "简短中文 Skill 名称",
+                    "description": "这个 Skill 做什么",
+                    "trigger": "什么时候使用这个 Skill",
+                    "content": "中文 SKILL.md 风格操作说明",
+                    "tags": ["memory", "hooks"],
                 },
             },
             ensure_ascii=False,
@@ -344,6 +350,8 @@ def _build_skill_evolution_user_prompt(
             "doNotRegister": True,
             "doNotBindToAgent": True,
             "maxContentChars": 8000,
+            "outputLanguage": "zh-CN",
+            "skillDraftMustBeChinese": True,
         },
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

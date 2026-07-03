@@ -95,6 +95,7 @@ class MemoryAdd(_BoundMemoryTool):
     description: str = (
         "向当前绑定的 Markdown 记忆文件添加一条记忆。"
         "只能追加到指定 section，不能操作其他文件。"
+        "note 和 reason 必须使用中文记录，必要技术标识符可保留原文。"
     )
     input_schema: dict[str, Any] = {
         "type": "object",
@@ -113,8 +114,8 @@ class MemoryAdd(_BoundMemoryTool):
                 ],
                 "description": "要追加到的 Markdown 一级章节。",
             },
-            "note": {"type": "string", "description": "一条简短、稳定、可复用的记忆。"},
-            "reason": {"type": "string", "description": "添加原因。"},
+            "note": {"type": "string", "description": "一条简短、稳定、可复用的中文记忆。"},
+            "reason": {"type": "string", "description": "中文添加原因。"},
         },
         "required": ["section", "note"],
     }
@@ -156,13 +157,14 @@ class MemoryUpdate(_BoundMemoryTool):
     description: str = (
         "精确修改当前绑定 Markdown 记忆文件中的一条或一段记忆。"
         "必须提供文件里已存在的 exactText，工具只做一次精确替换。"
+        "replacementText 和 reason 必须使用中文记录，必要技术标识符可保留原文。"
     )
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
             "exactText": {"type": "string", "description": "文件中已经存在、需要替换的完整文本。"},
-            "replacementText": {"type": "string", "description": "替换后的文本。"},
-            "reason": {"type": "string", "description": "修改原因。"},
+            "replacementText": {"type": "string", "description": "替换后的中文文本。"},
+            "reason": {"type": "string", "description": "中文修改原因。"},
         },
         "required": ["exactText", "replacementText"],
     }
@@ -205,12 +207,13 @@ class MemoryDelete(_BoundMemoryTool):
     description: str = (
         "从当前绑定 Markdown 记忆文件删除一条或一段记忆。"
         "必须提供文件里已存在的 exactText，工具只删除一次精确匹配。"
+        "reason 必须使用中文记录。"
     )
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
             "exactText": {"type": "string", "description": "文件中已经存在、需要删除的完整文本。"},
-            "reason": {"type": "string", "description": "删除原因。"},
+            "reason": {"type": "string", "description": "中文删除原因。"},
         },
         "required": ["exactText"],
     }
@@ -250,17 +253,18 @@ class SkillDraftPropose(ToolBase):
     description: str = (
         "提交一个标准 Skill 草稿候选。该工具不会注册 Skill，"
         "也不会把 Skill 自动绑定到任何 Agent。"
+        "reason、name、description、trigger、content 必须使用中文记录，必要技术标识符可保留原文。"
     )
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
             "reusable": {"type": "boolean", "description": "本次工作是否值得沉淀为 Skill。"},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-            "reason": {"type": "string", "description": "判断理由。"},
-            "name": {"type": "string", "description": "Skill 名称。"},
-            "description": {"type": "string", "description": "Skill 描述。"},
-            "trigger": {"type": "string", "description": "触发条件。"},
-            "content": {"type": "string", "description": "SKILL.md 风格操作说明。"},
+            "reason": {"type": "string", "description": "中文判断理由。"},
+            "name": {"type": "string", "description": "中文 Skill 名称。"},
+            "description": {"type": "string", "description": "中文 Skill 描述。"},
+            "trigger": {"type": "string", "description": "中文触发条件。"},
+            "content": {"type": "string", "description": "中文 SKILL.md 风格操作说明。"},
             "tags": {"type": "array", "items": {"type": "string"}},
         },
         "required": ["reusable", "confidence", "reason"],
