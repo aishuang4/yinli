@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 
 from src.memory.extraction_agents import (
-    MemoryExtractionItem,
     MemoryReflectionAgentPayload,
     SkillDraftPayload,
     SkillEvolutionAgentPayload,
@@ -137,18 +136,17 @@ def test_reflection_with_agents_writes_model_memories(tmp_path, monkeypatch):
 
     async def fake_memory_agent(**kwargs):
         captured.update(kwargs)
+        memory_file = kwargs["memory_file"]
+        add_tool = memory_file.tools()[1]
+        await add_tool(
+            section="Workspace Rules",
+            note="整个工作台默认通过 hooks 和 tools 接入记忆，不新增 memory runtime.kind。",
+            reason="全局架构规则。",
+        )
         return MemoryReflectionAgentPayload(
             shouldWrite=True,
             reason="用户明确给出长期规则。",
-            memories=[
-                MemoryExtractionItem(
-                    scope="global_preference",
-                    section="Workspace Rules",
-                    note="整个工作台默认通过 hooks 和 tools 接入记忆，不新增 memory runtime.kind。",
-                    confidence=0.92,
-                    reason="全局架构规则。",
-                ),
-            ],
+            memories=[],
         )
 
     async def fake_skill_agent(**kwargs):
@@ -175,7 +173,8 @@ def test_reflection_with_agents_writes_model_memories(tmp_path, monkeypatch):
 
     assert result.ignored_reason == ""
     assert result.updates[0].scope == "global_preference"
-    assert "已有规则：不要恢复旧记忆模块。" in captured["existing_memory_context"]
+    assert captured["memory_file"].scope == "global_preference"
+    assert captured["memory_file"].file_path.endswith("/global/default.md")
     content = (tmp_path / "memory" / "global" / "default.md").read_text(encoding="utf-8")
     assert "不新增 memory runtime.kind" in content
 

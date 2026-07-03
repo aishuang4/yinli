@@ -437,19 +437,21 @@ Hooks 负责被动生命周期事件，只做“运行前查询注入、运行�
 
 ### 提炼 Agent 与记忆操作
 
-`MemoryReflectionHook` 可以调用专用基础设施 Agent 完成提炼，但该 Agent 不直接持有真实写文件工具。运行时给它配置专用内部工具：
+`MemoryReflectionHook` 可以调用专用基础设施 Agent 完成提炼。运行时给它配置专用内部工具，并把工具绑定到某一个具体 Markdown 记忆文件；模型不能传入任意路径，也不能越权操作其他记忆文件。
 
-- `memory_context_read`：读取摘要级现有 user / agent / global Markdown 记忆，用于判断是否重复、是否冲突、应该写入哪个 scope。
-- `memory_operation_propose`：提交受控记忆操作候选，例如 append / skip；工具本身不写 Markdown。
+- `memory_read`：读取当前绑定记忆文件的完整 Markdown 内容。
+- `memory_add`：向当前绑定记忆文件的指定章节添加一条记忆。
+- `memory_update`：精确替换当前绑定记忆文件中的某一条或某一段文本。
+- `memory_delete`：精确删除当前绑定记忆文件中的某一条或某一段文本。
 - `skill_draft_propose`：提交标准 Skill 草稿候选；工具本身不注册 Skill，也不绑定 Agent。
 
-这些工具只给系统提炼 Agent 使用，不默认暴露给普通业务 Agent。后端 `MemoryPolicyEngine` / Markdown service 负责校验、去重、脱敏和真正写入。
+这些工具只给系统提炼 Agent 使用，不默认暴露给普通业务 Agent。后端在启动提炼 Agent 前选择本次允许操作的 memory scope，并注入该 scope 对应的文件地址和绑定工具。若一次 Run 需要处理 user / agent / global 多个文件，应由后端分别以不同绑定文件启动提炼 Agent，而不是给模型自由路径访问。
 
-提炼 Agent 通过工具或 JSON 输出受控记忆操作协议，MVP 先支持：
+工具操作仍需遵循受控记忆操作语义：
 
 ```json
 {
-  "operation": "append | skip",
+  "operation": "append | update | delete | skip",
   "scope": "user | agent | global_preference",
   "section": "Stable Preferences | Stable Behaviors | Profile | Workspace Rules | Corrections | Negative Rules",
   "note": "一条简短长期记忆",

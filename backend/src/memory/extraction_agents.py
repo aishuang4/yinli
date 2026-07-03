@@ -15,7 +15,7 @@ from agentscope.permission import PermissionMode
 from pydantic import BaseModel, Field
 
 from src.agents.runtime_types import AgentGuardrails, AgentModelOptions, RuntimeToolScope
-from src.tools.memory_reflection import MemoryContextRead, MemoryOperationPropose, SkillDraftPropose
+from src.tools.memory_reflection import MemoryFileToolSet, SkillDraftPropose
 
 MemoryScope = Literal["user", "agent", "global_preference"]
 MemorySection = Literal[
@@ -26,7 +26,7 @@ MemorySection = Literal[
     "Corrections",
     "Negative Rules",
 ]
-MemoryOperation = Literal["append", "skip"]
+MemoryOperation = Literal["append", "update", "delete", "skip"]
 
 MEMORY_REFLECTION_PROMPT_VERSION = "2026-07-03-v1"
 SKILL_EVOLUTION_PROMPT_VERSION = "2026-07-03-v1"
@@ -37,10 +37,14 @@ class MemoryExtractionItem(BaseModel):
 
     operation: MemoryOperation = "append"
     scope: MemoryScope
-    section: MemorySection
+    section: MemorySection = "Stable Preferences"
     note: str = Field(default="", max_length=600)
+    exact_text: str = Field(default="", alias="exactText", max_length=600)
+    replacement_text: str = Field(default="", alias="replacementText", max_length=600)
     confidence: float = Field(default=0.5, ge=0, le=1)
     reason: str = Field(default="", max_length=300)
+
+    model_config = {"populate_by_name": True, "extra": "ignore"}
 
 
 class MemoryReflectionAgentPayload(BaseModel):
@@ -80,15 +84,20 @@ async def run_memory_reflection_agent(
     assistant_text: str,
     agent_id: str,
     agent_name: str,
-    existing_memory_context: str = "",
+    memory_file: MemoryFileToolSet,
     model_name: str,
     fallback_names: list[str] | None = None,
+    invocation_key: str = "",
 ) -> MemoryReflectionAgentPayload | None:
     """调用 MemoryReflectionAgent 提炼 Markdown 记忆候选。"""
 
-    operation_tool = MemoryOperationPropose()
     text = await _run_json_agent(
-        agent_id=_system_agent_id("memory-reflection", model_name, fallback_names or [], MEMORY_REFLECTION_PROMPT_VERSION),
+        agent_id=_system_agent_id(
+            "memory-reflection",
+            model_name,
+            fallback_names or [],
+            f"{MEMORY_REFLECTION_PROMPT_VERSION}:{memory_file.scope}:{memory_file.owner_id}:{invocation_key}",
+        ),
         name="MemoryReflectionAgent",
         system_prompt=_build_memory_reflection_system_prompt(),
         user_prompt=_build_memory_reflection_user_prompt(
@@ -96,21 +105,18 @@ async def run_memory_reflection_agent(
             assistant_text=assistant_text,
             agent_id=agent_id,
             agent_name=agent_name,
-            existing_memory_context=existing_memory_context,
+            memory_file=memory_file,
         ),
         model_name=model_name,
         fallback_names=fallback_names or [],
         max_tokens=1600,
-        extra_tools=[
-            MemoryContextRead(existing_memory_context),
-            operation_tool,
-        ],
+        extra_tools=memory_file.tools(),
     )
-    if operation_tool.operations:
+    if memory_file.operations:
         return MemoryReflectionAgentPayload.model_validate({
             "shouldWrite": True,
-            "reason": "MemoryReflectionAgent submitted operations through memory_operation_propose.",
-            "memories": operation_tool.operations,
+            "reason": "MemoryReflectionAgent updated the bound memory file with memory tools.",
+            "memories": memory_file.operations,
         })
     data = _extract_json_object(text)
     if not data:
@@ -126,12 +132,18 @@ async def run_skill_evolution_agent(
     agent_name: str,
     model_name: str,
     fallback_names: list[str] | None = None,
+    invocation_key: str = "",
 ) -> SkillEvolutionAgentPayload | None:
     """调用 SkillEvolutionAgent 判断本次工作是否值得沉淀为标准 Skill 草稿。"""
 
     draft_tool = SkillDraftPropose()
     text = await _run_json_agent(
-        agent_id=_system_agent_id("skill-evolution", model_name, fallback_names or [], SKILL_EVOLUTION_PROMPT_VERSION),
+        agent_id=_system_agent_id(
+            "skill-evolution",
+            model_name,
+            fallback_names or [],
+            f"{SKILL_EVOLUTION_PROMPT_VERSION}:{invocation_key}",
+        ),
         name="SkillEvolutionAgent",
         system_prompt=_build_skill_evolution_system_prompt(),
         user_prompt=_build_skill_evolution_user_prompt(
@@ -206,18 +218,21 @@ def _build_memory_reflection_system_prompt() -> str:
     return "\n".join([
         "You are MemoryReflectionAgent, a background infrastructure agent.",
         "Return only one compact valid JSON object. Do not call tools. Do not write markdown fences.",
+        "You are editing exactly one bound Markdown memory file.",
         "Extract only durable, useful memory from the completed turn.",
         "Never store secrets, tokens, passwords, private keys, cookies, one-time codes, or large copied content.",
         "Do not store tool calls, observations, chain-of-thought, or implementation noise.",
-        "Use memory_context_read when you need current memory for dedupe and conflict checks.",
-        "Use memory_operation_propose to submit each memory operation candidate.",
-        "The tool does not write files; the backend validates and applies accepted candidates.",
+        "Before changing memory, call memory_read and inspect the current file content.",
+        "Use memory_add to add a new memory, memory_update to precisely replace an existing item, and memory_delete to remove an obsolete item.",
+        "The memory tools are already bound to one file path; never ask for or invent another path.",
+        "Do not edit if the new turn is temporary, duplicate, low confidence, or unrelated to the bound memory scope.",
         "A memory must be useful in future runs and must not conflict with the user's latest instruction.",
-        "Scopes:",
+        "Bound scopes:",
         "- user: stable user preference/profile useful across agents.",
         "- agent: behavior, correction, or boundary for this specific agent.",
         "- global_preference: workspace-wide rule useful across agents or teams.",
         "Sections: Stable Preferences, Stable Behaviors, Profile, Workspace Rules, Corrections, Negative Rules.",
+        "If you used memory tools successfully, return a minimal JSON summary after tool calls.",
         "Schema:",
         json.dumps(
             {
@@ -227,8 +242,10 @@ def _build_memory_reflection_system_prompt() -> str:
                     {
                         "scope": "user | agent | global_preference",
                         "section": "Stable Preferences | Stable Behaviors | Profile | Workspace Rules | Corrections | Negative Rules",
-                        "operation": "append | skip",
+                        "operation": "append | update | delete | skip",
                         "note": "one concise Chinese memory sentence",
+                        "exactText": "text changed or deleted when applicable",
+                        "replacementText": "replacement when applicable",
                         "confidence": 0.0,
                         "reason": "why this is durable",
                     },
@@ -245,18 +262,23 @@ def _build_memory_reflection_user_prompt(
     assistant_text: str,
     agent_id: str,
     agent_name: str,
-    existing_memory_context: str,
+    memory_file: MemoryFileToolSet,
 ) -> str:
     payload = {
         "agent": {"id": agent_id, "name": agent_name},
-        "existingMemoryContext": existing_memory_context,
+        "boundMemoryFile": {
+            "scope": memory_file.scope,
+            "ownerId": memory_file.owner_id,
+            "filePath": memory_file.file_path,
+        },
         "userMessage": user_message,
         "assistantFinalOutput": assistant_text,
         "policy": {
             "markdownOnly": True,
-            "maxMemories": 4,
+            "maxOperations": 4,
             "skipIfTemporary": True,
             "skipIfSensitive": True,
+            "mustUseBoundMemoryToolsForWrite": True,
         },
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

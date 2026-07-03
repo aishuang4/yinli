@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from hashlib import sha256
 from typing import Literal
 
 from src.memory.extraction_agents import (
@@ -16,6 +17,7 @@ from src.memory.extraction_agents import (
     run_skill_evolution_agent,
 )
 from src.memory.markdown_store import MarkdownMemoryStore
+from src.tools.memory_reflection import MemoryFileToolSet
 
 MemoryScope = Literal["user", "agent", "global_preference"]
 MemorySection = Literal[
@@ -96,6 +98,7 @@ class MemoryMarkdownUpdate:
     section: str
     note: str
     path: str
+    operation: str = "append"
 
 
 @dataclass(frozen=True)
@@ -153,32 +156,39 @@ async def reflect_completed_run_memory_with_agents(
     updates: list[MemoryMarkdownUpdate] = []
     memory_reason = ""
     if _has_long_term_intent(user_message):
-        try:
-            payload = await run_memory_reflection_agent(
-                user_message=user_message,
-                assistant_text=assistant_text,
-                agent_id=item.agent_id,
-                agent_name=item.agent_name,
-                existing_memory_context=_build_existing_memory_context(memory_store, item),
-                model_name=model_name,
-                fallback_names=fallback_names or [],
-            )
-        except Exception:
-            payload = None
-        if payload and payload.should_write:
-            for memory in payload.memories[:4]:
-                if memory.operation == "skip":
-                    continue
-                update = _append_note(
-                    memory_store,
-                    memory.scope,
-                    item,
-                    _safe_section(memory.section, memory.scope),
-                    _build_note(memory.note, item),
+        for scope in _candidate_memory_scopes(user_message):
+            memory_file = _build_memory_file_tool_set(memory_store, item, scope)
+            try:
+                payload = await run_memory_reflection_agent(
+                    user_message=user_message,
+                    assistant_text=assistant_text,
+                    agent_id=item.agent_id,
+                    agent_name=item.agent_name,
+                    memory_file=memory_file,
+                    model_name=model_name,
+                    fallback_names=fallback_names or [],
+                    invocation_key=_reflection_invocation_key(item, scope),
                 )
-                if update:
-                    updates.append(update)
-        memory_reason = payload.reason if payload else ""
+            except Exception:
+                payload = None
+            if memory_file.operations:
+                updates.extend(_updates_from_memory_file_operations(memory_file.operations))
+                memory_reason = payload.reason if payload else memory_reason
+                continue
+            if payload and payload.should_write:
+                for memory in payload.memories[:4]:
+                    if memory.operation != "append":
+                        continue
+                    update = _append_note(
+                        memory_store,
+                        scope,
+                        item,
+                        _safe_section(memory.section, scope),
+                        _build_note(memory.note, item),
+                    )
+                    if update:
+                        updates.append(update)
+            memory_reason = payload.reason if payload else memory_reason
         if not updates:
             fallback = reflect_completed_run_memory(item, store=memory_store)
             updates.extend(fallback.updates)
@@ -194,6 +204,7 @@ async def reflect_completed_run_memory_with_agents(
                 agent_name=item.agent_name,
                 model_name=model_name,
                 fallback_names=fallback_names or [],
+                invocation_key=_reflection_invocation_key(item, "skill"),
             )
         except Exception:
             skill_candidate = None
@@ -294,6 +305,95 @@ def _append_note(
     )
 
 
+def _candidate_memory_scopes(text: str) -> list[MemoryScope]:
+    lowered = text.lower()
+    scopes: list[MemoryScope] = []
+    if any(hint in lowered for hint in _GLOBAL_HINTS):
+        scopes.append("global_preference")
+    if any(hint in lowered for hint in _AGENT_HINTS):
+        scopes.append("agent")
+    if not scopes:
+        scopes.append("user")
+    return scopes
+
+
+def _build_memory_file_tool_set(
+    store: MarkdownMemoryStore,
+    item: MemoryReflectionInput,
+    scope: MemoryScope,
+) -> MemoryFileToolSet:
+    if scope == "global_preference":
+        doc = store.read_global_memory(item.workspace_id)
+
+        def read_content() -> str:
+            return store.read_global_memory(item.workspace_id).content
+
+        def write_content(content: str) -> None:
+            store.write_global_memory(item.workspace_id, content)
+
+    elif scope == "agent":
+        doc = store.read_agent_memory(item.agent_id)
+
+        def read_content() -> str:
+            return store.read_agent_memory(item.agent_id).content
+
+        def write_content(content: str) -> None:
+            store.write_agent_memory(item.agent_id, content)
+
+    else:
+        doc = store.read_user_memory(item.user_id)
+
+        def read_content() -> str:
+            return store.read_user_memory(item.user_id).content
+
+        def write_content(content: str) -> None:
+            store.write_user_memory(item.user_id, content)
+
+    return MemoryFileToolSet(
+        scope=scope,
+        owner_id=doc.owner_id,
+        file_path=doc.path,
+        read_content=read_content,
+        write_content=write_content,
+    )
+
+
+def _updates_from_memory_file_operations(operations: list[dict]) -> list[MemoryMarkdownUpdate]:
+    updates = []
+    for operation in operations:
+        op = str(operation.get("operation") or "append")
+        note = (
+            str(operation.get("note") or "")
+            or str(operation.get("replacementText") or "")
+            or str(operation.get("exactText") or "")
+        )
+        updates.append(
+            MemoryMarkdownUpdate(
+                scope=str(operation.get("scope") or "user"),  # type: ignore[arg-type]
+                owner_id=str(operation.get("ownerId") or ""),
+                section=str(operation.get("section") or ""),
+                note=note,
+                path=str(operation.get("filePath") or ""),
+                operation=op,
+            ),
+        )
+    return updates
+
+
+def _reflection_invocation_key(item: MemoryReflectionInput, target: str) -> str:
+    raw = "|".join([
+        item.session_id,
+        item.source_run_id,
+        item.source_message_id,
+        item.agent_id,
+        item.user_id,
+        item.workspace_id,
+        target,
+        item.user_message[:160],
+    ])
+    return sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def _insert_note_into_section(content: str, section: str, note: str) -> str:
     if _normalized_note_text(note) in _normalized_note_text(content):
         return content
@@ -353,61 +453,3 @@ def _looks_like_reusable_work(user_message: str, assistant_text: str) -> bool:
     )
     completion_markers = ("完成", "已", "done", "implemented", "added", "通过", "测试")
     return any(marker in text for marker in reusable_markers) and any(marker in text for marker in completion_markers)
-
-
-def _build_existing_memory_context(store: MarkdownMemoryStore, item: MemoryReflectionInput) -> str:
-    """给提炼 Agent 的摘要级现有记忆上下文，用于去重和冲突判断。"""
-
-    sections = []
-    for label, content in [
-        ("Global preference memory", store.read_global_memory(item.workspace_id).content),
-        ("User memory", store.read_user_memory(item.user_id).content),
-        ("Agent memory", store.read_agent_memory(item.agent_id).content),
-    ]:
-        extracted = _extract_markdown_sections_for_reflection(content)
-        if extracted:
-            sections.append(f"{label}:\n{extracted}")
-    return _trim("\n\n".join(sections), 4000)
-
-
-def _extract_markdown_sections_for_reflection(content: str) -> str:
-    parsed = _parse_markdown_sections(content)
-    parts = []
-    for title in (
-        "Summary",
-        "Stable Preferences",
-        "Stable Behaviors",
-        "Profile",
-        "Workspace Rules",
-        "Corrections",
-        "Negative Rules",
-    ):
-        text = _strip_markdown_comments(parsed.get(title, "")).strip()
-        if text:
-            parts.append(f"## {title}\n{text}")
-    return "\n\n".join(parts)
-
-
-def _parse_markdown_sections(content: str) -> dict[str, str]:
-    sections: dict[str, list[str]] = {}
-    current = ""
-    for line in content.splitlines():
-        if line.startswith("# "):
-            current = line[2:].strip()
-            sections.setdefault(current, [])
-            continue
-        if current:
-            sections[current].append(line)
-    return {
-        title: "\n".join(lines).strip()
-        for title, lines in sections.items()
-    }
-
-
-def _strip_markdown_comments(content: str) -> str:
-    lines = [
-        line
-        for line in content.splitlines()
-        if "<!--" not in line and "-->" not in line
-    ]
-    return "\n".join(lines)
