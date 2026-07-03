@@ -146,7 +146,6 @@ def ensure_db() -> None:
                     tags TEXT NOT NULL,
                     callable_agents TEXT NOT NULL,
                     max_depth INTEGER NOT NULL,
-                    memory_enabled INTEGER NOT NULL DEFAULT 1,
                     plan_config TEXT NOT NULL DEFAULT '{}',
                     guardrails TEXT NOT NULL,
                     status TEXT NOT NULL,
@@ -358,43 +357,6 @@ def ensure_db() -> None:
                     ON chat_runs(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_chat_run_events_order
                     ON chat_run_events(run_id, sort_order, created_at);
-                CREATE TABLE IF NOT EXISTS memory_facts (
-                    id TEXT PRIMARY KEY,
-                    agent_id TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    tags TEXT NOT NULL,
-                    pinned INTEGER NOT NULL DEFAULT 0,
-                    status TEXT NOT NULL DEFAULT 'active',
-                    access_count INTEGER NOT NULL DEFAULT 0,
-                    last_accessed_at TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS memory_events (
-                    id TEXT PRIMARY KEY,
-                    agent_id TEXT NOT NULL,
-                    type TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    session_id TEXT,
-                    metadata TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS memory_candidates (
-                    id TEXT PRIMARY KEY,
-                    agent_id TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    tags TEXT NOT NULL,
-                    category TEXT NOT NULL DEFAULT 'general',
-                    confidence REAL NOT NULL DEFAULT 0,
-                    source_session_id TEXT,
-                    status TEXT NOT NULL,
-                    reject_reason TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS skill_runs (
                     id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
@@ -418,22 +380,6 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_messages", "runtime_events", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "plan_runs", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "display_snapshot", "TEXT NOT NULL DEFAULT '{\"version\":2,\"blocks\":[]}'")
-            _ensure_column(conn, "memory_facts", "pinned", "INTEGER NOT NULL DEFAULT 0")
-            _ensure_column(conn, "memory_facts", "status", "TEXT NOT NULL DEFAULT 'active'")
-            _ensure_column(conn, "memory_facts", "access_count", "INTEGER NOT NULL DEFAULT 0")
-            _ensure_column(conn, "memory_facts", "last_accessed_at", "TEXT")
-            _ensure_column(conn, "memory_candidates", "category", "TEXT NOT NULL DEFAULT 'general'")
-            _ensure_column(conn, "memory_candidates", "confidence", "REAL NOT NULL DEFAULT 0")
-            _ensure_column(conn, "memory_candidates", "reject_reason", "TEXT NOT NULL DEFAULT ''")
-            columns = {
-                row["name"]
-                for row in conn.execute("PRAGMA table_info(agents)").fetchall()
-            }
-            if "memory_enabled" not in columns:
-                conn.execute(
-                    "ALTER TABLE agents ADD COLUMN memory_enabled INTEGER NOT NULL DEFAULT 1"
-                )
-            conn.commit()
             columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(agents)").fetchall()
@@ -624,7 +570,6 @@ def list_agents() -> list[dict[str, Any]]:
             "tags": _loads(row["tags"], []),
             "callableAgents": _loads(row["callable_agents"], []),
             "maxDepth": row["max_depth"],
-            "memoryEnabled": bool(row["memory_enabled"]),
             "planConfig": (
                 {**DEFAULT_PLAN_CONFIG, **plan_config}
                 if isinstance((plan_config := _loads(row["plan_config"], {})), dict)
@@ -651,10 +596,9 @@ def upsert_agent(data: dict[str, Any]) -> None:
             INSERT INTO agents(
                 id, name, avatar, description, system_prompt, model_config,
                 mcp_tools, knowledge_tools, skills, tags, callable_agents, max_depth,
-                memory_enabled, plan_config, guardrails, status, created_at,
-                updated_at
+                plan_config, guardrails, status, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name, avatar=excluded.avatar,
                 description=excluded.description, system_prompt=excluded.system_prompt,
@@ -662,7 +606,6 @@ def upsert_agent(data: dict[str, Any]) -> None:
                 knowledge_tools=excluded.knowledge_tools,
                 skills=excluded.skills, tags=excluded.tags,
                 callable_agents=excluded.callable_agents, max_depth=excluded.max_depth,
-                memory_enabled=excluded.memory_enabled,
                 plan_config=excluded.plan_config,
                 guardrails=excluded.guardrails, status=excluded.status,
                 updated_at=excluded.updated_at
@@ -674,7 +617,6 @@ def upsert_agent(data: dict[str, Any]) -> None:
                 _dumps(data.get("knowledgeTools", [])),
                 _dumps(data.get("skills", [])), _dumps(data.get("tags", [])),
                 _dumps(data.get("callableAgents", [])), data.get("maxDepth", 2),
-                1 if data.get("memoryEnabled", True) else 0,
                 _dumps(data.get("planConfig", DEFAULT_PLAN_CONFIG)),
                 _dumps(data.get("guardrails", {})), data.get("status", "idle"),
                 data.get("created_at") or _utc_now(), data.get("updated_at") or _utc_now(),
@@ -1634,199 +1576,6 @@ def _chat_run_from_row(row: sqlite3.Row, events: list[str], event_count: int | N
     }
 
 
-def load_agent_memory(agent_id: str) -> dict[str, Any] | None:
-    ensure_db()
-    with _lock, _connect() as conn:
-        facts = conn.execute(
-            """
-            SELECT * FROM memory_facts
-            WHERE agent_id = ?
-            ORDER BY pinned DESC, updated_at DESC, created_at ASC
-            """,
-            (agent_id,),
-        ).fetchall()
-        events = conn.execute(
-            "SELECT * FROM memory_events WHERE agent_id = ? ORDER BY created_at ASC",
-            (agent_id,),
-        ).fetchall()
-    if not facts and not events:
-        return None
-    updated_values = [row["updated_at"] for row in facts] + [row["created_at"] for row in events]
-    return {
-        "agent_id": agent_id,
-        "facts": [
-            {
-                "id": row["id"],
-                "title": row["title"],
-                "content": row["content"],
-                "tags": _loads(row["tags"], []),
-                "pinned": bool(row["pinned"]),
-                "status": row["status"] or "active",
-                "access_count": int(row["access_count"] or 0),
-                "last_accessed_at": row["last_accessed_at"],
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-            }
-            for row in facts
-        ],
-        "events": [
-            {
-                "id": row["id"],
-                "type": row["type"],
-                "title": row["title"],
-                "content": row["content"],
-                "session_id": row["session_id"],
-                "metadata": _loads(row["metadata"], {}),
-                "created_at": row["created_at"],
-            }
-            for row in events
-        ],
-        "updated_at": max(updated_values) if updated_values else _utc_now(),
-    }
-
-
-def save_agent_memory(data: dict[str, Any]) -> None:
-    ensure_db()
-    agent_id = data["agent_id"]
-    with _lock, _connect() as conn:
-        conn.execute("DELETE FROM memory_facts WHERE agent_id = ?", (agent_id,))
-        conn.execute("DELETE FROM memory_events WHERE agent_id = ?", (agent_id,))
-        conn.executemany(
-            """
-            INSERT INTO memory_facts (
-                id, agent_id, title, content, tags, pinned, status,
-                access_count, last_accessed_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    item["id"], agent_id, item["title"], item["content"],
-                    _dumps(item.get("tags", [])),
-                    1 if item.get("pinned") else 0,
-                    item.get("status") or "active",
-                    int(item.get("access_count") or 0),
-                    item.get("last_accessed_at"),
-                    item["created_at"],
-                    item["updated_at"],
-                )
-                for item in data.get("facts", [])
-            ],
-        )
-        conn.executemany(
-            "INSERT INTO memory_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                (
-                    item["id"], agent_id, item["type"], item["title"], item["content"],
-                    item.get("session_id"), _dumps(item.get("metadata", {})),
-                    item["created_at"],
-                )
-                for item in data.get("events", [])
-            ],
-        )
-        conn.commit()
-
-
-def list_memory_candidates(agent_id: str, status: str | None = None) -> list[dict[str, Any]]:
-    ensure_db()
-    query = "SELECT * FROM memory_candidates WHERE agent_id = ?"
-    params: list[Any] = [agent_id]
-    if status:
-        query += " AND status = ?"
-        params.append(status)
-    query += " ORDER BY created_at DESC"
-    with _lock, _connect() as conn:
-        rows = conn.execute(query, params).fetchall()
-    return [
-        {
-            "id": row["id"],
-            "agent_id": row["agent_id"],
-            "title": row["title"],
-            "content": row["content"],
-            "tags": _loads(row["tags"], []),
-            "category": row["category"] or "general",
-            "confidence": float(row["confidence"] or 0),
-            "source_session_id": row["source_session_id"],
-            "status": row["status"],
-            "reject_reason": row["reject_reason"] or "",
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        }
-        for row in rows
-    ]
-
-
-def upsert_memory_candidate(data: dict[str, Any]) -> None:
-    ensure_db()
-    with _lock, _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO memory_candidates (
-                id, agent_id, title, content, tags, category, confidence,
-                source_session_id, status, reject_reason, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                title=excluded.title, content=excluded.content,
-                tags=excluded.tags, category=excluded.category,
-                confidence=excluded.confidence,
-                source_session_id=excluded.source_session_id,
-                status=excluded.status, reject_reason=excluded.reject_reason,
-                updated_at=excluded.updated_at
-            """,
-            (
-                data["id"], data["agent_id"], data["title"], data["content"],
-                _dumps(data.get("tags", [])),
-                data.get("category") or "general",
-                float(data.get("confidence") or 0),
-                data.get("source_session_id"),
-                data.get("status", "pending"),
-                data.get("reject_reason") or "",
-                data.get("created_at") or _utc_now(),
-                data.get("updated_at") or _utc_now(),
-            ),
-        )
-        conn.commit()
-
-
-def update_memory_candidate_status(
-    agent_id: str,
-    candidate_id: str,
-    status: str,
-    reject_reason: str = "",
-) -> dict[str, Any] | None:
-    ensure_db()
-    now = _utc_now()
-    with _lock, _connect() as conn:
-        conn.execute(
-            """
-            UPDATE memory_candidates
-            SET status = ?, reject_reason = ?, updated_at = ?
-            WHERE agent_id = ? AND id = ?
-            """,
-            (status, reject_reason, now, agent_id, candidate_id),
-        )
-        row = conn.execute(
-            "SELECT * FROM memory_candidates WHERE agent_id = ? AND id = ?",
-            (agent_id, candidate_id),
-        ).fetchone()
-        conn.commit()
-    if row is None:
-        return None
-    return {
-        "id": row["id"],
-        "agent_id": row["agent_id"],
-        "title": row["title"],
-        "content": row["content"],
-        "tags": _loads(row["tags"], []),
-        "category": row["category"] or "general",
-        "confidence": float(row["confidence"] or 0),
-        "source_session_id": row["source_session_id"],
-        "status": row["status"],
-        "reject_reason": row["reject_reason"] or "",
-        "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        }
-
-
 def _row_to_plan(row: sqlite3.Row, steps: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {
         "id": row["id"],
@@ -2132,8 +1881,7 @@ def normalized_table_counts() -> dict[str, int]:
     ensure_db()
     tables = [
         "agents", "teams", "team_members", "mcp_servers", "skills",
-        "chat_sessions", "chat_messages", "memory_facts", "memory_events",
-        "memory_candidates",
+        "chat_sessions", "chat_messages",
     ]
     with _lock, _connect() as conn:
         return {

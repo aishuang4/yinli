@@ -897,13 +897,6 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
         elif runtime_type == "SANDBOX_FAILED":
             progress = 100
             current_stage = "沙盒运行失败"
-        elif runtime_type == "MEMORY_SUMMARY_STARTED":
-            progress = max(progress, 92)
-            current_stage = "正在总结记忆"
-        elif runtime_type == "MEMORY_SUMMARY_COMPLETED":
-            progress = max(progress, 96)
-            current_stage = "记忆总结完成"
-
         if scope in {"worker", "leader", "single", "single_agent"} and agent_name and str(data.get("status") or "") in {"running", "waiting"}:
             if agent_name not in active_actors:
                 active_actors.append(agent_name)

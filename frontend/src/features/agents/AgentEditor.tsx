@@ -182,7 +182,6 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
         tags: [...agent.tags],
         callableAgents: [...agent.callableAgents],
         maxDepth: agent.maxDepth,
-        memoryEnabled: agent.memoryEnabled,
         planConfig: { ...agent.planConfig },
         guardrails: { ...agent.guardrails },
       });

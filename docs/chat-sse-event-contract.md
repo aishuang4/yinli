@@ -289,7 +289,7 @@ Team 必须进入 `displaySnapshot.actors[]`。Chat 主界面不得依赖顶层 
 - `REASONING_DELTA`：ReAct 过程文本增量。必须包含 `delta`。主 Leader 新链路会优先发送该事件，避免过程文本混入最终答案。
 - `FINAL_ANSWER_DELTA`：最终答案文本增量。必须包含 `delta`。由 `FinalAnswerStart` 阶段工具触发后发送。
 - `THINKING_BLOCK_DELTA`：深度思考文本增量。必须包含 `delta`。
-- `REPLY_END`：AgentScope 回复结束。注意 SSE 结束才代表本轮后处理全部完成，`REPLY_END` 后仍可能出现记忆总结等事件。
+- `REPLY_END`：AgentScope 回复结束。注意 SSE 结束才代表本轮后处理全部完成，`REPLY_END` 后仍可能出现 Team / Skill / Artifact 等收尾事件。
 
 ## 工具调用
 

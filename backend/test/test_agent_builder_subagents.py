@@ -53,7 +53,6 @@ def test_agent_builder_apply_does_not_write_callable_agents(monkeypatch):
             tags=data.tags,
             callableAgents=[],
             maxDepth=data.max_depth,
-            memoryEnabled=data.memory_enabled,
             planConfig=data.plan_config,
             guardrails=data.guardrails,
             status="idle",

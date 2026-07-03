@@ -61,7 +61,6 @@ interface AgentApiData {
   tags: string[];
   callableAgents: string[];
   maxDepth: number;
-  memoryEnabled?: boolean;
   planConfig?: {
     enabled: boolean;
     mode: 'lightweight' | 'structured' | 'strict';
@@ -116,7 +115,6 @@ function mapApiAgent(api: AgentApiData): Agent {
     tags: api.tags,
     callableAgents: api.callableAgents,
     maxDepth: api.maxDepth,
-    memoryEnabled: api.memoryEnabled ?? true,
     planConfig: {
       enabled: api.planConfig?.enabled ?? false,
       mode: api.planConfig?.mode ?? 'structured',
@@ -161,7 +159,6 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
   if ('knowledgeTools' in data && data.knowledgeTools !== undefined) result.knowledgeTools = data.knowledgeTools;
   if ('callableAgents' in data && data.callableAgents !== undefined) result.callableAgents = data.callableAgents;
   if ('maxDepth' in data && data.maxDepth !== undefined) result.maxDepth = data.maxDepth;
-  if ('memoryEnabled' in data && data.memoryEnabled !== undefined) result.memoryEnabled = data.memoryEnabled;
   if ('planConfig' in data && data.planConfig) {
     result.planConfig = {
       enabled: data.planConfig.enabled,

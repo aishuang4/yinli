@@ -113,7 +113,6 @@ class AgentCreate(BaseModel):
     tags: list[str] = Field(default_factory=list, description="标签")
     callable_agents: list[str] = Field(default_factory=list, alias="callableAgents", description="历史兼容字段：旧可调用子 Agent ID 列表")
     max_depth: int = Field(default=2, ge=1, le=5, alias="maxDepth", description="历史兼容字段：旧子 Agent 最大调用深度")
-    memory_enabled: bool = Field(default=True, alias="memoryEnabled", description="历史兼容字段：当前运行时忽略")
     plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig", description="历史兼容字段：旧计划模型配置")
     guardrails: Guardrails = Field(default_factory=Guardrails, description="安全边界配置")
 
@@ -133,7 +132,6 @@ class AgentUpdate(BaseModel):
     tags: Optional[list[str]] = None
     callable_agents: Optional[list[str]] = Field(None, alias="callableAgents")
     max_depth: Optional[int] = Field(None, ge=1, le=5, alias="maxDepth")
-    memory_enabled: Optional[bool] = Field(None, alias="memoryEnabled")
     plan_config: Optional[PlanConfig] = Field(None, alias="planConfig")
     guardrails: Optional[Guardrails] = None
 
@@ -154,7 +152,6 @@ class AgentResponse(BaseModel):
     tags: list[str]
     callable_agents: list[str] = Field(alias="callableAgents")
     max_depth: int = Field(alias="maxDepth")
-    memory_enabled: bool = Field(default=True, alias="memoryEnabled")
     plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig")
     guardrails: Guardrails
     status: str = "idle"
@@ -414,7 +411,6 @@ async def create_agent(data: AgentCreate) -> AgentResponse:
         "tags": data.tags,
         "callableAgents": _normalize_callable_agents(data.callable_agents, next_id),
         "maxDepth": data.max_depth,
-        "memoryEnabled": data.memory_enabled,
         "planConfig": data.plan_config,
         "guardrails": data.guardrails,
         "status": "idle",
@@ -480,8 +476,6 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
         )
     if "max_depth" in update_dict:
         update_dict["maxDepth"] = update_dict.pop("max_depth")
-    if "memory_enabled" in update_dict:
-        update_dict["memoryEnabled"] = update_dict.pop("memory_enabled")
     if "plan_config" in update_dict:
         update_dict["planConfig"] = update_dict.pop("plan_config")
 

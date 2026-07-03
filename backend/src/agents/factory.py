@@ -59,7 +59,7 @@ def _build_context_config() -> ContextConfig:
 
     summary_schema = {
         "title": "SummarySchema",
-        "description": "The compressed memory model, used to generate summary of old memories",
+        "description": "用于生成长上下文压缩摘要的结构化模型。",
         "type": "object",
         "properties": {
             "task_overview": {

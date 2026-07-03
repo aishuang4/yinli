@@ -104,4 +104,4 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 - Chat SSE 事件新增或变更前必须先更新 `docs/chat-sse-event-contract.md`，前端只依赖该契约中的稳定事件。
 - 文件均带中文 docstring 说明职责，遵循既有风格。
 - 前端遵循若干约定（见 `App.tsx` 注释）：派生状态不用 effect、对象映射表代替 switch、初始化只做一次。
-- 文档入口见 `docs/README.md`；当前架构见 `docs/architecture-overview.md`；项目现状与待办见 `docs/project-progress-handoff.md` 和 `docs/project-todo.md`；开发规范见 `docs/development-guidelines.md`。
+- 文档入口见 `docs/README.md`；当前架构见 `docs/architecture-overview.md`；记忆模块重设计见 `docs/memory-system-design.md`；项目现状与待办见 `docs/project-progress-handoff.md` 和 `docs/project-todo.md`；开发规范见 `docs/development-guidelines.md`。

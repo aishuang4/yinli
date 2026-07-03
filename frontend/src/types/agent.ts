@@ -92,8 +92,6 @@ export interface Agent {
   callableAgents: string[];
   /** 最大调用深度 */
   maxDepth: number;
-  /** 历史兼容字段：当前运行时忽略 */
-  memoryEnabled: boolean;
   /** 历史 Plan 配置兼容字段 */
   planConfig: PlanConfig;
   /** 安全边界 */
@@ -173,7 +171,6 @@ export function createEmptyAgentForm(): AgentCreatePayload {
     tags: [],
     callableAgents: [],
     maxDepth: 2,
-    memoryEnabled: true,
     planConfig: { ...DEFAULT_PLAN_CONFIG },
     guardrails: { ...DEFAULT_GUARDRAILS },
   };
