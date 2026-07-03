@@ -10,9 +10,22 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
+from src.memory.extraction_agents import (
+    SkillEvolutionAgentPayload,
+    run_memory_reflection_agent,
+    run_skill_evolution_agent,
+)
 from src.memory.markdown_store import MarkdownMemoryStore
 
 MemoryScope = Literal["user", "agent", "global_preference"]
+MemorySection = Literal[
+    "Stable Preferences",
+    "Stable Behaviors",
+    "Profile",
+    "Workspace Rules",
+    "Corrections",
+    "Negative Rules",
+]
 
 _LONG_TERM_HINTS = (
     "以后",
@@ -90,6 +103,7 @@ class MemoryReflectionResult:
     """运行后记忆反思结果。"""
 
     updates: list[MemoryMarkdownUpdate] = field(default_factory=list)
+    skill_candidate: SkillEvolutionAgentPayload | None = None
     ignored_reason: str = ""
 
 
@@ -117,6 +131,78 @@ def reflect_completed_run_memory(
     if not update:
         return MemoryReflectionResult(ignored_reason="duplicate")
     return MemoryReflectionResult(updates=[update])
+
+
+async def reflect_completed_run_memory_with_agents(
+    item: MemoryReflectionInput,
+    *,
+    model_name: str,
+    fallback_names: list[str] | None = None,
+    store: MarkdownMemoryStore | None = None,
+) -> MemoryReflectionResult:
+    """调用专用系统 Agent 提炼记忆和 Skill 候选，失败时使用规则兜底。"""
+
+    user_message = _normalize_text(item.user_message)
+    assistant_text = _normalize_text(item.assistant_text)
+    if not user_message or not assistant_text:
+        return MemoryReflectionResult(ignored_reason="empty_turn")
+    if _contains_sensitive_content(user_message) or _contains_sensitive_content(assistant_text):
+        return MemoryReflectionResult(ignored_reason="sensitive_content")
+
+    memory_store = store or MarkdownMemoryStore()
+    updates: list[MemoryMarkdownUpdate] = []
+    memory_reason = ""
+    if _has_long_term_intent(user_message):
+        try:
+            payload = await run_memory_reflection_agent(
+                user_message=user_message,
+                assistant_text=assistant_text,
+                agent_id=item.agent_id,
+                agent_name=item.agent_name,
+                existing_memory_context=_build_existing_memory_context(memory_store, item),
+                model_name=model_name,
+                fallback_names=fallback_names or [],
+            )
+        except Exception:
+            payload = None
+        if payload and payload.should_write:
+            for memory in payload.memories[:4]:
+                if memory.operation == "skip":
+                    continue
+                update = _append_note(
+                    memory_store,
+                    memory.scope,
+                    item,
+                    _safe_section(memory.section, memory.scope),
+                    _build_note(memory.note, item),
+                )
+                if update:
+                    updates.append(update)
+        memory_reason = payload.reason if payload else ""
+        if not updates:
+            fallback = reflect_completed_run_memory(item, store=memory_store)
+            updates.extend(fallback.updates)
+            memory_reason = memory_reason or fallback.ignored_reason
+
+    skill_candidate = None
+    if _looks_like_reusable_work(user_message, assistant_text):
+        try:
+            skill_candidate = await run_skill_evolution_agent(
+                user_message=user_message,
+                assistant_text=assistant_text,
+                agent_id=item.agent_id,
+                agent_name=item.agent_name,
+                model_name=model_name,
+                fallback_names=fallback_names or [],
+            )
+        except Exception:
+            skill_candidate = None
+        if skill_candidate and (not skill_candidate.reusable or skill_candidate.confidence < 0.72):
+            skill_candidate = None
+
+    if updates or skill_candidate:
+        return MemoryReflectionResult(updates=updates, skill_candidate=skill_candidate)
+    return MemoryReflectionResult(ignored_reason=memory_reason or "no_memory_or_skill_candidate")
 
 
 def _has_long_term_intent(text: str) -> bool:
@@ -147,6 +233,24 @@ def _classify_section(text: str, scope: MemoryScope) -> str:
         return "Stable Behaviors"
     if scope == "global_preference":
         return "Stable Preferences"
+    return "Stable Preferences"
+
+
+def _safe_section(section: str, scope: MemoryScope) -> MemorySection:
+    allowed: set[str] = {
+        "Stable Preferences",
+        "Stable Behaviors",
+        "Profile",
+        "Workspace Rules",
+        "Corrections",
+        "Negative Rules",
+    }
+    if section in allowed:
+        return section  # type: ignore[return-value]
+    if scope == "agent":
+        return "Stable Behaviors"
+    if scope == "global_preference":
+        return "Workspace Rules"
     return "Stable Preferences"
 
 
@@ -227,3 +331,83 @@ def _trim(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return value[:limit].rstrip() + "..."
+
+
+def _looks_like_reusable_work(user_message: str, assistant_text: str) -> bool:
+    text = f"{user_message}\n{assistant_text}".lower()
+    if len(assistant_text) < 240:
+        return False
+    reusable_markers = (
+        "skill",
+        "技能",
+        "复用",
+        "流程",
+        "步骤",
+        "实现",
+        "设计",
+        "架构",
+        "模板",
+        "工作流",
+        "规范",
+        "总结",
+    )
+    completion_markers = ("完成", "已", "done", "implemented", "added", "通过", "测试")
+    return any(marker in text for marker in reusable_markers) and any(marker in text for marker in completion_markers)
+
+
+def _build_existing_memory_context(store: MarkdownMemoryStore, item: MemoryReflectionInput) -> str:
+    """给提炼 Agent 的摘要级现有记忆上下文，用于去重和冲突判断。"""
+
+    sections = []
+    for label, content in [
+        ("Global preference memory", store.read_global_memory(item.workspace_id).content),
+        ("User memory", store.read_user_memory(item.user_id).content),
+        ("Agent memory", store.read_agent_memory(item.agent_id).content),
+    ]:
+        extracted = _extract_markdown_sections_for_reflection(content)
+        if extracted:
+            sections.append(f"{label}:\n{extracted}")
+    return _trim("\n\n".join(sections), 4000)
+
+
+def _extract_markdown_sections_for_reflection(content: str) -> str:
+    parsed = _parse_markdown_sections(content)
+    parts = []
+    for title in (
+        "Summary",
+        "Stable Preferences",
+        "Stable Behaviors",
+        "Profile",
+        "Workspace Rules",
+        "Corrections",
+        "Negative Rules",
+    ):
+        text = _strip_markdown_comments(parsed.get(title, "")).strip()
+        if text:
+            parts.append(f"## {title}\n{text}")
+    return "\n\n".join(parts)
+
+
+def _parse_markdown_sections(content: str) -> dict[str, str]:
+    sections: dict[str, list[str]] = {}
+    current = ""
+    for line in content.splitlines():
+        if line.startswith("# "):
+            current = line[2:].strip()
+            sections.setdefault(current, [])
+            continue
+        if current:
+            sections[current].append(line)
+    return {
+        title: "\n".join(lines).strip()
+        for title, lines in sections.items()
+    }
+
+
+def _strip_markdown_comments(content: str) -> str:
+    lines = [
+        line
+        for line in content.splitlines()
+        if "<!--" not in line and "-->" not in line
+    ]
+    return "\n".join(lines)

@@ -141,6 +141,7 @@ Memory Page / Skills Page / Agent Editor / Trace Page
 ```text
 Run 成功完成
 -> MemoryReflectionHook 读取用户消息、Agent 最终输出、用户反馈
+-> 注入摘要级现有 user / agent / global Markdown 记忆用于去重和冲突判断
 -> 判断是否提炼 user memory Markdown
 -> AgentIterationPipeline 判断是否提炼 agent memory Markdown
 -> SkillEvolutionPipeline 判断是否可以生成标准 Skill
@@ -433,6 +434,30 @@ Hooks 负责被动生命周期事件，只做“运行前查询注入、运行�
 - `AgentIterationHook`：由 `MemoryReflectionHook` 调用，识别针对某个 Agent 的纠正、偏好和能力边界，写入 agent memory Markdown。
 - `SkillEvolutionHook`：由 `MemoryReflectionHook` 调用，在一整个工作完成后判断该工作是否可复用；若可复用，生成 Skill 草稿或直接注册标准 Skill。
 - `MemoryNodePersistHook`：Agent 运行完后，把用户输入和 Agent 最终输出聚合为当天节点并持久化到 `memory_nodes` 与向量库。
+
+### 提炼 Agent 与记忆操作
+
+`MemoryReflectionHook` 可以调用专用基础设施 Agent 完成提炼，但该 Agent 不直接持有真实写文件工具。运行时给它配置专用内部工具：
+
+- `memory_context_read`：读取摘要级现有 user / agent / global Markdown 记忆，用于判断是否重复、是否冲突、应该写入哪个 scope。
+- `memory_operation_propose`：提交受控记忆操作候选，例如 append / skip；工具本身不写 Markdown。
+- `skill_draft_propose`：提交标准 Skill 草稿候选；工具本身不注册 Skill，也不绑定 Agent。
+
+这些工具只给系统提炼 Agent 使用，不默认暴露给普通业务 Agent。后端 `MemoryPolicyEngine` / Markdown service 负责校验、去重、脱敏和真正写入。
+
+提炼 Agent 通过工具或 JSON 输出受控记忆操作协议，MVP 先支持：
+
+```json
+{
+  "operation": "append | skip",
+  "scope": "user | agent | global_preference",
+  "section": "Stable Preferences | Stable Behaviors | Profile | Workspace Rules | Corrections | Negative Rules",
+  "note": "一条简短长期记忆",
+  "confidence": 0.9
+}
+```
+
+后续若要支持精确 `update`、`disable`、`delete`，Markdown 条目需要先拥有稳定条目 ID，避免模型靠文本匹配误改或误删。
 
 ### Tools
 

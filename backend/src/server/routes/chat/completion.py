@@ -3,7 +3,7 @@
 from typing import AsyncGenerator
 
 from src.memory.node_persist import MemoryNodePersistInput, persist_completed_run_memory_node
-from src.memory.reflection import MemoryReflectionInput, reflect_completed_run_memory
+from src.memory.reflection import MemoryReflectionInput, reflect_completed_run_memory_with_agents
 from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
 from src.server.routes.chat.models import ChatModelCacheRun, ChatSkillRun, ChatTeamActivity, ChatToolRun
 from src.server.routes.chat.runtime_events import runtime_event_sse
@@ -171,7 +171,7 @@ async def finalize_successful_leader_run(
             },
         )
         try:
-            reflect_completed_run_memory(
+            await reflect_completed_run_memory_with_agents(
                 MemoryReflectionInput(
                     session_id=session_id,
                     agent_id=agent_id,
@@ -179,6 +179,7 @@ async def finalize_successful_leader_run(
                     user_message=user_message,
                     assistant_text=assistant_text,
                 ),
+                model_name=model_name,
             )
         except Exception:
             pass
