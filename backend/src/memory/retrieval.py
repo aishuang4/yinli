@@ -17,7 +17,9 @@ class MemoryRetrievalContext:
     workspace_id: str = "default"
     project_id: str = ""
     user_id: str = "default"
+    include_user_markdown: bool = True
     include_agent_markdown: bool = True
+    include_global_markdown: bool = True
     include_node_tree: bool = True
 
 
@@ -30,8 +32,22 @@ def build_memory_injection_text(
     """生成可追加到 system prompt 的精简记忆段落。"""
 
     sections: list[str] = []
+    store = markdown_store or MarkdownMemoryStore()
+
+    if context.include_global_markdown:
+        markdown = store.read_global_memory(context.workspace_id)
+        summary = _extract_markdown_injection(markdown.content)
+        if summary:
+            sections.append("Global preference Markdown memory:\n" + summary)
+
+    if context.include_user_markdown:
+        markdown = store.read_user_memory(context.user_id)
+        summary = _extract_markdown_injection(markdown.content)
+        if summary:
+            sections.append("User Markdown memory:\n" + summary)
+
     if context.include_agent_markdown:
-        markdown = (markdown_store or MarkdownMemoryStore()).read_agent_memory(context.agent_id)
+        markdown = store.read_agent_memory(context.agent_id)
         summary = _extract_markdown_injection(markdown.content)
         if summary:
             sections.append("Agent Markdown memory:\n" + summary)
@@ -75,7 +91,15 @@ def _empty_memory_hint() -> str:
 def _extract_markdown_injection(content: str) -> str:
     sections = _parse_markdown_sections(content)
     parts = []
-    for title in ("Summary", "Stable Behaviors", "Corrections", "Negative Rules"):
+    for title in (
+        "Summary",
+        "Stable Preferences",
+        "Stable Behaviors",
+        "Profile",
+        "Workspace Rules",
+        "Corrections",
+        "Negative Rules",
+    ):
         text = _strip_comments(sections.get(title, "")).strip()
         if text:
             parts.append(f"## {title}\n{text}")

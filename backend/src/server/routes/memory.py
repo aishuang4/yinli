@@ -1,6 +1,6 @@
 """Memory API 路由。
 
-首版只暴露长期节点记忆，供后续 Tools、Hook 和前端页面复用。
+暴露长期节点记忆和 Markdown 长期记忆，供后续 Tools、Hook 和前端页面复用。
 """
 
 from __future__ import annotations
@@ -49,6 +49,18 @@ class MarkdownMemoryUpdate(BaseModel):
     """保存 Markdown 记忆。"""
 
     content: str = Field(..., max_length=200_000)
+
+
+def _markdown_doc_response(doc) -> dict[str, Any]:
+    """统一转换 Markdown 记忆响应。"""
+
+    return {
+        "scope": doc.scope,
+        "ownerId": doc.owner_id,
+        "path": doc.path,
+        "content": doc.content,
+        "exists": doc.exists,
+    }
 
 
 @router.post("/nodes")
@@ -144,13 +156,7 @@ async def read_agent_markdown_memory(agent_id: str) -> dict[str, Any]:
     """读取 Agent Markdown 记忆；不存在时返回默认模板但不创建文件。"""
 
     doc = MarkdownMemoryStore().read_agent_memory(agent_id)
-    return {
-        "scope": doc.scope,
-        "ownerId": doc.owner_id,
-        "path": doc.path,
-        "content": doc.content,
-        "exists": doc.exists,
-    }
+    return _markdown_doc_response(doc)
 
 
 @router.put("/markdown/agent/{agent_id}")
@@ -158,10 +164,36 @@ async def write_agent_markdown_memory(agent_id: str, data: MarkdownMemoryUpdate)
     """保存 Agent Markdown 记忆；首次保存时创建文件。"""
 
     doc = MarkdownMemoryStore().write_agent_memory(agent_id, data.content)
-    return {
-        "scope": doc.scope,
-        "ownerId": doc.owner_id,
-        "path": doc.path,
-        "content": doc.content,
-        "exists": doc.exists,
-    }
+    return _markdown_doc_response(doc)
+
+
+@router.get("/markdown/user/{user_id}")
+async def read_user_markdown_memory(user_id: str) -> dict[str, Any]:
+    """读取用户 Markdown 记忆；不存在时返回默认模板但不创建文件。"""
+
+    doc = MarkdownMemoryStore().read_user_memory(user_id)
+    return _markdown_doc_response(doc)
+
+
+@router.put("/markdown/user/{user_id}")
+async def write_user_markdown_memory(user_id: str, data: MarkdownMemoryUpdate) -> dict[str, Any]:
+    """保存用户 Markdown 记忆；首次保存时创建文件。"""
+
+    doc = MarkdownMemoryStore().write_user_memory(user_id, data.content)
+    return _markdown_doc_response(doc)
+
+
+@router.get("/markdown/global/{workspace_id}")
+async def read_global_markdown_memory(workspace_id: str = "default") -> dict[str, Any]:
+    """读取全局偏好 Markdown 记忆；不存在时返回默认模板但不创建文件。"""
+
+    doc = MarkdownMemoryStore().read_global_memory(workspace_id)
+    return _markdown_doc_response(doc)
+
+
+@router.put("/markdown/global/{workspace_id}")
+async def write_global_markdown_memory(workspace_id: str, data: MarkdownMemoryUpdate) -> dict[str, Any]:
+    """保存全局偏好 Markdown 记忆；首次保存时创建文件。"""
+
+    doc = MarkdownMemoryStore().write_global_memory(workspace_id, data.content)
+    return _markdown_doc_response(doc)

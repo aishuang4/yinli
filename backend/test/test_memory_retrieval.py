@@ -13,6 +13,11 @@ def test_memory_injection_includes_markdown_sections_and_node_tree():
     )
 
     assert "# Memory" in text
+    assert "Global preference Markdown memory" in text
+    assert "整个工作台默认用中文。" in text
+    assert "User Markdown memory" in text
+    assert "用户喜欢简洁答案。" in text
+    assert "Agent Markdown memory" in text
     assert "Stable Behaviors" in text
     assert "以后默认用中文解释。" in text
     assert "Negative Rules" in text
@@ -34,6 +39,50 @@ def test_memory_injection_returns_tool_hint_when_empty():
 
 
 class FakeMarkdownStore:
+    def read_global_memory(self, workspace_id):
+        return type(
+            "Doc",
+            (),
+            {
+                "content": """# Summary
+
+整个工作台默认用中文。
+
+# Stable Preferences
+
+# Workspace Rules
+
+# Corrections
+
+# Negative Rules
+
+# Source References
+""",
+            },
+        )()
+
+    def read_user_memory(self, user_id):
+        return type(
+            "Doc",
+            (),
+            {
+                "content": """# Summary
+
+用户喜欢简洁答案。
+
+# Stable Preferences
+
+# Profile
+
+# Corrections
+
+# Negative Rules
+
+# Source References
+""",
+            },
+        )()
+
     def read_agent_memory(self, agent_id):
         return type(
             "Doc",
@@ -60,6 +109,12 @@ class FakeMarkdownStore:
 
 
 class EmptyMarkdownStore:
+    def read_global_memory(self, workspace_id):
+        return type("Doc", (), {"content": "# Summary\n\n# Stable Preferences\n\n# Workspace Rules\n\n# Corrections\n\n# Negative Rules\n"})()
+
+    def read_user_memory(self, user_id):
+        return type("Doc", (), {"content": "# Summary\n\n# Stable Preferences\n\n# Profile\n\n# Corrections\n\n# Negative Rules\n"})()
+
     def read_agent_memory(self, agent_id):
         return type("Doc", (), {"content": "# Summary\n\n# Stable Behaviors\n\n# Corrections\n\n# Negative Rules\n"})()
 
