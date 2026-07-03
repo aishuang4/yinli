@@ -13,75 +13,41 @@ from src.storage.database import BACKEND_ROOT
 
 USER_MEMORY_TEMPLATE = """# Summary
 
-<!-- 用户单独记忆摘要。 -->
-
 # Stable Preferences
-
-<!-- 用户长期偏好、协作习惯和输出风格。 -->
 
 # Profile
 
-<!-- 用户稳定信息、职责、常用技术栈和常用项目。 -->
-
 # Corrections
-
-<!-- 用户纠正过的事实、规则和表达偏好。 -->
 
 # Negative Rules
 
-<!-- 明确禁止或应避免的做法，优先级高于普通偏好。 -->
-
 # Source References
-
-<!-- 来源 session/run/message 引用，只保留短引用，不复制长对话。 -->
 """
 
 
 AGENT_MEMORY_TEMPLATE = """# Summary
 
-<!-- Agent 迭代记忆摘要。 -->
-
 # Stable Behaviors
-
-<!-- 这个 Agent 应长期保持的工作方式。 -->
 
 # Corrections
 
-<!-- 用户纠正、反复犯错点和修正规则。 -->
-
 # Negative Rules
 
-<!-- 明确禁止或应避免的做法，优先级高于普通偏好。 -->
-
 # Source References
-
-<!-- 来源 session/run/message 引用，只保留短引用，不复制长对话。 -->
 """
 
 
 GLOBAL_MEMORY_TEMPLATE = """# Summary
 
-<!-- 全局偏好记忆摘要。 -->
-
 # Stable Preferences
-
-<!-- 整个工作台或 Workspace 的默认偏好、语言和文档风格。 -->
 
 # Workspace Rules
 
-<!-- 对多个 Agent、Team 或项目都有效的流程、安全和架构约定。 -->
-
 # Corrections
-
-<!-- 全局纠正规则，例如已废弃能力和后续禁止使用的旧链路。 -->
 
 # Negative Rules
 
-<!-- 明确禁止或应避免的全局做法。 -->
-
 # Source References
-
-<!-- 来源 session/run/message 引用，只保留短引用，不复制长对话。 -->
 """
 
 
@@ -204,13 +170,19 @@ class MarkdownMemoryStore:
         )
 
     def _agent_path(self, agent_id: str) -> Path:
-        return self.root / "agents" / f"{_safe_id(agent_id)}.md"
+        if _safe_id(agent_id) == "default":
+            return self.root / "agents" / "agent_memory.md"
+        return self.root / "agents" / _safe_id(agent_id) / "agent_memory.md"
 
     def _user_path(self, user_id: str) -> Path:
-        return self.root / "users" / f"{_safe_id(user_id)}.md"
+        if _safe_id(user_id) == "default":
+            return self.root / "users" / "user_memory.md"
+        return self.root / "users" / _safe_id(user_id) / "user_memory.md"
 
     def _global_path(self, workspace_id: str) -> Path:
-        return self.root / "global" / f"{_safe_id(workspace_id)}.md"
+        if _safe_id(workspace_id) == "default":
+            return self.root / "global" / "global_memory.md"
+        return self.root / "global" / _safe_id(workspace_id) / "global_memory.md"
 
 
 def _safe_id(value: str) -> str:

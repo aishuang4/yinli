@@ -257,23 +257,13 @@ user / agent / global Markdown 文件使用统一结构：
 ```md
 # Summary
 
-<!-- 压缩摘要，运行时优先注入。 -->
-
 # Stable Preferences
-
-<!-- 长期偏好和稳定事实。 -->
 
 # Corrections
 
-<!-- 用户纠正、反复犯错点和修正规则。 -->
-
 # Negative Rules
 
-<!-- 明确禁止或应避免的做法，优先级高于普通偏好。 -->
-
 # Source References
-
-<!-- 来源 session/run/message 引用，只保留短引用，不复制长对话。 -->
 ```
 
 运行时只注入 `Summary`、`Negative Rules` 和必要的高优先级条目，不注入完整 Markdown。

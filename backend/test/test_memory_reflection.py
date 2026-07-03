@@ -34,7 +34,7 @@ def test_reflection_writes_user_preference_memory(tmp_path):
     assert result.ignored_reason == ""
     assert result.updates[0].scope == "user"
     assert result.updates[0].section == "Stable Preferences"
-    content = (tmp_path / "memory" / "users" / "default.md").read_text(encoding="utf-8")
+    content = (tmp_path / "memory" / "users" / "user_memory.md").read_text(encoding="utf-8")
     assert "以后默认用中文回答，解释保持简洁。" in content
     assert "source: session-1" in content
 
@@ -55,7 +55,7 @@ def test_reflection_writes_agent_negative_memory(tmp_path):
 
     assert result.updates[0].scope == "agent"
     assert result.updates[0].section == "Negative Rules"
-    content = (tmp_path / "memory" / "agents" / "agent-1.md").read_text(encoding="utf-8")
+    content = (tmp_path / "memory" / "agents" / "agent-1" / "agent_memory.md").read_text(encoding="utf-8")
     assert "你以后不要再恢复旧 Plan Runtime。" in content
 
 
@@ -76,7 +76,7 @@ def test_reflection_writes_global_memory(tmp_path):
 
     assert result.updates[0].scope == "global_preference"
     assert result.updates[0].section == "Negative Rules"
-    content = (tmp_path / "memory" / "global" / "workspace-1.md").read_text(encoding="utf-8")
+    content = (tmp_path / "memory" / "global" / "workspace-1" / "global_memory.md").read_text(encoding="utf-8")
     assert "整个工作台以后默认不要新增 memory runtime.kind。" in content
 
 
@@ -127,7 +127,7 @@ def test_reflection_deduplicates_existing_note(tmp_path):
 
     assert first.updates
     assert second.ignored_reason == "duplicate"
-    content = (tmp_path / "memory" / "users" / "default.md").read_text(encoding="utf-8")
+    content = (tmp_path / "memory" / "users" / "user_memory.md").read_text(encoding="utf-8")
     assert content.count("以后默认用中文回答。") == 1
 
 
@@ -175,10 +175,10 @@ def test_reflection_with_agents_writes_model_memories(tmp_path, monkeypatch):
     assert result.ignored_reason == ""
     assert result.updates[0].scope == "global_preference"
     assert [scope for scope, _path in captured_scopes] == ["user", "agent", "global_preference"]
-    assert captured_scopes[0][1].endswith("/users/default.md")
-    assert captured_scopes[1][1].endswith("/agents/agent-1.md")
-    assert captured_scopes[2][1].endswith("/global/default.md")
-    content = (tmp_path / "memory" / "global" / "default.md").read_text(encoding="utf-8")
+    assert captured_scopes[0][1].endswith("/users/user_memory.md")
+    assert captured_scopes[1][1].endswith("/agents/agent-1/agent_memory.md")
+    assert captured_scopes[2][1].endswith("/global/global_memory.md")
+    content = (tmp_path / "memory" / "global" / "global_memory.md").read_text(encoding="utf-8")
     assert "不新增 memory runtime.kind" in content
 
 
@@ -285,5 +285,5 @@ def test_reflection_with_agents_falls_back_to_rules(tmp_path, monkeypatch):
     )
 
     assert result.updates
-    content = (tmp_path / "memory" / "users" / "default.md").read_text(encoding="utf-8")
+    content = (tmp_path / "memory" / "users" / "user_memory.md").read_text(encoding="utf-8")
     assert "以后默认用中文回答。" in content
