@@ -89,17 +89,18 @@ async def run_memory_reflection_agent(
     fallback_names: list[str] | None = None,
     invocation_key: str = "",
 ) -> MemoryReflectionAgentPayload | None:
-    """调用 MemoryReflectionAgent 提炼 Markdown 记忆候选。"""
+    """调用指定 scope 的 MemoryReflectionAgent 提炼 Markdown 记忆候选。"""
 
+    kind, name = _memory_agent_identity(memory_file.scope)
     text = await _run_json_agent(
         agent_id=_system_agent_id(
-            "memory-reflection",
+            kind,
             model_name,
             fallback_names or [],
             f"{MEMORY_REFLECTION_PROMPT_VERSION}:{memory_file.scope}:{memory_file.owner_id}:{invocation_key}",
         ),
-        name="MemoryReflectionAgent",
-        system_prompt=_build_memory_reflection_system_prompt(),
+        name=name,
+        system_prompt=_build_memory_reflection_system_prompt(memory_file.scope),
         user_prompt=_build_memory_reflection_user_prompt(
             user_message=user_message,
             assistant_text=assistant_text,
@@ -214,11 +215,29 @@ def _system_agent_id(kind: str, model_name: str, fallback_names: list[str], prom
     return f"system:{kind}:{sha256(raw.encode('utf-8')).hexdigest()[:16]}"
 
 
-def _build_memory_reflection_system_prompt() -> str:
+def _memory_agent_identity(scope: str) -> tuple[str, str]:
+    if scope == "agent":
+        return "agent-memory-reflection", "AgentMemoryReflectionAgent"
+    if scope == "global_preference":
+        return "global-memory-reflection", "GlobalMemoryReflectionAgent"
+    return "user-memory-reflection", "UserMemoryReflectionAgent"
+
+
+def _scope_policy(scope: str) -> str:
+    if scope == "agent":
+        return "Only edit agent memory: behavior, corrections, working style, persona, and boundaries for this specific agent."
+    if scope == "global_preference":
+        return "Only edit global preference memory: workspace-wide rules useful across agents, teams, or projects."
+    return "Only edit user memory: stable user preferences, profile, communication habits, and cross-agent user facts."
+
+
+def _build_memory_reflection_system_prompt(scope: str) -> str:
+    _, name = _memory_agent_identity(scope)
     return "\n".join([
-        "You are MemoryReflectionAgent, a background infrastructure agent.",
+        f"You are {name}, a background infrastructure agent.",
         "Return only one compact valid JSON object. Do not call tools. Do not write markdown fences.",
         "You are editing exactly one bound Markdown memory file.",
+        _scope_policy(scope),
         "Extract only durable, useful memory from the completed turn.",
         "Never store secrets, tokens, passwords, private keys, cookies, one-time codes, or large copied content.",
         "Do not store tool calls, observations, chain-of-thought, or implementation noise.",
@@ -227,10 +246,7 @@ def _build_memory_reflection_system_prompt() -> str:
         "The memory tools are already bound to one file path; never ask for or invent another path.",
         "Do not edit if the new turn is temporary, duplicate, low confidence, or unrelated to the bound memory scope.",
         "A memory must be useful in future runs and must not conflict with the user's latest instruction.",
-        "Bound scopes:",
-        "- user: stable user preference/profile useful across agents.",
-        "- agent: behavior, correction, or boundary for this specific agent.",
-        "- global_preference: workspace-wide rule useful across agents or teams.",
+        f"The only allowed scope for this agent is: {scope}.",
         "Sections: Stable Preferences, Stable Behaviors, Profile, Workspace Rules, Corrections, Negative Rules.",
         "If you used memory tools successfully, return a minimal JSON summary after tool calls.",
         "Schema:",

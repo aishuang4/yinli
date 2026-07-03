@@ -430,14 +430,20 @@ Hooks 负责被动生命周期事件，只做“运行前查询注入、运行�
 
 - `MemoryRetrievalHook`：模型运行前，查询 user / agent / global Markdown 摘要和最近 30 天节点树，并生成注入片段。
 - `MemoryUsageAuditHook`：在 Run 开始、注入、结束时记录本轮使用了哪些记忆。
-- `MemoryReflectionHook`：Agent 完成运行后，判断是否需要提炼 user memory、agent memory 或 Skill。
+- `MemoryReflectionHook`：Agent 完成运行后，并行调用 `UserMemoryReflectionAgent`、`AgentMemoryReflectionAgent`、`GlobalMemoryReflectionAgent`，分别提炼 user memory、agent memory 和 global memory。
 - `AgentIterationHook`：由 `MemoryReflectionHook` 调用，识别针对某个 Agent 的纠正、偏好和能力边界，写入 agent memory Markdown。
 - `SkillEvolutionHook`：由 `MemoryReflectionHook` 调用，在一整个工作完成后判断该工作是否可复用；若可复用，生成 Skill 草稿或直接注册标准 Skill。
 - `MemoryNodePersistHook`：Agent 运行完后，把用户输入和 Agent 最终输出聚合为当天节点并持久化到 `memory_nodes` 与向量库。
 
 ### 提炼 Agent 与记忆操作
 
-`MemoryReflectionHook` 可以调用专用基础设施 Agent 完成提炼。运行时给它配置专用内部工具，并把工具绑定到某一个具体 Markdown 记忆文件；模型不能传入任意路径，也不能越权操作其他记忆文件。
+`MemoryReflectionHook` 使用三个专用基础设施 Agent 并行完成 Markdown 记忆提炼：
+
+- `UserMemoryReflectionAgent`：只处理 user memory，绑定当前用户 Markdown 文件。
+- `AgentMemoryReflectionAgent`：只处理 agent memory，绑定当前 Agent Markdown 文件。
+- `GlobalMemoryReflectionAgent`：只处理 global preference memory，绑定当前 Workspace 全局 Markdown 文件。
+
+运行时给每个 Agent 配置专用内部工具，并把工具绑定到它自己的具体 Markdown 记忆文件；模型不能传入任意路径，也不能越权操作其他记忆文件。
 
 - `memory_read`：读取当前绑定记忆文件的完整 Markdown 内容。
 - `memory_add`：向当前绑定记忆文件的指定章节添加一条记忆。
@@ -445,7 +451,7 @@ Hooks 负责被动生命周期事件，只做“运行前查询注入、运行�
 - `memory_delete`：精确删除当前绑定记忆文件中的某一条或某一段文本。
 - `skill_draft_propose`：提交标准 Skill 草稿候选；工具本身不注册 Skill，也不绑定 Agent。
 
-这些工具只给系统提炼 Agent 使用，不默认暴露给普通业务 Agent。后端在启动提炼 Agent 前选择本次允许操作的 memory scope，并注入该 scope 对应的文件地址和绑定工具。若一次 Run 需要处理 user / agent / global 多个文件，应由后端分别以不同绑定文件启动提炼 Agent，而不是给模型自由路径访问。
+这些工具只给系统提炼 Agent 使用，不默认暴露给普通业务 Agent。后端在启动提炼 Agent 前选择本次允许操作的 memory scope，并注入该 scope 对应的文件地址和绑定工具。user / agent / global 三个 Markdown 文件由三个不同 Agent 并行处理，而不是让单个模型自由决定跨文件写入。
 
 工具操作仍需遵循受控记忆操作语义：
 

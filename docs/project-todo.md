@@ -69,7 +69,7 @@
   - [ ] Team Worker 策略和 Trace payload。
 - [ ] 实现 `MemoryReflectionHook`：Agent 完成运行后判断是否提炼 user memory、agent memory，以及是否生成标准 Skill。
   - [x] 规则型首版：成功运行后提炼明确长期意图，写入 user / agent / global Markdown。
-  - [x] 新增 `MemoryReflectionAgent` / `SkillEvolutionAgent` 专用基础设施 Agent，并配置文件绑定的 `memory_read`、`memory_add`、`memory_update`、`memory_delete` 与 `skill_draft_propose` 内部工具。
+  - [x] 新增并行 `UserMemoryReflectionAgent` / `AgentMemoryReflectionAgent` / `GlobalMemoryReflectionAgent` 与 `SkillEvolutionAgent`，并配置文件绑定的 `memory_read`、`memory_add`、`memory_update`、`memory_delete` 与 `skill_draft_propose` 内部工具。
   - [ ] 去重增强、敏感信息过滤增强、Trace 审计和标准 Skill 注册流程。
 - [x] 实现 `MemoryNodePersistHook` 首版：Agent 成功运行完后只用用户输入和 Agent 最终输出写入当天节点并同步向量库。
 - [ ] 扩展 `MemoryNodePersistHook`：接入反思模型摘要、去重、敏感信息过滤、Trace 事件和异步失败重试。

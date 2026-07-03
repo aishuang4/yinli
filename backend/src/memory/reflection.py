@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -156,21 +157,21 @@ async def reflect_completed_run_memory_with_agents(
     updates: list[MemoryMarkdownUpdate] = []
     memory_reason = ""
     if _has_long_term_intent(user_message):
-        for scope in _candidate_memory_scopes(user_message):
-            memory_file = _build_memory_file_tool_set(memory_store, item, scope)
-            try:
-                payload = await run_memory_reflection_agent(
+        reflection_results = await asyncio.gather(
+            *[
+                _run_scoped_memory_reflection(
+                    scope=scope,
+                    item=item,
                     user_message=user_message,
                     assistant_text=assistant_text,
-                    agent_id=item.agent_id,
-                    agent_name=item.agent_name,
-                    memory_file=memory_file,
+                    memory_store=memory_store,
                     model_name=model_name,
                     fallback_names=fallback_names or [],
-                    invocation_key=_reflection_invocation_key(item, scope),
                 )
-            except Exception:
-                payload = None
+                for scope in _all_memory_scopes()
+            ],
+        )
+        for scope, memory_file, payload in reflection_results:
             if memory_file.operations:
                 updates.extend(_updates_from_memory_file_operations(memory_file.operations))
                 memory_reason = payload.reason if payload else memory_reason
@@ -305,16 +306,35 @@ def _append_note(
     )
 
 
-def _candidate_memory_scopes(text: str) -> list[MemoryScope]:
-    lowered = text.lower()
-    scopes: list[MemoryScope] = []
-    if any(hint in lowered for hint in _GLOBAL_HINTS):
-        scopes.append("global_preference")
-    if any(hint in lowered for hint in _AGENT_HINTS):
-        scopes.append("agent")
-    if not scopes:
-        scopes.append("user")
-    return scopes
+def _all_memory_scopes() -> tuple[MemoryScope, MemoryScope, MemoryScope]:
+    return ("user", "agent", "global_preference")
+
+
+async def _run_scoped_memory_reflection(
+    *,
+    scope: MemoryScope,
+    item: MemoryReflectionInput,
+    user_message: str,
+    assistant_text: str,
+    memory_store: MarkdownMemoryStore,
+    model_name: str,
+    fallback_names: list[str],
+) -> tuple[MemoryScope, MemoryFileToolSet, object | None]:
+    memory_file = _build_memory_file_tool_set(memory_store, item, scope)
+    try:
+        payload = await run_memory_reflection_agent(
+            user_message=user_message,
+            assistant_text=assistant_text,
+            agent_id=item.agent_id,
+            agent_name=item.agent_name,
+            memory_file=memory_file,
+            model_name=model_name,
+            fallback_names=fallback_names,
+            invocation_key=_reflection_invocation_key(item, scope),
+        )
+    except Exception:
+        payload = None
+    return scope, memory_file, payload
 
 
 def _build_memory_file_tool_set(

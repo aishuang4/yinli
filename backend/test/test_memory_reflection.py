@@ -132,17 +132,18 @@ def test_reflection_deduplicates_existing_note(tmp_path):
 
 
 def test_reflection_with_agents_writes_model_memories(tmp_path, monkeypatch):
-    captured = {}
+    captured_scopes = []
 
     async def fake_memory_agent(**kwargs):
-        captured.update(kwargs)
         memory_file = kwargs["memory_file"]
-        add_tool = memory_file.tools()[1]
-        await add_tool(
-            section="Workspace Rules",
-            note="整个工作台默认通过 hooks 和 tools 接入记忆，不新增 memory runtime.kind。",
-            reason="全局架构规则。",
-        )
+        captured_scopes.append((memory_file.scope, memory_file.file_path))
+        if memory_file.scope == "global_preference":
+            add_tool = memory_file.tools()[1]
+            await add_tool(
+                section="Workspace Rules",
+                note="整个工作台默认通过 hooks 和 tools 接入记忆，不新增 memory runtime.kind。",
+                reason="全局架构规则。",
+            )
         return MemoryReflectionAgentPayload(
             shouldWrite=True,
             reason="用户明确给出长期规则。",
@@ -173,10 +174,50 @@ def test_reflection_with_agents_writes_model_memories(tmp_path, monkeypatch):
 
     assert result.ignored_reason == ""
     assert result.updates[0].scope == "global_preference"
-    assert captured["memory_file"].scope == "global_preference"
-    assert captured["memory_file"].file_path.endswith("/global/default.md")
+    assert [scope for scope, _path in captured_scopes] == ["user", "agent", "global_preference"]
+    assert captured_scopes[0][1].endswith("/users/default.md")
+    assert captured_scopes[1][1].endswith("/agents/agent-1.md")
+    assert captured_scopes[2][1].endswith("/global/default.md")
     content = (tmp_path / "memory" / "global" / "default.md").read_text(encoding="utf-8")
     assert "不新增 memory runtime.kind" in content
+
+
+def test_reflection_with_agents_runs_three_memory_agents_in_parallel(tmp_path, monkeypatch):
+    started = []
+
+    async def fake_memory_agent(**kwargs):
+        memory_file = kwargs["memory_file"]
+        started.append(memory_file.scope)
+        if len(started) < 3:
+            while len(started) < 3:
+                await asyncio.sleep(0)
+        return None
+
+    async def fake_skill_agent(**kwargs):
+        return None
+
+    monkeypatch.setattr("src.memory.reflection.run_memory_reflection_agent", fake_memory_agent)
+    monkeypatch.setattr("src.memory.reflection.run_skill_evolution_agent", fake_skill_agent)
+
+    result = asyncio.run(
+        asyncio.wait_for(
+            reflect_completed_run_memory_with_agents(
+                MemoryReflectionInput(
+                    session_id="session-1",
+                    agent_id="agent-1",
+                    agent_name="Agent",
+                    user_message="以后默认用中文回答。",
+                    assistant_text="好的。",
+                ),
+                model_name="model",
+                store=MarkdownMemoryStore(root=tmp_path / "memory"),
+            ),
+            timeout=1,
+        ),
+    )
+
+    assert started == ["user", "agent", "global_preference"]
+    assert result.updates
 
 
 def test_reflection_with_agents_returns_skill_candidate(tmp_path, monkeypatch):
