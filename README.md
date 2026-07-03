@@ -1,51 +1,63 @@
 # Agent Workstation
 
-> 基于 AgentScope 2.0 + Electron + Spark Design 的开源桌面 Agent 工作台
-
+基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。
 
 ## 快速开始
 
-### 环境要求
+环境要求：
 
 - Node.js >= 20
 - Python >= 3.11
-- uv (Python 包管理)
-
-### 开发模式
+- uv
 
 ```bash
-# 1. 安装前端依赖
+# 1. 配置后端环境变量
+cp backend/.env.example backend/.env
+# 编辑 backend/.env，填入 AGENT_WORKSTATION_DEEPSEEK_API_KEY
+
+# 2. 安装依赖
+cd backend && uv sync && cd ..
 cd frontend && npm install && cd ..
 
-# 2. 配置后端环境变量
-cp backend/.env.example backend/.env
-# 编辑 backend/.env，填入 DeepSeek API Key
-
-# 3. 安装后端依赖
-cd backend && uv sync && cd ..
-
-# 4. 启动开发服务
+# 3. 启动开发服务（后端 8765，前端 5173）
 ./scripts/dev.sh
 ```
 
-### 访问
+桌面开发模式：
 
-- 前端: http://localhost:5173
-- 后端 API: http://localhost:8765
-- API 文档: http://localhost:8765/docs
+```bash
+cd frontend
+npm run electron:dev
+```
 
-## 技术栈
+## 常用命令
 
-| 层 | 技术 |
-|---|---|
-| 桌面壳 | Electron |
-| 前端 | React 19 + TypeScript + Vite |
-| UI 组件 | @agentscope-ai/design + @agentscope-ai/chat |
-| 后端 | Python + FastAPI + AgentScope 2.0 |
-| 模型 | DeepSeek 默认，可在系统设置切换 OpenAI 兼容供应商 |
-| 存储 | SQLite (MVP) + Milvus (预留) |
-| 容器 | AgentScope Workspace (Docker) |
+```bash
+# 后端
+cd backend
+uv run python -m uvicorn src.server.main:app --reload --port 8765
+uv run pytest
 
+# 前端
+cd frontend
+npm run dev
+npm run build
+npm run lint
+npm run electron:compile
+npm run electron:pack
+```
+
+## 文档入口
+
+- `AGENTS.md`：当前项目事实和代理协作规范。
+- `docs/README.md`：文档索引。
+- `docs/architecture-overview.md`：当前架构总览。
+- `docs/chat-sse-event-contract.md`：Chat / RunState 稳定事件契约。
+- `docs/development-guidelines.md`：开发规范。
+- `docs/project-progress-handoff.md`：项目状态交接。
+- `docs/project-todo.md`：后续任务。
+
+旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线。历史兼容字段仍可能存在，但不再作为当前运行时能力。
 
 ## License
 

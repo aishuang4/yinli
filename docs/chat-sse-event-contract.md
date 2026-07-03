@@ -11,7 +11,7 @@
 - Chat 主界面应逐步迁移到 `RunState` 中间层；原始 SSE 事件保留为兼容增量和 Trace 输入，不再作为长期 UI 状态的唯一来源。
 - 新增 Chat UI 功能只能依赖 RunState 字段；不得新增对 `TEXT_BLOCK_DELTA`、`TOOL_*`、`TEAM_ACTIVITY`、`TEAM_MEMBER_EVENT` 等 raw SSE 分支的主链路依赖。
 - 当前前端 live handler 只消费 `RUN_STATE`、`RUN_STATE_PATCH`、`ERROR`、`RUN_CANCELLED`；其他 raw SSE 只允许后端投影器、Trace 或调试入口消费。
-- 新功能必须定义独立 Runtime Event 家族，不允许混用其他功能事件。例如记忆使用 `MEMORY_*`，产物使用 `ARTIFACT_*`，沙箱使用 `SANDBOX_*`。
+- 新功能必须定义独立 Runtime Event 家族，不允许混用其他功能事件。例如后续重设计记忆时使用新的 `MEMORY_*` 语义，产物使用 `ARTIFACT_*`，沙箱使用 `SANDBOX_*`。
 - 旧 Plan Runtime 与 Subagent Runtime 已下线，旧 `PLAN_*`、`SUBAGENT_*` 事件不属于当前稳定契约；新的 Plan Mode 事件只通过本文定义的 `RUNTIME_EVENT` 契约表达。
 
 ## Chat 路由分层
@@ -52,7 +52,7 @@
 - `TEAM_*`：Team 初始化、Worker 调度/等待/报告/完成/失败、Leader 汇总、Team 完成/失败。
 - `SKILL_*`：Skill 开始、完成、失败。
 - `HITL_*` / `CLARIFICATION_*`：人工确认与反问采集。
-- `MEMORY_*`：记忆总结与候选记忆生命周期。
+- `MEMORY_*`：历史兼容 / 后续记忆重设计预留。旧记忆模块已删除，当前运行时不得新增依赖旧记忆语义的事件。
 - `ARTIFACT_*`：文件、下载产物、生成内容等可交付产物生命周期。
 - `SANDBOX_*`：沙箱运行生命周期。
 - `PLAN_*`：Plan Mode 进入、更新、最终计划输出和工具拦截状态。
@@ -332,7 +332,7 @@ Team 必须进入 `displaySnapshot.actors[]`。Chat 主界面不得依赖顶层 
 
 ## 后处理
 
-- 记忆、产物、沙箱等后处理均通过 `RUNTIME_EVENT` 的独立家族表达：`MEMORY_*`、`ARTIFACT_*`、`SANDBOX_*`。
+- 产物、沙箱等后处理均通过 `RUNTIME_EVENT` 的独立家族表达：`ARTIFACT_*`、`SANDBOX_*`。记忆能力重设计后再定义新的 `MEMORY_*` 事件语义。
 
 ## 兼容字段
 

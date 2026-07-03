@@ -31,7 +31,7 @@ Dynamic Workflows 指由模型根据用户目标动态生成执行流程，而�
 - `HITL`：用于确认模型选择的 Agent/Tool/Skill，或在信息不足时收集用户输入。
 - `Trace`：展示动态图运行轨迹。
 - `Sandbox`：保存动态 workflow 测试案例，回放同一目标的执行稳定性。
-- `Memory Hook`：在流程结束后判断是否沉淀新记忆。
+- `Memory Hook`：仅作为未来记忆模块重设计后的可选扩展。旧记忆模块已删除，当前 Dynamic Workflow 设计不得依赖旧记忆链路。
 
 ## 第一版建议边界
 

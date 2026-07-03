@@ -141,7 +141,7 @@
 
 - 提交前至少运行：
   - `cd backend && uv run pytest`
-- 修改 AgentScope 运行时、HITL、工具调用、记忆、Team 协作时必须补回归测试。
+- 修改 AgentScope 运行时、HITL、工具调用、Team 协作，或重新设计记忆能力时必须补回归测试。
 
 ## 5. SQLite / 数据持久化规范
 
