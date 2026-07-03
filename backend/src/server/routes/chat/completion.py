@@ -3,6 +3,7 @@
 from typing import AsyncGenerator
 
 from src.memory.node_persist import MemoryNodePersistInput, persist_completed_run_memory_node
+from src.memory.reflection import MemoryReflectionInput, reflect_completed_run_memory
 from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
 from src.server.routes.chat.models import ChatModelCacheRun, ChatSkillRun, ChatTeamActivity, ChatToolRun
 from src.server.routes.chat.runtime_events import runtime_event_sse
@@ -169,6 +170,18 @@ async def finalize_successful_leader_run(
                 "skillIds": [item.id for item in completed_skill_runs],
             },
         )
+        try:
+            reflect_completed_run_memory(
+                MemoryReflectionInput(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    user_message=user_message,
+                    assistant_text=assistant_text,
+                ),
+            )
+        except Exception:
+            pass
         try:
             persist_completed_run_memory_node(
                 MemoryNodePersistInput(

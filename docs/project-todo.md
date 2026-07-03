@@ -68,6 +68,8 @@
   - [x] 加入 user / global Markdown 摘要。
   - [ ] Team Worker 策略和 Trace payload。
 - [ ] 实现 `MemoryReflectionHook`：Agent 完成运行后判断是否提炼 user memory、agent memory，以及是否生成标准 Skill。
+  - [x] 规则型首版：成功运行后提炼明确长期意图，写入 user / agent / global Markdown。
+  - [ ] 模型提炼、去重增强、敏感信息过滤增强、Trace 审计和标准 Skill 生成。
 - [x] 实现 `MemoryNodePersistHook` 首版：Agent 成功运行完后只用用户输入和 Agent 最终输出写入当天节点并同步向量库。
 - [ ] 扩展 `MemoryNodePersistHook`：接入反思模型摘要、去重、敏感信息过滤、Trace 事件和异步失败重试。
 - [ ] 新增 Memory 页面，支持四层记忆管理、Skill 自进化队列、设置和审计查看。
