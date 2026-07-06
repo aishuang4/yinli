@@ -90,6 +90,7 @@ RuntimeEventType = Literal[
     "SKILL_STARTED",
     "SKILL_COMPLETED",
     "SKILL_FAILED",
+    "MEMORY_SKILL_GENERATING",
     "PLAN_MODE_ENTERED",
     "PLAN_UPDATED",
     "PLAN_FINALIZED",

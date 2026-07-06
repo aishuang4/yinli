@@ -13,9 +13,11 @@ import zipfile
 from io import BytesIO
 from datetime import datetime, timezone
 from typing import Literal, Optional
+from urllib.parse import quote
 
 import yaml
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.server.routes.agents import remove_skills_from_agents
@@ -84,6 +86,38 @@ def _slugify(value: str) -> str:
     return slug or "custom-skill"
 
 
+def _filename_slug(value: str) -> str:
+    """生成适合下载文件名的 Skill 名称。"""
+
+    slug = re.sub(r'[\\/:*?"<>|\r\n]+', "-", value.strip()).strip(" .-")
+    return slug or "skill"
+
+
+def _normalized_skill_name(value: str) -> str:
+    """归一化 Skill 名称，用于重复判断。"""
+
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", value.lower())
+
+
+def _find_skill_by_name(name: str) -> Skill | None:
+    normalized = _normalized_skill_name(name)
+    if not normalized:
+        return None
+    for skill in _skills.values():
+        if _normalized_skill_name(skill.name) == normalized:
+            return skill
+    return None
+
+
+def _ensure_skill_name_available(name: str) -> None:
+    duplicate = _find_skill_by_name(name)
+    if duplicate:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Skill 名称已存在：{duplicate.name}",
+        )
+
+
 def _unique_skill_id(name: str) -> str:
     base = f"custom-{_slugify(name)}"
     if base not in _skills:
@@ -119,6 +153,107 @@ def _skill(
             "enabled": False,
             "installedAt": None,
             "updatedAt": _utc_now(),
+        }
+    )
+
+
+def _skill_package_dir(skill_name: str) -> str:
+    """返回 Skill 标准包目录。"""
+
+    return os.path.join(SKILL_PACKAGES_DIR, _filename_slug(skill_name))
+
+
+def _skill_markdown_from_registration(data: SkillRegisterRequest) -> str:
+    """把注册请求转换为标准 SKILL.md 内容。"""
+
+    body = (data.content or "").strip()
+    if body.startswith("---"):
+        return body
+    if not body:
+        body = f"# {data.name}\n\n请在这里补充这个 Skill 的具体执行步骤、输入约束和输出要求。"
+    metadata = {
+        "name": data.name,
+        "description": data.description or f"用户注册的 Skill: {data.name}",
+        "metadata": {
+            "short-description": data.description or f"用户注册的 Skill: {data.name}",
+        },
+        "category": data.category or "自定义",
+        "trigger": data.trigger or "",
+        "tags": data.tags[:8],
+    }
+    frontmatter = yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False).strip()
+    return f"---\n{frontmatter}\n---\n\n{body.strip()}\n"
+
+
+def _write_skill_package(skill_name: str, markdown: str) -> tuple[str, list[str]]:
+    """写入标准 Skill 包目录，并返回 resourcePath/resources。"""
+
+    package_dir = _skill_package_dir(skill_name)
+    if os.path.exists(package_dir):
+        shutil.rmtree(package_dir)
+    os.makedirs(package_dir, exist_ok=True)
+    skill_md = os.path.join(package_dir, "SKILL.md")
+    with open(skill_md, "w", encoding="utf-8") as file:
+        file.write(markdown.strip() + "\n")
+    return package_dir, ["SKILL.md"]
+
+
+def _skill_export_archive(skill: Skill) -> bytes:
+    """把一个 Skill 标准包打包为 zip。"""
+
+    buffer = BytesIO()
+    package_root = skill.resource_path
+    archive_root = _filename_slug(skill.name)
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        if package_root and os.path.isdir(package_root):
+            for root, _dirs, files in os.walk(package_root):
+                for filename in sorted(files):
+                    path = os.path.join(root, filename)
+                    relative = os.path.relpath(path, package_root)
+                    if relative.startswith("../"):
+                        continue
+                    archive.write(path, arcname=os.path.join(archive_root, relative))
+        else:
+            archive.writestr(os.path.join(archive_root, "SKILL.md"), skill.content.strip() + "\n")
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def _skill_export_filename(skill: Skill) -> str:
+    """返回 Skill 导出 zip 文件名。"""
+
+    return f"{_filename_slug(skill.name)}.zip"
+
+
+def _ensure_skill_package(skill: Skill) -> Skill:
+    """为历史用户 Skill 补齐标准 Skill 包目录。"""
+
+    expected_package_dir = _skill_package_dir(skill.name)
+    if (
+        skill.resource_path == expected_package_dir
+        and os.path.isfile(os.path.join(expected_package_dir, "SKILL.md"))
+    ):
+        return skill
+
+    markdown = (skill.content or "").strip()
+    if not markdown.startswith("---"):
+        markdown = _skill_markdown_from_registration(
+            SkillRegisterRequest(
+                name=skill.name,
+                description=skill.description,
+                category=skill.category,
+                trigger=skill.trigger,
+                content=markdown,
+                tags=skill.tags,
+            )
+        )
+    resource_path, resources = _write_skill_package(skill.name, markdown)
+    return skill.model_copy(
+        update={
+            "content": markdown,
+            "resource_path": resource_path,
+            "resources": resources,
+            "updated_at": _utc_now(),
         }
     )
 
@@ -198,9 +333,9 @@ def _extract_skill_package(
     archive: zipfile.ZipFile,
     members: list[zipfile.ZipInfo],
     skill_path: str,
-    skill_id: str,
+    skill_name: str,
 ) -> tuple[str, list[str]]:
-    package_dir = os.path.join(SKILL_PACKAGES_DIR, skill_id)
+    package_dir = _skill_package_dir(skill_name)
     if os.path.exists(package_dir):
         shutil.rmtree(package_dir)
     os.makedirs(package_dir, exist_ok=True)
@@ -324,7 +459,10 @@ def _load_user_skills() -> None:
         records = db_list_skills()
     for item in records:
         skill = Skill.model_validate(item)
+        if skill.id not in _builtin_skills:
+            skill = _ensure_skill_package(skill)
         _skills[skill.id] = skill
+    _save_user_skills()
 
 
 def _save_user_skills() -> None:
@@ -338,6 +476,36 @@ def _save_user_skills() -> None:
 def _persist_if_user_skill(skill_id: str) -> None:
     if skill_id not in _builtin_skills:
         _save_user_skills()
+
+
+def register_user_skill(data: SkillRegisterRequest) -> Skill:
+    """注册标准用户 Skill；后台流程和 API 路由共用。"""
+
+    _ensure_skill_name_available(data.name)
+    skill_id = _unique_skill_id(data.name)
+    markdown = _skill_markdown_from_registration(data)
+    resource_path, resources = _write_skill_package(data.name, markdown)
+    now = _utc_now()
+    skill = Skill.model_validate(
+        {
+            "id": skill_id,
+            "name": data.name,
+            "description": data.description or f"用户注册的 Skill: {data.name}",
+            "category": data.category or "自定义",
+            "trigger": data.trigger,
+            "content": markdown,
+            "tags": data.tags[:8],
+            "resourcePath": resource_path,
+            "resources": resources,
+            "status": "installed",
+            "enabled": True,
+            "installedAt": now,
+            "updatedAt": now,
+        }
+    )
+    _skills[skill.id] = skill
+    _save_user_skills()
+    return skill
 
 
 def build_skill_system_prompt(skill_ids: list[str]) -> str:
@@ -526,26 +694,7 @@ async def list_enabled_skills() -> list[Skill]:
 async def register_skill(data: SkillRegisterRequest) -> Skill:
     """注册自定义 Skill 并保存到本地 registry。"""
 
-    skill_id = _unique_skill_id(data.name)
-    now = _utc_now()
-    skill = Skill.model_validate(
-        {
-            "id": skill_id,
-            "name": data.name,
-            "description": data.description or f"用户注册的 Skill: {data.name}",
-            "category": data.category or "自定义",
-            "trigger": data.trigger,
-            "content": data.content,
-            "tags": data.tags[:8],
-            "status": "installed",
-            "enabled": True,
-            "installedAt": now,
-            "updatedAt": now,
-        }
-    )
-    _skills[skill.id] = skill
-    _save_user_skills()
-    return skill
+    return register_user_skill(data)
 
 
 @router.post("/import", response_model=Skill, status_code=201)
@@ -563,11 +712,12 @@ async def import_skill_archive(file: UploadFile = File(...)) -> Skill:
     skill_path, markdown, archive, members = _read_skill_md_from_zip(raw)
     try:
         draft_skill = _skill_from_markdown(skill_path, markdown)
+        _ensure_skill_name_available(draft_skill.name)
         resource_path, resources = _extract_skill_package(
             archive,
             members,
             skill_path,
-            draft_skill.id,
+            draft_skill.name,
         )
         skill = _skill_from_markdown(skill_path, markdown, resource_path, resources)
         _skills[skill.id] = skill
@@ -584,6 +734,28 @@ async def get_skill(skill_id: str) -> Skill:
     if skill_id not in _skills:
         raise HTTPException(status_code=404, detail="Skill not found")
     return _skills[skill_id]
+
+
+@router.get("/{skill_id}/export")
+async def export_skill(skill_id: str) -> StreamingResponse:
+    """导出标准 Skill zip 包。"""
+
+    if skill_id not in _skills:
+        raise HTTPException(status_code=404, detail="Skill not found")
+
+    skill = _skills[skill_id]
+    raw = _skill_export_archive(skill)
+    filename = _skill_export_filename(skill)
+    quoted_filename = quote(filename)
+    return StreamingResponse(
+        BytesIO(raw),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{quoted_filename}"; filename*=UTF-8\'\'{quoted_filename}'
+            )
+        },
+    )
 
 
 @router.post("/{skill_id}/install", response_model=Skill)

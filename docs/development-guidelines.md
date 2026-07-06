@@ -71,6 +71,8 @@
 - 通用 UI 组件放 `frontend/src/components/`，例如 `ToggleButton`、`MarkdownContent`。
 - 组件 props 必须定义明确类型，避免 `any`。
 - 列表项、卡片、弹窗、抽屉、表单段落都应组件化，避免页面内堆大段 JSX。
+- 表单字段优先使用 `frontend/src/components/form/` 的统一封装；业务页面不要直接重复书写 label、help、error、input/select/textarea 布局。
+- 复杂业务表单应抽到 `frontend/src/features/<domain>/`，页面只保留弹窗开关、请求编排和状态传递。
 
 ### 3.2 状态管理
 
@@ -83,6 +85,7 @@
 ### 3.3 UI 和交互
 
 - 优先使用 `@agentscope-ai/design` 组件；没有合适组件时再用 Ant Design 或自定义。
+- 通用表单封装内部也应优先组合 `@agentscope-ai/design`，原生表单控件只允许出现在基础组件或特殊交互组件内部。
 - 高频区域避免整块 loading 闪烁，使用按钮级 loading 或局部骨架。
 - 主流程页面保持干净，复杂配置放到 Drawer / Modal / 折叠高级设置。
 - 容器卡片尽量悬浮无边框；列表项、成员卡片、工具卡片保留边框。

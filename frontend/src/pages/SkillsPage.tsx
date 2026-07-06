@@ -4,29 +4,22 @@
  * 支持浏览 Skills、按分类/安装状态筛选、注册自定义 Skill、安装/卸载、启停和查看详情。
  */
 
-import { useMemo, useRef, useState } from 'react';
-import { CheckCircle2, Package, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { CheckCircle2, Download, Package, Plus, RefreshCw, Trash2, Upload } from 'lucide-react';
 import {
   Button,
   Card,
   Empty,
-  Input,
   Modal,
-  Select,
   Spinner,
   Tag,
 } from '@agentscope-ai/design';
+import { SkillRegisterModal, type SkillRegisterFormState } from '../features/skills/SkillRegisterModal';
 import { ToggleButton } from '../components/ToggleButton';
+import { FileImportButton } from '../components/FileImportButton';
+import { CatalogFilterBar, type CatalogInstallFilter } from '../components/form/CatalogFilterBar';
 import { useSkills } from '../hooks/useSkills';
 import type { Skill } from '../types/skill';
-
-type InstallFilter = 'all' | 'installed' | 'available';
-
-const installFilterOptions = [
-  { label: '全部', value: 'all' },
-  { label: '已安装', value: 'installed' },
-  { label: '可安装', value: 'available' },
-];
 
 function skillMatchesQuery(skill: Skill, query: string): boolean {
   const normalized = query.trim().toLowerCase();
@@ -49,6 +42,10 @@ function parseTags(value: string): string[] {
     .slice(0, 8);
 }
 
+function skillArchiveFilename(name: string): string {
+  return `${name.trim().replace(/[\\/:*?"<>|\r\n]+/g, '-').replace(/^[ .-]+|[ .-]+$/g, '') || 'skill'}.zip`;
+}
+
 export function SkillsPage() {
   const {
     skills,
@@ -58,6 +55,7 @@ export function SkillsPage() {
     refresh,
     registerSkill,
     importSkillArchive,
+    exportSkill,
     installSkill,
     uninstallSkill,
     deleteSkill,
@@ -66,7 +64,7 @@ export function SkillsPage() {
 
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('all');
-  const [installFilter, setInstallFilter] = useState<InstallFilter>('all');
+  const [installFilter, setInstallFilter] = useState<CatalogInstallFilter>('all');
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<Skill | null>(null);
@@ -75,8 +73,7 @@ export function SkillsPage() {
   const [importing, setImporting] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [registerForm, setRegisterForm] = useState({
+  const [registerForm, setRegisterForm] = useState<SkillRegisterFormState>({
     name: '',
     description: '',
     category: '自定义',
@@ -97,11 +94,6 @@ export function SkillsPage() {
 
   const installedCount = skills.filter((skill) => skill.status === 'installed').length;
   const enabledCount = skills.filter((skill) => skill.status === 'installed' && skill.enabled).length;
-
-  const categoryOptions = [
-    { label: '全部分类', value: 'all' },
-    ...categories.map((item) => ({ label: item, value: item })),
-  ];
 
   async function runSkillAction(
     skillId: string,
@@ -162,9 +154,6 @@ export function SkillsPage() {
       setImportError(err instanceof Error ? err.message : '导入 Skill 压缩包失败');
     } finally {
       setImporting(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
     }
   }
 
@@ -175,6 +164,15 @@ export function SkillsPage() {
       await deleteSkill(deleteConfirm.id);
       setSelectedSkill((current) => (current?.id === deleteConfirm.id ? null : current));
       setDeleteConfirm(null);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleExportSkill(skill: Skill) {
+    try {
+      setBusyId(skill.id);
+      await exportSkill(skill.id, skillArchiveFilename(skill.name));
     } finally {
       setBusyId(null);
     }
@@ -211,25 +209,17 @@ export function SkillsPage() {
                 注册 Skill
               </span>
             </Button>
-            <input
-              ref={fileInputRef}
-              type="file"
+            <FileImportButton
               accept=".zip,application/zip"
-              className="hidden"
-              onChange={(event) => handleImportArchive(event.target.files?.[0])}
-            />
-            <Button
               loading={importing}
-              onClick={() => {
+              icon={<Upload size={14} className="shrink-0" />}
+              onFile={(file) => {
                 setImportError(null);
-                fileInputRef.current?.click();
+                void handleImportArchive(file);
               }}
             >
-              <span className="inline-flex items-center gap-1.5">
-                <Upload size={14} className="shrink-0" />
-                导入压缩包
-              </span>
-            </Button>
+              导入压缩包
+            </FileImportButton>
             <Button
               icon={<RefreshCw size={14} />}
               onClick={refresh}
@@ -242,25 +232,16 @@ export function SkillsPage() {
       </header>
 
       <section className="px-5 py-3 border-b border-[var(--color-border)]">
-        <div className="grid grid-cols-[minmax(240px,1fr)_180px_160px] gap-3">
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索 Skill、触发条件或标签"
-            prefix={<Search size={14} />}
-            allowClear
-          />
-          <Select
-            value={category}
-            onChange={setCategory}
-            options={categoryOptions}
-          />
-          <Select
-            value={installFilter}
-            onChange={setInstallFilter}
-            options={installFilterOptions}
-          />
-        </div>
+        <CatalogFilterBar
+          query={query}
+          category={category}
+          installFilter={installFilter}
+          categories={categories}
+          searchPlaceholder="搜索 Skill、触发条件或标签"
+          onQueryChange={setQuery}
+          onCategoryChange={setCategory}
+          onInstallFilterChange={setInstallFilter}
+        />
       </section>
 
       <main className="min-h-0 overflow-y-auto p-5">
@@ -363,6 +344,13 @@ export function SkillsPage() {
                         <Button onClick={() => setSelectedSkill(skill)}>
                           详情
                         </Button>
+                        <Button
+                          loading={busy}
+                          onClick={() => handleExportSkill(skill)}
+                          aria-label="导出 Skill"
+                        >
+                          <Download size={14} />
+                        </Button>
                         {installed ? (
                           <Button
                             danger
@@ -414,9 +402,20 @@ export function SkillsPage() {
       >
         {selectedSkill && (
           <div className="space-y-5">
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              {selectedSkill.description}
-            </p>
+            <div className="flex items-start justify-between gap-3">
+              <p className="min-w-0 text-sm text-[var(--color-text-secondary)]">
+                {selectedSkill.description}
+              </p>
+              <Button
+                loading={busyId === selectedSkill.id}
+                onClick={() => handleExportSkill(selectedSkill)}
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <Download size={14} className="shrink-0" />
+                  导出
+                </span>
+              </Button>
+            </div>
 
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div>
@@ -476,117 +475,15 @@ export function SkillsPage() {
         确定要删除「{deleteConfirm?.name}」吗？内置 Skill 不能删除，只能卸载或停用。
       </Modal>
 
-      <Modal
-        title="注册 Skill"
+      <SkillRegisterModal
         open={registerOpen}
+        form={registerForm}
+        error={registerError}
+        registering={registering}
+        onFormChange={setRegisterForm}
         onCancel={() => setRegisterOpen(false)}
-        onOk={handleRegister}
-        confirmLoading={registering}
-        okText="注册"
-        cancelText="取消"
-        width={640}
-      >
-        <div className="space-y-4">
-          {registerError && (
-            <div className="rounded-md border border-[var(--color-error)] bg-[var(--color-error-bg)] p-3 text-sm text-[var(--color-error)]">
-              {registerError}
-            </div>
-          )}
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              名称 <span className="text-[var(--color-error)]">*</span>
-            </label>
-            <Input
-              value={registerForm.name}
-              onChange={(event) => setRegisterForm({
-                ...registerForm,
-                name: event.target.value,
-              })}
-              placeholder="如：API 文档撰写"
-              maxLength={80}
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-                分类
-              </label>
-              <Input
-                value={registerForm.category}
-                onChange={(event) => setRegisterForm({
-                  ...registerForm,
-                  category: event.target.value,
-                })}
-                placeholder="自定义"
-                maxLength={40}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-                标签
-              </label>
-              <Input
-                value={registerForm.tags}
-                onChange={(event) => setRegisterForm({
-                  ...registerForm,
-                  tags: event.target.value,
-                })}
-                placeholder="docs, api, writing"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              描述
-            </label>
-            <Input.TextArea
-              value={registerForm.description}
-              onChange={(event) => setRegisterForm({
-                ...registerForm,
-                description: event.target.value,
-              })}
-              placeholder="说明这个 Skill 的能力"
-              rows={2}
-              maxLength={300}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              触发条件
-            </label>
-            <Input
-              value={registerForm.trigger}
-              onChange={(event) => setRegisterForm({
-                ...registerForm,
-                trigger: event.target.value,
-              })}
-              placeholder="当用户要求撰写 API 文档时触发"
-              maxLength={200}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              Skill 内容
-            </label>
-            <Input.TextArea
-              value={registerForm.content}
-              onChange={(event) => setRegisterForm({
-                ...registerForm,
-                content: event.target.value,
-              })}
-              placeholder="写入具体执行要求、输出格式、注意事项..."
-              rows={6}
-              maxLength={12000}
-              style={{ fontFamily: 'var(--font-mono)' }}
-            />
-          </div>
-        </div>
-      </Modal>
+        onRegister={() => void handleRegister()}
+      />
     </div>
   );
 }

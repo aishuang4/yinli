@@ -12,19 +12,21 @@
  * @see css-modern-layouts: Sidebar + Main
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { AlertCircle, Bot, CheckCircle2, Download, Plus, Sparkles, Trash2, Upload, UserPlus, Users, WandSparkles, X } from 'lucide-react';
-import { Button, Empty, Input, Modal, Select, Spinner, Tag } from '@agentscope-ai/design';
+import { useState, useCallback, useEffect } from 'react';
+import { Bot, Download, Plus, Sparkles, Upload, Users, WandSparkles } from 'lucide-react';
+import { Button, Empty, Modal, Spinner } from '@agentscope-ai/design';
 import { useAgentBuilder } from '../hooks/useAgentBuilder';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
 import { AgentCard } from '../features/agents/AgentCard';
 import { AgentEditor } from '../features/agents/AgentEditor';
-import { DEFAULT_MODEL_CONFIG, type AgentCreatePayload, type ModelsResponse } from '../types/agent';
-import type { Agent } from '../types/agent';
+import { AgentBuilderWizard } from '../features/teams/AgentBuilderWizard';
+import { TeamDetailPanel } from '../features/teams/TeamDetailPanel';
+import { TeamFormModal, type TeamFormState } from '../features/teams/TeamFormModal';
+import { FileImportButton } from '../components/FileImportButton';
+import { SelectField, TextField } from '../components/form';
+import type { AgentCreatePayload } from '../types/agent';
 import type { BuilderMode, BuilderPlan } from '../types/agentBuilder';
-import type { TeamMember, TeamRecord } from '../types/team';
-import { createId } from '../utils/id';
 
 interface TeamTemplate {
   id: string;
@@ -63,14 +65,12 @@ export function AgentTeamPage() {
   const [builderMode, setBuilderMode] = useState<BuilderMode>('team');
   const [builderModel, setBuilderModel] = useState('');
   const [builderPlan, setBuilderPlan] = useState<BuilderPlan | null>(null);
-  const [teamForm, setTeamForm] = useState({
+  const [teamForm, setTeamForm] = useState<TeamFormState>({
     name: '',
     description: '',
     leaderAgentId: '',
     workerAgentIds: [] as string[],
   });
-  const importAgentInputRef = useRef<HTMLInputElement | null>(null);
-  const importTeamInputRef = useRef<HTMLInputElement | null>(null);
   const [teamTemplates, setTeamTemplates] = useState<TeamTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [templateTeamName, setTemplateTeamName] = useState('');
@@ -286,21 +286,14 @@ export function AgentTeamPage() {
                 <Download size={13} />
                 导出
               </Button>
-              <Button size="small" onClick={() => importAgentInputRef.current?.click()}>
-                <Upload size={13} />
-                导入
-              </Button>
-              <input
-                ref={importAgentInputRef}
-                type="file"
+              <FileImportButton
+                size="small"
                 accept="application/json,.json"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  event.target.value = '';
-                  if (file) void handleImportAgentFile(file);
-                }}
-              />
+                icon={<Upload size={13} />}
+                onFile={(file) => void handleImportAgentFile(file)}
+              >
+                导入
+              </FileImportButton>
             </div>
           )}
 
@@ -311,36 +304,27 @@ export function AgentTeamPage() {
                   <Download size={13} />
                   导出
                 </Button>
-                <Button size="small" onClick={() => importTeamInputRef.current?.click()}>
-                  <Upload size={13} />
-                  导入
-                </Button>
-                <input
-                  ref={importTeamInputRef}
-                  type="file"
+                <FileImportButton
+                  size="small"
                   accept="application/json,.json"
-                  className="hidden"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    event.target.value = '';
-                    if (file) void handleImportTeamFile(file);
-                  }}
-                />
+                  icon={<Upload size={13} />}
+                  onFile={(file) => void handleImportTeamFile(file)}
+                >
+                  导入
+                </FileImportButton>
               </div>
-              <Select
+              <SelectField
                 value={selectedTemplateId || undefined}
                 onChange={(value) => setSelectedTemplateId(String(value))}
                 options={teamTemplates.map((template) => ({
                   label: `${template.name}${template.builtin ? ' · 内置' : ''}`,
                   value: template.id,
                 }))}
-                style={{ width: '100%' }}
                 placeholder="选择 Team 模板"
               />
-              <input
+              <TextField
                 value={templateTeamName}
                 onChange={(event) => setTemplateTeamName(event.target.value)}
-                className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
                 placeholder="新 Team 名称（可选）"
               />
               <div className="grid grid-cols-2 gap-2">
@@ -521,54 +505,14 @@ export function AgentTeamPage() {
         确定要删除这个 Agent 吗？此操作不可撤销。
       </Modal>
 
-      <Modal
-        title="创建 Team"
+      <TeamFormModal
         open={createTeamOpen}
+        form={teamForm}
+        agents={agents}
+        onFormChange={setTeamForm}
         onCancel={() => setCreateTeamOpen(false)}
-        onOk={handleCreateTeam}
-        okText="创建"
-        cancelText="取消"
-      >
-        <div className="space-y-3">
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">名称</label>
-            <Input
-              value={teamForm.name}
-              onChange={(event) => setTeamForm({ ...teamForm, name: event.target.value })}
-              placeholder="如：Research Team"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">描述</label>
-            <Input
-              value={teamForm.description}
-              onChange={(event) => setTeamForm({ ...teamForm, description: event.target.value })}
-              placeholder="Team 的目标或职责"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">Leader Agent</label>
-            <Select
-              value={teamForm.leaderAgentId}
-              onChange={(value) => setTeamForm({ ...teamForm, leaderAgentId: value })}
-              options={agents.map((agent) => ({ label: agent.name, value: agent.id }))}
-              style={{ width: '100%' }}
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">Worker Agents</label>
-            <Select
-              mode="multiple"
-              value={teamForm.workerAgentIds}
-              onChange={(value) => setTeamForm({ ...teamForm, workerAgentIds: value })}
-              options={agents
-                .filter((agent) => agent.id !== teamForm.leaderAgentId)
-                .map((agent) => ({ label: agent.name, value: agent.id }))}
-              style={{ width: '100%' }}
-            />
-          </div>
-        </div>
-      </Modal>
+        onCreate={() => void handleCreateTeam()}
+      />
 
       <Modal
         title="智能编排 Agent / Team"
@@ -597,623 +541,6 @@ export function AgentTeamPage() {
           onResetPlan={() => setBuilderPlan(null)}
         />
       </Modal>
-    </div>
-  );
-}
-
-function AgentBuilderWizard({
-  requirement,
-  mode,
-  model,
-  models,
-  plan,
-  planning,
-  applying,
-  error,
-  onRequirementChange,
-  onModeChange,
-  onModelChange,
-  onCreatePlan,
-  onApplyPlan,
-  onResetPlan,
-}: {
-  requirement: string;
-  mode: BuilderMode;
-  model: string;
-  models: ModelsResponse | null;
-  plan: BuilderPlan | null;
-  planning: boolean;
-  applying: boolean;
-  error: string | null;
-  onRequirementChange: (value: string) => void;
-  onModeChange: (value: BuilderMode) => void;
-  onModelChange: (value: string) => void;
-  onCreatePlan: () => Promise<void>;
-  onApplyPlan: () => Promise<void>;
-  onResetPlan: () => void;
-}) {
-  const missingToolCount = plan?.agents.reduce((total, agent) => total + (agent.missingTools || []).length, 0) || 0;
-  const missingSkillCount = plan?.agents.reduce((total, agent) => total + (agent.missingSkills || []).length, 0) || 0;
-
-  return (
-    <div
-      className="grid min-h-0 grid-cols-[330px_1fr] gap-4 overflow-hidden"
-      style={{ height: 'min(72vh, 720px)' }}
-    >
-      <div className="flex min-h-0 flex-col overflow-y-auto rounded-md bg-[var(--color-bg-secondary)] p-4 shadow-sm">
-        <div className="mb-4 flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
-          <Sparkles size={15} color="var(--color-accent)" />
-          <span>从需求生成可审核草案</span>
-        </div>
-
-        <div className="space-y-4">
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">创建模式</label>
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                type={mode === 'team' ? 'primary' : 'default'}
-                onClick={() => {
-                  onModeChange('team');
-                  onResetPlan();
-                }}
-              >
-                Team
-              </Button>
-              <Button
-                type={mode === 'agents' ? 'primary' : 'default'}
-                onClick={() => {
-                  onModeChange('agents');
-                  onResetPlan();
-                }}
-              >
-                Agents
-              </Button>
-            </div>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">规划模型</label>
-            <Select
-              value={model}
-              onChange={(value) => onModelChange(value)}
-              options={[
-                { label: '使用系统默认模型', value: '' },
-                ...(models?.primary || []).map((item) => ({
-                  label: item.name,
-                  value: item.id,
-                })),
-              ]}
-              style={{ width: '100%' }}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">用户需求</label>
-            <textarea
-              value={requirement}
-              onChange={(event) => {
-                onRequirementChange(event.target.value);
-                if (plan) onResetPlan();
-              }}
-              placeholder="例如：我需要一个能做产品需求分析、技术方案设计、代码实现和测试验证的团队。"
-              className="h-52 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none transition-colors duration-300 focus:border-[var(--color-accent)]"
-            />
-          </div>
-
-          {error && (
-            <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3 text-xs text-[var(--color-error)]">
-              {error}
-            </div>
-          )}
-
-          <Button
-            type="primary"
-            loading={planning}
-            disabled={!requirement.trim() || applying}
-            onClick={onCreatePlan}
-            style={{ width: '100%' }}
-          >
-            <WandSparkles size={14} />
-            生成草案
-          </Button>
-        </div>
-      </div>
-
-      <div className="h-full min-h-0 overflow-y-auto rounded-md bg-[var(--color-bg-secondary)] p-4 shadow-sm">
-        {!plan ? (
-          <div className="flex h-full items-center justify-center text-[var(--color-text-tertiary)]">
-            <div className="text-center">
-              <WandSparkles size={44} strokeWidth={1.2} className="mx-auto mb-3" />
-              <div className="text-sm">输入需求后生成 Agent / Team 草案</div>
-              <div className="mt-1 text-xs">系统会匹配已启用的 MCP 工具和 Skills，并标出缺失能力</div>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4 pb-2">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-base font-medium text-[var(--color-text-primary)]">
-                  {plan.team?.name || 'Agent 创建草案'}
-                </div>
-                <div className="mt-1 text-sm text-[var(--color-text-secondary)]">
-                  {plan.team?.description || plan.requirement}
-                </div>
-              </div>
-              <div className="flex shrink-0 gap-2">
-                <Tag size="small" color="transparent">{plan.mode}</Tag>
-                <Tag size="small" color={missingToolCount + missingSkillCount > 0 ? 'orange' : 'green'}>
-                  缺失 {missingToolCount + missingSkillCount}
-                </Tag>
-              </div>
-            </div>
-
-            {plan.warnings.length > 0 && (
-              <div className="space-y-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-                {plan.warnings.map((warning) => (
-                  <div key={warning} className="flex items-start gap-2 text-xs text-[var(--color-warning)]">
-                    <AlertCircle size={13} className="mt-0.5 shrink-0" />
-                    <span>{warning}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="grid gap-3">
-              {plan.agents.map((agent) => (
-                <BuilderAgentDraftCard
-                  key={agent.tempId}
-                  agent={agent}
-                  mode={plan.mode}
-                />
-              ))}
-            </div>
-
-            <div className="flex justify-end gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 shadow-sm">
-              <Button disabled={applying || planning} onClick={onResetPlan}>
-                重新填写
-              </Button>
-              <Button type="primary" loading={applying} disabled={planning} onClick={onApplyPlan}>
-                <CheckCircle2 size={14} />
-                确认创建
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function BuilderAgentDraftCard({
-  agent,
-  mode,
-}: {
-  agent: BuilderPlan['agents'][number];
-  mode: BuilderMode;
-}) {
-  const matchedTools = (agent.recommendedTools || []).filter((item) => item.matched);
-  const matchedSkills = (agent.recommendedSkills || []).filter((item) => item.matched);
-  const modelConfig = agent.modelConfig || DEFAULT_MODEL_CONFIG;
-
-  return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Tag size="small" color={mode === 'agents' ? 'green' : agent.role === 'leader' ? 'blue' : 'mauve'}>
-              {mode === 'agents' ? 'Agent' : agent.role === 'leader' ? 'Leader' : 'Worker'}
-            </Tag>
-            <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-              {agent.name}
-            </div>
-          </div>
-          <div className="mt-2 text-xs text-[var(--color-text-secondary)]">
-            {agent.description || '暂无描述'}
-          </div>
-        </div>
-        <Tag size="small" color="transparent">
-          {modelConfig.primary}
-        </Tag>
-      </div>
-
-      <div className="mb-3 line-clamp-3 whitespace-pre-wrap rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 text-xs text-[var(--color-text-tertiary)]">
-        {agent.systemPrompt}
-      </div>
-
-      <div className="grid gap-3 md:grid-cols-2">
-        <CapabilityBlock
-          title="MCP 工具"
-          matched={matchedTools.map((item) => item.name)}
-          missing={agent.missingTools || []}
-        />
-        <CapabilityBlock
-          title="Skills"
-          matched={matchedSkills.map((item) => item.name)}
-          missing={agent.missingSkills || []}
-        />
-      </div>
-    </div>
-  );
-}
-
-function CapabilityBlock({
-  title,
-  matched,
-  missing,
-}: {
-  title: string;
-  matched: string[];
-  missing: string[];
-}) {
-  return (
-    <div>
-      <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">{title}</div>
-      <div className="flex flex-wrap gap-1">
-        {matched.length === 0 && missing.length === 0 && (
-          <Tag size="small" color="transparent">未绑定</Tag>
-        )}
-        {matched.map((name) => (
-          <Tag key={`matched-${name}`} size="small" color="green">
-            {name}
-          </Tag>
-        ))}
-        {missing.map((name) => (
-          <Tag key={`missing-${name}`} size="small" color="orange">
-            缺失 {name}
-          </Tag>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function TeamDetailPanel({
-  team,
-  agents,
-  onUpdate,
-  onDelete,
-}: {
-  team: TeamRecord;
-  agents: Agent[];
-  onUpdate: (payload: { members: TeamMember[]; workerSelectorPrompt: string }) => Promise<void>;
-  onDelete: () => Promise<void>;
-}) {
-  const agentNameById = new Map(agents.map((agent) => [agent.id, agent.name]));
-  const [memberDrafts, setMemberDrafts] = useState<TeamMember[]>(team.members);
-  const [workerSelectorPrompt, setWorkerSelectorPrompt] = useState(team.workerSelectorPrompt || '');
-  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(team.members[0]?.id || null);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    setMemberDrafts(team.members);
-    setWorkerSelectorPrompt(team.workerSelectorPrompt || '');
-    setSelectedMemberId((current) => (
-      current && team.members.some((member) => member.id === current)
-        ? current
-        : team.members[0]?.id || null
-    ));
-  }, [team.id, team.members, team.workerSelectorPrompt]);
-
-  const workerMembers = memberDrafts.filter((member) => member.role === 'worker');
-  const selectedMember = memberDrafts.find((member) => member.id === selectedMemberId) || null;
-  const existingAgentIds = new Set(memberDrafts.map((member) => member.agentId));
-  const addableAgentOptions = agents
-    .filter((agent) => !existingAgentIds.has(agent.id))
-    .map((agent) => ({ label: agent.name, value: agent.id }));
-
-  const updateMember = (memberId: string, patch: Partial<TeamMember>) => {
-    setMemberDrafts((current) => current.map((member) => (
-      member.id === memberId
-        ? {
-            ...member,
-            ...patch,
-            dependsOn: patch.executionMode === 'parallel' ? [] : patch.dependsOn ?? member.dependsOn,
-          }
-        : member
-    )));
-  };
-
-  const addWorker = (agentId: string) => {
-    const agent = agents.find((item) => item.id === agentId);
-    if (!agent) return;
-
-    const nextMember: TeamMember = {
-      id: createId('member'),
-      agentId: agent.id,
-      name: agent.name,
-      role: 'worker',
-      description: agent.description || 'Team worker session',
-      executionMode: 'parallel',
-      dependsOn: [],
-      handoffPrompt: '',
-      status: 'idle',
-    };
-
-    setMemberDrafts((current) => [...current, nextMember]);
-    setSelectedMemberId(nextMember.id);
-  };
-
-  const removeWorker = (memberId: string) => {
-    const removed = memberDrafts.find((member) => member.id === memberId);
-    if (!removed || removed.role === 'leader') return;
-
-    setMemberDrafts((current) => current
-      .filter((member) => member.id !== memberId)
-      .map((member) => ({
-        ...member,
-        dependsOn: (member.dependsOn || []).filter((dependency) => dependency !== removed.agentId && dependency !== removed.id),
-      })));
-    setSelectedMemberId((current) => (
-      current === memberId
-        ? memberDrafts.find((member) => member.id !== memberId)?.id || null
-        : current
-    ));
-  };
-
-  const saveTeamMembers = async () => {
-    setSaving(true);
-    try {
-      await onUpdate({
-        members: memberDrafts,
-        workerSelectorPrompt,
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)_380px] gap-4 overflow-hidden p-4">
-      <div className="min-h-0 overflow-y-auto rounded-md bg-[var(--color-bg-primary)] p-5 shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
-      <div className="mb-5 flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-medium text-[var(--color-text-primary)]">{team.name}</h2>
-          <div className="mt-1 text-sm text-[var(--color-text-secondary)]">
-            {team.description || '暂无描述'}
-          </div>
-        </div>
-        <div className="flex shrink-0 gap-2">
-          <Button type="primary" loading={saving} onClick={saveTeamMembers}>
-            保存调度
-          </Button>
-          <Button danger icon={<Trash2 size={14} />} onClick={onDelete}>
-            删除
-          </Button>
-        </div>
-      </div>
-
-      <div className="mb-4 rounded-md bg-[var(--color-bg-secondary)] p-3 shadow-sm">
-        <label className="mb-2 flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
-          <UserPlus size={13} />
-          添加 Worker
-        </label>
-        <Select
-          key={memberDrafts.length}
-          value={undefined}
-          onChange={(value) => addWorker(String(value))}
-          options={addableAgentOptions}
-          placeholder={addableAgentOptions.length ? '选择一个 Agent 加入 Team' : '没有可添加的 Agent'}
-          disabled={addableAgentOptions.length === 0}
-          style={{ width: '100%' }}
-        />
-      </div>
-
-      <div className="mb-4 rounded-md bg-[var(--color-bg-secondary)] p-3 shadow-sm">
-        <label className="mb-2 flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]">
-          <Sparkles size={13} />
-          Worker 自动选择提示词
-        </label>
-        <Input.TextArea
-          value={workerSelectorPrompt}
-          onChange={(event) => setWorkerSelectorPrompt(event.target.value)}
-          rows={8}
-          placeholder="控制系统内置 TeamWorkerSelector 如何选择本轮参与的 Worker"
-        />
-        <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
-          该提示词只注入系统内置 Worker Selector Agent，不会赋予工具、MCP 或 Skills 权限。
-        </div>
-      </div>
-
-      <div className="grid gap-3">
-        {memberDrafts.map((member) => {
-          const selected = member.id === selectedMemberId;
-
-          return (
-          <button
-            key={member.id}
-            type="button"
-            onClick={() => setSelectedMemberId(member.id)}
-            className={[
-              'ui-card-transition w-full rounded-md border p-4 text-left',
-              selected
-                ? 'border-[var(--color-accent)] bg-[var(--color-accent-bg)] shadow-sm'
-                : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] hover:shadow-md',
-            ].join(' ')}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <Tag size="small" color={member.role === 'leader' ? 'blue' : 'mauve'}>
-                    {member.role}
-                  </Tag>
-                  <span className="font-medium text-[var(--color-text-primary)]">
-                    {agentNameById.get(member.agentId) || member.name}
-                  </span>
-                </div>
-                <div className="mt-2 text-xs text-[var(--color-text-secondary)]">
-                  {member.description}
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <Tag size="small" color="transparent">{member.status}</Tag>
-                {member.role === 'worker' && (
-                  <Button
-                    size="small"
-                    danger
-                    icon={<Trash2 size={13} />}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      removeWorker(member.id);
-                    }}
-                    aria-label="移除成员"
-                  />
-                )}
-              </div>
-            </div>
-          </button>
-          );
-        })}
-      </div>
-      </div>
-
-      <div className="min-h-0 rounded-md bg-[var(--color-bg-primary)] shadow-[0_12px_30px_rgba(0,0,0,0.08)] transition-all duration-300">
-        <div className="flex h-full min-h-0 flex-col">
-          <div className="flex items-center justify-between p-4">
-            <div>
-              <h3 className="text-sm font-medium text-[var(--color-text-primary)]">成员设置</h3>
-              <div className="mt-1 text-xs text-[var(--color-text-secondary)]">
-                点击左侧成员后编辑本轮协作参数
-              </div>
-            </div>
-            {selectedMember && (
-              <Button
-                size="small"
-                icon={<X size={14} />}
-                onClick={() => setSelectedMemberId(null)}
-                aria-label="关闭成员设置"
-              />
-            )}
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            {selectedMember ? (
-              <TeamMemberSettings
-                member={selectedMember}
-                workerMembers={workerMembers}
-                agentNameById={agentNameById}
-                onUpdate={(patch) => updateMember(selectedMember.id, patch)}
-                onRemove={selectedMember.role === 'worker' ? () => removeWorker(selectedMember.id) : undefined}
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center">
-                <Empty type="noData" description="选择成员后编辑设置" />
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TeamMemberSettings({
-  member,
-  workerMembers,
-  agentNameById,
-  onUpdate,
-  onRemove,
-}: {
-  member: TeamMember;
-  workerMembers: TeamMember[];
-  agentNameById: Map<string, string>;
-  onUpdate: (patch: Partial<TeamMember>) => void;
-  onRemove?: () => void;
-}) {
-  const dependencyOptions = workerMembers
-    .filter((worker) => worker.id !== member.id && worker.agentId !== member.agentId)
-    .map((worker) => ({
-      label: agentNameById.get(worker.agentId) || worker.name,
-      value: worker.agentId,
-    }));
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <Tag size="small" color={member.role === 'leader' ? 'blue' : 'mauve'}>
-                {member.role}
-              </Tag>
-              <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-                {agentNameById.get(member.agentId) || member.name}
-              </div>
-            </div>
-            <div className="mt-2 text-xs text-[var(--color-text-secondary)]">
-              {member.agentId}
-            </div>
-          </div>
-          {onRemove && (
-            <Button size="small" danger icon={<Trash2 size={13} />} onClick={onRemove}>
-              移除
-            </Button>
-          )}
-        </div>
-      </div>
-
-      <div>
-        <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-          成员职责说明
-        </label>
-        <Input.TextArea
-          value={member.description || ''}
-          onChange={(event) => onUpdate({ description: event.target.value })}
-          rows={4}
-          placeholder="描述该成员在 Team 中负责什么"
-        />
-      </div>
-
-      {member.role === 'worker' ? (
-        <>
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              执行方式
-            </label>
-            <Select
-              value={member.executionMode || 'parallel'}
-              onChange={(value) => onUpdate({
-                executionMode: value as TeamMember['executionMode'],
-              })}
-              options={[
-                { label: '并行执行', value: 'parallel' },
-                { label: '等待依赖 Worker', value: 'depends_on' },
-              ]}
-              style={{ width: '100%' }}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              依赖 Worker
-            </label>
-            <Select
-              mode="multiple"
-              value={member.dependsOn || []}
-              disabled={member.executionMode !== 'depends_on'}
-              onChange={(value) => onUpdate({ dependsOn: value })}
-              options={dependencyOptions}
-              placeholder="选择上游 Worker"
-              style={{ width: '100%' }}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              交接提示
-            </label>
-            <Input.TextArea
-              value={member.handoffPrompt || ''}
-              onChange={(event) => onUpdate({ handoffPrompt: event.target.value })}
-              rows={5}
-              placeholder="告诉该 Worker 如何使用上游 Worker 的输出"
-            />
-          </div>
-        </>
-      ) : (
-        <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4 text-sm text-[var(--color-text-secondary)]">
-          Leader 负责拆解任务和汇总结果；成员增删请通过 Worker 列表管理。
-        </div>
-      )}
     </div>
   );
 }

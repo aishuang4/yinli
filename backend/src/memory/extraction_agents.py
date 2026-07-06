@@ -15,6 +15,7 @@ from agentscope.permission import PermissionMode
 from pydantic import BaseModel, Field
 
 from src.agents.runtime_types import AgentGuardrails, AgentModelOptions, RuntimeToolScope
+from src.memory.skill_evolution import SkillEvolutionGateDecision, WorkflowEvidence
 from src.tools.memory_reflection import MemoryFileToolSet, SkillDraftPropose
 
 MemoryScope = Literal["user", "agent", "global_preference"]
@@ -27,9 +28,10 @@ MemorySection = Literal[
     "Negative Rules",
 ]
 MemoryOperation = Literal["append", "update", "delete", "skip"]
+SkillGranularity = Literal["too_small", "atomic", "too_broad"]
 
 MEMORY_REFLECTION_PROMPT_VERSION = "2026-07-03-v4"
-SKILL_EVOLUTION_PROMPT_VERSION = "2026-07-03-v3"
+SKILL_EVOLUTION_PROMPT_VERSION = "2026-07-06-v1"
 
 
 class MemoryExtractionItem(BaseModel):
@@ -67,15 +69,35 @@ class SkillDraftPayload(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class SkillSplitSuggestion(BaseModel):
+    """过大工作流的原子 Skill 拆分建议。"""
+
+    name: str = Field(default="", max_length=80)
+    trigger: str = Field(default="", max_length=300)
+    reason: str = Field(default="", max_length=300)
+
+
+class SkillVariableFlow(BaseModel):
+    """Skill 草稿中必须保留的变量传递关系。"""
+
+    source: str = ""
+    target: str = ""
+    variable: str = ""
+
+
 class SkillEvolutionAgentPayload(BaseModel):
     """SkillEvolutionAgent 的结构化输出。"""
 
     reusable: bool = False
     confidence: float = Field(default=0.0, ge=0, le=1)
+    granularity: SkillGranularity = "atomic"
+    requires_workflow: bool = Field(default=False, alias="requiresWorkflow")
     reason: str = Field(default="", max_length=500)
+    suggested_split: list[SkillSplitSuggestion] = Field(default_factory=list, alias="suggestedSplit")
+    variable_flow: list[SkillVariableFlow] = Field(default_factory=list, alias="variableFlow")
     draft: SkillDraftPayload | None = None
 
-    model_config = {"extra": "ignore"}
+    model_config = {"populate_by_name": True, "extra": "ignore"}
 
 
 async def run_memory_reflection_agent(
@@ -131,6 +153,8 @@ async def run_skill_evolution_agent(
     assistant_text: str,
     agent_id: str,
     agent_name: str,
+    workflow_evidence: WorkflowEvidence | None = None,
+    router_gate: SkillEvolutionGateDecision | None = None,
     model_name: str,
     fallback_names: list[str] | None = None,
     invocation_key: str = "",
@@ -152,6 +176,8 @@ async def run_skill_evolution_agent(
             assistant_text=assistant_text,
             agent_id=agent_id,
             agent_name=agent_name,
+            workflow_evidence=workflow_evidence,
+            router_gate=router_gate,
         ),
         model_name=model_name,
         fallback_names=fallback_names or [],
@@ -389,12 +415,20 @@ def _build_skill_evolution_system_prompt() -> str:
     return "\n".join([
         "你是 SkillEvolutionAgent，一个后台基础设施 Agent。",
         "只返回一个紧凑、合法的 JSON 对象。不要写 markdown fence。",
-        "判断本次已完成工作是否应该沉淀为可复用的标准 Skill。",
+        "判断本次已完成工作是否应该沉淀为可复用、原子化的标准 Skill。",
+        "你只能在 routerGate.shouldEvaluate=true 时评估 Skill；如果 gate 不通过，必须 reusable=false。",
+        "workflowEvidence 是唯一可信的过程证据来源，不能编造未出现在 evidence 中的工具链、测试或文件。",
         "所有 Skill 草稿字段必须使用中文记录：name、description、trigger、content、reason 都必须是中文。",
         "即使原始对话是英文，也要把可复用经验、触发条件、步骤、约束和输出形态翻译成中文后写入草稿。",
         "英文技术名词、代码标识符、文件名、API 名称、命令和专有产品名可以保留原文，但说明性文字必须是中文。",
         "不要把英文原句直接作为 Skill 内容保存，除非它本身是必须精确保留的代码、命令、路径、配置项或专有名词。",
-        "可复用 Skill 必须有可重复目标、触发条件、步骤、约束和输出形态。",
+        "可复用 Skill 必须有可重复目标、单一触发条件、步骤、约束和输出形态。",
+        "必须判断 granularity：too_small 表示太小不生成；atomic 表示原子能力可生成；too_broad 表示过大流程不能生成单个 Skill。",
+        "只有 granularity=atomic 且 reusable=true 时才允许生成 draft。",
+        "如果 granularity=too_broad，必须 reusable=false、requiresWorkflow=true、draft=null，并给出 suggestedSplit 原子 Skill 拆分建议。",
+        "禁止生成 do_everything_* 这类超级 Skill；跨阶段流程应该由 Workflow 编排器组合原子 Skill。",
+        "Skill 步骤必须保留变量流：工具返回值要写成变量传递，禁止硬编码本轮具体 ID、路径、URL、token 或运行时返回值。",
+        "successfulToolChain 只能作为主步骤来源；usefulFailures 只能转写为注意事项或反面案例；discardedFailures 不得进入 Skill 内容。",
         "拒绝一次性闲聊、私有客户数据、密钥、临时路径、未完成工作，以及无法泛化的项目细节。",
         "输出只能是 Skill 草稿，不要绑定到任何 Agent。",
         "优先调用 skill_draft_propose 提交候选；该工具不会注册 Skill，也不会绑定 Agent。",
@@ -403,7 +437,15 @@ def _build_skill_evolution_system_prompt() -> str:
             {
                 "reusable": True,
                 "confidence": 0.0,
+                "granularity": "atomic",
+                "requiresWorkflow": False,
                 "reason": "简短中文理由",
+                "suggestedSplit": [
+                    {"name": "原子 Skill 名称", "trigger": "触发条件", "reason": "为什么应该拆出它"},
+                ],
+                "variableFlow": [
+                    {"source": "search_user.user_id", "target": "send_email.user_id", "variable": "user_id"},
+                ],
                 "draft": {
                     "name": "简短中文 Skill 名称",
                     "description": "这个 Skill 做什么",
@@ -423,11 +465,23 @@ def _build_skill_evolution_user_prompt(
     assistant_text: str,
     agent_id: str,
     agent_name: str,
+    workflow_evidence: WorkflowEvidence | None = None,
+    router_gate: SkillEvolutionGateDecision | None = None,
 ) -> str:
     payload = {
         "agent": {"id": agent_id, "name": agent_name},
         "userMessage": user_message,
         "assistantFinalOutput": assistant_text,
+        "routerGate": (
+            router_gate.model_dump(mode="json", by_alias=True)
+            if router_gate
+            else {"shouldEvaluate": True, "reason": "未提供 gate，兼容旧调用。", "risk": "medium", "signals": []}
+        ),
+        "workflowEvidence": (
+            workflow_evidence.model_dump(mode="json", by_alias=True)
+            if workflow_evidence
+            else {}
+        ),
         "policy": {
             "draftOnly": True,
             "doNotRegister": True,
@@ -438,6 +492,12 @@ def _build_skill_evolution_user_prompt(
             "translateReusableKnowledgeToChinese": True,
             "skillDraftMustBeChinese": True,
             "preserveEnglishOnlyForTechnicalIdentifiers": True,
+            "requireAtomicGranularity": True,
+            "rejectTooBroadSkill": True,
+            "preserveVariableFlow": True,
+            "doNotHardcodeRuntimeValues": True,
+            "successfulToolsBecomeSteps": True,
+            "usefulFailuresBecomePitfallsOnly": True,
         },
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

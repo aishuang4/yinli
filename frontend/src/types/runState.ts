@@ -14,6 +14,7 @@ export type RunStatePatchKind =
   | 'model_usage'
   | 'approval_resolved'
   | 'display_event'
+  | 'notice'
   | 'error';
 
 export interface RunStateToolSummary {
@@ -109,6 +110,10 @@ export interface ChatRunStatePatch {
   tokenUsage?: { input: number; output: number } | null;
   displayEvent?: DisplayEvent;
   resolvedApprovalId?: string;
+  notice?: {
+    type: string;
+    message?: string;
+  };
   error?: string;
 }
 

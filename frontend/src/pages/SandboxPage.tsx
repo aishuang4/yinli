@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Bot, Copy, FlaskConical, Loader2, Save, Send, Square, Trash2, Users, Wrench } from 'lucide-react';
-import { Button, Select, Spinner, Tag } from '@agentscope-ai/design';
+import { Copy, FlaskConical, Loader2, Wrench } from 'lucide-react';
+import { Tag } from '@agentscope-ai/design';
+import { SandboxControlPanel, type SandboxCase } from '../features/sandbox/SandboxControlPanel';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
@@ -8,22 +9,6 @@ import { useEventStream, type TeamActorInfo, type ToolCallInfo } from '../hooks/
 import type { TeamMember } from '../types/team';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
-
-interface SandboxCase {
-  id: string;
-  name: string;
-  description: string;
-  payload: {
-    mode: 'agent' | 'team';
-    agentId: string;
-    agentName: string;
-    teamId: string | null;
-    teamName: string | null;
-    message: string;
-  };
-  createdAt: string;
-  updatedAt: string;
-}
 
 export function SandboxPage() {
   const { agents, loading: agentsLoading } = useAgents();
@@ -158,130 +143,35 @@ export function SandboxPage() {
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[360px_1fr] gap-4 overflow-hidden p-4">
-      <aside className="min-h-0 overflow-y-auto rounded-md bg-[var(--color-bg-primary)] p-4 shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
-        <div className="mb-4 flex items-center gap-2">
-          <FlaskConical size={18} color="var(--color-accent)" />
-          <div>
-            <h2 className="text-base font-medium text-[var(--color-text-primary)]">测试沙盒</h2>
-            <div className="text-xs text-[var(--color-text-secondary)]">不写历史，仅用于临时验证</div>
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="flex justify-center py-10"><Spinner /></div>
-        ) : (
-          <div className="space-y-4">
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">测试用例</label>
-              <Select
-                value={selectedCaseId || undefined}
-                onChange={(value) => setSelectedCaseId(String(value))}
-                options={cases.map((item) => ({ label: item.name, value: item.id }))}
-                style={{ width: '100%' }}
-                placeholder="选择已保存用例"
-              />
-              <div className="mt-2">
-                <input
-                  value={caseName}
-                  onChange={(event) => setCaseName(event.target.value)}
-                  className="w-full min-w-0 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-1.5 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                  placeholder="用例名称"
-                />
-                <div className="mt-2 flex items-center gap-2">
-                  <Button size="small" disabled={!runtimeAgent || !message.trim()} loading={savingCase} onClick={() => void saveCurrentCase()}>
-                    <Save size={13} />
-                    保存
-                  </Button>
-                  <Button size="small" disabled={!selectedCaseId} onClick={loadSelectedCase}>
-                    加载用例
-                  </Button>
-                  <Button size="small" disabled={!selectedCaseId} onClick={() => void deleteSelectedCase()} title="删除用例">
-                    <Trash2 size={13} />
-                  </Button>
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">运行模式</label>
-              <div className="grid grid-cols-2 gap-2">
-                <Button type={mode === 'agent' ? 'primary' : 'default'} onClick={() => setMode('agent')}>
-                  <Bot size={14} />
-                  单 Agent
-                </Button>
-                <Button type={mode === 'team' ? 'primary' : 'default'} onClick={() => setMode('team')}>
-                  <Users size={14} />
-                  Team
-                </Button>
-              </div>
-            </div>
-
-            {mode === 'agent' ? (
-              <div>
-                <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">Agent</label>
-                <Select
-                  value={selectedAgent?.id}
-                  onChange={(value) => setAgentId(String(value))}
-                  options={agents.map((agent) => ({ label: `${agent.name} · ${agent.modelConfig.primary}`, value: agent.id }))}
-                  style={{ width: '100%' }}
-                  placeholder="选择 Agent"
-                />
-              </div>
-            ) : (
-              <div>
-                <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">Team</label>
-                <Select
-                  value={selectedTeam?.id}
-                  onChange={(value) => setTeamId(String(value))}
-                  options={teams.map((team) => ({ label: `${team.name} · ${team.members.length} 成员`, value: team.id }))}
-                  style={{ width: '100%' }}
-                  placeholder="选择 Team"
-                />
-              </div>
-            )}
-
-            <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-              <div className="text-sm font-medium text-[var(--color-text-primary)]">
-                {runtimeAgent?.name || '未选择运行对象'}
-              </div>
-              <div className="mt-1 text-xs text-[var(--color-text-secondary)]">
-                {runtimeAgent?.modelConfig.primary || '选择 Agent 或 Team 后开始测试'}
-              </div>
-              {mode === 'team' && selectedTeam && (
-                <div className="mt-2 flex flex-wrap gap-1">
-                  {selectedTeam.members.slice(0, 6).map((member) => (
-                    <Tag key={member.id} size="small" color={member.role === 'leader' ? 'blue' : 'mauve'}>
-                      {member.name}
-                    </Tag>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">测试输入</label>
-              <textarea
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                className="h-48 w-full resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                placeholder="输入一条测试任务"
-              />
-            </div>
-
-            <div className="flex gap-2">
-              <Button type="primary" disabled={!runtimeAgent || !message.trim()} loading={state.isStreaming} onClick={() => void runSandbox()}>
-                <Send size={14} />
-                运行测试
-              </Button>
-              <Button disabled={!state.isStreaming} onClick={abort}>
-                <Square size={14} />
-                停止
-              </Button>
-              <Button disabled={state.isStreaming} onClick={reset}>清空</Button>
-            </div>
-          </div>
-        )}
-      </aside>
+      <SandboxControlPanel
+        loading={loading}
+        mode={mode}
+        setMode={setMode}
+        agents={agents}
+        teams={teams}
+        selectedAgent={selectedAgent}
+        selectedTeam={selectedTeam}
+        runtimeAgent={runtimeAgent}
+        agentId={agentId}
+        teamId={teamId}
+        setAgentId={setAgentId}
+        setTeamId={setTeamId}
+        cases={cases}
+        selectedCaseId={selectedCaseId}
+        setSelectedCaseId={setSelectedCaseId}
+        caseName={caseName}
+        setCaseName={setCaseName}
+        savingCase={savingCase}
+        message={message}
+        setMessage={setMessage}
+        isStreaming={state.isStreaming}
+        onSaveCase={() => void saveCurrentCase()}
+        onLoadCase={loadSelectedCase}
+        onDeleteCase={() => void deleteSelectedCase()}
+        onRun={() => void runSandbox()}
+        onAbort={abort}
+        onReset={reset}
+      />
 
       <main className="min-h-0 overflow-y-auto rounded-md bg-[var(--color-bg-primary)] p-5 shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
         <SandboxResult state={state} />

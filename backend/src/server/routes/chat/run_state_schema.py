@@ -16,6 +16,7 @@ RunStatePatchKind = Literal[
     "display_event",
     "model_usage",
     "approval_resolved",
+    "notice",
     "error",
 ]
 DisplayBlockKind = Literal["process", "team", "plan", "feedback", "answer", "files", "error"]
@@ -218,6 +219,7 @@ class RunStatePatch(BaseModel):
     modelName: str | None = None
     tokenUsage: dict[str, Any] | None = None
     resolvedApprovalId: str | None = None
+    notice: dict[str, Any] | None = None
     displayEvent: RunStateDisplayEvent | None = None
     error: str | None = None
 

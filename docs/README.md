@@ -1,6 +1,6 @@
 # Agent Workstation 文档索引
 
-> 状态：2026-07-03 更新后生效。本文是 `docs/` 的入口，避免旧设计文档继续误导开发。
+> 状态：2026-07-06 更新后生效。本文是 `docs/` 的入口，避免旧设计文档继续误导开发。
 
 ## 必读文档
 
@@ -8,7 +8,7 @@
 - `docs/development-guidelines.md`：开发规范，覆盖前端、后端、SQLite、Agent Runtime、测试和文档要求。
 - `docs/architecture-overview.md`：当前架构总览，只描述仍在线的核心链路。
 - `docs/chat-sse-event-contract.md`：Chat / RunState / DisplaySnapshot 稳定契约。新增或变更 Chat 事件前必须先改这里。
-- `docs/memory-system-design.md`：新记忆系统设计与实现进度，覆盖长期节点记忆、Markdown 记忆、向量存储和 Skill 自进化后续约束。
+- `docs/memory-system-design.md`：新记忆系统设计与实现进度，覆盖历史记忆（底层 `memory_nodes`）、Markdown 记忆、向量存储、Memory 页面和 Skill 自进化后续约束。
 - `docs/project-progress-handoff.md`：当前项目状态、启动验证方式和协作入口。
 - `docs/project-todo.md`：后续任务队列。
 

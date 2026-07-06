@@ -126,6 +126,29 @@ def test_user_markdown_route_uses_lazy_template_and_first_write(tmp_path, monkey
     assert (tmp_path / "data" / "memory" / "users" / "user-1" / "user_memory.md").exists()
 
 
+def test_default_user_markdown_route_uses_single_user_memory(tmp_path, monkeypatch):
+    from src.memory import markdown_store
+
+    monkeypatch.setattr(markdown_store, "BACKEND_ROOT", tmp_path)
+
+    read_response = asyncio.run(memory_routes.read_default_user_markdown_memory())
+    assert read_response["scope"] == "user"
+    assert read_response["ownerId"] == "default"
+    assert read_response["exists"] is False
+    assert read_response["content"] == USER_MEMORY_TEMPLATE
+    assert not (tmp_path / "data" / "memory" / "users" / "user_memory.md").exists()
+
+    write_response = asyncio.run(
+        memory_routes.write_default_user_markdown_memory(
+            memory_routes.MarkdownMemoryUpdate(content="# Summary\n\n唯一用户记忆。"),
+        ),
+    )
+    assert write_response["exists"] is True
+    assert write_response["ownerId"] == "default"
+    assert (tmp_path / "data" / "memory" / "users" / "user_memory.md").exists()
+    assert not (tmp_path / "data" / "memory" / "users" / "default" / "user_memory.md").exists()
+
+
 def test_global_markdown_route_uses_lazy_template_and_first_write(tmp_path, monkeypatch):
     from src.memory import markdown_store
 
@@ -146,6 +169,29 @@ def test_global_markdown_route_uses_lazy_template_and_first_write(tmp_path, monk
     )
     assert write_response["exists"] is True
     assert (tmp_path / "data" / "memory" / "global" / "workspace-1" / "global_memory.md").exists()
+
+
+def test_default_global_markdown_route_uses_single_global_memory(tmp_path, monkeypatch):
+    from src.memory import markdown_store
+
+    monkeypatch.setattr(markdown_store, "BACKEND_ROOT", tmp_path)
+
+    read_response = asyncio.run(memory_routes.read_default_global_markdown_memory())
+    assert read_response["scope"] == "global_preference"
+    assert read_response["ownerId"] == "default"
+    assert read_response["exists"] is False
+    assert read_response["content"] == GLOBAL_MEMORY_TEMPLATE
+    assert not (tmp_path / "data" / "memory" / "global" / "global_memory.md").exists()
+
+    write_response = asyncio.run(
+        memory_routes.write_default_global_markdown_memory(
+            memory_routes.MarkdownMemoryUpdate(content="# Summary\n\n唯一全局记忆。"),
+        ),
+    )
+    assert write_response["exists"] is True
+    assert write_response["ownerId"] == "default"
+    assert (tmp_path / "data" / "memory" / "global" / "global_memory.md").exists()
+    assert not (tmp_path / "data" / "memory" / "global" / "default" / "global_memory.md").exists()
 
 
 def test_default_memory_paths_use_descriptive_file_names(tmp_path):

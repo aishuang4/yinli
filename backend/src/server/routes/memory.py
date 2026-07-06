@@ -167,6 +167,22 @@ async def write_agent_markdown_memory(agent_id: str, data: MarkdownMemoryUpdate)
     return _markdown_doc_response(doc)
 
 
+@router.get("/markdown/user")
+async def read_default_user_markdown_memory() -> dict[str, Any]:
+    """读取唯一用户 Markdown 记忆；不存在时返回默认模板但不创建文件。"""
+
+    doc = MarkdownMemoryStore().read_user_memory("default")
+    return _markdown_doc_response(doc)
+
+
+@router.put("/markdown/user")
+async def write_default_user_markdown_memory(data: MarkdownMemoryUpdate) -> dict[str, Any]:
+    """保存唯一用户 Markdown 记忆；首次保存时创建文件。"""
+
+    doc = MarkdownMemoryStore().write_user_memory("default", data.content)
+    return _markdown_doc_response(doc)
+
+
 @router.get("/markdown/user/{user_id}")
 async def read_user_markdown_memory(user_id: str) -> dict[str, Any]:
     """读取用户 Markdown 记忆；不存在时返回默认模板但不创建文件。"""
@@ -180,6 +196,22 @@ async def write_user_markdown_memory(user_id: str, data: MarkdownMemoryUpdate) -
     """保存用户 Markdown 记忆；首次保存时创建文件。"""
 
     doc = MarkdownMemoryStore().write_user_memory(user_id, data.content)
+    return _markdown_doc_response(doc)
+
+
+@router.get("/markdown/global")
+async def read_default_global_markdown_memory() -> dict[str, Any]:
+    """读取唯一全局偏好 Markdown 记忆；不存在时返回默认模板但不创建文件。"""
+
+    doc = MarkdownMemoryStore().read_global_memory("default")
+    return _markdown_doc_response(doc)
+
+
+@router.put("/markdown/global")
+async def write_default_global_markdown_memory(data: MarkdownMemoryUpdate) -> dict[str, Any]:
+    """保存唯一全局偏好 Markdown 记忆；首次保存时创建文件。"""
+
+    doc = MarkdownMemoryStore().write_global_memory("default", data.content)
     return _markdown_doc_response(doc)
 
 

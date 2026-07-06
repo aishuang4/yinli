@@ -29,6 +29,7 @@ const AgentTeamPage = lazy(() => import('./pages/AgentTeamPage').then((module) =
 const ToolsPage = lazy(() => import('./pages/ToolsPage').then((module) => ({ default: module.ToolsPage })));
 const MCPPage = lazy(() => import('./pages/MCPPage').then((module) => ({ default: module.MCPPage })));
 const SkillsPage = lazy(() => import('./pages/SkillsPage').then((module) => ({ default: module.SkillsPage })));
+const MemoryPage = lazy(() => import('./pages/MemoryPage').then((module) => ({ default: module.MemoryPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })));
 
 /**
@@ -44,6 +45,7 @@ const VIEW_PAGES: Record<ViewType, ComponentType> = {
   tools: ToolsPage,
   mcp: MCPPage,
   skills: SkillsPage,
+  memory: MemoryPage,
   settings: SettingsPage,
 };
 

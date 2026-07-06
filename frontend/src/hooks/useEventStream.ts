@@ -21,6 +21,7 @@ import type {
   RunStateApprovalSummary,
 } from '../types/runState';
 import { applyDisplayEvent, createEmptyDisplaySnapshot, normalizeDisplaySnapshot } from '../utils/displayEventReducer';
+import { notifySuccess } from '../utils/feedback';
 import { createId } from '../utils/id';
 
 export type { ChatRunPlanState, ChatRunPlanStep, DisplaySnapshot } from '../types/runState';
@@ -1000,6 +1001,9 @@ export function useEventStream(): UseEventStreamReturn {
    * 使用函数式 setState 确保基于最新状态更新
    */
   function handleEvent(event: SSEEvent) {
+    if (event.type === 'RUN_STATE_PATCH') {
+      notifyRunStateNotice(event.data as unknown as ChatRunStatePatch);
+    }
     setState((prev) => {
       switch (event.type) {
         case 'RUN_STATE':
@@ -1028,6 +1032,11 @@ export function useEventStream(): UseEventStreamReturn {
           return prev;
       }
     });
+  }
+
+  function notifyRunStateNotice(patch: ChatRunStatePatch) {
+    if (patch.kind !== 'notice' || patch.notice?.type !== 'MEMORY_SKILL_GENERATING') return;
+    notifySuccess(patch.notice.message || 'Skills 生成中');
   }
 
   return { state, sendMessage, resumeInteraction, subscribeRun, abort, reset };

@@ -5,28 +5,20 @@
  */
 
 import { useMemo, useState } from 'react';
-import { CheckCircle2, Plus, Plug, RefreshCw, Search, Trash2, Wrench } from 'lucide-react';
+import { CheckCircle2, Plus, Plug, RefreshCw, Trash2, Wrench } from 'lucide-react';
 import {
   Button,
   Card,
   Empty,
-  Input,
   Modal,
-  Select,
   Spinner,
   Tag,
 } from '@agentscope-ai/design';
+import { McpRegisterModal, type McpRegisterFormState } from '../features/mcp/McpRegisterModal';
 import { ToggleButton } from '../components/ToggleButton';
+import { CatalogFilterBar, type CatalogInstallFilter } from '../components/form/CatalogFilterBar';
 import { useMcp } from '../hooks/useMcp';
 import type { McpServer } from '../types/mcp';
-
-type InstallFilter = 'all' | 'installed' | 'available';
-
-const installFilterOptions = [
-  { label: '全部', value: 'all' },
-  { label: '已安装', value: 'installed' },
-  { label: '可安装', value: 'available' },
-];
 
 interface MCPPageProps {
   embedded?: boolean;
@@ -62,14 +54,14 @@ export function MCPPage({ embedded = false }: MCPPageProps) {
 
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('all');
-  const [installFilter, setInstallFilter] = useState<InstallFilter>('all');
+  const [installFilter, setInstallFilter] = useState<CatalogInstallFilter>('all');
   const [selectedServer, setSelectedServer] = useState<McpServer | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<McpServer | null>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
   const [registering, setRegistering] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
-  const [registerForm, setRegisterForm] = useState({
+  const [registerForm, setRegisterForm] = useState<McpRegisterFormState>({
     name: '',
     url: '',
     description: '',
@@ -90,11 +82,6 @@ export function MCPPage({ embedded = false }: MCPPageProps) {
   const enabledToolCount = servers
     .filter((server) => server.status === 'installed' && server.enabled)
     .reduce((total, server) => total + server.tools.length, 0);
-
-  const categoryOptions = [
-    { label: '全部分类', value: 'all' },
-    ...categories.map((item) => ({ label: item, value: item })),
-  ];
 
   async function runServerAction(
     serverId: string,
@@ -217,25 +204,16 @@ export function MCPPage({ embedded = false }: MCPPageProps) {
         embedded ? '' : 'border-b border-[var(--color-border)]',
       ].join(' ')}>
         {embedded && <div className="mb-3">{actionBar}</div>}
-        <div className="grid grid-cols-[minmax(240px,1fr)_180px_160px] gap-3">
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索 Server、工具或标签"
-            prefix={<Search size={14} />}
-            allowClear
-          />
-          <Select
-            value={category}
-            onChange={setCategory}
-            options={categoryOptions}
-          />
-          <Select
-            value={installFilter}
-            onChange={setInstallFilter}
-            options={installFilterOptions}
-          />
-        </div>
+        <CatalogFilterBar
+          query={query}
+          category={category}
+          installFilter={installFilter}
+          categories={categories}
+          searchPlaceholder="搜索 Server、工具或标签"
+          onQueryChange={setQuery}
+          onCategoryChange={setCategory}
+          onInstallFilterChange={setInstallFilter}
+        />
       </section>
 
       <main className="min-h-0 overflow-y-auto p-5">
@@ -455,131 +433,15 @@ export function MCPPage({ embedded = false }: MCPPageProps) {
         确定要删除「{deleteConfirm?.name}」吗？内置 MCP 不能删除，只能卸载或停用。
       </Modal>
 
-      <Modal
-        title="注册 MCP Server"
+      <McpRegisterModal
         open={registerOpen}
+        form={registerForm}
+        error={registerError}
+        registering={registering}
+        onFormChange={setRegisterForm}
         onCancel={() => setRegisterOpen(false)}
-        onOk={handleRegister}
-        confirmLoading={registering}
-        okText="拉取并注册"
-        cancelText="取消"
-        width={560}
-      >
-        <div className="space-y-4">
-          {registerError && (
-            <div className="rounded-md border border-[var(--color-error)] bg-[var(--color-error-bg)] p-3 text-sm text-[var(--color-error)]">
-              {registerError}
-            </div>
-          )}
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              名称 <span className="text-[var(--color-error)]">*</span>
-            </label>
-            <Input
-              value={registerForm.name}
-              onChange={(event) => setRegisterForm({
-                ...registerForm,
-                name: event.target.value,
-              })}
-              placeholder="如：Company Docs MCP"
-              maxLength={80}
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              MCP 地址 <span className="text-[var(--color-error)]">*</span>
-            </label>
-            <Input
-              value={registerForm.url}
-              onChange={(event) => setRegisterForm({
-                ...registerForm,
-                url: event.target.value,
-              })}
-              placeholder="https://example.com/mcp"
-            />
-            <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-              支持 Streamable HTTP / JSON-RPC 的 tools/list，也兼容返回 <code>{'{"tools": [...]}'}</code> 的简单接口。
-            </div>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
-              描述
-            </label>
-            <Input.TextArea
-              value={registerForm.description}
-              onChange={(event) => setRegisterForm({
-                ...registerForm,
-                description: event.target.value,
-              })}
-              placeholder="说明这个 MCP Server 提供什么能力"
-              rows={3}
-              maxLength={300}
-            />
-          </div>
-
-          <div>
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <label className="block text-xs text-[var(--color-text-secondary)]">
-                请求头
-              </label>
-              <Button
-                size="small"
-                onClick={() => setRegisterForm({
-                  ...registerForm,
-                  headers: [...registerForm.headers, { key: '', value: '' }],
-                })}
-              >
-                <span className="inline-flex items-center gap-1">
-                  <Plus size={12} className="shrink-0" />
-                  添加
-                </span>
-              </Button>
-            </div>
-            <div className="space-y-2">
-              {registerForm.headers.map((header, index) => (
-                <div key={index} className="grid grid-cols-[1fr_1fr_32px] gap-2">
-                  <Input
-                    value={header.key}
-                    onChange={(event) => {
-                      const next = [...registerForm.headers];
-                      next[index] = { ...next[index], key: event.target.value };
-                      setRegisterForm({ ...registerForm, headers: next });
-                    }}
-                    placeholder="Header 名称，如 Authorization"
-                  />
-                  <Input.Password
-                    value={header.value}
-                    onChange={(event) => {
-                      const next = [...registerForm.headers];
-                      next[index] = { ...next[index], value: event.target.value };
-                      setRegisterForm({ ...registerForm, headers: next });
-                    }}
-                    placeholder="Header 值"
-                  />
-                  <Button
-                    type="text"
-                    danger
-                    disabled={registerForm.headers.length === 1}
-                    onClick={() => setRegisterForm({
-                      ...registerForm,
-                      headers: registerForm.headers.filter((_, itemIndex) => itemIndex !== index),
-                    })}
-                    aria-label="删除请求头"
-                  >
-                    <Trash2 size={14} className="shrink-0" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-            <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-              可用于 Authorization、X-API-Key 等认证信息；Content-Type 和 Accept 由系统自动设置。
-            </div>
-          </div>
-        </div>
-      </Modal>
+        onRegister={() => void handleRegister()}
+      />
     </div>
   );
 }

@@ -1,40 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Card, Input, Select, Tag } from '@agentscope-ai/design';
-import { KeyRound, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { Card, Tag } from '@agentscope-ai/design';
+import { ModelSettingsForm, type ModelSettings } from '../features/settings/ModelSettingsForm';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
-
-interface ModelProviderOption {
-  id: string;
-  name: string;
-  defaultBaseUrl: string;
-  defaultModel: string;
-  models: string[];
-  requiresApiKey: boolean;
-  adapter: string;
-  configured: boolean;
-  apiKeyConfigured: boolean;
-  apiKeyPreview: string;
-  providerName: string;
-  baseUrl: string;
-  configuredDefaultModel: string;
-  fallbackModels: string[];
-  customModels: string[];
-}
-
-interface ModelSettings {
-  provider: string;
-  providerName: string;
-  baseUrl: string;
-  defaultModel: string;
-  fallbackModels: string[];
-  customModels: string[];
-  modelOptions: string[];
-  apiKeyConfigured: boolean;
-  apiKeyPreview: string;
-  requiresApiKey: boolean;
-  adapter: string;
-  providers: ModelProviderOption[];
-}
 
 export function SettingsPage() {
   const [settings, setSettings] = useState<ModelSettings | null>(null);
@@ -173,161 +140,35 @@ export function SettingsPage() {
               配置默认模型供应商、API Key 和全局降级模型链。
             </p>
           </div>
-
-          <Card bodyStyle={{ padding: 0 }}>
-            <div className="space-y-5 p-5">
-              <div className="grid grid-cols-2 gap-4">
-                <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--color-text-secondary)]">模型供应商</span>
-	                  <Select
-                    value={provider}
-                    loading={loading}
-                    onChange={handleProviderChange}
-                    options={(settings?.providers ?? []).map((item) => ({
-                      label: `${item.name}${item.configured ? ' · 已配置' : ' · 未配置'}`,
-                      value: item.id,
-                    }))}
-	                    style={{ width: '100%' }}
-	                  />
-	                </label>
-
-	                <label className="block">
-	                  <span className="mb-1 block text-xs text-[var(--color-text-secondary)]">默认模型</span>
-	                  <Input
-	                    value={defaultModel}
-	                    onChange={(event) => setDefaultModel(event.target.value)}
-	                    placeholder="输入任意模型名，例如 deepseek-chat"
-	                  />
-	                </label>
-	              </div>
-
-              {provider === 'custom_openai' ? (
-                <label className="block">
-                  <span className="mb-1 block text-xs text-[var(--color-text-secondary)]">自定义供应商名称</span>
-                  <Input
-                    value={customProviderName}
-                    onChange={(event) => setCustomProviderName(event.target.value)}
-                    placeholder="例如：公司内网模型网关"
-                  />
-                </label>
-              ) : null}
-
-              {modelOptions.length > 0 ? (
-                <div>
-                  <span className="mb-2 block text-xs text-[var(--color-text-secondary)]">模型快速填充</span>
-                  <div className="flex flex-wrap gap-2">
-                    {modelOptions.map((model) => (
-                      <button
-                        key={model}
-                        type="button"
-                        className="rounded-md bg-[var(--color-bg-secondary)] px-2 py-1 text-xs text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)]"
-                        onClick={() => setDefaultModel(model)}
-                      >
-                        {model}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-xs text-[var(--color-text-secondary)]">自定义模型</span>
-                  <Button size="small" icon={<Plus size={14} />} onClick={addCustomModel}>
-                    添加自定义模型
-                  </Button>
-                </div>
-                <div className="space-y-2">
-                  {customModels.length === 0 ? (
-                    <div className="rounded-md bg-[var(--color-bg-secondary)] px-3 py-3 text-sm text-[var(--color-text-tertiary)]">
-                      如果供应商列表里没有你的模型，可以在这里添加模型 ID，保存后会出现在 Agent 模型选择中。
-                    </div>
-                  ) : customModels.map((model, index) => (
-                    <div key={index} className="grid grid-cols-[minmax(0,1fr)_36px] gap-2">
-                      <Input
-                        value={model}
-                        onChange={(event) => updateCustomModel(index, event.target.value)}
-                        placeholder="输入模型 ID，例如 qwen2.5-72b-instruct"
-                      />
-                      <Button icon={<Trash2 size={14} />} onClick={() => removeCustomModel(index)} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <label className="block">
-                <span className="mb-1 block text-xs text-[var(--color-text-secondary)]">Base URL</span>
-                <Input
-                  value={baseUrl}
-                  onChange={(event) => setBaseUrl(event.target.value)}
-                  placeholder={selectedProvider?.defaultBaseUrl || 'https://api.example.com/v1'}
-                />
-              </label>
-
-              <label className="block">
-                <span className="mb-1 flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-                  <KeyRound size={13} />
-                  API Key
-                  {selectedProvider?.apiKeyConfigured ? (
-                    <Tag size="small" color="success">{selectedProvider.apiKeyPreview}</Tag>
-                  ) : (
-                    <Tag size="small" color={selectedProvider?.requiresApiKey ? 'warning' : 'success'}>
-                      {selectedProvider?.requiresApiKey ? '未配置' : '无需 Key'}
-                    </Tag>
-                  )}
-                </span>
-                <Input.Password
-                  value={apiKey}
-                  onChange={(event) => setApiKey(event.target.value)}
-                  placeholder={selectedProvider?.requiresApiKey ? '输入新的 API Key；留空则保持当前 Key' : '本地模型可留空；需要鉴权的网关可填写 Key'}
-                  disabled={!apiKeyEditable}
-                />
-              </label>
-
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-xs text-[var(--color-text-secondary)]">降级模型链</span>
-                  <Button size="small" icon={<Plus size={14} />} onClick={addFallbackModel}>
-                    添加模型
-                  </Button>
-                </div>
-                <div className="space-y-2">
-                  {fallbackModels.length === 0 ? (
-                    <div className="rounded-md bg-[var(--color-bg-secondary)] px-3 py-3 text-sm text-[var(--color-text-tertiary)]">
-                      暂未配置降级模型。
-                    </div>
-                  ) : fallbackModels.map((model, index) => (
-	                    <div key={index} className="grid grid-cols-[minmax(0,1fr)_36px] gap-2">
-	                      <Input
-	                        value={model}
-	                        onChange={(event) => updateFallbackModel(index, event.target.value)}
-	                        placeholder="输入任意降级模型名"
-	                      />
-                      <Button icon={<Trash2 size={14} />} onClick={() => removeFallbackModel(index)} />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {notice ? (
-                <div className="rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-text-secondary)]">
-                  {notice}
-                </div>
-              ) : null}
-
-              <div className="flex justify-end gap-2 border-t border-[var(--color-border)] pt-4">
-                <Button icon={<RefreshCw size={14} />} onClick={loadSettings} disabled={saving}>
-                  刷新
-                </Button>
-                <Button danger onClick={() => void saveSettings(true)} disabled={saving || !selectedProvider?.apiKeyConfigured}>
-                  清除 Key
-                </Button>
-                <Button type="primary" icon={<Save size={14} />} loading={saving} onClick={() => void saveSettings(false)}>
-                  保存设置
-                </Button>
-              </div>
-            </div>
-          </Card>
+          <ModelSettingsForm
+            settings={settings}
+            loading={loading}
+            saving={saving}
+            notice={notice}
+            provider={provider}
+            selectedProvider={selectedProvider}
+            baseUrl={baseUrl}
+            apiKey={apiKey}
+            apiKeyEditable={Boolean(apiKeyEditable)}
+            defaultModel={defaultModel}
+            customProviderName={customProviderName}
+            customModels={customModels}
+            fallbackModels={fallbackModels}
+            modelOptions={modelOptions}
+            onProviderChange={handleProviderChange}
+            onBaseUrlChange={setBaseUrl}
+            onApiKeyChange={setApiKey}
+            onDefaultModelChange={setDefaultModel}
+            onCustomProviderNameChange={setCustomProviderName}
+            onAddCustomModel={addCustomModel}
+            onUpdateCustomModel={updateCustomModel}
+            onRemoveCustomModel={removeCustomModel}
+            onAddFallbackModel={addFallbackModel}
+            onUpdateFallbackModel={updateFallbackModel}
+            onRemoveFallbackModel={removeFallbackModel}
+            onRefresh={() => void loadSettings()}
+            onSave={(clearApiKey) => void saveSettings(clearApiKey)}
+          />
         </section>
 
         <aside className="space-y-4">

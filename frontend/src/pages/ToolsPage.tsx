@@ -1,9 +1,17 @@
 import { useMemo, useState } from 'react';
 import { Edit3, Globe2, Plus, Plug, RefreshCw, Settings2, Trash2, Wrench } from 'lucide-react';
-import { Button, Input, Modal, Select, Spinner, Tag } from '@agentscope-ai/design';
+import { Button, Spinner, Tag } from '@agentscope-ai/design';
+import { HttpToolEditor } from '../features/tools/HttpToolEditor';
+import { HttpToolFilters } from '../features/tools/HttpToolFilters';
+import {
+  EMPTY_HTTP_TOOL_DRAFT,
+  draftToHttpToolPayload,
+  httpToolToDraft,
+  type HttpToolDraft,
+} from '../features/tools/httpToolDraft';
 import { MCPPage } from './MCPPage';
 import { useHttpTools, useSystemTools } from '../hooks/useKnowledgeTools';
-import type { HttpTool, HttpToolPayload } from '../types/tool';
+import type { HttpTool } from '../types/tool';
 
 type ToolsTab = 'mcp' | 'http' | 'system';
 
@@ -12,89 +20,6 @@ const TOOL_TABS: Array<{ key: ToolsTab; label: string; description: string; icon
   { key: 'http', label: 'HTTP 工具', description: '传统系统 API 快速封装', icon: Globe2 },
   { key: 'system', label: '系统工具', description: '内置文件、命令和人工交互工具', icon: Settings2 },
 ];
-
-interface HttpToolDraft {
-  name: string;
-  description: string;
-  method: HttpTool['method'];
-  url: string;
-  headersJson: string;
-  queryTemplateJson: string;
-  bodyTemplateJson: string;
-  parameterSchemaJson: string;
-  parameterInstructions: string;
-  enabled: boolean;
-}
-
-const DEFAULT_PARAMETER_SCHEMA = {
-  type: 'object',
-  properties: {
-    query: { type: 'string', description: '检索问题或 API 查询参数。' },
-    filename_pattern: { type: 'string', description: '可选文件名过滤。' },
-    filterCategories: { type: 'array', items: { type: 'string' }, description: '可选分类过滤。' },
-    searchMode: { type: 'string', description: '可选检索模式。' },
-  },
-};
-
-const EMPTY_HTTP_TOOL_DRAFT: HttpToolDraft = {
-  name: 'KnowledgeBaseSearch',
-  description: '检索外部知识库并返回命中文档片段。',
-  method: 'POST',
-  url: 'http://localhost:8080/search/knowledgeBaseSearch',
-  headersJson: '{}',
-  queryTemplateJson: '{}',
-  bodyTemplateJson: JSON.stringify({
-    query: '',
-    filename_pattern: '',
-    filterCategories: [],
-    searchMode: '',
-  }, null, 2),
-  parameterSchemaJson: JSON.stringify(DEFAULT_PARAMETER_SCHEMA, null, 2),
-  parameterInstructions: 'query 是检索问题；filename_pattern 用于按文件名过滤；filterCategories 是分类过滤数组；searchMode 是检索模式。',
-  enabled: true,
-};
-
-function httpToolToDraft(tool: HttpTool | null): HttpToolDraft {
-  if (!tool) return { ...EMPTY_HTTP_TOOL_DRAFT };
-  return {
-    name: tool.name,
-    description: tool.description,
-    method: tool.method,
-    url: tool.url,
-    headersJson: JSON.stringify(tool.headers ?? {}, null, 2),
-    queryTemplateJson: JSON.stringify(tool.queryTemplate ?? {}, null, 2),
-    bodyTemplateJson: JSON.stringify(tool.bodyTemplate ?? {}, null, 2),
-    parameterSchemaJson: JSON.stringify(tool.parameterSchema ?? DEFAULT_PARAMETER_SCHEMA, null, 2),
-    parameterInstructions: tool.parameterInstructions,
-    enabled: tool.enabled,
-  };
-}
-
-function draftToHttpToolPayload(draft: HttpToolDraft): HttpToolPayload {
-  const queryTemplate = JSON.parse(draft.queryTemplateJson || '{}');
-  const bodyTemplate = JSON.parse(draft.bodyTemplateJson || '{}');
-  const parameterSchema = JSON.parse(draft.parameterSchemaJson || '{}');
-  const sendsBody = !['GET', 'DELETE'].includes(draft.method);
-  return {
-    name: draft.name.trim(),
-    description: draft.description.trim(),
-    category: 'custom',
-    method: draft.method,
-    url: draft.url.trim(),
-    authType: 'none',
-    authConfig: {},
-    headers: JSON.parse(draft.headersJson || '{}'),
-    queryTemplate,
-    bodyTemplate: sendsBody ? bodyTemplate : {},
-    parameterSchema,
-    parameterInstructions: draft.parameterInstructions.trim(),
-    responseMode: 'full',
-    responsePath: '',
-    readonly: true,
-    approvalPolicy: 'inherit',
-    enabled: draft.enabled,
-  };
-}
 
 export function ToolsPage() {
   const [activeTab, setActiveTab] = useState<ToolsTab>('mcp');
@@ -159,10 +84,6 @@ function HttpToolsPanel() {
   const [draft, setDraft] = useState<HttpToolDraft>(EMPTY_HTTP_TOOL_DRAFT);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const sendsBody = !['GET', 'DELETE'].includes(draft.method);
-  const methodDescription = sendsBody
-    ? '该请求会把 Body 模板作为 JSON 请求体发送；Query 模板会拼接到 URL 查询参数。'
-    : '该请求不会发送 Body，参数会合并到 Query 模板并拼接到 URL 查询参数。';
 
   const filteredTools = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -207,10 +128,12 @@ function HttpToolsPanel() {
   return (
     <section className="grid h-full min-h-0 grid-rows-[auto_1fr] px-5 pb-5">
       <div className="flex items-center justify-between gap-3 py-3">
-        <div className="grid flex-1 grid-cols-[minmax(240px,1fr)_auto] gap-3">
-          <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 HTTP 工具、URL 或说明" allowClear />
-          <Button icon={<RefreshCw size={14} />} onClick={refresh} loading={loading}>刷新</Button>
-        </div>
+        <HttpToolFilters
+          query={query}
+          loading={loading}
+          onQueryChange={setQuery}
+          onRefresh={refresh}
+        />
         <Button type="primary" onClick={() => openEditor()}>
           <Plus size={14} />
           新建 HTTP 工具
@@ -265,135 +188,16 @@ function HttpToolsPanel() {
         )}
       </div>
 
-      <Modal
-        title={editingTool ? '编辑 HTTP 工具' : '新建 HTTP 工具'}
+      <HttpToolEditor
         open={editorOpen}
+        editingTool={editingTool}
+        draft={draft}
+        saving={saving}
+        error={formError}
+        onDraftChange={setDraft}
         onCancel={() => setEditorOpen(false)}
-        onOk={() => void saveDraft()}
-        okText="保存"
-        cancelText="取消"
-        confirmLoading={saving}
-        width={840}
-      >
-        <div className="http-tool-form">
-          {formError && <div className="rounded-md border border-[var(--color-error)] p-3 text-sm text-[var(--color-error)]">{formError}</div>}
-          <div className="http-tool-form__section">
-            <div className="http-tool-form__section-title">基础信息</div>
-            <div className="http-tool-form__grid">
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">工具名称</label>
-              <Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="如：公司知识库检索" />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">是否启用</label>
-              <Button className="http-tool-form__control" type={draft.enabled ? 'primary' : 'default'} onClick={() => setDraft({ ...draft, enabled: !draft.enabled })}>
-                {draft.enabled ? '启用' : '停用'}
-              </Button>
-            </div>
-          </div>
-            <div className="mt-3">
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">工具描述</label>
-              <Input.TextArea className="http-tool-form__text" value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} rows={3} placeholder="告诉模型什么时候应该调用这个 HTTP 工具" />
-            </div>
-          </div>
-
-          <div className="http-tool-form__section">
-            <div className="http-tool-form__section-title">请求配置</div>
-            <div className="grid grid-cols-[200px_1fr] gap-3">
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">请求类型</label>
-              <Select
-                value={draft.method}
-                onChange={(value) => setDraft({ ...draft, method: value as HttpTool['method'] })}
-                options={[
-                  { label: 'GET - 查询读取', value: 'GET' },
-                  { label: 'POST - 提交/检索', value: 'POST' },
-                  { label: 'PUT - 整体更新', value: 'PUT' },
-                  { label: 'PATCH - 局部更新', value: 'PATCH' },
-                  { label: 'DELETE - 删除/撤销', value: 'DELETE' },
-                ]}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">发送方式</label>
-              <div className="http-tool-form__hint">
-                {methodDescription}
-              </div>
-            </div>
-          </div>
-            <div className="mt-3">
-            <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">接口地址</label>
-            <Input value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="http://localhost:8080/search/knowledgeBaseSearch" />
-          </div>
-          </div>
-
-          <div className="http-tool-form__section">
-            <div className="http-tool-form__section-title">请求头</div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">Headers JSON</label>
-              <Input.TextArea
-                className="http-tool-form__json"
-                value={draft.headersJson}
-                onChange={(event) => setDraft({ ...draft, headersJson: event.target.value })}
-                rows={6}
-                style={{ fontFamily: 'var(--font-mono)' }}
-              />
-            </div>
-          </div>
-
-          <div className="http-tool-form__section">
-            <div className="http-tool-form__section-title">参数配置</div>
-            <div className="mb-3">
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">参数说明</label>
-              <Input.TextArea
-                className="http-tool-form__text"
-                value={draft.parameterInstructions}
-                onChange={(event) => setDraft({ ...draft, parameterInstructions: event.target.value })}
-                rows={3}
-                placeholder="说明 query、filename_pattern、filterCategories、searchMode 应该如何填写"
-              />
-            </div>
-            <div className="http-tool-form__grid">
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">Query 参数模板 JSON</label>
-              <Input.TextArea
-                className="http-tool-form__json"
-                value={draft.queryTemplateJson}
-                onChange={(event) => setDraft({ ...draft, queryTemplateJson: event.target.value })}
-                rows={6}
-                placeholder={'{\n  "query": "{{query}}"\n}'}
-                style={{ fontFamily: 'var(--font-mono)' }}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">参数 Schema JSON</label>
-              <Input.TextArea
-                className="http-tool-form__json"
-                value={draft.parameterSchemaJson}
-                onChange={(event) => setDraft({ ...draft, parameterSchemaJson: event.target.value })}
-                rows={6}
-                placeholder={JSON.stringify(DEFAULT_PARAMETER_SCHEMA, null, 2)}
-                style={{ fontFamily: 'var(--font-mono)' }}
-              />
-            </div>
-          </div>
-          {sendsBody && (
-            <div className="mt-3">
-              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">Body 请求体模板 JSON</label>
-              <Input.TextArea
-                className="http-tool-form__json"
-                value={draft.bodyTemplateJson}
-                onChange={(event) => setDraft({ ...draft, bodyTemplateJson: event.target.value })}
-                rows={6}
-                placeholder={'{\n  "query": "{{query}}"\n}'}
-                style={{ fontFamily: 'var(--font-mono)' }}
-              />
-            </div>
-          )}
-          </div>
-
-        </div>
-      </Modal>
+        onSave={() => void saveDraft()}
+      />
     </section>
   );
 }

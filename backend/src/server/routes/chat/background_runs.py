@@ -270,6 +270,17 @@ async def mark_chat_background_run_resuming(
     return run
 
 
+async def emit_chat_background_runtime_event(run_id: str, event: str) -> bool:
+    """向仍在内存中的后台 Run 推送一个 Runtime Event。"""
+
+    async with _runs_lock:
+        run = _runs.get(run_id)
+    if run is None:
+        return False
+    await _broadcast(run, event)
+    return True
+
+
 async def relay_chat_background_run_events(
     run_id: str,
     events: AsyncGenerator[str, None],
@@ -1040,6 +1051,11 @@ def _run_state_patch_sse(
             interaction_id = str(payload.get("interactionId") or data.get("interactionId") or "")
             if interaction_id:
                 patch["resolvedApprovalId"] = interaction_id
+        elif runtime_type == "MEMORY_SKILL_GENERATING":
+            patch["notice"] = {
+                "type": runtime_type,
+                "message": str(payload.get("message") or "Skills 生成中"),
+            }
     elif event_type == "ERROR":
         patch["error"] = str(data.get("message") or state.get("error") or "执行失败")
     return _sse_event("RUN_STATE_PATCH", dump_run_state_patch(patch))
@@ -1051,7 +1067,7 @@ def _should_emit_run_state_metadata_patch(event_type: str, data: dict) -> bool:
     if event_type in RUN_STATE_METADATA_PATCH_EVENTS:
         return True
     if event_type == SSE_EVENT_RUNTIME:
-        return str(data.get("type") or "") == "HITL_RESOLVED"
+        return str(data.get("type") or "") in {"HITL_RESOLVED", "MEMORY_SKILL_GENERATING"}
     return False
 
 
@@ -1080,6 +1096,8 @@ def _run_state_patch_kind(event_type: str, data: dict) -> str:
         runtime_type = str(data.get("type") or "")
         if runtime_type == "HITL_RESOLVED":
             return "approval_resolved"
+        if runtime_type == "MEMORY_SKILL_GENERATING":
+            return "notice"
         if runtime_type.startswith("PLAN_"):
             return "display_event"
         return "snapshot_meta"

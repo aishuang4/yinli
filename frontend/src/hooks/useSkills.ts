@@ -16,6 +16,7 @@ interface UseSkillsReturn {
   refresh: () => Promise<void>;
   registerSkill: (payload: SkillRegisterPayload) => Promise<Skill>;
   importSkillArchive: (file: File) => Promise<Skill>;
+  exportSkill: (id: string, filename?: string) => Promise<void>;
   installSkill: (id: string) => Promise<Skill>;
   uninstallSkill: (id: string) => Promise<Skill>;
   deleteSkill: (id: string) => Promise<void>;
@@ -109,6 +110,29 @@ export function useSkills(): UseSkillsReturn {
     }
   }, [updateSkill]);
 
+  const exportSkill = useCallback(async (id: string, filename?: string) => {
+    try {
+      const response = await fetch(`/api/skills/${id}/export`);
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${response.status}`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename || `${id}.zip`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      notifySuccess('Skill 导出成功');
+    } catch (err) {
+      notifyError(`Skill 导出失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
+  }, []);
+
   const installSkill = useCallback(async (id: string) => {
     try {
       const skill = await requestJson<Skill>(`/api/skills/${id}/install`, {
@@ -182,6 +206,7 @@ export function useSkills(): UseSkillsReturn {
     refresh,
     registerSkill,
     importSkillArchive,
+    exportSkill,
     installSkill,
     uninstallSkill,
     deleteSkill,

@@ -5,6 +5,12 @@ from __future__ import annotations
 import json
 
 from src.memory import extraction_agents
+from src.memory.skill_evolution import (
+    SkillEvolutionGateDecision,
+    WorkflowEvidence,
+    WorkflowToolStep,
+    WorkflowVariableFlow,
+)
 
 
 def test_memory_reflection_prompt_requires_chinese_output():
@@ -88,6 +94,10 @@ def test_skill_evolution_prompt_requires_chinese_draft():
     prompt = extraction_agents._build_skill_evolution_system_prompt()
 
     assert "所有 Skill 草稿字段必须使用中文记录" in prompt
+    assert "granularity" in prompt
+    assert "只有 granularity=atomic" in prompt
+    assert "do_everything" in prompt
+    assert "变量流" in prompt
     assert "可复用经验、触发条件、步骤、约束和输出形态翻译成中文" in prompt
     assert "不要把英文原句直接作为 Skill 内容保存" in prompt
     assert "中文 SKILL.md 风格操作说明" in prompt
@@ -100,14 +110,42 @@ def test_skill_evolution_user_prompt_sets_chinese_policy():
             assistant_text="已完成。",
             agent_id="agent-1",
             agent_name="Agent",
+            router_gate=SkillEvolutionGateDecision(
+                shouldEvaluate=True,
+                reason="具备可复用证据。",
+                risk="low",
+                signals=["successful_tool_chain"],
+            ),
+            workflow_evidence=WorkflowEvidence(
+                successfulToolChain=[
+                    WorkflowToolStep(
+                        tool="search_user",
+                        status="completed",
+                        outputVariables=["user_id"],
+                    )
+                ],
+                variableFlow=[
+                    WorkflowVariableFlow(
+                        source="search_user.user_id",
+                        target="send_email.user_id",
+                        variable="user_id",
+                    )
+                ],
+            ),
         ),
     )
 
+    assert payload["routerGate"]["shouldEvaluate"] is True
+    assert payload["workflowEvidence"]["successfulToolChain"][0]["tool"] == "search_user"
+    assert payload["workflowEvidence"]["variableFlow"][0]["variable"] == "user_id"
     assert payload["policy"]["outputLanguage"] == "zh-CN"
     assert payload["policy"]["allExtractedInformationMustBeChinese"] is True
     assert payload["policy"]["translateReusableKnowledgeToChinese"] is True
     assert payload["policy"]["skillDraftMustBeChinese"] is True
     assert payload["policy"]["preserveEnglishOnlyForTechnicalIdentifiers"] is True
+    assert payload["policy"]["requireAtomicGranularity"] is True
+    assert payload["policy"]["preserveVariableFlow"] is True
+    assert payload["policy"]["doNotHardcodeRuntimeValues"] is True
 
 
 class FakeMemoryFile:

@@ -8,7 +8,7 @@
 import { create } from 'zustand';
 
 /** 应用视图类型（对应 Activity Bar 选项） */
-export type ViewType = 'chat' | 'runs' | 'traces' | 'sandbox' | 'agents' | 'tools' | 'mcp' | 'skills' | 'settings';
+export type ViewType = 'chat' | 'runs' | 'traces' | 'sandbox' | 'agents' | 'tools' | 'mcp' | 'skills' | 'memory' | 'settings';
 
 /** 应用状态接口 */
 interface AppState {

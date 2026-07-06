@@ -180,55 +180,6 @@ button[class*="-btn"] .lucide {
   border-color: color-mix(in srgb, var(--color-accent) 70%, var(--color-border));
 }
 
-.http-tool-form {
-  display: grid;
-  gap: 14px;
-}
-
-.http-tool-form__section {
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--color-bg-secondary) 62%, transparent);
-  padding: 14px;
-}
-
-.http-tool-form__section-title {
-  margin-bottom: 12px;
-  color: var(--color-text-primary);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.http-tool-form__grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.http-tool-form__hint {
-  min-height: 34px;
-  border-radius: 6px;
-  background: var(--color-bg-primary);
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  line-height: 18px;
-  padding: 8px 10px;
-}
-
-.http-tool-form__control {
-  min-width: 128px;
-}
-
-.http-tool-form__text textarea {
-  min-height: 82px;
-}
-
-.http-tool-form__json textarea {
-  min-height: 160px;
-  max-height: 220px;
-  overflow: auto;
-  resize: vertical;
-}
-
 [data-theme="dark"] .chat-history-panel,
 [data-theme="dark"] .chat-main-panel,
 [data-theme="dark"] .chat-composer {

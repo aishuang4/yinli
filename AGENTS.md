@@ -59,7 +59,7 @@ npm run lint     # eslint
 
 8. **`routes/chat/leader_stream.py`** — Leader/单 Agent 事件流处理。消费 `agent.reply_stream()`，维护 `LeaderStreamState`，处理模型 cache、trace、permission decision、tool artifacts、HITL 早停、流式文本/思考累计、Skill end 和模型输出后的 clarification 兜底。
 
-9. **`routes/chat/completion.py`** — Leader run 成功/失败收尾。负责完成 Skill/Team 状态、写 assistant message、写 trace，并输出 `TEAM_ACTIVITY` / `ERROR` 等后续 SSE。成功运行后会触发新记忆后处理：后台并行提炼 user / agent / global Markdown 记忆，调用 SkillEvolutionAgent 生成 Skill 草稿候选，并把本轮用户输入和 Agent 最终输出持久化为长期节点记忆。该链路不恢复旧 memory summarize，也不新增 memory runtime.kind。
+9. **`routes/chat/completion.py`** — Leader run 成功/失败收尾。负责完成 Skill/Team 状态、写 assistant message、写 trace，并输出 `TEAM_ACTIVITY` / `ERROR` 等后续 SSE。成功运行后会触发新记忆后处理：后台并行提炼 user / agent / global Markdown 记忆，调用 SkillEvolutionAgent 生成 Skill 候选，并把本轮用户输入和 Agent 最终输出持久化为历史记忆（底层 `memory_nodes`）。该链路不恢复旧 memory summarize，也不新增 memory runtime.kind。
 
 10. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 `agent_id` 缓存实例；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件）。工具集在 `_create_default_toolkit()` 注入：普通 Agent 默认拥有 Read/Grep/Glob/AskUser/FinalAnswerStart，Write/Edit 受权限控制；Bash/HttpRequest/知识库工具/MCP 受 `RuntimeToolScope` 裁剪。系统基础设施 Agent 可通过 `include_default_tools=False` 创建完全无工具实例。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是项目根目录，避免 Glob/Grep 扫描用户主目录）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
 
@@ -71,7 +71,7 @@ npm run lint     # eslint
 
 - **结构化表**：`agents`、`teams`、`team_members`、`mcp_servers`、`skills`、`chat_sessions`、`chat_messages`、`run_events`、`memory_nodes`。历史库中可能仍残留 `memory_facts` / `memory_events` / `memory_candidates` 表，但旧记忆模块已删除，不再作为当前运行时能力。
 - **Markdown 记忆文件**：新记忆 MVP 使用 `backend/data/memory/users/user_memory.md`、`backend/data/memory/agents/agent_memory.md`、`backend/data/memory/global/global_memory.md` 作为默认文件；非默认 owner 使用 `users/{user_id}/user_memory.md`、`agents/{agent_id}/agent_memory.md`、`global/{workspace_id}/global_memory.md`。不兼容读取旧 `default.md`。
-- **向量存储**：全局 `VectorStoreBackend` 抽象支持 `disabled` 和 `zvec` provider。`VECTOR_STORE_PROVIDER` 只在首次初始化时生效，之后读取持久化 `VectorStorePolicy`；向量库只索引长期节点记忆 `memory_nodes`，Markdown 记忆不进入向量库。
+- **向量存储**：全局 `VectorStoreBackend` 抽象支持 `disabled` 和 `zvec` provider。`VECTOR_STORE_PROVIDER` 只在首次初始化时生效，之后读取持久化 `VectorStorePolicy`；向量库只索引历史记忆底层表 `memory_nodes`，Markdown 记忆不进入向量库。
 - **`json_store` 表**：`(namespace, key) -> JSON`，用于系统设置等 Pydantic 文档。运行时模型设置存于 namespace `system_settings`、key `model`，由 `config/runtime_settings.py` 读写。
 
 Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不用迁移框架。早期 JSON 文件（如 `data/chat_sessions.json`）通过 `migrate_json_*_file()` 一次性导入 SQLite。
@@ -99,7 +99,7 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 - 如果 `AGENTS.md` / `CLAUDE.md` 与 `docs/development-guidelines.md` 冲突，以更具体、更严格、更新的规范为准；不确定时先按 `docs/development-guidelines.md` 执行。
 - `AGENTS.md` 是开发代理记忆和项目协作规范的唯一真实来源；`CLAUDE.md` 只作为兼容入口，避免多份记忆漂移。
 - 当前已删除/下线的旧设计：旧记忆模块、Plan Runtime、Subagent Runtime。后续不要在旧字段、旧事件或旧工具链上继续补丁式开发；记忆能力只能沿当前新方案推进，通过 hooks / tools / 后处理服务接入，不新增 `memory` Runtime 分支。
-- 新记忆系统当前状态：运行前在 readiness 通过后注入 user / agent / global Markdown 摘要和最近 30 天节点树；普通 Agent 默认有 `memory_node_tree` / `memory_node_query`；运行后后台提炼 Markdown 记忆并持久化节点记忆。Skill 自进化仍未形成完整闭环，缺少 `SkillEvolutionRouterGate`、`WorkflowEvidenceBuilder`、颗粒度 gate、变量流抽象、候选持久化和标准 Skill 注册。
+- 新记忆系统当前状态：运行前在 readiness 通过后注入 user / agent / global Markdown 摘要和最近 30 天历史记忆索引；普通 Agent 默认有 `memory_node_tree` / `memory_node_query`；运行后后台提炼 Markdown 记忆并持久化历史记忆。Skill 自进化已有 router gate、workflow evidence、颗粒度控制、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和手动触发流；Memory 页面仍需补 Skill 自进化队列、设置、审计详情和历史记忆删除 / 禁用。
 - 在本项目 AgentScope 语境中，`middleware` 按 AgentScope hooks / `MiddlewareBase` 理解；讨论 Plan Mode 等运行时增强时，优先考虑通过 middleware hooks（如 `on_system_prompt`、`on_acting`）接入，而不是恢复旧 Runtime 分支。
 - 推进 Plan Mode 任务进度能力时，固定顺序为：先核对 SQLite/Pydantic/前端 TypeScript 数据结构，再补 `todo_write` / `task_output` / `task_list` 等工具与 Runtime Event，最后和前端流式展示、审批入口、刷新恢复一起联调。
 - 代码注释和文档用中文，技术术语和标识符保持英文。

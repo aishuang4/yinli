@@ -18,6 +18,16 @@ from src.memory.extraction_agents import (
     run_skill_evolution_agent,
 )
 from src.memory.markdown_store import MarkdownMemoryStore
+from src.memory.skill_evolution import (
+    SkillEvolutionGateDecision,
+    SkillEvolutionRecordInput,
+    build_workflow_evidence,
+    evaluate_skill_evolution_router_gate,
+    is_accepted_skill_candidate,
+    persist_skill_evolution_record,
+    register_skill_evolution_record,
+    rejected_skill_candidate_reason,
+)
 from src.tools.memory_reflection import MemoryFileToolSet
 
 MemoryScope = Literal["user", "agent", "global_preference"]
@@ -56,6 +66,35 @@ _GLOBAL_HINTS = (
     "项目约定",
     "团队约定",
 )
+_MANUAL_SKILL_ACTIONS = (
+    "生成",
+    "创建",
+    "沉淀",
+    "提炼",
+    "保存",
+    "注册",
+    "做成",
+    "转成",
+    "整理成",
+    "generate",
+    "create",
+    "save",
+    "register",
+)
+_MANUAL_SKILL_REFERENCES = (
+    "这个",
+    "这次",
+    "刚才",
+    "上面",
+    "前面",
+    "流程",
+    "工作",
+    "任务",
+    "结果",
+    "it",
+    "this",
+    "that",
+)
 _AGENT_HINTS = (
     "你以后",
     "你下次",
@@ -86,8 +125,13 @@ class MemoryReflectionInput:
     assistant_text: str
     user_id: str = "default"
     workspace_id: str = "default"
+    project_id: str = ""
+    team_id: str = ""
     source_run_id: str = ""
     source_message_id: str = ""
+    tool_calls: list[object] = field(default_factory=list)
+    runtime_events: list[dict] = field(default_factory=list)
+    manual_skill_request: bool = False
 
 
 @dataclass(frozen=True)
@@ -108,6 +152,7 @@ class MemoryReflectionResult:
 
     updates: list[MemoryMarkdownUpdate] = field(default_factory=list)
     skill_candidate: SkillEvolutionAgentPayload | None = None
+    skill_evolution_record: dict | None = None
     ignored_reason: str = ""
 
 
@@ -196,30 +241,115 @@ async def reflect_completed_run_memory_with_agents(
             memory_reason = memory_reason or fallback.ignored_reason
 
     skill_candidate = None
-    if _looks_like_reusable_work(user_message, assistant_text):
+    skill_evolution_record = None
+    gate = _skill_evolution_gate_for_item(
+        item=item,
+        user_message=user_message,
+        assistant_text=assistant_text,
+    )
+    workflow_evidence = build_workflow_evidence(
+        tool_calls=item.tool_calls,
+        runtime_events=item.runtime_events,
+    )
+    if gate.should_evaluate:
         try:
             skill_candidate = await run_skill_evolution_agent(
                 user_message=user_message,
                 assistant_text=assistant_text,
                 agent_id=item.agent_id,
                 agent_name=item.agent_name,
+                workflow_evidence=workflow_evidence,
+                router_gate=gate,
                 model_name=model_name,
                 fallback_names=fallback_names or [],
                 invocation_key=_reflection_invocation_key(item, "skill"),
             )
-        except Exception:
+        except Exception as exc:
             skill_candidate = None
-        if skill_candidate and (not skill_candidate.reusable or skill_candidate.confidence < 0.72):
-            skill_candidate = None
+            skill_evolution_record = _persist_skill_evolution_record(
+                item=item,
+                gate=gate,
+                workflow_evidence=workflow_evidence,
+                candidate=None,
+                status="failed",
+                risk_notes=f"SkillEvolutionAgent 调用失败：{type(exc).__name__}",
+            )
+        if skill_evolution_record is None:
+            accepted = is_accepted_skill_candidate(skill_candidate)
+            skill_evolution_record = _persist_skill_evolution_record(
+                item=item,
+                gate=gate,
+                workflow_evidence=workflow_evidence,
+                candidate=skill_candidate,
+                status="draft" if accepted else "skipped",
+                risk_notes="" if accepted else rejected_skill_candidate_reason(skill_candidate),
+            )
+            if not accepted:
+                skill_candidate = None
+            elif skill_evolution_record:
+                registered_record, _reason = register_skill_evolution_record(skill_evolution_record)
+                if registered_record:
+                    skill_evolution_record = registered_record
+    else:
+        skill_evolution_record = _persist_skill_evolution_record(
+            item=item,
+            gate=gate,
+            workflow_evidence=workflow_evidence,
+            candidate=None,
+            status="skipped",
+            risk_notes=gate.reason,
+        )
 
-    if updates or skill_candidate:
-        return MemoryReflectionResult(updates=updates, skill_candidate=skill_candidate)
+    if updates or skill_candidate or skill_evolution_record:
+        return MemoryReflectionResult(
+            updates=updates,
+            skill_candidate=skill_candidate,
+            skill_evolution_record=skill_evolution_record,
+        )
     return MemoryReflectionResult(ignored_reason=memory_reason or "no_memory_or_skill_candidate")
 
 
 def _has_long_term_intent(text: str) -> bool:
     lowered = text.lower()
     return any(hint in lowered for hint in _LONG_TERM_HINTS)
+
+
+def is_manual_skill_generation_request(text: str) -> bool:
+    """判断用户是否显式要求把前序工作生成 Skill。"""
+
+    normalized = _normalize_text(text).lower()
+    if not normalized:
+        return False
+    has_skill_marker = any(marker in normalized for marker in ("skill", "skills", "技能"))
+    if not has_skill_marker:
+        return False
+    has_action = any(marker in normalized for marker in _MANUAL_SKILL_ACTIONS)
+    if not has_action:
+        return False
+    return len(normalized) <= 120 or any(marker in normalized for marker in _MANUAL_SKILL_REFERENCES)
+
+
+def _skill_evolution_gate_for_item(
+    *,
+    item: MemoryReflectionInput,
+    user_message: str,
+    assistant_text: str,
+) -> SkillEvolutionGateDecision:
+    """为自动或手动 Skill 提炼生成 gate 决策。"""
+
+    if item.manual_skill_request:
+        return SkillEvolutionGateDecision(
+            shouldEvaluate=True,
+            reason="用户显式要求把前序完成工作生成 Skill。",
+            risk="low",
+            signals=["manual_skill_request"],
+        )
+    return evaluate_skill_evolution_router_gate(
+        user_message=user_message,
+        assistant_text=assistant_text,
+        tool_calls=item.tool_calls,
+        runtime_events=item.runtime_events,
+    )
 
 
 def _contains_sensitive_content(text: str) -> bool:
@@ -308,6 +438,42 @@ def _append_note(
 
 def _all_memory_scopes() -> tuple[MemoryScope, MemoryScope, MemoryScope]:
     return ("user", "agent", "global_preference")
+
+
+def _persist_skill_evolution_record(
+    *,
+    item: MemoryReflectionInput,
+    gate,
+    workflow_evidence,
+    candidate: SkillEvolutionAgentPayload | None,
+    status: str,
+    risk_notes: str,
+) -> dict | None:
+    """保存 Skill 自进化记录，失败时不影响主对话和记忆提炼。"""
+
+    try:
+        return persist_skill_evolution_record(
+            SkillEvolutionRecordInput(
+                session_id=item.session_id,
+                agent_id=item.agent_id,
+                agent_name=item.agent_name,
+                user_message=item.user_message,
+                assistant_text=item.assistant_text,
+                user_id=item.user_id,
+                workspace_id=item.workspace_id,
+                project_id=item.project_id,
+                team_id=item.team_id,
+                source_run_id=item.source_run_id,
+                source_message_id=item.source_message_id,
+                router_gate=gate,
+                workflow_evidence=workflow_evidence,
+                candidate=candidate,
+                status=status,
+                risk_notes=risk_notes,
+            )
+        )
+    except Exception:
+        return None
 
 
 async def _run_scoped_memory_reflection(
@@ -451,25 +617,3 @@ def _trim(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return value[:limit].rstrip() + "..."
-
-
-def _looks_like_reusable_work(user_message: str, assistant_text: str) -> bool:
-    text = f"{user_message}\n{assistant_text}".lower()
-    if len(assistant_text) < 240:
-        return False
-    reusable_markers = (
-        "skill",
-        "技能",
-        "复用",
-        "流程",
-        "步骤",
-        "实现",
-        "设计",
-        "架构",
-        "模板",
-        "工作流",
-        "规范",
-        "总结",
-    )
-    completion_markers = ("完成", "已", "done", "implemented", "added", "通过", "测试")
-    return any(marker in text for marker in reusable_markers) and any(marker in text for marker in completion_markers)

@@ -254,13 +254,43 @@ class SkillDraftPropose(ToolBase):
         "提交一个标准 Skill 草稿候选。该工具不会注册 Skill，"
         "也不会把 Skill 自动绑定到任何 Agent。"
         "reason、name、description、trigger、content 必须使用中文记录，必要技术标识符可保留原文。"
+        "只有原子化 Skill 才能提交 draft；过大流程应设置 requiresWorkflow 并给出 suggestedSplit。"
     )
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
             "reusable": {"type": "boolean", "description": "本次工作是否值得沉淀为 Skill。"},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "granularity": {
+                "type": "string",
+                "enum": ["too_small", "atomic", "too_broad"],
+                "description": "Skill 颗粒度判断。",
+            },
+            "requiresWorkflow": {"type": "boolean", "description": "是否应交给 Workflow 编排多个原子 Skill。"},
             "reason": {"type": "string", "description": "中文判断理由。"},
+            "suggestedSplit": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "trigger": {"type": "string"},
+                        "reason": {"type": "string"},
+                    },
+                },
+            },
+            "variableFlow": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string"},
+                        "target": {"type": "string"},
+                        "variable": {"type": "string"},
+                    },
+                },
+                "description": "需要在 Skill 中保留的变量传递关系。",
+            },
             "name": {"type": "string", "description": "中文 Skill 名称。"},
             "description": {"type": "string", "description": "中文 Skill 描述。"},
             "trigger": {"type": "string", "description": "中文触发条件。"},
@@ -294,7 +324,11 @@ class SkillDraftPropose(ToolBase):
         self,
         reusable: bool,
         confidence: float = 0.0,
+        granularity: str = "atomic",
+        requiresWorkflow: bool = False,
         reason: str = "",
+        suggestedSplit: list[dict[str, Any]] | None = None,
+        variableFlow: list[dict[str, Any]] | None = None,
         name: str = "",
         description: str = "",
         trigger: str = "",
@@ -305,7 +339,27 @@ class SkillDraftPropose(ToolBase):
         payload = {
             "reusable": bool(reusable),
             "confidence": max(0.0, min(float(confidence), 1.0)),
+            "granularity": granularity if granularity in {"too_small", "atomic", "too_broad"} else "atomic",
+            "requiresWorkflow": bool(requiresWorkflow),
             "reason": str(reason).strip()[:500],
+            "suggestedSplit": [
+                {
+                    "name": str(item.get("name") or "").strip()[:80],
+                    "trigger": str(item.get("trigger") or "").strip()[:300],
+                    "reason": str(item.get("reason") or "").strip()[:300],
+                }
+                for item in (suggestedSplit or [])
+                if isinstance(item, dict)
+            ][:8],
+            "variableFlow": [
+                {
+                    "source": str(item.get("source") or "").strip()[:120],
+                    "target": str(item.get("target") or "").strip()[:120],
+                    "variable": str(item.get("variable") or "").strip()[:80],
+                }
+                for item in (variableFlow or [])
+                if isinstance(item, dict)
+            ][:16],
             "draft": {
                 "name": str(name).strip()[:80],
                 "description": str(description).strip()[:300],

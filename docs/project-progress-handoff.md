@@ -1,12 +1,12 @@
 # Agent Workstation 项目进展与协作交接
 
-> 更新时间：2026-07-03
+> 更新时间：2026-07-06
 >
 > 本文只记录当前项目事实和协作入口。详细架构见 `docs/architecture-overview.md`，任务排期见 `docs/project-todo.md`。
 
 ## 当前定位
 
-Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。当前核心链路已经收束为 Chat 中选择单 Agent 或 Team，通过 ReAct Runtime 执行任务，并用 RunState / DisplaySnapshot 驱动前端主展示。新记忆系统 MVP 已部分接入：运行前注入 Markdown 摘要和最近 30 天节点树，运行后后台提炼 Markdown 记忆并持久化长期节点记忆。
+Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。当前核心链路已经收束为 Chat 中选择单 Agent 或 Team，通过 ReAct Runtime 执行任务，并用 RunState / DisplaySnapshot 驱动前端主展示。新记忆系统 MVP 已部分接入：运行前注入 Markdown 摘要和最近 30 天历史记忆索引，运行后后台提炼 Markdown 记忆并持久化历史记忆（底层 `memory_nodes`）。
 
 旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线。`memory*`、`planConfig`、`planRuns`、`callableAgents`、`subagentCalls` 等字段只保留历史兼容语义，不能继续作为新功能实现入口。当前记忆能力只能沿 `docs/memory-system-design.md` 的新方案推进，不新增 `memory` runtime.kind。
 
@@ -21,8 +21,8 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 - Trace：模型、工具、权限、Team、HITL、错误和 token/cache 事件审计。
 - Electron 开发窗口、内测打包脚本、生产模式后端启动入口。
 - Plan Mode middleware：单 Agent 下通过 `plan_enter` / `plan_write` / `todo_write` / `task_output` / `plan_exit` 生成计划；`plan_exit` 输出 finalized 计划作为最终答案，不走旧审批流。
-- 记忆系统 MVP：`memory_nodes` SQLite 主表、`VectorStoreBackend` 抽象、`disabled` / `zvec` provider、`memory_node_tree` / `memory_node_query` 工具、user / agent / global Markdown 记忆文件、运行前记忆注入、运行后后台反思提炼和节点持久化。
-- Skill 自进化雏形：已有 `SkillEvolutionAgent` 与 `skill_draft_propose` 草稿工具，但尚未完成 router gate、workflow evidence、颗粒度控制、变量流抽象、候选持久化和标准 Skill 注册。
+- 记忆系统 MVP：历史记忆底层 `memory_nodes` SQLite 主表、`VectorStoreBackend` 抽象、`disabled` / `zvec` provider、`memory_node_tree` / `memory_node_query` 工具、user / agent / global Markdown 记忆文件、运行前记忆注入、运行后后台反思提炼、历史记忆持久化和 Memory 页面管理入口首版。
+- Skill 自进化雏形：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、规则版 router gate、workflow evidence、颗粒度控制、变量流抽象、`skill_evolution_records` 候选持久化、标准 Skill 注册首版、相似 Skill 合并首版、标准包目录 `backend/data/skill_packages/{skill_name}/SKILL.md`、历史 Skill 包目录 backfill、Skill zip 导出、用户显式请求生成 Skill 的手动触发流、`MEMORY_AUDIT` Trace 审计首版和 Chat “Skills 生成中”轻量提醒；注册后不自动绑定 Agent。尚未完成注册失败原因可视化和前端队列管理。
 
 ## 核心入口
 
@@ -38,16 +38,17 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 - `backend/src/server/routes/chat/background_runs.py`：后台 Run 与 RunState。
 - `backend/src/server/routes/chat/event_hub/projector.py`：原始事件到 RunState / DisplaySnapshot 投影。
 - `backend/src/server/routes/chat/run_context.py`：组装运行上下文，并在 readiness 通过后注入 Skill prompt 和记忆上下文。
-- `backend/src/server/routes/chat/completion.py`：成功收尾后触发后台 Markdown 记忆提炼和长期节点记忆持久化。
+- `backend/src/server/routes/chat/completion.py`：成功收尾后触发后台 Markdown 记忆提炼和历史记忆持久化。
 - `backend/src/agents/factory.py`：AgentScope Agent / Model / Toolkit 唯一构造入口。
 - `backend/src/storage/database.py`：SQLite schema 和存储访问。
 - `backend/src/memory/retrieval.py`：生成运行前记忆注入文本。
 - `backend/src/memory/reflection.py`：运行后 user / agent / global Markdown 记忆与 Skill 草稿提炼编排。
 - `backend/src/memory/extraction_agents.py`：记忆提炼 Agent 和 SkillEvolutionAgent prompt / schema。
-- `backend/src/memory/nodes.py`、`backend/src/memory/node_persist.py`：长期节点记忆服务和运行后持久化。
+- `backend/src/memory/nodes.py`、`backend/src/memory/node_persist.py`：历史记忆底层服务和运行后持久化。
 - `backend/src/memory/markdown_store.py`：Markdown 记忆文件存储。
+- `backend/src/server/routes/skills.py`：Skills 注册、导入、导出和标准 Skill 包目录管理。
 - `backend/src/vector_store/*`：向量存储抽象、策略和 Zvec / disabled provider。
-- `backend/src/tools/memory_nodes.py`、`backend/src/tools/memory_reflection.py`：记忆节点查询工具和内部反思工具。
+- `backend/src/tools/memory_nodes.py`、`backend/src/tools/memory_reflection.py`：历史记忆查询工具和内部反思工具。
 
 前端：
 
@@ -58,6 +59,7 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 - `frontend/src/types/displayEvents.ts`：DisplaySnapshot / DisplayEvent 类型。
 - `frontend/src/features/chat/*`：Chat 展示组件。
 - `frontend/src/pages/AgentTeamPage.tsx`、`MCPPage.tsx`、`SkillsPage.tsx`、`ToolsPage.tsx`、`TracePage.tsx`、`RunsPage.tsx`、`SettingsPage.tsx`：主要页面。
+- `frontend/src/pages/MemoryPage.tsx`：Memory 管理入口首版，支持唯一用户记忆、唯一全局记忆、每个 Agent 一份 Agent Markdown 记忆，以及历史记忆按“Agent -> 时间节点 -> 具体记忆”查看；Skill 自进化队列保留为下一步页面能力，不砍掉。
 
 ## 启动与验证
 
@@ -91,8 +93,8 @@ cd frontend && npm run electron:dev
 - Team Runtime 不支持 Plan Mode。需要“先规划再 Team 执行”时，先用单 Agent 生成计划，再由用户下一轮选择 Team 普通执行。
 - `resume.py` 仍有部分旧式分支，后续应继续复用 `leader_stream.py`、`completion.py`、`orchestration.py`。
 - 旧记忆表可能存在于开发库中，但当前运行时不触发旧 memory summarize，也不应扩展旧记忆模块。新记忆数据使用 `memory_nodes`、Markdown 文件和 `VectorStoreBackend`。
-- 默认 Markdown 记忆文件为 `backend/data/memory/users/user_memory.md`、`backend/data/memory/agents/agent_memory.md`、`backend/data/memory/global/global_memory.md`；非默认 owner 使用 `{owner_id}/user_memory.md`、`{agent_id}/agent_memory.md`、`{workspace_id}/global_memory.md`，不兼容读取旧 `default.md`。
-- Skill 自进化下一步必须先实现 `SkillEvolutionRouterGate` 和 `WorkflowEvidenceBuilder`，再做颗粒度控制、变量流抽象和标准 Skill 注册。
+- 默认 Markdown 记忆文件为 `backend/data/memory/users/user_memory.md`、`backend/data/memory/agents/agent_memory.md`、`backend/data/memory/global/global_memory.md`；Memory 页面主入口只暴露唯一 user / global 和按 Agent ID 的 agent memory，不兼容读取旧 `default.md`。历史扩展路由仍保留，但不作为当前页面入口。
+- Skill 自进化下一步应补 Memory 页面候选队列管理和注册失败原因可视化；队列作为从协作沉淀到标准 Skill 的中间态入口保留在 Memory 页面。
 - `CLAUDE.md` 只是兼容指针，当前事实以 `AGENTS.md` 为准。
 
 ## 文档入口
@@ -105,3 +107,40 @@ cd frontend && npm run electron:dev
 - `docs/electron-packaging-plan.md`：正式打包后续。
 - `docs/dynamic-workflows-plan.md`：动态编排概念评估。
 - `docs/memory-system-design.md`：新记忆系统设计、当前实现边界和 Skill 自进化后续约束。
+
+## 文档维护规则
+
+> 生效时间：2026-07-06
+
+以下规则用于判断一份文档是否过时，以及如何维护文档目录。
+
+### 审计流程（可复用）
+
+检查 `docs/` 目录文档时，按以下顺序执行：
+
+1. **先读 `docs/README.md`**
+   - 这是文档总索引，列出了必读文档、暂保留专题文档和已清理类型。先确认当前分类框架。
+
+2. **再读 `docs/architecture-overview.md`**
+   - 确认当前在线架构事实：Chat 核心链路、Team Runtime、Plan Mode、记忆系统 MVP、存储、权限。旧链路（旧 Plan Runtime、旧记忆模块、旧 Subagent Runtime）已下线，与之相关的文档应标记为过时。
+
+3. **然后读 `docs/project-todo.md`**
+   - 了解当前仍有效的任务队列和已完成项。如果一份文档描述的功能不在 TODO 中且不在已在线能力中，则大概率已下线或废弃。
+
+4. **再读 `docs/project-progress-handoff.md`**
+   - 确认已在线能力和注意事项。文档内容若与本文事实矛盾（例如仍引用旧记忆模块或旧 Plan Runtime 作为入口），应判定为过时。
+
+5. **最后逐文档判断**
+   - 对照以上四个入口的联合事实，逐份检查 `docs/` 下其他文档：
+     - 内容是否与当前架构一致？
+     - 是否引用了已下线的 Runtime 或模块？
+     - 是否引用了旧字段或已清理的设计？
+     - 描述的流程在当前代码中是否仍然成立？
+   - 若上述任一答案为"是"，则该文档过时，应移到已清理清单或归档。
+
+### 日常维护原则
+
+- 新增功能前，涉及 Chat SSE / RunState / DisplaySnapshot 的必须先更新 `docs/chat-sse-event-contract.md`。
+- 文档内容原则上只减不增，新增入口级文档需在 `docs/README.md` 中登记。
+- `project-todo.md` 中标记为已完成的任务，对应专题文档可关闭或归档。
+- 旧 Runtime / 旧模块文档发现后直接标记过时，不在 `docs/README.md` 的"必读文档"中保留引用。

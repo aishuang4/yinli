@@ -12,6 +12,8 @@
 - 新增 Chat UI 功能只能依赖 RunState 字段；不得新增对 `TEXT_BLOCK_DELTA`、`TOOL_*`、`TEAM_ACTIVITY`、`TEAM_MEMBER_EVENT` 等 raw SSE 分支的主链路依赖。
 - 当前前端 live handler 只消费 `RUN_STATE`、`RUN_STATE_PATCH`、`ERROR`、`RUN_CANCELLED`；其他 raw SSE 只允许后端投影器、Trace 或调试入口消费。
 - 新功能必须定义独立 Runtime Event 家族，不允许混用其他功能事件。例如后续重设计记忆时使用新的 `MEMORY_*` 语义，产物使用 `ARTIFACT_*`，沙箱使用 `SANDBOX_*`。
+- 记忆模块的详细过程审计使用 `run_events.event_type=MEMORY_AUDIT`，不作为 Chat SSE 事件发送，不驱动 Chat 页面过程展示。
+- Chat 侧只允许通过 `RUNTIME_EVENT.type=MEMORY_SKILL_GENERATING` 投影为 `RUN_STATE_PATCH.kind=notice`，展示 “Skills 生成中” 轻量提醒；payload 不得包含 Skill 内容、记忆内容、生成结果或提炼过程。
 - 旧 Plan Runtime 与 Subagent Runtime 已下线，旧 `PLAN_*`、`SUBAGENT_*` 事件不属于当前稳定契约；新的 Plan Mode 事件只通过本文定义的 `RUNTIME_EVENT` 契约表达。
 
 ## Chat 路由分层

@@ -408,6 +408,44 @@ def ensure_db() -> None:
                     ON memory_nodes(status, node_date DESC);
                 CREATE INDEX IF NOT EXISTS idx_memory_nodes_source_run
                     ON memory_nodes(source_run_id);
+                CREATE TABLE IF NOT EXISTS skill_evolution_records (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL DEFAULT 'default',
+                    project_id TEXT NOT NULL DEFAULT '',
+                    agent_id TEXT NOT NULL,
+                    agent_name TEXT NOT NULL DEFAULT '',
+                    team_id TEXT NOT NULL DEFAULT '',
+                    user_id TEXT NOT NULL DEFAULT 'default',
+                    source_session_id TEXT NOT NULL DEFAULT '',
+                    source_run_id TEXT NOT NULL DEFAULT '',
+                    source_message_id TEXT NOT NULL DEFAULT '',
+                    router_gate TEXT NOT NULL DEFAULT '{}',
+                    workflow_evidence TEXT NOT NULL DEFAULT '{}',
+                    reusable INTEGER NOT NULL DEFAULT 0,
+                    reusable_reason TEXT NOT NULL DEFAULT '',
+                    trigger_description TEXT NOT NULL DEFAULT '',
+                    inputs_schema TEXT NOT NULL DEFAULT '{}',
+                    draft_skill_name TEXT NOT NULL DEFAULT '',
+                    draft_skill_description TEXT NOT NULL DEFAULT '',
+                    draft_skill_content TEXT NOT NULL DEFAULT '',
+                    draft_tags TEXT NOT NULL DEFAULT '[]',
+                    granularity TEXT NOT NULL DEFAULT '',
+                    requires_workflow INTEGER NOT NULL DEFAULT 0,
+                    suggested_split TEXT NOT NULL DEFAULT '[]',
+                    variable_flow TEXT NOT NULL DEFAULT '[]',
+                    risk_notes TEXT NOT NULL DEFAULT '',
+                    confidence REAL NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'skipped',
+                    registered_skill_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_skill_evolution_records_status_updated
+                    ON skill_evolution_records(status, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_skill_evolution_records_source
+                    ON skill_evolution_records(source_session_id, source_run_id, source_message_id);
+                CREATE INDEX IF NOT EXISTS idx_skill_evolution_records_agent
+                    ON skill_evolution_records(agent_id, updated_at DESC);
             """)
             _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "subagent_calls", "TEXT NOT NULL DEFAULT '[]'")
@@ -1593,6 +1631,83 @@ def get_latest_assistant_message_preview(session_id: str) -> dict[str, Any] | No
     }
 
 
+def get_latest_completed_user_assistant_turn(
+    session_id: str,
+    *,
+    before_user_content: str | None = None,
+) -> dict[str, Any] | None:
+    """读取当前用户消息之前最近一轮完整 user -> assistant 对话。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        before_sort_order: int | None = None
+        if before_user_content is not None:
+            current_user = conn.execute(
+                """
+                SELECT sort_order FROM chat_messages
+                WHERE session_id = ? AND role = 'user' AND content = ?
+                ORDER BY sort_order DESC, created_at DESC
+                LIMIT 1
+                """,
+                (session_id, before_user_content),
+            ).fetchone()
+            if current_user:
+                before_sort_order = int(current_user["sort_order"])
+
+        if before_sort_order is None:
+            assistant_row = conn.execute(
+                """
+                SELECT * FROM chat_messages
+                WHERE session_id = ?
+                  AND role = 'assistant'
+                  AND length(trim(content)) > 0
+                ORDER BY sort_order DESC, created_at DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+        else:
+            assistant_row = conn.execute(
+                """
+                SELECT * FROM chat_messages
+                WHERE session_id = ?
+                  AND role = 'assistant'
+                  AND length(trim(content)) > 0
+                  AND sort_order < ?
+                ORDER BY sort_order DESC, created_at DESC
+                LIMIT 1
+                """,
+                (session_id, before_sort_order),
+            ).fetchone()
+
+        if not assistant_row:
+            return None
+
+        user_row = conn.execute(
+            """
+            SELECT * FROM chat_messages
+            WHERE session_id = ?
+              AND role = 'user'
+              AND sort_order < ?
+            ORDER BY sort_order DESC, created_at DESC
+            LIMIT 1
+            """,
+            (session_id, int(assistant_row["sort_order"])),
+        ).fetchone()
+
+    if not user_row:
+        return None
+    return {
+        "userMessageId": user_row["id"],
+        "assistantMessageId": assistant_row["id"],
+        "userMessage": user_row["content"],
+        "assistantText": assistant_row["content"],
+        "toolCalls": _loads(assistant_row["tool_calls"], []),
+        "runtimeEvents": _loads(assistant_row["runtime_events"], []),
+        "createdAt": assistant_row["created_at"],
+    }
+
+
 def _chat_run_from_row(row: sqlite3.Row, events: list[str], event_count: int | None = None) -> dict[str, Any]:
     return {
         "id": row["id"],
@@ -1855,6 +1970,183 @@ def mark_memory_node_used(node_id: str) -> dict[str, Any] | None:
         row = conn.execute("SELECT * FROM memory_nodes WHERE id = ?", (node_id,)).fetchone()
         conn.commit()
     return _memory_node_from_row(row) if row else None
+
+
+def _skill_evolution_record_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "workspaceId": row["workspace_id"],
+        "projectId": row["project_id"],
+        "agentId": row["agent_id"],
+        "agentName": row["agent_name"],
+        "teamId": row["team_id"],
+        "userId": row["user_id"],
+        "sourceSessionId": row["source_session_id"],
+        "sourceRunId": row["source_run_id"],
+        "sourceMessageId": row["source_message_id"],
+        "routerGate": _loads(row["router_gate"], {}),
+        "workflowEvidence": _loads(row["workflow_evidence"], {}),
+        "reusable": bool(row["reusable"]),
+        "reusableReason": row["reusable_reason"],
+        "triggerDescription": row["trigger_description"],
+        "inputsSchema": _loads(row["inputs_schema"], {}),
+        "draftSkillName": row["draft_skill_name"],
+        "draftSkillDescription": row["draft_skill_description"],
+        "draftSkillContent": row["draft_skill_content"],
+        "draftTags": _loads(row["draft_tags"], []),
+        "granularity": row["granularity"],
+        "requiresWorkflow": bool(row["requires_workflow"]),
+        "suggestedSplit": _loads(row["suggested_split"], []),
+        "variableFlow": _loads(row["variable_flow"], []),
+        "riskNotes": row["risk_notes"],
+        "confidence": float(row["confidence"] or 0),
+        "status": row["status"],
+        "registeredSkillId": row["registered_skill_id"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def upsert_skill_evolution_record(data: dict[str, Any]) -> dict[str, Any]:
+    """写入或更新 Skill 自进化候选记录。"""
+
+    ensure_db()
+    now = _utc_now()
+    created_at = data.get("created_at") or now
+    updated_at = data.get("updated_at") or now
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO skill_evolution_records (
+                id, workspace_id, project_id, agent_id, agent_name, team_id, user_id,
+                source_session_id, source_run_id, source_message_id, router_gate,
+                workflow_evidence, reusable, reusable_reason, trigger_description,
+                inputs_schema, draft_skill_name, draft_skill_description, draft_skill_content,
+                draft_tags, granularity, requires_workflow, suggested_split, variable_flow,
+                risk_notes, confidence, status, registered_skill_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                workspace_id=excluded.workspace_id,
+                project_id=excluded.project_id,
+                agent_id=excluded.agent_id,
+                agent_name=excluded.agent_name,
+                team_id=excluded.team_id,
+                user_id=excluded.user_id,
+                source_session_id=excluded.source_session_id,
+                source_run_id=excluded.source_run_id,
+                source_message_id=excluded.source_message_id,
+                router_gate=excluded.router_gate,
+                workflow_evidence=excluded.workflow_evidence,
+                reusable=excluded.reusable,
+                reusable_reason=excluded.reusable_reason,
+                trigger_description=excluded.trigger_description,
+                inputs_schema=excluded.inputs_schema,
+                draft_skill_name=excluded.draft_skill_name,
+                draft_skill_description=excluded.draft_skill_description,
+                draft_skill_content=excluded.draft_skill_content,
+                draft_tags=excluded.draft_tags,
+                granularity=excluded.granularity,
+                requires_workflow=excluded.requires_workflow,
+                suggested_split=excluded.suggested_split,
+                variable_flow=excluded.variable_flow,
+                risk_notes=excluded.risk_notes,
+                confidence=excluded.confidence,
+                status=excluded.status,
+                registered_skill_id=excluded.registered_skill_id,
+                updated_at=excluded.updated_at
+            """,
+            (
+                data["id"],
+                data.get("workspace_id") or "default",
+                data.get("project_id") or "",
+                data["agent_id"],
+                data.get("agent_name") or "",
+                data.get("team_id") or "",
+                data.get("user_id") or "default",
+                data.get("source_session_id") or "",
+                data.get("source_run_id") or "",
+                data.get("source_message_id") or "",
+                _dumps(data.get("router_gate", {})),
+                _dumps(data.get("workflow_evidence", {})),
+                1 if data.get("reusable") else 0,
+                data.get("reusable_reason") or "",
+                data.get("trigger_description") or "",
+                _dumps(data.get("inputs_schema", {})),
+                data.get("draft_skill_name") or "",
+                data.get("draft_skill_description") or "",
+                data.get("draft_skill_content") or "",
+                _dumps(data.get("draft_tags", [])),
+                data.get("granularity") or "",
+                1 if data.get("requires_workflow") else 0,
+                _dumps(data.get("suggested_split", [])),
+                _dumps(data.get("variable_flow", [])),
+                data.get("risk_notes") or "",
+                float(data.get("confidence") or 0),
+                data.get("status") or "skipped",
+                data.get("registered_skill_id") or "",
+                created_at,
+                updated_at,
+            ),
+        )
+        row = conn.execute("SELECT * FROM skill_evolution_records WHERE id = ?", (data["id"],)).fetchone()
+        conn.commit()
+    return _skill_evolution_record_from_row(row)
+
+
+def get_skill_evolution_record(record_id: str) -> dict[str, Any] | None:
+    """读取单条 Skill 自进化候选记录。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT * FROM skill_evolution_records WHERE id = ?", (record_id,)).fetchone()
+    return _skill_evolution_record_from_row(row) if row else None
+
+
+def list_skill_evolution_records(
+    *,
+    status: str | None = None,
+    agent_id: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """按状态或 Agent 列出 Skill 自进化候选记录。"""
+
+    ensure_db()
+    query = "SELECT * FROM skill_evolution_records WHERE 1 = 1"
+    params: list[Any] = []
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    if agent_id:
+        query += " AND agent_id = ?"
+        params.append(agent_id)
+    query += " ORDER BY updated_at DESC LIMIT ?"
+    params.append(max(1, min(limit, 200)))
+    with _lock, _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [_skill_evolution_record_from_row(row) for row in rows]
+
+
+def mark_skill_evolution_record_registered(
+    record_id: str,
+    *,
+    registered_skill_id: str,
+) -> dict[str, Any] | None:
+    """标记 Skill 自进化候选已注册为标准 Skill。"""
+
+    ensure_db()
+    now = _utc_now()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE skill_evolution_records
+            SET status = 'registered', registered_skill_id = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (registered_skill_id, now, record_id),
+        )
+        row = conn.execute("SELECT * FROM skill_evolution_records WHERE id = ?", (record_id,)).fetchone()
+        conn.commit()
+    return _skill_evolution_record_from_row(row) if row else None
 
 
 def _row_to_plan(row: sqlite3.Row, steps: list[dict[str, Any]] | None = None) -> dict[str, Any]:
