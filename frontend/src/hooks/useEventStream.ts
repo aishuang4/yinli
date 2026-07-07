@@ -615,8 +615,18 @@ function normalizeDisplayApproval(source: unknown, block: DisplayBlock): RunStat
         question && typeof question === 'object' ? [question as Record<string, unknown>] : []
       ))
       : undefined,
+    externalResultsPreview: normalizeExternalResultsPreview(record.externalResultsPreview),
     createdAt: String(record.createdAt || block.updatedAt || new Date().toISOString()),
   };
+}
+
+function normalizeExternalResultsPreview(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => [key, String(item || '')])
+      .filter(([, item]) => item),
+  );
 }
 
 function normalizeApprovalToolCall(toolCall: unknown): RunStateApprovalSummary['toolCalls'][number] {
@@ -922,6 +932,7 @@ export function useEventStream(): UseEventStreamReturn {
         isStreaming: true,
         error: null,
         hitlRequests: prev.hitlRequests.filter((item) => item.interactionId !== interactionId),
+        clarificationRequests: prev.clarificationRequests.filter((item) => item.id !== interactionId),
       }));
 
       try {

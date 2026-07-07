@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
+from src.memory.admission import MemoryAdmissionInput, evaluate_memory_admission
 from src.memory.nodes import MemoryNodeService, MemoryNodeWrite
 
 
@@ -33,7 +34,13 @@ def persist_completed_run_memory_node(
 
     user_message = item.user_message.strip()
     assistant_text = item.assistant_text.strip()
-    if not user_message or not assistant_text:
+    admission = evaluate_memory_admission(
+        MemoryAdmissionInput(
+            user_message=user_message,
+            assistant_text=assistant_text,
+        )
+    )
+    if not admission.should_persist_history:
         return None
     node_date = date.today().isoformat()
     node = MemoryNodeWrite(

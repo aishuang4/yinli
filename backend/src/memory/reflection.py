@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Literal
 
+from src.memory.admission import MemoryAdmissionInput, evaluate_memory_admission
 from src.memory.extraction_agents import (
     SkillEvolutionAgentPayload,
     run_memory_reflection_agent,
@@ -40,18 +41,6 @@ MemorySection = Literal[
     "Negative Rules",
 ]
 
-_LONG_TERM_HINTS = (
-    "以后",
-    "下次",
-    "默认",
-    "记住",
-    "长期",
-    "一直",
-    "每次",
-    "不要再",
-    "别再",
-    "禁止",
-)
 _NEGATIVE_HINTS = ("不要", "别", "禁止", "不能", "砍掉", "删除", "下线", "不要再", "别再")
 _CORRECTION_HINTS = ("纠正", "不对", "不是", "应该", "改成", "以后改", "需要改")
 _GLOBAL_HINTS = (
@@ -107,13 +96,6 @@ _AGENT_HINTS = (
     "该agent",
     "该 agent",
 )
-_SECRET_PATTERNS = (
-    re.compile(r"(?i)\b(api[_-]?key|token|password|secret|cookie)\b\s*[:=]\s*\S+"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    re.compile(r"(?i)\bsk-[a-z0-9_-]{12,}"),
-)
-
-
 @dataclass(frozen=True)
 class MemoryReflectionInput:
     """Markdown 记忆反思输入。"""
@@ -165,12 +147,9 @@ def reflect_completed_run_memory(
 
     user_message = _normalize_text(item.user_message)
     assistant_text = _normalize_text(item.assistant_text)
-    if not user_message or not assistant_text:
-        return MemoryReflectionResult(ignored_reason="empty_turn")
-    if not _has_long_term_intent(user_message):
-        return MemoryReflectionResult(ignored_reason="no_long_term_intent")
-    if _contains_sensitive_content(user_message):
-        return MemoryReflectionResult(ignored_reason="sensitive_content")
+    admission = _admission_for_item(item, user_message, assistant_text)
+    if not admission.should_write_markdown:
+        return MemoryReflectionResult(ignored_reason=admission.reason)
 
     target = _classify_scope(user_message)
     section = _classify_section(user_message, target)
@@ -193,15 +172,14 @@ async def reflect_completed_run_memory_with_agents(
 
     user_message = _normalize_text(item.user_message)
     assistant_text = _normalize_text(item.assistant_text)
-    if not user_message or not assistant_text:
-        return MemoryReflectionResult(ignored_reason="empty_turn")
-    if _contains_sensitive_content(user_message) or _contains_sensitive_content(assistant_text):
-        return MemoryReflectionResult(ignored_reason="sensitive_content")
+    admission = _admission_for_item(item, user_message, assistant_text)
+    if admission.sensitive or admission.reason == "empty_turn":
+        return MemoryReflectionResult(ignored_reason=admission.reason)
 
     memory_store = store or MarkdownMemoryStore()
     updates: list[MemoryMarkdownUpdate] = []
     memory_reason = ""
-    if _has_long_term_intent(user_message):
+    if admission.should_write_markdown:
         reflection_results = await asyncio.gather(
             *[
                 _run_scoped_memory_reflection(
@@ -246,6 +224,8 @@ async def reflect_completed_run_memory_with_agents(
         item=item,
         user_message=user_message,
         assistant_text=assistant_text,
+        admission_allows_skill=admission.should_evaluate_skill,
+        admission_reason=admission.reason,
     )
     workflow_evidence = build_workflow_evidence(
         tool_calls=item.tool_calls,
@@ -309,11 +289,6 @@ async def reflect_completed_run_memory_with_agents(
     return MemoryReflectionResult(ignored_reason=memory_reason or "no_memory_or_skill_candidate")
 
 
-def _has_long_term_intent(text: str) -> bool:
-    lowered = text.lower()
-    return any(hint in lowered for hint in _LONG_TERM_HINTS)
-
-
 def is_manual_skill_generation_request(text: str) -> bool:
     """判断用户是否显式要求把前序工作生成 Skill。"""
 
@@ -334,9 +309,18 @@ def _skill_evolution_gate_for_item(
     item: MemoryReflectionInput,
     user_message: str,
     assistant_text: str,
+    admission_allows_skill: bool = True,
+    admission_reason: str = "",
 ) -> SkillEvolutionGateDecision:
     """为自动或手动 Skill 提炼生成 gate 决策。"""
 
+    if not admission_allows_skill:
+        return SkillEvolutionGateDecision(
+            shouldEvaluate=False,
+            reason=f"MemoryAdmissionGate 跳过 Skill 自进化：{admission_reason or 'not_admitted'}。",
+            risk="skip",
+            signals=["memory_admission_gate"],
+        )
     if item.manual_skill_request:
         return SkillEvolutionGateDecision(
             shouldEvaluate=True,
@@ -352,8 +336,20 @@ def _skill_evolution_gate_for_item(
     )
 
 
-def _contains_sensitive_content(text: str) -> bool:
-    return any(pattern.search(text) for pattern in _SECRET_PATTERNS)
+def _admission_for_item(
+    item: MemoryReflectionInput,
+    user_message: str,
+    assistant_text: str,
+):
+    return evaluate_memory_admission(
+        MemoryAdmissionInput(
+            user_message=user_message,
+            assistant_text=assistant_text,
+            tool_calls=item.tool_calls,
+            runtime_events=item.runtime_events,
+            manual_skill_request=item.manual_skill_request,
+        )
+    )
 
 
 def _classify_scope(text: str) -> MemoryScope:

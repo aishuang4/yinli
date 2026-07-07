@@ -60,12 +60,12 @@ def _build_clarification_system_prompt() -> str:
     return "\n".join([
         "## Human Input / Clarification Contract",
         "If the user's request cannot be executed reliably because required information is missing, ask for clarification instead of guessing.",
-        "Prefer calling the AskUser tool when clarification is required. AskUser pauses the current AgentScope ReAct loop and resumes after the user answers.",
+        "Call the AskUser tool when clarification is required. AskUser is an AgentScope external tool: it pauses the current ReAct loop and resumes after the user answers.",
+        "For vague requests such as '帮我处理一下', '处理一下', '帮我弄一下', or requests missing the target object/action, you MUST call AskUser before FinalAnswerStart.",
+        "Never answer a blocking clarification as plain assistant text. Do not say '请问你具体想让我处理什么' directly; call AskUser with that question.",
         "AskUser questions must use at most 3 questions. Supported question types are: choice, multi_choice, text. For choice and multi_choice, provide 2-5 concise options.",
         "Only use AskUser when the missing information blocks meaningful progress.",
-        "",
-        "Legacy fallback only: if tools are unavailable and clarification is required, the first output token must be <clarification>. Output only one clarification block and no other text before or after it:",
-        '<clarification>{"title":"需要补充信息","description":"简短说明为什么需要这些信息","questions":[{"id":"target","type":"choice","label":"请选择目标","options":["选项 A","选项 B"]},{"id":"needs","type":"multi_choice","label":"请选择需要的能力","options":["能力 A","能力 B"]},{"id":"details","type":"text","label":"请补充具体要求","placeholder":"输入补充信息"}]}</clarification>',
+        "Do not output XML or JSON clarification blocks as assistant text. User-visible clarification must go through AskUser so the backend can resume the same AgentScope reply.",
     ])
 
 
@@ -89,7 +89,7 @@ def _extract_clarification_request(text: str) -> dict | None:
     match = re.search(r"<clarification>\s*(.*?)\s*</clarification>", text, re.DOTALL)
     raw_text = match.group(1) if match else _extract_raw_clarification_json(text)
     if not raw_text:
-        return None
+        return _extract_natural_language_clarification(text)
 
     try:
         raw = json.loads(raw_text)
@@ -145,6 +145,40 @@ def _extract_raw_clarification_json(text: str) -> str | None:
     if start < 0 or end <= start:
         return None
     return text[start:end + 1]
+
+
+def _extract_natural_language_clarification(text: str) -> dict | None:
+    """识别模型误把反问当最终答案输出的情况。"""
+
+    normalized = " ".join(str(text or "").split())
+    if not normalized or len(normalized) > 900:
+        return None
+    patterns = [
+        r"请问.*具体.*(想|要).*处理.*什么",
+        r"请.*描述.*(要|想).*处理.*(内容|具体内容|任务)",
+        r"请.*提供.*(具体|目标|任务|内容)",
+        r"需要.*补充.*(信息|内容|目标)",
+        r"告诉我.*具体.*(处理|修改|查看|分析).*什么",
+    ]
+    if not any(re.search(pattern, normalized, re.IGNORECASE) for pattern in patterns):
+        return None
+    return {
+        "id": uuid.uuid4().hex,
+        "kind": "clarification",
+        "type": "clarification",
+        "title": "需要补充任务内容",
+        "description": "当前请求缺少要处理的具体目标或动作，无法可靠继续执行。",
+        "questions": [{
+            "id": "target",
+            "type": "text",
+            "label": "请说明你希望我具体处理什么内容？",
+            "options": [],
+            "placeholder": "例如：检查 docs 文档、修改某个文件、运行某个脚本等",
+            "required": True,
+        }],
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "clearFinalAnswer": True,
+    }
 
 
 def _parse_worker_selection(text: str, allowed_agent_ids: set[str]) -> tuple[list[str], str]:

@@ -30,7 +30,7 @@ MemorySection = Literal[
 MemoryOperation = Literal["append", "update", "delete", "skip"]
 SkillGranularity = Literal["too_small", "atomic", "too_broad"]
 
-MEMORY_REFLECTION_PROMPT_VERSION = "2026-07-03-v4"
+MEMORY_REFLECTION_PROMPT_VERSION = "2026-07-06-v5"
 SKILL_EVOLUTION_PROMPT_VERSION = "2026-07-06-v1"
 
 
@@ -342,6 +342,8 @@ def _build_memory_reflection_system_prompt(scope: str) -> str:
         "即使原始对话是英文，也要把可沉淀的事实、规则、偏好和修正翻译成中文后写入记忆。",
         "英文技术名词、代码标识符、文件名、API 名称、环境变量、命令和专有产品名可以保留原文，但解释性文本必须是中文。",
         "不要把英文原句直接作为记忆内容保存，除非它本身是必须精确保留的代码、命令、路径、配置项或专有名词。",
+        "对长期重要实体使用 Obsidian Wiki 链接，格式为 [[类型:名称]]，例如 [[项目:Agent Workstation]]、[[规则:禁止恢复旧 Plan Runtime]]、[[模块:MemoryAdmissionGate]]、[[Skill:Memory Gate]]。",
+        "只给项目、规则、模块、Skill、工具、文件、错误类型、主题等稳定实体加链接；不要给普通词、整句描述或一次性细节过度加链接。",
         "只提取本轮已完成对话中长期稳定、未来有用的信息。",
         "禁止记录 secrets、tokens、passwords、private keys、cookies、一次性验证码或大段复制内容。",
         "不要记录工具调用过程、observation、chain-of-thought 或实现噪音。",
@@ -405,6 +407,9 @@ def _build_memory_reflection_user_prompt(
             "translateSourceFactsToChinese": True,
             "notesAndReasonsMustBeChinese": True,
             "preserveEnglishOnlyForTechnicalIdentifiers": True,
+            "useObsidianEntityLinks": True,
+            "entityLinkFormat": "[[类型:名称]]",
+            "entityLinkKinds": ["项目", "规则", "模块", "Skill", "工具", "文件", "错误", "主题"],
             "scopeBoundary": _scope_policy_payload(memory_file.scope),
         },
     }

@@ -191,6 +191,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 "interactionType": interaction.type,
                 "action": data.action,
                 "externalResultCount": len(data.external_results),
+                "externalResultsPreview": _external_results_preview(data.external_results),
             },
         )
         yield runtime_event_sse(
@@ -207,6 +208,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 "interactionType": interaction.type,
                 "action": data.action,
                 "externalResultCount": len(data.external_results),
+                "externalResultsPreview": _external_results_preview(data.external_results),
             },
         )
         yield runtime_event_sse(
@@ -1198,6 +1200,7 @@ async def start_resume_interaction(data: ChatResumeRequest) -> dict:
         pending_interaction.run_id,
         interaction_id=pending_interaction.id,
         action=data.action,
+        external_results_preview=_external_results_preview(data.external_results),
     )
     response = await resume_interaction(data)
     asyncio.create_task(
@@ -1220,3 +1223,13 @@ async def _drain_resume_stream(stream) -> None:
     except Exception:
         # 后台恢复流内部已经尽量发出 RUN_FAILED/ERROR；这里兜底避免 task 异常泄漏。
         return
+
+
+def _external_results_preview(external_results: dict[str, str]) -> dict[str, str]:
+    """返回外部执行/AskUser 结果预览，供过程面板展示用户实际传回模型的信息。"""
+
+    return {
+        str(key): _trim_text(str(value or ""), 2000)
+        for key, value in external_results.items()
+        if str(key).strip()
+    }

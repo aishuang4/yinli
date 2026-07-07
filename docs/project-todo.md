@@ -46,7 +46,22 @@
 - [ ] 将运行时数据目录稳定迁移到 Electron `userData`。
 - [ ] 评估桌面自动更新流程。
 
-## P6. 记忆系统重设计
+## P6. 前端组件化与 UI 规范收敛
+
+- [x] 建立 `frontend/src/components/form/` 统一表单封装，优先组合 `@agentscope-ai/design` 的 `Input`、`Select`、`DatePicker`、`Switch`、`Slider`、`InputNumber`。
+- [x] 将 Agent、Team、MCP、Skills、Tools、Settings、Sandbox、Memory 等非 Chat 业务表单逐步迁移到共享表单字段。
+- [x] 新增 `FileImportButton`，用 Spark Design `Upload` 替代页面内隐藏原生 file input。
+- [x] 新增 `CatalogFilterBar`，收敛 MCP / Skills 目录页搜索和筛选控件。
+- [x] 拆分 `AgentEditor`：基础信息、模型高级设置、能力工具、Guardrails、MCP / HTTP / Skill 选择弹窗拆到 `features/agents/sections/`。
+- [x] 拆分 `MemoryPage`：页面只保留数据装配和 tab 编排，Markdown、历史节点、Skill 自进化队列、Wiki Vault 面板拆到 `features/memory/`。
+- [x] 拆分 `TracePage`：页面只保留运行轨迹数据加载和分页，列表、详情、事件时间线、消息卡、工具列表拆到 `features/traces/`。
+- [ ] 继续拆 `AgentTeamPage`：侧栏导入导出、Team 模板区、Team 列表项和空状态可继续下沉到 `features/teams/` 或 `features/agents/`。
+- [ ] 继续拆 `RunsPage`：运行列表、状态筛选、详情操作和空状态应组件化。
+- [ ] 抽取通用非表单交互组件：卡片式 tab、可选择列表项、时间线节点、工具条按钮组，减少页面内重复 `<button>` className。
+- [ ] 给非 Chat 前端整改增加轻量自动检查脚本，固定扫描裸表单控件和超大 `.tsx` 文件。
+- [ ] Chat 页面和 `features/chat/` 单独排期整改；当前非 Chat 整改不顺手修改 Chat 行为。
+
+## P7. 记忆系统重设计
 
 - [x] 将 `docs/memory-system-design.md` 更新到当前 MVP 进度，记录已实现能力、未完成闭环和 Skill 自进化约束。
 - [ ] 评审并冻结 `docs/memory-system-design.md`，重点确认历史记忆、Markdown 记忆、hooks/tools 接入、运行前注入、运行后自动写入、Skill 自进化和冲突优先级。
@@ -88,11 +103,23 @@
 - [ ] 扩展 `MemoryNodePersistHook`：接入反思模型摘要、去重、敏感信息过滤、Trace 事件和异步失败重试。
 - [ ] 新增 Memory 页面，支持历史记忆、三类 Markdown 记忆、Skill 自进化队列、设置和审计查看。
   - [x] Memory 页面首版：导航入口、唯一用户记忆、唯一全局记忆、每个 Agent 一份 Agent Markdown 记忆、历史记忆按“Agent -> 时间节点 -> 具体记忆”查看。
-  - [ ] Skill 自进化队列、设置区、审计详情、历史记忆删除 / 禁用。Skill 自进化队列保留在 Memory 页面，不砍掉。
+  - [x] Skill 自进化队列查看：展示候选状态、草稿 Skill、复用理由、router gate、workflow evidence、风险提示和注册状态。
+  - [ ] 设置区、审计详情、历史记忆删除 / 禁用、Skill 队列操作和注册失败原因可视化。
+- [ ] 融合 Obsidian-compatible Memory Vault 方向：先做可读 Wiki 表现层，再逐步补实体索引、记忆准入门和差异追踪。
+  - [x] 在 `docs/memory-system-design.md` 记录 Vault 边界：不替代 SQLite / Markdown / VectorStoreBackend 权威存储。
+  - [x] 新增 `backend/data/memory/wiki/` 目录生成器和基础同步器，支持手动生成只读 wiki 视图。
+  - [x] Memory 页面增加 Wiki 同步入口和同步结果查看。
+  - [x] Memory 页面增加打开 wiki 文件夹 / 打开 Obsidian vault 入口。
+  - [ ] 设计 Memory Wiki 自动同步策略和用户在 wiki 中手动编辑后的反向合并边界。
+  - [x] Wiki 同步器维护轻量实体索引，生成 `entities/{kind}/{name}.md`、Obsidian 双链和 `entities/graph.md`。
+  - [x] 记忆提炼 Agent 输出时主动使用 `[[类型:名称]]` 链接。
+  - [x] 新增轻量规则版 `MemoryAdmissionGate`，控制历史记忆、长期 Markdown 和 Skill 自进化的准入。
+  - [ ] 增强 `MemoryAdmissionGate`：接入模型评分、配置化阈值、Trace payload 和更完整的脱敏策略。
+  - [ ] 新增轻量 `memory_change_log`，后续再评估 Git-backed vault diff。
 - [x] 明确旧 `memory_facts` / `memory_events` / `memory_candidates` 表的迁移或废弃策略：当前代码不再创建/读写旧表，已有本地库不自动 drop。
 - [ ] 新方案必须先更新架构文档和 Chat 事件契约，再接入 Runtime。
 
-## P7. 长期方向
+## P8. 长期方向
 
 - [ ] Dynamic Workflows 概念评估，参考 `docs/dynamic-workflows-plan.md`。
 - [ ] Milvus 或其他向量数据库集成评估。

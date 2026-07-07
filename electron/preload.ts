@@ -26,6 +26,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('get-app-version'),
 
   /**
+   * 在系统文件管理器中打开一个本地文件夹或文件位置
+   */
+  openPath: (targetPath: string): Promise<{ ok: boolean; error?: string }> => (
+    ipcRenderer.invoke('open-path', targetPath)
+  ),
+
+  /**
+   * 打开安全白名单内的外部链接
+   */
+  openExternal: (url: string): Promise<{ ok: boolean; error?: string }> => (
+    ipcRenderer.invoke('open-external', url)
+  ),
+
+  /**
    * 获取平台信息
    * @returns 'darwin' | 'win32' | 'linux'
    */

@@ -7,7 +7,6 @@ from fastapi.responses import StreamingResponse
 
 from src.server.routes.chat.completion import emit_failed_startup_run
 from src.server.routes.chat.initial_events import (
-    emit_clarification_if_required,
     emit_context_events,
     emit_start_events,
     persist_user_message_and_trace,
@@ -80,10 +79,6 @@ async def start_chat_run(data: ChatMessage):
         persist_user_message_and_trace(ctx, run_data)
         async for start_event in emit_start_events(ctx, run_data):
             yield start_event
-        if not ctx.readiness.ready and ctx.readiness.clarification:
-            async for clarification_event in emit_clarification_if_required(ctx):
-                yield clarification_event
-            return
         async for context_event in emit_context_events(ctx):
             yield context_event
 

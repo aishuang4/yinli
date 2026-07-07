@@ -9,6 +9,10 @@ interface ElectronAPI {
   getBackendUrl(): Promise<string>;
   /** 获取应用版本号 */
   getAppVersion(): Promise<string>;
+  /** 在系统文件管理器中打开本地路径 */
+  openPath(targetPath: string): Promise<{ ok: boolean; error?: string }>;
+  /** 打开安全白名单内的外部链接 */
+  openExternal(url: string): Promise<{ ok: boolean; error?: string }>;
   /** 获取当前平台 */
   getPlatform(): string;
 }

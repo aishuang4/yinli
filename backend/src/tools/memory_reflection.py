@@ -96,6 +96,7 @@ class MemoryAdd(_BoundMemoryTool):
         "向当前绑定的 Markdown 记忆文件添加一条记忆。"
         "只能追加到指定 section，不能操作其他文件。"
         "note 和 reason 必须使用中文记录，必要技术标识符可保留原文。"
+        "重要稳定实体可用 Obsidian 链接格式 [[类型:名称]]，例如 [[规则:禁止恢复旧 Plan Runtime]]。"
     )
     input_schema: dict[str, Any] = {
         "type": "object",
@@ -158,6 +159,7 @@ class MemoryUpdate(_BoundMemoryTool):
         "精确修改当前绑定 Markdown 记忆文件中的一条或一段记忆。"
         "必须提供文件里已存在的 exactText，工具只做一次精确替换。"
         "replacementText 和 reason 必须使用中文记录，必要技术标识符可保留原文。"
+        "重要稳定实体可用 Obsidian 链接格式 [[类型:名称]]，例如 [[项目:Agent Workstation]]。"
     )
     input_schema: dict[str, Any] = {
         "type": "object",

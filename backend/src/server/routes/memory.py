@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field
 
 from src.memory.markdown_store import MarkdownMemoryStore
 from src.memory.nodes import MemoryNodeService, MemoryNodeWrite
-from src.storage.database import get_memory_node
+from src.memory.wiki_vault import MemoryWikiVaultSyncer
+from src.storage.database import get_memory_node, list_skill_evolution_records
 
 router = APIRouter()
 
@@ -51,6 +52,24 @@ class MarkdownMemoryUpdate(BaseModel):
     content: str = Field(..., max_length=200_000)
 
 
+class SkillEvolutionRecordListResponse(BaseModel):
+    """Skill 自进化候选队列响应。"""
+
+    records: list[dict[str, Any]]
+
+
+class MemoryWikiSyncResponse(BaseModel):
+    """Memory wiki vault 同步响应。"""
+
+    path: str
+    filesWritten: int
+    markdownMemories: int
+    historyNodes: int
+    skills: int
+    entities: int
+    files: list[str]
+
+
 def _markdown_doc_response(doc) -> dict[str, Any]:
     """统一转换 Markdown 记忆响应。"""
 
@@ -61,6 +80,18 @@ def _markdown_doc_response(doc) -> dict[str, Any]:
         "content": doc.content,
         "exists": doc.exists,
     }
+
+
+def _wiki_sync_response(result) -> MemoryWikiSyncResponse:
+    return MemoryWikiSyncResponse(
+        path=result.path,
+        filesWritten=result.files_written,
+        markdownMemories=result.markdown_memories,
+        historyNodes=result.history_nodes,
+        skills=result.skills,
+        entities=result.entities,
+        files=result.files,
+    )
 
 
 @router.post("/nodes")
@@ -149,6 +180,28 @@ async def get_node(node_id: str) -> dict[str, Any]:
     if not node:
         raise HTTPException(status_code=404, detail="Memory node not found")
     return node
+
+
+@router.get("/skill-evolution/records")
+async def skill_evolution_records(
+    status: str | None = Query(default=None, pattern="^(draft|registered|skipped|failed)$"),
+    agent_id: str | None = Query(default=None, alias="agentId"),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> SkillEvolutionRecordListResponse:
+    """列出 Skill 自进化候选队列，供 Memory 页面查看中间态。"""
+
+    records = list_skill_evolution_records(status=status, agent_id=agent_id, limit=limit)
+    return SkillEvolutionRecordListResponse(records=records)
+
+
+@router.post("/wiki/sync")
+async def sync_memory_wiki_vault(
+    history_limit: int = Query(default=200, alias="historyLimit", ge=1, le=500),
+) -> MemoryWikiSyncResponse:
+    """手动同步 Obsidian-compatible Memory Wiki 视图。"""
+
+    result = MemoryWikiVaultSyncer().sync(history_limit=history_limit)
+    return _wiki_sync_response(result)
 
 
 @router.get("/markdown/agent/{agent_id}")

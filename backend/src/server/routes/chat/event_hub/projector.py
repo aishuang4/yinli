@@ -36,8 +36,8 @@ def initial_run_state(run: Any) -> dict[str, Any]:
         "sessionId": run.session_id,
         "agentId": run.agent_id,
         "agentName": run.agent_name,
-        "teamId": run.team_id,
-        "teamName": run.team_name,
+        "teamId": str(run.team_id or ""),
+        "teamName": str(run.team_name or ""),
         "mode": run.mode,
         "status": run.status,
         "task": run.task_text,
@@ -158,10 +158,15 @@ def project_event(state: dict[str, Any] | None, event_type: str, data: dict[str,
         _append_model_cache(next_state, data)
     elif event_type == "HITL_REQUIRED":
         _upsert_approval(next_state, data)
+        _upsert_hitl_process_timeline_item(next_state, data)
         next_state["status"] = "waiting"
         next_state["currentStage"] = "等待人工处理"
     elif event_type == "CLARIFICATION_REQUIRED":
         _upsert_approval(next_state, data, approval_type="clarification")
+        _upsert_hitl_process_timeline_item(next_state, {**data, "kind": "clarification", "type": "clarification"})
+        if data.get("clearFinalAnswer"):
+            next_state["finalAnswer"] = ""
+            next_state["finalAnswerTruncated"] = False
         next_state["status"] = "waiting"
         next_state["currentStage"] = "等待用户补充信息"
     elif event_type == "ERROR":
@@ -696,6 +701,58 @@ def _upsert_process_skill_timeline_items(state: dict[str, Any]) -> None:
         })
 
 
+def _upsert_hitl_process_timeline_item(state: dict[str, Any], data: dict[str, Any]) -> None:
+    """把 AskUser 反问登记到过程时间线，便于折叠面板展示模型问题。"""
+
+    item = _hitl_process_item_from_required_event(state, data)
+    if not item:
+        return
+    actor_id = _hitl_actor_id(state, data)
+    if _display_mode(state) == "team" and actor_id:
+        _upsert_actor_timeline_item(state, actor_id, item)
+    else:
+        _upsert_process_timeline_item(state, item)
+
+
+def _complete_hitl_process_timeline_item(
+    state: dict[str, Any],
+    interaction_id: str,
+    payload: dict[str, Any],
+) -> None:
+    """把用户提交给 AskUser 的答案写回过程时间线。"""
+
+    approval = _find_approval(state, interaction_id)
+    tool_call = _ask_user_tool_call_from_approval(approval)
+    if not tool_call:
+        tool_call = _clarification_tool_call_from_approval(approval)
+    tool_id = str(tool_call.get("id") or "")
+    if not tool_id:
+        return
+    item = {
+        "id": tool_id,
+        "event": "tool.completed" if str(payload.get("action") or "") == "approve" else "tool.failed",
+        "targetId": tool_id,
+        "status": "completed" if str(payload.get("action") or "") == "approve" else "failed",
+        "createdAt": str(state.get("updatedAt") or _utc_now()),
+        "updatedAt": str(state.get("updatedAt") or _utc_now()),
+        "data": {
+            "name": "AskUser",
+            "inputPreview": _format_ask_user_question_preview(tool_call),
+            "input": _format_ask_user_question_preview(tool_call),
+            "outputPreview": _ask_user_result_preview(tool_id, payload),
+            "output": _ask_user_result_preview(tool_id, payload),
+            "outputSize": len(_ask_user_result_preview(tool_id, payload)),
+            "outputTruncated": False,
+            "error": "" if str(payload.get("action") or "") == "approve" else "用户取消或拒绝补充信息。",
+        },
+    }
+    actor_id = _hitl_actor_id_from_approval(state, approval)
+    if _display_mode(state) == "team" and actor_id:
+        _upsert_actor_timeline_item(state, actor_id, item)
+    else:
+        _upsert_process_timeline_item(state, item)
+
+
 def _upsert_process_timeline_item(state: dict[str, Any], item: dict[str, Any]) -> None:
     items = _process_timeline_items(state)
     target_id = str(item.get("targetId") or item.get("id") or "")
@@ -869,13 +926,26 @@ def _project_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     state["runtimeEvents"] = [*state.get("runtimeEvents", [])[-199:], event]
     _project_actor_timeline_from_runtime_event(state, event)
-    if runtime_type == "HITL_RESOLVED":
+    if runtime_type in {"HITL_RESOLVED", "RUN_RESUMED"}:
         interaction_id = str(payload.get("interactionId") or event.get("interactionId") or "")
         if interaction_id:
             state["approvals"] = [
-                {**item, "status": "resolved"} if item.get("interactionId") == interaction_id else item
+                {
+                    **item,
+                    "status": "resolved",
+                    "resolvedAt": str(event.get("timestamp") or _utc_now()),
+                    "action": str(payload.get("action") or ""),
+                    "externalResultsPreview": (
+                        payload.get("externalResultsPreview")
+                        if isinstance(payload.get("externalResultsPreview"), dict)
+                        else {}
+                    ),
+                }
+                if item.get("interactionId") == interaction_id
+                else item
                 for item in state.get("approvals", [])
             ]
+            _complete_hitl_process_timeline_item(state, interaction_id, payload)
     elif runtime_type.startswith("PLAN_"):
         _upsert_plan(state, event)
     elif runtime_type in {"RUN_COMPLETED", "RUN_FAILED", "RUN_CANCELLED"}:
@@ -1042,15 +1112,31 @@ def _build_display_events_for_raw_event(
     if event_type in {"HITL_REQUIRED", "CLARIFICATION_REQUIRED"}:
         interaction_id = str(data.get("interactionId") or data.get("id") or "")
         approval = _find_approval(state, interaction_id)
-        return [_display_event(
-            state,
-            block="feedback",
-            event="feedback.waiting",
-            op="replace",
-            target_id=interaction_id or "feedback",
-            status="waiting",
-            data={"approval": approval or {}},
-        )]
+        normalized_data = {**data, "kind": "clarification", "type": "clarification"} if event_type == "CLARIFICATION_REQUIRED" else data
+        events = []
+        if data.get("clearFinalAnswer"):
+            events.append(_display_event(
+                state,
+                block="answer",
+                event="answer.completed",
+                op="remove",
+                target_id="answer",
+                status="waiting",
+                data={},
+            ))
+        events.extend(_hitl_process_display_events_for_raw_event(state, normalized_data))
+        events.append(
+            _display_event(
+                state,
+                block="feedback",
+                event="feedback.waiting",
+                op="replace",
+                target_id=interaction_id or "feedback",
+                status="waiting",
+                data={"approval": approval or {}},
+            ),
+        )
+        return events
     if event_type == "ERROR":
         return [_display_event(
             state,
@@ -1161,7 +1247,8 @@ def _runtime_display_events_for_raw_event(state: dict[str, Any], event: dict[str
         return [actor_event]
     if runtime_type == "HITL_RESOLVED":
         interaction_id = str(payload.get("interactionId") or event.get("interactionId") or "")
-        return [_display_event(
+        events = _hitl_resolved_process_display_events(state, interaction_id, payload)
+        events.append(_display_event(
             state,
             block="feedback",
             event="feedback.resolved",
@@ -1169,7 +1256,8 @@ def _runtime_display_events_for_raw_event(state: dict[str, Any], event: dict[str
             target_id=interaction_id or "feedback",
             status="completed",
             data={},
-        )]
+        ))
+        return events
     if runtime_type.startswith("PLAN_"):
         plan_id = str(payload.get("planId") or "")
         plan = _find_plan(state, plan_id)
@@ -1322,6 +1410,215 @@ def _actor_display_event_for_runtime_event(state: dict[str, Any], event: dict[st
     return None
 
 
+def _hitl_process_display_events_for_raw_event(state: dict[str, Any], data: dict[str, Any]) -> list[dict[str, Any]]:
+    item = _hitl_process_item_from_required_event(state, data)
+    if not item:
+        return []
+    return [_display_event(
+        state,
+        block="process",
+        event=str(item.get("event") or "tool.started"),
+        op="upsert",
+        target_id=str(item.get("targetId") or item.get("id") or ""),
+        actor_id=_hitl_actor_id(state, data),
+        scope=_normalize_display_scope(str(data.get("scope") or "")),
+        status=str(item.get("status") or "waiting"),
+        data=item.get("data") if isinstance(item.get("data"), dict) else {},
+    )]
+
+
+def _hitl_resolved_process_display_events(
+    state: dict[str, Any],
+    interaction_id: str,
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    approval = _find_approval(state, interaction_id)
+    tool_call = _ask_user_tool_call_from_approval(approval)
+    if not tool_call:
+        tool_call = _clarification_tool_call_from_approval(approval)
+    tool_id = str(tool_call.get("id") or "")
+    if not tool_id:
+        return []
+    status = "completed" if str(payload.get("action") or "") == "approve" else "failed"
+    output_preview = _ask_user_result_preview(tool_id, payload)
+    if status == "completed" and not output_preview:
+        return []
+    return [_display_event(
+        state,
+        block="process",
+        event="tool.completed" if status == "completed" else "tool.failed",
+        op="upsert",
+        target_id=tool_id,
+        actor_id=_hitl_actor_id_from_approval(state, approval),
+        scope=_normalize_display_scope(str((approval or {}).get("scope") or "")),
+        status=status,
+        data={
+            "name": "AskUser",
+            "inputPreview": _format_ask_user_question_preview(tool_call),
+            "input": _format_ask_user_question_preview(tool_call),
+            "outputPreview": output_preview,
+            "output": output_preview,
+            "outputSize": len(output_preview),
+            "outputTruncated": False,
+            "error": "" if status == "completed" else "用户取消或拒绝补充信息。",
+        },
+    )]
+
+
+def _hitl_process_item_from_required_event(state: dict[str, Any], data: dict[str, Any]) -> dict[str, Any] | None:
+    tool_call = _ask_user_tool_call_from_payload(data)
+    if not tool_call:
+        tool_call = _clarification_tool_call_from_payload(data)
+    if not tool_call:
+        return None
+    tool_id = str(tool_call.get("id") or "")
+    if not tool_id:
+        return None
+    updated_at = str(state.get("updatedAt") or _utc_now())
+    return {
+        "id": tool_id,
+        "event": "tool.started",
+        "targetId": tool_id,
+        "status": "waiting",
+        "createdAt": updated_at,
+        "updatedAt": updated_at,
+        "data": {
+            "name": "AskUser",
+            "inputPreview": _format_ask_user_question_preview(tool_call),
+            "input": _format_ask_user_question_preview(tool_call),
+            "outputPreview": "",
+            "output": "",
+            "outputSize": 0,
+            "outputTruncated": False,
+            "error": "",
+        },
+    }
+
+
+def _ask_user_tool_call_from_payload(data: dict[str, Any]) -> dict[str, Any] | None:
+    for tool_call in data.get("toolCalls") or data.get("tool_calls") or []:
+        if not isinstance(tool_call, dict):
+            continue
+        if _is_ask_user_tool_name(str(tool_call.get("rawName") or tool_call.get("name") or "")):
+            return tool_call
+    return None
+
+
+def _ask_user_tool_call_from_approval(approval: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(approval, dict):
+        return None
+    return _ask_user_tool_call_from_payload({"toolCalls": approval.get("toolCalls") or []})
+
+
+def _clarification_tool_call_from_payload(data: dict[str, Any]) -> dict[str, Any] | None:
+    interaction_id = str(data.get("interactionId") or data.get("id") or "")
+    if not interaction_id:
+        return None
+    if str(data.get("kind") or data.get("type") or "") != "clarification":
+        return None
+    return {
+        "id": f"clarification-{interaction_id}",
+        "name": "AskUser",
+        "input": {
+            "title": str(data.get("title") or "需要补充信息"),
+            "description": str(data.get("description") or ""),
+            "questions": data.get("questions") if isinstance(data.get("questions"), list) else [],
+        },
+    }
+
+
+def _clarification_tool_call_from_approval(approval: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(approval, dict):
+        return {}
+    return _clarification_tool_call_from_payload(approval) or {}
+
+
+def _format_ask_user_question_preview(tool_call: dict[str, Any]) -> str:
+    raw_input = tool_call.get("input") or tool_call.get("args") or {}
+    parsed = _parse_tool_input(raw_input)
+    if not isinstance(parsed, dict) or not parsed:
+        return str(raw_input or "").strip()
+    lines: list[str] = []
+    title = str(parsed.get("title") or "需要补充信息").strip()
+    if title:
+        lines.append(f"模型反问：{title}")
+    description = str(parsed.get("description") or "").strip()
+    if description:
+        lines.append(f"说明：{description}")
+    questions = parsed.get("questions") if isinstance(parsed.get("questions"), list) else []
+    for index, question in enumerate(questions, start=1):
+        if not isinstance(question, dict):
+            continue
+        label = str(question.get("label") or question.get("question") or "").strip()
+        if not label:
+            continue
+        question_type = str(question.get("type") or "text").strip()
+        options = [
+            str(option).strip()
+            for option in (question.get("options") or [])
+            if str(option).strip()
+        ]
+        suffix = f"（{question_type}）" if question_type else ""
+        line = f"{index}. {label}{suffix}"
+        if options:
+            line += f"\n   选项：{'、'.join(options)}"
+        lines.append(line)
+    return "\n".join(lines).strip() or json.dumps(parsed, ensure_ascii=False)
+
+
+def _parse_tool_input(raw_input: Any) -> dict[str, Any]:
+    if isinstance(raw_input, dict):
+        return raw_input
+    if not isinstance(raw_input, str):
+        return {}
+    text = raw_input.strip()
+    if not text:
+        return {}
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _ask_user_result_preview(tool_id: str, payload: dict[str, Any]) -> str:
+    previews = payload.get("externalResultsPreview")
+    if isinstance(previews, dict):
+        if tool_id in previews:
+            return str(previews.get(tool_id) or "")
+        if "answer" in previews:
+            return str(previews.get("answer") or "")
+        values = [str(value or "") for value in previews.values() if str(value or "").strip()]
+        if values:
+            return "\n".join(values)
+    if str(payload.get("action") or "") != "approve":
+        return "用户取消或拒绝补充信息。"
+    return ""
+
+
+def _hitl_actor_id(state: dict[str, Any], data: dict[str, Any]) -> str:
+    activity_id = str(data.get("teamActivityId") or data.get("team_activity_id") or "")
+    if activity_id:
+        return activity_id
+    agent_id = str(data.get("agentId") or data.get("agent_id") or "")
+    if agent_id:
+        for activity in state.get("teamActivities") or []:
+            if isinstance(activity, dict) and str(activity.get("agentId") or activity.get("agent_id") or "") == agent_id:
+                return str(activity.get("id") or "")
+    return _default_actor_id(state)
+
+
+def _hitl_actor_id_from_approval(state: dict[str, Any], approval: dict[str, Any] | None) -> str:
+    if not isinstance(approval, dict):
+        return _default_actor_id(state)
+    return _hitl_actor_id(state, approval)
+
+
+def _is_ask_user_tool_name(name: str) -> bool:
+    normalized = "".join(str(name or "").split()).lower()
+    return normalized == "askuser" or normalized.endswith("_askuser")
+
+
 def _runtime_event_has_raw_main_stream_pair(event: dict[str, Any]) -> bool:
     """判断 Runtime Event 是否已有主 Agent 原始事件负责展示。
 
@@ -1457,6 +1754,8 @@ def _upsert_approval(state: dict[str, Any], data: dict[str, Any], approval_type:
         "status": "waiting",
         "agentId": str(data.get("agentId") or data.get("agent_id") or ""),
         "agentName": str(data.get("agentName") or data.get("agent_name") or ""),
+        "scope": str(data.get("scope") or ""),
+        "teamActivityId": str(data.get("teamActivityId") or data.get("team_activity_id") or ""),
         "toolCalls": data.get("toolCalls") or data.get("tool_calls") or [],
         "title": str(data.get("title") or ""),
         "description": str(data.get("description") or ""),
@@ -1577,10 +1876,14 @@ def _find_plan(state: dict[str, Any], plan_id: str) -> dict[str, Any] | None:
 
 
 def _tool_display_data(tool: dict[str, Any]) -> dict[str, Any]:
+    input_text = str(tool.get("input") or tool.get("inputPreview") or "")
+    output_text = str(tool.get("output") or tool.get("outputPreview") or "")
     return {
         "name": str(tool.get("name") or "tool"),
-        "inputPreview": str(tool.get("inputPreview") or ""),
-        "outputPreview": str(tool.get("outputPreview") or ""),
+        "inputPreview": input_text,
+        "input": input_text,
+        "outputPreview": output_text,
+        "output": output_text,
         "outputSize": int(tool.get("outputSize") or 0),
         "outputTruncated": bool(tool.get("outputTruncated") or False),
         "error": str(tool.get("error") or ""),

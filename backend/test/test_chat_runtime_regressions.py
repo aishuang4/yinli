@@ -571,6 +571,123 @@ def test_run_state_projection_restores_final_answer_and_hitl():
     assert state["approvals"][0]["interactionId"] == "hitl-1"
 
 
+def test_run_state_projects_ask_user_into_process_timeline():
+    """AskUser 反问和用户答案必须进入过程折叠面板。"""
+
+    run = _projection_run()
+    state = initial_run_state(run)
+    run.status = "waiting"
+    state = project_event(
+        state,
+        "HITL_REQUIRED",
+        {
+            "interactionId": "hitl-ask-1",
+            "type": "REQUIRE_EXTERNAL_EXECUTION",
+            "scope": "single",
+            "agentId": "agent-1",
+            "agentName": "Agent",
+            "toolCalls": [{
+                "id": "ask-call-1",
+                "name": "AskUser",
+                "input": (
+                    '{"title":"需要目标文件","description":"缺少要修改的对象",'
+                    '"questions":[{"id":"target","type":"text","label":"要修改哪个文件？"}]}'
+                ),
+            }],
+        },
+        run,
+    )
+    waiting_events = consume_run_state_display_events(state)
+
+    waiting_item = state["displaySnapshot"]["actors"][0]["items"][0]
+    assert waiting_item["event"] == "tool.started"
+    assert waiting_item["status"] == "waiting"
+    assert waiting_item["data"]["name"] == "AskUser"
+    assert "模型反问：需要目标文件" in waiting_item["data"]["inputPreview"]
+    assert waiting_item["data"]["outputPreview"] == ""
+    feedback_block = next(block for block in state["displaySnapshot"]["blocks"] if block["block"] == "feedback")
+    assert feedback_block["status"] == "waiting"
+    assert feedback_block["data"]["approval"]["interactionId"] == "hitl-ask-1"
+    assert [(event["block"], event["event"]) for event in waiting_events] == [
+        ("process", "tool.started"),
+        ("feedback", "feedback.waiting"),
+    ]
+
+    run.status = "running"
+    state = project_event(
+        state,
+        "RUNTIME_EVENT",
+        {
+            "type": "HITL_RESOLVED",
+            "status": "completed",
+            "scope": "single",
+            "payload": {
+                "interactionId": "hitl-ask-1",
+                "interactionType": "REQUIRE_EXTERNAL_EXECUTION",
+                "action": "approve",
+                "externalResultsPreview": {
+                    "ask-call-1": "目标文件是 README.md",
+                },
+            },
+        },
+        run,
+    )
+    resolved_events = consume_run_state_display_events(state)
+
+    actor_item = state["displaySnapshot"]["actors"][0]["items"][0]
+    assert actor_item["event"] == "tool.completed"
+    assert actor_item["status"] == "completed"
+    assert "模型反问：需要目标文件" in actor_item["data"]["inputPreview"]
+    assert "要修改哪个文件？" in actor_item["data"]["inputPreview"]
+    assert actor_item["data"]["outputPreview"] == "目标文件是 README.md"
+    assert [event["block"] for event in resolved_events] == ["process", "feedback"]
+    assert resolved_events[0]["event"] == "tool.completed"
+    assert resolved_events[1]["event"] == "feedback.resolved"
+
+
+def test_run_state_schema_keeps_resolved_feedback_payload():
+    """RunState schema 不能裁掉已提交的人类反馈结果。"""
+
+    from src.server.routes.chat.run_state_schema import dump_run_state
+
+    state = {
+        "version": 2,
+        "runId": "run-1",
+        "sessionId": "session-1",
+        "status": "running",
+        "createdAt": "",
+        "completedAt": None,
+        "reasoning": "",
+        "finalAnswer": "",
+        "thinking": "",
+        "tools": [],
+        "skillCalls": [],
+        "modelName": "",
+        "tokenUsage": None,
+        "approvals": [{
+            "interactionId": "interaction-1",
+            "kind": "clarification",
+            "type": "clarification",
+            "status": "resolved",
+            "scope": "single",
+            "teamActivityId": "",
+            "resolvedAt": "2026-01-01T00:00:00+00:00",
+            "action": "approve",
+            "externalResultsPreview": {"answer": "用户反馈内容"},
+            "createdAt": "",
+        }],
+        "plans": [],
+        "displaySnapshot": {"version": 3, "mode": "single_agent", "actors": [], "blocks": []},
+        "error": "",
+    }
+
+    approval = dump_run_state(state)["approvals"][0]
+
+    assert approval["action"] == "approve"
+    assert approval["resolvedAt"]
+    assert approval["externalResultsPreview"]["answer"] == "用户反馈内容"
+
+
 def test_run_state_projection_builds_single_agent_display_snapshot():
     """RunState 必须投影单 Agent 主展示快照，前端不再扫描 runtimeEvents 拼主界面。"""
 
@@ -894,6 +1011,51 @@ def test_run_state_projection_does_not_duplicate_runtime_text_delta():
     assert state["runtimeEvents"][0]["type"] == "AGENT_FINAL_ANSWER_DELTA"
 
 
+def test_natural_language_clarification_is_detected():
+    """模型误把反问当最终答案时，后端必须识别为用户补充信息。"""
+
+    from src.server.routes.chat.prompts import _extract_clarification_request
+
+    clarification = _extract_clarification_request(
+        "你好！请问你具体想让我处理什么？请描述一下你要处理的具体内容，我来帮你。"
+    )
+
+    assert clarification is not None
+    assert clarification["kind"] == "clarification"
+    assert clarification["clearFinalAnswer"] is True
+    assert clarification["questions"][0]["id"] == "target"
+
+
+def test_clarification_required_can_clear_mistaken_final_answer():
+    """自然语言反问兜底必须移除误发的 answer block，并进入等待态。"""
+
+    run = _projection_run()
+    state = initial_run_state(run)
+    state = project_event(state, "FINAL_ANSWER_DELTA", {"delta": "请问你具体想让我处理什么？"}, run)
+    consume_run_state_display_events(state)
+    run.status = "waiting"
+    state = project_event(
+        state,
+        "CLARIFICATION_REQUIRED",
+        {
+            "id": "clarify-natural-1",
+            "title": "需要补充任务内容",
+            "questions": [{"id": "target", "type": "text", "label": "请说明你希望我具体处理什么内容？"}],
+            "clearFinalAnswer": True,
+        },
+        run,
+    )
+    events = consume_run_state_display_events(state)
+
+    assert state["status"] == "waiting"
+    assert state["finalAnswer"] == ""
+    assert [event["event"] for event in events] == ["answer.completed", "tool.started", "feedback.waiting"]
+    assert events[0]["block"] == "answer"
+    assert events[0]["op"] == "remove"
+    assert state["displaySnapshot"]["actors"][0]["items"][0]["event"] == "tool.started"
+    assert state["displaySnapshot"]["blocks"][0]["block"] == "feedback"
+
+
 def test_run_state_snapshot_contract_does_not_expose_runtime_events():
     """RunState 对前端只暴露展示快照，不再携带内部 runtimeEvents。"""
 
@@ -1126,6 +1288,54 @@ def test_readiness_gate_normalizes_clarification_identity():
     assert clarification["questions"][0]["id"] == "target"
 
 
+def test_readiness_gate_routes_missing_details_to_runtime_ask_user():
+    """业务信息缺口不再由 Readiness 反问，交给 Runtime AskUser 暂停恢复。"""
+
+    from src.server.routes.chat.readiness_gate import check_message_readiness_by_rule
+
+    decision = check_message_readiness_by_rule("帮我修改一下")
+
+    assert decision.ready is True
+    assert decision.clarification is None
+
+
+def test_external_execution_resume_uses_text_block_output():
+    """AskUser 恢复必须把用户答案作为 AgentScope 外部工具结果注入原 reply。"""
+
+    from agentscope.event import ExternalExecutionResultEvent
+    from src.server.routes.chat.hitl import _build_resume_event
+    from src.server.routes.chat.models import ChatResumeRequest, PendingInteraction
+
+    event = _build_resume_event(
+        PendingInteraction(
+            id="interaction-1",
+            type="REQUIRE_EXTERNAL_EXECUTION",
+            session_id="session-1",
+            agent_id="agent-1",
+            agent_name="Agent",
+            model_name="model",
+            reply_id="reply-1",
+            tool_calls=[{
+                "type": "tool_call",
+                "id": "call-1",
+                "name": "AskUser",
+                "input": "{}",
+            }],
+            message="帮我修改一下",
+        ),
+        ChatResumeRequest(
+            interactionId="interaction-1",
+            action="approve",
+            externalResults={"call-1": "目标是 README.md"},
+        ),
+    )
+
+    assert isinstance(event, ExternalExecutionResultEvent)
+    result = event.execution_results[0]
+    assert result.id == "call-1"
+    assert result.output[0].text == "目标是 README.md"
+
+
 def test_subscribe_background_run_can_skip_replay():
     """RunState 恢复后订阅 stream 可跳过历史事件，避免前端重复拼接文本。"""
 
@@ -1263,22 +1473,26 @@ def test_subscribe_run_state_stream_closes_after_waiting_patch():
                 "questions": [{"id": "target", "type": "text", "label": "目标"}],
             }))
             second = await asyncio.wait_for(stream.__anext__(), timeout=0.1)
+            third = await asyncio.wait_for(stream.__anext__(), timeout=0.1)
             try:
-                third = await asyncio.wait_for(stream.__anext__(), timeout=0.05)
+                fourth = await asyncio.wait_for(stream.__anext__(), timeout=0.05)
             except StopAsyncIteration:
-                third = ""
+                fourth = ""
         finally:
             await stream.aclose()
             async with background_runs._runs_lock:
                 background_runs._runs.pop(run.id, None)
-        return first, second, third
+        return first, second, third, fourth
 
-    first, second, third = asyncio.run(run_case())
+    first, second, third, fourth = asyncio.run(run_case())
     assert "event: RUN_STATE" in first
     assert "event: RUN_STATE_PATCH" in second
     assert '"status": "waiting"' in second
-    assert '"approval"' in second
-    assert third == ""
+    assert '"tool.started"' in second
+    assert "event: RUN_STATE_PATCH" in third
+    assert '"status": "waiting"' in third
+    assert '"approval"' in third
+    assert fourth == ""
 
 
 def test_run_state_stream_waits_for_actionable_hitl_patch_before_closing():

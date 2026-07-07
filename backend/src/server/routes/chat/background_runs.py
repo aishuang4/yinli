@@ -196,6 +196,7 @@ async def mark_chat_background_run_resuming(
     *,
     interaction_id: str = "",
     action: str = "approve",
+    external_results_preview: dict[str, str] | None = None,
 ) -> ChatBackgroundRun | None:
     """在 resume/start 返回前同步 RunState，避免前端重订阅读到旧 waiting 快照。"""
 
@@ -229,11 +230,29 @@ async def mark_chat_background_run_resuming(
                 else:
                     approvals.append(item)
             state["approvals"] = approvals
+            runtime_event = {
+                "type": "HITL_RESOLVED",
+                "sessionId": run.session_id,
+                "runId": run.id,
+                "scope": "run",
+                "status": "completed" if action == "approve" else "failed",
+                "timestamp": now,
+                "payload": {
+                    "interactionId": interaction_id,
+                    "action": action,
+                    "externalResultsPreview": external_results_preview or {},
+                },
+            }
+            state = project_event(state, SSE_EVENT_RUNTIME, runtime_event, run)
+            display_events = consume_run_state_display_events(state)
+        else:
+            display_events = []
         refresh_run_state_display_snapshot(state)
         if run.persisted:
             run.state = upsert_chat_run_state(run.id, state)
         else:
             run.state = state
+        _persist_latest_assistant_display_snapshot(run, SSE_EVENT_RUNTIME, force=True)
 
         patch = {
             "kind": "approval_resolved" if interaction_id else "snapshot_meta",
@@ -248,25 +267,21 @@ async def mark_chat_background_run_resuming(
         }
         if interaction_id:
             patch["resolvedApprovalId"] = interaction_id
-            patch["displayEvent"] = {
-                "id": f"{run.id}-{run.state.get('eventCount') or run.event_count}-feedback-resolved-{interaction_id}",
-                "runId": run.id,
-                "sessionId": run.session_id,
-                "seq": int(run.state.get("eventCount") or run.event_count or 0),
-                "createdAt": now,
-                "scope": "single_agent",
-                "block": "feedback",
-                "event": "feedback.resolved",
-                "op": "remove",
-                "targetId": interaction_id,
-                "status": "completed",
-                "data": {},
-            }
-        patch_event = _sse_event("RUN_STATE_PATCH", dump_run_state_patch(patch))
+        patches = []
+        if display_events:
+            for display_event in display_events:
+                patches.append(_sse_event("RUN_STATE_PATCH", dump_run_state_patch({
+                    **patch,
+                    "kind": "display_event",
+                    "displayEvent": display_event,
+                })))
+        else:
+            patches.append(_sse_event("RUN_STATE_PATCH", dump_run_state_patch(patch)))
         queues = list(run.state_subscribers)
 
     for queue in queues:
-        await queue.put(patch_event)
+        for patch_event in patches:
+            await queue.put(patch_event)
     return run
 
 
@@ -616,10 +631,14 @@ def _append_cancelled_assistant_message(run: ChatBackgroundRun) -> None:
     )
 
 
-def _persist_latest_assistant_display_snapshot(run: ChatBackgroundRun, event_type: str) -> None:
+def _persist_latest_assistant_display_snapshot(run: ChatBackgroundRun, event_type: str, *, force: bool = False) -> None:
     """在 RunState 到达可回放节点后，把展示快照写回本轮 Assistant 消息。"""
 
-    if event_type != "CLARIFICATION_REQUIRED" and run.status not in TERMINAL_RUN_STATUSES:
+    if (
+        not force
+        and event_type not in {"CLARIFICATION_REQUIRED", "HITL_REQUIRED"}
+        and run.status not in TERMINAL_RUN_STATUSES
+    ):
         return
     snapshot = normalize_run_state(run.state).get("displaySnapshot")
     if not isinstance(snapshot, dict):

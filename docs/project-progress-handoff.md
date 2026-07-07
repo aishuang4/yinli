@@ -6,7 +6,7 @@
 
 ## 当前定位
 
-Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。当前核心链路已经收束为 Chat 中选择单 Agent 或 Team，通过 ReAct Runtime 执行任务，并用 RunState / DisplaySnapshot 驱动前端主展示。新记忆系统 MVP 已部分接入：运行前注入 Markdown 摘要和最近 30 天历史记忆索引，运行后后台提炼 Markdown 记忆并持久化历史记忆（底层 `memory_nodes`）。
+Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。当前核心链路已经收束为 Chat 中选择单 Agent 或 Team，通过 ReAct Runtime 执行任务，并用 RunState / DisplaySnapshot 驱动前端主展示。新记忆系统 MVP 已部分接入：运行前注入 Markdown 摘要和最近 30 天历史记忆索引，运行后经过 `MemoryAdmissionGate` 后台提炼 Markdown 记忆并持久化历史记忆（底层 `memory_nodes`）。
 
 旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线。`memory*`、`planConfig`、`planRuns`、`callableAgents`、`subagentCalls` 等字段只保留历史兼容语义，不能继续作为新功能实现入口。当前记忆能力只能沿 `docs/memory-system-design.md` 的新方案推进，不新增 `memory` runtime.kind。
 
@@ -21,8 +21,9 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 - Trace：模型、工具、权限、Team、HITL、错误和 token/cache 事件审计。
 - Electron 开发窗口、内测打包脚本、生产模式后端启动入口。
 - Plan Mode middleware：单 Agent 下通过 `plan_enter` / `plan_write` / `todo_write` / `task_output` / `plan_exit` 生成计划；`plan_exit` 输出 finalized 计划作为最终答案，不走旧审批流。
-- 记忆系统 MVP：历史记忆底层 `memory_nodes` SQLite 主表、`VectorStoreBackend` 抽象、`disabled` / `zvec` provider、`memory_node_tree` / `memory_node_query` 工具、user / agent / global Markdown 记忆文件、运行前记忆注入、运行后后台反思提炼、历史记忆持久化和 Memory 页面管理入口首版。
-- Skill 自进化雏形：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、规则版 router gate、workflow evidence、颗粒度控制、变量流抽象、`skill_evolution_records` 候选持久化、标准 Skill 注册首版、相似 Skill 合并首版、标准包目录 `backend/data/skill_packages/{skill_name}/SKILL.md`、历史 Skill 包目录 backfill、Skill zip 导出、用户显式请求生成 Skill 的手动触发流、`MEMORY_AUDIT` Trace 审计首版和 Chat “Skills 生成中”轻量提醒；注册后不自动绑定 Agent。尚未完成注册失败原因可视化和前端队列管理。
+- 记忆系统 MVP：历史记忆底层 `memory_nodes` SQLite 主表、`VectorStoreBackend` 抽象、`disabled` / `zvec` provider、`memory_node_tree` / `memory_node_query` 工具、user / agent / global Markdown 记忆文件、运行前记忆注入、运行后 `MemoryAdmissionGate` 准入、后台反思提炼、历史记忆持久化、Memory Wiki 只读同步器和 Memory 页面管理入口首版。Memory 页面可手动同步 Wiki、查看生成文件、打开本地文件夹或通过 Obsidian 深链打开 vault；Wiki 同步会生成轻量 `entities/` 实体索引和 `entities/graph.md` 共现图。
+- Skill 自进化雏形：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、规则版 router gate、workflow evidence、颗粒度控制、变量流抽象、`skill_evolution_records` 候选持久化、标准 Skill 注册首版、相似 Skill 合并首版、标准包目录 `backend/data/skill_packages/{skill_name}/SKILL.md`、历史 Skill 包目录 backfill、Skill zip 导出、用户显式请求生成 Skill 的手动触发流、`MEMORY_AUDIT` Trace 审计首版和 Chat “Skills 生成中”轻量提醒；注册后不自动绑定 Agent。Memory 页面已能查看 Skill 自进化队列，尚未完成注册失败原因可视化和队列操作。
+- 前端非 Chat 组件化整改首轮：业务表单字段已基本收口到 `frontend/src/components/form/`，文件导入统一到 `FileImportButton`，MCP / Skills 等目录筛选复用 `CatalogFilterBar`；Agent、Team、MCP、Skills、Tools、Settings、Sandbox、Memory、Trace 等页面已优先使用 `@agentscope-ai/design` 和共享封装。`MemoryPage` 已拆为页面编排层 + `features/memory/*`，`TracePage` 已拆为页面编排层 + `features/traces/*`，`AgentEditor` 已拆出 sections 和选择弹窗。
 
 ## 核心入口
 
@@ -38,7 +39,7 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 - `backend/src/server/routes/chat/background_runs.py`：后台 Run 与 RunState。
 - `backend/src/server/routes/chat/event_hub/projector.py`：原始事件到 RunState / DisplaySnapshot 投影。
 - `backend/src/server/routes/chat/run_context.py`：组装运行上下文，并在 readiness 通过后注入 Skill prompt 和记忆上下文。
-- `backend/src/server/routes/chat/completion.py`：成功收尾后触发后台 Markdown 记忆提炼和历史记忆持久化。
+- `backend/src/server/routes/chat/completion.py`：成功收尾后触发 `MemoryAdmissionGate`、后台 Markdown 记忆提炼和历史记忆持久化。
 - `backend/src/agents/factory.py`：AgentScope Agent / Model / Toolkit 唯一构造入口。
 - `backend/src/storage/database.py`：SQLite schema 和存储访问。
 - `backend/src/memory/retrieval.py`：生成运行前记忆注入文本。
@@ -46,6 +47,7 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 - `backend/src/memory/extraction_agents.py`：记忆提炼 Agent 和 SkillEvolutionAgent prompt / schema。
 - `backend/src/memory/nodes.py`、`backend/src/memory/node_persist.py`：历史记忆底层服务和运行后持久化。
 - `backend/src/memory/markdown_store.py`：Markdown 记忆文件存储。
+- `backend/src/memory/wiki_vault.py`：Obsidian-compatible Memory Wiki 只读同步器。
 - `backend/src/server/routes/skills.py`：Skills 注册、导入、导出和标准 Skill 包目录管理。
 - `backend/src/vector_store/*`：向量存储抽象、策略和 Zvec / disabled provider。
 - `backend/src/tools/memory_nodes.py`、`backend/src/tools/memory_reflection.py`：历史记忆查询工具和内部反思工具。
@@ -59,7 +61,10 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 - `frontend/src/types/displayEvents.ts`：DisplaySnapshot / DisplayEvent 类型。
 - `frontend/src/features/chat/*`：Chat 展示组件。
 - `frontend/src/pages/AgentTeamPage.tsx`、`MCPPage.tsx`、`SkillsPage.tsx`、`ToolsPage.tsx`、`TracePage.tsx`、`RunsPage.tsx`、`SettingsPage.tsx`：主要页面。
-- `frontend/src/pages/MemoryPage.tsx`：Memory 管理入口首版，支持唯一用户记忆、唯一全局记忆、每个 Agent 一份 Agent Markdown 记忆，以及历史记忆按“Agent -> 时间节点 -> 具体记忆”查看；Skill 自进化队列保留为下一步页面能力，不砍掉。
+- `frontend/src/pages/MemoryPage.tsx`：Memory 管理入口，当前只负责数据装配和 tab 编排；具体 Markdown 记忆、历史节点记忆、Skill 自进化队列和 Wiki Vault 面板在 `frontend/src/features/memory/`。
+- `frontend/src/pages/TracePage.tsx`：运行轨迹入口，当前只负责 trace 列表、详情和事件分页的数据加载；列表、详情、事件时间线、消息卡和工具列表在 `frontend/src/features/traces/`。
+- `frontend/src/components/form/`：非 Chat 表单字段统一封装层，业务页面优先使用这里的 `TextField`、`SelectField`、`TextAreaField`、`DateField`、`ToggleField` 等组件。
+- `frontend/src/components/FileImportButton.tsx`：基于 Spark Design `Upload` 的本地文件导入按钮，Agent / Team / Skill 导入优先复用。
 
 ## 启动与验证
 
@@ -81,6 +86,16 @@ cd frontend && npm run build
 cd frontend && npm run lint
 ```
 
+前端整改专项扫描：
+
+```bash
+rg -n "<(Input|Select|DatePicker|Switch|Slider|InputNumber|textarea|input|select)\b|from ['\"]antd['\"]" \
+  frontend/src/pages frontend/src/features frontend/src/components \
+  -g '*.tsx' -g '!frontend/src/pages/ChatPage.tsx' -g '!frontend/src/features/chat/**'
+```
+
+当前非 Chat 预期只命中 `components/form/` 共享封装和 `FeedbackBridge` 的 AntD App 桥接。若命中业务页面，应优先继续抽取。
+
 桌面开发：
 
 ```bash
@@ -94,7 +109,9 @@ cd frontend && npm run electron:dev
 - `resume.py` 仍有部分旧式分支，后续应继续复用 `leader_stream.py`、`completion.py`、`orchestration.py`。
 - 旧记忆表可能存在于开发库中，但当前运行时不触发旧 memory summarize，也不应扩展旧记忆模块。新记忆数据使用 `memory_nodes`、Markdown 文件和 `VectorStoreBackend`。
 - 默认 Markdown 记忆文件为 `backend/data/memory/users/user_memory.md`、`backend/data/memory/agents/agent_memory.md`、`backend/data/memory/global/global_memory.md`；Memory 页面主入口只暴露唯一 user / global 和按 Agent ID 的 agent memory，不兼容读取旧 `default.md`。历史扩展路由仍保留，但不作为当前页面入口。
-- Skill 自进化下一步应补 Memory 页面候选队列管理和注册失败原因可视化；队列作为从协作沉淀到标准 Skill 的中间态入口保留在 Memory 页面。
+- Skill 自进化下一步应补 Memory 页面候选队列操作、注册失败原因可视化和更强筛选；队列作为从协作沉淀到标准 Skill 的中间态入口保留在 Memory 页面。
+- 前端非 Chat 页面已完成第一轮表单统一和大页面拆分；后续重点是继续拆 `AgentTeamPage`、`RunsPage`，并把重复的卡片式 `<button>`、tab 选择项和列表选择项沉淀为通用交互组件。
+- `npm run lint` 当前仍会被 Chat 相关既有问题阻断：`features/chat/ProcessTimeline.tsx` 中 render 阶段读取 ref，以及 `hooks/useEventStream.ts` 的 hook 依赖 warning。非 Chat 整改阶段除非明确排期，否则不顺手修改 Chat。
 - `CLAUDE.md` 只是兼容指针，当前事实以 `AGENTS.md` 为准。
 
 ## 文档入口

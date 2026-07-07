@@ -16,6 +16,8 @@ from src.memory.reflection import (
     reflect_completed_run_memory,
     reflect_completed_run_memory_with_agents,
 )
+from src.memory.extraction_agents import _build_memory_reflection_system_prompt, _build_memory_reflection_user_prompt
+from src.tools.memory_reflection import MemoryFileToolSet
 from src.server.routes.chat.models import ChatToolRun
 from src.storage import database
 
@@ -183,6 +185,29 @@ def test_reflection_with_agents_writes_model_memories(tmp_path, monkeypatch):
     assert captured_scopes[2][1].endswith("/global/global_memory.md")
     content = (tmp_path / "memory" / "global" / "global_memory.md").read_text(encoding="utf-8")
     assert "不新增 memory runtime.kind" in content
+
+
+def test_memory_reflection_prompt_requires_chinese_entity_links():
+    tool_set = MemoryFileToolSet(
+        scope="global_preference",
+        owner_id="default",
+        file_path="/tmp/global_memory.md",
+        read_content=lambda: "# Summary\n",
+        write_content=lambda _content: None,
+    )
+
+    system_prompt = _build_memory_reflection_system_prompt("global_preference")
+    user_prompt = _build_memory_reflection_user_prompt(
+        user_message="整个工作台不要恢复旧 Plan Runtime。",
+        assistant_text="收到。",
+        agent_id="agent-1",
+        agent_name="Agent",
+        memory_file=tool_set,
+    )
+
+    assert "[[类型:名称]]" in system_prompt
+    assert "[[规则:禁止恢复旧 Plan Runtime]]" in system_prompt
+    assert '"useObsidianEntityLinks":true' in user_prompt
 
 
 def test_reflection_with_agents_runs_three_memory_agents_in_parallel(tmp_path, monkeypatch):

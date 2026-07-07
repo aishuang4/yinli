@@ -45,11 +45,11 @@ npm run lint     # eslint
 
 1. **`routes/chat/handlers/send.py`** — `POST /api/chat/send` 是 Chat SSE 统一入口，只负责请求读取、用户消息写入、后台 Run 启动、前置错误处理和 SSE 编排。Plan Runtime 与 Subagent Runtime 已下线，后续重构前不要在旧链路上继续补丁式开发。
 
-2. **`routes/chat/readiness_gate.py`** — Chat 前置信息充足性判断。系统内置 `ReadinessAgent` 模型优先、规则兜底，只判断当前用户输入是否足够开始执行；信息不足时返回 clarification，不进入 Runtime。ReadinessAgent 不选择架构、不选择 Team、不选择 Skill、不决定 ToolScope。
+2. **`routes/chat/readiness_gate.py`** — Chat 前置信息充足性判断。系统内置 `ReadinessAgent` 模型优先、规则兜底，只判断当前输入是否可以启动 Runtime；业务信息缺口交给主 Agent 在 ReAct 内通过 `AskUser` 外部工具暂停并恢复。ReadinessAgent 不选择架构、不选择 Team、不选择 Skill、不决定 ToolScope。
 
-3. **`routes/chat/intent_router.py`** — Chat 第一层架构路由。仅在 readiness 通过后运行，模型语义路由优先、规则路由兜底；当前只决定本轮进入 `react`，Plan Runtime 与 Subagent Runtime 已砍掉，不再作为路由结果。`clarification` 不是 runtime.kind，只是 readiness 未通过后的等待状态。它不选择 Team、不裁剪 Worker、不选择 Skill、不决定 ToolScope。第二层 `executor` 由前端选择机械决定：选择单 Agent 时为 `single_agent`，选择 Team 时为 `team`。路由结果写入 `INTENT_ROUTE` trace，用于排查本轮为何进入某条架构线路。
+3. **`routes/chat/intent_router.py`** — Chat 第一层架构路由。仅在 readiness 通过后运行，模型语义路由优先、规则路由兜底；当前只决定本轮进入 `react`，Plan Runtime 与 Subagent Runtime 已砍掉，不再作为路由结果。`clarification` 不是 runtime.kind，也不是新的运行时分支。它不选择 Team、不裁剪 Worker、不选择 Skill、不决定 ToolScope。第二层 `executor` 由前端选择机械决定：选择单 Agent 时为 `single_agent`，选择 Team 时为 `team`。路由结果写入 `INTENT_ROUTE` trace，用于排查本轮为何进入某条架构线路。
 
-4. **`routes/chat/runtime_dispatcher.py` / `routes/chat/react_runtime.py`** — Chat Runtime 分发与 ReAct 执行入口。`runtime_dispatcher.execute_chat_runtime()` 只按第一层 `runtime.kind` 分发；当前仅 `react` 在线，信息不足时已经在进入 Runtime 前由 send 直接返回反问事件。`react_runtime.execute_react_runtime()` 再按第二层 `executor.kind` 执行：`single_agent` 直接运行主 Agent，`team` 先运行 Team Worker，再把 Worker report 注入 Leader 上下文后运行 Leader。
+4. **`routes/chat/runtime_dispatcher.py` / `routes/chat/react_runtime.py`** — Chat Runtime 分发与 ReAct 执行入口。`runtime_dispatcher.execute_chat_runtime()` 只按第一层 `runtime.kind` 分发；当前仅 `react` 在线，信息不足时由主 Agent 在 Runtime 内调用 `AskUser`，通过 AgentScope `RequireExternalExecutionEvent` 暂停。`react_runtime.execute_react_runtime()` 再按第二层 `executor.kind` 执行：`single_agent` 直接运行主 Agent，`team` 先运行 Team Worker，再把 Worker report 注入 Leader 上下文后运行 Leader。
 
 5. **`routes/chat/runtime_builder.py`** — IntentRoute 之后的运行时组装层。负责合成本轮模型配置、完整 Team 上下文、主 Agent runtime cache key、`MainAgentRuntimeSpec`，并通过 `create_main_agent_from_spec()` 委托工厂创建/复用 Agent。它不再裁剪 Team 成员，不再从 IntentRoute 读取 Skill/ToolScope。Skill 选择由 `skill_selector.py` 处理；工具范围由 `tool_scope_resolver.py` 处理。
 
@@ -99,7 +99,7 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 - 如果 `AGENTS.md` / `CLAUDE.md` 与 `docs/development-guidelines.md` 冲突，以更具体、更严格、更新的规范为准；不确定时先按 `docs/development-guidelines.md` 执行。
 - `AGENTS.md` 是开发代理记忆和项目协作规范的唯一真实来源；`CLAUDE.md` 只作为兼容入口，避免多份记忆漂移。
 - 当前已删除/下线的旧设计：旧记忆模块、Plan Runtime、Subagent Runtime。后续不要在旧字段、旧事件或旧工具链上继续补丁式开发；记忆能力只能沿当前新方案推进，通过 hooks / tools / 后处理服务接入，不新增 `memory` Runtime 分支。
-- 新记忆系统当前状态：运行前在 readiness 通过后注入 user / agent / global Markdown 摘要和最近 30 天历史记忆索引；普通 Agent 默认有 `memory_node_tree` / `memory_node_query`；运行后后台提炼 Markdown 记忆并持久化历史记忆。Skill 自进化已有 router gate、workflow evidence、颗粒度控制、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和手动触发流；Memory 页面仍需补 Skill 自进化队列、设置、审计详情和历史记忆删除 / 禁用。
+- 新记忆系统当前状态：运行前在 readiness 通过后注入 user / agent / global Markdown 摘要和最近 30 天历史记忆索引；普通 Agent 默认有 `memory_node_tree` / `memory_node_query`；运行后先经过轻量 `MemoryAdmissionGate`，再后台提炼 Markdown 记忆并持久化历史记忆。Skill 自进化已有 router gate、workflow evidence、颗粒度控制、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和手动触发流；Memory Wiki 同步器可手动生成 `backend/data/memory/wiki/` 只读 Obsidian-compatible 视图，并生成 `entities/` 实体索引和 `entities/graph.md` 共现图；Memory 页面已支持 Markdown 记忆、历史记忆、Skill 自进化队列、Wiki 同步入口、打开文件夹和打开 Obsidian，仍需补设置、审计详情和历史记忆删除 / 禁用。
 - 在本项目 AgentScope 语境中，`middleware` 按 AgentScope hooks / `MiddlewareBase` 理解；讨论 Plan Mode 等运行时增强时，优先考虑通过 middleware hooks（如 `on_system_prompt`、`on_acting`）接入，而不是恢复旧 Runtime 分支。
 - 推进 Plan Mode 任务进度能力时，固定顺序为：先核对 SQLite/Pydantic/前端 TypeScript 数据结构，再补 `todo_write` / `task_output` / `task_list` 等工具与 Runtime Event，最后和前端流式展示、审批入口、刷新恢复一起联调。
 - 代码注释和文档用中文，技术术语和标识符保持英文。

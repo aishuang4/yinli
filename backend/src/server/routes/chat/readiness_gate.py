@@ -72,12 +72,25 @@ async def check_message_readiness_with_model(
 def check_message_readiness_by_rule(message: str) -> ReadinessDecision:
     """规则兜底的信息充足性判断。"""
 
+    text = message.strip()
+    if not text:
+        return ReadinessDecision(
+            ready=False,
+            confidence=0.9,
+            reason="当前消息为空，无法启动 Runtime。",
+            clarification=None,
+            source="rule",
+        )
     clarification = _detect_missing_required_context(message)
     return ReadinessDecision(
-        ready=clarification is None,
-        confidence=0.75 if clarification else 0.65,
-        reason="执行前缺少必要目标信息。" if clarification else "未发现必须前置追问的信息缺口。",
-        clarification=clarification,
+        ready=True,
+        confidence=0.7 if clarification else 0.75,
+        reason=(
+            "可能缺少目标信息；交由 Runtime 通过 AskUser 外部工具在原 ReAct 链路内追问。"
+            if clarification
+            else "未发现阻塞 Runtime 启动的信息缺口。"
+        ),
+        clarification=None,
         source="rule",
     )
 
@@ -153,8 +166,9 @@ def _build_readiness_system_prompt() -> str:
         "Return only one compact valid JSON object. Do not call tools. Do not write markdown.",
         "Your only job is to decide whether the user provided enough information to start execution.",
         "Do not select architecture, executor, tools, skills, workers, or permissions.",
-        "Set ready=false only when a critical target, scope, credential, parameter, or user preference is missing and execution would be unreliable.",
-        "If ready=false, provide concise clarification questions.",
+        "Set ready=false only for structurally invalid input that cannot start a Runtime at all, such as an empty message.",
+        "For missing business details, keep ready=true; the main Agent must ask through the AskUser external tool inside the ReAct loop.",
+        "Do not create user-facing clarification here.",
         "If the user asks a general question or asks for advice, ready should usually be true.",
         "Schema:",
         json.dumps(
@@ -224,18 +238,13 @@ def _sanitize_readiness_payload(
             source="model",
         )
 
-    clarification = _normalize_clarification(payload.clarification)
-    if clarification is None:
-        clarification = fallback.clarification or {
-            "title": "需要补充信息",
-            "description": payload.reason or "当前任务需要补充关键信息后再执行。",
-            "questions": [{"id": "details", "type": "text", "label": "请补充需要处理的目标、范围或约束"}],
-        }
+    if not fallback.ready:
+        return fallback
     return ReadinessDecision(
-        ready=False,
+        ready=True,
         confidence=confidence,
-        reason=payload.reason or "ReadinessAgent 判断执行前需要补充信息。",
-        clarification=clarification,
+        reason=payload.reason or "ReadinessAgent 发现可能缺少信息；交由 Runtime AskUser 处理。",
+        clarification=None,
         source="model",
     )
 

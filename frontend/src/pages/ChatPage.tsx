@@ -29,6 +29,7 @@ import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList
 import { TeamActorSidebar } from '../features/chat/TeamDisplayBlock';
 import { TeamSelectionDock } from '../features/chat/TeamSelectionDock';
 import { FloatingPlanDock } from '../features/chat/FloatingPlanDock';
+import { isAskUserToolName } from '../features/chat/humanInteractionUtils';
 import type { ChatImageAttachment, ChatImagePayload, ChatSession, LocalMessage, PendingTeamSelection, StoredChatMessage } from '../features/chat/types';
 import { DISPLAY_EVENTS, type DisplayActor, type DisplayItem } from '../types/displayEvents';
 
@@ -113,6 +114,229 @@ function pickDisplayItemString(item: DisplayItem, keys: string[]): string {
     if (text) return text;
   }
   return '';
+}
+
+function mergeResolvedClarificationFeedbackIntoReplies(messages: LocalMessage[]): LocalMessage[] {
+  const merged: LocalMessage[] = [];
+  let pendingClarification: DisplayItem | null = null;
+
+  for (const message of messages) {
+    if (message.role !== 'assistant') {
+      merged.push(message);
+      continue;
+    }
+
+    const storedAskUserItem = askUserToolItemFromMessage(message);
+    if (storedAskUserItem && !message.content.trim()) {
+      if (hasToolOutput(storedAskUserItem)) {
+        pendingClarification = storedAskUserItem;
+        continue;
+      }
+      merged.push(message);
+      continue;
+    }
+
+    const clarificationItem = processItemFromResolvedClarificationMessage(message);
+    if (clarificationItem && isWaitingClarificationMessage(message)) {
+      continue;
+    }
+    if (clarificationItem && !message.content.trim()) {
+      if (hasToolOutput(clarificationItem)) {
+        pendingClarification = clarificationItem;
+      }
+      continue;
+    }
+
+    if (pendingClarification) {
+      merged.push({
+        ...message,
+        displaySnapshot: prependProcessItemToMessageSnapshot(message, pendingClarification),
+      });
+      pendingClarification = null;
+      continue;
+    }
+
+    merged.push(message);
+  }
+
+  if (pendingClarification) {
+    merged.push({
+      id: `assistant-clarification-${pendingClarification.id}`,
+      role: 'assistant',
+      content: '',
+      createdAt: pendingClarification.createdAt,
+      displaySnapshot: snapshotFromProcessItem(pendingClarification, 'waiting'),
+    });
+  }
+
+  return merged;
+}
+
+function askUserToolItemFromMessage(message: LocalMessage): DisplayItem | null {
+  const items = (message.displaySnapshot?.actors || [])
+    .flatMap((actor) => Array.isArray(actor.items) ? actor.items : []);
+  return items.find((item) => (
+    item.event.startsWith('tool.') &&
+    isAskUserToolName(pickDisplayItemString(item, ['name', 'toolName', 'rawName']))
+  )) || null;
+}
+
+function hasToolOutput(item: DisplayItem): boolean {
+  return Boolean(pickDisplayItemString(item, ['outputPreview', 'output', 'result', 'error']).trim());
+}
+
+function isWaitingClarificationMessage(message: LocalMessage): boolean {
+  const feedbackBlock = message.displaySnapshot?.blocks?.find((block) => block.block === 'feedback');
+  const approval = feedbackBlock?.data?.approval;
+  if (!approval || typeof approval !== 'object') return false;
+  const status = String((approval as Record<string, unknown>).status || feedbackBlock.status || '');
+  return status === 'waiting' && !message.clarificationResolved;
+}
+
+function processItemFromResolvedClarificationMessage(message: LocalMessage): DisplayItem | null {
+  const feedbackBlock = message.displaySnapshot?.blocks?.find((block) => block.block === 'feedback');
+  const approval = feedbackBlock?.data?.approval;
+  if (!approval || typeof approval !== 'object') return null;
+  const record = approval as Record<string, unknown>;
+  if (String(record.kind || record.type || '') !== 'clarification') return null;
+
+  const questions = Array.isArray(record.questions) ? record.questions : [];
+  const inputPreview = [
+    `模型反问：${String(record.title || '需要补充信息').trim()}`,
+    String(record.description || '').trim() ? `说明：${String(record.description || '').trim()}` : '',
+    ...questions.flatMap((question, index) => {
+      if (!question || typeof question !== 'object') return [];
+      const label = String((question as Record<string, unknown>).label || '').trim();
+      return label ? [`${index + 1}. ${label}`] : [];
+    }),
+  ].filter(Boolean).join('\n');
+  const outputPreview = extractClarificationAnswerFromMessage(message, record);
+  const interactionId = String(record.interactionId || message.id || 'clarification');
+  const createdAt = String(record.createdAt || message.createdAt || '');
+
+  return {
+    id: `clarification-${interactionId}`,
+    event: outputPreview ? DISPLAY_EVENTS.TOOL_COMPLETED : DISPLAY_EVENTS.TOOL_STARTED,
+    targetId: `clarification-${interactionId}`,
+    status: outputPreview ? 'completed' : 'waiting',
+    createdAt,
+    updatedAt: message.createdAt || createdAt,
+    data: {
+      name: 'AskUser',
+      inputPreview,
+      outputPreview,
+      outputSize: outputPreview.length,
+      outputTruncated: false,
+      error: '',
+    },
+  };
+}
+
+function extractClarificationAnswerFromMessage(message: LocalMessage, approval: Record<string, unknown>): string {
+  const fromApproval = extractClarificationAnswerFromApproval(approval);
+  if (fromApproval) return fromApproval;
+  return extractClarificationAnswerFromMessageContent(message.content);
+}
+
+function extractClarificationAnswerFromApproval(approval: Record<string, unknown>): string {
+  const preview = approval.externalResultsPreview;
+  if (!preview || typeof preview !== 'object' || Array.isArray(preview)) return '';
+  const values = Object.values(preview as Record<string, unknown>)
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  return values.join('\n');
+}
+
+function extractClarificationAnswerFromMessageContent(content: string): string {
+  const text = String(content || '');
+  if (!text.includes('针对上一个补充信息请求，用户回答如下')) return '';
+  const answerLine = [...text.split('\n')]
+    .map((line) => line.trim())
+    .reverse()
+    .find((line) => line.startsWith('- ') && !line.startsWith('- 原始请求:') && line.includes(':'));
+  if (!answerLine) return '';
+  const [, answer = ''] = answerLine.split(/:(.*)/s);
+  return answer.trim();
+}
+
+function prependProcessItemToMessageSnapshot(message: LocalMessage, item: DisplayItem) {
+  const snapshot = message.displaySnapshot;
+  const resolvedItem = resolveClarificationProcessItem(item);
+  if (!snapshot) return snapshotFromProcessItem(resolvedItem, message.error ? 'failed' : 'completed');
+  const actors = Array.isArray(snapshot.actors) ? [...snapshot.actors] : [];
+  if (actors.length === 0) {
+    return {
+      ...snapshot,
+      actors: snapshotFromProcessItem(resolvedItem, message.error ? 'failed' : 'completed').actors,
+    };
+  }
+  const firstActor = actors[0];
+  const existingItems = Array.isArray(firstActor.items) ? firstActor.items : [];
+  if (existingItems.some((existing) => existing.id === resolvedItem.id || existing.targetId === resolvedItem.targetId)) {
+    return snapshot;
+  }
+  actors[0] = {
+    ...firstActor,
+    items: [resolvedItem, ...existingItems],
+  };
+  return { ...snapshot, actors };
+}
+
+function resolveClarificationProcessItem(item: DisplayItem): DisplayItem {
+  const inputPreview = pickDisplayItemString(item, ['inputPreview', 'input', 'args']);
+  const storedOutput = pickDisplayItemString(item, ['outputPreview', 'output', 'result', 'error']);
+  return {
+    ...item,
+    event: storedOutput ? DISPLAY_EVENTS.TOOL_COMPLETED : item.event,
+    status: storedOutput ? 'completed' : item.status,
+    data: {
+      ...item.data,
+      inputPreview,
+      input: inputPreview,
+      outputPreview: storedOutput,
+      output: storedOutput,
+      outputSize: storedOutput.length,
+      outputTruncated: false,
+      error: '',
+    },
+  };
+}
+
+function snapshotFromProcessItem(item: DisplayItem, status: string) {
+  return {
+    version: 3 as const,
+    mode: 'single_agent',
+    actors: [{
+      id: 'single-agent',
+      role: 'single',
+      agentId: '',
+      agentName: 'Agent',
+      activityId: null,
+      status,
+      task: '',
+      assignment: '',
+      expectedOutput: '',
+      constraints: '',
+      detail: '',
+      output: '',
+      report: '',
+      skippedReason: '',
+      reportReviewStatus: '',
+      reportReviewNotes: '',
+      reportReviewGaps: [],
+      executionMode: '',
+      dependsOn: [],
+      waitReason: '',
+      dependencyOutputCount: 0,
+      leaderContextCount: 0,
+      createdAt: item.createdAt || '',
+      updatedAt: item.updatedAt,
+      completedAt: '',
+      items: [item],
+      data: {},
+    }],
+    blocks: [],
+  };
 }
 
 
@@ -255,7 +479,7 @@ export function ChatPage() {
     const response = await fetch(`/api/chat/sessions/${sessionId}/messages`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data: StoredChatMessage[] = await response.json();
-    setMessages(data.map((item) => ({
+    const loadedMessages = data.map((item) => ({
       id: item.id,
       role: item.role,
       content: item.content,
@@ -267,7 +491,8 @@ export function ChatPage() {
       displaySnapshot: item.displaySnapshot || item.display_snapshot,
       clarificationRequests: item.clarificationRequests || item.clarification_requests || [],
       clarificationResolved: item.clarificationResolved || item.clarification_resolved || false,
-    })));
+    }));
+    setMessages(mergeResolvedClarificationFeedbackIntoReplies(loadedMessages));
   }, []);
 
   useEffect(() => {
@@ -578,90 +803,25 @@ export function ChatPage() {
 
   const handleSubmitClarification = useCallback(async (content: string, displayContent?: string) => {
     const modelContent = content.trim();
-    const visibleContent = (displayContent || content).trim();
     if (!modelContent || state.isStreaming) return;
-    const sessionId = activeSessionId || createId();
-    const userMessage: LocalMessage = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: visibleContent,
-      createdAt: new Date().toISOString(),
-      images: [],
-    };
-    const clarificationPauseMessage: LocalMessage | null = state.clarificationRequests.length > 0
-      ? {
-        id: `assistant-clarification-${Date.now()}`,
-        role: 'assistant',
-        content: state.finalAnswerContent || state.textContent || '',
-        createdAt: new Date().toISOString(),
-        processStartedAt: state.runStartedAt,
-        processCompletedAt: state.runCompletedAt || new Date().toISOString(),
-        displaySnapshot: state.displaySnapshot.blocks.length > 0 || state.displaySnapshot.actors.length > 0 ? state.displaySnapshot : undefined,
-        reasoning: state.reasoningContent || undefined,
-        thinking: state.thinkingContent || undefined,
-        tokenUsage: state.tokenUsage,
-        modelName: state.modelName,
-        clarificationRequests: state.clarificationRequests,
-        clarificationResolved: true,
-      }
-      : null;
+    const visibleContent = (displayContent || content).trim();
+    const clarificationId = state.clarificationRequests[0]?.id;
+    if (!clarificationId) {
+      setChatError('当前没有可继续的反问请求。');
+      return;
+    }
 
-    setActiveSessionId(sessionId);
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
-    setMessages((prev) => [
-      ...prev,
-      ...(clarificationPauseMessage ? [clarificationPauseMessage] : []),
-      userMessage,
-    ]);
     setChatError(null);
-
-    await sendMessage(modelContent, {
-      sessionId,
-      displayMessage: visibleContent,
-      agentId: runtimeAgent?.id,
-      agentName: runtimeAgent?.name,
-      teamId: targetMode === 'team' ? selectedTeam?.id : undefined,
-      teamName: targetMode === 'team' ? selectedTeam?.name : undefined,
-      workerSelectorPrompt: targetMode === 'team' ? selectedTeam?.workerSelectorPrompt : undefined,
-      teamMembers: targetMode === 'team'
-        ? buildTeamMembersForRun(null).map((member) => ({
-          id: member.id,
-          agentId: member.agentId,
-          name: agents.find((agent) => agent.id === member.agentId)?.name || member.name,
-          role: member.role,
-          description: member.description,
-          executionMode: member.executionMode,
-          dependsOn: member.dependsOn,
-          handoffPrompt: member.handoffPrompt,
-        }))
-        : undefined,
-      systemPrompt: runtimeAgent?.systemPrompt,
-      model: runtimeAgent?.modelConfig.primary,
-      skillIds: runtimeAgent?.skills,
-      deepThinking,
-      images: [],
+    await resumeInteraction(clarificationId, 'approve', {
+      answer: modelContent,
+      display: visibleContent,
     });
   }, [
-    activeSessionId,
-    agents,
-    buildTeamMembersForRun,
-    deepThinking,
-    runtimeAgent,
-    selectedTeam,
-    sendMessage,
-    state.clarificationRequests,
-    state.displaySnapshot,
     state.isStreaming,
-    state.modelName,
-    state.reasoningContent,
-    state.runCompletedAt,
-    state.runStartedAt,
-    state.finalAnswerContent,
-    state.textContent,
-    state.thinkingContent,
-    state.tokenUsage,
-    targetMode,
+    state.clarificationRequests,
+    resumeInteraction,
   ]);
 
   const confirmTeamSelection = useCallback(async (workerAgentIds: string[]) => {

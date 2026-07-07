@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from src.memory.skill_evolution import (
     SkillEvolutionRecordInput,
     build_workflow_evidence,
@@ -9,6 +11,7 @@ from src.memory.skill_evolution import (
     persist_skill_evolution_record,
     register_skill_evolution_record,
 )
+from src.server.routes.memory import skill_evolution_records
 from src.server.routes.chat.models import ChatToolRun
 from src.storage import database
 
@@ -75,6 +78,18 @@ def test_skill_evolution_record_persists_draft_candidate(tmp_path, monkeypatch):
     assert record["draftSkillName"] == "用户发送邮件"
     assert record["inputsSchema"]["properties"]["user_id"]["type"] == "string"
     assert record["variableFlow"][0]["target"] == "send_email.user_id"
+
+
+def test_memory_route_lists_skill_evolution_records(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+    _draft_record(tmp_path, monkeypatch, source_run_id="run-list-1")
+
+    response = asyncio.run(skill_evolution_records(status="draft", agent_id="agent-1", limit=10))
+
+    assert len(response.records) == 1
+    assert response.records[0]["status"] == "draft"
+    assert response.records[0]["draftSkillName"] == "用户发送邮件"
 
 
 def test_skill_evolution_record_registers_standard_skill(tmp_path, monkeypatch):

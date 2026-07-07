@@ -14,6 +14,7 @@ import {
 import { MarkdownContent } from '../../components/MarkdownContent';
 import type { SkillCallInfo } from '../../hooks/useEventStream';
 import type { ChatDisplayStatus, ChatProcessItem } from './chatDisplayTypes';
+import { isAskUserToolName } from './humanInteractionUtils';
 import { useSmoothStreamingText } from './useSmoothStreamingText';
 
 export function AccordionProcessTimeline({
@@ -171,6 +172,7 @@ function processItemToAccordionStep(
   }
   if (item.type === 'tool') {
     const toolStatus = item.toolCall.status || item.status;
+    const isAskUser = isAskUserToolName(item.toolCall.name);
     if (isPlanExitTool(item.toolCall.name)) {
       return {
         id: `${item.type}-${item.id}`,
@@ -183,14 +185,14 @@ function processItemToAccordionStep(
     }
     return {
       id: `${item.type}-${item.id}`,
-      title: titleForStatus(`Action · ${item.toolCall.name}`, toolStatus),
+      title: titleForStatus(isAskUser ? '人工反馈 · 模型反问' : `Action · ${item.toolCall.name}`, toolStatus),
       status: toAccordionStatus(toolStatus),
       icon: toolIconForStatus(toolStatus),
       iconLine: !isLast,
       defaultOpen: item.toolCall.status === 'calling' || item.toolCall.status === 'running' || item.toolCall.status === 'failed',
       rightChildren: <StepStatusText status={toolStatus} />,
       children: (
-        <ToolInputOutputPanels input={item.toolCall.args} output={item.toolCall.result} />
+        <ToolInputOutputPanels input={item.toolCall.args} output={item.toolCall.result} isAskUser={isAskUser} />
       ),
     };
   }
@@ -363,7 +365,7 @@ function StepStatusText({ status }: { status: ChatDisplayStatus | string | undef
   );
 }
 
-function ToolInputOutputPanels({ input, output }: { input: string; output: string }) {
+function ToolInputOutputPanels({ input, output, isAskUser = false }: { input: string; output: string; isAskUser?: boolean }) {
   const hasInput = Boolean(input.trim());
   const hasOutput = Boolean(output.trim());
   if (!hasInput && !hasOutput) {
@@ -379,12 +381,12 @@ function ToolInputOutputPanels({ input, output }: { input: string; output: strin
   return (
     <div className="flex flex-col gap-2">
       {hasInput && (
-        <Accordion.BodyContent headerLeft="Input">
+        <Accordion.BodyContent headerLeft={isAskUser ? '模型反问' : 'Input'}>
           <ToolPreBlock value={input} />
         </Accordion.BodyContent>
       )}
       {hasOutput && (
-        <Accordion.BodyContent headerLeft="Output">
+        <Accordion.BodyContent headerLeft={isAskUser ? '用户补充信息' : 'Output'}>
           <ToolPreBlock value={output} />
         </Accordion.BodyContent>
       )}

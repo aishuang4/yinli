@@ -68,6 +68,42 @@ def test_persist_completed_run_memory_node_skips_empty_final_output():
     assert service.items == []
 
 
+def test_persist_completed_run_memory_node_skips_trivial_turn():
+    service = FakeMemoryNodeService()
+
+    node = persist_completed_run_memory_node(
+        MemoryNodePersistInput(
+            session_id="session-1",
+            agent_id="agent-1",
+            agent_name="Agent",
+            user_message="谢谢",
+            assistant_text="好的",
+        ),
+        service=service,
+    )
+
+    assert node is None
+    assert service.items == []
+
+
+def test_persist_completed_run_memory_node_skips_sensitive_turn():
+    service = FakeMemoryNodeService()
+
+    node = persist_completed_run_memory_node(
+        MemoryNodePersistInput(
+            session_id="session-1",
+            agent_id="agent-1",
+            agent_name="Agent",
+            user_message="记住 token=secret-value-123456",
+            assistant_text="不应该保存。",
+        ),
+        service=service,
+    )
+
+    assert node is None
+    assert service.items == []
+
+
 def test_successful_completion_triggers_memory_persist(isolated_db, monkeypatch):
     calls = []
 

@@ -18,8 +18,8 @@
 
 ## Chat 路由分层
 
-- Readiness Gate 是进入 architecture 前的前置判断，由系统内置 `ReadinessAgent` 判断本轮信息是否足够开始执行。若信息不足，后端直接返回 `CLARIFICATION_REQUIRED` 并停止进入 Runtime。
-- 第一层是 architecture，由前置意图识别决定。当前在线值为 `react`；`plan`、`subagent` 后续重新设计后再进入稳定契约。`clarification` 不是 architecture runtime，只是运行前等待补充信息的状态。
+- Readiness Gate 是进入 architecture 前的轻量启动判断，由系统内置 `ReadinessAgent` 判断本轮是否可以启动 Runtime。业务信息缺口不在这里发起用户交互，交给主 Agent 在 ReAct 内调用 `AskUser` 外部工具暂停。
+- 第一层是 architecture，由前置意图识别决定。当前在线值为 `react`；`plan`、`subagent` 后续重新设计后再进入稳定契约。`clarification` 不是 architecture runtime，也不是新的 runtime.kind。
 - 第二层是 executor，由前端选择机械决定。选择单 Agent 时为 `single_agent`，选择 Team 时为 `team`，模型不得把单 Agent 改成 Team 或把 Team 改成单 Agent。
 - `INTENT_ROUTE` trace payload 必须包含 `runtime`、`executor` 与 `readiness_gate` decision，其中 `runtime.kind` 表示架构模式，`executor.kind` 表示执行主体。
 
@@ -27,10 +27,10 @@
 
 - `/api/chat/send/start` 创建后台 Run 并返回 JSON 元数据；Chat 主界面随后订阅 `/api/chat/runs/{run_id}/state/stream`。
 - `/api/chat/send` 保留原始 SSE 兼容入口；新前端不应再用它驱动 Chat 主状态。
-- `/api/chat/resume/start` 在后台恢复 HITL Run 并返回原 `runId`；Chat 主界面随后订阅 `/api/chat/runs/{run_id}/state/stream`。
+- `/api/chat/resume/start` 在后台恢复 HITL / AskUser 外部执行暂停的原 Run 并返回原 `runId`；Chat 主界面随后订阅 `/api/chat/runs/{run_id}/state/stream`。
 - `/api/chat/resume` 保留原始 SSE 兼容入口；新前端不应再用它驱动 Chat 主状态。
 - Runtime 执行入口只负责构建 `ChatRunContext`、输出起始事件和启动校验。
-- `runtime_dispatcher.execute_chat_runtime()` 只按第一层 `runtime.kind` 分发。当前仅 `react` 在线；信息不足时在进入 Runtime 前由 send 直接返回反问事件。
+- `runtime_dispatcher.execute_chat_runtime()` 只按第一层 `runtime.kind` 分发。当前仅 `react` 在线；信息不足时由主 Agent 在 Runtime 内调用 `AskUser`，通过 AgentScope `RequireExternalExecutionEvent` 暂停。
 - `react_runtime.execute_react_runtime()` 是 ReAct 唯一执行入口。它先读取第二层 `executor.kind`：`single_agent` 直接进入主 Agent，`team` 先运行 Worker，再把 Worker 输出拼入 Leader 上下文。
 - ReAct Runtime 内部仍复用统一的 `LeaderStreamState`、`RUNTIME_EVENT`、成功/失败收尾与历史消息持久化，不为 Team 另开独立 SSE 契约。
 
@@ -250,6 +250,7 @@ type DisplayItem = {
 - `plan`：Plan Mode 展示块，使用 `data.planId`、`data.planFile`、`data.markdown`、`data.steps`。`PLAN_FINALIZED` 使用 `status=completed`。
 - `feedback`：当前等待用户处理的人机交互，使用 `data.approval`。只放当前等待项，不保留历史已完成项。
 - `answer`：最终答案展示，使用 `data.content`。没有 `FinalAnswerStart` 时，后端不得把 reasoning 兜底复制成最终答案；如果 Agent 流自然结束但没有产生最终答案，后端可以先执行一次受限 Final Answer Recovery，恢复轮必须重新生成 `FINAL_ANSWER_DELTA`。恢复失败后必须发送 `RUN_FAILED` 和 `ERROR`，并投影为 `error` 展示块，常见原因包括达到最大 ReAct 迭代次数。
+  如果模型误把阻塞性的补充信息请求当作普通最终答案输出，后端必须把该自然语言反问转换为 `CLARIFICATION_REQUIRED`，发送 `displayEvent(block=answer, op=remove)` 清理误发答案，再发送 AskUser `process` 项和 `feedback` 块进入等待态。
 - `files`：生成文件下载，使用 `data.files`，每项至少包含 `path`、`name`、`extension`。
 - `error`：错误展示块，使用 `data.message` 或 `data.error`。
 
@@ -264,15 +265,15 @@ Team 必须进入 `displaySnapshot.actors[]`。Chat 主界面不得依赖顶层 
 后端在 RunState 到达可回放节点后，把当前 `displaySnapshot` 写回本轮最新 assistant 消息：
 
 - `RUN_COMPLETED` / `RUN_FAILED` / `RUN_CANCELLED` 后保存终态快照。
-- `CLARIFICATION_REQUIRED` 后保存等待用户补充信息的快照。
+- `HITL_REQUIRED` 后保存等待用户审批或 AskUser 补充信息的快照。`CLARIFICATION_REQUIRED` 仅用于旧兼容回放。
 - 没有 `displaySnapshot` 的旧历史消息不做回填，前端可仅按 `content` 显示最终答案。
 
 ### Raw Event 到 RunState 到前端状态映射
 
 | 后端原始事件 / Runtime Event | RunState 字段 | `RUN_STATE_PATCH` 字段 | 前端 live 状态 | 流语义 |
 | --- | --- | --- | --- | --- |
-| `CLARIFICATION_REQUIRED` | `displaySnapshot.blocks[]`、`approvals[]` | `displayEvent(block=feedback,event=feedback.waiting)` | `displaySnapshot: feedback block` | `CLARIFICATION_REQUIRED` 带 `feedback` 后结束，等待用户补充；`CLARIFICATION_WAITING` 只作内部预告，不单独发 RunState patch |
-| `HITL_REQUIRED` | `displaySnapshot.blocks[]`、`approvals[]` | `displayEvent(block=feedback,event=feedback.waiting)` | `displaySnapshot: feedback block` | `HITL_REQUIRED` 带 `feedback` 后结束，等待用户审批；`AGENT_WAITING_HUMAN` 只作内部预告，不单独发 RunState patch |
+| `CLARIFICATION_REQUIRED` | `displaySnapshot.actors[].items[]`、`displaySnapshot.blocks[]`、`approvals[]` | AskUser 先发 `displayEvent(block=process,event=tool.started)`，随后发 `displayEvent(block=feedback,event=feedback.waiting)` | `displaySnapshot: process item + feedback block` | 旧兼容事件；新可恢复反问不得依赖它 |
+| `HITL_REQUIRED` | `displaySnapshot.actors[].items[]`、`displaySnapshot.blocks[]`、`approvals[]` | AskUser 先发 `displayEvent(block=process,event=tool.started)`，随后发 `displayEvent(block=feedback,event=feedback.waiting)` | `displaySnapshot: process item + feedback block` | `HITL_REQUIRED` 带 `feedback` 后结束，等待用户审批或 AskUser 补充信息；`AGENT_WAITING_HUMAN` 只作内部预告，不单独发 RunState patch |
 | `PLAN_FINALIZED` | `displaySnapshot.blocks[]`、`finalAnswer` | `displayEvent(block=plan,event=plan.completed)`，随后 `displayEvent(block=answer,event=answer.delta)` | `displaySnapshot: plan block + answer block` | 本轮正常完成，用户下一条普通消息决定修改或执行 |
 | `TOOL_CALL_*` / `TOOL_RESULT_*` | `displaySnapshot.blocks[]`、`tools[]` 摘要 | `displayEvent(block=process,event=tool.*)` | `displaySnapshot: process item` | running 继续，终态工具不可保留 running |
 | `REASONING_DELTA` | `displaySnapshot.blocks[]`、`reasoning` | `displayEvent(block=process,event=reasoning.delta)` | `displaySnapshot: process item` | running 继续 |
@@ -328,9 +329,10 @@ Team 必须进入 `displaySnapshot.actors[]`。Chat 主界面不得依赖顶层 
 
 ## 用户介入
 
-- `HITL_REQUIRED`：需要用户审批或补充外部执行结果。必须包含 `interactionId`、`type`、`sessionId`、`agentId`、`agentName`、`replyId`、`toolCalls`。
+- `HITL_REQUIRED`：需要用户审批或补充外部执行结果。`AskUser` 反问也走该事件，前端按工具名渲染为补充信息表单。必须包含 `interactionId`、`type`、`sessionId`、`agentId`、`agentName`、`replyId`、`toolCalls`。
   `toolCalls` 是前端展示用列表，可能合并同一回复里仍处于 UI running/calling 的工具；后端恢复 AgentScope 时必须使用内部保存的 AgentScope 原始等待工具集合，不能把展示合并列表整体回传给 `UserConfirmResultEvent` / `ExternalExecutionResultEvent`。
-- `CLARIFICATION_REQUIRED`：模型反问采集信息。必须包含 `id`、`title`、`questions`，可包含 `description`。
+- `HITL_RESOLVED`：用户处理完成。AskUser 场景必须在 Runtime Event payload 中携带 `externalResultsPreview`，用于把“用户补充信息”写回同一个 AskUser process item；该字段只保存短预览，完整恢复数据仍以 `/resume/start` 请求和 AgentScope `ExternalExecutionResultEvent` 为准。
+- `CLARIFICATION_REQUIRED`：旧兼容事件。新链路不得用它发起用户可恢复反问；用户可恢复反问必须通过 `AskUser` -> `HITL_REQUIRED` -> `/resume/start` -> `ExternalExecutionResultEvent`。
 
 ## 后处理
 

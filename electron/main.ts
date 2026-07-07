@@ -219,3 +219,57 @@ ipcMain.handle('get-backend-url', () => {
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
 });
+
+/**
+ * 打开本地路径。仅允许当前工作目录、用户主目录和 Electron userData 下的路径。
+ */
+ipcMain.handle('open-path', async (_event, targetPath: string) => {
+  const resolvedPath = resolveSafeLocalPath(targetPath);
+  if (!resolvedPath) {
+    return { ok: false, error: 'Path is not allowed' };
+  }
+  const error = await shell.openPath(resolvedPath);
+  if (error) {
+    return { ok: false, error };
+  }
+  return { ok: true };
+});
+
+/**
+ * 打开外部链接。当前只允许 Obsidian vault 深链。
+ */
+ipcMain.handle('open-external', async (_event, url: string) => {
+  if (!isAllowedExternalUrl(url)) {
+    return { ok: false, error: 'URL is not allowed' };
+  }
+  await shell.openExternal(url);
+  return { ok: true };
+});
+
+function resolveSafeLocalPath(targetPath: string): string | null {
+  if (!targetPath || typeof targetPath !== 'string') {
+    return null;
+  }
+  const resolved = path.resolve(targetPath);
+  const allowedRoots = [
+    process.cwd(),
+    app.getPath('userData'),
+    app.getPath('home'),
+  ].map((item) => path.resolve(item));
+  const isAllowed = allowedRoots.some((root) => (
+    resolved === root || resolved.startsWith(root + path.sep)
+  ));
+  if (!isAllowed || !fs.existsSync(resolved)) {
+    return null;
+  }
+  return resolved;
+}
+
+function isAllowedExternalUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'obsidian:' && url.hostname === 'open';
+  } catch {
+    return false;
+  }
+}

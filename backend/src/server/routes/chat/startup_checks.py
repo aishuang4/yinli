@@ -8,6 +8,9 @@ from src.server.routes.chat.run_context import ChatRunContext
 def get_startup_error(ctx: ChatRunContext, run_data) -> str | None:
     """返回启动阶段阻塞错误；无错误返回 None。"""
 
+    if not run_data.message.strip():
+        return "请输入要执行的任务。"
+
     if run_data.images and ctx.model_name not in MULTIMODAL_MODELS:
         return f"{ctx.model_name} 不支持图片输入，请切换到 qwen3.7-plus。"
 

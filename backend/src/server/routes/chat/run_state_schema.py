@@ -32,7 +32,9 @@ class RunStateToolSummary(BaseModel):
     name: str = "tool"
     status: str = "running"
     inputPreview: str = ""
+    input: str = ""
     outputPreview: str = ""
+    output: str = ""
     outputSize: int = 0
     outputTruncated: bool = False
     error: str = ""
@@ -49,10 +51,15 @@ class RunStateApprovalSummary(BaseModel):
     status: str = "waiting"
     agentId: str = ""
     agentName: str = ""
+    scope: str = ""
+    teamActivityId: str = ""
     toolCalls: list[dict[str, Any]] = Field(default_factory=list)
     title: str = ""
     description: str = ""
     questions: list[dict[str, Any]] = Field(default_factory=list)
+    resolvedAt: str = ""
+    action: str = ""
+    externalResultsPreview: dict[str, str] = Field(default_factory=dict)
     createdAt: str = ""
 
 

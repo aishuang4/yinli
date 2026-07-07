@@ -67,12 +67,22 @@
 
 - 页面只负责布局、路由级状态和业务编排；复杂 UI 必须拆成组件。
 - 单个 `.tsx` 文件超过约 500 行时，优先拆分到 `features/`、`components/` 或局部子组件。
+- 页面级 `.tsx` 原则上不承载大段列表项、详情面板、筛选栏、弹窗、抽屉内容；这些内容应按领域拆到 `frontend/src/features/<domain>/`。
 - 可复用业务组件放 `frontend/src/features/<domain>/`。
 - 通用 UI 组件放 `frontend/src/components/`，例如 `ToggleButton`、`MarkdownContent`。
 - 组件 props 必须定义明确类型，避免 `any`。
 - 列表项、卡片、弹窗、抽屉、表单段落都应组件化，避免页面内堆大段 JSX。
 - 表单字段优先使用 `frontend/src/components/form/` 的统一封装；业务页面不要直接重复书写 label、help、error、input/select/textarea 布局。
 - 复杂业务表单应抽到 `frontend/src/features/<domain>/`，页面只保留弹窗开关、请求编排和状态传递。
+- 领域页面拆分后，页面文件应主要包含：
+  - 数据 hook / API 调用编排。
+  - 顶层 tab / layout 状态。
+  - 传给 feature 组件的 props。
+  - 跨面板刷新、错误提示和导航行为。
+- Feature 组件应承接：
+  - 列表、卡片、详情、时间线、筛选条、表单段落。
+  - 局部派生状态和只影响本组件的 `useMemo` / `useState`。
+  - 与自身 UI 强相关的展示 helper。
 
 ### 3.2 状态管理
 
@@ -86,11 +96,42 @@
 
 - 优先使用 `@agentscope-ai/design` 组件；没有合适组件时再用 Ant Design 或自定义。
 - 通用表单封装内部也应优先组合 `@agentscope-ai/design`，原生表单控件只允许出现在基础组件或特殊交互组件内部。
+- 业务页面禁止直接使用原生 `input`、`textarea`、`select` 或直接散写 `@agentscope-ai/design` 的 `Input` / `Select` / `DatePicker` / `Switch` / `Slider` / `InputNumber` 作为表单字段；应使用 `frontend/src/components/form/` 的 `TextField`、`SelectField`、`TextAreaField`、`DateField`、`ToggleField` 等封装。
+- 需要本地文件导入时，优先使用 `frontend/src/components/FileImportButton.tsx`，由内部 `Upload.beforeUpload` 接管文件，不在页面中写隐藏原生 file input。
+- 通用目录筛选栏优先复用 `frontend/src/components/form/CatalogFilterBar.tsx`；领域筛选栏放在对应 `features/<domain>/`。
+- 非表单型可点击项（tab、卡片、列表项、时间线节点）可以使用 `<button>`，但重复出现的交互样式应抽成领域组件或通用选择项组件，不在页面里复制整段 className。
 - 高频区域避免整块 loading 闪烁，使用按钮级 loading 或局部骨架。
 - 主流程页面保持干净，复杂配置放到 Drawer / Modal / 折叠高级设置。
 - 容器卡片尽量悬浮无边框；列表项、成员卡片、工具卡片保留边框。
 - 长文本、工具输出、日志输出必须限制高度并允许内部滚动。
 - 图标优先使用 `lucide-react`，按钮内图标必须居中。
+
+### 3.6 前端整改基线
+
+> 本节记录 2026-07-06 前端组件化整改后的基线，后续开发应保持该方向。
+
+- 非 Chat 业务页面的表单控件已基本收口到 `frontend/src/components/form/`。新增表单时先查共享封装，不足再扩展封装层。
+- 当前通用表单入口包括：
+  - `FormField`、`FormSection`、`FormGrid`、`FormError`
+  - `TextField`、`PasswordField`、`TextAreaField`
+  - `SelectField`、`NumberField`、`SliderField`
+  - `DateField`、`ToggleField`
+- 文件导入统一走 `FileImportButton`；不要在页面里新增隐藏 file input。
+- MCP / Skills 等目录页通用筛选优先复用 `CatalogFilterBar`。
+- 大型页面当前拆分方向：
+  - `MemoryPage` 只保留记忆数据装配和 tab 编排；Markdown、历史记忆、Skill 自进化队列、Wiki Vault 面板放在 `features/memory/`。
+  - `TracePage` 只保留运行轨迹数据加载、选中态和事件分页；列表、详情、事件时间线、消息卡、工具列表放在 `features/traces/`。
+  - `AgentEditor` 只保留 Agent 表单状态和保存编排；基础信息、模型高级设置、能力工具、Guardrails 和选择弹窗放在 `features/agents/sections/`。
+- 新页面验收时至少扫描：
+
+```bash
+rg -n "<(Input|Select|DatePicker|Switch|Slider|InputNumber|textarea|input|select)\b|from ['\"]antd['\"]" \
+  frontend/src/pages frontend/src/features frontend/src/components \
+  -g '*.tsx' -g '!frontend/src/pages/ChatPage.tsx' -g '!frontend/src/features/chat/**'
+```
+
+- 该扫描在非 Chat 范围内只应命中共享基础封装层和必要桥接组件，例如 `components/form/`、`FeedbackBridge`。如果命中业务页面，需要解释原因或继续抽取。
+- Chat 页面和 `features/chat/` 暂按独立节奏整改，非 Chat 整改不得顺手改 Chat 行为。
 
 ### 3.4 性能
 

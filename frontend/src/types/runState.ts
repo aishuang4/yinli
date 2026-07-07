@@ -46,6 +46,7 @@ export interface RunStateApprovalSummary {
   title?: string;
   description?: string;
   questions?: Array<Record<string, unknown>>;
+  externalResultsPreview?: Record<string, string>;
   createdAt: string;
 }
 

@@ -38,6 +38,23 @@ def test_memory_add_updates_only_bound_file():
     assert tool_set.operations[0]["filePath"] == "/tmp/user.md"
 
 
+def test_memory_add_preserves_obsidian_entity_links():
+    state = {"content": "# Summary\n\n# Workspace Rules\n"}
+    tool_set = _tool_set(state)
+    add_tool = tool_set.tools()[1]
+
+    asyncio.run(
+        add_tool(
+            section="Workspace Rules",
+            note="[[规则:禁止恢复旧 Plan Runtime]] 是全局约束。",
+            reason="用户明确给出长期规则。",
+        ),
+    )
+
+    assert "- [[规则:禁止恢复旧 Plan Runtime]] 是全局约束。" in state["content"]
+    assert tool_set.operations[0]["note"] == "- [[规则:禁止恢复旧 Plan Runtime]] 是全局约束。"
+
+
 def test_memory_update_replaces_exact_text():
     state = {"content": "# Summary\n\n- 以后默认用英文回答。\n"}
     tool_set = _tool_set(state)

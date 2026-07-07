@@ -137,7 +137,7 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
 
 
 async def emit_clarification_if_required(ctx: ChatRunContext) -> AsyncGenerator[str, None]:
-    """如果 Readiness Gate 需要追问，输出 CLARIFICATION_REQUIRED 并停止主流程。"""
+    """旧兼容：输出非 AgentScope 恢复式 CLARIFICATION_REQUIRED。新反问走 AskUser。"""
 
     if ctx.readiness.ready or not ctx.readiness.clarification:
         return

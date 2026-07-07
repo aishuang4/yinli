@@ -8,8 +8,11 @@ import { useCallback } from 'react';
 import type {
   MarkdownMemoryDocument,
   MarkdownMemoryScope,
+  MemoryWikiSyncResult,
   MemoryNodeQueryResult,
   MemoryNodeTreeItem,
+  SkillEvolutionRecord,
+  SkillEvolutionRecordStatus,
 } from '../types/memory';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
@@ -21,11 +24,19 @@ interface MemoryNodeFilters {
   limit?: number;
 }
 
+interface SkillEvolutionFilters {
+  status?: SkillEvolutionRecordStatus | 'all';
+  agentId?: string;
+  limit?: number;
+}
+
 interface UseMemoryReturn {
   readMarkdownMemory: (scope: MarkdownMemoryScope, agentId?: string) => Promise<MarkdownMemoryDocument>;
   saveMarkdownMemory: (scope: MarkdownMemoryScope, content: string, agentId?: string) => Promise<MarkdownMemoryDocument>;
   loadNodeTree: (filters?: MemoryNodeFilters) => Promise<MemoryNodeTreeItem[]>;
   queryNodes: (filters?: MemoryNodeFilters) => Promise<MemoryNodeQueryResult[]>;
+  loadSkillEvolutionRecords: (filters?: SkillEvolutionFilters) => Promise<SkillEvolutionRecord[]>;
+  syncWikiVault: (historyLimit?: number) => Promise<MemoryWikiSyncResult>;
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -53,6 +64,14 @@ function nodeQueryParams(filters: MemoryNodeFilters = {}): string {
   if (filters.query) params.set('query', filters.query);
   if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
   if (filters.dateTo) params.set('dateTo', filters.dateTo);
+  if (filters.limit) params.set('limit', String(filters.limit));
+  return params.toString();
+}
+
+function skillEvolutionQueryParams(filters: SkillEvolutionFilters = {}): string {
+  const params = new URLSearchParams();
+  if (filters.status && filters.status !== 'all') params.set('status', filters.status);
+  if (filters.agentId) params.set('agentId', filters.agentId);
   if (filters.limit) params.set('limit', String(filters.limit));
   return params.toString();
 }
@@ -97,10 +116,34 @@ export function useMemory(): UseMemoryReturn {
     return data.results;
   }, []);
 
+  const loadSkillEvolutionRecords = useCallback(async (filters: SkillEvolutionFilters = {}) => {
+    const params = skillEvolutionQueryParams({ ...filters, limit: filters.limit || 50 });
+    const data = await requestJson<{ records: SkillEvolutionRecord[] }>(
+      `/api/memory/skill-evolution/records${params ? `?${params}` : ''}`,
+    );
+    return data.records;
+  }, []);
+
+  const syncWikiVault = useCallback(async (historyLimit = 200) => {
+    try {
+      const params = new URLSearchParams({ historyLimit: String(historyLimit) });
+      const result = await requestJson<MemoryWikiSyncResult>(`/api/memory/wiki/sync?${params.toString()}`, {
+        method: 'POST',
+      });
+      notifySuccess(`Memory Wiki 已同步：${result.filesWritten} 个文件`);
+      return result;
+    } catch (error) {
+      notifyError(`Memory Wiki 同步失败：${getErrorMessage(error, '未知错误')}`);
+      throw error;
+    }
+  }, []);
+
   return {
     readMarkdownMemory,
     saveMarkdownMemory,
     loadNodeTree,
     queryNodes,
+    loadSkillEvolutionRecords,
+    syncWikiVault,
   };
 }

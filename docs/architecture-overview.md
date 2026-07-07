@@ -6,7 +6,7 @@
 
 Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。用户在 Chat 中选择单个 Agent 或 Team 执行任务，运行时支持 MCP、Skills、HTTP 工具、权限控制、HITL、Trace、容器沙箱和新记忆系统 MVP。
 
-旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线。相关字段仅作为历史 SQLite / API 兼容保留，不能继续扩展旧链路。当前记忆能力是新方案：通过运行前上下文注入、运行后后台提炼、历史记忆（底层 `memory_nodes`）和 memory tools 接入 ReAct，不新增 `memory` runtime.kind。
+旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线。相关字段仅作为历史 SQLite / API 兼容保留，不能继续扩展旧链路。当前记忆能力是新方案：通过运行前上下文注入、运行后 `MemoryAdmissionGate` 准入、后台提炼、历史记忆（底层 `memory_nodes`）和 memory tools 接入 ReAct，不新增 `memory` runtime.kind。
 
 ## 技术栈
 
@@ -19,15 +19,15 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 ## Chat 核心链路
 
 1. `routes/chat/handlers/send.py` 接收用户消息、落库、创建后台 Run，并编排 SSE。
-2. `readiness_gate.py` 判断本轮信息是否足够；不足时直接返回 clarification，不进入 Runtime。
+2. `readiness_gate.py` 只做进入 Runtime 前的轻量启动判断；业务信息缺口交给主 Agent 在 ReAct 内通过 `AskUser` 外部工具暂停并恢复。
 3. `intent_router.py` 只决定第一层 architecture。当前在线值为 `react`。
 4. 前端选择决定第二层 executor：单 Agent 为 `single_agent`，Team 为 `team`。
 5. `runtime_dispatcher.py` 只按 architecture 分发；当前只分发到 ReAct。
 6. `react_runtime.py` 按 executor 执行单 Agent 或 Team。
 7. `runtime_builder.py` 组装模型配置、Team 上下文、Skill、ToolScope 和主 Agent runtime spec。
-8. `run_context.py` 在 readiness 通过后注入 Skill prompt 和记忆上下文；记忆注入位于 Skill prompt 后、clarification / final answer 规则前。
+8. `run_context.py` 在 readiness 通过后注入 Skill prompt 和记忆上下文；记忆注入位于 Skill prompt 后、AskUser clarification / final answer 规则前。
 9. `leader_stream.py` 消费 AgentScope `reply_stream()`，转换文本、工具、权限、Plan Mode、Skill 和 HITL 事件。
-10. `completion.py` 完成消息落库、Trace、Team / Skill 状态和错误收尾，并后台触发 Markdown 记忆提炼和历史记忆持久化。
+10. `completion.py` 完成消息落库、Trace、Team / Skill 状态和错误收尾，并在轻量 `MemoryAdmissionGate` 后触发 Markdown 记忆提炼和历史记忆持久化。
 11. `background_runs.py` 将后台 Run 与前端 SSE 订阅解耦，并维护 RunState。
 
 ## Team Runtime
@@ -45,7 +45,7 @@ Worker 选择由 Team Runtime 内部处理：优先使用系统内置 `TeamWorke
 Chat 主界面只依赖 RunState / DisplaySnapshot：
 
 - `/api/chat/send/start` 创建后台 Run。
-- `/api/chat/resume/start` 恢复 HITL Run。
+- `/api/chat/resume/start` 恢复 HITL / AskUser 外部执行暂停的原 Run。
 - `/api/chat/runs/{run_id}/state` 返回完整快照。
 - `/api/chat/runs/{run_id}/state/stream` 首包返回 `RUN_STATE`，后续返回 `RUN_STATE_PATCH`。
 
@@ -70,10 +70,11 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 - **运行前注入**：`memory/retrieval.py` 读取 user / agent / global Markdown 摘要和最近 30 天节点树；`run_context.py` 在 readiness 通过后注入。
 - **历史记忆**：底层 `memory_nodes` 只保存用户输入、Agent 最终输出和摘要索引，不保存工具调用过程；写入后同步到 `VectorStoreBackend` 的 `memory_nodes` collection。
 - **Markdown 长期记忆**：user memory、agent memory、global preference memory 分别保存为 `user_memory.md`、`agent_memory.md`、`global_memory.md`，没有旧 `default.md` 兼容读取。
-- **Memory 管理入口**：前端 Memory 页面首版已接入，用户记忆和全局记忆各只有一个管理入口；Agent 记忆按 Agent 选择，每个 Agent 对应一份 `agent_memory.md`；历史记忆按“Agent -> 时间节点 -> 具体记忆”三段式查看，底层使用 `memory_nodes`。Skill 自进化队列保留在 Memory 页面作为中间态管理入口，下一步补 UI。
+- **Memory 管理入口**：前端 Memory 页面首版已接入，用户记忆和全局记忆各只有一个管理入口；Agent 记忆按 Agent 选择，每个 Agent 对应一份 `agent_memory.md`；历史记忆按“Agent -> 时间节点 -> 具体记忆”三段式查看，底层使用 `memory_nodes`。Skill 自进化队列已作为 Memory 页面中间态入口接入，可查看候选状态、草稿、gate 原因、workflow evidence、风险提示和注册状态。
+- **Memory Wiki**：`MemoryWikiVaultSyncer` 可从三类 Markdown 记忆、`memory_nodes` 和已注册 Skills 手动生成 `backend/data/memory/wiki/` 只读 Obsidian-compatible 视图，并生成 `entities/` 实体页与 `entities/graph.md` 共现图；Memory 页面可同步、查看生成结果、打开文件夹或通过 Obsidian 深链打开 vault。当前不作为运行时事实源，也不反向写回权威存储。
 - **记忆查询工具**：普通 Agent 默认注入 `memory_node_tree` 和 `memory_node_query`，需要详情时由 Agent 主动查询。
 - **运行后提炼**：`completion.py` 成功收尾后后台并行调用 `UserMemoryReflectionAgent`、`AgentMemoryReflectionAgent`、`GlobalMemoryReflectionAgent`，通过绑定文件的 `memory_read` / `memory_add` / `memory_update` / `memory_delete` 操作 Markdown 记忆，不阻塞主对话。
-- **Skill 自进化现状**：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、router gate、workflow evidence、颗粒度 gate、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和用户显式请求生成 Skill 的手动触发流；自动生成 / 手动注册 Skill 会写入 `backend/data/skill_packages/{skill_name}/SKILL.md` 并支持按 Skill 名称导出 zip。当前仍缺注册失败原因可视化和候选队列管理。
+- **Skill 自进化现状**：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、router gate、workflow evidence、颗粒度 gate、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和用户显式请求生成 Skill 的手动触发流；自动生成 / 手动注册 Skill 会写入 `backend/data/skill_packages/{skill_name}/SKILL.md` 并支持按 Skill 名称导出 zip。Memory 页面已能查看候选队列；当前仍缺注册失败原因可视化、队列操作和更强筛选。
 - **向量存储**：全局 `VectorStoreBackend` 抽象已支持 `disabled` / `zvec`，`VECTOR_STORE_PROVIDER` 仅首次初始化生效，之后按持久化 `VectorStorePolicy` 启动。
 
 ## 存储

@@ -27,12 +27,19 @@
 - 历史记忆持久化和后台反思会写入 `MEMORY_AUDIT` Trace 审计；Chat 页面只展示 “Skills 生成中” 轻量提示。
 - 运行后历史记忆持久化只保存用户输入和 Agent 最终输出，不保存工具调用过程。
 - 新增前端 Memory 页面首版：导航入口已接入，支持唯一用户记忆、唯一全局记忆、每个 Agent 一份 Agent Markdown 记忆的查看 / 编辑 / 保存；历史记忆按“Agent -> 时间节点 -> 具体记忆”查看，底层使用 `memory_nodes`。
+- Memory 页面已接入 Skill 自进化队列只读视图：可按状态和 Agent 查看候选记录、router gate、workflow evidence、草稿描述、风险提示、变量流和注册状态。
+- 新增轻量规则版 `MemoryAdmissionGate`：运行后先判断空内容、敏感内容、低信号礼貌回复、长期意图和手动 Skill 信号，再决定是否进入历史记忆、Markdown 反思和 Skill 自进化。
+- 新增 Obsidian-compatible Memory Wiki 同步器首版：`MemoryWikiVaultSyncer` 可从三类 Markdown 记忆、`memory_nodes` 和已注册 Skills 生成 `backend/data/memory/wiki/` 只读视图，并通过 `/api/memory/wiki/sync` 手动触发。
+- Memory 页面已增加 Wiki Vault tab，可手动同步 wiki 视图、查看生成统计、vault 路径和生成文件列表；Electron 桌面端可打开 wiki 文件夹或通过 `obsidian://open?path=...` 打开 Obsidian vault。
+- Memory Wiki 已支持轻量实体索引：同步时从 Markdown 记忆、历史记忆和 Skill 文档中提取稳定实体，生成 `entities/{kind}/{name}.md`、Obsidian 双链和 `entities/graph.md` 共现图。
+- 记忆提炼 Agent 提示词已要求重要稳定实体使用 `[[类型:名称]]` 链接，例如 `[[规则:禁止恢复旧 Plan Runtime]]`，并避免给普通词过度加链接。
 
 仍未完成：
 
 - Memory 设置模型和更完整的使用审计视图。
-- Memory 页面中的 Skill 自进化队列、设置区、审计详情和历史记忆删除 / 禁用操作。
+- Memory 页面中的设置区、审计详情和历史记忆删除 / 禁用操作。
 - Markdown 记忆压缩摘要、去重增强、敏感信息过滤增强和失败重试。
+- Memory Wiki 的自动同步、反向编辑策略和实体提取增强。
 - Team Worker 记忆注入策略。
 - Skill 自进化注册失败原因可视化和前端管理入口。
 
@@ -61,6 +68,37 @@
 ## 产品语义
 
 记忆系统按“历史记忆 + Markdown 长期记忆”双轨设计。向量存储只保存历史记忆底层 `memory_nodes`；用户记忆、Agent 迭代记忆和全局偏好记忆以 Markdown 文件存储，并通过压缩摘要控制上下文体积。
+
+### Obsidian-compatible Memory Vault 借鉴方向
+
+参考 OpenHuman 的 Obsidian Wiki / Memory Tree 方案后，本项目后续将把 Markdown 记忆增强为 **Obsidian-compatible Memory Vault 表现层**。该层用于让用户和 Agent 都能读取、编辑、链接和导出记忆，但不替代当前权威存储：
+
+- **权威存储仍是 SQLite + Markdown + VectorStoreBackend**：`memory_nodes`、`skill_evolution_records`、三类 Markdown 长期记忆和向量库策略继续作为运行时事实来源。
+- **Vault 是可读表现层**：生成 `backend/data/memory/wiki/`，按 `users/`、`agents/`、`global/`、`history/`、`skills/`、`entities/` 组织 Markdown 文件。当前首版为手动同步的只读生成视图。
+- **Wiki 链接不承担事务语义**：`[[项目:Agent Workstation]]`、`[[规则:禁止恢复旧 Plan Runtime]]`、`[[Skill:xxx]]` 只作为可视化和人工维护入口，真实检索仍通过工具、索引和数据库完成。
+- **实体索引先只读生成**：当前同步器会生成 `entities/` 实体页和 `entities/graph.md` 共现关系；后续再评估是否新增 `memory_entities`、`memory_entity_links`、`memory_entity_edges` 等结构化表，把用户、项目、Agent、Skill、工具、规则、文件和错误类型连成可检索关系图。
+- **记忆准入先于 Wiki 同步**：`MemoryAdmissionGate` 控制哪些内容只进入历史记忆、哪些进入长期 Markdown、哪些进入 Skill 自进化，避免把低信号聊天无差别写入 Vault。
+- **差异追踪先轻量后 Git-backed**：先做 `memory_change_log` 记录记忆新增、修改、删除、链接和 Skill 注册；后续再评估 Git-backed vault diff。
+
+推荐目录形态：
+
+```text
+backend/data/memory/wiki/
+  README.md
+  entities/
+    project/
+    topic/
+    module/
+    rule/
+    graph.md
+  users/user_memory.md
+  agents/{agent_id}/agent_memory.md
+  global/global_memory.md
+  history/{agent_id}/{date}.md
+  skills/{skill_name}.md
+```
+
+这个方向的边界是：Vault 解决“用户可读、可修正、可导出、可图谱化”，不解决向量检索、事务一致性和运行时准入；这些仍由服务层和存储层负责。
 
 ### 记忆层与技能自进化产物
 
@@ -1016,7 +1054,7 @@ MVP 不做记忆审批流，也不做记忆审批候选队列。Skill 自进化�
 - user / agent / global 长期偏好写入 Markdown 文件，并维护压缩摘要。
 - 不确定、低置信、重复、敏感或一次性的记忆内容直接忽略，不进入记忆审批队列。
 - Chat 不展示“已更新记忆”等记忆过程提示；Skill 自进化只展示“Skills 生成中”轻量提示。
-- Memory 页面只负责查看历史记忆、查询详情、编辑 Markdown 记忆、查看 Skill 自进化队列、删除、禁用和审计，不负责审批。当前首版已支持“Agent -> 时间节点 -> 具体记忆”的历史记忆查看和 Markdown 编辑；Skill 自进化队列、删除、禁用和审计详情留到下一阶段。
+- Memory 页面只负责查看历史记忆、查询详情、编辑 Markdown 记忆、查看 Skill 自进化队列、删除、禁用和审计，不负责审批。当前首版已支持“Agent -> 时间节点 -> 具体记忆”的历史记忆查看、Markdown 编辑和 Skill 自进化队列查看；删除、禁用、设置和审计详情留到下一阶段。
 - 删除历史记忆使用软删除，保留审计事件。
 
 后续如确实需要审批流，必须单独设计生命周期、RunState、前端入口和 API，不在 MVP 中预留半套 approve / reject 状态。
@@ -1074,7 +1112,7 @@ Memory 页面主入口只使用唯一 user / global 的 canonical 路由，不�
 后续补齐：
 
 - 记忆详情抽屉：来源 Run / Session、使用次数、最近使用、审计记录。
-- Skill 自进化队列：展示自动生成的 Skill 草稿、复用理由、风险提示和注册状态。
+- Skill 自进化队列：展示自动生成的 Skill 草稿、复用理由、风险提示、router gate、workflow evidence 和注册状态。
 - 设置区：启用开关、自动写入最低置信度、注入预算、Team Worker 是否使用记忆。
 - 历史记忆删除 / 禁用操作：底层对 `memory_nodes` 使用软删除并写审计。
 
@@ -1140,13 +1178,13 @@ Memory 页面主入口只使用唯一 user / global 的 canonical 路由，不�
 - 已实现标准 Skill 包落盘和导出：自动生成 / 手动注册 Skill 都写入 `backend/data/skill_packages/{skill_name}/SKILL.md`，并可从 Skills 页面按 Skill 名称导出 zip。
 - 注册后的 Skill 不会自动绑定到任何 Agent，用户仍需进入 Agent 配置手动添加。
 - 对 `too_broad` 结果只保存拆分建议，不注册超级 Skill；未来由 Workflow 编排器组合原子 Skill。
-- 继续补候选队列管理和注册失败原因可视化。
+- 继续补注册失败原因可视化、队列操作入口和更强的候选检索筛选。
 
 ### Phase 5：前端 Memory 页面
 
 - 已新增 Memory 页面和导航入口。
 - 已支持历史记忆三段式查看、按日期查询和 Markdown 记忆管理。
-- 后续补 Skill 自进化队列、设置区、审计详情、历史记忆删除 / 禁用。
+- 后续补设置区、审计详情、历史记忆删除 / 禁用，以及 Skill 自进化队列操作能力。
 - Chat 中只展示 “Skills 生成中” 轻量提示；记忆过程和本轮注入摘要进入 Trace / Memory 页面。
 
 ### Phase 6：检索增强
