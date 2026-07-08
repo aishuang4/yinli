@@ -58,7 +58,7 @@ def build_memory_injection_text(
             workspace_id=context.workspace_id,
             project_id=context.project_id,
             user_id=context.user_id,
-            limit=30,
+            limit=20,
         )
         node_text = _format_node_tree(tree.get("nodes", []))
         if node_text:
@@ -71,7 +71,7 @@ def build_memory_injection_text(
         [
             "# Memory",
             "以下是可用长期记忆摘要。若与本轮用户明确要求冲突，以本轮用户消息为准。",
-            "需要查看某天或某个主题的详情时，使用 memory_node_tree 或 memory_node_query 工具。",
+            "这里只注入摘要索引；需要查看某天、某个主题或 nodeId 的详情时，使用 memory_node_tree 或 memory_node_query 工具。",
             "",
             "\n\n".join(sections),
         ],
@@ -135,16 +135,23 @@ def _format_node_tree(nodes: list[dict]) -> str:
     if not nodes:
         return ""
     lines: list[str] = []
-    for node in nodes[:30]:
+    for node in nodes[:20]:
         tags = ",".join(node.get("tags") or [])
         lines.extend(
             [
                 f"- {node.get('date', '')}",
                 f"  - agent: {node.get('agentId', '')}",
                 f"    nodeId: {node.get('nodeId', '')}",
-                f"    title: {node.get('title', '')}",
-                f"    summary: {node.get('summary', '')}",
+                f"    title: {_trim(node.get('title', ''), 80)}",
+                f"    summary: {_trim(node.get('summary', ''), 180)}",
                 f"    tags: {tags}",
             ],
         )
     return "\n".join(lines)
+
+
+def _trim(value: str, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "..."

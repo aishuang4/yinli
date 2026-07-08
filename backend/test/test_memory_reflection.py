@@ -16,6 +16,7 @@ from src.memory.reflection import (
     reflect_completed_run_memory,
     reflect_completed_run_memory_with_agents,
 )
+from src.memory.trace import memory_reflection_audit_payload
 from src.memory.extraction_agents import _build_memory_reflection_system_prompt, _build_memory_reflection_user_prompt
 from src.tools.memory_reflection import MemoryFileToolSet
 from src.server.routes.chat.models import ChatToolRun
@@ -97,8 +98,28 @@ def test_reflection_ignores_without_long_term_intent(tmp_path):
         store=MarkdownMemoryStore(root=tmp_path / "memory"),
     )
 
-    assert result.ignored_reason == "no_long_term_intent"
+    assert result.ignored_reason == "below_history_threshold"
     assert not (tmp_path / "memory").exists()
+
+
+def test_reflection_audit_payload_includes_admission_quality(tmp_path):
+    result = reflect_completed_run_memory(
+        MemoryReflectionInput(
+            session_id="session-1",
+            agent_id="agent-1",
+            agent_name="Agent",
+            user_message="以后默认用中文回答，解释保持简洁。",
+            assistant_text="好的，我会记住这个偏好。",
+        ),
+        store=MarkdownMemoryStore(root=tmp_path / "memory"),
+    )
+
+    payload = memory_reflection_audit_payload(result)
+
+    assert payload["ignoredReason"] == ""
+    assert payload["admission"]["reason"] == "accepted"
+    assert payload["admission"]["scores"]["markdown"] >= payload["admission"]["thresholds"]["markdown"]
+    assert payload["admission"]["redactedUserMessage"]
 
 
 def test_reflection_ignores_sensitive_content(tmp_path):
@@ -133,7 +154,80 @@ def test_reflection_deduplicates_existing_note(tmp_path):
     assert first.updates
     assert second.ignored_reason == "duplicate"
     content = (tmp_path / "memory" / "users" / "user_memory.md").read_text(encoding="utf-8")
-    assert content.count("以后默认用中文回答。") == 1
+    assert "auto-generated summary" in content
+    assert content.count("以后默认用中文回答。 _(source: session-1)_") == 1
+
+
+def test_reflection_near_duplicate_ignores_different_source(tmp_path):
+    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    first = MemoryReflectionInput(
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        user_message="以后默认用中文回答，解释保持简洁。",
+        assistant_text="好的。",
+        source_run_id="run-1",
+    )
+    second = MemoryReflectionInput(
+        session_id="session-2",
+        agent_id="agent-1",
+        agent_name="Agent",
+        user_message="以后默认用中文回答，解释保持简洁。",
+        assistant_text="收到。",
+        source_run_id="run-2",
+    )
+
+    reflect_completed_run_memory(first, store=store)
+    result = reflect_completed_run_memory(second, store=store)
+
+    assert result.ignored_reason == "duplicate"
+    content = (tmp_path / "memory" / "users" / "user_memory.md").read_text(encoding="utf-8")
+    assert "auto-generated summary" in content
+    assert content.count("以后默认用中文回答，解释保持简洁。 _(source: run-1)_") == 1
+
+
+def test_reflection_merges_conflicting_language_preference(tmp_path):
+    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    first = MemoryReflectionInput(
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        user_message="以后默认用中文回答。",
+        assistant_text="好的。",
+    )
+    second = MemoryReflectionInput(
+        session_id="session-2",
+        agent_id="agent-1",
+        agent_name="Agent",
+        user_message="以后默认用英文回答。",
+        assistant_text="收到。",
+    )
+
+    reflect_completed_run_memory(first, store=store)
+    reflect_completed_run_memory(second, store=store)
+
+    content = (tmp_path / "memory" / "users" / "user_memory.md").read_text(encoding="utf-8")
+    assert "以后默认用英文回答。" in content
+    assert "以后默认用中文回答。 _(source:" not in content
+
+
+def test_memory_add_tool_redacts_sensitive_note_before_write(tmp_path):
+    path = tmp_path / "user_memory.md"
+    path.write_text("# Summary\n\n# Stable Preferences\n", encoding="utf-8")
+    tool_set = MemoryFileToolSet(
+        scope="user",
+        owner_id="default",
+        file_path=str(path),
+        read_content=lambda: path.read_text(encoding="utf-8"),
+        write_content=lambda content: path.write_text(content, encoding="utf-8"),
+    )
+    add_tool = tool_set.tools()[1]
+
+    asyncio.run(add_tool(section="Stable Preferences", note="以后默认联系邮箱是 test@example.com。"))
+
+    content = path.read_text(encoding="utf-8")
+    assert "test@example.com" not in content
+    assert "<redacted>" in content
 
 
 def test_reflection_with_agents_writes_model_memories(tmp_path, monkeypatch):

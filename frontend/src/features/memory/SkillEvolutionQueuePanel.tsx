@@ -3,11 +3,15 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { Ban, RefreshCw, RotateCcw, Upload, XCircle } from 'lucide-react';
 import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
 import { SelectField } from '../../components/form';
 import type { Agent } from '../../types/agent';
-import type { SkillEvolutionRecord, SkillEvolutionRecordStatus } from '../../types/memory';
+import type {
+  SkillEvolutionRecord,
+  SkillEvolutionRecordAction,
+  SkillEvolutionRecordStatus,
+} from '../../types/memory';
 import { SKILL_STATUS_OPTIONS, skillStatusMeta } from './memoryViewConfig';
 import { SkillEvolutionRecordDetail } from './SkillEvolutionRecordDetail';
 
@@ -20,6 +24,7 @@ interface SkillEvolutionQueuePanelProps {
   records: SkillEvolutionRecord[];
   loading: boolean;
   onSearch: () => Promise<void>;
+  onAction: (recordId: string, action: SkillEvolutionRecordAction, reason?: string) => Promise<void>;
 }
 
 export function SkillEvolutionQueuePanel({
@@ -31,6 +36,7 @@ export function SkillEvolutionQueuePanel({
   records,
   loading,
   onSearch,
+  onAction,
 }: SkillEvolutionQueuePanelProps) {
   const [selectedRecordId, setSelectedRecordId] = useState('');
   const agentOptions = useMemo(() => [
@@ -129,8 +135,17 @@ export function SkillEvolutionQueuePanel({
         </div>
 
         <div className="min-h-0 overflow-y-auto rounded-md border border-[var(--color-border)]">
-          <div className="border-b border-[var(--color-border)] px-4 py-3 text-sm font-medium text-[var(--color-text-primary)]">
-            队列详情
+          <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3">
+            <div className="text-sm font-medium text-[var(--color-text-primary)]">
+              队列详情
+            </div>
+            {selectedRecord && (
+              <SkillRecordActions
+                record={selectedRecord}
+                loading={loading}
+                onAction={onAction}
+              />
+            )}
           </div>
           {loading ? (
             <div className="flex justify-center py-12">
@@ -146,5 +161,62 @@ export function SkillEvolutionQueuePanel({
         </div>
       </div>
     </section>
+  );
+}
+
+function SkillRecordActions({
+  record,
+  loading,
+  onAction,
+}: {
+  record: SkillEvolutionRecord;
+  loading: boolean;
+  onAction: (recordId: string, action: SkillEvolutionRecordAction, reason?: string) => Promise<void>;
+}) {
+  if (record.status === 'registered') {
+    return (
+      <Tag size="small" color="success">已注册 {record.registeredSkillId || ''}</Tag>
+    );
+  }
+  if (record.status === 'draft') {
+    return (
+      <div className="flex flex-wrap justify-end gap-2">
+        <Button
+          size="small"
+          type="primary"
+          icon={<Upload size={13} />}
+          onClick={() => void onAction(record.id, 'register', '用户在 Memory 页面手动注册 Skill 候选')}
+          loading={loading}
+        >
+          注册
+        </Button>
+        <Button
+          size="small"
+          icon={<Ban size={13} />}
+          onClick={() => void onAction(record.id, 'skip', '用户在 Memory 页面跳过 Skill 候选')}
+          disabled={loading}
+        >
+          跳过
+        </Button>
+        <Button
+          size="small"
+          icon={<XCircle size={13} />}
+          onClick={() => void onAction(record.id, 'mark_failed', '用户在 Memory 页面标记 Skill 候选失败')}
+          disabled={loading}
+        >
+          标失败
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <Button
+      size="small"
+      icon={<RotateCcw size={13} />}
+      onClick={() => void onAction(record.id, 'restore_draft', '用户在 Memory 页面恢复 Skill 候选草稿')}
+      loading={loading}
+    >
+      恢复草稿
+    </Button>
   );
 }

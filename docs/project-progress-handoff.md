@@ -1,6 +1,6 @@
 # Agent Workstation 项目进展与协作交接
 
-> 更新时间：2026-07-06
+> 更新时间：2026-07-08
 >
 > 本文只记录当前项目事实和协作入口。详细架构见 `docs/architecture-overview.md`，任务排期见 `docs/project-todo.md`。
 
@@ -21,8 +21,9 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 - Trace：模型、工具、权限、Team、HITL、错误和 token/cache 事件审计。
 - Electron 开发窗口、内测打包脚本、生产模式后端启动入口。
 - Plan Mode middleware：单 Agent 下通过 `plan_enter` / `plan_write` / `todo_write` / `task_output` / `plan_exit` 生成计划；`plan_exit` 输出 finalized 计划作为最终答案，不走旧审批流。
-- 记忆系统 MVP：历史记忆底层 `memory_nodes` SQLite 主表、`VectorStoreBackend` 抽象、`disabled` / `zvec` provider、`memory_node_tree` / `memory_node_query` 工具、user / agent / global Markdown 记忆文件、运行前记忆注入、运行后 `MemoryAdmissionGate` 准入、后台反思提炼、历史记忆持久化、Memory Wiki 只读同步器和 Memory 页面管理入口首版。Memory 页面可手动同步 Wiki、查看生成文件、打开本地文件夹或通过 Obsidian 深链打开 vault；Wiki 同步会生成轻量 `entities/` 实体索引和 `entities/graph.md` 共现图。
-- Skill 自进化雏形：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、规则版 router gate、workflow evidence、颗粒度控制、变量流抽象、`skill_evolution_records` 候选持久化、标准 Skill 注册首版、相似 Skill 合并首版、标准包目录 `backend/data/skill_packages/{skill_name}/SKILL.md`、历史 Skill 包目录 backfill、Skill zip 导出、用户显式请求生成 Skill 的手动触发流、`MEMORY_AUDIT` Trace 审计首版和 Chat “Skills 生成中”轻量提醒；注册后不自动绑定 Agent。Memory 页面已能查看 Skill 自进化队列，尚未完成注册失败原因可视化和队列操作。
+- 记忆系统 MVP：历史记忆底层 `memory_nodes` SQLite 主表、`VectorStoreBackend` 抽象、`disabled` / `zvec` provider、`memory_node_tree` / `memory_node_query` 工具、user / agent / global Markdown 记忆文件、运行前记忆注入、运行后 `MemoryAdmissionGate` 准入、后台反思提炼、历史记忆持久化、Memory Wiki 只读同步器和 Memory 页面管理入口首版。Memory 页面可编辑 Markdown 记忆、禁用 / 删除 / 恢复历史记忆、查看 `MEMORY_AUDIT`、查看召回质量摘要、对召回命中做相关性反馈、操作 Skill 自进化队列、查看注册失败原因、手动同步 Wiki、查看生成文件、打开本地文件夹或通过 Obsidian 深链打开 vault；Wiki 同步会生成轻量 `entities/` 实体索引和 `entities/graph.md` 共现图。
+- 准入 / 记忆 / 召回质量首轮：`MemoryAdmissionGate` 已升级为规则评分 + 可选模型评分增强，输出 history / markdown / skill 三类评分、阈值、signals、模型评分、失败原因、脱敏摘要和脱敏类型统计；Memory 设置页可编辑准入阈值、模型评分开关和 Markdown 质量参数；Markdown 写入已增加忽略 source 差异的近似重复过滤、敏感信息过滤、冲突合并、失败重试和 `# Summary` 压缩摘要；历史记忆查询已增加向量候选 + SQLite 关键词结果合并、按查询词命中 / 向量分数 / 结构化反馈分 / 置顶 / 置信度 / 使用次数 / 日期的轻量重排，召回反馈写入 `memory_retrieval_feedback` 表并同步写 `MEMORY_AUDIT`，`memory_node_tree` / `memory_node_query` 工具召回会写入 `MEMORY_AUDIT` 并带 retrievalQuality 质量指标，运行前主 Agent / Team Leader / Team Worker 均注入 20 条摘要索引。
+- Skill 自进化雏形：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、规则版 router gate、workflow evidence、颗粒度控制、变量流抽象、`skill_evolution_records` 候选持久化、标准 Skill 注册首版、相似 Skill 合并首版、标准包目录 `backend/data/skill_packages/{skill_name}/SKILL.md`、历史 Skill 包目录 backfill、Skill zip 导出、用户显式请求生成 Skill 的手动触发流、`MEMORY_AUDIT` Trace 审计首版和 Chat “Skills 生成中”轻量提醒；注册后不自动绑定 Agent。Memory 页面已能查看和操作 Skill 自进化队列。
 - 前端非 Chat 组件化整改首轮：业务表单字段已基本收口到 `frontend/src/components/form/`，文件导入统一到 `FileImportButton`，MCP / Skills 等目录筛选复用 `CatalogFilterBar`；Agent、Team、MCP、Skills、Tools、Settings、Sandbox、Memory、Trace 等页面已优先使用 `@agentscope-ai/design` 和共享封装。`MemoryPage` 已拆为页面编排层 + `features/memory/*`，`TracePage` 已拆为页面编排层 + `features/traces/*`，`AgentEditor` 已拆出 sections 和选择弹窗。
 
 ## 核心入口
@@ -109,7 +110,8 @@ cd frontend && npm run electron:dev
 - `resume.py` 仍有部分旧式分支，后续应继续复用 `leader_stream.py`、`completion.py`、`orchestration.py`。
 - 旧记忆表可能存在于开发库中，但当前运行时不触发旧 memory summarize，也不应扩展旧记忆模块。新记忆数据使用 `memory_nodes`、Markdown 文件和 `VectorStoreBackend`。
 - 默认 Markdown 记忆文件为 `backend/data/memory/users/user_memory.md`、`backend/data/memory/agents/agent_memory.md`、`backend/data/memory/global/global_memory.md`；Memory 页面主入口只暴露唯一 user / global 和按 Agent ID 的 agent memory，不兼容读取旧 `default.md`。历史扩展路由仍保留，但不作为当前页面入口。
-- Skill 自进化下一步应补 Memory 页面候选队列操作、注册失败原因可视化和更强筛选；队列作为从协作沉淀到标准 Skill 的中间态入口保留在 Memory 页面。
+- Skill 自进化队列操作和注册失败原因可视化已接入 Memory 页面；后续重点是更强候选检索筛选、模型重跑策略和注册质量评估。
+- Memory 模块进入收口稳定阶段：近期只补运行前注入 Trace payload、设置迁移 / 重建 / 风险提示和整体回归测试；Wiki 图谱成熟化、Wiki 反向合并、`memory_change_log`、复杂召回质量视图、反馈权重配置和模型评分评估暂不继续横向扩展。
 - 前端非 Chat 页面已完成第一轮表单统一和大页面拆分；后续重点是继续拆 `AgentTeamPage`、`RunsPage`，并把重复的卡片式 `<button>`、tab 选择项和列表选择项沉淀为通用交互组件。
 - `npm run lint` 当前仍会被 Chat 相关既有问题阻断：`features/chat/ProcessTimeline.tsx` 中 render 阶段读取 ref，以及 `hooks/useEventStream.ts` 的 hook 依赖 warning。非 Chat 整改阶段除非明确排期，否则不顺手修改 Chat。
 - `CLAUDE.md` 只是兼容指针，当前事实以 `AGENTS.md` 为准。
@@ -127,7 +129,7 @@ cd frontend && npm run electron:dev
 
 ## 文档维护规则
 
-> 生效时间：2026-07-06
+> 生效时间：2026-07-08
 
 以下规则用于判断一份文档是否过时，以及如何维护文档目录。
 

@@ -3,10 +3,10 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, Brain } from 'lucide-react';
-import { Empty, Spinner, Tag } from '@agentscope-ai/design';
+import { Archive, Ban, Bot, Brain, RotateCcw, Trash2 } from 'lucide-react';
+import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
 import type { Agent } from '../../types/agent';
-import type { MemoryNodeQueryResult, MemoryNodeTreeItem } from '../../types/memory';
+import type { MemoryNodeQueryResult, MemoryNodeStatus, MemoryNodeTreeItem } from '../../types/memory';
 import { NodeMemoryFilters } from './NodeMemoryFilters';
 import { NodeTextList } from './MemoryDetailBlocks';
 
@@ -20,10 +20,13 @@ interface NodeMemoryPanelProps {
   setDateFrom: (value: string) => void;
   dateTo: string;
   setDateTo: (value: string) => void;
+  nodeStatus: MemoryNodeStatus | 'all';
+  setNodeStatus: (value: MemoryNodeStatus | 'all') => void;
   loading: boolean;
   nodeTree: MemoryNodeTreeItem[];
   nodeResults: MemoryNodeQueryResult[];
   onSearch: () => Promise<void>;
+  onUpdateStatus: (nodeId: string, status: MemoryNodeStatus, reason?: string) => Promise<void>;
 }
 
 export function NodeMemoryPanel({
@@ -36,10 +39,13 @@ export function NodeMemoryPanel({
   setDateFrom,
   dateTo,
   setDateTo,
+  nodeStatus,
+  setNodeStatus,
   loading,
   nodeTree,
   nodeResults,
   onSearch,
+  onUpdateStatus,
 }: NodeMemoryPanelProps) {
   const agentNameById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent.name])), [agents]);
   const [selectedHistoryId, setSelectedHistoryId] = useState('');
@@ -69,6 +75,7 @@ export function NodeMemoryPanel({
   const selectedHistory = useMemo(() => (
     visibleResults.find((node) => node.nodeId === selectedTimelineItem?.nodeId) || null
   ), [selectedTimelineItem?.nodeId, visibleResults]);
+  const selectedStatus = selectedHistory?.status || selectedTimelineItem?.status || 'active';
 
   useEffect(() => {
     if (!visibleTree.length) {
@@ -89,6 +96,8 @@ export function NodeMemoryPanel({
         setDateFrom={setDateFrom}
         dateTo={dateTo}
         setDateTo={setDateTo}
+        status={nodeStatus}
+        setStatus={setNodeStatus}
         loading={loading}
         onSearch={() => void onSearch()}
       />
@@ -189,6 +198,9 @@ export function NodeMemoryPanel({
                           {node.tags.slice(0, 3).map((tag) => (
                             <Tag key={tag} size="small" color="mauve">{tag}</Tag>
                           ))}
+                          {node.status !== 'active' && (
+                            <Tag size="small" color={nodeStatusColor(node.status)}>{nodeStatusLabel(node.status)}</Tag>
+                          )}
                         </div>
                       </button>
                     ))}
@@ -223,10 +235,47 @@ export function NodeMemoryPanel({
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                  <Tag size="small" color={nodeStatusColor(selectedStatus)}>{nodeStatusLabel(selectedStatus)}</Tag>
                   {(selectedHistory?.tags || selectedTimelineItem.tags).slice(0, 5).map((tag) => (
                     <Tag key={tag} size="small" color="blue">{tag}</Tag>
                   ))}
                 </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {selectedStatus !== 'active' ? (
+                  <Button
+                    icon={<RotateCcw size={14} />}
+                    onClick={() => void onUpdateStatus(selectedTimelineItem.nodeId, 'active', '用户在 Memory 页面恢复历史记忆')}
+                  >
+                    恢复
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      icon={<Ban size={14} />}
+                      onClick={() => void onUpdateStatus(selectedTimelineItem.nodeId, 'disabled', '用户在 Memory 页面禁用历史记忆')}
+                    >
+                      禁用
+                    </Button>
+                    <Button
+                      icon={<Archive size={14} />}
+                      onClick={() => void onUpdateStatus(selectedTimelineItem.nodeId, 'archived', '用户在 Memory 页面归档历史记忆')}
+                    >
+                      归档
+                    </Button>
+                    <Button
+                      icon={<Trash2 size={14} />}
+                      onClick={() => {
+                        if (window.confirm('确认软删除这条历史记忆吗？删除后可通过状态筛选查看并恢复。')) {
+                          void onUpdateStatus(selectedTimelineItem.nodeId, 'deleted', '用户在 Memory 页面软删除历史记忆');
+                        }
+                      }}
+                    >
+                      删除
+                    </Button>
+                  </>
+                )}
               </div>
               <p className="mt-3 text-sm leading-6 text-[var(--color-text-secondary)]">
                 {selectedHistory?.summary || selectedTimelineItem.summary}
@@ -252,4 +301,23 @@ export function NodeMemoryPanel({
       </div>
     </section>
   );
+}
+
+function nodeStatusLabel(status: string): string {
+  return {
+    active: '活跃',
+    disabled: '已禁用',
+    archived: '已归档',
+    deleted: '已删除',
+  }[status] || status;
+}
+
+function nodeStatusColor(status: string): 'default' | 'success' | 'blue' | 'mauve' {
+  const colors: Record<string, 'default' | 'success' | 'blue' | 'mauve'> = {
+    active: 'success',
+    disabled: 'mauve',
+    archived: 'blue',
+    deleted: 'default',
+  };
+  return colors[status] || 'default';
 }

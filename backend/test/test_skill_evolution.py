@@ -11,7 +11,7 @@ from src.memory.skill_evolution import (
     persist_skill_evolution_record,
     register_skill_evolution_record,
 )
-from src.server.routes.memory import skill_evolution_records
+from src.server.routes.memory import SkillEvolutionRecordAction, skill_evolution_records, update_skill_evolution_record
 from src.server.routes.chat.models import ChatToolRun
 from src.storage import database
 
@@ -90,6 +90,31 @@ def test_memory_route_lists_skill_evolution_records(tmp_path, monkeypatch):
     assert len(response.records) == 1
     assert response.records[0]["status"] == "draft"
     assert response.records[0]["draftSkillName"] == "用户发送邮件"
+
+
+def test_memory_route_updates_skill_evolution_record_status(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+    record = _draft_record(tmp_path, monkeypatch, source_run_id="run-action-1")
+
+    skipped = asyncio.run(
+        update_skill_evolution_record(
+            record["id"],
+            SkillEvolutionRecordAction(action="skip", reason="测试跳过"),
+        )
+    )
+    restored = asyncio.run(
+        update_skill_evolution_record(
+            record["id"],
+            SkillEvolutionRecordAction(action="restore_draft", reason="测试恢复"),
+        )
+    )
+
+    assert skipped["status"] == "skipped"
+    assert skipped["riskNotes"] == "测试跳过"
+    assert restored["status"] == "draft"
+    audit_events = database.list_run_events_by_type("MEMORY_AUDIT", limit=10)
+    assert audit_events[0]["payload"]["memoryType"] == "skill_evolution_restore_draft"
 
 
 def test_skill_evolution_record_registers_standard_skill(tmp_path, monkeypatch):

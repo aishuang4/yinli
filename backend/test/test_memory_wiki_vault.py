@@ -80,6 +80,42 @@ def test_memory_wiki_vault_syncs_markdown_history_and_skills(tmp_path, monkeypat
     assert "entities/module/MemoryAdmissionGate.md" in result.files
 
 
+def test_memory_wiki_vault_builds_structured_graph(tmp_path, monkeypatch):
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+
+    store = MarkdownMemoryStore(root=tmp_path / "memory")
+    store.write_agent_memory("agent-1", "# Summary\n\nAgent 使用 MemoryAdmissionGate 和 VectorStoreBackend。")
+
+    MemoryNodeService(vector_backend=DisabledVectorStoreBackend()).upsert_node(
+        MemoryNodeWrite(
+            id="node-graph",
+            agent_id="agent-1",
+            node_date="2026-07-06",
+            title="Wiki 图谱测试",
+            summary="继续推进 Obsidian Wiki 和 MemoryAdmissionGate。",
+            user_inputs=["继续推进 Wiki Vault"],
+            agent_final_outputs=["已生成图谱接口。"],
+            tags=["wiki"],
+        )
+    )
+
+    graph = MemoryWikiVaultSyncer(
+        memory_store=store,
+        wiki_root=tmp_path / "memory" / "wiki",
+    ).graph(history_limit=20)
+
+    node_ids = {node.id for node in graph.nodes}
+    assert graph.documents == 2
+    assert "agent:agent-1" in node_ids
+    assert "module:MemoryAdmissionGate" in node_ids
+    assert "module:VectorStoreBackend" in node_ids
+    assert any(
+        {edge.source, edge.target} == {"agent:agent-1", "module:MemoryAdmissionGate"}
+        for edge in graph.edges
+    )
+
+
 def test_memory_wiki_sync_route_returns_summary(tmp_path, monkeypatch):
     from src.memory import wiki_vault
 
@@ -92,3 +128,21 @@ def test_memory_wiki_sync_route_returns_summary(tmp_path, monkeypatch):
     assert response.path.endswith("/data/memory/wiki")
     assert response.filesWritten >= 1
     assert "README.md" in response.files
+
+
+def test_memory_wiki_graph_route_returns_graph(tmp_path, monkeypatch):
+    from src.memory import markdown_store
+    from src.memory import wiki_vault
+
+    monkeypatch.setattr(markdown_store, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(wiki_vault, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+
+    store = MarkdownMemoryStore(root=tmp_path / "data" / "memory")
+    store.write_global_memory("default", "# Summary\n\n全局规则：禁止恢复旧 Plan Runtime。")
+
+    response = asyncio.run(memory_routes.get_memory_wiki_graph(history_limit=10, edge_limit=20))
+
+    assert response.documents == 1
+    assert any(node.id == "rule:Plan Runtime" for node in response.nodes)

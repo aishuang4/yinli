@@ -1,6 +1,7 @@
 /** Memory 页面相关类型。 */
 
 export type MarkdownMemoryScope = 'user' | 'global' | 'agent';
+export type MemoryNodeStatus = 'active' | 'disabled' | 'archived' | 'deleted';
 
 export interface MarkdownMemoryDocument {
   scope: string;
@@ -14,6 +15,7 @@ export interface MemoryNodeTreeItem {
   nodeId: string;
   date: string;
   agentId: string;
+  status: MemoryNodeStatus;
   title: string;
   summary: string;
   tags: string[];
@@ -22,6 +24,7 @@ export interface MemoryNodeTreeItem {
 export interface MemoryNodeQueryResult {
   nodeId: string;
   date: string;
+  status?: MemoryNodeStatus;
   title?: string;
   dateRangeStart?: string;
   dateRangeEnd?: string;
@@ -41,6 +44,7 @@ export interface MemoryNodeQueryResult {
 }
 
 export type SkillEvolutionRecordStatus = 'draft' | 'registered' | 'skipped' | 'failed';
+export type SkillEvolutionRecordAction = 'skip' | 'restore_draft' | 'mark_failed' | 'register';
 
 export interface SkillEvolutionRecord {
   id: string;
@@ -97,3 +101,95 @@ export interface MemoryWikiSyncResult {
   entities: number;
   files: string[];
 }
+
+export interface MemoryWikiGraphNode {
+  id: string;
+  kind: string;
+  label: string;
+  path: string;
+  documents: string[];
+}
+
+export interface MemoryWikiGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: string;
+  weight: number;
+  documents: string[];
+}
+
+export interface MemoryWikiGraph {
+  nodes: MemoryWikiGraphNode[];
+  edges: MemoryWikiGraphEdge[];
+  documents: number;
+  historyLimit: number;
+}
+
+export interface MemoryAuditEvent {
+  id: string;
+  sessionId: string;
+  eventType: string;
+  scope: string;
+  agentId?: string;
+  agentName?: string;
+  status: string;
+  title: string;
+  content: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+  sortOrder: number;
+}
+
+export type MemoryRetrievalFeedbackRating = 'relevant' | 'irrelevant';
+
+export interface MemoryRetrievalFeedbackPayload {
+  auditEventId: string;
+  nodeId: string;
+  rating: MemoryRetrievalFeedbackRating;
+  reason?: string;
+  sessionId?: string;
+  agentId?: string;
+  query?: string;
+}
+
+export interface MemorySettingsSnapshot {
+  vectorStore: {
+    provider: string;
+    embeddingProvider: string;
+    embeddingModel: string;
+    embeddingDimensions: number | null;
+    retrievalLevel: number;
+    schemaVersion: number;
+  };
+  admission: {
+    historyThreshold: number;
+    markdownThreshold: number;
+    skillThreshold: number;
+    minUserChars: number;
+    minAssistantChars: number;
+    rejectSensitive: boolean;
+    enableRedaction: boolean;
+    enableModelScoring: boolean;
+    modelScoreWeight: number;
+    modelTimeoutSeconds: number;
+    summaryMaxItemsPerSection: number;
+    summaryMaxChars: number;
+    markdownWriteRetries: number;
+    mode: string;
+  };
+  markdownPaths: Record<string, string>;
+  wiki: {
+    root: string;
+    syncMode: string;
+    graphStatus: string;
+    isRuntimeSource: boolean;
+  };
+  runtime: {
+    memoryRuntimeKind: boolean;
+    usesHooksAndTools: boolean;
+    chatShowsMemoryProcess: boolean;
+  };
+}
+
+export type MemoryAdmissionPolicyUpdate = Partial<MemorySettingsSnapshot['admission']>;

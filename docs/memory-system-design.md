@@ -1,6 +1,6 @@
 # 记忆系统设计与实现进度
 
-> 状态：MVP 实现中，2026-07-06。本文记录新记忆系统的设计、已实现边界和后续任务。不复用旧三层记忆模块、旧 `memory_*` 事件或旧运行时补丁。
+> 状态：MVP 实现中，2026-07-07。本文记录新记忆系统的设计、已实现边界和后续任务。不复用旧三层记忆模块、旧 `memory_*` 事件或旧运行时补丁。
 
 ## 当前实现快照
 
@@ -24,24 +24,43 @@
 - 用户显式说“把这个生成 Skill / 把刚才流程生成 skills”时，会读取同一会话上一轮完整 user / assistant 对话作为 Skill 提炼输入，不把短命令本身当作 Skill 内容。
 - 自动生成 / 手动注册 Skill 会写入 `backend/data/skill_packages/{skill_name}/SKILL.md`，并可从 Skills 页面按 Skill 名称导出 zip。
 - 历史 registry 中缺少 `resourcePath/resources` 的用户 Skill 在加载时会自动 backfill 标准 `SKILL.md` 包目录。
-- 历史记忆持久化和后台反思会写入 `MEMORY_AUDIT` Trace 审计；Chat 页面只展示 “Skills 生成中” 轻量提示。
+- 历史记忆持久化、后台反思和 Agent 主动调用 `memory_node_tree` / `memory_node_query` 的召回行为会写入 `MEMORY_AUDIT` Trace 审计；Chat 页面只展示 “Skills 生成中” 轻量提示。
 - 运行后历史记忆持久化只保存用户输入和 Agent 最终输出，不保存工具调用过程。
 - 新增前端 Memory 页面首版：导航入口已接入，支持唯一用户记忆、唯一全局记忆、每个 Agent 一份 Agent Markdown 记忆的查看 / 编辑 / 保存；历史记忆按“Agent -> 时间节点 -> 具体记忆”查看，底层使用 `memory_nodes`。
 - Memory 页面已接入 Skill 自进化队列只读视图：可按状态和 Agent 查看候选记录、router gate、workflow evidence、草稿描述、风险提示、变量流和注册状态。
-- 新增轻量规则版 `MemoryAdmissionGate`：运行后先判断空内容、敏感内容、低信号礼貌回复、长期意图和手动 Skill 信号，再决定是否进入历史记忆、Markdown 反思和 Skill 自进化。
+- Memory 设置页已增加最近召回质量摘要：基于 `MEMORY_AUDIT.retrievalQuality` 统计召回次数、空结果率、平均 top score 和命中来源。
+- Memory 审计详情已增加召回命中反馈首版：用户可对某次 `memory_node_query` 命中的 node 标记相关 / 不相关，反馈写入结构化 `memory_retrieval_feedback` 表，并同步写 `MEMORY_AUDIT.memory_retrieval_feedback` 作为追溯记录。
+- 召回反馈已接入轻量排序权重：查询时聚合最近结构化反馈，相关反馈加权，不相关反馈降权，并在 `retrievalQuality.resultQuality[].feedbackScore` 中展示。
+- 新增轻量规则评分版 `MemoryAdmissionGate`：运行后先判断空内容、敏感内容、低信号礼貌回复、长期意图、实质工作信号和手动 Skill 信号，再输出 history / markdown / skill 三类评分，分别决定是否进入历史记忆、Markdown 反思和 Skill 自进化。
+- `MemoryAdmissionGate` 审计 payload 已包含准入原因、signals、三类评分、阈值、模型评分结果、模型失败原因、脱敏后的用户 / Agent 文本摘要、脱敏命中次数和脱敏类型统计；Memory 设置页支持编辑准入阈值、模型评分开关、模型评分权重、脱敏策略和 Markdown 质量参数。
+- `MemoryAdmissionScoringAgent` 已接入后台反思链路：开启模型评分后会对 history / markdown / skill 进行语义评分，失败时自动回落规则评分，不影响主对话。
+- Markdown 写入已增强近似重复过滤、敏感信息过滤、同类冲突合并、写入失败重试和 `# Summary` 自动压缩摘要，降低长期 Markdown 记忆被相同规则或冲突偏好刷脏的概率。
+- 历史记忆查询已增加轻量 hybrid fusion、重排和工具召回审计：向量候选会与 SQLite 关键词结果合并去重，再按查询词命中、向量分数、置顶、置信度、使用次数和日期排序；Agent 通过 `memory_node_tree` / `memory_node_query` 查询时记录 query、filters、resultCount 和命中 nodeId；运行前注入从 30 条收敛到 20 条摘要索引，详情仍要求通过 `memory_node_query` 查询。
 - 新增 Obsidian-compatible Memory Wiki 同步器首版：`MemoryWikiVaultSyncer` 可从三类 Markdown 记忆、`memory_nodes` 和已注册 Skills 生成 `backend/data/memory/wiki/` 只读视图，并通过 `/api/memory/wiki/sync` 手动触发。
-- Memory 页面已增加 Wiki Vault tab，可手动同步 wiki 视图、查看生成统计、vault 路径和生成文件列表；Electron 桌面端可打开 wiki 文件夹或通过 `obsidian://open?path=...` 打开 Obsidian vault。
+- 新增 `/api/memory/wiki/graph` 结构化图谱接口：直接从权威记忆源生成实体节点、共现关系、权重和引用文档，不依赖先同步文件，也不写回权威存储。
+- Memory 页面已增加 Wiki Vault tab，可手动同步 wiki 视图、查看图谱、查看生成统计、vault 路径和生成文件列表；Electron 桌面端可打开 wiki 文件夹或通过 `obsidian://open?path=...` 打开 Obsidian vault。
 - Memory Wiki 已支持轻量实体索引：同步时从 Markdown 记忆、历史记忆和 Skill 文档中提取稳定实体，生成 `entities/{kind}/{name}.md`、Obsidian 双链和 `entities/graph.md` 共现图。
 - 记忆提炼 Agent 提示词已要求重要稳定实体使用 `[[类型:名称]]` 链接，例如 `[[规则:禁止恢复旧 Plan Runtime]]`，并避免给普通词过度加链接。
+- Wiki 图谱当前先暂停继续推进：现有版本只是共现图 MVP，用于验证实体提取、图谱接口和前端展示链路，不代表成熟知识图谱能力。
 
-仍未完成：
+主干收口前仍需完成：
 
-- Memory 设置模型和更完整的使用审计视图。
-- Memory 页面中的设置区、审计详情和历史记忆删除 / 禁用操作。
-- Markdown 记忆压缩摘要、去重增强、敏感信息过滤增强和失败重试。
-- Memory Wiki 的自动同步、反向编辑策略和实体提取增强。
-- Team Worker 记忆注入策略。
-- Skill 自进化注册失败原因可视化和前端管理入口。
+- Memory 设置模型仍缺显式迁移、重建和策略变更风险提示。
+- 运行前记忆注入 Trace payload。
+- 当前 Memory 主干需要一次完整回归、冒烟测试和稳定版本提交。
+
+暂停增强分支：
+
+- Markdown 记忆的模型级冲突判断和摘要质量评估。
+- `MemoryAdmissionGate` 的模型评分效果评估、脱敏策略分级展示和模型评分回归集。
+- 召回质量的复杂质量评估视图、反馈权重配置、空结果 / 低分结果诊断和召回样本回放。
+- Memory Wiki 的自动同步、反向编辑策略、实体提取增强和图谱成熟化。
+- `memory_change_log` 与 Git-backed vault diff。
+
+下一阶段推进重点：
+
+- **固主干**：补齐运行前注入 Trace payload、设置迁移 / 重建 / 风险提示，并完成回归测试和稳定版本提交。
+- **控分支**：Wiki 图谱、反馈权重配置、复杂召回评估、`memory_change_log` 和模型评分评估暂不继续横向扩展。
 
 ## 目标
 
@@ -76,9 +95,36 @@
 - **权威存储仍是 SQLite + Markdown + VectorStoreBackend**：`memory_nodes`、`skill_evolution_records`、三类 Markdown 长期记忆和向量库策略继续作为运行时事实来源。
 - **Vault 是可读表现层**：生成 `backend/data/memory/wiki/`，按 `users/`、`agents/`、`global/`、`history/`、`skills/`、`entities/` 组织 Markdown 文件。当前首版为手动同步的只读生成视图。
 - **Wiki 链接不承担事务语义**：`[[项目:Agent Workstation]]`、`[[规则:禁止恢复旧 Plan Runtime]]`、`[[Skill:xxx]]` 只作为可视化和人工维护入口，真实检索仍通过工具、索引和数据库完成。
-- **实体索引先只读生成**：当前同步器会生成 `entities/` 实体页和 `entities/graph.md` 共现关系；后续再评估是否新增 `memory_entities`、`memory_entity_links`、`memory_entity_edges` 等结构化表，把用户、项目、Agent、Skill、工具、规则、文件和错误类型连成可检索关系图。
+- **实体索引先只读生成**：当前同步器会生成 `entities/` 实体页和 `entities/graph.md` 共现关系；服务端同时提供 `/api/memory/wiki/graph` 给前端展示结构化图谱。后续再评估是否新增 `memory_entities`、`memory_entity_links`、`memory_entity_edges` 等结构化表，把用户、项目、Agent、Skill、工具、规则、文件和错误类型连成可检索关系图。
 - **记忆准入先于 Wiki 同步**：`MemoryAdmissionGate` 控制哪些内容只进入历史记忆、哪些进入长期 Markdown、哪些进入 Skill 自进化，避免把低信号聊天无差别写入 Vault。
-- **差异追踪先轻量后 Git-backed**：先做 `memory_change_log` 记录记忆新增、修改、删除、链接和 Skill 注册；后续再评估 Git-backed vault diff。
+- **差异追踪暂停推进**：`memory_change_log` 和 Git-backed vault diff 先从 MVP 中移出，等主干稳定后再评估。
+
+#### Wiki 图谱 MVP 现状与暂缓项
+
+当前 Wiki 图谱只适合作为链路验证版本，问题和边界如下：
+
+- **语义层仍是共现图**：两个实体只要出现在同一份 Markdown 记忆、历史记忆或 Skill 文档中就会连边，不能表达“依赖、属于、禁止、解决、替代”等真实关系。
+- **高频结构节点会污染视图**：`agent:default`、日期、`workspace:default`、`tools`、`Plan Runtime` 等实体出现频率高，会把图谱拉成一团，看起来像噪声网络。
+- **实体提取仍偏规则化**：当前主要依赖固定 pattern 和 `[[类型:名称]]` 链接，缺少 LLM 实体归一、关系分类、同义词合并和低价值实体过滤。
+- **前端只是轻量 SVG 布局**：圆环布局可以验证接口，但节点多时不具备专业图谱所需的拖拽、缩放、搜索、聚类和力导向布局。
+
+后续恢复推进时，优先级建议：
+
+1. 默认隐藏或弱化 `date`、`agent:default`、`workspace:default` 等结构节点。
+2. 默认只展示高置信关系，例如 `weight >= 2`，并支持按实体类型过滤。
+3. 把图谱分成“知识图谱”和“历史时间图”：知识图谱展示规则、模块、Skill、主题关系；历史时间图展示 Agent、日期和记忆文件。
+4. 给边增加关系类型和证据说明，至少区分 `co_occurs`、`mentions`、`uses`、`forbids`、`derived_from` 等。
+5. 再考虑引入 Cytoscape.js 等专业图谱组件，替换当前轻量 SVG。
+
+### Memory 页面管理闭环现状
+
+Memory 页面“用户可控制、可追溯”的首版闭环已完成，先不继续扩展图谱：
+
+- **设置区**：展示当前记忆系统关键策略，包括向量库 provider、准入阈值、模型评分开关、模型评分权重、脱敏策略、Markdown 质量参数、Markdown 记忆文件路径、Wiki 图谱是否仍为 MVP。向量库 provider 和 schema 仍只读，准入与 Markdown 质量策略可热更新。
+- **审计详情**：按记忆相关 Trace 事件查看 `MEMORY_AUDIT`，重点展示 memory type、action、run/session/message 引用、状态、错误原因和 payload 摘要。
+- **历史记忆删除 / 禁用**：对 `memory_nodes` 做软状态变更，不物理删除；支持 `disabled`、`deleted` 和恢复为 `active`，并写入审计事件。向量索引首版跟随删除或标记失效，失败时不影响 SQLite 状态。
+- **Skill 队列操作**：对 Skill 自进化候选支持跳过、恢复草稿、标记失败和必要的重新注册入口。首版提供状态管理和失败原因可视化，避免自动重跑模型。
+- **注册失败原因可视化**：前端详情中突出展示 `status=failed` 的原因、风险提示、相似 Skill 命中、颗粒度拒绝、校验失败等字段，让用户能判断是模型输出问题、重复 Skill、风险问题还是注册链路错误。
 
 推荐目录形态：
 
@@ -465,7 +511,26 @@ Memory node tree, recent 30 days:
       "summary": "...",
       "sourceRunIds": ["..."]
     }
-  ]
+  ],
+  "meta": {
+    "queryTermCount": 2,
+    "vectorCandidateCount": 3,
+    "lexicalCandidateCount": 2,
+    "mergedCandidateCount": 4,
+    "returnedCount": 4,
+    "topScore": 1.25,
+    "empty": false,
+    "retrievalSources": ["lexical", "vector"],
+    "resultQuality": [
+      {
+        "nodeId": "mn_20260703_code",
+        "rankScore": 1.25,
+        "vectorScore": 0.9,
+        "matchedTerms": ["hook"],
+        "sources": ["lexical", "vector"]
+      }
+    ]
+  }
 }
 ```
 
@@ -918,7 +983,7 @@ Skill 自进化生成记录表。最终产物必须注册为标准 Skill；本�
 - 是否启用记忆。
 - 单轮最大注入条数。
 - 单轮最大注入 token budget。
-- 是否允许 Team Worker 使用记忆。
+- Team Worker 运行前按 single agent 同策略注入记忆。
 - 自动写入最低置信度。
 
 ## 运行时接入点
@@ -933,13 +998,13 @@ Skill 自进化生成记录表。最终产物必须注册为标准 Skill；本�
 - `injectionText`：可直接拼入 Agent system prompt 的精简文本。
 - `tracePayload`：用于 Trace 审计，不直接驱动 Chat 主界面。
 
-记忆过程审计使用独立 Trace event：`eventType=MEMORY_AUDIT`，写入 `run_events`，payload 固定包含 `type=memory` 和 `memoryType`。Chat 页面不展示记忆检索、提炼、历史记忆持久化等过程；只允许通过 `MEMORY_SKILL_GENERATING` 展示“Skills 生成中”轻量提示，不展示 Skill 内容、生成结果或记忆过程。
+记忆过程审计使用独立 Trace event：`eventType=MEMORY_AUDIT`，写入 `run_events`，payload 固定包含 `type=memory` 和 `memoryType`。Agent 主动召回历史记忆时，`memory_node_tree` / `memory_node_query` 工具会记录 `query`、`filters`、`resultCount`、`resultNodeIds`、`retrievalSource=agent_tool`、`retrievalQuality` 和当前 `sourceRunId`。`retrievalQuality` 包含 query term 数、向量候选数、关键词候选数、合并后候选数、top score、空结果标记、命中来源和每条结果的 rank score / vector score / feedback score / matched terms。用户对召回命中的相关 / 不相关反馈以 `memory_retrieval_feedback` 结构化表作为排序事实源，并同步写入 `MEMORY_AUDIT.memory_retrieval_feedback` 便于审计追溯。Chat 页面不展示记忆检索、提炼、历史记忆持久化等过程；只允许通过 `MEMORY_SKILL_GENERATING` 展示“Skills 生成中”轻量提示，不展示 Skill 内容、生成结果或记忆过程。
 
 注入位置：
 
 - 单 Agent：注入主 Agent system prompt 的独立 `Memory` 段落。
-- Team Leader：只注入 Leader，Worker 默认不注入，除非 Team 设置允许。
-- Team Worker：MVP 不注入长期记忆，避免 Worker 隔离语义复杂化；后续按 worker scope 独立开启。
+- Team Leader：注入 Leader system prompt 的独立 `Memory` 段落。
+- Team Worker：按 single agent 同策略注入 Worker system prompt；使用该 Worker 的 `agent_id` 读取 agent Markdown 记忆，同时共享 user / global Markdown 摘要和最近历史记忆索引。Worker 需要详情时仍通过 `memory_node_tree` / `memory_node_query` 主动查询。
 
 注入格式必须短、可溯源、可覆盖：
 
@@ -1113,7 +1178,7 @@ Memory 页面主入口只使用唯一 user / global 的 canonical 路由，不�
 
 - 记忆详情抽屉：来源 Run / Session、使用次数、最近使用、审计记录。
 - Skill 自进化队列：展示自动生成的 Skill 草稿、复用理由、风险提示、router gate、workflow evidence 和注册状态。
-- 设置区：启用开关、自动写入最低置信度、注入预算、Team Worker 是否使用记忆。
+- 设置区：启用开关、自动写入最低置信度、注入预算和召回质量摘要。
 - 历史记忆删除 / 禁用操作：底层对 `memory_nodes` 使用软删除并写审计。
 
 旧 Agent 编辑页中的 `memoryEnabled` 已从当前代码移除。新方案如需 Agent 级配置，应定义更明确的 `memoryPolicy` / `memoryScope`，不要恢复旧布尔开关。
@@ -1178,13 +1243,13 @@ Memory 页面主入口只使用唯一 user / global 的 canonical 路由，不�
 - 已实现标准 Skill 包落盘和导出：自动生成 / 手动注册 Skill 都写入 `backend/data/skill_packages/{skill_name}/SKILL.md`，并可从 Skills 页面按 Skill 名称导出 zip。
 - 注册后的 Skill 不会自动绑定到任何 Agent，用户仍需进入 Agent 配置手动添加。
 - 对 `too_broad` 结果只保存拆分建议，不注册超级 Skill；未来由 Workflow 编排器组合原子 Skill。
-- 继续补注册失败原因可视化、队列操作入口和更强的候选检索筛选。
+- 已在 Memory 页面补注册失败原因可视化和队列操作入口；后续继续增强候选检索筛选和模型重跑策略。
 
 ### Phase 5：前端 Memory 页面
 
 - 已新增 Memory 页面和导航入口。
 - 已支持历史记忆三段式查看、按日期查询和 Markdown 记忆管理。
-- 后续补设置区、审计详情、历史记忆删除 / 禁用，以及 Skill 自进化队列操作能力。
+- 已支持设置区、审计详情、历史记忆禁用 / 删除 / 恢复，以及 Skill 自进化队列操作能力。
 - Chat 中只展示 “Skills 生成中” 轻量提示；记忆过程和本轮注入摘要进入 Trace / Memory 页面。
 
 ### Phase 6：检索增强
@@ -1199,7 +1264,7 @@ Memory 页面主入口只使用唯一 user / global 的 canonical 路由，不�
 - 用户本轮明确指令优先于旧记忆。
 - 低置信、敏感、一次性内容不会写入长期节点或 Markdown 记忆。
 - 自动写入失败不影响 Chat Run 完成。
-- Team Worker 默认不注入记忆。
+- Team Worker 按 single agent 同策略注入记忆，且不能跨 Project / Workspace 泄漏。
 - 删除或禁用记忆后不会再被注入。
 - RunState 刷新恢复不会重复展示“已更新记忆”提示。
 - MVP 不从旧表迁移 active memory。

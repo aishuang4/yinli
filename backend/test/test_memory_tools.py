@@ -74,6 +74,43 @@ def test_memory_node_query_tool_returns_node_details(isolated_db):
     assert payload["results"][0]["agentFinalOutputs"] == ["使用 tree 和 query 两个工具。"]
 
 
+def test_memory_node_query_tool_records_retrieval_audit(isolated_db):
+    MemoryNodeService(vector_backend=NoopVectorBackend()).upsert_node(
+        MemoryNodeWrite(
+            id="node-1",
+            agent_id="agent-1",
+            node_date="2026-07-03",
+            title="记忆召回审计",
+            summary="讨论了 MEMORY_AUDIT 查询审计。",
+            user_inputs=["召回质量怎么追踪"],
+            agent_final_outputs=["通过工具查询审计追踪。"],
+        ),
+    )
+
+    asyncio.run(
+        MemoryNodeQuery(
+            audit_session_id="session-1",
+            audit_agent_id="agent-1",
+            audit_agent_name="测试 Agent",
+        )(
+            agentId="agent-1",
+            query="召回",
+            limit=10,
+        ),
+    )
+
+    events = database.list_run_events_by_type("MEMORY_AUDIT", limit=10)
+    assert events[0]["sessionId"] == "session-1"
+    assert events[0]["agentId"] == "agent-1"
+    assert events[0]["payload"]["memoryType"] == "memory_node_query"
+    assert events[0]["payload"]["query"] == "召回"
+    assert events[0]["payload"]["resultCount"] == 1
+    assert events[0]["payload"]["resultNodeIds"] == ["node-1"]
+    assert events[0]["payload"]["retrievalQuality"]["returnedCount"] == 1
+    assert events[0]["payload"]["retrievalQuality"]["empty"] is False
+    assert events[0]["payload"]["retrievalQuality"]["resultQuality"][0]["nodeId"] == "node-1"
+
+
 def test_default_toolkit_includes_memory_tools():
     toolkit = _create_default_toolkit()
     tool_names = asyncio.run(_tool_names(toolkit))

@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Brain, RefreshCw } from 'lucide-react';
 import { Button } from '@agentscope-ai/design';
 import { MarkdownMemoryPanel } from '../features/memory/MarkdownMemoryPanel';
+import { MemorySettingsPanel } from '../features/memory/MemorySettingsPanel';
 import { NodeMemoryPanel } from '../features/memory/NodeMemoryPanel';
 import { SkillEvolutionQueuePanel } from '../features/memory/SkillEvolutionQueuePanel';
 import { WikiVaultPanel } from '../features/memory/WikiVaultPanel';
@@ -21,9 +22,15 @@ import { useMemory } from '../hooks/useMemory';
 import type {
   MarkdownMemoryDocument,
   MarkdownMemoryScope,
+  MemoryAuditEvent,
   MemoryNodeQueryResult,
+  MemoryNodeStatus,
+  MemoryRetrievalFeedbackPayload,
   MemoryNodeTreeItem,
+  MemorySettingsSnapshot,
+  MemoryWikiGraph,
   MemoryWikiSyncResult,
+  SkillEvolutionRecordAction,
   SkillEvolutionRecord,
   SkillEvolutionRecordStatus,
 } from '../types/memory';
@@ -35,8 +42,15 @@ export function MemoryPage() {
     saveMarkdownMemory,
     loadNodeTree,
     queryNodes,
+    updateNodeStatus,
     loadSkillEvolutionRecords,
+    updateSkillEvolutionRecord,
+    loadMemoryAuditEvents,
+    sendRetrievalFeedback,
+    loadMemorySettings,
+    saveAdmissionPolicy,
     syncWikiVault,
+    loadWikiGraph,
   } = useMemory();
   const [activeTab, setActiveTab] = useState<MemoryTab>('markdown');
   const [target, setTarget] = useState<MarkdownMemoryScope>('user');
@@ -49,6 +63,7 @@ export function MemoryPage() {
   const [nodeQuery, setNodeQuery] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [nodeStatus, setNodeStatus] = useState<MemoryNodeStatus | 'all'>('active');
   const [nodeTree, setNodeTree] = useState<MemoryNodeTreeItem[]>([]);
   const [nodeResults, setNodeResults] = useState<MemoryNodeQueryResult[]>([]);
   const [nodesLoading, setNodesLoading] = useState(false);
@@ -58,6 +73,11 @@ export function MemoryPage() {
   const [skillsLoading, setSkillsLoading] = useState(false);
   const [wikiSyncing, setWikiSyncing] = useState(false);
   const [wikiResult, setWikiResult] = useState<MemoryWikiSyncResult | null>(null);
+  const [wikiGraph, setWikiGraph] = useState<MemoryWikiGraph | null>(null);
+  const [wikiGraphLoading, setWikiGraphLoading] = useState(false);
+  const [memorySettings, setMemorySettings] = useState<MemorySettingsSnapshot | null>(null);
+  const [auditEvents, setAuditEvents] = useState<MemoryAuditEvent[]>([]);
+  const [settingsLoading, setSettingsLoading] = useState(false);
   const [error, setError] = useState('');
 
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || agents[0] || null;
@@ -86,6 +106,16 @@ export function MemoryPage() {
     void loadSkillQueue();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'wiki' && !wikiGraph && !wikiGraphLoading) {
+      void loadWikiGraphData();
+    }
+    if (activeTab === 'settings' && !memorySettings && !settingsLoading) {
+      void loadSettingsAndAudit();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   async function loadMarkdown() {
     try {
@@ -123,6 +153,7 @@ export function MemoryPage() {
         query: nodeQuery.trim() || undefined,
         dateFrom: dateFrom || undefined,
         dateTo: dateTo || undefined,
+        status: nodeStatus,
       };
       const [tree, results] = await Promise.all([
         loadNodeTree({ ...filters, limit: 200 }),
@@ -132,6 +163,20 @@ export function MemoryPage() {
       setNodeResults(results);
     } catch (err) {
       setError(err instanceof Error ? err.message : '历史记忆加载失败');
+    } finally {
+      setNodesLoading(false);
+    }
+  }
+
+  async function updateHistoryStatus(nodeId: string, status: MemoryNodeStatus, reason = '') {
+    try {
+      setNodesLoading(true);
+      setError('');
+      await updateNodeStatus(nodeId, status, reason);
+      await loadNodes();
+      if (activeTab === 'settings') await loadSettingsAndAudit();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '历史记忆状态更新失败');
     } finally {
       setNodesLoading(false);
     }
@@ -154,12 +199,27 @@ export function MemoryPage() {
     }
   }
 
+  async function updateSkillRecord(recordId: string, action: SkillEvolutionRecordAction, reason = '') {
+    try {
+      setSkillsLoading(true);
+      setError('');
+      await updateSkillEvolutionRecord(recordId, action, reason);
+      await loadSkillQueue();
+      if (activeTab === 'settings') await loadSettingsAndAudit();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Skill 队列操作失败');
+    } finally {
+      setSkillsLoading(false);
+    }
+  }
+
   async function syncWiki() {
     try {
       setWikiSyncing(true);
       setError('');
       const result = await syncWikiVault(200);
       setWikiResult(result);
+      await loadWikiGraphData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Memory Wiki 同步失败');
     } finally {
@@ -167,12 +227,50 @@ export function MemoryPage() {
     }
   }
 
+  async function loadWikiGraphData() {
+    try {
+      setWikiGraphLoading(true);
+      setError('');
+      const graph = await loadWikiGraph(200, 300);
+      setWikiGraph(graph);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Memory Wiki 图谱加载失败');
+    } finally {
+      setWikiGraphLoading(false);
+    }
+  }
+
+  async function loadSettingsAndAudit() {
+    try {
+      setSettingsLoading(true);
+      setError('');
+      const [settings, events] = await Promise.all([
+        loadMemorySettings(),
+        loadMemoryAuditEvents(80),
+      ]);
+      setMemorySettings(settings);
+      setAuditEvents(events);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Memory 设置或审计加载失败');
+    } finally {
+      setSettingsLoading(false);
+    }
+  }
+
+  async function submitRetrievalFeedback(payload: MemoryRetrievalFeedbackPayload) {
+    await sendRetrievalFeedback(payload);
+    await loadSettingsAndAudit();
+  }
+
   function refreshActiveTab() {
     void refreshAgents();
     if (activeTab === 'markdown') void loadMarkdown();
     if (activeTab === 'nodes') void loadNodes();
     if (activeTab === 'skills') void loadSkillQueue();
-    if (activeTab === 'wiki') void syncWiki();
+    if (activeTab === 'wiki') {
+      void syncWiki();
+    }
+    if (activeTab === 'settings') void loadSettingsAndAudit();
   }
 
   return (
@@ -192,7 +290,7 @@ export function MemoryPage() {
             刷新
           </Button>
         </div>
-        <div className="mt-4 grid grid-cols-4 gap-3">
+        <div className="mt-4 grid grid-cols-5 gap-3">
           {MEMORY_TABS.map((item) => {
             const Icon = item.icon;
             const active = activeTab === item.key;
@@ -255,10 +353,13 @@ export function MemoryPage() {
             setDateFrom={setDateFrom}
             dateTo={dateTo}
             setDateTo={setDateTo}
+            nodeStatus={nodeStatus}
+            setNodeStatus={setNodeStatus}
             loading={nodesLoading}
             nodeTree={nodeTree}
             nodeResults={nodeResults}
             onSearch={loadNodes}
+            onUpdateStatus={updateHistoryStatus}
           />
         ) : activeTab === 'skills' ? (
           <SkillEvolutionQueuePanel
@@ -270,12 +371,29 @@ export function MemoryPage() {
             records={skillRecords}
             loading={skillsLoading}
             onSearch={loadSkillQueue}
+            onAction={updateSkillRecord}
           />
-        ) : (
+        ) : activeTab === 'wiki' ? (
           <WikiVaultPanel
             result={wikiResult}
+            graph={wikiGraph}
+            graphLoading={wikiGraphLoading}
             syncing={wikiSyncing}
             onSync={syncWiki}
+            onLoadGraph={loadWikiGraphData}
+          />
+        ) : (
+          <MemorySettingsPanel
+            settings={memorySettings}
+            auditEvents={auditEvents}
+            loading={settingsLoading}
+            onRefresh={loadSettingsAndAudit}
+            onSaveAdmission={async (payload) => {
+              const admission = await saveAdmissionPolicy(payload);
+              setMemorySettings((current) => (current ? { ...current, admission } : current));
+              void loadSettingsAndAudit();
+            }}
+            onRetrievalFeedback={submitRetrievalFeedback}
           />
         )}
       </main>

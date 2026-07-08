@@ -60,6 +60,7 @@ class MainAgentRuntimeSpec:
     knowledge_tools: list[KnowledgeToolRuntimeSpec]
     parent_agent_id: str
     parent_agent_name: str
+    session_id: str
     tool_scope: RuntimeToolScope
     extra_tools: list[ToolBase]
     middlewares: list[MiddlewareBase]
@@ -224,6 +225,7 @@ def build_main_agent_runtime_spec(
         knowledge_tools=knowledge_tools,
         parent_agent_id=agent_id,
         parent_agent_name=agent_name,
+        session_id=session_id,
         tool_scope=runtime_tool_scope,
         extra_tools=extra_tools or [],
         middlewares=middlewares or [],
@@ -251,6 +253,7 @@ def create_main_agent_from_spec(
         knowledge_tools=spec.knowledge_tools,
         parent_agent_id=spec.parent_agent_id,
         parent_agent_name=spec.parent_agent_name,
+        session_id=spec.session_id,
         tool_scope=spec.tool_scope,
         on_fallback_event=on_fallback_event,
         extra_tools=spec.extra_tools,

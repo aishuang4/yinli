@@ -12,13 +12,21 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Literal
 
-from src.memory.admission import MemoryAdmissionInput, evaluate_memory_admission
+from src.memory.admission import (
+    MemoryAdmissionInput,
+    MemoryAdmissionScores,
+    apply_model_admission_scores,
+    evaluate_memory_admission,
+)
 from src.memory.extraction_agents import (
     SkillEvolutionAgentPayload,
+    run_memory_admission_scoring_agent,
     run_memory_reflection_agent,
     run_skill_evolution_agent,
 )
 from src.memory.markdown_store import MarkdownMemoryStore
+from src.memory.sanitizer import sanitize_memory_note_text
+from src.memory.settings import get_memory_admission_policy
 from src.memory.skill_evolution import (
     SkillEvolutionGateDecision,
     SkillEvolutionRecordInput,
@@ -136,6 +144,7 @@ class MemoryReflectionResult:
     skill_candidate: SkillEvolutionAgentPayload | None = None
     skill_evolution_record: dict | None = None
     ignored_reason: str = ""
+    admission: object | None = None
 
 
 def reflect_completed_run_memory(
@@ -149,7 +158,7 @@ def reflect_completed_run_memory(
     assistant_text = _normalize_text(item.assistant_text)
     admission = _admission_for_item(item, user_message, assistant_text)
     if not admission.should_write_markdown:
-        return MemoryReflectionResult(ignored_reason=admission.reason)
+        return MemoryReflectionResult(ignored_reason=admission.reason, admission=admission)
 
     target = _classify_scope(user_message)
     section = _classify_section(user_message, target)
@@ -157,8 +166,8 @@ def reflect_completed_run_memory(
     memory_store = store or MarkdownMemoryStore()
     update = _append_note(memory_store, target, item, section, note)
     if not update:
-        return MemoryReflectionResult(ignored_reason="duplicate")
-    return MemoryReflectionResult(updates=[update])
+        return MemoryReflectionResult(ignored_reason="duplicate", admission=admission)
+    return MemoryReflectionResult(updates=[update], admission=admission)
 
 
 async def reflect_completed_run_memory_with_agents(
@@ -172,9 +181,15 @@ async def reflect_completed_run_memory_with_agents(
 
     user_message = _normalize_text(item.user_message)
     assistant_text = _normalize_text(item.assistant_text)
-    admission = _admission_for_item(item, user_message, assistant_text)
+    admission = await _admission_for_item_with_model(
+        item,
+        user_message,
+        assistant_text,
+        model_name=model_name,
+        fallback_names=fallback_names or [],
+    )
     if admission.sensitive or admission.reason == "empty_turn":
-        return MemoryReflectionResult(ignored_reason=admission.reason)
+        return MemoryReflectionResult(ignored_reason=admission.reason, admission=admission)
 
     memory_store = store or MarkdownMemoryStore()
     updates: list[MemoryMarkdownUpdate] = []
@@ -285,8 +300,12 @@ async def reflect_completed_run_memory_with_agents(
             updates=updates,
             skill_candidate=skill_candidate,
             skill_evolution_record=skill_evolution_record,
+            admission=admission,
         )
-    return MemoryReflectionResult(ignored_reason=memory_reason or "no_memory_or_skill_candidate")
+    return MemoryReflectionResult(
+        ignored_reason=memory_reason or "no_memory_or_skill_candidate",
+        admission=admission,
+    )
 
 
 def is_manual_skill_generation_request(text: str) -> bool:
@@ -352,6 +371,54 @@ def _admission_for_item(
     )
 
 
+async def _admission_for_item_with_model(
+    item: MemoryReflectionInput,
+    user_message: str,
+    assistant_text: str,
+    *,
+    model_name: str,
+    fallback_names: list[str],
+):
+    """规则准入 + 可选模型评分增强。"""
+
+    decision = _admission_for_item(item, user_message, assistant_text)
+    if not decision.policy.enable_model_scoring or decision.reason in {"empty_turn", "sensitive_content"}:
+        return decision
+    try:
+        payload = await asyncio.wait_for(
+            run_memory_admission_scoring_agent(
+                user_message=decision.redacted_user_message or user_message,
+                assistant_text=decision.redacted_assistant_text or assistant_text,
+                agent_id=item.agent_id,
+                agent_name=item.agent_name,
+                rule_scores=decision.scores,
+                rule_signals=decision.signals,
+                policy=decision.policy,
+                model_name=model_name,
+                fallback_names=fallback_names,
+                invocation_key=_reflection_invocation_key(item, "admission"),
+            ),
+            timeout=decision.policy.model_timeout_seconds,
+        )
+    except Exception as exc:
+        return apply_model_admission_scores(
+            decision,
+            scores=None,
+            error=f"{type(exc).__name__}: {str(exc)[:160]}",
+        )
+    if not payload:
+        return apply_model_admission_scores(decision, scores=None, error="empty_model_payload")
+    return apply_model_admission_scores(
+        decision,
+        scores=MemoryAdmissionScores(
+            history=payload.history,
+            markdown=payload.markdown,
+            skill=payload.skill,
+        ),
+        reason=payload.reason,
+    )
+
+
 def _classify_scope(text: str) -> MemoryScope:
     lowered = text.lower()
     if any(hint in lowered for hint in _GLOBAL_HINTS):
@@ -405,24 +472,31 @@ def _append_note(
     section: str,
     note: str,
 ) -> MemoryMarkdownUpdate | None:
+    note = _sanitize_memory_note(note)
+    if not note:
+        return None
+    policy = get_memory_admission_policy()
     if scope == "global_preference":
         doc = store.read_global_memory(item.workspace_id)
         content = _insert_note_into_section(doc.content, section, note)
         if content == doc.content:
             return None
-        written = store.write_global_memory(item.workspace_id, content)
+        content = _prepare_markdown_memory_content(content, policy=policy)
+        written = _write_with_retry(lambda value: store.write_global_memory(item.workspace_id, value), content, policy.markdown_write_retries)
     elif scope == "agent":
         doc = store.read_agent_memory(item.agent_id)
         content = _insert_note_into_section(doc.content, section, note)
         if content == doc.content:
             return None
-        written = store.write_agent_memory(item.agent_id, content)
+        content = _prepare_markdown_memory_content(content, policy=policy)
+        written = _write_with_retry(lambda value: store.write_agent_memory(item.agent_id, value), content, policy.markdown_write_retries)
     else:
         doc = store.read_user_memory(item.user_id)
         content = _insert_note_into_section(doc.content, section, note)
         if content == doc.content:
             return None
-        written = store.write_user_memory(item.user_id, content)
+        content = _prepare_markdown_memory_content(content, policy=policy)
+        written = _write_with_retry(lambda value: store.write_user_memory(item.user_id, value), content, policy.markdown_write_retries)
     return MemoryMarkdownUpdate(
         scope=scope,
         owner_id=written.owner_id,
@@ -577,7 +651,14 @@ def _reflection_invocation_key(item: MemoryReflectionInput, target: str) -> str:
 
 
 def _insert_note_into_section(content: str, section: str, note: str) -> str:
-    if _normalized_note_text(note) in _normalized_note_text(content):
+    normalized_note = _normalized_note_text(note)
+    normalized_content = _normalized_note_text(content)
+    if normalized_note in normalized_content:
+        return content
+    conflict_merged = _merge_conflicting_note(content, note)
+    if conflict_merged != content:
+        return conflict_merged
+    if _is_near_duplicate_note(content, note):
         return content
 
     lines = content.rstrip().splitlines()
@@ -599,10 +680,169 @@ def _insert_note_into_section(content: str, section: str, note: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _sanitize_memory_note(note: str) -> str:
+    text = sanitize_memory_note_text(str(note or "").strip())
+    if not text:
+        return ""
+    return text
+
+
+def _merge_conflicting_note(content: str, note: str) -> str:
+    conflict_key = _conflict_key(note)
+    if not conflict_key:
+        return content
+    lines = content.splitlines()
+    current_section = ""
+    for index, line in enumerate(lines):
+        if line.startswith("# "):
+            current_section = line[2:].strip()
+            continue
+        if current_section == "Summary":
+            continue
+        if not line.strip().startswith("-"):
+            continue
+        if _conflict_key(line) != conflict_key:
+            continue
+        if _normalized_note_text(line) == _normalized_note_text(note):
+            return content
+        lines[index] = note
+        return "\n".join(lines).rstrip() + "\n"
+    return content
+
+
+def _conflict_key(value: str) -> str:
+    normalized = _normalized_note_text(value)
+    if "默认" in normalized and ("中文" in normalized or "英文" in normalized):
+        return "default_language"
+    if "简洁" in normalized and ("详细" in normalized or "详细解释" in normalized):
+        return "answer_detail_level"
+    if "planruntime" in normalized:
+        return "plan_runtime_rule"
+    if "memoryruntime" in normalized:
+        return "memory_runtime_rule"
+    return ""
+
+
+def _prepare_markdown_memory_content(content: str, *, policy) -> str:
+    content = _collapse_blank_lines(content)
+    return _rebuild_summary_section(
+        content,
+        max_items_per_section=policy.summary_max_items_per_section,
+        max_chars=policy.summary_max_chars,
+    )
+
+
+def _rebuild_summary_section(content: str, *, max_items_per_section: int, max_chars: int) -> str:
+    sections = _parse_markdown_sections(content)
+    summary_items: list[str] = []
+    for section in (
+        "Stable Preferences",
+        "Stable Behaviors",
+        "Profile",
+        "Workspace Rules",
+        "Corrections",
+        "Negative Rules",
+    ):
+        items = [
+            _strip_source_reference(line.strip())
+            for line in sections.get(section, [])
+            if line.strip().startswith("-")
+        ][:max_items_per_section]
+        for item in items:
+            if item and item not in summary_items:
+                summary_items.append(item)
+    summary = "\n".join(summary_items)
+    if len(summary) > max_chars:
+        summary = summary[:max_chars].rstrip() + "..."
+    summary_lines = ["# Summary", "", "<!-- auto-generated summary; edit sections below for source of truth. -->"]
+    if summary:
+        summary_lines.extend(["", summary])
+    return _replace_section(content, "Summary", "\n".join(summary_lines).rstrip())
+
+
+def _parse_markdown_sections(content: str) -> dict[str, list[str]]:
+    sections: dict[str, list[str]] = {}
+    current = ""
+    for line in content.splitlines():
+        if line.startswith("# "):
+            current = line[2:].strip()
+            sections.setdefault(current, [])
+            continue
+        if current:
+            sections[current].append(line)
+    return sections
+
+
+def _replace_section(content: str, section: str, replacement: str) -> str:
+    lines = content.rstrip().splitlines()
+    heading = f"# {section}"
+    try:
+        start = lines.index(heading)
+    except ValueError:
+        return replacement.rstrip() + "\n\n" + content.rstrip() + "\n"
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("# "):
+            end = index
+            break
+    next_lines = lines[:start] + replacement.rstrip().splitlines() + [""] + lines[end:]
+    return "\n".join(next_lines).rstrip() + "\n"
+
+
+def _strip_source_reference(value: str) -> str:
+    value = re.sub(r"_\(source:[^)]+\)_", "", value)
+    value = re.sub(r"\(source:[^)]+\)", "", value)
+    return value.strip()
+
+
+def _collapse_blank_lines(content: str) -> str:
+    return re.sub(r"\n{3,}", "\n\n", content).rstrip() + "\n"
+
+
+def _write_with_retry(write_fn, content: str, retries: int):
+    last_exc: Exception | None = None
+    for _attempt in range(max(retries, 0) + 1):
+        try:
+            return write_fn(content)
+        except Exception as exc:
+            last_exc = exc
+    if last_exc:
+        raise last_exc
+    return write_fn(content)
+
+
 def _normalized_note_text(value: str) -> str:
     value = re.sub(r"_\(source:[^)]+\)_", "", value)
+    value = re.sub(r"\(source:[^)]+\)", "", value)
+    value = re.sub(r"source:[\w:./-]+", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"^-", "", value.strip())
     value = re.sub(r"\s+", "", value)
     return value.lower()
+
+
+def _is_near_duplicate_note(content: str, note: str) -> bool:
+    note_tokens = _dedupe_tokens(note)
+    if not note_tokens:
+        return False
+    for line in content.splitlines():
+        if not line.strip().startswith("-"):
+            continue
+        line_tokens = _dedupe_tokens(line)
+        if not line_tokens:
+            continue
+        overlap = len(note_tokens & line_tokens) / max(len(note_tokens), 1)
+        if overlap >= 0.82:
+            return True
+    return False
+
+
+def _dedupe_tokens(value: str) -> set[str]:
+    cleaned = re.sub(r"_\(source:[^)]+\)_", "", value)
+    return {
+        token.lower()
+        for token in re.findall(r"[A-Za-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", cleaned)
+        if token.lower() not in {"source", "run", "session"}
+    }
 
 
 def _normalize_text(value: str) -> str:

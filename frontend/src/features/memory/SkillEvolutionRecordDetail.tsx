@@ -41,6 +41,12 @@ export function SkillEvolutionRecordDetail({ record }: { record: SkillEvolutionR
         <MetricBlock label="改动文件" value={String(changedFileCount)} />
       </div>
 
+      {record.status === 'failed' && (
+        <DetailSection title="失败原因" icon={<XCircleIcon />}>
+          <p>{record.riskNotes || record.reusableReason || record.routerGate?.reason || '暂无失败原因。'}</p>
+        </DetailSection>
+      )}
+
       <DetailSection title="Router Gate" icon={<GitBranch size={14} />}>
         <p>{record.routerGate?.reason || '暂无 gate 原因'}</p>
         <div className="mt-2 flex flex-wrap gap-1">
@@ -107,4 +113,8 @@ export function SkillEvolutionRecordDetail({ record }: { record: SkillEvolutionR
       )}
     </article>
   );
+}
+
+function XCircleIcon() {
+  return <AlertTriangle size={14} color="var(--color-error)" />;
 }

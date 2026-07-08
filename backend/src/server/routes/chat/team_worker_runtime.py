@@ -6,12 +6,14 @@
 """
 
 import asyncio
+import hashlib
 from dataclasses import dataclass
 
 from agentscope.message import UserMsg
 
 from src.agents.factory import AgentModelOptions, get_or_create_agent
 from src.config.runtime_settings import get_effective_model_settings
+from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
 from src.server.routes.agents import get_registered_agent
 from src.server.routes.chat.helpers import _sse_event, _trim_text
 from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload, _merge_hitl_tool_calls
@@ -105,6 +107,12 @@ async def run_team_worker(request: TeamWorkerRuntimeRequest) -> None:
     worker_knowledge_tools = _build_runtime_knowledge_tools(worker_config)
     worker_skills = select_relevant_skills(worker_skill_ids, data.message)
     worker_skill_prompt = build_skill_system_prompt_from_skills(worker_skills)
+    worker_memory_prompt = build_memory_injection_text(
+        MemoryRetrievalContext(
+            agent_id=member.agent_id,
+            agent_name=worker_name,
+        ),
+    )
     worker_system_prompt = "\n\n".join(
         part
         for part in [
@@ -112,9 +120,11 @@ async def run_team_worker(request: TeamWorkerRuntimeRequest) -> None:
             _build_runtime_context_prompt(),
             _build_worker_system_prompt(data.team_name, data.agent_name, member),
             worker_skill_prompt,
+            worker_memory_prompt,
         ]
         if part
     )
+    worker_system_prompt_cache_key = hashlib.sha256(worker_system_prompt.encode("utf-8")).hexdigest()[:16]
     worker_cache_key = ",".join(sorted(skill.id for skill in worker_skills))
     worker_fallback_names = worker_model_config.fallback if worker_model_config else runtime_model_settings.fallback_models
     worker_fallback_cache_key = ",".join(worker_fallback_names)
@@ -128,6 +138,7 @@ async def run_team_worker(request: TeamWorkerRuntimeRequest) -> None:
         f"thinking-{data.deep_thinking}:fallbacks-{worker_fallback_cache_key}:"
         f"skills-{worker_cache_key}:mcp-{worker_mcp_cache_key}:"
         f"knowledge-{worker_knowledge_cache_key}:"
+        f"prompt-{worker_system_prompt_cache_key}:"
         f"guardrails-{_guardrail_cache_key(worker_guardrails)}"
     )
     worker_agent = get_or_create_agent(
@@ -142,6 +153,9 @@ async def run_team_worker(request: TeamWorkerRuntimeRequest) -> None:
         guardrails=worker_guardrails,
         mcp_servers=worker_mcp_servers,
         knowledge_tools=worker_knowledge_tools,
+        parent_agent_id=member.agent_id,
+        parent_agent_name=worker_name,
+        session_id=request.session_id,
         on_fallback_event=_make_fallback_trace_recorder(
             session_id=request.session_id,
             persist=not data.sandbox,

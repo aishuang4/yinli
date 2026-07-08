@@ -30,6 +30,39 @@ class WikiVaultSyncResult:
     files: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class WikiVaultGraphNode:
+    """Wiki vault 图谱节点。"""
+
+    id: str
+    kind: str
+    label: str
+    path: str
+    documents: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class WikiVaultGraphEdge:
+    """Wiki vault 图谱边。"""
+
+    id: str
+    source: str
+    target: str
+    weight: int
+    documents: list[str] = field(default_factory=list)
+    type: str = "co_occurs"
+
+
+@dataclass(frozen=True)
+class WikiVaultGraphResult:
+    """Wiki vault 图谱响应数据。"""
+
+    nodes: list[WikiVaultGraphNode]
+    edges: list[WikiVaultGraphEdge]
+    documents: int
+    history_limit: int
+
+
 class MemoryWikiVaultSyncer:
     """把权威记忆源同步为 Obsidian-compatible vault。"""
 
@@ -44,6 +77,7 @@ class MemoryWikiVaultSyncer:
         self._entities: dict[str, MemoryEntity] = {}
         self._entity_backlinks: dict[str, set[str]] = defaultdict(set)
         self._entity_edges: Counter[tuple[str, str]] = Counter()
+        self._entity_edge_documents: dict[tuple[str, str], set[str]] = defaultdict(set)
 
     def sync(self, *, history_limit: int = 200) -> WikiVaultSyncResult:
         """生成 wiki 视图，并返回写入统计。"""
@@ -52,6 +86,7 @@ class MemoryWikiVaultSyncer:
         self._entities.clear()
         self._entity_backlinks.clear()
         self._entity_edges.clear()
+        self._entity_edge_documents.clear()
         self.wiki_root.mkdir(parents=True, exist_ok=True)
 
         written.append(self._write_readme())
@@ -68,6 +103,42 @@ class MemoryWikiVaultSyncer:
             skills=skill_count,
             entities=entity_count,
             files=[str(path.relative_to(self.wiki_root)) for path in written],
+        )
+
+    def graph(self, *, history_limit: int = 200, edge_limit: int = 300) -> WikiVaultGraphResult:
+        """从权威记忆源生成结构化实体图谱，不写入 wiki 文件。"""
+
+        self._entities.clear()
+        self._entity_backlinks.clear()
+        self._entity_edges.clear()
+        self._entity_edge_documents.clear()
+
+        documents = self._index_graph_sources(history_limit=history_limit)
+        nodes = [
+            WikiVaultGraphNode(
+                id=entity.id,
+                kind=entity.kind,
+                label=entity.name,
+                path=f"{entity.path}.md",
+                documents=sorted(self._entity_backlinks.get(entity.id, set())),
+            )
+            for entity in sorted(self._entities.values(), key=lambda item: (item.kind, item.name.lower()))
+        ]
+        edges = [
+            WikiVaultGraphEdge(
+                id=f"{left}__{right}",
+                source=left,
+                target=right,
+                weight=weight,
+                documents=sorted(self._entity_edge_documents.get((left, right), set())),
+            )
+            for (left, right), weight in self._entity_edges.most_common(edge_limit)
+        ]
+        return WikiVaultGraphResult(
+            nodes=nodes,
+            edges=edges,
+            documents=documents,
+            history_limit=history_limit,
         )
 
     def _write_readme(self) -> Path:
@@ -199,6 +270,49 @@ class MemoryWikiVaultSyncer:
             written.append(self._write(path, content))
         return len(skills)
 
+    def _index_graph_sources(self, *, history_limit: int) -> int:
+        count = 0
+        for source, target, _title, forced_entities in self._iter_existing_markdown_memories():
+            self._entity_links_for_document(
+                target,
+                source.read_text(encoding="utf-8"),
+                forced_entities,
+            )
+            count += 1
+
+        for node in list_memory_nodes(limit=history_limit):
+            agent_id = str(node.get("agent_id") or "unknown")
+            node_date = str(node.get("node_date") or "unknown-date")
+            node_id = str(node.get("id") or "")
+            title = str(node.get("title") or node_id or "历史记忆")
+            target = (
+                self.wiki_root
+                / "history"
+                / _safe_filename(agent_id)
+                / f"{_safe_filename(node_date)}-{_safe_filename(node_id or title)}.md"
+            )
+            self._entity_links_for_document(
+                target,
+                _history_node_plain_text(node),
+                [
+                    make_memory_entity("agent", agent_id),
+                    make_memory_entity("date", node_date),
+                ],
+            )
+            count += 1
+
+        for skill in list_skills():
+            name = str(skill.get("name") or skill.get("id") or "skill")
+            target = self.wiki_root / "skills" / f"{_safe_filename(name)}.md"
+            self._entity_links_for_document(
+                target,
+                _skill_plain_text(skill),
+                [make_memory_entity("skill", name)],
+            )
+            count += 1
+
+        return count
+
     def _sync_entities(self, written: list[Path]) -> int:
         for entity in sorted(self._entities.values(), key=lambda item: (item.kind, item.name.lower())):
             path = self.wiki_root / "entities" / _safe_filename(entity.kind) / f"{_safe_filename(entity.name)}.md"
@@ -226,6 +340,7 @@ class MemoryWikiVaultSyncer:
             for right in entities[index + 1:]:
                 key = tuple(sorted([left.id, right.id]))
                 self._entity_edges[key] += 1
+                self._entity_edge_documents[key].add(relative)
         return [entity.link for entity in entities]
 
     def _write(self, path: Path, content: str) -> Path:

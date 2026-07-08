@@ -15,6 +15,7 @@ from typing import Any
 
 from src.storage.database import (
     get_memory_node,
+    list_memory_retrieval_feedback_scores,
     list_memory_nodes,
     mark_memory_node_used,
     search_memory_nodes,
@@ -110,7 +111,15 @@ class MemoryNodeService:
         if not node:
             raise ValueError(f"Memory node not found: {node_id}")
         if node["status"] != "active":
-            self.vector_backend.delete(MEMORY_NODES_COLLECTION, [node_id])
+            try:
+                self.vector_backend.delete(MEMORY_NODES_COLLECTION, [node_id])
+            except Exception as exc:
+                updated = update_memory_node_vector_state(
+                    node_id,
+                    vector_status="pending",
+                    vector_error=str(exc),
+                )
+                return updated or node
             updated = update_memory_node_vector_state(node_id, vector_status="deleted")
             return updated or node
         try:
@@ -136,6 +145,7 @@ class MemoryNodeService:
         workspace_id: str = "default",
         project_id: str = "",
         user_id: str | None = None,
+        status: str | None = "active",
     ) -> dict[str, Any]:
         """返回最近或指定范围的节点树。"""
 
@@ -148,6 +158,7 @@ class MemoryNodeService:
             user_id=user_id,
             date_from=resolved_from,
             date_to=resolved_to,
+            status=status,
             limit=limit,
         )
         return {
@@ -159,6 +170,7 @@ class MemoryNodeService:
                     "title": node["title"],
                     "summary": node["summary"],
                     "tags": node["tags"],
+                    "status": node["status"],
                 }
                 for node in nodes
             ],
@@ -175,6 +187,7 @@ class MemoryNodeService:
         workspace_id: str = "default",
         project_id: str = "",
         user_id: str | None = None,
+        status: str | None = "active",
     ) -> dict[str, Any]:
         """按语义或日期查询节点详情。"""
 
@@ -187,27 +200,56 @@ class MemoryNodeService:
             workspace_id=workspace_id,
             project_id=project_id,
             user_id=user_id,
+            status=status,
         )
-        if vector_results:
-            nodes = [
-                node
-                for result in vector_results
-                if (node := get_memory_node(result.id)) and node["status"] == "active"
-            ]
-        else:
-            nodes = search_memory_nodes(
+        vector_nodes = []
+        for result in vector_results:
+            node = get_memory_node(result.id)
+            if node and _node_matches_query_filters(
+                node,
                 workspace_id=workspace_id,
                 project_id=project_id,
                 agent_id=agent_id,
                 user_id=user_id,
                 date_from=date_from,
                 date_to=date_to,
-                query_text=query_text,
-                limit=limit,
-            )
+                status=status,
+            ):
+                candidate = dict(node)
+                candidate["_vector_score"] = float(result.score or 0.0)
+                candidate["_retrieval_sources"] = ["vector"]
+                vector_nodes.append(candidate)
+        lexical_nodes = search_memory_nodes(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            agent_id=agent_id,
+            user_id=user_id,
+            date_from=date_from,
+            date_to=date_to,
+            query_text=query_text,
+            status=status,
+            limit=min(max(limit * 2, limit), 100),
+        )
+        for node in lexical_nodes:
+            node["_retrieval_sources"] = ["lexical"]
+        nodes = _merge_query_candidates(vector_nodes, lexical_nodes)
+        feedback_scores = _load_retrieval_feedback_scores()
         for node in nodes:
+            node["_feedback_score"] = feedback_scores.get(str(node.get("id") or ""), 0.0)
+        nodes = _rerank_nodes(nodes, query_text=query_text)
+        for node in nodes[:limit]:
             mark_memory_node_used(node["id"])
-        return {"results": [_node_query_payload(node) for node in nodes[:limit]]}
+        results = nodes[:limit]
+        return {
+            "results": [_node_query_payload(node) for node in results],
+            "meta": _query_meta(
+                query_text=query_text,
+                vector_count=len(vector_nodes),
+                lexical_count=len(lexical_nodes),
+                merged_count=len(nodes),
+                returned_nodes=results,
+            ),
+        }
 
     def _query_vector(
         self,
@@ -220,8 +262,9 @@ class MemoryNodeService:
         workspace_id: str,
         project_id: str,
         user_id: str | None,
+        status: str | None,
     ):
-        if not query_text.strip():
+        if not query_text.strip() or status != "active":
             return []
         filters: dict[str, Any] = {
             "workspace_id": workspace_id,
@@ -245,6 +288,59 @@ class MemoryNodeService:
             )
         except Exception:
             return []
+
+def _node_matches_query_filters(
+    node: dict[str, Any],
+    *,
+    workspace_id: str,
+    project_id: str,
+    agent_id: str | None,
+    user_id: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    status: str | None,
+) -> bool:
+    """校验向量候选仍满足 SQLite 权威过滤条件。"""
+
+    if node.get("workspace_id") != workspace_id or node.get("project_id") != project_id:
+        return False
+    if status is not None and node.get("status") != status:
+        return False
+    if agent_id and node.get("agent_id") != agent_id:
+        return False
+    if user_id and node.get("user_id") != user_id:
+        return False
+    node_date = str(node.get("node_date") or "")
+    if date_from and node_date < date_from:
+        return False
+    if date_to and node_date > date_to:
+        return False
+    return True
+
+
+def _merge_query_candidates(
+    vector_nodes: list[dict[str, Any]],
+    lexical_nodes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """合并向量和关键词候选，SQLite 同 ID 节点保留向量分数。"""
+
+    merged: dict[str, dict[str, Any]] = {}
+    for node in vector_nodes:
+        node_id = str(node.get("id") or "")
+        if node_id:
+            merged[node_id] = node
+    for node in lexical_nodes:
+        node_id = str(node.get("id") or "")
+        if not node_id:
+            continue
+        if node_id in merged:
+            sources = set(merged[node_id].get("_retrieval_sources") or [])
+            sources.update(node.get("_retrieval_sources") or [])
+            merged[node_id].update({key: value for key, value in node.items() if key != "_vector_score"})
+            merged[node_id]["_retrieval_sources"] = sorted(sources)
+        else:
+            merged[node_id] = node
+    return list(merged.values())
 
 
 def _collection_config() -> VectorCollectionConfig:
@@ -288,12 +384,113 @@ def _node_query_payload(node: dict[str, Any]) -> dict[str, Any]:
         "nodeId": node["id"],
         "date": node["node_date"],
         "agentId": node["agent_id"],
+        "status": node["status"],
+        "title": node["title"],
+        "confidence": node["confidence"],
+        "lastUsedAt": node["last_used_at"],
+        "useCount": node["use_count"],
+        "sourceSessionId": node["source_session_id"],
+        "sourceRunId": node["source_run_id"],
+        "sourceMessageId": node["source_message_id"],
         "userInputs": node["user_inputs"],
         "agentFinalOutputs": node["agent_final_outputs"],
         "summary": node["summary"],
         "conversationDigest": node["conversation_digest"],
         "sourceRunIds": [node["source_run_id"]] if node["source_run_id"] else [],
         "tags": node["tags"],
+    }
+
+
+def _rerank_nodes(nodes: list[dict[str, Any]], *, query_text: str) -> list[dict[str, Any]]:
+    query_terms = _rank_terms(query_text)
+
+    def score(node: dict[str, Any]) -> tuple[float, str]:
+        rank_score, matched_terms = _node_rank_score(node, query_terms=query_terms)
+        node["_rank_score"] = rank_score
+        node["_matched_terms"] = sorted(matched_terms)
+        return (rank_score, str(node.get("node_date") or ""))
+
+    return sorted(nodes, key=score, reverse=True)
+
+
+def _query_meta(
+    *,
+    query_text: str,
+    vector_count: int,
+    lexical_count: int,
+    merged_count: int,
+    returned_nodes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """生成召回质量审计摘要，不包含完整记忆正文。"""
+
+    query_terms = sorted(_rank_terms(query_text))
+    top_score = float(returned_nodes[0].get("_rank_score") or 0.0) if returned_nodes else 0.0
+    retrieval_sources = sorted({
+        source
+        for node in returned_nodes
+        for source in (node.get("_retrieval_sources") or [])
+    })
+    return {
+        "queryTermCount": len(query_terms),
+        "queryTerms": query_terms[:20],
+        "vectorCandidateCount": vector_count,
+        "lexicalCandidateCount": lexical_count,
+        "mergedCandidateCount": merged_count,
+        "returnedCount": len(returned_nodes),
+        "topScore": round(top_score, 4),
+        "empty": len(returned_nodes) == 0,
+        "retrievalSources": retrieval_sources,
+        "resultQuality": [
+            {
+                "nodeId": str(node.get("id") or ""),
+                "rankScore": round(float(node.get("_rank_score") or 0.0), 4),
+                "vectorScore": round(float(node.get("_vector_score") or 0.0), 4),
+                "feedbackScore": round(float(node.get("_feedback_score") or 0.0), 4),
+                "matchedTerms": list(node.get("_matched_terms") or [])[:20],
+                "sources": list(node.get("_retrieval_sources") or []),
+                "confidence": float(node.get("confidence") or 0.0),
+                "useCount": int(node.get("use_count") or 0),
+                "pinned": bool(node.get("pinned")),
+            }
+            for node in returned_nodes[:10]
+        ],
+    }
+
+
+def _node_rank_score(node: dict[str, Any], *, query_terms: set[str]) -> tuple[float, set[str]]:
+    """计算轻量召回排序分，并返回命中的查询词。"""
+
+    text = "\n".join(
+        [
+            str(node.get("title") or ""),
+            str(node.get("summary") or ""),
+            str(node.get("conversation_digest") or ""),
+            " ".join(str(item) for item in node.get("tags") or []),
+        ]
+    ).lower()
+    matched_terms = {term for term in query_terms if term in text}
+    lexical = float(len(matched_terms))
+    vector = min(float(node.get("_vector_score") or 0), 1.0) * 0.35
+    feedback = max(-1.0, min(float(node.get("_feedback_score") or 0), 1.0))
+    pinned = 0.4 if node.get("pinned") else 0.0
+    confidence = min(float(node.get("confidence") or 0), 1.0) * 0.25
+    used = min(int(node.get("use_count") or 0), 10) * 0.01
+    return lexical + vector + feedback + pinned + confidence + used, matched_terms
+
+
+def _load_retrieval_feedback_scores(limit: int = 200) -> dict[str, float]:
+    """从结构化召回反馈表聚合分数，用于轻量排序权重。"""
+
+    try:
+        return list_memory_retrieval_feedback_scores(limit=limit)
+    except Exception:
+        return {}
+
+
+def _rank_terms(value: str) -> set[str]:
+    return {
+        token.lower()
+        for token in re.findall(r"[A-Za-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", value)
     }
 
 

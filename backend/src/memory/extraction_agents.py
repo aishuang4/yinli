@@ -15,6 +15,8 @@ from agentscope.permission import PermissionMode
 from pydantic import BaseModel, Field
 
 from src.agents.runtime_types import AgentGuardrails, AgentModelOptions, RuntimeToolScope
+from src.memory.admission import MemoryAdmissionScores
+from src.memory.settings import MemoryAdmissionPolicy
 from src.memory.skill_evolution import SkillEvolutionGateDecision, WorkflowEvidence
 from src.tools.memory_reflection import MemoryFileToolSet, SkillDraftPropose
 
@@ -32,6 +34,19 @@ SkillGranularity = Literal["too_small", "atomic", "too_broad"]
 
 MEMORY_REFLECTION_PROMPT_VERSION = "2026-07-06-v5"
 SKILL_EVOLUTION_PROMPT_VERSION = "2026-07-06-v1"
+MEMORY_ADMISSION_PROMPT_VERSION = "2026-07-07-v1"
+
+
+class MemoryAdmissionAgentPayload(BaseModel):
+    """MemoryAdmissionScoringAgent 的结构化输出。"""
+
+    history: float = Field(default=0.0, ge=0, le=1)
+    markdown: float = Field(default=0.0, ge=0, le=1)
+    skill: float = Field(default=0.0, ge=0, le=1)
+    reason: str = Field(default="", max_length=500)
+    sensitive: bool = False
+
+    model_config = {"extra": "ignore"}
 
 
 class MemoryExtractionItem(BaseModel):
@@ -145,6 +160,49 @@ async def run_memory_reflection_agent(
     if not data:
         return None
     return MemoryReflectionAgentPayload.model_validate(data)
+
+
+async def run_memory_admission_scoring_agent(
+    *,
+    user_message: str,
+    assistant_text: str,
+    agent_id: str,
+    agent_name: str,
+    rule_scores: MemoryAdmissionScores,
+    rule_signals: list[str],
+    policy: MemoryAdmissionPolicy,
+    model_name: str,
+    fallback_names: list[str] | None = None,
+    invocation_key: str = "",
+) -> MemoryAdmissionAgentPayload | None:
+    """调用模型准入评分 Agent，对规则评分做增强。"""
+
+    text = await _run_json_agent(
+        agent_id=_system_agent_id(
+            "memory-admission",
+            model_name,
+            fallback_names or [],
+            f"{MEMORY_ADMISSION_PROMPT_VERSION}:{invocation_key}",
+        ),
+        name="MemoryAdmissionScoringAgent",
+        system_prompt=_build_memory_admission_system_prompt(),
+        user_prompt=_build_memory_admission_user_prompt(
+            user_message=user_message,
+            assistant_text=assistant_text,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            rule_scores=rule_scores,
+            rule_signals=rule_signals,
+            policy=policy,
+        ),
+        model_name=model_name,
+        fallback_names=fallback_names or [],
+        max_tokens=900,
+    )
+    data = _extract_json_object(text)
+    if not data:
+        return None
+    return MemoryAdmissionAgentPayload.model_validate(data)
 
 
 async def run_skill_evolution_agent(
@@ -377,6 +435,69 @@ def _build_memory_reflection_system_prompt(scope: str) -> str:
             ensure_ascii=False,
         ),
     ])
+
+
+def _build_memory_admission_system_prompt() -> str:
+    return "\n".join([
+        "你是 MemoryAdmissionScoringAgent，一个后台基础设施 Agent。",
+        "你只负责判断本轮完成对话是否值得进入长期记忆链路，不写入任何记忆。",
+        "只返回一个紧凑、合法的 JSON 对象。不要写 markdown fence。",
+        "评分范围 0 到 1：",
+        "- history：是否值得保存为历史记忆节点。普通实质工作可较高，闲聊和临时确认应很低。",
+        "- markdown：是否值得写入长期 Markdown 记忆。只有稳定偏好、规则、纠正、可复用经验才应较高。",
+        "- skill：是否值得进入 Skill 自进化评估。只有可复用、原子化、有完成证据的工作才应较高。",
+        "必须保守：不要因为出现技术词就提高 markdown 或 skill；一次性任务、低价值闲聊、未完成工作要低分。",
+        "如果包含 token、password、private key、cookie、验证码、身份证号、银行卡号、手机号、邮箱等敏感信息，sensitive=true，并把三类分数压低。",
+        "模型评分会和规则评分加权融合，因此请只按语义质量评分，不要照抄规则分数。",
+        "Schema:",
+        json.dumps(
+            {
+                "history": 0.0,
+                "markdown": 0.0,
+                "skill": 0.0,
+                "sensitive": False,
+                "reason": "中文说明评分原因",
+            },
+            ensure_ascii=False,
+        ),
+    ])
+
+
+def _build_memory_admission_user_prompt(
+    *,
+    user_message: str,
+    assistant_text: str,
+    agent_id: str,
+    agent_name: str,
+    rule_scores: MemoryAdmissionScores,
+    rule_signals: list[str],
+    policy: MemoryAdmissionPolicy,
+) -> str:
+    payload = {
+        "agent": {"id": agent_id, "name": agent_name},
+        "userMessage": user_message,
+        "assistantFinalOutput": assistant_text,
+        "ruleGate": {
+            "scores": {
+                "history": rule_scores.history,
+                "markdown": rule_scores.markdown,
+                "skill": rule_scores.skill,
+            },
+            "signals": rule_signals,
+        },
+        "thresholds": {
+            "history": policy.history_threshold,
+            "markdown": policy.markdown_threshold,
+            "skill": policy.skill_threshold,
+        },
+        "policy": {
+            "beConservative": True,
+            "doNotWriteMemory": True,
+            "outputLanguage": "zh-CN",
+            "rejectSensitive": policy.reject_sensitive,
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _build_memory_reflection_user_prompt(

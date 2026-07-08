@@ -13,7 +13,7 @@ from src.storage.database import mark_skill_evolution_record_registered, upsert_
 
 
 SkillGateRisk = Literal["low", "medium", "high", "skip"]
-SkillEvolutionRecordStatus = Literal["draft", "skipped", "failed"]
+SkillEvolutionRecordStatus = Literal["draft", "registered", "skipped", "failed"]
 
 _REUSABLE_MARKERS = (
     "skill",

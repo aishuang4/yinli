@@ -58,6 +58,7 @@ def memory_reflection_audit_payload(result: Any) -> dict[str, Any]:
     updates = list(getattr(result, "updates", []) or [])
     skill_record = getattr(result, "skill_evolution_record", None) or {}
     skill_candidate = getattr(result, "skill_candidate", None)
+    admission = getattr(result, "admission", None)
     scopes = sorted({str(getattr(update, "scope", "")) for update in updates if getattr(update, "scope", "")})
     operations = [
         {
@@ -78,6 +79,7 @@ def memory_reflection_audit_payload(result: Any) -> dict[str, Any]:
         "skillEvolutionStatus": str(skill_record.get("status") or ""),
         "registeredSkillId": str(skill_record.get("registeredSkillId") or ""),
         "ignoredReason": str(getattr(result, "ignored_reason", "") or ""),
+        "admission": admission.audit_payload() if hasattr(admission, "audit_payload") else {},
     }
 
 

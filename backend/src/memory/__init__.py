@@ -13,7 +13,13 @@ from src.memory.reflection import (
     reflect_completed_run_memory_with_agents,
 )
 from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
-from src.memory.wiki_vault import MemoryWikiVaultSyncer, WikiVaultSyncResult
+from src.memory.wiki_vault import (
+    MemoryWikiVaultSyncer,
+    WikiVaultGraphEdge,
+    WikiVaultGraphNode,
+    WikiVaultGraphResult,
+    WikiVaultSyncResult,
+)
 
 __all__ = [
     "MemoryNodeService",
@@ -29,5 +35,8 @@ __all__ = [
     "reflect_completed_run_memory",
     "reflect_completed_run_memory_with_agents",
     "MemoryWikiVaultSyncer",
+    "WikiVaultGraphEdge",
+    "WikiVaultGraphNode",
+    "WikiVaultGraphResult",
     "WikiVaultSyncResult",
 ]

@@ -1,6 +1,6 @@
 # Agent Workstation 当前架构总览
 
-> 状态：2026-07-06 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
+> 状态：2026-07-07 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
 
 ## 项目定位
 
@@ -67,14 +67,15 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 
 当前在线的是新记忆系统首版，不是旧 memory summarize：
 
-- **运行前注入**：`memory/retrieval.py` 读取 user / agent / global Markdown 摘要和最近 30 天节点树；`run_context.py` 在 readiness 通过后注入。
+- **运行前注入**：`memory/retrieval.py` 读取 user / agent / global Markdown 摘要和最近 30 天节点树；`run_context.py` 在 readiness 通过后注入主 Agent / Team Leader；`team_worker_runtime.py` 按 single agent 同策略注入 Team Worker。
 - **历史记忆**：底层 `memory_nodes` 只保存用户输入、Agent 最终输出和摘要索引，不保存工具调用过程；写入后同步到 `VectorStoreBackend` 的 `memory_nodes` collection。
 - **Markdown 长期记忆**：user memory、agent memory、global preference memory 分别保存为 `user_memory.md`、`agent_memory.md`、`global_memory.md`，没有旧 `default.md` 兼容读取。
-- **Memory 管理入口**：前端 Memory 页面首版已接入，用户记忆和全局记忆各只有一个管理入口；Agent 记忆按 Agent 选择，每个 Agent 对应一份 `agent_memory.md`；历史记忆按“Agent -> 时间节点 -> 具体记忆”三段式查看，底层使用 `memory_nodes`。Skill 自进化队列已作为 Memory 页面中间态入口接入，可查看候选状态、草稿、gate 原因、workflow evidence、风险提示和注册状态。
-- **Memory Wiki**：`MemoryWikiVaultSyncer` 可从三类 Markdown 记忆、`memory_nodes` 和已注册 Skills 手动生成 `backend/data/memory/wiki/` 只读 Obsidian-compatible 视图，并生成 `entities/` 实体页与 `entities/graph.md` 共现图；Memory 页面可同步、查看生成结果、打开文件夹或通过 Obsidian 深链打开 vault。当前不作为运行时事实源，也不反向写回权威存储。
-- **记忆查询工具**：普通 Agent 默认注入 `memory_node_tree` 和 `memory_node_query`，需要详情时由 Agent 主动查询。
+- **Memory 管理入口**：前端 Memory 页面首版已接入，用户记忆和全局记忆各只有一个管理入口；Agent 记忆按 Agent 选择，每个 Agent 对应一份 `agent_memory.md`；历史记忆按“Agent -> 时间节点 -> 具体记忆”三段式查看，底层使用 `memory_nodes`。页面已支持历史记忆禁用 / 删除 / 恢复、Skill 自进化队列操作、注册失败原因可视化、设置快照、召回质量摘要、召回命中相关性反馈和 `MEMORY_AUDIT` 审计详情。
+- **Memory Wiki**：`MemoryWikiVaultSyncer` 可从三类 Markdown 记忆、`memory_nodes` 和已注册 Skills 手动生成 `backend/data/memory/wiki/` 只读 Obsidian-compatible 视图，并生成 `entities/` 实体页与 `entities/graph.md` 共现图；`/api/memory/wiki/graph` 提供结构化实体图谱给前端展示。Memory 页面可同步、查看图谱和生成结果、打开文件夹或通过 Obsidian 深链打开 vault。当前不作为运行时事实源，也不反向写回权威存储。
+- **记忆查询工具**：普通 Agent 默认注入 `memory_node_tree` 和 `memory_node_query`，需要详情时由 Agent 主动查询；工具召回会写入 `MEMORY_AUDIT`，记录 query、filters、resultCount、命中 nodeId 和 retrievalQuality 质量指标。
 - **运行后提炼**：`completion.py` 成功收尾后后台并行调用 `UserMemoryReflectionAgent`、`AgentMemoryReflectionAgent`、`GlobalMemoryReflectionAgent`，通过绑定文件的 `memory_read` / `memory_add` / `memory_update` / `memory_delete` 操作 Markdown 记忆，不阻塞主对话。
-- **Skill 自进化现状**：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、router gate、workflow evidence、颗粒度 gate、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和用户显式请求生成 Skill 的手动触发流；自动生成 / 手动注册 Skill 会写入 `backend/data/skill_packages/{skill_name}/SKILL.md` 并支持按 Skill 名称导出 zip。Memory 页面已能查看候选队列；当前仍缺注册失败原因可视化、队列操作和更强筛选。
+- **准入、记忆与召回质量**：`MemoryAdmissionGate` 当前是规则评分 + 可选模型评分增强，会输出 history / markdown / skill 三类评分、阈值、signals、模型评分、失败原因、脱敏摘要和脱敏类型统计；Memory 设置页可编辑准入阈值、模型评分开关和 Markdown 质量参数。Markdown 写入会做敏感信息过滤、近似去重、冲突合并、失败重试和 `# Summary` 压缩摘要；历史记忆查询会合并向量候选和 SQLite 关键词结果，再按查询词命中、向量分数、结构化反馈分、置顶、置信度、使用次数和日期做轻量重排，用户对命中 node 的相关 / 不相关反馈写入 `memory_retrieval_feedback` 表并同步写 `MEMORY_AUDIT` 追溯，Agent 工具查询会进入召回审计并带质量指标，运行前只注入 20 条摘要索引。
+- **Skill 自进化现状**：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、router gate、workflow evidence、颗粒度 gate、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和用户显式请求生成 Skill 的手动触发流；自动生成 / 手动注册 Skill 会写入 `backend/data/skill_packages/{skill_name}/SKILL.md` 并支持按 Skill 名称导出 zip。Memory 页面已能查看和操作候选队列；注册后不自动绑定 Agent。
 - **向量存储**：全局 `VectorStoreBackend` 抽象已支持 `disabled` / `zvec`，`VECTOR_STORE_PROVIDER` 仅首次初始化生效，之后按持久化 `VectorStorePolicy` 启动。
 
 ## 存储

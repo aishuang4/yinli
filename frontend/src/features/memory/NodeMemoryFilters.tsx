@@ -6,7 +6,9 @@
 
 import { Search } from 'lucide-react';
 import { Button } from '@agentscope-ai/design';
-import { DateField, TextField } from '../../components/form';
+import { DateField, SelectField, TextField } from '../../components/form';
+import type { MemoryNodeStatus } from '../../types/memory';
+import { NODE_STATUS_OPTIONS } from './memoryViewConfig';
 
 interface NodeMemoryFiltersProps {
   query: string;
@@ -15,6 +17,8 @@ interface NodeMemoryFiltersProps {
   setDateFrom: (value: string) => void;
   dateTo: string;
   setDateTo: (value: string) => void;
+  status: MemoryNodeStatus | 'all';
+  setStatus: (value: MemoryNodeStatus | 'all') => void;
   loading: boolean;
   onSearch: () => void;
 }
@@ -26,11 +30,13 @@ export function NodeMemoryFilters({
   setDateFrom,
   dateTo,
   setDateTo,
+  status,
+  setStatus,
   loading,
   onSearch,
 }: NodeMemoryFiltersProps) {
   return (
-    <div className="grid grid-cols-[minmax(260px,1fr)_150px_150px_auto] items-end gap-3">
+    <div className="grid grid-cols-[minmax(260px,1fr)_150px_150px_150px_auto] items-end gap-3">
       <TextField
         value={query}
         onChange={(event) => setQuery(event.target.value)}
@@ -47,6 +53,12 @@ export function NodeMemoryFilters({
         value={dateTo}
         onChange={setDateTo}
         placeholder="结束日期"
+      />
+      <SelectField
+        label=""
+        value={status}
+        options={NODE_STATUS_OPTIONS}
+        onChange={(value) => setStatus(value as MemoryNodeStatus | 'all')}
       />
       <Button type="primary" icon={<Search size={14} />} onClick={onSearch} loading={loading}>
         查询

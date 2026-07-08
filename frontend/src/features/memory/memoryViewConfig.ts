@@ -10,14 +10,15 @@ import {
   FileText,
   FolderSync,
   Globe2,
+  Settings2,
   Sparkles,
   UserRound,
   XCircle,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { MarkdownMemoryScope, SkillEvolutionRecordStatus } from '../../types/memory';
+import type { MarkdownMemoryScope, MemoryNodeStatus, SkillEvolutionRecordStatus } from '../../types/memory';
 
-export type MemoryTab = 'markdown' | 'nodes' | 'skills' | 'wiki';
+export type MemoryTab = 'markdown' | 'nodes' | 'skills' | 'wiki' | 'settings';
 
 export interface MarkdownTarget {
   key: MarkdownMemoryScope;
@@ -37,6 +38,15 @@ export const MEMORY_TABS: Array<{ key: MemoryTab; label: string; icon: typeof Fi
   { key: 'nodes', label: '历史记忆', icon: Database },
   { key: 'skills', label: 'Skill 自进化队列', icon: Sparkles },
   { key: 'wiki', label: 'Wiki Vault', icon: FolderSync },
+  { key: 'settings', label: '设置与审计', icon: Settings2 },
+];
+
+export const NODE_STATUS_OPTIONS: Array<{ label: string; value: MemoryNodeStatus | 'all' }> = [
+  { label: '活跃记忆', value: 'active' },
+  { label: '全部状态', value: 'all' },
+  { label: '已禁用', value: 'disabled' },
+  { label: '已归档', value: 'archived' },
+  { label: '已删除', value: 'deleted' },
 ];
 
 export const SKILL_STATUS_OPTIONS: Array<{ label: string; value: SkillEvolutionRecordStatus | 'all' }> = [

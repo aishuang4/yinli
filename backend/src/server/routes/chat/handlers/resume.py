@@ -585,6 +585,9 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     guardrails=leader_guardrails,
                     mcp_servers=leader_mcp_servers,
                     knowledge_tools=leader_knowledge_tools,
+                    parent_agent_id=leader_agent_id,
+                    parent_agent_name=leader_agent_name,
+                    session_id=interaction.session_id,
                 )
                 user_msg = UserMsg(
                     name="user",

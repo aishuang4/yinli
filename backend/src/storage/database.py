@@ -8,6 +8,7 @@ surface can stay stable while persistence moves off flat files.
 
 import json
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
@@ -408,6 +409,22 @@ def ensure_db() -> None:
                     ON memory_nodes(status, node_date DESC);
                 CREATE INDEX IF NOT EXISTS idx_memory_nodes_source_run
                     ON memory_nodes(source_run_id);
+                CREATE TABLE IF NOT EXISTS memory_retrieval_feedback (
+                    id TEXT PRIMARY KEY,
+                    audit_event_id TEXT NOT NULL DEFAULT '',
+                    node_id TEXT NOT NULL,
+                    rating TEXT NOT NULL,
+                    query TEXT NOT NULL DEFAULT '',
+                    agent_id TEXT NOT NULL DEFAULT '',
+                    session_id TEXT NOT NULL DEFAULT '',
+                    reason TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(node_id) REFERENCES memory_nodes(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_memory_retrieval_feedback_node
+                    ON memory_retrieval_feedback(node_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_memory_retrieval_feedback_created
+                    ON memory_retrieval_feedback(created_at DESC);
                 CREATE TABLE IF NOT EXISTS skill_evolution_records (
                     id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL DEFAULT 'default',
@@ -1342,6 +1359,48 @@ def list_run_events(
     ]
 
 
+def list_run_events_by_type(
+    event_type: str,
+    *,
+    include_payload: bool = True,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """按事件类型列出运行事件，用于 Memory 审计等横向视图。"""
+
+    ensure_db()
+    safe_limit = max(1, min(int(limit or 50), 200))
+    safe_offset = max(0, int(offset or 0))
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM run_events
+            WHERE event_type = ?
+            ORDER BY created_at DESC, sort_order DESC
+            LIMIT ? OFFSET ?
+            """,
+            (event_type, safe_limit, safe_offset),
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "sessionId": row["session_id"],
+            "eventType": row["event_type"],
+            "scope": row["scope"],
+            "agentId": row["agent_id"],
+            "agentName": row["agent_name"],
+            "teamActivityId": row["team_activity_id"],
+            "status": row["status"],
+            "title": row["title"],
+            "content": row["content"],
+            "payload": _loads(row["payload"], {}) if include_payload else {},
+            "createdAt": row["created_at"],
+            "sortOrder": row["sort_order"],
+        }
+        for row in rows
+    ]
+
+
 def count_run_events(session_id: str) -> int:
     """Count normalized runtime events for one session."""
     ensure_db()
@@ -1857,7 +1916,7 @@ def list_memory_nodes(
     user_id: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-    status: str = "active",
+    status: str | None = "active",
     limit: int = 30,
 ) -> list[dict[str, Any]]:
     """按作用域和日期列出长期节点记忆。"""
@@ -1865,9 +1924,12 @@ def list_memory_nodes(
     ensure_db()
     query = """
         SELECT * FROM memory_nodes
-        WHERE workspace_id = ? AND project_id = ? AND status = ?
+        WHERE workspace_id = ? AND project_id = ?
     """
-    params: list[Any] = [workspace_id, project_id, status]
+    params: list[Any] = [workspace_id, project_id]
+    if status:
+        query += " AND status = ?"
+        params.append(status)
     if agent_id:
         query += " AND agent_id = ?"
         params.append(agent_id)
@@ -1896,7 +1958,7 @@ def search_memory_nodes(
     date_from: str | None = None,
     date_to: str | None = None,
     query_text: str = "",
-    status: str = "active",
+    status: str | None = "active",
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     """SQLite 关键词降级检索长期节点记忆。"""
@@ -1904,9 +1966,12 @@ def search_memory_nodes(
     ensure_db()
     query = """
         SELECT * FROM memory_nodes
-        WHERE workspace_id = ? AND project_id = ? AND status = ?
+        WHERE workspace_id = ? AND project_id = ?
     """
-    params: list[Any] = [workspace_id, project_id, status]
+    params: list[Any] = [workspace_id, project_id]
+    if status:
+        query += " AND status = ?"
+        params.append(status)
     if agent_id:
         query += " AND agent_id = ?"
         params.append(agent_id)
@@ -1953,6 +2018,29 @@ def update_memory_node_vector_state(
     return _memory_node_from_row(row) if row else None
 
 
+def update_memory_node_status(
+    node_id: str,
+    *,
+    status: str,
+) -> dict[str, Any] | None:
+    """软更新长期节点记忆状态。"""
+
+    ensure_db()
+    now = _utc_now()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE memory_nodes
+            SET status = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (status, now, node_id),
+        )
+        row = conn.execute("SELECT * FROM memory_nodes WHERE id = ?", (node_id,)).fetchone()
+        conn.commit()
+    return _memory_node_from_row(row) if row else None
+
+
 def mark_memory_node_used(node_id: str) -> dict[str, Any] | None:
     """记录长期节点记忆被查询使用。"""
 
@@ -1970,6 +2058,87 @@ def mark_memory_node_used(node_id: str) -> dict[str, Any] | None:
         row = conn.execute("SELECT * FROM memory_nodes WHERE id = ?", (node_id,)).fetchone()
         conn.commit()
     return _memory_node_from_row(row) if row else None
+
+
+def _memory_retrieval_feedback_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    """把召回反馈行转换为前端和排序共用的字典。"""
+
+    return {
+        "id": row["id"],
+        "auditEventId": row["audit_event_id"],
+        "nodeId": row["node_id"],
+        "rating": row["rating"],
+        "query": row["query"],
+        "agentId": row["agent_id"],
+        "sessionId": row["session_id"],
+        "reason": row["reason"],
+        "createdAt": row["created_at"],
+    }
+
+
+def record_memory_retrieval_feedback(data: dict[str, Any]) -> dict[str, Any]:
+    """记录用户对历史记忆召回命中的结构化反馈。"""
+
+    ensure_db()
+    now = _utc_now()
+    feedback_id = data.get("id") or f"mrf_{uuid.uuid4().hex}"
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO memory_retrieval_feedback (
+                id, audit_event_id, node_id, rating, query, agent_id,
+                session_id, reason, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                feedback_id,
+                data.get("audit_event_id") or "",
+                data["node_id"],
+                data["rating"],
+                data.get("query") or "",
+                data.get("agent_id") or "",
+                data.get("session_id") or "",
+                data.get("reason") or "",
+                data.get("created_at") or now,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM memory_retrieval_feedback WHERE id = ?",
+            (feedback_id,),
+        ).fetchone()
+        conn.commit()
+    return _memory_retrieval_feedback_from_row(row)
+
+
+def list_memory_retrieval_feedback(limit: int = 200) -> list[dict[str, Any]]:
+    """列出最近的召回反馈记录。"""
+
+    ensure_db()
+    safe_limit = max(1, min(int(limit or 200), 1000))
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM memory_retrieval_feedback
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [_memory_retrieval_feedback_from_row(row) for row in rows]
+
+
+def list_memory_retrieval_feedback_scores(limit: int = 500) -> dict[str, float]:
+    """按历史记忆节点聚合召回反馈分，用于轻量重排。"""
+
+    scores: dict[str, float] = {}
+    for item in reversed(list_memory_retrieval_feedback(limit=limit)):
+        node_id = str(item.get("nodeId") or "")
+        rating = str(item.get("rating") or "")
+        if not node_id:
+            continue
+        delta = 0.25 if rating == "relevant" else -0.45 if rating == "irrelevant" else 0.0
+        scores[node_id] = max(-1.0, min(scores.get(node_id, 0.0) + delta, 1.0))
+    return scores
 
 
 def _skill_evolution_record_from_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -2143,6 +2312,39 @@ def mark_skill_evolution_record_registered(
             WHERE id = ?
             """,
             (registered_skill_id, now, record_id),
+        )
+        row = conn.execute("SELECT * FROM skill_evolution_records WHERE id = ?", (record_id,)).fetchone()
+        conn.commit()
+    return _skill_evolution_record_from_row(row) if row else None
+
+
+def update_skill_evolution_record_status(
+    record_id: str,
+    *,
+    status: str,
+    risk_notes: str | None = None,
+    clear_registered_skill: bool = False,
+) -> dict[str, Any] | None:
+    """更新 Skill 自进化候选状态。"""
+
+    ensure_db()
+    now = _utc_now()
+    assignments = ["status = ?", "updated_at = ?"]
+    params: list[Any] = [status, now]
+    if risk_notes is not None:
+        assignments.append("risk_notes = ?")
+        params.append(risk_notes)
+    if clear_registered_skill:
+        assignments.append("registered_skill_id = ''")
+    params.append(record_id)
+    with _lock, _connect() as conn:
+        conn.execute(
+            f"""
+            UPDATE skill_evolution_records
+            SET {", ".join(assignments)}
+            WHERE id = ?
+            """,
+            params,
         )
         row = conn.execute("SELECT * FROM skill_evolution_records WHERE id = ?", (record_id,)).fetchone()
         conn.commit()

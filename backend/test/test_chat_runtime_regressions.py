@@ -43,6 +43,7 @@ from src.server.routes.chat.runtime import _permission_mode_for_guardrails
 from src.server.routes.chat.react_runtime import execute_react_runtime
 from src.server.routes.chat.run_context import ChatRunContext
 from src.server.routes.chat.run_context import build_chat_run_context
+from src.server.routes.chat.team_worker_runtime import TeamWorkerRuntimeRequest, run_team_worker
 from src.agents.factory import _safe_workspace_dir
 from src.agents.runtime_types import WORKSPACE_DIR
 from src.storage.database import _normalize_guardrails
@@ -3020,6 +3021,76 @@ def test_chat_run_context_includes_memory_prompt(monkeypatch):
     assert "# Memory\n记忆注入片段" in ctx.system_prompt
 
 
+def test_team_worker_runtime_includes_memory_prompt(monkeypatch):
+    captured = {}
+
+    class FakeWorkerAgent:
+        async def reply_stream(self, user_msg):
+            yield _FakeAgentScopeEvent({"type": "TEXT_BLOCK_DELTA", "delta": "worker done"})
+
+    def fake_get_or_create_agent(**kwargs):
+        captured.update(kwargs)
+        return FakeWorkerAgent()
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.team_worker_runtime.get_or_create_agent",
+        fake_get_or_create_agent,
+    )
+    monkeypatch.setattr(
+        "src.server.routes.chat.team_worker_runtime.get_effective_model_settings",
+        lambda: SimpleNamespace(default_model="model", fallback_models=[]),
+    )
+    monkeypatch.setattr(
+        "src.server.routes.chat.team_worker_runtime.get_registered_agent",
+        lambda agent_id: None,
+    )
+    monkeypatch.setattr(
+        "src.server.routes.chat.team_worker_runtime.build_memory_injection_text",
+        lambda context: "# Memory\nWorker 记忆注入片段",
+    )
+
+    member = ChatTeamMemberPayload(
+        agentId="worker-1",
+        name="Worker",
+        role="researcher",
+        description="负责调研",
+    )
+    activity = ChatTeamActivity(
+        id="activity-1",
+        agentId="worker-1",
+        agentName="Worker",
+        role="worker",
+        status="running",
+        createdAt="2026-07-08T00:00:00+00:00",
+    )
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+    asyncio.run(run_team_worker(TeamWorkerRuntimeRequest(
+        data=ChatMessage(
+            session_id="session-1",
+            message="继续推进",
+            agent_id="leader-1",
+            agent_name="Leader",
+            team_name="Team",
+            sandbox=True,
+        ),
+        session_id="session-1",
+        team_activities=[activity],
+        model_name="model",
+        leader_system_prompt="leader prompt",
+        skill_runs=[],
+        member=member,
+        dependency_outputs=[],
+        queue=queue,
+        pause_event=asyncio.Event(),
+    )))
+
+    assert "# Memory\nWorker 记忆注入片段" in captured["system_prompt"]
+    assert "prompt-" in captured["agent_id"]
+    assert captured["parent_agent_id"] == "worker-1"
+    assert captured["session_id"] == "session-1"
+
+
 def test_runtime_builder_cache_key_changes_with_system_prompt():
     base_kwargs = dict(
         agent_id="agent",
@@ -3062,6 +3133,7 @@ def test_main_agent_runtime_spec_wraps_factory_inputs():
 
     assert spec.name == "Agent"
     assert spec.parent_agent_id == "agent"
+    assert spec.session_id == "session"
     assert spec.tool_scope is tool_scope
     assert "thinking-True" in spec.runtime_agent_id
     assert "prompt-" in spec.runtime_agent_id
@@ -3107,6 +3179,7 @@ def test_create_main_agent_from_spec_delegates_to_factory(monkeypatch):
     assert calls["agent_id"] == spec.runtime_agent_id
     assert calls["name"] == "Agent"
     assert calls["model_name"] == "model"
+    assert calls["session_id"] == "session"
     assert calls["tool_scope"] is tool_scope
     assert callable(calls["on_fallback_event"])
 

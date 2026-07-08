@@ -7,12 +7,15 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from agentscope.message import TextBlock, ToolResultState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.tool import ToolBase, ToolChunk
+from src.memory.sanitizer import sanitize_memory_note_text
+from src.memory.settings import get_memory_admission_policy
 
 ReadMemoryContent = Callable[[], str]
 WriteMemoryContent = Callable[[str], None]
@@ -137,6 +140,7 @@ class MemoryAdd(_BoundMemoryTool):
         next_content = _insert_note_into_section(content, section, normalized_note)
         if next_content == content:
             return _json_tool_result({"updated": False, "reason": "duplicate"})
+        next_content = _prepare_markdown_memory_content(next_content)
         self.memory_file.write_content(next_content)
         operation = {
             "operation": "append",
@@ -188,6 +192,7 @@ class MemoryUpdate(_BoundMemoryTool):
         if exact not in content:
             return _json_tool_result({"updated": False, "reason": "exact_text_not_found"})
         next_content = content.replace(exact, replacement, 1)
+        next_content = _prepare_markdown_memory_content(next_content)
         self.memory_file.write_content(next_content)
         operation = {
             "operation": "update",
@@ -235,7 +240,7 @@ class MemoryDelete(_BoundMemoryTool):
         if exact not in content:
             return _json_tool_result({"updated": False, "reason": "exact_text_not_found"})
         next_content = content.replace(exact, "", 1)
-        self.memory_file.write_content(_collapse_blank_lines(next_content))
+        self.memory_file.write_content(_prepare_markdown_memory_content(next_content))
         operation = {
             "operation": "delete",
             "scope": self.memory_file.scope,
@@ -379,7 +384,7 @@ class SkillDraftPropose(ToolBase):
 
 
 def _normalize_note(note: str) -> str:
-    normalized = " ".join(str(note).split())
+    normalized = sanitize_memory_note_text(" ".join(str(note).split()))
     if not normalized:
         return ""
     return normalized if normalized.startswith("- ") else f"- {normalized}"
@@ -387,6 +392,11 @@ def _normalize_note(note: str) -> str:
 
 def _insert_note_into_section(content: str, section: str, note: str) -> str:
     if _normalized_text(note) in _normalized_text(content):
+        return content
+    conflict_merged = _merge_conflicting_note(content, note)
+    if conflict_merged != content:
+        return conflict_merged
+    if _is_near_duplicate_note(content, note):
         return content
     lines = content.rstrip().splitlines()
     heading = f"# {section}"
@@ -407,8 +417,142 @@ def _insert_note_into_section(content: str, section: str, note: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _merge_conflicting_note(content: str, note: str) -> str:
+    conflict_key = _conflict_key(note)
+    if not conflict_key:
+        return content
+    lines = content.splitlines()
+    current_section = ""
+    for index, line in enumerate(lines):
+        if line.startswith("# "):
+            current_section = line[2:].strip()
+            continue
+        if current_section == "Summary":
+            continue
+        if not line.strip().startswith("-"):
+            continue
+        if _conflict_key(line) != conflict_key:
+            continue
+        lines[index] = note
+        return "\n".join(lines).rstrip() + "\n"
+    return content
+
+
+def _conflict_key(value: str) -> str:
+    normalized = _normalized_text(value)
+    if "默认" in normalized and ("中文" in normalized or "英文" in normalized):
+        return "default_language"
+    if "简洁" in normalized and "详细" in normalized:
+        return "answer_detail_level"
+    if "planruntime" in normalized:
+        return "plan_runtime_rule"
+    if "memoryruntime" in normalized:
+        return "memory_runtime_rule"
+    return ""
+
+
+def _prepare_markdown_memory_content(content: str) -> str:
+    policy = get_memory_admission_policy()
+    content = _collapse_blank_lines(content)
+    return _rebuild_summary_section(
+        content,
+        max_items_per_section=policy.summary_max_items_per_section,
+        max_chars=policy.summary_max_chars,
+    )
+
+
+def _rebuild_summary_section(content: str, *, max_items_per_section: int, max_chars: int) -> str:
+    sections = _parse_markdown_sections(content)
+    summary_items: list[str] = []
+    for section in (
+        "Stable Preferences",
+        "Stable Behaviors",
+        "Profile",
+        "Workspace Rules",
+        "Corrections",
+        "Negative Rules",
+    ):
+        items = [
+            _strip_source_reference(line.strip())
+            for line in sections.get(section, [])
+            if line.strip().startswith("-")
+        ][:max_items_per_section]
+        for item in items:
+            if item and item not in summary_items:
+                summary_items.append(item)
+    summary = "\n".join(summary_items)
+    if len(summary) > max_chars:
+        summary = summary[:max_chars].rstrip() + "..."
+    summary_lines = ["# Summary", "", "<!-- auto-generated summary; edit sections below for source of truth. -->"]
+    if summary:
+        summary_lines.extend(["", summary])
+    return _replace_section(content, "Summary", "\n".join(summary_lines).rstrip())
+
+
+def _parse_markdown_sections(content: str) -> dict[str, list[str]]:
+    sections: dict[str, list[str]] = {}
+    current = ""
+    for line in content.splitlines():
+        if line.startswith("# "):
+            current = line[2:].strip()
+            sections.setdefault(current, [])
+            continue
+        if current:
+            sections[current].append(line)
+    return sections
+
+
+def _replace_section(content: str, section: str, replacement: str) -> str:
+    lines = content.rstrip().splitlines()
+    heading = f"# {section}"
+    try:
+        start = lines.index(heading)
+    except ValueError:
+        return replacement.rstrip() + "\n\n" + content.rstrip() + "\n"
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("# "):
+            end = index
+            break
+    next_lines = lines[:start] + replacement.rstrip().splitlines() + [""] + lines[end:]
+    return "\n".join(next_lines).rstrip() + "\n"
+
+
+def _strip_source_reference(value: str) -> str:
+    value = re.sub(r"_\(source:[^)]+\)_", "", value)
+    value = re.sub(r"\(source:[^)]+\)", "", value)
+    return value.strip()
+
+
 def _normalized_text(value: str) -> str:
-    return "".join(str(value).lower().split())
+    text = re.sub(r"_\(source:[^)]+\)_", "", str(value))
+    text = re.sub(r"\(source:[^)]+\)", "", text)
+    return "".join(text.lower().split())
+
+
+def _is_near_duplicate_note(content: str, note: str) -> bool:
+    note_tokens = _dedupe_tokens(note)
+    if not note_tokens:
+        return False
+    for line in content.splitlines():
+        if not line.strip().startswith("-"):
+            continue
+        line_tokens = _dedupe_tokens(line)
+        if not line_tokens:
+            continue
+        overlap = len(note_tokens & line_tokens) / max(len(note_tokens), 1)
+        if overlap >= 0.82:
+            return True
+    return False
+
+
+def _dedupe_tokens(value: str) -> set[str]:
+    cleaned = re.sub(r"_\(source:[^)]+\)_", "", value)
+    return {
+        token.lower()
+        for token in re.findall(r"[A-Za-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", cleaned)
+        if token.lower() not in {"source", "run", "session"}
+    }
 
 
 def _collapse_blank_lines(content: str) -> str:
