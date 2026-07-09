@@ -7,30 +7,48 @@
  * 注意：此区域需要设置 -webkit-app-region: drag 来支持窗口拖拽。
  */
 
+import { GitBranch, PanelsTopLeft } from 'lucide-react';
+import { useAppStore, type WorkspaceMode } from '../stores/appStore';
+import { cn } from '../utils/cn';
+import './TitleBar.css';
+
+const MODE_OPTIONS: Array<{
+  id: WorkspaceMode;
+  label: string;
+  icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
+}> = [
+  { id: 'workstation', label: '工作台', icon: PanelsTopLeft },
+  { id: 'workflow', label: '任务流', icon: GitBranch },
+];
+
 export function TitleBar() {
+  const workspaceMode = useAppStore((s) => s.workspaceMode);
+  const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
+
   return (
     <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        backgroundColor: 'var(--color-bg-secondary)',
-        borderBottom: '1px solid var(--color-border)',
-        WebkitAppRegion: 'drag', // Electron: 使此区域可拖拽移动窗口
-        userSelect: 'none',
-        paddingLeft: '80px', // 为 macOS 红绿灯按钮留空间
-      } as React.CSSProperties}
+      className="titlebar"
     >
-      <span
-        style={{
-          fontSize: 'var(--text-sm)',
-          color: 'var(--color-text-secondary)',
-          fontWeight: 500,
-        }}
-      >
-        Agent Workstation
-      </span>
+      <div className="titlebar__mode-switch" role="tablist" aria-label="切换产品工作空间">
+        <span className="titlebar__mode-indicator" data-mode={workspaceMode} />
+        {MODE_OPTIONS.map((option) => {
+          const active = option.id === workspaceMode;
+          const Icon = option.icon;
+          return (
+            <button
+              key={option.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              className={cn('titlebar__mode-button', active && 'titlebar__mode-button--active')}
+              onClick={() => setWorkspaceMode(option.id)}
+            >
+              <Icon size={14} strokeWidth={1.7} />
+              <span>{option.label}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

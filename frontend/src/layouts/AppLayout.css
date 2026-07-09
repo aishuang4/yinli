@@ -34,6 +34,14 @@
     var(--detail-panel-width);
 }
 
+.app-layout[data-workspace-mode="workflow"] {
+  grid-template-columns: 0px 1fr 0px;
+}
+
+.app-layout[data-workspace-mode="workflow"][data-detail-open="true"] {
+  grid-template-columns: 0px 1fr 0px;
+}
+
 /* 各区域映射到 grid area */
 .app-layout__titlebar {
   grid-area: titlebar;
@@ -41,6 +49,13 @@
 
 .app-layout__activity-bar {
   grid-area: activity;
+  overflow: hidden;
+  transition: opacity var(--duration-normal) var(--ease-out);
+}
+
+.app-layout[data-workspace-mode="workflow"] .app-layout__activity-bar {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .app-layout__main {
@@ -59,4 +74,32 @@
 
 .app-layout__statusbar {
   grid-area: statusbar;
+}
+
+.app-workspace-switcher {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--color-bg-secondary);
+}
+
+.app-workspace-pane {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(10px) scale(0.992);
+  transition:
+    opacity 260ms var(--ease-out),
+    transform 260ms var(--ease-out);
+}
+
+.app-workspace-switcher[data-mode="workstation"] .app-workspace-pane--workstation,
+.app-workspace-switcher[data-mode="workflow"] .app-workspace-pane--workflow {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
 }

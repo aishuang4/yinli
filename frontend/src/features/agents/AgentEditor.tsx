@@ -126,8 +126,6 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
         knowledgeTools: [...agent.knowledgeTools],
         skills: [...agent.skills],
         tags: [...agent.tags],
-        callableAgents: [...agent.callableAgents],
-        maxDepth: agent.maxDepth,
         planConfig: { ...agent.planConfig },
         guardrails: { ...agent.guardrails },
       });

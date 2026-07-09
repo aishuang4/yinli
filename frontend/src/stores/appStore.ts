@@ -10,10 +10,15 @@ import { create } from 'zustand';
 /** 应用视图类型（对应 Activity Bar 选项） */
 export type ViewType = 'chat' | 'runs' | 'traces' | 'sandbox' | 'agents' | 'subagents' | 'tools' | 'mcp' | 'skills' | 'memory' | 'settings';
 
+/** 顶层产品工作空间模式 */
+export type WorkspaceMode = 'workstation' | 'workflow';
+
 /** 应用状态接口 */
 interface AppState {
   /** 当前激活的视图 */
   currentView: ViewType;
+  /** 当前顶层工作空间模式 */
+  workspaceMode: WorkspaceMode;
   /** 详情面板是否展开 */
   detailPanelOpen: boolean;
   /** 后端连接状态 */
@@ -22,6 +27,8 @@ interface AppState {
   // Actions
   /** 切换视图 */
   setView: (view: ViewType) => void;
+  /** 切换顶层工作空间模式 */
+  setWorkspaceMode: (mode: WorkspaceMode) => void;
   /** 切换详情面板 */
   toggleDetailPanel: () => void;
   /** 设置后端连接状态 */
@@ -31,11 +38,13 @@ interface AppState {
 export const useAppStore = create<AppState>()((set) => ({
   // 初始状态
   currentView: 'chat',
+  workspaceMode: 'workstation',
   detailPanelOpen: false,
   backendConnected: false,
 
   // Actions
   setView: (view) => set({ currentView: view }),
+  setWorkspaceMode: (mode) => set({ workspaceMode: mode }),
   toggleDetailPanel: () =>
     set((state) => ({ detailPanelOpen: !state.detailPanelOpen })),
   setBackendConnected: (connected) => set({ backendConnected: connected }),

@@ -22,6 +22,7 @@ import { AppLayout } from './layouts/AppLayout';
 import { FeedbackBridge } from './components/FeedbackBridge';
 
 const ChatPage = lazy(() => import('./pages/ChatPage').then((module) => ({ default: module.ChatPage })));
+const WorkflowPage = lazy(() => import('./pages/WorkflowPage').then((module) => ({ default: module.WorkflowPage })));
 const RunsPage = lazy(() => import('./pages/RunsPage').then((module) => ({ default: module.RunsPage })));
 const TracePage = lazy(() => import('./pages/TracePage').then((module) => ({ default: module.TracePage })));
 const SandboxPage = lazy(() => import('./pages/SandboxPage').then((module) => ({ default: module.SandboxPage })));
@@ -60,6 +61,7 @@ const MAX_CACHED_VIEWS = 3;
  */
 export function App() {
   const currentView = useAppStore((s) => s.currentView);
+  const workspaceMode = useAppStore((s) => s.workspaceMode);
   const setBackendConnected = useAppStore((s) => s.setBackendConnected);
   const theme = useSettingsStore((s) => s.theme);
   const backendUrl = useSettingsStore((s) => s.backendUrl);
@@ -144,11 +146,43 @@ export function App() {
         <AntdApp>
           <FeedbackBridge />
           <AppLayout>
-            <CachedPages activeView={currentView} cachedViews={cachedViews} />
+            <WorkspacePages
+              workspaceMode={workspaceMode}
+              activeView={currentView}
+              cachedViews={cachedViews}
+            />
           </AppLayout>
         </AntdApp>
       </ConfigProvider>
     </StyleProvider>
+  );
+}
+
+interface WorkspacePagesProps {
+  workspaceMode: 'workstation' | 'workflow';
+  activeView: ViewType;
+  cachedViews: ViewType[];
+}
+
+function WorkspacePages({ workspaceMode, activeView, cachedViews }: WorkspacePagesProps) {
+  const workflowActive = workspaceMode === 'workflow';
+  return (
+    <div className="app-workspace-switcher" data-mode={workspaceMode}>
+      <section
+        className="app-workspace-pane app-workspace-pane--workstation"
+        aria-hidden={workflowActive}
+      >
+        <CachedPages activeView={activeView} cachedViews={cachedViews} />
+      </section>
+      <section
+        className="app-workspace-pane app-workspace-pane--workflow"
+        aria-hidden={!workflowActive}
+      >
+        <Suspense fallback={<PageSkeleton />}>
+          <WorkflowPage />
+        </Suspense>
+      </section>
+    </div>
   );
 }
 

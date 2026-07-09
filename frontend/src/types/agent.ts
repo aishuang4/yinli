@@ -88,10 +88,6 @@ export interface Agent {
   skills: string[];
   /** 标签 */
   tags: string[];
-  /** 历史兼容字段：旧可调用子 Agent ID 列表 */
-  callableAgents: string[];
-  /** 最大调用深度 */
-  maxDepth: number;
   /** 历史 Plan 配置兼容字段 */
   planConfig: PlanConfig;
   /** 安全边界 */
@@ -169,8 +165,6 @@ export function createEmptyAgentForm(): AgentCreatePayload {
     knowledgeTools: [],
     skills: [],
     tags: [],
-    callableAgents: [],
-    maxDepth: 2,
     planConfig: { ...DEFAULT_PLAN_CONFIG },
     guardrails: { ...DEFAULT_GUARDRAILS },
   };

@@ -190,6 +190,7 @@ rg -n "<(Input|Select|DatePicker|Switch|Slider|InputNumber|textarea|input|select
 ## 5. SQLite / 数据持久化规范
 
 - 业务核心数据优先使用规范化表，不再新增零散 JSON 文件。
+- Team Runtime v2 是协作运行状态的例外：按 `docs/team-runtime-redesign.md` 使用 file-first 设计，JSON/JSONL/Markdown 作为 TeamRun source of truth，SQLite 只做可重建索引和展示投影。
 - `json_store` 只用于系统设置、轻量配置文档和确实不适合拆表的内容。
 - 表结构演进继续使用 `_ensure_column()` / 初始化升级逻辑；正式上线前再评估迁移框架。
 - 新表必须包含稳定主键、创建时间、更新时间；需要审计的数据保留操作记录。

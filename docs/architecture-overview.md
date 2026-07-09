@@ -6,7 +6,9 @@
 
 Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。用户在 Chat 中选择单个 Agent 或 Team 执行任务，运行时支持 MCP、Skills、HTTP 工具、权限控制、HITL、Trace、容器沙箱和新记忆系统 MVP。
 
-旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线。相关字段仅作为历史 SQLite / API 兼容保留，不能继续扩展旧链路。当前记忆能力是新方案：通过运行前上下文注入、运行后 `MemoryAdmissionGate` 准入、后台提炼、历史记忆（底层 `memory_nodes`）和 memory tools 接入 ReAct，不新增 `memory` runtime.kind。
+旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线，不能继续扩展旧链路。旧 Subagent 字段、配置入口、事件兼容分支和前端入口不得作为当前 API / UI / Runtime 事实源保留；历史 SQLite 开发库只允许保留启动所需的最小兼容。当前记忆能力是新方案：通过运行前上下文注入、运行后 `MemoryAdmissionGate` 准入、后台提炼、历史记忆（底层 `memory_nodes`）和 memory tools 接入 ReAct，不新增 `memory` runtime.kind。
+
+新版 Subagent M1 已作为 ReAct 内部委托能力上线：Subagent 定义来自 Markdown + YAML frontmatter 文件，主 Agent / Team Leader 通过 `DelegateTask` 前台委托 fresh-context 子 Agent，结果摘要回到主 Agent，完整过程进入 Trace 和 `subagent_invocations` 审计，不新增 `runtime.kind=subagent`。
 
 ## 技术栈
 
@@ -68,6 +70,7 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 当前在线的是新记忆系统首版，不是旧 memory summarize：
 
 - **运行前注入**：`memory/retrieval.py` 读取 user / agent / global Markdown 摘要和最近 30 天节点树；`run_context.py` 在 readiness 通过后注入主 Agent / Team Leader；`team_worker_runtime.py` 按 single agent 同策略注入 Team Worker。
+- **Subagent 注入**：`subagents/runtime_context.py` 为子 Agent 注入 frontmatter `skills` 指定的已安装启用 Skill，并用 `subagent:{name}` 作为 agent memory owner 注入长期记忆摘要；`subagents/permission_policy.py` 执行 frontmatter `permissionMode` 并按父 Agent guardrails 上限收窄；`subagents/tool_policy.py` 基于父运行时真实工具池执行 `tools` / `disallowedTools` 裁剪，并同步限制传给子 Agent 的 MCP server 与知识库工具；审计通过 `SUBAGENT_CONTEXT` Runtime Event 记录 loadedSkills、missingSkillRefs、memoryAgentId、memoryInjected 和 permission requested / effective 摘要。
 - **历史记忆**：底层 `memory_nodes` 只保存用户输入、Agent 最终输出和摘要索引，不保存工具调用过程；写入后同步到 `VectorStoreBackend` 的 `memory_nodes` collection。
 - **Markdown 长期记忆**：user memory、agent memory、global preference memory 分别保存为 `user_memory.md`、`agent_memory.md`、`global_memory.md`，没有旧 `default.md` 兼容读取。
 - **Memory 管理入口**：前端 Memory 页面首版已接入，用户记忆和全局记忆各只有一个管理入口；Agent 记忆按 Agent 选择，每个 Agent 对应一份 `agent_memory.md`；历史记忆按“Agent -> 时间节点 -> 具体记忆”三段式查看，底层使用 `memory_nodes`。页面已支持历史记忆禁用 / 删除 / 恢复、Skill 自进化队列操作、注册失败原因可视化、设置快照、召回质量摘要、召回命中相关性反馈和 `MEMORY_AUDIT` 审计详情。

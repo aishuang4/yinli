@@ -59,8 +59,6 @@ interface AgentApiData {
   knowledgeTools?: string[];
   skills: string[];
   tags: string[];
-  callableAgents: string[];
-  maxDepth: number;
   planConfig?: {
     enabled: boolean;
     mode: 'lightweight' | 'structured' | 'strict';
@@ -113,8 +111,6 @@ function mapApiAgent(api: AgentApiData): Agent {
     knowledgeTools: api.knowledgeTools ?? [],
     skills: api.skills,
     tags: api.tags,
-    callableAgents: api.callableAgents,
-    maxDepth: api.maxDepth,
     planConfig: {
       enabled: api.planConfig?.enabled ?? false,
       mode: api.planConfig?.mode ?? 'structured',
@@ -157,8 +153,6 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
   if ('skills' in data && data.skills !== undefined) result.skills = data.skills;
   if ('mcpTools' in data && data.mcpTools !== undefined) result.mcpTools = data.mcpTools;
   if ('knowledgeTools' in data && data.knowledgeTools !== undefined) result.knowledgeTools = data.knowledgeTools;
-  if ('callableAgents' in data && data.callableAgents !== undefined) result.callableAgents = data.callableAgents;
-  if ('maxDepth' in data && data.maxDepth !== undefined) result.maxDepth = data.maxDepth;
   if ('planConfig' in data && data.planConfig) {
     result.planConfig = {
       enabled: data.planConfig.enabled,

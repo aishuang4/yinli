@@ -28,9 +28,10 @@ interface AppLayoutProps {
  */
 export function AppLayout({ children, detail }: AppLayoutProps) {
   const detailPanelOpen = useAppStore((s) => s.detailPanelOpen);
+  const workspaceMode = useAppStore((s) => s.workspaceMode);
 
   return (
-    <div className="app-layout" data-detail-open={detailPanelOpen}>
+    <div className="app-layout" data-detail-open={detailPanelOpen} data-workspace-mode={workspaceMode}>
       {/* 自定义标题栏（Electron 无边框窗口） */}
       <div className="app-layout__titlebar">
         <TitleBar />
