@@ -568,6 +568,36 @@ def get_installed_skill(skill_id: str) -> Skill | None:
     return skill
 
 
+def resolve_installed_skills(skill_refs: list[str]) -> tuple[list[Skill], list[str]]:
+    """按 ID 或名称解析已安装启用的 Skill，保留输入顺序并返回未命中引用。"""
+
+    resolved: list[Skill] = []
+    missing: list[str] = []
+    seen: set[str] = set()
+    enabled_skills = [
+        skill
+        for skill in _skills.values()
+        if skill.status == "installed" and skill.enabled
+    ]
+    by_normalized_name = {
+        _normalized_skill_name(skill.name): skill
+        for skill in enabled_skills
+    }
+    for raw_ref in skill_refs:
+        ref = str(raw_ref or "").strip()
+        if not ref:
+            continue
+        skill = get_installed_skill(ref) or by_normalized_name.get(_normalized_skill_name(ref))
+        if not skill:
+            missing.append(ref)
+            continue
+        if skill.id in seen:
+            continue
+        seen.add(skill.id)
+        resolved.append(skill)
+    return resolved, missing
+
+
 def select_relevant_skills(skill_ids: list[str], message: str) -> list[Skill]:
     """根据用户消息从 Agent 绑定的 Skills 中选择本次要使用的 Skill。"""
     loaded_skills = _get_loaded_skills(skill_ids)

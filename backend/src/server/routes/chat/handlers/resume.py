@@ -6,9 +6,11 @@ from typing import AsyncGenerator
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
-from agentscope.message import UserMsg
+from agentscope.event import ExternalExecutionResultEvent
+from agentscope.message import TextBlock, ToolResultBlock, ToolResultState, UserMsg
 
 from src.agents.factory import AgentModelOptions, get_or_create_agent
+from src.agents.runtime_types import AgentGuardrails
 from src.config.runtime_settings import get_effective_model_settings
 from src.server.routes.agents import get_registered_agent
 
@@ -23,6 +25,7 @@ from src.server.routes.chat.hitl import (
 from src.server.routes.chat.models import (
     PENDING_AGENTS,
     PENDING_INTERACTIONS,
+    PENDING_SUBAGENT_PARENT_CONTEXTS,
     HITL_EVENT_TYPES,
     ChatMessage,
     ChatModelCacheRun,
@@ -88,6 +91,7 @@ from src.server.routes.chat.trace_recorder import (
     _record_run_event,
     _record_tool_execution_artifacts,
 )
+from src.storage.database import update_subagent_invocation
 
 
 def _is_final_answer_text_scope(scope: str) -> bool:
@@ -242,6 +246,219 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
         )
 
         try:
+            if interaction.scope == "subagent":
+                subagent_data = dict(interaction.chat_data or {})
+                invocation_id = str(subagent_data.get("invocationId") or "")
+                tool_call_id = str(subagent_data.get("toolCallId") or "")
+                subagent_name = str(subagent_data.get("subagentName") or interaction.agent_name)
+                subagent_guardrails = AgentGuardrails()
+                subagent_stream_state = LeaderStreamState()
+                final_text = ""
+                reasoning_text = interaction.assistant_text or ""
+                duration_ms = 0
+
+                async for event in agent.reply_stream(resume_event):
+                    event_data = event.model_dump(mode="json")
+                    event_type = event_data.pop("type", "UNKNOWN")
+                    _attach_provider_cache_usage(event_type, event_data)
+                    _record_agent_scope_event(
+                        session_id=interaction.session_id,
+                        event_type=event_type,
+                        event_data=event_data,
+                        persist=True,
+                        scope="subagent",
+                        agent_id=interaction.agent_id,
+                        agent_name=interaction.agent_name,
+                    )
+                    _record_permission_decision(
+                        session_id=interaction.session_id,
+                        event_type=event_type,
+                        event_data=event_data,
+                        persist=True,
+                        scope="subagent",
+                        agent_id=interaction.agent_id,
+                        agent_name=interaction.agent_name,
+                        guardrails=subagent_guardrails,
+                    )
+                    if _is_final_answer_tool_event(event_type, event_data, subagent_stream_state):
+                        if event_type == "TOOL_CALL_START":
+                            subagent_stream_state.final_answer_started = True
+                        continue
+                    if event_type in HITL_EVENT_TYPES:
+                        agentscope_waiting_tool_calls = list(event_data.get("tool_calls") or [])
+                        next_interaction = _create_pending_interaction(
+                            interaction_type=event_type,
+                            agent=agent,
+                            session_id=interaction.session_id,
+                            agent_id=interaction.agent_id,
+                            agent_name=interaction.agent_name,
+                            model_name=interaction.model_name,
+                            reply_id=str(event_data.get("reply_id") or ""),
+                            tool_calls=agentscope_waiting_tool_calls,
+                            resume_tool_calls=agentscope_waiting_tool_calls,
+                            message=interaction.message,
+                            assistant_text=final_text or reasoning_text,
+                            skill_runs=[],
+                            team_activities=[],
+                            scope="subagent",
+                            chat_data=subagent_data,
+                            run_id=interaction.run_id,
+                        )
+                        parent_context = PENDING_SUBAGENT_PARENT_CONTEXTS.pop(interaction.id, None)
+                        if parent_context is not None:
+                            PENDING_SUBAGENT_PARENT_CONTEXTS[next_interaction.id] = parent_context
+                        partial = _trim_text(final_text or reasoning_text, 1200)
+                        if invocation_id:
+                            update_subagent_invocation(
+                                invocation_id,
+                                status="waiting",
+                                result_preview=partial,
+                                error="Subagent paused for another human approval.",
+                            )
+                        _clear_pending_interaction(interaction.id)
+                        yield runtime_event_sse(
+                            "SUBAGENT_WAITING_HUMAN",
+                            session_id=interaction.session_id,
+                            run_id=interaction.run_id,
+                            scope="subagent",
+                            agent_id=interaction.agent_id,
+                            agent_name=interaction.agent_name,
+                            status="waiting",
+                            reason="hitl_required",
+                            payload={
+                                "invocationId": invocation_id,
+                                "toolCallId": tool_call_id,
+                                "subagentName": subagent_name,
+                                "interactionId": next_interaction.id,
+                                "interactionType": event_type,
+                                "replyId": str(event_data.get("reply_id") or ""),
+                                "toolCalls": agentscope_waiting_tool_calls,
+                                "partialResultPreview": partial,
+                                "durationMs": duration_ms,
+                            },
+                        )
+                        yield _sse_event("HITL_REQUIRED", _hitl_payload(next_interaction))
+                        return
+                    if event_type == "EXCEED_MAX_ITERS":
+                        subagent_stream_state.exceeded_max_iters = True
+                        break
+                    if event_type == "TEXT_BLOCK_DELTA":
+                        delta = str(event_data.get("delta") or "")
+                        if subagent_stream_state.final_answer_started:
+                            final_text += delta
+                        else:
+                            reasoning_text += delta
+                    runtime_event = runtime_event_from_agentscope_sse(
+                        event_type,
+                        session_id=interaction.session_id,
+                        scope="subagent",
+                        agent_id=interaction.agent_id,
+                        agent_name=interaction.agent_name,
+                        event_data=event_data,
+                    )
+                    if runtime_event:
+                        yield runtime_event
+
+                if subagent_stream_state.exceeded_max_iters or not final_text.strip():
+                    error_message = (
+                        max_react_iterations_error()
+                        if subagent_stream_state.exceeded_max_iters
+                        else missing_final_answer_error()
+                    )
+                    partial = _trim_text(final_text or reasoning_text, 1200)
+                    if invocation_id:
+                        update_subagent_invocation(
+                            invocation_id,
+                            status="failed",
+                            result_preview=partial,
+                            error=error_message,
+                        )
+                    PENDING_SUBAGENT_PARENT_CONTEXTS.pop(interaction.id, None)
+                    _clear_pending_interaction(interaction.id)
+                    yield runtime_event_sse(
+                        "SUBAGENT_FAILED",
+                        session_id=interaction.session_id,
+                        run_id=interaction.run_id,
+                        scope="subagent",
+                        agent_id=interaction.agent_id,
+                        agent_name=interaction.agent_name,
+                        status="failed",
+                        reason="resume_failed",
+                        payload={
+                            "invocationId": invocation_id,
+                            "toolCallId": tool_call_id,
+                            "subagentName": subagent_name,
+                            "error": error_message,
+                            "partialResultPreview": partial,
+                        },
+                    )
+                    yield _sse_event("ERROR", {"message": error_message})
+                    return
+
+                result_preview = _trim_text(final_text, 1200)
+                if invocation_id:
+                    update_subagent_invocation(
+                        invocation_id,
+                        status="completed",
+                        result_preview=result_preview,
+                    )
+                parent_context = PENDING_SUBAGENT_PARENT_CONTEXTS.pop(interaction.id, None)
+                _clear_pending_interaction(interaction.id)
+                yield runtime_event_sse(
+                    "SUBAGENT_COMPLETED",
+                    session_id=interaction.session_id,
+                    run_id=interaction.run_id,
+                    scope="subagent",
+                    agent_id=interaction.agent_id,
+                    agent_name=interaction.agent_name,
+                    status="completed",
+                    payload={
+                        "invocationId": invocation_id,
+                        "toolCallId": tool_call_id,
+                        "subagentName": subagent_name,
+                        "resultPreview": result_preview,
+                        "durationMs": duration_ms,
+                        "resumedFromHitl": True,
+                    },
+                )
+                if parent_context is not None:
+                    parent_tool_call = dict(parent_context.get("tool_call") or {})
+                    parent_result = ExternalExecutionResultEvent(
+                        reply_id=str(parent_context.get("reply_id") or ""),
+                        execution_results=[
+                            ToolResultBlock(
+                                id=str(parent_tool_call.get("id") or tool_call_id),
+                                name="DelegateTask",
+                                output=[
+                                    TextBlock(text=(
+                                        f"Subagent {subagent_name} completed.\n\n"
+                                        f"Summary:\n{final_text}"
+                                    )),
+                                ],
+                                state=ToolResultState.SUCCESS,
+                            )
+                        ],
+                    )
+                    async for parent_event in stream_leader_agent_reply(
+                        agent=parent_context["agent"],
+                        user_msg=parent_result,
+                        state=parent_context["state"],
+                        session_id=str(parent_context["session_id"]),
+                        persist=bool(parent_context["persist"]),
+                        agent_id=str(parent_context["agent_id"]),
+                        agent_name=str(parent_context["agent_name"]),
+                        model_name=str(parent_context["model_name"]),
+                        guardrails=parent_context["guardrails"],
+                        message=str(parent_context["message"]),
+                        stream_scope=str(parent_context["stream_scope"]),
+                        skill_runs=parent_context["skill_runs"],
+                        team_activities=parent_context["team_activities"],
+                        plan_mode_manager=parent_context.get("plan_mode_manager"),
+                        runtime_event_sources=parent_context.get("runtime_event_sources"),
+                    ):
+                        yield parent_event
+                return
+
             if interaction.scope == "worker":
                 chat_data = ChatMessage.model_validate(interaction.chat_data or {})
                 worker_member = ChatTeamMemberPayload.model_validate(interaction.worker_member or {})

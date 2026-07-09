@@ -30,6 +30,7 @@ import { TeamActorSidebar } from '../features/chat/TeamDisplayBlock';
 import { TeamSelectionDock } from '../features/chat/TeamSelectionDock';
 import { FloatingPlanDock } from '../features/chat/FloatingPlanDock';
 import { isAskUserToolName } from '../features/chat/humanInteractionUtils';
+import { subagentToolDataFromDisplayItem } from '../features/chat/subagentToolData';
 import type { ChatImageAttachment, ChatImagePayload, ChatSession, LocalMessage, PendingTeamSelection, StoredChatMessage } from '../features/chat/types';
 import { DISPLAY_EVENTS, type DisplayActor, type DisplayItem } from '../types/displayEvents';
 
@@ -96,6 +97,7 @@ function toolCallFromDisplayItem(item: DisplayItem): ToolCallInfo {
     args: pickDisplayItemString(item, ['inputPreview', 'input', 'args']),
     result: pickDisplayItemString(item, ['outputPreview', 'output', 'result', 'error']),
     status: normalizeToolCallStatus(String(item.status || item.data.status || 'running')),
+    ...subagentToolDataFromDisplayItem(item),
   };
 }
 
@@ -1022,7 +1024,7 @@ export function ChatPage() {
                   ? `${state.modelName || runtimeAgent?.modelConfig.primary || 'deepseek-chat'} · 正在思考...`
                   : targetMode === 'team'
                     ? `${teamLeaderAgent?.name || 'Leader'} · ${selectedTeam?.members.length || 0} 个成员`
-                    : runtimeAgent?.description || 'AgentScope 2.0 · DeepSeek'}
+                    : runtimeAgent?.description || 'DeepSeek'}
               </div>
             </div>
             {activeSessionId && (

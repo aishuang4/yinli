@@ -9,7 +9,7 @@ import type {
 import { MessageImages, StreamingPlaceholder } from './MessageAtoms';
 import type { LocalMessage } from './types';
 import { ChatDisplayRenderer } from './ChatDisplayRenderer';
-import { MessageFrame, TokenUsage } from './MessageFrame';
+import { MessageFrame } from './MessageFrame';
 import { buildLiveChatDisplayMessage, buildStoredChatDisplayMessage } from './chatDisplayProjector';
 
 type ResolveHitl = (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
@@ -79,8 +79,6 @@ function SingleAgentMessageBubble({
         selectedTeamActorId={selectedTeamActorId}
         onSelectTeamActor={onSelectTeamActor}
       />
-
-      <TokenUsage message={message} />
     </MessageFrame>
   );
 }

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
 from agentscope._utils._common import _generate_id
+from agentscope.event import ExternalExecutionResultEvent
 from agentscope.message import Msg, UserMsg
 from agentscope.tool import ToolChoice
 
@@ -13,6 +14,8 @@ from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
 from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload, _merge_hitl_tool_calls
 from src.server.routes.chat.models import (
     HITL_EVENT_TYPES,
+    PENDING_INTERACTIONS,
+    PENDING_SUBAGENT_PARENT_CONTEXTS,
     ChatModelCacheRun,
     ChatSkillRun,
     ChatTeamActivity,
@@ -38,6 +41,7 @@ from src.server.routes.chat.trace_recorder import (
     _record_run_event,
     _record_tool_execution_artifacts,
 )
+from src.subagents.manager import SubagentDelegationManager, SubagentDelegationWaiting
 
 
 @dataclass
@@ -88,6 +92,7 @@ async def stream_leader_agent_reply(
     skill_runs: list[ChatSkillRun],
     team_activities: list[ChatTeamActivity],
     plan_mode_manager: object | None = None,
+    runtime_event_sources: list[object] | None = None,
 ) -> AsyncGenerator[str, None]:
     """消费 Leader AgentScope 事件流，并处理 HITL / clarification 早停。"""
 
@@ -119,6 +124,9 @@ async def stream_leader_agent_reply(
                 yield _sse_event("RUNTIME_EVENT", runtime_event)
                 if runtime_event.get("type") == "PLAN_FINALIZED":
                     _remember_pending_plan_finalized(state, runtime_event)
+        for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
+            state.runtime_events.append(runtime_event)
+            yield _sse_event("RUNTIME_EVENT", runtime_event)
         if _is_final_answer_tool_event(event_type, event_data, state):
             if event_type == "TOOL_CALL_START":
                 state.final_answer_started = True
@@ -215,6 +223,81 @@ async def stream_leader_agent_reply(
                 payload=artifact_payload,
                 collect=state.runtime_events,
             )
+
+        if event_type == "REQUIRE_EXTERNAL_EXECUTION" and _is_delegate_task_external_event(event_data):
+            manager = _find_subagent_manager(runtime_event_sources or [])
+            if manager is None:
+                yield _sse_event("ERROR", {"message": "DelegateTask external executor is not available."})
+                state.stopped = True
+                state.stop_reason = "subagent_executor_missing"
+                return
+            try:
+                execution_results = []
+                for tool_call in list(event_data.get("tool_calls") or []):
+                    execution_task = asyncio.create_task(manager.execute_external_tool_call(tool_call))
+                    try:
+                        while not execution_task.done():
+                            for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
+                                state.runtime_events.append(runtime_event)
+                                yield _sse_event("RUNTIME_EVENT", runtime_event)
+                            await asyncio.sleep(0.1)
+                        execution_results.append(await execution_task)
+                    finally:
+                        for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
+                            state.runtime_events.append(runtime_event)
+                            yield _sse_event("RUNTIME_EVENT", runtime_event)
+                resume_event = ExternalExecutionResultEvent(
+                    reply_id=str(event_data.get("reply_id") or ""),
+                    execution_results=execution_results,
+                )
+                async for resumed_event in stream_leader_agent_reply(
+                    agent=agent,
+                    user_msg=resume_event,
+                    state=state,
+                    session_id=session_id,
+                    persist=persist,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    model_name=model_name,
+                    guardrails=guardrails,
+                    message=message,
+                    stream_scope=stream_scope,
+                    skill_runs=skill_runs,
+                    team_activities=team_activities,
+                    plan_mode_manager=plan_mode_manager,
+                    runtime_event_sources=runtime_event_sources,
+                ):
+                    yield resumed_event
+                return
+            except SubagentDelegationWaiting as exc:
+                for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
+                    state.runtime_events.append(runtime_event)
+                    yield _sse_event("RUNTIME_EVENT", runtime_event)
+                interaction = PENDING_INTERACTIONS.get(exc.interaction_id)
+                if interaction is not None:
+                    first_tool_call = dict((event_data.get("tool_calls") or [{}])[0])
+                    PENDING_SUBAGENT_PARENT_CONTEXTS[interaction.id] = {
+                        "agent": agent,
+                        "reply_id": str(event_data.get("reply_id") or ""),
+                        "tool_call": first_tool_call,
+                        "state": state,
+                        "session_id": session_id,
+                        "persist": persist,
+                        "agent_id": agent_id,
+                        "agent_name": agent_name,
+                        "model_name": model_name,
+                        "guardrails": guardrails,
+                        "message": message,
+                        "stream_scope": stream_scope,
+                        "skill_runs": skill_runs,
+                        "team_activities": team_activities,
+                        "plan_mode_manager": plan_mode_manager,
+                        "runtime_event_sources": runtime_event_sources,
+                    }
+                    yield _sse_event("HITL_REQUIRED", _hitl_payload(interaction))
+                state.stopped = True
+                state.stop_reason = "subagent_hitl"
+                return
 
         if event_type in HITL_EVENT_TYPES:
             if state.active_skill_run and persist:
@@ -329,6 +412,9 @@ async def stream_leader_agent_reply(
         if runtime_event:
             yield runtime_event
         yield _sse_event(event_type, event_data)
+        for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
+            state.runtime_events.append(runtime_event)
+            yield _sse_event("RUNTIME_EVENT", runtime_event)
         if _is_pending_plan_finalization_ready(state, event_type, event_data):
             async for final_event in _stream_pending_plan_final_answer_events(
                 state,
@@ -339,6 +425,10 @@ async def stream_leader_agent_reply(
             ):
                 yield final_event
             return
+
+    for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
+        state.runtime_events.append(runtime_event)
+        yield _sse_event("RUNTIME_EVENT", runtime_event)
 
     clarification = (
         _extract_clarification_request(state.assistant_text)
@@ -432,6 +522,33 @@ def _should_attempt_final_answer_recovery(state: LeaderStreamState) -> bool:
             or bool(state.assistant_tool_calls)
         )
     )
+
+
+def _drain_runtime_event_sources(sources: list[object]) -> list[dict]:
+    """从运行时增强模块中取出待发送 Runtime Event。"""
+
+    events: list[dict] = []
+    for source in sources:
+        drain = getattr(source, "drain_runtime_events", None)
+        if callable(drain):
+            events.extend(drain())
+    return events
+
+
+def _is_delegate_task_external_event(event_data: dict) -> bool:
+    """判断 AgentScope 外部执行事件是否只包含 DelegateTask。"""
+
+    tool_calls = list(event_data.get("tool_calls") or [])
+    return bool(tool_calls) and all(str(tool_call.get("name") or "") == "DelegateTask" for tool_call in tool_calls)
+
+
+def _find_subagent_manager(sources: list[object]) -> object | None:
+    """从 Runtime Event source 列表中找到 Subagent manager。"""
+
+    for source in sources:
+        if isinstance(source, SubagentDelegationManager) or callable(getattr(source, "execute_external_tool_call", None)):
+            return source
+    return None
 
 
 async def _stream_final_answer_recovery_events(

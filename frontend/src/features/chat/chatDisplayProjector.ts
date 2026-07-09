@@ -13,6 +13,7 @@ import type { RunStateApprovalSummary } from '../../types/runState';
 import { normalizeDisplaySnapshot } from '../../utils/displayEventReducer';
 import { createId } from '../../utils/id';
 import type { LocalMessage } from './types';
+import { subagentToolDataFromDisplayItem } from './subagentToolData';
 import type {
   ChatDisplayBlock,
   ChatDisplayMessage,
@@ -527,6 +528,7 @@ function toolCallFromDisplayItem(item: DisplayItem): ToolCallInfo {
     args: pickDisplayString(item.data, ['inputPreview', 'input', 'args']),
     result: pickDisplayString(item.data, ['outputPreview', 'output', 'result', 'error']),
     status: normalizeToolStatus(toolStatusFromDisplayItem(item)),
+    ...subagentToolDataFromDisplayItem(item),
   };
 }
 

@@ -129,7 +129,6 @@ def _append_assistant_message(
         error=error,
         thinking=thinking,
         tool_calls=[],
-        subagent_calls=[],
         skill_calls=[],
         team_activities=[],
         model_caches=[],

@@ -112,6 +112,17 @@ def _ensure_column(
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
+def _drop_column_if_exists(conn: sqlite3.Connection, table: str, column: str) -> None:
+    """删除已下线设计遗留列，避免旧 NOT NULL 约束继续影响当前写入。"""
+
+    columns = {
+        row["name"]
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column in columns:
+        conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+
+
 def ensure_db() -> None:
     """Create SQLite tables once, safe to call from import-time route loaders."""
     global _initialized
@@ -145,8 +156,6 @@ def ensure_db() -> None:
                     knowledge_tools TEXT NOT NULL DEFAULT '[]',
                     skills TEXT NOT NULL,
                     tags TEXT NOT NULL,
-                    callable_agents TEXT NOT NULL,
-                    max_depth INTEGER NOT NULL,
                     plan_config TEXT NOT NULL DEFAULT '{}',
                     guardrails TEXT NOT NULL,
                     status TEXT NOT NULL,
@@ -253,7 +262,6 @@ def ensure_db() -> None:
                     thinking TEXT NOT NULL DEFAULT '',
                     images TEXT NOT NULL,
                     tool_calls TEXT NOT NULL DEFAULT '[]',
-                    subagent_calls TEXT NOT NULL DEFAULT '[]',
                     skill_calls TEXT NOT NULL,
                     team_activities TEXT NOT NULL,
                     model_caches TEXT NOT NULL DEFAULT '[]',
@@ -326,6 +334,30 @@ def ensure_db() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_run_events_session_order
                     ON run_events(session_id, sort_order, created_at);
+                CREATE TABLE IF NOT EXISTS subagent_invocations (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    tool_call_id TEXT NOT NULL DEFAULT '',
+                    parent_scope TEXT NOT NULL DEFAULT 'single',
+                    parent_agent_id TEXT NOT NULL,
+                    parent_agent_name TEXT NOT NULL,
+                    definition_scope TEXT NOT NULL DEFAULT '',
+                    definition_path TEXT NOT NULL DEFAULT '',
+                    subagent_name TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    task TEXT NOT NULL,
+                    expected_output TEXT NOT NULL DEFAULT '',
+                    result_preview TEXT NOT NULL DEFAULT '',
+                    error TEXT NOT NULL DEFAULT '',
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_subagent_invocations_run
+                    ON subagent_invocations(run_id, started_at);
+                CREATE INDEX IF NOT EXISTS idx_subagent_invocations_session
+                    ON subagent_invocations(session_id, started_at);
                 CREATE TABLE IF NOT EXISTS chat_runs (
                     id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
@@ -358,6 +390,79 @@ def ensure_db() -> None:
                     ON chat_runs(updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_chat_run_events_order
                     ON chat_run_events(run_id, sort_order, created_at);
+                CREATE TABLE IF NOT EXISTS workflow_runs (
+                    id TEXT PRIMARY KEY,
+                    schema_version TEXT NOT NULL DEFAULT 'workflow.v1',
+                    title TEXT NOT NULL,
+                    goal TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    current_node_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS workflow_nodes (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    node_key TEXT NOT NULL,
+                    node_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    instruction TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    agent_id TEXT NOT NULL DEFAULT '',
+                    team_id TEXT NOT NULL DEFAULT '',
+                    summary TEXT NOT NULL DEFAULT '',
+                    output TEXT NOT NULL DEFAULT '',
+                    error TEXT NOT NULL DEFAULT '',
+                    position INTEGER NOT NULL DEFAULT 0,
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    started_at TEXT,
+                    completed_at TEXT,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS workflow_edges (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    from_node_id TEXT NOT NULL,
+                    to_node_id TEXT NOT NULL,
+                    condition TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS workflow_events (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    node_id TEXT NOT NULL DEFAULT '',
+                    event_type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL DEFAULT '',
+                    content TEXT NOT NULL DEFAULT '',
+                    payload TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    FOREIGN KEY(run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS workflow_artifacts (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    node_id TEXT NOT NULL DEFAULT '',
+                    artifact_type TEXT NOT NULL DEFAULT 'text',
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL DEFAULT '',
+                    uri TEXT NOT NULL DEFAULT '',
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_workflow_runs_updated
+                    ON workflow_runs(updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_workflow_nodes_run_position
+                    ON workflow_nodes(run_id, position ASC);
+                CREATE INDEX IF NOT EXISTS idx_workflow_edges_run
+                    ON workflow_edges(run_id);
+                CREATE INDEX IF NOT EXISTS idx_workflow_events_run_order
+                    ON workflow_events(run_id, sort_order ASC, created_at ASC);
                 CREATE TABLE IF NOT EXISTS skill_runs (
                     id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
@@ -465,12 +570,14 @@ def ensure_db() -> None:
                     ON skill_evolution_records(agent_id, updated_at DESC);
             """)
             _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
-            _ensure_column(conn, "chat_messages", "subagent_calls", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "runtime_events", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "plan_runs", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "display_snapshot", "TEXT NOT NULL DEFAULT '{\"version\":2,\"blocks\":[]}'")
+            _drop_column_if_exists(conn, "agents", "callable_agents")
+            _drop_column_if_exists(conn, "agents", "max_depth")
+            _drop_column_if_exists(conn, "chat_messages", "subagent_calls")
             columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(agents)").fetchall()
@@ -659,8 +766,6 @@ def list_agents() -> list[dict[str, Any]]:
             "knowledgeTools": _loads(row["knowledge_tools"], []),
             "skills": _loads(row["skills"], []),
             "tags": _loads(row["tags"], []),
-            "callableAgents": _loads(row["callable_agents"], []),
-            "maxDepth": row["max_depth"],
             "planConfig": (
                 {**DEFAULT_PLAN_CONFIG, **plan_config}
                 if isinstance((plan_config := _loads(row["plan_config"], {})), dict)
@@ -682,36 +787,36 @@ def list_agents() -> list[dict[str, Any]]:
 def upsert_agent(data: dict[str, Any]) -> None:
     ensure_db()
     with _lock, _connect() as conn:
+        column_names = [
+            "id", "name", "avatar", "description", "system_prompt", "model_config",
+            "mcp_tools", "knowledge_tools", "skills", "tags",
+            "plan_config", "guardrails", "status", "created_at", "updated_at",
+        ]
+        update_columns = [
+            "name", "avatar", "description", "system_prompt", "model_config",
+            "mcp_tools", "knowledge_tools", "skills", "tags",
+            "plan_config", "guardrails", "status", "updated_at",
+        ]
+        values = [
+            data["id"], data["name"], data.get("avatar", ""),
+            data.get("description", ""), data.get("system_prompt", ""),
+            _dumps(data.get("modelConfig", {})), _dumps(data.get("mcpTools", [])),
+            _dumps(data.get("knowledgeTools", [])),
+            _dumps(data.get("skills", [])), _dumps(data.get("tags", [])),
+        ]
+        values.extend([
+            _dumps(data.get("planConfig", DEFAULT_PLAN_CONFIG)),
+            _dumps(data.get("guardrails", {})), data.get("status", "idle"),
+            data.get("created_at") or _utc_now(), data.get("updated_at") or _utc_now(),
+        ])
         conn.execute(
-            """
-            INSERT INTO agents(
-                id, name, avatar, description, system_prompt, model_config,
-                mcp_tools, knowledge_tools, skills, tags, callable_agents, max_depth,
-                plan_config, guardrails, status, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            f"""
+            INSERT INTO agents({", ".join(column_names)})
+            VALUES ({", ".join("?" for _ in column_names)})
             ON CONFLICT(id) DO UPDATE SET
-                name=excluded.name, avatar=excluded.avatar,
-                description=excluded.description, system_prompt=excluded.system_prompt,
-                model_config=excluded.model_config, mcp_tools=excluded.mcp_tools,
-                knowledge_tools=excluded.knowledge_tools,
-                skills=excluded.skills, tags=excluded.tags,
-                callable_agents=excluded.callable_agents, max_depth=excluded.max_depth,
-                plan_config=excluded.plan_config,
-                guardrails=excluded.guardrails, status=excluded.status,
-                updated_at=excluded.updated_at
+                {", ".join(f"{column}=excluded.{column}" for column in update_columns)}
             """,
-            (
-                data["id"], data["name"], data.get("avatar", ""),
-                data.get("description", ""), data.get("system_prompt", ""),
-                _dumps(data.get("modelConfig", {})), _dumps(data.get("mcpTools", [])),
-                _dumps(data.get("knowledgeTools", [])),
-                _dumps(data.get("skills", [])), _dumps(data.get("tags", [])),
-                _dumps(data.get("callableAgents", [])), data.get("maxDepth", 2),
-                _dumps(data.get("planConfig", DEFAULT_PLAN_CONFIG)),
-                _dumps(data.get("guardrails", {})), data.get("status", "idle"),
-                data.get("created_at") or _utc_now(), data.get("updated_at") or _utc_now(),
-            ),
+            tuple(values),
         )
         conn.commit()
 
@@ -1204,7 +1309,6 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     _dumps([]),
                     _dumps([]),
                     _dumps([]),
-                    _dumps([]),
                     _dumps(item.get("displaySnapshot", item.get("display_snapshot", EMPTY_DISPLAY_SNAPSHOT))),
                     item["created_at"], index,
                 ))
@@ -1212,11 +1316,11 @@ def save_chat_store(data: dict[str, Any]) -> None:
             """
             INSERT INTO chat_messages (
                 id, session_id, role, content, agent_id, agent_name, model_name,
-                error, thinking, images, tool_calls, subagent_calls, skill_calls,
+                error, thinking, images, tool_calls, skill_calls,
                 team_activities, model_caches, runtime_events, plan_runs,
                 display_snapshot, created_at,
                 sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -1357,6 +1461,163 @@ def list_run_events(
         }
         for row in rows
     ]
+
+
+def create_subagent_invocation(data: dict[str, Any]) -> dict[str, Any]:
+    """创建 Subagent invocation 审计记录。"""
+
+    ensure_db()
+    invocation_id = data.get("id") or f"subagent-{uuid.uuid4().hex}"
+    now = _utc_now()
+    record = {
+        "id": invocation_id,
+        "run_id": data.get("run_id") or "",
+        "session_id": data.get("session_id") or "",
+        "tool_call_id": data.get("tool_call_id") or "",
+        "parent_scope": data.get("parent_scope") or "single",
+        "parent_agent_id": data.get("parent_agent_id") or "",
+        "parent_agent_name": data.get("parent_agent_name") or "",
+        "definition_scope": data.get("definition_scope") or "",
+        "definition_path": data.get("definition_path") or "",
+        "subagent_name": data.get("subagent_name") or "",
+        "status": data.get("status") or "running",
+        "task": data.get("task") or "",
+        "expected_output": data.get("expected_output") or "",
+        "result_preview": data.get("result_preview") or "",
+        "error": data.get("error") or "",
+        "started_at": data.get("started_at") or now,
+        "completed_at": data.get("completed_at"),
+        "updated_at": data.get("updated_at") or now,
+    }
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO subagent_invocations (
+                id, run_id, session_id, tool_call_id, parent_scope,
+                parent_agent_id, parent_agent_name, definition_scope,
+                definition_path, subagent_name, status, task, expected_output,
+                result_preview, error, started_at, completed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record["id"],
+                record["run_id"],
+                record["session_id"],
+                record["tool_call_id"],
+                record["parent_scope"],
+                record["parent_agent_id"],
+                record["parent_agent_name"],
+                record["definition_scope"],
+                record["definition_path"],
+                record["subagent_name"],
+                record["status"],
+                record["task"],
+                record["expected_output"],
+                record["result_preview"],
+                record["error"],
+                record["started_at"],
+                record["completed_at"],
+                record["updated_at"],
+            ),
+        )
+        conn.commit()
+    return _subagent_invocation_to_api(record)
+
+
+def update_subagent_invocation(
+    invocation_id: str,
+    *,
+    status: str,
+    result_preview: str = "",
+    error: str = "",
+    completed_at: str | None = None,
+) -> dict[str, Any] | None:
+    """更新 Subagent invocation 审计记录。"""
+
+    ensure_db()
+    now = _utc_now()
+    completed_value = completed_at if completed_at is not None else (now if status in {"completed", "failed"} else None)
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE subagent_invocations
+            SET status = ?, result_preview = ?, error = ?,
+                completed_at = COALESCE(?, completed_at), updated_at = ?
+            WHERE id = ?
+            """,
+            (status, result_preview, error, completed_value, now, invocation_id),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM subagent_invocations WHERE id = ?",
+            (invocation_id,),
+        ).fetchone()
+    return _subagent_invocation_to_api(dict(row)) if row else None
+
+
+def list_subagent_invocations(
+    *,
+    run_id: str | None = None,
+    session_id: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """列出 Subagent invocation 审计记录。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        if run_id:
+            rows = conn.execute(
+                """
+                SELECT * FROM subagent_invocations
+                WHERE run_id = ?
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (run_id, limit),
+            ).fetchall()
+        elif session_id:
+            rows = conn.execute(
+                """
+                SELECT * FROM subagent_invocations
+                WHERE session_id = ?
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (session_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM subagent_invocations
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+    return [_subagent_invocation_to_api(dict(row)) for row in rows]
+
+
+def _subagent_invocation_to_api(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "runId": row["run_id"],
+        "sessionId": row["session_id"],
+        "toolCallId": row["tool_call_id"],
+        "parentScope": row["parent_scope"],
+        "parentAgentId": row["parent_agent_id"],
+        "parentAgentName": row["parent_agent_name"],
+        "definitionScope": row["definition_scope"],
+        "definitionPath": row["definition_path"],
+        "subagentName": row["subagent_name"],
+        "status": row["status"],
+        "task": row["task"],
+        "expectedOutput": row["expected_output"],
+        "resultPreview": row["result_preview"],
+        "error": row["error"],
+        "startedAt": row["started_at"],
+        "completedAt": row["completed_at"],
+        "updatedAt": row["updated_at"],
+    }
 
 
 def list_run_events_by_type(
@@ -1622,6 +1883,313 @@ def get_chat_run(run_id: str, *, event_limit: int | None = None) -> dict[str, An
     return _chat_run_from_row(row, [event_row["raw_event"] for event_row in event_rows], event_count=event_count)
 
 
+def create_workflow_run(record: dict[str, Any]) -> dict[str, Any]:
+    """创建一个 Dynamic Workflow Run 及其初始节点和边。"""
+
+    ensure_db()
+    now = _utc_now()
+    run_id = record.get("id") or f"workflow-{uuid.uuid4().hex}"
+    nodes = list(record.get("nodes") or [])
+    edges = list(record.get("edges") or [])
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO workflow_runs (
+                id, schema_version, title, goal, status, current_node_id,
+                created_at, updated_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                record.get("schemaVersion") or record.get("schema_version") or "workflow.v1",
+                record.get("title") or "未命名任务流",
+                record.get("goal") or "",
+                record.get("status") or "draft",
+                record.get("currentNodeId") or "",
+                record.get("createdAt") or now,
+                record.get("updatedAt") or now,
+                record.get("completedAt"),
+            ),
+        )
+        node_id_by_key: dict[str, str] = {}
+        for index, node in enumerate(nodes):
+            node_id = node.get("id") or f"workflow-node-{uuid.uuid4().hex}"
+            node_key = node.get("key") or node.get("nodeKey") or node_id
+            node_id_by_key[node_key] = node_id
+            conn.execute(
+                """
+                INSERT INTO workflow_nodes (
+                    id, run_id, node_key, node_type, title, instruction, status,
+                    agent_id, team_id, summary, output, error, position, metadata,
+                    started_at, completed_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    node_id,
+                    run_id,
+                    node_key,
+                    node.get("type") or node.get("nodeType") or "agent",
+                    node.get("title") or node_key,
+                    node.get("instruction") or "",
+                    node.get("status") or "pending",
+                    node.get("agentId") or "",
+                    node.get("teamId") or "",
+                    node.get("summary") or "",
+                    node.get("output") or "",
+                    node.get("error") or "",
+                    int(node.get("position") if node.get("position") is not None else index),
+                    _dumps(node.get("metadata") or {}),
+                    node.get("startedAt"),
+                    node.get("completedAt"),
+                    node.get("updatedAt") or now,
+                ),
+            )
+        for edge in edges:
+            from_ref = str(edge.get("from") or edge.get("fromNodeId") or "")
+            to_ref = str(edge.get("to") or edge.get("toNodeId") or "")
+            from_node_id = node_id_by_key.get(from_ref, from_ref)
+            to_node_id = node_id_by_key.get(to_ref, to_ref)
+            if not from_node_id or not to_node_id:
+                continue
+            conn.execute(
+                """
+                INSERT INTO workflow_edges (
+                    id, run_id, from_node_id, to_node_id, condition, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    edge.get("id") or f"workflow-edge-{uuid.uuid4().hex}",
+                    run_id,
+                    from_node_id,
+                    to_node_id,
+                    edge.get("condition") or "",
+                    edge.get("createdAt") or now,
+                ),
+            )
+        conn.commit()
+    created = get_workflow_run(run_id)
+    return created or {"id": run_id}
+
+
+def list_workflow_runs(limit: int = 50) -> list[dict[str, Any]]:
+    """列出最近的 Dynamic Workflow Run。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM workflow_runs ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        event_counts = _workflow_event_counts(conn, [row["id"] for row in rows])
+    return [_workflow_run_from_row(row, event_count=event_counts.get(row["id"], 0)) for row in rows]
+
+
+def get_workflow_run(run_id: str, *, event_limit: int | None = None) -> dict[str, Any] | None:
+    """读取一个 Dynamic Workflow Run 的完整快照。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        run_row = conn.execute("SELECT * FROM workflow_runs WHERE id = ?", (run_id,)).fetchone()
+        if not run_row:
+            return None
+        node_rows = conn.execute(
+            """
+            SELECT * FROM workflow_nodes
+            WHERE run_id = ?
+            ORDER BY position ASC, updated_at ASC
+            """,
+            (run_id,),
+        ).fetchall()
+        edge_rows = conn.execute(
+            """
+            SELECT * FROM workflow_edges
+            WHERE run_id = ?
+            ORDER BY created_at ASC
+            """,
+            (run_id,),
+        ).fetchall()
+        artifact_rows = conn.execute(
+            """
+            SELECT * FROM workflow_artifacts
+            WHERE run_id = ?
+            ORDER BY created_at ASC
+            """,
+            (run_id,),
+        ).fetchall()
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS total FROM workflow_events WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        event_count = int(count_row["total"] if count_row else 0)
+        if event_limit and event_limit > 0:
+            event_rows = conn.execute(
+                """
+                SELECT * FROM (
+                    SELECT * FROM workflow_events
+                    WHERE run_id = ?
+                    ORDER BY sort_order DESC, created_at DESC
+                    LIMIT ?
+                )
+                ORDER BY sort_order ASC, created_at ASC
+                """,
+                (run_id, event_limit),
+            ).fetchall()
+        else:
+            event_rows = conn.execute(
+                """
+                SELECT * FROM workflow_events
+                WHERE run_id = ?
+                ORDER BY sort_order ASC, created_at ASC
+                """,
+                (run_id,),
+            ).fetchall()
+    return {
+        **_workflow_run_from_row(run_row, event_count=event_count),
+        "nodes": [_workflow_node_from_row(row) for row in node_rows],
+        "edges": [_workflow_edge_from_row(row) for row in edge_rows],
+        "events": [_workflow_event_from_row(row) for row in event_rows],
+        "artifacts": [_workflow_artifact_from_row(row) for row in artifact_rows],
+    }
+
+
+def update_workflow_run_status(
+    run_id: str,
+    status: str,
+    *,
+    current_node_id: str | None = None,
+    completed_at: str | None = None,
+) -> None:
+    """更新 Dynamic Workflow Run 状态。"""
+
+    ensure_db()
+    now = _utc_now()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE workflow_runs
+            SET status = ?,
+                current_node_id = COALESCE(?, current_node_id),
+                completed_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (status, current_node_id, completed_at, now, run_id),
+        )
+        conn.commit()
+
+
+def update_workflow_node_status(
+    node_id: str,
+    status: str,
+    *,
+    summary: str | None = None,
+    output: str | None = None,
+    error: str | None = None,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+) -> dict[str, Any] | None:
+    """更新 Dynamic Workflow 节点状态并返回更新后的节点。"""
+
+    ensure_db()
+    now = _utc_now()
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE workflow_nodes
+            SET status = ?,
+                summary = COALESCE(?, summary),
+                output = COALESCE(?, output),
+                error = COALESCE(?, error),
+                started_at = COALESCE(?, started_at),
+                completed_at = COALESCE(?, completed_at),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (status, summary, output, error, started_at, completed_at, now, node_id),
+        )
+        row = conn.execute("SELECT * FROM workflow_nodes WHERE id = ?", (node_id,)).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE workflow_runs SET current_node_id = ?, updated_at = ? WHERE id = ?",
+                (node_id if status == "running" else "", now, row["run_id"]),
+            )
+        conn.commit()
+    return _workflow_node_from_row(row) if row else None
+
+
+def append_workflow_event(
+    run_id: str,
+    event_type: str,
+    *,
+    node_id: str = "",
+    status: str = "",
+    title: str = "",
+    content: str = "",
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """追加一个 Dynamic Workflow 事件。"""
+
+    ensure_db()
+    now = _utc_now()
+    event_id = f"workflow-event-{uuid.uuid4().hex}"
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM workflow_events WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        sort_order = int(row["next_order"] if row else 0)
+        conn.execute(
+            """
+            INSERT INTO workflow_events (
+                id, run_id, node_id, event_type, status, title,
+                content, payload, created_at, sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                run_id,
+                node_id,
+                event_type,
+                status,
+                title,
+                content,
+                _dumps(payload or {}),
+                now,
+                sort_order,
+            ),
+        )
+        conn.execute("UPDATE workflow_runs SET updated_at = ? WHERE id = ?", (now, run_id))
+        conn.commit()
+    return {
+        "id": event_id,
+        "runId": run_id,
+        "nodeId": node_id,
+        "type": event_type,
+        "status": status,
+        "title": title,
+        "content": content,
+        "payload": payload or {},
+        "createdAt": now,
+        "sortOrder": sort_order,
+    }
+
+
+def _workflow_event_counts(conn: sqlite3.Connection, run_ids: list[str]) -> dict[str, int]:
+    if not run_ids:
+        return {}
+    placeholders = ",".join("?" for _ in run_ids)
+    rows = conn.execute(
+        f"""
+        SELECT run_id, COUNT(*) AS total
+        FROM workflow_events
+        WHERE run_id IN ({placeholders})
+        GROUP BY run_id
+        """,
+        run_ids,
+    ).fetchall()
+    return {row["run_id"]: int(row["total"]) for row in rows}
+
+
 def get_latest_user_chat_message(session_id: str, content: str | None = None) -> dict[str, Any] | None:
     """读取某个会话里最近一条用户消息，可按内容精确匹配。"""
 
@@ -1783,6 +2351,83 @@ def _chat_run_from_row(row: sqlite3.Row, events: list[str], event_count: int | N
         "updatedAt": row["updated_at"],
         "events": events,
         "eventCount": len(events) if event_count is None else event_count,
+    }
+
+
+def _workflow_run_from_row(row: sqlite3.Row, event_count: int = 0) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "schemaVersion": row["schema_version"],
+        "title": row["title"],
+        "goal": row["goal"],
+        "status": row["status"],
+        "currentNodeId": row["current_node_id"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+        "completedAt": row["completed_at"],
+        "eventCount": event_count,
+    }
+
+
+def _workflow_node_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "runId": row["run_id"],
+        "key": row["node_key"],
+        "type": row["node_type"],
+        "title": row["title"],
+        "instruction": row["instruction"],
+        "status": row["status"],
+        "agentId": row["agent_id"],
+        "teamId": row["team_id"],
+        "summary": row["summary"],
+        "output": row["output"],
+        "error": row["error"],
+        "position": int(row["position"] or 0),
+        "metadata": _loads(row["metadata"], {}),
+        "startedAt": row["started_at"],
+        "completedAt": row["completed_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def _workflow_edge_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "runId": row["run_id"],
+        "fromNodeId": row["from_node_id"],
+        "toNodeId": row["to_node_id"],
+        "condition": row["condition"],
+        "createdAt": row["created_at"],
+    }
+
+
+def _workflow_event_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "runId": row["run_id"],
+        "nodeId": row["node_id"],
+        "type": row["event_type"],
+        "status": row["status"],
+        "title": row["title"],
+        "content": row["content"],
+        "payload": _loads(row["payload"], {}),
+        "createdAt": row["created_at"],
+        "sortOrder": int(row["sort_order"] or 0),
+    }
+
+
+def _workflow_artifact_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "runId": row["run_id"],
+        "nodeId": row["node_id"],
+        "type": row["artifact_type"],
+        "title": row["title"],
+        "content": row["content"],
+        "uri": row["uri"],
+        "metadata": _loads(row["metadata"], {}),
+        "createdAt": row["created_at"],
     }
 
 

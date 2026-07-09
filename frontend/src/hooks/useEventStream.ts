@@ -23,6 +23,8 @@ import type {
 import { applyDisplayEvent, createEmptyDisplaySnapshot, normalizeDisplaySnapshot } from '../utils/displayEventReducer';
 import { notifySuccess } from '../utils/feedback';
 import { createId } from '../utils/id';
+import { subagentToolDataFromDisplayItem } from '../features/chat/subagentToolData';
+import type { SubagentTimelineItem } from '../types/subagent';
 
 export type { ChatRunPlanState, ChatRunPlanStep, DisplaySnapshot } from '../types/runState';
 
@@ -84,6 +86,12 @@ export interface ToolCallInfo {
   result: string;
   /** 执行状态 */
   status: 'calling' | 'running' | 'completed' | 'failed';
+  subagentName?: string;
+  subagentInvocationId?: string;
+  subagentStatus?: string;
+  subagentTimeline?: SubagentTimelineItem[];
+  subagentSummary?: string;
+  subagentError?: string;
 }
 
 function normalizeToolStatus(status: unknown): ToolCallInfo['status'] {
@@ -496,6 +504,7 @@ function toolCallFromDisplayItem(item: DisplayBlock['items'][number]): ToolCallI
     args: pickDisplayString(item.data, ['inputPreview', 'input', 'args']),
     result: pickDisplayString(item.data, ['outputPreview', 'output', 'result', 'error']),
     status: normalizeToolStatus(item.status || item.data.status),
+    ...subagentToolDataFromDisplayItem(item),
   };
 }
 

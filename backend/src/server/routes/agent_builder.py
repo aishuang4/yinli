@@ -60,7 +60,6 @@ class BuilderAgentDraft(BaseModel):
     model_config_data: ModelConfig = Field(default_factory=ModelConfig, alias="modelConfig")
     mcp_tools: list[str] = Field(default_factory=list, alias="mcpTools")
     skills: list[str] = Field(default_factory=list)
-    callable_agent_refs: list[str] = Field(default_factory=list, alias="callableAgentRefs")
     tags: list[str] = Field(default_factory=list)
     recommended_tools: list[BuilderRecommendedItem] = Field(default_factory=list, alias="recommendedTools")
     recommended_skills: list[BuilderRecommendedItem] = Field(default_factory=list, alias="recommendedSkills")
@@ -144,7 +143,6 @@ async def apply_agent_team(data: BuilderApplyRequest) -> BuilderApplyResponse:
             modelConfig=draft.model_config_data,
             mcpTools=draft.mcp_tools,
             skills=draft.skills,
-            callableAgents=[],
             tags=draft.tags,
             guardrails=Guardrails(human_approval=True),
         ))
@@ -188,7 +186,6 @@ async def _generate_plan_with_model(data: BuilderPlanRequest) -> dict:
         "Design reviewable Agent drafts from the user requirement.",
         "Use existing MCP tool ids and Skill ids only when they match the role.",
         "If a needed capability is missing, put its natural-language name in missingTools or missingSkills.",
-        "Subagent/callableAgents design is disabled. Always return callableAgents as an empty array if present.",
         "JSON schema:",
         "{",
         '  "team": {"name": "...", "description": "..."},',
@@ -206,7 +203,7 @@ async def _generate_plan_with_model(data: BuilderPlanRequest) -> dict:
         f"Available MCP tools:\n{available_tools or '(none)'}",
         f"Available Skills:\n{available_skills or '(none)'}",
         "For team mode, generate 1 leader and 2-4 workers.",
-        "For agents mode, generate standalone Agents only. Do not create a Team and do not create callable Subagent relationships.",
+        "For agents mode, generate standalone Agents only. Do not create a Team.",
     ])
     runtime_settings = get_effective_model_settings()
     model_name = data.preferred_model or runtime_settings.default_model
@@ -235,7 +232,6 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
     warnings = [str(item) for item in raw.get("warnings", []) if str(item).strip()]
 
     drafts: list[BuilderAgentDraft] = []
-    pending_callable_names: dict[str, list[str]] = {}
     for index, item in enumerate(agents_raw):
         if not isinstance(item, dict):
             continue
@@ -275,7 +271,6 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
             missingSkills=_unique_nonempty(missing_skills),
         )
         drafts.append(draft)
-        pending_callable_names[draft.temp_id] = []
 
     if not drafts:
         return _normalize_plan(data, _heuristic_plan(data))
@@ -286,8 +281,6 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
 
     if data.mode == "team" and not any(item.role == "leader" for item in drafts):
         drafts[0].role = "leader"
-
-    drafts = _attach_callable_agent_refs(data, drafts, pending_callable_names)
 
     for draft in drafts:
         if draft.missing_tools:
@@ -309,16 +302,6 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
         agents=drafts,
         warnings=_unique_nonempty(warnings),
     )
-
-
-def _attach_callable_agent_refs(
-    data: BuilderPlanRequest,
-    drafts: list[BuilderAgentDraft],
-    pending_callable_names: dict[str, list[str]],
-) -> list[BuilderAgentDraft]:
-    """Subagent 已下线，草案不再生成 callableAgents 关系。"""
-
-    return [draft.model_copy(update={"callable_agent_refs": []}) for draft in drafts]
 
 
 def _heuristic_plan(data: BuilderPlanRequest) -> dict:

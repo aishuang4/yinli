@@ -63,6 +63,8 @@ class MainAgentRuntimeSpec:
     session_id: str
     tool_scope: RuntimeToolScope
     extra_tools: list[ToolBase]
+    tool_name_allowlist: set[str] | None
+    tool_name_denylist: set[str]
     middlewares: list[MiddlewareBase]
 
 
@@ -194,6 +196,8 @@ def build_main_agent_runtime_spec(
     guardrail_cache_key: str,
     runtime_features_cache_key: str = "none",
     extra_tools: list[ToolBase] | None = None,
+    tool_name_allowlist: set[str] | None = None,
+    tool_name_denylist: set[str] | None = None,
     middlewares: list[MiddlewareBase] | None = None,
 ) -> MainAgentRuntimeSpec:
     """构建主 Agent 工厂参数，不包含 trace 回调。"""
@@ -228,6 +232,8 @@ def build_main_agent_runtime_spec(
         session_id=session_id,
         tool_scope=runtime_tool_scope,
         extra_tools=extra_tools or [],
+        tool_name_allowlist=tool_name_allowlist,
+        tool_name_denylist=tool_name_denylist or set(),
         middlewares=middlewares or [],
     )
 
@@ -257,5 +263,7 @@ def create_main_agent_from_spec(
         tool_scope=spec.tool_scope,
         on_fallback_event=on_fallback_event,
         extra_tools=spec.extra_tools,
+        tool_name_allowlist=spec.tool_name_allowlist,
+        tool_name_denylist=spec.tool_name_denylist,
         middlewares=spec.middlewares,
     )

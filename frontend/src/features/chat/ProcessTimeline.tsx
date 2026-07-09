@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { BookOpenCheck, ChevronDown, ChevronRight } from 'lucide-react';
+import { Bot, BookOpenCheck, ChevronDown, ChevronRight } from 'lucide-react';
 import { Accordion, type IAccordionProps } from '@agentscope-ai/chat';
 import { Tag } from '@agentscope-ai/design';
 import {
@@ -16,6 +16,7 @@ import type { SkillCallInfo } from '../../hooks/useEventStream';
 import type { ChatDisplayStatus, ChatProcessItem } from './chatDisplayTypes';
 import { isAskUserToolName } from './humanInteractionUtils';
 import { useSmoothStreamingText } from './useSmoothStreamingText';
+import type { SubagentTimelineItem } from '../../types/subagent';
 
 export function AccordionProcessTimeline({
   items,
@@ -44,54 +45,49 @@ export function AccordionProcessTimeline({
   );
   const sequentialReveal = autoScroll && toAccordionStatus(status) === 'generating';
   const itemOrderSignature = useMemo(() => items.map((item) => item.id).join('|'), [items]);
-  const revealedItemCountRef = useRef(sequentialReveal ? Math.min(1, items.length) : items.length);
-  const [, forceRevealRender] = useReducerVersion();
+  const [revealedItemCount, setRevealedItemCount] = useState(
+    sequentialReveal ? Math.min(1, items.length) : items.length,
+  );
 
   useEffect(() => {
     if (!sequentialReveal) {
-      if (revealedItemCountRef.current !== items.length) {
-        revealedItemCountRef.current = items.length;
-        forceRevealRender();
-      }
+      setRevealedItemCount(items.length);
       return;
     }
-    const nextCount = items.length === 0
-      ? 0
-      : Math.min(Math.max(revealedItemCountRef.current || 1, 1), items.length);
-    if (revealedItemCountRef.current !== nextCount) {
-      revealedItemCountRef.current = nextCount;
-      forceRevealRender();
-    }
-  }, [forceRevealRender, itemOrderSignature, items.length, sequentialReveal]);
+    setRevealedItemCount((current) => {
+      const nextCount = items.length === 0
+        ? 0
+        : Math.min(Math.max(current || 1, 1), items.length);
+      return current === nextCount ? current : nextCount;
+    });
+  }, [itemOrderSignature, items.length, sequentialReveal]);
 
   const revealNextItem = useCallback(() => {
-    if (revealedItemCountRef.current >= items.length) return;
-    revealedItemCountRef.current += 1;
-    forceRevealRender();
-  }, [forceRevealRender, items.length]);
+    setRevealedItemCount((current) => (current >= items.length ? current : current + 1));
+  }, [items.length]);
 
   const handleTextAnimationChange = useCallback((itemId: string, isAnimating: boolean) => {
     if (!sequentialReveal || isAnimating) return;
     const itemIndex = items.findIndex((item) => item.id === itemId);
-    if (itemIndex === revealedItemCountRef.current - 1) {
+    if (itemIndex === revealedItemCount - 1) {
       revealNextItem();
     }
-  }, [items, revealNextItem, sequentialReveal]);
+  }, [items, revealNextItem, revealedItemCount, sequentialReveal]);
 
   useEffect(() => {
     if (!sequentialReveal) return;
-    const current = items[revealedItemCountRef.current - 1];
-    if (!current || revealedItemCountRef.current >= items.length) return;
+    const current = items[revealedItemCount - 1];
+    if (!current || revealedItemCount >= items.length) return;
     if ((current.type === 'reasoning' || current.type === 'thinking') && current.content.trim()) return;
     const timer = window.setTimeout(revealNextItem, 160);
     return () => window.clearTimeout(timer);
-  }, [items, revealNextItem, scrollSignature, sequentialReveal]);
+  }, [items, revealNextItem, revealedItemCount, scrollSignature, sequentialReveal]);
 
   const visibleItems = sequentialReveal
-    ? items.slice(0, revealedItemCountRef.current)
+    ? items.slice(0, revealedItemCount)
     : items;
   const visibleScrollSignature = sequentialReveal
-    ? `${scrollSignature}:visible-${revealedItemCountRef.current}`
+    ? `${scrollSignature}:visible-${revealedItemCount}`
     : scrollSignature;
   const steps = useMemo(() => visibleItems
     .map((item) => processItemToAccordionStep(
@@ -150,7 +146,7 @@ function processItemContentLength(item: ChatProcessItem): number {
     return item.content.length;
   }
   if (item.type === 'tool') {
-    return `${item.toolCall.args}${item.toolCall.result}${item.toolCall.status}`.length;
+    return `${item.toolCall.args}${item.toolCall.result}${item.toolCall.status}${item.toolCall.subagentTimeline?.length ?? 0}`.length;
   }
   if (item.type === 'skill') {
     return `${item.skillCall.content}${item.skillCall.status}`.length;
@@ -173,6 +169,7 @@ function processItemToAccordionStep(
   if (item.type === 'tool') {
     const toolStatus = item.toolCall.status || item.status;
     const isAskUser = isAskUserToolName(item.toolCall.name);
+    const subagent = getSubagentDelegationInfo(item.toolCall);
     if (isPlanExitTool(item.toolCall.name)) {
       return {
         id: `${item.type}-${item.id}`,
@@ -185,14 +182,26 @@ function processItemToAccordionStep(
     }
     return {
       id: `${item.type}-${item.id}`,
-      title: titleForStatus(isAskUser ? '人工反馈 · 模型反问' : `Action · ${item.toolCall.name}`, toolStatus),
+      title: titleForStatus(
+        subagent
+          ? `Subagent · ${subagent.name}`
+          : isAskUser
+            ? '人工反馈 · 模型反问'
+            : `Action · ${item.toolCall.name}`,
+        toolStatus,
+      ),
       status: toAccordionStatus(toolStatus),
-      icon: toolIconForStatus(toolStatus),
+      icon: subagent ? subagentIconForStatus(toolStatus) : toolIconForStatus(toolStatus),
       iconLine: !isLast,
       defaultOpen: item.toolCall.status === 'calling' || item.toolCall.status === 'running' || item.toolCall.status === 'failed',
       rightChildren: <StepStatusText status={toolStatus} />,
       children: (
-        <ToolInputOutputPanels input={item.toolCall.args} output={item.toolCall.result} isAskUser={isAskUser} />
+        <ToolInputOutputPanels
+          input={item.toolCall.args}
+          output={item.toolCall.result}
+          isAskUser={isAskUser}
+          subagent={subagent}
+        />
       ),
     };
   }
@@ -281,16 +290,6 @@ function StreamingProcessMarkdown({
   );
 }
 
-function useReducerVersion(): [number, () => void] {
-  const versionRef = useRef(0);
-  const [, setVersion] = useState(0);
-  const bump = useCallback(() => {
-    versionRef.current += 1;
-    setVersion(versionRef.current);
-  }, []);
-  return [versionRef.current, bump];
-}
-
 function textItemDisplayStatus(
   itemStatus: ChatDisplayStatus | string | undefined,
   processStatus: ChatDisplayStatus | string | undefined,
@@ -337,6 +336,17 @@ function toolIconForStatus(status: ChatDisplayStatus | string | undefined): Reac
   return <SparkToolLine size={14} />;
 }
 
+function subagentIconForStatus(status: ChatDisplayStatus | string | undefined): ReactElement {
+  const accordionStatus = toAccordionStatus(status);
+  if (accordionStatus === 'generating') {
+    return <SparkLoadingLine size={14} spin />;
+  }
+  if (accordionStatus === 'error') {
+    return <SparkErrorCircleLine size={14} className="text-[var(--color-error)]" />;
+  }
+  return <Bot size={14} />;
+}
+
 function titleForStatus(title: string, status: ChatDisplayStatus | string | undefined): string | ReactElement {
   if (toAccordionStatus(status) !== 'error') return title;
   return (
@@ -344,6 +354,82 @@ function titleForStatus(title: string, status: ChatDisplayStatus | string | unde
       {title}
     </span>
   );
+}
+
+type SubagentDelegationInfo = {
+  name: string;
+  task: string;
+  summary: string;
+  error: string;
+  status: string;
+  timeline: SubagentTimelineItem[];
+};
+
+function getSubagentDelegationInfo(toolCall: {
+  name: string;
+  args: string;
+  result: string;
+  subagentName?: string;
+  subagentStatus?: string;
+  subagentTimeline?: SubagentTimelineItem[];
+  subagentSummary?: string;
+  subagentError?: string;
+  status?: string;
+}): SubagentDelegationInfo | null {
+  const toolName = String(toolCall.name || '').trim();
+  const input = String(toolCall.args || '');
+  const payload = parseToolPayload(input);
+  const subagentName = toolCall.subagentName || pickPayloadString(payload, ['subagentName', 'subagent_name', 'agentName', 'name']);
+  const task = pickPayloadString(payload, ['task', 'prompt', 'instruction', 'message']) || input;
+  const isDelegateTask = normalizeToolKey(toolName) === 'delegatetask';
+  if (!isDelegateTask && !subagentName) return null;
+  return {
+    name: subagentName || 'Subagent',
+    task: stripCodeFence(task),
+    summary: normalizeSubagentSummary(toolCall.subagentSummary || toolCall.result),
+    error: stripCodeFence(toolCall.subagentError || ''),
+    status: toolCall.subagentStatus || toolCall.status || '',
+    timeline: toolCall.subagentTimeline || [],
+  };
+}
+
+function parseToolPayload(input: string): Record<string, unknown> {
+  const trimmed = input.trim();
+  if (!trimmed) return {};
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    const matches = [...trimmed.matchAll(/["']?(subagentName|subagent_name|agentName)["']?\s*[:=]\s*["']([^"',\n}]+)["']/gi)];
+    return Object.fromEntries(matches.map((match) => [match[1], match[2]]));
+  }
+}
+
+function pickPayloadString(payload: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = payload[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function normalizeToolKey(name: string): string {
+  return String(name || '').replace(/[\s_-]+/g, '').toLowerCase();
+}
+
+function normalizeSubagentSummary(output: string): string {
+  return stripCodeFence(String(output || ''))
+    .replace(/^Subagent\s+.+?\s+completed\.\s*\n+/i, '')
+    .replace(/^Summary:\s*/i, '')
+    .trim();
+}
+
+function stripCodeFence(value: string): string {
+  const trimmed = String(value || '').trim();
+  const match = /^```(?:json|markdown|md|text)?\s*\n([\s\S]*?)\n```$/i.exec(trimmed);
+  return (match ? match[1] : trimmed).trim();
 }
 
 function StepStatusText({ status }: { status: ChatDisplayStatus | string | undefined }) {
@@ -365,9 +451,22 @@ function StepStatusText({ status }: { status: ChatDisplayStatus | string | undef
   );
 }
 
-function ToolInputOutputPanels({ input, output, isAskUser = false }: { input: string; output: string; isAskUser?: boolean }) {
+function ToolInputOutputPanels({
+  input,
+  output,
+  isAskUser = false,
+  subagent = null,
+}: {
+  input: string;
+  output: string;
+  isAskUser?: boolean;
+  subagent?: SubagentDelegationInfo | null;
+}) {
   const hasInput = Boolean(input.trim());
   const hasOutput = Boolean(output.trim());
+  if (subagent) {
+    return <SubagentDelegationPanels subagent={subagent} />;
+  }
   if (!hasInput && !hasOutput) {
     return (
       <Accordion.BodyContent>
@@ -392,6 +491,122 @@ function ToolInputOutputPanels({ input, output, isAskUser = false }: { input: st
       )}
     </div>
   );
+}
+
+function SubagentDelegationPanels({ subagent }: { subagent: SubagentDelegationInfo }) {
+  const hasTask = Boolean(subagent.task.trim());
+  const hasSummary = Boolean(subagent.summary.trim());
+  const hasError = Boolean(subagent.error.trim());
+  const hasTimeline = subagent.timeline.length > 0;
+  if (!hasTask && !hasSummary && !hasTimeline && !hasError) {
+    return (
+      <Accordion.BodyContent>
+        <div className="p-3 text-xs text-[var(--color-text-tertiary)]">
+          Subagent 委托已创建，等待任务详情
+        </div>
+      </Accordion.BodyContent>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {hasTask && (
+        <Accordion.BodyContent headerLeft="委托任务">
+          <div className="rounded-md bg-[var(--color-bg-primary)] p-3 text-sm leading-7 text-[var(--color-text-primary)]">
+            <MarkdownContent content={subagent.task} className="w-full" />
+          </div>
+        </Accordion.BodyContent>
+      )}
+      {(subagent.status === 'running' || subagent.status === 'calling' || subagent.status === 'waiting' || subagent.status === 'failed') && (
+        <Accordion.BodyContent headerLeft="当前状态">
+          <SubagentCurrentStatusBlock timeline={subagent.timeline} status={subagent.status} />
+        </Accordion.BodyContent>
+      )}
+      {hasError && (
+        <Accordion.BodyContent headerLeft="执行错误">
+          <div className="rounded-md bg-[var(--color-bg-primary)] p-3 text-sm leading-7 text-[var(--color-error)]">
+            <MarkdownContent content={subagent.error} className="w-full" />
+          </div>
+        </Accordion.BodyContent>
+      )}
+      {hasSummary && (
+        <Accordion.BodyContent headerLeft="返回主 Agent 的结果">
+          <div className="rounded-md bg-[var(--color-bg-primary)] p-3 text-sm leading-7 text-[var(--color-text-primary)]">
+            <MarkdownContent content={subagent.summary} className="w-full" />
+          </div>
+        </Accordion.BodyContent>
+      )}
+    </div>
+  );
+}
+
+function SubagentCurrentStatusBlock({
+  timeline,
+  status,
+}: {
+  timeline: SubagentTimelineItem[];
+  status: string;
+}) {
+  const current = pickCurrentSubagentTimelineItem(timeline, status);
+  const title = current?.title || defaultSubagentStatusTitle(status);
+  const detail = current?.detail || '';
+  return (
+    <div className="rounded-md bg-[var(--color-bg-primary)] p-3">
+      <div className="grid grid-cols-[16px_1fr] gap-2">
+        {status === 'running' || status === 'calling'
+          ? <SparkLoadingLine size={14} spin className="mt-1 text-[var(--color-primary)]" />
+          : <span className={`mt-1.5 h-2 w-2 rounded-full ${subagentTimelineDotClass(status)}`} />}
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-[var(--color-text-primary)]">
+            {title}
+          </div>
+          {detail && (
+            <div className="mt-1 line-clamp-3 text-xs leading-6 text-[var(--color-text-secondary)]">
+              <MarkdownContent content={detail} className="w-full" />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function pickCurrentSubagentTimelineItem(
+  timeline: SubagentTimelineItem[],
+  status: string,
+): SubagentTimelineItem | null {
+  if (timeline.length === 0) return null;
+  if (status === 'completed') {
+    return findLastSubagentTimelineItem(timeline, (item) => item.type === 'SUBAGENT_COMPLETED') || timeline[timeline.length - 1];
+  }
+  if (status === 'failed') {
+    return findLastSubagentTimelineItem(timeline, (item) => item.status === 'failed') || timeline[timeline.length - 1];
+  }
+  return timeline[timeline.length - 1];
+}
+
+function findLastSubagentTimelineItem(
+  timeline: SubagentTimelineItem[],
+  predicate: (item: SubagentTimelineItem) => boolean,
+): SubagentTimelineItem | null {
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    if (predicate(timeline[index])) return timeline[index];
+  }
+  return null;
+}
+
+function defaultSubagentStatusTitle(status: string): string {
+  if (status === 'completed') return '已返回结果给主 Agent';
+  if (status === 'failed') return 'Subagent 执行失败';
+  if (status === 'waiting') return '等待人工确认';
+  return 'Subagent 正在运行';
+}
+
+function subagentTimelineDotClass(status: string): string {
+  if (status === 'failed') return 'bg-[var(--color-error)]';
+  if (status === 'completed') return 'bg-[var(--color-success)]';
+  if (status === 'waiting') return 'bg-[var(--color-warning)]';
+  return 'bg-[var(--color-primary)]';
 }
 
 function ToolPreBlock({ value }: { value: string }) {

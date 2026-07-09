@@ -20,6 +20,7 @@ TOOL_INPUT_PREVIEW_MAX_CHARS = 2_000
 TOOL_OUTPUT_PREVIEW_MAX_CHARS = 4_000
 REASONING_MAX_CHARS = 100_000
 FINAL_ANSWER_MAX_CHARS = 300_000
+SUBAGENT_TIMELINE_MAX_ITEMS = 80
 DISPLAY_SNAPSHOT_VERSION = 3
 DISPLAY_EVENT_SCOPE = "single_agent"
 PROCESS_TIMELINE_KEY = "_processTimelineItems"
@@ -926,6 +927,7 @@ def _project_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     state["runtimeEvents"] = [*state.get("runtimeEvents", [])[-199:], event]
     _project_actor_timeline_from_runtime_event(state, event)
+    _project_subagent_tool_from_runtime_event(state, event)
     if runtime_type in {"HITL_RESOLVED", "RUN_RESUMED"}:
         interaction_id = str(payload.get("interactionId") or event.get("interactionId") or "")
         if interaction_id:
@@ -1026,6 +1028,191 @@ def _project_actor_timeline_from_runtime_event(state: dict[str, Any], event: dic
                 "error": str(payload.get("state") or "") if item_status == "failed" else "",
             },
         })
+
+
+def _project_subagent_tool_from_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None:
+    """把 Subagent Runtime Event 合并到父 DelegateTask 工具项。"""
+
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    tool_id = str(payload.get("toolCallId") or payload.get("tool_call_id") or "")
+    invocation_id = str(payload.get("invocationId") or "")
+    if not tool_id and invocation_id:
+        tool_id = f"subagent-{invocation_id}"
+    if not tool_id:
+        return
+    runtime_type = str(event.get("type") or "")
+    if not _is_subagent_runtime_event(runtime_type, payload):
+        return
+
+    tools = list(state.get("tools") or [])
+    index = next((idx for idx, item in enumerate(tools) if isinstance(item, dict) and item.get("id") == tool_id), -1)
+    current = tools[index] if index >= 0 and isinstance(tools[index], dict) else {}
+    timeline = [
+        item
+        for item in (current.get("subagentTimeline") or [])
+        if isinstance(item, dict)
+    ]
+    timeline_item = _subagent_timeline_item_from_runtime_event(event)
+    if timeline_item:
+        timeline.append(timeline_item)
+
+    subagent_name = str(payload.get("subagentName") or current.get("subagentName") or "Subagent")
+    if payload.get("subagentFinalAnswerDelta"):
+        summary = str(current.get("subagentSummary") or "") + str(payload.get("delta") or "")
+    else:
+        summary = str(
+            payload.get("resultPreview")
+            or payload.get("partialResultPreview")
+            or current.get("subagentSummary")
+            or ""
+        )
+    error = str(payload.get("error") or current.get("subagentError") or "")
+    status = _subagent_status_from_runtime_event(runtime_type, str(event.get("status") or current.get("subagentStatus") or "running"))
+    output_preview = summary or str(current.get("outputPreview") or "")
+    if error and not output_preview:
+        output_preview = error
+
+    tool = {
+        **current,
+        "id": tool_id,
+        "name": str(current.get("name") or "DelegateTask"),
+        "status": status,
+        "inputPreview": str(current.get("inputPreview") or payload.get("taskPreview") or ""),
+        "outputPreview": _truncate(output_preview, TOOL_OUTPUT_PREVIEW_MAX_CHARS),
+        "outputSize": max(int(current.get("outputSize") or 0), len(output_preview)),
+        "outputTruncated": len(output_preview) > TOOL_OUTPUT_PREVIEW_MAX_CHARS,
+        "error": error,
+        "startedAt": str(current.get("startedAt") or event.get("timestamp") or _utc_now()),
+        "completedAt": str(current.get("completedAt") or ""),
+        "subagentName": subagent_name,
+        "subagentInvocationId": invocation_id or str(current.get("subagentInvocationId") or ""),
+        "subagentStatus": status,
+        "subagentTimeline": timeline[-SUBAGENT_TIMELINE_MAX_ITEMS:],
+        "subagentSummary": summary,
+        "subagentError": error,
+    }
+    if status in {"completed", "failed", "waiting"}:
+        tool["completedAt"] = str(event.get("timestamp") or _utc_now())
+    if index >= 0:
+        tools[index] = tool
+    else:
+        tools.append(tool)
+    state["tools"] = tools[-200:]
+
+
+def _is_subagent_runtime_event(runtime_type: str, payload: dict[str, Any]) -> bool:
+    if runtime_type.startswith("SUBAGENT_"):
+        return True
+    return bool(payload.get("invocationId") and payload.get("subagentName"))
+
+
+def _subagent_status_from_runtime_event(runtime_type: str, status: str) -> str:
+    if runtime_type == "SUBAGENT_COMPLETED":
+        return "completed"
+    if runtime_type == "SUBAGENT_FAILED":
+        return "failed"
+    if runtime_type == "SUBAGENT_WAITING_HUMAN":
+        return "waiting"
+    return status if status in {"failed", "waiting"} else "running"
+
+
+def _subagent_timeline_item_from_runtime_event(event: dict[str, Any]) -> dict[str, Any] | None:
+    runtime_type = str(event.get("type") or "")
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    timestamp = str(event.get("timestamp") or _utc_now())
+    status = str(event.get("status") or "running")
+    if status not in {"running", "completed", "failed", "waiting"}:
+        status = "running"
+    subagent_name = str(payload.get("subagentName") or "Subagent")
+    tool_name = str(payload.get("tool_call_name") or payload.get("toolName") or "")
+
+    title = ""
+    detail = ""
+    kind = "event"
+    if runtime_type == "SUBAGENT_STARTED":
+        title = f"启动 {subagent_name}"
+        detail = str(payload.get("taskPreview") or "")
+        kind = "start"
+    elif runtime_type == "SUBAGENT_CONTEXT":
+        title = "加载上下文与权限"
+        detail = _subagent_context_detail(payload)
+        kind = "context"
+    elif runtime_type == "AGENT_STARTED":
+        title = "子 Agent 开始执行"
+        kind = "agent"
+    elif runtime_type == "AGENT_MODEL_CALL_STARTED":
+        title = "调用模型"
+        kind = "model"
+    elif runtime_type == "AGENT_MODEL_CALL_COMPLETED":
+        title = "模型调用完成"
+        kind = "model"
+    elif runtime_type == "TOOL_CALL_STARTED":
+        if tool_name == "FinalAnswerStart":
+            title = "准备最终摘要"
+            kind = "summary"
+        else:
+            title = f"调用工具 {tool_name or 'tool'}"
+            kind = "tool"
+    elif runtime_type == "TOOL_RESULT_COMPLETED":
+        title = f"工具完成 {tool_name or 'tool'}"
+        kind = "tool"
+    elif runtime_type == "AGENT_COMPLETED":
+        title = "子 Agent 完成运行"
+        kind = "agent"
+    elif runtime_type == "AGENT_OUTPUT_DELTA" and payload.get("subagentFinalAnswerDelta"):
+        return None
+    elif runtime_type == "SUBAGENT_WAITING_HUMAN":
+        title = "等待人工确认"
+        detail = str(payload.get("partialResultPreview") or "")
+        kind = "waiting"
+    elif runtime_type == "SUBAGENT_COMPLETED":
+        title = "返回结果给主 Agent"
+        detail = str(payload.get("resultPreview") or "")
+        kind = "complete"
+    elif runtime_type == "SUBAGENT_FAILED":
+        title = "Subagent 执行失败"
+        detail = str(payload.get("error") or payload.get("partialResultPreview") or "")
+        kind = "error"
+        status = "failed"
+    else:
+        return None
+
+    return {
+        "id": str(event.get("id") or f"{runtime_type}-{timestamp}"),
+        "kind": kind,
+        "type": runtime_type,
+        "title": title,
+        "detail": _truncate(detail, 1_200),
+        "status": status,
+        "timestamp": timestamp,
+        "toolName": tool_name,
+    }
+
+
+def _subagent_context_detail(payload: dict[str, Any]) -> str:
+    parts: list[str] = []
+    tools = payload.get("effectiveTools") or payload.get("tools")
+    if isinstance(tools, list):
+        parts.append(f"可用工具 {len(tools)} 个")
+    skills = payload.get("skills")
+    if isinstance(skills, list):
+        parts.append(f"注入 Skill {len(skills)} 个")
+    permission = payload.get("permission")
+    if isinstance(permission, dict):
+        mode = str(permission.get("mode") or permission.get("permissionMode") or "")
+        if mode:
+            parts.append(f"权限模式 {mode}")
+    return "，".join(parts) or "已准备独立上下文"
+
+
+def _model_usage_detail(payload: dict[str, Any]) -> str:
+    model_name = str(payload.get("model_name") or "")
+    input_tokens = str(payload.get("input_tokens") or "")
+    output_tokens = str(payload.get("output_tokens") or "")
+    token_text = ""
+    if input_tokens or output_tokens:
+        token_text = f"input {input_tokens or 0} / output {output_tokens or 0}"
+    return "，".join(part for part in [model_name, token_text] if part)
 
 
 def _actor_id_from_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> str:
@@ -1242,6 +1429,9 @@ def _skill_display_events_for_raw_event(state: dict[str, Any], event_type: str) 
 def _runtime_display_events_for_raw_event(state: dict[str, Any], event: dict[str, Any]) -> list[dict[str, Any]]:
     runtime_type = str(event.get("type") or "")
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    subagent_event = _subagent_display_event_for_runtime_event(state, event)
+    if subagent_event:
+        return [subagent_event]
     actor_event = _actor_display_event_for_runtime_event(state, event)
     if actor_event:
         return [actor_event]
@@ -1307,6 +1497,37 @@ def _runtime_display_events_for_raw_event(state: dict[str, Any], event: dict[str
             data={"content": str(state.get("finalAnswer") or ""), "started": True},
         )]
     return []
+
+
+def _subagent_display_event_for_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> dict[str, Any] | None:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    runtime_type = str(event.get("type") or "")
+    if not _is_subagent_runtime_event(runtime_type, payload):
+        return None
+    tool_id = str(payload.get("toolCallId") or payload.get("tool_call_id") or "")
+    invocation_id = str(payload.get("invocationId") or "")
+    if not tool_id and invocation_id:
+        tool_id = f"subagent-{invocation_id}"
+    if not tool_id:
+        return None
+    tool = _find_tool(state, tool_id)
+    if not tool:
+        return None
+    status = str(tool.get("status") or "running")
+    event_name = "tool.started"
+    if status == "completed":
+        event_name = "tool.completed"
+    elif status == "failed":
+        event_name = "tool.failed"
+    return _display_event(
+        state,
+        block="process",
+        event=event_name,
+        op="upsert",
+        target_id=tool_id,
+        status=status,
+        data=_tool_display_data(tool),
+    )
 
 
 def _actor_display_event_for_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> dict[str, Any] | None:
@@ -1729,6 +1950,16 @@ def _upsert_tool(state: dict[str, Any], data: dict[str, Any], *, status: str) ->
         "startedAt": current.get("startedAt") or _utc_now(),
         "completedAt": current.get("completedAt") or "",
     }
+    for key in [
+        "subagentName",
+        "subagentInvocationId",
+        "subagentStatus",
+        "subagentTimeline",
+        "subagentSummary",
+        "subagentError",
+    ]:
+        if key in current:
+            tool[key] = current[key]
     if index >= 0:
         tools[index] = tool
     else:
@@ -1878,7 +2109,7 @@ def _find_plan(state: dict[str, Any], plan_id: str) -> dict[str, Any] | None:
 def _tool_display_data(tool: dict[str, Any]) -> dict[str, Any]:
     input_text = str(tool.get("input") or tool.get("inputPreview") or "")
     output_text = str(tool.get("output") or tool.get("outputPreview") or "")
-    return {
+    data = {
         "name": str(tool.get("name") or "tool"),
         "inputPreview": input_text,
         "input": input_text,
@@ -1890,6 +2121,17 @@ def _tool_display_data(tool: dict[str, Any]) -> dict[str, Any]:
         "startedAt": str(tool.get("startedAt") or ""),
         "completedAt": str(tool.get("completedAt") or ""),
     }
+    for key in [
+        "subagentName",
+        "subagentInvocationId",
+        "subagentStatus",
+        "subagentTimeline",
+        "subagentSummary",
+        "subagentError",
+    ]:
+        if key in tool:
+            data[key] = tool[key]
+    return data
 
 
 def _tool_display_event_name(tool: dict[str, Any]) -> str:

@@ -128,6 +128,75 @@ class _FakeHitlAgent:
         })
 
 
+class _FakeDelegateTaskParentAgent:
+    def __init__(self) -> None:
+        self.resume_events: list[object] = []
+
+    async def reply_stream(self, user_msg):
+        from agentscope.event import ExternalExecutionResultEvent
+
+        if isinstance(user_msg, ExternalExecutionResultEvent):
+            self.resume_events.append(user_msg)
+            yield _FakeAgentScopeEvent({
+                "type": "TOOL_CALL_START",
+                "reply_id": "reply-parent",
+                "tool_call_id": "final-1",
+                "tool_call_name": "FinalAnswerStart",
+            })
+            yield _FakeAgentScopeEvent({
+                "type": "TEXT_BLOCK_DELTA",
+                "reply_id": "reply-parent",
+                "block_id": "text-1",
+                "delta": "父 Agent 已继续。",
+            })
+            yield _FakeAgentScopeEvent({
+                "type": "REPLY_END",
+                "session_id": "session-delegate",
+                "reply_id": "reply-parent",
+            })
+            return
+        yield _FakeAgentScopeEvent({
+            "type": "REQUIRE_EXTERNAL_EXECUTION",
+            "reply_id": "reply-parent",
+            "tool_calls": [{
+                "type": "tool_call",
+                "id": "delegate-1",
+                "name": "DelegateTask",
+                "input": '{"subagentName":"explorer","task":"查找相关文件"}',
+                "state": "submitted",
+            }],
+        })
+
+
+class _FakeSubagentExternalManager:
+    def __init__(self) -> None:
+        self.called_tool_ids: list[str] = []
+
+    async def execute_external_tool_call(self, tool_call):
+        from agentscope.message import TextBlock, ToolResultBlock, ToolResultState
+
+        self.called_tool_ids.append(str(tool_call.get("id") or ""))
+        return ToolResultBlock(
+            id=str(tool_call.get("id") or ""),
+            name="DelegateTask",
+            output=[TextBlock(text="Subagent explorer completed.\n\nSummary:\n找到 README.md。")],
+            state=ToolResultState.SUCCESS,
+        )
+
+    def drain_runtime_events(self):
+        return [{
+            "type": "SUBAGENT_COMPLETED",
+            "status": "completed",
+            "scope": "subagent",
+            "payload": {
+                "invocationId": "invocation-1",
+                "toolCallId": "delegate-1",
+                "subagentName": "explorer",
+                "resultPreview": "找到 README.md。",
+            },
+        }]
+
+
 class _FakeMultiToolHitlAgent:
     async def reply_stream(self, user_msg):
         yield _FakeAgentScopeEvent({
@@ -1803,6 +1872,45 @@ def test_single_agent_hitl_pending_interaction_keeps_stream_scope():
         PENDING_AGENTS.clear()
 
 
+def test_delegate_task_external_result_resumes_parent_agent():
+    """DelegateTask 作为外部工具完成后，应把结果喂回父 Agent 并继续 ReAct。"""
+
+    async def run_case():
+        agent = _FakeDelegateTaskParentAgent()
+        manager = _FakeSubagentExternalManager()
+        state = LeaderStreamState()
+        events = [
+            event
+            async for event in stream_leader_agent_reply(
+                agent=agent,
+                user_msg=object(),
+                state=state,
+                session_id="session-delegate",
+                persist=False,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="deepseek-chat",
+                guardrails=[],
+                message="委托探索",
+                stream_scope="single",
+                skill_runs=[],
+                team_activities=[],
+                runtime_event_sources=[manager],
+            )
+        ]
+        return events, agent, manager, state
+
+    events, agent, manager, state = asyncio.run(run_case())
+
+    assert manager.called_tool_ids == ["delegate-1"]
+    assert agent.resume_events
+    assert agent.resume_events[0].execution_results[0].id == "delegate-1"
+    assert "Subagent explorer completed" in agent.resume_events[0].execution_results[0].output[0].text
+    assert _final_answer_deltas(events) == ["父 Agent 已继续。"]
+    assert state.assistant_text == "父 Agent 已继续。"
+    assert any("SUBAGENT_COMPLETED" in event for event in events)
+
+
 def test_single_agent_without_final_answer_marker_does_not_fallback_to_final_answer():
     """没有 FinalAnswerStart 时，过程文本只能留在 reasoning，不能兜底复制到最终答案。"""
 
@@ -2835,7 +2943,6 @@ def test_model_intent_route_ignores_legacy_plan_subagent_and_tool_scope(monkeypa
         id="parent-agent",
         name="Parent",
         description="",
-        callable_agents=["code-agent"],
         plan_config=SimpleNamespace(enabled=True),
         mcp_tools=[],
         knowledge_tools=["kb-1"],
@@ -2906,7 +3013,6 @@ def test_model_intent_route_falls_back_to_rules_on_invalid_json(monkeypatch):
         message="请修复一下。",
         agent_config=SimpleNamespace(
             id="agent",
-            callable_agents=[],
             plan_config=SimpleNamespace(enabled=True),
             mcp_tools=[],
             knowledge_tools=[],

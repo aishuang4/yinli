@@ -51,6 +51,7 @@ def _create_pending_interaction(
     worker_text: str = "",
     worker_thinking: str = "",
     worker_tool_calls: list[ChatToolRun] | None = None,
+    run_id: str | None = None,
     persist: bool = True,
 ) -> PendingInteraction:
     """Create and cache an in-process human interaction."""
@@ -62,7 +63,7 @@ def _create_pending_interaction(
         agent_name=agent_name,
         model_name=model_name,
         reply_id=reply_id,
-        run_id=current_chat_background_run_id(),
+        run_id=run_id or current_chat_background_run_id(),
         tool_calls=tool_calls,
         resume_tool_calls=tool_calls if resume_tool_calls is None else resume_tool_calls,
         message=message,

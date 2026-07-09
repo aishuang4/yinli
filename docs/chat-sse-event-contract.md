@@ -14,7 +14,7 @@
 - 新功能必须定义独立 Runtime Event 家族，不允许混用其他功能事件。例如后续重设计记忆时使用新的 `MEMORY_*` 语义，产物使用 `ARTIFACT_*`，沙箱使用 `SANDBOX_*`。
 - 记忆模块的详细过程审计使用 `run_events.event_type=MEMORY_AUDIT`，不作为 Chat SSE 事件发送，不驱动 Chat 页面过程展示。
 - Chat 侧只允许通过 `RUNTIME_EVENT.type=MEMORY_SKILL_GENERATING` 投影为 `RUN_STATE_PATCH.kind=notice`，展示 “Skills 生成中” 轻量提醒；payload 不得包含 Skill 内容、记忆内容、生成结果或提炼过程。
-- 旧 Plan Runtime 与 Subagent Runtime 已下线，旧 `PLAN_*`、`SUBAGENT_*` 事件不属于当前稳定契约；新的 Plan Mode 事件只通过本文定义的 `RUNTIME_EVENT` 契约表达。
+- 旧 Plan Runtime 与旧 Subagent Runtime 已下线；新的 Plan Mode 与 Subagent 委托能力只通过本文定义的 `RUNTIME_EVENT` 契约表达，不恢复旧 runtime.kind 分支。
 
 ## Chat 路由分层
 
@@ -58,6 +58,7 @@
 - `ARTIFACT_*`：文件、下载产物、生成内容等可交付产物生命周期。
 - `SANDBOX_*`：沙箱运行生命周期。
 - `PLAN_*`：Plan Mode 进入、更新、最终计划输出和工具拦截状态。
+- `SUBAGENT_*`：ReAct 内部 Subagent 委托生命周期。
 
 ## Plan Mode Runtime Events
 
@@ -75,6 +76,22 @@ Plan Mode 内部只产生 `PlanDomainEvent`；跨出 Plan middleware / Plan tool
 | `PLAN_TASK_OUTPUT` | `running|completed|failed` | `{ planId, planFile, step, steps }` |
 
 `steps` 使用现有 `ChatPlanStep` camelCase 字段：`id`、`planId`、`stepIndex`、`title`、`description`、`status`、`assignedAgentId`、`evidence`、`result`、`startedAt`、`completedAt`、`updatedAt`。
+
+## Subagent Runtime Events
+
+Subagent 委托能力基于 ReAct 内部 `DelegateTask` 工具实现，不新增 `runtime.kind=subagent`。V1 只支持前台 blocking 调用：主 Agent 调用 `DelegateTask` 后，必须等待子 Agent 完成并拿到 observation，才能继续 ReAct 或输出最终答案。
+
+Subagent 定义来自 Markdown + YAML frontmatter 文件，不来自历史数据库 Subagent 配置。后端若发现历史 `callableAgents`、`subagentCalls`、旧 `runtime.kind=subagent`、旧 Subagent Runtime 事件兼容分支或对应前端入口，必须删除，不能改造成新版能力事实源。
+
+| type | status | payload |
+| --- | --- | --- |
+| `SUBAGENT_STARTED` | `running` | `{ invocationId, toolCallId, subagentName, definitionScope, definitionPath, taskPreview, expectedOutput }` |
+| `SUBAGENT_CONTEXT` | `running` | `{ invocationId, toolCallId, subagentName, skillRefs, loadedSkills, missingSkillRefs, memoryAgentId, memoryInjected, errors, permission }` |
+| `SUBAGENT_WAITING_HUMAN` | `waiting` | `{ invocationId, toolCallId, subagentName, interactionType, replyId, toolCalls, partialResultPreview, durationMs }` |
+| `SUBAGENT_COMPLETED` | `completed` | `{ invocationId, toolCallId, subagentName, resultPreview, durationMs }` |
+| `SUBAGENT_FAILED` | `failed` | `{ invocationId, toolCallId, subagentName, error, partialResultPreview }` |
+
+V1 的 Chat 主界面不展示子 Agent 完整 transcript，也不铺开完整轨迹列表；`DelegateTask` 工具项只展示当前 Subagent 正在做什么、委托任务和最终返回主 Agent 的结果。后端将 `SUBAGENT_*` 与子 Agent 关键模型/工具 Runtime Event 归并到同一个工具 display item，附加 `subagentName`、`subagentInvocationId`、`subagentStatus`、`subagentTimeline`、`subagentSummary`、`subagentError` 字段；前端只取 `subagentTimeline` 最新有效项作为“当前状态”。普通工具 display item 不包含这些字段，仍按通用工具输入/输出渲染。前台 blocking 模式下，主 Agent 仍等待 `DelegateTask` observation，但 `leader_stream` 必须在等待期间持续 drain Subagent runtime event sources，让当前状态实时刷新；子 Agent 调用 `FinalAnswerStart` 后的文本 delta 可以实时追加到 `subagentSummary`，仅用于前端显示，父 Agent 仍在完整 observation 到达后才继续。完整子 Agent 模型调用、工具调用、权限决策和错误进入 Trace / `subagent_invocations` 审计。`SUBAGENT_WAITING_HUMAN` 表示子 Agent 已暂停在人工确认点；后端 `/resume` 已能恢复 child agent、更新 invocation，并把恢复后的摘要作为 `DelegateTask` external result 交还父 Agent，继续父 Agent ReAct。
 
 ### Plan Mode 收口与后续执行
 
@@ -145,6 +162,7 @@ RunState 稳定字段：
 - `outputPreview`：结果预览，默认最多保留少量文本。
 - `outputSize`、`outputTruncated`：完整结果大小与是否截断。
 - `error`、`startedAt`、`completedAt`。
+- `subagentName`、`subagentInvocationId`、`subagentStatus`、`subagentTimeline`、`subagentSummary`、`subagentError`：仅 `DelegateTask` Subagent 工具项可携带的展示字段；`subagentTimeline[]` 只放压缩后的关键步骤，不存完整 transcript。
 
 Chat 主界面不得依赖完整工具结果。大体积 Read、Glob、Bash、HTTP、MCP 输出必须通过 Trace 或 Artifact 按需查看，不进入 RunState 常驻状态。
 
@@ -340,4 +358,4 @@ Team 必须进入 `displaySnapshot.actors[]`。Chat 主界面不得依赖顶层 
 
 ## 兼容字段
 
-- 历史消息中仍可能存在 `planRuns`、`subagentCalls` 字段。当前前端不展示、不执行这些字段；后端仅保留读写兼容，避免旧 SQLite 数据导致接口失败。
+- 历史消息中仍可能存在 `planRuns` 字段。当前前端不执行历史 Plan 字段；后端仅保留读写兼容，避免旧 SQLite 数据导致接口失败。

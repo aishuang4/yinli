@@ -6,6 +6,7 @@ import { DISPLAY_EVENTS, type DisplayItem } from '../../types/displayEvents';
 import { normalizeStoredToolCalls } from './formatters';
 import { AccordionProcessTimeline } from './ProcessTimeline';
 import type { ChatDisplayStatus, ChatProcessItem } from './chatDisplayTypes';
+import { subagentToolDataFromDisplayItem } from './subagentToolData';
 
 /**
  * TeamDisplayBlock — Team 协作过程展示
@@ -584,6 +585,7 @@ function toolCallFromDisplayItem(item: DisplayItem): ToolCallInfo {
     args: pickDisplayItemString(item, ['inputPreview', 'input', 'args']),
     result: pickDisplayItemString(item, ['outputPreview', 'output', 'result', 'error']),
     status: normalizeToolStatus(item.status || item.data.status),
+    ...subagentToolDataFromDisplayItem(item),
   };
 }
 

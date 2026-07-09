@@ -195,6 +195,8 @@ def _create_default_toolkit(
     tool_scope: RuntimeToolScope | None = None,
     extra_tools: list[ToolBase] | None = None,
     include_default_tools: bool = True,
+    tool_name_allowlist: set[str] | None = None,
+    tool_name_denylist: set[str] | None = None,
 ) -> Toolkit:
     """
     创建默认工具集
@@ -279,6 +281,12 @@ def _create_default_toolkit(
                     )
                 )
 
+    local_tools = _filter_tools_by_name(
+        local_tools,
+        allowlist=tool_name_allowlist,
+        denylist=tool_name_denylist or set(),
+    )
+
     mcp_clients = [] if read_only or not scope.allow_mcp else _create_mcp_clients(mcp_servers or [], guardrails)
     return Toolkit(
         tools=[
@@ -306,6 +314,8 @@ def get_or_create_agent(
     tool_scope: RuntimeToolScope | None = None,
     extra_tools: list[ToolBase] | None = None,
     include_default_tools: bool = True,
+    tool_name_allowlist: set[str] | None = None,
+    tool_name_denylist: set[str] | None = None,
     on_fallback_event: FallbackEventCallback | None = None,
     middlewares: list[MiddlewareBase] | None = None,
 ) -> Agent:
@@ -378,6 +388,8 @@ def get_or_create_agent(
             tool_scope=tool_scope,
             extra_tools=extra_tools,
             include_default_tools=include_default_tools,
+            tool_name_allowlist=tool_name_allowlist,
+            tool_name_denylist=tool_name_denylist,
         ),
         state=agent_state,
         offloader=workspace,
@@ -395,6 +407,25 @@ def get_or_create_agent(
     # 缓存并返回
     _agent_cache[agent_id] = agent
     return agent
+
+
+def _filter_tools_by_name(
+    tools: list[ToolBase],
+    *,
+    allowlist: set[str] | None,
+    denylist: set[str],
+) -> list[ToolBase]:
+    """按工具名过滤本地工具，供 Subagent 继承工具池后裁剪。"""
+
+    filtered: list[ToolBase] = []
+    for tool in tools:
+        name = str(getattr(tool, "name", "") or tool.__class__.__name__)
+        if name in denylist:
+            continue
+        if allowlist is not None and name not in allowlist:
+            continue
+        filtered.append(tool)
+    return filtered
 
 
 def has_cached_agent(agent_id: str) -> bool:

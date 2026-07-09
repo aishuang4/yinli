@@ -111,8 +111,6 @@ class AgentCreate(BaseModel):
     knowledge_tools: list[str] = Field(default_factory=list, alias="knowledgeTools", description="知识库 HTTP 工具 ID 列表")
     skills: list[str] = Field(default_factory=list, description="Skills ID 列表")
     tags: list[str] = Field(default_factory=list, description="标签")
-    callable_agents: list[str] = Field(default_factory=list, alias="callableAgents", description="历史兼容字段：旧可调用子 Agent ID 列表")
-    max_depth: int = Field(default=2, ge=1, le=5, alias="maxDepth", description="历史兼容字段：旧子 Agent 最大调用深度")
     plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig", description="历史兼容字段：旧计划模型配置")
     guardrails: Guardrails = Field(default_factory=Guardrails, description="安全边界配置")
 
@@ -130,8 +128,6 @@ class AgentUpdate(BaseModel):
     knowledge_tools: Optional[list[str]] = Field(None, alias="knowledgeTools")
     skills: Optional[list[str]] = None
     tags: Optional[list[str]] = None
-    callable_agents: Optional[list[str]] = Field(None, alias="callableAgents")
-    max_depth: Optional[int] = Field(None, ge=1, le=5, alias="maxDepth")
     plan_config: Optional[PlanConfig] = Field(None, alias="planConfig")
     guardrails: Optional[Guardrails] = None
 
@@ -150,8 +146,6 @@ class AgentResponse(BaseModel):
     knowledge_tools: list[str] = Field(default_factory=list, alias="knowledgeTools")
     skills: list[str]
     tags: list[str]
-    callable_agents: list[str] = Field(alias="callableAgents")
-    max_depth: int = Field(alias="maxDepth")
     plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig")
     guardrails: Guardrails
     status: str = "idle"
@@ -221,45 +215,6 @@ def get_registered_agent(agent_id: str) -> AgentResponse | None:
 def list_registered_agents() -> list[AgentResponse]:
     """Return persisted Agent configurations for internal matching logic."""
     return list(_agents.values())
-
-
-def _normalize_callable_agents(agent_ids: list[str] | None, owner_id: str) -> list[str]:
-    """清理子 Agent 引用：去重、排除自己、过滤不存在的 Agent。"""
-
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for raw_id in agent_ids or []:
-        agent_id = str(raw_id).strip()
-        if not agent_id or agent_id == owner_id or agent_id in seen:
-            continue
-        if agent_id not in _agents:
-            continue
-        seen.add(agent_id)
-        normalized.append(agent_id)
-    return normalized
-
-
-def remove_callable_agents_from_agents(agent_ids: set[str]) -> int:
-    """从所有 Agent 的 callableAgents 中移除已删除的 Agent 引用。"""
-
-    if not agent_ids:
-        return 0
-
-    changed = 0
-    now = datetime.now(timezone.utc).isoformat()
-    for owner_id, agent in list(_agents.items()):
-        next_callable = [item for item in agent.callable_agents if item not in agent_ids and item != owner_id]
-        if len(next_callable) == len(agent.callable_agents):
-            continue
-        updated_agent = agent.model_copy(update={
-            "callable_agents": next_callable,
-            "updated_at": now,
-        })
-        _agents[owner_id] = updated_agent
-        invalidate_agent(owner_id)
-        upsert_agent(updated_agent.model_dump(by_alias=True))
-        changed += 1
-    return changed
 
 
 def remove_mcp_tools_from_agents(tool_ids: set[str]) -> int:
@@ -369,17 +324,13 @@ async def import_agent(data: AgentImportRequest) -> AgentImportResponse:
         next_name = f"{source.name} Copy"
         warnings.append("Agent name already exists; imported name was suffixed with Copy.")
 
-    normalized_callable_agents = _normalize_callable_agents(source.callable_agents, next_id)
     imported = source.model_copy(update={
         "id": next_id,
         "name": next_name,
-        "callable_agents": normalized_callable_agents,
         "status": "idle",
         "created_at": now,
         "updated_at": now,
     })
-    if len(normalized_callable_agents) != len(source.callable_agents):
-        warnings.append("Some callable Agent references were duplicated, missing, or pointed to itself and were removed.")
     _agents[imported.id] = imported
     upsert_agent(imported.model_dump(by_alias=True))
     return AgentImportResponse(agent=imported, warnings=warnings)
@@ -409,8 +360,6 @@ async def create_agent(data: AgentCreate) -> AgentResponse:
         "knowledgeTools": data.knowledge_tools,
         "skills": data.skills,
         "tags": data.tags,
-        "callableAgents": _normalize_callable_agents(data.callable_agents, next_id),
-        "maxDepth": data.max_depth,
         "planConfig": data.plan_config,
         "guardrails": data.guardrails,
         "status": "idle",
@@ -469,13 +418,6 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
         update_dict["mcpTools"] = update_dict.pop("mcp_tools")
     if "knowledge_tools" in update_dict:
         update_dict["knowledgeTools"] = update_dict.pop("knowledge_tools")
-    if "callable_agents" in update_dict:
-        update_dict["callableAgents"] = _normalize_callable_agents(
-            update_dict.pop("callable_agents"),
-            agent_id,
-        )
-    if "max_depth" in update_dict:
-        update_dict["maxDepth"] = update_dict.pop("max_depth")
     if "plan_config" in update_dict:
         update_dict["planConfig"] = update_dict.pop("plan_config")
 
@@ -531,4 +473,3 @@ async def delete_agent(agent_id: str) -> None:
     del _agents[agent_id]
     invalidate_agent(agent_id)
     db_delete_agent(agent_id)
-    remove_callable_agents_from_agents({agent_id})
