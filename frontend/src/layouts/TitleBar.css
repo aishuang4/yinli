@@ -1,0 +1,85 @@
+.titlebar {
+  position: relative;
+  display: flex;
+  height: 100%;
+  align-items: center;
+  justify-content: flex-start;
+  border-bottom: 1px solid var(--color-border);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-bg-primary) 74%, var(--color-bg-secondary)), var(--color-bg-secondary));
+  user-select: none;
+  padding-left: 86px;
+  -webkit-app-region: drag;
+}
+
+.titlebar__mode-switch {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 218px;
+  height: 32px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 84%, var(--color-accent));
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-bg-primary) 96%, white 4%), var(--color-bg-primary));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 18%, transparent),
+    0 8px 20px color-mix(in srgb, black 8%, transparent);
+  padding: 3px;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar__mode-indicator {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 18%, var(--color-bg-primary)), var(--color-accent-bg));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 20%, transparent),
+    0 6px 14px color-mix(in srgb, var(--color-accent) 18%, transparent);
+  transition: transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.titlebar__mode-indicator[data-mode="workflow"] {
+  transform: translateX(100%);
+}
+
+.titlebar__mode-button {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  transition:
+    color 220ms var(--ease-out),
+    transform 220ms var(--ease-out);
+}
+
+.titlebar__mode-button--active {
+  color: var(--color-accent);
+}
+
+.titlebar__mode-button:hover {
+  color: var(--color-text-primary);
+}
+
+.titlebar__mode-button svg {
+  transition: transform 220ms var(--ease-out);
+}
+
+.titlebar__mode-button--active svg {
+  transform: translateY(-0.5px);
+}

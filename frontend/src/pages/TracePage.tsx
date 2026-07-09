@@ -5,10 +5,11 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity } from 'lucide-react';
-import { Spinner } from '@agentscope-ai/design';
+import { Activity, RefreshCw } from 'lucide-react';
+import { Button, Spinner } from '@agentscope-ai/design';
+import { WorkbenchDetailShell } from '../components/workbench';
 import { TraceDetailView } from '../features/traces/TraceDetailView';
-import { TraceListSidebar } from '../features/traces/TraceListSidebar';
+import { TraceLandingPage } from '../features/traces/TraceLandingPage';
 import type { TraceDetail, TraceEvent, TraceSummary } from '../features/traces/traceTypes';
 import { TRACE_RENDER_BATCH_SIZE } from '../features/traces/traceUtils';
 import { useAppStore } from '../stores/appStore';
@@ -38,7 +39,6 @@ export function TracePage() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: TraceSummary[] = await response.json();
       setTraces(data);
-      setSelectedId((current) => current || data[0]?.id || '');
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : '加载运行轨迹失败');
@@ -125,18 +125,35 @@ export function TracePage() {
     detailAbortRef.current?.abort();
   }, []);
 
-  return (
-    <div className="grid h-full min-h-0 grid-cols-[340px_1fr] gap-4 overflow-hidden p-4">
-      <TraceListSidebar
+  if (!selectedId) {
+    return (
+      <TraceLandingPage
         traces={traces}
-        selectedId={selectedId}
         loading={loading}
         error={error}
         onSelect={setSelectedId}
         onRefresh={() => void loadTraces()}
       />
+    );
+  }
 
-      <main className="min-h-0 overflow-hidden rounded-md bg-[var(--color-bg-primary)] shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
+  const selectedTrace = detail || traces.find((trace) => trace.id === selectedId) || null;
+
+  return (
+    <WorkbenchDetailShell
+      title={selectedTrace?.title || '运行轨迹'}
+      subtitle={selectedTrace?.teamName || selectedTrace?.agentName || selectedId}
+      onBack={() => {
+        setSelectedId('');
+        setDetail(null);
+      }}
+      actions={(
+        <Button size="small" icon={<RefreshCw size={13} />} onClick={() => void loadDetail(selectedId)} loading={detailLoading}>
+          刷新
+        </Button>
+      )}
+    >
+      <main className="h-full min-h-0 overflow-hidden bg-[var(--color-bg-primary)]">
         {detailLoading ? (
           <div className="flex h-full items-center justify-center"><Spinner /></div>
         ) : detail ? (
@@ -149,11 +166,11 @@ export function TracePage() {
           <div className="flex h-full items-center justify-center text-[var(--color-text-tertiary)]">
             <div className="text-center">
               <Activity size={44} strokeWidth={1.2} className="mx-auto mb-3" />
-              <div>选择一条运行轨迹</div>
+              <div>运行轨迹详情加载失败</div>
             </div>
           </div>
         )}
       </main>
-    </div>
+    </WorkbenchDetailShell>
   );
 }

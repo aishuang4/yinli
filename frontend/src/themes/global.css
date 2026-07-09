@@ -127,9 +127,58 @@ button[class*="-btn"] .lucide {
 }
 
 .chat-page-shell {
-  background:
-    radial-gradient(circle at 18% 8%, color-mix(in srgb, var(--color-accent) 7%, transparent), transparent 30%),
-    var(--color-bg-secondary);
+  --chat-workbench-bg: #ffffff;
+  --chat-workbench-main-bg: #ffffff;
+  --chat-workbench-history-bg: #f3f4f5;
+  --chat-workbench-topbar-bg: rgba(255, 255, 255, 0.92);
+  --chat-workbench-border: rgba(26, 28, 31, 0.1);
+  --chat-workbench-border-subtle: rgba(26, 28, 31, 0.08);
+  --chat-workbench-control-bg: #ffffff;
+  --chat-workbench-control-hover: #f1f3f5;
+  --chat-workbench-control-active-bg: #1a1c1f;
+  --chat-workbench-control-active-text: #ffffff;
+  --chat-workbench-search-bg: rgba(255, 255, 255, 0.72);
+  --chat-workbench-status-bg: rgba(26, 28, 31, 0.055);
+  --chat-workbench-status-text: #1a1c1f;
+  --chat-workbench-status-blue-border: rgba(51, 156, 255, 0.28);
+  --chat-workbench-status-blue-bg: rgba(51, 156, 255, 0.12);
+  --chat-workbench-status-blue-text: #1268b8;
+  --chat-workbench-status-mauve-border: rgba(139, 92, 246, 0.24);
+  --chat-workbench-status-mauve-bg: rgba(139, 92, 246, 0.1);
+  --chat-workbench-status-mauve-text: #6d42c7;
+  --chat-workbench-session-active-bg: rgba(26, 28, 31, 0.075);
+  --chat-workbench-composer-bg: #ffffff;
+  --chat-workbench-composer-border: rgba(26, 28, 31, 0.14);
+  --chat-workbench-composer-focus: rgba(51, 156, 255, 0.58);
+  --chat-workbench-separator: rgba(26, 28, 31, 0.1);
+  background: var(--chat-workbench-bg);
+}
+
+[data-theme="dark"] .chat-page-shell {
+  --chat-workbench-bg: #181818;
+  --chat-workbench-main-bg: #181818;
+  --chat-workbench-history-bg: #222222;
+  --chat-workbench-topbar-bg: rgba(24, 24, 24, 0.94);
+  --chat-workbench-border: #333333;
+  --chat-workbench-border-subtle: #2a2a2a;
+  --chat-workbench-control-bg: #1f1f1f;
+  --chat-workbench-control-hover: #2c2c2c;
+  --chat-workbench-control-active-bg: var(--color-text-primary);
+  --chat-workbench-control-active-text: var(--color-bg-primary);
+  --chat-workbench-search-bg: rgba(255, 255, 255, 0.04);
+  --chat-workbench-status-bg: rgba(255, 255, 255, 0.075);
+  --chat-workbench-status-text: #ffffff;
+  --chat-workbench-status-blue-border: rgba(51, 156, 255, 0.34);
+  --chat-workbench-status-blue-bg: rgba(51, 156, 255, 0.16);
+  --chat-workbench-status-blue-text: #9fd0ff;
+  --chat-workbench-status-mauve-border: rgba(216, 180, 254, 0.32);
+  --chat-workbench-status-mauve-bg: rgba(216, 180, 254, 0.14);
+  --chat-workbench-status-mauve-text: #ead7ff;
+  --chat-workbench-session-active-bg: #3a3a3a;
+  --chat-workbench-composer-bg: #2b2b2b;
+  --chat-workbench-composer-border: #414141;
+  --chat-workbench-composer-focus: rgba(51, 156, 255, 0.62);
+  --chat-workbench-separator: rgba(255, 255, 255, 0.08);
 }
 
 .chat-history-panel,
@@ -186,6 +235,240 @@ button[class*="-btn"] .lucide {
   box-shadow:
     0 18px 44px rgba(0, 0, 0, 0.28),
     0 1px 0 rgba(255, 255, 255, 0.04) inset;
+}
+
+.chat-workbench-shell {
+  color: var(--color-text-primary);
+}
+
+.chat-workbench-history {
+  border: 0;
+  border-right: 1px solid var(--chat-workbench-border);
+  border-radius: 0;
+  background: var(--chat-workbench-history-bg);
+  box-shadow: none;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity 180ms var(--ease-out),
+    transform 260ms var(--ease-out);
+}
+
+.chat-workbench-history[data-collapsed="true"] {
+  border-right-color: transparent;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-10px);
+}
+
+.chat-workbench-electron-spacer {
+  height: 56px;
+  flex: 0 0 auto;
+  -webkit-app-region: drag;
+}
+
+.chat-workbench-history button,
+.chat-workbench-topbar button {
+  -webkit-app-region: no-drag;
+}
+
+.chat-workbench-search {
+  border: 1px solid var(--chat-workbench-border-subtle);
+  background: var(--chat-workbench-search-bg);
+}
+
+.chat-history-collapse-button,
+.chat-history-new-button {
+  height: 32px;
+  width: 32px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--chat-workbench-control-bg);
+  color: var(--color-text-secondary);
+  transition:
+    background-color var(--duration-normal) var(--ease-out),
+    color var(--duration-normal) var(--ease-out),
+    opacity var(--duration-normal) var(--ease-out),
+    transform var(--duration-normal) var(--ease-out);
+}
+
+.chat-history-collapse-button:hover,
+.chat-history-new-button:hover {
+  transform: translateY(-1px);
+  background: var(--chat-workbench-control-hover);
+  color: var(--color-text-primary);
+}
+
+.chat-history-new-button {
+  border-color: var(--chat-workbench-control-active-bg);
+  background: var(--chat-workbench-control-active-bg);
+  color: var(--chat-workbench-control-active-text);
+}
+
+.chat-history-new-button:hover {
+  background: var(--chat-workbench-control-active-bg);
+  color: var(--chat-workbench-control-active-text);
+  opacity: 0.9;
+}
+
+.chat-workbench-main {
+  border: 0;
+  border-radius: 0;
+  background: var(--chat-workbench-main-bg);
+  box-shadow: none;
+}
+
+.chat-workbench-topbar {
+  min-height: 56px;
+  border-bottom: 1px solid var(--chat-workbench-border-subtle);
+  background: var(--chat-workbench-topbar-bg);
+}
+
+.chat-workbench-top-action {
+  border: 1px solid var(--color-border);
+  background: var(--chat-workbench-control-bg);
+  color: var(--color-text-secondary);
+}
+
+.chat-workbench-top-action:hover {
+  background: var(--chat-workbench-control-hover);
+  color: var(--color-text-primary);
+}
+
+.chat-workbench-status-tag {
+  border-color: var(--chat-workbench-border) !important;
+  background: var(--chat-workbench-status-bg) !important;
+  color: var(--chat-workbench-status-text) !important;
+}
+
+.chat-workbench-status-tag--blue {
+  border-color: var(--chat-workbench-status-blue-border) !important;
+  background: var(--chat-workbench-status-blue-bg) !important;
+  color: var(--chat-workbench-status-blue-text) !important;
+}
+
+.chat-workbench-status-tag--mauve {
+  border-color: var(--chat-workbench-status-mauve-border) !important;
+  background: var(--chat-workbench-status-mauve-bg) !important;
+  color: var(--chat-workbench-status-mauve-text) !important;
+}
+
+.chat-workbench-shell [class*="accordion-group"] {
+  color: var(--color-text-secondary);
+}
+
+.chat-workbench-shell [class*="accordion-group-open"] {
+  border-color: transparent !important;
+  background: transparent !important;
+}
+
+.chat-workbench-shell [class*="accordion-group-header"] {
+  background: transparent !important;
+  color: var(--color-text-secondary) !important;
+}
+
+.chat-workbench-shell [class*="accordion-group-body"] {
+  background: transparent !important;
+  color: var(--color-text-secondary) !important;
+}
+
+.chat-workbench-shell [class*="accordion-group-body"] > [class*="accordion-group"] {
+  background: transparent !important;
+}
+
+.chat-workbench-shell [class*="accordion-content-body"] {
+  border-color: transparent !important;
+  background: transparent !important;
+}
+
+.chat-workbench-shell [class*="accordion-content-body-header"] {
+  border-bottom-color: transparent !important;
+  background: transparent !important;
+  color: var(--color-text-secondary) !important;
+}
+
+.chat-workbench-shell [class*="accordion-content-body-body"] {
+  background: transparent !important;
+}
+
+.chat-workbench-shell [class*="accordion-soft-light-title"] {
+  color: var(--color-text-secondary);
+}
+
+.chat-workbench-shell .chat-final-answer-section {
+  padding-top: 4px;
+}
+
+.chat-workbench-shell .chat-final-answer-separator {
+  display: grid;
+  grid-template-columns: 28px auto 1fr;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 6px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.chat-workbench-shell .chat-final-answer-separator::before,
+.chat-workbench-shell .chat-final-answer-separator::after {
+  height: 1px;
+  background: var(--chat-workbench-separator);
+  content: '';
+}
+
+.chat-workbench-shell .chat-final-answer-separator span {
+  white-space: nowrap;
+}
+
+.chat-workbench-shell .chat-message-content--assistant {
+  background-color: transparent !important;
+}
+
+.chat-workbench-shell .chat-session-item {
+  background: transparent;
+  box-shadow: none;
+}
+
+.chat-workbench-shell .chat-session-item:hover {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.chat-workbench-shell .chat-session-item--active {
+  border-color: transparent;
+  background: var(--chat-workbench-session-active-bg);
+  box-shadow: none;
+}
+
+.chat-workbench-shell .chat-composer {
+  border-color: var(--chat-workbench-composer-border);
+  border-radius: 20px;
+  background: var(--chat-workbench-composer-bg);
+  box-shadow:
+    0 20px 70px rgba(0, 0, 0, 0.28),
+    0 1px 0 rgba(255, 255, 255, 0.04) inset;
+}
+
+.chat-workbench-shell .chat-composer:focus-within {
+  border-color: var(--chat-workbench-composer-focus);
+}
+
+@media (max-width: 1180px) {
+  .chat-workbench-shell {
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+
+}
+
+@media (max-width: 860px) {
+  .chat-workbench-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-workbench-history {
+    display: none;
+  }
+
 }
 
 /* 闪烁光标动画（流式输出用） */

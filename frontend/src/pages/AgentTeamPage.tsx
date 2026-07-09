@@ -1,60 +1,28 @@
 /**
- * AgentTeamPage — Agent Team 管理页面
+ * AgentTeamPage — 智能体入口与详情设置页面。
  *
- * 双面板布局：
- * - 左侧：Agent 列表（卡片）+ 创建按钮
- * - 右侧：AgentEditor 表单（选中时显示）
- *
- * 功能：
- * - 创建/编辑/删除 Agent
- * - 查看 Agent 配置详情
- *
- * @see css-modern-layouts: Sidebar + Main
+ * 第一层只展示自定义智能体和协作 Team 入口；
+ * 点击具体对象后进入第二层，再展示配置表单或 Team 调度设置。
  */
 
-import { useState, useCallback, useEffect } from 'react';
-import { Bot, Download, Plus, Sparkles, Upload, Users, WandSparkles } from 'lucide-react';
-import { Button, Empty, Modal, Spinner } from '@agentscope-ai/design';
+import { useState, useCallback } from 'react';
+import { Modal } from '@agentscope-ai/design';
 import { useAgentBuilder } from '../hooks/useAgentBuilder';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
-import { AgentCard } from '../features/agents/AgentCard';
+import { AgentDetailShell } from '../features/agents/AgentDetailShell';
 import { AgentEditor } from '../features/agents/AgentEditor';
+import { AgentLandingPage } from '../features/agents/AgentLandingPage';
 import { AgentBuilderWizard } from '../features/teams/AgentBuilderWizard';
 import { TeamDetailPanel } from '../features/teams/TeamDetailPanel';
 import { TeamFormModal, type TeamFormState } from '../features/teams/TeamFormModal';
-import { FileImportButton } from '../components/FileImportButton';
-import { SelectField, TextField } from '../components/form';
 import type { AgentCreatePayload } from '../types/agent';
 import type { BuilderMode, BuilderPlan } from '../types/agentBuilder';
 
-interface TeamTemplate {
-  id: string;
-  name: string;
-  description: string;
-  category: string;
-  builtin: boolean;
-  members: Array<{
-    name: string;
-    role: 'leader' | 'worker';
-    agentId: string;
-    keywords: string[];
-    executionMode: 'parallel' | 'depends_on';
-    dependsOn: string[];
-    handoffPrompt: string;
-  }>;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/**
- * AgentTeamPage 组件
- */
 export function AgentTeamPage() {
   const { agents, loading, models, createAgent, updateAgent, deleteAgent, refresh: refreshAgents } = useAgents();
   const { teams, loading: teamsLoading, createTeam, updateTeam, deleteTeam, refresh: refreshTeams } = useTeams();
   const { planning, applying, error: builderError, createPlan, applyPlan } = useAgentBuilder();
-  const [mode, setMode] = useState<'agents' | 'teams'>('agents');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -69,47 +37,38 @@ export function AgentTeamPage() {
     name: '',
     description: '',
     leaderAgentId: '',
-    workerAgentIds: [] as string[],
+    workerAgentIds: [],
   });
-  const [teamTemplates, setTeamTemplates] = useState<TeamTemplate[]>([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState('');
-  const [templateTeamName, setTemplateTeamName] = useState('');
 
-  // 获取选中的 Agent
-  const selectedAgent = agents.find((a) => a.id === selectedId) || null;
+  const selectedAgent = agents.find((agent) => agent.id === selectedId) || null;
   const selectedTeam = teams.find((team) => team.id === selectedTeamId) || null;
 
-  const refreshTeamTemplates = useCallback(async () => {
-    const response = await fetch('/api/teams/templates');
-    if (!response.ok) return;
-    setTeamTemplates(await response.json());
+  const goList = useCallback(() => {
+    setCreating(false);
+    setSelectedId(null);
+    setSelectedTeamId(null);
   }, []);
 
-  useEffect(() => {
-    void refreshTeamTemplates();
-  }, [refreshTeamTemplates]);
-
-  /** 创建新 Agent */
   const handleCreate = useCallback(async (data: AgentCreatePayload) => {
     const newAgent = await createAgent(data);
     setSelectedId(newAgent.id);
+    setSelectedTeamId(null);
     setCreating(false);
   }, [createAgent]);
 
-  /** 更新 Agent */
   const handleUpdate = useCallback(async (data: AgentCreatePayload) => {
     if (!selectedId) return;
     await updateAgent(selectedId, data);
-  }, [selectedId, updateAgent]);
+    await refreshAgents();
+  }, [refreshAgents, selectedId, updateAgent]);
 
-  /** 删除 Agent */
   const handleDelete = useCallback(async (id: string) => {
     await deleteAgent(id);
     if (selectedId === id) {
-      setSelectedId(null);
+      goList();
     }
     setDeleteConfirm(null);
-  }, [selectedId, deleteAgent]);
+  }, [deleteAgent, goList, selectedId]);
 
   const handleCreateTeam = useCallback(async () => {
     if (!teamForm.name.trim() || !teamForm.leaderAgentId) return;
@@ -120,6 +79,8 @@ export function AgentTeamPage() {
       workerAgentIds: teamForm.workerAgentIds,
     });
     setSelectedTeamId(team.id);
+    setSelectedId(null);
+    setCreating(false);
     setCreateTeamOpen(false);
     setTeamForm({
       name: '',
@@ -144,13 +105,13 @@ export function AgentTeamPage() {
     const result = await applyPlan(builderPlan);
     await Promise.all([refreshAgents(), refreshTeams()]);
     if (result.createdTeam) {
-      setMode('teams');
       setSelectedTeamId(result.createdTeam.id);
       setSelectedId(null);
+      setCreating(false);
     } else if (result.createdAgents[0]) {
-      setMode('agents');
       setSelectedId(result.createdAgents[0].id);
       setSelectedTeamId(null);
+      setCreating(false);
     }
     setBuilderOpen(false);
     setBuilderPlan(null);
@@ -173,27 +134,6 @@ export function AgentTeamPage() {
     URL.revokeObjectURL(url);
   }, [selectedAgent]);
 
-  const handleImportAgentFile = useCallback(async (file: File) => {
-    const text = await file.text();
-    const parsed = JSON.parse(text);
-    const response = await fetch('/api/agents/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        package: parsed,
-        conflictStrategy: 'new_id',
-      }),
-    });
-    if (!response.ok) return;
-    const result = await response.json();
-    await refreshAgents();
-    if (result.agent?.id) {
-      setMode('agents');
-      setSelectedId(result.agent.id);
-      setSelectedTeamId(null);
-    }
-  }, [refreshAgents]);
-
   const handleExportTeam = useCallback(async () => {
     if (!selectedTeam) return;
     const response = await fetch(`/api/teams/${selectedTeam.id}/export`);
@@ -210,289 +150,8 @@ export function AgentTeamPage() {
     URL.revokeObjectURL(url);
   }, [selectedTeam]);
 
-  const handleImportTeamFile = useCallback(async (file: File) => {
-    const text = await file.text();
-    const parsed = JSON.parse(text);
-    const response = await fetch('/api/teams/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        package: parsed,
-        conflictStrategy: 'new_id',
-      }),
-    });
-    if (!response.ok) return;
-    const result = await response.json();
-    await refreshTeams();
-    if (result.team?.id) {
-      setMode('teams');
-      setSelectedTeamId(result.team.id);
-      setSelectedId(null);
-    }
-  }, [refreshTeams]);
-
-  const handleCreateTeamFromTemplate = useCallback(async () => {
-    if (!selectedTemplateId) return;
-    const response = await fetch(`/api/teams/templates/${selectedTemplateId}/instantiate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: templateTeamName || undefined }),
-    });
-    if (!response.ok) return;
-    const result = await response.json();
-    await refreshTeams();
-    if (result.team?.id) {
-      setMode('teams');
-      setSelectedTeamId(result.team.id);
-      setSelectedId(null);
-      setTemplateTeamName('');
-    }
-  }, [refreshTeams, selectedTemplateId, templateTeamName]);
-
-  const handleSaveSelectedTeamAsTemplate = useCallback(async () => {
-    if (!selectedTeam) return;
-    const response = await fetch(`/api/teams/templates/from-team/${selectedTeam.id}`, {
-      method: 'POST',
-    });
-    if (response.ok) {
-      await refreshTeamTemplates();
-    }
-  }, [refreshTeamTemplates, selectedTeam]);
-
-  return (
-    <div className="grid h-full min-h-0 grid-cols-[280px_1fr] gap-4 overflow-hidden p-4">
-      {/* 左侧列表 */}
-      <div className="flex min-h-0 flex-col rounded-md bg-[var(--color-bg-primary)] shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
-        {/* 列表头部 */}
-        <div className="p-4">
-          <div className="mb-3 grid grid-cols-2 gap-2">
-            <Button
-              type={mode === 'agents' ? 'primary' : 'default'}
-              onClick={() => setMode('agents')}
-            >
-              Agents
-            </Button>
-            <Button
-              type={mode === 'teams' ? 'primary' : 'default'}
-              onClick={() => setMode('teams')}
-            >
-              Teams
-            </Button>
-          </div>
-
-          {mode === 'agents' && (
-            <div className="mb-3 grid grid-cols-2 gap-2">
-              <Button size="small" disabled={!selectedAgent} onClick={() => void handleExportAgent()}>
-                <Download size={13} />
-                导出
-              </Button>
-              <FileImportButton
-                size="small"
-                accept="application/json,.json"
-                icon={<Upload size={13} />}
-                onFile={(file) => void handleImportAgentFile(file)}
-              >
-                导入
-              </FileImportButton>
-            </div>
-          )}
-
-          {mode === 'teams' && (
-            <div className="mb-3 space-y-2">
-              <div className="grid grid-cols-2 gap-2">
-                <Button size="small" disabled={!selectedTeam} onClick={() => void handleExportTeam()}>
-                  <Download size={13} />
-                  导出
-                </Button>
-                <FileImportButton
-                  size="small"
-                  accept="application/json,.json"
-                  icon={<Upload size={13} />}
-                  onFile={(file) => void handleImportTeamFile(file)}
-                >
-                  导入
-                </FileImportButton>
-              </div>
-              <SelectField
-                value={selectedTemplateId || undefined}
-                onChange={(value) => setSelectedTemplateId(String(value))}
-                options={teamTemplates.map((template) => ({
-                  label: `${template.name}${template.builtin ? ' · 内置' : ''}`,
-                  value: template.id,
-                }))}
-                placeholder="选择 Team 模板"
-              />
-              <TextField
-                value={templateTeamName}
-                onChange={(event) => setTemplateTeamName(event.target.value)}
-                placeholder="新 Team 名称（可选）"
-              />
-              <div className="grid grid-cols-2 gap-2">
-                <Button size="small" disabled={!selectedTemplateId} onClick={() => void handleCreateTeamFromTemplate()}>
-                  <Plus size={13} />
-                  用模板创建
-                </Button>
-                <Button size="small" disabled={!selectedTeam} onClick={() => void handleSaveSelectedTeamAsTemplate()}>
-                  <Sparkles size={13} />
-                  存为模板
-                </Button>
-              </div>
-            </div>
-          )}
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-base font-medium text-[var(--color-text-primary)]">
-              {mode === 'agents' ? 'Agents' : 'Teams'}
-            </h2>
-            {mode === 'agents' ? (
-              <div className="flex items-center gap-2">
-                <Button
-                  size="small"
-                  icon={<WandSparkles size={14} />}
-                  onClick={() => setBuilderOpen(true)}
-                  aria-label="智能创建"
-                />
-                <Button
-                  type="primary"
-                  size="small"
-                  icon={<Plus size={14} />}
-                  onClick={() => {
-                    setCreating(true);
-                    setSelectedId(null);
-                  }}
-                  aria-label="创建 Agent"
-                />
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <Button
-                  size="small"
-                  icon={<WandSparkles size={14} />}
-                  onClick={() => setBuilderOpen(true)}
-                  aria-label="智能创建"
-                />
-                <Button
-                  type="primary"
-                  size="small"
-                  icon={<Plus size={14} />}
-                  onClick={() => setCreateTeamOpen(true)}
-                  aria-label="创建 Team"
-                />
-              </div>
-            )}
-          </div>
-          <div className="text-xs text-[var(--color-text-secondary)]">
-            {mode === 'agents' ? `${agents.length} 个 Agent` : `${teams.length} 个 Team`}
-          </div>
-        </div>
-
-        {/* Agent 列表 */}
-        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
-          {mode === 'agents' && loading ? (
-            <div className="flex justify-center py-8">
-              <Spinner />
-            </div>
-          ) : mode === 'agents' && agents.length === 0 ? (
-            <Empty type="noData" description="暂无 Agent" />
-          ) : mode === 'agents' ? (
-            agents.map((agent) => (
-              <AgentCard
-                key={agent.id}
-                agent={agent}
-                selected={selectedId === agent.id}
-                onSelect={() => {
-                  setSelectedId(agent.id);
-                  setCreating(false);
-                }}
-                onDelete={() => setDeleteConfirm(agent.id)}
-              />
-            ))
-          ) : teamsLoading ? (
-            <div className="flex justify-center py-8">
-              <Spinner />
-            </div>
-          ) : teams.length === 0 ? (
-            <Empty type="noData" description="暂无 Team" />
-          ) : (
-            teams.map((team) => (
-              <button
-                key={team.id}
-                type="button"
-                onClick={() => setSelectedTeamId(team.id)}
-                className={`w-full rounded-md border px-3 py-2 text-left transition-all duration-300 ease-out ${
-                  selectedTeamId === team.id
-                    ? 'border-[var(--color-accent)] bg-[var(--color-accent-bg)] shadow-sm'
-                    : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] hover:shadow-md'
-                }`}
-              >
-                <div className="flex items-start gap-2">
-                  <Users size={16} className="mt-0.5 text-[var(--color-text-secondary)]" />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-                      {team.name}
-                    </div>
-                    <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-                      {team.members.length} 个成员
-                    </div>
-                  </div>
-                </div>
-              </button>
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* 右侧编辑器 */}
-      <div className="h-full min-h-0 overflow-hidden rounded-md bg-[var(--color-bg-primary)] shadow-[0_12px_30px_rgba(0,0,0,0.08)]">
-        {creating ? (
-          <AgentEditor
-            agent={null}
-            models={models}
-            availableAgents={agents}
-            onSave={handleCreate}
-            onCancel={() => setCreating(false)}
-          />
-        ) : mode === 'agents' && selectedAgent ? (
-          <div className="h-full min-h-0 p-4">
-            <AgentEditor
-              agent={selectedAgent}
-              models={models}
-              availableAgents={agents}
-              onSave={handleUpdate}
-              onCancel={() => setSelectedId(null)}
-            />
-          </div>
-        ) : mode === 'teams' && selectedTeam ? (
-          <TeamDetailPanel
-            team={selectedTeam}
-            agents={agents}
-            onUpdate={async (payload) => {
-              await updateTeam(selectedTeam.id, payload);
-            }}
-            onDelete={async () => {
-              await deleteTeam(selectedTeam.id);
-              setSelectedTeamId(null);
-            }}
-          />
-        ) : (
-          <div className="h-full flex items-center justify-center text-[var(--color-text-tertiary)]">
-            <div className="text-center">
-              {mode === 'agents' ? (
-                <Bot size={48} strokeWidth={1} className="mx-auto mb-3" />
-              ) : (
-                <Users size={48} strokeWidth={1} className="mx-auto mb-3" />
-              )}
-              <div className="text-sm">
-                {mode === 'agents' ? '选择一个 Agent 开始编辑' : '选择一个 Team 查看成员'}
-              </div>
-              <div className="text-xs mt-1">
-                {mode === 'agents' ? '或点击 + 创建新的 Agent' : '或点击 + 创建新的 Team'}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* 删除确认对话框 */}
+  const detailModals = (
+    <>
       <Modal
         title="确认删除"
         open={Boolean(deleteConfirm)}
@@ -541,6 +200,97 @@ export function AgentTeamPage() {
           onResetPlan={() => setBuilderPlan(null)}
         />
       </Modal>
-    </div>
+    </>
+  );
+
+  if (creating) {
+    return (
+      <>
+        <AgentEditor
+          agent={null}
+          models={models}
+          availableAgents={agents}
+          onSave={handleCreate}
+          onCancel={goList}
+        />
+        {detailModals}
+      </>
+    );
+  }
+
+  if (selectedAgent) {
+    return (
+      <>
+        <AgentDetailShell
+          title={selectedAgent.name}
+          subtitle={selectedAgent.description || '配置这个智能体的模型、工具和运行边界'}
+          onBack={goList}
+          onExport={() => void handleExportAgent()}
+          onDelete={() => setDeleteConfirm(selectedAgent.id)}
+        >
+          <AgentEditor
+            agent={selectedAgent}
+            models={models}
+            availableAgents={agents}
+            onSave={handleUpdate}
+            onCancel={goList}
+          />
+        </AgentDetailShell>
+        {detailModals}
+      </>
+    );
+  }
+
+  if (selectedTeam) {
+    return (
+      <>
+        <AgentDetailShell
+          title={selectedTeam.name}
+          subtitle={selectedTeam.description || '配置 Team 成员和 Worker 调度规则'}
+          onBack={goList}
+          onExport={() => void handleExportTeam()}
+        >
+          <TeamDetailPanel
+            team={selectedTeam}
+            agents={agents}
+            onUpdate={async (payload) => {
+              await updateTeam(selectedTeam.id, payload);
+              await refreshTeams();
+            }}
+            onDelete={async () => {
+              await deleteTeam(selectedTeam.id);
+              goList();
+            }}
+          />
+        </AgentDetailShell>
+        {detailModals}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <AgentLandingPage
+        agents={agents}
+        teams={teams}
+        loading={loading}
+        teamsLoading={teamsLoading}
+        onCreateAgent={() => setCreating(true)}
+        onBuilderOpen={() => setBuilderOpen(true)}
+        onCreateTeam={() => setCreateTeamOpen(true)}
+        onSelectAgent={(agentId) => {
+          setSelectedId(agentId);
+          setSelectedTeamId(null);
+          setCreating(false);
+        }}
+        onDeleteAgent={setDeleteConfirm}
+        onSelectTeam={(teamId) => {
+          setSelectedTeamId(teamId);
+          setSelectedId(null);
+          setCreating(false);
+        }}
+      />
+      {detailModals}
+    </>
   );
 }

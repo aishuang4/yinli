@@ -69,7 +69,7 @@ if curl -fsS "$BACKEND_URL/api/health" >/dev/null 2>&1; then
   echo "后端已运行：$BACKEND_URL"
 else
   echo "启动后端 FastAPI..."
-  uv run python -m uvicorn src.server.main:app --reload --port 8765 &
+  uv run python -m uvicorn src.server.main:app --reload --reload-dir src --port 8765 &
   BACKEND_PID=$!
   wait_for_url "$BACKEND_URL/api/health" "后端"
 fi

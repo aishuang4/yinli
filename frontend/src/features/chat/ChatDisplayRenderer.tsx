@@ -76,14 +76,19 @@ export function ChatDisplayRenderer({
 
         if (block.type === 'final_answer') {
           return (
-            <MessageContentBlock
-              key={block.id}
-              content={block.content}
-              role="assistant"
-              streaming={message.isStreaming}
-              animateOnMount={animateStreamingText}
-              onAnimationChange={onFinalAnswerAnimationChange}
-            />
+            <div key={block.id} className="chat-final-answer-section">
+              <div className="chat-final-answer-separator" aria-hidden="true">
+                <span>最终回答</span>
+              </div>
+              <MessageContentBlock
+                content={block.content}
+                role="assistant"
+                streaming={message.isStreaming}
+                animateOnMount={animateStreamingText}
+                onAnimationChange={onFinalAnswerAnimationChange}
+                surface="transparent"
+              />
+            </div>
           );
         }
 

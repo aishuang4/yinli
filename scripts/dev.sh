@@ -16,7 +16,7 @@ nvm use 24 2>/dev/null || echo "⚠️  Using system Node: $(node --version)"
 # 启动后端（后台）
 echo "📦 Starting Python backend..."
 cd "$(dirname "$0")/../backend"
-uv run python -m uvicorn src.server.main:app --reload --port 8765 &
+uv run python -m uvicorn src.server.main:app --reload --reload-dir src --port 8765 &
 BACKEND_PID=$!
 echo "   Backend PID: $BACKEND_PID"
 cd ..

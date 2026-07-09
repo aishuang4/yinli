@@ -34,12 +34,14 @@ export function MessageContentBlock({
   streaming = false,
   animateOnMount = false,
   onAnimationChange,
+  surface = 'default',
 }: {
   content: string;
   role: 'user' | 'assistant';
   streaming?: boolean;
   animateOnMount?: boolean;
   onAnimationChange?: (isAnimating: boolean) => void;
+  surface?: 'default' | 'transparent';
 }) {
   const isUser = role === 'user';
   const visible = useSmoothStreamingText(content, streaming && !isUser, {
@@ -61,7 +63,9 @@ export function MessageContentBlock({
         borderRadius: 'var(--radius-xl)',
         backgroundColor: isUser
           ? 'var(--color-accent)'
-          : 'var(--color-bg-secondary)',
+          : surface === 'transparent'
+            ? 'transparent'
+            : 'var(--color-bg-secondary)',
         border: '0',
         boxShadow: 'none',
         outline: 'none',

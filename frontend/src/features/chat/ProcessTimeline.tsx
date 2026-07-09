@@ -129,7 +129,7 @@ export function AccordionProcessTimeline({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="max-h-[400px] overflow-y-auto px-2 py-2 pr-1"
+        className="overflow-visible px-2 py-2 pr-1"
       >
         <div className="space-y-1">
           {steps.map((step) => (
@@ -249,6 +249,7 @@ function textStepFromProcessItem(
     icon: iconForStatus(displayStatus, fallbackIcon),
     iconLine: !isLast,
     defaultOpen: true,
+    open: item.type === 'reasoning' ? true : undefined,
     rightChildren: <StepStatusText status={displayStatus} />,
     children: (
       <Accordion.BodyContent>

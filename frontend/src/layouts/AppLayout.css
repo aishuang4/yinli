@@ -42,6 +42,18 @@
   grid-template-columns: 0px 1fr 0px;
 }
 
+.app-layout[data-chat-workbench="true"] {
+  grid-template:
+    "main" 1fr
+    / 1fr;
+}
+
+.app-layout[data-workbench-menu-page="true"] {
+  grid-template:
+    "activity main" 1fr
+    / 286px 1fr;
+}
+
 /* 各区域映射到 grid area */
 .app-layout__titlebar {
   grid-area: titlebar;
@@ -56,6 +68,16 @@
 .app-layout[data-workspace-mode="workflow"] .app-layout__activity-bar {
   opacity: 0;
   pointer-events: none;
+}
+
+.app-layout[data-chat-workbench="true"] .app-layout__titlebar,
+.app-layout[data-chat-workbench="true"] .app-layout__activity-bar,
+.app-layout[data-chat-workbench="true"] .app-layout__statusbar,
+.app-layout[data-chat-workbench="true"] .app-layout__detail,
+.app-layout[data-workbench-menu-page="true"] .app-layout__titlebar,
+.app-layout[data-workbench-menu-page="true"] .app-layout__statusbar,
+.app-layout[data-workbench-menu-page="true"] .app-layout__detail {
+  display: none;
 }
 
 .app-layout__main {
@@ -102,4 +124,133 @@
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0) scale(1);
+}
+
+.workbench-menu-page {
+  --workbench-menu-bg: #f3f4f5;
+  --workbench-menu-border: rgba(26, 28, 31, 0.1);
+  --workbench-menu-control-bg: rgba(255, 255, 255, 0.72);
+  --workbench-menu-control-hover: rgba(26, 28, 31, 0.055);
+  --workbench-menu-active-bg: rgba(51, 156, 255, 0.12);
+  --workbench-menu-active-border: rgba(51, 156, 255, 0.28);
+  --workbench-menu-icon-bg: rgba(26, 28, 31, 0.055);
+  --workbench-menu-icon-color: #339cff;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  border-right: 1px solid var(--workbench-menu-border);
+  background: var(--workbench-menu-bg);
+  color: var(--color-text-primary);
+}
+
+[data-theme="dark"] .workbench-menu-page {
+  --workbench-menu-bg: #181818;
+  --workbench-menu-border: #333333;
+  --workbench-menu-control-bg: #222222;
+  --workbench-menu-control-hover: rgba(255, 255, 255, 0.075);
+  --workbench-menu-active-bg: rgba(51, 156, 255, 0.13);
+  --workbench-menu-active-border: rgba(51, 156, 255, 0.3);
+  --workbench-menu-icon-bg: rgba(255, 255, 255, 0.06);
+  --workbench-menu-icon-color: #339cff;
+}
+
+.workbench-menu-page__back,
+.workbench-menu-page__item {
+  -webkit-app-region: no-drag;
+}
+
+.workbench-menu-page__back {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 16px 14px;
+  border: 1px solid var(--workbench-menu-border);
+  border-radius: 12px;
+  background: var(--workbench-menu-control-bg);
+  padding: 8px 11px;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-normal) var(--ease-out),
+    color var(--duration-normal) var(--ease-out),
+    transform var(--duration-normal) var(--ease-out);
+}
+
+.workbench-menu-page__back:hover {
+  transform: translateX(-1px);
+  background: var(--workbench-menu-control-hover);
+  color: var(--color-text-primary);
+}
+
+.workbench-menu-page__items {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 4px 12px 16px;
+}
+
+.workbench-menu-page__item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: transparent;
+  padding: 11px 12px;
+  color: var(--color-text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-normal) var(--ease-out),
+    border-color var(--duration-normal) var(--ease-out),
+    color var(--duration-normal) var(--ease-out);
+}
+
+.workbench-menu-page__item:hover {
+  background: var(--workbench-menu-control-hover);
+  color: var(--color-text-primary);
+}
+
+.workbench-menu-page__item[data-active="true"] {
+  border-color: var(--workbench-menu-active-border);
+  background: var(--workbench-menu-active-bg);
+  color: var(--color-text-primary);
+}
+
+.workbench-menu-page__item-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background: var(--workbench-menu-icon-bg);
+  color: var(--workbench-menu-icon-color);
+}
+
+.workbench-menu-page__item-copy {
+  min-width: 0;
+}
+
+.workbench-menu-page__item-label {
+  display: block;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.workbench-menu-page__item-description {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

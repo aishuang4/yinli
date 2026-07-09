@@ -751,6 +751,15 @@ def _rebuild_summary_section(content: str, *, max_items_per_section: int, max_ch
         for item in items:
             if item and item not in summary_items:
                 summary_items.append(item)
+    if not summary_items:
+        items = [
+            _strip_source_reference(line.strip())
+            for line in sections.get("Summary", [])
+            if line.strip().startswith("-")
+        ][:max_items_per_section]
+        for item in items:
+            if item and item not in summary_items:
+                summary_items.append(item)
     summary = "\n".join(summary_items)
     if len(summary) > max_chars:
         summary = summary[:max_chars].rstrip() + "..."

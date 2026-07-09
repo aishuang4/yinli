@@ -8,6 +8,7 @@
 - `docs/development-guidelines.md`：开发规范，覆盖前端、后端、SQLite、Agent Runtime、测试和文档要求。
 - `docs/architecture-overview.md`：当前架构总览，只描述仍在线的核心链路。
 - `docs/chat-sse-event-contract.md`：Chat / RunState / DisplaySnapshot 稳定契约。新增或变更 Chat 事件前必须先改这里。
+- `docs/chat-workbench-redesign.md`：Chat Workbench 前端改造设计，约束深色工作台布局、历史区、工作台菜单页和功能分布边界。
 - `docs/memory-system-design.md`：新记忆系统设计与实现进度，覆盖历史记忆（底层 `memory_nodes`）、Markdown 记忆、向量存储、Memory 页面和 Skill 自进化后续约束。
 - `docs/subagent-delegation-design.md`：新版 Subagent 委托能力设计，定义 Markdown + YAML frontmatter 文件定义、ReAct 内 `DelegateTask` 工具、invocation 审计、`SUBAGENT_*` 事件和分期边界。
 - `docs/team-runtime-redesign.md`：新版 Team Runtime 设计草案，定义 TeamRun、TeammateSession、Task List、Mailbox、file-first 状态和旧 Team Runtime 禁用边界。

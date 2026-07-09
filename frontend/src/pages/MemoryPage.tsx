@@ -5,9 +5,11 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Brain, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { Button } from '@agentscope-ai/design';
+import { WorkbenchDetailShell } from '../components/workbench';
 import { MarkdownMemoryPanel } from '../features/memory/MarkdownMemoryPanel';
+import { MemoryLandingPage } from '../features/memory/MemoryLandingPage';
 import { MemorySettingsPanel } from '../features/memory/MemorySettingsPanel';
 import { NodeMemoryPanel } from '../features/memory/NodeMemoryPanel';
 import { SkillEvolutionQueuePanel } from '../features/memory/SkillEvolutionQueuePanel';
@@ -52,7 +54,7 @@ export function MemoryPage() {
     syncWikiVault,
     loadWikiGraph,
   } = useMemory();
-  const [activeTab, setActiveTab] = useState<MemoryTab>('markdown');
+  const [activeTab, setActiveTab] = useState<MemoryTab | null>(null);
   const [target, setTarget] = useState<MarkdownMemoryScope>('user');
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [doc, setDoc] = useState<MarkdownMemoryDocument | null>(null);
@@ -95,11 +97,12 @@ export function MemoryPage() {
   }, [agents, selectedAgentId]);
 
   useEffect(() => {
+    if (activeTab !== 'markdown') return;
     if (target !== 'agent' || selectedAgent) {
       void loadMarkdown();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target, selectedAgentId]);
+  }, [activeTab, target, selectedAgentId]);
 
   useEffect(() => {
     void loadNodes();
@@ -264,6 +267,7 @@ export function MemoryPage() {
 
   function refreshActiveTab() {
     void refreshAgents();
+    if (!activeTab) return;
     if (activeTab === 'markdown') void loadMarkdown();
     if (activeTab === 'nodes') void loadNodes();
     if (activeTab === 'skills') void loadSkillQueue();
@@ -273,50 +277,31 @@ export function MemoryPage() {
     if (activeTab === 'settings') void loadSettingsAndAudit();
   }
 
-  return (
-    <div className="grid h-full min-h-0 grid-rows-[auto_1fr] overflow-hidden bg-[var(--color-bg-primary)]">
-      <header className="border-b border-[var(--color-border)] px-5 py-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Brain size={20} color="var(--color-accent)" />
-              <h1 className="text-lg font-semibold text-[var(--color-text-primary)]">Memory</h1>
-            </div>
-            <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-              管理用户、Agent、全局长期记忆和历史记忆。
-            </p>
-          </div>
-          <Button icon={<RefreshCw size={14} />} onClick={refreshActiveTab}>
-            刷新
-          </Button>
-        </div>
-        <div className="mt-4 grid grid-cols-5 gap-3">
-          {MEMORY_TABS.map((item) => {
-            const Icon = item.icon;
-            const active = activeTab === item.key;
-            return (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => setActiveTab(item.key)}
-                className={[
-                  'rounded-md px-4 py-3 text-left transition-colors',
-                  active
-                    ? 'bg-[var(--color-accent-bg)] text-[var(--color-accent)]'
-                    : 'bg-[var(--color-bg-secondary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]',
-                ].join(' ')}
-              >
-                <span className="flex items-center gap-2 text-sm font-medium">
-                  <Icon size={15} />
-                  {item.label}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </header>
+  if (!activeTab) {
+    return (
+      <MemoryLandingPage
+        onSelectTab={setActiveTab}
+        onRefresh={() => {
+          void refreshAgents();
+        }}
+      />
+    );
+  }
 
-      <main className="min-h-0 overflow-hidden">
+  const activeTabInfo = MEMORY_TABS.find((item) => item.key === activeTab) || MEMORY_TABS[0];
+
+  return (
+    <WorkbenchDetailShell
+      title={activeTabInfo.label}
+      subtitle="管理用户、Agent、全局长期记忆和历史记忆。"
+      onBack={() => setActiveTab(null)}
+      actions={(
+        <Button size="small" icon={<RefreshCw size={13} />} onClick={refreshActiveTab}>
+          刷新
+        </Button>
+      )}
+    >
+      <main className="h-full min-h-0 overflow-hidden bg-[var(--color-bg-primary)]">
         {error && (
           <div className="mx-5 mt-4 rounded-md border border-[var(--color-error)] bg-[var(--color-error-bg)] p-3 text-sm text-[var(--color-error)]">
             {error}
@@ -397,6 +382,6 @@ export function MemoryPage() {
           />
         )}
       </main>
-    </div>
+    </WorkbenchDetailShell>
   );
 }

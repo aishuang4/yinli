@@ -13,7 +13,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo, type WheelEvent } from 'react';
-import { AlertCircle, Bot, ChevronDown, ImagePlus, Plus, Send, Square, Trash2, X } from 'lucide-react';
+import { AlertCircle, Bot, ChevronDown, ImagePlus, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Search, Send, Settings, Square, Trash2, X } from 'lucide-react';
 import {
   SparkDeepThinkLine,
   SparkReinforcementLearningLine,
@@ -23,6 +23,7 @@ import { Empty, Select, Spinner, Tag, Tooltip } from '@agentscope-ai/design';
 import { useEventStream, type TeamActorInfo, type ToolCallInfo } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
+import { useAppStore } from '../stores/appStore';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList';
@@ -34,6 +35,7 @@ import { subagentToolDataFromDisplayItem } from '../features/chat/subagentToolDa
 import type { ChatImageAttachment, ChatImagePayload, ChatSession, LocalMessage, PendingTeamSelection, StoredChatMessage } from '../features/chat/types';
 import { DISPLAY_EVENTS, type DisplayActor, type DisplayItem } from '../types/displayEvents';
 
+const HISTORY_PANEL_TRANSITION_MS = 260;
 
 function teamActorsFromMessageSnapshot(message: LocalMessage): TeamActorInfo[] {
   const snapshot = message.displaySnapshot;
@@ -358,11 +360,16 @@ export function ChatPage() {
   const [chatError, setChatError] = useState<string | null>(null);
   const [selectedTeamActorId, setSelectedTeamActorId] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [historyPanelMounted, setHistoryPanelMounted] = useState(true);
+  const setView = useAppStore((state) => state.setView);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const programmaticScrollRef = useRef(false);
   const programmaticScrollTimerRef = useRef<number | null>(null);
+  const historyTransitionTimerRef = useRef<number | null>(null);
+  const historyExpandFrameRef = useRef<number | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
   const recoveredRunRef = useRef<string>('');
@@ -407,6 +414,7 @@ export function ChatPage() {
 
   const selectedModelId = runtimeAgent?.modelConfig.primary || 'deepseek-chat';
   const selectedModelSupportsImages = selectedModelId === 'qwen3.7-plus';
+  const isDesktopShell = Boolean(window.electronAPI);
   const hasLiveResponse = (
     state.isStreaming ||
     state.hitlRequests.length > 0 ||
@@ -431,8 +439,51 @@ export function ChatPage() {
   const selectedTeamActor = useMemo(() => (
     visibleTeamActors.find((activity) => activity.id === selectedTeamActorId) || null
   ), [selectedTeamActorId, visibleTeamActors]);
+  const activeSession = useMemo(() => (
+    sessions.find((session) => session.id === activeSessionId) || null
+  ), [activeSessionId, sessions]);
+  const handleCollapseHistory = useCallback(() => {
+    if (historyTransitionTimerRef.current !== null) {
+      window.clearTimeout(historyTransitionTimerRef.current);
+    }
+    if (historyExpandFrameRef.current !== null) {
+      window.cancelAnimationFrame(historyExpandFrameRef.current);
+      historyExpandFrameRef.current = null;
+    }
+
+    setHistoryCollapsed(true);
+    historyTransitionTimerRef.current = window.setTimeout(() => {
+      setHistoryPanelMounted(false);
+      historyTransitionTimerRef.current = null;
+    }, HISTORY_PANEL_TRANSITION_MS);
+  }, []);
+  const handleExpandHistory = useCallback(() => {
+    if (historyTransitionTimerRef.current !== null) {
+      window.clearTimeout(historyTransitionTimerRef.current);
+      historyTransitionTimerRef.current = null;
+    }
+    if (historyExpandFrameRef.current !== null) {
+      window.cancelAnimationFrame(historyExpandFrameRef.current);
+    }
+
+    setHistoryPanelMounted(true);
+    setHistoryCollapsed(true);
+    historyExpandFrameRef.current = window.requestAnimationFrame(() => {
+      historyExpandFrameRef.current = null;
+      setHistoryCollapsed(false);
+    });
+  }, []);
   const openTeamActorSidebar = useCallback((actorId: string) => {
     setSelectedTeamActorId(actorId);
+  }, []);
+
+  useEffect(() => () => {
+    if (historyTransitionTimerRef.current !== null) {
+      window.clearTimeout(historyTransitionTimerRef.current);
+    }
+    if (historyExpandFrameRef.current !== null) {
+      window.cancelAnimationFrame(historyExpandFrameRef.current);
+    }
   }, []);
 
   const handleFinalAnswerAnimationChange = useCallback((isAnimating: boolean) => {
@@ -918,88 +969,117 @@ export function ChatPage() {
   );
 
   return (
-    <div className="chat-page-shell grid h-full min-h-0 grid-cols-[280px_1fr] gap-4 bg-[var(--color-bg-secondary)] p-4">
-      <aside className="chat-history-panel flex min-h-0 flex-col overflow-hidden rounded-xl bg-[var(--color-bg-primary)]">
-        <div className="p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-base font-medium text-[var(--color-text-primary)]">
-              历史对话
-            </h2>
-            <button
-              type="button"
-              className="icon-button h-8 w-8 rounded-md bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-all duration-300 ease-out hover:-translate-y-0.5 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-              onClick={handleNewSession}
-              disabled={state.isStreaming}
-              aria-label="新建会话"
-              title="新建会话"
-            >
-              <Plus size={14} />
-            </button>
-          </div>
-          <div className="text-xs text-[var(--color-text-tertiary)]">
-            {sessions.length} 个会话
-          </div>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
-          {sessionsLoading ? (
-            <div className="flex justify-center py-8">
-              <Spinner />
-            </div>
-          ) : sessions.length === 0 ? (
-            <Empty type="noData" description="暂无历史对话" />
-          ) : (
-            <div className="space-y-2">
-              {sessions.map((session) => (
+    <div
+      className="chat-page-shell chat-workbench-shell grid h-full min-h-0 overflow-hidden"
+      style={{
+        gridTemplateColumns: historyPanelMounted
+          ? historyCollapsed
+            ? '0px minmax(0, 1fr)'
+            : '286px minmax(0, 1fr)'
+          : 'minmax(0, 1fr)',
+        transition: `grid-template-columns ${HISTORY_PANEL_TRANSITION_MS}ms var(--ease-out)`,
+      }}
+    >
+      {historyPanelMounted && (
+        <aside
+          className="chat-history-panel chat-workbench-history flex min-h-0 flex-col overflow-hidden"
+          data-collapsed={historyCollapsed}
+        >
+          {isDesktopShell && <div className="chat-workbench-electron-spacer" aria-hidden="true" />}
+          <div className="px-4 pb-3 pt-3">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
+                历史对话
+              </h2>
+              <div className="flex items-center gap-2">
+                <Tooltip title="折叠历史对话" placement="bottom" mode="dark">
+                  <button
+                    type="button"
+                    className="icon-button chat-history-collapse-button"
+                    onClick={handleCollapseHistory}
+                    aria-label="折叠历史对话"
+                  >
+                    <PanelLeftClose size={17} strokeWidth={1.7} />
+                  </button>
+                </Tooltip>
                 <button
-                  key={session.id}
                   type="button"
-                  onClick={() => handleSelectSession(session)}
-                  className={`chat-session-item group w-full rounded-lg px-3 py-2 text-left transition-all duration-300 ease-out ${
-                    activeSessionId === session.id
-                      ? 'chat-session-item--active bg-[var(--color-bg-secondary)]'
-                      : 'bg-[var(--color-bg-secondary)] hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)]'
-                  }`}
+                  className="icon-button chat-history-new-button"
+                  onClick={handleNewSession}
+                  disabled={state.isStreaming}
+                  aria-label="新建会话"
+                  title="新建会话"
                 >
-                  <div className="flex items-start gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-                        {session.title}
+                  <Plus size={15} />
+                </button>
+              </div>
+            </div>
+            <div className="chat-workbench-search flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--color-text-tertiary)]">
+              <Search size={14} />
+              <span>{sessions.length} 个会话</span>
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+            {sessionsLoading ? (
+              <div className="flex justify-center py-8">
+                <Spinner />
+              </div>
+            ) : sessions.length === 0 ? (
+              <Empty type="noData" description="暂无历史对话" />
+            ) : (
+              <div className="space-y-2">
+                {sessions.map((session) => (
+                  <button
+                    key={session.id}
+                    type="button"
+                    onClick={() => handleSelectSession(session)}
+                    className={`chat-session-item group w-full rounded-lg px-3 py-2 text-left transition-all duration-300 ease-out ${
+                      activeSessionId === session.id
+                        ? 'chat-session-item--active'
+                        : 'hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)]'
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
+                          {session.title}
+                        </div>
+                        <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
+                          <span className="truncate">{session.agent_name}</span>
+                          <span>{session.message_count} 条</span>
+                        </div>
                       </div>
-                      <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-                        <span className="truncate">{session.agent_name}</span>
-                        <span>{session.message_count} 条</span>
-                      </div>
-                    </div>
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      className="rounded p-1 text-[var(--color-text-tertiary)] opacity-0 transition-all duration-300 ease-out hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-error)] group-hover:opacity-100"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        handleDeleteSession(session.id);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        className="rounded p-1 text-[var(--color-text-tertiary)] opacity-0 transition-all duration-300 ease-out hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-error)] group-hover:opacity-100"
+                        onClick={(event) => {
                           event.stopPropagation();
                           handleDeleteSession(session.id);
-                        }
-                      }}
-                      aria-label="删除会话"
-                    >
-                      <Trash2 size={14} />
-                    </span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </aside>
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            handleDeleteSession(session.id);
+                          }
+                        }}
+                        aria-label="删除会话"
+                      >
+                        <Trash2 size={14} />
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </aside>
+      )}
 
       <section
-        className="chat-main-panel grid min-h-0 overflow-hidden rounded-xl bg-[var(--color-bg-primary)]"
+        className="chat-main-panel chat-workbench-main grid min-h-0 overflow-hidden"
         style={{
           gridTemplateColumns: selectedTeamActor
             ? 'minmax(0, 1fr) 360px'
@@ -1008,47 +1088,82 @@ export function ChatPage() {
         }}
       >
         <div className="grid min-h-0 grid-rows-[auto_1fr_auto] overflow-hidden">
-          <header className="px-5 py-4">
+          <header className="chat-workbench-topbar flex items-center justify-between gap-4 px-8 py-2">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--color-agent-leader)] text-white">
-              <Bot size={18} strokeWidth={1.5} />
+            {historyCollapsed && (
+              <>
+                <Tooltip title="展开历史对话" placement="bottom" mode="dark">
+                  <button
+                    type="button"
+                    className="icon-button chat-history-collapse-button"
+                    onClick={handleExpandHistory}
+                    aria-label="展开历史对话"
+                  >
+                    <PanelLeftOpen size={17} strokeWidth={1.7} />
+                  </button>
+                </Tooltip>
+                <Tooltip title="新建会话" placement="bottom" mode="dark">
+                  <button
+                    type="button"
+                    className="icon-button chat-history-new-button"
+                    onClick={handleNewSession}
+                    disabled={state.isStreaming}
+                    aria-label="新建会话"
+                  >
+                    <Plus size={15} />
+                  </button>
+                </Tooltip>
+              </>
+            )}
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)]">
+              <MessageSquare size={17} strokeWidth={1.7} />
             </div>
             <div className="min-w-0">
-              <div className="truncate text-base font-medium text-[var(--color-text-primary)]">
-                {targetMode === 'team'
-                  ? selectedTeam?.name || 'Team'
-                  : runtimeAgent?.name || 'Assistant'}
+              <div className="truncate text-base font-semibold text-[var(--color-text-primary)]">
+                {activeSession?.title || '新对话'}
               </div>
               <div className="truncate text-xs text-[var(--color-text-tertiary)]">
                 {state.isStreaming
                   ? `${state.modelName || runtimeAgent?.modelConfig.primary || 'deepseek-chat'} · 正在思考...`
                   : targetMode === 'team'
-                    ? `${teamLeaderAgent?.name || 'Leader'} · ${selectedTeam?.members.length || 0} 个成员`
-                    : runtimeAgent?.description || 'DeepSeek'}
+                    ? `${selectedTeam?.name || 'Team'} · ${teamLeaderAgent?.name || 'Leader'} · ${selectedTeam?.members.length || 0} 个成员`
+                    : `${runtimeAgent?.name || 'Assistant'} · ${runtimeAgent?.description || 'DeepSeek'}`}
               </div>
             </div>
             {activeSessionId && (
-              <Tag size="small" color="transparent">
+              <Tag className="chat-workbench-status-tag" size="small" color="transparent">
                 已保存
               </Tag>
             )}
             {selectedModelSupportsImages && (
-              <Tag size="small" color="blue">
+              <Tag className="chat-workbench-status-tag chat-workbench-status-tag--blue" size="small" color="blue">
                 图片
               </Tag>
             )}
             {targetMode === 'team' && (
-              <Tag size="small" color="mauve">
+              <Tag className="chat-workbench-status-tag chat-workbench-status-tag--mauve" size="small" color="mauve">
                 Team
               </Tag>
             )}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Tooltip title="工作台设置" placement="bottom" mode="dark">
+              <button
+                type="button"
+                className="icon-button chat-workbench-top-action h-9 w-9 rounded-xl"
+                onClick={() => setView('settings')}
+                aria-label="进入工作台设置"
+              >
+                <Settings size={17} />
+              </button>
+            </Tooltip>
           </div>
           </header>
 
           <div className="relative min-h-0 overflow-hidden">
             <div
               ref={messagesContainerRef}
-              className="h-full min-h-0 overflow-auto px-5 py-4"
+              className="h-full min-h-0 overflow-auto px-8 py-4"
               onScroll={handleMessagesScroll}
               onWheel={handleMessagesWheel}
               onPointerDown={cancelProgrammaticScroll}
@@ -1127,7 +1242,7 @@ export function ChatPage() {
             <FloatingPlanDock plans={state.plans} />
           </div>
 
-          <div className="px-5 pb-5 pt-2">
+          <div className="px-8 pb-6 pt-2">
           {chatError && (
             <div className="mb-2 flex items-center gap-2 rounded-md border border-[var(--color-error)] bg-[var(--color-error-bg)] px-3 py-2 text-sm text-[var(--color-error)]">
               <AlertCircle size={14} />

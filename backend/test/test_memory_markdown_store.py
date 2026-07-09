@@ -88,8 +88,13 @@ def test_write_global_memory_creates_file(tmp_path):
 
 def test_agent_create_does_not_create_markdown_memory(tmp_path, monkeypatch):
     from src.memory import markdown_store
+    from src.server.routes import agents as agents_routes
+    from src.storage import database
 
     monkeypatch.setattr(markdown_store, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+    monkeypatch.setattr(agents_routes, "_agents", {})
 
     agent = asyncio.run(
         create_agent(

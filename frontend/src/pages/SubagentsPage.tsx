@@ -5,10 +5,18 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, FileText, History, RefreshCw, Search, ShieldCheck } from 'lucide-react';
-import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
+import { Bot, FileText, History, List, RefreshCw, Search, ShieldCheck } from 'lucide-react';
+import { Button, Tag } from '@agentscope-ai/design';
 import { TextField } from '../components/form';
-import { SubagentDefinitionList } from '../features/subagents/SubagentDefinitionList';
+import {
+  WorkbenchEmptyPanel,
+  WorkbenchDetailShell,
+  WorkbenchList,
+  WorkbenchListPage,
+  WorkbenchListRow,
+  WorkbenchLoadingPanel,
+  WorkbenchSection,
+} from '../components/workbench';
 import { SubagentInvocationList } from '../features/subagents/SubagentInvocationList';
 import { matchText, compactHash } from '../features/subagents/subagentViewUtils';
 import { useSubagents } from '../hooks/useSubagents';
@@ -53,12 +61,11 @@ export function SubagentsPage() {
   ), [invocations]);
 
   useEffect(() => {
-    if (definitions.length === 0) {
-      setSelectedName('');
+    if (!selectedName) {
       return;
     }
     if (!definitions.some((definition) => definition.name === selectedName)) {
-      setSelectedName(definitions[0].name);
+      setSelectedName('');
     }
   }, [definitions, selectedName]);
 
@@ -84,32 +91,71 @@ export function SubagentsPage() {
   const completedCount = invocations.filter((item) => item.status === 'completed').length;
   const failedCount = invocations.filter((item) => item.status === 'failed').length;
 
-  return (
-    <div className="grid h-full min-h-0 grid-rows-[auto_auto_1fr] overflow-hidden bg-[var(--color-bg-primary)]">
-      <header className="border-b border-[var(--color-border)] px-5 py-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Bot size={20} color="var(--color-accent)" />
-              <h1 className="text-lg font-semibold text-[var(--color-text-primary)]">Subagents</h1>
+  if (selectedDefinition) {
+    return (
+      <WorkbenchDetailShell
+        title={selectedDefinition.name}
+        subtitle={selectedDefinition.description || '暂无描述'}
+        onBack={() => setSelectedName('')}
+        actions={(
+          <>
+            <Tag size="small" color={selectedDefinition.scope === 'project' ? 'blue' : 'mauve'}>{selectedDefinition.scope}</Tag>
+            <Tag size="small" color="transparent">{selectedDefinition.permissionMode}</Tag>
+            <Tag size="small" color={selectedDefinition.model === 'inherit' ? 'green' : 'orange'}>{selectedDefinition.model || 'inherit'}</Tag>
+            <Tag size="small" color="transparent">{invocationCounts[selectedDefinition.name] || 0} 次调用</Tag>
+          </>
+        )}
+      >
+        <section className="grid h-full min-h-0 grid-rows-[auto_1fr] overflow-hidden">
+          <div className="border-b border-[var(--color-border)] bg-[var(--color-bg-primary)] px-5 py-3">
+            <div className="flex gap-2">
+              <DetailTabButton
+                active={activeTab === 'definition'}
+                icon={<FileText size={14} />}
+                label="定义详情"
+                onClick={() => setActiveTab('definition')}
+              />
+              <DetailTabButton
+                active={activeTab === 'history'}
+                icon={<History size={14} />}
+                label="调用历史"
+                onClick={() => setActiveTab('history')}
+              />
             </div>
-            <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-              查看文件定义、加载状态和最近的 DelegateTask 委托记录。
-            </p>
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-2 text-sm text-[var(--color-text-secondary)]">
-            <Tag size="small" color="blue">{definitions.length} 个定义</Tag>
-            <Tag size="small" color="green">{completedCount} 次完成</Tag>
-            {failedCount > 0 && <Tag size="small" color="red">{failedCount} 次失败</Tag>}
-            <Tag size="small" color="transparent">fp {compactHash(fingerprint)}</Tag>
-            <Button icon={<RefreshCw size={14} />} onClick={refresh} loading={loading}>
-              刷新
-            </Button>
+          <div className="min-h-0 overflow-y-auto p-5">
+            {activeTab === 'definition' ? (
+              <SubagentDefinitionDetail definition={selectedDefinition} />
+            ) : (
+              <SubagentInvocationList
+                invocations={selectedInvocations}
+                title={`${selectedDefinition.name} 调用历史`}
+                emptyDescription="当前 Subagent 暂无匹配的调用记录"
+              />
+            )}
           </div>
-        </div>
-      </header>
+        </section>
+      </WorkbenchDetailShell>
+    );
+  }
 
-      <section className="border-b border-[var(--color-border)] px-5 py-3">
+  return (
+    <WorkbenchListPage
+      title="Subagents"
+      icon={<Bot size={18} />}
+      actions={(
+        <>
+          <Tag size="small" color="blue">{definitions.length} 个定义</Tag>
+          <Tag size="small" color="green">{completedCount} 次完成</Tag>
+          {failedCount > 0 && <Tag size="small" color="red">{failedCount} 次失败</Tag>}
+          <Tag size="small" color="transparent">fp {compactHash(fingerprint)}</Tag>
+          <Button icon={<RefreshCw size={14} />} onClick={refresh} loading={loading}>
+            刷新
+          </Button>
+        </>
+      )}
+    >
+      <div className="mb-5">
         <TextField
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -117,110 +163,96 @@ export function SubagentsPage() {
           prefix={<Search size={14} />}
           allowClear
         />
-      </section>
+      </div>
 
-      <main className="min-h-0 overflow-hidden px-5 py-4">
+      {(errors.length > 0 || warnings.length > 0) && (
+        <WorkbenchSection title="加载提示">
+          <div className="grid gap-2">
+            {errors.map((item) => (
+              <div key={`${item.path}-${item.message}`} className="rounded-xl border border-[var(--color-error)] bg-[var(--color-error-bg)] px-4 py-3 text-sm text-[var(--color-error)]">
+                <div className="font-medium">{item.path}</div>
+                <div className="mt-1">{item.message}</div>
+              </div>
+            ))}
+            {warnings.map((item) => (
+              <div key={item} className="rounded-xl border border-[var(--color-warning)] bg-[var(--color-warning-bg)] px-4 py-3 text-sm text-[var(--color-warning)]">
+                <div>{item}</div>
+              </div>
+            ))}
+          </div>
+        </WorkbenchSection>
+      )}
+
+      <WorkbenchSection title="Subagent 定义" compact>
         {error ? (
-          <div className="rounded-md border border-[var(--color-error)] bg-[var(--color-bg-secondary)] p-4 text-sm text-[var(--color-error)]">
-            {error}
-          </div>
+          <WorkbenchEmptyPanel>
+            <span className="text-[var(--color-error)]">{error}</span>
+          </WorkbenchEmptyPanel>
         ) : loading ? (
-          <div className="flex h-full min-h-[420px] items-center justify-center">
-            <Spinner tip="加载 Subagent 数据..." />
-          </div>
+          <WorkbenchLoadingPanel tip="加载 Subagent 数据..." />
+        ) : filteredDefinitions.length === 0 ? (
+          <WorkbenchEmptyPanel>暂无匹配的 Subagent 定义</WorkbenchEmptyPanel>
         ) : (
-          <div className="grid h-full min-h-0 overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] xl:grid-cols-[360px_minmax(0,1fr)]">
-            <SubagentDefinitionList
-              definitions={filteredDefinitions}
-              errors={errors}
-              warnings={warnings}
-              selectedName={selectedName}
-              invocationCounts={invocationCounts}
-              onSelect={(name) => {
-                setSelectedName(name);
-                setActiveTab('definition');
-              }}
-            />
-            <section className="grid min-h-0 grid-rows-[auto_1fr] overflow-hidden bg-[var(--color-bg-primary)]">
-              {selectedDefinition ? (
-                <>
-                  <SubagentDetailHeader
-                    definition={selectedDefinition}
-                    invocationCount={invocationCounts[selectedDefinition.name] || 0}
-                    activeTab={activeTab}
-                    onTabChange={setActiveTab}
-                  />
-                  <div className="min-h-0 overflow-y-auto p-4">
-                    {activeTab === 'definition' ? (
-                      <SubagentDefinitionDetail definition={selectedDefinition} />
-                    ) : (
-                      <SubagentInvocationList
-                        invocations={selectedInvocations}
-                        title={`${selectedDefinition.name} 调用历史`}
-                        emptyDescription="当前 Subagent 暂无匹配的调用记录"
-                      />
-                    )}
-                  </div>
-                </>
-              ) : (
-                <div className="flex h-full min-h-[420px] items-center justify-center">
-                  <Empty type="noData" description="请选择一个 Subagent 定义" />
-                </div>
-              )}
-            </section>
-          </div>
+          <WorkbenchList>
+            {filteredDefinitions.map((definition, index) => (
+              <SubagentDefinitionRow
+                key={`${definition.scope}-${definition.name}`}
+                definition={definition}
+                invocationCount={invocationCounts[definition.name] || 0}
+                last={index === filteredDefinitions.length - 1}
+                onSelect={() => {
+                  setSelectedName(definition.name);
+                  setActiveTab('definition');
+                }}
+              />
+            ))}
+          </WorkbenchList>
         )}
-      </main>
-    </div>
+      </WorkbenchSection>
+    </WorkbenchListPage>
   );
 }
 
-function SubagentDetailHeader({
+function SubagentDefinitionRow({
   definition,
   invocationCount,
-  activeTab,
-  onTabChange,
+  last,
+  onSelect,
 }: {
   definition: SubagentDefinition;
   invocationCount: number;
-  activeTab: SubagentDetailTab;
-  onTabChange: (tab: SubagentDetailTab) => void;
+  last: boolean;
+  onSelect: () => void;
 }) {
   return (
-    <div className="border-b border-[var(--color-border)] px-5 py-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="truncate text-base font-semibold text-[var(--color-text-primary)]">{definition.name}</h2>
-            {definition.color && <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: definition.color }} />}
-          </div>
-          <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--color-text-secondary)]">
-            {definition.description || '暂无描述'}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-1">
+    <WorkbenchListRow
+      icon={(
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-accent)]">
+          <Bot size={20} strokeWidth={1.8} />
+        </span>
+      )}
+      title={definition.name}
+      subtitle={definition.path}
+      description={definition.description || '暂无描述'}
+      last={last}
+      onSelect={onSelect}
+      meta={(
+        <>
           <Tag size="small" color={definition.scope === 'project' ? 'blue' : 'mauve'}>{definition.scope}</Tag>
-          <Tag size="small" color="transparent">{definition.permissionMode}</Tag>
-          <Tag size="small" color={definition.model === 'inherit' ? 'green' : 'orange'}>{definition.model || 'inherit'}</Tag>
           <Tag size="small" color="transparent">{invocationCount} 次调用</Tag>
-        </div>
-      </div>
-
-      <div className="mt-4 flex gap-2">
-        <DetailTabButton
-          active={activeTab === 'definition'}
-          icon={<FileText size={14} />}
-          label="定义详情"
-          onClick={() => onTabChange('definition')}
-        />
-        <DetailTabButton
-          active={activeTab === 'history'}
-          icon={<History size={14} />}
-          label="调用历史"
-          onClick={() => onTabChange('history')}
-        />
-      </div>
-    </div>
+        </>
+      )}
+      trailing={(
+        <button
+          type="button"
+          onClick={onSelect}
+          className="icon-button h-8 w-8 rounded-md text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+          aria-label={`打开 ${definition.name} 详情`}
+        >
+          <List size={17} />
+        </button>
+      )}
+    />
   );
 }
 

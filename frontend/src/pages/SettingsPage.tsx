@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card, Tag } from '@agentscope-ai/design';
 import { ModelSettingsForm, type ModelSettings } from '../features/settings/ModelSettingsForm';
+import { useSettingsStore } from '../stores/settingsStore';
+import type { ThemeName } from '../types/theme';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
 export function SettingsPage() {
+  const theme = useSettingsStore((state) => state.theme);
+  const setTheme = useSettingsStore((state) => state.setTheme);
   const [settings, setSettings] = useState<ModelSettings | null>(null);
   const [provider, setProvider] = useState('deepseek');
   const [baseUrl, setBaseUrl] = useState('');
@@ -172,14 +176,16 @@ export function SettingsPage() {
         </section>
 
         <aside className="space-y-4">
+          <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
+
           <Card bodyStyle={{ padding: 0 }}>
             <div className="p-4">
               <div className="text-sm font-medium text-[var(--color-text-primary)]">当前运行配置</div>
               <dl className="mt-4 space-y-3 text-sm">
-	                <div>
-	                  <dt className="text-xs text-[var(--color-text-tertiary)]">供应商</dt>
-	                  <dd className="mt-1 text-[var(--color-text-primary)]">{settings?.providerName || '-'}</dd>
-	                </div>
+                <div>
+                  <dt className="text-xs text-[var(--color-text-tertiary)]">供应商</dt>
+                  <dd className="mt-1 text-[var(--color-text-primary)]">{settings?.providerName || '-'}</dd>
+                </div>
                 <div>
                   <dt className="text-xs text-[var(--color-text-tertiary)]">适配器</dt>
                   <dd className="mt-1 text-[var(--color-text-primary)]">{settings?.adapter || '-'}</dd>
@@ -211,5 +217,50 @@ export function SettingsPage() {
         </aside>
       </div>
     </div>
+  );
+}
+
+function AppearanceSettingsCard({
+  theme,
+  onThemeChange,
+}: {
+  theme: ThemeName;
+  onThemeChange: (theme: ThemeName) => void;
+}) {
+  const options: Array<{ value: ThemeName; label: string; description: string }> = [
+    { value: 'light', label: '亮色主体', description: '浅灰侧栏与白色主工作区' },
+    { value: 'dark', label: '暗色主体', description: '深色工作台与低亮度边界' },
+  ];
+
+  return (
+    <Card bodyStyle={{ padding: 0 }}>
+      <div className="p-4">
+        <div className="text-sm font-medium text-[var(--color-text-primary)]">界面外观</div>
+        <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
+          控制 Chat 工作台和系统页面的亮色/暗色主题。
+        </p>
+        <div className="mt-4 grid gap-2">
+          {options.map((option) => {
+            const active = theme === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                className={`rounded-lg border px-3 py-2 text-left transition ${
+                  active
+                    ? 'border-[var(--color-accent)] bg-[var(--color-accent-bg)]'
+                    : 'border-[var(--color-border)] bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-hover)]'
+                }`}
+                onClick={() => onThemeChange(option.value)}
+                aria-pressed={active}
+              >
+                <span className="block text-sm font-medium text-[var(--color-text-primary)]">{option.label}</span>
+                <span className="mt-1 block text-xs text-[var(--color-text-tertiary)]">{option.description}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </Card>
   );
 }

@@ -7,31 +7,31 @@
 
 [data-theme="light"] {
   /* === 背景色 === */
-  --color-bg-primary: #f7f7f5;
-  --color-bg-secondary: #eeeeeb;
-  --color-bg-tertiary: #e4e4e0;
-  --color-bg-hover: #e7e7e3;
-  --color-bg-active: #d8d8d3;
+  --color-bg-primary: #ffffff;
+  --color-bg-secondary: #f4f5f6;
+  --color-bg-tertiary: #eceef0;
+  --color-bg-hover: #f0f2f4;
+  --color-bg-active: #e3e6e8;
   --color-bg-overlay: rgba(24, 24, 27, 0.36);
 
   /* === 文字色 === */
-  --color-text-primary: #242428;
-  --color-text-secondary: #64646b;
-  --color-text-tertiary: #8b8b92;
-  --color-text-inverse: #f7f7f5;
-  --color-text-link: #2f5fbd;
+  --color-text-primary: #1a1c1f;
+  --color-text-secondary: #5f6368;
+  --color-text-tertiary: #8b9097;
+  --color-text-inverse: #ffffff;
+  --color-text-link: #339cff;
 
   /* === 边框色 === */
-  --color-border: #d8d8d3;
-  --color-border-strong: #c7c7c0;
-  --color-border-focus: #4674c8;
+  --color-border: #dde1e5;
+  --color-border-strong: #c8cdd2;
+  --color-border-focus: #339cff;
 
   /* === 主题色 (Accent) === */
-  --color-accent: #4674c8;
-  --color-accent-hover: #365fa8;
-  --color-accent-active: #2b4d89;
-  --color-accent-bg: #e7edf7;
-  --color-accent-text: #284a83;
+  --color-accent: #339cff;
+  --color-accent-hover: #1f8df0;
+  --color-accent-active: #1678d2;
+  --color-accent-bg: #e8f3ff;
+  --color-accent-text: #1268b8;
 
   /* === 语义色 === */
   --color-success: #10b981;
@@ -40,8 +40,8 @@
   --color-warning-bg: #f5ecd5;
   --color-error: #ef4444;
   --color-error-bg: #f4e3e3;
-  --color-info: #4674c8;
-  --color-info-bg: #e7edf7;
+  --color-info: #339cff;
+  --color-info-bg: #e8f3ff;
 
   /* === Agent 类型色 === */
   --color-agent-leader: #8b5cf6;

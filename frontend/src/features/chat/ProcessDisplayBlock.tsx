@@ -23,11 +23,12 @@ export function ProcessDisplayBlock({
   const displayStatus = hasFinalAnswer && !isTerminalStatus ? 'completed' : block.status;
   const isProcessDone = Boolean(block.completedAt) || hasFinalAnswer || isTerminalStatus;
   const processTitle = isProcessDone
-    ? '已处理'
+    ? processDuration
+      ? `耗时 ${processDuration}`
+      : '已处理'
     : <Accordion.SoftLightTitle>处理中</Accordion.SoftLightTitle>;
   const processMeta = (
     <span className="flex shrink-0 items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-      {processDuration && <span>耗时 {processDuration}</span>}
       <span>{detailCount} 项</span>
     </span>
   );

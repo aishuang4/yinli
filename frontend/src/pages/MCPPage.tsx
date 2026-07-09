@@ -1,22 +1,24 @@
 /**
- * MCPPage — MCP 浏览器页面
+ * MCPPage — MCP Server 管理页面。
  *
- * 支持浏览 MCP Server、按分类/安装状态筛选、安装/卸载、启停和查看工具详情。
+ * 第一层展示 Server 列表；点击 Server 后进入第二层查看工具和连接配置。
  */
 
 import { useMemo, useState } from 'react';
-import { CheckCircle2, Plus, Plug, RefreshCw, Trash2, Wrench } from 'lucide-react';
-import {
-  Button,
-  Card,
-  Empty,
-  Modal,
-  Spinner,
-  Tag,
-} from '@agentscope-ai/design';
+import { List, Plus, Plug, RefreshCw, Trash2, Wrench } from 'lucide-react';
+import { Button, Modal, Tag } from '@agentscope-ai/design';
 import { McpRegisterModal, type McpRegisterFormState } from '../features/mcp/McpRegisterModal';
 import { ToggleButton } from '../components/ToggleButton';
 import { CatalogFilterBar, type CatalogInstallFilter } from '../components/form/CatalogFilterBar';
+import {
+  WorkbenchDetailShell,
+  WorkbenchEmptyPanel,
+  WorkbenchList,
+  WorkbenchListPage,
+  WorkbenchListRow,
+  WorkbenchLoadingPanel,
+  WorkbenchSection,
+} from '../components/workbench';
 import { useMcp } from '../hooks/useMcp';
 import type { McpServer } from '../types/mcp';
 
@@ -83,10 +85,7 @@ export function MCPPage({ embedded = false }: MCPPageProps) {
     .filter((server) => server.status === 'installed' && server.enabled)
     .reduce((total, server) => total + server.tools.length, 0);
 
-  async function runServerAction(
-    serverId: string,
-    action: () => Promise<McpServer>,
-  ) {
+  async function runServerAction(serverId: string, action: () => Promise<McpServer>) {
     try {
       setBusyId(serverId);
       const next = await action();
@@ -144,282 +143,29 @@ export function MCPPage({ embedded = false }: MCPPageProps) {
     }
   }
 
-  const actionBar = (
-    <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-[var(--color-text-secondary)]">
-      <div className="flex flex-wrap items-center gap-3">
-        <span>{servers.length} 个 Server</span>
-        <span>{installedCount} 个已安装</span>
-        <span>{enabledToolCount} 个可用工具</span>
-      </div>
-      <div className="flex items-center gap-2">
-        <Button
-          type="primary"
-          onClick={() => {
-            setRegisterError(null);
-            setRegisterOpen(true);
-          }}
-        >
-          <span className="inline-flex items-center gap-1.5">
-            <Plus size={14} className="shrink-0" />
-            注册 MCP
-          </span>
-        </Button>
-        <Button
-          icon={<RefreshCw size={14} />}
-          onClick={refresh}
-          loading={loading}
-        >
-          刷新
-        </Button>
-      </div>
-    </div>
+  const actions = (
+    <>
+      <Tag size="small" color="blue">{servers.length} 个 Server</Tag>
+      <Tag size="small" color="green">{installedCount} 个已安装</Tag>
+      <Tag size="small" color="transparent">{enabledToolCount} 个工具</Tag>
+      <Button
+        type="primary"
+        icon={<Plus size={14} />}
+        onClick={() => {
+          setRegisterError(null);
+          setRegisterOpen(true);
+        }}
+      >
+        注册 MCP
+      </Button>
+      <Button icon={<RefreshCw size={14} />} onClick={refresh} loading={loading}>
+        刷新
+      </Button>
+    </>
   );
 
-  return (
-    <div className={[
-      'h-full grid min-h-0 bg-[var(--color-bg-primary)]',
-      embedded ? 'grid-rows-[auto_1fr]' : 'grid-rows-[auto_auto_1fr]',
-    ].join(' ')}>
-      {!embedded && (
-        <header className="px-5 py-4 border-b border-[var(--color-border)]">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <Plug size={20} color="var(--color-accent)" />
-                <h1 className="text-lg font-semibold text-[var(--color-text-primary)]">
-                  MCP Browser
-                </h1>
-              </div>
-              <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-                浏览、安装和管理 Agent 可用的 MCP Server 工具。
-              </p>
-            </div>
-            {actionBar}
-          </div>
-        </header>
-      )}
-
-      <section className={[
-        'px-5 py-3',
-        embedded ? '' : 'border-b border-[var(--color-border)]',
-      ].join(' ')}>
-        {embedded && <div className="mb-3">{actionBar}</div>}
-        <CatalogFilterBar
-          query={query}
-          category={category}
-          installFilter={installFilter}
-          categories={categories}
-          searchPlaceholder="搜索 Server、工具或标签"
-          onQueryChange={setQuery}
-          onCategoryChange={setCategory}
-          onInstallFilterChange={setInstallFilter}
-        />
-      </section>
-
-      <main className="min-h-0 overflow-y-auto p-5">
-        {error ? (
-          <div className="rounded-md border border-[var(--color-error)] bg-[var(--color-error-bg)] p-4 text-sm text-[var(--color-error)]">
-            {error}
-          </div>
-        ) : loading ? (
-          <div className="flex justify-center py-12">
-            <Spinner tip="加载 MCP Server..." />
-          </div>
-        ) : filteredServers.length === 0 ? (
-          <Empty type="noData" description="没有匹配的 MCP Server" />
-        ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {filteredServers.map((server) => {
-              const installed = server.status === 'installed';
-              const busy = busyId === server.id;
-
-              return (
-                <Card
-                  key={server.id}
-                  className="h-[400px] overflow-hidden transition-all duration-300 ease-out hover:-translate-y-1 hover:shadow-lg"
-                  bodyStyle={{ height: '100%', padding: 0 }}
-                >
-                  <div className="grid h-full grid-rows-[minmax(0,62px)_minmax(0,58px)_minmax(0,32px)_minmax(0,66px)_minmax(0,34px)_minmax(0,1fr)_minmax(0,62px)] overflow-hidden">
-                    <div className="flex min-h-0 items-start justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3">
-                      <h2 className="line-clamp-2 min-w-0 text-sm font-semibold text-[var(--color-text-primary)]">
-                        {server.name}
-                      </h2>
-                      <div className="shrink-0">
-                        <Tag color={installed ? 'success' : 'info'} size="small">
-                          {installed ? '已安装' : '可安装'}
-                        </Tag>
-                      </div>
-                    </div>
-
-                    <div className="min-h-0 overflow-hidden px-4 py-2">
-                      <p className="line-clamp-2 text-xs text-[var(--color-text-secondary)]">
-                        {server.description}
-                      </p>
-                    </div>
-
-                    <div className="min-h-0 overflow-hidden px-4">
-                      <div className="flex h-7 flex-nowrap gap-2 overflow-hidden">
-                        <Tag size="small" color="blue">{server.category}</Tag>
-                        <Tag size="small" color="transparent">{server.transport}</Tag>
-                        {server.tags.slice(0, 2).map((tag) => (
-                          <Tag key={tag} size="small" color="mauve">{tag}</Tag>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="grid min-h-0 grid-cols-2 gap-2 px-4 text-sm">
-                      <div className="min-w-0 overflow-hidden rounded-md bg-[var(--color-bg-secondary)] px-3 py-2">
-                        <div className="text-xs text-[var(--color-text-tertiary)]">工具数</div>
-                        <div className="mt-1 font-medium text-[var(--color-text-primary)]">
-                          {server.tools.length}
-                        </div>
-                      </div>
-                      <div className="min-w-0 overflow-hidden rounded-md bg-[var(--color-bg-secondary)] px-3 py-2">
-                        <div className="text-xs text-[var(--color-text-tertiary)]">状态</div>
-                        <div className="mt-1 flex min-w-0 items-center gap-1 truncate font-medium text-[var(--color-text-primary)]">
-                          {installed && server.enabled && <CheckCircle2 size={14} color="var(--color-success)" />}
-                          {installed ? (server.enabled ? '已启用' : '已停用') : '未安装'}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="line-clamp-1 min-h-0 overflow-hidden px-4 py-1 text-xs text-[var(--color-text-secondary)]">
-                      {server.tools.map((tool) => tool.name).join(' / ')}
-                    </div>
-
-                    <div aria-hidden="true" />
-
-                    <div className="flex min-h-0 items-center justify-between gap-3 self-end px-4 py-3">
-                      {installed ? (
-                        <ToggleButton
-                          checked={server.enabled}
-                          checkedLabel="启用中"
-                          uncheckedLabel="已停用"
-                          disabled={busy}
-                          ariaLabel={`${server.name} 启停状态`}
-                          onChange={(enabled) => runServerAction(
-                            server.id,
-                            () => setServerEnabled(server.id, enabled),
-                          )}
-                        />
-                      ) : (
-                        <span className="text-xs text-[var(--color-text-tertiary)]">
-                          安装后可在 Agent 中选择工具
-                        </span>
-                      )}
-
-                      <div className="flex shrink-0 gap-2">
-                        <Button onClick={() => setSelectedServer(server)}>
-                          详情
-                        </Button>
-                        {installed ? (
-                          <Button
-                            danger
-                            loading={busy}
-                            onClick={() => runServerAction(
-                              server.id,
-                              () => uninstallServer(server.id),
-                            )}
-                          >
-                            卸载
-                          </Button>
-                        ) : (
-                          <Button
-                            type="primary"
-                            loading={busy}
-                            onClick={() => runServerAction(
-                              server.id,
-                              () => installServer(server.id),
-                            )}
-                          >
-                            安装
-                          </Button>
-                        )}
-                        <Button
-                          type="text"
-                          danger
-                          loading={busy}
-                          onClick={() => setDeleteConfirm(server)}
-                          aria-label="删除 MCP"
-                        >
-                          <Trash2 size={14} />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </Card>
-              );
-            })}
-          </div>
-        )}
-      </main>
-
-      <Modal
-        title={selectedServer?.name}
-        open={Boolean(selectedServer)}
-        onCancel={() => setSelectedServer(null)}
-        footer={null}
-        width={720}
-      >
-        {selectedServer && (
-          <div className="space-y-5">
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              {selectedServer.description}
-            </p>
-
-            <div className="grid grid-cols-2 gap-3 text-sm">
-              <div>
-                <div className="text-xs text-[var(--color-text-tertiary)]">分类</div>
-                <div className="mt-1 text-[var(--color-text-primary)]">{selectedServer.category}</div>
-              </div>
-              <div>
-                <div className="text-xs text-[var(--color-text-tertiary)]">通信方式</div>
-                <div className="mt-1 text-[var(--color-text-primary)]">{selectedServer.transport}</div>
-              </div>
-              <div className="col-span-2">
-                <div className="text-xs text-[var(--color-text-tertiary)]">启动命令</div>
-                <code className="mt-1 block rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-xs text-[var(--color-text-primary)]">
-                  {selectedServer.command || selectedServer.url || '未配置'}
-                </code>
-              </div>
-              {Object.keys(selectedServer.headers).length > 0 && (
-                <div className="col-span-2">
-                  <div className="text-xs text-[var(--color-text-tertiary)]">请求头</div>
-                  <div className="mt-1 space-y-1 rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-xs text-[var(--color-text-primary)]">
-                    {Object.keys(selectedServer.headers).map((key) => (
-                      <div key={key}>{key}: ********</div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <section>
-              <div className="mb-3 flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
-                <Wrench size={16} />
-                提供的工具
-              </div>
-              <div className="space-y-2">
-                {selectedServer.tools.map((tool) => (
-                  <div
-                    key={tool.id}
-                    className="rounded-md border border-[var(--color-border)] p-3"
-                  >
-                    <div className="font-medium text-[var(--color-text-primary)]">{tool.name}</div>
-                    <div className="mt-1 text-sm text-[var(--color-text-secondary)]">
-                      {tool.description}
-                    </div>
-                    <code className="mt-2 block text-xs text-[var(--color-text-tertiary)]">
-                      {tool.id}
-                    </code>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </div>
-        )}
-      </Modal>
-
+  const modals = (
+    <>
       <Modal
         title="删除 MCP Server"
         open={Boolean(deleteConfirm)}
@@ -442,6 +188,258 @@ export function MCPPage({ embedded = false }: MCPPageProps) {
         onCancel={() => setRegisterOpen(false)}
         onRegister={() => void handleRegister()}
       />
+    </>
+  );
+
+  if (selectedServer) {
+    const installed = selectedServer.status === 'installed';
+    const busy = busyId === selectedServer.id;
+    return (
+      <>
+        <WorkbenchDetailShell
+          title={selectedServer.name}
+          subtitle={selectedServer.description || '暂无描述'}
+          onBack={() => setSelectedServer(null)}
+          actions={(
+            <>
+              {installed ? (
+                <ToggleButton
+                  checked={selectedServer.enabled}
+                  checkedLabel="启用中"
+                  uncheckedLabel="已停用"
+                  disabled={busy}
+                  ariaLabel={`${selectedServer.name} 启停状态`}
+                  onChange={(enabled) => runServerAction(
+                    selectedServer.id,
+                    () => setServerEnabled(selectedServer.id, enabled),
+                  )}
+                />
+              ) : null}
+              {installed ? (
+                <Button
+                  size="small"
+                  danger
+                  loading={busy}
+                  onClick={() => runServerAction(selectedServer.id, () => uninstallServer(selectedServer.id))}
+                >
+                  卸载
+                </Button>
+              ) : (
+                <Button
+                  size="small"
+                  type="primary"
+                  loading={busy}
+                  onClick={() => runServerAction(selectedServer.id, () => installServer(selectedServer.id))}
+                >
+                  安装
+                </Button>
+              )}
+              <Button size="small" danger icon={<Trash2 size={13} />} onClick={() => setDeleteConfirm(selectedServer)}>
+                删除
+              </Button>
+            </>
+          )}
+        >
+          <McpServerDetail server={selectedServer} />
+        </WorkbenchDetailShell>
+        {modals}
+      </>
+    );
+  }
+
+  const content = (
+    <>
+      <div className="mb-5">
+        <CatalogFilterBar
+          query={query}
+          category={category}
+          installFilter={installFilter}
+          categories={categories}
+          searchPlaceholder="搜索 Server、工具或标签"
+          onQueryChange={setQuery}
+          onCategoryChange={setCategory}
+          onInstallFilterChange={setInstallFilter}
+        />
+      </div>
+
+      <WorkbenchSection title="MCP Server" compact>
+        {error ? (
+          <WorkbenchEmptyPanel>
+            <span className="text-[var(--color-error)]">{error}</span>
+          </WorkbenchEmptyPanel>
+        ) : loading ? (
+          <WorkbenchLoadingPanel tip="加载 MCP Server..." />
+        ) : filteredServers.length === 0 ? (
+          <WorkbenchEmptyPanel>没有匹配的 MCP Server</WorkbenchEmptyPanel>
+        ) : (
+          <WorkbenchList>
+            {filteredServers.map((server, index) => (
+              <McpServerRow
+                key={server.id}
+                server={server}
+                busy={busyId === server.id}
+                last={index === filteredServers.length - 1}
+                onSelect={() => setSelectedServer(server)}
+                onInstall={() => runServerAction(server.id, () => installServer(server.id))}
+                onUninstall={() => runServerAction(server.id, () => uninstallServer(server.id))}
+                onDelete={() => setDeleteConfirm(server)}
+              />
+            ))}
+          </WorkbenchList>
+        )}
+      </WorkbenchSection>
+    </>
+  );
+
+  if (embedded) {
+    return (
+      <div className="h-full min-h-0 overflow-auto bg-[var(--color-bg-primary)]">
+        <main className="mx-auto w-full max-w-5xl px-5 py-4">
+          <div className="mb-5 flex flex-wrap items-center justify-end gap-2">{actions}</div>
+          {content}
+        </main>
+        {modals}
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <WorkbenchListPage title="MCP" icon={<Plug size={18} />} actions={actions}>
+        {content}
+      </WorkbenchListPage>
+      {modals}
+    </>
+  );
+}
+
+function McpServerRow({
+  server,
+  busy,
+  last,
+  onSelect,
+  onInstall,
+  onUninstall,
+  onDelete,
+}: {
+  server: McpServer;
+  busy: boolean;
+  last: boolean;
+  onSelect: () => void;
+  onInstall: () => void;
+  onUninstall: () => void;
+  onDelete: () => void;
+}) {
+  const installed = server.status === 'installed';
+  return (
+    <WorkbenchListRow
+      icon={(
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-accent)]">
+          <Plug size={20} strokeWidth={1.8} />
+        </span>
+      )}
+      title={server.name}
+      subtitle={`${server.category} · ${server.transport}`}
+      description={server.description || server.tools.map((tool) => tool.name).join(' / ') || '暂无描述'}
+      last={last}
+      onSelect={onSelect}
+      meta={(
+        <>
+          <Tag size="small" color={installed ? 'green' : 'blue'}>{installed ? '已安装' : '可安装'}</Tag>
+          <Tag size="small" color={installed && server.enabled ? 'green' : 'transparent'}>
+            {installed ? (server.enabled ? '已启用' : '已停用') : `${server.tools.length} 工具`}
+          </Tag>
+        </>
+      )}
+      trailing={(
+        <>
+          <button
+            type="button"
+            onClick={onSelect}
+            className="icon-button h-8 w-8 rounded-md text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+            aria-label={`打开 ${server.name} 详情`}
+          >
+            <List size={17} />
+          </button>
+          {installed ? (
+            <Button size="small" danger loading={busy} onClick={onUninstall}>
+              卸载
+            </Button>
+          ) : (
+            <Button size="small" type="primary" loading={busy} onClick={onInstall}>
+              安装
+            </Button>
+          )}
+          <button
+            type="button"
+            onClick={onDelete}
+            className="icon-button h-8 w-8 rounded-md text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-error-bg)] hover:text-[var(--color-error)]"
+            aria-label={`删除 ${server.name}`}
+          >
+            <Trash2 size={15} />
+          </button>
+        </>
+      )}
+    />
+  );
+}
+
+function McpServerDetail({ server }: { server: McpServer }) {
+  return (
+    <div className="h-full min-h-0 overflow-y-auto p-5">
+      <div className="mx-auto grid w-full max-w-5xl gap-4">
+        <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
+          <div className="grid gap-3 text-sm md:grid-cols-2">
+            <DetailField label="分类" value={server.category} />
+            <DetailField label="通信方式" value={server.transport} />
+            <DetailField label="状态" value={server.status === 'installed' ? (server.enabled ? '已启用' : '已停用') : '未安装'} />
+            <DetailField label="工具数量" value={`${server.tools.length}`} />
+          </div>
+        </section>
+
+        <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
+          <div className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">启动命令</div>
+          <code className="block rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-xs text-[var(--color-text-primary)]">
+            {server.command || server.url || '未配置'}
+          </code>
+        </section>
+
+        {Object.keys(server.headers).length > 0 && (
+          <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
+            <div className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">请求头</div>
+            <div className="space-y-1 rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-xs text-[var(--color-text-primary)]">
+              {Object.keys(server.headers).map((key) => (
+                <div key={key}>{key}: ********</div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
+          <div className="mb-3 flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
+            <Wrench size={16} />
+            提供的工具
+          </div>
+          <div className="space-y-2">
+            {server.tools.map((tool) => (
+              <div key={tool.id} className="rounded-md border border-[var(--color-border)] p-3">
+                <div className="font-medium text-[var(--color-text-primary)]">{tool.name}</div>
+                <div className="mt-1 text-sm text-[var(--color-text-secondary)]">{tool.description}</div>
+                <code className="mt-2 block text-xs text-[var(--color-text-tertiary)]">{tool.id}</code>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function DetailField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md bg-[var(--color-bg-secondary)] p-3">
+      <div className="text-xs text-[var(--color-text-tertiary)]">{label}</div>
+      <div className="mt-1 truncate text-sm font-medium text-[var(--color-text-primary)]">{value}</div>
     </div>
   );
 }
