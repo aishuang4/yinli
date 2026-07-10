@@ -23,6 +23,25 @@ _POLICY_RANK = {
     ApprovalPolicy.TRUSTED_TOOLS: 3,
 }
 
+_CANONICAL_PERMISSION_MODES = {
+    "default",
+    "acceptEdits",
+    "auto",
+    "dontAsk",
+    "bypassPermissions",
+    "plan",
+}
+_PERMISSION_MODE_ALIASES = {
+    "accept_edits": "acceptEdits",
+    "accept-edits": "acceptEdits",
+    "dont_ask": "dontAsk",
+    "dont-ask": "dontAsk",
+    "bypass": "bypassPermissions",
+    "bypass_permissions": "bypassPermissions",
+    "bypass-permissions": "bypassPermissions",
+    "explore": "plan",
+}
+
 
 @dataclass(frozen=True)
 class SubagentPermissionResolution:
@@ -94,18 +113,8 @@ def normalize_subagent_permission_mode(value: str) -> str:
     """把 Claude 风格 permissionMode 和常见别名归一为规范值。"""
 
     normalized = value.strip()
-    aliases = {
-        "accept_edits": "acceptEdits",
-        "accept-edits": "acceptEdits",
-        "dont_ask": "dontAsk",
-        "dont-ask": "dontAsk",
-        "bypass": "bypassPermissions",
-        "bypass_permissions": "bypassPermissions",
-        "bypass-permissions": "bypassPermissions",
-        "explore": "plan",
-    }
     key = normalized.lower()
-    for alias, canonical in aliases.items():
+    for alias, canonical in _PERMISSION_MODE_ALIASES.items():
         if key == alias.lower():
             return canonical
     if key in {"default", "acceptedits", "auto", "dontask", "bypasspermissions", "plan"}:
@@ -118,6 +127,19 @@ def normalize_subagent_permission_mode(value: str) -> str:
             "plan": "plan",
         }[key]
     return "default"
+
+
+def is_supported_subagent_permission_mode(value: str) -> bool:
+    """检查 frontmatter permissionMode 是否是受支持的官网枚举或兼容别名。"""
+
+    normalized = value.strip()
+    if not normalized:
+        return True
+    key = normalized.lower()
+    return (
+        key in {mode.lower() for mode in _CANONICAL_PERMISSION_MODES}
+        or key in {alias.lower() for alias in _PERMISSION_MODE_ALIASES}
+    )
 
 
 def _effective_parent_policy(profile: UnifiedPermissionProfile) -> ApprovalPolicy:

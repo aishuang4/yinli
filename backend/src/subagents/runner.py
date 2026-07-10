@@ -19,7 +19,7 @@ from src.agents.runtime_types import (
 from src.subagents.models import SubagentDefinition
 from src.subagents.permission_policy import SubagentPermissionResolution, resolve_subagent_permission
 from src.subagents.runtime_context import SubagentRuntimeContext, build_subagent_runtime_context
-from src.subagents.tool_policy import build_subagent_tool_policy
+from src.subagents.tool_policy import SubagentToolPolicy, build_subagent_tool_policy
 from src.tools.configured_http_tool import safe_http_tool_name
 
 HITL_EVENT_TYPES = {"REQUIRE_USER_CONFIRM", "REQUIRE_EXTERNAL_EXECUTION"}
@@ -39,6 +39,7 @@ class SubagentPreparedRun:
 
     runtime_context: SubagentRuntimeContext
     permission: SubagentPermissionResolution
+    tool_policy: SubagentToolPolicy
     audit_payload: dict[str, Any]
 
 
@@ -111,12 +112,23 @@ class SubagentRunner:
 
         runtime_context = build_subagent_runtime_context(definition)
         permission = resolve_subagent_permission(definition, self.guardrails)
+        tool_policy = build_subagent_tool_policy(
+            definition,
+            parent_tool_scope=self.parent_tool_scope,
+            parent_guardrails=self.guardrails,
+            child_guardrails=permission.guardrails,
+            mcp_servers=self.mcp_servers,
+            knowledge_tools=self.knowledge_tools,
+        )
         return SubagentPreparedRun(
             runtime_context=runtime_context,
             permission=permission,
+            tool_policy=tool_policy,
             audit_payload={
                 **runtime_context.audit_payload(definition),
                 "permission": permission.audit_payload(),
+                "effectiveTools": sorted(tool_policy.effective_tool_names),
+                "deniedTools": sorted(tool_policy.denied_tool_names),
             },
         )
 
@@ -131,6 +143,7 @@ class SubagentRunner:
         constraints: list[str] | None = None,
         runtime_context: SubagentRuntimeContext | None = None,
         permission: SubagentPermissionResolution | None = None,
+        tool_policy: SubagentToolPolicy | None = None,
         runtime_event_sink: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> SubagentRunResult:
         """运行一个 Subagent invocation。"""
@@ -138,7 +151,7 @@ class SubagentRunner:
         started = time.monotonic()
         runtime_context = runtime_context or build_subagent_runtime_context(definition)
         permission = permission or resolve_subagent_permission(definition, self.guardrails)
-        policy = build_subagent_tool_policy(
+        policy = tool_policy or build_subagent_tool_policy(
             definition,
             parent_tool_scope=self.parent_tool_scope,
             parent_guardrails=self.guardrails,
@@ -338,7 +351,12 @@ def _child_tool_scope(parent_scope: RuntimeToolScope, effective_tools: set[str])
 
     return RuntimeToolScope(
         allow_mcp=parent_scope.allow_mcp and any(tool.startswith("mcp__") for tool in effective_tools),
-        allow_knowledge=parent_scope.allow_knowledge and "KnowledgeBaseSearch" in effective_tools,
+        allow_knowledge=parent_scope.allow_knowledge and any(
+            tool == "KnowledgeBaseSearch"
+            or tool.startswith("KnowledgeBaseSearch_")
+            or tool.startswith("HttpTool_")
+            for tool in effective_tools
+        ),
         allow_bash=parent_scope.allow_bash and "Bash" in effective_tools,
         allow_http=parent_scope.allow_http and "HttpRequest" in effective_tools,
     )

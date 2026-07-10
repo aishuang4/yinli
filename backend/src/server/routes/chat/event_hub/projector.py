@@ -1125,12 +1125,17 @@ def _subagent_context_detail(payload: dict[str, Any]) -> str:
     tools = payload.get("effectiveTools") or payload.get("tools")
     if isinstance(tools, list):
         parts.append(f"可用工具 {len(tools)} 个")
-    skills = payload.get("skills")
+    skills = payload.get("loadedSkills") or payload.get("skills")
     if isinstance(skills, list):
         parts.append(f"注入 Skill {len(skills)} 个")
     permission = payload.get("permission")
     if isinstance(permission, dict):
-        mode = str(permission.get("mode") or permission.get("permissionMode") or "")
+        mode = str(
+            permission.get("effectivePermissionMode")
+            or permission.get("mode")
+            or permission.get("permissionMode")
+            or ""
+        )
         if mode:
             parts.append(f"权限模式 {mode}")
     return "，".join(parts) or "已准备独立上下文"

@@ -7,7 +7,7 @@ from typing import AsyncGenerator
 
 from agentscope._utils._common import _generate_id
 from agentscope.event import ExternalExecutionResultEvent
-from agentscope.message import Msg, UserMsg
+from agentscope.message import Msg, TextBlock, ToolResultBlock, ToolResultState, UserMsg
 from agentscope.tool import ToolChoice
 
 from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
@@ -88,6 +88,7 @@ async def stream_leader_agent_reply(
     skill_runs: list[ChatSkillRun],
     plan_mode_manager: object | None = None,
     runtime_event_sources: list[object] | None = None,
+    sandbox: bool = False,
 ) -> AsyncGenerator[str, None]:
     """消费 Leader AgentScope 事件流，并处理 HITL / clarification 早停。"""
 
@@ -226,8 +227,12 @@ async def stream_leader_agent_reply(
                 state.stop_reason = "subagent_executor_missing"
                 return
             try:
+                tool_calls = list(event_data.get("tool_calls") or [])
                 execution_results = []
-                for tool_call in list(event_data.get("tool_calls") or []):
+                if len(tool_calls) != 1:
+                    execution_results = _delegate_task_batch_error_results(tool_calls)
+                else:
+                    tool_call = tool_calls[0]
                     execution_task = asyncio.create_task(manager.execute_external_tool_call(tool_call))
                     try:
                         while not execution_task.done():
@@ -259,6 +264,7 @@ async def stream_leader_agent_reply(
                     skill_runs=skill_runs,
                     plan_mode_manager=plan_mode_manager,
                     runtime_event_sources=runtime_event_sources,
+                    sandbox=sandbox,
                 ):
                     yield resumed_event
                 return
@@ -268,11 +274,11 @@ async def stream_leader_agent_reply(
                     yield _sse_event("RUNTIME_EVENT", runtime_event)
                 interaction = PENDING_INTERACTIONS.get(exc.interaction_id)
                 if interaction is not None:
-                    first_tool_call = dict((event_data.get("tool_calls") or [{}])[0])
+                    delegated_tool_call = dict(tool_calls[0])
                     PENDING_SUBAGENT_PARENT_CONTEXTS[interaction.id] = {
                         "agent": agent,
                         "reply_id": str(event_data.get("reply_id") or ""),
-                        "tool_call": first_tool_call,
+                        "tool_call": delegated_tool_call,
                         "state": state,
                         "session_id": session_id,
                         "persist": persist,
@@ -285,6 +291,7 @@ async def stream_leader_agent_reply(
                         "skill_runs": skill_runs,
                         "plan_mode_manager": plan_mode_manager,
                         "runtime_event_sources": runtime_event_sources,
+                        "sandbox": sandbox,
                     }
                     yield _sse_event("HITL_REQUIRED", _hitl_payload(interaction))
                 state.stopped = True
@@ -525,6 +532,24 @@ def _is_delegate_task_external_event(event_data: dict) -> bool:
 
     tool_calls = list(event_data.get("tool_calls") or [])
     return bool(tool_calls) and all(str(tool_call.get("name") or "") == "DelegateTask" for tool_call in tool_calls)
+
+
+def _delegate_task_batch_error_results(tool_calls: list[dict]) -> list[ToolResultBlock]:
+    """拒绝同一回复中的多条 blocking 委托，避免 HITL 恢复关联到错误调用。"""
+
+    message = (
+        "DelegateTask is blocking and supports exactly one delegation per model reply. "
+        "Review the returned result, then delegate the next task in a later tool call."
+    )
+    return [
+        ToolResultBlock(
+            id=str(tool_call.get("id") or ""),
+            name="DelegateTask",
+            output=[TextBlock(text=message)],
+            state=ToolResultState.ERROR,
+        )
+        for tool_call in tool_calls
+    ]
 
 
 def _find_subagent_manager(sources: list[object]) -> object | None:

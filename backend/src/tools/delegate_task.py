@@ -18,7 +18,7 @@ class DelegateTask(ToolBase):
         "Delegate a self-contained side task to a named subagent with an independent context. "
         "Use this when exploration or analysis would pollute the main conversation, and only a concise "
         "summary is needed before continuing. In V1 this call is blocking: wait for the subagent result "
-        "before continuing."
+        "before continuing. Call at most one DelegateTask per model reply."
     )
     input_schema: dict[str, Any] = {
         "type": "object",

@@ -17,6 +17,8 @@ from src.agents.runtime_types import (
 )
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.server.routes.chat.hitl import _create_pending_interaction
+from src.server.routes.chat.event_hub.projector import _subagent_context_detail
+from src.server.routes.chat.leader_stream import _delegate_task_batch_error_results
 from src.server.routes.chat.models import (
     ChatResumeRequest,
     PENDING_AGENTS,
@@ -29,7 +31,13 @@ from src.subagents.loader import load_subagent_file
 from src.subagents.models import SubagentCatalog, SubagentDefinition
 from src.subagents.permission_policy import resolve_subagent_permission
 from src.subagents.registry import load_subagent_catalog
-from src.subagents.runner import SubagentHitlRequired, SubagentRunResult, _build_child_system_prompt, _filter_mcp_servers
+from src.subagents.runner import (
+    SubagentHitlRequired,
+    SubagentRunResult,
+    _build_child_system_prompt,
+    _child_tool_scope,
+    _filter_mcp_servers,
+)
 from src.subagents.runtime_context import SubagentRuntimeContext
 from src.subagents.tool_policy import build_subagent_tool_policy
 from src.tools.delegate_task import DelegateTask
@@ -68,6 +76,26 @@ background: true
     assert definition.skills == ["review-style"]
     assert definition.prompt == "你是代码审查专家。"
     assert definition.metadata["recognizedUnsupportedFields"] == ["background"]
+
+
+def test_load_subagent_rejects_unknown_permission_mode(tmp_path: Path) -> None:
+    path = tmp_path / "unsafe-typo.md"
+    path.write_text(
+        """---
+name: unsafe-typo
+description: Should not silently gain parent permissions.
+permissionMode: plna
+---
+Prompt.
+""",
+        encoding="utf-8",
+    )
+
+    definition, error = load_subagent_file(path, scope="project")
+
+    assert definition is None
+    assert error is not None
+    assert "permissionMode" in error.message
 
 
 def test_registry_project_scope_overrides_user_scope(tmp_path: Path) -> None:
@@ -302,6 +330,43 @@ Prompt.
 
     assert "KnowledgeBaseSearch_Product_Docs" in policy.effective_tool_names
     assert "KnowledgeBaseSearch_API_Docs" not in policy.effective_tool_names
+
+
+def test_child_scope_keeps_custom_knowledge_and_http_tools_enabled() -> None:
+    parent_scope = RuntimeToolScope(allow_knowledge=True)
+
+    knowledge_scope = _child_tool_scope(
+        parent_scope,
+        {"KnowledgeBaseSearch_Product_Docs", "FinalAnswerStart"},
+    )
+    http_scope = _child_tool_scope(
+        parent_scope,
+        {"HttpTool_Product_API", "FinalAnswerStart"},
+    )
+
+    assert knowledge_scope.allow_knowledge is True
+    assert http_scope.allow_knowledge is True
+
+
+def test_batch_delegate_task_returns_one_error_per_call() -> None:
+    results = _delegate_task_batch_error_results([
+        {"id": "delegate-1", "name": "DelegateTask"},
+        {"id": "delegate-2", "name": "DelegateTask"},
+    ])
+
+    assert [result.id for result in results] == ["delegate-1", "delegate-2"]
+    assert all(str(result.state).lower() == "error" for result in results)
+    assert all("exactly one delegation" in result.output[0].text for result in results)
+
+
+def test_subagent_context_projection_uses_runtime_audit_field_names() -> None:
+    detail = _subagent_context_detail({
+        "effectiveTools": ["Read", "Grep"],
+        "loadedSkills": [{"id": "review", "name": "Review Style"}],
+        "permission": {"effectivePermissionMode": "plan"},
+    })
+
+    assert detail == "可用工具 2 个，注入 Skill 1 个，权限模式 plan"
 
 
 def test_action_subagent_tools_are_available_with_parent_permission(tmp_path: Path) -> None:
@@ -707,6 +772,7 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
         "skill_runs": [],
         "plan_mode_manager": None,
         "runtime_event_sources": [],
+        "sandbox": False,
     }
 
     async def collect_resume_events() -> str:
@@ -725,6 +791,7 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
 
     assert "SUBAGENT_COMPLETED" in output
     assert "Parent continued." in output
+    assert "RUN_COMPLETED" in output
     assert parent_agent.resumed is True
     assert invocations[0]["status"] == "completed"
     assert invocations[0]["resultPreview"] == "Fixed the file."

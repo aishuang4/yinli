@@ -123,6 +123,7 @@ def _build_subagent_prompt_addendum(definitions: dict[str, object]) -> str:
         "Subagent delegation:",
         "You may call DelegateTask for self-contained side tasks that should run in an independent context.",
         "DelegateTask is blocking in this version: wait for the result before finalizing your answer.",
+        "Call at most one DelegateTask per model reply. Review its result before delegating another task.",
         "Available subagents:",
     ]
     for name, definition in sorted(definitions.items()):
@@ -231,6 +232,7 @@ async def execute_react_runtime(
             skill_runs=ctx.skill_runs,
             plan_mode_manager=plan_mode_manager,
             runtime_event_sources=runtime_event_sources,
+            sandbox=run_data.sandbox,
         ):
             yield leader_event
         active_skill_run = leader_stream_state.active_skill_run

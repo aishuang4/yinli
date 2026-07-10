@@ -10,7 +10,10 @@ from typing import Any
 import yaml
 
 from src.subagents.models import SubagentDefinition, SubagentLoadError
-from src.subagents.permission_policy import normalize_subagent_permission_mode
+from src.subagents.permission_policy import (
+    is_supported_subagent_permission_mode,
+    normalize_subagent_permission_mode,
+)
 
 
 _FRONTMATTER_RE = re.compile(r"\A---\s*\n(?P<yaml>.*?)\n---\s*\n?(?P<body>.*)\Z", re.DOTALL)
@@ -71,13 +74,19 @@ def load_subagent_file(path: Path, *, scope: str) -> tuple[SubagentDefinition | 
     }
     unsupported = {
         key: frontmatter[key]
-        for key in ("background", "isolation", "hooks", "memory", "effort", "initialPrompt")
+        for key in ("background", "isolation", "hooks", "memory", "effort", "initialPrompt", "mcpServers")
         if key in frontmatter
     }
     if unsupported:
         metadata["recognizedUnsupportedFields"] = sorted(unsupported.keys())
         metadata["unsupportedFieldValues"] = unsupported
     raw_permission_mode = str(frontmatter.get("permissionMode") or "default").strip() or "default"
+    if not is_supported_subagent_permission_mode(raw_permission_mode):
+        return None, SubagentLoadError(
+            scope=scope,
+            path=str(path),
+            message=f"不支持的 permissionMode: {raw_permission_mode}",
+        )
     permission_mode = normalize_subagent_permission_mode(raw_permission_mode)
 
     return (

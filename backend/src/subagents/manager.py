@@ -157,6 +157,7 @@ class SubagentDelegationManager:
                 constraints=constraints or [],
                 runtime_context=prepared.runtime_context,
                 permission=prepared.permission,
+                tool_policy=getattr(prepared, "tool_policy", None),
                 runtime_event_sink=lambda event_type, event_data: self._emit_child_agent_event(
                     definition=definition,
                     invocation_id=invocation_id,

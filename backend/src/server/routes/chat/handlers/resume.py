@@ -35,7 +35,12 @@ from src.server.routes.chat.background_runs import (
     mark_chat_background_run_resuming,
     relay_chat_background_run_events,
 )
-from src.server.routes.chat.completion import max_react_iterations_error, missing_final_answer_error
+from src.server.routes.chat.completion import (
+    finalize_failed_leader_run,
+    finalize_successful_leader_run,
+    max_react_iterations_error,
+    missing_final_answer_error,
+)
 from src.server.routes.chat.leader_stream import (
     LeaderStreamState,
     _PLAN_FINAL_ANSWER_CHUNK_DELAY_SECONDS,
@@ -389,6 +394,10 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 )
                 if parent_context is not None:
                     parent_tool_call = dict(parent_context.get("tool_call") or {})
+                    parent_state = parent_context["state"]
+                    # 父 Agent 因子智能体审批暂停后，恢复前必须清除旧的暂停标志。
+                    parent_state.stopped = False
+                    parent_state.stop_reason = ""
                     parent_result = ExternalExecutionResultEvent(
                         reply_id=str(parent_context.get("reply_id") or ""),
                         execution_results=[
@@ -420,8 +429,58 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         skill_runs=parent_context["skill_runs"],
                         plan_mode_manager=parent_context.get("plan_mode_manager"),
                         runtime_event_sources=parent_context.get("runtime_event_sources"),
+                        sandbox=bool(parent_context.get("sandbox")),
                     ):
                         yield parent_event
+                    if parent_state.stopped and parent_state.stop_reason != "plan_finalized":
+                        return
+                    if parent_state.exceeded_max_iters:
+                        async for completion_event in finalize_failed_leader_run(
+                            session_id=str(parent_context["session_id"]),
+                            persist=bool(parent_context["persist"]),
+                            agent_id=str(parent_context["agent_id"]),
+                            agent_name=str(parent_context["agent_name"]),
+                            model_name=str(parent_context["model_name"]),
+                            assistant_text="",
+                            assistant_error=max_react_iterations_error(),
+                            assistant_model_caches=parent_state.assistant_model_caches,
+                            skill_runs=parent_context["skill_runs"],
+                            sandbox=bool(parent_context.get("sandbox")),
+                        ):
+                            yield completion_event
+                        return
+                    if not parent_state.assistant_text.strip():
+                        async for completion_event in finalize_failed_leader_run(
+                            session_id=str(parent_context["session_id"]),
+                            persist=bool(parent_context["persist"]),
+                            agent_id=str(parent_context["agent_id"]),
+                            agent_name=str(parent_context["agent_name"]),
+                            model_name=str(parent_context["model_name"]),
+                            assistant_text="",
+                            assistant_error=missing_final_answer_error(),
+                            assistant_model_caches=parent_state.assistant_model_caches,
+                            skill_runs=parent_context["skill_runs"],
+                            sandbox=bool(parent_context.get("sandbox")),
+                        ):
+                            yield completion_event
+                        return
+                    async for completion_event in finalize_successful_leader_run(
+                        session_id=str(parent_context["session_id"]),
+                        persist=bool(parent_context["persist"]),
+                        agent_id=str(parent_context["agent_id"]),
+                        agent_name=str(parent_context["agent_name"]),
+                        model_name=str(parent_context["model_name"]),
+                        user_message=str(parent_context["message"]),
+                        assistant_text=parent_state.assistant_text,
+                        assistant_thinking=parent_state.assistant_thinking,
+                        assistant_tool_calls=parent_state.assistant_tool_calls,
+                        assistant_model_caches=parent_state.assistant_model_caches,
+                        runtime_events=parent_state.runtime_events,
+                        skill_runs=parent_context["skill_runs"],
+                        active_skill_run=parent_state.active_skill_run,
+                        sandbox=bool(parent_context.get("sandbox")),
+                    ):
+                        yield completion_event
                 return
 
             assistant_tool_calls = _pending_tool_calls_to_runs(

@@ -322,7 +322,7 @@ function SubagentDefinitionDetail({ definition }: { definition: SubagentDefiniti
           <div className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">扩展配置</div>
           <div className="grid gap-4 md:grid-cols-3">
             <TagGroup title="Skills" values={definition.skills} color="blue" empty="未配置" />
-            <TagGroup title="MCP Servers" values={definition.mcpServers.map((item) => JSON.stringify(item))} color="mauve" empty="未配置" />
+            <TagGroup title="MCP Servers（已解析，当前未执行）" values={definition.mcpServers.map((item) => JSON.stringify(item))} color="mauve" empty="未配置" />
             <TagGroup title="Metadata" values={metadataEntries.map(([key, value]) => `${key}: ${String(value)}`)} color="transparent" empty="无" />
           </div>
         </section>

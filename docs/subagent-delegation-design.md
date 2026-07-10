@@ -42,7 +42,7 @@ V1.0 做“前台、一次性、可审计”的 Subagent，作为 Agent Workstat
 
 - 支持 Markdown + YAML frontmatter 定义文件：Markdown 正文是系统提示词，YAML frontmatter 配置名称、描述、工具、模型、权限、Skill、最大 ReAct 轮次。
 - 支持项目级和用户级 Subagent 目录扫描，名称冲突按项目级优先。
-- 注入 `DelegateTask` 工具，参数包括 `subagentName`、`task`、`expectedOutput`、`context`、`constraints`。M1 中 `DelegateTask` 是 blocking 前台工具：主 Agent 必须等待子 Agent 完成并拿到 observation 后，才能继续 ReAct 或输出最终答案。
+- 注入 `DelegateTask` 工具，参数包括 `subagentName`、`task`、`expectedOutput`、`context`、`constraints`。M1 中 `DelegateTask` 是 blocking 前台工具：每个模型回复最多发起一条委托；主 Agent 必须等待子 Agent 完成并拿到 observation 后，才能继续 ReAct 或输出最终答案。若模型批量发起多条委托，后端返回每条对应的错误结果，要求其改为串行委托，避免 HITL 恢复关联错位。
 - 子 Agent fresh context 执行，不读取主会话历史，只接收委托任务、必要环境信息、当前项目规则摘要、git 状态快照、运行前记忆摘要和预加载 Skill。内置 `explorer` / `plan` 为低成本研究代理，默认跳过项目规则和 git 状态；自定义 Subagent 默认加载这些启动上下文。
 - 子 Agent 结果以短摘要返回给主 Agent；完整过程进入 Trace，RunState 只做轻量委托状态展示。
 - 子 Agent 继承父 Agent guardrails 的上限，Subagent 文件配置只能进一步收窄权限，不能放大权限。
