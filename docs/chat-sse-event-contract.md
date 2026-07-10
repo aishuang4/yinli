@@ -1,6 +1,6 @@
 # Chat SSE 事件契约
 
-> 状态：2026-07-02 RunState v2 + DisplaySnapshot v3。本文定义 `/api/chat/send/start`、`/api/chat/send`、`/api/chat/resume/start`、`/api/chat/resume`、`/api/chat/runs/{run_id}/stream`、`/api/chat/runs/{run_id}/state` 与 `/api/chat/runs/{run_id}/state/stream` 可被前端依赖的事件和状态。新增事件前必须先更新本文档。
+> 状态：2026-07-10，RunState v2 + DisplaySnapshot v3。本文定义 `/api/chat/send/start`、`/api/chat/send`、`/api/chat/resume/start`、`/api/chat/resume`、`/api/chat/runs/{run_id}/stream`、`/api/chat/runs/{run_id}/state` 与 `/api/chat/runs/{run_id}/state/stream` 可被前端依赖的事件和状态。新增事件前必须先更新本文档。
 
 ## 基本规则
 
@@ -20,7 +20,7 @@
 
 - Readiness Gate 是进入 architecture 前的轻量启动判断，由系统内置 `ReadinessAgent` 判断本轮是否可以启动 Runtime。业务信息缺口不在这里发起用户交互，交给主 Agent 在 ReAct 内调用 `AskUser` 外部工具暂停。
 - 第一层是 architecture，由前置意图识别决定。当前在线值为 `react`；`plan`、`subagent` 后续重新设计后再进入稳定契约。`clarification` 不是 architecture runtime，也不是新的 runtime.kind。
-- 第二层是 executor，由前端选择机械决定。选择单 Agent 时为 `single_agent`，选择 Team 时为 `team`，模型不得把单 Agent 改成 Team 或把 Team 改成单 Agent。
+- 第二层是 executor，由请求的显式 `mode` 机械决定。`mode=agent` 时为 `single_agent`，`mode=team` 时为 `team`，模型不得改写执行模式。
 - `INTENT_ROUTE` trace payload 必须包含 `runtime`、`executor` 与 `readiness_gate` decision，其中 `runtime.kind` 表示架构模式，`executor.kind` 表示执行主体。
 
 ## ReAct Runtime 链路
@@ -96,7 +96,7 @@ V1 的 Chat 主界面不展示子 Agent 完整 transcript，也不铺开完整�
 ### Plan Mode 收口与后续执行
 
 - `plan_exit` 不进入人工审批状态，也不触发 approve/deny HTTP 端点。
-- Team Runtime 不支持 Plan Mode。用户如需“先规划再由 Team 执行”，应先用单 Agent 生成计划，再在下一轮选择 Team 普通执行。
+- Team Runtime 不支持 Plan Mode。用户如需“先规划再由 Team 执行”，应先用单 Agent 生成计划，再在下一轮切换到 Team 模式执行。
 - Agent 调用 `plan_exit` 后，后端发送 `RUNTIME_EVENT:PLAN_FINALIZED`，随后通过分片 `FINAL_ANSWER_DELTA` / `AGENT_FINAL_ANSWER_DELTA` 将当前计划 markdown 作为本轮 assistant 最终答案，禁止把完整计划作为单个超大 delta 一次性发给前端。
 - 本轮 Run 继续走正常成功收尾并发送 `RUN_COMPLETED`。前端不得展示手动批准/拒绝按钮。
 - 用户通过下一条自然语言消息决定后续动作，例如“修改这个计划”或“按这个计划执行”。该下一轮仍由普通 Chat 路由进入 ReAct Runtime，不携带旧 Plan 审批字段。

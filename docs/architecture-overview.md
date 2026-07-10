@@ -1,6 +1,6 @@
 # Agent Workstation 当前架构总览
 
-> 状态：2026-07-09 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
+> 状态：2026-07-10 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
 
 ## 项目定位
 
@@ -8,7 +8,7 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 
 旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线，不能继续扩展旧链路。旧 Subagent 字段、配置入口、事件兼容分支和前端入口不得作为当前 API / UI / Runtime 事实源保留；历史 SQLite 开发库只允许保留启动所需的最小兼容。当前记忆能力是新方案：通过运行前上下文注入、运行后 `MemoryAdmissionGate` 准入、后台提炼、历史记忆（底层 `memory_nodes`）和 memory tools 接入 ReAct，不新增 `memory` runtime.kind。
 
-新版 Subagent M1 已作为 ReAct 内部委托能力上线：Subagent 定义来自 Markdown + YAML frontmatter 文件，主 Agent / Team Leader 通过 `DelegateTask` 前台委托 fresh-context 子 Agent，结果摘要回到主 Agent，完整过程进入 Trace 和 `subagent_invocations` 审计，不新增 `runtime.kind=subagent`。
+新版 Subagent M1 和部分 M2 已作为 ReAct 内部委托能力上线：Subagent 定义来自 Markdown + YAML frontmatter 文件，主 Agent / Team Leader 通过 `DelegateTask` 前台委托 fresh-context 子 Agent，结果摘要回到主 Agent，完整过程进入 Trace 和 `subagent_invocations` 审计，不新增 `runtime.kind=subagent`。
 
 ## 技术栈
 
@@ -23,10 +23,10 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 1. `routes/chat/handlers/send.py` 接收用户消息、落库、创建后台 Run，并编排 SSE。
 2. `readiness_gate.py` 只做进入 Runtime 前的轻量启动判断；业务信息缺口交给主 Agent 在 ReAct 内通过 `AskUser` 外部工具暂停并恢复。
 3. `intent_router.py` 只决定第一层 architecture。当前在线值为 `react`。
-4. 前端选择决定第二层 executor：单 Agent 为 `single_agent`，Team 为 `team`。
+4. 请求中的显式 `mode` 决定第二层 executor：`agent` 为 `single_agent`，`team` 为 `team`。
 5. `runtime_dispatcher.py` 只按 architecture 分发；当前只分发到 ReAct。
 6. `react_runtime.py` 按 executor 执行单 Agent 或 Team。
-7. `runtime_builder.py` 组装模型配置、Team 上下文、Skill、ToolScope 和主 Agent runtime spec。
+7. `runtime_builder.py` 组装模型配置、Skill、ToolScope 和主 Agent runtime spec；Chat 请求不接收持久 Team 或固定成员上下文。
 8. `run_context.py` 在 readiness 通过后注入 Skill prompt 和记忆上下文；记忆注入位于 Skill prompt 后、AskUser clarification / final answer 规则前。
 9. `leader_stream.py` 消费 AgentScope `reply_stream()`，转换文本、工具、权限、Plan Mode、Skill 和 HITL 事件。
 10. `completion.py` 完成消息落库、Trace、Skill 状态和错误收尾，并在轻量 `MemoryAdmissionGate` 后触发 Markdown 记忆提炼和历史记忆持久化。
@@ -34,11 +34,11 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 
 ## Team Runtime
 
-Team Runtime 是一次性 `TeamRun`。持久化 Team 只提供 Leader 和候选角色素材；每轮运行在 `backend/data/team-runtime/runs/{team_run_id}/` 下生成全新 file-first 状态。
+Team Runtime 是一次性 `TeamRun`。用户在单 Agent 模式选择 Agent，切换到 Team 模式后沿用该 Agent 作为 Leader；Team 模式不显示 Team、Member 或 Leader 下拉框，也不读取持久 Team 配置。每轮运行在 `backend/data/team-runtime/runs/{team_run_id}/` 下生成全新 file-first 状态。
 
 核心语义：
 
-- Team Lead 是主协调会话，负责生成队友、拆任务、协调 mailbox、汇总成果。
+- Team Lead 是主协调会话，负责动态生成临时队友、拆任务和协调 Mailbox；最终答案由独立综合阶段生成。
 - Teammate 是隔离 AgentScope Agent 会话，拥有独立上下文窗口，不继承 Lead 对话历史。
 - 共享事实只允许通过 Task List、Mailbox、member directory、result artifacts 和 events/snapshots 表达。
 - 用户可以向任意 Member 发送 mailbox 消息，作为本轮运行中的直接干预。

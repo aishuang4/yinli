@@ -4,7 +4,7 @@
 
 ## 1. 产品语义
 
-Team 是一次性协作运行：用户选择 Team 模式和一个 Agent 后，所选 Agent 成为本轮 Leader，系统创建一个全新的 `TeamRun`。Leader 在本轮动态组建临时成员、创建共享任务并通过 Mailbox 协调；成员拥有隔离的 Agent session，只通过共享 Task List、Mailbox 和任务结果交流。全部任务收敛后，由独立综合阶段生成唯一用户答案。
+Team 是一次性协作运行：用户先在单 Agent 模式选择 Agent，再切换到 Team 模式；所选 Agent 成为本轮 Leader，Team 模式隐藏所有成员选择器，系统创建一个全新的 `TeamRun`。Leader 在本轮动态组建临时成员、创建共享任务并通过 Mailbox 协调；成员拥有隔离的 Agent session，只通过共享 Task List、Mailbox 和任务结果交流。全部任务收敛后，由独立综合阶段生成唯一用户答案。
 
 必须满足以下不变量：
 

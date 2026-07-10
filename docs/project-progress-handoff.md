@@ -123,48 +123,12 @@ cd frontend && npm run electron:dev
 
 ## 文档入口
 
-- `docs/README.md`：文档索引。
-- `docs/architecture-overview.md`：当前架构总览。
-- `docs/development-guidelines.md`：正式开发规范。
-- `docs/chat-sse-event-contract.md`：稳定事件契约。
-- `docs/project-todo.md`：后续任务。
-- `docs/electron-packaging-plan.md`：正式打包后续。
-- `docs/dynamic-workflows-plan.md`：动态编排概念评估。
-- `docs/memory-system-design.md`：新记忆系统设计、当前实现边界和 Skill 自进化后续约束。
+- 完整分类只维护在 `docs/README.md`，本文不复制第二份文档清单。
+- 当前事实以 `AGENTS.md` 和 `docs/architecture-overview.md` 为准，待办以 `docs/project-todo.md` 为准。
 
 ## 文档维护规则
 
-> 生效时间：2026-07-08
-
-以下规则用于判断一份文档是否过时，以及如何维护文档目录。
-
-### 审计流程（可复用）
-
-检查 `docs/` 目录文档时，按以下顺序执行：
-
-1. **先读 `docs/README.md`**
-   - 这是文档总索引，列出了必读文档、暂保留专题文档和已清理类型。先确认当前分类框架。
-
-2. **再读 `docs/architecture-overview.md`**
-   - 确认当前在线架构事实：Chat 核心链路、Team Runtime、Plan Mode、记忆系统 MVP、存储、权限。旧链路（旧 Plan Runtime、旧记忆模块、旧 Subagent Runtime）已下线，与之相关的文档应标记为过时。
-
-3. **然后读 `docs/project-todo.md`**
-   - 了解当前仍有效的任务队列和已完成项。如果一份文档描述的功能不在 TODO 中且不在已在线能力中，则大概率已下线或废弃。
-
-4. **再读 `docs/project-progress-handoff.md`**
-   - 确认已在线能力和注意事项。文档内容若与本文事实矛盾（例如仍引用旧记忆模块或旧 Plan Runtime 作为入口），应判定为过时。
-
-5. **最后逐文档判断**
-   - 对照以上四个入口的联合事实，逐份检查 `docs/` 下其他文档：
-     - 内容是否与当前架构一致？
-     - 是否引用了已下线的 Runtime 或模块？
-     - 是否引用了旧字段或已清理的设计？
-     - 描述的流程在当前代码中是否仍然成立？
-   - 若上述任一答案为"是"，则该文档过时，应移到已清理清单或归档。
-
-### 日常维护原则
-
 - 新增功能前，涉及 Chat SSE / RunState / DisplaySnapshot 的必须先更新 `docs/chat-sse-event-contract.md`。
-- 文档内容原则上只减不增，新增入口级文档需在 `docs/README.md` 中登记。
+- 新增入口级文档必须在 `docs/README.md` 中登记。
 - `project-todo.md` 中标记为已完成的任务，对应专题文档可关闭或归档。
-- 旧 Runtime / 旧模块文档发现后直接标记过时，不在 `docs/README.md` 的"必读文档"中保留引用。
+- 已完成的阶段草案直接合并结论并删除，不保留归档目录。

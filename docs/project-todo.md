@@ -26,18 +26,6 @@
 
 ## P2.5. Subagent 委托能力
 
-- [x] 按 `docs/subagent-delegation-design.md` 实现 M1：Markdown + YAML frontmatter 定义加载、前台 blocking `DelegateTask` 工具、fresh context 子 Agent、`SUBAGENT_*` Runtime Event 和 Trace / invocation 审计。
-- [x] 新增 `.agents/subagents/` 与用户级 Subagent 目录扫描、frontmatter 解析、scope 优先级和 `subagent_invocations` 审计表，旧 Subagent 配置入口不再作为新能力事实源。
-- [x] 扩展 `agents/factory.py` 工具过滤能力，借鉴官方 `tools` / `disallowedTools` 解析顺序，并与父 Agent guardrails 做交集；内部 `FinalAnswerStart` 不被用户 allow / deny 裁剪。
-- [x] 更新 `docs/chat-sse-event-contract.md`、RunState / DisplaySnapshot 展示链路和前端 Chat 展示，将 `DelegateTask` 渲染为 Subagent 委托卡片。
-- [x] 增加 Subagent 管理 UI：定义列表、解析错误、来源路径、优先级和 invocation 详情，入口为 `frontend/src/pages/SubagentsPage.tsx`。
-- [x] 补 Subagent `skills` 预加载和 Subagent 维度记忆注入的运行时实现与 `SUBAGENT_CONTEXT` 审计。
-- [x] M2 部分：执行 frontmatter `permissionMode`，按父 Agent guardrails 上限合并，并在 `SUBAGENT_CONTEXT.permission` 审计 requested / effective 权限。
-- [x] M2 部分：工具策略改为基于父运行时真实工具池裁剪，MCP server 级模式和知识库自定义工具名会实际影响子 Agent 注入范围。
-- [x] M2 部分：新增 `debugger` / `general-purpose` 项目级动作型 Subagent 定义；父权限允许时可用 Write/Edit/Bash/Http，父 read-only 时自动收窄。
-- [x] M2 部分：子 Agent 遇到 HITL / 外部执行确认时记录 `SUBAGENT_WAITING_HUMAN` 和 invocation `waiting`，不再伪装成普通失败。
-- [x] M2 部分：`/api/chat/resume` 已支持 `scope=subagent`，可恢复 child agent 并把 invocation 更新为 completed / failed / waiting。
-- [x] M2 部分：父 `DelegateTask` 自动续接已接入 AgentScope external tool 语义；child agent 完成或 resume 后，会将结果摘要返回给父 Agent 并继续父 ReAct。
 - [ ] M2 继续借鉴官方补动作型 Subagent 的 HITL resume、inline MCP 和 hooks，但最终行为落到 AW PermissionPolicy、Trace 和 RunState 契约。
 - [ ] M4 补 `isolation: worktree`、嵌套深度限制和 fork；M5 补托管 / 会话 / Plugin scope、frontmatter `memory`、`effort`、`initialPrompt` 和显式 @-mention 调用。
 
@@ -64,7 +52,7 @@
 
 ## P6. 前端组件化与 UI 规范收敛
 
-- [ ] 继续拆 `AgentTeamPage`：侧栏导入导出、Team 模板区、Team 列表项和空状态可继续下沉到 `features/teams/` 或 `features/agents/`。
+- [ ] 拆分 `AgentTeamPage` 的 Agent 管理部分，并评估删除与一次性 TeamRun 产品语义冲突的持久 Team / template 管理入口。
 - [ ] 继续拆 `RunsPage`：运行列表、状态筛选、详情操作和空状态应组件化。
 - [ ] 抽取通用非表单交互组件：卡片式 tab、可选择列表项、时间线节点、工具条按钮组，减少页面内重复 `<button>` className。
 - [ ] 给非 Chat 前端整改增加轻量自动检查脚本，固定扫描裸表单控件和超大 `.tsx` 文件。
@@ -95,7 +83,7 @@
 - [ ] Dynamic Workflow Phase 4：评估 LangGraph / LangChain 作为执行引擎，SQLite 继续作为产品事实来源。
 - [ ] Milvus 或其他向量数据库集成评估。
 - [ ] Workspace 多租户隔离：Agent、Team、Run、Tool、Skill、Memory 归属同一 Workspace。
-- [ ] Agent / Team 模板市场。
+- [ ] Agent / Subagent preset 市场。
 - [ ] 多语言 UI。
 
 ## 文档维护规则
