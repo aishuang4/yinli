@@ -49,8 +49,7 @@ def _append_user_message(
     session_id: str,
     agent_id: str,
     agent_name: str,
-    team_id: str | None,
-    team_name: str | None,
+    mode: str,
     model_name: str,
     content: str,
     images: list[ChatImagePayload],
@@ -75,8 +74,7 @@ def _append_user_message(
     if existing:
         existing.agent_id = agent_id
         existing.agent_name = agent_name
-        existing.team_id = team_id
-        existing.team_name = team_name
+        existing.mode = mode
         existing.updated_at = now
         existing.message_count = len(messages)
     else:
@@ -85,8 +83,7 @@ def _append_user_message(
             title=title,
             agent_id=agent_id,
             agent_name=agent_name,
-            team_id=team_id,
-            team_name=team_name,
+            mode=mode,
             created_at=now,
             updated_at=now,
             message_count=len(messages),

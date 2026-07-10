@@ -13,8 +13,6 @@ export interface TeamRunRecord {
   status: TeamRunStatus;
   phase: TeamRunPhase;
   leaderId: string;
-  sourceTemplateId: string;
-  sourceTemplateName: string;
   createdAt: string;
   updatedAt: string;
   completedAt: string;

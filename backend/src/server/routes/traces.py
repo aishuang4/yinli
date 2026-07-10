@@ -27,8 +27,7 @@ class TraceSummary(BaseModel):
     title: str
     agent_id: str | None = Field(default=None, alias="agentId")
     agent_name: str | None = Field(default=None, alias="agentName")
-    team_id: str | None = Field(default=None, alias="teamId")
-    team_name: str | None = Field(default=None, alias="teamName")
+    mode: str = "agent"
     message_count: int = Field(alias="messageCount")
     tool_call_count: int = Field(alias="toolCallCount")
     member_count: int = Field(alias="memberCount")
@@ -224,8 +223,7 @@ def _summary_from_session(session: object, messages: list[object]) -> TraceSumma
         title=session.title,
         agentId=session.agent_id,
         agentName=session.agent_name,
-        teamId=session.team_id,
-        teamName=session.team_name,
+        mode=session.mode,
         messageCount=session.message_count,
         toolCallCount=tool_call_count,
         memberCount=member_count,

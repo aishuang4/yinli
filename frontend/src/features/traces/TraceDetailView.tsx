@@ -26,7 +26,7 @@ export function TraceDetailView({
           <div className="min-w-0">
             <h2 className="truncate text-lg font-medium text-[var(--color-text-primary)]">{trace.title}</h2>
             <div className="mt-1 text-sm text-[var(--color-text-secondary)]">
-              {trace.teamName ? `${trace.teamName} · ${trace.agentName}` : trace.agentName}
+              {trace.mode === 'team' ? `${trace.agentName || 'Agent'} · Team Leader` : trace.agentName}
             </div>
           </div>
           <div className="flex shrink-0 gap-2">

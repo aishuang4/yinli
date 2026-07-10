@@ -111,7 +111,7 @@ cd frontend && npm run electron:dev
 ## 当前注意事项
 
 - Chat SSE / RunState / DisplaySnapshot 新增字段前必须先更新 `docs/chat-sse-event-contract.md`。
-- Team Runtime 不支持 Plan Mode。需要“先规划再 Team 执行”时，先用单 Agent 生成计划，再由用户下一轮选择 Team 普通执行。
+- Team Runtime 不支持 Plan Mode。需要“先规划再 Team 执行”时，先用单 Agent 生成计划，再由用户下一轮切换到 Team 模式执行；当前所选 Agent 自动成为本轮 Leader，不选择持久 Team。
 - `resume.py` 仍有部分旧式分支，后续应继续复用 `leader_stream.py`、`completion.py`、`orchestration.py`。
 - 旧记忆表可能存在于开发库中，但当前运行时不触发旧 memory summarize，也不应扩展旧记忆模块。新记忆数据使用 `memory_nodes`、Markdown 文件和 `VectorStoreBackend`。
 - 默认 Markdown 记忆文件为 `backend/data/memory/users/user_memory.md`、`backend/data/memory/agents/agent_memory.md`、`backend/data/memory/global/global_memory.md`；Memory 页面主入口只暴露唯一 user / global 和按 Agent ID 的 agent memory，不兼容读取旧 `default.md`。历史扩展路由仍保留，但不作为当前页面入口。

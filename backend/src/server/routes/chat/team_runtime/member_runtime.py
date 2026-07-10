@@ -493,21 +493,10 @@ def _build_team_tool_denial(
 
 
 def _leader_system_prompt(store: TeamStore, run_data: ChatMessage) -> str:
-    presets = [
-        {
-            "sourceAgentId": member.agent_id,
-            "name": member.name,
-            "role": member.role,
-            "description": member.description,
-        }
-        for member in run_data.team_members
-        if member.role != "leader"
-    ]
     return "\n".join([
         "You are the coordination-only Leader of a one-off TeamRun.",
         f"TeamRun goal: {run_data.message}",
-        f"Available role materials: {presets}",
-        "Create temporary members with dynamic runtime prompts for this goal.",
+        "Create temporary members with names, roles, capability boundaries, and dynamic runtime prompts tailored to this goal.",
         "Create tasks using exact returned task IDs for dependencies.",
         "Model communication prerequisites explicitly: if A must message B before B can work, create A's communication task first and make B depend on it.",
         "Never create a task that waits for a member whose own task is blocked by that waiting task.",

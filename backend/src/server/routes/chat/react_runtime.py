@@ -49,7 +49,6 @@ def _build_plan_mode_runtime_parts(
         run_id=current_chat_background_run_id() or "",
         agent_id=ctx.agent_id,
         agent_name=ctx.agent_name,
-        team_id=run_data.team_id,
         persist=ctx.persist_run,
     )
     runtime_features_cache_key = "plan-mode-v1"
@@ -286,8 +285,6 @@ async def execute_react_runtime(
             runtime_events=runtime_events,
             skill_runs=ctx.skill_runs,
             active_skill_run=active_skill_run,
-            team_id=run_data.team_id,
-            team_name=run_data.team_name,
             sandbox=run_data.sandbox,
         ):
             yield completion_event

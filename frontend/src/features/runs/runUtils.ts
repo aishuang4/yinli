@@ -17,9 +17,7 @@ export function statusText(status: string) {
 }
 
 export function runDisplayName(run: RunSummary) {
-  if (run.mode === 'team') {
-    return run.teamName || run.agentName || '未命名 Team';
-  }
+  if (run.mode === 'team') return `${run.agentName || '未命名 Agent'} · Team Leader`;
   return run.agentName || '未命名 Agent';
 }
 

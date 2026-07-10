@@ -7,7 +7,7 @@
 import json
 import re
 import uuid
-from typing import Any
+from typing import Any, Literal
 from datetime import datetime, timezone
 
 from agentscope.message import UserMsg
@@ -15,7 +15,7 @@ from agentscope.permission import PermissionMode
 from pydantic import BaseModel, Field
 
 from src.agents.factory import AgentGuardrails, AgentModelOptions, RuntimeToolScope, get_or_create_agent
-from src.server.routes.chat.models import ChatImagePayload, ChatTeamMemberPayload
+from src.server.routes.chat.models import ChatImagePayload
 
 
 class ReadinessDecision(BaseModel):
@@ -44,7 +44,7 @@ async def check_message_readiness_with_model(
     message: str,
     agent_config: object | None,
     skill_ids: list[str],
-    team_members: list[ChatTeamMemberPayload],
+    execution_mode: Literal["agent", "team"],
     images: list[ChatImagePayload],
     model_name: str,
     fallback_names: list[str] | None = None,
@@ -59,7 +59,7 @@ async def check_message_readiness_with_model(
         message=message,
         agent_config=agent_config,
         skill_ids=skill_ids,
-        team_members=team_members,
+        execution_mode=execution_mode,
         images=images,
         model_name=model_name,
         fallback_names=fallback_names or [],
@@ -100,7 +100,7 @@ async def _run_readiness_agent(
     message: str,
     agent_config: object | None,
     skill_ids: list[str],
-    team_members: list[ChatTeamMemberPayload],
+    execution_mode: Literal["agent", "team"],
     images: list[ChatImagePayload],
     model_name: str,
     fallback_names: list[str],
@@ -136,7 +136,7 @@ async def _run_readiness_agent(
                 message=message,
                 agent_config=agent_config,
                 skill_ids=skill_ids,
-                team_members=team_members,
+                execution_mode=execution_mode,
                 images=images,
             ),
         )):
@@ -192,7 +192,7 @@ def _build_readiness_user_prompt(
     message: str,
     agent_config: object | None,
     skill_ids: list[str],
-    team_members: list[ChatTeamMemberPayload],
+    execution_mode: Literal["agent", "team"],
     images: list[ChatImagePayload],
 ) -> str:
     """构建 ReadinessAgent 用户提示词。"""
@@ -208,10 +208,7 @@ def _build_readiness_user_prompt(
             "configuredKnowledgeToolCount": len(list(getattr(agent_config, "knowledge_tools", []) or [])),
         },
         "hasImages": bool(images),
-        "teamContext": {
-            "enabled": bool(team_members),
-            "memberCount": len(team_members),
-        },
+        "executionMode": execution_mode,
         "policy": {
             "readinessOnly": True,
             "doNotRouteArchitecture": True,

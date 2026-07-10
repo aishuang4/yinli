@@ -2,7 +2,7 @@
 
 ReadinessAgent 在本模块前判断信息是否足够；本模块只负责：
 - 模型/规则识别 architecture：当前只在线 ReAct，Plan/SubAgent 后续重建。
-- 后端按前端传入的 Team 上下文机械选择 executor：single_agent 或 team。
+- 后端按前端显式执行模式机械选择 executor：single_agent 或 team。
 """
 
 import json
@@ -14,7 +14,7 @@ from agentscope.permission import PermissionMode
 from pydantic import BaseModel, Field
 
 from src.agents.factory import AgentGuardrails, AgentModelOptions, RuntimeToolScope, get_or_create_agent
-from src.server.routes.chat.models import ChatImagePayload, ChatTeamMemberPayload
+from src.server.routes.chat.models import ChatImagePayload
 
 
 RuntimeKind = Literal["react"]
@@ -84,7 +84,7 @@ async def route_chat_message_with_model(
     *,
     message: str,
     agent_config: object | None,
-    team_members: list[ChatTeamMemberPayload],
+    execution_mode: Literal["agent", "team"],
     images: list[ChatImagePayload],
     model_name: str,
     fallback_names: list[str] | None = None,
@@ -95,7 +95,7 @@ async def route_chat_message_with_model(
     """
 
     fallback_route = route_chat_message(
-        team_members=team_members,
+        execution_mode=execution_mode,
     )
     model_payload = await _run_model_intent_router(
         message=message,
@@ -110,19 +110,19 @@ async def route_chat_message_with_model(
     return _sanitize_model_route(
         payload=model_payload,
         fallback_route=fallback_route,
-        team_members=team_members,
+        execution_mode=execution_mode,
     )
 
 
 def route_chat_message(
     *,
-    team_members: list[ChatTeamMemberPayload],
+    execution_mode: Literal["agent", "team"],
 ) -> IntentRoute:
     """生成本轮 Chat 的前置路由结果。"""
 
     decisions: list[RouteDecision] = []
     runtime = _route_runtime()
-    executor = _select_executor(team_members)
+    executor = _select_executor(execution_mode)
     decisions.append(RouteDecision(
         name="architecture_route",
         enabled=True,
@@ -273,7 +273,7 @@ def _sanitize_model_route(
     *,
     payload: ModelIntentRoutePayload,
     fallback_route: IntentRoute,
-    team_members: list[ChatTeamMemberPayload],
+    execution_mode: Literal["agent", "team"],
 ) -> IntentRoute:
     """后端裁剪模型第一层路由，确保只进入当前支持的 runtime。"""
 
@@ -283,7 +283,7 @@ def _sanitize_model_route(
         payload_confidence=payload.confidence,
         payload_reason=payload.reason,
     )
-    executor = _select_executor(team_members)
+    executor = _select_executor(execution_mode)
     decisions = [
         RouteDecision(
             name="architecture_route",
@@ -365,19 +365,19 @@ def _route_runtime() -> RuntimeRoute:
     )
 
 
-def _select_executor(team_members: list[ChatTeamMemberPayload]) -> ExecutorRoute:
-    """根据前端是否传入 Team 上下文机械选择执行主体。"""
+def _select_executor(execution_mode: Literal["agent", "team"]) -> ExecutorRoute:
+    """根据前端显式执行模式机械选择执行主体。"""
 
-    if team_members:
+    if execution_mode == "team":
         return ExecutorRoute(
             kind="team",
-            reason="前端选择了 Team，上层架构模式下使用 Team 执行主体。",
-            payload={"memberCount": len(team_members)},
+            reason="前端选择了 Team 模式，所选 Agent 作为本轮 Leader。",
+            payload={"executionMode": "team"},
         )
     return ExecutorRoute(
         kind="single_agent",
         reason="前端选择了单 Agent，上层架构模式下使用单 Agent 执行主体。",
-        payload={"memberCount": 0},
+        payload={"executionMode": "agent"},
     )
 
 

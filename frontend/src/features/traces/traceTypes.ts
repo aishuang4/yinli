@@ -9,8 +9,7 @@ export interface TraceSummary {
   title: string;
   agentId: string | null;
   agentName: string | null;
-  teamId: string | null;
-  teamName: string | null;
+  mode: 'agent' | 'team';
   messageCount: number;
   toolCallCount: number;
   memberCount: number;

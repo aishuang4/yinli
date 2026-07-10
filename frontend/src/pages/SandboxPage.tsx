@@ -4,20 +4,16 @@ import { Tag } from '@agentscope-ai/design';
 import { SandboxControlPanel, type SandboxCase } from '../features/sandbox/SandboxControlPanel';
 import { MarkdownContent } from '../components/MarkdownContent';
 import { useAgents } from '../hooks/useAgents';
-import { useTeams } from '../hooks/useTeams';
 import { useEventStream, type ToolCallInfo } from '../hooks/useEventStream';
 import { TeamConsolePanel } from '../features/chat/TeamDisplayBlock';
-import type { TeamMember } from '../types/team';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
 export function SandboxPage() {
   const { agents, loading: agentsLoading } = useAgents();
-  const { teams, loading: teamsLoading } = useTeams();
   const { state, sendMessage, abort, reset } = useEventStream();
   const [mode, setMode] = useState<'agent' | 'team'>('agent');
   const [agentId, setAgentId] = useState('');
-  const [teamId, setTeamId] = useState('');
   const [message, setMessage] = useState('请用一句话说明你会如何完成这个任务，并在需要时调用合适工具。');
   const [cases, setCases] = useState<SandboxCase[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState('');
@@ -28,13 +24,7 @@ export function SandboxPage() {
     () => agents.find((agent) => agent.id === agentId) || agents[0] || null,
     [agentId, agents]
   );
-  const selectedTeam = useMemo(
-    () => teams.find((team) => team.id === teamId) || teams[0] || null,
-    [teamId, teams]
-  );
-  const runtimeAgent = mode === 'team'
-    ? agents.find((agent) => agent.id === selectedTeam?.leaderAgentId) || null
-    : selectedAgent;
+  const runtimeAgent = selectedAgent;
 
   const loadCases = useCallback(async () => {
     const response = await fetch('/api/sandbox/cases');
@@ -61,8 +51,6 @@ export function SandboxPage() {
             mode,
             agentId: runtimeAgent.id,
             agentName: runtimeAgent.name,
-            teamId: mode === 'team' ? selectedTeam?.id || null : null,
-            teamName: mode === 'team' ? selectedTeam?.name || null : null,
             message,
           },
         }),
@@ -87,11 +75,7 @@ export function SandboxPage() {
     const item = cases.find((sandboxCase) => sandboxCase.id === selectedCaseId);
     if (!item) return;
     setMode(item.payload.mode);
-    if (item.payload.mode === 'team') {
-      setTeamId(item.payload.teamId || '');
-    } else {
-      setAgentId(item.payload.agentId);
-    }
+    setAgentId(item.payload.agentId);
     setMessage(item.payload.message);
     setCaseName(item.name);
     reset();
@@ -117,17 +101,7 @@ export function SandboxPage() {
       sessionId: createId('sandbox'),
       agentId: runtimeAgent.id,
       agentName: runtimeAgent.name,
-      teamId: mode === 'team' ? selectedTeam?.id : undefined,
-      teamName: mode === 'team' ? selectedTeam?.name : undefined,
-      teamMembers: mode === 'team'
-        ? (selectedTeam?.members || []).map((member: TeamMember) => ({
-          id: member.id,
-          agentId: member.agentId,
-          name: member.name,
-          role: member.role,
-          description: member.description,
-        }))
-        : undefined,
+      mode,
       systemPrompt: runtimeAgent.systemPrompt,
       model: runtimeAgent.modelConfig.primary,
       skillIds: runtimeAgent.skills,
@@ -136,7 +110,7 @@ export function SandboxPage() {
     });
   };
 
-  const loading = agentsLoading || teamsLoading;
+  const loading = agentsLoading;
 
   return (
     <div className="grid h-full min-h-0 grid-cols-[360px_1fr] gap-4 overflow-hidden p-4">
@@ -145,14 +119,10 @@ export function SandboxPage() {
         mode={mode}
         setMode={setMode}
         agents={agents}
-        teams={teams}
         selectedAgent={selectedAgent}
-        selectedTeam={selectedTeam}
         runtimeAgent={runtimeAgent}
         agentId={agentId}
-        teamId={teamId}
         setAgentId={setAgentId}
-        setTeamId={setTeamId}
         cases={cases}
         selectedCaseId={selectedCaseId}
         setSelectedCaseId={setSelectedCaseId}

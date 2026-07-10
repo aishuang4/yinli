@@ -1,6 +1,6 @@
 """Chat 单轮运行上下文构建。
 
-本模块只负责把 ChatMessage、Agent 配置、路由结果、Skill、Team 和工具范围
+本模块只负责把 ChatMessage、Agent 配置、路由结果、Skill 和工具范围
 整理成 send.py 可直接执行的上下文，不负责 SSE 输出、持久化和 Agent 执行。
 """
 
@@ -25,10 +25,8 @@ from src.server.routes.chat.runtime import (
 )
 from src.server.routes.chat.readiness_gate import ReadinessDecision, check_message_readiness_with_model
 from src.server.routes.chat.runtime_builder import (
-    RoutedTeamContext,
     RuntimeModelConfig,
     build_runtime_skills,
-    build_routed_team_context,
     build_runtime_model_config,
     resolve_react_runtime_tool_scope,
 )
@@ -55,7 +53,6 @@ class ChatRunContext:
     runtime_model_config: RuntimeModelConfig
     readiness: ReadinessDecision
     intent_route: IntentRoute
-    routed_team: RoutedTeamContext
     effective_user_message: str
     used_skills: list[Skill]
     used_skill_details: list[dict]
@@ -94,7 +91,7 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
         message=run_data.message,
         agent_config=agent_config,
         skill_ids=skill_ids,
-        team_members=run_data.team_members,
+        execution_mode=run_data.mode,
         images=run_data.images,
         model_name=runtime_model_config.model_name,
         fallback_names=runtime_model_config.fallback_names,
@@ -103,17 +100,13 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
         intent_route = await route_chat_message_with_model(
             message=run_data.message,
             agent_config=agent_config,
-            team_members=run_data.team_members,
+            execution_mode=run_data.mode,
             images=run_data.images,
             model_name=runtime_model_config.model_name,
             fallback_names=runtime_model_config.fallback_names,
         )
     else:
-        intent_route = route_chat_message(team_members=run_data.team_members)
-    routed_team = build_routed_team_context(
-        run_data=run_data,
-        leader_agent_id=agent_id,
-    )
+        intent_route = route_chat_message(execution_mode=run_data.mode)
 
     active_skill_run = None
     used_skills: list[Skill] = []
@@ -147,7 +140,6 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
         for skill_detail in used_skill_details
     ]
     model_name = runtime_model_config.model_name
-    team_system_prompt = routed_team.system_prompt
     memory_prompt = (
         build_memory_injection_text(
             MemoryRetrievalContext(
@@ -165,7 +157,6 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
             _build_runtime_context_prompt(),
             intent_route.main_agent_instruction,
             _build_conversation_history_prompt(session_id),
-            team_system_prompt,
             build_skill_run_system_prompt(active_skill_run),
             build_skill_system_prompt_from_skills(used_skills),
             memory_prompt,
@@ -180,7 +171,7 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
         message=run_data.message,
         agent_config=agent_config,
         has_selected_skills=bool(used_skills),
-        has_team=bool(routed_team.members),
+        has_team=run_data.mode == "team",
         has_images=bool(run_data.images),
     )
     return ChatRunContext(
@@ -193,7 +184,6 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
         runtime_model_config=runtime_model_config,
         readiness=readiness,
         intent_route=intent_route,
-        routed_team=routed_team,
         effective_user_message=run_data.message,
         used_skills=used_skills,
         used_skill_details=used_skill_details,

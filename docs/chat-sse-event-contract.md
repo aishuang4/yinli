@@ -109,6 +109,24 @@ V1 的 Chat 主界面不展示子 Agent 完整 transcript，也不铺开完整�
 
 3. **下一轮决策**：前端只展示计划和最终答案，不显示审批入口。用户下一条消息决定修改计划或执行计划；后续执行能力需独立设计，不复用旧 approve/deny 或 Build mode 字段。
 
+## Chat 执行模式请求
+
+`POST /api/chat/send` 使用显式 `mode` 选择执行器：
+
+```json
+{
+  "mode": "team",
+  "agent_id": "selected-agent-id",
+  "agent_name": "Selected Agent",
+  "message": "用户任务"
+}
+```
+
+- `mode=agent`：所选 Agent 作为单 Agent 执行。
+- `mode=team`：所选 Agent 作为一次性 TeamRun Leader，并在运行中动态创建临时 Member。
+- 请求禁止携带 `team_id`、`team_name`、`team_members`；Chat Runtime 不读取持久 Team 配置。
+- session、后台 Run、RunState 与 rerun 通过 `mode` 恢复执行方式，通过 `agentId/agentName` 恢复 Leader，不通过 Team 模板字段推断。
+
 ## Run 生命周期
 
 - `RUN`：后端已创建后台 Run。必须包含 `run_id` 或 `runId`，建议包含 `created_at`。
@@ -141,7 +159,7 @@ V1 的 Chat 主界面不展示子 Agent 完整 transcript，也不铺开完整�
 RunState 稳定字段：
 
 - `version`：状态版本，当前为 `2`。
-- `runId`、`sessionId`、`agentId`、`agentName`、`teamId`、`teamName`、`mode`、`task`。
+- `runId`、`sessionId`、`agentId`、`agentName`、`mode`、`task`。Team 模式下 `agentId/agentName` 表示本轮 Leader。
 - `status`：`running|waiting|completed|failed|cancelled|cancelling`。
 - `currentStage`：面向用户的当前阶段。
 - `reasoning`、`reasoningTruncated`：ReAct 过程文本。可截断。

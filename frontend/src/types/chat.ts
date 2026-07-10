@@ -55,8 +55,6 @@ export interface Session {
   title: string;
   /** 当前使用的 Agent */
   agentId: string;
-  /** 所属 Team（可选） */
-  teamId?: string;
   /** 创建时间 */
   createdAt: string;
   /** 更新时间 */

@@ -47,13 +47,14 @@ npm run lint     # eslint
 
 2. **`routes/chat/readiness_gate.py`** — Chat 前置信息充足性判断。系统内置 `ReadinessAgent` 模型优先、规则兜底，只判断当前输入是否可以启动 Runtime；业务信息缺口交给主 Agent 在 ReAct 内通过 `AskUser` 外部工具暂停并恢复。ReadinessAgent 不选择架构、不选择 Team、不选择 Skill、不决定 ToolScope。
 
-3. **`routes/chat/intent_router.py`** — Chat 第一层架构路由。仅在 readiness 通过后运行，模型语义路由优先、规则路由兜底；当前只决定本轮进入 `react`，Plan Runtime 与 Subagent Runtime 已砍掉，不再作为路由结果。`clarification` 不是 runtime.kind，也不是新的运行时分支。它不选择 Team、不选择 Member、不选择 Skill、不决定 ToolScope。第二层 `executor` 由前端选择机械决定：选择单 Agent 时为 `single_agent`，选择 Team 时为 `team`。路由结果写入 `INTENT_ROUTE` trace，用于排查本轮为何进入某条架构线路。
+3. **`routes/chat/intent_router.py`** — Chat 第一层架构路由。仅在 readiness 通过后运行，模型语义路由优先、规则路由兜底；当前只决定本轮进入 `react`，Plan Runtime 与 Subagent Runtime 已砍掉，不再作为路由结果。`clarification` 不是 runtime.kind，也不是新的运行时分支。它不选择 Team、不选择 Member、不选择 Skill、不决定 ToolScope。第二层 `executor` 由请求的显式 `mode` 机械决定：`mode=agent` 为 `single_agent`，`mode=team` 为 `team`。Team 模式仍选择一个 Agent 作为本轮 Leader，不选择持久 Team。路由结果写入 `INTENT_ROUTE` trace。
 
 4. **`routes/chat/runtime_dispatcher.py` / `routes/chat/react_runtime.py`** — Chat Runtime 分发与 ReAct 执行入口。`runtime_dispatcher.execute_chat_runtime()` 只按第一层 `runtime.kind` 分发；当前仅 `react` 在线，信息不足时由主 Agent 在 Runtime 内调用 `AskUser`，通过 AgentScope `RequireExternalExecutionEvent` 暂停。`react_runtime.execute_react_runtime()` 再按第二层 `executor.kind` 执行：`single_agent` 直接运行主 Agent，`team` 委托全新的 `TeamRunService`，由 Leader 动态组建临时团队、Member 隔离执行、Mailbox 协作并独立综合最终答案。
 
-5. **`routes/chat/runtime_builder.py`** — IntentRoute 之后的运行时组装层。负责合成本轮模型配置、完整 Team 上下文、主 Agent runtime cache key、`MainAgentRuntimeSpec`，并通过 `create_main_agent_from_spec()` 委托工厂创建/复用 Agent。它不再裁剪 Team 成员，不再从 IntentRoute 读取 Skill/ToolScope。Skill 选择由 `skill_selector.py` 处理；工具范围由 `tool_scope_resolver.py` 处理。
+5. **`routes/chat/runtime_builder.py`** — IntentRoute 之后的运行时组装层。负责合成本轮模型配置、主 Agent runtime cache key、`MainAgentRuntimeSpec`，并通过 `create_main_agent_from_spec()` 委托工厂创建/复用 Agent。Chat 请求不包含持久 Team 或固定成员上下文。Skill 选择由 `skill_selector.py` 处理；工具范围由 `tool_scope_resolver.py` 处理。
 
 6. **`routes/chat/team_runtime/`** — 一次性 Team Runtime。每轮由 `TeamRunService` 创建全新文件状态，Leader 使用 Team 控制工具动态创建临时 Member 和共享任务，`TeamCoordinator` 按依赖并发运行隔离 Member session，全部任务成功后进入无工具综合阶段。Team 只发送顶层 `TEAM_EVENT`，状态进入独立 `teamSnapshot` / `TeamConsoleState`，不得进入单 Agent `DisplaySnapshot`。用户可通过 active TeamRun Mailbox API 向任意成员投递干预消息；Member 存在未读消息时不得提交结果，综合期间收到新消息必须重新综合。
+   Chat 与 Sandbox 在单 Agent 模式选择 Agent；切换到 Team 模式后沿用该 Agent 作为 Leader，并隐藏选择器。禁止恢复 Team、Member 或 Leader 下拉框，也禁止向 Chat Runtime 传入 `team_id`、`team_name`、`team_members`。
 
 8. **`routes/chat/leader_stream.py`** — Leader/单 Agent 事件流处理。消费 `agent.reply_stream()`，维护 `LeaderStreamState`，处理模型 cache、trace、permission decision、tool artifacts、HITL 早停、流式文本/思考累计、Skill end 和模型输出后的 clarification 兜底。
 

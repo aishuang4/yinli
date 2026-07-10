@@ -25,8 +25,7 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
         session_id=ctx.session_id,
         agent_id=ctx.agent_id,
         agent_name=ctx.agent_name,
-        team_id=run_data.team_id,
-        team_name=run_data.team_name,
+        mode=run_data.mode,
         model_name=ctx.model_name,
         content=display_content,
         images=run_data.images,
@@ -41,8 +40,7 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
         title="User message",
         content=display_content,
         payload={
-            "teamId": run_data.team_id,
-            "teamName": run_data.team_name,
+            "mode": run_data.mode,
             "model": ctx.model_name,
             "imageCount": len(run_data.images),
         },
@@ -60,8 +58,7 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
         agent_name=ctx.agent_name,
         status="running",
         payload={
-            "teamId": run_data.team_id,
-            "teamName": run_data.team_name,
+            "mode": run_data.mode,
             "model": ctx.model_name,
             "sandbox": run_data.sandbox,
         },
@@ -75,8 +72,7 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
             agent_name=ctx.agent_name,
             status="running",
             payload={
-                "teamId": run_data.team_id,
-                "teamName": run_data.team_name,
+                "mode": run_data.mode,
                 "model": ctx.model_name,
             },
         )
@@ -92,8 +88,7 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
         status="running",
         title="Run started",
         payload={
-            "teamId": run_data.team_id,
-            "teamName": run_data.team_name,
+            "mode": run_data.mode,
             "model": ctx.model_name,
             "sandbox": run_data.sandbox,
             "workspace": _workspace_trace_payload(ctx.guardrails),

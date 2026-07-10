@@ -4,7 +4,7 @@
 
 ## 1. 产品语义
 
-Team 是一次性协作运行：用户选择 Team 模式发送目标后，系统创建一个全新的 `TeamRun`。Leader 在本轮动态组建临时成员、创建共享任务并通过 Mailbox 协调；成员拥有隔离的 Agent session，只通过共享 Task List、Mailbox 和任务结果交流。全部任务收敛后，由独立综合阶段生成唯一用户答案。
+Team 是一次性协作运行：用户选择 Team 模式和一个 Agent 后，所选 Agent 成为本轮 Leader，系统创建一个全新的 `TeamRun`。Leader 在本轮动态组建临时成员、创建共享任务并通过 Mailbox 协调；成员拥有隔离的 Agent session，只通过共享 Task List、Mailbox 和任务结果交流。全部任务收敛后，由独立综合阶段生成唯一用户答案。
 
 必须满足以下不变量：
 
@@ -22,6 +22,8 @@ Team 是一次性协作运行：用户选择 Team 模式发送目标后，系统
 12. 综合期间 Mailbox 发生变化时必须丢弃当前草稿并基于最新消息重新综合。
 13. 后端启动时发现仍为 running 的孤儿 TeamRun，必须明确收口为 cancelled，并同步 ChatRun、RunState 和历史 Team 快照；不得伪装为可续跑。
 14. TeamRun 文件按保留天数和最大记录数清理；删除 Chat session 时同步删除其终态 TeamRun 文件。
+15. Team 模式不选择持久 Team，也不接收固定成员列表；Chat 请求只携带 `mode=team` 和 Leader 的 `agent_id`。
+16. Chat session、后台 Run、重跑和 RunState 只能通过显式 `mode` 判断 Team，不得通过 `teamId`、`teamName` 或成员数组推断。
 
 ## 2. 组件边界
 
@@ -223,6 +225,8 @@ teamEventReducer
 
 约束：
 
+- 用户在单 Agent 模式选择 Agent；切换到 Team 模式后沿用该 Agent 作为 Leader，并隐藏选择器。Team 模式禁止出现 Team、Member 或 Leader 下拉框。
+- Chat 和 Sandbox 请求只发送 `mode`、`agent_id`、`agent_name` 及普通运行参数，禁止发送 `team_id`、`team_name`、`team_members`。
 - `useEventStream` 的 `teamConsole` 与 `displaySnapshot` 并列，不能互相派生。
 - `TEAM_EVENT` 只进入 `teamEventReducer`。
 - Team Console 直接读取 `TeamConsoleState`，不读取 `DisplayActor`、`TeamActorInfo` 或 `displaySnapshot.actors`。

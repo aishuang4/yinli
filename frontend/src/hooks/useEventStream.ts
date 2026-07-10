@@ -189,15 +189,7 @@ interface UseEventStreamReturn {
 interface SendMessageOptions {
   agentId?: string;
   agentName?: string;
-  teamId?: string;
-  teamName?: string;
-  teamMembers?: Array<{
-    id?: string;
-    agentId: string;
-    name: string;
-    role: string;
-    description: string;
-  }>;
+  mode?: 'agent' | 'team';
   systemPrompt?: string;
   model?: string;
   sessionId?: string;
@@ -831,9 +823,7 @@ export function useEventStream(): UseEventStreamReturn {
             display_message: options?.displayMessage,
             agent_id: options?.agentId,
             agent_name: options?.agentName,
-            team_id: options?.teamId,
-            team_name: options?.teamName,
-            team_members: options?.teamMembers,
+            mode: options?.mode || 'agent',
             system_prompt: options?.systemPrompt,
             model: options?.model,
             session_id: options?.sessionId,

@@ -37,8 +37,6 @@ def initial_run_state(run: Any) -> dict[str, Any]:
         "sessionId": run.session_id,
         "agentId": run.agent_id,
         "agentName": run.agent_name,
-        "teamId": str(run.team_id or ""),
-        "teamName": str(run.team_name or ""),
         "mode": run.mode,
         "status": run.status,
         "task": run.task_text,

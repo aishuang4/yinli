@@ -7,8 +7,6 @@ export interface RunSummary {
   sessionId: string;
   agentId: string;
   agentName: string;
-  teamId: string;
-  teamName: string;
   task: string;
   mode: string;
   status: string;

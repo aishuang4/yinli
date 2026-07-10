@@ -123,8 +123,6 @@ async def finalize_successful_leader_run(
     runtime_events: list[dict],
     skill_runs: list[ChatSkillRun],
     active_skill_run: dict | None,
-    team_id: str | None,
-    team_name: str | None,
     sandbox: bool = False,
 ) -> AsyncGenerator[str, None]:
     """完成 Leader run 成功路径的消息、trace 和 UI 事件。"""
@@ -240,8 +238,6 @@ async def finalize_successful_leader_run(
         payload={
             "model": model_name,
             "toolCallCount": len(assistant_tool_calls),
-            "teamId": team_id,
-            "teamName": team_name,
         },
     )
     if sandbox:
@@ -255,8 +251,6 @@ async def finalize_successful_leader_run(
             payload={
                 "model": model_name,
                 "toolCallCount": len(assistant_tool_calls),
-                "teamId": team_id,
-                "teamName": team_name,
             },
         )
 

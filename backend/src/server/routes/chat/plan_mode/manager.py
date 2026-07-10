@@ -33,10 +33,8 @@ class PlanModeManager:
         run_id: str,
         agent_id: str,
         agent_name: str,
-        team_id: str | None = None,
         persist: bool = True,
     ) -> None:
-        self.team_id = team_id
         self.persist = persist
         self.domain_events: list[PlanDomainEvent] = []
         self.context = PlanModeContext(
@@ -251,7 +249,6 @@ class PlanModeManager:
                 "runId": self.context.run_id,
                 "sessionId": self.context.session_id,
                 "agentId": self.context.agent_id,
-                "teamId": self.team_id,
                 "title": title,
                 "goal": goal,
                 "status": PLAN_STATUS_DRAFT,

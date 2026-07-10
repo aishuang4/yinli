@@ -65,8 +65,6 @@ class TeamRunService:
                 goal=self.run_data.message,
                 leader_agent_id=self.ctx.agent_id,
                 leader_name=self.ctx.agent_name,
-                source_template_id=self.run_data.team_id or "",
-                source_template_name=self.run_data.team_name or "",
             )
             self.publisher = TeamEventPublisher(self.store)
             await register_team_service(chat_run_id, self)
@@ -123,8 +121,6 @@ class TeamRunService:
                 runtime_events=[],
                 skill_runs=self.ctx.skill_runs,
                 active_skill_run=self.ctx.active_skill_run,
-                team_id=self.run_data.team_id,
-                team_name=self.run_data.team_name,
                 sandbox=self.run_data.sandbox,
             ):
                 await self.queue.put(event)

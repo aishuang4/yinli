@@ -241,8 +241,7 @@ def ensure_db() -> None:
                     title TEXT NOT NULL,
                     agent_id TEXT NOT NULL,
                     agent_name TEXT NOT NULL,
-                    team_id TEXT,
-                    team_name TEXT,
+                    mode TEXT NOT NULL DEFAULT 'agent',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     message_count INTEGER NOT NULL DEFAULT 0
@@ -274,7 +273,6 @@ def ensure_db() -> None:
                     run_id TEXT NOT NULL DEFAULT '',
                     session_id TEXT NOT NULL,
                     agent_id TEXT NOT NULL,
-                    team_id TEXT,
                     title TEXT NOT NULL,
                     goal TEXT NOT NULL,
                     status TEXT NOT NULL,
@@ -359,8 +357,6 @@ def ensure_db() -> None:
                     session_id TEXT NOT NULL,
                     agent_id TEXT NOT NULL DEFAULT '',
                     agent_name TEXT NOT NULL DEFAULT '',
-                    team_id TEXT NOT NULL DEFAULT '',
-                    team_name TEXT NOT NULL DEFAULT '',
                     task_text TEXT NOT NULL DEFAULT '',
                     mode TEXT NOT NULL DEFAULT 'agent',
                     status TEXT NOT NULL DEFAULT 'running',
@@ -572,10 +568,14 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_messages", "plan_runs", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "display_snapshot", "TEXT NOT NULL DEFAULT '{\"version\":2,\"blocks\":[]}'")
             _ensure_column(conn, "chat_messages", "team_snapshot", "TEXT")
+            _ensure_column(conn, "chat_sessions", "mode", "TEXT NOT NULL DEFAULT 'agent'")
             _drop_column_if_exists(conn, "agents", "callable_agents")
             _drop_column_if_exists(conn, "agents", "max_depth")
             _drop_column_if_exists(conn, "chat_messages", "subagent_calls")
             _drop_column_if_exists(conn, "chat_messages", "team_activities")
+            _drop_column_if_exists(conn, "chat_sessions", "team_id")
+            _drop_column_if_exists(conn, "chat_sessions", "team_name")
+            _drop_column_if_exists(conn, "plans", "team_id")
             _drop_column_if_exists(conn, "run_events", "team_activity_id")
             _drop_column_if_exists(conn, "team_members", "execution_mode")
             _drop_column_if_exists(conn, "team_members", "depends_on")
@@ -616,6 +616,8 @@ def ensure_db() -> None:
             if "handoff_prompt" not in member_columns:
                 conn.execute("ALTER TABLE team_members ADD COLUMN handoff_prompt TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_runs", "updated_at", "TEXT NOT NULL DEFAULT ''")
+            _drop_column_if_exists(conn, "chat_runs", "team_id")
+            _drop_column_if_exists(conn, "chat_runs", "team_name")
             conn.commit()
             _initialized = True
 
@@ -1271,8 +1273,7 @@ def load_chat_store() -> dict[str, Any]:
                 "title": row["title"],
                 "agent_id": row["agent_id"],
                 "agent_name": row["agent_name"],
-                "team_id": row["team_id"],
-                "team_name": row["team_name"],
+                "mode": row["mode"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "message_count": row["message_count"],
@@ -1292,12 +1293,15 @@ def save_chat_store(data: dict[str, Any]) -> None:
         conn.execute("DELETE FROM chat_sessions")
         conn.executemany(
             """
-            INSERT INTO chat_sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO chat_sessions (
+                id, title, agent_id, agent_name, mode,
+                created_at, updated_at, message_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     item["id"], item["title"], item["agent_id"], item["agent_name"],
-                    item.get("team_id"), item.get("team_name"), item["created_at"],
+                    item.get("mode", "agent"), item["created_at"],
                     item["updated_at"], item.get("message_count", 0),
                 )
                 for item in sessions
@@ -1685,15 +1689,13 @@ def upsert_chat_run(record: dict[str, Any]) -> dict[str, Any]:
         conn.execute(
             """
             INSERT INTO chat_runs (
-                id, session_id, agent_id, agent_name, team_id, team_name,
+                id, session_id, agent_id, agent_name,
                 task_text, mode, status, created_at, completed_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 session_id=excluded.session_id,
                 agent_id=excluded.agent_id,
                 agent_name=excluded.agent_name,
-                team_id=excluded.team_id,
-                team_name=excluded.team_name,
                 task_text=excluded.task_text,
                 mode=excluded.mode,
                 status=excluded.status,
@@ -1705,8 +1707,6 @@ def upsert_chat_run(record: dict[str, Any]) -> dict[str, Any]:
                 record["sessionId"],
                 record.get("agentId", ""),
                 record.get("agentName", ""),
-                record.get("teamId", ""),
-                record.get("teamName", ""),
                 record.get("task", ""),
                 record.get("mode", "agent"),
                 record.get("status", "running"),
@@ -2343,8 +2343,6 @@ def _chat_run_from_row(row: sqlite3.Row, events: list[str], event_count: int | N
         "sessionId": row["session_id"],
         "agentId": row["agent_id"],
         "agentName": row["agent_name"],
-        "teamId": row["team_id"],
-        "teamName": row["team_name"],
         "task": row["task_text"],
         "mode": row["mode"],
         "status": row["status"],
@@ -3004,7 +3002,6 @@ def _row_to_plan(row: sqlite3.Row, steps: list[dict[str, Any]] | None = None) ->
         "runId": row["run_id"],
         "sessionId": row["session_id"],
         "agentId": row["agent_id"],
-        "teamId": row["team_id"],
         "title": row["title"],
         "goal": row["goal"],
         "status": row["status"],
@@ -3041,16 +3038,15 @@ def create_plan_record(plan: dict[str, Any], steps: list[dict[str, Any]]) -> dic
         conn.execute(
             """
             INSERT INTO plans (
-                id, run_id, session_id, agent_id, team_id, title, goal, status,
+                id, run_id, session_id, agent_id, title, goal, status,
                 markdown, current_step_id, created_at, updated_at, completed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 plan["id"],
                 plan.get("runId", ""),
                 plan["sessionId"],
                 plan["agentId"],
-                plan.get("teamId"),
                 plan["title"],
                 plan["goal"],
                 plan["status"],

@@ -20,7 +20,6 @@ from src.server.routes.chat.handlers.send import send_message
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.router import router
 from src.server.routes.chat.team_runtime.registry import get_team_service
-from src.server.routes.teams import get_registered_team
 from src.storage.database import get_latest_user_chat_message
 
 
@@ -144,7 +143,7 @@ async def cancel_run(run_id: str) -> dict:
 
 
 def _build_rerun_chat_message(source_run) -> ChatMessage:
-    """从历史 Run 还原一条新的 Chat 请求，使用当前 Agent/Team 配置执行。"""
+    """从历史 Run 还原一条新的 Chat 请求，使用当前 Leader Agent 配置执行。"""
 
     original_user = get_latest_user_chat_message(source_run.session_id, source_run.task_text)
     message = source_run.task_text or str((original_user or {}).get("content") or "").strip()
@@ -152,22 +151,6 @@ def _build_rerun_chat_message(source_run) -> ChatMessage:
         raise HTTPException(status_code=400, detail="Run task is empty and cannot be rerun")
 
     images = list((original_user or {}).get("images") or [])
-    if source_run.mode == "team" and source_run.team_id:
-        team = get_registered_team(source_run.team_id)
-        if not team:
-            raise HTTPException(status_code=404, detail="Team for rerun not found")
-        leader = get_registered_agent(team.leader_agent_id)
-        return ChatMessage(
-            session_id=source_run.session_id,
-            message=message,
-            agent_id=team.leader_agent_id,
-            agent_name=leader.name if leader else source_run.agent_name,
-            team_id=team.id,
-            team_name=team.name,
-            team_members=[member.model_dump(by_alias=True) for member in team.members],
-            images=images,
-        )
-
     agent = get_registered_agent(source_run.agent_id) if source_run.agent_id else None
     if source_run.agent_id and not agent:
         raise HTTPException(status_code=404, detail="Agent for rerun not found")
@@ -176,6 +159,7 @@ def _build_rerun_chat_message(source_run) -> ChatMessage:
         message=message,
         agent_id=source_run.agent_id or None,
         agent_name=agent.name if agent else source_run.agent_name,
+        mode=source_run.mode,
         images=images,
     )
 

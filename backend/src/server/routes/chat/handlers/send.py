@@ -104,8 +104,6 @@ async def start_chat_run(data: ChatMessage):
         factory=event_stream,
         agent_id=run_data.agent_id or "default",
         agent_name=run_data.agent_name or "",
-        team_id=run_data.team_id or "",
-        team_name=run_data.team_name or "",
         task=run_data.message,
-        mode="team" if run_data.team_id else "agent",
+        mode=run_data.mode,
     )

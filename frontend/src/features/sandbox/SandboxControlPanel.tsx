@@ -5,10 +5,9 @@
  */
 
 import { Bot, FlaskConical, Save, Send, Square, Trash2, Users } from 'lucide-react';
-import { Button, Spinner, Tag } from '@agentscope-ai/design';
+import { Button, Spinner } from '@agentscope-ai/design';
 import { FormField, SelectField, TextAreaField, TextField } from '../../components/form';
 import type { Agent } from '../../types/agent';
-import type { TeamRecord } from '../../types/team';
 
 export interface SandboxCase {
   id: string;
@@ -18,8 +17,6 @@ export interface SandboxCase {
     mode: 'agent' | 'team';
     agentId: string;
     agentName: string;
-    teamId: string | null;
-    teamName: string | null;
     message: string;
   };
   createdAt: string;
@@ -31,14 +28,10 @@ interface SandboxControlPanelProps {
   mode: 'agent' | 'team';
   setMode: (mode: 'agent' | 'team') => void;
   agents: Agent[];
-  teams: TeamRecord[];
   selectedAgent: Agent | null;
-  selectedTeam: TeamRecord | null;
   runtimeAgent: Agent | null;
   agentId?: string;
-  teamId?: string;
   setAgentId: (id: string) => void;
-  setTeamId: (id: string) => void;
   cases: SandboxCase[];
   selectedCaseId: string;
   setSelectedCaseId: (id: string) => void;
@@ -61,14 +54,10 @@ export function SandboxControlPanel({
   mode,
   setMode,
   agents,
-  teams,
   selectedAgent,
-  selectedTeam,
   runtimeAgent,
   agentId,
-  teamId,
   setAgentId,
-  setTeamId,
   cases,
   selectedCaseId,
   setSelectedCaseId,
@@ -141,21 +130,13 @@ export function SandboxControlPanel({
             </div>
           </FormField>
 
-          {mode === 'agent' ? (
+          {mode === 'agent' && (
             <SelectField
               label="Agent"
               value={agentId || selectedAgent?.id}
               onChange={(value) => setAgentId(String(value))}
               options={agents.map((agent) => ({ label: `${agent.name} · ${agent.modelConfig.primary}`, value: agent.id }))}
               placeholder="选择 Agent"
-            />
-          ) : (
-            <SelectField
-              label="Team"
-              value={teamId || selectedTeam?.id}
-              onChange={(value) => setTeamId(String(value))}
-              options={teams.map((team) => ({ label: `${team.name} · ${team.members.length} 成员`, value: team.id }))}
-              placeholder="选择 Team"
             />
           )}
 
@@ -164,16 +145,10 @@ export function SandboxControlPanel({
               {runtimeAgent?.name || '未选择运行对象'}
             </div>
             <div className="mt-1 text-xs text-[var(--color-text-secondary)]">
-              {runtimeAgent?.modelConfig.primary || '选择 Agent 或 Team 后开始测试'}
+              {runtimeAgent?.modelConfig.primary || '选择 Agent 后开始测试'}
             </div>
-            {mode === 'team' && selectedTeam && (
-              <div className="mt-2 flex flex-wrap gap-1">
-                {selectedTeam.members.slice(0, 6).map((member) => (
-                  <Tag key={member.id} size="small" color={member.role === 'leader' ? 'blue' : 'mauve'}>
-                    {member.name}
-                  </Tag>
-                ))}
-              </div>
+            {mode === 'team' && runtimeAgent && (
+              <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">作为 Leader 动态组建临时成员</div>
             )}
           </div>
 

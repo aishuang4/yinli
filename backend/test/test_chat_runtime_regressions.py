@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from pydantic import ValidationError
+
 from src.server.routes.chat.background_runs import (
     ChatBackgroundRun,
     _broadcast,
@@ -24,6 +26,7 @@ from src.server.routes.chat.handlers.resume import (
     _should_wrap_resume_text_as_final,
     resume_interaction,
 )
+from src.server.routes.chat.handlers.runs import _build_rerun_chat_message
 from src.server.routes.chat.intent_router import (
     IntentRoute,
     route_chat_message,
@@ -33,7 +36,6 @@ from src.server.routes.chat.intent_router import (
 from src.server.routes.chat.models import (
     ChatMessage,
     ChatResumeRequest,
-    ChatTeamMemberPayload,
     ChatToolRun,
 )
 from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
@@ -972,8 +974,7 @@ def test_completed_background_run_persists_history_display_snapshot(tmp_path, mo
         session_id=run.session_id,
         agent_id=run.agent_id,
         agent_name=run.agent_name,
-        team_id=None,
-        team_name=None,
+        mode="agent",
         model_name="model",
         content="请测试历史快照",
         images=[],
@@ -1931,7 +1932,6 @@ def test_react_runtime_fails_when_agent_ends_without_final_answer(monkeypatch):
             ),
             readiness=SimpleNamespace(ready=True),
             intent_route=IntentRoute(),
-            routed_team=SimpleNamespace(members=[], run_data=None, system_prompt=""),
             effective_user_message="测试最大迭代停止",
             used_skills=[],
             used_skill_details=[],
@@ -1994,7 +1994,6 @@ def test_react_runtime_reports_agentscope_max_iters(monkeypatch):
             ),
             readiness=SimpleNamespace(ready=True),
             intent_route=IntentRoute(),
-            routed_team=SimpleNamespace(members=[], run_data=None, system_prompt=""),
             effective_user_message="测试最大迭代停止",
             used_skills=[],
             used_skill_details=[],
@@ -2058,7 +2057,6 @@ def test_react_runtime_recovers_final_answer_after_max_iters(monkeypatch):
             ),
             readiness=SimpleNamespace(ready=True),
             intent_route=IntentRoute(),
-            routed_team=SimpleNamespace(members=[], run_data=None, system_prompt=""),
             effective_user_message="测试最大迭代后收口",
             used_skills=[],
             used_skill_details=[],
@@ -2124,7 +2122,6 @@ def test_react_runtime_forces_final_answer_after_bare_max_iters(monkeypatch):
             ),
             readiness=SimpleNamespace(ready=True),
             intent_route=IntentRoute(),
-            routed_team=SimpleNamespace(members=[], run_data=None, system_prompt=""),
             effective_user_message="测试空过程最大迭代后收口",
             used_skills=[],
             used_skill_details=[],
@@ -2664,7 +2661,7 @@ def test_ask_user_is_external_tool_for_agentscope_resume():
 
 
 def test_intent_route_only_selects_react_architecture_and_executor():
-    route = route_chat_message(team_members=[])
+    route = route_chat_message(execution_mode="agent")
 
     assert route.mode == "react"
     assert route.runtime.kind == "react"
@@ -2674,7 +2671,7 @@ def test_intent_route_only_selects_react_architecture_and_executor():
 
 
 def test_intent_route_trace_payload_uses_api_aliases():
-    route = route_chat_message(team_members=[])
+    route = route_chat_message(execution_mode="agent")
 
     payload = route_trace_payload(route)
 
@@ -2687,20 +2684,52 @@ def test_intent_route_trace_payload_uses_api_aliases():
 
 
 def test_intent_route_team_executor_is_mechanical():
-    route = route_chat_message(
-        team_members=[
-            ChatTeamMemberPayload(
-                id="member-role",
-                agentId="member-agent",
-                name="Member",
-                role="member",
-            ),
-        ],
-    )
+    route = route_chat_message(execution_mode="team")
 
     assert route.mode == "react"
     assert route.executor.kind == "team"
-    assert route.executor.payload["memberCount"] == 1
+    assert route.executor.payload["executionMode"] == "team"
+
+
+def test_chat_message_rejects_persistent_team_payload():
+    try:
+        ChatMessage(
+            message="测试",
+            mode="team",
+            agent_id="leader-agent",
+            team_id="legacy-team",
+            team_members=[],
+        )
+    except ValidationError as exc:
+        rejected_fields = {error["loc"][0] for error in exc.errors()}
+    else:
+        raise AssertionError("旧 Team 模板字段必须被请求模型拒绝")
+
+    assert {"team_id", "team_members"}.issubset(rejected_fields)
+
+
+def test_team_rerun_reuses_mode_and_leader_without_team_template(monkeypatch):
+    monkeypatch.setattr(
+        "src.server.routes.chat.handlers.runs.get_latest_user_chat_message",
+        lambda session_id, fallback: {"content": "重新执行", "images": []},
+    )
+    monkeypatch.setattr(
+        "src.server.routes.chat.handlers.runs.get_registered_agent",
+        lambda agent_id: SimpleNamespace(name="Leader"),
+    )
+
+    request = _build_rerun_chat_message(SimpleNamespace(
+        session_id="session-team",
+        task_text="原任务",
+        mode="team",
+        agent_id="leader-agent",
+        agent_name="Leader",
+    ))
+
+    assert request.mode == "team"
+    assert request.agent_id == "leader-agent"
+    assert "team_id" not in ChatMessage.model_fields
+    assert "team_members" not in ChatMessage.model_fields
 
 
 def test_intent_route_tool_scope_stays_minimal_for_conversation():
@@ -2804,7 +2833,7 @@ def test_model_intent_route_ignores_legacy_plan_subagent_and_tool_scope(monkeypa
     route = asyncio.run(route_chat_message_with_model(
         message="请让代码 Agent 修复项目中的测试问题，并运行 pytest 验证。",
         agent_config=parent,
-        team_members=[],
+        execution_mode="agent",
         images=[],
         model_name="test-model",
     ))
@@ -2833,7 +2862,7 @@ def test_model_intent_route_falls_back_to_rules_on_invalid_json(monkeypatch):
             mcp_tools=[],
             knowledge_tools=[],
         ),
-        team_members=[],
+        execution_mode="agent",
         images=[],
         model_name="test-model",
     ))

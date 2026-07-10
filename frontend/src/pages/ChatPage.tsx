@@ -22,7 +22,6 @@ import {
 import { Empty, Select, Spinner, Tag, Tooltip } from '@agentscope-ai/design';
 import { useEventStream } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
-import { useTeams } from '../hooks/useTeams';
 import { useAppStore } from '../stores/appStore';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
@@ -263,7 +262,6 @@ export function ChatPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [targetMode, setTargetMode] = useState<'agent' | 'team'>('agent');
   const [selectedAgentId, setSelectedAgentId] = useState<string>('default');
-  const [selectedTeamId, setSelectedTeamId] = useState<string>('');
   const [inputValue, setInputValue] = useState('');
   const [deepThinking, setDeepThinking] = useState(false);
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
@@ -286,25 +284,13 @@ export function ChatPage() {
   const [visualCompletionVersion, setVisualCompletionVersion] = useState(0);
   const { state, sendMessage, resumeInteraction, subscribeRun, abort, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
-  const { teams, loading: teamsLoading } = useTeams();
 
   const selectedAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) || null,
     [agents, selectedAgentId]
   );
 
-  const selectedTeam = useMemo(
-    () => teams.find((team) => team.id === selectedTeamId) || null,
-    [selectedTeamId, teams]
-  );
-
-  const teamLeaderAgent = useMemo(() => (
-    selectedTeam
-      ? agents.find((agent) => agent.id === selectedTeam.leaderAgentId) || null
-      : null
-  ), [agents, selectedTeam]);
-
-  const runtimeAgent = targetMode === 'team' ? teamLeaderAgent : selectedAgent;
+  const runtimeAgent = selectedAgent;
 
   const agentOptions = useMemo(() => [
     { label: 'Assistant - 默认助手', value: 'default' },
@@ -313,13 +299,6 @@ export function ChatPage() {
       value: agent.id,
     })),
   ], [agents]);
-
-  const teamOptions = useMemo(() => (
-    teams.map((team) => ({
-      label: team.name,
-      value: team.id,
-    }))
-  ), [teams]);
 
   const selectedModelId = runtimeAgent?.modelConfig.primary || 'deepseek-chat';
   const selectedModelSupportsImages = selectedModelId === 'qwen3.7-plus';
@@ -480,12 +459,6 @@ export function ChatPage() {
     };
   }, [activeSessionId, hasLiveResponse, subscribeRun]);
 
-  useEffect(() => {
-    if (targetMode === 'team' && !selectedTeamId && teams.length > 0) {
-      setSelectedTeamId(teams[0].id);
-    }
-  }, [selectedTeamId, targetMode, teams]);
-
   const handleMessagesScroll = useCallback(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
@@ -577,13 +550,8 @@ export function ChatPage() {
     recoveredRunRef.current = '';
     reset();
     setActiveSessionId(session.id);
-    if (session.team_id) {
-      setTargetMode('team');
-      setSelectedTeamId(session.team_id);
-    } else {
-      setTargetMode('agent');
-      setSelectedAgentId(session.agent_id || 'default');
-    }
+    setTargetMode(session.mode || 'agent');
+    setSelectedAgentId(session.agent_id || 'default');
     setImageAttachments([]);
     setChatError(null);
     shouldAutoScrollRef.current = true;
@@ -650,14 +618,6 @@ export function ChatPage() {
   /** 发送消息 */
   const handleSend = useCallback(async () => {
     if ((!inputValue.trim() && imageAttachments.length === 0) || state.isStreaming) return;
-    if (targetMode === 'team' && !selectedTeam) {
-      setChatError('请先选择一个 Team。');
-      return;
-    }
-    if (targetMode === 'team' && !teamLeaderAgent) {
-      setChatError('当前 Team 没有可用的 Leader Agent。');
-      return;
-    }
     if (imageAttachments.length > 0 && !selectedModelSupportsImages) {
       setChatError(`${selectedModelId} 不支持图片输入，请选择使用 qwen3.7-plus 的 Agent。`);
       return;
@@ -690,24 +650,14 @@ export function ChatPage() {
       sessionId,
       agentId: runtimeAgent?.id,
       agentName: runtimeAgent?.name,
-      teamId: targetMode === 'team' ? selectedTeam?.id : undefined,
-      teamName: targetMode === 'team' ? selectedTeam?.name : undefined,
-      teamMembers: targetMode === 'team'
-        ? selectedTeam?.members.map((member) => ({
-          id: member.id,
-          agentId: member.agentId,
-          name: agents.find((agent) => agent.id === member.agentId)?.name || member.name,
-          role: member.role,
-          description: member.description,
-        }))
-        : undefined,
+      mode: targetMode,
       systemPrompt: runtimeAgent?.systemPrompt,
       model: runtimeAgent?.modelConfig.primary,
       skillIds: runtimeAgent?.skills,
       deepThinking,
       images,
     });
-  }, [activeSessionId, agents, deepThinking, imageAttachments, inputValue, runtimeAgent, selectedModelId, selectedModelSupportsImages, selectedTeam, sendMessage, state.isStreaming, targetMode, teamLeaderAgent]);
+  }, [activeSessionId, deepThinking, imageAttachments, inputValue, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.isStreaming, targetMode]);
 
   const handleSubmitClarification = useCallback(async (content: string, displayContent?: string) => {
     const modelContent = content.trim();
@@ -937,7 +887,7 @@ export function ChatPage() {
                 {state.isStreaming
                   ? `${state.modelName || runtimeAgent?.modelConfig.primary || 'deepseek-chat'} · 正在思考...`
                   : targetMode === 'team'
-                    ? `${selectedTeam?.name || 'Team'} · ${teamLeaderAgent?.name || 'Leader'} · ${selectedTeam?.members.length || 0} 个成员`
+                    ? `${runtimeAgent?.name || 'Assistant'} · Leader 动态组建临时成员`
                     : `${runtimeAgent?.name || 'Assistant'} · ${runtimeAgent?.description || 'DeepSeek'}`}
               </div>
             </div>
@@ -1161,23 +1111,14 @@ export function ChatPage() {
                   </span>
                 </Tooltip>
               </div>
-              {targetMode === 'agent' ? (
+              {targetMode === 'agent' && (
                 <Select
                   value={selectedAgentId}
                   onChange={(value) => setSelectedAgentId(value)}
                   options={agentOptions}
                   loading={agentsLoading}
                   disabled={state.isStreaming}
-                  style={{ width: 160 }}
-                />
-              ) : (
-                <Select
-                  value={selectedTeamId}
-                  onChange={(value) => setSelectedTeamId(value)}
-                  options={teamOptions}
-                  loading={teamsLoading}
-                  disabled={state.isStreaming}
-                  placeholder="选择 Team"
+                  placeholder="选择 Agent"
                   style={{ width: 160 }}
                 />
               )}

@@ -21,11 +21,9 @@ class SandboxCasePayload(BaseModel):
     mode: str = Field(pattern="^(agent|team)$")
     agent_id: str = Field(default="", alias="agentId")
     agent_name: str = Field(default="", alias="agentName")
-    team_id: str | None = Field(default=None, alias="teamId")
-    team_name: str | None = Field(default=None, alias="teamName")
     message: str
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "forbid"}
 
 
 class SandboxCaseCreate(BaseModel):

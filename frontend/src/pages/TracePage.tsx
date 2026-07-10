@@ -142,7 +142,7 @@ export function TracePage() {
   return (
     <WorkbenchDetailShell
       title={selectedTrace?.title || '运行轨迹'}
-      subtitle={selectedTrace?.teamName || selectedTrace?.agentName || selectedId}
+      subtitle={selectedTrace?.mode === 'team' ? `${selectedTrace.agentName || 'Agent'} · Team Leader` : selectedTrace?.agentName || selectedId}
       onBack={() => {
         setSelectedId('');
         setDetail(null);

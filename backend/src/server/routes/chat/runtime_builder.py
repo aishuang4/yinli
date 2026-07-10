@@ -19,7 +19,7 @@ from src.agents.factory import (
     RuntimeToolScope,
     get_or_create_agent,
 )
-from src.server.routes.chat.models import ChatMessage, ChatTeamMemberPayload
+from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.skill_selector import select_runtime_skills
 from src.server.routes.chat.tool_scope_resolver import resolve_runtime_tool_scope
 from src.server.routes.skills import Skill
@@ -32,15 +32,6 @@ class RuntimeModelConfig:
     model_name: str
     fallback_names: list[str]
     model_options: AgentModelOptions
-
-
-@dataclass(frozen=True)
-class RoutedTeamContext:
-    """完整 Team 角色素材，临时 Member 由 Leader 在 TeamRun 内动态创建。"""
-
-    members: list[ChatTeamMemberPayload]
-    run_data: ChatMessage
-    system_prompt: str
 
 
 @dataclass(frozen=True)
@@ -91,21 +82,6 @@ def build_runtime_model_config(
             max_tokens=model_config_data.max_tokens if model_config_data else None,
             max_react_iters=int(getattr(model_config_data, "max_react_iters", 40) or 40) if model_config_data else 40,
         ),
-    )
-
-
-def build_routed_team_context(
-    *,
-    run_data: ChatMessage,
-    leader_agent_id: str,
-) -> RoutedTeamContext:
-    """保留前端传入的 Team 来源信息，不再注入旧静态 Team prompt。"""
-
-    members = run_data.team_members
-    return RoutedTeamContext(
-        members=members,
-        run_data=run_data.model_copy(update={"team_members": members}),
-        system_prompt="",
     )
 
 

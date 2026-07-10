@@ -60,8 +60,6 @@ class TeamStore:
         goal: str,
         leader_agent_id: str,
         leader_name: str,
-        source_template_id: str = "",
-        source_template_name: str = "",
         root: Path | None = None,
     ) -> "TeamStore":
         """创建全新的 TeamRun。"""
@@ -85,8 +83,6 @@ class TeamStore:
             "status": "running",
             "phase": "created",
             "leaderId": "leader",
-            "sourceTemplateId": source_template_id,
-            "sourceTemplateName": source_template_name,
             "eventSeq": 0,
             "maxConcurrency": 3,
             "createdAt": now,

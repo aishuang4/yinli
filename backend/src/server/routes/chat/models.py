@@ -6,7 +6,7 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -44,17 +44,6 @@ class ChatImagePayload(BaseModel):
     media_type: str
     data: str
 
-
-class ChatTeamMemberPayload(BaseModel):
-    """前端传入的 Team 成员摘要"""
-
-    id: str = ""
-    agent_id: str = Field(alias="agentId")
-    name: str
-    role: str
-    description: str = ""
-
-    model_config = {"populate_by_name": True}
 
 class ChatSkillRun(BaseModel):
     """本轮对话使用的 Skill 记录"""
@@ -123,7 +112,6 @@ class ChatPlanRun(BaseModel):
     run_id: str = Field(default="", alias="runId")
     session_id: str = Field(alias="sessionId")
     agent_id: str = Field(alias="agentId")
-    team_id: str | None = Field(default=None, alias="teamId")
     title: str
     goal: str
     status: str
@@ -170,8 +158,7 @@ class ChatSession(BaseModel):
     title: str
     agent_id: str
     agent_name: str
-    team_id: str | None = None
-    team_name: str | None = None
+    mode: Literal["agent", "team"] = "agent"
     created_at: str
     updated_at: str
     message_count: int = 0
@@ -236,14 +223,8 @@ class ChatMessage(BaseModel):
     agent_name: str | None = None
     """Agent 名称（可选）"""
 
-    team_id: str | None = None
-    """Team ID（Team 模式下传入）"""
-
-    team_name: str | None = None
-    """Team 名称（Team 模式下传入）"""
-
-    team_members: list[ChatTeamMemberPayload] = Field(default_factory=list)
-    """Team 成员摘要（Team 模式下用于注入 Leader 上下文）"""
+    mode: Literal["agent", "team"] = "agent"
+    """执行模式；Team 模式下所选 Agent 是本轮 Leader。"""
 
     system_prompt: str | None = None
     """Agent 系统提示词（可选，用于临时自定义）"""
@@ -263,4 +244,4 @@ class ChatMessage(BaseModel):
     sandbox: bool = False
     """沙盒运行：不写入历史对话"""
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "forbid"}

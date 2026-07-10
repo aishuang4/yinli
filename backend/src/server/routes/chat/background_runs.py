@@ -80,8 +80,6 @@ class ChatBackgroundRun:
     session_id: str
     agent_id: str = ""
     agent_name: str = ""
-    team_id: str = ""
-    team_name: str = ""
     task_text: str = ""
     mode: str = "agent"
     status: str = "running"
@@ -331,8 +329,6 @@ def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
         "sessionId": run.session_id,
         "agentId": run.agent_id,
         "agentName": run.agent_name,
-        "teamId": run.team_id,
-        "teamName": run.team_name,
         "task": run.task_text,
         "mode": run.mode,
         "status": run.status,
@@ -380,8 +376,6 @@ async def start_chat_background_run(
     factory: EventStreamFactory,
     agent_id: str = "",
     agent_name: str = "",
-    team_id: str = "",
-    team_name: str = "",
     task: str = "",
     mode: str = "agent",
     persist: bool = True,
@@ -392,8 +386,6 @@ async def start_chat_background_run(
         session_id=session_id,
         agent_id=agent_id,
         agent_name=agent_name,
-        team_id=team_id,
-        team_name=team_name,
         task_text=task,
         mode=mode,
     )
@@ -483,8 +475,6 @@ async def _consume_chat_events(run: ChatBackgroundRun, factory: EventStreamFacto
         "session_id": run.session_id,
         "agent_id": run.agent_id,
         "agent_name": run.agent_name,
-        "team_id": run.team_id,
-        "team_name": run.team_name,
         "task": run.task_text,
         "mode": run.mode,
         "status": run.status,
@@ -756,8 +746,6 @@ def _persist_run(run: ChatBackgroundRun) -> None:
         "sessionId": run.session_id,
         "agentId": run.agent_id,
         "agentName": run.agent_name,
-        "teamId": run.team_id,
-        "teamName": run.team_name,
         "task": run.task_text,
         "mode": run.mode,
         "status": run.status,
@@ -773,8 +761,6 @@ def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
         session_id=record["sessionId"],
         agent_id=record.get("agentId", ""),
         agent_name=record.get("agentName", ""),
-        team_id=record.get("teamId", ""),
-        team_name=record.get("teamName", ""),
         task_text=record.get("task", ""),
         mode=record.get("mode", "agent"),
         status=record.get("status", "completed"),

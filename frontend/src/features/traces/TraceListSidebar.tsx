@@ -57,7 +57,7 @@ export function TraceListSidebar({
             >
               <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">{trace.title}</div>
               <div className="mt-1 truncate text-xs text-[var(--color-text-secondary)]">
-                {trace.teamName || trace.agentName || 'Agent'}
+                {trace.mode === 'team' ? `${trace.agentName || 'Agent'} · Team` : trace.agentName || 'Agent'}
               </div>
               <div className="mt-2 flex flex-wrap gap-1">
                 <Tag size="small" color={trace.status === 'failed' ? 'red' : trace.status === 'waiting' ? 'orange' : 'green'}>

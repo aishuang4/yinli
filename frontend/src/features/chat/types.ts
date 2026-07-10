@@ -50,8 +50,7 @@ export interface ChatSession {
   title: string;
   agent_id: string;
   agent_name: string;
-  team_id: string | null;
-  team_name: string | null;
+  mode: 'agent' | 'team';
   created_at: string;
   updated_at: string;
   message_count: number;

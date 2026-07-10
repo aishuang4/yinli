@@ -87,7 +87,7 @@ function TraceListRow({
         </span>
       )}
       title={trace.title}
-      subtitle={trace.teamName || trace.agentName || 'Agent'}
+      subtitle={trace.mode === 'team' ? `${trace.agentName || 'Agent'} · Team Leader` : trace.agentName || 'Agent'}
       description={trace.updatedAt || trace.createdAt}
       last={last}
       onSelect={onSelect}

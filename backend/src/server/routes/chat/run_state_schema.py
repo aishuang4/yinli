@@ -171,8 +171,6 @@ class RunStateSnapshot(BaseModel):
     sessionId: str = ""
     agentId: str = ""
     agentName: str = ""
-    teamId: str = ""
-    teamName: str = ""
     mode: str = "agent"
     status: RunStateStatus | str = "running"
     task: str = ""

@@ -203,8 +203,6 @@ def test_team_event_never_creates_single_agent_display_items(tmp_path) -> None:
         session_id="session-new",
         agent_id="leader-agent",
         agent_name="Leader",
-        team_id="template",
-        team_name="Template",
         mode="team",
         status="running",
         task_text="goal",
