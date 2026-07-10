@@ -22,7 +22,6 @@ def build_runtime_event(
     source_event_type: str | None = None,
     agent_id: str | None = None,
     agent_name: str | None = None,
-    team_activity_id: str | None = None,
     status: str | None = None,
     reason: str | None = None,
     duration_ms: int | None = None,
@@ -40,7 +39,6 @@ def build_runtime_event(
         "scope": scope,
         "agentId": agent_id or "",
         "agentName": agent_name or "",
-        "teamActivityId": team_activity_id,
         "status": status or "",
         "reason": reason or "",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -66,7 +64,6 @@ def runtime_event_from_agentscope_sse(
     scope: str,
     agent_id: str,
     agent_name: str,
-    team_activity_id: str | None = None,
     event_data: dict[str, Any] | None = None,
     collect: list[dict[str, Any]] | None = None,
 ) -> str | None:
@@ -83,7 +80,6 @@ def runtime_event_from_agentscope_sse(
         source_event_type=source_event_type,
         agent_id=agent_id,
         agent_name=agent_name,
-        team_activity_id=team_activity_id,
         status=_status_for_runtime_event(runtime_type, event_data or {}),
         payload=_compact_agentscope_payload(source_event_type, event_data or {}),
         collect=collect,
@@ -95,9 +91,9 @@ def _status_for_runtime_event(event_type: str, event_data: dict[str, Any] | None
         state = str((event_data or {}).get("state") or "").lower()
         if state in {"error", "failed", "denied"}:
             return "failed"
-    if event_type.endswith("_COMPLETED") or event_type in {"AGENT_COMPLETED", "TEAM_COMPLETED", "RUN_COMPLETED"}:
+    if event_type.endswith("_COMPLETED") or event_type in {"AGENT_COMPLETED", "RUN_COMPLETED"}:
         return "completed"
-    if event_type.endswith("_FAILED") or event_type in {"AGENT_FAILED", "TEAM_FAILED", "RUN_FAILED"}:
+    if event_type.endswith("_FAILED") or event_type in {"AGENT_FAILED", "RUN_FAILED"}:
         return "failed"
     if "WAITING" in event_type:
         return "waiting"
@@ -129,7 +125,6 @@ def _record_runtime_event_trace(event: dict[str, Any]) -> None:
             scope=str(event.get("scope") or "run"),
             agent_id=str(event.get("agentId") or "") or None,
             agent_name=str(event.get("agentName") or "") or None,
-            team_activity_id=event.get("teamActivityId"),
             status=str(event.get("status") or ""),
             title=str(event.get("type") or SSE_EVENT_RUNTIME),
             content=str(event.get("reason") or ""),
@@ -159,8 +154,6 @@ def _should_merge_runtime_delta(previous: dict[str, Any], event: dict[str, Any])
     if previous.get("scope") != event.get("scope"):
         return False
     if previous.get("agentId") != event.get("agentId"):
-        return False
-    if previous.get("teamActivityId") != event.get("teamActivityId"):
         return False
     if event.get("type") not in {
         "AGENT_OUTPUT_DELTA",

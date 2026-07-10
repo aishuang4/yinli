@@ -6,6 +6,7 @@
  */
 
 import type { DisplayEvent, DisplaySnapshot } from './displayEvents';
+import type { TeamDomainEvent, TeamSnapshot } from './teamRuntime';
 
 export type RunStateStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'cancelling' | string;
 
@@ -14,6 +15,7 @@ export type RunStatePatchKind =
   | 'model_usage'
   | 'approval_resolved'
   | 'display_event'
+  | 'team_event'
   | 'notice'
   | 'error';
 
@@ -97,6 +99,7 @@ export interface ChatRunStateSnapshot {
   approvals: RunStateApprovalSummary[];
   plans: ChatRunPlanState[];
   displaySnapshot?: DisplaySnapshot;
+  teamSnapshot?: TeamSnapshot | null;
   error: string;
 }
 
@@ -110,6 +113,7 @@ export interface ChatRunStatePatch {
   modelName?: string;
   tokenUsage?: { input: number; output: number } | null;
   displayEvent?: DisplayEvent;
+  teamEvent?: TeamDomainEvent;
   resolvedApprovalId?: string;
   notice?: {
     type: string;

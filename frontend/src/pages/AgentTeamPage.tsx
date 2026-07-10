@@ -37,7 +37,7 @@ export function AgentTeamPage() {
     name: '',
     description: '',
     leaderAgentId: '',
-    workerAgentIds: [],
+    memberAgentIds: [],
   });
 
   const selectedAgent = agents.find((agent) => agent.id === selectedId) || null;
@@ -76,7 +76,7 @@ export function AgentTeamPage() {
       name: teamForm.name.trim(),
       description: teamForm.description.trim(),
       leaderAgentId: teamForm.leaderAgentId,
-      workerAgentIds: teamForm.workerAgentIds,
+      memberAgentIds: teamForm.memberAgentIds,
     });
     setSelectedTeamId(team.id);
     setSelectedId(null);
@@ -86,7 +86,7 @@ export function AgentTeamPage() {
       name: '',
       description: '',
       leaderAgentId: '',
-      workerAgentIds: [],
+      memberAgentIds: [],
     });
   }, [createTeam, teamForm]);
 
@@ -246,7 +246,7 @@ export function AgentTeamPage() {
       <>
         <AgentDetailShell
           title={selectedTeam.name}
-          subtitle={selectedTeam.description || '配置 Team 成员和 Worker 调度规则'}
+          subtitle={selectedTeam.description || '配置 Leader 和候选角色素材'}
           onBack={goList}
           onExport={() => void handleExportTeam()}
         >

@@ -19,12 +19,10 @@ from src.server.routes.chat.models import (
     PENDING_INTERACTIONS,
     ChatResumeRequest,
     ChatSkillRun,
-    ChatTeamActivity,
     ChatToolRun,
     PendingInteraction,
 )
 from src.server.routes.chat.background_runs import current_chat_background_run_id
-from src.server.routes.chat.team_state import _find_team_activity
 from src.server.routes.chat.trace_recorder import _record_run_event
 
 
@@ -41,16 +39,10 @@ def _create_pending_interaction(
     message: str,
     assistant_text: str,
     skill_runs: list[ChatSkillRun],
-    team_activities: list[ChatTeamActivity],
     resume_tool_calls: list[dict] | None = None,
     assistant_tool_calls: list[ChatToolRun] | None = None,
-    scope: str = "leader",
+    scope: str = "single",
     chat_data: dict | None = None,
-    leader_system_prompt: str = "",
-    worker_member: dict | None = None,
-    worker_text: str = "",
-    worker_thinking: str = "",
-    worker_tool_calls: list[ChatToolRun] | None = None,
     run_id: str | None = None,
     persist: bool = True,
 ) -> PendingInteraction:
@@ -70,18 +62,11 @@ def _create_pending_interaction(
         assistant_text=assistant_text,
         assistant_tool_calls=assistant_tool_calls or [],
         skill_runs=skill_runs,
-        team_activities=team_activities,
         scope=scope,
         chat_data=chat_data,
-        leader_system_prompt=leader_system_prompt,
-        worker_member=worker_member,
-        worker_text=worker_text,
-        worker_thinking=worker_thinking,
-        worker_tool_calls=worker_tool_calls or [],
     )
     PENDING_INTERACTIONS[interaction.id] = interaction
     PENDING_AGENTS[interaction.id] = agent
-    activity = _find_team_activity(interaction.team_activities, interaction.agent_id)
     _record_run_event(
         session_id=interaction.session_id,
         event_type="HITL_REQUIRED",
@@ -89,7 +74,6 @@ def _create_pending_interaction(
         scope=interaction.scope,
         agent_id=interaction.agent_id,
         agent_name=interaction.agent_name,
-        team_activity_id=activity.id if activity else None,
         status="waiting",
         title=f"{interaction.scope.title()} human approval required",
         payload=_hitl_payload(interaction),
@@ -139,9 +123,6 @@ def _hitl_payload(interaction: PendingInteraction) -> dict:
         "runId": interaction.run_id,
         "toolCalls": interaction.tool_calls,
         "scope": interaction.scope,
-        "teamActivityId": _find_team_activity(interaction.team_activities, interaction.agent_id).id
-        if interaction.scope == "worker" and _find_team_activity(interaction.team_activities, interaction.agent_id)
-        else None,
         "createdAt": interaction.created_at,
     }
 

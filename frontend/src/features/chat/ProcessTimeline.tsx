@@ -27,6 +27,7 @@ export function AccordionProcessTimeline({
   defaultOpen,
   accordionKey,
   alwaysOpen = false,
+  replayStreamingOnMount = true,
 }: {
   items: ChatProcessItem[];
   autoScroll?: boolean;
@@ -36,6 +37,7 @@ export function AccordionProcessTimeline({
   defaultOpen: boolean;
   accordionKey: string;
   alwaysOpen?: boolean;
+  replayStreamingOnMount?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -43,7 +45,7 @@ export function AccordionProcessTimeline({
     () => items.map((item) => `${item.id}:${item.status}:${item.updatedAt}:${processItemContentLength(item)}`).join('|'),
     [items],
   );
-  const sequentialReveal = autoScroll && toAccordionStatus(status) === 'generating';
+  const sequentialReveal = replayStreamingOnMount && autoScroll && toAccordionStatus(status) === 'generating';
   const itemOrderSignature = useMemo(() => items.map((item) => item.id).join('|'), [items]);
   const [revealedItemCount, setRevealedItemCount] = useState(
     sequentialReveal ? Math.min(1, items.length) : items.length,
@@ -95,8 +97,9 @@ export function AccordionProcessTimeline({
       items.findIndex((source) => source.id === item.id) === items.length - 1,
       status,
       handleTextAnimationChange,
+      replayStreamingOnMount,
     ))
-    .filter((step): step is IAccordionProps => Boolean(step)), [handleTextAnimationChange, items, status, visibleItems]);
+    .filter((step): step is IAccordionProps => Boolean(step)), [handleTextAnimationChange, items, replayStreamingOnMount, status, visibleItems]);
 
   useLayoutEffect(() => {
     if (!autoScroll || !shouldStickToBottomRef.current) return;
@@ -159,12 +162,13 @@ function processItemToAccordionStep(
   isLast: boolean,
   processStatus: ChatDisplayStatus,
   onTextAnimationChange?: (itemId: string, isAnimating: boolean) => void,
+  replayStreamingOnMount = true,
 ): IAccordionProps | null {
   if (item.type === 'reasoning') {
-    return textStepFromProcessItem(item, 'Reasoning', <SparkTimeLine size={14} />, isLast, processStatus, onTextAnimationChange);
+    return textStepFromProcessItem(item, 'Reasoning', <SparkTimeLine size={14} />, isLast, processStatus, onTextAnimationChange, replayStreamingOnMount);
   }
   if (item.type === 'thinking') {
-    return textStepFromProcessItem(item, 'Thinking', <SparkDeepThinkLine size={14} />, isLast, processStatus, onTextAnimationChange);
+    return textStepFromProcessItem(item, 'Thinking', <SparkDeepThinkLine size={14} />, isLast, processStatus, onTextAnimationChange, replayStreamingOnMount);
   }
   if (item.type === 'tool') {
     const toolStatus = item.toolCall.status || item.status;
@@ -238,6 +242,7 @@ function textStepFromProcessItem(
   isLast: boolean,
   processStatus: ChatDisplayStatus,
   onTextAnimationChange?: (itemId: string, isAnimating: boolean) => void,
+  replayStreamingOnMount = true,
 ): IAccordionProps | null {
   if (!item.content.trim()) return null;
   const displayStatus = textItemDisplayStatus(item.status, processStatus, isLast);
@@ -259,6 +264,7 @@ function textStepFromProcessItem(
             content={item.content}
             streaming={isGenerating}
             onAnimationChange={(isAnimating) => onTextAnimationChange?.(item.id, isAnimating)}
+            animateStreamingOnMount={replayStreamingOnMount}
           />
         </div>
       </Accordion.BodyContent>
@@ -270,14 +276,17 @@ function StreamingProcessMarkdown({
   content,
   streaming,
   onAnimationChange,
+  animateStreamingOnMount,
 }: {
   content: string;
   streaming: boolean;
   onAnimationChange?: (isAnimating: boolean) => void;
+  animateStreamingOnMount: boolean;
 }) {
   const visible = useSmoothStreamingText(content, streaming, {
     charsPerSecond: 112,
     maxCharsPerFrame: 18,
+    animateStreamingOnMount,
   });
   useEffect(() => {
     onAnimationChange?.(visible.isAnimating);

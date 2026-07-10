@@ -3,7 +3,6 @@
 提供对话相关的 API 端点：
 - POST /api/chat/send                发送消息并通过 SSE 返回 Agent 事件流
 - POST /api/chat/resume              人工审批后恢复运行
-- POST /api/chat/team-worker-selection  预选 Team worker
 - GET  /api/chat/sessions            获取会话列表
 - GET  /api/chat/sessions/{id}/messages
 - DELETE /api/chat/sessions/{id}
@@ -16,7 +15,7 @@
   TOOL_CALL_START / TOOL_CALL_DELTA / TOOL_CALL_END
   TOOL_RESULT_START / TOOL_RESULT_TEXT_DELTA / TOOL_RESULT_END
 
-本模块对外重新导出 router 及向后兼容的符号（traces.py 依赖）。
+本模块对外重新导出 router 及路由共享模型。
 """
 
 from src.server.routes.chat.router import router
@@ -28,13 +27,10 @@ from src.server.routes.chat.models import (
     ChatSession,
     ChatSkillRun,
     ChatStore,
-    ChatTeamActivity,
     ChatTeamMemberPayload,
     ChatToolRun,
     PendingInteraction,
     StoredChatMessage,
-    TeamWorkerSelectionRequest,
-    TeamWorkerSelectionResponse,
 )
 from src.server.routes.chat.store import _load_store
 
@@ -46,12 +42,9 @@ __all__ = [
     "ChatSession",
     "ChatSkillRun",
     "ChatStore",
-    "ChatTeamActivity",
     "ChatTeamMemberPayload",
     "ChatToolRun",
     "PendingInteraction",
     "StoredChatMessage",
-    "TeamWorkerSelectionRequest",
-    "TeamWorkerSelectionResponse",
     "_load_store",
 ]

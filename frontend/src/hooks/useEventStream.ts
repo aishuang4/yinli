@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useRef, useState } from 'react';
-import { DISPLAY_BLOCKS, DISPLAY_EVENTS, type DisplayActor, type DisplayBlock, type DisplayItem, type DisplaySnapshot } from '../types/displayEvents';
+import { DISPLAY_BLOCKS, DISPLAY_EVENTS, type DisplayBlock, type DisplaySnapshot } from '../types/displayEvents';
 import type {
   ChatRunPlanState,
   ChatRunPlanStep,
@@ -25,6 +25,8 @@ import { notifySuccess } from '../utils/feedback';
 import { createId } from '../utils/id';
 import { subagentToolDataFromDisplayItem } from '../features/chat/subagentToolData';
 import type { SubagentTimelineItem } from '../types/subagent';
+import { applyTeamEvent, teamConsoleFromSnapshot } from '../features/team-runtime/teamEventReducer';
+import { EMPTY_TEAM_CONSOLE, type TeamConsoleState } from '../types/teamRuntime';
 
 export type { ChatRunPlanState, ChatRunPlanStep, DisplaySnapshot } from '../types/runState';
 
@@ -56,8 +58,8 @@ export interface StreamState {
   toolCalls: ToolCallInfo[];
   /** Skill 注入/应用列表 */
   skillCalls: SkillCallInfo[];
-  /** Team actor 视图数据，由 displaySnapshot.actors 派生 */
-  teamActors: TeamActorInfo[];
+  /** 与单 Agent DisplaySnapshot 完全隔离的 Team Console 状态。 */
+  teamConsole: TeamConsoleState;
   /** RunState 投影出的 Plan Mode 状态 */
   plans: ChatRunPlanState[];
   /** 单 Agent 主展示快照 */
@@ -127,36 +129,6 @@ export interface SkillCallInfo {
   status: 'running' | 'completed' | 'failed';
 }
 
-/** Team 执行主体信息 */
-export interface TeamActorInfo {
-  id: string;
-  agentId: string;
-  agentName: string;
-  role: string;
-  status: 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'skipped';
-  task: string;
-  assignment: string;
-  expectedOutput: string;
-  constraints: string;
-  detail: string;
-  output: string;
-  report: string;
-  skippedReason: string;
-  reportReviewStatus: string;
-  reportReviewNotes: string;
-  reportReviewGaps: string[];
-  thinking: string;
-  currentEvent: string;
-  items: DisplayItem[];
-  toolCalls: ToolCallInfo[];
-  executionMode: string;
-  dependsOn: string[];
-  waitReason: string;
-  dependencyOutputCount: number;
-  leaderContextCount: number;
-  createdAt: string;
-}
-
 /** 人机交互请求 */
 export interface HitlRequestInfo {
   interactionId: string;
@@ -165,8 +137,7 @@ export interface HitlRequestInfo {
   agentId: string;
   agentName: string;
   runId: string;
-  scope: 'leader' | 'worker';
-  teamActivityId: string | null;
+  scope: 'leader';
   replyId: string;
   toolCalls: Array<{
     id: string;
@@ -220,16 +191,12 @@ interface SendMessageOptions {
   agentName?: string;
   teamId?: string;
   teamName?: string;
-  workerSelectorPrompt?: string;
   teamMembers?: Array<{
     id?: string;
     agentId: string;
     name: string;
     role: string;
     description: string;
-    executionMode?: string;
-    dependsOn?: string[];
-    handoffPrompt?: string;
   }>;
   systemPrompt?: string;
   model?: string;
@@ -257,7 +224,7 @@ const INITIAL_STATE: StreamState = {
   thinkingContent: '',
   toolCalls: [],
   skillCalls: [],
-  teamActors: [],
+  teamConsole: EMPTY_TEAM_CONSOLE,
   plans: [],
   displaySnapshot: createEmptyDisplaySnapshot(),
   hitlRequests: [],
@@ -297,20 +264,12 @@ function markActiveToolCallsFailed(toolCalls: ToolCallInfo[]): ToolCallInfo[] {
   ));
 }
 
-function markActiveTeamToolCallsFailed(actors: TeamActorInfo[]): TeamActorInfo[] {
-  return actors.map((actor) => ({
-    ...actor,
-    toolCalls: markActiveToolCallsFailed(actor.toolCalls),
-  }));
-}
-
 function failStreamWithError(state: StreamState, error: string): StreamState {
   return {
     ...state,
     isStreaming: false,
     error,
     toolCalls: markActiveToolCallsFailed(state.toolCalls),
-    teamActors: markActiveTeamToolCallsFailed(state.teamActors),
     runCompletedAt: state.runCompletedAt || new Date().toISOString(),
   };
 }
@@ -333,7 +292,6 @@ function streamStateFromRunState(snapshot: ChatRunStateSnapshot): StreamState {
       agentName: String(approval.agentName || ''),
       runId: String(snapshot.runId || ''),
       scope: 'leader',
-      teamActivityId: null,
       replyId: '',
       toolCalls: (approval.toolCalls || []).map((toolCall) => ({
         id: String(toolCall.id || createId()),
@@ -360,7 +318,7 @@ function streamStateFromRunState(snapshot: ChatRunStateSnapshot): StreamState {
       ...tool,
       status: normalizeToolStatusForRun(tool.status, runStatus),
     })),
-    teamActors: displayState.teamActors,
+    teamConsole: teamConsoleFromSnapshot(snapshot.teamSnapshot),
     skillCalls: displayState.skillCalls,
     modelName: String(snapshot.modelName || ''),
     tokenUsage: snapshot.tokenUsage || null,
@@ -377,9 +335,12 @@ function applyRunStatePatch(state: StreamState, patch: ChatRunStatePatch): Strea
   const nextStatus = String(patch.status || '');
   const isTerminal = ['completed', 'failed', 'cancelled'].includes(nextStatus);
   const isWaiting = nextStatus === 'waiting';
-  const displaySnapshot = patch.displayEvent
+  const displaySnapshot = patchKind === 'display_event' && patch.displayEvent
     ? applyDisplayEvent(state.displaySnapshot, patch.displayEvent)
     : state.displaySnapshot;
+  const teamConsole = patchKind === 'team_event' && patch.teamEvent
+    ? applyTeamEvent(state.teamConsole, patch.teamEvent)
+    : state.teamConsole;
   const hasDisplaySnapshot = displaySnapshot.blocks.length > 0 || displaySnapshot.actors.length > 0;
   const displayState = deriveStateFromDisplaySnapshot(
     displaySnapshot,
@@ -405,7 +366,7 @@ function applyRunStatePatch(state: StreamState, patch: ChatRunStatePatch): Strea
     reasoningContent: hasDisplaySnapshot ? displayState.reasoningContent : state.reasoningContent,
     thinkingContent: hasDisplaySnapshot ? displayState.thinkingContent : state.thinkingContent,
     toolCalls,
-    teamActors: hasDisplaySnapshot ? displayState.teamActors : state.teamActors,
+    teamConsole,
     skillCalls: hasDisplaySnapshot
       ? displayState.skillCalls
       : state.skillCalls,
@@ -431,7 +392,6 @@ interface DisplayDerivedState {
   thinkingContent: string;
   finalAnswerContent: string;
   toolCalls: ToolCallInfo[];
-  teamActors: TeamActorInfo[];
   skillCalls: SkillCallInfo[];
   plans: ChatRunPlanState[];
   hitlRequests: HitlRequestInfo[];
@@ -471,7 +431,6 @@ function deriveStateFromDisplaySnapshot(
     thinkingContent,
     finalAnswerContent: answerBlock ? pickDisplayString(answerBlock.data, ['content', 'text']) : '',
     toolCalls,
-    teamActors: snapshot.mode === 'team' ? snapshot.actors.map(teamActorFromDisplayActor) : [],
     skillCalls,
     plans: snapshot.blocks
       .filter((block) => block.block === DISPLAY_BLOCKS.PLAN)
@@ -506,55 +465,6 @@ function toolCallFromDisplayItem(item: DisplayBlock['items'][number]): ToolCallI
     status: normalizeToolStatus(item.status || item.data.status),
     ...subagentToolDataFromDisplayItem(item),
   };
-}
-
-function teamActorFromDisplayActor(actor: DisplayActor): TeamActorInfo {
-  return {
-    id: actor.activityId || actor.id,
-    agentId: actor.agentId,
-    agentName: actor.agentName,
-    role: actor.role,
-    status: normalizeTeamActorStatus(actor.status),
-    task: actor.task,
-    assignment: actor.assignment,
-    expectedOutput: actor.expectedOutput,
-    constraints: actor.constraints,
-    detail: actor.detail,
-    output: actor.output,
-    report: actor.report,
-    skippedReason: actor.skippedReason,
-    reportReviewStatus: actor.reportReviewStatus,
-    reportReviewNotes: actor.reportReviewNotes,
-    reportReviewGaps: actor.reportReviewGaps,
-    thinking: actor.items
-      .filter((item) => item.event === DISPLAY_EVENTS.THINKING_DELTA)
-      .map((item) => pickDisplayString(item.data, ['text', 'content', 'delta']))
-      .join('\n\n'),
-    currentEvent: actor.detail,
-    items: actor.items,
-    toolCalls: actor.items
-      .filter((item) => item.event.startsWith('tool.') || item.targetId.startsWith('tool'))
-      .map(toolCallFromDisplayItem),
-    executionMode: actor.executionMode,
-    dependsOn: actor.dependsOn,
-    waitReason: actor.waitReason,
-    dependencyOutputCount: actor.dependencyOutputCount,
-    leaderContextCount: actor.leaderContextCount,
-    createdAt: actor.createdAt,
-  };
-}
-
-function normalizeTeamActorStatus(status: string): TeamActorInfo['status'] {
-  if (
-    status === 'running' ||
-    status === 'waiting' ||
-    status === 'completed' ||
-    status === 'failed' ||
-    status === 'skipped'
-  ) {
-    return status;
-  }
-  return 'pending';
 }
 
 function skillCallFromDisplayItem(item: DisplayBlock['items'][number]): SkillCallInfo {
@@ -664,7 +574,6 @@ function hitlRequestFromApprovalContext(
     agentName: String(approval.agentName || ''),
     runId,
     scope: 'leader',
-    teamActivityId: null,
     replyId: '',
     toolCalls: (approval.toolCalls || []).map((toolCall) => ({
       id: String(toolCall.id || createId()),
@@ -754,6 +663,44 @@ export function useEventStream(): UseEventStreamReturn {
   const [state, setState] = useState<StreamState>(INITIAL_STATE);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  /** 处理 RunState 协议事件，Team 事件由独立的 teamEventReducer 投影。 */
+  const handleEvent = useCallback((event: SSEEvent) => {
+    if (event.type === 'RUN_STATE_PATCH') {
+      const patch = event.data as unknown as ChatRunStatePatch;
+      if (patch.kind === 'notice' && patch.notice?.type === 'MEMORY_SKILL_GENERATING') {
+        notifySuccess(patch.notice.message || 'Skills 生成中');
+      }
+    }
+    setState((prev) => {
+      switch (event.type) {
+        case 'RUN_STATE':
+          return streamStateFromRunState(event.data as unknown as ChatRunStateSnapshot);
+
+        case 'RUN_STATE_PATCH':
+          return applyRunStatePatch(prev, event.data as unknown as ChatRunStatePatch);
+
+        case 'ERROR':
+          return {
+            ...prev,
+            isStreaming: false,
+            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
+            error: (event.data.message as string) || 'Unknown error',
+          };
+
+        case 'RUN_CANCELLED':
+          return {
+            ...prev,
+            isStreaming: false,
+            runCompletedAt: String(event.data.completed_at || event.data.completedAt || new Date().toISOString()),
+            error: '用户已停止本轮执行。',
+          };
+
+        default:
+          return prev;
+      }
+    });
+  }, []);
+
   const readEventStream = useCallback(async (response: Response) => {
     if (!response.body) {
       throw new Error('Response body is null');
@@ -779,7 +726,7 @@ export function useEventStream(): UseEventStreamReturn {
         }
       }
     }
-  }, []);
+  }, [handleEvent]);
 
   /** 重置状态到初始值 */
   const reset = useCallback(() => {
@@ -886,7 +833,6 @@ export function useEventStream(): UseEventStreamReturn {
             agent_name: options?.agentName,
             team_id: options?.teamId,
             team_name: options?.teamName,
-            workerSelectorPrompt: options?.workerSelectorPrompt,
             team_members: options?.teamMembers,
             system_prompt: options?.systemPrompt,
             model: options?.model,
@@ -1009,54 +955,6 @@ export function useEventStream(): UseEventStreamReturn {
       console.warn('[SSE] Failed to parse event data:', dataStr);
       return null;
     }
-  }
-
-  /**
-   * 处理单个 SSE 事件。
-   *
-   * 主链路只处理 RUN_STATE / RUN_STATE_PATCH。
-   * 旧 raw SSE 仅进入后端 RunState 投影和 Trace，不再直接驱动 Chat UI。
-   *
-   * 遵循 rerender-functional-setstate 规则：
-   * 使用函数式 setState 确保基于最新状态更新
-   */
-  function handleEvent(event: SSEEvent) {
-    if (event.type === 'RUN_STATE_PATCH') {
-      notifyRunStateNotice(event.data as unknown as ChatRunStatePatch);
-    }
-    setState((prev) => {
-      switch (event.type) {
-        case 'RUN_STATE':
-          return streamStateFromRunState(event.data as unknown as ChatRunStateSnapshot);
-
-        case 'RUN_STATE_PATCH':
-          return applyRunStatePatch(prev, event.data as unknown as ChatRunStatePatch);
-
-        case 'ERROR':
-          return {
-            ...prev,
-            isStreaming: false,
-            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
-            error: (event.data.message as string) || 'Unknown error',
-          };
-
-        case 'RUN_CANCELLED':
-          return {
-            ...prev,
-            isStreaming: false,
-            runCompletedAt: String(event.data.completed_at || event.data.completedAt || new Date().toISOString()),
-            error: '用户已停止本轮执行。',
-          };
-
-        default:
-          return prev;
-      }
-    });
-  }
-
-  function notifyRunStateNotice(patch: ChatRunStatePatch) {
-    if (patch.kind !== 'notice' || patch.notice?.type !== 'MEMORY_SKILL_GENERATING') return;
-    notifySuccess(patch.notice.message || 'Skills 生成中');
   }
 
   return { state, sendMessage, resumeInteraction, subscribeRun, abort, reset };

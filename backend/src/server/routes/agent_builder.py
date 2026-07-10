@@ -27,7 +27,7 @@ from src.server.routes.teams import TeamCreate, TeamRecord, create_team
 router = APIRouter()
 
 BuilderMode = Literal["agents", "team"]
-BuilderAgentRole = Literal["leader", "worker"]
+BuilderAgentRole = Literal["leader", "member"]
 
 
 class BuilderPlanRequest(BaseModel):
@@ -54,7 +54,7 @@ class BuilderAgentDraft(BaseModel):
 
     temp_id: str = Field(default_factory=lambda: f"draft-{uuid.uuid4().hex}", alias="tempId")
     name: str
-    role: BuilderAgentRole = "worker"
+    role: BuilderAgentRole = "member"
     description: str = ""
     system_prompt: str = Field(default="", alias="systemPrompt")
     model_config_data: ModelConfig = Field(default_factory=ModelConfig, alias="modelConfig")
@@ -152,7 +152,7 @@ async def apply_agent_team(data: BuilderApplyRequest) -> BuilderApplyResponse:
     created_team: TeamRecord | None = None
     if data.plan.mode == "team" and data.plan.team and created_agents:
         leader_draft = next((item for item in data.plan.agents if item.role == "leader"), data.plan.agents[0])
-        worker_drafts = [
+        member_drafts = [
             item
             for item in data.plan.agents
             if item.temp_id != leader_draft.temp_id
@@ -161,9 +161,9 @@ async def apply_agent_team(data: BuilderApplyRequest) -> BuilderApplyResponse:
             name=data.plan.team.name,
             description=data.plan.team.description,
             leaderAgentId=temp_to_agent_id[leader_draft.temp_id],
-            workerAgentIds=[
+            memberAgentIds=[
                 temp_to_agent_id[item.temp_id]
-                for item in worker_drafts
+                for item in member_drafts
                 if item.temp_id in temp_to_agent_id
             ],
         ))
@@ -190,7 +190,7 @@ async def _generate_plan_with_model(data: BuilderPlanRequest) -> dict:
         "{",
         '  "team": {"name": "...", "description": "..."},',
         '  "agents": [',
-        '    {"name": "...", "role": "leader|worker", "description": "...", "systemPrompt": "...",',
+        '    {"name": "...", "role": "leader|member", "description": "...", "systemPrompt": "...",',
         '     "recommendedTools": ["tool name"], "recommendedSkills": ["skill name"],',
         '     "missingTools": ["..."], "missingSkills": ["..."], "tags": ["..."]}',
         "  ],",
@@ -202,7 +202,7 @@ async def _generate_plan_with_model(data: BuilderPlanRequest) -> dict:
         f"Requirement:\n{data.requirement}",
         f"Available MCP tools:\n{available_tools or '(none)'}",
         f"Available Skills:\n{available_skills or '(none)'}",
-        "For team mode, generate 1 leader and 2-4 workers.",
+        "For team mode, generate 1 leader and 2-4 role-material members.",
         "For agents mode, generate standalone Agents only. Do not create a Team.",
     ])
     runtime_settings = get_effective_model_settings()
@@ -237,9 +237,9 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
             continue
         role = item.get("role")
         if data.mode == "agents":
-            role = "worker"
-        if role not in {"leader", "worker"}:
-            role = "leader" if index == 0 and data.mode == "team" else "worker"
+            role = "member"
+        if role not in {"leader", "member"}:
+            role = "leader" if index == 0 and data.mode == "team" else "member"
 
         tool_names = _as_string_list(item.get("recommendedTools") or item.get("tools"))
         skill_names = _as_string_list(item.get("recommendedSkills") or item.get("skills"))
@@ -248,7 +248,7 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
         missing_tools.extend(_as_string_list(item.get("missingTools")))
         missing_skills.extend(_as_string_list(item.get("missingSkills")))
 
-        name = str(item.get("name") or ("Team Leader" if role == "leader" else f"Worker {index + 1}")).strip()
+        name = str(item.get("name") or ("Team Leader" if role == "leader" else f"Member {index + 1}")).strip()
         description = str(item.get("description") or "").strip()
         runtime_settings = get_effective_model_settings()
         draft = BuilderAgentDraft(
@@ -276,7 +276,7 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
         return _normalize_plan(data, _heuristic_plan(data))
 
     if data.mode == "agents":
-        drafts = [draft.model_copy(update={"role": "worker"}) for draft in drafts]
+        drafts = [draft.model_copy(update={"role": "member"}) for draft in drafts]
         team_raw = {}
 
     if data.mode == "team" and not any(item.role == "leader" for item in drafts):
@@ -313,7 +313,7 @@ def _heuristic_plan(data: BuilderPlanRequest) -> dict:
             "agents": [
                 {
                     "name": _make_title(requirement, "需求处理 Agent"),
-                    "role": "worker",
+                    "role": "member",
                     "description": "根据用户需求完成分析、执行和总结。",
                     "systemPrompt": _default_agent_prompt("需求处理 Agent", requirement),
                     "recommendedTools": _guess_tool_names(requirement),
@@ -335,15 +335,15 @@ def _heuristic_plan(data: BuilderPlanRequest) -> dict:
             {
                 "name": "Team Leader",
                 "role": "leader",
-                "description": "拆解任务、调度 Worker 并汇总最终结果。",
-                "systemPrompt": _default_agent_prompt("Team Leader", "Coordinate workers and synthesize the final answer."),
+                "description": "为每轮目标动态组建 Member、拆解任务并综合最终结果。",
+                "systemPrompt": _default_agent_prompt("Team Leader", "Create temporary members and synthesize the final answer."),
                 "recommendedTools": [],
                 "recommendedSkills": [],
                 "tags": ["leader", "auto-built"],
             },
             {
                 "name": "需求分析 Agent",
-                "role": "worker",
+                "role": "member",
                 "description": "分析需求目标、约束和验收标准。",
                 "systemPrompt": _default_agent_prompt("需求分析 Agent", "Analyze requirements, constraints, and acceptance criteria."),
                 "recommendedTools": _guess_tool_names(requirement),
@@ -352,7 +352,7 @@ def _heuristic_plan(data: BuilderPlanRequest) -> dict:
             },
             {
                 "name": "执行实现 Agent",
-                "role": "worker",
+                "role": "member",
                 "description": "设计执行步骤，必要时使用工具完成实现。",
                 "systemPrompt": _default_agent_prompt("执行实现 Agent", "Design and execute implementation steps with available tools."),
                 "recommendedTools": _guess_tool_names(requirement),
@@ -361,7 +361,7 @@ def _heuristic_plan(data: BuilderPlanRequest) -> dict:
             },
             {
                 "name": "验证评审 Agent",
-                "role": "worker",
+                "role": "member",
                 "description": "验证结果、发现风险并给出改进建议。",
                 "systemPrompt": _default_agent_prompt("验证评审 Agent", "Validate output, identify risks, and suggest improvements."),
                 "recommendedTools": _guess_tool_names(requirement),

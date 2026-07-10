@@ -65,7 +65,7 @@ export function TraceListSidebar({
                 </Tag>
                 <Tag size="small" color="transparent">{trace.messageCount} 消息</Tag>
                 <Tag size="small" color="transparent">{trace.toolCallCount} 工具</Tag>
-                {trace.workerCount > 0 && <Tag size="small" color="transparent">{trace.workerCount} Worker</Tag>}
+                {trace.memberCount > 0 && <Tag size="small" color="transparent">{trace.memberCount} Member</Tag>}
               </div>
             </button>
           ))}

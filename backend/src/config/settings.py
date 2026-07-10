@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # === 数据库 ===
     database_url: str = "sqlite+aiosqlite:///./data/agent_workstation.db"
 
+    # === Team Runtime 文件保留 ===
+    team_run_retention_days: int = 30
+    team_run_max_records: int = 200
+
     # === CORS ===
     cors_origins: list[str] = [
         "http://localhost:5173",  # Vite dev server

@@ -106,11 +106,11 @@ def _append_assistant_message(
     thinking: str = "",
     skill_calls: list | None = None,
     tool_calls: list | None = None,
-    team_activities: list | None = None,
     model_caches: list | None = None,
     runtime_events: list[dict] | None = None,
     plan_runs: list | None = None,
     display_snapshot: dict | None = None,
+    team_snapshot: dict | None = None,
     clarification_requests: list[dict] | None = None,
     clarification_resolved: bool = False,
 ) -> None:
@@ -118,7 +118,7 @@ def _append_assistant_message(
     now = datetime.now(timezone.utc).isoformat()
     store = _load_store()
     messages = store.messages.setdefault(session_id, [])
-    _ = skill_calls, tool_calls, team_activities, model_caches, runtime_events, plan_runs
+    _ = skill_calls, tool_calls, model_caches, runtime_events, plan_runs
     messages.append(StoredChatMessage(
         id=uuid.uuid4().hex,
         role="assistant",
@@ -130,11 +130,11 @@ def _append_assistant_message(
         thinking=thinking,
         tool_calls=[],
         skill_calls=[],
-        team_activities=[],
         model_caches=[],
         runtime_events=[],
         plan_runs=[],
         display_snapshot=display_snapshot or {"version": 3, "mode": "single_agent", "actors": [], "blocks": []},
+        team_snapshot=team_snapshot,
         clarification_requests=clarification_requests or [],
         clarification_resolved=clarification_resolved,
         created_at=now,
@@ -164,6 +164,26 @@ def _update_latest_assistant_display_snapshot(
         if min_created_at and message.created_at < min_created_at:
             return
         message.display_snapshot = display_snapshot
+        _save_store(store)
+        return
+
+
+def _update_latest_assistant_team_snapshot(
+    *,
+    session_id: str,
+    team_snapshot: dict,
+    min_created_at: str = "",
+) -> None:
+    """把当前 TeamRun 快照写回本轮 Assistant 消息。"""
+
+    store = _load_store()
+    messages = store.messages.get(session_id) or []
+    for message in reversed(messages):
+        if message.role != "assistant":
+            continue
+        if min_created_at and message.created_at < min_created_at:
+            return
+        message.team_snapshot = team_snapshot
         _save_store(store)
         return
 

@@ -22,8 +22,8 @@ export interface RunSummary {
   activeActors: string[];
   resultPreview: string;
   resultLength: number;
-  workerTotal: number;
-  workerCompleted: number;
+  memberTotal: number;
+  memberCompleted: number;
 }
 
 export interface RunDetail extends RunSummary {

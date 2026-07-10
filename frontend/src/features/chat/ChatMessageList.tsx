@@ -6,18 +6,15 @@ import type {
   SkillCallInfo,
   ToolCallInfo,
 } from '../../hooks/useEventStream';
+import { Loader2, Users } from 'lucide-react';
 import { MessageImages, StreamingPlaceholder } from './MessageAtoms';
 import type { LocalMessage } from './types';
+import type { TeamConsoleState } from '../../types/teamRuntime';
 import { ChatDisplayRenderer } from './ChatDisplayRenderer';
 import { MessageFrame } from './MessageFrame';
 import { buildLiveChatDisplayMessage, buildStoredChatDisplayMessage } from './chatDisplayProjector';
 
 type ResolveHitl = (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
-
-type TeamSelectionProps = {
-  selectedTeamActorId: string | null;
-  onSelectTeamActor: (id: string) => void;
-};
 
 type ClarificationSubmitProps = {
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
@@ -25,12 +22,10 @@ type ClarificationSubmitProps = {
 
 export function MessageBubble({
   message,
-  selectedTeamActorId,
-  onSelectTeamActor,
   onSubmitClarification,
 }: {
   message: LocalMessage;
-} & TeamSelectionProps & ClarificationSubmitProps) {
+} & ClarificationSubmitProps) {
   if (message.role === 'user') {
     return <UserMessageBubble message={message} />;
   }
@@ -38,8 +33,6 @@ export function MessageBubble({
   return (
       <SingleAgentMessageBubble
         message={message}
-        selectedTeamActorId={selectedTeamActorId}
-        onSelectTeamActor={onSelectTeamActor}
         onSubmitClarification={onSubmitClarification}
       />
   );
@@ -58,12 +51,10 @@ function UserMessageBubble({ message }: { message: LocalMessage }) {
 
 function SingleAgentMessageBubble({
   message,
-  selectedTeamActorId,
-  onSelectTeamActor,
   onSubmitClarification,
 }: {
   message: LocalMessage;
-} & TeamSelectionProps & ClarificationSubmitProps) {
+} & ClarificationSubmitProps) {
   const displayMessage = buildStoredChatDisplayMessage(message);
 
   return (
@@ -76,8 +67,6 @@ function SingleAgentMessageBubble({
         toolbarCreatedAt={message.createdAt || new Date().toISOString()}
         showToolbar={Boolean(displayMessage.finalAnswer) && !displayMessage.blocks.some((block) => block.type === 'human_feedback')}
         onSubmitClarification={onSubmitClarification}
-        selectedTeamActorId={selectedTeamActorId}
-        onSelectTeamActor={onSelectTeamActor}
       />
     </MessageFrame>
   );
@@ -91,14 +80,13 @@ export function StreamingBubble({
   finalAnswerContent,
   thinkingContent,
   displaySnapshot,
+  teamConsole,
   skillCalls,
   hitlRequests,
   clarificationRequests,
   plans,
   onSubmitClarification,
   onResolveHitl,
-  selectedTeamActorId,
-  onSelectTeamActor,
   onFinalAnswerAnimationChange,
   toolCalls,
   modelName,
@@ -114,14 +102,13 @@ export function StreamingBubble({
   finalAnswerContent: string;
   thinkingContent: string;
   displaySnapshot: DisplaySnapshot;
+  teamConsole: TeamConsoleState;
   skillCalls: SkillCallInfo[];
   hitlRequests: HitlRequestInfo[];
   clarificationRequests: ClarificationRequestInfo[];
   plans: ChatRunPlanState[];
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
   onResolveHitl: ResolveHitl;
-  selectedTeamActorId: string | null;
-  onSelectTeamActor: (id: string) => void;
   onFinalAnswerAnimationChange?: (isAnimating: boolean) => void;
   toolCalls: ToolCallInfo[];
   modelName: string;
@@ -141,7 +128,7 @@ export function StreamingBubble({
     thinkingContent,
     toolCalls,
     skillCalls,
-    teamActors: [],
+    teamConsole,
     plans,
     displaySnapshot,
     hitlRequests,
@@ -160,15 +147,44 @@ export function StreamingBubble({
         showToolbar={Boolean(displayMessage.finalAnswer)}
         onSubmitClarification={onSubmitClarification}
         onResolveHitl={onResolveHitl}
-        selectedTeamActorId={selectedTeamActorId}
-        onSelectTeamActor={onSelectTeamActor}
         animateStreamingText
         onFinalAnswerAnimationChange={onFinalAnswerAnimationChange}
       />
 
       {displayMessage.blocks.length === 0 && (
-        <StreamingPlaceholder modelName={modelName} />
+        teamConsole.snapshot
+          ? <TeamStreamingPlaceholder state={teamConsole} />
+          : <StreamingPlaceholder modelName={modelName} />
       )}
     </MessageFrame>
+  );
+}
+
+function TeamStreamingPlaceholder({ state }: { state: TeamConsoleState }) {
+  const snapshot = state.snapshot;
+  if (!snapshot) return null;
+  const phase = ({
+    created: '正在创建 TeamRun',
+    coordinating: 'Leader 正在组建团队',
+    executing: '成员正在执行共享任务',
+    synthesizing: 'Leader 正在综合协作结果',
+    completed: 'TeamRun 已完成',
+    failed: 'TeamRun 执行失败',
+    cancelled: 'TeamRun 已取消',
+  } as Record<string, string>)[snapshot.run.phase] || 'Team 正在协作';
+  const active = snapshot.run.status === 'running';
+
+  return (
+    <div className="flex min-h-20 items-center gap-3 border-l-2 border-[var(--color-accent)] px-4 py-3">
+      {active
+        ? <Loader2 size={16} className="shrink-0 animate-spin text-[var(--color-accent)]" />
+        : <Users size={16} className="shrink-0 text-[var(--color-accent)]" />}
+      <div className="min-w-0">
+        <div className="text-sm font-medium text-[var(--color-text-primary)]">{phase}</div>
+        <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+          {snapshot.counts.succeeded}/{snapshot.counts.tasks} 个任务已完成 · {snapshot.counts.members} 名成员
+        </div>
+      </div>
+    </div>
   );
 }

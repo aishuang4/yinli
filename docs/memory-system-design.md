@@ -81,7 +81,7 @@
 - 不直接复用旧 `memory_facts` / `memory_events` / `memory_candidates` 表作为新语义源。
 - 不把所有历史消息当成长记忆。
 - 不让模型静默写入长期记忆。
-- 不把记忆能力塞进 `intent_router.py`，也不让记忆系统决定 Runtime architecture 或 Team Worker 选择。
+- 不把记忆能力塞进 `intent_router.py`，也不让记忆系统决定 Runtime architecture 或 Team Member 组建。
 - 不新增 `memory` runtime.kind，也不恢复旧 Plan / Subagent 式分支；记忆只能作为 ReAct 周边增强能力存在。
 
 ## 产品语义
@@ -368,7 +368,7 @@ Skill 草稿必须正确抽象上下文依赖，禁止硬编码本轮具体返�
 首版以历史记忆、三类 Markdown 记忆和 Skill 自进化产物为主，同时在 schema 和 UI 筛选上预留扩展：
 
 - **Project / Workspace 记忆**：记录某个项目或工作区的架构事实、命令、流程和禁用规则。
-- **Team 记忆**：记录 Team 协作模式、Worker 组合和 Leader 分派经验，后续可辅助 Worker Selector。
+- **Team 记忆**：记录 Team 协作模式、临时 Member 角色组合和 Leader 分派经验，后续可作为 Leader 动态组队的参考材料。
 - **Tool 使用记忆**：记录 MCP / HTTP / Bash / Skill 的使用经验、失败原因和参数模板，但必须脱敏。
 - **Artifact 记忆**：索引可复用产物、模板、报告和脚本，后续与 `ARTIFACT_*` 生命周期联动。
 
@@ -983,7 +983,7 @@ Skill 自进化生成记录表。最终产物必须注册为标准 Skill；本�
 - 是否启用记忆。
 - 单轮最大注入条数。
 - 单轮最大注入 token budget。
-- Team Worker 运行前按 single agent 同策略注入记忆。
+- Team 临时 Member session 运行前按 single agent 同策略注入本轮已解析记忆。
 - 自动写入最低置信度。
 
 ## 运行时接入点
@@ -1004,7 +1004,7 @@ Skill 自进化生成记录表。最终产物必须注册为标准 Skill；本�
 
 - 单 Agent：注入主 Agent system prompt 的独立 `Memory` 段落。
 - Team Leader：注入 Leader system prompt 的独立 `Memory` 段落。
-- Team Worker：按 single agent 同策略注入 Worker system prompt；使用该 Worker 的 `agent_id` 读取 agent Markdown 记忆，同时共享 user / global Markdown 摘要和最近历史记忆索引。Worker 需要详情时仍通过 `memory_node_tree` / `memory_node_query` 主动查询。
+- Team 临时 Member：按 single agent 同策略注入动态 Member system prompt；使用本轮 Team Leader 已解析的 user / agent / global Markdown 摘要和最近历史记忆索引，需要详情时仍通过 `memory_node_tree` / `memory_node_query` 主动查询。
 
 注入格式必须短、可溯源、可覆盖：
 
@@ -1046,7 +1046,7 @@ Agent 迭代记忆通过 `AgentIterationHook` 和 `agent_memory_note` tool 生�
 - 这个 Agent 暴露出需要避免的能力边界。
 - 用户希望这个 Agent 以后保持某种 persona、语气或交付标准。
 
-Agent memory 默认只注入给对应 Agent；Team 场景中 Leader 和 Worker 分别只读取自己的 agent memory。
+Agent memory 默认只注入给对应 Agent；Team 临时 Member 使用本轮 Leader 解析后的记忆上下文，不把模板角色误当成持久 Agent session。
 
 ### Skill 自进化
 
@@ -1264,7 +1264,7 @@ Memory 页面主入口只使用唯一 user / global 的 canonical 路由，不�
 - 用户本轮明确指令优先于旧记忆。
 - 低置信、敏感、一次性内容不会写入长期节点或 Markdown 记忆。
 - 自动写入失败不影响 Chat Run 完成。
-- Team Worker 按 single agent 同策略注入记忆，且不能跨 Project / Workspace 泄漏。
+- Team 临时 Member 按 single agent 同策略注入本轮记忆，且不能跨 Project / Workspace 泄漏。
 - 删除或禁用记忆后不会再被注入。
 - RunState 刷新恢复不会重复展示“已更新记忆”提示。
 - MVP 不从旧表迁移 active memory。

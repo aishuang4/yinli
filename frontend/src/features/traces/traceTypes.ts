@@ -2,7 +2,7 @@
  * traceTypes — 运行轨迹页面类型定义。
  */
 
-import type { TeamActorInfo, ToolCallInfo } from '../../hooks/useEventStream';
+import type { ToolCallInfo } from '../../hooks/useEventStream';
 
 export interface TraceSummary {
   id: string;
@@ -13,7 +13,7 @@ export interface TraceSummary {
   teamName: string | null;
   messageCount: number;
   toolCallCount: number;
-  workerCount: number;
+  memberCount: number;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -28,7 +28,6 @@ export interface TraceMessage {
   modelName: string | null;
   error: string | null;
   toolCalls: ToolCallInfo[];
-  teamActivities: TeamActorInfo[];
   createdAt: string;
 }
 
@@ -39,7 +38,6 @@ export interface TraceEvent {
   scope: string;
   agentId: string | null;
   agentName: string | null;
-  teamActivityId: string | null;
   status: string;
   title: string;
   content: string;

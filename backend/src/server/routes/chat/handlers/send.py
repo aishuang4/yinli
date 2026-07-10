@@ -92,7 +92,6 @@ async def start_chat_run(data: ChatMessage):
                 model_name=ctx.model_name,
                 assistant_error=assistant_error,
                 skill_runs=ctx.skill_runs,
-                team_activities=ctx.team_activities,
             ):
                 yield failure_event
             return

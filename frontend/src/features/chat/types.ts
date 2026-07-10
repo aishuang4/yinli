@@ -1,4 +1,5 @@
 import type { ClarificationRequestInfo, DisplaySnapshot } from '../../hooks/useEventStream';
+import type { TeamSnapshot } from '../../types/teamRuntime';
 
 /** 本地消息记录 */
 export interface LocalMessage {
@@ -13,6 +14,8 @@ export interface LocalMessage {
   processCompletedAt?: string;
   /** 后端投影后的消息展示快照 */
   displaySnapshot?: DisplaySnapshot;
+  /** Team Runtime 独立历史快照。 */
+  teamSnapshot?: TeamSnapshot;
   /** 思考链内容（仅 assistant 消息） */
   thinking?: string;
   /** ReAct 过程文本（仅本地 live run 收口消息） */
@@ -42,13 +45,6 @@ export interface ChatImageAttachment extends ChatImagePayload {
   previewUrl: string;
 }
 
-export interface PendingTeamSelection {
-  message: string;
-  images: ChatImagePayload[];
-  selectedAgentIds: string[];
-  reason: string;
-}
-
 export interface ChatSession {
   id: string;
   title: string;
@@ -73,6 +69,8 @@ export interface StoredChatMessage {
   images: ChatImagePayload[];
   displaySnapshot?: DisplaySnapshot;
   display_snapshot?: DisplaySnapshot;
+  teamSnapshot?: TeamSnapshot;
+  team_snapshot?: TeamSnapshot;
   clarificationRequests?: ClarificationRequestInfo[];
   clarification_requests?: ClarificationRequestInfo[];
   clarificationResolved?: boolean;

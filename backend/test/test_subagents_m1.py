@@ -679,7 +679,6 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
         message="Fix the file.",
         assistant_text="",
         skill_runs=[],
-        team_activities=[],
         scope="subagent",
         chat_data={
             "invocationId": invocation["id"],
@@ -706,7 +705,6 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
         "message": "Fix the file.",
         "stream_scope": "single",
         "skill_runs": [],
-        "team_activities": [],
         "plan_mode_manager": None,
         "runtime_event_sources": [],
     }

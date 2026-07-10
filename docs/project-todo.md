@@ -1,14 +1,14 @@
 # Agent Workstation TODO
 
-> 最后更新：2026-07-08
+> 最后更新：2026-07-10
 >
 > 本文件只保留当前仍有效的任务。已完成事项归档到 `docs/project-progress-handoff.md` 和 `docs/architecture-overview.md`，旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线，相关历史 TODO 已清理。
 
 ## P0. Chat Runtime 收尾
 
 - [ ] 让 `resume.py` 继续复用 `leader_stream.py`、`completion.py`、`orchestration.py`，减少 resume 和 send 行为分叉。
-- [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor、Team worker 选择和 toolScope 摘要。
-- [ ] 补齐 RunState / DisplaySnapshot 的回归矩阵，覆盖 Team、Plan Mode finalized、HITL、clarification、工具失败和取消。
+- [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor 和 toolScope 摘要。
+- [ ] 补齐 RunState / DisplaySnapshot 与独立 TeamSnapshot 的回归矩阵，覆盖 Plan Mode finalized、HITL、clarification、工具失败和取消。
 - [ ] 检查历史消息回放路径，确保新消息优先读取 `displaySnapshot`，旧消息只按 `content` 和兼容字段降级展示。
 
 ## P1. Plan Mode 后续
@@ -18,12 +18,11 @@
 - [ ] 保持 Plan Mode 只支持 `single_agent`，Team 场景继续禁止注入 Plan 控制工具。
 - [ ] 如需审批流，必须重新设计生命周期、持久化、RunState 和前端入口，不复用旧 approve / deny 字段。
 
-## P2. Team Runtime 与 HITL
+## P2. Team Runtime
 
-- [ ] 继续验证 Worker HITL resume 与 Leader HITL resume 的状态一致性。
-- [ ] 在 Team 展示中进一步区分 worker `output` 与正式 `report`，避免 Leader 上下文和前端过程日志混淆。
-- [ ] 为 Worker selector 增加更多模型输出解析失败回归用例。
-- [ ] 评估 Team 动态编排是否纳入 Workflow / Dynamic Workflows，而不是恢复旧 Team Plan 路线。
+- [ ] 增加 Team Mailbox API 与综合阶段并发投递的端到端测试。
+- [ ] 增加 Team Console 的 Playwright 回归，覆盖第二轮清空、成员切换不重放和用户主动发信。
+- [ ] 评估 Team 动态编排是否纳入 Workflow / Dynamic Workflows，但不得恢复旧 Team Plan 路线。
 
 ## P2.5. Subagent 委托能力
 

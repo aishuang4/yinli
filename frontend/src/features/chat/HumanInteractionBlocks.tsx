@@ -61,7 +61,7 @@ export function HitlApprovalBlock({
           <span>{isExternal ? '等待外部执行结果' : '等待人工确认'}</span>
         </div>
         <Tag size="small" color="transparent">
-          {request.scope === 'worker' ? 'Worker' : 'Leader'} · {request.agentName}
+          Leader · {request.agentName}
         </Tag>
       </div>
       <div className="space-y-2 px-3 pb-3">

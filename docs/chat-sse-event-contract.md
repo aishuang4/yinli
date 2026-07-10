@@ -9,7 +9,7 @@
 - 前端只消费本文档列出的稳定事件；调试类或 trace 类事件应进入 `run_events`，不要直接驱动 Chat UI。
 - 应用级状态统一通过 `RUNTIME_EVENT` 表达。AgentScope 原始事件只负责流式文本、思考和底层调试，不承载业务状态。
 - Chat 主界面应逐步迁移到 `RunState` 中间层；原始 SSE 事件保留为兼容增量和 Trace 输入，不再作为长期 UI 状态的唯一来源。
-- 新增 Chat UI 功能只能依赖 RunState 字段；不得新增对 `TEXT_BLOCK_DELTA`、`TOOL_*`、`TEAM_ACTIVITY`、`TEAM_MEMBER_EVENT` 等 raw SSE 分支的主链路依赖。
+- 新增 Chat UI 功能只能依赖 RunState 字段；Team UI 只能依赖独立 `teamSnapshot` / `teamEvent`，不得读取单 Agent 展示快照。
 - 当前前端 live handler 只消费 `RUN_STATE`、`RUN_STATE_PATCH`、`ERROR`、`RUN_CANCELLED`；其他 raw SSE 只允许后端投影器、Trace 或调试入口消费。
 - 新功能必须定义独立 Runtime Event 家族，不允许混用其他功能事件。例如后续重设计记忆时使用新的 `MEMORY_*` 语义，产物使用 `ARTIFACT_*`，沙箱使用 `SANDBOX_*`。
 - 记忆模块的详细过程审计使用 `run_events.event_type=MEMORY_AUDIT`，不作为 Chat SSE 事件发送，不驱动 Chat 页面过程展示。
@@ -31,7 +31,7 @@
 - `/api/chat/resume` 保留原始 SSE 兼容入口；新前端不应再用它驱动 Chat 主状态。
 - Runtime 执行入口只负责构建 `ChatRunContext`、输出起始事件和启动校验。
 - `runtime_dispatcher.execute_chat_runtime()` 只按第一层 `runtime.kind` 分发。当前仅 `react` 在线；信息不足时由主 Agent 在 Runtime 内调用 `AskUser`，通过 AgentScope `RequireExternalExecutionEvent` 暂停。
-- `react_runtime.execute_react_runtime()` 是 ReAct 唯一执行入口。它先读取第二层 `executor.kind`：`single_agent` 直接进入主 Agent，`team` 先运行 Worker，再把 Worker 输出拼入 Leader 上下文。
+- `react_runtime.execute_react_runtime()` 是 ReAct 唯一执行入口。它先读取第二层 `executor.kind`：`single_agent` 直接进入主 Agent，`team` 委托独立 `TeamRunService`，由 Leader 动态组队、Member 隔离执行并在任务收敛后综合。
 - ReAct Runtime 内部仍复用统一的 `LeaderStreamState`、`RUNTIME_EVENT`、成功/失败收尾与历史消息持久化，不为 Team 另开独立 SSE 契约。
 
 ## Runtime Event
@@ -40,9 +40,9 @@
 
 - `id`、`runId`、`sessionId`：事件与 Run 关联信息。
 - `type`：应用级事件类型，例如 `RUN_STARTED`、`TOOL_CALL_STARTED`。
-- `scope`：`run|single|leader|worker|team|skill|memory|artifact|sandbox`。
+- `scope`：`run|single|subagent|skill|memory|artifact|sandbox`。Team 不使用该字段，领域事件改用 `actorId`。
 - `source` / `sourceEventType`：来源系统与原始事件类型。
-- `agentId`、`agentName`、`teamActivityId`：可选执行主体。
+- `agentId`、`agentName`：可选执行主体。
 - `status`：`running|waiting|completed|failed|cancelled|pending`。
 - `reason`、`durationMs`、`payload`：补充信息。
 
@@ -51,7 +51,7 @@
 - `RUN_*`：`RUN_STARTED`、`RUN_WAITING`、`RUN_RESUMED`、`RUN_COMPLETED`、`RUN_FAILED`、`RUN_CANCELLED`。
 - `AGENT_*`：模型调用、输出、等待人工、恢复、完成、失败等 Agent 状态。
 - `TOOL_*`：`TOOL_CALL_STARTED`、`TOOL_CALL_DELTA`、`TOOL_CALL_COMPLETED`、`TOOL_RESULT_STARTED`、`TOOL_RESULT_DELTA`、`TOOL_RESULT_COMPLETED`（工具失败时 status 为 `failed`）。
-- `TEAM_*`：Team 初始化、Worker 调度/等待/报告/完成/失败、Leader 汇总、Team 完成/失败。
+- Team 领域状态不属于 `RUNTIME_EVENT` 家族，只允许使用独立顶层 `TEAM_EVENT`。
 - `SKILL_*`：Skill 开始、完成、失败。
 - `HITL_*` / `CLARIFICATION_*`：人工确认与反问采集。
 - `MEMORY_*`：历史兼容 / 后续记忆重设计预留。旧记忆模块已删除，当前运行时不得新增依赖旧记忆语义的事件。
@@ -62,7 +62,7 @@
 
 ## Plan Mode Runtime Events
 
-Plan Mode 基于 AgentScope Middleware hooks 实现，不恢复旧 Plan Runtime。所有事件都通过 `RUNTIME_EVENT` 发送，`scope` 使用 `plan`。当前 Plan Mode 只支持 `executor.kind=single_agent`；当 `executor.kind=team` 时，后端不得注入 Plan Mode middleware，也不得向 Leader 或 Worker 注入 `plan_enter`、`plan_write`、`plan_exit`、`todo_write`、`task_output` 等 Plan 控制工具。
+Plan Mode 基于 AgentScope Middleware hooks 实现，不恢复旧 Plan Runtime。所有事件都通过 `RUNTIME_EVENT` 发送，`scope` 使用 `plan`。当前 Plan Mode 只支持 `executor.kind=single_agent`；当 `executor.kind=team` 时，后端不得向 TeamRun 注入 `plan_enter`、`plan_write`、`plan_exit`、`todo_write`、`task_output` 等 Plan 控制工具。
 
 Plan Mode 内部只产生 `PlanDomainEvent`；跨出 Plan middleware / Plan tools 边界前，必须统一转换为 `RUNTIME_EVENT`。前端不得依赖 middleware 内部事件结构，也不得直接解析 Plan 工具结果作为主状态来源。
 
@@ -151,7 +151,7 @@ RunState 稳定字段：
 - `skillCalls`：本轮注入/使用的 Skill 摘要。
 - `modelName`、`tokenUsage`：模型调用与 token 用量摘要。
 - `plans`：Plan Mode 当前计划摘要。
-- `displaySnapshot`：Chat 主展示完整快照，结构为 `{ version: 3, mode, actors, blocks }`。用于刷新、断线恢复和历史消息回放。单 Agent 与 Team 都必须进入该字段。
+- `displaySnapshot`：单 Agent Chat 主展示完整快照，结构为 `{ version: 3, mode, actors, blocks }`，用于刷新、断线恢复和历史消息回放。Team 严禁进入该字段，使用并列的 `teamSnapshot`。
 - `approvals`：等待用户处理的 HITL / clarification 摘要；每项必须包含 `interactionId`、`kind`、`type`、`status`、`createdAt`。`kind` 表示 UI 交互大类，稳定值为 `hitl|clarification`；`type` 表示该大类内部的交互子类型。clarification 的 `kind` 与 `type` 都必须为 `clarification`，并保留 `title`、`description`、`questions`，不得被问题字段或原始 payload 中的 `type` 覆盖。
 - `error`、`lastEventType`、`eventCount`、`createdAt`、`updatedAt`、`completedAt`。
 
@@ -172,17 +172,17 @@ Chat 主界面不得依赖完整工具结果。大体积 Read、Glob、Bash、HT
 
 DisplaySnapshot v3 的核心原则：
 
-- 外层 `mode` 描述本轮展示形态：`single_agent|team`。
-- 内层 `actors[]` 统一描述执行主体。单 Agent 是一个 `role=single` 的 actor；Team 是一个 `role=leader` actor 加多个 `role=worker` actor。
+- 外层 `mode` 固定为 `single_agent`。
+- 内层 `actors[]` 只描述一个 `role=single` 的单 Agent 执行主体。
 - `blocks[]` 只放整轮 Run 级展示块，例如 Plan、人工反馈、最终答案、生成文件和错误。
-- actor 内部 `items[]` 统一承载 reasoning、thinking、tool、skill 的有序 ReAct 过程。前端根据 `mode` 决定用单 Agent 过程组件还是 Team 组件渲染，但数据结构一致。
+- actor 内部 `items[]` 承载 reasoning、thinking、tool、skill 的有序 ReAct 过程。Team Console 不读取这些 actor 或 item。
 
 `RUN_STATE` 必须返回完整快照：
 
 ```ts
 displaySnapshot: {
   version: 3;
-  mode: "single_agent" | "team";
+  mode: "single_agent";
   actors: DisplayActor[];
   blocks: DisplayBlock[];
 }
@@ -197,8 +197,8 @@ displayEvent: {
   sessionId: string;
   seq: number;
   createdAt: string;
-  scope: "single_agent" | "team" | "leader" | "worker";
-  block: "process" | "team" | "plan" | "feedback" | "answer" | "files" | "error";
+  scope: "single_agent";
+  block: "process" | "plan" | "feedback" | "answer" | "files" | "error";
   event: string;
   op: "append" | "upsert" | "replace" | "remove" | "clear";
   targetId?: string;
@@ -213,27 +213,13 @@ displayEvent: {
 ```ts
 type DisplayActor = {
   id: string;
-  role: "single" | "leader" | "worker";
+  role: "single";
   agentId: string;
   agentName: string;
-  activityId?: string;
   status: "pending" | "running" | "waiting" | "completed" | "failed" | "skipped" | "cancelled";
   task: string;
-  assignment: string;
-  expectedOutput: string;
-  constraints: string;
   detail: string;
   output: string;
-  report: string;
-  skippedReason: string;
-  reportReviewStatus: string;
-  reportReviewNotes: string;
-  reportReviewGaps: string[];
-  executionMode: string;
-  dependsOn: string[];
-  waitReason: string;
-  dependencyOutputCount: number;
-  leaderContextCount: number;
   createdAt: string;
   updatedAt: string;
   completedAt: string;
@@ -243,7 +229,7 @@ type DisplayActor = {
 
 type DisplayBlock = {
   id: string;
-  block: "process" | "team" | "plan" | "feedback" | "answer" | "files" | "error";
+  block: "process" | "plan" | "feedback" | "answer" | "files" | "error";
   status: string;
   updatedAt: string;
   items: DisplayItem[];
@@ -264,7 +250,6 @@ type DisplayItem = {
 当前稳定展示事件：
 
 - `process`：ReAct 过程事件，投影到对应 actor 的 `items[]`。连续 reasoning / thinking delta 使用同一个 `targetId` 追加；如果中间出现 tool / skill，再出现 reasoning / thinking 时必须使用新的 `targetId`，避免前端把非连续过程合并成一个 item。
-- `team`：Team actor 状态更新事件。后端可以由旧 `TEAM_ACTIVITY` 内部状态投影而来，但 Chat 主界面只依赖 `displaySnapshot.actors[]`。
 - `plan`：Plan Mode 展示块，使用 `data.planId`、`data.planFile`、`data.markdown`、`data.steps`。`PLAN_FINALIZED` 使用 `status=completed`。
 - `feedback`：当前等待用户处理的人机交互，使用 `data.approval`。只放当前等待项，不保留历史已完成项。
 - `answer`：最终答案展示，使用 `data.content`。没有 `FinalAnswerStart` 时，后端不得把 reasoning 兜底复制成最终答案；如果 Agent 流自然结束但没有产生最终答案，后端可以先执行一次受限 Final Answer Recovery，恢复轮必须重新生成 `FINAL_ANSWER_DELTA`。恢复失败后必须发送 `RUN_FAILED` 和 `ERROR`，并投影为 `error` 展示块，常见原因包括达到最大 ReAct 迭代次数。
@@ -274,11 +259,11 @@ type DisplayItem = {
 
 当前前端登记的事件名集中维护在 `frontend/src/types/displayEvents.ts`。新增事件时先扩展该文件，再更新本文档、后端 Pydantic schema、前端 projector 和测试矩阵。
 
-Team 必须进入 `displaySnapshot.actors[]`。Chat 主界面不得依赖顶层 `teamActivities` 或 `team_activities` 旧字段。
+Team 严禁进入 `displaySnapshot.actors[]` 或 `displaySnapshot.blocks[]`。
 
 ### 历史消息回放
 
-`GET /api/chat/sessions/{session_id}/messages` 返回的 assistant 消息必须携带 `displaySnapshot`。前端历史消息只从该字段恢复单 Agent 主展示块，不从 `toolCalls`、`runtimeEvents`、`planRuns` 等旧字段反推 reasoning、tools、plan、files 或 feedback。
+`GET /api/chat/sessions/{session_id}/messages` 返回的 assistant 消息携带 `displaySnapshot`；Team 轮次另带独立 `teamSnapshot`。两者不得互相推导。
 
 后端在 RunState 到达可回放节点后，把当前 `displaySnapshot` 写回本轮最新 assistant 消息：
 
@@ -297,7 +282,7 @@ Team 必须进入 `displaySnapshot.actors[]`。Chat 主界面不得依赖顶层 
 | `REASONING_DELTA` | `displaySnapshot.blocks[]`、`reasoning` | `displayEvent(block=process,event=reasoning.delta)` | `displaySnapshot: process item` | running 继续 |
 | `FINAL_ANSWER_DELTA` | `displaySnapshot.blocks[]`、`finalAnswer` | `displayEvent(block=answer,event=answer.delta)` | `displaySnapshot: answer block` | running 继续 |
 | Agent 流结束但没有最终答案 | 恢复成功时写入 `finalAnswer`；恢复失败时 `status=failed`、`error` | 恢复成功时 `displayEvent(block=answer,event=answer.delta)`；恢复失败时 `displayEvent(block=error,event=error.raised)` | `displaySnapshot: answer block` 或 `error block` | 后端最多执行一次受限 Final Answer Recovery；恢复失败后结束 |
-| `TEAM_ACTIVITY` | `displaySnapshot.actors[]` | `displayEvent(block=team,event=team.actors.updated)` | `displaySnapshot.actors[] -> TeamDisplayBlock` | running 继续 |
+| `TEAM_EVENT` | `teamSnapshot` | `kind=team_event`、`teamEvent` | `TeamConsoleState` | running 继续，完全绕过 DisplaySnapshot |
 | `SKILL_CONTEXT` / `SKILL_END` | `displaySnapshot.blocks[]`、`skillCalls[]` | `displayEvent(block=process,event=skill.*)` | `displaySnapshot: process item` | running 继续 |
 | `MODEL_CALL_*` | `modelName`、`tokenUsage` | `modelName`、`tokenUsage` | 模型与用量状态 | running 继续 |
 | `RUN_COMPLETED` / `RUN_FAILED` / `RUN_CANCELLED` | `status`、`completedAt`、`error` | `status`、`completedAt`、`error` | 停止 streaming | 发送后结束 |
@@ -309,6 +294,7 @@ Team 必须进入 `displaySnapshot.actors[]`。Chat 主界面不得依赖顶层 
 - `TEXT_BLOCK_DELTA`：最终回复文本增量。必须包含 `delta`。
 - `REASONING_DELTA`：ReAct 过程文本增量。必须包含 `delta`。主 Leader 新链路会优先发送该事件，避免过程文本混入最终答案。
 - `FINAL_ANSWER_DELTA`：最终答案文本增量。必须包含 `delta`。由 `FinalAnswerStart` 阶段工具触发后发送。
+- `FINAL_ANSWER_REPLACE`：替换当前最终答案。必须包含 `content`。仅用于 TeamRun 等后处理完成后需要用最终汇总覆盖早先协调输出的场景。
 - `THINKING_BLOCK_DELTA`：深度思考文本增量。必须包含 `delta`。
 - `REPLY_END`：AgentScope 回复结束。注意 SSE 结束才代表本轮后处理全部完成，`REPLY_END` 后仍可能出现 Team / Skill / Artifact 等收尾事件。
 
@@ -339,11 +325,17 @@ Team 必须进入 `displaySnapshot.actors[]`。Chat 主界面不得依赖顶层 
 
 ## Team 协作
 
-- `TEAM_ACTIVITY`：Team 成员状态快照。必须包含 `activities` 数组。前端按 `id` 或 `agentId` 合并同一成员状态。Worker 活动应区分 `output`（运行时过程输出）与 `report`（提交给 Leader 的正式 TeamSay 报告）；跳过成员使用 `skippedReason` 说明原因。
-- `TEAM_MEMBER_EVENT`：兼容旧前端的 Worker ReAct 子事件。新代码应优先消费 `RUNTIME_EVENT` 中的 `AGENT_*` / `TOOL_*` / `TEAM_*`，不要再新增依赖。
-- `TEAM_ASSIGNMENT_PLANNED`：Team 已完成本轮 Worker 分派。payload 必须包含 `workerCount`；具体分派内容以随后 `TEAM_ACTIVITY.activities[].assignment/expectedOutput/constraints` 为准。
-- `TEAM_WORKER_REPORTED`：Worker 已按 AgentScope TeamSay 语义向 Leader 提交报告。必须包含 `agentId`、`agentName`，payload 建议包含 `to` 与 `reportPreview`。
-- `TEAM_REPORT_REVIEWED`：Team 已完成 Worker report 质量检查。payload 必须包含 `acceptedCount` 与 `needsRevisionCount`；具体缺口以 `TEAM_ACTIVITY.activities[].reportReviewStatus/reportReviewNotes/reportReviewGaps` 为准。
+- Team 使用顶层 SSE `TEAM_EVENT`，不经过 `RUNTIME_EVENT`，也不进入单 Agent `DisplaySnapshot`。
+- payload 必须包含 `id`、`seq`、`teamRunId`、`chatRunId`、`type`、`timestamp`、`payload` 和最新 `snapshot`；成员或任务事件还应包含 `actorId` / `taskId`。
+- 稳定事件名为：`run.created`、`run.phase.changed`、`run.completed`、`run.failed`、`run.cancelled`、`member.spawned`、`member.status.changed`、`member.output.delta`、`member.thinking.delta`、`member.tool.started`、`member.tool.completed`、`member.tool.failed`、`member.tool.denied`、`member.iteration.recovery`、`member.iteration.exhausted`、`task.created`、`task.claimed`、`task.completed`、`task.failed`、`task.cancelled`、`task.unlocked`、`mail.sent`、`mail.read`、`mail.acted`。
+- RunState 首包通过独立 `teamSnapshot` 字段恢复 Team Console；`teamSnapshot.recentEvents` 保存最多 300 条已压缩领域事件，用于刷新和历史回放恢复“运行”页。后续 `RUN_STATE_PATCH(kind=team_event)` 必须携带原始 `teamEvent`。`teamSnapshot` / `teamEvent` 与 `displaySnapshot` / `displayEvent` 互不派生。
+- Team 最终用户答案仍通过 `FINAL_ANSWER_REPLACE` 进入 Chat 主回答区；协调文本和 Member 输出不得发送 `FINAL_ANSWER_DELTA`。
+- TeamRun 执行期间，Chat 主回答区只显示 Team 阶段和任务完成数等运行占位，不显示 Member 过程；最终综合完成后用正式答案替换该占位。
+- `mail.sent` 必须在消息持久化后立即发布；Member 未读入站消息会阻止 `team_submit_result`，`mail.read` 表示该消息已进入 Member session 上下文。
+- Team Mailbox 支持 `recipient=broadcast`，广播在 Store 边界展开为每个目标成员一条独立 `mail.sent`，不引入特殊广播消息结构。
+- Member 不进入单 Agent HITL。工具请求需要人工确认或外部执行时，Runtime 必须拒绝该工具、发出 `member.tool.denied`，并用拒绝结果恢复原 Member session；不得因此直接终止 TeamRun，也不得绕过权限执行工具。
+- Team session 使用独立 ReAct 预算：Leader 协调 16 轮、Member 执行 32 轮、综合 8 轮。Member 首次达到上限时发出 `member.iteration.recovery`，把工具收缩为 Team 协作工具并追加 8 轮收敛恢复；再次耗尽时发出 `member.iteration.exhausted` 后失败。
+- 旧 Team 事件和旧 Team 历史快照不兼容、不回放、不投影。
 
 ## 用户介入
 

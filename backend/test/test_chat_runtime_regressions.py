@@ -33,17 +33,15 @@ from src.server.routes.chat.intent_router import (
 from src.server.routes.chat.models import (
     ChatMessage,
     ChatResumeRequest,
-    ChatTeamActivity,
     ChatTeamMemberPayload,
     ChatToolRun,
 )
 from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
-from src.server.routes.chat.prompts import _build_final_answer_system_prompt, build_worker_assignment_text
+from src.server.routes.chat.prompts import _build_final_answer_system_prompt
 from src.server.routes.chat.runtime import _permission_mode_for_guardrails
 from src.server.routes.chat.react_runtime import execute_react_runtime
 from src.server.routes.chat.run_context import ChatRunContext
 from src.server.routes.chat.run_context import build_chat_run_context
-from src.server.routes.chat.team_worker_runtime import TeamWorkerRuntimeRequest, run_team_worker
 from src.agents.factory import _safe_workspace_dir
 from src.agents.runtime_types import WORKSPACE_DIR
 from src.storage.database import _normalize_guardrails
@@ -55,9 +53,8 @@ from src.server.routes.chat.runtime_builder import (
     create_main_agent_from_spec,
 )
 from src.server.routes.chat.runtime_events import runtime_event_from_agentscope_sse, runtime_event_sse
-from src.server.routes.chat.team_worker_selector import filter_team_members_for_runtime
 from src.server.routes.chat.tool_scope_resolver import resolve_runtime_tool_scope
-from src.server.routes.chat.team_state import _collect_worker_outputs, _pending_tool_calls_to_runs
+from src.server.routes.chat.tool_state import _pending_tool_calls_to_runs
 from src.server.routes.chat.trace_recorder import _model_cache_from_event, _permission_decision_payload
 from src.server.routes.traces import _event_trace_status, _trace_status
 from src.agents.factory import AgentGuardrails, AgentModelOptions, RuntimeToolScope, _build_context_config
@@ -456,7 +453,6 @@ class _FakeNativePlanFinalizedManager:
             "scope": "plan",
             "agentId": "agent-1",
             "agentName": "Agent",
-            "teamActivityId": None,
             "status": "completed",
             "reason": "Plan finalized as final answer.",
             "timestamp": "2026-07-01T00:00:00+00:00",
@@ -740,7 +736,6 @@ def test_run_state_schema_keeps_resolved_feedback_payload():
             "type": "clarification",
             "status": "resolved",
             "scope": "single",
-            "teamActivityId": "",
             "resolvedAt": "2026-01-01T00:00:00+00:00",
             "action": "approve",
             "externalResultsPreview": {"answer": "用户反馈内容"},
@@ -943,42 +938,6 @@ def test_run_state_ignores_main_runtime_tool_when_raw_tool_event_follows():
     assert tool_items[0]["data"]["outputPreview"] == "hello"
 
 
-def test_run_state_keeps_worker_runtime_tool_actor_item():
-    """Worker 没有主原始工具流时，仍由 RuntimeEvent 投影 actor 工具过程。"""
-
-    run = _projection_run()
-    run.mode = "team"
-    run.team_id = "team-1"
-    run.team_name = "Team"
-    state = initial_run_state(run)
-    state["teamActivities"] = [{
-        "id": "activity-worker",
-        "role": "worker",
-        "agentId": "worker-1",
-        "agentName": "Worker",
-        "status": "running",
-    }]
-
-    state = project_event(state, "RUNTIME_EVENT", {
-        "type": "TOOL_CALL_STARTED",
-        "scope": "worker",
-        "agentId": "worker-1",
-        "agentName": "Worker",
-        "teamActivityId": "activity-worker",
-        "status": "running",
-        "payload": {
-            "tool_call_id": "call-read",
-            "tool_call_name": "Read",
-        },
-    }, run)
-    display_events = consume_run_state_display_events(state)
-
-    actor = state["displaySnapshot"]["actors"][0]
-    assert display_events[0]["actorId"] == "activity-worker"
-    assert actor["items"][0]["targetId"] == "activity-worker:tool:call-read"
-    assert actor["items"][0]["data"]["name"] == "Read"
-
-
 def test_completed_background_run_persists_history_display_snapshot(tmp_path, monkeypatch):
     """Run 完成后，历史 assistant 消息必须保存可直接回放的 displaySnapshot。"""
 
@@ -1147,30 +1106,6 @@ def test_run_state_snapshot_contract_does_not_expose_runtime_events():
 
     assert "runtimeEvents" not in payload
     assert state["runtimeEvents"][0]["type"] == "AGENT_REASONING_DELTA"
-
-
-def test_run_state_projection_tracks_team_activity_snapshot():
-    """Team 活动快照进入 RunState，前端不再依赖原始 TEAM_ACTIVITY 事件。"""
-
-    run = _projection_run()
-    state = project_event(
-        initial_run_state(run),
-        "TEAM_ACTIVITY",
-        {
-            "activities": [{
-                "id": "activity-1",
-                "agentId": "worker-1",
-                "agentName": "Worker",
-                "role": "worker",
-                "status": "running",
-                "task": "读取文件",
-            }],
-        },
-        run,
-    )
-
-    assert state["teamActivities"][0]["id"] == "activity-1"
-    assert state["teamActivities"][0]["status"] == "running"
 
 
 def test_run_state_projection_finalizes_open_tools_on_terminal_run():
@@ -1856,7 +1791,6 @@ def test_single_agent_hitl_pending_interaction_keeps_stream_scope():
                 message="读取文件",
                 stream_scope="single",
                 skill_runs=[],
-                team_activities=[],
             )
         ]
         return events, list(PENDING_INTERACTIONS.values())
@@ -1894,7 +1828,6 @@ def test_delegate_task_external_result_resumes_parent_agent():
                 message="委托探索",
                 stream_scope="single",
                 skill_runs=[],
-                team_activities=[],
                 runtime_event_sources=[manager],
             )
         ]
@@ -1930,7 +1863,6 @@ def test_single_agent_without_final_answer_marker_does_not_fallback_to_final_ans
                 message="只输出过程",
                 stream_scope="single",
                 skill_runs=[],
-                team_activities=[],
             )
         ]
 
@@ -1960,7 +1892,6 @@ def test_single_agent_recovers_missing_final_answer_marker_with_extra_call():
                 message="总结工具结果",
                 stream_scope="single",
                 skill_runs=[],
-                team_activities=[],
             )
         ]
 
@@ -2017,7 +1948,6 @@ def test_react_runtime_fails_when_agent_ends_without_final_answer(monkeypatch):
             ),
             mcp_servers=[],
             knowledge_tools=[],
-            team_activities=[],
         )
         run_data = ChatMessage(
             session_id=ctx.session_id,
@@ -2081,7 +2011,6 @@ def test_react_runtime_reports_agentscope_max_iters(monkeypatch):
             ),
             mcp_servers=[],
             knowledge_tools=[],
-            team_activities=[],
         )
         run_data = ChatMessage(
             session_id=ctx.session_id,
@@ -2146,7 +2075,6 @@ def test_react_runtime_recovers_final_answer_after_max_iters(monkeypatch):
             ),
             mcp_servers=[],
             knowledge_tools=[],
-            team_activities=[],
         )
         run_data = ChatMessage(
             session_id=ctx.session_id,
@@ -2213,7 +2141,6 @@ def test_react_runtime_forces_final_answer_after_bare_max_iters(monkeypatch):
             ),
             mcp_servers=[],
             knowledge_tools=[],
-            team_activities=[],
         )
         run_data = ChatMessage(
             session_id=ctx.session_id,
@@ -2256,7 +2183,6 @@ def test_single_agent_hitl_merges_same_reply_running_tool_calls():
                 message="读取两个文件",
                 stream_scope="single",
                 skill_runs=[],
-                team_activities=[],
             )
         ]
         return events, list(PENDING_INTERACTIONS.values())
@@ -2311,7 +2237,6 @@ def test_resume_event_uses_only_agentscope_waiting_tool_calls():
         message="读取文件",
         assistant_text="",
         skill_runs=[],
-        team_activities=[],
         scope="single",
         persist=False,
     )
@@ -2355,7 +2280,6 @@ def test_resume_text_before_final_answer_marker_stays_out_of_final_body():
             message="读取文件后回答",
             assistant_text="",
             skill_runs=[],
-            team_activities=[],
             scope="single",
             persist=False,
         )
@@ -2404,7 +2328,6 @@ def test_resume_without_final_answer_marker_does_not_fallback_to_final_answer():
             message="读取文件后回答",
             assistant_text="",
             skill_runs=[],
-            team_activities=[],
             scope="single",
             persist=False,
         )
@@ -2452,7 +2375,6 @@ def test_resume_recovers_missing_final_answer_marker_with_extra_call():
             message="读取文件后回答",
             assistant_text="",
             skill_runs=[],
-            team_activities=[],
             scope="single",
             persist=False,
         )
@@ -2499,7 +2421,6 @@ def test_plan_exit_tool_result_becomes_final_answer():
                 message="制定计划",
                 stream_scope="single",
                 skill_runs=[],
-                team_activities=[],
             )
         ]
         return events
@@ -2535,7 +2456,6 @@ def test_plan_exit_stops_leader_stream_after_final_answer():
                 message="制定计划",
                 stream_scope="single",
                 skill_runs=[],
-                team_activities=[],
             )
         ]
         return state, events
@@ -2570,7 +2490,6 @@ def test_native_plan_finalized_waits_for_tool_result_end_before_stopping():
                 message="制定计划",
                 stream_scope="single",
                 skill_runs=[],
-                team_activities=[],
                 plan_mode_manager=_FakeNativePlanFinalizedManager(),
             )
         ]
@@ -2614,7 +2533,6 @@ def test_resume_plan_exit_tool_result_becomes_final_answer():
             message="读取后制定计划",
             assistant_text="",
             skill_runs=[],
-            team_activities=[],
             scope="single",
             persist=False,
         )
@@ -2658,7 +2576,6 @@ def test_todo_write_tool_result_emits_plan_tasks_updated_runtime_event():
                 message="制定结构化计划",
                 stream_scope="single",
                 skill_runs=[],
-                team_activities=[],
             )
         ]
 
@@ -2687,7 +2604,6 @@ def test_task_output_tool_result_emits_plan_task_output_runtime_event():
                 message="执行结构化计划",
                 stream_scope="single",
                 skill_runs=[],
-                team_activities=[],
             )
         ]
 
@@ -2712,68 +2628,11 @@ def test_context_compression_schema_allows_project_discovery_summaries():
 
 def test_resume_text_event_scopes_are_separated():
     assert _is_final_answer_text_scope("single") is True
-    assert _is_final_answer_text_scope("leader") is True
-    assert _is_final_answer_text_scope("worker") is False
-    assert _should_wrap_resume_text_as_final("TEXT_BLOCK_DELTA", "leader", True) is True
-    assert _should_wrap_resume_text_as_final("TEXT_BLOCK_DELTA", "leader", False) is False
-    assert _should_wrap_resume_text_as_final("TEXT_BLOCK_DELTA", "worker", True) is False
-
-
-def test_team_leader_collects_formal_worker_report_only():
-    """Leader 汇总只消费 Worker report，不读取运行过程 output 碎片。"""
-
-    outputs = _collect_worker_outputs([
-        ChatTeamActivity(
-            id="activity-worker",
-            agentId="worker-a",
-            agentName="调研 Worker",
-            role="worker",
-            status="completed",
-            task="调研任务",
-            output="过程碎片：正在读取资料...",
-            report="正式报告：用户流程已梳理完成。",
-            createdAt="2026-06-29T00:00:00+00:00",
-        ),
-    ])
-
-    assert outputs == [{
-        "agentId": "worker-a",
-        "name": "调研 Worker",
-        "status": "completed",
-        "detail": "",
-        "report": "正式报告：用户流程已梳理完成。",
-        "output": "正式报告：用户流程已梳理完成。",
-        "skippedReason": "",
-        "reportReviewStatus": "",
-        "reportReviewNotes": "",
-        "reportReviewGaps": "",
-    }]
-    assert _should_emit_raw_resume_event("TEXT_BLOCK_DELTA", "leader") is False
-    assert _should_emit_raw_resume_event("TEXT_BLOCK_DELTA", "worker") is False
-    assert _should_emit_raw_resume_event("THINKING_BLOCK_DELTA", "leader") is False
-    assert _should_emit_raw_resume_event("THINKING_BLOCK_DELTA", "single") is True
-
-
-def test_worker_assignment_uses_member_identity_when_description_is_default():
-    research = ChatTeamMemberPayload.model_validate({
-        "agentId": "research-agent",
-        "name": "调研 Agent",
-        "role": "worker",
-        "description": "Team worker session",
-    })
-    developer = ChatTeamMemberPayload.model_validate({
-        "agentId": "dev-agent",
-        "name": "开发 Agent",
-        "role": "worker",
-        "description": "Team worker session",
-    })
-
-    research_assignment = build_worker_assignment_text(research)
-    developer_assignment = build_worker_assignment_text(developer)
-
-    assert research_assignment != developer_assignment
-    assert "调研" in research_assignment or "事实" in research_assignment
-    assert "实现" in developer_assignment or "代码" in developer_assignment
+    assert _is_final_answer_text_scope("single_agent") is True
+    assert _is_final_answer_text_scope("leader") is False
+    assert _should_wrap_resume_text_as_final("TEXT_BLOCK_DELTA", "single", True) is True
+    assert _should_wrap_resume_text_as_final("TEXT_BLOCK_DELTA", "single", False) is False
+    assert _should_wrap_resume_text_as_final("TEXT_BLOCK_DELTA", "leader", True) is False
 
 
 def test_model_cache_from_event_maps_provider_cache_usage():
@@ -2831,10 +2690,10 @@ def test_intent_route_team_executor_is_mechanical():
     route = route_chat_message(
         team_members=[
             ChatTeamMemberPayload(
-                id="member-worker",
-                agentId="worker-agent",
-                name="Worker",
-                role="worker",
+                id="member-role",
+                agentId="member-agent",
+                name="Member",
+                role="member",
             ),
         ],
     )
@@ -2842,49 +2701,6 @@ def test_intent_route_team_executor_is_mechanical():
     assert route.mode == "react"
     assert route.executor.kind == "team"
     assert route.executor.payload["memberCount"] == 1
-
-
-def test_filter_team_members_for_runtime_keeps_leader_and_selected_workers():
-    members = [
-        ChatTeamMemberPayload(
-            id="member-leader",
-            agentId="leader-agent",
-            name="Leader",
-            role="leader",
-            description="",
-            executionMode="serial",
-            dependsOn=[],
-            handoffPrompt="",
-        ),
-        ChatTeamMemberPayload(
-            id="member-research",
-            agentId="research-agent",
-            name="Research",
-            role="worker",
-            description="",
-            executionMode="parallel",
-            dependsOn=[],
-            handoffPrompt="",
-        ),
-        ChatTeamMemberPayload(
-            id="member-code",
-            agentId="code-agent",
-            name="Code",
-            role="worker",
-            description="",
-            executionMode="parallel",
-            dependsOn=[],
-            handoffPrompt="",
-        ),
-    ]
-
-    routed = filter_team_members_for_runtime(
-        members=members,
-        selected_member_ids=["research-agent"],
-        leader_agent_id="leader-agent",
-    )
-
-    assert [member.agent_id for member in routed] == ["leader-agent", "research-agent"]
 
 
 def test_intent_route_tool_scope_stays_minimal_for_conversation():
@@ -3127,76 +2943,6 @@ def test_chat_run_context_includes_memory_prompt(monkeypatch):
     assert "# Memory\n记忆注入片段" in ctx.system_prompt
 
 
-def test_team_worker_runtime_includes_memory_prompt(monkeypatch):
-    captured = {}
-
-    class FakeWorkerAgent:
-        async def reply_stream(self, user_msg):
-            yield _FakeAgentScopeEvent({"type": "TEXT_BLOCK_DELTA", "delta": "worker done"})
-
-    def fake_get_or_create_agent(**kwargs):
-        captured.update(kwargs)
-        return FakeWorkerAgent()
-
-    monkeypatch.setattr(
-        "src.server.routes.chat.team_worker_runtime.get_or_create_agent",
-        fake_get_or_create_agent,
-    )
-    monkeypatch.setattr(
-        "src.server.routes.chat.team_worker_runtime.get_effective_model_settings",
-        lambda: SimpleNamespace(default_model="model", fallback_models=[]),
-    )
-    monkeypatch.setattr(
-        "src.server.routes.chat.team_worker_runtime.get_registered_agent",
-        lambda agent_id: None,
-    )
-    monkeypatch.setattr(
-        "src.server.routes.chat.team_worker_runtime.build_memory_injection_text",
-        lambda context: "# Memory\nWorker 记忆注入片段",
-    )
-
-    member = ChatTeamMemberPayload(
-        agentId="worker-1",
-        name="Worker",
-        role="researcher",
-        description="负责调研",
-    )
-    activity = ChatTeamActivity(
-        id="activity-1",
-        agentId="worker-1",
-        agentName="Worker",
-        role="worker",
-        status="running",
-        createdAt="2026-07-08T00:00:00+00:00",
-    )
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
-
-    asyncio.run(run_team_worker(TeamWorkerRuntimeRequest(
-        data=ChatMessage(
-            session_id="session-1",
-            message="继续推进",
-            agent_id="leader-1",
-            agent_name="Leader",
-            team_name="Team",
-            sandbox=True,
-        ),
-        session_id="session-1",
-        team_activities=[activity],
-        model_name="model",
-        leader_system_prompt="leader prompt",
-        skill_runs=[],
-        member=member,
-        dependency_outputs=[],
-        queue=queue,
-        pause_event=asyncio.Event(),
-    )))
-
-    assert "# Memory\nWorker 记忆注入片段" in captured["system_prompt"]
-    assert "prompt-" in captured["agent_id"]
-    assert captured["parent_agent_id"] == "worker-1"
-    assert captured["session_id"] == "session-1"
-
-
 def test_runtime_builder_cache_key_changes_with_system_prompt():
     base_kwargs = dict(
         agent_id="agent",
@@ -3417,7 +3163,7 @@ def test_trace_status_waiting_when_hitl_is_unresolved():
 
 def test_trace_status_does_not_complete_for_user_only_messages():
     status = _trace_status([
-        SimpleNamespace(role="user", error=None, team_activities=[]),
+        SimpleNamespace(role="user", error=None, team_snapshot=None),
     ])
 
     assert status == "empty"
@@ -3425,8 +3171,8 @@ def test_trace_status_does_not_complete_for_user_only_messages():
 
 def test_trace_status_completes_when_assistant_message_exists():
     status = _trace_status([
-        SimpleNamespace(role="user", error=None, team_activities=[]),
-        SimpleNamespace(role="assistant", error=None, team_activities=[]),
+        SimpleNamespace(role="user", error=None, team_snapshot=None),
+        SimpleNamespace(role="assistant", error=None, team_snapshot=None),
     ])
 
     assert status == "completed"
@@ -3578,7 +3324,6 @@ def test_plan_finalized_runtime_event_updates_run_state():
             "scope": "plan",
             "agentId": "agent-1",
             "agentName": "Agent",
-            "teamActivityId": None,
             "status": "completed",
             "reason": "Plan finalized as final answer.",
             "timestamp": "2026-07-01T00:00:01+00:00",

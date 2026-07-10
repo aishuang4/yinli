@@ -206,7 +206,7 @@ function BuilderAgentDraftCard({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <Tag size="small" color={mode === 'agents' ? 'green' : agent.role === 'leader' ? 'blue' : 'mauve'}>
-              {mode === 'agents' ? 'Agent' : agent.role === 'leader' ? 'Leader' : 'Worker'}
+              {mode === 'agents' ? 'Agent' : agent.role === 'leader' ? 'Leader' : 'Member'}
             </Tag>
             <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
               {agent.name}

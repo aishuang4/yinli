@@ -1,6 +1,6 @@
 # Agent Workstation 项目进展与协作交接
 
-> 更新时间：2026-07-08
+> 更新时间：2026-07-10
 >
 > 本文只记录当前项目事实和协作入口。详细架构见 `docs/architecture-overview.md`，任务排期见 `docs/project-todo.md`。
 
@@ -13,8 +13,8 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 ## 已在线能力
 
 - Agent CRUD、导入导出、模型配置、降级模型链、工具权限、执行后端配置。
-- Team CRUD、模板、成员依赖、Worker 选择、Worker 独立 ReAct、Leader 汇总。
-- Chat 单 Agent / Team 运行、历史会话、Markdown、多模态图片、HITL、工具 / Skill / Team 过程展示。
+- Team CRUD 与角色素材模板；每次请求由 Leader 动态创建临时 Member 和共享任务，不复用模板中的静态依赖或上轮成员。
+- Chat 单 Agent / Team 运行、历史会话、Markdown、多模态图片、HITL、工具 / Skill 展示，以及与单 Agent `DisplaySnapshot` 隔离的 Team Console。
 - 后台 Run：`/api/chat/send/start`、`/api/chat/resume/start`、Run Center、取消、重跑、SQLite 运行记录。
 - RunState 主链路：`RUN_STATE` / `RUN_STATE_PATCH`、`displaySnapshot`、轻量工具摘要、刷新恢复。
 - MCP、Skills、HTTP 工具管理与 Agent 注入。
@@ -23,7 +23,7 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 - Plan Mode middleware：单 Agent 下通过 `plan_enter` / `plan_write` / `todo_write` / `task_output` / `plan_exit` 生成计划；`plan_exit` 输出 finalized 计划作为最终答案，不走旧审批流。
 - Subagent M1/M2 部分：已按 Claude Code sub-agents 设计方式落地 Markdown + YAML frontmatter 文件定义，项目级 `.agents/subagents/` 和用户级 `~/.agent-workstation/subagents/` 扫描，主 Agent / Team Leader 可通过 `DelegateTask` 前台 blocking 委托 fresh-context 子 Agent；工具策略按“继承父工具池 -> `disallowedTools` -> `tools`”裁剪且不放大父 guardrails；frontmatter `permissionMode` 已接入父权限上限合并，支持 `default`、`acceptEdits`、`auto`、`dontAsk`、`bypassPermissions`、`plan`。运行写入 `subagent_invocations` 和 `SUBAGENT_STARTED` / `SUBAGENT_CONTEXT` / `SUBAGENT_COMPLETED` / `SUBAGENT_FAILED`，旧 `callableAgents` / `maxDepth` / `subagentCalls` schema 启动时删除。Subagent 已支持 frontmatter `skills` 预加载已安装启用 Skill，并以 `subagent:{name}` 作为 agent memory owner 注入 user / agent / global Markdown 摘要和最近 30 天历史记忆索引；`SUBAGENT_CONTEXT` 记录 loadedSkills、missingSkillRefs、memoryAgentId、memoryInjected、注入错误和 permission requested / effective 审计。前端 Chat 已将 `DelegateTask` 专门渲染为 `Subagent · {name}` 委托卡片，只显示 Markdown 委托任务和摘要，不展示原始调用 JSON；Subagents 管理页已显示文件定义、解析错误、来源路径、工具策略和 invocation 审计历史。当前项目含 `.agents/subagents/explorer.md` 只读探索示例。
 - 记忆系统 MVP：历史记忆底层 `memory_nodes` SQLite 主表、`VectorStoreBackend` 抽象、`disabled` / `zvec` provider、`memory_node_tree` / `memory_node_query` 工具、user / agent / global Markdown 记忆文件、运行前记忆注入、运行后 `MemoryAdmissionGate` 准入、后台反思提炼、历史记忆持久化、Memory Wiki 只读同步器和 Memory 页面管理入口首版。Memory 页面可编辑 Markdown 记忆、禁用 / 删除 / 恢复历史记忆、查看 `MEMORY_AUDIT`、查看召回质量摘要、对召回命中做相关性反馈、操作 Skill 自进化队列、查看注册失败原因、手动同步 Wiki、查看生成文件、打开本地文件夹或通过 Obsidian 深链打开 vault；Wiki 同步会生成轻量 `entities/` 实体索引和 `entities/graph.md` 共现图。
-- 准入 / 记忆 / 召回质量首轮：`MemoryAdmissionGate` 已升级为规则评分 + 可选模型评分增强，输出 history / markdown / skill 三类评分、阈值、signals、模型评分、失败原因、脱敏摘要和脱敏类型统计；Memory 设置页可编辑准入阈值、模型评分开关和 Markdown 质量参数；Markdown 写入已增加忽略 source 差异的近似重复过滤、敏感信息过滤、冲突合并、失败重试和 `# Summary` 压缩摘要；历史记忆查询已增加向量候选 + SQLite 关键词结果合并、按查询词命中 / 向量分数 / 结构化反馈分 / 置顶 / 置信度 / 使用次数 / 日期的轻量重排，召回反馈写入 `memory_retrieval_feedback` 表并同步写 `MEMORY_AUDIT`，`memory_node_tree` / `memory_node_query` 工具召回会写入 `MEMORY_AUDIT` 并带 retrievalQuality 质量指标，运行前主 Agent / Team Leader / Team Worker 均注入 20 条摘要索引。
+- 准入 / 记忆 / 召回质量首轮：`MemoryAdmissionGate` 已升级为规则评分 + 可选模型评分增强，输出 history / markdown / skill 三类评分、阈值、signals、模型评分、失败原因、脱敏摘要和脱敏类型统计；Memory 设置页可编辑准入阈值、模型评分开关和 Markdown 质量参数；Markdown 写入已增加忽略 source 差异的近似重复过滤、敏感信息过滤、冲突合并、失败重试和 `# Summary` 压缩摘要；历史记忆查询已增加向量候选 + SQLite 关键词结果合并、按查询词命中 / 向量分数 / 结构化反馈分 / 置顶 / 置信度 / 使用次数 / 日期的轻量重排，召回反馈写入 `memory_retrieval_feedback` 表并同步写 `MEMORY_AUDIT`，`memory_node_tree` / `memory_node_query` 工具召回会写入 `MEMORY_AUDIT` 并带 retrievalQuality 质量指标，运行前主 Agent / Team Leader / 临时 Member session 均注入 20 条摘要索引。
 - Skill 自进化雏形：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、规则版 router gate、workflow evidence、颗粒度控制、变量流抽象、`skill_evolution_records` 候选持久化、标准 Skill 注册首版、相似 Skill 合并首版、标准包目录 `backend/data/skill_packages/{skill_name}/SKILL.md`、历史 Skill 包目录 backfill、Skill zip 导出、用户显式请求生成 Skill 的手动触发流、`MEMORY_AUDIT` Trace 审计首版和 Chat “Skills 生成中”轻量提醒；注册后不自动绑定 Agent。Memory 页面已能查看和操作 Skill 自进化队列。
 - 前端非 Chat 组件化整改首轮：业务表单字段已基本收口到 `frontend/src/components/form/`，文件导入统一到 `FileImportButton`，MCP / Skills 等目录筛选复用 `CatalogFilterBar`；Agent、Team、MCP、Skills、Tools、Settings、Sandbox、Memory、Trace 等页面已优先使用 `@agentscope-ai/design` 和共享封装。`MemoryPage` 已拆为页面编排层 + `features/memory/*`，`TracePage` 已拆为页面编排层 + `features/traces/*`，`AgentEditor` 已拆出 sections 和选择弹窗。
 
@@ -36,6 +36,7 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 - `backend/src/server/routes/chat/readiness_gate.py`：运行前信息充足性判断。
 - `backend/src/server/routes/chat/intent_router.py`：第一层 architecture 路由，当前只进入 `react`。
 - `backend/src/server/routes/chat/react_runtime.py`：ReAct Runtime 执行入口。
+- `backend/src/server/routes/chat/team_runtime/`：一次性 TeamRun、文件状态、Task List、Mailbox、隔离 Member session 和最终综合。
 - `backend/src/server/routes/chat/runtime_builder.py`：运行时规格组装。
 - `backend/src/server/routes/chat/leader_stream.py`：AgentScope 流事件转换。
 - `backend/src/server/routes/chat/background_runs.py`：后台 Run 与 RunState。
@@ -117,7 +118,7 @@ cd frontend && npm run electron:dev
 - Skill 自进化队列操作和注册失败原因可视化已接入 Memory 页面；后续重点是更强候选检索筛选、模型重跑策略和注册质量评估。
 - Memory 模块进入收口稳定阶段：近期只补运行前注入 Trace payload、设置迁移 / 重建 / 风险提示和整体回归测试；Wiki 图谱成熟化、Wiki 反向合并、`memory_change_log`、复杂召回质量视图、反馈权重配置和模型评分评估暂不继续横向扩展。
 - 前端非 Chat 页面已完成第一轮表单统一和大页面拆分；后续重点是继续拆 `AgentTeamPage`、`RunsPage`，并把重复的卡片式 `<button>`、tab 选择项和列表选择项沉淀为通用交互组件。
-- `npm run lint` 当前仍会被 Chat 相关既有问题阻断：`features/chat/ProcessTimeline.tsx` 中 render 阶段读取 ref，以及 `hooks/useEventStream.ts` 的 hook 依赖 warning。非 Chat 整改阶段除非明确排期，否则不顺手修改 Chat。
+- Team Runtime 不读取或投影旧 Team 事件和旧 Team 历史字段；发现旧兼容分支时直接删除，不在新运行时上补适配。
 - `CLAUDE.md` 只是兼容指针，当前事实以 `AGENTS.md` 为准。
 
 ## 文档入口

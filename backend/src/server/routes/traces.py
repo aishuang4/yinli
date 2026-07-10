@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from src.server.routes.chat import ChatTeamActivity, ChatToolRun, _load_store
+from src.server.routes.chat import ChatToolRun, _load_store
 from src.storage.database import count_run_events, list_run_events
 
 router = APIRouter()
@@ -17,7 +17,6 @@ MAX_TRACE_EVENT_PAGE_SIZE = 100
 MAX_TRACE_DETAIL_MESSAGES = 12
 MAX_TRACE_MESSAGE_TEXT_LENGTH = 2500
 MAX_TRACE_TOOL_TEXT_LENGTH = 1200
-MAX_TRACE_ACTIVITY_TEXT_LENGTH = 1600
 MAX_TRACE_PAYLOAD_TEXT_LENGTH = 1000
 
 
@@ -32,7 +31,7 @@ class TraceSummary(BaseModel):
     team_name: str | None = Field(default=None, alias="teamName")
     message_count: int = Field(alias="messageCount")
     tool_call_count: int = Field(alias="toolCallCount")
-    worker_count: int = Field(alias="workerCount")
+    member_count: int = Field(alias="memberCount")
     status: str
     created_at: str = Field(alias="createdAt")
     updated_at: str = Field(alias="updatedAt")
@@ -51,7 +50,6 @@ class TraceMessage(BaseModel):
     model_name: str | None = Field(default=None, alias="modelName")
     error: str | None = None
     tool_calls: list[ChatToolRun] = Field(default_factory=list, alias="toolCalls")
-    team_activities: list[ChatTeamActivity] = Field(default_factory=list, alias="teamActivities")
     created_at: str = Field(alias="createdAt")
 
     model_config = {"populate_by_name": True}
@@ -66,7 +64,6 @@ class TraceEvent(BaseModel):
     scope: str
     agent_id: str | None = Field(default=None, alias="agentId")
     agent_name: str | None = Field(default=None, alias="agentName")
-    team_activity_id: str | None = Field(default=None, alias="teamActivityId")
     status: str
     title: str
     content: str
@@ -101,8 +98,6 @@ def _tool_call_count(messages: list[object]) -> int:
     total = 0
     for message in messages:
         total += len(getattr(message, "tool_calls", []) or [])
-        for activity in getattr(message, "team_activities", []) or []:
-            total += len(activity.tool_calls or [])
     return total
 
 
@@ -142,47 +137,32 @@ def _trim_tool_run(tool_call: ChatToolRun) -> ChatToolRun:
     return ChatToolRun.model_validate(data)
 
 
-def _trim_activity(activity: ChatTeamActivity) -> ChatTeamActivity:
-    """裁剪 Team 活动大字段，详情抽屉和 Chat 页保留完整信息。"""
-    data = activity.model_dump(by_alias=True)
-    for key in ("detail", "output", "report", "assignment", "expectedOutput"):
-        data[key] = _trim_trace_text(data.get(key), MAX_TRACE_ACTIVITY_TEXT_LENGTH)
-    data["toolCalls"] = [_trim_tool_run(item).model_dump(by_alias=True) for item in activity.tool_calls[:20]]
-    return ChatTeamActivity.model_validate(data)
-
-
 def _event_tool_call_count(events: list[dict]) -> int:
     return sum(1 for event in events if event.get("eventType") == "TOOL_CALL_START")
 
 
-def _worker_count(messages: list[object]) -> int:
-    worker_ids: set[str] = set()
+def _member_count(messages: list[object]) -> int:
+    member_ids: set[str] = set()
     for message in messages:
-        for activity in getattr(message, "team_activities", []) or []:
-            if activity.role != "leader":
-                worker_ids.add(activity.agent_id)
-    return len(worker_ids)
-
-
-def _event_worker_count(events: list[dict]) -> int:
-    return len({
-        str(event.get("agentId") or "")
-        for event in events
-        if event.get("scope") == "worker" and event.get("agentId")
-    })
+        snapshot = getattr(message, "team_snapshot", None)
+        members = snapshot.get("members") if isinstance(snapshot, dict) and isinstance(snapshot.get("members"), list) else []
+        for member in members:
+            if isinstance(member, dict) and member.get("role") != "leader" and member.get("id"):
+                member_ids.add(str(member["id"]))
+    return len(member_ids)
 
 
 def _trace_status(messages: list[object]) -> str:
     if any(getattr(message, "error", None) for message in messages):
         return "failed"
-    activities = [
-        activity
+    team_statuses = [
+        str(run.get("status") or "")
         for message in messages
-        for activity in (getattr(message, "team_activities", []) or [])
+        for snapshot in [getattr(message, "team_snapshot", None)]
+        for run in [snapshot.get("run") if isinstance(snapshot, dict) and isinstance(snapshot.get("run"), dict) else {}]
+        if run
     ]
-    if any(activity.status == "waiting" for activity in activities):
-        return "waiting"
-    if any(activity.status == "running" for activity in activities):
+    if "running" in team_statuses:
         return "running"
     if any(getattr(message, "role", "") == "assistant" for message in messages):
         return "completed"
@@ -231,7 +211,7 @@ def _event_trace_status(events: list[dict]) -> str:
 def _summary_from_session(session: object, messages: list[object]) -> TraceSummary:
     events = list_run_events(session.id, include_payload=False, limit=MAX_TRACE_SUMMARY_EVENTS, latest=True)
     tool_call_count = _event_tool_call_count(events) if events else _tool_call_count(messages)
-    worker_count = _event_worker_count(events) if events else _worker_count(messages)
+    member_count = _member_count(messages)
     event_status = _event_trace_status(events) if events else "empty"
     message_status = _trace_status(messages)
     status = (
@@ -248,7 +228,7 @@ def _summary_from_session(session: object, messages: list[object]) -> TraceSumma
         teamName=session.team_name,
         messageCount=session.message_count,
         toolCallCount=tool_call_count,
-        workerCount=worker_count,
+        memberCount=member_count,
         status=status,
         createdAt=session.created_at,
         updatedAt=session.updated_at,
@@ -296,7 +276,6 @@ async def get_trace(trace_id: str) -> TraceDetail:
                 modelName=message.model_name,
                 error=message.error,
                 toolCalls=[_trim_tool_run(item) for item in (message.tool_calls or [])[:20]],
-                teamActivities=[_trim_activity(item) for item in (message.team_activities or [])],
                 createdAt=message.created_at,
             )
             for message in messages

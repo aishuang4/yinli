@@ -169,7 +169,6 @@ async def emit_clarification_if_required(ctx: ChatRunContext) -> AsyncGenerator[
             content="",
             error=None,
             skill_calls=ctx.skill_runs,
-            team_activities=ctx.team_activities,
             clarification_requests=[clarification],
         )
     yield _sse_event("CLARIFICATION_REQUIRED", clarification)
@@ -177,33 +176,6 @@ async def emit_clarification_if_required(ctx: ChatRunContext) -> AsyncGenerator[
 
 async def emit_context_events(ctx: ChatRunContext) -> AsyncGenerator[str, None]:
     """输出 Team 初始状态和 Skill 注入上下文事件。"""
-
-    if ctx.team_activities:
-        yield runtime_event_sse(
-            "TEAM_INITIALIZED",
-            session_id=ctx.session_id,
-            scope="team",
-            agent_id=ctx.agent_id,
-            agent_name=ctx.agent_name,
-            status="running",
-            payload={
-                "workerCount": len([item for item in ctx.team_activities if item.role == "worker"]),
-                "activityCount": len(ctx.team_activities),
-            },
-        )
-        yield _sse_event("TEAM_ACTIVITY", {
-            "activities": [item.model_dump(by_alias=True) for item in ctx.team_activities],
-        })
-        _record_run_event(
-            session_id=ctx.session_id,
-            event_type="TEAM_ACTIVITY",
-            persist=ctx.persist_run,
-            agent_id=ctx.agent_id,
-            agent_name=ctx.agent_name,
-            status="running",
-            title="Team initialized",
-            payload={"activities": [item.model_dump(by_alias=True) for item in ctx.team_activities]},
-        )
 
     if ctx.used_skill_details:
         for skill in ctx.used_skill_details:

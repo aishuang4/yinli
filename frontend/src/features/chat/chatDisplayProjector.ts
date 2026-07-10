@@ -6,7 +6,6 @@ import type {
   HitlRequestInfo,
   SkillCallInfo,
   StreamState,
-  TeamActorInfo,
   ToolCallInfo,
 } from '../../hooks/useEventStream';
 import type { RunStateApprovalSummary } from '../../types/runState';
@@ -46,7 +45,7 @@ export function buildLiveChatDisplayMessage(
 export function buildStoredChatDisplayMessage(message: LocalMessage): ChatDisplayMessage {
   return buildChatDisplayMessage({
     displaySnapshot: message.displaySnapshot,
-    runId: '',
+    runId: message.id,
     sessionId: '',
     status: message.error ? 'failed' : 'completed',
     isStreaming: false,
@@ -80,7 +79,7 @@ export function buildChatDisplayMessage(input: ChatDisplayMessageInput): ChatDis
 
 function buildDisplayBlocks(blocks: DisplayBlock[], input: ChatDisplayMessageInput): ChatDisplayBlock[] {
   const snapshot = normalizeDisplaySnapshot(input.displaySnapshot);
-  const actorBlocks = buildActorDisplayBlocks(snapshot.actors, snapshot.mode, input);
+  const actorBlocks = buildActorDisplayBlocks(snapshot.actors, input);
   const hasActorProcessBlock = actorBlocks.some((block) => block.type === 'process' && block.items.length > 0);
   const displayBlocks = [
     ...actorBlocks,
@@ -106,22 +105,8 @@ function buildDisplayBlocks(blocks: DisplayBlock[], input: ChatDisplayMessageInp
 
 function buildActorDisplayBlocks(
   actors: DisplayActor[],
-  mode: string,
   input: ChatDisplayMessageInput,
 ): ChatDisplayBlock[] {
-  if (mode === 'team') {
-    const teamActors = actors.map(teamActorFromDisplayActor);
-    return teamActors.length > 0
-      ? [{
-        id: 'team',
-        type: 'team',
-        status: input.status,
-        actors: teamActors,
-        updatedAt: actors.reduce((latest, actor) => actor.updatedAt || latest, ''),
-      }]
-      : [];
-  }
-
   const actor = actors[0];
   if (!actor || actor.items.length === 0) return [];
   return [processBlockFromActor(actor, input)];
@@ -142,55 +127,6 @@ function processBlockFromActor(actor: DisplayActor, input: ChatDisplayMessageInp
     updatedAt: actor.updatedAt,
     items,
   };
-}
-
-function teamActorFromDisplayActor(actor: DisplayActor): TeamActorInfo {
-  return {
-    id: actor.activityId || actor.id,
-    agentId: actor.agentId,
-    agentName: actor.agentName,
-    role: actor.role,
-    status: normalizeTeamActorStatus(actor.status),
-    task: actor.task,
-    assignment: actor.assignment,
-    expectedOutput: actor.expectedOutput,
-    constraints: actor.constraints,
-    detail: actor.detail,
-    output: actor.output,
-    report: actor.report,
-    skippedReason: actor.skippedReason,
-    reportReviewStatus: actor.reportReviewStatus,
-    reportReviewNotes: actor.reportReviewNotes,
-    reportReviewGaps: actor.reportReviewGaps,
-    thinking: actor.items
-      .filter((item) => item.event === DISPLAY_EVENTS.THINKING_DELTA)
-      .map((item) => pickDisplayString(item.data, ['text', 'content', 'delta']))
-      .join('\n\n'),
-    currentEvent: actor.detail,
-    items: actor.items,
-    toolCalls: actor.items
-      .filter((item) => item.event.startsWith('tool.') || item.targetId.startsWith('tool'))
-      .map(toolCallFromDisplayItem),
-    executionMode: actor.executionMode,
-    dependsOn: actor.dependsOn,
-    waitReason: actor.waitReason,
-    dependencyOutputCount: actor.dependencyOutputCount,
-    leaderContextCount: actor.leaderContextCount,
-    createdAt: actor.createdAt,
-  };
-}
-
-function normalizeTeamActorStatus(status: string): TeamActorInfo['status'] {
-  if (
-    status === 'running' ||
-    status === 'waiting' ||
-    status === 'completed' ||
-    status === 'failed' ||
-    status === 'skipped'
-  ) {
-    return status;
-  }
-  return 'pending';
 }
 
 function blockFromDisplayBlock(
@@ -470,7 +406,6 @@ function errorBlockFromDisplayBlock(block: DisplayBlock): ChatDisplayBlock | nul
 }
 
 function isVisibleBlock(block: ChatDisplayBlock): boolean {
-  if (block.type === 'team') return block.actors.length > 0;
   if (block.type === 'process') return block.items.length > 0;
   if (block.type === 'plan') return Boolean(block.planId || block.markdown.trim() || block.steps.length);
   if (block.type === 'human_feedback') return block.hitlRequests.length > 0 || block.clarificationRequests.length > 0;
@@ -624,7 +559,6 @@ function hitlRequestFromApproval(input: ChatDisplayMessageInput, approval: RunSt
     agentName: String(approval.agentName || ''),
     runId: input.runId,
     scope: 'leader',
-    teamActivityId: null,
     replyId: '',
     toolCalls: (approval.toolCalls || []).map((toolCall: RunStateApprovalSummary['toolCalls'][number]) => ({
       id: String(toolCall.id || createId()),

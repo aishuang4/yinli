@@ -178,9 +178,6 @@ def ensure_db() -> None:
                     name TEXT NOT NULL,
                     role TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
-                    execution_mode TEXT NOT NULL DEFAULT 'parallel',
-                    depends_on TEXT NOT NULL DEFAULT '[]',
-                    handoff_prompt TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
                     sort_order INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE
@@ -263,11 +260,11 @@ def ensure_db() -> None:
                     images TEXT NOT NULL,
                     tool_calls TEXT NOT NULL DEFAULT '[]',
                     skill_calls TEXT NOT NULL,
-                    team_activities TEXT NOT NULL,
                     model_caches TEXT NOT NULL DEFAULT '[]',
                     runtime_events TEXT NOT NULL DEFAULT '[]',
                     plan_runs TEXT NOT NULL DEFAULT '[]',
                     display_snapshot TEXT NOT NULL DEFAULT '{"version":3,"mode":"single_agent","actors":[],"blocks":[]}',
+                    team_snapshot TEXT,
                     created_at TEXT NOT NULL,
                     sort_order INTEGER NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
@@ -323,7 +320,6 @@ def ensure_db() -> None:
                     scope TEXT NOT NULL DEFAULT 'leader',
                     agent_id TEXT,
                     agent_name TEXT,
-                    team_activity_id TEXT,
                     status TEXT NOT NULL DEFAULT '',
                     title TEXT NOT NULL DEFAULT '',
                     content TEXT NOT NULL DEFAULT '',
@@ -575,9 +571,26 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_messages", "runtime_events", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "plan_runs", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "display_snapshot", "TEXT NOT NULL DEFAULT '{\"version\":2,\"blocks\":[]}'")
+            _ensure_column(conn, "chat_messages", "team_snapshot", "TEXT")
             _drop_column_if_exists(conn, "agents", "callable_agents")
             _drop_column_if_exists(conn, "agents", "max_depth")
             _drop_column_if_exists(conn, "chat_messages", "subagent_calls")
+            _drop_column_if_exists(conn, "chat_messages", "team_activities")
+            _drop_column_if_exists(conn, "run_events", "team_activity_id")
+            _drop_column_if_exists(conn, "team_members", "execution_mode")
+            _drop_column_if_exists(conn, "team_members", "depends_on")
+            _drop_column_if_exists(conn, "team_members", "handoff_prompt")
+            legacy_team_ids = [
+                str(row["team_id"])
+                for row in conn.execute(
+                    "SELECT DISTINCT team_id FROM team_members WHERE role NOT IN ('leader', 'member')"
+                ).fetchall()
+            ]
+            if legacy_team_ids:
+                placeholders = ",".join("?" for _ in legacy_team_ids)
+                conn.execute(f"DELETE FROM team_members WHERE team_id IN ({placeholders})", legacy_team_ids)
+                conn.execute(f"DELETE FROM teams WHERE id IN ({placeholders})", legacy_team_ids)
+                conn.commit()
             columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(agents)").fetchall()
@@ -852,9 +865,6 @@ def list_teams() -> list[dict[str, Any]]:
             "name": row["name"],
             "role": row["role"],
             "description": row["description"],
-            "executionMode": row["execution_mode"],
-            "dependsOn": _loads(row["depends_on"], []),
-            "handoffPrompt": row["handoff_prompt"],
             "status": row["status"],
         })
     return [
@@ -893,17 +903,13 @@ def upsert_team(data: dict[str, Any]) -> None:
         conn.executemany(
             """
             INSERT INTO team_members(
-                id, team_id, agent_id, name, role, description,
-                execution_mode, depends_on, handoff_prompt, status, sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, team_id, agent_id, name, role, description, status, sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     member["id"], data["id"], member["agentId"], member["name"],
                     member["role"], member.get("description", ""),
-                    member.get("executionMode", "parallel"),
-                    _dumps(member.get("dependsOn", [])),
-                    member.get("handoffPrompt", ""),
                     member.get("status", "idle"), index,
                 )
                 for index, member in enumerate(data.get("members", []))
@@ -1255,6 +1261,7 @@ def load_chat_store() -> dict[str, Any]:
             "thinking": row["thinking"],
             "images": _loads(row["images"], []),
             "displaySnapshot": _loads(row["display_snapshot"], EMPTY_DISPLAY_SNAPSHOT),
+            "teamSnapshot": _loads(row["team_snapshot"], None),
             "created_at": row["created_at"],
         })
     return {
@@ -1308,8 +1315,8 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     _dumps([]),
                     _dumps([]),
                     _dumps([]),
-                    _dumps([]),
                     _dumps(item.get("displaySnapshot", item.get("display_snapshot", EMPTY_DISPLAY_SNAPSHOT))),
+                    _dumps(item.get("teamSnapshot", item.get("team_snapshot"))) if item.get("teamSnapshot", item.get("team_snapshot")) else None,
                     item["created_at"], index,
                 ))
         conn.executemany(
@@ -1317,8 +1324,8 @@ def save_chat_store(data: dict[str, Any]) -> None:
             INSERT INTO chat_messages (
                 id, session_id, role, content, agent_id, agent_name, model_name,
                 error, thinking, images, tool_calls, skill_calls,
-                team_activities, model_caches, runtime_events, plan_runs,
-                display_snapshot, created_at,
+                model_caches, runtime_events, plan_runs,
+                display_snapshot, team_snapshot, created_at,
                 sort_order
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
@@ -1334,7 +1341,6 @@ def append_run_event(
     scope: str = "leader",
     agent_id: str | None = None,
     agent_name: str | None = None,
-    team_activity_id: str | None = None,
     status: str = "",
     title: str = "",
     content: str = "",
@@ -1354,9 +1360,9 @@ def append_run_event(
             """
             INSERT INTO run_events (
                 id, session_id, event_type, scope, agent_id, agent_name,
-                team_activity_id, status, title, content, payload, created_at,
+                status, title, content, payload, created_at,
                 sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_id,
@@ -1365,7 +1371,6 @@ def append_run_event(
                 scope,
                 agent_id,
                 agent_name,
-                team_activity_id,
                 status,
                 title,
                 content,
@@ -1382,7 +1387,6 @@ def append_run_event(
         "scope": scope,
         "agentId": agent_id,
         "agentName": agent_name,
-        "teamActivityId": team_activity_id,
         "status": status,
         "title": title,
         "content": content,
@@ -1451,7 +1455,6 @@ def list_run_events(
             "scope": row["scope"],
             "agentId": row["agent_id"],
             "agentName": row["agent_name"],
-            "teamActivityId": row["team_activity_id"],
             "status": row["status"],
             "title": row["title"],
             "content": row["content"],
@@ -1650,7 +1653,6 @@ def list_run_events_by_type(
             "scope": row["scope"],
             "agentId": row["agent_id"],
             "agentName": row["agent_name"],
-            "teamActivityId": row["team_activity_id"],
             "status": row["status"],
             "title": row["title"],
             "content": row["content"],

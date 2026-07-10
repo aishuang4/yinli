@@ -2,7 +2,7 @@ import type { Agent, ModelConfig } from './agent';
 import type { TeamRecord } from './team';
 
 export type BuilderMode = 'agents' | 'team';
-export type BuilderAgentRole = 'leader' | 'worker';
+export type BuilderAgentRole = 'leader' | 'member';
 
 export interface BuilderRecommendedItem {
   id: string;

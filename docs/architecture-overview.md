@@ -1,6 +1,6 @@
 # Agent Workstation 当前架构总览
 
-> 状态：2026-07-07 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
+> 状态：2026-07-09 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
 
 ## 项目定位
 
@@ -29,18 +29,21 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 7. `runtime_builder.py` 组装模型配置、Team 上下文、Skill、ToolScope 和主 Agent runtime spec。
 8. `run_context.py` 在 readiness 通过后注入 Skill prompt 和记忆上下文；记忆注入位于 Skill prompt 后、AskUser clarification / final answer 规则前。
 9. `leader_stream.py` 消费 AgentScope `reply_stream()`，转换文本、工具、权限、Plan Mode、Skill 和 HITL 事件。
-10. `completion.py` 完成消息落库、Trace、Team / Skill 状态和错误收尾，并在轻量 `MemoryAdmissionGate` 后触发 Markdown 记忆提炼和历史记忆持久化。
+10. `completion.py` 完成消息落库、Trace、Skill 状态和错误收尾，并在轻量 `MemoryAdmissionGate` 后触发 Markdown 记忆提炼和历史记忆持久化。
 11. `background_runs.py` 将后台 Run 与前端 SSE 订阅解耦，并维护 RunState。
 
 ## Team Runtime
 
-Team 当前语义收束为：
+Team Runtime 是一次性 `TeamRun`。持久化 Team 只提供 Leader 和候选角色素材；每轮运行在 `backend/data/team-runtime/runs/{team_run_id}/` 下生成全新 file-first 状态。
 
-```text
-Leader dispatch -> Worker isolated ReAct -> Worker report -> Leader synthesize
-```
+核心语义：
 
-Worker 选择由 Team Runtime 内部处理：优先使用系统内置 `TeamWorkerSelector` 模型选择，解析失败或调用异常时使用全部 Worker 兜底；模型合法返回空数组时只保留 Leader。
+- Team Lead 是主协调会话，负责生成队友、拆任务、协调 mailbox、汇总成果。
+- Teammate 是隔离 AgentScope Agent 会话，拥有独立上下文窗口，不继承 Lead 对话历史。
+- 共享事实只允许通过 Task List、Mailbox、member directory、result artifacts 和 events/snapshots 表达。
+- 用户可以向任意 Member 发送 mailbox 消息，作为本轮运行中的直接干预。
+- Member 提交结果前必须清空未读 Mailbox；综合阶段使用完整 Mailbox，综合期间的新消息会触发重新综合。
+- Team 只使用顶层 `TEAM_EVENT`；旧事件、旧历史投影和静态成员选择链路不读取、不兼容。
 
 ## RunState 与前端主展示
 
@@ -69,7 +72,7 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 
 当前在线的是新记忆系统首版，不是旧 memory summarize：
 
-- **运行前注入**：`memory/retrieval.py` 读取 user / agent / global Markdown 摘要和最近 30 天节点树；`run_context.py` 在 readiness 通过后注入主 Agent / Team Leader；`team_worker_runtime.py` 按 single agent 同策略注入 Team Worker。
+- **运行前注入**：`memory/retrieval.py` 读取 user / agent / global Markdown 摘要和最近 30 天节点树；`run_context.py` 在 readiness 通过后注入主 Agent / Team Lead，隔离 Member session 使用本轮解析后的相同记忆与 Skill 上下文。
 - **Subagent 注入**：`subagents/runtime_context.py` 为子 Agent 注入 frontmatter `skills` 指定的已安装启用 Skill，并用 `subagent:{name}` 作为 agent memory owner 注入长期记忆摘要；`subagents/permission_policy.py` 执行 frontmatter `permissionMode` 并按父 Agent guardrails 上限收窄；`subagents/tool_policy.py` 基于父运行时真实工具池执行 `tools` / `disallowedTools` 裁剪，并同步限制传给子 Agent 的 MCP server 与知识库工具；审计通过 `SUBAGENT_CONTEXT` Runtime Event 记录 loadedSkills、missingSkillRefs、memoryAgentId、memoryInjected 和 permission requested / effective 摘要。
 - **历史记忆**：底层 `memory_nodes` 只保存用户输入、Agent 最终输出和摘要索引，不保存工具调用过程；写入后同步到 `VectorStoreBackend` 的 `memory_nodes` collection。
 - **Markdown 长期记忆**：user memory、agent memory、global preference memory 分别保存为 `user_memory.md`、`agent_memory.md`、`global_memory.md`，没有旧 `default.md` 兼容读取。

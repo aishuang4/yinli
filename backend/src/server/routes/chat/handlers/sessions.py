@@ -7,6 +7,11 @@ from fastapi import HTTPException
 from src.server.routes.chat.models import ChatSession, StoredChatMessage
 from src.server.routes.chat.router import router
 from src.server.routes.chat.store import _load_store, _save_store
+from src.server.routes.chat.team_runtime.maintenance import (
+    delete_team_runs_for_session,
+    recover_team_snapshot,
+)
+from src.server.routes.chat.team_runtime.store import TeamStoreError
 
 
 @router.get("/sessions")
@@ -37,6 +42,10 @@ async def delete_session(session_id: str) -> None:
     if session_id not in store.messages:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    try:
+        delete_team_runs_for_session(session_id)
+    except TeamStoreError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     store.sessions = [session for session in store.sessions if session.id != session_id]
     store.messages.pop(session_id, None)
     _save_store(store)
@@ -64,6 +73,7 @@ def _history_message_to_response(message: StoredChatMessage) -> dict[str, Any]:
         "thinking": message.thinking,
         "images": [item.model_dump(mode="json", by_alias=True) for item in message.images],
         "displaySnapshot": message.display_snapshot,
+        "teamSnapshot": recover_team_snapshot(message.team_snapshot),
         "clarificationRequests": message.clarification_requests,
         "clarificationResolved": message.clarification_resolved,
         "created_at": message.created_at,

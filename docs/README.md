@@ -11,7 +11,7 @@
 - `docs/chat-workbench-redesign.md`：Chat Workbench 前端改造设计，约束深色工作台布局、历史区、工作台菜单页和功能分布边界。
 - `docs/memory-system-design.md`：新记忆系统设计与实现进度，覆盖历史记忆（底层 `memory_nodes`）、Markdown 记忆、向量存储、Memory 页面和 Skill 自进化后续约束。
 - `docs/subagent-delegation-design.md`：新版 Subagent 委托能力设计，定义 Markdown + YAML frontmatter 文件定义、ReAct 内 `DelegateTask` 工具、invocation 审计、`SUBAGENT_*` 事件和分期边界。
-- `docs/team-runtime-redesign.md`：新版 Team Runtime 设计草案，定义 TeamRun、TeammateSession、Task List、Mailbox、file-first 状态和旧 Team Runtime 禁用边界。
+- `docs/team-runtime-redesign.md`：当前 Team Runtime 设计，定义 TeamRun、TeammateSession、Task List、Mailbox、file-first 状态和旧 Team Runtime 禁用边界。
 - `docs/dynamic-workflows-plan.md`：Dynamic Workflow 决策版改造设计，定义独立工作空间、Script Review、Runtime Cockpit、AgentScope Bridge 和后续 LangGraph 接入边界。
 - `docs/project-progress-handoff.md`：当前项目状态、启动验证方式和协作入口。
 - `docs/project-todo.md`：后续任务队列。

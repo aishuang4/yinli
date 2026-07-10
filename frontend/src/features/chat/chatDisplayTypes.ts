@@ -4,7 +4,6 @@ import type {
   ClarificationRequestInfo,
   HitlRequestInfo,
   SkillCallInfo,
-  TeamActorInfo,
   ToolCallInfo,
 } from '../../hooks/useEventStream';
 import type { GeneratedFileInfo } from './generatedFiles';
@@ -26,7 +25,6 @@ export interface ChatDisplayMessage {
 }
 
 export type ChatDisplayBlock =
-  | ChatTeamBlock
   | ChatProcessBlock
   | ChatPlanBlock
   | ChatHumanFeedbackBlock
@@ -72,14 +70,6 @@ export interface ChatProcessBlock {
   completedAt: string;
   updatedAt: string;
   items: ChatProcessItem[];
-}
-
-export interface ChatTeamBlock {
-  id: string;
-  type: 'team';
-  status: ChatDisplayStatus;
-  actors: TeamActorInfo[];
-  updatedAt: string;
 }
 
 export interface ChatPlanBlock {

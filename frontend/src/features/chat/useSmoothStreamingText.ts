@@ -4,6 +4,7 @@ const FRAME_MS = 32;
 
 type SmoothStreamingTextOptions = {
   animateOnMount?: boolean;
+  animateStreamingOnMount?: boolean;
   charsPerSecond?: number;
   maxCharsPerFrame?: number;
 };
@@ -18,8 +19,16 @@ export function useSmoothStreamingText(
   streaming: boolean,
   options: SmoothStreamingTextOptions = {},
 ): SmoothStreamingTextState {
-  const { animateOnMount = false, charsPerSecond = 84, maxCharsPerFrame = 14 } = options;
-  const shouldAnimateInitialContent = streaming || (animateOnMount && content.length > 0);
+  const {
+    animateOnMount = false,
+    animateStreamingOnMount = true,
+    charsPerSecond = 84,
+    maxCharsPerFrame = 14,
+  } = options;
+  const shouldAnimateInitialContent = (
+    (streaming && animateStreamingOnMount) ||
+    (animateOnMount && content.length > 0)
+  );
   const [displayedContent, setDisplayedContent] = useState(() => (shouldAnimateInitialContent ? '' : content));
   const [isAnimating, setIsAnimating] = useState(() => shouldAnimateInitialContent);
   const displayedRef = useRef(shouldAnimateInitialContent ? '' : content);

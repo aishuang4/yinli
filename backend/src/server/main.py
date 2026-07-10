@@ -18,6 +18,7 @@ from src.server.routes import agent_builder, agents, chat, health, mcp, memory, 
 from src.agents.agentscope_usage_patch import patch_agentscope_usage_events
 from src.config.settings import settings
 from src.storage.database import init_db, close_db
+from src.server.routes.chat.team_runtime.maintenance import maintain_team_runtime_runs
 
 
 @asynccontextmanager
@@ -31,6 +32,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # === 启动 ===
     patch_agentscope_usage_events()
     await init_db()
+    team_maintenance = maintain_team_runtime_runs(
+        retention_days=settings.team_run_retention_days,
+        max_records=settings.team_run_max_records,
+    )
+    if any(team_maintenance.values()):
+        print(f"[TeamRuntime] maintenance: {team_maintenance}")
     print(f"[Server] Agent Workstation Backend started on port {settings.port}")
     deepseek_key_display = ("***" + settings.deepseek_api_key[-4:]) if settings.deepseek_api_key else "NOT SET"
     print(f"[Server] DeepSeek API Key: {deepseek_key_display}")

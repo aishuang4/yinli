@@ -20,95 +20,21 @@ import {
   SparkRenyizhuanrenyiAnyToanyLine,
 } from '@agentscope-ai/icons';
 import { Empty, Select, Spinner, Tag, Tooltip } from '@agentscope-ai/design';
-import { useEventStream, type TeamActorInfo, type ToolCallInfo } from '../hooks/useEventStream';
+import { useEventStream } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
 import { useAppStore } from '../stores/appStore';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList';
-import { TeamActorSidebar } from '../features/chat/TeamDisplayBlock';
-import { TeamSelectionDock } from '../features/chat/TeamSelectionDock';
+import { TeamConsolePanel } from '../features/chat/TeamDisplayBlock';
+import { teamConsoleFromSnapshot } from '../features/team-runtime/teamEventReducer';
 import { FloatingPlanDock } from '../features/chat/FloatingPlanDock';
 import { isAskUserToolName } from '../features/chat/humanInteractionUtils';
-import { subagentToolDataFromDisplayItem } from '../features/chat/subagentToolData';
-import type { ChatImageAttachment, ChatImagePayload, ChatSession, LocalMessage, PendingTeamSelection, StoredChatMessage } from '../features/chat/types';
-import { DISPLAY_EVENTS, type DisplayActor, type DisplayItem } from '../types/displayEvents';
+import type { ChatImageAttachment, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
+import { DISPLAY_EVENTS, type DisplayItem } from '../types/displayEvents';
 
 const HISTORY_PANEL_TRANSITION_MS = 260;
-
-function teamActorsFromMessageSnapshot(message: LocalMessage): TeamActorInfo[] {
-  const snapshot = message.displaySnapshot;
-  if (!snapshot || snapshot.mode !== 'team') return [];
-  return snapshot.actors.map(teamActorFromDisplayActor);
-}
-
-function teamActorFromDisplayActor(actor: DisplayActor): TeamActorInfo {
-  return {
-    id: actor.activityId || actor.id,
-    agentId: actor.agentId,
-    agentName: actor.agentName,
-    role: actor.role,
-    status: normalizeTeamActorStatus(actor.status),
-    task: actor.task,
-    assignment: actor.assignment,
-    expectedOutput: actor.expectedOutput,
-    constraints: actor.constraints,
-    detail: actor.detail,
-    output: actor.output,
-    report: actor.report,
-    skippedReason: actor.skippedReason,
-    reportReviewStatus: actor.reportReviewStatus,
-    reportReviewNotes: actor.reportReviewNotes,
-    reportReviewGaps: actor.reportReviewGaps,
-    thinking: actor.items
-      .filter((item) => item.event === DISPLAY_EVENTS.THINKING_DELTA)
-      .map((item) => pickDisplayItemString(item, ['text', 'content', 'delta']))
-      .join('\n\n'),
-    currentEvent: actor.detail,
-    items: actor.items,
-    toolCalls: actor.items
-      .filter((item) => item.event.startsWith('tool.') || item.targetId.startsWith('tool'))
-      .map(toolCallFromDisplayItem),
-    executionMode: actor.executionMode,
-    dependsOn: actor.dependsOn,
-    waitReason: actor.waitReason,
-    dependencyOutputCount: actor.dependencyOutputCount,
-    leaderContextCount: actor.leaderContextCount,
-    createdAt: actor.createdAt,
-  };
-}
-
-function normalizeTeamActorStatus(status: string): TeamActorInfo['status'] {
-  if (
-    status === 'running' ||
-    status === 'waiting' ||
-    status === 'completed' ||
-    status === 'failed' ||
-    status === 'skipped'
-  ) {
-    return status;
-  }
-  return 'pending';
-}
-
-function toolCallFromDisplayItem(item: DisplayItem): ToolCallInfo {
-  return {
-    id: item.targetId || item.id,
-    name: pickDisplayItemString(item, ['name', 'toolName', 'rawName']) || 'tool',
-    args: pickDisplayItemString(item, ['inputPreview', 'input', 'args']),
-    result: pickDisplayItemString(item, ['outputPreview', 'output', 'result', 'error']),
-    status: normalizeToolCallStatus(String(item.status || item.data.status || 'running')),
-    ...subagentToolDataFromDisplayItem(item),
-  };
-}
-
-function normalizeToolCallStatus(status: string): ToolCallInfo['status'] {
-  if (status === 'running' || status === 'completed' || status === 'failed' || status === 'calling') {
-    return status;
-  }
-  return 'running';
-}
 
 function pickDisplayItemString(item: DisplayItem, keys: string[]): string {
   for (const key of keys) {
@@ -309,30 +235,16 @@ function resolveClarificationProcessItem(item: DisplayItem): DisplayItem {
 function snapshotFromProcessItem(item: DisplayItem, status: string) {
   return {
     version: 3 as const,
-    mode: 'single_agent',
+    mode: 'single_agent' as const,
     actors: [{
       id: 'single-agent',
-      role: 'single',
+      role: 'single' as const,
       agentId: '',
       agentName: 'Agent',
-      activityId: null,
       status,
       task: '',
-      assignment: '',
-      expectedOutput: '',
-      constraints: '',
       detail: '',
       output: '',
-      report: '',
-      skippedReason: '',
-      reportReviewStatus: '',
-      reportReviewNotes: '',
-      reportReviewGaps: [],
-      executionMode: '',
-      dependsOn: [],
-      waitReason: '',
-      dependencyOutputCount: 0,
-      leaderContextCount: 0,
       createdAt: item.createdAt || '',
       updatedAt: item.updatedAt,
       completedAt: '',
@@ -352,13 +264,10 @@ export function ChatPage() {
   const [targetMode, setTargetMode] = useState<'agent' | 'team'>('agent');
   const [selectedAgentId, setSelectedAgentId] = useState<string>('default');
   const [selectedTeamId, setSelectedTeamId] = useState<string>('');
-  const [selectingTeamWorkers, setSelectingTeamWorkers] = useState(false);
-  const [pendingTeamSelection, setPendingTeamSelection] = useState<PendingTeamSelection | null>(null);
   const [inputValue, setInputValue] = useState('');
   const [deepThinking, setDeepThinking] = useState(false);
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
-  const [selectedTeamActorId, setSelectedTeamActorId] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [historyPanelMounted, setHistoryPanelMounted] = useState(true);
@@ -424,21 +333,19 @@ export function ChatPage() {
     Boolean(state.thinkingContent) ||
     state.toolCalls.length > 0 ||
     state.skillCalls.length > 0 ||
-    state.teamActors.length > 0 ||
+    Boolean(state.teamConsole.snapshot) ||
     state.displaySnapshot.blocks.length > 0 ||
     state.plans.length > 0
   );
 
-  const visibleTeamActors = useMemo(() => (
-    [
-      ...messages.flatMap((message) => teamActorsFromMessageSnapshot(message)),
-      ...state.teamActors,
-    ]
-  ), [messages, state.teamActors]);
-
-  const selectedTeamActor = useMemo(() => (
-    visibleTeamActors.find((activity) => activity.id === selectedTeamActorId) || null
-  ), [selectedTeamActorId, visibleTeamActors]);
+  const historicalTeamSnapshot = useMemo(() => (
+    [...messages].reverse().find((message) => message.role === 'assistant')?.teamSnapshot || null
+  ), [messages]);
+  const visibleTeamConsole = state.teamConsole.snapshot
+    ? state.teamConsole
+    : !state.isStreaming && historicalTeamSnapshot
+      ? teamConsoleFromSnapshot(historicalTeamSnapshot)
+      : null;
   const activeSession = useMemo(() => (
     sessions.find((session) => session.id === activeSessionId) || null
   ), [activeSessionId, sessions]);
@@ -473,10 +380,6 @@ export function ChatPage() {
       setHistoryCollapsed(false);
     });
   }, []);
-  const openTeamActorSidebar = useCallback((actorId: string) => {
-    setSelectedTeamActorId(actorId);
-  }, []);
-
   useEffect(() => () => {
     if (historyTransitionTimerRef.current !== null) {
       window.clearTimeout(historyTransitionTimerRef.current);
@@ -501,15 +404,6 @@ export function ChatPage() {
       setVisualCompletionVersion((version) => version + 1);
     }
   }, [state.currentRunId]);
-
-  const buildTeamMembersForRun = useCallback((workerAgentIds: string[] | null) => {
-    if (!selectedTeam) return [];
-    if (workerAgentIds === null) return selectedTeam.members;
-    const selectedWorkers = new Set(workerAgentIds);
-    return selectedTeam.members.filter((member) => (
-      member.role === 'leader' || selectedWorkers.has(member.agentId)
-    ));
-  }, [selectedTeam]);
 
   const loadSessions = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
@@ -542,6 +436,7 @@ export function ChatPage() {
       thinking: item.thinking || undefined,
       images: item.images,
       displaySnapshot: item.displaySnapshot || item.display_snapshot,
+      teamSnapshot: item.teamSnapshot || item.team_snapshot,
       clarificationRequests: item.clarificationRequests || item.clarification_requests || [],
       clarificationResolved: item.clarificationResolved || item.clarification_resolved || false,
     }));
@@ -645,7 +540,7 @@ export function ChatPage() {
   useEffect(() => {
     if (!shouldAutoScrollRef.current) return;
     scrollToBottom(state.isStreaming ? 'auto' : 'smooth');
-  }, [messages, scrollToBottom, state.isStreaming, state.finalAnswerContent, state.reasoningContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamActors]);
+  }, [messages, scrollToBottom, state.isStreaming, state.finalAnswerContent, state.reasoningContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamConsole]);
 
   useEffect(() => {
     const container = messagesContainerRef.current;
@@ -672,7 +567,6 @@ export function ChatPage() {
     setMessages([]);
     setImageAttachments([]);
     setChatError(null);
-    setSelectedTeamActorId(null);
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
@@ -692,7 +586,6 @@ export function ChatPage() {
     }
     setImageAttachments([]);
     setChatError(null);
-    setSelectedTeamActorId(null);
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
@@ -711,7 +604,6 @@ export function ChatPage() {
         setMessages([]);
         setImageAttachments([]);
         setChatError(null);
-        setSelectedTeamActorId(null);
         reset();
       }
       notifySuccess('历史对话已删除');
@@ -755,49 +647,6 @@ export function ChatPage() {
     setImageAttachments((current) => current.filter((item) => item.id !== id));
   }, []);
 
-  const prepareTeamSelection = useCallback(async (message: string, images: ChatImagePayload[]) => {
-    if (!selectedTeam || targetMode !== 'team') return;
-    setSelectingTeamWorkers(true);
-    setPendingTeamSelection(null);
-    try {
-      const response = await fetch('/api/chat/team-worker-selection', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message,
-          agentId: runtimeAgent?.id,
-          agentName: runtimeAgent?.name,
-          teamName: selectedTeam.name,
-          teamMembers: selectedTeam.members,
-          workerSelectorPrompt: selectedTeam.workerSelectorPrompt,
-          model: runtimeAgent?.modelConfig.primary,
-        }),
-      });
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${response.status}`);
-      }
-      const result = await response.json() as { selectedAgentIds?: string[]; reason?: string };
-      setPendingTeamSelection({
-        message,
-        images,
-        selectedAgentIds: result.selectedAgentIds || [],
-        reason: result.reason || '模型已完成 Worker 预选。',
-      });
-    } catch (err) {
-      setPendingTeamSelection({
-        message,
-        images,
-        selectedAgentIds: selectedTeam.members
-          .filter((member) => member.role === 'worker')
-          .map((member) => member.agentId),
-        reason: err instanceof Error ? `AI 选择失败，默认使用全部 Worker：${err.message}` : 'AI 选择失败，默认使用全部 Worker。',
-      });
-    } finally {
-      setSelectingTeamWorkers(false);
-    }
-  }, [runtimeAgent, selectedTeam, targetMode]);
-
   /** 发送消息 */
   const handleSend = useCallback(async () => {
     if ((!inputValue.trim() && imageAttachments.length === 0) || state.isStreaming) return;
@@ -821,11 +670,6 @@ export function ChatPage() {
       media_type,
       data,
     }));
-    if (targetMode === 'team') {
-      await prepareTeamSelection(userText, images);
-      return;
-    }
-
     const userMessage: LocalMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -846,13 +690,24 @@ export function ChatPage() {
       sessionId,
       agentId: runtimeAgent?.id,
       agentName: runtimeAgent?.name,
+      teamId: targetMode === 'team' ? selectedTeam?.id : undefined,
+      teamName: targetMode === 'team' ? selectedTeam?.name : undefined,
+      teamMembers: targetMode === 'team'
+        ? selectedTeam?.members.map((member) => ({
+          id: member.id,
+          agentId: member.agentId,
+          name: agents.find((agent) => agent.id === member.agentId)?.name || member.name,
+          role: member.role,
+          description: member.description,
+        }))
+        : undefined,
       systemPrompt: runtimeAgent?.systemPrompt,
       model: runtimeAgent?.modelConfig.primary,
       skillIds: runtimeAgent?.skills,
       deepThinking,
       images,
     });
-  }, [activeSessionId, deepThinking, imageAttachments, inputValue, prepareTeamSelection, runtimeAgent, selectedModelId, selectedModelSupportsImages, selectedTeam, sendMessage, state.isStreaming, targetMode, teamLeaderAgent]);
+  }, [activeSessionId, agents, deepThinking, imageAttachments, inputValue, runtimeAgent, selectedModelId, selectedModelSupportsImages, selectedTeam, sendMessage, state.isStreaming, targetMode, teamLeaderAgent]);
 
   const handleSubmitClarification = useCallback(async (content: string, displayContent?: string) => {
     const modelContent = content.trim();
@@ -877,51 +732,6 @@ export function ChatPage() {
     resumeInteraction,
   ]);
 
-  const confirmTeamSelection = useCallback(async (workerAgentIds: string[]) => {
-    if (!pendingTeamSelection || state.isStreaming) return;
-    const sessionId = activeSessionId || createId();
-    const userMessage: LocalMessage = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: pendingTeamSelection.message,
-      createdAt: new Date().toISOString(),
-      images: pendingTeamSelection.images,
-    };
-
-    setActiveSessionId(sessionId);
-    shouldAutoScrollRef.current = true;
-    setShowScrollToBottom(false);
-    setMessages((prev) => [...prev, userMessage]);
-    setInputValue('');
-    setImageAttachments([]);
-    setChatError(null);
-    setPendingTeamSelection(null);
-
-    await sendMessage(pendingTeamSelection.message, {
-      sessionId,
-      agentId: runtimeAgent?.id,
-      agentName: runtimeAgent?.name,
-      teamId: selectedTeam?.id,
-      teamName: selectedTeam?.name,
-      workerSelectorPrompt: selectedTeam?.workerSelectorPrompt,
-      teamMembers: buildTeamMembersForRun(workerAgentIds).map((member) => ({
-        id: member.id,
-        agentId: member.agentId,
-        name: agents.find((agent) => agent.id === member.agentId)?.name || member.name,
-        role: member.role,
-        description: member.description,
-        executionMode: member.executionMode,
-        dependsOn: member.dependsOn,
-        handoffPrompt: member.handoffPrompt,
-      })),
-      systemPrompt: runtimeAgent?.systemPrompt,
-      model: runtimeAgent?.modelConfig.primary,
-      skillIds: runtimeAgent?.skills,
-      deepThinking,
-      images: pendingTeamSelection.images,
-    });
-  }, [activeSessionId, agents, buildTeamMembersForRun, deepThinking, pendingTeamSelection, runtimeAgent, selectedTeam, sendMessage, state.isStreaming]);
-
   // 当流结束时，将 assistant 回复加入消息历史
   useEffect(() => {
     const waitingForFinalAnswerAnimation = Boolean(
@@ -945,6 +755,7 @@ export function ChatPage() {
         processStartedAt: state.runStartedAt,
         processCompletedAt: state.runCompletedAt || new Date().toISOString(),
         displaySnapshot: state.displaySnapshot.blocks.length > 0 || state.displaySnapshot.actors.length > 0 ? state.displaySnapshot : undefined,
+        teamSnapshot: state.teamConsole.snapshot || undefined,
         reasoning: state.reasoningContent || undefined,
         thinking: state.thinkingContent || undefined,
         tokenUsage: state.tokenUsage,
@@ -955,7 +766,7 @@ export function ChatPage() {
       reset();
       loadSessions({ silent: true });
     }
-  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.currentRunId, state.displaySnapshot, state.error, state.finalAnswerContent, state.hitlRequests.length, state.isStreaming, state.modelName, state.plans.length, state.reasoningContent, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamActors, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls, visualCompletionVersion]);
+  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.currentRunId, state.displaySnapshot, state.error, state.finalAnswerContent, state.hitlRequests.length, state.isStreaming, state.modelName, state.plans.length, state.reasoningContent, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamConsole, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls, visualCompletionVersion]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -1081,8 +892,8 @@ export function ChatPage() {
       <section
         className="chat-main-panel chat-workbench-main grid min-h-0 overflow-hidden"
         style={{
-          gridTemplateColumns: selectedTeamActor
-            ? 'minmax(0, 1fr) 360px'
+          gridTemplateColumns: visibleTeamConsole
+            ? 'minmax(0, 1fr) 390px'
             : 'minmax(0, 1fr) 0px',
           transition: 'grid-template-columns 360ms var(--ease-out)',
         }}
@@ -1188,8 +999,6 @@ export function ChatPage() {
                       <MessageBubble
                         key={msg.id}
                         message={msg}
-                        selectedTeamActorId={selectedTeamActorId}
-                        onSelectTeamActor={openTeamActorSidebar}
                         onSubmitClarification={handleSubmitClarification}
                       />
                     ))}
@@ -1203,14 +1012,13 @@ export function ChatPage() {
                         finalAnswerContent={state.finalAnswerContent}
                         thinkingContent={state.thinkingContent}
                         displaySnapshot={state.displaySnapshot}
+                        teamConsole={state.teamConsole}
                         skillCalls={state.skillCalls}
                         hitlRequests={state.hitlRequests}
                         clarificationRequests={state.clarificationRequests}
                         plans={state.plans}
                         onSubmitClarification={handleSubmitClarification}
                         onResolveHitl={resumeInteraction}
-                        selectedTeamActorId={selectedTeamActorId}
-                        onSelectTeamActor={openTeamActorSidebar}
                         onFinalAnswerAnimationChange={handleFinalAnswerAnimationChange}
                         toolCalls={state.toolCalls}
                         modelName={state.modelName}
@@ -1250,17 +1058,6 @@ export function ChatPage() {
             </div>
           )}
 
-          {(selectingTeamWorkers || pendingTeamSelection) && (
-            <TeamSelectionDock
-              pending={pendingTeamSelection}
-              selecting={selectingTeamWorkers}
-              agents={agents}
-              members={selectedTeam?.members || []}
-              onConfirm={(workerIds) => void confirmTeamSelection(workerIds)}
-              onCancel={() => setPendingTeamSelection(null)}
-            />
-          )}
-
           <div className="chat-composer mx-auto max-w-4xl rounded-xl bg-[var(--color-bg-secondary)]">
             <input
               ref={imageInputRef}
@@ -1280,9 +1077,9 @@ export function ChatPage() {
               onCompositionEnd={() => {
                 isComposingRef.current = false;
               }}
-              placeholder={state.isStreaming ? 'Agent 正在回复中...' : selectingTeamWorkers ? 'AI 正在选择 Worker...' : '输入消息...'}
+              placeholder={state.isStreaming ? 'Agent 正在回复中...' : '输入消息...'}
               rows={2}
-              disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
+              disabled={state.isStreaming}
               className="block max-h-[180px] w-full resize-none rounded-t-lg border-0 bg-transparent px-4 pb-0 pt-3 text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:bg-[var(--color-bg-tertiary)]"
               aria-label="消息输入框"
             />
@@ -1319,7 +1116,7 @@ export function ChatPage() {
                     type="button"
                     className="icon-button h-8 w-8 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
                     onClick={() => imageInputRef.current?.click()}
-                    disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection) || imageAttachments.length >= 4}
+                    disabled={state.isStreaming || imageAttachments.length >= 4}
                     aria-label="上传图片"
                   >
                     <ImagePlus size={16} />
@@ -1336,7 +1133,7 @@ export function ChatPage() {
                           ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
                           : 'border-transparent bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
                       }`}
-                      disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
+                      disabled={state.isStreaming}
                       onClick={() => setTargetMode('agent')}
                       aria-label="单 Agent"
                       aria-pressed={targetMode === 'agent'}
@@ -1354,7 +1151,7 @@ export function ChatPage() {
                           ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
                           : 'border-transparent bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
                       }`}
-                      disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
+                      disabled={state.isStreaming}
                       onClick={() => setTargetMode('team')}
                       aria-label="Team"
                       aria-pressed={targetMode === 'team'}
@@ -1370,7 +1167,7 @@ export function ChatPage() {
                   onChange={(value) => setSelectedAgentId(value)}
                   options={agentOptions}
                   loading={agentsLoading}
-                  disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
+                  disabled={state.isStreaming}
                   style={{ width: 160 }}
                 />
               ) : (
@@ -1379,7 +1176,7 @@ export function ChatPage() {
                   onChange={(value) => setSelectedTeamId(value)}
                   options={teamOptions}
                   loading={teamsLoading}
-                  disabled={state.isStreaming || selectingTeamWorkers || Boolean(pendingTeamSelection)}
+                  disabled={state.isStreaming}
                   placeholder="选择 Team"
                   style={{ width: 160 }}
                 />
@@ -1423,7 +1220,7 @@ export function ChatPage() {
                         type="button"
                         className="icon-button h-8 w-8 rounded-md border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-opacity duration-200 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                         onClick={handleSend}
-                        disabled={selectingTeamWorkers || Boolean(pendingTeamSelection) || (!inputValue.trim() && imageAttachments.length === 0)}
+                        disabled={!inputValue.trim() && imageAttachments.length === 0}
                         aria-label="发送消息"
                       >
                         <Send size={16} />
@@ -1440,18 +1237,15 @@ export function ChatPage() {
         <div
           className="h-full min-h-0 min-w-0 overflow-hidden"
           style={{
-            opacity: selectedTeamActor ? 1 : 0,
-            transform: selectedTeamActor ? 'translateX(0)' : 'translateX(16px)',
+            opacity: visibleTeamConsole ? 1 : 0,
+            transform: visibleTeamConsole ? 'translateX(0)' : 'translateX(16px)',
             transition: 'opacity 280ms var(--ease-out), transform 360ms var(--ease-out)',
-            pointerEvents: selectedTeamActor ? 'auto' : 'none',
+            pointerEvents: visibleTeamConsole ? 'auto' : 'none',
           }}
-          aria-hidden={!selectedTeamActor}
+          aria-hidden={!visibleTeamConsole}
         >
-          {selectedTeamActor ? (
-            <TeamActorSidebar
-              actor={selectedTeamActor}
-              onClose={() => setSelectedTeamActorId(null)}
-            />
+          {visibleTeamConsole ? (
+            <TeamConsolePanel state={visibleTeamConsole} />
           ) : null}
         </div>
       </section>

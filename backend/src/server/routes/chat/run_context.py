@@ -11,7 +11,7 @@ from src.config.runtime_settings import get_effective_model_settings
 from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
 from src.server.routes.agents import get_registered_agent
 from src.server.routes.chat.intent_router import IntentRoute, route_chat_message, route_chat_message_with_model
-from src.server.routes.chat.models import ChatMessage, ChatSkillRun, ChatTeamActivity
+from src.server.routes.chat.models import ChatMessage, ChatSkillRun
 from src.server.routes.chat.prompts import (
     _build_clarification_system_prompt,
     _build_conversation_history_prompt,
@@ -39,7 +39,6 @@ from src.server.routes.chat.skill_runs import (
     start_or_resume_skill_run,
     update_skill_run_status,
 )
-from src.server.routes.chat.team_state import _build_team_activities
 from src.server.routes.skills import Skill, build_skill_system_prompt_from_skills, list_skill_usage_details
 
 
@@ -68,7 +67,6 @@ class ChatRunContext:
     runtime_tool_scope: Any
     mcp_servers: list[Any]
     knowledge_tools: list[Any]
-    team_activities: list[ChatTeamActivity]
 
 
 async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
@@ -207,11 +205,4 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
         runtime_tool_scope=runtime_tool_scope,
         mcp_servers=_build_runtime_mcp_servers(agent_config),
         knowledge_tools=_build_runtime_knowledge_tools(agent_config),
-        team_activities=_build_team_activities(
-            team_name=run_data.team_name,
-            leader_agent_id=agent_id,
-            leader_agent_name=agent_name,
-            members=routed_team.members,
-            user_message=run_data.message,
-        ),
     )

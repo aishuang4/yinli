@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from src.server.routes.chat.helpers import _sse_event
-from src.server.routes.chat.event_types import SSE_EVENT_RUNTIME
+from src.server.routes.chat.event_types import SSE_EVENT_RUNTIME, SSE_EVENT_TEAM
 from src.server.routes.chat.event_hub import (
     consume_run_state_display_events,
     initial_run_state,
@@ -22,7 +22,11 @@ from src.server.routes.chat.event_hub import (
     refresh_run_state_display_snapshot,
 )
 from src.server.routes.chat.run_state_schema import dump_run_state, dump_run_state_patch
-from src.server.routes.chat.store import _append_assistant_message, _update_latest_assistant_display_snapshot
+from src.server.routes.chat.store import (
+    _append_assistant_message,
+    _update_latest_assistant_display_snapshot,
+    _update_latest_assistant_team_snapshot,
+)
 from src.storage.database import (
     append_chat_run_event,
     get_chat_run_state,
@@ -43,7 +47,6 @@ WAITING_EVENT_TYPES = {"HITL_REQUIRED", "CLARIFICATION_REQUIRED"}
 RUNTIME_WAITING_TYPES = {
     "RUN_WAITING",
     "AGENT_WAITING_HUMAN",
-    "TEAM_WORKER_WAITING_HUMAN",
     "CLARIFICATION_WAITING",
     "HITL_REQUIRED",
 }
@@ -52,9 +55,6 @@ RUNTIME_RUNNING_TYPES = {
     "RUN_RESUMED",
     "AGENT_STARTED",
     "AGENT_RESUMED",
-    "TEAM_WORKER_STARTED",
-    "TEAM_LEADER_STARTED",
-    "TEAM_LEADER_SYNTHESIZING",
 }
 RUNTIME_TERMINAL_STATUS = {
     "RUN_COMPLETED": "completed",
@@ -369,8 +369,8 @@ def _empty_run_summary(run: ChatBackgroundRun) -> dict:
         "activeActors": [],
         "resultPreview": "",
         "resultLength": 0,
-        "workerTotal": 0,
-        "workerCompleted": 0,
+        "memberTotal": 0,
+        "memberCompleted": 0,
     }
 
 
@@ -648,6 +648,13 @@ def _persist_latest_assistant_display_snapshot(run: ChatBackgroundRun, event_typ
         display_snapshot=snapshot,
         min_created_at=run.created_at,
     )
+    team_snapshot = normalize_run_state(run.state).get("teamSnapshot")
+    if isinstance(team_snapshot, dict):
+        _update_latest_assistant_team_snapshot(
+            session_id=run.session_id,
+            team_snapshot=team_snapshot,
+            min_created_at=run.created_at,
+        )
 
 
 async def _close_subscribers(run: ChatBackgroundRun) -> None:
@@ -790,8 +797,8 @@ def _summarize_run_events(run: ChatBackgroundRun) -> dict:
     current_stage = _stage_for_status(run.status)
     result_parts: list[str] = []
     active_actors: list[str] = []
-    total_workers = 0
-    completed_workers = 0
+    total_members = 0
+    completed_members = 0
 
     for raw_event in run.events:
         event_type, data = _parse_sse_event(raw_event)
@@ -808,25 +815,25 @@ def _summarize_run_events(run: ChatBackgroundRun) -> dict:
             progress = max(progress, 70)
             result_parts.append(str(data.get("delta") or ""))
             current_stage = "正在生成回复"
-        elif event_type == "TEAM_ACTIVITY":
-            activities = data.get("activities")
-            if isinstance(activities, list):
-                total_workers = len([item for item in activities if isinstance(item, dict) and item.get("role") == "worker"])
-                completed_workers = len([
-                    item
-                    for item in activities
-                    if isinstance(item, dict)
-                    and item.get("role") == "worker"
-                    and item.get("status") in {"completed", "failed"}
-                ])
-                active_actors = [
-                    str(item.get("agentName") or item.get("name") or item.get("agentId"))
-                    for item in activities
-                    if isinstance(item, dict) and item.get("status") in {"running", "waiting"}
-                ]
-                if total_workers:
-                    progress = max(progress, min(90, 20 + int((completed_workers / total_workers) * 55)))
-                    current_stage = f"Worker 协作中：{completed_workers}/{total_workers} 完成"
+        elif event_type == SSE_EVENT_TEAM:
+            snapshot = data.get("snapshot") if isinstance(data.get("snapshot"), dict) else {}
+            counts = snapshot.get("counts") if isinstance(snapshot.get("counts"), dict) else {}
+            members = snapshot.get("members") if isinstance(snapshot.get("members"), list) else []
+            total_members = max(0, int(counts.get("members") or len(members)) - 1)
+            completed_members = len([
+                member for member in members
+                if isinstance(member, dict) and member.get("role") != "leader" and member.get("status") == "idle"
+            ])
+            active_actors = [
+                str(member.get("name") or member.get("id"))
+                for member in members
+                if isinstance(member, dict) and member.get("status") in {"running", "waiting"}
+            ]
+            task_total = int(counts.get("tasks") or 0)
+            task_succeeded = int(counts.get("succeeded") or 0)
+            if task_total:
+                progress = max(progress, min(90, 20 + int((task_succeeded / task_total) * 65)))
+                current_stage = f"Team 协作中：{task_succeeded}/{task_total} 任务完成"
         elif event_type in WAITING_EVENT_TYPES:
             progress = max(progress, 65)
             current_stage = "等待人工处理"
@@ -855,8 +862,8 @@ def _summarize_run_events(run: ChatBackgroundRun) -> dict:
         "activeActors": active_actors[:6],
         "resultPreview": result_text,
         "resultLength": len(result_text),
-        "workerTotal": total_workers,
-        "workerCompleted": completed_workers,
+        "memberTotal": total_members,
+        "memberCompleted": completed_members,
     }
 
 
@@ -865,7 +872,7 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
 
     runtime_events: list[dict] = []
     result_parts: list[str] = []
-    worker_status: dict[str, str] = {}
+    member_status: dict[str, str] = {}
     active_actors: list[str] = []
     current_stage = _stage_for_status(run.status)
     progress = _base_progress_for_status(run.status)
@@ -874,6 +881,25 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
         event_type, data = _parse_sse_event(raw_event)
         if event_type == "TEXT_BLOCK_DELTA":
             result_parts.append(str(data.get("delta") or ""))
+        if event_type == SSE_EVENT_TEAM:
+            snapshot = data.get("snapshot") if isinstance(data.get("snapshot"), dict) else {}
+            members = snapshot.get("members") if isinstance(snapshot.get("members"), list) else []
+            counts = snapshot.get("counts") if isinstance(snapshot.get("counts"), dict) else {}
+            member_status = {
+                str(member.get("id") or ""): str(member.get("status") or "")
+                for member in members
+                if isinstance(member, dict) and member.get("role") != "leader" and member.get("id")
+            }
+            active_actors = [
+                str(member.get("name") or member.get("id"))
+                for member in members
+                if isinstance(member, dict) and member.get("status") in {"running", "waiting"}
+            ]
+            task_total = int(counts.get("tasks") or 0)
+            task_succeeded = int(counts.get("succeeded") or 0)
+            if task_total:
+                progress = max(progress, min(90, 20 + int((task_succeeded / task_total) * 65)))
+                current_stage = f"Team 协作中：{task_succeeded}/{task_total} 任务完成"
         if event_type != SSE_EVENT_RUNTIME:
             continue
         runtime_events.append(data)
@@ -900,18 +926,6 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
         elif runtime_type in {"AGENT_OUTPUT_DELTA", "AGENT_FINAL_ANSWER_DELTA"}:
             progress = max(progress, 70)
             current_stage = "正在生成回复"
-        elif runtime_type == "TEAM_WORKER_STARTED":
-            progress = max(progress, 30)
-            current_stage = f"{agent_name or 'Worker'} 正在执行"
-        elif runtime_type == "TEAM_WORKER_COMPLETED":
-            progress = max(progress, 75)
-            current_stage = f"{agent_name or 'Worker'} 已完成"
-        elif runtime_type == "TEAM_WORKER_REPORTED":
-            progress = max(progress, 72)
-            current_stage = f"{agent_name or 'Worker'} 已提交报告"
-        elif runtime_type == "TEAM_LEADER_SYNTHESIZING":
-            progress = max(progress, 85)
-            current_stage = "Leader 正在汇总"
         elif runtime_type == "ARTIFACT_CREATED":
             progress = max(progress, 72)
             current_stage = "已生成文件产物"
@@ -927,27 +941,22 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
         elif runtime_type == "SANDBOX_FAILED":
             progress = 100
             current_stage = "沙盒运行失败"
-        if scope in {"worker", "leader", "single", "single_agent"} and agent_name and str(data.get("status") or "") in {"running", "waiting"}:
+        if scope in {"leader", "single", "single_agent"} and agent_name and str(data.get("status") or "") in {"running", "waiting"}:
             if agent_name not in active_actors:
                 active_actors.append(agent_name)
-
-        if runtime_type.startswith("TEAM_WORKER_"):
-            worker_id = str(data.get("teamActivityId") or data.get("agentId") or agent_name)
-            if worker_id:
-                worker_status[worker_id] = str(data.get("status") or "")
 
     if not runtime_events:
         return None
 
-    worker_total = len(worker_status)
-    worker_completed = len([
-        status for status in worker_status.values()
+    member_total = len(member_status)
+    member_completed = len([
+        status for status in member_status.values()
         if status in {"completed", "failed"}
     ])
-    if worker_total:
-        progress = max(progress, min(90, 25 + int((worker_completed / worker_total) * 55)))
+    if member_total:
+        progress = max(progress, min(90, 25 + int((member_completed / member_total) * 55)))
         if run.status not in TERMINAL_RUN_STATUSES and run.status != "waiting":
-            current_stage = f"Worker 协作中：{worker_completed}/{worker_total} 完成"
+            current_stage = f"Member 协作中：{member_completed}/{member_total} 完成"
 
     if run.status == "completed":
         progress = 100
@@ -968,8 +977,8 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
         "activeActors": active_actors[:6],
         "resultPreview": result_text,
         "resultLength": len(result_text),
-        "workerTotal": worker_total,
-        "workerCompleted": worker_completed,
+        "memberTotal": member_total,
+        "memberCompleted": member_completed,
     }
 
 
@@ -1075,6 +1084,8 @@ def _run_state_patch_sse(
                 "type": runtime_type,
                 "message": str(payload.get("message") or "Skills 生成中"),
             }
+    elif event_type == SSE_EVENT_TEAM:
+        patch["teamEvent"] = data
     elif event_type == "ERROR":
         patch["error"] = str(data.get("message") or state.get("error") or "执行失败")
     return _sse_event("RUN_STATE_PATCH", dump_run_state_patch(patch))
@@ -1086,7 +1097,10 @@ def _should_emit_run_state_metadata_patch(event_type: str, data: dict) -> bool:
     if event_type in RUN_STATE_METADATA_PATCH_EVENTS:
         return True
     if event_type == SSE_EVENT_RUNTIME:
-        return str(data.get("type") or "") in {"HITL_RESOLVED", "MEMORY_SKILL_GENERATING"}
+        runtime_type = str(data.get("type") or "")
+        return runtime_type in {"HITL_RESOLVED", "MEMORY_SKILL_GENERATING"}
+    if event_type == SSE_EVENT_TEAM:
+        return True
     return False
 
 
@@ -1097,6 +1111,7 @@ def _run_state_patch_kind(event_type: str, data: dict) -> str:
         "REASONING_DELTA",
         "TEXT_BLOCK_DELTA",
         "FINAL_ANSWER_DELTA",
+        "FINAL_ANSWER_REPLACE",
         "THINKING_BLOCK_DELTA",
         "TOOL_CALL_START",
         "TOOL_CALL_DELTA",
@@ -1120,6 +1135,8 @@ def _run_state_patch_kind(event_type: str, data: dict) -> str:
         if runtime_type.startswith("PLAN_"):
             return "display_event"
         return "snapshot_meta"
+    if event_type == SSE_EVENT_TEAM:
+        return "team_event"
     if event_type == "ERROR":
         return "display_event"
     return "snapshot_meta"

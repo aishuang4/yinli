@@ -91,7 +91,7 @@ async def route_chat_message_with_model(
 ) -> IntentRoute:
     """模型优先的 Chat 前置路由，失败时回退到规则路由。
 
-    模型只负责 architecture 选择；最终执行主体、工具、Skill、Worker 由下层处理。
+    模型只负责 architecture 选择；最终执行主体、工具、Skill、Team Member 由下层处理。
     """
 
     fallback_route = route_chat_message(
@@ -220,7 +220,7 @@ def _build_model_router_system_prompt() -> str:
         "Your only job is to select the first-layer architecture route.",
         "Current supported architecture kinds are: react.",
         "Readiness and clarification were already handled before you. Never ask questions here.",
-        "Do not select executor, tools, skills, workers, or permissions.",
+        "Do not select executor, tools, skills, team members, or permissions.",
         "Team execution is selected mechanically by the application; never return team as runtime.kind.",
         "Prefer runtime.kind=react unless a future supported architecture is explicitly available in the catalog.",
         "Schema:",
@@ -382,7 +382,7 @@ def _select_executor(team_members: list[ChatTeamMemberPayload]) -> ExecutorRoute
 
 
 def _main_agent_instruction(mode: RuntimeKind, executor: ExecutorKind = "single_agent") -> str:
-    executor_text = "执行主体为 Team，Leader 需要基于 Worker 输出汇总。" if executor == "team" else "执行主体为单 Agent。"
+    executor_text = "执行主体为 Team，Leader 动态组建 Member 并基于共享成果综合。" if executor == "team" else "执行主体为单 Agent。"
     if mode == "react":
         return f"本轮按 ReAct 架构处理；不要主动输出计划或调用子 Agent。{executor_text}"
     return ""

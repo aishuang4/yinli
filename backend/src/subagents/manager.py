@@ -210,7 +210,6 @@ class SubagentDelegationManager:
                     message=task,
                     assistant_text=partial,
                     skill_runs=[],
-                    team_activities=[],
                     scope="subagent",
                     chat_data={
                         "invocationId": invocation_id,

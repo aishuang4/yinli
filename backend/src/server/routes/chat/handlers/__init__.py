@@ -6,5 +6,4 @@ from src.server.routes.chat.handlers import (  # noqa: F401
     send,
     runs,
     sessions,
-    team_selection,
 )

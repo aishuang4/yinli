@@ -157,7 +157,7 @@ rg -n "<(Input|Select|DatePicker|Switch|Slider|InputNumber|textarea|input|select
 - AgentScope 运行时构造统一走 `backend/src/agents/factory.py`；类型定义和模型创建分别维护在 `runtime_types.py`、`model_factory.py`，不要重新塞回 factory。
 - Plan Runtime 与 Subagent Runtime 已下线，重新设计前不要在旧兼容字段或旧事件上继续扩展。
 - Chat 应用级状态统一使用 `RUNTIME_EVENT` 包装，事件类型定义集中在 `backend/src/server/routes/chat/event_types.py` 和 `frontend/src/types/chatEvents.ts`。
-- 新功能必须定义自己的 Runtime Event 家族，例如 `TOOL_*`、`MEMORY_*`、`ARTIFACT_*`、`SANDBOX_*`，不要复用 `TEAM_ACTIVITY`、`TEAM_MEMBER_EVENT` 等旧事件表达新语义。
+- 新功能必须定义自己的事件家族；Team 状态只能使用顶层 `TEAM_EVENT`，不得塞入通用 `RUNTIME_EVENT` 或单 Agent `DisplaySnapshot`。
 - Chat SSE 事件新增或语义变更前，先更新 `docs/chat-sse-event-contract.md`，再改后端发送和前端消费。
 - 工具实现放 `backend/src/tools/`，不要散落在路由里。
 - 存储访问集中在 `backend/src/storage/database.py` 或领域封装函数里。
@@ -190,7 +190,7 @@ rg -n "<(Input|Select|DatePicker|Switch|Slider|InputNumber|textarea|input|select
 ## 5. SQLite / 数据持久化规范
 
 - 业务核心数据优先使用规范化表，不再新增零散 JSON 文件。
-- Team Runtime v2 是协作运行状态的例外：按 `docs/team-runtime-redesign.md` 使用 file-first 设计，JSON/JSONL/Markdown 作为 TeamRun source of truth，SQLite 只做可重建索引和展示投影。
+- Team Runtime 是协作运行状态的例外：按 `docs/team-runtime-redesign.md` 使用 file-first 设计，JSON/JSONL/Markdown 作为 TeamRun source of truth，SQLite 只保存 Chat 索引、RunState 和历史 `teamSnapshot`。
 - `json_store` 只用于系统设置、轻量配置文档和确实不适合拆表的内容。
 - 表结构演进继续使用 `_ensure_column()` / 初始化升级逻辑；正式上线前再评估迁移框架。
 - 新表必须包含稳定主键、创建时间、更新时间；需要审计的数据保留操作记录。
@@ -206,7 +206,7 @@ rg -n "<(Input|Select|DatePicker|Switch|Slider|InputNumber|textarea|input|select
   - 历史消息可回放
   - Trace 可审计
 - HITL 暂停不代表 Run 完成；耗时和状态应延续到最终回复结束。
-- Team Worker 的输出、工具调用、思考、状态必须独立记录，Leader 汇总必须使用 Worker 输出。
+- Team Member 的输出、工具调用、思考、状态必须通过独立 `TEAM_EVENT` 记录，最终综合必须使用成功任务结果和 Mailbox。
 - Skills 生命周期要明确：选择、注入、使用、等待用户、完成、失败，不能无限保持 active。
 
 ## 7. 测试规范

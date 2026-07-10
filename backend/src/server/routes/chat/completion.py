@@ -18,11 +18,10 @@ from src.memory.trace import (
 )
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
-from src.server.routes.chat.models import ChatModelCacheRun, ChatSkillRun, ChatTeamActivity, ChatToolRun
+from src.server.routes.chat.models import ChatModelCacheRun, ChatSkillRun, ChatToolRun
 from src.server.routes.chat.runtime_events import runtime_event_sse
 from src.server.routes.chat.skill_runs import update_skill_run_status
 from src.server.routes.chat.store import _append_assistant_message
-from src.server.routes.chat.team_state import _finalize_team_activities, _set_team_activity_status
 from src.server.routes.chat.trace_recorder import _record_run_event, _trim_text
 from src.storage.database import get_latest_completed_user_assistant_turn
 
@@ -51,7 +50,6 @@ async def emit_failed_startup_run(
     model_name: str,
     assistant_error: str,
     skill_runs: list[ChatSkillRun],
-    team_activities: list[ChatTeamActivity],
     assistant_model_caches: list[ChatModelCacheRun] | None = None,
     sandbox: bool = False,
 ) -> AsyncGenerator[str, None]:
@@ -67,16 +65,8 @@ async def emit_failed_startup_run(
             content="",
             error=assistant_error,
             skill_calls=failed_skill_runs,
-            team_activities=_set_team_activity_status(team_activities, "failed"),
             model_caches=assistant_model_caches or [],
         )
-    if team_activities:
-        yield _sse_event("TEAM_ACTIVITY", {
-            "activities": [
-                item.model_dump(by_alias=True)
-                for item in _set_team_activity_status(team_activities, "failed")
-            ],
-        })
     yield runtime_event_sse(
         "RUN_FAILED",
         session_id=session_id,
@@ -133,7 +123,6 @@ async def finalize_successful_leader_run(
     runtime_events: list[dict],
     skill_runs: list[ChatSkillRun],
     active_skill_run: dict | None,
-    team_activities: list[ChatTeamActivity],
     team_id: str | None,
     team_name: str | None,
     sandbox: bool = False,
@@ -148,11 +137,6 @@ async def finalize_successful_leader_run(
             current_step="completed",
             pending_interaction_id="",
         )
-    completed_team_activities = _finalize_team_activities(
-        team_activities,
-        leader_agent_id=agent_id,
-        leader_output=assistant_text,
-    )
     source_run_id = current_chat_background_run_id()
     if persist:
         _append_assistant_message(
@@ -165,7 +149,6 @@ async def finalize_successful_leader_run(
             thinking=assistant_thinking,
             skill_calls=completed_skill_runs,
             tool_calls=assistant_tool_calls,
-            team_activities=completed_team_activities,
             model_caches=assistant_model_caches,
             runtime_events=runtime_events,
         )
@@ -247,22 +230,6 @@ async def finalize_successful_leader_run(
                 content=type(exc).__name__,
                 payload={"sourceRunId": source_run_id},
             )
-    if team_activities:
-        yield runtime_event_sse(
-            "TEAM_COMPLETED",
-            session_id=session_id,
-            scope="team",
-            agent_id=agent_id,
-            agent_name=agent_name,
-            status="completed",
-            payload={"activityCount": len(completed_team_activities)},
-        )
-        yield _sse_event("TEAM_ACTIVITY", {
-            "activities": [
-                item.model_dump(by_alias=True)
-                for item in completed_team_activities
-            ],
-        })
     yield runtime_event_sse(
         "RUN_COMPLETED",
         session_id=session_id,
@@ -423,7 +390,6 @@ async def finalize_failed_leader_run(
     assistant_error: str,
     assistant_model_caches: list[ChatModelCacheRun],
     skill_runs: list[ChatSkillRun],
-    team_activities: list[ChatTeamActivity],
     sandbox: bool = False,
 ) -> AsyncGenerator[str, None]:
     """完成 Leader run 失败路径的持久化与 UI 事件。"""
@@ -450,7 +416,6 @@ async def finalize_failed_leader_run(
             content=assistant_text,
             error=assistant_error,
             skill_calls=failed_skill_runs,
-            team_activities=_set_team_activity_status(team_activities, "failed"),
             model_caches=assistant_model_caches,
         )
     if failed_skill_runs:
@@ -467,22 +432,6 @@ async def finalize_failed_leader_run(
         yield _sse_event("SKILL_END", {
             "skills": [item.model_dump(by_alias=True) for item in failed_skill_runs],
             "status": "failed",
-        })
-    if team_activities:
-        yield runtime_event_sse(
-            "TEAM_FAILED",
-            session_id=session_id,
-            scope="team",
-            agent_id=agent_id,
-            agent_name=agent_name,
-            status="failed",
-            payload={"message": assistant_error},
-        )
-        yield _sse_event("TEAM_ACTIVITY", {
-            "activities": [
-                item.model_dump(by_alias=True)
-                for item in _set_team_activity_status(team_activities, "failed")
-            ],
         })
     yield runtime_event_sse(
         "RUN_FAILED",

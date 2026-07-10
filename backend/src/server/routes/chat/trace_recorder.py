@@ -16,7 +16,7 @@ from src.storage.database import append_run_event
 
 from src.server.routes.chat.helpers import _trim_text
 from src.server.routes.chat.models import ChatModelCacheRun, ChatToolRun, TRACE_EVENT_TYPES
-from src.server.routes.chat.team_state import _tool_result_status
+from src.server.routes.chat.tool_state import _tool_result_status
 
 
 def _record_run_event(
@@ -27,7 +27,6 @@ def _record_run_event(
     scope: str = "leader",
     agent_id: str | None = None,
     agent_name: str | None = None,
-    team_activity_id: str | None = None,
     status: str = "",
     title: str = "",
     content: str = "",
@@ -43,7 +42,6 @@ def _record_run_event(
             scope=scope,
             agent_id=agent_id,
             agent_name=agent_name,
-            team_activity_id=team_activity_id,
             status=status,
             title=title,
             content=content,
@@ -60,7 +58,6 @@ def _make_fallback_trace_recorder(
     scope: str,
     agent_id: str,
     agent_name: str,
-    team_activity_id: str | None = None,
 ):
     """Create a callback that records application-level fallback attempts."""
 
@@ -84,7 +81,6 @@ def _make_fallback_trace_recorder(
             scope=scope,
             agent_id=agent_id,
             agent_name=agent_name,
-            team_activity_id=team_activity_id,
             status=status,
             title=title,
             content=str(event.get("error") or ""),
@@ -116,7 +112,6 @@ def _record_workspace_event(
     agent_id: str,
     agent_name: str,
     guardrails: AgentGuardrails,
-    team_activity_id: str | None = None,
 ) -> None:
     payload = _workspace_trace_payload(guardrails)
     title = (
@@ -131,7 +126,6 @@ def _record_workspace_event(
         scope=scope,
         agent_id=agent_id,
         agent_name=agent_name,
-        team_activity_id=team_activity_id,
         status="configured",
         title=title,
         content=(
@@ -147,7 +141,6 @@ def _record_workspace_event(
         scope=scope,
         agent_id=agent_id,
         agent_name=agent_name,
-        team_activity_id=team_activity_id,
         status="configured",
         title="Permission policy configured",
         content=(
@@ -174,7 +167,6 @@ def _record_permission_decision(
     agent_id: str,
     agent_name: str,
     guardrails: AgentGuardrails,
-    team_activity_id: str | None = None,
 ) -> None:
     """Record a platform-level permission decision for tool execution."""
 
@@ -192,7 +184,6 @@ def _record_permission_decision(
         scope=scope,
         agent_id=agent_id,
         agent_name=agent_name,
-        team_activity_id=team_activity_id,
         status=decision,
         title=f"Permission {decision}: {tool_name}",
         content=f"{payload['resourceType']}:{tool_name} · action={action}",
@@ -294,7 +285,6 @@ def _record_agent_scope_event(
     scope: str,
     agent_id: str,
     agent_name: str,
-    team_activity_id: str | None = None,
 ) -> None:
     """Record selected AgentScope events as compact trace events."""
     if event_type not in TRACE_EVENT_TYPES:
@@ -326,7 +316,6 @@ def _record_agent_scope_event(
         scope=scope,
         agent_id=agent_id,
         agent_name=agent_name,
-        team_activity_id=team_activity_id,
         status=status,
         title=title,
         payload=payload,
@@ -342,7 +331,6 @@ def _record_agent_scope_event(
             scope=scope,
             agent_id=agent_id,
             agent_name=agent_name,
-            team_activity_id=team_activity_id,
             status="completed",
             title="Provider prompt cache usage",
             content=f"created={created_tokens}, hit={hit_tokens}",
@@ -362,7 +350,6 @@ def _record_tool_execution_artifacts(
     scope: str,
     agent_id: str,
     agent_name: str,
-    team_activity_id: str | None,
     guardrails: AgentGuardrails,
     event_type: str,
     event_data: dict,
@@ -398,7 +385,6 @@ def _record_tool_execution_artifacts(
             scope=scope,
             agent_id=agent_id,
             agent_name=agent_name,
-            team_activity_id=team_activity_id,
             status=status,
             title="Command execution result",
             content=_trim_text(command_payload.get("summary", ""), 600),
@@ -412,7 +398,6 @@ def _record_tool_execution_artifacts(
                 scope=scope,
                 agent_id=agent_id,
                 agent_name=agent_name,
-                team_activity_id=team_activity_id,
                 status="observed",
                 title="Shell command may have changed files",
                 content=_trim_text(command_payload["command"], 600),
@@ -458,7 +443,6 @@ def _record_tool_execution_artifacts(
         scope=scope,
         agent_id=agent_id,
         agent_name=agent_name,
-        team_activity_id=team_activity_id,
         status=status,
         title=f"{tool_name} file operation",
         content=file_path,

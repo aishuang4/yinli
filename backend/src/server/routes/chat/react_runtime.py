@@ -1,8 +1,8 @@
 """Chat ReAct Runtime。
 
 本模块只负责 ReAct 架构下的执行链路：
-1. 根据机械 executor 决定是否先运行 Team Worker。
-2. 创建或复用主 Agent。
+1. Team executor 交给独立 Team Runtime。
+2. 单 Agent executor 创建或复用主 Agent。
 3. 消费 AgentScope 流式事件并完成成功/失败收尾。
 
 第一层 architecture 路由和第二层 executor 选择均在进入本模块前完成。
@@ -25,13 +25,9 @@ from src.server.routes.chat.models import ChatMessage, ChatModelCacheRun
 from src.server.routes.chat.plan_mode.manager import PlanModeManager
 from src.server.routes.chat.plan_mode.middleware import PlanModeMiddleware
 from src.server.routes.chat.plan_mode.tools import build_plan_mode_tools
-from src.server.routes.chat.team_runtime import (
-    TeamRuntimeState,
-    prepare_leader_with_team_runtime,
-)
-from src.server.routes.chat.prompts import _build_leader_user_message
 from src.server.routes.chat.runtime import _build_user_content, _guardrail_cache_key
 from src.server.routes.chat.run_context import ChatRunContext
+from src.server.routes.chat.team_runtime import execute_team_runtime
 from src.server.routes.chat.runtime_builder import (
     build_main_agent_runtime_spec,
     create_main_agent_from_spec,
@@ -68,8 +64,8 @@ def _build_runtime_feature_parts(
 ) -> tuple[PlanModeManager | None, str, list[object], list[object], list[object], str]:
     """构造主 Agent 运行时增强能力。
 
-    Team Runtime 暂不支持 Plan Mode：Team 自身已经包含 Leader 分派、
-    Worker 执行和 Leader 汇总语义，Plan Mode 只在单 Agent 路径注入。
+    Team Runtime 有独立的 TeamRun / Task / Mailbox 控制面，当前不复用
+    单 Agent Plan Mode 工具。
     """
 
     feature_keys: list[str] = []
@@ -147,28 +143,15 @@ async def execute_react_runtime(
     assistant_text = ""
     assistant_thinking = ""
     assistant_model_caches: list[ChatModelCacheRun] = []
-    worker_outputs: list[dict[str, str]] = []
     active_skill_run = ctx.active_skill_run
     system_prompt = ctx.system_prompt
     stream_scope = "leader" if ctx.intent_route.executor.kind == "team" else "single_agent"
 
     try:
         if ctx.intent_route.executor.kind == "team":
-            team_state = TeamRuntimeState(leader_system_prompt=system_prompt)
-            async for worker_event in prepare_leader_with_team_runtime(
-                state=team_state,
-                data=ctx.routed_team.run_data,
-                session_id=ctx.session_id,
-                team_activities=ctx.team_activities,
-                model_name=ctx.model_name,
-                leader_agent_id=ctx.agent_id,
-                skill_runs=ctx.skill_runs,
-            ):
-                yield worker_event
-            if team_state.waiting:
-                return
-            system_prompt = team_state.leader_system_prompt
-            worker_outputs = team_state.worker_reports
+            async for team_event in execute_team_runtime(ctx=ctx, run_data=run_data):
+                yield team_event
+            return
 
         (
             plan_mode_manager,
@@ -217,7 +200,6 @@ async def execute_react_runtime(
             model_name=ctx.model_name,
             assistant_error=assistant_error,
             skill_runs=ctx.skill_runs,
-            team_activities=ctx.team_activities,
             sandbox=run_data.sandbox,
         ):
             yield failure_event
@@ -226,7 +208,7 @@ async def execute_react_runtime(
     user_msg = UserMsg(
         name="user",
         content=_build_user_content(
-            _build_leader_user_message(ctx.effective_user_message, worker_outputs),
+            ctx.effective_user_message,
             run_data.images,
         ),
     )
@@ -248,7 +230,6 @@ async def execute_react_runtime(
             message=ctx.effective_user_message,
             stream_scope=stream_scope,
             skill_runs=ctx.skill_runs,
-            team_activities=ctx.team_activities,
             plan_mode_manager=plan_mode_manager,
             runtime_event_sources=runtime_event_sources,
         ):
@@ -272,7 +253,6 @@ async def execute_react_runtime(
                 assistant_error=max_react_iterations_error(),
                 assistant_model_caches=assistant_model_caches,
                 skill_runs=ctx.skill_runs,
-                team_activities=ctx.team_activities,
                 sandbox=run_data.sandbox,
             ):
                 yield completion_event
@@ -288,7 +268,6 @@ async def execute_react_runtime(
                 assistant_error=missing_final_answer_error(),
                 assistant_model_caches=assistant_model_caches,
                 skill_runs=ctx.skill_runs,
-                team_activities=ctx.team_activities,
                 sandbox=run_data.sandbox,
             ):
                 yield completion_event
@@ -307,7 +286,6 @@ async def execute_react_runtime(
             runtime_events=runtime_events,
             skill_runs=ctx.skill_runs,
             active_skill_run=active_skill_run,
-            team_activities=ctx.team_activities,
             team_id=run_data.team_id,
             team_name=run_data.team_name,
             sandbox=run_data.sandbox,
@@ -325,7 +303,6 @@ async def execute_react_runtime(
             assistant_error=assistant_error,
             assistant_model_caches=assistant_model_caches,
             skill_runs=ctx.skill_runs,
-            team_activities=ctx.team_activities,
             sandbox=run_data.sandbox,
         ):
             yield completion_event

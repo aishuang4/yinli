@@ -4,10 +4,8 @@
 
 import { Bot } from 'lucide-react';
 import { Tag } from '@agentscope-ai/design';
-import type { TeamActorInfo } from '../../hooks/useEventStream';
 import type { TraceMessage } from './traceTypes';
 import { formatLongTextPreview, formatTraceTime, MAX_MESSAGE_PREVIEW_LENGTH } from './traceUtils';
-import { TraceStatus } from './TraceStatus';
 import { TraceToolList } from './TraceToolList';
 
 export function TraceMessageCard({ message }: { message: TraceMessage }) {
@@ -16,7 +14,7 @@ export function TraceMessageCard({ message }: { message: TraceMessage }) {
     <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <Bot size={15} color={isUser ? 'var(--color-accent)' : 'var(--color-agent-worker)'} />
+          <Bot size={15} color={isUser ? 'var(--color-accent)' : 'var(--color-agent-member)'} />
           <span className="text-sm font-medium text-[var(--color-text-primary)]">
             {isUser ? 'User' : message.agentName || 'Assistant'}
           </span>
@@ -38,29 +36,6 @@ export function TraceMessageCard({ message }: { message: TraceMessage }) {
       {message.toolCalls?.length > 0 && (
         <TraceToolList title="Agent 工具调用" toolCalls={message.toolCalls} />
       )}
-      {message.teamActivities?.length > 0 && (
-        <div className="mt-3 grid gap-2 md:grid-cols-2">
-          {message.teamActivities.map((activity) => (
-            <TraceActivityCard key={activity.id} activity={activity} />
-          ))}
-        </div>
-      )}
     </section>
-  );
-}
-
-function TraceActivityCard({ activity }: { activity: TeamActorInfo }) {
-  return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">{activity.agentName}</div>
-          <div className="text-xs text-[var(--color-text-tertiary)]">{activity.role}</div>
-        </div>
-        <TraceStatus status={activity.status} />
-      </div>
-      <div className="line-clamp-2 text-xs text-[var(--color-text-secondary)]">{activity.task || activity.detail}</div>
-      {activity.toolCalls?.length > 0 && <TraceToolList title="Worker 工具调用" toolCalls={activity.toolCalls} compact />}
-    </div>
   );
 }

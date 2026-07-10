@@ -53,12 +53,8 @@ class ChatTeamMemberPayload(BaseModel):
     name: str
     role: str
     description: str = ""
-    execution_mode: str = Field(default="parallel", alias="executionMode")
-    depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
-    handoff_prompt: str = Field(default="", alias="handoffPrompt")
 
     model_config = {"populate_by_name": True}
-
 
 class ChatSkillRun(BaseModel):
     """本轮对话使用的 Skill 记录"""
@@ -141,37 +137,6 @@ class ChatPlanRun(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-class ChatTeamActivity(BaseModel):
-    """Team 协作活动记录"""
-
-    id: str
-    agent_id: str = Field(alias="agentId")
-    agent_name: str = Field(alias="agentName")
-    role: str
-    status: str
-    task: str = ""
-    assignment: str = ""
-    expected_output: str = Field(default="", alias="expectedOutput")
-    constraints: str = ""
-    detail: str = ""
-    output: str = ""
-    report: str = ""
-    skipped_reason: str = Field(default="", alias="skippedReason")
-    report_review_status: str = Field(default="", alias="reportReviewStatus")
-    report_review_notes: str = Field(default="", alias="reportReviewNotes")
-    report_review_gaps: list[str] = Field(default_factory=list, alias="reportReviewGaps")
-    thinking: str = ""
-    tool_calls: list[ChatToolRun] = Field(default_factory=list, alias="toolCalls")
-    execution_mode: str = Field(default="parallel", alias="executionMode")
-    depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
-    wait_reason: str = Field(default="", alias="waitReason")
-    dependency_output_count: int = Field(default=0, alias="dependencyOutputCount")
-    leader_context_count: int = Field(default=0, alias="leaderContextCount")
-    created_at: str = Field(alias="createdAt")
-
-    model_config = {"populate_by_name": True}
-
-
 class StoredChatMessage(BaseModel):
     """持久化对话消息"""
 
@@ -186,11 +151,11 @@ class StoredChatMessage(BaseModel):
     images: list[ChatImagePayload] = Field(default_factory=list)
     tool_calls: list[ChatToolRun] = Field(default_factory=list, alias="toolCalls")
     skill_calls: list[ChatSkillRun] = Field(default_factory=list, alias="skillCalls")
-    team_activities: list[ChatTeamActivity] = Field(default_factory=list, alias="teamActivities")
     model_caches: list[ChatModelCacheRun] = Field(default_factory=list, alias="modelCaches")
     runtime_events: list[dict] = Field(default_factory=list, alias="runtimeEvents")
     plan_runs: list[ChatPlanRun] = Field(default_factory=list, alias="planRuns")
     display_snapshot: dict[str, Any] = Field(default_factory=_empty_display_snapshot, alias="displaySnapshot")
+    team_snapshot: dict[str, Any] | None = Field(default=None, alias="teamSnapshot")
     clarification_requests: list[dict] = Field(default_factory=list, alias="clarificationRequests")
     clarification_resolved: bool = Field(default=False, alias="clarificationResolved")
     created_at: str
@@ -236,14 +201,8 @@ class PendingInteraction(BaseModel):
     assistant_text: str = ""
     assistant_tool_calls: list[ChatToolRun] = Field(default_factory=list)
     skill_runs: list[ChatSkillRun] = Field(default_factory=list)
-    team_activities: list[ChatTeamActivity] = Field(default_factory=list)
-    scope: str = "leader"
+    scope: str = "single"
     chat_data: dict | None = None
-    leader_system_prompt: str = ""
-    worker_member: dict | None = None
-    worker_text: str = ""
-    worker_thinking: str = ""
-    worker_tool_calls: list[ChatToolRun] = Field(default_factory=list)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     model_config = {"arbitrary_types_allowed": True}
@@ -286,9 +245,6 @@ class ChatMessage(BaseModel):
     team_members: list[ChatTeamMemberPayload] = Field(default_factory=list)
     """Team 成员摘要（Team 模式下用于注入 Leader 上下文）"""
 
-    worker_selector_prompt: str = Field(default="", alias="workerSelectorPrompt")
-    """Team Worker Selector 专用提示词（Team 模式下动态注入系统内置选择器）"""
-
     system_prompt: str | None = None
     """Agent 系统提示词（可选，用于临时自定义）"""
 
@@ -306,26 +262,5 @@ class ChatMessage(BaseModel):
 
     sandbox: bool = False
     """沙盒运行：不写入历史对话"""
-
-    model_config = {"populate_by_name": True}
-
-
-class TeamWorkerSelectionRequest(BaseModel):
-    """Ask a model to preselect relevant Team workers for one user task."""
-
-    message: str
-    agent_id: str | None = Field(default=None, alias="agentId")
-    agent_name: str | None = Field(default=None, alias="agentName")
-    team_name: str | None = Field(default=None, alias="teamName")
-    team_members: list[ChatTeamMemberPayload] = Field(default_factory=list, alias="teamMembers")
-    worker_selector_prompt: str = Field(default="", alias="workerSelectorPrompt")
-    model: str | None = None
-
-    model_config = {"populate_by_name": True}
-
-
-class TeamWorkerSelectionResponse(BaseModel):
-    selected_agent_ids: list[str] = Field(alias="selectedAgentIds")
-    reason: str = ""
 
     model_config = {"populate_by_name": True}

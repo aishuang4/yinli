@@ -5,7 +5,8 @@ import { SandboxControlPanel, type SandboxCase } from '../features/sandbox/Sandb
 import { MarkdownContent } from '../components/MarkdownContent';
 import { useAgents } from '../hooks/useAgents';
 import { useTeams } from '../hooks/useTeams';
-import { useEventStream, type TeamActorInfo, type ToolCallInfo } from '../hooks/useEventStream';
+import { useEventStream, type ToolCallInfo } from '../hooks/useEventStream';
+import { TeamConsolePanel } from '../features/chat/TeamDisplayBlock';
 import type { TeamMember } from '../types/team';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
@@ -118,7 +119,6 @@ export function SandboxPage() {
       agentName: runtimeAgent.name,
       teamId: mode === 'team' ? selectedTeam?.id : undefined,
       teamName: mode === 'team' ? selectedTeam?.name : undefined,
-      workerSelectorPrompt: mode === 'team' ? selectedTeam?.workerSelectorPrompt : undefined,
       teamMembers: mode === 'team'
         ? (selectedTeam?.members || []).map((member: TeamMember) => ({
           id: member.id,
@@ -126,9 +126,6 @@ export function SandboxPage() {
           name: member.name,
           role: member.role,
           description: member.description,
-          executionMode: member.executionMode,
-          dependsOn: member.dependsOn,
-          handoffPrompt: member.handoffPrompt,
         }))
         : undefined,
       systemPrompt: runtimeAgent.systemPrompt,
@@ -181,7 +178,7 @@ export function SandboxPage() {
 }
 
 function SandboxResult({ state }: { state: ReturnType<typeof useEventStream>['state'] }) {
-  if (!state.isStreaming && !state.textContent && !state.error && state.toolCalls.length === 0 && state.teamActors.length === 0 && state.skillCalls.length === 0) {
+  if (!state.isStreaming && !state.textContent && !state.error && state.toolCalls.length === 0 && !state.teamConsole.snapshot && state.skillCalls.length === 0) {
     return (
       <div className="flex h-full items-center justify-center text-[var(--color-text-tertiary)]">
         <div className="text-center">
@@ -211,15 +208,10 @@ function SandboxResult({ state }: { state: ReturnType<typeof useEventStream>['st
           </div>
         </section>
       )}
-      {state.teamActors.length > 0 && (
-        <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-          <div className="mb-3 text-sm font-medium text-[var(--color-text-primary)]">Team 轨迹</div>
-          <div className="grid gap-2 md:grid-cols-2">
-            {state.teamActors.map((activity) => (
-              <SandboxActivityCard key={activity.id} activity={activity} />
-            ))}
-          </div>
-        </section>
+      {state.teamConsole.snapshot && (
+        <div className="h-[640px] overflow-hidden rounded-md border border-[var(--color-border)]">
+          <TeamConsolePanel state={state.teamConsole} />
+        </div>
       )}
       {state.toolCalls.length > 0 && <SandboxToolList title="Agent 工具调用" toolCalls={state.toolCalls} />}
       {state.thinkingContent && (
@@ -233,26 +225,6 @@ function SandboxResult({ state }: { state: ReturnType<typeof useEventStream>['st
           <MarkdownContent content={state.textContent} streaming={state.isStreaming} />
         </section>
       )}
-    </div>
-  );
-}
-
-function SandboxActivityCard({ activity }: { activity: TeamActorInfo }) {
-  const toolCalls = activity.toolCalls || [];
-
-  return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">{activity.agentName}</div>
-          <div className="text-xs text-[var(--color-text-tertiary)]">{activity.role}</div>
-        </div>
-        <Tag size="small" color={activity.status === 'failed' ? 'red' : activity.status === 'completed' ? 'green' : 'blue'}>
-          {activity.status}
-        </Tag>
-      </div>
-      <div className="line-clamp-2 text-xs text-[var(--color-text-secondary)]">{activity.detail || activity.task}</div>
-      {toolCalls.length > 0 && <SandboxToolList title="工具调用" toolCalls={toolCalls} compact />}
     </div>
   );
 }

@@ -20,7 +20,6 @@ from src.agents.factory import (
     get_or_create_agent,
 )
 from src.server.routes.chat.models import ChatMessage, ChatTeamMemberPayload
-from src.server.routes.chat.prompts import _build_team_system_prompt
 from src.server.routes.chat.skill_selector import select_runtime_skills
 from src.server.routes.chat.tool_scope_resolver import resolve_runtime_tool_scope
 from src.server.routes.skills import Skill
@@ -37,7 +36,7 @@ class RuntimeModelConfig:
 
 @dataclass(frozen=True)
 class RoutedTeamContext:
-    """完整 Team 上下文。Worker 选择由 Team Runtime 内部处理。"""
+    """完整 Team 角色素材，临时 Member 由 Leader 在 TeamRun 内动态创建。"""
 
     members: list[ChatTeamMemberPayload]
     run_data: ChatMessage
@@ -100,13 +99,13 @@ def build_routed_team_context(
     run_data: ChatMessage,
     leader_agent_id: str,
 ) -> RoutedTeamContext:
-    """生成完整 Team 上下文和 Leader 系统提示词。"""
+    """保留前端传入的 Team 来源信息，不再注入旧静态 Team prompt。"""
 
     members = run_data.team_members
     return RoutedTeamContext(
         members=members,
         run_data=run_data.model_copy(update={"team_members": members}),
-        system_prompt=_build_team_system_prompt(run_data.team_name, members),
+        system_prompt="",
     )
 
 

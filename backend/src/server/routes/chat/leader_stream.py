@@ -18,7 +18,6 @@ from src.server.routes.chat.models import (
     PENDING_SUBAGENT_PARENT_CONTEXTS,
     ChatModelCacheRun,
     ChatSkillRun,
-    ChatTeamActivity,
     ChatToolRun,
 )
 from src.server.routes.chat.prompts import _extract_clarification_request
@@ -28,10 +27,7 @@ from src.server.routes.chat.runtime_events import (
 )
 from src.server.routes.chat.skill_runs import update_skill_run_status
 from src.server.routes.chat.store import _append_assistant_message
-from src.server.routes.chat.team_state import (
-    _mark_team_leader_waiting_for_clarification,
-    _update_worker_tool_calls,
-)
+from src.server.routes.chat.tool_state import _update_tool_calls
 from src.server.routes.chat.trace_recorder import (
     _attach_provider_cache_usage,
     build_tool_artifact_runtime_event,
@@ -90,7 +86,6 @@ async def stream_leader_agent_reply(
     message: str,
     stream_scope: str,
     skill_runs: list[ChatSkillRun],
-    team_activities: list[ChatTeamActivity],
     plan_mode_manager: object | None = None,
     runtime_event_sources: list[object] | None = None,
 ) -> AsyncGenerator[str, None]:
@@ -171,7 +166,7 @@ async def stream_leader_agent_reply(
             agent_name=agent_name,
             guardrails=guardrails,
         )
-        next_tool_calls = _update_worker_tool_calls(
+        next_tool_calls = _update_tool_calls(
             state.assistant_tool_calls,
             event_type,
             event_data,
@@ -200,7 +195,6 @@ async def stream_leader_agent_reply(
             scope=stream_scope,
             agent_id=agent_id,
             agent_name=agent_name,
-            team_activity_id=None,
             guardrails=guardrails,
             tool_calls=state.assistant_tool_calls,
         )
@@ -263,7 +257,6 @@ async def stream_leader_agent_reply(
                     message=message,
                     stream_scope=stream_scope,
                     skill_runs=skill_runs,
-                    team_activities=team_activities,
                     plan_mode_manager=plan_mode_manager,
                     runtime_event_sources=runtime_event_sources,
                 ):
@@ -290,7 +283,6 @@ async def stream_leader_agent_reply(
                         "message": message,
                         "stream_scope": stream_scope,
                         "skill_runs": skill_runs,
-                        "team_activities": team_activities,
                         "plan_mode_manager": plan_mode_manager,
                         "runtime_event_sources": runtime_event_sources,
                     }
@@ -324,7 +316,6 @@ async def stream_leader_agent_reply(
                 assistant_text=state.assistant_text,
                 assistant_tool_calls=state.assistant_tool_calls,
                 skill_runs=skill_runs,
-                team_activities=team_activities,
                 scope=stream_scope,
                 persist=persist,
             )
@@ -443,11 +434,6 @@ async def stream_leader_agent_reply(
                 current_step=str(clarification.get("title") or "waiting_user"),
                 pending_interaction_id=str(clarification.get("id") or ""),
             )
-        _mark_team_leader_waiting_for_clarification(team_activities, agent_id)
-        if team_activities:
-            yield _sse_event("TEAM_ACTIVITY", {
-                "activities": [item.model_dump(by_alias=True) for item in team_activities],
-            })
         _record_run_event(
             session_id=session_id,
             event_type="CLARIFICATION_REQUIRED",
@@ -470,7 +456,6 @@ async def stream_leader_agent_reply(
                 thinking=state.assistant_thinking,
                 skill_calls=skill_runs,
                 tool_calls=state.assistant_tool_calls,
-                team_activities=team_activities,
                 model_caches=state.assistant_model_caches,
                 runtime_events=state.runtime_events,
                 clarification_requests=[clarification],

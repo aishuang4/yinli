@@ -5,6 +5,7 @@ import json
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from src.server.routes.agents import get_registered_agent
 from src.server.routes.chat.background_runs import (
@@ -18,8 +19,33 @@ from src.server.routes.chat.background_runs import (
 from src.server.routes.chat.handlers.send import send_message
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.router import router
+from src.server.routes.chat.team_runtime.registry import get_team_service
 from src.server.routes.teams import get_registered_team
 from src.storage.database import get_latest_user_chat_message
+
+
+class TeamMailRequest(BaseModel):
+    """用户向 active TeamRun 成员发送消息。"""
+
+    recipient: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=20_000)
+
+
+@router.post("/runs/{run_id}/team/mail")
+async def send_team_mail(run_id: str, data: TeamMailRequest) -> dict:
+    """通过 Mailbox 干预当前 TeamRun。"""
+
+    service = await get_team_service(run_id)
+    if service is None:
+        raise HTTPException(status_code=409, detail="TeamRun is not active")
+    try:
+        message = await service.send_user_mail(
+            recipient=data.recipient,
+            content=data.content,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"message": message}
 
 
 @router.get("/runs/{run_id}/stream")
@@ -139,7 +165,6 @@ def _build_rerun_chat_message(source_run) -> ChatMessage:
             team_id=team.id,
             team_name=team.name,
             team_members=[member.model_dump(by_alias=True) for member in team.members],
-            worker_selector_prompt=team.worker_selector_prompt,
             images=images,
         )
 

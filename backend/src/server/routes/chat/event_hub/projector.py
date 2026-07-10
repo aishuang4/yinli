@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Any
 
-from src.server.routes.chat.event_types import SSE_EVENT_RUNTIME
+from src.server.routes.chat.event_types import SSE_EVENT_RUNTIME, SSE_EVENT_TEAM
 from src.server.routes.chat.run_state_schema import dump_run_state
 
 
@@ -52,12 +52,12 @@ def initial_run_state(run: Any) -> dict[str, Any]:
         "finalAnswerTruncated": False,
         "thinking": "",
         "tools": [],
-        "teamActivities": [],
         "skillCalls": [],
         "modelName": "",
         "tokenUsage": None,
         "plans": [],
         "displaySnapshot": _empty_display_snapshot(),
+        "teamSnapshot": None,
         "approvals": [],
         "runtimeEvents": [],
         "error": "",
@@ -114,6 +114,10 @@ def project_event(state: dict[str, Any] | None, event_type: str, data: dict[str,
         _append_text(next_state, "finalAnswer", str(data.get("delta") or ""), FINAL_ANSWER_MAX_CHARS)
         next_state["finalAnswerTruncated"] = len(next_state["finalAnswer"]) >= FINAL_ANSWER_MAX_CHARS
         next_state["currentStage"] = "正在生成最终答案"
+    elif event_type == "FINAL_ANSWER_REPLACE":
+        next_state["finalAnswer"] = _truncate(str(data.get("content") or ""), FINAL_ANSWER_MAX_CHARS)
+        next_state["finalAnswerTruncated"] = len(str(data.get("content") or "")) > FINAL_ANSWER_MAX_CHARS
+        next_state["currentStage"] = "已生成最终答案"
     elif event_type == "TEXT_BLOCK_DELTA":
         _append_text(next_state, "reasoning", str(data.get("delta") or ""), REASONING_MAX_CHARS)
         next_state["reasoningTruncated"] = len(next_state["reasoning"]) >= REASONING_MAX_CHARS
@@ -145,9 +149,6 @@ def project_event(state: dict[str, Any] | None, event_type: str, data: dict[str,
         tool["completedAt"] = _utc_now()
         if status == "failed":
             tool["error"] = str(data.get("error") or data.get("message") or data.get("state") or "工具调用失败")
-    elif event_type == "TEAM_ACTIVITY":
-        activities = data.get("activities")
-        next_state["teamActivities"] = activities if isinstance(activities, list) else []
     elif event_type == "SKILL_CONTEXT":
         _replace_skill_calls(next_state, data, status="running")
     elif event_type == "SKILL_END":
@@ -176,6 +177,31 @@ def project_event(state: dict[str, Any] | None, event_type: str, data: dict[str,
         next_state["currentStage"] = "执行失败"
     elif event_type == SSE_EVENT_RUNTIME:
         _project_runtime_event(next_state, data)
+    elif event_type == SSE_EVENT_TEAM:
+        snapshot = data.get("snapshot") if isinstance(data.get("snapshot"), dict) else None
+        if snapshot:
+            previous_team_snapshot = (
+                next_state.get("teamSnapshot")
+                if isinstance(next_state.get("teamSnapshot"), dict)
+                else {}
+            )
+            next_state["teamSnapshot"] = {
+                **snapshot,
+                "recentEvents": _append_team_event_history(
+                    previous_team_snapshot.get("recentEvents"),
+                    data,
+                ),
+            }
+            run_state = snapshot.get("run") if isinstance(snapshot.get("run"), dict) else {}
+            phase = str(run_state.get("phase") or "")
+            next_state["currentStage"] = {
+                "created": "创建 TeamRun",
+                "coordinating": "Leader 正在组建团队",
+                "executing": "成员正在执行共享任务",
+                "synthesizing": "Leader 正在综合结果",
+                "completed": "TeamRun 已完成",
+                "failed": "TeamRun 失败",
+            }.get(phase, "TeamRun 运行中")
 
     if next_state["status"] == "completed":
         next_state["currentStage"] = "已完成"
@@ -192,6 +218,50 @@ def project_event(state: dict[str, Any] | None, event_type: str, data: dict[str,
     return next_state
 
 
+def _append_team_event_history(history: Any, event: dict[str, Any]) -> list[dict[str, Any]]:
+    """把 Team event 压缩写入可恢复快照，且不递归保存事件内 snapshot。"""
+
+    events = [deepcopy(item) for item in history or [] if isinstance(item, dict)]
+    compact = {key: deepcopy(value) for key, value in event.items() if key != "snapshot"}
+    event_id = str(compact.get("id") or "")
+    event_seq = int(compact.get("seq") or 0)
+    if any(
+        str(item.get("id") or "") == event_id
+        or int(item.get("seq") or 0) == event_seq
+        or event_seq in (item.get("payload") or {}).get("mergedSeqs", [])
+        for item in events
+    ):
+        return events[-300:]
+
+    last = events[-1] if events else None
+    if (
+        isinstance(last, dict)
+        and str(compact.get("type") or "").endswith(".delta")
+        and last.get("type") == compact.get("type")
+        and last.get("actorId") == compact.get("actorId")
+        and last.get("taskId") == compact.get("taskId")
+    ):
+        last_payload = last.get("payload") if isinstance(last.get("payload"), dict) else {}
+        compact_payload = compact.get("payload") if isinstance(compact.get("payload"), dict) else {}
+        events[-1] = {
+            **last,
+            "id": compact.get("id"),
+            "seq": compact.get("seq"),
+            "timestamp": compact.get("timestamp"),
+            "payload": {
+                **last_payload,
+                "delta": f"{last_payload.get('delta') or ''}{compact_payload.get('delta') or ''}",
+                "mergedSeqs": [
+                    *(last_payload.get("mergedSeqs") or [last.get("seq")]),
+                    compact.get("seq"),
+                ],
+            },
+        }
+    else:
+        events.append(compact)
+    return events[-300:]
+
+
 def _empty_display_snapshot() -> dict[str, Any]:
     return {
         "version": DISPLAY_SNAPSHOT_VERSION,
@@ -204,7 +274,6 @@ def _empty_display_snapshot() -> dict[str, Any]:
 def _build_display_snapshot(state: dict[str, Any]) -> dict[str, Any]:
     status = str(state.get("status") or "running")
     updated_at = str(state.get("updatedAt") or _utc_now())
-    mode = _display_mode(state)
     actors = _build_display_actors(state, status, updated_at)
     blocks: list[dict[str, Any]] = []
     tools = [tool for tool in state.get("tools") or [] if isinstance(tool, dict)]
@@ -286,35 +355,15 @@ def _build_display_snapshot(state: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "version": DISPLAY_SNAPSHOT_VERSION,
-        "mode": mode,
+        "mode": "single_agent",
         "actors": actors,
         "blocks": blocks,
     }
 
 
-def _display_mode(state: dict[str, Any]) -> str:
-    """根据 RunState 判断展示形态。"""
-
-    if str(state.get("mode") or "") == "team":
-        return "team"
-    if state.get("teamId") or state.get("teamName"):
-        return "team"
-    if state.get("teamActivities"):
-        return "team"
-    return "single_agent"
-
-
 def _build_display_actors(state: dict[str, Any], status: str, updated_at: str) -> list[dict[str, Any]]:
-    """构建统一 actor 列表。"""
+    """构建单 Agent actor 列表。"""
 
-    if _display_mode(state) == "team":
-        actors = [
-            _display_actor_from_team_activity(activity, state, updated_at)
-            for activity in state.get("teamActivities") or []
-            if isinstance(activity, dict)
-        ]
-        if actors:
-            return actors
     return [_display_actor_from_single_agent(state, status, updated_at)]
 
 
@@ -324,10 +373,9 @@ def _display_actor_from_single_agent(state: dict[str, Any], status: str, updated
     actor_id = _default_actor_id(state)
     return _normalize_display_actor({
         "id": actor_id,
-        "role": "leader" if _display_mode(state) == "team" else "single",
+        "role": "single",
         "agentId": str(state.get("agentId") or ""),
         "agentName": str(state.get("agentName") or "Agent"),
-        "activityId": None,
         "status": status,
         "task": str(state.get("task") or ""),
         "detail": str(state.get("currentStage") or ""),
@@ -339,80 +387,18 @@ def _display_actor_from_single_agent(state: dict[str, Any], status: str, updated
     })
 
 
-def _display_actor_from_team_activity(activity: dict[str, Any], state: dict[str, Any], updated_at: str) -> dict[str, Any]:
-    """把 TeamActivity 转成统一 actor。"""
-
-    activity_id = str(activity.get("id") or "")
-    role = str(activity.get("role") or "worker")
-    agent_id = str(activity.get("agentId") or activity.get("agent_id") or "")
-    actor_id = activity_id or (f"{role}-{agent_id}" if agent_id else f"{role}-actor")
-    items = _build_actor_items_from_team_activity(state, activity, updated_at)
-    if role == "leader":
-        leader_items = _build_actor_process_items(state, str(activity.get("status") or state.get("status") or "running"), updated_at)
-        if leader_items:
-            items = leader_items
-    return _normalize_display_actor({
-        "id": actor_id,
-        "role": role,
-        "agentId": agent_id,
-        "agentName": str(activity.get("agentName") or activity.get("agent_name") or "Agent"),
-        "activityId": activity_id,
-        "status": str(activity.get("status") or "pending"),
-        "task": str(activity.get("task") or ""),
-        "assignment": str(activity.get("assignment") or ""),
-        "expectedOutput": str(activity.get("expectedOutput") or activity.get("expected_output") or ""),
-        "constraints": str(activity.get("constraints") or ""),
-        "detail": str(activity.get("detail") or ""),
-        "output": str(activity.get("output") or ""),
-        "report": str(activity.get("report") or ""),
-        "skippedReason": str(activity.get("skippedReason") or activity.get("skipped_reason") or ""),
-        "reportReviewStatus": str(activity.get("reportReviewStatus") or activity.get("report_review_status") or ""),
-        "reportReviewNotes": str(activity.get("reportReviewNotes") or activity.get("report_review_notes") or ""),
-        "reportReviewGaps": activity.get("reportReviewGaps") or activity.get("report_review_gaps") or [],
-        "executionMode": str(activity.get("executionMode") or activity.get("execution_mode") or ""),
-        "dependsOn": activity.get("dependsOn") or activity.get("depends_on") or [],
-        "waitReason": str(activity.get("waitReason") or activity.get("wait_reason") or ""),
-        "dependencyOutputCount": int(activity.get("dependencyOutputCount") or activity.get("dependency_output_count") or 0),
-        "leaderContextCount": int(activity.get("leaderContextCount") or activity.get("leader_context_count") or 0),
-        "createdAt": str(activity.get("createdAt") or activity.get("created_at") or updated_at),
-        "updatedAt": updated_at,
-        "completedAt": str(activity.get("completedAt") or activity.get("completed_at") or ""),
-        "items": items,
-    })
-
-
 def _normalize_display_actor(actor: dict[str, Any]) -> dict[str, Any]:
     """补齐 actor 默认字段，保持前端 schema 稳定。"""
 
     return {
         "id": str(actor.get("id") or ""),
-        "role": str(actor.get("role") or "single"),
+        "role": "single",
         "agentId": str(actor.get("agentId") or ""),
         "agentName": str(actor.get("agentName") or "Agent"),
-        "activityId": actor.get("activityId"),
         "status": str(actor.get("status") or "running"),
         "task": str(actor.get("task") or ""),
-        "assignment": str(actor.get("assignment") or ""),
-        "expectedOutput": str(actor.get("expectedOutput") or ""),
-        "constraints": str(actor.get("constraints") or ""),
         "detail": str(actor.get("detail") or ""),
         "output": str(actor.get("output") or ""),
-        "report": str(actor.get("report") or ""),
-        "skippedReason": str(actor.get("skippedReason") or ""),
-        "reportReviewStatus": str(actor.get("reportReviewStatus") or ""),
-        "reportReviewNotes": str(actor.get("reportReviewNotes") or ""),
-        "reportReviewGaps": [
-            str(item)
-            for item in (actor.get("reportReviewGaps") if isinstance(actor.get("reportReviewGaps"), list) else [])
-        ],
-        "executionMode": str(actor.get("executionMode") or ""),
-        "dependsOn": [
-            str(item)
-            for item in (actor.get("dependsOn") if isinstance(actor.get("dependsOn"), list) else [])
-        ],
-        "waitReason": str(actor.get("waitReason") or ""),
-        "dependencyOutputCount": int(actor.get("dependencyOutputCount") or 0),
-        "leaderContextCount": int(actor.get("leaderContextCount") or 0),
         "createdAt": str(actor.get("createdAt") or ""),
         "updatedAt": str(actor.get("updatedAt") or ""),
         "completedAt": str(actor.get("completedAt") or ""),
@@ -437,51 +423,6 @@ def _build_actor_process_items(state: dict[str, Any], status: str, updated_at: s
         status,
         updated_at,
     )
-
-
-def _build_actor_items_from_team_activity(state: dict[str, Any], activity: dict[str, Any], updated_at: str) -> list[dict[str, Any]]:
-    """从 TeamActivity 的 thinking/toolCalls 还原 actor 内部过程。"""
-
-    actor_id = str(activity.get("id") or "")
-    actor_items = _build_actor_items_from_timeline(state, actor_id, updated_at)
-    if actor_items:
-        return actor_items
-    items: list[dict[str, Any]] = []
-    thinking = str(activity.get("thinking") or "")
-    if thinking:
-        items.append({
-            "id": f"{activity.get('id') or 'activity'}-thinking",
-            "event": "thinking.delta",
-            "targetId": f"{activity.get('id') or 'activity'}-thinking",
-            "status": str(activity.get("status") or "running"),
-            "createdAt": str(activity.get("createdAt") or activity.get("created_at") or updated_at),
-            "updatedAt": updated_at,
-            "data": {"text": thinking},
-        })
-    for tool in activity.get("toolCalls") or activity.get("tool_calls") or []:
-        if not isinstance(tool, dict):
-            continue
-        tool_id = str(tool.get("id") or "")
-        if not tool_id:
-            continue
-        tool_status = str(tool.get("status") or "running")
-        items.append({
-            "id": tool_id,
-            "event": _tool_display_event_name({"status": tool_status}),
-            "targetId": tool_id,
-            "status": tool_status,
-            "createdAt": str(activity.get("createdAt") or activity.get("created_at") or updated_at),
-            "updatedAt": updated_at,
-            "data": {
-                "name": str(tool.get("name") or "tool"),
-                "inputPreview": str(tool.get("args") or tool.get("inputPreview") or ""),
-                "outputPreview": str(tool.get("result") or tool.get("outputPreview") or ""),
-                "outputSize": len(str(tool.get("result") or tool.get("outputPreview") or "")),
-                "outputTruncated": False,
-                "error": str(tool.get("error") or ""),
-            },
-        })
-    return items
 
 
 def _build_process_items_from_timeline(
@@ -708,11 +649,7 @@ def _upsert_hitl_process_timeline_item(state: dict[str, Any], data: dict[str, An
     item = _hitl_process_item_from_required_event(state, data)
     if not item:
         return
-    actor_id = _hitl_actor_id(state, data)
-    if _display_mode(state) == "team" and actor_id:
-        _upsert_actor_timeline_item(state, actor_id, item)
-    else:
-        _upsert_process_timeline_item(state, item)
+    _upsert_process_timeline_item(state, item)
 
 
 def _complete_hitl_process_timeline_item(
@@ -747,11 +684,7 @@ def _complete_hitl_process_timeline_item(
             "error": "" if str(payload.get("action") or "") == "approve" else "用户取消或拒绝补充信息。",
         },
     }
-    actor_id = _hitl_actor_id_from_approval(state, approval)
-    if _display_mode(state) == "team" and actor_id:
-        _upsert_actor_timeline_item(state, actor_id, item)
-    else:
-        _upsert_process_timeline_item(state, item)
+    _upsert_process_timeline_item(state, item)
 
 
 def _upsert_process_timeline_item(state: dict[str, Any], item: dict[str, Any]) -> None:
@@ -959,7 +892,7 @@ def _project_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None
 
 
 def _project_actor_timeline_from_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None:
-    """把 worker/leader Runtime Event 投影到对应 actor 的 ReAct timeline。"""
+    """把单 Agent Runtime Event 投影到 actor 的 ReAct timeline。"""
 
     if _runtime_event_has_raw_main_stream_pair(event):
         return
@@ -1217,19 +1150,9 @@ def _model_usage_detail(payload: dict[str, Any]) -> str:
 
 def _actor_id_from_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> str:
     scope = str(event.get("scope") or "")
-    if scope not in {"leader", "worker", "single", "single_agent"}:
+    if scope not in {"single", "single_agent"}:
         return ""
-    activity_id = str(event.get("teamActivityId") or "")
-    if activity_id:
-        return activity_id
-    if scope in {"single", "single_agent"}:
-        return _default_actor_id(state)
-    agent_id = str(event.get("agentId") or "")
-    if agent_id:
-        for activity in state.get("teamActivities") or []:
-            if isinstance(activity, dict) and str(activity.get("agentId") or activity.get("agent_id") or "") == agent_id:
-                return str(activity.get("id") or "")
-    return _default_actor_id(state) if scope == "leader" else ""
+    return _default_actor_id(state)
 
 
 def _runtime_tool_target_id(actor_id: str, payload: dict[str, Any]) -> str:
@@ -1242,24 +1165,6 @@ def _build_display_events_for_raw_event(
     event_type: str,
     data: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    if event_type == "TEAM_ACTIVITY":
-        return [_display_event(
-            state,
-            block="team",
-            event="team.actors.updated",
-            op="replace",
-            target_id="team",
-            status=str(state.get("status") or "running"),
-            data={
-                "mode": "team",
-                "actors": _build_display_actors(
-                    state,
-                    str(state.get("status") or "running"),
-                    str(state.get("updatedAt") or _utc_now()),
-                ),
-            },
-            scope="team",
-        )]
     if event_type in {"REASONING_DELTA", "TEXT_BLOCK_DELTA"}:
         target_id = _latest_process_text_target_id(state, "reasoning.delta", "reasoning")
         return [_display_event(
@@ -1291,6 +1196,16 @@ def _build_display_events_for_raw_event(
             target_id="final-answer",
             status=_final_answer_display_status(str(state.get("status") or "running")),
             data={"content": str(data.get("delta") or ""), "started": True},
+        )]
+    if event_type == "FINAL_ANSWER_REPLACE":
+        return [_display_event(
+            state,
+            block="answer",
+            event="answer.completed",
+            op="replace",
+            target_id="final-answer",
+            status=_final_answer_display_status(str(state.get("status") or "running")),
+            data={"content": str(data.get("content") or ""), "started": True},
         )]
     if event_type in {"TOOL_CALL_START", "TOOL_CALL_DELTA", "TOOL_CALL_END", "TOOL_RESULT_TEXT_DELTA", "TOOL_RESULT_END"}:
         return _tool_display_events_for_raw_event(state, event_type, data)
@@ -1531,7 +1446,7 @@ def _subagent_display_event_for_runtime_event(state: dict[str, Any], event: dict
 
 
 def _actor_display_event_for_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> dict[str, Any] | None:
-    """把 worker/leader Runtime Event 转成前端 actor process 增量。"""
+    """把单 Agent Runtime Event 转成前端 actor process 增量。"""
 
     if _runtime_event_has_raw_main_stream_pair(event):
         return None
@@ -1818,14 +1733,6 @@ def _ask_user_result_preview(tool_id: str, payload: dict[str, Any]) -> str:
 
 
 def _hitl_actor_id(state: dict[str, Any], data: dict[str, Any]) -> str:
-    activity_id = str(data.get("teamActivityId") or data.get("team_activity_id") or "")
-    if activity_id:
-        return activity_id
-    agent_id = str(data.get("agentId") or data.get("agent_id") or "")
-    if agent_id:
-        for activity in state.get("teamActivities") or []:
-            if isinstance(activity, dict) and str(activity.get("agentId") or activity.get("agent_id") or "") == agent_id:
-                return str(activity.get("id") or "")
     return _default_actor_id(state)
 
 
@@ -1843,13 +1750,12 @@ def _is_ask_user_tool_name(name: str) -> bool:
 def _runtime_event_has_raw_main_stream_pair(event: dict[str, Any]) -> bool:
     """判断 Runtime Event 是否已有主 Agent 原始事件负责展示。
 
-    单 Agent 和 Leader 的 AgentScope 事件会紧跟着以原始事件进入 RunState；
-    如果 Runtime Event 也投影到 actor timeline，会生成同一 tool_call_id 的
-    第二个过程项。Worker 没有同等原始主流事件，仍由 Runtime Event 投影。
+    单 Agent 的 AgentScope 事件会紧跟着以原始事件进入 RunState；如果 Runtime
+    Event 也投影到 actor timeline，会生成同一 tool_call_id 的第二个过程项。
     """
 
     scope = str(event.get("scope") or "")
-    if scope not in {"single", "single_agent", "leader"}:
+    if scope not in {"single", "single_agent"}:
         return False
     runtime_type = str(event.get("type") or "")
     return runtime_type in {
@@ -1900,33 +1806,18 @@ def _display_event(
 
 
 def _default_display_scope(state: dict[str, Any]) -> str:
-    if _display_mode(state) != "team":
-        return DISPLAY_EVENT_SCOPE
-    for activity in state.get("teamActivities") or []:
-        if isinstance(activity, dict) and str(activity.get("role") or "") == "leader":
-            return "leader"
-    return "team"
+    return DISPLAY_EVENT_SCOPE
 
 
 def _normalize_display_scope(scope: str) -> str:
-    """把内部旧 scope 转成 DisplayEvent v3 稳定 scope。"""
+    """DisplaySnapshot 只接受单 Agent scope。"""
 
-    if scope == "single":
-        return DISPLAY_EVENT_SCOPE
-    if scope in {"single_agent", "team", "leader", "worker"}:
-        return scope
     return DISPLAY_EVENT_SCOPE
 
 
 def _default_actor_id(state: dict[str, Any]) -> str:
-    """返回当前主 Agent/Leader 的 actor id。"""
+    """返回当前单 Agent actor id。"""
 
-    if _display_mode(state) == "team":
-        for activity in state.get("teamActivities") or []:
-            if not isinstance(activity, dict):
-                continue
-            if str(activity.get("role") or "") == "leader":
-                return str(activity.get("id") or "")
     agent_id = str(state.get("agentId") or "")
     return f"single-{agent_id}" if agent_id else "single-agent"
 
@@ -1986,7 +1877,6 @@ def _upsert_approval(state: dict[str, Any], data: dict[str, Any], approval_type:
         "agentId": str(data.get("agentId") or data.get("agent_id") or ""),
         "agentName": str(data.get("agentName") or data.get("agent_name") or ""),
         "scope": str(data.get("scope") or ""),
-        "teamActivityId": str(data.get("teamActivityId") or data.get("team_activity_id") or ""),
         "toolCalls": data.get("toolCalls") or data.get("tool_calls") or [],
         "title": str(data.get("title") or ""),
         "description": str(data.get("description") or ""),

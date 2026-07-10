@@ -14,15 +14,16 @@ RunStateStatus = Literal["running", "waiting", "completed", "failed", "cancelled
 RunStatePatchKind = Literal[
     "snapshot_meta",
     "display_event",
+    "team_event",
     "model_usage",
     "approval_resolved",
     "notice",
     "error",
 ]
-DisplayBlockKind = Literal["process", "team", "plan", "feedback", "answer", "files", "error"]
+DisplayBlockKind = Literal["process", "plan", "feedback", "answer", "files", "error"]
 DisplayEventOp = Literal["append", "upsert", "replace", "remove", "clear"]
-DisplayMode = Literal["single_agent", "team"]
-DisplayScope = Literal["single_agent", "team", "leader", "worker"]
+DisplayMode = Literal["single_agent"]
+DisplayScope = Literal["single_agent"]
 
 
 class RunStateToolSummary(BaseModel):
@@ -52,7 +53,6 @@ class RunStateApprovalSummary(BaseModel):
     agentId: str = ""
     agentName: str = ""
     scope: str = ""
-    teamActivityId: str = ""
     toolCalls: list[dict[str, Any]] = Field(default_factory=list)
     title: str = ""
     description: str = ""
@@ -104,30 +104,16 @@ class RunStateDisplayItem(BaseModel):
 
 
 class RunStateDisplayActor(BaseModel):
-    """DisplaySnapshot v3 中的统一执行主体。"""
+    """DisplaySnapshot v3 中的单 Agent 执行主体。"""
 
     id: str
     role: str = "single"
     agentId: str = ""
     agentName: str = ""
-    activityId: str | None = None
     status: str = "running"
     task: str = ""
-    assignment: str = ""
-    expectedOutput: str = ""
-    constraints: str = ""
     detail: str = ""
     output: str = ""
-    report: str = ""
-    skippedReason: str = ""
-    reportReviewStatus: str = ""
-    reportReviewNotes: str = ""
-    reportReviewGaps: list[str] = Field(default_factory=list)
-    executionMode: str = ""
-    dependsOn: list[str] = Field(default_factory=list)
-    waitReason: str = ""
-    dependencyOutputCount: int = 0
-    leaderContextCount: int = 0
     createdAt: str = ""
     updatedAt: str = ""
     completedAt: str = ""
@@ -205,6 +191,7 @@ class RunStateSnapshot(BaseModel):
     tokenUsage: dict[str, Any] | None = None
     plans: list[RunStatePlanSummary] = Field(default_factory=list)
     displaySnapshot: RunStateDisplaySnapshot = Field(default_factory=RunStateDisplaySnapshot)
+    teamSnapshot: dict[str, Any] | None = None
     approvals: list[RunStateApprovalSummary] = Field(default_factory=list)
     error: str = ""
     lastEventType: str = ""
@@ -228,6 +215,7 @@ class RunStatePatch(BaseModel):
     resolvedApprovalId: str | None = None
     notice: dict[str, Any] | None = None
     displayEvent: RunStateDisplayEvent | None = None
+    teamEvent: dict[str, Any] | None = None
     error: str | None = None
 
 

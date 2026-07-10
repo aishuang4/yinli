@@ -177,7 +177,7 @@ function TeamListRow({
   return (
     <WorkbenchListRow
       icon={(
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-agent-worker)]">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-agent-member)]">
           <Users size={20} strokeWidth={1.8} />
         </span>
       )}

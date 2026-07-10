@@ -138,7 +138,7 @@ function TraceEventRow({ event }: { event: TraceEvent }) {
             <span className="truncate text-sm font-medium text-[var(--color-text-primary)]">
               {event.title || event.eventType}
             </span>
-            <Tag size="small" color={event.scope === 'worker' ? 'mauve' : 'blue'}>{event.scope}</Tag>
+            <Tag size="small" color={event.scope === 'team_member' ? 'mauve' : 'blue'}>{event.scope}</Tag>
             {event.status && (
               <Tag size="small" color={event.status === 'failed' ? 'red' : event.status === 'waiting' ? 'orange' : event.status === 'completed' ? 'green' : 'transparent'}>
                 {event.status}

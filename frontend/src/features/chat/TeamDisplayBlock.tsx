@@ -1,649 +1,353 @@
-import { AlertCircle, Bot, CheckCircle2, ChevronRight, Clock3, GitBranch, Loader2, Users, X } from 'lucide-react';
-import { Tag } from '@agentscope-ai/design';
-import { MarkdownContent } from '../../components/MarkdownContent';
-import type { SkillCallInfo, TeamActorInfo, ToolCallInfo } from '../../hooks/useEventStream';
-import { DISPLAY_EVENTS, type DisplayItem } from '../../types/displayEvents';
-import { normalizeStoredToolCalls } from './formatters';
-import { AccordionProcessTimeline } from './ProcessTimeline';
-import type { ChatDisplayStatus, ChatProcessItem } from './chatDisplayTypes';
-import { subagentToolDataFromDisplayItem } from './subagentToolData';
+/** Team Runtime 独立右侧控制台。 */
 
-/**
- * TeamDisplayBlock — Team 协作过程展示
- */
-export function TeamDisplayBlock({
-  actors,
-  selectedActorId,
-  onSelectActor,
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { AlertCircle, Bot, CheckCircle2, ChevronDown, ChevronRight, Circle, Clock3, Inbox, ListChecks, Loader2, Megaphone, Send, Users, X } from 'lucide-react';
+import { Button, Tag } from '@agentscope-ai/design';
+import { TextAreaField } from '../../components/form';
+import { notifyError } from '../../utils/feedback';
+import type { TeamConsoleState, TeamDomainEvent, TeamMemberRecord, TeamTaskRecord } from '../../types/teamRuntime';
+
+type ConsoleTab = 'tasks' | 'mailbox' | 'events';
+
+export function TeamConsolePanel({
+  state,
+  onClose,
 }: {
-  actors: TeamActorInfo[];
-  selectedActorId: string | null;
-  onSelectActor: (id: string) => void;
+  state: TeamConsoleState;
+  onClose?: () => void;
 }) {
-  const leader = actors.find((item) => item.role === 'leader');
-  const workers = actors.filter((item) => item.role !== 'leader');
-  const completedCount = actors.filter((item) => item.status === 'completed').length;
+  const snapshot = state.snapshot;
+  const [selectedMemberId, setSelectedMemberId] = useState('leader');
+  const [tab, setTab] = useState<ConsoleTab>('tasks');
+  const [message, setMessage] = useState('');
+  const [sending, setSending] = useState(false);
+
+  useEffect(() => {
+    if (!snapshot) return;
+    if (!snapshot.members.some((member) => member.id === selectedMemberId)) {
+      setSelectedMemberId(snapshot.members[0]?.id || 'leader');
+    }
+  }, [selectedMemberId, snapshot]);
+
+  const selectedMember = snapshot?.members.find((member) => member.id === selectedMemberId) || null;
+  const selectedActiveTask = snapshot?.tasks.find((task) => task.id === selectedMember?.activeTaskId) || null;
+  const tasks = useMemo(() => (
+    snapshot?.tasks.filter((task) => (
+      selectedMemberId === 'leader' ||
+      task.assignedMemberId === selectedMemberId ||
+      task.ownerMemberId === selectedMemberId
+    )) || []
+  ), [selectedMemberId, snapshot]);
+  const mailbox = useMemo(() => (
+    snapshot?.mailbox.filter((mail) => (
+      selectedMemberId === 'leader' || mail.from === selectedMemberId || mail.to === selectedMemberId
+    )) || []
+  ), [selectedMemberId, snapshot]);
+  const events = useMemo(() => state.events.filter((event) => (
+    selectedMemberId === 'leader' || event.actorId === selectedMemberId
+  )), [selectedMemberId, state.events]);
+
+  if (!snapshot) return null;
+
+  const sendMessage = async (recipient = selectedMember?.id || '') => {
+    const content = message.trim();
+    if (!content || !recipient) return;
+    setSending(true);
+    try {
+      const response = await fetch(`/api/chat/runs/${snapshot.run.chatRunId}/team/mail`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipient, content }),
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(String(error.detail || `HTTP ${response.status}`));
+      }
+      setMessage('');
+      setTab('mailbox');
+    } catch (error) {
+      notifyError(error instanceof Error ? error.message : '消息发送失败');
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
-    <div className="w-full overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
-      <div className="flex items-center justify-between gap-3 px-3 py-2">
-        <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
-          <Users size={14} color="var(--color-agent-leader)" />
-          <span>Team 协作</span>
+    <aside className="flex h-full min-h-0 flex-col border-l border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--color-border)] px-4">
+        <Users size={16} className="text-[var(--color-accent)]" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold text-[var(--color-text-primary)]">Team Console</div>
+          <div className="truncate text-xs text-[var(--color-text-tertiary)]">{phaseLabel(snapshot.run.phase)}</div>
         </div>
-        <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
-          {completedCount}/{actors.length} 完成
-        </span>
-      </div>
-
-      {workers.length > 0 && (
-        <TeamExecutionGraph
-          leader={leader || null}
-          workers={workers}
-          selectedActorId={selectedActorId}
-          onSelectActor={onSelectActor}
-        />
-      )}
-
-      <div className="grid items-stretch gap-2 px-3 pb-3 md:grid-cols-2">
-        {leader && (
-          <TeamActorCard
-            actor={leader}
-            selected={selectedActorId === leader.id}
-            onSelect={() => onSelectActor(leader.id)}
-          />
+        <Tag size="small" color={snapshot.run.status === 'failed' ? 'red' : snapshot.run.status === 'completed' ? 'green' : snapshot.run.status === 'cancelled' ? 'orange' : 'blue'}>
+          {snapshot.counts.succeeded}/{snapshot.counts.tasks}
+        </Tag>
+        {onClose && (
+          <button type="button" className="icon-button h-8 w-8" onClick={onClose} aria-label="关闭 Team Console" title="关闭">
+            <X size={14} />
+          </button>
         )}
-        {workers.map((actor) => (
-          <TeamActorCard
-            key={actor.id}
-            actor={actor}
-            selected={selectedActorId === actor.id}
-            onSelect={() => onSelectActor(actor.id)}
-          />
-        ))}
+      </header>
+
+      <div className="shrink-0 border-b border-[var(--color-border)] p-3">
+        <div className="grid grid-cols-2 gap-2">
+          {snapshot.members.map((member) => (
+            <MemberButton
+              key={member.id}
+              member={member}
+              selected={member.id === selectedMemberId}
+              onClick={() => setSelectedMemberId(member.id)}
+            />
+          ))}
+        </div>
       </div>
-    </div>
-  );
-}
 
-function TeamExecutionGraph({
-  leader,
-  workers,
-  selectedActorId,
-  onSelectActor,
-}: {
-  leader: TeamActorInfo | null;
-  workers: TeamActorInfo[];
-  selectedActorId: string | null;
-  onSelectActor: (id: string) => void;
-}) {
-  const nameByAgentId = new Map(workers.map((worker) => [worker.agentId, worker.agentName]));
-  const parallelCount = workers.filter((worker) => worker.executionMode !== 'depends_on').length;
-  const waitingCount = workers.filter((worker) => worker.status === 'pending' && worker.waitReason).length;
+      <div className="flex shrink-0 border-b border-[var(--color-border)] px-3">
+        <TabButton active={tab === 'tasks'} icon={<ListChecks size={13} />} label="任务" count={tasks.length} onClick={() => setTab('tasks')} />
+        <TabButton active={tab === 'mailbox'} icon={<Inbox size={13} />} label="Mailbox" count={mailbox.length} onClick={() => setTab('mailbox')} />
+        <TabButton active={tab === 'events'} icon={<Clock3 size={13} />} label="运行" count={events.length} onClick={() => setTab('events')} />
+      </div>
 
-  return (
-    <div className="px-3 pb-3">
-      <div className="rounded-md bg-[var(--color-bg-primary)] p-3">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-text-secondary)]">
-            <GitBranch size={13} color="var(--color-accent)" />
-            <span>执行图</span>
-          </div>
-          <div className="flex flex-wrap gap-1">
-            <Tag size="small" color="transparent">并行 {parallelCount}</Tag>
-            <Tag size="small" color={waitingCount > 0 ? 'orange' : 'green'}>等待 {waitingCount}</Tag>
-            {leader && leader.leaderContextCount > 0 && (
-              <Tag size="small" color="blue">Leader 使用 {leader.leaderContextCount} 个输出</Tag>
+      <div className="min-h-0 flex-1 overflow-auto p-3">
+        {selectedMember && (
+          <div className="mb-3 text-xs text-[var(--color-text-tertiary)]">
+            <span className="font-medium text-[var(--color-text-secondary)]">{selectedMember.name}</span>
+            <span> · {memberRoleLabel(selectedMember.role)}</span>
+            {selectedMember.activeTaskId && (
+              <span title={selectedMember.activeTaskId}> · {selectedActiveTask?.title || '当前任务'}</span>
             )}
           </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-          {workers.map((worker) => {
-            const dependencyNames = worker.dependsOn.map((dependency) => nameByAgentId.get(dependency) || dependency);
-            const selected = selectedActorId === worker.id;
-            const statusColor = worker.status === 'completed'
-              ? 'var(--color-success)'
-              : worker.status === 'failed'
-                ? 'var(--color-error)'
-                : worker.status === 'running'
-                  ? 'var(--color-accent)'
-                  : 'var(--color-text-tertiary)';
-            return (
-              <button
-                key={worker.id}
-                type="button"
-                onClick={() => onSelectActor(worker.id)}
-                className={`ui-card-transition flex h-[92px] min-w-0 flex-col rounded-md border bg-[var(--color-bg-secondary)] p-2 text-left ${
-                  selected ? 'border-[var(--color-accent)] shadow-sm' : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0 truncate text-xs font-medium text-[var(--color-text-primary)]">
-                    {worker.agentName}
-                  </div>
-                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: statusColor }} />
+        )}
+        {tab === 'tasks' && <TaskList tasks={tasks} allTasks={snapshot.tasks} />}
+        {tab === 'mailbox' && (
+          <div className="space-y-2">
+            {mailbox.map((mail) => (
+              <div key={mail.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
+                <div className="flex items-center justify-between gap-2 text-xs">
+                  <span
+                    className="truncate font-medium text-[var(--color-text-secondary)]"
+                    title={`${mail.from} → ${mail.to}`}
+                  >
+                    {memberName(mail.from, snapshot.members)} → {memberName(mail.to, snapshot.members)}
+                  </span>
+                  <span className="shrink-0 text-[var(--color-text-tertiary)]" title={mail.kind}>{mailKindLabel(mail.kind)}</span>
                 </div>
-                <div className="mt-1 flex h-6 min-w-0 items-center gap-1 overflow-hidden">
-                  <Tag size="small" color={worker.executionMode === 'depends_on' ? 'blue' : 'transparent'}>
-                    {worker.executionMode === 'depends_on' ? '依赖执行' : '并行'}
-                  </Tag>
-                  {worker.dependencyOutputCount > 0 && (
-                    <Tag size="small" color="green">收到 {worker.dependencyOutputCount}</Tag>
-                  )}
-                </div>
-                <div className="mt-auto min-w-0 truncate text-[11px] text-[var(--color-text-tertiary)]">
-                  {worker.waitReason || (dependencyNames.length > 0 ? `依赖：${dependencyNames.join(' -> ')}` : worker.currentEvent || worker.detail || '')}
-                </div>
-              </button>
-            );
-          })}
-        </div>
+                {mail.subject && <div className="mt-1 text-xs font-medium text-[var(--color-text-primary)]">{mail.subject}</div>}
+                <CollapsibleText
+                  content={mail.content}
+                  className="mt-1 text-[var(--color-text-secondary)]"
+                />
+              </div>
+            ))}
+            {mailbox.length === 0 && <EmptyText text="暂无消息" />}
+          </div>
+        )}
+        {tab === 'events' && <EventList events={events} members={snapshot.members} tasks={snapshot.tasks} />}
       </div>
-    </div>
+      <footer className="shrink-0 border-t border-[var(--color-border)] p-3">
+        <div className="flex items-end gap-2">
+          <div className="min-w-0 flex-1">
+            <TextAreaField
+              label={`发给 ${selectedMember?.name || '成员'}`}
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              rows={2}
+              disabled={snapshot.run.status !== 'running'}
+            />
+          </div>
+          <Button
+            icon={<Megaphone size={14} />}
+            loading={sending}
+            disabled={!message.trim() || snapshot.run.status !== 'running'}
+            onClick={() => void sendMessage('broadcast')}
+            aria-label="广播 Mailbox 消息"
+            title="广播给全体成员"
+          />
+          <Button
+            type="primary"
+            icon={<Send size={14} />}
+            loading={sending}
+            disabled={!message.trim() || !selectedMember || snapshot.run.status !== 'running'}
+            onClick={() => void sendMessage()}
+            aria-label="发送 Mailbox 消息"
+          />
+        </div>
+      </footer>
+    </aside>
   );
 }
 
-function TeamActorCard({
-  actor,
-  selected,
-  onSelect,
-}: {
-  actor: TeamActorInfo;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  const toolCalls = normalizeStoredToolCalls(actor.toolCalls || []);
-  const isRunning = actor.status === 'running';
-  const isWaiting = actor.status === 'waiting';
-  const isCompleted = actor.status === 'completed';
-  const isFailed = actor.status === 'failed';
-  const summaryText = actor.report || actor.output || actor.detail || actor.currentEvent || '';
-  const reviewLabel = actor.reportReviewStatus && actor.role !== 'leader'
-    ? (actor.reportReviewStatus === 'accepted' ? '报告可用' : '需要补充')
-    : '';
-  const color = isFailed
-    ? 'var(--color-error)'
-    : isCompleted
-      ? 'var(--color-success)'
-      : isRunning || isWaiting
-        ? 'var(--color-accent)'
-        : 'var(--color-text-tertiary)';
-
+function MemberButton({ member, selected, onClick }: { member: TeamMemberRecord; selected: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
-      onClick={onSelect}
-      className={`ui-card-transition flex h-[132px] min-w-0 flex-col rounded-md bg-[var(--color-bg-primary)] p-3 text-left ${
-        selected ? 'ring-1 ring-[var(--color-accent)]' : 'hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)]'
-      }`}
+      onClick={onClick}
+      className={`flex h-14 min-w-0 items-center gap-2 rounded-md border px-2 text-left ${selected ? 'border-[var(--color-accent)] bg-[var(--color-bg-primary)]' : 'border-transparent hover:bg-[var(--color-bg-hover)]'}`}
     >
-      <div className="mb-2 flex h-8 w-full shrink-0 items-center gap-2 text-left">
-        <div
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white"
-          style={{
-            backgroundColor: actor.role === 'leader'
-              ? 'var(--color-agent-leader)'
-              : 'var(--color-agent-worker)',
-          }}
-        >
-          <Bot size={13} />
+      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--color-accent)] text-white"><Bot size={13} /></div>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-medium text-[var(--color-text-primary)]">{member.name}</div>
+        <div className="mt-0.5 flex items-center gap-1 text-[11px] text-[var(--color-text-tertiary)]">
+          {member.status === 'running' && <Loader2 size={10} className="animate-spin text-[var(--color-accent)]" />}
+          {member.status === 'failed' && <AlertCircle size={10} className="text-[var(--color-error)]" />}
+          {member.status === 'idle' && <CheckCircle2 size={10} className="text-[var(--color-success)]" />}
+          <span>{memberStatusLabel(member.status)}</span>
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-            {actor.agentName}
-          </div>
-          <div className="text-xs text-[var(--color-text-tertiary)]">
-            {actor.role === 'leader' ? 'Leader' : 'Worker'}
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1 text-xs" style={{ color }}>
-          {isRunning ? (
-            <Loader2 size={12} className="animate-spin" />
-          ) : isWaiting ? (
-            <AlertCircle size={12} />
-          ) : isCompleted ? (
-            <CheckCircle2 size={12} />
-          ) : (
-            <Clock3 size={12} />
-          )}
-          <span>{getTeamActivityStatusText(actor.status)}</span>
-        </div>
-        <ChevronRight size={12} />
-      </div>
-      <div
-        className="h-5 min-w-0 truncate text-sm leading-5 text-[var(--color-text-secondary)]"
-        title={actor.assignment || actor.task || ''}
-      >
-        {actor.assignment || actor.task || ''}
-      </div>
-      <div
-        className="mt-1 h-5 min-w-0 truncate text-xs leading-5 text-[var(--color-text-tertiary)]"
-        title={summaryText}
-      >
-        {summaryText}
-      </div>
-      <div className="mt-auto flex h-7 min-w-0 items-center gap-1 overflow-hidden pt-1">
-        {reviewLabel && (
-          <Tag size="small" color={actor.reportReviewStatus === 'accepted' ? 'green' : 'orange'}>
-            {reviewLabel}
-          </Tag>
-        )}
-        {toolCalls.length > 0 && (
-          <>
-          {toolCalls.slice(0, 2).map((toolCall) => (
-            <span
-              key={toolCall.id}
-              className="flex h-[22px] min-w-0 max-w-[160px] items-center truncate rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-1.5 text-xs text-[var(--color-text-tertiary)]"
-              title={toolCall.name}
-            >
-              {toolCall.name}
-            </span>
-          ))}
-          {toolCalls.length > 2 && (
-            <span className="flex h-[22px] shrink-0 items-center rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-1.5 text-xs text-[var(--color-text-tertiary)]">
-              +{toolCalls.length - 2}
-            </span>
-          )}
-          </>
-        )}
       </div>
     </button>
   );
 }
 
-export function TeamActorSidebar({
-  actor,
-  onClose,
-}: {
-  actor: TeamActorInfo;
-  onClose: () => void;
-}) {
-  const processItems = buildActorProcessItems(actor);
-  const isRunning = actor.status === 'running';
-  const isWaiting = actor.status === 'waiting';
+function TabButton({ active, icon, label, count, onClick }: { active: boolean; icon: ReactNode; label: string; count: number; onClick: () => void }) {
+  return <button type="button" onClick={onClick} className={`flex h-10 flex-1 items-center justify-center gap-1.5 border-b-2 text-xs ${active ? 'border-[var(--color-accent)] text-[var(--color-text-primary)]' : 'border-transparent text-[var(--color-text-tertiary)]'}`}>{icon}<span>{label}</span><span>{count}</span></button>;
+}
 
-  return (
-    <aside className="flex h-full min-h-0 flex-col bg-[var(--color-bg-secondary)] shadow-inner">
-      <div className="flex items-start gap-3 px-4 py-4">
-        <div
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white"
-          style={{
-            backgroundColor: actor.role === 'leader'
-              ? 'var(--color-agent-leader)'
-              : 'var(--color-agent-worker)',
-          }}
-        >
-          <Bot size={16} />
-        </div>
+function TaskList({ tasks, allTasks }: { tasks: TeamTaskRecord[]; allTasks: TeamTaskRecord[] }) {
+  if (tasks.length === 0) return <EmptyText text="暂无任务" />;
+  return <div className="space-y-2">{tasks.map((task) => (
+    <div key={task.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
+      <div className="flex items-start gap-2">
+        <TaskStatusIcon task={task} />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-base font-medium text-[var(--color-text-primary)]">
-            {actor.agentName}
-          </div>
-          <div className="mt-0.5 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-            <span>{actor.role === 'leader' ? 'Leader' : 'Worker'}</span>
-            <span>{getTeamActivityStatusText(actor.status)}</span>
-          </div>
+          <div className="text-xs font-medium text-[var(--color-text-primary)]">{task.title}</div>
+          <div className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">{taskStatusLabel(task)}</div>
+          {task.briefPreview && (
+            <CollapsibleText
+              content={task.briefPreview}
+              className="mt-2 text-[var(--color-text-secondary)]"
+            />
+          )}
+          {task.dependsOn.length > 0 && (
+            <div
+              className="mt-1 break-words text-[11px] text-[var(--color-text-tertiary)]"
+              title={task.dependsOn.join(', ')}
+            >
+              依赖 {task.dependsOn.map((taskId) => taskName(taskId, allTasks)).join('、')}
+            </div>
+          )}
+          {task.resultPreview && (
+            <div className="mt-2 border-l-2 border-[var(--color-success)] pl-2">
+              <CollapsibleText
+                content={task.resultPreview}
+                className="text-[var(--color-text-primary)]"
+              />
+            </div>
+          )}
+          {task.failureReason && <div className="mt-1 text-xs text-[var(--color-error)]">{task.failureReason}</div>}
         </div>
-        <button
-          type="button"
-          className="icon-button h-8 w-8 rounded-md text-[var(--color-text-secondary)] transition-all duration-300 ease-out hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-          onClick={onClose}
-          aria-label="关闭详情"
-          title="关闭详情"
-        >
-          <X size={14} />
-        </button>
       </div>
+    </div>
+  ))}</div>;
+}
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-auto px-4 pb-4">
-        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">当前动作</div>
-          <div className="flex items-center gap-2 text-sm text-[var(--color-text-primary)]">
-            {isRunning && <Loader2 size={13} className="animate-spin text-[var(--color-accent)]" />}
-            {isWaiting && <AlertCircle size={13} className="text-[var(--color-warning)]" />}
-            <span>{actor.currentEvent || getTeamActivityStatusText(actor.status)}</span>
-        </div>
-        <div className="mt-2 flex flex-wrap gap-1">
-            <Tag size="small" color={actor.executionMode === 'depends_on' ? 'blue' : 'transparent'}>
-              {actor.role === 'leader'
-                ? 'Leader 汇总'
-                : actor.executionMode === 'depends_on'
-                  ? '依赖执行'
-                  : '并行执行'}
-            </Tag>
-            {actor.dependencyOutputCount > 0 && (
-              <Tag size="small" color="green">上游输出 {actor.dependencyOutputCount}</Tag>
-            )}
-            {actor.leaderContextCount > 0 && (
-              <Tag size="small" color="blue">Worker 输出 {actor.leaderContextCount}</Tag>
-            )}
-            {actor.reportReviewStatus && (
-              <Tag size="small" color={actor.reportReviewStatus === 'accepted' ? 'green' : 'orange'}>
-                {actor.reportReviewStatus === 'accepted' ? '报告可用' : '需要补充'}
-              </Tag>
-            )}
+function EventList({
+  events,
+  members,
+  tasks,
+}: {
+  events: TeamDomainEvent[];
+  members: TeamMemberRecord[];
+  tasks: TeamTaskRecord[];
+}) {
+  if (events.length === 0) return <EmptyText text="暂无运行事件" />;
+  return <div className="space-y-1">{[...events].reverse().map((event) => (
+    <div key={event.id} className="flex min-h-9 items-start gap-2 border-b border-[var(--color-border)] py-2 text-xs">
+      <span className="w-7 shrink-0 text-right text-[var(--color-text-tertiary)]">#{event.seq}</span>
+      <div className="min-w-0 flex-1">
+        <div className="break-words text-[var(--color-text-secondary)]">{eventLabel(event.type)}</div>
+        {(event.taskId || event.actorId) && (
+          <div
+            className="mt-0.5 truncate text-[11px] text-[var(--color-text-tertiary)]"
+            title={[event.actorId, event.taskId].filter(Boolean).join(' · ')}
+          >
+            {event.actorId ? memberName(event.actorId, members) : ''}
+            {event.taskId ? ` · ${taskName(event.taskId, tasks)}` : ''}
           </div>
-          {actor.waitReason && (
-            <div className="mt-2 text-xs text-[var(--color-warning)]">
-              {actor.waitReason}
-            </div>
-          )}
-        </section>
-
-        {actor.dependsOn.length > 0 && (
-          <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-            <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">依赖 Worker</div>
-            <div className="flex flex-wrap gap-1">
-              {actor.dependsOn.map((dependency) => (
-                <Tag key={dependency} size="small" color="transparent">
-                  {dependency}
-                </Tag>
-              ))}
-            </div>
-          </section>
         )}
-
-        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">分派任务</div>
-          <div className="whitespace-pre-wrap break-words text-sm text-[var(--color-text-secondary)]">
-            {actor.assignment || actor.task}
-          </div>
-          {actor.expectedOutput && (
-            <div className="mt-3">
-              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">期望输出</div>
-              <div className="whitespace-pre-wrap break-words text-xs text-[var(--color-text-secondary)]">
-                {actor.expectedOutput}
-              </div>
-            </div>
-          )}
-          {actor.constraints && (
-            <div className="mt-3">
-              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">约束</div>
-              <div className="whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
-                {actor.constraints}
-              </div>
-            </div>
-          )}
-          {actor.detail && (
-            <div className="mt-2 whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
-              {actor.detail}
-            </div>
-          )}
-          {actor.skippedReason && (
-            <div className="mt-2 whitespace-pre-wrap break-words text-xs text-[var(--color-warning)]">
-              跳过原因：{actor.skippedReason}
-            </div>
-          )}
-          {actor.reportReviewStatus && actor.role !== 'leader' && (
-            <div className="mt-3 rounded-md bg-[var(--color-bg-secondary)] p-2">
-              <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">报告质量</div>
-              <div className="text-xs text-[var(--color-text-secondary)]">
-                {actor.reportReviewStatus === 'accepted' ? '报告可用于 Leader 汇总' : '报告信息不足，Leader 会按缺口谨慎汇总'}
-              </div>
-              {actor.reportReviewNotes && (
-                <div className="mt-1 whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
-                  {actor.reportReviewNotes}
-                </div>
-              )}
-              {actor.reportReviewGaps.length > 0 && (
-                <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-[var(--color-warning)]">
-                  {actor.reportReviewGaps.map((gap, index) => (
-                    <li key={`${gap}-${index}`}>{gap}</li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-lg bg-[var(--color-bg-primary)] p-3">
-          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">
-            {actor.role === 'leader' ? '输出' : 'Worker report'}
-          </div>
-          {actor.report || actor.output ? (
-            <div className="max-h-80 overflow-auto text-xs text-[var(--color-text-secondary)]">
-              <MarkdownContent content={actor.report || actor.output} />
-            </div>
-          ) : (
-            <div className="text-sm text-[var(--color-text-tertiary)]">暂无输出</div>
-          )}
-        </section>
-
-        {processItems.length > 0 && (
-          <AccordionProcessTimeline
-            accordionKey={`team-actor-process-${actor.id}-${actor.status}`}
-            items={processItems}
-            autoScroll={actor.status === 'running' || actor.status === 'waiting'}
-            title="运行过程"
-            status={actorProcessStatus(actor.status)}
-            rightChildren={(
-              <span className="text-xs text-[var(--color-text-tertiary)]">
-                {processItems.length} 项
-              </span>
-            )}
-            defaultOpen
-            alwaysOpen
+        {eventDetail(event) && (
+          <CollapsibleText
+            content={eventDetail(event)}
+            className="mt-1 text-[var(--color-text-primary)]"
+            collapseAt={100}
           />
         )}
       </div>
-    </aside>
+    </div>
+  ))}</div>;
+}
+
+function TaskStatusIcon({ task }: { task: TeamTaskRecord }) {
+  if (task.status === 'succeeded') return <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-[var(--color-success)]" />;
+  if (task.status === 'failed') return <AlertCircle size={14} className="mt-0.5 shrink-0 text-[var(--color-error)]" />;
+  if (task.status === 'running') return <Loader2 size={14} className="mt-0.5 shrink-0 animate-spin text-[var(--color-accent)]" />;
+  return <Circle size={14} className="mt-0.5 shrink-0 text-[var(--color-text-tertiary)]" />;
+}
+
+function CollapsibleText({
+  content,
+  className = '',
+  collapseAt = 140,
+}: {
+  content: string;
+  className?: string;
+  collapseAt?: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const shouldCollapse = content.length > collapseAt || content.split('\n').length > 3;
+
+  return (
+    <div className={className}>
+      <div className={`whitespace-pre-wrap break-words text-xs leading-5 ${shouldCollapse && !expanded ? 'max-h-[3.75rem] overflow-hidden' : ''}`}>
+        {content}
+      </div>
+      {shouldCollapse && (
+        <button
+          type="button"
+          className="mt-1 flex h-6 items-center gap-1 text-[11px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+          title={expanded ? '收起内容' : '展开内容'}
+        >
+          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          <span>{expanded ? '收起' : '展开'}</span>
+        </button>
+      )}
+    </div>
   );
 }
 
-function buildActorProcessItems(actor: TeamActorInfo): ChatProcessItem[] {
-  const items = Array.isArray(actor.items) ? actor.items : [];
-  const processItems = items
-    .map(actorDisplayItemToProcessItem)
-    .filter((item): item is ChatProcessItem => Boolean(item));
-  if (processItems.length > 0) return normalizeActorProcessItems(processItems);
-  return normalizeStoredToolCalls(actor.toolCalls || []).map((toolCall): ChatProcessItem => ({
-    id: `tool-${toolCall.id}`,
-    type: 'tool',
-    toolCall,
-    status: toolCall.status,
-    updatedAt: actor.createdAt,
-  }));
+function EmptyText({ text }: { text: string }) { return <div className="py-8 text-center text-xs text-[var(--color-text-tertiary)]">{text}</div>; }
+function memberName(memberId: string, members: TeamMemberRecord[]) {
+  if (memberId === 'user') return '用户';
+  if (memberId === 'system') return '系统';
+  return members.find((member) => member.id === memberId)?.name || (memberId === 'leader' ? 'Leader' : '未知成员');
 }
-
-function normalizeActorProcessItems(items: ChatProcessItem[]): ChatProcessItem[] {
-  return items.reduce<ChatProcessItem[]>((normalized, item) => {
-    if (item.type !== 'tool') {
-      normalized.push(item);
-      return normalized;
-    }
-    const toolKey = canonicalToolProcessKey(item);
-    const existingIndex = normalized.findIndex((current) => (
-      current.type === 'tool' && canonicalToolProcessKey(current) === toolKey
-    ));
-    if (existingIndex >= 0) {
-      normalized[existingIndex] = mergeToolProcessItem(normalized[existingIndex], item);
-      return normalized;
-    }
-    normalized.push(item);
-    return normalized;
-  }, []);
+function taskName(taskId: string, tasks: TeamTaskRecord[]) {
+  return tasks.find((task) => task.id === taskId)?.title || '未知任务';
 }
-
-function canonicalToolProcessKey(item: ChatProcessItem): string {
-  if (item.type !== 'tool') return item.id;
-  return canonicalToolCallId(item.toolCall.id || item.id);
+function memberRoleLabel(role: string) {
+  return ({ leader: '负责人', member: '成员', research: '调研', researcher: '调研', review: '评审', reviewer: '评审' } as Record<string, string>)[role.toLowerCase()] || role;
 }
-
-function canonicalToolCallId(id: string): string {
-  const value = String(id || '');
-  if (value.includes(':tool:')) {
-    return value.split(':tool:').pop() || value;
+function mailKindLabel(kind: string) {
+  return ({ user_goal: '用户目标', user_intervention: '用户补充', task_assignment: '任务分派', result: '成果汇报', message: '协作消息' } as Record<string, string>)[kind] || '协作消息';
+}
+function phaseLabel(phase: string) { return ({ created: '正在创建', coordinating: 'Leader 正在组建团队', executing: '成员正在执行', synthesizing: 'Leader 正在综合', completed: '协作已完成', failed: '协作失败', cancelled: '协作已取消' } as Record<string, string>)[phase] || phase; }
+function memberStatusLabel(status: string) { return ({ created: '已创建', idle: '空闲', running: '执行中', waiting: '等待', failed: '失败', stopped: '已停止' } as Record<string, string>)[status] || status; }
+function taskStatusLabel(task: TeamTaskRecord) { if (task.blocked) return '等待依赖'; return ({ queued: '待领取', running: '进行中', succeeded: '已完成', failed: '失败', cancelled: '已取消' } as Record<string, string>)[task.status] || task.status; }
+function eventDetail(event: TeamDomainEvent) {
+  if (event.type.endsWith('.delta')) return String(event.payload.delta || '');
+  if (event.type === 'member.tool.denied') {
+    const reason = event.payload.reason === 'requires_user_confirmation' ? '需要人工确认' : '需要外部执行';
+    return `${String(event.payload.name || 'tool')} · ${reason}`;
   }
-  return value.replace(/^tool[:-]/, '') || value;
-}
-
-function mergeToolProcessItem(current: ChatProcessItem, incoming: ChatProcessItem): ChatProcessItem {
-  if (current.type !== 'tool' || incoming.type !== 'tool') return incoming;
-  const currentTool = current.toolCall;
-  const incomingTool = incoming.toolCall;
-  const canonicalId = canonicalToolCallId(incomingTool.id || currentTool.id || incoming.id || current.id);
-  const name = preferToolName(currentTool.name, incomingTool.name);
-  const args = preferLongerText(currentTool.args, incomingTool.args);
-  const result = preferLongerText(currentTool.result, incomingTool.result);
-  const status = preferToolStatus(currentTool.status, incomingTool.status);
-  return {
-    ...current,
-    id: canonicalId || incoming.id || current.id,
-    status,
-    updatedAt: incoming.updatedAt || current.updatedAt,
-    toolCall: {
-      ...currentTool,
-      ...incomingTool,
-      id: canonicalId || incomingTool.id || currentTool.id,
-      name,
-      args,
-      result,
-      status,
-    },
-  };
-}
-
-function preferToolName(current: string, incoming: string): string {
-  const currentName = normalizeToolDisplayName(String(current || 'tool'));
-  const incomingName = normalizeToolDisplayName(String(incoming || 'tool'));
-  if (incomingName !== 'tool') return incomingName;
-  if (currentName !== 'tool') return currentName;
-  return incomingName || currentName || 'tool';
-}
-
-function preferLongerText(current: string, incoming: string): string {
-  const currentText = String(current || '');
-  const incomingText = String(incoming || '');
-  return incomingText.length >= currentText.length ? incomingText : currentText;
-}
-
-function preferToolStatus(
-  current: ToolCallInfo['status'],
-  incoming: ToolCallInfo['status'],
-): ToolCallInfo['status'] {
-  if (incoming === 'failed' || incoming === 'completed') return incoming;
-  if (current === 'failed' || current === 'completed') return current;
-  return incoming || current;
-}
-
-function actorDisplayItemToProcessItem(item: DisplayItem): ChatProcessItem | null {
-  const status = String(item.status || 'running') as ChatDisplayStatus;
-  if (isToolDisplayItem(item)) {
-    return {
-      id: item.id,
-      type: 'tool',
-      toolCall: toolCallFromDisplayItem(item),
-      status,
-      updatedAt: item.updatedAt,
-    };
+  if (event.type.startsWith('member.iteration.')) {
+    const lastTool = String(event.payload.lastTool || '');
+    return lastTool ? `最后工具：${lastTool}` : '';
   }
-  if (isSkillDisplayItem(item)) {
-    return {
-      id: item.id,
-      type: 'skill',
-      skillCall: skillCallFromDisplayItem(item),
-      status,
-      updatedAt: item.updatedAt,
-    };
-  }
-  if (isReasoningDisplayItem(item)) {
-    const content = pickDisplayItemString(item, ['text', 'content', 'delta']);
-    return content ? { id: item.id, type: 'reasoning', content, status, updatedAt: item.updatedAt } : null;
-  }
-  if (isThinkingDisplayItem(item)) {
-    const content = pickDisplayItemString(item, ['text', 'content', 'delta']);
-    return content ? { id: item.id, type: 'thinking', content, status, updatedAt: item.updatedAt } : null;
-  }
-  return null;
-}
-
-function isToolDisplayItem(item: DisplayItem): boolean {
-  const targetId = String(item.targetId || item.id || '');
-  return item.event.startsWith('tool.') || targetId.includes(':tool:') || targetId.startsWith('tool');
-}
-
-function isSkillDisplayItem(item: DisplayItem): boolean {
-  const targetId = String(item.targetId || item.id || '');
-  return item.event.startsWith('skill.') || targetId.includes(':skill:') || targetId.startsWith('skill');
-}
-
-function isReasoningDisplayItem(item: DisplayItem): boolean {
-  const targetId = String(item.targetId || '');
-  return item.event === DISPLAY_EVENTS.REASONING_DELTA || targetId === 'reasoning' || targetId.endsWith(':reasoning') || targetId.startsWith('reasoning-');
-}
-
-function isThinkingDisplayItem(item: DisplayItem): boolean {
-  const targetId = String(item.targetId || '');
-  return item.event === DISPLAY_EVENTS.THINKING_DELTA || targetId === 'thinking' || targetId.endsWith(':thinking') || targetId.startsWith('thinking-');
-}
-
-function toolCallFromDisplayItem(item: DisplayItem): ToolCallInfo {
-  return {
-    id: item.targetId || item.id,
-    name: normalizeToolDisplayName(pickDisplayItemString(item, ['name', 'toolName', 'rawName']) || 'tool'),
-    args: pickDisplayItemString(item, ['inputPreview', 'input', 'args']),
-    result: pickDisplayItemString(item, ['outputPreview', 'output', 'result', 'error']),
-    status: normalizeToolStatus(item.status || item.data.status),
-    ...subagentToolDataFromDisplayItem(item),
-  };
-}
-
-function skillCallFromDisplayItem(item: DisplayItem): SkillCallInfo {
-  const status = String(item.status || item.data.status || 'running');
-  return {
-    id: item.targetId || item.id,
-    name: pickDisplayItemString(item, ['name']) || 'Skill',
-    description: pickDisplayItemString(item, ['description']),
-    trigger: pickDisplayItemString(item, ['trigger']),
-    content: pickDisplayItemString(item, ['content']),
-    resourcePath: pickDisplayItemString(item, ['resourcePath']),
-    resources: Array.isArray(item.data.resources) ? item.data.resources.map((resource) => String(resource)) : [],
-    status: (
-      status === 'completed' || status === 'failed' || status === 'running'
-        ? status
-        : 'running'
-    ) as SkillCallInfo['status'],
-  };
-}
-
-function pickDisplayItemString(item: DisplayItem, keys: string[]): string {
-  for (const key of keys) {
-    const value = item.data[key];
-    if (value === undefined || value === null) continue;
-    const text = String(value);
-    if (text) return text;
-  }
+  if (event.type.startsWith('member.tool.')) return String(event.payload.name || event.payload.state || '');
+  if (event.type === 'task.completed') return String(event.payload.resultPreview || '');
+  if (event.type === 'task.failed' || event.type === 'task.cancelled' || event.type === 'run.failed' || event.type === 'run.cancelled') return String(event.payload.message || '');
   return '';
 }
-
-function normalizeToolStatus(status: unknown): ToolCallInfo['status'] {
-  const value = String(status || 'calling');
-  if (value === 'running' || value === 'completed' || value === 'failed' || value === 'calling') {
-    return value;
-  }
-  return 'calling';
-}
-
-function normalizeToolDisplayName(name: string): string {
-  const value = String(name || 'tool');
-  const parts = value.split('_');
-  if (parts.length === 2 && parts[0] && parts[0] === parts[1]) {
-    return parts[0];
-  }
-  return value;
-}
-
-function actorProcessStatus(status: TeamActorInfo['status']): ChatDisplayStatus {
-  if (status === 'skipped') return 'completed';
-  return status;
-}
-
-function getTeamActivityStatusText(status: TeamActorInfo['status']) {
-  if (status === 'running') return '执行中';
-  if (status === 'waiting') return '等待确认';
-  if (status === 'completed') return '完成';
-  if (status === 'failed') return '失败';
-  if (status === 'skipped') return '跳过';
-  return '等待';
-}
+function eventLabel(type: string) { return ({ 'run.created': 'TeamRun 已创建', 'run.phase.changed': '运行阶段变化', 'member.spawned': '成员已创建', 'member.status.changed': '成员状态变化', 'task.created': '任务已创建', 'task.claimed': '任务已领取', 'task.completed': '任务已完成', 'task.failed': '任务失败', 'task.cancelled': '任务已取消', 'task.unlocked': '任务依赖已解锁', 'mail.sent': 'Mailbox 消息已投递', 'mail.read': 'Mailbox 消息已读取', 'member.thinking.delta': '成员正在分析', 'member.tool.started': '成员调用工具', 'member.tool.completed': '成员工具完成', 'member.tool.failed': '成员工具失败', 'member.tool.denied': '成员工具已拒绝', 'member.iteration.recovery': '成员正在收敛结果', 'member.iteration.exhausted': '成员恢复预算已耗尽', 'member.output.delta': '成员输出更新', 'run.completed': 'TeamRun 已完成', 'run.failed': 'TeamRun 失败', 'run.cancelled': 'TeamRun 已取消' } as Record<string, string>)[type] || type; }

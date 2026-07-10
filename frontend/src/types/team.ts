@@ -1,6 +1,5 @@
-export type TeamMemberRole = 'leader' | 'worker';
+export type TeamMemberRole = 'leader' | 'member';
 export type TeamStatus = 'idle' | 'running' | 'ended';
-export type TeamExecutionMode = 'parallel' | 'depends_on';
 
 export interface TeamMember {
   id: string;
@@ -8,9 +7,6 @@ export interface TeamMember {
   name: string;
   role: TeamMemberRole;
   description: string;
-  executionMode: TeamExecutionMode;
-  dependsOn: string[];
-  handoffPrompt: string;
   status: string;
 }
 
@@ -19,7 +15,6 @@ export interface TeamRecord {
   name: string;
   description: string;
   leaderAgentId: string;
-  workerSelectorPrompt: string;
   members: TeamMember[];
   status: TeamStatus;
   createdAt: string;
@@ -30,16 +25,14 @@ export interface TeamCreatePayload {
   name: string;
   description?: string;
   leaderAgentId: string;
-  workerAgentIds: string[];
-  workerSelectorPrompt?: string;
+  memberAgentIds: string[];
 }
 
 export interface TeamUpdatePayload {
   name?: string;
   description?: string;
   leaderAgentId?: string;
-  workerAgentIds?: string[];
-  workerSelectorPrompt?: string;
+  memberAgentIds?: string[];
   members?: TeamMember[];
   status?: TeamStatus;
 }

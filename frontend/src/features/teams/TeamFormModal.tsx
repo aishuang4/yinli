@@ -12,7 +12,7 @@ export interface TeamFormState {
   name: string;
   description: string;
   leaderAgentId: string;
-  workerAgentIds: string[];
+  memberAgentIds: string[];
 }
 
 interface TeamFormModalProps {
@@ -61,10 +61,10 @@ export function TeamFormModal({
           options={agents.map((agent) => ({ label: agent.name, value: agent.id }))}
         />
         <SelectField
-          label="Worker Agents"
+          label="候选角色 Agent"
           mode="multiple"
-          value={form.workerAgentIds}
-          onChange={(value) => onFormChange({ ...form, workerAgentIds: value as string[] })}
+          value={form.memberAgentIds}
+          onChange={(value) => onFormChange({ ...form, memberAgentIds: value as string[] })}
           options={agents
             .filter((agent) => agent.id !== form.leaderAgentId)
             .map((agent) => ({ label: agent.name, value: agent.id }))}

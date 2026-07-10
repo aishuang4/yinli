@@ -32,7 +32,6 @@ async def execute_chat_runtime(
         model_name=ctx.model_name,
         assistant_error=f"暂不支持的运行线路: {ctx.intent_route.runtime.kind}",
         skill_runs=ctx.skill_runs,
-        team_activities=ctx.team_activities,
         sandbox=run_data.sandbox,
     ):
         yield event

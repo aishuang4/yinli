@@ -101,8 +101,8 @@ function RunDashboard({ run }: { run: RunDetail }) {
         <SummaryItem label="运行方式" value={run.mode === 'team' ? 'Team 协作' : '单 Agent'} />
         <SummaryItem label="耗时" value={duration || '进行中'} />
         <SummaryItem
-          label="Worker"
-          value={run.workerTotal > 0 ? `${run.workerCompleted}/${run.workerTotal} 完成` : '无'}
+          label="Member"
+          value={run.memberTotal > 0 ? `${run.memberCompleted}/${run.memberTotal} 完成` : '无'}
         />
       </div>
 

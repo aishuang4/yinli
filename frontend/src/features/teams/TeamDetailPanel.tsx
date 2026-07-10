@@ -1,11 +1,11 @@
 /**
  * TeamDetailPanel — Team 调度和成员设置面板。
  *
- * 管理 Team 成员草稿、Worker Selector 提示词和单个成员协作参数。
+ * 管理一次性 TeamRun 可使用的 Leader 和角色素材。
  */
 
 import { useEffect, useState } from 'react';
-import { Sparkles, Trash2, UserPlus, X } from 'lucide-react';
+import { Trash2, UserPlus, X } from 'lucide-react';
 import { Button, Empty, Tag } from '@agentscope-ai/design';
 import { FormField, SelectField, TextAreaField } from '../../components/form';
 import type { Agent } from '../../types/agent';
@@ -15,7 +15,7 @@ import { createId } from '../../utils/id';
 interface TeamDetailPanelProps {
   team: TeamRecord;
   agents: Agent[];
-  onUpdate: (payload: { members: TeamMember[]; workerSelectorPrompt: string }) => Promise<void>;
+  onUpdate: (payload: { members: TeamMember[] }) => Promise<void>;
   onDelete: () => Promise<void>;
 }
 
@@ -27,21 +27,18 @@ export function TeamDetailPanel({
 }: TeamDetailPanelProps) {
   const agentNameById = new Map(agents.map((agent) => [agent.id, agent.name]));
   const [memberDrafts, setMemberDrafts] = useState<TeamMember[]>(team.members);
-  const [workerSelectorPrompt, setWorkerSelectorPrompt] = useState(team.workerSelectorPrompt || '');
   const [selectedMemberId, setSelectedMemberId] = useState<string | null>(team.members[0]?.id || null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setMemberDrafts(team.members);
-    setWorkerSelectorPrompt(team.workerSelectorPrompt || '');
     setSelectedMemberId((current) => (
       current && team.members.some((member) => member.id === current)
         ? current
         : team.members[0]?.id || null
     ));
-  }, [team.id, team.members, team.workerSelectorPrompt]);
+  }, [team.id, team.members]);
 
-  const workerMembers = memberDrafts.filter((member) => member.role === 'worker');
   const selectedMember = memberDrafts.find((member) => member.id === selectedMemberId) || null;
   const existingAgentIds = new Set(memberDrafts.map((member) => member.agentId));
   const addableAgentOptions = agents
@@ -51,16 +48,12 @@ export function TeamDetailPanel({
   const updateMember = (memberId: string, patch: Partial<TeamMember>) => {
     setMemberDrafts((current) => current.map((member) => (
       member.id === memberId
-        ? {
-            ...member,
-            ...patch,
-            dependsOn: patch.executionMode === 'parallel' ? [] : patch.dependsOn ?? member.dependsOn,
-          }
+        ? { ...member, ...patch }
         : member
     )));
   };
 
-  const addWorker = (agentId: string) => {
+  const addMember = (agentId: string) => {
     const agent = agents.find((item) => item.id === agentId);
     if (!agent) return;
 
@@ -68,11 +61,8 @@ export function TeamDetailPanel({
       id: createId('member'),
       agentId: agent.id,
       name: agent.name,
-      role: 'worker',
-      description: agent.description || 'Team worker session',
-      executionMode: 'parallel',
-      dependsOn: [],
-      handoffPrompt: '',
+      role: 'member',
+      description: agent.description || 'Team role material',
       status: 'idle',
     };
 
@@ -80,16 +70,11 @@ export function TeamDetailPanel({
     setSelectedMemberId(nextMember.id);
   };
 
-  const removeWorker = (memberId: string) => {
+  const removeMember = (memberId: string) => {
     const removed = memberDrafts.find((member) => member.id === memberId);
     if (!removed || removed.role === 'leader') return;
 
-    setMemberDrafts((current) => current
-      .filter((member) => member.id !== memberId)
-      .map((member) => ({
-        ...member,
-        dependsOn: (member.dependsOn || []).filter((dependency) => dependency !== removed.agentId && dependency !== removed.id),
-      })));
+    setMemberDrafts((current) => current.filter((member) => member.id !== memberId));
     setSelectedMemberId((current) => (
       current === memberId
         ? memberDrafts.find((member) => member.id !== memberId)?.id || null
@@ -100,10 +85,7 @@ export function TeamDetailPanel({
   const saveTeamMembers = async () => {
     setSaving(true);
     try {
-      await onUpdate({
-        members: memberDrafts,
-        workerSelectorPrompt,
-      });
+      await onUpdate({ members: memberDrafts });
     } finally {
       setSaving(false);
     }
@@ -134,35 +116,19 @@ export function TeamDetailPanel({
             label={(
               <span className="flex items-center gap-1.5">
                 <UserPlus size={13} />
-                添加 Worker
+                添加候选角色
               </span>
             )}
           >
             <SelectField
               key={memberDrafts.length}
               value={undefined}
-              onChange={(value) => addWorker(String(value))}
+              onChange={(value) => addMember(String(value))}
               options={addableAgentOptions}
               placeholder={addableAgentOptions.length ? '选择一个 Agent 加入 Team' : '没有可添加的 Agent'}
               disabled={addableAgentOptions.length === 0}
             />
           </FormField>
-        </div>
-
-        <div className="mb-4 rounded-md bg-[var(--color-bg-secondary)] p-3 shadow-sm">
-          <TextAreaField
-            label={(
-              <span className="flex items-center gap-1.5">
-                <Sparkles size={13} />
-                Worker 自动选择提示词
-              </span>
-            )}
-            value={workerSelectorPrompt}
-            onChange={(event) => setWorkerSelectorPrompt(event.target.value)}
-            rows={8}
-            placeholder="控制系统内置 TeamWorkerSelector 如何选择本轮参与的 Worker"
-            help="该提示词只注入系统内置 Worker Selector Agent，不会赋予工具、MCP 或 Skills 权限。"
-          />
         </div>
 
         <div className="grid gap-3">
@@ -197,14 +163,14 @@ export function TeamDetailPanel({
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <Tag size="small" color="transparent">{member.status}</Tag>
-                    {member.role === 'worker' && (
+                    {member.role === 'member' && (
                       <Button
                         size="small"
                         danger
                         icon={<Trash2 size={13} />}
                         onClick={(event) => {
                           event.stopPropagation();
-                          removeWorker(member.id);
+                          removeMember(member.id);
                         }}
                         aria-label="移除成员"
                       />
@@ -240,10 +206,9 @@ export function TeamDetailPanel({
             {selectedMember ? (
               <TeamMemberSettings
                 member={selectedMember}
-                workerMembers={workerMembers}
                 agentNameById={agentNameById}
                 onUpdate={(patch) => updateMember(selectedMember.id, patch)}
-                onRemove={selectedMember.role === 'worker' ? () => removeWorker(selectedMember.id) : undefined}
+                onRemove={selectedMember.role === 'member' ? () => removeMember(selectedMember.id) : undefined}
               />
             ) : (
               <div className="flex h-full items-center justify-center">
@@ -259,24 +224,15 @@ export function TeamDetailPanel({
 
 function TeamMemberSettings({
   member,
-  workerMembers,
   agentNameById,
   onUpdate,
   onRemove,
 }: {
   member: TeamMember;
-  workerMembers: TeamMember[];
   agentNameById: Map<string, string>;
   onUpdate: (patch: Partial<TeamMember>) => void;
   onRemove?: () => void;
 }) {
-  const dependencyOptions = workerMembers
-    .filter((worker) => worker.id !== member.id && worker.agentId !== member.agentId)
-    .map((worker) => ({
-      label: agentNameById.get(worker.agentId) || worker.name,
-      value: worker.agentId,
-    }));
-
   return (
     <div className="space-y-4">
       <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
@@ -310,43 +266,11 @@ function TeamMemberSettings({
         placeholder="描述该成员在 Team 中负责什么"
       />
 
-      {member.role === 'worker' ? (
-        <>
-          <SelectField
-            label="执行方式"
-            value={member.executionMode || 'parallel'}
-            onChange={(value) => onUpdate({
-              executionMode: value as TeamMember['executionMode'],
-            })}
-            options={[
-              { label: '并行执行', value: 'parallel' },
-              { label: '等待依赖 Worker', value: 'depends_on' },
-            ]}
-          />
-
-          <SelectField
-            label="依赖 Worker"
-            mode="multiple"
-            value={member.dependsOn || []}
-            disabled={member.executionMode !== 'depends_on'}
-            onChange={(value) => onUpdate({ dependsOn: value as string[] })}
-            options={dependencyOptions}
-            placeholder="选择上游 Worker"
-          />
-
-          <TextAreaField
-            label="交接提示"
-            value={member.handoffPrompt || ''}
-            onChange={(event) => onUpdate({ handoffPrompt: event.target.value })}
-            rows={5}
-            placeholder="告诉该 Worker 如何使用上游 Worker 的输出"
-          />
-        </>
-      ) : (
-        <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4 text-sm text-[var(--color-text-secondary)]">
-          Leader 负责拆解任务和汇总结果；成员增删请通过 Worker 列表管理。
-        </div>
-      )}
+      <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4 text-sm text-[var(--color-text-secondary)]">
+        {member.role === 'leader'
+          ? 'Leader 在每轮 TeamRun 中动态创建成员、拆分任务并综合结果。'
+          : '该记录只提供角色素材；运行时 prompt、任务和依赖由 Leader 按本轮目标动态生成。'}
+      </div>
     </div>
   );
 }

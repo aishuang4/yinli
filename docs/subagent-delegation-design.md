@@ -33,7 +33,7 @@ Subagent 用来处理会污染主上下文但结果又有价值的支线任务�
 | --- | --- | --- | --- |
 | Skill | 可复用流程、提示词或资源注入，仍在主 Agent 上下文内执行 | 共享主上下文 | 运行时 Skill selector / Agent |
 | Subagent | 支线任务需要独立探索，只需要返回摘要 | 独立上下文 | 主 Agent 调用 `DelegateTask` |
-| Team | 用户选择多个长期角色协作，Leader 统筹 Worker | Worker 独立，Leader 汇总 | 前端 executor 选择 |
+| Team | 用户选择角色素材，Leader 在本轮组建临时 Member | Member 隔离，Leader 综合 | 前端 executor 选择 |
 | Workflow | 明确多阶段自动化、变量流、产物和 Cockpit | 独立 workflow runtime | Workflow 入口 |
 
 ## V1.0 范围
@@ -46,7 +46,7 @@ V1.0 做“前台、一次性、可审计”的 Subagent，作为 Agent Workstat
 - 子 Agent fresh context 执行，不读取主会话历史，只接收委托任务、必要环境信息、当前项目规则摘要、git 状态快照、运行前记忆摘要和预加载 Skill。内置 `explorer` / `plan` 为低成本研究代理，默认跳过项目规则和 git 状态；自定义 Subagent 默认加载这些启动上下文。
 - 子 Agent 结果以短摘要返回给主 Agent；完整过程进入 Trace，RunState 只做轻量委托状态展示。
 - 子 Agent 继承父 Agent guardrails 的上限，Subagent 文件配置只能进一步收窄权限，不能放大权限。
-- 支持单 Agent executor；Team executor 的 Leader 可调用 Subagent，Worker 默认不注入，后续按 Team 策略开放。
+- 支持单 Agent executor；Team executor 使用独立控制工具组建 Member，不向临时 Member 注入 Subagent 委托工具。
 
 当前 M1 已落地：
 
@@ -413,7 +413,7 @@ V1.0 最小 UI：
 - **缓存污染**：子 Agent 必须用独立 cache key，不共享主 Agent 实例。
 - **权限错配**：工具策略必须做交集，任何 Subagent 文件配置都不能绕过父 Agent guardrails。
 - **上下文膨胀**：`DelegateTask` 返回给主 Agent 的 Observation 必须截断，完整 transcript 进 Trace。
-- **Team 混用**：V1.0 只给 Team Leader 注入，避免 Worker 再动态拉 Subagent 导致调度树不可控。
+- **Team 混用**：只给 Team Leader 注入，避免临时 Member 再动态拉 Subagent 导致调度树不可控。
 - **旧入口误用**：旧 Subagent 配置入口已从 API、前端类型和运行模型中移除，不作为新 UI、API 或 Runtime 的事实源。
 
 ## 验收标准

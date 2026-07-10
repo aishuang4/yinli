@@ -28,7 +28,7 @@ export default defineConfig({
     // 后端 API 代理到 FastAPI 服务
     proxy: {
       '/api': {
-        target: 'http://localhost:8765',
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:8765',
         changeOrigin: true,
       },
     },

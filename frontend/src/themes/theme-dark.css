@@ -45,7 +45,7 @@
 
   /* === Agent 类型色 === */
   --color-agent-leader: #9f8fe0;
-  --color-agent-worker: #66c3d1;
+  --color-agent-member: #66c3d1;
   --color-agent-specialist: #d69a69;
 
   /* === 阴影 (暗色模式更深) === */
