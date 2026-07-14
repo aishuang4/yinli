@@ -26,7 +26,7 @@ const WorkflowPage = lazy(() => import('./pages/WorkflowPage').then((module) => 
 const RunsPage = lazy(() => import('./pages/RunsPage').then((module) => ({ default: module.RunsPage })));
 const TracePage = lazy(() => import('./pages/TracePage').then((module) => ({ default: module.TracePage })));
 const SandboxPage = lazy(() => import('./pages/SandboxPage').then((module) => ({ default: module.SandboxPage })));
-const AgentTeamPage = lazy(() => import('./pages/AgentTeamPage').then((module) => ({ default: module.AgentTeamPage })));
+const AgentsPage = lazy(() => import('./pages/AgentsPage').then((module) => ({ default: module.AgentsPage })));
 const SubagentsPage = lazy(() => import('./pages/SubagentsPage').then((module) => ({ default: module.SubagentsPage })));
 const ToolsPage = lazy(() => import('./pages/ToolsPage').then((module) => ({ default: module.ToolsPage })));
 const MCPPage = lazy(() => import('./pages/MCPPage').then((module) => ({ default: module.MCPPage })));
@@ -43,7 +43,7 @@ const VIEW_PAGES: Record<ViewType, ComponentType> = {
   runs: RunsPage,
   traces: TracePage,
   sandbox: SandboxPage,
-  agents: AgentTeamPage,
+  agents: AgentsPage,
   subagents: SubagentsPage,
   tools: ToolsPage,
   mcp: MCPPage,

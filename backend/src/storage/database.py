@@ -162,26 +162,6 @@ def ensure_db() -> None:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS teams (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    description TEXT NOT NULL DEFAULT '',
-                    leader_agent_id TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS team_members (
-                    id TEXT PRIMARY KEY,
-                    team_id TEXT NOT NULL,
-                    agent_id TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    description TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL,
-                    sort_order INTEGER NOT NULL DEFAULT 0,
-                    FOREIGN KEY(team_id) REFERENCES teams(id) ON DELETE CASCADE
-                );
                 CREATE TABLE IF NOT EXISTS mcp_servers (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -577,20 +557,9 @@ def ensure_db() -> None:
             _drop_column_if_exists(conn, "chat_sessions", "team_name")
             _drop_column_if_exists(conn, "plans", "team_id")
             _drop_column_if_exists(conn, "run_events", "team_activity_id")
-            _drop_column_if_exists(conn, "team_members", "execution_mode")
-            _drop_column_if_exists(conn, "team_members", "depends_on")
-            _drop_column_if_exists(conn, "team_members", "handoff_prompt")
-            legacy_team_ids = [
-                str(row["team_id"])
-                for row in conn.execute(
-                    "SELECT DISTINCT team_id FROM team_members WHERE role NOT IN ('leader', 'member')"
-                ).fetchall()
-            ]
-            if legacy_team_ids:
-                placeholders = ",".join("?" for _ in legacy_team_ids)
-                conn.execute(f"DELETE FROM team_members WHERE team_id IN ({placeholders})", legacy_team_ids)
-                conn.execute(f"DELETE FROM teams WHERE id IN ({placeholders})", legacy_team_ids)
-                conn.commit()
+            conn.execute("DROP TABLE IF EXISTS team_members")
+            conn.execute("DROP TABLE IF EXISTS teams")
+            conn.execute("DELETE FROM json_store WHERE namespace = 'team_templates'")
             columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(agents)").fetchall()
@@ -605,16 +574,6 @@ def ensure_db() -> None:
             if "knowledge_tools" not in columns:
                 conn.execute("ALTER TABLE agents ADD COLUMN knowledge_tools TEXT NOT NULL DEFAULT '[]'")
                 conn.commit()
-            member_columns = {
-                row["name"]
-                for row in conn.execute("PRAGMA table_info(team_members)").fetchall()
-            }
-            if "execution_mode" not in member_columns:
-                conn.execute("ALTER TABLE team_members ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'parallel'")
-            if "depends_on" not in member_columns:
-                conn.execute("ALTER TABLE team_members ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'")
-            if "handoff_prompt" not in member_columns:
-                conn.execute("ALTER TABLE team_members ADD COLUMN handoff_prompt TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_runs", "updated_at", "TEXT NOT NULL DEFAULT ''")
             _drop_column_if_exists(conn, "chat_runs", "team_id")
             _drop_column_if_exists(conn, "chat_runs", "team_name")
@@ -849,92 +808,6 @@ def delete_agent(agent_id: str) -> None:
     ensure_db()
     with _lock, _connect() as conn:
         conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
-        conn.commit()
-
-
-def list_teams() -> list[dict[str, Any]]:
-    ensure_db()
-    with _lock, _connect() as conn:
-        teams = conn.execute("SELECT * FROM teams ORDER BY updated_at ASC").fetchall()
-        members = conn.execute(
-            "SELECT * FROM team_members ORDER BY team_id, sort_order ASC"
-        ).fetchall()
-    by_team: dict[str, list[dict[str, Any]]] = {}
-    for row in members:
-        by_team.setdefault(row["team_id"], []).append({
-            "id": row["id"],
-            "agentId": row["agent_id"],
-            "name": row["name"],
-            "role": row["role"],
-            "description": row["description"],
-            "status": row["status"],
-        })
-    return [
-        {
-            "id": row["id"],
-            "name": row["name"],
-            "description": row["description"],
-            "leaderAgentId": row["leader_agent_id"],
-            "members": by_team.get(row["id"], []),
-            "status": row["status"],
-            "createdAt": row["created_at"],
-            "updatedAt": row["updated_at"],
-        }
-        for row in teams
-    ]
-
-
-def upsert_team(data: dict[str, Any]) -> None:
-    ensure_db()
-    with _lock, _connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO teams VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                name=excluded.name, description=excluded.description,
-                leader_agent_id=excluded.leader_agent_id, status=excluded.status,
-                updated_at=excluded.updated_at
-            """,
-            (
-                data["id"], data["name"], data.get("description", ""),
-                data["leaderAgentId"], data.get("status", "idle"),
-                data["createdAt"], data["updatedAt"],
-            ),
-        )
-        conn.execute("DELETE FROM team_members WHERE team_id = ?", (data["id"],))
-        conn.executemany(
-            """
-            INSERT INTO team_members(
-                id, team_id, agent_id, name, role, description, status, sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    member["id"], data["id"], member["agentId"], member["name"],
-                    member["role"], member.get("description", ""),
-                    member.get("status", "idle"), index,
-                )
-                for index, member in enumerate(data.get("members", []))
-            ],
-        )
-        conn.commit()
-
-
-def replace_teams(records: dict[str, dict[str, Any]]) -> None:
-    ensure_db()
-    with _lock, _connect() as conn:
-        conn.execute("DELETE FROM team_members")
-        conn.execute("DELETE FROM teams")
-        conn.commit()
-    for record in records.values():
-        upsert_team(record)
-
-
-def delete_team(team_id: str) -> None:
-    ensure_db()
-    with _lock, _connect() as conn:
-        conn.execute("DELETE FROM team_members WHERE team_id = ?", (team_id,))
-        conn.execute("DELETE FROM teams WHERE id = ?", (team_id,))
         conn.commit()
 
 
@@ -3298,7 +3171,7 @@ def append_plan_event_record(
 def normalized_table_counts() -> dict[str, int]:
     ensure_db()
     tables = [
-        "agents", "teams", "team_members", "mcp_servers", "skills",
+        "agents", "mcp_servers", "skills",
         "chat_sessions", "chat_messages", "memory_nodes",
     ]
     with _lock, _connect() as conn:

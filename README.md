@@ -154,6 +154,7 @@ scripts/                 开发、打包和后端构建脚本
 - [`docs/chat-sse-event-contract.md`](docs/chat-sse-event-contract.md)：Chat / RunState / DisplaySnapshot 稳定契约。
 - [`docs/team-runtime-redesign.md`](docs/team-runtime-redesign.md)：一次性 TeamRun、Task List 与 Mailbox。
 - [`docs/subagent-delegation-design.md`](docs/subagent-delegation-design.md)：Subagent 定义和委托模型。
+- [`docs/workspace-project-design.md`](docs/workspace-project-design.md)：Workspace / Project 平台归属设计。
 - [`docs/development-guidelines.md`](docs/development-guidelines.md)：开发规范。
 - [`docs/project-todo.md`](docs/project-todo.md)：当前待办。
 

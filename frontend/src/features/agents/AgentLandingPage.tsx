@@ -4,7 +4,7 @@
  * 只展示对象列表和主要入口，具体智能体设置在二级详情页完成。
  */
 
-import { Bot, HelpCircle, List, Plus, Trash2, Users, WandSparkles } from 'lucide-react';
+import { Bot, HelpCircle, List, Plus, Trash2, WandSparkles } from 'lucide-react';
 import { Button } from '@agentscope-ai/design';
 import {
   WorkbenchEmptyPanel,
@@ -15,32 +15,23 @@ import {
   WorkbenchSection,
 } from '../../components/workbench';
 import type { Agent } from '../../types/agent';
-import type { TeamRecord } from '../../types/team';
 
 interface AgentLandingPageProps {
   agents: Agent[];
-  teams: TeamRecord[];
   loading: boolean;
-  teamsLoading: boolean;
   onCreateAgent: () => void;
   onBuilderOpen: () => void;
-  onCreateTeam: () => void;
   onSelectAgent: (agentId: string) => void;
   onDeleteAgent: (agentId: string) => void;
-  onSelectTeam: (teamId: string) => void;
 }
 
 export function AgentLandingPage({
   agents,
-  teams,
   loading,
-  teamsLoading,
   onCreateAgent,
   onBuilderOpen,
-  onCreateTeam,
   onSelectAgent,
   onDeleteAgent,
-  onSelectTeam,
 }: AgentLandingPageProps) {
   return (
     <WorkbenchListPage
@@ -74,33 +65,6 @@ export function AgentLandingPage({
                 last={index === agents.length - 1}
                 onSelect={() => onSelectAgent(agent.id)}
                 onDelete={() => onDeleteAgent(agent.id)}
-              />
-            ))}
-          </WorkbenchList>
-        )}
-      </WorkbenchSection>
-
-      <WorkbenchSection
-        title="协作 Team"
-        compact
-        actions={(
-          <Button size="small" icon={<Plus size={13} />} onClick={onCreateTeam}>
-            创建 Team
-          </Button>
-        )}
-      >
-        {teamsLoading ? (
-          <WorkbenchLoadingPanel />
-        ) : teams.length === 0 ? (
-          <WorkbenchEmptyPanel>暂无 Team</WorkbenchEmptyPanel>
-        ) : (
-          <WorkbenchList>
-            {teams.map((team, index) => (
-              <TeamListRow
-                key={team.id}
-                team={team}
-                last={index === teams.length - 1}
-                onSelect={() => onSelectTeam(team.id)}
               />
             ))}
           </WorkbenchList>
@@ -162,40 +126,5 @@ function AgentIcon({ agent }: { agent: Agent }) {
         <Bot size={20} strokeWidth={1.8} />
       )}
     </span>
-  );
-}
-
-function TeamListRow({
-  team,
-  last,
-  onSelect,
-}: {
-  team: TeamRecord;
-  last: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <WorkbenchListRow
-      icon={(
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-agent-member)]">
-          <Users size={20} strokeWidth={1.8} />
-        </span>
-      )}
-      title={team.name}
-      subtitle={`${team.members.length} 个成员`}
-      description={team.description || '多智能体协作编排'}
-      last={last}
-      onSelect={onSelect}
-      trailing={(
-        <button
-          type="button"
-          onClick={onSelect}
-          className="icon-button h-8 w-8 rounded-md text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-          aria-label={`打开 ${team.name} 设置`}
-        >
-          <List size={17} />
-        </button>
-      )}
-    />
   );
 }

@@ -56,19 +56,19 @@ npm run lint     # eslint
 6. **`routes/chat/team_runtime/`** — 一次性 Team Runtime。每轮由 `TeamRunService` 创建全新文件状态，Leader 使用 Team 控制工具动态创建临时 Member 和共享任务，`TeamCoordinator` 按依赖并发运行隔离 Member session，全部任务成功后进入无工具综合阶段。Team 只发送顶层 `TEAM_EVENT`，状态进入独立 `teamSnapshot` / `TeamConsoleState`，不得进入单 Agent `DisplaySnapshot`。用户可通过 active TeamRun Mailbox API 向任意成员投递干预消息；Member 存在未读消息时不得提交结果，综合期间收到新消息必须重新综合。
    Chat 与 Sandbox 在单 Agent 模式选择 Agent；切换到 Team 模式后沿用该 Agent 作为 Leader，并隐藏选择器。禁止恢复 Team、Member 或 Leader 下拉框，也禁止向 Chat Runtime 传入 `team_id`、`team_name`、`team_members`。
 
-8. **`routes/chat/leader_stream.py`** — Leader/单 Agent 事件流处理。消费 `agent.reply_stream()`，维护 `LeaderStreamState`，处理模型 cache、trace、permission decision、tool artifacts、HITL 早停、流式文本/思考累计、Skill end 和模型输出后的 clarification 兜底。
+7. **`routes/chat/leader_stream.py`** — Leader/单 Agent 事件流处理。消费 `agent.reply_stream()`，维护 `LeaderStreamState`，处理模型 cache、trace、permission decision、tool artifacts、HITL 早停、流式文本/思考累计、Skill end 和模型输出后的 clarification 兜底。
 
-9. **`routes/chat/completion.py`** — 单 Agent/综合结果成功或失败收尾。负责 Skill 状态、assistant message、trace 和 `ERROR` 等 SSE。Team 领域状态由 `team_runtime` 自己收口，不经 completion 投影。成功运行后会触发新记忆后处理：后台并行提炼 user / agent / global Markdown 记忆，调用 SkillEvolutionAgent 生成 Skill 候选，并把本轮用户输入和 Agent 最终输出持久化为历史记忆（底层 `memory_nodes`）。
+8. **`routes/chat/completion.py`** — 单 Agent/综合结果成功或失败收尾。负责 Skill 状态、assistant message、trace 和 `ERROR` 等 SSE。Team 领域状态由 `team_runtime` 自己收口，不经 completion 投影。成功运行后会触发新记忆后处理：后台并行提炼 user / agent / global Markdown 记忆，调用 SkillEvolutionAgent 生成 Skill 候选，并把本轮用户输入和 Agent 最终输出持久化为历史记忆（底层 `memory_nodes`）。
 
-10. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 `agent_id` 缓存实例；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件）。工具集在 `_create_default_toolkit()` 注入：普通 Agent 默认拥有 Read/Grep/Glob/AskUser/FinalAnswerStart，Write/Edit 受权限控制；Bash/HttpRequest/知识库工具/MCP 受 `RuntimeToolScope` 裁剪。系统基础设施 Agent 可通过 `include_default_tools=False` 创建完全无工具实例。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是项目根目录，避免 Glob/Grep 扫描用户主目录）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
+9. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 `agent_id` 缓存实例；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件）。工具集在 `_create_default_toolkit()` 注入：普通 Agent 默认拥有 Read/Grep/Glob/AskUser/FinalAnswerStart，Write/Edit 受权限控制；Bash/HttpRequest/知识库工具/MCP 受 `RuntimeToolScope` 裁剪。系统基础设施 Agent 可通过 `include_default_tools=False` 创建完全无工具实例。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是项目根目录，避免 Glob/Grep 扫描用户主目录）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
 
-11. **`agents/agentscope_usage_patch.py`** — 启动时 `patch_agentscope_usage_events()` 给 AgentScope 打补丁以捕获 usage 事件。
+10. **`agents/agentscope_usage_patch.py`** — 启动时 `patch_agentscope_usage_events()` 给 AgentScope 打补丁以捕获 usage 事件。
 
 ### 持久化
 
 `backend/src/storage/database.py` 用同步 `sqlite3`（线程锁 `RLock`）封装所有存储，尽管依赖里有 `aiosqlite`。两类存储模式：
 
-- **结构化表**：`agents`、`teams`、`team_members`、`mcp_servers`、`skills`、`chat_sessions`、`chat_messages`、`run_events`、`memory_nodes`。历史库中可能仍残留 `memory_facts` / `memory_events` / `memory_candidates` 表，但旧记忆模块已删除，不再作为当前运行时能力。
+- **结构化表**：`agents`、`mcp_servers`、`skills`、`chat_sessions`、`chat_messages`、`run_events`、`memory_nodes`。持久 Team 的 `teams` / `team_members` 表在启动迁移中删除；历史库中可能仍残留 `memory_facts` / `memory_events` / `memory_candidates` 表，但旧记忆模块已删除，不再作为当前运行时能力。
 - **Markdown 记忆文件**：新记忆 MVP 使用 `backend/data/memory/users/user_memory.md`、`backend/data/memory/agents/agent_memory.md`、`backend/data/memory/global/global_memory.md` 作为默认文件；非默认 owner 使用 `users/{user_id}/user_memory.md`、`agents/{agent_id}/agent_memory.md`、`global/{workspace_id}/global_memory.md`。不兼容读取旧 `default.md`。
 - **向量存储**：全局 `VectorStoreBackend` 抽象支持 `disabled` 和 `zvec` provider。`VECTOR_STORE_PROVIDER` 只在首次初始化时生效，之后读取持久化 `VectorStorePolicy`；向量库只索引历史记忆底层表 `memory_nodes`，Markdown 记忆不进入向量库。
 - **`json_store` 表**：`(namespace, key) -> JSON`，用于系统设置等 Pydantic 文档。运行时模型设置存于 namespace `system_settings`、key `model`，由 `config/runtime_settings.py` 读写。
@@ -84,7 +84,7 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 
 - `frontend/src/App.tsx` — 用 `appStore.currentView` 通过 `VIEW_PAGES` 映射表（非 switch）懒加载页面；主题用 `useLayoutEffect` 同步到 `data-theme`；每 10s 轮询 `/api/health`。
 - 状态用 Zustand（`stores/appStore.ts`、`stores/settingsStore.ts`）。
-- API 调用与 SSE 事件流封装在 `hooks/`（`useEventStream.ts` 等）。页面在 `pages/`，对应后端各路由域（Chat/Trace/Sandbox/AgentTeam/MCP/Skills/Settings）。
+- API 调用与 SSE 事件流封装在 `hooks/`（`useEventStream.ts` 等）。页面在 `pages/`，对应后端各路由域（Chat/Trace/Sandbox/Agents/Subagents/MCP/Skills/Settings）。
 - Vite 把 `/api` 代理到 `localhost:8765`；`@/` 别名指向 `src/`。
 - UI 库为 `@agentscope-ai/design` + `@agentscope-ai/chat` + Ant Design，主题用 carbonTheme/carbonDarkTheme。
 

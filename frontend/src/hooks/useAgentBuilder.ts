@@ -32,7 +32,6 @@ export function useAgentBuilder(): UseAgentBuilderReturn {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           requirement: payload.requirement,
-          mode: payload.mode,
           preferredModel: payload.preferredModel,
         }),
       });

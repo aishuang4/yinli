@@ -1,30 +1,38 @@
 # Agent Workstation 文档索引
 
-> 状态：2026-07-10 更新后生效。本文是 `docs/` 的唯一索引。
+> 状态：2026-07-14 生效。本文是 `docs/` 的唯一索引。
 
-## 必读文档
+## 事实与规范
 
-- `AGENTS.md`：代理协作规范和当前项目事实的唯一真实入口。
-- `docs/development-guidelines.md`：开发规范，覆盖前端、后端、SQLite、Agent Runtime、测试和文档要求。
-- `docs/architecture-overview.md`：当前架构总览，只描述仍在线的核心链路。
-- `docs/chat-sse-event-contract.md`：Chat / RunState / DisplaySnapshot 稳定契约。新增或变更 Chat 事件前必须先改这里。
-- `docs/memory-system-design.md`：新记忆系统设计与实现进度，覆盖历史记忆（底层 `memory_nodes`）、Markdown 记忆、向量存储、Memory 页面和 Skill 自进化后续约束。
-- `docs/subagent-delegation-design.md`：新版 Subagent 委托能力设计，定义 Markdown + YAML frontmatter 文件定义、ReAct 内 `DelegateTask` 工具、invocation 审计、`SUBAGENT_*` 事件和分期边界。
-- `docs/team-runtime-redesign.md`：当前 Team Runtime 设计，定义 TeamRun、MemberSessionRuntime、Task List、Mailbox、file-first 状态和旧 Team Runtime 禁用边界。
-- `docs/dynamic-workflows-plan.md`：Dynamic Workflow 决策版改造设计，定义独立工作空间、Script Review、Runtime Cockpit、AgentScope Bridge 和后续 LangGraph 接入边界。
-- `docs/project-progress-handoff.md`：当前项目状态、启动验证方式和协作入口。
-- `docs/project-todo.md`：后续任务队列。
+首次参与项目时按以下顺序阅读：
 
-## 专题与路线文档
+1. `AGENTS.md`：当前项目事实、架构约束和开发代理规范。
+2. `docs/architecture-overview.md`：当前仍在线的系统架构。
+3. `docs/development-guidelines.md`：前后端、Runtime、SQLite、测试和文档规范。
+4. `docs/project-progress-handoff.md`：当前完成度、验证结果和已知缺口。
+5. `docs/project-todo.md`：按优先级维护的后续任务。
 
-- `docs/electron-packaging-plan.md`：桌面端正式打包、签名、公证、内置后端运行时仍有未完成项。
-- `docs/workflow-event-contract.md`：Dynamic Workflow 独立 SSE 事件契约。该契约不属于 Chat SSE。
+## 稳定契约
 
-## 已清理的文档类型
+- `docs/chat-sse-event-contract.md`：Chat SSE、RunState、DisplaySnapshot、TeamSnapshot 稳定契约。变更事件前必须先更新。
+- `docs/workflow-event-contract.md`：Dynamic Workflow 独立事件契约，不属于 Chat SSE。
 
-- 旧 Plan Runtime / Subagent Runtime 文档：对应 Runtime 已下线，不得作为当前 Plan Mode 或 Subagent 委托的实现入口。
-- 旧三层记忆设计文档：旧记忆模块已删除，当前只保留数据库兼容字段，不能作为运行时能力引用；新记忆能力以 `docs/memory-system-design.md` 和当前代码为准。
-- 已完成或被 `chat-sse-event-contract.md` 覆盖的临时执行计划：避免多份契约并存。
-- 已完成的 Chat Workbench 阶段草案：稳定布局事实已进入当前前端代码和架构总览，不再保留重复设计稿。
-- 脚手架操作清单：命令进入正式配置后立即删除。
-- 空 README、Vite 模板 README：根目录 README 已覆盖项目启动信息。
+## 在线领域设计
+
+- `docs/team-runtime-redesign.md`：一次性 TeamRun、动态 Member、Task List、Mailbox 和 file-first 状态。
+- `docs/subagent-delegation-design.md`：Subagent 文件定义、`DelegateTask`、权限裁剪和 invocation 审计。
+- `docs/memory-system-design.md`：新记忆系统、Markdown 记忆、`memory_nodes`、向量检索和 Skill 自进化。
+
+## 后续路线
+
+- `docs/workspace-project-design.md`：Workspace / Project 归属、资源绑定和 RuntimeContext 设计，尚未实现。
+- `docs/dynamic-workflows-plan.md`：Dynamic Workflow 的 Script Review、Runtime Cockpit 和 AgentScope Bridge 路线。
+- `docs/electron-packaging-plan.md`：桌面正式打包、签名、公证、数据目录和 Windows 验证。
+
+## 维护规则
+
+- 当前事实只写入 `AGENTS.md`、`architecture-overview.md` 和 `project-progress-handoff.md`。
+- 任务只写入 `project-todo.md`，专题文档不复制完整 TODO。
+- 事件字段只在对应稳定契约中定义，其他文档只引用。
+- 已完成的阶段草案合并结论后删除，不设置归档目录。
+- 旧 Plan Runtime、旧 Subagent Runtime、旧 Memory Runtime 和持久 Team 管理不得恢复为当前能力。

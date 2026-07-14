@@ -1,6 +1,6 @@
 # Agent Workstation 当前架构总览
 
-> 状态：2026-07-10 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
+> 状态：2026-07-14 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
 
 ## 项目定位
 
@@ -89,8 +89,6 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 `backend/src/storage/database.py` 使用同步 `sqlite3 + RLock`。核心结构化表包括：
 
 - `agents`
-- `teams`
-- `team_members`
 - `mcp_servers`
 - `skills`
 - `http_tools`

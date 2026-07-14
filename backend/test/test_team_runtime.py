@@ -10,7 +10,6 @@ from agentscope.event import (
     UserConfirmResultEvent,
 )
 from agentscope.message import ToolResultState
-from pydantic import ValidationError
 
 from src.agents.factory import AgentGuardrails, AgentModelOptions
 from src.server.routes.chat.event_hub.projector import (
@@ -36,7 +35,6 @@ from src.server.routes.chat.team_runtime.maintenance import (
 from src.server.routes.chat.team_runtime.service import TeamRunService
 from src.server.routes.chat.team_runtime.store import TeamEventPublisher, TeamStore, TeamStoreError
 from src.server.routes.chat.team_runtime.tools import leader_tools, member_tools
-from src.server.routes.teams import TeamCreate, TeamMember
 
 
 def create_store(tmp_path) -> TeamStore:
@@ -460,29 +458,6 @@ def test_team_store_rejects_path_like_ids_and_mail_after_completion(tmp_path) ->
     store.complete_run(expected_mailbox_version=len(store.mailbox()))
     with pytest.raises(TeamStoreError, match="不可接收用户消息"):
         store.send_mail(sender="user", recipient=member["id"], content="too late")
-
-
-def test_team_template_contract_rejects_old_worker_fields() -> None:
-    current = TeamCreate.model_validate({
-        "name": "Current Team",
-        "leaderAgentId": "leader-agent",
-        "memberAgentIds": ["member-agent"],
-    })
-    assert current.member_agent_ids == ["member-agent"]
-
-    with pytest.raises(ValidationError):
-        TeamCreate.model_validate({
-            "name": "Old Team",
-            "leaderAgentId": "leader-agent",
-            "workerAgentIds": ["member-agent"],
-        })
-    with pytest.raises(ValidationError):
-        TeamMember.model_validate({
-            "id": "old-member",
-            "agentId": "member-agent",
-            "name": "Old Member",
-            "role": "worker",
-        })
 
 
 def test_member_stream_coalesces_deltas_and_preserves_tool_name(tmp_path) -> None:

@@ -32,7 +32,7 @@ interface WorkbenchMenuItem {
 }
 
 const WORKBENCH_MENU_ITEMS: WorkbenchMenuItem[] = [
-  { id: 'agents', label: 'Agents', description: '主 Agent 与 Team 配置', icon: Bot },
+  { id: 'agents', label: 'Agents', description: 'Agent 模型、工具与运行边界', icon: Bot },
   { id: 'subagents', label: 'Subagents', description: '子 Agent 定义与调用历史', icon: Network },
   { id: 'tools', label: 'Tools', description: '内置工具与 HTTP 工具', icon: Wrench },
   { id: 'mcp', label: 'MCP', description: '外部工具服务连接', icon: GitBranch },

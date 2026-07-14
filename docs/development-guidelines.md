@@ -86,7 +86,7 @@
 
 ### 3.2 状态管理
 
-- 服务端数据通过 hooks 封装，例如 `useAgents`、`useTeams`、`useMcp`。
+- 服务端数据通过 hooks 封装，例如 `useAgents`、`useMcp`。
 - 删除、启用、局部编辑成功后优先本地更新，不要无脑刷新整个模块。
 - 只有会影响多个区域、后端有复杂合并逻辑时，才使用接口返回值替换本地状态或重新拉取。
 - 派生状态优先用 `useMemo`，不要用 `useEffect + setState` 保存可计算结果。

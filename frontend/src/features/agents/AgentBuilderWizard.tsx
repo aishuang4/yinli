@@ -1,18 +1,17 @@
 /**
- * AgentBuilderWizard — 根据需求生成 Agent / Team 草案的审核弹窗内容。
+ * AgentBuilderWizard — 根据需求生成独立 Agent 草案的审核弹窗内容。
  *
- * 从 AgentTeamPage 抽离，统一 Builder 表单字段并减少页面文件体积。
+ * 从 AgentsPage 抽离，统一 Builder 展示并减少页面文件体积。
  */
 
 import { AlertCircle, CheckCircle2, Sparkles, WandSparkles } from 'lucide-react';
 import { Button, Tag } from '@agentscope-ai/design';
-import { FormField, SelectField, TextAreaField } from '../../components/form';
+import { SelectField, TextAreaField } from '../../components/form';
 import { DEFAULT_MODEL_CONFIG, type ModelsResponse } from '../../types/agent';
-import type { BuilderMode, BuilderPlan } from '../../types/agentBuilder';
+import type { BuilderPlan } from '../../types/agentBuilder';
 
 interface AgentBuilderWizardProps {
   requirement: string;
-  mode: BuilderMode;
   model: string;
   models: ModelsResponse | null;
   plan: BuilderPlan | null;
@@ -20,7 +19,6 @@ interface AgentBuilderWizardProps {
   applying: boolean;
   error: string | null;
   onRequirementChange: (value: string) => void;
-  onModeChange: (value: BuilderMode) => void;
   onModelChange: (value: string) => void;
   onCreatePlan: () => Promise<void>;
   onApplyPlan: () => Promise<void>;
@@ -29,7 +27,6 @@ interface AgentBuilderWizardProps {
 
 export function AgentBuilderWizard({
   requirement,
-  mode,
   model,
   models,
   plan,
@@ -37,7 +34,6 @@ export function AgentBuilderWizard({
   applying,
   error,
   onRequirementChange,
-  onModeChange,
   onModelChange,
   onCreatePlan,
   onApplyPlan,
@@ -58,29 +54,6 @@ export function AgentBuilderWizard({
         </div>
 
         <div className="space-y-4">
-          <FormField label="创建模式">
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                type={mode === 'team' ? 'primary' : 'default'}
-                onClick={() => {
-                  onModeChange('team');
-                  onResetPlan();
-                }}
-              >
-                Team
-              </Button>
-              <Button
-                type={mode === 'agents' ? 'primary' : 'default'}
-                onClick={() => {
-                  onModeChange('agents');
-                  onResetPlan();
-                }}
-              >
-                Agents
-              </Button>
-            </div>
-          </FormField>
-
           <SelectField
             label="规划模型"
             value={model}
@@ -101,7 +74,7 @@ export function AgentBuilderWizard({
               onRequirementChange(event.target.value);
               if (plan) onResetPlan();
             }}
-            placeholder="例如：我需要一个能做产品需求分析、技术方案设计、代码实现和测试验证的团队。"
+            placeholder="例如：创建一个能完成产品需求分析和技术方案评审的 Agent。"
             fieldClassName="h-52 resize-none"
           />
 
@@ -129,7 +102,7 @@ export function AgentBuilderWizard({
           <div className="flex h-full items-center justify-center text-[var(--color-text-tertiary)]">
             <div className="text-center">
               <WandSparkles size={44} strokeWidth={1.2} className="mx-auto mb-3" />
-              <div className="text-sm">输入需求后生成 Agent / Team 草案</div>
+              <div className="text-sm">输入需求后生成 Agent 草案</div>
               <div className="mt-1 text-xs">系统会匹配已启用的 MCP 工具和 Skills，并标出缺失能力</div>
             </div>
           </div>
@@ -138,14 +111,14 @@ export function AgentBuilderWizard({
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-base font-medium text-[var(--color-text-primary)]">
-                  {plan.team?.name || 'Agent 创建草案'}
+                  Agent 创建草案
                 </div>
                 <div className="mt-1 text-sm text-[var(--color-text-secondary)]">
-                  {plan.team?.description || plan.requirement}
+                  {plan.requirement}
                 </div>
               </div>
               <div className="flex shrink-0 gap-2">
-                <Tag size="small" color="transparent">{plan.mode}</Tag>
+                <Tag size="small" color="transparent">Agents</Tag>
                 <Tag size="small" color={missingToolCount + missingSkillCount > 0 ? 'orange' : 'green'}>
                   缺失 {missingToolCount + missingSkillCount}
                 </Tag>
@@ -168,7 +141,6 @@ export function AgentBuilderWizard({
                 <BuilderAgentDraftCard
                   key={agent.tempId}
                   agent={agent}
-                  mode={plan.mode}
                 />
               ))}
             </div>
@@ -191,10 +163,8 @@ export function AgentBuilderWizard({
 
 function BuilderAgentDraftCard({
   agent,
-  mode,
 }: {
   agent: BuilderPlan['agents'][number];
-  mode: BuilderMode;
 }) {
   const matchedTools = (agent.recommendedTools || []).filter((item) => item.matched);
   const matchedSkills = (agent.recommendedSkills || []).filter((item) => item.matched);
@@ -205,8 +175,8 @@ function BuilderAgentDraftCard({
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <Tag size="small" color={mode === 'agents' ? 'green' : agent.role === 'leader' ? 'blue' : 'mauve'}>
-              {mode === 'agents' ? 'Agent' : agent.role === 'leader' ? 'Leader' : 'Member'}
+            <Tag size="small" color="green">
+              Agent
             </Tag>
             <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
               {agent.name}
