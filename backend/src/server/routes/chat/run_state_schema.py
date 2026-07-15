@@ -10,7 +10,17 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-RunStateStatus = Literal["running", "waiting", "completed", "failed", "cancelled", "cancelling"]
+RunStateStatus = Literal[
+    "running",
+    "waiting_user",
+    "waiting_permission",
+    "waiting_external",
+    "completed",
+    "failed",
+    "cancelled",
+    "cancelling",
+    "waiting",  # 只兼容升级前持久化快照。
+]
 RunStatePatchKind = Literal[
     "snapshot_meta",
     "display_event",

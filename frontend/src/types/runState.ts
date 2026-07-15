@@ -8,7 +8,17 @@
 import type { DisplayEvent, DisplaySnapshot } from './displayEvents';
 import type { TeamDomainEvent, TeamSnapshot } from './teamRuntime';
 
-export type RunStateStatus = 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled' | 'cancelling' | string;
+export type RunStateStatus =
+  | 'running'
+  | 'waiting_user'
+  | 'waiting_permission'
+  | 'waiting_external'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'cancelling'
+  | 'waiting'
+  | string;
 
 export type RunStatePatchKind =
   | 'snapshot_meta'

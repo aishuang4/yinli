@@ -4,8 +4,6 @@
 
 ## P0. Runtime 稳定性
 
-- [ ] 让 `resume.py` 复用 `leader_stream.py`、`completion.py` 和统一 orchestration，减少 send / resume 行为分叉。
-- [ ] 统一 `running`、`waiting_user`、`waiting_permission`、`waiting_external`、`completed`、`failed`、`cancelled` 状态语义。
 - [ ] 补齐 RunState / DisplaySnapshot / TeamSnapshot 回归矩阵，覆盖 Plan finalized、HITL、AskUser、工具失败、取消和刷新恢复。
 - [ ] 增加关键 Chat 工作流的 Playwright 测试，避免只依赖 reducer 和后端单测。
 - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor 和 ToolScope 摘要。

@@ -226,6 +226,13 @@ const INITIAL_STATE: StreamState = {
   error: null,
 };
 
+const WAITING_RUN_STATUSES = new Set([
+  'waiting',
+  'waiting_user',
+  'waiting_permission',
+  'waiting_external',
+]);
+
 function hasPendingUserInteraction(state: StreamState): boolean {
   return (
     state.hitlRequests.length > 0 ||
@@ -326,7 +333,7 @@ function applyRunStatePatch(state: StreamState, patch: ChatRunStatePatch): Strea
   const patchKind = patch.kind || 'snapshot_meta';
   const nextStatus = String(patch.status || '');
   const isTerminal = ['completed', 'failed', 'cancelled'].includes(nextStatus);
-  const isWaiting = nextStatus === 'waiting';
+  const isWaiting = WAITING_RUN_STATUSES.has(nextStatus);
   const displaySnapshot = patchKind === 'display_event' && patch.displayEvent
     ? applyDisplayEvent(state.displaySnapshot, patch.displayEvent)
     : state.displaySnapshot;

@@ -43,7 +43,7 @@
 - `scope`：`run|single|subagent|skill|memory|artifact|sandbox`。Team 不使用该字段，领域事件改用 `actorId`。
 - `source` / `sourceEventType`：来源系统与原始事件类型。
 - `agentId`、`agentName`：可选执行主体。
-- `status`：`running|waiting|completed|failed|cancelled|pending`。
+- `status`：`running|waiting_user|waiting_permission|waiting_external|completed|failed|cancelled|pending`。领域内部任务可以使用自己的状态，但不得覆盖顶层 Run 状态。
 - `reason`、`durationMs`、`payload`：补充信息。
 
 当前稳定 Runtime Event 家族：
@@ -59,6 +59,22 @@
 - `SANDBOX_*`：沙箱运行生命周期。
 - `PLAN_*`：Plan Mode 进入、更新、最终计划输出和工具拦截状态。
 - `SUBAGENT_*`：ReAct 内部 Subagent 委托生命周期。
+
+### 顶层 Run 生命周期
+
+顶层 Run 只允许以下状态：
+
+- `running`：Runtime 正在执行。
+- `waiting_user`：等待用户补充业务信息，例如 `AskUser` 或 clarification。
+- `waiting_permission`：等待用户批准或拒绝受权限控制的工具调用。
+- `waiting_external`：等待用户或外部系统回传外部执行结果。
+- `completed`：最终答案和成功收尾均已完成。
+- `failed`：Runtime 已失败并完成失败收尾。
+- `cancelled`：用户取消，或后端重启后确认该运行不可恢复。
+
+`waiting` 仅用于读取升级前的历史快照，新运行不得再写入。暂停时必须先发送顶层 `RUN_WAITING`，其 `status` 和 `payload.waitState` 使用上述具体等待状态；`AGENT_WAITING_HUMAN` 只描述 Agent 自身暂停，不作为顶层 Run 状态事实源。恢复时发送 `RUN_RESUMED`，终态只能由一个 `RUN_COMPLETED`、`RUN_FAILED` 或 `RUN_CANCELLED` 收口。
+
+`RUN_WAITING.payload` 至少包含 `interactionId`、`interactionType`、`waitState` 和稳定的 `reason`。`reason` 当前包括 `clarification_required`、`permission_required`、`user_input_required`、`external_execution_required`。
 
 ## Plan Mode Runtime Events
 
@@ -139,7 +155,7 @@ V1 的 Chat 主界面不展示子 Agent 完整 transcript，也不铺开完整�
 
 `GET /api/chat/runs/{run_id}/state/stream` 返回 RunState 中间层 SSE。首个事件为 `RUN_STATE` 完整快照，后续事件优先使用 `RUN_STATE_PATCH` 轻量增量。该流是 Chat 主界面恢复运行中任务的推荐入口，前端不需要直接处理工具结果、模型调用等原始事件。
 
-当 RunState 首包快照的 `status` 为 `completed|failed|cancelled` 时，`state/stream` 必须在发送 `RUN_STATE` 后结束连接。`waiting` 表示等待用户操作，不是仍在持续输出的流，但只有快照或 patch 已经包含前端可操作内容时才结束连接，例如 `approvals[]` / `approval` 或 `plans[]` / `plans`。`AGENT_WAITING_HUMAN`、`CLARIFICATION_WAITING` 这类预告等待的 Runtime Event 不得单独关闭流，必须等待随后的 `HITL_REQUIRED` / `CLARIFICATION_REQUIRED` 把可操作数据投影进 RunState。
+当 RunState 首包快照的 `status` 为 `completed|failed|cancelled` 时，`state/stream` 必须在发送 `RUN_STATE` 后结束连接。`waiting_user|waiting_permission|waiting_external` 表示等待外部输入，不是仍在持续输出的流，但只有快照或 patch 已经包含前端可操作内容时才结束连接，例如 `approvals[]` / `approval`。`RUN_WAITING`、`AGENT_WAITING_HUMAN`、`CLARIFICATION_WAITING` 这类预告等待的 Runtime Event 不得单独关闭流，必须等待随后的 `HITL_REQUIRED` / `CLARIFICATION_REQUIRED` 把可操作数据投影进 RunState。
 
 `RUN_STATE_PATCH` 用于连接中的实时更新，允许丢失；网络断开、页面刷新或前端怀疑状态不一致时，应重新订阅并以新的 `RUN_STATE` 快照为准。每个 patch 必须包含 `kind`，前端必须优先按 `kind` 分支处理，不得再靠猜测可选字段判断 patch 语义。稳定字段包括：
 
@@ -160,7 +176,7 @@ RunState 稳定字段：
 
 - `version`：状态版本，当前为 `2`。
 - `runId`、`sessionId`、`agentId`、`agentName`、`mode`、`task`。Team 模式下 `agentId/agentName` 表示本轮 Leader。
-- `status`：`running|waiting|completed|failed|cancelled|cancelling`。
+- `status`：`running|waiting_user|waiting_permission|waiting_external|completed|failed|cancelled|cancelling`；历史快照可能仍为 `waiting`。
 - `currentStage`：面向用户的当前阶段。
 - `reasoning`、`reasoningTruncated`：ReAct 过程文本。可截断。
 - `finalAnswer`、`finalAnswerTruncated`：最终答案文本。可截断，完整最终结果以 `chat_messages` 为准。

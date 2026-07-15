@@ -15,13 +15,10 @@ from agentscope.message import UserMsg
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.completion import (
     emit_failed_startup_run,
-    finalize_failed_leader_run,
-    finalize_successful_leader_run,
-    max_react_iterations_error,
-    missing_final_answer_error,
 )
-from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
-from src.server.routes.chat.models import ChatMessage, ChatModelCacheRun
+from src.server.routes.chat.leader_execution import execute_and_finalize_leader_reply
+from src.server.routes.chat.leader_stream import LeaderStreamState
+from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.plan_mode.manager import PlanModeManager
 from src.server.routes.chat.plan_mode.middleware import PlanModeMiddleware
 from src.server.routes.chat.plan_mode.tools import build_plan_mode_tools
@@ -140,9 +137,6 @@ async def execute_react_runtime(
 ) -> AsyncGenerator[str, None]:
     """执行 ReAct Runtime 并输出 SSE 事件。"""
 
-    assistant_text = ""
-    assistant_thinking = ""
-    assistant_model_caches: list[ChatModelCacheRun] = []
     active_skill_run = ctx.active_skill_run
     system_prompt = ctx.system_prompt
     stream_scope = "leader" if ctx.intent_route.executor.kind == "team" else "single_agent"
@@ -213,95 +207,22 @@ async def execute_react_runtime(
         ),
     )
 
-    try:
-        leader_stream_state = LeaderStreamState(
-            active_skill_run=active_skill_run,
-        )
-        async for leader_event in stream_leader_agent_reply(
-            agent=agent,
-            user_msg=user_msg,
-            state=leader_stream_state,
-            session_id=ctx.session_id,
-            persist=ctx.persist_run,
-            agent_id=ctx.agent_id,
-            agent_name=ctx.agent_name,
-            model_name=ctx.model_name,
-            guardrails=ctx.guardrails,
-            message=ctx.effective_user_message,
-            stream_scope=stream_scope,
-            skill_runs=ctx.skill_runs,
-            plan_mode_manager=plan_mode_manager,
-            runtime_event_sources=runtime_event_sources,
-            sandbox=run_data.sandbox,
-        ):
-            yield leader_event
-        active_skill_run = leader_stream_state.active_skill_run
-        assistant_text = leader_stream_state.assistant_text
-        assistant_thinking = leader_stream_state.assistant_thinking
-        assistant_tool_calls = leader_stream_state.assistant_tool_calls
-        assistant_model_caches = leader_stream_state.assistant_model_caches
-        runtime_events = leader_stream_state.runtime_events
-        if leader_stream_state.stopped and leader_stream_state.stop_reason != "plan_finalized":
-            return
-        if leader_stream_state.exceeded_max_iters:
-            async for completion_event in finalize_failed_leader_run(
-                session_id=ctx.session_id,
-                persist=ctx.persist_run,
-                agent_id=ctx.agent_id,
-                agent_name=ctx.agent_name,
-                model_name=ctx.model_name,
-                assistant_text="",
-                assistant_error=max_react_iterations_error(),
-                assistant_model_caches=assistant_model_caches,
-                skill_runs=ctx.skill_runs,
-                sandbox=run_data.sandbox,
-            ):
-                yield completion_event
-            return
-        if not assistant_text.strip():
-            async for completion_event in finalize_failed_leader_run(
-                session_id=ctx.session_id,
-                persist=ctx.persist_run,
-                agent_id=ctx.agent_id,
-                agent_name=ctx.agent_name,
-                model_name=ctx.model_name,
-                assistant_text="",
-                assistant_error=missing_final_answer_error(),
-                assistant_model_caches=assistant_model_caches,
-                skill_runs=ctx.skill_runs,
-                sandbox=run_data.sandbox,
-            ):
-                yield completion_event
-            return
-        async for completion_event in finalize_successful_leader_run(
-            session_id=ctx.session_id,
-            persist=ctx.persist_run,
-            agent_id=ctx.agent_id,
-            agent_name=ctx.agent_name,
-            model_name=ctx.model_name,
-            user_message=ctx.effective_user_message,
-            assistant_text=assistant_text,
-            assistant_thinking=assistant_thinking,
-            assistant_tool_calls=assistant_tool_calls,
-            assistant_model_caches=assistant_model_caches,
-            runtime_events=runtime_events,
-            skill_runs=ctx.skill_runs,
-            active_skill_run=active_skill_run,
-            sandbox=run_data.sandbox,
-        ):
-            yield completion_event
-    except Exception as exc:
-        assistant_error = f"Agent 执行异常: {exc}"
-        async for completion_event in finalize_failed_leader_run(
-            session_id=ctx.session_id,
-            persist=ctx.persist_run,
-            agent_id=ctx.agent_id,
-            agent_name=ctx.agent_name,
-            model_name=ctx.model_name,
-            assistant_text=assistant_text,
-            assistant_error=assistant_error,
-            assistant_model_caches=assistant_model_caches,
-            skill_runs=ctx.skill_runs,
-            sandbox=run_data.sandbox,
-        ):
-            yield completion_event
+    leader_stream_state = LeaderStreamState(active_skill_run=active_skill_run)
+    async for event in execute_and_finalize_leader_reply(
+        agent=agent,
+        input_event=user_msg,
+        state=leader_stream_state,
+        session_id=ctx.session_id,
+        persist=ctx.persist_run,
+        agent_id=ctx.agent_id,
+        agent_name=ctx.agent_name,
+        model_name=ctx.model_name,
+        guardrails=ctx.guardrails,
+        user_message=ctx.effective_user_message,
+        stream_scope=stream_scope,
+        skill_runs=ctx.skill_runs,
+        plan_mode_manager=plan_mode_manager,
+        runtime_event_sources=runtime_event_sources,
+        sandbox=run_data.sandbox,
+    ):
+        yield event

@@ -3,7 +3,7 @@
  */
 
 import { Tag } from '@agentscope-ai/design';
-import { clampProgress, statusText } from './runUtils';
+import { clampProgress, isWaitingRunStatus, statusText } from './runUtils';
 
 export function ProgressBar({ value, large = false }: { value: number; large?: boolean }) {
   return (
@@ -20,7 +20,7 @@ export function RunStatusTag({ status }: { status: string }) {
   const color = (
     status === 'running' || status === 'cancelling'
       ? 'blue'
-      : status === 'waiting'
+      : isWaitingRunStatus(status)
         ? 'orange'
         : status === 'completed'
           ? 'green'

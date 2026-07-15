@@ -15,6 +15,7 @@
 - Readiness Gate、Intent Router、ReAct Runtime 和 ToolScope。
 - 单 Agent 流式执行、AskUser、HITL、取消、重跑和刷新恢复。
 - 后台 Run、RunState v2、DisplaySnapshot v3、Runs 和 Trace。
+- send / resume 共用 Leader 流处理和 completion 收口；顶层 Run 区分用户输入、权限审批和外部执行等待，终态不可逆。
 - Plan Mode 通过 middleware 接入，仅支持单 Agent，不恢复旧 Plan Runtime。
 
 ### TeamRun
@@ -52,7 +53,7 @@
 最近一次完整验证：
 
 ```text
-backend pytest: 281 passed
+backend pytest: 286 passed
 frontend build: passed
 frontend lint: passed
 /api/teams: 404
@@ -64,12 +65,11 @@ Vite 仍有约 968 KB 的大 chunk 警告，不影响构建，但需要后续拆
 
 ## 主要缺口
 
-1. `resume.py` 与 send 主链路仍有部分行为分叉，需要统一暂停、恢复和完成状态机。
-2. Team、Subagent、Plan、HITL 和刷新恢复缺少完整 Playwright 回归。
-3. Artifact 还没有正式生命周期，大体积工具结果主要依赖 Trace 摘要。
-4. Workspace / Project 归属和资源绑定尚未实现，设计见 `docs/workspace-project-design.md`。
-5. Agent / Subagent 配置版本、评估指标、自动化调度和 Secret 治理尚未形成平台能力。
-6. Electron 正式签名、公证、Windows 真机、`userData` 迁移和自动更新尚未完成。
+1. Team、Subagent、Plan、HITL 和刷新恢复缺少完整 Playwright 回归。
+2. Artifact 还没有正式生命周期，大体积工具结果主要依赖 Trace 摘要。
+3. Workspace / Project 归属和资源绑定尚未实现，设计见 `docs/workspace-project-design.md`。
+4. Agent / Subagent 配置版本、评估指标、自动化调度和 Secret 治理尚未形成平台能力。
+5. Electron 正式签名、公证、Windows 真机、`userData` 迁移和自动更新尚未完成。
 
 ## 核心入口
 

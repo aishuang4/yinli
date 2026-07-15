@@ -12,6 +12,7 @@ from agentscope.tool import ToolChoice
 
 from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
 from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload, _merge_hitl_tool_calls
+from src.server.routes.chat.lifecycle import waiting_reason, waiting_status_for_interaction
 from src.server.routes.chat.models import (
     HITL_EVENT_TYPES,
     PENDING_INTERACTIONS,
@@ -293,6 +294,28 @@ async def stream_leader_agent_reply(
                         "runtime_event_sources": runtime_event_sources,
                         "sandbox": sandbox,
                     }
+                    wait_state = waiting_status_for_interaction(
+                        interaction.type,
+                        interaction.resume_tool_calls,
+                    )
+                    yield runtime_event_sse(
+                        "RUN_WAITING",
+                        session_id=session_id,
+                        scope="run",
+                        source="runtime",
+                        source_event_type=interaction.type,
+                        agent_id=agent_id,
+                        agent_name=agent_name,
+                        status=wait_state,
+                        reason=waiting_reason(wait_state),
+                        payload={
+                            "interactionId": interaction.id,
+                            "interactionType": interaction.type,
+                            "waitState": wait_state,
+                            "reason": waiting_reason(wait_state),
+                        },
+                        collect=state.runtime_events,
+                    )
                     yield _sse_event("HITL_REQUIRED", _hitl_payload(interaction))
                 state.stopped = True
                 state.stop_reason = "subagent_hitl"
@@ -325,6 +348,28 @@ async def stream_leader_agent_reply(
                 skill_runs=skill_runs,
                 scope=stream_scope,
                 persist=persist,
+            )
+            wait_state = waiting_status_for_interaction(
+                interaction.type,
+                interaction.resume_tool_calls,
+            )
+            yield runtime_event_sse(
+                "RUN_WAITING",
+                session_id=session_id,
+                scope="run",
+                source="runtime",
+                source_event_type=event_type,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                status=wait_state,
+                reason=waiting_reason(wait_state),
+                payload={
+                    "interactionId": interaction.id,
+                    "interactionType": interaction.type,
+                    "waitState": wait_state,
+                    "reason": waiting_reason(wait_state),
+                },
+                collect=state.runtime_events,
             )
             yield runtime_event_sse(
                 "AGENT_WAITING_HUMAN",
@@ -467,6 +512,22 @@ async def stream_leader_agent_reply(
                 runtime_events=state.runtime_events,
                 clarification_requests=[clarification],
             )
+        yield runtime_event_sse(
+            "RUN_WAITING",
+            session_id=session_id,
+            scope="run",
+            agent_id=agent_id,
+            agent_name=agent_name,
+            status="waiting_user",
+            reason="clarification_required",
+            payload={
+                "interactionId": str(clarification.get("id") or ""),
+                "interactionType": "CLARIFICATION_REQUIRED",
+                "waitState": "waiting_user",
+                "reason": "clarification_required",
+            },
+            collect=state.runtime_events,
+        )
         yield runtime_event_sse(
             "CLARIFICATION_WAITING",
             session_id=session_id,

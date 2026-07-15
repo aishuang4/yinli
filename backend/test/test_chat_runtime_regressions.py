@@ -625,7 +625,7 @@ def test_run_state_projection_restores_final_answer_and_hitl():
         "HITL_REQUIRED",
         {
             "interactionId": "hitl-1",
-            "type": "tool_approval",
+            "type": "REQUIRE_USER_CONFIRM",
             "agentId": "agent-1",
             "agentName": "Agent",
             "toolCalls": [{"id": "call-bash", "name": "Bash"}],
@@ -634,8 +634,8 @@ def test_run_state_projection_restores_final_answer_and_hitl():
     )
 
     assert state["finalAnswer"] == "完成"
-    assert state["status"] == "waiting"
-    assert state["currentStage"] == "等待人工处理"
+    assert state["status"] == "waiting_permission"
+    assert state["currentStage"] == "等待权限确认"
     assert state["approvals"][0]["interactionId"] == "hitl-1"
 
 
@@ -1077,7 +1077,7 @@ def test_clarification_required_can_clear_mistaken_final_answer():
     )
     events = consume_run_state_display_events(state)
 
-    assert state["status"] == "waiting"
+    assert state["status"] == "waiting_user"
     assert state["finalAnswer"] == ""
     assert [event["event"] for event in events] == ["answer.completed", "tool.started", "feedback.waiting"]
     assert events[0]["block"] == "answer"
@@ -1239,7 +1239,7 @@ def test_run_state_projection_preserves_clarification_questions():
         run,
     )
 
-    assert state["status"] == "waiting"
+    assert state["status"] == "waiting_user"
     assert state["approvals"][0]["type"] == "clarification"
     assert state["approvals"][0]["title"] == "需要补充信息"
     assert state["approvals"][0]["questions"][0]["id"] == "target"
@@ -1493,16 +1493,16 @@ def test_subscribe_run_state_stream_closes_after_waiting_patch():
     first, second, third, fourth = asyncio.run(run_case())
     assert "event: RUN_STATE" in first
     assert "event: RUN_STATE_PATCH" in second
-    assert '"status": "waiting"' in second
+    assert '"status": "waiting_user"' in second
     assert '"tool.started"' in second
     assert "event: RUN_STATE_PATCH" in third
-    assert '"status": "waiting"' in third
+    assert '"status": "waiting_user"' in third
     assert '"approval"' in third
     assert fourth == ""
 
 
 def test_run_state_stream_waits_for_actionable_hitl_patch_before_closing():
-    """AGENT_WAITING_HUMAN 只是内部状态，不再向前端发送 runtime_event patch。"""
+    """RUN_WAITING 可更新状态，但必须等到交互数据可操作后才关闭流。"""
 
     async def run_case():
         run = ChatBackgroundRun(
@@ -1515,6 +1515,20 @@ def test_run_state_stream_waits_for_actionable_hitl_patch_before_closing():
         run.state_subscribers.add(queue)
 
         await _broadcast(run, runtime_event_sse(
+            "RUN_WAITING",
+            session_id=run.session_id,
+            run_id=run.id,
+            scope="run",
+            status="waiting_permission",
+            payload={
+                "interactionId": "hitl-1",
+                "interactionType": "REQUIRE_USER_CONFIRM",
+                "waitState": "waiting_permission",
+            },
+        ))
+        waiting_patch = await asyncio.wait_for(queue.get(), timeout=0.1)
+
+        await _broadcast(run, runtime_event_sse(
             "AGENT_WAITING_HUMAN",
             session_id=run.session_id,
             run_id=run.id,
@@ -1523,9 +1537,9 @@ def test_run_state_stream_waits_for_actionable_hitl_patch_before_closing():
             payload={"interactionId": "hitl-1"},
         ))
         try:
-            runtime_patch = queue.get_nowait()
+            agent_patch = queue.get_nowait()
         except asyncio.QueueEmpty:
-            runtime_patch = ""
+            agent_patch = ""
 
         await _broadcast(run, _sse_event("HITL_REQUIRED", {
             "interactionId": "hitl-1",
@@ -1537,10 +1551,12 @@ def test_run_state_stream_waits_for_actionable_hitl_patch_before_closing():
         }))
         hitl_patch = await asyncio.wait_for(queue.get(), timeout=0.1)
         stream_close = await asyncio.wait_for(queue.get(), timeout=0.1)
-        return runtime_patch, hitl_patch, stream_close
+        return waiting_patch, agent_patch, hitl_patch, stream_close
 
-    runtime_patch, hitl_patch, stream_close = asyncio.run(run_case())
-    assert runtime_patch == ""
+    waiting_patch, agent_patch, hitl_patch, stream_close = asyncio.run(run_case())
+    assert '"status": "waiting_permission"' in waiting_patch
+    assert '"kind": "snapshot_meta"' in waiting_patch
+    assert agent_patch == ""
     assert hitl_patch is not None
     assert "event: RUN_STATE_PATCH" in hitl_patch
     assert '"kind": "display_event"' in hitl_patch
@@ -2191,6 +2207,10 @@ def test_single_agent_hitl_merges_same_reply_running_tool_calls():
         assert [item["id"] for item in interactions[0].tool_calls] == ["call-read-1", "call-read-2"]
         hitl_events = [event for event in events if event.startswith("event: HITL_REQUIRED")]
         assert hitl_events
+        assert any(
+            "RUN_WAITING" in event and '"status": "waiting_permission"' in event
+            for event in events
+        )
         assert "call-read-1" in hitl_events[0]
         assert "call-read-2" in hitl_events[0]
     finally:
@@ -3259,7 +3279,7 @@ def test_background_run_keeps_waiting_status_after_hitl_required():
 
     run = asyncio.run(run_waiting_case())
 
-    assert run.status == "waiting"
+    assert run.status == "waiting_user"
     assert run.completed_at is None
 
 
@@ -3435,7 +3455,7 @@ def test_background_run_resume_relay_marks_original_run_completed():
         )
         assert run.async_task is not None
         await run.async_task
-        assert run.status == "waiting"
+        assert run.status == "waiting_user"
 
         replayed = [
             event
@@ -3449,3 +3469,83 @@ def test_background_run_resume_relay_marks_original_run_completed():
     assert run.completed_at is not None
     assert len(replayed) == 2
     assert any("TEXT_BLOCK_DELTA" in event for event in run.events)
+
+
+def test_background_run_resume_relay_preserves_failed_terminal_status():
+    """恢复流已发出 RUN_FAILED 时，relay 结束不得把终态覆盖成 completed。"""
+
+    async def run_resume_failure_case():
+        async def initial_factory():
+            yield _sse_event("HITL_REQUIRED", {"id": "hitl-failed"})
+
+        async def resume_factory():
+            yield runtime_event_sse(
+                "RUN_FAILED",
+                session_id="session-resume-failed",
+                run_id="",
+                scope="run",
+                status="failed",
+                reason="resume_error",
+                payload={"message": "恢复失败"},
+            )
+            yield _sse_event("ERROR", {"message": "恢复失败"})
+
+        run = await start_chat_background_run(
+            session_id="session-resume-failed",
+            factory=initial_factory,
+            task="恢复后失败的任务",
+            persist=False,
+        )
+        assert run.async_task is not None
+        await run.async_task
+        async for _ in relay_chat_background_run_events(run.id, resume_factory()):
+            pass
+        return run
+
+    run = asyncio.run(run_resume_failure_case())
+
+    assert run.status == "failed"
+
+
+def test_background_run_raw_error_finishes_as_failed():
+    """即使调用方漏发 RUN_FAILED，ERROR 也必须把顶层 Run 收口为 failed。"""
+
+    async def run_error_case():
+        async def factory():
+            yield _sse_event("ERROR", {"message": "直接失败"})
+
+        run = await start_chat_background_run(
+            session_id="session-raw-error",
+            factory=factory,
+            task="直接失败的任务",
+            persist=False,
+        )
+        assert run.async_task is not None
+        await run.async_task
+        return run
+
+    run = asyncio.run(run_error_case())
+
+    assert run.status == "failed"
+    assert run.state["status"] == "failed"
+
+
+def test_run_state_terminal_status_ignores_late_resume_event():
+    """晚到的 RUN_RESUMED 不得把终态 RunState 改回 running。"""
+
+    run = _projection_run()
+    run.status = "completed"
+    run.completed_at = "2026-07-14T00:00:00+00:00"
+    state = initial_run_state(run)
+    state = project_event(
+        state,
+        "RUNTIME_EVENT",
+        {
+            "type": "RUN_RESUMED",
+            "status": "running",
+            "payload": {"interactionId": "late-resume"},
+        },
+        run,
+    )
+
+    assert state["status"] == "completed"

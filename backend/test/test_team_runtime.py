@@ -18,6 +18,7 @@ from src.server.routes.chat.event_hub.projector import (
     normalize_run_state,
     project_event,
 )
+from src.server.routes.chat.lifecycle import can_transition_run_status, waiting_status_for_interaction
 from src.server.routes.chat.team_runtime.coordinator import TeamCoordinator
 from src.server.routes.chat.team_runtime.member_runtime import (
     MEMBER_RECOVERY_MAX_REACT_ITERS,
@@ -35,6 +36,34 @@ from src.server.routes.chat.team_runtime.maintenance import (
 from src.server.routes.chat.team_runtime.service import TeamRunService
 from src.server.routes.chat.team_runtime.store import TeamEventPublisher, TeamStore, TeamStoreError
 from src.server.routes.chat.team_runtime.tools import leader_tools, member_tools
+
+
+def test_chat_run_waiting_status_distinguishes_interaction_types() -> None:
+    """顶层 Run 必须区分用户输入、权限审批与外部执行等待。"""
+
+    assert waiting_status_for_interaction(
+        "REQUIRE_EXTERNAL_EXECUTION",
+        [{"name": "AskUser"}],
+    ) == "waiting_user"
+    assert waiting_status_for_interaction(
+        "REQUIRE_USER_CONFIRM",
+        [{"name": "Bash"}],
+    ) == "waiting_permission"
+    assert waiting_status_for_interaction(
+        "REQUIRE_EXTERNAL_EXECUTION",
+        [{"name": "ExternalTool"}],
+    ) == "waiting_external"
+
+
+def test_chat_run_terminal_status_cannot_transition_back_to_active() -> None:
+    """顶层 Run 进入终态后不得被晚到事件改回运行态或其他终态。"""
+
+    assert can_transition_run_status("waiting_permission", "running") is True
+    assert can_transition_run_status("waiting", "waiting_user") is True
+    assert can_transition_run_status("running", "failed") is True
+    assert can_transition_run_status("failed", "running") is False
+    assert can_transition_run_status("completed", "failed") is False
+    assert can_transition_run_status("cancelled", "running") is False
 
 
 def create_store(tmp_path) -> TeamStore:

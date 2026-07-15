@@ -441,7 +441,14 @@ export function ChatPage() {
           const status = String(run.status || '');
           return (
             sessionId === activeSessionId &&
-            (status === 'running' || status === 'waiting' || status === 'cancelling')
+            (
+              status === 'running' ||
+              status === 'waiting' ||
+              status === 'waiting_user' ||
+              status === 'waiting_permission' ||
+              status === 'waiting_external' ||
+              status === 'cancelling'
+            )
           );
         });
         const runId = String(activeRun?.id || '');

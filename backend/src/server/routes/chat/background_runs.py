@@ -13,6 +13,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from src.server.routes.chat.helpers import _sse_event
+from src.server.routes.chat.lifecycle import (
+    ACTIVE_RUN_STATUSES,
+    TERMINAL_RUN_STATUSES,
+    can_transition_run_status,
+    is_waiting_run_status,
+    stage_for_run_status,
+    waiting_status_for_interaction,
+)
 from src.server.routes.chat.event_types import SSE_EVENT_RUNTIME, SSE_EVENT_TEAM
 from src.server.routes.chat.event_hub import (
     consume_run_state_display_events,
@@ -44,12 +52,6 @@ MAX_BACKGROUND_RUNS = 50
 MAX_EVENTS_PER_RUN = 5000
 COMPLETED_RUN_TTL = timedelta(hours=2)
 WAITING_EVENT_TYPES = {"HITL_REQUIRED", "CLARIFICATION_REQUIRED"}
-RUNTIME_WAITING_TYPES = {
-    "RUN_WAITING",
-    "AGENT_WAITING_HUMAN",
-    "CLARIFICATION_WAITING",
-    "HITL_REQUIRED",
-}
 RUNTIME_RUNNING_TYPES = {
     "RUN_STARTED",
     "RUN_RESUMED",
@@ -67,8 +69,6 @@ RUN_STATE_METADATA_PATCH_EVENTS = {
     "MODEL_CALL_END",
     "RUN_CANCELLED",
 }
-ACTIVE_RUN_STATUSES = {"running", "waiting", "cancelling"}
-TERMINAL_RUN_STATUSES = {"completed", "failed", "cancelled"}
 CURRENT_BACKGROUND_RUN_ID: ContextVar[str] = ContextVar("current_chat_background_run_id", default="")
 
 
@@ -180,6 +180,8 @@ async def mark_chat_background_run_status(run_id: str, status: str) -> ChatBackg
         run = _runs.get(run_id)
         if run is None:
             return None
+        if not can_transition_run_status(run.status, status):
+            return run
         run.status = status
         if status == "running":
             run.completed_at = None
@@ -311,7 +313,7 @@ async def relay_chat_background_run_events(
         async for event in events:
             await _broadcast(run, event)
             yield event
-        if run.status != "waiting":
+        if run.status not in TERMINAL_RUN_STATUSES and not is_waiting_run_status(run.status):
             await mark_chat_background_run_status(run_id, "completed")
     except Exception:
         await mark_chat_background_run_status(run_id, "failed")
@@ -484,7 +486,7 @@ async def _consume_chat_events(run: ChatBackgroundRun, factory: EventStreamFacto
     try:
         async for event in factory():
             await _broadcast(run, event)
-        if run.status not in TERMINAL_RUN_STATUSES and run.status != "waiting":
+        if run.status not in TERMINAL_RUN_STATUSES and not is_waiting_run_status(run.status):
             run.status = "completed"
             update_chat_run_status(run.id, run.status, run.completed_at)
     except asyncio.CancelledError:
@@ -525,15 +527,26 @@ async def _broadcast(run: ChatBackgroundRun, event: str) -> None:
     _, event_data = _parse_sse_event(event)
     runtime_status = _status_from_runtime_event_chunk(event_type, event)
     if runtime_status:
-        run.status = runtime_status
-        if runtime_status == "running":
-            run.completed_at = None
-        elif runtime_status in TERMINAL_RUN_STATUSES and not run.completed_at:
+        if can_transition_run_status(run.status, runtime_status):
+            run.status = runtime_status
+            if runtime_status == "running":
+                run.completed_at = None
+            elif runtime_status in TERMINAL_RUN_STATUSES and not run.completed_at:
+                run.completed_at = datetime.now(timezone.utc).isoformat()
+            update_chat_run_status(run.id, run.status, run.completed_at)
+    elif event_type == "ERROR" and can_transition_run_status(run.status, "failed"):
+        run.status = "failed"
+        if not run.completed_at:
             run.completed_at = datetime.now(timezone.utc).isoformat()
         update_chat_run_status(run.id, run.status, run.completed_at)
     elif event_type in WAITING_EVENT_TYPES:
-        run.status = "waiting"
-        update_chat_run_status(run.id, run.status, run.completed_at)
+        waiting_status = waiting_status_for_interaction(
+            str(event_data.get("type") or event_type),
+            event_data.get("toolCalls") if isinstance(event_data.get("toolCalls"), list) else [],
+        )
+        if can_transition_run_status(run.status, waiting_status):
+            run.status = waiting_status
+            update_chat_run_status(run.id, run.status, run.completed_at)
     run.event_count += 1
     run.events.append(event)
     if len(run.events) > MAX_EVENTS_PER_RUN:
@@ -667,7 +680,7 @@ def _run_state_patch_should_close(patch_event: str) -> bool:
     status = str(patch.get("status") or "")
     if status in TERMINAL_RUN_STATUSES:
         return True
-    if status != "waiting":
+    if not is_waiting_run_status(status):
         return False
     display_event = patch.get("displayEvent") if isinstance(patch.get("displayEvent"), dict) else {}
     return (
@@ -679,7 +692,7 @@ def _run_state_patch_should_close(patch_event: str) -> bool:
 def _run_state_has_actionable_waiting_state(state: dict) -> bool:
     """判断 waiting 快照是否已有前端可操作内容。"""
 
-    if str(state.get("status") or "") != "waiting":
+    if not is_waiting_run_status(str(state.get("status") or "")):
         return False
     approvals = state.get("approvals") if isinstance(state.get("approvals"), list) else []
     if any(isinstance(item, dict) and item.get("status") == "waiting" for item in approvals):
@@ -838,8 +851,8 @@ def _summarize_run_events(run: ChatBackgroundRun) -> dict:
     elif run.status == "cancelled":
         progress = 100
         current_stage = "已取消"
-    elif run.status == "waiting":
-        current_stage = "等待人工处理"
+    elif is_waiting_run_status(run.status):
+        current_stage = stage_for_run_status(run.status)
 
     result_text = "".join(result_parts).strip()
     return {
@@ -896,9 +909,11 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
         if runtime_type == "AGENT_FINAL_ANSWER_DELTA":
             result_parts.append(str(payload.get("delta") or ""))
 
-        if runtime_type in RUNTIME_WAITING_TYPES:
+        if runtime_type == "RUN_WAITING":
             progress = max(progress, 65)
-            current_stage = "等待人工处理"
+            current_stage = stage_for_run_status(
+                str(payload.get("waitState") or data.get("status") or run.status),
+            )
         elif runtime_type == "AGENT_MODEL_CALL_STARTED":
             progress = max(progress, 25)
             current_stage = f"{agent_name or 'Agent'} 正在调用模型"
@@ -941,7 +956,7 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
     ])
     if member_total:
         progress = max(progress, min(90, 25 + int((member_completed / member_total) * 55)))
-        if run.status not in TERMINAL_RUN_STATUSES and run.status != "waiting":
+        if run.status not in TERMINAL_RUN_STATUSES and not is_waiting_run_status(run.status):
             current_stage = f"Member 协作中：{member_completed}/{member_total} 完成"
 
     if run.status == "completed":
@@ -953,8 +968,8 @@ def _summarize_runtime_events(run: ChatBackgroundRun) -> dict | None:
     elif run.status == "cancelled":
         progress = 100
         current_stage = "已取消"
-    elif run.status == "waiting":
-        current_stage = "等待人工处理"
+    elif is_waiting_run_status(run.status):
+        current_stage = stage_for_run_status(run.status)
 
     result_text = "".join(result_parts).strip()
     return {
@@ -977,8 +992,10 @@ def _status_from_runtime_event_chunk(event_type: str, raw_event: str) -> str:
     runtime_type = str(data.get("type") or "")
     if runtime_type in RUNTIME_TERMINAL_STATUS:
         return RUNTIME_TERMINAL_STATUS[runtime_type]
-    if runtime_type in RUNTIME_WAITING_TYPES:
-        return "waiting"
+    if runtime_type == "RUN_WAITING":
+        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+        wait_state = str(payload.get("waitState") or data.get("status") or "")
+        return wait_state if is_waiting_run_status(wait_state) else "waiting_user"
     if runtime_type in RUNTIME_RUNNING_TYPES:
         return "running"
     return ""
@@ -989,7 +1006,7 @@ def _base_progress_for_status(status: str) -> int:
         return 100
     if status in {"failed", "cancelled"}:
         return 100
-    if status == "waiting":
+    if is_waiting_run_status(status):
         return 65
     if status == "cancelling":
         return 90
@@ -997,17 +1014,7 @@ def _base_progress_for_status(status: str) -> int:
 
 
 def _stage_for_status(status: str) -> str:
-    if status == "waiting":
-        return "等待人工处理"
-    if status == "cancelling":
-        return "正在取消"
-    if status == "completed":
-        return "已完成"
-    if status == "failed":
-        return "失败"
-    if status == "cancelled":
-        return "已取消"
-    return "准备执行"
+    return stage_for_run_status(status)
 
 
 def _parse_sse_event(raw_event: str) -> tuple[str, dict]:
@@ -1084,7 +1091,7 @@ def _should_emit_run_state_metadata_patch(event_type: str, data: dict) -> bool:
         return True
     if event_type == SSE_EVENT_RUNTIME:
         runtime_type = str(data.get("type") or "")
-        return runtime_type in {"HITL_RESOLVED", "MEMORY_SKILL_GENERATING"}
+        return runtime_type in {"RUN_WAITING", "HITL_RESOLVED", "MEMORY_SKILL_GENERATING"}
     if event_type == SSE_EVENT_TEAM:
         return True
     return False

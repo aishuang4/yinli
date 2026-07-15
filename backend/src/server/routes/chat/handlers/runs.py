@@ -18,6 +18,7 @@ from src.server.routes.chat.background_runs import (
 )
 from src.server.routes.chat.handlers.send import send_message
 from src.server.routes.chat.models import ChatMessage
+from src.server.routes.chat.lifecycle import ACTIVE_RUN_STATUSES
 from src.server.routes.chat.router import router
 from src.server.routes.chat.team_runtime.registry import get_team_service
 from src.storage.database import get_latest_user_chat_message
@@ -121,7 +122,7 @@ async def rerun_run(run_id: str) -> dict:
     source_run = await get_chat_background_run(run_id)
     if source_run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    if source_run.status in {"running", "waiting", "cancelling"}:
+    if source_run.status in ACTIVE_RUN_STATUSES:
         raise HTTPException(status_code=409, detail="Only terminal runs can be rerun")
 
     response = await send_message(_build_rerun_chat_message(source_run))

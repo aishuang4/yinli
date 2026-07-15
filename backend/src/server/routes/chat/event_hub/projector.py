@@ -13,6 +13,12 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from src.server.routes.chat.event_types import SSE_EVENT_RUNTIME, SSE_EVENT_TEAM
+from src.server.routes.chat.lifecycle import (
+    can_transition_run_status,
+    is_waiting_run_status,
+    stage_for_run_status,
+    waiting_status_for_interaction,
+)
 from src.server.routes.chat.run_state_schema import dump_run_state
 
 
@@ -159,20 +165,27 @@ def project_event(state: dict[str, Any] | None, event_type: str, data: dict[str,
     elif event_type == "HITL_REQUIRED":
         _upsert_approval(next_state, data)
         _upsert_hitl_process_timeline_item(next_state, data)
-        next_state["status"] = "waiting"
-        next_state["currentStage"] = "等待人工处理"
+        waiting_status = waiting_status_for_interaction(
+            str(data.get("type") or ""),
+            data.get("toolCalls") if isinstance(data.get("toolCalls"), list) else [],
+        )
+        if can_transition_run_status(str(next_state.get("status") or ""), waiting_status):
+            next_state["status"] = waiting_status
+            next_state["currentStage"] = stage_for_run_status(waiting_status)
     elif event_type == "CLARIFICATION_REQUIRED":
         _upsert_approval(next_state, data, approval_type="clarification")
         _upsert_hitl_process_timeline_item(next_state, {**data, "kind": "clarification", "type": "clarification"})
         if data.get("clearFinalAnswer"):
             next_state["finalAnswer"] = ""
             next_state["finalAnswerTruncated"] = False
-        next_state["status"] = "waiting"
-        next_state["currentStage"] = "等待用户补充信息"
+        if can_transition_run_status(str(next_state.get("status") or ""), "waiting_user"):
+            next_state["status"] = "waiting_user"
+            next_state["currentStage"] = stage_for_run_status(next_state["status"])
     elif event_type == "ERROR":
-        next_state["status"] = "failed"
-        next_state["error"] = str(data.get("message") or "执行失败")
-        next_state["currentStage"] = "执行失败"
+        if can_transition_run_status(str(next_state.get("status") or ""), "failed"):
+            next_state["status"] = "failed"
+            next_state["error"] = str(data.get("message") or "执行失败")
+            next_state["currentStage"] = "执行失败"
     elif event_type == SSE_EVENT_RUNTIME:
         _project_runtime_event(next_state, data)
     elif event_type == SSE_EVENT_TEAM:
@@ -207,6 +220,8 @@ def project_event(state: dict[str, Any] | None, event_type: str, data: dict[str,
         next_state["currentStage"] = "失败"
     elif next_state["status"] == "cancelled":
         next_state["currentStage"] = "已取消"
+    elif is_waiting_run_status(str(next_state["status"])):
+        next_state["currentStage"] = stage_for_run_status(str(next_state["status"]))
     if next_state["status"] in {"completed", "failed", "cancelled"}:
         _finalize_open_tools(next_state)
     _project_process_timeline(next_state, event_type, data)
@@ -271,8 +286,9 @@ def _empty_display_snapshot() -> dict[str, Any]:
 
 def _build_display_snapshot(state: dict[str, Any]) -> dict[str, Any]:
     status = str(state.get("status") or "running")
+    display_status = "waiting" if is_waiting_run_status(status) else status
     updated_at = str(state.get("updatedAt") or _utc_now())
-    actors = _build_display_actors(state, status, updated_at)
+    actors = _build_display_actors(state, display_status, updated_at)
     blocks: list[dict[str, Any]] = []
     tools = [tool for tool in state.get("tools") or [] if isinstance(tool, dict)]
 
@@ -320,7 +336,7 @@ def _build_display_snapshot(state: dict[str, Any]) -> dict[str, Any]:
         blocks.append({
             "id": "answer",
             "block": "answer",
-            "status": _final_answer_display_status(status),
+            "status": _final_answer_display_status(display_status),
             "updatedAt": updated_at,
             "items": [],
             "data": {
@@ -859,7 +875,19 @@ def _project_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None
     state["runtimeEvents"] = [*state.get("runtimeEvents", [])[-199:], event]
     _project_actor_timeline_from_runtime_event(state, event)
     _project_subagent_tool_from_runtime_event(state, event)
-    if runtime_type in {"HITL_RESOLVED", "RUN_RESUMED"}:
+    if runtime_type == "RUN_WAITING":
+        wait_state = str(payload.get("waitState") or event.get("status") or "")
+        target_status = wait_state if is_waiting_run_status(wait_state) else "waiting_user"
+        if can_transition_run_status(str(state.get("status") or ""), target_status):
+            state["status"] = target_status
+            state["currentStage"] = stage_for_run_status(state["status"])
+    elif runtime_type in {"HITL_RESOLVED", "RUN_RESUMED"}:
+        if runtime_type == "RUN_RESUMED" and can_transition_run_status(
+            str(state.get("status") or ""),
+            "running",
+        ):
+            state["status"] = "running"
+            state["currentStage"] = "继续执行"
         interaction_id = str(payload.get("interactionId") or event.get("interactionId") or "")
         if interaction_id:
             state["approvals"] = [
@@ -882,11 +910,13 @@ def _project_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None
     elif runtime_type.startswith("PLAN_"):
         _upsert_plan(state, event)
     elif runtime_type in {"RUN_COMPLETED", "RUN_FAILED", "RUN_CANCELLED"}:
-        state["status"] = {
+        target_status = {
             "RUN_COMPLETED": "completed",
             "RUN_FAILED": "failed",
             "RUN_CANCELLED": "cancelled",
         }[runtime_type]
+        if can_transition_run_status(str(state.get("status") or ""), target_status):
+            state["status"] = target_status
 
 
 def _project_actor_timeline_from_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None:

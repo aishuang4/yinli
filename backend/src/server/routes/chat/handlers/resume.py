@@ -7,50 +7,34 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from agentscope.event import ExternalExecutionResultEvent
-from agentscope.message import TextBlock, ToolResultBlock, ToolResultState, UserMsg
+from agentscope.message import TextBlock, ToolResultBlock, ToolResultState
 
-from src.agents.factory import get_or_create_agent
 from src.agents.runtime_types import AgentGuardrails
 from src.server.routes.agents import get_registered_agent
 
-from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event, _trim_text
+from src.server.routes.chat.helpers import _sse_event, _trim_text
 from src.server.routes.chat.hitl import (
     _build_resume_event,
     _clear_pending_interaction,
     _create_pending_interaction,
     _hitl_payload,
-    _merge_hitl_tool_calls,
 )
 from src.server.routes.chat.models import (
     PENDING_AGENTS,
     PENDING_INTERACTIONS,
     PENDING_SUBAGENT_PARENT_CONTEXTS,
     HITL_EVENT_TYPES,
-    ChatModelCacheRun,
     ChatResumeRequest,
-    ChatToolRun,
 )
 from src.server.routes.chat.router import router
 from src.server.routes.chat.background_runs import (
     mark_chat_background_run_resuming,
     relay_chat_background_run_events,
 )
-from src.server.routes.chat.completion import (
-    finalize_failed_leader_run,
-    finalize_successful_leader_run,
-    max_react_iterations_error,
-    missing_final_answer_error,
-)
-from src.server.routes.chat.leader_stream import (
-    LeaderStreamState,
-    _PLAN_FINAL_ANSWER_CHUNK_DELAY_SECONDS,
-    _iter_plan_final_answer_deltas,
-    _is_final_answer_tool_event,
-    _plan_final_answer_from_sse,
-    _plan_runtime_event_from_tool_result,
-    _stream_final_answer_recovery_events,
-    stream_leader_agent_reply,
-)
+from src.server.routes.chat.completion import max_react_iterations_error, missing_final_answer_error
+from src.server.routes.chat.leader_stream import LeaderStreamState, _is_final_answer_tool_event
+from src.server.routes.chat.leader_execution import execute_and_finalize_leader_reply
+from src.server.routes.chat.lifecycle import waiting_reason, waiting_status_for_interaction
 from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
 )
@@ -63,19 +47,12 @@ from src.server.routes.chat.skill_runs import (
     get_skill_run_for_pending_interaction,
     update_skill_run_status,
 )
-from src.server.routes.chat.store import _append_assistant_message
-from src.server.routes.chat.tool_state import (
-    _pending_tool_calls_to_runs,
-    _update_tool_calls,
-)
+from src.server.routes.chat.tool_state import _pending_tool_calls_to_runs
 from src.server.routes.chat.trace_recorder import (
     _attach_provider_cache_usage,
-    build_tool_artifact_runtime_event,
-    _model_cache_from_event,
     _record_agent_scope_event,
     _record_permission_decision,
     _record_run_event,
-    _record_tool_execution_artifacts,
 )
 from src.storage.database import update_subagent_invocation
 
@@ -133,27 +110,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
             yield _sse_event("ERROR", {"message": f"恢复事件构建失败: {exc}"})
             return
 
-        assistant_text = interaction.assistant_text
-        assistant_thinking = ""
-        assistant_error: str | None = None
-        assistant_model_caches: list[ChatModelCacheRun] = []
-        runtime_events: list[dict] = []
         skill_runs = interaction.skill_runs
-        def _mark_persistent_skill_run(
-            agent_id: str,
-            *,
-            status: str,
-            current_step: str,
-            pending_interaction_id: str = "",
-        ) -> None:
-            run = get_active_session_skill_run(interaction.session_id, agent_id)
-            if run:
-                update_skill_run_status(
-                    run,
-                    status=status,
-                    current_step=current_step,
-                    pending_interaction_id=pending_interaction_id,
-                )
 
         _record_run_event(
             session_id=interaction.session_id,
@@ -287,6 +244,26 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                                 error="Subagent paused for another human approval.",
                             )
                         _clear_pending_interaction(interaction.id)
+                        wait_state = waiting_status_for_interaction(
+                            next_interaction.type,
+                            next_interaction.resume_tool_calls,
+                        )
+                        yield runtime_event_sse(
+                            "RUN_WAITING",
+                            session_id=interaction.session_id,
+                            run_id=interaction.run_id,
+                            scope="run",
+                            agent_id=interaction.agent_id,
+                            agent_name=interaction.agent_name,
+                            status=wait_state,
+                            reason=waiting_reason(wait_state),
+                            payload={
+                                "interactionId": next_interaction.id,
+                                "interactionType": next_interaction.type,
+                                "waitState": wait_state,
+                                "reason": waiting_reason(wait_state),
+                            },
+                        )
                         yield runtime_event_sse(
                             "SUBAGENT_WAITING_HUMAN",
                             session_id=interaction.session_id,
@@ -363,6 +340,17 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                             "partialResultPreview": partial,
                         },
                     )
+                    yield runtime_event_sse(
+                        "RUN_FAILED",
+                        session_id=interaction.session_id,
+                        run_id=interaction.run_id,
+                        scope="run",
+                        agent_id=interaction.agent_id,
+                        agent_name=interaction.agent_name,
+                        status="failed",
+                        reason="subagent_resume_failed",
+                        payload={"message": error_message},
+                    )
                     yield _sse_event("ERROR", {"message": error_message})
                     return
 
@@ -414,464 +402,75 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                             )
                         ],
                     )
-                    async for parent_event in stream_leader_agent_reply(
+                    async for parent_event in execute_and_finalize_leader_reply(
                         agent=parent_context["agent"],
-                        user_msg=parent_result,
-                        state=parent_context["state"],
+                        input_event=parent_result,
+                        state=parent_state,
                         session_id=str(parent_context["session_id"]),
                         persist=bool(parent_context["persist"]),
                         agent_id=str(parent_context["agent_id"]),
                         agent_name=str(parent_context["agent_name"]),
                         model_name=str(parent_context["model_name"]),
                         guardrails=parent_context["guardrails"],
-                        message=str(parent_context["message"]),
+                        user_message=str(parent_context["message"]),
                         stream_scope=str(parent_context["stream_scope"]),
                         skill_runs=parent_context["skill_runs"],
                         plan_mode_manager=parent_context.get("plan_mode_manager"),
                         runtime_event_sources=parent_context.get("runtime_event_sources"),
                         sandbox=bool(parent_context.get("sandbox")),
+                        exception_prefix="父 Agent 恢复执行异常",
                     ):
                         yield parent_event
-                    if parent_state.stopped and parent_state.stop_reason != "plan_finalized":
-                        return
-                    if parent_state.exceeded_max_iters:
-                        async for completion_event in finalize_failed_leader_run(
-                            session_id=str(parent_context["session_id"]),
-                            persist=bool(parent_context["persist"]),
-                            agent_id=str(parent_context["agent_id"]),
-                            agent_name=str(parent_context["agent_name"]),
-                            model_name=str(parent_context["model_name"]),
-                            assistant_text="",
-                            assistant_error=max_react_iterations_error(),
-                            assistant_model_caches=parent_state.assistant_model_caches,
-                            skill_runs=parent_context["skill_runs"],
-                            sandbox=bool(parent_context.get("sandbox")),
-                        ):
-                            yield completion_event
-                        return
-                    if not parent_state.assistant_text.strip():
-                        async for completion_event in finalize_failed_leader_run(
-                            session_id=str(parent_context["session_id"]),
-                            persist=bool(parent_context["persist"]),
-                            agent_id=str(parent_context["agent_id"]),
-                            agent_name=str(parent_context["agent_name"]),
-                            model_name=str(parent_context["model_name"]),
-                            assistant_text="",
-                            assistant_error=missing_final_answer_error(),
-                            assistant_model_caches=parent_state.assistant_model_caches,
-                            skill_runs=parent_context["skill_runs"],
-                            sandbox=bool(parent_context.get("sandbox")),
-                        ):
-                            yield completion_event
-                        return
-                    async for completion_event in finalize_successful_leader_run(
-                        session_id=str(parent_context["session_id"]),
-                        persist=bool(parent_context["persist"]),
-                        agent_id=str(parent_context["agent_id"]),
-                        agent_name=str(parent_context["agent_name"]),
-                        model_name=str(parent_context["model_name"]),
-                        user_message=str(parent_context["message"]),
-                        assistant_text=parent_state.assistant_text,
-                        assistant_thinking=parent_state.assistant_thinking,
-                        assistant_tool_calls=parent_state.assistant_tool_calls,
-                        assistant_model_caches=parent_state.assistant_model_caches,
-                        runtime_events=parent_state.runtime_events,
-                        skill_runs=parent_context["skill_runs"],
-                        active_skill_run=parent_state.active_skill_run,
-                        sandbox=bool(parent_context.get("sandbox")),
-                    ):
-                        yield completion_event
-                return
-
-            assistant_tool_calls = _pending_tool_calls_to_runs(
-                interaction.tool_calls,
-                interaction.assistant_tool_calls,
-            )
-            resume_stream_state = LeaderStreamState()
-            interaction_guardrails = _build_runtime_guardrails(get_registered_agent(interaction.agent_id))
-            async for event in agent.reply_stream(resume_event):
-                event_data = event.model_dump(mode="json")
-                event_type = event_data.pop("type", "UNKNOWN")
-                if event_type == "EXCEED_MAX_ITERS":
-                    resume_stream_state.exceeded_max_iters = True
+                else:
+                    error_message = "Subagent 已恢复完成，但父 Agent 恢复上下文不存在。"
                     yield runtime_event_sse(
-                        "AGENT_FAILED",
+                        "RUN_FAILED",
                         session_id=interaction.session_id,
                         run_id=interaction.run_id,
-                        scope=interaction.scope,
-                        source="agentscope",
-                        source_event_type=event_type,
+                        scope="run",
                         agent_id=interaction.agent_id,
                         agent_name=interaction.agent_name,
                         status="failed",
-                        reason="max_react_iterations",
-                        payload={
-                            "replyId": str(event_data.get("reply_id") or ""),
-                            "name": str(event_data.get("name") or interaction.agent_name),
-                        },
+                        reason="missing_subagent_parent_context",
+                        payload={"message": error_message},
                     )
-                    break
-                _attach_provider_cache_usage(event_type, event_data)
-                if event_type == "MODEL_CALL_END":
-                    cache_entry = _model_cache_from_event(event_data, interaction.model_name)
-                    if cache_entry:
-                        assistant_model_caches.append(cache_entry)
-                if _is_final_answer_tool_event(event_type, event_data, resume_stream_state):
-                    if event_type == "TOOL_CALL_START":
-                        resume_stream_state.final_answer_started = True
-                        yield runtime_event_sse(
-                            "AGENT_FINAL_ANSWER_STARTED",
-                            session_id=interaction.session_id,
-                            run_id=interaction.run_id,
-                            scope=interaction.scope,
-                            source="runtime",
-                            source_event_type=event_type,
-                            agent_id=interaction.agent_id,
-                            agent_name=interaction.agent_name,
-                            status="running",
-                            payload={
-                                "tool_call_id": str(event_data.get("tool_call_id") or ""),
-                                "tool_call_name": str(event_data.get("tool_call_name") or "FinalAnswerStart"),
-                            },
-                        )
-                    continue
-                _record_agent_scope_event(
-                    session_id=interaction.session_id,
-                    event_type=event_type,
-                    event_data=event_data,
-                    persist=True,
-                    scope=interaction.scope,
-                    agent_id=interaction.agent_id,
-                    agent_name=interaction.agent_name,
-                )
-                _record_permission_decision(
-                    session_id=interaction.session_id,
-                    event_type=event_type,
-                    event_data=event_data,
-                    persist=True,
-                    scope=interaction.scope,
-                    agent_id=interaction.agent_id,
-                    agent_name=interaction.agent_name,
-                    guardrails=interaction_guardrails,
-                )
-                if _should_wrap_resume_text_as_final(
-                    event_type,
-                    interaction.scope,
-                    resume_stream_state.final_answer_started,
-                ):
-                    yield runtime_event_sse(
-                        "AGENT_FINAL_ANSWER_DELTA",
-                        session_id=interaction.session_id,
-                        run_id=interaction.run_id,
-                        scope=interaction.scope,
-                        source="runtime",
-                        source_event_type=event_type,
-                        agent_id=interaction.agent_id,
-                        agent_name=interaction.agent_name,
-                        status="running",
-                        payload={"delta": str(event_data.get("delta", ""))},
-                    )
-                else:
-                    runtime_event = runtime_event_from_agentscope_sse(
-                        event_type,
-                        session_id=interaction.session_id,
-                        scope=interaction.scope,
-                        agent_id=interaction.agent_id,
-                        agent_name=interaction.agent_name,
-                        event_data=event_data,
-                    )
-                    if runtime_event:
-                        yield runtime_event
-                next_tool_calls = _update_tool_calls(
-                    assistant_tool_calls,
-                    event_type,
-                    event_data,
-                )
-                if next_tool_calls is not assistant_tool_calls:
-                    assistant_tool_calls = next_tool_calls
-                plan_event = _plan_runtime_event_from_tool_result(
-                    tool_calls=assistant_tool_calls,
-                    runtime_events=runtime_events,
-                    event_type=event_type,
-                    event_data=event_data,
-                    session_id=interaction.session_id,
-                    agent_id=interaction.agent_id,
-                    agent_name=interaction.agent_name,
-                )
-                if plan_event:
-                    yield plan_event
-                    plan_answer = _plan_final_answer_from_sse(plan_event)
-                    if plan_answer:
-                        resume_stream_state.final_answer_started = True
-                        assistant_text += plan_answer
-                        deltas = _iter_plan_final_answer_deltas(plan_answer)
-                        for index, delta in enumerate(deltas):
-                            yield _sse_event("FINAL_ANSWER_DELTA", {"delta": delta})
-                            yield runtime_event_sse(
-                                "AGENT_FINAL_ANSWER_DELTA",
-                                session_id=interaction.session_id,
-                                run_id=interaction.run_id,
-                                scope=interaction.scope,
-                                source="runtime",
-                                source_event_type="PLAN_FINALIZED",
-                                agent_id=interaction.agent_id,
-                                agent_name=interaction.agent_name,
-                                status="completed",
-                                payload={"delta": delta},
-                            )
-                            if index < len(deltas) - 1:
-                                await asyncio.sleep(_PLAN_FINAL_ANSWER_CHUNK_DELAY_SECONDS)
-                        resume_stream_state.stopped = True
-                        resume_stream_state.stop_reason = "plan_finalized"
-                        break
-                _record_tool_execution_artifacts(
-                    session_id=interaction.session_id,
-                    event_type=event_type,
-                    event_data=event_data,
-                    persist=True,
-                    scope=interaction.scope,
-                    agent_id=interaction.agent_id,
-                    agent_name=interaction.agent_name,
-                    guardrails=interaction_guardrails,
-                    tool_calls=assistant_tool_calls,
-                )
-                artifact_event = build_tool_artifact_runtime_event(
-                    event_type=event_type,
-                    event_data=event_data,
-                    tool_calls=assistant_tool_calls,
-                )
-                if artifact_event:
-                    artifact_type, artifact_payload = artifact_event
-                    yield runtime_event_sse(
-                        artifact_type,
-                        session_id=interaction.session_id,
-                        run_id=interaction.run_id,
-                        scope="artifact",
-                        source="runtime",
-                        source_event_type=event_type,
-                        agent_id=interaction.agent_id,
-                        agent_name=interaction.agent_name,
-                        status=str(artifact_payload.get("status") or "completed"),
-                        payload=artifact_payload,
-                    )
-                if event_type in HITL_EVENT_TYPES:
-                    _mark_persistent_skill_run(
-                        interaction.agent_id,
-                        status="waiting_user",
-                        current_step="waiting_hitl_resume",
-                    )
-                    agentscope_waiting_tool_calls = list(event_data.get("tool_calls") or [])
-                    next_interaction = _create_pending_interaction(
-                        interaction_type=event_type,
-                        agent=agent,
-                        session_id=interaction.session_id,
-                        agent_id=interaction.agent_id,
-                        agent_name=interaction.agent_name,
-                        model_name=interaction.model_name,
-                        reply_id=str(event_data.get("reply_id") or ""),
-                        tool_calls=_merge_hitl_tool_calls(
-                            agentscope_waiting_tool_calls,
-                            assistant_tool_calls,
-                        ),
-                        resume_tool_calls=agentscope_waiting_tool_calls,
-                        message=interaction.message,
-                        assistant_text=assistant_text,
-                        assistant_tool_calls=assistant_tool_calls,
-                        skill_runs=skill_runs,
-                        scope=interaction.scope,
-                    )
-                    _clear_pending_interaction(interaction.id)
-                    yield runtime_event_sse(
-                        "AGENT_WAITING_HUMAN",
-                        session_id=interaction.session_id,
-                        run_id=interaction.run_id,
-                        scope=interaction.scope,
-                        source="runtime",
-                        source_event_type=event_type,
-                        agent_id=interaction.agent_id,
-                        agent_name=interaction.agent_name,
-                        status="waiting",
-                        reason="hitl_required",
-                        payload={"interactionId": next_interaction.id, "interactionType": event_type},
-                    )
-                    yield _sse_event("HITL_REQUIRED", _hitl_payload(next_interaction))
-                    return
-
-                if event_type == "TEXT_BLOCK_DELTA":
-                    delta = str(event_data.get("delta", ""))
-                    if resume_stream_state.final_answer_started:
-                        assistant_text += delta
-                        resume_stream_state.assistant_text += delta
-                    else:
-                        resume_stream_state.assistant_reasoning_text += delta
-                    if _should_wrap_resume_text_as_final(
-                        event_type,
-                        interaction.scope,
-                        resume_stream_state.final_answer_started,
-                    ):
-                        yield _sse_event("FINAL_ANSWER_DELTA", {"delta": delta})
-                elif event_type == "THINKING_BLOCK_DELTA":
-                    assistant_thinking += str(event_data.get("delta", ""))
-
-                if event_type == "REPLY_END" and skill_runs:
-                    completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
-                    for skill in completed_skill_runs:
-                        yield runtime_event_sse(
-                            "SKILL_COMPLETED",
-                            session_id=interaction.session_id,
-                            run_id=interaction.run_id,
-                            scope="skill",
-                            agent_id=interaction.agent_id,
-                            agent_name=interaction.agent_name,
-                            status="completed",
-                            payload=skill.model_dump(by_alias=True),
-                        )
-                    yield _sse_event("SKILL_END", {
-                        "skills": [item.model_dump(by_alias=True) for item in completed_skill_runs],
-                        "status": "completed",
-                    })
-
-                if _should_emit_raw_resume_event(event_type, interaction.scope):
-                    yield _sse_event(event_type, event_data)
-
-            if not assistant_text.strip() and (
-                resume_stream_state.exceeded_max_iters
-                or resume_stream_state.assistant_reasoning_text.strip()
-                or assistant_thinking.strip()
-                or assistant_tool_calls
-            ):
-                resume_stream_state.assistant_text = assistant_text
-                resume_stream_state.assistant_thinking = assistant_thinking
-                resume_stream_state.assistant_tool_calls = assistant_tool_calls
-                resume_stream_state.assistant_model_caches = assistant_model_caches
-                resume_stream_state.runtime_events = runtime_events
-                async for recovery_event in _stream_final_answer_recovery_events(
-                    agent=agent,
-                    state=resume_stream_state,
-                    session_id=interaction.session_id,
-                    persist=True,
-                    agent_id=interaction.agent_id,
-                    agent_name=interaction.agent_name,
-                    model_name=interaction.model_name,
-                    guardrails=interaction_guardrails,
-                    message=interaction.message,
-                    stream_scope=interaction.scope,
-                ):
-                    yield recovery_event
-                assistant_text = resume_stream_state.assistant_text
-                assistant_thinking = resume_stream_state.assistant_thinking
-                assistant_tool_calls = resume_stream_state.assistant_tool_calls
-                assistant_model_caches = resume_stream_state.assistant_model_caches
-                runtime_events = resume_stream_state.runtime_events
-
-            if resume_stream_state.exceeded_max_iters or not assistant_text.strip():
-                assistant_error = (
-                    max_react_iterations_error()
-                    if resume_stream_state.exceeded_max_iters
-                    else missing_final_answer_error()
-                )
-                failed_skill_runs = _set_skill_run_status(skill_runs, "failed")
-                _mark_persistent_skill_run(
-                    interaction.agent_id,
-                    status="failed",
-                    current_step=(
-                        "max_react_iterations"
-                        if resume_stream_state.exceeded_max_iters
-                        else "missing_final_answer"
-                    ),
-                )
-                _append_assistant_message(
-                    session_id=interaction.session_id,
-                    agent_id=interaction.agent_id,
-                    agent_name=interaction.agent_name,
-                    model_name=interaction.model_name,
-                    content="",
-                    error=assistant_error,
-                    thinking=assistant_thinking,
-                    skill_calls=failed_skill_runs,
-                    tool_calls=assistant_tool_calls,
-                    model_caches=assistant_model_caches,
-                    runtime_events=runtime_events,
-                )
-                _clear_pending_interaction(interaction.id)
-                yield runtime_event_sse(
-                    "RUN_FAILED",
-                    session_id=interaction.session_id,
-                    run_id=interaction.run_id,
-                    scope="run",
-                    agent_id=interaction.agent_id,
-                    agent_name=interaction.agent_name,
-                    status="failed",
-                    reason=(
-                        "max_react_iterations"
-                        if resume_stream_state.exceeded_max_iters
-                        else "missing_final_answer"
-                    ),
-                    payload={"message": assistant_error},
-                )
-                yield _sse_event("ERROR", {"message": assistant_error})
+                    yield _sse_event("ERROR", {"message": error_message})
                 return
-            completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
-            _mark_persistent_skill_run(
-                interaction.agent_id,
-                status="completed",
-                current_step="completed",
+
+            resume_stream_state = LeaderStreamState(
+                assistant_text=interaction.assistant_text,
+                assistant_tool_calls=_pending_tool_calls_to_runs(
+                    interaction.tool_calls,
+                    interaction.assistant_tool_calls,
+                ),
+                active_skill_run=get_active_session_skill_run(
+                    interaction.session_id,
+                    interaction.agent_id,
+                ),
             )
-            _append_assistant_message(
+            interaction_guardrails = _build_runtime_guardrails(get_registered_agent(interaction.agent_id))
+            _clear_pending_interaction(interaction.id)
+            async for event in execute_and_finalize_leader_reply(
+                agent=agent,
+                input_event=resume_event,
+                state=resume_stream_state,
                 session_id=interaction.session_id,
-                agent_id=interaction.agent_id,
-                agent_name=interaction.agent_name,
-                model_name=interaction.model_name,
-                content=assistant_text,
-                error=assistant_error,
-                thinking=assistant_thinking,
-                skill_calls=completed_skill_runs,
-                tool_calls=assistant_tool_calls,
-                model_caches=assistant_model_caches,
-                runtime_events=runtime_events,
-            )
-            _record_run_event(
-                session_id=interaction.session_id,
-                event_type="ASSISTANT_MESSAGE",
                 persist=True,
-                scope=interaction.scope,
-                agent_id=interaction.agent_id,
-                agent_name=interaction.agent_name,
-                status="completed",
-                title="Assistant response",
-                content=_trim_text(assistant_text, 1200),
-                payload={
-                    "model": interaction.model_name,
-                    "toolCallCount": len(assistant_tool_calls),
-                    "skillIds": [item.id for item in completed_skill_runs],
-                    "resumedFromHitl": True,
-                },
-            )
-            _clear_pending_interaction(interaction.id)
-            yield runtime_event_sse(
-                "RUN_COMPLETED",
-                session_id=interaction.session_id,
-                run_id=interaction.run_id,
-                scope="run",
-                agent_id=interaction.agent_id,
-                agent_name=interaction.agent_name,
-                status="completed",
-                payload={"resumedFromHitl": True},
-            )
-        except Exception as exc:
-            assistant_error = f"Agent 恢复执行异常: {exc}"
-            _append_assistant_message(
-                session_id=interaction.session_id,
                 agent_id=interaction.agent_id,
                 agent_name=interaction.agent_name,
                 model_name=interaction.model_name,
-                content=assistant_text,
-                error=assistant_error,
-                thinking=assistant_thinking,
-                skill_calls=_set_skill_run_status(skill_runs, "failed"),
-                model_caches=assistant_model_caches,
-            )
+                guardrails=interaction_guardrails,
+                user_message=interaction.message,
+                stream_scope=interaction.scope,
+                skill_runs=skill_runs,
+                sandbox=bool((interaction.chat_data or {}).get("sandbox")),
+                exception_prefix="Agent 恢复执行异常",
+            ):
+                yield event
+            return
+        except Exception as exc:
             _clear_pending_interaction(interaction.id)
+            error_message = f"Agent 恢复执行异常: {exc}"
             yield runtime_event_sse(
                 "RUN_FAILED",
                 session_id=interaction.session_id,
@@ -881,9 +480,9 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 agent_name=interaction.agent_name,
                 status="failed",
                 reason="resume_error",
-                payload={"message": assistant_error},
+                payload={"message": error_message},
             )
-            yield _sse_event("ERROR", {"message": assistant_error})
+            yield _sse_event("ERROR", {"message": error_message})
 
     pending_interaction = PENDING_INTERACTIONS.get(data.interaction_id)
     stream = (
