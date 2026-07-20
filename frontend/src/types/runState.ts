@@ -96,6 +96,8 @@ export interface ChatRunStateSnapshot {
   version?: number;
   runId: string;
   sessionId: string;
+  workspaceId: string;
+  projectId: string;
   status: RunStateStatus;
   createdAt: string;
   completedAt: string | null;

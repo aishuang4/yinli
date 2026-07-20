@@ -35,6 +35,7 @@ DISABLED_TOOL_SCOPE = RuntimeToolScope(
     allow_knowledge=False,
     allow_bash=False,
     allow_http=False,
+    allow_web=False,
 )
 MAX_AUTOMATIC_TOOL_DENIALS = 8
 LEADER_MAX_REACT_ITERS = 16
@@ -122,6 +123,7 @@ async def run_member_task(
         "Glob",
         "Bash",
         "HttpRequest",
+        "WebFetch",
         "memory_node_tree",
         "memory_node_query",
         *(str(tool.name) for tool in ctx.knowledge_tools),

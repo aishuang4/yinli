@@ -24,6 +24,7 @@ READ_ONLY_TOOL_NAMES = frozenset({
     "Grep",
     "Glob",
     "KnowledgeBaseSearch",
+    "WebFetch",
 })
 
 BASH_READ_ONLY_COMMANDS = frozenset({

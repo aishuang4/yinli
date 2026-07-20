@@ -375,7 +375,7 @@ def test_action_subagent_tools_are_available_with_parent_permission(tmp_path: Pa
         """---
 name: debugger
 description: Debug and apply scoped fixes.
-tools: Read, Grep, Glob, Bash, Write, Edit, HttpRequest
+tools: Read, Grep, Glob, Bash, Write, Edit, HttpRequest, WebFetch
 permissionMode: acceptEdits
 ---
 Prompt.
@@ -397,7 +397,7 @@ Prompt.
         child_guardrails=permission.guardrails,
     )
 
-    assert {"Read", "Grep", "Glob", "Write", "Edit", "Bash", "HttpRequest", "FinalAnswerStart"} <= policy.effective_tool_names
+    assert {"Read", "Grep", "Glob", "Write", "Edit", "Bash", "HttpRequest", "WebFetch", "FinalAnswerStart"} <= policy.effective_tool_names
     assert permission.effective_policy == ApprovalPolicy.CONFIRM_DESTRUCTIVE
 
 

@@ -31,6 +31,7 @@ export interface McpServer {
   enabled: boolean;
   installedAt: string | null;
   updatedAt: string;
+  workspaceId?: string;
 }
 
 export interface McpRegisterPayload {
@@ -38,4 +39,5 @@ export interface McpRegisterPayload {
   url: string;
   description?: string;
   headers?: Record<string, string>;
+  workspaceId?: string;
 }

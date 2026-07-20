@@ -74,11 +74,10 @@ def _build_final_answer_system_prompt() -> str:
     return "\n".join([
         "## Final Answer Contract",
         "During analysis, tool use, and intermediate reasoning, you may write brief progress text.",
-        "The only valid way to finish a successful run is to call the FinalAnswerStart tool exactly once and then write the final user-facing answer.",
-        "If you believe the task is complete, you MUST call FinalAnswerStart before emitting any final answer text. A response that ends without this tool is invalid.",
+        "FinalAnswerStart is an optional phase marker for runs that used tools; do not call it just to wrap a normal answer.",
+        "If this response needs no tool call or clarification, answer the user directly as normal assistant text.",
+        "After using tools, you may call FinalAnswerStart before writing the final user-facing answer.",
         "Do not put the final answer inside FinalAnswerStart arguments. The tool only marks the phase boundary.",
-        "Do not call FinalAnswerStart before required tool calls, clarification, or checks are complete.",
-        "If no more tools or clarification are needed, call FinalAnswerStart immediately instead of continuing to think.",
     ])
 
 

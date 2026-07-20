@@ -164,10 +164,11 @@ def test_memory_node_vector_failure_marks_pending(isolated_db):
     assert "boom" in node["vector_error"]
 
 
-def test_memory_node_status_update_disables_and_restores_with_audit(isolated_db):
+def test_memory_node_status_update_disables_and_restores_with_audit(isolated_db, monkeypatch):
     import asyncio
 
     service = MemoryNodeService(vector_backend=FakeVectorBackend())
+    monkeypatch.setattr(memory_routes, "MemoryNodeService", lambda: service)
     service.upsert_node(
         MemoryNodeWrite(
             id="node-1",

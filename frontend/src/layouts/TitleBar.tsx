@@ -7,7 +7,11 @@
  * 注意：此区域需要设置 -webkit-app-region: drag 来支持窗口拖拽。
  */
 
-import { GitBranch, PanelsTopLeft } from 'lucide-react';
+import { useState } from 'react';
+import { Boxes, FolderKanban, GitBranch, PanelsTopLeft, Plus } from 'lucide-react';
+import { Select, Tooltip } from '@agentscope-ai/design';
+import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
+import { ContextCreateModal } from '../features/workspaces/ContextCreateModal';
 import { useAppStore, type WorkspaceMode } from '../stores/appStore';
 import { cn } from '../utils/cn';
 import './TitleBar.css';
@@ -24,6 +28,18 @@ const MODE_OPTIONS: Array<{
 export function TitleBar() {
   const workspaceMode = useAppStore((s) => s.workspaceMode);
   const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
+  const setActiveContext = useAppStore((s) => s.setActiveContext);
+  const [createOpen, setCreateOpen] = useState(false);
+  const {
+    workspaces,
+    projects,
+    activeWorkspaceId,
+    activeProjectId,
+    loading,
+    error,
+    selectWorkspace,
+    selectProject,
+  } = useWorkspaceProjects();
 
   return (
     <div
@@ -49,6 +65,54 @@ export function TitleBar() {
           );
         })}
       </div>
+      {workspaceMode === 'workstation' && (
+        <div className="titlebar__runtime-context" title={error || undefined}>
+          <Tooltip title="Workspace 资源边界">
+            <Boxes size={14} strokeWidth={1.7} className="titlebar__context-icon" />
+          </Tooltip>
+          <Select
+            aria-label="选择 Workspace"
+            className="titlebar__context-select titlebar__context-select--workspace"
+            value={activeWorkspaceId || undefined}
+            loading={loading}
+            options={workspaces.map((workspace) => ({ label: workspace.name, value: workspace.id }))}
+            onChange={(value) => void selectWorkspace(String(value))}
+          />
+          <span className="titlebar__context-separator" />
+          <Tooltip title="当前 Project">
+            <FolderKanban size={14} strokeWidth={1.7} className="titlebar__context-icon" />
+          </Tooltip>
+          <Select
+            aria-label="选择 Project"
+            className="titlebar__context-select titlebar__context-select--project"
+            value={activeProjectId || undefined}
+            loading={loading}
+            disabled={projects.length === 0}
+            options={projects.map((project) => ({ label: project.name, value: project.id }))}
+            onChange={(value) => selectProject(String(value))}
+          />
+          <Tooltip title="新建 Workspace 或 Project" mode="dark">
+            <button
+              type="button"
+              className="titlebar__context-create"
+              aria-label="新建 Workspace 或 Project"
+              onClick={() => setCreateOpen(true)}
+            >
+              <Plus size={15} strokeWidth={1.8} />
+            </button>
+          </Tooltip>
+        </div>
+      )}
+      <ContextCreateModal
+        open={createOpen}
+        workspaceId={activeWorkspaceId}
+        allowWorkspaceCreation
+        onCancel={() => setCreateOpen(false)}
+        onCreated={(workspaceId, projectId) => {
+          setActiveContext(workspaceId, projectId);
+          setCreateOpen(false);
+        }}
+      />
     </div>
   );
 }

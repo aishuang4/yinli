@@ -50,7 +50,7 @@ export interface Guardrails {
   timeoutSeconds: number;
 }
 
-/** 历史 Plan 配置兼容字段：旧 Plan Runtime 已下线，当前运行时不消费。 */
+/** 历史 Plan 配置兼容字段：旧 runtime.kind=plan 已下线，当前 Plan Mode middleware 不消费。 */
 export interface PlanConfig {
   /** 历史兼容字段：旧计划层开关 */
   enabled: boolean;
@@ -70,6 +70,8 @@ export interface PlanConfig {
 export interface Agent {
   /** 唯一标识 */
   id: string;
+  /** 持久资源所属 Workspace。 */
+  workspaceId?: string;
   /** Agent 名称 */
   name: string;
   /** 头像 URL */

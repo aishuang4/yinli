@@ -1,12 +1,25 @@
 # Agent Workstation 项目进展与协作交接
 
-> 更新时间：2026-07-14。本文只记录当前完成度、验证结果和已知缺口。
+> 更新时间：2026-07-17。本文只记录当前完成度、验证结果和已知缺口。
 
 ## 当前阶段
 
 项目已从功能原型进入 Runtime 与产品化收口阶段。当前定位是本地优先的桌面 Agent 工作站：ReAct 是唯一在线 architecture，`agent` / `team` 是显式 executor mode。
 
-当前综合成熟度约 70%：Runtime 内核和主要管理页面可用，平台归属、Artifact、自动化、评估和正式桌面发布仍未完成。
+当前综合成熟度约 79%：Runtime 内核、主要管理页面和 Workspace / Project Phase 0 至 Phase 3 可用，Artifact、自动化、评估和正式桌面发布仍未完成。
+
+### Workspace / Project
+
+- 已建立 `Workspace -> Project -> Session -> Run` 归属模型、默认记录和历史数据回填。
+- Chat 在创建 Agent 前解析不可变 `RuntimeContext`；Session 不能跨 Project 继续。
+- Project root 与 Agent filesystem scope 取交集，不相交时拒绝运行。
+- TeamRun、Subagent、Memory、Trace、RunState 已继承 Workspace / Project，并按当前 Project 隔离。
+- Project resource binding 已作为持久资源白名单参与 Runtime：Agent 必须绑定，Skill、MCP 和 HTTP Tool 取 Agent 配置与 enabled binding 的交集。
+- 已有 Project 在升级时建立一次性资源基线，新建 Project 快照绑定创建时的 Workspace 资源；后续新增资源不会自动授权。
+- Chat 历史区按 Workspace / Project 分类，点击 Session 自动恢复其归属；新对话在首次输入前选择或创建工作上下文。管理侧栏保留资源上下文切换入口。
+- Session、Runs、Trace、Memory 与 Agent、Skill、MCP、HTTP Tool 管理已读取当前上下文；新建持久资源会显式绑定当前 Project。
+- `Workspace + Project` 使用 bootstrap 组合 API，Project root 校验失败不会残留空 Workspace。
+- 正式 Artifact ownership 与浏览器级跨 Project 自动化回归仍待实现。
 
 ## 已在线能力
 
@@ -16,7 +29,7 @@
 - 单 Agent 流式执行、AskUser、HITL、取消、重跑和刷新恢复。
 - 后台 Run、RunState v2、DisplaySnapshot v3、Runs 和 Trace。
 - send / resume 共用 Leader 流处理和 completion 收口；顶层 Run 区分用户输入、权限审批和外部执行等待，终态不可逆。
-- Plan Mode 通过 middleware 接入，仅支持单 Agent，不恢复旧 Plan Runtime。
+- Plan Mode 通过 middleware 接入，仅支持单 Agent；删除的是旧独立 Plan Runtime（`runtime.kind=plan`），不是当前 Plan Mode 能力。
 
 ### TeamRun
 
@@ -28,6 +41,7 @@
 
 ### Subagent
 
+- Subagent 是 ReAct 内部 `DelegateTask` 委托；删除的是旧独立 Subagent Runtime（`runtime.kind=subagent`），不是当前委托能力。
 - Markdown + YAML frontmatter 文件定义和项目级 / 用户级扫描。
 - ReAct 内 `DelegateTask` 前台委托和 fresh-context 子 Agent。
 - 工具、Skills、Memory 和 permission mode 按父权限上限裁剪。
@@ -42,6 +56,12 @@
 - disabled / zvec provider、召回反馈、Memory Wiki 和 Skill 自进化 MVP。
 - 当前方向是稳定和迁移验证，不继续横向扩张实验能力。
 
+### 网络工具
+
+- `HttpRequest` 用于显式 API 请求；`WebFetch` 用于读取已知公开网页并提取正文，两者使用独立 ToolScope。
+- `WebFetch` 已接入主 Agent、Team Member、Subagent 和 Plan Mode，并包含私网、重定向、响应大小、非文本内容和外部 prompt injection 提醒。
+- WebSearch 尚未实现，不能把 WebFetch 描述成网络搜索能力。
+
 ### 管理与桌面端
 
 - Agent CRUD、智能创建、导入导出、模型、工具、Skills、MCP 和权限配置。
@@ -53,7 +73,7 @@
 最近一次完整验证：
 
 ```text
-backend pytest: 286 passed
+backend pytest: 306 passed
 frontend build: passed
 frontend lint: passed
 /api/teams: 404
@@ -67,7 +87,7 @@ Vite 仍有约 968 KB 的大 chunk 警告，不影响构建，但需要后续拆
 
 1. Team、Subagent、Plan、HITL 和刷新恢复缺少完整 Playwright 回归。
 2. Artifact 还没有正式生命周期，大体积工具结果主要依赖 Trace 摘要。
-3. Workspace / Project 归属和资源绑定尚未实现，设计见 `docs/workspace-project-design.md`。
+3. Workspace / Project Phase 0 至 Phase 3 已完成；浏览器级跨 Project 自动化隔离和 Artifact ownership 尚未完成。
 4. Agent / Subagent 配置版本、评估指标、自动化调度和 Secret 治理尚未形成平台能力。
 5. Electron 正式签名、公证、Windows 真机、`userData` 迁移和自动更新尚未完成。
 

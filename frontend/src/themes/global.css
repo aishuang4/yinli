@@ -324,6 +324,11 @@ button[class*="-btn"] .lucide {
   background: var(--chat-workbench-topbar-bg);
 }
 
+/* 历史栏收起后，Chat 顶栏的操作按钮需要避开 macOS traffic lights。 */
+.chat-workbench-shell[data-electron-shell="true"][data-history-collapsed="true"] .chat-workbench-topbar {
+  padding-left: 128px;
+}
+
 .chat-workbench-top-action {
   border: 1px solid var(--color-border);
   background: var(--chat-workbench-control-bg);

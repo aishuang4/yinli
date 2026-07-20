@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
+from src.runtime_context import RuntimeContext as PlatformRuntimeContext
 from src.server.routes.skills import Skill, build_skill_system_prompt_from_skills, resolve_installed_skills
 from src.subagents.models import SubagentDefinition
 
@@ -44,7 +45,10 @@ class SubagentRuntimeContext:
         }
 
 
-def build_subagent_runtime_context(definition: SubagentDefinition) -> SubagentRuntimeContext:
+def build_subagent_runtime_context(
+    definition: SubagentDefinition,
+    platform_context: PlatformRuntimeContext | None = None,
+) -> SubagentRuntimeContext:
     """为 Subagent 构建 Skill 与记忆注入上下文。"""
 
     errors: list[str] = []
@@ -63,6 +67,8 @@ def build_subagent_runtime_context(definition: SubagentDefinition) -> SubagentRu
             MemoryRetrievalContext(
                 agent_id=memory_agent_id,
                 agent_name=f"Subagent {definition.name}",
+                workspace_id=platform_context.workspace_id if platform_context else "default",
+                project_id=platform_context.project_id if platform_context else "default",
             ),
         )
     except Exception as exc:

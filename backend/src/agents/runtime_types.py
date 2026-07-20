@@ -89,11 +89,13 @@ class RuntimeToolScope:
     allow_knowledge: bool = True
     allow_bash: bool = True
     allow_http: bool = True
+    allow_web: bool = True
 
     def cache_key(self) -> str:
         return (
             f"mcp-{int(self.allow_mcp)}:"
             f"knowledge-{int(self.allow_knowledge)}:"
             f"bash-{int(self.allow_bash)}:"
-            f"http-{int(self.allow_http)}"
+            f"http-{int(self.allow_http)}:"
+            f"web-{int(self.allow_web)}"
         )

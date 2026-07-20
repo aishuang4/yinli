@@ -10,6 +10,7 @@ from src.server.routes.chat.completion import (
 )
 from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
 from src.server.routes.chat.models import ChatSkillRun
+from src.runtime_context import RuntimeContext
 
 
 async def execute_and_finalize_leader_reply(
@@ -30,6 +31,7 @@ async def execute_and_finalize_leader_reply(
     runtime_event_sources: list[object] | None = None,
     sandbox: bool = False,
     exception_prefix: str = "Agent 执行异常",
+    runtime_context: RuntimeContext | None = None,
 ) -> AsyncGenerator[str, None]:
     """执行一次 Leader reply，并保证非暂停路径只经过统一 completion 收口。"""
 
@@ -100,6 +102,7 @@ async def execute_and_finalize_leader_reply(
             runtime_events=state.runtime_events,
             skill_runs=skill_runs,
             active_skill_run=state.active_skill_run,
+            runtime_context=runtime_context,
             sandbox=sandbox,
         ):
             yield event

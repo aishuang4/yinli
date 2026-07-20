@@ -14,6 +14,7 @@ import { useAppStore, type ViewType, type WorkspaceMode } from '../stores/appSto
 import { TitleBar } from './TitleBar';
 import { ActivityBar } from './ActivityBar';
 import { StatusBar } from './StatusBar';
+import { WorkspaceContextPanel } from '../features/workspaces/WorkspaceContextPanel';
 import './AppLayout.css';
 
 interface AppLayoutProps {
@@ -53,6 +54,7 @@ export function AppLayout({ children, detail }: AppLayoutProps) {
   const detailPanelOpen = useAppStore((s) => s.detailPanelOpen);
   const workspaceMode = useAppStore((s) => s.workspaceMode);
   const currentView = useAppStore((s) => s.currentView);
+  const electronShell = Boolean(window.electronAPI);
   const chatWorkbench = workspaceMode === 'workstation' && currentView === 'chat';
   const workbenchMenuPage = workspaceMode === 'workstation' && currentView !== 'chat';
 
@@ -61,6 +63,7 @@ export function AppLayout({ children, detail }: AppLayoutProps) {
       className="app-layout"
       data-detail-open={detailPanelOpen}
       data-workspace-mode={workspaceMode}
+      data-electron-shell={electronShell}
       data-chat-workbench={chatWorkbench}
       data-workbench-menu-page={workbenchMenuPage}
     >
@@ -100,7 +103,12 @@ function WorkbenchMenu() {
   const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
 
   return (
-    <nav className="workbench-menu-page" aria-label="工作台功能菜单">
+    <nav
+      className="workbench-menu-page"
+      data-electron-shell={Boolean(window.electronAPI)}
+      style={window.electronAPI ? { paddingTop: 56 } : undefined}
+      aria-label="工作台功能菜单"
+    >
       <button
         type="button"
         className="workbench-menu-page__back"
@@ -109,6 +117,7 @@ function WorkbenchMenu() {
         <ArrowLeft size={16} strokeWidth={1.8} />
         <span>返回 Chat</span>
       </button>
+      <WorkspaceContextPanel />
       <div className="workbench-menu-page__items">
         {WORKBENCH_MENU_ITEMS.map((item) => {
           const active = currentView === item.id;

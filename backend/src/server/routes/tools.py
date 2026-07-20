@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -105,6 +105,7 @@ class HttpToolBase(BaseModel):
     readonly: bool = True
     approval_policy: str = Field(default="inherit", alias="approvalPolicy")
     enabled: bool = True
+    workspace_id: str = Field(default="default", alias="workspaceId")
 
     model_config = {"populate_by_name": True}
 
@@ -324,6 +325,15 @@ def _system_tool_records() -> list[SystemToolResponse]:
             "defaultEnabled": True,
         },
         {
+            "name": "WebFetch",
+            "description": "安全读取公开网页并提取正文，不提供网络搜索。",
+            "category": "network",
+            "action": "read",
+            "risk": "medium",
+            "readonly": True,
+            "defaultEnabled": True,
+        },
+        {
             "name": "AskUser",
             "description": "向用户发起人工补充信息或确认。",
             "category": "hitl",
@@ -392,10 +402,12 @@ async def delete_knowledge_tool(tool_id: str) -> None:
 
 
 @router.get("/http", response_model=list[HttpToolResponse])
-async def list_http_tool_configs() -> list[HttpToolResponse]:
+async def list_http_tool_configs(
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
+) -> list[HttpToolResponse]:
     """列出通用 HTTP 工具。"""
 
-    return _http_tool_records()
+    return [tool for tool in _http_tool_records() if tool.workspace_id == workspace_id]
 
 
 @router.post("/http", response_model=HttpToolResponse, status_code=201)

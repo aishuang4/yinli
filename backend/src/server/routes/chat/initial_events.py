@@ -29,6 +29,8 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
         model_name=ctx.model_name,
         content=display_content,
         images=run_data.images,
+        workspace_id=ctx.runtime_context.workspace_id,
+        project_id=ctx.runtime_context.project_id,
     )
     _record_run_event(
         session_id=ctx.session_id,
@@ -43,6 +45,8 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
             "mode": run_data.mode,
             "model": ctx.model_name,
             "imageCount": len(run_data.images),
+            "workspaceId": ctx.runtime_context.workspace_id,
+            "projectId": ctx.runtime_context.project_id,
         },
     )
 
@@ -78,6 +82,8 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
         )
     yield _sse_event("SESSION", {
         "session_id": ctx.session_id,
+        "workspace_id": ctx.runtime_context.workspace_id,
+        "project_id": ctx.runtime_context.project_id,
     })
     _record_run_event(
         session_id=ctx.session_id,
@@ -91,6 +97,8 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
             "mode": run_data.mode,
             "model": ctx.model_name,
             "sandbox": run_data.sandbox,
+            "workspaceId": ctx.runtime_context.workspace_id,
+            "projectId": ctx.runtime_context.project_id,
             "workspace": _workspace_trace_payload(ctx.guardrails),
         },
     )

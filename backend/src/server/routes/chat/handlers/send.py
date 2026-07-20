@@ -3,6 +3,7 @@
 import uuid
 from typing import AsyncGenerator
 
+from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from src.server.routes.chat.completion import emit_failed_startup_run
@@ -12,10 +13,12 @@ from src.server.routes.chat.initial_events import (
     persist_user_message_and_trace,
 )
 from src.server.routes.chat.background_runs import (
+    current_chat_background_run_id,
     start_chat_background_run,
     serialize_chat_background_run,
     subscribe_chat_background_run,
 )
+from src.runtime_context import resolve_runtime_context
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.router import router
 from src.server.routes.chat.run_context import build_chat_run_context
@@ -65,7 +68,19 @@ async def start_chat_run(data: ChatMessage):
     """创建后台 Chat Run。"""
 
     session_id = data.session_id or uuid.uuid4().hex
-    run_data = data.model_copy(update={"session_id": session_id})
+    try:
+        runtime_context = resolve_runtime_context(
+            project_id=data.project_id,
+            session_id=session_id,
+            run_id="",
+            agent_id=data.agent_id or "default",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    run_data = data.model_copy(update={
+        "session_id": session_id,
+        "project_id": runtime_context.project_id,
+    })
 
     async def event_stream() -> AsyncGenerator[str, None]:
         """
@@ -75,7 +90,10 @@ async def start_chat_run(data: ChatMessage):
           event: <EventType>
           data: <JSON>
         """
-        ctx = await build_chat_run_context(run_data)
+        ctx = await build_chat_run_context(
+            run_data,
+            runtime_context.with_run_id(current_chat_background_run_id()),
+        )
         persist_user_message_and_trace(ctx, run_data)
         async for start_event in emit_start_events(ctx, run_data):
             yield start_event
@@ -106,4 +124,6 @@ async def start_chat_run(data: ChatMessage):
         agent_name=run_data.agent_name or "",
         task=run_data.message,
         mode=run_data.mode,
+        workspace_id=runtime_context.workspace_id,
+        project_id=runtime_context.project_id,
     )

@@ -23,6 +23,10 @@ interface AppState {
   detailPanelOpen: boolean;
   /** 后端连接状态 */
   backendConnected: boolean;
+  /** 当前资源隔离 Workspace。 */
+  activeWorkspaceId: string;
+  /** 当前会话和运行所属 Project。 */
+  activeProjectId: string;
 
   // Actions
   /** 切换视图 */
@@ -33,6 +37,8 @@ interface AppState {
   toggleDetailPanel: () => void;
   /** 设置后端连接状态 */
   setBackendConnected: (connected: boolean) => void;
+  /** 原子切换 Workspace / Project，避免出现不一致的中间状态。 */
+  setActiveContext: (workspaceId: string, projectId: string) => void;
 }
 
 export const useAppStore = create<AppState>()((set) => ({
@@ -41,6 +47,8 @@ export const useAppStore = create<AppState>()((set) => ({
   workspaceMode: 'workstation',
   detailPanelOpen: false,
   backendConnected: false,
+  activeWorkspaceId: 'default',
+  activeProjectId: 'default',
 
   // Actions
   setView: (view) => set({ currentView: view }),
@@ -48,4 +56,8 @@ export const useAppStore = create<AppState>()((set) => ({
   toggleDetailPanel: () =>
     set((state) => ({ detailPanelOpen: !state.detailPanelOpen })),
   setBackendConnected: (connected) => set({ backendConnected: connected }),
+  setActiveContext: (activeWorkspaceId, activeProjectId) => set({
+    activeWorkspaceId,
+    activeProjectId,
+  }),
 }));

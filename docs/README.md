@@ -25,7 +25,7 @@
 
 ## 后续路线
 
-- `docs/workspace-project-design.md`：Workspace / Project 归属、资源绑定和 RuntimeContext 设计，尚未实现。
+- `docs/workspace-project-design.md`：Workspace / Project 归属、资源绑定、RuntimeContext 和前端上下文切换设计；Phase 0 至 Phase 3 已实现。
 - `docs/dynamic-workflows-plan.md`：Dynamic Workflow 的 Script Review、Runtime Cockpit 和 AgentScope Bridge 路线。
 - `docs/electron-packaging-plan.md`：桌面正式打包、签名、公证、数据目录和 Windows 验证。
 
@@ -35,4 +35,4 @@
 - 任务只写入 `project-todo.md`，专题文档不复制完整 TODO。
 - 事件字段只在对应稳定契约中定义，其他文档只引用。
 - 已完成的阶段草案合并结论后删除，不设置归档目录。
-- 旧 Plan Runtime、旧 Subagent Runtime、旧 Memory Runtime 和持久 Team 管理不得恢复为当前能力。
+- 旧独立 Plan Runtime（`runtime.kind=plan`）、旧独立 Subagent Runtime（`runtime.kind=subagent`）、旧 Memory Runtime 和持久 Team 管理不得恢复。当前 Plan Mode middleware 与 `DelegateTask` Subagent 委托属于 ReAct 内部在线能力，不在删除范围内。

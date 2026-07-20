@@ -78,6 +78,8 @@ class ChatBackgroundRun:
 
     id: str
     session_id: str
+    workspace_id: str = "default"
+    project_id: str = "default"
     agent_id: str = ""
     agent_name: str = ""
     task_text: str = ""
@@ -108,12 +110,20 @@ async def get_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
     return _run_from_persisted_record(persisted) if persisted else None
 
 
-async def list_chat_background_runs() -> list[ChatBackgroundRun]:
+async def list_chat_background_runs(project_id: str | None = None) -> list[ChatBackgroundRun]:
     """列出当前进程内后台 Run。"""
     async with _runs_lock:
         memory_runs = list(_runs.values())
-    by_id = {run.id: run for run in memory_runs}
-    for record in list_chat_runs(MAX_BACKGROUND_RUNS, include_events=False):
+    by_id = {
+        run.id: run
+        for run in memory_runs
+        if not project_id or run.project_id == project_id
+    }
+    for record in list_chat_runs(
+        MAX_BACKGROUND_RUNS,
+        include_events=False,
+        project_id=project_id,
+    ):
         if record["id"] not in by_id:
             record = _normalize_stale_persisted_run(record)
             by_id[record["id"]] = _run_from_persisted_record(record)
@@ -329,6 +339,8 @@ def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
     return {
         "id": run.id,
         "sessionId": run.session_id,
+        "workspaceId": run.workspace_id,
+        "projectId": run.project_id,
         "agentId": run.agent_id,
         "agentName": run.agent_name,
         "task": run.task_text,
@@ -380,12 +392,16 @@ async def start_chat_background_run(
     agent_name: str = "",
     task: str = "",
     mode: str = "agent",
+    workspace_id: str = "default",
+    project_id: str = "default",
     persist: bool = True,
 ) -> ChatBackgroundRun:
     """创建后台 Run 并启动执行 task。"""
     run = ChatBackgroundRun(
         id=f"run-{uuid.uuid4().hex}",
         session_id=session_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
         agent_id=agent_id,
         agent_name=agent_name,
         task_text=task,
@@ -475,6 +491,8 @@ async def _consume_chat_events(run: ChatBackgroundRun, factory: EventStreamFacto
     await _broadcast(run, _sse_event("RUN", {
         "run_id": run.id,
         "session_id": run.session_id,
+        "workspace_id": run.workspace_id,
+        "project_id": run.project_id,
         "agent_id": run.agent_id,
         "agent_name": run.agent_name,
         "task": run.task_text,
@@ -757,6 +775,8 @@ def _persist_run(run: ChatBackgroundRun) -> None:
     upsert_chat_run({
         "id": run.id,
         "sessionId": run.session_id,
+        "workspaceId": run.workspace_id,
+        "projectId": run.project_id,
         "agentId": run.agent_id,
         "agentName": run.agent_name,
         "task": run.task_text,
@@ -772,6 +792,8 @@ def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
     return ChatBackgroundRun(
         id=record["id"],
         session_id=record["sessionId"],
+        workspace_id=record.get("workspaceId", "default"),
+        project_id=record.get("projectId", "default"),
         agent_id=record.get("agentId", ""),
         agent_name=record.get("agentName", ""),
         task_text=record.get("task", ""),

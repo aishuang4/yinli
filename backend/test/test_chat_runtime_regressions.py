@@ -68,6 +68,21 @@ from src.security.permissions import (
 )
 from src.tools.ask_user import AskUser
 from src.server.routes.agent_builder import _default_agent_prompt
+from src.runtime_context import RuntimeContext
+
+
+def _test_runtime_context(session_id: str = "session-1", agent_id: str = "agent-1") -> RuntimeContext:
+    """构造不依赖持久化 Project 的测试运行上下文。"""
+
+    return RuntimeContext(
+        workspace_id="default",
+        project_id="default",
+        project_root=Path(__file__).resolve().parents[2],
+        session_id=session_id,
+        run_id="run-test",
+        agent_id=agent_id,
+        project_name="Default Project",
+    )
 
 
 class _FakeAgentScopeEvent:
@@ -91,11 +106,11 @@ def _final_answer_deltas(events: list[str]) -> list[str]:
     ]
 
 
-def test_final_answer_prompt_strongly_requires_phase_marker():
+def test_final_answer_prompt_allows_direct_text_and_phase_marker():
     prompt = _build_final_answer_system_prompt()
     assert "FinalAnswerStart" in prompt
-    assert "only valid way to finish a successful run" in prompt
-    assert "A response that ends without this tool is invalid" in prompt
+    assert "optional phase marker" in prompt
+    assert "answer the user directly" in prompt
 
 
 def test_default_agent_prompt_mentions_final_answer_marker():
@@ -779,13 +794,15 @@ def test_run_state_projection_builds_single_agent_display_snapshot():
         {"tool_call_id": "call-write", "state": "success"},
         run,
     )
+    tool_result_display_events = consume_run_state_display_events(state)
+    assert [event["block"] for event in tool_result_display_events] == ["process"]
     state = project_event(state, "FINAL_ANSWER_DELTA", {"delta": "完成"}, run)
 
     actors = state["displaySnapshot"]["actors"]
     blocks = state["displaySnapshot"]["blocks"]
     assert state["displaySnapshot"]["mode"] == "single_agent"
     assert len(actors) == 1
-    assert [block["block"] for block in blocks] == ["answer", "files"]
+    assert [block["block"] for block in blocks] == ["answer"]
 
     actor = actors[0]
     assert actor["role"] == "single"
@@ -798,6 +815,17 @@ def test_run_state_projection_builds_single_agent_display_snapshot():
     assert final_answer["id"] == "answer"
     assert final_answer["data"]["content"] == "完成"
     assert final_answer["data"]["started"] is True
+
+    state = project_event(
+        state,
+        "RUNTIME_EVENT",
+        {"type": "RUN_COMPLETED", "status": "completed", "payload": {}},
+        run,
+    )
+    completion_display_events = consume_run_state_display_events(state)
+    assert [event["block"] for event in completion_display_events] == ["answer", "files"]
+    blocks = state["displaySnapshot"]["blocks"]
+    assert [block["block"] for block in blocks] == ["answer", "files"]
 
     generated_files = blocks[1]
     assert generated_files["data"]["files"] == [
@@ -1862,7 +1890,7 @@ def test_delegate_task_external_result_resumes_parent_agent():
 
 
 def test_single_agent_without_final_answer_marker_does_not_fallback_to_final_answer():
-    """没有 FinalAnswerStart 时，过程文本只能留在 reasoning，不能兜底复制到最终答案。"""
+    """没有任何工具调用时，模型自然输出应直接作为最终答案。"""
 
     async def run_case():
         return [
@@ -1885,8 +1913,8 @@ def test_single_agent_without_final_answer_marker_does_not_fallback_to_final_ans
 
     events = asyncio.run(run_case())
 
-    assert any(event.startswith("event: REASONING_DELTA") for event in events)
-    assert not any(event.startswith("event: FINAL_ANSWER_DELTA") for event in events)
+    assert any(event.startswith("event: FINAL_ANSWER_DELTA") for event in events)
+    assert not any(event.startswith("event: REASONING_DELTA") for event in events)
     assert not any("missing_final_answer_marker_fallback" in event for event in events)
 
 
@@ -1914,12 +1942,10 @@ def test_single_agent_recovers_missing_final_answer_marker_with_extra_call():
 
     events = asyncio.run(run_case())
 
-    reasoning_events = [event for event in events if event.startswith("event: REASONING_DELTA")]
     final_events = [event for event in events if event.startswith("event: FINAL_ANSWER_DELTA")]
-    assert any("工具后的过程总结" in event for event in reasoning_events)
-    assert not any("工具后的过程总结" in event for event in final_events)
-    assert any("恢复后的最终答案" in event for event in final_events)
-    assert any("recover_missing_final_answer_marker" in event for event in events)
+    assert any("工具后的过程总结" in event for event in final_events)
+    assert not any("恢复后的最终答案" in event for event in final_events)
+    assert not any("recover_missing_final_answer_marker" in event for event in events)
 
 
 def test_react_runtime_fails_when_agent_ends_without_final_answer(monkeypatch):
@@ -1936,6 +1962,7 @@ def test_react_runtime_fails_when_agent_ends_without_final_answer(monkeypatch):
     async def run_case():
         ctx = ChatRunContext(
             session_id="session-missing-final",
+            runtime_context=_test_runtime_context("session-missing-final"),
             agent_id="agent-1",
             agent_name="Agent",
             agent_config=None,
@@ -1978,10 +2005,10 @@ def test_react_runtime_fails_when_agent_ends_without_final_answer(monkeypatch):
 
     events = asyncio.run(run_case())
 
-    assert any(event.startswith("event: REASONING_DELTA") for event in events)
-    assert any("RUN_FAILED" in event for event in events)
-    assert any(event.startswith("event: ERROR") for event in events)
-    assert not any("RUN_COMPLETED" in event for event in events)
+    assert any(event.startswith("event: FINAL_ANSWER_DELTA") for event in events)
+    assert any("RUN_COMPLETED" in event for event in events)
+    assert not any("RUN_FAILED" in event for event in events)
+    assert not any(event.startswith("event: ERROR") for event in events)
 
 
 def test_react_runtime_reports_agentscope_max_iters(monkeypatch):
@@ -1998,6 +2025,7 @@ def test_react_runtime_reports_agentscope_max_iters(monkeypatch):
     async def run_case():
         ctx = ChatRunContext(
             session_id="session-max-iters",
+            runtime_context=_test_runtime_context("session-max-iters"),
             agent_id="agent-1",
             agent_name="Agent",
             agent_config=None,
@@ -2061,6 +2089,7 @@ def test_react_runtime_recovers_final_answer_after_max_iters(monkeypatch):
     async def run_case():
         ctx = ChatRunContext(
             session_id="session-max-iters-recover",
+            runtime_context=_test_runtime_context("session-max-iters-recover"),
             agent_id="agent-1",
             agent_name="Agent",
             agent_config=None,
@@ -2126,6 +2155,7 @@ def test_react_runtime_forces_final_answer_after_bare_max_iters(monkeypatch):
     async def run_case():
         ctx = ChatRunContext(
             session_id="session-max-iters-bare-recover",
+            runtime_context=_test_runtime_context("session-max-iters-bare-recover"),
             agent_id="agent-1",
             agent_name="Agent",
             agent_config=None,
@@ -2359,11 +2389,11 @@ def test_resume_without_final_answer_marker_does_not_fallback_to_final_answer():
     events = asyncio.run(run_case())
 
     try:
-        assert not any(event.startswith("event: FINAL_ANSWER_DELTA") for event in events)
+        assert any(event.startswith("event: FINAL_ANSWER_DELTA") for event in events)
         assert not any("missing_final_answer_marker_fallback" in event for event in events)
-        assert any("RUN_FAILED" in event for event in events)
-        assert any(event.startswith("event: ERROR") for event in events)
-        assert not any("RUN_COMPLETED" in event for event in events)
+        assert any("RUN_COMPLETED" in event for event in events)
+        assert not any("RUN_FAILED" in event for event in events)
+        assert not any(event.startswith("event: ERROR") for event in events)
     finally:
         PENDING_INTERACTIONS.clear()
         PENDING_AGENTS.clear()
@@ -2410,8 +2440,8 @@ def test_resume_recovers_missing_final_answer_marker_with_extra_call():
             event for event in events
             if event.startswith("event: FINAL_ANSWER_DELTA")
         ]
-        assert not any("工具后的过程总结" in event for event in final_events)
-        assert any("恢复后的最终答案" in event for event in final_events)
+        assert any("工具后的过程总结" in event for event in final_events)
+        assert not any("恢复后的最终答案" in event for event in final_events)
         assert any("RUN_COMPLETED" in event for event in events)
         assert not any("RUN_FAILED" in event for event in events)
     finally:
@@ -2768,6 +2798,7 @@ def test_intent_route_tool_scope_stays_minimal_for_conversation():
     assert decision.scope.allow_knowledge is False
     assert decision.scope.allow_bash is False
     assert decision.scope.allow_http is False
+    assert decision.scope.allow_web is False
 
 
 def test_intent_route_tool_scope_enables_execution_and_research_tools():
@@ -2783,8 +2814,22 @@ def test_intent_route_tool_scope_enables_execution_and_research_tools():
     )
 
     assert decision.scope.allow_bash is True
-    assert decision.scope.allow_http is True
+    assert decision.scope.allow_http is False
+    assert decision.scope.allow_web is True
     assert decision.scope.allow_knowledge is True
+
+
+def test_runtime_tool_scope_separates_api_requests_from_web_fetch():
+    decision = resolve_runtime_tool_scope(
+        message="请调用 REST API POST /reports 创建报告。",
+        agent_config=SimpleNamespace(mcp_tools=[], knowledge_tools=[]),
+        has_selected_skills=False,
+        has_team=False,
+        has_images=False,
+    )
+
+    assert decision.scope.allow_http is True
+    assert decision.scope.allow_web is False
 
 
 class _FakeTextDeltaEvent:
@@ -2900,7 +2945,7 @@ def test_runtime_tool_scope_cache_key_is_stable():
         allow_http=True,
     )
 
-    assert scope.cache_key() == "mcp-0:knowledge-1:bash-0:http-1"
+    assert scope.cache_key() == "mcp-0:knowledge-1:bash-0:http-1:web-1"
 
 
 def test_runtime_builder_model_config_prefers_request_model():
@@ -2975,16 +3020,27 @@ def test_chat_run_context_includes_memory_prompt(monkeypatch):
         "src.server.routes.chat.run_context.build_memory_injection_text",
         lambda context: "# Memory\n记忆注入片段",
     )
+    monkeypatch.setattr(
+        "src.server.routes.chat.run_context.resolve_project_resource_access",
+        lambda context: SimpleNamespace(
+            require_agent=lambda agent_id: None,
+            filter_ids=lambda resource_type, resource_ids: resource_ids,
+            skill_ids=frozenset(),
+            mcp_server_ids=frozenset(),
+            http_tool_ids=frozenset(),
+        ),
+    )
 
     ctx = asyncio.run(
         build_chat_run_context(
             ChatMessage(
                 session_id="session-1",
                 message="继续推进",
-                agent_id="agent-1",
+                agent_id="default",
                 agent_name="Agent",
                 system_prompt="base prompt",
             ),
+            _test_runtime_context(),
         ),
     )
 

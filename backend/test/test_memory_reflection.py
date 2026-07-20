@@ -300,7 +300,7 @@ def test_memory_reflection_prompt_requires_chinese_entity_links():
     )
 
     assert "[[类型:名称]]" in system_prompt
-    assert "[[规则:禁止恢复旧 Plan Runtime]]" in system_prompt
+    assert "[[规则:禁止恢复独立 Plan Runtime 分支]]" in system_prompt
     assert '"useObsidianEntityLinks":true' in user_prompt
 
 

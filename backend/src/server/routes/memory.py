@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -42,7 +42,7 @@ class MemoryNodeCreate(BaseModel):
     conversation_digest: str = Field(default="", alias="conversationDigest", max_length=8000)
     tags: list[str] = Field(default_factory=list)
     workspace_id: str = Field(default="default", alias="workspaceId")
-    project_id: str = Field(default="", alias="projectId")
+    project_id: str = Field(default="default", alias="projectId")
     user_id: str = Field(default="default", alias="userId")
     date_range_start: str | None = Field(default=None, alias="dateRangeStart")
     date_range_end: str | None = Field(default=None, alias="dateRangeEnd")
@@ -125,6 +125,7 @@ class MemoryRetrievalFeedback(BaseModel):
 
     audit_event_id: str = Field(..., alias="auditEventId", min_length=1, max_length=120)
     node_id: str = Field(..., alias="nodeId", min_length=1, max_length=120)
+    project_id: str = Field(default="default", alias="projectId")
     rating: str = Field(..., pattern="^(relevant|irrelevant)$")
     reason: str = Field(default="", max_length=500)
     session_id: str = Field(default="memory-page", alias="sessionId", max_length=120)
@@ -288,7 +289,7 @@ async def node_tree(
     date_to: str | None = Query(default=None, alias="dateTo"),
     limit: int = Query(default=30, ge=1, le=500),
     workspace_id: str = Query(default="default", alias="workspaceId"),
-    project_id: str = Query(default="", alias="projectId"),
+    project_id: str = Query(default="default", alias="projectId"),
     user_id: str | None = Query(default=None, alias="userId"),
     status: str = Query(default="active", pattern="^(active|disabled|archived|deleted|all)$"),
 ) -> dict[str, Any]:
@@ -314,7 +315,7 @@ async def node_query(
     date_to: str | None = Query(default=None, alias="dateTo"),
     limit: int = Query(default=10, ge=1, le=100),
     workspace_id: str = Query(default="default", alias="workspaceId"),
-    project_id: str = Query(default="", alias="projectId"),
+    project_id: str = Query(default="default", alias="projectId"),
     user_id: str | None = Query(default=None, alias="userId"),
     status: str = Query(default="active", pattern="^(active|disabled|archived|deleted|all)$"),
 ) -> dict[str, Any]:
@@ -334,21 +335,28 @@ async def node_query(
 
 
 @router.get("/nodes/{node_id}")
-async def get_node(node_id: str) -> dict[str, Any]:
+async def get_node(
+    node_id: str,
+    project_id: Annotated[str, Query(alias="projectId")] = "default",
+) -> dict[str, Any]:
     """读取单个长期节点记忆。"""
 
     node = get_memory_node(node_id)
-    if not node:
+    if not node or str(node.get("project_id") or "default") != project_id:
         raise HTTPException(status_code=404, detail="Memory node not found")
     return node
 
 
 @router.patch("/nodes/{node_id}/status")
-async def update_node_status(node_id: str, data: MemoryNodeStatusUpdate) -> dict[str, Any]:
+async def update_node_status(
+    node_id: str,
+    data: MemoryNodeStatusUpdate,
+    project_id: Annotated[str, Query(alias="projectId")] = "default",
+) -> dict[str, Any]:
     """软更新历史记忆状态，并尽力同步向量索引。"""
 
     existing = get_memory_node(node_id)
-    if not existing:
+    if not existing or str(existing.get("project_id") or "default") != project_id:
         raise HTTPException(status_code=404, detail="Memory node not found")
     updated = update_memory_node_status(node_id, status=data.status)
     if not updated:
@@ -377,11 +385,17 @@ async def update_node_status(node_id: str, data: MemoryNodeStatusUpdate) -> dict
 async def skill_evolution_records(
     status: str | None = Query(default=None, pattern="^(draft|registered|skipped|failed)$"),
     agent_id: str | None = Query(default=None, alias="agentId"),
+    project_id: Annotated[str, Query(alias="projectId")] = "default",
     limit: int = Query(default=50, ge=1, le=200),
 ) -> SkillEvolutionRecordListResponse:
     """列出 Skill 自进化候选队列，供 Memory 页面查看中间态。"""
 
-    records = list_skill_evolution_records(status=status, agent_id=agent_id, limit=limit)
+    records = list_skill_evolution_records(
+        status=status,
+        agent_id=agent_id,
+        project_id=project_id,
+        limit=limit,
+    )
     return SkillEvolutionRecordListResponse(records=records)
 
 
@@ -389,11 +403,12 @@ async def skill_evolution_records(
 async def update_skill_evolution_record(
     record_id: str,
     data: SkillEvolutionRecordAction,
+    project_id: Annotated[str, Query(alias="projectId")] = "default",
 ) -> dict[str, Any]:
     """操作 Skill 自进化候选队列。"""
 
     record = get_skill_evolution_record(record_id)
-    if not record:
+    if not record or str(record.get("projectId") or "default") != project_id:
         raise HTTPException(status_code=404, detail="Skill evolution record not found")
 
     action = data.action
@@ -470,6 +485,7 @@ async def update_skill_evolution_record(
 
 @router.get("/audit/events")
 async def memory_audit_events(
+    project_id: Annotated[str, Query(alias="projectId")] = "default",
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> MemoryAuditEventListResponse:
@@ -477,6 +493,7 @@ async def memory_audit_events(
 
     events = list_run_events_by_type(
         MEMORY_AUDIT_EVENT_TYPE,
+        project_id=project_id,
         include_payload=True,
         limit=limit,
         offset=offset,
@@ -489,7 +506,7 @@ async def record_retrieval_feedback(data: MemoryRetrievalFeedback) -> dict[str, 
     """记录用户对历史记忆召回命中的相关性反馈。"""
 
     node = get_memory_node(data.node_id)
-    if not node:
+    if not node or str(node.get("project_id") or "default") != data.project_id:
         raise HTTPException(status_code=404, detail="Memory node not found")
     feedback = record_memory_retrieval_feedback(
         {

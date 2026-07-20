@@ -27,6 +27,7 @@ import { subagentToolDataFromDisplayItem } from '../features/chat/subagentToolDa
 import type { SubagentTimelineItem } from '../types/subagent';
 import { applyTeamEvent, teamConsoleFromSnapshot } from '../features/team-runtime/teamEventReducer';
 import { EMPTY_TEAM_CONSOLE, type TeamConsoleState } from '../types/teamRuntime';
+import { useAppStore } from '../stores/appStore';
 
 export type { ChatRunPlanState, ChatRunPlanStep, DisplaySnapshot } from '../types/runState';
 
@@ -187,6 +188,7 @@ interface UseEventStreamReturn {
 
 /** 发送消息选项 */
 interface SendMessageOptions {
+  projectId?: string;
   agentId?: string;
   agentName?: string;
   mode?: 'agent' | 'team';
@@ -659,6 +661,7 @@ function normalizeRunStatePlanStep(step: unknown): ChatRunPlanStep {
  * 管理 SSE 事件流的完整生命周期：发送请求 → 接收事件 → 更新状态
  */
 export function useEventStream(): UseEventStreamReturn {
+  const activeProjectId = useAppStore((storeState) => storeState.activeProjectId);
   const [state, setState] = useState<StreamState>(INITIAL_STATE);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -741,7 +744,8 @@ export function useEventStream(): UseEventStreamReturn {
     const runId = state.currentRunId;
     if (runId) {
       try {
-        await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/cancel`, {
+        const params = new URLSearchParams({ projectId: activeProjectId });
+        await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/cancel?${params.toString()}`, {
           method: 'POST',
         });
       } catch (error) {
@@ -758,7 +762,7 @@ export function useEventStream(): UseEventStreamReturn {
       error: prev.error || '用户已停止本轮执行。',
       runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
     }));
-  }, [state.currentRunId]);
+  }, [activeProjectId, state.currentRunId]);
 
   /** 重新订阅仍在后台运行或等待人工处理的 Run */
   const subscribeRun = useCallback(async (runId: string) => {
@@ -780,7 +784,8 @@ export function useEventStream(): UseEventStreamReturn {
     });
 
     try {
-      const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/state/stream`, {
+      const params = new URLSearchParams({ projectId: activeProjectId });
+      const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/state/stream?${params.toString()}`, {
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -800,7 +805,7 @@ export function useEventStream(): UseEventStreamReturn {
         runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
       }));
     }
-  }, [readEventStream]);
+  }, [activeProjectId, readEventStream]);
 
   /** 发送消息并开始接收事件流 */
   const sendMessage = useCallback(
@@ -827,6 +832,7 @@ export function useEventStream(): UseEventStreamReturn {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             message,
+            project_id: options?.projectId,
             display_message: options?.displayMessage,
             agent_id: options?.agentId,
             agent_name: options?.agentName,

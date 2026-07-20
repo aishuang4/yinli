@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from src.server.routes.chat import ChatToolRun, _load_store
-from src.storage.database import count_run_events, list_run_events
+from src.storage.database import DEFAULT_PROJECT_ID, count_run_events, list_run_events
 
 router = APIRouter()
 
@@ -24,6 +24,8 @@ class TraceSummary(BaseModel):
     """A compact run trace summary."""
 
     id: str
+    workspace_id: str = Field(default="default", alias="workspaceId")
+    project_id: str = Field(default="default", alias="projectId")
     title: str
     agent_id: str | None = Field(default=None, alias="agentId")
     agent_name: str | None = Field(default=None, alias="agentName")
@@ -59,6 +61,8 @@ class TraceEvent(BaseModel):
 
     id: str
     session_id: str = Field(alias="sessionId")
+    workspace_id: str = Field(default="default", alias="workspaceId")
+    project_id: str = Field(default="default", alias="projectId")
     event_type: str = Field(alias="eventType")
     scope: str
     agent_id: str | None = Field(default=None, alias="agentId")
@@ -220,6 +224,8 @@ def _summary_from_session(session: object, messages: list[object]) -> TraceSumma
     )
     return TraceSummary(
         id=session.id,
+        workspaceId=session.workspace_id,
+        projectId=session.project_id,
         title=session.title,
         agentId=session.agent_id,
         agentName=session.agent_name,
@@ -242,20 +248,32 @@ def _normalize_trace_events(events: list[dict]) -> list[TraceEvent]:
 
 
 @router.get("", response_model=list[TraceSummary])
-async def list_traces() -> list[TraceSummary]:
+async def list_traces(
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> list[TraceSummary]:
     """List runtime traces derived from persisted chat sessions."""
     store = _load_store()
     return [
         _summary_from_session(session, store.messages.get(session.id, []))
-        for session in sorted(store.sessions, key=lambda item: item.updated_at, reverse=True)[:MAX_TRACE_SUMMARIES]
+        for session in sorted(
+            [item for item in store.sessions if item.project_id == project_id],
+            key=lambda item: item.updated_at,
+            reverse=True,
+        )[:MAX_TRACE_SUMMARIES]
     ]
 
 
 @router.get("/{trace_id}", response_model=TraceDetail)
-async def get_trace(trace_id: str) -> TraceDetail:
+async def get_trace(
+    trace_id: str,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> TraceDetail:
     """Return full runtime trace detail for a chat session."""
     store = _load_store()
-    session = next((item for item in store.sessions if item.id == trace_id), None)
+    session = next(
+        (item for item in store.sessions if item.id == trace_id and item.project_id == project_id),
+        None,
+    )
     if session is None:
         raise HTTPException(status_code=404, detail="Trace not found")
     messages = store.messages.get(trace_id, [])[-MAX_TRACE_DETAIL_MESSAGES:]
@@ -286,12 +304,16 @@ async def get_trace(trace_id: str) -> TraceDetail:
 @router.get("/{trace_id}/events", response_model=TraceEventPage)
 async def get_trace_events(
     trace_id: str,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=TRACE_EVENT_PAGE_SIZE, ge=1, le=MAX_TRACE_EVENT_PAGE_SIZE),
 ) -> TraceEventPage:
     """Return one lightweight page of runtime trace events."""
     store = _load_store()
-    session = next((item for item in store.sessions if item.id == trace_id), None)
+    session = next(
+        (item for item in store.sessions if item.id == trace_id and item.project_id == project_id),
+        None,
+    )
     if session is None:
         raise HTTPException(status_code=404, detail="Trace not found")
     total = count_run_events(trace_id)

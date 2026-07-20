@@ -8,6 +8,7 @@ dependencies = [
     "agentscope==2.0.3",
     "aiosqlite>=0.22.1",
     "fastapi>=0.136.3",
+    "httpx>=0.28.1",
     "pydantic-settings>=2.14.1",
     "pytest>=9.0.2",
     "python-dotenv>=1.2.2",

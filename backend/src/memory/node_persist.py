@@ -18,6 +18,8 @@ class MemoryNodePersistInput:
     agent_name: str
     user_message: str
     assistant_text: str
+    workspace_id: str = "default"
+    project_id: str = "default"
     source_run_id: str = ""
     source_message_id: str = ""
 
@@ -52,6 +54,8 @@ def persist_completed_run_memory_node(
         user_inputs=[user_message],
         agent_final_outputs=[assistant_text],
         tags=_tags_from_text(user_message + "\n" + assistant_text),
+        workspace_id=item.workspace_id,
+        project_id=item.project_id,
         source_session_id=item.session_id,
         source_run_id=item.source_run_id,
         source_message_id=item.source_message_id,

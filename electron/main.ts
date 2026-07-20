@@ -8,7 +8,7 @@
  * 4. 注册 IPC 处理器，桥接前端与系统能力
  */
 
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
@@ -18,6 +18,7 @@ const isDev = process.env.NODE_ENV === 'development';
 
 /** Vite 开发服务器地址 */
 const DEV_SERVER_URL = 'http://localhost:5173';
+const BACKEND_SERVER_URL = 'http://127.0.0.1:8765';
 
 /** Python 后端子进程引用 */
 let pythonProcess: ChildProcess | null = null;
@@ -176,10 +177,31 @@ function stopPythonBackend(): void {
   }
 }
 
+async function waitForPythonBackend(timeoutMs = 15000): Promise<boolean> {
+  if (isDev) {
+    return true;
+  }
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${BACKEND_SERVER_URL}/api/health`, { cache: 'no-store' });
+      if (response.ok) {
+        return true;
+      }
+    } catch {
+      // 后端可执行文件首次启动需要解压依赖，短暂等待后重试。
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  console.error('[Electron] Python backend did not become ready before timeout');
+  return false;
+}
+
 // ========== App Lifecycle ==========
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   startPythonBackend();
+  await waitForPythonBackend();
   createMainWindow();
 
   // macOS: 点击 Dock 图标时重新创建窗口
@@ -210,7 +232,7 @@ app.on('before-quit', () => {
  * 前端通过此 IPC 获取 API base URL
  */
 ipcMain.handle('get-backend-url', () => {
-  return 'http://localhost:8765';
+  return BACKEND_SERVER_URL;
 });
 
 /**
@@ -218,6 +240,31 @@ ipcMain.handle('get-backend-url', () => {
  */
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
+});
+
+/**
+ * 选择 Project 工作目录。目录名直接作为 Project 名称，路径由主进程读取。
+ */
+ipcMain.handle('select-project-directory', async () => {
+  const options = {
+    title: '选择 Project 文件夹',
+    properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>,
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+  const selectedPath = path.resolve(result.filePaths[0]);
+  if (!fs.existsSync(selectedPath) || !fs.statSync(selectedPath).isDirectory()) {
+    return { canceled: true };
+  }
+  return {
+    canceled: false,
+    path: selectedPath,
+    name: path.basename(selectedPath),
+  };
 });
 
 /**

@@ -51,6 +51,8 @@ export interface ChatSession {
   agent_id: string;
   agent_name: string;
   mode: 'agent' | 'team';
+  workspace_id: string;
+  project_id: string;
   created_at: string;
   updated_at: string;
   message_count: number;

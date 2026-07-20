@@ -41,6 +41,8 @@ def initial_run_state(run: Any) -> dict[str, Any]:
         "version": 2,
         "runId": run.id,
         "sessionId": run.session_id,
+        "workspaceId": getattr(run, "workspace_id", "default"),
+        "projectId": getattr(run, "project_id", "default"),
         "agentId": run.agent_id,
         "agentName": run.agent_name,
         "mode": run.mode,
@@ -346,7 +348,7 @@ def _build_display_snapshot(state: dict[str, Any]) -> dict[str, Any]:
         })
 
     generated_files = _collect_generated_files_from_tools(tools)
-    if generated_files:
+    if status == "completed" and generated_files:
         blocks.append({
             "id": "files",
             "block": "files",
@@ -992,7 +994,7 @@ def _project_actor_timeline_from_runtime_event(state: dict[str, Any], event: dic
 
 
 def _project_subagent_tool_from_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None:
-    """把 Subagent Runtime Event 合并到父 DelegateTask 工具项。"""
+    """把 Subagent 委托 Runtime Event 合并到父 DelegateTask 工具项。"""
 
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     tool_id = str(payload.get("toolCallId") or payload.get("tool_call_id") or "")
@@ -1317,7 +1319,7 @@ def _tool_display_events_for_raw_event(
         op = "upsert"
         event_data = _tool_display_data(tool)
 
-    events = [_display_event(
+    return [_display_event(
         state,
         block="process",
         event=event_name,
@@ -1326,21 +1328,6 @@ def _tool_display_events_for_raw_event(
         status=str(tool.get("status") or "running"),
         data=event_data,
     )]
-    if event_type == "TOOL_RESULT_END":
-        generated_files = _collect_generated_files_from_tools([tool])
-        if generated_files:
-            events.append(_display_event(
-                state,
-                block="files",
-                event="file.created",
-                op="upsert",
-                target_id=generated_files[0]["path"],
-                status="completed",
-                data={"files": _collect_generated_files_from_tools([
-                    item for item in state.get("tools") or [] if isinstance(item, dict)
-                ])},
-            ))
-    return events
 
 
 def _skill_display_events_for_raw_event(state: dict[str, Any], event_type: str) -> list[dict[str, Any]]:
@@ -1434,16 +1421,32 @@ def _runtime_display_events_for_raw_event(state: dict[str, Any], event: dict[str
             status="failed",
             data={"message": str(state.get("error") or "执行失败")},
         )]
-    if runtime_type == "RUN_COMPLETED" and state.get("finalAnswer"):
-        return [_display_event(
-            state,
-            block="answer",
-            event="answer.completed",
-            op="upsert",
-            target_id="final-answer",
-            status="completed",
-            data={"content": str(state.get("finalAnswer") or ""), "started": True},
-        )]
+    if runtime_type == "RUN_COMPLETED":
+        events: list[dict[str, Any]] = []
+        if state.get("finalAnswer"):
+            events.append(_display_event(
+                state,
+                block="answer",
+                event="answer.completed",
+                op="upsert",
+                target_id="final-answer",
+                status="completed",
+                data={"content": str(state.get("finalAnswer") or ""), "started": True},
+            ))
+        generated_files = _collect_generated_files_from_tools([
+            item for item in state.get("tools") or [] if isinstance(item, dict)
+        ])
+        if generated_files:
+            events.append(_display_event(
+                state,
+                block="files",
+                event="files.completed",
+                op="replace",
+                target_id="files",
+                status="completed",
+                data={"files": generated_files},
+            ))
+        return events
     return []
 
 

@@ -99,7 +99,7 @@ class MemoryAdd(_BoundMemoryTool):
         "向当前绑定的 Markdown 记忆文件添加一条记忆。"
         "只能追加到指定 section，不能操作其他文件。"
         "note 和 reason 必须使用中文记录，必要技术标识符可保留原文。"
-        "重要稳定实体可用 Obsidian 链接格式 [[类型:名称]]，例如 [[规则:禁止恢复旧 Plan Runtime]]。"
+        "重要稳定实体可用 Obsidian 链接格式 [[类型:名称]]，例如 [[规则:禁止恢复独立 Plan Runtime 分支]]。"
     )
     input_schema: dict[str, Any] = {
         "type": "object",

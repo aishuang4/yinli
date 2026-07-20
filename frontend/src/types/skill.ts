@@ -20,6 +20,7 @@ export interface Skill {
   enabled: boolean;
   installedAt: string | null;
   updatedAt: string;
+  workspaceId?: string;
 }
 
 export interface SkillRegisterPayload {
@@ -29,4 +30,5 @@ export interface SkillRegisterPayload {
   trigger?: string;
   content?: string;
   tags?: string[];
+  workspaceId?: string;
 }

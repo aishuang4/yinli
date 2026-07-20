@@ -9,13 +9,13 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import anyio
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
@@ -64,6 +64,7 @@ class McpServer(BaseModel):
     enabled: bool = False
     installed_at: Optional[str] = Field(default=None, alias="installedAt")
     updated_at: str = Field(alias="updatedAt")
+    workspace_id: str = Field(default="default", alias="workspaceId")
 
     model_config = {"populate_by_name": True}
 
@@ -81,6 +82,9 @@ class McpRegisterRequest(BaseModel):
     url: HttpUrl
     description: str = Field(default="", max_length=300)
     headers: dict[str, str] = Field(default_factory=dict)
+    workspace_id: str = Field(default="default", alias="workspaceId")
+
+    model_config = {"populate_by_name": True}
 
 
 DATA_DIR = "data"
@@ -465,7 +469,11 @@ def _persist_if_user_server(server_id: str) -> None:
         _save_user_mcp_servers()
 
 
-def resolve_mcp_runtime_servers(tool_ids: list[str]) -> list[dict[str, object]]:
+def resolve_mcp_runtime_servers(
+    tool_ids: list[str],
+    *,
+    allowed_server_ids: set[str] | frozenset[str] | None = None,
+) -> list[dict[str, object]]:
     """Resolve selected MCP tool ids into server specs for Agent runtime."""
 
     selected = set(tool_ids)
@@ -474,6 +482,12 @@ def resolve_mcp_runtime_servers(tool_ids: list[str]) -> list[dict[str, object]]:
 
     runtime_servers: list[dict[str, object]] = []
     for server in _mcp_servers.values():
+        if (
+            allowed_server_ids is not None
+            and server.id not in allowed_server_ids
+            and server.id not in _builtin_mcp_servers
+        ):
+            continue
         if server.status != "installed" or not server.enabled:
             continue
         enabled_tool_names = [
@@ -499,11 +513,16 @@ async def list_mcp_servers(
     q: str = "",
     category: str = "",
     installed: Optional[bool] = None,
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
 ) -> list[McpServer]:
     """获取 MCP Server 列表，支持搜索、分类和安装状态筛选。"""
 
     query = q.strip().lower()
-    result = list(_mcp_servers.values())
+    result = [
+        server
+        for server in _mcp_servers.values()
+        if server.id in _builtin_mcp_servers or server.workspace_id == workspace_id
+    ]
 
     if query:
         result = [
@@ -536,12 +555,18 @@ async def list_mcp_categories() -> list[str]:
 
 
 @router.get("/tools", response_model=list[McpTool])
-async def list_installed_mcp_tools() -> list[McpTool]:
+async def list_installed_mcp_tools(
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
+) -> list[McpTool]:
     """获取已安装并启用的 MCP 工具列表，用于 Agent 配置选择。"""
 
     tools: list[McpTool] = []
     for server in _mcp_servers.values():
-        if server.status == "installed" and server.enabled:
+        if (
+            server.status == "installed"
+            and server.enabled
+            and (server.id in _builtin_mcp_servers or server.workspace_id == workspace_id)
+        ):
             tools.extend(server.tools)
     return tools
 
@@ -572,6 +597,7 @@ async def register_mcp_server(data: McpRegisterRequest) -> McpServer:
             "enabled": True,
             "installedAt": now,
             "updatedAt": now,
+            "workspaceId": data.workspace_id,
         }
     )
     _mcp_servers[server.id] = server

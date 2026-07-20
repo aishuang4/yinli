@@ -21,6 +21,16 @@ _lock = RLock()
 _initialized = False
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_ROOT = BACKEND_ROOT.parent
+DEFAULT_WORKSPACE_ID = "default"
+DEFAULT_PROJECT_ID = "default"
+PROJECT_RESOURCE_TYPES = ("agent", "skill", "mcp", "http_tool")
+_PROJECT_RESOURCE_TABLES = {
+    "agent": "agents",
+    "skill": "skills",
+    "mcp": "mcp_servers",
+    "http_tool": "http_tools",
+}
+_RESOURCE_BINDING_MIGRATION_KEY = "project_resource_bindings_v1"
 
 DEFAULT_GUARDRAILS = {
     "filesystem_scope": str(PROJECT_ROOT),
@@ -123,6 +133,68 @@ def _drop_column_if_exists(conn: sqlite3.Connection, table: str, column: str) ->
         conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
 
 
+def _bind_workspace_resources(
+    conn: sqlite3.Connection,
+    *,
+    project_id: str,
+    workspace_id: str,
+    now: str,
+) -> None:
+    """把 Workspace 当前持久资源作为 Project 的初始白名单快照。"""
+
+    for resource_type, table in _PROJECT_RESOURCE_TABLES.items():
+        conn.execute(
+            f"""
+            INSERT OR IGNORE INTO project_resource_bindings (
+                project_id, resource_type, resource_id, enabled,
+                config_override, created_at, updated_at
+            )
+            SELECT ?, ?, id, 1, '{{}}', ?, ?
+            FROM {table}
+            WHERE workspace_id = ?
+            """,
+            (project_id, resource_type, now, now, workspace_id),
+        )
+    if workspace_id == DEFAULT_WORKSPACE_ID:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO project_resource_bindings (
+                project_id, resource_type, resource_id, enabled,
+                config_override, created_at, updated_at
+            )
+            SELECT ?, 'http_tool', key, 1, '{}', ?, ?
+            FROM json_store
+            WHERE namespace = 'knowledge_tools'
+            """,
+            (project_id, now, now),
+        )
+
+
+def _migrate_project_resource_bindings(conn: sqlite3.Connection, *, now: str) -> None:
+    """为升级前已有 Project 建立一次性资源白名单基线。"""
+
+    marker = conn.execute(
+        "SELECT 1 FROM json_store WHERE namespace = 'schema_migrations' AND key = ?",
+        (_RESOURCE_BINDING_MIGRATION_KEY,),
+    ).fetchone()
+    if marker is not None:
+        return
+    for project in conn.execute("SELECT id, workspace_id FROM projects").fetchall():
+        _bind_workspace_resources(
+            conn,
+            project_id=str(project["id"]),
+            workspace_id=str(project["workspace_id"]),
+            now=now,
+        )
+    conn.execute(
+        """
+        INSERT INTO json_store (namespace, key, value, created_at, updated_at)
+        VALUES ('schema_migrations', ?, '{"completed":true}', ?, ?)
+        """,
+        (_RESOURCE_BINDING_MIGRATION_KEY, now, now),
+    )
+
+
 def ensure_db() -> None:
     """Create SQLite tables once, safe to call from import-time route loaders."""
     global _initialized
@@ -145,6 +217,41 @@ def ensure_db() -> None:
                 )
             """)
             conn.executescript("""
+                CREATE TABLE IF NOT EXISTS workspaces (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    root_path TEXT NOT NULL,
+                    instructions_file TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_projects_workspace_status
+                    ON projects(workspace_id, status, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS project_resource_bindings (
+                    project_id TEXT NOT NULL,
+                    resource_type TEXT NOT NULL,
+                    resource_id TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    config_override TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(project_id, resource_type, resource_id),
+                    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_project_resource_bindings_project
+                    ON project_resource_bindings(project_id, resource_type, enabled);
                 CREATE TABLE IF NOT EXISTS agents (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -453,7 +560,7 @@ def ensure_db() -> None:
                 CREATE TABLE IF NOT EXISTS memory_nodes (
                     id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL DEFAULT 'default',
-                    project_id TEXT NOT NULL DEFAULT '',
+                    project_id TEXT NOT NULL DEFAULT 'default',
                     agent_id TEXT NOT NULL,
                     user_id TEXT NOT NULL DEFAULT 'default',
                     node_date TEXT NOT NULL,
@@ -505,7 +612,7 @@ def ensure_db() -> None:
                 CREATE TABLE IF NOT EXISTS skill_evolution_records (
                     id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL DEFAULT 'default',
-                    project_id TEXT NOT NULL DEFAULT '',
+                    project_id TEXT NOT NULL DEFAULT 'default',
                     agent_id TEXT NOT NULL,
                     agent_name TEXT NOT NULL DEFAULT '',
                     team_id TEXT NOT NULL DEFAULT '',
@@ -549,6 +656,20 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_messages", "display_snapshot", "TEXT NOT NULL DEFAULT '{\"version\":2,\"blocks\":[]}'")
             _ensure_column(conn, "chat_messages", "team_snapshot", "TEXT")
             _ensure_column(conn, "chat_sessions", "mode", "TEXT NOT NULL DEFAULT 'agent'")
+            _ensure_column(conn, "agents", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "mcp_servers", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "http_tools", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "skills", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "chat_sessions", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "chat_sessions", "project_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "chat_runs", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "chat_runs", "project_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "run_events", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "run_events", "project_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "memory_nodes", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "memory_nodes", "project_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "subagent_invocations", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "subagent_invocations", "project_id", "TEXT NOT NULL DEFAULT 'default'")
             _drop_column_if_exists(conn, "agents", "callable_agents")
             _drop_column_if_exists(conn, "agents", "max_depth")
             _drop_column_if_exists(conn, "chat_messages", "subagent_calls")
@@ -577,6 +698,69 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_runs", "updated_at", "TEXT NOT NULL DEFAULT ''")
             _drop_column_if_exists(conn, "chat_runs", "team_id")
             _drop_column_if_exists(conn, "chat_runs", "team_name")
+            now = _utc_now()
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO workspaces (
+                    id, name, description, status, created_at, updated_at
+                ) VALUES (?, ?, ?, 'active', ?, ?)
+                """,
+                (
+                    DEFAULT_WORKSPACE_ID,
+                    "默认工作区",
+                    "历史数据和未显式指定归属的资源所在工作区。",
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO projects (
+                    id, workspace_id, name, description, root_path,
+                    instructions_file, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, '', 'active', ?, ?)
+                """,
+                (
+                    DEFAULT_PROJECT_ID,
+                    DEFAULT_WORKSPACE_ID,
+                    "默认项目",
+                    "历史会话和未显式选择项目的运行所在项目。",
+                    str(PROJECT_ROOT),
+                    now,
+                    now,
+                ),
+            )
+            for table in ("agents", "mcp_servers", "http_tools", "skills"):
+                conn.execute(
+                    f"UPDATE {table} SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''",
+                    (DEFAULT_WORKSPACE_ID,),
+                )
+            for table in ("chat_sessions", "chat_runs", "run_events", "memory_nodes", "subagent_invocations"):
+                conn.execute(
+                    f"UPDATE {table} SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''",
+                    (DEFAULT_WORKSPACE_ID,),
+                )
+                conn.execute(
+                    f"UPDATE {table} SET project_id = ? WHERE project_id IS NULL OR project_id = ''",
+                    (DEFAULT_PROJECT_ID,),
+                )
+            conn.execute(
+                "UPDATE skill_evolution_records SET project_id = ? WHERE project_id IS NULL OR project_id = ''",
+                (DEFAULT_PROJECT_ID,),
+            )
+            _migrate_project_resource_bindings(conn, now=now)
+            conn.executescript("""
+                CREATE INDEX IF NOT EXISTS idx_chat_sessions_project_updated
+                    ON chat_sessions(project_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_chat_runs_project_updated
+                    ON chat_runs(project_id, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_run_events_project_session_order
+                    ON run_events(project_id, session_id, sort_order, created_at);
+                CREATE INDEX IF NOT EXISTS idx_memory_nodes_project_date
+                    ON memory_nodes(project_id, node_date DESC);
+                CREATE INDEX IF NOT EXISTS idx_subagent_invocations_project_run
+                    ON subagent_invocations(project_id, run_id, started_at);
+            """)
             conn.commit()
             _initialized = True
 
@@ -594,6 +778,303 @@ def _loads(value: str | None, default: Any) -> Any:
         return default
 
 
+def _workspace_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "description": row["description"],
+        "status": row["status"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def _project_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "workspaceId": row["workspace_id"],
+        "name": row["name"],
+        "description": row["description"],
+        "rootPath": row["root_path"],
+        "instructionsFile": row["instructions_file"],
+        "status": row["status"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def list_workspaces(*, include_archived: bool = False) -> list[dict[str, Any]]:
+    """列出 Workspace。"""
+
+    ensure_db()
+    query = "SELECT * FROM workspaces"
+    params: tuple[Any, ...] = ()
+    if not include_archived:
+        query += " WHERE status = ?"
+        params = ("active",)
+    query += " ORDER BY updated_at DESC, id ASC"
+    with _lock, _connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [_workspace_from_row(row) for row in rows]
+
+
+def get_workspace(workspace_id: str) -> dict[str, Any] | None:
+    """读取一个 Workspace。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
+    return _workspace_from_row(row) if row else None
+
+
+def create_workspace(data: dict[str, Any]) -> dict[str, Any]:
+    """创建 Workspace。"""
+
+    ensure_db()
+    now = _utc_now()
+    workspace_id = str(data.get("id") or f"ws_{uuid.uuid4().hex}")
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO workspaces (id, name, description, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                workspace_id,
+                str(data.get("name") or "未命名工作区"),
+                str(data.get("description") or ""),
+                str(data.get("status") or "active"),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    return get_workspace(workspace_id) or {}
+
+
+def list_projects(
+    workspace_id: str | None = None,
+    *,
+    include_archived: bool = False,
+) -> list[dict[str, Any]]:
+    """列出 Project，可按 Workspace 过滤。"""
+
+    ensure_db()
+    clauses: list[str] = []
+    params: list[Any] = []
+    if workspace_id:
+        clauses.append("workspace_id = ?")
+        params.append(workspace_id)
+    if not include_archived:
+        clauses.append("status = 'active'")
+    query = "SELECT * FROM projects"
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY updated_at DESC, id ASC"
+    with _lock, _connect() as conn:
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [_project_from_row(row) for row in rows]
+
+
+def get_project(project_id: str) -> dict[str, Any] | None:
+    """读取一个 Project。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+    return _project_from_row(row) if row else None
+
+
+def create_project(data: dict[str, Any]) -> dict[str, Any]:
+    """创建 Project。"""
+
+    ensure_db()
+    now = _utc_now()
+    project_id = str(data.get("id") or f"proj_{uuid.uuid4().hex}")
+    workspace_id = str(data.get("workspace_id") or data.get("workspaceId") or DEFAULT_WORKSPACE_ID)
+    with _lock, _connect() as conn:
+        workspace = conn.execute("SELECT id FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
+        if workspace is None:
+            raise ValueError(f"Workspace 不存在: {workspace_id}")
+        conn.execute(
+            """
+            INSERT INTO projects (
+                id, workspace_id, name, description, root_path,
+                instructions_file, status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                project_id,
+                workspace_id,
+                str(data.get("name") or "未命名项目"),
+                str(data.get("description") or ""),
+                str(data.get("root_path") or data.get("rootPath") or PROJECT_ROOT),
+                str(data.get("instructions_file") or data.get("instructionsFile") or ""),
+                str(data.get("status") or "active"),
+                now,
+                now,
+            ),
+        )
+        _bind_workspace_resources(
+            conn,
+            project_id=project_id,
+            workspace_id=workspace_id,
+            now=now,
+        )
+        conn.commit()
+    return get_project(project_id) or {}
+
+
+def update_project(project_id: str, changes: dict[str, Any]) -> dict[str, Any] | None:
+    """更新 Project 可编辑字段。"""
+
+    ensure_db()
+    existing = get_project(project_id)
+    if existing is None:
+        return None
+    values = {
+        "name": str(changes.get("name", existing["name"])),
+        "description": str(changes.get("description", existing["description"])),
+        "root_path": str(changes.get("root_path", changes.get("rootPath", existing["rootPath"]))),
+        "instructions_file": str(
+            changes.get("instructions_file", changes.get("instructionsFile", existing["instructionsFile"])),
+        ),
+        "status": str(changes.get("status", existing["status"])),
+    }
+    with _lock, _connect() as conn:
+        conn.execute(
+            """
+            UPDATE projects
+            SET name = ?, description = ?, root_path = ?, instructions_file = ?,
+                status = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                values["name"],
+                values["description"],
+                values["root_path"],
+                values["instructions_file"],
+                values["status"],
+                _utc_now(),
+                project_id,
+            ),
+        )
+        conn.commit()
+    return get_project(project_id)
+
+
+def list_project_resource_bindings(project_id: str) -> list[dict[str, Any]]:
+    """列出 Project 资源绑定。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM project_resource_bindings
+            WHERE project_id = ?
+            ORDER BY resource_type, resource_id
+            """,
+            (project_id,),
+        ).fetchall()
+    return [
+        {
+            "projectId": row["project_id"],
+            "resourceType": row["resource_type"],
+            "resourceId": row["resource_id"],
+            "enabled": bool(row["enabled"]),
+            "configOverride": _loads(row["config_override"], {}),
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+        }
+        for row in rows
+    ]
+
+
+def get_workspace_resource(
+    resource_type: str,
+    resource_id: str,
+) -> dict[str, str] | None:
+    """读取持久资源的 Workspace 归属。"""
+
+    ensure_db()
+    table = _PROJECT_RESOURCE_TABLES.get(resource_type)
+    if table is None:
+        return None
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            f"SELECT id, workspace_id FROM {table} WHERE id = ?",
+            (resource_id,),
+        ).fetchone()
+        if row is None and resource_type == "http_tool":
+            legacy = conn.execute(
+                "SELECT key FROM json_store WHERE namespace = 'knowledge_tools' AND key = ?",
+                (resource_id,),
+            ).fetchone()
+            if legacy is not None:
+                return {"id": str(legacy["key"]), "workspaceId": DEFAULT_WORKSPACE_ID}
+    if row is None:
+        return None
+    return {
+        "id": str(row["id"]),
+        "workspaceId": str(row["workspace_id"] or DEFAULT_WORKSPACE_ID),
+    }
+
+
+def upsert_project_resource_binding(data: dict[str, Any]) -> dict[str, Any]:
+    """创建或更新一个 Project 资源绑定。"""
+
+    ensure_db()
+    project_id = str(data.get("project_id") or data.get("projectId") or "")
+    resource_type = str(data.get("resource_type") or data.get("resourceType") or "")
+    resource_id = str(data.get("resource_id") or data.get("resourceId") or "")
+    now = _utc_now()
+    with _lock, _connect() as conn:
+        if conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone() is None:
+            raise ValueError(f"Project 不存在: {project_id}")
+        conn.execute(
+            """
+            INSERT INTO project_resource_bindings (
+                project_id, resource_type, resource_id, enabled,
+                config_override, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(project_id, resource_type, resource_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                config_override = excluded.config_override,
+                updated_at = excluded.updated_at
+            """,
+            (
+                project_id,
+                resource_type,
+                resource_id,
+                int(bool(data.get("enabled", True))),
+                _dumps(data.get("config_override") or data.get("configOverride") or {}),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    return next(
+        item
+        for item in list_project_resource_bindings(project_id)
+        if item["resourceType"] == resource_type and item["resourceId"] == resource_id
+    )
+
+
+def get_chat_session_ownership(session_id: str) -> dict[str, str] | None:
+    """读取 Session 的 Workspace / Project 归属。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            "SELECT workspace_id, project_id FROM chat_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "workspaceId": str(row["workspace_id"] or DEFAULT_WORKSPACE_ID),
+        "projectId": str(row["project_id"] or DEFAULT_PROJECT_ID),
+    }
 def list_json_records(namespace: str) -> list[dict[str, Any]]:
     """List all JSON documents in a namespace."""
     ensure_db()
@@ -751,6 +1232,7 @@ def list_agents() -> list[dict[str, Any]]:
                 else DEFAULT_GUARDRAILS
             ),
             "status": row["status"],
+            "workspaceId": row["workspace_id"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -765,11 +1247,13 @@ def upsert_agent(data: dict[str, Any]) -> None:
             "id", "name", "avatar", "description", "system_prompt", "model_config",
             "mcp_tools", "knowledge_tools", "skills", "tags",
             "plan_config", "guardrails", "status", "created_at", "updated_at",
+            "workspace_id",
         ]
         update_columns = [
             "name", "avatar", "description", "system_prompt", "model_config",
             "mcp_tools", "knowledge_tools", "skills", "tags",
             "plan_config", "guardrails", "status", "updated_at",
+            "workspace_id",
         ]
         values = [
             data["id"], data["name"], data.get("avatar", ""),
@@ -782,6 +1266,7 @@ def upsert_agent(data: dict[str, Any]) -> None:
             _dumps(data.get("planConfig", DEFAULT_PLAN_CONFIG)),
             _dumps(data.get("guardrails", {})), data.get("status", "idle"),
             data.get("created_at") or _utc_now(), data.get("updated_at") or _utc_now(),
+            data.get("workspaceId", DEFAULT_WORKSPACE_ID),
         ])
         conn.execute(
             f"""
@@ -832,6 +1317,7 @@ def list_mcp_servers() -> list[dict[str, Any]]:
             "enabled": bool(row["enabled"]),
             "installedAt": row["installed_at"],
             "updatedAt": row["updated_at"],
+            "workspaceId": row["workspace_id"],
         }
         for row in rows
     ]
@@ -843,7 +1329,10 @@ def replace_mcp_servers(records: dict[str, dict[str, Any]]) -> None:
         conn.execute("DELETE FROM mcp_servers")
         conn.executemany(
             """
-            INSERT INTO mcp_servers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO mcp_servers (
+                id, name, description, category, transport, command, url, homepage,
+                headers, tags, tools, status, enabled, installed_at, updated_at, workspace_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -854,6 +1343,7 @@ def replace_mcp_servers(records: dict[str, dict[str, Any]]) -> None:
                     _dumps(data.get("tags", [])), _dumps(data.get("tools", [])),
                     data.get("status", "available"), int(bool(data.get("enabled", False))),
                     data.get("installedAt"), data.get("updatedAt") or _utc_now(),
+                    data.get("workspaceId", DEFAULT_WORKSPACE_ID),
                 )
                 for data in records.values()
             ],
@@ -888,6 +1378,7 @@ def list_http_tools() -> list[dict[str, Any]]:
             "enabled": bool(row["enabled"]),
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
+            "workspaceId": row["workspace_id"],
         }
         for row in rows
     ]
@@ -907,8 +1398,8 @@ def upsert_http_tool(data: dict[str, Any]) -> dict[str, Any]:
                 auth_config, headers, query_template, body_template,
                 parameter_schema, parameter_instructions, response_mode,
                 response_path, readonly, approval_policy, enabled,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, workspace_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name,
                 description=excluded.description,
@@ -950,6 +1441,7 @@ def upsert_http_tool(data: dict[str, Any]) -> dict[str, Any]:
                 1 if data.get("enabled", True) else 0,
                 created_at,
                 updated_at,
+                data.get("workspaceId", DEFAULT_WORKSPACE_ID),
             ),
         )
         conn.commit()
@@ -984,6 +1476,7 @@ def list_skills() -> list[dict[str, Any]]:
             "enabled": bool(row["enabled"]),
             "installedAt": row["installed_at"],
             "updatedAt": row["updated_at"],
+            "workspaceId": row["workspace_id"],
         }
         for row in rows
     ]
@@ -994,7 +1487,12 @@ def replace_skills(records: dict[str, dict[str, Any]]) -> None:
     with _lock, _connect() as conn:
         conn.execute("DELETE FROM skills")
         conn.executemany(
-            "INSERT INTO skills VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            """
+            INSERT INTO skills (
+                id, name, description, category, trigger, content, tags,
+                resource_path, resources, status, enabled, installed_at, updated_at, workspace_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
             [
                 (
                     data["id"], data["name"], data.get("description", ""),
@@ -1003,6 +1501,7 @@ def replace_skills(records: dict[str, dict[str, Any]]) -> None:
                     data.get("resourcePath", ""), _dumps(data.get("resources", [])),
                     data.get("status", "available"), int(bool(data.get("enabled", False))),
                     data.get("installedAt"), data.get("updatedAt") or _utc_now(),
+                    data.get("workspaceId", DEFAULT_WORKSPACE_ID),
                 )
                 for data in records.values()
             ],
@@ -1147,6 +1646,8 @@ def load_chat_store() -> dict[str, Any]:
                 "agent_id": row["agent_id"],
                 "agent_name": row["agent_name"],
                 "mode": row["mode"],
+                "workspace_id": row["workspace_id"],
+                "project_id": row["project_id"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "message_count": row["message_count"],
@@ -1167,14 +1668,17 @@ def save_chat_store(data: dict[str, Any]) -> None:
         conn.executemany(
             """
             INSERT INTO chat_sessions (
-                id, title, agent_id, agent_name, mode,
+                id, title, agent_id, agent_name, mode, workspace_id, project_id,
                 created_at, updated_at, message_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
                     item["id"], item["title"], item["agent_id"], item["agent_name"],
-                    item.get("mode", "agent"), item["created_at"],
+                    item.get("mode", "agent"),
+                    item.get("workspace_id", item.get("workspaceId", DEFAULT_WORKSPACE_ID)),
+                    item.get("project_id", item.get("projectId", DEFAULT_PROJECT_ID)),
+                    item["created_at"],
                     item["updated_at"], item.get("message_count", 0),
                 )
                 for item in sessions
@@ -1222,12 +1726,24 @@ def append_run_event(
     title: str = "",
     content: str = "",
     payload: dict[str, Any] | None = None,
+    workspace_id: str | None = None,
+    project_id: str | None = None,
 ) -> dict[str, Any]:
     """Append one normalized runtime event for trace inspection."""
     ensure_db()
     event_id = f"evt-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
     created_at = _utc_now()
     with _lock, _connect() as conn:
+        ownership = conn.execute(
+            "SELECT workspace_id, project_id FROM chat_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        resolved_workspace_id = workspace_id or (
+            str(ownership["workspace_id"]) if ownership else DEFAULT_WORKSPACE_ID
+        )
+        resolved_project_id = project_id or (
+            str(ownership["project_id"]) if ownership else DEFAULT_PROJECT_ID
+        )
         row = conn.execute(
             "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM run_events WHERE session_id = ?",
             (session_id,),
@@ -1236,14 +1752,16 @@ def append_run_event(
         conn.execute(
             """
             INSERT INTO run_events (
-                id, session_id, event_type, scope, agent_id, agent_name,
+                id, session_id, workspace_id, project_id, event_type, scope, agent_id, agent_name,
                 status, title, content, payload, created_at,
                 sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_id,
                 session_id,
+                resolved_workspace_id,
+                resolved_project_id,
                 event_type,
                 scope,
                 agent_id,
@@ -1260,6 +1778,8 @@ def append_run_event(
     return {
         "id": event_id,
         "sessionId": session_id,
+        "workspaceId": resolved_workspace_id,
+        "projectId": resolved_project_id,
         "eventType": event_type,
         "scope": scope,
         "agentId": agent_id,
@@ -1328,6 +1848,8 @@ def list_run_events(
         {
             "id": row["id"],
             "sessionId": row["session_id"],
+            "workspaceId": row["workspace_id"],
+            "projectId": row["project_id"],
             "eventType": row["event_type"],
             "scope": row["scope"],
             "agentId": row["agent_id"],
@@ -1353,6 +1875,8 @@ def create_subagent_invocation(data: dict[str, Any]) -> dict[str, Any]:
         "id": invocation_id,
         "run_id": data.get("run_id") or "",
         "session_id": data.get("session_id") or "",
+        "workspace_id": data.get("workspace_id") or DEFAULT_WORKSPACE_ID,
+        "project_id": data.get("project_id") or DEFAULT_PROJECT_ID,
         "tool_call_id": data.get("tool_call_id") or "",
         "parent_scope": data.get("parent_scope") or "single",
         "parent_agent_id": data.get("parent_agent_id") or "",
@@ -1373,16 +1897,18 @@ def create_subagent_invocation(data: dict[str, Any]) -> dict[str, Any]:
         conn.execute(
             """
             INSERT INTO subagent_invocations (
-                id, run_id, session_id, tool_call_id, parent_scope,
+                id, run_id, session_id, workspace_id, project_id, tool_call_id, parent_scope,
                 parent_agent_id, parent_agent_name, definition_scope,
                 definition_path, subagent_name, status, task, expected_output,
                 result_preview, error, started_at, completed_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record["id"],
                 record["run_id"],
                 record["session_id"],
+                record["workspace_id"],
+                record["project_id"],
                 record["tool_call_id"],
                 record["parent_scope"],
                 record["parent_agent_id"],
@@ -1439,41 +1965,30 @@ def list_subagent_invocations(
     *,
     run_id: str | None = None,
     session_id: str | None = None,
+    project_id: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     """列出 Subagent invocation 审计记录。"""
 
     ensure_db()
+    clauses: list[str] = []
+    params: list[Any] = []
+    if run_id:
+        clauses.append("run_id = ?")
+        params.append(run_id)
+    if session_id:
+        clauses.append("session_id = ?")
+        params.append(session_id)
+    if project_id:
+        clauses.append("project_id = ?")
+        params.append(project_id)
+    query = "SELECT * FROM subagent_invocations"
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY started_at DESC LIMIT ?"
+    params.append(limit)
     with _lock, _connect() as conn:
-        if run_id:
-            rows = conn.execute(
-                """
-                SELECT * FROM subagent_invocations
-                WHERE run_id = ?
-                ORDER BY started_at DESC
-                LIMIT ?
-                """,
-                (run_id, limit),
-            ).fetchall()
-        elif session_id:
-            rows = conn.execute(
-                """
-                SELECT * FROM subagent_invocations
-                WHERE session_id = ?
-                ORDER BY started_at DESC
-                LIMIT ?
-                """,
-                (session_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT * FROM subagent_invocations
-                ORDER BY started_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+        rows = conn.execute(query, tuple(params)).fetchall()
     return [_subagent_invocation_to_api(dict(row)) for row in rows]
 
 
@@ -1482,6 +1997,8 @@ def _subagent_invocation_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "id": row["id"],
         "runId": row["run_id"],
         "sessionId": row["session_id"],
+        "workspaceId": row.get("workspace_id", DEFAULT_WORKSPACE_ID),
+        "projectId": row.get("project_id", DEFAULT_PROJECT_ID),
         "toolCallId": row["tool_call_id"],
         "parentScope": row["parent_scope"],
         "parentAgentId": row["parent_agent_id"],
@@ -1503,6 +2020,7 @@ def _subagent_invocation_to_api(row: dict[str, Any]) -> dict[str, Any]:
 def list_run_events_by_type(
     event_type: str,
     *,
+    project_id: str = DEFAULT_PROJECT_ID,
     include_payload: bool = True,
     limit: int = 50,
     offset: int = 0,
@@ -1516,16 +2034,18 @@ def list_run_events_by_type(
         rows = conn.execute(
             """
             SELECT * FROM run_events
-            WHERE event_type = ?
+            WHERE event_type = ? AND project_id = ?
             ORDER BY created_at DESC, sort_order DESC
             LIMIT ? OFFSET ?
             """,
-            (event_type, safe_limit, safe_offset),
+            (event_type, project_id or DEFAULT_PROJECT_ID, safe_limit, safe_offset),
         ).fetchall()
     return [
         {
             "id": row["id"],
             "sessionId": row["session_id"],
+            "workspaceId": row["workspace_id"],
+            "projectId": row["project_id"],
             "eventType": row["event_type"],
             "scope": row["scope"],
             "agentId": row["agent_id"],
@@ -1562,11 +2082,13 @@ def upsert_chat_run(record: dict[str, Any]) -> dict[str, Any]:
         conn.execute(
             """
             INSERT INTO chat_runs (
-                id, session_id, agent_id, agent_name,
+                id, session_id, workspace_id, project_id, agent_id, agent_name,
                 task_text, mode, status, created_at, completed_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 session_id=excluded.session_id,
+                workspace_id=excluded.workspace_id,
+                project_id=excluded.project_id,
                 agent_id=excluded.agent_id,
                 agent_name=excluded.agent_name,
                 task_text=excluded.task_text,
@@ -1578,6 +2100,8 @@ def upsert_chat_run(record: dict[str, Any]) -> dict[str, Any]:
             (
                 record["id"],
                 record["sessionId"],
+                record.get("workspaceId", DEFAULT_WORKSPACE_ID),
+                record.get("projectId", DEFAULT_PROJECT_ID),
                 record.get("agentId", ""),
                 record.get("agentName", ""),
                 record.get("task", ""),
@@ -1675,14 +2199,25 @@ def get_chat_run_state(run_id: str) -> dict[str, Any] | None:
     return state if isinstance(state, dict) else {}
 
 
-def list_chat_runs(limit: int = 50, *, include_events: bool = True) -> list[dict[str, Any]]:
+def list_chat_runs(
+    limit: int = 50,
+    *,
+    include_events: bool = True,
+    project_id: str | None = None,
+) -> list[dict[str, Any]]:
     """List persisted Chat Runs, optionally omitting raw event arrays for fast summaries."""
     ensure_db()
     with _lock, _connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM chat_runs ORDER BY updated_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        if project_id:
+            rows = conn.execute(
+                "SELECT * FROM chat_runs WHERE project_id = ? ORDER BY updated_at DESC LIMIT ?",
+                (project_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM chat_runs ORDER BY updated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
         if not include_events:
             run_ids = [row["id"] for row in rows]
             event_counts: dict[str, int] = {run_id: 0 for run_id in run_ids}
@@ -2095,6 +2630,8 @@ def get_latest_user_chat_message(session_id: str, content: str | None = None) ->
     return {
         "id": row["id"],
         "sessionId": row["session_id"],
+        "workspaceId": row["workspace_id"],
+        "projectId": row["project_id"],
         "role": row["role"],
         "content": row["content"],
         "agentId": row["agent_id"],
@@ -2214,6 +2751,8 @@ def _chat_run_from_row(row: sqlite3.Row, events: list[str], event_count: int | N
     return {
         "id": row["id"],
         "sessionId": row["session_id"],
+        "workspaceId": row["workspace_id"],
+        "projectId": row["project_id"],
         "agentId": row["agent_id"],
         "agentName": row["agent_name"],
         "task": row["task_text"],
@@ -2384,7 +2923,7 @@ def upsert_memory_node(data: dict[str, Any]) -> dict[str, Any]:
             (
                 data["id"],
                 data.get("workspace_id") or "default",
-                data.get("project_id") or "",
+                data.get("project_id") or DEFAULT_PROJECT_ID,
                 data["agent_id"],
                 data.get("user_id") or "default",
                 data["node_date"],
@@ -2429,7 +2968,7 @@ def get_memory_node(node_id: str) -> dict[str, Any] | None:
 def list_memory_nodes(
     *,
     workspace_id: str = "default",
-    project_id: str = "",
+    project_id: str = DEFAULT_PROJECT_ID,
     agent_id: str | None = None,
     user_id: str | None = None,
     date_from: str | None = None,
@@ -2444,7 +2983,7 @@ def list_memory_nodes(
         SELECT * FROM memory_nodes
         WHERE workspace_id = ? AND project_id = ?
     """
-    params: list[Any] = [workspace_id, project_id]
+    params: list[Any] = [workspace_id or DEFAULT_WORKSPACE_ID, project_id or DEFAULT_PROJECT_ID]
     if status:
         query += " AND status = ?"
         params.append(status)
@@ -2470,7 +3009,7 @@ def list_memory_nodes(
 def search_memory_nodes(
     *,
     workspace_id: str = "default",
-    project_id: str = "",
+    project_id: str = DEFAULT_PROJECT_ID,
     agent_id: str | None = None,
     user_id: str | None = None,
     date_from: str | None = None,
@@ -2486,7 +3025,7 @@ def search_memory_nodes(
         SELECT * FROM memory_nodes
         WHERE workspace_id = ? AND project_id = ?
     """
-    params: list[Any] = [workspace_id, project_id]
+    params: list[Any] = [workspace_id or DEFAULT_WORKSPACE_ID, project_id or DEFAULT_PROJECT_ID]
     if status:
         query += " AND status = ?"
         params.append(status)
@@ -2745,7 +3284,7 @@ def upsert_skill_evolution_record(data: dict[str, Any]) -> dict[str, Any]:
             (
                 data["id"],
                 data.get("workspace_id") or "default",
-                data.get("project_id") or "",
+                data.get("project_id") or DEFAULT_PROJECT_ID,
                 data["agent_id"],
                 data.get("agent_name") or "",
                 data.get("team_id") or "",
@@ -2793,13 +3332,14 @@ def list_skill_evolution_records(
     *,
     status: str | None = None,
     agent_id: str | None = None,
+    project_id: str = DEFAULT_PROJECT_ID,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """按状态或 Agent 列出 Skill 自进化候选记录。"""
+    """按 Project、状态或 Agent 列出 Skill 自进化候选记录。"""
 
     ensure_db()
-    query = "SELECT * FROM skill_evolution_records WHERE 1 = 1"
-    params: list[Any] = []
+    query = "SELECT * FROM skill_evolution_records WHERE project_id = ?"
+    params: list[Any] = [project_id or DEFAULT_PROJECT_ID]
     if status:
         query += " AND status = ?"
         params.append(status)

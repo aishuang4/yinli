@@ -16,6 +16,7 @@ import { useAppStore } from '../stores/appStore';
 
 export function TracePage() {
   const active = useAppStore((state) => state.currentView === 'traces');
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const [traces, setTraces] = useState<TraceSummary[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
   const [detail, setDetail] = useState<TraceDetail | null>(null);
@@ -35,7 +36,8 @@ export function TracePage() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/traces', { signal: controller.signal });
+      const params = new URLSearchParams({ projectId: activeProjectId });
+      const response = await fetch(`/api/traces?${params.toString()}`, { signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: TraceSummary[] = await response.json();
       setTraces(data);
@@ -47,7 +49,7 @@ export function TracePage() {
         setLoading(false);
       }
     }
-  }, [active]);
+  }, [active, activeProjectId]);
 
   const loadDetail = useCallback(async (traceId: string) => {
     if (!active) return;
@@ -63,7 +65,8 @@ export function TracePage() {
     setDetailLoading(true);
     setDetail(null);
     try {
-      const response = await fetch(`/api/traces/${traceId}`, { signal: controller.signal });
+      const params = new URLSearchParams({ projectId: activeProjectId });
+      const response = await fetch(`/api/traces/${traceId}?${params.toString()}`, { signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json() as TraceDetail;
       window.setTimeout(() => {
@@ -77,14 +80,19 @@ export function TracePage() {
       setError(err instanceof Error ? err.message : '加载运行轨迹详情失败');
       setDetailLoading(false);
     }
-  }, [active]);
+  }, [active, activeProjectId]);
 
   const loadMoreTraceEvents = useCallback(async () => {
     if (!active || !detail || eventPageLoading || detail.events.length >= detail.eventTotal) return;
     const offset = detail.events.length;
     setEventPageLoading(true);
     try {
-      const response = await fetch(`/api/traces/${encodeURIComponent(detail.id)}/events?offset=${offset}&limit=${TRACE_RENDER_BATCH_SIZE}`);
+      const params = new URLSearchParams({
+        projectId: activeProjectId,
+        offset: String(offset),
+        limit: String(TRACE_RENDER_BATCH_SIZE),
+      });
+      const response = await fetch(`/api/traces/${encodeURIComponent(detail.id)}/events?${params.toString()}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json() as { events: TraceEvent[]; total: number };
       setDetail((current) => {
@@ -102,7 +110,13 @@ export function TracePage() {
     } finally {
       setEventPageLoading(false);
     }
-  }, [active, detail, eventPageLoading]);
+  }, [active, activeProjectId, detail, eventPageLoading]);
+
+  useEffect(() => {
+    setSelectedId('');
+    setDetail(null);
+    setTraces([]);
+  }, [activeProjectId]);
 
   useEffect(() => {
     if (!active) return;

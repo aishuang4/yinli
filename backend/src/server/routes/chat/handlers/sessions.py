@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 
 from src.server.routes.chat.models import ChatSession, StoredChatMessage
 from src.server.routes.chat.router import router
@@ -12,10 +12,13 @@ from src.server.routes.chat.team_runtime.maintenance import (
     recover_team_snapshot,
 )
 from src.server.routes.chat.team_runtime.store import TeamStoreError
+from src.storage.database import DEFAULT_PROJECT_ID
 
 
 @router.get("/sessions")
-async def list_sessions() -> list[ChatSession]:
+async def list_sessions(
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> list[ChatSession]:
     """
     获取会话列表
 
@@ -23,23 +26,49 @@ async def list_sessions() -> list[ChatSession]:
         list[ChatSession]: 会话列表
     """
     store = _load_store()
+    return sorted(
+        [session for session in store.sessions if session.project_id == project_id],
+        key=lambda item: item.updated_at,
+        reverse=True,
+    )
+
+
+@router.get("/sessions/catalog")
+async def list_session_catalog() -> list[ChatSession]:
+    """列出全部工作上下文中的会话，用于按 Workspace / Project 构建历史目录。"""
+
+    store = _load_store()
     return sorted(store.sessions, key=lambda item: item.updated_at, reverse=True)
 
 
 @router.get("/sessions/{session_id}/messages")
-async def list_session_messages(session_id: str) -> list[dict[str, Any]]:
+async def list_session_messages(
+    session_id: str,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> list[dict[str, Any]]:
     """获取指定会话的消息列表"""
     store = _load_store()
-    if session_id not in store.messages:
+    session = next(
+        (item for item in store.sessions if item.id == session_id and item.project_id == project_id),
+        None,
+    )
+    if session is None or session_id not in store.messages:
         raise HTTPException(status_code=404, detail="Session not found")
     return _normalize_history_messages(store.messages[session_id])
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
-async def delete_session(session_id: str) -> None:
+async def delete_session(
+    session_id: str,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> None:
     """删除指定会话及消息"""
     store = _load_store()
-    if session_id not in store.messages:
+    session = next(
+        (item for item in store.sessions if item.id == session_id and item.project_id == project_id),
+        None,
+    )
+    if session is None or session_id not in store.messages:
         raise HTTPException(status_code=404, detail="Session not found")
 
     try:

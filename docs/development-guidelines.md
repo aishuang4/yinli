@@ -155,7 +155,7 @@ rg -n "<(Input|Select|DatePicker|Switch|Slider|InputNumber|textarea|input|select
 - API 路由按领域放在 `backend/src/server/routes/`。
 - Chat 复杂链路继续按 `routes/chat/handlers`、`runtime`、`team`、`store` 拆分，避免单文件膨胀。
 - AgentScope 运行时构造统一走 `backend/src/agents/factory.py`；类型定义和模型创建分别维护在 `runtime_types.py`、`model_factory.py`，不要重新塞回 factory。
-- Plan Runtime 与 Subagent Runtime 已下线，重新设计前不要在旧兼容字段或旧事件上继续扩展。
+- 旧独立 Plan Runtime（`runtime.kind=plan`）与旧独立 Subagent Runtime（`runtime.kind=subagent`）已下线，不得在旧路由、旧兼容字段或旧事件上继续扩展。当前 Plan Mode middleware 与 `DelegateTask` Subagent 委托仍在线，新增能力必须沿 ReAct 内部增强链路推进。
 - Chat 应用级状态统一使用 `RUNTIME_EVENT` 包装，事件类型定义集中在 `backend/src/server/routes/chat/event_types.py` 和 `frontend/src/types/chatEvents.ts`。
 - 新功能必须定义自己的事件家族；Team 状态只能使用顶层 `TEAM_EVENT`，不得塞入通用 `RUNTIME_EVENT` 或单 Agent `DisplaySnapshot`。
 - Chat SSE 事件新增或语义变更前，先更新 `docs/chat-sse-event-contract.md`，再改后端发送和前端消费。

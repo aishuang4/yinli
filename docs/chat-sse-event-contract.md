@@ -14,7 +14,7 @@
 - 新功能必须定义独立 Runtime Event 家族，不允许混用其他功能事件。例如后续重设计记忆时使用新的 `MEMORY_*` 语义，产物使用 `ARTIFACT_*`，沙箱使用 `SANDBOX_*`。
 - 记忆模块的详细过程审计使用 `run_events.event_type=MEMORY_AUDIT`，不作为 Chat SSE 事件发送，不驱动 Chat 页面过程展示。
 - Chat 侧只允许通过 `RUNTIME_EVENT.type=MEMORY_SKILL_GENERATING` 投影为 `RUN_STATE_PATCH.kind=notice`，展示 “Skills 生成中” 轻量提醒；payload 不得包含 Skill 内容、记忆内容、生成结果或提炼过程。
-- 旧 Plan Runtime 与旧 Subagent Runtime 已下线；新的 Plan Mode 与 Subagent 委托能力只通过本文定义的 `RUNTIME_EVENT` 契约表达，不恢复旧 runtime.kind 分支。
+- 旧独立 Plan Runtime（`runtime.kind=plan`）与旧独立 Subagent Runtime（`runtime.kind=subagent`）已下线；当前 Plan Mode middleware 与 `DelegateTask` Subagent 委托仍在线，并只通过本文定义的 `RUNTIME_EVENT` 契约表达，不恢复旧 architecture 分支。
 
 ## Chat 路由分层
 
@@ -78,7 +78,7 @@
 
 ## Plan Mode Runtime Events
 
-Plan Mode 基于 AgentScope Middleware hooks 实现，不恢复旧 Plan Runtime。所有事件都通过 `RUNTIME_EVENT` 发送，`scope` 使用 `plan`。当前 Plan Mode 只支持 `executor.kind=single_agent`；当 `executor.kind=team` 时，后端不得向 TeamRun 注入 `plan_enter`、`plan_write`、`plan_exit`、`todo_write`、`task_output` 等 Plan 控制工具。
+Plan Mode 基于 AgentScope Middleware hooks 实现，不恢复旧独立 Plan Runtime（`runtime.kind=plan`）。所有事件都通过 `RUNTIME_EVENT` 发送，`scope` 使用 `plan`。当前 Plan Mode 只支持 `executor.kind=single_agent`；当 `executor.kind=team` 时，后端不得向 TeamRun 注入 `plan_enter`、`plan_write`、`plan_exit`、`todo_write`、`task_output` 等 Plan 控制工具。
 
 Plan Mode 内部只产生 `PlanDomainEvent`；跨出 Plan middleware / Plan tools 边界前，必须统一转换为 `RUNTIME_EVENT`。前端不得依赖 middleware 内部事件结构，也不得直接解析 Plan 工具结果作为主状态来源。
 
@@ -93,11 +93,11 @@ Plan Mode 内部只产生 `PlanDomainEvent`；跨出 Plan middleware / Plan tool
 
 `steps` 使用现有 `ChatPlanStep` camelCase 字段：`id`、`planId`、`stepIndex`、`title`、`description`、`status`、`assignedAgentId`、`evidence`、`result`、`startedAt`、`completedAt`、`updatedAt`。
 
-## Subagent Runtime Events
+## Subagent Delegation Runtime Events
 
 Subagent 委托能力基于 ReAct 内部 `DelegateTask` 工具实现，不新增 `runtime.kind=subagent`。V1 只支持前台 blocking 调用：主 Agent 调用 `DelegateTask` 后，必须等待子 Agent 完成并拿到 observation，才能继续 ReAct 或输出最终答案。
 
-Subagent 定义来自 Markdown + YAML frontmatter 文件，不来自历史数据库 Subagent 配置。后端若发现历史 `callableAgents`、`subagentCalls`、旧 `runtime.kind=subagent`、旧 Subagent Runtime 事件兼容分支或对应前端入口，必须删除，不能改造成新版能力事实源。
+Subagent 定义来自 Markdown + YAML frontmatter 文件，不来自历史数据库 Subagent 配置。后端若发现历史 `callableAgents`、`subagentCalls`、旧 `runtime.kind=subagent`、旧独立 Subagent Runtime 事件兼容分支或对应前端入口，必须删除，不能改造成新版能力事实源。
 
 | type | status | payload |
 | --- | --- | --- |
@@ -175,7 +175,7 @@ V1 的 Chat 主界面不展示子 Agent 完整 transcript，也不铺开完整�
 RunState 稳定字段：
 
 - `version`：状态版本，当前为 `2`。
-- `runId`、`sessionId`、`agentId`、`agentName`、`mode`、`task`。Team 模式下 `agentId/agentName` 表示本轮 Leader。
+- `runId`、`sessionId`、`workspaceId`、`projectId`、`agentId`、`agentName`、`mode`、`task`。Team 模式下 `agentId/agentName` 表示本轮 Leader；归属字段用于刷新恢复时保持 Project 隔离。
 - `status`：`running|waiting_user|waiting_permission|waiting_external|completed|failed|cancelled|cancelling`；历史快照可能仍为 `waiting`。
 - `currentStage`：面向用户的当前阶段。
 - `reasoning`、`reasoningTruncated`：ReAct 过程文本。可截断。
@@ -288,7 +288,7 @@ type DisplayItem = {
 - `feedback`：当前等待用户处理的人机交互，使用 `data.approval`。只放当前等待项，不保留历史已完成项。
 - `answer`：最终答案展示，使用 `data.content`。没有 `FinalAnswerStart` 时，后端不得把 reasoning 兜底复制成最终答案；如果 Agent 流自然结束但没有产生最终答案，后端可以先执行一次受限 Final Answer Recovery，恢复轮必须重新生成 `FINAL_ANSWER_DELTA`。恢复失败后必须发送 `RUN_FAILED` 和 `ERROR`，并投影为 `error` 展示块，常见原因包括达到最大 ReAct 迭代次数。
   如果模型误把阻塞性的补充信息请求当作普通最终答案输出，后端必须把该自然语言反问转换为 `CLARIFICATION_REQUIRED`，发送 `displayEvent(block=answer, op=remove)` 清理误发答案，再发送 AskUser `process` 项和 `feedback` 块进入等待态。
-- `files`：生成文件下载，使用 `data.files`，每项至少包含 `path`、`name`、`extension`。
+- `files`：生成文件下载，使用 `data.files`，每项至少包含 `path`、`name`、`extension`。`ARTIFACT_CREATED/UPDATED` 只更新 RunState 和 Trace 中的产物事实，不得在工具结束时立即发送下载展示事件；只有成功的 `RUN_COMPLETED` 在最终答案完成后才能发布 `files` block。运行中、等待、失败或取消状态均不显示下载入口，刷新后的终态快照必须保持相同语义。
 - `error`：错误展示块，使用 `data.message` 或 `data.error`。
 
 当前前端登记的事件名集中维护在 `frontend/src/types/displayEvents.ts`。新增事件时先扩展该文件，再更新本文档、后端 Pydantic schema、前端 projector 和测试矩阵。

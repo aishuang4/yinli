@@ -15,7 +15,7 @@ Agent Workstation 的 Subagent 采用“文件定义 + ReAct 内部委托”的�
 
 旧 `runtime.kind=subagent` 不恢复，历史 Subagent 配置入口也不复用。新的 Subagent 能力只从文件定义加载。
 
-如果后续实现过程中遇到历史 Subagent Runtime、旧 Agent Builder callable agent、旧 `subagentCalls` 消息字段、旧 `callableAgents` / `maxDepth` API 字段、旧 `runtime.kind=subagent` 分支、旧 `SUBAGENT_*` 事件兼容代码或对应前端入口，必须删除，不能改造成新版能力，也不能继续补兼容逻辑。历史 SQLite 开发库只允许保留启动所需的最小 schema 兼容，且不得暴露为当前 API / UI / Runtime 事实源。
+如果后续实现过程中遇到旧独立 Subagent Runtime（`runtime.kind=subagent`）、旧 Agent Builder callable agent、旧 `subagentCalls` 消息字段、旧 `callableAgents` / `maxDepth` API 字段、旧 `SUBAGENT_*` 事件兼容代码或对应前端入口，必须删除，不能改造成新版能力，也不能继续补兼容逻辑。此处不包括当前 ReAct 内的 `DelegateTask` 委托及其 `SUBAGENT_*` 稳定事件。历史 SQLite 开发库只允许保留启动所需的最小 schema 兼容，且不得暴露为当前 API / UI / Runtime 事实源。
 
 这条路线和当前架构一致：
 
@@ -67,7 +67,7 @@ V1.0 不做：
 - 不支持嵌套 Subagent，后续优先参考官方深度限制，再补 AW 的权限继承、Trace 树和防循环策略。
 - 不支持 fork 当前完整会话，后续作为实验能力补齐。
 - 不支持 worktree 隔离写入，后续按 `isolation: worktree` 语义补齐。
-- 不新增 Subagent Runtime 分支。
+- 不新增 `runtime.kind=subagent` 独立分支；当前 `DelegateTask` 委托继续作为 ReAct 内部能力演进。
 - 不将旧 Subagent 配置入口改造成新能力入口。
 
 这些能力进入实现时，以官方设计为首选方案；只有在数据契约、权限语义、测试矩阵和 UI 恢复都稳定后，才进入对应版本。

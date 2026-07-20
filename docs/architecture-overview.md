@@ -1,12 +1,12 @@
 # Agent Workstation 当前架构总览
 
-> 状态：2026-07-14 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
+> 状态：2026-07-15 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
 
 ## 项目定位
 
 Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。用户在 Chat 中选择单个 Agent 或 Team 执行任务，运行时支持 MCP、Skills、HTTP 工具、权限控制、HITL、Trace、容器沙箱和新记忆系统 MVP。
 
-旧记忆模块、旧 Plan Runtime、旧 Subagent Runtime 已下线，不能继续扩展旧链路。旧 Subagent 字段、配置入口、事件兼容分支和前端入口不得作为当前 API / UI / Runtime 事实源保留；历史 SQLite 开发库只允许保留启动所需的最小兼容。当前记忆能力是新方案：通过运行前上下文注入、运行后 `MemoryAdmissionGate` 准入、后台提炼、历史记忆（底层 `memory_nodes`）和 memory tools 接入 ReAct，不新增 `memory` runtime.kind。
+旧记忆模块、旧独立 Plan Runtime（`runtime.kind=plan`）和旧独立 Subagent Runtime（`runtime.kind=subagent`）已下线，不能继续扩展旧链路。这里删除的是独立 architecture / 路由分支，不是当前能力：Plan Mode 仍通过 middleware 接入单 Agent ReAct，Subagent 仍通过 `DelegateTask` 接入 ReAct。旧 Subagent 字段、配置入口、事件兼容分支和前端入口不得作为当前 API / UI / Runtime 事实源保留；历史 SQLite 开发库只允许保留启动所需的最小兼容。当前记忆能力是新方案：通过运行前上下文注入、运行后 `MemoryAdmissionGate` 准入、后台提炼、历史记忆（底层 `memory_nodes`）和 memory tools 接入 ReAct，不新增 `memory` runtime.kind。
 
 新版 Subagent M1 和部分 M2 已作为 ReAct 内部委托能力上线：Subagent 定义来自 Markdown + YAML frontmatter 文件，主 Agent / Team Leader 通过 `DelegateTask` 前台委托 fresh-context 子 Agent，结果摘要回到主 Agent，完整过程进入 Trace 和 `subagent_invocations` 审计，不新增 `runtime.kind=subagent`。
 
@@ -20,7 +20,7 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 
 ## Chat 核心链路
 
-1. `routes/chat/handlers/send.py` 接收用户消息、落库、创建后台 Run，并编排 SSE。
+1. `routes/chat/handlers/send.py` 接收用户消息，先按 `project_id` 解析 `RuntimeContext`，再落库、创建后台 Run 并编排 SSE。
 2. `readiness_gate.py` 只做进入 Runtime 前的轻量启动判断；业务信息缺口交给主 Agent 在 ReAct 内通过 `AskUser` 外部工具暂停并恢复。
 3. `intent_router.py` 只决定第一层 architecture。当前在线值为 `react`。
 4. 请求中的显式 `mode` 决定第二层 executor：`agent` 为 `single_agent`，`team` 为 `team`。
@@ -31,6 +31,19 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 9. `leader_stream.py` 消费 AgentScope `reply_stream()`，转换文本、工具、权限、Plan Mode、Skill 和 HITL 事件。
 10. `completion.py` 完成消息落库、Trace、Skill 状态和错误收尾，并在轻量 `MemoryAdmissionGate` 后触发 Markdown 记忆提炼和历史记忆持久化。
 11. `background_runs.py` 将后台 Run 与前端 SSE 订阅解耦，并维护 RunState。
+
+## Workspace / Project
+
+当前归属关系固定为 `Workspace -> Project -> Session -> Run`：Workspace 是资源和策略边界，Project 是目录、上下文和运行数据边界。
+
+- 启动时创建 `default` Workspace / Project，并回填历史资源和运行记录。
+- Chat 请求只传 `project_id`；Workspace 必须由 Project 反查，现有 Session 不允许跨 Project 继续。
+- `runtime_context.py` 在 Runtime 创建前解析 Project root、instructions 和 ownership。
+- Project root 与 Agent filesystem scope 取交集；不相交时拒绝执行。
+- TeamRun、Subagent invocation、Memory、Trace 和 RunState 继承父运行归属。
+- Project resource binding 已作为运行时白名单参与 Agent、Skill、MCP Server 和 HTTP Tool 裁剪；资源必须属于 Project 所在 Workspace，Project 只能收窄 Agent 配置。
+- 前端使用统一 Workspace / Project 上下文；Chat、Runs、Trace、Memory 和资源管理按当前上下文筛选，切换 Project 时清理 Chat 与 Team 运行投影。
+- Workspace 与首个 Project 通过 bootstrap API 原子创建；正式 Artifact ownership 留在 Artifact Phase。
 
 ## Team Runtime
 
@@ -99,6 +112,10 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 - `chat_run_states`
 - `run_events`
 - `memory_nodes`
+- `workspaces`
+- `projects`
+- `project_resource_bindings`
+- `subagent_invocations`
 
 历史开发库可能仍有 `memory_facts`、`memory_events`、`memory_candidates`，但旧记忆模块已删除，不再代表当前运行时能力。
 
@@ -109,6 +126,7 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 - Agent 运行时由 `agents/factory.py` 统一创建和缓存。
 - 工具范围由 `RuntimeToolScope` 与 `tool_scope_resolver.py` 控制。
 - 权限策略由 guardrails 归一化为统一权限模型，再映射到 AgentScope permission mode、工具注入和 Trace。
+- `WebFetch` 是独立的只读公开网页工具：只接收已知 HTTP(S) URL，逐次校验重定向目标，拒绝私网、本机、保留地址、URL 凭据、超大响应和非文本内容，并把网页正文标记为不可信外部数据。它不复用 `HttpRequest` 的通用 API 语义，也不提供 WebSearch。
 
 ## 前端入口
 

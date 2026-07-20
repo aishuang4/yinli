@@ -1,6 +1,6 @@
 # Agent Workstation TODO
 
-> 最后更新：2026-07-14。本文只保留尚未完成的任务。
+> 最后更新：2026-07-17。本文只保留尚未完成的任务。
 
 ## P0. Runtime 稳定性
 
@@ -20,11 +20,9 @@
 
 ### Workspace / Project
 
-- [ ] 按 `docs/workspace-project-design.md` 完成 Phase 0：Schema、默认 Workspace / Project 和历史数据回填。
-- [ ] 完成 Phase 1：统一 RuntimeContext，Chat、TeamRun、Subagent、Memory、Trace 和 Artifact 继承 Project 归属。
-- [ ] 完成 Project resource binding，按 Workspace policy、Project policy、Agent config 和 Run grant 交集裁剪权限。
-- [ ] 增加跨 Project 数据、文件路径、Memory 和资源绑定隔离测试。
-- [ ] 最后接入 Workspace / Project 前端上下文切换，禁止只做 UI 假隔离。
+- [ ] 在现有数据、文件路径、Memory 和资源绑定隔离测试基础上，补浏览器级跨 Project 隔离测试。
+- [ ] 为资源创建与 Project binding 增加后端事务接口，避免绑定失败时留下未授权资源。
+- [ ] 评估并收紧资源详情、更新和删除 API 的 Workspace ownership 校验。
 
 ### Artifact
 
@@ -40,6 +38,7 @@
 - [ ] Trace 增加权限审计筛选、工具结果大小和截断标记。
 - [ ] 对 Bash / Write / Edit 的文件变更记录补可靠性测试。
 - [ ] 完善 HTTP 工具请求预览、响应提取、错误摘要和脱敏展示。
+- [ ] 在 WebFetch 稳定后增加 WebSearch provider 抽象，首批支持 SearXNG 和一个正式云端供应商，并建立来源引用契约。
 - [ ] MCP 调用加强 Secret 脱敏、超时和错误提示。
 - [ ] Skills 补等待用户、失败恢复、产物路径和引用资源状态。
 

@@ -6,6 +6,7 @@ import { Button, Tag } from '@agentscope-ai/design';
 import { TextAreaField } from '../../components/form';
 import { notifyError } from '../../utils/feedback';
 import type { TeamConsoleState, TeamDomainEvent, TeamMemberRecord, TeamTaskRecord } from '../../types/teamRuntime';
+import { useAppStore } from '../../stores/appStore';
 
 type ConsoleTab = 'tasks' | 'mailbox' | 'events';
 
@@ -16,6 +17,7 @@ export function TeamConsolePanel({
   state: TeamConsoleState;
   onClose?: () => void;
 }) {
+  const activeProjectId = useAppStore((appState) => appState.activeProjectId);
   const snapshot = state.snapshot;
   const [selectedMemberId, setSelectedMemberId] = useState('leader');
   const [tab, setTab] = useState<ConsoleTab>('tasks');
@@ -54,7 +56,8 @@ export function TeamConsolePanel({
     if (!content || !recipient) return;
     setSending(true);
     try {
-      const response = await fetch(`/api/chat/runs/${snapshot.run.chatRunId}/team/mail`, {
+      const params = new URLSearchParams({ projectId: activeProjectId });
+      const response = await fetch(`/api/chat/runs/${snapshot.run.chatRunId}/team/mail?${params.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ recipient, content }),

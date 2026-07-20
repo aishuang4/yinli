@@ -26,6 +26,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('get-app-version'),
 
   /**
+   * 选择 Project 工作目录，名称和绝对路径由 Electron 主进程返回
+   */
+  selectProjectDirectory: (): Promise<{ canceled: boolean; path?: string; name?: string }> => (
+    ipcRenderer.invoke('select-project-directory')
+  ),
+
+  /**
    * 在系统文件管理器中打开一个本地文件夹或文件位置
    */
   openPath: (targetPath: string): Promise<{ ok: boolean; error?: string }> => (

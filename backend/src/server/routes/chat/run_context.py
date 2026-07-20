@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.config.runtime_settings import get_effective_model_settings
+from src.project_resources import ProjectResourceAccess, resolve_project_resource_access
+from src.runtime_context import RuntimeContext, load_project_instructions
 from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
 from src.server.routes.agents import get_registered_agent
 from src.server.routes.chat.intent_router import IntentRoute, route_chat_message, route_chat_message_with_model
@@ -22,6 +24,7 @@ from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
     _build_runtime_knowledge_tools,
     _build_runtime_mcp_servers,
+    scope_guardrails_to_project,
 )
 from src.server.routes.chat.readiness_gate import ReadinessDecision, check_message_readiness_with_model
 from src.server.routes.chat.runtime_builder import (
@@ -45,6 +48,7 @@ class ChatRunContext:
     """send.py 执行主流程所需的上下文。"""
 
     session_id: str
+    runtime_context: RuntimeContext
     agent_id: str
     agent_name: str
     agent_config: Any | None
@@ -64,14 +68,22 @@ class ChatRunContext:
     runtime_tool_scope: Any
     mcp_servers: list[Any]
     knowledge_tools: list[Any]
+    project_resources: ProjectResourceAccess | None = None
 
 
-async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
+async def build_chat_run_context(
+    run_data: ChatMessage,
+    runtime_context: RuntimeContext,
+) -> ChatRunContext:
     """构建单轮 Chat 运行上下文。"""
 
     session_id = run_data.session_id or ""
     agent_id = run_data.agent_id or "default"
     agent_config = get_registered_agent(agent_id)
+    project_resources = resolve_project_resource_access(runtime_context)
+    project_resources.require_agent(agent_id)
+    if agent_id != "default" and agent_config is None:
+        raise ValueError(f"Agent 配置不存在: {agent_id}")
     agent_name = run_data.agent_name or (agent_config.name if agent_config else "Assistant")
     base_system_prompt = (
         run_data.system_prompt
@@ -80,7 +92,12 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
     )
     persist_run = not run_data.sandbox
 
-    skill_ids = agent_config.skills if agent_config and not run_data.skill_ids else run_data.skill_ids
+    configured_skill_ids = list(agent_config.skills if agent_config else run_data.skill_ids)
+    requested_skill_ids = set(run_data.skill_ids or configured_skill_ids)
+    skill_ids = project_resources.filter_ids(
+        "skill",
+        [skill_id for skill_id in configured_skill_ids if skill_id in requested_skill_ids],
+    )
     runtime_model_settings = get_effective_model_settings()
     runtime_model_config = build_runtime_model_config(
         run_data=run_data,
@@ -113,6 +130,10 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
     if readiness.ready:
         active_skill_run = get_active_session_skill_run(session_id, agent_id)
         active_skill = get_skill_for_run(active_skill_run)
+        if active_skill and active_skill.id not in project_resources.skill_ids:
+            raise ValueError(
+                f"Skill {active_skill.id} 已从 Project {runtime_context.project_id} 移除，不能继续当前 Skill Run。",
+            )
         if active_skill_run and active_skill_run.get("status") == "waiting_user" and persist_run:
             active_skill_run = update_skill_run_status(
                 active_skill_run,
@@ -145,6 +166,8 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
             MemoryRetrievalContext(
                 agent_id=agent_id,
                 agent_name=agent_name,
+                workspace_id=runtime_context.workspace_id,
+                project_id=runtime_context.project_id,
             ),
         )
         if readiness.ready
@@ -154,6 +177,7 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
         part
         for part in [
             base_system_prompt,
+            _build_project_context_prompt(runtime_context),
             _build_runtime_context_prompt(),
             intent_route.main_agent_instruction,
             _build_conversation_history_prompt(session_id),
@@ -166,7 +190,10 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
         if part
     )
 
-    guardrails = _build_runtime_guardrails(agent_config)
+    guardrails = scope_guardrails_to_project(
+        _build_runtime_guardrails(agent_config),
+        runtime_context.project_root,
+    )
     runtime_tool_scope = resolve_react_runtime_tool_scope(
         message=run_data.message,
         agent_config=agent_config,
@@ -176,6 +203,8 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
     )
     return ChatRunContext(
         session_id=session_id,
+        runtime_context=runtime_context,
+        project_resources=project_resources,
         agent_id=agent_id,
         agent_name=agent_name,
         agent_config=agent_config,
@@ -193,6 +222,29 @@ async def build_chat_run_context(run_data: ChatMessage) -> ChatRunContext:
         system_prompt=system_prompt,
         guardrails=guardrails,
         runtime_tool_scope=runtime_tool_scope,
-        mcp_servers=_build_runtime_mcp_servers(agent_config),
-        knowledge_tools=_build_runtime_knowledge_tools(agent_config),
+        mcp_servers=_build_runtime_mcp_servers(
+            agent_config,
+            allowed_server_ids=project_resources.mcp_server_ids,
+        ),
+        knowledge_tools=_build_runtime_knowledge_tools(
+            agent_config,
+            allowed_tool_ids=project_resources.http_tool_ids,
+        ),
     )
+
+
+def _build_project_context_prompt(runtime_context: RuntimeContext) -> str:
+    """构造 Project root 和项目说明提示。"""
+
+    instructions = load_project_instructions(runtime_context)
+    parts = [
+        "# Project Context",
+        f"Workspace ID: {runtime_context.workspace_id}",
+        f"Project ID: {runtime_context.project_id}",
+        f"Project name: {runtime_context.project_name}",
+        f"Project root: {runtime_context.project_root}",
+        "All file operations must remain within the effective project filesystem scope.",
+    ]
+    if instructions:
+        parts.extend(["", "## Project Instructions", instructions])
+    return "\n".join(parts)

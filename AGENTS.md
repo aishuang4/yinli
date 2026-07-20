@@ -43,11 +43,11 @@ npm run lint     # eslint
 
 `backend/src/server/main.py` 注册所有路由，前缀均为 `/api/*`。关键路径是对话流：
 
-1. **`routes/chat/handlers/send.py`** — `POST /api/chat/send` 是 Chat SSE 统一入口，只负责请求读取、用户消息写入、后台 Run 启动、前置错误处理和 SSE 编排。Plan Runtime 与 Subagent Runtime 已下线，后续重构前不要在旧链路上继续补丁式开发。
+1. **`routes/chat/handlers/send.py`** — `POST /api/chat/send` 是 Chat SSE 统一入口，只负责请求读取、用户消息写入、后台 Run 启动、前置错误处理和 SSE 编排。已删除的是旧独立 Plan Runtime（`runtime.kind=plan`）和旧独立 Subagent Runtime（`runtime.kind=subagent`）；当前 Plan Mode 通过 middleware 接入单 Agent ReAct，当前 Subagent 通过 `DelegateTask` 接入 ReAct。后续不要在旧路由、旧字段或旧兼容事件上继续补丁式开发。
 
 2. **`routes/chat/readiness_gate.py`** — Chat 前置信息充足性判断。系统内置 `ReadinessAgent` 模型优先、规则兜底，只判断当前输入是否可以启动 Runtime；业务信息缺口交给主 Agent 在 ReAct 内通过 `AskUser` 外部工具暂停并恢复。ReadinessAgent 不选择架构、不选择 Team、不选择 Skill、不决定 ToolScope。
 
-3. **`routes/chat/intent_router.py`** — Chat 第一层架构路由。仅在 readiness 通过后运行，模型语义路由优先、规则路由兜底；当前只决定本轮进入 `react`，Plan Runtime 与 Subagent Runtime 已砍掉，不再作为路由结果。`clarification` 不是 runtime.kind，也不是新的运行时分支。它不选择 Team、不选择 Member、不选择 Skill、不决定 ToolScope。第二层 `executor` 由请求的显式 `mode` 机械决定：`mode=agent` 为 `single_agent`，`mode=team` 为 `team`。Team 模式仍选择一个 Agent 作为本轮 Leader，不选择持久 Team。路由结果写入 `INTENT_ROUTE` trace。
+3. **`routes/chat/intent_router.py`** — Chat 第一层架构路由。仅在 readiness 通过后运行，模型语义路由优先、规则路由兜底；当前只决定本轮进入 `react`，旧 `runtime.kind=plan` 与 `runtime.kind=subagent` 已删除，不再作为路由结果。Plan Mode 和 Subagent 委托都是 ReAct 内部增强，不是 architecture。`clarification` 不是 runtime.kind，也不是新的运行时分支。它不选择 Team、不选择 Member、不选择 Skill、不决定 ToolScope。第二层 `executor` 由请求的显式 `mode` 机械决定：`mode=agent` 为 `single_agent`，`mode=team` 为 `team`。Team 模式仍选择一个 Agent 作为本轮 Leader，不选择持久 Team。路由结果写入 `INTENT_ROUTE` trace。
 
 4. **`routes/chat/runtime_dispatcher.py` / `routes/chat/react_runtime.py`** — Chat Runtime 分发与 ReAct 执行入口。`runtime_dispatcher.execute_chat_runtime()` 只按第一层 `runtime.kind` 分发；当前仅 `react` 在线，信息不足时由主 Agent 在 Runtime 内调用 `AskUser`，通过 AgentScope `RequireExternalExecutionEvent` 暂停。`react_runtime.execute_react_runtime()` 再按第二层 `executor.kind` 执行：`single_agent` 直接运行主 Agent，`team` 委托全新的 `TeamRunService`，由 Leader 动态组建临时团队、Member 隔离执行、Mailbox 协作并独立综合最终答案。
 
@@ -60,15 +60,17 @@ npm run lint     # eslint
 
 8. **`routes/chat/completion.py`** — 单 Agent/综合结果成功或失败收尾。负责 Skill 状态、assistant message、trace 和 `ERROR` 等 SSE。Team 领域状态由 `team_runtime` 自己收口，不经 completion 投影。成功运行后会触发新记忆后处理：后台并行提炼 user / agent / global Markdown 记忆，调用 SkillEvolutionAgent 生成 Skill 候选，并把本轮用户输入和 Agent 最终输出持久化为历史记忆（底层 `memory_nodes`）。
 
-9. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 `agent_id` 缓存实例；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件）。工具集在 `_create_default_toolkit()` 注入：普通 Agent 默认拥有 Read/Grep/Glob/AskUser/FinalAnswerStart，Write/Edit 受权限控制；Bash/HttpRequest/知识库工具/MCP 受 `RuntimeToolScope` 裁剪。系统基础设施 Agent 可通过 `include_default_tools=False` 创建完全无工具实例。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是项目根目录，避免 Glob/Grep 扫描用户主目录）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
+9. **`runtime_context.py` / `project_resources.py`** — Workspace / Project Phase 1 + Phase 2 的统一运行归属和资源白名单。Chat 请求只传 `project_id`，后端由 Project 反查 Workspace；现有 Session 不得跨 Project 继续。`RuntimeContext` 在 Agent 创建前解析，Project root 与 Agent filesystem scope 取交集，并传递给 TeamRun、Subagent、Memory、Trace 和 RunState。Project binding 已按 Workspace 归属裁剪持久 Agent、Skill、MCP 和 HTTP Tool；Agent 配置仍是能力上限。Phase 3 已提供统一前端 Workspace / Project 上下文，Chat、Runs、Trace、Memory 和资源管理按当前上下文隔离；Artifact ownership 仍留在 Artifact Phase。
 
-10. **`agents/agentscope_usage_patch.py`** — 启动时 `patch_agentscope_usage_events()` 给 AgentScope 打补丁以捕获 usage 事件。
+10. **`agents/factory.py`** — 唯一的 AgentScope 运行时构造入口。`get_or_create_agent()` 按 `agent_id` 缓存实例；`_create_model()` 按 `adapter` 字段分发到不同 ChatModel 类；`FallbackChainModel` 是应用层多模型降级链（主模型失败逐级回退并发 `attempt`/`success`/`failure` 事件）。工具集在 `_create_default_toolkit()` 注入：普通 Agent 默认拥有 Read/Grep/Glob/AskUser/FinalAnswerStart，Write/Edit 受权限控制；Bash/HttpRequest/WebFetch/知识库工具/MCP 受 `RuntimeToolScope` 裁剪。`WebFetch` 只读取已知公开 URL，不提供 WebSearch，必须保持私网地址、URL 凭据、重定向、响应大小和非文本内容防护。系统基础设施 Agent 可通过 `include_default_tools=False` 创建完全无工具实例。`GuardedBash` 强制执行 shell 黑名单和超时。执行环境为 `LocalWorkspace`（默认工作目录是项目根目录，避免 Glob/Grep 扫描用户主目录）或 `DockerWorkspace`。改 Agent 配置后必须调 `invalidate_agent()` 让缓存失效。
+
+11. **`agents/agentscope_usage_patch.py`** — 启动时 `patch_agentscope_usage_events()` 给 AgentScope 打补丁以捕获 usage 事件。
 
 ### 持久化
 
 `backend/src/storage/database.py` 用同步 `sqlite3`（线程锁 `RLock`）封装所有存储，尽管依赖里有 `aiosqlite`。两类存储模式：
 
-- **结构化表**：`agents`、`mcp_servers`、`skills`、`chat_sessions`、`chat_messages`、`run_events`、`memory_nodes`。持久 Team 的 `teams` / `team_members` 表在启动迁移中删除；历史库中可能仍残留 `memory_facts` / `memory_events` / `memory_candidates` 表，但旧记忆模块已删除，不再作为当前运行时能力。
+- **结构化表**：`workspaces`、`projects`、`project_resource_bindings`、`agents`、`mcp_servers`、`skills`、`chat_sessions`、`chat_messages`、`chat_runs`、`run_events`、`memory_nodes`、`subagent_invocations`。启动时创建稳定的 `default` Workspace / Project 并回填历史空归属。持久 Team 的 `teams` / `team_members` 表在启动迁移中删除；历史库中可能仍残留 `memory_facts` / `memory_events` / `memory_candidates` 表，但旧记忆模块已删除，不再作为当前运行时能力。
 - **Markdown 记忆文件**：新记忆 MVP 使用 `backend/data/memory/users/user_memory.md`、`backend/data/memory/agents/agent_memory.md`、`backend/data/memory/global/global_memory.md` 作为默认文件；非默认 owner 使用 `users/{user_id}/user_memory.md`、`agents/{agent_id}/agent_memory.md`、`global/{workspace_id}/global_memory.md`。不兼容读取旧 `default.md`。
 - **向量存储**：全局 `VectorStoreBackend` 抽象支持 `disabled` 和 `zvec` provider。`VECTOR_STORE_PROVIDER` 只在首次初始化时生效，之后读取持久化 `VectorStorePolicy`；向量库只索引历史记忆底层表 `memory_nodes`，Markdown 记忆不进入向量库。
 - **`json_store` 表**：`(namespace, key) -> JSON`，用于系统设置等 Pydantic 文档。运行时模型设置存于 namespace `system_settings`、key `model`，由 `config/runtime_settings.py` 读写。
@@ -97,7 +99,7 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 - 开发必须遵循 `docs/development-guidelines.md`。该文件是正式开发规范，覆盖模块化、React/TypeScript、Python/FastAPI、SQLite、Agent Runtime、测试、Git 和文档要求。
 - 如果 `AGENTS.md` / `CLAUDE.md` 与 `docs/development-guidelines.md` 冲突，以更具体、更严格、更新的规范为准；不确定时先按 `docs/development-guidelines.md` 执行。
 - `AGENTS.md` 是开发代理记忆和项目协作规范的唯一真实来源；`CLAUDE.md` 只作为兼容入口，避免多份记忆漂移。
-- 当前已删除/下线的旧设计：旧记忆模块、Plan Runtime、Subagent Runtime。后续不要在旧字段、旧事件或旧工具链上继续补丁式开发；记忆能力只能沿当前新方案推进，通过 hooks / tools / 后处理服务接入，不新增 `memory` Runtime 分支。
+- 当前已删除/下线的旧设计：旧记忆模块、旧独立 Plan Runtime（`runtime.kind=plan`）、旧独立 Subagent Runtime（`runtime.kind=subagent`）。当前在线能力是 ReAct 内的 Plan middleware 和 `DelegateTask` Subagent 委托；不得把“删除旧独立 Runtime”误解为删除这两项当前能力。后续不要在旧字段、旧事件或旧工具链上继续补丁式开发；记忆能力只能沿当前新方案推进，通过 hooks / tools / 后处理服务接入，不新增 `memory` Runtime 分支。
 - 新记忆系统当前状态：运行前在 readiness 通过后给主 Agent / Team Leader / 临时 Member session 注入 user / agent / global Markdown 摘要和最近 30 天历史记忆索引；普通 Agent 默认有 `memory_node_tree` / `memory_node_query`，查询会合并向量候选与 SQLite 关键词结果，按查询词命中、向量分数、结构化反馈分、置顶、置信度、使用次数和日期轻量重排，并写入 `MEMORY_AUDIT`，记录 query、filters、resultCount、命中 nodeId 和 retrievalQuality 质量指标；召回命中相关性反馈写入 `memory_retrieval_feedback` 表并同步写 `MEMORY_AUDIT` 追溯。运行后先经过 `MemoryAdmissionGate`，再后台提炼 Markdown 记忆并持久化历史记忆。`MemoryAdmissionGate` 已支持规则评分、可选模型评分、持久化阈值、可编辑设置、审计 payload、脱敏摘要和脱敏类型统计；Markdown 写入已支持近似去重、敏感信息过滤、冲突合并、失败重试和 `# Summary` 压缩摘要。Skill 自进化已有 router gate、workflow evidence、颗粒度控制、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和手动触发流；Memory Wiki 同步器可手动生成 `backend/data/memory/wiki/` 只读 Obsidian-compatible 视图，并生成 `entities/` 实体索引和 `entities/graph.md` 共现图；Memory 页面已支持 Markdown 记忆、历史记忆禁用 / 删除 / 恢复、Skill 自进化队列操作、注册失败原因可视化、Wiki 同步入口、设置区和 MEMORY_AUDIT 审计详情。
 - 在本项目 AgentScope 语境中，`middleware` 按 AgentScope hooks / `MiddlewareBase` 理解；讨论 Plan Mode 等运行时增强时，优先考虑通过 middleware hooks（如 `on_system_prompt`、`on_acting`）接入，而不是恢复旧 Runtime 分支。
 - 推进 Plan Mode 任务进度能力时，固定顺序为：先核对 SQLite/Pydantic/前端 TypeScript 数据结构，再补 `todo_write` / `task_output` / `task_list` 等工具与 Runtime Event，最后和前端流式展示、审批入口、刷新恢复一起联调。

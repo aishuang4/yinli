@@ -9,8 +9,8 @@ Agent Workstation 是基于 AgentScope 2.0、Electron 和 React 的桌面 Agent 
 当前版本是 Agent Workstation 的架构升级版本，不是对旧 Runtime 的兼容性修补。本次升级重新收束了 Chat 执行链路和多 Agent 协作语义：
 
 - Team 升级为一次性 `TeamRun`，由 Leader 动态创建临时成员，通过 Task List 和 Mailbox 协作，不再选择持久 Team 或固定成员。
-- Subagent 升级为 ReAct 内部 `DelegateTask` 委托，使用独立上下文和文件定义，不恢复旧 Subagent Runtime。
-- Plan Mode 升级为 AgentScope middleware 能力，不再使用独立 Plan Runtime 或旧审批链路。
+- Subagent 升级为 ReAct 内部 `DelegateTask` 委托，使用独立上下文和文件定义，不恢复旧独立 Subagent Runtime（`runtime.kind=subagent`）。
+- Plan Mode 升级为 AgentScope middleware 能力，不再使用旧独立 Plan Runtime（`runtime.kind=plan`）或旧审批链路。
 - Memory 升级为运行前注入、工具查询和运行后提炼组合，不恢复旧 memory runtime。
 - Chat 前端升级为 RunState / DisplaySnapshot 主链路，Team 状态使用独立 `TEAM_EVENT` / `teamSnapshot`。
 
@@ -47,7 +47,7 @@ Agent Workstation 是基于 AgentScope 2.0、Electron 和 React 的桌面 Agent 
 
 ### 工具、权限与记忆
 
-- 支持 Read、Grep、Glob、Write、Edit、Bash、HTTP、MCP、知识库工具和 Skills。
+- 支持 Read、Grep、Glob、Write、Edit、Bash、HTTP、公开网页 WebFetch、MCP、知识库工具和 Skills；WebSearch 尚未接入。
 - LocalWorkspace 与 DockerWorkspace 提供本地或容器执行环境。
 - 新记忆系统通过运行前注入、memory tools、运行后准入和后台提炼接入 ReAct。
 - 历史记忆使用 SQLite `memory_nodes`，长期偏好使用 user / agent / global Markdown 文件，向量检索支持 `disabled` 和 `zvec` provider。
@@ -142,7 +142,7 @@ scripts/                 开发、打包和后端构建脚本
 - Chat 当前只有 `react` architecture；`agent` / `team` 是显式 executor mode。
 - Team 每次请求创建新的 TeamRun，不选择持久 Team，不复用上轮成员或 Mailbox。
 - Subagent 是 ReAct 内部工具委托，不恢复旧 `runtime.kind=subagent`。
-- Plan Mode 是 middleware 能力，不恢复旧 Plan Runtime 或 approve / deny 链路。
+- Plan Mode 是 middleware 能力，不恢复旧独立 Plan Runtime（`runtime.kind=plan`）或 approve / deny 链路。
 - 旧记忆模块已删除；记忆能力只能沿当前 hooks、tools 和后处理方案演进。
 - 新增或变更 Chat SSE、RunState、DisplaySnapshot 前，必须先更新稳定事件契约。
 
@@ -154,7 +154,7 @@ scripts/                 开发、打包和后端构建脚本
 - [`docs/chat-sse-event-contract.md`](docs/chat-sse-event-contract.md)：Chat / RunState / DisplaySnapshot 稳定契约。
 - [`docs/team-runtime-redesign.md`](docs/team-runtime-redesign.md)：一次性 TeamRun、Task List 与 Mailbox。
 - [`docs/subagent-delegation-design.md`](docs/subagent-delegation-design.md)：Subagent 定义和委托模型。
-- [`docs/workspace-project-design.md`](docs/workspace-project-design.md)：Workspace / Project 平台归属设计。
+- [`docs/workspace-project-design.md`](docs/workspace-project-design.md)：Workspace / Project 平台归属与上下文切换设计，Phase 0 至 Phase 3 已实现。
 - [`docs/development-guidelines.md`](docs/development-guidelines.md)：开发规范。
 - [`docs/project-todo.md`](docs/project-todo.md)：当前待办。
 

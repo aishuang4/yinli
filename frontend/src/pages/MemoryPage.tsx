@@ -21,6 +21,7 @@ import {
 } from '../features/memory/memoryViewConfig';
 import { useAgents } from '../hooks/useAgents';
 import { useMemory } from '../hooks/useMemory';
+import { useAppStore } from '../stores/appStore';
 import type {
   MarkdownMemoryDocument,
   MarkdownMemoryScope,
@@ -38,6 +39,7 @@ import type {
 } from '../types/memory';
 
 export function MemoryPage() {
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const { agents, loading: agentsLoading, refresh: refreshAgents } = useAgents();
   const {
     readMarkdownMemory,
@@ -105,10 +107,18 @@ export function MemoryPage() {
   }, [activeTab, target, selectedAgentId]);
 
   useEffect(() => {
+    setDoc(null);
+    setDraft('');
+    setNodeTree([]);
+    setNodeResults([]);
+    setSkillRecords([]);
+    setAuditEvents([]);
+    setWikiGraph(null);
+    setWikiResult(null);
     void loadNodes();
     void loadSkillQueue();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeProjectId]);
 
   useEffect(() => {
     if (activeTab === 'wiki' && !wikiGraph && !wikiGraphLoading) {

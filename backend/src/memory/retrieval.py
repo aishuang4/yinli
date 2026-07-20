@@ -15,7 +15,7 @@ class MemoryRetrievalContext:
     agent_id: str
     agent_name: str
     workspace_id: str = "default"
-    project_id: str = ""
+    project_id: str = "default"
     user_id: str = "default"
     include_user_markdown: bool = True
     include_agent_markdown: bool = True

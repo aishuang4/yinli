@@ -179,6 +179,8 @@ class RunStateSnapshot(BaseModel):
     version: int = 2
     runId: str = ""
     sessionId: str = ""
+    workspaceId: str = "default"
+    projectId: str = "default"
     agentId: str = ""
     agentName: str = ""
     mode: str = "agent"

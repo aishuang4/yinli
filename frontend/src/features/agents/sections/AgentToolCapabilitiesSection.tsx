@@ -144,7 +144,7 @@ export function AgentToolCapabilitiesSection({
       <div className="space-y-4">
         <FormField label="默认工具（已锁定）">
           <div className="flex flex-wrap gap-2">
-            {['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'HttpRequest'].map((tool) => (
+            {['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'HttpRequest', 'WebFetch'].map((tool) => (
               <Tag key={tool} color="transparent" size="small">
                 {tool}
               </Tag>

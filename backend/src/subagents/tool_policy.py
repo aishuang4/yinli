@@ -109,6 +109,8 @@ def _parent_available_tools(
             tools.add("Bash")
         if tool_scope.allow_http:
             tools.add("HttpRequest")
+        if tool_scope.allow_web:
+            tools.add("WebFetch")
         if tool_scope.allow_knowledge:
             tools.update(_knowledge_tool_names(knowledge_tools or []))
         if tool_scope.allow_mcp:

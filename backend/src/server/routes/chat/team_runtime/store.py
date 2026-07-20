@@ -60,6 +60,8 @@ class TeamStore:
         goal: str,
         leader_agent_id: str,
         leader_name: str,
+        workspace_id: str = "default",
+        project_id: str = "default",
         root: Path | None = None,
     ) -> "TeamStore":
         """创建全新的 TeamRun。"""
@@ -79,6 +81,8 @@ class TeamStore:
             "id": team_run_id,
             "sessionId": session_id,
             "chatRunId": chat_run_id,
+            "workspaceId": workspace_id,
+            "projectId": project_id,
             "goal": goal,
             "status": "running",
             "phase": "created",

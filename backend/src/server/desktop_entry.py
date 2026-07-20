@@ -7,6 +7,7 @@
 
 import argparse
 import os
+from pathlib import Path
 
 import uvicorn
 
@@ -19,6 +20,9 @@ def main() -> None:
     args = parser.parse_args()
 
     os.environ.setdefault("AGENT_WORKSTATION_DESKTOP_MODE", "1")
+    data_dir = Path(os.environ.get("AGENT_WORKSTATION_DATA_DIR", ".")).expanduser().resolve()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    os.chdir(data_dir)
     uvicorn.run(
         "src.server.main:app",
         host=args.host,

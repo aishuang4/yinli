@@ -12,11 +12,11 @@ import shutil
 import zipfile
 from io import BytesIO
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 from urllib.parse import quote
 
 import yaml
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -56,6 +56,7 @@ class Skill(BaseModel):
     enabled: bool = False
     installed_at: Optional[str] = Field(default=None, alias="installedAt")
     updated_at: str = Field(alias="updatedAt")
+    workspace_id: str = Field(default="default", alias="workspaceId")
 
     model_config = {"populate_by_name": True}
 
@@ -75,6 +76,9 @@ class SkillRegisterRequest(BaseModel):
     trigger: str = Field(default="", max_length=200)
     content: str = Field(default="", max_length=12000)
     tags: list[str] = Field(default_factory=list)
+    workspace_id: str = Field(default="default", alias="workspaceId")
+
+    model_config = {"populate_by_name": True}
 
 
 def _utc_now() -> str:
@@ -501,6 +505,7 @@ def register_user_skill(data: SkillRegisterRequest) -> Skill:
             "enabled": True,
             "installedAt": now,
             "updatedAt": now,
+            "workspaceId": data.workspace_id,
         }
     )
     _skills[skill.id] = skill
@@ -673,11 +678,16 @@ async def list_skills(
     q: str = "",
     category: str = "",
     installed: Optional[bool] = None,
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
 ) -> list[Skill]:
     """获取 Skill 列表，支持搜索、分类和安装状态筛选。"""
 
     query = q.strip().lower()
-    result = list(_skills.values())
+    result = [
+        skill
+        for skill in _skills.values()
+        if skill.id in _builtin_skills or skill.workspace_id == workspace_id
+    ]
 
     if query:
         result = [
@@ -710,13 +720,17 @@ async def list_skill_categories() -> list[str]:
 
 
 @router.get("/enabled", response_model=list[Skill])
-async def list_enabled_skills() -> list[Skill]:
+async def list_enabled_skills(
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
+) -> list[Skill]:
     """获取已安装并启用的 Skills，用于 Agent 配置选择。"""
 
     return [
         skill
         for skill in _skills.values()
-        if skill.status == "installed" and skill.enabled
+        if skill.status == "installed"
+        and skill.enabled
+        and (skill.id in _builtin_skills or skill.workspace_id == workspace_id)
     ]
 
 
@@ -728,7 +742,10 @@ async def register_skill(data: SkillRegisterRequest) -> Skill:
 
 
 @router.post("/import", response_model=Skill, status_code=201)
-async def import_skill_archive(file: UploadFile = File(...)) -> Skill:
+async def import_skill_archive(
+    file: UploadFile = File(...),
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
+) -> Skill:
     """导入标准 Skill zip 包，读取 SKILL.md 并注册为已安装启用的 Skill。"""
 
     filename = file.filename or ""
@@ -749,7 +766,9 @@ async def import_skill_archive(file: UploadFile = File(...)) -> Skill:
             skill_path,
             draft_skill.name,
         )
-        skill = _skill_from_markdown(skill_path, markdown, resource_path, resources)
+        skill = _skill_from_markdown(skill_path, markdown, resource_path, resources).model_copy(
+            update={"workspace_id": workspace_id},
+        )
         _skills[skill.id] = skill
         _save_user_skills()
         return skill

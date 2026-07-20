@@ -15,6 +15,8 @@ import type {
   ModelsResponse,
 } from '../types/agent';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
+import { useAppStore } from '../stores/appStore';
+import { bindProjectResource } from '../utils/projectResources';
 
 /** Hook 返回值 */
 interface UseAgentsReturn {
@@ -42,6 +44,7 @@ interface UseAgentsReturn {
 /** API 响应中的 Agent（snake_case） */
 interface AgentApiData {
   id: string;
+  workspaceId?: string;
   name: string;
   avatar: string;
   description: string;
@@ -95,6 +98,7 @@ interface AgentApiData {
 function mapApiAgent(api: AgentApiData): Agent {
   return {
     id: api.id,
+    workspaceId: api.workspaceId ?? 'default',
     name: api.name,
     avatar: api.avatar,
     description: api.description,
@@ -146,6 +150,7 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
   const result: Record<string, unknown> = {};
 
   if ('name' in data && data.name !== undefined) result.name = data.name;
+  if ('workspaceId' in data && data.workspaceId !== undefined) result.workspaceId = data.workspaceId;
   if ('avatar' in data && data.avatar !== undefined) result.avatar = data.avatar;
   if ('description' in data && data.description !== undefined) result.description = data.description;
   if ('systemPrompt' in data && data.systemPrompt !== undefined) result.system_prompt = data.systemPrompt;
@@ -206,6 +211,8 @@ function profileFromLegacyToolMode(mode: string | undefined): 'read_only' | 'tru
  * useAgents Hook
  */
 export function useAgents(): UseAgentsReturn {
+  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [models, setModels] = useState<ModelsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -216,16 +223,16 @@ export function useAgents(): UseAgentsReturn {
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch('/api/agents');
+      const res = await fetch(`/api/agents?workspaceId=${encodeURIComponent(activeWorkspaceId)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: AgentApiData[] = await res.json();
-      setAgents(data.map(mapApiAgent));
+      setAgents(data.map(mapApiAgent).filter((agent) => agent.workspaceId === activeWorkspaceId));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load agents');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeWorkspaceId]);
 
   /** 获取可用模型列表 */
   const loadModels = useCallback(async () => {
@@ -246,7 +253,7 @@ export function useAgents(): UseAgentsReturn {
       const res = await fetch('/api/agents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mapToApiPayload(payload)),
+        body: JSON.stringify(mapToApiPayload({ ...payload, workspaceId: activeWorkspaceId })),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -254,6 +261,7 @@ export function useAgents(): UseAgentsReturn {
       }
       const data: AgentApiData = await res.json();
       const agent = mapApiAgent(data);
+      await bindProjectResource(activeProjectId, 'agent', agent.id);
       setAgents((prev) => [...prev, agent]);
       notifySuccess('Agent 创建成功');
       return agent;
@@ -261,7 +269,7 @@ export function useAgents(): UseAgentsReturn {
       notifyError(`Agent 创建失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, []);
+  }, [activeProjectId, activeWorkspaceId]);
 
   /** 更新 Agent */
   const updateAgent = useCallback(async (id: string, payload: AgentUpdatePayload): Promise<Agent> => {

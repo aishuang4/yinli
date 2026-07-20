@@ -15,6 +15,7 @@ def test_builtin_read_tools_are_allowed() -> None:
     assert is_plan_mode_tool_allowed("Read", '{"path": "README.md"}')
     assert is_plan_mode_tool_allowed("Grep", '{"pattern": "Plan"}')
     assert is_plan_mode_tool_allowed("Glob", '{"pattern": "*.py"}')
+    assert is_plan_mode_tool_allowed("WebFetch", '{"url": "https://example.com"}')
 
 
 def test_write_tools_are_denied() -> None:

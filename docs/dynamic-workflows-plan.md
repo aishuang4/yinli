@@ -466,7 +466,7 @@ ARTIFACT_CREATED
 
 ## 风险与约束
 
-- 不允许恢复旧 Plan Runtime / Subagent Runtime。
+- 不允许恢复旧独立 Plan Runtime（`runtime.kind=plan`）或旧独立 Subagent Runtime（`runtime.kind=subagent`）；Workflow 如需规划或委托能力，应复用当前 ReAct 内的 Plan middleware / `DelegateTask` 语义。
 - 不把 Workflow 塞回 Chat Runtime。
 - 不让前端依赖 LangGraph 内部事件。
 - 不让模型凭空选择不存在的 Agent / Tool / Skill。

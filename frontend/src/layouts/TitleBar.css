@@ -83,3 +83,67 @@
 .titlebar__mode-button--active svg {
   transform: translateY(-0.5px);
 }
+
+.titlebar__runtime-context {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  margin-left: 14px;
+  padding-left: 14px;
+  border-left: 1px solid var(--color-border);
+  -webkit-app-region: no-drag;
+}
+
+.titlebar__context-icon {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+}
+
+.titlebar__context-select {
+  min-width: 0;
+}
+
+.titlebar__context-select--workspace {
+  width: 150px;
+}
+
+.titlebar__context-select--project {
+  width: 180px;
+}
+
+.titlebar__context-separator {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--color-border);
+}
+
+.titlebar__context-create {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.titlebar__context-create:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+@media (max-width: 880px) {
+  .titlebar__context-select--workspace {
+    width: 112px;
+  }
+
+  .titlebar__context-select--project {
+    width: 132px;
+  }
+}

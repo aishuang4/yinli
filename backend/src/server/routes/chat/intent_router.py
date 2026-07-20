@@ -184,6 +184,7 @@ async def _run_model_intent_router(
                 allow_knowledge=False,
                 allow_bash=False,
                 allow_http=False,
+                allow_web=False,
             ),
             include_default_tools=False,
         )

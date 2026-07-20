@@ -213,7 +213,14 @@ def create_model_chain(
 ) -> ChatModelBase:
     """Create a primary + fallback chain as one AgentScope-compatible model."""
 
-    cleaned_names = [name for name in model_names if name]
+    cleaned_names: list[str] = []
+    seen_names: set[str] = set()
+    for raw_name in model_names:
+        name = str(raw_name).strip()
+        if not name or name in seen_names:
+            continue
+        seen_names.add(name)
+        cleaned_names.append(name)
     if not cleaned_names:
         raise ValueError("At least one model name is required")
     models = [

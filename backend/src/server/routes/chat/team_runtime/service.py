@@ -65,6 +65,8 @@ class TeamRunService:
                 goal=self.run_data.message,
                 leader_agent_id=self.ctx.agent_id,
                 leader_name=self.ctx.agent_name,
+                workspace_id=self.ctx.runtime_context.workspace_id,
+                project_id=self.ctx.runtime_context.project_id,
             )
             self.publisher = TeamEventPublisher(self.store)
             await register_team_service(chat_run_id, self)
@@ -121,6 +123,7 @@ class TeamRunService:
                 runtime_events=[],
                 skill_runs=self.ctx.skill_runs,
                 active_skill_run=self.ctx.active_skill_run,
+                runtime_context=self.ctx.runtime_context,
                 sandbox=self.run_data.sandbox,
             ):
                 await self.queue.put(event)

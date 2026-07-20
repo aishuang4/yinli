@@ -2,28 +2,21 @@ appId: com.agentworkstation.desktop
 productName: Agent Workstation
 artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
 directories:
-  output: ../release
+  output: ../../release
+electronDist: ../node_modules/electron/dist
+electronVersion: 42.3.3
+npmRebuild: false
 files:
-  - dist/**/*
-  - electron-dist/**/*
-  - package.json
+  - '**/*'
 extraResources:
-  - from: ../backend
-    to: backend
+  - from: ../../backend/dist
+    to: backend-server
     filter:
-      - src/**/*
-      - pyproject.toml
-      - uv.lock
-      - README.md
-      - .env.example
-      - '!**/__pycache__/**'
-      - '!**/*.pyc'
-      - '!data/**'
-      - '!.venv/**'
-      - '!.env'
+      - backend-server
+      - backend-server.exe
 asar: true
 mac:
-  identity: null
+  identity: '-'
   target:
     - dmg
     - zip

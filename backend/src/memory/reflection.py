@@ -115,7 +115,7 @@ class MemoryReflectionInput:
     assistant_text: str
     user_id: str = "default"
     workspace_id: str = "default"
-    project_id: str = ""
+    project_id: str = "default"
     team_id: str = ""
     source_run_id: str = ""
     source_message_id: str = ""

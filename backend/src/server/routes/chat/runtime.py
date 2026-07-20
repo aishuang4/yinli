@@ -1,6 +1,7 @@
 """运行时配置构建 — guardrails、权限模式、MCP/知识库工具规格、用户消息内容。"""
 
 from typing import Any
+from pathlib import Path
 
 from agentscope.message import Base64Source, DataBlock, TextBlock
 from agentscope.permission import PermissionMode
@@ -71,6 +72,37 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
     )
 
 
+def scope_guardrails_to_project(
+    guardrails: AgentGuardrails,
+    project_root: Path,
+) -> AgentGuardrails:
+    """计算 Agent 文件范围与 Project root 的交集。"""
+
+    project_path = project_root.expanduser().resolve()
+    agent_path = Path(guardrails.filesystem_scope).expanduser().resolve()
+    if project_path.is_relative_to(agent_path):
+        effective_scope = project_path
+    elif agent_path.is_relative_to(project_path):
+        effective_scope = agent_path
+    else:
+        raise ValueError(
+            f"Agent filesystem scope {agent_path} 与 Project root {project_path} 不相交。",
+        )
+    return AgentGuardrails(
+        filesystem_scope=str(effective_scope),
+        shell_blacklist=guardrails.shell_blacklist,
+        network_enabled=guardrails.network_enabled,
+        human_approval=guardrails.human_approval,
+        tool_permission_mode=guardrails.tool_permission_mode,
+        tool_permission_profile=guardrails.tool_permission_profile,
+        execution_backend=guardrails.execution_backend,
+        docker_image=guardrails.docker_image,
+        persistent_sandbox=guardrails.persistent_sandbox,
+        timeout_seconds=guardrails.timeout_seconds,
+        permission_profile=guardrails.permission_profile,
+    )
+
+
 def _profile_from_legacy_tool_mode(mode: object) -> str:
     value = str(mode or "accept_edits").strip().lower()
     if value == "ask_every_time":
@@ -89,6 +121,7 @@ def _guardrail_cache_key(guardrails: AgentGuardrails) -> str:
 
     return (
         f"{guardrails.permission_profile.cache_key()}:"
+        f"scope-{guardrails.filesystem_scope}:"
         f"legacy-mode-{guardrails.tool_permission_mode}:"
         f"legacy-profile-{guardrails.tool_permission_profile}:"
         f"exec-{guardrails.execution_backend}:"
@@ -97,10 +130,14 @@ def _guardrail_cache_key(guardrails: AgentGuardrails) -> str:
     )
 
 
-def _build_runtime_mcp_servers(agent_config: object | None) -> list[McpRuntimeSpec]:
+def _build_runtime_mcp_servers(
+    agent_config: object | None,
+    *,
+    allowed_server_ids: set[str] | frozenset[str] | None = None,
+) -> list[McpRuntimeSpec]:
     tool_ids = list(getattr(agent_config, "mcp_tools", []) or [])
     specs: list[McpRuntimeSpec] = []
-    for item in resolve_mcp_runtime_servers(tool_ids):
+    for item in resolve_mcp_runtime_servers(tool_ids, allowed_server_ids=allowed_server_ids):
         specs.append(McpRuntimeSpec(
             name=str(item.get("name") or ""),
             transport=str(item.get("transport") or ""),
@@ -112,8 +149,17 @@ def _build_runtime_mcp_servers(agent_config: object | None) -> list[McpRuntimeSp
     return specs
 
 
-def _build_runtime_knowledge_tools(agent_config: object | None) -> list[KnowledgeToolRuntimeSpec]:
-    tool_ids = list(getattr(agent_config, "knowledge_tools", []) or [])
+def _build_runtime_knowledge_tools(
+    agent_config: object | None,
+    *,
+    allowed_tool_ids: set[str] | frozenset[str] | None = None,
+) -> list[KnowledgeToolRuntimeSpec]:
+    configured_tool_ids = list(getattr(agent_config, "knowledge_tools", []) or [])
+    tool_ids = [
+        tool_id
+        for tool_id in configured_tool_ids
+        if allowed_tool_ids is None or tool_id in allowed_tool_ids
+    ]
     specs: list[KnowledgeToolRuntimeSpec] = []
     http_tool_ids: set[str] = set()
     for item in get_enabled_http_tools(tool_ids):
@@ -140,4 +186,3 @@ def _build_runtime_knowledge_tools(agent_config: object | None) -> list[Knowledg
             parameter_instructions=str(item.get("parameterInstructions") or item.get("parameter_instructions") or ""),
         ))
     return specs
-

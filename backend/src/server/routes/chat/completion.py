@@ -23,7 +23,8 @@ from src.server.routes.chat.runtime_events import runtime_event_sse
 from src.server.routes.chat.skill_runs import update_skill_run_status
 from src.server.routes.chat.store import _append_assistant_message
 from src.server.routes.chat.trace_recorder import _record_run_event, _trim_text
-from src.storage.database import get_latest_completed_user_assistant_turn
+from src.storage.database import DEFAULT_PROJECT_ID, PROJECT_ROOT, get_latest_completed_user_assistant_turn
+from src.runtime_context import RuntimeContext, resolve_runtime_context
 
 
 def missing_final_answer_error() -> str:
@@ -31,7 +32,7 @@ def missing_final_answer_error() -> str:
 
     return (
         "Agent 执行已停止，但没有产生最终答案。"
-        "可能已达到最大 ReAct 迭代次数，或模型没有调用 FinalAnswerStart 后输出最终回复。"
+        "可能已达到最大 ReAct 迭代次数，或模型没有输出可作为最终回复的文本。"
     )
 
 
@@ -123,6 +124,7 @@ async def finalize_successful_leader_run(
     runtime_events: list[dict],
     skill_runs: list[ChatSkillRun],
     active_skill_run: dict | None,
+    runtime_context: RuntimeContext | None = None,
     sandbox: bool = False,
 ) -> AsyncGenerator[str, None]:
     """完成 Leader run 成功路径的消息、trace 和 UI 事件。"""
@@ -136,6 +138,20 @@ async def finalize_successful_leader_run(
             pending_interaction_id="",
         )
     source_run_id = current_chat_background_run_id()
+    resolved_runtime_context = runtime_context
+    if resolved_runtime_context is None and persist:
+        resolved_runtime_context = resolve_runtime_context(
+            project_id=None,
+            session_id=session_id,
+            run_id=source_run_id,
+            agent_id=agent_id,
+        )
+    if resolved_runtime_context is None:
+        resolved_runtime_context = _default_runtime_context(
+            session_id=session_id,
+            run_id=source_run_id,
+            agent_id=agent_id,
+        )
     if persist:
         _append_assistant_message(
             session_id=session_id,
@@ -175,6 +191,7 @@ async def finalize_successful_leader_run(
             source_run_id=source_run_id,
             tool_calls=assistant_tool_calls,
             runtime_events=runtime_events,
+            runtime_context=resolved_runtime_context,
         )
         _schedule_memory_reflection(reflection_input, model_name=model_name, persist=persist)
         if _should_emit_skill_generating_notice(reflection_input):
@@ -197,6 +214,8 @@ async def finalize_successful_leader_run(
                     agent_name=agent_name,
                     user_message=user_message,
                     assistant_text=assistant_text,
+                    workspace_id=resolved_runtime_context.workspace_id,
+                    project_id=resolved_runtime_context.project_id,
                     source_run_id=source_run_id,
                 ),
             )
@@ -339,8 +358,15 @@ def _build_memory_reflection_input(
     source_run_id: str,
     tool_calls: list[ChatToolRun],
     runtime_events: list[dict],
+    runtime_context: RuntimeContext | None = None,
 ) -> MemoryReflectionInput:
     """构建运行后反思输入，显式 Skill 请求会切换到上一轮完成工作。"""
+
+    resolved_context = runtime_context or _default_runtime_context(
+        session_id=session_id,
+        run_id=source_run_id,
+        agent_id=agent_id,
+    )
 
     if is_manual_skill_generation_request(user_message):
         previous_turn = get_latest_completed_user_assistant_turn(
@@ -359,6 +385,8 @@ def _build_memory_reflection_input(
                 tool_calls=list(previous_turn.get("toolCalls") or []),
                 runtime_events=list(previous_turn.get("runtimeEvents") or []),
                 manual_skill_request=True,
+                workspace_id=resolved_context.workspace_id,
+                project_id=resolved_context.project_id,
             )
 
     return MemoryReflectionInput(
@@ -370,6 +398,22 @@ def _build_memory_reflection_input(
         source_run_id=source_run_id,
         tool_calls=tool_calls,
         runtime_events=runtime_events,
+        workspace_id=resolved_context.workspace_id,
+        project_id=resolved_context.project_id,
+    )
+
+
+def _default_runtime_context(*, session_id: str, run_id: str, agent_id: str) -> RuntimeContext:
+    """为不持久化运行和纯函数测试构造稳定的默认归属。"""
+
+    return RuntimeContext(
+        workspace_id="default",
+        project_id=DEFAULT_PROJECT_ID,
+        project_root=PROJECT_ROOT,
+        session_id=session_id,
+        run_id=run_id,
+        agent_id=agent_id,
+        project_name="Default Project",
     )
 
 

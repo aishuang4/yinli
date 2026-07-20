@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WorkflowEvent, WorkflowRunDetail, WorkflowRunSummary } from '../types/workflow';
+import { resolveApiUrl } from '../utils/apiUrl';
 
 interface CreateWorkflowInput {
   title?: string;
@@ -109,7 +110,7 @@ export function useWorkflowRuns() {
     eventSourceRef.current?.close();
     if (!selectedRunId) return undefined;
 
-    const source = new EventSource(`/api/workflows/${encodeURIComponent(selectedRunId)}/events`);
+    const source = new EventSource(resolveApiUrl(`/api/workflows/${encodeURIComponent(selectedRunId)}/events`));
     eventSourceRef.current = source;
     const handleEvent = (event: MessageEvent<string>) => {
       try {

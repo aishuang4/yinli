@@ -16,6 +16,7 @@ export function ChatDisplayRenderer({
   onSubmitClarification,
   onResolveHitl,
   animateStreamingText = false,
+  showGeneratedFiles = true,
   onFinalAnswerAnimationChange,
 }: {
   message: ChatDisplayMessage;
@@ -25,6 +26,7 @@ export function ChatDisplayRenderer({
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
   onResolveHitl?: ResolveHitl;
   animateStreamingText?: boolean;
+  showGeneratedFiles?: boolean;
   onFinalAnswerAnimationChange?: (isAnimating: boolean) => void;
 }) {
   const hasFinalAnswer = message.blocks.some((block) => (
@@ -77,7 +79,9 @@ export function ChatDisplayRenderer({
         }
 
         if (block.type === 'generated_files') {
-          return <GeneratedFilesBlock key={block.id} files={block.files} />;
+          return showGeneratedFiles
+            ? <GeneratedFilesBlock key={block.id} files={block.files} />
+            : null;
         }
 
         if (block.type === 'error') {

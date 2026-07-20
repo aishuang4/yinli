@@ -100,7 +100,7 @@ export function StreamingPlaceholder({ modelName }: { modelName: string }) {
       }}
     >
       <Loader2 size={14} className="animate-spin" />
-      {modelName ? `${modelName} 正在思考...` : '正在连接 Agent...'}
+      {modelName || '正在连接 Agent...'}
     </div>
   );
 }

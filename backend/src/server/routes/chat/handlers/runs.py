@@ -3,7 +3,7 @@
 import asyncio
 import json
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,7 @@ from src.server.routes.chat.lifecycle import ACTIVE_RUN_STATUSES
 from src.server.routes.chat.router import router
 from src.server.routes.chat.team_runtime.registry import get_team_service
 from src.storage.database import get_latest_user_chat_message
+from src.storage.database import DEFAULT_PROJECT_ID
 
 
 class TeamMailRequest(BaseModel):
@@ -31,10 +32,24 @@ class TeamMailRequest(BaseModel):
     content: str = Field(min_length=1, max_length=20_000)
 
 
+async def _get_project_run(run_id: str, project_id: str):
+    """读取当前 Project 内的 Run，避免仅凭 runId 跨 Project 操作。"""
+
+    run = await get_chat_background_run(run_id)
+    if run is None or run.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
 @router.post("/runs/{run_id}/team/mail")
-async def send_team_mail(run_id: str, data: TeamMailRequest) -> dict:
+async def send_team_mail(
+    run_id: str,
+    data: TeamMailRequest,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> dict:
     """通过 Mailbox 干预当前 TeamRun。"""
 
+    await _get_project_run(run_id, project_id)
     service = await get_team_service(run_id)
     if service is None:
         raise HTTPException(status_code=409, detail="TeamRun is not active")
@@ -49,9 +64,14 @@ async def send_team_mail(run_id: str, data: TeamMailRequest) -> dict:
 
 
 @router.get("/runs/{run_id}/stream")
-async def stream_run(run_id: str, replay: bool = True) -> StreamingResponse:
+async def stream_run(
+    run_id: str,
+    replay: bool = True,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> StreamingResponse:
     """重新订阅后台 Chat Run 事件。"""
 
+    await _get_project_run(run_id, project_id)
     return StreamingResponse(
         subscribe_chat_background_run(run_id, replay=replay),
         media_type="text/event-stream",
@@ -64,20 +84,23 @@ async def stream_run(run_id: str, replay: bool = True) -> StreamingResponse:
 
 
 @router.get("/runs")
-async def list_runs() -> dict:
+async def list_runs(
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> dict:
     """列出当前进程内后台 Chat Run。"""
 
-    runs = await list_chat_background_runs()
+    runs = await list_chat_background_runs(project_id=project_id)
     return {"runs": [serialize_chat_background_run(run) for run in runs]}
 
 
 @router.get("/runs/{run_id}")
-async def get_run(run_id: str) -> dict:
+async def get_run(
+    run_id: str,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> dict:
     """读取一个后台 Chat Run 的状态和事件缓存。"""
 
-    run = await get_chat_background_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+    run = await _get_project_run(run_id, project_id)
     return {
         **serialize_chat_background_run(run),
         "events": run.events,
@@ -85,12 +108,13 @@ async def get_run(run_id: str) -> dict:
 
 
 @router.get("/runs/{run_id}/state")
-async def get_run_state(run_id: str) -> dict:
+async def get_run_state(
+    run_id: str,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> dict:
     """读取一个后台 Chat Run 的前端状态快照。"""
 
-    run = await get_chat_background_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+    run = await _get_project_run(run_id, project_id)
     if not run.state:
         from src.server.routes.chat.event_hub import initial_run_state
 
@@ -101,9 +125,13 @@ async def get_run_state(run_id: str) -> dict:
 
 
 @router.get("/runs/{run_id}/state/stream")
-async def stream_run_state(run_id: str) -> StreamingResponse:
+async def stream_run_state(
+    run_id: str,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> StreamingResponse:
     """订阅 RunState 中间层状态流。"""
 
+    await _get_project_run(run_id, project_id)
     return StreamingResponse(
         subscribe_chat_run_state(run_id),
         media_type="text/event-stream",
@@ -116,12 +144,13 @@ async def stream_run_state(run_id: str) -> StreamingResponse:
 
 
 @router.post("/runs/{run_id}/rerun")
-async def rerun_run(run_id: str) -> dict:
+async def rerun_run(
+    run_id: str,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> dict:
     """基于历史 Run 的用户输入重新创建一个后台 Chat Run。"""
 
-    source_run = await get_chat_background_run(run_id)
-    if source_run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+    source_run = await _get_project_run(run_id, project_id)
     if source_run.status in ACTIVE_RUN_STATUSES:
         raise HTTPException(status_code=409, detail="Only terminal runs can be rerun")
 
@@ -134,9 +163,13 @@ async def rerun_run(run_id: str) -> dict:
 
 
 @router.post("/runs/{run_id}/cancel")
-async def cancel_run(run_id: str) -> dict:
+async def cancel_run(
+    run_id: str,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> dict:
     """取消一个仍在运行的后台 Chat Run。"""
 
+    await _get_project_run(run_id, project_id)
     run = await cancel_chat_background_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -157,6 +190,7 @@ def _build_rerun_chat_message(source_run) -> ChatMessage:
         raise HTTPException(status_code=404, detail="Agent for rerun not found")
     return ChatMessage(
         session_id=source_run.session_id,
+        project_id=getattr(source_run, "project_id", DEFAULT_PROJECT_ID),
         message=message,
         agent_id=source_run.agent_id or None,
         agent_name=agent.name if agent else source_run.agent_name,

@@ -8,8 +8,11 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './utils/devConsoleFilters';
+import { installDesktopFetchBridge } from './utils/apiUrl';
 import { App } from './App';
 import './themes/index.css';
+
+installDesktopFetchBridge();
 
 // 获取挂载点
 const rootElement = document.getElementById('root');

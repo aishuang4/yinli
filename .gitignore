@@ -7,6 +7,7 @@ frontend/dist/
 frontend/.vite/
 electron/dist/
 frontend/electron-dist/
+frontend/desktop-package/
 release/
 backend/build/
 backend/dist/
@@ -26,6 +27,10 @@ Thumbs.db
 .env
 backend/.env
 backend/data/
+/data/
+/sessions/
+/skills/
+/tmp/
 
 # Python
 __pycache__/

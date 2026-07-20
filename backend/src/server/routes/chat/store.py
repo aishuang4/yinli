@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime, timezone
 
 from src.storage.database import (
+    DEFAULT_PROJECT_ID,
+    DEFAULT_WORKSPACE_ID,
     get_json_record,
     load_chat_store,
     migrate_json_object_file,
@@ -53,6 +55,8 @@ def _append_user_message(
     model_name: str,
     content: str,
     images: list[ChatImagePayload],
+    workspace_id: str = DEFAULT_WORKSPACE_ID,
+    project_id: str = DEFAULT_PROJECT_ID,
 ) -> None:
     """追加用户消息，并创建或更新会话摘要"""
     now = datetime.now(timezone.utc).isoformat()
@@ -75,6 +79,8 @@ def _append_user_message(
         existing.agent_id = agent_id
         existing.agent_name = agent_name
         existing.mode = mode
+        existing.workspace_id = workspace_id
+        existing.project_id = project_id
         existing.updated_at = now
         existing.message_count = len(messages)
     else:
@@ -84,6 +90,8 @@ def _append_user_message(
             agent_id=agent_id,
             agent_name=agent_name,
             mode=mode,
+            workspace_id=workspace_id,
+            project_id=project_id,
             created_at=now,
             updated_at=now,
             message_count=len(messages),

@@ -79,7 +79,7 @@ def _build_runtime_feature_parts(
         extra_tools.extend(plan_tools)
         middlewares.extend(plan_middlewares)
 
-    catalog = load_subagent_catalog()
+    catalog = load_subagent_catalog(workspace_dir=str(ctx.runtime_context.project_root))
     if catalog.definitions:
         subagent_manager = SubagentDelegationManager(
             catalog=catalog,
@@ -96,6 +96,7 @@ def _build_runtime_feature_parts(
             knowledge_tools=ctx.knowledge_tools,
             parent_tool_scope=ctx.runtime_tool_scope,
             persist=ctx.persist_run,
+            runtime_context=ctx.runtime_context,
         )
         extra_tools.append(DelegateTask(subagent_manager))
         runtime_event_sources.append(subagent_manager)
@@ -223,6 +224,7 @@ async def execute_react_runtime(
         skill_runs=ctx.skill_runs,
         plan_mode_manager=plan_mode_manager,
         runtime_event_sources=runtime_event_sources,
+        runtime_context=ctx.runtime_context,
         sandbox=run_data.sandbox,
     ):
         yield event

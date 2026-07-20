@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Copy, Download, FileText, Loader2, Wrench, XCircle } from 'lucide-react';
 import type { ToolCallInfo } from '../../hooks/useEventStream';
+import { resolveApiUrl } from '../../utils/apiUrl';
 import { copyTextToClipboard } from './chatUiUtils';
 import type { GeneratedFileInfo } from './generatedFiles';
 
@@ -33,7 +34,7 @@ export function GeneratedFilesBlock({ files }: { files: GeneratedFileInfo[] }) {
           </div>
           <a
             className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-hover)]"
-            href={`/api/tools/files/download?path=${encodeURIComponent(file.path)}`}
+            href={resolveApiUrl(`/api/tools/files/download?path=${encodeURIComponent(file.path)}`)}
             download={file.name}
             title={file.path}
           >

@@ -13,7 +13,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo, type WheelEvent } from 'react';
-import { AlertCircle, Bot, ChevronDown, ImagePlus, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Search, Send, Settings, Square, Trash2, X } from 'lucide-react';
+import { AlertCircle, Bot, Boxes, ChevronDown, FolderKanban, FolderPlus, ImagePlus, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Search, Send, Settings, Square, Trash2, X } from 'lucide-react';
 import {
   SparkDeepThinkLine,
   SparkReinforcementLearningLine,
@@ -22,6 +22,8 @@ import {
 import { Empty, Select, Spinner, Tag, Tooltip } from '@agentscope-ai/design';
 import { useEventStream } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
+import { useProjectResources } from '../hooks/useProjectResources';
+import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
 import { useAppStore } from '../stores/appStore';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
@@ -270,6 +272,8 @@ export function ChatPage() {
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [historyPanelMounted, setHistoryPanelMounted] = useState(true);
   const setView = useAppStore((state) => state.setView);
+  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -281,24 +285,34 @@ export function ChatPage() {
   const isComposingRef = useRef(false);
   const recoveredRunRef = useRef<string>('');
   const completedVisualRunRef = useRef<string>('');
-  const [visualCompletionVersion, setVisualCompletionVersion] = useState(0);
+  const sessionsRequestRef = useRef(0);
+  const messagesRequestRef = useRef(0);
+  const pendingSessionRef = useRef<ChatSession | null>(null);
+  const [visuallyCompletedRunId, setVisuallyCompletedRunId] = useState('');
   const { state, sendMessage, resumeInteraction, subscribeRun, abort, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
+  const { enabledByType, loading: projectResourcesLoading } = useProjectResources(activeProjectId);
+  const { workspaces, projects, allProjects, selectWorkspace, selectProject } = useWorkspaceProjects();
+  const setActiveContext = useAppStore((state) => state.setActiveContext);
+
+  const availableAgents = useMemo(() => agents.filter((agent) => (
+    agent.workspaceId === activeWorkspaceId && enabledByType.agent.has(agent.id)
+  )), [activeWorkspaceId, agents, enabledByType]);
 
   const selectedAgent = useMemo(
-    () => agents.find((agent) => agent.id === selectedAgentId) || null,
-    [agents, selectedAgentId]
+    () => availableAgents.find((agent) => agent.id === selectedAgentId) || null,
+    [availableAgents, selectedAgentId]
   );
 
   const runtimeAgent = selectedAgent;
 
   const agentOptions = useMemo(() => [
     { label: 'Assistant - 默认助手', value: 'default' },
-    ...agents.map((agent) => ({
+    ...availableAgents.map((agent) => ({
       label: agent.name,
       value: agent.id,
     })),
-  ], [agents]);
+  ], [availableAgents]);
 
   const selectedModelId = runtimeAgent?.modelConfig.primary || 'deepseek-chat';
   const selectedModelSupportsImages = selectedModelId === 'qwen3.7-plus';
@@ -328,6 +342,18 @@ export function ChatPage() {
   const activeSession = useMemo(() => (
     sessions.find((session) => session.id === activeSessionId) || null
   ), [activeSessionId, sessions]);
+  const historyGroups = useMemo(() => workspaces.map((workspace) => ({
+    workspace,
+    projects: allProjects
+      .filter((project) => project.workspaceId === workspace.id)
+      .map((project) => ({
+        project,
+        sessions: sessions.filter((session) => session.project_id === project.id),
+      }))
+      .filter((group) => group.sessions.length > 0),
+  })).filter((group) => group.projects.length > 0), [allProjects, sessions, workspaces]);
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) || null;
+  const activeProject = allProjects.find((project) => project.id === activeProjectId) || null;
   const handleCollapseHistory = useCallback(() => {
     if (historyTransitionTimerRef.current !== null) {
       window.clearTimeout(historyTransitionTimerRef.current);
@@ -374,26 +400,28 @@ export function ChatPage() {
     if (isAnimating) {
       if (completedVisualRunRef.current === runId) {
         completedVisualRunRef.current = '';
-        setVisualCompletionVersion((version) => version + 1);
+        setVisuallyCompletedRunId('');
       }
       return;
     }
     if (completedVisualRunRef.current !== runId) {
       completedVisualRunRef.current = runId;
-      setVisualCompletionVersion((version) => version + 1);
+      setVisuallyCompletedRunId(runId);
     }
   }, [state.currentRunId]);
 
   const loadSessions = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
+    const requestId = sessionsRequestRef.current + 1;
+    sessionsRequestRef.current = requestId;
     try {
       if (!silent) {
         setSessionsLoading(true);
       }
-      const response = await fetch('/api/chat/sessions');
+      const response = await fetch('/api/chat/sessions/catalog');
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: ChatSession[] = await response.json();
-      setSessions(data);
+      if (sessionsRequestRef.current === requestId) setSessions(data);
     } finally {
       if (!silent) {
         setSessionsLoading(false);
@@ -401,8 +429,11 @@ export function ChatPage() {
     }
   }, []);
 
-  const loadSessionMessages = useCallback(async (sessionId: string) => {
-    const response = await fetch(`/api/chat/sessions/${sessionId}/messages`);
+  const loadSessionMessages = useCallback(async (sessionId: string, projectId = activeProjectId) => {
+    const requestId = messagesRequestRef.current + 1;
+    messagesRequestRef.current = requestId;
+    const params = new URLSearchParams({ projectId });
+    const response = await fetch(`/api/chat/sessions/${sessionId}/messages?${params.toString()}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data: StoredChatMessage[] = await response.json();
     const loadedMessages = data.map((item) => ({
@@ -419,12 +450,55 @@ export function ChatPage() {
       clarificationRequests: item.clarificationRequests || item.clarification_requests || [],
       clarificationResolved: item.clarificationResolved || item.clarification_resolved || false,
     }));
-    setMessages(mergeResolvedClarificationFeedbackIntoReplies(loadedMessages));
-  }, []);
+    if (messagesRequestRef.current === requestId) {
+      setMessages(mergeResolvedClarificationFeedbackIntoReplies(loadedMessages));
+    }
+  }, [activeProjectId]);
+
+  const activateSession = useCallback(async (session: ChatSession) => {
+    recoveredRunRef.current = '';
+    reset();
+    setActiveSessionId(session.id);
+    setTargetMode(session.mode || 'agent');
+    setSelectedAgentId(session.agent_id || 'default');
+    setImageAttachments([]);
+    setChatError(null);
+    shouldAutoScrollRef.current = true;
+    setShowScrollToBottom(false);
+    await loadSessionMessages(session.id, session.project_id);
+  }, [loadSessionMessages, reset]);
 
   useEffect(() => {
-    loadSessions();
+    sessionsRequestRef.current += 1;
+    messagesRequestRef.current += 1;
+    recoveredRunRef.current = '';
+    completedVisualRunRef.current = '';
+    setVisuallyCompletedRunId('');
+    setActiveSessionId(null);
+    setMessages([]);
+    setImageAttachments([]);
+    setChatError(null);
+    reset();
+    const pendingSession = pendingSessionRef.current;
+    if (
+      pendingSession &&
+      pendingSession.workspace_id === activeWorkspaceId &&
+      pendingSession.project_id === activeProjectId
+    ) {
+      pendingSessionRef.current = null;
+      void activateSession(pendingSession);
+    }
+  }, [activeProjectId, activeWorkspaceId, activateSession, reset]);
+
+  useEffect(() => {
+    void loadSessions();
   }, [loadSessions]);
+
+  useEffect(() => {
+    if (selectedAgentId !== 'default' && !availableAgents.some((agent) => agent.id === selectedAgentId)) {
+      setSelectedAgentId('default');
+    }
+  }, [availableAgents, selectedAgentId]);
 
   useEffect(() => {
     if (!activeSessionId || hasLiveResponse) return;
@@ -432,7 +506,8 @@ export function ChatPage() {
 
     async function recoverActiveRun() {
       try {
-        const response = await fetch('/api/chat/runs');
+        const params = new URLSearchParams({ projectId: activeProjectId });
+        const response = await fetch(`/api/chat/runs?${params.toString()}`);
         if (!response.ok) return;
         const data = await response.json();
         const runs = Array.isArray(data.runs) ? data.runs : [];
@@ -464,7 +539,7 @@ export function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, hasLiveResponse, subscribeRun]);
+  }, [activeProjectId, activeSessionId, hasLiveResponse, subscribeRun]);
 
   const handleMessagesScroll = useCallback(() => {
     const container = messagesContainerRef.current;
@@ -542,6 +617,7 @@ export function ChatPage() {
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
+    pendingSessionRef.current = null;
     recoveredRunRef.current = '';
     setActiveSessionId(null);
     setMessages([]);
@@ -552,28 +628,66 @@ export function ChatPage() {
     reset();
   }, [reset, state.isStreaming]);
 
+  const handleCreateProjectFromDirectory = useCallback(async () => {
+    if (state.isStreaming) return;
+    if (!window.electronAPI) {
+      setChatError('请在 Electron 桌面端选择 Project 文件夹。');
+      return;
+    }
+    setChatError(null);
+    try {
+      const selected = await window.electronAPI.selectProjectDirectory();
+      if (selected.canceled || !selected.path || !selected.name) return;
+      const existing = allProjects.find((project) => (
+        project.workspaceId === activeWorkspaceId && project.rootPath === selected.path
+      ));
+      if (existing) {
+        handleNewSession();
+        setActiveContext(existing.workspaceId, existing.id);
+        notifySuccess(`已切换到 Project：${existing.name}`);
+        return;
+      }
+      const response = await fetch(`/api/workspaces/${encodeURIComponent(activeWorkspaceId)}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: selected.name,
+          description: '',
+          rootPath: selected.path,
+          instructionsFile: '',
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(String(payload.detail || `HTTP ${response.status}`));
+      }
+      const project = await response.json() as { id: string; workspaceId: string; name: string };
+      handleNewSession();
+      setActiveContext(project.workspaceId, project.id);
+      notifySuccess(`Project ${project.name} 已创建`);
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : 'Project 创建失败。');
+    }
+  }, [activeWorkspaceId, allProjects, handleNewSession, setActiveContext, state.isStreaming]);
+
   const handleSelectSession = useCallback(async (session: ChatSession) => {
     if (state.isStreaming) return;
-    recoveredRunRef.current = '';
-    reset();
-    setActiveSessionId(session.id);
-    setTargetMode(session.mode || 'agent');
-    setSelectedAgentId(session.agent_id || 'default');
-    setImageAttachments([]);
-    setChatError(null);
-    shouldAutoScrollRef.current = true;
-    setShowScrollToBottom(false);
-    reset();
-    await loadSessionMessages(session.id);
-  }, [loadSessionMessages, reset, state.isStreaming]);
+    if (session.project_id !== activeProjectId || session.workspace_id !== activeWorkspaceId) {
+      pendingSessionRef.current = session;
+      setActiveContext(session.workspace_id, session.project_id);
+      return;
+    }
+    await activateSession(session);
+  }, [activeProjectId, activeWorkspaceId, activateSession, setActiveContext, state.isStreaming]);
 
-  const handleDeleteSession = useCallback(async (sessionId: string) => {
+  const handleDeleteSession = useCallback(async (session: ChatSession) => {
     if (state.isStreaming) return;
     try {
-      const response = await fetch(`/api/chat/sessions/${sessionId}`, { method: 'DELETE' });
+      const params = new URLSearchParams({ projectId: session.project_id });
+      const response = await fetch(`/api/chat/sessions/${session.id}?${params.toString()}`, { method: 'DELETE' });
       if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
-      setSessions((current) => current.filter((session) => session.id !== sessionId));
-      if (activeSessionId === sessionId) {
+      setSessions((current) => current.filter((item) => item.id !== session.id));
+      if (activeSessionId === session.id) {
         recoveredRunRef.current = '';
         setActiveSessionId(null);
         setMessages([]);
@@ -625,6 +739,10 @@ export function ChatPage() {
   /** 发送消息 */
   const handleSend = useCallback(async () => {
     if ((!inputValue.trim() && imageAttachments.length === 0) || state.isStreaming) return;
+    if (!activeProjectId) {
+      setChatError('请先为新对话选择或创建 Project。');
+      return;
+    }
     if (imageAttachments.length > 0 && !selectedModelSupportsImages) {
       setChatError(`${selectedModelId} 不支持图片输入，请选择使用 qwen3.7-plus 的 Agent。`);
       return;
@@ -654,6 +772,7 @@ export function ChatPage() {
     setChatError(null);
 
     await sendMessage(userText, {
+      projectId: activeProjectId,
       sessionId,
       agentId: runtimeAgent?.id,
       agentName: runtimeAgent?.name,
@@ -664,7 +783,7 @@ export function ChatPage() {
       deepThinking,
       images,
     });
-  }, [activeSessionId, deepThinking, imageAttachments, inputValue, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.isStreaming, targetMode]);
+  }, [activeProjectId, activeSessionId, deepThinking, imageAttachments, inputValue, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.isStreaming, targetMode]);
 
   const handleSubmitClarification = useCallback(async (content: string, displayContent?: string) => {
     const modelContent = content.trim();
@@ -694,7 +813,7 @@ export function ChatPage() {
     const waitingForFinalAnswerAnimation = Boolean(
       state.currentRunId &&
       state.finalAnswerContent &&
-      completedVisualRunRef.current !== state.currentRunId,
+      visuallyCompletedRunId !== state.currentRunId,
     );
     if (
       !state.isStreaming &&
@@ -723,7 +842,7 @@ export function ChatPage() {
       reset();
       loadSessions({ silent: true });
     }
-  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.currentRunId, state.displaySnapshot, state.error, state.finalAnswerContent, state.hitlRequests.length, state.isStreaming, state.modelName, state.plans.length, state.reasoningContent, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamConsole, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls, visualCompletionVersion]);
+  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.currentRunId, state.displaySnapshot, state.error, state.finalAnswerContent, state.hitlRequests.length, state.isStreaming, state.modelName, state.plans.length, state.reasoningContent, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamConsole, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls, visuallyCompletedRunId]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -739,6 +858,9 @@ export function ChatPage() {
   return (
     <div
       className="chat-page-shell chat-workbench-shell grid h-full min-h-0 overflow-hidden"
+      data-history-mounted={historyPanelMounted}
+      data-history-collapsed={historyCollapsed}
+      data-electron-shell={isDesktopShell}
       style={{
         gridTemplateColumns: historyPanelMounted
           ? historyCollapsed
@@ -789,56 +911,77 @@ export function ChatPage() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-            {sessionsLoading ? (
+            {sessionsLoading || (sessions.length > 0 && allProjects.length === 0) ? (
               <div className="flex justify-center py-8">
                 <Spinner />
               </div>
             ) : sessions.length === 0 ? (
               <Empty type="noData" description="暂无历史对话" />
             ) : (
-              <div className="space-y-2">
-                {sessions.map((session) => (
-                  <button
-                    key={session.id}
-                    type="button"
-                    onClick={() => handleSelectSession(session)}
-                    className={`chat-session-item group w-full rounded-lg px-3 py-2 text-left transition-all duration-300 ease-out ${
-                      activeSessionId === session.id
-                        ? 'chat-session-item--active'
-                        : 'hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)]'
-                    }`}
-                  >
-                    <div className="flex items-start gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-                          {session.title}
-                        </div>
-                        <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-                          <span className="truncate">{session.agent_name}</span>
-                          <span>{session.message_count} 条</span>
-                        </div>
-                      </div>
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        className="rounded p-1 text-[var(--color-text-tertiary)] opacity-0 transition-all duration-300 ease-out hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-error)] group-hover:opacity-100"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          handleDeleteSession(session.id);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' || event.key === ' ') {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            handleDeleteSession(session.id);
-                          }
-                        }}
-                        aria-label="删除会话"
-                      >
-                        <Trash2 size={14} />
-                      </span>
+              <div className="space-y-5">
+                {historyGroups.map(({ workspace, projects: projectGroups }) => (
+                  <section key={workspace.id} aria-label={`${workspace.name}中的历史对话`}>
+                    <div className="mb-2 flex items-center gap-2 px-2 text-xs font-semibold text-[var(--color-text-secondary)]">
+                      <Boxes size={13} strokeWidth={1.8} />
+                      <span className="truncate">{workspace.name}</span>
                     </div>
-                  </button>
+                    <div className="space-y-3">
+                      {projectGroups.map(({ project, sessions: projectSessions }) => (
+                        <div key={project.id}>
+                          <div className="mb-1 flex items-center gap-2 px-2 text-xs text-[var(--color-text-tertiary)]">
+                            <FolderKanban size={12} strokeWidth={1.7} />
+                            <span className="truncate">{project.name}</span>
+                            <span className="ml-auto shrink-0">{projectSessions.length}</span>
+                          </div>
+                          <div className="space-y-1">
+                            {projectSessions.map((session) => (
+                              <button
+                                key={session.id}
+                                type="button"
+                                onClick={() => handleSelectSession(session)}
+                                className={`chat-session-item group w-full rounded-lg px-3 py-2 text-left transition-all duration-300 ease-out ${
+                                  activeSessionId === session.id
+                                    ? 'chat-session-item--active'
+                                    : 'hover:bg-[var(--color-bg-hover)]'
+                                }`}
+                              >
+                                <div className="flex items-start gap-2">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
+                                      {session.title}
+                                    </div>
+                                    <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
+                                      <span className="truncate">{session.agent_name}</span>
+                                      <span>{session.message_count} 条</span>
+                                    </div>
+                                  </div>
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
+                                    className="rounded p-1 text-[var(--color-text-tertiary)] opacity-0 transition-all duration-300 ease-out hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-error)] group-hover:opacity-100"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void handleDeleteSession(session);
+                                    }}
+                                    onKeyDown={(event) => {
+                                      if (event.key === 'Enter' || event.key === ' ') {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        void handleDeleteSession(session);
+                                      }
+                                    }}
+                                    aria-label="删除会话"
+                                  >
+                                    <Trash2 size={14} />
+                                  </span>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
                 ))}
               </div>
             )}
@@ -856,7 +999,10 @@ export function ChatPage() {
         }}
       >
         <div className="grid min-h-0 grid-rows-[auto_1fr_auto] overflow-hidden">
-          <header className="chat-workbench-topbar flex items-center justify-between gap-4 px-8 py-2">
+          <header
+            className="chat-workbench-topbar flex items-center justify-between gap-4 px-8 py-2"
+            style={isDesktopShell && (!historyPanelMounted || historyCollapsed) ? { paddingLeft: 128 } : undefined}
+          >
           <div className="flex min-w-0 items-center gap-3">
             {historyCollapsed && (
               <>
@@ -892,7 +1038,7 @@ export function ChatPage() {
               </div>
               <div className="truncate text-xs text-[var(--color-text-tertiary)]">
                 {state.isStreaming
-                  ? `${state.modelName || runtimeAgent?.modelConfig.primary || 'deepseek-chat'} · 正在思考...`
+                  ? state.modelName || runtimeAgent?.modelConfig.primary || 'deepseek-chat'
                   : targetMode === 'team'
                     ? `${runtimeAgent?.name || 'Assistant'} · Leader 动态组建临时成员`
                     : `${runtimeAgent?.name || 'Assistant'} · ${runtimeAgent?.description || 'DeepSeek'}`}
@@ -949,6 +1095,38 @@ export function ChatPage() {
                     <div className="max-w-[420px] text-sm">
                       先选择一个主 Agent，再输入消息开始协作。系统会保存会话历史，方便后续继续查看。
                     </div>
+                    <div className="mt-3 w-full max-w-[520px] border-t border-[var(--color-border)] pt-4 text-left">
+                      <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">保存到</div>
+                      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_36px] gap-2">
+                        <Select
+                          aria-label="为新对话选择 Workspace"
+                          value={activeWorkspace?.id || undefined}
+                          options={workspaces.map((workspace) => ({ label: workspace.name, value: workspace.id }))}
+                          onChange={(value) => void selectWorkspace(String(value))}
+                          placeholder="Workspace"
+                          style={{ minWidth: 0, width: '100%' }}
+                        />
+                        <Select
+                          aria-label="为新对话选择 Project"
+                          value={activeProject?.id || undefined}
+                          options={projects.map((project) => ({ label: project.name, value: project.id }))}
+                          onChange={(value) => selectProject(String(value))}
+                          placeholder="Project"
+                          disabled={projects.length === 0}
+                          style={{ minWidth: 0, width: '100%' }}
+                        />
+                        <Tooltip title="选择文件夹创建 Project" placement="bottom" mode="dark">
+                          <button
+                            type="button"
+                            className="icon-button h-8 w-8"
+                            aria-label="选择文件夹创建 Project"
+                            onClick={() => void handleCreateProjectFromDirectory()}
+                          >
+                            <FolderPlus size={15} />
+                          </button>
+                        </Tooltip>
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -977,6 +1155,10 @@ export function ChatPage() {
                         onSubmitClarification={handleSubmitClarification}
                         onResolveHitl={resumeInteraction}
                         onFinalAnswerAnimationChange={handleFinalAnswerAnimationChange}
+                        showGeneratedFiles={Boolean(
+                          !state.finalAnswerContent ||
+                          visuallyCompletedRunId === state.currentRunId
+                        )}
                         toolCalls={state.toolCalls}
                         modelName={state.modelName}
                         tokenUsage={state.tokenUsage}
@@ -1123,7 +1305,7 @@ export function ChatPage() {
                   value={selectedAgentId}
                   onChange={(value) => setSelectedAgentId(value)}
                   options={agentOptions}
-                  loading={agentsLoading}
+                  loading={agentsLoading || projectResourcesLoading}
                   disabled={state.isStreaming}
                   placeholder="选择 Agent"
                   style={{ width: 160 }}

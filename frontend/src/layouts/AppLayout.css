@@ -54,6 +54,11 @@
     / 286px 1fr;
 }
 
+/* Electron macOS 的 hiddenInset 标题栏会把 traffic lights 放在内容左上角。 */
+.workbench-menu-page[data-electron-shell="true"] {
+  padding-top: 56px;
+}
+
 /* 各区域映射到 grid area */
 .app-layout__titlebar {
   grid-area: titlebar;
@@ -184,6 +189,39 @@
   transform: translateX(-1px);
   background: var(--workbench-menu-control-hover);
   color: var(--color-text-primary);
+}
+
+.workbench-context-panel {
+  display: grid;
+  gap: 8px;
+  margin: 0 16px 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--workbench-menu-border);
+}
+
+.workbench-context-panel__row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.workbench-context-panel__create {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--workbench-menu-border);
+  border-radius: 6px;
+  background: var(--workbench-menu-control-bg);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.workbench-context-panel__create:hover {
+  color: var(--workbench-menu-icon-color);
 }
 
 .workbench-menu-page__items {

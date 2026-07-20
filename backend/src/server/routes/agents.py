@@ -11,9 +11,9 @@ Agent 管理路由
 """
 
 import os
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Annotated, Optional
 from datetime import datetime, timezone
 import uuid
 
@@ -87,10 +87,10 @@ class Guardrails(BaseModel):
 class PlanConfig(BaseModel):
     """历史 Plan 配置兼容字段。
 
-    旧 Plan Runtime 已下线；该模型只用于读取和导出历史数据，当前运行时不消费。
+    旧独立 Plan Runtime（runtime.kind=plan）已下线；当前 Plan Mode middleware 不消费该模型。
     """
 
-    enabled: bool = Field(default=False, description="历史兼容字段：旧 Plan Runtime 已下线")
+    enabled: bool = Field(default=False, description="历史兼容字段：旧 runtime.kind=plan 已下线")
     mode: str = Field(default="structured", description="历史兼容字段：旧计划模式")
     max_steps: int = Field(default=6, ge=1, le=20, alias="maxSteps", description="历史兼容字段：旧最大计划步骤数")
     require_plan_before_tools: bool = Field(default=False, alias="requirePlanBeforeTools", description="历史兼容字段：旧工具前计划开关")
@@ -113,6 +113,7 @@ class AgentCreate(BaseModel):
     tags: list[str] = Field(default_factory=list, description="标签")
     plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig", description="历史兼容字段：旧计划模型配置")
     guardrails: Guardrails = Field(default_factory=Guardrails, description="安全边界配置")
+    workspace_id: str = Field(default="default", alias="workspaceId")
 
     model_config = {"populate_by_name": True}
 
@@ -151,6 +152,7 @@ class AgentResponse(BaseModel):
     status: str = "idle"
     created_at: str
     updated_at: str
+    workspace_id: str = Field(default="default", alias="workspaceId")
 
     model_config = {"populate_by_name": True}
 
@@ -281,14 +283,16 @@ async def list_models() -> dict:
 
 
 @router.get("", response_model=list[AgentResponse])
-async def list_agents() -> list[AgentResponse]:
+async def list_agents(
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
+) -> list[AgentResponse]:
     """
     获取所有 Agent 列表
 
     Returns:
         list[AgentResponse]: Agent 列表
     """
-    return list(_agents.values())
+    return [agent for agent in _agents.values() if agent.workspace_id == workspace_id]
 
 
 @router.get("/{agent_id}/export", response_model=AgentExportPackage)
@@ -365,6 +369,7 @@ async def create_agent(data: AgentCreate) -> AgentResponse:
         "status": "idle",
         "created_at": now,
         "updated_at": now,
+        "workspaceId": data.workspace_id,
     })
     _agents[agent.id] = agent
     upsert_agent(agent.model_dump(by_alias=True))

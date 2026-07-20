@@ -230,7 +230,7 @@ def _resource_type_for_tool(tool_name: str) -> ResourceType:
         or normalized.startswith("HttpTool_")
     ):
         return ResourceType.KNOWLEDGE_TOOL
-    if normalized in {"Read", "Grep", "Glob", "Write", "Edit", "Bash", "HttpRequest", "AskUser"}:
+    if normalized in {"Read", "Grep", "Glob", "Write", "Edit", "Bash", "HttpRequest", "WebFetch", "AskUser"}:
         return ResourceType.TOOL
     return ResourceType.MCP
 

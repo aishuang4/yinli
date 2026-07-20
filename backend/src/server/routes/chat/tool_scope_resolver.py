@@ -30,7 +30,15 @@ def resolve_runtime_tool_scope(
     text = message.strip().lower()
     configured_mcp = bool(list(getattr(agent_config, "mcp_tools", []) or []))
     configured_knowledge = bool(list(getattr(agent_config, "knowledge_tools", []) or []))
-    needs_network = bool(re.search(r"(http|https|接口|api|网页|网站|联网|搜索|调研|资料|下载|请求|curl|url|链接|最新|今天|新闻|价格|汇率)", text))
+    needs_http = bool(re.search(
+        r"(接口|\bapi\b|\brest\b|webhook|http请求|网络请求|\bcurl\b|\b(get|post|put|patch|delete|head)\b)",
+        text,
+    ))
+    needs_web = bool(re.search(
+        r"(https?://|网页|网站|页面|链接|\burl\b|抓取|读取网页|提取正文|联网|搜索|调研|资料|下载|最新|今天|新闻|价格|汇率)",
+        text,
+    ))
+    needs_network = needs_http or needs_web
     needs_shell = bool(re.search(r"(运行|执行|测试|构建|启动|命令|脚本|pytest|npm|uv|bash|shell|终端|部署)", text))
     needs_knowledge = bool(re.search(r"(知识库|资料库|文档库|检索|搜索|查询|调研|资料|上下文|文档)", text))
     needs_mcp = bool(re.search(r"(mcp|外部工具|数据库|浏览器|github|figma|notion|jira|linear|slack)", text))
@@ -38,7 +46,8 @@ def resolve_runtime_tool_scope(
     allow_knowledge = configured_knowledge and (needs_knowledge or needs_network or has_selected_skills or has_team)
     allow_mcp = configured_mcp and (needs_mcp or needs_network or has_team)
     allow_bash = needs_shell
-    allow_http = needs_network
+    allow_http = needs_http
+    allow_web = needs_web
 
     reasons: list[str] = []
     if allow_knowledge:
@@ -49,6 +58,8 @@ def resolve_runtime_tool_scope(
         reasons.append("匹配到命令执行意图")
     if allow_http:
         reasons.append("匹配到 HTTP/网络请求意图")
+    if allow_web:
+        reasons.append("匹配到公开网页读取意图")
     if has_images and not reasons:
         reasons.append("图片任务保留基础多模态处理，不额外启用网络工具")
 
@@ -58,6 +69,7 @@ def resolve_runtime_tool_scope(
             allow_knowledge=allow_knowledge,
             allow_bash=allow_bash,
             allow_http=allow_http,
+            allow_web=allow_web,
         ),
         reason="；".join(reasons),
     )

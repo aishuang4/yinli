@@ -19,6 +19,7 @@ from src.agents.runtime_types import (
 from src.subagents.models import SubagentDefinition
 from src.subagents.permission_policy import SubagentPermissionResolution, resolve_subagent_permission
 from src.subagents.runtime_context import SubagentRuntimeContext, build_subagent_runtime_context
+from src.runtime_context import RuntimeContext as PlatformRuntimeContext
 from src.subagents.tool_policy import SubagentToolPolicy, build_subagent_tool_policy
 from src.tools.configured_http_tool import safe_http_tool_name
 
@@ -92,6 +93,7 @@ class SubagentRunner:
         knowledge_tools: list[KnowledgeToolRuntimeSpec],
         parent_tool_scope: RuntimeToolScope,
         persist: bool,
+        platform_context: PlatformRuntimeContext | None = None,
     ) -> None:
         self.session_id = session_id
         self.run_id = run_id
@@ -106,11 +108,12 @@ class SubagentRunner:
         self.knowledge_tools = knowledge_tools
         self.parent_tool_scope = parent_tool_scope
         self.persist = persist
+        self.platform_context = platform_context
 
     def prepare(self, definition: SubagentDefinition) -> SubagentPreparedRun:
         """解析 Subagent 运行前上下文，供调用方先写审计事件。"""
 
-        runtime_context = build_subagent_runtime_context(definition)
+        runtime_context = build_subagent_runtime_context(definition, self.platform_context)
         permission = resolve_subagent_permission(definition, self.guardrails)
         tool_policy = build_subagent_tool_policy(
             definition,
@@ -149,7 +152,7 @@ class SubagentRunner:
         """运行一个 Subagent invocation。"""
 
         started = time.monotonic()
-        runtime_context = runtime_context or build_subagent_runtime_context(definition)
+        runtime_context = runtime_context or build_subagent_runtime_context(definition, self.platform_context)
         permission = permission or resolve_subagent_permission(definition, self.guardrails)
         policy = tool_policy or build_subagent_tool_policy(
             definition,
@@ -359,6 +362,7 @@ def _child_tool_scope(parent_scope: RuntimeToolScope, effective_tools: set[str])
         ),
         allow_bash=parent_scope.allow_bash and "Bash" in effective_tools,
         allow_http=parent_scope.allow_http and "HttpRequest" in effective_tools,
+        allow_web=parent_scope.allow_web and "WebFetch" in effective_tools,
     )
 
 

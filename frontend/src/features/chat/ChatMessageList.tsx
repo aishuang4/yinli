@@ -88,6 +88,7 @@ export function StreamingBubble({
   onSubmitClarification,
   onResolveHitl,
   onFinalAnswerAnimationChange,
+  showGeneratedFiles,
   toolCalls,
   modelName,
   tokenUsage,
@@ -110,6 +111,7 @@ export function StreamingBubble({
   onSubmitClarification: (content: string, displayContent?: string) => Promise<void>;
   onResolveHitl: ResolveHitl;
   onFinalAnswerAnimationChange?: (isAnimating: boolean) => void;
+  showGeneratedFiles: boolean;
   toolCalls: ToolCallInfo[];
   modelName: string;
   tokenUsage: { input: number; output: number } | null;
@@ -148,6 +150,7 @@ export function StreamingBubble({
         onSubmitClarification={onSubmitClarification}
         onResolveHitl={onResolveHitl}
         animateStreamingText
+        showGeneratedFiles={showGeneratedFiles}
         onFinalAnswerAnimationChange={onFinalAnswerAnimationChange}
       />
 

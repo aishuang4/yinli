@@ -414,5 +414,5 @@ def _default_agent_prompt(name: str, description: str) -> str:
         f"You are {name}.",
         description or "Work carefully according to your assigned responsibility.",
         "Use bound MCP tools and Skills when they are relevant.",
-        "When you are ready to answer the user, call FinalAnswerStart exactly once before writing the final answer.",
+        "When you used tools and are ready to answer the user, you may call FinalAnswerStart before writing the final answer. If no tool is needed, answer directly.",
     ])

@@ -31,6 +31,9 @@ fi
 
 cd "$ROOT_DIR/frontend"
 
+echo "构建桌面端后端..."
+"$ROOT_DIR/scripts/build-backend-desktop.sh"
+
 echo "构建前端..."
 npm run build
 
@@ -40,15 +43,15 @@ npm run electron:compile
 case "$TARGET" in
   mac)
     echo "打包 macOS 桌面端..."
-    npx electron-builder --mac
+    npx electron-builder --projectDir desktop-package --config ../electron-builder.yml --mac
     ;;
   win)
     echo "打包 Windows 桌面端..."
-    npx electron-builder --win
+    npx electron-builder --projectDir desktop-package --config ../electron-builder.yml --win
     ;;
   "")
     echo "打包当前平台桌面端..."
-    npx electron-builder
+    npx electron-builder --projectDir desktop-package --config ../electron-builder.yml
     ;;
   *)
     echo "未知打包目标：$TARGET"

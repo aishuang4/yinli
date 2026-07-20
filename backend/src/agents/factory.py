@@ -3,7 +3,7 @@ Agent 工厂模块 — 从配置创建 AgentScope 2.0 Agent 实例
 
 职责：
 1. 根据 Agent 配置创建 DashScope 模型（主模型 + Fallback 链）
-2. 注入默认工具集（Read/Write/Edit/Grep/Glob/Bash/HttpRequest）
+2. 注入默认工具集（Read/Write/Edit/Grep/Glob/Bash/HttpRequest/WebFetch）
 3. 配置 LocalWorkspace 作为工具执行环境
 4. 设置 BYPASS 权限模式（工具自动执行，无需确认）
 5. 管理 Agent 实例缓存（避免重复创建）
@@ -40,6 +40,7 @@ from src.tools.final_answer import FinalAnswerStart
 from src.tools.http_request import HttpRequest
 from src.tools.knowledge_base_search import KnowledgeBaseSearch
 from src.tools.memory_nodes import MemoryNodeQuery, MemoryNodeTree
+from src.tools.web_fetch import WebFetch
 from src.tools.scoped_edit import ScopedEdit
 from src.tools.scoped_glob import ScopedGlob
 from src.tools.scoped_grep import ScopedGrep
@@ -209,6 +210,7 @@ def _create_default_toolkit(
     - Glob: 按模式查找文件
     - Bash: 执行 Shell 命令
     - HttpRequest: 调用 HTTP 接口
+    - WebFetch: 读取公开网页正文
 
     Returns:
         Toolkit: 包含默认工具的 Toolkit 实例
@@ -251,6 +253,8 @@ def _create_default_toolkit(
             )
         if scope.allow_http:
             network_tools.append(HttpRequest())
+        if scope.allow_web:
+            network_tools.append(WebFetch())
         local_tools.extend(network_tools)
 
         for tool in (knowledge_tools or []) if scope.allow_knowledge else []:

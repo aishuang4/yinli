@@ -7,6 +7,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Skill, SkillRegisterPayload } from '../types/skill';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
+import { useAppStore } from '../stores/appStore';
+import { bindProjectResource } from '../utils/projectResources';
 
 interface UseSkillsReturn {
   skills: Skill[];
@@ -40,6 +42,8 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function useSkills(): UseSkillsReturn {
+  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,7 +54,7 @@ export function useSkills(): UseSkillsReturn {
       setLoading(true);
       setError(null);
       const [skillList, categoryList] = await Promise.all([
-        requestJson<Skill[]>('/api/skills'),
+        requestJson<Skill[]>(`/api/skills?workspaceId=${encodeURIComponent(activeWorkspaceId)}`),
         requestJson<string[]>('/api/skills/categories'),
       ]);
       setSkills(skillList);
@@ -60,7 +64,7 @@ export function useSkills(): UseSkillsReturn {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeWorkspaceId]);
 
   const updateSkill = useCallback((skill: Skill) => {
     setSkills((prev) => {
@@ -76,8 +80,9 @@ export function useSkills(): UseSkillsReturn {
       const skill = await requestJson<Skill>('/api/skills/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, workspaceId: activeWorkspaceId }),
       });
+      await bindProjectResource(activeProjectId, 'skill', skill.id);
       updateSkill(skill);
       setCategories((prev) => (
         prev.includes(skill.category) ? prev : [...prev, skill.category].sort()
@@ -88,16 +93,20 @@ export function useSkills(): UseSkillsReturn {
       notifyError(`Skill 注册失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [updateSkill]);
+  }, [activeProjectId, activeWorkspaceId, updateSkill]);
 
   const importSkillArchive = useCallback(async (file: File) => {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const skill = await requestJson<Skill>('/api/skills/import', {
+      const skill = await requestJson<Skill>(
+        `/api/skills/import?workspaceId=${encodeURIComponent(activeWorkspaceId)}`,
+        {
         method: 'POST',
         body: formData,
-      });
+        },
+      );
+      await bindProjectResource(activeProjectId, 'skill', skill.id);
       updateSkill(skill);
       setCategories((prev) => (
         prev.includes(skill.category) ? prev : [...prev, skill.category].sort()
@@ -108,7 +117,7 @@ export function useSkills(): UseSkillsReturn {
       notifyError(`Skill 导入失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [updateSkill]);
+  }, [activeProjectId, activeWorkspaceId, updateSkill]);
 
   const exportSkill = useCallback(async (id: string, filename?: string) => {
     try {
@@ -215,6 +224,7 @@ export function useSkills(): UseSkillsReturn {
 }
 
 export function useEnabledSkills(): UseEnabledSkillsReturn {
+  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -223,13 +233,15 @@ export function useEnabledSkills(): UseEnabledSkillsReturn {
     try {
       setLoading(true);
       setError(null);
-      setSkills(await requestJson<Skill[]>('/api/skills/enabled'));
+      setSkills(await requestJson<Skill[]>(
+        `/api/skills/enabled?workspaceId=${encodeURIComponent(activeWorkspaceId)}`,
+      ));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load enabled skills');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
     refresh();

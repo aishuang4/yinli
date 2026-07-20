@@ -159,6 +159,8 @@ class ChatSession(BaseModel):
     agent_id: str
     agent_name: str
     mode: Literal["agent", "team"] = "agent"
+    workspace_id: str = "default"
+    project_id: str = "default"
     created_at: str
     updated_at: str
     message_count: int = 0
@@ -210,6 +212,9 @@ class ChatMessage(BaseModel):
 
     session_id: str | None = None
     """会话 ID（可选，用于上下文连续性）"""
+
+    project_id: str | None = None
+    """Project ID；未提供时使用 default Project。"""
 
     message: str
     """用户输入的消息文本"""

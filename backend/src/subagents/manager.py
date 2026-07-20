@@ -20,6 +20,7 @@ from src.storage.database import (
 )
 from src.subagents.models import SubagentCatalog, SubagentDefinition
 from src.subagents.runner import SubagentHitlRequired, SubagentRunError, SubagentRunner
+from src.runtime_context import RuntimeContext
 
 
 class SubagentDelegationWaiting(RuntimeError):
@@ -50,6 +51,7 @@ class SubagentDelegationManager:
         knowledge_tools: list[KnowledgeToolRuntimeSpec],
         parent_tool_scope: RuntimeToolScope,
         persist: bool,
+        runtime_context: RuntimeContext | None = None,
     ) -> None:
         self.catalog = catalog
         self.session_id = session_id
@@ -60,6 +62,7 @@ class SubagentDelegationManager:
         self.model_name = model_name
         self.guardrails = guardrails
         self.persist = persist
+        self.runtime_context = runtime_context
         self._events: list[dict[str, Any]] = []
         self._runner = SubagentRunner(
             session_id=session_id,
@@ -75,6 +78,7 @@ class SubagentDelegationManager:
             knowledge_tools=knowledge_tools,
             parent_tool_scope=parent_tool_scope,
             persist=persist,
+            platform_context=runtime_context,
         )
 
     def get_definition(self, name: str) -> SubagentDefinition | None:
@@ -111,6 +115,8 @@ class SubagentDelegationManager:
             {
                 "run_id": self.run_id,
                 "session_id": self.session_id,
+                "workspace_id": self.runtime_context.workspace_id if self.runtime_context else "default",
+                "project_id": self.runtime_context.project_id if self.runtime_context else "default",
                 "tool_call_id": tool_call_id,
                 "parent_scope": self.parent_scope,
                 "parent_agent_id": self.parent_agent_id,

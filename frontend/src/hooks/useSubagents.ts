@@ -12,6 +12,7 @@ import type {
   SubagentInvocationListResponse,
   SubagentLoadError,
 } from '../types/subagent';
+import { useAppStore } from '../stores/appStore';
 
 interface UseSubagentsReturn {
   definitions: SubagentDefinition[];
@@ -34,6 +35,7 @@ async function requestJson<T>(url: string): Promise<T> {
 }
 
 export function useSubagents(limit = 100): UseSubagentsReturn {
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const [definitions, setDefinitions] = useState<SubagentDefinition[]>([]);
   const [invocations, setInvocations] = useState<SubagentInvocation[]>([]);
   const [errors, setErrors] = useState<SubagentLoadError[]>([]);
@@ -47,8 +49,10 @@ export function useSubagents(limit = 100): UseSubagentsReturn {
       setLoading(true);
       setError(null);
       const [catalog, invocationList] = await Promise.all([
-        requestJson<SubagentCatalogResponse>('/api/subagents'),
-        requestJson<SubagentInvocationListResponse>(`/api/subagents/invocations?limit=${limit}`),
+        requestJson<SubagentCatalogResponse>(`/api/subagents?projectId=${encodeURIComponent(activeProjectId)}`),
+        requestJson<SubagentInvocationListResponse>(
+          `/api/subagents/invocations?projectId=${encodeURIComponent(activeProjectId)}&limit=${limit}`,
+        ),
       ]);
       setDefinitions(catalog.definitions);
       setErrors(catalog.errors);
@@ -60,7 +64,7 @@ export function useSubagents(limit = 100): UseSubagentsReturn {
     } finally {
       setLoading(false);
     }
-  }, [limit]);
+  }, [activeProjectId, limit]);
 
   useEffect(() => {
     void refresh();

@@ -13,6 +13,7 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react()],
+  base: './',
 
   // 路径别名
   resolve: {

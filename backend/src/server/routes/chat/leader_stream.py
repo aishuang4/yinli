@@ -60,6 +60,8 @@ class LeaderStreamState:
     pending_plan_finalized: bool = False
     pending_plan_final_answer: str = ""
     final_answer_recovery_attempted: bool = False
+    pending_text: str = ""
+    reply_had_tool_call: bool = False
 
 
 _PLAN_TOOL_RUNTIME_EVENTS = {
@@ -96,8 +98,23 @@ async def stream_leader_agent_reply(
     async for event in agent.reply_stream(user_msg):
         event_data = event.model_dump(mode="json")
         event_type = event_data.pop("type", "UNKNOWN")
+        if event_type == "REPLY_START":
+            state.pending_text = ""
+            state.reply_had_tool_call = False
+        elif event_type in {"TOOL_CALL_START", "TOOL_CALL_DELTA", "TOOL_CALL_END"}:
+            state.reply_had_tool_call = True
         if event_type == "EXCEED_MAX_ITERS":
             state.exceeded_max_iters = True
+            if state.pending_text:
+                state.assistant_reasoning_text += state.pending_text
+                yield runtime_event_sse(
+                    "AGENT_REASONING_DELTA", session_id=session_id, scope=stream_scope,
+                    source="runtime", source_event_type=event_type, agent_id=agent_id,
+                    agent_name=agent_name, status="running", payload={"delta": state.pending_text},
+                    collect=state.runtime_events,
+                )
+                yield _sse_event("REASONING_DELTA", {"delta": state.pending_text})
+                state.pending_text = ""
             yield runtime_event_sse(
                 "AGENT_FAILED",
                 session_id=session_id,
@@ -125,6 +142,22 @@ async def stream_leader_agent_reply(
             state.runtime_events.append(runtime_event)
             yield _sse_event("RUNTIME_EVENT", runtime_event)
         if _is_final_answer_tool_event(event_type, event_data, state):
+            if state.pending_text:
+                state.assistant_reasoning_text += state.pending_text
+                yield runtime_event_sse(
+                    "AGENT_REASONING_DELTA",
+                    session_id=session_id,
+                    scope=stream_scope,
+                    source="runtime",
+                    source_event_type=event_type,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    status="running",
+                    payload={"delta": state.pending_text},
+                    collect=state.runtime_events,
+                )
+                yield _sse_event("REASONING_DELTA", {"delta": state.pending_text})
+                state.pending_text = ""
             if event_type == "TOOL_CALL_START":
                 state.final_answer_started = True
                 yield runtime_event_sse(
@@ -394,33 +427,14 @@ async def stream_leader_agent_reply(
             if state.final_answer_started:
                 state.assistant_text += delta
                 yield runtime_event_sse(
-                    "AGENT_FINAL_ANSWER_DELTA",
-                    session_id=session_id,
-                    scope=stream_scope,
-                    source="runtime",
-                    source_event_type=event_type,
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    status="running",
-                    payload={"delta": delta},
+                    "AGENT_FINAL_ANSWER_DELTA", session_id=session_id, scope=stream_scope,
+                    source="runtime", source_event_type=event_type, agent_id=agent_id,
+                    agent_name=agent_name, status="running", payload={"delta": delta},
                     collect=state.runtime_events,
                 )
                 yield _sse_event("FINAL_ANSWER_DELTA", {"delta": delta})
             else:
-                state.assistant_reasoning_text += delta
-                yield runtime_event_sse(
-                    "AGENT_REASONING_DELTA",
-                    session_id=session_id,
-                    scope=stream_scope,
-                    source="runtime",
-                    source_event_type=event_type,
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    status="running",
-                    payload={"delta": delta},
-                    collect=state.runtime_events,
-                )
-                yield _sse_event("REASONING_DELTA", {"delta": delta})
+                state.pending_text += delta
             continue
         elif event_type == "THINKING_BLOCK_DELTA":
             state.assistant_thinking += str(event_data.get("delta", ""))
@@ -442,6 +456,35 @@ async def stream_leader_agent_reply(
                 "skills": [item.model_dump(by_alias=True) for item in completed_skill_runs],
                 "status": "completed",
             })
+
+        if event_type == "REPLY_END" and state.pending_text:
+            pending = state.pending_text
+            state.pending_text = ""
+            if state.final_answer_started or not state.reply_had_tool_call:
+                state.final_answer_started = True
+                state.assistant_text += pending
+                yield runtime_event_sse(
+                    "AGENT_FINAL_ANSWER_STARTED", session_id=session_id, scope=stream_scope,
+                    source="runtime", source_event_type=event_type, agent_id=agent_id,
+                    agent_name=agent_name, status="running", reason="direct_text_response",
+                    payload={"recovered": False, "direct": True}, collect=state.runtime_events,
+                )
+                yield runtime_event_sse(
+                    "AGENT_FINAL_ANSWER_DELTA", session_id=session_id, scope=stream_scope,
+                    source="runtime", source_event_type=event_type, agent_id=agent_id,
+                    agent_name=agent_name, status="running", reason="direct_text_response",
+                    payload={"delta": pending, "direct": True}, collect=state.runtime_events,
+                )
+                yield _sse_event("FINAL_ANSWER_DELTA", {"delta": pending})
+            else:
+                state.assistant_reasoning_text += pending
+                yield runtime_event_sse(
+                    "AGENT_REASONING_DELTA", session_id=session_id, scope=stream_scope,
+                    source="runtime", source_event_type=event_type, agent_id=agent_id,
+                    agent_name=agent_name, status="running", payload={"delta": pending},
+                    collect=state.runtime_events,
+                )
+                yield _sse_event("REASONING_DELTA", {"delta": pending})
 
         runtime_event = runtime_event_from_agentscope_sse(
             event_type,

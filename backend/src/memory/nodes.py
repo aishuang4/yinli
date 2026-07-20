@@ -46,7 +46,7 @@ class MemoryNodeWrite:
     conversation_digest: str = ""
     tags: list[str] = field(default_factory=list)
     workspace_id: str = "default"
-    project_id: str = ""
+    project_id: str = "default"
     user_id: str = "default"
     date_range_start: str | None = None
     date_range_end: str | None = None
@@ -143,7 +143,7 @@ class MemoryNodeService:
         date_to: str | None = None,
         limit: int = 30,
         workspace_id: str = "default",
-        project_id: str = "",
+        project_id: str = "default",
         user_id: str | None = None,
         status: str | None = "active",
     ) -> dict[str, Any]:
@@ -185,7 +185,7 @@ class MemoryNodeService:
         date_to: str | None = None,
         limit: int = 10,
         workspace_id: str = "default",
-        project_id: str = "",
+        project_id: str = "default",
         user_id: str | None = None,
         status: str | None = "active",
     ) -> dict[str, Any]:
