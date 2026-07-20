@@ -31,6 +31,25 @@ fi
 
 cd "$ROOT_DIR/frontend"
 
+package_macos() {
+  local version package_arch app_path zip_path dmg_path
+
+  "$ROOT_DIR/scripts/generate-macos-assets.sh"
+  npx electron-builder --projectDir desktop-package --config ../electron-builder.yml --mac dir
+
+  version="$(node -p "require('./package.json').version")"
+  package_arch="$(node -p "process.arch")"
+  app_path="$ROOT_DIR/release/mac-${package_arch}/Agent Workstation.app"
+  zip_path="$ROOT_DIR/release/Agent Workstation-${version}-mac-${package_arch}.zip"
+  dmg_path="$ROOT_DIR/release/Agent Workstation-${version}-mac-${package_arch}.dmg"
+
+  echo "生成 macOS ZIP..."
+  ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"
+
+  echo "生成带拖拽引导的 macOS DMG..."
+  "$ROOT_DIR/scripts/build-macos-dmg.sh" "$app_path" "$dmg_path"
+}
+
 echo "构建桌面端后端..."
 "$ROOT_DIR/scripts/build-backend-desktop.sh"
 
@@ -43,7 +62,7 @@ npm run electron:compile
 case "$TARGET" in
   mac)
     echo "打包 macOS 桌面端..."
-    npx electron-builder --projectDir desktop-package --config ../electron-builder.yml --mac
+    package_macos
     ;;
   win)
     echo "打包 Windows 桌面端..."
@@ -51,7 +70,11 @@ case "$TARGET" in
     ;;
   "")
     echo "打包当前平台桌面端..."
-    npx electron-builder --projectDir desktop-package --config ../electron-builder.yml
+    if [ "$(uname -s)" = "Darwin" ]; then
+      package_macos
+    else
+      npx electron-builder --projectDir desktop-package --config ../electron-builder.yml
+    fi
     ;;
   *)
     echo "未知打包目标：$TARGET"

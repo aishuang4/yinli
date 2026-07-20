@@ -3,6 +3,7 @@ productName: Agent Workstation
 artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
 directories:
   output: ../../release
+  buildResources: ../build
 electronDist: ../node_modules/electron/dist
 electronVersion: 42.3.3
 npmRebuild: false
@@ -16,6 +17,7 @@ extraResources:
       - backend-server.exe
 asar: true
 mac:
+  icon: icon.icns
   identity: '-'
   target:
     - dmg
@@ -23,6 +25,22 @@ mac:
   category: public.app-category.developer-tools
   hardenedRuntime: false
   gatekeeperAssess: false
+dmg:
+  background: dmg-background.png
+  icon: icon.icns
+  iconSize: 112
+  iconTextSize: 13
+  title: Agent Workstation
+  window:
+    width: 720
+    height: 440
+  contents:
+    - x: 180
+      y: 245
+    - x: 540
+      y: 245
+      type: link
+      path: /Applications
 win:
   target:
     - nsis

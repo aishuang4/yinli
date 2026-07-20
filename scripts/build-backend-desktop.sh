@@ -19,6 +19,7 @@ uv run --with pyinstaller pyinstaller \
   --hidden-import src.server.main \
   --hidden-import src.server.routes.chat \
   --hidden-import src.agents.factory \
+  --collect-all agentscope.tool._builtin._scripts \
   src/server/desktop_entry.py
 
 echo "后端可执行文件已输出到 backend/dist/"

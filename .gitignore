@@ -31,6 +31,7 @@ backend/data/
 /sessions/
 /skills/
 /tmp/
+/frontend/build/
 
 # Python
 __pycache__/
