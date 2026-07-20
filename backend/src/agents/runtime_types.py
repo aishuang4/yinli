@@ -2,13 +2,13 @@
 
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Callable
 
+from src.config.runtime_paths import DEFAULT_PROJECT_ROOT
 from src.security.permissions import UnifiedPermissionProfile, build_permission_profile
 
 
-WORKSPACE_DIR = str(Path(__file__).resolve().parents[3])
+WORKSPACE_DIR = str(DEFAULT_PROJECT_ROOT)
 FallbackEventCallback = Callable[[dict[str, Any]], None]
 
 

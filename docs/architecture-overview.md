@@ -94,7 +94,7 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 - **记忆查询工具**：普通 Agent 默认注入 `memory_node_tree` 和 `memory_node_query`，需要详情时由 Agent 主动查询；工具召回会写入 `MEMORY_AUDIT`，记录 query、filters、resultCount、命中 nodeId 和 retrievalQuality 质量指标。
 - **运行后提炼**：`completion.py` 成功收尾后后台并行调用 `UserMemoryReflectionAgent`、`AgentMemoryReflectionAgent`、`GlobalMemoryReflectionAgent`，通过绑定文件的 `memory_read` / `memory_add` / `memory_update` / `memory_delete` 操作 Markdown 记忆，不阻塞主对话。
 - **准入、记忆与召回质量**：`MemoryAdmissionGate` 当前是规则评分 + 可选模型评分增强，会输出 history / markdown / skill 三类评分、阈值、signals、模型评分、失败原因、脱敏摘要和脱敏类型统计；Memory 设置页可编辑准入阈值、模型评分开关和 Markdown 质量参数。Markdown 写入会做敏感信息过滤、近似去重、冲突合并、失败重试和 `# Summary` 压缩摘要；历史记忆查询会合并向量候选和 SQLite 关键词结果，再按查询词命中、向量分数、结构化反馈分、置顶、置信度、使用次数和日期做轻量重排，用户对命中 node 的相关 / 不相关反馈写入 `memory_retrieval_feedback` 表并同步写 `MEMORY_AUDIT` 追溯，Agent 工具查询会进入召回审计并带质量指标，运行前只注入 20 条摘要索引。
-- **Skill 自进化现状**：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、router gate、workflow evidence、颗粒度 gate、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和用户显式请求生成 Skill 的手动触发流；自动生成 / 手动注册 Skill 会写入 `backend/data/skill_packages/{skill_name}/SKILL.md` 并支持按 Skill 名称导出 zip。Memory 页面已能查看和操作候选队列；注册后不自动绑定 Agent。
+- **Skill 自进化现状**：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、router gate、workflow evidence、颗粒度 gate、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和用户显式请求生成 Skill 的手动触发流；自动生成 / 手动注册 Skill 会写入运行时 `data/skill_packages/{skill_name}/SKILL.md` 并支持按 Skill 名称导出 zip。Memory 页面已能查看和操作候选队列；注册后不自动绑定 Agent。
 - **向量存储**：全局 `VectorStoreBackend` 抽象已支持 `disabled` / `zvec`，`VECTOR_STORE_PROVIDER` 仅首次初始化生效，之后按持久化 `VectorStorePolicy` 启动。
 
 ## 存储
@@ -118,6 +118,8 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 - `subagent_invocations`
 
 历史开发库可能仍有 `memory_facts`、`memory_events`、`memory_candidates`，但旧记忆模块已删除，不再代表当前运行时能力。
+
+桌面安装版把 Electron `userData` 固定为 `agent-workstation-desktop`。`config/runtime_paths.py` 是所有运行时可写路径的唯一入口；SQLite、Markdown / Wiki Memory、向量库、TeamRun、Skill 包、用户级 Subagent、持久沙盒、日志和默认 Workspace 都必须位于该根目录。macOS 对应 `~/Library/Application Support/agent-workstation-desktop/`，Windows 对应 `%APPDATA%\\agent-workstation-desktop\\`。安装目录和 PyInstaller `_MEI...` 临时目录只允许读取代码资源，不能保存用户数据。
 
 ## 配置与权限
 

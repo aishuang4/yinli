@@ -5,13 +5,13 @@
 """
 
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from src.config.runtime_paths import DATA_ROOT
 
-CHAT_DATA_PATH = Path("data/chat_sessions.json")
+CHAT_DATA_PATH = DATA_ROOT / "chat_sessions.json"
 CHAT_NAMESPACE = "chat_store"
 CHAT_STORE_KEY = "default"
 MULTIMODAL_MODELS = {"qwen3.7-plus"}

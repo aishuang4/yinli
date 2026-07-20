@@ -91,7 +91,7 @@ def test_agent_create_does_not_create_markdown_memory(tmp_path, monkeypatch):
     from src.server.routes import agents as agents_routes
     from src.storage import database
 
-    monkeypatch.setattr(markdown_store, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(markdown_store, "MEMORY_ROOT", tmp_path / "data" / "memory")
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
     monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr(agents_routes, "_agents", {})
@@ -112,7 +112,7 @@ def test_agent_create_does_not_create_markdown_memory(tmp_path, monkeypatch):
 def test_user_markdown_route_uses_lazy_template_and_first_write(tmp_path, monkeypatch):
     from src.memory import markdown_store
 
-    monkeypatch.setattr(markdown_store, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(markdown_store, "MEMORY_ROOT", tmp_path / "data" / "memory")
 
     read_response = asyncio.run(memory_routes.read_user_markdown_memory("user-1"))
     assert read_response["scope"] == "user"
@@ -134,7 +134,7 @@ def test_user_markdown_route_uses_lazy_template_and_first_write(tmp_path, monkey
 def test_default_user_markdown_route_uses_single_user_memory(tmp_path, monkeypatch):
     from src.memory import markdown_store
 
-    monkeypatch.setattr(markdown_store, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(markdown_store, "MEMORY_ROOT", tmp_path / "data" / "memory")
 
     read_response = asyncio.run(memory_routes.read_default_user_markdown_memory())
     assert read_response["scope"] == "user"
@@ -157,7 +157,7 @@ def test_default_user_markdown_route_uses_single_user_memory(tmp_path, monkeypat
 def test_global_markdown_route_uses_lazy_template_and_first_write(tmp_path, monkeypatch):
     from src.memory import markdown_store
 
-    monkeypatch.setattr(markdown_store, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(markdown_store, "MEMORY_ROOT", tmp_path / "data" / "memory")
 
     read_response = asyncio.run(memory_routes.read_global_markdown_memory("workspace-1"))
     assert read_response["scope"] == "global_preference"
@@ -179,7 +179,7 @@ def test_global_markdown_route_uses_lazy_template_and_first_write(tmp_path, monk
 def test_default_global_markdown_route_uses_single_global_memory(tmp_path, monkeypatch):
     from src.memory import markdown_store
 
-    monkeypatch.setattr(markdown_store, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(markdown_store, "MEMORY_ROOT", tmp_path / "data" / "memory")
 
     read_response = asyncio.run(memory_routes.read_default_global_markdown_memory())
     assert read_response["scope"] == "global_preference"

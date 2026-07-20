@@ -314,7 +314,7 @@ export function ChatPage() {
     })),
   ], [availableAgents]);
 
-  const selectedModelId = runtimeAgent?.modelConfig.primary || 'deepseek-chat';
+  const selectedModelId = runtimeAgent?.modelConfig.primary || 'deepseek-v4-flash';
   const selectedModelSupportsImages = selectedModelId === 'qwen3.7-plus';
   const isDesktopShell = Boolean(window.electronAPI);
   const hasLiveResponse = (
@@ -1038,7 +1038,7 @@ export function ChatPage() {
               </div>
               <div className="truncate text-xs text-[var(--color-text-tertiary)]">
                 {state.isStreaming
-                  ? state.modelName || runtimeAgent?.modelConfig.primary || 'deepseek-chat'
+                  ? state.modelName || runtimeAgent?.modelConfig.primary || 'deepseek-v4-flash'
                   : targetMode === 'team'
                     ? `${runtimeAgent?.name || 'Assistant'} · Leader 动态组建临时成员`
                     : `${runtimeAgent?.name || 'Assistant'} · ${runtimeAgent?.description || 'DeepSeek'}`}

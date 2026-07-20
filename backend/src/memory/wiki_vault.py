@@ -14,7 +14,8 @@ from typing import Any
 
 from src.memory.entities import MemoryEntity, extract_memory_entities, make_memory_entity
 from src.memory.markdown_store import MarkdownMemoryStore
-from src.storage.database import BACKEND_ROOT, list_memory_nodes, list_skills
+from src.config.runtime_paths import MEMORY_ROOT
+from src.storage.database import list_memory_nodes, list_skills
 
 
 @dataclass(frozen=True)
@@ -73,7 +74,7 @@ class MemoryWikiVaultSyncer:
         wiki_root: Path | None = None,
     ) -> None:
         self.memory_store = memory_store or MarkdownMemoryStore()
-        self.wiki_root = wiki_root or BACKEND_ROOT / "data" / "memory" / "wiki"
+        self.wiki_root = wiki_root or MEMORY_ROOT / "wiki"
         self._entities: dict[str, MemoryEntity] = {}
         self._entity_backlinks: dict[str, set[str]] = defaultdict(set)
         self._entity_edges: Counter[tuple[str, str]] = Counter()

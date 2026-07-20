@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.config.runtime_paths import TEAM_RUNTIME_ROOT
 
-TEAM_RUNTIME_ROOT = Path("data/team-runtime/runs")
 TERMINAL_TASK_STATUSES = {"succeeded", "failed", "cancelled"}
 TEAM_RUN_ID_PATTERN = re.compile(r"^trun_[0-9a-f]{32}$")
 MEMBER_ID_PATTERN = re.compile(r"^(leader|member_[0-9a-f]{12})$")

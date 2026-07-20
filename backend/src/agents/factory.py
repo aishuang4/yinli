@@ -33,6 +33,7 @@ from src.agents.runtime_types import (
     WORKSPACE_DIR,
 )
 from src.config.runtime_settings import get_effective_model_settings
+from src.config.runtime_paths import SANDBOX_ROOT
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.tools.ask_user import AskUser
 from src.tools.configured_http_tool import ConfiguredHttpTool
@@ -361,7 +362,7 @@ def get_or_create_agent(
             workspace_id=f"agent-{agent_id}".replace(":", "-")[:120],
             base_image=guardrails.docker_image or "python:3.11-slim",
             workdir=(
-                os.path.join(_safe_workspace_dir(guardrails), ".agent-workstation-sandbox", agent_id.replace(":", "-"))
+                str(SANDBOX_ROOT / agent_id.replace(":", "-").replace("/", "-"))
                 if guardrails.persistent_sandbox
                 else None
             ),

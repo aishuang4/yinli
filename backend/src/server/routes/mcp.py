@@ -21,6 +21,7 @@ from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, Field, HttpUrl
 
+from src.config.runtime_paths import DATA_ROOT
 from src.server.routes.agents import remove_mcp_tools_from_agents
 from src.storage.database import (
     list_mcp_servers as db_list_mcp_servers,
@@ -87,7 +88,7 @@ class McpRegisterRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-DATA_DIR = "data"
+DATA_DIR = str(DATA_ROOT)
 USER_MCP_REGISTRY_FILE = os.path.join(DATA_DIR, "mcp_servers.json")
 MCP_NAMESPACE = "mcp_servers"
 RESERVED_MCP_HEADERS = {"content-type", "accept"}

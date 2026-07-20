@@ -8,7 +8,7 @@ import zlib
 from pathlib import Path
 from typing import Any
 
-from src.storage.database import BACKEND_ROOT
+from src.config.runtime_paths import VECTOR_STORE_ROOT
 from src.vector_store.base import (
     ScalarValue,
     VectorCollectionConfig,
@@ -225,7 +225,7 @@ class ZvecVectorStoreBackend:
 
     @staticmethod
     def _collection_path(collection: str) -> Path:
-        return BACKEND_ROOT / "data" / "vector_store" / "zvec" / _safe_collection_name(collection)
+        return VECTOR_STORE_ROOT / "zvec" / _safe_collection_name(collection)
 
     @staticmethod
     def _flush(collection: Any) -> None:

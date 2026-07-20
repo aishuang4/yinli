@@ -74,7 +74,7 @@ export function AgentModelAdvancedSection({
                 ...form,
                 modelConfig: {
                   ...form.modelConfig,
-                  fallback: [...form.modelConfig.fallback, 'deepseek-reasoner'],
+                  fallback: [...form.modelConfig.fallback, 'deepseek-v4-pro'],
                 },
               })}
             >

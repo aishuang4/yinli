@@ -119,7 +119,7 @@ def test_memory_wiki_vault_builds_structured_graph(tmp_path, monkeypatch):
 def test_memory_wiki_sync_route_returns_summary(tmp_path, monkeypatch):
     from src.memory import wiki_vault
 
-    monkeypatch.setattr(wiki_vault, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(wiki_vault, "MEMORY_ROOT", tmp_path / "data" / "memory")
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
     monkeypatch.setattr(database, "_initialized", False)
 
@@ -134,8 +134,8 @@ def test_memory_wiki_graph_route_returns_graph(tmp_path, monkeypatch):
     from src.memory import markdown_store
     from src.memory import wiki_vault
 
-    monkeypatch.setattr(markdown_store, "BACKEND_ROOT", tmp_path)
-    monkeypatch.setattr(wiki_vault, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(markdown_store, "MEMORY_ROOT", tmp_path / "data" / "memory")
+    monkeypatch.setattr(wiki_vault, "MEMORY_ROOT", tmp_path / "data" / "memory")
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
     monkeypatch.setattr(database, "_initialized", False)
 

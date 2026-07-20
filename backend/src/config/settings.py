@@ -29,8 +29,8 @@ class Settings(BaseSettings):
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     # === 默认模型配置 ===
-    default_model: str = "deepseek-chat"
-    fallback_models: list[str] = ["deepseek-reasoner"]
+    default_model: str = "deepseek-v4-flash"
+    fallback_models: list[str] = ["deepseek-v4-pro"]
 
     # === 数据库 ===
     database_url: str = "sqlite+aiosqlite:///./data/agent_workstation.db"

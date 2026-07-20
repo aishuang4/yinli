@@ -82,7 +82,7 @@ def test_zvec_backend_creates_collection_and_upserts_docs(monkeypatch, tmp_path)
     from src.vector_store.base import VectorCollectionConfig, VectorDocument
 
     fake = FakeZvecModule()
-    monkeypatch.setattr(zvec_provider, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(zvec_provider, "VECTOR_STORE_ROOT", tmp_path / "data" / "vector_store")
     backend = ZvecVectorStoreBackend(get_zvec_policy())
     backend._zvec_module = fake
 
@@ -118,7 +118,7 @@ def test_zvec_backend_queries_text_and_maps_results(monkeypatch, tmp_path):
     from src.vector_store.base import VectorCollectionConfig, VectorQuery
 
     fake = FakeZvecModule()
-    monkeypatch.setattr(zvec_provider, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(zvec_provider, "VECTOR_STORE_ROOT", tmp_path / "data" / "vector_store")
     backend = ZvecVectorStoreBackend(get_zvec_policy())
     backend._zvec_module = fake
     backend.ensure_collection(
@@ -161,7 +161,7 @@ def test_zvec_backend_real_fts_query(monkeypatch, tmp_path):
     from src.vector_store.providers import zvec as zvec_provider
     from src.vector_store.base import VectorCollectionConfig, VectorDocument, VectorQuery
 
-    monkeypatch.setattr(zvec_provider, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(zvec_provider, "VECTOR_STORE_ROOT", tmp_path / "data" / "vector_store")
     backend = ZvecVectorStoreBackend(get_zvec_policy())
     backend.ensure_collection(
         VectorCollectionConfig(
@@ -199,7 +199,7 @@ def test_zvec_backend_real_dense_query(monkeypatch, tmp_path):
     from src.vector_store.providers import zvec as zvec_provider
     from src.vector_store.base import VectorCollectionConfig, VectorDocument, VectorQuery
 
-    monkeypatch.setattr(zvec_provider, "BACKEND_ROOT", tmp_path)
+    monkeypatch.setattr(zvec_provider, "VECTOR_STORE_ROOT", tmp_path / "data" / "vector_store")
     backend = ZvecVectorStoreBackend(get_dense_zvec_policy())
     backend.ensure_collection(
         VectorCollectionConfig(

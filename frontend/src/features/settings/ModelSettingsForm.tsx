@@ -118,7 +118,7 @@ export function ModelSettingsForm({
             label="默认模型"
             value={defaultModel}
             onChange={(event) => onDefaultModelChange(event.target.value)}
-            placeholder="输入任意模型名，例如 deepseek-chat"
+            placeholder="输入任意模型名，例如 deepseek-v4-flash"
           />
         </FormGrid>
 

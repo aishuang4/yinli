@@ -20,6 +20,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from src.config.runtime_paths import DATA_ROOT, SKILL_PACKAGES_ROOT
 from src.server.routes.agents import remove_skills_from_agents
 from src.storage.database import (
     list_skills as db_list_skills,
@@ -32,10 +33,10 @@ router = APIRouter()
 
 SkillInstallStatus = Literal["available", "installed", "error"]
 
-DATA_DIR = "data"
+DATA_DIR = str(DATA_ROOT)
 USER_SKILLS_REGISTRY_FILE = os.path.join(DATA_DIR, "skills.json")
 SKILLS_NAMESPACE = "skills"
-SKILL_PACKAGES_DIR = os.path.join(DATA_DIR, "skill_packages")
+SKILL_PACKAGES_DIR = str(SKILL_PACKAGES_ROOT)
 MAX_SKILL_ARCHIVE_BYTES = 10 * 1024 * 1024
 MAX_SKILL_PACKAGE_FILES = 200
 

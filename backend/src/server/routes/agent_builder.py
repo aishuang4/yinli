@@ -209,7 +209,7 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
             systemPrompt=str(item.get("systemPrompt") or item.get("system_prompt") or _default_agent_prompt(name, description)),
             modelConfig=ModelConfig(
                 primary=data.preferred_model or runtime_settings.default_model,
-                fallback=runtime_settings.fallback_models[:3] or ["deepseek-reasoner"],
+                fallback=runtime_settings.fallback_models[:3] or ["deepseek-v4-pro"],
                 temperature=0.7,
                 max_tokens=4096,
             ),

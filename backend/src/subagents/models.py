@@ -7,9 +7,10 @@ Subagent 定义不进入 SQLite，SQLite 只记录运行 invocation。
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.config.runtime_paths import USER_SUBAGENT_ROOT
 
 SUBAGENT_PROJECT_DIR = ".agents/subagents"
-SUBAGENT_USER_DIR = "~/.agent-workstation/subagents"
+SUBAGENT_USER_DIR = str(USER_SUBAGENT_ROOT)
 
 
 @dataclass(frozen=True)

@@ -123,8 +123,8 @@ export interface ModelsResponse {
 
 /** 默认模型配置 */
 export const DEFAULT_MODEL_CONFIG: ModelConfig = {
-  primary: 'deepseek-chat',
-  fallback: ['deepseek-reasoner'],
+  primary: 'deepseek-v4-flash',
+  fallback: ['deepseek-v4-pro'],
   temperature: 0.7,
   topP: 0.8,
   maxTokens: 4096,

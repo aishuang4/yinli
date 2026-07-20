@@ -19,6 +19,7 @@ import uuid
 
 from src.agents.factory import invalidate_agent
 from src.agents.runtime_types import WORKSPACE_DIR
+from src.config.runtime_paths import DATA_ROOT
 from src.config.runtime_settings import get_current_model_options
 from src.storage.database import (
     delete_agent as db_delete_agent,
@@ -31,15 +32,15 @@ from src.storage.database import (
 
 router = APIRouter()
 
-DATA_DIR = "data"
+DATA_DIR = str(DATA_ROOT)
 AGENTS_REGISTRY_FILE = os.path.join(DATA_DIR, "agents.json")
 AGENTS_NAMESPACE = "agents"
 
 
 class ModelConfig(BaseModel):
     """模型配置"""
-    primary: str = Field(default="deepseek-chat", description="主模型")
-    fallback: list[str] = Field(default_factory=lambda: ["deepseek-reasoner"], description="降级模型链")
+    primary: str = Field(default="deepseek-v4-flash", description="主模型")
+    fallback: list[str] = Field(default_factory=lambda: ["deepseek-v4-pro"], description="降级模型链")
     temperature: float = Field(default=0.7, ge=0, le=2, description="温度参数")
     top_p: float = Field(default=0.8, ge=0, le=1, description="核采样参数")
     max_tokens: int = Field(default=4096, gt=0, description="最大输出 token 数")

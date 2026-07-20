@@ -50,8 +50,8 @@ MODEL_PROVIDERS: dict[str, ModelProvider] = {
         id="deepseek",
         name="DeepSeek",
         default_base_url="https://api.deepseek.com",
-        default_model="deepseek-chat",
-        models=("deepseek-chat", "deepseek-reasoner"),
+        default_model="deepseek-v4-flash",
+        models=("deepseek-v4-flash", "deepseek-v4-pro"),
         adapter="deepseek",
     ),
     "volcengine": ModelProvider(

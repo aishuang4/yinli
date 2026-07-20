@@ -16,6 +16,11 @@ import { spawn, ChildProcess } from 'child_process';
 /** 当前是否处于开发模式（Vite dev server 运行中） */
 const isDev = process.env.NODE_ENV === 'development';
 
+// 安装版固定 userData 目录名，避免 productName 或 package name 变化造成数据分散。
+if (!isDev) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'agent-workstation-desktop'));
+}
+
 /** Vite 开发服务器地址 */
 const DEV_SERVER_URL = 'http://localhost:5173';
 const BACKEND_SERVER_URL = 'http://127.0.0.1:8765';

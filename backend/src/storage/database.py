@@ -14,13 +14,21 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from src.config.runtime_paths import (
+    DATA_ROOT,
+    DEFAULT_PROJECT_ROOT,
+    INSTALL_BACKEND_ROOT,
+    USING_CUSTOM_DATA_ROOT,
+    USER_DATA_ROOT,
+    ensure_runtime_directories,
+)
 from src.config.settings import settings
 
 
 _lock = RLock()
 _initialized = False
-BACKEND_ROOT = Path(__file__).resolve().parents[2]
-PROJECT_ROOT = BACKEND_ROOT.parent
+BACKEND_ROOT = INSTALL_BACKEND_ROOT
+PROJECT_ROOT = DEFAULT_PROJECT_ROOT
 DEFAULT_WORKSPACE_ID = "default"
 DEFAULT_PROJECT_ID = "default"
 PROJECT_RESOURCE_TYPES = ("agent", "skill", "mcp", "http_tool")
@@ -50,9 +58,16 @@ def _normalize_guardrails(data: dict[str, Any]) -> dict[str, Any]:
     """归一化历史 guardrails 默认值，避免旧 '/' 继续暴露给前端。"""
 
     normalized = {**DEFAULT_GUARDRAILS, **data}
-    if str(normalized.get("filesystem_scope") or "").strip() == "/":
+    filesystem_scope = str(normalized.get("filesystem_scope") or "").strip()
+    if filesystem_scope == "/" or _is_pyinstaller_temp_path(filesystem_scope):
         normalized["filesystem_scope"] = str(PROJECT_ROOT)
     return normalized
+
+
+def _is_pyinstaller_temp_path(value: str) -> bool:
+    """识别历史打包版本写入的 PyInstaller 临时目录。"""
+
+    return any(part.startswith("_MEI") for part in Path(value).parts)
 
 DEFAULT_PLAN_CONFIG = {
     "enabled": False,
@@ -64,8 +79,8 @@ DEFAULT_PLAN_CONFIG = {
 }
 
 DEFAULT_MODEL_CONFIG = {
-    "primary": "deepseek-chat",
-    "fallback": ["deepseek-reasoner"],
+    "primary": "deepseek-v4-flash",
+    "fallback": ["deepseek-v4-pro"],
     "temperature": 0.7,
     "topP": 0.8,
     "maxTokens": 4096,
@@ -85,7 +100,7 @@ def _db_path() -> Path:
         return _resolve_sqlite_path(url[len(prefix):])
     if url.startswith("sqlite:///"):
         return _resolve_sqlite_path(url[len("sqlite:///"):])
-    return BACKEND_ROOT / "data/agent_workstation.db"
+    return DATA_ROOT / "agent_workstation.db"
 
 
 def _resolve_sqlite_path(value: str) -> Path:
@@ -94,13 +109,14 @@ def _resolve_sqlite_path(value: str) -> Path:
     path = Path(value)
     if path.is_absolute():
         return path
-    return BACKEND_ROOT / path
+    return USER_DATA_ROOT / path
 
 
 DB_PATH = _db_path()
 
 
 def _connect() -> sqlite3.Connection:
+    ensure_runtime_directories()
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -713,6 +729,17 @@ def ensure_db() -> None:
                     now,
                 ),
             )
+            if USING_CUSTOM_DATA_ROOT:
+                default_project = conn.execute(
+                    "SELECT root_path FROM projects WHERE id = ?",
+                    (DEFAULT_PROJECT_ID,),
+                ).fetchone()
+                current_root = str(default_project["root_path"] or "") if default_project else ""
+                if _is_pyinstaller_temp_path(current_root):
+                    conn.execute(
+                        "UPDATE projects SET root_path = ?, updated_at = ? WHERE id = ?",
+                        (str(PROJECT_ROOT), now, DEFAULT_PROJECT_ID),
+                    )
             conn.execute(
                 """
                 INSERT OR IGNORE INTO projects (
