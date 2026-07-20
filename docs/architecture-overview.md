@@ -124,7 +124,7 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 ## 配置与权限
 
 - 启动期静态配置在 `config/settings.py`，环境变量前缀为 `AGENT_WORKSTATION_`。
-- 运行时模型设置在 `config/runtime_settings.py`，持久化到 `json_store`。
+- 运行时模型设置在 `config/runtime_settings.py`，非敏感配置持久化到 `json_store`；模型 API Key 不进入 SQLite，macOS 使用 Keychain，Windows 使用当前用户 DPAPI 加密并将密文保存在统一 `userData/data/secrets/` 目录。旧版 SQLite 明文 Key 会在安全写入成功后自动迁移并删除原字段。
 - Agent 运行时由 `agents/factory.py` 统一创建和缓存。
 - 工具范围由 `RuntimeToolScope` 与 `tool_scope_resolver.py` 控制。
 - 权限策略由 guardrails 归一化为统一权限模型，再映射到 AgentScope permission mode、工具注入和 Trace。

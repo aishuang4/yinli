@@ -20,6 +20,7 @@ import type { ViewType } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { AppLayout } from './layouts/AppLayout';
 import { FeedbackBridge } from './components/FeedbackBridge';
+import { ApiKeyOnboardingModal } from './features/settings/ApiKeyOnboardingModal';
 
 const ChatPage = lazy(() => import('./pages/ChatPage').then((module) => ({ default: module.ChatPage })));
 const WorkflowPage = lazy(() => import('./pages/WorkflowPage').then((module) => ({ default: module.WorkflowPage })));
@@ -145,6 +146,7 @@ export function App() {
       <ConfigProvider {...sparkTheme}>
         <AntdApp>
           <FeedbackBridge />
+          <ApiKeyOnboardingModal />
           <AppLayout>
             <WorkspacePages
               workspaceMode={workspaceMode}

@@ -1,8 +1,15 @@
 """Runtime system settings persisted in SQLite."""
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from src.config.secret_store import (
+    SecretStoreError,
+    delete_model_api_key,
+    get_model_api_key,
+    set_model_api_key,
+)
 from src.config.settings import settings
 from src.storage.database import get_json_record, upsert_json_record
 
@@ -159,21 +166,13 @@ class EffectiveModelSettings:
     custom_models: list[str]
 
 
-def _mask_secret(value: str) -> str:
-    if not value:
-        return ""
-    if len(value) <= 8:
-        return "***"
-    return f"{value[:4]}...{value[-4:]}"
-
-
 def _default_model_settings() -> dict[str, Any]:
     return {
         "provider": "deepseek",
         "providerConfigs": {
             "deepseek": {
                 "providerName": MODEL_PROVIDERS["deepseek"].name,
-                "apiKey": settings.deepseek_api_key,
+                "apiKeyConfigured": bool(settings.deepseek_api_key),
                 "baseUrl": settings.deepseek_base_url,
                 "defaultModel": settings.default_model,
                 "fallbackModels": settings.fallback_models,
@@ -181,7 +180,7 @@ def _default_model_settings() -> dict[str, Any]:
             },
             "dashscope": {
                 "providerName": MODEL_PROVIDERS["dashscope"].name,
-                "apiKey": settings.dashscope_api_key,
+                "apiKeyConfigured": bool(settings.dashscope_api_key),
                 "baseUrl": settings.dashscope_base_url,
                 "defaultModel": MODEL_PROVIDERS["dashscope"].default_model,
                 "fallbackModels": ["qwen-turbo", "qwen-long"],
@@ -214,7 +213,7 @@ def _default_provider_api_key(provider_id: str) -> str:
 def _default_provider_config(provider: ModelProvider) -> dict[str, Any]:
     return {
         "providerName": provider.name,
-        "apiKey": _default_provider_api_key(provider.id),
+        "apiKeyConfigured": bool(_default_provider_api_key(provider.id)),
         "baseUrl": provider.default_base_url,
         "defaultModel": provider.default_model,
         "fallbackModels": [],
@@ -233,7 +232,10 @@ def _provider_configs_from_stored(stored: dict[str, Any], defaults: dict[str, An
             base = _default_provider_config(provider)
             result[provider_id] = {
                 "providerName": str(raw.get("providerName") or base["providerName"]),
-                "apiKey": str(raw.get("apiKey") or base["apiKey"]),
+                "apiKeyConfigured": bool(
+                    raw.get("apiKeyConfigured")
+                    or base["apiKeyConfigured"]
+                ),
                 "baseUrl": str(raw.get("baseUrl") or base["baseUrl"]),
                 "defaultModel": str(raw.get("defaultModel") or base["defaultModel"]),
                 "fallbackModels": _clean_model_list(raw.get("fallbackModels") or []),
@@ -250,7 +252,10 @@ def _provider_configs_from_stored(stored: dict[str, Any], defaults: dict[str, An
     }
     result[provider.id] = {
         "providerName": str(stored.get("providerName") or provider.name),
-        "apiKey": str(stored.get("apiKey") or _default_provider_api_key(provider.id) or ""),
+        "apiKeyConfigured": bool(
+            stored.get("apiKeyConfigured")
+            or _default_provider_api_key(provider.id)
+        ),
         "baseUrl": str(stored.get("baseUrl") or provider.default_base_url),
         "defaultModel": str(stored.get("defaultModel") or provider.default_model),
         "fallbackModels": _clean_model_list(stored.get("fallbackModels") or settings.fallback_models or []),
@@ -259,18 +264,66 @@ def _provider_configs_from_stored(stored: dict[str, Any], defaults: dict[str, An
     return result
 
 
+def _migrate_legacy_api_keys(stored: dict[str, Any]) -> dict[str, Any]:
+    """将历史 SQLite 明文 Key 移入系统凭据库，再清除原字段。"""
+
+    migrated = deepcopy(stored)
+    changed = False
+    provider_configs = migrated.get("providerConfigs")
+    if isinstance(provider_configs, dict):
+        for provider_id, raw in provider_configs.items():
+            if not isinstance(raw, dict) or "apiKey" not in raw:
+                continue
+            legacy_key = str(raw.get("apiKey") or "").strip()
+            if legacy_key:
+                set_model_api_key(str(provider_id), legacy_key)
+            raw.pop("apiKey", None)
+            raw["apiKeyConfigured"] = bool(
+                legacy_key
+                or raw.get("apiKeyConfigured")
+                or _default_provider_api_key(str(provider_id))
+            )
+            changed = True
+
+    if "apiKey" in migrated:
+        provider_id = str(migrated.get("provider") or "deepseek")
+        legacy_key = str(migrated.get("apiKey") or "").strip()
+        if legacy_key:
+            set_model_api_key(provider_id, legacy_key)
+        migrated.pop("apiKey", None)
+        migrated["apiKeyConfigured"] = bool(
+            legacy_key
+            or migrated.get("apiKeyConfigured")
+            or _default_provider_api_key(provider_id)
+        )
+        changed = True
+
+    if changed:
+        upsert_json_record(SYSTEM_SETTINGS_NAMESPACE, MODEL_SETTINGS_KEY, migrated)
+    return migrated
+
+
 def get_model_settings_raw() -> dict[str, Any]:
     stored = get_json_record(SYSTEM_SETTINGS_NAMESPACE, MODEL_SETTINGS_KEY) or {}
+    try:
+        stored = _migrate_legacy_api_keys(stored)
+    except SecretStoreError as exc:
+        raise ValueError("旧版 API Key 无法迁移到系统安全凭据库。") from exc
     defaults = _default_model_settings()
     provider_id = str(stored.get("provider") or defaults["provider"])
     provider = MODEL_PROVIDERS.get(provider_id, MODEL_PROVIDERS["custom_openai"])
     provider_configs = _provider_configs_from_stored(stored, defaults)
     current = provider_configs[provider.id]
+    try:
+        api_key = get_model_api_key(provider.id) or _default_provider_api_key(provider.id)
+    except SecretStoreError as exc:
+        raise ValueError("无法读取系统安全凭据库中的 API Key。") from exc
+    current["apiKeyConfigured"] = bool(api_key)
     return {
         "provider": provider.id,
         "providerName": current["providerName"],
         "adapter": provider.adapter,
-        "apiKey": current["apiKey"],
+        "apiKey": api_key,
         "baseUrl": current["baseUrl"],
         "defaultModel": current["defaultModel"],
         "fallbackModels": current["fallbackModels"],
@@ -317,13 +370,22 @@ def _is_provider_configured(provider: ModelProvider, config: dict[str, Any]) -> 
         )
     return bool(
         not provider.requires_api_key
-        or str(config.get("apiKey") or "").strip()
+        or config.get("apiKeyConfigured")
     )
 
 
 def get_model_settings_public() -> dict[str, Any]:
     raw = get_model_settings_raw()
     provider = MODEL_PROVIDERS[raw["provider"]]
+    try:
+        for item in MODEL_PROVIDERS.values():
+            config = raw["providerConfigs"].get(item.id, {})
+            config["apiKeyConfigured"] = bool(
+                get_model_api_key(item.id)
+                or _default_provider_api_key(item.id)
+            )
+    except SecretStoreError as exc:
+        raise ValueError("无法读取系统安全凭据库中的 API Key。") from exc
     return {
         "provider": raw["provider"],
         "providerName": raw["providerName"],
@@ -333,7 +395,7 @@ def get_model_settings_public() -> dict[str, Any]:
         "customModels": raw["customModels"],
         "modelOptions": get_current_model_options(),
         "apiKeyConfigured": bool(raw["apiKey"]),
-        "apiKeyPreview": _mask_secret(raw["apiKey"]),
+        "apiKeyPreview": "已安全保存" if raw["apiKey"] else "",
         "requiresApiKey": provider.requires_api_key,
         "adapter": provider.adapter,
         "providers": [
@@ -346,8 +408,8 @@ def get_model_settings_public() -> dict[str, Any]:
                 "requiresApiKey": item.requires_api_key,
                 "adapter": item.adapter,
                 "configured": _is_provider_configured(item, raw["providerConfigs"].get(item.id, {})),
-                "apiKeyConfigured": bool(raw["providerConfigs"].get(item.id, {}).get("apiKey")),
-                "apiKeyPreview": _mask_secret(str(raw["providerConfigs"].get(item.id, {}).get("apiKey") or "")),
+                "apiKeyConfigured": bool(raw["providerConfigs"].get(item.id, {}).get("apiKeyConfigured")),
+                "apiKeyPreview": "已安全保存" if raw["providerConfigs"].get(item.id, {}).get("apiKeyConfigured") else "",
                 "providerName": str(raw["providerConfigs"].get(item.id, {}).get("providerName") or item.name),
                 "baseUrl": str(raw["providerConfigs"].get(item.id, {}).get("baseUrl") or item.default_base_url),
                 "configuredDefaultModel": str(raw["providerConfigs"].get(item.id, {}).get("defaultModel") or item.default_model),
@@ -361,6 +423,10 @@ def get_model_settings_public() -> dict[str, Any]:
 
 def save_model_settings(data: dict[str, Any]) -> dict[str, Any]:
     stored = get_json_record(SYSTEM_SETTINGS_NAMESPACE, MODEL_SETTINGS_KEY) or {}
+    try:
+        stored = _migrate_legacy_api_keys(stored)
+    except SecretStoreError as exc:
+        raise ValueError("旧版 API Key 无法迁移到系统安全凭据库。") from exc
     current = get_model_settings_raw()
     provider_id = str(data.get("provider") or current["provider"])
     provider = MODEL_PROVIDERS.get(provider_id, MODEL_PROVIDERS["custom_openai"])
@@ -373,16 +439,21 @@ def save_model_settings(data: dict[str, Any]) -> dict[str, Any]:
     }
     next_config = {
         "providerName": str(data.get("providerName") or existing.get("providerName") or provider.name),
-        "apiKey": str(existing.get("apiKey") or ""),
+        "apiKeyConfigured": bool(existing.get("apiKeyConfigured")),
         "baseUrl": str(data.get("baseUrl") or existing.get("baseUrl") or provider.default_base_url),
         "defaultModel": str(data.get("defaultModel") or existing.get("defaultModel") or provider.default_model),
         "fallbackModels": _clean_model_list(data.get("fallbackModels") or []),
         "customModels": _clean_model_list(data.get("customModels") or []),
     }
-    if data.get("clearApiKey"):
-        next_config["apiKey"] = ""
-    elif "apiKey" in data and data.get("apiKey") is not None:
-        next_config["apiKey"] = str(data.get("apiKey") or "")
+    try:
+        if data.get("clearApiKey"):
+            delete_model_api_key(provider_id)
+            next_config["apiKeyConfigured"] = bool(_default_provider_api_key(provider_id))
+        elif str(data.get("apiKey") or "").strip():
+            set_model_api_key(provider_id, str(data["apiKey"]))
+            next_config["apiKeyConfigured"] = True
+    except SecretStoreError as exc:
+        raise ValueError("API Key 无法写入系统安全凭据库。") from exc
 
     provider_configs[provider_id] = next_config
     upsert_json_record(SYSTEM_SETTINGS_NAMESPACE, MODEL_SETTINGS_KEY, next_settings)

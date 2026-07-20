@@ -22,6 +22,7 @@ def test_desktop_writable_paths_share_user_data_root(tmp_path: Path) -> None:
 import json
 from src.agents.runtime_types import WORKSPACE_DIR
 from src.config import runtime_paths
+from src.config.secret_store import SECRET_DIR
 from src.memory.markdown_store import MarkdownMemoryStore
 from src.memory.wiki_vault import MemoryWikiVaultSyncer
 from src.server.routes import agents, mcp, skills
@@ -40,6 +41,7 @@ print(json.dumps({
     "skills": str(skills.SKILL_PACKAGES_DIR),
     "subagents": str(SUBAGENT_USER_DIR),
     "sandboxes": str(runtime_paths.SANDBOX_ROOT),
+    "secrets": str(SECRET_DIR),
     "legacy_agents": str(agents.AGENTS_REGISTRY_FILE),
     "legacy_mcp": str(mcp.USER_MCP_REGISTRY_FILE),
     "legacy_chat": str(CHAT_DATA_PATH),

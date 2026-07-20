@@ -26,7 +26,10 @@ class ModelSettingsUpdate(BaseModel):
 async def get_model_settings() -> dict:
     """Return model provider settings without exposing the API key."""
 
-    return get_model_settings_public()
+    try:
+        return get_model_settings_public()
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.put("/model")
