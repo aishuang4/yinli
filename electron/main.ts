@@ -8,13 +8,16 @@
  * 4. 注册 IPC 处理器，桥接前端与系统能力
  */
 
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
+import { randomUUID } from 'crypto';
 
 /** 当前是否处于开发模式（Vite dev server 运行中） */
 const isDev = process.env.NODE_ENV === 'development';
+/** Windows 安装包排障时由调试脚本开启，允许查看渲染进程 DevTools。 */
+const desktopDebugEnabled = process.env.AGENT_WORKSTATION_DESKTOP_DEBUG === '1';
 
 // 安装版固定 userData 目录名，避免 productName 或 package name 变化造成数据分散。
 if (!isDev) {
@@ -31,6 +34,88 @@ let pythonProcess: ChildProcess | null = null;
 /** 主窗口引用 */
 let mainWindow: BrowserWindow | null = null;
 
+type DesktopBackendState = 'starting' | 'ready' | 'error';
+
+interface DesktopBackendStatus {
+  state: DesktopBackendState;
+  detail?: string;
+}
+
+interface BackendOwnerRecord {
+  pid: number;
+  instanceId: string;
+  startedAt: string;
+}
+
+let backendStatus: DesktopBackendStatus = { state: 'starting' };
+let backendStartupPromise: Promise<boolean> | null = null;
+let backendInstanceId: string | null = null;
+let appQuitting = false;
+
+/** 返回安装实例的诊断日志目录，并在首次使用时创建。 */
+function desktopLogsPath(): string {
+  const logsPath = path.join(app.getPath('userData'), 'logs');
+  fs.mkdirSync(logsPath, { recursive: true });
+  return logsPath;
+}
+
+/** 将桌面端关键运行信息写入本地日志，便于无控制台的安装包排障。 */
+function appendDesktopLog(fileName: string, message: string): void {
+  try {
+    const line = `[${new Date().toISOString()}] ${message.trim()}\n`;
+    fs.appendFileSync(path.join(desktopLogsPath(), fileName), line, 'utf8');
+  } catch {
+    // 日志写入失败不能影响应用本身的启动与退出。
+  }
+}
+
+/** 更新后端状态，并通知已加载的渲染进程。 */
+function setBackendStatus(status: DesktopBackendStatus): void {
+  backendStatus = status;
+  appendDesktopLog('electron-main.log', `Backend status: ${status.state}${status.detail ? ` - ${status.detail}` : ''}`);
+  mainWindow?.webContents.send('backend-status', status);
+}
+
+/** 返回当前安装实例用于清理遗留进程的本地记录路径。 */
+function backendOwnerPath(): string {
+  return path.join(app.getPath('userData'), 'backend-process.json');
+}
+
+function readBackendOwner(): BackendOwnerRecord | null {
+  try {
+    const raw = fs.readFileSync(backendOwnerPath(), 'utf8');
+    const parsed = JSON.parse(raw) as Partial<BackendOwnerRecord>;
+    if (typeof parsed.pid !== 'number' || typeof parsed.instanceId !== 'string') {
+      return null;
+    }
+    return {
+      pid: parsed.pid,
+      instanceId: parsed.instanceId,
+      startedAt: typeof parsed.startedAt === 'string' ? parsed.startedAt : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeBackendOwner(record: BackendOwnerRecord): void {
+  fs.writeFileSync(backendOwnerPath(), JSON.stringify(record), 'utf8');
+}
+
+function removeBackendOwner(expectedPid?: number): void {
+  const owner = readBackendOwner();
+  if (expectedPid !== undefined && owner?.pid !== expectedPid) {
+    return;
+  }
+  try {
+    fs.unlinkSync(backendOwnerPath());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn('[Electron] Failed to remove backend owner record', error);
+    }
+  }
+}
+
 /**
  * 创建主浏览器窗口
  * 配置窗口尺寸、无边框标题栏（自定义 TitleBar）、预加载脚本
@@ -41,7 +126,16 @@ function createMainWindow(): void {
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    titleBarStyle: 'hiddenInset', // macOS 内嵌标题栏，留出红绿灯空间
+    // macOS 保持红绿灯区域；Windows 隐藏系统标题栏并将窗口控制按钮覆盖在内容之上，
+    // 使工作区能够从窗口左上角开始，与网页端保持一致。
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    ...(process.platform === 'win32' ? {
+      titleBarOverlay: {
+        color: '#00000000',
+        symbolColor: '#5f6773',
+        height: 32,
+      },
+    } : {}),
     trafficLightPosition: { x: 16, y: 16 }, // 红绿灯按钮位置
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -56,6 +150,9 @@ function createMainWindow(): void {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    if (desktopDebugEnabled) {
+      mainWindow.webContents.openDevTools({ mode: 'detach' });
+    }
   }
 
   // 外部链接用系统浏览器打开
@@ -69,58 +166,195 @@ function createMainWindow(): void {
   });
 }
 
+/** 请求本机健康接口；失败时返回 null。 */
+async function fetchBackendHealth(): Promise<{ desktopInstanceId?: string | null } | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 1000);
+  try {
+    const response = await fetch(`${BACKEND_SERVER_URL}/api/health`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json() as { desktopInstanceId?: string | null };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** 在 Windows 结束整个进程树，避免打包后端遗留子进程占用端口。 */
+async function terminateProcessTree(pid: number): Promise<void> {
+  if (process.platform === 'win32') {
+    await new Promise<void>((resolve) => {
+      const taskkill = spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
+      taskkill.once('error', () => resolve());
+      taskkill.once('exit', () => resolve());
+    });
+    return;
+  }
+
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    return;
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  try {
+    process.kill(pid, 0);
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // 进程已自然退出。
+  }
+}
+
 /**
- * 启动 Python 后端子进程
- * 生产模式下作为 Electron 子进程运行，随主进程启动/关闭
+ * 清理因崩溃或强制结束而遗留的本应用后端。
+ * 仅当健康接口返回的实例标识与记录匹配时才会终止，避免误杀其他本机服务。
  */
-function startPythonBackend(): void {
+async function cleanupStalePythonBackend(): Promise<void> {
   if (isDev) {
-    // 开发模式：后端独立运行，不启动子进程
-    console.log('[Electron] Dev mode: skipping Python backend launch');
     return;
   }
 
-  const backendProcess = resolvePackagedBackendProcess();
-  if (!backendProcess) {
-    console.error('[Electron] No packaged backend entry found');
+  const owner = readBackendOwner();
+  if (!owner) {
     return;
   }
 
-  const userDataPath = app.getPath('userData');
-  const dataPath = path.join(userDataPath, 'data');
-  const logsPath = path.join(userDataPath, 'logs');
-  fs.mkdirSync(dataPath, { recursive: true });
-  fs.mkdirSync(logsPath, { recursive: true });
+  const health = await fetchBackendHealth();
+  if (health?.desktopInstanceId !== owner.instanceId) {
+    removeBackendOwner(owner.pid);
+    return;
+  }
 
-  const env = {
-    ...process.env,
-    PYTHONUNBUFFERED: '1',
-    AGENT_WORKSTATION_DESKTOP_MODE: '1',
-    AGENT_WORKSTATION_DATA_DIR: userDataPath,
-    AGENT_WORKSTATION_DATABASE_URL: `sqlite+aiosqlite:///${path.join(dataPath, 'agent_workstation.db')}`,
-    AGENT_WORKSTATION_PORT: '8765',
-    AGENT_WORKSTATION_CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000","null","file://"]',
-  };
+  console.log(`[Electron] Cleaning stale Python backend ${owner.pid}`);
+  appendDesktopLog('electron-main.log', `Cleaning stale backend process ${owner.pid}`);
+  await terminateProcessTree(owner.pid);
+  removeBackendOwner(owner.pid);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+}
 
-  pythonProcess = spawn(backendProcess.command, backendProcess.args, {
-    cwd: backendProcess.cwd,
-    env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
+/**
+ * 启动或恢复 Python 后端。
+ * 安装版会记录进程归属，开发模式只等待外部后端就绪。
+ */
+async function ensurePythonBackend(): Promise<boolean> {
+  if (backendStatus.state === 'ready') {
+    return true;
+  }
+  if (backendStartupPromise) {
+    return backendStartupPromise;
+  }
+
+  backendStartupPromise = (async () => {
+    setBackendStatus({ state: 'starting', detail: '正在启动本地服务…' });
+
+    if (isDev) {
+      const ready = await waitForPythonBackend();
+      setBackendStatus(ready
+        ? { state: 'ready' }
+        : { state: 'error', detail: '未检测到开发后端，请先启动 backend 服务。' });
+      return ready;
+    }
+
+    await cleanupStalePythonBackend();
+    const existingHealth = await fetchBackendHealth();
+    if (existingHealth) {
+      setBackendStatus({
+        state: 'error',
+        detail: '本机端口 8765 已被其他服务占用，请关闭该服务后重试。',
+      });
+      return false;
+    }
+
+    const backendProcess = resolvePackagedBackendProcess();
+    if (!backendProcess) {
+      setBackendStatus({ state: 'error', detail: '未找到内置服务，请重新安装应用。' });
+      return false;
+    }
+
+    const userDataPath = app.getPath('userData');
+    const dataPath = path.join(userDataPath, 'data');
+    const logsPath = path.join(userDataPath, 'logs');
+    fs.mkdirSync(dataPath, { recursive: true });
+    fs.mkdirSync(logsPath, { recursive: true });
+
+    backendInstanceId = randomUUID();
+    appendDesktopLog('electron-main.log', `Starting backend from ${backendProcess.command}`);
+    const env = {
+      ...process.env,
+      PYTHONUNBUFFERED: '1',
+      AGENT_WORKSTATION_DESKTOP_MODE: '1',
+      AGENT_WORKSTATION_DESKTOP_INSTANCE_ID: backendInstanceId,
+      AGENT_WORKSTATION_DATA_DIR: userDataPath,
+      AGENT_WORKSTATION_DATABASE_URL: `sqlite+aiosqlite:///${path.join(dataPath, 'agent_workstation.db')}`,
+      AGENT_WORKSTATION_PORT: '8765',
+      AGENT_WORKSTATION_CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000","null","file://"]',
+    };
+
+    pythonProcess = spawn(backendProcess.command, backendProcess.args, {
+      cwd: backendProcess.cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+
+    if (!pythonProcess.pid) {
+      setBackendStatus({ state: 'error', detail: '内置服务启动失败，请重试或重新安装应用。' });
+      return false;
+    }
+
+    const pid = pythonProcess.pid;
+    writeBackendOwner({ pid, instanceId: backendInstanceId, startedAt: new Date().toISOString() });
+    pythonProcess.stdout?.on('data', (data: Buffer) => {
+      const output = data.toString().trim();
+      console.log(`[Python] ${output}`);
+      appendDesktopLog('python-backend.log', output);
+    });
+    pythonProcess.stderr?.on('data', (data: Buffer) => {
+      const output = data.toString().trim();
+      console.error(`[Python] ${output}`);
+      appendDesktopLog('python-backend.log', `ERROR ${output}`);
+    });
+    let backendExited = false;
+    let backendExitCode: number | null = null;
+    pythonProcess.on('exit', (code: number | null) => {
+      backendExited = true;
+      backendExitCode = code;
+      console.log(`[Python] Process exited with code ${code}`);
+      appendDesktopLog('electron-main.log', `Backend process ${pid} exited with code ${code}`);
+      removeBackendOwner(pid);
+      if (pythonProcess?.pid === pid) {
+        pythonProcess = null;
+      }
+      if (!appQuitting) {
+        setBackendStatus({ state: 'error', detail: `本地服务已异常退出（代码 ${code ?? '未知'}）。` });
+      }
+    });
+
+    const ready = await waitForPythonBackend(15000, () => backendExited);
+    if (!ready) {
+      await stopPythonBackend();
+      if (!backendExited) {
+        setBackendStatus({ state: 'error', detail: '本地服务启动超时，请重试或查看安装日志。' });
+      } else {
+        setBackendStatus({ state: 'error', detail: `本地服务启动失败（代码 ${backendExitCode ?? '未知'}）。` });
+      }
+      return false;
+    }
+
+    setBackendStatus({ state: 'ready' });
+    return true;
+  })().finally(() => {
+    backendStartupPromise = null;
   });
 
-  pythonProcess.stdout?.on('data', (data: Buffer) => {
-    console.log(`[Python] ${data.toString().trim()}`);
-  });
-
-  pythonProcess.stderr?.on('data', (data: Buffer) => {
-    console.error(`[Python] ${data.toString().trim()}`);
-  });
-
-  pythonProcess.on('exit', (code: number | null) => {
-    console.log(`[Python] Process exited with code ${code}`);
-    pythonProcess = null;
-  });
+  return backendStartupPromise;
 }
 
 interface BackendProcessConfig {
@@ -172,22 +406,26 @@ function resolvePackagedBackendProcess(): BackendProcessConfig | null {
   };
 }
 
-/**
- * 停止 Python 后端子进程
- */
-function stopPythonBackend(): void {
-  if (pythonProcess) {
-    pythonProcess.kill('SIGTERM');
-    pythonProcess = null;
+/** 停止当前安装实例启动的 Python 后端及其子进程。 */
+async function stopPythonBackend(): Promise<void> {
+  const pid = pythonProcess?.pid ?? readBackendOwner()?.pid;
+  if (!pid) {
+    return;
   }
+  await terminateProcessTree(pid);
+  removeBackendOwner(pid);
+  pythonProcess = null;
 }
 
-async function waitForPythonBackend(timeoutMs = 15000): Promise<boolean> {
+async function waitForPythonBackend(timeoutMs = 15000, shouldAbort?: () => boolean): Promise<boolean> {
   if (isDev) {
     return true;
   }
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (shouldAbort?.()) {
+      return false;
+    }
     try {
       const response = await fetch(`${BACKEND_SERVER_URL}/api/health`, { cache: 'no-store' });
       if (response.ok) {
@@ -205,14 +443,22 @@ async function waitForPythonBackend(timeoutMs = 15000): Promise<boolean> {
 // ========== App Lifecycle ==========
 
 app.whenReady().then(async () => {
-  startPythonBackend();
-  await waitForPythonBackend();
+  appendDesktopLog('electron-main.log', `Application ready on ${process.platform}`);
+  // Windows/Linux 默认会生成 File、Edit 等菜单。桌面工作台不提供这些菜单入口，
+  // 显式移除以避免占用内容区域；macOS 仍保留系统菜单栏约定。
+  if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null);
+  }
+
   createMainWindow();
+  // 先展示本地启动页，再异步等待后端，以免服务初始化期间出现空白窗口。
+  void ensurePythonBackend();
 
   // macOS: 点击 Dock 图标时重新创建窗口
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
+      void ensurePythonBackend();
     }
   });
 });
@@ -220,14 +466,19 @@ app.whenReady().then(async () => {
 // 所有窗口关闭时退出应用（macOS 除外）
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    stopPythonBackend();
     app.quit();
   }
 });
 
-// 应用退出前清理子进程
-app.on('before-quit', () => {
-  stopPythonBackend();
+// 显式退出时等待进程树清理完成；macOS 关闭窗口本身不退出应用。
+app.on('before-quit', (event) => {
+  if (appQuitting) {
+    return;
+  }
+  appQuitting = true;
+  appendDesktopLog('electron-main.log', 'Application is quitting; stopping backend process.');
+  event.preventDefault();
+  void stopPythonBackend().finally(() => app.exit(0));
 });
 
 // ========== IPC Handlers ==========
@@ -238,6 +489,22 @@ app.on('before-quit', () => {
  */
 ipcMain.handle('get-backend-url', () => {
   return BACKEND_SERVER_URL;
+});
+
+/** 获取内置后端状态，供启动页和运行期故障页使用。 */
+ipcMain.handle('get-backend-status', () => backendStatus);
+
+/** 用户触发恢复时，先结束旧实例，再重新启动后端。 */
+ipcMain.handle('restart-backend', async () => {
+  await stopPythonBackend();
+  await ensurePythonBackend();
+  return backendStatus;
+});
+
+/** 打开桌面端诊断日志目录，用于安装包启动失败后的排障。 */
+ipcMain.handle('open-desktop-logs', async () => {
+  const error = await shell.openPath(desktopLogsPath());
+  return error ? { ok: false, error } : { ok: true };
 });
 
 /**

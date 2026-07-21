@@ -1,3 +1,5 @@
+import type { DesktopBackendStatus } from './desktopBackend';
+
 /**
  * Electron IPC API 类型声明
  *
@@ -17,6 +19,14 @@ interface ElectronAPI {
   openExternal(url: string): Promise<{ ok: boolean; error?: string }>;
   /** 获取当前平台 */
   getPlatform(): string;
+  /** 获取内置后端状态 */
+  getBackendStatus(): Promise<DesktopBackendStatus>;
+  /** 重新启动内置后端 */
+  restartBackend(): Promise<DesktopBackendStatus>;
+  /** 打开桌面端诊断日志目录 */
+  openDesktopLogs(): Promise<{ ok: boolean; error?: string }>;
+  /** 订阅内置后端状态变化 */
+  onBackendStatus(callback: (status: DesktopBackendStatus) => void): () => void;
 }
 
 declare global {

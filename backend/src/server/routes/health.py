@@ -6,6 +6,7 @@
 """
 
 from fastapi import APIRouter
+import os
 
 router = APIRouter()
 
@@ -27,4 +28,6 @@ async def health_check() -> dict:
         "version": "0.1.0",
         "framework": "AgentScope 2.0",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        # 仅桌面端进程设置，用于 Electron 识别并清理自身遗留的后端实例。
+        "desktopInstanceId": os.getenv("AGENT_WORKSTATION_DESKTOP_INSTANCE_ID") or None,
     }

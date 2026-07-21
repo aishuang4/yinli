@@ -27,6 +27,55 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* 桌面端后端启动/故障门，保证本地服务不可用时仍有稳定可恢复的界面。 */
+.desktop-backend-gate {
+  display: grid;
+  width: 100vw;
+  height: 100vh;
+  place-items: center;
+  background: var(--color-bg-primary);
+}
+
+.desktop-backend-gate__content {
+  display: flex;
+  width: min(420px, calc(100vw - 48px));
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.desktop-backend-gate__mark {
+  display: grid;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 20px;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  color: var(--color-accent);
+}
+
+.desktop-backend-gate h1 {
+  color: var(--color-text-primary);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.desktop-backend-gate p {
+  margin: 10px 0 20px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.desktop-backend-gate__actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
 /* 减少动画偏好 */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -364,8 +413,19 @@ button[class*="-btn"] .lucide {
 }
 
 /* 历史栏收起后，Chat 顶栏的操作按钮需要避开 macOS traffic lights。 */
-.chat-workbench-shell[data-electron-shell="true"][data-history-collapsed="true"] .chat-workbench-topbar {
+.chat-workbench-shell[data-electron-shell="true"]:not([data-windows-shell="true"])[data-history-collapsed="true"] .chat-workbench-topbar {
   padding-left: 128px;
+}
+
+/* Windows 使用透明标题栏覆盖层：保留可拖拽区域，并避开右上角窗口控制按钮。 */
+.chat-workbench-shell[data-windows-shell="true"] .chat-workbench-topbar {
+  padding-right: 148px;
+  -webkit-app-region: drag;
+}
+
+.chat-workbench-shell[data-windows-shell="true"] .chat-workbench-topbar button,
+.chat-workbench-shell[data-windows-shell="true"] .chat-workbench-topbar [role="button"] {
+  -webkit-app-region: no-drag;
 }
 
 .chat-workbench-top-action {

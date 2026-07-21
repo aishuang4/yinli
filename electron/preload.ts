@@ -51,4 +51,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @returns 'darwin' | 'win32' | 'linux'
    */
   getPlatform: (): string => process.platform,
+
+  /** 获取内置后端当前生命周期状态。 */
+  getBackendStatus: (): Promise<DesktopBackendStatus> => ipcRenderer.invoke('get-backend-status'),
+
+  /** 重新启动内置后端，用于用户从启动故障页恢复。 */
+  restartBackend: (): Promise<DesktopBackendStatus> => ipcRenderer.invoke('restart-backend'),
+
+  /** 在系统文件管理器中打开桌面端诊断日志目录。 */
+  openDesktopLogs: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('open-desktop-logs'),
+
+  /** 订阅内置后端状态变化，返回取消订阅函数。 */
+  onBackendStatus: (callback: (status: DesktopBackendStatus) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: DesktopBackendStatus) => callback(status);
+    ipcRenderer.on('backend-status', listener);
+    return () => ipcRenderer.removeListener('backend-status', listener);
+  },
 });
+
+type DesktopBackendStatus = {
+  state: 'starting' | 'ready' | 'error';
+  detail?: string;
+};

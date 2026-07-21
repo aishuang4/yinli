@@ -319,6 +319,9 @@ export function ChatPage() {
   const selectedModelId = runtimeAgent?.modelConfig.primary || 'deepseek-v4-flash';
   const selectedModelSupportsImages = selectedModelId === 'qwen3.7-plus';
   const isDesktopShell = Boolean(window.electronAPI);
+  const desktopPlatform = window.electronAPI?.getPlatform();
+  const isMacDesktopShell = desktopPlatform === 'darwin';
+  const isWindowsDesktopShell = desktopPlatform === 'win32';
   const hasLiveResponse = (
     state.isStreaming ||
     state.hitlRequests.length > 0 ||
@@ -887,6 +890,7 @@ export function ChatPage() {
       data-history-mounted={historyPanelMounted}
       data-history-collapsed={historyCollapsed}
       data-electron-shell={isDesktopShell}
+      data-windows-shell={isWindowsDesktopShell}
       style={{
         gridTemplateColumns: historyPanelMounted
           ? historyCollapsed
@@ -901,7 +905,7 @@ export function ChatPage() {
           className="chat-history-panel chat-workbench-history flex min-h-0 flex-col overflow-hidden"
           data-collapsed={historyCollapsed}
         >
-          {isDesktopShell && <div className="chat-workbench-electron-spacer" aria-hidden="true" />}
+          {isMacDesktopShell && <div className="chat-workbench-electron-spacer" aria-hidden="true" />}
           <div className="px-4 pb-3 pt-3">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
@@ -1027,7 +1031,7 @@ export function ChatPage() {
         <div className="grid min-h-0 grid-rows-[auto_1fr_auto] overflow-hidden">
           <header
             className="chat-workbench-topbar flex items-center justify-between gap-4 px-8 py-2"
-            style={isDesktopShell && (!historyPanelMounted || historyCollapsed) ? { paddingLeft: 128 } : undefined}
+            style={isMacDesktopShell && (!historyPanelMounted || historyCollapsed) ? { paddingLeft: 128 } : undefined}
           >
           <div className="flex min-w-0 items-center gap-3">
             {historyCollapsed && (
@@ -1293,7 +1297,7 @@ export function ChatPage() {
                   </FileImportButton>
                 </span>
               </Tooltip>
-              <div className="flex h-8 gap-1 rounded-[10px] bg-[var(--color-bg-primary)] p-1">
+              <div className="flex h-8 gap-1 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-[3px]">
                 <Tooltip title="单 Agent" placement="top" mode="dark">
                   <span className="inline-flex">
                     <button

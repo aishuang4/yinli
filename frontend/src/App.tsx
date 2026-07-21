@@ -20,7 +20,9 @@ import type { ViewType } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { AppLayout } from './layouts/AppLayout';
 import { FeedbackBridge } from './components/FeedbackBridge';
+import { DesktopBackendGate } from './components/DesktopBackendGate';
 import { ApiKeyOnboardingModal } from './features/settings/ApiKeyOnboardingModal';
+import type { DesktopBackendStatus } from './types/desktopBackend';
 
 const ChatPage = lazy(() => import('./pages/ChatPage').then((module) => ({ default: module.ChatPage })));
 const WorkflowPage = lazy(() => import('./pages/WorkflowPage').then((module) => ({ default: module.WorkflowPage })));
@@ -69,6 +71,10 @@ export function App() {
   const setBackendUrl = useSettingsStore((s) => s.setBackendUrl);
   const setAppVersion = useSettingsStore((s) => s.setAppVersion);
   const [cachedViews, setCachedViews] = useState<ViewType[]>(['chat']);
+  const isDesktopShell = Boolean(window.electronAPI);
+  const [desktopBackendStatus, setDesktopBackendStatus] = useState<DesktopBackendStatus>(
+    isDesktopShell ? { state: 'starting' } : { state: 'ready' },
+  );
 
   // 同步主题到 DOM（useLayoutEffect 确保在绘制前应用，避免闪烁）
   useLayoutEffect(() => {
@@ -102,6 +108,17 @@ export function App() {
       mounted = false;
     };
   }, [setAppVersion, setBackendUrl]);
+
+  useEffect(() => {
+    const electronAPI = window.electronAPI;
+    if (!electronAPI) {
+      return;
+    }
+
+    const unsubscribe = electronAPI.onBackendStatus(setDesktopBackendStatus);
+    void electronAPI.getBackendStatus().then(setDesktopBackendStatus);
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -140,20 +157,29 @@ export function App() {
   }, [currentView]);
 
   const sparkTheme = theme === 'dark' ? carbonDarkTheme : carbonTheme;
+  const retryDesktopBackend = () => {
+    void window.electronAPI?.restartBackend();
+  };
 
   return (
     <StyleProvider linters={[]}>
       <ConfigProvider {...sparkTheme}>
         <AntdApp>
-          <FeedbackBridge />
-          <ApiKeyOnboardingModal />
-          <AppLayout>
-            <WorkspacePages
-              workspaceMode={workspaceMode}
-              activeView={currentView}
-              cachedViews={cachedViews}
-            />
-          </AppLayout>
+          {isDesktopShell && desktopBackendStatus.state !== 'ready' ? (
+            <DesktopBackendGate status={desktopBackendStatus} onRetry={retryDesktopBackend} />
+          ) : (
+            <>
+              <FeedbackBridge />
+              <ApiKeyOnboardingModal />
+              <AppLayout>
+                <WorkspacePages
+                  workspaceMode={workspaceMode}
+                  activeView={currentView}
+                  cachedViews={cachedViews}
+                />
+              </AppLayout>
+            </>
+          )}
         </AntdApp>
       </ConfigProvider>
     </StyleProvider>
