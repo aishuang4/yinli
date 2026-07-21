@@ -169,6 +169,8 @@ class SystemToolResponse(BaseModel):
     risk: str
     readonly: bool
     default_enabled: bool = Field(alias="defaultEnabled")
+    platforms: list[str] = Field(default_factory=list)
+    platform_notes: list[str] = Field(default_factory=list, alias="platformNotes")
 
     model_config = {"populate_by_name": True}
 
@@ -272,15 +274,18 @@ def _system_tool_records() -> list[SystemToolResponse]:
             "risk": "low",
             "readonly": True,
             "defaultEnabled": True,
+            "platforms": ["macOS", "Windows", "Linux"],
         },
         {
             "name": "Grep",
-            "description": "按关键字搜索文件内容。",
+            "description": "按关键字搜索文件内容；未安装 ripgrep 时自动使用内置搜索。",
             "category": "filesystem",
             "action": "read",
             "risk": "low",
             "readonly": True,
             "defaultEnabled": True,
+            "platforms": ["macOS", "Windows", "Linux"],
+            "platformNotes": ["Windows 未安装 rg.exe 时自动降级为 Python 搜索。"],
         },
         {
             "name": "Glob",
@@ -290,6 +295,7 @@ def _system_tool_records() -> list[SystemToolResponse]:
             "risk": "low",
             "readonly": True,
             "defaultEnabled": True,
+            "platforms": ["macOS", "Windows", "Linux"],
         },
         {
             "name": "Write",
@@ -299,6 +305,7 @@ def _system_tool_records() -> list[SystemToolResponse]:
             "risk": "high",
             "readonly": False,
             "defaultEnabled": True,
+            "platforms": ["macOS", "Windows", "Linux"],
         },
         {
             "name": "Edit",
@@ -308,6 +315,7 @@ def _system_tool_records() -> list[SystemToolResponse]:
             "risk": "high",
             "readonly": False,
             "defaultEnabled": True,
+            "platforms": ["macOS", "Windows", "Linux"],
         },
         {
             "name": "Bash",
@@ -317,6 +325,8 @@ def _system_tool_records() -> list[SystemToolResponse]:
             "risk": "high",
             "readonly": False,
             "defaultEnabled": True,
+            "platforms": ["macOS", "Windows", "Linux"],
+            "platformNotes": ["Windows 使用 cmd.exe；macOS/Linux 使用 sh。"],
         },
         {
             "name": "HttpRequest",
@@ -326,6 +336,7 @@ def _system_tool_records() -> list[SystemToolResponse]:
             "risk": "medium",
             "readonly": False,
             "defaultEnabled": True,
+            "platforms": ["macOS", "Windows", "Linux"],
         },
         {
             "name": "WebFetch",
@@ -335,6 +346,7 @@ def _system_tool_records() -> list[SystemToolResponse]:
             "risk": "medium",
             "readonly": True,
             "defaultEnabled": True,
+            "platforms": ["macOS", "Windows", "Linux"],
         },
         {
             "name": "AskUser",
@@ -344,6 +356,7 @@ def _system_tool_records() -> list[SystemToolResponse]:
             "risk": "low",
             "readonly": True,
             "defaultEnabled": True,
+            "platforms": ["macOS", "Windows", "Linux"],
         },
     ]
     return [SystemToolResponse.model_validate(item) for item in records]

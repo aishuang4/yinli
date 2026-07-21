@@ -41,6 +41,21 @@ def test_skill_package_diagnostics_are_non_blocking():
     assert any("helper.bin" in warning for warning in skill.warnings)
 
 
+def test_skill_package_warns_about_platform_specific_scripts():
+    """导入的 Shell 与 PowerShell 脚本应明确提示可执行平台。"""
+
+    import src.server.routes.skills as skills_routes
+
+    skill = skills_routes._skill_from_markdown(
+        "portable-skill/SKILL.md",
+        "---\nname: portable-skill\ndescription: Run platform helpers.\n---\n",
+        resources=["SKILL.md", "scripts/run.sh", "scripts/setup.ps1"],
+    )
+
+    assert any(".sh/.bash" in warning and "Windows" in warning for warning in skill.warnings)
+    assert any(".ps1" in warning and "PowerShell 7+" in warning for warning in skill.warnings)
+
+
 def test_skill_zip_rejects_symbolic_links():
     """Skill zip 不允许通过符号链接把资源解析到包目录之外。"""
 
@@ -61,6 +76,66 @@ def test_skill_zip_rejects_symbolic_links():
         skills_routes._read_skill_md_from_zip(buffer.getvalue())
 
     assert getattr(exc_info.value, "status_code", None) == 422
+
+
+def test_import_skill_package_ignores_build_artifacts_and_macos_metadata(tmp_path, monkeypatch):
+    """导入时只保留标准包资源，不能复制构建产物的重复副本。"""
+
+    import src.server.routes.skills as skills_routes
+
+    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(
+            "word-documents/SKILL.md",
+            "---\nname: word-documents\ndescription: Create Word documents.\n---\n",
+        )
+        archive.writestr("word-documents/scripts/create_docx.py", "print('ok')\n")
+        archive.writestr("word-documents/.DS_Store", "metadata")
+        archive.writestr("artifacts/skills/word-documents/SKILL.md", "duplicate")
+        archive.writestr("artifacts/skills/word-documents/scripts/create_docx.py", "duplicate")
+
+    skill_path, _markdown, archive, members = skills_routes._read_skill_md_from_zip(buffer.getvalue())
+    try:
+        resource_path, resources = skills_routes._extract_skill_package(
+            archive, members, skill_path, "word-documents",
+        )
+    finally:
+        archive.close()
+
+    assert resources == ["SKILL.md", "scripts/create_docx.py"]
+    assert (tmp_path / "skill_packages" / "word-documents" / "scripts" / "create_docx.py").exists()
+    assert not (tmp_path / "skill_packages" / "word-documents" / "artifacts").exists()
+    assert resource_path == str(tmp_path / "skill_packages" / "word-documents")
+
+
+def test_existing_skill_package_cleans_duplicate_artifacts(tmp_path, monkeypatch):
+    """启动回填历史 Skill 时清理旧版本留下的 artifacts 副本。"""
+
+    import src.server.routes.skills as skills_routes
+
+    package_dir = tmp_path / "skill_packages" / "word-documents"
+    (package_dir / "scripts").mkdir(parents=True)
+    (package_dir / "SKILL.md").write_text("---\nname: word-documents\ndescription: Word.\n---\n", encoding="utf-8")
+    (package_dir / "scripts" / "create_docx.py").write_text("print('ok')\n", encoding="utf-8")
+    (package_dir / "artifacts" / "skills" / "word-documents").mkdir(parents=True)
+    (package_dir / "artifacts" / "skills" / "word-documents" / "SKILL.md").write_text("duplicate", encoding="utf-8")
+    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    skill = skills_routes.Skill.model_validate({
+        "id": "custom-word-documents",
+        "name": "word-documents",
+        "description": "Word.",
+        "category": "导入",
+        "resourcePath": str(package_dir),
+        "resources": ["SKILL.md", "artifacts/skills/word-documents/SKILL.md"],
+        "status": "installed",
+        "updatedAt": "2026-07-20T00:00:00+00:00",
+    })
+
+    repaired = skills_routes._ensure_skill_package(skill)
+
+    assert repaired.resources == ["SKILL.md", "scripts/create_docx.py"]
+    assert not (package_dir / "artifacts").exists()
 
 
 def test_register_user_skill_writes_standard_skill_package(tmp_path, monkeypatch):

@@ -86,6 +86,8 @@ function SystemToolRow({
           <Tag size="small" color={tool.defaultEnabled ? 'blue' : 'transparent'}>
             {tool.defaultEnabled ? '默认注入' : '默认关闭'}
           </Tag>
+          {tool.platforms?.length ? <Tag size="small" color="transparent">{tool.platforms.join(' / ')}</Tag> : null}
+          {tool.platformNotes?.map((note) => <Tag key={note} size="small" color="orange">{note}</Tag>)}
         </>
       )}
     />

@@ -240,7 +240,10 @@ def _ensure_skill_package(skill: Skill) -> Skill:
         skill.resource_path == expected_package_dir
         and os.path.isfile(os.path.join(expected_package_dir, "SKILL.md"))
     ):
-        return skill
+        resources = _cleanup_skill_package_artifacts(expected_package_dir)
+        if resources == skill.resources:
+            return skill
+        return skill.model_copy(update={"resources": resources, "updated_at": _utc_now()})
 
     markdown = (skill.content or "").strip()
     if not markdown.startswith("---"):
@@ -313,9 +316,13 @@ def _read_skill_md_from_zip(raw: bytes) -> tuple[str, str, zipfile.ZipFile, list
                 info.filename
                 for info in members
                 if os.path.basename(info.filename) == "SKILL.md"
+                and "artifacts" not in _path_parts(info.filename)
             ]
             if not skill_paths:
-                raise HTTPException(status_code=422, detail="Zip archive must contain a SKILL.md file")
+                raise HTTPException(
+                    status_code=422,
+                    detail="Zip archive must contain a SKILL.md file outside artifacts/",
+                )
 
             skill_path = sorted(skill_paths, key=lambda item: item.count("/"))[0]
             info = archive.getinfo(skill_path)
@@ -332,11 +339,46 @@ def _read_skill_md_from_zip(raw: bytes) -> tuple[str, str, zipfile.ZipFile, list
         raise HTTPException(status_code=422, detail="SKILL.md must be UTF-8 encoded") from exc
 
 
-def _package_relative_path(skill_path: str, filename: str) -> str:
-    root = os.path.dirname(skill_path)
-    if root and filename.startswith(root + "/"):
-        return filename[len(root) + 1:]
-    return filename
+def _path_parts(path: str) -> tuple[str, ...]:
+    """将压缩包路径规范化为便于校验的片段。"""
+
+    return tuple(part for part in path.replace("\\", "/").split("/") if part and part != ".")
+
+
+def _package_relative_path(skill_path: str, filename: str) -> str | None:
+    """返回包根下的相对资源路径，包根外的文件不参与安装。"""
+
+    root_parts = _path_parts(os.path.dirname(skill_path))
+    file_parts = _path_parts(filename)
+    if root_parts:
+        if file_parts[:len(root_parts)] != root_parts:
+            return None
+        file_parts = file_parts[len(root_parts):]
+    return "/".join(file_parts)
+
+
+def _is_package_resource_path(path: str) -> bool:
+    """判断路径是否属于可安装的 Skill 源文件，而非系统或构建残留。"""
+
+    parts = _path_parts(path)
+    return bool(parts) and "artifacts" not in parts and ".DS_Store" not in parts and "__MACOSX" not in parts
+
+
+def _cleanup_skill_package_artifacts(package_dir: str) -> list[str]:
+    """清理旧版本误导入的 artifacts，并重建资源清单。"""
+
+    artifacts_dir = os.path.join(package_dir, "artifacts")
+    if os.path.isdir(artifacts_dir):
+        shutil.rmtree(artifacts_dir)
+
+    resources: list[str] = []
+    for root, _dirs, files in os.walk(package_dir):
+        for filename in files:
+            path = os.path.join(root, filename)
+            relative = os.path.relpath(path, package_dir).replace(os.sep, "/")
+            if _is_package_resource_path(relative):
+                resources.append(relative)
+    return sorted(resources)
 
 
 def _extract_skill_package(
@@ -353,7 +395,7 @@ def _extract_skill_package(
     resources: list[str] = []
     for info in members:
         relative_path = _package_relative_path(skill_path, info.filename)
-        if relative_path == "." or relative_path.startswith("../"):
+        if not relative_path or not _is_package_resource_path(relative_path):
             continue
 
         target_path = os.path.join(package_dir, relative_path)
@@ -426,6 +468,14 @@ def _skill_package_warnings(*, name: str, skill_path: str, resources: list[str])
     if unknown_scripts:
         warnings.append(
             "scripts/ 包含不会自动执行的未知文件类型: " + ", ".join(sorted(unknown_scripts)[:8]),
+        )
+    if any(os.path.splitext(path)[1].lower() in {".sh", ".bash"} for path in resources):
+        warnings.append(
+            "包含 POSIX Shell 脚本（.sh/.bash）：macOS/Linux 可直接执行；Windows 需要 Git Bash、WSL 或等价环境。",
+        )
+    if any(os.path.splitext(path)[1].lower() == ".ps1" for path in resources):
+        warnings.append(
+            "包含 PowerShell 脚本（.ps1）：Windows 原生支持；macOS/Linux 需要安装 PowerShell 7+。",
         )
     return warnings
 

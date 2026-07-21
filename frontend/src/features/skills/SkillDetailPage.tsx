@@ -6,6 +6,7 @@
 
 import { AlertTriangle, Download, Package, Trash2 } from 'lucide-react';
 import { Button, Tag } from '@agentscope-ai/design';
+import { MarkdownContent } from '../../components/MarkdownContent';
 import { WorkbenchDetailShell, WorkbenchListIcon } from '../../components/workbench';
 import { ToggleButton } from '../../components/ToggleButton';
 import type { Skill } from '../../types/skill';
@@ -88,8 +89,8 @@ export function SkillDetailPage({
             <div className="grid gap-3 text-sm md:grid-cols-2">
               <DetailField label="分类" value={skill.category} />
               <DetailField label="状态" value={statusText} />
-              <DetailField label="更新时间" value={skill.updatedAt || '未知'} />
-              <DetailField label="安装时间" value={skill.installedAt || '未安装'} />
+              <DetailField label="更新时间" value={formatDateTime(skill.updatedAt)} />
+              <DetailField label="安装时间" value={formatDateTime(skill.installedAt)} />
             </div>
           </section>
 
@@ -120,16 +121,16 @@ export function SkillDetailPage({
 
           <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
             <div className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">触发条件</div>
-            <div className="rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-sm text-[var(--color-text-primary)]">
+            <div className="break-words rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-sm leading-6 text-[var(--color-text-primary)]">
               {skill.trigger || '未配置'}
             </div>
           </section>
 
           <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
             <div className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">内容</div>
-            <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-xs leading-6 text-[var(--color-text-primary)]">
-              {skill.content || '未配置'}
-            </pre>
+            <div className="max-h-[420px] overflow-auto rounded-md bg-[var(--color-bg-secondary)] px-4 py-3 text-sm text-[var(--color-text-primary)]">
+              <MarkdownContent content={skill.content || '未配置'} />
+            </div>
           </section>
 
           {skill.resources.length > 0 ? (
@@ -139,7 +140,7 @@ export function SkillDetailPage({
                 <div className="mb-2 text-[var(--color-text-tertiary)]">{skill.resourcePath}</div>
                 <div className="max-h-[220px] space-y-1 overflow-auto">
                   {skill.resources.map((resource) => (
-                    <div key={resource}>{resource}</div>
+                    <div key={resource} className="break-all">{resource}</div>
                   ))}
                 </div>
               </div>
@@ -155,7 +156,13 @@ function DetailField({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-md bg-[var(--color-bg-secondary)] p-3">
       <div className="text-xs text-[var(--color-text-tertiary)]">{label}</div>
-      <div className="mt-1 truncate text-sm font-medium text-[var(--color-text-primary)]">{value}</div>
+      <div className="mt-1 break-words text-sm font-medium text-[var(--color-text-primary)]">{value}</div>
     </div>
   );
+}
+
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) return '未安装';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN');
 }

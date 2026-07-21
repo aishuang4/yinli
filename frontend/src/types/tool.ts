@@ -52,4 +52,6 @@ export interface SystemTool {
   risk: string;
   readonly: boolean;
   defaultEnabled: boolean;
+  platforms?: string[];
+  platformNotes?: string[];
 }

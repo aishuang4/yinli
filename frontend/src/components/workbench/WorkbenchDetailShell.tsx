@@ -23,8 +23,8 @@ export function WorkbenchDetailShell({
 }) {
   return (
     <div className="grid h-full min-h-0 grid-rows-[auto_1fr] bg-[var(--color-bg-secondary)]">
-      <header className="flex items-center justify-between gap-4 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)] px-6 py-3">
-        <div className="flex min-w-0 items-center gap-3">
+      <header className="flex min-w-0 items-center justify-between gap-4 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)] px-6 py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <Button size="small" icon={<ArrowLeft size={14} />} onClick={onBack}>
             返回
           </Button>
@@ -33,7 +33,7 @@ export function WorkbenchDetailShell({
             {subtitle ? <p className="mt-0.5 truncate text-xs text-[var(--color-text-tertiary)]">{subtitle}</p> : null}
           </div>
         </div>
-        {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
+        {actions ? <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div> : null}
       </header>
       <div className="min-h-0 overflow-hidden">
         {children}

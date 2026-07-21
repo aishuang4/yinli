@@ -66,3 +66,18 @@ def test_scoped_grep_accepts_project_relative_paths(tmp_path: Path, monkeypatch)
 
     assert chunk.state != "error"
     assert "out.txt" in chunk.content[0].text
+
+
+def test_scoped_grep_falls_back_when_ripgrep_is_unavailable(tmp_path: Path, monkeypatch):
+    """Windows 未安装 rg.exe 时，Grep 仍应返回项目内匹配内容。"""
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "guide.md").write_text("first line\nNeedle value\nlast line", encoding="utf-8")
+    monkeypatch.setattr("src.tools.scoped_grep.shutil.which", lambda _name: None)
+
+    chunk = asyncio.run(ScopedGrep()(pattern="needle", path=str(docs), output_mode="content", i=True))
+
+    assert chunk.state.value == "success"
+    assert "兼容模式" in chunk.content[0].text
+    assert "Needle value" in chunk.content[0].text

@@ -195,6 +195,7 @@ function SkillListRow({
         <>
           <Tag size="small" color={installed ? 'green' : 'blue'}>{installed ? '已安装' : '可安装'}</Tag>
           <Tag size="small" color="transparent">{skill.category}</Tag>
+          {(skill.warnings?.length ?? 0) > 0 ? <Tag size="small" color="orange">平台兼容提示</Tag> : null}
           {installed && skill.enabled ? (
             <Tag size="small" color="green">
               <span className="inline-flex items-center gap-1">
