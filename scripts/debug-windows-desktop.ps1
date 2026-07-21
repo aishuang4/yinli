@@ -1,14 +1,12 @@
 <#
-  调试已安装的 Windows 桌面端。
+  Debug an installed Windows desktop build.
 
-  用法：
+  Usage:
     powershell -ExecutionPolicy Bypass -File .\debug-windows-desktop.ps1
-    powershell -ExecutionPolicy Bypass -File .\debug-windows-desktop.ps1 -AppPath "D:\\引力 YINLI\\引力 YINLI.exe"
+    powershell -ExecutionPolicy Bypass -File .\debug-windows-desktop.ps1 -AppPath "D:\\YINLI\\YINLI.exe"
 
-  脚本会：
-  1. 以桌面调试模式启动安装包，并自动打开 Electron DevTools；
-  2. 在当前终端实时打印主进程和 Python 后端日志；
-  3. 退出后输出 8765 端口和遗留进程记录，便于反馈排障信息。
+  The script starts the app with DevTools, tails Electron/Python logs,
+  and prints port and stale-process diagnostics after exit.
 #>
 
 [CmdletBinding()]
@@ -24,17 +22,12 @@ function Resolve-DesktopAppPath {
 
   if ($Candidate) {
     if (-not (Test-Path -LiteralPath $Candidate -PathType Leaf)) {
-      throw "未找到指定应用：$Candidate"
+      throw "Application not found: $Candidate"
     }
     return (Resolve-Path -LiteralPath $Candidate).Path
   }
 
-  $defaultPath = Join-Path $env:LOCALAPPDATA 'Programs\引力 YINLI\引力 YINLI.exe'
-  if (Test-Path -LiteralPath $defaultPath -PathType Leaf) {
-    return $defaultPath
-  }
-
-  throw "未找到默认安装包。请使用 -AppPath 指定 引力 YINLI.exe 的完整路径。"
+  throw 'Use -AppPath to specify the full path to the installed application executable.'
 }
 
 $resolvedAppPath = Resolve-DesktopAppPath -Candidate $AppPath
@@ -54,9 +47,9 @@ $env:AGENT_WORKSTATION_DESKTOP_DEBUG = '1'
 $env:ELECTRON_ENABLE_LOGGING = '1'
 $env:ELECTRON_ENABLE_STACK_DUMPING = '1'
 
-Write-Host "启动：$resolvedAppPath" -ForegroundColor Cyan
-Write-Host "日志目录：$logsPath" -ForegroundColor Cyan
-Write-Host 'Electron DevTools 将自动打开；请重点查看 Console 的红色错误和 Network 请求。' -ForegroundColor Yellow
+Write-Host "Starting: $resolvedAppPath" -ForegroundColor Cyan
+Write-Host "Log directory: $logsPath" -ForegroundColor Cyan
+Write-Host 'Electron DevTools opens automatically. Check the first Console error and failed Network requests.' -ForegroundColor Yellow
 
 $mainTail = Start-Job -ScriptBlock {
   param($Path)
@@ -75,31 +68,31 @@ try {
     $process.Refresh()
   }
   Receive-Job -Job $mainTail, $pythonTail
-  Write-Host "应用已退出，退出代码：$($process.ExitCode)" -ForegroundColor Yellow
+  Write-Host "Application exited with code: $($process.ExitCode)" -ForegroundColor Yellow
 } finally {
   Stop-Job -Job $mainTail, $pythonTail -ErrorAction SilentlyContinue
   Remove-Job -Job $mainTail, $pythonTail -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "`n--- 退出后诊断 ---" -ForegroundColor Cyan
+Write-Host "`n--- Post-exit diagnostics ---" -ForegroundColor Cyan
 if (Test-Path -LiteralPath $ownerPath) {
-  Write-Host '发现后端进程记录：' -ForegroundColor Yellow
+  Write-Host 'Found backend process record:' -ForegroundColor Yellow
   Get-Content -LiteralPath $ownerPath
 } else {
-  Write-Host '未发现遗留的后端进程记录。'
+  Write-Host 'No stale backend process record found.'
 }
 
 $portOwners = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
 if ($portOwners) {
-  Write-Host '8765 端口仍被以下进程监听：' -ForegroundColor Yellow
+  Write-Host 'Port 8765 is still listening in these processes:' -ForegroundColor Yellow
   $portOwners | Select-Object LocalAddress, LocalPort, OwningProcess | Format-Table -AutoSize
   $portOwners | ForEach-Object { Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue } |
     Select-Object Id, ProcessName, Path | Format-Table -AutoSize
 } else {
-  Write-Host '8765 端口当前未被监听。'
+  Write-Host 'Port 8765 is not listening.'
 }
 
-Write-Host "`n请将以下内容一并反馈：" -ForegroundColor Cyan
-Write-Host "1. DevTools Console 的首个红色错误；"
-Write-Host "2. $mainLogPath；"
-Write-Host "3. $pythonLogPath。"
+Write-Host "`nPlease provide:" -ForegroundColor Cyan
+Write-Host '1. The first red error in DevTools Console.'
+Write-Host "2. $mainLogPath"
+Write-Host "3. $pythonLogPath"
