@@ -73,9 +73,14 @@ Assert-Command -Name 'uv' -Hint 'Install uv from https://docs.astral.sh/uv/'
 Assert-Command -Name 'node' -Hint 'Install Node.js 20.19 or newer.'
 Assert-Command -Name 'npm.cmd' -Hint 'Ensure npm is on PATH.'
 
-$nodeMajor = [int]((& node -p "process.versions.node.split('.')[0]") | Select-Object -First 1)
-if ($nodeMajor -lt 20) {
-  throw "Node.js $nodeMajor is too old. Electron requires Node.js 20.19 or newer."
+$nodeVersion = ((& node -p "process.versions.node") | Select-Object -First 1).Trim()
+if ($nodeVersion -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+  throw "Unable to parse Node.js version: $nodeVersion"
+}
+$nodeMajor = [int]$Matches[1]
+$nodeMinor = [int]$Matches[2]
+if ($nodeMajor -lt 20 -or ($nodeMajor -eq 20 -and $nodeMinor -lt 19)) {
+  throw "Node.js $nodeVersion is unsupported. Install Node.js 20.19+, 22.12+, or 24 LTS, then open a new PowerShell window."
 }
 
 if ($InstallDependencies) {
@@ -109,12 +114,12 @@ try {
   Write-Host 'Starting FastAPI...' -ForegroundColor Cyan
   $backendProcess = Start-Process -FilePath 'uv' `
     -ArgumentList 'run', 'python', '-m', 'uvicorn', 'src.server.main:app', '--reload', '--reload-dir', 'src', '--port', '8765' `
-    -WorkingDirectory $backendPath -PassThru -RedirectStandardOutput $backendOut -RedirectStandardError $backendErr
+    -WorkingDirectory $backendPath -PassThru -WindowStyle Hidden -RedirectStandardOutput $backendOut -RedirectStandardError $backendErr
   Wait-HttpReady -Url 'http://127.0.0.1:8765/api/health' -Name 'FastAPI'
 
   Write-Host 'Starting Vite...' -ForegroundColor Cyan
   $frontendProcess = Start-Process -FilePath 'npm.cmd' -ArgumentList 'run', 'dev', '--', '--host', '127.0.0.1' `
-    -WorkingDirectory $frontendPath -PassThru -RedirectStandardOutput $frontendOut -RedirectStandardError $frontendErr
+    -WorkingDirectory $frontendPath -PassThru -WindowStyle Hidden -RedirectStandardOutput $frontendOut -RedirectStandardError $frontendErr
   Wait-HttpReady -Url 'http://127.0.0.1:5173' -Name 'Vite'
 
   $backendTail = Start-Job -ScriptBlock { param($Path) Get-Content -LiteralPath $Path -Wait | ForEach-Object { "[backend] $_" } } -ArgumentList $backendErr
