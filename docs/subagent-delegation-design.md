@@ -1,13 +1,13 @@
 # Subagent 委托能力设计
 
 > 状态：M1 已实现并可前端测试，M2+ 继续按本文分期推进。
-> 外部参考：Claude Code sub-agents 文档。Agent Workstation 尽可能借鉴官方设计和实现思路，包括文件定义、frontmatter 字段、独立上下文、工具裁剪、模型继承、前后台、恢复、嵌套和隔离等能力；但稳定行为以本文和 `docs/chat-sse-event-contract.md` 为准，任何偏离官方设计的地方都必须写明原因。
+> 外部参考：Claude Code sub-agents 文档。引力 YINLI 尽可能借鉴官方设计和实现思路，包括文件定义、frontmatter 字段、独立上下文、工具裁剪、模型继承、前后台、恢复、嵌套和隔离等能力；但稳定行为以本文和 `docs/chat-sse-event-contract.md` 为准，任何偏离官方设计的地方都必须写明原因。
 
 ## 设计结论
 
-Agent Workstation 的 Subagent 采用“文件定义 + ReAct 内部委托”的稳定产品模型：**Subagent 定义源是 Markdown 文件 + YAML frontmatter**，不是数据库配置。V1.0 将 Subagent 设计为 ReAct Runtime 内的 `DelegateTask` 系统工具：主 Agent 在同一轮 ReAct 中按需调用该工具，把自包含任务交给一个独立上下文的专员 Agent 执行，专员返回结构化摘要后主 Agent 继续推理或最终回答。
+引力 YINLI 的 Subagent 采用“文件定义 + ReAct 内部委托”的稳定产品模型：**Subagent 定义源是 Markdown 文件 + YAML frontmatter**，不是数据库配置。V1.0 将 Subagent 设计为 ReAct Runtime 内的 `DelegateTask` 系统工具：主 Agent 在同一轮 ReAct 中按需调用该工具，把自包含任务交给一个独立上下文的专员 Agent 执行，专员返回结构化摘要后主 Agent 继续推理或最终回答。
 
-为了贴合本项目已有命名和目录约定，Agent Workstation 不强制复刻 Claude Code 的外部名称：
+为了贴合本项目已有命名和目录约定，引力 YINLI 不强制复刻 Claude Code 的外部名称：
 
 - 定义目录继续使用 `.agents/subagents/` 与 `~/.agent-workstation/subagents/`，而不是 `.claude/agents/`。
 - 主 Agent 暴露的委托工具继续命名为 `DelegateTask`，而不是 `Agent`。
@@ -38,7 +38,7 @@ Subagent 用来处理会污染主上下文但结果又有价值的支线任务�
 
 ## V1.0 范围
 
-V1.0 做“前台、一次性、可审计”的 Subagent，作为 Agent Workstation 的稳定最小闭环：
+V1.0 做“前台、一次性、可审计”的 Subagent，作为引力 YINLI 的稳定最小闭环：
 
 - 支持 Markdown + YAML frontmatter 定义文件：Markdown 正文是系统提示词，YAML frontmatter 配置名称、描述、工具、模型、权限、Skill、最大 ReAct 轮次。
 - 支持项目级和用户级 Subagent 目录扫描，名称冲突按项目级优先。
@@ -74,7 +74,7 @@ V1.0 不做：
 
 ## 官方设计借鉴矩阵
 
-| 官方设计 / 能力 | Agent Workstation 借鉴方案 | 状态 |
+| 官方设计 / 能力 | 引力 YINLI 借鉴方案 | 状态 |
 | --- | --- | --- |
 | Markdown + YAML frontmatter 定义 | 保持同等格式，目录名使用 AW 约定 | M1 已实现 |
 | `name` / `description` 决定自动委托 | 主 Agent system prompt 注入可用定义，按 description 自主调用 `DelegateTask` | M1 已实现 |

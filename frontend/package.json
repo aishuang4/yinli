@@ -2,8 +2,8 @@
   "name": "frontend",
   "private": true,
   "version": "0.1.0-beta.1",
-  "description": "AgentScope 2.0 desktop multi-agent workstation",
-  "author": "Agent Workstation",
+  "description": "YINLI local-first AI workstation for office work",
+  "author": "YINLI",
   "type": "module",
   "main": "electron-dist/main.js",
   "scripts": {

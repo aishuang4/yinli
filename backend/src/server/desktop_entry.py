@@ -14,7 +14,7 @@ import uvicorn
 
 def main() -> None:
     """启动桌面端内置 FastAPI 服务。"""
-    parser = argparse.ArgumentParser(description="Agent Workstation desktop backend")
+    parser = argparse.ArgumentParser(description="引力 YINLI desktop backend")
     parser.add_argument("--host", default=os.getenv("AGENT_WORKSTATION_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("AGENT_WORKSTATION_PORT", "8765")))
     args = parser.parse_args()

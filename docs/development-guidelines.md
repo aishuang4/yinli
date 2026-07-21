@@ -1,4 +1,4 @@
-# Agent Workstation 开发规范
+# 引力 YINLI 开发规范
 
 > 状态：正式生效。本文用于统一后续 React、Python、SQLite、Agent Runtime 和协作开发习惯。
 

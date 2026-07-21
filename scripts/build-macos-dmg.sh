@@ -11,7 +11,7 @@ fi
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_PATH="$1"
 OUTPUT_DMG="$2"
-VOLUME_NAME="Agent Workstation"
+VOLUME_NAME="引力 YINLI"
 STAGING_DIR="$(mktemp -d /private/tmp/agent-workstation-dmg.XXXXXX)"
 MOUNT_DIR=""
 MOUNT_VOLUME_NAME=""
@@ -26,7 +26,7 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$STAGING_DIR/payload/.background"
-ditto "$APP_PATH" "$STAGING_DIR/payload/Agent Workstation.app"
+ditto "$APP_PATH" "$STAGING_DIR/payload/引力 YINLI.app"
 cp "$ROOT_DIR/frontend/build/dmg-background.png" "$STAGING_DIR/payload/.background/background.png"
 ln -s /Applications "$STAGING_DIR/payload/Applications"
 
@@ -67,7 +67,7 @@ on run argv
       set icon size of viewOptions to 112
       set text size of viewOptions to 13
       set background picture of viewOptions to backgroundFile
-      set position of item "Agent Workstation.app" to {180, 245}
+      set position of item "引力 YINLI.app" to {180, 245}
       set position of item "Applications" to {540, 245}
       update without registering applications
       delay 2

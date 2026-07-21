@@ -39,7 +39,7 @@
 
 ## 产品定义
 
-Dynamic Workflow 是 Agent Workstation 的第二工作空间：
+Dynamic Workflow 是引力 YINLI 的第二工作空间：
 
 - **工作台模式**：Chat / Agents / Tools / Memory / Trace 等现有功能，适合开放式对话和即时任务。
 - **任务流模式**：可审查脚本驱动的长任务编排，适合批量审计、迁移、调研、验证、循环修复和多 Agent 大规模协作。

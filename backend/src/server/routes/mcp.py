@@ -124,7 +124,7 @@ def _normalize_headers(headers: dict[str, str]) -> dict[str, str]:
         if clean_key.lower() in RESERVED_MCP_HEADERS:
             raise HTTPException(
                 status_code=422,
-                detail=f"Header '{clean_key}' is managed by Agent Workstation",
+                detail=f"Header '{clean_key}' is managed by 引力 YINLI",
             )
         normalized[clean_key] = clean_value
     return normalized

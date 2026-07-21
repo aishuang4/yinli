@@ -27,9 +27,9 @@
 - 将 Python 后端打成平台相关可执行文件。
 - macOS 产物包含 `backend-server`，Windows 产物包含 `backend-server.exe`。
 - Electron 主进程按平台选择后端可执行文件并启动。
-- 后端数据目录迁移到 Electron `app.getPath('userData')` 下，例如：
-  - macOS：`~/Library/Application Support/Agent Workstation/`
-  - Windows：`%APPDATA%/Agent Workstation/`
+- 后端数据目录迁移到 Electron `app.getPath('userData')` 下。为保持升级兼容，当前稳定目录名为：
+  - macOS：`~/Library/Application Support/agent-workstation-desktop/`
+  - Windows：`%APPDATA%/agent-workstation-desktop/`
 - `.env` 仅作为首次初始化模板，真实 key 和模型配置继续走系统设置与 SQLite。
 
 ## 推荐技术路线

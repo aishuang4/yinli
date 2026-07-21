@@ -102,7 +102,7 @@ int main(int argc, const char *argv[]) {
             [Color(0x42df87, 1) setFill];
             NSRectFill(NSMakeRect(0, 436, 720, 4));
 
-            CenteredText(@"安装 Agent Workstation",
+            CenteredText(@"安装 引力 YINLI",
                          NSMakeRect(80, 365, 560, 34),
                          [NSFont systemFontOfSize:25 weight:NSFontWeightSemibold],
                          Color(0x20232b, 1));

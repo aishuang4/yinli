@@ -94,7 +94,7 @@
 
 - **权威存储仍是 SQLite + Markdown + VectorStoreBackend**：`memory_nodes`、`skill_evolution_records`、三类 Markdown 长期记忆和向量库策略继续作为运行时事实来源。
 - **Vault 是可读表现层**：生成 `backend/data/memory/wiki/`，按 `users/`、`agents/`、`global/`、`history/`、`skills/`、`entities/` 组织 Markdown 文件。当前首版为手动同步的只读生成视图。
-- **Wiki 链接不承担事务语义**：`[[项目:Agent Workstation]]`、`[[规则:禁止恢复独立 Plan Runtime 分支]]`、`[[Skill:xxx]]` 只作为可视化和人工维护入口，真实检索仍通过工具、索引和数据库完成。
+- **Wiki 链接不承担事务语义**：`[[项目:引力 YINLI]]`、`[[规则:禁止恢复独立 Plan Runtime 分支]]`、`[[Skill:xxx]]` 只作为可视化和人工维护入口，真实检索仍通过工具、索引和数据库完成。
 - **实体索引先只读生成**：当前同步器会生成 `entities/` 实体页和 `entities/graph.md` 共现关系；服务端同时提供 `/api/memory/wiki/graph` 给前端展示结构化图谱。后续再评估是否新增 `memory_entities`、`memory_entity_links`、`memory_entity_edges` 等结构化表，把用户、项目、Agent、Skill、工具、规则、文件和错误类型连成可检索关系图。
 - **记忆准入先于 Wiki 同步**：`MemoryAdmissionGate` 控制哪些内容只进入历史记忆、哪些进入长期 Markdown、哪些进入 Skill 自进化，避免把低信号聊天无差别写入 Vault。
 - **差异追踪暂停推进**：`memory_change_log` 和 Git-backed vault diff 先从 MVP 中移出，等主干稳定后再评估。

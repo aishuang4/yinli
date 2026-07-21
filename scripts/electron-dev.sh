@@ -62,7 +62,7 @@ wait_for_url() {
 
 trap cleanup EXIT INT TERM
 
-echo "启动 Agent Workstation Electron 开发窗口..."
+echo "启动 引力 YINLI Electron 开发窗口..."
 
 cd "$ROOT_DIR/backend"
 if curl -fsS "$BACKEND_URL/api/health" >/dev/null 2>&1; then

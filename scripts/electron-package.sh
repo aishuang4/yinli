@@ -39,9 +39,9 @@ package_macos() {
 
   version="$(node -p "require('./package.json').version")"
   package_arch="$(node -p "process.arch")"
-  app_path="$ROOT_DIR/release/mac-${package_arch}/Agent Workstation.app"
-  zip_path="$ROOT_DIR/release/Agent Workstation-${version}-mac-${package_arch}.zip"
-  dmg_path="$ROOT_DIR/release/Agent Workstation-${version}-mac-${package_arch}.dmg"
+  app_path="$ROOT_DIR/release/mac-${package_arch}/引力 YINLI.app"
+  zip_path="$ROOT_DIR/release/引力-YINLI-${version}-mac-${package_arch}.zip"
+  dmg_path="$ROOT_DIR/release/引力-YINLI-${version}-mac-${package_arch}.dmg"
 
   echo "生成 macOS ZIP..."
   ditto -c -k --sequesterRsrc --keepParent "$app_path" "$zip_path"

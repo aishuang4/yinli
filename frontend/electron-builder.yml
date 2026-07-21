@@ -1,5 +1,5 @@
 appId: com.agentworkstation.desktop
-productName: Agent Workstation
+productName: 引力 YINLI
 artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
 directories:
   output: ../../release
@@ -30,7 +30,7 @@ dmg:
   icon: icon.icns
   iconSize: 112
   iconTextSize: 13
-  title: Agent Workstation
+  title: 引力 YINLI
   window:
     width: 720
     height: 440

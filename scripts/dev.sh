@@ -5,7 +5,7 @@
 
 set -e
 
-echo "🚀 Starting Agent Workstation in development mode..."
+echo "🚀 Starting 引力 YINLI in development mode..."
 echo ""
 
 # 确保使用 Node 24

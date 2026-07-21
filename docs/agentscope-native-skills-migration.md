@@ -1,6 +1,6 @@
 # AgentScope 原生 Skills 第一版改造设计
 
-> 状态：第一版已实现；DeepSeek 本地行为验证通过，第二供应商验证因 DashScope Key 无效暂未完成。本文定义 Agent Workstation 从“应用层全文注入 Skill”迁移到 AgentScope 2.0 原生 Skills 的第一版方案。
+> 状态：第一版已实现；DeepSeek 本地行为验证通过，第二供应商验证因 DashScope Key 无效暂未完成。本文定义引力 YINLI 从“应用层全文注入 Skill”迁移到 AgentScope 2.0 原生 Skills 的第一版方案。
 
 ## 1. 背景
 

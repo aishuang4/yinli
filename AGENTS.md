@@ -4,7 +4,7 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## 项目概述
 
-Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。用户在 Chat 界面选择单个 Agent 或 Team 协作完成任务，支持 MCP 工具、Skills 技能、HTTP 知识库工具、权限控制、容器沙箱执行和新记忆系统 MVP。旧记忆模块已删除，当前记忆能力按新方案通过 hooks / tools / 后处理服务接入，不恢复旧 memory runtime。
+引力 YINLI 是基于 AgentScope 2.0 + Electron + React 的本地优先办公 AI 工作台。用户在 Chat 界面选择单个 Agent 或 Team 协作完成文档、表格、文件和项目任务，支持 MCP 工具、Skills 技能、HTTP 知识库工具、权限控制、容器沙箱执行和新记忆系统 MVP。旧记忆模块已删除，当前记忆能力按新方案通过 hooks / tools / 后处理服务接入，不恢复旧 memory runtime。
 
 技术栈：Electron 壳 + React 19/TypeScript/Vite 前端 + Python/FastAPI/AgentScope 2.0 后端 + SQLite 存储。模型默认接 DeepSeek，运行时可切换至 OpenAI、Anthropic、DashScope、Gemini、Ollama、自定义 OpenAI 兼容等十余个供应商。
 

@@ -1,12 +1,12 @@
-# Agent Workstation
+# 引力 YINLI
 
-Agent Workstation 是基于 AgentScope 2.0、Electron 和 React 的桌面 Agent 协作工作台。它以 Chat 为主入口，在同一套 ReAct Runtime 上提供单 Agent 执行、一次性 Team 协作、Subagent 委托、Plan Mode、工具与权限控制、长期记忆、运行恢复和 Trace 审计。
+引力 YINLI 是面向办公场景的本地优先 AI 工作台，基于 AgentScope 2.0、Electron 和 React 构建。它以 Chat 为主入口，让用户在一个受控桌面环境中读取、整理和产出文档、表格与项目文件，并提供单 Agent 执行、临时 Team 协作、Subagent 委托、Plan Mode、工具权限、长期记忆、运行恢复和 Trace 审计。
 
 项目面向需要反复执行真实任务的本地工作流，不把多 Agent 简化成固定角色聊天。运行过程、任务状态、工具调用和最终成果都有明确的隔离、持久化与恢复边界。
 
 ## 升级版本说明
 
-当前版本是 Agent Workstation 的架构升级版本，不是对旧 Runtime 的兼容性修补。本次升级重新收束了 Chat 执行链路和多 Agent 协作语义：
+当前版本是引力的架构升级版本，不是对旧 Runtime 的兼容性修补。本次升级重新收束了 Chat 执行链路和多 Agent 协作语义：
 
 - Team 升级为一次性 `TeamRun`，由 Leader 动态创建临时成员，通过 Task List 和 Mailbox 协作，不再选择持久 Team 或固定成员。
 - Subagent 升级为 ReAct 内部 `DelegateTask` 委托，使用独立上下文和文件定义，不恢复旧独立 Subagent Runtime（`runtime.kind=subagent`）。

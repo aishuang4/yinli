@@ -1,5 +1,5 @@
 """
-FastAPI 服务入口 — Agent Workstation 后端
+FastAPI 服务入口 — 引力 YINLI 后端
 
 职责：
 1. 创建 FastAPI 应用实例
@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     if any(team_maintenance.values()):
         print(f"[TeamRuntime] maintenance: {team_maintenance}")
-    print(f"[Server] Agent Workstation Backend started on port {settings.port}")
+    print(f"[Server] 引力 YINLI Backend started on port {settings.port}")
     deepseek_key_display = ("***" + settings.deepseek_api_key[-4:]) if settings.deepseek_api_key else "NOT SET"
     print(f"[Server] DeepSeek API Key: {deepseek_key_display}")
 
@@ -51,8 +51,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 # 创建 FastAPI 应用
 app = FastAPI(
-    title="Agent Workstation API",
-    description="基于 AgentScope 2.0 的多 Agent 协作工作台后端服务",
+    title="引力 YINLI API",
+    description="基于 AgentScope 2.0 的本地优先办公 AI 工作台后端服务",
     version="0.1.0",
     lifespan=lifespan,
 )

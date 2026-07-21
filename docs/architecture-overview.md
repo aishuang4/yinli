@@ -1,10 +1,10 @@
-# Agent Workstation 当前架构总览
+# 引力 YINLI 当前架构总览
 
 > 状态：2026-07-20 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
 
 ## 项目定位
 
-Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent 协作工作台。用户在 Chat 中选择单个 Agent 或 Team 执行任务，运行时支持 MCP、Skills、HTTP 工具、权限控制、HITL、Trace、容器沙箱和新记忆系统 MVP。
+引力 YINLI 是基于 AgentScope 2.0 + Electron + React 的本地优先办公 AI 工作台。用户在 Chat 中选择单个 Agent 或 Team 执行文档、表格、文件和项目任务，运行时支持 MCP、Skills、HTTP 工具、权限控制、HITL、Trace、容器沙箱和新记忆系统 MVP。
 
 旧记忆模块、旧独立 Plan Runtime（`runtime.kind=plan`）和旧独立 Subagent Runtime（`runtime.kind=subagent`）已下线，不能继续扩展旧链路。这里删除的是独立 architecture / 路由分支，不是当前能力：Plan Mode 仍通过 middleware 接入单 Agent ReAct，Subagent 仍通过 `DelegateTask` 接入 ReAct。旧 Subagent 字段、配置入口、事件兼容分支和前端入口不得作为当前 API / UI / Runtime 事实源保留；历史 SQLite 开发库只允许保留启动所需的最小兼容。当前记忆能力是新方案：通过运行前上下文注入、运行后 `MemoryAdmissionGate` 准入、后台提炼、历史记忆（底层 `memory_nodes`）和 memory tools 接入 ReAct，不新增 `memory` runtime.kind。
 
