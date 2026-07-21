@@ -5,7 +5,12 @@ from __future__ import annotations
 import asyncio
 import os
 
-from src.agents.factory import RuntimePathSkillLoader, _create_default_toolkit
+from src.agents.factory import (
+    RuntimePathSkillLoader,
+    _bash_error_chunk,
+    _create_default_toolkit,
+    _resolve_windows_command_shell,
+)
 from src.agents.runtime_types import AgentGuardrails, RuntimeToolScope
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.server.routes.chat.runtime_builder import build_runtime_agent_cache_key
@@ -94,6 +99,26 @@ def test_local_bash_does_not_depend_on_network_permission() -> None:
     assert "Bash" in tool_names
     assert "HttpRequest" not in tool_names
     assert "WebFetch" not in tool_names
+
+
+def test_windows_command_shell_prefers_comspec_absolute_path() -> None:
+    """Windows Bash 必须无需 Git Bash，并优先使用系统声明的 cmd.exe。"""
+
+    command_shell = _resolve_windows_command_shell(
+        {"ComSpec": r"C:\\Windows\\System32\\cmd.exe"},
+        path_exists=lambda value: value.endswith("cmd.exe"),
+        command_lookup=lambda _name: None,
+    )
+
+    assert command_shell == r"C:\\Windows\\System32\\cmd.exe"
+
+
+def test_bash_failure_chunk_always_contains_error_detail() -> None:
+    """Windows 子进程异常不能在对话界面退化为空白 Error。"""
+
+    chunk = _bash_error_chunk("dir", "cmd.exe not found")
+
+    assert "Error:\ncmd.exe not found" in chunk.content[0].text
 
 
 def test_runtime_skill_paths_reject_paths_outside_package_root(tmp_path, monkeypatch) -> None:

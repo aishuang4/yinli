@@ -16,7 +16,8 @@
 
 [CmdletBinding()]
 param(
-  [switch]$InstallDependencies
+  [switch]$InstallDependencies,
+  [string]$ElectronMirror = 'https://npmmirror.com/mirrors/electron/'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -69,6 +70,69 @@ function Stop-ProcessTree {
   & taskkill /pid $Process.Id /T /F 2>$null | Out-Null
 }
 
+function Set-ElectronMirror {
+  param([AllowEmptyString()][string]$Mirror)
+  if ([string]::IsNullOrWhiteSpace($Mirror)) {
+    Remove-Item Env:ELECTRON_MIRROR -ErrorAction SilentlyContinue
+    return
+  }
+  $env:ELECTRON_MIRROR = $Mirror.TrimEnd('/') + '/'
+}
+
+function Restore-ElectronMirror {
+  param([AllowNull()][string]$Mirror)
+  if ($null -eq $Mirror) {
+    Remove-Item Env:ELECTRON_MIRROR -ErrorAction SilentlyContinue
+    return
+  }
+  $env:ELECTRON_MIRROR = $Mirror
+}
+
+function Assert-ElectronBinary {
+  $electronPackagePath = Join-Path $frontendPath 'node_modules\electron'
+  $electronInstallerPath = Join-Path $electronPackagePath 'install.js'
+  $electronBinaryPath = Join-Path $electronPackagePath 'dist\electron.exe'
+  $electronCommandPath = Join-Path $frontendPath 'node_modules\.bin\electron.cmd'
+
+  if (-not (Test-Path -LiteralPath $electronInstallerPath -PathType Leaf)) {
+    throw 'Electron npm package is missing. Run once with -InstallDependencies.'
+  }
+
+  if (-not (Test-Path -LiteralPath $electronBinaryPath -PathType Leaf)) {
+    $previousMirror = [Environment]::GetEnvironmentVariable('ELECTRON_MIRROR', 'Process')
+    try {
+      Set-ElectronMirror -Mirror $ElectronMirror
+      for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Write-Host "Downloading Electron binary (attempt $attempt/3)..." -ForegroundColor Cyan
+        & node $electronInstallerPath
+        if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $electronBinaryPath -PathType Leaf)) {
+          break
+        }
+        if ($attempt -lt 3) {
+          Start-Sleep -Seconds (2 * $attempt)
+        }
+      }
+    } finally {
+      Restore-ElectronMirror -Mirror $previousMirror
+    }
+  }
+
+  if (-not (Test-Path -LiteralPath $electronBinaryPath -PathType Leaf)) {
+    throw "Electron binary download failed after 3 attempts. Check HTTPS_PROXY/NODE_EXTRA_CA_CERTS, or pass -ElectronMirror with an accessible mirror."
+  }
+
+  if (-not (Test-Path -LiteralPath $electronCommandPath -PathType Leaf)) {
+    throw 'Electron command shim is missing. Run once with -InstallDependencies.'
+  }
+  $electronVersionOutput = & $electronCommandPath --version
+  $electronExitCode = $LASTEXITCODE
+  $electronVersion = ([string]($electronVersionOutput | Select-Object -First 1)).Trim()
+  if ($electronExitCode -ne 0 -or [string]::IsNullOrWhiteSpace($electronVersion)) {
+    throw 'Electron binary exists but cannot start. Delete frontend\node_modules\electron\dist and retry.'
+  }
+  Write-Host "Electron ready: $electronVersion" -ForegroundColor Green
+}
+
 Assert-Command -Name 'uv' -Hint 'Install uv from https://docs.astral.sh/uv/'
 Assert-Command -Name 'node' -Hint 'Install Node.js 20.19 or newer.'
 Assert-Command -Name 'npm.cmd' -Hint 'Ensure npm is on PATH.'
@@ -79,23 +143,41 @@ if ($nodeVersion -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
 }
 $nodeMajor = [int]$Matches[1]
 $nodeMinor = [int]$Matches[2]
-if ($nodeMajor -lt 20 -or ($nodeMajor -eq 20 -and $nodeMinor -lt 19)) {
+$nodeSupported = ($nodeMajor -eq 20 -and $nodeMinor -ge 19) `
+  -or ($nodeMajor -eq 22 -and $nodeMinor -ge 12) `
+  -or ($nodeMajor -ge 24 -and $nodeMajor % 2 -eq 0)
+if (-not $nodeSupported) {
   throw "Node.js $nodeVersion is unsupported. Install Node.js 20.19+, 22.12+, or 24 LTS, then open a new PowerShell window."
 }
 
 if ($InstallDependencies) {
   Write-Host 'Syncing Python dependencies...' -ForegroundColor Cyan
   Push-Location $backendPath
-  try { & uv sync } finally { Pop-Location }
+  try {
+    & uv sync
+    if ($LASTEXITCODE -ne 0) { throw 'Python dependency installation failed.' }
+  } finally { Pop-Location }
 
   Write-Host 'Installing frontend dependencies...' -ForegroundColor Cyan
   Push-Location $frontendPath
-  try { & npm.cmd install } finally { Pop-Location }
+  $previousMirror = [Environment]::GetEnvironmentVariable('ELECTRON_MIRROR', 'Process')
+  try {
+    # Electron 会校验包内 checksums.json；镜像仅替换下载地址，不跳过完整性校验。
+    Set-ElectronMirror -Mirror $ElectronMirror
+    & npm.cmd ci
+    if ($LASTEXITCODE -ne 0) { throw 'Frontend dependency installation failed.' }
+  } finally {
+    Restore-ElectronMirror -Mirror $previousMirror
+    Pop-Location
+  }
 }
 
 if (-not (Test-Path (Join-Path $frontendPath 'node_modules'))) {
   throw 'Frontend dependencies are missing. Run once with -InstallDependencies.'
 }
+
+# 在启动后端和 Vite 前先修复 Electron，避免两个服务已经运行后才发现桌面壳不可用。
+Assert-ElectronBinary
 
 Assert-PortAvailable -Port 8765 -Name 'FastAPI'
 Assert-PortAvailable -Port 5173 -Name 'Vite'

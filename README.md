@@ -93,9 +93,22 @@ cd frontend && npm install && cd ..
 桌面开发模式：
 
 ```bash
+# macOS / Linux
 cd frontend
 npm run electron:dev
 ```
+
+Windows 请在 PowerShell 中使用专用启动器。首次运行会安装依赖，并在启动服务前下载、重试和校验 Electron：
+
+```powershell
+cd frontend
+npm run electron:dev:win:install
+
+# 后续启动
+npm run electron:dev:win
+```
+
+Windows 启动器默认使用 `https://npmmirror.com/mirrors/electron/` 下载 Electron，下载内容仍按 Electron 包内 checksum 校验。需要切换下载源时，可直接运行脚本并传入 `-ElectronMirror`；公司代理或自签 CA 环境应分别配置 `HTTPS_PROXY` 或 `NODE_EXTRA_CA_CERTS`，不要关闭 TLS 校验。
 
 ## 开发命令
 

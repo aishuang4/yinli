@@ -47,6 +47,18 @@ fi
 MOUNT_VOLUME_NAME="$(basename "$MOUNT_DIR")"
 sleep 1
 
+# Finder 默认不会显示点目录，但开发机若启用了显示隐藏文件，.background 和
+# macOS 自动生成的 .fseventsd 仍会干扰安装画面。额外写入不可见标记。
+for helper_dir in ".background" ".fseventsd"; do
+  helper_path="$MOUNT_DIR/$helper_dir"
+  if [ -e "$helper_path" ]; then
+    chflags hidden "$helper_path" 2>/dev/null || true
+    if command -v SetFile >/dev/null 2>&1; then
+      SetFile -a V "$helper_path" 2>/dev/null || true
+    fi
+  fi
+done
+
 osascript - "$MOUNT_VOLUME_NAME" <<'APPLESCRIPT'
 on run argv
   set volumeName to item 1 of argv

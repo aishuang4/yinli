@@ -5,13 +5,18 @@
  * `file://` 加载页面，需要把同样的相对请求转发到本机内置后端。
  */
 
-const DESKTOP_API_ORIGIN = 'http://127.0.0.1:8765';
+let desktopApiOrigin = 'http://127.0.0.1:8765';
+
+/** 同步 Electron 主进程本轮选定的后端地址。 */
+export function setDesktopApiOrigin(origin: string): void {
+  desktopApiOrigin = origin.replace(/\/$/, '');
+}
 
 export function resolveApiUrl(value: string): string {
   if (!window.electronAPI || !value.startsWith('/api')) {
     return value;
   }
-  return `${DESKTOP_API_ORIGIN}${value}`;
+  return `${desktopApiOrigin}${value}`;
 }
 
 let desktopFetchBridgeInstalled = false;

@@ -10,6 +10,8 @@ Agent 工厂模块 — 从配置创建 AgentScope 2.0 Agent 实例
 """
 
 import os
+import shutil
+from collections.abc import AsyncGenerator, Callable, Mapping
 from typing import Any
 
 from agentscope.agent import Agent
@@ -17,7 +19,8 @@ from agentscope.agent._config import ContextConfig, ModelConfig, ReActConfig
 from agentscope.mcp import HttpMCPConfig, MCPClient
 from agentscope.middleware import MiddlewareBase
 from agentscope.skill import LocalSkillLoader, Skill as AgentScopeSkill
-from agentscope.tool import Toolkit, Bash, ToolBase
+from agentscope.tool import Toolkit, Bash, ToolBase, ToolChunk
+from agentscope.message import TextBlock, ToolResultState
 from agentscope.state import AgentState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.permission._types import PermissionMode
@@ -142,7 +145,14 @@ def _build_context_config() -> ContextConfig:
 
 
 class GuardedBash(Bash):
-    """Bash with user-configured blacklist checks."""
+    """带用户黑名单与 Windows 原生命令解释器支持的 Shell 工具。"""
+
+    description: str = """Executes a local shell command and returns its output.
+
+On Windows this tool uses cmd.exe directly. Use Windows command syntax there:
+`dir`, `type`, `%PATH%`, `cd /d "C:\\path"`, and `&&`. Do not require Git
+Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
+"""
 
     def __init__(
         self,
@@ -153,6 +163,64 @@ class GuardedBash(Bash):
         super().__init__(cwd=cwd)
         self.shell_blacklist = [item.strip() for item in shell_blacklist if item.strip()]
         self.timeout_seconds = timeout_seconds
+
+    async def call(  # type: ignore[override]
+        self,
+        command: str,
+        description: str = "",
+        timeout: int = 120000,
+    ) -> AsyncGenerator[ToolChunk, None]:
+        """在 Windows 使用绝对 ``cmd.exe`` 路径，避免 PATH 或 Git Bash 依赖。"""
+
+        if os.name != "nt":
+            async for chunk in super().call(command, description, timeout):
+                yield chunk
+            return
+
+        timeout_ms = min(timeout, 600000)
+        shell_path = _resolve_windows_command_shell()
+        if not shell_path:
+            yield _bash_error_chunk(
+                command,
+                "未找到 Windows 命令解释器 cmd.exe。请检查 COMSPEC 和 SystemRoot 环境变量。",
+            )
+            return
+
+        try:
+            result = await self._backend.exec_shell(
+                [shell_path, "/d", "/c", command],
+                cwd=self._cwd,
+                timeout=timeout_ms / 1000.0,
+            )
+        except Exception as exc:
+            detail = str(exc) or repr(exc) or exc.__class__.__name__
+            yield _bash_error_chunk(
+                command,
+                f"无法启动 cmd.exe（{shell_path}，工作目录：{self._cwd or os.getcwd()}）：{detail}",
+            )
+            return
+
+        stdout = result.stdout.decode("utf-8", errors="replace").replace("\r\n", "\n")
+        stderr = result.stderr.decode("utf-8", errors="replace").replace("\r\n", "\n")
+        if result.exit_code == -1 and result.stderr == b"timed out":
+            yield _bash_error_chunk(command, f"命令在 {timeout_ms}ms 后超时。")
+            return
+
+        if not result.ok():
+            detail = stderr or stdout or (
+                f"cmd.exe 退出码为 {result.exit_code}，但未输出错误信息。"
+            )
+            yield _bash_error_chunk(command, detail, stdout=stdout)
+            return
+
+        output = stdout
+        if stderr:
+            output = f"{output}\n{stderr}" if output else stderr
+        yield ToolChunk(
+            content=[TextBlock(text=output[:30000])],
+            state=ToolResultState.SUCCESS,
+            is_last=True,
+        )
 
     async def check_permissions(self, tool_input: dict, context: PermissionContext) -> PermissionDecision:
         command = str(tool_input.get("command") or "")
@@ -171,6 +239,43 @@ class GuardedBash(Bash):
             tool_input["timeout"] = max_timeout_ms
 
         return await super().check_permissions(tool_input, context)
+
+
+def _resolve_windows_command_shell(
+    environ: Mapping[str, str] | None = None,
+    *,
+    path_exists: Callable[[str], bool] = os.path.isfile,
+    command_lookup: Callable[[str], str | None] = shutil.which,
+) -> str | None:
+    """定位 Windows ``cmd.exe``，优先使用系统给出的绝对路径。"""
+
+    values = environ if environ is not None else os.environ
+    candidates = [
+        values.get("ComSpec") or values.get("COMSPEC"),
+        (
+            os.path.join(values["SystemRoot"], "System32", "cmd.exe")
+            if values.get("SystemRoot")
+            else None
+        ),
+    ]
+    for candidate in candidates:
+        if candidate and path_exists(candidate):
+            return candidate
+    return command_lookup("cmd.exe") or command_lookup("cmd")
+
+
+def _bash_error_chunk(command: str, error: str, *, stdout: str = "") -> ToolChunk:
+    """构造统一错误结果，确保前端不会只看到空白 ``Error:``。"""
+
+    text = f"Command failed: {command}\n"
+    if stdout:
+        text += f"\n\nStdout:\n{stdout}"
+    text += f"\n\nError:\n{error}"
+    return ToolChunk(
+        content=[TextBlock(text=text[:30000])],
+        state=ToolResultState.ERROR,
+        is_last=True,
+    )
 
 
 class RuntimePathSkillLoader(LocalSkillLoader):

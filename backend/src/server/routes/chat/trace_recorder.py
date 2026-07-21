@@ -529,7 +529,7 @@ def _build_command_result_payload(
     summary = result
 
     failed_match = re.match(
-        r"Command failed: (?P<command>.*?)\n(?:\nStdout:\n(?P<stdout>.*?))?(?:\nStderr:\n(?P<stderr>.*))?$",
+        r"Command failed: (?P<command>.*?)\n(?:\nStdout:\n(?P<stdout>.*?))?(?:\n(?:Stderr|Error):\n(?P<stderr>.*))?$",
         result,
         flags=re.DOTALL,
     )

@@ -69,6 +69,19 @@ def _is_pyinstaller_temp_path(value: str) -> bool:
 
     return any(part.startswith("_MEI") for part in Path(value).parts)
 
+
+def _is_macos_ephemeral_path(value: str) -> bool:
+    """识别不应作为安装版默认 Project 的 macOS 临时目录。"""
+
+    path = Path(value).expanduser()
+    return path.is_relative_to(Path("/private/var/folders")) or path.is_relative_to(Path("/var/folders"))
+
+
+def _is_stale_desktop_default_project_path(value: str) -> bool:
+    """判断历史安装版默认 Project 是否仍指向不可复用的临时位置。"""
+
+    return _is_pyinstaller_temp_path(value) or _is_macos_ephemeral_path(value)
+
 DEFAULT_PLAN_CONFIG = {
     "enabled": False,
     "mode": "structured",
@@ -735,7 +748,7 @@ def ensure_db() -> None:
                     (DEFAULT_PROJECT_ID,),
                 ).fetchone()
                 current_root = str(default_project["root_path"] or "") if default_project else ""
-                if _is_pyinstaller_temp_path(current_root):
+                if _is_stale_desktop_default_project_path(current_root):
                     conn.execute(
                         "UPDATE projects SET root_path = ?, updated_at = ? WHERE id = ?",
                         (str(PROJECT_ROOT), now, DEFAULT_PROJECT_ID),

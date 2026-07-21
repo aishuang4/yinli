@@ -18,6 +18,7 @@ import { ConfigProvider, Spinner, carbonDarkTheme, carbonTheme } from '@agentsco
 import { useAppStore } from './stores/appStore';
 import type { ViewType } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
+import { setDesktopApiOrigin } from './utils/apiUrl';
 import { AppLayout } from './layouts/AppLayout';
 import { FeedbackBridge } from './components/FeedbackBridge';
 import { DesktopBackendGate } from './components/DesktopBackendGate';
@@ -100,6 +101,7 @@ export function App() {
       }
 
       setBackendUrl(runtimeBackendUrl);
+      setDesktopApiOrigin(runtimeBackendUrl);
       setAppVersion(runtimeVersion);
     };
 

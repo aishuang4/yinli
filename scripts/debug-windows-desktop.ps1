@@ -31,7 +31,7 @@ function Resolve-DesktopAppPath {
 }
 
 $resolvedAppPath = Resolve-DesktopAppPath -Candidate $AppPath
-$userDataPath = Join-Path $env:APPDATA 'agent-workstation-desktop'
+$userDataPath = Join-Path $HOME '.agent-workstation'
 $logsPath = Join-Path $userDataPath 'logs'
 $mainLogPath = Join-Path $logsPath 'electron-main.log'
 $pythonLogPath = Join-Path $logsPath 'python-backend.log'

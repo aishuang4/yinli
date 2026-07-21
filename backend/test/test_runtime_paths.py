@@ -65,8 +65,8 @@ print(json.dumps({
         assert Path(path).is_relative_to(user_data_root), path
 
 
-def test_pyinstaller_temp_defaults_migrate_to_stable_workspace(tmp_path, monkeypatch) -> None:
-    """历史打包版写入的 _MEI 路径会迁移，用户自定义外部路径不受影响。"""
+def test_ephemeral_desktop_defaults_migrate_to_stable_workspace(tmp_path, monkeypatch) -> None:
+    """历史打包版写入的临时路径会迁移，用户自定义外部路径不受影响。"""
 
     from src.storage import database
 
@@ -94,6 +94,17 @@ def test_pyinstaller_temp_defaults_migrate_to_stable_workspace(tmp_path, monkeyp
     })
     assert normalized["filesystem_scope"] == str(workspace_root)
 
+    with database._connect() as conn:
+        conn.execute(
+            "UPDATE projects SET root_path = ? WHERE id = ?",
+            ("/private/var/folders/example/T/agent-workstation", database.DEFAULT_PROJECT_ID),
+        )
+        conn.commit()
+
+    monkeypatch.setattr(database, "_initialized", False)
+    database.ensure_db()
+
+    assert database.get_project(database.DEFAULT_PROJECT_ID)["rootPath"] == str(workspace_root)
     custom_root = tmp_path / "external-project"
     normalized_custom = database._normalize_guardrails({
         "filesystem_scope": str(custom_root),

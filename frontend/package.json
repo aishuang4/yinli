@@ -13,6 +13,8 @@
     "preview": "vite preview",
     "electron:compile": "tsc -p ../electron/tsconfig.json && node ../scripts/prepare-electron-dist.mjs",
     "electron:dev": "../scripts/electron-dev.sh",
+    "electron:dev:win": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/debug-windows-source.ps1",
+    "electron:dev:win:install": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/debug-windows-source.ps1 -InstallDependencies",
     "electron:pack": "../scripts/electron-package.sh",
     "electron:build:mac": "../scripts/electron-package.sh mac",
     "electron:build:win": "../scripts/electron-package.sh win"
@@ -37,7 +39,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.5.0",
-    "electron": "^42.3.3",
+    "electron": "42.3.3",
     "electron-builder": "^26.15.2",
     "eslint": "^10.3.0",
     "eslint-plugin-react-hooks": "^7.1.1",

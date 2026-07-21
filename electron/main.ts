@@ -11,6 +11,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as net from 'net';
 import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
 
@@ -19,14 +20,38 @@ const isDev = process.env.NODE_ENV === 'development';
 /** Windows 安装包排障时由调试脚本开启，允许查看渲染进程 DevTools。 */
 const desktopDebugEnabled = process.env.AGENT_WORKSTATION_DESKTOP_DEBUG === '1';
 
+/** 安装版在用户主目录下统一保存应用数据，便于用户备份与排障。 */
+const DESKTOP_USER_DATA_DIR = path.join(app.getPath('home'), '.agent-workstation');
+/** 旧版按 Electron 默认目录保存数据，升级时需要迁移。 */
+const LEGACY_DESKTOP_USER_DATA_DIR = path.join(app.getPath('appData'), 'agent-workstation-desktop');
+
+/**
+ * 将旧安装版数据迁移到稳定且可见的用户目录。
+ * 目标已存在时将其视为权威目录，避免覆盖用户已经迁出的数据。
+ */
+function migrateLegacyDesktopUserData(): void {
+  if (!fs.existsSync(LEGACY_DESKTOP_USER_DATA_DIR) || fs.existsSync(DESKTOP_USER_DATA_DIR)) {
+    return;
+  }
+  try {
+    fs.renameSync(LEGACY_DESKTOP_USER_DATA_DIR, DESKTOP_USER_DATA_DIR);
+  } catch (error) {
+    console.warn('[Electron] Failed to migrate legacy desktop data', error);
+  }
+}
+
 // 安装版固定 userData 目录名，避免 productName 或 package name 变化造成数据分散。
 if (!isDev) {
-  app.setPath('userData', path.join(app.getPath('appData'), 'agent-workstation-desktop'));
+  migrateLegacyDesktopUserData();
+  app.setPath('userData', DESKTOP_USER_DATA_DIR);
 }
 
 /** Vite 开发服务器地址 */
 const DEV_SERVER_URL = 'http://localhost:5173';
-const BACKEND_SERVER_URL = 'http://127.0.0.1:8765';
+const DEV_BACKEND_SERVER_URL = 'http://127.0.0.1:8765';
+/** 安装版从较少被占用的高位端口段中选择本轮可用端口。 */
+const DESKTOP_BACKEND_PORT_START = 39100;
+const DESKTOP_BACKEND_PORT_COUNT = 200;
 
 /** Python 后端子进程引用 */
 let pythonProcess: ChildProcess | null = null;
@@ -45,12 +70,20 @@ interface BackendOwnerRecord {
   pid: number;
   instanceId: string;
   startedAt: string;
+  /** 未携带该字段的旧记录按历史固定端口 8765 处理。 */
+  port?: number;
 }
 
 let backendStatus: DesktopBackendStatus = { state: 'starting' };
 let backendStartupPromise: Promise<boolean> | null = null;
 let backendInstanceId: string | null = null;
+let backendPort: number | null = isDev ? 8765 : null;
 let appQuitting = false;
+
+/** 返回当前运行期后端地址。开发模式仍使用固定的 Vite 代理端口。 */
+function backendServerUrl(port = backendPort): string {
+  return `http://127.0.0.1:${port ?? 8765}`;
+}
 
 /** 返回安装实例的诊断日志目录，并在首次使用时创建。 */
 function desktopLogsPath(): string {
@@ -92,6 +125,7 @@ function readBackendOwner(): BackendOwnerRecord | null {
       pid: parsed.pid,
       instanceId: parsed.instanceId,
       startedAt: typeof parsed.startedAt === 'string' ? parsed.startedAt : '',
+      port: typeof parsed.port === 'number' ? parsed.port : 8765,
     };
   } catch {
     return null;
@@ -164,14 +198,23 @@ function createMainWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  // macOS 的 Command + W 仅隐藏窗口，保留渲染进程和当前工作状态；
+  // Command + Q 触发 appQuitting 后才允许窗口真正销毁并退出应用。
+  mainWindow.on('close', (event) => {
+    if (process.platform === 'darwin' && !appQuitting) {
+      event.preventDefault();
+      mainWindow?.hide();
+    }
+  });
 }
 
 /** 请求本机健康接口；失败时返回 null。 */
-async function fetchBackendHealth(): Promise<{ desktopInstanceId?: string | null } | null> {
+async function fetchBackendHealth(port?: number): Promise<{ desktopInstanceId?: string | null } | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1000);
   try {
-    const response = await fetch(`${BACKEND_SERVER_URL}/api/health`, {
+    const response = await fetch(`${backendServerUrl(port)}/api/health`, {
       cache: 'no-store',
       signal: controller.signal,
     });
@@ -226,7 +269,7 @@ async function cleanupStalePythonBackend(): Promise<void> {
     return;
   }
 
-  const health = await fetchBackendHealth();
+  const health = await fetchBackendHealth(owner.port);
   if (health?.desktopInstanceId !== owner.instanceId) {
     removeBackendOwner(owner.pid);
     return;
@@ -237,6 +280,31 @@ async function cleanupStalePythonBackend(): Promise<void> {
   await terminateProcessTree(owner.pid);
   removeBackendOwner(owner.pid);
   await new Promise((resolve) => setTimeout(resolve, 200));
+}
+
+/**
+ * 在安装版私有高位端口段内选择空闲端口。
+ * 端口只绑定本机回环地址，避免与局域网服务发生冲突；后端启动前的短暂竞态由
+ * 进程启动失败处理兜底，下一次重试会重新选择端口。
+ */
+async function findAvailableBackendPort(): Promise<number | null> {
+  const offset = Math.floor(Math.random() * DESKTOP_BACKEND_PORT_COUNT);
+  for (let index = 0; index < DESKTOP_BACKEND_PORT_COUNT; index += 1) {
+    const port = DESKTOP_BACKEND_PORT_START
+      + ((offset + index) % DESKTOP_BACKEND_PORT_COUNT);
+    const available = await new Promise<boolean>((resolve) => {
+      const server = net.createServer();
+      server.unref();
+      server.once('error', () => resolve(false));
+      server.listen({ host: '127.0.0.1', port }, () => {
+        server.close(() => resolve(true));
+      });
+    });
+    if (available) {
+      return port;
+    }
+  }
+  return null;
 }
 
 /**
@@ -263,14 +331,12 @@ async function ensurePythonBackend(): Promise<boolean> {
     }
 
     await cleanupStalePythonBackend();
-    const existingHealth = await fetchBackendHealth();
-    if (existingHealth) {
-      setBackendStatus({
-        state: 'error',
-        detail: '本机端口 8765 已被其他服务占用，请关闭该服务后重试。',
-      });
+    const availablePort = await findAvailableBackendPort();
+    if (!availablePort) {
+      setBackendStatus({ state: 'error', detail: '未找到可用的本地服务端口，请重试。' });
       return false;
     }
+    backendPort = availablePort;
 
     const backendProcess = resolvePackagedBackendProcess();
     if (!backendProcess) {
@@ -293,7 +359,7 @@ async function ensurePythonBackend(): Promise<boolean> {
       AGENT_WORKSTATION_DESKTOP_INSTANCE_ID: backendInstanceId,
       AGENT_WORKSTATION_DATA_DIR: userDataPath,
       AGENT_WORKSTATION_DATABASE_URL: `sqlite+aiosqlite:///${path.join(dataPath, 'agent_workstation.db')}`,
-      AGENT_WORKSTATION_PORT: '8765',
+      AGENT_WORKSTATION_PORT: String(backendPort),
       AGENT_WORKSTATION_CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000","null","file://"]',
     };
 
@@ -310,7 +376,12 @@ async function ensurePythonBackend(): Promise<boolean> {
     }
 
     const pid = pythonProcess.pid;
-    writeBackendOwner({ pid, instanceId: backendInstanceId, startedAt: new Date().toISOString() });
+    writeBackendOwner({
+      pid,
+      instanceId: backendInstanceId,
+      startedAt: new Date().toISOString(),
+      port: backendPort,
+    });
     pythonProcess.stdout?.on('data', (data: Buffer) => {
       const output = data.toString().trim();
       console.log(`[Python] ${output}`);
@@ -375,7 +446,7 @@ function resolvePackagedBackendProcess(): BackendProcessConfig | null {
     if (fs.existsSync(candidate)) {
       return {
         command: candidate,
-        args: ['--host', '127.0.0.1', '--port', '8765'],
+        args: ['--host', '127.0.0.1', '--port', String(backendPort ?? 8765)],
         cwd: path.dirname(candidate),
       };
     }
@@ -393,7 +464,7 @@ function resolvePackagedBackendProcess(): BackendProcessConfig | null {
   if (fs.existsSync(venvPython)) {
     return {
       command: venvPython,
-      args: ['-m', 'uvicorn', 'src.server.main:app', '--host', '127.0.0.1', '--port', '8765'],
+      args: ['-m', 'uvicorn', 'src.server.main:app', '--host', '127.0.0.1', '--port', String(backendPort ?? 8765)],
       cwd: backendPath,
     };
   }
@@ -401,7 +472,7 @@ function resolvePackagedBackendProcess(): BackendProcessConfig | null {
   const uvCommand = process.platform === 'win32' ? 'uv.cmd' : 'uv';
   return {
     command: uvCommand,
-    args: ['run', 'python', '-m', 'uvicorn', 'src.server.main:app', '--host', '127.0.0.1', '--port', '8765'],
+    args: ['run', 'python', '-m', 'uvicorn', 'src.server.main:app', '--host', '127.0.0.1', '--port', String(backendPort ?? 8765)],
     cwd: backendPath,
   };
 }
@@ -427,7 +498,7 @@ async function waitForPythonBackend(timeoutMs = 15000, shouldAbort?: () => boole
       return false;
     }
     try {
-      const response = await fetch(`${BACKEND_SERVER_URL}/api/health`, { cache: 'no-store' });
+      const response = await fetch(`${backendServerUrl()}/api/health`, { cache: 'no-store' });
       if (response.ok) {
         return true;
       }
@@ -456,7 +527,10 @@ app.whenReady().then(async () => {
 
   // macOS: 点击 Dock 图标时重新创建窗口
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+    } else if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
       void ensurePythonBackend();
     }
@@ -488,7 +562,7 @@ app.on('before-quit', (event) => {
  * 前端通过此 IPC 获取 API base URL
  */
 ipcMain.handle('get-backend-url', () => {
-  return BACKEND_SERVER_URL;
+  return isDev ? DEV_BACKEND_SERVER_URL : backendServerUrl();
 });
 
 /** 获取内置后端状态，供启动页和运行期故障页使用。 */
