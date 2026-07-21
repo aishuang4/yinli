@@ -238,6 +238,7 @@ def _create_team_agent(
         model_config=team_model_config,
         deep_thinking=False,
         used_skills=used_skills,
+        skill_paths=(ctx.skill_paths if used_skills else []),
         guardrails=ctx.guardrails,
         mcp_servers=mcp_servers or [],
         knowledge_tools=knowledge_tools or [],
@@ -246,6 +247,7 @@ def _create_team_agent(
         runtime_features_cache_key=f"{runtime_key}-iters-{max_react_iters}",
         extra_tools=extra_tools,
         tool_name_allowlist=tool_allowlist,
+        workspace_dir=str(getattr(ctx, "session_workspace_dir", "") or ""),
     )
     return create_main_agent_from_spec(
         spec,

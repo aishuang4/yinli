@@ -90,6 +90,7 @@ export interface RunStateGeneratedFile {
   path: string;
   name: string;
   extension: string;
+  size?: number;
 }
 
 export interface ChatRunStateSnapshot {
@@ -110,6 +111,7 @@ export interface ChatRunStateSnapshot {
   tokenUsage: { input: number; output: number } | null;
   approvals: RunStateApprovalSummary[];
   plans: ChatRunPlanState[];
+  generatedFiles?: RunStateGeneratedFile[];
   displaySnapshot?: DisplaySnapshot;
   teamSnapshot?: TeamSnapshot | null;
   error: string;

@@ -1,6 +1,7 @@
 export {
   WorkbenchEmptyPanel,
   WorkbenchList,
+  WorkbenchListIcon,
   WorkbenchListPage,
   WorkbenchListRow,
   WorkbenchLoadingPanel,

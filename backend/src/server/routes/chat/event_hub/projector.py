@@ -347,7 +347,7 @@ def _build_display_snapshot(state: dict[str, Any]) -> dict[str, Any]:
             },
         })
 
-    generated_files = _collect_generated_files_from_tools(tools)
+    generated_files = _generated_files_from_state(state, tools)
     if status == "completed" and generated_files:
         blocks.append({
             "id": "files",
@@ -911,6 +911,10 @@ def _project_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None
             _complete_hitl_process_timeline_item(state, interaction_id, payload)
     elif runtime_type.startswith("PLAN_"):
         _upsert_plan(state, event)
+    elif runtime_type in {"ARTIFACT_CREATED", "ARTIFACT_UPDATED"}:
+        files = payload.get("files") if isinstance(payload.get("files"), list) else []
+        if files:
+            state["generatedFiles"] = _normalize_generated_files(files)
     elif runtime_type in {"RUN_COMPLETED", "RUN_FAILED", "RUN_CANCELLED"}:
         target_status = {
             "RUN_COMPLETED": "completed",
@@ -919,6 +923,18 @@ def _project_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None
         }[runtime_type]
         if can_transition_run_status(str(state.get("status") or ""), target_status):
             state["status"] = target_status
+        if runtime_type == "RUN_CANCELLED":
+            state["approvals"] = [
+                {
+                    **item,
+                    "status": "cancelled",
+                    "resolvedAt": str(event.get("timestamp") or _utc_now()),
+                    "action": "cancelled",
+                }
+                if isinstance(item, dict) and item.get("status") == "waiting"
+                else item
+                for item in state.get("approvals", [])
+            ]
 
 
 def _project_actor_timeline_from_runtime_event(state: dict[str, Any], event: dict[str, Any]) -> None:
@@ -1298,6 +1314,8 @@ def _tool_display_events_for_raw_event(
     tool = _find_tool(state, tool_id)
     if not tool:
         return []
+    if _tool_name(data) == "Skill" or str(tool.get("name") or "") == "Skill":
+        return []
     if event_type == "TOOL_CALL_START":
         event_name = "tool.started"
         op = "upsert"
@@ -1433,9 +1451,10 @@ def _runtime_display_events_for_raw_event(state: dict[str, Any], event: dict[str
                 status="completed",
                 data={"content": str(state.get("finalAnswer") or ""), "started": True},
             ))
-        generated_files = _collect_generated_files_from_tools([
-            item for item in state.get("tools") or [] if isinstance(item, dict)
-        ])
+        generated_files = _generated_files_from_state(
+            state,
+            [item for item in state.get("tools") or [] if isinstance(item, dict)],
+        )
         if generated_files:
             events.append(_display_event(
                 state,
@@ -1532,6 +1551,8 @@ def _actor_display_event_for_runtime_event(state: dict[str, Any], event: dict[st
         if not tool_id:
             return None
         tool_name = str(payload.get("tool_call_name") or "tool")
+        if tool_name == "Skill":
+            return None
         if runtime_type == "TOOL_CALL_DELTA":
             return _display_event(
                 state,
@@ -2092,6 +2113,37 @@ def _collect_generated_files_from_tools(tools: list[dict[str, Any]]) -> list[dic
             continue
         seen_paths.add(file_path)
         files.append(_generated_file_summary(file_path))
+    return files
+
+
+def _generated_files_from_state(state: dict[str, Any], tools: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """优先使用真实扫描的 Session 产物，兼容旧 Write/Edit 工具推断。"""
+
+    artifacts = state.get("generatedFiles")
+    if isinstance(artifacts, list):
+        files = _normalize_generated_files(artifacts)
+        if files:
+            return files
+    return _collect_generated_files_from_tools(tools)
+
+
+def _normalize_generated_files(items: list[Any]) -> list[dict[str, str]]:
+    """归一化 Session 产物清单，消除重复和不完整记录。"""
+
+    files: list[dict[str, str]] = []
+    seen_paths: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        file_path = str(item.get("path") or "").strip()
+        if not file_path or file_path in seen_paths:
+            continue
+        seen_paths.add(file_path)
+        files.append({
+            "path": file_path,
+            "name": str(item.get("name") or PurePosixPath(file_path).name or "file"),
+            "extension": str(item.get("extension") or PurePosixPath(file_path).suffix.lstrip(".").upper() or "FILE"),
+        })
     return files
 
 

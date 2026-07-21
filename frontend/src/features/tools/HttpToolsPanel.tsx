@@ -10,6 +10,7 @@ import { Button, Tag } from '@agentscope-ai/design';
 import {
   WorkbenchEmptyPanel,
   WorkbenchList,
+  WorkbenchListIcon,
   WorkbenchListRow,
   WorkbenchLoadingPanel,
   WorkbenchSection,
@@ -146,14 +147,15 @@ function HttpToolRow({
   return (
     <WorkbenchListRow
       icon={(
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-accent)]">
+        <WorkbenchListIcon>
           <Globe2 size={20} strokeWidth={1.8} />
-        </span>
+        </WorkbenchListIcon>
       )}
       title={tool.name}
       subtitle={tool.url}
       description={tool.description || tool.parameterInstructions || '暂无说明'}
       last={last}
+      layout="columns"
       onSelect={onEdit}
       meta={(
         <>

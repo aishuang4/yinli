@@ -1,6 +1,6 @@
 # Agent Workstation 项目进展与协作交接
 
-> 更新时间：2026-07-17。本文只记录当前完成度、验证结果和已知缺口。
+> 更新时间：2026-07-20。本文只记录当前完成度、验证结果和已知缺口。
 
 ## 当前阶段
 
@@ -48,6 +48,25 @@
 - `subagent_invocations`、`SUBAGENT_*` 事件、Trace 和 HITL resume。
 - M1 已完成，M2 部分完成；inline MCP、hooks、worktree isolation 等尚未完成。
 
+### Skills
+
+- Chat Runtime 已从关键词预选和完整 `SKILL.md` 注入迁移到 AgentScope 原生 `skills_or_loaders` 与内置 `Skill` viewer。
+- Workspace / Project binding、Agent 配置和请求显式 `skillIds` 继续作为 catalog 白名单；Agent cache key 包含包路径和 `SKILL.md` 修改时间。
+- 单 Agent、Team 临时 Member 和 `DelegateTask` Subagent 已统一传递 Skill 包路径；Team 协调、综合和恢复轮继续禁用 Skills。
+- Skill 生命周期以真实 viewer 调用为准，viewer 不重复显示普通工具卡片；本地 Bash 与网络权限已解耦。
+- Skill zip 安装已增加标准 frontmatter、符号链接和兼容 warning 诊断，详情页展示非阻断提示。
+- 持久 Docker sandbox 会 seed Skill 到 `/workspace/skills`；非持久 Docker + Skills 当前明确拒绝启动，避免宿主路径在容器中静默失效。
+- 尚需用至少两个模型供应商做 Sandbox 行为验证，重点检查 Skill 相对路径转绝对路径和 Office script 调用稳定性。
+
+2026-07-20 真实模型 smoke test：
+
+- DeepSeek `deepseek-v4-flash` 已完成 `Skill -> Read references/ -> Bash scripts/ -> FinalAnswerStart` 全链路，最终结果和 SkillRun 均正确收口。
+- 测试 Agent 关闭 network 后仍可运行本地 Bash，验证 execute 与 network 权限已解耦。
+- macOS 当前运行环境提供 `python3`，不提供 `python`；Skill 示例和后续 Office Skills 应显式使用 `python3`，或在脚本前探测解释器。
+- DashScope `qwen-plus` 已到达真实供应商接口，但返回 `401 invalid_api_key`，因此第二供应商行为验证仍未完成。
+- 真实 Run 发现 Runtime Event 路径仍把 `Skill` viewer 写入 DisplaySnapshot 普通工具项；已在 projector 层过滤并增加回归测试。
+- 真实 Run 中一次 Bash 失败后成功恢复，Trace 摘要仍被历史 failed 事件锁死；已改为按最后一个顶层终态事件判定，并保留中间失败事件用于审计。
+
 ### Memory
 
 - user / agent / global Markdown 记忆。
@@ -65,6 +84,7 @@
 ### 管理与桌面端
 
 - Agent CRUD、智能创建、导入导出、模型、工具、Skills、MCP 和权限配置。
+- 系统 `default` Agent 已持久化并在管理页单独展示，可配置模型、系统提示词、Skills、MCP、HTTP 工具和 Guardrails；该 Agent 跨 Workspace 可见且禁止删除。
 - Agents、Subagents、Tools、MCP、Skills、Memory、Runs、Trace、Sandbox、Workflow、Settings 页面。
 - Electron 开发窗口、后端启动和 macOS / Windows 内测打包脚本。
 
@@ -73,7 +93,7 @@
 最近一次完整验证：
 
 ```text
-backend pytest: 306 passed
+backend pytest: 329 passed
 frontend build: passed
 frontend lint: passed
 /api/teams: 404

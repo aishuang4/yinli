@@ -6,6 +6,7 @@
 
 from dataclasses import dataclass
 import hashlib
+import os
 from typing import Any, Callable
 
 from agentscope.middleware import MiddlewareBase
@@ -56,6 +57,8 @@ class MainAgentRuntimeSpec:
     tool_name_allowlist: set[str] | None
     tool_name_denylist: set[str]
     middlewares: list[MiddlewareBase]
+    skill_paths: list[str]
+    workspace_dir: str = ""
 
 
 def build_runtime_model_config(
@@ -128,6 +131,7 @@ def build_runtime_agent_cache_key(
     deep_thinking: bool,
     fallback_names: list[str],
     used_skills: list[Skill],
+    skill_paths: list[str] | None = None,
     mcp_servers: list[McpRuntimeSpec],
     knowledge_tools: list[KnowledgeToolRuntimeSpec],
     runtime_tool_scope: RuntimeToolScope,
@@ -136,7 +140,15 @@ def build_runtime_agent_cache_key(
 ) -> str:
     """生成影响 Agent 实例缓存的稳定 key。"""
 
-    skill_cache_key = ",".join(sorted(skill.id for skill in used_skills))
+    skill_cache_parts: list[str] = []
+    for path in sorted(skill_paths or []):
+        skill_md = os.path.join(path, "SKILL.md")
+        try:
+            modified_ns = os.stat(skill_md).st_mtime_ns
+        except OSError:
+            modified_ns = 0
+        skill_cache_parts.append(f"{path}:{modified_ns}")
+    skill_cache_key = hashlib.sha256("\n".join(skill_cache_parts).encode("utf-8")).hexdigest()[:16]
     fallback_cache_key = ",".join(fallback_names)
     mcp_cache_key = ",".join(
         f"{server.name}:{','.join(server.enable_tools)}"
@@ -164,6 +176,7 @@ def build_main_agent_runtime_spec(
     model_config: RuntimeModelConfig,
     deep_thinking: bool,
     used_skills: list[Skill],
+    skill_paths: list[str] | None = None,
     guardrails: AgentGuardrails,
     mcp_servers: list[McpRuntimeSpec],
     knowledge_tools: list[KnowledgeToolRuntimeSpec],
@@ -174,6 +187,7 @@ def build_main_agent_runtime_spec(
     tool_name_allowlist: set[str] | None = None,
     tool_name_denylist: set[str] | None = None,
     middlewares: list[MiddlewareBase] | None = None,
+    workspace_dir: str = "",
 ) -> MainAgentRuntimeSpec:
     """构建主 Agent 工厂参数，不包含 trace 回调。"""
 
@@ -185,6 +199,7 @@ def build_main_agent_runtime_spec(
         deep_thinking=deep_thinking,
         fallback_names=model_config.fallback_names,
         used_skills=used_skills,
+        skill_paths=skill_paths,
         mcp_servers=mcp_servers,
         knowledge_tools=knowledge_tools,
         runtime_tool_scope=runtime_tool_scope,
@@ -210,6 +225,8 @@ def build_main_agent_runtime_spec(
         tool_name_allowlist=tool_name_allowlist,
         tool_name_denylist=tool_name_denylist or set(),
         middlewares=middlewares or [],
+        skill_paths=list(skill_paths or []),
+        workspace_dir=workspace_dir,
     )
 
 
@@ -241,4 +258,6 @@ def create_main_agent_from_spec(
         tool_name_allowlist=spec.tool_name_allowlist,
         tool_name_denylist=spec.tool_name_denylist,
         middlewares=spec.middlewares,
+        skill_paths=spec.skill_paths,
+        workspace_dir=spec.workspace_dir or None,
     )

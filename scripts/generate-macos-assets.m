@@ -59,34 +59,39 @@ int main(int argc, const char *argv[]) {
 
             NSRect iconFrame = NSMakeRect(72, 72, 880, 880);
             NSBezierPath *icon = [NSBezierPath bezierPathWithRoundedRect:iconFrame xRadius:205 yRadius:205];
-            [Color(0x1c1e25, 1) setFill];
+            [Color(0x111614, 1) setFill];
             [icon fill];
 
             NSBezierPath *border = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(iconFrame, 12, 12)
                                                                    xRadius:194
                                                                    yRadius:194];
-            border.lineWidth = 8;
-            [Color(0x343741, 1) setStroke];
+            border.lineWidth = 4;
+            [Color(0x42df87, 0.10) setStroke];
             [border stroke];
 
-            NSBezierPath *bolt = [NSBezierPath bezierPath];
-            [bolt moveToPoint:NSMakePoint(565, 842)];
-            [bolt lineToPoint:NSMakePoint(278, 480)];
-            [bolt lineToPoint:NSMakePoint(470, 480)];
-            [bolt lineToPoint:NSMakePoint(405, 176)];
-            [bolt lineToPoint:NSMakePoint(748, 606)];
-            [bolt lineToPoint:NSMakePoint(540, 606)];
-            [bolt closePath];
-            [Color(0x8b5cf6, 1) setFill];
-            [bolt fill];
+            NSBezierPath *orbit = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(206, 206, 612, 612)];
+            orbit.lineWidth = 5;
+            [Color(0x42df87, 0.12) setStroke];
+            [orbit stroke];
 
-            NSBezierPath *accent = [NSBezierPath bezierPath];
-            [accent moveToPoint:NSMakePoint(550, 606)];
-            [accent lineToPoint:NSMakePoint(748, 606)];
-            [accent lineToPoint:NSMakePoint(630, 458)];
-            [accent closePath];
-            [Color(0x41c7bd, 1) setFill];
-            [accent fill];
+            NSBezierPath *mark = [NSBezierPath bezierPath];
+            [mark moveToPoint:NSMakePoint(300, 738)];
+            [mark curveToPoint:NSMakePoint(512, 512)
+                 controlPoint1:NSMakePoint(347, 644)
+                 controlPoint2:NSMakePoint(416, 574)];
+            [mark moveToPoint:NSMakePoint(724, 738)];
+            [mark curveToPoint:NSMakePoint(512, 512)
+                 controlPoint1:NSMakePoint(677, 644)
+                 controlPoint2:NSMakePoint(608, 574)];
+            [mark moveToPoint:NSMakePoint(512, 512)];
+            [mark curveToPoint:NSMakePoint(512, 278)
+                 controlPoint1:NSMakePoint(512, 426)
+                 controlPoint2:NSMakePoint(512, 356)];
+            mark.lineWidth = 88;
+            mark.lineCapStyle = NSLineCapStyleRound;
+            mark.lineJoinStyle = NSLineJoinStyleRound;
+            [Color(0x42df87, 1) setStroke];
+            [mark stroke];
         });
 
         SavePNG(720, 440, [outputDirectory stringByAppendingPathComponent:@"dmg-background.png"], ^{
@@ -94,10 +99,8 @@ int main(int argc, const char *argv[]) {
             NSRectFill(NSMakeRect(0, 0, 720, 440));
             [Color(0xffffff, 1) setFill];
             NSRectFill(NSMakeRect(0, 316, 720, 124));
-            [Color(0x8b5cf6, 1) setFill];
-            NSRectFill(NSMakeRect(0, 436, 470, 4));
-            [Color(0x41c7bd, 1) setFill];
-            NSRectFill(NSMakeRect(470, 436, 250, 4));
+            [Color(0x42df87, 1) setFill];
+            NSRectFill(NSMakeRect(0, 436, 720, 4));
 
             CenteredText(@"安装 Agent Workstation",
                          NSMakeRect(80, 365, 560, 34),
@@ -110,7 +113,7 @@ int main(int argc, const char *argv[]) {
             CenteredText(@"拖到这里安装",
                          NSMakeRect(270, 244, 180, 24),
                          [NSFont systemFontOfSize:14 weight:NSFontWeightMedium],
-                         Color(0x5148cf, 1));
+                         Color(0x238b57, 1));
 
             NSBezierPath *arrow = [NSBezierPath bezierPath];
             [arrow moveToPoint:NSMakePoint(278, 207)];
@@ -119,7 +122,7 @@ int main(int argc, const char *argv[]) {
                   controlPoint2:NSMakePoint(394, 176)];
             arrow.lineWidth = 5;
             arrow.lineCapStyle = NSLineCapStyleRound;
-            [Color(0x6157e7, 1) setStroke];
+            [Color(0x238b57, 1) setStroke];
             [arrow stroke];
 
             NSBezierPath *arrowHead = [NSBezierPath bezierPath];
@@ -129,7 +132,7 @@ int main(int argc, const char *argv[]) {
             arrowHead.lineWidth = 5;
             arrowHead.lineCapStyle = NSLineCapStyleRound;
             arrowHead.lineJoinStyle = NSLineJoinStyleRound;
-            [Color(0x6157e7, 1) setStroke];
+            [Color(0x238b57, 1) setStroke];
             [arrowHead stroke];
 
             CenteredText(@"安装完成后，可从“应用程序”中打开",

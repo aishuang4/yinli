@@ -23,6 +23,10 @@
 - `docs/subagent-delegation-design.md`：Subagent 文件定义、`DelegateTask`、权限裁剪和 invocation 审计。
 - `docs/memory-system-design.md`：新记忆系统、Markdown 记忆、`memory_nodes`、向量检索和 Skill 自进化。
 
+## 待实施设计
+
+- `docs/agentscope-native-skills-migration.md`：将应用层 Skill 全文注入迁移到 AgentScope 原生 `LocalSkillLoader`、统一 `Skill` viewer 和渐进式披露的第一版设计。
+
 ## 后续路线
 
 - `docs/workspace-project-design.md`：Workspace / Project 归属、资源绑定、RuntimeContext 和前端上下文切换设计；Phase 0 至 Phase 3 已实现。

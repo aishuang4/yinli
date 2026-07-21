@@ -4,9 +4,9 @@
  * 用统一详情外壳展示 Skill 元数据、触发条件、提示内容和资源文件。
  */
 
-import { Download, Package, Trash2 } from 'lucide-react';
+import { AlertTriangle, Download, Package, Trash2 } from 'lucide-react';
 import { Button, Tag } from '@agentscope-ai/design';
-import { WorkbenchDetailShell } from '../../components/workbench';
+import { WorkbenchDetailShell, WorkbenchListIcon } from '../../components/workbench';
 import { ToggleButton } from '../../components/ToggleButton';
 import type { Skill } from '../../types/skill';
 
@@ -73,9 +73,9 @@ export function SkillDetailPage({
         <div className="mx-auto grid w-full max-w-5xl gap-4">
           <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
             <div className="mb-4 flex items-center gap-3">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-accent)]">
-                <Package size={20} strokeWidth={1.8} />
-              </span>
+            <WorkbenchListIcon>
+              <Package size={20} strokeWidth={1.8} />
+            </WorkbenchListIcon>
               <div className="min-w-0">
                 <div className="truncate text-sm font-semibold text-[var(--color-text-primary)]">{skill.name}</div>
                 <div className="mt-1 flex flex-wrap gap-1">
@@ -99,6 +99,20 @@ export function SkillDetailPage({
               <div className="flex flex-wrap gap-2">
                 {skill.tags.map((tag) => (
                   <Tag key={tag} size="small" color="blue">{tag}</Tag>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {(skill.warnings?.length ?? 0) > 0 ? (
+            <section className="rounded-lg border border-[var(--color-warning)] bg-[var(--color-bg-primary)] p-4">
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
+                <AlertTriangle size={15} color="var(--color-warning)" />
+                兼容性提示
+              </div>
+              <div className="space-y-2 text-sm text-[var(--color-text-secondary)]">
+                {(skill.warnings ?? []).map((warning) => (
+                  <div key={warning}>{warning}</div>
                 ))}
               </div>
             </section>

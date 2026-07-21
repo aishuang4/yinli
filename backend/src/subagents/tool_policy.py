@@ -104,9 +104,9 @@ def _parent_available_tools(
     }
     if not read_only:
         tools.update(WRITE_TOOLS)
+    if permission_profile.can_execute and tool_scope.allow_bash:
+        tools.add("Bash")
     if permission_profile.can_use_network:
-        if tool_scope.allow_bash:
-            tools.add("Bash")
         if tool_scope.allow_http:
             tools.add("HttpRequest")
         if tool_scope.allow_web:

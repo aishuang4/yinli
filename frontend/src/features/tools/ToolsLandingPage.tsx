@@ -1,13 +1,13 @@
 /**
  * ToolsLandingPage — 工具模块第一层入口页。
  *
- * 将 MCP、HTTP 工具和系统工具收束成统一列表入口，具体配置进入二级页面。
+ * 展示 HTTP 工具和系统工具的管理入口。
  */
 
 import { Plug } from 'lucide-react';
-import { Tag } from '@agentscope-ai/design';
 import {
   WorkbenchList,
+  WorkbenchListIcon,
   WorkbenchListPage,
   WorkbenchListRow,
   WorkbenchSection,
@@ -30,16 +30,14 @@ export function ToolsLandingPage({ onSelectPanel }: ToolsLandingPageProps) {
               <WorkbenchListRow
                 key={key}
                 icon={(
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-accent)]">
+                  <WorkbenchListIcon>
                     <Icon size={20} strokeWidth={1.8} />
-                  </span>
+                  </WorkbenchListIcon>
                 )}
                 title={item.label}
                 subtitle={item.description}
-                description="进入后查看和配置具体工具"
                 last={index === TOOL_PANEL_ORDER.length - 1}
                 onSelect={() => onSelectPanel(key)}
-                meta={<Tag size="small" color="transparent">二级页面</Tag>}
               />
             );
           })}

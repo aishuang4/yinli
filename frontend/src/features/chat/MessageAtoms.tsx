@@ -1,8 +1,8 @@
 import { useEffect } from 'react';
-import { Loader2 } from 'lucide-react';
+import { FileText, Loader2 } from 'lucide-react';
 
 import { MarkdownContent } from '../../components/MarkdownContent';
-import type { ChatImagePayload } from './types';
+import type { ChatFilePayload, ChatImagePayload } from './types';
 import { useSmoothStreamingText } from './useSmoothStreamingText';
 
 export function MessageImages({
@@ -23,6 +23,25 @@ export function MessageImages({
           alt={image.name || `image-${index + 1}`}
           className="max-h-48 max-w-64 rounded-md border border-[var(--color-border)] object-contain"
         />
+      ))}
+    </div>
+  );
+}
+
+export function MessageFiles({ files, align = 'left' }: { files?: ChatFilePayload[]; align?: 'left' | 'right' }) {
+  if (!files || files.length === 0) return null;
+
+  return (
+    <div className={`flex flex-wrap gap-2 ${align === 'right' ? 'justify-end' : 'justify-start'}`}>
+      {files.map((file) => (
+        <div
+          key={file.path}
+          className="flex max-w-64 items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1.5 text-xs text-[var(--color-text-secondary)]"
+          title={file.path}
+        >
+          <FileText size={14} className="shrink-0" />
+          <span className="truncate">{file.name}</span>
+        </div>
       ))}
     </div>
   );

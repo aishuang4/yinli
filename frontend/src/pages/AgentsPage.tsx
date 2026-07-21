@@ -155,7 +155,7 @@ export function AgentsPage() {
           subtitle={selectedAgent.description || '配置这个智能体的模型、工具和运行边界'}
           onBack={goList}
           onExport={() => void handleExportAgent()}
-          onDelete={() => setDeleteConfirm(selectedAgent.id)}
+          onDelete={selectedAgent.id === 'default' ? undefined : () => setDeleteConfirm(selectedAgent.id)}
         >
           <AgentEditor
             agent={selectedAgent}

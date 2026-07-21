@@ -226,7 +226,9 @@ export function useAgents(): UseAgentsReturn {
       const res = await fetch(`/api/agents?workspaceId=${encodeURIComponent(activeWorkspaceId)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: AgentApiData[] = await res.json();
-      setAgents(data.map(mapApiAgent).filter((agent) => agent.workspaceId === activeWorkspaceId));
+      setAgents(data.map(mapApiAgent).filter((agent) => (
+        agent.id === 'default' || agent.workspaceId === activeWorkspaceId
+      )));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load agents');
     } finally {

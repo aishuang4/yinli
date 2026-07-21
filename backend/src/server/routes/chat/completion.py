@@ -16,6 +16,7 @@ from src.memory.trace import (
     memory_skill_generating_payload,
     record_memory_audit_event,
 )
+from src.project_files import list_project_session_artifacts
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
 from src.server.routes.chat.models import ChatModelCacheRun, ChatSkillRun, ChatToolRun
@@ -31,8 +32,8 @@ def missing_final_answer_error() -> str:
     """生成没有最终答案时返回给前端的错误说明。"""
 
     return (
-        "Agent 执行已停止，但没有产生最终答案。"
-        "可能已达到最大 ReAct 迭代次数，或模型没有输出可作为最终回复的文本。"
+        "Agent 执行已结束，但没有生成最终答案。"
+        "请查看 Run Trace 中最后一个失败事件，或重新发起该任务。"
     )
 
 
@@ -125,6 +126,8 @@ async def finalize_successful_leader_run(
     skill_runs: list[ChatSkillRun],
     active_skill_run: dict | None,
     runtime_context: RuntimeContext | None = None,
+    session_workspace_dir: str = "",
+    session_artifact_paths_before: list[str] | None = None,
     sandbox: bool = False,
 ) -> AsyncGenerator[str, None]:
     """完成 Leader run 成功路径的消息、trace 和 UI 事件。"""
@@ -152,6 +155,16 @@ async def finalize_successful_leader_run(
             run_id=source_run_id,
             agent_id=agent_id,
         )
+    previous_artifact_paths = set(session_artifact_paths_before or [])
+    session_artifacts = [
+        artifact
+        for artifact in list_project_session_artifacts(
+        project_root=resolved_runtime_context.project_root,
+        session_id=session_id,
+        session_workspace_dir=session_workspace_dir,
+        )
+        if str(artifact.get("path") or "") not in previous_artifact_paths
+    ]
     if persist:
         _append_assistant_message(
             session_id=session_id,
@@ -247,6 +260,18 @@ async def finalize_successful_leader_run(
                 content=type(exc).__name__,
                 payload={"sourceRunId": source_run_id},
             )
+    if session_artifacts:
+        yield runtime_event_sse(
+            "ARTIFACT_CREATED",
+            session_id=session_id,
+            run_id=source_run_id,
+            scope="artifact",
+            source="runtime",
+            agent_id=agent_id,
+            agent_name=agent_name,
+            status="completed",
+            payload={"files": session_artifacts},
+        )
     yield runtime_event_sse(
         "RUN_COMPLETED",
         session_id=session_id,

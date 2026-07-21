@@ -10,6 +10,59 @@ import pytest
 from src.storage import database
 
 
+def test_imported_skill_requires_standard_frontmatter_fields():
+    """AgentScope loader 所需的 name/description 缺失时应在安装阶段失败。"""
+
+    import src.server.routes.skills as skills_routes
+
+    with pytest.raises(Exception) as exc_info:
+        skills_routes._skill_from_markdown(
+            "missing-description/SKILL.md",
+            "---\nname: missing-description\n---\n\nInstructions.\n",
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 422
+
+
+def test_skill_package_diagnostics_are_non_blocking():
+    """目录名和标准名称不一致时返回 warning，但仍能创建 Skill。"""
+
+    import src.server.routes.skills as skills_routes
+
+    skill = skills_routes._skill_from_markdown(
+        "Different Folder/SKILL.md",
+        "---\nname: Workbook Inspector\ndescription: Inspect workbooks.\n---\n\nInstructions.\n",
+        resources=["SKILL.md", "scripts/helper.bin"],
+    )
+
+    assert len(skill.warnings) == 3
+    assert any("目录名" in warning for warning in skill.warnings)
+    assert any("小写字母" in warning for warning in skill.warnings)
+    assert any("helper.bin" in warning for warning in skill.warnings)
+
+
+def test_skill_zip_rejects_symbolic_links():
+    """Skill zip 不允许通过符号链接把资源解析到包目录之外。"""
+
+    import src.server.routes.skills as skills_routes
+
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(
+            "safe/SKILL.md",
+            "---\nname: safe\ndescription: Safe skill.\n---\n\nInstructions.\n",
+        )
+        link = zipfile.ZipInfo("safe/scripts/link.py")
+        link.create_system = 3
+        link.external_attr = (0o120777 << 16)
+        archive.writestr(link, "../../outside.py")
+
+    with pytest.raises(Exception) as exc_info:
+        skills_routes._read_skill_md_from_zip(buffer.getvalue())
+
+    assert getattr(exc_info.value, "status_code", None) == 422
+
+
 def test_register_user_skill_writes_standard_skill_package(tmp_path, monkeypatch):
     """手动注册 Skill 时必须落标准 SKILL.md 包目录。"""
 

@@ -14,6 +14,7 @@ import {
   WorkbenchDetailShell,
   WorkbenchEmptyPanel,
   WorkbenchList,
+  WorkbenchListIcon,
   WorkbenchListPage,
   WorkbenchListRow,
   WorkbenchLoadingPanel,
@@ -334,14 +335,15 @@ function McpServerRow({
   return (
     <WorkbenchListRow
       icon={(
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-accent)]">
+        <WorkbenchListIcon>
           <Plug size={20} strokeWidth={1.8} />
-        </span>
+        </WorkbenchListIcon>
       )}
       title={server.name}
       subtitle={`${server.category} · ${server.transport}`}
       description={server.description || server.tools.map((tool) => tool.name).join(' / ') || '暂无描述'}
       last={last}
+      layout="columns"
       onSelect={onSelect}
       meta={(
         <>

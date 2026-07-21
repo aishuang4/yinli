@@ -9,6 +9,7 @@ import { Button, Tag } from '@agentscope-ai/design';
 import {
   WorkbenchEmptyPanel,
   WorkbenchList,
+  WorkbenchListIcon,
   WorkbenchListPage,
   WorkbenchListRow,
   WorkbenchLoadingPanel,
@@ -82,14 +83,15 @@ function TraceListRow({
   return (
     <WorkbenchListRow
       icon={(
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-accent)]">
+        <WorkbenchListIcon>
           <Activity size={20} strokeWidth={1.8} />
-        </span>
+        </WorkbenchListIcon>
       )}
       title={trace.title}
       subtitle={trace.mode === 'team' ? `${trace.agentName || 'Agent'} · Team Leader` : trace.agentName || 'Agent'}
       description={trace.updatedAt || trace.createdAt}
       last={last}
+      layout="columns"
       onSelect={onSelect}
       meta={(
         <>

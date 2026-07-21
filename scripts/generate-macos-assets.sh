@@ -43,3 +43,11 @@ node "$ROOT_DIR/scripts/create-icns.mjs" "$BUILD_DIR/icon.icns" \
   "ic14=$ICONSET_DIR/icon-512.png" \
   "ic10=$ICONSET_DIR/icon-1024.png"
 echo "macOS 应用图标已输出到 frontend/build/icon.icns"
+
+node "$ROOT_DIR/scripts/create-ico.mjs" "$BUILD_DIR/icon.ico" \
+  "16=$ICONSET_DIR/icon-16.png" \
+  "32=$ICONSET_DIR/icon-32.png" \
+  "64=$ICONSET_DIR/icon-64.png" \
+  "128=$ICONSET_DIR/icon-128.png" \
+  "256=$ICONSET_DIR/icon-256.png"
+echo "Windows 应用图标已输出到 frontend/build/icon.ico"

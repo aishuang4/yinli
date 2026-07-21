@@ -7,7 +7,7 @@ import type {
   ToolCallInfo,
 } from '../../hooks/useEventStream';
 import { Loader2, Users } from 'lucide-react';
-import { MessageImages, StreamingPlaceholder } from './MessageAtoms';
+import { MessageFiles, MessageImages, StreamingPlaceholder } from './MessageAtoms';
 import type { LocalMessage } from './types';
 import type { TeamConsoleState } from '../../types/teamRuntime';
 import { ChatDisplayRenderer } from './ChatDisplayRenderer';
@@ -22,9 +22,11 @@ type ClarificationSubmitProps = {
 
 export function MessageBubble({
   message,
+  sessionId = '',
   onSubmitClarification,
 }: {
   message: LocalMessage;
+  sessionId?: string;
 } & ClarificationSubmitProps) {
   if (message.role === 'user') {
     return <UserMessageBubble message={message} />;
@@ -33,6 +35,7 @@ export function MessageBubble({
   return (
       <SingleAgentMessageBubble
         message={message}
+        sessionId={sessionId}
         onSubmitClarification={onSubmitClarification}
       />
   );
@@ -42,6 +45,7 @@ function UserMessageBubble({ message }: { message: LocalMessage }) {
   return (
     <MessageFrame isUser containIntrinsicSize="88px">
       <MessageImages images={message.images} align="right" />
+      <MessageFiles files={message.files} align="right" />
       <div className="rounded-xl bg-[var(--color-bg-secondary)] px-3 py-2 text-sm leading-7 text-[var(--color-text-primary)]">
         {message.content}
       </div>
@@ -51,11 +55,13 @@ function UserMessageBubble({ message }: { message: LocalMessage }) {
 
 function SingleAgentMessageBubble({
   message,
+  sessionId,
   onSubmitClarification,
 }: {
   message: LocalMessage;
+  sessionId: string;
 } & ClarificationSubmitProps) {
-  const displayMessage = buildStoredChatDisplayMessage(message);
+  const displayMessage = buildStoredChatDisplayMessage(message, sessionId);
 
   return (
     <MessageFrame containIntrinsicSize="220px">
@@ -89,6 +95,7 @@ export function StreamingBubble({
   onResolveHitl,
   onFinalAnswerAnimationChange,
   showGeneratedFiles,
+  sessionId,
   toolCalls,
   modelName,
   tokenUsage,
@@ -112,6 +119,7 @@ export function StreamingBubble({
   onResolveHitl: ResolveHitl;
   onFinalAnswerAnimationChange?: (isAnimating: boolean) => void;
   showGeneratedFiles: boolean;
+  sessionId: string;
   toolCalls: ToolCallInfo[];
   modelName: string;
   tokenUsage: { input: number; output: number } | null;
@@ -138,7 +146,7 @@ export function StreamingBubble({
     modelName,
     tokenUsage,
     error,
-  });
+  }, sessionId);
 
   return (
     <MessageFrame containIntrinsicSize="220px">

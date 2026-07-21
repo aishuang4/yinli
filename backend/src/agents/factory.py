@@ -16,6 +16,7 @@ from agentscope.agent import Agent
 from agentscope.agent._config import ContextConfig, ModelConfig, ReActConfig
 from agentscope.mcp import HttpMCPConfig, MCPClient
 from agentscope.middleware import MiddlewareBase
+from agentscope.skill import LocalSkillLoader, Skill as AgentScopeSkill
 from agentscope.tool import Toolkit, Bash, ToolBase
 from agentscope.state import AgentState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
@@ -53,6 +54,27 @@ from src.tools.scoped_write import ScopedWrite
 # Agent 实例缓存 — 按 agent_id 缓存，避免重复创建
 # ============================================================================
 _agent_cache: dict[str, Agent] = {}
+
+AGENT_WORKSTATION_SKILL_INSTRUCTION = """<agent-skills>
+Skills are instruction packages that extend your capabilities. Skills are not tools and cannot be called directly.
+To use a Skill, call the `{{ skill_viewer }}` tool with its exact name, read the returned instructions, then use the ordinary tools allowed by this runtime.
+
+# Available Skills
+{% for skill in skills %}<skill>
+<name>{{ skill.name }}</name>
+<description>{{ skill.description }}</description>
+<dir>{{ skill.dir }}</dir>
+</skill>
+{% endfor %}
+
+Rules:
+- Resolve relative paths mentioned by a Skill against that Skill's `dir` before calling Read, Grep, Glob, or Bash.
+- For example, when `dir` is `/skills/excel` and the Skill says `scripts/inspect.py`, call tools with `/skills/excel/scripts/inspect.py`.
+- Project files remain relative to the current Project workspace.
+- Do not guess Skill directories or scan for unregistered Skills.
+- A Skill never expands the current tool, filesystem, execution, network, or approval permissions.
+</agent-skills>
+"""
 
 CONTEXT_SUMMARY_FIELD_LIMIT = 2000
 CONTEXT_SUMMARY_NEXT_STEPS_LIMIT = 1200
@@ -122,8 +144,13 @@ def _build_context_config() -> ContextConfig:
 class GuardedBash(Bash):
     """Bash with user-configured blacklist checks."""
 
-    def __init__(self, shell_blacklist: list[str], timeout_seconds: int) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        shell_blacklist: list[str],
+        timeout_seconds: int,
+        cwd: str | None = None,
+    ) -> None:
+        super().__init__(cwd=cwd)
         self.shell_blacklist = [item.strip() for item in shell_blacklist if item.strip()]
         self.timeout_seconds = timeout_seconds
 
@@ -144,6 +171,27 @@ class GuardedBash(Bash):
             tool_input["timeout"] = max_timeout_ms
 
         return await super().check_permissions(tool_input, context)
+
+
+class RuntimePathSkillLoader(LocalSkillLoader):
+    """从宿主加载 Skill 正文，但向模型披露实际执行环境中的目录。"""
+
+    def __init__(self, directory: str, runtime_directory: str) -> None:
+        super().__init__(directory)
+        self.runtime_directory = runtime_directory
+
+    async def list_skills(self) -> list[AgentScopeSkill]:
+        skills = await super().list_skills()
+        return [
+            AgentScopeSkill(
+                name=skill.name,
+                description=skill.description,
+                dir=self.runtime_directory,
+                markdown=skill.markdown,
+                updated_at=skill.updated_at,
+            )
+            for skill in skills
+        ]
 
 
 def _safe_workspace_dir(guardrails: AgentGuardrails | None) -> str:
@@ -199,6 +247,9 @@ def _create_default_toolkit(
     include_default_tools: bool = True,
     tool_name_allowlist: set[str] | None = None,
     tool_name_denylist: set[str] | None = None,
+    skill_paths: list[str] | None = None,
+    skill_runtime_root: str | None = None,
+    workspace_dir: str | None = None,
 ) -> Toolkit:
     """
     创建默认工具集
@@ -241,17 +292,19 @@ def _create_default_toolkit(
         *(extra_tools or []),
     ]
     if include_default_tools and not read_only:
-        local_tools.extend([ScopedWrite(), ScopedEdit()])
+        local_tools.extend([ScopedWrite(base_dir=workspace_dir), ScopedEdit(base_dir=workspace_dir)])
+
+    if scope.allow_bash and permission_profile.can_execute:
+        local_tools.append(
+            GuardedBash(
+                shell_blacklist=guardrails.shell_blacklist if guardrails else [],
+                timeout_seconds=guardrails.timeout_seconds if guardrails else 300,
+                cwd=workspace_dir,
+            )
+        )
 
     if permission_profile.can_use_network:
         network_tools = []
-        if scope.allow_bash:
-            network_tools.append(
-                GuardedBash(
-                    shell_blacklist=guardrails.shell_blacklist if guardrails else [],
-                    timeout_seconds=guardrails.timeout_seconds if guardrails else 300,
-                )
-            )
         if scope.allow_http:
             network_tools.append(HttpRequest())
         if scope.allow_web:
@@ -293,11 +346,20 @@ def _create_default_toolkit(
     )
 
     mcp_clients = [] if read_only or not scope.allow_mcp else _create_mcp_clients(mcp_servers or [], guardrails)
+    skills_or_loaders = [
+        RuntimePathSkillLoader(
+            path,
+            os.path.join(skill_runtime_root, os.path.basename(path)),
+        )
+        for path in (skill_paths or [])
+    ] if skill_runtime_root else (skill_paths or None)
     return Toolkit(
         tools=[
             *local_tools,
         ],
+        skills_or_loaders=skills_or_loaders,
         mcps=mcp_clients,
+        skill_instruction_template=AGENT_WORKSTATION_SKILL_INSTRUCTION,
     )
 
 
@@ -323,6 +385,8 @@ def get_or_create_agent(
     tool_name_denylist: set[str] | None = None,
     on_fallback_event: FallbackEventCallback | None = None,
     middlewares: list[MiddlewareBase] | None = None,
+    skill_paths: list[str] | None = None,
+    workspace_dir: str | None = None,
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -357,7 +421,11 @@ def get_or_create_agent(
     )
 
     # 创建 Workspace — local 默认，docker 用 AgentScope 内置容器沙盒
+    docker_skill_runtime_root: str | None = None
     if guardrails and guardrails.execution_backend == "docker":
+        if skill_paths and not guardrails.persistent_sandbox:
+            raise ValueError("DockerWorkspace 使用 Skills 时必须启用 persistent_sandbox。")
+        docker_skill_runtime_root = "/workspace/skills" if skill_paths else None
         workspace = DockerWorkspace(
             workspace_id=f"agent-{agent_id}".replace(":", "-")[:120],
             base_image=guardrails.docker_image or "python:3.11-slim",
@@ -366,9 +434,10 @@ def get_or_create_agent(
                 if guardrails.persistent_sandbox
                 else None
             ),
+            skill_paths=skill_paths,
         )
     else:
-        workspace = LocalWorkspace(workdir=_safe_workspace_dir(guardrails))
+        workspace = LocalWorkspace(workdir=workspace_dir or _safe_workspace_dir(guardrails))
 
     # 创建 AgentState — 设置 BYPASS 权限模式
     # BYPASS 模式：跳过所有权限检查，工具自动执行无需确认
@@ -395,6 +464,9 @@ def get_or_create_agent(
             include_default_tools=include_default_tools,
             tool_name_allowlist=tool_name_allowlist,
             tool_name_denylist=tool_name_denylist,
+            skill_paths=skill_paths,
+            skill_runtime_root=docker_skill_runtime_root,
+            workspace_dir=workspace_dir,
         ),
         state=agent_state,
         offloader=workspace,

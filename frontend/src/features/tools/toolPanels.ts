@@ -2,20 +2,15 @@
  * toolPanels — 工具模块入口元数据。
  */
 
-import { Globe2, Plug, Settings2 } from 'lucide-react';
+import { Globe2, Settings2 } from 'lucide-react';
 
-export type ToolsPanelKey = 'mcp' | 'http' | 'system';
+export type ToolsPanelKey = 'http' | 'system';
 
 export const TOOL_PANEL_INFO: Record<ToolsPanelKey, {
   label: string;
   description: string;
-  icon: typeof Plug;
+  icon: typeof Globe2;
 }> = {
-  mcp: {
-    label: 'MCP',
-    description: '协议化工具服务器和 MCP 工具能力',
-    icon: Plug,
-  },
   http: {
     label: 'HTTP 工具',
     description: '把传统系统 API 封装成 Agent 可调用工具',
@@ -28,4 +23,4 @@ export const TOOL_PANEL_INFO: Record<ToolsPanelKey, {
   },
 };
 
-export const TOOL_PANEL_ORDER: ToolsPanelKey[] = ['mcp', 'http', 'system'];
+export const TOOL_PANEL_ORDER: ToolsPanelKey[] = ['http', 'system'];

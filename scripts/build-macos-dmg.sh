@@ -14,6 +14,7 @@ OUTPUT_DMG="$2"
 VOLUME_NAME="Agent Workstation"
 STAGING_DIR="$(mktemp -d /private/tmp/agent-workstation-dmg.XXXXXX)"
 MOUNT_DIR=""
+MOUNT_VOLUME_NAME=""
 RW_DMG="$STAGING_DIR/agent-workstation-rw.dmg"
 
 cleanup() {
@@ -37,10 +38,16 @@ hdiutil create \
   "$RW_DMG" >/dev/null
 
 ATTACH_OUTPUT="$(hdiutil attach "$RW_DMG" -readwrite -noverify -noautoopen)"
-MOUNT_DIR="$(printf '%s\n' "$ATTACH_OUTPUT" | awk -F '\t' 'END { print $NF }')"
+MOUNT_DIR="$(printf '%s\n' "$ATTACH_OUTPUT" | awk -F '\t' '$NF ~ /^\/Volumes\// { mount = $NF } END { print mount }')"
+if [ -z "$MOUNT_DIR" ]; then
+  echo "无法从 hdiutil 输出解析挂载路径"
+  printf '%s\n' "$ATTACH_OUTPUT"
+  exit 1
+fi
+MOUNT_VOLUME_NAME="$(basename "$MOUNT_DIR")"
 sleep 1
 
-osascript - "$VOLUME_NAME" <<'APPLESCRIPT'
+osascript - "$MOUNT_VOLUME_NAME" <<'APPLESCRIPT'
 on run argv
   set volumeName to item 1 of argv
   tell application "Finder"
@@ -71,6 +78,16 @@ end run
 APPLESCRIPT
 
 sync
+for _ in {1..20}; do
+  if [ -f "$MOUNT_DIR/.DS_Store" ]; then
+    break
+  fi
+  sleep 0.25
+done
+if [ ! -f "$MOUNT_DIR/.DS_Store" ]; then
+  echo "Finder 布局写入失败：$MOUNT_DIR/.DS_Store 不存在"
+  exit 1
+fi
 hdiutil detach "$MOUNT_DIR" -quiet
 hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$OUTPUT_DMG" -ov >/dev/null
 echo "macOS DMG 已输出到 $OUTPUT_DMG"

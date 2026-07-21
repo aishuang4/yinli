@@ -1,7 +1,7 @@
 /**
  * ToolsPage — 工具模块路由页。
  *
- * 第一层展示工具域入口；进入二级页后分别管理 MCP、HTTP 工具和系统工具。
+ * 展示 HTTP 工具和系统工具的管理入口与详情页。
  */
 
 import { useState } from 'react';
@@ -10,7 +10,6 @@ import { HttpToolsPanel } from '../features/tools/HttpToolsPanel';
 import { SystemToolsPanel } from '../features/tools/SystemToolsPanel';
 import { ToolsLandingPage } from '../features/tools/ToolsLandingPage';
 import { TOOL_PANEL_INFO, type ToolsPanelKey } from '../features/tools/toolPanels';
-import { MCPPage } from './MCPPage';
 
 export function ToolsPage() {
   const [activePanel, setActivePanel] = useState<ToolsPanelKey | null>(null);
@@ -27,7 +26,6 @@ export function ToolsPage() {
       subtitle={panel.description}
       onBack={() => setActivePanel(null)}
     >
-      {activePanel === 'mcp' ? <MCPPage embedded /> : null}
       {activePanel === 'http' ? <HttpToolsPanel /> : null}
       {activePanel === 'system' ? <SystemToolsPanel /> : null}
     </WorkbenchDetailShell>

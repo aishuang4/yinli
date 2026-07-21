@@ -447,6 +447,12 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     interaction.session_id,
                     interaction.agent_id,
                 ),
+                session_workspace_dir=str((interaction.chat_data or {}).get("sessionWorkspaceDir") or ""),
+                session_artifact_paths_before=[
+                    str(path)
+                    for path in (interaction.chat_data or {}).get("sessionArtifactPathsBefore", [])
+                    if isinstance(path, str) and path
+                ],
             )
             interaction_guardrails = _build_runtime_guardrails(get_registered_agent(interaction.agent_id))
             _clear_pending_interaction(interaction.id)

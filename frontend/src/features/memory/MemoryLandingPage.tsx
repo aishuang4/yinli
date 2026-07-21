@@ -8,6 +8,7 @@ import { Brain, List, RefreshCw } from 'lucide-react';
 import { Button, Tag } from '@agentscope-ai/design';
 import {
   WorkbenchList,
+  WorkbenchListIcon,
   WorkbenchListPage,
   WorkbenchListRow,
   WorkbenchSection,
@@ -44,16 +45,14 @@ export function MemoryLandingPage({
               <WorkbenchListRow
                 key={item.key}
                 icon={(
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-accent)]">
+                  <WorkbenchListIcon>
                     <Icon size={20} strokeWidth={1.8} />
-                  </span>
+                  </WorkbenchListIcon>
                 )}
                 title={item.label}
                 subtitle={memoryTabDescription(item.key)}
-                description="进入后查看和维护具体数据"
                 last={index === MEMORY_TABS.length - 1}
                 onSelect={() => onSelectTab(item.key)}
-                meta={<Tag size="small" color="transparent">二级页面</Tag>}
                 trailing={(
                   <button
                     type="button"

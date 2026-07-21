@@ -10,9 +10,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from src.server.routes.agents import remove_knowledge_tools_from_agents
+from src.project_files import resolve_project_session_artifact
 from src.storage.database import (
     delete_json_record,
     delete_http_tool as db_delete_http_tool,
+    get_chat_session_ownership,
+    get_project,
     list_http_tools as db_list_http_tools,
     list_json_records,
     upsert_http_tool,
@@ -346,16 +349,23 @@ def _system_tool_records() -> list[SystemToolResponse]:
     return [SystemToolResponse.model_validate(item) for item in records]
 
 
-def _resolve_downloadable_file(path: str) -> Path:
-    file_path = Path(path).expanduser().resolve()
-    home_path = Path.home().resolve()
-    try:
-        file_path.relative_to(home_path)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail="Only files under the user home directory can be accessed") from exc
-    if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    return file_path
+def _resolve_downloadable_file(*, session_id: str, path: str) -> Path:
+    """解析指定会话的可下载产物，拒绝会话目录外的路径。"""
+
+    ownership = get_chat_session_ownership(session_id)
+    if ownership is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    project = get_project(str(ownership.get("projectId") or ""))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
+    if not project_root.is_dir():
+        raise HTTPException(status_code=409, detail="Project root 不可用")
+    return resolve_project_session_artifact(
+        project_root=project_root,
+        session_id=session_id,
+        relative_path=path,
+    )
 
 
 @router.get("/knowledge-base", response_model=list[KnowledgeToolResponse])
@@ -471,9 +481,12 @@ async def list_system_tools() -> list[SystemToolResponse]:
 
 
 @router.get("/files/download")
-async def download_generated_file(path: str = Query(..., min_length=1)) -> FileResponse:
+async def download_generated_file(
+    path: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1, max_length=128, alias="sessionId"),
+) -> FileResponse:
     """下载 Agent 工具生成的本地文件。"""
-    file_path = _resolve_downloadable_file(path)
+    file_path = _resolve_downloadable_file(session_id=session_id, path=path)
     return FileResponse(
         path=str(file_path),
         filename=file_path.name,
@@ -482,9 +495,12 @@ async def download_generated_file(path: str = Query(..., min_length=1)) -> FileR
 
 
 @router.get("/files/preview", response_model=GeneratedFilePreviewResponse)
-async def preview_generated_file(path: str = Query(..., min_length=1)) -> GeneratedFilePreviewResponse:
+async def preview_generated_file(
+    path: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1, max_length=128, alias="sessionId"),
+) -> GeneratedFilePreviewResponse:
     """预览 Agent 工具生成的文本文件。"""
-    file_path = _resolve_downloadable_file(path)
+    file_path = _resolve_downloadable_file(session_id=session_id, path=path)
     max_preview_bytes = 200 * 1024
     size = file_path.stat().st_size
     raw = file_path.read_bytes()[: max_preview_bytes + 1]

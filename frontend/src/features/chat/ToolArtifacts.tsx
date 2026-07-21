@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Copy, Download, FileText, Loader2, Wrench, XCircle } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Copy, Download, FileOutput, FileText, Loader2, Wrench, XCircle } from 'lucide-react';
 import type { ToolCallInfo } from '../../hooks/useEventStream';
 import { resolveApiUrl } from '../../utils/apiUrl';
 import { copyTextToClipboard } from './chatUiUtils';
@@ -11,38 +11,54 @@ import type { GeneratedFileInfo } from './generatedFiles';
  * 显示工具名称、参数和执行结果。
  * 可展开/折叠查看详情。
  */
-export function GeneratedFilesBlock({ files }: { files: GeneratedFileInfo[] }) {
+export function GeneratedFilesBlock({ files, sessionId }: { files: GeneratedFileInfo[]; sessionId: string }) {
   if (files.length === 0) return null;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-sm">
-      {files.map((file, index) => (
-        <div
-          key={file.path}
-          className={`flex min-w-0 items-center gap-3 px-4 py-3 ${index > 0 ? 'border-t border-[var(--color-border)]' : ''}`}
-        >
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-primary)] text-[var(--color-text-tertiary)]">
-            <FileText size={21} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold text-[var(--color-text-primary)]" title={file.name}>
-              {file.name}
-            </div>
-            <div className="mt-0.5 truncate text-xs text-[var(--color-text-tertiary)]" title={file.path}>
-              文档 · {file.extension}
-            </div>
-          </div>
-          <a
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-sm font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-hover)]"
-            href={resolveApiUrl(`/api/tools/files/download?path=${encodeURIComponent(file.path)}`)}
-            download={file.name}
-            title={file.path}
-          >
-            <Download size={15} />
-            下载
-          </a>
+    <div className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
+      <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)]">
+          <FileOutput size={18} />
         </div>
-      ))}
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-[var(--color-text-primary)]">已生成 {files.length} 个文件</div>
+          <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">可逐个下载</div>
+        </div>
+      </div>
+      <div className="max-h-72 overflow-y-auto">
+        {files.map((file, index) => {
+          const downloadUrl = sessionId
+            ? resolveApiUrl(`/api/tools/files/download?sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(file.path)}`)
+            : '';
+          return (
+            <div
+              key={file.path}
+              className={`flex min-w-0 items-center gap-3 px-4 py-2.5 ${index > 0 ? 'border-t border-[var(--color-border)]' : ''}`}
+            >
+              <FileText size={18} className="shrink-0 text-[var(--color-text-tertiary)]" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-[var(--color-text-primary)]" title={file.name}>
+                  {file.name}
+                </div>
+                <div className="mt-0.5 truncate text-xs text-[var(--color-text-tertiary)]" title={file.path}>
+                  {file.extension} 文件
+                </div>
+              </div>
+              {downloadUrl ? (
+                <a
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+                  href={downloadUrl}
+                  download={file.name}
+                  title={`下载 ${file.name}`}
+                  aria-label={`下载 ${file.name}`}
+                >
+                  <Download size={17} />
+                </a>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

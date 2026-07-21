@@ -12,6 +12,7 @@ import {
   WorkbenchEmptyPanel,
   WorkbenchDetailShell,
   WorkbenchList,
+  WorkbenchListIcon,
   WorkbenchListPage,
   WorkbenchListRow,
   WorkbenchLoadingPanel,
@@ -227,14 +228,15 @@ function SubagentDefinitionRow({
   return (
     <WorkbenchListRow
       icon={(
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-accent)]">
+        <WorkbenchListIcon>
           <Bot size={20} strokeWidth={1.8} />
-        </span>
+        </WorkbenchListIcon>
       )}
       title={definition.name}
       subtitle={definition.path}
       description={definition.description || '暂无描述'}
       last={last}
+      layout="columns"
       onSelect={onSelect}
       meta={(
         <>

@@ -11,7 +11,7 @@ from agentscope.message import Msg, TextBlock, ToolResultBlock, ToolResultState,
 from agentscope.tool import ToolChoice
 
 from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
-from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload, _merge_hitl_tool_calls
+from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload
 from src.server.routes.chat.lifecycle import waiting_reason, waiting_status_for_interaction
 from src.server.routes.chat.models import (
     HITL_EVENT_TYPES,
@@ -26,7 +26,8 @@ from src.server.routes.chat.runtime_events import (
     runtime_event_from_agentscope_sse,
     runtime_event_sse,
 )
-from src.server.routes.chat.skill_runs import update_skill_run_status
+from src.server.routes.chat.skill_runs import start_or_resume_skill_run, update_skill_run_status
+from src.server.routes.skills import Skill, list_skill_usage_details, resolve_installed_skills
 from src.server.routes.chat.store import _append_assistant_message
 from src.server.routes.chat.tool_state import _update_tool_calls
 from src.server.routes.chat.trace_recorder import (
@@ -62,6 +63,9 @@ class LeaderStreamState:
     final_answer_recovery_attempted: bool = False
     pending_text: str = ""
     reply_had_tool_call: bool = False
+    available_skill_details: list[dict] = field(default_factory=list)
+    session_workspace_dir: str = ""
+    session_artifact_paths_before: list[str] = field(default_factory=list)
 
 
 _PLAN_TOOL_RUNTIME_EVENTS = {
@@ -73,6 +77,42 @@ _PLAN_TOOL_RUNTIME_EVENTS = {
 }
 _PLAN_FINAL_ANSWER_CHUNK_SIZE = 24
 _PLAN_FINAL_ANSWER_CHUNK_DELAY_SECONDS = 0.012
+
+
+def _collect_pending_hitl_batch(
+    batches: list[dict],
+    interaction_type: str,
+    event_data: dict,
+) -> None:
+    """合并同一回复、同一交互类型的 AgentScope 等待工具调用。"""
+
+    reply_id = str(event_data.get("reply_id") or "")
+    batch = next(
+        (
+            item
+            for item in batches
+            if item["type"] == interaction_type and item["reply_id"] == reply_id
+        ),
+        None,
+    )
+    if batch is None:
+        batch = {
+            "type": interaction_type,
+            "reply_id": reply_id,
+            "tool_calls": [],
+        }
+        batches.append(batch)
+
+    tool_calls = batch["tool_calls"]
+    seen_ids = {str(tool_call.get("id") or "") for tool_call in tool_calls}
+    for tool_call in event_data.get("tool_calls") or []:
+        if not isinstance(tool_call, dict):
+            continue
+        tool_call_id = str(tool_call.get("id") or "")
+        if not tool_call_id or tool_call_id in seen_ids:
+            continue
+        tool_calls.append(dict(tool_call))
+        seen_ids.add(tool_call_id)
 
 
 async def stream_leader_agent_reply(
@@ -94,6 +134,12 @@ async def stream_leader_agent_reply(
     sandbox: bool = False,
 ) -> AsyncGenerator[str, None]:
     """消费 Leader AgentScope 事件流，并处理 HITL / clarification 早停。"""
+
+    # AgentScope 会为同一并行批次中的每个待审批工具分别发出一个
+    # REQUIRE_* 事件。必须先排空该批次，确保 Agent 内部已把所有工具标为
+    # waiting，再把准确集合交给前端；收到第一个事件就返回会导致 resume
+    # 回传一个 Agent 实际未等待的工具 ID。
+    pending_hitl_batches: list[dict] = []
 
     async for event in agent.reply_stream(user_msg):
         event_data = event.model_dump(mode="json")
@@ -208,6 +254,17 @@ async def stream_leader_agent_reply(
         )
         if next_tool_calls is not state.assistant_tool_calls:
             state.assistant_tool_calls = next_tool_calls
+        for skill_event in _skill_lifecycle_events(
+            event_type=event_type,
+            event_data=event_data,
+            state=state,
+            skill_runs=skill_runs,
+            session_id=session_id,
+            persist=persist,
+            agent_id=agent_id,
+            agent_name=agent_name,
+        ):
+            yield skill_event
         plan_event = _plan_runtime_event_from_tool_result(
             tool_calls=state.assistant_tool_calls,
             runtime_events=state.runtime_events,
@@ -355,72 +412,8 @@ async def stream_leader_agent_reply(
                 return
 
         if event_type in HITL_EVENT_TYPES:
-            if state.active_skill_run and persist:
-                state.active_skill_run = update_skill_run_status(
-                    state.active_skill_run,
-                    status="waiting_user",
-                    current_step="waiting_hitl_resume",
-                )
-            agentscope_waiting_tool_calls = list(event_data.get("tool_calls") or [])
-            interaction = _create_pending_interaction(
-                interaction_type=event_type,
-                agent=agent,
-                session_id=session_id,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                model_name=model_name,
-                reply_id=str(event_data.get("reply_id") or ""),
-                tool_calls=_merge_hitl_tool_calls(
-                    agentscope_waiting_tool_calls,
-                    state.assistant_tool_calls,
-                ),
-                resume_tool_calls=agentscope_waiting_tool_calls,
-                message=message,
-                assistant_text=state.assistant_text,
-                assistant_tool_calls=state.assistant_tool_calls,
-                skill_runs=skill_runs,
-                scope=stream_scope,
-                persist=persist,
-            )
-            wait_state = waiting_status_for_interaction(
-                interaction.type,
-                interaction.resume_tool_calls,
-            )
-            yield runtime_event_sse(
-                "RUN_WAITING",
-                session_id=session_id,
-                scope="run",
-                source="runtime",
-                source_event_type=event_type,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                status=wait_state,
-                reason=waiting_reason(wait_state),
-                payload={
-                    "interactionId": interaction.id,
-                    "interactionType": interaction.type,
-                    "waitState": wait_state,
-                    "reason": waiting_reason(wait_state),
-                },
-                collect=state.runtime_events,
-            )
-            yield runtime_event_sse(
-                "AGENT_WAITING_HUMAN",
-                session_id=session_id,
-                scope=stream_scope,
-                source="runtime",
-                source_event_type=event_type,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                status="waiting",
-                reason="hitl_required",
-                payload={"interactionId": interaction.id, "interactionType": event_type},
-                collect=state.runtime_events,
-            )
-            yield _sse_event("HITL_REQUIRED", _hitl_payload(interaction))
-            state.stopped = True
-            state.stop_reason = "hitl"
-            return
+            _collect_pending_hitl_batch(pending_hitl_batches, event_type, event_data)
+            continue
 
         if event_type == "TEXT_BLOCK_DELTA":
             delta = str(event_data.get("delta", ""))
@@ -515,6 +508,78 @@ async def stream_leader_agent_reply(
     for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
         state.runtime_events.append(runtime_event)
         yield _sse_event("RUNTIME_EVENT", runtime_event)
+
+    if pending_hitl_batches:
+        if state.active_skill_run and persist:
+            state.active_skill_run = update_skill_run_status(
+                state.active_skill_run,
+                status="waiting_user",
+                current_step="waiting_hitl_resume",
+            )
+        for batch in pending_hitl_batches:
+            interaction = _create_pending_interaction(
+                interaction_type=str(batch["type"]),
+                agent=agent,
+                session_id=session_id,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                model_name=model_name,
+                reply_id=str(batch["reply_id"]),
+                tool_calls=list(batch["tool_calls"]),
+                # 这里的集合只来自 AgentScope 实际发出的 REQUIRE 事件，不能
+                # 用 UI 工具状态猜测，否则会在 resume 时触发未知工具调用错误。
+                resume_tool_calls=list(batch["tool_calls"]),
+                message=message,
+                assistant_text=state.assistant_text,
+                assistant_tool_calls=state.assistant_tool_calls,
+                skill_runs=skill_runs,
+                scope=stream_scope,
+                chat_data={
+                    "sandbox": sandbox,
+                    "sessionWorkspaceDir": state.session_workspace_dir,
+                    "sessionArtifactPathsBefore": state.session_artifact_paths_before,
+                },
+                persist=persist,
+            )
+            wait_state = waiting_status_for_interaction(
+                interaction.type,
+                interaction.resume_tool_calls,
+            )
+            yield runtime_event_sse(
+                "RUN_WAITING",
+                session_id=session_id,
+                scope="run",
+                source="runtime",
+                source_event_type=interaction.type,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                status=wait_state,
+                reason=waiting_reason(wait_state),
+                payload={
+                    "interactionId": interaction.id,
+                    "interactionType": interaction.type,
+                    "waitState": wait_state,
+                    "reason": waiting_reason(wait_state),
+                },
+                collect=state.runtime_events,
+            )
+            yield runtime_event_sse(
+                "AGENT_WAITING_HUMAN",
+                session_id=session_id,
+                scope=stream_scope,
+                source="runtime",
+                source_event_type=interaction.type,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                status="waiting",
+                reason="hitl_required",
+                payload={"interactionId": interaction.id, "interactionType": interaction.type},
+                collect=state.runtime_events,
+            )
+            yield _sse_event("HITL_REQUIRED", _hitl_payload(interaction))
+        state.stopped = True
+        state.stop_reason = "hitl"
+        return
 
     clarification = (
         _extract_clarification_request(state.assistant_text)
@@ -629,6 +694,127 @@ def _drain_runtime_event_sources(sources: list[object]) -> list[dict]:
         if callable(drain):
             events.extend(drain())
     return events
+
+
+def _skill_lifecycle_events(
+    *,
+    event_type: str,
+    event_data: dict,
+    state: LeaderStreamState,
+    skill_runs: list[ChatSkillRun],
+    session_id: str,
+    persist: bool,
+    agent_id: str,
+    agent_name: str,
+) -> list[str]:
+    """把 AgentScope Skill viewer 工具事件转换为平台 Skill 生命周期。"""
+
+    tool_call_id = str(event_data.get("tool_call_id") or "")
+    tool_call = next((item for item in state.assistant_tool_calls if item.id == tool_call_id), None)
+    tool_name = str(event_data.get("tool_call_name") or getattr(tool_call, "name", ""))
+    if tool_name != "Skill":
+        return []
+
+    if event_type == "TOOL_CALL_START":
+        payload = {"id": tool_call_id, "name": "Skill", "status": "running"}
+        return [runtime_event_sse(
+            "SKILL_STARTED",
+            session_id=session_id,
+            scope="skill",
+            source="agentscope",
+            source_event_type=event_type,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            status="running",
+            payload=payload,
+            collect=state.runtime_events,
+        )]
+
+    if event_type != "TOOL_RESULT_END":
+        return []
+
+    requested_name = _skill_name_from_tool_call(tool_call)
+    detail = next(
+        (
+            item for item in state.available_skill_details
+            if str(item.get("name") or "") == requested_name
+        ),
+        None,
+    )
+    if detail is None and requested_name:
+        resolved_skills, _missing = resolve_installed_skills([requested_name])
+        resolved_details = list_skill_usage_details(resolved_skills)
+        detail = resolved_details[0] if resolved_details else None
+    failed = str(event_data.get("state") or "").lower() in {"error", "failed", "denied"} or detail is None
+    if failed:
+        payload = {
+            "id": tool_call_id,
+            "name": requested_name or "Skill",
+            "status": "failed",
+        }
+        return [
+            runtime_event_sse(
+                "SKILL_FAILED",
+                session_id=session_id,
+                scope="skill",
+                source="agentscope",
+                source_event_type=event_type,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                status="failed",
+                payload=payload,
+                collect=state.runtime_events,
+            ),
+            _sse_event("SKILL_END", {"skills": [payload], "status": "failed"}),
+        ]
+
+    skill_run = ChatSkillRun.model_validate({**detail, "status": "running"})
+    if all(item.id != skill_run.id for item in skill_runs):
+        skill_runs.append(skill_run)
+    if persist:
+        skill = Skill.model_validate({
+            **detail,
+            "category": "runtime",
+            "tags": [],
+            "status": "installed",
+            "enabled": True,
+            "updatedAt": "",
+        })
+        state.active_skill_run = start_or_resume_skill_run(
+            session_id=session_id,
+            agent_id=agent_id,
+            skill=skill,
+            status="active",
+            current_step="instructions_loaded",
+        )
+    payload = skill_run.model_dump(by_alias=True)
+    return [
+        runtime_event_sse(
+            "SKILL_CONTEXT",
+            session_id=session_id,
+            scope="skill",
+            source="agentscope",
+            source_event_type=event_type,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            status="running",
+            payload=payload,
+            collect=state.runtime_events,
+        ),
+        _sse_event("SKILL_CONTEXT", {"skills": [payload]}),
+    ]
+
+
+def _skill_name_from_tool_call(tool_call: ChatToolRun | None) -> str:
+    """从 Skill viewer 的流式 JSON 参数中提取 Skill 名称。"""
+
+    if tool_call is None or not tool_call.args:
+        return ""
+    try:
+        value = json.loads(tool_call.args)
+    except json.JSONDecodeError:
+        return ""
+    return str(value.get("skill") or "") if isinstance(value, dict) else ""
 
 
 def _is_delegate_task_external_event(event_data: dict) -> bool:

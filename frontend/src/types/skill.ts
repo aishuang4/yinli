@@ -16,6 +16,7 @@ export interface Skill {
   tags: string[];
   resourcePath: string;
   resources: string[];
+  warnings?: string[];
   status: SkillInstallStatus;
   enabled: boolean;
   installedAt: string | null;

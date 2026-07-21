@@ -103,6 +103,8 @@ async def execute_and_finalize_leader_reply(
             skill_runs=skill_runs,
             active_skill_run=state.active_skill_run,
             runtime_context=runtime_context,
+            session_workspace_dir=state.session_workspace_dir,
+            session_artifact_paths_before=state.session_artifact_paths_before,
             sandbox=sandbox,
         ):
             yield event

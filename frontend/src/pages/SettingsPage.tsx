@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Card, Tag } from '@agentscope-ai/design';
+import { Card } from '@agentscope-ai/design';
 import { ModelSettingsForm, type ModelSettings } from '../features/settings/ModelSettingsForm';
+import { ConversationContextSettingsCard } from '../features/settings/ConversationContextSettingsCard';
 import { useSettingsStore } from '../stores/settingsStore';
 import type { ThemeName } from '../types/theme';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
@@ -135,86 +136,56 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="h-full overflow-auto bg-[var(--color-bg-primary)] px-8 py-6">
-      <div className="mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)_320px] gap-6">
-        <section className="min-w-0 space-y-4">
+    <div className="h-full overflow-auto bg-[var(--color-bg-primary)] px-5 py-6 sm:px-8">
+      <div className="mx-auto max-w-7xl">
+        <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-xl font-semibold text-[var(--color-text-primary)]">系统设置</h1>
             <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-              配置默认模型供应商、API Key 和全局降级模型链。
+              管理默认模型与新会话使用的工作上下文。
             </p>
           </div>
-          <ModelSettingsForm
-            settings={settings}
-            loading={loading}
-            saving={saving}
-            notice={notice}
-            provider={provider}
-            selectedProvider={selectedProvider}
-            baseUrl={baseUrl}
-            apiKey={apiKey}
-            apiKeyEditable={Boolean(apiKeyEditable)}
-            defaultModel={defaultModel}
-            customProviderName={customProviderName}
-            customModels={customModels}
-            fallbackModels={fallbackModels}
-            modelOptions={modelOptions}
-            onProviderChange={handleProviderChange}
-            onBaseUrlChange={setBaseUrl}
-            onApiKeyChange={setApiKey}
-            onDefaultModelChange={setDefaultModel}
-            onCustomProviderNameChange={setCustomProviderName}
-            onAddCustomModel={addCustomModel}
-            onUpdateCustomModel={updateCustomModel}
-            onRemoveCustomModel={removeCustomModel}
-            onAddFallbackModel={addFallbackModel}
-            onUpdateFallbackModel={updateFallbackModel}
-            onRemoveFallbackModel={removeFallbackModel}
-            onRefresh={() => void loadSettings()}
-            onSave={(clearApiKey) => void saveSettings(clearApiKey)}
-          />
-        </section>
+          <span className="text-xs text-[var(--color-text-tertiary)]">保存后将在下一轮对话生效</span>
+        </header>
 
-        <aside className="space-y-4">
-          <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
+        <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_352px]">
+          <section className="min-w-0">
+            <ModelSettingsForm
+              settings={settings}
+              loading={loading}
+              saving={saving}
+              notice={notice}
+              provider={provider}
+              selectedProvider={selectedProvider}
+              baseUrl={baseUrl}
+              apiKey={apiKey}
+              apiKeyEditable={Boolean(apiKeyEditable)}
+              defaultModel={defaultModel}
+              customProviderName={customProviderName}
+              customModels={customModels}
+              fallbackModels={fallbackModels}
+              modelOptions={modelOptions}
+              onProviderChange={handleProviderChange}
+              onBaseUrlChange={setBaseUrl}
+              onApiKeyChange={setApiKey}
+              onDefaultModelChange={setDefaultModel}
+              onCustomProviderNameChange={setCustomProviderName}
+              onAddCustomModel={addCustomModel}
+              onUpdateCustomModel={updateCustomModel}
+              onRemoveCustomModel={removeCustomModel}
+              onAddFallbackModel={addFallbackModel}
+              onUpdateFallbackModel={updateFallbackModel}
+              onRemoveFallbackModel={removeFallbackModel}
+              onRefresh={() => void loadSettings()}
+              onSave={(clearApiKey) => void saveSettings(clearApiKey)}
+            />
+          </section>
 
-          <Card bodyStyle={{ padding: 0 }}>
-            <div className="p-4">
-              <div className="text-sm font-medium text-[var(--color-text-primary)]">当前运行配置</div>
-              <dl className="mt-4 space-y-3 text-sm">
-                <div>
-                  <dt className="text-xs text-[var(--color-text-tertiary)]">供应商</dt>
-                  <dd className="mt-1 text-[var(--color-text-primary)]">{settings?.providerName || '-'}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-[var(--color-text-tertiary)]">适配器</dt>
-                  <dd className="mt-1 text-[var(--color-text-primary)]">{settings?.adapter || '-'}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-[var(--color-text-tertiary)]">默认模型</dt>
-                  <dd className="mt-1 text-[var(--color-text-primary)]">{settings?.defaultModel || '-'}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs text-[var(--color-text-tertiary)]">Key 状态</dt>
-                  <dd className="mt-1">
-                    <Tag size="small" color={settings?.apiKeyConfigured ? 'success' : 'warning'}>
-                      {settings?.apiKeyConfigured ? '已配置' : '未配置'}
-                    </Tag>
-                  </dd>
-                </div>
-              </dl>
-            </div>
-          </Card>
-
-          <Card bodyStyle={{ padding: 0 }}>
-            <div className="p-4 text-sm text-[var(--color-text-secondary)]">
-              <div className="font-medium text-[var(--color-text-primary)]">生效规则</div>
-              <p className="mt-3 leading-6">
-                系统设置作为全局默认值。单个 Agent 如果配置了自己的主模型，会优先使用 Agent 的模型名，但供应商、Base URL 和 API Key 仍来自这里。
-              </p>
-            </div>
-          </Card>
-        </aside>
+          <aside className="space-y-4 xl:sticky xl:top-0">
+            <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
+            <ConversationContextSettingsCard />
+          </aside>
+        </div>
       </div>
     </div>
   );
@@ -234,19 +205,19 @@ function AppearanceSettingsCard({
 
   return (
     <Card bodyStyle={{ padding: 0 }}>
-      <div className="p-4">
+      <div className="p-5">
         <div className="text-sm font-medium text-[var(--color-text-primary)]">界面外观</div>
         <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
-          控制 Chat 工作台和系统页面的亮色/暗色主题。
+          为 Chat 与管理页面选择主题。
         </p>
-        <div className="mt-4 grid gap-2">
+        <div className="mt-4 grid grid-cols-2 gap-2">
           {options.map((option) => {
             const active = theme === option.value;
             return (
               <button
                 key={option.value}
                 type="button"
-                className={`rounded-lg border px-3 py-2 text-left transition ${
+                className={`min-h-[76px] rounded-lg border px-3 py-2.5 text-left transition ${
                   active
                     ? 'border-[var(--color-accent)] bg-[var(--color-accent-bg)]'
                     : 'border-[var(--color-border)] bg-[var(--color-bg-secondary)] hover:bg-[var(--color-bg-hover)]'

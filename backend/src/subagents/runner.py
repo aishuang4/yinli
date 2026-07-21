@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from agentscope.message import UserMsg
@@ -20,6 +21,7 @@ from src.subagents.models import SubagentDefinition
 from src.subagents.permission_policy import SubagentPermissionResolution, resolve_subagent_permission
 from src.subagents.runtime_context import SubagentRuntimeContext, build_subagent_runtime_context
 from src.runtime_context import RuntimeContext as PlatformRuntimeContext
+from src.project_files import project_session_directory
 from src.subagents.tool_policy import SubagentToolPolicy, build_subagent_tool_policy
 from src.tools.configured_http_tool import safe_http_tool_name
 
@@ -164,6 +166,11 @@ class SubagentRunner:
         )
         child_agent_id = f"subagent:{definition.name}:{invocation_id}"
         child_agent_name = f"Subagent {definition.name}"
+        workspace_dir = (
+            str(project_session_directory(Path(permission.guardrails.filesystem_scope), self.session_id))
+            if self.platform_context is not None
+            else None
+        )
         agent = get_or_create_agent(
             agent_id=child_agent_id,
             name=child_agent_name,
@@ -187,6 +194,8 @@ class SubagentRunner:
             tool_scope=_child_tool_scope(self.parent_tool_scope, policy.effective_tool_names),
             tool_name_allowlist=policy.allowed_tool_names,
             tool_name_denylist=policy.denied_tool_names,
+            skill_paths=runtime_context.skill_paths,
+            workspace_dir=workspace_dir,
         )
 
         final_started = False
@@ -274,7 +283,6 @@ def _build_child_system_prompt(
         part
         for part in [
             definition.prompt,
-            runtime_context.skill_prompt,
             runtime_context.memory_prompt,
             (
                 "你是 Agent Workstation 的 Subagent。你在独立上下文中完成委托任务，"

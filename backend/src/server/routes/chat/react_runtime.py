@@ -166,6 +166,7 @@ async def execute_react_runtime(
             model_config=ctx.runtime_model_config,
             deep_thinking=run_data.deep_thinking,
             used_skills=ctx.used_skills,
+            skill_paths=ctx.skill_paths,
             guardrails=ctx.guardrails,
             mcp_servers=ctx.mcp_servers,
             knowledge_tools=ctx.knowledge_tools,
@@ -174,6 +175,7 @@ async def execute_react_runtime(
             runtime_features_cache_key=runtime_features_cache_key,
             extra_tools=extra_tools,
             middlewares=middlewares,
+            workspace_dir=ctx.session_workspace_dir,
         )
         agent = create_main_agent_from_spec(
             main_agent_spec,
@@ -208,7 +210,12 @@ async def execute_react_runtime(
         ),
     )
 
-    leader_stream_state = LeaderStreamState(active_skill_run=active_skill_run)
+    leader_stream_state = LeaderStreamState(
+        active_skill_run=active_skill_run,
+        available_skill_details=ctx.used_skill_details,
+        session_workspace_dir=ctx.session_workspace_dir,
+        session_artifact_paths_before=ctx.session_artifact_paths_before,
+    )
     async for event in execute_and_finalize_leader_reply(
         agent=agent,
         input_event=user_msg,

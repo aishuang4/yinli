@@ -1,6 +1,6 @@
 # Agent Workstation TODO
 
-> 最后更新：2026-07-17。本文只保留尚未完成的任务。
+> 最后更新：2026-07-20。本文只保留尚未完成的任务。
 
 ## P0. Runtime 稳定性
 
@@ -41,6 +41,8 @@
 - [ ] 在 WebFetch 稳定后增加 WebSearch provider 抽象，首批支持 SearXNG 和一个正式云端供应商，并建立来源引用契约。
 - [ ] MCP 调用加强 Secret 脱敏、超时和错误提示。
 - [ ] Skills 补等待用户、失败恢复、产物路径和引用资源状态。
+- [ ] 用至少两个模型供应商完成 AgentScope 原生 Skills Sandbox 行为验证，覆盖 `scripts/`、`references/`、Office 文件和 fallback 模型。
+- [ ] 为非持久 DockerWorkspace 设计一次性 Skill seed 与运行结束清理，解除当前“Docker + Skills 必须启用 persistent_sandbox”的限制。
 
 ## P4. Memory 稳定化
 

@@ -1,7 +1,12 @@
 import { ClarificationBlock, HitlApprovalBlock } from './HumanInteractionBlocks';
 import type { ChatHumanFeedbackBlock } from './chatDisplayTypes';
 
-type ResolveHitl = (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
+type ResolveHitl = (
+  interactionId: string,
+  action: 'approve' | 'reject',
+  externalResults?: Record<string, string>,
+  rememberApproval?: boolean,
+) => Promise<void>;
 
 export function HumanFeedbackDisplayBlock({
   block,

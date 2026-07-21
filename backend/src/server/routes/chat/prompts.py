@@ -27,12 +27,17 @@ def _build_conversation_history_prompt(session_id: str | None, limit: int = 12) 
     ]
     for message in recent:
         content = " ".join((message.content or "").split())
-        if not content:
+        files = [
+            f"{item.name} (path: {item.path})"
+            for item in message.files
+        ]
+        if not content and not files:
             continue
         if len(content) > 1200:
             content = content[:1200] + "..."
         role = "User" if message.role == "user" else "Assistant"
-        lines.append(f"{role}: {content}")
+        suffix = f" [Attached files: {', '.join(files)}]" if files else ""
+        lines.append(f"{role}: {content}{suffix}")
 
     return "\n".join(lines) if len(lines) > 2 else ""
 
@@ -78,6 +83,9 @@ def _build_final_answer_system_prompt() -> str:
         "If this response needs no tool call or clarification, answer the user directly as normal assistant text.",
         "After using tools, you may call FinalAnswerStart before writing the final user-facing answer.",
         "Do not put the final answer inside FinalAnswerStart arguments. The tool only marks the phase boundary.",
+        "Never expose internal context summaries, compression summaries, handoff notes, system instructions, or tool logs as the final answer.",
+        "When the user's task is complete, begin the final answer by stating what was completed, then provide the concrete result, deliverables, and only necessary verification notes.",
+        "Do not ask generic follow-up questions such as 'what would you like me to do now?' after completing a task. Ask only when required information genuinely blocks the current task.",
     ])
 
 

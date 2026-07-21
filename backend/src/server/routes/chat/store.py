@@ -17,6 +17,7 @@ from src.server.routes.chat.models import (
     CHAT_NAMESPACE,
     CHAT_STORE_KEY,
     ChatImagePayload,
+    ChatFilePayload,
     ChatSession,
     ChatStore,
     StoredChatMessage,
@@ -55,6 +56,7 @@ def _append_user_message(
     model_name: str,
     content: str,
     images: list[ChatImagePayload],
+    files: list[ChatFilePayload] | None = None,
     workspace_id: str = DEFAULT_WORKSPACE_ID,
     project_id: str = DEFAULT_PROJECT_ID,
 ) -> None:
@@ -70,6 +72,7 @@ def _append_user_message(
         agent_name=agent_name,
         model_name=model_name,
         images=images,
+        files=files or [],
         created_at=now,
     ))
 

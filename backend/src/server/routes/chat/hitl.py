@@ -13,6 +13,7 @@ from agentscope.message import (
     ToolResultBlock,
     ToolResultState,
 )
+from agentscope.permission import PermissionBehavior, PermissionRule
 
 from src.server.routes.chat.models import (
     PENDING_AGENTS,
@@ -85,7 +86,7 @@ def _merge_hitl_tool_calls(
     event_tool_calls: list[dict],
     active_tool_calls: list[ChatToolRun],
 ) -> list[dict]:
-    """合并 HITL 事件显式工具与同轮尚未完成的工具调用。"""
+    """合并同一模型回复中仍需审批并回传结果的工具调用。"""
 
     merged = [dict(tool_call) for tool_call in event_tool_calls]
     seen_ids = {str(tool_call.get("id") or "") for tool_call in merged}
@@ -139,16 +140,22 @@ def _build_resume_event(
     )
     if interaction.type == "REQUIRE_USER_CONFIRM":
         confirmed = data.action == "approve"
+        remembered_tool_names: set[str] = set()
+        confirm_results: list[ConfirmResult] = []
+        for tool_call in resume_tool_calls:
+            tool_name = str(tool_call.get("name") or "").strip()
+            rules = None
+            if confirmed and data.remember_approval and tool_name and tool_name not in remembered_tool_names:
+                rules = _session_allow_rules([tool_call])
+                remembered_tool_names.add(tool_name)
+            confirm_results.append(ConfirmResult(
+                confirmed=confirmed,
+                tool_call=ToolCallBlock.model_validate(tool_call),
+                rules=rules,
+            ))
         return UserConfirmResultEvent(
             reply_id=interaction.reply_id,
-            confirm_results=[
-                ConfirmResult(
-                    confirmed=confirmed,
-                    tool_call=ToolCallBlock.model_validate(tool_call),
-                    rules=None,
-                )
-                for tool_call in resume_tool_calls
-            ],
+            confirm_results=confirm_results,
         )
 
     if interaction.type == "REQUIRE_EXTERNAL_EXECUTION":
@@ -172,3 +179,22 @@ def _build_resume_event(
         )
 
     raise ValueError(f"Unsupported interaction type: {interaction.type}")
+
+
+def _session_allow_rules(tool_calls: list[dict]) -> list[PermissionRule]:
+    """构建当前会话有效的同类工具允许规则。"""
+
+    tool_names = {
+        str(tool_call.get("name") or "").strip()
+        for tool_call in tool_calls
+        if str(tool_call.get("name") or "").strip()
+    }
+    return [
+        PermissionRule(
+            tool_name=tool_name,
+            rule_content=None,
+            behavior=PermissionBehavior.ALLOW,
+            source="chat_session_approval",
+        )
+        for tool_name in sorted(tool_names)
+    ]

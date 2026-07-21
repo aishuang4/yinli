@@ -18,6 +18,7 @@ from src.server.routes.chat.background_runs import (
     serialize_chat_background_run,
     subscribe_chat_background_run,
 )
+from src.project_files import validate_session_uploads
 from src.runtime_context import resolve_runtime_context
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.router import router
@@ -81,6 +82,14 @@ async def start_chat_run(data: ChatMessage):
         "session_id": session_id,
         "project_id": runtime_context.project_id,
     })
+    try:
+        validate_session_uploads(
+            project_root=runtime_context.project_root,
+            session_id=session_id,
+            paths=[item.path for item in run_data.files],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     async def event_stream() -> AsyncGenerator[str, None]:
         """

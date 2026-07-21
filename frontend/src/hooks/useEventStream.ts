@@ -176,7 +176,8 @@ interface UseEventStreamReturn {
   resumeInteraction: (
     interactionId: string,
     action: 'approve' | 'reject',
-    externalResults?: Record<string, string>
+    externalResults?: Record<string, string>,
+    rememberApproval?: boolean,
   ) => Promise<void>;
   /** 重新订阅一个仍在后台运行或等待人工处理的 Run */
   subscribeRun: (runId: string) => Promise<void>;
@@ -203,6 +204,12 @@ interface SendMessageOptions {
     name: string;
     media_type: string;
     data: string;
+  }>;
+  files?: Array<{
+    name: string;
+    path: string;
+    size: number;
+    media_type: string;
   }>;
 }
 
@@ -844,6 +851,7 @@ export function useEventStream(): UseEventStreamReturn {
             deep_thinking: options?.deepThinking,
             sandbox: options?.sandbox,
             images: options?.images,
+            files: options?.files,
           }),
           signal: controller.signal,
         });
@@ -877,7 +885,8 @@ export function useEventStream(): UseEventStreamReturn {
     async (
       interactionId: string,
       action: 'approve' | 'reject',
-      externalResults: Record<string, string> = {}
+      externalResults: Record<string, string> = {},
+      rememberApproval = false,
     ) => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -901,6 +910,7 @@ export function useEventStream(): UseEventStreamReturn {
             interactionId,
             action,
             externalResults,
+            rememberApproval,
           }),
           signal: controller.signal,
         });

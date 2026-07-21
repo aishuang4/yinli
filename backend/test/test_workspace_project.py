@@ -3,18 +3,30 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from starlette.datastructures import UploadFile
 
 from src.agents.factory import AgentGuardrails
 from src.memory.nodes import MemoryNodeService, MemoryNodeWrite
 from src.project_resources import resolve_project_resource_access
 from src.runtime_context import resolve_runtime_context
+from src.project_files import (
+    delete_project_session_files,
+    list_project_session_artifacts,
+    project_session_directory,
+    project_upload_directory,
+    resolve_project_session_artifact,
+    save_project_upload,
+    validate_session_uploads,
+)
 from src.server.routes.chat.intent_router import IntentRoute
 from src.server.routes.chat.handlers.runs import _get_project_run
-from src.server.routes.chat.handlers.sessions import list_session_catalog
+from src.server.routes.chat.handlers.sessions import delete_session, list_session_catalog
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import build_chat_run_context
 from src.server.routes.chat.runtime import scope_guardrails_to_project
@@ -146,6 +158,113 @@ def test_project_api_validates_root_and_instructions(isolated_db, tmp_path):
         _validated_project_paths(str(root), "../outside.md")
     with pytest.raises(HTTPException, match="Project root"):
         _validated_project_paths(str(root / "missing"))
+
+
+def test_uploads_are_isolated_by_session(tmp_path):
+    """附件路径使用 Session ID，且 Chat 不能引用其他 Session 的文件。"""
+
+    uploaded = asyncio.run(save_project_upload(
+        project_root=tmp_path,
+        session_id="session-a",
+        upload=UploadFile(filename="预算.xlsx", file=BytesIO(b"workbook")),
+    ))
+
+    assert str(uploaded["path"]).startswith(".agent-workstation/uploads/session-a/")
+    output_dir = project_session_directory(tmp_path, "session-a")
+    assert output_dir == tmp_path / ".agent-workstation" / "sessions" / "session-a"
+    validate_session_uploads(
+        project_root=tmp_path,
+        session_id="session-a",
+        paths=[str(uploaded["path"])],
+    )
+    with pytest.raises(ValueError, match="不属于当前 Session"):
+        validate_session_uploads(
+            project_root=tmp_path,
+            session_id="session-b",
+            paths=[str(uploaded["path"])],
+        )
+
+
+def test_delete_project_session_files_only_removes_target_session(tmp_path):
+    """清理会话文件时不能影响同一 Project 的其他 Session。"""
+
+    target_upload = project_upload_directory(tmp_path, "session-target")
+    target_output = project_session_directory(tmp_path, "session-target")
+    target_upload.joinpath("source.docx").write_bytes(b"source")
+    target_output.joinpath("result.docx").write_bytes(b"result")
+    preserved_upload = project_upload_directory(tmp_path, "session-preserved")
+    preserved_output = project_session_directory(tmp_path, "session-preserved")
+    preserved_upload.joinpath("source.xlsx").write_bytes(b"source")
+    preserved_output.joinpath("result.xlsx").write_bytes(b"result")
+
+    assert delete_project_session_files(project_root=tmp_path, session_id="session-target") == 2
+    assert not target_upload.exists()
+    assert not target_output.exists()
+    assert preserved_upload.is_dir()
+    assert preserved_output.is_dir()
+
+
+def test_session_artifacts_are_listed_and_resolved_within_session_directory(tmp_path):
+    """脚本产物无需经过 Write/Edit，也应可被安全列出和下载。"""
+
+    output_dir = project_session_directory(tmp_path, "session-artifacts")
+    generated = output_dir / "reports" / "会议纪要.docx"
+    generated.parent.mkdir()
+    generated.write_bytes(b"word-document")
+    outside = tmp_path / "outside.docx"
+    outside.write_bytes(b"outside")
+
+    artifacts = list_project_session_artifacts(
+        project_root=tmp_path,
+        session_id="session-artifacts",
+    )
+
+    assert artifacts == [{
+        "path": ".agent-workstation/sessions/session-artifacts/reports/会议纪要.docx",
+        "name": "会议纪要.docx",
+        "extension": "DOCX",
+        "size": len(b"word-document"),
+    }]
+    assert resolve_project_session_artifact(
+        project_root=tmp_path,
+        session_id="session-artifacts",
+        relative_path=str(artifacts[0]["path"]),
+    ) == generated
+    with pytest.raises(HTTPException, match="不属于当前会话"):
+        resolve_project_session_artifact(
+            project_root=tmp_path,
+            session_id="session-artifacts",
+            relative_path="outside.docx",
+        )
+
+
+def test_delete_session_removes_its_uploaded_and_generated_files(isolated_db, tmp_path):
+    """Chat 删除同时清理同一会话的附件和 Agent 产物目录。"""
+
+    workspace = create_workspace({"id": "ws-delete", "name": "删除工作区"})
+    project = _create_project(tmp_path, workspace_id=workspace["id"], project_id="project-delete")
+    project_root = Path(project["rootPath"])
+    _append_user_message(
+        session_id="session-delete",
+        agent_id="agent-1",
+        agent_name="Agent",
+        mode="agent",
+        model_name="model",
+        content="请处理文件",
+        images=[],
+        workspace_id=workspace["id"],
+        project_id=project["id"],
+    )
+    uploaded = project_upload_directory(project_root, "session-delete")
+    generated = project_session_directory(project_root, "session-delete")
+    uploaded.joinpath("source.docx").write_bytes(b"source")
+    generated.joinpath("result.docx").write_bytes(b"result")
+
+    asyncio.run(delete_session("session-delete", project_id=project["id"]))
+
+    assert not uploaded.exists()
+    assert not generated.exists()
+    assert all(item.id != "session-delete" for item in asyncio.run(list_session_catalog()))
 
 
 def test_workspace_bootstrap_validates_project_before_creating_workspace(isolated_db, tmp_path):

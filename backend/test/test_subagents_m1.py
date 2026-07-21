@@ -840,7 +840,7 @@ def test_delegate_task_passes_current_tool_call_id_from_agent_state() -> None:
     assert chunk.state == "success"
 
 
-def test_child_system_prompt_injects_subagent_skills_and_memory() -> None:
+def test_child_system_prompt_only_injects_memory_not_skill_manual() -> None:
     definition = SubagentDefinition(
         name="researcher",
         description="Research with a loaded skill.",
@@ -849,7 +849,7 @@ def test_child_system_prompt_injects_subagent_skills_and_memory() -> None:
         path=".agents/subagents/researcher.md",
     )
     runtime_context = SubagentRuntimeContext(
-        skill_prompt="## Loaded Skills\n### Skill 1: Review Style\nFollow the review checklist.",
+        skill_paths=["/skills/review-style"],
         memory_prompt="# Memory\nAgent Markdown memory:\n## Summary\nPrefer concise findings.",
         memory_agent_id="subagent:researcher",
     )
@@ -857,8 +857,7 @@ def test_child_system_prompt_injects_subagent_skills_and_memory() -> None:
     prompt = _build_child_system_prompt(definition, runtime_context)
 
     assert "你是研究型 Subagent。" in prompt
-    assert "## Loaded Skills" in prompt
-    assert "Follow the review checklist." in prompt
+    assert "/skills/review-style" not in prompt
     assert "Agent Markdown memory" in prompt
     assert "subagent:researcher" not in prompt
     assert "必须调用 FinalAnswerStart" in prompt

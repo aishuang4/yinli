@@ -101,6 +101,15 @@ class RunStatePlanSummary(BaseModel):
     updatedAt: str = ""
 
 
+class RunStateGeneratedFile(BaseModel):
+    """当前 Session 中可下载的产物摘要。"""
+
+    path: str
+    name: str
+    extension: str
+    size: int = 0
+
+
 class RunStateDisplayItem(BaseModel):
     """DisplaySnapshot 中的有序展示 item。"""
 
@@ -200,6 +209,7 @@ class RunStateSnapshot(BaseModel):
     modelName: str = ""
     tokenUsage: dict[str, Any] | None = None
     plans: list[RunStatePlanSummary] = Field(default_factory=list)
+    generatedFiles: list[RunStateGeneratedFile] = Field(default_factory=list)
     displaySnapshot: RunStateDisplaySnapshot = Field(default_factory=RunStateDisplaySnapshot)
     teamSnapshot: dict[str, Any] | None = None
     approvals: list[RunStateApprovalSummary] = Field(default_factory=list)

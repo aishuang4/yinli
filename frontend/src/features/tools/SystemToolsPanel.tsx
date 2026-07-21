@@ -9,6 +9,7 @@ import { Button, Tag } from '@agentscope-ai/design';
 import {
   WorkbenchEmptyPanel,
   WorkbenchList,
+  WorkbenchListIcon,
   WorkbenchListRow,
   WorkbenchLoadingPanel,
   WorkbenchSection,
@@ -67,14 +68,15 @@ function SystemToolRow({
   return (
     <WorkbenchListRow
       icon={(
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-accent)]">
+        <WorkbenchListIcon>
           <Settings2 size={20} strokeWidth={1.8} />
-        </span>
+        </WorkbenchListIcon>
       )}
       title={tool.name}
       subtitle={`${tool.category} · ${tool.action}`}
       description={tool.description}
       last={last}
+      layout="columns"
       meta={(
         <>
           <Tag size="small" color={tool.risk === 'high' ? 'red' : tool.risk === 'medium' ? 'orange' : 'green'}>

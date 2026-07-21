@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from src.server.routes.chat.background_runs import (
     ChatBackgroundRun,
     _broadcast,
+    _finalize_cancelled_run,
     mark_chat_background_run_resuming,
     relay_chat_background_run_events,
     start_chat_background_run,
@@ -255,6 +256,17 @@ class _FakeMultiToolHitlAgent:
                 "id": "call-read-1",
                 "name": "Read",
                 "input": '{"file_path":"a.py"}',
+                "state": "asking",
+            }],
+        })
+        yield _FakeAgentScopeEvent({
+            "type": "REQUIRE_USER_CONFIRM",
+            "reply_id": "reply-1",
+            "tool_calls": [{
+                "type": "tool_call",
+                "id": "call-read-2",
+                "name": "Read",
+                "input": '{"file_path":"b.py"}',
                 "state": "asking",
             }],
         })
@@ -819,6 +831,24 @@ def test_run_state_projection_builds_single_agent_display_snapshot():
     state = project_event(
         state,
         "RUNTIME_EVENT",
+        {
+            "type": "ARTIFACT_CREATED",
+            "status": "completed",
+            "payload": {
+                "files": [{
+                    "path": ".agent-workstation/sessions/session-projection-1/result.docx",
+                    "name": "result.docx",
+                    "extension": "DOCX",
+                    "size": 128,
+                }],
+            },
+        },
+        run,
+    )
+
+    state = project_event(
+        state,
+        "RUNTIME_EVENT",
         {"type": "RUN_COMPLETED", "status": "completed", "payload": {}},
         run,
     )
@@ -829,7 +859,11 @@ def test_run_state_projection_builds_single_agent_display_snapshot():
 
     generated_files = blocks[1]
     assert generated_files["data"]["files"] == [
-        {"path": "docs/result.md", "name": "result.md", "extension": "MD"}
+        {
+            "path": ".agent-workstation/sessions/session-projection-1/result.docx",
+            "name": "result.docx",
+            "extension": "DOCX",
+        },
     ]
 
 
@@ -1215,6 +1249,31 @@ def test_run_state_projection_tracks_skill_lifecycle():
     assert state["skillCalls"][0]["resourcePath"] == "skills/review/SKILL.md"
 
 
+def test_runtime_skill_viewer_is_not_projected_as_generic_tool_item():
+    """Skill viewer 只投影为 Skill 过程项，不重复生成普通工具卡片。"""
+
+    run = _projection_run()
+    state = project_event(
+        initial_run_state(run),
+        "RUNTIME_EVENT",
+        {
+            "type": "TOOL_CALL_STARTED",
+            "scope": "single",
+            "status": "running",
+            "agentId": "agent-1",
+            "agentName": "Agent",
+            "payload": {
+                "tool_call_id": "call-skill",
+                "tool_call_name": "Skill",
+            },
+        },
+        run,
+    )
+
+    actor = state["displaySnapshot"]["actors"][0]
+    assert actor["items"] == []
+
+
 def test_run_state_projection_tracks_model_usage():
     """模型调用与 token 用量进入 RunState，前端不再直接消费 MODEL_CALL_*。"""
 
@@ -1480,6 +1539,40 @@ def test_subscribe_run_state_stream_closes_for_waiting_run():
     assert "event: RUN_STATE" in first
     assert '"status": "waiting"' in first
     assert second == ""
+
+
+def test_cancelled_run_keeps_terminal_snapshot_when_late_events_arrive(monkeypatch):
+    """取消后即使底层调用迟到产出事件，也不能重新投影为运行或等待状态。"""
+
+    async def run_case():
+        from src.server.routes.chat import background_runs
+
+        run = ChatBackgroundRun(
+            id="run-cancelled-late-event-1",
+            session_id="session-cancelled-late-event-1",
+            state={},
+        )
+        run.state = initial_run_state(run)
+        monkeypatch.setattr(background_runs, "_append_cancelled_assistant_message", lambda _run: None)
+
+        await _finalize_cancelled_run(run)
+        completed_at = run.completed_at
+        event_count = run.event_count
+        await _broadcast(run, _sse_event("HITL_REQUIRED", {
+            "id": "late-approval",
+            "type": "REQUIRE_USER_CONFIRM",
+            "toolCalls": [{"id": "late-tool", "name": "Write", "input": "{}"}],
+        }))
+        return run, completed_at, event_count
+
+    run, completed_at, event_count = asyncio.run(run_case())
+
+    assert run.status == "cancelled"
+    assert run.completed_at == completed_at
+    assert run.state["status"] == "cancelled"
+    assert run.state["completedAt"] == completed_at
+    assert run.state["approvals"] == []
+    assert run.event_count == event_count
 
 
 def test_subscribe_run_state_stream_closes_after_waiting_patch():
@@ -2205,8 +2298,8 @@ def test_react_runtime_forces_final_answer_after_bare_max_iters(monkeypatch):
     assert "maximum iteration limit" in str(agent.recovery_message)
 
 
-def test_single_agent_hitl_merges_same_reply_running_tool_calls():
-    """同一模型回复里多个工具并发请求审批时，不能只保留第一个工具。"""
+def test_single_agent_hitl_collects_every_parallel_permission_event():
+    """并行审批必须排空 AgentScope 事件后再创建同一个交互。"""
 
     async def run_case():
         PENDING_INTERACTIONS.clear()
@@ -2235,8 +2328,9 @@ def test_single_agent_hitl_merges_same_reply_running_tool_calls():
     try:
         assert interactions
         assert [item["id"] for item in interactions[0].tool_calls] == ["call-read-1", "call-read-2"]
+        assert [item["id"] for item in interactions[0].resume_tool_calls] == ["call-read-1", "call-read-2"]
         hitl_events = [event for event in events if event.startswith("event: HITL_REQUIRED")]
-        assert hitl_events
+        assert len(hitl_events) == 1
         assert any(
             "RUN_WAITING" in event and '"status": "waiting_permission"' in event
             for event in events
@@ -2248,8 +2342,8 @@ def test_single_agent_hitl_merges_same_reply_running_tool_calls():
         PENDING_AGENTS.clear()
 
 
-def test_resume_event_uses_only_agentscope_waiting_tool_calls():
-    """恢复 AgentScope 审批时只回传真正等待确认的工具，UI 展示工具不能混入。"""
+def test_resume_event_covers_every_pending_tool_call_in_same_reply():
+    """同一回复的待执行工具都必须获得确认结果，避免供应商拒绝工具消息序列。"""
 
     interaction = _create_pending_interaction(
         interaction_type="REQUIRE_USER_CONFIRM",
@@ -2273,14 +2367,6 @@ def test_resume_event_uses_only_agentscope_waiting_tool_calls():
                 "state": "asking",
             },
         ],
-        resume_tool_calls=[
-            {
-                "id": "call-waiting",
-                "name": "Read",
-                "input": '{"file_path":"a.py"}',
-                "state": "asking",
-            },
-        ],
         message="读取文件",
         assistant_text="",
         skill_runs=[],
@@ -2297,8 +2383,55 @@ def test_resume_event_uses_only_agentscope_waiting_tool_calls():
             }),
         )
 
-        assert [item.tool_call.id for item in resume_event.confirm_results] == ["call-waiting"]
+        assert [item.tool_call.id for item in resume_event.confirm_results] == [
+            "call-waiting",
+            "call-ui-only",
+        ]
         assert [item["id"] for item in interaction.tool_calls] == ["call-waiting", "call-ui-only"]
+    finally:
+        PENDING_INTERACTIONS.clear()
+        PENDING_AGENTS.clear()
+
+
+def test_resume_event_can_remember_tool_approval_for_current_session():
+    """用户选择记住确认时，恢复事件向 AgentScope 追加同类工具允许规则。"""
+
+    interaction = _create_pending_interaction(
+        interaction_type="REQUIRE_USER_CONFIRM",
+        agent=object(),
+        session_id="session-remember-approval",
+        agent_id="agent-1",
+        agent_name="Agent",
+        model_name="deepseek-chat",
+        reply_id="reply-1",
+        tool_calls=[{
+            "id": "call-bash",
+            "name": "Bash",
+            "input": '{"command":"uv run pytest"}',
+            "state": "asking",
+        }],
+        message="运行测试",
+        assistant_text="",
+        skill_runs=[],
+        scope="single",
+        persist=False,
+    )
+
+    try:
+        resume_event = _build_resume_event(
+            interaction,
+            ChatResumeRequest.model_validate({
+                "interactionId": interaction.id,
+                "action": "approve",
+                "rememberApproval": True,
+            }),
+        )
+
+        rules = resume_event.confirm_results[0].rules
+        assert rules is not None
+        assert [(rule.tool_name, rule.rule_content, rule.behavior.value, rule.source) for rule in rules] == [
+            ("Bash", None, "allow", "chat_session_approval"),
+        ]
     finally:
         PENDING_INTERACTIONS.clear()
         PENDING_AGENTS.clear()
@@ -2796,7 +2929,7 @@ def test_intent_route_tool_scope_stays_minimal_for_conversation():
 
     assert decision.scope.allow_mcp is False
     assert decision.scope.allow_knowledge is False
-    assert decision.scope.allow_bash is False
+    assert decision.scope.allow_bash is True
     assert decision.scope.allow_http is False
     assert decision.scope.allow_web is False
 
@@ -3255,6 +3388,27 @@ def test_trace_status_completed_after_waiting_is_resolved():
     ])
 
     assert status == "completed"
+
+
+def test_trace_status_completed_after_intermediate_tool_failure():
+    """中途工具失败被 Agent 恢复后，不应覆盖最终成功终态。"""
+
+    status = _event_trace_status([
+        {"eventType": "TOOL_RESULT_END", "status": "failed", "sortOrder": 1},
+        {"eventType": "ASSISTANT_MESSAGE", "status": "completed", "sortOrder": 2},
+        {"eventType": "RUN_COMPLETED", "status": "completed", "sortOrder": 3},
+    ])
+
+    assert status == "completed"
+
+
+def test_trace_status_latest_run_failure_overrides_earlier_reply_end():
+    status = _event_trace_status([
+        {"eventType": "REPLY_END", "status": "completed", "sortOrder": 1},
+        {"eventType": "RUN_FAILED", "status": "failed", "sortOrder": 2},
+    ])
+
+    assert status == "failed"
 
 
 def test_trace_status_waiting_when_hitl_is_unresolved():

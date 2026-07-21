@@ -28,6 +28,8 @@ export interface LocalMessage {
   error?: string;
   /** 图片输入 */
   images?: ChatImagePayload[];
+  /** 用户上传到当前 Session 的普通附件 */
+  files?: ChatFilePayload[];
   /** 本轮暂停时模型提出的补充信息请求 */
   clarificationRequests?: ClarificationRequestInfo[];
   /** 补充信息已提交，仅保留模型问题作为上下文 */
@@ -43,6 +45,20 @@ export interface ChatImagePayload {
 export interface ChatImageAttachment extends ChatImagePayload {
   id: string;
   previewUrl: string;
+}
+
+export interface ChatFilePayload {
+  name: string;
+  path: string;
+  size: number;
+  media_type: string;
+}
+
+export interface ChatFileAttachment {
+  id: string;
+  file: File;
+  name: string;
+  size: number;
 }
 
 export interface ChatSession {
@@ -68,6 +84,7 @@ export interface StoredChatMessage {
   error: string | null;
   thinking?: string;
   images: ChatImagePayload[];
+  files: ChatFilePayload[];
   displaySnapshot?: DisplaySnapshot;
   display_snapshot?: DisplaySnapshot;
   teamSnapshot?: TeamSnapshot;

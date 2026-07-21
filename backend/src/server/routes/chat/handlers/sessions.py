@@ -1,9 +1,11 @@
 """会话查询端点 — 列表、消息、删除。"""
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, Query
 
+from src.project_files import delete_project_session_files
 from src.server.routes.chat.models import ChatSession, StoredChatMessage
 from src.server.routes.chat.router import router
 from src.server.routes.chat.store import _load_store, _save_store
@@ -12,7 +14,7 @@ from src.server.routes.chat.team_runtime.maintenance import (
     recover_team_snapshot,
 )
 from src.server.routes.chat.team_runtime.store import TeamStoreError
-from src.storage.database import DEFAULT_PROJECT_ID
+from src.storage.database import DEFAULT_PROJECT_ID, get_project
 
 
 @router.get("/sessions")
@@ -62,7 +64,7 @@ async def delete_session(
     session_id: str,
     project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
 ) -> None:
-    """删除指定会话及消息"""
+    """删除指定会话、消息及其私有附件和产物。"""
     store = _load_store()
     session = next(
         (item for item in store.sessions if item.id == session_id and item.project_id == project_id),
@@ -71,9 +73,17 @@ async def delete_session(
     if session is None or session_id not in store.messages:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    project = get_project(session.project_id)
+    if project is None:
+        raise HTTPException(status_code=409, detail="会话所属 Project 不存在，无法清理私有文件")
+    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
+    if not project_root.is_dir():
+        raise HTTPException(status_code=409, detail="会话所属 Project root 不可用，无法清理私有文件")
+
     try:
         delete_team_runs_for_session(session_id)
-    except TeamStoreError as exc:
+        delete_project_session_files(project_root=project_root, session_id=session_id)
+    except (OSError, ValueError, TeamStoreError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     store.sessions = [session for session in store.sessions if session.id != session_id]
     store.messages.pop(session_id, None)
@@ -101,6 +111,7 @@ def _history_message_to_response(message: StoredChatMessage) -> dict[str, Any]:
         "error": message.error,
         "thinking": message.thinking,
         "images": [item.model_dump(mode="json", by_alias=True) for item in message.images],
+        "files": [item.model_dump(mode="json", by_alias=True) for item in message.files],
         "displaySnapshot": message.display_snapshot,
         "teamSnapshot": recover_team_snapshot(message.team_snapshot),
         "clarificationRequests": message.clarification_requests,

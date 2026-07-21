@@ -4,7 +4,7 @@ Router 只负责选择架构模式；具体本轮注入哪些 Skill 属于 ReAct
 上下文组装阶段的职责。
 """
 
-from src.server.routes.skills import Skill, get_installed_skill, select_relevant_skills
+from src.server.routes.skills import Skill, get_installed_skill
 
 
 def select_runtime_skills(
@@ -13,17 +13,14 @@ def select_runtime_skills(
     message: str,
     active_skill: Skill | None,
 ) -> list[Skill]:
-    """选择本轮 ReAct Runtime 需要注入的 Skill。"""
+    """返回本轮可发现的 Skills；具体使用哪个 Skill 由模型按需决定。"""
 
-    if active_skill:
-        return [active_skill]
-    available_skill_ids = {
-        skill_id
-        for skill_id in skill_ids
-        if get_installed_skill(skill_id) is not None
-    }
-    return [
+    del message
+    available = [
         skill
-        for skill in select_relevant_skills(skill_ids, message)
-        if skill.id in available_skill_ids
+        for skill_id in skill_ids
+        if (skill := get_installed_skill(skill_id)) is not None
     ]
+    if active_skill and all(skill.id != active_skill.id for skill in available):
+        available.insert(0, active_skill)
+    return available

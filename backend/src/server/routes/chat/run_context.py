@@ -4,10 +4,12 @@
 整理成 send.py 可直接执行的上下文，不负责 SSE 输出、持久化和 Agent 执行。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from src.config.runtime_settings import get_effective_model_settings
+from src.project_files import list_project_session_artifacts, project_session_directory
 from src.project_resources import ProjectResourceAccess, resolve_project_resource_access
 from src.runtime_context import RuntimeContext, load_project_instructions
 from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
@@ -37,10 +39,9 @@ from src.server.routes.chat.skill_runs import (
     build_skill_run_system_prompt,
     get_active_session_skill_run,
     get_skill_for_run,
-    start_or_resume_skill_run,
     update_skill_run_status,
 )
-from src.server.routes.skills import Skill, build_skill_system_prompt_from_skills, list_skill_usage_details
+from src.server.routes.skills import Skill, list_skill_usage_details, resolve_runtime_skill_paths
 
 
 @dataclass
@@ -69,6 +70,9 @@ class ChatRunContext:
     mcp_servers: list[Any]
     knowledge_tools: list[Any]
     project_resources: ProjectResourceAccess | None = None
+    skill_paths: list[str] = field(default_factory=list)
+    session_workspace_dir: str = ""
+    session_artifact_paths_before: list[str] = field(default_factory=list)
 
 
 async def build_chat_run_context(
@@ -146,20 +150,9 @@ async def build_chat_run_context(
             message=run_data.message,
             active_skill=active_skill,
         )
-        if not active_skill_run and used_skills and persist_run:
-            active_skill_run = start_or_resume_skill_run(
-                session_id=session_id,
-                agent_id=agent_id,
-                skill=used_skills[0],
-                status="active",
-                current_step="started",
-            )
-
+    skill_paths = resolve_runtime_skill_paths(used_skills)
     used_skill_details = list_skill_usage_details(used_skills)
-    skill_runs = [
-        ChatSkillRun.model_validate({**skill_detail, "status": "running"})
-        for skill_detail in used_skill_details
-    ]
+    skill_runs: list[ChatSkillRun] = []
     model_name = runtime_model_config.model_name
     memory_prompt = (
         build_memory_injection_text(
@@ -173,16 +166,34 @@ async def build_chat_run_context(
         if readiness.ready
         else ""
     )
+    guardrails = scope_guardrails_to_project(
+        _build_runtime_guardrails(agent_config),
+        runtime_context.project_root,
+    )
+    session_workspace_dir = str(project_session_directory(
+        Path(guardrails.filesystem_scope),
+        session_id,
+    ))
+    session_artifact_paths_before = [
+        str(item.get("path") or "")
+        for item in list_project_session_artifacts(
+            project_root=runtime_context.project_root,
+            session_id=session_id,
+            session_workspace_dir=session_workspace_dir,
+        )
+        if str(item.get("path") or "")
+    ]
     system_prompt = "\n\n".join(
         part
         for part in [
             base_system_prompt,
             _build_project_context_prompt(runtime_context),
+            _build_session_workspace_prompt(session_workspace_dir),
+            _build_file_attachments_prompt(run_data.files),
             _build_runtime_context_prompt(),
             intent_route.main_agent_instruction,
             _build_conversation_history_prompt(session_id),
             build_skill_run_system_prompt(active_skill_run),
-            build_skill_system_prompt_from_skills(used_skills),
             memory_prompt,
             _build_clarification_system_prompt(),
             _build_final_answer_system_prompt(),
@@ -190,10 +201,6 @@ async def build_chat_run_context(
         if part
     )
 
-    guardrails = scope_guardrails_to_project(
-        _build_runtime_guardrails(agent_config),
-        runtime_context.project_root,
-    )
     runtime_tool_scope = resolve_react_runtime_tool_scope(
         message=run_data.message,
         agent_config=agent_config,
@@ -215,6 +222,7 @@ async def build_chat_run_context(
         intent_route=intent_route,
         effective_user_message=run_data.message,
         used_skills=used_skills,
+        skill_paths=skill_paths,
         used_skill_details=used_skill_details,
         skill_runs=skill_runs,
         active_skill_run=active_skill_run,
@@ -230,6 +238,8 @@ async def build_chat_run_context(
             agent_config,
             allowed_tool_ids=project_resources.http_tool_ids,
         ),
+        session_workspace_dir=session_workspace_dir,
+        session_artifact_paths_before=session_artifact_paths_before,
     )
 
 
@@ -248,3 +258,30 @@ def _build_project_context_prompt(runtime_context: RuntimeContext) -> str:
     if instructions:
         parts.extend(["", "## Project Instructions", instructions])
     return "\n".join(parts)
+
+
+def _build_file_attachments_prompt(files) -> str:
+    """声明本轮普通附件在 Project 内的位置，避免模型自行猜测路径。"""
+
+    if not files:
+        return ""
+    lines = [
+        "## Attached Files",
+        "The user uploaded these files to the current Project. Read or modify them using the listed relative paths.",
+    ]
+    lines.extend(
+        f"- {item.name}: `{item.path}` ({item.size} bytes, {item.media_type})"
+        for item in files
+    )
+    return "\n".join(lines)
+
+
+def _build_session_workspace_prompt(session_workspace_dir: str) -> str:
+    """声明本 Session 的默认产物目录。"""
+
+    return "\n".join([
+        "## Session Workspace",
+        f"Default working directory for this session: {session_workspace_dir}",
+        "Create every new deliverable with a relative path so it stays in this directory.",
+        "Use an explicit Project path only when the user specifically asks to modify an existing Project file.",
+    ])

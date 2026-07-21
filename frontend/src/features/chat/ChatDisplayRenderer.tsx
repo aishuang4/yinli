@@ -6,7 +6,12 @@ import { HumanFeedbackDisplayBlock } from './HumanFeedbackDisplayBlock';
 import { ProcessDisplayBlock } from './ProcessDisplayBlock';
 import type { ChatDisplayMessage } from './chatDisplayTypes';
 
-type ResolveHitl = (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
+type ResolveHitl = (
+  interactionId: string,
+  action: 'approve' | 'reject',
+  externalResults?: Record<string, string>,
+  rememberApproval?: boolean,
+) => Promise<void>;
 
 export function ChatDisplayRenderer({
   message,
@@ -80,7 +85,7 @@ export function ChatDisplayRenderer({
 
         if (block.type === 'generated_files') {
           return showGeneratedFiles
-            ? <GeneratedFilesBlock key={block.id} files={block.files} />
+            ? <GeneratedFilesBlock key={block.id} files={block.files} sessionId={message.sessionId} />
             : null;
         }
 

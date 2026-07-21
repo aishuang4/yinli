@@ -11,6 +11,7 @@ import { CatalogFilterBar, type CatalogInstallFilter } from '../../components/fo
 import {
   WorkbenchEmptyPanel,
   WorkbenchList,
+  WorkbenchListIcon,
   WorkbenchListPage,
   WorkbenchListRow,
   WorkbenchLoadingPanel,
@@ -180,14 +181,15 @@ function SkillListRow({
   return (
     <WorkbenchListRow
       icon={(
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-accent)]">
+        <WorkbenchListIcon>
           <Package size={20} strokeWidth={1.8} />
-        </span>
+        </WorkbenchListIcon>
       )}
       title={skill.name}
       subtitle={skill.trigger || skill.id}
       description={skill.description || '暂无描述'}
       last={last}
+      layout="columns"
       onSelect={onSelect}
       meta={(
         <>

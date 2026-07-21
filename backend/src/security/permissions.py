@@ -83,6 +83,12 @@ class UnifiedPermissionProfile:
 
         return self.network_enabled and not self.is_read_only
 
+    @property
+    def can_execute(self) -> bool:
+        """是否允许本地命令执行；该能力不依赖网络开关。"""
+
+        return not self.is_read_only
+
     def decide(self, resource_type: ResourceType, action: PermissionAction) -> PermissionDecision:
         """根据统一策略给出基础决策。
 

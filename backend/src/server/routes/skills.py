@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import zipfile
 from io import BytesIO
 from datetime import datetime, timezone
@@ -53,6 +54,7 @@ class Skill(BaseModel):
     tags: list[str] = Field(default_factory=list)
     resource_path: str = Field(default="", alias="resourcePath")
     resources: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     status: SkillInstallStatus = "available"
     enabled: bool = False
     installed_at: Optional[str] = Field(default=None, alias="installedAt")
@@ -292,6 +294,9 @@ def _safe_archive_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
         normalized = os.path.normpath(info.filename)
         if normalized.startswith("../") or os.path.isabs(normalized):
             raise HTTPException(status_code=422, detail="Zip archive contains unsafe paths")
+        file_type = (info.external_attr >> 16) & 0o170000
+        if file_type == stat.S_IFLNK:
+            raise HTTPException(status_code=422, detail="Zip archive must not contain symbolic links")
         members.append(info)
 
     if len(members) > MAX_SKILL_PACKAGE_FILES:
@@ -367,12 +372,19 @@ def _skill_from_markdown(
     resources: Optional[list[str]] = None,
 ) -> Skill:
     metadata, body = _split_frontmatter(markdown)
-    name = str(metadata.get("name") or os.path.basename(os.path.dirname(skill_path)) or "Imported Skill")
-    description = str(metadata.get("description") or "")
-    short_description = ""
-    raw_metadata = metadata.get("metadata")
-    if isinstance(raw_metadata, dict):
-        short_description = str(raw_metadata.get("short-description") or "")
+    name = str(metadata.get("name") or "").strip()
+    description = str(metadata.get("description") or "").strip()
+    if not name or not description:
+        raise HTTPException(
+            status_code=422,
+            detail="SKILL.md frontmatter must contain non-empty name and description fields",
+        )
+
+    warnings = _skill_package_warnings(
+        name=name,
+        skill_path=skill_path,
+        resources=resources or [],
+    )
 
     skill_id = _unique_skill_id(name)
     now = _utc_now()
@@ -380,19 +392,42 @@ def _skill_from_markdown(
         {
             "id": skill_id,
             "name": name,
-            "description": description or short_description or f"从压缩包导入的 Skill: {name}",
+            "description": description,
             "category": "导入",
             "trigger": description,
             "content": markdown.strip() or body,
             "tags": ["imported", "zip"],
             "resourcePath": resource_path,
             "resources": resources or [],
+            "warnings": warnings,
             "status": "installed",
             "enabled": True,
             "installedAt": now,
             "updatedAt": now,
         }
     )
+
+
+def _skill_package_warnings(*, name: str, skill_path: str, resources: list[str]) -> list[str]:
+    """返回不阻断安装的 Agent Skills 兼容诊断。"""
+
+    warnings: list[str] = []
+    directory_name = os.path.basename(os.path.dirname(skill_path)).strip()
+    if directory_name and directory_name != name:
+        warnings.append(f"Skill name '{name}' 与包目录名 '{directory_name}' 不一致。")
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name):
+        warnings.append("Skill name 建议使用小写字母、数字和连字符。")
+    known_script_suffixes = {".py", ".js", ".mjs", ".cjs", ".ts", ".sh", ".bash", ".ps1", ".rb"}
+    unknown_scripts = [
+        path for path in resources
+        if path.replace("\\", "/").startswith("scripts/")
+        and os.path.splitext(path)[1].lower() not in known_script_suffixes
+    ]
+    if unknown_scripts:
+        warnings.append(
+            "scripts/ 包含不会自动执行的未知文件类型: " + ", ".join(sorted(unknown_scripts)[:8]),
+        )
+    return warnings
 
 
 _builtin_skills: dict[str, Skill] = {
@@ -564,6 +599,32 @@ def list_skill_usage_details(skills: list[Skill]) -> list[dict[str, object]]:
         }
         for skill in skills
     ]
+
+
+def resolve_runtime_skill_paths(skills: list[Skill]) -> list[str]:
+    """把已裁剪的持久 Skill 转换为 AgentScope 可加载的安全包目录。"""
+
+    packages_root = os.path.realpath(SKILL_PACKAGES_DIR)
+    paths: list[str] = []
+    seen: set[str] = set()
+    for skill in skills:
+        if not skill.resource_path:
+            continue
+        package_dir = os.path.realpath(os.path.abspath(skill.resource_path))
+        try:
+            inside_packages_root = os.path.commonpath([packages_root, package_dir]) == packages_root
+        except ValueError:
+            inside_packages_root = False
+        if (
+            not inside_packages_root
+            or package_dir in seen
+            or not os.path.isdir(package_dir)
+            or not os.path.isfile(os.path.join(package_dir, "SKILL.md"))
+        ):
+            continue
+        seen.add(package_dir)
+        paths.append(package_dir)
+    return sorted(paths)
 
 
 def get_installed_skill(skill_id: str) -> Skill | None:

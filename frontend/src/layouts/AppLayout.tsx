@@ -14,7 +14,6 @@ import { useAppStore, type ViewType, type WorkspaceMode } from '../stores/appSto
 import { TitleBar } from './TitleBar';
 import { ActivityBar } from './ActivityBar';
 import { StatusBar } from './StatusBar';
-import { WorkspaceContextPanel } from '../features/workspaces/WorkspaceContextPanel';
 import './AppLayout.css';
 
 interface AppLayoutProps {
@@ -117,7 +116,6 @@ function WorkbenchMenu() {
         <ArrowLeft size={16} strokeWidth={1.8} />
         <span>返回 Chat</span>
       </button>
-      <WorkspaceContextPanel />
       <div className="workbench-menu-page__items">
         {WORKBENCH_MENU_ITEMS.map((item) => {
           const active = currentView === item.id;

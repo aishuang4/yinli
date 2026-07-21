@@ -12,6 +12,7 @@ export type ChatDisplayStatus = DisplayStatus;
 
 export interface ChatDisplayMessage {
   id: string;
+  sessionId: string;
   role: 'assistant';
   status: ChatDisplayStatus;
   isStreaming: boolean;

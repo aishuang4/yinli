@@ -7,6 +7,7 @@ import { Button, Tag } from '@agentscope-ai/design';
 import {
   WorkbenchEmptyPanel,
   WorkbenchList,
+  WorkbenchListIcon,
   WorkbenchListPage,
   WorkbenchListRow,
   WorkbenchLoadingPanel,
@@ -166,14 +167,15 @@ function RunListRow({
   return (
     <WorkbenchListRow
       icon={(
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-black text-[var(--color-accent)]">
+        <WorkbenchListIcon>
           {run.mode === 'team' ? <Users size={20} strokeWidth={1.8} /> : <Bot size={20} strokeWidth={1.8} />}
-        </span>
+        </WorkbenchListIcon>
       )}
       title={runDisplayName(run)}
       subtitle={run.task || '未记录任务内容'}
       description={run.currentStage || statusText(run.status)}
       last={last}
+      layout="columns"
       onSelect={onSelect}
       meta={(
         <>
@@ -183,8 +185,8 @@ function RunListRow({
         </>
       )}
       trailing={(
-        <>
-          <div className="hidden w-24 shrink-0 md:block">
+        <div className="flex w-40 shrink-0 items-center justify-end gap-3 lg:w-[19rem]">
+          <div className="hidden w-24 shrink-0 lg:block">
             <ProgressBar value={run.progress} />
           </div>
           <button
@@ -196,16 +198,16 @@ function RunListRow({
             <List size={17} />
           </button>
           {active && run.status === 'running' ? (
-            <Button size="small" danger icon={<Ban size={13} />} loading={busy} onClick={onCancel}>
+            <Button className="w-28 justify-center" size="small" danger icon={<Ban size={13} />} loading={busy} onClick={onCancel}>
               取消
             </Button>
           ) : null}
           {!active ? (
-            <Button size="small" icon={<RotateCcw size={13} />} loading={busy} onClick={onRerun}>
+            <Button className="w-28 justify-center" size="small" icon={<RotateCcw size={13} />} loading={busy} onClick={onRerun}>
               {run.status === 'failed' ? '重试' : '重新运行'}
             </Button>
           ) : null}
-        </>
+        </div>
       )}
     />
   );

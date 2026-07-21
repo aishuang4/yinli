@@ -39,13 +39,15 @@ def resolve_runtime_tool_scope(
         text,
     ))
     needs_network = needs_http or needs_web
-    needs_shell = bool(re.search(r"(运行|执行|测试|构建|启动|命令|脚本|pytest|npm|uv|bash|shell|终端|部署)", text))
     needs_knowledge = bool(re.search(r"(知识库|资料库|文档库|检索|搜索|查询|调研|资料|上下文|文档)", text))
     needs_mcp = bool(re.search(r"(mcp|外部工具|数据库|浏览器|github|figma|notion|jira|linear|slack)", text))
 
     allow_knowledge = configured_knowledge and (needs_knowledge or needs_network or has_selected_skills or has_team)
     allow_mcp = configured_mcp and (needs_mcp or needs_network or has_team)
-    allow_bash = needs_shell
+    # Bash 是 Skill 执行 scripts/ 下工具的通用执行面。Skill 的脚本需求通常
+    # 不会出现在用户原话中，因此不能用关键词裁剪；实际执行仍经过权限策略、
+    # 黑名单与工作目录限制。
+    allow_bash = True
     allow_http = needs_http
     allow_web = needs_web
 
@@ -55,7 +57,7 @@ def resolve_runtime_tool_scope(
     if allow_mcp:
         reasons.append("匹配到 MCP/外部工具意图")
     if allow_bash:
-        reasons.append("匹配到命令执行意图")
+        reasons.append("保留通用 Shell 以支持 Skill 脚本与工作区操作")
     if allow_http:
         reasons.append("匹配到 HTTP/网络请求意图")
     if allow_web:

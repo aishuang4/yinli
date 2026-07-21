@@ -173,6 +173,27 @@ def _trace_status(messages: list[object]) -> str:
 
 
 def _event_trace_status(events: list[dict]) -> str:
+    terminal_events = [
+        event
+        for event in events
+        if event.get("eventType") in {
+            "ASSISTANT_MESSAGE",
+            "REPLY_END",
+            "RUN_COMPLETED",
+            "RUN_FAILED",
+            "ERROR",
+        }
+    ]
+    if terminal_events:
+        latest_terminal = max(
+            terminal_events,
+            key=lambda event: int(event.get("sortOrder") or 0),
+        )
+        if latest_terminal.get("eventType") in {"RUN_FAILED", "ERROR"}:
+            return "failed"
+        if latest_terminal.get("status") in {"", "completed"}:
+            return "completed"
+
     if any(event.get("status") == "failed" for event in events):
         return "failed"
 

@@ -45,6 +45,17 @@ class ChatImagePayload(BaseModel):
     data: str
 
 
+class ChatFilePayload(BaseModel):
+    """已保存到当前 Project 的普通附件。"""
+
+    name: str
+    path: str
+    size: int = 0
+    media_type: str = Field(default="application/octet-stream", alias="mediaType")
+
+    model_config = {"populate_by_name": True}
+
+
 class ChatSkillRun(BaseModel):
     """本轮对话使用的 Skill 记录"""
 
@@ -137,6 +148,7 @@ class StoredChatMessage(BaseModel):
     error: str | None = None
     thinking: str = ""
     images: list[ChatImagePayload] = Field(default_factory=list)
+    files: list[ChatFilePayload] = Field(default_factory=list)
     tool_calls: list[ChatToolRun] = Field(default_factory=list, alias="toolCalls")
     skill_calls: list[ChatSkillRun] = Field(default_factory=list, alias="skillCalls")
     model_caches: list[ChatModelCacheRun] = Field(default_factory=list, alias="modelCaches")
@@ -203,6 +215,8 @@ class ChatResumeRequest(BaseModel):
     interaction_id: str = Field(alias="interactionId")
     action: str
     external_results: dict[str, str] = Field(default_factory=dict, alias="externalResults")
+    remember_approval: bool = Field(default=False, alias="rememberApproval")
+    """确认后在当前会话内自动允许同类工具，不跨会话持久化。"""
 
     model_config = {"populate_by_name": True}
 
@@ -245,6 +259,9 @@ class ChatMessage(BaseModel):
 
     images: list[ChatImagePayload] = Field(default_factory=list)
     """图片输入（base64，不含 data URL 前缀）"""
+
+    files: list[ChatFilePayload] = Field(default_factory=list)
+    """已上传到当前 Project 的普通附件。"""
 
     sandbox: bool = False
     """沙盒运行：不写入历史对话"""

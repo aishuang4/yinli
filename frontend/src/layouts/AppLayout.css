@@ -225,8 +225,11 @@
 }
 
 .workbench-menu-page__items {
+  display: flex;
   min-height: 0;
   flex: 1 1 auto;
+  flex-direction: column;
+  gap: 6px;
   overflow: auto;
   padding: 4px 12px 16px;
 }

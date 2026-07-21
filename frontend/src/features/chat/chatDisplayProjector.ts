@@ -28,11 +28,12 @@ import type {
 
 export function buildLiveChatDisplayMessage(
   state: StreamState,
+  sessionId = '',
 ): ChatDisplayMessage {
   return buildChatDisplayMessage({
     displaySnapshot: state.displaySnapshot,
     runId: state.currentRunId,
-    sessionId: '',
+    sessionId,
     status: inferRunStatus(state),
     isStreaming: state.isStreaming,
     startedAt: state.runStartedAt,
@@ -42,11 +43,11 @@ export function buildLiveChatDisplayMessage(
   });
 }
 
-export function buildStoredChatDisplayMessage(message: LocalMessage): ChatDisplayMessage {
+export function buildStoredChatDisplayMessage(message: LocalMessage, sessionId = ''): ChatDisplayMessage {
   return buildChatDisplayMessage({
     displaySnapshot: message.displaySnapshot,
     runId: message.id,
-    sessionId: '',
+    sessionId,
     status: message.error ? 'failed' : 'completed',
     isStreaming: false,
     startedAt: message.processStartedAt || '',
@@ -64,6 +65,7 @@ export function buildChatDisplayMessage(input: ChatDisplayMessageInput): ChatDis
   const finalAnswerBlock = blocks.find((block): block is ChatFinalAnswerBlock => block.type === 'final_answer');
   return {
     id: input.runId || `display-${input.startedAt || 'message'}`,
+    sessionId: input.sessionId,
     role: 'assistant',
     status: input.status,
     isStreaming: input.isStreaming,

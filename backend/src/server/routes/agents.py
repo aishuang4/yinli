@@ -20,7 +20,7 @@ import uuid
 from src.agents.factory import invalidate_agent
 from src.agents.runtime_types import WORKSPACE_DIR
 from src.config.runtime_paths import DATA_ROOT
-from src.config.runtime_settings import get_current_model_options
+from src.config.runtime_settings import get_current_model_options, get_effective_model_settings
 from src.storage.database import (
     delete_agent as db_delete_agent,
     list_agents as db_list_agents,
@@ -35,6 +35,16 @@ router = APIRouter()
 DATA_DIR = str(DATA_ROOT)
 AGENTS_REGISTRY_FILE = os.path.join(DATA_DIR, "agents.json")
 AGENTS_NAMESPACE = "agents"
+DEFAULT_AGENT_PROMPT_VERSION_TAG = "prompt-contract-v2"
+DEFAULT_AGENT_FINAL_DELIVERY_RULES = """
+
+# 最终交付规则
+
+1. 完成用户任务后，先用一句话明确说明已经完成了什么，再说明关键结果、交付文件或必要验证信息。
+2. 不要向用户输出内部上下文摘要、压缩摘要、交接说明、系统提示、工具日志或“我已收到上下文摘要”等内容。
+3. 不要在任务已经完成时再泛化地询问“现在需要做什么”“是否需要其他任务”。只有当前任务缺少关键信息且无法继续执行时，才通过 AskUser 提问。
+4. 只基于本轮用户请求和已实际执行的结果作答；不得把内部运行过程误认为新的用户任务。
+""".strip()
 
 
 class ModelConfig(BaseModel):
@@ -188,6 +198,71 @@ class AgentImportResponse(BaseModel):
 _agents: dict[str, AgentResponse] = {}
 
 
+def _build_default_agent() -> AgentResponse:
+    """构建可持久配置、但不可删除的系统默认 Agent。"""
+
+    runtime_settings = get_effective_model_settings()
+    now = datetime.now(timezone.utc).isoformat()
+    return AgentResponse.model_validate({
+        "id": "default",
+        "name": "Assistant",
+        "avatar": "",
+        "description": "默认助手，可配置模型、工具、Skills 和运行边界",
+        "system_prompt": "\n\n".join([
+            "你是用户的通用办公助手，负责完成文档、表格、演示文稿、数据分析和文件处理任务。默认使用中文沟通；信息足够时直接执行，只有缺少会改变结果的关键信息时才提问。",
+            DEFAULT_AGENT_FINAL_DELIVERY_RULES,
+        ]),
+        "modelConfig": {
+            "primary": runtime_settings.default_model,
+            "fallback": runtime_settings.fallback_models,
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "max_tokens": 4096,
+            "maxReactIters": 40,
+        },
+        "mcpTools": [],
+        "knowledgeTools": [],
+        "skills": [],
+        "tags": ["system", "default", DEFAULT_AGENT_PROMPT_VERSION_TAG],
+        "planConfig": PlanConfig(),
+        "guardrails": Guardrails(),
+        "status": "idle",
+        "created_at": now,
+        "updated_at": now,
+        "workspaceId": "default",
+    })
+
+
+def _ensure_default_agent() -> None:
+    """为历史数据库补齐默认 Agent，已有用户配置保持不变。"""
+
+    existing = _agents.get("default")
+    if existing is not None:
+        _upgrade_default_agent_prompt(existing)
+        return
+    default_agent = _build_default_agent()
+    _agents[default_agent.id] = default_agent
+    upsert_agent(default_agent.model_dump(by_alias=True))
+
+
+def _upgrade_default_agent_prompt(agent: AgentResponse) -> None:
+    """为已有默认 Agent 一次性补齐最终交付规则，保留用户原有提示词。"""
+
+    if DEFAULT_AGENT_PROMPT_VERSION_TAG in agent.tags:
+        return
+    prompt = agent.system_prompt.rstrip()
+    if DEFAULT_AGENT_FINAL_DELIVERY_RULES not in prompt:
+        prompt = "\n\n".join([prompt, DEFAULT_AGENT_FINAL_DELIVERY_RULES]).strip()
+    updated_agent = agent.model_copy(update={
+        "system_prompt": prompt,
+        "tags": [*agent.tags, DEFAULT_AGENT_PROMPT_VERSION_TAG],
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
+    _agents[agent.id] = updated_agent
+    invalidate_agent(agent.id)
+    upsert_agent(updated_agent.model_dump(by_alias=True))
+
+
 def _load_agents() -> None:
     migrate_json_list_file(AGENTS_NAMESPACE, AGENTS_REGISTRY_FILE)
     records = db_list_agents()
@@ -198,6 +273,7 @@ def _load_agents() -> None:
     for item in records:
         agent = AgentResponse.model_validate(item)
         _agents[agent.id] = agent
+    _ensure_default_agent()
 
 
 def _save_agents() -> None:
@@ -293,7 +369,11 @@ async def list_agents(
     Returns:
         list[AgentResponse]: Agent 列表
     """
-    return [agent for agent in _agents.values() if agent.workspace_id == workspace_id]
+    return [
+        agent
+        for agent in _agents.values()
+        if agent.id == "default" or agent.workspace_id == workspace_id
+    ]
 
 
 @router.get("/{agent_id}/export", response_model=AgentExportPackage)
@@ -476,6 +556,8 @@ async def delete_agent(agent_id: str) -> None:
     """
     if agent_id not in _agents:
         raise HTTPException(status_code=404, detail="Agent not found")
+    if agent_id == "default":
+        raise HTTPException(status_code=403, detail="默认 Agent 不能删除，只能修改配置")
     del _agents[agent_id]
     invalidate_agent(agent_id)
     db_delete_agent(agent_id)

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { AlertCircle, Wrench } from 'lucide-react';
-import { Button, Tag } from '@agentscope-ai/design';
+import { Button, Checkbox, Tag } from '@agentscope-ai/design';
 import type { ClarificationQuestionInfo, ClarificationRequestInfo, HitlRequestInfo } from '../../hooks/useEventStream';
 import { isAskUserToolName } from './humanInteractionUtils';
 
@@ -9,9 +9,15 @@ export function HitlApprovalBlock({
   onResolve,
 }: {
   request: HitlRequestInfo;
-  onResolve: (interactionId: string, action: 'approve' | 'reject', externalResults?: Record<string, string>) => Promise<void>;
+  onResolve: (
+    interactionId: string,
+    action: 'approve' | 'reject',
+    externalResults?: Record<string, string>,
+    rememberApproval?: boolean,
+  ) => Promise<void>;
 }) {
   const [submitting, setSubmitting] = useState<'approve' | 'reject' | null>(null);
+  const [rememberApproval, setRememberApproval] = useState(false);
   const isExternal = request.type === 'REQUIRE_EXTERNAL_EXECUTION';
   const askUserToolCall = request.toolCalls.find((toolCall) => isAskUserToolName(toolCall.rawName || toolCall.name));
   const askUserRequest = askUserToolCall ? buildClarificationRequestFromAskUser(askUserToolCall) : null;
@@ -19,7 +25,7 @@ export function HitlApprovalBlock({
   const handleResolve = async (action: 'approve' | 'reject') => {
     setSubmitting(action);
     try {
-      await onResolve(request.interactionId, action);
+      await onResolve(request.interactionId, action, {}, action === 'approve' && rememberApproval);
     } finally {
       setSubmitting(null);
     }
@@ -80,6 +86,15 @@ export function HitlApprovalBlock({
             )}
           </div>
         ))}
+        {!isExternal && (
+          <Checkbox
+            checked={rememberApproval}
+            disabled={Boolean(submitting)}
+            onChange={(event) => setRememberApproval(event.target.checked)}
+          >
+            本会话后续自动允许这些工具
+          </Checkbox>
+        )}
         <div className="flex justify-end gap-2">
           <Button
             danger

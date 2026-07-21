@@ -29,6 +29,7 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
         model_name=ctx.model_name,
         content=display_content,
         images=run_data.images,
+        files=run_data.files,
         workspace_id=ctx.runtime_context.workspace_id,
         project_id=ctx.runtime_context.project_id,
     )
@@ -45,6 +46,7 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
             "mode": run_data.mode,
             "model": ctx.model_name,
             "imageCount": len(run_data.images),
+            "fileCount": len(run_data.files),
             "workspaceId": ctx.runtime_context.workspace_id,
             "projectId": ctx.runtime_context.project_id,
         },
@@ -178,29 +180,8 @@ async def emit_clarification_if_required(ctx: ChatRunContext) -> AsyncGenerator[
 
 
 async def emit_context_events(ctx: ChatRunContext) -> AsyncGenerator[str, None]:
-    """输出 Team 初始状态和 Skill 注入上下文事件。"""
+    """保留上下文事件扩展点；Skill catalog 不代表 Skill 已实际使用。"""
 
-    if ctx.used_skill_details:
-        for skill in ctx.used_skill_details:
-            yield runtime_event_sse(
-                "SKILL_STARTED",
-                session_id=ctx.session_id,
-                scope="skill",
-                agent_id=ctx.agent_id,
-                agent_name=ctx.agent_name,
-                status="running",
-                payload=skill,
-            )
-        yield _sse_event("SKILL_CONTEXT", {
-            "skills": ctx.used_skill_details,
-        })
-        _record_run_event(
-            session_id=ctx.session_id,
-            event_type="SKILL_CONTEXT",
-            persist=ctx.persist_run,
-            agent_id=ctx.agent_id,
-            agent_name=ctx.agent_name,
-            status="running",
-            title="Skills injected",
-            payload={"skills": ctx.used_skill_details},
-        )
+    del ctx
+    for event in ():
+        yield event

@@ -3,9 +3,10 @@
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
+from src.project_files import save_project_upload
 from src.project_resources import validate_project_resource_binding
 from src.storage.database import (
     create_project,
@@ -102,6 +103,17 @@ class ProjectResourceBindingRequest(BaseModel):
 
     enabled: bool = True
     config_override: dict[str, Any] = Field(default_factory=dict, alias="configOverride")
+
+    model_config = {"populate_by_name": True}
+
+
+class ProjectFileUploadResponse(BaseModel):
+    """上传后可提供给 Agent 的 Project 文件元数据。"""
+
+    name: str
+    path: str
+    size: int
+    media_type: str = Field(alias="mediaType")
 
     model_config = {"populate_by_name": True}
 
@@ -211,6 +223,27 @@ async def get_project_record(project_id: str) -> ProjectRecord:
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return ProjectRecord.model_validate(project)
+
+
+@router.post("/projects/{project_id}/files", response_model=ProjectFileUploadResponse, status_code=201)
+async def upload_project_file(
+    project_id: str,
+    session_id: str = Query(..., min_length=1, max_length=128, alias="sessionId"),
+    file: UploadFile = File(...),
+) -> ProjectFileUploadResponse:
+    """上传用户附件到当前 Project，供该 Project 内的 Agent 操作。"""
+
+    project = get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if str(project.get("status") or "") != "active":
+        raise HTTPException(status_code=409, detail="Project 已归档，不能上传附件")
+    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
+    if not project_root.is_dir():
+        raise HTTPException(status_code=422, detail="Project root 不是有效目录")
+    return ProjectFileUploadResponse.model_validate(
+        await save_project_upload(project_root=project_root, session_id=session_id, upload=file),
+    )
 
 
 @router.patch("/projects/{project_id}", response_model=ProjectRecord)

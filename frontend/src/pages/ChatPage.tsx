@@ -13,7 +13,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo, type WheelEvent } from 'react';
-import { AlertCircle, Bot, Boxes, ChevronDown, FolderKanban, FolderPlus, ImagePlus, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Search, Send, Settings, Square, Trash2, X } from 'lucide-react';
+import { AlertCircle, Bot, Boxes, ChevronDown, FileText, FolderKanban, ImagePlus, MessageSquare, Paperclip, PanelLeftClose, PanelLeftOpen, Plus, Search, Send, Settings, Square, Trash2, X } from 'lucide-react';
 import {
   SparkDeepThinkLine,
   SparkReinforcementLearningLine,
@@ -26,13 +26,15 @@ import { useProjectResources } from '../hooks/useProjectResources';
 import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
 import { useAppStore } from '../stores/appStore';
 import { createId } from '../utils/id';
+import { FileImportButton } from '../components/FileImportButton';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList';
 import { TeamConsolePanel } from '../features/chat/TeamDisplayBlock';
 import { teamConsoleFromSnapshot } from '../features/team-runtime/teamEventReducer';
 import { FloatingPlanDock } from '../features/chat/FloatingPlanDock';
+import { ChatStartScenarios } from '../features/chat/ChatStartScenarios';
 import { isAskUserToolName } from '../features/chat/humanInteractionUtils';
-import type { ChatImageAttachment, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
+import type { ChatFileAttachment, ChatFilePayload, ChatImageAttachment, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
 import { DISPLAY_EVENTS, type DisplayItem } from '../types/displayEvents';
 
 const HISTORY_PANEL_TRANSITION_MS = 260;
@@ -267,6 +269,7 @@ export function ChatPage() {
   const [inputValue, setInputValue] = useState('');
   const [deepThinking, setDeepThinking] = useState(false);
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
+  const [fileAttachments, setFileAttachments] = useState<ChatFileAttachment[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
@@ -282,6 +285,7 @@ export function ChatPage() {
   const historyTransitionTimerRef = useRef<number | null>(null);
   const historyExpandFrameRef = useRef<number | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
   const recoveredRunRef = useRef<string>('');
   const completedVisualRunRef = useRef<string>('');
@@ -292,11 +296,12 @@ export function ChatPage() {
   const { state, sendMessage, resumeInteraction, subscribeRun, abort, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
   const { enabledByType, loading: projectResourcesLoading } = useProjectResources(activeProjectId);
-  const { workspaces, projects, allProjects, selectWorkspace, selectProject } = useWorkspaceProjects();
+  const { workspaces, allProjects } = useWorkspaceProjects();
   const setActiveContext = useAppStore((state) => state.setActiveContext);
 
   const availableAgents = useMemo(() => agents.filter((agent) => (
-    agent.workspaceId === activeWorkspaceId && enabledByType.agent.has(agent.id)
+    agent.id === 'default'
+    || (agent.workspaceId === activeWorkspaceId && enabledByType.agent.has(agent.id))
   )), [activeWorkspaceId, agents, enabledByType]);
 
   const selectedAgent = useMemo(
@@ -306,13 +311,10 @@ export function ChatPage() {
 
   const runtimeAgent = selectedAgent;
 
-  const agentOptions = useMemo(() => [
-    { label: 'Assistant - 默认助手', value: 'default' },
-    ...availableAgents.map((agent) => ({
-      label: agent.name,
+  const agentOptions = useMemo(() => availableAgents.map((agent) => ({
+      label: agent.id === 'default' ? `${agent.name} - 默认助手` : agent.name,
       value: agent.id,
-    })),
-  ], [availableAgents]);
+    })), [availableAgents]);
 
   const selectedModelId = runtimeAgent?.modelConfig.primary || 'deepseek-v4-flash';
   const selectedModelSupportsImages = selectedModelId === 'qwen3.7-plus';
@@ -352,8 +354,6 @@ export function ChatPage() {
       }))
       .filter((group) => group.sessions.length > 0),
   })).filter((group) => group.projects.length > 0), [allProjects, sessions, workspaces]);
-  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) || null;
-  const activeProject = allProjects.find((project) => project.id === activeProjectId) || null;
   const handleCollapseHistory = useCallback(() => {
     if (historyTransitionTimerRef.current !== null) {
       window.clearTimeout(historyTransitionTimerRef.current);
@@ -445,6 +445,7 @@ export function ChatPage() {
       error: item.error || undefined,
       thinking: item.thinking || undefined,
       images: item.images,
+      files: item.files,
       displaySnapshot: item.displaySnapshot || item.display_snapshot,
       teamSnapshot: item.teamSnapshot || item.team_snapshot,
       clarificationRequests: item.clarificationRequests || item.clarification_requests || [],
@@ -462,6 +463,7 @@ export function ChatPage() {
     setTargetMode(session.mode || 'agent');
     setSelectedAgentId(session.agent_id || 'default');
     setImageAttachments([]);
+    setFileAttachments([]);
     setChatError(null);
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
@@ -474,10 +476,11 @@ export function ChatPage() {
     recoveredRunRef.current = '';
     completedVisualRunRef.current = '';
     setVisuallyCompletedRunId('');
-    setActiveSessionId(null);
-    setMessages([]);
-    setImageAttachments([]);
-    setChatError(null);
+        setActiveSessionId(null);
+        setMessages([]);
+        setImageAttachments([]);
+        setFileAttachments([]);
+        setChatError(null);
     reset();
     const pendingSession = pendingSessionRef.current;
     if (
@@ -622,53 +625,17 @@ export function ChatPage() {
     setActiveSessionId(null);
     setMessages([]);
     setImageAttachments([]);
+    setFileAttachments([]);
     setChatError(null);
     shouldAutoScrollRef.current = true;
     setShowScrollToBottom(false);
     reset();
   }, [reset, state.isStreaming]);
 
-  const handleCreateProjectFromDirectory = useCallback(async () => {
-    if (state.isStreaming) return;
-    if (!window.electronAPI) {
-      setChatError('请在 Electron 桌面端选择 Project 文件夹。');
-      return;
-    }
-    setChatError(null);
-    try {
-      const selected = await window.electronAPI.selectProjectDirectory();
-      if (selected.canceled || !selected.path || !selected.name) return;
-      const existing = allProjects.find((project) => (
-        project.workspaceId === activeWorkspaceId && project.rootPath === selected.path
-      ));
-      if (existing) {
-        handleNewSession();
-        setActiveContext(existing.workspaceId, existing.id);
-        notifySuccess(`已切换到 Project：${existing.name}`);
-        return;
-      }
-      const response = await fetch(`/api/workspaces/${encodeURIComponent(activeWorkspaceId)}/projects`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: selected.name,
-          description: '',
-          rootPath: selected.path,
-          instructionsFile: '',
-        }),
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(String(payload.detail || `HTTP ${response.status}`));
-      }
-      const project = await response.json() as { id: string; workspaceId: string; name: string };
-      handleNewSession();
-      setActiveContext(project.workspaceId, project.id);
-      notifySuccess(`Project ${project.name} 已创建`);
-    } catch (err) {
-      setChatError(err instanceof Error ? err.message : 'Project 创建失败。');
-    }
-  }, [activeWorkspaceId, allProjects, handleNewSession, setActiveContext, state.isStreaming]);
+  const handleScenarioSelect = useCallback((prompt: string) => {
+    setInputValue(prompt);
+    window.requestAnimationFrame(() => messageInputRef.current?.focus());
+  }, []);
 
   const handleSelectSession = useCallback(async (session: ChatSession) => {
     if (state.isStreaming) return;
@@ -692,6 +659,7 @@ export function ChatPage() {
         setActiveSessionId(null);
         setMessages([]);
         setImageAttachments([]);
+        setFileAttachments([]);
         setChatError(null);
         reset();
       }
@@ -736,11 +704,59 @@ export function ChatPage() {
     setImageAttachments((current) => current.filter((item) => item.id !== id));
   }, []);
 
+  const handleFile = useCallback((file: File) => {
+    if (file.size > 50 * 1024 * 1024) {
+      setChatError('单个附件不能超过 50 MB。');
+      return;
+    }
+    setFileAttachments((current) => {
+      if (current.length >= 10) {
+        setChatError('单次最多上传 10 个附件。');
+        return current;
+      }
+      if (current.some((item) => item.name === file.name && item.size === file.size)) {
+        return current;
+      }
+      return [...current, { id: createId(), file, name: file.name, size: file.size }];
+    });
+    setChatError(null);
+  }, []);
+
+  const removeFileAttachment = useCallback((id: string) => {
+    setFileAttachments((current) => current.filter((item) => item.id !== id));
+  }, []);
+
+  const uploadFilesForSession = useCallback(async (
+    files: ChatFileAttachment[],
+    projectId: string,
+    sessionId: string,
+  ): Promise<ChatFilePayload[]> => {
+    return Promise.all(files.map(async (attachment) => {
+      const form = new FormData();
+      form.append('file', attachment.file, attachment.name);
+      const params = new URLSearchParams({ sessionId });
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files?${params.toString()}`, {
+        method: 'POST',
+        body: form,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(String(payload.detail || `附件 ${attachment.name} 上传失败`));
+      }
+      return {
+        name: String(payload.name || attachment.name),
+        path: String(payload.path || ''),
+        size: Number(payload.size || attachment.size),
+        media_type: String(payload.mediaType || attachment.file.type || 'application/octet-stream'),
+      };
+    }));
+  }, []);
+
   /** 发送消息 */
   const handleSend = useCallback(async () => {
-    if ((!inputValue.trim() && imageAttachments.length === 0) || state.isStreaming) return;
+    if ((!inputValue.trim() && imageAttachments.length === 0 && fileAttachments.length === 0) || state.isStreaming) return;
     if (!activeProjectId) {
-      setChatError('请先为新对话选择或创建 Project。');
+      setChatError('请先在设置中选择 Workspace 和 Project。');
       return;
     }
     if (imageAttachments.length > 0 && !selectedModelSupportsImages) {
@@ -748,19 +764,27 @@ export function ChatPage() {
       return;
     }
 
-    const userText = inputValue.trim() || '请分析这张图片。';
+    const userText = inputValue.trim() || (fileAttachments.length > 0 ? '请处理我上传的文件。' : '请分析这张图片。');
     const sessionId = activeSessionId || createId();
     const images = imageAttachments.map(({ name, media_type, data }) => ({
       name,
       media_type,
       data,
     }));
+    let files: ChatFilePayload[];
+    try {
+      files = await uploadFilesForSession(fileAttachments, activeProjectId, sessionId);
+    } catch (err) {
+      setChatError(getErrorMessage(err, '附件上传失败。'));
+      return;
+    }
     const userMessage: LocalMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
       content: userText,
       createdAt: new Date().toISOString(),
       images,
+      files,
     };
 
     setActiveSessionId(sessionId);
@@ -769,6 +793,7 @@ export function ChatPage() {
     setMessages((prev) => [...prev, userMessage]);
     setInputValue('');
     setImageAttachments([]);
+    setFileAttachments([]);
     setChatError(null);
 
     await sendMessage(userText, {
@@ -782,8 +807,9 @@ export function ChatPage() {
       skillIds: runtimeAgent?.skills,
       deepThinking,
       images,
+      files,
     });
-  }, [activeProjectId, activeSessionId, deepThinking, imageAttachments, inputValue, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.isStreaming, targetMode]);
+  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, imageAttachments, inputValue, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.isStreaming, targetMode, uploadFilesForSession]);
 
   const handleSubmitClarification = useCallback(async (content: string, displayContent?: string) => {
     const modelContent = content.trim();
@@ -1093,40 +1119,9 @@ export function ChatPage() {
                     </div>
                     <div className="text-lg font-medium">开始对话</div>
                     <div className="max-w-[420px] text-sm">
-                      先选择一个主 Agent，再输入消息开始协作。系统会保存会话历史，方便后续继续查看。
+                      选择一个场景开始，或直接在下方输入你的任务。
                     </div>
-                    <div className="mt-3 w-full max-w-[520px] border-t border-[var(--color-border)] pt-4 text-left">
-                      <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">保存到</div>
-                      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_36px] gap-2">
-                        <Select
-                          aria-label="为新对话选择 Workspace"
-                          value={activeWorkspace?.id || undefined}
-                          options={workspaces.map((workspace) => ({ label: workspace.name, value: workspace.id }))}
-                          onChange={(value) => void selectWorkspace(String(value))}
-                          placeholder="Workspace"
-                          style={{ minWidth: 0, width: '100%' }}
-                        />
-                        <Select
-                          aria-label="为新对话选择 Project"
-                          value={activeProject?.id || undefined}
-                          options={projects.map((project) => ({ label: project.name, value: project.id }))}
-                          onChange={(value) => selectProject(String(value))}
-                          placeholder="Project"
-                          disabled={projects.length === 0}
-                          style={{ minWidth: 0, width: '100%' }}
-                        />
-                        <Tooltip title="选择文件夹创建 Project" placement="bottom" mode="dark">
-                          <button
-                            type="button"
-                            className="icon-button h-8 w-8"
-                            aria-label="选择文件夹创建 Project"
-                            onClick={() => void handleCreateProjectFromDirectory()}
-                          >
-                            <FolderPlus size={15} />
-                          </button>
-                        </Tooltip>
-                      </div>
-                    </div>
+                    <ChatStartScenarios onSelect={handleScenarioSelect} />
                   </div>
                 ) : (
                   <>
@@ -1134,6 +1129,7 @@ export function ChatPage() {
                       <MessageBubble
                         key={msg.id}
                         message={msg}
+                        sessionId={activeSessionId || ''}
                         onSubmitClarification={handleSubmitClarification}
                       />
                     ))}
@@ -1159,6 +1155,7 @@ export function ChatPage() {
                           !state.finalAnswerContent ||
                           visuallyCompletedRunId === state.currentRunId
                         )}
+                        sessionId={activeSessionId || ''}
                         toolCalls={state.toolCalls}
                         modelName={state.modelName}
                         tokenUsage={state.tokenUsage}
@@ -1207,6 +1204,7 @@ export function ChatPage() {
               onChange={(event) => handleImageFiles(event.target.files)}
             />
             <textarea
+              ref={messageInputRef}
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -1248,12 +1246,34 @@ export function ChatPage() {
               </div>
             )}
 
+            {fileAttachments.length > 0 && (
+              <div className="flex max-h-[104px] flex-wrap gap-2 overflow-y-auto px-3 py-2">
+                {fileAttachments.map((file) => (
+                  <div
+                    key={file.id}
+                    className="flex max-w-64 items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1.5 text-xs text-[var(--color-text-secondary)]"
+                  >
+                    <FileText size={14} className="shrink-0" />
+                    <span className="truncate">{file.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeFileAttachment(file.id)}
+                      className="icon-button ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+                      aria-label={`移除附件 ${file.name}`}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="flex flex-wrap items-center gap-2 px-3 py-2">
               <Tooltip title="上传图片" placement="top" mode="dark">
                 <span className="inline-flex">
                   <button
                     type="button"
-                    className="icon-button h-8 w-8 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+                    className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
                     onClick={() => imageInputRef.current?.click()}
                     disabled={state.isStreaming || imageAttachments.length >= 4}
                     aria-label="上传图片"
@@ -1262,12 +1282,23 @@ export function ChatPage() {
                   </button>
                 </span>
               </Tooltip>
-              <div className="flex rounded-md bg-[var(--color-bg-primary)] p-1">
+              <Tooltip title="上传文件" placement="top" mode="dark">
+                <span className="inline-flex">
+                  <FileImportButton
+                    onFile={handleFile}
+                    disabled={state.isStreaming || fileAttachments.length >= 10}
+                    className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-0 text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+                  >
+                    <Paperclip size={16} />
+                  </FileImportButton>
+                </span>
+              </Tooltip>
+              <div className="flex h-8 gap-1 rounded-[10px] bg-[var(--color-bg-primary)] p-1">
                 <Tooltip title="单 Agent" placement="top" mode="dark">
                   <span className="inline-flex">
                     <button
                       type="button"
-                      className={`icon-button h-8 w-8 rounded-sm border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
+                      className={`icon-button h-6 w-6 rounded-[10px] border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
                         targetMode === 'agent'
                           ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
                           : 'border-transparent bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
@@ -1285,7 +1316,7 @@ export function ChatPage() {
                   <span className="inline-flex">
                     <button
                       type="button"
-                      className={`icon-button h-8 w-8 rounded-sm border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
+                      className={`icon-button h-6 w-6 rounded-[10px] border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
                         targetMode === 'team'
                           ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
                           : 'border-transparent bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
@@ -1316,7 +1347,7 @@ export function ChatPage() {
                   <span className="inline-flex">
                     <button
                       type="button"
-                      className={`icon-button h-8 w-8 rounded-md border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
+                      className={`icon-button h-8 w-8 rounded-[10px] border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
                         deepThinking
                           ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
                           : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
@@ -1335,7 +1366,7 @@ export function ChatPage() {
                     <span className="inline-flex">
                       <button
                         type="button"
-                        className="icon-button h-8 w-8 rounded-md border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-opacity duration-200 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-opacity duration-200 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                         onClick={abort}
                         aria-label="停止回复"
                       >
@@ -1348,9 +1379,9 @@ export function ChatPage() {
                     <span className="inline-flex">
                       <button
                         type="button"
-                        className="icon-button h-8 w-8 rounded-md border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-opacity duration-200 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                        className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-opacity duration-200 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                         onClick={handleSend}
-                        disabled={!inputValue.trim() && imageAttachments.length === 0}
+                        disabled={!inputValue.trim() && imageAttachments.length === 0 && fileAttachments.length === 0}
                         aria-label="发送消息"
                       >
                         <Send size={16} />

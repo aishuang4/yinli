@@ -33,6 +33,7 @@ export function FileImportButton({
   return (
     <DesignUpload
       accept={accept}
+      className="file-import-button-upload"
       disabled={disabled || loading}
       maxCount={1}
       showUploadList={false}

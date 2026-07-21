@@ -1,6 +1,6 @@
 # Agent Workstation 当前架构总览
 
-> 状态：2026-07-15 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
+> 状态：2026-07-20 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
 
 ## 项目定位
 
@@ -26,8 +26,8 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 4. 请求中的显式 `mode` 决定第二层 executor：`agent` 为 `single_agent`，`team` 为 `team`。
 5. `runtime_dispatcher.py` 只按 architecture 分发；当前只分发到 ReAct。
 6. `react_runtime.py` 按 executor 执行单 Agent 或 Team。
-7. `runtime_builder.py` 组装模型配置、Skill、ToolScope 和主 Agent runtime spec；Chat 请求不接收持久 Team 或固定成员上下文。
-8. `run_context.py` 在 readiness 通过后注入 Skill prompt 和记忆上下文；记忆注入位于 Skill prompt 后、AskUser clarification / final answer 规则前。
+7. `runtime_builder.py` 组装模型配置、Skill 包路径、ToolScope 和主 Agent runtime spec；Chat 请求不接收持久 Team 或固定成员上下文。
+8. `run_context.py` 在 readiness 通过后按 Workspace、Project、Agent 和请求白名单裁剪可用 Skill catalog，并注入记忆上下文；完整 `SKILL.md` 不预注入 system prompt。
 9. `leader_stream.py` 消费 AgentScope `reply_stream()`，转换文本、工具、权限、Plan Mode、Skill 和 HITL 事件。
 10. `completion.py` 完成消息落库、Trace、Skill 状态和错误收尾，并在轻量 `MemoryAdmissionGate` 后触发 Markdown 记忆提炼和历史记忆持久化。
 11. `background_runs.py` 将后台 Run 与前端 SSE 订阅解耦，并维护 RunState。
@@ -44,6 +44,17 @@ Agent Workstation 是基于 AgentScope 2.0 + Electron + React 的桌面多 Agent
 - Project resource binding 已作为运行时白名单参与 Agent、Skill、MCP Server 和 HTTP Tool 裁剪；资源必须属于 Project 所在 Workspace，Project 只能收窄 Agent 配置。
 - 前端使用统一 Workspace / Project 上下文；Chat、Runs、Trace、Memory 和资源管理按当前上下文筛选，切换 Project 时清理 Chat 与 Team 运行投影。
 - Workspace 与首个 Project 通过 bootstrap API 原子创建；正式 Artifact ownership 留在 Artifact Phase。
+
+## AgentScope 原生 Skills
+
+- 应用层继续负责安装、SQLite、Workspace / Project binding、Agent 配置、权限和 UI；AgentScope 负责运行时 catalog、渐进式披露和内置 `Skill` viewer。
+- Toolkit 通过 `skills_or_loaders` 接收已裁剪的绝对 Skill 包目录；system prompt 只包含 `name`、`description` 和 `dir`，模型实际调用 `Skill` 后才读取完整指令。
+- Skill 正文使用 `scripts/foo.py`、`references/bar.md` 等标准相对路径。模型根据 catalog 中的 `dir` 转成绝对路径后调用普通 Read、Grep、Glob 或 Bash；不使用 `$SKILL_DIR`，也不新增每脚本工具。
+- Skill script 复用单一 `GuardedBash`；本地 execute 权限与 network 权限独立，Skill 不突破 Agent 的 ToolScope、filesystem、审批或黑名单。
+- 持久 DockerWorkspace 会把允许的 Skill 包 seed 到容器 `/workspace/skills`，catalog 披露容器路径；非持久 Docker sandbox 暂不支持 Skills，启动时返回明确错误。
+- 单 Agent 和 Team Member 使用相同 Skill catalog；Team 协调、综合和恢复轮不开放业务 Skill。Subagent frontmatter `skills` 转换为裁剪后的 loader 路径，不再全文拼接。
+- `SKILL_STARTED`、`SKILL_CONTEXT`、`SKILL_FAILED` 和 `SKILL_COMPLETED` 以真实 `Skill` viewer 工具调用为事实源。catalog 可见不创建 active `SkillRun`。
+- zip 安装拒绝缺少 `name` / `description` 的 `SKILL.md`、路径穿越和符号链接；命名、目录名和未知 script 类型以 warning 展示。
 
 ## Team Runtime
 
@@ -85,8 +96,8 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 
 当前在线的是新记忆系统首版，不是旧 memory summarize：
 
-- **运行前注入**：`memory/retrieval.py` 读取 user / agent / global Markdown 摘要和最近 30 天节点树；`run_context.py` 在 readiness 通过后注入主 Agent / Team Lead，隔离 Member session 使用本轮解析后的相同记忆与 Skill 上下文。
-- **Subagent 注入**：`subagents/runtime_context.py` 为子 Agent 注入 frontmatter `skills` 指定的已安装启用 Skill，并用 `subagent:{name}` 作为 agent memory owner 注入长期记忆摘要；`subagents/permission_policy.py` 执行 frontmatter `permissionMode` 并按父 Agent guardrails 上限收窄；`subagents/tool_policy.py` 基于父运行时真实工具池执行 `tools` / `disallowedTools` 裁剪，并同步限制传给子 Agent 的 MCP server 与知识库工具；审计通过 `SUBAGENT_CONTEXT` Runtime Event 记录 loadedSkills、missingSkillRefs、memoryAgentId、memoryInjected 和 permission requested / effective 摘要。
+- **运行前注入**：`memory/retrieval.py` 读取 user / agent / global Markdown 摘要和最近 30 天节点树；`run_context.py` 在 readiness 通过后注入主 Agent / Team Lead，隔离 Member session 使用本轮解析后的相同记忆上下文，并单独注册裁剪后的 AgentScope Skill catalog。
+- **Subagent 注入**：`subagents/runtime_context.py` 把 frontmatter `skills` 指定的已安装启用 Skill 转换为 AgentScope loader 路径，不注入完整 Skill 正文；同时用 `subagent:{name}` 作为 agent memory owner 注入长期记忆摘要。`subagents/permission_policy.py` 执行 frontmatter `permissionMode` 并按父 Agent guardrails 上限收窄；`subagents/tool_policy.py` 基于父运行时真实工具池执行 `tools` / `disallowedTools` 裁剪，并同步限制传给子 Agent 的 MCP server 与知识库工具；审计通过 `SUBAGENT_CONTEXT` Runtime Event 记录 loadedSkills、missingSkillRefs、memoryAgentId、memoryInjected 和 permission requested / effective 摘要。
 - **历史记忆**：底层 `memory_nodes` 只保存用户输入、Agent 最终输出和摘要索引，不保存工具调用过程；写入后同步到 `VectorStoreBackend` 的 `memory_nodes` collection。
 - **Markdown 长期记忆**：user memory、agent memory、global preference memory 分别保存为 `user_memory.md`、`agent_memory.md`、`global_memory.md`，没有旧 `default.md` 兼容读取。
 - **Memory 管理入口**：前端 Memory 页面首版已接入，用户记忆和全局记忆各只有一个管理入口；Agent 记忆按 Agent 选择，每个 Agent 对应一份 `agent_memory.md`；历史记忆按“Agent -> 时间节点 -> 具体记忆”三段式查看，底层使用 `memory_nodes`。页面已支持历史记忆禁用 / 删除 / 恢复、Skill 自进化队列操作、注册失败原因可视化、设置快照、召回质量摘要、召回命中相关性反馈和 `MEMORY_AUDIT` 审计详情。

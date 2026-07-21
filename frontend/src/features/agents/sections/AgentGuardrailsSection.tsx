@@ -1,7 +1,7 @@
 /**
  * AgentGuardrailsSection — Agent 安全边界配置区块。
  *
- * 负责网络、执行隔离、人工审批、工具权限范围和工具超时策略。
+ * 负责网络、执行隔离、工具权限与审批、工具超时策略。
  */
 
 import { FormGrid, NumberField, SelectField, TextField, ToggleField } from '../../../components/form';
@@ -16,6 +16,30 @@ function legacyModeFromProfile(profile: string): 'ask_every_time' | 'accept_edit
   if (profile === 'read_only' || profile === 'ask_every_time') return 'ask_every_time';
   if (profile === 'trusted_tools') return 'bypass';
   return 'accept_edits';
+}
+
+const FORCE_HUMAN_APPROVAL = 'force_human_approval';
+
+function permissionStrategyValue(form: AgentCreatePayload): string {
+  return form.guardrails.humanApproval
+    ? FORCE_HUMAN_APPROVAL
+    : form.guardrails.toolPermissionProfile;
+}
+
+function permissionStrategyHelp(form: AgentCreatePayload): string {
+  if (form.guardrails.humanApproval) {
+    return `当前会对所有可用工具逐次确认；保留的基础权限范围为“${permissionProfileLabel(form.guardrails.toolPermissionProfile)}”。`;
+  }
+  return '只读模式会移除写入、Bash、HTTP 和 MCP；可信工具适合受控沙箱；破坏性确认适合日常开发。';
+}
+
+function permissionProfileLabel(profile: string): string {
+  return {
+    read_only: '只读工具',
+    trusted_tools: '可信工具',
+    confirm_destructive: '破坏性操作确认',
+    ask_every_time: '每次工具调用确认',
+  }[profile] || '破坏性操作确认';
 }
 
 export function AgentGuardrailsSection({
@@ -92,44 +116,39 @@ export function AgentGuardrailsSection({
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2">
-          <div>
-            <div className="text-sm text-[var(--color-text-primary)]">强制人工审批</div>
-            <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-              开启后会覆盖下方权限范围，工具调用按每次确认处理。
-            </div>
-          </div>
-          <ToggleField
-            checked={form.guardrails.humanApproval}
-            onChange={(checked) => onChange({
-              ...form,
-              guardrails: { ...form.guardrails, humanApproval: checked },
-            })}
-            checkedLabel="开启"
-            uncheckedLabel="关闭"
+        <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-3">
+          <SelectField
+            label="工具权限与审批"
+            value={permissionStrategyValue(form)}
+            onChange={(value) => {
+              const strategy = String(value);
+              if (strategy === FORCE_HUMAN_APPROVAL) {
+                onChange({
+                  ...form,
+                  guardrails: { ...form.guardrails, humanApproval: true },
+                });
+                return;
+              }
+              onChange({
+                ...form,
+                guardrails: {
+                  ...form.guardrails,
+                  humanApproval: false,
+                  toolPermissionProfile: strategy as typeof form.guardrails.toolPermissionProfile,
+                  toolPermissionMode: legacyModeFromProfile(strategy),
+                },
+              });
+            }}
+            options={[
+              { label: '只读工具 - 仅读取/搜索文件', value: 'read_only' },
+              { label: '可信工具 - 自动放行', value: 'trusted_tools' },
+              { label: '破坏性操作确认 - 推荐', value: 'confirm_destructive' },
+              { label: '每次工具调用都确认', value: 'ask_every_time' },
+              { label: '强制人工审批 - 所有可用工具均需确认', value: FORCE_HUMAN_APPROVAL },
+            ]}
+            help={permissionStrategyHelp(form)}
           />
         </div>
-
-        <SelectField
-          label="工具权限范围"
-          value={form.guardrails.toolPermissionProfile}
-          disabled={form.guardrails.humanApproval}
-          onChange={(value) => onChange({
-            ...form,
-            guardrails: {
-              ...form.guardrails,
-              toolPermissionProfile: value as typeof form.guardrails.toolPermissionProfile,
-              toolPermissionMode: legacyModeFromProfile(String(value)),
-            },
-          })}
-          options={[
-            { label: '只读工具 - 仅读取/搜索文件', value: 'read_only' },
-            { label: '可信工具 - 自动放行', value: 'trusted_tools' },
-            { label: '破坏性操作确认 - 推荐', value: 'confirm_destructive' },
-            { label: '每次工具调用都确认', value: 'ask_every_time' },
-          ]}
-          help="只读模式会移除写入、Bash、HTTP 和 MCP；可信工具适合受控沙箱；破坏性确认适合日常开发。"
-        />
 
         <NumberField
           label="工具调用超时（秒）"

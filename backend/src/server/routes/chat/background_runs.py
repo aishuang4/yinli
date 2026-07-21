@@ -161,21 +161,25 @@ async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
                 return None
             completed_at = datetime.now(timezone.utc).isoformat()
             update_chat_run_status(run_id, "cancelled", completed_at)
-            return _run_from_persisted_record({
+            restored_run = _run_from_persisted_record({
                 **persisted,
                 "status": "cancelled",
                 "completedAt": completed_at,
             })
+            restored_run.state = _reconcile_terminal_run_state(restored_run)
+            upsert_chat_run_state(run_id, restored_run.state)
+            _persist_latest_assistant_display_snapshot(restored_run, "RUN_CANCELLED", force=True)
+            return restored_run
         if run.status in TERMINAL_RUN_STATUSES:
             return run
-        run.status = "cancelling"
         task = run.async_task
-        update_chat_run_status(run.id, run.status, run.completed_at)
 
+    # AgentScope / provider calls may swallow CancelledError briefly. The UI
+    # must still become terminal immediately, and late events must not revive
+    # the cancelled snapshot.
+    await _finalize_cancelled_run(run)
     if task is not None and not task.done():
         task.cancel()
-    else:
-        await _finalize_cancelled_run(run)
     return run
 
 
@@ -543,6 +547,12 @@ async def _consume_chat_events(run: ChatBackgroundRun, factory: EventStreamFacto
 async def _broadcast(run: ChatBackgroundRun, event: str) -> None:
     event_type = _extract_sse_event_type(event)
     _, event_data = _parse_sse_event(event)
+    is_cancellation_event = (
+        event_type == "RUN_CANCELLED"
+        or event_type == SSE_EVENT_RUNTIME and str(event_data.get("type") or "") == "RUN_CANCELLED"
+    )
+    if run.status in TERMINAL_RUN_STATUSES and not is_cancellation_event:
+        return
     runtime_status = _status_from_runtime_event_chunk(event_type, event)
     if runtime_status:
         if can_transition_run_status(run.status, runtime_status):
@@ -789,7 +799,7 @@ def _persist_run(run: ChatBackgroundRun) -> None:
 
 
 def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
-    return ChatBackgroundRun(
+    run = ChatBackgroundRun(
         id=record["id"],
         session_id=record["sessionId"],
         workspace_id=record.get("workspaceId", "default"),
@@ -805,6 +815,32 @@ def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
         event_count=int(record.get("eventCount") or len(record.get("events") or [])),
         state=get_chat_run_state(str(record["id"])) or {},
         persisted=True,
+    )
+    if run.status in TERMINAL_RUN_STATUSES:
+        run.state = _reconcile_terminal_run_state(run)
+    return run
+
+
+def _reconcile_terminal_run_state(run: ChatBackgroundRun) -> dict:
+    """用顶层终态修正持久化快照，避免旧审批或运行中工具继续转圈。"""
+
+    runtime_type = {
+        "completed": "RUN_COMPLETED",
+        "failed": "RUN_FAILED",
+        "cancelled": "RUN_CANCELLED",
+    }.get(run.status)
+    if runtime_type is None:
+        return run.state or initial_run_state(run)
+    return project_event(
+        run.state or initial_run_state(run),
+        SSE_EVENT_RUNTIME,
+        {
+            "type": runtime_type,
+            "status": run.status,
+            "timestamp": run.completed_at or datetime.now(timezone.utc).isoformat(),
+            "payload": {"completedAt": run.completed_at},
+        },
+        run,
     )
 
 
