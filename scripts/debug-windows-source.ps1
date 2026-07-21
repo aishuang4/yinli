@@ -128,6 +128,13 @@ try {
   Write-Host 'Compiling Electron main process...' -ForegroundColor Cyan
   Push-Location $frontendPath
   try {
+    # prepare-electron-dist.mjs needs dist for desktop-package assembly even in dev mode.
+    if (-not (Test-Path (Join-Path $frontendPath 'dist\index.html'))) {
+      Write-Host 'Building frontend once for Electron desktop metadata...' -ForegroundColor Cyan
+      & npm.cmd run build
+      if ($LASTEXITCODE -ne 0) { throw 'Frontend build failed.' }
+    }
+
     & npm.cmd run electron:compile
     if ($LASTEXITCODE -ne 0) { throw 'Electron main-process compilation failed.' }
 
