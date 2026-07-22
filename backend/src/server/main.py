@@ -19,6 +19,7 @@ from src.agents.agentscope_usage_patch import patch_agentscope_usage_events
 from src.config.settings import settings
 from src.storage.database import init_db, close_db
 from src.server.routes.chat.team_runtime.maintenance import maintain_team_runtime_runs
+from src.server.local_access import LocalAccessMiddleware
 
 
 @asynccontextmanager
@@ -38,7 +39,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     if any(team_maintenance.values()):
         print(f"[TeamRuntime] maintenance: {team_maintenance}")
-    print(f"[Server] 引力 YINLI Backend started on port {settings.port}")
+    print(f"[Server] 引力 YINLI Backend started on {settings.host}:{settings.port}")
     deepseek_key_display = ("***" + settings.deepseek_api_key[-4:]) if settings.deepseek_api_key else "NOT SET"
     print(f"[Server] DeepSeek API Key: {deepseek_key_display}")
 
@@ -58,6 +59,8 @@ app = FastAPI(
 )
 
 # CORS 配置 — 开发模式允许前端 dev server 跨域
+# 本地访问中间件必须覆盖全部路由；即使误绑定到 0.0.0.0，也不接受局域网请求。
+app.add_middleware(LocalAccessMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

@@ -9,7 +9,6 @@ from typing import Any, Literal
 from agentscope.message import TextBlock, ToolResultState
 from agentscope.tool import Grep, ToolChunk
 
-from src.agents.runtime_types import WORKSPACE_DIR
 from src.tools.scoped_paths import resolve_workspace_path
 
 
@@ -35,6 +34,11 @@ class ScopedGrep(Grep):
         "xml": {".xml"},
     }
 
+    def __init__(self, *, base_dir: str | None = None, scope_dir: str | None = None) -> None:
+        super().__init__()
+        self.base_dir = base_dir
+        self.scope_dir = scope_dir
+
     async def __call__(  # type: ignore[override]
         self,
         pattern: str,
@@ -55,7 +59,11 @@ class ScopedGrep(Grep):
         n: bool = True,
         **kwargs: Any,
     ) -> ToolChunk:
-        resolved_path = resolve_workspace_path(path) if path else WORKSPACE_DIR
+        resolved_path = resolve_workspace_path(
+            path or ".",
+            base_dir=self.base_dir,
+            scope_dir=self.scope_dir,
+        )
         if shutil.which("rg") is None:
             return self._python_fallback(
                 pattern=pattern,

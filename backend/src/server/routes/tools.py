@@ -319,7 +319,7 @@ def _system_tool_records() -> list[SystemToolResponse]:
         },
         {
             "name": "Bash",
-            "description": "执行 Shell 命令，受权限和黑名单约束。",
+            "description": "执行 Shell 命令；黑名单仅拦截明显误操作，强隔离需使用 Docker 沙盒。",
             "category": "execution",
             "action": "execute",
             "risk": "high",

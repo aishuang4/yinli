@@ -1,7 +1,8 @@
 # Subagent 委托能力设计
 
-> 状态：M1 已实现并可前端测试，M2+ 继续按本文分期推进。
+> 状态：M1 已实现，M2 在线能力继续稳定化；M3 仅按精简持久任务方案推进。
 > 外部参考：Claude Code sub-agents 文档。引力 YINLI 尽可能借鉴官方设计和实现思路，包括文件定义、frontmatter 字段、独立上下文、工具裁剪、模型继承、前后台、恢复、嵌套和隔离等能力；但稳定行为以本文和 `docs/chat-sse-event-contract.md` 为准，任何偏离官方设计的地方都必须写明原因。
+> M3 详细设计：单进程持久任务、transcript、Supervisor、分级恢复和前端事件映射统一见 `docs/subagent-task-runtime-redesign.md`；嵌套、隔离和长期兼容特性不属于当前实施计划。
 
 ## 设计结论
 
@@ -46,7 +47,7 @@ V1.0 做“前台、一次性、可审计”的 Subagent，作为引力 YINLI �
 - 子 Agent fresh context 执行，不读取主会话历史，只接收委托任务、必要环境信息、当前项目规则摘要、git 状态快照、运行前记忆摘要和预加载 Skill。内置 `explorer` / `plan` 为低成本研究代理，默认跳过项目规则和 git 状态；自定义 Subagent 默认加载这些启动上下文。
 - 子 Agent 结果以短摘要返回给主 Agent；完整过程进入 Trace，RunState 只做轻量委托状态展示。
 - 子 Agent 继承父 Agent guardrails 的上限，Subagent 文件配置只能进一步收窄权限，不能放大权限。
-- 支持单 Agent executor；Team executor 使用独立控制工具组建 Member，不向临时 Member 注入 Subagent 委托工具。
+- 当前只支持 single-agent executor；Team executor 不注入 `DelegateTask`，是否仅允许 Leader 委托需后续单独决策。
 
 当前 M1 已落地：
 
@@ -54,23 +55,16 @@ V1.0 做“前台、一次性、可审计”的 Subagent，作为引力 YINLI �
 - `backend/src/tools/delegate_task.py` 已实现 `DelegateTask` 工具。
 - `backend/src/server/routes/subagents.py` 已提供定义列表和 invocation 查询 API。
 - `backend/src/storage/database.py` 已新增 `subagent_invocations`，并在启动迁移中删除旧 `callable_agents` / `max_depth` / `subagent_calls` 遗留列。
-- `backend/src/server/routes/chat/react_runtime.py` 已在主 Agent / Team Leader 运行时注入 Subagent 摘要提示和 `DelegateTask`。
+- `backend/src/server/routes/chat/react_runtime.py` 已在 single-agent 主 Agent 运行时注入 Subagent 摘要提示和 `DelegateTask`；Team 当前未注入。
 - `backend/src/subagents/runtime_context.py` 已支持 frontmatter `skills` 预加载已安装启用 Skill，并以 `subagent:{name}` 作为 agent memory owner 注入 user / agent / global Markdown 摘要和最近 30 天历史记忆索引。
 - `frontend/src/features/chat/ProcessTimeline.tsx` 已对 `DelegateTask` 做 Subagent 专用展示：标题显示 `Subagent · {name}`，展开后只展示 Markdown 委托任务和摘要，不展示原始调用 JSON。
 - `frontend/src/pages/SubagentsPage.tsx` 已提供 Subagent 管理入口：展示定义、解析错误、来源路径、工具策略和 invocation 审计历史。
 - `.agents/subagents/explorer.md` 已作为项目级只读探索 Subagent 示例定义；`.agents/subagents/debugger.md` 和 `.agents/subagents/general-purpose.md` 已作为项目级动作型 Subagent 定义，实际能力仍以父 Agent guardrails 为上限。
 
-V1.0 不做：
-
-- 不支持后台并发 Subagent，后续优先参考官方 `background` 语义，再落到 AW 的后台生命周期、取消、权限提示和 UI 恢复模型。
-- 不支持 resume 已完成或中断的 Subagent，后续优先参考官方 `SendMessage` / agent id 语义，再落到 AW 的 transcript、定位和恢复安全模型。
-- 不支持嵌套 Subagent，后续优先参考官方深度限制，再补 AW 的权限继承、Trace 树和防循环策略。
-- 不支持 fork 当前完整会话，后续作为实验能力补齐。
-- 不支持 worktree 隔离写入，后续按 `isolation: worktree` 语义补齐。
-- 不新增 `runtime.kind=subagent` 独立分支；当前 `DelegateTask` 委托继续作为 ReAct 内部能力演进。
-- 不将旧 Subagent 配置入口改造成新能力入口。
-
-这些能力进入实现时，以官方设计为首选方案；只有在数据契约、权限语义、测试矩阵和 UI 恢复都稳定后，才进入对应版本。
+V1.0 不支持后台并发、持久 transcript、跨进程恢复和运行中消息；这些能力只按
+`docs/subagent-task-runtime-redesign.md` 的 M3 单进程方案推进。嵌套、fork、worktree
+隔离、更多 frontmatter 兼容字段仅作为产品调研素材，不是当前路线。始终不新增
+`runtime.kind=subagent`，也不将旧 Subagent 配置入口改造成新能力入口。
 
 ## 官方设计借鉴矩阵
 
@@ -80,20 +74,12 @@ V1.0 不做：
 | `name` / `description` 决定自动委托 | 主 Agent system prompt 注入可用定义，按 description 自主调用 `DelegateTask` | M1 已实现 |
 | 独立 context window，只返回摘要 | 子 Agent fresh context，完整过程进 Trace，摘要回主 Agent | M1 已实现 |
 | 工具 allowlist / denylist | 借鉴官方规则：先 deny、再 allow，并与父工具池交集；内部 `FinalAnswerStart` 始终保留 | M1 已实现 |
-| 模型继承 / 指定模型 | 支持 `inherit` 和本项目模型配置可解析的具体模型 | M1 已实现 |
+| 模型继承 / 指定模型 | 已支持字段解析和指定模型；`inherit` 继承父本轮实际模型的缺口列入 M2.1 | 待修复 |
 | 项目 / 用户 scope | 使用 `.agents/subagents/` 和 `~/.agent-workstation/subagents/` | M1 已实现 |
-| 托管 / 会话 / Plugin scope | 借鉴官方优先级；实现前需统一插件和托管配置模型 | 候选 |
 | `permissionMode` | 支持 `default`、`acceptEdits`、`auto`、`dontAsk`、`bypassPermissions`、`plan`，并按父 Agent guardrails 上限收窄 | M2 部分实现 |
-| MCP server scoped to subagent | 借鉴官方引用 / inline 设计；执行前补 MCP 权限和生命周期评审 | 候选 |
-| hooks | 借鉴官方 frontmatter hooks；执行层复用 AgentScope hooks / Middleware 模型 | 候选 |
 | `skills` 预加载 | 解析 frontmatter `skills` 中的 Skill id / name，只加载已安装启用 Skill，并注入完整 Skill manual | M1 已实现 |
-| `memory` 持久范围 | 借鉴官方 scope 概念；落地时映射到本项目新记忆 owner 和审计模型 | 候选 |
-| 前台 / 后台 | 借鉴官方前后台模型；AW 需要补取消、权限提示、RunState 恢复和 UI 面板 | 候选 |
-| resume / SendMessage | 借鉴官方 agent id/name 恢复心智；AW 可使用自己的恢复 API 和 transcript 模型 | 候选 |
-| 嵌套 Subagent | 借鉴官方固定深度上限；AW 需补调度树、Trace 树和防循环测试 | 候选 |
-| fork 当前会话 | 借鉴官方 fork 概念，作为实验能力单独开关 | 候选 |
-| `isolation: worktree` | 借鉴官方 worktree 隔离，可选择 git worktree 或 Docker workspace clone | 候选 |
-| 显式 @-mention / 选择指定 Subagent | 借鉴官方显式调用心智，需要先定义输入层和工具调用优先级 | 候选 |
+| 前台 / 后台 | M3 使用单进程 Supervisor、持久 task 和独立前端组件 | 待 spike 后实施 |
+| resume / SendMessage | 以 `invocationId` 定位；恢复等级由 AgentScope checkpoint spike 决定 | 待 spike 后实施 |
 
 ## 稳定性原则
 
@@ -102,9 +88,9 @@ V1.0 不做：
 - 先更新 `docs/chat-sse-event-contract.md`，再实现新的 Runtime Event / RunState 投影。
 - 先定义 SQLite / Pydantic / TypeScript 数据结构，再接入运行时。
 - 权限能力必须以父 Agent guardrails 为上限，不允许 Subagent 文件扩大权限。
-- 后台、恢复、嵌套和 fork 必须有可重放 transcript、取消语义、错误恢复和最小回归测试。
+- 后台和恢复必须有持久 transcript、取消语义、错误收口和最小回归测试。
 - 前端只消费 DisplaySnapshot / RunState，不依赖 raw SSE 或临时 trace payload。
-- 以官网设计作为默认参考方案；每项能力还必须写成本项目自己的验收标准，确保在 AW 内稳定可靠。
+- 外部产品只作为能力参考；每项能力必须先有本项目产品理由和验收标准。
 
 ## 数据模型
 
@@ -214,7 +200,7 @@ effective_tools = tools ? (after_deny ∩ tools) : after_deny
 - 同时出现在两者中的工具最终不可用。
 - 支持精确工具名、知识库自定义工具名和 MCP server 级模式：`mcp__<server>`、`mcp__<server>__*`、`mcp__*`。策略结果会同步裁剪传给子 Agent 的 MCP server `enable_tools` 与知识库工具列表。
 - 依赖主会话 UI 或会话状态的工具不进入 Subagent，例如 AskUser 类交互工具、Plan mode 切换工具、定时唤醒工具和 MCP 等待工具。
-- `DelegateTask` 是否进入子 Agent 工具池决定是否允许嵌套；M1 默认不注入，后续按固定深度限制开放。
+- M1 至 M3 不向子 Agent 注入 `DelegateTask`，因此不允许嵌套；未来如有明确产品需求必须另行设计，不能只靠增加深度字段开放。
 
 ## 后端模块
 
@@ -362,7 +348,7 @@ V1.0 最小 UI：
 - [x] 新增 Markdown + YAML frontmatter loader / registry 和定义列表 API。
 - [x] 新增 `subagent_invocations` 审计表。
 - [x] 新增 `DelegateTask` 工具和 `SubagentRunner`。
-- [x] 子 Agent 支持 fresh context、只读工具、模型继承。
+- [x] 子 Agent 支持 fresh context、只读工具和 `model` 字段；`inherit` 的父本轮实际模型继承仍列入 M2.1。
 - [x] 新增 `SUBAGENT_STARTED` / `SUBAGENT_CONTEXT` / `SUBAGENT_COMPLETED` / `SUBAGENT_FAILED`。
 - [x] Chat 将 `DelegateTask` 专门展示为 Subagent 委托卡片，Trace 可看详情。
 - [x] Subagents 管理页展示定义、加载错误、来源路径、工具策略和 invocation 历史。
@@ -374,37 +360,35 @@ V1.0 最小 UI：
 - [x] 子 Agent HITL 已结构化为 `SUBAGENT_WAITING_HUMAN` / invocation `waiting`，不再作为普通失败处理。
 - [x] `/api/chat/resume` 已支持恢复 child agent，并根据恢复结果更新 `subagent_invocations`。
 
-### M2：动作型 Subagent 与 HITL
+### M2：动作型 Subagent 与 HITL（部分完成）
 
-- 支持 Write/Edit/Bash/Http 等可能触发权限的工具。
-- 完善动作型工具下的权限体验：HITL 透传、resume、用户审批和 `permissionMode` 的 UI 说明。
-- 子 Agent HITL 透传父 Run，可 resume；任何 Agent 消息都不能替代用户审批。child resume 完成后，父 `DelegateTask` 会自动拿回摘要并继续父 ReAct。
-- 完整支持 `mcpServers` 引用和 inline MCP server 生命周期，受父会话 MCP 策略限制。
-- 执行 frontmatter `hooks` 中的 `PreToolUse`、`PostToolUse`、`Stop`，并支持主会话侧 `SubagentStart` / `SubagentStop` hook 事件。
-- `SUBAGENT_PROGRESS` 投影到 RunState。
-- 增加更多内置定义的安装 / 覆盖策略。
+- 已具备 Write/Edit/Bash/Http 等可能触发权限的工具，实际能力受父权限上限裁剪。
+- 已具备子 Agent HITL 透传和当前进程内 resume；任何 Agent 消息都不能替代用户审批。
+- [ ] 补齐动作型工具的权限 UI、拒绝路径和 resume 回归测试。
+- [ ] 收紧子 Agent 关键进度投影，不扩充新的 frontmatter 能力。
 
-### M3：后台与恢复
+### M2.1：前台链路稳定性
 
-- Subagent invocation 持久 transcript。
-- 支持 `background`：前台阻塞等待结果，后台并发运行并在完成后把结果消息回送主会话。
-- 支持取消、继续发送消息和 `SendMessage` 式恢复；恢复时通过 agent id / name 定位同一 Subagent 实例，避免名称复用误投。
-- 支持 Subagent transcript 独立于主会话压缩和清理；主会话压缩不删除子 Agent 历史。
-- Chat 增加 Subagent panel 或 DisplaySnapshot `subagents[]`。
-- 支持同一 session 内 resume 某个 Subagent invocation。
+- [ ] 子任务失败返回结构化 error observation，不无条件击穿父 Run。
+- [ ] `model: inherit` 使用父 Agent 本轮实际解析的模型配置。
+- [ ] 未预期异常和取消都将 invocation 收口到明确终态。
+- [ ] HITL resume 后的 child 事件补齐 `invocationId`、`toolCallId`、`subagentName` 和稳定 seq。
 
-### M4：隔离与嵌套
+### M3：单进程持久任务
 
-- 支持 `isolation=worktree` 或 Docker workspace clone。
-- 支持嵌套 Subagent，按官网使用固定深度上限，达到上限后不再注入 `DelegateTask`。
-- 支持 fork 当前主会话上下文，作为实验能力单独开关。
+- 先验证 child / parent AgentScope checkpoint，再确定 exact resume、transcript replay 或显式 restart。
+- 复用并扩展 `subagent_invocations`，新增一张规范化 transcript 表。
+- 使用进程内 `SubagentSupervisor` 支持 background 和单一并发上限，不引入 lease / heartbeat / 多 Worker claim。
+- 通过 `invocationId` 查询、取消和发送消息，禁止按名称定位运行实例。
+- transcript 独立于主会话压缩；完整内容按需读取，不进入 RunState 常驻状态。
+- Chat 使用独立 Subagent 组件：前台内联、后台列表、共用 Detail Drawer。
+- 后端重启后遗留 running task 先标记 `interrupted`，恢复能力严格服从 spike 结论。
 
-### M5：长期兼容能力
+### 未来候选，非当前计划
 
-- 托管设置、运行时会话注入和 Plugin `agents/` scope 全部接入 registry 优先级。
-- 执行 frontmatter `memory`：支持 `user`、`project`、`local` 三种持久记忆范围，并和本项目新记忆系统做 owner / 路径映射。
-- 支持 `effort` 与 `initialPrompt`，分别用于模型努力等级覆盖和“把 Subagent 作为主会话 Agent 启动”的入口。
-- 支持显式 @-mention / UI 选择 Subagent，保证指定 Subagent 运行；自然语言仍由主 Agent 根据 description 判断是否委托。
+嵌套 Subagent、worktree/Docker isolation、fork 会话、托管/Plugin scope、scoped/inline
+MCP、frontmatter hooks、`memory`、`effort`、`initialPrompt` 和显式 @-mention 只有在
+出现明确产品需求后重新设计，不在当前源码中预埋字段、事件或空抽象。
 
 ## 风险与决策点
 
@@ -413,7 +397,7 @@ V1.0 最小 UI：
 - **缓存污染**：子 Agent 必须用独立 cache key，不共享主 Agent 实例。
 - **权限错配**：工具策略必须做交集，任何 Subagent 文件配置都不能绕过父 Agent guardrails。
 - **上下文膨胀**：`DelegateTask` 返回给主 Agent 的 Observation 必须截断，完整 transcript 进 Trace。
-- **Team 混用**：只给 Team Leader 注入，避免临时 Member 再动态拉 Subagent 导致调度树不可控。
+- **Team 混用**：临时 Member 默认不注入 `DelegateTask`；是否允许 Team Leader 委托需先核对当前注入事实和总并发预算，不作为 M3 验收前提。
 - **旧入口误用**：旧 Subagent 配置入口已从 API、前端类型和运行模型中移除，不作为新 UI、API 或 Runtime 的事实源。
 
 ## 验收标准

@@ -26,6 +26,7 @@
 ## 待实施设计
 
 - `docs/agentscope-native-skills-migration.md`：将应用层 Skill 全文注入迁移到 AgentScope 原生 `LocalSkillLoader`、统一 `Skill` viewer 和渐进式披露的第一版设计。
+- `docs/subagent-task-runtime-redesign.md`：将 Subagent 从 blocking 委托升级为适合单进程桌面应用的持久任务实体，覆盖 transcript、Supervisor、通信、分级恢复和前端事件投影。
 
 ## 后续路线
 

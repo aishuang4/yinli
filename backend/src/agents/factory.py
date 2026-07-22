@@ -145,7 +145,11 @@ def _build_context_config() -> ContextConfig:
 
 
 class GuardedBash(Bash):
-    """带用户黑名单与 Windows 原生命令解释器支持的 Shell 工具。"""
+    """带提示级黑名单与 Windows 原生命令解释器支持的 Shell 工具。
+
+    黑名单用于拦截明显误操作，不是可抵抗命令混淆的安全沙箱；强隔离依赖
+    DockerWorkspace 与权限审批。
+    """
 
     description: str = """Executes a local shell command and returns its output.
 
@@ -391,12 +395,13 @@ def _create_default_toolkit(
     permission_profile = guardrails.permission_profile if guardrails else UnifiedPermissionProfile()
     read_only = permission_profile.tool_policy == ApprovalPolicy.READ_ONLY
     scope = tool_scope or RuntimeToolScope()
+    filesystem_scope = _safe_workspace_dir(guardrails)
 
     local_tools = [
         *((
-            ScopedRead(),
-            ScopedGrep(),
-            ScopedGlob(),
+            ScopedRead(base_dir=workspace_dir, scope_dir=filesystem_scope),
+            ScopedGrep(base_dir=workspace_dir, scope_dir=filesystem_scope),
+            ScopedGlob(base_dir=workspace_dir, scope_dir=filesystem_scope),
             AskUser(),
             FinalAnswerStart(),
             MemoryNodeTree(
@@ -413,7 +418,10 @@ def _create_default_toolkit(
         *(extra_tools or []),
     ]
     if include_default_tools and not read_only:
-        local_tools.extend([ScopedWrite(base_dir=workspace_dir), ScopedEdit(base_dir=workspace_dir)])
+        local_tools.extend([
+            ScopedWrite(base_dir=workspace_dir, scope_dir=filesystem_scope),
+            ScopedEdit(base_dir=workspace_dir, scope_dir=filesystem_scope),
+        ])
 
     if scope.allow_bash and permission_profile.can_execute:
         local_tools.append(

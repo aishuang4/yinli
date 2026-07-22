@@ -9,7 +9,6 @@ from agentscope.message import TextBlock
 from agentscope.tool import Glob
 from agentscope.tool._response import ToolChunk
 
-from src.agents.runtime_types import WORKSPACE_DIR
 from src.tools.scoped_paths import resolve_workspace_path
 
 
@@ -34,6 +33,11 @@ class ScopedGlob(Glob):
         "sessions",
     }
     max_results: ClassVar[int] = 500
+
+    def __init__(self, *, base_dir: str | None = None, scope_dir: str | None = None) -> None:
+        super().__init__()
+        self.base_dir = base_dir
+        self.scope_dir = scope_dir
 
     def _is_ignored_directory(self, path: str) -> bool:
         return os.path.basename(os.path.normpath(path)) in self.ignored_directories
@@ -132,7 +136,11 @@ class ScopedGlob(Glob):
     ) -> ToolChunk:
         """执行受控 Glob，并提示结果可能被截断。"""
 
-        base_dir = resolve_workspace_path(path) if path else WORKSPACE_DIR
+        base_dir = resolve_workspace_path(
+            path or ".",
+            base_dir=self.base_dir,
+            scope_dir=self.scope_dir,
+        )
         if not os.path.exists(base_dir):
             return ToolChunk(
                 content=[TextBlock(text=f"Directory not found: {base_dir}")],

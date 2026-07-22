@@ -10,12 +10,17 @@ from src.tools.scoped_paths import resolve_workspace_path
 
 
 class ScopedRead(Read):
-    """兼容绝对路径与项目相对路径的 Read。"""
+    """只读取 filesystem scope 内文件的 Read。"""
 
     description: str = (
-        "Reads a file from the local filesystem. Accepts either an absolute "
-        "path or a path relative to the current project workspace."
+        "Reads a file within the current project filesystem scope. Accepts an "
+        "in-scope absolute path or a path relative to the current workspace."
     )
+
+    def __init__(self, *, base_dir: str | None = None, scope_dir: str | None = None) -> None:
+        super().__init__()
+        self.base_dir = base_dir
+        self.scope_dir = scope_dir
 
     async def __call__(  # type: ignore[override]
         self,
@@ -36,4 +41,8 @@ class ScopedRead(Read):
         )
 
     def _resolve_file_path(self, file_path: str) -> str:
-        return resolve_workspace_path(file_path)
+        return resolve_workspace_path(
+            file_path,
+            base_dir=self.base_dir,
+            scope_dir=self.scope_dir,
+        )

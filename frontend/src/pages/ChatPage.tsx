@@ -13,251 +13,26 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo, type WheelEvent } from 'react';
-import { AlertCircle, Bot, Boxes, ChevronDown, FileText, FolderKanban, ImagePlus, MessageSquare, Paperclip, PanelLeftClose, PanelLeftOpen, Plus, Search, Send, Settings, Square, Trash2, X } from 'lucide-react';
-import {
-  SparkDeepThinkLine,
-  SparkReinforcementLearningLine,
-  SparkRenyizhuanrenyiAnyToanyLine,
-} from '@agentscope-ai/icons';
-import { Empty, Select, Spinner, Tag, Tooltip } from '@agentscope-ai/design';
+import { Bot, ChevronDown, MessageSquare, PanelLeftOpen, Plus, Settings } from 'lucide-react';
+import { Tag, Tooltip } from '@agentscope-ai/design';
 import { useEventStream } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useProjectResources } from '../hooks/useProjectResources';
 import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
 import { useAppStore } from '../stores/appStore';
 import { createId } from '../utils/id';
-import { FileImportButton } from '../components/FileImportButton';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList';
 import { TeamConsolePanel } from '../features/chat/TeamDisplayBlock';
 import { teamConsoleFromSnapshot } from '../features/team-runtime/teamEventReducer';
 import { FloatingPlanDock } from '../features/chat/FloatingPlanDock';
 import { ChatStartScenarios } from '../features/chat/ChatStartScenarios';
-import { isAskUserToolName } from '../features/chat/humanInteractionUtils';
+import { ChatComposer } from '../features/chat/ChatComposer';
+import { ChatHistoryPanel } from '../features/chat/ChatHistoryPanel';
+import { mergeResolvedClarificationFeedbackIntoReplies } from '../features/chat/clarificationHistory';
 import type { ChatFileAttachment, ChatFilePayload, ChatImageAttachment, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
-import { DISPLAY_EVENTS, type DisplayItem } from '../types/displayEvents';
 
 const HISTORY_PANEL_TRANSITION_MS = 260;
-
-function pickDisplayItemString(item: DisplayItem, keys: string[]): string {
-  for (const key of keys) {
-    const value = item.data[key];
-    if (value === undefined || value === null) continue;
-    const text = String(value);
-    if (text) return text;
-  }
-  return '';
-}
-
-function mergeResolvedClarificationFeedbackIntoReplies(messages: LocalMessage[]): LocalMessage[] {
-  const merged: LocalMessage[] = [];
-  let pendingClarification: DisplayItem | null = null;
-
-  for (const message of messages) {
-    if (message.role !== 'assistant') {
-      merged.push(message);
-      continue;
-    }
-
-    const storedAskUserItem = askUserToolItemFromMessage(message);
-    if (storedAskUserItem && !message.content.trim()) {
-      if (hasToolOutput(storedAskUserItem)) {
-        pendingClarification = storedAskUserItem;
-        continue;
-      }
-      merged.push(message);
-      continue;
-    }
-
-    const clarificationItem = processItemFromResolvedClarificationMessage(message);
-    if (clarificationItem && isWaitingClarificationMessage(message)) {
-      continue;
-    }
-    if (clarificationItem && !message.content.trim()) {
-      if (hasToolOutput(clarificationItem)) {
-        pendingClarification = clarificationItem;
-      }
-      continue;
-    }
-
-    if (pendingClarification) {
-      merged.push({
-        ...message,
-        displaySnapshot: prependProcessItemToMessageSnapshot(message, pendingClarification),
-      });
-      pendingClarification = null;
-      continue;
-    }
-
-    merged.push(message);
-  }
-
-  if (pendingClarification) {
-    merged.push({
-      id: `assistant-clarification-${pendingClarification.id}`,
-      role: 'assistant',
-      content: '',
-      createdAt: pendingClarification.createdAt,
-      displaySnapshot: snapshotFromProcessItem(pendingClarification, 'waiting'),
-    });
-  }
-
-  return merged;
-}
-
-function askUserToolItemFromMessage(message: LocalMessage): DisplayItem | null {
-  const items = (message.displaySnapshot?.actors || [])
-    .flatMap((actor) => Array.isArray(actor.items) ? actor.items : []);
-  return items.find((item) => (
-    item.event.startsWith('tool.') &&
-    isAskUserToolName(pickDisplayItemString(item, ['name', 'toolName', 'rawName']))
-  )) || null;
-}
-
-function hasToolOutput(item: DisplayItem): boolean {
-  return Boolean(pickDisplayItemString(item, ['outputPreview', 'output', 'result', 'error']).trim());
-}
-
-function isWaitingClarificationMessage(message: LocalMessage): boolean {
-  const feedbackBlock = message.displaySnapshot?.blocks?.find((block) => block.block === 'feedback');
-  const approval = feedbackBlock?.data?.approval;
-  if (!approval || typeof approval !== 'object') return false;
-  const status = String((approval as Record<string, unknown>).status || feedbackBlock.status || '');
-  return status === 'waiting' && !message.clarificationResolved;
-}
-
-function processItemFromResolvedClarificationMessage(message: LocalMessage): DisplayItem | null {
-  const feedbackBlock = message.displaySnapshot?.blocks?.find((block) => block.block === 'feedback');
-  const approval = feedbackBlock?.data?.approval;
-  if (!approval || typeof approval !== 'object') return null;
-  const record = approval as Record<string, unknown>;
-  if (String(record.kind || record.type || '') !== 'clarification') return null;
-
-  const questions = Array.isArray(record.questions) ? record.questions : [];
-  const inputPreview = [
-    `模型反问：${String(record.title || '需要补充信息').trim()}`,
-    String(record.description || '').trim() ? `说明：${String(record.description || '').trim()}` : '',
-    ...questions.flatMap((question, index) => {
-      if (!question || typeof question !== 'object') return [];
-      const label = String((question as Record<string, unknown>).label || '').trim();
-      return label ? [`${index + 1}. ${label}`] : [];
-    }),
-  ].filter(Boolean).join('\n');
-  const outputPreview = extractClarificationAnswerFromMessage(message, record);
-  const interactionId = String(record.interactionId || message.id || 'clarification');
-  const createdAt = String(record.createdAt || message.createdAt || '');
-
-  return {
-    id: `clarification-${interactionId}`,
-    event: outputPreview ? DISPLAY_EVENTS.TOOL_COMPLETED : DISPLAY_EVENTS.TOOL_STARTED,
-    targetId: `clarification-${interactionId}`,
-    status: outputPreview ? 'completed' : 'waiting',
-    createdAt,
-    updatedAt: message.createdAt || createdAt,
-    data: {
-      name: 'AskUser',
-      inputPreview,
-      outputPreview,
-      outputSize: outputPreview.length,
-      outputTruncated: false,
-      error: '',
-    },
-  };
-}
-
-function extractClarificationAnswerFromMessage(message: LocalMessage, approval: Record<string, unknown>): string {
-  const fromApproval = extractClarificationAnswerFromApproval(approval);
-  if (fromApproval) return fromApproval;
-  return extractClarificationAnswerFromMessageContent(message.content);
-}
-
-function extractClarificationAnswerFromApproval(approval: Record<string, unknown>): string {
-  const preview = approval.externalResultsPreview;
-  if (!preview || typeof preview !== 'object' || Array.isArray(preview)) return '';
-  const values = Object.values(preview as Record<string, unknown>)
-    .map((value) => String(value || '').trim())
-    .filter(Boolean);
-  return values.join('\n');
-}
-
-function extractClarificationAnswerFromMessageContent(content: string): string {
-  const text = String(content || '');
-  if (!text.includes('针对上一个补充信息请求，用户回答如下')) return '';
-  const answerLine = [...text.split('\n')]
-    .map((line) => line.trim())
-    .reverse()
-    .find((line) => line.startsWith('- ') && !line.startsWith('- 原始请求:') && line.includes(':'));
-  if (!answerLine) return '';
-  const [, answer = ''] = answerLine.split(/:(.*)/s);
-  return answer.trim();
-}
-
-function prependProcessItemToMessageSnapshot(message: LocalMessage, item: DisplayItem) {
-  const snapshot = message.displaySnapshot;
-  const resolvedItem = resolveClarificationProcessItem(item);
-  if (!snapshot) return snapshotFromProcessItem(resolvedItem, message.error ? 'failed' : 'completed');
-  const actors = Array.isArray(snapshot.actors) ? [...snapshot.actors] : [];
-  if (actors.length === 0) {
-    return {
-      ...snapshot,
-      actors: snapshotFromProcessItem(resolvedItem, message.error ? 'failed' : 'completed').actors,
-    };
-  }
-  const firstActor = actors[0];
-  const existingItems = Array.isArray(firstActor.items) ? firstActor.items : [];
-  if (existingItems.some((existing) => existing.id === resolvedItem.id || existing.targetId === resolvedItem.targetId)) {
-    return snapshot;
-  }
-  actors[0] = {
-    ...firstActor,
-    items: [resolvedItem, ...existingItems],
-  };
-  return { ...snapshot, actors };
-}
-
-function resolveClarificationProcessItem(item: DisplayItem): DisplayItem {
-  const inputPreview = pickDisplayItemString(item, ['inputPreview', 'input', 'args']);
-  const storedOutput = pickDisplayItemString(item, ['outputPreview', 'output', 'result', 'error']);
-  return {
-    ...item,
-    event: storedOutput ? DISPLAY_EVENTS.TOOL_COMPLETED : item.event,
-    status: storedOutput ? 'completed' : item.status,
-    data: {
-      ...item.data,
-      inputPreview,
-      input: inputPreview,
-      outputPreview: storedOutput,
-      output: storedOutput,
-      outputSize: storedOutput.length,
-      outputTruncated: false,
-      error: '',
-    },
-  };
-}
-
-function snapshotFromProcessItem(item: DisplayItem, status: string) {
-  return {
-    version: 3 as const,
-    mode: 'single_agent' as const,
-    actors: [{
-      id: 'single-agent',
-      role: 'single' as const,
-      agentId: '',
-      agentName: 'Agent',
-      status,
-      task: '',
-      detail: '',
-      output: '',
-      createdAt: item.createdAt || '',
-      updatedAt: item.updatedAt,
-      completedAt: '',
-      items: [item],
-      data: {},
-    }],
-    blocks: [],
-  };
-}
-
 
 export function ChatPage() {
   const [messages, setMessages] = useState<LocalMessage[]>([]);
@@ -347,16 +122,6 @@ export function ChatPage() {
   const activeSession = useMemo(() => (
     sessions.find((session) => session.id === activeSessionId) || null
   ), [activeSessionId, sessions]);
-  const historyGroups = useMemo(() => workspaces.map((workspace) => ({
-    workspace,
-    projects: allProjects
-      .filter((project) => project.workspaceId === workspace.id)
-      .map((project) => ({
-        project,
-        sessions: sessions.filter((session) => session.project_id === project.id),
-      }))
-      .filter((group) => group.sessions.length > 0),
-  })).filter((group) => group.projects.length > 0), [allProjects, sessions, workspaces]);
   const handleCollapseHistory = useCallback(() => {
     if (historyTransitionTimerRef.current !== null) {
       window.clearTimeout(historyTransitionTimerRef.current);
@@ -901,122 +666,20 @@ export function ChatPage() {
       }}
     >
       {historyPanelMounted && (
-        <aside
-          className="chat-history-panel chat-workbench-history flex min-h-0 flex-col overflow-hidden"
-          data-collapsed={historyCollapsed}
-        >
-          {isMacDesktopShell && <div className="chat-workbench-electron-spacer" aria-hidden="true" />}
-          <div className="px-4 pb-3 pt-3">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-                历史对话
-              </h2>
-              <div className="flex items-center gap-2">
-                <Tooltip title="折叠历史对话" placement="bottom" mode="dark">
-                  <button
-                    type="button"
-                    className="icon-button chat-history-collapse-button"
-                    onClick={handleCollapseHistory}
-                    aria-label="折叠历史对话"
-                  >
-                    <PanelLeftClose size={17} strokeWidth={1.7} />
-                  </button>
-                </Tooltip>
-                <button
-                  type="button"
-                  className="icon-button chat-history-new-button"
-                  onClick={handleNewSession}
-                  disabled={state.isStreaming}
-                  aria-label="新建会话"
-                  title="新建会话"
-                >
-                  <Plus size={15} />
-                </button>
-              </div>
-            </div>
-            <div className="chat-workbench-search flex items-center gap-2 rounded-lg px-3 py-2 text-xs text-[var(--color-text-tertiary)]">
-              <Search size={14} />
-              <span>{sessions.length} 个会话</span>
-            </div>
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-            {sessionsLoading || (sessions.length > 0 && allProjects.length === 0) ? (
-              <div className="flex justify-center py-8">
-                <Spinner />
-              </div>
-            ) : sessions.length === 0 ? (
-              <Empty type="noData" description="暂无历史对话" />
-            ) : (
-              <div className="space-y-5">
-                {historyGroups.map(({ workspace, projects: projectGroups }) => (
-                  <section key={workspace.id} aria-label={`${workspace.name}中的历史对话`}>
-                    <div className="mb-2 flex items-center gap-2 px-2 text-xs font-semibold text-[var(--color-text-secondary)]">
-                      <Boxes size={13} strokeWidth={1.8} />
-                      <span className="truncate">{workspace.name}</span>
-                    </div>
-                    <div className="space-y-3">
-                      {projectGroups.map(({ project, sessions: projectSessions }) => (
-                        <div key={project.id}>
-                          <div className="mb-1 flex items-center gap-2 px-2 text-xs text-[var(--color-text-tertiary)]">
-                            <FolderKanban size={12} strokeWidth={1.7} />
-                            <span className="truncate">{project.name}</span>
-                            <span className="ml-auto shrink-0">{projectSessions.length}</span>
-                          </div>
-                          <div className="space-y-1">
-                            {projectSessions.map((session) => (
-                              <button
-                                key={session.id}
-                                type="button"
-                                onClick={() => handleSelectSession(session)}
-                                className={`chat-session-item group w-full rounded-lg px-3 py-2 text-left transition-all duration-300 ease-out ${
-                                  activeSessionId === session.id
-                                    ? 'chat-session-item--active'
-                                    : 'hover:bg-[var(--color-bg-hover)]'
-                                }`}
-                              >
-                                <div className="flex items-start gap-2">
-                                  <div className="min-w-0 flex-1">
-                                    <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-                                      {session.title}
-                                    </div>
-                                    <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-                                      <span className="truncate">{session.agent_name}</span>
-                                      <span>{session.message_count} 条</span>
-                                    </div>
-                                  </div>
-                                  <span
-                                    role="button"
-                                    tabIndex={0}
-                                    className="rounded p-1 text-[var(--color-text-tertiary)] opacity-0 transition-all duration-300 ease-out hover:bg-[var(--color-bg-tertiary)] hover:text-[var(--color-error)] group-hover:opacity-100"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      void handleDeleteSession(session);
-                                    }}
-                                    onKeyDown={(event) => {
-                                      if (event.key === 'Enter' || event.key === ' ') {
-                                        event.preventDefault();
-                                        event.stopPropagation();
-                                        void handleDeleteSession(session);
-                                      }
-                                    }}
-                                    aria-label="删除会话"
-                                  >
-                                    <Trash2 size={14} />
-                                  </span>
-                                </div>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            )}
-          </div>
-        </aside>
+        <ChatHistoryPanel
+          activeSessionId={activeSessionId}
+          allProjects={allProjects}
+          collapsed={historyCollapsed}
+          isMacDesktopShell={isMacDesktopShell}
+          isStreaming={state.isStreaming}
+          loading={sessionsLoading}
+          sessions={sessions}
+          workspaces={workspaces}
+          onCollapse={handleCollapseHistory}
+          onDeleteSession={(session) => { void handleDeleteSession(session); }}
+          onNewSession={handleNewSession}
+          onSelectSession={(session) => { void handleSelectSession(session); }}
+        />
       )}
 
       <section
@@ -1190,213 +853,35 @@ export function ChatPage() {
             <FloatingPlanDock plans={state.plans} />
           </div>
 
-          <div className="px-8 pb-6 pt-2">
-          {chatError && (
-            <div className="mb-2 flex items-center gap-2 rounded-md border border-[var(--color-error)] bg-[var(--color-error-bg)] px-3 py-2 text-sm text-[var(--color-error)]">
-              <AlertCircle size={14} />
-              {chatError}
-            </div>
-          )}
+          <ChatComposer
+            agentOptions={agentOptions}
+            agentsLoading={agentsLoading}
+            chatError={chatError}
+            deepThinking={deepThinking}
+            fileAttachments={fileAttachments}
+            imageAttachments={imageAttachments}
+            imageInputRef={imageInputRef}
+            inputValue={inputValue}
+            isStreaming={state.isStreaming}
+            messageInputRef={messageInputRef}
+            projectResourcesLoading={projectResourcesLoading}
+            selectedAgentId={selectedAgentId}
+            targetMode={targetMode}
+            onAbort={abort}
+            onCompositionEnd={() => { isComposingRef.current = false; }}
+            onCompositionStart={() => { isComposingRef.current = true; }}
+            onFile={handleFile}
+            onImageFiles={handleImageFiles}
+            onInputChange={setInputValue}
+            onKeyDown={handleKeyDown}
+            onRemoveFile={removeFileAttachment}
+            onRemoveImage={removeImageAttachment}
+            onSelectedAgentChange={setSelectedAgentId}
+            onSend={handleSend}
+            onTargetModeChange={setTargetMode}
+            onToggleDeepThinking={() => setDeepThinking((value) => !value)}
+          />
 
-          <div className="chat-composer mx-auto max-w-4xl rounded-xl bg-[var(--color-bg-secondary)]">
-            <input
-              ref={imageInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(event) => handleImageFiles(event.target.files)}
-            />
-            <textarea
-              ref={messageInputRef}
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onCompositionStart={() => {
-                isComposingRef.current = true;
-              }}
-              onCompositionEnd={() => {
-                isComposingRef.current = false;
-              }}
-              placeholder={state.isStreaming ? 'Agent 正在回复中...' : '输入消息...'}
-              rows={2}
-              disabled={state.isStreaming}
-              className="block max-h-[180px] w-full resize-none rounded-t-lg border-0 bg-transparent px-4 pb-0 pt-3 text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:bg-[var(--color-bg-tertiary)]"
-              aria-label="消息输入框"
-            />
-
-            {imageAttachments.length > 0 && (
-              <div className="flex max-h-[88px] flex-wrap gap-2 overflow-hidden px-3 py-2">
-                {imageAttachments.map((image) => (
-                  <div
-                    key={image.id}
-                    className="group relative h-16 w-16 overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)]"
-                  >
-                    <img
-                      src={image.previewUrl}
-                      alt={image.name}
-                      className="h-full w-full object-cover"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => removeImageAttachment(image.id)}
-                      className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded bg-black/60 text-white opacity-0 transition-opacity group-hover:opacity-100"
-                      aria-label="移除图片"
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {fileAttachments.length > 0 && (
-              <div className="flex max-h-[104px] flex-wrap gap-2 overflow-y-auto px-3 py-2">
-                {fileAttachments.map((file) => (
-                  <div
-                    key={file.id}
-                    className="flex max-w-64 items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-1.5 text-xs text-[var(--color-text-secondary)]"
-                  >
-                    <FileText size={14} className="shrink-0" />
-                    <span className="truncate">{file.name}</span>
-                    <button
-                      type="button"
-                      onClick={() => removeFileAttachment(file.id)}
-                      className="icon-button ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-                      aria-label={`移除附件 ${file.name}`}
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="flex flex-wrap items-center gap-2 px-3 py-2">
-              <Tooltip title="上传图片" placement="top" mode="dark">
-                <span className="inline-flex">
-                  <button
-                    type="button"
-                    className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-                    onClick={() => imageInputRef.current?.click()}
-                    disabled={state.isStreaming || imageAttachments.length >= 4}
-                    aria-label="上传图片"
-                  >
-                    <ImagePlus size={16} />
-                  </button>
-                </span>
-              </Tooltip>
-              <Tooltip title="上传文件" placement="top" mode="dark">
-                <span className="inline-flex">
-                  <FileImportButton
-                    onFile={handleFile}
-                    disabled={state.isStreaming || fileAttachments.length >= 10}
-                    className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-0 text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-                  >
-                    <Paperclip size={16} />
-                  </FileImportButton>
-                </span>
-              </Tooltip>
-              <div className="flex h-8 gap-1 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-[3px]">
-                <Tooltip title="单 Agent" placement="top" mode="dark">
-                  <span className="inline-flex">
-                    <button
-                      type="button"
-                      className={`icon-button h-6 w-6 rounded-[10px] border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
-                        targetMode === 'agent'
-                          ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
-                          : 'border-transparent bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
-                      }`}
-                      disabled={state.isStreaming}
-                      onClick={() => setTargetMode('agent')}
-                      aria-label="单 Agent"
-                      aria-pressed={targetMode === 'agent'}
-                    >
-                      <SparkReinforcementLearningLine size={16} />
-                    </button>
-                  </span>
-                </Tooltip>
-                <Tooltip title="Team" placement="top" mode="dark">
-                  <span className="inline-flex">
-                    <button
-                      type="button"
-                      className={`icon-button h-6 w-6 rounded-[10px] border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
-                        targetMode === 'team'
-                          ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
-                          : 'border-transparent bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
-                      }`}
-                      disabled={state.isStreaming}
-                      onClick={() => setTargetMode('team')}
-                      aria-label="Team"
-                      aria-pressed={targetMode === 'team'}
-                    >
-                      <SparkRenyizhuanrenyiAnyToanyLine size={16} />
-                    </button>
-                  </span>
-                </Tooltip>
-              </div>
-              {targetMode === 'agent' && (
-                <Select
-                  value={selectedAgentId}
-                  onChange={(value) => setSelectedAgentId(value)}
-                  options={agentOptions}
-                  loading={agentsLoading || projectResourcesLoading}
-                  disabled={state.isStreaming}
-                  placeholder="选择 Agent"
-                  style={{ width: 160 }}
-                />
-              )}
-              <div className="ml-auto flex items-center gap-2">
-                <Tooltip title={deepThinking ? '深度思考已开启' : '开启深度思考'} placement="top" mode="dark">
-                  <span className="inline-flex">
-                    <button
-                      type="button"
-                      className={`icon-button h-8 w-8 rounded-[10px] border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
-                        deepThinking
-                          ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
-                          : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
-                      }`}
-                      onClick={() => setDeepThinking((value) => !value)}
-                      disabled={state.isStreaming}
-                      aria-label={deepThinking ? '关闭深度思考' : '开启深度思考'}
-                      aria-pressed={deepThinking}
-                    >
-                      <SparkDeepThinkLine size={16} />
-                    </button>
-                  </span>
-                </Tooltip>
-                {state.isStreaming ? (
-                  <Tooltip title="停止回复" placement="top" mode="dark">
-                    <span className="inline-flex">
-                      <button
-                        type="button"
-                        className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-opacity duration-200 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-                        onClick={abort}
-                        aria-label="停止回复"
-                      >
-                        <Square size={16} />
-                      </button>
-                    </span>
-                  </Tooltip>
-                ) : (
-                  <Tooltip title="发送消息" placement="top" mode="dark">
-                    <span className="inline-flex">
-                      <button
-                        type="button"
-                        className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-opacity duration-200 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-                        onClick={handleSend}
-                        disabled={!inputValue.trim() && imageAttachments.length === 0 && fileAttachments.length === 0}
-                        aria-label="发送消息"
-                      >
-                        <Send size={16} />
-                      </button>
-                    </span>
-                  </Tooltip>
-                )}
-              </div>
-            </div>
-          </div>
-          </div>
         </div>
 
         <div

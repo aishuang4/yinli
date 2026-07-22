@@ -50,7 +50,7 @@
 - 应用层继续负责安装、SQLite、Workspace / Project binding、Agent 配置、权限和 UI；AgentScope 负责运行时 catalog、渐进式披露和内置 `Skill` viewer。
 - Toolkit 通过 `skills_or_loaders` 接收已裁剪的绝对 Skill 包目录；system prompt 只包含 `name`、`description` 和 `dir`，模型实际调用 `Skill` 后才读取完整指令。
 - Skill 正文使用 `scripts/foo.py`、`references/bar.md` 等标准相对路径。模型根据 catalog 中的 `dir` 转成绝对路径后调用普通 Read、Grep、Glob 或 Bash；不使用 `$SKILL_DIR`，也不新增每脚本工具。
-- Skill script 复用单一 `GuardedBash`；本地 execute 权限与 network 权限独立，Skill 不突破 Agent 的 ToolScope、filesystem、审批或黑名单。
+- Skill script 复用单一 `GuardedBash`；本地 execute 权限与 network 权限独立。Shell 黑名单仅是拦截明显误操作的提示级防护，不能抵抗命令混淆；真正的执行隔离依赖 DockerWorkspace 与权限审批。Skill 不突破 Agent 的 ToolScope、filesystem 或审批边界。
 - 持久 DockerWorkspace 会把允许的 Skill 包 seed 到容器 `/workspace/skills`，catalog 披露容器路径；非持久 Docker sandbox 暂不支持 Skills，启动时返回明确错误。
 - 单 Agent 和 Team Member 使用相同 Skill catalog；Team 协调、综合和恢复轮不开放业务 Skill。Subagent frontmatter `skills` 转换为裁剪后的 loader 路径，不再全文拼接。
 - `SKILL_STARTED`、`SKILL_CONTEXT`、`SKILL_FAILED` 和 `SKILL_COMPLETED` 以真实 `Skill` viewer 工具调用为事实源。catalog 可见不创建 active `SkillRun`。

@@ -7,7 +7,7 @@ import ipaddress
 import json
 import re
 import socket
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any
@@ -19,10 +19,49 @@ from agentscope.permission import PermissionBehavior, PermissionContext, Permiss
 from agentscope.tool import ToolBase, ToolChunk
 
 
-HostResolver = Callable[[str, int], Awaitable[None]]
+HostResolver = Callable[[str, int], Awaitable[Sequence[str] | None]]
 REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
 ALLOWED_CONTENT_TYPES = ("text/html", "application/xhtml+xml", "text/plain")
 DEFAULT_USER_AGENT = "AgentWorkstation-WebFetch/0.1"
+
+
+class PinnedAsyncHTTPTransport(httpx.AsyncBaseTransport):
+    """把 HTTP 连接固定到本次校验通过的 IP，消除 DNS rebinding 时间窗。"""
+
+    def __init__(
+        self,
+        *,
+        resolver: HostResolver,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self.resolver = resolver
+        self.transport = transport or httpx.AsyncHTTPTransport(trust_env=False)
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        hostname = request.url.host
+        port = request.url.port or (443 if request.url.scheme == "https" else 80)
+        addresses = tuple(await self.resolver(hostname, port) or ())
+        if not addresses:
+            raise ValueError("WebFetch resolver did not return a validated address.")
+
+        pinned_url = request.url.copy_with(host=addresses[0])
+        headers = request.headers.copy()
+        headers["Host"] = request.url.netloc.decode("ascii")
+        extensions = {
+            **request.extensions,
+            "sni_hostname": hostname,
+        }
+        pinned_request = httpx.Request(
+            method=request.method,
+            url=pinned_url,
+            headers=headers,
+            stream=request.stream,
+            extensions=extensions,
+        )
+        return await self.transport.handle_async_request(pinned_request)
+
+    async def aclose(self) -> None:
+        await self.transport.aclose()
 
 
 class WebFetch(ToolBase):
@@ -111,10 +150,11 @@ class WebFetch(ToolBase):
         redirects = 0
 
         try:
+            request_transport = self.transport or PinnedAsyncHTTPTransport(resolver=self.resolver)
             async with httpx.AsyncClient(
                 follow_redirects=False,
                 timeout=httpx.Timeout(timeout),
-                transport=self.transport,
+                transport=request_transport,
                 trust_env=False,
                 headers={
                     "User-Agent": DEFAULT_USER_AGENT,
@@ -122,7 +162,13 @@ class WebFetch(ToolBase):
                 },
             ) as client:
                 while True:
-                    await self._validate_target(current_url)
+                    shape_error = _validate_url_shape(current_url)
+                    if shape_error:
+                        raise ValueError(shape_error)
+                    # 自定义 transport 主要用于测试，仍在请求前执行目标校验。
+                    # 生产 transport 会在同一次解析后直接连接已校验 IP。
+                    if self.transport is not None:
+                        await self._validate_target(current_url)
                     async with client.stream("GET", current_url) as response:
                         if response.status_code in REDIRECT_STATUS_CODES:
                             location = str(response.headers.get("location") or "").strip()
@@ -222,7 +268,7 @@ class WebFetch(ToolBase):
         )
 
 
-async def _validate_public_host(hostname: str, port: int) -> None:
+async def _validate_public_host(hostname: str, port: int) -> tuple[str, ...]:
     """解析目标主机并拒绝任何非公网地址。"""
 
     if not hostname:
@@ -233,7 +279,7 @@ async def _validate_public_host(hostname: str, port: int) -> None:
         direct_ip = None
     if direct_ip is not None:
         _require_global_ip(direct_ip)
-        return
+        return (str(direct_ip),)
 
     loop = asyncio.get_running_loop()
     records = await loop.run_in_executor(
@@ -245,6 +291,7 @@ async def _validate_public_host(hostname: str, port: int) -> None:
         raise ValueError("WebFetch hostname did not resolve to an address.")
     for address in addresses:
         _require_global_ip(ipaddress.ip_address(address))
+    return tuple(sorted(addresses))
 
 
 def _require_global_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:

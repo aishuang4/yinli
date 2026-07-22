@@ -74,7 +74,7 @@ export function AgentGuardrailsSection({
           <div className="mb-2">
             <div className="text-sm text-[var(--color-text-primary)]">执行隔离</div>
             <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-              Docker 会把工具运行放入容器工作区，需要本机 Docker 可用。
+              本地命令黑名单只能拦截明显误操作；需要安全隔离时请选择 Docker 沙盒。
             </div>
           </div>
           <SelectField

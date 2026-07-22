@@ -18,11 +18,12 @@ class ScopedEdit(Edit):
         "absolute path or a path relative to the current project workspace."
     )
 
-    def __init__(self, *, base_dir: str | None = None) -> None:
+    def __init__(self, *, base_dir: str | None = None, scope_dir: str | None = None) -> None:
         """指定相对编辑路径的默认目录。"""
 
         super().__init__()
         self.base_dir = base_dir
+        self.scope_dir = scope_dir
 
     async def check_permissions(
         self,
@@ -30,7 +31,7 @@ class ScopedEdit(Edit):
         context: PermissionContext,
     ) -> PermissionDecision:
         return await super().check_permissions(
-            resolved_tool_input(tool_input, "file_path", base_dir=self.base_dir),
+            resolved_tool_input(tool_input, "file_path", base_dir=self.base_dir, scope_dir=self.scope_dir),
             context,
         )
 
@@ -41,7 +42,7 @@ class ScopedEdit(Edit):
     ) -> bool:
         return super().match_rule(
             rule_content,
-            resolved_tool_input(tool_input, "file_path", base_dir=self.base_dir),
+            resolved_tool_input(tool_input, "file_path", base_dir=self.base_dir, scope_dir=self.scope_dir),
         )
 
     def generate_suggestions(
@@ -49,7 +50,7 @@ class ScopedEdit(Edit):
         tool_input: dict[str, Any],
     ) -> list[PermissionRule]:
         return super().generate_suggestions(
-            resolved_tool_input(tool_input, "file_path", base_dir=self.base_dir),
+            resolved_tool_input(tool_input, "file_path", base_dir=self.base_dir, scope_dir=self.scope_dir),
         )
 
     async def __call__(  # type: ignore[override]
@@ -61,7 +62,7 @@ class ScopedEdit(Edit):
         _agent_state: AgentState | None = None,
     ) -> ToolChunk:
         return await super().__call__(
-            file_path=resolve_workspace_path(file_path, base_dir=self.base_dir),
+            file_path=resolve_workspace_path(file_path, base_dir=self.base_dir, scope_dir=self.scope_dir),
             old_string=old_string,
             new_string=new_string,
             replace_all=replace_all,

@@ -1,6 +1,6 @@
 # 引力 YINLI TODO
 
-> 最后更新：2026-07-20。本文只保留尚未完成的任务。
+> 最后更新：2026-07-22。本文只保留尚未完成的任务。
 
 ## P0. Runtime 稳定性
 
@@ -12,9 +12,9 @@
 
 - [ ] 增加 Team Mailbox API 与综合阶段并发投递的端到端测试。
 - [ ] 增加 Team Console Playwright 回归，覆盖第二轮清空、成员切换不重放和用户主动发信。
-- [ ] 完成动作型 Subagent 的 HITL resume、inline MCP 和 hooks，并落到统一 PermissionPolicy / Trace / RunState。
-- [ ] 增加 Subagent 嵌套深度限制、fork 和 `isolation: worktree`。
-- [ ] 后续评估托管 / 会话 / Plugin scope、frontmatter `memory`、`effort`、`initialPrompt` 和显式 @-mention。
+- [ ] 完成 Subagent M2.1 稳定性修复：错误 observation、父本轮模型继承、异常终态和 HITL 事件关联。
+- [ ] 完成 child / parent AgentScope checkpoint spike，明确 exact resume、transcript replay 和 restart 边界。
+- [ ] spike 后按 `docs/subagent-task-runtime-redesign.md` 实施单进程持久 task、transcript、Supervisor 和独立前端组件。
 
 ## P2. 平台基础
 

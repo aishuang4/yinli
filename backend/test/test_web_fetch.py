@@ -7,7 +7,7 @@ import json
 import httpx
 from agentscope.message import ToolResultState
 
-from src.tools.web_fetch import WebFetch
+from src.tools.web_fetch import PinnedAsyncHTTPTransport, WebFetch
 
 
 async def _allow_public_host(hostname: str, port: int) -> None:
@@ -151,3 +151,38 @@ def test_web_fetch_limits_response_bytes_and_extracted_chars():
     payload = _payload(truncated)
     assert 990 <= len(payload["content"]) <= 1000
     assert payload["truncated"] is True
+
+
+def test_pinned_transport_connects_to_validated_ip_and_preserves_host_and_sni():
+    """校验与连接共用同一解析结果，同时保留 HTTP Host 与 TLS SNI。"""
+
+    seen: dict[str, object] = {}
+
+    async def resolver(hostname: str, port: int) -> tuple[str, ...]:
+        seen["resolved"] = (hostname, port)
+        return ("93.184.216.34",)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["host"] = request.headers["host"]
+        seen["sni"] = request.extensions["sni_hostname"]
+        return httpx.Response(200, request=request)
+
+    import asyncio
+
+    transport = PinnedAsyncHTTPTransport(
+        resolver=resolver,
+        transport=httpx.MockTransport(handler),
+    )
+    async def send() -> None:
+        async with httpx.AsyncClient(transport=transport) as client:
+            await client.get("https://example.com:8443/docs")
+
+    asyncio.run(send())
+
+    assert seen == {
+        "resolved": ("example.com", 8443),
+        "url": "https://93.184.216.34:8443/docs",
+        "host": "example.com:8443",
+        "sni": "example.com",
+    }
