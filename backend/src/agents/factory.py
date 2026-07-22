@@ -170,7 +170,7 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
         description: str = "",
         timeout: int = 120000,
     ) -> AsyncGenerator[ToolChunk, None]:
-        """在 Windows 使用绝对 ``cmd.exe`` 路径，避免 PATH 或 Git Bash 依赖。"""
+        """在 Windows 使用 UTF-8 编码的 ``cmd.exe``，避免 PATH 或 Git Bash 依赖。"""
 
         if os.name != "nt":
             async for chunk in super().call(command, description, timeout):
@@ -188,7 +188,7 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
 
         try:
             result = await self._backend.exec_shell(
-                [shell_path, "/d", "/c", command],
+                [shell_path, "/d", "/c", _windows_utf8_command(command)],
                 cwd=self._cwd,
                 timeout=timeout_ms / 1000.0,
             )
@@ -200,8 +200,8 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
             )
             return
 
-        stdout = result.stdout.decode("utf-8", errors="replace").replace("\r\n", "\n")
-        stderr = result.stderr.decode("utf-8", errors="replace").replace("\r\n", "\n")
+        stdout = _decode_windows_shell_output(result.stdout)
+        stderr = _decode_windows_shell_output(result.stderr)
         if result.exit_code == -1 and result.stderr == b"timed out":
             yield _bash_error_chunk(command, f"命令在 {timeout_ms}ms 后超时。")
             return
@@ -262,6 +262,22 @@ def _resolve_windows_command_shell(
         if candidate and path_exists(candidate):
             return candidate
     return command_lookup("cmd.exe") or command_lookup("cmd")
+
+
+def _windows_utf8_command(command: str) -> str:
+    """让当前 cmd 会话使用 UTF-8，保证中文输出可由后端稳定读取。"""
+
+    return f"chcp 65001 >nul 2>&1 & {command}"
+
+
+def _decode_windows_shell_output(value: bytes) -> str:
+    """读取 cmd UTF-8 输出，并兼容少数仍强制使用 GBK 的旧程序。"""
+
+    try:
+        text = value.decode("utf-8")
+    except UnicodeDecodeError:
+        text = value.decode("gbk", errors="replace")
+    return text.replace("\r\n", "\n")
 
 
 def _bash_error_chunk(command: str, error: str, *, stdout: str = "") -> ToolChunk:

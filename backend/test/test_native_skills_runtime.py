@@ -9,7 +9,9 @@ from src.agents.factory import (
     RuntimePathSkillLoader,
     _bash_error_chunk,
     _create_default_toolkit,
+    _decode_windows_shell_output,
     _resolve_windows_command_shell,
+    _windows_utf8_command,
 )
 from src.agents.runtime_types import AgentGuardrails, RuntimeToolScope
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
@@ -119,6 +121,14 @@ def test_bash_failure_chunk_always_contains_error_detail() -> None:
     chunk = _bash_error_chunk("dir", "cmd.exe not found")
 
     assert "Error:\ncmd.exe not found" in chunk.content[0].text
+
+
+def test_windows_bash_uses_utf8_code_page_and_decodes_legacy_output() -> None:
+    """Windows Bash 应统一 UTF-8，并兼容未跟随代码页的 GBK 旧程序。"""
+
+    assert _windows_utf8_command("dir") == "chcp 65001 >nul 2>&1 & dir"
+    assert _decode_windows_shell_output("中文目录".encode("utf-8")) == "中文目录"
+    assert _decode_windows_shell_output("旧程序输出".encode("gbk")) == "旧程序输出"
 
 
 def test_runtime_skill_paths_reject_paths_outside_package_root(tmp_path, monkeypatch) -> None:
