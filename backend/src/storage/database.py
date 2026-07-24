@@ -393,6 +393,10 @@ def ensure_db() -> None:
                     status TEXT NOT NULL,
                     markdown TEXT NOT NULL,
                     current_step_id TEXT,
+                    current_revision INTEGER NOT NULL DEFAULT 0,
+                    approved_revision INTEGER,
+                    review_feedback TEXT NOT NULL DEFAULT '',
+                    execution_run_id TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     completed_at TEXT
@@ -422,10 +426,23 @@ def ensure_db() -> None:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS plan_revisions (
+                    id TEXT PRIMARY KEY,
+                    plan_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    markdown TEXT NOT NULL,
+                    steps TEXT NOT NULL,
+                    feedback TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(plan_id, revision),
+                    FOREIGN KEY(plan_id) REFERENCES plans(id) ON DELETE CASCADE
+                );
                 CREATE INDEX IF NOT EXISTS idx_plans_session_updated
                     ON plans(session_id, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_plan_steps_plan_order
                     ON plan_steps(plan_id, step_index);
+                CREATE INDEX IF NOT EXISTS idx_plan_revisions_plan_revision
+                    ON plan_revisions(plan_id, revision DESC);
                 CREATE TABLE IF NOT EXISTS run_events (
                     id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
@@ -747,6 +764,10 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_sessions", "project_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "chat_runs", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "chat_runs", "project_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "plans", "current_revision", "INTEGER NOT NULL DEFAULT 0")
+            _ensure_column(conn, "plans", "approved_revision", "INTEGER")
+            _ensure_column(conn, "plans", "review_feedback", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "plans", "execution_run_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "run_events", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "run_events", "project_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "memory_nodes", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
@@ -1917,6 +1938,10 @@ def update_plan_record(
     status: str | None = None,
     markdown: str | None = None,
     current_step_id: str | None = None,
+    revision: int | None = None,
+    approved_revision: int | None = None,
+    feedback: str | None = None,
+    execution_run_id: str | None = None,
     completed_at: str | None = None,
 ) -> dict[str, Any] | None:
     return _plan_record_store().update_plan(
@@ -1925,6 +1950,54 @@ def update_plan_record(
         status=status,
         markdown=markdown,
         current_step_id=current_step_id,
+        revision=revision,
+        approved_revision=approved_revision,
+        feedback=feedback,
+        execution_run_id=execution_run_id,
+        completed_at=completed_at,
+    )
+
+
+def publish_plan_revision_record(
+    plan_id: str,
+    *,
+    expected_status: str,
+    revision: int,
+    markdown: str,
+    steps: list[dict[str, Any]],
+    feedback: str = "",
+) -> dict[str, Any] | None:
+    """原子发布一次不可变 Plan revision。"""
+
+    return _plan_record_store().publish_revision(
+        plan_id,
+        expected_status=expected_status,
+        revision=revision,
+        markdown=markdown,
+        steps=steps,
+        feedback=feedback,
+    )
+
+
+def transition_plan_status_record(
+    plan_id: str,
+    *,
+    expected_status: str,
+    status: str,
+    approved_revision: int | None = None,
+    feedback: str | None = None,
+    execution_run_id: str | None = None,
+    completed_at: str | None = None,
+) -> dict[str, Any] | None:
+    """按期望状态原子迁移 Plan。"""
+
+    return _plan_record_store().transition_status(
+        plan_id,
+        expected_status=expected_status,
+        status=status,
+        approved_revision=approved_revision,
+        feedback=feedback,
+        execution_run_id=execution_run_id,
         completed_at=completed_at,
     )
 

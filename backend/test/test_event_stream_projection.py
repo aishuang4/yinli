@@ -379,8 +379,14 @@ def test_source_normalizer_closes_all_activity_before_run_completed(projection_d
     normalizer.ingest("HITL_RESOLVED", {
         "payload": {"interactionId": "interaction-1", "action": "approve"},
     })
-    normalizer.ingest("PLAN_UPDATED", {
-        "payload": {"planId": "plan-1", "markdown": "- step"},
+    normalizer.ingest("PLAN_REVIEW_REQUESTED", {
+        "payload": {
+            "planId": "plan-1",
+            "status": "review_waiting",
+            "revision": 1,
+            "markdown": "- step",
+            "steps": [{"id": "step-1", "title": "Step", "status": "pending"}],
+        },
     })
     normalizer.ingest("SUBAGENT_STARTED", {
         "payload": {"invocationId": "sub-1", "subagentName": "explorer"},
@@ -403,6 +409,9 @@ def test_source_normalizer_closes_all_activity_before_run_completed(projection_d
     assert state.snapshot.blocks_by_id["approval:interaction-1"].outcome == "completed"
     assert state.snapshot.blocks_by_id["approval:interaction-1"].data["scope"] == "subagent"
     assert state.snapshot.blocks_by_id["approval:interaction-1"].data["replyId"] == "reply-1"
+    assert state.snapshot.blocks_by_id["plan:plan-1"].data["status"] == "review_waiting"
+    assert state.snapshot.blocks_by_id["plan:plan-1"].data["revision"] == 1
+    assert state.snapshot.blocks_by_id["plan:plan-1"].data["steps"][0]["id"] == "step-1"
     assert state.snapshot.blocks_by_id["message:run-normalized"].outcome == "completed"
 
 

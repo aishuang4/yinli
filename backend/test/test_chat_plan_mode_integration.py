@@ -1,9 +1,15 @@
+from pathlib import Path
+from types import SimpleNamespace
+
 from src.agents.runtime_types import AgentGuardrails, AgentModelOptions, RuntimeToolScope
+from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.plan_mode.manager import PlanModeManager
 from src.server.routes.chat.plan_mode.middleware import PlanModeMiddleware
 from src.server.routes.chat.plan_mode.tools import build_plan_mode_tools
-from src.server.routes.chat.react_runtime import _build_plan_mode_runtime_parts
-from src.server.routes.chat.models import ChatMessage
+from src.server.routes.chat.react_runtime import (
+    _build_plan_mode_runtime_parts,
+    _build_runtime_feature_parts,
+)
 from src.server.routes.chat.runtime_builder import RuntimeModelConfig, build_main_agent_runtime_spec
 
 
@@ -49,16 +55,18 @@ def test_plan_mode_tools_and_middleware_are_constructed_together() -> None:
     assert [tool.name for tool in tools] == [
         "plan_enter",
         "plan_write",
-        "todo_write",
+        "plan_set_steps",
+        "plan_request_review",
         "task_list",
         "task_output",
-        "plan_exit",
+        "plan_request_replan",
+        "plan_complete",
     ]
     assert middleware.manager is manager
 
 
 def test_react_runtime_constructs_plan_mode_without_approval_state() -> None:
-    """ReAct Runtime 始终只构造 Plan Mode 只读增强，不加载旧审批状态。"""
+    """Plan runtime parts 不从旧审批状态隐式恢复。"""
 
     ctx = type("Ctx", (), {
         "session_id": "session-1",
@@ -72,6 +80,33 @@ def test_react_runtime_constructs_plan_mode_without_approval_state() -> None:
         ChatMessage(message="请先制定计划"),
     )
 
-    assert cache_key == "plan-mode-v1"
+    assert cache_key.startswith("plan-mode-v2:")
     assert manager.context.plan_active is False
     assert manager.context.markdown == ""
+
+
+def test_react_runtime_only_enables_plan_features_for_explicit_plan_request(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.server.routes.chat.react_runtime.load_subagent_catalog",
+        lambda workspace_dir: SimpleNamespace(definitions={}, fingerprint="none"),
+    )
+    ctx = SimpleNamespace(
+        session_id="session-1",
+        agent_id="agent-1",
+        agent_name="Agent",
+        persist_run=True,
+        intent_route=SimpleNamespace(executor=SimpleNamespace(kind="single_agent")),
+        runtime_context=SimpleNamespace(project_root=Path("/tmp/project")),
+    )
+
+    normal_parts = _build_runtime_feature_parts(ctx, ChatMessage(message="直接回答"))
+    plan_parts = _build_runtime_feature_parts(
+        ctx,
+        ChatMessage(message="先制定计划", plan_requested=True),
+    )
+
+    assert normal_parts[0] is None
+    assert normal_parts[1] == "none"
+    assert plan_parts[0] is not None
+    assert plan_parts[0].context.plan_active is True
+    assert plan_parts[1].startswith("plan-mode-v2:")

@@ -24,12 +24,6 @@ from src.server.routes.chat.final_answer_recovery import (
     _is_final_answer_tool_event,
     stream_final_answer_recovery_events as _stream_final_answer_recovery_events,
 )
-from src.server.routes.chat.plan_stream import (
-    iter_plan_final_answer_deltas as _iter_plan_final_answer_deltas,
-    plan_final_answer_from_runtime_event as _plan_final_answer_from_runtime_event,
-    plan_final_answer_from_sse as _plan_final_answer_from_sse,
-    plan_runtime_event_from_tool_result as _plan_runtime_event_from_tool_result,
-)
 from src.server.routes.chat.runtime_events import (
     runtime_event_from_agentscope_event,
     runtime_trace_source_event,
@@ -68,8 +62,8 @@ class LeaderStreamState:
     stopped: bool = False
     stop_reason: str = ""
     exceeded_max_iters: bool = False
-    pending_plan_finalized: bool = False
-    pending_plan_final_answer: str = ""
+    pending_plan_review: bool = False
+    pending_plan_review_answer: str = ""
     final_answer_recovery_attempted: bool = False
     pending_text: str = ""
     reply_had_tool_call: bool = False
@@ -216,8 +210,8 @@ async def stream_leader_agent_reply(
             for runtime_event in plan_mode_manager.drain_runtime_events():
                 state.runtime_events.append(runtime_event)
                 yield runtime_source_event(runtime_event)
-                if runtime_event.get("type") == "PLAN_FINALIZED":
-                    _remember_pending_plan_finalized(state, runtime_event)
+                if runtime_event.get("type") == "PLAN_REVIEW_REQUESTED":
+                    _remember_pending_plan_review(state, runtime_event)
         for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
             state.runtime_events.append(runtime_event)
             yield runtime_source_event(runtime_event)
@@ -302,20 +296,6 @@ async def stream_leader_agent_reply(
             agent_name=agent_name,
         ):
             yield skill_event
-        plan_event = _plan_runtime_event_from_tool_result(
-            tool_calls=state.assistant_tool_calls,
-            runtime_events=state.runtime_events,
-            event_type=event_type,
-            event_data=event_data,
-            session_id=session_id,
-            agent_id=agent_id,
-            agent_name=agent_name,
-        )
-        if plan_event:
-            yield plan_event
-            plan_answer = _plan_final_answer_from_sse(plan_event)
-            if plan_answer:
-                _remember_pending_plan_finalized_from_text(state, plan_answer)
         _record_tool_execution_artifacts(
             session_id=session_id,
             event_type=event_type,
@@ -549,8 +529,8 @@ async def stream_leader_agent_reply(
         for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
             state.runtime_events.append(runtime_event)
             yield runtime_source_event(runtime_event)
-        if _is_pending_plan_finalization_ready(state, event_type, event_data):
-            async for final_event in _stream_pending_plan_final_answer_events(
+        if _is_pending_plan_review_ready(state, event_type, event_data):
+            async for final_event in _stream_pending_plan_review_events(
                 state,
                 session_id=session_id,
                 stream_scope=stream_scope,
@@ -933,46 +913,38 @@ async def _find_subagent_manager(
     return None
 
 
-def _remember_pending_plan_finalized(state: LeaderStreamState, runtime_event: dict) -> None:
-    """暂存 PLAN_FINALIZED，等 plan_exit 工具结果闭合后再输出最终答案。"""
+def _remember_pending_plan_review(state: LeaderStreamState, runtime_event: dict) -> None:
+    """暂存已提交审核的计划，等待工具结果闭合后安全停止 Agent。"""
 
-    state.pending_plan_finalized = True
-    plan_answer = _plan_final_answer_from_runtime_event(runtime_event)
-    if plan_answer:
-        state.pending_plan_final_answer = plan_answer
-
-
-def _remember_pending_plan_finalized_from_text(state: LeaderStreamState, plan_answer: str) -> None:
-    """暂存工具结果兜底生成的 finalized plan 文本。"""
-
-    state.pending_plan_finalized = True
-    if plan_answer:
-        state.pending_plan_final_answer = plan_answer
+    state.pending_plan_review = True
+    payload = runtime_event.get("payload") if isinstance(runtime_event.get("payload"), dict) else {}
+    revision = int(payload.get("revision") or 0)
+    state.pending_plan_review_answer = f"计划 Revision {revision} 已生成，等待你的确认。"
 
 
-def _is_pending_plan_finalization_ready(
+def _is_pending_plan_review_ready(
     state: LeaderStreamState,
     event_type: str,
     event_data: dict,
 ) -> bool:
-    """判断 plan_exit 工具结果是否已经闭合，可以安全停止 Agent 流。"""
+    """判断 plan_request_review 工具结果是否闭合。"""
 
-    if not state.pending_plan_finalized or event_type != "TOOL_RESULT_END":
+    if not state.pending_plan_review or event_type != "TOOL_RESULT_END":
         return False
     tool_call_id = str(event_data.get("tool_call_id") or "")
     tool_name = str(event_data.get("tool_call_name") or "")
     if not tool_name and tool_call_id:
         tool_call = next((item for item in state.assistant_tool_calls if item.id == tool_call_id), None)
         tool_name = tool_call.name if tool_call else ""
-    return _is_plan_exit_tool_name(tool_name)
+    return _is_plan_review_tool_name(tool_name)
 
 
-def _is_plan_exit_tool_name(tool_name: str) -> bool:
+def _is_plan_review_tool_name(tool_name: str) -> bool:
     normalized = tool_name.replace(" ", "").replace("_", "").lower()
-    return normalized == "planexit"
+    return normalized == "planrequestreview"
 
 
-async def _stream_pending_plan_final_answer_events(
+async def _stream_pending_plan_review_events(
     state: LeaderStreamState,
     *,
     session_id: str,
@@ -980,18 +952,18 @@ async def _stream_pending_plan_final_answer_events(
     agent_id: str,
     agent_name: str,
 ) -> AsyncGenerator[str, None]:
-    """流式输出暂存的 Plan 最终答案并标记本轮计划收口。"""
+    """输出待审核计划摘要并结束当前起草 Run。"""
 
-    plan_answer = state.pending_plan_final_answer
-    state.pending_plan_finalized = False
-    state.pending_plan_final_answer = ""
+    plan_answer = state.pending_plan_review_answer
+    state.pending_plan_review = False
+    state.pending_plan_review_answer = ""
     state.stopped = True
-    state.stop_reason = "plan_finalized"
+    state.stop_reason = "plan_review_requested"
     if not plan_answer:
         return
     state.final_answer_started = True
     state.assistant_text += plan_answer
-    deltas = _iter_plan_final_answer_deltas(plan_answer)
+    deltas = [plan_answer[index:index + 120] for index in range(0, len(plan_answer), 120)]
     for index, delta in enumerate(deltas):
         yield source_event("FINAL_ANSWER_DELTA", {"delta": delta})
         yield runtime_trace_source_event(
@@ -999,7 +971,7 @@ async def _stream_pending_plan_final_answer_events(
             session_id=session_id,
             scope=stream_scope,
             source="runtime",
-            source_event_type="PLAN_FINALIZED",
+            source_event_type="PLAN_REVIEW_REQUESTED",
             agent_id=agent_id,
             agent_name=agent_name,
             status="completed",

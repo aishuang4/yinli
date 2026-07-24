@@ -141,6 +141,10 @@ export interface SendMessageOptions {
   displayMessage?: string;
   skillIds?: string[];
   deepThinking?: boolean;
+  planId?: string;
+  planAction?: 'revise' | 'approve' | 'cancel';
+  planFeedback?: string;
+  planRequested?: boolean;
   sandbox?: boolean;
   images?: Array<{
     name: string;

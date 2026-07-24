@@ -213,6 +213,61 @@ type AskUserQuestion = {
 - `POST /api/chat/resume/start` 成功不代表 UI 已完成；只有原 approval Block 收到 close Frame 后才移出待回答队列并恢复普通 Composer。
 - 刷新或重连后由 Snapshot 恢复待回答队列。未提交草稿不是协议状态，不写入 Block 或 Domain Event。
 
+### 6.2 Plan 审核与执行投影
+
+Plan Mode 是 ReAct 内的持久化领域状态，不是独立 Runtime。每次计划起草、模型修订和确认执行都可以启动新的 Chat Run，但必须复用同一个 `planId`；新 Run 的第一个 Plan 领域事件必须携带当前完整 Plan 数据，使该 Run 的 `kind=plan` Block 能独立恢复，不依赖上一轮 Snapshot 或进程内 Agent。
+
+Plan middleware 和控制工具只在请求显式携带 `plan_requested=true`，或携带 `planId + planAction` 继续既有 Plan 时装载。普通单 Agent Run 不暴露 Plan 控制工具，也不因为 Plan 能力改变 Agent cache key。
+
+`kind=plan` 的 `data` 固定包含：
+
+```ts
+type PlanBlockData = {
+  planId: string;
+  title: string;
+  goal: string;
+  status:
+    | "drafting"
+    | "review_waiting"
+    | "revising"
+    | "approved"
+    | "executing"
+    | "replanning"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  revision: number;
+  approvedRevision?: number;
+  markdown: string;
+  steps: Array<{
+    id: string;
+    stepIndex: number;
+    title: string;
+    description: string;
+    status: "pending" | "running" | "completed" | "failed" | "skipped";
+    evidence?: string;
+    result?: string;
+  }>;
+  feedback?: string;
+  executionRunId?: string;
+  updatedAt: string;
+};
+```
+
+稳定领域事件语义如下，仍统一投影为 `open | delta | close`，不增加 SSE 事件名或 RuntimeFrame op：
+
+- `PLAN_CREATED` / `PLAN_CONTENT_REPLACED` / `PLAN_STEPS_REPLACED`：起草并替换当前未提交 revision。
+- `PLAN_REVIEW_REQUESTED`：完整 revision 已保存，状态进入 `review_waiting`；前端底部普通 Composer 替换为 Plan 审核 Composer。
+- `PLAN_REVISION_REQUESTED`：用户提交自然语言修改意见，状态进入 `revising`，由模型生成完整新 revision。
+- `PLAN_APPROVED` / `PLAN_EXECUTION_STARTED`：用户确认当前 revision 后进入执行阶段。
+- `PLAN_STEP_UPDATED`：执行步骤状态、evidence 或 result 更新，前端实时归并到同一个 Plan Block。
+- `PLAN_REPLAN_REQUESTED`：执行中需要重新规划，状态进入 `replanning`，完成新 revision 后再次进入 `review_waiting`。
+- 起草 Run 必须以 `PLAN_REVIEW_REQUESTED` 收口，执行 Run 必须以 `PLAN_COMPLETED | PLAN_FAILED` 收口；模型直接结束但未调用对应控制工具时，后端必须把该 Run 判为失败，不能留下无入口的 `drafting | revising | replanning | executing`。
+- 初次起草或执行失败时 Plan 进入 `failed` 并关闭 Block；revision/replan 尝试失败时回退到已有 revision 的 `review_waiting`，继续保留确认、再次修改和取消入口，不创建伪 revision。
+- `PLAN_COMPLETED` / `PLAN_FAILED` / `PLAN_CANCELLED`：Plan 终态并关闭 Plan Block。
+
+Plan 审核命令只提交 `planId`、`action=revise|approve|cancel` 和可选自然语言 `feedback`。HTTP 响应只返回新 Run 元数据，不能直接修改 UI；审核态、revision 和执行进度必须由新 Run 的 Plan Block 回流。`revise` 不能接收前端直接编辑后的 Markdown 或步骤，完整新 revision 必须由模型通过 Plan 工具生成。
+
 ## 7. 后端边界
 
 ```text

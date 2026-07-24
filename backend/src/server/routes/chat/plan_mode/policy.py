@@ -12,10 +12,12 @@ from typing import Any
 PLAN_CONTROL_TOOL_NAMES = frozenset({
     "plan_enter",
     "plan_write",
-    "plan_exit",
-    "todo_write",
+    "plan_set_steps",
+    "plan_request_review",
     "task_list",
     "task_output",
+    "plan_request_replan",
+    "plan_complete",
     "FinalAnswerStart",
 })
 

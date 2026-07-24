@@ -290,10 +290,13 @@ class ChatProjectionNormalizer:
         produced: list[DomainEvent] = []
         if block_id not in self._active:
             produced.extend(self._start_block("plan", block_id, "plan", payload, aggregate_id=plan_id))
-        elif runtime_type not in {"PLAN_FINALIZED"}:
+        elif runtime_type not in {"PLAN_COMPLETED", "PLAN_FAILED", "PLAN_CANCELLED"}:
             produced.append(self._delta_block("plan", plan_id, "plan", payload, block_id=block_id, event_suffix="updated"))
-        if runtime_type == "PLAN_FINALIZED" and block_id in self._active:
-            produced.append(self._close_block("plan", plan_id, block_id, "completed", payload))
+        if runtime_type in {"PLAN_COMPLETED", "PLAN_FAILED", "PLAN_CANCELLED"} and block_id in self._active:
+            outcome = "failed" if runtime_type == "PLAN_FAILED" else (
+                "cancelled" if runtime_type == "PLAN_CANCELLED" else "completed"
+            )
+            produced.append(self._close_block("plan", plan_id, block_id, outcome, payload))
         return produced
 
     def _artifact_event(self, runtime_type: str, payload: dict[str, Any]) -> list[DomainEvent]:

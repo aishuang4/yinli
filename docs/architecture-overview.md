@@ -87,13 +87,15 @@ RunState、DisplayEvent、旧 `event_hub`、旧 adapter/reducer 和旧 Snapshot 
 
 当前 Plan Mode 不是旧 `runtime.kind=plan`。它基于 AgentScope middleware hooks 接入 ReAct：
 
-- 支持单 Agent。
-- 不支持 Team Runtime。
-- `plan_enter` 进入只读计划阶段。
-- `plan_write` / `todo_write` 更新 markdown 和结构化任务。
-- `task_output` 更新任务执行状态。
-- `plan_exit` 将计划 finalized，并把计划 markdown 作为本轮最终答案输出。
-- 前端不再显示旧 approve / deny 审批入口，用户下一条自然语言消息决定修改或执行计划。
+- Chat Composer 可显式开启 Plan Mode；仅支持单 Agent，不进入 Team Runtime。
+- `plan_enter` 创建持久化 Plan，会话由 `plans / plan_revisions / plan_steps / plan_events` 保存。
+- `plan_write` / `plan_set_steps` 替换当前未提交 revision 的 Markdown 和结构化步骤。
+- middleware 在起草、模型修订和重新规划期间只允许读取类工具与安全只读 Bash，拒绝变更型工具。
+- `plan_request_review` 保存不可变 revision 并进入 `review_waiting`；底部 Composer 提供确认执行、自然语言修改和取消入口。
+- 修改意见启动新的 ReAct continuation，由模型读取完整当前计划并生成下一版；前端不能直接编辑计划数据。
+- 确认后新 Run 进入 `executing`，模型通过 `task_output` 实时更新步骤，全部步骤终止后调用 `plan_complete`。
+- 执行中可用 `plan_request_replan` 回到只读规划，再次生成 revision 并等待审核。
+- 每个 continuation 的首个 Plan 事件携带完整状态，刷新、重连和历史回放不依赖旧 Run 或进程内 Agent。
 
 ## 记忆系统 MVP
 

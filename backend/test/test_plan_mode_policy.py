@@ -8,7 +8,8 @@ def test_plan_control_tools_are_allowed() -> None:
     assert "plan_enter" in PLAN_CONTROL_TOOL_NAMES
     assert is_plan_mode_tool_allowed("plan_enter", "{}")
     assert is_plan_mode_tool_allowed("plan_write", "{}")
-    assert is_plan_mode_tool_allowed("plan_exit", "{}")
+    assert is_plan_mode_tool_allowed("plan_set_steps", "{}")
+    assert is_plan_mode_tool_allowed("plan_request_review", "{}")
 
 
 def test_builtin_read_tools_are_allowed() -> None:

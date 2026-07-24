@@ -427,26 +427,26 @@ class _FakeRecoverableBareExceedMaxItersAgent(_FakeRecoverableNoFinalAnswerAgent
         })
 
 
-class _FakePlanExitAgent:
+class _FakePlanReviewAgent:
     plan_markdown = "# 计划\n\n- [ ] 修改文件\n- [ ] 验证前端流式输出\n- [ ] 总结结果"
 
     async def reply_stream(self, user_msg):
         yield _FakeAgentScopeEvent({
             "type": "TOOL_CALL_START",
             "reply_id": "reply-1",
-            "tool_call_id": "call-plan-exit",
-            "tool_call_name": "plan_exit",
+            "tool_call_id": "call-plan-review",
+            "tool_call_name": "plan_request_review",
         })
         yield _FakeAgentScopeEvent({
             "type": "TOOL_RESULT_START",
             "reply_id": "reply-1",
-            "tool_call_id": "call-plan-exit",
-            "tool_call_name": "plan_exit",
+            "tool_call_id": "call-plan-review",
+            "tool_call_name": "plan_request_review",
         })
         yield _FakeAgentScopeEvent({
             "type": "TOOL_RESULT_TEXT_DELTA",
             "reply_id": "reply-1",
-            "tool_call_id": "call-plan-exit",
+            "tool_call_id": "call-plan-review",
             "delta": json.dumps({
                 "planId": "plan-1",
                 "planFile": ".agent-workstation/plans/session-1/plan-1.md",
@@ -456,7 +456,7 @@ class _FakePlanExitAgent:
         yield _FakeAgentScopeEvent({
             "type": "TOOL_RESULT_END",
             "reply_id": "reply-1",
-            "tool_call_id": "call-plan-exit",
+            "tool_call_id": "call-plan-review",
             "state": "success",
         })
         yield _FakeAgentScopeEvent({
@@ -465,8 +465,8 @@ class _FakePlanExitAgent:
         })
 
 
-class _FakeNativePlanFinalizedManager:
-    """模拟 plan_exit 工具刚执行完、manager 先产出 PLAN_FINALIZED 的真实路径。"""
+class _FakeNativePlanReviewManager:
+    """模拟 plan_request_review 产出审核事件的真实路径。"""
 
     def __init__(self) -> None:
         self.drain_count = 0
@@ -479,25 +479,25 @@ class _FakeNativePlanFinalizedManager:
             "id": "runtime-plan-finalized",
             "runId": "run-1",
             "sessionId": "session-1",
-            "type": "PLAN_FINALIZED",
+            "type": "PLAN_REVIEW_REQUESTED",
             "source": "runtime",
             "sourceEventType": None,
             "scope": "plan",
             "agentId": "agent-1",
             "agentName": "Agent",
-            "status": "completed",
-            "reason": "Plan finalized as final answer.",
+            "status": "waiting",
+            "reason": "",
             "timestamp": "2026-07-01T00:00:00+00:00",
             "durationMs": None,
             "payload": {
                 "planId": "plan-1",
                 "planFile": ".agent-workstation/plans/session-1/plan-1.md",
-                "markdown": _FakePlanExitAgent.plan_markdown,
+                "markdown": _FakePlanReviewAgent.plan_markdown,
             },
         }]
 
 
-class _FakePlanExitThenContinuesAgent(_FakePlanExitAgent):
+class _FakePlanReviewThenContinuesAgent(_FakePlanReviewAgent):
     async def reply_stream(self, user_msg):
         async for event in super().reply_stream(user_msg):
             yield event
@@ -509,90 +509,8 @@ class _FakePlanExitThenContinuesAgent(_FakePlanExitAgent):
         yield _FakeAgentScopeEvent({
             "type": "TOOL_CALL_START",
             "reply_id": "reply-1",
-            "tool_call_id": "call-write-after-plan-exit",
+            "tool_call_id": "call-write-after-plan-review",
             "tool_call_name": "Write",
-        })
-
-
-class _FakeTodoWriteAgent:
-    async def reply_stream(self, user_msg):
-        yield _FakeAgentScopeEvent({
-            "type": "TOOL_CALL_START",
-            "reply_id": "reply-1",
-            "tool_call_id": "call-todo-write",
-            "tool_call_name": "todo_write",
-        })
-        yield _FakeAgentScopeEvent({
-            "type": "TOOL_RESULT_START",
-            "reply_id": "reply-1",
-            "tool_call_id": "call-todo-write",
-            "tool_call_name": "todo_write",
-        })
-        yield _FakeAgentScopeEvent({
-            "type": "TOOL_RESULT_TEXT_DELTA",
-            "reply_id": "reply-1",
-            "tool_call_id": "call-todo-write",
-            "delta": (
-                '{"planId":"plan-1","planFile":".agent-workstation/plans/session-1/plan-1.md",'
-                '"steps":[{"id":"plan-1-step-1","planId":"plan-1","stepIndex":0,'
-                '"title":"补工具","description":"实现 todo_write","status":"pending",'
-                '"assignedAgentId":null,"evidence":"","result":"","startedAt":null,'
-                '"completedAt":null,"updatedAt":"2026-06-30T00:00:00+00:00"}]}'
-            ),
-        })
-        yield _FakeAgentScopeEvent({
-            "type": "TOOL_RESULT_END",
-            "reply_id": "reply-1",
-            "tool_call_id": "call-todo-write",
-            "state": "success",
-        })
-        yield _FakeAgentScopeEvent({
-            "type": "REPLY_END",
-            "reply_id": "reply-1",
-        })
-
-
-class _FakeTaskOutputAgent:
-    async def reply_stream(self, user_msg):
-        yield _FakeAgentScopeEvent({
-            "type": "TOOL_CALL_START",
-            "reply_id": "reply-1",
-            "tool_call_id": "call-task-output",
-            "tool_call_name": "task_output",
-        })
-        yield _FakeAgentScopeEvent({
-            "type": "TOOL_RESULT_START",
-            "reply_id": "reply-1",
-            "tool_call_id": "call-task-output",
-            "tool_call_name": "task_output",
-        })
-        yield _FakeAgentScopeEvent({
-            "type": "TOOL_RESULT_TEXT_DELTA",
-            "reply_id": "reply-1",
-            "tool_call_id": "call-task-output",
-            "delta": (
-                '{"planId":"plan-1","planFile":".agent-workstation/plans/session-1/plan-1.md",'
-                '"step":{"id":"plan-1-step-1","planId":"plan-1","stepIndex":0,'
-                '"title":"补工具","description":"实现 todo_write","status":"completed",'
-                '"assignedAgentId":null,"evidence":"测试通过","result":"工具可用",'
-                '"startedAt":null,"completedAt":"2026-06-30T00:01:00+00:00",'
-                '"updatedAt":"2026-06-30T00:01:00+00:00"},'
-                '"steps":[{"id":"plan-1-step-1","planId":"plan-1","stepIndex":0,'
-                '"title":"补工具","description":"实现 todo_write","status":"completed",'
-                '"assignedAgentId":null,"evidence":"测试通过","result":"工具可用",'
-                '"startedAt":null,"completedAt":"2026-06-30T00:01:00+00:00",'
-                '"updatedAt":"2026-06-30T00:01:00+00:00"}]}'
-            ),
-        })
-        yield _FakeAgentScopeEvent({
-            "type": "TOOL_RESULT_END",
-            "reply_id": "reply-1",
-            "tool_call_id": "call-task-output",
-            "state": "success",
-        })
-        yield _FakeAgentScopeEvent({
-            "type": "REPLY_END",
-            "reply_id": "reply-1",
         })
 
 
@@ -1499,49 +1417,15 @@ def test_resume_recovers_missing_final_answer_marker_with_extra_call():
         PENDING_AGENTS.clear()
 
 
-def test_plan_exit_tool_result_becomes_final_answer():
-    """plan_exit 工具结果必须转成最终答案，而不是等待审批事件。"""
-
-    async def run_case():
-        events = [
-            event
-            async for event in stream_leader_agent_reply(
-                agent=_FakePlanExitAgent(),
-                user_msg=object(),
-                state=LeaderStreamState(),
-                session_id="session-1",
-                persist=False,
-                agent_id="agent-1",
-                agent_name="Agent",
-                model_name="deepseek-chat",
-                guardrails=AgentGuardrails(),
-                message="制定计划",
-                stream_scope="single",
-                skill_runs=[],
-            )
-        ]
-        return events
-
-    events = asyncio.run(run_case())
-
-    assert any(_event_is(event, "PLAN_FINALIZED") for event in events)
-    assert any(_event_is(event, "FINAL_ANSWER_DELTA") and _event_contains(event, "# 计划") for event in events)
-    assert any(_event_contains(event, "plan-1") for event in events)
-    final_deltas = _final_answer_deltas(events)
-    assert len(final_deltas) > 1
-    assert "".join(final_deltas) == _FakePlanExitAgent.plan_markdown
-    assert all(delta != _FakePlanExitAgent.plan_markdown for delta in final_deltas)
-
-
-def test_plan_exit_stops_leader_stream_after_final_answer():
-    """plan_exit 后必须输出计划最终答案并停止当前 Agent 流。"""
+def test_plan_review_waits_for_tool_result_end_before_stopping():
+    """PLAN_REVIEW_REQUESTED 必须等工具结果闭合后再停流。"""
 
     async def run_case():
         state = LeaderStreamState()
         events = [
             event
             async for event in stream_leader_agent_reply(
-                agent=_FakePlanExitThenContinuesAgent(),
+                agent=_FakePlanReviewThenContinuesAgent(),
                 user_msg=object(),
                 state=state,
                 session_id="session-1",
@@ -1553,41 +1437,7 @@ def test_plan_exit_stops_leader_stream_after_final_answer():
                 message="制定计划",
                 stream_scope="single",
                 skill_runs=[],
-            )
-        ]
-        return state, events
-
-    state, events = asyncio.run(run_case())
-
-    assert state.stopped is True
-    assert state.stop_reason == "plan_finalized"
-    assert any(_event_is(event, "FINAL_ANSWER_DELTA") and _event_contains(event, "# 计划") for event in events)
-    assert "".join(_final_answer_deltas(events)) == _FakePlanExitAgent.plan_markdown
-    assert not any(_event_contains(event, "不应该继续输出") for event in events)
-    assert not any(_event_contains(event, "call-write-after-plan-exit") for event in events)
-
-
-def test_native_plan_finalized_waits_for_tool_result_end_before_stopping():
-    """manager 原生 PLAN_FINALIZED 必须等 plan_exit TOOL_RESULT_END 后再停流。"""
-
-    async def run_case():
-        state = LeaderStreamState()
-        events = [
-            event
-            async for event in stream_leader_agent_reply(
-                agent=_FakePlanExitThenContinuesAgent(),
-                user_msg=object(),
-                state=state,
-                session_id="session-1",
-                persist=False,
-                agent_id="agent-1",
-                agent_name="Agent",
-                model_name="deepseek-chat",
-                guardrails=AgentGuardrails(),
-                message="制定计划",
-                stream_scope="single",
-                skill_runs=[],
-                plan_mode_manager=_FakeNativePlanFinalizedManager(),
+                plan_mode_manager=_FakeNativePlanReviewManager(),
             )
         ]
         return state, events
@@ -1598,117 +1448,13 @@ def test_native_plan_finalized_waits_for_tool_result_end_before_stopping():
     final_answer_index = next(index for index, event in enumerate(events) if _event_is(event, "FINAL_ANSWER_DELTA"))
     assert tool_result_end_index < final_answer_index
     final_deltas = _final_answer_deltas(events)
-    assert len(final_deltas) > 1
-    assert "".join(final_deltas) == _FakePlanExitAgent.plan_markdown
-    assert state.assistant_tool_calls[0].id == "call-plan-exit"
+    assert final_deltas
+    assert "".join(final_deltas) == "计划 Revision 0 已生成，等待你的确认。"
+    assert state.assistant_tool_calls[0].id == "call-plan-review"
     assert state.assistant_tool_calls[0].status == "completed"
     assert state.stopped is True
-    assert state.stop_reason == "plan_finalized"
-    assert not any(_event_contains(event, "call-write-after-plan-exit") for event in events)
-
-
-def test_resume_plan_exit_tool_result_becomes_final_answer():
-    """HITL resume 后执行 plan_exit，也必须输出最终答案并完成本轮。"""
-
-    async def run_case():
-        PENDING_INTERACTIONS.clear()
-        PENDING_AGENTS.clear()
-        interaction = _create_pending_interaction(
-            interaction_type="REQUIRE_USER_CONFIRM",
-            agent=_FakePlanExitAgent(),
-            session_id="session-resume-plan",
-            agent_id="agent-1",
-            agent_name="Agent",
-            model_name="deepseek-chat",
-            reply_id="reply-1",
-            tool_calls=[{
-                "id": "call-read",
-                "name": "Read",
-                "input": '{"file_path":"docs/chat-sse-event-contract.md"}',
-                "state": "asking",
-            }],
-            message="读取后制定计划",
-            assistant_text="",
-            skill_runs=[],
-            scope="single",
-            persist=False,
-        )
-        stream = resume_interaction_events(
-            ChatResumeRequest.model_validate({
-                "interactionId": interaction.id,
-                "action": "approve",
-            })
-        )
-        return [chunk async for chunk in stream]
-
-    events = asyncio.run(run_case())
-
-    try:
-        assert any(_event_is(event, "PLAN_FINALIZED") for event in events)
-        assert any(_event_is(event, "FINAL_ANSWER_DELTA") and _event_contains(event, "# 计划") for event in events)
-        assert "".join(_final_answer_deltas(events)) == _FakePlanExitAgent.plan_markdown
-        assert any(_event_contains(event, "plan-1") for event in events)
-        assert any(_event_contains(event, "RUN_COMPLETED") for event in events)
-    finally:
-        PENDING_INTERACTIONS.clear()
-        PENDING_AGENTS.clear()
-
-
-def test_todo_write_tool_result_emits_plan_tasks_updated_runtime_event():
-    """todo_write 工具结果必须实时转成结构化任务列表事件。"""
-
-    async def run_case():
-        return [
-            event
-            async for event in stream_leader_agent_reply(
-                agent=_FakeTodoWriteAgent(),
-                user_msg=object(),
-                state=LeaderStreamState(),
-                session_id="session-1",
-                persist=False,
-                agent_id="agent-1",
-                agent_name="Agent",
-                model_name="deepseek-chat",
-                guardrails=AgentGuardrails(),
-                message="制定结构化计划",
-                stream_scope="single",
-                skill_runs=[],
-            )
-        ]
-
-    events = asyncio.run(run_case())
-
-    assert any(_event_is(event, "PLAN_TASKS_UPDATED") for event in events)
-    assert any(_event_contains(event, "补工具") for event in events)
-
-
-def test_task_output_tool_result_emits_plan_task_output_runtime_event():
-    """task_output 工具结果必须实时转成步骤输出事件，并保留步骤状态。"""
-
-    async def run_case():
-        return [
-            event
-            async for event in stream_leader_agent_reply(
-                agent=_FakeTaskOutputAgent(),
-                user_msg=object(),
-                state=LeaderStreamState(),
-                session_id="session-1",
-                persist=False,
-                agent_id="agent-1",
-                agent_name="Agent",
-                model_name="deepseek-chat",
-                guardrails=AgentGuardrails(),
-                message="执行结构化计划",
-                stream_scope="single",
-                skill_runs=[],
-            )
-        ]
-
-    events = asyncio.run(run_case())
-
-    assert any(_event_is(event, "PLAN_TASK_OUTPUT") for event in events)
-    assert any(_event_contains(event, "completed") for event in events)
-    assert any(_event_contains(event, "工具可用") for event in events)
+    assert state.stop_reason == "plan_review_requested"
+    assert not any(_event_contains(event, "call-write-after-plan-review") for event in events)
 
 
 def test_context_compression_schema_allows_project_discovery_summaries():
@@ -2476,18 +2222,18 @@ def test_background_run_preserves_failed_status_after_run_failed_event():
     assert run.completed_at is not None
 
 
-def test_background_run_completes_after_plan_finalized():
-    """Plan finalized 是本轮正常完成，不再进入 waiting。"""
+def test_background_run_completes_after_plan_review_requested():
+    """Plan revision 提交审核后，本轮起草 Run 正常完成。"""
 
     async def run_finalized_case():
         async def factory():
             yield runtime_trace_source_event(
-                "PLAN_FINALIZED",
+                "PLAN_REVIEW_REQUESTED",
                 session_id="session-plan-finalized",
                 run_id="run-plan-finalized",
                 scope="plan",
-                status="completed",
-                payload={"planId": "plan-1", "markdown": "# 计划"},
+                status="waiting",
+                payload={"planId": "plan-1", "status": "review_waiting", "revision": 1, "markdown": "# 计划"},
             )
             yield source_event("FINAL_ANSWER_DELTA", {"delta": "# 计划"})
             yield runtime_trace_source_event(
@@ -2515,23 +2261,23 @@ def test_background_run_completes_after_plan_finalized():
     assert run.completed_at is not None
 
 
-def test_background_run_plan_tail_events_do_not_break_completed_status():
-    """Plan finalized 后的工具尾事件不能把 Run 冲回 running。"""
+def test_background_run_plan_review_tail_events_do_not_break_completed_status():
+    """Plan review 提交后的工具尾事件不能把 Run 冲回 running。"""
 
     async def run_finalized_case():
         async def factory():
             yield runtime_trace_source_event(
-                "PLAN_FINALIZED",
+                "PLAN_REVIEW_REQUESTED",
                 session_id="session-plan-tail",
                 run_id="run-plan-tail",
                 scope="plan",
-                status="completed",
-                payload={"planId": "plan-1", "markdown": "# 计划"},
+                status="waiting",
+                payload={"planId": "plan-1", "status": "review_waiting", "revision": 1, "markdown": "# 计划"},
             )
             yield source_event("FINAL_ANSWER_DELTA", {"delta": "# 计划"})
             yield source_event("TOOL_RESULT_END", {
-                "tool_call_id": "call-plan-exit",
-                "tool_call_name": "plan_exit",
+                "tool_call_id": "call-plan-review",
+                "tool_call_name": "plan_request_review",
                 "state": "success",
             })
             yield source_event("REPLY_END", {"reply_id": "reply-1"})

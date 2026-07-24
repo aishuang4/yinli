@@ -12,7 +12,7 @@ from src.server.routes.chat.plan_mode.policy import is_plan_mode_tool_allowed
 
 DENY_MESSAGE = (
     "Blocked: you are in PLAN mode (read-only). You may investigate and run "
-    "read-only tools, record your plan with plan_write, and call plan_exit "
+    "read-only tools, record your plan with plan_write, and call plan_request_review "
     "when ready to return the plan. Do not modify files or run mutating "
     "commands while PLAN mode is active."
 )
@@ -21,18 +21,31 @@ PLAN_BANNER_TEMPLATE = """
 
 <system-reminder>
 PLAN MODE is active (read-only). Plan file: {plan_file}
+If no Plan ID exists yet, call plan_enter before any other Plan control tool.
 Investigate the problem and draft a concrete plan, but do NOT modify files,
 run mutating commands, or otherwise change state. Record the plan with
-plan_write. After writing the plan, use todo_write to create a structured
+plan_write. After writing the plan, use plan_set_steps to create a structured
 task list so the user can review the intended execution steps.
-When the plan is complete, call plan_exit to return the plan as the final
-answer for this run. The user will decide whether to modify or execute the
-plan in a later message.
+When the plan is complete, call plan_request_review. This pauses work for an
+explicit user review. Never implement the plan before the user approves it.
 If you lack required information, ask one specific clarifying question
 instead of inventing details.
 When the user or context gives an exact relative path, call Read on that path
 directly. Avoid broad Glob patterns such as **/* unless you truly need project
 discovery; prefer scoped Grep/Glob inside the smallest known directory.
+</system-reminder>
+"""
+
+EXECUTION_BANNER_TEMPLATE = """
+
+<system-reminder>
+An approved PLAN is being executed. Plan ID: {plan_id}; approved revision:
+{approved_revision}. Follow the structured steps in order. Before starting a
+step call task_output with status=running. After it finishes call task_output
+again with completed, failed, or skipped and include concise evidence/result.
+If new evidence invalidates the approved plan, call plan_request_replan and
+produce a complete new revision for review. When every step has a terminal
+status, call plan_complete before the final answer.
 </system-reminder>
 """
 
@@ -48,10 +61,15 @@ class PlanModeMiddleware(MiddlewareBase):
 
         base = current_prompt or ""
         if self.manager.context.plan_active:
-            return base + PLAN_BANNER_TEMPLATE.format(
+            base += PLAN_BANNER_TEMPLATE.format(
                 plan_file=self.manager.plan_file_path(),
             )
-        return base
+        elif self.manager.is_execution_active():
+            base += EXECUTION_BANNER_TEMPLATE.format(
+                plan_id=self.manager.context.plan_id,
+                approved_revision=self.manager.context.approved_revision,
+            )
+        return base + self.manager.prompt_context()
 
     async def on_acting(
         self,

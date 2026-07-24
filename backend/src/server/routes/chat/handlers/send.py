@@ -69,6 +69,12 @@ async def start_message(data: ChatMessage) -> dict:
 async def start_chat_run(data: ChatMessage):
     """创建后台 Chat Run。"""
 
+    if bool(data.plan_action) != bool(data.plan_id):
+        raise HTTPException(status_code=422, detail="plan_action 和 plan_id 必须同时提供。")
+    if data.plan_action and data.mode != "agent":
+        raise HTTPException(status_code=422, detail="Plan 审核与执行只支持单 Agent 模式。")
+    if data.plan_action == "revise" and not data.plan_feedback.strip():
+        raise HTTPException(status_code=422, detail="修改计划必须提供自然语言反馈。")
     session_id = data.session_id or uuid.uuid4().hex
     try:
         runtime_context = resolve_runtime_context(

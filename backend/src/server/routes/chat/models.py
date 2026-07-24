@@ -134,6 +134,10 @@ class ChatPlanRun(BaseModel):
     status: str
     markdown: str
     current_step_id: str | None = Field(default=None, alias="currentStepId")
+    revision: int = 0
+    approved_revision: int | None = Field(default=None, alias="approvedRevision")
+    feedback: str = ""
+    execution_run_id: str = Field(default="", alias="executionRunId")
     steps: list[ChatPlanStep] = Field(default_factory=list)
     created_at: str = Field(alias="createdAt")
     updated_at: str = Field(alias="updatedAt")
@@ -270,5 +274,17 @@ class ChatMessage(BaseModel):
 
     sandbox: bool = False
     """沙盒运行：不写入历史对话"""
+
+    plan_id: str | None = None
+    """Plan 审核动作绑定的持久化 Plan ID。"""
+
+    plan_action: Literal["revise", "approve", "cancel"] | None = None
+    """Plan 审核命令；修改仍由模型生成完整 revision。"""
+
+    plan_feedback: str = ""
+    """用户提交给模型的自然语言计划修改意见。"""
+
+    plan_requested: bool = False
+    """显式要求本轮先进入只读 Plan Mode。"""
 
     model_config = {"populate_by_name": True, "extra": "forbid"}

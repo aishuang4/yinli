@@ -26,7 +26,9 @@ import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList
 import { ChatStartScenarios } from '../features/chat/ChatStartScenarios';
 import { AskUserComposer } from '../features/chat/AskUserComposer';
 import { ChatComposer } from '../features/chat/ChatComposer';
+import { PlanReviewComposer } from '../features/chat/PlanReviewComposer';
 import { ChatHistoryPanel } from '../features/chat/ChatHistoryPanel';
+import { selectPendingPlanReview, type PlanReviewData } from '../features/chat/planReviewUtils';
 import { selectPendingAskUserInteractions } from '../features/chat/humanInteractionUtils';
 import type { ChatFileAttachment, ChatFilePayload, ChatImageAttachment, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
 import { runtimeError, runtimeText } from '../features/runtime-stream/selectors';
@@ -42,6 +44,7 @@ export function ChatPage() {
   const [selectedAgentId, setSelectedAgentId] = useState<string>('default');
   const [inputValue, setInputValue] = useState('');
   const [deepThinking, setDeepThinking] = useState(false);
+  const [planMode, setPlanMode] = useState(false);
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
   const [fileAttachments, setFileAttachments] = useState<ChatFileAttachment[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
@@ -102,6 +105,10 @@ export function ChatPage() {
     [snapshot],
   );
   const activeAskUserInteraction = pendingAskUserInteractions[0];
+  const pendingPlanReview = useMemo(
+    () => selectPendingPlanReview(messages.map((message) => message.displaySnapshot), snapshot),
+    [messages, snapshot],
+  );
   const hasLiveResponse = state.isStreaming || snapshot.order.length > 0 || Boolean(state.error);
   const activeSession = useMemo(() => (
     sessions.find((session) => session.id === activeSessionId) || null
@@ -539,10 +546,47 @@ export function ChatPage() {
       model: runtimeAgent?.modelConfig.primary,
       skillIds: runtimeAgent?.skills,
       deepThinking,
+      planRequested: planMode && targetMode === 'agent',
       images,
       files,
     });
-  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, imageAttachments, inputValue, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.isStreaming, targetMode, uploadFilesForSession]);
+  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, imageAttachments, inputValue, planMode, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.isStreaming, targetMode, uploadFilesForSession]);
+
+  const handlePlanReview = useCallback(async (
+    plan: PlanReviewData,
+    action: 'revise' | 'approve' | 'cancel',
+    feedback = '',
+  ) => {
+    if (!activeSessionId || state.isStreaming) return;
+    const userText = action === 'approve'
+      ? `确认执行计划 Revision ${plan.revision}`
+      : action === 'cancel'
+        ? `取消计划 Revision ${plan.revision}`
+        : `修改计划：${feedback}`;
+    setMessages((current) => [...current, {
+      id: `user-plan-${Date.now()}`,
+      role: 'user',
+      content: userText,
+      createdAt: new Date().toISOString(),
+    }]);
+    shouldAutoScrollRef.current = true;
+    setShowScrollToBottom(false);
+    setChatError(null);
+    await sendMessage(userText, {
+      projectId: activeProjectId,
+      sessionId: activeSessionId,
+      agentId: runtimeAgent?.id,
+      agentName: runtimeAgent?.name,
+      mode: 'agent',
+      systemPrompt: runtimeAgent?.systemPrompt,
+      model: runtimeAgent?.modelConfig.primary,
+      skillIds: runtimeAgent?.skills,
+      deepThinking,
+      planId: plan.planId,
+      planAction: action,
+      planFeedback: feedback,
+    });
+  }, [activeProjectId, activeSessionId, deepThinking, runtimeAgent, sendMessage, state.isStreaming]);
 
   // 当流结束时，将 assistant 回复加入消息历史
   useEffect(() => {
@@ -764,6 +808,13 @@ export function ChatPage() {
               isResuming={state.isStreaming}
               onResolve={resumeInteraction}
             />
+          ) : pendingPlanReview ? (
+            <PlanReviewComposer
+              key={`${pendingPlanReview.planId}:${pendingPlanReview.revision}`}
+              plan={pendingPlanReview}
+              submitting={state.isStreaming}
+              onSubmit={(action, feedback) => handlePlanReview(pendingPlanReview, action, feedback)}
+            />
           ) : (
             <ChatComposer
               agentOptions={agentOptions}
@@ -776,6 +827,7 @@ export function ChatPage() {
               inputValue={inputValue}
               isStreaming={state.isStreaming}
               messageInputRef={messageInputRef}
+              planMode={planMode}
               projectResourcesLoading={projectResourcesLoading}
               selectedAgentId={selectedAgentId}
               targetMode={targetMode}
@@ -792,6 +844,7 @@ export function ChatPage() {
               onSend={handleSend}
               onTargetModeChange={setTargetMode}
               onToggleDeepThinking={() => setDeepThinking((value) => !value)}
+              onTogglePlanMode={() => setPlanMode((value) => !value)}
             />
           )}
 

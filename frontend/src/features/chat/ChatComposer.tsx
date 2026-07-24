@@ -1,7 +1,7 @@
 /** Chat 输入器，负责附件预览、运行模式和发送控制。 */
 
 import type { ChangeEvent, KeyboardEventHandler, ReactNode, RefObject } from 'react';
-import { AlertCircle, FileText, ImagePlus, Paperclip, Send, Square, X } from 'lucide-react';
+import { AlertCircle, FileText, ImagePlus, ListChecks, Paperclip, Send, Square, X } from 'lucide-react';
 import {
   SparkDeepThinkLine,
   SparkReinforcementLearningLine,
@@ -22,6 +22,7 @@ interface ChatComposerProps {
   inputValue: string;
   isStreaming: boolean;
   messageInputRef: RefObject<HTMLTextAreaElement | null>;
+  planMode: boolean;
   projectResourcesLoading: boolean;
   selectedAgentId: string;
   targetMode: 'agent' | 'team';
@@ -38,16 +39,17 @@ interface ChatComposerProps {
   onSend: () => void;
   onTargetModeChange: (mode: 'agent' | 'team') => void;
   onToggleDeepThinking: () => void;
+  onTogglePlanMode: () => void;
 }
 
 export function ChatComposer(props: ChatComposerProps) {
   const {
     agentOptions, agentsLoading, chatError, deepThinking, fileAttachments,
-    imageAttachments, imageInputRef, inputValue, isStreaming, messageInputRef,
+    imageAttachments, imageInputRef, inputValue, isStreaming, messageInputRef, planMode,
     projectResourcesLoading, selectedAgentId, targetMode, onAbort,
     onCompositionEnd, onCompositionStart, onFile, onImageFiles, onInputChange,
     onKeyDown, onRemoveFile, onRemoveImage, onSelectedAgentChange, onSend,
-    onTargetModeChange, onToggleDeepThinking,
+    onTargetModeChange, onToggleDeepThinking, onTogglePlanMode,
   } = props;
 
   return (
@@ -171,6 +173,26 @@ export function ChatComposer(props: ChatComposerProps) {
             />
           )}
           <div className="ml-auto flex items-center gap-2">
+            {targetMode === 'agent' ? (
+              <Tooltip title={planMode ? '计划模式已开启' : '先制定计划'} placement="top" mode="dark">
+                <span className="inline-flex">
+                  <button
+                    type="button"
+                    className={`icon-button h-8 w-8 rounded-[10px] border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
+                      planMode
+                        ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
+                        : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
+                    }`}
+                    onClick={onTogglePlanMode}
+                    disabled={isStreaming}
+                    aria-label={planMode ? '关闭计划模式' : '开启计划模式'}
+                    aria-pressed={planMode}
+                  >
+                    <ListChecks size={16} />
+                  </button>
+                </span>
+              </Tooltip>
+            ) : null}
             <Tooltip title={deepThinking ? '深度思考已开启' : '开启深度思考'} placement="top" mode="dark">
               <span className="inline-flex">
                 <button

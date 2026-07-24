@@ -10,7 +10,24 @@ from src.server.routes.chat.completion import (
 )
 from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
 from src.server.routes.chat.models import ChatSkillRun
+from src.server.routes.chat.plan_mode.manager import PlanModeManager
+from src.server.routes.chat.runtime_events import runtime_source_event
 from src.runtime_context import RuntimeContext
+
+
+async def _emit_plan_run_failure(
+    manager: PlanModeManager | None,
+    state: LeaderStreamState,
+    reason: str,
+) -> AsyncGenerator[str, None]:
+    """先持久化 Plan 失败/回退状态，再让通用 Run failure 收口。"""
+
+    if manager is None:
+        return
+    manager.fail_run(reason=reason)
+    for runtime_event in manager.drain_runtime_events():
+        state.runtime_events.append(runtime_event)
+        yield runtime_source_event(runtime_event)
 
 
 async def execute_and_finalize_leader_reply(
@@ -27,7 +44,7 @@ async def execute_and_finalize_leader_reply(
     user_message: str,
     stream_scope: str,
     skill_runs: list[ChatSkillRun],
-    plan_mode_manager: object | None = None,
+    plan_mode_manager: PlanModeManager | None = None,
     runtime_event_sources: list[object] | None = None,
     sandbox: bool = False,
     exception_prefix: str = "Agent 执行异常",
@@ -55,9 +72,12 @@ async def execute_and_finalize_leader_reply(
         ):
             yield event
 
-        if state.stopped and state.stop_reason != "plan_finalized":
+        if state.stopped and state.stop_reason != "plan_review_requested":
             return
         if state.exceeded_max_iters:
+            assistant_error = max_react_iterations_error()
+            async for event in _emit_plan_run_failure(plan_mode_manager, state, assistant_error):
+                yield event
             async for event in finalize_failed_leader_run(
                 session_id=session_id,
                 persist=persist,
@@ -65,7 +85,25 @@ async def execute_and_finalize_leader_reply(
                 agent_name=agent_name,
                 model_name=model_name,
                 assistant_text="",
-                assistant_error=max_react_iterations_error(),
+                assistant_error=assistant_error,
+                assistant_model_caches=state.assistant_model_caches,
+                skill_runs=skill_runs,
+                sandbox=sandbox,
+            ):
+                yield event
+            return
+        plan_completion_error = plan_mode_manager.run_completion_error() if plan_mode_manager else ""
+        if plan_completion_error:
+            async for event in _emit_plan_run_failure(plan_mode_manager, state, plan_completion_error):
+                yield event
+            async for event in finalize_failed_leader_run(
+                session_id=session_id,
+                persist=persist,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                model_name=model_name,
+                assistant_text=state.assistant_text,
+                assistant_error=plan_completion_error,
                 assistant_model_caches=state.assistant_model_caches,
                 skill_runs=skill_runs,
                 sandbox=sandbox,
@@ -73,6 +111,9 @@ async def execute_and_finalize_leader_reply(
                 yield event
             return
         if not state.assistant_text.strip():
+            assistant_error = missing_final_answer_error()
+            async for event in _emit_plan_run_failure(plan_mode_manager, state, assistant_error):
+                yield event
             async for event in finalize_failed_leader_run(
                 session_id=session_id,
                 persist=persist,
@@ -80,7 +121,7 @@ async def execute_and_finalize_leader_reply(
                 agent_name=agent_name,
                 model_name=model_name,
                 assistant_text="",
-                assistant_error=missing_final_answer_error(),
+                assistant_error=assistant_error,
                 assistant_model_caches=state.assistant_model_caches,
                 skill_runs=skill_runs,
                 sandbox=sandbox,
@@ -109,6 +150,9 @@ async def execute_and_finalize_leader_reply(
         ):
             yield event
     except Exception as exc:
+        assistant_error = f"{exception_prefix}: {exc}"
+        async for event in _emit_plan_run_failure(plan_mode_manager, state, assistant_error):
+            yield event
         async for event in finalize_failed_leader_run(
             session_id=session_id,
             persist=persist,
@@ -116,7 +160,7 @@ async def execute_and_finalize_leader_reply(
             agent_name=agent_name,
             model_name=model_name,
             assistant_text=state.assistant_text,
-            assistant_error=f"{exception_prefix}: {exc}",
+            assistant_error=assistant_error,
             assistant_model_caches=state.assistant_model_caches,
             skill_runs=skill_runs,
             sandbox=sandbox,

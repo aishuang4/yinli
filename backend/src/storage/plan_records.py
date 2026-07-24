@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -31,13 +32,16 @@ class PlanRecordStore:
                 """
                 INSERT INTO plans (
                     id, run_id, session_id, agent_id, title, goal, status,
-                    markdown, current_step_id, created_at, updated_at, completed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    markdown, current_step_id, current_revision, approved_revision,
+                    review_feedback, execution_run_id, created_at, updated_at, completed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     plan["id"], plan.get("runId", ""), plan["sessionId"], plan["agentId"],
                     plan["title"], plan["goal"], plan["status"], plan["markdown"],
-                    plan.get("currentStepId"), plan["createdAt"], plan["updatedAt"],
+                    plan.get("currentStepId"), plan.get("revision", 0),
+                    plan.get("approvedRevision"), plan.get("feedback", ""),
+                    plan.get("executionRunId", ""), plan["createdAt"], plan["updatedAt"],
                     plan.get("completedAt"),
                 ),
             )
@@ -120,6 +124,10 @@ class PlanRecordStore:
         status: str | None = None,
         markdown: str | None = None,
         current_step_id: str | None = None,
+        revision: int | None = None,
+        approved_revision: int | None = None,
+        feedback: str | None = None,
+        execution_run_id: str | None = None,
         completed_at: str | None = None,
     ) -> dict[str, Any] | None:
         existing = self.get(plan_id)
@@ -129,7 +137,9 @@ class PlanRecordStore:
             conn.execute(
                 """
                 UPDATE plans
-                SET title = ?, status = ?, markdown = ?, current_step_id = ?, completed_at = ?, updated_at = ?
+                SET title = ?, status = ?, markdown = ?, current_step_id = ?, current_revision = ?,
+                    approved_revision = ?, review_feedback = ?, execution_run_id = ?,
+                    completed_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -137,11 +147,123 @@ class PlanRecordStore:
                     status if status is not None else existing["status"],
                     markdown if markdown is not None else existing["markdown"],
                     current_step_id if current_step_id is not None else existing.get("currentStepId"),
+                    revision if revision is not None else existing.get("revision", 0),
+                    approved_revision if approved_revision is not None else existing.get("approvedRevision"),
+                    feedback if feedback is not None else existing.get("feedback", ""),
+                    execution_run_id if execution_run_id is not None else existing.get("executionRunId", ""),
                     completed_at if completed_at is not None else existing.get("completedAt"),
                     self.utc_now(),
                     plan_id,
                 ),
             )
+            conn.commit()
+        return self.get(plan_id)
+
+    def publish_revision(
+        self,
+        plan_id: str,
+        *,
+        expected_status: str,
+        revision: int,
+        markdown: str,
+        steps: list[dict[str, Any]],
+        feedback: str = "",
+    ) -> dict[str, Any] | None:
+        """原子保存不可变 revision，并把 Plan 切换到等待审核。"""
+
+        self.ensure_db()
+        created_at = self.utc_now()
+        revision_id = f"{plan_id}-revision-{revision}"
+        with self.lock, self.connect() as conn:
+            current = conn.execute(
+                "SELECT status, current_revision FROM plans WHERE id = ?",
+                (plan_id,),
+            ).fetchone()
+            if (
+                current is None
+                or current["status"] != expected_status
+                or revision != int(current["current_revision"] or 0) + 1
+            ):
+                return None
+            conn.execute(
+                """
+                INSERT INTO plan_revisions(id, plan_id, revision, markdown, steps, feedback, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    revision_id,
+                    plan_id,
+                    revision,
+                    markdown,
+                    json.dumps(steps, ensure_ascii=False),
+                    feedback,
+                    created_at,
+                ),
+            )
+            updated = conn.execute(
+                """
+                UPDATE plans
+                SET status = 'review_waiting', markdown = ?, current_revision = ?,
+                    review_feedback = ?, updated_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (markdown, revision, feedback, created_at, plan_id, expected_status),
+            )
+            if updated.rowcount != 1:
+                conn.rollback()
+                return None
+            conn.commit()
+        return {
+            "id": revision_id,
+            "planId": plan_id,
+            "revision": revision,
+            "markdown": markdown,
+            "steps": steps,
+            "feedback": feedback,
+            "createdAt": created_at,
+        }
+
+    def transition_status(
+        self,
+        plan_id: str,
+        *,
+        expected_status: str,
+        status: str,
+        approved_revision: int | None = None,
+        feedback: str | None = None,
+        execution_run_id: str | None = None,
+        completed_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        """仅在当前状态匹配时原子迁移 Plan，防止重复审核或执行。"""
+
+        self.ensure_db()
+        updated_at = self.utc_now()
+        with self.lock, self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE plans
+                SET status = ?,
+                    approved_revision = COALESCE(?, approved_revision),
+                    review_feedback = COALESCE(?, review_feedback),
+                    execution_run_id = COALESCE(?, execution_run_id),
+                    completed_at = COALESCE(?, completed_at),
+                    updated_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (
+                    status,
+                    approved_revision,
+                    feedback,
+                    execution_run_id,
+                    completed_at,
+                    updated_at,
+                    plan_id,
+                    expected_status,
+                ),
+            )
+            if cursor.rowcount != 1:
+                conn.rollback()
+                return None
             conn.commit()
         return self.get(plan_id)
 
@@ -245,6 +367,10 @@ class PlanRecordStore:
             "agentId": row["agent_id"], "title": row["title"], "goal": row["goal"],
             "status": row["status"], "markdown": row["markdown"],
             "currentStepId": row["current_step_id"], "steps": steps,
+            "revision": row["current_revision"],
+            "approvedRevision": row["approved_revision"],
+            "feedback": row["review_feedback"],
+            "executionRunId": row["execution_run_id"],
             "createdAt": row["created_at"], "updatedAt": row["updated_at"],
             "completedAt": row["completed_at"],
         }

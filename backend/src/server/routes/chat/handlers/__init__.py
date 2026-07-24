@@ -2,7 +2,6 @@
 
 from src.server.routes.chat.handlers import (  # noqa: F401
     resume,
-    plans,
     send,
     runs,
     sessions,

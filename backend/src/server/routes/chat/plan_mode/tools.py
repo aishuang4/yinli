@@ -86,11 +86,11 @@ class PlanWriteTool(_PlanToolBase):
         })
 
 
-class PlanExitTool(_PlanToolBase):
-    """退出计划模式并将计划作为最终答复。"""
+class PlanRequestReviewTool(_PlanToolBase):
+    """提交完整 revision 并等待用户审核。"""
 
-    name: str = "plan_exit"
-    description: str = "Exit PLAN mode and return the written plan as the final answer."
+    name: str = "plan_request_review"
+    description: str = "Submit the complete plan revision for user review and stop planning."
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {},
@@ -98,19 +98,21 @@ class PlanExitTool(_PlanToolBase):
     }
 
     async def __call__(self) -> ToolChunk:
-        context = self.manager.finalize()
+        context = self.manager.request_review()
         return self._success({
             "planId": context.plan_id,
-            "planFile": context.current_plan_file,
+            "status": context.status,
+            "revision": context.revision,
             "markdown": context.markdown,
+            "steps": context.steps,
         })
 
 
-class TodoWriteTool(_PlanToolBase):
-    """写入结构化任务列表。"""
+class PlanSetStepsTool(_PlanToolBase):
+    """替换当前 revision 的结构化步骤。"""
 
-    name: str = "todo_write"
-    description: str = "Create or replace the structured task list for the active plan."
+    name: str = "plan_set_steps"
+    description: str = "Create or replace all structured steps in the current plan revision."
     input_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
@@ -122,14 +124,7 @@ class TodoWriteTool(_PlanToolBase):
                     "properties": {
                         "title": {"type": "string", "description": "Short task title."},
                         "description": {"type": "string", "description": "Task details."},
-                        "status": {
-                            "type": "string",
-                            "description": "Task status.",
-                            "enum": ["pending", "running", "completed", "failed", "skipped"],
-                        },
                         "assignedAgentId": {"type": "string", "description": "Optional assigned agent id."},
-                        "evidence": {"type": "string", "description": "Evidence collected for this task."},
-                        "result": {"type": "string", "description": "Task result summary."},
                     },
                     "required": ["title"],
                 },
@@ -216,14 +211,60 @@ class TaskOutputTool(_PlanToolBase):
         })
 
 
+class PlanRequestReplanTool(_PlanToolBase):
+    """执行中请求重新规划。"""
+
+    name: str = "plan_request_replan"
+    description: str = "Pause execution and enter read-only replanning when the approved plan is no longer valid."
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "reason": {"type": "string", "description": "New evidence that requires a revised plan."},
+        },
+        "required": ["reason"],
+    }
+
+    async def __call__(self, reason: str) -> ToolChunk:
+        context = self.manager.request_replan(reason=reason)
+        return self._success({
+            "planId": context.plan_id,
+            "status": context.status,
+            "feedback": context.feedback,
+        })
+
+
+class PlanCompleteTool(_PlanToolBase):
+    """在全部步骤终止后收口计划执行。"""
+
+    name: str = "plan_complete"
+    description: str = "Finish execution after every plan step is completed, failed, or skipped."
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string", "description": "Short execution summary."},
+        },
+        "required": [],
+    }
+
+    async def __call__(self, summary: str = "") -> ToolChunk:
+        context = self.manager.complete_execution(summary=summary)
+        return self._success({
+            "planId": context.plan_id,
+            "status": context.status,
+            "steps": context.steps,
+        })
+
+
 def build_plan_mode_tools(manager: PlanModeManager) -> list[ToolBase]:
     """构造 Plan Mode 控制工具。"""
 
     return [
         PlanEnterTool(manager),
         PlanWriteTool(manager),
-        TodoWriteTool(manager),
+        PlanSetStepsTool(manager),
+        PlanRequestReviewTool(manager),
         TaskListTool(manager),
         TaskOutputTool(manager),
-        PlanExitTool(manager),
+        PlanRequestReplanTool(manager),
+        PlanCompleteTool(manager),
     ]

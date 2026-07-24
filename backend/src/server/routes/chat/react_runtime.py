@@ -15,6 +15,7 @@ from agentscope.message import UserMsg
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.completion import (
     emit_failed_startup_run,
+    finalize_successful_leader_run,
 )
 from src.server.routes.chat.leader_execution import execute_and_finalize_leader_reply
 from src.server.routes.chat.leader_stream import LeaderStreamState
@@ -30,6 +31,7 @@ from src.server.routes.chat.runtime_builder import (
     create_main_agent_from_spec,
 )
 from src.server.routes.chat.trace_recorder import _make_fallback_trace_recorder
+from src.server.routes.chat.runtime_events import runtime_source_event
 from src.subagents.manager import SubagentDelegationManager
 from src.subagents.registry import load_subagent_catalog
 from src.tools.delegate_task import DelegateTask
@@ -47,8 +49,12 @@ def _build_plan_mode_runtime_parts(
         agent_id=ctx.agent_id,
         agent_name=ctx.agent_name,
         persist=ctx.persist_run,
+        plan_id=run_data.plan_id or "",
+        action=run_data.plan_action or "",
+        feedback=run_data.plan_feedback,
+        requested=run_data.plan_requested,
     )
-    runtime_features_cache_key = "plan-mode-v1"
+    runtime_features_cache_key = f"plan-mode-v2:{current_chat_background_run_id()}"
     tools = build_plan_mode_tools(manager)
     middlewares = [PlanModeMiddleware(manager)]
     return manager, runtime_features_cache_key, tools, middlewares
@@ -73,7 +79,7 @@ def _build_runtime_feature_parts(
 
     if ctx.intent_route.executor.kind == "team":
         pass
-    else:
+    elif run_data.plan_requested or run_data.plan_action:
         plan_mode_manager, plan_key, plan_tools, plan_middlewares = _build_plan_mode_runtime_parts(ctx, run_data)
         feature_keys.append(plan_key)
         extra_tools.extend(plan_tools)
@@ -141,6 +147,7 @@ async def execute_react_runtime(
     active_skill_run = ctx.active_skill_run
     system_prompt = ctx.system_prompt
     stream_scope = "leader" if ctx.intent_route.executor.kind == "team" else "single_agent"
+    plan_mode_manager: PlanModeManager | None = None
 
     try:
         if ctx.intent_route.executor.kind == "team":
@@ -156,6 +163,31 @@ async def execute_react_runtime(
             runtime_event_sources,
             runtime_prompt_addendum,
         ) = _build_runtime_feature_parts(ctx, run_data)
+        if plan_mode_manager and plan_mode_manager.is_cancelled_action():
+            runtime_events = plan_mode_manager.drain_runtime_events()
+            for runtime_event in runtime_events:
+                yield runtime_source_event(runtime_event)
+            async for completion_event in finalize_successful_leader_run(
+                session_id=ctx.session_id,
+                persist=ctx.persist_run,
+                agent_id=ctx.agent_id,
+                agent_name=ctx.agent_name,
+                model_name=ctx.model_name,
+                user_message=ctx.effective_user_message,
+                assistant_text="计划已取消。",
+                assistant_thinking="",
+                assistant_tool_calls=[],
+                assistant_model_caches=[],
+                runtime_events=runtime_events,
+                skill_runs=ctx.skill_runs,
+                active_skill_run=ctx.active_skill_run,
+                runtime_context=ctx.runtime_context,
+                session_workspace_dir=ctx.session_workspace_dir,
+                session_artifact_paths_before=ctx.session_artifact_paths_before,
+                sandbox=run_data.sandbox,
+            ):
+                yield completion_event
+            return
         if runtime_prompt_addendum:
             system_prompt = f"{system_prompt}\n\n{runtime_prompt_addendum}"
         main_agent_spec = build_main_agent_runtime_spec(
@@ -189,6 +221,10 @@ async def execute_react_runtime(
         )
     except Exception as exc:
         assistant_error = f"Agent 创建失败: {exc}"
+        if plan_mode_manager:
+            plan_mode_manager.fail_run(reason=assistant_error)
+            for runtime_event in plan_mode_manager.drain_runtime_events():
+                yield runtime_source_event(runtime_event)
         async for failure_event in emit_failed_startup_run(
             session_id=ctx.session_id,
             persist=ctx.persist_run,
@@ -216,6 +252,10 @@ async def execute_react_runtime(
         session_workspace_dir=ctx.session_workspace_dir,
         session_artifact_paths_before=ctx.session_artifact_paths_before,
     )
+    if plan_mode_manager:
+        for runtime_event in plan_mode_manager.drain_runtime_events():
+            leader_stream_state.runtime_events.append(runtime_event)
+            yield runtime_source_event(runtime_event)
     async for event in execute_and_finalize_leader_reply(
         agent=agent,
         input_event=user_msg,

@@ -6,6 +6,8 @@ import {
   Bot,
   BrainCircuit,
   CheckCircle2,
+  Circle,
+  CircleDot,
   ChevronRight,
   Download,
   FilePenLine,
@@ -290,22 +292,69 @@ export function ApprovalBlockView({ block }: { block: DisplayBlock<RecordData> }
 
 export function PlanBlockView({ block }: { block: DisplayBlock<RecordData> }) {
   const steps = Array.isArray(block.data.steps) ? block.data.steps : [];
+  const status = text(block.data.status, block.phase === 'open' ? 'drafting' : 'completed');
+  const revision = Number(block.data.revision || 0);
+  const completedCount = steps.filter((item) => (
+    item && typeof item === 'object' && !Array.isArray(item)
+    && ['completed', 'skipped'].includes(text((item as RecordData).status))
+  )).length;
+  const statusText: Record<string, string> = {
+    drafting: '正在起草',
+    revising: '正在修改',
+    review_waiting: '等待确认',
+    approved: '已确认',
+    executing: '执行中',
+    replanning: '重新规划',
+    completed: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+  };
   return (
     <RuntimeItem icon={<ListChecks size={14} />} title={text(block.data.title, '执行计划')} block={block}>
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
+        <span className="rounded bg-[var(--color-bg-secondary)] px-2 py-1">Revision {revision}</span>
+        <span>{statusText[status] || status}</span>
+        {steps.length > 0 ? <span className="ml-auto">{completedCount} / {steps.length}</span> : null}
+      </div>
+      {text(block.data.markdown) ? (
+        <div className="mb-3 max-h-72 overflow-auto rounded-md bg-[var(--color-bg-secondary)] px-3 py-2">
+          <MarkdownContent content={text(block.data.markdown)} />
+        </div>
+      ) : null}
       {steps.length ? (
-        <div className="space-y-1">
+        <div className="space-y-1.5">
           {steps.slice(0, 20).map((item, index) => {
             const step = item && typeof item === 'object' && !Array.isArray(item) ? item as RecordData : {};
+            const stepStatus = text(step.status, 'pending');
+            const StepIcon = stepStatus === 'completed' || stepStatus === 'skipped'
+              ? CheckCircle2
+              : stepStatus === 'running'
+                ? Loader2
+                : stepStatus === 'failed'
+                  ? AlertCircle
+                  : stepStatus === 'pending'
+                    ? Circle
+                    : CircleDot;
             return (
-              <div key={text(step.id, String(index))} className="flex items-center gap-2 text-xs">
-                <ChevronRight size={12} />
-                <span className="min-w-0 flex-1 truncate">{text(step.title, `步骤 ${index + 1}`)}</span>
-                <span>{text(step.status, 'pending')}</span>
+              <div key={text(step.id, String(index))} className="flex items-start gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-[var(--color-bg-hover)]">
+                <StepIcon
+                  size={13}
+                  className={`mt-0.5 shrink-0 ${stepStatus === 'failed' ? 'text-[var(--color-error)]' : 'text-[var(--color-text-tertiary)]'} ${stepStatus === 'running' ? 'animate-spin' : ''}`}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[var(--color-text-primary)]">{text(step.title, `步骤 ${index + 1}`)}</div>
+                  {text(step.result) || text(step.evidence) ? (
+                    <div className="mt-0.5 line-clamp-2 text-[var(--color-text-tertiary)]">{text(step.result, text(step.evidence))}</div>
+                  ) : null}
+                </div>
+                <span className={stepStatus === 'failed' ? 'text-[var(--color-error)]' : 'text-[var(--color-text-tertiary)]'}>
+                  {statusText[stepStatus] || stepStatus}
+                </span>
               </div>
             );
           })}
         </div>
-      ) : text(block.data.markdown) ? <MarkdownContent content={text(block.data.markdown)} /> : null}
+      ) : null}
     </RuntimeItem>
   );
 }

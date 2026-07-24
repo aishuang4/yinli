@@ -29,7 +29,7 @@
 - 单 Agent 流式执行、AskUser、HITL、取消、重跑和刷新恢复。
 - 后台 Run、Event Stream V3、DisplaySnapshot V4、Runs 和 Trace。
 - send / resume 共用 Leader 流处理和 completion 收口；顶层 Run 区分用户输入、权限审批和外部执行等待，终态不可逆。
-- Plan Mode 通过 middleware 接入，仅支持单 Agent；删除的是旧独立 Plan Runtime（`runtime.kind=plan`），不是当前 Plan Mode 能力。
+- Plan Mode 通过 middleware 接入且仅支持单 Agent；已具备持久化 revision、人工审核、自然语言模型修订、确认后执行、重新规划和实时步骤投影。删除的是旧独立 Plan Runtime（`runtime.kind=plan`），不是当前 Plan Mode 能力。
 
 ### Event Stream
 

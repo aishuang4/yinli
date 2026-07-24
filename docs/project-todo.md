@@ -41,9 +41,9 @@
 
 ## P4. Plan、Trace 与工具
 
-- [ ] 明确 finalized plan 在下一轮“按计划执行”时的注入格式和状态恢复语义。
-- [ ] 为 `todo_write`、`task_output`、`task_list` 补更细的后端与前端回归。
-- [ ] 保持 Plan Mode 只支持单 Agent；如需审批流必须重新设计，不复用旧 approve / deny。
+- [x] 明确 Plan revision 在模型修改和确认执行 continuation 中的完整注入与恢复语义。
+- [x] 为 `plan_set_steps`、`task_output`、`task_list` 补生命周期和投影回归。
+- [x] Plan Mode 保持单 Agent，并完成独立 revision 审核、自然语言模型修订、确认执行、取消和实时步骤投影。
 - [ ] Trace 增加权限审计筛选、工具结果大小和截断标记。
 - [ ] 对 Bash / Write / Edit 的文件变更记录补可靠性测试。
 - [ ] 完善 HTTP 工具请求预览、响应提取、错误摘要和脱敏展示。
