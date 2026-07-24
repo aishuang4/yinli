@@ -1,409 +1,273 @@
-# Chat SSE 事件契约
+# Chat Event Stream V3 稳定契约
 
-> 状态：2026-07-14，RunState v2 + DisplaySnapshot v3。本文定义 `/api/chat/send/start`、`/api/chat/send`、`/api/chat/resume/start`、`/api/chat/resume`、`/api/chat/runs/{run_id}/stream`、`/api/chat/runs/{run_id}/state` 与 `/api/chat/runs/{run_id}/state/stream` 可被前端依赖的事件和状态。新增事件前必须先更新本文档。
+> 状态：2026-07-23 已在线。
+> 本文是 Chat 实时展示、刷新恢复和历史回放的唯一前端事件契约。
+> 旧 RunState、DisplayEvent、`RUN_STATE_PATCH`、顶层 `TEAM_EVENT` 和旧 Snapshot 不兼容、不迁移、不读取。
 
-## 基本规则
+## 1. 稳定边界
 
-- SSE 事件名使用全大写下划线，例如 `TEXT_BLOCK_DELTA`。
-- 事件 payload 对外字段使用 camelCase；透传 AgentScope 原始事件时可保留 snake_case。
-- 前端只消费本文档列出的稳定事件；调试类或 trace 类事件应进入 `run_events`，不要直接驱动 Chat UI。
-- 应用级状态统一通过 `RUNTIME_EVENT` 表达。AgentScope 原始事件只负责流式文本、思考和底层调试，不承载业务状态。
-- Chat 主界面应逐步迁移到 `RunState` 中间层；原始 SSE 事件保留为兼容增量和 Trace 输入，不再作为长期 UI 状态的唯一来源。
-- 新增 Chat UI 功能只能依赖 RunState 字段；Team UI 只能依赖独立 `teamSnapshot` / `teamEvent`，不得读取单 Agent 展示快照。
-- 当前前端 live handler 只消费 `RUN_STATE`、`RUN_STATE_PATCH`、`ERROR`、`RUN_CANCELLED`；其他 raw SSE 只允许后端投影器、Trace 或调试入口消费。
-- 新功能必须定义独立 Runtime Event 家族，不允许混用其他功能事件。例如后续重设计记忆时使用新的 `MEMORY_*` 语义，产物使用 `ARTIFACT_*`，沙箱使用 `SANDBOX_*`。
-- 记忆模块的详细过程审计使用 `run_events.event_type=MEMORY_AUDIT`，不作为 Chat SSE 事件发送，不驱动 Chat 页面过程展示。
-- Chat 侧只允许通过 `RUNTIME_EVENT.type=MEMORY_SKILL_GENERATING` 投影为 `RUN_STATE_PATCH.kind=notice`，展示 “Skills 生成中” 轻量提醒；payload 不得包含 Skill 内容、记忆内容、生成结果或提炼过程。
-- 旧独立 Plan Runtime（`runtime.kind=plan`）与旧独立 Subagent Runtime（`runtime.kind=subagent`）已下线；当前 Plan Mode middleware 与 `DelegateTask` Subagent 委托仍在线，并只通过本文定义的 `RUNTIME_EVENT` 契约表达，不恢复旧 architecture 分支。
+Chat 展示只保留两个稳定边界：
 
-## Chat 路由分层
+- SSE 应用事件名：`RUNTIME_EVENT`。
+- 完整展示状态：`DisplaySnapshot V4`。
 
-- Readiness Gate 是进入 architecture 前的轻量启动判断，由系统内置 `ReadinessAgent` 判断本轮是否可以启动 Runtime。业务信息缺口不在这里发起用户交互，交给主 Agent 在 ReAct 内调用 `AskUser` 外部工具暂停。
-- 第一层是 architecture，由前置意图识别决定。当前在线值为 `react`；`plan`、`subagent` 后续重新设计后再进入稳定契约。`clarification` 不是 architecture runtime，也不是新的 runtime.kind。
-- 第二层是 executor，由请求的显式 `mode` 机械决定。`mode=agent` 时为 `single_agent`，`mode=team` 时为 `team`，模型不得改写执行模式。
-- `INTENT_ROUTE` trace payload 必须包含 `runtime`、`executor` 与 `readiness_gate` decision，其中 `runtime.kind` 表示架构模式，`executor.kind` 表示执行主体。
+SSE 连接中的 heartbeat 使用 comment：
 
-## ReAct Runtime 链路
+```text
+: heartbeat
+```
 
-- `/api/chat/send/start` 创建后台 Run 并返回 JSON 元数据；Chat 主界面随后订阅 `/api/chat/runs/{run_id}/state/stream`。
-- `/api/chat/send` 保留原始 SSE 兼容入口；新前端不应再用它驱动 Chat 主状态。
-- `/api/chat/resume/start` 在后台恢复 HITL / AskUser 外部执行暂停的原 Run 并返回原 `runId`；Chat 主界面随后订阅 `/api/chat/runs/{run_id}/state/stream`。
-- `/api/chat/resume/start` 可接收 `rememberApproval: true`。该选项只对 `REQUIRE_USER_CONFIRM` 有效：将当前审批中同类工具设为本会话自动允许规则，不写入 Agent 配置，也不适用于 `AskUser` 或 `REQUIRE_EXTERNAL_EXECUTION`。
-- `/api/chat/resume` 保留原始 SSE 兼容入口；新前端不应再用它驱动 Chat 主状态。
-- Runtime 执行入口只负责构建 `ChatRunContext`、输出起始事件和启动校验。
-- `runtime_dispatcher.execute_chat_runtime()` 只按第一层 `runtime.kind` 分发。当前仅 `react` 在线；信息不足时由主 Agent 在 Runtime 内调用 `AskUser`，通过 AgentScope `RequireExternalExecutionEvent` 暂停。
-- `react_runtime.execute_react_runtime()` 是 ReAct 唯一执行入口。它先读取第二层 `executor.kind`：`single_agent` 直接进入主 Agent，`team` 委托独立 `TeamRunService`，由 Leader 动态组队、Member 隔离执行并在任务收敛后综合。
-- ReAct Runtime 内部仍复用统一的 `LeaderStreamState`、`RUNTIME_EVENT`、成功/失败收尾与历史消息持久化，不为 Team 另开独立 SSE 契约。
+heartbeat 不带 `seq`、不进入 replay log，也不进入前端 reducer。
 
-## Runtime Event
+## 2. RuntimeFrame
 
-`RUNTIME_EVENT` 是业务状态事实日志，payload 固定为：
+`RUNTIME_EVENT` 的 `data` 必须是以下五种形状之一。协议拒绝额外字段。
 
-- `id`、`runId`、`sessionId`：事件与 Run 关联信息。
-- `type`：应用级事件类型，例如 `RUN_STARTED`、`TOOL_CALL_STARTED`。
-- `scope`：`run|single|subagent|skill|memory|artifact|sandbox`。Team 不使用该字段，领域事件改用 `actorId`。
-- `source` / `sourceEventType`：来源系统与原始事件类型。
-- `agentId`、`agentName`：可选执行主体。
-- `status`：`running|waiting_user|waiting_permission|waiting_external|completed|failed|cancelled|pending`。领域内部任务可以使用自己的状态，但不得覆盖顶层 Run 状态。
-- `reason`、`durationMs`、`payload`：补充信息。
-
-当前稳定 Runtime Event 家族：
-
-- `RUN_*`：`RUN_STARTED`、`RUN_WAITING`、`RUN_RESUMED`、`RUN_COMPLETED`、`RUN_FAILED`、`RUN_CANCELLED`。
-- `AGENT_*`：模型调用、输出、等待人工、恢复、完成、失败等 Agent 状态。
-- `TOOL_*`：`TOOL_CALL_STARTED`、`TOOL_CALL_DELTA`、`TOOL_CALL_COMPLETED`、`TOOL_RESULT_STARTED`、`TOOL_RESULT_DELTA`、`TOOL_RESULT_COMPLETED`（工具失败时 status 为 `failed`）。
-- Team 领域状态不属于 `RUNTIME_EVENT` 家族，只允许使用独立顶层 `TEAM_EVENT`。
-- `SKILL_*`：Skill 开始、完成、失败。
-- `HITL_*` / `CLARIFICATION_*`：人工确认与反问采集。
-- `MEMORY_*`：历史兼容 / 后续记忆重设计预留。旧记忆模块已删除，当前运行时不得新增依赖旧记忆语义的事件。
-- `ARTIFACT_*`：文件、下载产物、生成内容等可交付产物生命周期。
-- `SANDBOX_*`：沙箱运行生命周期。
-- `PLAN_*`：Plan Mode 进入、更新、最终计划输出和工具拦截状态。
-- `SUBAGENT_*`：ReAct 内部 Subagent 委托生命周期。
-
-### Skill 生命周期
-
-Skill catalog 只表示当前 Runtime 可发现的能力，不表示 Skill 已被使用。新运行不得因为
-Project / Agent 绑定了 Skill 就预先发送 `SKILL_STARTED`、创建 active `SkillRun`，或把
-完整 `SKILL.md` 注入 system prompt。
-
-Skill 生命周期以 AgentScope 内置 `Skill` viewer 的真实工具事件为事实源：
-
-| AgentScope 事件 | Runtime Event | 语义 |
-| --- | --- | --- |
-| `TOOL_CALL_START` 且工具名为 `Skill` | `SKILL_STARTED` | 模型开始加载一个 catalog 中的 Skill |
-| `TOOL_RESULT_END` 且工具名为 `Skill`、结果成功 | `SKILL_CONTEXT` | 完整 Skill 指令已按需进入当前 Agent 上下文，`SkillRun` 保持 active |
-| `TOOL_RESULT_END` 且工具名为 `Skill`、结果失败 | `SKILL_FAILED` | Skill 不存在、不可读取或 loader 执行失败 |
-| 顶层 Run 成功且存在 active `SkillRun` | `SKILL_COMPLETED` | 本轮实际加载的 Skill 随 Run 成功收口 |
-| Agent 因 `AskUser` / HITL 暂停且存在 active `SkillRun` | 对应等待事件 | `SkillRun` 更新为 `waiting_user`，恢复后继续同一 Run |
-
-`SKILL_STARTED` / `SKILL_CONTEXT` / `SKILL_COMPLETED` / `SKILL_FAILED` payload 至少包含
-`id`、`name` 和 `status`；能够解析时应附带 `description`、`resourcePath` 和
-`resources`。AgentScope `Skill` viewer 可以保留在 Trace 的通用工具事实中，但
-`displaySnapshot` 应投影为 Skill process item，不重复显示普通工具卡片。
-
-### 顶层 Run 生命周期
-
-顶层 Run 只允许以下状态：
-
-- `running`：Runtime 正在执行。
-- `waiting_user`：等待用户补充业务信息，例如 `AskUser` 或 clarification。
-- `waiting_permission`：等待用户批准或拒绝受权限控制的工具调用。
-- `waiting_external`：等待用户或外部系统回传外部执行结果。
-- `completed`：最终答案和成功收尾均已完成。
-- `failed`：Runtime 已失败并完成失败收尾。
-- `cancelled`：用户取消，或后端重启后确认该运行不可恢复。
-
-`waiting` 仅用于读取升级前的历史快照，新运行不得再写入。暂停时必须先发送顶层 `RUN_WAITING`，其 `status` 和 `payload.waitState` 使用上述具体等待状态；`AGENT_WAITING_HUMAN` 只描述 Agent 自身暂停，不作为顶层 Run 状态事实源。恢复时发送 `RUN_RESUMED`，终态只能由一个 `RUN_COMPLETED`、`RUN_FAILED` 或 `RUN_CANCELLED` 收口。
-
-`RUN_WAITING.payload` 至少包含 `interactionId`、`interactionType`、`waitState` 和稳定的 `reason`。`reason` 当前包括 `clarification_required`、`permission_required`、`user_input_required`、`external_execution_required`。
-
-## Plan Mode Runtime Events
-
-Plan Mode 基于 AgentScope Middleware hooks 实现，不恢复旧独立 Plan Runtime（`runtime.kind=plan`）。所有事件都通过 `RUNTIME_EVENT` 发送，`scope` 使用 `plan`。当前 Plan Mode 只支持 `executor.kind=single_agent`；当 `executor.kind=team` 时，后端不得向 TeamRun 注入 `plan_enter`、`plan_write`、`plan_exit`、`todo_write`、`task_output` 等 Plan 控制工具。
-
-Plan Mode 内部只产生 `PlanDomainEvent`；跨出 Plan middleware / Plan tools 边界前，必须统一转换为 `RUNTIME_EVENT`。前端不得依赖 middleware 内部事件结构，也不得直接解析 Plan 工具结果作为主状态来源。
-
-| type | status | payload |
-| --- | --- | --- |
-| `PLAN_MODE_ENTERED` | `running` | `{ planId, planFile, mode }` |
-| `PLAN_UPDATED` | `running` | `{ planId, planFile, markdown, source }` |
-| `PLAN_FINALIZED` | `completed` | `{ planId, planFile, markdown }` |
-| `PLAN_TOOL_DENIED` | `completed` | `{ planId, toolCallId, toolName, message }` |
-| `PLAN_TASKS_UPDATED` | `running` | `{ planId, planFile, steps }` |
-| `PLAN_TASK_OUTPUT` | `running|completed|failed` | `{ planId, planFile, step, steps }` |
-
-`steps` 使用现有 `ChatPlanStep` camelCase 字段：`id`、`planId`、`stepIndex`、`title`、`description`、`status`、`assignedAgentId`、`evidence`、`result`、`startedAt`、`completedAt`、`updatedAt`。
-
-## Subagent Delegation Runtime Events
-
-Subagent 委托能力基于 ReAct 内部 `DelegateTask` 工具实现，不新增 `runtime.kind=subagent`。V1 只支持前台 blocking 调用：主 Agent 调用 `DelegateTask` 后，必须等待子 Agent 完成并拿到 observation，才能继续 ReAct 或输出最终答案。
-
-Subagent 定义来自 Markdown + YAML frontmatter 文件，不来自历史数据库 Subagent 配置。后端若发现历史 `callableAgents`、`subagentCalls`、旧 `runtime.kind=subagent`、旧独立 Subagent Runtime 事件兼容分支或对应前端入口，必须删除，不能改造成新版能力事实源。
-
-| type | status | payload |
-| --- | --- | --- |
-| `SUBAGENT_STARTED` | `running` | `{ invocationId, toolCallId, subagentName, definitionScope, definitionPath, taskPreview, expectedOutput }` |
-| `SUBAGENT_CONTEXT` | `running` | `{ invocationId, toolCallId, subagentName, skillRefs, loadedSkills, missingSkillRefs, memoryAgentId, memoryInjected, errors, permission }` |
-| `SUBAGENT_WAITING_HUMAN` | `waiting` | `{ invocationId, toolCallId, subagentName, interactionType, replyId, toolCalls, partialResultPreview, durationMs }` |
-| `SUBAGENT_COMPLETED` | `completed` | `{ invocationId, toolCallId, subagentName, resultPreview, durationMs }` |
-| `SUBAGENT_FAILED` | `failed` | `{ invocationId, toolCallId, subagentName, error, partialResultPreview }` |
-
-V1 的 Chat 主界面不展示子 Agent 完整 transcript，也不铺开完整轨迹列表；`DelegateTask` 工具项只展示当前 Subagent 正在做什么、委托任务和最终返回主 Agent 的结果。后端将 `SUBAGENT_*` 与子 Agent 关键模型/工具 Runtime Event 归并到同一个工具 display item，附加 `subagentName`、`subagentInvocationId`、`subagentStatus`、`subagentTimeline`、`subagentSummary`、`subagentError` 字段；前端只取 `subagentTimeline` 最新有效项作为“当前状态”。普通工具 display item 不包含这些字段，仍按通用工具输入/输出渲染。前台 blocking 模式下，主 Agent 仍等待 `DelegateTask` observation，但 `leader_stream` 必须在等待期间持续 drain Subagent runtime event sources，让当前状态实时刷新；子 Agent 调用 `FinalAnswerStart` 后的文本 delta 可以实时追加到 `subagentSummary`，仅用于前端显示，父 Agent 仍在完整 observation 到达后才继续。完整子 Agent 模型调用、工具调用、权限决策和错误进入 Trace / `subagent_invocations` 审计。`SUBAGENT_WAITING_HUMAN` 表示子 Agent 已暂停在人工确认点；后端 `/resume` 已能恢复 child agent、更新 invocation，并把恢复后的摘要作为 `DelegateTask` external result 交还父 Agent，继续父 Agent ReAct。
-
-### Plan Mode 收口与后续执行
-
-- `plan_exit` 不进入人工审批状态，也不触发 approve/deny HTTP 端点。
-- Team Runtime 不支持 Plan Mode。用户如需“先规划再由 Team 执行”，应先用单 Agent 生成计划，再在下一轮切换到 Team 模式执行。
-- Agent 调用 `plan_exit` 后，后端发送 `RUNTIME_EVENT:PLAN_FINALIZED`，随后通过分片 `FINAL_ANSWER_DELTA` / `AGENT_FINAL_ANSWER_DELTA` 将当前计划 markdown 作为本轮 assistant 最终答案，禁止把完整计划作为单个超大 delta 一次性发给前端。
-- 本轮 Run 继续走正常成功收尾并发送 `RUN_COMPLETED`。前端不得展示手动批准/拒绝按钮。
-- 用户通过下一条自然语言消息决定后续动作，例如“修改这个计划”或“按这个计划执行”。该下一轮仍由普通 Chat 路由进入 ReAct Runtime，不携带旧 Plan 审批字段。
-
-### Plan Mode 执行链路详解
-
-1. **调查与计划阶段（Plan Mode）**：Agent 调用 `plan_enter` 进入 Plan Mode。该模式下，`PlanModeMiddleware.on_acting` 拦截变更型工具（`Write`、`Edit`、`Bash` 变更命令等），阻止其真实执行，并发送 `PLAN_TOOL_DENIED` Runtime Event 告知前端。Agent 只能执行只读工具（`Read`、`Grep`、`Glob`、只读 `Bash`/`HttpRequest`）和计划控制工具（`plan_enter`、`plan_write`、`plan_exit`、`FinalAnswerStart`）。
-
-2. **计划收口**：Agent 调用 `plan_exit` 后，后端将计划置为 `finalized` 状态，发送 `PLAN_FINALIZED` Runtime Event，把计划 markdown 输出为最终答案，并停止当前 Agent 流。
-
-3. **下一轮决策**：前端只展示计划和最终答案，不显示审批入口。用户下一条消息决定修改计划或执行计划；后续执行能力需独立设计，不复用旧 approve/deny 或 Build mode 字段。
-
-## Chat 执行模式请求
-
-`POST /api/chat/send` 使用显式 `mode` 选择执行器：
+### 2.1 Open
 
 ```json
 {
-  "mode": "team",
-  "agent_id": "selected-agent-id",
-  "agent_name": "Selected Agent",
-  "message": "用户任务"
+  "seq": 1,
+  "op": "open",
+  "id": "message:run-1",
+  "kind": "message",
+  "dataVersion": 1,
+  "patch": { "role": "assistant" }
 }
 ```
 
-- `mode=agent`：所选 Agent 作为单 Agent 执行。
-- `mode=team`：所选 Agent 作为一次性 TeamRun Leader，并在运行中动态创建临时 Member。
-- 请求禁止携带 `team_id`、`team_name`、`team_members`；Chat Runtime 不读取持久 Team 配置。
-- session、后台 Run、RunState 与 rerun 通过 `mode` 恢复执行方式，通过 `agentId/agentName` 恢复 Leader，不通过 Team 模板字段推断。
+子 Block 使用 `parent` 指向已打开的父 Block：
 
-## Run 生命周期
-
-- `RUN`：后端已创建后台 Run。必须包含 `run_id` 或 `runId`，建议包含 `created_at`。
-- `RUN_CANCELLED`：用户取消本轮执行。必须包含 `completed_at` 或 `completedAt`。
-- `ERROR`：本轮执行失败。必须包含 `message`。
-
-## RunState 中间层
-
-`GET /api/chat/runs/{run_id}/state` 返回某个 Run 的最新前端状态快照。该接口用于刷新、断线恢复和后续替代 Chat 主界面对原始 SSE 的直接依赖。
-
-`GET /api/chat/runs/{run_id}/state/stream` 返回 RunState 中间层 SSE。首个事件为 `RUN_STATE` 完整快照，后续事件优先使用 `RUN_STATE_PATCH` 轻量增量。该流是 Chat 主界面恢复运行中任务的推荐入口，前端不需要直接处理工具结果、模型调用等原始事件。
-
-当 RunState 首包快照的 `status` 为 `completed|failed|cancelled` 时，`state/stream` 必须在发送 `RUN_STATE` 后结束连接。`waiting_user|waiting_permission|waiting_external` 表示等待外部输入，不是仍在持续输出的流，但只有快照或 patch 已经包含前端可操作内容时才结束连接，例如 `approvals[]` / `approval`。`RUN_WAITING`、`AGENT_WAITING_HUMAN`、`CLARIFICATION_WAITING` 这类预告等待的 Runtime Event 不得单独关闭流，必须等待随后的 `HITL_REQUIRED` / `CLARIFICATION_REQUIRED` 把可操作数据投影进 RunState。
-
-`RUN_STATE_PATCH` 用于连接中的实时更新，允许丢失；网络断开、页面刷新或前端怀疑状态不一致时，应重新订阅并以新的 `RUN_STATE` 快照为准。每个 patch 必须包含 `kind`，前端必须优先按 `kind` 分支处理，不得再靠猜测可选字段判断 patch 语义。稳定字段包括：
-
-- `kind`：稳定 patch 类型，当前值为 `snapshot_meta|display_event|model_usage|approval_resolved|error`。普通 Runtime Event 不得作为 `RUN_STATE_PATCH` 发送到 Chat 主界面。
-- `runId`、`sessionId`、`status`、`currentStage`、`updatedAt`、`completedAt`、`lastEventType`、`eventCount`。
-- `displayEvent`：一个单 Agent 展示增量事件。patch 中只允许携带一个 `displayEvent`，前端用 reducer 聚合到 `displaySnapshot`。
-- `approvalResolvedId` / `resolvedApprovalId`：用户介入完成后的等待项 ID。
-- `modelName`、`tokenUsage`：模型调用与用量摘要。
-- `error`：错误摘要。
-
-为避免同一段文本被 `RUNTIME_EVENT:AGENT_*_DELTA` 与 `FINAL_ANSWER_DELTA` / `REASONING_DELTA` 重复累计，RunState 正文投影只以稳定文本事件作为正文增量来源；Runtime Event 只保留在后端内部状态、Trace 或原始兼容流中，不进入 Chat 主界面的 RunState 契约。
-
-后端必须用 `backend/src/server/routes/chat/run_state_schema.py` 校验 `RUN_STATE` 和 `RUN_STATE_PATCH` 输出；前端必须用 `frontend/src/types/runState.ts` 作为主链路类型来源。新增字段时先更新本文档、后端 Pydantic schema、前端 TypeScript 类型，再更新 projector 和测试矩阵。
-
-`GET /api/chat/runs/{run_id}/stream?replay=false` 用于 RunState 恢复后的兼容订阅。`replay=false` 表示只接收订阅之后的新事件，避免前端先恢复快照后又重复消费历史 SSE。默认 `replay=true`，保持旧行为。
-
-RunState 稳定字段：
-
-- `version`：状态版本，当前为 `2`。
-- `runId`、`sessionId`、`workspaceId`、`projectId`、`agentId`、`agentName`、`mode`、`task`。Team 模式下 `agentId/agentName` 表示本轮 Leader；归属字段用于刷新恢复时保持 Project 隔离。
-- `status`：`running|waiting_user|waiting_permission|waiting_external|completed|failed|cancelled|cancelling`；历史快照可能仍为 `waiting`。
-- `currentStage`：面向用户的当前阶段。
-- `reasoning`、`reasoningTruncated`：ReAct 过程文本。可截断。
-- `finalAnswer`、`finalAnswerTruncated`：最终答案文本。可截断，完整最终结果以 `chat_messages` 为准。
-- `thinking`：深度思考摘要。
-- `tools`：轻量工具摘要数组，不包含完整 Observation。
-- `skillCalls`：本轮注入/使用的 Skill 摘要。
-- `modelName`、`tokenUsage`：模型调用与 token 用量摘要。
-- `plans`：Plan Mode 当前计划摘要。
-- `displaySnapshot`：单 Agent Chat 主展示完整快照，结构为 `{ version: 3, mode, actors, blocks }`，用于刷新、断线恢复和历史消息回放。Team 严禁进入该字段，使用并列的 `teamSnapshot`。
-- `approvals`：等待用户处理的 HITL / clarification 摘要；每项必须包含 `interactionId`、`kind`、`type`、`status`、`createdAt`。`kind` 表示 UI 交互大类，稳定值为 `hitl|clarification`；`type` 表示该大类内部的交互子类型。clarification 的 `kind` 与 `type` 都必须为 `clarification`，并保留 `title`、`description`、`questions`，不得被问题字段或原始 payload 中的 `type` 覆盖。
-- `error`、`lastEventType`、`eventCount`、`createdAt`、`updatedAt`、`completedAt`。
-
-`tools[]` 稳定字段：
-
-- `id`、`name`、`status`：工具调用身份和状态。
-- `inputPreview`：参数预览，禁止存完整大参数。
-- `outputPreview`：结果预览，默认最多保留少量文本。
-- `outputSize`、`outputTruncated`：完整结果大小与是否截断。
-- `error`、`startedAt`、`completedAt`。
-- `subagentName`、`subagentInvocationId`、`subagentStatus`、`subagentTimeline`、`subagentSummary`、`subagentError`：仅 `DelegateTask` Subagent 工具项可携带的展示字段；`subagentTimeline[]` 只放压缩后的关键步骤，不存完整 transcript。
-
-Chat 主界面不得依赖完整工具结果。大体积 Read、Glob、Bash、HTTP、MCP 输出必须通过 Trace 或 Artifact 按需查看，不进入 RunState 常驻状态。
-
-### Chat DisplaySnapshot v3
-
-`displaySnapshot` / `displayEvent` 是 Chat 主界面展示层契约，只表达“前端现在应该显示什么”。它不替代 `RUNTIME_EVENT` 事实日志；事实事件仍用于 Trace 和审计。
-
-DisplaySnapshot v3 的核心原则：
-
-- 外层 `mode` 固定为 `single_agent`。
-- 内层 `actors[]` 只描述一个 `role=single` 的单 Agent 执行主体。
-- `blocks[]` 只放整轮 Run 级展示块，例如 Plan、人工反馈、最终答案、生成文件和错误。
-- actor 内部 `items[]` 承载 reasoning、thinking、tool、skill 的有序 ReAct 过程。Team Console 不读取这些 actor 或 item。
-
-`RUN_STATE` 必须返回完整快照：
-
-```ts
-displaySnapshot: {
-  version: 3;
-  mode: "single_agent";
-  actors: DisplayActor[];
-  blocks: DisplayBlock[];
+```json
+{
+  "seq": 2,
+  "op": "open",
+  "id": "text:reply-1",
+  "parent": "message:run-1",
+  "kind": "text",
+  "dataVersion": 1,
+  "patch": ""
 }
 ```
 
-`RUN_STATE_PATCH` 必须返回单个展示事件：
+### 2.2 Delta
 
-```ts
-displayEvent: {
-  id: string;
-  runId: string;
-  sessionId: string;
-  seq: number;
-  createdAt: string;
-  scope: "single_agent";
-  block: "process" | "plan" | "feedback" | "answer" | "files" | "error";
-  event: string;
-  op: "append" | "upsert" | "replace" | "remove" | "clear";
-  targetId?: string;
-  actorId?: string;
-  status?: "pending" | "running" | "waiting" | "completed" | "failed" | "cancelled";
-  data?: Record<string, unknown>;
+```json
+{
+  "seq": 3,
+  "op": "delta",
+  "id": "text:reply-1",
+  "patch": "正在处理"
 }
 ```
 
-`DisplayActor` / `DisplayBlock` / `DisplayItem` 使用通用结构，避免后端输出组件形状：
+`patch` 的结构和合并语义只由 Block 的 `kind + dataVersion` 决定。公共协议不提供 mask、字段路径或动态赋值。
+
+### 2.3 Close
+
+```json
+{
+  "seq": 4,
+  "op": "close",
+  "id": "text:reply-1",
+  "outcome": "completed",
+  "patch": { "replace": "最终结果" }
+}
+```
+
+`outcome` 只能是 `completed | failed | cancelled`。关闭后的 Block 不得再次 delta 或 close。
+
+### 2.4 Snapshot
+
+```json
+{
+  "seq": 4,
+  "snapshot": {
+    "version": 4,
+    "lastSeq": 4,
+    "streamDone": false,
+    "order": ["message:run-1", "text:reply-1"],
+    "blocksById": {
+      "message:run-1": {
+        "id": "message:run-1",
+        "kind": "message",
+        "dataVersion": 1,
+        "phase": "open",
+        "data": { "role": "assistant" }
+      },
+      "text:reply-1": {
+        "id": "text:reply-1",
+        "parent": "message:run-1",
+        "kind": "text",
+        "dataVersion": 1,
+        "phase": "closed",
+        "outcome": "completed",
+        "data": "最终结果"
+      }
+    }
+  }
+}
+```
+
+Snapshot Frame 的 `seq` 必须等于 `snapshot.lastSeq`。前端收到 Snapshot 后整树替换，不把它与本地旧树合并。
+
+### 2.5 Done
+
+```json
+{
+  "seq": 6,
+  "done": true
+}
+```
+
+`done` 是唯一的正常传输收口信号，必须晚于所有业务 Block close。`streamDone=true` 的 Snapshot 不得包含 open Block。
+
+## 3. DisplaySnapshot V4
 
 ```ts
-type DisplayActor = {
-  id: string;
-  role: "single";
-  agentId: string;
-  agentName: string;
-  status: "pending" | "running" | "waiting" | "completed" | "failed" | "skipped" | "cancelled";
-  task: string;
-  detail: string;
-  output: string;
-  createdAt: string;
-  updatedAt: string;
-  completedAt: string;
-  items: DisplayItem[];
-  data: Record<string, unknown>;
-};
-
-type DisplayBlock = {
-  id: string;
-  block: "process" | "plan" | "feedback" | "answer" | "files" | "error";
-  status: string;
-  updatedAt: string;
-  items: DisplayItem[];
-  data: Record<string, unknown>;
-};
-
-type DisplayItem = {
-  id: string;
-  event: string;
-  targetId: string;
-  status?: string;
-  createdAt?: string;
-  updatedAt: string;
-  data: Record<string, unknown>;
+type DisplaySnapshot = {
+  version: 4;
+  lastSeq: number;
+  streamDone: boolean;
+  order: string[];
+  blocksById: Record<string, {
+    id: string;
+    parent?: string;
+    kind: string;
+    dataVersion: number;
+    phase: "open" | "closed";
+    outcome?: "completed" | "failed" | "cancelled";
+    data: unknown;
+  }>;
 };
 ```
 
-当前稳定展示事件：
+约束：
 
-- `process`：ReAct 过程事件，投影到对应 actor 的 `items[]`。连续 reasoning / thinking delta 使用同一个 `targetId` 追加；如果中间出现 tool / skill，再出现 reasoning / thinking 时必须使用新的 `targetId`，避免前端把非连续过程合并成一个 item。
-- `plan`：Plan Mode 展示块，使用 `data.planId`、`data.planFile`、`data.markdown`、`data.steps`。`PLAN_FINALIZED` 使用 `status=completed`。
-- `feedback`：当前等待用户处理的人机交互，使用 `data.approval`。只放当前等待项，不保留历史已完成项。
-- `answer`：最终答案展示，使用 `data.content`。没有 `FinalAnswerStart` 时，后端不得把 reasoning 兜底复制成最终答案；如果 Agent 流自然结束但没有产生最终答案，后端可以先执行一次受限 Final Answer Recovery，恢复轮必须重新生成 `FINAL_ANSWER_DELTA`。恢复失败后必须发送 `RUN_FAILED` 和 `ERROR`，并投影为 `error` 展示块，常见原因包括达到最大 ReAct 迭代次数。
-  如果模型误把阻塞性的补充信息请求当作普通最终答案输出，后端必须把该自然语言反问转换为 `CLARIFICATION_REQUIRED`，发送 `displayEvent(block=answer, op=remove)` 清理误发答案，再发送 AskUser `process` 项和 `feedback` 块进入等待态。
-- `files`：生成文件下载，使用 `data.files`，每项至少包含 `path`、`name`、`extension`。`path` 是当前 Project 内 Session 产物目录的相对路径，下载请求必须携带 `sessionId` 并只能读取该 Session 所属 Project 的产物目录。成功收口时后端扫描真实存在的 Session 产物，因此 Skill 通过 Bash 或脚本生成的 Word、Excel、PDF 等文件也必须纳入清单；`ARTIFACT_CREATED/UPDATED` 只更新 RunState 和 Trace 中的产物事实，不得在工具结束时立即发送下载展示事件；只有成功的 `RUN_COMPLETED` 在最终答案完成后才能发布 `files` block。运行中、等待、失败或取消状态均不显示下载入口，刷新后的终态快照必须保持相同语义。文件区块以单个紧凑列表展示，列表自身可滚动，不为每个文件创建独立消息卡片。
-- `error`：错误展示块，使用 `data.message` 或 `data.error`。
+- `order` 与 `blocksById` 的 ID 集合必须完全一致且无重复。
+- 父 Block 必须存在，并在 `order` 中早于子 Block。
+- 最大嵌套深度为 16，单 Snapshot 最多 2000 个 Block。
+- `phase=open` 时不能有 `outcome`；`phase=closed` 时必须有 `outcome`。
+- 未注册的 `kind` 只展示公共元数据，不渲染 `data`。
 
-当前前端登记的事件名集中维护在 `frontend/src/types/displayEvents.ts`。新增事件时先扩展该文件，再更新本文档、后端 Pydantic schema、前端 projector 和测试矩阵。
+## 4. Seq 与恢复
 
-Team 严禁进入 `displaySnapshot.actors[]` 或 `displaySnapshot.blocks[]`。
+- `seq` 在单个 Run stream 内从 1 单调递增；不同 Run 之间不可比较。
+- 前端只提交连续 Frame；重复或旧 `seq` 幂等忽略。
+- 出现 gap 时先有界缓存并请求缺失 tail；无法补齐时请求 Snapshot 整树替换。
+- `GET /api/chat/runs/{runId}/stream?projectId=...&afterSeq=N` 返回连续 tail；retention 已删除所需 Frame 时返回 Snapshot。
+- 不传 `afterSeq` 时返回当前 Snapshot，再继续实时订阅。
+- `GET /api/chat/runs/{runId}/state?projectId=...` 只返回 DisplaySnapshot V4。
+- assistant 历史消息的 `displaySnapshot` 只保存 V4；不存在旧版本 decoder。
 
-### 历史消息回放
+## 5. 请求入口
 
-`GET /api/chat/sessions/{session_id}/messages` 返回的 assistant 消息携带 `displaySnapshot`；Team 轮次另带独立 `teamSnapshot`。两者不得互相推导。
+- `POST /api/chat/send/start`：创建后台 Run，返回 Run 元数据。
+- `GET /api/chat/runs/{runId}/stream`：订阅或恢复 RuntimeFrame。
+- `GET /api/chat/runs/{runId}/state`：读取完整 DisplaySnapshot V4。
+- `POST /api/chat/resume/start`：恢复原 HITL Run；返回原 `runId`，前端继续订阅同一 seq 空间。
+- `POST /api/chat/runs/{runId}/cancel`：提交取消命令；展示终态仍由 RuntimeFrame 回流。
 
-后端在 RunState 到达可回放节点后，把当前 `displaySnapshot` 写回本轮最新 assistant 消息：
+命令 API 的 HTTP 响应不是 UI 状态。Approval、AskUser、取消和重跑的展示变化必须由后端投影 Frame 驱动。
 
-- `RUN_COMPLETED` / `RUN_FAILED` / `RUN_CANCELLED` 后保存终态快照。
-- `HITL_REQUIRED` 后保存等待用户审批或 AskUser 补充信息的快照。`CLARIFICATION_REQUIRED` 仅用于旧兼容回放。
-- 没有 `displaySnapshot` 的旧历史消息不做回填，前端可仅按 `content` 显示最终答案。
+## 6. Block Kind
 
-### Raw Event 到 RunState 到前端状态映射
+当前核心 registry：
 
-| 后端原始事件 / Runtime Event | RunState 字段 | `RUN_STATE_PATCH` 字段 | 前端 live 状态 | 流语义 |
-| --- | --- | --- | --- | --- |
-| `CLARIFICATION_REQUIRED` | `displaySnapshot.actors[].items[]`、`displaySnapshot.blocks[]`、`approvals[]` | AskUser 先发 `displayEvent(block=process,event=tool.started)`，随后发 `displayEvent(block=feedback,event=feedback.waiting)` | `displaySnapshot: process item + feedback block` | 旧兼容事件；新可恢复反问不得依赖它 |
-| `HITL_REQUIRED` | `displaySnapshot.actors[].items[]`、`displaySnapshot.blocks[]`、`approvals[]` | AskUser 先发 `displayEvent(block=process,event=tool.started)`，随后发 `displayEvent(block=feedback,event=feedback.waiting)` | `displaySnapshot: process item + feedback block` | `HITL_REQUIRED` 带 `feedback` 后结束，等待用户审批或 AskUser 补充信息；`AGENT_WAITING_HUMAN` 只作内部预告，不单独发 RunState patch |
-| `PLAN_FINALIZED` | `displaySnapshot.blocks[]`、`finalAnswer` | `displayEvent(block=plan,event=plan.completed)`，随后 `displayEvent(block=answer,event=answer.delta)` | `displaySnapshot: plan block + answer block` | 本轮正常完成，用户下一条普通消息决定修改或执行 |
-| `TOOL_CALL_*` / `TOOL_RESULT_*` | `displaySnapshot.blocks[]`、`tools[]` 摘要 | `displayEvent(block=process,event=tool.*)` | `displaySnapshot: process item` | running 继续，终态工具不可保留 running |
-| `REASONING_DELTA` | `displaySnapshot.blocks[]`、`reasoning` | `displayEvent(block=process,event=reasoning.delta)` | `displaySnapshot: process item` | running 继续 |
-| `FINAL_ANSWER_DELTA` | `displaySnapshot.blocks[]`、`finalAnswer` | `displayEvent(block=answer,event=answer.delta)` | `displaySnapshot: answer block` | running 继续 |
-| Agent 流结束但没有最终答案 | 恢复成功时写入 `finalAnswer`；恢复失败时 `status=failed`、`error` | 恢复成功时 `displayEvent(block=answer,event=answer.delta)`；恢复失败时 `displayEvent(block=error,event=error.raised)` | `displaySnapshot: answer block` 或 `error block` | 后端最多执行一次受限 Final Answer Recovery；恢复失败后结束 |
-| `TEAM_EVENT` | `teamSnapshot` | `kind=team_event`、`teamEvent` | `TeamConsoleState` | running 继续，完全绕过 DisplaySnapshot |
-| `SKILL_CONTEXT` / `SKILL_END` | `displaySnapshot.blocks[]`、`skillCalls[]` | `displayEvent(block=process,event=skill.*)` | `displaySnapshot: process item` | running 继续 |
-| `MODEL_CALL_*` | `modelName`、`tokenUsage` | `modelName`、`tokenUsage` | 模型与用量状态 | running 继续 |
-| `RUN_COMPLETED` / `RUN_FAILED` / `RUN_CANCELLED` | `status`、`completedAt`、`error` | `status`、`completedAt`、`error` | 停止 streaming | 发送后结束 |
+| kind | 用途 | patch 语义 |
+| --- | --- | --- |
+| `message` | 单轮根节点 | 浅合并结构化字段 |
+| `text` | 最终回答 | 字符串追加或 `{replace}` |
+| `reasoning` | 执行过程 | 字符串追加或 `{replace}` |
+| `thinking` | 模型思考 | 字符串追加或 `{replace}` |
+| `tool` | 工具调用与结果摘要 | 结构化合并；input/output delta 追加 |
+| `skill` | Skill 生命周期 | 浅合并结构化字段 |
+| `approval` | HITL / AskUser | 浅合并；resume 后 close |
+| `plan` | Plan Mode 和任务进度 | 浅合并结构化字段 |
+| `artifact` | 产物摘要与下载引用 | 浅合并结构化字段 |
+| `error` | 用户可见错误 | 浅合并结构化字段 |
+| `subagent` | 子 Agent 生命周期 | 浅合并；内部活动使用子 Block |
+| `team` | TeamRun 摘要与成员活动 | 浅合并；内部活动使用子 Block |
 
-## 模型与文本输出
+新增展示能力只能新增一个后端 per-kind projector 和一个前端 Block module。不得增加 RuntimeFrame op、顶层 SSE 事件、公共 reducer 分支或 payload 反解析。
 
-- `MODEL_CALL_START`：模型调用开始。建议包含 `model_name`。
-- `MODEL_CALL_END`：模型调用结束。可包含 `input_tokens`、`output_tokens`、`cache_creation_input_tokens`、`cache_input_tokens`。
-- `TEXT_BLOCK_DELTA`：最终回复文本增量。必须包含 `delta`。
-- `REASONING_DELTA`：ReAct 过程文本增量。必须包含 `delta`。主 Leader 新链路会优先发送该事件，避免过程文本混入最终答案。
-- `FINAL_ANSWER_DELTA`：最终答案文本增量。必须包含 `delta`。由 `FinalAnswerStart` 阶段工具触发后发送。
-- `FINAL_ANSWER_REPLACE`：替换当前最终答案。必须包含 `content`。仅用于 TeamRun 等后处理完成后需要用最终汇总覆盖早先协调输出的场景。
-- `THINKING_BLOCK_DELTA`：深度思考文本增量。必须包含 `delta`。
-- `REPLY_END`：AgentScope 回复结束。注意 SSE 结束才代表本轮后处理全部完成，`REPLY_END` 后仍可能出现 Team / Skill / Artifact 等收尾事件。
+### 6.1 AskUser 交互投影
 
-## 工具调用
+AskUser 不新增 Block kind。后端以 `phase=open` 的 `kind=approval` Block 表达待回答请求，`data.type=REQUIRE_EXTERNAL_EXECUTION`，`data.toolCalls` 中包含 `rawName/name=AskUser` 的工具调用。AskUser 工具输入中的 `questions` 固定为：
 
-- `TOOL_CALL_START`：工具调用开始。必须包含 `tool_call_id`，建议包含 `tool_call_name`。
-- `TOOL_CALL_DELTA`：工具参数增量。必须包含 `tool_call_id`、`delta`。
-- `TOOL_CALL_END`：工具参数结束。必须包含 `tool_call_id`。
-- `TOOL_RESULT_START`：工具结果开始。必须包含 `tool_call_id`。
-- `TOOL_RESULT_TEXT_DELTA`：工具结果文本增量。必须包含 `tool_call_id`、`delta`。
-- `TOOL_RESULT_END`：工具结果结束。必须包含 `tool_call_id`。
-- `RUNTIME_EVENT:TOOL_RESULT_COMPLETED`：工具结果结束的应用级事件。若工具调用失败（抛出异常、超时等）或原始工具结果 `state=error|failed|denied`，`status` 必须为 `failed`，payload 需保留 `state` 或 `error` 信息，前端据此在流式阶段将工具节点标记为失败。
-- RunState 的工具投影只保留工具摘要和 `outputPreview`，不得把完整 `TOOL_RESULT_TEXT_DELTA` 内容长期放入 Chat UI 状态。
+```ts
+type AskUserQuestion = {
+  id: string;
+  type: "choice" | "multi_choice" | "text";
+  label: string;
+  options?: string[];
+  placeholder?: string;
+  required: boolean;
+};
+```
 
-## Final Answer 阶段切换
+- `required` 是每个问题的必传布尔字段，不允许通过缺省值推断必填。
+- 前端只校验 `required === true` 的问题；空的选填答案不进入 `externalResults` 模型文本。
+- Chat 从当前 DisplaySnapshot 中按 `order` 派生所有开放 AskUser，底部输入区显示其中一个并提供待回答数量；不建立第二份 interaction store。
+- 开放 AskUser 在消息过程区只显示等待状态，实际表单只出现在底部输入区，避免同一命令存在两个提交入口。
+- `POST /api/chat/resume/start` 成功不代表 UI 已完成；只有原 approval Block 收到 close Frame 后才移出待回答队列并恢复普通 Composer。
+- 刷新或重连后由 Snapshot 恢复待回答队列。未提交草稿不是协议状态，不写入 Block 或 Domain Event。
 
-- 后端默认注入 `FinalAnswerStart` 系统工具。
-- Agent 在完成分析、工具调用、反问等步骤后，必须先调用 `FinalAnswerStart`，随后再输出最终答案正文。
-- `FinalAnswerStart` 只负责阶段切换，不承载最终答案内容，不在 Chat 工具调用列表中展示。
-- 调用该工具前的普通文本会转换为 `REASONING_DELTA` / `AGENT_REASONING_DELTA`；调用后的普通文本会转换为 `FINAL_ANSWER_DELTA` / `AGENT_FINAL_ANSWER_DELTA`。
-- 如果 AgentScope 自然结束但没有调用 `FinalAnswerStart`，后端可执行一次受限 Final Answer Recovery：内部强制调用 `FinalAnswerStart`，随后禁止工具调用并重新生成最终答案正文。Recovery 不得把既有 reasoning 原样提升为 final answer；既有 reasoning 仍保留为过程文本。
-- Recovery 仍未产生最终答案时，本轮按失败收口。
+## 7. 后端边界
 
-## Skills
+```text
+AgentScope/provider
+  -> SourceEvent
+  -> ChatProjectionNormalizer
+  -> DomainEventRepository
+  -> ProjectionRunner
+  -> per-kind projector
+  -> BlockLifecycleCoordinator
+  -> ProjectionStreamStore
+  -> RUNTIME_EVENT: RuntimeFrame
+```
 
-- `SKILL_CONTEXT`：本轮注入的 Skill 上下文。必须包含 `skills` 数组。
-- `SKILL_END`：本轮 Skill 使用结束。必须包含 `skills` 数组，可包含 `status=completed|failed`。
+- SourceEvent 是进程内输入，不是前端协议，也不允许先序列化为 SSE 再反解析。
+- Domain Event 是业务事实；Trace Event 是诊断事实；RuntimeFrame 是 UI projection，三者不得混用。
+- 同一 Run 由唯一 `stream_ordinal` 排序，ProjectionRunner 使用 lease/fencing 串行投影。
+- projector 不直接写 SSE，handler 不直接修改 DisplaySnapshot。
+- Snapshot checkpoint、tail Frame、消费水位和 seq 由 projection store 原子维护。
+- `run.completed` 必须通过 completion barrier；失败或取消时按叶子到根关闭未完成 Block，最后发送 done。
+- Block 只保存白名单摘要。完整工具 observation、模型原始响应和完整 Subagent transcript 留在 Trace/领域存储。
 
-## Team 协作
+## 8. 前端边界
 
-- Team 使用顶层 SSE `TEAM_EVENT`，不经过 `RUNTIME_EVENT`，也不进入单 Agent `DisplaySnapshot`。
-- payload 必须包含 `id`、`seq`、`teamRunId`、`chatRunId`、`type`、`timestamp`、`payload` 和最新 `snapshot`；成员或任务事件还应包含 `actorId` / `taskId`。
-- 稳定事件名为：`run.created`、`run.phase.changed`、`run.completed`、`run.failed`、`run.cancelled`、`member.spawned`、`member.status.changed`、`member.output.delta`、`member.thinking.delta`、`member.tool.started`、`member.tool.completed`、`member.tool.failed`、`member.tool.denied`、`member.iteration.recovery`、`member.iteration.exhausted`、`task.created`、`task.claimed`、`task.completed`、`task.failed`、`task.cancelled`、`task.unlocked`、`mail.sent`、`mail.read`、`mail.acted`。
-- RunState 首包通过独立 `teamSnapshot` 字段恢复 Team Console；`teamSnapshot.recentEvents` 保存最多 300 条已压缩领域事件，用于刷新和历史回放恢复“运行”页。后续 `RUN_STATE_PATCH(kind=team_event)` 必须携带原始 `teamEvent`。`teamSnapshot` / `teamEvent` 与 `displaySnapshot` / `displayEvent` 互不派生。
-- Team 最终用户答案仍通过 `FINAL_ANSWER_REPLACE` 进入 Chat 主回答区；协调文本和 Member 输出不得发送 `FINAL_ANSWER_DELTA`。
-- TeamRun 执行期间，Chat 主回答区只显示 Team 阶段和任务完成数等运行占位，不显示 Member 过程；最终综合完成后用正式答案替换该占位。
-- `mail.sent` 必须在消息持久化后立即发布；Member 未读入站消息会阻止 `team_submit_result`，`mail.read` 表示该消息已进入 Member session 上下文。
-- Team Mailbox 支持 `recipient=broadcast`，广播在 Store 边界展开为每个目标成员一条独立 `mail.sent`，不引入特殊广播消息结构。
-- Member 不进入单 Agent HITL。工具请求需要人工确认或外部执行时，Runtime 必须拒绝该工具、发出 `member.tool.denied`，并用拒绝结果恢复原 Member session；不得因此直接终止 TeamRun，也不得绕过权限执行工具。
-- Team session 使用独立 ReAct 预算：Leader 协调 16 轮、Member 执行 32 轮、综合 8 轮。Member 首次达到上限时发出 `member.iteration.recovery`，把工具收缩为 Team 协作工具并追加 8 轮收敛恢复；再次耗尽时发出 `member.iteration.exhausted` 后失败。
-- 旧 Team 事件和旧 Team 历史快照不兼容、不回放、不投影。
+```text
+RUNTIME_EVENT
+  -> decodeRuntimeFrame
+  -> streamAdapter
+  -> blockTreeReducer
+  -> registry[kind].reduce
+  -> registry[kind].renderer
+```
 
-## 用户介入
+- 通用层只理解 `seq`、Block identity、父子关系和生命周期。
+- renderer 不修改 Block Tree，不从工具文本或 JSON 字符串恢复领域状态。
+- 每个 kind 严格校验 `dataVersion`、initial data 和 patch。
+- Chat 与 Sandbox 使用同一 Runtime Block Tree 渲染入口。
 
-- `HITL_REQUIRED`：需要用户审批或补充外部执行结果。`AskUser` 反问也走该事件，前端按工具名渲染为补充信息表单。必须包含 `interactionId`、`type`、`sessionId`、`agentId`、`agentName`、`replyId`、`toolCalls`。
-  `toolCalls` 是前端展示用列表，可能合并同一回复中尚未得到结果的工具；后端恢复 AgentScope 时必须为该条 assistant 工具调用中的每个 pending `tool_call_id` 回传确认或执行结果，不能遗漏同轮调用，也不能混入已完成或历史调用。
-- `HITL_RESOLVED`：用户处理完成。AskUser 场景必须在 Runtime Event payload 中携带 `externalResultsPreview`，用于把“用户补充信息”写回同一个 AskUser process item；该字段只保存短预览，完整恢复数据仍以 `/resume/start` 请求和 AgentScope `ExternalExecutionResultEvent` 为准。
-- `CLARIFICATION_REQUIRED`：旧兼容事件。新链路不得用它发起用户可恢复反问；用户可恢复反问必须通过 `AskUser` -> `HITL_REQUIRED` -> `/resume/start` -> `ExternalExecutionResultEvent`。
+## 9. 已删除契约
 
-## 后处理
+下列名称只能出现在破坏性 reset、历史设计说明或删除验收中，不能重新进入运行时：
 
-- 产物、沙箱等后处理均通过 `RUNTIME_EVENT` 的独立家族表达：`ARTIFACT_*`、`SANDBOX_*`。记忆能力重设计后再定义新的 `MEMORY_*` 事件语义。
+- `RunState` / `RUN_STATE` / `RUN_STATE_PATCH`
+- `DisplayEvent` 与固定 event/block 映射
+- `event_hub`、`runStateStreamAdapter`、`displayEventReducer`
+- mask registry、动态字段路径、`set/append/remove/clear`
+- 顶层业务 `TEAM_EVENT`
+- 旧 Snapshot reader、迁移 adapter、双读或双写 fallback
 
-## 兼容字段
+## 10. 变更规则
 
-- 历史消息中仍可能存在 `planRuns` 字段。当前前端不执行历史 Plan 字段；后端仅保留读写兼容，避免旧 SQLite 数据导致接口失败。
+修改 RuntimeFrame、DisplaySnapshot、核心生命周期或现有 kind 语义前，必须先更新本文，再同步：
+
+1. 后端 Pydantic schema 与 projector 测试。
+2. 前端 TypeScript decoder、kind module 与 reducer 测试/构建。
+3. Snapshot、tail replay、HITL resume 和 terminal done 回归。
+
+新功能如果只需要新增 `kind`，不得修改本协议公共结构。

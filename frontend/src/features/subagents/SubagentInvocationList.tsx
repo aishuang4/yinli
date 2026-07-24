@@ -2,8 +2,8 @@
  * SubagentInvocationList — 展示 Subagent 委托调用审计记录。
  */
 
-import { Clock, ExternalLink, ListChecks } from 'lucide-react';
-import { Empty, Tag } from '@agentscope-ai/design';
+import { Clock, ExternalLink, Eye, ListChecks } from 'lucide-react';
+import { Button, Empty, Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import type { SubagentInvocation } from '../../types/subagent';
 import {
@@ -17,12 +17,14 @@ interface SubagentInvocationListProps {
   invocations: SubagentInvocation[];
   title?: string;
   emptyDescription?: string;
+  onSelect?: (invocation: SubagentInvocation) => void;
 }
 
 export function SubagentInvocationList({
   invocations,
   title = '委托历史',
   emptyDescription = '暂无 Subagent 委托记录',
+  onSelect,
 }: SubagentInvocationListProps) {
   return (
     <section className="grid min-h-0 grid-rows-[auto_1fr] overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
@@ -42,7 +44,7 @@ export function SubagentInvocationList({
         ) : (
           <div className="grid gap-3">
             {invocations.map((item) => (
-              <InvocationCard key={item.id} invocation={item} />
+              <InvocationCard key={item.id} invocation={item} onSelect={onSelect} />
             ))}
           </div>
         )}
@@ -51,7 +53,7 @@ export function SubagentInvocationList({
   );
 }
 
-function InvocationCard({ invocation }: { invocation: SubagentInvocation }) {
+function InvocationCard({ invocation, onSelect }: { invocation: SubagentInvocation; onSelect?: (invocation: SubagentInvocation) => void }) {
   const duration = formatDuration(invocation.startedAt, invocation.completedAt);
 
   return (
@@ -65,6 +67,9 @@ function InvocationCard({ invocation }: { invocation: SubagentInvocation }) {
             </Tag>
             <Tag size="small" color={invocation.definitionScope === 'project' ? 'blue' : 'mauve'}>
               {invocation.definitionScope || 'scope'}
+            </Tag>
+            <Tag size="small" color="transparent">
+              {invocation.executionMode === 'background' ? 'background · legacy' : (invocation.executionMode || 'foreground')}
             </Tag>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
@@ -83,6 +88,7 @@ function InvocationCard({ invocation }: { invocation: SubagentInvocation }) {
           <ExternalLink size={12} className="shrink-0" />
           <span className="truncate">{invocation.runId || invocation.sessionId}</span>
         </div>
+        {onSelect && <Button icon={<Eye size={14} />} onClick={() => onSelect(invocation)} aria-label="查看任务详情" />}
       </div>
 
       <div className="mt-3 grid gap-3 text-xs lg:grid-cols-2">

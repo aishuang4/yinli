@@ -4,7 +4,7 @@ description: Use for read-only codebase exploration, locating relevant files, tr
 tools: Read, Grep, Glob
 model: inherit
 permissionMode: default
-maxTurns: 12
+maxTurns: 30
 color: blue
 ---
 

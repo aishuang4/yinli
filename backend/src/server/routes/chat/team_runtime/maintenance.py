@@ -8,9 +8,7 @@ from src.server.routes.chat.store import _append_assistant_message
 from src.server.routes.chat.team_runtime.store import TEAM_RUNTIME_ROOT, TeamStore, TeamStoreError
 from src.storage.database import (
     get_chat_run,
-    get_chat_run_state,
     update_chat_run_status,
-    upsert_chat_run_state,
 )
 
 
@@ -85,42 +83,13 @@ def delete_team_runs_for_session(session_id: str, *, root: Path = TEAM_RUNTIME_R
     return removed
 
 
-def recover_team_snapshot(snapshot: dict | None) -> dict | None:
-    """从当前 v3 文件事实源补齐历史 Team 快照和运行事件。"""
-
-    team_run_id = str((snapshot or {}).get("teamRunId") or "")
-    if not team_run_id:
-        return snapshot
-    try:
-        store = TeamStore.load(team_run_id)
-    except (OSError, ValueError, TeamStoreError):
-        return snapshot
-    return {
-        **store.snapshot(),
-        "recentEvents": store.events_after(0)[-300:],
-    }
-
-
 def _persist_interrupted_run(store: TeamStore) -> None:
     run = store.run()
     chat_run_id = str(run.get("chatRunId") or "")
     completed_at = str(run.get("completedAt") or datetime.now(timezone.utc).isoformat())
-    snapshot = {
-        **store.snapshot(),
-        "recentEvents": store.events_after(0)[-300:],
-    }
     if chat_run_id:
         update_chat_run_status(chat_run_id, "cancelled", completed_at)
-        state = get_chat_run_state(chat_run_id) or {}
-        upsert_chat_run_state(chat_run_id, {
-            **state,
-            "status": "cancelled",
-            "completedAt": completed_at,
-            "currentStage": "TeamRun 因后端重启中断",
-            "error": INTERRUPTED_REASON,
-            "teamSnapshot": snapshot,
-        })
-    record = get_chat_run(chat_run_id, event_limit=1) if chat_run_id else None
+    record = get_chat_run(chat_run_id) if chat_run_id else None
     _append_assistant_message(
         session_id=str(run.get("sessionId") or ""),
         agent_id=str((record or {}).get("agentId") or ""),
@@ -128,7 +97,6 @@ def _persist_interrupted_run(store: TeamStore) -> None:
         model_name="",
         content="",
         error=INTERRUPTED_REASON,
-        team_snapshot=snapshot,
     )
 
 

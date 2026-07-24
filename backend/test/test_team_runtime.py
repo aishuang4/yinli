@@ -12,12 +12,6 @@ from agentscope.event import (
 from agentscope.message import ToolResultState
 
 from src.agents.factory import AgentGuardrails, AgentModelOptions
-from src.server.routes.chat.event_hub.projector import (
-    consume_run_state_display_events,
-    initial_run_state,
-    normalize_run_state,
-    project_event,
-)
 from src.server.routes.chat.lifecycle import can_transition_run_status, waiting_status_for_interaction
 from src.server.routes.chat.team_runtime.coordinator import TeamCoordinator
 from src.server.routes.chat.team_runtime.member_runtime import (
@@ -221,34 +215,6 @@ def test_team_agent_overrides_parent_iteration_budget(monkeypatch) -> None:
     assert ctx.runtime_model_config.model_options.max_react_iters == 99
 
 
-def test_team_event_never_creates_single_agent_display_items(tmp_path) -> None:
-    store = create_store(tmp_path)
-    event = store.events_after(0)[0]
-    event["snapshot"] = store.snapshot()
-    run = SimpleNamespace(
-        id="run-new",
-        session_id="session-new",
-        agent_id="leader-agent",
-        agent_name="Leader",
-        mode="team",
-        status="running",
-        task_text="goal",
-        created_at="2026-07-10T00:00:00+00:00",
-        completed_at=None,
-    )
-
-    state = project_event(initial_run_state(run), "TEAM_EVENT", event, run)
-
-    assert state["teamSnapshot"]["teamRunId"] == store.ref.id
-    assert len(state["teamSnapshot"]["recentEvents"]) == 1
-    assert state["teamSnapshot"]["recentEvents"][0]["id"] == event["id"]
-    assert "snapshot" not in state["teamSnapshot"]["recentEvents"][0]
-    assert normalize_run_state(state)["teamSnapshot"]["recentEvents"][0]["id"] == event["id"]
-    assert consume_run_state_display_events(state) == []
-    assert state["displaySnapshot"]["mode"] == "single_agent"
-    assert all(block["block"] != "team" for block in state["displaySnapshot"]["blocks"])
-
-
 def test_coordinator_runs_independent_tasks_concurrently(tmp_path, monkeypatch) -> None:
     store = create_store(tmp_path)
     members = [
@@ -354,7 +320,9 @@ def test_user_mail_is_persisted_and_published(tmp_path) -> None:
     assert message["from"] == "user"
     assert store.inbox(member["id"])[-1]["content"] == "请优先检查边界条件"
     published = queue.get_nowait()
-    assert published is not None and "TEAM_EVENT" in published and "mail.sent" in published
+    assert published is not None
+    assert published.event_type == "TEAM_DOMAIN_EVENT"
+    assert published.data["type"] == "mail.sent"
 
 
 def test_mailbox_broadcast_expands_to_individual_deliveries(tmp_path) -> None:
@@ -383,16 +351,8 @@ def test_startup_maintenance_interrupts_orphaned_team_run(tmp_path, monkeypatch)
         lambda run_id, status, completed_at: persisted.update(status=(run_id, status, completed_at)),
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.team_runtime.maintenance.get_chat_run_state",
-        lambda _run_id: {"runId": "run-new"},
-    )
-    monkeypatch.setattr(
-        "src.server.routes.chat.team_runtime.maintenance.upsert_chat_run_state",
-        lambda run_id, state: persisted.update(state=(run_id, state)),
-    )
-    monkeypatch.setattr(
         "src.server.routes.chat.team_runtime.maintenance.get_chat_run",
-        lambda _run_id, event_limit=1: {"agentId": "leader-agent", "agentName": "Leader"},
+        lambda _run_id: {"agentId": "leader-agent", "agentName": "Leader"},
     )
     monkeypatch.setattr(
         "src.server.routes.chat.team_runtime.maintenance._append_assistant_message",
@@ -404,8 +364,8 @@ def test_startup_maintenance_interrupts_orphaned_team_run(tmp_path, monkeypatch)
     assert result["interrupted"] == 1
     assert store.run()["status"] == "cancelled"
     assert store.task(task["id"])["status"] == "cancelled"
-    assert persisted["state"][1]["teamSnapshot"]["recentEvents"][-1]["type"] == "run.cancelled"
     assert persisted["message"]["error"] == INTERRUPTED_REASON
+    assert "team_snapshot" not in persisted["message"]
 
 
 def test_team_run_retention_and_session_deletion(tmp_path) -> None:

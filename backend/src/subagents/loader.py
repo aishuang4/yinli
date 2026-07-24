@@ -156,6 +156,6 @@ def _normalize_list(value: Any) -> list[Any]:
 
 def _normalize_max_turns(value: Any) -> int:
     try:
-        return max(1, min(int(value or 20), 120))
+        return max(1, min(int(value or 30), 120))
     except (TypeError, ValueError):
-        return 20
+        return 30

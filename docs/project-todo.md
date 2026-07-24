@@ -1,22 +1,31 @@
 # 引力 YINLI TODO
 
-> 最后更新：2026-07-22。本文只保留尚未完成的任务。
+> 最后更新：2026-07-23。本文只保留尚未完成的任务。
 
 ## P0. Runtime 稳定性
 
-- [ ] 补齐 RunState / DisplaySnapshot / TeamSnapshot 回归矩阵，覆盖 Plan finalized、HITL、AskUser、工具失败、取消和刷新恢复。
+- [ ] 补齐 RuntimeFrame / DisplaySnapshot V4 浏览器回归矩阵，覆盖 Plan finalized、HITL、AskUser、工具失败、取消和刷新恢复。
 - [ ] 增加关键 Chat 工作流的 Playwright 测试，避免只依赖 reducer 和后端单测。
 - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor 和 ToolScope 摘要。
 
-## P1. TeamRun 与 Subagent
+## P1. Event Stream 后续加固
+
+- [ ] 增加前端 RuntimeFrame decoder、gap recovery 和 kind reducer 的独立单元测试，减少只靠 production build 与浏览器回归发现问题的风险。
+- [ ] 为 ProjectionRunner backlog、Snapshot fallback、retention 和 invariant repair 增加可观测指标。
+
+## P2. TeamRun 与 Subagent
 
 - [ ] 增加 Team Mailbox API 与综合阶段并发投递的端到端测试。
 - [ ] 增加 Team Console Playwright 回归，覆盖第二轮清空、成员切换不重放和用户主动发信。
-- [ ] 完成 Subagent M2.1 稳定性修复：错误 observation、父本轮模型继承、异常终态和 HITL 事件关联。
-- [ ] 完成 child / parent AgentScope checkpoint spike，明确 exact resume、transcript replay 和 restart 边界。
-- [ ] spike 后按 `docs/subagent-task-runtime-redesign.md` 实施单进程持久 task、transcript、Supervisor 和独立前端组件。
+- [x] 完成 Subagent M2.1 稳定性修复：错误 observation、父本轮模型继承、异常终态和 HITL 事件关联。
+- [x] 完成 child / parent AgentScope checkpoint spike，明确 exact resume、transcript replay 和 restart 边界。
+- [x] 完成 Subagent M3 MVP：单进程前台持久 task、Supervisor、transcript、任务控制台和查询/取消 API；Chat 展示已切换为 `kind=subagent` Block。
+- [ ] 按 `docs/subagent-runtime-event-redesign.md` 完成 Subagent 领域层：TaskService 唯一写入口、revision/process fencing、attempt、domain event 和 result delivery；依赖通用 Event Stream V3。
+- [x] 完成 Subagent 前端领域投影：注册 `Block.kind=subagent` 的 schema/reducer/renderer 和 Generic Block fallback，删除 `tools[].subagent*` 反解析；不修改通用事件流主干。
+- [ ] 完成 attached async fan-out/join 与 parent completion barrier，确保 child 结果 delivered/consumed 前父 Run 不成功收口。
+- [ ] 在 Task API 基础上接入 Subagent 控制台刷新恢复回归；Chat 使用嵌套 `kind=subagent` Block，detached background 暂不开放。
 
-## P2. 平台基础
+## P3. 平台基础
 
 ### Workspace / Project
 
@@ -28,9 +37,9 @@
 
 - [ ] 定义 Artifact 数据模型和 `ARTIFACT_*` 生命周期。
 - [ ] 支持文件、报告、代码补丁和数据集的来源、预览、下载和版本。
-- [ ] 大体积工具输出进入 Trace / Artifact 按需查看，RunState 只保留轻量摘要。
+- [ ] 大体积工具输出进入 Trace / Artifact 按需查看，Block 只保留轻量摘要。
 
-## P3. Plan、Trace 与工具
+## P4. Plan、Trace 与工具
 
 - [ ] 明确 finalized plan 在下一轮“按计划执行”时的注入格式和状态恢复语义。
 - [ ] 为 `todo_write`、`task_output`、`task_list` 补更细的后端与前端回归。
@@ -44,7 +53,7 @@
 - [ ] 用至少两个模型供应商完成 AgentScope 原生 Skills Sandbox 行为验证，覆盖 `scripts/`、`references/`、Office 文件和 fallback 模型。
 - [ ] 为非持久 DockerWorkspace 设计一次性 Skill seed 与运行结束清理，解除当前“Docker + Skills 必须启用 persistent_sandbox”的限制。
 
-## P4. Memory 稳定化
+## P5. Memory 稳定化
 
 - [ ] 补运行前记忆注入 Trace payload，记录目标、来源、条数和截断信息。
 - [ ] 补 VectorStorePolicy、准入阈值、Markdown 质量策略的迁移、重建和风险提示。
@@ -52,7 +61,7 @@
 
 暂缓：复杂召回质量视图、模型评分评估、`memory_change_log`、Git-backed vault、Wiki 反向合并和专业图谱组件。
 
-## P5. 桌面端与前端
+## P6. 桌面端与前端
 
 - [ ] 验证 macOS / Windows 真机 PyInstaller 后端产物。
 - [ ] 完成 Electron 签名、公证、安装包过滤、日志和异常展示。
@@ -63,7 +72,7 @@
 - [ ] 抽取卡片式 tab、可选择列表项、时间线节点和工具条按钮组。
 - [ ] 增加非 Chat 表单与超大组件的轻量自动检查。
 
-## P6. 长期路线
+## P7. 长期路线
 
 - [ ] Dynamic Workflow Phase 0：从固定节点演示改为 Script Review + Runtime Cockpit。
 - [ ] 定义 `workflow.script.v1`，再实现 stage / task / variable / artifact 动态事件。
@@ -77,6 +86,6 @@
 
 ## 维护规则
 
-- 新增 Chat SSE、RunState、DisplaySnapshot 字段前先更新 `docs/chat-sse-event-contract.md`。
+- 新增 Chat RuntimeFrame、DisplaySnapshot 或 kind 语义前先更新 `docs/chat-sse-event-contract.md`。
 - 新增大功能前写短设计；实现完成后合并事实并删除阶段草案。
 - 已下线能力只能以历史清理边界描述，不能重新写成当前入口。

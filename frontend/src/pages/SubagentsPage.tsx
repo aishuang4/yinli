@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, FileText, History, List, RefreshCw, Search, ShieldCheck } from 'lucide-react';
+import { Bot, FileText, History, List, ListChecks, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import { Button, Tag } from '@agentscope-ai/design';
 import { TextField } from '../components/form';
 import {
@@ -19,11 +19,14 @@ import {
   WorkbenchSection,
 } from '../components/workbench';
 import { SubagentInvocationList } from '../features/subagents/SubagentInvocationList';
+import { SubagentTaskDetail } from '../features/subagents/SubagentTaskDetail';
 import { matchText, compactHash } from '../features/subagents/subagentViewUtils';
 import { useSubagents } from '../hooks/useSubagents';
-import type { SubagentDefinition } from '../types/subagent';
+import type { SubagentDefinition, SubagentInvocation } from '../types/subagent';
+import { useAppStore } from '../stores/appStore';
 
 type SubagentDetailTab = 'definition' | 'history';
+type SubagentPageTab = 'tasks' | 'definitions';
 
 export function SubagentsPage() {
   const {
@@ -37,8 +40,11 @@ export function SubagentsPage() {
     refresh,
   } = useSubagents();
   const [query, setQuery] = useState('');
+  const [pageTab, setPageTab] = useState<SubagentPageTab>('tasks');
   const [selectedName, setSelectedName] = useState('');
   const [activeTab, setActiveTab] = useState<SubagentDetailTab>('definition');
+  const [selectedInvocation, setSelectedInvocation] = useState<SubagentInvocation | null>(null);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
 
   const filteredDefinitions = useMemo(() => (
     definitions.filter((definition) => matchText(query, [
@@ -74,23 +80,66 @@ export function SubagentsPage() {
     definitions.find((definition) => definition.name === selectedName) || null
   ), [definitions, selectedName]);
 
+  const resolvedSelectedInvocation = useMemo(() => (
+    selectedInvocation ? invocations.find((item) => item.id === selectedInvocation.id) || selectedInvocation : null
+  ), [invocations, selectedInvocation]);
+
   const selectedInvocations = useMemo(() => (
     invocations
       .filter((invocation) => invocation.subagentName === selectedName)
       .filter((invocation) => matchText(query, [
-      invocation.subagentName,
-      invocation.parentAgentName,
-      invocation.status,
-      invocation.task,
-      invocation.expectedOutput,
-      invocation.resultPreview,
-      invocation.error,
-      invocation.definitionPath,
+        invocation.subagentName,
+        invocation.parentAgentName,
+        invocation.status,
+        invocation.task,
+        invocation.expectedOutput,
+        invocation.resultPreview,
+        invocation.error,
+        invocation.definitionPath,
       ]))
+      .sort((left, right) => Date.parse(right.updatedAt || right.startedAt) - Date.parse(left.updatedAt || left.startedAt))
   ), [invocations, query, selectedName]);
+
+  const taskInvocations = useMemo(() => {
+    const statusRank: Record<string, number> = { queued: 0, running: 1, waiting: 2, interrupted: 3 };
+    return invocations
+      .filter((invocation) => matchText(query, [
+        invocation.subagentName,
+        invocation.parentAgentName,
+        invocation.status,
+        invocation.task,
+        invocation.expectedOutput,
+        invocation.resultPreview,
+        invocation.error,
+        invocation.definitionPath,
+        invocation.runId,
+      ]))
+      .sort((left, right) => {
+        const rankDiff = (statusRank[left.status] ?? 4) - (statusRank[right.status] ?? 4);
+        if (rankDiff !== 0) return rankDiff;
+        return Date.parse(right.updatedAt || right.startedAt) - Date.parse(left.updatedAt || left.startedAt);
+      });
+  }, [invocations, query]);
+
+  if (resolvedSelectedInvocation) {
+    return (
+      <WorkbenchDetailShell
+        title={resolvedSelectedInvocation.subagentName}
+        subtitle="持久任务详情"
+        onBack={() => setSelectedInvocation(null)}
+        actions={<Tag size="small" color="transparent">{resolvedSelectedInvocation.id}</Tag>}
+      >
+        <div className="h-full overflow-y-auto p-5">
+          <SubagentTaskDetail invocation={resolvedSelectedInvocation} projectId={activeProjectId} onRefresh={refresh} />
+        </div>
+      </WorkbenchDetailShell>
+    );
+  }
 
   const completedCount = invocations.filter((item) => item.status === 'completed').length;
   const failedCount = invocations.filter((item) => item.status === 'failed').length;
+  const activeCount = invocations.filter((item) => ['queued', 'running', 'waiting'].includes(item.status)).length;
+  const waitingCount = invocations.filter((item) => item.status === 'waiting').length;
 
   if (selectedDefinition) {
     return (
@@ -132,6 +181,7 @@ export function SubagentsPage() {
                 invocations={selectedInvocations}
                 title={`${selectedDefinition.name} 调用历史`}
                 emptyDescription="当前 Subagent 暂无匹配的调用记录"
+                onSelect={setSelectedInvocation}
               />
             )}
           </div>
@@ -147,6 +197,8 @@ export function SubagentsPage() {
       actions={(
         <>
           <Tag size="small" color="blue">{definitions.length} 个定义</Tag>
+          <Tag size="small" color={activeCount > 0 ? 'orange' : 'transparent'}>{activeCount} 个活跃任务</Tag>
+          {waitingCount > 0 && <Tag size="small" color="mauve">{waitingCount} 个等待人工</Tag>}
           <Tag size="small" color="green">{completedCount} 次完成</Tag>
           {failedCount > 0 && <Tag size="small" color="red">{failedCount} 次失败</Tag>}
           <Tag size="small" color="transparent">fp {compactHash(fingerprint)}</Tag>
@@ -163,6 +215,21 @@ export function SubagentsPage() {
           placeholder="搜索 Subagent、工具、任务或结果"
           prefix={<Search size={14} />}
           allowClear
+        />
+      </div>
+
+      <div className="mb-5 flex gap-2">
+        <DetailTabButton
+          active={pageTab === 'tasks'}
+          icon={<ListChecks size={14} />}
+          label="任务控制台"
+          onClick={() => setPageTab('tasks')}
+        />
+        <DetailTabButton
+          active={pageTab === 'definitions'}
+          icon={<FileText size={14} />}
+          label="定义"
+          onClick={() => setPageTab('definitions')}
         />
       </div>
 
@@ -184,32 +251,48 @@ export function SubagentsPage() {
         </WorkbenchSection>
       )}
 
-      <WorkbenchSection title="Subagent 定义" compact>
-        {error ? (
-          <WorkbenchEmptyPanel>
-            <span className="text-[var(--color-error)]">{error}</span>
-          </WorkbenchEmptyPanel>
-        ) : loading ? (
-          <WorkbenchLoadingPanel tip="加载 Subagent 数据..." />
-        ) : filteredDefinitions.length === 0 ? (
-          <WorkbenchEmptyPanel>暂无匹配的 Subagent 定义</WorkbenchEmptyPanel>
-        ) : (
-          <WorkbenchList>
-            {filteredDefinitions.map((definition, index) => (
-              <SubagentDefinitionRow
-                key={`${definition.scope}-${definition.name}`}
-                definition={definition}
-                invocationCount={invocationCounts[definition.name] || 0}
-                last={index === filteredDefinitions.length - 1}
-                onSelect={() => {
-                  setSelectedName(definition.name);
-                  setActiveTab('definition');
-                }}
-              />
-            ))}
-          </WorkbenchList>
-        )}
-      </WorkbenchSection>
+      {pageTab === 'tasks' ? (
+        <WorkbenchSection title="Subagent 任务" compact>
+          {error ? (
+            <WorkbenchEmptyPanel><span className="text-[var(--color-error)]">{error}</span></WorkbenchEmptyPanel>
+          ) : loading ? (
+            <WorkbenchLoadingPanel tip="加载 Subagent 任务..." />
+          ) : (
+            <SubagentInvocationList
+              invocations={taskInvocations}
+              title="当前 Project 的全部任务"
+              emptyDescription="暂无匹配的 Subagent 任务"
+              onSelect={setSelectedInvocation}
+            />
+          )}
+        </WorkbenchSection>
+      ) : (
+        <WorkbenchSection title="Subagent 定义" compact>
+          {error ? (
+            <WorkbenchEmptyPanel><span className="text-[var(--color-error)]">{error}</span></WorkbenchEmptyPanel>
+          ) : loading ? (
+            <WorkbenchLoadingPanel tip="加载 Subagent 定义..." />
+          ) : filteredDefinitions.length === 0 ? (
+            <WorkbenchEmptyPanel>暂无匹配的 Subagent 定义</WorkbenchEmptyPanel>
+          ) : (
+            <WorkbenchList>
+              {filteredDefinitions.map((definition, index) => (
+                <SubagentDefinitionRow
+                  key={`${definition.scope}-${definition.name}`}
+                  definition={definition}
+                  invocationCount={invocationCounts[definition.name] || 0}
+                  last={index === filteredDefinitions.length - 1}
+                  onSelect={() => {
+                    setPageTab('definitions');
+                    setSelectedName(definition.name);
+                    setActiveTab('definition');
+                  }}
+                />
+              ))}
+            </WorkbenchList>
+          )}
+        </WorkbenchSection>
+      )}
     </WorkbenchListPage>
   );
 }

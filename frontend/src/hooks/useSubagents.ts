@@ -26,7 +26,10 @@ interface UseSubagentsReturn {
 }
 
 async function requestJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { cache: 'no-store' });
+  const response = await fetch(url, {
+    cache: 'no-store',
+    signal: AbortSignal.timeout(8_000),
+  });
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
     throw new Error(err.detail || `HTTP ${response.status}`);
@@ -44,31 +47,61 @@ export function useSubagents(limit = 100): UseSubagentsReturn {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const loadInvocations = useCallback(async () => {
+    const invocationList = await requestJson<SubagentInvocationListResponse>(
+      `/api/subagents/invocations?projectId=${encodeURIComponent(activeProjectId)}&limit=${limit}`,
+    );
+    setInvocations(invocationList.items);
+  }, [activeProjectId, limit]);
+
+  const load = useCallback(async (showLoading: boolean) => {
     try {
-      setLoading(true);
+      if (showLoading) setLoading(true);
       setError(null);
-      const [catalog, invocationList] = await Promise.all([
+      const [catalog] = await Promise.all([
         requestJson<SubagentCatalogResponse>(`/api/subagents?projectId=${encodeURIComponent(activeProjectId)}`),
-        requestJson<SubagentInvocationListResponse>(
-          `/api/subagents/invocations?projectId=${encodeURIComponent(activeProjectId)}&limit=${limit}`,
-        ),
+        loadInvocations(),
       ]);
       setDefinitions(catalog.definitions);
       setErrors(catalog.errors);
       setWarnings(catalog.warnings);
       setFingerprint(catalog.fingerprint);
-      setInvocations(invocationList.items);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载 Subagent 数据失败');
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
-  }, [activeProjectId, limit]);
+  }, [activeProjectId, loadInvocations]);
+
+  const refresh = useCallback(async () => {
+    await load(true);
+  }, [load]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void load(true);
+  }, [load]);
+
+  useEffect(() => {
+    const hasActiveTask = invocations.some((invocation) => (
+      invocation.status === 'queued'
+      || invocation.status === 'running'
+      || invocation.status === 'waiting'
+    ));
+    const intervalMs = hasActiveTask ? 1000 : 2000;
+    const timer = window.setInterval(() => {
+      void loadInvocations().catch((err) => {
+        setError(err instanceof Error ? err.message : '刷新 Subagent 任务失败');
+      });
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+  }, [invocations, loadInvocations]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void load(false);
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [load]);
 
   return {
     definitions,

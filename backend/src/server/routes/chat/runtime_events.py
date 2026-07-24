@@ -7,9 +7,10 @@ from typing import Any
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.event_types import (
     AGENTSCOPE_TO_RUNTIME_EVENT,
-    SSE_EVENT_RUNTIME,
+    RUNTIME_EVENT_TRACE,
 )
-from src.server.routes.chat.helpers import _sse_event
+from src.server.routes.chat.helpers import source_event
+from src.server.routes.chat.projection.source_events import SourceEvent
 
 
 def build_runtime_event(
@@ -47,41 +48,60 @@ def build_runtime_event(
     }
 
 
-def runtime_event_sse(event_type: str, collect: list[dict[str, Any]] | None = None, **kwargs: Any) -> str:
-    """把 Runtime Event 包装为 SSE RUNTIME_EVENT。"""
+def runtime_trace_source_event(
+    event_type: str,
+    collect: list[dict[str, Any]] | None = None,
+    **kwargs: Any,
+) -> SourceEvent:
+    """构造带 Trace 元数据的结构化 Runtime 源信号。"""
 
     event = build_runtime_event(event_type, **kwargs)
     _record_runtime_event_trace(event)
     if collect is not None:
         _append_collected_runtime_event(collect, event)
-    return _sse_event(SSE_EVENT_RUNTIME, event)
+    return SourceEvent(event_type, event)
 
 
-def runtime_event_from_agentscope_sse(
+def runtime_source_event(event: dict[str, Any]) -> SourceEvent:
+    """把已构造的 Runtime Trace 记录转为直接类型的源信号。"""
+
+    event_type = str(event.get("type") or "")
+    if not event_type:
+        raise ValueError("Runtime source event 缺少 type")
+    return SourceEvent(event_type, event)
+
+
+def runtime_event_from_agentscope_event(
     source_event_type: str,
     *,
     session_id: str,
     scope: str,
     agent_id: str,
     agent_name: str,
+    run_id: str | None = None,
     event_data: dict[str, Any] | None = None,
+    payload_extra: dict[str, Any] | None = None,
     collect: list[dict[str, Any]] | None = None,
-) -> str | None:
+) -> SourceEvent | None:
     """把 AgentScope 原始事件映射为应用级 Runtime Event。"""
 
     runtime_type = AGENTSCOPE_TO_RUNTIME_EVENT.get(source_event_type)
     if not runtime_type:
         return None
-    return runtime_event_sse(
+    payload = _compact_agentscope_payload(source_event_type, event_data or {})
+    if payload_extra:
+        payload.update(payload_extra)
+    return runtime_trace_source_event(
         runtime_type,
         session_id=session_id,
+        run_id=run_id,
         scope=scope,
         source="agentscope",
         source_event_type=source_event_type,
         agent_id=agent_id,
         agent_name=agent_name,
         status=_status_for_runtime_event(runtime_type, event_data or {}),
-        payload=_compact_agentscope_payload(source_event_type, event_data or {}),
+        payload=payload,
         collect=collect,
     )
 
@@ -120,13 +140,13 @@ def _record_runtime_event_trace(event: dict[str, Any]) -> None:
 
         _record_run_event(
             session_id=session_id,
-            event_type=SSE_EVENT_RUNTIME,
+            event_type=RUNTIME_EVENT_TRACE,
             persist=True,
             scope=str(event.get("scope") or "run"),
             agent_id=str(event.get("agentId") or "") or None,
             agent_name=str(event.get("agentName") or "") or None,
             status=str(event.get("status") or ""),
-            title=str(event.get("type") or SSE_EVENT_RUNTIME),
+            title=str(event.get("type") or RUNTIME_EVENT_TRACE),
             content=str(event.get("reason") or ""),
             payload=event,
         )

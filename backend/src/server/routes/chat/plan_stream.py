@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 
 from src.server.routes.chat.models import ChatToolRun
-from src.server.routes.chat.runtime_events import runtime_event_sse
+from src.server.routes.chat.runtime_events import runtime_trace_source_event
+from src.server.routes.chat.projection.source_events import SourceEvent
 
 
 PLAN_TOOL_RUNTIME_EVENTS = {
@@ -26,7 +27,7 @@ def plan_runtime_event_from_tool_result(
     session_id: str,
     agent_id: str,
     agent_name: str,
-) -> str | None:
+) -> SourceEvent | None:
     """从 Plan 控制工具结果兜底生成实时 Runtime Event。"""
 
     if event_type != "TOOL_RESULT_END":
@@ -74,7 +75,7 @@ def plan_runtime_event_from_tool_result(
                 else result.get(key) or ([] if key == "steps" else {})
             )
     status = default_status or _runtime_status_from_plan_tool_result(result)
-    return runtime_event_sse(
+    return runtime_trace_source_event(
         runtime_type,
         session_id=session_id,
         scope="plan",
@@ -89,13 +90,12 @@ def plan_runtime_event_from_tool_result(
     )
 
 
-def plan_final_answer_from_sse(event: str) -> str:
-    """从 PLAN_FINALIZED SSE 中提取最终答复文本。"""
+def plan_final_answer_from_sse(event: SourceEvent) -> str:
+    """从 PLAN_FINALIZED 结构化源信号提取最终答复文本。"""
 
-    event_type, data = _parse_plan_sse_event(event)
-    if event_type != "RUNTIME_EVENT" or data.get("type") != "PLAN_FINALIZED":
+    if event.event_type != "PLAN_FINALIZED":
         return ""
-    return plan_final_answer_from_runtime_event(data)
+    return plan_final_answer_from_runtime_event(event.data)
 
 
 def plan_final_answer_from_runtime_event(runtime_event: dict) -> str:
@@ -120,23 +120,6 @@ def iter_plan_final_answer_deltas(text: str, chunk_size: int = 24) -> list[str]:
     if buffer:
         chunks.append(buffer)
     return chunks
-
-
-def _parse_plan_sse_event(event: str) -> tuple[str, dict]:
-    event_type = ""
-    data_text = ""
-    for line in event.splitlines():
-        if line.startswith("event: "):
-            event_type = line.removeprefix("event: ").strip()
-        elif line.startswith("data: "):
-            data_text = line.removeprefix("data: ").strip()
-    if not data_text:
-        return event_type, {}
-    try:
-        data = json.loads(data_text)
-    except json.JSONDecodeError:
-        return event_type, {}
-    return event_type, data if isinstance(data, dict) else {}
 
 
 def _has_existing_plan_tool_runtime_event(

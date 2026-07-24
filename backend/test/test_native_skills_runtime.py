@@ -187,8 +187,8 @@ def test_skill_lifecycle_starts_only_after_viewer_call_and_loads_context() -> No
         agent_name="Agent",
     )
 
-    assert any("SKILL_STARTED" in event for event in started)
-    assert any("SKILL_CONTEXT" in event for event in loaded)
+    assert any(event.event_type == "SKILL_STARTED" for event in started)
+    assert any(event.event_type == "SKILL_CONTEXT" for event in loaded)
     assert [skill.id for skill in skill_runs] == ["workbook-inspector"]
 
 

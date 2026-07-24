@@ -18,9 +18,9 @@ from src.memory.trace import (
 )
 from src.project_files import list_project_session_artifacts
 from src.server.routes.chat.background_runs import current_chat_background_run_id
-from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
+from src.server.routes.chat.helpers import _set_skill_run_status, source_event
 from src.server.routes.chat.models import ChatModelCacheRun, ChatSkillRun, ChatToolRun
-from src.server.routes.chat.runtime_events import runtime_event_sse
+from src.server.routes.chat.runtime_events import runtime_trace_source_event
 from src.server.routes.chat.skill_runs import update_skill_run_status
 from src.server.routes.chat.store import _append_assistant_message
 from src.server.routes.chat.trace_recorder import _record_run_event, _trim_text
@@ -69,7 +69,7 @@ async def emit_failed_startup_run(
             skill_calls=failed_skill_runs,
             model_caches=assistant_model_caches or [],
         )
-    yield runtime_event_sse(
+    yield runtime_trace_source_event(
         "RUN_FAILED",
         session_id=session_id,
         scope="run",
@@ -80,7 +80,7 @@ async def emit_failed_startup_run(
         payload={"message": assistant_error},
     )
     if sandbox:
-        yield runtime_event_sse(
+        yield runtime_trace_source_event(
             "SANDBOX_FAILED",
             session_id=session_id,
             scope="sandbox",
@@ -92,7 +92,7 @@ async def emit_failed_startup_run(
         )
     if failed_skill_runs:
         for skill in failed_skill_runs:
-            yield runtime_event_sse(
+            yield runtime_trace_source_event(
                 "SKILL_FAILED",
                 session_id=session_id,
                 scope="skill",
@@ -101,11 +101,11 @@ async def emit_failed_startup_run(
                 status="failed",
                 payload=skill.model_dump(by_alias=True),
             )
-        yield _sse_event("SKILL_END", {
+        yield source_event("SKILL_END", {
             "skills": [item.model_dump(by_alias=True) for item in failed_skill_runs],
             "status": "failed",
         })
-    yield _sse_event("ERROR", {
+    yield source_event("ERROR", {
         "message": assistant_error,
     })
 
@@ -208,7 +208,7 @@ async def finalize_successful_leader_run(
         )
         _schedule_memory_reflection(reflection_input, model_name=model_name, persist=persist)
         if _should_emit_skill_generating_notice(reflection_input):
-            yield runtime_event_sse(
+            yield runtime_trace_source_event(
                 MEMORY_SKILL_GENERATING_EVENT_TYPE,
                 session_id=session_id,
                 run_id=source_run_id,
@@ -261,7 +261,7 @@ async def finalize_successful_leader_run(
                 payload={"sourceRunId": source_run_id},
             )
     if session_artifacts:
-        yield runtime_event_sse(
+        yield runtime_trace_source_event(
             "ARTIFACT_CREATED",
             session_id=session_id,
             run_id=source_run_id,
@@ -272,7 +272,7 @@ async def finalize_successful_leader_run(
             status="completed",
             payload={"files": session_artifacts},
         )
-    yield runtime_event_sse(
+    yield runtime_trace_source_event(
         "RUN_COMPLETED",
         session_id=session_id,
         scope="run",
@@ -285,7 +285,7 @@ async def finalize_successful_leader_run(
         },
     )
     if sandbox:
-        yield runtime_event_sse(
+        yield runtime_trace_source_event(
             "SANDBOX_COMPLETED",
             session_id=session_id,
             scope="sandbox",
@@ -483,7 +483,7 @@ async def finalize_failed_leader_run(
         )
     if failed_skill_runs:
         for skill in failed_skill_runs:
-            yield runtime_event_sse(
+            yield runtime_trace_source_event(
                 "SKILL_FAILED",
                 session_id=session_id,
                 scope="skill",
@@ -492,11 +492,11 @@ async def finalize_failed_leader_run(
                 status="failed",
                 payload=skill.model_dump(by_alias=True),
             )
-        yield _sse_event("SKILL_END", {
+        yield source_event("SKILL_END", {
             "skills": [item.model_dump(by_alias=True) for item in failed_skill_runs],
             "status": "failed",
         })
-    yield runtime_event_sse(
+    yield runtime_trace_source_event(
         "RUN_FAILED",
         session_id=session_id,
         scope="run",
@@ -507,7 +507,7 @@ async def finalize_failed_leader_run(
         payload={"message": assistant_error},
     )
     if sandbox:
-        yield runtime_event_sse(
+        yield runtime_trace_source_event(
             "SANDBOX_FAILED",
             session_id=session_id,
             scope="sandbox",
@@ -517,6 +517,6 @@ async def finalize_failed_leader_run(
             reason="agent_error",
             payload={"message": assistant_error},
         )
-    yield _sse_event("ERROR", {
+    yield source_event("ERROR", {
         "message": assistant_error,
     })

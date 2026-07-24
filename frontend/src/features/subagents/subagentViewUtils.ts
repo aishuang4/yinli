@@ -27,7 +27,10 @@ export function invocationStatusColor(status: SubagentInvocationStatus): string 
   if (status === 'completed') return 'green';
   if (status === 'failed') return 'red';
   if (status === 'running') return 'blue';
+  if (status === 'queued') return 'blue';
   if (status === 'waiting') return 'orange';
+  if (status === 'cancelled') return 'transparent';
+  if (status === 'interrupted') return 'orange';
   return 'transparent';
 }
 
@@ -35,7 +38,10 @@ export function invocationStatusLabel(status: SubagentInvocationStatus): string 
   if (status === 'completed') return '已完成';
   if (status === 'failed') return '失败';
   if (status === 'running') return '运行中';
+  if (status === 'queued') return '排队中';
   if (status === 'waiting') return '等待确认';
+  if (status === 'cancelled') return '已取消';
+  if (status === 'interrupted') return '后端重启中断';
   return status || 'unknown';
 }
 

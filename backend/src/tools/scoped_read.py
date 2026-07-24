@@ -6,7 +6,7 @@ from agentscope.state import AgentState
 from agentscope.tool import Read
 from agentscope.tool._response import ToolChunk
 
-from src.tools.scoped_paths import resolve_workspace_path
+from src.tools.scoped_paths import resolve_existing_workspace_path
 
 
 class ScopedRead(Read):
@@ -41,7 +41,7 @@ class ScopedRead(Read):
         )
 
     def _resolve_file_path(self, file_path: str) -> str:
-        return resolve_workspace_path(
+        return resolve_existing_workspace_path(
             file_path,
             base_dir=self.base_dir,
             scope_dir=self.scope_dir,

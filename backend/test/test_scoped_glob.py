@@ -39,3 +39,22 @@ def test_scoped_glob_accepts_project_relative_base_path(tmp_path: Path, monkeypa
 
     assert chunk.state != "error"
     assert "contract.md" in chunk.content[0].text
+
+
+def test_scoped_glob_falls_back_from_session_workspace_to_project_scope(tmp_path: Path):
+    """Glob 的显式 Project 相对目录应在 Session cwd 缺失时回退。"""
+
+    project_root = tmp_path / "project"
+    session_root = project_root / ".agent-workstation" / "sessions" / "session-a"
+    backend = project_root / "backend"
+    session_root.mkdir(parents=True)
+    backend.mkdir()
+    (backend / "service.py").write_text("pass\n", encoding="utf-8")
+
+    chunk = asyncio.run(ScopedGlob(
+        base_dir=str(session_root),
+        scope_dir=str(project_root),
+    )(pattern="*.py", path="backend"))
+
+    assert chunk.state != "error"
+    assert "service.py" in chunk.content[0].text

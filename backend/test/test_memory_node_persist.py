@@ -136,7 +136,7 @@ def test_successful_completion_triggers_memory_persist(isolated_db, monkeypatch)
         ),
     )
 
-    assert any("RUN_COMPLETED" in event for event in events)
+    assert any(event.event_type == "RUN_COMPLETED" for event in events)
     assert calls[0].user_message == "用户输入"
     assert calls[0].assistant_text == "最终回答"
 
@@ -177,7 +177,7 @@ def test_successful_completion_records_memory_node_trace_without_chat_event(isol
     trace_events = database.list_run_events("session-1")
     memory_events = [event for event in trace_events if event["eventType"] == "MEMORY_AUDIT"]
 
-    assert not any("MEMORY_AUDIT" in event for event in events)
+    assert not any(event.event_type == "MEMORY_AUDIT" for event in events)
     assert memory_events
     assert memory_events[0]["scope"] == "memory"
     assert memory_events[0]["payload"]["type"] == "memory"
@@ -214,7 +214,7 @@ def test_successful_completion_ignores_memory_persist_failure(isolated_db, monke
         ),
     )
 
-    assert any("RUN_COMPLETED" in event for event in events)
+    assert any(event.event_type == "RUN_COMPLETED" for event in events)
 
 
 def test_successful_completion_does_not_wait_for_memory_reflection(isolated_db, monkeypatch):
@@ -251,7 +251,7 @@ def test_successful_completion_does_not_wait_for_memory_reflection(isolated_db, 
         ),
     )
 
-    assert any("RUN_COMPLETED" in event for event in events)
+    assert any(event.event_type == "RUN_COMPLETED" for event in events)
     assert time.monotonic() - started < 0.15
 
 
@@ -331,11 +331,11 @@ def test_successful_completion_emits_skill_generating_notice_only(isolated_db, m
         ),
     )
 
-    notice_events = [event for event in events if "MEMORY_SKILL_GENERATING" in event]
+    notice_events = [event for event in events if event.event_type == "MEMORY_SKILL_GENERATING"]
     assert len(notice_events) == 1
-    assert "Skills 生成中" in notice_events[0]
-    assert "registeredSkillId" not in notice_events[0]
-    assert "draftSkillContent" not in notice_events[0]
+    assert notice_events[0].data["payload"]["message"] == "Skills 生成中"
+    assert "registeredSkillId" not in notice_events[0].data["payload"]
+    assert "draftSkillContent" not in notice_events[0].data["payload"]
 
 
 def test_manual_skill_request_uses_previous_completed_turn(isolated_db):

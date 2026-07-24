@@ -59,10 +59,13 @@ class AskUser(ToolBase):
                         },
                         "required": {
                             "type": "boolean",
-                            "description": "Whether an answer is required. Defaults to true.",
+                            "description": (
+                                "Whether this specific answer is required to continue. "
+                                "Use false for optional supporting details."
+                            ),
                         },
                     },
-                    "required": ["id", "type", "label"],
+                    "required": ["id", "type", "label", "required"],
                 },
             },
         },

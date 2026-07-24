@@ -4,7 +4,7 @@ description: Use for reproducing bugs, inspecting failing behavior, running focu
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: inherit
 permissionMode: acceptEdits
-maxTurns: 20
+maxTurns: 30
 color: orange
 ---
 

@@ -1,7 +1,8 @@
 # Subagent 持久任务运行时重设计
 
-> 状态：待实施设计，V2 精简版。
-> 适用范围：当前 M2 稳定性修复与 M3 单进程持久任务 MVP。
+> 历史说明：本文记录 M3 单进程持久 task MVP 的设计和已实施行为，不再作为后续事件/投影架构的目标文档。固定 Block Frame、DisplaySnapshot V4、Block module registry 和 seq/replay 协议以 `docs/event-stream-architecture-redesign.md` 为准；Subagent Domain Event、`kind=subagent` Block 和父结果消费以 `docs/subagent-runtime-event-redesign.md` 为准。
+> 状态：M3 单进程前台持久任务闭环已实施；detached background、消息与跨进程 exact resume 推迟。
+> 适用范围：M2 稳定性修复与 M3 单进程持久任务 MVP。
 > 核心结论：保留 ReAct 内部 `DelegateTask` 和现有事件链路，在源代码上分层升级；不重写 Chat Runtime，不恢复 `runtime.kind=subagent`，也不为当前单用户桌面应用预建分布式调度系统。
 
 ## 1. 为什么要升级
@@ -11,7 +12,7 @@
 - invocation 有审计 ID，但不是可长期控制的任务实体。
 - 完整 transcript 没有独立持久化，无法按 invocation 查询和恢复。
 - 父子续接依赖进程内 live Agent 对象，后端重启后链路丢失。
-- 没有后台任务的稳定查询、取消、消息和独立前端状态。
+- invocation 查询、取消、transcript 和独立前端状态需要形成一个稳定闭环。
 - 异常路径可能击穿父 Run，或让 invocation 永久停在 `running`。
 
 目标仍然是把 Subagent 升级为：
@@ -29,7 +30,7 @@
 - 父 Agent 权限、Project ToolScope 和 filesystem scope 是能力上限。
 - `RUNTIME_EVENT(scope=subagent)`、现有 `run_events`、EventHub、RunState 和 DisplaySnapshot 链路。
 - 前台 Subagent 继续关联 `DelegateTask` 工具项。
-- 后台 Subagent 使用 `invocationId` 作为前端身份，并使用独立 Subagent 组件。
+- Subagent invocation 使用 `invocationId` 作为前端身份，并使用独立任务控制台组件；detached background 不属于当前在线能力。
 - Team 继续只使用 `TEAM_EVENT` / `teamSnapshot`，不与 Subagent reducer 混用。
 
 ### 2.2 删除或推迟
@@ -60,8 +61,8 @@
 
 | 参考系 | 值得借鉴的能力 | 当前差距 | 本版本处理 |
 | --- | --- | --- | --- |
-| Claude Code Subagents | 文件定义、独立上下文、工具裁剪、前后台、按身份通信/恢复 | 已有定义和前台委托；缺后台、transcript 和身份控制面 | 保留定义层，增加持久 invocation、transcript、后台和消息 |
-| 当前 Codex 协作语义 | canonical task identity、父子任务、message、wait、interrupt、status | 只有 blocking 委托和审计记录 | 以 `invocationId` 提供 get/wait/message/cancel |
+| Claude Code Subagents | 文件定义、独立上下文、工具裁剪、前后台、按身份通信/恢复 | 已有定义、前台委托、transcript 和身份控制面；缺 detached background、消息和 exact resume | 保留 blocking 消费链路，先完成持久 invocation、transcript、get/cancel 和任务控制台 |
+| 当前 Codex 协作语义 | canonical task identity、父子任务、message、wait、interrupt、status | 已有持久 identity、状态、transcript 和取消；缺运行中消息与跨进程恢复 | 当前以 `invocationId` 提供 get/cancel，后续再设计 message/restart |
 | Durable task 基本模式 | 状态持久化、进程句柄可丢弃、启动期 reconciliation | live Agent 与恢复上下文仍在内存 | SQLite 做事实源，Supervisor 只管理当前进程 |
 
 Claude Code/Codex 的私有调度和持久化机制不作为设计前提。对齐的是用户可理解的任务语义，不是功能数量。
@@ -106,6 +107,7 @@ Claude Code/Codex 的私有调度和持久化机制不作为设计前提。对�
 
 - 继承父 Agent 本轮已经解析完成的实际 adapter、model、base URL 标识、fallback 和非敏感参数。
 - 不重新读取全局默认模型来解释 inherit。
+- 当前实现已复用父 Run 传入的 resolved model name 和 fallback 链；adapter/base URL 等运行时设置仍由同一轮已解析的应用配置构造，后续若支持 invocation 断点重启，必须把该模型 snapshot 持久化。
 - API key 等 secret 不进入 invocation snapshot；运行时从当前 secret store 读取。
 
 ### 5.3 异常终态
@@ -150,6 +152,15 @@ Claude Code/Codex 的私有调度和持久化机制不作为设计前提。对�
 
 无论 spike 结果如何，task identity、transcript、后台状态、取消和前端刷新恢复仍有独立价值。
 
+### 6.2 已验证结论（AgentScope 2.0.3）
+
+- `Agent` 没有公开的 checkpoint / restore API；`AgentState` 是唯一可序列化的运行状态载体。
+- `AgentState.model_dump_json()` 后，以相同系统提示词、模型、Toolkit、Middleware、权限和 Workspace 重建 `Agent`，再用 `AgentState.model_validate_json()` 注入状态，child 的 `ASKING` 和 parent `DelegateTask` 的 `SUBMITTED` 都能接收原 `replyId` 的恢复事件并继续 ReAct。
+- 该结论由 `backend/test/test_subagent_checkpoint_spike.py` 固化：覆盖 `UserConfirmResultEvent` 与 `ExternalExecutionResultEvent`，不依赖真实模型或网络。
+- 因此 M3.3 可提供 `exact_checkpoint`，但只在 runtime snapshot、AgentState schema 版本、definition/tool/Middleware/模型配置 fingerprint 都匹配时开放；不匹配时降为 `restart_only`，绝不能把 JSON state 当作跨版本通用恢复格式。
+- 当前生产代码尚未持久化这些 snapshot，重启后的 waiting 仍不能恢复；本结论不改变当前运行时行为。
+- 启动期已将遗留 `running` invocation 标记为 `interrupted`；`waiting` 保持可见，当前标记为需要显式 restart，不能伪装成 exact resume。
+
 ## 7. 简化领域模型
 
 ### 7.1 实体
@@ -167,7 +178,7 @@ Claude Code/Codex 的私有调度和持久化机制不作为设计前提。对�
 - `toolCallId` 只负责把前台 task 关联到 `DelegateTask` UI，不是任务身份。
 - `subagentName` 只用于定义选择和展示，不能用于消息投递或 resume。
 - task 创建时保存定义、模型、权限和工具摘要；定义文件后续变化不篡改历史。
-- 后台 task 保留创建时的 Workspace、Project、Session 和 Run 归属。
+- task 保留创建时的 Workspace、Project、Session 和 Run 归属。
 
 ## 8. 简化状态机
 
@@ -379,16 +390,9 @@ CREATE TABLE subagent_messages (
 
 checkpoint spike 未完成前，后端重启会把前台 child 标记 `interrupted`，父 Run 按当前不可恢复策略收口，不能展示“可恢复”按钮。
 
-### 12.2 后台
+### 12.2 后台（推迟）
 
-1. `DelegateTask(background=true)` 创建 `mode=background` task。
-2. 创建成功后立即向父 Agent 返回 `invocationId + status`。
-3. 父 Agent 可继续 ReAct 或结束本轮。
-4. child 由 Supervisor 并发执行，状态和 transcript 持久化。
-5. child 完成后只更新 Subagent task UI 和通知，不修改已经保存的父 assistant 正文。
-6. 用户需要主 Agent 使用结果时，发起新一轮或让主 Agent读取 task result。
-
-后台 task 默认在父 Run 取消后继续；产品实现前要确认是否需要改成默认级联取消。
+当前不开放 detached background。`DelegateTask` 必须等待并消费 child observation；`background=true` 只作为旧输入的稳定拒绝分支，不创建 task。未来若实现 attached/background queue，必须先定义父 Agent 的 join、结果消费、取消和父 Run 结束语义，再复用本节的 Supervisor 设计。
 
 ## 13. 消息、等待与取消
 
@@ -427,7 +431,7 @@ Electron 每次启动 Python 后端生成新的 `process_instance_id`。
 3. 通过现有 Runtime Event / RunState 投影恢复可见状态。
 4. waiting task 不参与 running reconciliation，也不能因为没有活跃 `asyncio.Task` 就自动降级。
 5. 对 waiting task 校验持久 interaction metadata、待恢复 tool calls 和 checkpoint：数据足以重建时保持 waiting，并设置 `resumeCapability=exact_checkpoint`；只能重新执行时保持历史 waiting 展示，但设置 `resumeCapability=restart_only`；数据不完整或副作用不确定时才转 interrupted。
-6. queued background task 可重新交给当前 Supervisor；尚未执行，因此不存在副作用 replay。
+6. 当前 blocking 链路不在重启后自动重调度 queued task；未来如开放持久队列，必须先完成副作用与父 Agent join 语义。
 
 当前 `_create_pending_interaction()` 只把可审计 HITL payload 写入 `run_events`，live
 `PendingInteraction` 与 Agent 仍在进程内。M3 必须先把恢复需要的 interaction metadata
@@ -571,12 +575,12 @@ interface SubagentDisplayTask {
 - `SubagentInlineView` 替代 `ProcessTimeline.tsx` 内持续增长的专用 JSX。
 - 点击打开共用 `SubagentDetailDrawer`。
 
-### 16.3 后台投影
+### 16.3 任务控制台投影
 
 - 以 `invocationId` 放入独立 Subagent task list。
 - 不放入 TeamSnapshot，不新增 Subagent DisplayActor。
-- 后台跨父 Run 更新优先使用 Project/Session 级 task API/stream。
-- 是否在 DisplaySnapshot v3 增加 `subagents` block，实施前先更新稳定契约；不能向已关闭 RunState stream 偷发 patch。
+- 页面刷新与状态更新使用 Project 级 task API；active task 静默轮询，终态保留可查询。
+- 当前不在 DisplaySnapshot v3 增加 `subagents` block，也不向已关闭 RunState stream 发送 patch。
 
 ### 16.4 Detail Drawer
 
@@ -611,13 +615,12 @@ POST /api/subagents/tasks/{invocationId}/messages
 
 ### 17.2 Agent 工具候选
 
-- `DelegateTask(background=true)`
 - `SubagentTaskGet`
 - `SubagentTaskWait`
 - `SubagentSendMessage`
 - `SubagentTaskCancel`
 
-首期按顺序开放，不一次注入全部工具。所有工具只调用 TaskService。
+这些 Agent 工具尚未注入；当前只有 blocking `DelegateTask`，控制台通过 HTTP get/cancel 操作 TaskService。
 
 ## 18. 错误与副作用
 
@@ -671,7 +674,7 @@ POST /api/subagents/tasks/{invocationId}/messages
 - 重复和迟到 seq 被忽略。
 - `SUBAGENT_QUEUED` 与 `SUBAGENT_INTERRUPTED` 的外层 status 都为 pending 时，ViewModel 仍分别得到 queued 与 interrupted。
 - 前台 task 更新正确的 `DelegateTask` item。
-- 后台 task 更新正确的 `invocationId` item。
+- 任务控制台按 `invocationId` 更新正确的 task item。
 - 实时、刷新和 replay 得到相同 ViewModel。
 - transcript 只在 Drawer 按需加载。
 - Team 事件不进入 Subagent reducer。
@@ -680,11 +683,11 @@ POST /api/subagents/tasks/{invocationId}/messages
 
 - 每个 Subagent 可通过 `invocationId` 查询身份、状态、结果和 transcript。
 - 前台失败不无条件击穿父 Run。
-- 后台任务创建后父 Agent 可继续执行。
-- 页面刷新后后台 task 仍可见。
+- 父 Agent 在 child 完成、失败或 HITL 后消费 observation，再继续执行。
+- 页面刷新后 task 身份、状态、结果和 transcript 仍可见。
 - 用户可以取消 task；消息能力启用后可按 ID 投递消息。
 - 后端重启后不残留伪 running；恢复能力与 spike 结论一致。
-- 前后台复用同一个 ViewModel 和 Detail Drawer。
+- Chat 内联视图与任务控制台复用同一 invocation 身份和状态语义。
 
 ## 20. 高级架构触发条件
 
@@ -703,31 +706,31 @@ POST /api/subagents/tasks/{invocationId}/messages
 
 ### M2.1
 
-- [ ] 错误隔离。
-- [ ] `model: inherit`。
-- [ ] 异常终态。
-- [ ] HITL 事件关联。
+- [x] 错误隔离。
+- [x] `model: inherit`。
+- [x] 异常终态。
+- [x] HITL 事件关联。
 
 ### Phase 0
 
-- [ ] child checkpoint spike。
-- [ ] parent continuation checkpoint spike。
-- [ ] 记录 exact resume / replay / restart 结论。
+- [x] child checkpoint spike。
+- [x] parent continuation checkpoint spike。
+- [x] 记录 exact resume / replay / restart 结论。
 
 ### M3.1
 
-- [ ] 扩展 `subagent_invocations`。
-- [ ] 新增 `subagent_transcript_items`。
-- [ ] 引入 TaskService 和简化状态机。
-- [ ] 前台 `DelegateTask` 改走 TaskService。
+- [x] 扩展 `subagent_invocations`（Workspace / Project / executionMode / resumeCapability）。
+- [x] 新增 `subagent_transcript_items`，并写入现有前台生命周期/关键过程事件。
+- [x] 引入 TaskService 和简化状态机。
+- [x] 前台 `DelegateTask` 改走 TaskService。
 
 ### M3.2
 
-- [ ] 引入单进程 Supervisor。
-- [ ] 支持 background、get、wait、cancel。
+- [x] 引入单进程 Supervisor。
+- [x] 支持 invocation get、cancel 和任务控制台查询；detached background 尚未开放，`wait` 由 blocking `DelegateTask` 内部承担。
 - [ ] 需要时新增 messages 表和 SendMessage。
-- [ ] 更新稳定 SSE 契约。
-- [ ] 实现 Subagent 组件、projector 和刷新恢复。
+- [x] 更新稳定 SSE 契约。
+- [x] 实现 Subagent 组件、projector 和刷新恢复。
 
 ### M3.3
 

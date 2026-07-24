@@ -34,7 +34,13 @@ PENDING_SUBAGENT_PARENT_CONTEXTS: dict[str, dict[str, Any]] = {}
 def _empty_display_snapshot() -> dict[str, Any]:
     """创建空的 Chat 展示快照。"""
 
-    return {"version": 3, "mode": "single_agent", "actors": [], "blocks": []}
+    return {
+        "version": 4,
+        "lastSeq": 0,
+        "streamDone": False,
+        "order": [],
+        "blocksById": {},
+    }
 
 
 class ChatImagePayload(BaseModel):
@@ -155,7 +161,6 @@ class StoredChatMessage(BaseModel):
     runtime_events: list[dict] = Field(default_factory=list, alias="runtimeEvents")
     plan_runs: list[ChatPlanRun] = Field(default_factory=list, alias="planRuns")
     display_snapshot: dict[str, Any] = Field(default_factory=_empty_display_snapshot, alias="displaySnapshot")
-    team_snapshot: dict[str, Any] | None = Field(default=None, alias="teamSnapshot")
     clarification_requests: list[dict] = Field(default_factory=list, alias="clarificationRequests")
     clarification_resolved: bool = Field(default=False, alias="clarificationResolved")
     created_at: str

@@ -1,8 +1,8 @@
 # Subagent 委托能力设计
 
-> 状态：M1 已实现，M2 在线能力继续稳定化；M3 仅按精简持久任务方案推进。
-> 外部参考：Claude Code sub-agents 文档。引力 YINLI 尽可能借鉴官方设计和实现思路，包括文件定义、frontmatter 字段、独立上下文、工具裁剪、模型继承、前后台、恢复、嵌套和隔离等能力；但稳定行为以本文和 `docs/chat-sse-event-contract.md` 为准，任何偏离官方设计的地方都必须写明原因。
-> M3 详细设计：单进程持久任务、transcript、Supervisor、分级恢复和前端事件映射统一见 `docs/subagent-task-runtime-redesign.md`；嵌套、隔离和长期兼容特性不属于当前实施计划。
+> 状态：M1/M2 已实现，M3 单进程前台持久任务闭环已完成；detached background 与跨进程恢复未开放。
+> 外部参考：Claude Code sub-agents 文档。引力 YINLI 尽可能借鉴官方设计和实现思路，包括文件定义、frontmatter 字段、独立上下文、工具裁剪、模型继承、恢复、嵌套和隔离等能力；但稳定行为以本文和 `docs/chat-sse-event-contract.md` 为准，任何偏离官方设计的地方都必须写明原因。当前 `DelegateTask` 保持 blocking，父 Agent 必须消费 child 结果。
+> M3 历史实施记录见 `docs/subagent-task-runtime-redesign.md`；后续 Subagent Task Runtime 和父结果消费以 `docs/subagent-runtime-event-redesign.md` 为准，固定 Block Frame、DisplaySnapshot V4、Block module registry 和 seq/replay 协议以 `docs/event-stream-architecture-redesign.md` 为准。
 
 ## 设计结论
 
@@ -24,7 +24,7 @@
 - `intent_router.py` 仍只返回 `runtime.kind=react`。
 - `runtime_dispatcher.py` 不新增 `subagent` 分支。
 - Team Runtime 继续表示用户显式选择的多人协作；Subagent 表示主 Agent 在任务中临时委托的内部工作单元。
-- Chat UI 继续依赖 RunState / DisplaySnapshot，Subagent 过程通过新的 `SUBAGENT_*` Runtime Event 投影，不直接消费 raw SSE。
+- 当前 Chat UI 继续依赖 RunState / DisplaySnapshot 和 `SUBAGENT_*` 兼容投影；通用事件流重构完成后，Subagent 改为 `Block.kind=subagent` 的 open/delta/close 嵌套 Block，不直接消费 raw Domain Event 或 Trace。
 
 ## 产品语义
 
@@ -74,7 +74,7 @@ V1.0 不支持后台并发、持久 transcript、跨进程恢复和运行中消�
 | `name` / `description` 决定自动委托 | 主 Agent system prompt 注入可用定义，按 description 自主调用 `DelegateTask` | M1 已实现 |
 | 独立 context window，只返回摘要 | 子 Agent fresh context，完整过程进 Trace，摘要回主 Agent | M1 已实现 |
 | 工具 allowlist / denylist | 借鉴官方规则：先 deny、再 allow，并与父工具池交集；内部 `FinalAnswerStart` 始终保留 | M1 已实现 |
-| 模型继承 / 指定模型 | 已支持字段解析和指定模型；`inherit` 继承父本轮实际模型的缺口列入 M2.1 | 待修复 |
+| 模型继承 / 指定模型 | 已支持字段解析和指定模型；`inherit` 继承父本轮实际模型 | 已完成 |
 | 项目 / 用户 scope | 使用 `.agents/subagents/` 和 `~/.agent-workstation/subagents/` | M1 已实现 |
 | `permissionMode` | 支持 `default`、`acceptEdits`、`auto`、`dontAsk`、`bypassPermissions`、`plan`，并按父 Agent guardrails 上限收窄 | M2 部分实现 |
 | `skills` 预加载 | 解析 frontmatter `skills` 中的 Skill id / name，只加载已安装启用 Skill，并注入完整 Skill manual | M1 已实现 |
@@ -85,11 +85,11 @@ V1.0 不支持后台并发、持久 transcript、跨进程恢复和运行中消�
 
 后续 Subagent 能力进入稳定版本前，必须满足：
 
-- 先更新 `docs/chat-sse-event-contract.md`，再实现新的 Runtime Event / RunState 投影。
+- 先更新 `docs/chat-sse-event-contract.md`，再实现新的 Block kind、data schema 或 DisplaySnapshot 字段。
 - 先定义 SQLite / Pydantic / TypeScript 数据结构，再接入运行时。
 - 权限能力必须以父 Agent guardrails 为上限，不允许 Subagent 文件扩大权限。
 - 后台和恢复必须有持久 transcript、取消语义、错误收口和最小回归测试。
-- 前端只消费 DisplaySnapshot / RunState，不依赖 raw SSE 或临时 trace payload。
+- 前端只消费 DisplaySnapshot 及其 open/delta/close Block Frame，不依赖 raw Domain Event、工具结果或临时 trace payload。
 - 外部产品只作为能力参考；每项能力必须先有本项目产品理由和验收标准。
 
 ## 数据模型
@@ -130,7 +130,7 @@ description: Reviews code for quality, security, and maintainability. Use after 
 tools: Read, Grep, Glob
 model: inherit
 permissionMode: default
-maxTurns: 20
+maxTurns: 30
 skills: []
 ---
 
@@ -147,7 +147,7 @@ V1.0 解析官网字段；其中 M1 会执行 `name`、`description`、`tools`�
 | `disallowedTools` | No | 工具 denylist，从继承工具池中移除 |
 | `model` | No | `inherit` 或具体模型名；默认 `inherit` |
 | `permissionMode` | No | 官网枚举：`default`、`acceptEdits`、`auto`、`dontAsk`、`bypassPermissions`、`plan`；默认继承父会话权限上下文 |
-| `maxTurns` | No | 子 Agent 最大 ReAct 轮次，默认 20 |
+| `maxTurns` | No | 子 Agent 最大 ReAct 轮次，默认 30，配置上限 120 |
 | `skills` | No | 预加载 Skill id / name 列表，启动时注入完整 Skill 内容 |
 | `mcpServers` | No | 引用已配置 MCP server，或使用 inline MCP server 定义；V1.0 可先解析并保留 inline 定义，M2 完整连接与生命周期清理 |
 | `color` | No | 前端展示颜色，V1.0 可解析但不强依赖 |
@@ -272,7 +272,7 @@ V1.0 的子 Agent 必须调用 `FinalAnswerStart` 后输出结果。若自然结
 | `SUBAGENT_CONTEXT` | `running` | `{ invocationId, toolCallId, subagentName, skillRefs, loadedSkills, missingSkillRefs, memoryAgentId, memoryInjected, errors, permission }` |
 | `SUBAGENT_WAITING_HUMAN` | `waiting` | `{ invocationId, toolCallId, subagentName, interactionType, replyId, toolCalls, partialResultPreview, durationMs }` |
 | `SUBAGENT_COMPLETED` | `completed` | `{ invocationId, toolCallId, subagentName, resultPreview, durationMs }` |
-| `SUBAGENT_FAILED` | `failed` | `{ invocationId, toolCallId, subagentName, error, partialResultPreview }` |
+| `SUBAGENT_FAILED` | `failed` | `{ invocationId, toolCallId, subagentName, failureCode?, error, partialResultPreview }` |
 
 Chat 主界面 V1.0 不展示子 Agent 完整 transcript，只在主 Agent process timeline 中展示一个 `DelegateTask` 工具项和轻量状态：
 
@@ -348,7 +348,7 @@ V1.0 最小 UI：
 - [x] 新增 Markdown + YAML frontmatter loader / registry 和定义列表 API。
 - [x] 新增 `subagent_invocations` 审计表。
 - [x] 新增 `DelegateTask` 工具和 `SubagentRunner`。
-- [x] 子 Agent 支持 fresh context、只读工具和 `model` 字段；`inherit` 的父本轮实际模型继承仍列入 M2.1。
+- [x] 子 Agent 支持 fresh context、只读工具和 `model` 字段；`inherit` 继承父本轮实际模型。
 - [x] 新增 `SUBAGENT_STARTED` / `SUBAGENT_CONTEXT` / `SUBAGENT_COMPLETED` / `SUBAGENT_FAILED`。
 - [x] Chat 将 `DelegateTask` 专门展示为 Subagent 委托卡片，Trace 可看详情。
 - [x] Subagents 管理页展示定义、加载错误、来源路径、工具策略和 invocation 历史。
@@ -369,20 +369,21 @@ V1.0 最小 UI：
 
 ### M2.1：前台链路稳定性
 
-- [ ] 子任务失败返回结构化 error observation，不无条件击穿父 Run。
-- [ ] `model: inherit` 使用父 Agent 本轮实际解析的模型配置。
-- [ ] 未预期异常和取消都将 invocation 收口到明确终态。
-- [ ] HITL resume 后的 child 事件补齐 `invocationId`、`toolCallId`、`subagentName` 和稳定 seq。
+- [x] 子任务失败返回结构化 error observation，不无条件击穿父 Run。
+- [x] `model: inherit` 使用父 Agent 本轮实际解析的模型配置。
+- [x] 未预期异常和取消都将 invocation 收口到明确终态。
+- [x] HITL resume 后的 child 事件补齐 `invocationId`、`toolCallId`、`subagentName` 和稳定 seq。
 
 ### M3：单进程持久任务
 
-- 先验证 child / parent AgentScope checkpoint，再确定 exact resume、transcript replay 或显式 restart。
-- 复用并扩展 `subagent_invocations`，新增一张规范化 transcript 表。
-- 使用进程内 `SubagentSupervisor` 支持 background 和单一并发上限，不引入 lease / heartbeat / 多 Worker claim。
-- 通过 `invocationId` 查询、取消和发送消息，禁止按名称定位运行实例。
-- transcript 独立于主会话压缩；完整内容按需读取，不进入 RunState 常驻状态。
-- Chat 使用独立 Subagent 组件：前台内联、后台列表、共用 Detail Drawer。
-- 后端重启后遗留 running task 先标记 `interrupted`，恢复能力严格服从 spike 结论。
+- [x] 完成 child / parent AgentScope checkpoint spike，并明确 exact resume 的 fingerprint 约束。
+- [x] 复用并扩展 `subagent_invocations`，新增规范化 `subagent_transcript_items` 表。
+- [x] 使用进程内 `SubagentSupervisor` 管理 blocking task 和单一并发上限，不引入 lease / heartbeat / 多 Worker claim。
+- [x] 通过 `invocationId` 查询和取消，禁止按名称定位运行实例；运行中消息尚未开放。
+- [x] transcript 独立于主会话压缩；完整内容按需读取，不进入 RunState 常驻状态。
+- [x] Chat 使用 Subagent 内联组件，Subagents 页面提供项目级任务控制台和共用详情视图。
+- [x] 后端重启后遗留 running task 标记为 `interrupted`；waiting task 保持可见，不因缺少 `asyncio.Task` 自动降级。
+- [ ] detached background 必须在父 Agent join/消费协议明确后再实现，当前 `background=true` 稳定拒绝且不创建 invocation。
 
 ### 未来候选，非当前计划
 

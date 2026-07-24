@@ -8,11 +8,11 @@ from agentscope._utils._common import _generate_id
 from agentscope.message import Msg, UserMsg
 from agentscope.tool import ToolChoice
 
-from src.server.routes.chat.helpers import _sse_event
+from src.server.routes.chat.helpers import source_event
 from src.server.routes.chat.models import ChatToolRun
 from src.server.routes.chat.runtime_events import (
-    runtime_event_from_agentscope_sse,
-    runtime_event_sse,
+    runtime_event_from_agentscope_event,
+    runtime_trace_source_event,
 )
 from src.server.routes.chat.trace_recorder import (
     _attach_provider_cache_usage,
@@ -104,7 +104,7 @@ async def stream_final_answer_recovery_events(
         if state.assistant_text.strip():
             state.exceeded_max_iters = False
     except Exception as exc:
-        yield runtime_event_sse(
+        yield runtime_trace_source_event(
             "AGENT_FAILED",
             session_id=session_id,
             scope=stream_scope,
@@ -153,7 +153,7 @@ async def _handle_final_answer_recovery_event(
     if _is_final_answer_tool_event(event_type, event_data, state):
         if event_type == "TOOL_CALL_START":
             state.final_answer_started = True
-            yield runtime_event_sse(
+            yield runtime_trace_source_event(
                 "AGENT_FINAL_ANSWER_STARTED",
                 session_id=session_id,
                 scope=stream_scope,
@@ -201,7 +201,7 @@ async def _handle_final_answer_recovery_event(
         delta = str(event_data.get("delta", ""))
         if state.final_answer_started:
             state.assistant_text += delta
-            yield runtime_event_sse(
+            yield runtime_trace_source_event(
                 "AGENT_FINAL_ANSWER_DELTA",
                 session_id=session_id,
                 scope=stream_scope,
@@ -214,13 +214,13 @@ async def _handle_final_answer_recovery_event(
                 payload={"delta": delta, "recovered": True},
                 collect=state.runtime_events,
             )
-            yield _sse_event("FINAL_ANSWER_DELTA", {"delta": delta})
+            yield source_event("FINAL_ANSWER_DELTA", {"delta": delta})
         return
     if event_type == "THINKING_BLOCK_DELTA":
         state.assistant_thinking += str(event_data.get("delta", ""))
         return
 
-    runtime_event = runtime_event_from_agentscope_sse(
+    runtime_event = runtime_event_from_agentscope_event(
         event_type,
         session_id=session_id,
         scope=stream_scope,
@@ -231,7 +231,7 @@ async def _handle_final_answer_recovery_event(
     )
     if runtime_event:
         yield runtime_event
-    yield _sse_event(event_type, event_data)
+    yield source_event(event_type, event_data)
 
 
 def build_final_answer_recovery_prompt(

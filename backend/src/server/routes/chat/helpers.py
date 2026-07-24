@@ -1,27 +1,13 @@
-"""对话路由通用小工具 — SSE 格式化、文本裁剪、Skill 状态更新。"""
-
-import json
+"""对话路由通用小工具 — 源信号构造、文本裁剪、Skill 状态更新。"""
 
 from src.server.routes.chat.models import ChatSkillRun
+from src.server.routes.chat.projection.source_events import SourceEvent
 
 
-def _sse_event(event_type: str, data: dict) -> str:
-    """
-    格式化 SSE 事件
+def source_event(event_type: str, data: dict) -> SourceEvent:
+    """构造进程内结构化源信号；历史名称将在调用点逐步收口。"""
 
-    遵循 Server-Sent Events 规范：
-      event: <type>
-      data: <json>
-
-    Args:
-        event_type: 事件类型名称
-        data: 事件数据（将被 JSON 序列化）
-
-    Returns:
-        str: 符合 SSE 规范的事件字符串
-    """
-    json_str = json.dumps(data, ensure_ascii=False, default=str)
-    return f"event: {event_type}\ndata: {json_str}\n\n"
+    return SourceEvent(event_type, data)
 
 
 def _trim_text(text: str, limit: int) -> str:

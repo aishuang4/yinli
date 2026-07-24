@@ -1,5 +1,5 @@
-import type { ClarificationRequestInfo, DisplaySnapshot } from '../../hooks/useEventStream';
-import type { TeamSnapshot } from '../../types/teamRuntime';
+import type { ClarificationRequestInfo } from '../../hooks/useEventStream';
+import type { DisplaySnapshot } from '../runtime-stream/protocol';
 
 /** 本地消息记录 */
 export interface LocalMessage {
@@ -14,8 +14,6 @@ export interface LocalMessage {
   processCompletedAt?: string;
   /** 后端投影后的消息展示快照 */
   displaySnapshot?: DisplaySnapshot;
-  /** Team Runtime 独立历史快照。 */
-  teamSnapshot?: TeamSnapshot;
   /** 思考链内容（仅 assistant 消息） */
   thinking?: string;
   /** ReAct 过程文本（仅本地 live run 收口消息） */
@@ -87,8 +85,6 @@ export interface StoredChatMessage {
   files: ChatFilePayload[];
   displaySnapshot?: DisplaySnapshot;
   display_snapshot?: DisplaySnapshot;
-  teamSnapshot?: TeamSnapshot;
-  team_snapshot?: TeamSnapshot;
   clarificationRequests?: ClarificationRequestInfo[];
   clarification_requests?: ClarificationRequestInfo[];
   clarificationResolved?: boolean;

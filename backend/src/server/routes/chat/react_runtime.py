@@ -120,7 +120,7 @@ def _build_subagent_prompt_addendum(definitions: dict[str, object]) -> str:
         "",
         "Subagent delegation:",
         "You may call DelegateTask for self-contained side tasks that should run in an independent context.",
-        "DelegateTask is blocking in this version: wait for the result before finalizing your answer.",
+        "DelegateTask waits for the child result. Review and consume that result before finalizing your answer.",
         "Call at most one DelegateTask per model reply. Review its result before delegating another task.",
         "Available subagents:",
     ]

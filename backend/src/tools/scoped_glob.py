@@ -9,7 +9,7 @@ from agentscope.message import TextBlock
 from agentscope.tool import Glob
 from agentscope.tool._response import ToolChunk
 
-from src.tools.scoped_paths import resolve_workspace_path
+from src.tools.scoped_paths import resolve_existing_workspace_path
 
 
 class ScopedGlob(Glob):
@@ -136,7 +136,7 @@ class ScopedGlob(Glob):
     ) -> ToolChunk:
         """执行受控 Glob，并提示结果可能被截断。"""
 
-        base_dir = resolve_workspace_path(
+        base_dir = resolve_existing_workspace_path(
             path or ".",
             base_dir=self.base_dir,
             scope_dir=self.scope_dir,

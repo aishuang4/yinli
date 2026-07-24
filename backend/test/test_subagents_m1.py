@@ -1,6 +1,7 @@
 """Subagent M1 定义加载、工具策略和审计回归测试。"""
 
 import asyncio
+import json
 import sqlite3
 from pathlib import Path
 
@@ -17,7 +18,6 @@ from src.agents.runtime_types import (
 )
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.server.routes.chat.hitl import _create_pending_interaction
-from src.server.routes.chat.event_hub.projector import _subagent_context_detail
 from src.server.routes.chat.leader_stream import _delegate_task_batch_error_results
 from src.server.routes.chat.models import (
     ChatResumeRequest,
@@ -34,11 +34,14 @@ from src.subagents.registry import load_subagent_catalog
 from src.subagents.runner import (
     SubagentHitlRequired,
     SubagentRunResult,
+    SubagentRunner,
     _build_child_system_prompt,
     _child_tool_scope,
     _filter_mcp_servers,
 )
 from src.subagents.runtime_context import SubagentRuntimeContext
+from src.runtime_context import RuntimeContext
+from src.subagents.supervisor import get_subagent_supervisor
 from src.subagents.tool_policy import build_subagent_tool_policy
 from src.tools.delegate_task import DelegateTask
 
@@ -359,16 +362,6 @@ def test_batch_delegate_task_returns_one_error_per_call() -> None:
     assert all("exactly one delegation" in result.output[0].text for result in results)
 
 
-def test_subagent_context_projection_uses_runtime_audit_field_names() -> None:
-    detail = _subagent_context_detail({
-        "effectiveTools": ["Read", "Grep"],
-        "loadedSkills": [{"id": "review", "name": "Review Style"}],
-        "permission": {"effectivePermissionMode": "plan"},
-    })
-
-    assert detail == "可用工具 2 个，注入 Skill 1 个，权限模式 plan"
-
-
 def test_action_subagent_tools_are_available_with_parent_permission(tmp_path: Path) -> None:
     path = tmp_path / "debugger.md"
     path.write_text(
@@ -564,6 +557,274 @@ def test_delegation_manager_emits_started_and_completed_events(tmp_path: Path, m
     assert events[1]["payload"]["permission"]["effectiveToolPolicy"] == "trusted_tools"
     assert invocations[0]["status"] == "completed"
     assert invocations[0]["toolCallId"] == "tool-call-reviewer"
+
+
+def test_cancelling_child_returns_error_observation_without_cancelling_parent(tmp_path: Path, monkeypatch) -> None:
+    """控制台取消 child 后，父 DelegateTask 应收到失败 observation 并可继续运行。"""
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+    definition = SubagentDefinition(
+        name="reviewer", description="Review code.", prompt="Review.",
+        scope="project", path=".agents/subagents/reviewer.md",
+    )
+    manager = SubagentDelegationManager(
+        catalog=SubagentCatalog(definitions={"reviewer": definition}),
+        session_id="session-cancel", run_id="run-cancel", parent_scope="single",
+        parent_agent_id="agent-1", parent_agent_name="Agent", model_name="deepseek-chat",
+        fallback_names=[], model_options=AgentModelOptions(), guardrails=AgentGuardrails(),
+        mcp_servers=[], knowledge_tools=[], parent_tool_scope=RuntimeToolScope(), persist=False,
+    )
+    entered = asyncio.Event()
+
+    class BlockingRunner:
+        def prepare(self, _definition):
+            runtime_context = SubagentRuntimeContext(memory_agent_id="subagent:reviewer")
+            permission = resolve_subagent_permission(definition, manager.guardrails)
+
+            class Prepared:
+                audit_payload = runtime_context.audit_payload(definition)
+                audit_payload["permission"] = permission.audit_payload()
+
+                def __init__(self) -> None:
+                    self.runtime_context = runtime_context
+                    self.permission = permission
+
+            return Prepared()
+
+        async def run(self, **_kwargs):
+            entered.set()
+            await asyncio.Event().wait()
+
+    manager._runner = BlockingRunner()  # noqa: SLF001
+
+    async def cancel_child() -> tuple[object, dict[str, object]]:
+        parent_call = asyncio.create_task(manager.execute_external_tool_call({
+            "id": "delegate-cancel",
+            "input": '{"subagentName":"reviewer","task":"Review."}',
+        }))
+        await entered.wait()
+        invocation = database.list_subagent_invocations(run_id="run-cancel")[0]
+        assert await get_subagent_supervisor().cancel(invocation["id"])
+        result = await parent_call
+        return result, invocation
+
+    result, invocation = asyncio.run(cancel_child())
+    observation = json.loads(result.output[0].text)  # type: ignore[attr-defined]
+    settled = database.get_subagent_invocation(invocation["id"])
+
+    assert result.state == "error"  # type: ignore[attr-defined]
+    assert observation["failureCode"] == "subagent_cancelled"
+    assert observation["invocationId"] == invocation["id"]
+    assert settled is not None
+    assert settled["status"] == "cancelled"
+
+
+def test_delegation_manager_settles_setup_failure_and_external_call_returns_observation(tmp_path: Path, monkeypatch) -> None:
+    """准备阶段失败不能留下 running invocation 或击穿父 ReAct。"""
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+    definition = SubagentDefinition(
+        name="reviewer", description="Review code.", prompt="Review.",
+        scope="project", path=".agents/subagents/reviewer.md",
+    )
+    manager = SubagentDelegationManager(
+        catalog=SubagentCatalog(definitions={"reviewer": definition}),
+        session_id="session-1", run_id="run-1", parent_scope="single",
+        parent_agent_id="agent-1", parent_agent_name="Agent", model_name="deepseek-chat",
+        fallback_names=[], model_options=AgentModelOptions(), guardrails=AgentGuardrails(),
+        mcp_servers=[], knowledge_tools=[], parent_tool_scope=RuntimeToolScope(), persist=False,
+    )
+
+    class FailingRunner:
+        def prepare(self, _definition):
+            raise RuntimeError("invalid child tool scope")
+
+    manager._runner = FailingRunner()  # noqa: SLF001
+    result = asyncio.run(manager.execute_external_tool_call({
+        "id": "delegate-1",
+        "input": '{"subagentName":"reviewer","task":"Review."}',
+    }))
+    observation = __import__("json").loads(result.output[0].text)
+    invocations = database.list_subagent_invocations(run_id="run-1")
+
+    assert result.state == "error"
+    assert observation["ok"] is False
+    assert observation["failureCode"] == "subagent_setup_failed"
+    assert observation["invocationId"] == invocations[0]["id"]
+    assert invocations[0]["status"] == "failed"
+    assert invocations[0]["completedAt"] is not None
+
+
+def test_subagent_runner_inherit_uses_parent_resolved_model(monkeypatch) -> None:
+    """inherit 不得退回全局默认模型。"""
+
+    captured: dict[str, object] = {}
+
+    class FakeEvent:
+        def __init__(self, data):
+            self._data = data
+
+        def model_dump(self, **_kwargs):
+            return self._data
+
+    class FakeAgent:
+        async def reply_stream(self, _message):
+            yield FakeEvent({"type": "TOOL_CALL_START", "tool_call_name": "FinalAnswerStart"})
+            yield FakeEvent({"type": "TEXT_BLOCK_DELTA", "delta": "Done."})
+
+    def fake_get_or_create_agent(**kwargs):
+        captured.update(kwargs)
+        return FakeAgent()
+
+    monkeypatch.setattr("src.subagents.runner.get_or_create_agent", fake_get_or_create_agent)
+    runner = SubagentRunner(
+        session_id="session-1", run_id="run-1", parent_scope="single",
+        parent_agent_id="agent-1", parent_agent_name="Agent", model_name="parent-resolved-model",
+        fallback_names=["parent-fallback"], model_options=AgentModelOptions(), guardrails=AgentGuardrails(),
+        mcp_servers=[], knowledge_tools=[], parent_tool_scope=RuntimeToolScope(), persist=False,
+    )
+    definition = SubagentDefinition(
+        name="reviewer", description="Review code.", prompt="Review.",
+        scope="project", path=".agents/subagents/reviewer.md", model="inherit",
+    )
+
+    result = asyncio.run(runner.run(invocation_id="subagent-1", definition=definition, task="Review."))
+
+    assert result.text == "Done."
+    assert captured["model_name"] == "parent-resolved-model"
+    assert captured["fallback_names"] == ["parent-fallback"]
+
+
+def test_subagent_runner_injects_project_paths_and_uses_session_workspace(tmp_path: Path, monkeypatch) -> None:
+    """child 应知道 Project scope，同时保持 Session cwd 作为默认产物目录。"""
+
+    captured: dict[str, object] = {}
+
+    class FakeEvent:
+        def __init__(self, data):
+            self._data = data
+
+        def model_dump(self, **_kwargs):
+            return self._data
+
+    class FakeAgent:
+        async def reply_stream(self, _message):
+            yield FakeEvent({"type": "TOOL_CALL_START", "tool_call_name": "FinalAnswerStart"})
+            yield FakeEvent({"type": "TEXT_BLOCK_DELTA", "delta": "Done."})
+
+    def fake_get_or_create_agent(**kwargs):
+        captured.update(kwargs)
+        return FakeAgent()
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    platform_context = RuntimeContext(
+        workspace_id="workspace-1",
+        project_id="project-1",
+        project_root=project_root,
+        session_id="session-1",
+        run_id="run-1",
+        agent_id="agent-1",
+    )
+    monkeypatch.setattr("src.subagents.runner.get_or_create_agent", fake_get_or_create_agent)
+    runner = SubagentRunner(
+        session_id="session-1", run_id="run-1", parent_scope="single",
+        parent_agent_id="agent-1", parent_agent_name="Agent", model_name="model",
+        fallback_names=[], model_options=AgentModelOptions(),
+        guardrails=AgentGuardrails(filesystem_scope=str(project_root)),
+        mcp_servers=[], knowledge_tools=[], parent_tool_scope=RuntimeToolScope(), persist=False,
+        platform_context=platform_context,
+    )
+    definition = SubagentDefinition(
+        name="explorer", description="Explore.", prompt="Explore.",
+        scope="project", path=".agents/subagents/explorer.md",
+    )
+
+    result = asyncio.run(runner.run(invocation_id="subagent-1", definition=definition, task="Read."))
+
+    expected_workspace = project_root / ".agent-workstation" / "sessions" / "session-1"
+    assert result.text == "Done."
+    assert captured["workspace_dir"] == str(expected_workspace)
+    assert f"Project root: {project_root}" in str(captured["system_prompt"])
+    assert f"Effective filesystem scope: {project_root}" in str(captured["system_prompt"])
+
+
+def test_subagent_runner_uses_restricted_finalization_after_max_iters(monkeypatch) -> None:
+    """首次耗尽轮次后只允许一次 FinalAnswerStart 收尾。"""
+
+    class FakeEvent:
+        def __init__(self, data):
+            self._data = data
+
+        def model_dump(self, **_kwargs):
+            return self._data
+
+    class FakeGroup:
+        def __init__(self):
+            self.tools = [type("Tool", (), {"name": "Read"})(), type("Tool", (), {"name": "FinalAnswerStart"})()]
+            self.mcps = [object()]
+            self.skills_or_loaders = [object()]
+
+    class FakeAgent:
+        def __init__(self):
+            self.calls = 0
+            self.react_config = type("ReactConfig", (), {"max_iters": 30})()
+            self.toolkit = type("Toolkit", (), {"tool_groups": [FakeGroup()]})()
+
+        async def reply_stream(self, _message):
+            self.calls += 1
+            if self.calls == 1:
+                yield FakeEvent({"type": "TEXT_BLOCK_DELTA", "delta": "Known evidence."})
+                yield FakeEvent({"type": "EXCEED_MAX_ITERS"})
+                return
+            yield FakeEvent({"type": "TOOL_CALL_START", "tool_call_name": "FinalAnswerStart"})
+            yield FakeEvent({"type": "TEXT_BLOCK_DELTA", "delta": "Recovered result."})
+
+    fake_agent = FakeAgent()
+    monkeypatch.setattr("src.subagents.runner.get_or_create_agent", lambda **_kwargs: fake_agent)
+    runner = SubagentRunner(
+        session_id="session-1", run_id="run-1", parent_scope="single",
+        parent_agent_id="agent-1", parent_agent_name="Agent", model_name="model",
+        fallback_names=[], model_options=AgentModelOptions(), guardrails=AgentGuardrails(),
+        mcp_servers=[], knowledge_tools=[], parent_tool_scope=RuntimeToolScope(), persist=False,
+    )
+    definition = SubagentDefinition(
+        name="explorer", description="Explore.", prompt="Explore.",
+        scope="project", path=".agents/subagents/explorer.md", max_turns=30,
+    )
+
+    result = asyncio.run(runner.run(invocation_id="subagent-1", definition=definition, task="Explore."))
+
+    assert result.text == "Recovered result."
+    assert fake_agent.calls == 2
+    assert fake_agent.react_config.max_iters == 2
+    assert [tool.name for tool in fake_agent.toolkit.tool_groups[0].tools] == ["FinalAnswerStart"]
+    assert fake_agent.toolkit.tool_groups[0].mcps == []
+    assert fake_agent.toolkit.tool_groups[0].skills_or_loaders == []
+
+
+def test_subagent_transcript_is_ordered_by_invocation(tmp_path: Path, monkeypatch) -> None:
+    """M3 transcript 必须以 invocation 内的稳定 seq 作为事实顺序。"""
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+    invocation = database.create_subagent_invocation({
+        "run_id": "run-1", "session_id": "session-1", "parent_agent_id": "agent-1",
+        "parent_agent_name": "Agent", "subagent_name": "reviewer", "status": "running", "task": "Review.",
+    })
+    first = database.append_subagent_transcript_item(
+        invocation_id=invocation["id"], kind="SUBAGENT_STARTED", payload={"taskPreview": "Review."},
+    )
+    second = database.append_subagent_transcript_item(
+        invocation_id=invocation["id"], kind="AGENT_STARTED", payload={},
+    )
+
+    items = database.list_subagent_transcript_items(invocation["id"])
+
+    assert [item["seq"] for item in items] == [1, 2]
+    assert [item["id"] for item in items] == [first["id"], second["id"]]
 
 
 def test_delegation_manager_marks_subagent_waiting_on_hitl(tmp_path: Path, monkeypatch) -> None:
@@ -776,15 +1037,16 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
     }
 
     async def collect_resume_events() -> str:
-        from src.server.routes.chat.handlers.resume import resume_interaction
+        from src.server.routes.chat.handlers.resume import resume_interaction_events
 
-        response = await resume_interaction(
+        stream = resume_interaction_events(
             ChatResumeRequest(interactionId=interaction.id, action="approve")
         )
-        chunks: list[str] = []
-        async for chunk in response.body_iterator:
-            chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk))
-        return "".join(chunks)
+        chunks = [chunk async for chunk in stream]
+        return "\n".join(
+            f"{chunk.event_type}:{json.dumps(chunk.data, ensure_ascii=False, default=str)}"
+            for chunk in chunks
+        )
 
     output = asyncio.run(collect_resume_events())
     invocations = database.list_subagent_invocations(run_id="run-1")
@@ -951,6 +1213,47 @@ def test_subagent_invocation_audit_create_update_and_list(tmp_path: Path, monkey
     assert updated["completedAt"]
     assert by_run[0]["id"] == created["id"]
     assert by_run[0]["subagentName"] == "reviewer"
+
+
+def test_delegate_task_schema_is_blocking_and_does_not_advertise_background() -> None:
+    """DelegateTask 必须让模型看到 blocking 语义，避免父 Agent提前结束。"""
+
+    assert "background" not in DelegateTask.input_schema["properties"]
+    assert "waits for the subagent result" in DelegateTask.description
+
+
+def test_external_background_input_is_rejected_without_creating_invocation(tmp_path: Path, monkeypatch) -> None:
+    """旧模型或手工请求传入 background 时必须稳定报错，不能产生 detached task。"""
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+    definition = SubagentDefinition(
+        name="reviewer", description="Review code.", prompt="Review.",
+        scope="project", path=".agents/subagents/reviewer.md",
+    )
+    manager = SubagentDelegationManager(
+        catalog=SubagentCatalog(definitions={"reviewer": definition}),
+        session_id="session-background", run_id="run-background", parent_scope="single",
+        parent_agent_id="agent-1", parent_agent_name="Agent", model_name="deepseek-chat",
+        fallback_names=[], model_options=AgentModelOptions(), guardrails=AgentGuardrails(),
+        mcp_servers=[], knowledge_tools=[], parent_tool_scope=RuntimeToolScope(), persist=False,
+    )
+
+    result = asyncio.run(manager.execute_external_tool_call({
+        "id": "delegate-background",
+        "input": json.dumps({
+            "subagentName": "reviewer",
+            "task": "Review independently.",
+            "background": True,
+        }),
+    }))
+    observation = json.loads(result.output[0].text)
+
+    assert result.state == "error"
+    assert observation["ok"] is False
+    assert observation["failureCode"] == "background_delegation_not_supported"
+    assert observation["invocationId"] == ""
+    assert database.list_subagent_invocations(run_id="run-background") == []
 
 
 def test_legacy_subagent_agent_columns_are_removed_on_db_startup(tmp_path: Path, monkeypatch) -> None:

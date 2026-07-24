@@ -23,14 +23,13 @@ import { useAppStore } from '../stores/appStore';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList';
-import { TeamConsolePanel } from '../features/chat/TeamDisplayBlock';
-import { teamConsoleFromSnapshot } from '../features/team-runtime/teamEventReducer';
-import { FloatingPlanDock } from '../features/chat/FloatingPlanDock';
 import { ChatStartScenarios } from '../features/chat/ChatStartScenarios';
+import { AskUserComposer } from '../features/chat/AskUserComposer';
 import { ChatComposer } from '../features/chat/ChatComposer';
 import { ChatHistoryPanel } from '../features/chat/ChatHistoryPanel';
-import { mergeResolvedClarificationFeedbackIntoReplies } from '../features/chat/clarificationHistory';
+import { selectPendingAskUserInteractions } from '../features/chat/humanInteractionUtils';
 import type { ChatFileAttachment, ChatFilePayload, ChatImageAttachment, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
+import { runtimeError, runtimeText } from '../features/runtime-stream/selectors';
 
 const HISTORY_PANEL_TRANSITION_MS = 260;
 
@@ -63,11 +62,9 @@ export function ChatPage() {
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
   const recoveredRunRef = useRef<string>('');
-  const completedVisualRunRef = useRef<string>('');
   const sessionsRequestRef = useRef(0);
   const messagesRequestRef = useRef(0);
   const pendingSessionRef = useRef<ChatSession | null>(null);
-  const [visuallyCompletedRunId, setVisuallyCompletedRunId] = useState('');
   const { state, sendMessage, resumeInteraction, subscribeRun, abort, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
   const { enabledByType, loading: projectResourcesLoading } = useProjectResources(activeProjectId);
@@ -97,28 +94,15 @@ export function ChatPage() {
   const desktopPlatform = window.electronAPI?.getPlatform();
   const isMacDesktopShell = desktopPlatform === 'darwin';
   const isWindowsDesktopShell = desktopPlatform === 'win32';
-  const hasLiveResponse = (
-    state.isStreaming ||
-    state.hitlRequests.length > 0 ||
-    state.clarificationRequests.length > 0 ||
-    Boolean(state.finalAnswerContent) ||
-    Boolean(state.reasoningContent) ||
-    Boolean(state.thinkingContent) ||
-    state.toolCalls.length > 0 ||
-    state.skillCalls.length > 0 ||
-    Boolean(state.teamConsole.snapshot) ||
-    state.displaySnapshot.blocks.length > 0 ||
-    state.plans.length > 0
+  const snapshot = state.runtime.snapshot;
+  const liveText = runtimeText(snapshot);
+  const projectedError = runtimeError(snapshot);
+  const pendingAskUserInteractions = useMemo(
+    () => selectPendingAskUserInteractions(snapshot),
+    [snapshot],
   );
-
-  const historicalTeamSnapshot = useMemo(() => (
-    [...messages].reverse().find((message) => message.role === 'assistant')?.teamSnapshot || null
-  ), [messages]);
-  const visibleTeamConsole = state.teamConsole.snapshot
-    ? state.teamConsole
-    : !state.isStreaming && historicalTeamSnapshot
-      ? teamConsoleFromSnapshot(historicalTeamSnapshot)
-      : null;
+  const activeAskUserInteraction = pendingAskUserInteractions[0];
+  const hasLiveResponse = state.isStreaming || snapshot.order.length > 0 || Boolean(state.error);
   const activeSession = useMemo(() => (
     sessions.find((session) => session.id === activeSessionId) || null
   ), [activeSessionId, sessions]);
@@ -162,22 +146,6 @@ export function ChatPage() {
     }
   }, []);
 
-  const handleFinalAnswerAnimationChange = useCallback((isAnimating: boolean) => {
-    const runId = state.currentRunId;
-    if (!runId) return;
-    if (isAnimating) {
-      if (completedVisualRunRef.current === runId) {
-        completedVisualRunRef.current = '';
-        setVisuallyCompletedRunId('');
-      }
-      return;
-    }
-    if (completedVisualRunRef.current !== runId) {
-      completedVisualRunRef.current = runId;
-      setVisuallyCompletedRunId(runId);
-    }
-  }, [state.currentRunId]);
-
   const loadSessions = useCallback(async (options?: { silent?: boolean }) => {
     const silent = Boolean(options?.silent);
     const requestId = sessionsRequestRef.current + 1;
@@ -215,12 +183,11 @@ export function ChatPage() {
       images: item.images,
       files: item.files,
       displaySnapshot: item.displaySnapshot || item.display_snapshot,
-      teamSnapshot: item.teamSnapshot || item.team_snapshot,
       clarificationRequests: item.clarificationRequests || item.clarification_requests || [],
       clarificationResolved: item.clarificationResolved || item.clarification_resolved || false,
     }));
     if (messagesRequestRef.current === requestId) {
-      setMessages(mergeResolvedClarificationFeedbackIntoReplies(loadedMessages));
+      setMessages(loadedMessages);
     }
   }, [activeProjectId]);
 
@@ -242,8 +209,6 @@ export function ChatPage() {
     sessionsRequestRef.current += 1;
     messagesRequestRef.current += 1;
     recoveredRunRef.current = '';
-    completedVisualRunRef.current = '';
-    setVisuallyCompletedRunId('');
         setActiveSessionId(null);
         setMessages([]);
         setImageAttachments([]);
@@ -366,7 +331,7 @@ export function ChatPage() {
   useEffect(() => {
     if (!shouldAutoScrollRef.current) return;
     scrollToBottom(state.isStreaming ? 'auto' : 'smooth');
-  }, [messages, scrollToBottom, state.isStreaming, state.finalAnswerContent, state.reasoningContent, state.thinkingContent, state.toolCalls, state.skillCalls, state.teamConsole]);
+  }, [messages, scrollToBottom, state.isStreaming, snapshot]);
 
   useEffect(() => {
     const container = messagesContainerRef.current;
@@ -579,64 +544,29 @@ export function ChatPage() {
     });
   }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, imageAttachments, inputValue, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.isStreaming, targetMode, uploadFilesForSession]);
 
-  const handleSubmitClarification = useCallback(async (content: string, displayContent?: string) => {
-    const modelContent = content.trim();
-    if (!modelContent || state.isStreaming) return;
-    const visibleContent = (displayContent || content).trim();
-    const clarificationId = state.clarificationRequests[0]?.id;
-    if (!clarificationId) {
-      setChatError('当前没有可继续的反问请求。');
-      return;
-    }
-
-    shouldAutoScrollRef.current = true;
-    setShowScrollToBottom(false);
-    setChatError(null);
-    await resumeInteraction(clarificationId, 'approve', {
-      answer: modelContent,
-      display: visibleContent,
-    });
-  }, [
-    state.isStreaming,
-    state.clarificationRequests,
-    resumeInteraction,
-  ]);
-
   // 当流结束时，将 assistant 回复加入消息历史
   useEffect(() => {
-    const waitingForFinalAnswerAnimation = Boolean(
-      state.currentRunId &&
-      state.finalAnswerContent &&
-      visuallyCompletedRunId !== state.currentRunId,
-    );
     if (
       !state.isStreaming &&
-      !waitingForFinalAnswerAnimation &&
-      state.hitlRequests.length === 0 &&
-      state.clarificationRequests.length === 0 &&
-      (state.finalAnswerContent || state.reasoningContent || state.textContent || state.error || state.displaySnapshot.blocks.length > 0 || state.plans.length > 0) &&
+      snapshot.streamDone &&
+      snapshot.order.length > 0 &&
       (messages.length === 0 || messages[messages.length - 1].role === 'user')
     ) {
       const assistantMessage: LocalMessage = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
-        content: state.finalAnswerContent || state.textContent,
+        content: liveText,
         createdAt: new Date().toISOString(),
         processStartedAt: state.runStartedAt,
         processCompletedAt: state.runCompletedAt || new Date().toISOString(),
-        displaySnapshot: state.displaySnapshot.blocks.length > 0 || state.displaySnapshot.actors.length > 0 ? state.displaySnapshot : undefined,
-        teamSnapshot: state.teamConsole.snapshot || undefined,
-        reasoning: state.reasoningContent || undefined,
-        thinking: state.thinkingContent || undefined,
-        tokenUsage: state.tokenUsage,
-        modelName: state.modelName,
-        error: state.error || undefined,
+        displaySnapshot: snapshot,
+        error: state.error || projectedError || undefined,
       };
       setMessages((prev) => [...prev, assistantMessage]);
       reset();
       loadSessions({ silent: true });
     }
-  }, [loadSessions, messages, reset, state.clarificationRequests.length, state.currentRunId, state.displaySnapshot, state.error, state.finalAnswerContent, state.hitlRequests.length, state.isStreaming, state.modelName, state.plans.length, state.reasoningContent, state.runCompletedAt, state.runStartedAt, state.skillCalls, state.teamConsole, state.textContent, state.thinkingContent, state.tokenUsage, state.toolCalls, visuallyCompletedRunId]);
+  }, [liveText, loadSessions, messages, projectedError, reset, snapshot, state.error, state.isStreaming, state.runCompletedAt, state.runStartedAt]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -683,13 +613,7 @@ export function ChatPage() {
       )}
 
       <section
-        className="chat-main-panel chat-workbench-main grid min-h-0 overflow-hidden"
-        style={{
-          gridTemplateColumns: visibleTeamConsole
-            ? 'minmax(0, 1fr) 390px'
-            : 'minmax(0, 1fr) 0px',
-          transition: 'grid-template-columns 360ms var(--ease-out)',
-        }}
+        className="chat-main-panel chat-workbench-main grid min-h-0 grid-cols-1 overflow-hidden"
       >
         <div className="grid min-h-0 grid-rows-[auto_1fr_auto] overflow-hidden">
           <header
@@ -731,7 +655,7 @@ export function ChatPage() {
               </div>
               <div className="truncate text-xs text-[var(--color-text-tertiary)]">
                 {state.isStreaming
-                  ? state.modelName || runtimeAgent?.modelConfig.primary || 'deepseek-v4-flash'
+                  ? runtimeAgent?.modelConfig.primary || 'deepseek-v4-flash'
                   : targetMode === 'team'
                     ? `${runtimeAgent?.name || 'Assistant'} · Leader 动态组建临时成员`
                     : `${runtimeAgent?.name || 'Assistant'} · ${runtimeAgent?.description || 'DeepSeek'}`}
@@ -796,39 +720,19 @@ export function ChatPage() {
                       <MessageBubble
                         key={msg.id}
                         message={msg}
-                        sessionId={activeSessionId || ''}
-                        onSubmitClarification={handleSubmitClarification}
+                        sessionId={activeSessionId || undefined}
                       />
                     ))}
 
                     {hasLiveResponse && (
                       <StreamingBubble
+                        snapshot={snapshot}
                         isStreaming={state.isStreaming}
-                        currentRunId={state.currentRunId}
-                        textContent={state.textContent}
-                        reasoningContent={state.reasoningContent}
-                        finalAnswerContent={state.finalAnswerContent}
-                        thinkingContent={state.thinkingContent}
-                        displaySnapshot={state.displaySnapshot}
-                        teamConsole={state.teamConsole}
-                        skillCalls={state.skillCalls}
-                        hitlRequests={state.hitlRequests}
-                        clarificationRequests={state.clarificationRequests}
-                        plans={state.plans}
-                        onSubmitClarification={handleSubmitClarification}
-                        onResolveHitl={resumeInteraction}
-                        onFinalAnswerAnimationChange={handleFinalAnswerAnimationChange}
-                        showGeneratedFiles={Boolean(
-                          !state.finalAnswerContent ||
-                          visuallyCompletedRunId === state.currentRunId
-                        )}
-                        sessionId={activeSessionId || ''}
-                        toolCalls={state.toolCalls}
-                        modelName={state.modelName}
-                        tokenUsage={state.tokenUsage}
+                        modelName={runtimeAgent?.modelConfig.primary || ''}
                         error={state.error}
-                        runStartedAt={state.runStartedAt}
-                        runCompletedAt={state.runCompletedAt}
+                        createdAt={state.runCompletedAt || undefined}
+                        sessionId={activeSessionId || undefined}
+                        onResolveInteraction={resumeInteraction}
                       />
                     )}
 
@@ -850,53 +754,47 @@ export function ChatPage() {
             >
               <ChevronDown size={16} />
             </button>
-            <FloatingPlanDock plans={state.plans} />
           </div>
 
-          <ChatComposer
-            agentOptions={agentOptions}
-            agentsLoading={agentsLoading}
-            chatError={chatError}
-            deepThinking={deepThinking}
-            fileAttachments={fileAttachments}
-            imageAttachments={imageAttachments}
-            imageInputRef={imageInputRef}
-            inputValue={inputValue}
-            isStreaming={state.isStreaming}
-            messageInputRef={messageInputRef}
-            projectResourcesLoading={projectResourcesLoading}
-            selectedAgentId={selectedAgentId}
-            targetMode={targetMode}
-            onAbort={abort}
-            onCompositionEnd={() => { isComposingRef.current = false; }}
-            onCompositionStart={() => { isComposingRef.current = true; }}
-            onFile={handleFile}
-            onImageFiles={handleImageFiles}
-            onInputChange={setInputValue}
-            onKeyDown={handleKeyDown}
-            onRemoveFile={removeFileAttachment}
-            onRemoveImage={removeImageAttachment}
-            onSelectedAgentChange={setSelectedAgentId}
-            onSend={handleSend}
-            onTargetModeChange={setTargetMode}
-            onToggleDeepThinking={() => setDeepThinking((value) => !value)}
-          />
+          {activeAskUserInteraction ? (
+            <AskUserComposer
+              key={activeAskUserInteraction.hitlRequest.interactionId}
+              interaction={activeAskUserInteraction}
+              pendingCount={pendingAskUserInteractions.length}
+              isResuming={state.isStreaming}
+              onResolve={resumeInteraction}
+            />
+          ) : (
+            <ChatComposer
+              agentOptions={agentOptions}
+              agentsLoading={agentsLoading}
+              chatError={chatError}
+              deepThinking={deepThinking}
+              fileAttachments={fileAttachments}
+              imageAttachments={imageAttachments}
+              imageInputRef={imageInputRef}
+              inputValue={inputValue}
+              isStreaming={state.isStreaming}
+              messageInputRef={messageInputRef}
+              projectResourcesLoading={projectResourcesLoading}
+              selectedAgentId={selectedAgentId}
+              targetMode={targetMode}
+              onAbort={abort}
+              onCompositionEnd={() => { isComposingRef.current = false; }}
+              onCompositionStart={() => { isComposingRef.current = true; }}
+              onFile={handleFile}
+              onImageFiles={handleImageFiles}
+              onInputChange={setInputValue}
+              onKeyDown={handleKeyDown}
+              onRemoveFile={removeFileAttachment}
+              onRemoveImage={removeImageAttachment}
+              onSelectedAgentChange={setSelectedAgentId}
+              onSend={handleSend}
+              onTargetModeChange={setTargetMode}
+              onToggleDeepThinking={() => setDeepThinking((value) => !value)}
+            />
+          )}
 
-        </div>
-
-        <div
-          className="h-full min-h-0 min-w-0 overflow-hidden"
-          style={{
-            opacity: visibleTeamConsole ? 1 : 0,
-            transform: visibleTeamConsole ? 'translateX(0)' : 'translateX(16px)',
-            transition: 'opacity 280ms var(--ease-out), transform 360ms var(--ease-out)',
-            pointerEvents: visibleTeamConsole ? 'auto' : 'none',
-          }}
-          aria-hidden={!visibleTeamConsole}
-        >
-          {visibleTeamConsole ? (
-            <TeamConsolePanel state={visibleTeamConsole} />
-          ) : null}
         </div>
       </section>
     </div>

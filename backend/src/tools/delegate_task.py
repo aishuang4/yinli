@@ -7,7 +7,7 @@ from agentscope.permission import PermissionBehavior, PermissionContext, Permiss
 from agentscope.state import AgentState
 from agentscope.tool import ToolBase, ToolChunk
 
-from src.subagents.manager import SubagentDelegationManager
+from src.subagents.manager import SubagentDelegationManager, subagent_error_observation
 
 
 class DelegateTask(ToolBase):
@@ -17,8 +17,8 @@ class DelegateTask(ToolBase):
     description: str = (
         "Delegate a self-contained side task to a named subagent with an independent context. "
         "Use this when exploration or analysis would pollute the main conversation, and only a concise "
-        "summary is needed before continuing. In V1 this call is blocking: wait for the subagent result "
-        "before continuing. Call at most one DelegateTask per model reply."
+        "summary is needed before continuing. This call waits for the subagent result so the parent can "
+        "review and consume it before continuing."
     )
     input_schema: dict[str, Any] = {
         "type": "object",
@@ -94,7 +94,10 @@ class DelegateTask(ToolBase):
             )
         except Exception as exc:
             return ToolChunk(
-                content=[TextBlock(text=f"Subagent delegation failed: {exc}")],
+                content=[TextBlock(text=subagent_error_observation(
+                    exc,
+                    subagent_name=subagentName,
+                ))],
                 state=ToolResultState.ERROR,
                 is_last=True,
             )

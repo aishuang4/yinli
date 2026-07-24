@@ -67,7 +67,7 @@ def _build_clarification_system_prompt() -> str:
         "Call the AskUser tool when clarification is required. AskUser is an AgentScope external tool: it pauses the current ReAct loop and resumes after the user answers.",
         "For vague requests such as '帮我处理一下', '处理一下', '帮我弄一下', or requests missing the target object/action, you MUST call AskUser before FinalAnswerStart.",
         "Never answer a blocking clarification as plain assistant text. Do not say '请问你具体想让我处理什么' directly; call AskUser with that question.",
-        "AskUser questions must use at most 3 questions. Supported question types are: choice, multi_choice, text. For choice and multi_choice, provide 2-5 concise options.",
+        "AskUser questions must use at most 3 questions. Supported question types are: choice, multi_choice, text. For choice and multi_choice, provide 2-5 concise options. Every question must explicitly set required=true or required=false; only information that truly blocks execution may be required.",
         "Only use AskUser when the missing information blocks meaningful progress.",
         "Do not output XML or JSON clarification blocks as assistant text. User-visible clarification must go through AskUser so the backend can resume the same AgentScope reply.",
     ])

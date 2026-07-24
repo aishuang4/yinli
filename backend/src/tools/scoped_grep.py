@@ -9,7 +9,7 @@ from typing import Any, Literal
 from agentscope.message import TextBlock, ToolResultState
 from agentscope.tool import Grep, ToolChunk
 
-from src.tools.scoped_paths import resolve_workspace_path
+from src.tools.scoped_paths import resolve_existing_workspace_path
 
 
 class ScopedGrep(Grep):
@@ -59,7 +59,7 @@ class ScopedGrep(Grep):
         n: bool = True,
         **kwargs: Any,
     ) -> ToolChunk:
-        resolved_path = resolve_workspace_path(
+        resolved_path = resolve_existing_workspace_path(
             path or ".",
             base_dir=self.base_dir,
             scope_dir=self.scope_dir,

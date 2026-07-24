@@ -1,27 +1,14 @@
-/**
- * useEventStream — Chat RunState 事件流 Hook
- *
- * Chat 主链路订阅 RunState 中间层 SSE：
- * - RUN_STATE
- * - RUN_STATE_PATCH
- *
- * AgentScope raw SSE 只在后端投影为 RunState 和 Trace。
- * 新 Chat UI 功能不得直接依赖 raw SSE 作为 live 状态来源。
- *
- * @see docs/chat-sse-event-contract.md
- */
+/** Chat 的 RuntimeFrame V3 / DisplaySnapshot V4 传输 Hook。 */
 
 import { useCallback, useRef, useState } from 'react';
-import type { ChatRunStatePatch, ChatRunStateSnapshot } from '../types/runState';
-import { notifySuccess } from '../utils/feedback';
-import { useAppStore } from '../stores/appStore';
+import { coreBlockRegistry } from '../features/runtime-stream/coreModules';
+import { RuntimeProtocolError } from '../features/runtime-stream/protocol';
 import {
-  applyRunStatePatch,
-  completeStreamIfNoPendingUserInteraction,
-  failStreamWithError,
-  INITIAL_STATE,
-  streamStateFromRunState,
-} from './runStateStreamAdapter';
+  acceptRuntimeFrame,
+  checkRuntimeGapTimeout,
+  createRuntimeStreamState,
+} from '../features/runtime-stream/streamAdapter';
+import { useAppStore } from '../stores/appStore';
 import type {
   SendMessageOptions,
   SSEEvent,
@@ -29,7 +16,7 @@ import type {
   UseEventStreamReturn,
 } from './eventStreamTypes';
 
-export type { ChatRunPlanState, ChatRunPlanStep, DisplaySnapshot } from '../types/runState';
+export type { DisplaySnapshot } from '../features/runtime-stream/protocol';
 export type {
   ClarificationQuestionInfo,
   ClarificationRequestInfo,
@@ -42,313 +29,230 @@ export type {
   UseEventStreamReturn,
 } from './eventStreamTypes';
 
-/**
- * useEventStream Hook
- *
- * 管理 SSE 事件流的完整生命周期：发送请求 → 接收事件 → 更新状态
- */
+function initialState(): StreamState {
+  return {
+    isStreaming: false,
+    currentRunId: '',
+    runStartedAt: '',
+    runCompletedAt: '',
+    runtime: createRuntimeStreamState(),
+    error: null,
+  };
+}
+
 export function useEventStream(): UseEventStreamReturn {
   const activeProjectId = useAppStore((storeState) => storeState.activeProjectId);
-  const [state, setState] = useState<StreamState>(INITIAL_STATE);
+  const [state, setReactState] = useState<StreamState>(() => initialState());
+  const stateRef = useRef(state);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  /** 处理 RunState 协议事件，Team 事件由独立的 teamEventReducer 投影。 */
-  const handleEvent = useCallback((event: SSEEvent) => {
-    if (event.type === 'RUN_STATE_PATCH') {
-      const patch = event.data as unknown as ChatRunStatePatch;
-      if (patch.kind === 'notice' && patch.notice?.type === 'MEMORY_SKILL_GENERATING') {
-        notifySuccess(patch.notice.message || 'Skills 生成中');
-      }
-    }
-    setState((prev) => {
-      switch (event.type) {
-        case 'RUN_STATE':
-          return streamStateFromRunState(event.data as unknown as ChatRunStateSnapshot);
-
-        case 'RUN_STATE_PATCH':
-          return applyRunStatePatch(prev, event.data as unknown as ChatRunStatePatch);
-
-        case 'ERROR':
-          return {
-            ...prev,
-            isStreaming: false,
-            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
-            error: (event.data.message as string) || 'Unknown error',
-          };
-
-        case 'RUN_CANCELLED':
-          return {
-            ...prev,
-            isStreaming: false,
-            runCompletedAt: String(event.data.completed_at || event.data.completedAt || new Date().toISOString()),
-            error: '用户已停止本轮执行。',
-          };
-
-        default:
-          return prev;
-      }
-    });
+  const setState = useCallback((updater: (current: StreamState) => StreamState) => {
+    const next = updater(stateRef.current);
+    stateRef.current = next;
+    setReactState(next);
   }, []);
 
-  const readEventStream = useCallback(async (response: Response) => {
-    if (!response.body) {
-      throw new Error('Response body is null');
+  const handleEvent = useCallback((event: SSEEvent) => {
+    if (event.type !== 'RUNTIME_EVENT') {
+      throw new RuntimeProtocolError(`不支持的 SSE 应用事件: ${event.type}`);
     }
+    setState((current) => {
+      const runtime = acceptRuntimeFrame(current.runtime, event.data, coreBlockRegistry);
+      return {
+        ...current,
+        runtime,
+        isStreaming: runtime.snapshot.streamDone ? false : current.isStreaming,
+        runCompletedAt: runtime.snapshot.streamDone
+          ? current.runCompletedAt || new Date().toISOString()
+          : current.runCompletedAt,
+      };
+    });
+  }, [setState]);
 
+  const readEventStream = useCallback(async (response: Response): Promise<'ended' | 'snapshot_required'> => {
+    if (!response.body) throw new Error('Response body is null');
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const events = buffer.split('\n\n');
-      buffer = events.pop() || '';
-
-      for (const eventStr of events) {
-        if (!eventStr.trim()) continue;
-        const parsed = parseSSEEvent(eventStr);
-        if (parsed) {
-          handleEvent(parsed);
-        }
+      buffer += decoder.decode(value, { stream: true }).replaceAll('\r\n', '\n');
+      const chunks = buffer.split('\n\n');
+      buffer = chunks.pop() || '';
+      for (const chunk of chunks) {
+        const parsed = parseSSEEvent(chunk);
+        if (parsed) handleEvent(parsed);
+      }
+      setState((current) => {
+        const runtime = checkRuntimeGapTimeout(current.runtime);
+        return runtime === current.runtime ? current : { ...current, runtime };
+      });
+      if (stateRef.current.runtime.needsSnapshot) {
+        await reader.cancel();
+        return 'snapshot_required';
       }
     }
-  }, [handleEvent]);
+    const trailing = parseSSEEvent(buffer);
+    if (trailing) handleEvent(trailing);
+    return stateRef.current.runtime.needsSnapshot ? 'snapshot_required' : 'ended';
+  }, [handleEvent, setState]);
 
-  /** 重置状态到初始值 */
   const reset = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    setState(INITIAL_STATE);
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    const next = initialState();
+    stateRef.current = next;
+    setReactState(next);
   }, []);
 
-  /** 中止当前流 */
   const abort = useCallback(async () => {
-    const runId = state.currentRunId;
+    const runId = stateRef.current.currentRunId;
     if (runId) {
       try {
         const params = new URLSearchParams({ projectId: activeProjectId });
-        await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/cancel?${params.toString()}`, {
-          method: 'POST',
-        });
+        await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/cancel?${params.toString()}`, { method: 'POST' });
       } catch (error) {
-        console.warn('[SSE] Failed to cancel run:', error);
+        console.warn('[RuntimeStream] cancel failed:', error);
       }
     }
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
-    setState((prev) => ({
-      ...prev,
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setState((current) => ({
+      ...current,
       isStreaming: false,
-      error: prev.error || '用户已停止本轮执行。',
-      runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
+      error: current.error || '用户已停止本轮执行。',
+      runCompletedAt: current.runCompletedAt || new Date().toISOString(),
     }));
-  }, [activeProjectId, state.currentRunId]);
+  }, [activeProjectId, setState]);
 
-  /** 重新订阅仍在后台运行或等待人工处理的 Run */
   const subscribeRun = useCallback(async (runId: string) => {
     if (!runId) return;
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-
+    abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    setState((prev) => {
-      const isDifferentRun = Boolean(prev.currentRunId && prev.currentRunId !== runId);
-      return {
-        ...(isDifferentRun ? INITIAL_STATE : prev),
-        currentRunId: runId,
-        isStreaming: true,
-        error: null,
-      };
-    });
+    const current = stateRef.current;
+    const sameRun = current.currentRunId === runId;
+    const afterSeq = sameRun ? current.runtime.snapshot.lastSeq : 0;
+    setState((value) => ({
+      ...(sameRun ? value : initialState()),
+      currentRunId: runId,
+      runStartedAt: sameRun ? value.runStartedAt : new Date().toISOString(),
+      isStreaming: true,
+      error: null,
+    }));
 
     try {
-      const params = new URLSearchParams({ projectId: activeProjectId });
-      const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/state/stream?${params.toString()}`, {
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      let forceSnapshot = false;
+      while (true) {
+        const params = new URLSearchParams({ projectId: activeProjectId });
+        if (!forceSnapshot) params.set('afterSeq', String(afterSeq));
+        const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/stream?${params.toString()}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        const result = await readEventStream(response);
+        if (result !== 'snapshot_required') break;
+        forceSnapshot = true;
       }
-      await readEventStream(response);
-      setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
-    } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        return;
-      }
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setState((prev) => ({
-        ...prev,
+      setState((value) => ({
+        ...value,
         isStreaming: false,
-        error: errorMessage,
-        runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
+        runCompletedAt: value.runtime.snapshot.streamDone
+          ? value.runCompletedAt || new Date().toISOString()
+          : value.runCompletedAt,
+      }));
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      const message = error instanceof Error ? error.message : String(error);
+      setState((value) => ({
+        ...value,
+        isStreaming: false,
+        error: message,
+        runtime: { ...value.runtime, connection: 'protocol_error' },
       }));
     }
-  }, [activeProjectId, readEventStream]);
+  }, [activeProjectId, readEventStream, setState]);
 
-  /** 发送消息并开始接收事件流 */
-  const sendMessage = useCallback(
-    async (message: string, options?: SendMessageOptions) => {
-      // 中止之前的流（如果有）
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-
-      // 创建新的 AbortController
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-
-      // 重置状态并开始
-      setState({
-        ...INITIAL_STATE,
-        isStreaming: true,
-        runStartedAt: new Date().toISOString(),
-      });
-
-      try {
-        const response = await fetch('/api/chat/send/start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message,
-            project_id: options?.projectId,
-            display_message: options?.displayMessage,
-            agent_id: options?.agentId,
-            agent_name: options?.agentName,
-            mode: options?.mode || 'agent',
-            system_prompt: options?.systemPrompt,
-            model: options?.model,
-            session_id: options?.sessionId,
-            skill_ids: options?.skillIds,
-            deep_thinking: options?.deepThinking,
-            sandbox: options?.sandbox,
-            images: options?.images,
-            files: options?.files,
-          }),
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const payload = await response.json();
-        const runId = String(payload?.run?.id || payload?.runId || '');
-        if (!runId) {
-          throw new Error('Run was not started');
-        }
-        await subscribeRun(runId);
-      } catch (err: unknown) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          // 用户主动中止
-          setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
-        } else {
-          // 其他错误
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          setState((prev) => failStreamWithError(prev, errorMessage));
-        }
-      }
-    },
-    [subscribeRun]
-  );
-
-  /** 恢复暂停的人机交互 */
-  const resumeInteraction = useCallback(
-    async (
-      interactionId: string,
-      action: 'approve' | 'reject',
-      externalResults: Record<string, string> = {},
-      rememberApproval = false,
-    ) => {
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-      setState((prev) => ({
-        ...prev,
-        isStreaming: true,
-        error: null,
-        hitlRequests: prev.hitlRequests.filter((item) => item.interactionId !== interactionId),
-        clarificationRequests: prev.clarificationRequests.filter((item) => item.id !== interactionId),
-      }));
-
-      try {
-        const response = await fetch('/api/chat/resume/start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            interactionId,
-            action,
-            externalResults,
-            rememberApproval,
-          }),
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const payload = await response.json();
-        const runId = String(payload?.runId || '');
-        if (!runId) {
-          throw new Error('Run was not resumed');
-        }
-        await subscribeRun(runId);
-      } catch (err: unknown) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          setState((prev) => completeStreamIfNoPendingUserInteraction(prev));
-        } else {
-          const errorMessage = err instanceof Error ? err.message : String(err);
-          setState((prev) => ({
-            ...prev,
-            isStreaming: false,
-            error: errorMessage,
-            runCompletedAt: prev.runCompletedAt || new Date().toISOString(),
-          }));
-        }
-      }
-    },
-    [subscribeRun]
-  );
-
-  /**
-   * 解析单个 SSE 事件字符串
-   *
-   * SSE 格式：
-   *   event: TEXT_BLOCK_DELTA
-   *   data: {"delta": "你好", ...}
-   */
-  function parseSSEEvent(raw: string): SSEEvent | null {
-    let eventType = '';
-    let dataStr = '';
-
-    for (const line of raw.split('\n')) {
-      if (line.startsWith('event: ')) {
-        eventType = line.slice(7).trim();
-      } else if (line.startsWith('data: ')) {
-        dataStr = line.slice(6);
-      }
-    }
-
-    if (!eventType || !dataStr) return null;
-
+  const sendMessage = useCallback(async (message: string, options?: SendMessageOptions) => {
+    abortControllerRef.current?.abort();
+    const next = initialState();
+    next.isStreaming = true;
+    next.runStartedAt = new Date().toISOString();
+    stateRef.current = next;
+    setReactState(next);
     try {
-      const data = JSON.parse(dataStr);
-      return { type: eventType, data };
-    } catch {
-      console.warn('[SSE] Failed to parse event data:', dataStr);
-      return null;
+      const response = await fetch('/api/chat/send/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          project_id: options?.projectId,
+          display_message: options?.displayMessage,
+          agent_id: options?.agentId,
+          agent_name: options?.agentName,
+          mode: options?.mode || 'agent',
+          system_prompt: options?.systemPrompt,
+          model: options?.model,
+          session_id: options?.sessionId,
+          skill_ids: options?.skillIds,
+          deep_thinking: options?.deepThinking,
+          sandbox: options?.sandbox,
+          images: options?.images,
+          files: options?.files,
+        }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      const payload = await response.json();
+      const runId = String(payload?.run?.id || payload?.runId || '');
+      if (!runId) throw new Error('Run was not started');
+      await subscribeRun(runId);
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : String(error);
+      setState((value) => ({ ...value, isStreaming: false, error: messageText }));
     }
-  }
+  }, [setState, subscribeRun]);
+
+  const resumeInteraction = useCallback(async (
+    interactionId: string,
+    action: 'approve' | 'reject',
+    externalResults: Record<string, string> = {},
+    rememberApproval = false,
+  ) => {
+    abortControllerRef.current?.abort();
+    setState((value) => ({ ...value, isStreaming: true, error: null }));
+    try {
+      const response = await fetch('/api/chat/resume/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interactionId, action, externalResults, rememberApproval }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      const payload = await response.json();
+      const runId = String(payload?.runId || '');
+      if (!runId) throw new Error('Run was not resumed');
+      await subscribeRun(runId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setState((value) => ({ ...value, isStreaming: false, error: message }));
+    }
+  }, [setState, subscribeRun]);
 
   return { state, sendMessage, resumeInteraction, subscribeRun, abort, reset };
+}
+
+function parseSSEEvent(raw: string): SSEEvent | null {
+  let eventType = '';
+  const dataLines: string[] = [];
+  for (const line of raw.split('\n')) {
+    if (line.startsWith(':')) continue;
+    if (line.startsWith('event:')) eventType = line.slice(6).trim();
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+  }
+  if (!eventType || dataLines.length === 0) return null;
+  const value: unknown = JSON.parse(dataLines.join('\n'));
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new RuntimeProtocolError('SSE data 必须为 RuntimeFrame 对象');
+  }
+  return { type: eventType, data: value as Record<string, unknown> };
 }

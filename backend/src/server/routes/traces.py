@@ -147,8 +147,8 @@ def _event_tool_call_count(events: list[dict]) -> int:
 def _member_count(messages: list[object]) -> int:
     member_ids: set[str] = set()
     for message in messages:
-        snapshot = getattr(message, "team_snapshot", None)
-        members = snapshot.get("members") if isinstance(snapshot, dict) and isinstance(snapshot.get("members"), list) else []
+        team_data = _latest_team_block_data(message)
+        members = team_data.get("members") if isinstance(team_data.get("members"), list) else []
         for member in members:
             if isinstance(member, dict) and member.get("role") != "leader" and member.get("id"):
                 member_ids.add(str(member["id"]))
@@ -161,8 +161,8 @@ def _trace_status(messages: list[object]) -> str:
     team_statuses = [
         str(run.get("status") or "")
         for message in messages
-        for snapshot in [getattr(message, "team_snapshot", None)]
-        for run in [snapshot.get("run") if isinstance(snapshot, dict) and isinstance(snapshot.get("run"), dict) else {}]
+        for team_data in [_latest_team_block_data(message)]
+        for run in [team_data.get("run") if isinstance(team_data.get("run"), dict) else {}]
         if run
     ]
     if "running" in team_statuses:
@@ -170,6 +170,25 @@ def _trace_status(messages: list[object]) -> str:
     if any(getattr(message, "role", "") == "assistant" for message in messages):
         return "completed"
     return "empty"
+
+
+def _latest_team_block_data(message: object) -> dict:
+    """从 DisplaySnapshot V4 读取最新 Team Block，不恢复并列 TeamSnapshot。"""
+
+    snapshot = getattr(message, "display_snapshot", None)
+    if not isinstance(snapshot, dict):
+        return {}
+    blocks = snapshot.get("blocksById")
+    order = snapshot.get("order")
+    if not isinstance(blocks, dict) or not isinstance(order, list):
+        return {}
+    for block_id in reversed(order):
+        block = blocks.get(block_id)
+        if not isinstance(block, dict) or block.get("kind") != "team":
+            continue
+        data = block.get("data")
+        return data if isinstance(data, dict) else {}
+    return {}
 
 
 def _event_trace_status(events: list[dict]) -> str:

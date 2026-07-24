@@ -1,10 +1,9 @@
-"""POST /resume — 人工确认或外部执行结果后恢复 Agent / Team 运行。"""
+"""人工确认或外部执行结果后恢复 Agent / Team 运行。"""
 
 import asyncio
 from typing import AsyncGenerator
 
 from fastapi import HTTPException
-from fastapi.responses import StreamingResponse
 
 from agentscope.event import ExternalExecutionResultEvent
 from agentscope.message import TextBlock, ToolResultBlock, ToolResultState
@@ -12,7 +11,7 @@ from agentscope.message import TextBlock, ToolResultBlock, ToolResultState
 from src.agents.runtime_types import AgentGuardrails
 from src.server.routes.agents import get_registered_agent
 
-from src.server.routes.chat.helpers import _sse_event, _trim_text
+from src.server.routes.chat.helpers import source_event, _trim_text
 from src.server.routes.chat.hitl import (
     _build_resume_event,
     _clear_pending_interaction,
@@ -26,6 +25,7 @@ from src.server.routes.chat.models import (
     HITL_EVENT_TYPES,
     ChatResumeRequest,
 )
+from src.server.routes.chat.projection.source_events import SourceEvent
 from src.server.routes.chat.router import router
 from src.server.routes.chat.background_runs import (
     mark_chat_background_run_resuming,
@@ -39,8 +39,8 @@ from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
 )
 from src.server.routes.chat.runtime_events import (
-    runtime_event_from_agentscope_sse,
-    runtime_event_sse,
+    runtime_event_from_agentscope_event,
+    runtime_trace_source_event,
 )
 from src.server.routes.chat.skill_runs import (
     get_active_session_skill_run,
@@ -81,11 +81,10 @@ def _should_emit_raw_resume_event(event_type: str, scope: str) -> bool:
     return True
 
 
-@router.post("/resume")
-async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
-    """Resume a paused Agent run after user confirmation or external result."""
+def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceEvent, None]:
+    """构造恢复原 AgentScope ReAct 的结构化源信号流。"""
 
-    async def event_stream() -> AsyncGenerator[str, None]:
+    async def event_stream() -> AsyncGenerator[SourceEvent, None]:
         interaction = PENDING_INTERACTIONS.get(data.interaction_id)
         agent = PENDING_AGENTS.get(data.interaction_id)
         if interaction is None or agent is None:
@@ -97,7 +96,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     current_step="stale_after_backend_restart",
                     pending_interaction_id="",
                 )
-            yield _sse_event("ERROR", {
+            yield source_event("ERROR", {
                 "message": "待处理交互不存在或后端已重启，无法恢复原 AgentScope ReAct。请重新发送上一条需求继续。",
                 "recoverable": True,
                 "reason": "missing_pending_interaction",
@@ -107,7 +106,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
         try:
             resume_event = _build_resume_event(interaction, data)
         except Exception as exc:
-            yield _sse_event("ERROR", {"message": f"恢复事件构建失败: {exc}"})
+            yield source_event("ERROR", {"message": f"恢复事件构建失败: {exc}"})
             return
 
         skill_runs = interaction.skill_runs
@@ -129,7 +128,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 "externalResultsPreview": _external_results_preview(data.external_results),
             },
         )
-        yield runtime_event_sse(
+        yield runtime_trace_source_event(
             "HITL_RESOLVED",
             session_id=interaction.session_id,
             run_id=interaction.run_id,
@@ -145,7 +144,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 "externalResultsPreview": _external_results_preview(data.external_results),
             },
         )
-        yield runtime_event_sse(
+        yield runtime_trace_source_event(
             "RUN_RESUMED",
             session_id=interaction.session_id,
             run_id=interaction.run_id,
@@ -159,7 +158,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 "action": data.action,
             },
         )
-        yield runtime_event_sse(
+        yield runtime_trace_source_event(
             "AGENT_RESUMED",
             session_id=interaction.session_id,
             run_id=interaction.run_id,
@@ -177,6 +176,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
         try:
             if interaction.scope == "subagent":
                 subagent_data = dict(interaction.chat_data or {})
+                is_background_subagent = subagent_data.get("mode") == "background"
                 invocation_id = str(subagent_data.get("invocationId") or "")
                 tool_call_id = str(subagent_data.get("toolCallId") or "")
                 subagent_name = str(subagent_data.get("subagentName") or interaction.agent_name)
@@ -185,8 +185,10 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 final_text = ""
                 reasoning_text = interaction.assistant_text or ""
                 duration_ms = 0
+                subagent_seq = 0
 
                 async for event in agent.reply_stream(resume_event):
+                    subagent_seq += 1
                     event_data = event.model_dump(mode="json")
                     event_type = event_data.pop("type", "UNKNOWN")
                     _attach_provider_cache_usage(event_type, event_data)
@@ -248,7 +250,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                             next_interaction.type,
                             next_interaction.resume_tool_calls,
                         )
-                        yield runtime_event_sse(
+                        yield runtime_trace_source_event(
                             "RUN_WAITING",
                             session_id=interaction.session_id,
                             run_id=interaction.run_id,
@@ -264,7 +266,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                                 "reason": waiting_reason(wait_state),
                             },
                         )
-                        yield runtime_event_sse(
+                        yield runtime_trace_source_event(
                             "SUBAGENT_WAITING_HUMAN",
                             session_id=interaction.session_id,
                             run_id=interaction.run_id,
@@ -283,9 +285,10 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                                 "toolCalls": agentscope_waiting_tool_calls,
                                 "partialResultPreview": partial,
                                 "durationMs": duration_ms,
+                                "seq": subagent_seq,
                             },
                         )
-                        yield _sse_event("HITL_REQUIRED", _hitl_payload(next_interaction))
+                        yield source_event("HITL_REQUIRED", _hitl_payload(next_interaction))
                         return
                     if event_type == "EXCEED_MAX_ITERS":
                         subagent_stream_state.exceeded_max_iters = True
@@ -296,13 +299,21 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                             final_text += delta
                         else:
                             reasoning_text += delta
-                    runtime_event = runtime_event_from_agentscope_sse(
+                    runtime_event = runtime_event_from_agentscope_event(
                         event_type,
                         session_id=interaction.session_id,
+                        run_id=interaction.run_id,
                         scope="subagent",
                         agent_id=interaction.agent_id,
                         agent_name=interaction.agent_name,
                         event_data=event_data,
+                        payload_extra={
+                            "invocationId": invocation_id,
+                            "toolCallId": tool_call_id,
+                            "subagentName": subagent_name,
+                            "seq": subagent_seq,
+                            "resumedFromHitl": True,
+                        },
                     )
                     if runtime_event:
                         yield runtime_event
@@ -323,7 +334,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         )
                     PENDING_SUBAGENT_PARENT_CONTEXTS.pop(interaction.id, None)
                     _clear_pending_interaction(interaction.id)
-                    yield runtime_event_sse(
+                    yield runtime_trace_source_event(
                         "SUBAGENT_FAILED",
                         session_id=interaction.session_id,
                         run_id=interaction.run_id,
@@ -338,20 +349,22 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                             "subagentName": subagent_name,
                             "error": error_message,
                             "partialResultPreview": partial,
+                            "seq": subagent_seq,
                         },
                     )
-                    yield runtime_event_sse(
-                        "RUN_FAILED",
-                        session_id=interaction.session_id,
-                        run_id=interaction.run_id,
-                        scope="run",
-                        agent_id=interaction.agent_id,
-                        agent_name=interaction.agent_name,
-                        status="failed",
-                        reason="subagent_resume_failed",
-                        payload={"message": error_message},
-                    )
-                    yield _sse_event("ERROR", {"message": error_message})
+                    if not is_background_subagent:
+                        yield runtime_trace_source_event(
+                            "RUN_FAILED",
+                            session_id=interaction.session_id,
+                            run_id=interaction.run_id,
+                            scope="run",
+                            agent_id=interaction.agent_id,
+                            agent_name=interaction.agent_name,
+                            status="failed",
+                            reason="subagent_resume_failed",
+                            payload={"message": error_message},
+                        )
+                        yield source_event("ERROR", {"message": error_message})
                     return
 
                 result_preview = _trim_text(final_text, 1200)
@@ -363,7 +376,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                     )
                 parent_context = PENDING_SUBAGENT_PARENT_CONTEXTS.pop(interaction.id, None)
                 _clear_pending_interaction(interaction.id)
-                yield runtime_event_sse(
+                yield runtime_trace_source_event(
                     "SUBAGENT_COMPLETED",
                     session_id=interaction.session_id,
                     run_id=interaction.run_id,
@@ -378,6 +391,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         "resultPreview": result_preview,
                         "durationMs": duration_ms,
                         "resumedFromHitl": True,
+                        "seq": subagent_seq,
                     },
                 )
                 if parent_context is not None:
@@ -421,9 +435,9 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         exception_prefix="父 Agent 恢复执行异常",
                     ):
                         yield parent_event
-                else:
+                elif not is_background_subagent:
                     error_message = "Subagent 已恢复完成，但父 Agent 恢复上下文不存在。"
-                    yield runtime_event_sse(
+                    yield runtime_trace_source_event(
                         "RUN_FAILED",
                         session_id=interaction.session_id,
                         run_id=interaction.run_id,
@@ -434,7 +448,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                         reason="missing_subagent_parent_context",
                         payload={"message": error_message},
                     )
-                    yield _sse_event("ERROR", {"message": error_message})
+                    yield source_event("ERROR", {"message": error_message})
                 return
 
             resume_stream_state = LeaderStreamState(
@@ -477,7 +491,7 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
         except Exception as exc:
             _clear_pending_interaction(interaction.id)
             error_message = f"Agent 恢复执行异常: {exc}"
-            yield runtime_event_sse(
+            yield runtime_trace_source_event(
                 "RUN_FAILED",
                 session_id=interaction.session_id,
                 run_id=interaction.run_id,
@@ -488,29 +502,14 @@ async def resume_interaction(data: ChatResumeRequest) -> StreamingResponse:
                 reason="resume_error",
                 payload={"message": error_message},
             )
-            yield _sse_event("ERROR", {"message": error_message})
+            yield source_event("ERROR", {"message": error_message})
 
-    pending_interaction = PENDING_INTERACTIONS.get(data.interaction_id)
-    stream = (
-        relay_chat_background_run_events(pending_interaction.run_id, event_stream())
-        if pending_interaction and pending_interaction.run_id
-        else event_stream()
-    )
-
-    return StreamingResponse(
-        stream,
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return event_stream()
 
 
 @router.post("/resume/start")
 async def start_resume_interaction(data: ChatResumeRequest) -> dict:
-    """后台恢复 HITL Run，并返回原 Run ID 供前端订阅 RunState。"""
+    """后台恢复 HITL Run，并返回原 Run ID 供前端继续订阅 RuntimeFrame。"""
 
     pending_interaction = PENDING_INTERACTIONS.get(data.interaction_id)
     if pending_interaction is None or not pending_interaction.run_id:
@@ -521,9 +520,12 @@ async def start_resume_interaction(data: ChatResumeRequest) -> dict:
         action=data.action,
         external_results_preview=_external_results_preview(data.external_results),
     )
-    response = await resume_interaction(data)
+    stream = relay_chat_background_run_events(
+        pending_interaction.run_id,
+        resume_interaction_events(data),
+    )
     asyncio.create_task(
-        _drain_resume_stream(response.body_iterator),
+        _drain_resume_stream(stream),
         name=f"chat-resume-{pending_interaction.run_id}",
     )
     return {
@@ -534,7 +536,7 @@ async def start_resume_interaction(data: ChatResumeRequest) -> dict:
 
 
 async def _drain_resume_stream(stream) -> None:
-    """消费旧 resume SSE 生成器，让事件进入后台 RunState 中间层。"""
+    """消费结构化 resume 源流，让事件进入原 Run 的投影序列。"""
 
     try:
         async for _ in stream:

@@ -1,9 +1,10 @@
-"""Team Runtime 独立 SSE 事件封装。"""
+"""Team Runtime 进程内源信号封装。"""
 
-from src.server.routes.chat.helpers import _sse_event
+from src.server.routes.chat.helpers import source_event
+from src.server.routes.chat.projection.source_events import SourceEvent
 
 
-def team_event_sse(event: dict) -> str:
-    """把 Team domain event 包装为顶层 TEAM_EVENT。"""
+def team_source_event(event: dict) -> SourceEvent:
+    """把 Team domain event 包装为进程内源信号。"""
 
-    return _sse_event("TEAM_EVENT", event)
+    return source_event("TEAM_DOMAIN_EVENT", event)

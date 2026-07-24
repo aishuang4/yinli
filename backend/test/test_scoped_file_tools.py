@@ -91,6 +91,25 @@ def test_scoped_grep_accepts_project_relative_paths(tmp_path: Path, monkeypatch)
     assert "out.txt" in chunk.content[0].text
 
 
+def test_scoped_grep_falls_back_from_session_workspace_to_project_scope(tmp_path: Path):
+    """Grep 的显式 Project 相对目录不应被空 Session cwd 吞掉。"""
+
+    project_root = tmp_path / "project"
+    session_root = project_root / ".agent-workstation" / "sessions" / "session-a"
+    backend = project_root / "backend"
+    session_root.mkdir(parents=True)
+    backend.mkdir()
+    (backend / "service.py").write_text("needle\n", encoding="utf-8")
+
+    chunk = asyncio.run(ScopedGrep(
+        base_dir=str(session_root),
+        scope_dir=str(project_root),
+    )(pattern="needle", path="backend"))
+
+    assert chunk.state != "error"
+    assert "service.py" in chunk.content[0].text
+
+
 def test_scoped_grep_falls_back_when_ripgrep_is_unavailable(tmp_path: Path, monkeypatch):
     """Windows 未安装 rg.exe 时，Grep 仍应返回项目内匹配内容。"""
 

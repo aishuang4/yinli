@@ -1,7 +1,11 @@
 export async function copyTextToClipboard(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // 浏览器权限策略可能拒绝 Clipboard API，继续使用受用户点击触发的 DOM fallback。
+    }
   }
 
   const textarea = document.createElement('textarea');

@@ -11,7 +11,6 @@ from src.server.routes.chat.router import router
 from src.server.routes.chat.store import _load_store, _save_store
 from src.server.routes.chat.team_runtime.maintenance import (
     delete_team_runs_for_session,
-    recover_team_snapshot,
 )
 from src.server.routes.chat.team_runtime.store import TeamStoreError
 from src.storage.database import DEFAULT_PROJECT_ID, get_project
@@ -113,7 +112,6 @@ def _history_message_to_response(message: StoredChatMessage) -> dict[str, Any]:
         "images": [item.model_dump(mode="json", by_alias=True) for item in message.images],
         "files": [item.model_dump(mode="json", by_alias=True) for item in message.files],
         "displaySnapshot": message.display_snapshot,
-        "teamSnapshot": recover_team_snapshot(message.team_snapshot),
         "clarificationRequests": message.clarification_requests,
         "clarificationResolved": message.clarification_resolved,
         "created_at": message.created_at,

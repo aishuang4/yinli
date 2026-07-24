@@ -156,8 +156,12 @@ rg -n "<(Input|Select|DatePicker|Switch|Slider|InputNumber|textarea|input|select
 - Chat 复杂链路继续按 `routes/chat/handlers`、`runtime`、`team`、`store` 拆分，避免单文件膨胀。
 - AgentScope 运行时构造统一走 `backend/src/agents/factory.py`；类型定义和模型创建分别维护在 `runtime_types.py`、`model_factory.py`，不要重新塞回 factory。
 - 旧独立 Plan Runtime（`runtime.kind=plan`）与旧独立 Subagent Runtime（`runtime.kind=subagent`）已下线，不得在旧路由、旧兼容字段或旧事件上继续扩展。当前 Plan Mode middleware 与 `DelegateTask` Subagent 委托仍在线，新增能力必须沿 ReAct 内部增强链路推进。
-- Chat 应用级状态统一使用 `RUNTIME_EVENT` 包装，事件类型定义集中在 `backend/src/server/routes/chat/event_types.py` 和 `frontend/src/types/chatEvents.ts`。
-- 新功能必须定义自己的事件家族；Team 状态只能使用顶层 `TEAM_EVENT`，不得塞入通用 `RUNTIME_EVENT` 或单 Agent `DisplaySnapshot`。
+- Chat 展示链路只使用 `RUNTIME_EVENT: RuntimeFrame` 和 `DisplaySnapshot V4`；旧 RunState、DisplayEvent、顶层业务事件和旧 Snapshot reader 已删除，不得恢复兼容 union、双读或双写。
+- 新展示能力必须注册自己的 `Block.kind` module 和 per-kind projector，不新增 RuntimeFrame op、顶层 SSE 事件或通用 reducer 分支；Team、Subagent 等领域活动通过嵌套 Block 表达，完整领域事件保留在后端存储与 Trace。
+- 目标后端 projector 不得直接写 SSE，handler 不得直接修改 DisplaySnapshot；所有 Frame 必须经过 `BlockLifecycleCoordinator` 和原子 projection writer，保证 seq、replay、Snapshot 和 checkpoint 一致。
+- 同一 Run stream 的 Domain Event 必须按全局 `stream_ordinal` 由单一 ProjectionRunner 串行消费；per-kind projector 不得维护独立消费游标。Snapshot 使用周期 checkpoint + tail replay，不得在每个 token delta 上全量重写整棵 JSON。
+- `run.completed` 前必须通过领域 completion barrier；projector 不得反向改写已经成立的 Run 终态，投影不变量损坏按重建、应急 child close 和 Trace 审计处理。
+- 目标前端 renderer 不得直接改 Block Tree，也不得把 command response 当作 UI 状态；命令经显式 API 提交，最终状态必须由后端 Frame 回流。
 - Chat SSE 事件新增或语义变更前，先更新 `docs/chat-sse-event-contract.md`，再改后端发送和前端消费。
 - 工具实现放 `backend/src/tools/`，不要散落在路由里。
 - 存储访问集中在 `backend/src/storage/database.py` 或领域封装函数里。
@@ -190,7 +194,7 @@ rg -n "<(Input|Select|DatePicker|Switch|Slider|InputNumber|textarea|input|select
 ## 5. SQLite / 数据持久化规范
 
 - 业务核心数据优先使用规范化表，不再新增零散 JSON 文件。
-- Team Runtime 是协作运行状态的例外：按 `docs/team-runtime-redesign.md` 使用 file-first 设计，JSON/JSONL/Markdown 作为 TeamRun source of truth，SQLite 只保存 Chat 索引、RunState 和历史 `teamSnapshot`。
+- Team Runtime 按 `docs/team-runtime-redesign.md` 使用 file-first 设计，JSON/JSONL/Markdown 作为 TeamRun source of truth；Chat 展示只读取由 Team projector 生成的 `kind=team` Block，不读取 Team 文件状态。
 - `json_store` 只用于系统设置、轻量配置文档和确实不适合拆表的内容。
 - 表结构演进继续使用 `_ensure_column()` / 初始化升级逻辑；正式上线前再评估迁移框架。
 - 新表必须包含稳定主键、创建时间、更新时间；需要审计的数据保留操作记录。
@@ -206,7 +210,7 @@ rg -n "<(Input|Select|DatePicker|Switch|Slider|InputNumber|textarea|input|select
   - 历史消息可回放
   - Trace 可审计
 - HITL 暂停不代表 Run 完成；耗时和状态应延续到最终回复结束。
-- Team Member 的输出、工具调用、思考、状态必须通过独立 `TEAM_EVENT` 记录，最终综合必须使用成功任务结果和 Mailbox。
+- Team Member 的输出、工具调用、思考、状态必须先写 Team 领域事件，再投影为嵌套 `kind=team` Block；最终综合必须使用成功任务结果和 Mailbox。
 - Skills 生命周期要明确：选择、注入、使用、等待用户、完成、失败，不能无限保持 active。
 
 ## 7. 测试规范

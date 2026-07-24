@@ -26,6 +26,28 @@ def resolve_workspace_path(
     return str(resolved)
 
 
+def resolve_existing_workspace_path(
+    path: str | None,
+    *,
+    base_dir: str | None = None,
+    scope_dir: str | None = None,
+) -> str:
+    """解析只读路径；Session cwd 中不存在时兼容 Project scope 相对路径。"""
+
+    resolved = resolve_workspace_path(path, base_dir=base_dir, scope_dir=scope_dir)
+    value = Path(str(path or "")).expanduser()
+    if value.is_absolute() or Path(resolved).exists() or not base_dir or not scope_dir:
+        return resolved
+
+    scope = Path(scope_dir).expanduser().resolve()
+    scope_relative = (scope / value).resolve()
+    if not scope_relative.is_relative_to(scope):
+        raise ValueError(f"Path is outside filesystem scope: {scope_relative}")
+    if scope_relative.exists():
+        return str(scope_relative)
+    return resolved
+
+
 def resolved_tool_input(
     tool_input: dict[str, Any],
     key: str,

@@ -93,7 +93,13 @@ DEFAULT_MODEL_CONFIG = {
     "maxTokens": 4096,
     "maxReactIters": 40,
 }
-EMPTY_DISPLAY_SNAPSHOT = {"version": 3, "mode": "single_agent", "actors": [], "blocks": []}
+EMPTY_DISPLAY_SNAPSHOT = {
+    "version": 4,
+    "lastSeq": 0,
+    "streamDone": False,
+    "order": [],
+    "blocksById": {},
+}
 
 
 def _utc_now() -> str:
@@ -372,8 +378,7 @@ def ensure_db() -> None:
                     model_caches TEXT NOT NULL DEFAULT '[]',
                     runtime_events TEXT NOT NULL DEFAULT '[]',
                     plan_runs TEXT NOT NULL DEFAULT '[]',
-                    display_snapshot TEXT NOT NULL DEFAULT '{"version":3,"mode":"single_agent","actors":[],"blocks":[]}',
-                    team_snapshot TEXT,
+                    display_snapshot TEXT NOT NULL DEFAULT '{"version":4,"lastSeq":0,"streamDone":false,"order":[],"blocksById":{}}',
                     created_at TEXT NOT NULL,
                     sort_order INTEGER NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
@@ -462,6 +467,18 @@ def ensure_db() -> None:
                     ON subagent_invocations(run_id, started_at);
                 CREATE INDEX IF NOT EXISTS idx_subagent_invocations_session
                     ON subagent_invocations(session_id, started_at);
+                CREATE TABLE IF NOT EXISTS subagent_transcript_items (
+                    id TEXT PRIMARY KEY,
+                    invocation_id TEXT NOT NULL,
+                    seq INTEGER NOT NULL,
+                    kind TEXT NOT NULL,
+                    payload TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(invocation_id, seq),
+                    FOREIGN KEY(invocation_id) REFERENCES subagent_invocations(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_subagent_transcript_invocation_seq
+                    ON subagent_transcript_items(invocation_id, seq);
                 CREATE TABLE IF NOT EXISTS chat_runs (
                     id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
@@ -474,24 +491,63 @@ def ensure_db() -> None:
                     completed_at TEXT,
                     updated_at TEXT NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS chat_run_events (
-                    id TEXT PRIMARY KEY,
-                    run_id TEXT NOT NULL,
-                    raw_event TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    sort_order INTEGER NOT NULL DEFAULT 0,
-                    FOREIGN KEY(run_id) REFERENCES chat_runs(id) ON DELETE CASCADE
-                );
-                CREATE TABLE IF NOT EXISTS chat_run_states (
-                    run_id TEXT PRIMARY KEY,
-                    state TEXT NOT NULL DEFAULT '{}',
-                    updated_at TEXT NOT NULL,
-                    FOREIGN KEY(run_id) REFERENCES chat_runs(id) ON DELETE CASCADE
-                );
                 CREATE INDEX IF NOT EXISTS idx_chat_runs_updated
                     ON chat_runs(updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_chat_run_events_order
-                    ON chat_run_events(run_id, sort_order, created_at);
+                CREATE TABLE IF NOT EXISTS chat_domain_streams (
+                    stream_key TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL UNIQUE,
+                    next_ordinal INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS chat_domain_events (
+                    id TEXT PRIMARY KEY,
+                    stream_key TEXT NOT NULL,
+                    stream_ordinal INTEGER NOT NULL,
+                    run_id TEXT NOT NULL,
+                    aggregate_type TEXT NOT NULL,
+                    aggregate_id TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    data_version INTEGER NOT NULL,
+                    revision INTEGER NOT NULL,
+                    data_json TEXT NOT NULL DEFAULT '{}',
+                    occurred_at TEXT NOT NULL,
+                    causation_id TEXT,
+                    correlation_id TEXT,
+                    trace_id TEXT,
+                    UNIQUE(stream_key, stream_ordinal),
+                    UNIQUE(aggregate_type, aggregate_id, revision),
+                    FOREIGN KEY(stream_key) REFERENCES chat_domain_streams(stream_key) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_domain_events_stream_order
+                    ON chat_domain_events(stream_key, stream_ordinal);
+                CREATE TABLE IF NOT EXISTS projection_streams (
+                    stream_key TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL UNIQUE,
+                    scope TEXT NOT NULL DEFAULT 'chat',
+                    last_domain_ordinal INTEGER NOT NULL DEFAULT 0,
+                    last_seq INTEGER NOT NULL DEFAULT 0,
+                    snapshot_seq INTEGER NOT NULL DEFAULT 0,
+                    snapshot_json TEXT NOT NULL DEFAULT '{"version":4,"lastSeq":0,"streamDone":false,"order":[],"blocksById":{}}',
+                    snapshot_version INTEGER NOT NULL DEFAULT 4,
+                    stream_done INTEGER NOT NULL DEFAULT 0,
+                    runner_fence INTEGER NOT NULL DEFAULT 0,
+                    lease_owner TEXT,
+                    lease_expires_at TEXT,
+                    snapshot_updated_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(stream_key) REFERENCES chat_domain_streams(stream_key) ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS projection_frames (
+                    stream_key TEXT NOT NULL,
+                    seq INTEGER NOT NULL,
+                    frame_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(stream_key, seq),
+                    FOREIGN KEY(stream_key) REFERENCES projection_streams(stream_key) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_projection_frames_stream_order
+                    ON projection_frames(stream_key, seq);
                 CREATE TABLE IF NOT EXISTS workflow_runs (
                     id TEXT PRIMARY KEY,
                     schema_version TEXT NOT NULL DEFAULT 'workflow.v1',
@@ -676,8 +732,12 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "runtime_events", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "plan_runs", "TEXT NOT NULL DEFAULT '[]'")
-            _ensure_column(conn, "chat_messages", "display_snapshot", "TEXT NOT NULL DEFAULT '{\"version\":2,\"blocks\":[]}'")
-            _ensure_column(conn, "chat_messages", "team_snapshot", "TEXT")
+            _ensure_column(
+                conn,
+                "chat_messages",
+                "display_snapshot",
+                "TEXT NOT NULL DEFAULT '{\"version\":4,\"lastSeq\":0,\"streamDone\":false,\"order\":[],\"blocksById\":{}}'",
+            )
             _ensure_column(conn, "chat_sessions", "mode", "TEXT NOT NULL DEFAULT 'agent'")
             _ensure_column(conn, "agents", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "mcp_servers", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
@@ -693,10 +753,14 @@ def ensure_db() -> None:
             _ensure_column(conn, "memory_nodes", "project_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "subagent_invocations", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "subagent_invocations", "project_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "subagent_invocations", "execution_mode", "TEXT NOT NULL DEFAULT 'foreground'")
+            _ensure_column(conn, "subagent_invocations", "resume_capability", "TEXT NOT NULL DEFAULT 'same_process'")
+            _ensure_column(conn, "subagent_invocations", "process_instance_id", "TEXT NOT NULL DEFAULT ''")
             _drop_column_if_exists(conn, "agents", "callable_agents")
             _drop_column_if_exists(conn, "agents", "max_depth")
             _drop_column_if_exists(conn, "chat_messages", "subagent_calls")
             _drop_column_if_exists(conn, "chat_messages", "team_activities")
+            _drop_column_if_exists(conn, "chat_messages", "team_snapshot")
             _drop_column_if_exists(conn, "chat_sessions", "team_id")
             _drop_column_if_exists(conn, "chat_sessions", "team_name")
             _drop_column_if_exists(conn, "plans", "team_id")
@@ -704,6 +768,7 @@ def ensure_db() -> None:
             conn.execute("DROP TABLE IF EXISTS team_members")
             conn.execute("DROP TABLE IF EXISTS teams")
             conn.execute("DELETE FROM json_store WHERE namespace = 'team_templates'")
+            _reset_legacy_chat_stream_data(conn)
             columns = {
                 row["name"]
                 for row in conn.execute("PRAGMA table_info(agents)").fetchall()
@@ -810,6 +875,42 @@ def _loads(value: str | None, default: Any) -> Any:
         return json.loads(value)
     except Exception:
         return default
+
+
+def _reset_legacy_chat_stream_data(conn: sqlite3.Connection) -> None:
+    """检测到旧 RunState/V3 Snapshot 时一次性清空 Chat 运行域，不做数据迁移。"""
+
+    table_names = {
+        str(row["name"])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+    }
+    has_legacy_tables = bool({"chat_run_events", "chat_run_states"} & table_names)
+    has_legacy_snapshot = False
+    for row in conn.execute("SELECT display_snapshot FROM chat_messages").fetchall():
+        snapshot = _loads(row["display_snapshot"], {})
+        if not isinstance(snapshot, dict) or snapshot.get("version") != 4:
+            has_legacy_snapshot = True
+            break
+    if has_legacy_tables or has_legacy_snapshot:
+        for table in (
+            "projection_frames",
+            "projection_streams",
+            "chat_domain_events",
+            "chat_domain_streams",
+            "subagent_transcript_items",
+            "subagent_invocations",
+            "plan_events",
+            "plan_steps",
+            "plans",
+            "run_events",
+            "chat_messages",
+            "chat_runs",
+            "chat_sessions",
+        ):
+            if table in table_names:
+                conn.execute(f"DELETE FROM {table}")
+    conn.execute("DROP TABLE IF EXISTS chat_run_events")
+    conn.execute("DROP TABLE IF EXISTS chat_run_states")
 
 
 def _workspace_project_record_store() -> WorkspaceProjectRecordStore:
@@ -1088,7 +1189,6 @@ def load_chat_store() -> dict[str, Any]:
             "thinking": row["thinking"],
             "images": _loads(row["images"], []),
             "displaySnapshot": _loads(row["display_snapshot"], EMPTY_DISPLAY_SNAPSHOT),
-            "teamSnapshot": _loads(row["team_snapshot"], None),
             "created_at": row["created_at"],
         })
     return {
@@ -1150,7 +1250,6 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     _dumps([]),
                     _dumps([]),
                     _dumps(item.get("displaySnapshot", item.get("display_snapshot", EMPTY_DISPLAY_SNAPSHOT))),
-                    _dumps(item.get("teamSnapshot", item.get("team_snapshot"))) if item.get("teamSnapshot", item.get("team_snapshot")) else None,
                     item["created_at"], index,
                 ))
         conn.executemany(
@@ -1159,9 +1258,9 @@ def save_chat_store(data: dict[str, Any]) -> None:
                 id, session_id, role, content, agent_id, agent_name, model_name,
                 error, thinking, images, tool_calls, skill_calls,
                 model_caches, runtime_events, plan_runs,
-                display_snapshot, team_snapshot, created_at,
+                display_snapshot, created_at,
                 sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -1273,6 +1372,39 @@ def list_subagent_invocations(
     )
 
 
+def get_subagent_invocation(invocation_id: str) -> dict[str, Any] | None:
+    """按 invocation id 获取 Subagent 持久任务。"""
+
+    return _trace_record_store().get_invocation(invocation_id)
+
+
+def reconcile_interrupted_subagent_invocations() -> int:
+    """启动期收口上个后端进程遗留的 running Subagent task。"""
+
+    return _trace_record_store().reconcile_interrupted_invocations()
+
+
+def append_subagent_transcript_item(
+    *,
+    invocation_id: str,
+    kind: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """追加 Subagent invocation 的 transcript 条目。"""
+
+    return _trace_record_store().append_transcript_item(
+        invocation_id=invocation_id,
+        kind=kind,
+        payload=payload,
+    )
+
+
+def list_subagent_transcript_items(invocation_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
+    """列出 Subagent invocation transcript。"""
+
+    return _trace_record_store().list_transcript_items(invocation_id, limit=limit)
+
+
 def list_run_events_by_type(
     event_type: str,
     *,
@@ -1305,8 +1437,6 @@ def _chat_run_record_store() -> ChatRunRecordStore:
         connect=_connect,
         lock=_lock,
         utc_now=_utc_now,
-        dumps=_dumps,
-        loads=_loads,
         default_workspace_id=DEFAULT_WORKSPACE_ID,
         default_project_id=DEFAULT_PROJECT_ID,
     )
@@ -1324,43 +1454,23 @@ def update_chat_run_status(run_id: str, status: str, completed_at: str | None = 
     _chat_run_record_store().update_status(run_id, status, completed_at)
 
 
-def append_chat_run_event(run_id: str, raw_event: str) -> dict[str, Any]:
-    """追加一个 Chat Run 原始 SSE 事件。"""
-
-    return _chat_run_record_store().append_event(run_id, raw_event)
-
-
-def upsert_chat_run_state(run_id: str, state: dict[str, Any]) -> dict[str, Any]:
-    """保存一个 RunState 快照。"""
-
-    return _chat_run_record_store().upsert_state(run_id, state)
-
-
-def get_chat_run_state(run_id: str) -> dict[str, Any] | None:
-    """读取一个 RunState 快照。"""
-
-    return _chat_run_record_store().get_state(run_id)
-
-
 def list_chat_runs(
     limit: int = 50,
     *,
-    include_events: bool = True,
     project_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """列出持久化 Chat Run。"""
 
     return _chat_run_record_store().list(
         limit,
-        include_events=include_events,
         project_id=project_id,
     )
 
 
-def get_chat_run(run_id: str, *, event_limit: int | None = None) -> dict[str, Any] | None:
+def get_chat_run(run_id: str) -> dict[str, Any] | None:
     """读取一个持久化 Chat Run。"""
 
-    return _chat_run_record_store().get(run_id, event_limit=event_limit)
+    return _chat_run_record_store().get(run_id)
 
 
 def _workflow_record_store() -> WorkflowRecordStore:

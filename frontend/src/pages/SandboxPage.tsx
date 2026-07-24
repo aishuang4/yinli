@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Copy, FlaskConical, Loader2, Wrench } from 'lucide-react';
+import { FlaskConical, Loader2 } from 'lucide-react';
 import { Tag } from '@agentscope-ai/design';
 import { SandboxControlPanel, type SandboxCase } from '../features/sandbox/SandboxControlPanel';
-import { MarkdownContent } from '../components/MarkdownContent';
 import { useAgents } from '../hooks/useAgents';
-import { useEventStream, type ToolCallInfo } from '../hooks/useEventStream';
-import { TeamConsolePanel } from '../features/chat/TeamDisplayBlock';
+import { useEventStream } from '../hooks/useEventStream';
+import { RuntimeBlockTree } from '../features/runtime-stream/RuntimeBlockTree';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
@@ -148,7 +147,8 @@ export function SandboxPage() {
 }
 
 function SandboxResult({ state }: { state: ReturnType<typeof useEventStream>['state'] }) {
-  if (!state.isStreaming && !state.textContent && !state.error && state.toolCalls.length === 0 && !state.teamConsole.snapshot && state.skillCalls.length === 0) {
+  const snapshot = state.runtime.snapshot;
+  if (!state.isStreaming && snapshot.order.length === 0 && !state.error) {
     return (
       <div className="flex h-full items-center justify-center text-[var(--color-text-tertiary)]">
         <div className="text-center">
@@ -170,96 +170,7 @@ function SandboxResult({ state }: { state: ReturnType<typeof useEventStream>['st
       {state.error && (
         <div className="rounded-md border border-[var(--color-border)] p-3 text-sm text-[var(--color-error)]">{state.error}</div>
       )}
-      {state.skillCalls.length > 0 && (
-        <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">Skills</div>
-          <div className="flex flex-wrap gap-1">
-            {state.skillCalls.map((skill) => <Tag key={skill.id} size="small" color="green">{skill.name}</Tag>)}
-          </div>
-        </section>
-      )}
-      {state.teamConsole.snapshot && (
-        <div className="h-[640px] overflow-hidden rounded-md border border-[var(--color-border)]">
-          <TeamConsolePanel state={state.teamConsole} />
-        </div>
-      )}
-      {state.toolCalls.length > 0 && <SandboxToolList title="Agent 工具调用" toolCalls={state.toolCalls} />}
-      {state.thinkingContent && (
-        <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-          <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">深度思考</div>
-          <MarkdownContent content={state.thinkingContent} />
-        </section>
-      )}
-      {state.textContent && (
-        <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
-          <MarkdownContent content={state.textContent} streaming={state.isStreaming} />
-        </section>
-      )}
+      <RuntimeBlockTree snapshot={snapshot} />
     </div>
   );
-}
-
-function SandboxToolList({ title, toolCalls, compact = false }: { title: string; toolCalls: ToolCallInfo[]; compact?: boolean }) {
-  return (
-    <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
-      <div className="mb-2 flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
-        <Wrench size={12} />
-        {title}
-      </div>
-      <div className={`${compact ? 'max-h-72' : 'max-h-96'} grid gap-2 overflow-y-auto pr-1`}>
-        {toolCalls.map((toolCall) => (
-          <div key={toolCall.id} className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-2">
-            <div className="flex min-w-0 items-center justify-between gap-2">
-              <span className="min-w-0 truncate text-sm font-medium text-[var(--color-text-primary)]" title={normalizeToolDisplayName(toolCall.name)}>
-                {normalizeToolDisplayName(toolCall.name)}
-              </span>
-              <div className="flex shrink-0 items-center gap-1">
-                {(toolCall.args || toolCall.result) && (
-                  <button
-                    type="button"
-                    className="inline-flex h-6 w-6 items-center justify-center rounded text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-                    title="复制工具内容"
-                    onClick={() => void copyTextToClipboard(toolCall.result || toolCall.args)}
-                  >
-                    <Copy size={12} />
-                  </button>
-                )}
-                <Tag size="small" color={toolCall.status === 'failed' ? 'red' : toolCall.status === 'completed' ? 'green' : 'blue'}>{toolCall.status}</Tag>
-              </div>
-            </div>
-            {!compact && (toolCall.args || toolCall.result) && (
-              <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-xs text-[var(--color-text-tertiary)]">
-                {toolCall.result || toolCall.args}
-              </pre>
-            )}
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-async function copyTextToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', 'true');
-  textarea.style.position = 'fixed';
-  textarea.style.left = '-9999px';
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand('copy');
-  document.body.removeChild(textarea);
-}
-
-function normalizeToolDisplayName(name: string): string {
-  const value = String(name || 'tool');
-  const parts = value.split('_');
-  if (parts.length === 2 && parts[0] && parts[0] === parts[1]) {
-    return parts[0];
-  }
-  return value;
 }

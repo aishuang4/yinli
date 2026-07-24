@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.server.routes import agent_builder, agents, chat, health, mcp, memory, sandbox, settings as settings_routes, skills, subagents, tools, traces, workflows, workspaces
 from src.agents.agentscope_usage_patch import patch_agentscope_usage_events
 from src.config.settings import settings
-from src.storage.database import init_db, close_db
+from src.storage.database import close_db, init_db, reconcile_interrupted_subagent_invocations
 from src.server.routes.chat.team_runtime.maintenance import maintain_team_runtime_runs
 from src.server.local_access import LocalAccessMiddleware
 
@@ -33,6 +33,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # === 启动 ===
     patch_agentscope_usage_events()
     await init_db()
+    interrupted_subagents = reconcile_interrupted_subagent_invocations()
+    if interrupted_subagents:
+        print(f"[Subagent] reconciled {interrupted_subagents} interrupted task(s)")
     team_maintenance = maintain_team_runtime_runs(
         retention_days=settings.team_run_retention_days,
         max_records=settings.team_run_max_records,

@@ -1,18 +1,12 @@
-"""Chat 事件类型定义。
-
-AgentScope 原始事件和工作台应用级 Runtime Event 分开维护：
-- 原始事件继续用于模型/工具流式输出和 Trace 调试。
-- Runtime Event 用于 Chat、Run Center、Team 面板等业务 UI。
-"""
+"""Chat 进程内 SourceEvent 与 Runtime Trace 类型定义。"""
 
 from typing import Literal
 
 
-SSE_EVENT_RUNTIME = "RUNTIME_EVENT"
-SSE_EVENT_TEAM = "TEAM_EVENT"
+RUNTIME_EVENT_TRACE = "RUNTIME_EVENT"
 
 
-AgentScopeSseEventType = Literal[
+AgentScopeSourceEventType = Literal[
     "RUN",
     "SESSION",
     "REPLY_START",
@@ -41,7 +35,7 @@ AgentScopeSseEventType = Literal[
     "ERROR",
     "RUN_CANCELLED",
     "RUNTIME_EVENT",
-    "TEAM_EVENT",
+    "TEAM_DOMAIN_EVENT",
 ]
 
 
@@ -80,6 +74,7 @@ RuntimeEventType = Literal[
     "PLAN_TOOL_DENIED",
     "PLAN_TASKS_UPDATED",
     "PLAN_TASK_OUTPUT",
+    "SUBAGENT_QUEUED",
     "SUBAGENT_STARTED",
     "SUBAGENT_CONTEXT",
     "SUBAGENT_WAITING_HUMAN",

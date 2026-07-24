@@ -1,6 +1,6 @@
 # 引力 YINLI 当前架构总览
 
-> 状态：2026-07-20 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
+> 状态：2026-07-23 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
 
 ## 项目定位
 
@@ -30,7 +30,8 @@
 8. `run_context.py` 在 readiness 通过后按 Workspace、Project、Agent 和请求白名单裁剪可用 Skill catalog，并注入记忆上下文；完整 `SKILL.md` 不预注入 system prompt。
 9. `leader_stream.py` 消费 AgentScope `reply_stream()`，转换文本、工具、权限、Plan Mode、Skill 和 HITL 事件。
 10. `completion.py` 完成消息落库、Trace、Skill 状态和错误收尾，并在轻量 `MemoryAdmissionGate` 后触发 Markdown 记忆提炼和历史记忆持久化。
-11. `background_runs.py` 将后台 Run 与前端 SSE 订阅解耦，并维护 RunState。
+11. `background_runs.py` 将后台 Run 与前端 SSE 订阅解耦，把结构化 SourceEvent 送入 Domain Event 和 ProjectionRunner。
+12. `projection/` 按 Run 内全局 ordinal 串行投影为 RuntimeFrame，并维护 DisplaySnapshot V4、tail replay、retention 和 terminal done。
 
 ## Workspace / Project
 
@@ -40,7 +41,7 @@
 - Chat 请求只传 `project_id`；Workspace 必须由 Project 反查，现有 Session 不允许跨 Project 继续。
 - `runtime_context.py` 在 Runtime 创建前解析 Project root、instructions 和 ownership。
 - Project root 与 Agent filesystem scope 取交集；不相交时拒绝执行。
-- TeamRun、Subagent invocation、Memory、Trace 和 RunState 继承父运行归属。
+- TeamRun、Subagent invocation、Memory、Trace、Domain Event 和 Projection stream 继承父运行归属。
 - Project resource binding 已作为运行时白名单参与 Agent、Skill、MCP Server 和 HTTP Tool 裁剪；资源必须属于 Project 所在 Workspace，Project 只能收窄 Agent 配置。
 - 前端使用统一 Workspace / Project 上下文；Chat、Runs、Trace、Memory 和资源管理按当前上下文筛选，切换 Project 时清理 Chat 与 Team 运行投影。
 - Workspace 与首个 Project 通过 bootstrap API 原子创建；正式 Artifact ownership 留在 Artifact Phase。
@@ -67,18 +68,20 @@ Team Runtime 是一次性 `TeamRun`。用户在单 Agent 模式选择 Agent，�
 - 共享事实只允许通过 Task List、Mailbox、member directory、result artifacts 和 events/snapshots 表达。
 - 用户可以向任意 Member 发送 mailbox 消息，作为本轮运行中的直接干预。
 - Member 提交结果前必须清空未读 Mailbox；综合阶段使用完整 Mailbox，综合期间的新消息会触发重新综合。
-- Team 只使用顶层 `TEAM_EVENT`；旧事件、旧历史投影和静态成员选择链路不读取、不兼容。
+- Team 领域状态仍以 file-first store 和领域事件为事实源；Chat 只读取 `kind=team` 投影 Block，不读取 Team 文件状态或顶层业务 SSE。
 
-## RunState 与前端主展示
+## Event Stream 与前端主展示
 
-Chat 主界面只依赖 RunState / DisplaySnapshot：
+Chat 主界面只依赖 `RUNTIME_EVENT: RuntimeFrame` 与 DisplaySnapshot V4：
 
 - `/api/chat/send/start` 创建后台 Run。
 - `/api/chat/resume/start` 恢复 HITL / AskUser 外部执行暂停的原 Run。
-- `/api/chat/runs/{run_id}/state` 返回完整快照。
-- `/api/chat/runs/{run_id}/state/stream` 首包返回 `RUN_STATE`，后续返回 `RUN_STATE_PATCH`。
+- `/api/chat/runs/{run_id}/state` 返回 DisplaySnapshot V4。
+- `/api/chat/runs/{run_id}/stream?afterSeq=N` 返回连续 tail；无法连续恢复时返回 Snapshot。
 
-原始 SSE 事件保留给兼容流、Trace 和后端 projector，不作为 Chat 主界面长期状态来源。稳定契约见 `docs/chat-sse-event-contract.md`。
+后端固定链路是 `SourceEvent -> DomainEvent -> ProjectionRunner -> per-kind projector -> BlockLifecycleCoordinator -> ProjectionStreamStore`。前端固定链路是 `decodeRuntimeFrame -> streamAdapter -> Block Tree reducer -> kind module/renderer`。
+
+RunState、DisplayEvent、旧 `event_hub`、旧 adapter/reducer 和旧 Snapshot reader 已删除。稳定契约见 `docs/chat-sse-event-contract.md`，实现说明见 `docs/event-stream-architecture-redesign.md`。
 
 ## Plan Mode
 
@@ -145,13 +148,12 @@ Chat 主界面只依赖 RunState / DisplaySnapshot：
 
 - `frontend/src/App.tsx`：页面映射、主题同步和健康检查。
 - `frontend/src/pages/ChatPage.tsx`：Chat 主页面。
-- `frontend/src/hooks/useEventStream.ts`：RunState / SSE 订阅入口。
-- `frontend/src/types/runState.ts`：RunState 主链路类型。
-- `frontend/src/types/displayEvents.ts`：DisplaySnapshot / DisplayEvent 展示契约。
-- `frontend/src/features/chat/*`：Chat 展示投影与渲染组件。
+- `frontend/src/hooks/useEventStream.ts`：RuntimeFrame SSE 订阅入口。
+- `frontend/src/features/runtime-stream/`：协议 decoder、stream adapter、Block Tree reducer、kind registry 和 renderer。
+- `frontend/src/features/chat/*`：Chat 输入、消息布局和 HITL 命令组件。
 
 ## 开发原则
 
 - 新 Chat 事件先更新 `docs/chat-sse-event-contract.md`。
-- 新运行时能力优先接入 ReAct / middleware / RunState，不恢复旧 Runtime 分支。
+- 新运行时能力优先接入 ReAct / middleware，并通过新的 per-kind projector 接入 Block Tree，不恢复旧 Runtime 或 RunState 分支。
 - 文档只保留当前事实、稳定契约和明确待办；实验记录完成后应合并进 TODO 或删除。

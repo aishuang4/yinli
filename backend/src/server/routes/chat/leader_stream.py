@@ -8,7 +8,7 @@ from typing import AsyncGenerator
 from agentscope.event import ExternalExecutionResultEvent
 from agentscope.message import TextBlock, ToolResultBlock, ToolResultState
 
-from src.server.routes.chat.helpers import _set_skill_run_status, _sse_event
+from src.server.routes.chat.helpers import _set_skill_run_status, source_event
 from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload
 from src.server.routes.chat.lifecycle import waiting_reason, waiting_status_for_interaction
 from src.server.routes.chat.models import (
@@ -31,9 +31,11 @@ from src.server.routes.chat.plan_stream import (
     plan_runtime_event_from_tool_result as _plan_runtime_event_from_tool_result,
 )
 from src.server.routes.chat.runtime_events import (
-    runtime_event_from_agentscope_sse,
-    runtime_event_sse,
+    runtime_event_from_agentscope_event,
+    runtime_trace_source_event,
+    runtime_source_event,
 )
+from src.server.routes.chat.projection.source_events import SourceEvent
 from src.server.routes.chat.skill_runs import start_or_resume_skill_run, update_skill_run_status
 from src.server.routes.skills import Skill, list_skill_usage_details, resolve_installed_skills
 from src.server.routes.chat.store import _append_assistant_message
@@ -115,6 +117,39 @@ def _collect_pending_hitl_batch(
         seen_ids.add(tool_call_id)
 
 
+def _flush_pending_reasoning_events(
+    state: LeaderStreamState,
+    *,
+    session_id: str,
+    stream_scope: str,
+    source_event_type: str,
+    agent_id: str,
+    agent_name: str,
+) -> list[SourceEvent]:
+    """把工具调用前累计的普通文本立即投成独立 reasoning 段。"""
+
+    pending = state.pending_text
+    if not pending:
+        return []
+    state.pending_text = ""
+    state.assistant_reasoning_text += pending
+    return [
+        runtime_trace_source_event(
+            "AGENT_REASONING_DELTA",
+            session_id=session_id,
+            scope=stream_scope,
+            source="runtime",
+            source_event_type=source_event_type,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            status="running",
+            payload={"delta": pending},
+            collect=state.runtime_events,
+        ),
+        source_event("REASONING_DELTA", {"delta": pending}),
+    ]
+
+
 async def stream_leader_agent_reply(
     *,
     agent: object,
@@ -151,17 +186,16 @@ async def stream_leader_agent_reply(
             state.reply_had_tool_call = True
         if event_type == "EXCEED_MAX_ITERS":
             state.exceeded_max_iters = True
-            if state.pending_text:
-                state.assistant_reasoning_text += state.pending_text
-                yield runtime_event_sse(
-                    "AGENT_REASONING_DELTA", session_id=session_id, scope=stream_scope,
-                    source="runtime", source_event_type=event_type, agent_id=agent_id,
-                    agent_name=agent_name, status="running", payload={"delta": state.pending_text},
-                    collect=state.runtime_events,
-                )
-                yield _sse_event("REASONING_DELTA", {"delta": state.pending_text})
-                state.pending_text = ""
-            yield runtime_event_sse(
+            for reasoning_event in _flush_pending_reasoning_events(
+                state,
+                session_id=session_id,
+                stream_scope=stream_scope,
+                source_event_type=event_type,
+                agent_id=agent_id,
+                agent_name=agent_name,
+            ):
+                yield reasoning_event
+            yield runtime_trace_source_event(
                 "AGENT_FAILED",
                 session_id=session_id,
                 scope=stream_scope,
@@ -181,32 +215,25 @@ async def stream_leader_agent_reply(
         if plan_mode_manager is not None:
             for runtime_event in plan_mode_manager.drain_runtime_events():
                 state.runtime_events.append(runtime_event)
-                yield _sse_event("RUNTIME_EVENT", runtime_event)
+                yield runtime_source_event(runtime_event)
                 if runtime_event.get("type") == "PLAN_FINALIZED":
                     _remember_pending_plan_finalized(state, runtime_event)
         for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
             state.runtime_events.append(runtime_event)
-            yield _sse_event("RUNTIME_EVENT", runtime_event)
+            yield runtime_source_event(runtime_event)
         if _is_final_answer_tool_event(event_type, event_data, state):
-            if state.pending_text:
-                state.assistant_reasoning_text += state.pending_text
-                yield runtime_event_sse(
-                    "AGENT_REASONING_DELTA",
-                    session_id=session_id,
-                    scope=stream_scope,
-                    source="runtime",
-                    source_event_type=event_type,
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    status="running",
-                    payload={"delta": state.pending_text},
-                    collect=state.runtime_events,
-                )
-                yield _sse_event("REASONING_DELTA", {"delta": state.pending_text})
-                state.pending_text = ""
+            for reasoning_event in _flush_pending_reasoning_events(
+                state,
+                session_id=session_id,
+                stream_scope=stream_scope,
+                source_event_type=event_type,
+                agent_id=agent_id,
+                agent_name=agent_name,
+            ):
+                yield reasoning_event
             if event_type == "TOOL_CALL_START":
                 state.final_answer_started = True
-                yield runtime_event_sse(
+                yield runtime_trace_source_event(
                     "AGENT_FINAL_ANSWER_STARTED",
                     session_id=session_id,
                     scope=stream_scope,
@@ -222,6 +249,16 @@ async def stream_leader_agent_reply(
                     collect=state.runtime_events,
                 )
             continue
+        if event_type == "TOOL_CALL_START":
+            for reasoning_event in _flush_pending_reasoning_events(
+                state,
+                session_id=session_id,
+                stream_scope=stream_scope,
+                source_event_type=event_type,
+                agent_id=agent_id,
+                agent_name=agent_name,
+            ):
+                yield reasoning_event
         _attach_provider_cache_usage(event_type, event_data)
         if event_type == "MODEL_CALL_END":
             cache_entry = _model_cache_from_event(event_data, model_name)
@@ -297,7 +334,7 @@ async def stream_leader_agent_reply(
         )
         if artifact_event:
             artifact_type, artifact_payload = artifact_event
-            yield runtime_event_sse(
+            yield runtime_trace_source_event(
                 artifact_type,
                 session_id=session_id,
                 scope="artifact",
@@ -311,9 +348,12 @@ async def stream_leader_agent_reply(
             )
 
         if event_type == "REQUIRE_EXTERNAL_EXECUTION" and _is_delegate_task_external_event(event_data):
-            manager = _find_subagent_manager(runtime_event_sources or [])
+            manager = await _find_subagent_manager(
+                runtime_event_sources or [],
+                agent=agent,
+            )
             if manager is None:
-                yield _sse_event("ERROR", {"message": "DelegateTask external executor is not available."})
+                yield source_event("ERROR", {"message": "DelegateTask external executor is not available."})
                 state.stopped = True
                 state.stop_reason = "subagent_executor_missing"
                 return
@@ -329,13 +369,13 @@ async def stream_leader_agent_reply(
                         while not execution_task.done():
                             for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
                                 state.runtime_events.append(runtime_event)
-                                yield _sse_event("RUNTIME_EVENT", runtime_event)
+                                yield runtime_source_event(runtime_event)
                             await asyncio.sleep(0.1)
                         execution_results.append(await execution_task)
                     finally:
                         for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
                             state.runtime_events.append(runtime_event)
-                            yield _sse_event("RUNTIME_EVENT", runtime_event)
+                            yield runtime_source_event(runtime_event)
                 resume_event = ExternalExecutionResultEvent(
                     reply_id=str(event_data.get("reply_id") or ""),
                     execution_results=execution_results,
@@ -362,7 +402,7 @@ async def stream_leader_agent_reply(
             except SubagentDelegationWaiting as exc:
                 for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
                     state.runtime_events.append(runtime_event)
-                    yield _sse_event("RUNTIME_EVENT", runtime_event)
+                    yield runtime_source_event(runtime_event)
                 interaction = PENDING_INTERACTIONS.get(exc.interaction_id)
                 if interaction is not None:
                     delegated_tool_call = dict(tool_calls[0])
@@ -388,7 +428,21 @@ async def stream_leader_agent_reply(
                         interaction.type,
                         interaction.resume_tool_calls,
                     )
-                    yield runtime_event_sse(
+                    if persist:
+                        _append_assistant_message(
+                            session_id=session_id,
+                            agent_id=agent_id,
+                            agent_name=agent_name,
+                            model_name=model_name,
+                            content=state.assistant_text,
+                            error=None,
+                            thinking=state.assistant_thinking,
+                            skill_calls=skill_runs,
+                            tool_calls=state.assistant_tool_calls,
+                            model_caches=state.assistant_model_caches,
+                            runtime_events=state.runtime_events,
+                        )
+                    yield runtime_trace_source_event(
                         "RUN_WAITING",
                         session_id=session_id,
                         scope="run",
@@ -406,7 +460,7 @@ async def stream_leader_agent_reply(
                         },
                         collect=state.runtime_events,
                     )
-                    yield _sse_event("HITL_REQUIRED", _hitl_payload(interaction))
+                    yield source_event("HITL_REQUIRED", _hitl_payload(interaction))
                 state.stopped = True
                 state.stop_reason = "subagent_hitl"
                 return
@@ -419,13 +473,13 @@ async def stream_leader_agent_reply(
             delta = str(event_data.get("delta", ""))
             if state.final_answer_started:
                 state.assistant_text += delta
-                yield runtime_event_sse(
+                yield runtime_trace_source_event(
                     "AGENT_FINAL_ANSWER_DELTA", session_id=session_id, scope=stream_scope,
                     source="runtime", source_event_type=event_type, agent_id=agent_id,
                     agent_name=agent_name, status="running", payload={"delta": delta},
                     collect=state.runtime_events,
                 )
-                yield _sse_event("FINAL_ANSWER_DELTA", {"delta": delta})
+                yield source_event("FINAL_ANSWER_DELTA", {"delta": delta})
             else:
                 state.pending_text += delta
             continue
@@ -435,7 +489,7 @@ async def stream_leader_agent_reply(
         if event_type == "REPLY_END" and skill_runs:
             completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
             for skill in completed_skill_runs:
-                yield runtime_event_sse(
+                yield runtime_trace_source_event(
                     "SKILL_COMPLETED",
                     session_id=session_id,
                     scope="skill",
@@ -445,41 +499,42 @@ async def stream_leader_agent_reply(
                     payload=skill.model_dump(by_alias=True),
                     collect=state.runtime_events,
                 )
-            yield _sse_event("SKILL_END", {
+            yield source_event("SKILL_END", {
                 "skills": [item.model_dump(by_alias=True) for item in completed_skill_runs],
                 "status": "completed",
             })
 
         if event_type == "REPLY_END" and state.pending_text:
-            pending = state.pending_text
-            state.pending_text = ""
             if state.final_answer_started or not state.reply_had_tool_call:
+                pending = state.pending_text
+                state.pending_text = ""
                 state.final_answer_started = True
                 state.assistant_text += pending
-                yield runtime_event_sse(
+                yield runtime_trace_source_event(
                     "AGENT_FINAL_ANSWER_STARTED", session_id=session_id, scope=stream_scope,
                     source="runtime", source_event_type=event_type, agent_id=agent_id,
                     agent_name=agent_name, status="running", reason="direct_text_response",
                     payload={"recovered": False, "direct": True}, collect=state.runtime_events,
                 )
-                yield runtime_event_sse(
+                yield runtime_trace_source_event(
                     "AGENT_FINAL_ANSWER_DELTA", session_id=session_id, scope=stream_scope,
                     source="runtime", source_event_type=event_type, agent_id=agent_id,
                     agent_name=agent_name, status="running", reason="direct_text_response",
                     payload={"delta": pending, "direct": True}, collect=state.runtime_events,
                 )
-                yield _sse_event("FINAL_ANSWER_DELTA", {"delta": pending})
+                yield source_event("FINAL_ANSWER_DELTA", {"delta": pending})
             else:
-                state.assistant_reasoning_text += pending
-                yield runtime_event_sse(
-                    "AGENT_REASONING_DELTA", session_id=session_id, scope=stream_scope,
-                    source="runtime", source_event_type=event_type, agent_id=agent_id,
-                    agent_name=agent_name, status="running", payload={"delta": pending},
-                    collect=state.runtime_events,
-                )
-                yield _sse_event("REASONING_DELTA", {"delta": pending})
+                for reasoning_event in _flush_pending_reasoning_events(
+                    state,
+                    session_id=session_id,
+                    stream_scope=stream_scope,
+                    source_event_type=event_type,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                ):
+                    yield reasoning_event
 
-        runtime_event = runtime_event_from_agentscope_sse(
+        runtime_event = runtime_event_from_agentscope_event(
             event_type,
             session_id=session_id,
             scope=stream_scope,
@@ -490,10 +545,10 @@ async def stream_leader_agent_reply(
         )
         if runtime_event:
             yield runtime_event
-        yield _sse_event(event_type, event_data)
+        yield source_event(event_type, event_data)
         for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
             state.runtime_events.append(runtime_event)
-            yield _sse_event("RUNTIME_EVENT", runtime_event)
+            yield runtime_source_event(runtime_event)
         if _is_pending_plan_finalization_ready(state, event_type, event_data):
             async for final_event in _stream_pending_plan_final_answer_events(
                 state,
@@ -507,7 +562,7 @@ async def stream_leader_agent_reply(
 
     for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
         state.runtime_events.append(runtime_event)
-        yield _sse_event("RUNTIME_EVENT", runtime_event)
+        yield runtime_source_event(runtime_event)
 
     if pending_hitl_batches:
         if state.active_skill_run and persist:
@@ -515,6 +570,20 @@ async def stream_leader_agent_reply(
                 state.active_skill_run,
                 status="waiting_user",
                 current_step="waiting_hitl_resume",
+            )
+        if persist:
+            _append_assistant_message(
+                session_id=session_id,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                model_name=model_name,
+                content=state.assistant_text,
+                error=None,
+                thinking=state.assistant_thinking,
+                skill_calls=skill_runs,
+                tool_calls=state.assistant_tool_calls,
+                model_caches=state.assistant_model_caches,
+                runtime_events=state.runtime_events,
             )
         for batch in pending_hitl_batches:
             interaction = _create_pending_interaction(
@@ -545,7 +614,7 @@ async def stream_leader_agent_reply(
                 interaction.type,
                 interaction.resume_tool_calls,
             )
-            yield runtime_event_sse(
+            yield runtime_trace_source_event(
                 "RUN_WAITING",
                 session_id=session_id,
                 scope="run",
@@ -563,7 +632,7 @@ async def stream_leader_agent_reply(
                 },
                 collect=state.runtime_events,
             )
-            yield runtime_event_sse(
+            yield runtime_trace_source_event(
                 "AGENT_WAITING_HUMAN",
                 session_id=session_id,
                 scope=stream_scope,
@@ -576,7 +645,7 @@ async def stream_leader_agent_reply(
                 payload={"interactionId": interaction.id, "interactionType": interaction.type},
                 collect=state.runtime_events,
             )
-            yield _sse_event("HITL_REQUIRED", _hitl_payload(interaction))
+            yield source_event("HITL_REQUIRED", _hitl_payload(interaction))
         state.stopped = True
         state.stop_reason = "hitl"
         return
@@ -620,7 +689,7 @@ async def stream_leader_agent_reply(
                 runtime_events=state.runtime_events,
                 clarification_requests=[clarification],
             )
-        yield runtime_event_sse(
+        yield runtime_trace_source_event(
             "RUN_WAITING",
             session_id=session_id,
             scope="run",
@@ -636,7 +705,7 @@ async def stream_leader_agent_reply(
             },
             collect=state.runtime_events,
         )
-        yield runtime_event_sse(
+        yield runtime_trace_source_event(
             "CLARIFICATION_WAITING",
             session_id=session_id,
             scope=stream_scope,
@@ -647,7 +716,7 @@ async def stream_leader_agent_reply(
             payload=clarification,
             collect=state.runtime_events,
         )
-        yield _sse_event("CLARIFICATION_REQUIRED", clarification)
+        yield source_event("CLARIFICATION_REQUIRED", clarification)
         state.stopped = True
         state.stop_reason = "clarification"
         return
@@ -717,7 +786,7 @@ def _skill_lifecycle_events(
 
     if event_type == "TOOL_CALL_START":
         payload = {"id": tool_call_id, "name": "Skill", "status": "running"}
-        return [runtime_event_sse(
+        return [runtime_trace_source_event(
             "SKILL_STARTED",
             session_id=session_id,
             scope="skill",
@@ -753,7 +822,7 @@ def _skill_lifecycle_events(
             "status": "failed",
         }
         return [
-            runtime_event_sse(
+            runtime_trace_source_event(
                 "SKILL_FAILED",
                 session_id=session_id,
                 scope="skill",
@@ -765,7 +834,7 @@ def _skill_lifecycle_events(
                 payload=payload,
                 collect=state.runtime_events,
             ),
-            _sse_event("SKILL_END", {"skills": [payload], "status": "failed"}),
+            source_event("SKILL_END", {"skills": [payload], "status": "failed"}),
         ]
 
     skill_run = ChatSkillRun.model_validate({**detail, "status": "running"})
@@ -789,7 +858,7 @@ def _skill_lifecycle_events(
         )
     payload = skill_run.model_dump(by_alias=True)
     return [
-        runtime_event_sse(
+        runtime_trace_source_event(
             "SKILL_CONTEXT",
             session_id=session_id,
             scope="skill",
@@ -801,7 +870,7 @@ def _skill_lifecycle_events(
             payload=payload,
             collect=state.runtime_events,
         ),
-        _sse_event("SKILL_CONTEXT", {"skills": [payload]}),
+        source_event("SKILL_CONTEXT", {"skills": [payload]}),
     ]
 
 
@@ -842,12 +911,25 @@ def _delegate_task_batch_error_results(tool_calls: list[dict]) -> list[ToolResul
     ]
 
 
-def _find_subagent_manager(sources: list[object]) -> object | None:
-    """从 Runtime Event source 列表中找到 Subagent manager。"""
+async def _find_subagent_manager(
+    sources: list[object],
+    *,
+    agent: object | None = None,
+) -> object | None:
+    """从 source 或当前 Agent Toolkit 找到 Subagent manager。"""
 
     for source in sources:
         if isinstance(source, SubagentDelegationManager) or callable(getattr(source, "execute_external_tool_call", None)):
             return source
+    toolkit = getattr(agent, "toolkit", None)
+    get_tool = getattr(toolkit, "get_tool", None)
+    if callable(get_tool):
+        delegate_tool = await get_tool("DelegateTask")
+        manager = getattr(delegate_tool, "_manager", None)
+        if isinstance(manager, SubagentDelegationManager) or callable(
+            getattr(manager, "execute_external_tool_call", None),
+        ):
+            return manager
     return None
 
 
@@ -911,8 +993,8 @@ async def _stream_pending_plan_final_answer_events(
     state.assistant_text += plan_answer
     deltas = _iter_plan_final_answer_deltas(plan_answer)
     for index, delta in enumerate(deltas):
-        yield _sse_event("FINAL_ANSWER_DELTA", {"delta": delta})
-        yield runtime_event_sse(
+        yield source_event("FINAL_ANSWER_DELTA", {"delta": delta})
+        yield runtime_trace_source_event(
             "AGENT_FINAL_ANSWER_DELTA",
             session_id=session_id,
             scope=stream_scope,

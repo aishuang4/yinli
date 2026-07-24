@@ -5,11 +5,11 @@ from collections.abc import AsyncGenerator
 
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.completion import finalize_failed_leader_run, finalize_successful_leader_run
-from src.server.routes.chat.helpers import _sse_event
+from src.server.routes.chat.helpers import source_event
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import ChatRunContext
 from src.server.routes.chat.team_runtime.coordinator import TeamCoordinator
-from src.server.routes.chat.team_runtime.events import team_event_sse
+from src.server.routes.chat.team_runtime.events import team_source_event
 from src.server.routes.chat.team_runtime.member_runtime import run_leader_coordination, run_synthesis
 from src.server.routes.chat.team_runtime.registry import register_team_service, unregister_team_service
 from src.server.routes.chat.team_runtime.store import (
@@ -108,7 +108,7 @@ class TeamRunService:
                 else:
                     break
             await self.flush_events()
-            await self.queue.put(_sse_event("FINAL_ANSWER_REPLACE", {"content": final_answer}))
+            await self.queue.put(source_event("FINAL_ANSWER_REPLACE", {"content": final_answer}))
             async for event in finalize_successful_leader_run(
                 session_id=self.ctx.session_id,
                 persist=self.ctx.persist_run,
@@ -161,7 +161,7 @@ class TeamRunService:
             return
         async with self._publish_lock:
             for event in self.publisher.drain():
-                await self.queue.put(team_event_sse(event))
+                await self.queue.put(team_source_event(event))
 
     async def send_user_mail(self, *, recipient: str, content: str) -> dict:
         """用户向当前 active TeamRun 成员投递干预消息。"""

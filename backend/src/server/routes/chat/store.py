@@ -118,7 +118,6 @@ def _append_assistant_message(
     runtime_events: list[dict] | None = None,
     plan_runs: list | None = None,
     display_snapshot: dict | None = None,
-    team_snapshot: dict | None = None,
     clarification_requests: list[dict] | None = None,
     clarification_resolved: bool = False,
 ) -> None:
@@ -141,8 +140,13 @@ def _append_assistant_message(
         model_caches=[],
         runtime_events=[],
         plan_runs=[],
-        display_snapshot=display_snapshot or {"version": 3, "mode": "single_agent", "actors": [], "blocks": []},
-        team_snapshot=team_snapshot,
+        display_snapshot=display_snapshot or {
+            "version": 4,
+            "lastSeq": 0,
+            "streamDone": False,
+            "order": [],
+            "blocksById": {},
+        },
         clarification_requests=clarification_requests or [],
         clarification_resolved=clarification_resolved,
         created_at=now,
@@ -162,38 +166,46 @@ def _update_latest_assistant_display_snapshot(
     display_snapshot: dict,
     min_created_at: str = "",
 ) -> None:
-    """把当前 RunState 展示快照写回最近一条 Assistant 消息。"""
+    """把 V4 Snapshot 写回最新消息，并移除同一 Run 的旧等待占位消息。"""
 
     store = _load_store()
     messages = store.messages.get(session_id) or []
-    for message in reversed(messages):
+    target_index: int | None = None
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
         if message.role != "assistant":
             continue
         if min_created_at and message.created_at < min_created_at:
             return
-        message.display_snapshot = display_snapshot
-        _save_store(store)
+        target_index = index
+        break
+    if target_index is None:
         return
 
-
-def _update_latest_assistant_team_snapshot(
-    *,
-    session_id: str,
-    team_snapshot: dict,
-    min_created_at: str = "",
-) -> None:
-    """把当前 TeamRun 快照写回本轮 Assistant 消息。"""
-
-    store = _load_store()
-    messages = store.messages.get(session_id) or []
-    for message in reversed(messages):
-        if message.role != "assistant":
-            continue
-        if min_created_at and message.created_at < min_created_at:
-            return
-        message.team_snapshot = team_snapshot
-        _save_store(store)
-        return
+    messages[target_index].display_snapshot = display_snapshot
+    root_ids = {
+        str(block_id)
+        for block_id, block in (display_snapshot.get("blocksById") or {}).items()
+        if isinstance(block, dict) and block.get("kind") == "message"
+    }
+    if root_ids:
+        duplicate_indices = {
+            index
+            for index, message in enumerate(messages)
+            if index != target_index
+            and message.role == "assistant"
+            and root_ids.intersection(((message.display_snapshot or {}).get("blocksById") or {}).keys())
+        }
+        if duplicate_indices:
+            messages[:] = [
+                message
+                for index, message in enumerate(messages)
+                if index not in duplicate_indices
+            ]
+            session = next((item for item in store.sessions if item.id == session_id), None)
+            if session is not None:
+                session.message_count = len(messages)
+    _save_store(store)
 
 
 def _make_session_title(content: str) -> str:

@@ -1,8 +1,5 @@
 """Chat Run 查询、订阅、重跑和取消端点。"""
 
-import asyncio
-import json
-
 from fastapi import HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -11,12 +8,12 @@ from src.server.routes.agents import get_registered_agent
 from src.server.routes.chat.background_runs import (
     cancel_chat_background_run,
     get_chat_background_run,
+    get_chat_projection_snapshot,
     list_chat_background_runs,
     serialize_chat_background_run,
     subscribe_chat_background_run,
-    subscribe_chat_run_state,
 )
-from src.server.routes.chat.handlers.send import send_message
+from src.server.routes.chat.handlers.send import start_chat_run
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.lifecycle import ACTIVE_RUN_STATUSES
 from src.server.routes.chat.router import router
@@ -66,14 +63,14 @@ async def send_team_mail(
 @router.get("/runs/{run_id}/stream")
 async def stream_run(
     run_id: str,
-    replay: bool = True,
+    after_seq: int | None = Query(default=None, alias="afterSeq", ge=0),
     project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
 ) -> StreamingResponse:
     """重新订阅后台 Chat Run 事件。"""
 
     await _get_project_run(run_id, project_id)
     return StreamingResponse(
-        subscribe_chat_background_run(run_id, replay=replay),
+        subscribe_chat_background_run(run_id, after_seq=after_seq),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -103,7 +100,7 @@ async def get_run(
     run = await _get_project_run(run_id, project_id)
     return {
         **serialize_chat_background_run(run),
-        "events": run.events,
+        "snapshot": get_chat_projection_snapshot(run.id),
     }
 
 
@@ -114,33 +111,8 @@ async def get_run_state(
 ) -> dict:
     """读取一个后台 Chat Run 的前端状态快照。"""
 
-    run = await _get_project_run(run_id, project_id)
-    if not run.state:
-        from src.server.routes.chat.event_hub import initial_run_state
-
-        return initial_run_state(run)
-    from src.server.routes.chat.event_hub import normalize_run_state
-
-    return normalize_run_state(run.state)
-
-
-@router.get("/runs/{run_id}/state/stream")
-async def stream_run_state(
-    run_id: str,
-    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
-) -> StreamingResponse:
-    """订阅 RunState 中间层状态流。"""
-
     await _get_project_run(run_id, project_id)
-    return StreamingResponse(
-        subscribe_chat_run_state(run_id),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return get_chat_projection_snapshot(run_id)
 
 
 @router.post("/runs/{run_id}/rerun")
@@ -154,11 +126,7 @@ async def rerun_run(
     if source_run.status in ACTIVE_RUN_STATUSES:
         raise HTTPException(status_code=409, detail="Only terminal runs can be rerun")
 
-    response = await send_message(_build_rerun_chat_message(source_run))
-    new_run_id = await _read_started_run_id(response)
-    new_run = await get_chat_background_run(new_run_id)
-    if new_run is None:
-        raise HTTPException(status_code=500, detail="Rerun was started but cannot be loaded")
+    new_run = await start_chat_run(_build_rerun_chat_message(source_run))
     return serialize_chat_background_run(new_run)
 
 
@@ -197,45 +165,3 @@ def _build_rerun_chat_message(source_run) -> ChatMessage:
         mode=source_run.mode,
         images=images,
     )
-
-
-async def _read_started_run_id(response: StreamingResponse) -> str:
-    """读取 send_message 返回流的首个 RUN 事件，拿到新建后台 Run ID。"""
-
-    iterator = response.body_iterator
-    try:
-        async with asyncio.timeout(5):
-            async for chunk in iterator:
-                raw = chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
-                event_type, data = _parse_sse_chunk(raw)
-                if event_type == "RUN":
-                    run_id = str(data.get("run_id") or data.get("runId") or "")
-                    if run_id:
-                        return run_id
-                if event_type == "ERROR":
-                    raise HTTPException(status_code=500, detail=str(data.get("message") or "Rerun failed"))
-    except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="Timed out waiting for rerun to start") from exc
-    finally:
-        close = getattr(iterator, "aclose", None)
-        if callable(close):
-            await close()
-    raise HTTPException(status_code=500, detail="Rerun did not emit a RUN event")
-
-
-def _parse_sse_chunk(raw: str) -> tuple[str, dict]:
-    """解析单个 SSE 文本块。"""
-
-    event_type = ""
-    data_lines: list[str] = []
-    for line in raw.splitlines():
-        if line.startswith("event:"):
-            event_type = line.removeprefix("event:").strip()
-        elif line.startswith("data:"):
-            data_lines.append(line.removeprefix("data:").strip())
-    if not data_lines:
-        return event_type, {}
-    try:
-        return event_type, json.loads("\n".join(data_lines))
-    except json.JSONDecodeError:
-        return event_type, {}

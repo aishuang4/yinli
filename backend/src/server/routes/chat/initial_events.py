@@ -2,9 +2,9 @@
 
 from typing import AsyncGenerator
 
-from src.server.routes.chat.helpers import _sse_event
+from src.server.routes.chat.helpers import source_event
 from src.server.routes.chat.intent_router import route_trace_payload
-from src.server.routes.chat.runtime_events import runtime_event_sse
+from src.server.routes.chat.runtime_events import runtime_trace_source_event
 from src.server.routes.chat.run_context import ChatRunContext
 from src.server.routes.chat.skill_runs import update_skill_run_status
 from src.server.routes.chat.store import _append_assistant_message, _append_user_message
@@ -56,7 +56,7 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
 async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str, None]:
     """输出 SESSION 事件并记录本轮启动 trace。"""
 
-    yield runtime_event_sse(
+    yield runtime_trace_source_event(
         "RUN_STARTED",
         session_id=ctx.session_id,
         scope="run",
@@ -70,7 +70,7 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
         },
     )
     if run_data.sandbox:
-        yield runtime_event_sse(
+        yield runtime_trace_source_event(
             "SANDBOX_STARTED",
             session_id=ctx.session_id,
             scope="sandbox",
@@ -82,7 +82,7 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
                 "model": ctx.model_name,
             },
         )
-    yield _sse_event("SESSION", {
+    yield source_event("SESSION", {
         "session_id": ctx.session_id,
         "workspace_id": ctx.runtime_context.workspace_id,
         "project_id": ctx.runtime_context.project_id,
@@ -176,7 +176,7 @@ async def emit_clarification_if_required(ctx: ChatRunContext) -> AsyncGenerator[
             skill_calls=ctx.skill_runs,
             clarification_requests=[clarification],
         )
-    yield _sse_event("CLARIFICATION_REQUIRED", clarification)
+    yield source_event("CLARIFICATION_REQUIRED", clarification)
 
 
 async def emit_context_events(ctx: ChatRunContext) -> AsyncGenerator[str, None]:

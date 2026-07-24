@@ -207,6 +207,7 @@ class TraceRecordStore:
             "parentAgentId": row["parent_agent_id"], "parentAgentName": row["parent_agent_name"],
             "definitionScope": row["definition_scope"], "definitionPath": row["definition_path"],
             "subagentName": row["subagent_name"], "status": row["status"], "task": row["task"],
+            "executionMode": row.get("execution_mode", "foreground"),
             "expectedOutput": row["expected_output"], "resultPreview": row["result_preview"],
             "error": row["error"], "startedAt": row["started_at"],
             "completedAt": row["completed_at"], "updatedAt": row["updated_at"],
@@ -229,6 +230,7 @@ class TraceRecordStore:
             "definition_scope": data.get("definition_scope") or "",
             "definition_path": data.get("definition_path") or "",
             "subagent_name": data.get("subagent_name") or "",
+            "execution_mode": data.get("execution_mode") or "foreground",
             "status": data.get("status") or "running",
             "task": data.get("task") or "",
             "expected_output": data.get("expected_output") or "",
@@ -244,16 +246,16 @@ class TraceRecordStore:
                 INSERT INTO subagent_invocations (
                     id, run_id, session_id, workspace_id, project_id, tool_call_id, parent_scope,
                     parent_agent_id, parent_agent_name, definition_scope, definition_path,
-                    subagent_name, status, task, expected_output, result_preview, error,
+                    subagent_name, execution_mode, status, task, expected_output, result_preview, error,
                     started_at, completed_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record["id"], record["run_id"], record["session_id"],
                     record["workspace_id"], record["project_id"], record["tool_call_id"],
                     record["parent_scope"], record["parent_agent_id"],
                     record["parent_agent_name"], record["definition_scope"],
-                    record["definition_path"], record["subagent_name"], record["status"],
+                    record["definition_path"], record["subagent_name"], record["execution_mode"], record["status"],
                     record["task"], record["expected_output"], record["result_preview"],
                     record["error"], record["started_at"], record["completed_at"],
                     record["updated_at"],
@@ -274,7 +276,7 @@ class TraceRecordStore:
         self.ensure_db()
         now = self.utc_now()
         completed_value = completed_at if completed_at is not None else (
-            now if status in {"completed", "failed"} else None
+            now if status in {"completed", "failed", "cancelled"} else None
         )
         with self.lock, self.connect() as conn:
             conn.execute(
@@ -321,3 +323,76 @@ class TraceRecordStore:
         with self.lock, self.connect() as conn:
             rows = conn.execute(query, tuple(params)).fetchall()
         return [self._invocation_to_api(dict(row)) for row in rows]
+
+    def get_invocation(self, invocation_id: str) -> dict[str, Any] | None:
+        """按稳定 invocation id 查询单个 Subagent task。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute("SELECT * FROM subagent_invocations WHERE id = ?", (invocation_id,)).fetchone()
+        return self._invocation_to_api(dict(row)) if row else None
+
+    def reconcile_interrupted_invocations(self) -> int:
+        """将上一进程遗留的 running task 收口为 interrupted。
+
+        waiting task 不依赖 asyncio.Task，且其 HITL 元数据已经写入 run_events；
+        在 checkpoint snapshot 尚未落库前保留 waiting，供后续明确 restart。
+        """
+
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE subagent_invocations
+                SET status = 'interrupted',
+                    error = 'Backend restarted while Subagent was running.',
+                    updated_at = ?
+                WHERE status = 'running'
+                """,
+                (now,),
+            )
+            conn.commit()
+        return int(cursor.rowcount)
+
+    def append_transcript_item(
+        self,
+        *,
+        invocation_id: str,
+        kind: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """追加一条按 invocation 单调排序的 Subagent transcript。"""
+
+        self.ensure_db()
+        item_id = f"subagent-transcript-{uuid.uuid4().hex}"
+        created_at = self.utc_now()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM subagent_transcript_items WHERE invocation_id = ?",
+                (invocation_id,),
+            ).fetchone()
+            seq = int(row["next_seq"] if row else 1)
+            conn.execute(
+                """
+                INSERT INTO subagent_transcript_items (id, invocation_id, seq, kind, payload, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (item_id, invocation_id, seq, kind, self.dumps(payload), created_at),
+            )
+            conn.commit()
+        return {"id": item_id, "invocationId": invocation_id, "seq": seq, "kind": kind, "payload": payload, "createdAt": created_at}
+
+    def list_transcript_items(self, invocation_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
+        """读取 invocation 的 transcript，供后续 detail drawer 和恢复使用。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM subagent_transcript_items WHERE invocation_id = ? ORDER BY seq ASC LIMIT ?",
+                (invocation_id, max(1, min(limit, 2_000))),
+            ).fetchall()
+        return [
+            {"id": row["id"], "invocationId": row["invocation_id"], "seq": row["seq"], "kind": row["kind"], "payload": self.loads(row["payload"], {}), "createdAt": row["created_at"]}
+            for row in rows
+        ]

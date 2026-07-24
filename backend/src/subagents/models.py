@@ -26,7 +26,7 @@ class SubagentDefinition:
     disallowed_tools: list[str] = field(default_factory=list)
     model: str = "inherit"
     permission_mode: str = "default"
-    max_turns: int = 20
+    max_turns: int = 30
     skills: list[str] = field(default_factory=list)
     mcp_servers: list[Any] = field(default_factory=list)
     color: str = ""

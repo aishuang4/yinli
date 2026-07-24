@@ -1,76 +1,55 @@
-"""后台 Chat Run 管理。
+"""基于 Event Stream V3 Projection 的后台 Chat Run 管理。"""
 
-把 Agent 执行与前端 SSE 订阅解耦：后端创建后台 task 持续执行 Agent，
-前端连接只负责订阅事件。页面切换、刷新或网络断开不会直接取消后台执行。
-"""
+from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from src.server.routes.chat.background_run_events import (
-    _extract_sse_event_type,
-    _parse_sse_event,
-    _run_state_patch_kind,
-    _run_state_patch_sse,
-    _run_state_sse,
-    _should_emit_run_state_metadata_patch,
-    _status_from_runtime_event_chunk,
-)
-from src.server.routes.chat.background_run_summary import (
-    _empty_run_summary,
-    _fill_result_preview_from_history,
-    _summarize_run_events,
-)
-from src.server.routes.chat.helpers import _sse_event
 from src.server.routes.chat.lifecycle import (
     ACTIVE_RUN_STATUSES,
     TERMINAL_RUN_STATUSES,
     can_transition_run_status,
     is_waiting_run_status,
-    stage_for_run_status,
-    waiting_status_for_interaction,
 )
-from src.server.routes.chat.event_types import SSE_EVENT_RUNTIME, SSE_EVENT_TEAM
-from src.server.routes.chat.event_hub import (
-    consume_run_state_display_events,
-    initial_run_state,
-    normalize_run_state,
-    project_event,
-    refresh_run_state_display_snapshot,
+from src.server.routes.chat.projection import (
+    BlockLifecycleCoordinator,
+    DomainEventRepository,
+    ProjectionRunner,
+    ProjectionStreamService,
+    ProjectionStreamStore,
+    default_projection_registry,
 )
-from src.server.routes.chat.run_state_schema import dump_run_state, dump_run_state_patch
-from src.server.routes.chat.store import (
-    _append_assistant_message,
-    _update_latest_assistant_display_snapshot,
-    _update_latest_assistant_team_snapshot,
-)
+from src.server.routes.chat.projection.frame_schema import RuntimeFrame, dump_protocol
+from src.server.routes.chat.projection.source_normalizer import ChatProjectionNormalizer
+from src.server.routes.chat.projection.source_events import SourceEvent
+from src.server.routes.chat.store import _update_latest_assistant_display_snapshot
 from src.storage.database import (
-    append_chat_run_event,
-    get_chat_run_state,
-    get_latest_assistant_message_preview,
     get_chat_run,
     list_chat_runs,
     update_chat_run_status,
-    upsert_chat_run_state,
     upsert_chat_run,
 )
 
 
-EventStreamFactory = Callable[[], AsyncGenerator[str, None]]
-MAX_BACKGROUND_RUNS = 50
-MAX_EVENTS_PER_RUN = 5000
-COMPLETED_RUN_TTL = timedelta(hours=2)
-WAITING_EVENT_TYPES = {"HITL_REQUIRED", "CLARIFICATION_REQUIRED"}
+SourceStreamFactory = Callable[[], AsyncGenerator[SourceEvent, None]]
 CURRENT_BACKGROUND_RUN_ID: ContextVar[str] = ContextVar("current_chat_background_run_id", default="")
+MAX_BACKGROUND_RUNS = 50
+COMPLETED_RUN_TTL = timedelta(hours=2)
+
+_domain_events = DomainEventRepository()
+_projection_store = ProjectionStreamStore()
+_coordinator = BlockLifecycleCoordinator()
+_stream_service = ProjectionStreamService(store=_projection_store, coordinator=_coordinator)
 
 
 @dataclass
 class ChatBackgroundRun:
-    """进程内后台 Run 状态。"""
+    """进程内执行句柄；展示状态的唯一真相在 Projection Stream。"""
 
     id: str
     session_id: str
@@ -83,122 +62,165 @@ class ChatBackgroundRun:
     status: str = "running"
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     completed_at: str | None = None
-    events: list[str] = field(default_factory=list)
     event_count: int = 0
-    state: dict = field(default_factory=dict)
     subscribers: set[asyncio.Queue[str | None]] = field(default_factory=set)
-    state_subscribers: set[asyncio.Queue[str | None]] = field(default_factory=set)
     async_task: asyncio.Task | None = None
     persisted: bool = False
+    normalizer: ChatProjectionNormalizer | None = None
+
+    @property
+    def stream_key(self) -> str:
+        return f"chat:{self.id}"
 
 
 _runs: dict[str, ChatBackgroundRun] = {}
 _runs_lock = asyncio.Lock()
 
 
+def current_chat_background_run_id() -> str:
+    return CURRENT_BACKGROUND_RUN_ID.get()
+
+
 async def get_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
-    """读取后台 Run 状态。"""
     async with _runs_lock:
         run = _runs.get(run_id)
     if run is not None:
         return run
-    persisted = get_chat_run(run_id, event_limit=100)
-    return _run_from_persisted_record(persisted) if persisted else None
+    record = get_chat_run(run_id)
+    return _run_from_persisted_record(record) if record else None
 
 
 async def list_chat_background_runs(project_id: str | None = None) -> list[ChatBackgroundRun]:
-    """列出当前进程内后台 Run。"""
     async with _runs_lock:
-        memory_runs = list(_runs.values())
-    by_id = {
-        run.id: run
-        for run in memory_runs
-        if not project_id or run.project_id == project_id
-    }
-    for record in list_chat_runs(
-        MAX_BACKGROUND_RUNS,
-        include_events=False,
-        project_id=project_id,
-    ):
+        by_id = {
+            run.id: run
+            for run in _runs.values()
+            if not project_id or run.project_id == project_id
+        }
+    for record in list_chat_runs(MAX_BACKGROUND_RUNS, project_id=project_id):
         if record["id"] not in by_id:
-            record = _normalize_stale_persisted_run(record)
             by_id[record["id"]] = _run_from_persisted_record(record)
-    return sorted(
-        by_id.values(),
-        key=lambda item: item.completed_at or item.created_at,
-        reverse=True,
+    return sorted(by_id.values(), key=lambda item: item.completed_at or item.created_at, reverse=True)
+
+
+async def start_chat_background_run(
+    *,
+    session_id: str,
+    factory: SourceStreamFactory,
+    agent_id: str = "",
+    agent_name: str = "",
+    task: str = "",
+    mode: str = "agent",
+    workspace_id: str = "default",
+    project_id: str = "default",
+    persist: bool = True,
+) -> ChatBackgroundRun:
+    """创建 Run、V3 stream 和根 message Block 后启动后台执行。"""
+
+    run = ChatBackgroundRun(
+        id=f"run-{uuid.uuid4().hex}",
+        session_id=session_id,
+        workspace_id=workspace_id,
+        project_id=project_id,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        task_text=task,
+        mode=mode,
     )
-
-
-def _normalize_stale_persisted_run(record: dict) -> dict:
-    """把不可恢复的历史 active run 收口为 cancelled。
-
-    运行中的 run 只可靠保存在当前进程内；如果重启后仅剩持久化记录，
-    waiting/running/cancelling 都无法继续订阅或 resume，不能继续显示为活跃任务。
-    """
-    if record.get("status") not in ACTIVE_RUN_STATUSES:
-        return record
-    completed_at = record.get("completedAt") or datetime.now(timezone.utc).isoformat()
-    update_chat_run_status(str(record["id"]), "cancelled", completed_at)
-    return {
-        **record,
-        "status": "cancelled",
-        "completedAt": completed_at,
-    }
-
-
-async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
-    """取消一个仍在运行的后台 Run。"""
+    if persist:
+        _persist_run(run)
+    _projection_store.ensure_stream(run.stream_key, run.id)
+    run.normalizer = ChatProjectionNormalizer(
+        stream_key=run.stream_key,
+        run_id=run.id,
+        session_id=run.session_id,
+        events=_domain_events,
+    )
+    run.event_count += len(run.normalizer.start(agent_name=agent_name))
+    _run_projection(run)
     async with _runs_lock:
-        run = _runs.get(run_id)
-        if run is None:
-            persisted = get_chat_run(run_id, event_limit=100)
-            if not persisted:
-                return None
-            completed_at = datetime.now(timezone.utc).isoformat()
-            update_chat_run_status(run_id, "cancelled", completed_at)
-            restored_run = _run_from_persisted_record({
-                **persisted,
-                "status": "cancelled",
-                "completedAt": completed_at,
-            })
-            restored_run.state = _reconcile_terminal_run_state(restored_run)
-            upsert_chat_run_state(run_id, restored_run.state)
-            _persist_latest_assistant_display_snapshot(restored_run, "RUN_CANCELLED", force=True)
-            return restored_run
-        if run.status in TERMINAL_RUN_STATUSES:
-            return run
-        task = run.async_task
-
-    # AgentScope / provider calls may swallow CancelledError briefly. The UI
-    # must still become terminal immediately, and late events must not revive
-    # the cancelled snapshot.
-    await _finalize_cancelled_run(run)
-    if task is not None and not task.done():
-        task.cancel()
+        _prune_runs_locked()
+        _runs[run.id] = run
+    run.async_task = asyncio.create_task(_consume_source_events(run, factory), name=f"chat-run-{run.id}")
     return run
 
 
-def current_chat_background_run_id() -> str:
-    """读取当前事件流所属的后台 Run ID。"""
-    return CURRENT_BACKGROUND_RUN_ID.get()
+async def subscribe_chat_background_run(
+    run_id: str,
+    *,
+    after_seq: int | None = None,
+) -> AsyncGenerator[str, None]:
+    """订阅唯一 V3 stream，并按 afterSeq 恢复。"""
+    queue: asyncio.Queue[str | None] | None = None
+    async with _runs_lock:
+        run = _runs.get(run_id)
+        if run is not None:
+            queue = asyncio.Queue()
+            run.subscribers.add(queue)
+            should_wait = run.status not in TERMINAL_RUN_STATUSES and not is_waiting_run_status(run.status)
+        else:
+            should_wait = False
+    if run is None:
+        record = get_chat_run(run_id)
+        if record is None:
+            return
+        stream_key = f"chat:{run_id}"
+    else:
+        stream_key = run.stream_key
+
+    try:
+        batch = _stream_service.read(stream_key, after_seq=after_seq)
+        for frame in batch.frames:
+            yield _frame_sse(frame)
+        if not should_wait or batch.stream_done or queue is None:
+            return
+        while True:
+            event = await queue.get()
+            if event is None:
+                return
+            yield event
+    finally:
+        if queue is not None:
+            async with _runs_lock:
+                current = _runs.get(run_id)
+                if current is not None:
+                    current.subscribers.discard(queue)
+
+
+def get_chat_projection_snapshot(run_id: str) -> dict:
+    """返回物化到最新 last_seq 的 DisplaySnapshot V4。"""
+
+    state = _projection_store.load_materialized(f"chat:{run_id}", _coordinator)
+    return dump_protocol(state.snapshot)
+
+
+async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
+    async with _runs_lock:
+        run = _runs.get(run_id)
+    if run is None:
+        return await get_chat_background_run(run_id)
+    if run.status in TERMINAL_RUN_STATUSES:
+        return run
+    run.status = "cancelled"
+    run.completed_at = datetime.now(timezone.utc).isoformat()
+    if run.normalizer is not None:
+        await _project_terminal(run, "cancelled", {"completedAt": run.completed_at})
+    update_chat_run_status(run.id, run.status, run.completed_at)
+    if run.async_task is not None and not run.async_task.done():
+        run.async_task.cancel()
+    await _close_subscribers(run)
+    return run
 
 
 async def mark_chat_background_run_status(run_id: str, status: str) -> ChatBackgroundRun | None:
-    """手动更新后台 Run 状态。用于 HITL resume 后同步 Run Center。"""
     async with _runs_lock:
         run = _runs.get(run_id)
-        if run is None:
-            return None
-        if not can_transition_run_status(run.status, status):
-            return run
-        run.status = status
-        if status == "running":
-            run.completed_at = None
-        elif status in TERMINAL_RUN_STATUSES:
-            run.completed_at = datetime.now(timezone.utc).isoformat()
-        update_chat_run_status(run.id, run.status, run.completed_at)
+    if run is None or not can_transition_run_status(run.status, status):
         return run
+    run.status = status
+    run.completed_at = None if status == "running" else run.completed_at
+    update_chat_run_status(run.id, run.status, run.completed_at)
+    return run
 
 
 async def mark_chat_background_run_resuming(
@@ -208,134 +230,57 @@ async def mark_chat_background_run_resuming(
     action: str = "approve",
     external_results_preview: dict[str, str] | None = None,
 ) -> ChatBackgroundRun | None:
-    """在 resume/start 返回前同步 RunState，避免前端重订阅读到旧 waiting 快照。"""
+    """恢复同一 Run；interaction 终态仍由 resume 源信号进入 Domain Stream。"""
 
-    now = datetime.now(timezone.utc).isoformat()
-    patch_event = ""
-    queues: list[asyncio.Queue[str | None]] = []
-    async with _runs_lock:
-        run = _runs.get(run_id)
-        if run is None:
-            return None
-
-        run.status = "running"
-        run.completed_at = None
-        update_chat_run_status(run.id, run.status, run.completed_at)
-
-        state = dict(run.state or initial_run_state(run))
-        state["status"] = "running"
-        state["completedAt"] = None
-        state["updatedAt"] = now
-        state["currentStage"] = "继续执行"
-        if interaction_id:
-            approvals = []
-            for item in state.get("approvals") or []:
-                if isinstance(item, dict) and str(item.get("interactionId") or "") == interaction_id:
-                    approvals.append({
-                        **item,
-                        "status": "resolved",
-                        "resolvedAt": now,
-                        "action": action,
-                    })
-                else:
-                    approvals.append(item)
-            state["approvals"] = approvals
-            runtime_event = {
-                "type": "HITL_RESOLVED",
-                "sessionId": run.session_id,
-                "runId": run.id,
-                "scope": "run",
-                "status": "completed" if action == "approve" else "failed",
-                "timestamp": now,
-                "payload": {
-                    "interactionId": interaction_id,
-                    "action": action,
-                    "externalResultsPreview": external_results_preview or {},
-                },
-            }
-            state = project_event(state, SSE_EVENT_RUNTIME, runtime_event, run)
-            display_events = consume_run_state_display_events(state)
-        else:
-            display_events = []
-        refresh_run_state_display_snapshot(state)
-        if run.persisted:
-            run.state = upsert_chat_run_state(run.id, state)
-        else:
-            run.state = state
-        _persist_latest_assistant_display_snapshot(run, SSE_EVENT_RUNTIME, force=True)
-
-        patch = {
-            "kind": "approval_resolved" if interaction_id else "snapshot_meta",
-            "runId": run.id,
-            "sessionId": run.session_id,
-            "status": run.state.get("status") or run.status,
-            "currentStage": run.state.get("currentStage") or "",
-            "updatedAt": run.state.get("updatedAt") or now,
-            "completedAt": run.state.get("completedAt"),
-            "lastEventType": "RUN_RESUMED",
-            "eventCount": run.state.get("eventCount") or run.event_count,
-        }
-        if interaction_id:
-            patch["resolvedApprovalId"] = interaction_id
-        patches = []
-        if display_events:
-            for display_event in display_events:
-                patches.append(_sse_event("RUN_STATE_PATCH", dump_run_state_patch({
-                    **patch,
-                    "kind": "display_event",
-                    "displayEvent": display_event,
-                })))
-        else:
-            patches.append(_sse_event("RUN_STATE_PATCH", dump_run_state_patch(patch)))
-        queues = list(run.state_subscribers)
-
-    for queue in queues:
-        for patch_event in patches:
-            await queue.put(patch_event)
-    return run
+    _ = interaction_id, action, external_results_preview
+    return await mark_chat_background_run_status(run_id, "running")
 
 
-async def emit_chat_background_runtime_event(run_id: str, event: str) -> bool:
-    """向仍在内存中的后台 Run 推送一个 Runtime Event。"""
-
+async def emit_chat_background_runtime_event(run_id: str, event: SourceEvent) -> bool:
     async with _runs_lock:
         run = _runs.get(run_id)
     if run is None:
         return False
-    await _broadcast(run, event)
+    await _ingest_source_event(run, event)
     return True
 
 
 async def relay_chat_background_run_events(
     run_id: str,
-    events: AsyncGenerator[str, None],
+    events: AsyncGenerator[SourceEvent, None],
 ) -> AsyncGenerator[str, None]:
-    """把 resume 流里的事件追加回原后台 Run，同时继续返回给前端。"""
-    run = await get_chat_background_run(run_id)
-    if run is None:
-        async for event in events:
-            yield event
-        return
+    """Resume 产生的源信号写回同一 projection seq 空间，并只向 HTTP 返回 V3 Frame。"""
 
+    run = await get_chat_background_run(run_id)
+    if run is None or run.normalizer is None:
+        raise RuntimeError(f"Chat Run {run_id} 没有可恢复的活动 projection context")
     await mark_chat_background_run_status(run_id, "running")
     token = CURRENT_BACKGROUND_RUN_ID.set(run_id)
     try:
         async for event in events:
-            await _broadcast(run, event)
-            yield event
+            frames = await _ingest_source_event(run, event)
+            for frame in frames:
+                yield frame
         if run.status not in TERMINAL_RUN_STATUSES and not is_waiting_run_status(run.status):
-            await mark_chat_background_run_status(run_id, "completed")
-    except Exception:
-        await mark_chat_background_run_status(run_id, "failed")
+            for frame in await _project_terminal(run, "completed", {}):
+                yield frame
+    except asyncio.CancelledError:
+        if run.status != "cancelled":
+            for frame in await _project_terminal(run, "cancelled", {}):
+                yield frame
         raise
+    except Exception as exc:
+        for frame in await _ingest_source_event(run, _source_error_signal(str(exc))):
+            yield frame
+        for frame in await _project_terminal(run, "failed", {"message": str(exc)}):
+            yield frame
     finally:
+        _finalize_run_persistence(run)
+        await _close_subscribers(run)
         CURRENT_BACKGROUND_RUN_ID.reset(token)
 
 
 def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
-    """Serialize one in-memory Run for API responses."""
-    summary = _summarize_run_events(run) if run.events else _empty_run_summary(run)
-    summary = _fill_result_preview_from_history(run, summary)
     return {
         "id": run.id,
         "sessionId": run.session_id,
@@ -348,396 +293,145 @@ def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
         "status": run.status,
         "createdAt": run.created_at,
         "completedAt": run.completed_at,
-        "eventCount": run.event_count or len(run.events),
+        "eventCount": run.event_count,
         "subscriberCount": len(run.subscribers),
-        "latestEvent": run.events[-1] if run.events else "",
-        **summary,
+        "resultPreview": "",
+        "error": "",
     }
 
 
-async def start_chat_background_run(
-    *,
-    session_id: str,
-    factory: EventStreamFactory,
-    agent_id: str = "",
-    agent_name: str = "",
-    task: str = "",
-    mode: str = "agent",
-    workspace_id: str = "default",
-    project_id: str = "default",
-    persist: bool = True,
-) -> ChatBackgroundRun:
-    """创建后台 Run 并启动执行 task。"""
-    run = ChatBackgroundRun(
-        id=f"run-{uuid.uuid4().hex}",
-        session_id=session_id,
-        workspace_id=workspace_id,
-        project_id=project_id,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        task_text=task,
-        mode=mode,
-    )
-    async with _runs_lock:
-        _prune_runs_locked()
-        _runs[run.id] = run
-    if persist:
-        _persist_run(run)
-        run.state = upsert_chat_run_state(run.id, initial_run_state(run))
-    else:
-        run.state = initial_run_state(run)
-    run.async_task = asyncio.create_task(_consume_chat_events(run, factory), name=f"chat-run-{run.id}")
-    return run
-
-
-async def subscribe_chat_background_run(run_id: str, *, replay: bool = True) -> AsyncGenerator[str, None]:
-    """订阅后台 Run 事件；订阅断开不会取消后台 task。"""
-    async with _runs_lock:
-        run = _runs.get(run_id)
-        if run is None:
-            error_event = _sse_event("ERROR", {"message": f"Run not found: {run_id}"})
-            replay_events: list[str] = [error_event]
-            queue = None
-            already_finished = True
-        else:
-            replay_events = list(run.events) if replay else []
-            queue: asyncio.Queue[str | None] | None = asyncio.Queue()
-            run.subscribers.add(queue)
-            already_finished = run.status in TERMINAL_RUN_STATUSES
-
-    try:
-        for event in replay_events:
-            yield event
-        if already_finished or queue is None:
-            return
-        while True:
-            event = await queue.get()
-            if event is None:
-                return
-            yield event
-    finally:
-        async with _runs_lock:
-            current = _runs.get(run_id)
-            if current is not None and queue is not None:
-                current.subscribers.discard(queue)
-
-
-async def subscribe_chat_run_state(run_id: str) -> AsyncGenerator[str, None]:
-    """订阅 RunState 中间层状态；前端主界面优先消费该流。"""
-
-    queue: asyncio.Queue[str | None] | None = None
-    async with _runs_lock:
-        run = _runs.get(run_id)
-        if run is None:
-            persisted = get_chat_run(run_id, event_limit=0)
-            if not persisted:
-                initial_event = _sse_event("ERROR", {"message": f"Run not found: {run_id}"})
-            else:
-                run = _run_from_persisted_record(_normalize_stale_persisted_run(persisted))
-                initial_event = _run_state_sse(run)
-            already_finished = True
-        else:
-            queue = asyncio.Queue()
-            run.state_subscribers.add(queue)
-            already_finished = _run_state_stream_should_close(run)
-            initial_event = _run_state_sse(run)
-
-    try:
-        yield initial_event
-        if already_finished:
-            return
-        while True:
-            event = await queue.get()
-            if event is None:
-                return
-            yield event
-    finally:
-        async with _runs_lock:
-            current = _runs.get(run_id)
-            if current is not None and queue is not None:
-                current.state_subscribers.discard(queue)
-
-
-async def _consume_chat_events(run: ChatBackgroundRun, factory: EventStreamFactory) -> None:
-    await _broadcast(run, _sse_event("RUN", {
-        "run_id": run.id,
-        "session_id": run.session_id,
-        "workspace_id": run.workspace_id,
-        "project_id": run.project_id,
-        "agent_id": run.agent_id,
-        "agent_name": run.agent_name,
-        "task": run.task_text,
-        "mode": run.mode,
-        "status": run.status,
-        "created_at": run.created_at,
-    }))
+async def _consume_source_events(run: ChatBackgroundRun, factory: SourceStreamFactory) -> None:
     token = CURRENT_BACKGROUND_RUN_ID.set(run.id)
     try:
         async for event in factory():
-            await _broadcast(run, event)
+            await _ingest_source_event(run, event)
         if run.status not in TERMINAL_RUN_STATUSES and not is_waiting_run_status(run.status):
-            run.status = "completed"
-            update_chat_run_status(run.id, run.status, run.completed_at)
+            await _project_terminal(run, "completed", {})
     except asyncio.CancelledError:
-        await _finalize_cancelled_run(run)
+        if run.status != "cancelled":
+            await _project_terminal(run, "cancelled", {})
         raise
     except Exception as exc:
-        run.status = "failed"
-        from src.server.routes.chat.runtime_events import runtime_event_sse
-
-        await _broadcast(run, runtime_event_sse(
-            "RUN_FAILED",
-            session_id=run.session_id,
-            run_id=run.id,
-            scope="run",
-            agent_id=run.agent_id,
-            agent_name=run.agent_name,
-            status="failed",
-            reason="background_run_error",
-            payload={"message": str(exc)},
-        ))
-        await _broadcast(run, _sse_event("ERROR", {
-            "message": f"Run failed: {exc}",
-            "run_id": run.id,
-            "session_id": run.session_id,
-        }))
+        await _ingest_source_event(run, _source_error_signal(str(exc)))
+        await _project_terminal(run, "failed", {"message": str(exc)})
     finally:
-        if run.status in TERMINAL_RUN_STATUSES:
-            run.completed_at = datetime.now(timezone.utc).isoformat()
-            update_chat_run_status(run.id, run.status, run.completed_at)
+        _finalize_run_persistence(run)
         await _close_subscribers(run)
-        async with _runs_lock:
-            _prune_runs_locked()
         CURRENT_BACKGROUND_RUN_ID.reset(token)
 
 
-async def _broadcast(run: ChatBackgroundRun, event: str) -> None:
-    event_type = _extract_sse_event_type(event)
-    _, event_data = _parse_sse_event(event)
-    is_cancellation_event = (
-        event_type == "RUN_CANCELLED"
-        or event_type == SSE_EVENT_RUNTIME and str(event_data.get("type") or "") == "RUN_CANCELLED"
-    )
-    if run.status in TERMINAL_RUN_STATUSES and not is_cancellation_event:
-        return
-    runtime_status = _status_from_runtime_event_chunk(event_type, event)
-    if runtime_status:
-        if can_transition_run_status(run.status, runtime_status):
-            run.status = runtime_status
-            if runtime_status == "running":
-                run.completed_at = None
-            elif runtime_status in TERMINAL_RUN_STATUSES and not run.completed_at:
-                run.completed_at = datetime.now(timezone.utc).isoformat()
-            update_chat_run_status(run.id, run.status, run.completed_at)
-    elif event_type == "ERROR" and can_transition_run_status(run.status, "failed"):
-        run.status = "failed"
-        if not run.completed_at:
-            run.completed_at = datetime.now(timezone.utc).isoformat()
-        update_chat_run_status(run.id, run.status, run.completed_at)
-    elif event_type in WAITING_EVENT_TYPES:
-        waiting_status = waiting_status_for_interaction(
-            str(event_data.get("type") or event_type),
-            event_data.get("toolCalls") if isinstance(event_data.get("toolCalls"), list) else [],
-        )
-        if can_transition_run_status(run.status, waiting_status):
-            run.status = waiting_status
-            update_chat_run_status(run.id, run.status, run.completed_at)
-    run.event_count += 1
-    run.events.append(event)
-    if len(run.events) > MAX_EVENTS_PER_RUN:
-        run.events = run.events[-MAX_EVENTS_PER_RUN:]
-    next_state = project_event(run.state, event_type, event_data, run)
-    display_events = consume_run_state_display_events(next_state)
-    if run.persisted:
-        append_chat_run_event(run.id, event)
-        run.state = upsert_chat_run_state(run.id, next_state)
-    else:
-        run.state = next_state
-    _persist_latest_assistant_display_snapshot(run, event_type)
-    state_patches = [
-        _run_state_patch_sse(run, event_type, event_data, display_event=display_event)
-        for display_event in display_events
-    ]
-    if not state_patches and _should_emit_run_state_metadata_patch(event_type, event_data):
-        state_patches = [_run_state_patch_sse(run, event_type, event_data)]
-    should_close_state_stream = False
-    for state_patch in state_patches:
-        for queue in list(run.state_subscribers):
-            await queue.put(state_patch)
-        should_close_state_stream = should_close_state_stream or _run_state_patch_should_close(state_patch)
-    if should_close_state_stream:
-        for queue in list(run.state_subscribers):
-            await queue.put(None)
+async def _ingest_source_event(run: ChatBackgroundRun, source_event: SourceEvent) -> list[str]:
+    if run.normalizer is None or run.status in TERMINAL_RUN_STATUSES:
+        return []
+    event_type, data = source_event.event_type, source_event.data
+    previous_seq = _projection_store.load_materialized(run.stream_key, _coordinator).last_seq
+    produced = run.normalizer.ingest(event_type, data)
+    if event_type == "ERROR":
+        produced.extend(run.normalizer.finish("failed", data))
+    run.event_count += len(produced)
+    _update_status_from_signal(run, event_type, data)
+    if produced:
+        _run_projection(run)
+    frames = [_frame_sse(frame) for frame in _projection_store.frames_after(run.stream_key, previous_seq)]
+    for payload in frames:
+        await _publish(run, payload)
+    if is_waiting_run_status(run.status) and event_type in {
+        "HITL_REQUIRED",
+        "CLARIFICATION_REQUIRED",
+    }:
+        _persist_display_snapshot(run)
+        await _close_subscribers(run)
+    return frames
+
+
+async def _project_terminal(run: ChatBackgroundRun, outcome: str, data: dict) -> list[str]:
+    if run.normalizer is None:
+        return []
+    previous_seq = _projection_store.load_materialized(run.stream_key, _coordinator).last_seq
+    produced = run.normalizer.finish(outcome, data)
+    run.event_count += len(produced)
+    if not produced:
+        return []
+    _run_projection(run)
+    run.status = outcome
+    run.completed_at = datetime.now(timezone.utc).isoformat()
+    payloads = [_frame_sse(frame) for frame in _projection_store.frames_after(run.stream_key, previous_seq)]
+    for payload in payloads:
+        await _publish(run, payload)
+    return payloads
+
+
+def _run_projection(run: ChatBackgroundRun) -> None:
+    ProjectionRunner(
+        events=_domain_events,
+        store=_projection_store,
+        registry=default_projection_registry(),
+        coordinator=_coordinator,
+    ).run_available(run.stream_key, run.id)
+
+
+async def _publish(run: ChatBackgroundRun, event: str) -> None:
     for queue in list(run.subscribers):
         await queue.put(event)
-
-
-async def _finalize_cancelled_run(run: ChatBackgroundRun) -> None:
-    """将取消状态、事件和已生成内容落库，保证历史与任务中心一致。"""
-
-    if run.status == "cancelled":
-        return
-    run.status = "cancelled"
-    run.completed_at = datetime.now(timezone.utc).isoformat()
-    _append_cancelled_assistant_message(run)
-    from src.server.routes.chat.runtime_events import runtime_event_sse
-
-    await _broadcast(run, runtime_event_sse(
-        "RUN_CANCELLED",
-        session_id=run.session_id,
-        run_id=run.id,
-        scope="run",
-        agent_id=run.agent_id,
-        agent_name=run.agent_name,
-        status="cancelled",
-        payload={"completedAt": run.completed_at},
-    ))
-    await _broadcast(run, _sse_event("RUN_CANCELLED", {
-        "message": "Run cancelled",
-        "run_id": run.id,
-        "session_id": run.session_id,
-        "completed_at": run.completed_at,
-    }))
-    update_chat_run_status(run.id, run.status, run.completed_at)
-
-
-def _append_cancelled_assistant_message(run: ChatBackgroundRun) -> None:
-    """从已缓存事件恢复停止前输出，追加到会话历史。"""
-
-    text_parts: list[str] = []
-    thinking_parts: list[str] = []
-    for raw_event in run.events:
-        event_type, data = _parse_sse_event(raw_event)
-        if event_type == "TEXT_BLOCK_DELTA":
-            text_parts.append(str(data.get("delta") or ""))
-        elif event_type == "THINKING_BLOCK_DELTA":
-            thinking_parts.append(str(data.get("delta") or ""))
-
-    content = "".join(text_parts).strip()
-    thinking = "".join(thinking_parts).strip()
-    if not content and not thinking:
-        content = "本轮执行已由用户停止。"
-
-    _append_assistant_message(
-        session_id=run.session_id,
-        agent_id=run.agent_id,
-        agent_name=run.agent_name,
-        model_name="",
-        content=content,
-        error="用户已停止本轮执行。",
-        thinking=thinking,
-    )
-
-
-def _persist_latest_assistant_display_snapshot(run: ChatBackgroundRun, event_type: str, *, force: bool = False) -> None:
-    """在 RunState 到达可回放节点后，把展示快照写回本轮 Assistant 消息。"""
-
-    if (
-        not force
-        and event_type not in {"CLARIFICATION_REQUIRED", "HITL_REQUIRED"}
-        and run.status not in TERMINAL_RUN_STATUSES
-    ):
-        return
-    snapshot = normalize_run_state(run.state).get("displaySnapshot")
-    if not isinstance(snapshot, dict):
-        return
-    _update_latest_assistant_display_snapshot(
-        session_id=run.session_id,
-        display_snapshot=snapshot,
-        min_created_at=run.created_at,
-    )
-    team_snapshot = normalize_run_state(run.state).get("teamSnapshot")
-    if isinstance(team_snapshot, dict):
-        _update_latest_assistant_team_snapshot(
-            session_id=run.session_id,
-            team_snapshot=team_snapshot,
-            min_created_at=run.created_at,
-        )
 
 
 async def _close_subscribers(run: ChatBackgroundRun) -> None:
     for queue in list(run.subscribers):
         await queue.put(None)
-    for queue in list(run.state_subscribers):
-        await queue.put(None)
 
 
-def _run_state_stream_should_close(run: ChatBackgroundRun) -> bool:
-    """判断 RunState 订阅在首包快照后是否应立即结束。"""
-
-    return run.status in TERMINAL_RUN_STATUSES or _run_state_has_actionable_waiting_state(run.state)
-
-
-def _run_state_patch_should_close(patch_event: str) -> bool:
-    """判断单个 RunState patch 发送后是否应关闭订阅。"""
-
-    _, patch = _parse_sse_event(patch_event)
-    status = str(patch.get("status") or "")
-    if status in TERMINAL_RUN_STATUSES:
-        return True
-    if not is_waiting_run_status(status):
-        return False
-    display_event = patch.get("displayEvent") if isinstance(patch.get("displayEvent"), dict) else {}
-    return (
-        display_event.get("block") == "feedback"
-        or display_event.get("block") == "plan" and display_event.get("status") == "waiting"
-    )
-
-
-def _run_state_has_actionable_waiting_state(state: dict) -> bool:
-    """判断 waiting 快照是否已有前端可操作内容。"""
-
-    if not is_waiting_run_status(str(state.get("status") or "")):
-        return False
-    approvals = state.get("approvals") if isinstance(state.get("approvals"), list) else []
-    if any(isinstance(item, dict) and item.get("status") == "waiting" for item in approvals):
-        return True
-    plans = state.get("plans") if isinstance(state.get("plans"), list) else []
-    if any(isinstance(item, dict) and item.get("status") == "waiting" for item in plans):
-        return True
-    snapshot = state.get("displaySnapshot") if isinstance(state.get("displaySnapshot"), dict) else {}
-    blocks = snapshot.get("blocks") if isinstance(snapshot.get("blocks"), list) else []
-    return any(
-        isinstance(block, dict)
-        and block.get("status") == "waiting"
-        and block.get("block") in {"feedback", "plan"}
-        for block in blocks
-    )
+def _update_status_from_signal(run: ChatBackgroundRun, event_type: str, data: dict) -> None:
+    runtime_type = event_type
+    status = ""
+    if runtime_type == "RUN_WAITING" or event_type in {"HITL_REQUIRED", "CLARIFICATION_REQUIRED"}:
+        payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
+        status = str(payload.get("waitState") or data.get("status") or "waiting_user")
+        if not is_waiting_run_status(status):
+            status = "waiting_user"
+    elif runtime_type == "RUN_COMPLETED":
+        status = "completed"
+    elif runtime_type == "RUN_FAILED":
+        status = "failed"
+    elif runtime_type == "RUN_CANCELLED":
+        status = "cancelled"
+    elif runtime_type in {"RUN_RESUMED", "RUN_STARTED"}:
+        status = "running"
+    elif event_type == "ERROR":
+        status = "failed"
+    if status and can_transition_run_status(run.status, status):
+        run.status = status
+        update_chat_run_status(run.id, status, run.completed_at)
 
 
-def _prune_runs_locked() -> None:
-    """Drop old completed in-memory runs while keeping active runs available."""
-
-    now = datetime.now(timezone.utc)
-    removable_ids: list[str] = []
-    for run_id, run in _runs.items():
-        if run.status in ACTIVE_RUN_STATUSES or run.subscribers or run.state_subscribers:
-            continue
-        if run.completed_at:
-            try:
-                completed_at = datetime.fromisoformat(run.completed_at)
-            except ValueError:
-                completed_at = now
-            if now - completed_at > COMPLETED_RUN_TTL:
-                removable_ids.append(run_id)
-
-    for run_id in removable_ids:
-        _runs.pop(run_id, None)
-
-    if len(_runs) <= MAX_BACKGROUND_RUNS:
+def _persist_display_snapshot(run: ChatBackgroundRun) -> None:
+    try:
+        state = _projection_store.load_materialized(run.stream_key, _coordinator)
+    except KeyError:
         return
-
-    candidates = sorted(
-        [
-            run
-            for run in _runs.values()
-            if run.status not in ACTIVE_RUN_STATUSES and not run.subscribers
-            and not run.state_subscribers
-        ],
-        key=lambda item: item.completed_at or item.created_at,
+    _update_latest_assistant_display_snapshot(
+        session_id=run.session_id,
+        display_snapshot=dump_protocol(state.snapshot),
+        min_created_at=run.created_at,
     )
-    for run in candidates[: max(0, len(_runs) - MAX_BACKGROUND_RUNS)]:
-        _runs.pop(run.id, None)
+
+
+def _finalize_run_persistence(run: ChatBackgroundRun) -> None:
+    """把终态元数据和最终 DisplaySnapshot 一次性写回历史消息。"""
+
+    if run.status not in TERMINAL_RUN_STATUSES:
+        return
+    run.completed_at = run.completed_at or datetime.now(timezone.utc).isoformat()
+    update_chat_run_status(run.id, run.status, run.completed_at)
+    _persist_display_snapshot(run)
+
+
+def _frame_sse(frame: RuntimeFrame) -> str:
+    payload = json.dumps(dump_protocol(frame), ensure_ascii=False, separators=(",", ":"))
+    return f"event: RUNTIME_EVENT\ndata: {payload}\n\n"
+
+
+def _source_error_signal(message: str) -> SourceEvent:
+    return SourceEvent("ERROR", {"message": message})
 
 
 def _persist_run(run: ChatBackgroundRun) -> None:
@@ -758,7 +452,7 @@ def _persist_run(run: ChatBackgroundRun) -> None:
 
 
 def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
-    run = ChatBackgroundRun(
+    return ChatBackgroundRun(
         id=record["id"],
         session_id=record["sessionId"],
         workspace_id=record.get("workspaceId", "default"),
@@ -770,34 +464,31 @@ def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
         status=record.get("status", "completed"),
         created_at=record.get("createdAt") or datetime.now(timezone.utc).isoformat(),
         completed_at=record.get("completedAt"),
-        events=list(record.get("events") or []),
-        event_count=int(record.get("eventCount") or len(record.get("events") or [])),
-        state=get_chat_run_state(str(record["id"])) or {},
+        event_count=int(record.get("eventCount") or 0),
         persisted=True,
     )
-    if run.status in TERMINAL_RUN_STATUSES:
-        run.state = _reconcile_terminal_run_state(run)
-    return run
 
 
-def _reconcile_terminal_run_state(run: ChatBackgroundRun) -> dict:
-    """用顶层终态修正持久化快照，避免旧审批或运行中工具继续转圈。"""
-
-    runtime_type = {
-        "completed": "RUN_COMPLETED",
-        "failed": "RUN_FAILED",
-        "cancelled": "RUN_CANCELLED",
-    }.get(run.status)
-    if runtime_type is None:
-        return run.state or initial_run_state(run)
-    return project_event(
-        run.state or initial_run_state(run),
-        SSE_EVENT_RUNTIME,
-        {
-            "type": runtime_type,
-            "status": run.status,
-            "timestamp": run.completed_at or datetime.now(timezone.utc).isoformat(),
-            "payload": {"completedAt": run.completed_at},
-        },
-        run,
+def _prune_runs_locked() -> None:
+    now = datetime.now(timezone.utc)
+    removable: list[str] = []
+    for run_id, run in _runs.items():
+        if run.status in ACTIVE_RUN_STATUSES or run.subscribers:
+            continue
+        if run.completed_at:
+            try:
+                completed_at = datetime.fromisoformat(run.completed_at)
+            except ValueError:
+                completed_at = now
+            if now - completed_at > COMPLETED_RUN_TTL:
+                removable.append(run_id)
+    for run_id in removable:
+        _runs.pop(run_id, None)
+    if len(_runs) <= MAX_BACKGROUND_RUNS:
+        return
+    candidates = sorted(
+        [run for run in _runs.values() if run.status not in ACTIVE_RUN_STATUSES and not run.subscribers],
+        key=lambda item: item.completed_at or item.created_at,
     )
+    for run in candidates[:len(_runs) - MAX_BACKGROUND_RUNS]:
+        _runs.pop(run.id, None)

@@ -21,6 +21,25 @@ def test_scoped_read_accepts_project_relative_paths(tmp_path: Path, monkeypatch)
     assert "hello" in text
 
 
+def test_scoped_read_falls_back_from_session_workspace_to_project_scope(tmp_path: Path):
+    """Session cwd 中不存在的已有文件应按 Project scope 相对路径读取。"""
+
+    project_root = tmp_path / "project"
+    session_root = project_root / ".agent-workstation" / "sessions" / "session-a"
+    target = project_root / "backend" / "task_service.py"
+    session_root.mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    target.write_text("class SubagentTaskService: pass\n", encoding="utf-8")
+
+    chunk = asyncio.run(ScopedRead(
+        base_dir=str(session_root),
+        scope_dir=str(project_root),
+    )(file_path="backend/task_service.py"))
+
+    assert chunk.state != "error"
+    assert "SubagentTaskService" in chunk.content[0].text
+
+
 def test_scoped_read_rejects_absolute_path_outside_scope(tmp_path: Path):
     """Read 不得通过绝对路径读取 scope 外文件。"""
 

@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { AlertCircle, Wrench } from 'lucide-react';
 import { Button, Checkbox, Tag } from '@agentscope-ai/design';
-import type { ClarificationQuestionInfo, ClarificationRequestInfo, HitlRequestInfo } from '../../hooks/useEventStream';
-import { isAskUserToolName } from './humanInteractionUtils';
+import type { ClarificationRequestInfo, HitlRequestInfo } from '../../hooks/useEventStream';
 
 export function HitlApprovalBlock({
   request,
@@ -19,8 +18,11 @@ export function HitlApprovalBlock({
   const [submitting, setSubmitting] = useState<'approve' | 'reject' | null>(null);
   const [rememberApproval, setRememberApproval] = useState(false);
   const isExternal = request.type === 'REQUIRE_EXTERNAL_EXECUTION';
-  const askUserToolCall = request.toolCalls.find((toolCall) => isAskUserToolName(toolCall.rawName || toolCall.name));
-  const askUserRequest = askUserToolCall ? buildClarificationRequestFromAskUser(askUserToolCall) : null;
+  const actorLabel = request.scope === 'subagent'
+    ? 'Subagent'
+    : request.scope === 'team'
+      ? 'Team'
+      : 'Agent';
 
   const handleResolve = async (action: 'approve' | 'reject') => {
     setSubmitting(action);
@@ -31,34 +33,6 @@ export function HitlApprovalBlock({
     }
   };
 
-  if (askUserToolCall && askUserRequest) {
-    return (
-      <ClarificationBlock
-        request={askUserRequest}
-        onSubmit={async (content) => {
-          setSubmitting('approve');
-          try {
-            await onResolve(request.interactionId, 'approve', {
-              [askUserToolCall.id]: content,
-            });
-          } finally {
-            setSubmitting(null);
-          }
-        }}
-        onCancel={async () => {
-          setSubmitting('reject');
-          try {
-            await onResolve(request.interactionId, 'reject');
-          } finally {
-            setSubmitting(null);
-          }
-        }}
-        submittingOverride={submitting === 'approve'}
-        cancelSubmittingOverride={submitting === 'reject'}
-      />
-    );
-  }
-
   return (
     <div className="overflow-hidden rounded-lg bg-[var(--color-bg-secondary)] shadow-sm">
       <div className="flex items-center justify-between gap-3 px-3 py-2">
@@ -67,7 +41,7 @@ export function HitlApprovalBlock({
           <span>{isExternal ? '等待外部执行结果' : '等待人工确认'}</span>
         </div>
         <Tag size="small" color="transparent">
-          Leader · {request.agentName}
+          {actorLabel} · {request.agentName}
         </Tag>
       </div>
       <div className="space-y-2 px-3 pb-3">
@@ -118,52 +92,6 @@ export function HitlApprovalBlock({
   );
 }
 
-function buildClarificationRequestFromAskUser(toolCall: HitlRequestInfo['toolCalls'][number]): ClarificationRequestInfo {
-  let raw: Record<string, unknown>;
-  try {
-    raw = JSON.parse(toolCall.input || '{}') as Record<string, unknown>;
-  } catch {
-    raw = {};
-  }
-
-  const questions = Array.isArray(raw.questions) ? raw.questions : [];
-  const parsedQuestions = questions.flatMap((item, index) => {
-    if (!item || typeof item !== 'object') return [];
-    const question = item as Record<string, unknown>;
-    const type = String(question.type || 'text');
-    if (!['choice', 'multi_choice', 'text'].includes(type)) return [];
-    const options = Array.isArray(question.options)
-      ? question.options.map((option) => String(option)).filter(Boolean).slice(0, 5)
-      : [];
-    if ((type === 'choice' || type === 'multi_choice') && options.length < 2) return [];
-    return [{
-      id: String(question.id || `q${index + 1}`),
-      type: type as ClarificationQuestionInfo['type'],
-      label: String(question.label || question.question || `问题 ${index + 1}`),
-      options,
-      placeholder: String(question.placeholder || ''),
-      required: question.required !== false,
-    }];
-  }).slice(0, 3);
-
-  return {
-    id: `ask-user-${toolCall.id}`,
-    title: String(raw.title || '需要补充信息'),
-    description: String(raw.description || 'Agent 需要这些信息后才能继续执行。'),
-    createdAt: new Date().toISOString(),
-    questions: parsedQuestions.length > 0
-      ? parsedQuestions
-      : [{
-        id: 'details',
-        type: 'text',
-        label: '请补充信息',
-        options: [],
-        placeholder: '输入后 Agent 会继续当前执行',
-        required: true,
-      }],
-  };
-}
-
 export function ClarificationBlock({
   request,
   onSubmit,
@@ -204,26 +132,41 @@ export function ClarificationBlock({
     });
     if (missing) return;
 
-    const entries = request.questions.map((question) => {
+    const entries = request.questions.flatMap((question) => {
       const value = answers[question.id];
       const answer = Array.isArray(value) ? value.join('、') : String(value || '').trim();
-      return {
+      if (!answer) return [];
+      return [{
         label: question.label,
-        answer: answer || '未填写',
-      };
+        answer,
+      }];
     });
     const modelLines = entries.map((entry) => `- ${entry.label}: ${entry.answer}`);
-    const displayText = entries.map((entry) => entry.answer).join('；');
+    const hasAnswers = entries.length > 0;
+    const displayText = hasAnswers ? entries.map((entry) => entry.answer).join('；') : '已跳过选填项';
     setSubmitting(true);
     try {
       await onSubmit(
-        `针对上一个补充信息请求，用户回答如下：\n${modelLines.join('\n')}`,
+        hasAnswers
+          ? `针对上一个补充信息请求，用户回答如下：\n${modelLines.join('\n')}`
+          : '用户未提供选填信息，请基于现有信息继续执行。',
         displayText,
       );
     } finally {
       setSubmitting(false);
     }
   };
+
+  const hasMissingRequired = request.questions.some((question) => {
+    if (!question.required) return false;
+    const value = answers[question.id];
+    return Array.isArray(value) ? value.length === 0 : !String(value || '').trim();
+  });
+  const hasAnyAnswer = request.questions.some((question) => {
+    const value = answers[question.id];
+    return Array.isArray(value) ? value.length > 0 : Boolean(String(value || '').trim());
+  });
+  const hasRequiredQuestions = request.questions.some((question) => question.required);
 
   return (
     <div className="rounded-lg bg-[var(--color-bg-secondary)] p-3 shadow-sm">
@@ -249,6 +192,11 @@ export function ClarificationBlock({
           <div key={question.id}>
             <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">
               {question.label}
+              {question.required ? (
+                <span className="ml-1 text-[var(--color-error)]">*</span>
+              ) : (
+                <span className="ml-1 font-normal text-[var(--color-text-tertiary)]">选填</span>
+              )}
             </div>
             {readOnly ? (
               <div className="rounded-md bg-[var(--color-bg-primary)] px-3 py-2 text-xs text-[var(--color-text-tertiary)]">
@@ -261,7 +209,10 @@ export function ClarificationBlock({
                     key={option}
                     size="small"
                     type={answers[question.id] === option ? 'primary' : 'default'}
-                    onClick={() => setAnswer(question.id, option)}
+                    onClick={() => setAnswer(
+                      question.id,
+                      !question.required && answers[question.id] === option ? '' : option,
+                    )}
                   >
                     {option}
                   </Button>
@@ -318,8 +269,13 @@ export function ClarificationBlock({
             取消请求
           </Button>
         )}
-        <Button type="primary" loading={submitting || submittingOverride} onClick={handleSubmit}>
-          提交补充信息
+        <Button
+          type="primary"
+          loading={submitting || submittingOverride}
+          disabled={hasMissingRequired || cancelSubmittingOverride}
+          onClick={handleSubmit}
+        >
+          {!hasAnyAnswer && !hasRequiredQuestions ? '跳过并继续' : '提交并继续'}
         </Button>
       </div>
       )}

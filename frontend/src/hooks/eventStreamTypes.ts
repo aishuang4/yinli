@@ -1,9 +1,6 @@
 /** Chat 事件流 Hook 的公开状态与请求类型。 */
 
-import type { DisplaySnapshot } from '../types/displayEvents';
-import type { ChatRunPlanState } from '../types/runState';
-import type { SubagentTimelineItem } from '../types/subagent';
-import type { TeamConsoleState } from '../types/teamRuntime';
+import type { RuntimeStreamState } from '../features/runtime-stream/streamAdapter';
 
 
 /** SSE 事件类型 */
@@ -22,32 +19,8 @@ export interface StreamState {
   runStartedAt: string;
   /** 当前 Run 结束时间 */
   runCompletedAt: string;
-  /** 累积的文本内容 */
-  textContent: string;
-  /** ReAct 过程文本内容 */
-  reasoningContent: string;
-  /** 最终答案文本内容 */
-  finalAnswerContent: string;
-  /** 思考链内容（thinking tokens） */
-  thinkingContent: string;
-  /** 工具调用列表 */
-  toolCalls: ToolCallInfo[];
-  /** Skill 注入/应用列表 */
-  skillCalls: SkillCallInfo[];
-  /** 与单 Agent DisplaySnapshot 完全隔离的 Team Console 状态。 */
-  teamConsole: TeamConsoleState;
-  /** RunState 投影出的 Plan Mode 状态 */
-  plans: ChatRunPlanState[];
-  /** 单 Agent 主展示快照 */
-  displaySnapshot: DisplaySnapshot;
-  /** 待人工处理的交互 */
-  hitlRequests: HitlRequestInfo[];
-  /** 待用户补充信息的反问 */
-  clarificationRequests: ClarificationRequestInfo[];
-  /** 当前正在调用的模型名称 */
-  modelName: string;
-  /** Token 用量 */
-  tokenUsage: { input: number; output: number } | null;
+  /** 唯一展示状态：V4 Snapshot、传输水位和 gap buffer。 */
+  runtime: RuntimeStreamState;
   /** 错误信息 */
   error: string | null;
 }
@@ -64,12 +37,6 @@ export interface ToolCallInfo {
   result: string;
   /** 执行状态 */
   status: 'calling' | 'running' | 'completed' | 'failed';
-  subagentName?: string;
-  subagentInvocationId?: string;
-  subagentStatus?: string;
-  subagentTimeline?: SubagentTimelineItem[];
-  subagentSummary?: string;
-  subagentError?: string;
 }
 
 export function normalizeToolStatus(status: unknown): ToolCallInfo['status'] {
@@ -113,7 +80,7 @@ export interface HitlRequestInfo {
   agentId: string;
   agentName: string;
   runId: string;
-  scope: 'leader';
+  scope: 'leader' | 'single' | 'subagent' | 'team';
   replyId: string;
   toolCalls: Array<{
     id: string;

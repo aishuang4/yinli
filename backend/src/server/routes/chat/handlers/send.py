@@ -25,6 +25,7 @@ from src.server.routes.chat.router import router
 from src.server.routes.chat.run_context import build_chat_run_context
 from src.server.routes.chat.runtime_dispatcher import execute_chat_runtime
 from src.server.routes.chat.startup_checks import get_startup_error
+from src.server.routes.chat.projection.source_events import SourceEvent
 
 
 @router.post("/send")
@@ -59,7 +60,7 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
 
 @router.post("/send/start")
 async def start_message(data: ChatMessage) -> dict:
-    """创建后台 Run 并返回元数据，前端随后订阅 RunState stream。"""
+    """创建后台 Run 并返回元数据，前端随后订阅 RuntimeFrame stream。"""
 
     run = await start_chat_run(data)
     return {"run": serialize_chat_background_run(run)}
@@ -91,13 +92,9 @@ async def start_chat_run(data: ChatMessage):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    async def event_stream() -> AsyncGenerator[str, None]:
+    async def event_stream() -> AsyncGenerator[SourceEvent, None]:
         """
-        生成 SSE 事件流
-
-        将 AgentScope 2.0 的 AgentEvent 转换为 SSE 格式：
-          event: <EventType>
-          data: <JSON>
+        生成进程内结构化源流；SSE 只在最终 Projection Stream 边界序列化。
         """
         ctx = await build_chat_run_context(
             run_data,

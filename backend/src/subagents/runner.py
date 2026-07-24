@@ -174,8 +174,16 @@ class SubagentRunner:
         agent = get_or_create_agent(
             agent_id=child_agent_id,
             name=child_agent_name,
-            system_prompt=_build_child_system_prompt(definition, runtime_context),
-            model_name=None if definition.model == "inherit" else definition.model,
+            system_prompt=_build_child_system_prompt(
+                definition,
+                runtime_context,
+                platform_context=self.platform_context,
+                filesystem_scope=permission.guardrails.filesystem_scope,
+                workspace_dir=workspace_dir or permission.guardrails.filesystem_scope,
+            ),
+            # `inherit` 必须复用本轮父 Agent 已解析的实际模型，而不是重新读取
+            # 全局默认设置。否则显式切换模型或 Agent 专属模型会在委托处丢失。
+            model_name=self.model_name if definition.model == "inherit" else definition.model,
             fallback_names=self.fallback_names,
             thinking_enable=False,
             permission_mode=permission.agentscope_mode,
@@ -201,62 +209,79 @@ class SubagentRunner:
         final_started = False
         final_text = ""
         reasoning_text = ""
+        next_input = UserMsg(
+            name="user",
+            content=_build_child_task_message(
+                task=task,
+                expected_output=expected_output,
+                context=context,
+                constraints=constraints or [],
+            ),
+        )
+        iteration_recovery_used = False
         try:
-            async for event in agent.reply_stream(
-                UserMsg(
-                    name="user",
-                    content=_build_child_task_message(
-                        task=task,
-                        expected_output=expected_output,
-                        context=context,
-                        constraints=constraints or [],
-                    ),
-                )
-            ):
-                event_data = event.model_dump(mode="json")
-                event_type = event_data.pop("type", "UNKNOWN")
-                _record_child_agent_event(
-                    session_id=self.session_id,
-                    event_type=event_type,
-                    event_data=event_data,
-                    persist=self.persist,
-                    agent_id=f"subagent:{definition.name}",
-                    agent_name=child_agent_name,
-                    guardrails=self.guardrails,
-                    child_guardrails=permission.guardrails,
-                )
-                if runtime_event_sink is not None:
-                    runtime_event_sink(event_type, event_data)
-                if event_type in HITL_EVENT_TYPES:
-                    raise SubagentHitlRequired(
-                        "Subagent 已暂停在人工确认点，等待后续 HITL resume 主路径接入。",
-                        agent=agent,
-                        interaction_type=event_type,
-                        reply_id=str(event_data.get("reply_id") or ""),
-                        tool_calls=list(event_data.get("tool_calls") or []),
-                        partial_result=final_text or reasoning_text,
-                        duration_ms=_duration_ms(started),
+            while True:
+                retry_with_recovery = False
+                async for event in agent.reply_stream(next_input):
+                    event_data = event.model_dump(mode="json")
+                    event_type = event_data.pop("type", "UNKNOWN")
+                    _record_child_agent_event(
+                        session_id=self.session_id,
+                        event_type=event_type,
+                        event_data=event_data,
+                        persist=self.persist,
+                        agent_id=f"subagent:{definition.name}",
+                        agent_name=child_agent_name,
+                        guardrails=self.guardrails,
+                        child_guardrails=permission.guardrails,
                     )
-                if event_type == "EXCEED_MAX_ITERS":
-                    raise SubagentRunError(
-                        "Subagent 超过最大 ReAct 轮次。",
-                        partial_result=final_text or reasoning_text,
-                        duration_ms=_duration_ms(started),
-                    )
-                if _is_final_answer_marker(event_type, event_data):
-                    final_started = True
+                    if runtime_event_sink is not None:
+                        runtime_event_sink(event_type, event_data)
+                    if event_type in HITL_EVENT_TYPES:
+                        raise SubagentHitlRequired(
+                            "Subagent 已暂停在人工确认点，等待后续 HITL resume 主路径接入。",
+                            agent=agent,
+                            interaction_type=event_type,
+                            reply_id=str(event_data.get("reply_id") or ""),
+                            tool_calls=list(event_data.get("tool_calls") or []),
+                            partial_result=final_text or reasoning_text,
+                            duration_ms=_duration_ms(started),
+                        )
+                    if event_type == "EXCEED_MAX_ITERS":
+                        if not iteration_recovery_used and _prepare_iteration_recovery(agent):
+                            iteration_recovery_used = True
+                            retry_with_recovery = True
+                            next_input = UserMsg(
+                                name="user",
+                                content=_build_iteration_recovery_message(
+                                    task=task,
+                                    partial_result=final_text or reasoning_text,
+                                ),
+                            )
+                            break
+                        suffix = "（已尝试受限收尾）" if iteration_recovery_used else ""
+                        raise SubagentRunError(
+                            f"Subagent 超过最大 ReAct 轮次{suffix}。",
+                            partial_result=final_text or reasoning_text,
+                            duration_ms=_duration_ms(started),
+                        )
+                    if _is_final_answer_marker(event_type, event_data):
+                        final_started = True
+                        continue
+                    if event_type == "TEXT_BLOCK_DELTA":
+                        delta = str(event_data.get("delta") or "")
+                        if final_started:
+                            final_text += delta
+                            if runtime_event_sink is not None:
+                                runtime_event_sink(event_type, {
+                                    **event_data,
+                                    "subagentFinalAnswerDelta": True,
+                                })
+                        else:
+                            reasoning_text += delta
+                if retry_with_recovery:
                     continue
-                if event_type == "TEXT_BLOCK_DELTA":
-                    delta = str(event_data.get("delta") or "")
-                    if final_started:
-                        final_text += delta
-                        if runtime_event_sink is not None:
-                            runtime_event_sink(event_type, {
-                                **event_data,
-                                "subagentFinalAnswerDelta": True,
-                            })
-                    else:
-                        reasoning_text += delta
+                break
             if not final_text.strip():
                 raise SubagentRunError(
                     "Subagent 未调用 FinalAnswerStart 或未输出最终摘要。",
@@ -277,12 +302,21 @@ class SubagentRunner:
 def _build_child_system_prompt(
     definition: SubagentDefinition,
     runtime_context: SubagentRuntimeContext | None = None,
+    *,
+    platform_context: PlatformRuntimeContext | None = None,
+    filesystem_scope: str = "",
+    workspace_dir: str = "",
 ) -> str:
     runtime_context = runtime_context or build_subagent_runtime_context(definition)
     return "\n\n".join(
         part
         for part in [
             definition.prompt,
+            _build_child_project_prompt(
+                platform_context=platform_context,
+                filesystem_scope=filesystem_scope,
+                workspace_dir=workspace_dir,
+            ),
             runtime_context.memory_prompt,
             (
                 "你是 Agent Workstation 的 Subagent。你在独立上下文中完成委托任务，"
@@ -292,6 +326,60 @@ def _build_child_system_prompt(
         ]
         if part.strip()
     )
+
+
+def _build_child_project_prompt(
+    *,
+    platform_context: PlatformRuntimeContext | None,
+    filesystem_scope: str,
+    workspace_dir: str,
+) -> str:
+    """声明 child 可访问的 Project 与 Session 路径语义。"""
+
+    if platform_context is None:
+        return ""
+    return "\n".join([
+        "# Project Context",
+        f"Project root: {platform_context.project_root}",
+        f"Effective filesystem scope: {filesystem_scope}",
+        f"Default session workspace: {workspace_dir}",
+        "Relative paths naming existing Project files may be resolved from the effective filesystem scope.",
+        "Create new deliverables with relative paths so they remain in the session workspace.",
+    ])
+
+
+def _prepare_iteration_recovery(agent: object) -> bool:
+    """为 max-iters 后的一次收尾轮禁用普通工具。"""
+
+    react_config = getattr(agent, "react_config", None)
+    toolkit = getattr(agent, "toolkit", None)
+    if react_config is None or toolkit is None:
+        return False
+    react_config.max_iters = 2
+    for group in getattr(toolkit, "tool_groups", []):
+        group.tools = [
+            tool
+            for tool in group.tools
+            if str(getattr(tool, "name", "")) == "FinalAnswerStart"
+        ]
+        group.mcps = []
+        group.skills_or_loaders = []
+    return True
+
+
+def _build_iteration_recovery_message(*, task: str, partial_result: str) -> str:
+    """要求 child 停止调查并用现有证据输出最终摘要。"""
+
+    compact_partial = partial_result.strip()
+    if len(compact_partial) > 6000:
+        compact_partial = compact_partial[-6000:]
+    return "\n\n".join([
+        "You reached the Subagent iteration budget. Ordinary tools are now unavailable.",
+        "Stop investigating. Call FinalAnswerStart exactly once, then immediately provide the best concise result from the evidence already gathered.",
+        "If evidence is incomplete, state that clearly instead of retrying tools.",
+        f"Original delegated task:\n{task.strip()}",
+        f"Available partial result:\n{compact_partial or '(none)'}",
+    ])
 
 
 def _build_child_task_message(

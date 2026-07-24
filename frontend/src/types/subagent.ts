@@ -4,7 +4,8 @@
  * 与 backend/src/server/routes/subagents.py 的响应结构保持同步。
  */
 
-export type SubagentInvocationStatus = 'running' | 'completed' | 'failed' | 'waiting' | string;
+export type SubagentInvocationStatus = 'queued' | 'running' | 'completed' | 'failed' | 'waiting' | 'cancelled' | 'interrupted' | string;
+export type SubagentExecutionMode = 'foreground' | 'background' | string;
 
 export interface SubagentTimelineItem {
   id: string;
@@ -59,6 +60,7 @@ export interface SubagentInvocation {
   definitionPath: string;
   subagentName: string;
   status: SubagentInvocationStatus;
+  executionMode: SubagentExecutionMode;
   task: string;
   expectedOutput: string;
   resultPreview: string;
@@ -70,4 +72,17 @@ export interface SubagentInvocation {
 
 export interface SubagentInvocationListResponse {
   items: SubagentInvocation[];
+}
+
+export interface SubagentTranscriptItem {
+  id: string;
+  invocationId: string;
+  seq: number;
+  kind: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface SubagentTranscriptResponse {
+  items: SubagentTranscriptItem[];
 }

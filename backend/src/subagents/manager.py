@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -15,11 +16,12 @@ from src.agents.runtime_types import (
     RuntimeToolScope,
 )
 from src.storage.database import (
-    create_subagent_invocation,
-    update_subagent_invocation,
+    append_subagent_transcript_item,
 )
 from src.subagents.models import SubagentCatalog, SubagentDefinition
 from src.subagents.runner import SubagentHitlRequired, SubagentRunError, SubagentRunner
+from src.subagents.task_service import SubagentTaskService
+from src.subagents.supervisor import get_subagent_supervisor
 from src.runtime_context import RuntimeContext
 
 
@@ -29,6 +31,33 @@ class SubagentDelegationWaiting(RuntimeError):
     def __init__(self, interaction_id: str) -> None:
         super().__init__("Subagent delegation is waiting for human approval.")
         self.interaction_id = interaction_id
+
+
+def subagent_error_observation(
+    exc: Exception,
+    *,
+    invocation_id: str = "",
+    subagent_name: str = "",
+) -> str:
+    """构造给父 Agent 消费的稳定失败 observation。"""
+
+    if isinstance(exc, SubagentRunError):
+        partial_result = exc.partial_result
+        failure_code = str(getattr(exc, "failure_code", "subagent_run_failed"))
+    else:
+        partial_result = ""
+        failure_code = "subagent_delegation_failed"
+    return json.dumps(
+        {
+            "ok": False,
+            "invocationId": invocation_id or str(getattr(exc, "invocation_id", "")),
+            "subagentName": subagent_name or str(getattr(exc, "subagent_name", "")),
+            "failureCode": failure_code,
+            "error": str(exc),
+            "partialResult": partial_result,
+        },
+        ensure_ascii=False,
+    )
 
 
 class SubagentDelegationManager:
@@ -64,6 +93,8 @@ class SubagentDelegationManager:
         self.persist = persist
         self.runtime_context = runtime_context
         self._events: list[dict[str, Any]] = []
+        self._task_service = SubagentTaskService()
+        self._supervisor = get_subagent_supervisor()
         self._runner = SubagentRunner(
             session_id=session_id,
             run_id=run_id,
@@ -111,7 +142,7 @@ class SubagentDelegationManager:
             available = ", ".join(sorted(self.catalog.definitions)) or "none"
             raise ValueError(f"Unknown subagent '{subagent_name}'. Available subagents: {available}")
 
-        invocation = create_subagent_invocation(
+        invocation = self._task_service.create(
             {
                 "run_id": self.run_id,
                 "session_id": self.session_id,
@@ -124,12 +155,13 @@ class SubagentDelegationManager:
                 "definition_scope": definition.scope,
                 "definition_path": definition.path,
                 "subagent_name": definition.name,
-                "status": "running",
+                "execution_mode": "foreground",
                 "task": task,
                 "expected_output": expected_output,
             }
         )
         invocation_id = str(invocation["id"])
+        self._task_service.transition(invocation_id, target_status="running", reason="foreground_delegate_started")
         self._emit(
             "SUBAGENT_STARTED",
             status="running",
@@ -143,39 +175,43 @@ class SubagentDelegationManager:
                 "expectedOutput": expected_output,
             },
         )
-        prepared = self._runner.prepare(definition)
-        self._emit(
-            "SUBAGENT_CONTEXT",
-            status="running",
-            payload={
-                "invocationId": invocation_id,
-                "toolCallId": tool_call_id,
-                **prepared.audit_payload,
-            },
-        )
         try:
-            result = await self._runner.run(
-                invocation_id=invocation_id,
-                definition=definition,
-                task=task,
-                expected_output=expected_output,
-                context=context,
-                constraints=constraints or [],
-                runtime_context=prepared.runtime_context,
-                permission=prepared.permission,
-                tool_policy=getattr(prepared, "tool_policy", None),
-                runtime_event_sink=lambda event_type, event_data: self._emit_child_agent_event(
-                    definition=definition,
+            prepared = self._runner.prepare(definition)
+            self._emit(
+                "SUBAGENT_CONTEXT",
+                status="running",
+                payload={
+                    "invocationId": invocation_id,
+                    "toolCallId": tool_call_id,
+                    **prepared.audit_payload,
+                },
+            )
+            execution = await self._supervisor.start(
+                invocation_id,
+                lambda: self._runner.run(
                     invocation_id=invocation_id,
-                    tool_call_id=tool_call_id,
-                    event_type=event_type,
-                    event_data=event_data,
+                    definition=definition,
+                    task=task,
+                    expected_output=expected_output,
+                    context=context,
+                    constraints=constraints or [],
+                    runtime_context=prepared.runtime_context,
+                    permission=prepared.permission,
+                    tool_policy=getattr(prepared, "tool_policy", None),
+                    runtime_event_sink=lambda event_type, event_data: self._emit_child_agent_event(
+                        definition=definition,
+                        invocation_id=invocation_id,
+                        tool_call_id=tool_call_id,
+                        event_type=event_type,
+                        event_data=event_data,
+                    ),
                 ),
             )
+            result = await execution
             result_preview = _trim_text(result.text, 1200)
-            update_subagent_invocation(
+            self._task_service.transition(
                 invocation_id,
-                status="completed",
+                target_status="completed",
                 result_preview=result_preview,
             )
             self._emit(
@@ -233,11 +269,12 @@ class SubagentDelegationManager:
                     persist=self.persist,
                 )
                 interaction_id = interaction.id
-            update_subagent_invocation(
+            self._task_service.transition(
                 invocation_id,
-                status="waiting",
+                target_status="waiting",
                 result_preview=partial,
                 error=message,
+                reason="hitl_required",
             )
             self._emit(
                 "SUBAGENT_WAITING_HUMAN",
@@ -266,9 +303,9 @@ class SubagentDelegationManager:
             )
         except SubagentRunError as exc:
             partial = _trim_text(exc.partial_result, 1200)
-            update_subagent_invocation(
+            self._task_service.transition(
                 invocation_id,
-                status="failed",
+                target_status="failed",
                 result_preview=partial,
                 error=str(exc),
             )
@@ -284,7 +321,61 @@ class SubagentDelegationManager:
                     "partialResultPreview": partial,
                 },
             )
+            exc.invocation_id = invocation_id
+            exc.subagent_name = definition.name
+            exc.failure_code = "subagent_run_failed"
             raise
+        except asyncio.CancelledError:
+            message = "Subagent 执行已取消。"
+            self._task_service.transition(
+                invocation_id,
+                target_status="cancelled",
+                error=message,
+            )
+            self._emit(
+                "SUBAGENT_FAILED",
+                status="failed",
+                payload={
+                    "invocationId": invocation_id,
+                    "toolCallId": tool_call_id,
+                    "subagentName": definition.name,
+                    "failureCode": "subagent_cancelled",
+                    "error": message,
+                    "partialResultPreview": "",
+                },
+            )
+            current_task = asyncio.current_task()
+            if current_task is not None and current_task.cancelling():
+                raise
+            cancelled_error = SubagentRunError(message)
+            cancelled_error.invocation_id = invocation_id
+            cancelled_error.subagent_name = definition.name
+            cancelled_error.failure_code = "subagent_cancelled"
+            raise cancelled_error
+        except Exception as exc:
+            message = f"Subagent 委托准备失败: {exc}"
+            self._task_service.transition(
+                invocation_id,
+                target_status="failed",
+                error=message,
+            )
+            self._emit(
+                "SUBAGENT_FAILED",
+                status="failed",
+                payload={
+                    "invocationId": invocation_id,
+                    "toolCallId": tool_call_id,
+                    "subagentName": definition.name,
+                    "failureCode": "subagent_setup_failed",
+                    "error": message,
+                    "partialResultPreview": "",
+                },
+            )
+            setup_error = SubagentRunError(message)
+            setup_error.invocation_id = invocation_id
+            setup_error.subagent_name = definition.name
+            setup_error.failure_code = "subagent_setup_failed"
+            raise setup_error from exc
 
     async def execute_external_tool_call(self, tool_call: dict[str, Any]) -> ToolResultBlock:
         """执行父 AgentScope 外部 DelegateTask 工具调用。"""
@@ -297,18 +388,48 @@ class SubagentDelegationManager:
             return ToolResultBlock(
                 id=tool_call_id,
                 name="DelegateTask",
-                output=[TextBlock(text=f"Subagent delegation failed: invalid DelegateTask input JSON: {exc}")],
+                output=[TextBlock(text=subagent_error_observation(
+                    ValueError(f"invalid DelegateTask input JSON: {exc}"),
+                ))],
                 state=ToolResultState.ERROR,
             )
-        result = await self.delegate(
-            subagent_name=str(data.get("subagentName") or ""),
-            task=str(data.get("task") or ""),
-            expected_output=str(data.get("expectedOutput") or ""),
-            context=str(data.get("context") or ""),
-            constraints=list(data.get("constraints") or []),
-            tool_call_id=tool_call_id,
-            raise_on_waiting=True,
-        )
+        subagent_name = str(data.get("subagentName") or "")
+        if data.get("background") is True:
+            return ToolResultBlock(
+                id=tool_call_id,
+                name="DelegateTask",
+                output=[TextBlock(text=json.dumps({
+                    "ok": False,
+                    "invocationId": "",
+                    "subagentName": subagent_name,
+                    "failureCode": "background_delegation_not_supported",
+                    "error": "DelegateTask 必须等待并消费 Subagent 结果；当前不支持 detached background 调用。",
+                    "partialResult": "",
+                }, ensure_ascii=False))],
+                state=ToolResultState.ERROR,
+            )
+        try:
+            result = await self.delegate(
+                subagent_name=subagent_name,
+                task=str(data.get("task") or ""),
+                expected_output=str(data.get("expectedOutput") or ""),
+                context=str(data.get("context") or ""),
+                constraints=list(data.get("constraints") or []),
+                tool_call_id=tool_call_id,
+                raise_on_waiting=True,
+            )
+        except SubagentDelegationWaiting:
+            raise
+        except Exception as exc:
+            return ToolResultBlock(
+                id=tool_call_id,
+                name="DelegateTask",
+                output=[TextBlock(text=subagent_error_observation(
+                    exc,
+                    subagent_name=subagent_name,
+                ))],
+                state=ToolResultState.ERROR,
+            )
         return ToolResultBlock(
             id=tool_call_id,
             name="DelegateTask",
@@ -350,7 +471,19 @@ class SubagentDelegationManager:
             title=event_type,
             payload=event,
         )
+        self._append_transcript(event_type, payload)
         self._events.append(event)
+
+    def _append_transcript(self, kind: str, payload: dict[str, Any]) -> None:
+        """把稳定生命周期事件写入 invocation transcript。"""
+
+        invocation_id = str(payload.get("invocationId") or "")
+        if invocation_id:
+            append_subagent_transcript_item(
+                invocation_id=invocation_id,
+                kind=kind,
+                payload=payload,
+            )
 
     def _emit_child_agent_event(
         self,
@@ -382,6 +515,7 @@ class SubagentDelegationManager:
             "toolCallId": tool_call_id,
             "subagentName": definition.name,
         })
+        self._append_transcript(runtime_type, payload)
         self._events.append(build_runtime_event(
             runtime_type,
             session_id=self.session_id,

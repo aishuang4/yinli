@@ -4,7 +4,7 @@ description: Use for broad self-contained implementation or maintenance tasks th
 tools: Read, Grep, Glob, Bash, Write, Edit, HttpRequest
 model: inherit
 permissionMode: acceptEdits
-maxTurns: 24
+maxTurns: 30
 color: green
 ---
 

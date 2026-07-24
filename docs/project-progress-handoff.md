@@ -1,6 +1,6 @@
 # 引力 YINLI 项目进展与协作交接
 
-> 更新时间：2026-07-20。本文只记录当前完成度、验证结果和已知缺口。
+> 更新时间：2026-07-23。本文只记录当前完成度、验证结果和已知缺口。
 
 ## 当前阶段
 
@@ -13,7 +13,7 @@
 - 已建立 `Workspace -> Project -> Session -> Run` 归属模型、默认记录和历史数据回填。
 - Chat 在创建 Agent 前解析不可变 `RuntimeContext`；Session 不能跨 Project 继续。
 - Project root 与 Agent filesystem scope 取交集，不相交时拒绝运行。
-- TeamRun、Subagent、Memory、Trace、RunState 已继承 Workspace / Project，并按当前 Project 隔离。
+- TeamRun、Subagent、Memory、Trace、Domain Event 和 Projection stream 已继承 Workspace / Project，并按当前 Project 隔离。
 - Project resource binding 已作为持久资源白名单参与 Runtime：Agent 必须绑定，Skill、MCP 和 HTTP Tool 取 Agent 配置与 enabled binding 的交集。
 - 已有 Project 在升级时建立一次性资源基线，新建 Project 快照绑定创建时的 Workspace 资源；后续新增资源不会自动授权。
 - Chat 历史区按 Workspace / Project 分类，点击 Session 自动恢复其归属；新对话在首次输入前选择或创建工作上下文。管理侧栏保留资源上下文切换入口。
@@ -27,16 +27,27 @@
 
 - Readiness Gate、Intent Router、ReAct Runtime 和 ToolScope。
 - 单 Agent 流式执行、AskUser、HITL、取消、重跑和刷新恢复。
-- 后台 Run、RunState v2、DisplaySnapshot v3、Runs 和 Trace。
+- 后台 Run、Event Stream V3、DisplaySnapshot V4、Runs 和 Trace。
 - send / resume 共用 Leader 流处理和 completion 收口；顶层 Run 区分用户输入、权限审批和外部执行等待，终态不可逆。
 - Plan Mode 通过 middleware 接入，仅支持单 Agent；删除的是旧独立 Plan Runtime（`runtime.kind=plan`），不是当前 Plan Mode 能力。
+
+### Event Stream
+
+- Event Stream V3 已原子切换生产 Chat，只保留 `RUNTIME_EVENT: RuntimeFrame` 与 `DisplaySnapshot V4` 两个前端边界。
+- 后端在线链路为 `SourceEvent -> ChatProjectionNormalizer -> DomainEventRepository -> ProjectionRunner -> per-kind projector -> BlockLifecycleCoordinator -> ProjectionStreamStore -> SSE`；同一 Run 使用全局 `stream_ordinal`、lease/fencing、周期 Snapshot + tail replay、retention、afterSeq fallback 和 completion barrier。
+- `message/text/reasoning/thinking/tool/skill/approval/plan/artifact/error/subagent/team` 已注册独立 projector。Subagent 和 Team 的完整领域状态仍保留在各自存储，Chat 只消费嵌套 Block 摘要。
+- 前端 Chat 与 Sandbox 已切换到严格 RuntimeFrame decoder、streamAdapter、Block Tree reducer、kind registry 和 Generic Block fallback。HITL renderer 只提交命令，状态由后端 Frame 回流。
+- `event_hub`、RunState schema、DisplayEvent projector/reducer、旧 stream adapter、固定 Process/Plan 组件和工具结果反解析已删除；旧测试 fixture 已物理删除，不存在双读、双写或 compatibility fallback。
+- SQLite 检测到旧 Chat 投影表或非 V4 Snapshot 时执行一次性运行域 reset，不转换旧数据；后续数据库只写 V4 Snapshot。
+- Event Stream 专项测试现有 13 项，覆盖 aggregate transaction、跨 aggregate/并发 ordinal、非法生命周期、父子级联 close、零 Frame checkpoint、runner fencing、Snapshot + tail replay、retention fallback、clarification/HITL 和 terminal done。
+- HITL 的 `RUN_WAITING` 只作为等待预告，实时订阅会持续到可操作的 approval Frame；resume 终态统一写回最终 V4 Snapshot、关闭订阅，并移除同一 Run 的旧 waiting 占位消息，避免刷新后重复显示进行中与完成两棵 Block Tree。
 
 ### TeamRun
 
 - 每次 Team 请求创建独立 TeamRun，Leader 动态创建临时 Member 和任务。
 - Member session 隔离，通过 Task List、Mailbox 和任务结果协作。
 - 用户可向指定成员或全员发送 Mailbox 消息。
-- Team 使用独立 `TEAM_EVENT` / `teamSnapshot` / Team Console。
+- Team 以 file-first 状态和领域事件为事实源，Chat 使用嵌套 `kind=team` Block 展示摘要。
 - 持久 Team CRUD、template、固定成员列表、`/api/teams`、`teams` / `team_members` 表已经删除。
 
 ### Subagent
@@ -45,8 +56,8 @@
 - Markdown + YAML frontmatter 文件定义和项目级 / 用户级扫描。
 - ReAct 内 `DelegateTask` 前台委托和 fresh-context 子 Agent。
 - 工具、Skills、Memory 和 permission mode 按父权限上限裁剪。
-- `subagent_invocations`、`SUBAGENT_*` 事件、Trace 和 HITL resume。
-- M1 已完成，M2 部分完成；inline MCP、hooks、worktree isolation 等尚未完成。
+- `subagent_invocations`、`subagent_transcript_items`、`SUBAGENT_*` 事件、Trace、HITL resume 和 Subagents 任务控制台。
+- M1/M2.1 前台稳定性与 M3 单进程持久 task 已完成；当前 DelegateTask 仍是 blocking，detached background、跨进程恢复、运行中消息和 worktree isolation 尚未开放。
 
 ### Skills
 
@@ -93,7 +104,7 @@
 最近一次完整验证：
 
 ```text
-backend pytest: 329 passed
+backend pytest: 355 passed
 frontend build: passed
 frontend lint: passed
 /api/teams: 404
@@ -101,7 +112,14 @@ legacy Agent Builder mode=team: 422
 legacy teams / team_members tables: removed
 ```
 
-Vite 仍有约 968 KB 的大 chunk 警告，不影响构建，但需要后续拆包。
+2026-07-23 真实浏览器回归：
+
+- 普通回答完成后 `streamDone=true`，afterSeq replay、Snapshot fallback 和刷新恢复正常。
+- AskUser 在 `RUN_WAITING` 后正常显示可操作 approval；提交“开发”后 tool、approval、text 和 message 全部收口，刷新恢复后只有一棵完成态 Block Tree，无持续转圈或旧 waiting 占位。
+- `DelegateTask(explorer)` 完成前父 Agent 保持等待，父 Agent 消费子结果后才输出最终回答；刷新后 `kind=subagent` 仍为单一完成态 Block。
+- Subagents 页面可查看 completed invocation、结果、耗时和完整 transcript。
+
+Vite 仍有约 941 KB 的大 chunk 警告，不影响构建，但需要后续拆包。
 
 ## 主要缺口
 
@@ -113,14 +131,14 @@ Vite 仍有约 968 KB 的大 chunk 警告，不影响构建，但需要后续拆
 
 ## 核心入口
 
-- `backend/src/server/routes/chat/`：Chat、RunState、恢复和 TeamRun。
+- `backend/src/server/routes/chat/`：Chat、Event Stream V3、恢复和 TeamRun。
 - `backend/src/agents/factory.py`：AgentScope Agent / Model / Toolkit 构造入口。
 - `backend/src/subagents/`：Subagent 定义、权限、上下文和执行。
 - `backend/src/memory/`：记忆准入、检索、提炼和 Wiki。
 - `backend/src/storage/database.py`：SQLite schema 和存储访问。
 - `frontend/src/pages/ChatPage.tsx`：Chat 主工作台。
 - `frontend/src/pages/AgentsPage.tsx`：持久 Agent 管理。
-- `frontend/src/hooks/useEventStream.ts`：RunState / SSE 订阅。
-- `frontend/src/features/team-runtime/`：Team 前端状态投影。
+- `frontend/src/hooks/useEventStream.ts`：RuntimeFrame SSE 订阅。
+- `frontend/src/features/runtime-stream/`：Block Tree 协议、状态和 renderer。
 
 完整文档分类见 `docs/README.md`，待办只维护在 `docs/project-todo.md`。
