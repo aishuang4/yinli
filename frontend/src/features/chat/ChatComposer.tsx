@@ -174,7 +174,7 @@ export function ChatComposer(props: ChatComposerProps) {
           )}
           <div className="ml-auto flex items-center gap-2">
             {targetMode === 'agent' ? (
-              <Tooltip title={planMode ? '计划模式已开启' : '先制定计划'} placement="top" mode="dark">
+              <Tooltip title={planMode ? '点击关闭计划模式' : '点击开启计划模式'} placement="top" mode="dark">
                 <span className="inline-flex">
                   <button
                     type="button"
@@ -189,7 +189,7 @@ export function ChatComposer(props: ChatComposerProps) {
                     aria-pressed={planMode}
                   >
                     <ListChecks size={16} />
-                    <span>计划</span>
+                    <span>{planMode ? '计划开启' : '计划关闭'}</span>
                   </button>
                 </span>
               </Tooltip>
