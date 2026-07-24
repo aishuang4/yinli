@@ -3,7 +3,7 @@
 import type { ComponentType } from 'react';
 import type { DisplayBlock } from './protocol';
 
-export type BlockPresentation = 'structural' | 'process' | 'answer' | 'supplement';
+export type BlockPresentation = 'structural' | 'process' | 'answer' | 'supplement' | 'detached';
 
 export interface BlockModule<TData = unknown, TPatch = unknown> {
   kind: string;

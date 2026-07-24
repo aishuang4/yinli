@@ -30,6 +30,7 @@ export function RuntimeBlockTree({
   const renderBranch = (id: string): React.ReactNode => {
     const block = snapshot.blocksById[id];
     if (!block) return null;
+    if (coreBlockRegistry.get(block.kind)?.presentation === 'detached') return null;
     const children = childrenByParent.get(id) || [];
     const processChildren = block.kind === 'message'
       ? children.filter((childId) => {

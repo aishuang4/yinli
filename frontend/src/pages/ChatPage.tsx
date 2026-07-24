@@ -27,8 +27,9 @@ import { ChatStartScenarios } from '../features/chat/ChatStartScenarios';
 import { AskUserComposer } from '../features/chat/AskUserComposer';
 import { ChatComposer } from '../features/chat/ChatComposer';
 import { PlanReviewComposer } from '../features/chat/PlanReviewComposer';
+import { PlanFloatingPanel } from '../features/chat/PlanFloatingPanel';
 import { ChatHistoryPanel } from '../features/chat/ChatHistoryPanel';
-import { selectPendingPlanReview, type PlanReviewData } from '../features/chat/planReviewUtils';
+import { selectLatestPlan, selectPendingPlanReview, type PlanReviewData } from '../features/chat/planReviewUtils';
 import { selectPendingAskUserInteractions } from '../features/chat/humanInteractionUtils';
 import type { ChatFileAttachment, ChatFilePayload, ChatImageAttachment, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
 import { runtimeError, runtimeText } from '../features/runtime-stream/selectors';
@@ -45,6 +46,7 @@ export function ChatPage() {
   const [inputValue, setInputValue] = useState('');
   const [deepThinking, setDeepThinking] = useState(false);
   const [planMode, setPlanMode] = useState(false);
+  const [planPanelOpen, setPlanPanelOpen] = useState(false);
   const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
   const [fileAttachments, setFileAttachments] = useState<ChatFileAttachment[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
@@ -109,6 +111,17 @@ export function ChatPage() {
     () => selectPendingPlanReview(messages.map((message) => message.displaySnapshot), snapshot),
     [messages, snapshot],
   );
+  const latestPlan = useMemo(
+    () => selectLatestPlan(messages.map((message) => message.displaySnapshot), snapshot),
+    [messages, snapshot],
+  );
+  const planIdentity = latestPlan ? `${latestPlan.planId}:${latestPlan.revision}` : '';
+  const openedPlanIdentityRef = useRef('');
+  useEffect(() => {
+    if (!planIdentity || openedPlanIdentityRef.current === planIdentity) return;
+    openedPlanIdentityRef.current = planIdentity;
+    setPlanPanelOpen(true);
+  }, [planIdentity]);
   const hasLiveResponse = state.isStreaming || snapshot.order.length > 0 || Boolean(state.error);
   const activeSession = useMemo(() => (
     sessions.find((session) => session.id === activeSessionId) || null
@@ -200,6 +213,9 @@ export function ChatPage() {
 
   const activateSession = useCallback(async (session: ChatSession) => {
     recoveredRunRef.current = '';
+    openedPlanIdentityRef.current = '';
+    setPlanPanelOpen(false);
+    setMessages([]);
     reset();
     setActiveSessionId(session.id);
     setTargetMode(session.mode || 'agent');
@@ -216,11 +232,13 @@ export function ChatPage() {
     sessionsRequestRef.current += 1;
     messagesRequestRef.current += 1;
     recoveredRunRef.current = '';
-        setActiveSessionId(null);
-        setMessages([]);
-        setImageAttachments([]);
-        setFileAttachments([]);
-        setChatError(null);
+    openedPlanIdentityRef.current = '';
+    setPlanPanelOpen(false);
+    setActiveSessionId(null);
+    setMessages([]);
+    setImageAttachments([]);
+    setFileAttachments([]);
+    setChatError(null);
     reset();
     const pendingSession = pendingSessionRef.current;
     if (
@@ -362,6 +380,8 @@ export function ChatPage() {
     if (state.isStreaming) return;
     pendingSessionRef.current = null;
     recoveredRunRef.current = '';
+    openedPlanIdentityRef.current = '';
+    setPlanPanelOpen(false);
     setActiveSessionId(null);
     setMessages([]);
     setImageAttachments([]);
@@ -396,6 +416,8 @@ export function ChatPage() {
       setSessions((current) => current.filter((item) => item.id !== session.id));
       if (activeSessionId === session.id) {
         recoveredRunRef.current = '';
+        openedPlanIdentityRef.current = '';
+        setPlanPanelOpen(false);
         setActiveSessionId(null);
         setMessages([]);
         setImageAttachments([]);
@@ -798,6 +820,14 @@ export function ChatPage() {
             >
               <ChevronDown size={16} />
             </button>
+            {latestPlan ? (
+              <PlanFloatingPanel
+                key={latestPlan.planId}
+                plan={latestPlan}
+                open={planPanelOpen}
+                onOpenChange={setPlanPanelOpen}
+              />
+            ) : null}
           </div>
 
           {activeAskUserInteraction ? (

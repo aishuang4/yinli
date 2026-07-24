@@ -106,7 +106,7 @@ export function createCoreBlockRegistry(): BlockRegistry {
   registry.register(toolModule);
   registry.register(recordModule('skill', 'Skill', SkillBlockView));
   registry.register(recordModule('approval', '人工确认', ApprovalBlockView));
-  registry.register(recordModule('plan', '计划', PlanBlockView, 'answer'));
+  registry.register(recordModule('plan', '计划', PlanBlockView, 'detached'));
   registry.register(recordModule('artifact', '产物', ArtifactBlockView, 'supplement'));
   registry.register(recordModule('error', '错误', ErrorBlockView, 'supplement'));
   registry.register(recordModule('subagent', 'Subagent', SubagentBlockView));

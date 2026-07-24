@@ -36,6 +36,14 @@ function readPlan(snapshot?: DisplaySnapshot): PlanReviewData[] {
   });
 }
 
+export function selectLatestPlan(
+  historicalSnapshots: Array<DisplaySnapshot | undefined>,
+  liveSnapshot?: DisplaySnapshot,
+): PlanReviewData | undefined {
+  const plans = [...historicalSnapshots, liveSnapshot].flatMap((snapshot) => readPlan(snapshot));
+  return plans.at(-1);
+}
+
 export function selectPendingPlanReview(
   historicalSnapshots: Array<DisplaySnapshot | undefined>,
   liveSnapshot?: DisplaySnapshot,

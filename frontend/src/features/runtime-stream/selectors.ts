@@ -6,7 +6,8 @@ import type { DisplayBlock, DisplaySnapshot } from './protocol';
 export function hasVisibleRuntimeContent(snapshot: DisplaySnapshot): boolean {
   return snapshot.order.some((id) => {
     const block = snapshot.blocksById[id];
-    return block && coreBlockRegistry.get(block.kind)?.presentation !== 'structural';
+    const presentation = block ? coreBlockRegistry.get(block.kind)?.presentation : undefined;
+    return block && presentation !== 'structural' && presentation !== 'detached';
   });
 }
 

@@ -27,6 +27,9 @@ export function MessageBubble({ message, sessionId }: { message: LocalMessage; s
     );
   }
   const markdown = message.displaySnapshot ? runtimeText(message.displaySnapshot) : message.content;
+  if (message.displaySnapshot && !hasVisibleRuntimeContent(message.displaySnapshot) && !message.error) {
+    return null;
+  }
   return (
     <MessageFrame containIntrinsicSize="220px">
       <MessageImages images={message.images} align="left" />
@@ -60,6 +63,7 @@ export function StreamingBubble({
 }) {
   const markdown = runtimeText(snapshot);
   const hasVisibleContent = hasVisibleRuntimeContent(snapshot);
+  if (!hasVisibleContent && !isStreaming && !error) return null;
   return (
     <MessageFrame containIntrinsicSize="220px">
       {hasVisibleContent ? (
