@@ -71,6 +71,22 @@ def _reduce_tool(data: Any, patch: Any) -> dict[str, Any]:
     return result
 
 
+def _reduce_team_activity(data: Any, patch: Any) -> dict[str, Any]:
+    if data is None:
+        data = {}
+    if not isinstance(data, dict) or not isinstance(patch, dict):
+        raise BlockLifecycleError("team-activity Block patch 必须为对象")
+    result = dict(data)
+    for key, value in patch.items():
+        if key == "contentDelta":
+            if not isinstance(value, str):
+                raise BlockLifecycleError("team-activity.contentDelta 必须为字符串")
+            result["content"] = (str(result.get("content") or "") + value)[-12_000:]
+        else:
+            result[key] = value
+    return result
+
+
 DEFAULT_BLOCK_MODULES = {
     "message": BlockDataModule(empty={}, reduce=_merge_mapping),
     "text": BlockDataModule(empty="", reduce=_append_text),
@@ -84,6 +100,10 @@ DEFAULT_BLOCK_MODULES = {
     "error": BlockDataModule(empty={}, reduce=_merge_mapping),
     "subagent": BlockDataModule(empty={}, reduce=_merge_mapping),
     "team": BlockDataModule(empty={}, reduce=_merge_mapping),
+    "team-member": BlockDataModule(empty={}, reduce=_merge_mapping),
+    "team-task": BlockDataModule(empty={}, reduce=_merge_mapping),
+    "team-activity": BlockDataModule(empty={}, reduce=_reduce_team_activity),
+    "team-mail": BlockDataModule(empty={}, reduce=_merge_mapping),
 }
 
 

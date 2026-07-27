@@ -35,7 +35,7 @@
 
 - Event Stream V3 已原子切换生产 Chat，只保留 `RUNTIME_EVENT: RuntimeFrame` 与 `DisplaySnapshot V4` 两个前端边界。
 - 后端在线链路为 `SourceEvent -> ChatProjectionNormalizer -> DomainEventRepository -> ProjectionRunner -> per-kind projector -> BlockLifecycleCoordinator -> ProjectionStreamStore -> SSE`；同一 Run 使用全局 `stream_ordinal`、lease/fencing、周期 Snapshot + tail replay、retention、afterSeq fallback 和 completion barrier。
-- `message/text/reasoning/thinking/tool/skill/approval/plan/artifact/error/subagent/team` 已注册独立 projector。Subagent 和 Team 的完整领域状态仍保留在各自存储，Chat 只消费嵌套 Block 摘要。
+- `message/text/reasoning/thinking/tool/skill/approval/plan/artifact/error/subagent/team/team-member/team-task/team-activity/team-mail` 已注册独立 projector。Subagent 和 Team 的完整领域状态仍保留在各自存储，Chat 只消费嵌套 Block 摘要。
 - 前端 Chat 与 Sandbox 已切换到严格 RuntimeFrame decoder、streamAdapter、Block Tree reducer、kind registry 和 Generic Block fallback。HITL renderer 只提交命令，状态由后端 Frame 回流。
 - `event_hub`、RunState schema、DisplayEvent projector/reducer、旧 stream adapter、固定 Process/Plan 组件和工具结果反解析已删除；旧测试 fixture 已物理删除，不存在双读、双写或 compatibility fallback。
 - SQLite 检测到旧 Chat 投影表或非 V4 Snapshot 时执行一次性运行域 reset，不转换旧数据；后续数据库只写 V4 Snapshot。
@@ -47,7 +47,8 @@
 - 每次 Team 请求创建独立 TeamRun，Leader 动态创建临时 Member 和任务。
 - Member session 隔离，通过 Task List、Mailbox 和任务结果协作。
 - 用户可向指定成员或全员发送 Mailbox 消息。
-- Team 以 file-first 状态和领域事件为事实源，Chat 使用嵌套 `kind=team` Block 展示摘要。
+- Team 以 file-first 状态和 `events.jsonl` outbox 为事实源，不再给每条事件附加完整 snapshot；Chat 将 Run、Member、Task、Activity、Tool 和 Mail 分别投影为规范化 Block 子树。
+- 前端 Team Console 只从 DisplaySnapshot V4 派生任务、成员、过程和 Mailbox，并支持通过 active TeamRun Mailbox API 向成员或全体发送干预消息；命令结果仍以 RuntimeFrame 回流为准。
 - 持久 Team CRUD、template、固定成员列表、`/api/teams`、`teams` / `team_members` 表已经删除。
 
 ### Subagent

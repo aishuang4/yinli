@@ -166,6 +166,7 @@ async def run_synthesis(
     ctx: ChatRunContext,
     run_data: ChatMessage,
     flush_events: FlushEvents,
+    on_output_delta: Callable[[str], Awaitable[None]] | None = None,
 ) -> str:
     """使用独立无工具 session 综合最终答案。"""
 
@@ -197,6 +198,7 @@ async def run_synthesis(
         actor_id="leader",
         task_id="",
         flush_events=flush_events,
+        on_output_delta=on_output_delta,
     )
     if not text.strip():
         raise TeamSessionError("综合 session 没有生成最终答案")
@@ -271,6 +273,7 @@ async def _run_agent_stream(
     flush_events: FlushEvents,
     allow_iteration_recovery: bool = False,
     stop_after_tool_name: str = "",
+    on_output_delta: Callable[[str], Awaitable[None]] | None = None,
 ) -> str:
     """把 AgentScope 过程转换为 Team domain event。"""
 
@@ -382,6 +385,8 @@ async def _run_agent_stream(
             if event_type == "TEXT_BLOCK_DELTA":
                 delta = str(data.get("delta") or "")
                 output.append(delta)
+                if delta and on_output_delta is not None:
+                    await on_output_delta(delta)
                 domain_type = "member.output.delta"
             elif event_type == "THINKING_BLOCK_DELTA":
                 delta = str(data.get("delta") or "")

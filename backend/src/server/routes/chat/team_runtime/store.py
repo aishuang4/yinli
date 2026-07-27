@@ -111,7 +111,14 @@ class TeamStore:
         store._write_json(path / "members" / "leader.json", leader)
         (path / "mailbox" / "messages.jsonl").touch()
         (path / "events.jsonl").touch()
-        store._record("run.created", actor_id="leader")
+        store._record(
+            "run.created",
+            actor_id="leader",
+            payload={
+                "run": store._public_run(run),
+                "leader": store._public_member(leader),
+            },
+        )
         store.write_snapshot()
         return store
 
@@ -184,7 +191,11 @@ class TeamStore:
         with self._lock:
             run = {**self.run(), "phase": phase, "updatedAt": utc_now()}
             self._write_json(self.ref.path / "run.json", run)
-            self._record("run.phase.changed", status=phase, payload={"phase": phase})
+            self._record(
+                "run.phase.changed",
+                status=phase,
+                payload={"run": self._public_run(run)},
+            )
             self.write_snapshot()
             return run
 
@@ -204,7 +215,11 @@ class TeamStore:
                 "updatedAt": now,
             }
             self._write_json(self.ref.path / "run.json", run)
-            self._record("run.completed", status="completed")
+            self._record(
+                "run.completed",
+                status="completed",
+                payload={"run": self._public_run(run)},
+            )
             self.write_snapshot()
             return run
 
@@ -232,7 +247,11 @@ class TeamStore:
                 "updatedAt": now,
             }
             self._write_json(self.ref.path / "run.json", run)
-            self._record("run.failed", status="failed", payload={"message": run["failureReason"]})
+            self._record(
+                "run.failed",
+                status="failed",
+                payload={"run": self._public_run(run), "message": run["failureReason"]},
+            )
             self.write_snapshot()
             return run
 
@@ -260,7 +279,11 @@ class TeamStore:
                 "updatedAt": now,
             }
             self._write_json(self.ref.path / "run.json", run)
-            self._record("run.cancelled", status="cancelled", payload={"message": run["failureReason"]})
+            self._record(
+                "run.cancelled",
+                status="cancelled",
+                payload={"run": self._public_run(run), "message": run["failureReason"]},
+            )
             self.write_snapshot()
             return run
 
@@ -295,7 +318,7 @@ class TeamStore:
                 "member.spawned",
                 actor_id=member_id,
                 status="idle",
-                payload={"name": member["name"], "role": member["role"]},
+                payload={"member": self._public_member(member)},
             )
             self.write_snapshot()
             return member
@@ -315,6 +338,7 @@ class TeamStore:
                 actor_id=member_id,
                 task_id=active_task_id,
                 status=status,
+                payload={"member": self._public_member(member)},
             )
             self.write_snapshot()
             return member
@@ -370,7 +394,13 @@ class TeamStore:
             self._write_json(task_path / "task.json", task)
             (task_path / "brief.md").write_text(brief, encoding="utf-8")
             (task_path / "result.md").write_text("", encoding="utf-8")
-            self._record("task.created", actor_id=created_by, task_id=task_id, status="queued")
+            self._record(
+                "task.created",
+                actor_id=created_by,
+                task_id=task_id,
+                status="queued",
+                payload={"task": self._public_task(task, brief_preview=brief)},
+            )
             if assigned_member_id and not self.is_blocked(task):
                 self.send_mail(
                     sender=created_by,
@@ -440,7 +470,13 @@ class TeamStore:
                 }
                 self._write_json(task_path / "task.json", task)
                 self.set_member_status(member_id, "running", active_task_id=task_id)
-                self._record("task.claimed", actor_id=member_id, task_id=task_id, status="running")
+                self._record(
+                    "task.claimed",
+                    actor_id=member_id,
+                    task_id=task_id,
+                    status="running",
+                    payload={"task": self._public_task(task)},
+                )
                 self.write_snapshot()
                 return task
             except Exception:
@@ -473,7 +509,10 @@ class TeamStore:
                 actor_id=member_id,
                 task_id=task_id,
                 status="succeeded",
-                payload={"resultPreview": normalized[:1000]},
+                payload={
+                    "task": self._public_task(task, result_preview=normalized),
+                    "resultPreview": normalized[:1000],
+                },
             )
             self.send_mail(
                 sender=member_id,
@@ -508,7 +547,10 @@ class TeamStore:
                 actor_id=member_id,
                 task_id=task_id,
                 status="failed",
-                payload={"message": task["failureReason"]},
+                payload={
+                    "task": self._public_task(task),
+                    "message": task["failureReason"],
+                },
             )
             self.write_snapshot()
             return task
@@ -536,7 +578,10 @@ class TeamStore:
                 actor_id=member_id,
                 task_id=task_id,
                 status="cancelled",
-                payload={"message": task["failureReason"]},
+                payload={
+                    "task": self._public_task(task),
+                    "message": task["failureReason"],
+                },
             )
             self.write_snapshot()
             return task
@@ -587,7 +632,7 @@ class TeamStore:
                 actor_id=sender,
                 task_id=task_id,
                 status="delivered",
-                payload={"message": message},
+                payload={"message": self._public_mail(message)},
             )
             self.write_snapshot()
             return message
@@ -702,7 +747,10 @@ class TeamStore:
                 actor_id="leader",
                 task_id=str(task["id"]),
                 status="queued",
-                payload={"unlockedByTaskId": completed_task_id},
+                payload={
+                    "task": self._public_task(task),
+                    "unlockedByTaskId": completed_task_id,
+                },
             )
             assigned = str(task.get("assignedMemberId") or "")
             if assigned:
@@ -737,11 +785,119 @@ class TeamStore:
             "actorId": actor_id,
             "taskId": task_id,
             "status": status,
+            "phase": str(run.get("phase") or ""),
             "timestamp": utc_now(),
+            "dataVersion": 1,
+            "counts": self._event_counts(),
+            "updatedAt": run["updatedAt"],
             "payload": payload or {},
         }
         self._append_jsonl(self.ref.path / "events.jsonl", event)
         return event
+
+    def _event_counts(self) -> dict[str, int]:
+        """生成适合实时投影的小型 Team 计数摘要。"""
+
+        members = self.members()
+        tasks = self.tasks()
+        return {
+            "members": len(members),
+            "tasks": len(tasks),
+            "queued": sum(task.get("status") == "queued" for task in tasks),
+            "running": sum(task.get("status") == "running" for task in tasks),
+            "succeeded": sum(task.get("status") == "succeeded" for task in tasks),
+            "failed": sum(task.get("status") == "failed" for task in tasks),
+            "cancelled": sum(task.get("status") == "cancelled" for task in tasks),
+            "mail": len(self.mailbox()),
+        }
+
+    @staticmethod
+    def _public_run(run: dict[str, Any]) -> dict[str, Any]:
+        """裁剪 TeamRun 展示字段，避免把完整用户目标重复写入事件。"""
+
+        return {
+            key: run.get(key)
+            for key in (
+                "id",
+                "chatRunId",
+                "projectId",
+                "status",
+                "phase",
+                "leaderId",
+                "maxConcurrency",
+                "createdAt",
+                "updatedAt",
+                "completedAt",
+                "failureReason",
+            )
+        }
+
+    @staticmethod
+    def _public_member(member: dict[str, Any]) -> dict[str, Any]:
+        """裁剪 Member 展示字段，禁止 runtimePrompt 进入 Chat Snapshot。"""
+
+        return {
+            key: member.get(key)
+            for key in (
+                "id",
+                "sourceAgentId",
+                "name",
+                "role",
+                "status",
+                "activeTaskId",
+                "createdAt",
+                "updatedAt",
+            )
+        }
+
+    @staticmethod
+    def _public_task(
+        task: dict[str, Any],
+        *,
+        brief_preview: str = "",
+        result_preview: str = "",
+    ) -> dict[str, Any]:
+        """裁剪 Task 展示字段，并限制 Markdown 预览大小。"""
+
+        result = {
+            key: task.get(key)
+            for key in (
+                "id",
+                "title",
+                "status",
+                "assignedMemberId",
+                "ownerMemberId",
+                "dependsOn",
+                "priority",
+                "createdBy",
+                "claimedAt",
+                "completedAt",
+                "failureReason",
+                "createdAt",
+                "updatedAt",
+            )
+        }
+        if brief_preview:
+            result["briefPreview"] = brief_preview[:2_000]
+        if result_preview:
+            result["resultPreview"] = result_preview[:4_000]
+        return result
+
+    @staticmethod
+    def _public_mail(message: dict[str, Any]) -> dict[str, Any]:
+        """裁剪 Mailbox 展示字段，完整正文只保留在 Team 文件事实源。"""
+
+        return {
+            "id": message.get("id"),
+            "teamRunId": message.get("teamRunId"),
+            "from": message.get("from"),
+            "to": message.get("to"),
+            "kind": message.get("kind"),
+            "subject": message.get("subject"),
+            "content": str(message.get("content") or "")[:4_000],
+            "taskId": message.get("taskId"),
+            "createdAt": message.get("createdAt"),
+        }
 
     def _member_path(self, member_id: str) -> Path:
         if not MEMBER_ID_PATTERN.fullmatch(member_id):
@@ -782,7 +938,7 @@ class TeamStore:
 
 
 class TeamEventPublisher:
-    """把持久化 Team event 增量包装为独立前端事件。"""
+    """按 seq 转发持久化 Team event，不构造展示快照。"""
 
     def __init__(self, store: TeamStore) -> None:
         self.store = store
@@ -796,5 +952,4 @@ class TeamEventPublisher:
         events = self.store.events_after(self.cursor)
         if events:
             self.cursor = max(int(event.get("seq") or 0) for event in events)
-        snapshot = self.store.snapshot()
-        return [{**event, "snapshot": snapshot} for event in events]
+        return events

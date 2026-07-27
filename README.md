@@ -12,7 +12,7 @@
 - Subagent 升级为 ReAct 内部 `DelegateTask` 委托，使用独立上下文和文件定义，不恢复旧独立 Subagent Runtime（`runtime.kind=subagent`）。
 - Plan Mode 升级为 AgentScope middleware 能力，不再使用旧独立 Plan Runtime（`runtime.kind=plan`）或旧审批链路。
 - Memory 升级为运行前注入、工具查询和运行后提炼组合，不恢复旧 memory runtime。
-- Chat 前端升级为 RunState / DisplaySnapshot 主链路，Team 状态使用独立 `TEAM_EVENT` / `teamSnapshot`。
+- Chat 前端统一使用 `RUNTIME_EVENT` / `DisplaySnapshot V4` Block 主链路，Team 状态投影为嵌套 Team Block 子树。
 
 旧开发库中可能仍有少量历史字段，但它们只用于最低限度的启动或数据读取，不代表当前功能，也不能作为后续实现入口。
 
@@ -55,7 +55,7 @@
 ### 工作台与审计
 
 - Chat、Runs、Trace、Agents、Subagents、Tools、MCP、Skills、Memory、Sandbox 和 Workflow 使用独立页面。
-- Team 状态使用独立 `TEAM_EVENT` / `teamSnapshot`，不污染单 Agent DisplaySnapshot。
+- Team 领域事件通过独立 projector 进入统一 DisplaySnapshot，前端 Team Console 只读取 Team Block 子树。
 - Dynamic Workflow 当前是独立实验工作区，后续按 Script Review 和 Runtime Cockpit 路线演进，不进入 Chat Runtime。
 - Electron 支持开发运行和 macOS / Windows 内测打包流程。
 

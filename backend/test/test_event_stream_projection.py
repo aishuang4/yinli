@@ -29,6 +29,7 @@ from src.server.routes.chat.projection.projection_writer import (
 )
 from src.server.routes.chat.projection.stream_service import ProjectionStreamService
 from src.server.routes.chat.projection.source_normalizer import ChatProjectionNormalizer
+from src.server.routes.chat.team_runtime.store import TeamEventPublisher, TeamStore
 from src.storage import database
 
 
@@ -392,8 +393,19 @@ def test_source_normalizer_closes_all_activity_before_run_completed(projection_d
         "payload": {"invocationId": "sub-1", "subagentName": "explorer"},
     })
     normalizer.ingest("TEAM_DOMAIN_EVENT", {
+        "id": "tevt-1",
+        "seq": 1,
         "teamRunId": "team-1",
-        "snapshot": {"run": {"status": "running"}},
+        "chatRunId": "run-normalized",
+        "type": "run.created",
+        "actorId": "leader",
+        "status": "running",
+        "timestamp": "2026-01-01T00:00:00+00:00",
+        "counts": {"members": 1, "tasks": 0},
+        "payload": {
+            "run": {"status": "running", "phase": "created"},
+            "leader": {"id": "leader", "name": "Leader", "role": "leader", "status": "created"},
+        },
     })
     terminal_events = normalizer.ingest("RUN_COMPLETED", {
         "payload": {"completedAt": "2026-01-01T00:00:00+00:00"},
@@ -412,7 +424,172 @@ def test_source_normalizer_closes_all_activity_before_run_completed(projection_d
     assert state.snapshot.blocks_by_id["plan:plan-1"].data["status"] == "review_waiting"
     assert state.snapshot.blocks_by_id["plan:plan-1"].data["revision"] == 1
     assert state.snapshot.blocks_by_id["plan:plan-1"].data["steps"][0]["id"] == "step-1"
+    assert state.snapshot.blocks_by_id["team:team-1"].outcome == "completed"
+    assert state.snapshot.blocks_by_id["team-member:team-1:leader"].outcome == "completed"
     assert state.snapshot.blocks_by_id["message:run-normalized"].outcome == "completed"
+
+
+def test_real_team_outbox_projects_incremental_block_tree(projection_db, tmp_path) -> None:
+    """真实 TeamStore 事件必须生成规范化子树，且发布事件不得携带完整 snapshot。"""
+
+    team_store = TeamStore.create(
+        session_id="session-team",
+        chat_run_id="run-team",
+        goal="并行审计",
+        leader_agent_id="agent-leader",
+        leader_name="Leader",
+        project_id="project-team",
+        root=tmp_path / "team-runtime",
+    )
+    member = team_store.spawn_member(name="Reviewer", role="review", runtime_prompt="review")
+    task = team_store.create_task(
+        title="检查投影",
+        brief="读取事件投影代码",
+        created_by="leader",
+    )
+    team_store.claim_task(task["id"], member["id"])
+    team_store.record_member_event(
+        "member.thinking.delta",
+        member_id=member["id"],
+        task_id=task["id"],
+        payload={"delta": "先检查 normalizer。"},
+    )
+    team_store.record_member_event(
+        "member.tool.started",
+        member_id=member["id"],
+        task_id=task["id"],
+        payload={"toolCallId": "call-read", "name": "Read"},
+    )
+    team_store.record_member_event(
+        "member.tool.completed",
+        member_id=member["id"],
+        task_id=task["id"],
+        status="completed",
+        payload={"toolCallId": "call-read", "name": "Read", "state": "completed"},
+    )
+    team_store.record_member_event(
+        "member.output.delta",
+        member_id=member["id"],
+        task_id=task["id"],
+        payload={"delta": "投影链路职责清晰。"},
+    )
+    team_store.record_member_event(
+        "member.tool.started",
+        member_id=member["id"],
+        task_id=task["id"],
+        payload={"toolCallId": "call-denied", "name": "Bash"},
+    )
+    team_store.record_member_event(
+        "member.tool.denied",
+        member_id=member["id"],
+        task_id=task["id"],
+        status="denied",
+        payload={
+            "toolCallId": "call-denied",
+            "name": "Bash",
+            "reason": "requires_user_confirmation",
+        },
+    )
+    team_store.record_member_event(
+        "member.tool.failed",
+        member_id=member["id"],
+        task_id=task["id"],
+        status="failed",
+        payload={"toolCallId": "call-denied", "name": "Bash", "state": "denied"},
+    )
+    team_store.record_member_event(
+        "member.tool.started",
+        member_id=member["id"],
+        task_id=task["id"],
+        payload={"toolCallId": "call-submit", "name": "team_submit_result"},
+    )
+    team_store.complete_task(task["id"], member["id"], "投影链路职责清晰。")
+    team_store.record_member_event(
+        "member.tool.completed",
+        member_id=member["id"],
+        task_id=task["id"],
+        status="completed",
+        payload={
+            "toolCallId": "call-submit",
+            "name": "team_submit_result",
+            "state": "completed",
+        },
+    )
+    team_store.record_member_event(
+        "member.output.delta",
+        member_id=member["id"],
+        task_id=task["id"],
+        payload={"delta": "任务提交后的迟到总结不应重新打开已关闭活动。"},
+    )
+    team_store.set_member_status(member["id"], "idle")
+    team_store.read_inbox("leader")
+    team_store.set_phase("synthesizing")
+    team_store.complete_run()
+
+    publisher = TeamEventPublisher(team_store)
+    source_events = publisher.drain()
+    assert source_events
+    assert all("snapshot" not in event for event in source_events)
+    assert publisher.drain() == []
+
+    events, display_store, coordinator, runner = create_runtime(checkpoint_frame_interval=5)
+    normalizer = ChatProjectionNormalizer(
+        stream_key="stream-team",
+        run_id="run-team",
+        session_id="session-team",
+        events=events,
+    )
+    normalizer.start(agent_name="Leader")
+    projected_count = 0
+    for source in source_events:
+        normalizer.ingest("TEAM_DOMAIN_EVENT", source)
+        if source["type"] == "task.completed":
+            projected_count += runner.run_available("stream-team", "run-team")
+            intermediate = display_store.load_materialized("stream-team", coordinator).snapshot
+            pending_task = intermediate.blocks_by_id[
+                f"team-task:{team_store.ref.id}:{task['id']}"
+            ]
+            pending_tool = intermediate.blocks_by_id[
+                f"tool:team:{team_store.ref.id}:call-submit"
+            ]
+            assert pending_task.phase == "open"
+            assert pending_task.data["status"] == "succeeded"
+            assert pending_tool.phase == "open"
+    normalizer.ingest("FINAL_ANSWER_REPLACE", {"content": "Team 审计完成。"})
+    normalizer.ingest("RUN_COMPLETED", {"payload": {}})
+
+    projected_count += runner.run_available("stream-team", "run-team")
+    assert projected_count == len(events.list("stream-team"))
+    state = display_store.load_materialized("stream-team", coordinator)
+    snapshot = state.snapshot
+    team_id = team_store.ref.id
+    team_block = snapshot.blocks_by_id[f"team:{team_id}"]
+    member_block = snapshot.blocks_by_id[f"team-member:{team_id}:{member['id']}"]
+    task_block = snapshot.blocks_by_id[f"team-task:{team_id}:{task['id']}"]
+    thinking_block = snapshot.blocks_by_id[f"team-activity:{team_id}:{task['id']}:thinking"]
+    output_block = snapshot.blocks_by_id[f"team-activity:{team_id}:{task['id']}:output"]
+    tool_block = snapshot.blocks_by_id[f"tool:team:{team_id}:call-read"]
+    submit_tool_block = snapshot.blocks_by_id[f"tool:team:{team_id}:call-submit"]
+    denied_tool_block = snapshot.blocks_by_id[f"tool:team:{team_id}:call-denied"]
+    mail_blocks = [block for block in snapshot.blocks_by_id.values() if block.kind == "team-mail"]
+
+    assert snapshot.stream_done is True
+    assert team_block.data["projectId"] == "project-team"
+    assert team_block.data["counts"]["succeeded"] == 1
+    assert team_block.outcome == "completed"
+    assert member_block.data["name"] == "Reviewer"
+    assert member_block.outcome == "completed"
+    assert task_block.data["briefPreview"] == "读取事件投影代码"
+    assert task_block.data["resultPreview"] == "投影链路职责清晰。"
+    assert task_block.outcome == "completed"
+    assert thinking_block.data["content"] == "先检查 normalizer。"
+    assert output_block.data["content"] == "投影链路职责清晰。"
+    assert tool_block.data["name"] == "Read"
+    assert tool_block.outcome == "completed"
+    assert submit_tool_block.outcome == "completed"
+    assert denied_tool_block.outcome == "failed"
+    assert mail_blocks and mail_blocks[0].data["deliveryStatus"] == "read"
+    assert all(block.phase == "closed" for block in snapshot.blocks_by_id.values())
 
 
 def test_subagent_block_stays_open_until_parent_consumes_result(projection_db) -> None:

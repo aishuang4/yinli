@@ -504,6 +504,45 @@ def test_member_stream_coalesces_deltas_and_preserves_tool_name(tmp_path) -> Non
     assert completed_tool["payload"]["name"] == "team_read_mailbox"
 
 
+def test_member_stream_forwards_synthesis_output_deltas_immediately(tmp_path) -> None:
+    """综合文本必须逐段转发给 Chat，不能只在 session 结束后整体 replace。"""
+
+    store = create_store(tmp_path)
+
+    class FakeEvent:
+        def __init__(self, delta: str) -> None:
+            self.delta = delta
+
+        def model_dump(self, **_kwargs) -> dict:
+            return {"type": "TEXT_BLOCK_DELTA", "delta": self.delta}
+
+    class FakeAgent:
+        async def reply_stream(self, _message):
+            yield FakeEvent("第一段")
+            yield FakeEvent("第二段")
+
+    forwarded: list[str] = []
+
+    async def flush_events() -> None:
+        return None
+
+    async def on_output_delta(delta: str) -> None:
+        forwarded.append(delta)
+
+    output = asyncio.run(_run_agent_stream(
+        agent=FakeAgent(),
+        user_msg=SimpleNamespace(),
+        store=store,
+        actor_id="leader",
+        task_id="",
+        flush_events=flush_events,
+        on_output_delta=on_output_delta,
+    ))
+
+    assert forwarded == ["第一段", "第二段"]
+    assert output == "第一段第二段"
+
+
 def test_leader_stream_stops_after_finish_coordination_tool(tmp_path) -> None:
     store = create_store(tmp_path)
 

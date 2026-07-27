@@ -53,7 +53,7 @@ npm run lint     # eslint
 
 5. **`routes/chat/runtime_builder.py`** — IntentRoute 之后的运行时组装层。负责合成本轮模型配置、主 Agent runtime cache key、`MainAgentRuntimeSpec`，并通过 `create_main_agent_from_spec()` 委托工厂创建/复用 Agent。Chat 请求不包含持久 Team 或固定成员上下文。Skill 选择由 `skill_selector.py` 处理；工具范围由 `tool_scope_resolver.py` 处理。
 
-6. **`routes/chat/team_runtime/`** — 一次性 Team Runtime。每轮由 `TeamRunService` 创建全新文件状态，Leader 使用 Team 控制工具动态创建临时 Member 和共享任务，`TeamCoordinator` 按依赖并发运行隔离 Member session，全部任务成功后进入无工具综合阶段。Team 只发送顶层 `TEAM_EVENT`，状态进入独立 `teamSnapshot` / `TeamConsoleState`，不得进入单 Agent `DisplaySnapshot`。用户可通过 active TeamRun Mailbox API 向任意成员投递干预消息；Member 存在未读消息时不得提交结果，综合期间收到新消息必须重新综合。
+6. **`routes/chat/team_runtime/`** — 一次性 Team Runtime。每轮由 `TeamRunService` 创建全新文件状态，Leader 使用 Team 控制工具动态创建临时 Member 和共享任务，`TeamCoordinator` 按依赖并发运行隔离 Member session，全部任务成功后进入无工具综合阶段。Team 文件状态和 `events.jsonl` 是领域事实源；展示通过内部 `TEAM_DOMAIN_EVENT` 归一化为 Domain Event，再统一投影为 `RUNTIME_EVENT` 和 `DisplaySnapshot V4` 中的 `team/team-member/team-task/team-activity/team-mail` Block，不得恢复顶层 `TEAM_EVENT`、独立 `teamSnapshot` 或 `TeamConsoleState`。用户可通过 active TeamRun Mailbox API 向任意成员投递干预消息；Member 存在未读消息时不得提交结果，综合期间收到新消息必须重新综合。
    Chat 与 Sandbox 在单 Agent 模式选择 Agent；切换到 Team 模式后沿用该 Agent 作为 Leader，并隐藏选择器。禁止恢复 Team、Member 或 Leader 下拉框，也禁止向 Chat Runtime 传入 `team_id`、`team_name`、`team_members`。
 
 7. **`routes/chat/leader_stream.py`** — Leader/单 Agent 事件流处理。消费 `agent.reply_stream()`，维护 `LeaderStreamState`，处理模型 cache、trace、permission decision、tool artifacts、HITL 早停、流式文本/思考累计、Skill end 和模型输出后的 clarification 兜底。

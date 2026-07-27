@@ -31,6 +31,10 @@ class DomainCompletionBarrier:
         "error": "error",
         "subagent": "subagent",
         "team": "team",
+        "team-member": "team.member",
+        "team-task": "team.task",
+        "team-activity": "team.activity",
+        "team-mail": "team.mail",
     }
 
     def terminal_events(

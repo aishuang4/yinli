@@ -100,6 +100,7 @@ class TeamRunService:
                     ctx=self.ctx,
                     run_data=self.run_data,
                     flush_events=self.flush_events,
+                    on_output_delta=self._publish_final_answer_delta,
                 )
                 try:
                     self.store.complete_run(expected_mailbox_version=mailbox_version)
@@ -162,6 +163,12 @@ class TeamRunService:
         async with self._publish_lock:
             for event in self.publisher.drain():
                 await self.queue.put(team_source_event(event))
+
+    async def _publish_final_answer_delta(self, delta: str) -> None:
+        """把综合 session 的模型增量同步投影到 Chat 最终回答。"""
+
+        if delta:
+            await self.queue.put(source_event("FINAL_ANSWER_DELTA", {"delta": delta}))
 
     async def send_user_mail(self, *, recipient: str, content: str) -> dict:
         """用户向当前 active TeamRun 成员投递干预消息。"""

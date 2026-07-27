@@ -16,7 +16,17 @@ EVENT_TYPES = {
     "tool.result.failed",
     "tool.result.cancelled",
 }
-_STRING_FIELDS = {"name", "inputPreview", "outputPreview", "error", "detailRef", "traceRef"}
+_STRING_FIELDS = {
+    "name",
+    "inputPreview",
+    "outputPreview",
+    "error",
+    "detailRef",
+    "traceRef",
+    "scope",
+    "memberId",
+    "taskId",
+}
 
 
 def _safe_patch(value: Any) -> dict[str, Any]:

@@ -187,7 +187,11 @@ type DisplaySnapshot = {
 | `artifact` | 产物摘要与下载引用 | 浅合并结构化字段 |
 | `error` | 用户可见错误 | 浅合并结构化字段 |
 | `subagent` | 子 Agent 生命周期 | 浅合并；内部活动使用子 Block |
-| `team` | TeamRun 摘要与成员活动 | 浅合并；内部活动使用子 Block |
+| `team` | TeamRun 根状态与统计 | 浅合并结构化字段 |
+| `team-member` | 临时 Member 身份与状态 | 浅合并结构化字段 |
+| `team-task` | Team Task 生命周期 | 浅合并结构化字段 |
+| `team-activity` | Member 输出、思考与恢复过程 | `delta` 追加 content，其他字段浅合并 |
+| `team-mail` | 单条 Mailbox 消息与 delivery 状态 | 浅合并结构化字段 |
 
 新增展示能力只能新增一个后端 per-kind projector 和一个前端 Block module。不得增加 RuntimeFrame op、顶层 SSE 事件、公共 reducer 分支或 payload 反解析。
 
@@ -367,3 +371,30 @@ RUNTIME_EVENT
 3. Snapshot、tail replay、HITL resume 和 terminal done 回归。
 
 新功能如果只需要新增 `kind`，不得修改本协议公共结构。
+
+## 11. Team 投影契约
+
+Team 是 ReAct 的 `executor.kind=team` 执行能力，不新增 SSE 事件名。TeamStore 的 `events.jsonl` 是后端领域事实与 outbox，`TEAM_DOMAIN_EVENT` 只是进程内源信号；浏览器只能收到由 projector 生成的 `RUNTIME_EVENT`。
+
+稳定 Block identity：
+
+```text
+team:{teamRunId}
+team-member:{teamRunId}:{memberId}
+team-task:{teamRunId}:{taskId}
+team-activity:{teamRunId}:{activityId}
+team-mail:{teamRunId}:{messageId}
+tool:team:{teamRunId}:{toolCallId}
+```
+
+`team`、`team-member`、`team-task`、`team-activity` 和 `team-mail` 都是 `message:{runId}` 的后代。Task 固定直属 Team，活动与工具直属 Task；没有 task 的 Leader 协调活动直属 Team。parent 一经 open 不得因 owner 或状态变化而修改。
+
+TeamStore event 不得携带完整 snapshot。每条事件 payload 必须自包含 projector 所需白名单字段。Team terminal 投影必须先关闭开放的 tool/activity，再关闭 task/member，最后关闭 team；只有随后到达的 Run terminal 才能关闭 message 和发送 done。`team_submit_result` 的真实顺序允许 `task.completed` 先于对应 `member.tool.completed`：projector 必须先更新 task 数据，保留 task 为 open，待最后一个已启动 tool 关闭后再关闭 task。task 进入领域终态后到达的新 activity 或新 tool 不再创建展示 Block，已启动 tool 的终态仍必须消费并投影。同一 `toolCallId` 可能因外部执行拒绝连续产生 `member.tool.denied` 和 `member.tool.failed`，Tool 首个终态关闭 Block 后，后续重复终态必须按幂等事实消费，不得重新 open。
+
+`team-activity.data.content` 最多保留最近 12000 字符，`team-mail.data.content` 最多 4000 字符，Task brief/result 分别最多 2000/4000 字符；完整内容留在 Team 文件状态和 Trace，不进入 DisplaySnapshot。
+
+前端 Team Console 只能从 DisplaySnapshot Block 子树派生。Mailbox 命令的 HTTP response 不得直接修改 Block Tree，必须等待对应 `team-mail` Frame 回流。旧顶层 `TEAM_EVENT`、`teamSnapshot`、`TeamConsoleState`、`teamEventReducer` 和历史 reader 均不兼容、不迁移、不读取。
+
+Team 综合阶段必须把模型的 `TEXT_BLOCK_DELTA` 同步投影到当前消息的 `kind=text` Block，逐段发送 `delta` Frame；综合完成后允许发送一次 `replace` 作为最终一致性校正，但不得把它作为首个回答内容。这样成员执行过程和最终回答都沿同一条可恢复的 seq 流实时展示。
+
+Chat 中的 `kind=team` renderer 必须直接从同一 DisplaySnapshot 的 Team 子树派生实时成员、任务和最新活动摘要。运行中的成员、任务和阶段变化应在 Frame 到达后立即更新，并使用局部状态动画表达进行中/完成/失败；完整过程仍由 Team Console 下钻查看。renderer 不得缓存第二份 Team 状态，也不得等待 Team 终态后批量构造组件。

@@ -31,7 +31,7 @@
 - `RUNTIME_EVENT(scope=subagent)`、现有 `run_events`、EventHub、RunState 和 DisplaySnapshot 链路。
 - 前台 Subagent 继续关联 `DelegateTask` 工具项。
 - Subagent invocation 使用 `invocationId` 作为前端身份，并使用独立任务控制台组件；detached background 不属于当前在线能力。
-- Team 继续只使用 `TEAM_EVENT` / `teamSnapshot`，不与 Subagent reducer 混用。
+- Team 与 Subagent 都进入统一 `RUNTIME_EVENT` / `DisplaySnapshot V4`，但分别使用独立 kind projector 和 Block 子树，不共享领域 reducer。
 
 ### 2.2 删除或推迟
 

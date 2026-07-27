@@ -21,7 +21,6 @@ import {
   MessageCircleQuestion,
   Puzzle,
   Terminal,
-  Users,
   Wrench,
 } from 'lucide-react';
 import { MarkdownContent } from '../../components/MarkdownContent';
@@ -484,19 +483,6 @@ export function SubagentBlockView({ block }: { block: DisplayBlock<RecordData> }
           {text(block.data.resultPreview, text(block.data.summary))}
         </div>
       ) : null}
-    </RuntimeItem>
-  );
-}
-
-export function TeamBlockView({ block }: { block: DisplayBlock<RecordData> }) {
-  const counts = block.data.counts && typeof block.data.counts === 'object' && !Array.isArray(block.data.counts)
-    ? block.data.counts as RecordData
-    : {};
-  return (
-    <RuntimeItem icon={<Users size={14} />} title="Team 协作" block={block}>
-      <div className="text-xs">
-        {Number(counts.succeeded || 0)}/{Number(counts.tasks || 0)} 个任务完成
-      </div>
     </RuntimeItem>
   );
 }

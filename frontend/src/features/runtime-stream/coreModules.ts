@@ -9,11 +9,17 @@ import {
   ProcessTextBlockView,
   SkillBlockView,
   SubagentBlockView,
-  TeamBlockView,
   TextBlockView,
   ToolBlockView,
   type RecordData,
 } from './CoreBlockViews';
+import {
+  TeamActivityBlockView,
+  TeamBlockView,
+  TeamMailBlockView,
+  TeamMemberBlockView,
+  TeamTaskBlockView,
+} from './TeamBlockViews';
 import {
   BlockRegistry,
   decodeRecord,
@@ -97,6 +103,21 @@ const toolModule: BlockModule<RecordData, RecordData> = {
   },
 };
 
+const teamActivityModule: BlockModule<RecordData, RecordData> = {
+  ...recordModule('team-activity', 'Team 过程', TeamActivityBlockView),
+  reduce: (data, patch) => {
+    const next = { ...data };
+    for (const [key, value] of Object.entries(patch)) {
+      if (key === 'contentDelta') {
+        next.content = (String(next.content ?? '') + decodeString(value, 'team-activity.contentDelta')).slice(-12_000);
+      } else {
+        next[key] = value;
+      }
+    }
+    return next;
+  },
+};
+
 export function createCoreBlockRegistry(): BlockRegistry {
   const registry = new BlockRegistry();
   registry.register(recordModule('message', '消息', MessageBlockView, 'structural'));
@@ -111,6 +132,10 @@ export function createCoreBlockRegistry(): BlockRegistry {
   registry.register(recordModule('error', '错误', ErrorBlockView, 'supplement'));
   registry.register(recordModule('subagent', 'Subagent', SubagentBlockView));
   registry.register(recordModule('team', 'Team', TeamBlockView));
+  registry.register(recordModule('team-member', 'Team Member', TeamMemberBlockView));
+  registry.register(recordModule('team-task', 'Team Task', TeamTaskBlockView));
+  registry.register(teamActivityModule);
+  registry.register(recordModule('team-mail', 'Team Mail', TeamMailBlockView));
   return registry;
 }
 

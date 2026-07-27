@@ -7,9 +7,10 @@ from typing import Any
 
 from .completion_barrier import ActiveDomainBlock, DomainCompletionBarrier
 from .domain_events import DomainEvent, DomainEventDraft, DomainEventRepository
+from .team_event_normalizer import TeamEventNormalizerMixin
 
 
-class ChatProjectionNormalizer:
+class ChatProjectionNormalizer(TeamEventNormalizerMixin):
     """单 Run normalizer；源信号不持久化、不作为 SSE 或 replay 契约。"""
 
     def __init__(
@@ -27,6 +28,10 @@ class ChatProjectionNormalizer:
         self.message_id = f"message:{run_id}"
         self._revisions: dict[tuple[str, str], int] = defaultdict(int)
         self._active: dict[str, ActiveDomainBlock] = {}
+        self._block_parents: dict[str, str] = {}
+        self._pending_team_task_terminals: dict[str, tuple[str, str, dict[str, Any]]] = {}
+        self._terminal_team_tasks: set[str] = set()
+        self._terminal_team_tools: set[str] = set()
         self._reasoning_index = 0
         self._thinking_index = 0
         self._reasoning_id = ""
@@ -69,7 +74,7 @@ class ChatProjectionNormalizer:
             "SKILL_END": self._skill_completed,
             "HITL_REQUIRED": self._interaction_started,
             "CLARIFICATION_REQUIRED": self._interaction_started,
-            "TEAM_DOMAIN_EVENT": self._team_updated,
+            "TEAM_DOMAIN_EVENT": self._team_event,
             "ERROR": self._error,
             "RUN_CANCELLED": lambda value: self.finish("cancelled", value),
         }.get(event_type)
@@ -328,13 +333,192 @@ class ChatProjectionNormalizer:
             ))
         return produced
 
-    def _team_updated(self, data: dict[str, Any]) -> list[DomainEvent]:
-        team_id = str(data.get("teamRunId") or self.run_id)
-        block_id = f"team:{team_id}"
-        snapshot = data.get("snapshot") if isinstance(data.get("snapshot"), dict) else data
+    def _team_event(self, data: dict[str, Any]) -> list[DomainEvent]:
+        return super()._team_event(data)
+
+    def _start_team_member(
+        self,
+        team_id: str,
+        member_id: str,
+        member: dict[str, Any],
+        team_block_id: str,
+    ) -> list[DomainEvent]:
+        if not member_id:
+            return []
+        block_id = self._team_member_block_id(team_id, member_id)
+        if block_id in self._active:
+            return []
+        return self._start_block(
+            "team.member",
+            block_id,
+            "team-member",
+            {"teamRunId": team_id, "memberId": member_id, **member},
+            aggregate_id=member_id,
+            parent_id=team_block_id,
+        )
+
+    def _team_tool_event(
+        self,
+        *,
+        source_type: str,
+        team_id: str,
+        team_block_id: str,
+        actor_id: str,
+        task_id: str,
+        payload: dict[str, Any],
+    ) -> list[DomainEvent]:
+        tool_call_id = str(payload.get("toolCallId") or "")
+        if not tool_call_id:
+            return []
+        block_id = f"tool:team:{team_id}:{tool_call_id}"
+        if block_id in self._terminal_team_tools:
+            return []
+        parent_id = self._team_task_block_id(team_id, task_id) if task_id else team_block_id
+        if parent_id not in self._active:
+            parent_id = team_block_id
+        produced: list[DomainEvent] = []
         if block_id not in self._active:
-            return self._start_block("team", block_id, "team", snapshot, aggregate_id=team_id)
-        return [self._delta_block("team", team_id, "team", snapshot, block_id=block_id, event_suffix="updated")]
+            event = self._append(
+                "tool.call.started",
+                aggregate_type="tool",
+                aggregate_id=f"team:{team_id}:{tool_call_id}",
+                data={
+                    "blockId": block_id,
+                    "parentId": parent_id,
+                    "name": str(payload.get("name") or "Tool"),
+                    "inputPreview": "",
+                    "outputPreview": "",
+                    "scope": "team",
+                    "memberId": actor_id,
+                    "taskId": task_id,
+                },
+            )
+            self._active[block_id] = ActiveDomainBlock(
+                block_id, "tool", "tool", f"team:{team_id}:{tool_call_id}",
+            )
+            self._block_parents[block_id] = parent_id
+            produced.append(event)
+        if source_type != "member.tool.started" and block_id in self._active:
+            failed = source_type in {"member.tool.failed", "member.tool.denied"}
+            event = self._append(
+                "tool.result.failed" if failed else "tool.result.completed",
+                aggregate_type="tool",
+                aggregate_id=f"team:{team_id}:{tool_call_id}",
+                data={
+                    "blockId": block_id,
+                    "status": "failed" if failed else "completed",
+                    "error": str(payload.get("reason") or payload.get("state") or "") if failed else "",
+                },
+            )
+            self._active.pop(block_id, None)
+            self._block_parents.pop(block_id, None)
+            self._terminal_team_tools.add(block_id)
+            produced.append(event)
+        return produced
+
+    def _close_team_tree(self, team_block_id: str, outcome: str) -> list[DomainEvent]:
+        produced = self._close_team_descendants(team_block_id, outcome)
+        self._pending_team_task_terminals.clear()
+        self._terminal_team_tasks.clear()
+        self._terminal_team_tools.clear()
+        block = self._active.get(team_block_id)
+        if block is not None:
+            produced.append(self._close_block(
+                "team", block.aggregate_id, team_block_id, outcome, {},
+            ))
+        return produced
+
+    def _close_team_descendants(
+        self,
+        parent_id: str,
+        outcome: str,
+        *,
+        exclude_kinds: set[str] | None = None,
+    ) -> list[DomainEvent]:
+        excluded = exclude_kinds or set()
+        descendants = [
+            block
+            for block in self._active.values()
+            if (
+                block.block_id != parent_id
+                and block.kind not in excluded
+                and self._is_descendant(block.block_id, parent_id)
+            )
+        ]
+        descendants.sort(key=lambda block: self._block_depth(block.block_id), reverse=True)
+        produced: list[DomainEvent] = []
+        for block in descendants:
+            if block.block_id not in self._active:
+                continue
+            prefix = "tool.result" if block.kind == "tool" else block.aggregate_type
+            produced.append(self._close_block(
+                prefix,
+                block.aggregate_id,
+                block.block_id,
+                outcome,
+                {"status": "completed" if outcome == "completed" else outcome},
+            ))
+        return produced
+
+    def _close_pending_team_task(self, task_id: str, team_id: str) -> list[DomainEvent]:
+        """最后一个工具关闭后，提交此前已到达的 Task 终态。"""
+
+        if not task_id:
+            return []
+        task_block_id = self._team_task_block_id(team_id, task_id)
+        pending = self._pending_team_task_terminals.get(task_block_id)
+        if pending is None or task_block_id not in self._active:
+            return []
+        if self._open_team_descendants(task_block_id):
+            return []
+        aggregate_id, outcome, patch = self._pending_team_task_terminals.pop(task_block_id)
+        return [self._close_block(
+            "team.task",
+            aggregate_id,
+            task_block_id,
+            outcome,
+            patch,
+        )]
+
+    def _open_team_descendants(
+        self,
+        parent_id: str,
+        *,
+        kind: str | None = None,
+    ) -> list[ActiveDomainBlock]:
+        return [
+            block
+            for block in self._active.values()
+            if (
+                block.block_id != parent_id
+                and (kind is None or block.kind == kind)
+                and self._is_descendant(block.block_id, parent_id)
+            )
+        ]
+
+    def _is_descendant(self, block_id: str, parent_id: str) -> bool:
+        current = self._block_parents.get(block_id, "")
+        while current:
+            if current == parent_id:
+                return True
+            current = self._block_parents.get(current, "")
+        return False
+
+    def _block_depth(self, block_id: str) -> int:
+        depth = 0
+        current = self._block_parents.get(block_id, "")
+        while current:
+            depth += 1
+            current = self._block_parents.get(current, "")
+        return depth
+
+    @staticmethod
+    def _team_member_block_id(team_id: str, member_id: str) -> str:
+        return f"team-member:{team_id}:{member_id}"
+
+    @staticmethod
+    def _team_task_block_id(team_id: str, task_id: str) -> str:
+        return f"team-task:{team_id}:{task_id}"
 
     def _error(self, data: dict[str, Any]) -> list[DomainEvent]:
         error_id = f"error:{self.run_id}"
@@ -371,15 +555,17 @@ class ChatProjectionNormalizer:
         initial: Any,
         *,
         aggregate_id: str | None = None,
+        parent_id: str | None = None,
     ) -> list[DomainEvent]:
         aggregate = aggregate_id or block_id
         event = self._append(
             f"{prefix}.started",
             aggregate_type=prefix,
             aggregate_id=aggregate,
-            data={"blockId": block_id, "parentId": self.message_id, "initial": initial},
+            data={"blockId": block_id, "parentId": parent_id or self.message_id, "initial": initial},
         )
         self._active[block_id] = ActiveDomainBlock(block_id, kind, prefix, aggregate)
+        self._block_parents[block_id] = parent_id or self.message_id
         return [event]
 
     def _delta_block(
@@ -415,6 +601,7 @@ class ChatProjectionNormalizer:
             data={"blockId": block_id, "patch": patch},
         )
         self._active.pop(block_id, None)
+        self._block_parents.pop(block_id, None)
         return event
 
     def _append(

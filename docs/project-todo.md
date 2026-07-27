@@ -15,6 +15,7 @@
 
 ## P2. TeamRun 与 Subagent
 
+- [x] 完成 Team 统一事件投影：删除每事件完整 snapshot，新增 `team/team-member/team-task/team-activity/team-mail` Block 子树和 DisplaySnapshot 驱动的 Team Console。
 - [ ] 增加 Team Mailbox API 与综合阶段并发投递的端到端测试。
 - [ ] 增加 Team Console Playwright 回归，覆盖第二轮清空、成员切换不重放和用户主动发信。
 - [x] 完成 Subagent M2.1 稳定性修复：错误 observation、父本轮模型继承、异常终态和 HITL 事件关联。

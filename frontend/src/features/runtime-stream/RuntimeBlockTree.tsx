@@ -1,11 +1,14 @@
 /** DisplaySnapshot V4 的唯一 Chat 树形渲染入口。 */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { RuntimeBlockRenderer } from './BlockRenderer';
 import { coreBlockRegistry } from './coreModules';
 import type { DisplaySnapshot } from './protocol';
 import { RuntimeBlockActionsContext, type RuntimeBlockActions } from './runtimeBlockActions';
 import { RuntimeProcessGroup } from './RuntimeProcessGroup';
+import { TeamConsole } from './TeamBlockViews';
+import { TeamRuntimeContext } from './TeamRuntimeContext';
 
 export function RuntimeBlockTree({
   snapshot,
@@ -16,6 +19,7 @@ export function RuntimeBlockTree({
   actions?: RuntimeBlockActions;
   sessionId?: string;
 }) {
+  const [openTeamId, setOpenTeamId] = useState<string | null>(null);
   const childrenByParent = useMemo(() => {
     const result = new Map<string, string[]>();
     for (const id of snapshot.order) {
@@ -55,7 +59,7 @@ export function RuntimeBlockTree({
     return (
       <div key={id} data-runtime-block-id={id} data-runtime-block-kind={block.kind}>
         <RuntimeBlockRenderer block={block} registry={coreBlockRegistry} />
-        {children.length > 0 ? (
+        {children.length > 0 && block.kind !== 'team' ? (
           <div className={block.kind === 'message' ? 'space-y-2' : 'ml-4 mt-2 space-y-2'}>
             {processChildren.length ? (
               <RuntimeProcessGroup
@@ -76,7 +80,17 @@ export function RuntimeBlockTree({
 
   return (
     <RuntimeBlockActionsContext.Provider value={actions || sessionId ? { ...actions, sessionId } : null}>
-      <div className="space-y-2">{(childrenByParent.get('') || []).map(renderBranch)}</div>
+      <TeamRuntimeContext.Provider value={{
+        snapshot,
+        openTeamId,
+        onOpenTeam: setOpenTeamId,
+        onCloseTeam: () => setOpenTeamId(null),
+      }}>
+        <div className="space-y-2">{(childrenByParent.get('') || []).map(renderBranch)}</div>
+        {openTeamId
+          ? createPortal(<TeamConsole snapshot={snapshot} teamBlockId={openTeamId} />, document.body)
+          : null}
+      </TeamRuntimeContext.Provider>
     </RuntimeBlockActionsContext.Provider>
   );
 }
