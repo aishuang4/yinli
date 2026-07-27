@@ -1,6 +1,6 @@
 # 引力 YINLI TODO
 
-> 最后更新：2026-07-23。本文只保留尚未完成的任务。
+> 最后更新：2026-07-27。本文只保留尚未完成的任务。
 
 ## P0. Runtime 稳定性
 
@@ -15,15 +15,8 @@
 
 ## P2. TeamRun 与 Subagent
 
-- [x] 完成 Team 统一事件投影：删除每事件完整 snapshot，新增 `team/team-member/team-task/team-activity/team-mail` Block 子树和 DisplaySnapshot 驱动的 Team Console。
 - [ ] 增加 Team Mailbox API 与综合阶段并发投递的端到端测试。
 - [ ] 增加 Team Console Playwright 回归，覆盖第二轮清空、成员切换不重放和用户主动发信。
-- [x] 完成 Subagent M2.1 稳定性修复：错误 observation、父本轮模型继承、异常终态和 HITL 事件关联。
-- [x] 完成 child / parent AgentScope checkpoint spike，明确 exact resume、transcript replay 和 restart 边界。
-- [x] 完成 Subagent attached 文件任务 MVP：Supervisor、并行 fork、wait/read、`result.md`、transcript、任务控制台和查询/取消 API；Chat 展示已切换为 `kind=subagent` Block。
-- [ ] 按 `docs/subagent-runtime-event-redesign.md` 完成 Subagent 领域层：TaskService 唯一写入口、revision/process fencing、attempt、domain event 和 result delivery；依赖通用 Event Stream V3。
-- [x] 完成 Subagent 前端领域投影：注册 `Block.kind=subagent` 的 schema/reducer/renderer 和 Generic Block fallback，删除 `tools[].subagent*` 反解析；不修改通用事件流主干。
-- [x] 完成 attached async fan-out/join 与 parent completion barrier，确保 child 结果 delivered/consumed 前父 Run 不成功收口。
 - [ ] 在 Task API 基础上接入 Subagent 控制台刷新恢复回归；Chat 使用嵌套 `kind=subagent` Block，detached background 暂不开放。
 
 ## P3. 平台基础
@@ -42,9 +35,6 @@
 
 ## P4. Plan、Trace 与工具
 
-- [x] 明确 Plan revision 在模型修改和确认执行 continuation 中的完整注入与恢复语义。
-- [x] 为 `plan_set_steps`、`task_output`、`task_list` 补生命周期和投影回归。
-- [x] Plan Mode 保持单 Agent，并完成独立 revision 审核、自然语言模型修订、确认执行、取消和实时步骤投影。
 - [ ] Trace 增加权限审计筛选、工具结果大小和截断标记。
 - [ ] 对 Bash / Write / Edit 的文件变更记录补可靠性测试。
 - [ ] 完善 HTTP 工具请求预览、响应提取、错误摘要和脱敏展示。

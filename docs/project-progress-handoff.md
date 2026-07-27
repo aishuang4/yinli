@@ -1,6 +1,6 @@
 # 引力 YINLI 项目进展与协作交接
 
-> 更新时间：2026-07-23。本文只记录当前完成度、验证结果和已知缺口。
+> 更新时间：2026-07-27。本文只记录当前完成度、验证结果和已知缺口。
 
 ## 当前阶段
 
@@ -106,7 +106,7 @@
 最近一次完整验证：
 
 ```text
-backend pytest: 355 passed
+backend pytest: 359 passed
 frontend build: passed
 frontend lint: passed
 /api/teams: 404
@@ -120,6 +120,12 @@ legacy teams / team_members tables: removed
 - AskUser 在 `RUN_WAITING` 后正常显示可操作 approval；提交“开发”后 tool、approval、text 和 message 全部收口，刷新恢复后只有一棵完成态 Block Tree，无持续转圈或旧 waiting 占位。
 - `DelegateTask(explorer)` 完成前父 Agent 保持等待，父 Agent 消费子结果后才输出最终回答；刷新后 `kind=subagent` 仍为单一完成态 Block。
 - Subagents 页面可查看 completed invocation、结果、耗时和完整 transcript。
+
+2026-07-27 Team 流式回归：
+
+- Team、Member 和 Task 按运行进度逐步进入同一 DisplaySnapshot Block Tree，任务完成数从 `1/4` 连续更新到 `4/4`。
+- 综合阶段逐条转发 `TEXT_BLOCK_DELTA`，最终答案从首个文本增量持续增长；`FINAL_ANSWER_REPLACE` 只做终态一致性校正。
+- 后端完整测试 359 项、前端 lint/build 和浏览器真实运行均通过，最终 Chat Run 正确收口为 `completed`。
 
 Vite 仍有约 941 KB 的大 chunk 警告，不影响构建，但需要后续拆包。
 

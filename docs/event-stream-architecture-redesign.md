@@ -1,10 +1,9 @@
-# 通用事件流基础设施重构设计
+# 通用事件流架构
 
-> 状态：核心重构已完成并切换生产 Chat；后续只按 `Block.kind` 扩展领域能力。
+> 状态：当前在线架构，2026-07-27；后续只按 `Block.kind` 扩展领域能力。
 > 范围：Chat 实时展示、刷新恢复和历史回放使用的通用事件、投影、Block Tree 与前端消费链路。
-> 本次只重构事件流基础设施，不顺便修改 Plan、Team、Artifact、Subagent 等领域自己的状态机。
-> 实施原则：这是结构性重构，不在旧 Runtime Event mapping、RunState projector 或 DisplayEvent reducer 上继续打补丁。
-> 数据策略：切换时允许清空旧 Chat Run/Event/Projection 数据；不迁移旧 Snapshot，不兼容旧事件包络，不保留旧库读取 fallback。
+> 领域边界：Plan、Team、Artifact、Subagent 维护自己的状态机，只通过 per-kind projector 接入本架构。
+> 删除边界：不恢复旧 Runtime Event mapping、RunState projector、DisplayEvent reducer、旧 Snapshot 或兼容读取 fallback。
 
 ## 1. 最终决策
 
@@ -810,56 +809,12 @@ completion barrier 使用有界超时，且检查的是领域活动状态，不�
 - renderer 只渲染 decode 后的数据，不使用 `dangerouslySetInnerHTML` 处理未知 payload。
 - 用户命令通过现有权限/API 链路执行，Block patch 不能直接触发副作用。
 
-## 13. 重构实施路线
-
-### Phase 0：冻结与删除清单（已完成）
-
-- 固化当前 text、reasoning、tool、Plan、HITL、Skill、files、error、取消和刷新恢复行为。
-- 列出旧 event constants、scope/payload mapping、projector 分支、RunState 字段、DisplayEvent、前端 adapter/reducer、反解析 helper、API 和 fixture。
-- 冻结旧链路：不再增加新事件、字段或兼容分支。
-
-### Phase 1：离线建立 Block Core（已完成）
-
-- 新增 RuntimeFrame schema、DisplaySnapshot V4、Block Tree reducer、kind registry、projection stream store 和 seq/replay/snapshot 机制。
-- 新增 `DomainEvent`、`ProjectionFrame`、`chat_domain_streams`、`chat_domain_events`、`projection_streams` 和 `projection_frames` 的后端 schema；完成 Run 内 ordinal 分配、领域 append、ProjectionRunner 和投影事务 writer。
-- 新增 `BlockLifecycleCoordinator` 与最小 `message/text/tool` projector，但先只做离线 replay，不接生产 Chat。
-- 新模块暂不接生产 Chat，不与旧链路双写。
-- 先完成 reducer、恢复、事务崩溃和 property-based 测试。
-
-### Phase 2：补齐首批 kind（已完成）
-
-- 实现 message、text、reasoning/thinking、tool、approval/HITL、skill、plan、artifact/files 和 error kind module。
-- 后端每个 kind 使用隔离 projector。
-- 用真实 Run fixture 验证新 Snapshot/replay 与现有用户可见行为等价。
-- 不让未完成 kind 通过 generic fallback 冒充功能完成。
-
-### Phase 3：原子切换 Chat（已完成）
-
-- 后端 Run stream 切换为 `RUNTIME_EVENT: RuntimeFrame`。
-- `/state` 切换为直接返回 DisplaySnapshot V4。
-- 前端 Chat 原子切换到 streamAdapter + Block Tree + kind registry。
-- 同一阶段删除旧 `RUN_STATE/RUN_STATE_PATCH` UI 路径、旧 DisplayEvent projector、旧 adapter/reducer 和工具结果反解析。
-- 不设置 V2/V3 feature flag，不长期双写，不允许前端同时读取两套状态。
-
-### Phase 4：数据重置与清理（已完成）
-
-- 切换前如需留档，只做数据库文件级备份；运行时不读取该备份。
-- 清空旧 Chat Run/Event/RunState/DisplaySnapshot 投影数据，由新 schema 从空库开始，不生成 V4 历史 Snapshot。
-- 删除仅服务旧链路的 Pydantic/TypeScript 类型、helper、fixture、API 分支和文档。
-- 全仓静态扫描确认旧事件、旧字段、compatibility adapter 和 migration reader 全部删除。
-
-### Phase 5：后续领域接入（核心 kind 已接入，持续演进）
-
-- Plan、Artifact 等现有领域使用已有 kind 继续演进，不扩展公共协议。
-- Team、Subagent 后续分别注册自己的 kind/projector/module，不在本次基础设施重构中修改其状态机。
-- 某个非 Chat 页面确需实时能力时，复用 RuntimeFrame，不增加 channel 字段或另一套 reducer。
-
-### 13.1 实施结果
+## 13. 在线实现
 
 当前生产链路已经完成以下切换：
 
 - 后端使用结构化 `SourceEvent -> DomainEvent -> ProjectionRunner -> RuntimeFrame`，不再序列化原始 SSE 后反解析。
-- `message/text/reasoning/thinking/tool/skill/approval/plan/artifact/error/subagent/team` 均有独立 projector 和前端 kind module。
+- `message/text/reasoning/thinking/tool/skill/approval/plan/artifact/error/subagent/team/team-member/team-task/team-activity/team-mail` 均有独立 projector 和前端 kind module。
 - `/api/chat/runs/{runId}/stream` 只发送 `RUNTIME_EVENT: RuntimeFrame`；`/state` 只返回 DisplaySnapshot V4。
 - Chat 与 Sandbox 只渲染 V4 Block Tree；HITL 命令结果必须经 Frame 回流。
 - 已删除 `event_hub`、RunState schema、DisplayEvent reducer、旧 stream adapter 和固定领域展示组件。
@@ -945,7 +900,7 @@ completion barrier 使用有界超时，且检查的是领域活动状态，不�
 2. RuntimeFrame 只有 open/delta/close、Snapshot 和 done 五种稳定形状。
 3. 通用前端只理解 seq、Block identity、父子关系和生命周期。
 4. 新增 kind 不修改 RuntimeFrame、stream transport、恢复逻辑或通用 reducer。
-5. Message、Tool、Plan、Approval、Artifact 和后续 Subagent 均使用同一 Block Tree。
+5. Message、Tool、Plan、Approval、Artifact、Subagent 和 Team 均使用同一 Block Tree。
 6. Snapshot、实时 Frame 和完整 replay 产生相同状态。
 7. Domain Event、Trace Event 和 Projection Event 职责独立。
 8. `/state` 只返回 DisplaySnapshot V4，前端不再消费并列 RunState UI projection。
@@ -960,6 +915,6 @@ completion barrier 使用有界超时，且检查的是领域活动状态，不�
 - 不在本次引入 Kafka、NATS、Redis Stream 或分布式 worker。
 - 不用 Block Frame 取代后端 Domain Event、Trace 或领域 transcript。
 - 不把完整模型输出、完整工具 observation 或完整 Subagent transcript 放入 DisplaySnapshot。
-- 不在事件流重构时顺便实现 Subagent background、Team 新状态机或 Artifact 产品能力。
+- 不用事件流基础设施决定 Subagent、Team、Plan 或 Artifact 的领域状态机。
 - 不保证不同订阅 URL 之间的全局 seq 或跨 stream 因果顺序；前端不得比较不同 stream 的 seq。
 - 不为未来假设提前增加 remove/move/channel/mask 等公共协议能力。

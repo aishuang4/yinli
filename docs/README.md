@@ -1,6 +1,6 @@
 # 引力 YINLI 文档索引
 
-> 状态：2026-07-23 生效。本文是 `docs/` 的唯一索引。
+> 状态：2026-07-27 生效。本文是 `docs/` 的唯一索引。
 
 ## 事实与规范
 
@@ -20,20 +20,15 @@
 ## 在线领域设计
 
 - `docs/team-runtime-redesign.md`：一次性 TeamRun、动态 Member、Task List、Mailbox 和 file-first 状态。
-- `docs/subagent-delegation-design.md`：Subagent 文件定义、`DelegateTask`、权限裁剪和 invocation 审计。
+- `docs/subagent-delegation-design.md`：Subagent 文件定义、attached fork/join、wait/read、父结果消费、权限裁剪和任务恢复边界。
 - `docs/memory-system-design.md`：新记忆系统、Markdown 记忆、`memory_nodes`、向量检索和 Skill 自进化。
 
-## 已实施设计与审计
+## 已实施设计
 
 - `docs/event-stream-architecture-redesign.md`：已实施的通用 Event Stream V3 前后端设计；后端采用全局有序 Domain/Trace、单 ProjectionRunner、per-kind projector、Block 生命周期协调器、周期 Snapshot 和原子 projection store，前端采用 `open/delta/close + seq`、DisplaySnapshot V4 和 Block module registry。
-- `docs/event-stream-architecture-redesign-review.md`：当前 Block Tree 方案的审计记录、运行时风险和复核结果。
-- `docs/agentscope-native-skills-migration.md`：将应用层 Skill 全文注入迁移到 AgentScope 原生 `LocalSkillLoader`、统一 `Skill` viewer 和渐进式披露的第一版设计。
-- `docs/subagent-runtime-event-redesign.md`：Subagent 领域接入草案；通用事件流基础设施以 `event-stream-architecture-redesign.md` 为准。
-- `docs/subagent-task-runtime-redesign.md`：M3 单进程持久任务 MVP 的历史实施记录；后续目标架构由 `subagent-runtime-event-redesign.md` 取代。
 
 ## 后续路线
 
-- `docs/workspace-project-design.md`：Workspace / Project 归属、资源绑定、RuntimeContext 和前端上下文切换设计；Phase 0 至 Phase 3 已实现。
 - `docs/dynamic-workflows-plan.md`：Dynamic Workflow 的 Script Review、Runtime Cockpit 和 AgentScope Bridge 路线。
 - `docs/electron-packaging-plan.md`：桌面正式打包、签名、公证、数据目录和 Windows 验证。
 
@@ -42,5 +37,5 @@
 - 当前事实只写入 `AGENTS.md`、`architecture-overview.md` 和 `project-progress-handoff.md`。
 - 任务只写入 `project-todo.md`，专题文档不复制完整 TODO。
 - 事件字段只在对应稳定契约中定义，其他文档只引用。
-- 已完成的阶段草案合并结论后删除，不设置归档目录。
+- 审计记录和已完成的阶段草案在结论并入当前文档后删除，不设置归档目录。
 - 旧独立 Plan Runtime（`runtime.kind=plan`）、旧独立 Subagent Runtime（`runtime.kind=subagent`）、旧 Memory Runtime 和持久 Team 管理不得恢复。当前 Plan Mode middleware 与 `DelegateTask` Subagent 委托属于 ReAct 内部在线能力，不在删除范围内。

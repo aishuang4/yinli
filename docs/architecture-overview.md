@@ -1,6 +1,6 @@
 # 引力 YINLI 当前架构总览
 
-> 状态：2026-07-23 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
+> 状态：2026-07-27 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
 
 ## 项目定位
 
@@ -8,7 +8,7 @@
 
 旧记忆模块、旧独立 Plan Runtime（`runtime.kind=plan`）和旧独立 Subagent Runtime（`runtime.kind=subagent`）已下线，不能继续扩展旧链路。这里删除的是独立 architecture / 路由分支，不是当前能力：Plan Mode 仍通过 middleware 接入单 Agent ReAct，Subagent 仍通过 `DelegateTask` 接入 ReAct。旧 Subagent 字段、配置入口、事件兼容分支和前端入口不得作为当前 API / UI / Runtime 事实源保留；历史 SQLite 开发库只允许保留启动所需的最小兼容。当前记忆能力是新方案：通过运行前上下文注入、运行后 `MemoryAdmissionGate` 准入、后台提炼、历史记忆（底层 `memory_nodes`）和 memory tools 接入 ReAct，不新增 `memory` runtime.kind。
 
-新版 Subagent M1 和部分 M2 已作为 ReAct 内部委托能力上线：Subagent 定义来自 Markdown + YAML frontmatter 文件，主 Agent / Team Leader 通过 `DelegateTask` 前台委托 fresh-context 子 Agent，结果摘要回到主 Agent，完整过程进入 Trace 和 `subagent_invocations` 审计，不新增 `runtime.kind=subagent`。
+新版 Subagent 已作为 ReAct 内部 attached fork/join 能力上线：Subagent 定义来自 Markdown + YAML frontmatter 文件，主 Agent 通过 `DelegateTask` 并行 fork fresh-context 子任务，再用 `SubagentTaskWait` / `SubagentResultRead` 等待并消费文件结果。Completion Barrier 保证全部 child 终态且结果已消费后父 Run 才能结束；完整过程进入独立 transcript、Trace 和 `subagent_invocations` 审计，不新增 `runtime.kind=subagent`。Team executor 当前不注入 Subagent 工具。
 
 ## 技术栈
 
@@ -43,8 +43,10 @@
 - Project root 与 Agent filesystem scope 取交集；不相交时拒绝执行。
 - TeamRun、Subagent invocation、Memory、Trace、Domain Event 和 Projection stream 继承父运行归属。
 - Project resource binding 已作为运行时白名单参与 Agent、Skill、MCP Server 和 HTTP Tool 裁剪；资源必须属于 Project 所在 Workspace，Project 只能收窄 Agent 配置。
+- 已有 Project 升级时建立一次性资源基线；新建 Project 快照绑定创建时已有的 Workspace 资源，后续新增资源不会自动授权给既有 Project。
 - 前端使用统一 Workspace / Project 上下文；Chat、Runs、Trace、Memory 和资源管理按当前上下文筛选，切换 Project 时清理 Chat 与 Team 运行投影。
 - Workspace 与首个 Project 通过 bootstrap API 原子创建；正式 Artifact ownership 留在 Artifact Phase。
+- Project 删除默认使用归档语义，不直接级联删除历史 Session、Run、Memory 或 Trace。
 
 ## AgentScope 原生 Skills
 

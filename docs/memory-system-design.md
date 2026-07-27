@@ -1,6 +1,6 @@
-# 记忆系统设计与实现进度
+# 记忆系统设计
 
-> 状态：MVP 在线并进入稳定化阶段，2026-07-14。本文记录新记忆系统的设计、已实现边界和后续约束。不复用旧三层记忆模块、旧 `memory_*` 事件或旧运行时补丁。
+> 状态：MVP 在线并进入稳定化阶段，2026-07-27。本文记录新记忆系统的当前设计、在线边界和后续约束。不复用旧三层记忆模块、旧 `memory_*` 事件或旧运行时补丁。
 
 ## 当前实现快照
 
@@ -156,7 +156,7 @@ backend/data/memory/wiki/
 
 ### 生命周期状态
 
-- **工作上下文**：本轮 Run 和当前 Session 内的上下文，由 Chat 历史和 RunState 负责，不属于长期记忆。
+- **工作上下文**：本轮 Run 和当前 Session 内的上下文，由 Chat 历史、Run records 和 DisplaySnapshot 负责，不属于长期记忆。
 - **历史记忆写入**：每天或每个聚合窗口把用户输入与 Agent 最终输出压缩成历史记忆，写入 SQLite `memory_nodes` 主表并同步到向量库。
 - **Markdown 长期记忆**：用户、Agent、全局偏好记忆以 Markdown 文件保存，通过压缩摘要注入上下文。
 - **Skill 生成记录 / Skill 草稿**：技能自进化链路的中间产物，最终应注册为标准 Skill，而不是作为普通 memory item 注入上下文。
@@ -207,7 +207,7 @@ Memory Service Layer
   |
   | storage / integration
   v
-SQLite / json_store / Skills System / Trace / RunState
+SQLite / json_store / Skills System / Trace / DisplaySnapshot
   |
   | UI
   v
@@ -221,7 +221,7 @@ Memory Page / Skills Page / Agent Editor / Trace Page
 - **Storage**：保存历史记忆、Markdown 记忆文件、Skill 自进化生成记录、使用审计和设置。
 - **Skills System Integration**：只接收通过 `skill_register` 注册的标准 Skill，不负责长期记忆检索。
 - **Frontend**：Memory 页面管理长期记忆，Skills 页面管理已注册 Skill，Agent Editor 决定某个 Agent 是否添加某个 Skill。
-- **Trace / RunState**：Trace 记录完整审计；RunState 只展示轻量提示和本轮使用摘要，不承载完整记忆内容。
+- **Trace / DisplaySnapshot**：Trace 记录完整审计；DisplaySnapshot 只承载 `MEMORY_SKILL_GENERATING` 轻量提示，不保存完整记忆内容。
 
 ### Hook 生命周期
 
@@ -280,7 +280,7 @@ Agent 运行完后
 -> 聚合到当天 Agent 历史记忆
 -> 写入 SQLite memory_nodes
 -> 同步 upsert 到 VectorStoreBackend 的 memory_nodes collection
--> 发送 MEMORY_NODE_UPDATED / MEMORY_NODE_IGNORED
+-> 写入 MEMORY_AUDIT Trace
 ```
 
 历史记忆持久化只关心“用户问了什么、Agent 最终答了什么、当天摘要是什么”。它不负责提炼用户偏好、Agent 迭代经验或 Skill。
@@ -290,7 +290,7 @@ Agent 运行完后
 ```text
 一整个工作完成
 -> SkillEvolutionRouterGate 先判断本轮是否值得进入 Skill 自进化
--> WorkflowEvidenceBuilder 从 RunState / Trace 提取工具调用链路摘要
+-> WorkflowEvidenceBuilder 从工具调用和运行事件提取链路摘要
 -> SkillEvolutionHook 读取用户目标、最终产出和 workflow evidence
 -> SkillEvolutionAgent 判断是否可复用、是否原子化、是否需要拆分为 Workflow
 -> SkillEvolutionPipeline 生成 Skill 生成记录
@@ -666,7 +666,7 @@ Tools 负责主动操作，让用户或 Agent 可以明确读写、请求记住�
 
 普通业务 Agent 默认不应拥有所有写入类 memory tools。首版建议只暴露只读 `memory_search` 和显式用户授权的写入工具；系统基础设施 Agent 可使用内部 tools 完成自动写入和 Skill 注册。
 
-## 数据模型草案
+## 数据模型
 
 新表建议使用新命名，避免和旧表语义混淆：
 
@@ -1119,67 +1119,18 @@ MVP 不做记忆审批流，也不做记忆审批候选队列。Skill 自进化�
 - user / agent / global 长期偏好写入 Markdown 文件，并维护压缩摘要。
 - 不确定、低置信、重复、敏感或一次性的记忆内容直接忽略，不进入记忆审批队列。
 - Chat 不展示“已更新记忆”等记忆过程提示；Skill 自进化只展示“Skills 生成中”轻量提示。
-- Memory 页面只负责查看历史记忆、查询详情、编辑 Markdown 记忆、查看 Skill 自进化队列、删除、禁用和审计，不负责审批。当前首版已支持“Agent -> 时间节点 -> 具体记忆”的历史记忆查看、Markdown 编辑和 Skill 自进化队列查看；删除、禁用、设置和审计详情留到下一阶段。
+- Memory 页面只负责查看历史记忆、查询详情、编辑 Markdown 记忆、查看和操作 Skill 自进化队列、删除、禁用、恢复、设置和审计，不负责审批。
 - 删除历史记忆使用软删除，保留审计事件。
 
-后续如确实需要审批流，必须单独设计生命周期、RunState、前端入口和 API，不在 MVP 中预留半套 approve / reject 状态。
+后续如确实需要审批流，必须单独设计生命周期、Block 投影、前端入口和 API，不在 MVP 中预留半套 approve / reject 状态。
 
-## Runtime Event 草案
+## Runtime 与管理边界
 
-正式实现前必须把以下事件补入 `docs/chat-sse-event-contract.md`、后端 schema、前端类型和 projector。
-
-建议事件：
-
-- `MEMORY_RETRIEVAL_STARTED`
-- `MEMORY_RETRIEVAL_COMPLETED`
-- `MEMORY_INJECTED`
-- `MEMORY_NODE_CREATED`
-- `MEMORY_NODE_UPDATED`
-- `MEMORY_NODE_IGNORED`
-- `MEMORY_NODE_DELETED`
-- `MEMORY_MARKDOWN_UPDATED`
-- `MEMORY_AGENT_ITERATION_UPDATED`
-- `MEMORY_SKILL_EVOLUTION_STARTED`
-- `MEMORY_SKILL_DRAFT_CREATED`
-- `MEMORY_SKILL_REGISTERED`
-- `MEMORY_SKILL_EVOLUTION_SKIPPED`
-
-Chat 主界面 MVP 不依赖完整记忆事件，不展示记忆提炼或历史记忆持久化过程。完整审计进入 Trace / Memory 页面；Skill 自进化只展示“Skills 生成中”轻量提示。
-
-## API 草案
-
-- `GET /api/memory/nodes/tree`
-- `GET /api/memory/nodes/query`
-- `GET /api/memory/nodes/{id}`
-- `PATCH /api/memory/nodes/{id}`
-- `DELETE /api/memory/nodes/{id}`
-- `GET /api/memory/markdown/user`
-- `PUT /api/memory/markdown/user`
-- `GET /api/memory/markdown/global`
-- `PUT /api/memory/markdown/global`
-- `GET /api/memory/markdown/agent/{agent_id}`
-- `PUT /api/memory/markdown/agent/{agent_id}`
-- `GET /api/memory/settings`
-- `PUT /api/memory/settings`
-
-Memory 页面主入口只使用唯一 user / global 的 canonical 路由，不暴露 userId 或 workspaceId；Agent 记忆按 Agent ID 选择。所有接口必须按作用域过滤，后续接 Workspace 时不能泄漏其他 Workspace 记忆。
-
-## 前端页面草案
-
-新增 Memory 页面，首版包含：
-
-- 历史记忆：先选择 Agent，再选择时间节点，最后查看具体记忆。
-- 历史查询：按某一天或日期范围查询历史记忆详情。
-- Markdown 记忆编辑：用户记忆、Agent 迭代记忆、全局偏好记忆。
-
-首版已实现导航入口、Markdown 记忆编辑和历史记忆三段式查看。用户记忆和全局记忆在 UI 中各只有一个入口；Agent 记忆通过 Agent 下拉选择，每个 Agent 只对应一个 `agent_memory.md`。
-
-后续补齐：
-
-- 记忆详情抽屉：来源 Run / Session、使用次数、最近使用、审计记录。
-- Skill 自进化队列：展示自动生成的 Skill 草稿、复用理由、风险提示、router gate、workflow evidence 和注册状态。
-- 设置区：启用开关、自动写入最低置信度、注入预算和召回质量摘要。
-- 历史记忆删除 / 禁用操作：底层对 `memory_nodes` 使用软删除并写审计。
+- 记忆检索、注入、提炼、历史持久化和召回反馈写入 `MEMORY_AUDIT` Trace，不扩展 Chat 通用事件协议。
+- Chat 不展示记忆提炼和历史写入过程；Skill 自进化只通过既有 `MEMORY_SKILL_GENERATING` 轻量 Block 提示运行状态。
+- Memory 页面使用 `/api/memory/*` 管理历史节点、三类 Markdown 记忆、设置、审计、Skill 自进化队列和 Wiki 视图。
+- user / global 使用当前 Workspace 下的 canonical 入口，不由前端传任意 owner；Agent 记忆按 Agent ID 选择。
+- 所有查询和修改必须按 Workspace / Project / Agent 作用域校验，命令响应不直接修改 Chat Block Tree。
 
 旧 Agent 编辑页中的 `memoryEnabled` 已从当前代码移除。新方案如需 Agent 级配置，应定义更明确的 `memoryPolicy` / `memoryScope`，不要恢复旧布尔开关。
 
@@ -1200,64 +1151,6 @@ Memory 页面主入口只使用唯一 user / global 的 canonical 路由，不�
 4. 已存在于本地开发库中的旧表不自动 `DROP`，避免破坏历史数据；如需清库应走显式维护脚本。
 5. 新 UI 不直接展示旧表数据。
 
-## 实施阶段
-
-### Phase 0：设计冻结
-
-- 完成本文评审。
-- 更新 `docs/chat-sse-event-contract.md` 的正式 `MEMORY_*` 契约。
-- 明确 embedding 配置和降级策略：无 embedding 时使用 Zvec 标量过滤 + BM25 / 稀疏检索，有 embedding 时启用稠密向量混合召回。
-
-### Phase 1：后端基础设施
-
-- 新增 SQLite schema 和 storage 方法。
-- 新增 Pydantic schema。
-- 新增 `/api/memory/*` 路由。
-- 明确 hooks 和 memory tools 的内部接口，不新增 Runtime 分支。
-- 补 storage 和 API 单测。
-
-### Phase 2：hooks + 只读检索与注入
-
-- 实现 `memory_retriever.py`。
-- 实现 `MemoryRetrievalHook` 和 `MemoryUsageAuditHook`。
-- 在 `runtime_builder.py` 挂载单 Agent / Leader 记忆 hook。
-- 写入 Trace / Runtime Event。
-- 补 RunState / Trace 回归测试。
-
-### Phase 3：反思提炼与历史记忆持久化
-
-- 实现 `memory_node_pipeline.py`。
-- 实现 `MemoryReflectionHook`、`AgentIterationHook` 和 `MemoryNodePersistHook`。
-- 实现 Markdown 记忆压缩摘要流程。
-- 接入 `completion.py` 后处理或等价 Run 完成 hook。
-- 确保提取失败不影响 Chat 成功收尾。
-
-### Phase 4：Skill 自进化
-
-- 已实现规则版 `SkillEvolutionRouterGate`，先判断是否值得进入 Skill 自进化链路。
-- 已实现 `WorkflowEvidenceBuilder` 首版，从 RunState / Trace 中提取成功工具链、有价值失败、变量流、改动文件和验证结果摘要。
-- 已扩展 `SkillEvolutionAgent` schema，加入 `granularity`、`requiresWorkflow`、`suggestedSplit` 和 `variableFlow`。
-- 已实现 Skill 自进化候选持久化记录，保存 gate reason、workflow evidence、granularity、suggested split、variable flow 和 risk notes。
-- 已实现标准 Skill 注册首版：只将 `granularity=atomic`、高置信度、通过安全校验且未发现相似已安装 Skill 的候选注册到现有 Skills 系统。
-- 已实现相似 Skill 合并首版：命中相似能力时关联已有 Skill，不创建重复 Skill。
-- 已实现标准 Skill 包落盘和导出：自动生成 / 手动注册 Skill 都写入 `backend/data/skill_packages/{skill_name}/SKILL.md`，并可从 Skills 页面按 Skill 名称导出 zip。
-- 注册后的 Skill 不会自动绑定到任何 Agent，用户仍需进入 Agent 配置手动添加。
-- 对 `too_broad` 结果只保存拆分建议，不注册超级 Skill；未来由 Workflow 编排器组合原子 Skill。
-- 已在 Memory 页面补注册失败原因可视化和队列操作入口；后续继续增强候选检索筛选和模型重跑策略。
-
-### Phase 5：前端 Memory 页面
-
-- 已新增 Memory 页面和导航入口。
-- 已支持历史记忆三段式查看、按日期查询和 Markdown 记忆管理。
-- 已支持设置区、审计详情、历史记忆禁用 / 删除 / 恢复，以及 Skill 自进化队列操作能力。
-- Chat 中只展示 “Skills 生成中” 轻量提示；记忆过程和本轮注入摘要进入 Trace / Memory 页面。
-
-### Phase 6：检索增强
-
-- 引入更多 embedding provider、重建任务和混合检索重排策略。
-- 支持相似记忆合并建议。
-- 支持 Workspace 多租户隔离后的跨项目策略。
-
 ## 测试重点
 
 - 记忆检索不会跨 Project / Workspace 泄漏。
@@ -1266,7 +1159,7 @@ Memory 页面主入口只使用唯一 user / global 的 canonical 路由，不�
 - 自动写入失败不影响 Chat Run 完成。
 - Team 临时 Member 按 single agent 同策略注入本轮记忆，且不能跨 Project / Workspace 泄漏。
 - 删除或禁用记忆后不会再被注入。
-- RunState 刷新恢复不会重复展示“已更新记忆”提示。
+- DisplaySnapshot 刷新恢复不会重复展示记忆过程提示。
 - MVP 不从旧表迁移 active memory。
 - 记忆 hook 失败不会影响 ReAct 主链路成功收尾。
 - 历史记忆不保存工具调用过程，只保存用户输入、Agent 最终输出和压缩摘要。

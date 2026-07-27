@@ -1,6 +1,6 @@
 # Chat Event Stream V3 稳定契约
 
-> 状态：2026-07-23 已在线。
+> 状态：2026-07-27 已在线。
 > 本文是 Chat 实时展示、刷新恢复和历史回放的唯一前端事件契约。
 > 旧 RunState、DisplayEvent、`RUN_STATE_PATCH`、顶层 `TEAM_EVENT` 和旧 Snapshot 不兼容、不迁移、不读取。
 

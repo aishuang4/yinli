@@ -159,17 +159,16 @@ scripts/                 开发、打包和后端构建脚本
 - Subagent 是 ReAct 内部工具委托，不恢复旧 `runtime.kind=subagent`。
 - Plan Mode 是 middleware 能力，不恢复旧独立 Plan Runtime（`runtime.kind=plan`）或 approve / deny 链路。
 - 旧记忆模块已删除；记忆能力只能沿当前 hooks、tools 和后处理方案演进。
-- 新增或变更 Chat SSE、RunState、DisplaySnapshot 前，必须先更新稳定事件契约。
+- 新增或变更 Chat `RuntimeFrame`、`Block.kind` 或 DisplaySnapshot 前，必须先更新稳定事件契约。
 
 ## 文档
 
 - [`AGENTS.md`](AGENTS.md)：当前项目事实和开发代理规范。
 - [`docs/README.md`](docs/README.md)：完整文档索引。
 - [`docs/architecture-overview.md`](docs/architecture-overview.md)：在线架构总览。
-- [`docs/chat-sse-event-contract.md`](docs/chat-sse-event-contract.md)：Chat / RunState / DisplaySnapshot 稳定契约。
+- [`docs/chat-sse-event-contract.md`](docs/chat-sse-event-contract.md)：Chat RuntimeFrame / DisplaySnapshot 稳定契约。
 - [`docs/team-runtime-redesign.md`](docs/team-runtime-redesign.md)：一次性 TeamRun、Task List 与 Mailbox。
 - [`docs/subagent-delegation-design.md`](docs/subagent-delegation-design.md)：Subagent 定义和委托模型。
-- [`docs/workspace-project-design.md`](docs/workspace-project-design.md)：Workspace / Project 平台归属与上下文切换设计，Phase 0 至 Phase 3 已实现。
 - [`docs/development-guidelines.md`](docs/development-guidelines.md)：开发规范。
 - [`docs/project-todo.md`](docs/project-todo.md)：当前待办。
 
