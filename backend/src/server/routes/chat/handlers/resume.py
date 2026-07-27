@@ -1,12 +1,10 @@
 """人工确认或外部执行结果后恢复 Agent / Team 运行。"""
 
 import asyncio
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import HTTPException
-
-from agentscope.event import ExternalExecutionResultEvent
-from agentscope.message import TextBlock, ToolResultBlock, ToolResultState
 
 from src.agents.runtime_types import AgentGuardrails
 from src.server.routes.agents import get_registered_agent
@@ -21,7 +19,6 @@ from src.server.routes.chat.hitl import (
 from src.server.routes.chat.models import (
     PENDING_AGENTS,
     PENDING_INTERACTIONS,
-    PENDING_SUBAGENT_PARENT_CONTEXTS,
     HITL_EVENT_TYPES,
     ChatResumeRequest,
 )
@@ -54,7 +51,8 @@ from src.server.routes.chat.trace_recorder import (
     _record_permission_decision,
     _record_run_event,
 )
-from src.storage.database import update_subagent_invocation
+from src.storage.database import update_subagent_invocation, update_subagent_invocation_delivery
+from src.subagents.task_store import SubagentTaskStore
 
 
 def _is_final_answer_text_scope(scope: str) -> bool:
@@ -176,7 +174,6 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
         try:
             if interaction.scope == "subagent":
                 subagent_data = dict(interaction.chat_data or {})
-                is_background_subagent = subagent_data.get("mode") == "background"
                 invocation_id = str(subagent_data.get("invocationId") or "")
                 tool_call_id = str(subagent_data.get("toolCallId") or "")
                 subagent_name = str(subagent_data.get("subagentName") or interaction.agent_name)
@@ -186,6 +183,12 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                 reasoning_text = interaction.assistant_text or ""
                 duration_ms = 0
                 subagent_seq = 0
+                project_root = str(subagent_data.get("projectRoot") or "")
+                subagent_task_store = (
+                    SubagentTaskStore(project_root=Path(project_root), session_id=interaction.session_id)
+                    if project_root
+                    else None
+                )
 
                 async for event in agent.reply_stream(resume_event):
                     subagent_seq += 1
@@ -234,9 +237,6 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                             chat_data=subagent_data,
                             run_id=interaction.run_id,
                         )
-                        parent_context = PENDING_SUBAGENT_PARENT_CONTEXTS.pop(interaction.id, None)
-                        if parent_context is not None:
-                            PENDING_SUBAGENT_PARENT_CONTEXTS[next_interaction.id] = parent_context
                         partial = _trim_text(final_text or reasoning_text, 1200)
                         if invocation_id:
                             update_subagent_invocation(
@@ -245,6 +245,12 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                                 result_preview=partial,
                                 error="Subagent paused for another human approval.",
                             )
+                            if subagent_task_store is not None:
+                                subagent_task_store.set_status(
+                                    invocation_id,
+                                    "waiting",
+                                    error="Subagent paused for another human approval.",
+                                )
                         _clear_pending_interaction(interaction.id)
                         wait_state = waiting_status_for_interaction(
                             next_interaction.type,
@@ -326,13 +332,25 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                     )
                     partial = _trim_text(final_text or reasoning_text, 1200)
                     if invocation_id:
+                        if subagent_task_store is not None:
+                            content = "\n\n".join(part for part in [
+                                f"Subagent {subagent_name} failed after resume.",
+                                error_message,
+                                f"Partial result:\n{partial}" if partial else "",
+                            ] if part)
+                            subagent_task_store.write_result(invocation_id, content, error=error_message)
+                            failed_status = subagent_task_store.set_status(invocation_id, "failed", error=error_message)
+                            update_subagent_invocation_delivery(
+                                invocation_id,
+                                delivery_status=str(failed_status.get("deliveryStatus") or "pending"),
+                                result_ref=str(failed_status.get("resultRef") or ""),
+                            )
                         update_subagent_invocation(
                             invocation_id,
                             status="failed",
                             result_preview=partial,
                             error=error_message,
                         )
-                    PENDING_SUBAGENT_PARENT_CONTEXTS.pop(interaction.id, None)
                     _clear_pending_interaction(interaction.id)
                     yield runtime_trace_source_event(
                         "SUBAGENT_FAILED",
@@ -352,29 +370,25 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                             "seq": subagent_seq,
                         },
                     )
-                    if not is_background_subagent:
-                        yield runtime_trace_source_event(
-                            "RUN_FAILED",
-                            session_id=interaction.session_id,
-                            run_id=interaction.run_id,
-                            scope="run",
-                            agent_id=interaction.agent_id,
-                            agent_name=interaction.agent_name,
-                            status="failed",
-                            reason="subagent_resume_failed",
-                            payload={"message": error_message},
-                        )
-                        yield source_event("ERROR", {"message": error_message})
                     return
 
                 result_preview = _trim_text(final_text, 1200)
                 if invocation_id:
+                    if subagent_task_store is not None:
+                        subagent_task_store.write_result(invocation_id, final_text)
+                        resumed_status = subagent_task_store.set_status(invocation_id, "completed")
+                        update_subagent_invocation_delivery(
+                            invocation_id,
+                            delivery_status=str(resumed_status.get("deliveryStatus") or "pending"),
+                            result_ref=str(resumed_status.get("resultRef") or ""),
+                        )
+                    else:
+                        resumed_status = {}
                     update_subagent_invocation(
                         invocation_id,
                         status="completed",
                         result_preview=result_preview,
                     )
-                parent_context = PENDING_SUBAGENT_PARENT_CONTEXTS.pop(interaction.id, None)
                 _clear_pending_interaction(interaction.id)
                 yield runtime_trace_source_event(
                     "SUBAGENT_COMPLETED",
@@ -388,67 +402,15 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                         "invocationId": invocation_id,
                         "toolCallId": tool_call_id,
                         "subagentName": subagent_name,
+                        "status": "completed",
+                        "deliveryStatus": resumed_status.get("deliveryStatus", "pending"),
+                        "resultRef": resumed_status.get("resultRef", ""),
                         "resultPreview": result_preview,
                         "durationMs": duration_ms,
                         "resumedFromHitl": True,
                         "seq": subagent_seq,
                     },
                 )
-                if parent_context is not None:
-                    parent_tool_call = dict(parent_context.get("tool_call") or {})
-                    parent_state = parent_context["state"]
-                    # 父 Agent 因子智能体审批暂停后，恢复前必须清除旧的暂停标志。
-                    parent_state.stopped = False
-                    parent_state.stop_reason = ""
-                    parent_result = ExternalExecutionResultEvent(
-                        reply_id=str(parent_context.get("reply_id") or ""),
-                        execution_results=[
-                            ToolResultBlock(
-                                id=str(parent_tool_call.get("id") or tool_call_id),
-                                name="DelegateTask",
-                                output=[
-                                    TextBlock(text=(
-                                        f"Subagent {subagent_name} completed.\n\n"
-                                        f"Summary:\n{final_text}"
-                                    )),
-                                ],
-                                state=ToolResultState.SUCCESS,
-                            )
-                        ],
-                    )
-                    async for parent_event in execute_and_finalize_leader_reply(
-                        agent=parent_context["agent"],
-                        input_event=parent_result,
-                        state=parent_state,
-                        session_id=str(parent_context["session_id"]),
-                        persist=bool(parent_context["persist"]),
-                        agent_id=str(parent_context["agent_id"]),
-                        agent_name=str(parent_context["agent_name"]),
-                        model_name=str(parent_context["model_name"]),
-                        guardrails=parent_context["guardrails"],
-                        user_message=str(parent_context["message"]),
-                        stream_scope=str(parent_context["stream_scope"]),
-                        skill_runs=parent_context["skill_runs"],
-                        plan_mode_manager=parent_context.get("plan_mode_manager"),
-                        runtime_event_sources=parent_context.get("runtime_event_sources"),
-                        sandbox=bool(parent_context.get("sandbox")),
-                        exception_prefix="父 Agent 恢复执行异常",
-                    ):
-                        yield parent_event
-                elif not is_background_subagent:
-                    error_message = "Subagent 已恢复完成，但父 Agent 恢复上下文不存在。"
-                    yield runtime_trace_source_event(
-                        "RUN_FAILED",
-                        session_id=interaction.session_id,
-                        run_id=interaction.run_id,
-                        scope="run",
-                        agent_id=interaction.agent_id,
-                        agent_name=interaction.agent_name,
-                        status="failed",
-                        reason="missing_subagent_parent_context",
-                        payload={"message": error_message},
-                    )
-                    yield source_event("ERROR", {"message": error_message})
                 return
 
             resume_stream_state = LeaderStreamState(

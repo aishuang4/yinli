@@ -72,6 +72,8 @@ def list_project_session_artifacts(
     for candidate in sorted(directory.rglob("*")):
         if not candidate.is_file() or candidate.is_symlink():
             continue
+        if candidate.is_relative_to(directory / "subagents"):
+            continue
         resolved = candidate.resolve()
         if not resolved.is_relative_to(directory) or not resolved.is_relative_to(root):
             continue

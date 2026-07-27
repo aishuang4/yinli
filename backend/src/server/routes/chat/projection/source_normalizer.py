@@ -310,16 +310,20 @@ class ChatProjectionNormalizer:
         invocation_id = str(payload.get("invocationId") or payload.get("toolCallId") or "subagent")
         block_id = f"subagent:{invocation_id}"
         produced: list[DomainEvent] = []
-        if block_id not in self._active and runtime_type not in {"SUBAGENT_COMPLETED", "SUBAGENT_FAILED"}:
+        if block_id not in self._active and runtime_type != "SUBAGENT_CONSUMED":
             produced.extend(self._start_block("subagent", block_id, "subagent", payload, aggregate_id=invocation_id))
-        elif block_id in self._active and runtime_type not in {"SUBAGENT_COMPLETED", "SUBAGENT_FAILED"}:
+        elif block_id in self._active and runtime_type != "SUBAGENT_CONSUMED":
             produced.append(self._delta_block("subagent", invocation_id, "subagent", payload, block_id=block_id, event_suffix="updated"))
-        if block_id in self._active and runtime_type in {"SUBAGENT_COMPLETED", "SUBAGENT_FAILED"}:
+        if block_id in self._active and runtime_type == "SUBAGENT_CONSUMED":
+            task_status = str(payload.get("taskStatus") or payload.get("status") or "completed")
+            outcome = "failed" if task_status in {"failed", "interrupted"} else (
+                "cancelled" if task_status == "cancelled" else "completed"
+            )
             produced.append(self._close_block(
                 "subagent",
                 invocation_id,
                 block_id,
-                "failed" if runtime_type.endswith("FAILED") else "completed",
+                outcome,
                 payload,
             ))
         return produced

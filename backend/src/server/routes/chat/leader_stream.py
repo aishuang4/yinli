@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import AsyncGenerator
 
 from agentscope.event import ExternalExecutionResultEvent
-from agentscope.message import TextBlock, ToolResultBlock, ToolResultState
+from agentscope.message import UserMsg
 
 from src.server.routes.chat.helpers import _set_skill_run_status, source_event
 from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload
@@ -14,7 +14,6 @@ from src.server.routes.chat.lifecycle import waiting_reason, waiting_status_for_
 from src.server.routes.chat.models import (
     HITL_EVENT_TYPES,
     PENDING_INTERACTIONS,
-    PENDING_SUBAGENT_PARENT_CONTEXTS,
     ChatModelCacheRun,
     ChatSkillRun,
     ChatToolRun,
@@ -43,7 +42,7 @@ from src.server.routes.chat.trace_recorder import (
     _record_run_event,
     _record_tool_execution_artifacts,
 )
-from src.subagents.manager import SubagentDelegationManager, SubagentDelegationWaiting
+from src.subagents.manager import SubagentDelegationManager
 
 
 @dataclass
@@ -70,17 +69,20 @@ class LeaderStreamState:
     available_skill_details: list[dict] = field(default_factory=list)
     session_workspace_dir: str = ""
     session_artifact_paths_before: list[str] = field(default_factory=list)
+    subagent_completion_blocked_reason: str = ""
+    subagent_completion_block_count: int = 0
+    blocked_final_text: str = ""
 
 
 _PLAN_FINAL_ANSWER_CHUNK_DELAY_SECONDS = 0.012
 
 
-def _collect_pending_hitl_batch(
+def _collect_pending_tool_batch(
     batches: list[dict],
     interaction_type: str,
     event_data: dict,
 ) -> None:
-    """合并同一回复、同一交互类型的 AgentScope 等待工具调用。"""
+    """合并同一回复、同一等待类型的 AgentScope 工具调用。"""
 
     reply_id = str(event_data.get("reply_id") or "")
     batch = next(
@@ -164,11 +166,12 @@ async def stream_leader_agent_reply(
 ) -> AsyncGenerator[str, None]:
     """消费 Leader AgentScope 事件流，并处理 HITL / clarification 早停。"""
 
-    # AgentScope 会为同一并行批次中的每个待审批工具分别发出一个
+    # AgentScope 会为同一并行批次中的每个待处理工具分别发出一个
     # REQUIRE_* 事件。必须先排空该批次，确保 Agent 内部已把所有工具标为
     # waiting，再把准确集合交给前端；收到第一个事件就返回会导致 resume
     # 回传一个 Agent 实际未等待的工具 ID。
     pending_hitl_batches: list[dict] = []
+    pending_subagent_batches: list[dict] = []
 
     async for event in agent.reply_stream(user_msg):
         event_data = event.model_dump(mode="json")
@@ -226,6 +229,11 @@ async def stream_leader_agent_reply(
             ):
                 yield reasoning_event
             if event_type == "TOOL_CALL_START":
+                completion_error = _runtime_completion_error(runtime_event_sources or [])
+                if completion_error:
+                    state.subagent_completion_blocked_reason = completion_error
+                    state.blocked_final_text = ""
+                    continue
                 state.final_answer_started = True
                 yield runtime_trace_source_event(
                     "AGENT_FINAL_ANSWER_STARTED",
@@ -327,130 +335,19 @@ async def stream_leader_agent_reply(
                 collect=state.runtime_events,
             )
 
-        if event_type == "REQUIRE_EXTERNAL_EXECUTION" and _is_delegate_task_external_event(event_data):
-            manager = await _find_subagent_manager(
-                runtime_event_sources or [],
-                agent=agent,
-            )
-            if manager is None:
-                yield source_event("ERROR", {"message": "DelegateTask external executor is not available."})
-                state.stopped = True
-                state.stop_reason = "subagent_executor_missing"
-                return
-            try:
-                tool_calls = list(event_data.get("tool_calls") or [])
-                execution_results = []
-                if len(tool_calls) != 1:
-                    execution_results = _delegate_task_batch_error_results(tool_calls)
-                else:
-                    tool_call = tool_calls[0]
-                    execution_task = asyncio.create_task(manager.execute_external_tool_call(tool_call))
-                    try:
-                        while not execution_task.done():
-                            for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
-                                state.runtime_events.append(runtime_event)
-                                yield runtime_source_event(runtime_event)
-                            await asyncio.sleep(0.1)
-                        execution_results.append(await execution_task)
-                    finally:
-                        for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
-                            state.runtime_events.append(runtime_event)
-                            yield runtime_source_event(runtime_event)
-                resume_event = ExternalExecutionResultEvent(
-                    reply_id=str(event_data.get("reply_id") or ""),
-                    execution_results=execution_results,
-                )
-                async for resumed_event in stream_leader_agent_reply(
-                    agent=agent,
-                    user_msg=resume_event,
-                    state=state,
-                    session_id=session_id,
-                    persist=persist,
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    model_name=model_name,
-                    guardrails=guardrails,
-                    message=message,
-                    stream_scope=stream_scope,
-                    skill_runs=skill_runs,
-                    plan_mode_manager=plan_mode_manager,
-                    runtime_event_sources=runtime_event_sources,
-                    sandbox=sandbox,
-                ):
-                    yield resumed_event
-                return
-            except SubagentDelegationWaiting as exc:
-                for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
-                    state.runtime_events.append(runtime_event)
-                    yield runtime_source_event(runtime_event)
-                interaction = PENDING_INTERACTIONS.get(exc.interaction_id)
-                if interaction is not None:
-                    delegated_tool_call = dict(tool_calls[0])
-                    PENDING_SUBAGENT_PARENT_CONTEXTS[interaction.id] = {
-                        "agent": agent,
-                        "reply_id": str(event_data.get("reply_id") or ""),
-                        "tool_call": delegated_tool_call,
-                        "state": state,
-                        "session_id": session_id,
-                        "persist": persist,
-                        "agent_id": agent_id,
-                        "agent_name": agent_name,
-                        "model_name": model_name,
-                        "guardrails": guardrails,
-                        "message": message,
-                        "stream_scope": stream_scope,
-                        "skill_runs": skill_runs,
-                        "plan_mode_manager": plan_mode_manager,
-                        "runtime_event_sources": runtime_event_sources,
-                        "sandbox": sandbox,
-                    }
-                    wait_state = waiting_status_for_interaction(
-                        interaction.type,
-                        interaction.resume_tool_calls,
-                    )
-                    if persist:
-                        _append_assistant_message(
-                            session_id=session_id,
-                            agent_id=agent_id,
-                            agent_name=agent_name,
-                            model_name=model_name,
-                            content=state.assistant_text,
-                            error=None,
-                            thinking=state.assistant_thinking,
-                            skill_calls=skill_runs,
-                            tool_calls=state.assistant_tool_calls,
-                            model_caches=state.assistant_model_caches,
-                            runtime_events=state.runtime_events,
-                        )
-                    yield runtime_trace_source_event(
-                        "RUN_WAITING",
-                        session_id=session_id,
-                        scope="run",
-                        source="runtime",
-                        source_event_type=interaction.type,
-                        agent_id=agent_id,
-                        agent_name=agent_name,
-                        status=wait_state,
-                        reason=waiting_reason(wait_state),
-                        payload={
-                            "interactionId": interaction.id,
-                            "interactionType": interaction.type,
-                            "waitState": wait_state,
-                            "reason": waiting_reason(wait_state),
-                        },
-                        collect=state.runtime_events,
-                    )
-                    yield source_event("HITL_REQUIRED", _hitl_payload(interaction))
-                state.stopped = True
-                state.stop_reason = "subagent_hitl"
-                return
+        if event_type == "REQUIRE_EXTERNAL_EXECUTION" and _is_subagent_task_external_event(event_data):
+            _collect_pending_tool_batch(pending_subagent_batches, event_type, event_data)
+            continue
 
         if event_type in HITL_EVENT_TYPES:
-            _collect_pending_hitl_batch(pending_hitl_batches, event_type, event_data)
+            _collect_pending_tool_batch(pending_hitl_batches, event_type, event_data)
             continue
 
         if event_type == "TEXT_BLOCK_DELTA":
             delta = str(event_data.get("delta", ""))
+            if state.subagent_completion_blocked_reason:
+                state.blocked_final_text += delta
+                continue
             if state.final_answer_started:
                 state.assistant_text += delta
                 yield runtime_trace_source_event(
@@ -485,6 +382,12 @@ async def stream_leader_agent_reply(
             })
 
         if event_type == "REPLY_END" and state.pending_text:
+            completion_error = _runtime_completion_error(runtime_event_sources or [])
+            if completion_error:
+                state.subagent_completion_blocked_reason = completion_error
+                state.blocked_final_text = state.pending_text
+                state.pending_text = ""
+                continue
             if state.final_answer_started or not state.reply_had_tool_call:
                 pending = state.pending_text
                 state.pending_text = ""
@@ -543,6 +446,78 @@ async def stream_leader_agent_reply(
     for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
         state.runtime_events.append(runtime_event)
         yield runtime_source_event(runtime_event)
+
+    if pending_subagent_batches:
+        reply_ids = {str(batch["reply_id"]) for batch in pending_subagent_batches}
+        if len(reply_ids) != 1:
+            raise RuntimeError("同一轮 Subagent external execution 出现多个 reply_id")
+        manager = await _find_subagent_manager(
+            runtime_event_sources or [],
+            agent=agent,
+        )
+        if manager is None:
+            yield source_event("ERROR", {"message": "Subagent task executor is not available."})
+            state.stopped = True
+            state.stop_reason = "subagent_executor_missing"
+            return
+        tool_calls = [
+            tool_call
+            for batch in pending_subagent_batches
+            for tool_call in batch["tool_calls"]
+        ]
+        execution_tasks = [
+            asyncio.create_task(manager.execute_external_tool_call(tool_call))
+            for tool_call in tool_calls
+        ]
+        try:
+            while not all(task.done() for task in execution_tasks):
+                for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
+                    state.runtime_events.append(runtime_event)
+                    yield runtime_source_event(runtime_event)
+                await asyncio.sleep(0.1)
+            execution_results = [await task for task in execution_tasks]
+        finally:
+            for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
+                state.runtime_events.append(runtime_event)
+                yield runtime_source_event(runtime_event)
+        resume_event = ExternalExecutionResultEvent(
+            reply_id=reply_ids.pop(),
+            execution_results=execution_results,
+        )
+        mark_consumed = getattr(manager, "mark_results_consumed_for_tool_calls", None)
+        if callable(mark_consumed):
+            # 结果已经作为 ExternalExecutionResultEvent 交给父 Agent；
+            # 不依赖恢复流是否能产出首个事件来确认消费，避免模型调用
+            # 在首个事件前失败时重复触发 completion barrier。
+            mark_consumed(tool_calls)
+        continuation_started = False
+        async for resumed_event in stream_leader_agent_reply(
+            agent=agent,
+            user_msg=resume_event,
+            state=state,
+            session_id=session_id,
+            persist=persist,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            model_name=model_name,
+            guardrails=guardrails,
+            message=message,
+            stream_scope=stream_scope,
+            skill_runs=skill_runs,
+            plan_mode_manager=plan_mode_manager,
+            runtime_event_sources=runtime_event_sources,
+            sandbox=sandbox,
+        ):
+            if not continuation_started:
+                continuation_started = True
+                for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
+                    state.runtime_events.append(runtime_event)
+                    yield runtime_source_event(runtime_event)
+            yield resumed_event
+        for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
+            state.runtime_events.append(runtime_event)
+            yield runtime_source_event(runtime_event)
+        return
 
     if pending_hitl_batches:
         if state.active_skill_run and persist:
@@ -701,6 +676,45 @@ async def stream_leader_agent_reply(
         state.stop_reason = "clarification"
         return
 
+    if state.subagent_completion_blocked_reason:
+        if state.subagent_completion_block_count >= 4:
+            raise RuntimeError(
+                "父 Agent 连续尝试结束，但 attached Subagent 仍未完成消费: "
+                f"{state.subagent_completion_blocked_reason}"
+            )
+        reason = state.subagent_completion_blocked_reason
+        state.subagent_completion_blocked_reason = ""
+        state.blocked_final_text = ""
+        state.pending_text = ""
+        state.final_answer_started = False
+        state.subagent_completion_block_count += 1
+        async for resumed_event in stream_leader_agent_reply(
+            agent=agent,
+            user_msg=UserMsg(
+                name="system",
+                content=(
+                    "Your final answer was withheld by the attached Subagent completion barrier. "
+                    f"{reason} Do not finalize again until every attached task is terminal and its "
+                    "result has been read with SubagentResultRead."
+                ),
+            ),
+            state=state,
+            session_id=session_id,
+            persist=persist,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            model_name=model_name,
+            guardrails=guardrails,
+            message=message,
+            stream_scope=stream_scope,
+            skill_runs=skill_runs,
+            plan_mode_manager=plan_mode_manager,
+            runtime_event_sources=runtime_event_sources,
+            sandbox=sandbox,
+        ):
+            yield resumed_event
+        return
+
     if _should_attempt_final_answer_recovery(state):
         async for recovery_event in _stream_final_answer_recovery_events(
             agent=agent,
@@ -743,6 +757,18 @@ def _drain_runtime_event_sources(sources: list[object]) -> list[dict]:
         if callable(drain):
             events.extend(drain())
     return events
+
+
+def _runtime_completion_error(sources: list[object]) -> str:
+    """收集运行时增强模块的成功收口屏障错误。"""
+
+    for source in sources:
+        completion_error = getattr(source, "completion_error", None)
+        if callable(completion_error):
+            error = str(completion_error() or "")
+            if error:
+                return error
+    return ""
 
 
 def _skill_lifecycle_events(
@@ -866,29 +892,23 @@ def _skill_name_from_tool_call(tool_call: ChatToolRun | None) -> str:
     return str(value.get("skill") or "") if isinstance(value, dict) else ""
 
 
-def _is_delegate_task_external_event(event_data: dict) -> bool:
-    """判断 AgentScope 外部执行事件是否只包含 DelegateTask。"""
+SUBAGENT_TASK_TOOL_NAMES = {
+    "DelegateTask",
+    "SubagentTaskList",
+    "SubagentTaskWait",
+    "SubagentResultRead",
+    "SubagentTaskCancel",
+}
+
+
+def _is_subagent_task_external_event(event_data: dict) -> bool:
+    """判断 AgentScope 外部执行事件是否只包含 attached Subagent 工具。"""
 
     tool_calls = list(event_data.get("tool_calls") or [])
-    return bool(tool_calls) and all(str(tool_call.get("name") or "") == "DelegateTask" for tool_call in tool_calls)
-
-
-def _delegate_task_batch_error_results(tool_calls: list[dict]) -> list[ToolResultBlock]:
-    """拒绝同一回复中的多条 blocking 委托，避免 HITL 恢复关联到错误调用。"""
-
-    message = (
-        "DelegateTask is blocking and supports exactly one delegation per model reply. "
-        "Review the returned result, then delegate the next task in a later tool call."
-    )
-    return [
-        ToolResultBlock(
-            id=str(tool_call.get("id") or ""),
-            name="DelegateTask",
-            output=[TextBlock(text=message)],
-            state=ToolResultState.ERROR,
-        )
+    return bool(tool_calls) and all(
+        str(tool_call.get("name") or "") in SUBAGENT_TASK_TOOL_NAMES
         for tool_call in tool_calls
-    ]
+    )
 
 
 async def _find_subagent_manager(

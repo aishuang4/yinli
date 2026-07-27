@@ -186,6 +186,48 @@ class _FakeDelegateTaskParentAgent:
         })
 
 
+class _FakeParallelDelegateTaskParentAgent(_FakeDelegateTaskParentAgent):
+    async def reply_stream(self, user_msg):
+        from agentscope.event import ExternalExecutionResultEvent
+
+        if isinstance(user_msg, ExternalExecutionResultEvent):
+            self.resume_events.append(user_msg)
+            yield _FakeAgentScopeEvent({
+                "type": "TOOL_CALL_START",
+                "reply_id": "reply-parallel",
+                "tool_call_id": "final-parallel",
+                "tool_call_name": "FinalAnswerStart",
+            })
+            yield _FakeAgentScopeEvent({
+                "type": "TEXT_BLOCK_DELTA",
+                "reply_id": "reply-parallel",
+                "block_id": "text-parallel",
+                "delta": "两个结果均已收到。",
+            })
+            yield _FakeAgentScopeEvent({
+                "type": "REPLY_END",
+                "session_id": "session-parallel-delegate",
+                "reply_id": "reply-parallel",
+            })
+            return
+        for index in range(2):
+            yield _FakeAgentScopeEvent({
+                "type": "REQUIRE_EXTERNAL_EXECUTION",
+                "reply_id": "reply-parallel",
+                "tool_calls": [{
+                    "type": "tool_call",
+                    "id": f"delegate-{index + 1}",
+                    "name": "DelegateTask",
+                    "input": (
+                        '{"subagentName":"explorer","task":"查找文件 '
+                        f'{index + 1}'
+                        '"}'
+                    ),
+                    "state": "submitted",
+                }],
+            })
+
+
 class _FakeSubagentExternalManager:
     def __init__(self) -> None:
         self.called_tool_ids: list[str] = []
@@ -776,6 +818,43 @@ def test_delegate_task_external_result_resumes_parent_agent():
     assert any(_event_contains(event, "SUBAGENT_COMPLETED") for event in events)
 
 
+def test_parallel_delegate_external_events_are_resumed_as_one_complete_batch():
+    """AgentScope 分开发出的并行 external 事件必须聚合后一次性回传。"""
+
+    async def run_case():
+        agent = _FakeParallelDelegateTaskParentAgent()
+        manager = _FakeSubagentExternalManager()
+        events = [
+            event
+            async for event in stream_leader_agent_reply(
+                agent=agent,
+                user_msg=object(),
+                state=LeaderStreamState(),
+                session_id="session-parallel-delegate",
+                persist=False,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="deepseek-chat",
+                guardrails=[],
+                message="并行委托探索",
+                stream_scope="single",
+                skill_runs=[],
+                runtime_event_sources=[manager],
+            )
+        ]
+        return events, agent, manager
+
+    events, agent, manager = asyncio.run(run_case())
+
+    assert manager.called_tool_ids == ["delegate-1", "delegate-2"]
+    assert len(agent.resume_events) == 1
+    assert [item.id for item in agent.resume_events[0].execution_results] == [
+        "delegate-1",
+        "delegate-2",
+    ]
+    assert _final_answer_deltas(events) == ["两个结果均已收到。"]
+
+
 def test_delegate_task_external_executor_is_recovered_from_agent_toolkit():
     """HITL 恢复没有传 source 时，仍可从 live Agent 的 DelegateTask 找回 manager。"""
 
@@ -815,6 +894,69 @@ def test_delegate_task_external_executor_is_recovered_from_agent_toolkit():
 
     assert manager.called_tool_ids == ["delegate-1"]
     assert not any(_event_contains(event, "subagent_executor_missing") for event in events)
+
+
+def test_subagent_completion_barrier_withholds_early_final_answer_and_resumes_parent():
+    """父 Agent忘记消费 attached child 时，候选答案不能泄漏到前端。"""
+
+    class BarrierSource:
+        def __init__(self) -> None:
+            self.checks = 0
+
+        def drain_runtime_events(self):
+            return []
+
+        def completion_error(self):
+            self.checks += 1
+            return "child still running" if self.checks == 1 else ""
+
+    class BarrierAgent:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def reply_stream(self, _event):
+            self.calls += 1
+            text = "不应展示" if self.calls == 1 else "已消费后回答"
+            yield _FakeAgentScopeEvent({
+                "type": "TOOL_CALL_START",
+                "reply_id": f"reply-{self.calls}",
+                "tool_call_id": f"final-{self.calls}",
+                "tool_call_name": "FinalAnswerStart",
+            })
+            yield _FakeAgentScopeEvent({
+                "type": "TEXT_BLOCK_DELTA",
+                "reply_id": f"reply-{self.calls}",
+                "delta": text,
+            })
+            yield _FakeAgentScopeEvent({"type": "REPLY_END", "reply_id": f"reply-{self.calls}"})
+
+    async def run_case():
+        agent = BarrierAgent()
+        events = [
+            event
+            async for event in stream_leader_agent_reply(
+                agent=agent,
+                user_msg=object(),
+                state=LeaderStreamState(),
+                session_id="session-subagent-barrier",
+                persist=False,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="deepseek-chat",
+                guardrails=AgentGuardrails(),
+                message="delegate",
+                stream_scope="single",
+                skill_runs=[],
+                runtime_event_sources=[BarrierSource()],
+            )
+        ]
+        return agent, events
+
+    agent, events = asyncio.run(run_case())
+
+    assert agent.calls == 2
+    assert _final_answer_deltas(events) == ["已消费后回答"]
+    assert not any(_event_contains(event, "不应展示") for event in events)
 
 
 def test_single_agent_without_final_answer_marker_does_not_fallback_to_final_answer():

@@ -27,15 +27,17 @@ sleep 2
 # 启动前端
 echo "🎨 Starting Vite frontend..."
 cd frontend
-npm run dev &
+npm run dev:lan &
 FRONTEND_PID=$!
 echo "   Frontend PID: $FRONTEND_PID"
 
 echo ""
 echo "✅ Development servers started!"
-echo "   Frontend: http://localhost:5173"
+echo "   Frontend (local): http://localhost:5173"
+echo "   Frontend (LAN):   http://<本机局域网 IP>:5173"
 echo "   Backend:  http://localhost:8765"
 echo "   API Docs: http://localhost:8765/docs"
+echo "   Note: LAN clients access the backend through the Vite /api proxy."
 echo ""
 echo "Press Ctrl+C to stop both servers."
 

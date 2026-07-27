@@ -19,10 +19,10 @@
 - [ ] 增加 Team Console Playwright 回归，覆盖第二轮清空、成员切换不重放和用户主动发信。
 - [x] 完成 Subagent M2.1 稳定性修复：错误 observation、父本轮模型继承、异常终态和 HITL 事件关联。
 - [x] 完成 child / parent AgentScope checkpoint spike，明确 exact resume、transcript replay 和 restart 边界。
-- [x] 完成 Subagent M3 MVP：单进程前台持久 task、Supervisor、transcript、任务控制台和查询/取消 API；Chat 展示已切换为 `kind=subagent` Block。
+- [x] 完成 Subagent attached 文件任务 MVP：Supervisor、并行 fork、wait/read、`result.md`、transcript、任务控制台和查询/取消 API；Chat 展示已切换为 `kind=subagent` Block。
 - [ ] 按 `docs/subagent-runtime-event-redesign.md` 完成 Subagent 领域层：TaskService 唯一写入口、revision/process fencing、attempt、domain event 和 result delivery；依赖通用 Event Stream V3。
 - [x] 完成 Subagent 前端领域投影：注册 `Block.kind=subagent` 的 schema/reducer/renderer 和 Generic Block fallback，删除 `tools[].subagent*` 反解析；不修改通用事件流主干。
-- [ ] 完成 attached async fan-out/join 与 parent completion barrier，确保 child 结果 delivered/consumed 前父 Run 不成功收口。
+- [x] 完成 attached async fan-out/join 与 parent completion barrier，确保 child 结果 delivered/consumed 前父 Run 不成功收口。
 - [ ] 在 Task API 基础上接入 Subagent 控制台刷新恢复回归；Chat 使用嵌套 `kind=subagent` Block，detached background 暂不开放。
 
 ## P3. 平台基础

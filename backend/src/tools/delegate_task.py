@@ -1,8 +1,10 @@
-"""DelegateTask 工具，供主 Agent 前台委托 Subagent。"""
+"""主 Agent 可见的 Subagent attached task 工具。"""
+
+from __future__ import annotations
 
 from typing import Any
 
-from agentscope.message import TextBlock, ToolCallBlock, ToolCallState, ToolResultState
+from agentscope.message import TextBlock, ToolResultState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.state import AgentState
 from agentscope.tool import ToolBase, ToolChunk
@@ -10,46 +12,12 @@ from agentscope.tool import ToolBase, ToolChunk
 from src.subagents.manager import SubagentDelegationManager, subagent_error_observation
 
 
-class DelegateTask(ToolBase):
-    """把自包含任务委托给一个文件定义的 Subagent。"""
+class _SubagentExternalTool(ToolBase):
+    """共享 Subagent 外部工具的权限和执行属性。"""
 
-    name: str = "DelegateTask"
-    description: str = (
-        "Delegate a self-contained side task to a named subagent with an independent context. "
-        "Use this when exploration or analysis would pollute the main conversation, and only a concise "
-        "summary is needed before continuing. This call waits for the subagent result so the parent can "
-        "review and consume it before continuing."
-    )
-    input_schema: dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            "subagentName": {
-                "type": "string",
-                "description": "Name of the subagent definition to run.",
-            },
-            "task": {
-                "type": "string",
-                "description": "Self-contained task for the subagent.",
-            },
-            "expectedOutput": {
-                "type": "string",
-                "description": "Concise description of the desired result format.",
-            },
-            "context": {
-                "type": "string",
-                "description": "Optional concise context from the main agent.",
-            },
-            "constraints": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Optional constraints the subagent must follow.",
-            },
-        },
-        "required": ["subagentName", "task"],
-    }
     is_mcp: bool = False
     is_read_only: bool = True
-    is_concurrency_safe: bool = False
+    is_concurrency_safe: bool = True
     is_external_tool: bool = True
     is_state_injected: bool = True
 
@@ -64,9 +32,47 @@ class DelegateTask(ToolBase):
     ) -> PermissionDecision:
         return PermissionDecision(
             behavior=PermissionBehavior.ALLOW,
-            message="DelegateTask only starts a Subagent within the current parent guardrails.",
-            decision_reason="Subagent delegation",
+            message="Subagent tools operate within the current parent guardrails.",
+            decision_reason="Subagent attached task orchestration",
         )
+
+    @staticmethod
+    def _success(text: str) -> ToolChunk:
+        return ToolChunk(content=[TextBlock(text=text)], state=ToolResultState.SUCCESS, is_last=True)
+
+    @staticmethod
+    def _failure(exc: Exception) -> ToolChunk:
+        return ToolChunk(
+            content=[TextBlock(text=subagent_error_observation(exc))],
+            state=ToolResultState.ERROR,
+            is_last=True,
+        )
+
+
+class DelegateTask(_SubagentExternalTool):
+    """按 YAML/Markdown definition fork 一个 attached Subagent task。"""
+
+    name: str = "DelegateTask"
+    description: str = (
+        "Fork a self-contained attached task to a named subagent with an independent context. "
+        "This returns an invocationId immediately. Continue useful parent work, then call "
+        "SubagentTaskWait and SubagentResultRead for every child before finalizing."
+    )
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "subagentName": {"type": "string", "description": "Subagent definition name."},
+            "task": {"type": "string", "description": "Self-contained child task."},
+            "expectedOutput": {"type": "string", "description": "Desired result format."},
+            "context": {"type": "string", "description": "Concise parent context."},
+            "constraints": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Constraints the child must follow.",
+            },
+        },
+        "required": ["subagentName", "task"],
+    }
 
     async def __call__(
         self,
@@ -79,53 +85,136 @@ class DelegateTask(ToolBase):
         **kwargs: Any,
     ) -> ToolChunk:
         try:
-            result = await self._manager.delegate(
+            return self._success(await self._manager.delegate(
                 subagent_name=subagentName,
                 task=task,
                 expected_output=expectedOutput,
                 context=context,
                 constraints=constraints or [],
                 tool_call_id=_extract_current_tool_call_id(_agent_state, self.name),
-            )
-            return ToolChunk(
-                content=[TextBlock(text=result)],
-                state=ToolResultState.SUCCESS,
-                is_last=True,
-            )
+            ))
         except Exception as exc:
-            return ToolChunk(
-                content=[TextBlock(text=subagent_error_observation(
-                    exc,
-                    subagent_name=subagentName,
-                ))],
-                state=ToolResultState.ERROR,
-                is_last=True,
-            )
+            return self._failure(exc)
+
+
+class SubagentTaskList(_SubagentExternalTool):
+    """列出当前父 Run 创建的 attached tasks。"""
+
+    name: str = "SubagentTaskList"
+    description: str = "List attached subagent task statuses for the current parent run without reading results."
+    input_schema: dict[str, Any] = {"type": "object", "properties": {}}
+
+    async def __call__(self, **kwargs: Any) -> ToolChunk:
+        try:
+            return self._success(self._manager.list_tasks())
+        except Exception as exc:
+            return self._failure(exc)
+
+
+class SubagentTaskWait(_SubagentExternalTool):
+    """等待指定 child tasks 结束或进入需要处理的 waiting 状态。"""
+
+    name: str = "SubagentTaskWait"
+    description: str = (
+        "Wait until any or all attached subagent tasks leave queued/running. "
+        "This returns status and result references only; read every terminal result afterward."
+    )
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "invocationIds": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "waitMode": {"type": "string", "enum": ["any", "all"], "default": "all"},
+            "timeoutSeconds": {"type": "integer", "minimum": 1, "maximum": 1800, "default": 300},
+        },
+        "required": ["invocationIds"],
+    }
+
+    async def __call__(
+        self,
+        invocationIds: list[str],
+        waitMode: str = "all",
+        timeoutSeconds: int = 300,
+        **kwargs: Any,
+    ) -> ToolChunk:
+        try:
+            return self._success(await self._manager.wait_tasks(
+                invocationIds,
+                wait_mode=waitMode,
+                timeout_seconds=timeoutSeconds,
+            ))
+        except Exception as exc:
+            return self._failure(exc)
+
+
+class SubagentResultRead(_SubagentExternalTool):
+    """读取一个终态 child 的 result.md。"""
+
+    name: str = "SubagentResultRead"
+    description: str = (
+        "Read the final result.md for one terminal attached subagent task. "
+        "You must use this for completed, failed, cancelled, or interrupted tasks before finalizing."
+    )
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {"invocationId": {"type": "string"}},
+        "required": ["invocationId"],
+    }
+
+    async def __call__(
+        self,
+        invocationId: str,
+        _agent_state: AgentState | None = None,
+        **kwargs: Any,
+    ) -> ToolChunk:
+        try:
+            return self._success(self._manager.read_result(
+                invocationId,
+                tool_call_id=_extract_current_tool_call_id(_agent_state, self.name),
+            ))
+        except Exception as exc:
+            return self._failure(exc)
+
+
+class SubagentTaskCancel(_SubagentExternalTool):
+    """取消一个当前父 Run 的 attached child。"""
+
+    name: str = "SubagentTaskCancel"
+    description: str = "Cancel an attached subagent task. The cancellation result must still be read and consumed."
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {"invocationId": {"type": "string"}},
+        "required": ["invocationId"],
+    }
+
+    async def __call__(self, invocationId: str, **kwargs: Any) -> ToolChunk:
+        try:
+            return self._success(await self._manager.cancel_task(invocationId))
+        except Exception as exc:
+            return self._failure(exc)
+
+
+def build_subagent_tools(manager: SubagentDelegationManager) -> list[ToolBase]:
+    """构造主 Agent完整的 attached task 工具组。"""
+
+    return [
+        DelegateTask(manager),
+        SubagentTaskList(manager),
+        SubagentTaskWait(manager),
+        SubagentResultRead(manager),
+        SubagentTaskCancel(manager),
+    ]
 
 
 def _extract_current_tool_call_id(state: AgentState | None, tool_name: str) -> str:
-    """从 AgentState 中提取当前工具调用 ID，用于关联 Subagent 审计事件。"""
+    """从 AgentState 中提取当前工具调用 ID。"""
 
     if state is None:
         return ""
-
-    fallback_id = ""
-    unfinished_states = {
-        str(ToolCallState.PENDING),
-        str(ToolCallState.ASKING),
-        str(ToolCallState.ALLOWED),
-        str(ToolCallState.SUBMITTED),
-    }
     for message in reversed(state.context):
         content = message.content
         if not isinstance(content, list):
             continue
         for block in reversed(content):
-            if not isinstance(block, ToolCallBlock):
-                continue
-            if block.name != tool_name:
-                continue
-            fallback_id = fallback_id or str(block.id or "")
-            if str(block.state) in unfinished_states:
-                return str(block.id or "")
-    return fallback_id
+            if getattr(block, "name", "") == tool_name and getattr(block, "id", ""):
+                return str(block.id)
+    return ""

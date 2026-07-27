@@ -475,6 +475,8 @@ def ensure_db() -> None:
                     task TEXT NOT NULL,
                     expected_output TEXT NOT NULL DEFAULT '',
                     result_preview TEXT NOT NULL DEFAULT '',
+                    result_ref TEXT NOT NULL DEFAULT '',
+                    delivery_status TEXT NOT NULL DEFAULT 'none',
                     error TEXT NOT NULL DEFAULT '',
                     started_at TEXT NOT NULL,
                     completed_at TEXT,
@@ -777,6 +779,8 @@ def ensure_db() -> None:
             _ensure_column(conn, "subagent_invocations", "execution_mode", "TEXT NOT NULL DEFAULT 'foreground'")
             _ensure_column(conn, "subagent_invocations", "resume_capability", "TEXT NOT NULL DEFAULT 'same_process'")
             _ensure_column(conn, "subagent_invocations", "process_instance_id", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "subagent_invocations", "result_ref", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "subagent_invocations", "delivery_status", "TEXT NOT NULL DEFAULT 'none'")
             _drop_column_if_exists(conn, "agents", "callable_agents")
             _drop_column_if_exists(conn, "agents", "max_depth")
             _drop_column_if_exists(conn, "chat_messages", "subagent_calls")
@@ -1373,6 +1377,21 @@ def update_subagent_invocation(
         result_preview=result_preview,
         error=error,
         completed_at=completed_at,
+    )
+
+
+def update_subagent_invocation_delivery(
+    invocation_id: str,
+    *,
+    delivery_status: str,
+    result_ref: str = "",
+) -> dict[str, Any] | None:
+    """更新 Subagent 结果引用和父 Agent消费状态索引。"""
+
+    return _trace_record_store().update_invocation_delivery(
+        invocation_id,
+        delivery_status=delivery_status,
+        result_ref=result_ref,
     )
 
 

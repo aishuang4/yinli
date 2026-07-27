@@ -415,6 +415,49 @@ def test_source_normalizer_closes_all_activity_before_run_completed(projection_d
     assert state.snapshot.blocks_by_id["message:run-normalized"].outcome == "completed"
 
 
+def test_subagent_block_stays_open_until_parent_consumes_result(projection_db) -> None:
+    events, store, coordinator, runner = create_runtime(checkpoint_frame_interval=8)
+    normalizer = ChatProjectionNormalizer(
+        stream_key="stream-subagent-consume",
+        run_id="run-subagent-consume",
+        session_id="session-subagent-consume",
+        events=events,
+    )
+    normalizer.start(agent_name="Agent")
+    normalizer.ingest("SUBAGENT_STARTED", {"payload": {
+        "invocationId": "sub-1",
+        "subagentName": "explorer",
+        "status": "queued",
+        "deliveryStatus": "none",
+    }})
+    normalizer.ingest("SUBAGENT_COMPLETED", {"payload": {
+        "invocationId": "sub-1",
+        "subagentName": "explorer",
+        "status": "completed",
+        "deliveryStatus": "pending",
+        "resultRef": ".agent-workstation/sessions/s/subagents/sub-1/result.md",
+    }})
+    runner.run_available("stream-subagent-consume", "run-subagent-consume")
+    pending = store.load_materialized("stream-subagent-consume", coordinator)
+
+    assert pending.snapshot.blocks_by_id["subagent:sub-1"].phase == "open"
+    assert pending.snapshot.blocks_by_id["subagent:sub-1"].data["deliveryStatus"] == "pending"
+
+    normalizer.ingest("SUBAGENT_CONSUMED", {"payload": {
+        "invocationId": "sub-1",
+        "subagentName": "explorer",
+        "status": "completed",
+        "taskStatus": "completed",
+        "deliveryStatus": "consumed",
+    }})
+    runner.run_available("stream-subagent-consume", "run-subagent-consume")
+    consumed = store.load_materialized("stream-subagent-consume", coordinator)
+
+    assert consumed.snapshot.blocks_by_id["subagent:sub-1"].phase == "closed"
+    assert consumed.snapshot.blocks_by_id["subagent:sub-1"].outcome == "completed"
+    assert consumed.snapshot.blocks_by_id["subagent:sub-1"].data["deliveryStatus"] == "consumed"
+
+
 def test_clarification_source_opens_approval_and_keeps_run_resumable(projection_db) -> None:
     events, store, coordinator, runner = create_runtime(checkpoint_frame_interval=8)
     normalizer = ChatProjectionNormalizer(

@@ -9,6 +9,7 @@ FastAPI 服务入口 — 引力 YINLI 后端
 """
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
@@ -17,7 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.server.routes import agent_builder, agents, chat, health, mcp, memory, sandbox, settings as settings_routes, skills, subagents, tools, traces, workflows, workspaces
 from src.agents.agentscope_usage_patch import patch_agentscope_usage_events
 from src.config.settings import settings
-from src.storage.database import close_db, init_db, reconcile_interrupted_subagent_invocations
+from src.storage.database import close_db, init_db, list_projects, reconcile_interrupted_subagent_invocations
+from src.subagents.task_store import reconcile_interrupted_file_tasks
 from src.server.routes.chat.team_runtime.maintenance import maintain_team_runtime_runs
 from src.server.local_access import LocalAccessMiddleware
 
@@ -34,8 +36,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     patch_agentscope_usage_events()
     await init_db()
     interrupted_subagents = reconcile_interrupted_subagent_invocations()
-    if interrupted_subagents:
-        print(f"[Subagent] reconciled {interrupted_subagents} interrupted task(s)")
+    interrupted_subagent_files = reconcile_interrupted_file_tasks([
+        Path(str(project.get("rootPath") or ""))
+        for project in list_projects(include_archived=True)
+        if str(project.get("rootPath") or "")
+    ])
+    if interrupted_subagents or interrupted_subagent_files:
+        print(
+            "[Subagent] reconciled "
+            f"{interrupted_subagents} index task(s), {interrupted_subagent_files} file task(s)"
+        )
     team_maintenance = maintain_team_runtime_runs(
         retention_days=settings.team_run_retention_days,
         max_records=settings.team_run_max_records,

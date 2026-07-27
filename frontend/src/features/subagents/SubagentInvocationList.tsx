@@ -9,6 +9,7 @@ import type { SubagentInvocation } from '../../types/subagent';
 import {
   formatDateTime,
   formatDuration,
+  deliveryStatusLabel,
   invocationStatusColor,
   invocationStatusLabel,
 } from './subagentViewUtils';
@@ -69,7 +70,10 @@ function InvocationCard({ invocation, onSelect }: { invocation: SubagentInvocati
               {invocation.definitionScope || 'scope'}
             </Tag>
             <Tag size="small" color="transparent">
-              {invocation.executionMode === 'background' ? 'background · legacy' : (invocation.executionMode || 'foreground')}
+              {invocation.executionMode || 'attached'}
+            </Tag>
+            <Tag size="small" color={invocation.deliveryStatus === 'consumed' ? 'green' : 'transparent'}>
+              {deliveryStatusLabel(invocation.deliveryStatus)}
             </Tag>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
@@ -104,6 +108,11 @@ function InvocationCard({ invocation, onSelect }: { invocation: SubagentInvocati
         <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
           <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">Expected Output</div>
           <MarkdownContent content={invocation.expectedOutput} />
+        </div>
+      )}
+      {invocation.resultRef && (
+        <div className="mt-3 truncate font-mono text-xs text-[var(--color-text-tertiary)]" title={invocation.resultRef}>
+          {invocation.resultRef}
         </div>
       )}
     </article>

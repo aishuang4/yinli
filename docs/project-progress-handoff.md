@@ -54,10 +54,11 @@
 
 - Subagent 是 ReAct 内部 `DelegateTask` 委托；删除的是旧独立 Subagent Runtime（`runtime.kind=subagent`），不是当前委托能力。
 - Markdown + YAML frontmatter 文件定义和项目级 / 用户级扫描。
-- ReAct 内 `DelegateTask` 前台委托和 fresh-context 子 Agent。
+- ReAct 内 `DelegateTask` attached fork、并行 fresh-context 子 Agent、`SubagentTaskWait` 和 `SubagentResultRead`。
 - 工具、Skills、Memory 和 permission mode 按父权限上限裁剪。
-- `subagent_invocations`、`subagent_transcript_items`、`SUBAGENT_*` 事件、Trace、HITL resume 和 Subagents 任务控制台。
-- M1/M2.1 前台稳定性与 M3 单进程持久 task 已完成；当前 DelegateTask 仍是 blocking，detached background、跨进程恢复、运行中消息和 worktree isolation 尚未开放。
+- Session 内每个 invocation 使用 `task.json`、`status.json`、`result.md` 和 `transcript.jsonl` 作为文件事实源；SQLite 保存控制台查询索引。
+- 父 Run Completion Barrier 强制所有 attached child 终态且 consumed；Chat 和 Subagents 控制台分别展示任务状态与结果消费状态。
+- detached、嵌套、跨进程精确恢复、运行中消息和 worktree isolation 尚未开放。
 
 ### Skills
 

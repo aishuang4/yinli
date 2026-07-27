@@ -258,6 +258,47 @@ type PlanBlockData = {
 
 - `PLAN_CREATED` / `PLAN_CONTENT_REPLACED` / `PLAN_STEPS_REPLACED`：起草并替换当前未提交 revision。
 - `PLAN_REVIEW_REQUESTED`：完整 revision 已保存，状态进入 `review_waiting`；前端底部普通 Composer 替换为 Plan 审核 Composer。
+
+### 6.3 Subagent attached task 投影
+
+Subagent 保持 Markdown + YAML frontmatter 定义，并由主 Agent 在 ReAct 内调用
+`DelegateTask` 创建。`DelegateTask` 的在线语义是 fork attached task：调用成功后立即返回
+`invocationId`，不等待 child 结束，也不把 child 中间过程持续注入父 Agent 上下文。
+
+每个 `kind=subagent` Block 对应一个稳定 invocation，`data` 固定包含：
+
+```ts
+type SubagentBlockData = {
+  invocationId: string;
+  subagentName: string;
+  taskPreview: string;
+  status:
+    | "queued"
+    | "running"
+    | "waiting"
+    | "completed"
+    | "failed"
+    | "cancelled"
+    | "interrupted";
+  deliveryStatus: "none" | "pending" | "delivered" | "consumed";
+  resultRef?: string;
+  resultPreview?: string;
+  error?: string;
+  durationMs?: number;
+  updatedAt?: string;
+};
+```
+
+- child 的模型 delta、工具输入输出和完整 transcript 不进入父 Agent context；Chat Block
+  只接收任务状态、当前轻量摘要和最终消费状态。
+- child 终态结果先原子写入任务目录的 `result.md`，再把状态改为终态。父 Agent
+  只能通过 Subagent 结果读取工具消费该文件。
+- 读取结果后 delivery 进入 `delivered`；父 Agent 基于结果继续至少一次 acting 后进入
+  `consumed`。
+- 父 Run 的 completion barrier 要求所有 attached child 已进入终态且 delivery 为
+  `consumed`。模型忘记 wait/read 时不得正常 close Run。
+- 多个 child 可并行；Run 内所有 Subagent Block Frame 仍使用同一全局 `seq`。
+- 首期不支持 detached 和嵌套 Subagent，不从 frontmatter 推断前台/后台执行策略。
 - `PLAN_REVISION_REQUESTED`：用户提交自然语言修改意见，状态进入 `revising`，由模型生成完整新 revision。
 - `PLAN_APPROVED` / `PLAN_EXECUTION_STARTED`：用户确认当前 revision 后进入执行阶段。
 - `PLAN_STEP_UPDATED`：执行步骤状态、evidence 或 result 更新，前端实时归并到同一个 Plan Block。

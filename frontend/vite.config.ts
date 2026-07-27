@@ -26,6 +26,7 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5173,
+    strictPort: true,
     // 后端 API 代理到 FastAPI 服务
     proxy: {
       '/api': {

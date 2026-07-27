@@ -18,12 +18,10 @@ from src.agents.runtime_types import (
 )
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.server.routes.chat.hitl import _create_pending_interaction
-from src.server.routes.chat.leader_stream import _delegate_task_batch_error_results
 from src.server.routes.chat.models import (
     ChatResumeRequest,
     PENDING_AGENTS,
     PENDING_INTERACTIONS,
-    PENDING_SUBAGENT_PARENT_CONTEXTS,
 )
 from src.storage import database
 from src.subagents.manager import SubagentDelegationManager
@@ -43,7 +41,7 @@ from src.subagents.runtime_context import SubagentRuntimeContext
 from src.runtime_context import RuntimeContext
 from src.subagents.supervisor import get_subagent_supervisor
 from src.subagents.tool_policy import build_subagent_tool_policy
-from src.tools.delegate_task import DelegateTask
+from src.tools.delegate_task import DelegateTask, SubagentResultRead, SubagentTaskWait
 
 
 def test_load_subagent_frontmatter_parses_yaml_and_body(tmp_path: Path) -> None:
@@ -351,15 +349,11 @@ def test_child_scope_keeps_custom_knowledge_and_http_tools_enabled() -> None:
     assert http_scope.allow_knowledge is True
 
 
-def test_batch_delegate_task_returns_one_error_per_call() -> None:
-    results = _delegate_task_batch_error_results([
-        {"id": "delegate-1", "name": "DelegateTask"},
-        {"id": "delegate-2", "name": "DelegateTask"},
-    ])
-
-    assert [result.id for result in results] == ["delegate-1", "delegate-2"]
-    assert all(str(result.state).lower() == "error" for result in results)
-    assert all("exactly one delegation" in result.output[0].text for result in results)
+def test_subagent_tools_expose_fork_wait_and_read_contract() -> None:
+    assert "background" not in DelegateTask.input_schema["properties"]
+    assert "invocationId immediately" in DelegateTask.description
+    assert "invocationIds" in SubagentTaskWait.input_schema["properties"]
+    assert "invocationId" in SubagentResultRead.input_schema["properties"]
 
 
 def test_action_subagent_tools_are_available_with_parent_permission(tmp_path: Path) -> None:
@@ -508,6 +502,7 @@ def test_delegation_manager_emits_started_and_completed_events(tmp_path: Path, m
         fallback_names=[],
         model_options=AgentModelOptions(),
         guardrails=AgentGuardrails(
+            filesystem_scope=str(tmp_path),
             permission_profile=UnifiedPermissionProfile(tool_policy=ApprovalPolicy.TRUSTED_TOOLS)
         ),
         mcp_servers=[],
@@ -536,31 +531,155 @@ def test_delegation_manager_emits_started_and_completed_events(tmp_path: Path, m
 
     manager._runner = FakeRunner()  # noqa: SLF001
 
-    result = asyncio.run(
-        manager.delegate(
+    async def run_case() -> tuple[dict, str, list[dict]]:
+        fork = json.loads(await manager.delegate(
             subagent_name="reviewer",
             task="Review the latest diff.",
             tool_call_id="tool-call-reviewer",
-        )
-    )
-    events = manager.drain_runtime_events()
+        ))
+        wait_result = await manager.wait_tasks([fork["invocationId"]])
+        result = manager.read_result(fork["invocationId"], tool_call_id="read-reviewer")
+        manager.mark_results_consumed_for_tool_calls([{"id": "read-reviewer"}])
+        return fork, result, manager.drain_runtime_events()
+
+    fork, result, events = asyncio.run(run_case())
     invocations = database.list_subagent_invocations(run_id="run-1")
 
+    assert fork["mode"] == "attached"
     assert "No blocking findings." in result
-    assert [event["type"] for event in events] == ["SUBAGENT_STARTED", "SUBAGENT_CONTEXT", "SUBAGENT_COMPLETED"]
+    assert [event["type"] for event in events] == [
+        "SUBAGENT_STARTED",
+        "SUBAGENT_UPDATED",
+        "SUBAGENT_CONTEXT",
+        "SUBAGENT_COMPLETED",
+        "SUBAGENT_UPDATED",
+        "SUBAGENT_CONSUMED",
+    ]
     assert events[0]["payload"]["subagentName"] == "reviewer"
     assert events[0]["payload"]["toolCallId"] == "tool-call-reviewer"
-    assert events[1]["payload"]["toolCallId"] == "tool-call-reviewer"
     assert events[2]["payload"]["toolCallId"] == "tool-call-reviewer"
-    assert events[1]["payload"]["memoryAgentId"] == "subagent:reviewer"
-    assert events[1]["payload"]["permission"]["effectivePermissionMode"] == "default"
-    assert events[1]["payload"]["permission"]["effectiveToolPolicy"] == "trusted_tools"
+    assert events[2]["payload"]["memoryAgentId"] == "subagent:reviewer"
+    assert events[2]["payload"]["permission"]["effectivePermissionMode"] == "default"
+    assert events[2]["payload"]["permission"]["effectiveToolPolicy"] == "trusted_tools"
     assert invocations[0]["status"] == "completed"
+    assert invocations[0]["deliveryStatus"] == "consumed"
     assert invocations[0]["toolCallId"] == "tool-call-reviewer"
 
 
-def test_cancelling_child_returns_error_observation_without_cancelling_parent(tmp_path: Path, monkeypatch) -> None:
-    """控制台取消 child 后，父 DelegateTask 应收到失败 observation 并可继续运行。"""
+def test_attached_fork_returns_before_child_finishes_and_barrier_requires_consumption(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+    definition = SubagentDefinition(
+        name="explorer", description="Explore code.", prompt="Explore.",
+        scope="project", path=".agents/subagents/explorer.md",
+    )
+    manager = SubagentDelegationManager(
+        catalog=SubagentCatalog(definitions={"explorer": definition}),
+        session_id="session-fork", run_id="run-fork", parent_scope="single",
+        parent_agent_id="agent-1", parent_agent_name="Agent", model_name="deepseek-chat",
+        fallback_names=[], model_options=AgentModelOptions(),
+        guardrails=AgentGuardrails(filesystem_scope=str(tmp_path)),
+        mcp_servers=[], knowledge_tools=[], parent_tool_scope=RuntimeToolScope(), persist=False,
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class ControlledRunner:
+        def prepare(self, definition):
+            runtime_context = SubagentRuntimeContext(memory_agent_id=f"subagent:{definition.name}")
+            permission = resolve_subagent_permission(definition, manager.guardrails)
+            return type("Prepared", (), {
+                "runtime_context": runtime_context,
+                "permission": permission,
+                "audit_payload": runtime_context.audit_payload(definition),
+            })()
+
+        async def run(self, **_kwargs):
+            entered.set()
+            await release.wait()
+            return SubagentRunResult(text="Explorer result.", duration_ms=8)
+
+    manager._runner = ControlledRunner()  # noqa: SLF001
+
+    async def run_case() -> tuple[dict, str, str, str]:
+        fork = json.loads(await manager.delegate(subagent_name="explorer", task="Inspect files."))
+        await entered.wait()
+        before = manager.completion_error()
+        release.set()
+        await manager.wait_tasks([fork["invocationId"]])
+        after_terminal = manager.completion_error()
+        result = manager.read_result(fork["invocationId"], tool_call_id="read-result")
+        after_read = manager.completion_error()
+        manager.mark_results_consumed_for_tool_calls([{"id": "read-result"}])
+        return fork, before, after_terminal, after_read + result
+
+    fork, before, after_terminal, after_read_and_result = asyncio.run(run_case())
+
+    assert fork["status"] == "queued"
+    assert "running/none" in before
+    assert "completed/pending" in after_terminal
+    assert "completed/delivered" in after_read_and_result
+    assert "Explorer result." in after_read_and_result
+    assert manager.completion_error() == ""
+    result_path = tmp_path / fork["resultRef"]
+    assert result_path.read_text(encoding="utf-8").strip() == "Explorer result."
+
+
+def test_multiple_attached_children_can_run_in_parallel(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+    definition = SubagentDefinition(
+        name="explorer", description="Explore code.", prompt="Explore.",
+        scope="project", path=".agents/subagents/explorer.md",
+    )
+    manager = SubagentDelegationManager(
+        catalog=SubagentCatalog(definitions={"explorer": definition}),
+        session_id="session-parallel", run_id="run-parallel", parent_scope="single",
+        parent_agent_id="agent-1", parent_agent_name="Agent", model_name="deepseek-chat",
+        fallback_names=[], model_options=AgentModelOptions(),
+        guardrails=AgentGuardrails(filesystem_scope=str(tmp_path)),
+        mcp_servers=[], knowledge_tools=[], parent_tool_scope=RuntimeToolScope(), persist=False,
+    )
+    both_running = asyncio.Event()
+    release = asyncio.Event()
+    active = 0
+
+    class ParallelRunner:
+        def prepare(self, definition):
+            runtime_context = SubagentRuntimeContext(memory_agent_id=f"subagent:{definition.name}")
+            permission = resolve_subagent_permission(definition, manager.guardrails)
+            return type("Prepared", (), {
+                "runtime_context": runtime_context,
+                "permission": permission,
+                "audit_payload": runtime_context.audit_payload(definition),
+            })()
+
+        async def run(self, **kwargs):
+            nonlocal active
+            active += 1
+            if active == 2:
+                both_running.set()
+            await release.wait()
+            active -= 1
+            return SubagentRunResult(text=f"Done {kwargs['task']}", duration_ms=5)
+
+    manager._runner = ParallelRunner()  # noqa: SLF001
+
+    async def run_case() -> list[str]:
+        first = json.loads(await manager.delegate(subagent_name="explorer", task="A"))
+        second = json.loads(await manager.delegate(subagent_name="explorer", task="B"))
+        await asyncio.wait_for(both_running.wait(), timeout=1)
+        release.set()
+        await manager.wait_tasks([first["invocationId"], second["invocationId"]])
+        return [first["invocationId"], second["invocationId"]]
+
+    invocation_ids = asyncio.run(run_case())
+    assert len(set(invocation_ids)) == 2
+    assert all(item["status"] == "completed" for item in database.list_subagent_invocations(run_id="run-parallel"))
+
+
+def test_cancelling_attached_child_writes_consumable_result(tmp_path: Path, monkeypatch) -> None:
+    """取消 child 不取消父 Run，但取消结果仍必须读取和消费。"""
 
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
     monkeypatch.setattr(database, "_initialized", False)
@@ -572,7 +691,8 @@ def test_cancelling_child_returns_error_observation_without_cancelling_parent(tm
         catalog=SubagentCatalog(definitions={"reviewer": definition}),
         session_id="session-cancel", run_id="run-cancel", parent_scope="single",
         parent_agent_id="agent-1", parent_agent_name="Agent", model_name="deepseek-chat",
-        fallback_names=[], model_options=AgentModelOptions(), guardrails=AgentGuardrails(),
+        fallback_names=[], model_options=AgentModelOptions(),
+        guardrails=AgentGuardrails(filesystem_scope=str(tmp_path)),
         mcp_servers=[], knowledge_tools=[], parent_tool_scope=RuntimeToolScope(), persist=False,
     )
     entered = asyncio.Event()
@@ -598,30 +718,32 @@ def test_cancelling_child_returns_error_observation_without_cancelling_parent(tm
 
     manager._runner = BlockingRunner()  # noqa: SLF001
 
-    async def cancel_child() -> tuple[object, dict[str, object]]:
-        parent_call = asyncio.create_task(manager.execute_external_tool_call({
+    async def cancel_child() -> tuple[str, dict[str, object]]:
+        fork_result = await manager.execute_external_tool_call({
             "id": "delegate-cancel",
+            "name": "DelegateTask",
             "input": '{"subagentName":"reviewer","task":"Review."}',
-        }))
+        })
+        fork = json.loads(fork_result.output[0].text)  # type: ignore[attr-defined]
         await entered.wait()
         invocation = database.list_subagent_invocations(run_id="run-cancel")[0]
         assert await get_subagent_supervisor().cancel(invocation["id"])
-        result = await parent_call
+        await manager.wait_tasks([fork["invocationId"]])
+        result = manager.read_result(fork["invocationId"], tool_call_id="read-cancelled")
+        manager.mark_results_consumed_for_tool_calls([{"id": "read-cancelled"}])
         return result, invocation
 
     result, invocation = asyncio.run(cancel_child())
-    observation = json.loads(result.output[0].text)  # type: ignore[attr-defined]
     settled = database.get_subagent_invocation(invocation["id"])
 
-    assert result.state == "error"  # type: ignore[attr-defined]
-    assert observation["failureCode"] == "subagent_cancelled"
-    assert observation["invocationId"] == invocation["id"]
+    assert "已取消" in result
     assert settled is not None
     assert settled["status"] == "cancelled"
+    assert settled["deliveryStatus"] == "consumed"
 
 
-def test_delegation_manager_settles_setup_failure_and_external_call_returns_observation(tmp_path: Path, monkeypatch) -> None:
-    """准备阶段失败不能留下 running invocation 或击穿父 ReAct。"""
+def test_delegation_manager_settles_setup_failure_as_readable_result(tmp_path: Path, monkeypatch) -> None:
+    """准备阶段失败也生成 result.md，由父 Agent显式读取。"""
 
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
     monkeypatch.setattr(database, "_initialized", False)
@@ -633,7 +755,8 @@ def test_delegation_manager_settles_setup_failure_and_external_call_returns_obse
         catalog=SubagentCatalog(definitions={"reviewer": definition}),
         session_id="session-1", run_id="run-1", parent_scope="single",
         parent_agent_id="agent-1", parent_agent_name="Agent", model_name="deepseek-chat",
-        fallback_names=[], model_options=AgentModelOptions(), guardrails=AgentGuardrails(),
+        fallback_names=[], model_options=AgentModelOptions(),
+        guardrails=AgentGuardrails(filesystem_scope=str(tmp_path)),
         mcp_servers=[], knowledge_tools=[], parent_tool_scope=RuntimeToolScope(), persist=False,
     )
 
@@ -642,18 +765,22 @@ def test_delegation_manager_settles_setup_failure_and_external_call_returns_obse
             raise RuntimeError("invalid child tool scope")
 
     manager._runner = FailingRunner()  # noqa: SLF001
-    result = asyncio.run(manager.execute_external_tool_call({
-        "id": "delegate-1",
-        "input": '{"subagentName":"reviewer","task":"Review."}',
-    }))
-    observation = __import__("json").loads(result.output[0].text)
+    async def run_case() -> str:
+        fork_result = await manager.execute_external_tool_call({
+            "id": "delegate-1",
+            "name": "DelegateTask",
+            "input": '{"subagentName":"reviewer","task":"Review."}',
+        })
+        fork = json.loads(fork_result.output[0].text)
+        await manager.wait_tasks([fork["invocationId"]])
+        return manager.read_result(fork["invocationId"], tool_call_id="read-failure")
+
+    result = asyncio.run(run_case())
     invocations = database.list_subagent_invocations(run_id="run-1")
 
-    assert result.state == "error"
-    assert observation["ok"] is False
-    assert observation["failureCode"] == "subagent_setup_failed"
-    assert observation["invocationId"] == invocations[0]["id"]
+    assert "invalid child tool scope" in result
     assert invocations[0]["status"] == "failed"
+    assert invocations[0]["deliveryStatus"] == "delivered"
     assert invocations[0]["completedAt"] is not None
 
 
@@ -850,6 +977,7 @@ def test_delegation_manager_marks_subagent_waiting_on_hitl(tmp_path: Path, monke
         fallback_names=[],
         model_options=AgentModelOptions(),
         guardrails=AgentGuardrails(
+            filesystem_scope=str(tmp_path),
             permission_profile=UnifiedPermissionProfile(tool_policy=ApprovalPolicy.CONFIRM_DESTRUCTIVE)
         ),
         mcp_servers=[],
@@ -895,31 +1023,37 @@ def test_delegation_manager_marks_subagent_waiting_on_hitl(tmp_path: Path, monke
 
     manager._runner = FakeRunner()  # noqa: SLF001
 
-    result = asyncio.run(
-        manager.delegate(
+    async def run_case() -> tuple[dict, dict]:
+        fork = json.loads(await manager.delegate(
             subagent_name="debugger",
             task="Fix the file.",
             tool_call_id="delegate-call-1",
-        )
-    )
+        ))
+        waited = json.loads(await manager.wait_tasks([fork["invocationId"]]))
+        return fork, waited
+
+    result, waited = asyncio.run(run_case())
     events = manager.drain_runtime_events()
     invocations = database.list_subagent_invocations(run_id="run-1")
 
-    assert "paused for human approval" in result
-    assert [event["type"] for event in events] == ["SUBAGENT_STARTED", "SUBAGENT_CONTEXT", "SUBAGENT_WAITING_HUMAN"]
-    assert events[2]["status"] == "waiting"
-    interaction_id = events[2]["payload"]["interactionId"]
+    assert result["mode"] == "attached"
+    assert waited["tasks"][0]["status"] == "waiting"
+    assert [event["type"] for event in events] == [
+        "SUBAGENT_STARTED", "SUBAGENT_UPDATED", "SUBAGENT_CONTEXT", "SUBAGENT_WAITING_HUMAN",
+    ]
+    assert events[3]["status"] == "waiting"
+    interaction_id = events[3]["payload"]["interactionId"]
     assert interaction_id
     assert interaction_id in PENDING_INTERACTIONS
     assert PENDING_AGENTS[interaction_id] is fake_agent
     assert PENDING_INTERACTIONS[interaction_id].scope == "subagent"
     assert PENDING_INTERACTIONS[interaction_id].chat_data["invocationId"] == invocations[0]["id"]
-    assert events[2]["payload"]["interactionType"] == "REQUIRE_USER_CONFIRM"
-    assert events[2]["payload"]["replyId"] == "reply-1"
-    assert events[2]["payload"]["toolCalls"][0]["name"] == "Write"
+    assert events[3]["payload"]["interactionType"] == "REQUIRE_USER_CONFIRM"
+    assert events[3]["payload"]["replyId"] == "reply-1"
+    assert events[3]["payload"]["toolCalls"][0]["name"] == "Write"
     assert invocations[0]["status"] == "waiting"
     assert invocations[0]["completedAt"] is None
-    assert "parent DelegateTask is not automatically continued" in invocations[0]["error"]
+    assert "paused for human approval" in invocations[0]["error"]
     PENDING_INTERACTIONS.clear()
     PENDING_AGENTS.clear()
 
@@ -929,9 +1063,35 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
     monkeypatch.setattr(database, "_initialized", False)
     PENDING_INTERACTIONS.clear()
     PENDING_AGENTS.clear()
-    PENDING_SUBAGENT_PARENT_CONTEXTS.clear()
+    from src.subagents.task_store import SubagentTaskStore
+
+    definition = SubagentDefinition(
+        name="debugger",
+        description="Debug code.",
+        prompt="Debug.",
+        scope="project",
+        path=".agents/subagents/debugger.md",
+    )
+    task_store = SubagentTaskStore(project_root=tmp_path, session_id="session-1")
+    invocation_id = "subagent-" + "1" * 32
+    task_store.create(
+        invocation_id=invocation_id,
+        run_id="run-1",
+        tool_call_id="delegate-call-1",
+        parent_scope="single",
+        parent_agent_id="agent-1",
+        parent_agent_name="Agent",
+        definition=definition,
+        task="Fix the file.",
+        expected_output="Summary.",
+        context="",
+        constraints=[],
+    )
+    task_store.set_status(invocation_id, "running")
+    task_store.set_status(invocation_id, "waiting", error="approval required")
     invocation = database.create_subagent_invocation(
         {
+            "id": invocation_id,
             "run_id": "run-1",
             "session_id": "session-1",
             "tool_call_id": "delegate-call-1",
@@ -964,27 +1124,6 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
                 reply_id="reply-1",
             )
 
-    class FakeParentAgent:
-        def __init__(self) -> None:
-            self.resumed = False
-
-        async def reply_stream(self, _event):
-            self.resumed = True
-            yield ToolCallStartEvent(
-                reply_id="reply-parent",
-                tool_call_id="final-parent",
-                tool_call_name="FinalAnswerStart",
-            )
-            yield TextBlockDeltaEvent(
-                reply_id="reply-parent",
-                block_id="text-parent",
-                delta="Parent continued.",
-            )
-            yield ReplyEndEvent(
-                session_id="session-1",
-                reply_id="reply-parent",
-            )
-
     interaction = _create_pending_interaction(
         interaction_type="REQUIRE_USER_CONFIRM",
         agent=FakeSubagent(),
@@ -1010,32 +1149,11 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
             "invocationId": invocation["id"],
             "toolCallId": "delegate-call-1",
             "subagentName": "debugger",
+            "projectRoot": str(tmp_path),
         },
         run_id="run-1",
         persist=False,
     )
-    from src.server.routes.chat.leader_stream import LeaderStreamState
-
-    parent_agent = FakeParentAgent()
-    PENDING_SUBAGENT_PARENT_CONTEXTS[interaction.id] = {
-        "agent": parent_agent,
-        "reply_id": "reply-parent",
-        "tool_call": {"id": "delegate-call-1", "name": "DelegateTask"},
-        "state": LeaderStreamState(),
-        "session_id": "session-1",
-        "persist": False,
-        "agent_id": "agent-1",
-        "agent_name": "Agent",
-        "model_name": "deepseek-chat",
-        "guardrails": AgentGuardrails(),
-        "message": "Fix the file.",
-        "stream_scope": "single",
-        "skill_runs": [],
-        "plan_mode_manager": None,
-        "runtime_event_sources": [],
-        "sandbox": False,
-    }
-
     async def collect_resume_events() -> str:
         from src.server.routes.chat.handlers.resume import resume_interaction_events
 
@@ -1050,16 +1168,17 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
 
     output = asyncio.run(collect_resume_events())
     invocations = database.list_subagent_invocations(run_id="run-1")
+    file_status = task_store.status(invocation_id)
 
     assert "SUBAGENT_COMPLETED" in output
-    assert "Parent continued." in output
-    assert "RUN_COMPLETED" in output
-    assert parent_agent.resumed is True
     assert invocations[0]["status"] == "completed"
     assert invocations[0]["resultPreview"] == "Fixed the file."
+    assert invocations[0]["deliveryStatus"] == "pending"
+    assert file_status["status"] == "completed"
+    assert file_status["deliveryStatus"] == "pending"
+    assert task_store.result_path(invocation_id).read_text(encoding="utf-8").strip() == "Fixed the file."
     assert interaction.id not in PENDING_INTERACTIONS
     assert interaction.id not in PENDING_AGENTS
-    assert interaction.id not in PENDING_SUBAGENT_PARENT_CONTEXTS
 
 
 def test_delegate_task_passes_current_tool_call_id_from_agent_state() -> None:
@@ -1215,15 +1334,16 @@ def test_subagent_invocation_audit_create_update_and_list(tmp_path: Path, monkey
     assert by_run[0]["subagentName"] == "reviewer"
 
 
-def test_delegate_task_schema_is_blocking_and_does_not_advertise_background() -> None:
-    """DelegateTask 必须让模型看到 blocking 语义，避免父 Agent提前结束。"""
+def test_delegate_task_schema_is_attached_fork_and_does_not_advertise_background() -> None:
+    """DelegateTask 统一使用 attached fork，不暴露前后台兼容开关。"""
 
     assert "background" not in DelegateTask.input_schema["properties"]
-    assert "waits for the subagent result" in DelegateTask.description
+    assert "invocationId immediately" in DelegateTask.description
+    assert "SubagentTaskWait" in DelegateTask.description
 
 
-def test_external_background_input_is_rejected_without_creating_invocation(tmp_path: Path, monkeypatch) -> None:
-    """旧模型或手工请求传入 background 时必须稳定报错，不能产生 detached task。"""
+def test_unrecognized_background_input_cannot_change_attached_semantics(tmp_path: Path, monkeypatch) -> None:
+    """额外 background 字段不产生 detached 分支，任务仍是 attached。"""
 
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
     monkeypatch.setattr(database, "_initialized", False)
@@ -1235,25 +1355,45 @@ def test_external_background_input_is_rejected_without_creating_invocation(tmp_p
         catalog=SubagentCatalog(definitions={"reviewer": definition}),
         session_id="session-background", run_id="run-background", parent_scope="single",
         parent_agent_id="agent-1", parent_agent_name="Agent", model_name="deepseek-chat",
-        fallback_names=[], model_options=AgentModelOptions(), guardrails=AgentGuardrails(),
+        fallback_names=[], model_options=AgentModelOptions(),
+        guardrails=AgentGuardrails(filesystem_scope=str(tmp_path)),
         mcp_servers=[], knowledge_tools=[], parent_tool_scope=RuntimeToolScope(), persist=False,
     )
 
-    result = asyncio.run(manager.execute_external_tool_call({
-        "id": "delegate-background",
-        "input": json.dumps({
-            "subagentName": "reviewer",
-            "task": "Review independently.",
-            "background": True,
-        }),
-    }))
-    observation = json.loads(result.output[0].text)
+    class FakeRunner:
+        def prepare(self, definition):
+            runtime_context = SubagentRuntimeContext(memory_agent_id=f"subagent:{definition.name}")
+            permission = resolve_subagent_permission(definition, manager.guardrails)
+            return type("Prepared", (), {
+                "runtime_context": runtime_context,
+                "permission": permission,
+                "audit_payload": runtime_context.audit_payload(definition),
+            })()
 
-    assert result.state == "error"
-    assert observation["ok"] is False
-    assert observation["failureCode"] == "background_delegation_not_supported"
-    assert observation["invocationId"] == ""
-    assert database.list_subagent_invocations(run_id="run-background") == []
+        async def run(self, **_kwargs):
+            return SubagentRunResult(text="Done.", duration_ms=1)
+
+    manager._runner = FakeRunner()  # noqa: SLF001
+
+    async def run_case() -> dict:
+        result = await manager.execute_external_tool_call({
+            "id": "delegate-background",
+            "name": "DelegateTask",
+            "input": json.dumps({
+                "subagentName": "reviewer",
+                "task": "Review independently.",
+                "background": True,
+            }),
+        })
+        observation = json.loads(result.output[0].text)
+        await manager.wait_tasks([observation["invocationId"]])
+        return observation
+
+    observation = asyncio.run(run_case())
+
+    assert observation["ok"] is True
+    assert observation["mode"] == "attached"
+    assert database.list_subagent_invocations(run_id="run-background")[0]["executionMode"] == "attached"
 
 
 def test_legacy_subagent_agent_columns_are_removed_on_db_startup(tmp_path: Path, monkeypatch) -> None:

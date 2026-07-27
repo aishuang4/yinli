@@ -28,7 +28,6 @@ TRACE_EVENT_TYPES = {
 }
 PENDING_INTERACTIONS: dict[str, "PendingInteraction"] = {}
 PENDING_AGENTS: dict[str, object] = {}
-PENDING_SUBAGENT_PARENT_CONTEXTS: dict[str, dict[str, Any]] = {}
 
 
 def _empty_display_snapshot() -> dict[str, Any]:

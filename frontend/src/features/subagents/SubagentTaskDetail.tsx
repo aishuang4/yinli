@@ -5,7 +5,13 @@ import { Ban, Clock, FileText, ListTree, RefreshCw } from 'lucide-react';
 import { Button, Tag } from '@agentscope-ai/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import type { SubagentInvocation, SubagentTranscriptItem } from '../../types/subagent';
-import { formatDateTime, formatDuration, invocationStatusColor, invocationStatusLabel } from './subagentViewUtils';
+import {
+  deliveryStatusLabel,
+  formatDateTime,
+  formatDuration,
+  invocationStatusColor,
+  invocationStatusLabel,
+} from './subagentViewUtils';
 
 interface SubagentTaskDetailProps {
   invocation: SubagentInvocation;
@@ -66,6 +72,9 @@ export function SubagentTaskDetail({ invocation, projectId, onRefresh }: Subagen
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--color-border)] pb-4">
         <div className="flex flex-wrap items-center gap-2">
           <Tag size="small" color={invocationStatusColor(invocation.status)}>{invocationStatusLabel(invocation.status)}</Tag>
+          <Tag size="small" color={invocation.deliveryStatus === 'consumed' ? 'green' : 'transparent'}>
+            {deliveryStatusLabel(invocation.deliveryStatus)}
+          </Tag>
           <Tag size="small" color="transparent">{invocation.id}</Tag>
           <span className="inline-flex items-center gap-1 text-xs text-[var(--color-text-tertiary)]"><Clock size={13} />{formatDateTime(invocation.startedAt)} {formatDuration(invocation.startedAt, invocation.completedAt)}</span>
         </div>
@@ -78,6 +87,11 @@ export function SubagentTaskDetail({ invocation, projectId, onRefresh }: Subagen
         <TaskPanel icon={<FileText size={15} />} title="委托任务" content={invocation.task} />
         <TaskPanel icon={<FileText size={15} />} title={invocation.status === 'failed' ? '错误' : '结果'} content={invocation.status === 'failed' ? invocation.error : invocation.resultPreview} />
       </section>
+      {invocation.resultRef ? (
+        <div className="truncate font-mono text-xs text-[var(--color-text-tertiary)]" title={invocation.resultRef}>
+          result.md · {invocation.resultRef}
+        </div>
+      ) : null}
       <section className="grid gap-3">
         <div className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]"><ListTree size={16} />Transcript</div>
         <div className="border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">

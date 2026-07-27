@@ -1,6 +1,6 @@
 # Subagent 任务运行时与事件架构重设计
 
-> 状态：后续领域接入草案，尚未实施。
+> 状态：attached fork/join 最小闭环实施中；detached、嵌套和跨进程精确恢复不在首期范围。
 > 适用范围：ReAct 内部 Subagent 委托、父子任务消费、Subagents 控制台和刷新恢复。
 > 重要边界：本文不再定义通用 `RUNTIME_EVENT`、Projection Mutation、DisplaySnapshot 或 stream 恢复协议。通用事件流基础设施以 `docs/event-stream-architecture-redesign.md` 为唯一主设计；本文只定义 Subagent 自己的 aggregate、Domain Event、展示 Block schema 和父子消费语义。
 > 取代范围：本文取代 `subagent-task-runtime-redesign.md` 中关于 TaskService、Supervisor、事件投影、前后台模式、消息和恢复的目标设计；旧文档只保留当前已实施行为的历史说明。
@@ -259,17 +259,17 @@ parent_join_required
 
 ## 8. 父子关系与执行策略
 
-### 8.1 blocking attached
+### 8.1 attached fork
 
-当前 `DelegateTask` 默认行为保留为兼容策略：
+`DelegateTask` 统一使用 attached fork 语义，不保留 blocking 兼容分支：
 
-1. 创建 attached task。
-2. 父 Agent停在 external tool call。
-3. child 结束或进入 HITL。
-4. result delivery 写为 delivered。
-5. 父 Agent继续 ReAct 后写为 consumed。
+1. 校验 YAML/Markdown definition 并保存 definition snapshot。
+2. 创建 task directory 和 queued task。
+3. 向 Supervisor 提交 child execution。
+4. 立即向父 Agent 返回 `invocationId`，不返回 child 结果。
+5. 父 Agent继续当前工作，通过状态、等待和结果读取工具完成 join/consume。
 
-这只是 `spawn + wait + consume` 的组合，不再由 Manager 直接 `await runner` 实现。
+child 中间过程只进入自己的 transcript/Trace；父 Agent context 只接收任务引用、状态查询结果和显式读取的 `result.md`。
 
 ### 8.2 async attached
 
@@ -372,16 +372,17 @@ backend/src/subagents/
 
 ## 11. Agent 工具与 API
 
-保留 `DelegateTask` 作为兼容入口，默认 blocking。逐步增加：
+保留 `DelegateTask` 作为 YAML definition 对应的 fork 入口，并增加：
 
 ```text
 SubagentTaskGet
 SubagentTaskWait
 SubagentSendMessage
 SubagentTaskCancel
+SubagentResultRead
 ```
 
-当支持 async attached 时，`DelegateTask` 增加显式 wait policy；不从 frontmatter 推断 foreground/background。
+不为 `DelegateTask` 增加 foreground/background 开关，也不从 frontmatter 推断执行策略；首期所有任务都是 async attached。
 
 HTTP API 按命令与查询拆分：
 

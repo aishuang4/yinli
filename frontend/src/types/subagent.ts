@@ -5,7 +5,8 @@
  */
 
 export type SubagentInvocationStatus = 'queued' | 'running' | 'completed' | 'failed' | 'waiting' | 'cancelled' | 'interrupted' | string;
-export type SubagentExecutionMode = 'foreground' | 'background' | string;
+export type SubagentExecutionMode = 'attached' | string;
+export type SubagentDeliveryStatus = 'none' | 'pending' | 'delivered' | 'consumed' | string;
 
 export interface SubagentTimelineItem {
   id: string;
@@ -64,6 +65,8 @@ export interface SubagentInvocation {
   task: string;
   expectedOutput: string;
   resultPreview: string;
+  resultRef: string;
+  deliveryStatus: SubagentDeliveryStatus;
   error: string;
   startedAt: string;
   completedAt: string | null;

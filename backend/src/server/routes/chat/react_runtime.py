@@ -34,7 +34,7 @@ from src.server.routes.chat.trace_recorder import _make_fallback_trace_recorder
 from src.server.routes.chat.runtime_events import runtime_source_event
 from src.subagents.manager import SubagentDelegationManager
 from src.subagents.registry import load_subagent_catalog
-from src.tools.delegate_task import DelegateTask
+from src.tools.delegate_task import build_subagent_tools
 
 
 def _build_plan_mode_runtime_parts(
@@ -104,7 +104,7 @@ def _build_runtime_feature_parts(
             persist=ctx.persist_run,
             runtime_context=ctx.runtime_context,
         )
-        extra_tools.append(DelegateTask(subagent_manager))
+        extra_tools.extend(build_subagent_tools(subagent_manager))
         runtime_event_sources.append(subagent_manager)
         feature_keys.append(f"subagents-{catalog.fingerprint}")
         prompt_addendum = _build_subagent_prompt_addendum(catalog.definitions)
@@ -125,15 +125,18 @@ def _build_subagent_prompt_addendum(definitions: dict[str, object]) -> str:
     lines = [
         "",
         "Subagent delegation:",
-        "You may call DelegateTask for self-contained side tasks that should run in an independent context.",
-        "DelegateTask waits for the child result. Review and consume that result before finalizing your answer.",
-        "Call at most one DelegateTask per model reply. Review its result before delegating another task.",
+        "You may call DelegateTask to fork self-contained attached tasks in independent contexts.",
+        "DelegateTask returns an invocationId immediately; it never returns the child result.",
+        "You may fork multiple independent tasks before continuing useful parent work.",
+        "Before finalizing, call SubagentTaskWait for all attached tasks, then call SubagentResultRead once for every terminal invocation.",
+        "A failed, cancelled, or interrupted child result must also be read and considered.",
+        "Do not claim completion while any attached task is queued, running, waiting, or unconsumed.",
         "Available subagents:",
     ]
     for name, definition in sorted(definitions.items()):
         description = str(getattr(definition, "description", "") or "")
         lines.append(f"- {name}: {description}")
-    lines.append("Only delegate when a concise result summary is enough for the main conversation.")
+    lines.append("Only delegate when result.md can contain the complete information the parent needs.")
     return "\n".join(lines)
 
 

@@ -2,7 +2,7 @@
  * Subagent 管理页展示工具函数。
  */
 
-import type { SubagentInvocationStatus } from '../../types/subagent';
+import type { SubagentDeliveryStatus, SubagentInvocationStatus } from '../../types/subagent';
 
 export function formatDateTime(value?: string | null): string {
   if (!value) return '未完成';
@@ -43,6 +43,13 @@ export function invocationStatusLabel(status: SubagentInvocationStatus): string 
   if (status === 'cancelled') return '已取消';
   if (status === 'interrupted') return '后端重启中断';
   return status || 'unknown';
+}
+
+export function deliveryStatusLabel(status: SubagentDeliveryStatus): string {
+  if (status === 'pending') return '等待主 Agent读取';
+  if (status === 'delivered') return '已读取，等待消费';
+  if (status === 'consumed') return '主 Agent已消费';
+  return '尚无结果';
 }
 
 export function compactHash(value: string): string {

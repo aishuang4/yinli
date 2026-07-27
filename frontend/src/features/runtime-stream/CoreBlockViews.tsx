@@ -450,15 +450,39 @@ export function ErrorBlockView({ block }: { block: DisplayBlock<RecordData> }) {
 }
 
 export function SubagentBlockView({ block }: { block: DisplayBlock<RecordData> }) {
+  const status = text(block.data.status, block.phase === 'closed' ? 'completed' : 'running');
+  const deliveryStatus = text(block.data.deliveryStatus, 'none');
+  const statusText: Record<string, string> = {
+    queued: '排队中',
+    running: '运行中',
+    waiting: '等待确认',
+    completed: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+    interrupted: '已中断',
+  };
+  const deliveryText: Record<string, string> = {
+    pending: '等待主 Agent读取',
+    delivered: '已读取，等待消费',
+    consumed: '主 Agent已消费',
+  };
   return (
     <RuntimeItem
       icon={<Bot size={14} />}
       title={`Subagent · ${text(block.data.subagentName, text(block.data.name, 'agent'))}`}
       block={block}
     >
-      {text(block.data.task) ? <div className="line-clamp-3 text-xs">{text(block.data.task)}</div> : null}
+      <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+        <span>{statusText[status] || status}</span>
+        {deliveryText[deliveryStatus] ? <span>· {deliveryText[deliveryStatus]}</span> : null}
+      </div>
+      {text(block.data.taskPreview, text(block.data.task)) ? (
+        <div className="mt-2 line-clamp-3 text-xs">{text(block.data.taskPreview, text(block.data.task))}</div>
+      ) : null}
       {text(block.data.resultPreview) || text(block.data.summary) ? (
-        <div className="mt-2 text-xs">{text(block.data.resultPreview, text(block.data.summary))}</div>
+        <div className="mt-2 border-t border-[var(--color-border)] pt-2 text-xs">
+          {text(block.data.resultPreview, text(block.data.summary))}
+        </div>
       ) : null}
     </RuntimeItem>
   );

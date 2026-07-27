@@ -209,6 +209,8 @@ class TraceRecordStore:
             "subagentName": row["subagent_name"], "status": row["status"], "task": row["task"],
             "executionMode": row.get("execution_mode", "foreground"),
             "expectedOutput": row["expected_output"], "resultPreview": row["result_preview"],
+            "resultRef": row.get("result_ref", ""),
+            "deliveryStatus": row.get("delivery_status", "none"),
             "error": row["error"], "startedAt": row["started_at"],
             "completedAt": row["completed_at"], "updatedAt": row["updated_at"],
         }
@@ -235,6 +237,8 @@ class TraceRecordStore:
             "task": data.get("task") or "",
             "expected_output": data.get("expected_output") or "",
             "result_preview": data.get("result_preview") or "",
+            "result_ref": data.get("result_ref") or "",
+            "delivery_status": data.get("delivery_status") or "none",
             "error": data.get("error") or "",
             "started_at": data.get("started_at") or now,
             "completed_at": data.get("completed_at"),
@@ -246,9 +250,10 @@ class TraceRecordStore:
                 INSERT INTO subagent_invocations (
                     id, run_id, session_id, workspace_id, project_id, tool_call_id, parent_scope,
                     parent_agent_id, parent_agent_name, definition_scope, definition_path,
-                    subagent_name, execution_mode, status, task, expected_output, result_preview, error,
+                    subagent_name, execution_mode, status, task, expected_output, result_preview,
+                    result_ref, delivery_status, error,
                     started_at, completed_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record["id"], record["run_id"], record["session_id"],
@@ -257,7 +262,8 @@ class TraceRecordStore:
                     record["parent_agent_name"], record["definition_scope"],
                     record["definition_path"], record["subagent_name"], record["execution_mode"], record["status"],
                     record["task"], record["expected_output"], record["result_preview"],
-                    record["error"], record["started_at"], record["completed_at"],
+                    record["result_ref"], record["delivery_status"], record["error"],
+                    record["started_at"], record["completed_at"],
                     record["updated_at"],
                 ),
             )
@@ -287,6 +293,34 @@ class TraceRecordStore:
                 WHERE id = ?
                 """,
                 (status, result_preview, error, completed_value, now, invocation_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM subagent_invocations WHERE id = ?",
+                (invocation_id,),
+            ).fetchone()
+        return self._invocation_to_api(dict(row)) if row else None
+
+    def update_invocation_delivery(
+        self,
+        invocation_id: str,
+        *,
+        delivery_status: str,
+        result_ref: str = "",
+    ) -> dict[str, Any] | None:
+        """更新可重建文件任务的查询索引，不作为运行时事实源。"""
+
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE subagent_invocations
+                SET delivery_status = ?, result_ref = CASE WHEN ? = '' THEN result_ref ELSE ? END,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (delivery_status, result_ref, result_ref, now, invocation_id),
             )
             conn.commit()
             row = conn.execute(
@@ -348,7 +382,7 @@ class TraceRecordStore:
                 SET status = 'interrupted',
                     error = 'Backend restarted while Subagent was running.',
                     updated_at = ?
-                WHERE status = 'running'
+                WHERE status IN ('queued', 'running')
                 """,
                 (now,),
             )
