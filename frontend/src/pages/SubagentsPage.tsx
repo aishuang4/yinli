@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Bot, FileText, History, List, ListChecks, RefreshCw, Search, ShieldCheck } from 'lucide-react';
-import { Button, Tag } from '@agentscope-ai/design';
+import { Button, Tag } from '@/components/design';
 import { TextField } from '../components/form';
 import {
   WorkbenchEmptyPanel,
@@ -322,10 +322,14 @@ function SubagentDefinitionRow({
       layout="columns"
       onSelect={onSelect}
       meta={(
-        <>
-          <Tag size="small" color={definition.scope === 'project' ? 'blue' : 'mauve'}>{definition.scope}</Tag>
-          <Tag size="small" color="transparent">{invocationCount} 次调用</Tag>
-        </>
+        <span className="grid w-full grid-cols-[minmax(0,1fr)_6rem] items-center gap-2">
+          <span className="justify-self-start">
+            <Tag size="small" color={definition.scope === 'project' ? 'blue' : 'mauve'}>{definition.scope}</Tag>
+          </span>
+          <span className="whitespace-nowrap text-right text-xs tabular-nums text-[var(--color-text-secondary)]">
+            {invocationCount} 次调用
+          </span>
+        </span>
       )}
       trailing={(
         <button

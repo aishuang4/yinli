@@ -5,7 +5,7 @@
  */
 
 import { AlertTriangle, Download, Package, Trash2 } from 'lucide-react';
-import { Button, Tag } from '@agentscope-ai/design';
+import { Button, Tag } from '@/components/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import { WorkbenchDetailShell, WorkbenchListIcon } from '../../components/workbench';
 import { ToggleButton } from '../../components/ToggleButton';

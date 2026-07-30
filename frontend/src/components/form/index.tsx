@@ -6,7 +6,7 @@
 
 import type { ComponentProps, ReactNode } from 'react';
 import dayjs from 'dayjs';
-import { DatePicker, Input, InputNumber, Select, Slider, Switch } from '@agentscope-ai/design';
+import { DatePicker, Input, InputNumber, Select, Slider, Switch } from '@/components/design';
 import { cn } from '../../utils/cn';
 
 type FieldChromeProps = {

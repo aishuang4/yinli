@@ -5,7 +5,7 @@
  */
 
 import type { ReactNode } from 'react';
-import { Spinner } from '@agentscope-ai/design';
+import { Spinner } from '@/components/design';
 import { cn } from '../../utils/cn';
 
 export function WorkbenchListPage({

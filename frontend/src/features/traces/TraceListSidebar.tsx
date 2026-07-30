@@ -3,7 +3,7 @@
  */
 
 import { RefreshCw } from 'lucide-react';
-import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
+import { Button, Empty, Spinner, Tag } from '@/components/design';
 import type { TraceSummary } from './traceTypes';
 
 interface TraceListSidebarProps {

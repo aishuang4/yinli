@@ -5,7 +5,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Modal } from '@agentscope-ai/design';
+import { Modal } from '@/components/design';
 import { SkillDetailPage } from '../features/skills/SkillDetailPage';
 import { SkillLandingPage } from '../features/skills/SkillLandingPage';
 import { SkillRegisterModal, type SkillRegisterFormState } from '../features/skills/SkillRegisterModal';

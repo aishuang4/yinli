@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { AlertCircle, Wrench } from 'lucide-react';
-import { Button, Checkbox, Tag } from '@agentscope-ai/design';
+import { Button, Checkbox, Tag } from '@/components/design';
 import type { ClarificationRequestInfo, HitlRequestInfo } from '../../hooks/useEventStream';
 
 export function HitlApprovalBlock({

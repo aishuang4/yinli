@@ -1,7 +1,7 @@
 /** 管理页侧栏中的 Workspace / Project 上下文入口。 */
 
 import { useState } from 'react';
-import { Select, Tooltip } from '@agentscope-ai/design';
+import { Select, Tooltip } from '@/components/design';
 import { Plus } from 'lucide-react';
 import { useWorkspaceProjects } from '../../hooks/useWorkspaceProjects';
 import { useAppStore } from '../../stores/appStore';

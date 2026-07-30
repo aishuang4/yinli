@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Ban, RefreshCw, RotateCcw, Upload, XCircle } from 'lucide-react';
-import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
+import { Button, Empty, Spinner, Tag } from '@/components/design';
 import { SelectField } from '../../components/form';
 import type { Agent } from '../../types/agent';
 import type {

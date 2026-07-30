@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { ClipboardList, Database, FileText, RefreshCw, Settings2, ThumbsDown, ThumbsUp } from 'lucide-react';
-import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
+import { Button, Empty, Spinner, Tag } from '@/components/design';
 import type {
   MemoryAdmissionPolicyUpdate,
   MemoryAuditEvent,

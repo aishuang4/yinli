@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react';
 import { Boxes, FolderKanban, PanelLeftClose, Plus, Search, Trash2 } from 'lucide-react';
-import { Empty, Spinner, Tooltip } from '@agentscope-ai/design';
+import { Empty, Spinner, Tooltip } from '@/components/design';
 import type { ProjectRecord, WorkspaceRecord } from '../../types/workspace';
 import type { ChatSession } from './types';
 

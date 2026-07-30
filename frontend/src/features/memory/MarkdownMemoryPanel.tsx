@@ -3,7 +3,7 @@
  */
 
 import { RefreshCw, Save } from 'lucide-react';
-import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
+import { Button, Empty, Spinner, Tag } from '@/components/design';
 import { SelectField, TextAreaField } from '../../components/form';
 import type { Agent } from '../../types/agent';
 import type { MarkdownMemoryDocument, MarkdownMemoryScope } from '../../types/memory';

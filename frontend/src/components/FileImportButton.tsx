@@ -5,7 +5,7 @@
  */
 
 import type { ComponentProps, ReactNode } from 'react';
-import { Button, Upload as DesignUpload } from '@agentscope-ai/design';
+import { Button, Upload as DesignUpload } from '@/components/design';
 
 type FileImportButtonProps = {
   accept?: string;

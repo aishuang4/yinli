@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Ban, Clock, FileText, ListTree, RefreshCw } from 'lucide-react';
-import { Button, Tag } from '@agentscope-ai/design';
+import { Button, Tag } from '@/components/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import type { SubagentInvocation, SubagentTranscriptItem } from '../../types/subagent';
 import {

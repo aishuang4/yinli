@@ -3,7 +3,7 @@
  */
 
 import { Clock, ExternalLink, Eye, ListChecks } from 'lucide-react';
-import { Button, Empty, Tag } from '@agentscope-ai/design';
+import { Button, Empty, Tag } from '@/components/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import type { SubagentInvocation } from '../../types/subagent';
 import {

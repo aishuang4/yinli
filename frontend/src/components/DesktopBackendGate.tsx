@@ -5,7 +5,7 @@
  * 仍能提供可理解的状态与重试入口，而不是展示半初始化的工作台。
  */
 
-import { Button, Spinner } from '@agentscope-ai/design';
+import { Button, Spinner } from '@/components/design';
 import { FolderOpen, RefreshCw, ServerCrash } from 'lucide-react';
 import type { DesktopBackendStatus } from '../types/desktopBackend';
 

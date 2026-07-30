@@ -4,8 +4,8 @@
  * 负责筛选条、列表行和对象级快捷操作；具体 Skill 内容放到二级详情页展示。
  */
 
-import { CheckCircle2, Download, List, Package, Plus, RefreshCw, Trash2, Upload } from 'lucide-react';
-import { Button, Tag } from '@agentscope-ai/design';
+import { Download, List, Package, Plus, RefreshCw, Trash2, Upload } from 'lucide-react';
+import { Button, Tag } from '@/components/design';
 import { FileImportButton } from '../../components/FileImportButton';
 import { CatalogFilterBar, type CatalogInstallFilter } from '../../components/form/CatalogFilterBar';
 import {
@@ -176,7 +176,6 @@ function SkillListRow({
   onToggle: (enabled: boolean) => void;
 }) {
   const installed = skill.status === 'installed';
-  const statusText = installed ? (skill.enabled ? '已启用' : '已停用') : '可安装';
 
   return (
     <WorkbenchListRow
@@ -192,42 +191,43 @@ function SkillListRow({
       layout="columns"
       onSelect={onSelect}
       meta={(
-        <>
-          <Tag size="small" color={installed ? 'green' : 'blue'}>{installed ? '已安装' : '可安装'}</Tag>
-          <Tag size="small" color="transparent">{skill.category}</Tag>
-          {(skill.warnings?.length ?? 0) > 0 ? <Tag size="small" color="orange">平台兼容提示</Tag> : null}
-          {installed && skill.enabled ? (
-            <Tag size="small" color="green">
-              <span className="inline-flex items-center gap-1">
-                <CheckCircle2 size={12} />
-                {statusText}
-              </span>
-            </Tag>
-          ) : (
-            <Tag size="small" color="transparent">{statusText}</Tag>
-          )}
-        </>
+        <span className="grid w-full grid-cols-[5rem_5rem_7rem] items-center gap-2">
+          <span className="justify-self-start">
+            <Tag size="small" color={installed ? 'green' : 'blue'}>{installed ? '已安装' : '可安装'}</Tag>
+          </span>
+          <span className="min-w-0 justify-self-start">
+            <Tag size="small" color="transparent">{skill.category}</Tag>
+          </span>
+          <span className="justify-self-start">
+            {(skill.warnings?.length ?? 0) > 0 ? <Tag size="small" color="orange">平台兼容提示</Tag> : null}
+          </span>
+        </span>
       )}
       trailing={(
-        <>
-          {installed ? (
-            <ToggleButton
-              checked={skill.enabled}
-              checkedLabel="启用中"
-              uncheckedLabel="已停用"
-              disabled={busy}
-              ariaLabel={`${skill.name} 启停状态`}
-              onChange={onToggle}
-            />
-          ) : null}
-          <button
-            type="button"
-            onClick={onSelect}
-            className="icon-button h-8 w-8 rounded-md text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-            aria-label={`打开 ${skill.name} 详情`}
-          >
-            <List size={17} />
-          </button>
+        <span className="grid grid-cols-[6rem_4rem_2rem_2rem_2rem] items-center gap-2">
+          <span className="justify-self-center">
+            {installed ? (
+              <ToggleButton
+                checked={skill.enabled}
+                checkedLabel="已启用"
+                uncheckedLabel="已停用"
+                disabled={busy}
+                ariaLabel={`${skill.name} 启停状态`}
+                onChange={onToggle}
+              />
+            ) : null}
+          </span>
+          <span className="justify-self-center">
+            {installed ? (
+              <Button size="small" danger loading={busy} onClick={onUninstall}>
+                卸载
+              </Button>
+            ) : (
+              <Button size="small" type="primary" loading={busy} onClick={onInstall}>
+                安装
+              </Button>
+            )}
+          </span>
           <button
             type="button"
             onClick={onExport}
@@ -236,15 +236,6 @@ function SkillListRow({
           >
             <Download size={15} />
           </button>
-          {installed ? (
-            <Button size="small" danger loading={busy} onClick={onUninstall}>
-              卸载
-            </Button>
-          ) : (
-            <Button size="small" type="primary" loading={busy} onClick={onInstall}>
-              安装
-            </Button>
-          )}
           <button
             type="button"
             onClick={onDelete}
@@ -253,7 +244,15 @@ function SkillListRow({
           >
             <Trash2 size={15} />
           </button>
-        </>
+          <button
+            type="button"
+            onClick={onSelect}
+            className="icon-button h-8 w-8 rounded-md text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+            aria-label={`打开 ${skill.name} 详情`}
+          >
+            <List size={17} />
+          </button>
+        </span>
       )}
     />
   );

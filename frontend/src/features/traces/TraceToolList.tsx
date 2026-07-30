@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { UIEvent } from 'react';
 import { Copy, Wrench } from 'lucide-react';
-import { Tag } from '@agentscope-ai/design';
+import { Tag } from '@/components/design';
 import type { ToolCallInfo } from '../../hooks/useEventStream';
 import {
   copyTextToClipboard,

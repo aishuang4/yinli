@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, RefreshCw } from 'lucide-react';
-import { Button, Spinner } from '@agentscope-ai/design';
+import { Button, Spinner } from '@/components/design';
 import { WorkbenchDetailShell } from '../components/workbench';
 import { TraceDetailView } from '../features/traces/TraceDetailView';
 import { TraceLandingPage } from '../features/traces/TraceLandingPage';

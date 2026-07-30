@@ -4,7 +4,7 @@
  * 统一维护 HTTP 工具草稿、JSON 字段布局和表单字段样式，供工具页和 Agent 编辑器复用。
  */
 
-import { Modal } from '@agentscope-ai/design';
+import { Modal } from '@/components/design';
 import {
   FormError,
   FormField,

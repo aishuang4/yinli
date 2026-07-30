@@ -4,7 +4,7 @@
  * 将 Skill 注册表单从页面中抽离，统一字段样式和 Spark Design 控件入口。
  */
 
-import { Modal } from '@agentscope-ai/design';
+import { Modal } from '@/components/design';
 import { FormError, FormGrid, TextAreaField, TextField } from '../../components/form';
 
 export interface SkillRegisterFormState {

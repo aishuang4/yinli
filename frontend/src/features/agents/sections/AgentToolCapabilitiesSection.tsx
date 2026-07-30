@@ -3,7 +3,7 @@
  */
 
 import { Plus } from 'lucide-react';
-import { Button, Tag } from '@agentscope-ai/design';
+import { Button, Tag } from '@/components/design';
 import { FormField } from '../../../components/form';
 import type { McpTool } from '../../../types/mcp';
 import type { Skill } from '../../../types/skill';

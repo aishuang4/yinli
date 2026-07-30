@@ -1,7 +1,7 @@
 /** ConversationContextSettingsCard — 设置页中的全局对话 Workspace / Project 选择。 */
 
 import { useState } from 'react';
-import { Button, Card } from '@agentscope-ai/design';
+import { Button, Card } from '@/components/design';
 import { Plus } from 'lucide-react';
 import { SelectField } from '../../components/form';
 import { useWorkspaceProjects } from '../../hooks/useWorkspaceProjects';

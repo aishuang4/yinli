@@ -5,7 +5,7 @@
  */
 
 import { Search } from 'lucide-react';
-import { Button } from '@agentscope-ai/design';
+import { Button } from '@/components/design';
 import { DateField, SelectField, TextField } from '../../components/form';
 import type { MemoryNodeStatus } from '../../types/memory';
 import { NODE_STATUS_OPTIONS } from './memoryViewConfig';

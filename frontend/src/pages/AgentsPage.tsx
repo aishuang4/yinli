@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useState } from 'react';
-import { Modal } from '@agentscope-ai/design';
+import { Modal } from '@/components/design';
 import { useAgentBuilder } from '../hooks/useAgentBuilder';
 import { useAgents } from '../hooks/useAgents';
 import { AgentBuilderWizard } from '../features/agents/AgentBuilderWizard';

@@ -1,7 +1,7 @@
 /** Workspace / Project 创建弹窗。 */
 
 import { useState } from 'react';
-import { Modal } from '@agentscope-ai/design';
+import { Modal } from '@/components/design';
 import { FolderOpen } from 'lucide-react';
 import { FormError, TextField } from '../../components/form';
 import type { ProjectRecord, WorkspaceRecord } from '../../types/workspace';

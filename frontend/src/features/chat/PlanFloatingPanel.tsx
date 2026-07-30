@@ -11,7 +11,7 @@ import {
   PanelRightOpen,
   X,
 } from 'lucide-react';
-import { Tooltip } from '@agentscope-ai/design';
+import { Tooltip } from '@/components/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import type { PlanReviewData } from './planReviewUtils';
 

@@ -2,7 +2,7 @@
  * RunDisplayParts — Runs 页面共享展示小组件。
  */
 
-import { Tag } from '@agentscope-ai/design';
+import { Tag } from '@/components/design';
 import { clampProgress, isWaitingRunStatus, statusText } from './runUtils';
 
 export function ProgressBar({ value, large = false }: { value: number; large?: boolean }) {

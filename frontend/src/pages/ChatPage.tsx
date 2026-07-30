@@ -12,9 +12,9 @@
  * @see 前端设计文档 §8.1 Chat 对话流程
  */
 
-import { useState, useCallback, useRef, useEffect, useMemo, type WheelEvent } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Bot, ChevronDown, MessageSquare, PanelLeftOpen, Plus, Settings } from 'lucide-react';
-import { Tag, Tooltip } from '@agentscope-ai/design';
+import { Tag, Tooltip } from '@/components/design';
 import { useEventStream } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useProjectResources } from '../hooks/useProjectResources';
@@ -31,8 +31,10 @@ import { PlanFloatingPanel } from '../features/chat/PlanFloatingPanel';
 import { ChatHistoryPanel } from '../features/chat/ChatHistoryPanel';
 import { selectLatestPlan, selectPendingPlanReview, type PlanReviewData } from '../features/chat/planReviewUtils';
 import { selectPendingAskUserInteractions } from '../features/chat/humanInteractionUtils';
-import type { ChatFileAttachment, ChatFilePayload, ChatImageAttachment, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
+import type { ChatFilePayload, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
 import { runtimeError, runtimeText } from '../features/runtime-stream/selectors';
+import { useChatScroll } from '../features/chat/useChatScroll';
+import { useChatAttachments } from '../features/chat/useChatAttachments';
 
 const HISTORY_PANEL_TRANSITION_MS = 260;
 
@@ -47,23 +49,14 @@ export function ChatPage() {
   const [deepThinking, setDeepThinking] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [planPanelOpen, setPlanPanelOpen] = useState(false);
-  const [imageAttachments, setImageAttachments] = useState<ChatImageAttachment[]>([]);
-  const [fileAttachments, setFileAttachments] = useState<ChatFileAttachment[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
-  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [historyPanelMounted, setHistoryPanelMounted] = useState(true);
   const setView = useAppStore((state) => state.setView);
   const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const shouldAutoScrollRef = useRef(true);
-  const programmaticScrollRef = useRef(false);
-  const programmaticScrollTimerRef = useRef<number | null>(null);
   const historyTransitionTimerRef = useRef<number | null>(null);
   const historyExpandFrameRef = useRef<number | null>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const isComposingRef = useRef(false);
   const recoveredRunRef = useRef<string>('');
@@ -75,6 +68,17 @@ export function ChatPage() {
   const { enabledByType, loading: projectResourcesLoading } = useProjectResources(activeProjectId);
   const { workspaces, allProjects } = useWorkspaceProjects();
   const setActiveContext = useAppStore((state) => state.setActiveContext);
+  const {
+    fileAttachments,
+    handleFile,
+    handleImageFiles,
+    imageAttachments,
+    imageInputRef,
+    removeFileAttachment,
+    removeImageAttachment,
+    resetAttachments,
+    uploadFilesForSession,
+  } = useChatAttachments({ onError: setChatError });
 
   const availableAgents = useMemo(() => agents.filter((agent) => (
     agent.id === 'default'
@@ -100,6 +104,19 @@ export function ChatPage() {
   const isMacDesktopShell = desktopPlatform === 'darwin';
   const isWindowsDesktopShell = desktopPlatform === 'win32';
   const snapshot = state.runtime.snapshot;
+  const {
+    cancelProgrammaticScroll,
+    handleMessagesScroll,
+    handleMessagesWheel,
+    messagesContainerRef,
+    messagesEndRef,
+    resetScroll,
+    scrollToBottom,
+    showScrollToBottom,
+  } = useChatScroll({
+    contentVersion: `${messages.length}:${snapshot.lastSeq}`,
+    isStreaming: state.isStreaming,
+  });
   const liveText = runtimeText(snapshot);
   const projectedError = runtimeError(snapshot);
   const pendingAskUserInteractions = useMemo(
@@ -220,13 +237,11 @@ export function ChatPage() {
     setActiveSessionId(session.id);
     setTargetMode(session.mode || 'agent');
     setSelectedAgentId(session.agent_id || 'default');
-    setImageAttachments([]);
-    setFileAttachments([]);
+    resetAttachments();
     setChatError(null);
-    shouldAutoScrollRef.current = true;
-    setShowScrollToBottom(false);
+    resetScroll();
     await loadSessionMessages(session.id, session.project_id);
-  }, [loadSessionMessages, reset]);
+  }, [loadSessionMessages, reset, resetAttachments, resetScroll]);
 
   useEffect(() => {
     sessionsRequestRef.current += 1;
@@ -236,8 +251,7 @@ export function ChatPage() {
     setPlanPanelOpen(false);
     setActiveSessionId(null);
     setMessages([]);
-    setImageAttachments([]);
-    setFileAttachments([]);
+    resetAttachments();
     setChatError(null);
     reset();
     const pendingSession = pendingSessionRef.current;
@@ -249,7 +263,7 @@ export function ChatPage() {
       pendingSessionRef.current = null;
       void activateSession(pendingSession);
     }
-  }, [activeProjectId, activeWorkspaceId, activateSession, reset]);
+  }, [activeProjectId, activeWorkspaceId, activateSession, reset, resetAttachments]);
 
   useEffect(() => {
     void loadSessions();
@@ -302,80 +316,6 @@ export function ChatPage() {
     };
   }, [activeProjectId, activeSessionId, hasLiveResponse, subscribeRun]);
 
-  const handleMessagesScroll = useCallback(() => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
-    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    const nearBottom = distanceToBottom < 80;
-    if (programmaticScrollRef.current) {
-      shouldAutoScrollRef.current = true;
-      setShowScrollToBottom(false);
-      if (nearBottom) {
-        programmaticScrollRef.current = false;
-      }
-      return;
-    }
-    shouldAutoScrollRef.current = nearBottom;
-    setShowScrollToBottom(!nearBottom);
-  }, []);
-
-  const cancelProgrammaticScroll = useCallback(() => {
-    programmaticScrollRef.current = false;
-    if (programmaticScrollTimerRef.current !== null) {
-      window.clearTimeout(programmaticScrollTimerRef.current);
-      programmaticScrollTimerRef.current = null;
-    }
-  }, []);
-
-  const handleMessagesWheel = useCallback((event: WheelEvent<HTMLDivElement>) => {
-    if (event.deltaY < 0) {
-      cancelProgrammaticScroll();
-    }
-  }, [cancelProgrammaticScroll]);
-
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
-    shouldAutoScrollRef.current = true;
-    programmaticScrollRef.current = true;
-    setShowScrollToBottom(false);
-    const container = messagesContainerRef.current;
-    if (container) {
-      container.scrollTo({ top: container.scrollHeight, behavior });
-    } else {
-      messagesEndRef.current?.scrollIntoView({ behavior });
-    }
-    if (programmaticScrollTimerRef.current !== null) {
-      window.clearTimeout(programmaticScrollTimerRef.current);
-    }
-    programmaticScrollTimerRef.current = window.setTimeout(() => {
-      programmaticScrollRef.current = false;
-      programmaticScrollTimerRef.current = null;
-    }, behavior === 'smooth' ? 700 : 80);
-  }, []);
-
-  /** 只有用户停留在底部附近时才自动滚动 */
-  useEffect(() => {
-    if (!shouldAutoScrollRef.current) return;
-    scrollToBottom(state.isStreaming ? 'auto' : 'smooth');
-  }, [messages, scrollToBottom, state.isStreaming, snapshot]);
-
-  useEffect(() => {
-    const container = messagesContainerRef.current;
-    const content = container?.firstElementChild;
-    if (!container || !content || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => {
-      if (!shouldAutoScrollRef.current) return;
-      scrollToBottom('auto');
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, [scrollToBottom]);
-
-  useEffect(() => () => {
-    if (programmaticScrollTimerRef.current !== null) {
-      window.clearTimeout(programmaticScrollTimerRef.current);
-    }
-  }, []);
-
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
     pendingSessionRef.current = null;
@@ -384,13 +324,11 @@ export function ChatPage() {
     setPlanPanelOpen(false);
     setActiveSessionId(null);
     setMessages([]);
-    setImageAttachments([]);
-    setFileAttachments([]);
+    resetAttachments();
     setChatError(null);
-    shouldAutoScrollRef.current = true;
-    setShowScrollToBottom(false);
+    resetScroll();
     reset();
-  }, [reset, state.isStreaming]);
+  }, [reset, resetAttachments, resetScroll, state.isStreaming]);
 
   const handleScenarioSelect = useCallback((prompt: string) => {
     setInputValue(prompt);
@@ -420,8 +358,7 @@ export function ChatPage() {
         setPlanPanelOpen(false);
         setActiveSessionId(null);
         setMessages([]);
-        setImageAttachments([]);
-        setFileAttachments([]);
+        resetAttachments();
         setChatError(null);
         reset();
       }
@@ -430,89 +367,7 @@ export function ChatPage() {
       notifyError(`删除历史对话失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [activeSessionId, reset, state.isStreaming]);
-
-  const handleImageFiles = useCallback(async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-
-    const imageFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
-    const nextAttachments = await Promise.all(imageFiles.map((file) => (
-      new Promise<ChatImageAttachment>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const previewUrl = String(reader.result);
-          const [, data = ''] = previewUrl.split(',', 2);
-          resolve({
-            id: createId(),
-            name: file.name,
-            media_type: file.type || 'image/png',
-            data,
-            previewUrl,
-          });
-        };
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(file);
-      })
-    )));
-
-    setImageAttachments((current) => [...current, ...nextAttachments].slice(0, 4));
-    setChatError(null);
-    if (imageInputRef.current) {
-      imageInputRef.current.value = '';
-    }
-  }, []);
-
-  const removeImageAttachment = useCallback((id: string) => {
-    setImageAttachments((current) => current.filter((item) => item.id !== id));
-  }, []);
-
-  const handleFile = useCallback((file: File) => {
-    if (file.size > 50 * 1024 * 1024) {
-      setChatError('单个附件不能超过 50 MB。');
-      return;
-    }
-    setFileAttachments((current) => {
-      if (current.length >= 10) {
-        setChatError('单次最多上传 10 个附件。');
-        return current;
-      }
-      if (current.some((item) => item.name === file.name && item.size === file.size)) {
-        return current;
-      }
-      return [...current, { id: createId(), file, name: file.name, size: file.size }];
-    });
-    setChatError(null);
-  }, []);
-
-  const removeFileAttachment = useCallback((id: string) => {
-    setFileAttachments((current) => current.filter((item) => item.id !== id));
-  }, []);
-
-  const uploadFilesForSession = useCallback(async (
-    files: ChatFileAttachment[],
-    projectId: string,
-    sessionId: string,
-  ): Promise<ChatFilePayload[]> => {
-    return Promise.all(files.map(async (attachment) => {
-      const form = new FormData();
-      form.append('file', attachment.file, attachment.name);
-      const params = new URLSearchParams({ sessionId });
-      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files?${params.toString()}`, {
-        method: 'POST',
-        body: form,
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(String(payload.detail || `附件 ${attachment.name} 上传失败`));
-      }
-      return {
-        name: String(payload.name || attachment.name),
-        path: String(payload.path || ''),
-        size: Number(payload.size || attachment.size),
-        media_type: String(payload.mediaType || attachment.file.type || 'application/octet-stream'),
-      };
-    }));
-  }, []);
+  }, [activeSessionId, reset, resetAttachments, state.isStreaming]);
 
   /** 发送消息 */
   const handleSend = useCallback(async () => {
@@ -550,12 +405,10 @@ export function ChatPage() {
     };
 
     setActiveSessionId(sessionId);
-    shouldAutoScrollRef.current = true;
-    setShowScrollToBottom(false);
+    resetScroll();
     setMessages((prev) => [...prev, userMessage]);
     setInputValue('');
-    setImageAttachments([]);
-    setFileAttachments([]);
+    resetAttachments();
     setChatError(null);
 
     await sendMessage(userText, {
@@ -572,7 +425,7 @@ export function ChatPage() {
       images,
       files,
     });
-  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, imageAttachments, inputValue, planMode, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.isStreaming, targetMode, uploadFilesForSession]);
+  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, imageAttachments, inputValue, planMode, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.isStreaming, targetMode, uploadFilesForSession]);
 
   const handlePlanReview = useCallback(async (
     plan: PlanReviewData,
@@ -591,8 +444,7 @@ export function ChatPage() {
       content: userText,
       createdAt: new Date().toISOString(),
     }]);
-    shouldAutoScrollRef.current = true;
-    setShowScrollToBottom(false);
+    resetScroll();
     setChatError(null);
     await sendMessage(userText, {
       projectId: activeProjectId,
@@ -608,7 +460,7 @@ export function ChatPage() {
       planAction: action,
       planFeedback: feedback,
     });
-  }, [activeProjectId, activeSessionId, deepThinking, runtimeAgent, sendMessage, state.isStreaming]);
+  }, [activeProjectId, activeSessionId, deepThinking, resetScroll, runtimeAgent, sendMessage, state.isStreaming]);
 
   // 当流结束时，将 assistant 回复加入消息历史
   useEffect(() => {

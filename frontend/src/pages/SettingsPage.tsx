@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Card } from '@agentscope-ai/design';
+import { Card } from '@/components/design';
 import { ModelSettingsForm, type ModelSettings } from '../features/settings/ModelSettingsForm';
 import { ConversationContextSettingsCard } from '../features/settings/ConversationContextSettingsCard';
 import { useSettingsStore } from '../stores/settingsStore';

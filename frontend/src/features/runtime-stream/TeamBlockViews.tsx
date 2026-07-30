@@ -1,7 +1,7 @@
 /** Team Block 摘要、实体 fallback renderer 与完整 Team Console。 */
 
 import { useContext, useMemo, useState } from 'react';
-import { Input, Select, Tooltip } from '@agentscope-ai/design';
+import { Input, Select, Tooltip } from '@/components/design';
 import {
   AlertCircle,
   Bot,

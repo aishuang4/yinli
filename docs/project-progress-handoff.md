@@ -127,7 +127,7 @@ legacy teams / team_members tables: removed
 - 综合阶段逐条转发 `TEXT_BLOCK_DELTA`，最终答案从首个文本增量持续增长；`FINAL_ANSWER_REPLACE` 只做终态一致性校正。
 - 后端完整测试 359 项、前端 lint/build 和浏览器真实运行均通过，最终 Chat Run 正确收口为 `completed`。
 
-Vite 仍有约 941 KB 的大 chunk 警告，不影响构建，但需要后续拆包。
+前端已通过轻量 Design 适配入口移除 `@agentscope-ai/design` 完整 barrel 的隐式依赖，React runtime 单独分包；当前最大 chunk 约 410 KB，生产构建不再产生大 chunk 警告。
 
 ## 主要缺口
 

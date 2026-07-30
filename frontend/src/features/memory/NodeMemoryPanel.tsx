@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { Archive, Ban, Bot, Brain, RotateCcw, Trash2 } from 'lucide-react';
-import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
+import { Button, Empty, Spinner, Tag } from '@/components/design';
 import type { Agent } from '../../types/agent';
 import type { MemoryNodeQueryResult, MemoryNodeStatus, MemoryNodeTreeItem } from '../../types/memory';
 import { NodeMemoryFilters } from './NodeMemoryFilters';

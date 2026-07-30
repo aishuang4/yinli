@@ -40,3 +40,7 @@ backend/data/*.db
 
 # Logs
 *.log
+
+# Local Agent Workstation runtime data
+.agent-workstation/
+.mcp.json

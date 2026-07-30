@@ -3,7 +3,7 @@
  */
 
 import { Ban, CheckCircle2, Clock3, RotateCcw } from 'lucide-react';
-import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
+import { Button, Empty, Spinner, Tag } from '@/components/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import { WorkbenchDetailShell } from '../../components/workbench';
 import type { RunDetail } from './runTypes';

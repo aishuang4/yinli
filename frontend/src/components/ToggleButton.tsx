@@ -1,4 +1,4 @@
-import { Button } from '@agentscope-ai/design';
+import { Button } from '@/components/design';
 
 interface ToggleButtonProps {
   checked: boolean;

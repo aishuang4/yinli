@@ -3,7 +3,7 @@
  */
 
 import { RefreshCw } from 'lucide-react';
-import { Button } from '@agentscope-ai/design';
+import { Button } from '@/components/design';
 import { TextField } from '../../components/form';
 
 type HttpToolFiltersProps = {

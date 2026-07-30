@@ -6,7 +6,7 @@
 
 import type { ReactNode } from 'react';
 import { ArrowLeft } from 'lucide-react';
-import { Button } from '@agentscope-ai/design';
+import { Button } from '@/components/design';
 
 export function WorkbenchDetailShell({
   title,

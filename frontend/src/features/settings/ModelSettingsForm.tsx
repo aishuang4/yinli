@@ -5,7 +5,7 @@
  */
 
 import { KeyRound, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
-import { Button, Card, Tag } from '@agentscope-ai/design';
+import { Button, Card, Tag } from '@/components/design';
 import { FormField, FormGrid, PasswordField, SelectField, TextField } from '../../components/form';
 
 export interface ModelProviderOption {

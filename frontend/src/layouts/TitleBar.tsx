@@ -9,7 +9,7 @@
 
 import { useState } from 'react';
 import { Boxes, FolderKanban, GitBranch, PanelsTopLeft, Plus } from 'lucide-react';
-import { Select, Tooltip } from '@agentscope-ai/design';
+import { Select, Tooltip } from '@/components/design';
 import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
 import { ContextCreateModal } from '../features/workspaces/ContextCreateModal';
 import { useAppStore, type WorkspaceMode } from '../stores/appStore';

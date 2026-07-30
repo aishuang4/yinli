@@ -5,7 +5,7 @@
  */
 
 import { Bot, FlaskConical, Save, Send, Square, Trash2, Users } from 'lucide-react';
-import { Button, Spinner } from '@agentscope-ai/design';
+import { Button, Spinner } from '@/components/design';
 import { FormField, SelectField, TextAreaField, TextField } from '../../components/form';
 import type { Agent } from '../../types/agent';
 

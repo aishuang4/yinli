@@ -3,7 +3,7 @@
  */
 
 import { AlertTriangle, FileText, GitBranch, Sparkles } from 'lucide-react';
-import { Tag } from '@agentscope-ai/design';
+import { Tag } from '@/components/design';
 import type { SkillEvolutionRecord } from '../../types/memory';
 import { DetailSection, MetricBlock } from './MemoryDetailBlocks';
 import { formatDateTime, skillStatusMeta } from './memoryViewConfig';

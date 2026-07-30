@@ -3,7 +3,7 @@
  */
 
 import { CheckCircle2, Clock3, XCircle } from 'lucide-react';
-import { Tag } from '@agentscope-ai/design';
+import { Tag } from '@/components/design';
 
 export function TraceStatus({ status }: { status: string }) {
   const Icon = status === 'failed' ? XCircle : status === 'running' || status === 'waiting' ? Clock3 : CheckCircle2;

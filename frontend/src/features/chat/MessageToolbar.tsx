@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
-import { Button } from '@agentscope-ai/design';
+import { Button } from '@/components/design';
 import { copyTextToClipboard, formatMessageTime } from './chatUiUtils';
 
 export function MessageToolbar({ markdown, createdAt }: { markdown: string; createdAt?: string }) {

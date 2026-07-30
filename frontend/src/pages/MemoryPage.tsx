@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
-import { Button } from '@agentscope-ai/design';
+import { Button } from '@/components/design';
 import { WorkbenchDetailShell } from '../components/workbench';
 import { MarkdownMemoryPanel } from '../features/memory/MarkdownMemoryPanel';
 import { MemoryLandingPage } from '../features/memory/MemoryLandingPage';

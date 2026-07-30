@@ -4,7 +4,7 @@
 
 import { useMemo, useState } from 'react';
 import { ExternalLink, FileText, FolderOpen, FolderSync, Network, RefreshCw } from 'lucide-react';
-import { Button, Empty, Spinner } from '@agentscope-ai/design';
+import { Button, Empty, Spinner } from '@/components/design';
 import type {
   MemoryWikiGraph,
   MemoryWikiGraphEdge,

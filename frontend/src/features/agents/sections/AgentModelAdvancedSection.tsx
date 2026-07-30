@@ -4,7 +4,7 @@
  * 负责降级模型链、温度、Top P、输出长度和 ReAct 循环上限。
  */
 
-import { Button } from '@agentscope-ai/design';
+import { Button } from '@/components/design';
 import { FormField, NumberField, SelectField, SliderField } from '../../../components/form';
 import type { AgentCreatePayload, ModelOption } from '../../../types/agent';
 

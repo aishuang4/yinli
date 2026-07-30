@@ -11,6 +11,12 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
+function frameworkChunk(id: string): string | undefined {
+  return /\/node_modules\/(react|react-dom|scheduler)\//.test(id)
+    ? 'vendor-react'
+    : undefined;
+}
+
 export default defineConfig({
   plugins: [react()],
   base: './',
@@ -40,5 +46,10 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks: frameworkChunk,
+      },
+    },
   },
 });

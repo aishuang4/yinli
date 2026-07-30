@@ -4,7 +4,7 @@
  * 负责名称、描述、主模型和系统提示词字段，保持 AgentEditor 只做状态编排。
  */
 
-import { Alert } from '@agentscope-ai/design';
+import { Alert } from '@/components/design';
 import { FormGrid, SelectField, TextAreaField, TextField } from '../../../components/form';
 import type { AgentCreatePayload, ModelOption } from '../../../types/agent';
 

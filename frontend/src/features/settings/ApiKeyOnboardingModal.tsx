@@ -3,7 +3,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Button, Modal, Tag } from '@agentscope-ai/design';
+import { Button, Modal, Tag } from '@/components/design';
 import { KeyRound, Settings2 } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
 

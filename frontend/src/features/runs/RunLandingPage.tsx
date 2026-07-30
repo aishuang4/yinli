@@ -3,7 +3,7 @@
  */
 
 import { Ban, Bot, Clock3, List, RefreshCw, RotateCcw, Users } from 'lucide-react';
-import { Button, Tag } from '@agentscope-ai/design';
+import { Button, Tag } from '@/components/design';
 import {
   WorkbenchEmptyPanel,
   WorkbenchList,

@@ -5,7 +5,7 @@
  */
 
 import { Plus, Trash2 } from 'lucide-react';
-import { Button, Modal } from '@agentscope-ai/design';
+import { Button, Modal } from '@/components/design';
 import { FormError, FormField, PasswordField, TextAreaField, TextField } from '../../components/form';
 
 export interface McpRegisterFormState {

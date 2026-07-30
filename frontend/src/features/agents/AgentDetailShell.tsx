@@ -6,7 +6,7 @@
 
 import type { ReactNode } from 'react';
 import { Download, Trash2 } from 'lucide-react';
-import { Button } from '@agentscope-ai/design';
+import { Button } from '@/components/design';
 import { WorkbenchDetailShell } from '../../components/workbench';
 
 interface AgentDetailShellProps {

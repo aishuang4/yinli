@@ -3,7 +3,7 @@
  */
 
 import { Bot } from 'lucide-react';
-import { Tag } from '@agentscope-ai/design';
+import { Tag } from '@/components/design';
 import type { TraceMessage } from './traceTypes';
 import { formatLongTextPreview, formatTraceTime, MAX_MESSAGE_PREVIEW_LENGTH } from './traceUtils';
 import { TraceToolList } from './TraceToolList';

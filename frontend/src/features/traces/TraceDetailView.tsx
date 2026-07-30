@@ -2,7 +2,7 @@
  * TraceDetailView — 单次运行轨迹详情。
  */
 
-import { Tag } from '@agentscope-ai/design';
+import { Tag } from '@/components/design';
 import type { TraceDetail } from './traceTypes';
 import { TraceEventTimeline } from './TraceEventTimeline';
 import { TraceMessageCard } from './TraceMessageCard';

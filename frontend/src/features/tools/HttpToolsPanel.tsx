@@ -6,7 +6,7 @@
 
 import { useMemo, useState } from 'react';
 import { Edit3, Globe2, Plus, Trash2 } from 'lucide-react';
-import { Button, Tag } from '@agentscope-ai/design';
+import { Button, Tag } from '@/components/design';
 import {
   WorkbenchEmptyPanel,
   WorkbenchList,

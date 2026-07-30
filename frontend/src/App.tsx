@@ -14,7 +14,8 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useState, type ComponentType } from 'react';
 import { App as AntdApp } from 'antd';
 import { StyleProvider } from '@ant-design/cssinjs';
-import { ConfigProvider, Spinner, carbonDarkTheme, carbonTheme } from '@agentscope-ai/design';
+import { ConfigProvider, Spinner } from '@/components/design';
+import { carbonDarkTheme, carbonTheme } from '@/components/design/theme';
 import { useAppStore } from './stores/appStore';
 import type { ViewType } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';

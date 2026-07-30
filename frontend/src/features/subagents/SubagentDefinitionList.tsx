@@ -3,7 +3,7 @@
  */
 
 import { AlertTriangle, Bot, ChevronRight, ShieldCheck } from 'lucide-react';
-import { Empty, Tag } from '@agentscope-ai/design';
+import { Empty, Tag } from '@/components/design';
 import type { SubagentDefinition, SubagentLoadError } from '../../types/subagent';
 
 interface SubagentDefinitionListProps {

@@ -3,7 +3,7 @@
  */
 
 import { Pencil, Trash2 } from 'lucide-react';
-import { Button, Checkbox, Modal, Tag } from '@agentscope-ai/design';
+import { Button, Checkbox, Modal, Tag } from '@/components/design';
 import type { HttpTool } from '../../../types/tool';
 
 type KnowledgeToolSelectionModalProps = {

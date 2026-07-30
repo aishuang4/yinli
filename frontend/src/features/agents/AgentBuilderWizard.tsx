@@ -5,7 +5,7 @@
  */
 
 import { AlertCircle, CheckCircle2, Sparkles, WandSparkles } from 'lucide-react';
-import { Button, Tag } from '@agentscope-ai/design';
+import { Button, Tag } from '@/components/design';
 import { SelectField, TextAreaField } from '../../components/form';
 import { DEFAULT_MODEL_CONFIG, type ModelsResponse } from '../../types/agent';
 import type { BuilderPlan } from '../../types/agentBuilder';

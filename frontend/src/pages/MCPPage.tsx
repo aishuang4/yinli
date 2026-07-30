@@ -6,7 +6,7 @@
 
 import { useMemo, useState } from 'react';
 import { List, Plus, Plug, RefreshCw, Trash2, Wrench } from 'lucide-react';
-import { Button, Modal, Tag } from '@agentscope-ai/design';
+import { Button, Modal, Tag } from '@/components/design';
 import { McpRegisterModal, type McpRegisterFormState } from '../features/mcp/McpRegisterModal';
 import { ToggleButton } from '../components/ToggleButton';
 import { CatalogFilterBar, type CatalogInstallFilter } from '../components/form/CatalogFilterBar';

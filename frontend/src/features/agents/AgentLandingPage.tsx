@@ -5,7 +5,7 @@
  */
 
 import { Bot, HelpCircle, List, Plus, Trash2, WandSparkles } from 'lucide-react';
-import { Button } from '@agentscope-ai/design';
+import { Button } from '@/components/design';
 import {
   WorkbenchEmptyPanel,
   WorkbenchList,

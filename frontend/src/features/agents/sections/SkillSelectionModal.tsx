@@ -2,7 +2,7 @@
  * SkillSelectionModal — Agent Skill 选择弹窗。
  */
 
-import { Checkbox, Modal, Tag } from '@agentscope-ai/design';
+import { Checkbox, Modal, Tag } from '@/components/design';
 import type { Skill } from '../../../types/skill';
 
 type SkillSelectionModalProps = {

@@ -7,7 +7,7 @@ import {
   SparkReinforcementLearningLine,
   SparkRenyizhuanrenyiAnyToanyLine,
 } from '@agentscope-ai/icons';
-import { Select, Tooltip } from '@agentscope-ai/design';
+import { Select, Tooltip } from '@/components/design';
 import { FileImportButton } from '../../components/FileImportButton';
 import type { ChatFileAttachment, ChatImageAttachment } from './types';
 

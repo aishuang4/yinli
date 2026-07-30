@@ -3,7 +3,7 @@
  */
 
 import { useMemo } from 'react';
-import { Checkbox, Modal } from '@agentscope-ai/design';
+import { Checkbox, Modal } from '@/components/design';
 import type { McpServer } from '../../../types/mcp';
 
 type McpToolSelectionModalProps = {

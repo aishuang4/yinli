@@ -19,7 +19,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
-import { Button, Empty, Spinner, Tag } from '@agentscope-ai/design';
+import { Button, Empty, Spinner, Tag } from '@/components/design';
 import { TextAreaField } from '../components/form';
 import { useWorkflowRuns } from '../hooks/useWorkflowRuns';
 import type { WorkflowEvent, WorkflowNode, WorkflowRunDetail, WorkflowRunStatus, WorkflowScript } from '../types/workflow';

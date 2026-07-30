@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FlaskConical, Loader2 } from 'lucide-react';
-import { Tag } from '@agentscope-ai/design';
+import { Tag } from '@/components/design';
 import { SandboxControlPanel, type SandboxCase } from '../features/sandbox/SandboxControlPanel';
 import { useAgents } from '../hooks/useAgents';
 import { useEventStream } from '../hooks/useEventStream';

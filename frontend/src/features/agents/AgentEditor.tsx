@@ -16,7 +16,7 @@ import {
   Alert,
   Button,
   Drawer,
-} from '@agentscope-ai/design';
+} from '@/components/design';
 import { AgentBasicSection } from './sections/AgentBasicSection';
 import { AgentGuardrailsSection } from './sections/AgentGuardrailsSection';
 import { AgentModelAdvancedSection } from './sections/AgentModelAdvancedSection';
