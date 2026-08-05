@@ -10,11 +10,12 @@ from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import ChatRunContext
 from src.server.routes.chat.team_runtime.coordinator import TeamCoordinator
 from src.server.routes.chat.team_runtime.events import team_source_event
-from src.server.routes.chat.team_runtime.member_runtime import run_leader_coordination, run_synthesis
+from src.server.routes.chat.team_runtime.member_runtime import TeamSessionError, run_leader_coordination, run_synthesis
 from src.server.routes.chat.team_runtime.registry import register_team_service, unregister_team_service
 from src.server.routes.chat.team_runtime.store import (
     TeamEventPublisher,
     TeamMailboxChangedError,
+    TeamStoreError,
     TeamStore,
 )
 
@@ -92,20 +93,25 @@ class TeamRunService:
                 run_data=self.run_data,
                 flush_events=self.flush_events,
             )
-            await coordinator.run()
             while True:
+                await coordinator.run()
                 mailbox_version = len(self.store.mailbox())
-                final_answer = await run_synthesis(
-                    store=self.store,
-                    ctx=self.ctx,
-                    run_data=self.run_data,
-                    flush_events=self.flush_events,
-                    on_output_delta=self._publish_final_answer_delta,
-                )
+                try:
+                    final_answer = await run_synthesis(
+                        store=self.store,
+                        ctx=self.ctx,
+                        run_data=self.run_data,
+                        flush_events=self.flush_events,
+                        on_output_delta=self._publish_final_answer_delta,
+                    )
+                except (TeamStoreError, TeamSessionError):
+                    if any(task.get("status") != "succeeded" for task in self.store.tasks()):
+                        continue
+                    raise
                 try:
                     self.store.complete_run(expected_mailbox_version=mailbox_version)
                 except TeamMailboxChangedError:
-                    pass
+                    continue
                 else:
                     break
             await self.flush_events()
@@ -170,7 +176,14 @@ class TeamRunService:
         if delta:
             await self.queue.put(source_event("FINAL_ANSWER_DELTA", {"delta": delta}))
 
-    async def send_user_mail(self, *, recipient: str, content: str) -> dict:
+    async def send_user_mail(
+        self,
+        *,
+        recipient: str,
+        content: str,
+        dispatch_mode: str = "context",
+        task_id: str = "",
+    ) -> dict:
         """用户向当前 active TeamRun 成员投递干预消息。"""
 
         if self.store is None or self.store.run().get("status") != "running":
@@ -178,12 +191,17 @@ class TeamRunService:
         normalized = content.strip()
         if not normalized:
             raise RuntimeError("Mailbox 消息不能为空")
+        if dispatch_mode not in {"context", "continue_task", "new_task"}:
+            raise RuntimeError("不支持的 Mailbox dispatchMode")
+        if dispatch_mode != "context" and recipient in {"broadcast", "*"}:
+            raise RuntimeError("执行型 Mailbox 消息必须指定单个 Member")
         if recipient in {"broadcast", "*"}:
             message: dict | list[dict] = self.store.broadcast_mail(
                 sender="user",
                 kind="user_intervention",
                 subject="用户广播",
                 content=normalized,
+                dispatch_mode=dispatch_mode,
             )
         else:
             message = self.store.send_mail(
@@ -192,6 +210,32 @@ class TeamRunService:
                 kind="user_intervention",
                 subject="用户补充",
                 content=normalized,
+                task_id=task_id,
+                dispatch_mode=dispatch_mode,
             )
+            member = self.store.member(recipient)
+            if dispatch_mode == "new_task":
+                self.store.create_task(
+                    title="用户追加任务",
+                    brief=normalized,
+                    created_by="user",
+                    assigned_member_id=recipient,
+                    origin="user_mail",
+                    origin_mail_id=str(message["id"]),
+                )
+            elif dispatch_mode == "continue_task" and member.get("status") == "idle":
+                target_task_id = task_id or str(member.get("lastTaskId") or "")
+                if not target_task_id:
+                    raise RuntimeError("该 Member 没有可继续执行的历史任务")
+                previous = self.store.task(target_task_id)
+                self.store.create_task(
+                    title=f"继续执行：{previous.get('title') or target_task_id}",
+                    brief=normalized,
+                    created_by="user",
+                    assigned_member_id=recipient,
+                    depends_on=[target_task_id],
+                    origin="user_mail",
+                    origin_mail_id=str(message["id"]),
+                )
         await self.flush_events()
         return message

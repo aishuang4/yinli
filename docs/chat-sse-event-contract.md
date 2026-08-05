@@ -193,6 +193,7 @@ type DisplaySnapshot = {
 | `team` | TeamRun 根状态与统计 | 浅合并结构化字段 |
 | `team-member` | 临时 Member 身份与状态 | 浅合并结构化字段 |
 | `team-task` | Team Task 生命周期 | 浅合并结构化字段 |
+| `team-attempt` | Member 对 Team Task 的单次执行记录 | 浅合并结构化字段 |
 | `team-activity` | Member 输出、思考与恢复过程 | `delta` 追加 content，其他字段浅合并 |
 | `team-mail` | 单条 Mailbox 消息与 delivery 状态 | 浅合并结构化字段 |
 
@@ -403,12 +404,15 @@ Team 是 ReAct 的 `executor.kind=team` 执行能力，不新增 SSE 事件名�
 team:{teamRunId}
 team-member:{teamRunId}:{memberId}
 team-task:{teamRunId}:{taskId}
+team-attempt:{teamRunId}:{attemptId}
 team-activity:{teamRunId}:{activityId}
 team-mail:{teamRunId}:{messageId}
 tool:team:{teamRunId}:{toolCallId}
 ```
 
-`team`、`team-member`、`team-task`、`team-activity` 和 `team-mail` 都是 `message:{runId}` 的后代。Task 固定直属 Team，活动与工具直属 Task；没有 task 的 Leader 协调活动直属 Team。parent 一经 open 不得因 owner 或状态变化而修改。
+`team`、`team-member`、`team-task`、`team-attempt`、`team-activity` 和 `team-mail` 都是 `message:{runId}` 的后代。Task 固定直属 Team，Attempt 固定直属对应 Task；活动与工具继续直属 Task，使用 `attemptId` 关联本次执行；没有 task 的 Leader 协调活动直属 Team。parent 一经 open 不得因 owner、状态或返工次数变化而修改。
+
+`attempt.created/started/submitted/accepted/rejected/failed/cancelled` 领域事实投影到 `team-attempt` Block。同一 Task 可以依次拥有多个 Attempt Block；Attempt 进入终态后不可 reopen。Task 的 `currentAttemptId`、`acceptedAttemptId` 和 `attemptCount` 通过 `team-task` Block 更新。Mailbox 的 `dispatchMode=context|continue_task|new_task` 必须保留在 `team-mail.data`，但命令 HTTP response 仍不能直接修改 Block Tree。
 
 TeamStore event 不得携带完整 snapshot。每条事件 payload 必须自包含 projector 所需白名单字段。Team terminal 投影必须先关闭开放的 tool/activity，再关闭 task/member，最后关闭 team；只有随后到达的 Run terminal 才能关闭 message 和发送 done。`team_submit_result` 的真实顺序允许 `task.completed` 先于对应 `member.tool.completed`：projector 必须先更新 task 数据，保留 task 为 open，待最后一个已启动 tool 关闭后再关闭 task。task 进入领域终态后到达的新 activity 或新 tool 不再创建展示 Block，已启动 tool 的终态仍必须消费并投影。同一 `toolCallId` 可能因外部执行拒绝连续产生 `member.tool.denied` 和 `member.tool.failed`，Tool 首个终态关闭 Block 后，后续重复终态必须按幂等事实消费，不得重新 open。
 

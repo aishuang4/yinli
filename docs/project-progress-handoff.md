@@ -57,6 +57,7 @@
 - Member session 隔离，通过 Task List、Mailbox 和任务结果协作。
 - 用户可向指定成员或全员发送 Mailbox 消息。
 - Team 以 file-first 状态和 `events.jsonl` outbox 为事实源，不再给每条事件附加完整 snapshot；Chat 将 Run、Member、Task、Activity、Tool 和 Mail 分别投影为规范化 Block 子树。
+- Team Member Lifecycle V2 的 Phase 1/2 已在 `codex/team-member-lifecycle-v2` 分支实现：TaskAttempt 事实源、Attempt Block、Mailbox `dispatchMode`、idle Member 追加 Task 和综合期间回到 Coordinator；Reviewer 自动审核、原 Task rework 与跨进程恢复尚未实现。
 - 前端 Team Console 只从 DisplaySnapshot V4 派生任务、成员、过程和 Mailbox，并支持通过 active TeamRun Mailbox API 向成员或全体发送干预消息；命令结果仍以 RuntimeFrame 回流为准。
 - 持久 Team CRUD、template、固定成员列表、`/api/teams`、`teams` / `team_members` 表已经删除。
 

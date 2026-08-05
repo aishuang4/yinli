@@ -120,6 +120,9 @@ def test_claim_result_and_dependency_unlock_invariants(tmp_path) -> None:
 
     claimed = store.claim_task(first["id"], first_member["id"])
     assert claimed["status"] == "running"
+    attempt_id = claimed["currentAttemptId"]
+    assert attempt_id.startswith("attempt_")
+    assert store.attempt(attempt_id)["status"] == "running"
     assert store.is_blocked(store.task(second["id"])) is True
     with pytest.raises(TeamStoreError, match="任务结果不能为空"):
         store.complete_task(first["id"], first_member["id"], "  ")
@@ -128,6 +131,9 @@ def test_claim_result_and_dependency_unlock_invariants(tmp_path) -> None:
     store.complete_task(first["id"], first_member["id"], "research result")
 
     assert store.task(first["id"])["status"] == "succeeded"
+    assert store.task(first["id"])["acceptedAttemptId"] == attempt_id
+    assert store.attempt(attempt_id)["status"] == "accepted"
+    assert len(store.attempts(first["id"])) == 1
     completed_snapshot = next(task for task in store.snapshot()["tasks"] if task["id"] == first["id"])
     assert completed_snapshot["briefPreview"] == "research"
     assert completed_snapshot["resultPreview"] == "research result"
@@ -324,6 +330,66 @@ def test_user_mail_is_persisted_and_published(tmp_path) -> None:
     assert published is not None
     assert published.event_type == "TEAM_DOMAIN_EVENT"
     assert published.data["type"] == "mail.sent"
+
+
+def test_user_mail_new_task_wakes_idle_member(tmp_path) -> None:
+    store = create_store(tmp_path)
+    member = store.spawn_member(name="Member", role="member", runtime_prompt="work")
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    service = TeamRunService(ctx=SimpleNamespace(), run_data=SimpleNamespace(), queue=queue)
+    service.store = store
+    service.publisher = TeamEventPublisher(store)
+    service.publisher.mark_existing_seen()
+
+    asyncio.run(service.send_user_mail(
+        recipient=member["id"],
+        content="补充核对版本差异",
+        dispatch_mode="new_task",
+    ))
+
+    task = store.tasks()[-1]
+    assert task["status"] == "queued"
+    assert task["assignedMemberId"] == member["id"]
+    assert task["origin"] == "user_mail"
+    assert task["originMailId"]
+    user_mail = next(
+        mail for mail in reversed(store.mailbox())
+        if mail["from"] == "user" and mail["kind"] == "user_intervention"
+    )
+    assert user_mail["dispatchMode"] == "new_task"
+
+
+def test_user_mail_continue_task_creates_followup_for_idle_member(tmp_path) -> None:
+    store = create_store(tmp_path)
+    member = store.spawn_member(name="Member", role="member", runtime_prompt="work")
+    task = store.create_task(title="Research", brief="research", created_by="leader", assigned_member_id=member["id"])
+    store.claim_task(task["id"], member["id"])
+    store.read_inbox(member["id"])
+    store.complete_task(task["id"], member["id"], "initial result")
+    store.set_member_status(member["id"], "idle")
+
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    service = TeamRunService(ctx=SimpleNamespace(), run_data=SimpleNamespace(), queue=queue)
+    service.store = store
+    service.publisher = TeamEventPublisher(store)
+    service.publisher.mark_existing_seen()
+    asyncio.run(service.send_user_mail(
+        recipient=member["id"],
+        content="继续补充证据",
+        dispatch_mode="continue_task",
+        task_id=task["id"],
+    ))
+
+    assert store.task(task["id"])["status"] == "succeeded"
+    followup = next(task for task in store.tasks() if task["origin"] == "user_mail")
+    assert followup["status"] == "queued"
+    assert followup["assignedMemberId"] == member["id"]
+    assert followup["dependsOn"] == [task["id"]]
+    user_mail = next(
+        mail for mail in reversed(store.mailbox())
+        if mail["from"] == "user" and mail["kind"] == "user_intervention"
+    )
+    assert followup["originMailId"] == user_mail["id"]
 
 
 def test_mailbox_broadcast_expands_to_individual_deliveries(tmp_path) -> None:

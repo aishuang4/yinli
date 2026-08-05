@@ -2,7 +2,7 @@
 
 > 状态：方案草案，待批准后实施。更新时间：2026-08-05。
 >
-> 本文只定义目标状态，不代表当前 Runtime 已实现。当前在线事实仍以 `docs/team-runtime-redesign.md` 为准。
+> 本文定义 V2 目标状态；Phase 1/2 已在 `codex/team-member-lifecycle-v2` 分支实现，Reviewer、原 Task rework 和跨进程恢复仍未实现。当前在线基线仍以 `docs/team-runtime-redesign.md` 为准。
 
 ## 1. 背景与核心问题
 
@@ -258,7 +258,7 @@ team-runs/{teamRunId}/
 Coordinator 仍是机械状态机，不直接做模型判断：
 
 1. 原子消费未处理的执行型 Mailbox 指令。
-2. 将 `continue_task` 转换为原 Task 的新 Attempt 请求。
+2. Phase 2 将 `continue_task` 转换为依赖原 Task 的追加 Task；Phase 3 在 Task Block 生命周期契约冻结后再支持原 Task 的新 Attempt。
 3. 将 `new_task` 转换为新 Task，并记录 `originMailId`。
 4. 调度依赖满足且存在空闲 Member 的 queued Task。
 5. Attempt 提交后将 Task 转为 `review_pending`。
@@ -332,10 +332,10 @@ Reviewer 决策：
 ### 9.2 idle Member
 
 - `context` 只进入综合证据，不启动模型。
-- `continue_task` 为最近可返工 Task 创建新 Attempt；没有可继续 Task 时返回明确错误。
+- `continue_task` 为最近 Task 创建一个依赖原 Task 的追加 Task，保留原 Task 的验收历史；没有可继续 Task 时返回明确错误。
 - `new_task` 创建并分配一个新 Task，随后由 Coordinator 唤醒 Member。
-- 如果目标 Task 已经 `succeeded`，`continue_task` 必须原子撤销其当前 acceptance，保留旧 Attempt 为历史证据，将 Task 转为 `rework_requested -> queued`，同时递增 `taskGraphVersion`。
-- 已解锁的下游 Task 若依赖该验收结果，不得继续使用旧结论；尚未开始的下游回到 blocked，已经提交或验收的下游进入重新审核，不能静默保持成功。
+- Phase 2 不 reopen 已完成的 `team-task` Block，而是创建 `origin=user_mail` 的追加 Task，避免违反当前 Block 终态不可逆不变量。
+- Phase 3 若引入原 Task rework，必须先定义 Task Block 的 revision/Attempt 子树语义，并使依赖旧验收结果的下游重新进入审核。
 
 ### 9.3 waiting_review Member
 
@@ -485,7 +485,7 @@ and no reviewer session is running
 ### Phase 2：Mailbox 唤醒
 
 - 增加 `dispatchMode`。
-- idle Member 支持 `continue_task` 和 `new_task`。
+- idle Member 支持 `continue_task`（追加 Task）和 `new_task`。
 - Coordinator 支持同一 Member 多次事件驱动执行。
 - 完成 Mail -> Task -> Attempt -> Frame 的端到端测试。
 
@@ -507,7 +507,7 @@ and no reviewer session is running
 后端必须覆盖：
 
 1. 同一 Member 顺序执行两个预建 Task，产生两个独立 Attempt。
-2. idle Member 收到 `continue_task` 后重新运行。
+2. idle Member 收到 `continue_task` 后创建追加 Task 并重新运行。
 3. idle Member 收到 `new_task` 后创建并领取追加 Task。
 4. `context` 不触发模型执行。
 5. running Member 收到消息后，未读屏障阻止提交。

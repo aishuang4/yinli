@@ -88,6 +88,41 @@ class TeamEventNormalizerMixin:
                 ))
             return produced
 
+        if source_type.startswith("attempt."):
+            attempt = payload.get("attempt") if isinstance(payload.get("attempt"), dict) else {}
+            attempt_id = str(attempt.get("id") or "")
+            attempt_task_id = str(attempt.get("taskId") or task_id)
+            task_block_id = self._team_task_block_id(team_id, attempt_task_id)
+            attempt_block_id = f"team-attempt:{team_id}:{attempt_id}"
+            if not attempt_id or task_block_id not in self._active:
+                return produced
+            if source_type == "attempt.created" and attempt_block_id not in self._active:
+                produced.extend(self._start_block(
+                    "team.attempt",
+                    attempt_block_id,
+                    "team-attempt",
+                    {"teamRunId": team_id, **attempt},
+                    aggregate_id=attempt_id,
+                    parent_id=task_block_id,
+                ))
+            elif attempt_block_id in self._active:
+                if source_type in {"attempt.accepted", "attempt.rejected", "attempt.failed", "attempt.cancelled"}:
+                    outcome = {
+                        "attempt.accepted": "accepted",
+                        "attempt.rejected": "rejected",
+                        "attempt.failed": "failed",
+                        "attempt.cancelled": "cancelled",
+                    }[source_type]
+                    produced.append(self._close_block(
+                        "team.attempt", attempt_id, attempt_block_id, outcome, attempt,
+                    ))
+                else:
+                    produced.append(self._delta_block(
+                        "team.attempt", attempt_id, "team-attempt", attempt,
+                        block_id=attempt_block_id, event_suffix="updated",
+                    ))
+            return produced
+
         if source_type == "task.created":
             task = payload.get("task") if isinstance(payload.get("task"), dict) else {}
             task_block_id = self._team_task_block_id(team_id, task_id)

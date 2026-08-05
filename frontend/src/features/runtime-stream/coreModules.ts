@@ -15,6 +15,7 @@ import {
 } from './CoreBlockViews';
 import {
   TeamActivityBlockView,
+  TeamAttemptBlockView,
   TeamBlockView,
   TeamMailBlockView,
   TeamMemberBlockView,
@@ -134,6 +135,7 @@ export function createCoreBlockRegistry(): BlockRegistry {
   registry.register(recordModule('team', 'Team', TeamBlockView));
   registry.register(recordModule('team-member', 'Team Member', TeamMemberBlockView));
   registry.register(recordModule('team-task', 'Team Task', TeamTaskBlockView));
+  registry.register(recordModule('team-attempt', 'Task Attempt', TeamAttemptBlockView));
   registry.register(teamActivityModule);
   registry.register(recordModule('team-mail', 'Team Mail', TeamMailBlockView));
   return registry;

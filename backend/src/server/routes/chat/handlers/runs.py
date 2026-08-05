@@ -27,6 +27,8 @@ class TeamMailRequest(BaseModel):
 
     recipient: str = Field(min_length=1)
     content: str = Field(min_length=1, max_length=20_000)
+    dispatch_mode: str = Field(default="context", alias="dispatchMode")
+    task_id: str = Field(default="", alias="taskId")
 
 
 async def _get_project_run(run_id: str, project_id: str):
@@ -54,6 +56,8 @@ async def send_team_mail(
         message = await service.send_user_mail(
             recipient=data.recipient,
             content=data.content,
+            dispatch_mode=data.dispatch_mode,
+            task_id=data.task_id,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

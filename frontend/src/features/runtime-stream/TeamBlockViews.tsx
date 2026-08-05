@@ -231,6 +231,11 @@ export function TeamTaskBlockView({ block }: { block: DisplayBlock<TeamRecord> }
   return <EntityFallback icon={<CheckCircle2 size={14} />} title={text(block.data.title, 'Task')} block={block} />;
 }
 
+export function TeamAttemptBlockView({ block }: { block: DisplayBlock<TeamRecord> }) {
+  const ordinal = text(block.data.ordinal);
+  return <EntityFallback icon={<Clock3 size={14} />} title={`Attempt ${ordinal || '?'}`} block={block} />;
+}
+
 export function TeamActivityBlockView({ block }: { block: DisplayBlock<TeamRecord> }) {
   return <EntityFallback icon={<MessageSquareText size={14} />} title="Member 过程" block={block} />;
 }
@@ -440,6 +445,7 @@ function MemberList({ members, tasks }: { members: TeamRecordBlock[]; tasks: Tea
 
 function MailboxPanel({ root, members, mails }: { root: TeamRecordBlock; members: TeamRecordBlock[]; mails: TeamRecordBlock[] }) {
   const [recipient, setRecipient] = useState('broadcast');
+  const [dispatchMode, setDispatchMode] = useState<'context' | 'continue_task' | 'new_task'>('context');
   const [content, setContent] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
@@ -457,7 +463,7 @@ function MailboxPanel({ root, members, mails }: { root: TeamRecordBlock; members
       const response = await fetch(resolveApiUrl(`/api/chat/runs/${encodeURIComponent(runId)}/team/mail?projectId=${encodeURIComponent(projectId)}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recipient, content: content.trim() }),
+        body: JSON.stringify({ recipient, content: content.trim(), dispatchMode }),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => ({})) as { detail?: string };
@@ -497,13 +503,30 @@ function MailboxPanel({ root, members, mails }: { root: TeamRecordBlock; members
         <div className="sticky bottom-0 border-t border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
           <Select
             value={recipient}
-            onChange={(value) => setRecipient(String(value))}
+            onChange={(value) => {
+              const nextRecipient = String(value);
+              setRecipient(nextRecipient);
+              if (nextRecipient === 'broadcast') setDispatchMode('context');
+            }}
             options={[
               { label: '广播给全部成员', value: 'broadcast' },
               ...members.map((member) => ({
                 label: text(member.data.name, 'Member'),
                 value: text(member.data.memberId, text(member.data.id)),
               })),
+            ]}
+            style={{ width: '100%' }}
+          />
+          <Select
+            className="mt-2"
+            value={recipient === 'broadcast' ? 'context' : dispatchMode}
+            onChange={(value) => setDispatchMode(value as 'context' | 'continue_task' | 'new_task')}
+            options={[
+              { label: '仅补充信息', value: 'context' },
+              ...(recipient === 'broadcast' ? [] : [
+                { label: '要求继续执行当前任务', value: 'continue_task' },
+                { label: '创建一个追加任务', value: 'new_task' },
+              ]),
             ]}
             style={{ width: '100%' }}
           />

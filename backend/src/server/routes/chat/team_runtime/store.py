@@ -4,6 +4,7 @@
 """
 
 import json
+import hashlib
 import os
 import re
 import threading
@@ -19,6 +20,7 @@ TERMINAL_TASK_STATUSES = {"succeeded", "failed", "cancelled"}
 TEAM_RUN_ID_PATTERN = re.compile(r"^trun_[0-9a-f]{32}$")
 MEMBER_ID_PATTERN = re.compile(r"^(leader|member_[0-9a-f]{12})$")
 TASK_ID_PATTERN = re.compile(r"^task_[0-9a-f]{12}$")
+ATTEMPT_ID_PATTERN = re.compile(r"^attempt_[0-9a-f]{12}$")
 MAIL_ID_PATTERN = re.compile(r"^mail_[0-9a-f]{12}$")
 
 
@@ -164,6 +166,7 @@ class TeamStore:
                 {
                     **task,
                     "blocked": self.is_blocked(task),
+                    "attemptCount": len(self.attempts(str(task["id"]))),
                     "briefPreview": self.task_brief(str(task["id"]))[:2_000],
                     "resultPreview": self.task_result(str(task["id"]))[:4_000],
                 }
@@ -310,6 +313,10 @@ class TeamStore:
                 "sessionKey": f"{self.ref.id}:{member_id}",
                 "runtimePrompt": runtime_prompt.strip(),
                 "activeTaskId": "",
+                "activeAttemptId": "",
+                "lastTaskId": "",
+                "lastAttemptId": "",
+                "attemptCount": 0,
                 "createdAt": now,
                 "updatedAt": now,
             }
@@ -323,13 +330,25 @@ class TeamStore:
             self.write_snapshot()
             return member
 
-    def set_member_status(self, member_id: str, status: str, *, active_task_id: str = "") -> dict[str, Any]:
+    def set_member_status(
+        self,
+        member_id: str,
+        status: str,
+        *,
+        active_task_id: str = "",
+        active_attempt_id: str = "",
+    ) -> dict[str, Any]:
         with self._lock:
             member = self.member(member_id)
+            previous_task_id = str(member.get("activeTaskId") or "")
+            previous_attempt_id = str(member.get("activeAttemptId") or "")
             member = {
                 **member,
                 "status": status,
                 "activeTaskId": active_task_id,
+                "activeAttemptId": active_attempt_id,
+                "lastTaskId": previous_task_id or str(member.get("lastTaskId") or ""),
+                "lastAttemptId": previous_attempt_id or str(member.get("lastAttemptId") or ""),
                 "updatedAt": utc_now(),
             }
             self._write_json(self._member_path(member_id), member)
@@ -358,9 +377,12 @@ class TeamStore:
         assigned_member_id: str = "",
         depends_on: list[str] | None = None,
         priority: int = 0,
+        origin: str = "leader",
+        origin_mail_id: str = "",
     ) -> dict[str, Any]:
         with self._lock:
-            self.member(created_by)
+            if created_by != "user":
+                self.member(created_by)
             if assigned_member_id:
                 member = self.member(assigned_member_id)
                 if member.get("role") == "leader":
@@ -382,6 +404,13 @@ class TeamStore:
                 "status": "queued",
                 "assignedMemberId": assigned_member_id,
                 "ownerMemberId": "",
+                "currentAttemptId": "",
+                "acceptedAttemptId": "",
+                "attemptCount": 0,
+                "reviewCount": 0,
+                "lastReviewReason": "",
+                "origin": origin,
+                "originMailId": origin_mail_id,
                 "dependsOn": dependencies,
                 "priority": int(priority),
                 "createdBy": created_by,
@@ -412,6 +441,50 @@ class TeamStore:
                 )
             self.write_snapshot()
             return task
+
+    def request_task_rework(
+        self,
+        *,
+        task_id: str,
+        member_id: str,
+        reason: str,
+        origin_mail_id: str = "",
+    ) -> dict[str, Any]:
+        """撤销已验收 Task 并重新排队，保留历史 Attempt。"""
+
+        with self._lock:
+            task = self.task(task_id)
+            if task.get("status") != "succeeded":
+                raise TeamStoreError("只有已完成任务可以发起继续执行")
+            assigned = str(task.get("assignedMemberId") or task.get("ownerMemberId") or "")
+            if assigned and assigned != member_id:
+                raise TeamStoreError("只能让原任务成员继续执行")
+            self.member(member_id)
+            now = utc_now()
+            rework = {
+                **task,
+                "status": "queued",
+                "assignedMemberId": member_id,
+                "ownerMemberId": "",
+                "currentAttemptId": "",
+                "acceptedAttemptId": "",
+                "completedAt": "",
+                "failureReason": "",
+                "lastReviewReason": reason.strip() or "用户要求继续执行",
+                "origin": "user_mail",
+                "originMailId": origin_mail_id,
+                "updatedAt": now,
+            }
+            self._write_json(self._task_path(task_id) / "task.json", rework)
+            self._record(
+                "task.rework.requested",
+                actor_id="user",
+                task_id=task_id,
+                status="queued",
+                payload={"task": self._public_task(rework), "message": rework["lastReviewReason"]},
+            )
+            self.write_snapshot()
+            return rework
 
     def task(self, task_id: str) -> dict[str, Any]:
         path = self._task_path(task_id) / "task.json"
@@ -465,11 +538,59 @@ class TeamStore:
                     **task,
                     "status": "running",
                     "ownerMemberId": member_id,
+                    "currentAttemptId": f"attempt_{uuid.uuid4().hex[:12]}",
                     "claimedAt": now,
                     "updatedAt": now,
                 }
                 self._write_json(task_path / "task.json", task)
-                self.set_member_status(member_id, "running", active_task_id=task_id)
+                attempt_id = str(task["currentAttemptId"])
+                attempt_path = task_path / "attempts" / attempt_id
+                attempt_path.mkdir(parents=True, exist_ok=False)
+                attempt = {
+                    "id": attempt_id,
+                    "teamRunId": self.ref.id,
+                    "taskId": task_id,
+                    "memberId": member_id,
+                    "ordinal": int(task.get("attemptCount") or 0) + 1,
+                    "status": "running",
+                    "trigger": "initial" if not task.get("attemptCount") else "retry",
+                    "triggerMailId": str(task.get("originMailId") or ""),
+                    "instruction": "",
+                    "resultPath": "result.md",
+                    "resultHash": "",
+                    "startedAt": now,
+                    "submittedAt": "",
+                    "reviewedAt": "",
+                    "failureReason": "",
+                }
+                self._write_json(attempt_path / "attempt.json", attempt)
+                (attempt_path / "instruction.md").write_text("", encoding="utf-8")
+                (attempt_path / "result.md").write_text("", encoding="utf-8")
+                task["attemptCount"] = int(task.get("attemptCount") or 0) + 1
+                self._write_json(task_path / "task.json", task)
+                member = self.member(member_id)
+                self._write_json(self._member_path(member_id), {
+                    **member,
+                    "status": "running",
+                    "activeTaskId": task_id,
+                    "activeAttemptId": attempt_id,
+                    "attemptCount": int(member.get("attemptCount") or 0) + 1,
+                    "updatedAt": now,
+                })
+                self._record(
+                    "attempt.created",
+                    actor_id=member_id,
+                    task_id=task_id,
+                    status="created",
+                    payload={"attempt": self._public_attempt(attempt)},
+                )
+                self._record(
+                    "attempt.started",
+                    actor_id=member_id,
+                    task_id=task_id,
+                    status="running",
+                    payload={"attempt": self._public_attempt(attempt)},
+                )
                 self._record(
                     "task.claimed",
                     actor_id=member_id,
@@ -495,10 +616,41 @@ class TeamStore:
             if unread:
                 raise TeamStoreError("Mailbox 存在未读消息，请先调用 team_read_mailbox 再提交结果")
             now = utc_now()
+            attempt_id = str(task.get("currentAttemptId") or "")
+            attempt = self.attempt(attempt_id) if attempt_id else None
+            if attempt is None:
+                raise TeamStoreError("当前任务缺少 active Attempt")
+            attempt_path = self._attempt_path(task_id, attempt_id)
+            (attempt_path / "result.md").write_text(normalized, encoding="utf-8")
             (self._task_path(task_id) / "result.md").write_text(normalized, encoding="utf-8")
+            submitted = {
+                **attempt,
+                "status": "submitted",
+                "submittedAt": now,
+                "resultHash": f"sha256:{hashlib.sha256(normalized.encode('utf-8')).hexdigest()}",
+            }
+            self._write_json(attempt_path / "attempt.json", submitted)
+            self._record(
+                "attempt.submitted",
+                actor_id=member_id,
+                task_id=task_id,
+                status="submitted",
+                payload={"attempt": self._public_attempt(submitted)},
+            )
+            accepted = {**submitted, "status": "accepted", "reviewedAt": now}
+            self._write_json(attempt_path / "attempt.json", accepted)
+            self._record(
+                "attempt.accepted",
+                actor_id="leader",
+                task_id=task_id,
+                status="accepted",
+                payload={"attempt": self._public_attempt(accepted)},
+            )
             task = {
                 **task,
                 "status": "succeeded",
+                "acceptedAttemptId": attempt_id,
+                "currentAttemptId": "",
                 "completedAt": now,
                 "updatedAt": now,
             }
@@ -532,10 +684,24 @@ class TeamStore:
             if task.get("status") not in {"queued", "running"}:
                 return task
             now = utc_now()
+            attempt_id = str(task.get("currentAttemptId") or "")
+            if attempt_id:
+                attempt_path = self._attempt_path(task_id, attempt_id)
+                attempt = self.attempt(attempt_id)
+                attempt = {**attempt, "status": "failed", "failureReason": reason.strip() or "Task failed"}
+                self._write_json(attempt_path / "attempt.json", attempt)
+                self._record(
+                    "attempt.failed",
+                    actor_id=member_id,
+                    task_id=task_id,
+                    status="failed",
+                    payload={"attempt": self._public_attempt(attempt), "message": attempt["failureReason"]},
+                )
             task = {
                 **task,
                 "status": "failed",
                 "ownerMemberId": member_id or str(task.get("ownerMemberId") or ""),
+                "currentAttemptId": "",
                 "failureReason": reason.strip() or "Task failed",
                 "completedAt": now,
                 "updatedAt": now,
@@ -563,10 +729,24 @@ class TeamStore:
             if task.get("status") in TERMINAL_TASK_STATUSES:
                 return task
             now = utc_now()
+            attempt_id = str(task.get("currentAttemptId") or "")
+            if attempt_id:
+                attempt_path = self._attempt_path(task_id, attempt_id)
+                attempt = self.attempt(attempt_id)
+                attempt = {**attempt, "status": "cancelled", "failureReason": reason.strip() or "Task cancelled"}
+                self._write_json(attempt_path / "attempt.json", attempt)
+                self._record(
+                    "attempt.cancelled",
+                    actor_id=member_id,
+                    task_id=task_id,
+                    status="cancelled",
+                    payload={"attempt": self._public_attempt(attempt), "message": attempt["failureReason"]},
+                )
             task = {
                 **task,
                 "status": "cancelled",
                 "ownerMemberId": member_id if member_id != "leader" else str(task.get("ownerMemberId") or ""),
+                "currentAttemptId": "",
                 "failureReason": reason.strip() or "Task cancelled",
                 "completedAt": now,
                 "updatedAt": now,
@@ -595,6 +775,7 @@ class TeamStore:
         kind: str = "message",
         subject: str = "",
         task_id: str = "",
+        dispatch_mode: str = "context",
     ) -> dict[str, Any]:
         with self._lock:
             normalized = content.strip()
@@ -616,6 +797,7 @@ class TeamStore:
                 "subject": subject,
                 "content": normalized,
                 "taskId": task_id,
+                "dispatchMode": dispatch_mode,
                 "createdAt": now,
             }
             self._append_jsonl(self.ref.path / "mailbox" / "messages.jsonl", message)
@@ -645,6 +827,7 @@ class TeamStore:
         kind: str = "message",
         subject: str = "",
         task_id: str = "",
+        dispatch_mode: str = "context",
     ) -> list[dict[str, Any]]:
         """把广播展开为每个目标成员一条独立持久化消息。"""
 
@@ -663,6 +846,7 @@ class TeamStore:
                 kind=kind,
                 subject=subject,
                 task_id=task_id,
+                dispatch_mode=dispatch_mode,
             )
             for recipient in recipients
         ]
@@ -845,6 +1029,10 @@ class TeamStore:
                 "role",
                 "status",
                 "activeTaskId",
+                "activeAttemptId",
+                "lastTaskId",
+                "lastAttemptId",
+                "attemptCount",
                 "createdAt",
                 "updatedAt",
             )
@@ -873,6 +1061,13 @@ class TeamStore:
                 "claimedAt",
                 "completedAt",
                 "failureReason",
+                "currentAttemptId",
+                "acceptedAttemptId",
+                "attemptCount",
+                "reviewCount",
+                "lastReviewReason",
+                "origin",
+                "originMailId",
                 "createdAt",
                 "updatedAt",
             )
@@ -882,6 +1077,23 @@ class TeamStore:
         if result_preview:
             result["resultPreview"] = result_preview[:4_000]
         return result
+
+    def attempts(self, task_id: str) -> list[dict[str, Any]]:
+        """读取 Task 的所有 Attempt，旧 Task 没有目录时返回空列表。"""
+
+        attempts_path = self._task_path(task_id) / "attempts"
+        if not attempts_path.exists():
+            return []
+        return [self._read_json(path) for path in sorted(attempts_path.glob("*/attempt.json"))]
+
+    def attempt(self, attempt_id: str) -> dict[str, Any] | None:
+        """按 Attempt ID 读取记录；不存在时返回 None。"""
+
+        if not ATTEMPT_ID_PATTERN.fullmatch(attempt_id):
+            raise TeamStoreError(f"Attempt ID 非法: {attempt_id}")
+        for path in self.ref.path.joinpath("tasks").glob(f"*/attempts/{attempt_id}/attempt.json"):
+            return self._read_json(path)
+        return None
 
     @staticmethod
     def _public_mail(message: dict[str, Any]) -> dict[str, Any]:
@@ -896,6 +1108,7 @@ class TeamStore:
             "subject": message.get("subject"),
             "content": str(message.get("content") or "")[:4_000],
             "taskId": message.get("taskId"),
+            "dispatchMode": message.get("dispatchMode") or "context",
             "createdAt": message.get("createdAt"),
         }
 
@@ -908,6 +1121,34 @@ class TeamStore:
         if not TASK_ID_PATTERN.fullmatch(task_id):
             raise TeamStoreError(f"Task ID 非法: {task_id}")
         return self.ref.path / "tasks" / task_id
+
+    def _attempt_path(self, task_id: str, attempt_id: str) -> Path:
+        if not ATTEMPT_ID_PATTERN.fullmatch(attempt_id):
+            raise TeamStoreError(f"Attempt ID 非法: {attempt_id}")
+        return self._task_path(task_id) / "attempts" / attempt_id
+
+    @staticmethod
+    def _public_attempt(attempt: dict[str, Any]) -> dict[str, Any]:
+        """裁剪 Attempt 展示字段，完整结果保留在 Attempt 文件中。"""
+
+        return {
+            key: attempt.get(key)
+            for key in (
+                "id",
+                "teamRunId",
+                "taskId",
+                "memberId",
+                "ordinal",
+                "status",
+                "trigger",
+                "triggerMailId",
+                "resultHash",
+                "startedAt",
+                "submittedAt",
+                "reviewedAt",
+                "failureReason",
+            )
+        }
 
     def _delivery_path(self, message_id: str) -> Path:
         if not MAIL_ID_PATTERN.fullmatch(message_id):
