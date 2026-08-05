@@ -9,13 +9,16 @@ Agent 工厂模块 — 从配置创建 AgentScope 2.0 Agent 实例
 5. 管理 Agent 实例缓存（避免重复创建）
 """
 
+import asyncio
+import codecs
 import os
+import signal
 import shutil
 from collections.abc import AsyncGenerator, Callable, Mapping
 from typing import Any
 
 from agentscope.agent import Agent
-from agentscope.agent._config import ContextConfig, ModelConfig, ReActConfig
+from agentscope.agent._config import ContextConfig, InjectionConfig, ModelConfig, ReActConfig
 from agentscope.mcp import HttpMCPConfig, MCPClient
 from agentscope.middleware import MiddlewareBase
 from agentscope.skill import LocalSkillLoader, Skill as AgentScopeSkill
@@ -27,11 +30,13 @@ from agentscope.permission._types import PermissionMode
 from agentscope.workspace import DockerWorkspace, LocalWorkspace
 
 from src.agents.model_factory import create_model_chain
+from src.agents.agentscope_usage_middleware import ProviderCacheUsageMiddleware
 from src.agents.runtime_types import (
     AgentGuardrails,
     AgentModelOptions,
     FallbackEventCallback,
     KnowledgeToolRuntimeSpec,
+    MAX_REACT_ITERS,
     McpRuntimeSpec,
     RuntimeToolScope,
     WORKSPACE_DIR,
@@ -90,6 +95,11 @@ def _build_context_config() -> ContextConfig:
         "description": "用于生成长上下文压缩摘要的结构化模型。",
         "type": "object",
         "properties": {
+            "title": {
+                "type": "string",
+                "maxLength": CONTEXT_SUMMARY_FIELD_LIMIT,
+                "description": "压缩摘要标题；AgentScope 2.0.5 可能在结构化输出中返回该字段。",
+            },
             "task_overview": {
                 "title": "Task Overview",
                 "type": "string",
@@ -176,6 +186,11 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
     ) -> AsyncGenerator[ToolChunk, None]:
         """在 Windows 使用 UTF-8 编码的 ``cmd.exe``，避免 PATH 或 Git Bash 依赖。"""
 
+        if os.name != "nt" and self._backend.__class__.__name__ == "LocalBackend":
+            async for chunk in self._call_local_streaming(command, timeout):
+                yield chunk
+            return
+
         if os.name != "nt":
             async for chunk in super().call(command, description, timeout):
                 yield chunk
@@ -226,6 +241,74 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
             is_last=True,
         )
 
+    async def _call_local_streaming(
+        self,
+        command: str,
+        timeout: int,
+    ) -> AsyncGenerator[ToolChunk, None]:
+        """本地 POSIX Bash 按可读 stdout 节奏返回，并在取消时终止进程组。"""
+
+        timeout_ms = min(timeout, 600000)
+        process = await asyncio.create_subprocess_exec(
+            "/bin/sh",
+            "-c",
+            command,
+            cwd=self._cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            start_new_session=True,
+        )
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        emitted_chars = 0
+        output_truncated = False
+        deadline = asyncio.get_running_loop().time() + timeout_ms / 1000.0
+        try:
+            assert process.stdout is not None
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                raw = await asyncio.wait_for(process.stdout.read(4096), timeout=remaining)
+                if not raw:
+                    break
+                text = decoder.decode(raw)
+                visible = text[:max(0, 30000 - emitted_chars)]
+                output_truncated = output_truncated or len(visible) < len(text)
+                emitted_chars += len(visible)
+                if visible:
+                    yield ToolChunk(
+                        content=[TextBlock(text=visible)],
+                        state=ToolResultState.RUNNING,
+                        is_last=False,
+                    )
+            tail = decoder.decode(b"", final=True)
+            visible_tail = tail[:max(0, 30000 - emitted_chars)]
+            output_truncated = output_truncated or len(visible_tail) < len(tail)
+            if visible_tail:
+                yield ToolChunk(
+                    content=[TextBlock(text=visible_tail)],
+                    state=ToolResultState.RUNNING,
+                    is_last=False,
+                )
+            exit_code = await process.wait()
+        except asyncio.TimeoutError:
+            await _terminate_posix_process_group(process)
+            yield _bash_error_chunk(command, f"命令在 {timeout_ms}ms 后超时。")
+            return
+        except asyncio.CancelledError:
+            await _terminate_posix_process_group(process)
+            raise
+
+        if exit_code != 0:
+            yield _bash_error_chunk(command, f"Shell 退出码为 {exit_code}。")
+            return
+        final_text = "\n... (output truncated)" if output_truncated else ""
+        yield ToolChunk(
+            content=[TextBlock(text=final_text)],
+            state=ToolResultState.SUCCESS,
+            is_last=True,
+        )
+
     async def check_permissions(self, tool_input: dict, context: PermissionContext) -> PermissionDecision:
         command = str(tool_input.get("command") or "")
         for blocked in self.shell_blacklist:
@@ -243,6 +326,18 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
             tool_input["timeout"] = max_timeout_ms
 
         return await super().check_permissions(tool_input, context)
+
+
+async def _terminate_posix_process_group(process: asyncio.subprocess.Process) -> None:
+    """终止 Bash 及其派生子进程，避免 Run cancel 后命令继续执行。"""
+
+    if process.returncode is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    await process.wait()
 
 
 def _resolve_windows_command_shell(
@@ -558,7 +653,7 @@ def get_or_create_agent(
         workspace = DockerWorkspace(
             workspace_id=f"agent-{agent_id}".replace(":", "-")[:120],
             base_image=guardrails.docker_image or "python:3.11-slim",
-            workdir=(
+            host_workdir=(
                 str(SANDBOX_ROOT / agent_id.replace(":", "-").replace("/", "-"))
                 if guardrails.persistent_sandbox
                 else None
@@ -599,15 +694,24 @@ def get_or_create_agent(
         ),
         state=agent_state,
         offloader=workspace,
-        middlewares=middlewares or [],
+        middlewares=[*(middlewares or []), ProviderCacheUsageMiddleware()],
         model_config=ModelConfig(
             max_retries=3,
             fallback_model=None,
         ),
         context_config=_build_context_config(),
         react_config=ReActConfig(
-            max_iters=max(1, min(int(model_options.max_react_iters if model_options else 40), 120)),
+            max_iters=max(
+                1,
+                min(
+                    int(model_options.max_react_iters if model_options else 40),
+                    MAX_REACT_ITERS,
+                ),
+            ),
         ),
+        # 2.0.5 默认注入时间、任务和上下文状态。升级阶段保持现有 prompt 行为，
+        # 后续若采用该能力需单独完成产品语义和 HINT_BLOCK 契约设计。
+        injection_config=InjectionConfig(inject_runtime_state=False),
     )
 
     # 缓存并返回

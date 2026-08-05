@@ -23,6 +23,10 @@ from src.agents.factory import RuntimeToolScope
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import ChatRunContext
 from src.server.routes.chat.runtime import _build_user_content, _guardrail_cache_key
+from src.server.routes.chat.runtime_events import (
+    agentscope_reply_error_message,
+    agentscope_reply_finished_reason,
+)
 from src.server.routes.chat.runtime_builder import build_main_agent_runtime_spec, create_main_agent_from_spec
 from src.server.routes.chat.team_runtime.store import TeamStore, TeamStoreError
 from src.server.routes.chat.team_runtime.tools import leader_tools, member_tools
@@ -39,7 +43,7 @@ DISABLED_TOOL_SCOPE = RuntimeToolScope(
 )
 MAX_AUTOMATIC_TOOL_DENIALS = 8
 LEADER_MAX_REACT_ITERS = 16
-MEMBER_MAX_REACT_ITERS = 32
+MEMBER_MAX_REACT_ITERS = 256
 MEMBER_RECOVERY_MAX_REACT_ITERS = 8
 SYNTHESIS_MAX_REACT_ITERS = 8
 MEMBER_RECOVERY_TOOLS = {
@@ -382,6 +386,19 @@ async def _run_agent_stream(
                         f"{MEMBER_RECOVERY_MAX_REACT_ITERS} 轮 ReAct 恢复预算{suffix}",
                     )
                 raise TeamSessionError("Team session 达到最大 ReAct 轮数")
+            if event_type == "REPLY_END":
+                finished_reason = agentscope_reply_finished_reason(data)
+                recovering_from_max_iters = (
+                    finished_reason == "exceed_max_iters"
+                    and resume_event is not None
+                    and iteration_recovery_used
+                )
+                if finished_reason != "completed" and not recovering_from_max_iters:
+                    detail = agentscope_reply_error_message(data)
+                    suffix = f"：{detail}" if detail else ""
+                    raise TeamSessionError(
+                        f"Team session 异常结束（{finished_reason}）{suffix}",
+                    )
             if event_type == "TEXT_BLOCK_DELTA":
                 delta = str(data.get("delta") or "")
                 output.append(delta)

@@ -6,7 +6,8 @@ import type { DisplaySnapshot } from './protocol';
 export interface TeamRuntimeContextValue {
   snapshot: DisplaySnapshot;
   openTeamId: string | null;
-  onOpenTeam: (teamBlockId: string) => void;
+  onOpenTeam: (teamBlockId: string, tab?: 'tasks' | 'members' | 'mail') => void;
+  openTeamTab: 'tasks' | 'members' | 'mail';
   onCloseTeam: () => void;
 }
 

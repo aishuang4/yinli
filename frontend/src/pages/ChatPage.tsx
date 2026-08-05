@@ -687,7 +687,9 @@ export function ChatPage() {
               key={activeAskUserInteraction.hitlRequest.interactionId}
               interaction={activeAskUserInteraction}
               pendingCount={pendingAskUserInteractions.length}
-              isResuming={state.isStreaming}
+              isResuming={
+                state.resolvingInteractionId === activeAskUserInteraction.hitlRequest.interactionId
+              }
               onResolve={resumeInteraction}
             />
           ) : pendingPlanReview ? (

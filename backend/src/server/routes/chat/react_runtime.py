@@ -275,6 +275,7 @@ async def execute_react_runtime(
         plan_mode_manager=plan_mode_manager,
         runtime_event_sources=runtime_event_sources,
         runtime_context=ctx.runtime_context,
+        deep_thinking=run_data.deep_thinking,
         sandbox=run_data.sandbox,
     ):
         yield event

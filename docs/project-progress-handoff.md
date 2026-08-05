@@ -1,12 +1,21 @@
 # 引力 YINLI 项目进展与协作交接
 
-> 更新时间：2026-07-27。本文只记录当前完成度、验证结果和已知缺口。
+> 更新时间：2026-07-31。本文只记录当前完成度、验证结果和已知缺口。
 
 ## 当前阶段
 
 项目已从功能原型进入 Runtime 与产品化收口阶段。当前定位是本地优先的桌面 Agent 工作站：ReAct 是唯一在线 architecture，`agent` / `team` 是显式 executor mode。
 
 当前综合成熟度约 79%：Runtime 内核、主要管理页面和 Workspace / Project Phase 0 至 Phase 3 可用，Artifact、自动化、评估和正式桌面发布仍未完成。
+
+### AgentScope 2.0.5 基线
+
+- Runtime 依赖已从 `2.0.3` 升级到 `2.0.5`，锁文件保持 MCP `1.27.2`，仅新增上游必需的 `tzdata`。
+- 已删除覆盖 `Agent._reasoning_impl` 的 usage patch，改由原生 middleware hook 采集 provider prompt cache usage。
+- Write / Edit 异步权限接口、Docker `host_workdir`、Reply `finished_reason` / `error` 和取消终态均已完成兼容适配。
+- 2.0.5 默认 runtime state injection 在工厂中显式关闭，现有 prompt、Plan middleware 和 Event Stream 边界不变。
+- 后端全量 `376 passed`，前端 lint/build、源码后端启动、OpenAPI、macOS arm64 onefile 构建和产物健康检查均通过。
+- 本机未配置模型 API key且 Docker daemon 未运行；真实供应商矩阵与 Docker 执行仍是发布前门禁，详见 `docs/agentscope-2.0.5-upgrade-plan.md`。
 
 ### Workspace / Project
 
@@ -106,7 +115,7 @@
 最近一次完整验证：
 
 ```text
-backend pytest: 359 passed
+backend pytest: 376 passed
 frontend build: passed
 frontend lint: passed
 /api/teams: 404
@@ -121,11 +130,18 @@ legacy teams / team_members tables: removed
 - `DelegateTask(explorer)` 完成前父 Agent 保持等待，父 Agent 消费子结果后才输出最终回答；刷新后 `kind=subagent` 仍为单一完成态 Block。
 - Subagents 页面可查看 completed invocation、结果、耗时和完整 transcript。
 
-2026-07-27 Team 流式回归：
+2026-07-27 Team 流式回归（AgentScope 2.0.3 基线）：
 
 - Team、Member 和 Task 按运行进度逐步进入同一 DisplaySnapshot Block Tree，任务完成数从 `1/4` 连续更新到 `4/4`。
 - 综合阶段逐条转发 `TEXT_BLOCK_DELTA`，最终答案从首个文本增量持续增长；`FINAL_ANSWER_REPLACE` 只做终态一致性校正。
 - 后端完整测试 359 项、前端 lint/build 和浏览器真实运行均通过，最终 Chat Run 正确收口为 `completed`。
+
+2026-07-31 AgentScope 2.0.5 升级验证：
+
+- 新增 17 项升级专项回归并纳入全量测试，总计 `376 passed`。
+- 前端 lint 和 production build 通过，最大主 chunk 仍约 410 KB。
+- 源码后端和 macOS arm64 onefile 后端均成功启动，`/api/health` 返回 200；源码 OpenAPI 路由加载完整。
+- onefile 产物由 PyInstaller 6.21.0 构建，AgentScope 内置工具脚本已被收集；Windows 真机仍按桌面发布计划单独验证。
 
 前端已通过轻量 Design 适配入口移除 `@agentscope-ai/design` 完整 barrel 的隐式依赖，React runtime 单独分包；当前最大 chunk 约 410 KB，生产构建不再产生大 chunk 警告。
 

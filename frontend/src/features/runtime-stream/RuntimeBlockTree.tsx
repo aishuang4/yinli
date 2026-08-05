@@ -20,6 +20,11 @@ export function RuntimeBlockTree({
   sessionId?: string;
 }) {
   const [openTeamId, setOpenTeamId] = useState<string | null>(null);
+  const [openTeamTab, setOpenTeamTab] = useState<'tasks' | 'members' | 'mail'>('tasks');
+  const openTeam = (teamBlockId: string, tab: 'tasks' | 'members' | 'mail' = 'tasks') => {
+    setOpenTeamId(teamBlockId);
+    setOpenTeamTab(tab);
+  };
   const childrenByParent = useMemo(() => {
     const result = new Map<string, string[]>();
     for (const id of snapshot.order) {
@@ -83,12 +88,13 @@ export function RuntimeBlockTree({
       <TeamRuntimeContext.Provider value={{
         snapshot,
         openTeamId,
-        onOpenTeam: setOpenTeamId,
+        openTeamTab,
+        onOpenTeam: openTeam,
         onCloseTeam: () => setOpenTeamId(null),
       }}>
         <div className="space-y-2">{(childrenByParent.get('') || []).map(renderBranch)}</div>
         {openTeamId
-          ? createPortal(<TeamConsole snapshot={snapshot} teamBlockId={openTeamId} />, document.body)
+          ? createPortal(<TeamConsole snapshot={snapshot} teamBlockId={openTeamId} initialTab={openTeamTab} />, document.body)
           : null}
       </TeamRuntimeContext.Provider>
     </RuntimeBlockActionsContext.Provider>

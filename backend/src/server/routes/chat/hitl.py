@@ -44,6 +44,8 @@ def _create_pending_interaction(
     assistant_tool_calls: list[ChatToolRun] | None = None,
     scope: str = "single",
     chat_data: dict | None = None,
+    plan_mode_manager: object | None = None,
+    runtime_event_sources: list[object] | None = None,
     run_id: str | None = None,
     persist: bool = True,
 ) -> PendingInteraction:
@@ -65,6 +67,8 @@ def _create_pending_interaction(
         skill_runs=skill_runs,
         scope=scope,
         chat_data=chat_data,
+        plan_mode_manager=plan_mode_manager,
+        runtime_event_sources=runtime_event_sources or [],
     )
     PENDING_INTERACTIONS[interaction.id] = interaction
     PENDING_AGENTS[interaction.id] = agent

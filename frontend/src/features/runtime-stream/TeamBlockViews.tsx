@@ -109,9 +109,10 @@ export function TeamBlockView({ block }: { block: DisplayBlock<TeamRecord> }) {
   const active = block.phase === 'open';
   return (
     <section className="overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
+      <div className="flex items-stretch border-b border-[var(--color-border)]">
       <button
         type="button"
-        className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-[var(--color-bg-hover)]"
+        className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-[var(--color-bg-hover)]"
         onClick={() => runtime?.onOpenTeam(block.id)}
         aria-label="打开 Team Console"
       >
@@ -131,8 +132,22 @@ export function TeamBlockView({ block }: { block: DisplayBlock<TeamRecord> }) {
         {active ? <Loader2 size={14} className="animate-spin text-[var(--color-accent-text)]" /> : null}
         <PanelRightOpen size={15} className="text-[var(--color-text-tertiary)]" />
       </button>
+      {active ? (
+        <Tooltip title="向 Team 成员发送干预消息" placement="top" mode="dark">
+          <button
+            type="button"
+            className="flex shrink-0 items-center gap-1.5 border-l border-[var(--color-border)] px-3 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+            onClick={() => runtime?.onOpenTeam(block.id, 'mail')}
+            aria-label="向 Team 成员发送干预消息"
+          >
+            <Send size={15} />
+            <span>发送消息</span>
+          </button>
+        </Tooltip>
+      ) : null}
+      </div>
 
-      <div className="border-t border-[var(--color-border)] px-3 py-3">
+      <div className="px-3 py-3">
         <div className="h-1 overflow-hidden rounded-full bg-[var(--color-bg-primary)]">
           <div
             className={`h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-500 ${active ? 'animate-pulse' : ''}`}
@@ -245,13 +260,13 @@ function EntityFallback({
 
 type TeamTab = 'tasks' | 'members' | 'mail';
 
-export function TeamConsole({ snapshot, teamBlockId }: { snapshot: DisplaySnapshot; teamBlockId: string }) {
+export function TeamConsole({ snapshot, teamBlockId, initialTab = 'tasks' }: { snapshot: DisplaySnapshot; teamBlockId: string; initialTab?: TeamTab }) {
   const runtime = useContext(TeamRuntimeContext);
   const root = selectTeamRoot(snapshot, teamBlockId);
   const members = useMemo(() => selectTeamBlocks(snapshot, teamBlockId, 'team-member'), [snapshot, teamBlockId]);
   const tasks = useMemo(() => selectTeamBlocks(snapshot, teamBlockId, 'team-task'), [snapshot, teamBlockId]);
   const mails = useMemo(() => selectTeamBlocks(snapshot, teamBlockId, 'team-mail'), [snapshot, teamBlockId]);
-  const [tab, setTab] = useState<TeamTab>('tasks');
+  const [tab, setTab] = useState<TeamTab>(initialTab);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   if (!root) return null;
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) || null;
@@ -428,7 +443,8 @@ function MailboxPanel({ root, members, mails }: { root: TeamRecordBlock; members
   const [content, setContent] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
-  const active = root.phase === 'open' && text(root.data.status, 'running') === 'running';
+  const rootStatus = text(root.data.phase, text(root.data.status, root.phase === 'open' ? 'running' : 'completed'));
+  const active = root.phase === 'open' && !['completed', 'succeeded', 'failed', 'cancelled', 'stopped'].includes(rootStatus);
   const memberNames = new Map(members.map((member) => [text(member.data.memberId, text(member.data.id)), text(member.data.name, 'Member')]));
 
   const send = async () => {

@@ -291,21 +291,30 @@ def _record_agent_scope_event(
         return
     tool_name = str(event_data.get("tool_call_name") or "")
     model_name = str(event_data.get("model_name") or "")
+    finished_reason = str(event_data.get("finished_reason") or "completed").lower()
+    reply_failed = event_type == "REPLY_END" and finished_reason != "completed"
+    model_interrupted = event_type == "MODEL_CALL_END" and finished_reason == "interrupted"
     title = {
         "REPLY_START": "Reply started",
-        "REPLY_END": "Reply completed",
+        "REPLY_END": (
+            "Reply completed" if not reply_failed else f"Reply {finished_reason.replace('_', ' ')}"
+        ),
         "MODEL_CALL_START": f"Model call started{f': {model_name}' if model_name else ''}",
-        "MODEL_CALL_END": f"Model call completed{f': {model_name}' if model_name else ''}",
+        "MODEL_CALL_END": (
+            f"Model call {'interrupted' if model_interrupted else 'completed'}"
+            f"{f': {model_name}' if model_name else ''}"
+        ),
         "TOOL_CALL_START": f"Tool call started{f': {tool_name}' if tool_name else ''}",
         "TOOL_CALL_END": f"Tool call ended{f': {tool_name}' if tool_name else ''}",
         "TOOL_RESULT_START": f"Tool result started{f': {tool_name}' if tool_name else ''}",
         "TOOL_RESULT_END": f"Tool result completed{f': {tool_name}' if tool_name else ''}",
     }.get(event_type, event_type)
-    status = (
-        "completed"
-        if event_type in {"REPLY_END", "MODEL_CALL_END", "TOOL_RESULT_END"}
-        else "running"
-    )
+    if reply_failed or model_interrupted:
+        status = "failed"
+    elif event_type in {"REPLY_END", "MODEL_CALL_END", "TOOL_RESULT_END"}:
+        status = "completed"
+    else:
+        status = "running"
     payload = dict(event_data)
     if "delta" in payload:
         payload["delta"] = _trim_text(str(payload.get("delta") or ""), 240)

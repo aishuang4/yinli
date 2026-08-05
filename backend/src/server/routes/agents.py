@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 import uuid
 
 from src.agents.factory import invalidate_agent
-from src.agents.runtime_types import WORKSPACE_DIR
+from src.agents.runtime_types import MAX_REACT_ITERS, WORKSPACE_DIR
 from src.config.runtime_paths import DATA_ROOT
 from src.config.runtime_settings import get_current_model_options, get_effective_model_settings
 from src.storage.database import (
@@ -54,7 +54,13 @@ class ModelConfig(BaseModel):
     temperature: float = Field(default=0.7, ge=0, le=2, description="温度参数")
     top_p: float = Field(default=0.8, ge=0, le=1, description="核采样参数")
     max_tokens: int = Field(default=4096, gt=0, description="最大输出 token 数")
-    max_react_iters: int = Field(default=40, ge=1, le=120, alias="maxReactIters", description="ReAct 最大循环次数")
+    max_react_iters: int = Field(
+        default=40,
+        ge=1,
+        le=MAX_REACT_ITERS,
+        alias="maxReactIters",
+        description="ReAct 最大循环次数",
+    )
 
     model_config = {"populate_by_name": True}
 

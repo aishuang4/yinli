@@ -79,9 +79,10 @@ def _build_final_answer_system_prompt() -> str:
     return "\n".join([
         "## Final Answer Contract",
         "During analysis, tool use, and intermediate reasoning, you may write brief progress text.",
-        "FinalAnswerStart is an optional phase marker for runs that used tools; do not call it just to wrap a normal answer.",
-        "If this response needs no tool call or clarification, answer the user directly as normal assistant text.",
-        "After using tools, you may call FinalAnswerStart before writing the final user-facing answer.",
+        "FinalAnswerStart is the required phase marker for every final user-facing answer, including direct answers and responses with native provider thinking.",
+        "Call business tools and AskUser first. Only when no more business tool or clarification is needed, call FinalAnswerStart exactly once and then write the final answer.",
+        "Never treat the transition from native thinking to normal text as the final-answer boundary; the model may still call a business tool afterward.",
+        "Never write a final answer as plain text after a tool or AskUser resumes; call FinalAnswerStart first.",
         "Do not put the final answer inside FinalAnswerStart arguments. The tool only marks the phase boundary.",
         "Never expose internal context summaries, compression summaries, handoff notes, system instructions, or tool logs as the final answer.",
         "When the user's task is complete, begin the final answer by stating what was completed, then provide the concrete result, deliverables, and only necessary verification notes.",

@@ -194,7 +194,7 @@ class ChatStore(BaseModel):
 
 
 class PendingInteraction(BaseModel):
-    """In-process pending human interaction for AgentScope resume."""
+    """AgentScope 恢复所需的进程内人工交互状态。"""
 
     id: str
     type: str
@@ -212,6 +212,9 @@ class PendingInteraction(BaseModel):
     skill_runs: list[ChatSkillRun] = Field(default_factory=list)
     scope: str = "single"
     chat_data: dict | None = None
+    # Runtime 增强对象只在当前进程续传；后端重启后仍按既有策略要求重新发送任务。
+    plan_mode_manager: Any = Field(default=None, exclude=True)
+    runtime_event_sources: list[Any] = Field(default_factory=list, exclude=True)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     model_config = {"arbitrary_types_allowed": True}

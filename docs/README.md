@@ -1,6 +1,6 @@
 # 引力 YINLI 文档索引
 
-> 状态：2026-07-27 生效。本文是 `docs/` 的唯一索引。
+> 状态：2026-08-05 生效。本文是 `docs/` 的唯一索引。
 
 ## 事实与规范
 
@@ -29,6 +29,9 @@
 
 ## 后续路线
 
+- `docs/team-member-lifecycle-v2.md`：Team Member 长生命周期、TaskAttempt、多轮返工、Mailbox 唤醒和 Reviewer 闭环方案。
+- `docs/agentscope-2.0.5-upgrade-plan.md`：AgentScope `2.0.3 -> 2.0.5` Runtime 基线迁移实施记录、兼容改造、验收结果、发布门禁与回滚方案。
+- `docs/agentscope-2.0.5-manual-test-script.md`：AgentScope `2.0.5` 人工验收步骤、精确提示词、预期结果和发布阻断条件。
 - `docs/dynamic-workflows-plan.md`：Dynamic Workflow 的 Script Review、Runtime Cockpit 和 AgentScope Bridge 路线。
 - `docs/electron-packaging-plan.md`：桌面正式打包、签名、公证、数据目录和 Windows 验证。
 

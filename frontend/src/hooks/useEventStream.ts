@@ -32,6 +32,7 @@ export type {
 function initialState(): StreamState {
   return {
     isStreaming: false,
+    resolvingInteractionId: '',
     currentRunId: '',
     runStartedAt: '',
     runCompletedAt: '',
@@ -45,6 +46,7 @@ export function useEventStream(): UseEventStreamReturn {
   const [state, setReactState] = useState<StreamState>(() => initialState());
   const stateRef = useRef(state);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const activeSubscriptionRunIdRef = useRef('');
 
   const setState = useCallback((updater: (current: StreamState) => StreamState) => {
     const next = updater(stateRef.current);
@@ -101,6 +103,7 @@ export function useEventStream(): UseEventStreamReturn {
   const reset = useCallback(() => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    activeSubscriptionRunIdRef.current = '';
     const next = initialState();
     stateRef.current = next;
     setReactState(next);
@@ -111,13 +114,20 @@ export function useEventStream(): UseEventStreamReturn {
     if (runId) {
       try {
         const params = new URLSearchParams({ projectId: activeProjectId });
-        await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/cancel?${params.toString()}`, { method: 'POST' });
+        const response = await fetch(
+          `/api/chat/runs/${encodeURIComponent(runId)}/cancel?${params.toString()}`,
+          { method: 'POST' },
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        // 保持现有订阅，等待后端 cancelled close Frame 与 done 收口全部 Block。
+        return;
       } catch (error) {
         console.warn('[RuntimeStream] cancel failed:', error);
       }
     }
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    activeSubscriptionRunIdRef.current = '';
     setState((current) => ({
       ...current,
       isStreaming: false,
@@ -131,6 +141,7 @@ export function useEventStream(): UseEventStreamReturn {
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    activeSubscriptionRunIdRef.current = runId;
     const current = stateRef.current;
     const sameRun = current.currentRunId === runId;
     const afterSeq = sameRun ? current.runtime.snapshot.lastSeq : 0;
@@ -171,6 +182,10 @@ export function useEventStream(): UseEventStreamReturn {
         error: message,
         runtime: { ...value.runtime, connection: 'protocol_error' },
       }));
+    } finally {
+      if (abortControllerRef.current === controller) {
+        activeSubscriptionRunIdRef.current = '';
+      }
     }
   }, [activeProjectId, readEventStream, setState]);
 
@@ -223,8 +238,12 @@ export function useEventStream(): UseEventStreamReturn {
     externalResults: Record<string, string> = {},
     rememberApproval = false,
   ) => {
-    abortControllerRef.current?.abort();
-    setState((value) => ({ ...value, isStreaming: true, error: null }));
+    setState((value) => ({
+      ...value,
+      isStreaming: true,
+      resolvingInteractionId: interactionId,
+      error: null,
+    }));
     try {
       const response = await fetch('/api/chat/resume/start', {
         method: 'POST',
@@ -235,10 +254,23 @@ export function useEventStream(): UseEventStreamReturn {
       const payload = await response.json();
       const runId = String(payload?.runId || '');
       if (!runId) throw new Error('Run was not resumed');
-      await subscribeRun(runId);
+      if (activeSubscriptionRunIdRef.current !== runId) {
+        void subscribeRun(runId);
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      setState((value) => ({ ...value, isStreaming: false, error: message }));
+      setState((value) => ({
+        ...value,
+        isStreaming: Boolean(activeSubscriptionRunIdRef.current),
+        error: message,
+      }));
+    } finally {
+      setState((value) => ({
+        ...value,
+        resolvingInteractionId: value.resolvingInteractionId === interactionId
+          ? ''
+          : value.resolvingInteractionId,
+      }));
     }
   }, [setState, subscribeRun]);
 

@@ -35,21 +35,21 @@ class ScopedWrite(Write):
             context,
         )
 
-    def match_rule(
+    async def match_rule(
         self,
         rule_content: str | None,
         tool_input: dict[str, Any],
     ) -> bool:
-        return super().match_rule(
+        return await super().match_rule(
             rule_content,
             resolved_tool_input(tool_input, "file_path", base_dir=self.base_dir, scope_dir=self.scope_dir),
         )
 
-    def generate_suggestions(
+    async def generate_suggestions(
         self,
         tool_input: dict[str, Any],
     ) -> list[PermissionRule]:
-        return super().generate_suggestions(
+        return await super().generate_suggestions(
             resolved_tool_input(tool_input, "file_path", base_dir=self.base_dir, scope_dir=self.scope_dir),
         )
 

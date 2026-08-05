@@ -16,7 +16,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.server.routes import agent_builder, agents, chat, health, mcp, memory, sandbox, settings as settings_routes, skills, subagents, tools, traces, workflows, workspaces
-from src.agents.agentscope_usage_patch import patch_agentscope_usage_events
 from src.config.settings import settings
 from src.storage.database import close_db, init_db, list_projects, reconcile_interrupted_subagent_invocations
 from src.subagents.task_store import reconcile_interrupted_file_tasks
@@ -33,7 +32,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     关闭时：关闭数据库连接、清理资源
     """
     # === 启动 ===
-    patch_agentscope_usage_events()
     await init_db()
     interrupted_subagents = reconcile_interrupted_subagent_invocations()
     interrupted_subagent_files = reconcile_interrupted_file_tasks([

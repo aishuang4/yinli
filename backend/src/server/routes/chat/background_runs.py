@@ -90,6 +90,18 @@ async def get_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
     return _run_from_persisted_record(record) if record else None
 
 
+async def attach_chat_background_run_task(run_id: str, task: asyncio.Task) -> bool:
+    """把 HITL resume 等后续执行任务绑定回原 Run，供 cancel 精确中止。"""
+
+    async with _runs_lock:
+        run = _runs.get(run_id)
+        if run is None or run.status in TERMINAL_RUN_STATUSES:
+            task.cancel()
+            return False
+        run.async_task = task
+        return True
+
+
 async def list_chat_background_runs(project_id: str | None = None) -> list[ChatBackgroundRun]:
     async with _runs_lock:
         by_id = {
@@ -157,7 +169,7 @@ async def subscribe_chat_background_run(
         if run is not None:
             queue = asyncio.Queue()
             run.subscribers.add(queue)
-            should_wait = run.status not in TERMINAL_RUN_STATUSES and not is_waiting_run_status(run.status)
+            should_wait = run.status not in TERMINAL_RUN_STATUSES
         else:
             should_wait = False
     if run is None:
@@ -276,7 +288,8 @@ async def relay_chat_background_run_events(
             yield frame
     finally:
         _finalize_run_persistence(run)
-        await _close_subscribers(run)
+        if run.status in TERMINAL_RUN_STATUSES:
+            await _close_subscribers(run)
         CURRENT_BACKGROUND_RUN_ID.reset(token)
 
 
@@ -316,7 +329,8 @@ async def _consume_source_events(run: ChatBackgroundRun, factory: SourceStreamFa
         await _project_terminal(run, "failed", {"message": str(exc)})
     finally:
         _finalize_run_persistence(run)
-        await _close_subscribers(run)
+        if run.status in TERMINAL_RUN_STATUSES:
+            await _close_subscribers(run)
         CURRENT_BACKGROUND_RUN_ID.reset(token)
 
 
@@ -340,7 +354,6 @@ async def _ingest_source_event(run: ChatBackgroundRun, source_event: SourceEvent
         "CLARIFICATION_REQUIRED",
     }:
         _persist_display_snapshot(run)
-        await _close_subscribers(run)
     return frames
 
 

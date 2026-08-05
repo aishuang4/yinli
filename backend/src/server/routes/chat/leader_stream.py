@@ -23,6 +23,8 @@ from src.server.routes.chat.final_answer_recovery import (
     stream_final_answer_recovery_events as _stream_final_answer_recovery_events,
 )
 from src.server.routes.chat.runtime_events import (
+    agentscope_reply_error_message,
+    agentscope_reply_finished_reason,
     runtime_event_from_agentscope_event,
     runtime_trace_source_event,
     runtime_source_event,
@@ -82,6 +84,9 @@ class LeaderStreamState:
     subagent_completion_blocked_reason: str = ""
     subagent_completion_block_count: int = 0
     blocked_final_text: str = ""
+    reply_finished_reason: str = "completed"
+    reply_error: str = ""
+    reply_had_thinking: bool = False
 
 
 def _collect_pending_tool_batch(
@@ -169,6 +174,7 @@ async def stream_leader_agent_reply(
     skill_runs: list[ChatSkillRun],
     plan_mode_manager: object | None = None,
     runtime_event_sources: list[object] | None = None,
+    deep_thinking: bool = False,
     sandbox: bool = False,
 ) -> AsyncGenerator[str, None]:
     """消费 Leader AgentScope 事件流，并处理 HITL / clarification 早停。"""
@@ -186,8 +192,14 @@ async def stream_leader_agent_reply(
         if event_type == "REPLY_START":
             state.pending_text = ""
             state.reply_had_tool_call = False
+            state.reply_finished_reason = "completed"
+            state.reply_error = ""
+            state.reply_had_thinking = False
         elif event_type in {"TOOL_CALL_START", "TOOL_CALL_DELTA", "TOOL_CALL_END"}:
             state.reply_had_tool_call = True
+        elif event_type == "REPLY_END":
+            state.reply_finished_reason = agentscope_reply_finished_reason(event_data)
+            state.reply_error = agentscope_reply_error_message(event_data)
         if event_type == "EXCEED_MAX_ITERS":
             state.exceeded_max_iters = True
             for reasoning_event in _flush_pending_reasoning_events(
@@ -368,9 +380,11 @@ async def stream_leader_agent_reply(
                 state.pending_text += delta
             continue
         elif event_type == "THINKING_BLOCK_DELTA":
+            state.reply_had_thinking = True
             state.assistant_thinking += str(event_data.get("delta", ""))
 
-        if event_type == "REPLY_END" and skill_runs:
+        reply_completed = state.reply_finished_reason == "completed"
+        if event_type == "REPLY_END" and skill_runs and reply_completed:
             completed_skill_runs = _set_skill_run_status(skill_runs, "completed")
             for skill in completed_skill_runs:
                 yield runtime_trace_source_event(
@@ -388,41 +402,41 @@ async def stream_leader_agent_reply(
                 "status": "completed",
             })
 
-        if event_type == "REPLY_END" and state.pending_text:
+        if event_type == "REPLY_END" and state.pending_text and not reply_completed:
+            for reasoning_event in _flush_pending_reasoning_events(
+                state,
+                session_id=session_id,
+                stream_scope=stream_scope,
+                source_event_type=event_type,
+                agent_id=agent_id,
+                agent_name=agent_name,
+            ):
+                yield reasoning_event
+
+        if event_type == "REPLY_END" and state.pending_text and reply_completed:
             completion_error = _runtime_completion_error(runtime_event_sources or [])
             if completion_error:
                 state.subagent_completion_blocked_reason = completion_error
                 state.blocked_final_text = state.pending_text
                 state.pending_text = ""
                 continue
-            if state.final_answer_started or not state.reply_had_tool_call:
-                pending = state.pending_text
-                state.pending_text = ""
-                state.final_answer_started = True
-                state.assistant_text += pending
-                yield runtime_trace_source_event(
-                    "AGENT_FINAL_ANSWER_STARTED", session_id=session_id, scope=stream_scope,
-                    source="runtime", source_event_type=event_type, agent_id=agent_id,
-                    agent_name=agent_name, status="running", reason="direct_text_response",
-                    payload={"recovered": False, "direct": True}, collect=state.runtime_events,
-                )
-                yield runtime_trace_source_event(
-                    "AGENT_FINAL_ANSWER_DELTA", session_id=session_id, scope=stream_scope,
-                    source="runtime", source_event_type=event_type, agent_id=agent_id,
-                    agent_name=agent_name, status="running", reason="direct_text_response",
-                    payload={"delta": pending, "direct": True}, collect=state.runtime_events,
-                )
-                yield source_event("FINAL_ANSWER_DELTA", {"delta": pending})
-            else:
-                for reasoning_event in _flush_pending_reasoning_events(
-                    state,
-                    session_id=session_id,
-                    stream_scope=stream_scope,
-                    source_event_type=event_type,
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                ):
-                    yield reasoning_event
+            pending = state.pending_text
+            state.pending_text = ""
+            state.final_answer_started = True
+            state.assistant_text += pending
+            yield runtime_trace_source_event(
+                "AGENT_FINAL_ANSWER_STARTED", session_id=session_id, scope=stream_scope,
+                source="runtime", source_event_type=event_type, agent_id=agent_id,
+                agent_name=agent_name, status="running", reason="direct_text_response",
+                payload={"recovered": False, "direct": True}, collect=state.runtime_events,
+            )
+            yield runtime_trace_source_event(
+                "AGENT_FINAL_ANSWER_DELTA", session_id=session_id, scope=stream_scope,
+                source="runtime", source_event_type=event_type, agent_id=agent_id,
+                agent_name=agent_name, status="running", reason="direct_text_response",
+                payload={"delta": pending, "direct": True}, collect=state.runtime_events,
+            )
+            yield source_event("FINAL_ANSWER_DELTA", {"delta": pending})
 
         runtime_event = runtime_event_from_agentscope_event(
             event_type,
@@ -513,6 +527,7 @@ async def stream_leader_agent_reply(
             skill_runs=skill_runs,
             plan_mode_manager=plan_mode_manager,
             runtime_event_sources=runtime_event_sources,
+            deep_thinking=deep_thinking,
             sandbox=sandbox,
         ):
             if not continuation_started:
@@ -567,9 +582,12 @@ async def stream_leader_agent_reply(
                 scope=stream_scope,
                 chat_data={
                     "sandbox": sandbox,
+                    "deepThinking": deep_thinking,
                     "sessionWorkspaceDir": state.session_workspace_dir,
                     "sessionArtifactPathsBefore": state.session_artifact_paths_before,
                 },
+                plan_mode_manager=plan_mode_manager,
+                runtime_event_sources=runtime_event_sources,
                 persist=persist,
             )
             wait_state = waiting_status_for_interaction(
@@ -717,6 +735,7 @@ async def stream_leader_agent_reply(
             skill_runs=skill_runs,
             plan_mode_manager=plan_mode_manager,
             runtime_event_sources=runtime_event_sources,
+            deep_thinking=deep_thinking,
             sandbox=sandbox,
         ):
             yield resumed_event
@@ -742,7 +761,8 @@ def _should_attempt_final_answer_recovery(state: LeaderStreamState) -> bool:
     """判断是否进入受限最终答案恢复流程。"""
 
     return (
-        not state.final_answer_started
+        state.reply_finished_reason == "completed"
+        and not state.final_answer_started
         and not state.final_answer_recovery_attempted
         and not state.stopped
         and not state.assistant_text.strip()

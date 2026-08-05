@@ -46,6 +46,7 @@ async def execute_and_finalize_leader_reply(
     skill_runs: list[ChatSkillRun],
     plan_mode_manager: PlanModeManager | None = None,
     runtime_event_sources: list[object] | None = None,
+    deep_thinking: bool = False,
     sandbox: bool = False,
     exception_prefix: str = "Agent 执行异常",
     runtime_context: RuntimeContext | None = None,
@@ -68,6 +69,7 @@ async def execute_and_finalize_leader_reply(
             skill_runs=skill_runs,
             plan_mode_manager=plan_mode_manager,
             runtime_event_sources=runtime_event_sources,
+            deep_thinking=deep_thinking,
             sandbox=sandbox,
         ):
             yield event
@@ -85,6 +87,26 @@ async def execute_and_finalize_leader_reply(
                 agent_name=agent_name,
                 model_name=model_name,
                 assistant_text="",
+                assistant_error=assistant_error,
+                assistant_model_caches=state.assistant_model_caches,
+                skill_runs=skill_runs,
+                sandbox=sandbox,
+            ):
+                yield event
+            return
+        if state.reply_finished_reason != "completed":
+            if state.reply_finished_reason == "interrupted" and await _current_run_is_cancelled():
+                return
+            assistant_error = _reply_finished_error(state)
+            async for event in _emit_plan_run_failure(plan_mode_manager, state, assistant_error):
+                yield event
+            async for event in finalize_failed_leader_run(
+                session_id=session_id,
+                persist=persist,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                model_name=model_name,
+                assistant_text=state.assistant_text,
                 assistant_error=assistant_error,
                 assistant_model_caches=state.assistant_model_caches,
                 skill_runs=skill_runs,
@@ -166,3 +188,30 @@ async def execute_and_finalize_leader_reply(
             sandbox=sandbox,
         ):
             yield event
+
+
+async def _current_run_is_cancelled() -> bool:
+    """应用层取消已经成立时，不再把 SDK interrupted 覆盖为 failed。"""
+
+    from src.server.routes.chat.background_runs import (
+        current_chat_background_run_id,
+        get_chat_background_run,
+    )
+
+    run_id = current_chat_background_run_id()
+    if not run_id:
+        return False
+    run = await get_chat_background_run(run_id)
+    return bool(run and run.status == "cancelled")
+
+
+def _reply_finished_error(state: LeaderStreamState) -> str:
+    """把 AgentScope Reply 终态转换为应用失败说明。"""
+
+    if state.reply_error:
+        return state.reply_error
+    return {
+        "interrupted": "Agent 执行已中断。",
+        "exceed_max_iters": max_react_iterations_error(),
+        "error": "AgentScope 返回了失败终态。",
+    }.get(state.reply_finished_reason, f"AgentScope Reply 异常结束：{state.reply_finished_reason}")

@@ -36,6 +36,7 @@ from src.server.routes.chat.models import (
     ChatToolRun,
 )
 from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
+from src.server.routes.chat.final_answer_recovery import _execute_recovery_tool_calls
 from src.server.routes.chat.prompts import _build_final_answer_system_prompt
 from src.server.routes.chat.runtime import _permission_mode_for_guardrails
 from src.server.routes.chat.react_runtime import execute_react_runtime
@@ -110,11 +111,12 @@ def _final_answer_deltas(events: list[SourceEvent]) -> list[str]:
     ]
 
 
-def test_final_answer_prompt_allows_direct_text_and_phase_marker():
+def test_final_answer_prompt_requires_phase_marker_for_streaming():
     prompt = _build_final_answer_system_prompt()
     assert "FinalAnswerStart" in prompt
-    assert "optional phase marker" in prompt
-    assert "answer the user directly" in prompt
+    assert "required phase marker" in prompt
+    assert "including direct answers and responses with native provider thinking" in prompt
+    assert "after a tool or AskUser resumes" in prompt
 
 
 def test_default_agent_prompt_mentions_final_answer_marker():
@@ -414,8 +416,12 @@ class _FakeRecoverableNoFinalAnswerAgent:
                 "reply_id": "reply-recovery-answer",
             })
 
-    async def _batch_tool_calls(self):
-        return [SimpleNamespace(type="concurrent", tool_calls=[SimpleNamespace(id="call-recovery-final")])]
+    def _get_last_msg(self):
+        tool_calls = [SimpleNamespace(id="call-recovery-final")]
+        return SimpleNamespace(get_content_blocks=lambda block_type: tool_calls if block_type == "tool_call" else [])
+
+    async def _batch_tool_calls(self, tool_calls):
+        return [SimpleNamespace(type="concurrent", tool_calls=tool_calls)]
 
     async def _execute_concurrent_tool_calls(self, tool_calls):
         yield _FakeAgentScopeEvent({
@@ -740,12 +746,107 @@ def test_reasoning_is_flushed_before_each_tool_call():
     assert state.assistant_text == "检查完成。"
 
 
+def test_deep_thinking_progress_before_tool_stays_out_of_final_answer():
+    """thinking 后的过程文字仍可能接工具，不能提前进入最终正文。"""
+
+    class FakeDeepThinkingAgent:
+        async def reply_stream(self, _user_msg):
+            for payload in (
+                {"type": "REPLY_START", "reply_id": "reply-thinking"},
+                {"type": "THINKING_BLOCK_DELTA", "reply_id": "reply-thinking", "delta": "分析中。"},
+                {"type": "THINKING_BLOCK_END", "reply_id": "reply-thinking"},
+                {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-thinking", "delta": "我先执行任务。"},
+                {"type": "TOOL_CALL_START", "reply_id": "reply-thinking", "tool_call_id": "call-bash", "tool_call_name": "Bash"},
+                {"type": "TOOL_CALL_END", "reply_id": "reply-thinking", "tool_call_id": "call-bash"},
+                {"type": "TOOL_RESULT_END", "reply_id": "reply-thinking", "tool_call_id": "call-bash", "state": "success"},
+                {"type": "TOOL_CALL_START", "reply_id": "reply-thinking", "tool_call_id": "call-final", "tool_call_name": "FinalAnswerStart"},
+                {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-thinking", "delta": "第一段"},
+                {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-thinking", "delta": "第二段"},
+                {"type": "REPLY_END", "reply_id": "reply-thinking"},
+            ):
+                yield _FakeAgentScopeEvent(payload)
+
+    async def run_case():
+        state = LeaderStreamState()
+        events = [
+            event
+            async for event in stream_leader_agent_reply(
+                agent=FakeDeepThinkingAgent(),
+                user_msg=object(),
+                state=state,
+                session_id="session-deep-thinking-stream",
+                persist=False,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="deepseek-reasoner",
+                guardrails=AgentGuardrails(),
+                message="深度分析后回答",
+                stream_scope="single",
+                skill_runs=[],
+                deep_thinking=True,
+            )
+        ]
+        return state, events
+
+    state, events = asyncio.run(run_case())
+
+    assert _final_answer_deltas(events) == ["第一段", "第二段"]
+    assert state.assistant_thinking == "分析中。"
+    assert state.assistant_text == "第一段第二段"
+    assert state.assistant_reasoning_text == "我先执行任务。"
+    assert sum(
+        1
+        for event in events
+        if _event_is(event, "AGENT_FINAL_ANSWER_STARTED")
+    ) == 1
+
+
+def test_thinking_events_do_not_stream_direct_answer_when_mode_is_disabled():
+    """未显式开启深度思考时，即使 provider 发 thinking，也沿用直接回答终态判定。"""
+
+    class FakeUnexpectedThinkingAgent:
+        async def reply_stream(self, _user_msg):
+            for payload in (
+                {"type": "REPLY_START", "reply_id": "reply-thinking-disabled"},
+                {"type": "THINKING_BLOCK_DELTA", "reply_id": "reply-thinking-disabled", "delta": "分析中。"},
+                {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-thinking-disabled", "delta": "第一段"},
+                {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-thinking-disabled", "delta": "第二段"},
+                {"type": "REPLY_END", "reply_id": "reply-thinking-disabled"},
+            ):
+                yield _FakeAgentScopeEvent(payload)
+
+    async def run_case():
+        return [
+            event
+            async for event in stream_leader_agent_reply(
+                agent=FakeUnexpectedThinkingAgent(),
+                user_msg=object(),
+                state=LeaderStreamState(),
+                session_id="session-thinking-disabled",
+                persist=False,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="deepseek-chat",
+                guardrails=AgentGuardrails(),
+                message="回答",
+                stream_scope="single",
+                skill_runs=[],
+            )
+        ]
+
+    events = asyncio.run(run_case())
+
+    assert _final_answer_deltas(events) == ["第一段第二段"]
+
+
 def test_single_agent_hitl_pending_interaction_keeps_stream_scope():
-    """单 Agent 人工审批恢复必须保持 single scope，避免后续工具流被误归到 leader。"""
+    """单 Agent 人工审批恢复必须保留 scope 与本轮 Runtime 增强状态。"""
 
     async def run_case():
         PENDING_INTERACTIONS.clear()
         PENDING_AGENTS.clear()
+        plan_mode_manager = SimpleNamespace(drain_runtime_events=lambda: [])
+        runtime_event_source = SimpleNamespace(drain_runtime_events=lambda: [])
         events = [
             event
             async for event in stream_leader_agent_reply(
@@ -761,20 +862,130 @@ def test_single_agent_hitl_pending_interaction_keeps_stream_scope():
                 message="读取文件",
                 stream_scope="single",
                 skill_runs=[],
+                plan_mode_manager=plan_mode_manager,
+                runtime_event_sources=[runtime_event_source],
             )
         ]
-        return events, list(PENDING_INTERACTIONS.values())
+        return events, list(PENDING_INTERACTIONS.values()), plan_mode_manager, runtime_event_source
 
-    events, interactions = asyncio.run(run_case())
+    events, interactions, plan_mode_manager, runtime_event_source = asyncio.run(run_case())
 
     try:
         assert interactions
         assert interactions[0].scope == "single"
+        assert interactions[0].plan_mode_manager is plan_mode_manager
+        assert interactions[0].runtime_event_sources == [runtime_event_source]
         assert any(
             event.data.get("scope") == "single"
             for event in events
             if _event_is(event, "HITL_REQUIRED")
         )
+    finally:
+        PENDING_INTERACTIONS.clear()
+        PENDING_AGENTS.clear()
+
+
+def test_permission_resume_continues_plan_runtime_events():
+    """权限审批恢复后必须继续投递 Plan 步骤事件，避免进度面板停在旧步骤。"""
+
+    class FakePlanManager:
+        def __init__(self) -> None:
+            self.events: list[dict] = []
+
+        def drain_runtime_events(self) -> list[dict]:
+            events = list(self.events)
+            self.events.clear()
+            return events
+
+        def run_completion_error(self) -> str:
+            return ""
+
+        def fail_run(self, *, reason: str) -> None:
+            del reason
+
+    class FakePlanResumeAgent:
+        def __init__(self, manager: FakePlanManager) -> None:
+            self.manager = manager
+
+        async def reply_stream(self, _resume_event):
+            self.manager.events.append({
+                "type": "PLAN_STEP_UPDATED",
+                "status": "completed",
+                "payload": {
+                    "plan": {
+                        "planId": "plan-resume",
+                        "status": "executing",
+                        "steps": [{"id": "step-2", "status": "completed"}],
+                    },
+                },
+            })
+            for payload in (
+                {
+                    "type": "TOOL_RESULT_END",
+                    "reply_id": "reply-plan-resume",
+                    "tool_call_id": "call-write",
+                    "tool_call_name": "Write",
+                    "state": "success",
+                },
+                {
+                    "type": "TOOL_CALL_START",
+                    "reply_id": "reply-plan-resume",
+                    "tool_call_id": "final-plan-resume",
+                    "tool_call_name": "FinalAnswerStart",
+                },
+                {
+                    "type": "TEXT_BLOCK_DELTA",
+                    "reply_id": "reply-plan-resume",
+                    "delta": "计划执行完成。",
+                },
+                {
+                    "type": "REPLY_END",
+                    "reply_id": "reply-plan-resume",
+                    "finished_reason": "completed",
+                },
+            ):
+                yield _FakeAgentScopeEvent(payload)
+
+    async def run_case():
+        PENDING_INTERACTIONS.clear()
+        PENDING_AGENTS.clear()
+        manager = FakePlanManager()
+        interaction = _create_pending_interaction(
+            interaction_type="REQUIRE_USER_CONFIRM",
+            agent=FakePlanResumeAgent(manager),
+            session_id="session-plan-permission-resume",
+            agent_id="agent-1",
+            agent_name="Agent",
+            model_name="deepseek-chat",
+            reply_id="reply-plan-resume",
+            tool_calls=[{
+                "id": "call-write",
+                "name": "Write",
+                "input": '{"file_path":"artifacts/summary.md","content":"summary"}',
+                "state": "asking",
+            }],
+            message="执行已审批计划",
+            assistant_text="",
+            skill_runs=[],
+            scope="single_agent",
+            plan_mode_manager=manager,
+            persist=False,
+        )
+        stream = resume_interaction_events(
+            ChatResumeRequest.model_validate({
+                "interactionId": interaction.id,
+                "action": "approve",
+            })
+        )
+        return [event async for event in stream]
+
+    events = asyncio.run(run_case())
+
+    try:
+        plan_events = [event for event in events if _event_is(event, "PLAN_STEP_UPDATED")]
+        assert len(plan_events) == 1
+        assert plan_events[0].data["payload"]["plan"]["steps"][0]["status"] == "completed"
+        assert _final_answer_deltas(events) == ["计划执行完成。"]
     finally:
         PENDING_INTERACTIONS.clear()
         PENDING_AGENTS.clear()
@@ -989,7 +1200,7 @@ def test_single_agent_without_final_answer_marker_does_not_fallback_to_final_ans
 
 
 def test_single_agent_recovers_missing_final_answer_marker_with_extra_call():
-    """漏调 FinalAnswerStart 时，通过受限恢复轮重新生成最终答案。"""
+    """完整 Reply 的尾部正文无需 FinalAnswerStart，也必须作为最终答案。"""
 
     async def run_case():
         return [
@@ -1016,6 +1227,45 @@ def test_single_agent_recovers_missing_final_answer_marker_with_extra_call():
     assert any(_event_contains(event, "工具后的过程总结") for event in final_events)
     assert not any(_event_contains(event, "恢复后的最终答案") for event in final_events)
     assert not any(_event_contains(event, "recover_missing_final_answer_marker") for event in events)
+
+
+def test_final_answer_recovery_passes_tool_calls_to_agentscope_2_0_5_batcher():
+    """恢复轮必须按 AgentScope 2.0.5 签名向 batcher 传入 ToolCallBlock。"""
+
+    expected_tool_calls = [SimpleNamespace(id="call-final", name="FinalAnswerStart")]
+
+    class FakeLastMessage:
+        def get_content_blocks(self, block_type):
+            assert block_type == "tool_call"
+            return expected_tool_calls
+
+    class FakeAgent:
+        def __init__(self):
+            self.received_tool_calls = None
+
+        def _get_last_msg(self):
+            return FakeLastMessage()
+
+        async def _batch_tool_calls(self, tool_calls):
+            self.received_tool_calls = tool_calls
+            return [SimpleNamespace(type="concurrent", tool_calls=tool_calls)]
+
+        async def _execute_concurrent_tool_calls(self, tool_calls):
+            yield _FakeAgentScopeEvent({
+                "type": "TOOL_RESULT_END",
+                "tool_call_id": tool_calls[0].id,
+                "state": "success",
+            })
+
+    async def run_case():
+        agent = FakeAgent()
+        events = [event async for event in _execute_recovery_tool_calls(agent)]
+        return agent, events
+
+    agent, events = asyncio.run(run_case())
+
+    assert agent.received_tool_calls is expected_tool_calls
+    assert events[0].model_dump()["tool_call_id"] == "call-final"
 
 
 def test_react_runtime_fails_when_agent_ends_without_final_answer(monkeypatch):
@@ -1462,6 +1712,99 @@ def test_resume_text_before_final_answer_marker_stays_out_of_final_body():
         PENDING_AGENTS.clear()
 
 
+def test_permission_resume_promotes_completed_tail_text_without_final_answer_marker():
+    """批准 Write 后，Read 之后的完整尾部正文必须正常收口为最终答案。"""
+
+    class FakePermissionResumeAgent:
+        async def reply_stream(self, _resume_event):
+            for payload in (
+                {
+                    "type": "TOOL_RESULT_START",
+                    "reply_id": "reply-permission",
+                    "tool_call_id": "call-write",
+                    "tool_call_name": "Write",
+                },
+                {
+                    "type": "TOOL_RESULT_END",
+                    "reply_id": "reply-permission",
+                    "tool_call_id": "call-write",
+                    "tool_call_name": "Write",
+                    "state": "success",
+                },
+                {
+                    "type": "TOOL_CALL_START",
+                    "reply_id": "reply-permission",
+                    "tool_call_id": "call-read",
+                    "tool_call_name": "Read",
+                },
+                {
+                    "type": "TOOL_CALL_END",
+                    "reply_id": "reply-permission",
+                    "tool_call_id": "call-read",
+                },
+                {
+                    "type": "TOOL_RESULT_END",
+                    "reply_id": "reply-permission",
+                    "tool_call_id": "call-read",
+                    "tool_call_name": "Read",
+                    "state": "success",
+                },
+                {
+                    "type": "TEXT_BLOCK_DELTA",
+                    "reply_id": "reply-permission",
+                    "delta": "agentscope-2.0.5 permission check",
+                },
+                {
+                    "type": "REPLY_END",
+                    "reply_id": "reply-permission",
+                    "finished_reason": "completed",
+                },
+            ):
+                yield _FakeAgentScopeEvent(payload)
+
+    async def run_case():
+        PENDING_INTERACTIONS.clear()
+        PENDING_AGENTS.clear()
+        interaction = _create_pending_interaction(
+            interaction_type="REQUIRE_USER_CONFIRM",
+            agent=FakePermissionResumeAgent(),
+            session_id="session-permission-final-answer",
+            agent_id="agent-1",
+            agent_name="Agent",
+            model_name="deepseek-chat",
+            reply_id="reply-permission",
+            tool_calls=[{
+                "id": "call-write",
+                "name": "Write",
+                "input": '{"file_path":"artifacts/permission.txt","content":"permission check"}',
+                "state": "asking",
+            }],
+            message="写入并读取文件后原样回答",
+            assistant_text="",
+            skill_runs=[],
+            scope="single_agent",
+            persist=False,
+        )
+        stream = resume_interaction_events(
+            ChatResumeRequest.model_validate({
+                "interactionId": interaction.id,
+                "action": "approve",
+            })
+        )
+        return [chunk async for chunk in stream]
+
+    events = asyncio.run(run_case())
+
+    try:
+        assert _final_answer_deltas(events) == ["agentscope-2.0.5 permission check"]
+        assert any(_event_contains(event, "RUN_COMPLETED") for event in events)
+        assert not any(_event_contains(event, "RUN_FAILED") for event in events)
+        assert not any(_event_contains(event, "final_answer_recovery_failed") for event in events)
+    finally:
+        PENDING_INTERACTIONS.clear()
+        PENDING_AGENTS.clear()
+
+
 def test_resume_without_final_answer_marker_does_not_fallback_to_final_answer():
     """resume 阶段没有 FinalAnswerStart 时，也不能把过程文本兜底成最终答案。"""
 
@@ -1606,6 +1949,7 @@ def test_context_compression_schema_allows_project_discovery_summaries():
 
     assert schema["properties"]["important_discoveries"]["maxLength"] >= 1000
     assert schema["properties"]["next_steps"]["maxLength"] >= 1000
+    assert schema["properties"]["title"]["type"] == "string"
     assert "summary" in schema["properties"]
     assert "required" not in schema
     assert "under the schema maxLength" in context_config.compression_prompt
@@ -2316,7 +2660,12 @@ def test_run_waiting_keeps_subscriber_until_actionable_approval():
         )
 
         async def collect():
-            return [frame async for frame in subscribe_chat_background_run(run.id, after_seq=0)]
+            frames: list[str] = []
+            async for frame in subscribe_chat_background_run(run.id, after_seq=0):
+                frames.append(frame)
+                if '"id":"approval:interaction-actionable"' in frame:
+                    break
+            return frames
 
         collector = asyncio.create_task(collect())
         await asyncio.sleep(0)
@@ -2461,7 +2810,8 @@ def test_background_run_resume_relay_marks_original_run_completed(monkeypatch):
             yield source_event("HITL_REQUIRED", {"id": "hitl-1"})
 
         async def resume_factory():
-            yield source_event("TEXT_BLOCK_DELTA", {"block_id": "block-1", "delta": "done"})
+            yield source_event("FINAL_ANSWER_DELTA", {"delta": "first"})
+            yield source_event("FINAL_ANSWER_DELTA", {"delta": " second"})
             yield source_event("REPLY_END", {"reply_id": "reply-1"})
 
         run = await start_chat_background_run(
@@ -2470,12 +2820,16 @@ def test_background_run_resume_relay_marks_original_run_completed(monkeypatch):
             task="需要人工确认的任务",
             persist=False,
         )
+        subscriber: asyncio.Queue[str | None] = asyncio.Queue()
+        run.subscribers.add(subscriber)
         assert run.async_task is not None
         await run.async_task
         assert run.status == "waiting_user"
+        waiting_published: list[str | None] = []
+        while not subscriber.empty():
+            waiting_published.append(subscriber.get_nowait())
+        assert None not in waiting_published
 
-        subscriber: asyncio.Queue[str | None] = asyncio.Queue()
-        run.subscribers.add(subscriber)
         replayed = [
             event
             async for event in relay_chat_background_run_events(run.id, resume_factory())
@@ -2489,8 +2843,10 @@ def test_background_run_resume_relay_marks_original_run_completed(monkeypatch):
 
     assert run.status == "completed"
     assert run.completed_at is not None
-    assert len(replayed) == 3
+    assert len(replayed) == 7
     assert any('"id":"approval:hitl-1"' in frame for frame in replayed)
+    assert any('"patch":"first"' in frame for frame in replayed)
+    assert any('"patch":" second"' in frame for frame in replayed)
     assert any('"done":true' in frame for frame in replayed)
     assert published[-1] is None
     assert persisted_snapshots[-1]["streamDone"] is True

@@ -159,6 +159,9 @@ type DisplaySnapshot = {
 - 不传 `afterSeq` 时返回当前 Snapshot，再继续实时订阅。
 - `GET /api/chat/runs/{runId}/state?projectId=...` 只返回 DisplaySnapshot V4。
 - assistant 历史消息的 `displaySnapshot` 只保存 V4；不存在旧版本 decoder。
+- `waiting_user` / `waiting_permission` 只暂停 Runtime，不结束同一 Run 的传输订阅。前端必须保持
+  当前订阅跨越 HITL，resume 后继续从原 `lastSeq` 实时接收增量 Frame；只有 Run 进入
+  `completed | failed | cancelled` 终态后，后端才发送 `done` 并关闭 subscriber。
 
 ## 5. 请求入口
 
@@ -194,6 +197,24 @@ type DisplaySnapshot = {
 | `team-mail` | 单条 Mailbox 消息与 delivery 状态 | 浅合并结构化字段 |
 
 新增展示能力只能新增一个后端 per-kind projector 和一个前端 Block module。不得增加 RuntimeFrame op、顶层 SSE 事件、公共 reducer 分支或 payload 反解析。
+
+最终回答的 `text` Block 必须保留上游模型的增量节奏。Provider thinking 只投影到 `thinking`
+Block，不得用 thinking 到普通文本的边界推断最终回答已经开始；深度思考模型仍可能在调用业务
+工具前输出过程说明。尚未出现 `FinalAnswerStart`、无法判定用途的普通文本按 ReAct reasoning
+规则处理，避免把执行过程提前投影为最终回答。
+
+`FinalAnswerStart` 是最终回答的必需阶段标记。Agent 只有在本轮不再需要调用其他业务工具、准备
+输出最终用户答案时才能调用一次；无论本轮是否开启深度思考、是否使用过工具、是否经过 HITL
+暂停恢复，标记后的正文都必须按上游 `TEXT_BLOCK_DELTA` 原始节奏逐片投影。若模型违反契约并在
+`REPLY_END.finished_reason=completed` 前直接输出尾部文本，后端仍把尾部文本作为最终回答一次性
+投影，作为防止答案丢失的兼容兜底，不得额外强制发起模型调用。
+
+支持增量结果的长耗时工具必须在执行期间持续发送结果 delta。内置 Bash 在本地执行时必须按
+stdout/stderr 可读节奏产生 `TOOL_RESULT_TEXT_DELTA`，使对应 `tool` Block 的 `outputPreview`
+实时追加；进程退出后再发送 `TOOL_RESULT_END`。取消 Run 必须终止仍在执行的本地子进程，并先
+投影所有开放 Block 的 `cancelled` close Frame 和 `done`，随后才关闭 subscriber。前端发起取消后
+不得主动中断当前订阅，必须消费该 Run 的 cancel 终态 Frame；只有取消请求失败时才允许本地兜底
+中断。
 
 ### 6.1 AskUser 交互投影
 

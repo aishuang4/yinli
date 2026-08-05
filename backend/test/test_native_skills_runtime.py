@@ -6,6 +6,7 @@ import asyncio
 import os
 
 from src.agents.factory import (
+    GuardedBash,
     RuntimePathSkillLoader,
     _bash_error_chunk,
     _create_default_toolkit,
@@ -129,6 +130,50 @@ def test_windows_bash_uses_utf8_code_page_and_decodes_legacy_output() -> None:
     assert _windows_utf8_command("dir") == "chcp 65001 >nul 2>&1 & dir"
     assert _decode_windows_shell_output("中文目录".encode("utf-8")) == "中文目录"
     assert _decode_windows_shell_output("旧程序输出".encode("gbk")) == "旧程序输出"
+
+
+def test_local_bash_streams_output_before_process_exit(tmp_path) -> None:
+    """本地 Bash 必须在进程退出前交付 stdout chunk。"""
+
+    async def run_case():
+        tool = GuardedBash([], timeout_seconds=5, cwd=str(tmp_path))
+        stream = tool.call("printf 'first\\n'; sleep 0.1; printf 'second\\n'")
+        first = await anext(stream)
+        rest = [chunk async for chunk in stream]
+        return first, rest
+
+    first, rest = asyncio.run(run_case())
+
+    assert first.content[0].text == "first\n"
+    assert first.is_last is False
+    assert any("second\n" in chunk.content[0].text for chunk in rest)
+    assert rest[-1].is_last is True
+
+
+def test_local_bash_cancellation_kills_child_processes(tmp_path) -> None:
+    """取消 Bash 工具时必须终止 shell 派生进程，不能继续产生副作用。"""
+
+    marker = tmp_path / "should-not-exist"
+
+    async def run_case():
+        tool = GuardedBash([], timeout_seconds=5, cwd=str(tmp_path))
+
+        async def consume():
+            async for _ in tool.call(f"sleep 0.4; touch '{marker}'"):
+                pass
+
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await asyncio.sleep(0.45)
+
+    asyncio.run(run_case())
+
+    assert not marker.exists()
 
 
 def test_runtime_skill_paths_reject_paths_outside_package_root(tmp_path, monkeypatch) -> None:

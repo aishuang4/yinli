@@ -25,6 +25,7 @@ from src.server.routes.chat.models import (
 from src.server.routes.chat.projection.source_events import SourceEvent
 from src.server.routes.chat.router import router
 from src.server.routes.chat.background_runs import (
+    attach_chat_background_run_task,
     mark_chat_background_run_resuming,
     relay_chat_background_run_events,
 )
@@ -36,6 +37,8 @@ from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
 )
 from src.server.routes.chat.runtime_events import (
+    agentscope_reply_error_message,
+    agentscope_reply_finished_reason,
     runtime_event_from_agentscope_event,
     runtime_trace_source_event,
 )
@@ -299,6 +302,13 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                     if event_type == "EXCEED_MAX_ITERS":
                         subagent_stream_state.exceeded_max_iters = True
                         break
+                    if event_type == "REPLY_END":
+                        subagent_stream_state.reply_finished_reason = (
+                            agentscope_reply_finished_reason(event_data)
+                        )
+                        subagent_stream_state.reply_error = (
+                            agentscope_reply_error_message(event_data)
+                        )
                     if event_type == "TEXT_BLOCK_DELTA":
                         delta = str(event_data.get("delta") or "")
                         if subagent_stream_state.final_answer_started:
@@ -324,11 +334,22 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                     if runtime_event:
                         yield runtime_event
 
-                if subagent_stream_state.exceeded_max_iters or not final_text.strip():
+                if (
+                    subagent_stream_state.exceeded_max_iters
+                    or subagent_stream_state.reply_finished_reason != "completed"
+                    or not final_text.strip()
+                ):
                     error_message = (
                         max_react_iterations_error()
                         if subagent_stream_state.exceeded_max_iters
-                        else missing_final_answer_error()
+                        else (
+                            subagent_stream_state.reply_error
+                            or (
+                                "Subagent 执行已中断。"
+                                if subagent_stream_state.reply_finished_reason == "interrupted"
+                                else missing_final_answer_error()
+                            )
+                        )
                     )
                     partial = _trim_text(final_text or reasoning_text, 1200)
                     if invocation_id:
@@ -445,6 +466,9 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                 user_message=interaction.message,
                 stream_scope=interaction.scope,
                 skill_runs=skill_runs,
+                plan_mode_manager=interaction.plan_mode_manager,
+                runtime_event_sources=interaction.runtime_event_sources,
+                deep_thinking=bool((interaction.chat_data or {}).get("deepThinking")),
                 sandbox=bool((interaction.chat_data or {}).get("sandbox")),
                 exception_prefix="Agent 恢复执行异常",
             ):
@@ -486,10 +510,11 @@ async def start_resume_interaction(data: ChatResumeRequest) -> dict:
         pending_interaction.run_id,
         resume_interaction_events(data),
     )
-    asyncio.create_task(
+    resume_task = asyncio.create_task(
         _drain_resume_stream(stream),
         name=f"chat-resume-{pending_interaction.run_id}",
     )
+    await attach_chat_background_run_task(pending_interaction.run_id, resume_task)
     return {
         "runId": pending_interaction.run_id,
         "sessionId": pending_interaction.session_id,

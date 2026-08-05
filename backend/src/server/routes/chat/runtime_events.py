@@ -85,10 +85,11 @@ def runtime_event_from_agentscope_event(
 ) -> SourceEvent | None:
     """把 AgentScope 原始事件映射为应用级 Runtime Event。"""
 
-    runtime_type = AGENTSCOPE_TO_RUNTIME_EVENT.get(source_event_type)
+    data = event_data or {}
+    runtime_type = _runtime_type_from_agentscope_event(source_event_type, data)
     if not runtime_type:
         return None
-    payload = _compact_agentscope_payload(source_event_type, event_data or {})
+    payload = _compact_agentscope_payload(source_event_type, data)
     if payload_extra:
         payload.update(payload_extra)
     return runtime_trace_source_event(
@@ -100,10 +101,38 @@ def runtime_event_from_agentscope_event(
         source_event_type=source_event_type,
         agent_id=agent_id,
         agent_name=agent_name,
-        status=_status_for_runtime_event(runtime_type, event_data or {}),
+        status=_status_for_runtime_event(runtime_type, data),
+        reason=(
+            agentscope_reply_finished_reason(data)
+            if source_event_type == "REPLY_END" and runtime_type == "AGENT_FAILED"
+            else None
+        ),
         payload=payload,
         collect=collect,
     )
+
+
+def agentscope_reply_finished_reason(event_data: dict[str, Any]) -> str:
+    """读取 2.0.5 Reply 终态；兼容缺少该字段的历史事件和测试桩。"""
+
+    return str(event_data.get("finished_reason") or "completed").lower()
+
+
+def agentscope_reply_error_message(event_data: dict[str, Any]) -> str:
+    """从 AgentScope 结构化 Reply error 中提取可展示消息。"""
+
+    error = event_data.get("error")
+    if isinstance(error, dict):
+        return str(error.get("message") or error.get("type") or "")
+    return str(error or "")
+
+
+def _runtime_type_from_agentscope_event(source_event_type: str, event_data: dict[str, Any]) -> str | None:
+    """根据 Reply 真实结束原因选择 Runtime 终态。"""
+
+    if source_event_type == "REPLY_END" and agentscope_reply_finished_reason(event_data) != "completed":
+        return "AGENT_FAILED"
+    return AGENTSCOPE_TO_RUNTIME_EVENT.get(source_event_type)
 
 
 def _status_for_runtime_event(event_type: str, event_data: dict[str, Any] | None = None) -> str:
@@ -201,6 +230,8 @@ def _compact_agentscope_payload(source_event_type: str, event_data: dict[str, An
         "state",
         "input_tokens",
         "output_tokens",
+        "finished_reason",
+        "error",
     ]
     payload = {key: event_data[key] for key in keys if key in event_data}
     payload["sourceEventType"] = source_event_type

@@ -15,6 +15,7 @@ from src.agents.factory import AgentGuardrails, AgentModelOptions
 from src.server.routes.chat.lifecycle import can_transition_run_status, waiting_status_for_interaction
 from src.server.routes.chat.team_runtime.coordinator import TeamCoordinator
 from src.server.routes.chat.team_runtime.member_runtime import (
+    MEMBER_MAX_REACT_ITERS,
     MEMBER_RECOVERY_MAX_REACT_ITERS,
     MEMBER_RECOVERY_TOOLS,
     TeamSessionError,
@@ -678,7 +679,7 @@ def test_member_stream_recovers_after_iteration_limit_with_restricted_tools(tmp_
     class FakeAgent:
         def __init__(self) -> None:
             self.calls = 0
-            self.react_config = SimpleNamespace(max_iters=32)
+            self.react_config = SimpleNamespace(max_iters=MEMBER_MAX_REACT_ITERS)
             self.toolkit = SimpleNamespace(tool_groups=[SimpleNamespace(
                 tools=[*(FakeTool(name) for name in MEMBER_RECOVERY_TOOLS), FakeTool("Grep")],
                 mcps=[object()],
@@ -694,6 +695,10 @@ def test_member_stream_recovers_after_iteration_limit_with_restricted_tools(tmp_
                     "tool_call_name": "Grep",
                 })
                 yield FakeEvent({"type": "EXCEED_MAX_ITERS"})
+                yield FakeEvent({
+                    "type": "REPLY_END",
+                    "finished_reason": "exceed_max_iters",
+                })
                 return
             assert message.name == "user"
             assert "team_submit_result" in str(message.content)
@@ -737,7 +742,7 @@ def test_member_stream_fails_after_recovery_budget_is_exhausted(tmp_path) -> Non
             return {"type": "EXCEED_MAX_ITERS"}
 
     class FakeAgent:
-        react_config = SimpleNamespace(max_iters=32)
+        react_config = SimpleNamespace(max_iters=MEMBER_MAX_REACT_ITERS)
         toolkit = SimpleNamespace(tool_groups=[])
 
         async def reply_stream(self, _message):
@@ -746,7 +751,10 @@ def test_member_stream_fails_after_recovery_budget_is_exhausted(tmp_path) -> Non
     async def flush_events() -> None:
         return None
 
-    with pytest.raises(TeamSessionError, match=r"32\+8"):
+    with pytest.raises(
+        TeamSessionError,
+        match=rf"{MEMBER_MAX_REACT_ITERS}\+{MEMBER_RECOVERY_MAX_REACT_ITERS}",
+    ):
         asyncio.run(_run_agent_stream(
             agent=FakeAgent(),
             user_msg=SimpleNamespace(),

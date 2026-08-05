@@ -25,7 +25,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentscope", specifier = "==2.0.3" },
+    { name = "agentscope", specifier = "==2.0.5" },
     { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "fastapi", specifier = ">=0.136.3" },
     { name = "httpx", specifier = ">=0.28.1" },
@@ -38,7 +38,7 @@ requires-dist = [
 
 [[package]]
 name = "agentscope"
-version = "2.0.3"
+version = "2.0.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -65,10 +65,11 @@ dependencies = [
     { name = "shortuuid" },
     { name = "tree-sitter" },
     { name = "tree-sitter-bash" },
+    { name = "tzdata" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/97/12/4ed72815f9bb06fd869eaf3c22765421ec263364ca52efc506fcad5cc997/agentscope-2.0.3.tar.gz", hash = "sha256:6359380e2dd0995a025d824468c4ab1b0464f92077d38333b561ab635c2956ce", size = 521636, upload-time = "2026-06-29T02:09:14.13Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/38/d34788ef9192cf670b7b4cf6c7e4d58b6a853eb7c7f22a87337deebc4282/agentscope-2.0.5.tar.gz", hash = "sha256:3127803993074ec34062056080f619ab6b883d3d926768afeeddb4172cd1fc9a", size = 672122, upload-time = "2026-07-23T13:29:37.912Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/da/0b/9698adbd8b0887e8ce2162a356dc1be8f9f4d090be5255234ed8a2550edd/agentscope-2.0.3-py3-none-any.whl", hash = "sha256:070cc4cec54aa0fb0fc66afaaa41cde2c04b18af6c3755a075c4bc7853ab9766", size = 697856, upload-time = "2026-06-29T02:09:12.366Z" },
+    { url = "https://files.pythonhosted.org/packages/a4/1e/b27656bf3903fcd4ae5017c7b01bca16b6a3ca6cdf75c7b5e4ac92480fbe/agentscope-2.0.5-py3-none-any.whl", hash = "sha256:ae440075c8d72b21a0e6b54458b9c6b9d1d9594f1e3f885611df1ed93950d444", size = 894264, upload-time = "2026-07-23T13:29:36.378Z" },
 ]
 
 [[package]]
@@ -2302,6 +2303,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/55/e3/70399cb7dd41c10ac53367ae42139cf4b1ca5f36bb3dc6c9d33acdb43655/typing_inspection-0.4.2.tar.gz", hash = "sha256:ba561c48a67c5958007083d386c3295464928b01faa735ab8547c5692e87f464", size = 75949, upload-time = "2025-10-01T02:14:41.687Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/dc/9b/47798a6c91d8bdb567fe2698fe81e0c6b7cb7ef4d13da4114b41d239f65d/typing_inspection-0.4.2-py3-none-any.whl", hash = "sha256:4ed1cacbdc298c220f1bd249ed5287caa16f34d44ef4e9c3d0cbad5b521545e7", size = 14611, upload-time = "2025-10-01T02:14:40.154Z" },
+]
+
+[[package]]
+name = "tzdata"
+version = "2026.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/92/ff/5a28bdfd8c3ebec42564ac7d0e54ca3db65044a9314a97f9564fa7a1e926/tzdata-2026.3.tar.gz", hash = "sha256:4a1518b8993086a7982523e071643f3c0e5f213e75b21318e78bcabfff9d1415", size = 198674, upload-time = "2026-07-10T08:50:37.887Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e5/6d/b53b99a9f2766d095985947a5782f1702cabb129a34f7a802d7197af832f/tzdata-2026.3-py2.py3-none-any.whl", hash = "sha256:dc096730c87af6cab1b171c9d532be840741ff5d459015e7f6947bd7d7e54931", size = 348168, upload-time = "2026-07-10T08:50:36.46Z" },
 ]
 
 [[package]]

@@ -13,6 +13,8 @@ export interface SSEEvent {
 export interface StreamState {
   /** 是否正在接收事件流 */
   isStreaming: boolean;
+  /** 当前正在提交恢复命令的人机交互 ID */
+  resolvingInteractionId: string;
   /** 当前后台 Run ID */
   currentRunId: string;
   /** 当前 Run 开始时间 */

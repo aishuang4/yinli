@@ -1,9 +1,10 @@
 # 引力 YINLI TODO
 
-> 最后更新：2026-07-27。本文只保留尚未完成的任务。
+> 最后更新：2026-08-05。本文只保留尚未完成的任务。
 
 ## P0. Runtime 稳定性
 
+- [ ] 在配置 DeepSeek + 第二供应商凭据且 Docker daemon 可用的发布环境，完成 AgentScope `2.0.5` 真实 Runtime 与 Docker 门禁，结果写回升级记录。
 - [ ] 补齐 RuntimeFrame / DisplaySnapshot V4 浏览器回归矩阵，覆盖 Plan finalized、HITL、AskUser、工具失败、取消和刷新恢复。
 - [ ] 增加关键 Chat 工作流的 Playwright 测试，避免只依赖 reducer 和后端单测。
 - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor 和 ToolScope 摘要。
@@ -15,6 +16,7 @@
 
 ## P2. TeamRun 与 Subagent
 
+- [ ] 按 `docs/team-member-lifecycle-v2.md` 分阶段实现长生命周期 Member、TaskAttempt、Mailbox 唤醒和 Reviewer 返工闭环；实施前先冻结 Chat SSE 契约。
 - [ ] 增加 Team Mailbox API 与综合阶段并发投递的端到端测试。
 - [ ] 增加 Team Console Playwright 回归，覆盖第二轮清空、成员切换不重放和用户主动发信。
 - [ ] 在 Task API 基础上接入 Subagent 控制台刷新恢复回归；Chat 使用嵌套 `kind=subagent` Block，detached background 暂不开放。

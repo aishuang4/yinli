@@ -40,7 +40,12 @@ async def stream_final_answer_recovery_events(
     state.final_answer_recovery_attempted = True
     if not all(
         hasattr(agent, attr)
-        for attr in ("_handle_incoming_messages", "_reasoning", "_batch_tool_calls")
+        for attr in (
+            "_handle_incoming_messages",
+            "_reasoning",
+            "_get_last_msg",
+            "_batch_tool_calls",
+        )
     ):
         return
 
@@ -122,7 +127,13 @@ async def stream_final_answer_recovery_events(
 async def _execute_recovery_tool_calls(agent: object) -> AsyncGenerator[object, None]:
     """执行恢复轮强制生成的 FinalAnswerStart 工具调用。"""
 
-    for batch in await agent._batch_tool_calls():
+    last_msg = agent._get_last_msg()
+    if last_msg is None:
+        return
+    tool_calls = last_msg.get_content_blocks("tool_call")
+    if not tool_calls:
+        return
+    for batch in await agent._batch_tool_calls(tool_calls):
         if batch.type == "sequential":
             event_generator = agent._execute_sequential_tool_calls(batch.tool_calls)
         else:

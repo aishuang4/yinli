@@ -9,6 +9,7 @@ from src.security.permissions import UnifiedPermissionProfile, build_permission_
 
 
 WORKSPACE_DIR = str(DEFAULT_PROJECT_ROOT)
+MAX_REACT_ITERS = 512
 FallbackEventCallback = Callable[[dict[str, Any]], None]
 
 
