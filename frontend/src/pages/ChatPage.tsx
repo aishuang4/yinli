@@ -50,6 +50,7 @@ export function ChatPage() {
   const [planMode, setPlanMode] = useState(false);
   const [planPanelOpen, setPlanPanelOpen] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [answerAnimating, setAnswerAnimating] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [historyPanelMounted, setHistoryPanelMounted] = useState(true);
   const setView = useAppStore((state) => state.setView);
@@ -466,6 +467,7 @@ export function ChatPage() {
   useEffect(() => {
     if (
       !state.isStreaming &&
+      !answerAnimating &&
       snapshot.streamDone &&
       snapshot.order.length > 0 &&
       (messages.length === 0 || messages[messages.length - 1].role === 'user')
@@ -484,7 +486,7 @@ export function ChatPage() {
       reset();
       loadSessions({ silent: true });
     }
-  }, [liveText, loadSessions, messages, projectedError, reset, snapshot, state.error, state.isStreaming, state.runCompletedAt, state.runStartedAt]);
+  }, [answerAnimating, liveText, loadSessions, messages, projectedError, reset, snapshot, state.error, state.isStreaming, state.runCompletedAt, state.runStartedAt]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -651,6 +653,7 @@ export function ChatPage() {
                         createdAt={state.runCompletedAt || undefined}
                         sessionId={activeSessionId || undefined}
                         onResolveInteraction={resumeInteraction}
+                        onAnswerAnimationChange={setAnswerAnimating}
                       />
                     )}
 

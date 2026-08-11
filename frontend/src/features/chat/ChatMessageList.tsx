@@ -52,6 +52,7 @@ export function StreamingBubble({
   createdAt,
   sessionId,
   onResolveInteraction,
+  onAnswerAnimationChange,
 }: {
   snapshot: DisplaySnapshot;
   isStreaming: boolean;
@@ -60,6 +61,7 @@ export function StreamingBubble({
   createdAt?: string;
   sessionId?: string;
   onResolveInteraction: ResolveInteraction;
+  onAnswerAnimationChange?: (isAnimating: boolean) => void;
 }) {
   const markdown = runtimeText(snapshot);
   const hasVisibleContent = hasVisibleRuntimeContent(snapshot);
@@ -71,6 +73,7 @@ export function StreamingBubble({
           snapshot={snapshot}
           sessionId={sessionId}
           actions={{ onResolveInteraction }}
+          onAnswerAnimationChange={onAnswerAnimationChange}
         />
       ) : isStreaming ? (
         <StreamingPlaceholder modelName={modelName} />

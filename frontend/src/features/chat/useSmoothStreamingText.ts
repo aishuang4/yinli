@@ -71,10 +71,9 @@ export function useSmoothStreamingText(
       }
 
       carryRef.current += (charsPerSecond * FRAME_MS) / 1000;
-      const catchUpBoost = remaining > 1200 ? 4 : remaining > 480 ? 2 : 1;
       const nextCount = Math.max(
         1,
-        Math.min(maxCharsPerFrame * catchUpBoost, Math.floor(carryRef.current)),
+        Math.min(maxCharsPerFrame, Math.floor(carryRef.current)),
       );
       carryRef.current = Math.max(0, carryRef.current - nextCount);
 

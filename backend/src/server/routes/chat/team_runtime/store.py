@@ -569,14 +569,15 @@ class TeamStore:
                 task["attemptCount"] = int(task.get("attemptCount") or 0) + 1
                 self._write_json(task_path / "task.json", task)
                 member = self.member(member_id)
-                self._write_json(self._member_path(member_id), {
+                running_member = {
                     **member,
                     "status": "running",
                     "activeTaskId": task_id,
                     "activeAttemptId": attempt_id,
                     "attemptCount": int(member.get("attemptCount") or 0) + 1,
                     "updatedAt": now,
-                })
+                }
+                self._write_json(self._member_path(member_id), running_member)
                 self._record(
                     "attempt.created",
                     actor_id=member_id,
@@ -590,6 +591,13 @@ class TeamStore:
                     task_id=task_id,
                     status="running",
                     payload={"attempt": self._public_attempt(attempt)},
+                )
+                self._record(
+                    "member.status.changed",
+                    actor_id=member_id,
+                    task_id=task_id,
+                    status="running",
+                    payload={"member": self._public_member(running_member)},
                 )
                 self._record(
                     "task.claimed",

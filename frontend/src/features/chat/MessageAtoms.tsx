@@ -98,10 +98,7 @@ export function MessageContentBlock({
         whiteSpace: isUser ? 'pre-wrap' : undefined,
       }}
     >
-      {isUser ? content : <MarkdownContent content={visible.content} />}
-      {visible.isAnimating && (
-        <span className="chat-stream-caret" aria-hidden="true" />
-      )}
+      {isUser ? content : <MarkdownContent content={visible.content} streaming={visible.isAnimating} />}
     </div>
   );
 }

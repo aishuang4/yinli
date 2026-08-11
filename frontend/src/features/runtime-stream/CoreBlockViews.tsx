@@ -1,6 +1,6 @@
 /** Chat Runtime Block 的领域 renderer。 */
 
-import { useContext, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import {
   AlertCircle,
   Bot,
@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import { HitlApprovalBlock } from '../chat/HumanInteractionBlocks';
+import { useSmoothStreamingText } from '../chat/useSmoothStreamingText';
 import {
   buildClarificationRequestFromAskUser,
   isAskUserToolName,
@@ -32,6 +33,7 @@ import {
 } from '../chat/humanInteractionUtils';
 import { resolveApiUrl } from '../../utils/apiUrl';
 import type { DisplayBlock } from './protocol';
+import { RuntimeAnimationContext } from './RuntimeAnimationContext';
 import { RuntimeBlockActionsContext } from './runtimeBlockActions';
 
 export type RecordData = Record<string, unknown>;
@@ -168,11 +170,19 @@ export function MessageBlockView() {
 }
 
 export function TextBlockView({ block }: { block: DisplayBlock<string> }) {
-  if (!block.data) return null;
+  const reportAnimation = useContext(RuntimeAnimationContext);
+  const visible = useSmoothStreamingText(block.data, block.phase === 'open', {
+    animateOnMount: Boolean(reportAnimation),
+    charsPerSecond: 96,
+    maxCharsPerFrame: 18,
+  });
+  useEffect(() => {
+    reportAnimation?.(visible.isAnimating);
+  }, [reportAnimation, visible.isAnimating]);
+  if (!block.data && !visible.content) return null;
   return (
     <div className="chat-message-content chat-message-content--assistant px-1 py-2 text-[var(--color-text-primary)]">
-      <MarkdownContent content={block.data} />
-      {block.phase === 'open' ? <span className="chat-stream-caret" aria-hidden="true" /> : null}
+      <MarkdownContent content={visible.content} streaming={visible.isAnimating} />
     </div>
   );
 }

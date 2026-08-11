@@ -18,7 +18,7 @@ export function MarkdownContent({
       className={`markdown-content ${className}`.trim()}
       openLinksInNewTab
       escapeRawHtml
-      streaming={streaming ? { hasNextChunk: true, tail: false } : undefined}
+      streaming={streaming ? { hasNextChunk: true, tail: true } : undefined}
     />
   );
 }

@@ -6,6 +6,7 @@ import { RuntimeBlockRenderer } from './BlockRenderer';
 import { coreBlockRegistry } from './coreModules';
 import type { DisplaySnapshot } from './protocol';
 import { RuntimeBlockActionsContext, type RuntimeBlockActions } from './runtimeBlockActions';
+import { RuntimeAnimationContext, type RuntimeAnimationReporter } from './RuntimeAnimationContext';
 import { RuntimeProcessGroup } from './RuntimeProcessGroup';
 import { TeamConsole } from './TeamBlockViews';
 import { TeamRuntimeContext } from './TeamRuntimeContext';
@@ -14,10 +15,12 @@ export function RuntimeBlockTree({
   snapshot,
   actions,
   sessionId,
+  onAnswerAnimationChange,
 }: {
   snapshot: DisplaySnapshot;
   actions?: RuntimeBlockActions;
   sessionId?: string;
+  onAnswerAnimationChange?: RuntimeAnimationReporter;
 }) {
   const [openTeamId, setOpenTeamId] = useState<string | null>(null);
   const [openTeamTab, setOpenTeamTab] = useState<'tasks' | 'members' | 'mail'>('tasks');
@@ -85,18 +88,20 @@ export function RuntimeBlockTree({
 
   return (
     <RuntimeBlockActionsContext.Provider value={actions || sessionId ? { ...actions, sessionId } : null}>
-      <TeamRuntimeContext.Provider value={{
-        snapshot,
-        openTeamId,
-        openTeamTab,
-        onOpenTeam: openTeam,
-        onCloseTeam: () => setOpenTeamId(null),
-      }}>
-        <div className="space-y-2">{(childrenByParent.get('') || []).map(renderBranch)}</div>
-        {openTeamId
-          ? createPortal(<TeamConsole snapshot={snapshot} teamBlockId={openTeamId} initialTab={openTeamTab} />, document.body)
-          : null}
-      </TeamRuntimeContext.Provider>
+      <RuntimeAnimationContext.Provider value={onAnswerAnimationChange || null}>
+        <TeamRuntimeContext.Provider value={{
+          snapshot,
+          openTeamId,
+          openTeamTab,
+          onOpenTeam: openTeam,
+          onCloseTeam: () => setOpenTeamId(null),
+        }}>
+          <div className="space-y-2">{(childrenByParent.get('') || []).map(renderBranch)}</div>
+          {openTeamId
+            ? createPortal(<TeamConsole snapshot={snapshot} teamBlockId={openTeamId} initialTab={openTeamTab} />, document.body)
+            : null}
+        </TeamRuntimeContext.Provider>
+      </RuntimeAnimationContext.Provider>
     </RuntimeBlockActionsContext.Provider>
   );
 }

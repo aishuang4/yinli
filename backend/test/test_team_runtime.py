@@ -120,6 +120,16 @@ def test_claim_result_and_dependency_unlock_invariants(tmp_path) -> None:
 
     claimed = store.claim_task(first["id"], first_member["id"])
     assert claimed["status"] == "running"
+    assert store.member(first_member["id"])["status"] == "running"
+    assert store.member(first_member["id"])["activeTaskId"] == first["id"]
+    running_member_event = next(
+        event
+        for event in store.events_after(0)
+        if event["type"] == "member.status.changed"
+        and event["actorId"] == first_member["id"]
+        and event["status"] == "running"
+    )
+    assert running_member_event["payload"]["member"]["activeTaskId"] == first["id"]
     attempt_id = claimed["currentAttemptId"]
     assert attempt_id.startswith("attempt_")
     assert store.attempt(attempt_id)["status"] == "running"
