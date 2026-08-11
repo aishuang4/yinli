@@ -29,6 +29,7 @@
 
 ## 后续路线
 
+- `docs/debian-http-deployment-v1.md`：Debian 单机 HTTP 临时部署指南，覆盖 Nginx、systemd、持久化、更新与回滚；不属于生产安全基线。
 - `docs/team-member-lifecycle-v2.md`：Team Member 长生命周期、TaskAttempt、多轮返工、Mailbox 唤醒和 Reviewer 闭环方案。
 - `docs/agentscope-2.0.5-upgrade-plan.md`：AgentScope `2.0.3 -> 2.0.5` Runtime 基线迁移实施记录、兼容改造、验收结果、发布门禁与回滚方案。
 - `docs/agentscope-2.0.5-manual-test-script.md`：AgentScope `2.0.5` 人工验收步骤、精确提示词、预期结果和发布阻断条件。
