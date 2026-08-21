@@ -170,6 +170,12 @@ class ScheduledJobRecordStore:
             ).fetchall()
         return [self._job_from_row(row) for row in rows]
 
+    def delete_job(self, job_id: str) -> None:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            conn.execute("DELETE FROM scheduled_jobs WHERE id = ?", (job_id,))
+            conn.commit()
+
     def insert_firing(self, record: dict[str, Any]) -> dict[str, Any]:
         self.ensure_db()
         now = self.utc_now()

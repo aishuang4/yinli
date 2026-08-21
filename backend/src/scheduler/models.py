@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -35,6 +36,8 @@ TERMINAL_FIRING_STATUSES: frozenset[str] = frozenset(
     {"succeeded", "failed", "cancelled", "missed", "skipped"}
 )
 FAILURE_POLICIES: frozenset[str] = frozenset({"notify_keep_schedule", "pause_job"})
+MISSED_POLICIES: frozenset[str] = frozenset({"catch_up_once", "mark_missed", "skip_silent"})
+DELIVERY_POLICIES: frozenset[str] = frozenset({"none", "notify", "confirm_then_send", "auto_send"})
 SCHEDULE_KINDS: frozenset[str] = frozenset({"weekly", "once"})
 
 DEFAULT_JOB_TOOL_SCOPE: dict[str, bool] = {
@@ -44,10 +47,7 @@ DEFAULT_JOB_TOOL_SCOPE: dict[str, bool] = {
     "allow_mcp": False,
     "allow_knowledge": False,
 }
-DEFAULT_JOB_TOOL_SCOPE_JSON = (
-    '{"allow_bash":false,"allow_http":false,"allow_web":false,'
-    '"allow_mcp":false,"allow_knowledge":false}'
-)
+DEFAULT_JOB_TOOL_SCOPE_JSON = json.dumps(DEFAULT_JOB_TOOL_SCOPE, separators=(",", ":"))
 
 ALLOWED_JOB_TRANSITIONS: dict[str, frozenset[str]] = {
     "pending_confirmation": frozenset({"active", "archived"}),

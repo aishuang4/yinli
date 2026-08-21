@@ -30,8 +30,45 @@ class ChatRunRecordStore:
     def upsert(self, record: dict[str, Any]) -> dict[str, Any]:
         self.ensure_db()
         now = self.utc_now()
-        created_at = record.get("createdAt") or record.get("created_at") or now
-        updated_at = record.get("updatedAt") or record.get("updated_at") or now
+        existing = self.get(record["id"])
+        created_at = (
+            _pick(record, "createdAt", "created_at")
+            or (existing or {}).get("createdAt")
+            or now
+        )
+        updated_at = _pick(record, "updatedAt", "updated_at") or now
+        session_id = _pick(record, "sessionId", "session_id")
+        if not session_id:
+            session_id = (existing or {}).get("sessionId") or ""
+        payload = {
+            "id": record["id"],
+            "sessionId": session_id,
+            "workspaceId": _merged(
+                record, existing, "workspaceId", "workspace_id", self.default_workspace_id,
+            ),
+            "projectId": _merged(
+                record, existing, "projectId", "project_id", self.default_project_id,
+            ),
+            "agentId": _merged(record, existing, "agentId", "agent_id", ""),
+            "agentName": _merged(record, existing, "agentName", "agent_name", ""),
+            "task": _merged(record, existing, "task", "task_text", ""),
+            "mode": _merged(record, existing, "mode", "mode", "agent"),
+            "status": _merged(record, existing, "status", "status", "running"),
+            "triggerSource": _merged(
+                record, existing, "triggerSource", "trigger_source", "user",
+            ) or "user",
+            "scheduledJobId": _merged(
+                record, existing, "scheduledJobId", "scheduled_job_id", "",
+            ),
+            "scheduledFiringId": _merged(
+                record, existing, "scheduledFiringId", "scheduled_firing_id", "",
+            ),
+            "createdAt": created_at,
+            "completedAt": _merged(
+                record, existing, "completedAt", "completed_at", None, allow_none=True,
+            ),
+            "updatedAt": updated_at,
+        }
         with self.lock, self.connect() as conn:
             conn.execute(
                 """
@@ -56,21 +93,17 @@ class ChatRunRecordStore:
                     updated_at=excluded.updated_at
                 """,
                 (
-                    record["id"], record["sessionId"],
-                    record.get("workspaceId", self.default_workspace_id),
-                    record.get("projectId", self.default_project_id),
-                    record.get("agentId", ""), record.get("agentName", ""),
-                    record.get("task", ""), record.get("mode", "agent"),
-                    record.get("status", "running"),
-                    record.get("triggerSource") or record.get("trigger_source") or "user",
-                    record.get("scheduledJobId") or record.get("scheduled_job_id") or "",
-                    record.get("scheduledFiringId") or record.get("scheduled_firing_id") or "",
-                    created_at,
-                    record.get("completedAt"), updated_at,
+                    payload["id"], payload["sessionId"],
+                    payload["workspaceId"], payload["projectId"],
+                    payload["agentId"], payload["agentName"],
+                    payload["task"], payload["mode"], payload["status"],
+                    payload["triggerSource"], payload["scheduledJobId"],
+                    payload["scheduledFiringId"], created_at,
+                    payload["completedAt"], updated_at,
                 ),
             )
             conn.commit()
-        return {**record, "createdAt": created_at, "updatedAt": updated_at}
+        return {**payload, "eventCount": (existing or {}).get("eventCount", 0)}
 
     def update_status(self, run_id: str, status: str, completed_at: str | None = None) -> None:
         self.ensure_db()
@@ -122,3 +155,31 @@ class ChatRunRecordStore:
             "updatedAt": row["updated_at"],
             "eventCount": 0,
         }
+
+
+def _pick(record: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in record:
+            return record[key]
+    return None
+
+
+def _merged(
+    record: dict[str, Any],
+    existing: dict[str, Any] | None,
+    camel: str,
+    snake: str,
+    default: Any,
+    *,
+    allow_none: bool = False,
+) -> Any:
+    """未传入的列保留旧值，避免部分 upsert 把 trigger_source 打回 user。"""
+
+    if camel in record or snake in record:
+        value = record[camel] if camel in record else record[snake]
+        if value is None and not allow_none:
+            return default
+        return value
+    if existing is not None:
+        return existing.get(camel, default)
+    return default

@@ -113,10 +113,9 @@ def next_weekly_anchor_after(
     tz = load_timezone(timezone_name)
     after_utc = after if after.tzinfo is not None else after.replace(tzinfo=timezone.utc)
     after_utc = after_utc.astimezone(timezone.utc)
-    hour, minute = parse_clock(at)
-    wanted = {WEEKDAY_INDEX[name] for name in weekdays}
-    if not wanted:
-        raise ScheduleError("weekly 需要非空 weekdays")
+    expr = validate_schedule_expr("weekly", {"weekdays": weekdays, "at": at})
+    hour, minute = parse_clock(expr["at"])
+    wanted = {WEEKDAY_INDEX[name] for name in expr["weekdays"]}
     local = after_utc.astimezone(tz)
     start_date = local.date()
     for offset in range(0, 8):

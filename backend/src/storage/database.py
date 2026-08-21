@@ -1645,6 +1645,12 @@ def list_scheduled_jobs(
     )
 
 
+def delete_scheduled_job(job_id: str) -> None:
+    """删除一条 ScheduledJob，供写入校验失败时回滚。"""
+
+    _scheduled_job_record_store().delete_job(job_id)
+
+
 def insert_scheduled_job_run(record: dict[str, Any]) -> dict[str, Any]:
     """插入一次 firing。"""
 

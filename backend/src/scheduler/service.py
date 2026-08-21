@@ -10,11 +10,14 @@ from pydantic import ValidationError
 from src.scheduler.models import (
     ALLOWED_JOB_TRANSITIONS,
     DEFAULT_JOB_TOOL_SCOPE,
+    DELIVERY_POLICIES,
     FAILURE_POLICIES,
     FIRING_STATUSES,
     JOB_STATUSES,
+    MISSED_POLICIES,
     NON_TERMINAL_FIRING_STATUSES,
     SCHEDULE_KINDS,
+    TERMINAL_FIRING_STATUSES,
     JobToolScope,
     ScheduledJob,
     ScheduledJobConflictError,
@@ -32,6 +35,7 @@ from src.scheduler.schedule import (
     validate_schedule_expr,
 )
 from src.storage.database import (
+    delete_scheduled_job,
     get_project,
     get_scheduled_job,
     get_scheduled_job_run,
@@ -83,11 +87,15 @@ class ScheduledJobService:
             raise ScheduledJobValidationError("agent_id 不能为空")
         if not str(frozen_prompt).strip():
             raise ScheduledJobValidationError("frozen_prompt 不能为空")
-        self._validate_schedule(schedule_kind, schedule_expr, timezone)
+        canonical_expr, timezone_name = self._validate_schedule(
+            schedule_kind, schedule_expr, timezone,
+        )
         self._validate_failure_policy(failure_policy)
-        if delivery_policy not in {"none", "notify", "confirm_then_send", "auto_send"}:
+        self._validate_missed_policy(missed_policy)
+        if delivery_policy not in DELIVERY_POLICIES:
             raise ScheduledJobValidationError(f"非法 delivery_policy: {delivery_policy}")
         scope = self._frozen_tool_scope(tool_scope)
+        record: dict[str, Any] | None = None
         try:
             record = insert_scheduled_job({
                 "workspace_id": workspace_id,
@@ -99,8 +107,8 @@ class ScheduledJobService:
                 "agent_id": agent_id,
                 "mode": "agent",
                 "schedule_kind": schedule_kind,
-                "schedule_expr": schedule_expr,
-                "timezone": timezone,
+                "schedule_expr": canonical_expr,
+                "timezone": timezone_name,
                 "frozen_prompt": frozen_prompt,
                 "skill_ids": list(skill_ids or []),
                 "tool_scope": scope.to_storage_dict(),
@@ -118,7 +126,11 @@ class ScheduledJobService:
             })
         except UniqueConstraintError as exc:
             raise ScheduledJobConflictError("同项目下任务名称已存在") from exc
-        return self._job(record)
+        try:
+            return self._job(record)
+        except ScheduledJobValidationError:
+            delete_scheduled_job(record["id"])
+            raise
 
     def get_job(self, job_id: str) -> ScheduledJob:
         record = get_scheduled_job(job_id)
@@ -133,12 +145,15 @@ class ScheduledJobService:
         agent_id: str | None = None,
         status: str | None = None,
     ) -> list[ScheduledJob]:
-        return [
-            self._job(item)
-            for item in list_scheduled_jobs(
-                project_id=project_id, agent_id=agent_id, status=status,
-            )
-        ]
+        jobs: list[ScheduledJob] = []
+        for item in list_scheduled_jobs(
+            project_id=project_id, agent_id=agent_id, status=status,
+        ):
+            try:
+                jobs.append(self._job(item))
+            except ScheduledJobValidationError:
+                continue
+        return jobs
 
     def confirm(self, job_id: str, *, now: datetime | None = None) -> ScheduledJob:
         """Jobs 页 / ConfirmJob 主路径；已 active 则幂等返回。"""
@@ -209,13 +224,15 @@ class ScheduledJobService:
         trigger: str = "schedule",
         status: str = "queued",
     ) -> ScheduledJobRun:
-        """插入 firing 行；默认 queued。本 PR 无 ticker，供时钟与约束测试使用。"""
+        """插入 firing 行，默认 queued。同一 Job 同时只允许一个非终态 firing。"""
 
         job = self.get_job(job_id)
         if status not in FIRING_STATUSES:
             raise ScheduledJobValidationError(f"非法 firing 状态: {status}")
         if trigger not in {"schedule", "manual", "catch_up"}:
             raise ScheduledJobValidationError(f"非法 firing trigger: {trigger}")
+        if status in NON_TERMINAL_FIRING_STATUSES and self.has_non_terminal_firing(job_id):
+            raise ScheduledJobConflictError("该 Job 已有未结束的 firing")
         canonical = to_utc_iso(parse_stored_datetime(scheduled_for))
         try:
             record = insert_scheduled_job_run({
@@ -259,12 +276,19 @@ class ScheduledJobService:
     ) -> ScheduledJob:
         """将 firing 标终态并推进 Job 时钟；计数只在首次进入终态时更新。"""
 
-        if status not in {"succeeded", "failed", "cancelled", "missed", "skipped"}:
+        if status not in TERMINAL_FIRING_STATUSES:
             raise ScheduledJobValidationError(f"非法终态: {status}")
         firing = self.get_firing(firing_id)
-        already_terminal = firing.status in {"succeeded", "failed", "cancelled", "missed", "skipped"}
+        job = self.get_job(firing.job_id)
+        stamped_now = now or datetime.now(timezone.utc)
+        pending = firing.model_copy(update={"status": status})
+        try:
+            self._clock_updates(job, pending, now=stamped_now)
+        except ScheduleError as exc:
+            raise ScheduledJobValidationError(str(exc)) from exc
+        already_terminal = firing.status in TERMINAL_FIRING_STATUSES
         if not already_terminal:
-            stamped = to_utc_iso(now or datetime.now(timezone.utc))
+            stamped = to_utc_iso(stamped_now)
             update_scheduled_job_run(firing_id, {
                 "status": status,
                 "error_code": error_code,
@@ -272,7 +296,6 @@ class ScheduledJobService:
                 "output_manifest": dict(output_manifest or firing.output_manifest),
                 "completed_at": stamped,
             })
-            job = self.get_job(firing.job_id)
             if status == "succeeded":
                 update_scheduled_job(job.id, {
                     "consecutive_successes": job.consecutive_successes + 1,
@@ -285,7 +308,7 @@ class ScheduledJobService:
                     "consecutive_failures": job.consecutive_failures + 1,
                     "last_run_at": firing.scheduled_for,
                 })
-        job = self.finalize_job_clock(firing.job_id, firing_id)
+        job = self.finalize_job_clock(firing.job_id, firing_id, now=stamped_now)
         if already_terminal:
             return job
         refreshed_firing = self.get_firing(firing_id)
@@ -301,37 +324,74 @@ class ScheduledJobService:
             })
         return self.get_job(job.id)
 
-    def finalize_job_clock(self, job_id: str, firing_id: str) -> ScheduledJob:
+    def finalize_job_clock(
+        self,
+        job_id: str,
+        firing_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> ScheduledJob:
         """任一 firing 终态后推进时钟，避免 UNIQUE (job_id, scheduled_for, trigger) 卡死。"""
 
         job = self.get_job(job_id)
         firing = self.get_firing(firing_id)
-        if job.schedule_kind == "weekly":
-            nxt = next_weekly_anchor_after(
-                parse_stored_datetime(firing.scheduled_for),
-                weekdays=list(job.schedule_expr.get("weekdays") or []),
-                at=str(job.schedule_expr.get("at") or ""),
-                timezone_name=job.timezone,
+        try:
+            changes = self._clock_updates(
+                job, firing, now=now or datetime.now(timezone.utc),
             )
-            changes: dict[str, Any] = {"next_run_at": to_utc_iso(nxt)}
+        except ScheduleError as exc:
+            raise ScheduledJobValidationError(str(exc)) from exc
+        if not changes:
+            return job
+        return self._save_job(job.id, changes)
+
+    def _clock_updates(
+        self,
+        job: ScheduledJob,
+        firing: ScheduledJobRun,
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+        if job.schedule_kind == "weekly":
+            expr = validate_schedule_expr("weekly", job.schedule_expr)
+            kwargs = {
+                "weekdays": expr["weekdays"],
+                "at": expr["at"],
+                "timezone_name": job.timezone,
+            }
+            changes: dict[str, Any] = {}
+            if firing.trigger == "manual":
+                pass
+            elif firing.trigger == "catch_up":
+                from_scheduled = next_weekly_anchor_after(
+                    parse_stored_datetime(firing.scheduled_for), **kwargs,
+                )
+                from_now = next_weekly_anchor_after(now, **kwargs)
+                nxt = from_scheduled if from_scheduled >= from_now else from_now
+                changes["next_run_at"] = to_utc_iso(nxt)
+            else:
+                nxt = next_weekly_anchor_after(
+                    parse_stored_datetime(firing.scheduled_for), **kwargs,
+                )
+                changes["next_run_at"] = to_utc_iso(nxt)
             if (
-                firing.status != "succeeded"
+                firing.status not in {"succeeded", "skipped"}
                 and job.failure_policy == "pause_job"
                 and job.status == "active"
             ):
                 changes["status"] = "paused"
                 changes["pause_reason"] = "failure_policy"
-            return self._save_job(job.id, changes)
+            return changes
         changes = {"next_run_at": None}
         if job.status == "archived":
-            return self._save_job(job.id, changes)
+            return changes
         if firing.status == "succeeded":
             changes["status"] = "completed"
             changes["pause_reason"] = ""
-        else:
+        elif firing.status != "skipped":
             changes["status"] = "paused"
             changes["pause_reason"] = "once_failed"
-        return self._save_job(job.id, changes)
+        return changes
 
     def pause_for_resource_change(
         self,
@@ -341,7 +401,7 @@ class ScheduledJobService:
         agent_id: str | None = None,
         skill_id: str | None = None,
     ) -> list[ScheduledJob]:
-        """资源失效时立即暂停匹配的 active Job。本 PR 尚未接到路由。"""
+        """资源失效时立即暂停匹配的 active Job。"""
 
         if not project_id and not agent_id and not skill_id:
             raise ScheduledJobValidationError("pause_for_resource_change 需要过滤条件")
@@ -385,17 +445,19 @@ class ScheduledJobService:
         schedule_kind: str,
         schedule_expr: dict[str, Any],
         timezone_name: str,
-    ) -> None:
+    ) -> tuple[dict[str, Any], str]:
         if schedule_kind not in SCHEDULE_KINDS:
             raise ScheduledJobValidationError("Phase 1 仅支持 weekly 与 once")
         try:
-            validate_schedule_expr(schedule_kind, schedule_expr)
+            expr = validate_schedule_expr(schedule_kind, schedule_expr)
+            tz = str(timezone_name).strip()
             compute_next_run_at(
                 schedule_kind=schedule_kind,
-                schedule_expr=schedule_expr,
-                timezone_name=timezone_name,
+                schedule_expr=expr,
+                timezone_name=tz,
                 after=datetime.now(timezone.utc),
             )
+            return expr, tz
         except ScheduleError as exc:
             raise ScheduledJobValidationError(str(exc)) from exc
 
@@ -404,6 +466,10 @@ class ScheduledJobService:
             raise ScheduledJobValidationError("failure_policy 已删除 retry_once")
         if failure_policy not in FAILURE_POLICIES:
             raise ScheduledJobValidationError(f"非法 failure_policy: {failure_policy}")
+
+    def _validate_missed_policy(self, missed_policy: str) -> None:
+        if missed_policy not in MISSED_POLICIES:
+            raise ScheduledJobValidationError(f"非法 missed_policy: {missed_policy}")
 
     def _frozen_tool_scope(self, value: dict[str, Any] | JobToolScope | None) -> JobToolScope:
         if value is None:
