@@ -1,0 +1,546 @@
+"""定时任务 schema、session kind、weekly/once 调度与状态机回归。"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from pydantic import ValidationError
+
+from src.agents.runtime_types import RuntimeToolScope
+from src.scheduler.models import (
+    DEFAULT_JOB_TOOL_SCOPE,
+    JobToolScope,
+    ScheduledJob,
+    ScheduledJobRun,
+)
+from src.scheduler.schedule import (
+    ScheduleError,
+    compute_next_run_at,
+    next_weekly_anchor_after,
+    once_run_at,
+    to_utc_iso,
+    validate_schedule_expr,
+)
+from src.scheduler.service import ScheduledJobService
+from src.scheduler.settings import is_scheduled_jobs_enabled
+from src.server.routes.chat.models import ChatSession, ChatStore
+from src.storage import database
+from src.storage.database import (
+    DEFAULT_PROJECT_ID,
+    DEFAULT_WORKSPACE_ID,
+    ensure_db,
+    get_chat_run,
+    load_chat_store,
+    save_chat_store,
+    upsert_chat_run,
+)
+
+
+@pytest.fixture()
+def isolated_db(tmp_path, monkeypatch):
+    """每个用例使用独立 SQLite，避免污染开发库。"""
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
+    yield
+    database._initialized = False
+
+
+def _service() -> ScheduledJobService:
+    ensure_db()
+    return ScheduledJobService()
+
+
+def _weekly_job(service: ScheduledJobService, **overrides) -> object:
+    payload = {
+        "workspace_id": DEFAULT_WORKSPACE_ID,
+        "project_id": DEFAULT_PROJECT_ID,
+        "name": "周五周报",
+        "agent_id": "agent-1",
+        "schedule_kind": "weekly",
+        "schedule_expr": {"weekdays": ["fri"], "at": "18:00"},
+        "timezone": "Asia/Shanghai",
+        "frozen_prompt": "生成本周周报，写入 outputs/weekly-report.md",
+    }
+    payload.update(overrides)
+    return service.create_job(**payload)
+
+
+def test_default_job_tool_scope_is_all_false_not_runtime_tool_scope():
+    """缺省冻结 scope 全 false，禁止落入 RuntimeToolScope 全 True。"""
+
+    assert JobToolScope().model_dump() == DEFAULT_JOB_TOOL_SCOPE
+    assert JobToolScope.model_validate({}).allow_bash is False
+    assert JobToolScope.model_validate({}).allow_http is False
+    runtime = RuntimeToolScope()
+    assert runtime.allow_bash is True
+    assert runtime.allow_mcp is True
+
+
+def test_job_model_rejects_draft_and_retry_once():
+    base = {
+        "id": "job-1",
+        "workspace_id": "default",
+        "project_id": "default",
+        "name": "x",
+        "status": "pending_confirmation",
+        "agent_id": "a",
+        "schedule_kind": "weekly",
+        "schedule_expr": {"weekdays": ["fri"], "at": "18:00"},
+        "timezone": "Asia/Shanghai",
+        "frozen_prompt": "do",
+        "created_at": "2026-08-21T00:00:00+00:00",
+        "updated_at": "2026-08-21T00:00:00+00:00",
+    }
+    with pytest.raises(ValidationError):
+        ScheduledJob.model_validate({**base, "status": "draft"})
+    with pytest.raises(ValidationError):
+        ScheduledJob.model_validate({**base, "failure_policy": "retry_once"})
+    with pytest.raises(ValidationError):
+        ScheduledJob.model_validate({**base, "schedule_kind": "cron"})
+
+
+def test_firing_status_includes_queued():
+    firing = ScheduledJobRun.model_validate({
+        "id": "firing-1",
+        "job_id": "job-1",
+        "workspace_id": "default",
+        "project_id": "default",
+        "trigger": "schedule",
+        "scheduled_for": "2026-08-21T10:00:00+00:00",
+        "status": "queued",
+        "created_at": "2026-08-21T00:00:00+00:00",
+        "updated_at": "2026-08-21T00:00:00+00:00",
+    })
+    assert firing.status == "queued"
+
+
+def test_weekly_next_anchor_is_clock_face_not_plus_seven_days():
+    after = datetime(2026, 8, 21, 10, 0, tzinfo=timezone.utc)  # 周五 18:00 上海
+    nxt = next_weekly_anchor_after(
+        after,
+        weekdays=["fri"],
+        at="18:00",
+        timezone_name="Asia/Shanghai",
+    )
+    assert to_utc_iso(nxt) == "2026-08-28T10:00:00+00:00"
+
+
+def test_weekly_dst_uses_local_clock_not_utc_plus_seven_days():
+    """纽约夏令时切换后仍落在周五 18:00 本地，而不是 UTC+7 天。"""
+
+    after = datetime(2026, 3, 6, 23, 0, tzinfo=timezone.utc)  # 周五 18:00 EST
+    nxt = next_weekly_anchor_after(
+        after,
+        weekdays=["fri"],
+        at="18:00",
+        timezone_name="America/New_York",
+    )
+    assert to_utc_iso(nxt) == "2026-03-13T22:00:00+00:00"
+    plus_seven = after + timedelta(days=7)
+    assert to_utc_iso(nxt) != to_utc_iso(plus_seven)
+
+
+def test_weekly_before_same_day_clock_keeps_today():
+    after = datetime(2026, 8, 21, 9, 0, tzinfo=timezone.utc)  # 周五 17:00 上海
+    nxt = next_weekly_anchor_after(
+        after,
+        weekdays=["fri"],
+        at="18:00",
+        timezone_name="Asia/Shanghai",
+    )
+    assert to_utc_iso(nxt) == "2026-08-21T10:00:00+00:00"
+
+
+def test_once_run_at_uses_timezone_column_without_offset():
+    instant = once_run_at("2026-08-22T18:00:00", "Asia/Shanghai")
+    assert to_utc_iso(instant) == "2026-08-22T10:00:00+00:00"
+    with pytest.raises(ScheduleError):
+        once_run_at("2026-08-22T18:00:00+08:00", "Asia/Shanghai")
+    with pytest.raises(ScheduleError):
+        validate_schedule_expr("cron", {"expr": "0 18 * * 5"})
+
+
+def test_compute_next_run_at_once_and_weekly():
+    weekly = compute_next_run_at(
+        schedule_kind="weekly",
+        schedule_expr={"weekdays": ["fri"], "at": "18:00"},
+        timezone_name="Asia/Shanghai",
+        after=datetime(2026, 8, 21, 10, 0, tzinfo=timezone.utc),
+    )
+    assert to_utc_iso(weekly) == "2026-08-28T10:00:00+00:00"
+    once = compute_next_run_at(
+        schedule_kind="once",
+        schedule_expr={"at": "2026-08-22T18:00:00"},
+        timezone_name="Asia/Shanghai",
+        after=datetime(2026, 8, 21, 0, 0, tzinfo=timezone.utc),
+    )
+    assert to_utc_iso(once) == "2026-08-22T10:00:00+00:00"
+
+
+def test_feature_flag_defaults_false(isolated_db):
+    ensure_db()
+    assert is_scheduled_jobs_enabled() is False
+
+
+def test_create_job_writes_pending_confirmation_and_all_false_tool_scope(isolated_db):
+    service = _service()
+    job = _weekly_job(service)
+    assert job.status == "pending_confirmation"
+    assert job.status != "draft"
+    assert job.project_id == DEFAULT_PROJECT_ID
+    assert job.mode == "agent"
+    assert job.tool_scope.model_dump() == DEFAULT_JOB_TOOL_SCOPE
+    assert job.next_run_at is None
+
+
+def test_create_job_rejects_retry_once_and_duplicate_name(isolated_db):
+    from src.scheduler.models import ScheduledJobConflictError, ScheduledJobValidationError
+
+    service = _service()
+    _weekly_job(service)
+    with pytest.raises(ScheduledJobValidationError):
+        _weekly_job(service, name="另一个", failure_policy="retry_once")
+    with pytest.raises(ScheduledJobConflictError):
+        _weekly_job(service, name="周五周报")
+
+
+def test_status_transitions_confirm_pause_resume_archive(isolated_db):
+    from src.scheduler.models import ScheduledJobStateError
+
+    service = _service()
+    job = _weekly_job(service)
+    now = datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc)  # 周四
+    active = service.confirm(job.id, now=now)
+    assert active.status == "active"
+    assert active.next_run_at == "2026-08-21T10:00:00+00:00"
+    assert service.confirm(job.id, now=now).status == "active"
+
+    paused = service.pause(job.id, reason="user")
+    assert paused.status == "paused"
+    assert paused.pause_reason == "user"
+
+    resumed = service.resume(job.id, now=now)
+    assert resumed.status == "active"
+    assert resumed.next_run_at == "2026-08-21T10:00:00+00:00"
+
+    archived = service.archive(job.id)
+    assert archived.status == "archived"
+    assert archived.archived_at is not None
+    with pytest.raises(ScheduledJobStateError):
+        service.confirm(job.id)
+
+
+def test_confirm_rejects_auto_send(isolated_db):
+    from src.scheduler.models import ScheduledJobValidationError
+
+    service = _service()
+    job = _weekly_job(service, delivery_policy="auto_send", name="自动发送")
+    with pytest.raises(ScheduledJobValidationError):
+        service.confirm(job.id)
+
+
+def test_finalize_job_clock_weekly_advances_from_scheduled_for(isolated_db):
+    service = _service()
+    job = service.confirm(
+        _weekly_job(service).id,
+        now=datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc),
+    )
+    firing = service.create_firing(
+        job_id=job.id,
+        scheduled_for="2026-08-21T10:00:00+00:00",
+        trigger="schedule",
+        status="queued",
+    )
+    assert firing.status == "queued"
+    assert firing.project_id == DEFAULT_PROJECT_ID
+    updated = service.complete_firing(firing.id, "succeeded")
+    assert updated.status == "active"
+    assert updated.next_run_at == "2026-08-28T10:00:00+00:00"
+    # 再次 finalize 必须幂等，不能再跳一周
+    again = service.finalize_job_clock(job.id, firing.id)
+    assert again.next_run_at == "2026-08-28T10:00:00+00:00"
+
+
+def test_finalize_job_clock_weekly_pause_job_on_failure(isolated_db):
+    service = _service()
+    job = service.confirm(
+        _weekly_job(service, failure_policy="pause_job", name="失败暂停").id,
+        now=datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc),
+    )
+    firing = service.create_firing(
+        job_id=job.id,
+        scheduled_for=job.next_run_at or "",
+        trigger="schedule",
+    )
+    updated = service.complete_firing(firing.id, "failed", error_code="timeout")
+    assert updated.status == "paused"
+    assert updated.pause_reason == "failure_policy"
+    assert updated.next_run_at == "2026-08-28T10:00:00+00:00"
+
+
+def test_finalize_job_clock_weekly_notify_keep_schedule_stays_active(isolated_db):
+    service = _service()
+    job = service.confirm(
+        _weekly_job(service, name="失败继续").id,
+        now=datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc),
+    )
+    firing = service.create_firing(
+        job_id=job.id,
+        scheduled_for=job.next_run_at or "",
+        trigger="schedule",
+    )
+    updated = service.complete_firing(firing.id, "failed", error_code="timeout")
+    assert updated.status == "active"
+    assert updated.next_run_at == "2026-08-28T10:00:00+00:00"
+    assert updated.next_run_at != firing.scheduled_for
+
+
+def test_finalize_job_clock_once_success_and_failure(isolated_db):
+    service = _service()
+    success = service.create_job(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        project_id=DEFAULT_PROJECT_ID,
+        name="一次性成功",
+        agent_id="agent-1",
+        schedule_kind="once",
+        schedule_expr={"at": "2026-08-22T18:00:00"},
+        timezone="Asia/Shanghai",
+        frozen_prompt="写一份纪要",
+    )
+    success = service.confirm(success.id)
+    assert success.next_run_at == "2026-08-22T10:00:00+00:00"
+    firing = service.create_firing(
+        job_id=success.id,
+        scheduled_for=success.next_run_at or "",
+        trigger="schedule",
+    )
+    completed = service.complete_firing(firing.id, "succeeded")
+    assert completed.status == "completed"
+    assert completed.next_run_at is None
+
+    failed = service.create_job(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        project_id=DEFAULT_PROJECT_ID,
+        name="一次性失败",
+        agent_id="agent-1",
+        schedule_kind="once",
+        schedule_expr={"at": "2026-08-22T18:00:00"},
+        timezone="Asia/Shanghai",
+        frozen_prompt="写一份纪要",
+    )
+    failed = service.confirm(failed.id)
+    miss = service.create_firing(
+        job_id=failed.id,
+        scheduled_for=failed.next_run_at or "",
+        trigger="schedule",
+        status="queued",
+    )
+    paused = service.complete_firing(miss.id, "missed", error_code="missed")
+    assert paused.status == "paused"
+    assert paused.pause_reason == "once_failed"
+    assert paused.next_run_at is None
+
+
+def test_firing_unique_constraint_and_queued_not_stale(isolated_db):
+    from src.scheduler.models import ScheduledJobConflictError
+
+    service = _service()
+    job = service.confirm(
+        _weekly_job(service).id,
+        now=datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc),
+    )
+    first = service.create_firing(
+        job_id=job.id,
+        scheduled_for=job.next_run_at or "",
+        trigger="schedule",
+        status="queued",
+    )
+    assert first.status == "queued"
+    assert service.has_non_terminal_firing(job.id) is True
+    with pytest.raises(ScheduledJobConflictError):
+        service.create_firing(
+            job_id=job.id,
+            scheduled_for=job.next_run_at or "",
+            trigger="schedule",
+        )
+    manual = service.create_firing(
+        job_id=job.id,
+        scheduled_for=job.next_run_at or "",
+        trigger="manual",
+    )
+    assert manual.trigger == "manual"
+
+
+def test_pause_for_resource_change_pauses_matching_active_jobs(isolated_db):
+    service = _service()
+    now = datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc)
+    job = service.confirm(
+        _weekly_job(service, skill_ids=["skill-report"]).id,
+        now=now,
+    )
+    other = service.confirm(
+        _weekly_job(service, name="另一份", agent_id="agent-2").id,
+        now=now,
+    )
+    paused = service.pause_for_resource_change(
+        "skill_unbound",
+        project_id=DEFAULT_PROJECT_ID,
+        skill_id="skill-report",
+    )
+    assert [item.id for item in paused] == [job.id]
+    assert service.get_job(job.id).status == "paused"
+    assert service.get_job(job.id).pause_reason == "skill_unbound"
+    assert service.get_job(other.id).status == "active"
+
+    by_agent = service.pause_for_resource_change("agent_missing", agent_id="agent-2")
+    assert [item.id for item in by_agent] == [other.id]
+
+
+def test_sql_tool_scope_default_is_all_false(isolated_db):
+    ensure_db()
+    now = "2026-08-21T00:00:00+00:00"
+    with database._lock, database._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO scheduled_jobs (
+                id, workspace_id, project_id, name, status, agent_id,
+                schedule_kind, schedule_expr, timezone, frozen_prompt,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "job-sql-default", DEFAULT_WORKSPACE_ID, DEFAULT_PROJECT_ID,
+                "SQL默认", "pending_confirmation", "agent-1",
+                "weekly", '{"weekdays":["fri"],"at":"18:00"}', "Asia/Shanghai",
+                "prompt", now, now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT tool_scope FROM scheduled_jobs WHERE id = ?",
+            ("job-sql-default",),
+        ).fetchone()
+    assert json.loads(row["tool_scope"]) == DEFAULT_JOB_TOOL_SCOPE
+
+
+def test_schema_tables_and_unique_indexes_exist(isolated_db):
+    ensure_db()
+    with database._lock, database._connect() as conn:
+        tables = {
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert {
+            "scheduled_jobs",
+            "scheduled_job_runs",
+            "project_job_recipients",
+            "user_notifications",
+        }.issubset(tables)
+        session_cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(chat_sessions)").fetchall()
+        }
+        run_cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(chat_runs)").fetchall()
+        }
+        assert "kind" in session_cols
+        assert {"trigger_source", "scheduled_job_id", "scheduled_firing_id"} <= run_cols
+        indexes = {
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+            ).fetchall()
+        }
+        assert "idx_scheduled_jobs_due" in indexes
+
+
+def test_chat_session_kind_survives_save_chat_store(isolated_db):
+    ensure_db()
+    save_chat_store({
+        "sessions": [{
+            "id": "sess-job",
+            "title": "定时执行",
+            "agent_id": "agent-1",
+            "agent_name": "助手",
+            "mode": "agent",
+            "workspace_id": DEFAULT_WORKSPACE_ID,
+            "project_id": DEFAULT_PROJECT_ID,
+            "kind": "scheduled_job",
+            "created_at": "2026-08-21T00:00:00+00:00",
+            "updated_at": "2026-08-21T00:00:00+00:00",
+            "message_count": 0,
+        }],
+        "messages": {},
+    })
+    loaded = load_chat_store()
+    assert loaded["sessions"][0]["kind"] == "scheduled_job"
+    store = ChatStore.model_validate(loaded)
+    assert store.sessions[0].kind == "scheduled_job"
+    save_chat_store(store.model_dump(mode="json", by_alias=True))
+    reloaded = load_chat_store()
+    assert reloaded["sessions"][0]["kind"] == "scheduled_job"
+
+
+def test_chat_session_kind_defaults_to_chat(isolated_db):
+    ensure_db()
+    session = ChatSession(
+        id="sess-chat",
+        title="普通对话",
+        agent_id="agent-1",
+        agent_name="助手",
+        created_at="2026-08-21T00:00:00+00:00",
+        updated_at="2026-08-21T00:00:00+00:00",
+    )
+    assert session.kind == "chat"
+    save_chat_store({"sessions": [session.model_dump()], "messages": {}})
+    loaded = load_chat_store()
+    assert loaded["sessions"][0]["kind"] == "chat"
+
+
+def test_chat_run_trigger_source_defaults_to_user(isolated_db):
+    ensure_db()
+    upsert_chat_run({
+        "id": "run-user",
+        "sessionId": "sess-1",
+        "agentId": "agent-1",
+        "agentName": "助手",
+        "task": "hello",
+        "mode": "agent",
+        "status": "completed",
+    })
+    record = get_chat_run("run-user")
+    assert record is not None
+    assert record["triggerSource"] == "user"
+    assert record["scheduledJobId"] == ""
+    assert record["scheduledFiringId"] == ""
+
+
+def test_chat_run_records_scheduled_columns(isolated_db):
+    ensure_db()
+    upsert_chat_run({
+        "id": "run-job",
+        "sessionId": "sess-job",
+        "agentId": "agent-1",
+        "agentName": "助手",
+        "task": "周报",
+        "mode": "agent",
+        "status": "running",
+        "triggerSource": "scheduled_job",
+        "scheduledJobId": "job-1",
+        "scheduledFiringId": "firing-1",
+    })
+    record = get_chat_run("run-job")
+    assert record is not None
+    assert record["triggerSource"] == "scheduled_job"
+    assert record["scheduledJobId"] == "job-1"
+    assert record["scheduledFiringId"] == "firing-1"
+    upsert_chat_run({**record, "status": "completed"})
+    updated = get_chat_run("run-job")
+    assert updated is not None
+    assert updated["triggerSource"] == "scheduled_job"
+    assert updated["scheduledJobId"] == "job-1"
+    assert updated["status"] == "completed"

@@ -37,8 +37,9 @@ class ChatRunRecordStore:
                 """
                 INSERT INTO chat_runs (
                     id, session_id, workspace_id, project_id, agent_id, agent_name,
-                    task_text, mode, status, created_at, completed_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    task_text, mode, status, trigger_source, scheduled_job_id,
+                    scheduled_firing_id, created_at, completed_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     session_id=excluded.session_id,
                     workspace_id=excluded.workspace_id,
@@ -48,6 +49,9 @@ class ChatRunRecordStore:
                     task_text=excluded.task_text,
                     mode=excluded.mode,
                     status=excluded.status,
+                    trigger_source=excluded.trigger_source,
+                    scheduled_job_id=excluded.scheduled_job_id,
+                    scheduled_firing_id=excluded.scheduled_firing_id,
                     completed_at=excluded.completed_at,
                     updated_at=excluded.updated_at
                 """,
@@ -57,7 +61,11 @@ class ChatRunRecordStore:
                     record.get("projectId", self.default_project_id),
                     record.get("agentId", ""), record.get("agentName", ""),
                     record.get("task", ""), record.get("mode", "agent"),
-                    record.get("status", "running"), created_at,
+                    record.get("status", "running"),
+                    record.get("triggerSource") or record.get("trigger_source") or "user",
+                    record.get("scheduledJobId") or record.get("scheduled_job_id") or "",
+                    record.get("scheduledFiringId") or record.get("scheduled_firing_id") or "",
+                    created_at,
                     record.get("completedAt"), updated_at,
                 ),
             )
@@ -106,6 +114,9 @@ class ChatRunRecordStore:
             "task": row["task_text"],
             "mode": row["mode"],
             "status": row["status"],
+            "triggerSource": row["trigger_source"] if "trigger_source" in row.keys() else "user",
+            "scheduledJobId": row["scheduled_job_id"] if "scheduled_job_id" in row.keys() else "",
+            "scheduledFiringId": row["scheduled_firing_id"] if "scheduled_firing_id" in row.keys() else "",
             "createdAt": row["created_at"],
             "completedAt": row["completed_at"],
             "updatedAt": row["updated_at"],

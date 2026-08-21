@@ -113,6 +113,7 @@ BASE_SCHEMA_SQL = """
         agent_id TEXT NOT NULL,
         agent_name TEXT NOT NULL,
         mode TEXT NOT NULL DEFAULT 'agent',
+        kind TEXT NOT NULL DEFAULT 'chat',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         message_count INTEGER NOT NULL DEFAULT 0
@@ -261,6 +262,9 @@ BASE_SCHEMA_SQL = """
         task_text TEXT NOT NULL DEFAULT '',
         mode TEXT NOT NULL DEFAULT 'agent',
         status TEXT NOT NULL DEFAULT 'running',
+        trigger_source TEXT NOT NULL DEFAULT 'user',
+        scheduled_job_id TEXT NOT NULL DEFAULT '',
+        scheduled_firing_id TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
         completed_at TEXT,
         updated_at TEXT NOT NULL
@@ -500,4 +504,102 @@ BASE_SCHEMA_SQL = """
         ON skill_evolution_records(source_session_id, source_run_id, source_message_id);
     CREATE INDEX IF NOT EXISTS idx_skill_evolution_records_agent
         ON skill_evolution_records(agent_id, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS scheduled_jobs (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        pause_reason TEXT NOT NULL DEFAULT '',
+        agent_id TEXT NOT NULL,
+        mode TEXT NOT NULL DEFAULT 'agent',
+        schedule_kind TEXT NOT NULL,
+        schedule_expr TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        next_run_at TEXT,
+        last_run_at TEXT,
+        frozen_prompt TEXT NOT NULL,
+        skill_ids TEXT NOT NULL DEFAULT '[]',
+        tool_scope TEXT NOT NULL DEFAULT '{"allow_bash":false,"allow_http":false,"allow_web":false,"allow_mcp":false,"allow_knowledge":false}',
+        input_spec TEXT NOT NULL DEFAULT '{}',
+        output_spec TEXT NOT NULL DEFAULT '{}',
+        missed_policy TEXT NOT NULL DEFAULT 'catch_up_once',
+        failure_policy TEXT NOT NULL DEFAULT 'notify_keep_schedule',
+        delivery_policy TEXT NOT NULL DEFAULT 'notify',
+        delivery_channel_ref TEXT NOT NULL DEFAULT '',
+        recipient_ids TEXT NOT NULL DEFAULT '[]',
+        unattended_permission TEXT NOT NULL DEFAULT 'overlay_workspace_write',
+        auto_send_enabled_at TEXT,
+        required_successes INTEGER NOT NULL DEFAULT 3,
+        consecutive_successes INTEGER NOT NULL DEFAULT 0,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        max_consecutive_failures INTEGER NOT NULL DEFAULT 3,
+        max_firings_per_day INTEGER NOT NULL DEFAULT 8,
+        created_from_session_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT,
+        UNIQUE (project_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_due
+        ON scheduled_jobs(status, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_project
+        ON scheduled_jobs(project_id, status, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        trigger TEXT NOT NULL,
+        scheduled_for TEXT NOT NULL,
+        status TEXT NOT NULL,
+        chat_session_id TEXT NOT NULL DEFAULT '',
+        chat_run_id TEXT NOT NULL DEFAULT '',
+        error_code TEXT NOT NULL DEFAULT '',
+        error_message TEXT NOT NULL DEFAULT '',
+        output_manifest TEXT NOT NULL DEFAULT '{}',
+        delivery_status TEXT NOT NULL DEFAULT 'not_applicable',
+        started_at TEXT,
+        completed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (job_id, scheduled_for, trigger),
+        FOREIGN KEY(job_id) REFERENCES scheduled_jobs(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_job
+        ON scheduled_job_runs(job_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_status
+        ON scheduled_job_runs(status, updated_at);
+    CREATE TABLE IF NOT EXISTS project_job_recipients (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        display_name TEXT NOT NULL DEFAULT '',
+        channel TEXT NOT NULL,
+        address TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (project_id, channel, address)
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_job_recipients_project
+        ON project_job_recipients(project_id, enabled);
+    CREATE TABLE IF NOT EXISTS user_notifications (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT '',
+        job_id TEXT NOT NULL DEFAULT '',
+        firing_id TEXT NOT NULL DEFAULT '',
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL DEFAULT '',
+        payload TEXT NOT NULL DEFAULT '{}',
+        read_at TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_notifications_project_created
+        ON user_notifications(project_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_user_notifications_unread
+        ON user_notifications(project_id, read_at, created_at DESC);
 """
