@@ -1,8 +1,8 @@
 # 定时任务（Scheduled Jobs）后续路线设计
 
 > 状态：Draft / 后续路线。2026-08-20。
-> 作者：引力 YINLI 架构（待评审）。
-> 本文不是当前在线行为基线。落地后应写入 `docs/scheduled-jobs-design.md`，并在 `docs/README.md` 的「后续路线」登记。
+> 作者：引力 YINLI 架构（已登记为后续路线）。
+> 本文已在 `docs/README.md`「后续路线」登记；落地实现前不得当作在线行为基线。
 > 稳定事件字段以 `docs/chat-sse-event-contract.md` 为准；本文不定义新的 Chat SSE 字段。
 > 边界对照：`docs/team-runtime-redesign.md`、`docs/subagent-delegation-design.md`。
 
@@ -79,7 +79,7 @@
 5. **firing 去掉 AskUser / Plan / Subagent；HITL 在进入 `waiting_*` 之前由 `hitl_unattended_resolve` 处理。** cwd 内 Write/Edit **自动批准**；其余交互一律拒绝。Team Member 仍用纯 deny helper，二者只共享 resume 事件构造，不共用决策。上限 8 **只计 deny**。禁止把 Team 的 deny-only 原样套到 scheduled Leader，也禁止在 `leader_stream.py` 复制仍会写入 `PENDING_INTERACTIONS` 的暂停路径。
 6. **ToolScope 在 Job 上冻结，firing 不跑 `tool_scope_resolver`。Skill 不是关键词选择。** Phase 1 默认冻结 scope **全关** Bash/HTTP/Web/MCP/知识库（见数据模型）；`RuntimeToolScope()` 的 dataclass 全 True 不得当 Job 默认值。`used_skills` 必须 **等于** 冻结 `skill_ids`，且全部仍安装、仍在 Agent 绑定、仍在 Project binding，否则 `skill_unbound`。Skill 包含 `scripts/` 才打开 `allow_bash`。
 7. **调度器放 FastAPI 进程内。ticker 只 INSERT `queued` + `create_task`，禁止 await 信号量或完整 ReAct。** Electron 不持有 Job timer。OS 唤醒是 Phase 4。
-8. **错过只补跑最近一次，不追赶堆积。** weekly 按钟面（weekday + clock）算下一锚点，不是「现在 + 7 天」。
+8. **错过只补跑最近一次，不追赶堆积。** 处理完当次 due（catch-up 或 missed）后 `next_run_at = next_anchor_after(max(scheduled_for, now))`，一次跳过积压周期。weekly 按钟面（weekday + clock）算下一锚点，不是「现在 + 7 天」。
 9. **生成与外发解耦。** Agent 只写产物；投递由控制面在 Run 成功后执行。firing 的 ToolScope 不含投递通道。
 10. **投递策略默认 `notify`，`auto_send` 必须连续成功且用户显式打开。** 收件人只允许 Project 白名单。Phase 1 拒绝 `auto_send` 进入 `active`。
 11. **Job 启用由控制面 `ScheduledJobService.confirm()` 完成，不以模型漏调 `ConfirmJob` 为唯一路径。** Jobs 页确认按钮是主路径。AskUser 只收集字段，resume 答案不会自动把 Job 变 `active`。不先改 SSE 契约。
@@ -108,7 +108,7 @@
 12. 收件人只能来自 `project_job_recipients` 白名单。模型输出、冻结提示词、邮件正文里的地址一律不得进入投递 API。
 13. 投递策略 `auto_send` 仅当 `consecutive_successes >= required_successes` 且 `auto_send_enabled_at` 非空时生效；任一失败将连续成功清零。
 14. Secret 不得写入 `scheduled_jobs` / SQLite JSON。出站凭据走现有 `secret_store` 的同一 Keychain service 名 `agent-workstation-desktop.model-credentials.v1`，account 前缀 `outbound-channel:{channel_id}`。
-15. 调度器重启必须幂等：`UNIQUE (job_id, scheduled_for, trigger)` 去重，不得把同一到期点跑两遍。任一 firing 进入终态（含启动 reconcile）必须调用 `finalize_job_clock`：weekly 把 `next_run_at` 推到 **该次 `scheduled_for` 之后的下一钟面锚点**；once 成功 → `completed`，失败/missed → `paused` 且 `next_run_at=NULL`。`notify_keep_schedule` 不是用同一 `scheduled_for` 再试。
+15. 调度器重启必须幂等：`UNIQUE (job_id, scheduled_for, trigger)` 去重，不得把同一到期点跑两遍。任一 firing 进入终态（含启动 reconcile）必须调用 `finalize_job_clock`：weekly（`trigger≠manual`）把 `next_run_at` 推到 `next_anchor_after(max(scheduled_for, now), expr, tz)`，一次跳过积压周期；once 成功 → `completed`，失败/missed → `paused` 且 `next_run_at=NULL`。`notify_keep_schedule` 不是用同一 `scheduled_for` 再试。`trigger=manual` 的 weekly **不改** 周期 `next_run_at`。
 16. 错过策略不得把多个积压周期一次性全部执行。一次 tick 每个 Job 最多补 1 次。
 17. 定时 Run 计入 `chat_runs`，带内部 `trigger_source=scheduled_job`；Runs / Trace 可按该列筛选。禁止用普通 `/runs/{id}/rerun` 重跑定时 Run（409，引导 `run-now`）。
 18. 「关掉周五那个周报」必须落到已有 Job 的 `paused`，禁止再插入一条语义相同的新 Job 作为关闭手段。
@@ -446,13 +446,14 @@ async def stop() -> None:
 
 #### `finalize_job_clock`（失败后必须推钟）
 
-`UNIQUE (job_id, scheduled_for, trigger)` 禁止用同一到期点再 INSERT。因此 **任何终态**（`succeeded` / `failed` / `cancelled` / `missed`，含启动 reconcile）都必须改 Job 时钟，否则 Job 会表面 `active`、`next_run_at` 仍指向已占用的 `scheduled_for`，以后 claim 全部 UNIQUE 失败。
+`UNIQUE (job_id, scheduled_for, trigger)` 禁止用同一到期点再 INSERT。因此 **任何终态**（`succeeded` / `failed` / `cancelled` / `missed` / `skipped`，含启动 reconcile）都必须改 Job 时钟，否则 Job 会表面 `active`、`next_run_at` 仍指向已占用的 `scheduled_for`，以后 claim 全部 UNIQUE 失败。
 
 ```text
 finalize_job_clock(job, firing):
   weekly:
-    next_run_at = next_anchor_after(firing.scheduled_for, expr, tz)
-    # 从该次 scheduled_for 算下一个周五 18:00，不是 now+7d
+    若 firing.trigger == manual：不改 next_run_at
+    否则 next_run_at = next_anchor_after(max(firing.scheduled_for, now), expr, tz)
+    # 钟面锚点，不是 now+7d；max(..., now) 一次跳过关闭期间积压的周
     若 failure_policy=pause_job 且 firing 非 succeeded → paused
     否则保持 active（notify_keep_schedule ≠ 同一次 scheduled_for 再试）
   once:
@@ -481,13 +482,13 @@ finalize_job_clock(job, firing):
 
 | `missed_policy` | 行为 |
 | --- | --- |
-| `catch_up_once`（默认） | 过期且 `now - scheduled_for <= grace` 则补跑 **一次**（`trigger=catch_up`）。然后按 **现在** 计算下一个 **钟面锚点** |
-| `mark_missed` | 不跑，记录 `missed`，通知，跳到下一锚点 |
+| `catch_up_once`（默认） | 过期且 `now - scheduled_for <= grace` 则补跑 **一次**（`trigger=catch_up`）。过期且超出 grace：**不跑**，记一条 `missed` 并通知。无论补跑还是记 missed，随后 `next_run_at = next_anchor_after(max(scheduled_for, now))` |
+| `mark_missed` | 不跑，记录 `missed`，通知，`next_run_at = next_anchor_after(max(scheduled_for, now))` |
 | `skip_silent` | 同 mark_missed 但不通知（AskUser 默认不选） |
 
 `grace_seconds` 默认 `min(6 * 3600, max(300, interval_seconds / 2))`。周任务 6 小时。
 
-**钟面锚点（weekly）：** `schedule_expr = {"weekdays":["fri"],"at":"18:00"}`，timezone `Asia/Shanghai`。catch-up 在周六 10:00 跑完后，`next_run_at` 是 **下一个周五 18:00**，不是周六 10:00 + 7 天。`once` 没有下一锚点。
+**钟面锚点（weekly）：** `schedule_expr = {"weekdays":["fri"],"at":"18:00"}`，timezone `Asia/Shanghai`。catch-up 在周六 10:00 跑完后，`next_run_at` 是 **下一个周五 18:00**，不是周六 10:00 + 7 天。若应用关了三周，`max(scheduled_for, now)` 一次跳到 now 之后的下一周五，禁止按周连续 `missed`/`catch_up`。`once` 没有下一锚点。
 
 启动顺序：
 
@@ -601,10 +602,11 @@ Phase 1：`notify` 默认；`confirm_then_send` 当作 notify + UI 标明发送�
 
 **独立管理页**
 
-- 必须同时改三处，并用 `Record<ViewType, …>` 穷尽类型检查（`mcp` 已在 `VIEW_PAGES` 却不在 `NAV_ITEMS`，漏入口是真实风险）：
+- 必须同时改以下入口，并用 `Record<ViewType, …>` 穷尽类型检查（`mcp` 已在 `VIEW_PAGES` 却不在 `NAV_ITEMS`，漏入口是真实风险；workbench 非 Chat 页当前主菜单是 `WORKBENCH_MENU_ITEMS`）：
   1. `frontend/src/stores/appStore.ts` `ViewType`
   2. `frontend/src/App.tsx` `VIEW_PAGES`
   3. `frontend/src/layouts/ActivityBar.tsx` `NAV_ITEMS`
+  4. `frontend/src/layouts/AppLayout.tsx` `WORKBENCH_MENU_ITEMS`
 - 页面：`pages/ScheduledJobsPage.tsx` 装配；`features/scheduled-jobs/` 列表/详情/表单/历史/产物。不要用已空的 `features/teams/`。
 - 表单走 `components/form/`。
 - 按 `activeWorkspaceId` / `activeProjectId` 过滤。
@@ -748,13 +750,85 @@ CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_project
 
 ### `scheduled_job_runs`
 
-保留 `UNIQUE (job_id, scheduled_for, trigger)`。`trigger` ∈ `schedule | manual | catch_up`。没有 retry 第二行。非终态含 `queued`。终态必须 `finalize_job_clock`。
+```sql
+CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    scheduled_for TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    status TEXT NOT NULL,
+    chat_session_id TEXT NOT NULL DEFAULT '',
+    chat_run_id TEXT NOT NULL DEFAULT '',
+    output_manifest TEXT NOT NULL DEFAULT '{}',
+    delivery_status TEXT NOT NULL DEFAULT 'not_applicable',
+    error_code TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    finished_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (job_id, scheduled_for, trigger)
+);
+CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_job
+    ON scheduled_job_runs(job_id, scheduled_for DESC);
+CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_status
+    ON scheduled_job_runs(status, updated_at);
+```
 
-`error_code`：`missed` | `hitl_denied` | `skill_unbound` | `project_archived` | `agent_missing` | `output_missing` | `process_restart` | `needs_job_update` | `timeout` | `daily_cap` | `stale_starting` | `once_failed`。
+- `trigger` ∈ `schedule | manual | catch_up`。没有 retry 第二行。
+- `status`：非终态 `queued` / `starting` / `running`；终态 `succeeded` / `failed` / `cancelled` / `missed` / `skipped`。任一终态必须 `finalize_job_clock`。
+- `skipped` 仅用于已有非终态 firing 或 due 前已 pause、且需要留下审计行的场景。因 UNIQUE，同一 `(job_id, scheduled_for, trigger)` 已有非终态行时不得再 INSERT `skipped`，tick 直接 continue。
+- `error_code`：`missed` | `hitl_denied` | `skill_unbound` | `project_archived` | `agent_missing` | `output_missing` | `process_restart` | `needs_job_update` | `timeout` | `daily_cap` | `stale_starting` | `once_failed`。
+- `delivery_status` 与执行状态正交：`not_applicable` | `pending_review` | `approved` | `sending` | `sent` | `send_failed` | `skipped`。Phase 1 几乎只有 `not_applicable` 或成功后的 notify。
+- `output_manifest` 由系统扫描 `outputs/` 写入，不信任模型自报路径。`chat_session_id` / `chat_run_id` 在 `starting` 时仍可为空，进入 `running` 后必须非空。
 
-### `project_job_recipients` / `user_notifications`
+### `project_job_recipients`
 
-保留前一稿。Phase 1 建表。notifications 的 REST 见 API 节。
+Phase 1 建表。Phase 2 才走投递；Job.`recipient_ids` 只允许引用本表 id。模型输出的地址不得写入。
+
+```sql
+CREATE TABLE IF NOT EXISTS project_job_recipients (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    channel TEXT NOT NULL,
+    address TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    archived_at TEXT,
+    UNIQUE (project_id, channel, address)
+);
+CREATE INDEX IF NOT EXISTS idx_project_job_recipients_project
+    ON project_job_recipients(project_id, archived_at, updated_at DESC);
+```
+
+### `user_notifications`
+
+Phase 1 建表。REST 见 API 节。`kind`：`succeeded` | `failed` | `missed` | `paused`（自动暂停）。`read_at` 为空表示未读；`before` 游标用 `created_at`。
+
+```sql
+CREATE TABLE IF NOT EXISTS user_notifications (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    job_id TEXT NOT NULL DEFAULT '',
+    firing_id TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    read_at TEXT,
+    created_at TEXT NOT NULL,
+    payload TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_user_notifications_project
+    ON user_notifications(project_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_notifications_unread
+    ON user_notifications(project_id, created_at DESC)
+    WHERE read_at IS NULL;
+```
 
 ### `chat_runs` / `chat_sessions`
 
@@ -931,16 +1005,16 @@ Windows 关窗即退出；双发。**Phase 1 不采用。** Phase 4 只「拉起
 ## References
 
 - `AGENTS.md`：在线架构约束；禁止旧 Runtime 复活。
-- `docs/architecture-overview.md`、`docs/architecture-logic-walkthrough.md`。
+- `docs/architecture-overview.md`。
 - `docs/chat-sse-event-contract.md`：本阶段不改。`INTENT_ROUTE` 属于 `run_events` / Trace，不属于该契约。
 - `docs/team-runtime-redesign.md`：HITL 自动拒绝应对齐 `member_runtime`。
 - `docs/subagent-delegation-design.md`：DelegateTask 不进入 firing。
 - `docs/development-guidelines.md`。
 - `docs/project-todo.md`：Artifact、Secret、自动化触发、Playwright 矩阵均未完成。
 - `docs/electron-packaging-plan.md`。
-- 代码：`handlers/send.py`、`run_context.py`、`skill_selector.py`、`tool_scope_resolver.py`、`runtime_builder.py` `build_runtime_agent_cache_key`、`background_runs.py`（`ChatBackgroundRun` / `_persist_run`）、`storage/chat_run_records.py`、`lifecycle.py`、`handlers/runs.py` rerun、`handlers/sessions.py` catalog、`team_runtime/member_runtime.py`、`project_files.py`、`tools/scoped_paths.py`、`agents/runtime_types.py` `RuntimeToolScope`、`agents/factory.py` `_create_default_toolkit`、`storage/database.py` `save_chat_store`、`config/secret_store.py`、`electron/main.ts` `resolveSafeLocalPath`、`prompts.py`（Windows IANA）。
+- 代码：`handlers/send.py`、`run_context.py`、`skill_selector.py`、`tool_scope_resolver.py`、`runtime_builder.py` `build_runtime_agent_cache_key`、`background_runs.py`（`ChatBackgroundRun` / `_persist_run`）、`storage/chat_run_records.py`、`backend/src/server/routes/chat/lifecycle.py`、`handlers/runs.py` rerun、`handlers/sessions.py` catalog、`team_runtime/member_runtime.py`、`project_files.py`、`tools/scoped_paths.py`、`agents/runtime_types.py` `RuntimeToolScope`、`agents/factory.py` `_create_default_toolkit`、`storage/database.py` `save_chat_store`、`config/secret_store.py`、`electron/main.ts` `resolveSafeLocalPath`、`prompts.py`（Windows IANA）。
 
-落地后：本文定稿复制为 `docs/scheduled-jobs-design.md`，并在 `docs/README.md`「后续路线」增加一条。任务只写入 `docs/project-todo.md` 短条目。
+本文已是后续路线登记稿。任务只写入 `docs/project-todo.md` 短条目，不在本文复制完整 TODO。
 
 ---
 
@@ -995,7 +1069,7 @@ Windows 关窗即退出；双发。**Phase 1 不采用。** Phase 4 只「拉起
 - **标题：** `feat(scheduler): JobScheduler ticker 与 Chat Run 启动 reconcile`
 - **影响：** `scheduler/ticker.py`、`firing.py`、`main.py` lifespan（reconcile_interrupted_chat_runs → job_runs → start；shutdown stop 先于 close_db）、测试
 - **依赖：** PR 4a–4b
-- **内容：** 15s INSERT `queued`、`_inflight` Task 集、信号量在 Task 内再 `starting`、UNIQUE、`finalize_job_clock`、catch_up 钟面锚点、stale 仅 orphan starting、semaphore 2、daily cap。`run_firing` try/except/finally。不在 tick 里 await 信号量或 ReAct。flag 仍可关。
+- **内容：** 15s INSERT `queued`、`_inflight` Task 集、信号量在 Task 内再 `starting`、UNIQUE、`finalize_job_clock`（`next_run_at = next_anchor_after(max(scheduled_for, now))`）、catch_up 钟面锚点、stale 仅 orphan starting、semaphore 2、daily cap。`run_firing` try/except/finally。不在 tick 里 await 信号量或 ReAct。flag 仍可关。
 
 ### PR 6 — 通知写入
 
@@ -1007,7 +1081,7 @@ Windows 关窗即退出；双发。**Phase 1 不采用。** Phase 4 只「拉起
 ### PR 7 — 前端管理页
 
 - **标题：** `feat(ui): Scheduled Jobs 管理页`
-- **影响：** `appStore.ViewType`、`App.tsx VIEW_PAGES`、`ActivityBar NAV_ITEMS`（三处写死 + Record 穷尽）、`pages/ScheduledJobsPage.tsx`、`features/scheduled-jobs/*`、`hooks/useScheduledJobs.ts`、`electron/main.ts` Project root `open-path` 白名单
+- **影响：** `appStore.ViewType`、`App.tsx VIEW_PAGES`、`ActivityBar NAV_ITEMS`、`AppLayout WORKBENCH_MENU_ITEMS`（四处写死 + Record 穷尽）、`pages/ScheduledJobsPage.tsx`、`features/scheduled-jobs/*`、`hooks/useScheduledJobs.ts`、`electron/main.ts` Project root `open-path` 白名单
 - **依赖：** PR 2（可在 PR 5 前合入）
 - **内容：** 列表/详情/确认启用/暂停/删除/改 weekly 调度/历史/manifest/打开目录。Chat 不改 SSE。
 
