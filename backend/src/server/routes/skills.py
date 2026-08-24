@@ -20,6 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.config.runtime_paths import DATA_ROOT
+from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_skills_from_agents
 from src.server.routes.skill_packages import (
     MAX_SKILL_ARCHIVE_BYTES,
@@ -43,6 +44,7 @@ from src.storage.database import (
 )
 
 router = APIRouter()
+_job_service = ScheduledJobService()
 
 SkillInstallStatus = Literal["available", "installed", "error"]
 
@@ -777,6 +779,7 @@ async def uninstall_skill(skill_id: str) -> Skill:
     )
     _skills[skill_id] = skill
     _persist_if_user_skill(skill_id)
+    _job_service.pause_jobs_for_catalog_change(resource_type="skill", resource_id=skill_id)
     return skill
 
 
@@ -790,6 +793,7 @@ async def delete_skill(skill_id: str) -> None:
         raise HTTPException(status_code=409, detail="Built-in Skill cannot be deleted")
 
     skill = _skills.pop(skill_id)
+    _job_service.pause_jobs_for_catalog_change(resource_type="skill", resource_id=skill_id)
     remove_skills_from_agents({skill_id})
     if skill.resource_path and os.path.exists(skill.resource_path):
         shutil.rmtree(skill.resource_path)
@@ -815,4 +819,6 @@ async def set_skill_enabled(skill_id: str, data: SkillInstallRequest) -> Skill:
     )
     _skills[skill_id] = skill
     _persist_if_user_skill(skill_id)
+    if not data.enabled:
+        _job_service.pause_jobs_for_catalog_change(resource_type="skill", resource_id=skill_id)
     return skill

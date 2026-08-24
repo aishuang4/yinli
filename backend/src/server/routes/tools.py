@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_knowledge_tools_from_agents
 from src.project_files import resolve_project_session_artifact
 from src.storage.database import (
@@ -25,6 +26,7 @@ from src.tools.configured_http_tool import execute_configured_http_tool
 
 
 router = APIRouter()
+_job_service = ScheduledJobService()
 
 KNOWLEDGE_TOOLS_NAMESPACE = "knowledge_tools"
 
@@ -421,6 +423,7 @@ async def delete_knowledge_tool(tool_id: str) -> None:
         raise HTTPException(status_code=404, detail="Knowledge tool not found")
 
     delete_json_record(KNOWLEDGE_TOOLS_NAMESPACE, tool_id)
+    _job_service.pause_jobs_for_catalog_change(resource_type="http_tool", resource_id=tool_id)
     remove_knowledge_tools_from_agents({tool_id})
 
 
@@ -466,6 +469,7 @@ async def delete_http_tool_config(tool_id: str) -> None:
 
     if not db_delete_http_tool(tool_id):
         raise HTTPException(status_code=404, detail="HTTP tool not found")
+    _job_service.pause_jobs_for_catalog_change(resource_type="http_tool", resource_id=tool_id)
     remove_knowledge_tools_from_agents({tool_id})
 
 
