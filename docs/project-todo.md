@@ -73,6 +73,7 @@
 - [ ] 建立 Agent / Prompt / Model / TeamRun 的评估和成本体系。
 - [ ] 增加 Agent / Subagent 配置版本、Diff、发布和回滚。
 - [ ] 建立 Secret 安全存储和引用机制。
+- [ ] 按 `docs/scheduled-jobs-design.md` 分阶段实现定时任务：先 weekly/once 到点跑并通知，预览发送与 OS 唤醒不与第一批捆绑。
 - [ ] 评估自动化触发、任务队列、预算、失败重试和后台通知。
 - [ ] Agent / Subagent preset 市场、多语言 UI 和后续多用户 RBAC。
 
