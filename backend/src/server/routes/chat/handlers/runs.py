@@ -1,5 +1,7 @@
 """Chat Run 查询、订阅、重跑和取消端点。"""
 
+from typing import Annotated
+
 from fastapi import HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -18,8 +20,7 @@ from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.lifecycle import ACTIVE_RUN_STATUSES
 from src.server.routes.chat.router import router
 from src.server.routes.chat.team_runtime.registry import get_team_service
-from src.storage.database import get_latest_user_chat_message
-from src.storage.database import DEFAULT_PROJECT_ID
+from src.storage.database import DEFAULT_PROJECT_ID, get_latest_user_chat_message, list_chat_runs
 
 
 class TeamMailRequest(BaseModel):
@@ -87,10 +88,17 @@ async def stream_run(
 @router.get("/runs")
 async def list_runs(
     project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+    trigger_source: Annotated[str | None, Query(alias="triggerSource")] = None,
 ) -> dict:
     """列出当前进程内后台 Chat Run。"""
 
     runs = await list_chat_background_runs(project_id=project_id)
+    if trigger_source:
+        matching_ids = {
+            item["id"]
+            for item in list_chat_runs(project_id=project_id, trigger_source=trigger_source)
+        }
+        runs = [run for run in runs if run.id in matching_ids]
     return {"runs": [serialize_chat_background_run(run) for run in runs]}
 
 

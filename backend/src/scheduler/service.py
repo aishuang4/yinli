@@ -48,6 +48,19 @@ from src.storage.database import (
 )
 from src.storage.scheduled_job_records import UniqueConstraintError
 
+_RECONFIRM_FIELDS = frozenset({
+    "agent_id",
+    "frozen_prompt",
+    "skill_ids",
+    "tool_scope",
+    "input_spec",
+    "output_spec",
+    "delivery_policy",
+    "delivery_channel_ref",
+    "recipient_ids",
+})
+_SCHEDULE_FIELDS = frozenset({"schedule_kind", "schedule_expr", "timezone"})
+
 
 class ScheduledJobService:
     """Job 控制面唯一状态迁移入口。"""
@@ -216,6 +229,73 @@ class ScheduledJobService:
             "archived_at": to_utc_iso(stamped),
         })
 
+    def update_job(self, job_id: str, changes: dict[str, Any], *, now: datetime | None = None) -> ScheduledJob:
+        """部分更新冻结规格。改投递/收件人/Skill 等需回到 pending_confirmation。"""
+
+        job = self.get_job(job_id)
+        if job.status in {"archived", "completed"}:
+            raise ScheduledJobStateError(f"{job.status} 任务不能修改")
+        payload = dict(changes)
+        if "name" in payload:
+            name = str(payload.get("name") or "").strip()
+            if not name:
+                raise ScheduledJobValidationError("name 不能为空")
+            payload["name"] = name
+        if "agent_id" in payload and not str(payload.get("agent_id") or "").strip():
+            raise ScheduledJobValidationError("agent_id 不能为空")
+        if "frozen_prompt" in payload and not str(payload.get("frozen_prompt") or "").strip():
+            raise ScheduledJobValidationError("frozen_prompt 不能为空")
+        if "delivery_policy" in payload and payload["delivery_policy"] not in DELIVERY_POLICIES:
+            raise ScheduledJobValidationError(f"非法 delivery_policy: {payload['delivery_policy']}")
+        if "failure_policy" in payload:
+            self._validate_failure_policy(str(payload["failure_policy"]))
+        if "missed_policy" in payload:
+            self._validate_missed_policy(str(payload["missed_policy"]))
+        if "tool_scope" in payload:
+            payload["tool_scope"] = self._frozen_tool_scope(payload["tool_scope"]).to_storage_dict()
+        if _SCHEDULE_FIELDS & payload.keys():
+            canonical, timezone_name = self._validate_schedule(
+                str(payload.get("schedule_kind") or job.schedule_kind),
+                payload.get("schedule_expr") or job.schedule_expr,
+                str(payload.get("timezone") or job.timezone),
+            )
+            if "schedule_kind" in payload:
+                payload["schedule_kind"] = str(payload["schedule_kind"])
+            if "schedule_expr" in payload:
+                payload["schedule_expr"] = canonical
+            if "timezone" in payload:
+                payload["timezone"] = timezone_name
+        needs_reconfirm = bool(_RECONFIRM_FIELDS & payload.keys()) and job.status in {"active", "paused"}
+        if needs_reconfirm:
+            payload["status"] = "pending_confirmation"
+            payload["next_run_at"] = None
+            payload["pause_reason"] = ""
+        elif job.status == "active" and _SCHEDULE_FIELDS & payload.keys():
+            next_run = compute_next_run_at(
+                schedule_kind=str(payload.get("schedule_kind") or job.schedule_kind),
+                schedule_expr=payload.get("schedule_expr") or job.schedule_expr,
+                timezone_name=str(payload.get("timezone") or job.timezone),
+                after=now or datetime.now(timezone.utc),
+            )
+            payload["next_run_at"] = to_utc_iso(next_run)
+        if not payload:
+            return job
+        return self._save_job(job_id, payload)
+
+    def run_now(self, job_id: str, *, now: datetime | None = None) -> ScheduledJobRun:
+        """立即插入 trigger=manual 的 queued firing；已有非终态 firing 时冲突。"""
+
+        job = self.get_job(job_id)
+        if job.status in {"archived", "completed"}:
+            raise ScheduledJobStateError(f"{job.status} 任务不能立即执行")
+        stamped = now or datetime.now(timezone.utc)
+        return self.create_firing(
+            job_id=job.id,
+            scheduled_for=to_utc_iso(stamped),
+            trigger="manual",
+            status="queued",
+        )
+
     def create_firing(
         self,
         *,
@@ -256,7 +336,22 @@ class ScheduledJobService:
         return self._firing(record)
 
     def list_firings(self, job_id: str, *, status: str | None = None) -> list[ScheduledJobRun]:
+        self.get_job(job_id)
         return [self._firing(item) for item in list_scheduled_job_runs(job_id, status=status)]
+
+    def get_firing_for_job(self, job_id: str, firing_id: str) -> ScheduledJobRun:
+        self.get_job(job_id)
+        firing = self.get_firing(firing_id)
+        if firing.job_id != job_id:
+            raise ScheduledJobNotFoundError(f"找不到 firing: {firing_id}")
+        return firing
+
+    def cancel_firing(self, job_id: str, firing_id: str, *, now: datetime | None = None) -> ScheduledJobRun:
+        firing = self.get_firing_for_job(job_id, firing_id)
+        if firing.status in TERMINAL_FIRING_STATUSES:
+            raise ScheduledJobConflictError("firing 已结束")
+        self.complete_firing(firing_id, "cancelled", now=now)
+        return self.get_firing(firing_id)
 
     def has_non_terminal_firing(self, job_id: str) -> bool:
         return any(

@@ -1,7 +1,7 @@
 """会话查询端点 — 列表、消息、删除。"""
 
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import HTTPException, Query
 
@@ -15,10 +15,23 @@ from src.server.routes.chat.team_runtime.maintenance import (
 from src.server.routes.chat.team_runtime.store import TeamStoreError
 from src.storage.database import DEFAULT_PROJECT_ID, get_project
 
+_SESSION_KINDS = {"chat", "scheduled_job", "all"}
+
+
+def _filter_sessions_by_kind(sessions: list[ChatSession], kind: str) -> list[ChatSession]:
+    """默认隐藏 kind=scheduled_job；kind=all 仅调试。"""
+
+    if kind not in _SESSION_KINDS:
+        raise HTTPException(status_code=422, detail=f"非法 session kind: {kind}")
+    if kind == "all":
+        return list(sessions)
+    return [session for session in sessions if session.kind == kind]
+
 
 @router.get("/sessions")
 async def list_sessions(
     project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+    kind: Annotated[str, Query()] = "chat",
 ) -> list[ChatSession]:
     """
     获取会话列表
@@ -27,19 +40,28 @@ async def list_sessions(
         list[ChatSession]: 会话列表
     """
     store = _load_store()
+    matched = [
+        session for session in store.sessions if session.project_id == project_id
+    ]
     return sorted(
-        [session for session in store.sessions if session.project_id == project_id],
+        _filter_sessions_by_kind(matched, kind),
         key=lambda item: item.updated_at,
         reverse=True,
     )
 
 
 @router.get("/sessions/catalog")
-async def list_session_catalog() -> list[ChatSession]:
+async def list_session_catalog(
+    kind: Annotated[str, Query()] = "chat",
+) -> list[ChatSession]:
     """列出全部工作上下文中的会话，用于按 Workspace / Project 构建历史目录。"""
 
     store = _load_store()
-    return sorted(store.sessions, key=lambda item: item.updated_at, reverse=True)
+    return sorted(
+        _filter_sessions_by_kind(store.sessions, kind),
+        key=lambda item: item.updated_at,
+        reverse=True,
+    )
 
 
 @router.get("/sessions/{session_id}/messages")

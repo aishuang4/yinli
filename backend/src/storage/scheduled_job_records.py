@@ -266,6 +266,143 @@ class ScheduledJobRecordStore:
             rows = conn.execute(sql, params).fetchall()
         return [self._firing_from_row(row) for row in rows]
 
+    def insert_notification(self, record: dict[str, Any]) -> dict[str, Any]:
+        self.ensure_db()
+        now = self.utc_now()
+        note_id = record.get("id") or f"ntf-{uuid.uuid4().hex}"
+        payload = {
+            "id": note_id,
+            "workspace_id": record.get("workspace_id") or self.default_workspace_id,
+            "project_id": record.get("project_id") or "",
+            "job_id": record.get("job_id") or "",
+            "firing_id": record.get("firing_id") or "",
+            "kind": record["kind"],
+            "title": record["title"],
+            "body": record.get("body") or "",
+            "payload": record.get("payload") or {},
+            "read_at": record.get("read_at"),
+            "created_at": record.get("created_at") or now,
+        }
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO user_notifications (
+                    id, workspace_id, project_id, job_id, firing_id, kind, title,
+                    body, payload, read_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["id"],
+                    payload["workspace_id"],
+                    payload["project_id"],
+                    payload["job_id"],
+                    payload["firing_id"],
+                    payload["kind"],
+                    payload["title"],
+                    payload["body"],
+                    self.dumps(payload["payload"]),
+                    payload["read_at"],
+                    payload["created_at"],
+                ),
+            )
+            conn.commit()
+        stored = self.get_notification(note_id)
+        assert stored is not None
+        return stored
+
+    def get_notification(self, note_id: str) -> dict[str, Any] | None:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM user_notifications WHERE id = ?",
+                (note_id,),
+            ).fetchone()
+        return self._notification_from_row(row) if row else None
+
+    def list_notifications(
+        self,
+        *,
+        project_id: str | None = None,
+        unread_only: bool = False,
+        limit: int = 50,
+        before: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self.ensure_db()
+        clauses: list[str] = []
+        params: list[Any] = []
+        if project_id:
+            clauses.append("project_id = ?")
+            params.append(project_id)
+        if unread_only:
+            clauses.append("read_at IS NULL")
+        if before:
+            clauses.append("created_at < ?")
+            params.append(before)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, limit))
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM user_notifications {where} ORDER BY created_at DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [self._notification_from_row(row) for row in rows]
+
+    def count_unread_notifications(self, *, project_id: str | None = None) -> int:
+        self.ensure_db()
+        if project_id:
+            sql = "SELECT COUNT(*) AS n FROM user_notifications WHERE read_at IS NULL AND project_id = ?"
+            params: tuple[Any, ...] = (project_id,)
+        else:
+            sql = "SELECT COUNT(*) AS n FROM user_notifications WHERE read_at IS NULL"
+            params = ()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(sql, params).fetchone()
+        return int(row["n"] if row is not None else 0)
+
+    def mark_notification_read(self, note_id: str) -> dict[str, Any] | None:
+        current = self.get_notification(note_id)
+        if current is None:
+            return None
+        if current.get("read_at"):
+            return current
+        stamped = self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                "UPDATE user_notifications SET read_at = ? WHERE id = ? AND read_at IS NULL",
+                (stamped, note_id),
+            )
+            conn.commit()
+        return self.get_notification(note_id)
+
+    def mark_all_notifications_read(self, *, project_id: str | None = None) -> int:
+        self.ensure_db()
+        stamped = self.utc_now()
+        if project_id:
+            sql = "UPDATE user_notifications SET read_at = ? WHERE read_at IS NULL AND project_id = ?"
+            params: tuple[Any, ...] = (stamped, project_id)
+        else:
+            sql = "UPDATE user_notifications SET read_at = ? WHERE read_at IS NULL"
+            params = (stamped,)
+        with self.lock, self.connect() as conn:
+            cursor = conn.execute(sql, params)
+            conn.commit()
+            return int(cursor.rowcount)
+
+    def _notification_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "workspace_id": row["workspace_id"],
+            "project_id": row["project_id"],
+            "job_id": row["job_id"],
+            "firing_id": row["firing_id"],
+            "kind": row["kind"],
+            "title": row["title"],
+            "body": row["body"],
+            "payload": self.loads(row["payload"], {}),
+            "read_at": row["read_at"],
+            "created_at": row["created_at"],
+        }
+
     def _job_params(self, record: dict[str, Any]) -> tuple[Any, ...]:
         tool_scope = record.get("tool_scope")
         if not tool_scope:
