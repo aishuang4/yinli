@@ -27,10 +27,12 @@ from src.storage import database
 from src.storage.database import (
     DEFAULT_PROJECT_ID,
     DEFAULT_WORKSPACE_ID,
+    delete_agent,
     ensure_db,
     list_user_notifications,
     replace_mcp_servers,
     replace_skills,
+    upsert_agent,
     upsert_http_tool,
     upsert_project_resource_binding,
 )
@@ -51,6 +53,37 @@ def _service() -> ScheduledJobService:
     return ScheduledJobService()
 
 
+def _ensure_agent(agent_id: str) -> None:
+    upsert_agent({
+        "id": agent_id,
+        "name": agent_id,
+        "system_prompt": "prompt",
+        "workspaceId": DEFAULT_WORKSPACE_ID,
+        "status": "idle",
+    })
+
+
+def _ensure_skill(skill_id: str) -> None:
+    replace_skills({
+        skill_id: {
+            "id": skill_id,
+            "name": skill_id,
+            "description": "",
+            "category": "test",
+            "status": "installed",
+            "enabled": True,
+            "updatedAt": "2026-08-20T00:00:00+00:00",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+        },
+    })
+    upsert_project_resource_binding({
+        "project_id": DEFAULT_PROJECT_ID,
+        "resource_type": "skill",
+        "resource_id": skill_id,
+        "enabled": True,
+    })
+
+
 def _weekly_job(service: ScheduledJobService, **overrides):
     payload = {
         "workspace_id": DEFAULT_WORKSPACE_ID,
@@ -63,6 +96,7 @@ def _weekly_job(service: ScheduledJobService, **overrides):
         "frozen_prompt": "生成本周周报，写入 outputs/weekly-report.md",
     }
     payload.update(overrides)
+    _ensure_agent(str(payload["agent_id"]))
     return service.create_job(**payload)
 
 
@@ -215,6 +249,7 @@ def test_update_agent_removing_skill_pauses_jobs(isolated_db, monkeypatch):
     """从 Agent 配置摘掉 Skill 时，暂停冻结了该 Skill 的 Job。"""
 
     service = _service()
+    _ensure_skill("skill-report")
     needed = _confirm(
         service,
         _weekly_job(service, name="依赖 Agent Skill", skill_ids=["skill-report"]).id,
@@ -258,6 +293,7 @@ def test_skill_uninstall_pauses_jobs(isolated_db, monkeypatch):
     """卸载 Skill 时立即暂停冻结该 Skill 的 Job。"""
 
     service = _service()
+    _ensure_skill("skill-report")
     needed = _confirm(
         service,
         _weekly_job(service, name="依赖卸载 Skill", skill_ids=["skill-report"]).id,
@@ -412,3 +448,55 @@ def test_http_binding_removal_pauses_jobs_that_required_http(isolated_db):
     assert needed.pause_reason == "needs_job_update"
     assert other.status == "active"
     assert _pause_notes(needed.id)
+
+
+def test_resume_after_mcp_catalog_delete_fails(isolated_db):
+    """MCP 从目录删除后，即使 binding 仍 enabled，resume 也必须失败。"""
+
+    service = _service()
+    replace_mcp_servers({
+        "mcp-custom": {
+            "id": "mcp-custom",
+            "name": "MCP Custom",
+            "description": "",
+            "category": "test",
+            "transport": "sse",
+            "status": "installed",
+            "enabled": True,
+            "updatedAt": "2026-08-20T00:00:00+00:00",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+        },
+    })
+    upsert_project_resource_binding({
+        "project_id": DEFAULT_PROJECT_ID,
+        "resource_type": "mcp",
+        "resource_id": "mcp-custom",
+        "enabled": True,
+    })
+    job = _confirm(
+        service,
+        _weekly_job(service, name="MCP 周报", tool_scope={"allow_mcp": True}).id,
+    )
+    service.pause(job.id, reason="user")
+    replace_mcp_servers({})
+
+    with pytest.raises(ScheduledJobStateError, match="MCP"):
+        service.resume(job.id)
+    frozen = service.get_job(job.id)
+    assert frozen.status == "paused"
+    assert frozen.pause_reason == "user"
+
+
+def test_resume_after_user_pause_and_agent_delete_fails(isolated_db):
+    """用户先暂停后再删 Agent，resume 不得因 pause_reason=user 而放行。"""
+
+    service = _service()
+    job = _confirm(service, _weekly_job(service, name="先暂停再删 Agent").id)
+    service.pause(job.id, reason="user")
+    delete_agent("agent-1")
+
+    with pytest.raises(ScheduledJobStateError, match="Agent"):
+        service.resume(job.id)
+    frozen = service.get_job(job.id)
+    assert frozen.status == "paused"
+    assert frozen.pause_reason == "user"

@@ -43,6 +43,7 @@ from src.storage.database import (
     get_workspace_resource,
     insert_scheduled_job,
     insert_scheduled_job_run,
+    list_mcp_servers,
     list_project_resource_bindings,
     list_scheduled_job_runs,
     list_scheduled_jobs,
@@ -630,7 +631,7 @@ class ScheduledJobService:
         return self._job(record)
 
     def _assert_resources_available(self, job: ScheduledJob) -> None:
-        """confirm / resume 时复检 Project、Agent 与冻结 Skill/binding。"""
+        """confirm / resume 时复检 Project、Agent 与冻结 Skill/MCP/HTTP 是否仍可用。"""
 
         project = get_project(job.project_id)
         if project is None:
@@ -640,35 +641,60 @@ class ScheduledJobService:
         if str(project.get("workspaceId") or "") != job.workspace_id:
             raise ScheduledJobStateError("project_id 与 workspace_id 不一致")
 
-        agent = get_workspace_resource("agent", job.agent_id)
-        if agent is None and job.pause_reason == "agent_missing":
-            raise ScheduledJobStateError("Agent 不可用，不能启用任务")
+        if job.agent_id != "default":
+            agent = get_workspace_resource("agent", job.agent_id)
+            if agent is None:
+                raise ScheduledJobStateError("Agent 不可用，不能启用任务")
 
-        bindings = list_project_resource_bindings(job.project_id)
-        enabled = {
-            (str(item.get("resourceType") or ""), str(item.get("resourceId") or ""))
-            for item in bindings
-            if item.get("enabled")
-        }
-        catalog = {str(item.get("id") or ""): item for item in list_skills()}
+        live = self._live_project_resources(job.project_id, job.workspace_id)
+        skill_catalog = {str(item.get("id") or ""): item for item in list_skills()}
         for skill_id in job.skill_ids:
-            skill = catalog.get(skill_id)
-            if skill is None:
-                if job.pause_reason == "skill_unbound":
-                    raise ScheduledJobStateError("冻结 Skill 已不可用，不能启用任务")
-                continue
-            if str(skill.get("status") or "") != "installed" or not skill.get("enabled"):
+            skill = skill_catalog.get(skill_id)
+            if (
+                skill is None
+                or str(skill.get("status") or "") != "installed"
+                or not skill.get("enabled")
+                or skill_id not in live["skill"]
+            ):
                 raise ScheduledJobStateError("冻结 Skill 已不可用，不能启用任务")
-            if ("skill", skill_id) not in enabled:
-                raise ScheduledJobStateError("冻结 Skill 已移出绑定，不能启用任务")
 
-        if job.tool_scope.allow_mcp and not any(kind == "mcp" for kind, _ in enabled):
-            raise ScheduledJobStateError("MCP 绑定已失效，不能启用任务")
+        if job.tool_scope.allow_mcp:
+            mcp_catalog = {str(item.get("id") or ""): item for item in list_mcp_servers()}
+            usable = [
+                mcp_id
+                for mcp_id in live["mcp"]
+                if str(mcp_catalog.get(mcp_id, {}).get("status") or "") == "installed"
+                and mcp_catalog.get(mcp_id, {}).get("enabled")
+            ]
+            if not usable:
+                raise ScheduledJobStateError("MCP 绑定已失效，不能启用任务")
         if (
-            (job.tool_scope.allow_http or job.tool_scope.allow_knowledge)
-            and not any(kind == "http_tool" for kind, _ in enabled)
-        ):
+            job.tool_scope.allow_http or job.tool_scope.allow_knowledge
+        ) and not live["http_tool"]:
             raise ScheduledJobStateError("HTTP 工具绑定已失效，不能启用任务")
+
+    def _live_project_resources(
+        self,
+        project_id: str,
+        workspace_id: str,
+    ) -> dict[str, set[str]]:
+        """enabled binding 且 catalog 资源仍存在、归属当前 Workspace。"""
+
+        live: dict[str, set[str]] = {
+            "agent": set(),
+            "skill": set(),
+            "mcp": set(),
+            "http_tool": set(),
+        }
+        for binding in list_project_resource_bindings(project_id):
+            resource_type = str(binding.get("resourceType") or "")
+            resource_id = str(binding.get("resourceId") or "")
+            if not binding.get("enabled") or resource_type not in live or not resource_id:
+                continue
+            resource = get_workspace_resource(resource_type, resource_id)
+            if resource and resource.get("workspaceId") == workspace_id:
+                live[resource_type].add(resource_id)
+        return live
 
     def _require_project(self, workspace_id: str, project_id: str) -> None:
         if not str(project_id).strip():
