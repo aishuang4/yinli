@@ -66,7 +66,6 @@ from src.storage.database import (
     update_scheduled_job_run,
     update_scheduled_job_run_and_job,
 )
-from src.server.routes.agents import get_registered_agent
 from src.storage.scheduled_job_records import UniqueConstraintError
 
 ON_TIME_SLACK_SECONDS = 60
@@ -207,6 +206,8 @@ class ScheduledJobService:
         if job.delivery_policy == "auto_send":
             raise ScheduledJobValidationError("Phase 1 不能启用 auto_send")
         self._assert_resources_available(job)
+        from src.server.routes.agents import get_registered_agent
+
         agent = get_registered_agent(job.agent_id)
         tool_scope = job.tool_scope
         force_bash = frozen_skills_require_bash(job.skill_ids)
@@ -905,7 +906,10 @@ class ScheduledJobService:
         if job.agent_id != "default":
             agent = get_workspace_resource("agent", job.agent_id)
             if agent is None:
-                raise ScheduledJobStateError("Agent 不可用，不能启用任务")
+                from src.server.routes.agents import get_registered_agent
+
+                if get_registered_agent(job.agent_id) is None:
+                    raise ScheduledJobStateError("Agent 不可用，不能启用任务")
 
         live = self._live_project_resources(job.project_id, job.workspace_id)
         skill_catalog = {str(item.get("id") or ""): item for item in list_skills()}

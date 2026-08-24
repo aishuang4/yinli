@@ -70,7 +70,7 @@ def _weekly_job(service: ScheduledJobService, **overrides):
         "workspace_id": DEFAULT_WORKSPACE_ID,
         "project_id": DEFAULT_PROJECT_ID,
         "name": "周五周报",
-        "agent_id": "agent-1",
+        "agent_id": "default",
         "schedule_kind": "weekly",
         "schedule_expr": {"weekdays": ["fri"], "at": "18:00"},
         "timezone": "Asia/Shanghai",

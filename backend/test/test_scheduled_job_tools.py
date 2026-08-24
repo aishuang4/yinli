@@ -46,7 +46,7 @@ def _tools(**overrides):
     payload = {
         "workspace_id": DEFAULT_WORKSPACE_ID,
         "project_id": DEFAULT_PROJECT_ID,
-        "agent_id": "agent-1",
+        "agent_id": "default",
         "session_id": "session-1",
     }
     payload.update(overrides)

@@ -13,7 +13,6 @@ from agentscope.permission import PermissionMode
 
 from src.scheduler.models import JobToolScope
 from src.security.permissions import ApprovalPolicy, build_permission_profile
-from src.server.routes.skills import Skill, get_installed_skill
 
 
 _ALWAYS_INJECTED_TOOLS = ("Read", "Grep", "Glob", "Write", "Edit")
@@ -27,7 +26,7 @@ _SCOPE_TOOL_NAMES = {
 }
 
 
-def skill_package_has_scripts(skill: Skill | None) -> bool:
+def skill_package_has_scripts(skill: Any | None) -> bool:
     """Skill 包存在 scripts/ 目录则视为需要 Bash。"""
 
     if skill is None:
@@ -46,6 +45,8 @@ def skill_package_has_scripts(skill: Skill | None) -> bool:
 
 def frozen_skills_require_bash(skill_ids: list[str]) -> bool:
     """任一冻结 Skill 含 scripts/ 则 confirm 时强制 allow_bash。"""
+
+    from src.server.routes.skills import get_installed_skill
 
     return any(
         skill_package_has_scripts(get_installed_skill(skill_id))
@@ -90,17 +91,11 @@ def would_fail_unattended_tools(
     injected = injected_unattended_tools(tool_scope)
     profile = build_permission_profile(getattr(agent, "guardrails", None))
     if profile.is_read_only:
-        return [
-            name for name in injected
-            if name in _OVERLAY_APPROVED_TOOLS or name in _SCOPE_TOOL_NAMES.values()
-        ]
+        return [name for name in injected if name in _OVERLAY_APPROVED_TOOLS]
     if profile.to_agentscope_permission_mode() == PermissionMode.BYPASS:
         return []
     failing: list[str] = []
     for name in injected:
-        if name in _OVERLAY_APPROVED_TOOLS:
-            continue
-        if name in {"Read", "Grep", "Glob"}:
-            continue
-        failing.append(name)
+        if name == "Bash":
+            failing.append(name)
     return failing

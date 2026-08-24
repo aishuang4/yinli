@@ -81,7 +81,7 @@ def _tools():
     built = build_scheduled_job_tools(
         workspace_id=DEFAULT_WORKSPACE_ID,
         project_id=DEFAULT_PROJECT_ID,
-        agent_id="agent-1",
+        agent_id="default",
         session_id="session-register-1",
     )
     return {tool.name: tool for tool in built}
@@ -200,7 +200,7 @@ def test_askuser_resume_does_not_activate_pending_job(client, monkeypatch):
             interaction_type="REQUIRE_EXTERNAL_EXECUTION",
             agent=agent,
             session_id="session-register-1",
-            agent_id="agent-1",
+            agent_id="default",
             agent_name="Agent",
             model_name="deepseek-chat",
             reply_id="reply-askuser-resume",

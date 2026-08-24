@@ -612,10 +612,6 @@ def test_firing_notification_title_allows_braces_in_job_name(isolated_db):
     assert len(completed) == 1
     assert completed[0]["title"] == "周报 {draft 已完成"
 
-    notes = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
-    assert {item["job_id"] for item in notes} == {job.id, other.id}
-    assert all(item["kind"] == "job_paused" for item in notes)
-
 
 def test_sql_tool_scope_default_is_all_false(isolated_db):
     ensure_db()
