@@ -35,6 +35,11 @@ from src.server.routes.chat.runtime_events import runtime_source_event
 from src.subagents.manager import SubagentDelegationManager
 from src.subagents.registry import load_subagent_catalog
 from src.tools.delegate_task import build_subagent_tools
+from src.tools.scheduled_job_tools import (
+    build_scheduled_job_tools,
+    scheduled_job_prompt_addendum,
+    scheduled_job_tools_cache_key,
+)
 
 
 def _build_plan_mode_runtime_parts(
@@ -67,17 +72,19 @@ def _build_runtime_feature_parts(
     """构造主 Agent 运行时增强能力。
 
     Team Runtime 有独立的 TeamRun / Task / Mailbox 控制面，当前不复用
-    单 Agent Plan Mode 工具。
+    单 Agent Plan Mode 或 ScheduleJob 工具。scheduled firing 使用
+    `scheduled-job-unattended`，不得走本函数注入登记工具。
     """
 
     feature_keys: list[str] = []
     extra_tools: list[object] = []
     middlewares: list[object] = []
     runtime_event_sources: list[object] = []
-    prompt_addendum = ""
+    prompt_addenda: list[str] = []
     plan_mode_manager: PlanModeManager | None = None
+    is_team = ctx.intent_route.executor.kind == "team"
 
-    if ctx.intent_route.executor.kind == "team":
+    if is_team:
         pass
     elif run_data.plan_requested or run_data.plan_action:
         plan_mode_manager, plan_key, plan_tools, plan_middlewares = _build_plan_mode_runtime_parts(ctx, run_data)
@@ -85,13 +92,24 @@ def _build_runtime_feature_parts(
         extra_tools.extend(plan_tools)
         middlewares.extend(plan_middlewares)
 
+    if not is_team:
+        job_tools = build_scheduled_job_tools(
+            workspace_id=str(ctx.runtime_context.workspace_id),
+            project_id=str(ctx.runtime_context.project_id),
+            agent_id=ctx.agent_id,
+            session_id=ctx.session_id,
+        )
+        extra_tools.extend(job_tools)
+        feature_keys.append(scheduled_job_tools_cache_key(job_tools))
+        prompt_addenda.append(scheduled_job_prompt_addendum())
+
     catalog = load_subagent_catalog(workspace_dir=str(ctx.runtime_context.project_root))
     if catalog.definitions:
         subagent_manager = SubagentDelegationManager(
             catalog=catalog,
             session_id=ctx.session_id,
             run_id=current_chat_background_run_id() or "",
-            parent_scope="leader" if ctx.intent_route.executor.kind == "team" else "single",
+            parent_scope="leader" if is_team else "single",
             parent_agent_id=ctx.agent_id,
             parent_agent_name=ctx.agent_name,
             model_name=ctx.runtime_model_config.model_name,
@@ -107,7 +125,7 @@ def _build_runtime_feature_parts(
         extra_tools.extend(build_subagent_tools(subagent_manager))
         runtime_event_sources.append(subagent_manager)
         feature_keys.append(f"subagents-{catalog.fingerprint}")
-        prompt_addendum = _build_subagent_prompt_addendum(catalog.definitions)
+        prompt_addenda.append(_build_subagent_prompt_addendum(catalog.definitions))
 
     return (
         plan_mode_manager,
@@ -115,7 +133,7 @@ def _build_runtime_feature_parts(
         extra_tools,
         middlewares,
         runtime_event_sources,
-        prompt_addendum,
+        "\n".join(part for part in prompt_addenda if part),
     )
 
 
