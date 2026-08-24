@@ -36,6 +36,7 @@ from src.server.routes.chat.lifecycle import TERMINAL_RUN_STATUSES
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.projection.source_events import SourceEvent
 from src.server.routes.chat.run_context import build_chat_run_context
+from src.server.routes.chat.runtime import _build_runtime_guardrails, scope_guardrails_to_project
 from src.server.routes.chat.runtime_dispatcher import execute_chat_runtime
 from src.server.routes.chat.startup_checks import get_startup_error
 from src.server.routes.chat.store import ensure_scheduled_job_session
@@ -127,10 +128,16 @@ async def await_scheduled_chat_run(
         if run is None:
             raise ScheduledChatLaunchError(f"找不到 Chat Run: {chat_run_id}")
         if run.status in TERMINAL_RUN_STATUSES:
+            await _join_background_task(run)
             return run.status
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
+            task = run.async_task
             cancelled = await cancel_chat_background_run(chat_run_id)
+            await _join_background_task(cancelled or run, task=task)
+            final = await get_chat_background_run(chat_run_id)
+            if final is not None:
+                return final.status
             return cancelled.status if cancelled is not None else "cancelled"
         await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, remaining))
 
@@ -164,6 +171,9 @@ async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
     workspace_dir = project_job_run_directory(
         runtime_context.project_root, req.job_id, req.firing_id,
     )
+    _assert_job_workspace_in_scope(
+        workspace_dir, agent=agent, project_root=runtime_context.project_root,
+    )
     (workspace_dir / "outputs").mkdir(parents=True, exist_ok=True)
     _write_frozen_spec(workspace_dir, req)
 
@@ -183,10 +193,7 @@ async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
         ctx = await build_chat_run_context(
             run_data,
             runtime_context.with_run_id(current_chat_background_run_id()),
-        )
-        ctx.session_workspace_dir = str(workspace_dir)
-        ctx.system_prompt = "\n\n".join(
-            part for part in [ctx.system_prompt, _job_workspace_addendum(workspace_dir)] if part
+            session_workspace_dir=str(workspace_dir),
         )
         persist_user_message_and_trace(ctx, run_data)
         async for start_event in emit_start_events(ctx, run_data):
@@ -241,6 +248,34 @@ def _validate_request(req: ScheduledRunRequest) -> None:
         raise ScheduledChatLaunchError(f"非法 firing trigger: {req.trigger}")
 
 
+def _assert_job_workspace_in_scope(
+    workspace_dir: Path, *, agent, project_root: Path,
+) -> None:
+    """Job cwd 必须落在 Agent∩Project 文件范围内，否则工具无法读写。"""
+
+    try:
+        guardrails = scope_guardrails_to_project(
+            _build_runtime_guardrails(agent),
+            project_root,
+        )
+    except ValueError as exc:
+        raise ScheduledChatLaunchError(str(exc)) from exc
+    scope = Path(guardrails.filesystem_scope).expanduser().resolve()
+    if not workspace_dir.resolve().is_relative_to(scope):
+        raise ScheduledChatLaunchError(
+            f"Job firing 工作目录不在 Agent∩Project 文件范围内: {workspace_dir} vs {scope}",
+        )
+
+
+async def _join_background_task(run, *, task: asyncio.Task | None = None) -> None:
+    """取消后等消费协程收口，避免 scan outputs/ 与尚未落盘的写入竞态。"""
+
+    pending = task if task is not None else getattr(run, "async_task", None)
+    if pending is None or pending.done():
+        return
+    await asyncio.gather(pending, return_exceptions=True)
+
+
 def _write_frozen_spec(workspace_dir: Path, req: ScheduledRunRequest) -> None:
     payload = {
         "jobId": req.job_id,
@@ -264,15 +299,6 @@ def _write_frozen_spec(workspace_dir: Path, req: ScheduledRunRequest) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-
-
-def _job_workspace_addendum(workspace_dir: Path) -> str:
-    return "\n".join([
-        "## Scheduled Job Workspace",
-        f"Default working directory for this scheduled run: {workspace_dir}",
-        "Write final deliverables as relative paths under outputs/ (for example outputs/weekly-report.md).",
-        "Do not use absolute paths.",
-    ])
 
 
 def _sha256_file(path: Path) -> tuple[str, int]:

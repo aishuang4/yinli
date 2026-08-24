@@ -75,9 +75,26 @@ class ChatRunContext:
     session_artifact_paths_before: list[str] = field(default_factory=list)
 
 
+def resolve_run_workspace_dir(
+    *,
+    filesystem_scope: str | Path,
+    session_id: str,
+    session_workspace_dir: str | None = None,
+) -> str:
+    """解析本轮 cwd。传入覆盖路径时不创建 sessions/{session_id}。"""
+
+    if session_workspace_dir:
+        directory = Path(session_workspace_dir).expanduser().resolve()
+        directory.mkdir(parents=True, exist_ok=True)
+        return str(directory)
+    return str(project_session_directory(Path(filesystem_scope), session_id))
+
+
 async def build_chat_run_context(
     run_data: ChatMessage,
     runtime_context: RuntimeContext,
+    *,
+    session_workspace_dir: str | None = None,
 ) -> ChatRunContext:
     """构建单轮 Chat 运行上下文。"""
 
@@ -170,10 +187,12 @@ async def build_chat_run_context(
         _build_runtime_guardrails(agent_config),
         runtime_context.project_root,
     )
-    session_workspace_dir = str(project_session_directory(
-        Path(guardrails.filesystem_scope),
-        session_id,
-    ))
+    workspace_override = bool(session_workspace_dir)
+    session_workspace_dir = resolve_run_workspace_dir(
+        filesystem_scope=guardrails.filesystem_scope,
+        session_id=session_id,
+        session_workspace_dir=session_workspace_dir,
+    )
     session_artifact_paths_before = [
         str(item.get("path") or "")
         for item in list_project_session_artifacts(
@@ -188,7 +207,11 @@ async def build_chat_run_context(
         for part in [
             base_system_prompt,
             _build_project_context_prompt(runtime_context),
-            _build_session_workspace_prompt(session_workspace_dir),
+            (
+                _build_job_workspace_prompt(session_workspace_dir)
+                if workspace_override
+                else _build_session_workspace_prompt(session_workspace_dir)
+            ),
             _build_file_attachments_prompt(run_data.files),
             _build_runtime_context_prompt(),
             intent_route.main_agent_instruction,
@@ -284,4 +307,16 @@ def _build_session_workspace_prompt(session_workspace_dir: str) -> str:
         f"Default working directory for this session: {session_workspace_dir}",
         "Create every new deliverable with a relative path so it stays in this directory.",
         "Use an explicit Project path only when the user specifically asks to modify an existing Project file.",
+    ])
+
+
+def _build_job_workspace_prompt(workspace_dir: str) -> str:
+    """声明本次 firing 的唯一默认产物目录，避免与 Session Workspace 双路径。"""
+
+    return "\n".join([
+        "## Scheduled Job Workspace",
+        f"Default working directory for this scheduled run: {workspace_dir}",
+        "Write final deliverables as relative paths under outputs/ (for example outputs/weekly-report.md).",
+        "Do not use absolute paths.",
+        "Create every new deliverable with a relative path so it stays in this directory.",
     ])
