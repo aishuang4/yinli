@@ -50,7 +50,7 @@ DEFAULT_JOB_TOOL_SCOPE: dict[str, bool] = {
 DEFAULT_JOB_TOOL_SCOPE_JSON = json.dumps(DEFAULT_JOB_TOOL_SCOPE, separators=(",", ":"))
 
 ALLOWED_JOB_TRANSITIONS: dict[str, frozenset[str]] = {
-    "pending_confirmation": frozenset({"active", "archived"}),
+    "pending_confirmation": frozenset({"active", "paused", "archived"}),
     "active": frozenset({"paused", "archived", "completed"}),
     "paused": frozenset({"active", "archived"}),
     "archived": frozenset(),

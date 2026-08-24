@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from src.project_files import save_project_upload
 from src.project_resources import validate_project_resource_binding
+from src.scheduler.service import ScheduledJobService
 from src.storage.database import (
     create_project,
     create_workspace,
@@ -23,6 +24,7 @@ from src.storage.database import (
 
 router = APIRouter()
 ProjectStatus = Literal["active", "archived"]
+_job_service = ScheduledJobService()
 
 
 class WorkspaceRecord(BaseModel):
@@ -264,6 +266,12 @@ async def update_project_record(project_id: str, data: ProjectUpdateRequest) -> 
         changes["rootPath"] = root_path
         changes["instructionsFile"] = instructions_file
     updated = update_project(project_id, changes)
+    if (
+        updated is not None
+        and str(current.get("status") or "") != "archived"
+        and str(updated.get("status") or "") == "archived"
+    ):
+        _job_service.pause_for_resource_change("project_archived", project_id=project_id)
     return ProjectRecord.model_validate(updated)
 
 
@@ -296,10 +304,17 @@ async def put_project_resource(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return upsert_project_resource_binding({
+    binding = upsert_project_resource_binding({
         "project_id": project_id,
         "resource_type": resource_type,
         "resource_id": resource_id,
         "enabled": data.enabled,
         "config_override": data.config_override,
     })
+    if not data.enabled:
+        _job_service.pause_jobs_for_binding_change(
+            project_id=project_id,
+            resource_type=resource_type,
+            resource_id=resource_id,
+        )
+    return binding

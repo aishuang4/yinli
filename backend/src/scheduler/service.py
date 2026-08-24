@@ -26,7 +26,7 @@ from src.scheduler.models import (
     ScheduledJobStateError,
     ScheduledJobValidationError,
 )
-from src.scheduler.notifications import notify_firing_terminal, notify_job_paused
+from src.scheduler.notifications import notify_firing_terminal, notify_job_paused, create_notification
 from src.scheduler.unattended_policy import (
     frozen_skills_require_bash,
     would_fail_unattended_tools,
@@ -51,11 +51,17 @@ from src.storage.database import (
     insert_scheduled_job_run,
     list_due_scheduled_jobs,
     list_non_terminal_scheduled_job_runs,
+    get_workspace_resource,
+    insert_scheduled_job,
+    insert_scheduled_job_run,
+    list_mcp_servers,
+    list_project_resource_bindings,
     list_scheduled_job_runs,
     list_scheduled_job_runs_for_scheduled_for,
     list_scheduled_jobs,
     list_starting_scheduled_job_runs_without_chat_run,
     list_stuck_clock_scheduled_job_runs,
+    list_skills,
     update_scheduled_job,
     update_scheduled_job_run,
     update_scheduled_job_run_and_job,
@@ -77,6 +83,10 @@ _RECONFIRM_FIELDS = frozenset({
     "recipient_ids",
 })
 _SCHEDULE_FIELDS = frozenset({"schedule_kind", "schedule_expr", "timezone"})
+_PAUSABLE_JOB_STATUSES = frozenset({"active", "pending_confirmation"})
+_TOOL_SCOPE_FLAGS = frozenset({
+    "allow_bash", "allow_http", "allow_web", "allow_mcp", "allow_knowledge",
+})
 
 
 class ScheduledJobService:
@@ -191,9 +201,12 @@ class ScheduledJobService:
         job = self.get_job(job_id)
         if job.status == "active":
             return job
+        if job.status != "pending_confirmation":
+            raise ScheduledJobStateError("只有 pending_confirmation 任务可以确认启用")
         self._assert_transition(job.status, "active")
         if job.delivery_policy == "auto_send":
             raise ScheduledJobValidationError("Phase 1 不能启用 auto_send")
+        self._assert_resources_available(job)
         agent = get_registered_agent(job.agent_id)
         tool_scope = job.tool_scope
         force_bash = frozen_skills_require_bash(job.skill_ids)
@@ -247,7 +260,7 @@ class ScheduledJobService:
         self._assert_transition(job.status, "active")
         if job.delivery_policy == "auto_send":
             raise ScheduledJobValidationError("Phase 1 不能启用 auto_send")
-        self._require_project(job.workspace_id, job.project_id)
+        self._assert_resources_available(job)
         next_run = compute_next_run_at(
             schedule_kind=job.schedule_kind,
             schedule_expr=job.schedule_expr,
@@ -776,19 +789,20 @@ class ScheduledJobService:
         project_id: str | None = None,
         agent_id: str | None = None,
         skill_id: str | None = None,
+        require_tool_flags: tuple[str, ...] = (),
     ) -> list[ScheduledJob]:
-        """资源失效时立即暂停匹配的 active Job。"""
+        """资源失效时立即暂停匹配的 active / pending Job，并写通知。"""
 
-        if not project_id and not agent_id and not skill_id:
+        flags = tuple(flag for flag in require_tool_flags if flag in _TOOL_SCOPE_FLAGS)
+        if not project_id and not agent_id and not skill_id and not flags:
             raise ScheduledJobValidationError("pause_for_resource_change 需要过滤条件")
         paused: list[ScheduledJob] = []
-        candidates = self.list_jobs(
-            project_id=project_id,
-            agent_id=agent_id,
-            status="active",
-        )
-        for job in candidates:
+        for job in self.list_jobs(project_id=project_id, agent_id=agent_id):
+            if job.status not in _PAUSABLE_JOB_STATUSES:
+                continue
             if skill_id and skill_id not in job.skill_ids:
+                continue
+            if flags and not any(getattr(job.tool_scope, flag, False) for flag in flags):
                 continue
             paused_job = self._save_job(job.id, {
                 "status": "paused",
@@ -798,6 +812,76 @@ class ScheduledJobService:
             paused.append(paused_job)
         return paused
 
+    def pause_jobs_for_binding_change(
+        self,
+        *,
+        project_id: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> list[ScheduledJob]:
+        """Project 资源停用或移出绑定时，暂停依赖该资源的 Job。"""
+
+        if resource_type == "skill":
+            return self.pause_for_resource_change(
+                "skill_unbound",
+                project_id=project_id,
+                skill_id=resource_id,
+            )
+        if resource_type == "agent":
+            return self.pause_for_resource_change(
+                "agent_missing",
+                project_id=project_id,
+                agent_id=resource_id,
+            )
+        if resource_type == "mcp":
+            return self.pause_for_resource_change(
+                "needs_job_update",
+                project_id=project_id,
+                require_tool_flags=("allow_mcp",),
+            )
+        if resource_type == "http_tool":
+            return self.pause_for_resource_change(
+                "needs_job_update",
+                project_id=project_id,
+                require_tool_flags=("allow_http", "allow_knowledge"),
+            )
+        return []
+
+    def pause_jobs_for_catalog_change(
+        self,
+        *,
+        resource_type: str,
+        resource_id: str,
+    ) -> list[ScheduledJob]:
+        """Skill / MCP / HTTP 目录卸载、停用或删除时暂停依赖该资源的 Job。"""
+
+        if resource_type == "skill":
+            return self.pause_for_resource_change("skill_unbound", skill_id=resource_id)
+        if resource_type == "mcp":
+            return self.pause_for_resource_change(
+                "needs_job_update",
+                require_tool_flags=("allow_mcp",),
+            )
+        if resource_type in {"http_tool", "knowledge"}:
+            return self.pause_for_resource_change(
+                "needs_job_update",
+                require_tool_flags=("allow_http", "allow_knowledge"),
+            )
+        return []
+
+    def _notify_resource_pause(self, job: ScheduledJob, reason: str) -> None:
+        """资源变更暂停后写入一条应用内通知。"""
+
+        create_notification(
+            kind="job_paused",
+            title=f"定时任务「{job.name}」已暂停",
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            job_id=job.id,
+            body=reason,
+            payload={"pause_reason": reason},
+        )
+
     def _save_job(self, job_id: str, changes: dict[str, Any]) -> ScheduledJob:
         try:
             record = update_scheduled_job(job_id, changes)
@@ -806,6 +890,72 @@ class ScheduledJobService:
         if record is None:
             raise ScheduledJobNotFoundError(f"找不到 Job: {job_id}")
         return self._job(record)
+
+    def _assert_resources_available(self, job: ScheduledJob) -> None:
+        """confirm / resume 时复检 Project、Agent 与冻结 Skill/MCP/HTTP 是否仍可用。"""
+
+        project = get_project(job.project_id)
+        if project is None:
+            raise ScheduledJobStateError("Project 不存在，不能启用任务")
+        if str(project.get("status") or "") == "archived":
+            raise ScheduledJobStateError("Project 已归档，不能启用任务")
+        if str(project.get("workspaceId") or "") != job.workspace_id:
+            raise ScheduledJobStateError("project_id 与 workspace_id 不一致")
+
+        if job.agent_id != "default":
+            agent = get_workspace_resource("agent", job.agent_id)
+            if agent is None:
+                raise ScheduledJobStateError("Agent 不可用，不能启用任务")
+
+        live = self._live_project_resources(job.project_id, job.workspace_id)
+        skill_catalog = {str(item.get("id") or ""): item for item in list_skills()}
+        for skill_id in job.skill_ids:
+            skill = skill_catalog.get(skill_id)
+            if (
+                skill is None
+                or str(skill.get("status") or "") != "installed"
+                or not skill.get("enabled")
+                or skill_id not in live["skill"]
+            ):
+                raise ScheduledJobStateError("冻结 Skill 已不可用，不能启用任务")
+
+        if job.tool_scope.allow_mcp:
+            mcp_catalog = {str(item.get("id") or ""): item for item in list_mcp_servers()}
+            usable = [
+                mcp_id
+                for mcp_id in live["mcp"]
+                if str(mcp_catalog.get(mcp_id, {}).get("status") or "") == "installed"
+                and mcp_catalog.get(mcp_id, {}).get("enabled")
+            ]
+            if not usable:
+                raise ScheduledJobStateError("MCP 绑定已失效，不能启用任务")
+        if (
+            job.tool_scope.allow_http or job.tool_scope.allow_knowledge
+        ) and not live["http_tool"]:
+            raise ScheduledJobStateError("HTTP 工具绑定已失效，不能启用任务")
+
+    def _live_project_resources(
+        self,
+        project_id: str,
+        workspace_id: str,
+    ) -> dict[str, set[str]]:
+        """enabled binding 且 catalog 资源仍存在、归属当前 Workspace。"""
+
+        live: dict[str, set[str]] = {
+            "agent": set(),
+            "skill": set(),
+            "mcp": set(),
+            "http_tool": set(),
+        }
+        for binding in list_project_resource_bindings(project_id):
+            resource_type = str(binding.get("resourceType") or "")
+            resource_id = str(binding.get("resourceId") or "")
+            if not binding.get("enabled") or resource_type not in live or not resource_id:
+                continue
+            resource = get_workspace_resource(resource_type, resource_id)
+            if resource and resource.get("workspaceId") == workspace_id:
+                live[resource_type].add(resource_id)
+        return live
 
     def _require_project(self, workspace_id: str, project_id: str) -> None:
         if not str(project_id).strip():

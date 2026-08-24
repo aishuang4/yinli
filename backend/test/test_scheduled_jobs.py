@@ -35,8 +35,11 @@ from src.storage.database import (
     get_chat_run,
     list_user_notifications,
     load_chat_store,
+    replace_skills,
     save_chat_store,
+    upsert_agent,
     upsert_chat_run,
+    upsert_project_resource_binding,
 )
 from src.storage.database_schema import BASE_SCHEMA_SQL
 
@@ -53,7 +56,39 @@ def isolated_db(tmp_path, monkeypatch):
 
 def _service() -> ScheduledJobService:
     ensure_db()
+    _ensure_agent("agent-1")
     return ScheduledJobService()
+
+
+def _ensure_agent(agent_id: str) -> None:
+    upsert_agent({
+        "id": agent_id,
+        "name": agent_id,
+        "system_prompt": "prompt",
+        "workspaceId": DEFAULT_WORKSPACE_ID,
+        "status": "idle",
+    })
+
+
+def _ensure_skill(skill_id: str) -> None:
+    replace_skills({
+        skill_id: {
+            "id": skill_id,
+            "name": skill_id,
+            "description": "",
+            "category": "test",
+            "status": "installed",
+            "enabled": True,
+            "updatedAt": "2026-08-20T00:00:00+00:00",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+        },
+    })
+    upsert_project_resource_binding({
+        "project_id": DEFAULT_PROJECT_ID,
+        "resource_type": "skill",
+        "resource_id": skill_id,
+        "enabled": True,
+    })
 
 
 def _weekly_job(service: ScheduledJobService, **overrides) -> object:
@@ -68,6 +103,7 @@ def _weekly_job(service: ScheduledJobService, **overrides) -> object:
         "frozen_prompt": "生成本周周报，写入 outputs/weekly-report.md",
     }
     payload.update(overrides)
+    _ensure_agent(str(payload["agent_id"]))
     return service.create_job(**payload)
 
 
@@ -503,6 +539,7 @@ def test_list_jobs_skips_corrupt_row(isolated_db):
 
 def test_pause_for_resource_change_pauses_matching_active_jobs(isolated_db):
     service = _service()
+    _ensure_skill("skill-report")
     now = datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc)
     job = service.confirm(
         _weekly_job(service, skill_ids=["skill-report"]).id,
@@ -574,6 +611,10 @@ def test_firing_notification_title_allows_braces_in_job_name(isolated_db):
     completed = [item for item in notes if item["kind"] == "job_completed"]
     assert len(completed) == 1
     assert completed[0]["title"] == "周报 {draft 已完成"
+
+    notes = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+    assert {item["job_id"] for item in notes} == {job.id, other.id}
+    assert all(item["kind"] == "job_paused" for item in notes)
 
 
 def test_sql_tool_scope_default_is_all_false(isolated_db):

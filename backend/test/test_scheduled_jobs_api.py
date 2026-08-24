@@ -21,6 +21,7 @@ from src.storage.database import (
     list_chat_runs,
     list_user_notifications,
     save_chat_store,
+    upsert_agent,
     upsert_chat_run,
 )
 
@@ -38,6 +39,13 @@ def isolated_db(tmp_path, monkeypatch):
 @pytest.fixture()
 def client(isolated_db):
     ensure_db()
+    upsert_agent({
+        "id": "agent-1",
+        "name": "agent-1",
+        "system_prompt": "prompt",
+        "workspaceId": DEFAULT_WORKSPACE_ID,
+        "status": "idle",
+    })
     app = FastAPI()
     app.include_router(scheduled_jobs.router, prefix="/api")
     app.include_router(notifications.router, prefix="/api")
