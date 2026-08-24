@@ -26,6 +26,7 @@ from src.scheduler.models import (
     ScheduledJobStateError,
     ScheduledJobValidationError,
 )
+from src.scheduler.notifications import notify_firing_terminal, notify_job_paused
 from src.scheduler.unattended_policy import (
     frozen_skills_require_bash,
     would_fail_unattended_tools,
@@ -229,10 +230,13 @@ class ScheduledJobService:
         if job.status == "paused":
             return job
         self._assert_transition(job.status, "paused")
-        return self._save_job(job_id, {
+        updated = self._save_job(job_id, {
             "status": "paused",
             "pause_reason": reason,
         })
+        if reason and reason != "user":
+            notify_job_paused(updated)
+        return updated
 
     def resume(self, job_id: str, *, now: datetime | None = None) -> ScheduledJob:
         job = self.get_job(job_id)
@@ -687,7 +691,12 @@ class ScheduledJobService:
             raise ScheduledJobConflictError("同项目下任务名称已存在") from exc
         if job_record is None:
             raise ScheduledJobNotFoundError(f"找不到 Job: {job.id}")
-        return self._job(job_record)
+        updated = self._job(job_record)
+        firing_after = self.get_firing(firing_id)
+        notify_firing_terminal(updated, firing_after)
+        if updated.status == "paused" and job.status != "paused":
+            notify_job_paused(updated, firing=firing_after)
+        return updated
 
     def finalize_job_clock(
         self,
@@ -781,10 +790,12 @@ class ScheduledJobService:
         for job in candidates:
             if skill_id and skill_id not in job.skill_ids:
                 continue
-            paused.append(self._save_job(job.id, {
+            paused_job = self._save_job(job.id, {
                 "status": "paused",
                 "pause_reason": reason,
-            }))
+            })
+            notify_job_paused(paused_job)
+            paused.append(paused_job)
         return paused
 
     def _save_job(self, job_id: str, changes: dict[str, Any]) -> ScheduledJob:

@@ -35,6 +35,7 @@ from src.storage.database import (
     DEFAULT_WORKSPACE_ID,
     ensure_db,
     get_chat_run,
+    list_user_notifications,
     load_chat_store,
     update_scheduled_job,
     update_scheduled_job_run,
@@ -343,6 +344,70 @@ def test_catch_up_beyond_grace_is_missed(isolated_db):
         assert firing.status == "missed"
         assert firing.trigger == "schedule"
         assert service.get_job(job.id).next_run_at == "2026-08-28T10:00:00+00:00"
+
+    asyncio.run(run_case())
+
+
+def test_succeeded_firing_writes_job_completed_notification(isolated_db, monkeypatch):
+    service = _service()
+    job = _confirm_friday(service, name="成功通知")
+    _patch_instant_start(monkeypatch)
+    scheduler = JobScheduler(service=service)
+    now = datetime(2026, 8, 21, 10, 0, 0, tzinfo=timezone.utc)
+
+    async def run_case():
+        await scheduler.tick(now=now)
+        if scheduler._inflight:
+            await asyncio.gather(*list(scheduler._inflight), return_exceptions=True)
+        firing = service.list_firings(job.id)[0]
+        assert firing.status == "succeeded"
+        notes = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+        completed = [item for item in notes if item["kind"] == "job_completed"]
+        assert len(completed) == 1
+        assert completed[0]["job_id"] == job.id
+        assert completed[0]["firing_id"] == firing.id
+        service.complete_firing(firing.id, "succeeded")
+        again = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+        assert len([item for item in again if item["kind"] == "job_completed"]) == 1
+        await scheduler.stop()
+
+    asyncio.run(run_case())
+
+
+def test_missed_firing_writes_job_missed_notification(isolated_db):
+    service = _service()
+    job = _confirm_friday(service, name="错过通知", missed_policy="mark_missed")
+    scheduler = JobScheduler(service=service)
+    now = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+
+    async def run_case():
+        stats = await scheduler.tick(now=now)
+        assert stats["missed"] == 1
+        firing = service.list_firings(job.id)[0]
+        assert firing.status == "missed"
+        notes = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+        missed = [item for item in notes if item["kind"] == "job_missed"]
+        assert len(missed) == 1
+        assert missed[0]["job_id"] == job.id
+        assert missed[0]["firing_id"] == firing.id
+        assert all(item["kind"] != "job_completed" for item in notes)
+
+    asyncio.run(run_case())
+
+
+def test_skip_silent_missed_does_not_write_notification(isolated_db):
+    service = _service()
+    job = _confirm_friday(service, name="静默错过", missed_policy="skip_silent")
+    scheduler = JobScheduler(service=service)
+    now = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+
+    async def run_case():
+        stats = await scheduler.tick(now=now)
+        assert stats["missed"] == 1
+        firing = service.list_firings(job.id)[0]
+        assert firing.status == "missed"
+        notes = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+        assert notes == []
 
     asyncio.run(run_case())
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.scheduler.models import ScheduledJob, ScheduledJobRun
 from src.storage.database import (
     count_unread_user_notifications,
     get_user_notification,
@@ -12,6 +13,24 @@ from src.storage.database import (
     mark_all_user_notifications_read,
     mark_user_notification_read,
 )
+
+JOB_COMPLETED = "job_completed"
+JOB_FAILED = "job_failed"
+JOB_MISSED = "job_missed"
+JOB_PAUSED = "job_paused"
+
+_FIRING_KIND = {
+    "succeeded": JOB_COMPLETED,
+    "failed": JOB_FAILED,
+    "cancelled": JOB_FAILED,
+    "missed": JOB_MISSED,
+}
+_FIRING_TITLE = {
+    "succeeded": "{name} 已完成",
+    "failed": "{name} 执行失败",
+    "cancelled": "{name} 已取消",
+    "missed": "{name} 已错过计划时间",
+}
 
 
 class NotificationNotFoundError(Exception):
@@ -45,6 +64,59 @@ def create_notification(
         "body": body,
         "payload": dict(payload or {}),
     })
+
+
+def notify_firing_terminal(
+    job: ScheduledJob,
+    firing: ScheduledJobRun,
+) -> dict[str, Any] | None:
+    """firing 终态写入应用内通知；skip_silent 错过不通知。"""
+
+    if firing.status == "missed" and job.missed_policy == "skip_silent":
+        return None
+    kind = _FIRING_KIND.get(firing.status)
+    if not kind:
+        return None
+    body = firing.error_message or ""
+    if firing.status == "succeeded" and not body:
+        body = "定时任务已成功完成"
+    elif firing.status == "missed" and not body:
+        body = "错过计划时间"
+    return create_notification(
+        kind=kind,
+        title=_FIRING_TITLE[firing.status].format(name=job.name),
+        workspace_id=job.workspace_id,
+        project_id=job.project_id,
+        job_id=job.id,
+        firing_id=firing.id,
+        body=body,
+        payload={
+            "status": firing.status,
+            "error_code": firing.error_code,
+            "scheduled_for": firing.scheduled_for,
+            "trigger": firing.trigger,
+        },
+    )
+
+
+def notify_job_paused(
+    job: ScheduledJob,
+    *,
+    firing: ScheduledJobRun | None = None,
+) -> dict[str, Any]:
+    """自动暂停写入应用内通知。"""
+
+    reason = job.pause_reason or "paused"
+    return create_notification(
+        kind=JOB_PAUSED,
+        title=f"{job.name} 已自动暂停",
+        workspace_id=job.workspace_id,
+        project_id=job.project_id,
+        job_id=job.id,
+        firing_id=firing.id if firing is not None else "",
+        body=reason,
+        payload={"pause_reason": reason},
+    )
 
 
 def list_notification_page(
