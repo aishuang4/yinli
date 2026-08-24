@@ -35,8 +35,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /**
    * 在系统文件管理器中打开一个本地文件夹或文件位置
    */
-  openPath: (targetPath: string): Promise<{ ok: boolean; error?: string }> => (
-    ipcRenderer.invoke('open-path', targetPath)
+  openPath: (targetPath: string, projectRoot?: string): Promise<{ ok: boolean; error?: string }> => (
+    ipcRenderer.invoke('open-path', targetPath, projectRoot)
   ),
 
   /**
