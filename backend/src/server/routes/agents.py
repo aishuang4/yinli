@@ -21,6 +21,7 @@ from src.agents.factory import invalidate_agent
 from src.agents.runtime_types import MAX_REACT_ITERS, WORKSPACE_DIR
 from src.config.runtime_paths import DATA_ROOT
 from src.config.runtime_settings import get_current_model_options, get_effective_model_settings
+from src.scheduler.service import ScheduledJobService
 from src.storage.database import (
     delete_agent as db_delete_agent,
     list_agents as db_list_agents,
@@ -31,6 +32,19 @@ from src.storage.database import (
 )
 
 router = APIRouter()
+_job_service = ScheduledJobService()
+
+
+def _pause_jobs_for_removed_agent_skills(agent_id: str, skill_ids: set[str]) -> None:
+    """Agent 不再绑定某 Skill 时，暂停仍冻结该 Skill 的 Job。"""
+
+    for skill_id in skill_ids:
+        _job_service.pause_for_resource_change(
+            "skill_unbound",
+            agent_id=agent_id,
+            skill_id=skill_id,
+        )
+
 
 DATA_DIR = str(DATA_ROOT)
 AGENTS_REGISTRY_FILE = os.path.join(DATA_DIR, "agents.json")
@@ -346,6 +360,7 @@ def remove_skills_from_agents(skill_ids: set[str]) -> int:
         _agents[agent_id] = updated_agent
         invalidate_agent(agent_id)
         upsert_agent(updated_agent.model_dump(by_alias=True))
+        _pause_jobs_for_removed_agent_skills(agent_id, skill_ids)
         changed += 1
     return changed
 
@@ -519,9 +534,14 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
     existing_dict["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     updated_agent = AgentResponse(**existing_dict)
+    removed_skills = set()
+    if "skills" in update_dict:
+        removed_skills = set(existing.skills) - set(updated_agent.skills)
     _agents[agent_id] = updated_agent
     invalidate_agent(agent_id)
     upsert_agent(updated_agent.model_dump(by_alias=True))
+    if removed_skills:
+        _pause_jobs_for_removed_agent_skills(agent_id, removed_skills)
     return updated_agent
 
 
@@ -564,6 +584,7 @@ async def delete_agent(agent_id: str) -> None:
         raise HTTPException(status_code=404, detail="Agent not found")
     if agent_id == "default":
         raise HTTPException(status_code=403, detail="默认 Agent 不能删除，只能修改配置")
+    _job_service.pause_for_resource_change("agent_missing", agent_id=agent_id)
     del _agents[agent_id]
     invalidate_agent(agent_id)
     db_delete_agent(agent_id)

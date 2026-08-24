@@ -26,6 +26,7 @@ from src.scheduler.models import (
     ScheduledJobStateError,
     ScheduledJobValidationError,
 )
+from src.scheduler.notifications import create_notification
 from src.scheduler.schedule import (
     ScheduleError,
     compute_next_run_at,
@@ -60,6 +61,10 @@ _RECONFIRM_FIELDS = frozenset({
     "recipient_ids",
 })
 _SCHEDULE_FIELDS = frozenset({"schedule_kind", "schedule_expr", "timezone"})
+_PAUSABLE_JOB_STATUSES = frozenset({"active", "pending_confirmation"})
+_TOOL_SCOPE_FLAGS = frozenset({
+    "allow_bash", "allow_http", "allow_web", "allow_mcp", "allow_knowledge",
+})
 
 
 class ScheduledJobService:
@@ -516,25 +521,76 @@ class ScheduledJobService:
         project_id: str | None = None,
         agent_id: str | None = None,
         skill_id: str | None = None,
+        require_tool_flags: tuple[str, ...] = (),
     ) -> list[ScheduledJob]:
-        """资源失效时立即暂停匹配的 active Job。"""
+        """资源失效时立即暂停匹配的 active / pending Job，并写通知。"""
 
-        if not project_id and not agent_id and not skill_id:
+        flags = tuple(flag for flag in require_tool_flags if flag in _TOOL_SCOPE_FLAGS)
+        if not project_id and not agent_id and not skill_id and not flags:
             raise ScheduledJobValidationError("pause_for_resource_change 需要过滤条件")
         paused: list[ScheduledJob] = []
-        candidates = self.list_jobs(
-            project_id=project_id,
-            agent_id=agent_id,
-            status="active",
-        )
-        for job in candidates:
+        for job in self.list_jobs(project_id=project_id, agent_id=agent_id):
+            if job.status not in _PAUSABLE_JOB_STATUSES:
+                continue
             if skill_id and skill_id not in job.skill_ids:
                 continue
-            paused.append(self._save_job(job.id, {
+            if flags and not any(getattr(job.tool_scope, flag, False) for flag in flags):
+                continue
+            saved = self._save_job(job.id, {
                 "status": "paused",
                 "pause_reason": reason,
-            }))
+            })
+            self._notify_resource_pause(saved, reason)
+            paused.append(saved)
         return paused
+
+    def pause_jobs_for_binding_change(
+        self,
+        *,
+        project_id: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> list[ScheduledJob]:
+        """Project 资源停用或移出绑定时，暂停依赖该资源的 Job。"""
+
+        if resource_type == "skill":
+            return self.pause_for_resource_change(
+                "skill_unbound",
+                project_id=project_id,
+                skill_id=resource_id,
+            )
+        if resource_type == "agent":
+            return self.pause_for_resource_change(
+                "agent_missing",
+                project_id=project_id,
+                agent_id=resource_id,
+            )
+        if resource_type == "mcp":
+            return self.pause_for_resource_change(
+                "needs_job_update",
+                project_id=project_id,
+                require_tool_flags=("allow_mcp",),
+            )
+        if resource_type == "http_tool":
+            return self.pause_for_resource_change(
+                "needs_job_update",
+                project_id=project_id,
+                require_tool_flags=("allow_http", "allow_knowledge"),
+            )
+        return []
+
+    def _notify_resource_pause(self, job: ScheduledJob, reason: str) -> None:
+        """资源变更暂停后写入一条应用内通知。"""
+
+        create_notification(
+            kind="job_paused",
+            title=f"定时任务「{job.name}」已暂停",
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            job_id=job.id,
+            body=reason,
+            payload={"pause_reason": reason},
+        )
 
     def _save_job(self, job_id: str, changes: dict[str, Any]) -> ScheduledJob:
         try:

@@ -33,6 +33,7 @@ from src.storage.database import (
     DEFAULT_WORKSPACE_ID,
     ensure_db,
     get_chat_run,
+    list_user_notifications,
     load_chat_store,
     save_chat_store,
     upsert_chat_run,
@@ -523,6 +524,10 @@ def test_pause_for_resource_change_pauses_matching_active_jobs(isolated_db):
 
     by_agent = service.pause_for_resource_change("agent_missing", agent_id="agent-2")
     assert [item.id for item in by_agent] == [other.id]
+
+    notes = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+    assert {item["job_id"] for item in notes} == {job.id, other.id}
+    assert all(item["kind"] == "job_paused" for item in notes)
 
 
 def test_sql_tool_scope_default_is_all_false(isolated_db):
