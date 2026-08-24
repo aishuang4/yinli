@@ -1,7 +1,7 @@
 """定时 firing 与 Chat Run 的领域桥接。
 
 调度器必须走本模块，禁止直接 await start_chat_run()。
-本 PR 仍复用交互 toolkit；无人值守裁剪在 PR 4b。
+执行面经 build_scheduled_run_context 裁剪无人值守工具。
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, AsyncGenerator, Literal
 
 from fastapi import HTTPException
@@ -35,7 +36,7 @@ from src.server.routes.chat.initial_events import (
 from src.server.routes.chat.lifecycle import TERMINAL_RUN_STATUSES
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.projection.source_events import SourceEvent
-from src.server.routes.chat.run_context import build_chat_run_context
+from src.server.routes.chat.run_context import build_scheduled_run_context
 from src.server.routes.chat.runtime import _build_runtime_guardrails, scope_guardrails_to_project
 from src.server.routes.chat.runtime_dispatcher import execute_chat_runtime
 from src.server.routes.chat.startup_checks import get_startup_error
@@ -190,9 +191,11 @@ async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
     )
 
     async def event_stream() -> AsyncGenerator[SourceEvent, None]:
-        ctx = await build_chat_run_context(
-            run_data,
-            runtime_context.with_run_id(current_chat_background_run_id()),
+        ctx = await build_scheduled_run_context(
+            _job_view(req),
+            _firing_view(req),
+            run_data=run_data,
+            runtime_context=runtime_context.with_run_id(current_chat_background_run_id()),
             session_workspace_dir=str(workspace_dir),
         )
         persist_user_message_and_trace(ctx, run_data)
@@ -233,6 +236,20 @@ async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
         scheduled_firing_id=req.firing_id,
     )
     return run.id
+
+
+def _job_view(req: ScheduledRunRequest) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=req.job_id,
+        agent_id=req.agent_id,
+        frozen_prompt=req.frozen_prompt,
+        skill_ids=list(req.skill_ids),
+        tool_scope=req.tool_scope,
+    )
+
+
+def _firing_view(req: ScheduledRunRequest) -> SimpleNamespace:
+    return SimpleNamespace(id=req.firing_id, job_id=req.job_id)
 
 
 def _validate_request(req: ScheduledRunRequest) -> None:

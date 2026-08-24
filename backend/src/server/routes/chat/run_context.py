@@ -14,7 +14,13 @@ from src.project_resources import ProjectResourceAccess, resolve_project_resourc
 from src.runtime_context import RuntimeContext, load_project_instructions
 from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
 from src.server.routes.agents import get_registered_agent
-from src.server.routes.chat.intent_router import IntentRoute, route_chat_message, route_chat_message_with_model
+from src.server.routes.chat.intent_router import (
+    ExecutorRoute,
+    IntentRoute,
+    RuntimeRoute,
+    route_chat_message,
+    route_chat_message_with_model,
+)
 from src.server.routes.chat.models import ChatMessage, ChatSkillRun
 from src.server.routes.chat.prompts import (
     _build_clarification_system_prompt,
@@ -35,13 +41,18 @@ from src.server.routes.chat.runtime_builder import (
     build_runtime_model_config,
     resolve_react_runtime_tool_scope,
 )
+from src.server.routes.chat.scheduled_runtime import (
+    SCHEDULED_JOB_UNATTENDED_DENYLIST,
+    deserialize_frozen_runtime_tool_scope,
+)
 from src.server.routes.chat.skill_runs import (
     build_skill_run_system_prompt,
     get_active_session_skill_run,
     get_skill_for_run,
     update_skill_run_status,
 )
-from src.server.routes.skills import Skill, list_skill_usage_details, resolve_runtime_skill_paths
+from src.server.routes.skills import Skill, get_installed_skill, list_skill_usage_details, resolve_runtime_skill_paths
+from src.storage.database import get_project
 
 
 @dataclass
@@ -73,6 +84,11 @@ class ChatRunContext:
     skill_paths: list[str] = field(default_factory=list)
     session_workspace_dir: str = ""
     session_artifact_paths_before: list[str] = field(default_factory=list)
+    trigger_source: str = "user"
+    tool_name_denylist: set[str] = field(default_factory=set)
+    write_scope_dir: str = ""
+    scheduled_job_id: str = ""
+    scheduled_firing_id: str = ""
 
 
 def resolve_run_workspace_dir(
@@ -264,6 +280,181 @@ async def build_chat_run_context(
         session_workspace_dir=session_workspace_dir,
         session_artifact_paths_before=session_artifact_paths_before,
     )
+
+
+async def build_scheduled_run_context(
+    job: Any,
+    firing: Any,
+    *,
+    run_data: ChatMessage,
+    runtime_context: RuntimeContext,
+    session_workspace_dir: str,
+) -> ChatRunContext:
+    """组装无人值守 firing 的 ChatRunContext。
+
+    不调用模型 Readiness / intent，不跑 tool_scope_resolver。
+    冻结 Skill 必须全量命中，否则 skill_unbound。
+    """
+
+    frozen_prompt = str(getattr(job, "frozen_prompt", "") or run_data.message or "").strip()
+    if not frozen_prompt:
+        raise ValueError("frozen_prompt 不能为空")
+    project = get_project(runtime_context.project_id)
+    if project is None:
+        raise ValueError(f"project_archived: 找不到 Project {runtime_context.project_id}")
+    if str(project.get("status") or "") != "active":
+        raise ValueError(f"project_archived: Project {runtime_context.project_id} 已归档")
+
+    session_id = run_data.session_id or ""
+    agent_id = str(getattr(job, "agent_id", "") or run_data.agent_id or "default")
+    agent_config = get_registered_agent(agent_id)
+    if agent_id != "default" and agent_config is None:
+        raise ValueError(f"agent_missing: Agent 配置不存在: {agent_id}")
+    project_resources = resolve_project_resource_access(runtime_context)
+    project_resources.require_agent(agent_id)
+    agent_name = run_data.agent_name or (agent_config.name if agent_config else "Assistant")
+    base_system_prompt = (
+        run_data.system_prompt
+        or (agent_config.system_prompt if agent_config else None)
+        or "You are a helpful AI assistant."
+    )
+    frozen_skill_ids = [str(item) for item in list(getattr(job, "skill_ids", None) or run_data.skill_ids or [])]
+    used_skills = _resolve_frozen_runtime_skills(
+        frozen_skill_ids,
+        agent_config=agent_config,
+        project_resources=project_resources,
+    )
+    runtime_model_settings = get_effective_model_settings()
+    runtime_model_config = build_runtime_model_config(
+        run_data=run_data,
+        agent_config=agent_config,
+        runtime_model_settings=runtime_model_settings,
+    )
+    readiness = ReadinessDecision(
+        ready=True,
+        source="scheduled_job",
+        reason="frozen scheduled job spec",
+    )
+    intent_route = IntentRoute(
+        mode="react",
+        runtime=RuntimeRoute(kind="react", reason="scheduled_job"),
+        executor=ExecutorRoute(kind="single_agent", reason="scheduled_job"),
+        main_agent_instruction="",
+    )
+    skill_paths = resolve_runtime_skill_paths(used_skills)
+    used_skill_details = list_skill_usage_details(used_skills)
+    memory_prompt = build_memory_injection_text(
+        MemoryRetrievalContext(
+            agent_id=agent_id,
+            agent_name=agent_name,
+            workspace_id=runtime_context.workspace_id,
+            project_id=runtime_context.project_id,
+        ),
+    )
+    guardrails = scope_guardrails_to_project(
+        _build_runtime_guardrails(agent_config),
+        runtime_context.project_root,
+    )
+    workspace_dir = resolve_run_workspace_dir(
+        filesystem_scope=guardrails.filesystem_scope,
+        session_id=session_id,
+        session_workspace_dir=session_workspace_dir,
+    )
+    session_artifact_paths_before = [
+        str(item.get("path") or "")
+        for item in list_project_session_artifacts(
+            project_root=runtime_context.project_root,
+            session_id=session_id,
+            session_workspace_dir=workspace_dir,
+        )
+        if str(item.get("path") or "")
+    ]
+    system_prompt = "\n\n".join(
+        part
+        for part in [
+            base_system_prompt,
+            _build_project_context_prompt(runtime_context),
+            _build_job_workspace_prompt(workspace_dir),
+            _build_file_attachments_prompt(run_data.files),
+            _build_runtime_context_prompt(),
+            _build_conversation_history_prompt(session_id),
+            memory_prompt,
+            _build_final_answer_system_prompt(),
+        ]
+        if part
+    )
+    runtime_tool_scope = deserialize_frozen_runtime_tool_scope(getattr(job, "tool_scope", None))
+    denylist = set(SCHEDULED_JOB_UNATTENDED_DENYLIST)
+    return ChatRunContext(
+        session_id=session_id,
+        runtime_context=runtime_context,
+        project_resources=project_resources,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        agent_config=agent_config,
+        persist_run=True,
+        runtime_model_settings=runtime_model_settings,
+        runtime_model_config=runtime_model_config,
+        readiness=readiness,
+        intent_route=intent_route,
+        effective_user_message=frozen_prompt,
+        used_skills=used_skills,
+        skill_paths=skill_paths,
+        used_skill_details=used_skill_details,
+        skill_runs=[],
+        active_skill_run=None,
+        model_name=runtime_model_config.model_name,
+        system_prompt=system_prompt,
+        guardrails=guardrails,
+        runtime_tool_scope=runtime_tool_scope,
+        mcp_servers=_build_runtime_mcp_servers(
+            agent_config,
+            allowed_server_ids=project_resources.mcp_server_ids,
+        ),
+        knowledge_tools=_build_runtime_knowledge_tools(
+            agent_config,
+            allowed_tool_ids=project_resources.http_tool_ids,
+        ),
+        session_workspace_dir=workspace_dir,
+        session_artifact_paths_before=session_artifact_paths_before,
+        trigger_source="scheduled_job",
+        tool_name_denylist=denylist,
+        write_scope_dir=workspace_dir,
+        scheduled_job_id=str(getattr(job, "id", "") or getattr(firing, "job_id", "") or ""),
+        scheduled_firing_id=str(getattr(firing, "id", "") or ""),
+    )
+
+
+def _resolve_frozen_runtime_skills(
+    skill_ids: list[str],
+    *,
+    agent_config: Any | None,
+    project_resources: ProjectResourceAccess,
+) -> list[Skill]:
+    """冻结 skill_ids 必须全部仍安装、仍绑定 Agent 与 Project，禁止静默丢掉。"""
+
+    frozen = [str(skill_id) for skill_id in skill_ids if str(skill_id).strip()]
+    if not frozen:
+        return []
+    agent_skill_ids = list(getattr(agent_config, "skills", None) or [])
+    missing: list[str] = []
+    used: list[Skill] = []
+    for skill_id in frozen:
+        skill = get_installed_skill(skill_id)
+        if skill is None:
+            missing.append(skill_id)
+            continue
+        if skill_id not in agent_skill_ids:
+            missing.append(skill_id)
+            continue
+        used.append(skill)
+    project_bound = project_resources.filter_ids("skill", frozen)
+    if project_bound != frozen:
+        missing.extend(skill_id for skill_id in frozen if skill_id not in project_bound)
+    if missing or [skill.id for skill in used] != frozen:
+        unique = list(dict.fromkeys(missing or frozen))
+        raise ValueError(f"skill_unbound: {', '.join(unique)}")
+    return used
 
 
 def _build_project_context_prompt(runtime_context: RuntimeContext) -> str:

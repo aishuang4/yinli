@@ -422,6 +422,17 @@ def _safe_workspace_dir(guardrails: AgentGuardrails | None) -> str:
     return expanded
 
 
+def _safe_explicit_dir(path: str | None) -> str | None:
+    """规范化显式目录；空值或根目录视为未设置。"""
+
+    if not str(path or "").strip():
+        return None
+    expanded = os.path.abspath(os.path.expanduser(path))
+    if expanded == os.path.abspath(os.sep):
+        return None
+    return expanded
+
+
 def _create_mcp_clients(
     mcp_servers: list[McpRuntimeSpec],
     guardrails: AgentGuardrails | None,
@@ -470,6 +481,7 @@ def _create_default_toolkit(
     skill_paths: list[str] | None = None,
     skill_runtime_root: str | None = None,
     workspace_dir: str | None = None,
+    write_scope_dir: str | None = None,
 ) -> Toolkit:
     """
     创建默认工具集
@@ -491,6 +503,7 @@ def _create_default_toolkit(
     read_only = permission_profile.tool_policy == ApprovalPolicy.READ_ONLY
     scope = tool_scope or RuntimeToolScope()
     filesystem_scope = _safe_workspace_dir(guardrails)
+    write_scope = _safe_explicit_dir(write_scope_dir) or filesystem_scope
 
     local_tools = [
         *((
@@ -514,8 +527,8 @@ def _create_default_toolkit(
     ]
     if include_default_tools and not read_only:
         local_tools.extend([
-            ScopedWrite(base_dir=workspace_dir, scope_dir=filesystem_scope),
-            ScopedEdit(base_dir=workspace_dir, scope_dir=filesystem_scope),
+            ScopedWrite(base_dir=workspace_dir, scope_dir=write_scope),
+            ScopedEdit(base_dir=workspace_dir, scope_dir=write_scope),
         ])
 
     if scope.allow_bash and permission_profile.can_execute:
@@ -611,6 +624,7 @@ def get_or_create_agent(
     middlewares: list[MiddlewareBase] | None = None,
     skill_paths: list[str] | None = None,
     workspace_dir: str | None = None,
+    write_scope_dir: str | None = None,
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -691,6 +705,7 @@ def get_or_create_agent(
             skill_paths=skill_paths,
             skill_runtime_root=docker_skill_runtime_root,
             workspace_dir=workspace_dir,
+            write_scope_dir=write_scope_dir,
         ),
         state=agent_state,
         offloader=workspace,

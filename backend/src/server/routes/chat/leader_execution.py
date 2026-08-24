@@ -74,6 +74,22 @@ async def execute_and_finalize_leader_reply(
         ):
             yield event
 
+        if state.stopped and state.stop_reason == "hitl_denied":
+            assistant_error = "hitl_denied: 无人值守 HITL 拒绝次数超过上限"
+            async for event in finalize_failed_leader_run(
+                session_id=session_id,
+                persist=persist,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                model_name=model_name,
+                assistant_text=state.assistant_text,
+                assistant_error=assistant_error,
+                assistant_model_caches=state.assistant_model_caches,
+                skill_runs=skill_runs,
+                sandbox=sandbox,
+            ):
+                yield event
+            return
         if state.stopped and state.stop_reason != "plan_review_requested":
             return
         if state.exceeded_max_iters:

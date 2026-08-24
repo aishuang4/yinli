@@ -26,6 +26,10 @@ from src.scheduler.models import (
     ScheduledJobStateError,
     ScheduledJobValidationError,
 )
+from src.scheduler.unattended_policy import (
+    frozen_skills_require_bash,
+    would_fail_unattended_tools,
+)
 from src.scheduler.schedule import (
     ScheduleError,
     compute_next_run_at,
@@ -46,6 +50,7 @@ from src.storage.database import (
     update_scheduled_job,
     update_scheduled_job_run,
 )
+from src.server.routes.agents import get_registered_agent
 from src.storage.scheduled_job_records import UniqueConstraintError
 
 
@@ -164,17 +169,36 @@ class ScheduledJobService:
         self._assert_transition(job.status, "active")
         if job.delivery_policy == "auto_send":
             raise ScheduledJobValidationError("Phase 1 不能启用 auto_send")
+        agent = get_registered_agent(job.agent_id)
+        tool_scope = job.tool_scope
+        force_bash = frozen_skills_require_bash(job.skill_ids)
+        if force_bash and not tool_scope.allow_bash:
+            tool_scope = JobToolScope(
+                allow_bash=True,
+                allow_http=tool_scope.allow_http,
+                allow_web=tool_scope.allow_web,
+                allow_mcp=tool_scope.allow_mcp,
+                allow_knowledge=tool_scope.allow_knowledge,
+            )
+        failing = would_fail_unattended_tools(tool_scope=tool_scope, agent=agent)
+        if failing:
+            raise ScheduledJobValidationError(
+                "would_fail_tools: " + ", ".join(failing),
+            )
         next_run = compute_next_run_at(
             schedule_kind=job.schedule_kind,
             schedule_expr=job.schedule_expr,
             timezone_name=job.timezone,
             after=now or datetime.now(timezone.utc),
         )
-        return self._save_job(job_id, {
+        changes: dict[str, Any] = {
             "status": "active",
             "pause_reason": "",
             "next_run_at": to_utc_iso(next_run),
-        })
+        }
+        if force_bash and not job.tool_scope.allow_bash:
+            changes["tool_scope"] = tool_scope.to_storage_dict()
+        return self._save_job(job_id, changes)
 
     def pause(self, job_id: str, *, reason: str = "user") -> ScheduledJob:
         job = self.get_job(job_id)

@@ -149,15 +149,18 @@ def _patch_fake_agent(monkeypatch, execute, *, filesystem_scope: str):
     )
     passed: dict[str, str | None] = {"session_workspace_dir": None}
 
-    async def fake_build(run_data, runtime_context, *, session_workspace_dir=None):
+    async def fake_build(job, firing, *, run_data, runtime_context, session_workspace_dir=None):
+        _ = job, firing
         passed["session_workspace_dir"] = session_workspace_dir
         ctx = _fake_context(run_data, runtime_context)
         if session_workspace_dir:
             ctx.session_workspace_dir = str(session_workspace_dir)
+            ctx.write_scope_dir = str(session_workspace_dir)
+        ctx.trigger_source = "scheduled_job"
         return ctx
 
     monkeypatch.setattr("src.scheduler.chat_bridge.get_registered_agent", lambda agent_id: agent)
-    monkeypatch.setattr("src.scheduler.chat_bridge.build_chat_run_context", fake_build)
+    monkeypatch.setattr("src.scheduler.chat_bridge.build_scheduled_run_context", fake_build)
     monkeypatch.setattr("src.scheduler.chat_bridge.execute_chat_runtime", execute)
     monkeypatch.setattr("src.scheduler.chat_bridge.get_startup_error", lambda ctx, data: None)
     monkeypatch.setattr(

@@ -25,6 +25,10 @@ from src.server.routes.chat.plan_mode.middleware import PlanModeMiddleware
 from src.server.routes.chat.plan_mode.tools import build_plan_mode_tools
 from src.server.routes.chat.runtime import _build_user_content, _guardrail_cache_key
 from src.server.routes.chat.run_context import ChatRunContext
+from src.server.routes.chat.scheduled_runtime import (
+    SCHEDULED_JOB_UNATTENDED_DENYLIST,
+    scheduled_job_unattended_feature_key,
+)
 from src.server.routes.chat.team_runtime import execute_team_runtime
 from src.server.routes.chat.runtime_builder import (
     build_main_agent_runtime_spec,
@@ -76,6 +80,17 @@ def _build_runtime_feature_parts(
     runtime_event_sources: list[object] = []
     prompt_addendum = ""
     plan_mode_manager: PlanModeManager | None = None
+
+    if getattr(ctx, "trigger_source", "user") == "scheduled_job":
+        denylist = set(getattr(ctx, "tool_name_denylist", None) or SCHEDULED_JOB_UNATTENDED_DENYLIST)
+        return (
+            None,
+            scheduled_job_unattended_feature_key(denylist),
+            [],
+            [],
+            [],
+            "",
+        )
 
     if ctx.intent_route.executor.kind == "team":
         pass
@@ -209,8 +224,13 @@ async def execute_react_runtime(
             guardrail_cache_key=_guardrail_cache_key(ctx.guardrails),
             runtime_features_cache_key=runtime_features_cache_key,
             extra_tools=extra_tools,
+            tool_name_denylist=(
+                set(getattr(ctx, "tool_name_denylist", None) or set())
+                | (set(SCHEDULED_JOB_UNATTENDED_DENYLIST) if getattr(ctx, "trigger_source", "user") == "scheduled_job" else set())
+            ),
             middlewares=middlewares,
             workspace_dir=ctx.session_workspace_dir,
+            write_scope_dir=str(getattr(ctx, "write_scope_dir", "") or ""),
         )
         agent = create_main_agent_from_spec(
             main_agent_spec,
@@ -254,6 +274,7 @@ async def execute_react_runtime(
         available_skill_details=ctx.used_skill_details,
         session_workspace_dir=ctx.session_workspace_dir,
         session_artifact_paths_before=ctx.session_artifact_paths_before,
+        trigger_source=str(getattr(ctx, "trigger_source", "user") or "user"),
     )
     if plan_mode_manager:
         for runtime_event in plan_mode_manager.drain_runtime_events():
