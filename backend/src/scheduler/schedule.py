@@ -49,11 +49,14 @@ def parse_clock(value: str) -> tuple[int, int]:
     return hour, minute
 
 
-def to_utc_iso(value: datetime) -> str:
+def to_utc_iso(value: datetime, *, keep_microseconds: bool = False) -> str:
     """统一存 UTC ISO，避免不同偏移字符串破坏 UNIQUE 比较。"""
 
     aware = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
-    return aware.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+    utc = aware.astimezone(timezone.utc)
+    if not keep_microseconds:
+        utc = utc.replace(microsecond=0)
+    return utc.isoformat()
 
 
 def parse_stored_datetime(value: str) -> datetime:

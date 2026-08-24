@@ -68,6 +68,9 @@ class ChatBackgroundRun:
     scheduled_job_id: str = ""
     scheduled_firing_id: str = ""
     status: str = "running"
+    trigger_source: str = "user"
+    scheduled_job_id: str = ""
+    scheduled_firing_id: str = ""
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     completed_at: str | None = None
     event_count: int = 0
@@ -156,14 +159,22 @@ async def attach_chat_background_run_task(run_id: str, task: asyncio.Task) -> bo
         return True
 
 
-async def list_chat_background_runs(project_id: str | None = None) -> list[ChatBackgroundRun]:
+async def list_chat_background_runs(
+    project_id: str | None = None,
+    trigger_source: str | None = None,
+) -> list[ChatBackgroundRun]:
     async with _runs_lock:
         by_id = {
             run.id: run
             for run in _runs.values()
-            if not project_id or run.project_id == project_id
+            if (not project_id or run.project_id == project_id)
+            and (not trigger_source or run.trigger_source == trigger_source)
         }
-    for record in list_chat_runs(MAX_BACKGROUND_RUNS, project_id=project_id):
+    for record in list_chat_runs(
+        MAX_BACKGROUND_RUNS,
+        project_id=project_id,
+        trigger_source=trigger_source,
+    ):
         if record["id"] not in by_id:
             by_id[record["id"]] = _run_from_persisted_record(record)
     return sorted(by_id.values(), key=lambda item: item.completed_at or item.created_at, reverse=True)
@@ -367,6 +378,9 @@ def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
         "scheduledJobId": run.scheduled_job_id,
         "scheduledFiringId": run.scheduled_firing_id,
         "status": run.status,
+        "triggerSource": run.trigger_source,
+        "scheduledJobId": run.scheduled_job_id,
+        "scheduledFiringId": run.scheduled_firing_id,
         "createdAt": run.created_at,
         "completedAt": run.completed_at,
         "eventCount": run.event_count,
@@ -544,6 +558,9 @@ def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
         scheduled_job_id=record.get("scheduledJobId") or "",
         scheduled_firing_id=record.get("scheduledFiringId") or "",
         status=record.get("status", "completed"),
+        trigger_source=record.get("triggerSource") or "user",
+        scheduled_job_id=record.get("scheduledJobId") or "",
+        scheduled_firing_id=record.get("scheduledFiringId") or "",
         created_at=record.get("createdAt") or datetime.now(timezone.utc).isoformat(),
         completed_at=record.get("completedAt"),
         event_count=int(record.get("eventCount") or 0),

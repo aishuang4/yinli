@@ -114,19 +114,29 @@ class ChatRunRecordStore:
             )
             conn.commit()
 
-    def list(self, limit: int = 50, *, project_id: str | None = None) -> list[dict[str, Any]]:
+    def list(
+        self,
+        limit: int = 50,
+        *,
+        project_id: str | None = None,
+        trigger_source: str | None = None,
+    ) -> list[dict[str, Any]]:
         self.ensure_db()
+        clauses: list[str] = []
+        params: list[Any] = []
+        if project_id:
+            clauses.append("project_id = ?")
+            params.append(project_id)
+        if trigger_source:
+            clauses.append("trigger_source = ?")
+            params.append(trigger_source)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
         with self.lock, self.connect() as conn:
-            if project_id:
-                rows = conn.execute(
-                    "SELECT * FROM chat_runs WHERE project_id = ? ORDER BY updated_at DESC LIMIT ?",
-                    (project_id, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM chat_runs ORDER BY updated_at DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM chat_runs {where} ORDER BY updated_at DESC LIMIT ?",
+                params,
+            ).fetchall()
         return [self._from_row(row) for row in rows]
 
     def list_by_statuses(self, statuses: list[str] | tuple[str, ...] | set[str]) -> list[dict[str, Any]]:

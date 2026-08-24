@@ -1006,12 +1006,14 @@ def list_chat_runs(
     limit: int = 50,
     *,
     project_id: str | None = None,
+    trigger_source: str | None = None,
 ) -> list[dict[str, Any]]:
     """列出持久化 Chat Run。"""
 
     return _chat_run_record_store().list(
         limit,
         project_id=project_id,
+        trigger_source=trigger_source,
     )
 
 
@@ -1737,3 +1739,49 @@ def update_scheduled_job_run_and_job(
     return _scheduled_job_record_store().update_firing_and_job(
         firing_id, firing_changes, job_id, job_changes,
     )
+
+def insert_user_notification(record: dict[str, Any]) -> dict[str, Any]:
+    """写入一条应用内通知。"""
+
+    return _scheduled_job_record_store().insert_notification(record)
+
+
+def get_user_notification(note_id: str) -> dict[str, Any] | None:
+    """读取一条应用内通知。"""
+
+    return _scheduled_job_record_store().get_notification(note_id)
+
+
+def list_user_notifications(
+    *,
+    project_id: str | None = None,
+    unread_only: bool = False,
+    limit: int = 50,
+    before: str | None = None,
+) -> list[dict[str, Any]]:
+    """按时间倒序列出应用内通知。"""
+
+    return _scheduled_job_record_store().list_notifications(
+        project_id=project_id,
+        unread_only=unread_only,
+        limit=limit,
+        before=before,
+    )
+
+
+def count_unread_user_notifications(*, project_id: str | None = None) -> int:
+    """未读通知条数。"""
+
+    return _scheduled_job_record_store().count_unread_notifications(project_id=project_id)
+
+
+def mark_user_notification_read(note_id: str) -> dict[str, Any] | None:
+    """将一条通知标为已读；不存在则返回 None。"""
+
+    return _scheduled_job_record_store().mark_notification_read(note_id)
+
+
+def mark_all_user_notifications_read(*, project_id: str | None = None) -> int:
+    """将未读通知全部标为已读，返回更新行数。"""
+
+    return _scheduled_job_record_store().mark_all_notifications_read(project_id=project_id)
