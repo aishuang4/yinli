@@ -8,7 +8,7 @@
 import { create } from 'zustand';
 
 /** 应用视图类型（对应 Activity Bar 选项） */
-export type ViewType = 'chat' | 'runs' | 'traces' | 'sandbox' | 'agents' | 'subagents' | 'tools' | 'mcp' | 'skills' | 'memory' | 'settings';
+export type ViewType = 'chat' | 'runs' | 'jobs' | 'traces' | 'sandbox' | 'agents' | 'subagents' | 'tools' | 'mcp' | 'skills' | 'memory' | 'settings';
 
 /** 顶层产品工作空间模式 */
 export type WorkspaceMode = 'workstation' | 'workflow';

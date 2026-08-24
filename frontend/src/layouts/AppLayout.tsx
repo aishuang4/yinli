@@ -9,7 +9,7 @@
  */
 
 import { type ComponentType, type ReactNode } from 'react';
-import { Activity, ArrowLeft, Bot, Brain, FlaskConical, GitBranch, ListRestart, Network, Package, Settings, Wrench } from 'lucide-react';
+import { Activity, ArrowLeft, Bot, Brain, CalendarClock, FlaskConical, GitBranch, ListRestart, Network, Package, Settings, Wrench } from 'lucide-react';
 import { useAppStore, type ViewType, type WorkspaceMode } from '../stores/appStore';
 import { TitleBar } from './TitleBar';
 import { ActivityBar } from './ActivityBar';
@@ -31,18 +31,34 @@ interface WorkbenchMenuItem {
   workspaceMode?: WorkspaceMode;
 }
 
+/** 工作台菜单按 ViewType 穷尽，chat 走 ActivityBar，workflow 是顶层模式。 */
+const WORKBENCH_PAGES: Record<Exclude<ViewType, 'chat'>, WorkbenchMenuItem> = {
+  agents: { id: 'agents', label: 'Agents', description: 'Agent 模型、工具与运行边界', icon: Bot },
+  subagents: { id: 'subagents', label: 'Subagents', description: '子 Agent 定义与调用历史', icon: Network },
+  tools: { id: 'tools', label: 'Tools', description: '内置工具与 HTTP 工具', icon: Wrench },
+  mcp: { id: 'mcp', label: 'MCP', description: '外部工具服务连接', icon: GitBranch },
+  skills: { id: 'skills', label: 'Skills', description: '技能管理与注入', icon: Package },
+  memory: { id: 'memory', label: 'Memory', description: '记忆、审计与 Wiki', icon: Brain },
+  traces: { id: 'traces', label: 'Trace', description: '运行轨迹与事件详情', icon: Activity },
+  runs: { id: 'runs', label: 'Runs', description: '运行任务与恢复', icon: ListRestart },
+  jobs: { id: 'jobs', label: '定时任务', description: '周期任务、确认启用与运行历史', icon: CalendarClock },
+  sandbox: { id: 'sandbox', label: 'Sandbox', description: '测试沙盒', icon: FlaskConical },
+  settings: { id: 'settings', label: 'Settings', description: '模型、主题与系统设置', icon: Settings },
+};
+
 const WORKBENCH_MENU_ITEMS: WorkbenchMenuItem[] = [
-  { id: 'agents', label: 'Agents', description: 'Agent 模型、工具与运行边界', icon: Bot },
-  { id: 'subagents', label: 'Subagents', description: '子 Agent 定义与调用历史', icon: Network },
-  { id: 'tools', label: 'Tools', description: '内置工具与 HTTP 工具', icon: Wrench },
-  { id: 'mcp', label: 'MCP', description: '外部工具服务连接', icon: GitBranch },
-  { id: 'skills', label: 'Skills', description: '技能管理与注入', icon: Package },
-  { id: 'memory', label: 'Memory', description: '记忆、审计与 Wiki', icon: Brain },
-  { id: 'traces', label: 'Trace', description: '运行轨迹与事件详情', icon: Activity },
-  { id: 'runs', label: 'Runs', description: '运行任务与恢复', icon: ListRestart },
-  { id: 'sandbox', label: 'Sandbox', description: '测试沙盒', icon: FlaskConical },
+  WORKBENCH_PAGES.agents,
+  WORKBENCH_PAGES.subagents,
+  WORKBENCH_PAGES.tools,
+  WORKBENCH_PAGES.mcp,
+  WORKBENCH_PAGES.skills,
+  WORKBENCH_PAGES.memory,
+  WORKBENCH_PAGES.traces,
+  WORKBENCH_PAGES.runs,
+  WORKBENCH_PAGES.jobs,
+  WORKBENCH_PAGES.sandbox,
   { id: 'workflow', label: 'Workflow', description: '动态任务流工作空间', icon: GitBranch, workspaceMode: 'workflow' },
-  { id: 'settings', label: 'Settings', description: '模型、主题与系统设置', icon: Settings },
+  WORKBENCH_PAGES.settings,
 ];
 
 /**

@@ -162,12 +162,15 @@ async def list_scheduled_jobs(
     project_id: str | None = Query(default=None, alias="projectId"),
     status: str | None = Query(default=None),
 ) -> dict[str, Any]:
-    """列出定时任务。"""
+    """列出定时任务，并返回 scheduled_jobs.enabled，避免前端用写接口探测。"""
 
     if status and status not in JOB_STATUSES:
         raise HTTPException(status_code=422, detail=f"非法 Job 状态: {status}")
     jobs = _service.list_jobs(project_id=project_id, status=status)
-    return {"jobs": [serialize_job(item) for item in jobs]}
+    return {
+        "jobs": [serialize_job(item) for item in jobs],
+        "enabled": is_scheduled_jobs_enabled(),
+    }
 
 
 @router.post("/scheduled-jobs", status_code=201)

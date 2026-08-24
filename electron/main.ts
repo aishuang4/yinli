@@ -79,6 +79,9 @@ let backendStartupPromise: Promise<boolean> | null = null;
 let backendInstanceId: string | null = null;
 let backendPort: number | null = isDev ? 8765 : null;
 let appQuitting = false;
+/** 与选目录 IPC 同源的 Project root 白名单，允许打开外置盘产物。 */
+const trustedProjectRoots = new Set<string>();
+let projectRootsFetchedAt = 0;
 
 /** 返回当前运行期后端地址。开发模式仍使用固定的 Vite 代理端口。 */
 function backendServerUrl(port = backendPort): string {
@@ -606,6 +609,7 @@ ipcMain.handle('select-project-directory', async () => {
   if (!fs.existsSync(selectedPath) || !fs.statSync(selectedPath).isDirectory()) {
     return { canceled: true };
   }
+  rememberProjectRoot(selectedPath);
   return {
     canceled: false,
     path: selectedPath,
@@ -614,10 +618,11 @@ ipcMain.handle('select-project-directory', async () => {
 });
 
 /**
- * 打开本地路径。仅允许当前工作目录、用户主目录和 Electron userData 下的路径。
+ * 打开本地路径。允许 cwd / userData / home，以及选目录 IPC / 后端 Project root 及其子路径。
+ * 渲染进程传入的 projectRoot 不得写入白名单。
  */
-ipcMain.handle('open-path', async (_event, targetPath: string) => {
-  const resolvedPath = resolveSafeLocalPath(targetPath);
+ipcMain.handle('open-path', async (_event, targetPath: string, projectRoot?: string) => {
+  const resolvedPath = await resolveSafeLocalPath(targetPath, projectRoot);
   if (!resolvedPath) {
     return { ok: false, error: 'Path is not allowed' };
   }
@@ -639,23 +644,85 @@ ipcMain.handle('open-external', async (_event, url: string) => {
   return { ok: true };
 });
 
-function resolveSafeLocalPath(targetPath: string): string | null {
+function rememberProjectRoot(rootPath: string | undefined | null): string | null {
+  if (!rootPath || typeof rootPath !== 'string') {
+    return null;
+  }
+  const resolved = path.resolve(rootPath);
+  try {
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  trustedProjectRoots.add(resolved);
+  return resolved;
+}
+
+function isPathInsideRoot(target: string, root: string): boolean {
+  const resolvedRoot = path.resolve(root);
+  return target === resolvedRoot || target.startsWith(resolvedRoot + path.sep);
+}
+
+async function refreshTrustedProjectRootsFromBackend(): Promise<void> {
+  if (Date.now() - projectRootsFetchedAt < 15_000) {
+    return;
+  }
+  try {
+    const workspaceResponse = await fetch(`${backendServerUrl()}/api/workspaces`);
+    if (!workspaceResponse.ok) {
+      return;
+    }
+    const workspaces = await workspaceResponse.json() as Array<{ id?: string }>;
+    for (const workspace of workspaces) {
+      if (!workspace.id) continue;
+      const projectResponse = await fetch(
+        `${backendServerUrl()}/api/workspaces/${encodeURIComponent(workspace.id)}/projects`,
+      );
+      if (!projectResponse.ok) continue;
+      const projects = await projectResponse.json() as Array<{ rootPath?: string; root_path?: string }>;
+      for (const project of projects) {
+        rememberProjectRoot(project.rootPath || project.root_path);
+      }
+    }
+    projectRootsFetchedAt = Date.now();
+  } catch {
+    // 后端未就绪时仍允许 cwd / home / 已选择的 Project root。
+  }
+}
+
+async function resolveSafeLocalPath(targetPath: string, projectRoot?: string): Promise<string | null> {
   if (!targetPath || typeof targetPath !== 'string') {
     return null;
   }
+  // 渲染进程 projectRoot 不得写入白名单。允许的 root 只来自 cwd / userData / home、
+  // select-project-directory，以及后端 Project.rootPath。
+  void projectRoot;
+  await refreshTrustedProjectRootsFromBackend();
   const resolved = path.resolve(targetPath);
   const allowedRoots = [
     process.cwd(),
     app.getPath('userData'),
     app.getPath('home'),
+    ...trustedProjectRoots,
   ].map((item) => path.resolve(item));
-  const isAllowed = allowedRoots.some((root) => (
-    resolved === root || resolved.startsWith(root + path.sep)
-  ));
-  if (!isAllowed || !fs.existsSync(resolved)) {
-    return null;
+
+  let current = resolved;
+  while (true) {
+    const allowed = allowedRoots.some((root) => isPathInsideRoot(current, root));
+    if (!allowed) {
+      return null;
+    }
+    if (fs.existsSync(current)) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
   }
-  return resolved;
 }
 
 function isAllowedExternalUrl(value: string): boolean {
