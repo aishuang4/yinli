@@ -11,7 +11,7 @@
  * - 使用 Lucide 线性图标
  */
 
-import { MessageSquare, Bot, Wrench, Package, Settings, Sun, Moon, Activity, FlaskConical, ListRestart, Brain, Network } from 'lucide-react';
+import { MessageSquare, Bot, Wrench, Package, Settings, Sun, Moon, Activity, FlaskConical, ListRestart, Brain, Network, GitBranch, CalendarClock } from 'lucide-react';
 import { useAppStore, type ViewType } from '../stores/appStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { cn } from '../utils/cn';
@@ -26,59 +26,21 @@ interface NavItem {
   icon: React.ComponentType<{ size?: number; strokeWidth?: number }>;
 }
 
-/** 主要导航项 */
-const NAV_ITEMS: NavItem[] = [
-  {
-    id: 'chat',
-    label: '对话',
-    icon: MessageSquare,
-  },
-  {
-    id: 'traces',
-    label: '运行轨迹',
-    icon: Activity,
-  },
-  {
-    id: 'runs',
-    label: '运行任务',
-    icon: ListRestart,
-  },
-  {
-    id: 'sandbox',
-    label: '测试沙盒',
-    icon: FlaskConical,
-  },
-  {
-    id: 'agents',
-    label: 'Agents',
-    icon: Bot,
-  },
-  {
-    id: 'subagents',
-    label: 'Subagents',
-    icon: Network,
-  },
-  {
-    id: 'tools',
-    label: '工具管理',
-    icon: Wrench,
-  },
-  {
-    id: 'skills',
-    label: 'Skills',
-    icon: Package,
-  },
-  {
-    id: 'memory',
-    label: 'Memory',
-    icon: Brain,
-  },
-  {
-    id: 'settings',
-    label: '设置',
-    icon: Settings,
-  },
-];
+/** 主要导航项。Record 穷尽 ViewType，避免像 MCP 那样漏入口。 */
+const NAV_ITEMS: Record<ViewType, NavItem> = {
+  chat: { id: 'chat', label: '对话', icon: MessageSquare },
+  traces: { id: 'traces', label: '运行轨迹', icon: Activity },
+  runs: { id: 'runs', label: '运行任务', icon: ListRestart },
+  jobs: { id: 'jobs', label: '定时任务', icon: CalendarClock },
+  sandbox: { id: 'sandbox', label: '测试沙盒', icon: FlaskConical },
+  agents: { id: 'agents', label: 'Agents', icon: Bot },
+  subagents: { id: 'subagents', label: 'Subagents', icon: Network },
+  tools: { id: 'tools', label: '工具管理', icon: Wrench },
+  mcp: { id: 'mcp', label: 'MCP', icon: GitBranch },
+  skills: { id: 'skills', label: 'Skills', icon: Package },
+  memory: { id: 'memory', label: 'Memory', icon: Brain },
+  settings: { id: 'settings', label: '设置', icon: Settings },
+};
 
 /** 导航按钮样式 */
 const navButtonStyle = {
@@ -120,7 +82,7 @@ export function ActivityBar() {
     >
       {/* 顶部导航项 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        {NAV_ITEMS.map((item) => {
+        {Object.values(NAV_ITEMS).map((item) => {
           const isActive = currentView === item.id;
           const Icon = item.icon;
           return (

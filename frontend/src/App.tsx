@@ -37,6 +37,7 @@ const ToolsPage = lazy(() => import('./pages/ToolsPage').then((module) => ({ def
 const MCPPage = lazy(() => import('./pages/MCPPage').then((module) => ({ default: module.MCPPage })));
 const SkillsPage = lazy(() => import('./pages/SkillsPage').then((module) => ({ default: module.SkillsPage })));
 const MemoryPage = lazy(() => import('./pages/MemoryPage').then((module) => ({ default: module.MemoryPage })));
+const ScheduledJobsPage = lazy(() => import('./pages/ScheduledJobsPage').then((module) => ({ default: module.ScheduledJobsPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })));
 
 /**
@@ -46,6 +47,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => 
 const VIEW_PAGES: Record<ViewType, ComponentType> = {
   chat: ChatPage,
   runs: RunsPage,
+  jobs: ScheduledJobsPage,
   traces: TracePage,
   sandbox: SandboxPage,
   agents: AgentsPage,

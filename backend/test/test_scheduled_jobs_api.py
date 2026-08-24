@@ -98,7 +98,9 @@ def test_flag_off_write_is_403_and_list_still_readable(client):
     )
     listed = client.get("/api/scheduled-jobs", params={"projectId": DEFAULT_PROJECT_ID})
     assert listed.status_code == 200
-    assert any(item["id"] == created.id for item in listed.json()["jobs"])
+    payload = listed.json()
+    assert payload["enabled"] is False
+    assert any(item["id"] == created.id for item in payload["jobs"])
 
     denied = client.post("/api/scheduled-jobs", json=_create_payload(name="另一份"))
     assert denied.status_code == 403
@@ -113,6 +115,9 @@ def test_flag_off_write_is_403_and_list_still_readable(client):
 
 def test_confirm_activates_job(client):
     _enable_jobs()
+    listed = client.get("/api/scheduled-jobs")
+    assert listed.status_code == 200
+    assert listed.json()["enabled"] is True
     created = client.post("/api/scheduled-jobs", json=_create_payload())
     assert created.status_code == 201
     body = created.json()
