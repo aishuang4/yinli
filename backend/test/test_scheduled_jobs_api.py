@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
@@ -10,6 +12,7 @@ from src.scheduler.notifications import create_notification
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.settings import is_scheduled_jobs_enabled, set_scheduled_jobs_enabled
 from src.server.routes import chat, notifications, scheduled_jobs
+from src.server.routes.chat.background_runs import MAX_BACKGROUND_RUNS
 from src.storage import database
 from src.storage.database import (
     DEFAULT_PROJECT_ID,
@@ -125,9 +128,34 @@ def test_confirm_auto_send_is_422(client):
         json=_create_payload(name="自动发送", deliveryPolicy="auto_send"),
     )
     assert created.status_code == 201
-    confirmed = client.post(f"/api/scheduled-jobs/{created.json()['id']}/confirm")
+    job_id = created.json()["id"]
+    confirmed = client.post(f"/api/scheduled-jobs/{job_id}/confirm")
     assert confirmed.status_code == 422
     assert "auto_send" in confirmed.json()["detail"]
+    resumed = client.post(f"/api/scheduled-jobs/{job_id}/resume")
+    assert resumed.status_code == 409
+    assert client.get(f"/api/scheduled-jobs/{job_id}").json()["status"] == "pending_confirmation"
+
+
+def test_resume_does_not_activate_pending_confirmation(client):
+    _enable_jobs()
+    created = client.post("/api/scheduled-jobs", json=_create_payload(name="待确认不可恢复"))
+    job_id = created.json()["id"]
+    resumed = client.post(f"/api/scheduled-jobs/{job_id}/resume")
+    assert resumed.status_code == 409
+    assert client.get(f"/api/scheduled-jobs/{job_id}").json()["status"] == "pending_confirmation"
+
+    confirmed = client.post(f"/api/scheduled-jobs/{job_id}/confirm")
+    assert confirmed.status_code == 200
+    patched = client.patch(
+        f"/api/scheduled-jobs/{job_id}",
+        json={"deliveryPolicy": "auto_send"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["status"] == "pending_confirmation"
+    resumed_after_patch = client.post(f"/api/scheduled-jobs/{job_id}/resume")
+    assert resumed_after_patch.status_code == 409
+    assert client.get(f"/api/scheduled-jobs/{job_id}").json()["status"] == "pending_confirmation"
 
 
 def test_run_now_conflict_when_non_terminal_firing_exists(client):
@@ -149,6 +177,29 @@ def test_run_now_conflict_when_non_terminal_firing_exists(client):
     listed = client.get(f"/api/scheduled-jobs/{job_id}/runs")
     assert listed.status_code == 200
     assert len(listed.json()["runs"]) == 1
+
+
+def test_run_now_after_cancel_same_utc_second_is_not_unique_conflict(client):
+    _enable_jobs()
+    created = client.post("/api/scheduled-jobs", json=_create_payload(name="同秒再跑"))
+    job_id = created.json()["id"]
+    assert client.post(f"/api/scheduled-jobs/{job_id}/confirm").status_code == 200
+    frozen = datetime(2026, 8, 21, 10, 0, 0, tzinfo=timezone.utc)
+    service = ScheduledJobService()
+    first = service.run_now(job_id, now=frozen)
+    service.cancel_firing(job_id, first.id)
+    second = service.run_now(job_id, now=frozen)
+    assert second.id != first.id
+    assert second.trigger == "manual"
+    assert second.scheduled_for != first.scheduled_for
+
+
+def test_run_now_rejects_non_active_job(client):
+    _enable_jobs()
+    created = client.post("/api/scheduled-jobs", json=_create_payload(name="未确认不能立即跑"))
+    job_id = created.json()["id"]
+    denied = client.post(f"/api/scheduled-jobs/{job_id}/run-now")
+    assert denied.status_code == 409
 
 
 def test_session_catalog_defaults_to_chat_kind(client):
@@ -202,16 +253,7 @@ def test_session_catalog_defaults_to_chat_kind(client):
 
 
 def test_list_runs_filter_by_trigger_source(client):
-    upsert_chat_run({
-        "id": "run-user",
-        "sessionId": "sess-1",
-        "agentId": "agent-1",
-        "agentName": "助手",
-        "task": "hello",
-        "mode": "agent",
-        "status": "completed",
-        "triggerSource": "user",
-    })
+    base = datetime(2026, 8, 1, tzinfo=timezone.utc)
     upsert_chat_run({
         "id": "run-job",
         "sessionId": "sess-job",
@@ -223,7 +265,23 @@ def test_list_runs_filter_by_trigger_source(client):
         "triggerSource": "scheduled_job",
         "scheduledJobId": "job-1",
         "scheduledFiringId": "firing-1",
+        "createdAt": base.isoformat(),
+        "updatedAt": base.isoformat(),
     })
+    for index in range(MAX_BACKGROUND_RUNS):
+        stamp = (base + timedelta(seconds=index + 1)).isoformat()
+        upsert_chat_run({
+            "id": f"run-user-{index}",
+            "sessionId": f"sess-{index}",
+            "agentId": "agent-1",
+            "agentName": "助手",
+            "task": "hello",
+            "mode": "agent",
+            "status": "completed",
+            "triggerSource": "user",
+            "createdAt": stamp,
+            "updatedAt": stamp,
+        })
     stored = list_chat_runs(project_id=DEFAULT_PROJECT_ID, trigger_source="scheduled_job")
     assert [item["id"] for item in stored] == ["run-job"]
 
@@ -232,14 +290,20 @@ def test_list_runs_filter_by_trigger_source(client):
         params={"projectId": DEFAULT_PROJECT_ID, "triggerSource": "scheduled_job"},
     )
     assert filtered.status_code == 200
-    ids = {item["id"] for item in filtered.json()["runs"]}
+    payload = filtered.json()["runs"]
+    ids = {item["id"] for item in payload}
     assert "run-job" in ids
-    assert "run-user" not in ids
+    assert all(not item_id.startswith("run-user-") for item_id in ids)
+    scheduled = next(item for item in payload if item["id"] == "run-job")
+    assert scheduled["triggerSource"] == "scheduled_job"
+    assert scheduled["scheduledJobId"] == "job-1"
+    assert scheduled["scheduledFiringId"] == "firing-1"
 
     unfiltered = client.get("/api/chat/runs", params={"projectId": DEFAULT_PROJECT_ID})
     assert unfiltered.status_code == 200
     all_ids = {item["id"] for item in unfiltered.json()["runs"]}
-    assert {"run-job", "run-user"} <= all_ids
+    assert "run-job" not in all_ids
+    assert len(all_ids) == MAX_BACKGROUND_RUNS
 
 
 def test_notifications_list_read_and_unread_count(client):
@@ -301,6 +365,25 @@ def test_notifications_list_read_and_unread_count(client):
         "/api/notifications/unread-count",
         params={"projectId": DEFAULT_PROJECT_ID},
     ).json()["unreadCount"] == 0
+
+
+def test_cancel_queued_run_now_is_not_a_failure(client):
+    _enable_jobs()
+    created = client.post(
+        "/api/scheduled-jobs",
+        json=_create_payload(name="取消不算失败", failurePolicy="pause_job"),
+    )
+    job_id = created.json()["id"]
+    assert client.post(f"/api/scheduled-jobs/{job_id}/confirm").status_code == 200
+    firing = client.post(f"/api/scheduled-jobs/{job_id}/run-now").json()
+    cancelled = client.post(
+        f"/api/scheduled-jobs/{job_id}/runs/{firing['id']}/cancel",
+    )
+    assert cancelled.status_code == 200
+    job = client.get(f"/api/scheduled-jobs/{job_id}").json()
+    assert job["status"] == "active"
+    assert job["consecutiveFailures"] == 0
+    assert job["pauseReason"] == ""
 
 
 def test_delete_archives_job(client):

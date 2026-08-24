@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pydantic import ValidationError
@@ -203,7 +203,11 @@ class ScheduledJobService:
         job = self.get_job(job_id)
         if job.status == "active":
             return job
+        if job.status != "paused":
+            raise ScheduledJobStateError("只有 paused 任务可以恢复")
         self._assert_transition(job.status, "active")
+        if job.delivery_policy == "auto_send":
+            raise ScheduledJobValidationError("Phase 1 不能启用 auto_send")
         self._require_project(job.workspace_id, job.project_id)
         next_run = compute_next_run_at(
             schedule_kind=job.schedule_kind,
@@ -286,15 +290,27 @@ class ScheduledJobService:
         """立即插入 trigger=manual 的 queued firing；已有非终态 firing 时冲突。"""
 
         job = self.get_job(job_id)
-        if job.status in {"archived", "completed"}:
-            raise ScheduledJobStateError(f"{job.status} 任务不能立即执行")
+        if job.status != "active":
+            raise ScheduledJobStateError("只有 active 任务可以立即执行")
         stamped = now or datetime.now(timezone.utc)
-        return self.create_firing(
-            job_id=job.id,
-            scheduled_for=to_utc_iso(stamped),
-            trigger="manual",
-            status="queued",
-        )
+        last_error: ScheduledJobConflictError | None = None
+        for offset in range(16):
+            try:
+                return self.create_firing(
+                    job_id=job.id,
+                    scheduled_for=to_utc_iso(
+                        stamped + timedelta(microseconds=offset),
+                        keep_microseconds=True,
+                    ),
+                    trigger="manual",
+                    status="queued",
+                )
+            except ScheduledJobConflictError as exc:
+                if self.has_non_terminal_firing(job.id):
+                    raise
+                last_error = exc
+        assert last_error is not None
+        raise last_error
 
     def create_firing(
         self,
@@ -313,7 +329,10 @@ class ScheduledJobService:
             raise ScheduledJobValidationError(f"非法 firing trigger: {trigger}")
         if status in NON_TERMINAL_FIRING_STATUSES and self.has_non_terminal_firing(job_id):
             raise ScheduledJobConflictError("该 Job 已有未结束的 firing")
-        canonical = to_utc_iso(parse_stored_datetime(scheduled_for))
+        canonical = to_utc_iso(
+            parse_stored_datetime(scheduled_for),
+            keep_microseconds=(trigger == "manual"),
+        )
         try:
             record = insert_scheduled_job_run({
                 "job_id": job.id,
@@ -397,7 +416,7 @@ class ScheduledJobService:
                     "consecutive_failures": 0,
                     "last_run_at": firing.scheduled_for,
                 })
-            elif status in {"failed", "missed", "cancelled"}:
+            elif status in {"failed", "missed"}:
                 update_scheduled_job(job.id, {
                     "consecutive_successes": 0,
                     "consecutive_failures": job.consecutive_failures + 1,
@@ -410,7 +429,7 @@ class ScheduledJobService:
         if (
             job.schedule_kind == "weekly"
             and job.status == "active"
-            and refreshed_firing.status in {"failed", "missed", "cancelled"}
+            and refreshed_firing.status in {"failed", "missed"}
             and job.consecutive_failures >= job.max_consecutive_failures
         ):
             return self._save_job(job.id, {
@@ -470,13 +489,15 @@ class ScheduledJobService:
                 )
                 changes["next_run_at"] = to_utc_iso(nxt)
             if (
-                firing.status not in {"succeeded", "skipped"}
+                firing.status in {"failed", "missed"}
                 and job.failure_policy == "pause_job"
                 and job.status == "active"
             ):
                 changes["status"] = "paused"
                 changes["pause_reason"] = "failure_policy"
             return changes
+        if firing.trigger == "manual" and firing.status == "cancelled":
+            return {}
         changes = {"next_run_at": None}
         if job.status == "archived":
             return changes
