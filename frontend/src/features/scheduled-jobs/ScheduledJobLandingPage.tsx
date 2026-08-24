@@ -37,7 +37,7 @@ interface ScheduledJobLandingPageProps {
   agentNames: Record<string, string>;
   loading: boolean;
   error: string | null;
-  schedulerEnabled: boolean;
+  schedulerEnabled: boolean | null;
   busyId: string | null;
   query: string;
   statusFilter: string;
@@ -87,13 +87,13 @@ export function ScheduledJobLandingPage({
         </>
       )}
     >
-      {schedulerEnabled ? null : (
+      {schedulerEnabled === false ? (
         <div className="mb-5">
           <WorkbenchEmptyPanel>
             {SCHEDULER_DISABLED_DETAIL}。当前只能查看任务，确认启用、暂停、删除和改调度不可用。
           </WorkbenchEmptyPanel>
         </div>
-      )}
+      ) : null}
 
       <div className="mb-5 grid grid-cols-[minmax(240px,1fr)_180px] gap-3">
         <TextField
@@ -118,9 +118,9 @@ export function ScheduledJobLandingPage({
           <WorkbenchLoadingPanel tip="加载定时任务..." />
         ) : jobs.length === 0 ? (
           <WorkbenchEmptyPanel>
-            {schedulerEnabled
-              ? '暂无定时任务。在 Chat 中登记周期任务后，可在此确认启用。'
-              : '调度未启用，暂无定时任务。'}
+            {schedulerEnabled === false
+              ? '调度未启用，暂无定时任务。'
+              : '暂无定时任务。在 Chat 中登记周期任务后，可在此确认启用。'}
           </WorkbenchEmptyPanel>
         ) : (
           <WorkbenchList>
@@ -131,7 +131,7 @@ export function ScheduledJobLandingPage({
                 agentName={agentNames[job.agentId] || job.agentId}
                 busy={busyId === job.id}
                 last={index === jobs.length - 1}
-                writesEnabled={schedulerEnabled && canWriteJob(job)}
+                writesEnabled={schedulerEnabled === true && canWriteJob(job)}
                 onSelect={() => onSelect(job)}
                 onConfirm={() => onConfirm(job)}
                 onPause={() => onPause(job)}

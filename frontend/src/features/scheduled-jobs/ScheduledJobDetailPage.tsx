@@ -25,7 +25,7 @@ interface ScheduledJobDetailPageProps {
   runsError: string | null;
   busy: boolean;
   busyRunId: string | null;
-  schedulerEnabled: boolean;
+  schedulerEnabled: boolean | null;
   canOpenDirectory: boolean;
   projectRoot: string;
   onBack: () => void;
@@ -58,7 +58,7 @@ export function ScheduledJobDetailPage({
   onCancelRun,
   onOpenDirectory,
 }: ScheduledJobDetailPageProps) {
-  const writable = schedulerEnabled && canWriteJob(job);
+  const writable = schedulerEnabled === true && canWriteJob(job);
   const jobDir = projectRoot ? jobWorkspaceDir(projectRoot, job.id) : '';
 
   return (

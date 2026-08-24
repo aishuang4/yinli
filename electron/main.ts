@@ -618,7 +618,8 @@ ipcMain.handle('select-project-directory', async () => {
 });
 
 /**
- * 打开本地路径。允许 cwd / userData / home，以及当前 Project root 及其子路径。
+ * 打开本地路径。允许 cwd / userData / home，以及选目录 IPC / 后端 Project root 及其子路径。
+ * 渲染进程传入的 projectRoot 不得写入白名单。
  */
 ipcMain.handle('open-path', async (_event, targetPath: string, projectRoot?: string) => {
   const resolvedPath = await resolveSafeLocalPath(targetPath, projectRoot);
@@ -695,7 +696,9 @@ async function resolveSafeLocalPath(targetPath: string, projectRoot?: string): P
   if (!targetPath || typeof targetPath !== 'string') {
     return null;
   }
-  rememberProjectRoot(projectRoot);
+  // 渲染进程 projectRoot 不得写入白名单。允许的 root 只来自 cwd / userData / home、
+  // select-project-directory，以及后端 Project.rootPath。
+  void projectRoot;
   await refreshTrustedProjectRootsFromBackend();
   const resolved = path.resolve(targetPath);
   const allowedRoots = [

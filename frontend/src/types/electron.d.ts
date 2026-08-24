@@ -13,7 +13,7 @@ interface ElectronAPI {
   getAppVersion(): Promise<string>;
   /** 选择 Project 工作目录 */
   selectProjectDirectory(): Promise<{ canceled: boolean; path?: string; name?: string }>;
-  /** 在系统文件管理器中打开本地路径；可选传入当前 Project root 以加入白名单 */
+  /** 在系统文件管理器中打开本地路径。projectRoot 仅作提示，主进程不据此扩大白名单。 */
   openPath(targetPath: string, projectRoot?: string): Promise<{ ok: boolean; error?: string }>;
   /** 打开安全白名单内的外部链接 */
   openExternal(url: string): Promise<{ ok: boolean; error?: string }>;

@@ -15,13 +15,11 @@ import {
 } from '../types/scheduledJob';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
-const FLAG_PROBE_JOB_ID = '__scheduler_flag__';
-
 interface UseScheduledJobsReturn {
   jobs: ScheduledJob[];
   loading: boolean;
   error: string | null;
-  schedulerEnabled: boolean;
+  schedulerEnabled: boolean | null;
   refresh: () => Promise<void>;
   confirmJob: (jobId: string) => Promise<ScheduledJob>;
   pauseJob: (jobId: string) => Promise<ScheduledJob>;
@@ -151,16 +149,8 @@ function mapRun(raw: Record<string, unknown>): ScheduledJobRun {
   };
 }
 
-async function probeSchedulerEnabled(): Promise<boolean> {
-  try {
-    await requestJson(`/api/scheduled-jobs/${encodeURIComponent(FLAG_PROBE_JOB_ID)}/confirm`, {
-      method: 'POST',
-    });
-    return true;
-  } catch (err) {
-    if (err instanceof ScheduledJobsApiError && err.disabled) return false;
-    return true;
-  }
+function readEnabledFlag(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
 }
 
 export function useScheduledJobs(): UseScheduledJobsReturn {
@@ -168,7 +158,7 @@ export function useScheduledJobs(): UseScheduledJobsReturn {
   const [jobs, setJobs] = useState<ScheduledJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [schedulerEnabled, setSchedulerEnabled] = useState(false);
+  const [schedulerEnabled, setSchedulerEnabled] = useState<boolean | null>(null);
 
   const updateJob = useCallback((job: ScheduledJob) => {
     setJobs((prev) => {
@@ -186,14 +176,11 @@ export function useScheduledJobs(): UseScheduledJobsReturn {
       const params = new URLSearchParams();
       if (activeProjectId) params.set('projectId', activeProjectId);
       const query = params.toString();
-      const [payload, enabled] = await Promise.all([
-        requestJson<{ jobs: Record<string, unknown>[] }>(
-          `/api/scheduled-jobs${query ? `?${query}` : ''}`,
-        ),
-        probeSchedulerEnabled(),
-      ]);
+      const payload = await requestJson<{ jobs: Record<string, unknown>[]; enabled?: unknown }>(
+        `/api/scheduled-jobs${query ? `?${query}` : ''}`,
+      );
       setJobs((payload.jobs || []).map(mapJob));
-      setSchedulerEnabled(enabled);
+      setSchedulerEnabled(readEnabledFlag(payload.enabled));
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载定时任务失败');
       setJobs([]);
