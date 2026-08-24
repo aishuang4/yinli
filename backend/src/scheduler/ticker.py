@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from src.scheduler.firing import ensure_firing_terminal, run_firing
-from src.scheduler.models import ScheduledJob
+from src.scheduler.models import TERMINAL_FIRING_STATUSES, ScheduledJob
 from src.scheduler.schedule import parse_stored_datetime, to_utc_iso
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.settings import is_scheduled_jobs_enabled
@@ -140,6 +140,17 @@ class JobScheduler:
                 stats["paused_daily_cap"] += 1
             return
         scheduled_for = job.next_run_at or to_utc_iso(now)
+        occupant = self._service.occupying_due_slot(job.id, scheduled_for)
+        if occupant is not None:
+            if occupant.status in TERMINAL_FIRING_STATUSES:
+                repaired = self._service.repair_clock_if_slot_occupied(
+                    job, scheduled_for, now=now,
+                )
+                if repaired is not None:
+                    stats["clock_repaired"] += 1
+            else:
+                stats["skipped_in_flight"] += 1
+            return
         action, trigger = self._service.decide_due_action(job, now=now)
         if action in {"missed", "skip_silent"}:
             firing = self._service.claim_queued(
@@ -148,8 +159,8 @@ class JobScheduler:
                 trigger=trigger,
             )
             if firing is None:
-                repaired = self._service.repair_clock_if_terminal_row_exists(
-                    job, scheduled_for, trigger, now=now,
+                repaired = self._service.repair_clock_if_slot_occupied(
+                    job, scheduled_for, now=now,
                 )
                 if repaired is not None:
                     stats["clock_repaired"] += 1
@@ -169,8 +180,8 @@ class JobScheduler:
             trigger=trigger,
         )
         if firing is None:
-            repaired = self._service.repair_clock_if_terminal_row_exists(
-                job, scheduled_for, trigger, now=now,
+            repaired = self._service.repair_clock_if_slot_occupied(
+                job, scheduled_for, now=now,
             )
             if repaired is not None:
                 stats["clock_repaired"] += 1

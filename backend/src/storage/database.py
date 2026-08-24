@@ -1707,3 +1707,33 @@ def list_starting_scheduled_job_runs_without_chat_run() -> list[dict[str, Any]]:
     """列出 starting 且 chat_run_id 仍空的 firing。"""
 
     return _scheduled_job_record_store().list_starting_without_chat_run()
+
+
+def list_scheduled_job_runs_for_scheduled_for(
+    job_id: str,
+    scheduled_for: str,
+) -> list[dict[str, Any]]:
+    """列出同一 Job 同一 scheduled_for 的 firing，不区分 trigger。"""
+
+    return _scheduled_job_record_store().list_firings_for_scheduled_for(
+        job_id, scheduled_for,
+    )
+
+
+def list_stuck_clock_scheduled_job_runs() -> list[dict[str, Any]]:
+    """列出终态 schedule/catch_up 仍卡住 Job.next_run_at 的 firing。"""
+
+    return _scheduled_job_record_store().list_stuck_clock_firings()
+
+
+def update_scheduled_job_run_and_job(
+    firing_id: str,
+    firing_changes: dict[str, Any],
+    job_id: str,
+    job_changes: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """同一事务更新 firing 与 Job。"""
+
+    return _scheduled_job_record_store().update_firing_and_job(
+        firing_id, firing_changes, job_id, job_changes,
+    )

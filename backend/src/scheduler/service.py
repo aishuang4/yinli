@@ -51,15 +51,19 @@ from src.storage.database import (
     list_due_scheduled_jobs,
     list_non_terminal_scheduled_job_runs,
     list_scheduled_job_runs,
+    list_scheduled_job_runs_for_scheduled_for,
     list_scheduled_jobs,
     list_starting_scheduled_job_runs_without_chat_run,
+    list_stuck_clock_scheduled_job_runs,
     update_scheduled_job,
     update_scheduled_job_run,
+    update_scheduled_job_run_and_job,
 )
 from src.server.routes.agents import get_registered_agent
 from src.storage.scheduled_job_records import UniqueConstraintError
 
 ON_TIME_SLACK_SECONDS = 60
+DUE_SLOT_TRIGGERS = frozenset({"schedule", "catch_up"})
 
 
 class ScheduledJobService:
@@ -266,6 +270,8 @@ class ScheduledJobService:
         if status in NON_TERMINAL_FIRING_STATUSES and self.has_non_terminal_firing(job_id):
             raise ScheduledJobConflictError("该 Job 已有未结束的 firing")
         canonical = to_utc_iso(parse_stored_datetime(scheduled_for))
+        if trigger in DUE_SLOT_TRIGGERS and self.occupying_due_slot(job.id, canonical) is not None:
+            raise ScheduledJobConflictError("同一 Job 的 scheduled_for 槽位已被占用")
         try:
             record = insert_scheduled_job_run({
                 "job_id": job.id,
@@ -318,6 +324,25 @@ class ScheduledJobService:
             job_id, to_utc_iso(parse_stored_datetime(scheduled_for)), trigger,
         )
         return self._firing(record) if record else None
+
+    def list_slot_firings(self, job_id: str, scheduled_for: str) -> list[ScheduledJobRun]:
+        canonical = to_utc_iso(parse_stored_datetime(scheduled_for))
+        return [
+            self._firing(item)
+            for item in list_scheduled_job_runs_for_scheduled_for(job_id, canonical)
+        ]
+
+    def occupying_due_slot(self, job_id: str, scheduled_for: str) -> ScheduledJobRun | None:
+        """schedule/catch_up 占用同一到期点；terminal 优先。manual 不占周期槽。"""
+
+        occupants = [
+            item for item in self.list_slot_firings(job_id, scheduled_for)
+            if item.trigger in DUE_SLOT_TRIGGERS
+        ]
+        for item in occupants:
+            if item.status in TERMINAL_FIRING_STATUSES:
+                return item
+        return occupants[0] if occupants else None
 
     def claim_queued(
         self,
@@ -428,20 +453,32 @@ class ScheduledJobService:
         self,
         job: ScheduledJob,
         scheduled_for: str,
-        trigger: str,
+        trigger: str = "",
         *,
         now: datetime | None = None,
     ) -> ScheduledJob | None:
-        """UNIQUE 冲突且该行已终态、时钟仍停在 scheduled_for 时补跑 finalize_job_clock。"""
+        """到期槽已有终态 schedule/catch_up 且时钟未推进时补跑 finalize_job_clock。"""
 
-        existing = self.get_firing_by_key(job.id, scheduled_for, trigger)
-        if existing is None or existing.status not in TERMINAL_FIRING_STATUSES:
+        _ = trigger
+        return self.repair_clock_if_slot_occupied(job, scheduled_for, now=now)
+
+    def repair_clock_if_slot_occupied(
+        self,
+        job: ScheduledJob,
+        scheduled_for: str,
+        *,
+        now: datetime | None = None,
+    ) -> ScheduledJob | None:
+        """任一 trigger 的终态行占用该 scheduled_for 且 next_run_at 未推时只补时钟。"""
+
+        occupant = self.occupying_due_slot(job.id, scheduled_for)
+        if occupant is None or occupant.status not in TERMINAL_FIRING_STATUSES:
             return None
         canonical = to_utc_iso(parse_stored_datetime(scheduled_for))
         if job.next_run_at != canonical:
             return None
         return self.finalize_job_clock(
-            job.id, existing.id, now=now or datetime.now(timezone.utc),
+            job.id, occupant.id, now=now or datetime.now(timezone.utc),
         )
 
     def reconcile_interrupted_job_runs(
@@ -450,7 +487,7 @@ class ScheduledJobService:
         now: datetime | None = None,
         live_firing_ids: set[str] | None = None,
     ) -> int:
-        """非终态 firing → failed process_restart，并对每一行 finalize_job_clock。"""
+        """非终态 firing 失败收口；终态但时钟未推的到期槽只 finalize_job_clock。"""
 
         live = live_firing_ids or set()
         stamped = now or datetime.now(timezone.utc)
@@ -465,6 +502,14 @@ class ScheduledJobService:
                 error_message="进程已重启",
                 now=stamped,
             )
+            count += 1
+        seen_jobs: set[str] = set()
+        for item in list_stuck_clock_scheduled_job_runs():
+            firing = self._firing(item)
+            if firing.job_id in seen_jobs:
+                continue
+            self.finalize_job_clock(firing.job_id, firing.id, now=stamped)
+            seen_jobs.add(firing.job_id)
             count += 1
         return count
 
@@ -485,48 +530,51 @@ class ScheduledJobService:
         firing = self.get_firing(firing_id)
         job = self.get_job(firing.job_id)
         stamped_now = now or datetime.now(timezone.utc)
-        pending = firing.model_copy(update={"status": status})
+        already_terminal = firing.status in TERMINAL_FIRING_STATUSES
+        pending = firing if already_terminal else firing.model_copy(update={"status": status})
         try:
-            self._clock_updates(job, pending, now=stamped_now)
+            clock_changes = self._clock_updates(job, pending, now=stamped_now)
         except ScheduleError as exc:
             raise ScheduledJobValidationError(str(exc)) from exc
-        already_terminal = firing.status in TERMINAL_FIRING_STATUSES
-        if not already_terminal:
-            stamped = to_utc_iso(stamped_now)
-            update_scheduled_job_run(firing_id, {
-                "status": status,
-                "error_code": error_code,
-                "error_message": error_message,
-                "output_manifest": dict(output_manifest or firing.output_manifest),
-                "completed_at": stamped,
-            })
-            if status == "succeeded":
-                update_scheduled_job(job.id, {
-                    "consecutive_successes": job.consecutive_successes + 1,
-                    "consecutive_failures": 0,
-                    "last_run_at": firing.scheduled_for,
-                })
-            elif status in {"failed", "missed", "cancelled"}:
-                update_scheduled_job(job.id, {
-                    "consecutive_successes": 0,
-                    "consecutive_failures": job.consecutive_failures + 1,
-                    "last_run_at": firing.scheduled_for,
-                })
-        job = self.finalize_job_clock(firing.job_id, firing_id, now=stamped_now)
         if already_terminal:
-            return job
-        refreshed_firing = self.get_firing(firing_id)
+            if not clock_changes:
+                return job
+            return self._save_job(job.id, clock_changes)
+        firing_changes = {
+            "status": status,
+            "error_code": error_code,
+            "error_message": error_message,
+            "output_manifest": dict(output_manifest or firing.output_manifest),
+            "completed_at": to_utc_iso(stamped_now),
+        }
+        job_changes = dict(clock_changes)
+        if status == "succeeded":
+            job_changes["consecutive_successes"] = job.consecutive_successes + 1
+            job_changes["consecutive_failures"] = 0
+            job_changes["last_run_at"] = firing.scheduled_for
+        elif status in {"failed", "missed", "cancelled"}:
+            job_changes["consecutive_successes"] = 0
+            job_changes["consecutive_failures"] = job.consecutive_failures + 1
+            job_changes["last_run_at"] = firing.scheduled_for
+        new_failures = int(job_changes.get("consecutive_failures", job.consecutive_failures))
+        new_status = str(job_changes.get("status") or job.status)
         if (
             job.schedule_kind == "weekly"
-            and job.status == "active"
-            and refreshed_firing.status in {"failed", "missed", "cancelled"}
-            and job.consecutive_failures >= job.max_consecutive_failures
+            and new_status == "active"
+            and status in {"failed", "missed", "cancelled"}
+            and new_failures >= job.max_consecutive_failures
         ):
-            return self._save_job(job.id, {
-                "status": "paused",
-                "pause_reason": "consecutive_failures",
-            })
-        return self.get_job(job.id)
+            job_changes["status"] = "paused"
+            job_changes["pause_reason"] = "consecutive_failures"
+        try:
+            _, job_record = update_scheduled_job_run_and_job(
+                firing_id, firing_changes, job.id, job_changes,
+            )
+        except UniqueConstraintError as exc:
+            raise ScheduledJobConflictError("同项目下任务名称已存在") from exc
+        if job_record is None:
+            raise ScheduledJobNotFoundError(f"找不到 Job: {job.id}")
+        return self._job(job_record)
 
     def finalize_job_clock(
         self,

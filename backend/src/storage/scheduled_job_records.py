@@ -105,30 +105,10 @@ class ScheduledJobRecordStore:
         current = self.get_job(job_id)
         if current is None:
             return None
-        merged = {**current, **changes, "id": job_id, "updated_at": self.utc_now()}
-        assignments = ["updated_at=?"]
-        params: list[Any] = [merged["updated_at"]]
-        for field in _JOB_UPDATE_FIELDS:
-            if field not in changes:
-                continue
-            value = merged.get(field)
-            if field in _JOB_JSON_FIELDS:
-                if field == "tool_scope" and not value:
-                    value = dict(_DEFAULT_TOOL_SCOPE)
-                elif hasattr(value, "to_storage_dict"):
-                    value = value.to_storage_dict()
-                assignments.append(f"{field}=?")
-                params.append(self.dumps(value if value is not None else _json_default(field)))
-            else:
-                assignments.append(f"{field}=?")
-                params.append(value)
-        params.append(job_id)
+        sql, params = self._job_update_sql(current, changes, self.utc_now())
         with self.lock, self.connect() as conn:
             try:
-                conn.execute(
-                    f"UPDATE scheduled_jobs SET {', '.join(assignments)} WHERE id = ?",
-                    params,
-                )
+                conn.execute(sql, params)
             except sqlite3.IntegrityError as exc:
                 raise UniqueConstraintError("scheduled_jobs", str(exc)) from exc
             conn.commit()
@@ -208,29 +188,43 @@ class ScheduledJobRecordStore:
         current = self.get_firing(firing_id)
         if current is None:
             return None
-        merged = {**current, **changes, "id": firing_id, "updated_at": self.utc_now()}
-        assignments = ["updated_at=?"]
-        params: list[Any] = [merged["updated_at"]]
-        for field in _FIRING_UPDATE_FIELDS:
-            if field not in changes:
-                continue
-            value = merged.get(field)
-            assignments.append(f"{field}=?")
-            if field in _FIRING_JSON_FIELDS:
-                params.append(self.dumps(value or {}))
-            else:
-                params.append(value)
-        params.append(firing_id)
+        sql, params = self._firing_update_sql(current, changes, self.utc_now())
         with self.lock, self.connect() as conn:
             try:
-                conn.execute(
-                    f"UPDATE scheduled_job_runs SET {', '.join(assignments)} WHERE id = ?",
-                    params,
-                )
+                conn.execute(sql, params)
             except sqlite3.IntegrityError as exc:
                 raise UniqueConstraintError("scheduled_job_runs", str(exc)) from exc
             conn.commit()
         return self.get_firing(firing_id)
+
+    def update_firing_and_job(
+        self,
+        firing_id: str,
+        firing_changes: dict[str, Any],
+        job_id: str,
+        job_changes: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """同一事务写 firing 终态与 Job 时钟，避免崩溃后同一到期点再跑。"""
+
+        self.ensure_db()
+        firing_current = self.get_firing(firing_id)
+        job_current = self.get_job(job_id)
+        if firing_current is None or job_current is None:
+            return firing_current, job_current
+        now = self.utc_now()
+        firing_sql, firing_params = self._firing_update_sql(
+            firing_current, firing_changes, now,
+        )
+        job_sql, job_params = self._job_update_sql(job_current, job_changes, now)
+        with self.lock, self.connect() as conn:
+            try:
+                conn.execute(firing_sql, firing_params)
+                conn.execute(job_sql, job_params)
+            except sqlite3.IntegrityError as exc:
+                table = "scheduled_jobs" if "scheduled_jobs" in str(exc) else "scheduled_job_runs"
+                raise UniqueConstraintError(table, str(exc)) from exc
+            conn.commit()
+        return self.get_firing(firing_id), self.get_job(job_id)
 
     def get_firing(self, firing_id: str) -> dict[str, Any] | None:
         self.ensure_db()
@@ -330,6 +324,99 @@ class ScheduledJobRecordStore:
                 """,
             ).fetchall()
         return [self._firing_from_row(row) for row in rows]
+
+    def list_firings_for_scheduled_for(
+        self,
+        job_id: str,
+        scheduled_for: str,
+    ) -> list[dict[str, Any]]:
+        """同一 Job 同一 scheduled_for 的全部 firing，不区分 trigger。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM scheduled_job_runs
+                WHERE job_id = ? AND scheduled_for = ?
+                ORDER BY created_at ASC
+                """,
+                (job_id, scheduled_for),
+            ).fetchall()
+        return [self._firing_from_row(row) for row in rows]
+
+    def list_stuck_clock_firings(self) -> list[dict[str, Any]]:
+        """终态 schedule/catch_up 行仍占用 Job.next_run_at 的 firing。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT r.*
+                FROM scheduled_job_runs r
+                INNER JOIN scheduled_jobs j ON j.id = r.job_id
+                WHERE j.next_run_at IS NOT NULL
+                  AND r.scheduled_for = j.next_run_at
+                  AND r.trigger IN ('schedule', 'catch_up')
+                  AND r.status IN (
+                      'succeeded', 'failed', 'cancelled', 'missed', 'skipped'
+                  )
+                ORDER BY r.created_at ASC
+                """,
+            ).fetchall()
+        return [self._firing_from_row(row) for row in rows]
+
+    def _job_update_sql(
+        self,
+        current: dict[str, Any],
+        changes: dict[str, Any],
+        now: str,
+    ) -> tuple[str, list[Any]]:
+        merged = {**current, **changes, "id": current["id"], "updated_at": now}
+        assignments = ["updated_at=?"]
+        params: list[Any] = [merged["updated_at"]]
+        for field in _JOB_UPDATE_FIELDS:
+            if field not in changes:
+                continue
+            value = merged.get(field)
+            if field in _JOB_JSON_FIELDS:
+                if field == "tool_scope" and not value:
+                    value = dict(_DEFAULT_TOOL_SCOPE)
+                elif hasattr(value, "to_storage_dict"):
+                    value = value.to_storage_dict()
+                assignments.append(f"{field}=?")
+                params.append(self.dumps(value if value is not None else _json_default(field)))
+            else:
+                assignments.append(f"{field}=?")
+                params.append(value)
+        params.append(current["id"])
+        return (
+            f"UPDATE scheduled_jobs SET {', '.join(assignments)} WHERE id = ?",
+            params,
+        )
+
+    def _firing_update_sql(
+        self,
+        current: dict[str, Any],
+        changes: dict[str, Any],
+        now: str,
+    ) -> tuple[str, list[Any]]:
+        merged = {**current, **changes, "id": current["id"], "updated_at": now}
+        assignments = ["updated_at=?"]
+        params: list[Any] = [merged["updated_at"]]
+        for field in _FIRING_UPDATE_FIELDS:
+            if field not in changes:
+                continue
+            value = merged.get(field)
+            assignments.append(f"{field}=?")
+            if field in _FIRING_JSON_FIELDS:
+                params.append(self.dumps(value or {}))
+            else:
+                params.append(value)
+        params.append(current["id"])
+        return (
+            f"UPDATE scheduled_job_runs SET {', '.join(assignments)} WHERE id = ?",
+            params,
+        )
 
     def _job_params(self, record: dict[str, Any]) -> tuple[Any, ...]:
         tool_scope = record.get("tool_scope")

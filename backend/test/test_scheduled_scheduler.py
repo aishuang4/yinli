@@ -389,6 +389,64 @@ def test_unique_conflict_repairs_clock_when_terminal_row_exists(isolated_db):
     asyncio.run(run_case())
 
 
+def test_catch_up_does_not_refire_same_scheduled_for_after_stuck_clock(
+    isolated_db, monkeypatch,
+):
+    """终态 schedule 行未推时钟时，catch_up_once 不得再 INSERT 同一到期点。"""
+
+    service = _service()
+    job = _confirm_friday(service, name="崩溃后补跑")
+    scheduled_for = job.next_run_at or ""
+    firing = service.create_firing(
+        job_id=job.id, scheduled_for=scheduled_for, trigger="schedule",
+    )
+    service.complete_firing(firing.id, "succeeded")
+    update_scheduled_job(job.id, {"next_run_at": scheduled_for, "status": "active"})
+    starts: list[str] = []
+
+    async def fake_start(req):
+        starts.append(req.firing_id)
+        return f"run-{req.firing_id}"
+
+    monkeypatch.setattr("src.scheduler.firing.start_scheduled_chat_run", fake_start)
+    scheduler = JobScheduler(service=service)
+    now = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+
+    async def run_case():
+        stats = await scheduler.tick(now=now)
+        if scheduler._inflight:
+            await asyncio.gather(*list(scheduler._inflight), return_exceptions=True)
+        assert stats["claimed"] == 0
+        assert stats["clock_repaired"] == 1
+        assert starts == []
+        rows = service.list_firings(job.id)
+        assert len(rows) == 1
+        assert rows[0].trigger == "schedule"
+        assert rows[0].status == "succeeded"
+        assert service.get_job(job.id).next_run_at == "2026-08-28T10:00:00+00:00"
+        await scheduler.stop()
+
+    asyncio.run(run_case())
+
+
+def test_reconcile_repairs_stuck_clock_on_terminal_firing(isolated_db):
+    service = _service()
+    job = _confirm_friday(service, name="启动补时钟")
+    scheduled_for = job.next_run_at or ""
+    firing = service.create_firing(
+        job_id=job.id, scheduled_for=scheduled_for, trigger="schedule",
+    )
+    service.complete_firing(firing.id, "succeeded")
+    update_scheduled_job(job.id, {"next_run_at": scheduled_for, "status": "active"})
+    count = service.reconcile_interrupted_job_runs(
+        now=datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc),
+    )
+    assert count == 1
+    assert len(service.list_firings(job.id)) == 1
+    assert service.get_firing(firing.id).status == "succeeded"
+    assert service.get_job(job.id).next_run_at == "2026-08-28T10:00:00+00:00"
+
+
 def test_daily_cap_pauses_job(isolated_db):
     service = _service()
     job = _confirm_friday(service, name="每日上限", max_firings_per_day=1)
