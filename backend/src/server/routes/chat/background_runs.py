@@ -27,10 +27,14 @@ from src.server.routes.chat.projection import (
 from src.server.routes.chat.projection.frame_schema import RuntimeFrame, dump_protocol
 from src.server.routes.chat.projection.source_normalizer import ChatProjectionNormalizer
 from src.server.routes.chat.projection.source_events import SourceEvent
-from src.server.routes.chat.store import _update_latest_assistant_display_snapshot
+from src.server.routes.chat.store import (
+    _append_assistant_message,
+    _update_latest_assistant_display_snapshot,
+)
 from src.storage.database import (
     get_chat_run,
     list_chat_runs,
+    list_chat_runs_by_statuses,
     update_chat_run_status,
     upsert_chat_run,
 )
@@ -40,6 +44,7 @@ SourceStreamFactory = Callable[[], AsyncGenerator[SourceEvent, None]]
 CURRENT_BACKGROUND_RUN_ID: ContextVar[str] = ContextVar("current_chat_background_run_id", default="")
 MAX_BACKGROUND_RUNS = 50
 COMPLETED_RUN_TTL = timedelta(hours=2)
+PROCESS_RESTART_ERROR = "进程已重启，请重新发送"
 
 _domain_events = DomainEventRepository()
 _projection_store = ProjectionStreamStore()
@@ -82,6 +87,52 @@ _runs_lock = asyncio.Lock()
 
 def current_chat_background_run_id() -> str:
     return CURRENT_BACKGROUND_RUN_ID.get()
+
+
+def has_live_chat_background_task(run_id: str) -> bool:
+    """本进程 _runs 中仍有未结束 Task 的 Chat Run。热重载不得误杀。"""
+
+    run = _runs.get(run_id)
+    if run is None:
+        return False
+    task = run.async_task
+    return task is not None and not task.done()
+
+
+def reconcile_interrupted_chat_runs() -> int:
+    """把无活 Task 的 running/waiting_* 标 failed，error 提示进程重启。"""
+
+    completed_at = datetime.now(timezone.utc).isoformat()
+    count = 0
+    for record in list_chat_runs_by_statuses(ACTIVE_RUN_STATUSES):
+        run_id = str(record.get("id") or "")
+        if not run_id or has_live_chat_background_task(run_id):
+            continue
+        update_chat_run_status(run_id, "failed", completed_at)
+        in_memory = _runs.get(run_id)
+        if in_memory is not None and in_memory.status in ACTIVE_RUN_STATUSES:
+            in_memory.status = "failed"
+            in_memory.completed_at = completed_at
+        _append_process_restart_message(record)
+        count += 1
+    return count
+
+
+def _append_process_restart_message(record: dict) -> None:
+    session_id = str(record.get("sessionId") or "")
+    if not session_id:
+        return
+    try:
+        _append_assistant_message(
+            session_id=session_id,
+            agent_id=str(record.get("agentId") or ""),
+            agent_name=str(record.get("agentName") or "Assistant"),
+            model_name="",
+            content="",
+            error=PROCESS_RESTART_ERROR,
+        )
+    except Exception:
+        return
 
 
 async def get_chat_background_run(run_id: str) -> ChatBackgroundRun | None:

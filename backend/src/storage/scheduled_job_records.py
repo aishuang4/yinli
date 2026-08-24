@@ -266,6 +266,71 @@ class ScheduledJobRecordStore:
             rows = conn.execute(sql, params).fetchall()
         return [self._firing_from_row(row) for row in rows]
 
+    def list_due_jobs(self, now_iso: str) -> list[dict[str, Any]]:
+        """active 且 next_run_at 已到期的 Job。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM scheduled_jobs
+                WHERE status = 'active'
+                  AND next_run_at IS NOT NULL
+                  AND next_run_at <= ?
+                ORDER BY next_run_at ASC
+                """,
+                (now_iso,),
+            ).fetchall()
+        return [self._job_from_row(row) for row in rows]
+
+    def get_firing_by_key(
+        self,
+        job_id: str,
+        scheduled_for: str,
+        trigger: str,
+    ) -> dict[str, Any] | None:
+        """按 UNIQUE (job_id, scheduled_for, trigger) 读取 firing。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM scheduled_job_runs
+                WHERE job_id = ? AND scheduled_for = ? AND trigger = ?
+                """,
+                (job_id, scheduled_for, trigger),
+            ).fetchone()
+        return self._firing_from_row(row) if row else None
+
+    def list_non_terminal_firings(self) -> list[dict[str, Any]]:
+        """全部 queued / starting / running firing，供启动 reconcile。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM scheduled_job_runs
+                WHERE status IN ('queued', 'starting', 'running')
+                ORDER BY created_at ASC
+                """,
+            ).fetchall()
+        return [self._firing_from_row(row) for row in rows]
+
+    def list_starting_without_chat_run(self) -> list[dict[str, Any]]:
+        """starting 且尚未拿到 chat_run_id 的 firing。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM scheduled_job_runs
+                WHERE status = 'starting'
+                  AND (chat_run_id IS NULL OR chat_run_id = '')
+                ORDER BY updated_at ASC
+                """,
+            ).fetchall()
+        return [self._firing_from_row(row) for row in rows]
+
     def _job_params(self, record: dict[str, Any]) -> tuple[Any, ...]:
         tool_scope = record.get("tool_scope")
         if not tool_scope:

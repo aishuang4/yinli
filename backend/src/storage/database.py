@@ -1015,6 +1015,12 @@ def list_chat_runs(
     )
 
 
+def list_chat_runs_by_statuses(statuses: list[str] | tuple[str, ...] | set[str]) -> list[dict[str, Any]]:
+    """按状态列出全部 Chat Run，不受默认 LIMIT 截断。"""
+
+    return _chat_run_record_store().list_by_statuses(statuses)
+
+
 def get_chat_run(run_id: str) -> dict[str, Any] | None:
     """读取一个持久化 Chat Run。"""
 
@@ -1673,3 +1679,31 @@ def list_scheduled_job_runs(job_id: str, *, status: str | None = None) -> list[d
     """列出一个 Job 的 firing 历史。"""
 
     return _scheduled_job_record_store().list_firings(job_id, status=status)
+
+
+def list_due_scheduled_jobs(now_iso: str) -> list[dict[str, Any]]:
+    """列出已到期的 active Job。"""
+
+    return _scheduled_job_record_store().list_due_jobs(now_iso)
+
+
+def get_scheduled_job_run_by_key(
+    job_id: str,
+    scheduled_for: str,
+    trigger: str,
+) -> dict[str, Any] | None:
+    """按 UNIQUE (job_id, scheduled_for, trigger) 读取 firing。"""
+
+    return _scheduled_job_record_store().get_firing_by_key(job_id, scheduled_for, trigger)
+
+
+def list_non_terminal_scheduled_job_runs() -> list[dict[str, Any]]:
+    """列出全部非终态 firing。"""
+
+    return _scheduled_job_record_store().list_non_terminal_firings()
+
+
+def list_starting_scheduled_job_runs_without_chat_run() -> list[dict[str, Any]]:
+    """列出 starting 且 chat_run_id 仍空的 firing。"""
+
+    return _scheduled_job_record_store().list_starting_without_chat_run()

@@ -33,6 +33,8 @@ from src.scheduler.unattended_policy import (
 from src.scheduler.schedule import (
     ScheduleError,
     compute_next_run_at,
+    grace_seconds_for_schedule,
+    load_timezone,
     next_weekly_anchor_after,
     parse_stored_datetime,
     to_utc_iso,
@@ -43,15 +45,21 @@ from src.storage.database import (
     get_project,
     get_scheduled_job,
     get_scheduled_job_run,
+    get_scheduled_job_run_by_key,
     insert_scheduled_job,
     insert_scheduled_job_run,
+    list_due_scheduled_jobs,
+    list_non_terminal_scheduled_job_runs,
     list_scheduled_job_runs,
     list_scheduled_jobs,
+    list_starting_scheduled_job_runs_without_chat_run,
     update_scheduled_job,
     update_scheduled_job_run,
 )
 from src.server.routes.agents import get_registered_agent
 from src.storage.scheduled_job_records import UniqueConstraintError
+
+ON_TIME_SLACK_SECONDS = 60
 
 
 class ScheduledJobService:
@@ -287,6 +295,178 @@ class ScheduledJobService:
             item.status in NON_TERMINAL_FIRING_STATUSES
             for item in self.list_firings(job_id)
         )
+
+    def list_due_jobs(self, *, now: datetime | None = None) -> list[ScheduledJob]:
+        """active 且 next_run_at <= now 的 Job。"""
+
+        stamped = to_utc_iso(now or datetime.now(timezone.utc))
+        jobs: list[ScheduledJob] = []
+        for item in list_due_scheduled_jobs(stamped):
+            try:
+                jobs.append(self._job(item))
+            except ScheduledJobValidationError:
+                continue
+        return jobs
+
+    def get_firing_by_key(
+        self,
+        job_id: str,
+        scheduled_for: str,
+        trigger: str,
+    ) -> ScheduledJobRun | None:
+        record = get_scheduled_job_run_by_key(
+            job_id, to_utc_iso(parse_stored_datetime(scheduled_for)), trigger,
+        )
+        return self._firing(record) if record else None
+
+    def claim_queued(
+        self,
+        *,
+        job_id: str,
+        scheduled_for: str,
+        trigger: str,
+    ) -> ScheduledJobRun | None:
+        """INSERT queued；UNIQUE 冲突或已有非终态 firing 时返回 None。"""
+
+        try:
+            return self.create_firing(
+                job_id=job_id,
+                scheduled_for=scheduled_for,
+                trigger=trigger,
+                status="queued",
+            )
+        except ScheduledJobConflictError:
+            return None
+
+    def mark_starting(self, firing_id: str, *, now: datetime | None = None) -> ScheduledJobRun:
+        """queued -> starting。信号量拿到之后才调用。"""
+
+        firing = self.get_firing(firing_id)
+        if firing.status != "queued":
+            return firing
+        stamped = to_utc_iso(now or datetime.now(timezone.utc))
+        record = update_scheduled_job_run(firing_id, {
+            "status": "starting",
+            "started_at": stamped,
+        })
+        if record is None:
+            raise ScheduledJobNotFoundError(f"找不到 firing: {firing_id}")
+        return self._firing(record)
+
+    def mark_running(
+        self,
+        firing_id: str,
+        chat_run_id: str,
+        *,
+        chat_session_id: str = "",
+    ) -> ScheduledJobRun:
+        """starting -> running，写入 chat_run_id。"""
+
+        firing = self.get_firing(firing_id)
+        if firing.status not in {"queued", "starting"}:
+            return firing
+        record = update_scheduled_job_run(firing_id, {
+            "status": "running",
+            "chat_run_id": chat_run_id,
+            "chat_session_id": chat_session_id or firing.chat_session_id,
+        })
+        if record is None:
+            raise ScheduledJobNotFoundError(f"找不到 firing: {firing_id}")
+        return self._firing(record)
+
+    def list_starting_without_chat_run(self) -> list[ScheduledJobRun]:
+        return [
+            self._firing(item)
+            for item in list_starting_scheduled_job_runs_without_chat_run()
+        ]
+
+    def list_non_terminal_firings(self) -> list[ScheduledJobRun]:
+        return [self._firing(item) for item in list_non_terminal_scheduled_job_runs()]
+
+    def count_firings_today(self, job: ScheduledJob, *, now: datetime | None = None) -> int:
+        """按 Job 时区统计当天 firing 数（含 missed / catch_up / manual）。"""
+
+        stamped = now or datetime.now(timezone.utc)
+        try:
+            tz = load_timezone(job.timezone)
+        except ScheduleError:
+            tz = timezone.utc
+        local_day = stamped.astimezone(tz).date()
+        count = 0
+        for firing in self.list_firings(job.id):
+            try:
+                created = parse_stored_datetime(firing.created_at)
+            except ValueError:
+                continue
+            if created.astimezone(tz).date() == local_day:
+                count += 1
+        return count
+
+    def decide_due_action(
+        self,
+        job: ScheduledJob,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[str, str]:
+        """返回 (action, trigger)。action: fire / missed / skip_silent。"""
+
+        if not job.next_run_at:
+            return "skip_silent", "schedule"
+        stamped = now or datetime.now(timezone.utc)
+        scheduled_for = parse_stored_datetime(job.next_run_at)
+        age = (stamped - scheduled_for).total_seconds()
+        grace = grace_seconds_for_schedule(job.schedule_kind, job.schedule_expr)
+        if age <= ON_TIME_SLACK_SECONDS:
+            return "fire", "schedule"
+        if job.missed_policy == "catch_up_once" and age <= grace:
+            return "fire", "catch_up"
+        if job.missed_policy == "skip_silent":
+            return "skip_silent", "schedule"
+        return "missed", "schedule"
+
+    def repair_clock_if_terminal_row_exists(
+        self,
+        job: ScheduledJob,
+        scheduled_for: str,
+        trigger: str,
+        *,
+        now: datetime | None = None,
+    ) -> ScheduledJob | None:
+        """UNIQUE 冲突且该行已终态、时钟仍停在 scheduled_for 时补跑 finalize_job_clock。"""
+
+        existing = self.get_firing_by_key(job.id, scheduled_for, trigger)
+        if existing is None or existing.status not in TERMINAL_FIRING_STATUSES:
+            return None
+        canonical = to_utc_iso(parse_stored_datetime(scheduled_for))
+        if job.next_run_at != canonical:
+            return None
+        return self.finalize_job_clock(
+            job.id, existing.id, now=now or datetime.now(timezone.utc),
+        )
+
+    def reconcile_interrupted_job_runs(
+        self,
+        *,
+        now: datetime | None = None,
+        live_firing_ids: set[str] | None = None,
+    ) -> int:
+        """非终态 firing → failed process_restart，并对每一行 finalize_job_clock。"""
+
+        live = live_firing_ids or set()
+        stamped = now or datetime.now(timezone.utc)
+        count = 0
+        for firing in self.list_non_terminal_firings():
+            if firing.id in live:
+                continue
+            self.complete_firing(
+                firing.id,
+                "failed",
+                error_code="process_restart",
+                error_message="进程已重启",
+                now=stamped,
+            )
+            count += 1
+        return count
 
     def complete_firing(
         self,

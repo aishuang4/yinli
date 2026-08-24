@@ -21,6 +21,7 @@ from src.storage.database import close_db, init_db, list_projects, reconcile_int
 from src.subagents.task_store import reconcile_interrupted_file_tasks
 from src.server.routes.chat.team_runtime.maintenance import maintain_team_runtime_runs
 from src.server.local_access import LocalAccessMiddleware
+from src.scheduler.ticker import bootstrap_scheduler, shutdown_scheduler
 
 
 @asynccontextmanager
@@ -50,6 +51,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     if any(team_maintenance.values()):
         print(f"[TeamRuntime] maintenance: {team_maintenance}")
+    scheduler_bootstrap = bootstrap_scheduler()
+    if any(scheduler_bootstrap.values()):
+        print(f"[Scheduler] bootstrap: {scheduler_bootstrap}")
     print(f"[Server] 引力 YINLI Backend started on {settings.host}:{settings.port}")
     deepseek_key_display = ("***" + settings.deepseek_api_key[-4:]) if settings.deepseek_api_key else "NOT SET"
     print(f"[Server] DeepSeek API Key: {deepseek_key_display}")
@@ -57,6 +61,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield  # 应用运行中
 
     # === 关闭 ===
+    await shutdown_scheduler()
     await close_db()
     print("[Server] Backend shutdown complete")
 

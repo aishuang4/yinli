@@ -159,3 +159,33 @@ def compute_next_run_at(
             timezone_name=timezone_name,
         )
     return once_run_at(expr["at"], timezone_name)
+
+
+MAX_GRACE_SECONDS = 6 * 3600
+MIN_GRACE_SECONDS = 300
+_DAY_SECONDS = 24 * 3600
+
+
+def weekly_interval_seconds(weekdays: list[str]) -> int:
+    """相邻钟面锚点的最小间隔（秒）；单 weekday 视为 7 天。"""
+
+    indexes = sorted({WEEKDAY_INDEX[name] for name in weekdays if name in WEEKDAY_INDEX})
+    if len(indexes) <= 1:
+        return 7 * _DAY_SECONDS
+    gaps: list[int] = []
+    for i, idx in enumerate(indexes):
+        nxt = indexes[(i + 1) % len(indexes)]
+        gap = (nxt - idx) % 7
+        gaps.append(7 if gap == 0 else gap)
+    return min(gaps) * _DAY_SECONDS
+
+
+def grace_seconds_for_schedule(schedule_kind: str, schedule_expr: dict[str, Any] | None) -> int:
+    """错过补跑宽限：min(6h, max(300, interval/2))。周任务默认 6 小时。"""
+
+    if schedule_kind == "weekly":
+        expr = validate_schedule_expr("weekly", schedule_expr)
+        interval = weekly_interval_seconds(expr["weekdays"])
+    else:
+        interval = MAX_GRACE_SECONDS * 2
+    return int(min(MAX_GRACE_SECONDS, max(MIN_GRACE_SECONDS, interval / 2)))

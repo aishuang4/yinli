@@ -129,6 +129,21 @@ class ChatRunRecordStore:
                 ).fetchall()
         return [self._from_row(row) for row in rows]
 
+    def list_by_statuses(self, statuses: list[str] | tuple[str, ...] | set[str]) -> list[dict[str, Any]]:
+        """列出指定状态的全部 Chat Run，reconcile 不得受 list() 的 LIMIT 截断。"""
+
+        wanted = [str(item) for item in statuses if str(item or "").strip()]
+        if not wanted:
+            return []
+        self.ensure_db()
+        placeholders = ",".join("?" * len(wanted))
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM chat_runs WHERE status IN ({placeholders}) ORDER BY updated_at DESC",
+                wanted,
+            ).fetchall()
+        return [self._from_row(row) for row in rows]
+
     def get(self, run_id: str) -> dict[str, Any] | None:
         self.ensure_db()
         with self.lock, self.connect() as conn:
