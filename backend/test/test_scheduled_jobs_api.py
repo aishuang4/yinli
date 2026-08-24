@@ -19,6 +19,7 @@ from src.storage.database import (
     DEFAULT_WORKSPACE_ID,
     ensure_db,
     list_chat_runs,
+    list_user_notifications,
     save_chat_store,
     upsert_chat_run,
 )
@@ -384,6 +385,7 @@ def test_cancel_queued_run_now_is_not_a_failure(client):
     assert job["status"] == "active"
     assert job["consecutiveFailures"] == 0
     assert job["pauseReason"] == ""
+    assert list_user_notifications(project_id=DEFAULT_PROJECT_ID) == []
 
 
 def test_delete_archives_job(client):

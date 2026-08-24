@@ -669,7 +669,7 @@ class ScheduledJobService:
             job_changes["consecutive_successes"] = job.consecutive_successes + 1
             job_changes["consecutive_failures"] = 0
             job_changes["last_run_at"] = firing.scheduled_for
-        elif status in {"failed", "missed", "cancelled"}:
+        elif status in {"failed", "missed"}:
             job_changes["consecutive_successes"] = 0
             job_changes["consecutive_failures"] = job.consecutive_failures + 1
             job_changes["last_run_at"] = firing.scheduled_for
@@ -678,7 +678,7 @@ class ScheduledJobService:
         if (
             job.schedule_kind == "weekly"
             and new_status == "active"
-            and status in {"failed", "missed", "cancelled"}
+            and status in {"failed", "missed"}
             and new_failures >= job.max_consecutive_failures
         ):
             job_changes["status"] = "paused"

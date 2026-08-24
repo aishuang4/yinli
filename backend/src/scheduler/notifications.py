@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from src.scheduler.models import ScheduledJob, ScheduledJobRun
@@ -14,6 +15,8 @@ from src.storage.database import (
     mark_user_notification_read,
 )
 
+logger = logging.getLogger(__name__)
+
 JOB_COMPLETED = "job_completed"
 JOB_FAILED = "job_failed"
 JOB_MISSED = "job_missed"
@@ -22,14 +25,12 @@ JOB_PAUSED = "job_paused"
 _FIRING_KIND = {
     "succeeded": JOB_COMPLETED,
     "failed": JOB_FAILED,
-    "cancelled": JOB_FAILED,
     "missed": JOB_MISSED,
 }
-_FIRING_TITLE = {
-    "succeeded": "{name} 已完成",
-    "failed": "{name} 执行失败",
-    "cancelled": "{name} 已取消",
-    "missed": "{name} 已错过计划时间",
+_FIRING_TITLE_SUFFIX = {
+    "succeeded": "已完成",
+    "failed": "执行失败",
+    "missed": "已错过计划时间",
 }
 
 
@@ -70,53 +71,62 @@ def notify_firing_terminal(
     job: ScheduledJob,
     firing: ScheduledJobRun,
 ) -> dict[str, Any] | None:
-    """firing 终态写入应用内通知；skip_silent 错过不通知。"""
+    """firing 终态写入应用内通知；cancel / skip_silent 不通知。"""
 
     if firing.status == "missed" and job.missed_policy == "skip_silent":
         return None
     kind = _FIRING_KIND.get(firing.status)
-    if not kind:
+    suffix = _FIRING_TITLE_SUFFIX.get(firing.status)
+    if not kind or not suffix:
         return None
     body = firing.error_message or ""
     if firing.status == "succeeded" and not body:
         body = "定时任务已成功完成"
     elif firing.status == "missed" and not body:
         body = "错过计划时间"
-    return create_notification(
-        kind=kind,
-        title=_FIRING_TITLE[firing.status].format(name=job.name),
-        workspace_id=job.workspace_id,
-        project_id=job.project_id,
-        job_id=job.id,
-        firing_id=firing.id,
-        body=body,
-        payload={
-            "status": firing.status,
-            "error_code": firing.error_code,
-            "scheduled_for": firing.scheduled_for,
-            "trigger": firing.trigger,
-        },
-    )
+    try:
+        return create_notification(
+            kind=kind,
+            title=f"{job.name} {suffix}",
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            job_id=job.id,
+            firing_id=firing.id,
+            body=body,
+            payload={
+                "status": firing.status,
+                "error_code": firing.error_code,
+                "scheduled_for": firing.scheduled_for,
+                "trigger": firing.trigger,
+            },
+        )
+    except Exception:
+        logger.exception("写入 firing 通知失败 job=%s firing=%s", job.id, firing.id)
+        return None
 
 
 def notify_job_paused(
     job: ScheduledJob,
     *,
     firing: ScheduledJobRun | None = None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
     """自动暂停写入应用内通知。"""
 
     reason = job.pause_reason or "paused"
-    return create_notification(
-        kind=JOB_PAUSED,
-        title=f"{job.name} 已自动暂停",
-        workspace_id=job.workspace_id,
-        project_id=job.project_id,
-        job_id=job.id,
-        firing_id=firing.id if firing is not None else "",
-        body=reason,
-        payload={"pause_reason": reason},
-    )
+    try:
+        return create_notification(
+            kind=JOB_PAUSED,
+            title=f"{job.name} 已自动暂停",
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            job_id=job.id,
+            firing_id=firing.id if firing is not None else "",
+            body=reason,
+            payload={"pause_reason": reason},
+        )
+    except Exception:
+        logger.exception("写入自动暂停通知失败 job=%s", job.id)
+        return None
 
 
 def list_notification_page(

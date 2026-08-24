@@ -540,6 +540,42 @@ def test_user_pause_does_not_write_notification(isolated_db):
     assert list_user_notifications(project_id=DEFAULT_PROJECT_ID) == []
 
 
+def test_cancelled_firing_is_not_a_failure_notification(isolated_db):
+    service = _service()
+    job = service.confirm(
+        _weekly_job(service, name="取消不算失败", failure_policy="pause_job").id,
+        now=datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc),
+    )
+    firing = service.create_firing(
+        job_id=job.id,
+        scheduled_for=to_utc_iso(datetime.now(timezone.utc)),
+        trigger="manual",
+    )
+    updated = service.complete_firing(firing.id, "cancelled")
+    assert updated.status == "active"
+    assert updated.consecutive_failures == 0
+    assert updated.pause_reason == ""
+    assert list_user_notifications(project_id=DEFAULT_PROJECT_ID) == []
+
+
+def test_firing_notification_title_allows_braces_in_job_name(isolated_db):
+    service = _service()
+    job = service.confirm(
+        _weekly_job(service, name="周报 {draft").id,
+        now=datetime(2026, 8, 20, 0, 0, tzinfo=timezone.utc),
+    )
+    firing = service.create_firing(
+        job_id=job.id,
+        scheduled_for=job.next_run_at or "",
+        trigger="schedule",
+    )
+    service.complete_firing(firing.id, "succeeded")
+    notes = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+    completed = [item for item in notes if item["kind"] == "job_completed"]
+    assert len(completed) == 1
+    assert completed[0]["title"] == "周报 {draft 已完成"
+
+
 def test_sql_tool_scope_default_is_all_false(isolated_db):
     ensure_db()
     now = "2026-08-21T00:00:00+00:00"
