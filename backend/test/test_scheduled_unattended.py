@@ -544,6 +544,52 @@ def test_confirm_scripts_skill_requires_trusted_tools(isolated_db, tmp_path, mon
     assert confirmed.tool_scope.allow_bash is True
 
 
+def test_confirm_trusted_tools_with_human_approval_cannot_activate_scripts_job(
+    isolated_db, tmp_path, monkeypatch,
+):
+    """trusted_tools + human_approval 仍是 AgentScope DEFAULT，Bash 会被 overlay 拒绝。"""
+
+    service = _service()
+    skill_dir = tmp_path / "skill-pack-hitl"
+    (skill_dir / "scripts").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+    job = _weekly_job(service, name="人工审批脚本周报", skill_ids=["skill-scripts"])
+    monkeypatch.setattr(
+        "src.scheduler.unattended_policy.get_installed_skill",
+        lambda skill_id: Skill.model_validate({
+            "id": "skill-scripts",
+            "name": "scripts",
+            "description": "",
+            "category": "test",
+            "status": "installed",
+            "enabled": True,
+            "resourcePath": str(skill_dir),
+            "updatedAt": "2026-08-21T00:00:00+00:00",
+        }) if skill_id == "skill-scripts" else None,
+    )
+    monkeypatch.setattr(
+        "src.scheduler.service.get_registered_agent",
+        lambda agent_id: SimpleNamespace(
+            skills=["skill-scripts"],
+            guardrails=SimpleNamespace(
+                tool_permission_profile="trusted_tools",
+                tool_permission_mode="bypass",
+                human_approval=True,
+            ),
+        ),
+    )
+    with pytest.raises(ScheduledJobValidationError, match="would_fail_tools: Bash"):
+        service.confirm(job.id)
+    assert would_fail_unattended_tools(
+        tool_scope=JobToolScope(allow_bash=True),
+        agent=SimpleNamespace(guardrails=SimpleNamespace(
+            tool_permission_profile="trusted_tools",
+            tool_permission_mode="bypass",
+            human_approval=True,
+        )),
+    ) == ["Bash"]
+
+
 def test_confirm_ask_every_time_markdown_job_allows_cwd_write(isolated_db, monkeypatch):
     service = _service()
     job = _weekly_job(service, name="Markdown周报")

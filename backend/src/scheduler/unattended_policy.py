@@ -9,8 +9,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from agentscope.permission import PermissionMode
+
 from src.scheduler.models import JobToolScope
-from src.security.permissions import ApprovalPolicy, normalize_approval_policy
+from src.security.permissions import ApprovalPolicy, build_permission_profile
 from src.server.routes.skills import Skill, get_installed_skill
 
 
@@ -52,13 +54,16 @@ def frozen_skills_require_bash(skill_ids: list[str]) -> bool:
 
 
 def agent_approval_policy(agent: object | None) -> ApprovalPolicy:
-    """读取 Agent 用户可见权限策略。"""
+    """读取无人值守实际生效的审批策略。
 
-    guardrails = getattr(agent, "guardrails", None)
-    return normalize_approval_policy(
-        getattr(guardrails, "tool_permission_profile", None),
-        getattr(guardrails, "tool_permission_mode", None),
-    )
+    ``human_approval=True`` 会把 AgentScope 打成 DEFAULT，即使 profile
+    仍是 trusted_tools；overlay 只批准 cwd Write/Edit，不能当 BYPASS。
+    """
+
+    profile = build_permission_profile(getattr(agent, "guardrails", None))
+    if profile.human_approval:
+        return ApprovalPolicy.ASK_EVERY_TIME
+    return profile.tool_policy
 
 
 def injected_unattended_tools(tool_scope: JobToolScope | Any) -> list[str]:
@@ -76,13 +81,20 @@ def would_fail_unattended_tools(
     tool_scope: JobToolScope | Any,
     agent: object | None,
 ) -> list[str]:
-    """Agent 策略下会 HITL 且 overlay 不会批准的注入工具。"""
+    """Agent 策略下会 HITL 且 overlay 不会批准的注入工具。
+
+    与 firing overlay / AgentScope permission mode 对齐：只有真正 BYPASS
+    才能无人值守跑 Bash；human_approval 强制 DEFAULT，Bash 会被 overlay 拒绝。
+    """
 
     injected = injected_unattended_tools(tool_scope)
-    policy = agent_approval_policy(agent)
-    if policy == ApprovalPolicy.READ_ONLY:
-        return [name for name in injected if name in _OVERLAY_APPROVED_TOOLS or name in _SCOPE_TOOL_NAMES.values()]
-    if policy == ApprovalPolicy.TRUSTED_TOOLS:
+    profile = build_permission_profile(getattr(agent, "guardrails", None))
+    if profile.is_read_only:
+        return [
+            name for name in injected
+            if name in _OVERLAY_APPROVED_TOOLS or name in _SCOPE_TOOL_NAMES.values()
+        ]
+    if profile.to_agentscope_permission_mode() == PermissionMode.BYPASS:
         return []
     failing: list[str] = []
     for name in injected:
