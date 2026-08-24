@@ -129,6 +129,11 @@ async def rerun_run(
     source_run = await _get_project_run(run_id, project_id)
     if source_run.status in ACTIVE_RUN_STATUSES:
         raise HTTPException(status_code=409, detail="Only terminal runs can be rerun")
+    if getattr(source_run, "trigger_source", "user") == "scheduled_job":
+        raise HTTPException(
+            status_code=409,
+            detail="Scheduled job runs cannot be rerun as interactive chat. Use Job run-now instead.",
+        )
 
     new_run = await start_chat_run(_build_rerun_chat_message(source_run))
     return serialize_chat_background_run(new_run)

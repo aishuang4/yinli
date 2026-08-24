@@ -59,6 +59,9 @@ class ChatBackgroundRun:
     agent_name: str = ""
     task_text: str = ""
     mode: str = "agent"
+    trigger_source: str = "user"
+    scheduled_job_id: str = ""
+    scheduled_firing_id: str = ""
     status: str = "running"
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     completed_at: str | None = None
@@ -126,6 +129,9 @@ async def start_chat_background_run(
     workspace_id: str = "default",
     project_id: str = "default",
     persist: bool = True,
+    trigger_source: str = "user",
+    scheduled_job_id: str = "",
+    scheduled_firing_id: str = "",
 ) -> ChatBackgroundRun:
     """创建 Run、V3 stream 和根 message Block 后启动后台执行。"""
 
@@ -138,6 +144,9 @@ async def start_chat_background_run(
         agent_name=agent_name,
         task_text=task,
         mode=mode,
+        trigger_source=trigger_source or "user",
+        scheduled_job_id=scheduled_job_id or "",
+        scheduled_firing_id=scheduled_firing_id or "",
     )
     if persist:
         _persist_run(run)
@@ -303,6 +312,9 @@ def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
         "agentName": run.agent_name,
         "task": run.task_text,
         "mode": run.mode,
+        "triggerSource": run.trigger_source,
+        "scheduledJobId": run.scheduled_job_id,
+        "scheduledFiringId": run.scheduled_firing_id,
         "status": run.status,
         "createdAt": run.created_at,
         "completedAt": run.completed_at,
@@ -458,6 +470,9 @@ def _persist_run(run: ChatBackgroundRun) -> None:
         "task": run.task_text,
         "mode": run.mode,
         "status": run.status,
+        "triggerSource": run.trigger_source,
+        "scheduledJobId": run.scheduled_job_id,
+        "scheduledFiringId": run.scheduled_firing_id,
         "createdAt": run.created_at,
         "completedAt": run.completed_at,
     })
@@ -474,6 +489,9 @@ def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
         agent_name=record.get("agentName", ""),
         task_text=record.get("task", ""),
         mode=record.get("mode", "agent"),
+        trigger_source=record.get("triggerSource") or "user",
+        scheduled_job_id=record.get("scheduledJobId") or "",
+        scheduled_firing_id=record.get("scheduledFiringId") or "",
         status=record.get("status", "completed"),
         created_at=record.get("createdAt") or datetime.now(timezone.utc).isoformat(),
         completed_at=record.get("completedAt"),

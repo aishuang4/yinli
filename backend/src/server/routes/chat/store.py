@@ -103,6 +103,40 @@ def _append_user_message(
     _save_store(store)
 
 
+def ensure_scheduled_job_session(
+    *,
+    session_id: str,
+    agent_id: str,
+    agent_name: str,
+    workspace_id: str,
+    project_id: str,
+    title: str,
+) -> ChatSession:
+    """经 ChatStore 创建 kind=scheduled_job 的新 session，禁止直接 SQL INSERT。"""
+
+    now = datetime.now(timezone.utc).isoformat()
+    store = _load_store()
+    existing = next((session for session in store.sessions if session.id == session_id), None)
+    if existing is not None:
+        return existing
+    session = ChatSession(
+        id=session_id,
+        title=_make_session_title(title) if title.strip() else "定时任务",
+        agent_id=agent_id,
+        agent_name=agent_name,
+        mode="agent",
+        workspace_id=workspace_id,
+        project_id=project_id,
+        kind="scheduled_job",
+        created_at=now,
+        updated_at=now,
+        message_count=0,
+    )
+    store.sessions.append(session)
+    _save_store(store)
+    return session
+
+
 def _append_assistant_message(
     *,
     session_id: str,

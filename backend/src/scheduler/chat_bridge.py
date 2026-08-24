@@ -1,0 +1,285 @@
+"""定时 firing 与 Chat Run 的领域桥接。
+
+调度器必须走本模块，禁止直接 await start_chat_run()。
+本 PR 仍复用交互 toolkit；无人值守裁剪在 PR 4b。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, AsyncGenerator, Literal
+
+from fastapi import HTTPException
+
+from src.agents.runtime_types import RuntimeToolScope
+from src.project_files import project_job_run_directory
+from src.runtime_context import resolve_runtime_context
+from src.server.routes.agents import get_registered_agent
+from src.server.routes.chat.background_runs import (
+    cancel_chat_background_run,
+    current_chat_background_run_id,
+    get_chat_background_run,
+    start_chat_background_run,
+)
+from src.server.routes.chat.completion import emit_failed_startup_run
+from src.server.routes.chat.initial_events import (
+    emit_context_events,
+    emit_start_events,
+    persist_user_message_and_trace,
+)
+from src.server.routes.chat.lifecycle import TERMINAL_RUN_STATUSES
+from src.server.routes.chat.models import ChatMessage
+from src.server.routes.chat.projection.source_events import SourceEvent
+from src.server.routes.chat.run_context import build_chat_run_context
+from src.server.routes.chat.runtime_dispatcher import execute_chat_runtime
+from src.server.routes.chat.startup_checks import get_startup_error
+from src.server.routes.chat.store import ensure_scheduled_job_session
+
+
+DEFAULT_FIRING_TIMEOUT_SECONDS = 900
+_POLL_INTERVAL_SECONDS = 0.05
+
+
+class ScheduledChatLaunchError(Exception):
+    """领域错误，不抛 HTTPException。"""
+
+
+@dataclass(frozen=True)
+class ScheduledRunRequest:
+    """内部 DTO，禁止出现在公开 ChatMessage / HTTP schema。"""
+
+    job_id: str
+    firing_id: str
+    workspace_id: str
+    project_id: str
+    agent_id: str
+    frozen_prompt: str
+    skill_ids: list[str]
+    tool_scope: RuntimeToolScope
+    scheduled_for: str
+    trigger: Literal["schedule", "manual", "catch_up"]
+
+
+def scheduled_chat_run_timeout_seconds(agent_id: str) -> float:
+    """硬超时 min(agent.timeout_seconds, 900)。"""
+
+    timeout = 300
+    agent = get_registered_agent(agent_id)
+    if agent is not None:
+        timeout = int(getattr(agent.guardrails, "timeout_seconds", 300) or 300)
+    return float(min(max(1, timeout), DEFAULT_FIRING_TIMEOUT_SECONDS))
+
+
+def scan_scheduled_run_outputs(workspace_dir: Path | str) -> dict[str, Any]:
+    """扫描 firing cwd 的 outputs/，生成 sha256 / 字节数 / 相对路径清单。"""
+
+    root = Path(workspace_dir).expanduser().resolve()
+    outputs = (root / "outputs").resolve()
+    files: list[dict[str, Any]] = []
+    if outputs.is_dir() and outputs.is_relative_to(root):
+        for candidate in sorted(outputs.rglob("*")):
+            if not candidate.is_file() or candidate.is_symlink():
+                continue
+            resolved = candidate.resolve()
+            if not resolved.is_relative_to(outputs) or not resolved.is_relative_to(root):
+                continue
+            digest, size = _sha256_file(resolved)
+            files.append({
+                "path": resolved.relative_to(root).as_posix(),
+                "sha256": digest,
+                "bytes": size,
+            })
+    manifest = {"files": files}
+    (root / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+async def start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
+    """创建 kind=scheduled_job 的新 session 与 Chat Run，立即返回 chat_run_id。"""
+
+    try:
+        return await _start_scheduled_chat_run(req)
+    except ScheduledChatLaunchError:
+        raise
+    except HTTPException as exc:
+        raise ScheduledChatLaunchError(str(exc.detail)) from exc
+    except ValueError as exc:
+        raise ScheduledChatLaunchError(str(exc)) from exc
+
+
+async def await_scheduled_chat_run(
+    chat_run_id: str, *, timeout_seconds: float,
+) -> str:
+    """等待 chat_runs 进入 completed/failed/cancelled；超时则取消并返回 cancelled。"""
+
+    timeout = min(max(0.0, float(timeout_seconds)), DEFAULT_FIRING_TIMEOUT_SECONDS)
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        run = await get_chat_background_run(chat_run_id)
+        if run is None:
+            raise ScheduledChatLaunchError(f"找不到 Chat Run: {chat_run_id}")
+        if run.status in TERMINAL_RUN_STATUSES:
+            return run.status
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            cancelled = await cancel_chat_background_run(chat_run_id)
+            return cancelled.status if cancelled is not None else "cancelled"
+        await asyncio.sleep(min(_POLL_INTERVAL_SECONDS, remaining))
+
+
+async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
+    _validate_request(req)
+    session_id = f"sched-{uuid.uuid4().hex}"
+    runtime_context = resolve_runtime_context(
+        project_id=req.project_id,
+        session_id=session_id,
+        run_id="",
+        agent_id=req.agent_id,
+    )
+    if runtime_context.workspace_id != req.workspace_id:
+        raise ScheduledChatLaunchError(
+            f"Job Workspace {req.workspace_id} 与 Project {runtime_context.project_id} 不一致",
+        )
+    agent = get_registered_agent(req.agent_id)
+    if req.agent_id != "default" and agent is None:
+        raise ScheduledChatLaunchError(f"Agent 配置不存在: {req.agent_id}")
+    agent_name = agent.name if agent is not None else "Assistant"
+
+    ensure_scheduled_job_session(
+        session_id=session_id,
+        agent_id=req.agent_id,
+        agent_name=agent_name,
+        workspace_id=runtime_context.workspace_id,
+        project_id=runtime_context.project_id,
+        title=req.frozen_prompt,
+    )
+    workspace_dir = project_job_run_directory(
+        runtime_context.project_root, req.job_id, req.firing_id,
+    )
+    (workspace_dir / "outputs").mkdir(parents=True, exist_ok=True)
+    _write_frozen_spec(workspace_dir, req)
+
+    run_data = ChatMessage(
+        session_id=session_id,
+        project_id=runtime_context.project_id,
+        message=req.frozen_prompt,
+        agent_id=req.agent_id,
+        agent_name=agent_name,
+        mode="agent",
+        skill_ids=list(req.skill_ids),
+        plan_requested=False,
+        sandbox=False,
+    )
+
+    async def event_stream() -> AsyncGenerator[SourceEvent, None]:
+        ctx = await build_chat_run_context(
+            run_data,
+            runtime_context.with_run_id(current_chat_background_run_id()),
+        )
+        ctx.session_workspace_dir = str(workspace_dir)
+        ctx.system_prompt = "\n\n".join(
+            part for part in [ctx.system_prompt, _job_workspace_addendum(workspace_dir)] if part
+        )
+        persist_user_message_and_trace(ctx, run_data)
+        async for start_event in emit_start_events(ctx, run_data):
+            yield start_event
+        async for context_event in emit_context_events(ctx):
+            yield context_event
+
+        assistant_error = get_startup_error(ctx, run_data)
+        if assistant_error:
+            async for failure_event in emit_failed_startup_run(
+                session_id=ctx.session_id,
+                persist=ctx.persist_run,
+                agent_id=ctx.agent_id,
+                agent_name=ctx.agent_name,
+                model_name=ctx.model_name,
+                assistant_error=assistant_error,
+                skill_runs=ctx.skill_runs,
+            ):
+                yield failure_event
+            return
+
+        async for main_event in execute_chat_runtime(ctx=ctx, run_data=run_data):
+            yield main_event
+
+    run = await start_chat_background_run(
+        session_id=session_id,
+        factory=event_stream,
+        agent_id=req.agent_id,
+        agent_name=agent_name,
+        task=req.frozen_prompt,
+        mode="agent",
+        workspace_id=runtime_context.workspace_id,
+        project_id=runtime_context.project_id,
+        persist=True,
+        trigger_source="scheduled_job",
+        scheduled_job_id=req.job_id,
+        scheduled_firing_id=req.firing_id,
+    )
+    return run.id
+
+
+def _validate_request(req: ScheduledRunRequest) -> None:
+    if not str(req.job_id).strip() or not str(req.firing_id).strip():
+        raise ScheduledChatLaunchError("job_id 与 firing_id 不能为空")
+    if not str(req.frozen_prompt).strip():
+        raise ScheduledChatLaunchError("frozen_prompt 不能为空")
+    if not str(req.agent_id).strip():
+        raise ScheduledChatLaunchError("agent_id 不能为空")
+    if not str(req.project_id).strip():
+        raise ScheduledChatLaunchError("project_id 不能为空")
+    if req.trigger not in {"schedule", "manual", "catch_up"}:
+        raise ScheduledChatLaunchError(f"非法 firing trigger: {req.trigger}")
+
+
+def _write_frozen_spec(workspace_dir: Path, req: ScheduledRunRequest) -> None:
+    payload = {
+        "jobId": req.job_id,
+        "firingId": req.firing_id,
+        "agentId": req.agent_id,
+        "projectId": req.project_id,
+        "workspaceId": req.workspace_id,
+        "scheduledFor": req.scheduled_for,
+        "trigger": req.trigger,
+        "skillIds": list(req.skill_ids),
+        "toolScope": {
+            "allowBash": req.tool_scope.allow_bash,
+            "allowHttp": req.tool_scope.allow_http,
+            "allowWeb": req.tool_scope.allow_web,
+            "allowMcp": req.tool_scope.allow_mcp,
+            "allowKnowledge": req.tool_scope.allow_knowledge,
+        },
+        "frozenPrompt": req.frozen_prompt,
+    }
+    (workspace_dir / "spec.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _job_workspace_addendum(workspace_dir: Path) -> str:
+    return "\n".join([
+        "## Scheduled Job Workspace",
+        f"Default working directory for this scheduled run: {workspace_dir}",
+        "Write final deliverables as relative paths under outputs/ (for example outputs/weekly-report.md).",
+        "Do not use absolute paths.",
+    ])
+
+
+def _sha256_file(path: Path) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+    return digest.hexdigest(), size
