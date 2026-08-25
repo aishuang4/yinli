@@ -195,7 +195,7 @@ class ScheduledJobService:
         return jobs
 
     def confirm(self, job_id: str, *, now: datetime | None = None) -> ScheduledJob:
-        """Jobs 页 / ConfirmJob 主路径；已 active 则幂等返回。"""
+        """对话 ConfirmJob 与 Jobs 页 REST 共用的启用路径；已 active 则幂等返回。"""
 
         job = self.get_job(job_id)
         if job.status == "active":

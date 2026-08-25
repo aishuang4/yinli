@@ -20,6 +20,9 @@ from src.scheduler.settings import is_scheduled_jobs_enabled
 # AskUser 投递选项顺序由测试锁定：第一项且默认选中。
 ASKUSER_DELIVERY_OPTIONS: tuple[str, str] = ("生成后通知我", "不投递")
 ASKUSER_DELIVERY_DEFAULT = ASKUSER_DELIVERY_OPTIONS[0]
+# 启用确认同样锁定选项顺序；resume 本身不会把 Job 变成 active。
+ASKUSER_ENABLE_OPTIONS: tuple[str, str] = ("现在启用", "稍后再说")
+ASKUSER_ENABLE_DEFAULT = ASKUSER_ENABLE_OPTIONS[0]
 SCHEDULED_JOBS_DISABLED_MESSAGE = "调度未启用"
 SCHEDULED_JOB_TOOL_NAMES: tuple[str, ...] = ("ScheduleJob", "ListJobs", "PauseJob", "ConfirmJob")
 
@@ -27,6 +30,14 @@ _DELIVERY_ASKUSER_HINT = (
     "收集投递策略时必须调用 AskUser，options 顺序固定为："
     f"{ASKUSER_DELIVERY_OPTIONS[0]}（默认选中）、{ASKUSER_DELIVERY_OPTIONS[1]}。"
     "Phase 1 不要提供「直接发给客户」或 auto_send。"
+)
+_ENABLE_ASKUSER_HINT = (
+    "ScheduleJob 成功后任务仍是 pending_confirmation，不会进入调度。"
+    "用户已明确要求启用/开启时，立即调用 ConfirmJob(jobId)；"
+    "否则必须调用 AskUser，options 顺序固定为："
+    f"{ASKUSER_ENABLE_OPTIONS[0]}（默认选中）、{ASKUSER_ENABLE_OPTIONS[1]}。"
+    "用户选择现在启用后调用 ConfirmJob(jobId)。"
+    "不要让用户必须打开「定时任务」页才能启用。"
 )
 
 
@@ -39,7 +50,7 @@ def scheduled_job_tools_cache_key(tools: list[ToolBase] | None = None) -> str:
 
 
 def scheduled_job_prompt_addendum() -> str:
-    """注入主 Agent 的登记约定，锁定 AskUser 投递选项顺序。"""
+    """注入主 Agent 的登记约定：AskUser 收集字段后 ScheduleJob，对话内 ConfirmJob 启用。"""
 
     return "\n".join([
         "",
@@ -47,8 +58,13 @@ def scheduled_job_prompt_addendum() -> str:
         "Use AskUser to collect missing schedule fields, then call ScheduleJob with a complete payload. There is no draft status.",
         f"When asking for delivery policy, AskUser options must be exactly: {ASKUSER_DELIVERY_OPTIONS[0]} (default, first), then {ASKUSER_DELIVERY_OPTIONS[1]}.",
         "Do not offer 直接发给客户, auto_send, or sending to the customer.",
-        "ScheduleJob writes pending_confirmation immediately. Tell the user to confirm on the 定时任务 page.",
-        "ConfirmJob is idempotent and calls the same confirm() as REST; it is not the only activation path.",
+        "ScheduleJob writes pending_confirmation immediately; that is not yet scheduled.",
+        "After ScheduleJob, if the user already asked to enable/start the job, call ConfirmJob(jobId) immediately.",
+        f"Otherwise AskUser with options exactly: {ASKUSER_ENABLE_OPTIONS[0]} (default, first), then {ASKUSER_ENABLE_OPTIONS[1]}.",
+        "When the user chooses 现在启用, call ConfirmJob(jobId). AskUser resume itself does not activate the job.",
+        "Do not tell the user they must open the 定时任务 page to enable the job. The page is an alternative path.",
+        "If the user asks to enable an already-created pending job, ListJobs then ConfirmJob(job_id).",
+        "ConfirmJob is the chat activation path and calls the same confirm() as REST; it is idempotent.",
         "To pause an existing job, ListJobs then PauseJob(job_id). PauseJob requires job_id; do not pass a fuzzy name.",
         "Do not insert a new job as a way to turn an existing one off.",
         "Omit tool_scope unless the user explicitly needs extra tools; the default freezes Bash/HTTP/Web/MCP/knowledge all false.",
@@ -149,8 +165,8 @@ class ScheduleJob(_ScheduledJobToolBase):
     name: str = "ScheduleJob"
     description: str = (
         "Register a complete scheduled job for the current Project. "
-        "Writes pending_confirmation immediately; the user must confirm on the 定时任务 page "
-        "(ConfirmJob is optional and idempotent, not the only activation path). "
+        "Writes pending_confirmation immediately; that does not start the schedule. "
+        f"{_ENABLE_ASKUSER_HINT} "
         "Do not sleep until due time. There is no draft. Duplicate names in the same Project are rejected. "
         "Omit tool_scope unless the user explicitly needs extra tools; default freezes Bash/HTTP/Web/MCP/knowledge to false. "
         f"{_DELIVERY_ASKUSER_HINT} "
@@ -256,8 +272,12 @@ class ScheduleJob(_ScheduledJobToolBase):
         return self._success({
             **_job_payload(job),
             "message": (
-                "任务已登记为 pending_confirmation。"
-                "请到「定时任务」页点击确认启用；ConfirmJob 是幂等辅助，不是唯一激活路径。"
+                "任务已登记为 pending_confirmation，尚未进入调度。"
+                f"用户已明确要求启用时，立即调用 ConfirmJob({job.id})。"
+                "否则必须调用 AskUser，options 顺序固定为："
+                f"{ASKUSER_ENABLE_OPTIONS[0]}（默认选中）、{ASKUSER_ENABLE_OPTIONS[1]}。"
+                f"用户选择{ASKUSER_ENABLE_OPTIONS[0]}后调用 ConfirmJob({job.id})。"
+                "不要让用户必须打开「定时任务」页才能启用。"
             ),
         })
 
@@ -339,13 +359,14 @@ class PauseJob(_ScheduledJobToolBase):
 
 
 class ConfirmJob(_ScheduledJobToolBase):
-    """幂等调用 ScheduledJobService.confirm()；激活主路径仍是 REST。"""
+    """对话内启用路径：幂等调用 ScheduledJobService.confirm()。"""
 
     name: str = "ConfirmJob"
     description: str = (
-        "Idempotent confirm() for a pending job. Already-active jobs are returned unchanged. "
-        "The primary activation path remains the 定时任务 page REST confirm button; "
-        "call this only if the user explicitly asks to enable the job in chat."
+        "Enable a pending scheduled job via ScheduledJobService.confirm(). "
+        "This is the chat activation path after ScheduleJob (or after AskUser enable confirmation). "
+        "Already-active jobs are returned unchanged. "
+        "The 定时任务 page confirm button is an alternative path, not the required path."
     )
     input_schema: dict[str, Any] = {
         "type": "object",
@@ -369,7 +390,14 @@ class ConfirmJob(_ScheduledJobToolBase):
             confirmed = self._service.confirm(job_id)
         except ScheduledJobError as exc:
             return self._failure(exc)
-        return self._success(_job_payload(confirmed))
+        payload = _job_payload(confirmed)
+        next_run = confirmed.next_run_at or ""
+        payload["message"] = (
+            f"任务已启用。下次运行时间为 {next_run}。"
+            if next_run
+            else "任务已启用。"
+        )
+        return self._success(payload)
 
 
 def _job_payload(job: ScheduledJob) -> dict[str, Any]:

@@ -20,6 +20,8 @@ from src.storage.database import DEFAULT_PROJECT_ID, DEFAULT_WORKSPACE_ID, ensur
 from src.tools.scheduled_job_tools import (
     ASKUSER_DELIVERY_DEFAULT,
     ASKUSER_DELIVERY_OPTIONS,
+    ASKUSER_ENABLE_DEFAULT,
+    ASKUSER_ENABLE_OPTIONS,
     SCHEDULED_JOBS_DISABLED_MESSAGE,
     ConfirmJob,
     ListJobs,
@@ -88,6 +90,23 @@ def test_delivery_askuser_options_lock_notify_first():
     assert "Do not offer 直接发给客户" in addendum
 
 
+def test_enable_askuser_options_lock_now_first():
+    """登记后启用确认第一项且默认是「现在启用」，并要求对话内 ConfirmJob。"""
+
+    assert ASKUSER_ENABLE_OPTIONS == ("现在启用", "稍后再说")
+    assert ASKUSER_ENABLE_DEFAULT == "现在启用"
+    description = ScheduleJob.description
+    assert description.index("现在启用") < description.index("稍后再说")
+    assert "不要让用户必须打开「定时任务」页才能启用" in description
+    addendum = scheduled_job_prompt_addendum()
+    assert addendum.index("现在启用") < addendum.index("稍后再说")
+    assert "call ConfirmJob(jobId) immediately" in addendum
+    assert "must open the 定时任务 page" in addendum
+    assert "ListJobs then ConfirmJob(job_id)" in addendum
+    assert ConfirmJob.description.startswith("Enable a pending scheduled job")
+    assert "alternative path" in ConfirmJob.description
+
+
 def test_tools_are_ordinary_not_external():
     tools = build_scheduled_job_tools(
         workspace_id="ws",
@@ -110,6 +129,9 @@ def test_schedule_job_writes_pending_confirmation(isolated_db):
 
     assert chunk.state == ToolResultState.SUCCESS
     assert body["status"] == "pending_confirmation"
+    assert "ConfirmJob(" in body["message"]
+    assert ASKUSER_ENABLE_DEFAULT in body["message"]
+    assert "请到「定时任务」页点击确认启用" not in body["message"]
     assert body["toolScope"] == DEFAULT_JOB_TOOL_SCOPE
     stored = ScheduledJobService().get_job(body["jobId"])
     assert stored.status == "pending_confirmation"
@@ -159,6 +181,9 @@ def test_confirm_job_is_idempotent(isolated_db):
     assert first["status"] == "active"
     assert second["status"] == "active"
     assert first["nextRunAt"] == second["nextRunAt"]
+    assert first["nextRunAt"]
+    assert "任务已启用" in first["message"]
+    assert first["nextRunAt"] in first["message"]
     assert ScheduledJobService().get_job(job_id).status == "active"
 
 
@@ -218,3 +243,5 @@ def test_team_executor_does_not_inject_scheduled_job_tools(monkeypatch):
     ]
     assert single_parts[1] == scheduled_job_tools_cache_key(single_parts[2])
     assert ASKUSER_DELIVERY_DEFAULT in single_parts[5]
+    assert ASKUSER_ENABLE_DEFAULT in single_parts[5]
+    assert "call ConfirmJob(jobId) immediately" in single_parts[5]

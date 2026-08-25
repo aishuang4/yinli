@@ -82,7 +82,7 @@
 8. **错过只补跑最近一次，不追赶堆积。** 处理完当次 due（catch-up 或 missed）后 `next_run_at = next_anchor_after(max(scheduled_for, now))`，一次跳过积压周期。weekly 按钟面（weekday + clock）算下一锚点，不是「现在 + 7 天」。
 9. **生成与外发解耦。** Agent 只写产物；投递由控制面在 Run 成功后执行。firing 的 ToolScope 不含投递通道。
 10. **投递策略默认 `notify`，`auto_send` 必须连续成功且用户显式打开。** 收件人只允许 Project 白名单。Phase 1 拒绝 `auto_send` 进入 `active`。
-11. **Job 启用由控制面 `ScheduledJobService.confirm()` 完成，不以模型漏调 `ConfirmJob` 为唯一路径。** Jobs 页确认按钮是主路径。AskUser 只收集字段，resume 答案不会自动把 Job 变 `active`。不先改 SSE 契约。
+11. **Job 启用由控制面 `ScheduledJobService.confirm()` 完成，AskUser resume 不会自动把 Job 变 `active`。** 对话内 `ConfirmJob(job_id)` 是启用主路径：`ScheduleJob` 之后用户已明确要求启用则立即调用；否则用 AskUser（选项「现在启用」默认选中 / 「稍后再说」）得到同意后再调用。Jobs 页确认按钮是同一 `confirm()` 的备选路径，不是必须去管理页。不先改 SSE 契约。
 12. **产物目录沿用 `.agent-workstation/`，firing 的 `workspace_dir` 设为该次 run 目录。** Read/Grep/Glob 的 `scope_dir` 是 Project∩Agent；**Write/Edit 的 `scope_dir` 收窄为 `workspace_dir`**（工厂不得给 Write 同一个宽 `filesystem_scope`）。禁止依赖模型写绝对路径。不新建 `.yinli/`。
 13. **Phase 1 无人值守工具：Read/Grep/Glob 可读 Project 交集；Write/Edit 仅 cwd 内自动批准。** Bash/网络/MCP 默认不注入。需要 Skill `scripts/` / Bash 的 Job，Agent 必须是用户可见的 `trusted_tools` 才能 `active`。`ask_every_time` 的 Markdown 周报靠 HITL **批准** cwd Write，而不是 deny。不把该 Agent 改成全局 BYPASS。
 14. **ticker 只插入 `queued` 并 `create_task`；信号量在 Task 内、claim `starting` 之前获取。** `JobScheduler` 持有 in-flight `set[Task]`。stale 60s 只回收「`starting` + 空 `chat_run_id` + 进程内无对应 Task」。禁止把排队中的 `queued` 当 stale。硬超时 `min(agent.timeout_seconds, 900)`。
@@ -194,9 +194,9 @@ run_firing
 flowchart TB
   subgraph interactive [用户在场]
     Chat[Chat ReAct]
-    AskUser[AskUser 只收集字段]
+    AskUser[AskUser 收集字段与启用确认]
     Tools[ScheduleJob / PauseJob / ConfirmJob]
-    JobsPage[Jobs 页 Confirm 主路径]
+    JobsPage[Jobs 页 Confirm 备选]
     Chat --> AskUser
     Chat --> Tools
     Tools --> JobSvc[ScheduledJobService]
@@ -260,7 +260,7 @@ Write/Edit:     base_dir=scope_dir=workspace_dir   # 比 Project 更窄，工厂
 2. Readiness 通过后进入交互式 ReAct（现有 `readiness_gate.py`，不让 ReadinessAgent 选择 Job）。
 3. 主 Agent 用 **AskUser** 补齐字段。投递 options **第一项且默认选中** 必须是「生成后通知我」。Phase 1 不出现「直接发给客户」。
 4. Agent 调用 `ScheduleJob`：字段必须齐全，写入 `pending_confirmation`。同 Project 重名拒绝。没有 `draft` 状态。
-5. **启用不发生在 AskUser resume。** 助手告知用户到「定时任务」页点击确认；Jobs 页 `POST .../confirm` 是主路径。用户在对话里说「确认启用」时，模型可调幂等 `ConfirmJob(job_id)`，内部仍是 `ScheduledJobService.confirm()`。
+5. **启用不发生在 AskUser resume。** `ScheduleJob` 只写 `pending_confirmation`。用户已明确要求启用时，模型立即调幂等 `ConfirmJob(job_id)`；否则再 AskUser，options 第一项且默认选中「现在启用」，第二项「稍后再说」。用户选择现在启用后必须调用 `ConfirmJob`。Jobs 页 `POST .../confirm` 是同一 `confirm()` 的备选路径，助手不得把用户赶到管理页才能启用。
 6. `confirm()` 成功后 `active`，按 timezone 计算 `next_run_at`。本轮交互 Chat **结束**。到期与本 session 无关。
 
 「关掉周五那个周报」：`ListJobs` → 唯一命中则 `PauseJob(job_id)`；0 命中失败；多命中再 AskUser 选择。禁止再 `ScheduleJob` 一条「已关闭」记录。
@@ -298,7 +298,7 @@ active -> completed   # 仅 kind=once 成功结束后
 
 | 状态 | 调度 | 含义 |
 | --- | --- | --- |
-| `pending_confirmation` | 否 | 字段齐全，等人在 Jobs 页或 `ConfirmJob` 启用 |
+| `pending_confirmation` | 否 | 字段齐全，等人在对话里 `ConfirmJob` 或 Jobs 页启用 |
 | `active` | 是 | `next_run_at` 有效 |
 | `paused` | 否 | 用户暂停、资源失效自动暂停、`once` 失败、或超过每日/连续失败上限 |
 | `archived` | 否 | 删除的默认语义，不级联抹 firing / Trace |
@@ -588,7 +588,7 @@ Phase 1：`notify` 默认；`confirm_then_send` 当作 notify + UI 标明发送�
 | `ResumeJob` | 重新校验 binding 后 `paused` → `active` |
 | `UpdateJob` | 改调度可保持 active；改投递/收件人/Skill → `pending_confirmation` |
 | `DeleteJob` | 默认归档 |
-| `ConfirmJob` | 幂等调用 `confirm()`；不是激活的唯一路径 |
+| `ConfirmJob` | 对话内启用主路径；幂等调用 `confirm()`；Jobs 页 REST 为备选 |
 
 `PauseJob` 不接受模糊 name。AskUser 投递选项顺序：通知我（默认） / 不投递。工具 description 与测试锁定该顺序。
 
@@ -596,8 +596,8 @@ Phase 1：`notify` 默认；`confirm_then_send` 当作 notify + UI 标明发送�
 
 **Chat**
 
-- 不改 SSE。登记确认 **不** 把 AskUser 当激活。
-- `ScheduleJob` 保持通用 `tool` Block。助手文案指向管理页。
+- 不改 SSE。登记确认 **不** 把 AskUser 当激活；启用必须另调 `ConfirmJob`。
+- `ScheduleJob` 保持通用 `tool` Block。助手应在对话里确认启用，而不是把用户赶到管理页。
 - 禁止解析工具参数自制 Job 状态树。`approval` Block 仍同时服务权限 HITL。
 
 **独立管理页**
@@ -1048,7 +1048,7 @@ Windows 关窗即退出；双发。**Phase 1 不采用。** Phase 4 只「拉起
 - **标题：** `feat(scheduler): 单 Agent 注入 ScheduleJob 工具组`
 - **影响：** `tools/scheduled_job_tools.py`、`react_runtime.py`（feature key `scheduled-job-tools`）、测试
 - **依赖：** PR 1–2
-- **内容：** 立即写库；Team / firing 不注入；Pause 必须 `job_id`；AskUser 投递默认「通知我」。flag 关闭时工具失败信息明确。ConfirmJob 幂等。激活主路径仍是 REST。
+- **内容：** 立即写库；Team / firing 不注入；Pause 必须 `job_id`；AskUser 投递默认「通知我」。flag 关闭时工具失败信息明确。ConfirmJob 幂等，是对话内启用主路径；Jobs 页 REST 为备选。
 
 ### PR 4a — 内部 firing 桥接（等待/超时，仍可走交互 toolkit）
 
