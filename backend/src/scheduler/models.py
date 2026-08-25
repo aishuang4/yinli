@@ -7,6 +7,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.scheduler.capability_contract import (
+    JobCapabilityContract,
+    empty_capability_contract,
+    parse_capability_contract,
+)
+
 JobStatus = Literal["pending_confirmation", "active", "paused", "archived", "completed"]
 ScheduleKind = Literal["weekly", "once"]
 MissedPolicy = Literal["catch_up_once", "mark_missed", "skip_silent"]
@@ -108,6 +114,7 @@ class ScheduledJob(BaseModel):
     max_consecutive_failures: int = 3
     max_firings_per_day: int = 8
     created_from_session_id: str = ""
+    capability_contract: JobCapabilityContract = Field(default_factory=empty_capability_contract)
     created_at: str
     updated_at: str
     archived_at: str | None = None
@@ -154,6 +161,11 @@ class ScheduledJob(BaseModel):
         if isinstance(value, dict):
             return JobToolScope.model_validate(value)
         return value
+
+    @field_validator("capability_contract", mode="before")
+    @classmethod
+    def _empty_contract_generate_only(cls, value: Any) -> Any:
+        return parse_capability_contract(value)
 
 
 class ScheduledJobRun(BaseModel):

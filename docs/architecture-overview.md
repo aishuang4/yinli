@@ -134,6 +134,7 @@ RunState、DisplayEvent、旧 `event_hub`、旧 adapter/reducer 和旧 Snapshot 
 - `projects`
 - `project_resource_bindings`
 - `subagent_invocations`
+- `user_notifications`
 
 历史开发库可能仍有 `memory_facts`、`memory_events`、`memory_candidates`，但旧记忆模块已删除，不再代表当前运行时能力。
 
@@ -147,6 +148,19 @@ RunState、DisplayEvent、旧 `event_hub`、旧 adapter/reducer 和旧 Snapshot 
 - 工具范围由 `RuntimeToolScope` 与 `tool_scope_resolver.py` 控制。
 - 权限策略由 guardrails 归一化为统一权限模型，再映射到 AgentScope permission mode、工具注入和 Trace。
 - `WebFetch` 是独立的只读公开网页工具：只接收已知 HTTP(S) URL，逐次校验重定向目标，拒绝私网、本机、保留地址、URL 凭据、超大响应和非文本内容，并把网页正文标记为不可信外部数据。它不复用 `HttpRequest` 的通用 API 语义，也不提供 WebSearch。
+
+## 定时任务 Job Agent
+
+定时任务的到期执行者必须是 `role=job` 的 Job Agent，不能使用 Chat 助手。Job Agent 在配置里拆成必注入与可选注入两层工具：必注入到期一定带上，`CheckJobFeasibility` 只认领可选层。系统 `default` 助手不能改成 Job Agent；Job Agent 不出现在 Chat 选择器里。
+
+## 消息通知
+
+通知是独立于 Chat Runtime 的通道抽象：调度器在 firing 终态构造 `NotificationMessage`，由 `src/notifications/dispatcher.py` 分发给已启用通道。
+
+- 应用内通道写入 `user_notifications`，并通过 `/api/notifications/stream` 推送到 Chat 顶栏铃铛；不进入 Chat SSE。
+- 通道目录与开关存在 `json_store` / `system_settings` / `notifications`。应用内通道始终开启。
+- 邮箱、微信、飞书已登记占位通道，设置页可预填配置，但 `implemented=false` 时不能启用。
+- 新增通道只需实现 `NotificationChannel` 并登记，不要把投递逻辑写进 `scheduler/service.py` 或 Chat handler。
 
 ## 前端入口
 

@@ -383,8 +383,17 @@ async def build_scheduled_run_context(
         ]
         if part
     )
-    runtime_tool_scope = deserialize_frozen_runtime_tool_scope(getattr(job, "tool_scope", None))
+    from src.scheduler.firing_toolkit import assemble_scheduled_firing_toolkit_spec
+
+    spec = assemble_scheduled_firing_toolkit_spec(
+        job, agent=agent_config, project_resources=project_resources,
+    )
+    runtime_tool_scope = deserialize_frozen_runtime_tool_scope(spec.get("tool_scope"))
     denylist = set(SCHEDULED_JOB_UNATTENDED_DENYLIST)
+    claimed_mcp = set(spec.get("mcp_ids") or []) if spec.get("filter_claimed") else None
+    claimed_http = None
+    if spec.get("filter_claimed"):
+        claimed_http = set(spec.get("http_ids") or []) | set(spec.get("knowledge_ids") or [])
     return ChatRunContext(
         session_id=session_id,
         runtime_context=runtime_context,
@@ -410,10 +419,11 @@ async def build_scheduled_run_context(
         mcp_servers=_build_runtime_mcp_servers(
             agent_config,
             allowed_server_ids=project_resources.mcp_server_ids,
+            claimed_tool_ids=claimed_mcp,
         ),
         knowledge_tools=_build_runtime_knowledge_tools(
             agent_config,
-            allowed_tool_ids=project_resources.http_tool_ids,
+            allowed_tool_ids=claimed_http if claimed_http is not None else project_resources.http_tool_ids,
         ),
         session_workspace_dir=workspace_dir,
         session_artifact_paths_before=session_artifact_paths_before,

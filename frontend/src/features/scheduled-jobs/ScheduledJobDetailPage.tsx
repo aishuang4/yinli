@@ -6,6 +6,7 @@ import { CalendarClock, FolderOpen, Pause, Play, Trash2 } from 'lucide-react';
 import { Button, Tag } from '@/components/design';
 import { WorkbenchDetailShell, WorkbenchListIcon, WorkbenchSection } from '../../components/workbench';
 import type { ScheduledJob, ScheduledJobRun } from '../../types/scheduledJob';
+import { ScheduledJobContractPanel } from './ScheduledJobContractPanel';
 import { ScheduledJobHistory } from './ScheduledJobHistory';
 import { ScheduledJobScheduleForm } from './ScheduledJobScheduleForm';
 import {
@@ -130,6 +131,8 @@ export function ScheduledJobDetailPage({
               任务字段已齐全。确认启用来自主路径；AskUser 收集字段不会自动把任务变成 active。
             </section>
           ) : null}
+
+          <ScheduledJobContractPanel job={job} />
 
           <ScheduledJobScheduleForm
             job={job}

@@ -35,7 +35,8 @@ export function AgentLandingPage({
   onDeleteAgent,
 }: AgentLandingPageProps) {
   const defaultAgent = agents.find((agent) => agent.id === 'default') || null;
-  const customAgents = agents.filter((agent) => agent.id !== 'default');
+  const chatAgents = agents.filter((agent) => agent.id !== 'default' && agent.role !== 'job');
+  const jobAgents = agents.filter((agent) => agent.role === 'job');
 
   return (
     <WorkbenchListPage
@@ -69,20 +70,41 @@ export function AgentLandingPage({
         )}
       </WorkbenchSection>
 
-      <WorkbenchSection title="自定义智能体">
+      <WorkbenchSection title="对话智能体">
         {loading ? (
           <WorkbenchLoadingPanel />
-        ) : customAgents.length === 0 ? (
+        ) : chatAgents.length === 0 ? (
           <WorkbenchEmptyPanel onClick={onCreateAgent}>
-            暂无自定义智能体 <span className="text-[var(--color-text-primary)]">创建</span>
+            暂无对话智能体 <span className="text-[var(--color-text-primary)]">创建</span>
           </WorkbenchEmptyPanel>
         ) : (
           <WorkbenchList>
-            {customAgents.map((agent, index) => (
+            {chatAgents.map((agent, index) => (
               <AgentListRow
                 key={agent.id}
                 agent={agent}
-                last={index === customAgents.length - 1}
+                last={index === chatAgents.length - 1}
+                onSelect={() => onSelectAgent(agent.id)}
+                onDelete={() => onDeleteAgent(agent.id)}
+              />
+            ))}
+          </WorkbenchList>
+        )}
+      </WorkbenchSection>
+      <WorkbenchSection title="定时任务 Agent">
+        {loading ? (
+          <WorkbenchLoadingPanel />
+        ) : jobAgents.length === 0 ? (
+          <WorkbenchEmptyPanel onClick={onCreateAgent}>
+            把智能体用途设为「定时任务 Agent」，并配置必注入工具
+          </WorkbenchEmptyPanel>
+        ) : (
+          <WorkbenchList>
+            {jobAgents.map((agent, index) => (
+              <AgentListRow
+                key={agent.id}
+                agent={agent}
+                last={index === jobAgents.length - 1}
                 onSelect={() => onSelectAgent(agent.id)}
                 onDelete={() => onDeleteAgent(agent.id)}
               />
@@ -109,8 +131,8 @@ function AgentListRow({
     <WorkbenchListRow
       icon={<AgentIcon agent={agent} />}
       title={agent.name}
-      subtitle={agent.modelConfig.primary}
-      description={agent.description || '配置模型、工具和执行边界'}
+      subtitle={agent.role === 'job' ? `定时任务 · ${agent.modelConfig.primary}` : agent.modelConfig.primary}
+      description={agent.description || (agent.role === 'job' ? '到点执行，Chat 中不可选用' : '配置模型、工具和执行边界')}
       last={last}
       layout="columns"
       onSelect={onSelect}

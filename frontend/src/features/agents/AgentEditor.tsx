@@ -20,6 +20,7 @@ import {
 import { AgentBasicSection } from './sections/AgentBasicSection';
 import { AgentGuardrailsSection } from './sections/AgentGuardrailsSection';
 import { AgentModelAdvancedSection } from './sections/AgentModelAdvancedSection';
+import { AgentJobToolkitSection } from './sections/AgentJobToolkitSection';
 import { AgentToolCapabilitiesSection } from './sections/AgentToolCapabilitiesSection';
 import { KnowledgeToolSelectionModal } from './sections/KnowledgeToolSelectionModal';
 import { McpToolSelectionModal } from './sections/McpToolSelectionModal';
@@ -43,6 +44,31 @@ import { useMcp } from '../../hooks/useMcp';
 import { useEnabledSkills } from '../../hooks/useSkills';
 import { useHttpTools } from '../../hooks/useKnowledgeTools';
 import type { HttpTool } from '../../types/tool';
+
+function syncBoundIds(
+  form: AgentCreatePayload,
+  kind: 'mcp' | 'http' | 'skill',
+  ids: string[],
+): AgentCreatePayload {
+  const unique = Array.from(new Set(ids));
+  const keep = (item: { kind: string; id: string }) => item.kind !== kind || unique.includes(item.id);
+  const existing = new Set([
+    ...form.jobToolkit.required.filter((item) => item.kind === kind).map((item) => item.id),
+    ...form.jobToolkit.optional.filter((item) => item.kind === kind).map((item) => item.id),
+  ]);
+  const added = unique.filter((id) => !existing.has(id)).map((id) => ({ kind, id }));
+  const nextForm: AgentCreatePayload = {
+    ...form,
+    jobToolkit: {
+      required: [...form.jobToolkit.required.filter(keep), ...added],
+      optional: form.jobToolkit.optional.filter(keep),
+    },
+  };
+  if (kind === 'mcp') nextForm.mcpTools = unique;
+  if (kind === 'http') nextForm.knowledgeTools = unique;
+  if (kind === 'skill') nextForm.skills = unique;
+  return nextForm;
+}
 
 interface AgentEditorProps {
   /** 编辑的 Agent（null 表示创建模式） */
@@ -128,6 +154,11 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
         tags: [...agent.tags],
         planConfig: { ...agent.planConfig },
         guardrails: { ...agent.guardrails },
+        role: agent.role || 'chat',
+        jobToolkit: {
+          required: [...(agent.jobToolkit?.required || [])],
+          optional: [...(agent.jobToolkit?.optional || [])],
+        },
       });
     } else {
       setForm(createEmptyAgentForm());
@@ -139,6 +170,10 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
   const handleSave = useCallback(async () => {
     if (!form.name.trim()) {
       setError('请输入 Agent 名称');
+      return;
+    }
+    if (form.role === 'job' && form.jobToolkit.required.length === 0) {
+      setError('Job Agent 必须至少配置一项必注入工具');
       return;
     }
 
@@ -154,25 +189,16 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
   }, [form, onSave]);
 
   const setMcpToolSelection = useCallback((toolIds: string[]) => {
-    setForm((current) => ({
-      ...current,
-      mcpTools: Array.from(new Set(toolIds)),
-    }));
+    setForm((current) => syncBoundIds(current, 'mcp', toolIds));
   }, []);
 
   const toggleKnowledgeTool = useCallback((toolId: string, checked: boolean) => {
-    if (checked) {
-      setForm((current) => ({
-        ...current,
-        knowledgeTools: Array.from(new Set([...current.knowledgeTools, toolId])),
-      }));
-      return;
-    }
-
-    setForm((current) => ({
-      ...current,
-      knowledgeTools: current.knowledgeTools.filter((id) => id !== toolId),
-    }));
+    setForm((current) => {
+      const next = checked
+        ? Array.from(new Set([...current.knowledgeTools, toolId]))
+        : current.knowledgeTools.filter((id) => id !== toolId);
+      return syncBoundIds(current, 'http', next);
+    });
   }, []);
 
   const openKnowledgeEditor = useCallback((tool: HttpTool | null = null) => {
@@ -201,25 +227,20 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
 
   const handleDeleteKnowledgeTool = useCallback(async (toolId: string) => {
     await deleteKnowledgeTool(toolId);
-    setForm((current) => ({
-      ...current,
-      knowledgeTools: current.knowledgeTools.filter((id) => id !== toolId),
-    }));
+    setForm((current) => syncBoundIds(
+      current,
+      'http',
+      current.knowledgeTools.filter((id) => id !== toolId),
+    ));
   }, [deleteKnowledgeTool]);
 
   const toggleSkill = useCallback((skillId: string, checked: boolean) => {
-    if (checked) {
-      setForm((current) => ({
-        ...current,
-        skills: Array.from(new Set([...current.skills, skillId])),
-      }));
-      return;
-    }
-
-    setForm((current) => ({
-      ...current,
-      skills: current.skills.filter((id) => id !== skillId),
-    }));
+    setForm((current) => {
+      const next = checked
+        ? Array.from(new Set([...current.skills, skillId]))
+        : current.skills.filter((id) => id !== skillId);
+      return syncBoundIds(current, 'skill', next);
+    });
   }, []);
 
   return (
@@ -261,6 +282,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
           form={form}
           primaryModelOptions={primaryModelOptions}
           onChange={setForm}
+          lockChatRole={agent?.id === 'default'}
         />
 
         <button
@@ -309,22 +331,35 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
         >
           <div className="space-y-4 pb-4">
 
-        <AgentToolCapabilitiesSection
-          selectedMcpTools={selectedMcpTools}
-          selectedKnowledgeTools={selectedKnowledgeTools}
-          selectedSkills={selectedSkills}
-          mcpToolCount={form.mcpTools.length}
-          knowledgeToolCount={form.knowledgeTools.length}
-          skillCount={form.skills.length}
-          mcpServersLoading={mcpServersLoading}
-          knowledgeToolsLoading={knowledgeToolsLoading}
-          skillsLoading={skillsLoading}
-          hasEnabledMcpServers={enabledMcpServers.length > 0}
-          hasEnabledSkills={enabledSkills.length > 0}
-          onOpenMcpSelector={() => setMcpSelectorOpen(true)}
-          onOpenKnowledgeSelector={() => setKnowledgeSelectorOpen(true)}
-          onOpenSkillsSelector={() => setSkillsSelectorOpen(true)}
-        />
+        {form.role === 'job' ? (
+          <AgentJobToolkitSection
+            form={form}
+            selectedMcp={selectedMcpTools.map((tool) => ({ id: tool.id, name: tool.name }))}
+            selectedHttp={selectedKnowledgeTools.map((tool) => ({ id: tool.id, name: tool.name }))}
+            selectedSkills={selectedSkills.map((skill) => ({ id: skill.id, name: skill.name }))}
+            onChange={setForm}
+            onOpenMcp={() => setMcpSelectorOpen(true)}
+            onOpenHttp={() => setKnowledgeSelectorOpen(true)}
+            onOpenSkills={() => setSkillsSelectorOpen(true)}
+          />
+        ) : (
+          <AgentToolCapabilitiesSection
+            selectedMcpTools={selectedMcpTools}
+            selectedKnowledgeTools={selectedKnowledgeTools}
+            selectedSkills={selectedSkills}
+            mcpToolCount={form.mcpTools.length}
+            knowledgeToolCount={form.knowledgeTools.length}
+            skillCount={form.skills.length}
+            mcpServersLoading={mcpServersLoading}
+            knowledgeToolsLoading={knowledgeToolsLoading}
+            skillsLoading={skillsLoading}
+            hasEnabledMcpServers={enabledMcpServers.length > 0}
+            hasEnabledSkills={enabledSkills.length > 0}
+            onOpenMcpSelector={() => setMcpSelectorOpen(true)}
+            onOpenKnowledgeSelector={() => setKnowledgeSelectorOpen(true)}
+            onOpenSkillsSelector={() => setSkillsSelectorOpen(true)}
+          />
+        )}
 
         <AgentModelAdvancedSection
           form={form}

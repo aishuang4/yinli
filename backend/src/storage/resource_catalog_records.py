@@ -73,6 +73,8 @@ class ResourceCatalogRecordStore:
                 ),
                 "status": row["status"],
                 "workspaceId": row["workspace_id"],
+                "role": row["role"] if "role" in row.keys() else "chat",
+                "jobToolkit": self.loads(row["job_toolkit"], {}) if "job_toolkit" in row.keys() else {},
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
             })
@@ -84,11 +86,13 @@ class ResourceCatalogRecordStore:
             "id", "name", "avatar", "description", "system_prompt", "model_config",
             "mcp_tools", "knowledge_tools", "skills", "tags", "plan_config",
             "guardrails", "status", "created_at", "updated_at", "workspace_id",
+            "role", "job_toolkit",
         ]
         update_columns = [
             "name", "avatar", "description", "system_prompt", "model_config",
             "mcp_tools", "knowledge_tools", "skills", "tags", "plan_config",
             "guardrails", "status", "updated_at", "workspace_id",
+            "role", "job_toolkit",
         ]
         values = [
             data["id"], data["name"], data.get("avatar", ""),
@@ -100,6 +104,8 @@ class ResourceCatalogRecordStore:
             self.dumps(data.get("guardrails", {})), data.get("status", "idle"),
             data.get("created_at") or self.utc_now(), data.get("updated_at") or self.utc_now(),
             data.get("workspaceId", self.default_workspace_id),
+            data.get("role") or "chat",
+            self.dumps(data.get("jobToolkit") or data.get("job_toolkit") or {}),
         ]
         with self.lock, self.connect() as conn:
             conn.execute(

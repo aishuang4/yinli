@@ -90,6 +90,11 @@ interface AgentApiData {
   status: string;
   created_at: string;
   updated_at: string;
+  role?: 'chat' | 'job';
+  jobToolkit?: {
+    required?: Array<{ kind: string; id: string }>;
+    optional?: Array<{ kind: string; id: string }>;
+  };
 }
 
 /**
@@ -140,6 +145,17 @@ function mapApiAgent(api: AgentApiData): Agent {
     status: api.status as Agent['status'],
     createdAt: api.created_at,
     updatedAt: api.updated_at,
+    role: api.role === 'job' ? 'job' : 'chat',
+    jobToolkit: {
+      required: (api.jobToolkit?.required ?? []).map((item) => ({
+        kind: item.kind as Agent['jobToolkit']['required'][number]['kind'],
+        id: item.id,
+      })),
+      optional: (api.jobToolkit?.optional ?? []).map((item) => ({
+        kind: item.kind as Agent['jobToolkit']['optional'][number]['kind'],
+        id: item.id,
+      })),
+    },
   };
 }
 
@@ -156,6 +172,8 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
   if ('systemPrompt' in data && data.systemPrompt !== undefined) result.system_prompt = data.systemPrompt;
   if ('tags' in data && data.tags !== undefined) result.tags = data.tags;
   if ('skills' in data && data.skills !== undefined) result.skills = data.skills;
+  if ('role' in data && data.role !== undefined) result.role = data.role;
+  if ('jobToolkit' in data && data.jobToolkit !== undefined) result.jobToolkit = data.jobToolkit;
   if ('mcpTools' in data && data.mcpTools !== undefined) result.mcpTools = data.mcpTools;
   if ('knowledgeTools' in data && data.knowledgeTools !== undefined) result.knowledgeTools = data.knowledgeTools;
   if ('planConfig' in data && data.planConfig) {

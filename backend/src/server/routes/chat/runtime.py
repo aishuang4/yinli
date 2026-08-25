@@ -147,8 +147,12 @@ def _build_runtime_mcp_servers(
     agent_config: object | None,
     *,
     allowed_server_ids: set[str] | frozenset[str] | None = None,
+    claimed_tool_ids: set[str] | frozenset[str] | None = None,
 ) -> list[McpRuntimeSpec]:
     tool_ids = list(getattr(agent_config, "mcp_tools", []) or [])
+    if claimed_tool_ids is not None:
+        claimed = {str(item) for item in claimed_tool_ids}
+        tool_ids = [tool_id for tool_id in tool_ids if str(tool_id) in claimed]
     specs: list[McpRuntimeSpec] = []
     for item in resolve_mcp_runtime_servers(tool_ids, allowed_server_ids=allowed_server_ids):
         specs.append(McpRuntimeSpec(

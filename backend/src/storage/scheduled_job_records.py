@@ -20,6 +20,7 @@ _JOB_JSON_FIELDS = {
     "schedule_expr",
     "skill_ids",
     "tool_scope",
+    "capability_contract",
     "input_spec",
     "output_spec",
     "recipient_ids",
@@ -28,6 +29,7 @@ _JOB_UPDATE_FIELDS = (
     "workspace_id", "project_id", "name", "summary", "status", "pause_reason",
     "agent_id", "mode", "schedule_kind", "schedule_expr", "timezone",
     "next_run_at", "last_run_at", "frozen_prompt", "skill_ids", "tool_scope",
+    "capability_contract",
     "input_spec", "output_spec", "missed_policy", "failure_policy",
     "delivery_policy", "delivery_channel_ref", "recipient_ids",
     "unattended_permission", "auto_send_enabled_at", "required_successes",
@@ -80,15 +82,15 @@ class ScheduledJobRecordStore:
                     INSERT INTO scheduled_jobs (
                         id, workspace_id, project_id, name, summary, status, pause_reason,
                         agent_id, mode, schedule_kind, schedule_expr, timezone, next_run_at,
-                        last_run_at, frozen_prompt, skill_ids, tool_scope, input_spec,
-                        output_spec, missed_policy, failure_policy, delivery_policy,
+                        last_run_at, frozen_prompt, skill_ids, tool_scope, capability_contract,
+                        input_spec, output_spec, missed_policy, failure_policy, delivery_policy,
                         delivery_channel_ref, recipient_ids, unattended_permission,
                         auto_send_enabled_at, required_successes, consecutive_successes,
                         consecutive_failures, max_consecutive_failures, max_firings_per_day,
                         created_from_session_id, created_at, updated_at, archived_at
                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
                     """,
                     self._job_params(payload),
@@ -381,6 +383,8 @@ class ScheduledJobRecordStore:
             if field in _JOB_JSON_FIELDS:
                 if field == "tool_scope" and not value:
                     value = dict(_DEFAULT_TOOL_SCOPE)
+                elif field == "capability_contract" and not value:
+                    value = {}
                 elif hasattr(value, "to_storage_dict"):
                     value = value.to_storage_dict()
                 assignments.append(f"{field}=?")
@@ -579,6 +583,7 @@ class ScheduledJobRecordStore:
             record.get("frozen_prompt") or "",
             self.dumps(record.get("skill_ids") or []),
             self.dumps(tool_scope),
+            self.dumps(_contract_storage(record.get("capability_contract"))),
             self.dumps(record.get("input_spec") or {}),
             self.dumps(record.get("output_spec") or {}),
             record.get("missed_policy") or "catch_up_once",
@@ -621,6 +626,7 @@ class ScheduledJobRecordStore:
             "frozen_prompt": row["frozen_prompt"],
             "skill_ids": self.loads(row["skill_ids"], []),
             "tool_scope": tool_scope,
+            "capability_contract": _contract_from_row(row, self.loads),
             "input_spec": self.loads(row["input_spec"], {}),
             "output_spec": self.loads(row["output_spec"], {}),
             "missed_policy": row["missed_policy"],
@@ -684,11 +690,32 @@ class ScheduledJobRecordStore:
         }
 
 
+def _contract_storage(value: Any) -> dict[str, Any]:
+    if not value:
+        return {}
+    if hasattr(value, "to_storage_dict"):
+        return value.to_storage_dict()
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def _contract_from_row(row: sqlite3.Row, loads: Callable[[str | None, Any], Any]) -> dict[str, Any]:
+    try:
+        raw = row["capability_contract"]
+    except (IndexError, KeyError):
+        return {}
+    loaded = loads(raw, {})
+    return loaded if isinstance(loaded, dict) else {}
+
+
 def _json_default(field: str) -> Any:
     if field in {"skill_ids", "recipient_ids"}:
         return []
     if field == "tool_scope":
         return dict(_DEFAULT_TOOL_SCOPE)
+    if field == "capability_contract":
+        return {}
     return {}
 
 

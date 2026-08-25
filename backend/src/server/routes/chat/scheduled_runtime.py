@@ -35,6 +35,8 @@ SCHEDULED_JOB_UNATTENDED_DENYLIST: frozenset[str] = frozenset({
     "UpdateJob",
     "DeleteJob",
     "ConfirmJob",
+    "CheckJobFeasibility",
+    "RecheckJobCapabilities",
 })
 
 

@@ -45,6 +45,10 @@ function readApiDetail(payload: unknown, status: number): string {
   if (!payload || typeof payload !== 'object') return `HTTP ${status}`;
   const detail = (payload as { detail?: unknown }).detail;
   if (typeof detail === 'string' && detail.trim()) return detail;
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
   if (Array.isArray(detail)) {
     const messages = detail.map((item) => {
       if (typeof item === 'string') return item;
@@ -69,6 +73,54 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 function readBool(value: unknown): boolean {
   return value === true;
+}
+
+function mapContract(raw: unknown): ScheduledJob['capabilityContract'] {
+  const source = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const claimed = Array.isArray(source.claimed) ? source.claimed : [];
+  const missing = Array.isArray(source.missing) ? source.missing : [];
+  const blocked = Array.isArray(source.blockedByPermission) ? source.blockedByPermission : [];
+  return {
+    version: Number(source.version ?? 1),
+    verdict: source.verdict === 'ok' || source.verdict === 'partial' ? source.verdict : 'generate_only',
+    taskIntent: String(source.taskIntent ?? ''),
+    requiredIntents: Array.isArray(source.requiredIntents) ? source.requiredIntents.map((item) => String(item)) : [],
+    claimed: claimed.filter((item) => item && typeof item === 'object').map((item) => {
+      const row = item as Record<string, unknown>;
+      return {
+        capabilityId: String(row.capabilityId ?? ''),
+        kind: String(row.kind ?? ''),
+        resourceId: String(row.resourceId ?? ''),
+        serverId: String(row.serverId ?? ''),
+        toolName: String(row.toolName ?? ''),
+        tags: Array.isArray(row.tags) ? row.tags.map((tag) => String(tag)) : [],
+        unattendedOk: row.unattendedOk === true,
+        layer: row.layer === 'required' ? 'required' : 'optional',
+      };
+    }),
+    missing: missing.filter((item) => item && typeof item === 'object').map((item) => {
+      const row = item as Record<string, unknown>;
+      return {
+        intent: String(row.intent ?? ''),
+        reason: String(row.reason ?? ''),
+        suggestedAction: String(row.suggestedAction ?? ''),
+      };
+    }),
+    blockedByPermission: blocked.filter((item) => item && typeof item === 'object').map((item) => {
+      const row = item as Record<string, unknown>;
+      return {
+        intent: String(row.intent ?? ''),
+        reason: String(row.reason ?? ''),
+        suggestedAction: String(row.suggestedAction ?? ''),
+      };
+    }),
+    acceptedPartial: source.acceptedPartial === true,
+    allowHttpRequest: source.allowHttpRequest === true,
+    allowWebFetch: source.allowWebFetch === true,
+    allowBash: source.allowBash === true,
+    skillIds: Array.isArray(source.skillIds) ? source.skillIds.map((item) => String(item)) : [],
+    confirmedAt: source.confirmedAt ? String(source.confirmedAt) : null,
+  };
 }
 
 function mapToolScope(raw: unknown): JobToolScope {
@@ -118,6 +170,10 @@ function mapJob(raw: Record<string, unknown>): ScheduledJob {
     maxConsecutiveFailures: Number(raw.maxConsecutiveFailures ?? 3),
     maxFiringsPerDay: Number(raw.maxFiringsPerDay ?? 8),
     createdFromSessionId: String(raw.createdFromSessionId ?? ''),
+    capabilityContract: mapContract(raw.capabilityContract),
+    firingToolsPreview: Array.isArray(raw.firingToolsPreview)
+      ? raw.firingToolsPreview.map((item) => String(item))
+      : [],
     createdAt: String(raw.createdAt ?? ''),
     updatedAt: String(raw.updatedAt ?? ''),
     archivedAt: raw.archivedAt ? String(raw.archivedAt) : null,
@@ -141,6 +197,7 @@ function mapRun(raw: Record<string, unknown>): ScheduledJobRun {
     errorCode: String(raw.errorCode ?? ''),
     errorMessage: String(raw.errorMessage ?? ''),
     outputManifest: manifest,
+    resultText: String(raw.resultText ?? (manifest as { resultText?: unknown }).resultText ?? ''),
     deliveryStatus: String(raw.deliveryStatus ?? 'not_applicable'),
     startedAt: raw.startedAt ? String(raw.startedAt) : null,
     completedAt: raw.completedAt ? String(raw.completedAt) : null,

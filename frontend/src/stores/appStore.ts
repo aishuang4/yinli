@@ -27,6 +27,8 @@ interface AppState {
   activeWorkspaceId: string;
   /** 当前会话和运行所属 Project。 */
   activeProjectId: string;
+  /** 通知入口要打开的定时任务，消费后清空。 */
+  pendingJobId: string | null;
 
   // Actions
   /** 切换视图 */
@@ -39,6 +41,10 @@ interface AppState {
   setBackendConnected: (connected: boolean) => void;
   /** 原子切换 Workspace / Project，避免出现不一致的中间状态。 */
   setActiveContext: (workspaceId: string, projectId: string) => void;
+  /** 从通知跳转到指定定时任务。 */
+  openScheduledJob: (jobId: string) => void;
+  /** 消费通知跳转后的 pending Job。 */
+  clearPendingJobId: () => void;
 }
 
 export const useAppStore = create<AppState>()((set) => ({
@@ -49,6 +55,7 @@ export const useAppStore = create<AppState>()((set) => ({
   backendConnected: false,
   activeWorkspaceId: 'default',
   activeProjectId: 'default',
+  pendingJobId: null,
 
   // Actions
   setView: (view) => set({ currentView: view }),
@@ -60,4 +67,10 @@ export const useAppStore = create<AppState>()((set) => ({
     activeWorkspaceId,
     activeProjectId,
   }),
+  openScheduledJob: (jobId) => set({
+    currentView: 'jobs',
+    workspaceMode: 'workstation',
+    pendingJobId: jobId,
+  }),
+  clearPendingJobId: () => set({ pendingJobId: null }),
 }));

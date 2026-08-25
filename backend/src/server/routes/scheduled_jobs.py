@@ -50,6 +50,9 @@ class ScheduledJobCreateRequest(BaseModel):
     max_consecutive_failures: int = Field(default=3, alias="maxConsecutiveFailures")
     max_firings_per_day: int = Field(default=8, alias="maxFiringsPerDay")
     required_successes: int = Field(default=3, alias="requiredSuccesses")
+    task_intent: str = Field(default="", alias="taskIntent")
+    accept_partial: bool = Field(default=False, alias="acceptPartial")
+    required_intents: list[str] = Field(default_factory=list, alias="requiredIntents")
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
 
@@ -95,6 +98,48 @@ def _raise_job_http(exc: Exception) -> None:
     raise exc
 
 
+def _firing_preview(job: ScheduledJob) -> list[str]:
+    try:
+        from src.scheduler.firing_toolkit import assemble_scheduled_firing_toolkit_spec
+
+        spec = assemble_scheduled_firing_toolkit_spec(job)
+        return list(spec.get("firing_tools_preview") or [])
+    except Exception:
+        return ["Read", "Grep", "Glob", "Write", "Edit", "FinalAnswerStart"]
+
+
+@router.post("/scheduled-jobs/{job_id}/recheck-capabilities")
+async def recheck_scheduled_job_capabilities(job_id: str) -> dict[str, Any]:
+    """用合同原话重评能力；空合同 422。"""
+
+    _require_enabled()
+    from src.scheduler.feasibility import contract_from_feasibility, evaluate_job_feasibility
+
+    try:
+        job = _service.get_job(job_id)
+        intent = job.capability_contract.task_intent
+        if not intent:
+            raise HTTPException(status_code=422, detail="空合同必须提供 task_intent")
+        if _service.has_non_terminal_firing(job_id):
+            raise HTTPException(status_code=409, detail="任务正在执行，不能重评合同")
+        result = evaluate_job_feasibility(
+            task_intent=intent,
+            agent_id=job.agent_id,
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            required_intents=tuple(job.capability_contract.required_intents),
+        )
+        updated = _service.update_job(job_id, {
+            "capability_contract": contract_from_feasibility(result).to_storage_dict(),
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_job_http(exc)
+        raise
+    return serialize_job(updated)
+
+
 def serialize_job(job: ScheduledJob) -> dict[str, Any]:
     return {
         "id": job.id,
@@ -129,6 +174,8 @@ def serialize_job(job: ScheduledJob) -> dict[str, Any]:
         "maxConsecutiveFailures": job.max_consecutive_failures,
         "maxFiringsPerDay": job.max_firings_per_day,
         "createdFromSessionId": job.created_from_session_id,
+        "capabilityContract": job.capability_contract.model_dump(by_alias=True),
+        "firingToolsPreview": _firing_preview(job),
         "createdAt": job.created_at,
         "updatedAt": job.updated_at,
         "archivedAt": job.archived_at,
@@ -136,6 +183,15 @@ def serialize_job(job: ScheduledJob) -> dict[str, Any]:
 
 
 def serialize_firing(firing: ScheduledJobRun) -> dict[str, Any]:
+    manifest = dict(firing.output_manifest or {})
+    result_text = str(manifest.get("resultText") or "").strip()
+    if not result_text and firing.chat_session_id:
+        from src.storage.database import get_latest_assistant_chat_message
+
+        record = get_latest_assistant_chat_message(firing.chat_session_id)
+        result_text = str((record or {}).get("content") or "").strip()
+        if result_text:
+            manifest["resultText"] = result_text
     return {
         "id": firing.id,
         "jobId": firing.job_id,
@@ -148,7 +204,8 @@ def serialize_firing(firing: ScheduledJobRun) -> dict[str, Any]:
         "chatRunId": firing.chat_run_id,
         "errorCode": firing.error_code,
         "errorMessage": firing.error_message,
-        "outputManifest": firing.output_manifest,
+        "outputManifest": manifest,
+        "resultText": result_text,
         "deliveryStatus": firing.delivery_status,
         "startedAt": firing.started_at,
         "completedAt": firing.completed_at,
@@ -171,6 +228,34 @@ async def list_scheduled_jobs(
         "jobs": [serialize_job(item) for item in jobs],
         "enabled": is_scheduled_jobs_enabled(),
     }
+
+
+class FeasibilityRequest(BaseModel):
+    """创建前能力门禁查询。"""
+
+    task_intent: str = Field(alias="taskIntent")
+    agent_id: str = Field(alias="agentId")
+    workspace_id: str = Field(alias="workspaceId")
+    project_id: str = Field(alias="projectId")
+    required_intents: list[str] = Field(default_factory=list, alias="requiredIntents")
+
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+
+
+@router.post("/scheduled-jobs/feasibility")
+async def check_scheduled_job_feasibility(data: FeasibilityRequest) -> dict[str, Any]:
+    """不写库的能力门禁。"""
+
+    from src.scheduler.feasibility import evaluate_job_feasibility
+
+    result = evaluate_job_feasibility(
+        task_intent=data.task_intent,
+        agent_id=data.agent_id,
+        workspace_id=data.workspace_id,
+        project_id=data.project_id,
+        required_intents=tuple(data.required_intents),
+    )
+    return result.to_public_json()
 
 
 @router.post("/scheduled-jobs", status_code=201)

@@ -82,6 +82,8 @@ def test_main_registers_scheduled_job_and_notification_routes():
     assert "/api/scheduled-jobs/{job_id}/run-now" in paths
     assert "/api/notifications" in paths
     assert "/api/notifications/unread-count" in paths
+    assert "/api/notifications/stream" in paths
+    assert "/api/notifications/settings" in paths
 
 
 def test_flag_off_write_is_403_and_list_still_readable(client):

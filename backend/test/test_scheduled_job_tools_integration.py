@@ -66,7 +66,7 @@ class _FakeAskUserResumeAgent:
         yield _FakeAgentScopeEvent({
             "type": "TEXT_BLOCK_DELTA",
             "reply_id": "reply-askuser-resume",
-            "delta": "字段已记下。请到「定时任务」页点击确认启用。",
+            "delta": "字段已记下。任务仍待启用，本轮 AskUser 恢复不会自动激活。",
         })
         yield _FakeAgentScopeEvent({
             "type": "REPLY_END",
@@ -108,7 +108,7 @@ def _schedule_kwargs(**overrides) -> dict:
 
 
 def test_schedule_job_pending_then_rest_confirm_activates(client):
-    """ScheduleJob 只写 pending_confirmation；Jobs 页 REST confirm 才变成 active。"""
+    """ScheduleJob 只写 pending_confirmation；Jobs 页 REST confirm 仍可作为启用路径。"""
 
     tools = _tools()
     created = _payload(_run(tools["ScheduleJob"](**_schedule_kwargs())))
@@ -130,6 +130,28 @@ def test_schedule_job_pending_then_rest_confirm_activates(client):
     stored = ScheduledJobService().get_job(job_id)
     assert stored.status == "active"
     assert stored.next_run_at == body["nextRunAt"]
+
+
+def test_confirm_job_tool_activates_same_as_rest(client):
+    """对话 ConfirmJob 与 REST confirm 走同一 confirm()，都能把任务变成 active。"""
+
+    tools = _tools()
+    created = _payload(_run(tools["ScheduleJob"](**_schedule_kwargs(name="对话启用周报"))))
+    job_id = created["jobId"]
+    assert created["status"] == "pending_confirmation"
+    assert "ConfirmJob(" in created["message"]
+
+    confirmed = _run(tools["ConfirmJob"](job_id=job_id))
+    body = _payload(confirmed)
+    assert confirmed.state == ToolResultState.SUCCESS
+    assert body["status"] == "active"
+    assert body["nextRunAt"]
+    assert "任务已启用" in body["message"]
+
+    rest = client.get(f"/api/scheduled-jobs/{job_id}")
+    assert rest.status_code == 200
+    assert rest.json()["status"] == "active"
+    assert rest.json()["nextRunAt"] == body["nextRunAt"]
 
 
 def test_list_jobs_then_pause_job_updates_same_job_id(client):
@@ -239,7 +261,7 @@ def test_askuser_resume_does_not_activate_pending_job(client, monkeypatch):
         assert rest.status_code == 200
         assert rest.json()["status"] == "pending_confirmation"
         assert any(
-            "定时任务" in json.dumps(event.data, ensure_ascii=False, default=str)
+            "仍待启用" in json.dumps(event.data, ensure_ascii=False, default=str)
             for event in events
         )
     finally:

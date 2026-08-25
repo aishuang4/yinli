@@ -25,6 +25,8 @@ from src.scheduler.schedule import (
     validate_schedule_expr,
 )
 from src.scheduler.service import ScheduledJobService
+from src.scheduler.capability_contract import JobCapabilityContract
+from src.scheduler.firing_toolkit import assemble_scheduled_firing_toolkit_spec
 from src.scheduler.settings import is_scheduled_jobs_enabled
 from src.server.routes.chat.models import ChatSession, ChatStore
 from src.storage import database
@@ -251,6 +253,54 @@ def test_create_job_writes_pending_confirmation_and_all_false_tool_scope(isolate
     assert job.mode == "agent"
     assert job.tool_scope.model_dump() == DEFAULT_JOB_TOOL_SCOPE
     assert job.next_run_at is None
+    assert job.capability_contract.verdict == "generate_only"
+
+
+def test_capability_contract_roundtrip_and_empty_json(isolated_db):
+    service = _service()
+    contract = JobCapabilityContract.model_validate({
+        "verdict": "ok",
+        "taskIntent": "每周五发周报邮件",
+        "requiredIntents": ["email.send", "file.write"],
+        "claimed": [{
+            "capabilityId": "mcp:gmail-send-email",
+            "kind": "mcp",
+            "resourceId": "gmail-send-email",
+            "toolName": "send_email",
+            "tags": ["email.send"],
+            "unattendedOk": True,
+        }],
+    })
+    job = _weekly_job(service, name="合同往返", capability_contract=contract)
+    stored = service.get_job(job.id)
+    assert stored.capability_contract.verdict == "ok"
+    assert stored.capability_contract.task_intent == "每周五发周报邮件"
+    assert stored.capability_contract.claimed[0].capability_id == "mcp:gmail-send-email"
+    assert stored.tool_scope.allow_mcp is False
+    empty = _weekly_job(service, name="空合同")
+    assert empty.capability_contract.verdict == "generate_only"
+    assert "capability_contract" in BASE_SCHEMA_SQL
+
+
+def test_empty_contract_assemble_keeps_bash_ignores_dirty_mcp(isolated_db):
+    service = _service()
+    job = _weekly_job(service, name="脏五旗")
+    service.update_job(job.id, {
+        "tool_scope": {
+            "allow_bash": True,
+            "allow_mcp": True,
+            "allow_http": True,
+            "allow_web": True,
+            "allow_knowledge": True,
+        },
+    })
+    stored = service.get_job(job.id)
+    spec = assemble_scheduled_firing_toolkit_spec(stored)
+    assert spec["tool_scope"]["allow_bash"] is True
+    assert spec["tool_scope"]["allow_mcp"] is False
+    assert spec["legacy_tool_scope_ignored"] is True
+    assert "FinalAnswerStart" in spec["firing_tools_preview"]
+    assert "AskUser" not in spec["firing_tools_preview"]
 
 
 def test_create_job_rejects_retry_once_and_duplicate_name(isolated_db):

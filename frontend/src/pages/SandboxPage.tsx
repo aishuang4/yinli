@@ -19,9 +19,10 @@ export function SandboxPage() {
   const [caseName, setCaseName] = useState('');
   const [savingCase, setSavingCase] = useState(false);
 
+  const chatAgents = useMemo(() => agents.filter((agent) => agent.role !== 'job'), [agents]);
   const selectedAgent = useMemo(
-    () => agents.find((agent) => agent.id === agentId) || agents[0] || null,
-    [agentId, agents]
+    () => chatAgents.find((agent) => agent.id === agentId) || chatAgents[0] || null,
+    [agentId, chatAgents]
   );
   const runtimeAgent = selectedAgent;
 
@@ -117,7 +118,7 @@ export function SandboxPage() {
         loading={loading}
         mode={mode}
         setMode={setMode}
-        agents={agents}
+        agents={chatAgents}
         selectedAgent={selectedAgent}
         runtimeAgent={runtimeAgent}
         agentId={agentId}

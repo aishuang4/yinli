@@ -112,6 +112,14 @@ export function ScheduledJobHistory({
                 </>
               )}
             />
+            {run.resultText ? (
+              <div className="px-4 pb-4">
+                <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">运行结果</div>
+                <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap rounded-md bg-[var(--color-bg-primary)] px-3 py-2 text-xs leading-6 text-[var(--color-text-primary)]">
+                  {run.resultText}
+                </pre>
+              </div>
+            ) : null}
             {files.length > 0 ? (
               <div className="px-4 pb-4">
                 <div className="mb-2 text-xs text-[var(--color-text-tertiary)]">产物 manifest</div>

@@ -261,6 +261,8 @@ def ensure_db() -> None:
             )
             _ensure_column(conn, "chat_sessions", "mode", "TEXT NOT NULL DEFAULT 'agent'")
             _ensure_column(conn, "agents", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "agents", "role", "TEXT NOT NULL DEFAULT 'chat'")
+            _ensure_column(conn, "agents", "job_toolkit", "TEXT NOT NULL DEFAULT '{}'")
             _ensure_column(conn, "mcp_servers", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "http_tools", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "skills", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
@@ -283,6 +285,7 @@ def ensure_db() -> None:
             _ensure_column(conn, "subagent_invocations", "process_instance_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "subagent_invocations", "result_ref", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "subagent_invocations", "delivery_status", "TEXT NOT NULL DEFAULT 'none'")
+            _ensure_column(conn, "scheduled_jobs", "capability_contract", "TEXT NOT NULL DEFAULT '{}'")
             _drop_column_if_exists(conn, "agents", "callable_agents")
             _drop_column_if_exists(conn, "agents", "max_depth")
             _drop_column_if_exists(conn, "chat_messages", "subagent_calls")
@@ -1121,6 +1124,30 @@ def append_workflow_event(
         content=content,
         payload=payload,
     )
+
+
+def get_latest_assistant_chat_message(session_id: str) -> dict[str, Any] | None:
+    """读取某个会话里最近一条助手消息。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM chat_messages
+            WHERE session_id = ? AND role = 'assistant'
+            ORDER BY sort_order DESC, created_at DESC
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "sessionId": row["session_id"],
+        "role": row["role"],
+        "content": row["content"] or "",
+    }
 
 
 def get_latest_user_chat_message(session_id: str, content: str | None = None) -> dict[str, Any] | None:

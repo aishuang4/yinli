@@ -21,6 +21,18 @@ from src.agents.factory import invalidate_agent
 from src.agents.runtime_types import MAX_REACT_ITERS, WORKSPACE_DIR
 from src.config.runtime_paths import DATA_ROOT
 from src.config.runtime_settings import get_current_model_options, get_effective_model_settings
+from src.scheduler.job_toolkit import (
+    CHAT_ROLE,
+    JOB_ROLE,
+    JobAgentError,
+    JobToolkit,
+    bound_resource_ids,
+    empty_job_toolkit,
+    parse_agent_role,
+    parse_job_toolkit,
+    prune_job_toolkit,
+    validate_job_agent_config,
+)
 from src.scheduler.service import ScheduledJobService
 from src.storage.database import (
     delete_agent as db_delete_agent,
@@ -43,6 +55,34 @@ def _pause_jobs_for_removed_agent_skills(agent_id: str, skill_ids: set[str]) -> 
             "skill_unbound",
             agent_id=agent_id,
             skill_id=skill_id,
+        )
+
+
+def _pause_jobs_for_agent_capability_change(old_agent: "AgentResponse", new_agent: "AgentResponse") -> None:
+    """MCP/HTTP 解绑或权限降级时按合同暂停 Job。"""
+
+    from src.scheduler.unattended_policy import agent_approval_policy
+
+    removed_mcp = set(old_agent.mcp_tools) - set(new_agent.mcp_tools)
+    removed_knowledge = set(old_agent.knowledge_tools) - set(new_agent.knowledge_tools)
+    old_policy = agent_approval_policy(old_agent)
+    new_policy = agent_approval_policy(new_agent)
+    old_net = bool(getattr(old_agent.guardrails, "network_enabled", True))
+    new_net = bool(getattr(new_agent.guardrails, "network_enabled", True))
+    permission_revoked = (
+        old_policy != new_policy
+        or (old_net and not new_net)
+    )
+    if removed_mcp or removed_knowledge:
+        _job_service.pause_jobs_for_removed_agent_tools(
+            new_agent.id,
+            mcp_ids=removed_mcp,
+            knowledge_ids=removed_knowledge,
+        )
+    if permission_revoked:
+        _job_service.pause_jobs_for_removed_agent_tools(
+            new_agent.id,
+            permission_revoked=True,
         )
 
 
@@ -145,6 +185,8 @@ class AgentCreate(BaseModel):
     plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig", description="历史兼容字段：旧计划模型配置")
     guardrails: Guardrails = Field(default_factory=Guardrails, description="安全边界配置")
     workspace_id: str = Field(default="default", alias="workspaceId")
+    role: str = Field(default="chat", description="chat=对话助手，job=定时任务执行者")
+    job_toolkit: JobToolkit = Field(default_factory=JobToolkit, alias="jobToolkit")
 
     model_config = {"populate_by_name": True}
 
@@ -162,6 +204,8 @@ class AgentUpdate(BaseModel):
     tags: Optional[list[str]] = None
     plan_config: Optional[PlanConfig] = Field(None, alias="planConfig")
     guardrails: Optional[Guardrails] = None
+    role: Optional[str] = None
+    job_toolkit: Optional[JobToolkit] = Field(None, alias="jobToolkit")
 
     model_config = {"populate_by_name": True}
 
@@ -184,6 +228,8 @@ class AgentResponse(BaseModel):
     created_at: str
     updated_at: str
     workspace_id: str = Field(default="default", alias="workspaceId")
+    role: str = Field(default="chat")
+    job_toolkit: JobToolkit = Field(default_factory=JobToolkit, alias="jobToolkit")
 
     model_config = {"populate_by_name": True}
 
@@ -250,6 +296,8 @@ def _build_default_agent() -> AgentResponse:
         "created_at": now,
         "updated_at": now,
         "workspaceId": "default",
+        "role": "chat",
+        "jobToolkit": {"required": [], "optional": []},
     })
 
 
@@ -281,6 +329,44 @@ def _upgrade_default_agent_prompt(agent: AgentResponse) -> None:
     _agents[agent.id] = updated_agent
     invalidate_agent(agent.id)
     upsert_agent(updated_agent.model_dump(by_alias=True))
+
+
+def _apply_job_agent_fields(
+    *,
+    agent_id: str,
+    role: str,
+    job_toolkit: JobToolkit | dict | None,
+    guardrails: Guardrails,
+    mcp_tools: list[str],
+    knowledge_tools: list[str],
+    skills: list[str],
+) -> tuple[str, JobToolkit, Guardrails, list[str], list[str], list[str]]:
+    """校验角色并同步绑定字段。Job Agent 强制可信工具。"""
+
+    parsed_role = parse_agent_role(role)
+    toolkit = parse_job_toolkit(job_toolkit)
+    try:
+        toolkit = validate_job_agent_config(
+            agent_id=agent_id,
+            role=parsed_role,
+            toolkit=toolkit,
+            guardrails=guardrails,
+        )
+    except JobAgentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if parsed_role == JOB_ROLE:
+        bound = bound_resource_ids(toolkit)
+        mcp_tools = list(bound["mcp"])
+        knowledge_tools = list(dict.fromkeys([*bound["http"], *bound["knowledge"]]))
+        skills = list(bound["skill"])
+        guardrails = guardrails.model_copy(update={
+            "human_approval": False,
+            "tool_permission_profile": "trusted_tools",
+            "tool_permission_mode": "bypass",
+        })
+    else:
+        toolkit = empty_job_toolkit()
+    return parsed_role, toolkit, guardrails, mcp_tools, knowledge_tools, skills
 
 
 def _load_agents() -> None:
@@ -326,16 +412,19 @@ def remove_mcp_tools_from_agents(tool_ids: set[str]) -> int:
     now = datetime.now(timezone.utc).isoformat()
     for agent_id, agent in list(_agents.items()):
         next_tools = [tool_id for tool_id in agent.mcp_tools if tool_id not in tool_ids]
-        if len(next_tools) == len(agent.mcp_tools):
+        next_toolkit = prune_job_toolkit(agent.job_toolkit, mcp_ids=tool_ids)
+        if len(next_tools) == len(agent.mcp_tools) and next_toolkit == agent.job_toolkit:
             continue
 
         updated_agent = agent.model_copy(update={
             "mcp_tools": next_tools,
+            "job_toolkit": next_toolkit,
             "updated_at": now,
         })
         _agents[agent_id] = updated_agent
         invalidate_agent(agent_id)
         upsert_agent(updated_agent.model_dump(by_alias=True))
+        _job_service.pause_jobs_for_removed_agent_tools(agent_id, mcp_ids=tool_ids)
         changed += 1
     return changed
 
@@ -455,6 +544,15 @@ async def create_agent(data: AgentCreate) -> AgentResponse:
     """
     now = datetime.now(timezone.utc).isoformat()
     next_id = str(uuid.uuid4())
+    role, toolkit, guardrails, mcp_tools, knowledge_tools, skills = _apply_job_agent_fields(
+        agent_id=next_id,
+        role=data.role,
+        job_toolkit=data.job_toolkit,
+        guardrails=data.guardrails,
+        mcp_tools=list(data.mcp_tools),
+        knowledge_tools=list(data.knowledge_tools),
+        skills=list(data.skills),
+    )
     agent = AgentResponse.model_validate({
         "id": next_id,
         "name": data.name,
@@ -462,16 +560,18 @@ async def create_agent(data: AgentCreate) -> AgentResponse:
         "description": data.description,
         "system_prompt": data.system_prompt,
         "modelConfig": data.model_config_data,
-        "mcpTools": data.mcp_tools,
-        "knowledgeTools": data.knowledge_tools,
-        "skills": data.skills,
+        "mcpTools": mcp_tools,
+        "knowledgeTools": knowledge_tools,
+        "skills": skills,
         "tags": data.tags,
         "planConfig": data.plan_config,
-        "guardrails": data.guardrails,
+        "guardrails": guardrails,
         "status": "idle",
         "created_at": now,
         "updated_at": now,
         "workspaceId": data.workspace_id,
+        "role": role,
+        "jobToolkit": toolkit.model_dump(),
     })
     _agents[agent.id] = agent
     upsert_agent(agent.model_dump(by_alias=True))
@@ -527,11 +627,32 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
         update_dict["knowledgeTools"] = update_dict.pop("knowledge_tools")
     if "plan_config" in update_dict:
         update_dict["planConfig"] = update_dict.pop("plan_config")
+    if "job_toolkit" in update_dict:
+        update_dict["jobToolkit"] = update_dict.pop("job_toolkit")
 
     # 合并更新
     existing_dict = existing.model_dump(by_alias=True)
     existing_dict.update(update_dict)
     existing_dict["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if agent_id == "default":
+        existing_dict["role"] = CHAT_ROLE
+        existing_dict["jobToolkit"] = empty_job_toolkit().model_dump()
+    else:
+        role, toolkit, guardrails, mcp_tools, knowledge_tools, skills = _apply_job_agent_fields(
+            agent_id=agent_id,
+            role=str(existing_dict.get("role") or CHAT_ROLE),
+            job_toolkit=existing_dict.get("jobToolkit"),
+            guardrails=Guardrails.model_validate(existing_dict.get("guardrails") or {}),
+            mcp_tools=list(existing_dict.get("mcpTools") or []),
+            knowledge_tools=list(existing_dict.get("knowledgeTools") or []),
+            skills=list(existing_dict.get("skills") or []),
+        )
+        existing_dict["role"] = role
+        existing_dict["jobToolkit"] = toolkit.model_dump()
+        existing_dict["guardrails"] = guardrails.model_dump(by_alias=True)
+        existing_dict["mcpTools"] = mcp_tools
+        existing_dict["knowledgeTools"] = knowledge_tools
+        existing_dict["skills"] = skills
 
     updated_agent = AgentResponse(**existing_dict)
     removed_skills = set()
@@ -542,6 +663,9 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
     upsert_agent(updated_agent.model_dump(by_alias=True))
     if removed_skills:
         _pause_jobs_for_removed_agent_skills(agent_id, removed_skills)
+    _pause_jobs_for_agent_capability_change(existing, updated_agent)
+    if existing.role == JOB_ROLE and updated_agent.role != JOB_ROLE:
+        _job_service.pause_for_resource_change("needs_job_update", agent_id=agent_id)
     return updated_agent
 
 
@@ -565,6 +689,9 @@ def remove_knowledge_tools_from_agents(tool_ids: set[str]) -> int:
         _agents[agent_id] = updated_agent
         invalidate_agent(agent_id)
         upsert_agent(updated_agent.model_dump(by_alias=True))
+        _job_service.pause_jobs_for_removed_agent_tools(
+            agent_id, knowledge_ids=tool_ids,
+        )
         changed += 1
     return changed
 

@@ -51,7 +51,9 @@ BASE_SCHEMA_SQL = """
         guardrails TEXT NOT NULL,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'chat',
+        job_toolkit TEXT NOT NULL DEFAULT '{}'
     );
     CREATE TABLE IF NOT EXISTS mcp_servers (
         id TEXT PRIMARY KEY,
@@ -522,6 +524,7 @@ BASE_SCHEMA_SQL = """
         frozen_prompt TEXT NOT NULL,
         skill_ids TEXT NOT NULL DEFAULT '[]',
         tool_scope TEXT NOT NULL DEFAULT '{"allow_bash":false,"allow_http":false,"allow_web":false,"allow_mcp":false,"allow_knowledge":false}',
+        capability_contract TEXT NOT NULL DEFAULT '{}',
         input_spec TEXT NOT NULL DEFAULT '{}',
         output_spec TEXT NOT NULL DEFAULT '{}',
         missed_policy TEXT NOT NULL DEFAULT 'catch_up_once',
