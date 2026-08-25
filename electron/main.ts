@@ -415,7 +415,8 @@ async function ensurePythonBackend(): Promise<boolean> {
       }
     });
 
-    const ready = await waitForPythonBackend(15000, () => backendExited);
+    // PyInstaller 单文件首次解压大型科学计算依赖时可能超过 15 秒。
+    const ready = await waitForPythonBackend(60000, () => backendExited);
     if (!ready) {
       await stopPythonBackend();
       if (!backendExited) {

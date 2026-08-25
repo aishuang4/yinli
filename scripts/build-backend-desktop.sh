@@ -11,16 +11,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR/backend"
 
 echo "构建桌面端后端可执行文件..."
-uv run --with pyinstaller pyinstaller \
-  --name backend-server \
-  --onefile \
-  --clean \
-  --paths . \
-  --hidden-import src.server.main \
-  --hidden-import src.server.routes.chat \
-  --hidden-import src.agents.factory \
-  --collect-all agentscope.tool._builtin._scripts \
-  --collect-all zvec \
-  src/server/desktop_entry.py
+uv sync
+uv run --with pyinstaller pyinstaller --clean --noconfirm backend-server.spec
 
 echo "后端可执行文件已输出到 backend/dist/"

@@ -80,6 +80,10 @@ def scope_guardrails_to_project(
 
     project_path = project_root.expanduser().resolve()
     agent_path = Path(guardrails.filesystem_scope).expanduser().resolve()
+    # 安装包升级后，历史 Agent 可能仍保存旧 userData 下的 workspace。
+    # 该目录已不存在时按当前 Project root 迁移，避免旧路径导致整轮对话被拒绝。
+    if not agent_path.is_dir() and _is_legacy_desktop_scope(agent_path, project_path):
+        agent_path = project_path
     if project_path.is_relative_to(agent_path):
         effective_scope = project_path
     elif agent_path.is_relative_to(project_path):
@@ -101,6 +105,15 @@ def scope_guardrails_to_project(
         timeout_seconds=guardrails.timeout_seconds,
         permission_profile=guardrails.permission_profile,
     )
+
+
+def _is_legacy_desktop_scope(agent_path: Path, project_path: Path) -> bool:
+    """只识别历史桌面安装目录，避免吞掉用户配置错误。"""
+
+    if agent_path == project_path:
+        return False
+    legacy_markers = ("agent-workstation-desktop", ".agent-workstation")
+    return any(marker in str(agent_path).lower() for marker in legacy_markers)
 
 
 def _profile_from_legacy_tool_mode(mode: object) -> str:

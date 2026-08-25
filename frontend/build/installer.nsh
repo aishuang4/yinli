@@ -1,6 +1,8 @@
 ; Windows NSIS 卸载时询问是否删除 YINLI 用户数据。
 ; 只允许删除固定的当前目录和历史兼容目录，默认保留数据。
 !include "LogicLib.nsh"
+; electron-builder 将 NSIS 警告视为错误；该变量在卸载宏展开后才会被引用。
+!pragma warning disable 6001
 Var dataCleanupFailed
 
 !macro customUnInstall

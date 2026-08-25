@@ -11,7 +11,11 @@ frontend/desktop-package/
 release/
 backend/build/
 backend/dist/
+backend/builddeps/
+backend/pyinstaller_hooks/
 backend/*.spec
+!backend/backend-server.spec
+tmp-backend-verify/
 
 # IDE
 .vscode/
