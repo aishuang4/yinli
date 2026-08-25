@@ -11,7 +11,11 @@ frontend/desktop-package/
 release/
 backend/build/
 backend/dist/
+backend/builddeps/
+backend/pyinstaller_hooks/
 backend/*.spec
+!backend/backend-server.spec
+tmp-backend-verify/
 
 # IDE
 .vscode/
@@ -32,6 +36,9 @@ backend/data/
 /skills/
 /tmp/
 /frontend/build/
+!/frontend/build/
+/frontend/build/*
+!/frontend/build/installer.nsh
 
 # Python
 __pycache__/

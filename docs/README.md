@@ -38,6 +38,8 @@
 - `docs/agentscope-2.0.5-manual-test-script.md`：AgentScope `2.0.5` 人工验收步骤、精确提示词、预期结果和发布阻断条件。
 - `docs/dynamic-workflows-plan.md`：Dynamic Workflow 的 Script Review、Runtime Cockpit 和 AgentScope Bridge 路线。
 - `docs/electron-packaging-plan.md`：桌面正式打包、签名、公证、数据目录和 Windows 验证。
+- `docs/windows-data-uninstall-and-settings-v1.md`：Windows 卸载时保留/删除用户数据、系统设置目录入口和实现验收。
+- `docs/windows-data-uninstall-test-case.md`：Windows 用户数据与卸载的可执行测试用例。
 
 ## 维护规则
 

@@ -31,6 +31,7 @@ from src.server.routes.chat.handlers.sessions import delete_session, list_sessio
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import build_chat_run_context
 from src.server.routes.chat.runtime import scope_guardrails_to_project
+from src.storage.agent_defaults import is_stale_desktop_default_project_path
 from src.server.routes.chat.store import _append_user_message
 from src.server.routes.workspaces import (
     ProjectCreateRequest,
@@ -362,6 +363,39 @@ def test_project_root_intersects_agent_filesystem_scope(tmp_path):
             AgentGuardrails(filesystem_scope=str(tmp_path / "other")),
             project_root,
         )
+
+
+def test_legacy_desktop_scope_migrates_only_when_missing(tmp_path):
+    """历史桌面安装目录失效时迁移，用户仍存在的范围和未知错误不应被吞掉。"""
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    legacy_scope = tmp_path / "agent-workstation-desktop" / "workspace"
+    migrated = scope_guardrails_to_project(
+        AgentGuardrails(filesystem_scope=str(legacy_scope)),
+        project_root,
+    )
+    assert migrated.filesystem_scope == str(project_root.resolve())
+
+    existing_scope = tmp_path / "agent-workstation-desktop-existing"
+    existing_scope.mkdir()
+    with pytest.raises(ValueError, match="不相交"):
+        scope_guardrails_to_project(
+            AgentGuardrails(filesystem_scope=str(existing_scope)),
+            project_root,
+        )
+
+
+def test_stale_desktop_default_project_paths(tmp_path):
+    """仅将空值、临时目录和失效的桌面默认路径视为待迁移。"""
+
+    assert is_stale_desktop_default_project_path("")
+    assert is_stale_desktop_default_project_path(str(tmp_path / "agent-workstation-desktop" / "workspace"))
+    current = tmp_path / "project"
+    current.mkdir()
+    assert not is_stale_desktop_default_project_path(str(current))
+    unrelated = tmp_path / "user-project"
+    assert not is_stale_desktop_default_project_path(str(unrelated))
 
 
 def test_runtime_records_are_project_scoped(isolated_db, tmp_path):

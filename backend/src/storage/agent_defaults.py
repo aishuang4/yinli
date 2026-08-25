@@ -37,4 +37,12 @@ def is_macos_ephemeral_path(value: str) -> bool:
 def is_stale_desktop_default_project_path(value: str) -> bool:
     """判断历史安装版默认 Project 是否仍指向不可复用的临时位置。"""
 
-    return is_pyinstaller_temp_path(value) or is_macos_ephemeral_path(value)
+    # 安装包首次运行或更换 userData 位置后，旧数据库可能保留已不存在的根目录。
+    # 默认 Project 应迁移到当前桌面用户数据目录，由 runtime_paths 负责创建。
+    path = Path(value).expanduser()
+    return (
+        not value.strip()
+        or is_pyinstaller_temp_path(value)
+        or is_macos_ephemeral_path(value)
+        or (not path.is_dir() and "agent-workstation" in str(path).lower())
+    )
