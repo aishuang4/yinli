@@ -276,7 +276,15 @@ def _migrate_legacy_api_keys(stored: dict[str, Any]) -> dict[str, Any]:
                 continue
             legacy_key = str(raw.get("apiKey") or "").strip()
             if legacy_key:
-                set_model_api_key(str(provider_id), legacy_key)
+                try:
+                    set_model_api_key(str(provider_id), legacy_key)
+                except SecretStoreError:
+                    # 安全存储不可用时不能把历史明文继续留在 SQLite。
+                    raw.pop("apiKey", None)
+                    raw["apiKeyConfigured"] = False
+                    changed = True
+                    upsert_json_record(SYSTEM_SETTINGS_NAMESPACE, MODEL_SETTINGS_KEY, migrated)
+                    raise
             raw.pop("apiKey", None)
             raw["apiKeyConfigured"] = bool(
                 legacy_key
@@ -289,7 +297,14 @@ def _migrate_legacy_api_keys(stored: dict[str, Any]) -> dict[str, Any]:
         provider_id = str(migrated.get("provider") or "deepseek")
         legacy_key = str(migrated.get("apiKey") or "").strip()
         if legacy_key:
-            set_model_api_key(provider_id, legacy_key)
+            try:
+                set_model_api_key(provider_id, legacy_key)
+            except SecretStoreError:
+                # 顶层旧字段同样必须清除，避免凭据迁移失败时明文残留。
+                migrated.pop("apiKey", None)
+                migrated["apiKeyConfigured"] = False
+                upsert_json_record(SYSTEM_SETTINGS_NAMESPACE, MODEL_SETTINGS_KEY, migrated)
+                raise
         migrated.pop("apiKey", None)
         migrated["apiKeyConfigured"] = bool(
             legacy_key
@@ -303,12 +318,35 @@ def _migrate_legacy_api_keys(stored: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
+def _clear_unreadable_provider_key(stored: dict[str, Any], provider_id: str) -> dict[str, Any]:
+    """清除无法读取的凭据及其持久化配置标记，要求用户重新配置。"""
+
+    try:
+        delete_model_api_key(provider_id)
+    except SecretStoreError:
+        # Keychain/DPAPI 本身不可用时，至少清除 SQLite 中的旧明文和配置标记。
+        pass
+
+    cleared = deepcopy(stored)
+    provider_configs = cleared.get("providerConfigs")
+    if isinstance(provider_configs, dict):
+        config = provider_configs.get(provider_id)
+        if isinstance(config, dict):
+            config.pop("apiKey", None)
+            config["apiKeyConfigured"] = False
+    if str(cleared.get("provider") or "") == provider_id:
+        cleared.pop("apiKey", None)
+        cleared["apiKeyConfigured"] = False
+    upsert_json_record(SYSTEM_SETTINGS_NAMESPACE, MODEL_SETTINGS_KEY, cleared)
+    return cleared
+
+
 def get_model_settings_raw() -> dict[str, Any]:
     stored = get_json_record(SYSTEM_SETTINGS_NAMESPACE, MODEL_SETTINGS_KEY) or {}
     try:
         stored = _migrate_legacy_api_keys(stored)
     except SecretStoreError as exc:
-        raise ValueError("旧版 API Key 无法迁移到系统安全凭据库。") from exc
+        raise ValueError("旧版 API Key 已清除，请重新配置。") from exc
     defaults = _default_model_settings()
     provider_id = str(stored.get("provider") or defaults["provider"])
     provider = MODEL_PROVIDERS.get(provider_id, MODEL_PROVIDERS["custom_openai"])
@@ -316,8 +354,11 @@ def get_model_settings_raw() -> dict[str, Any]:
     current = provider_configs[provider.id]
     try:
         api_key = get_model_api_key(provider.id) or _default_provider_api_key(provider.id)
-    except SecretStoreError as exc:
-        raise ValueError("无法读取系统安全凭据库中的 API Key。") from exc
+    except SecretStoreError:
+        stored = _clear_unreadable_provider_key(stored, provider.id)
+        provider_configs = _provider_configs_from_stored(stored, defaults)
+        current = provider_configs[provider.id]
+        api_key = _default_provider_api_key(provider.id)
     current["apiKeyConfigured"] = bool(api_key)
     return {
         "provider": provider.id,
@@ -384,8 +425,18 @@ def get_model_settings_public() -> dict[str, Any]:
                 get_model_api_key(item.id)
                 or _default_provider_api_key(item.id)
             )
-    except SecretStoreError as exc:
-        raise ValueError("无法读取系统安全凭据库中的 API Key。") from exc
+    except SecretStoreError:
+        for item in MODEL_PROVIDERS.values():
+            config = raw["providerConfigs"].get(item.id, {})
+            try:
+                configured = get_model_api_key(item.id) or _default_provider_api_key(item.id)
+            except SecretStoreError:
+                _clear_unreadable_provider_key(
+                    get_json_record(SYSTEM_SETTINGS_NAMESPACE, MODEL_SETTINGS_KEY) or {},
+                    item.id,
+                )
+                configured = _default_provider_api_key(item.id)
+            config["apiKeyConfigured"] = bool(configured)
     return {
         "provider": raw["provider"],
         "providerName": raw["providerName"],

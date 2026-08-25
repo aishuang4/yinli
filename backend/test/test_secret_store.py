@@ -32,6 +32,26 @@ def test_memory_secret_store_round_trip() -> None:
     assert secret_store.get_model_api_key("deepseek") == ""
 
 
+def test_non_desktop_macos_uses_memory_store(monkeypatch) -> None:
+    """Web/源码模式不能因 macOS Keychain 授权缺失而阻断设置页启动。"""
+
+    monkeypatch.delenv("AGENT_WORKSTATION_DESKTOP_MODE", raising=False)
+    monkeypatch.delenv("AGENT_WORKSTATION_SECRET_STORE", raising=False)
+    monkeypatch.setattr(secret_store.sys, "platform", "darwin")
+
+    assert secret_store._backend_name() == "memory"
+
+
+def test_desktop_macos_uses_keychain(monkeypatch) -> None:
+    """Electron 桌面后端继续使用 macOS Keychain。"""
+
+    monkeypatch.setenv("AGENT_WORKSTATION_DESKTOP_MODE", "1")
+    monkeypatch.delenv("AGENT_WORKSTATION_SECRET_STORE", raising=False)
+    monkeypatch.setattr(secret_store.sys, "platform", "darwin")
+
+    assert secret_store._backend_name() == "keychain"
+
+
 def test_secret_store_rejects_multiline_values() -> None:
     """Key 不能借助换行符破坏系统凭据输入协议。"""
 
@@ -86,8 +106,8 @@ def test_legacy_plaintext_key_migrates_before_database_cleanup(monkeypatch) -> N
     assert stored["providerConfigs"]["deepseek"]["apiKey"] == "sk-legacy-plaintext"
 
 
-def test_legacy_plaintext_remains_when_secure_migration_fails(monkeypatch) -> None:
-    """安全存储失败时不能删除旧 Key，避免升级导致凭据丢失。"""
+def test_legacy_plaintext_is_cleared_when_secure_migration_fails(monkeypatch) -> None:
+    """安全存储失败时必须清除旧明文，要求用户重新配置。"""
 
     stored = {
         "provider": "deepseek",
@@ -108,8 +128,36 @@ def test_legacy_plaintext_remains_when_secure_migration_fails(monkeypatch) -> No
     with pytest.raises(secret_store.SecretStoreError):
         runtime_settings._migrate_legacy_api_keys(stored)
 
-    assert stored["providerConfigs"]["deepseek"]["apiKey"] == "sk-keep-me"
-    assert writes == []
+    assert writes == [{"provider": "deepseek", "providerConfigs": {"deepseek": {"apiKeyConfigured": False}}}]
+
+
+def test_unreadable_key_is_cleared_and_settings_require_reconfiguration(monkeypatch) -> None:
+    """读取失败时不把不可解密的 Key 继续带入公开设置或运行时。"""
+
+    records = {
+        runtime_settings.MODEL_SETTINGS_KEY: {
+            "provider": "deepseek",
+            "providerConfigs": {"deepseek": {"apiKeyConfigured": True}},
+        },
+    }
+    monkeypatch.setattr(runtime_settings, "get_json_record", lambda _namespace, key: deepcopy(records.get(key)))
+    monkeypatch.setattr(
+        runtime_settings,
+        "upsert_json_record",
+        lambda _namespace, key, value: records.__setitem__(key, deepcopy(value)),
+    )
+    monkeypatch.setattr(
+        runtime_settings,
+        "get_model_api_key",
+        lambda _provider_id: (_ for _ in ()).throw(secret_store.SecretStoreError("decrypt failed")),
+    )
+    monkeypatch.setattr(runtime_settings, "delete_model_api_key", lambda _provider_id: None)
+
+    raw = runtime_settings.get_model_settings_raw()
+
+    assert raw["apiKey"] == ""
+    assert raw["providerConfigs"]["deepseek"]["apiKeyConfigured"] is False
+    assert records[runtime_settings.MODEL_SETTINGS_KEY]["providerConfigs"]["deepseek"]["apiKeyConfigured"] is False
 
 
 def test_save_model_settings_never_persists_plaintext_key(monkeypatch) -> None:
