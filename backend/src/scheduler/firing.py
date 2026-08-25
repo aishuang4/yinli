@@ -105,6 +105,9 @@ async def run_firing(
                 chat_run_id, timeout_seconds=timeout,
             )
             output_manifest = _scan_outputs(job, service.get_firing(firing_id))
+            result_text = _assistant_result_text(session_id)
+            if result_text:
+                output_manifest = {**output_manifest, "resultText": result_text}
             if chat_status == "completed":
                 terminal_status = "succeeded"
                 error_code = ""
@@ -197,6 +200,15 @@ def _scan_outputs(job: ScheduledJob, firing: ScheduledJobRun) -> dict[str, Any]:
         return scan_scheduled_run_outputs(workspace)
     except (OSError, ValueError):
         return {}
+
+
+def _assistant_result_text(session_id: str) -> str:
+    if not str(session_id or "").strip():
+        return ""
+    from src.storage.database import get_latest_assistant_chat_message
+
+    record = get_latest_assistant_chat_message(session_id)
+    return str((record or {}).get("content") or "").strip()
 
 
 def _launch_error_code(exc: ScheduledChatLaunchError) -> str:

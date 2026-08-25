@@ -105,8 +105,12 @@ def evaluate_job_feasibility(
 
     if read_only and ("file.write" in required or "office.generate" in required):
         verdict: Literal["ok", "partial", "impossible"] = "impossible"
-    elif channel_required and not channel_satisfied and send_only:
-        verdict = "impossible"
+    elif channel_required and not channel_satisfied:
+        has_generate = "file.write" in required or "office.generate" in required
+        if send_only or not has_generate:
+            verdict = "impossible"
+        else:
+            verdict = "partial" if can_write else "impossible"
     elif missing or blocked:
         verdict = "partial" if can_write else "impossible"
     else:
@@ -218,6 +222,10 @@ def _message(
         if verdict == "impossible":
             return "我不能无人值守发邮件，这个定时任务做不到。"
         return "我不能无人值守发邮件，只能降级为到点生成文件并通知你。"
+    if "web.fetch" in required:
+        if verdict == "impossible":
+            return "我不能在定时任务里查天气或访问网页，当前 Agent 没有无人值守的网络能力。"
+        return "我不能在定时任务里访问网页，只能降级为到点写本地文件。"
     if verdict == "impossible":
         return "当前 Agent 没有完成该定时任务的无人值守能力。"
     return "当前 Agent 不能完成全部外发，只能降级生成。"

@@ -81,7 +81,8 @@ def notify_firing_terminal(
         return None
     body = firing.error_message or ""
     if firing.status == "succeeded" and not body:
-        body = "定时任务已成功完成"
+        result_text = str((firing.output_manifest or {}).get("resultText") or "").strip()
+        body = result_text[:800] if result_text else "定时任务已成功完成"
     elif firing.status == "missed" and not body:
         body = "错过计划时间"
     try:

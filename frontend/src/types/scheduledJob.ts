@@ -137,6 +137,7 @@ export interface ScheduledJobRun {
   errorCode: string;
   errorMessage: string;
   outputManifest: JobOutputManifest;
+  resultText: string;
   deliveryStatus: string;
   startedAt: string | null;
   completedAt: string | null;

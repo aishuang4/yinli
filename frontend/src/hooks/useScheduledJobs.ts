@@ -196,6 +196,7 @@ function mapRun(raw: Record<string, unknown>): ScheduledJobRun {
     errorCode: String(raw.errorCode ?? ''),
     errorMessage: String(raw.errorMessage ?? ''),
     outputManifest: manifest,
+    resultText: String(raw.resultText ?? (manifest as { resultText?: unknown }).resultText ?? ''),
     deliveryStatus: String(raw.deliveryStatus ?? 'not_applicable'),
     startedAt: raw.startedAt ? String(raw.startedAt) : null,
     completedAt: raw.completedAt ? String(raw.completedAt) : null,

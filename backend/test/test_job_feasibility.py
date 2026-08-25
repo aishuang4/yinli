@@ -61,6 +61,29 @@ def _gmail_send() -> CapabilityInventoryItem:
     )
 
 
+def test_weather_without_web_is_impossible(monkeypatch):
+    monkeypatch.setattr(
+        "src.scheduler.feasibility.build_agent_capability_inventory",
+        lambda *args, **kwargs: _file_builtins(),
+    )
+    monkeypatch.setattr(
+        "src.server.routes.agents.get_registered_agent",
+        lambda agent_id: SimpleNamespace(guardrails=SimpleNamespace(
+            tool_permission_profile="trusted_tools",
+        )),
+    )
+    result = evaluate_job_feasibility(
+        task_intent="2分钟后帮我调用看一下今天天气",
+        agent_id="agent-1",
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        project_id=DEFAULT_PROJECT_ID,
+        include_suggestions=False,
+    )
+    assert result.verdict == "impossible"
+    assert "web.fetch" in result.required_intents
+    assert "天气" in result.message or "网页" in result.message
+
+
 def test_email_without_channel_is_partial(monkeypatch):
     monkeypatch.setattr(
         "src.scheduler.feasibility.build_agent_capability_inventory",

@@ -152,6 +152,12 @@ def test_skill_only_cannot_satisfy_email_send():
     assert [item.intent for item in missing] == ["email.send"]
 
 
+def test_extract_weather_requires_web_fetch():
+    intents = extract_required_intents("2分钟后帮我调用看一下今天天气")
+    assert "web.fetch" in intents
+    assert "email.send" not in intents
+
+
 def test_extract_required_intents_email_and_weekly_report():
     intents = extract_required_intents("每周五给客户发周报邮件")
     assert "email.send" in intents

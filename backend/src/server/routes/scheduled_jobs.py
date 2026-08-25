@@ -183,6 +183,15 @@ def serialize_job(job: ScheduledJob) -> dict[str, Any]:
 
 
 def serialize_firing(firing: ScheduledJobRun) -> dict[str, Any]:
+    manifest = dict(firing.output_manifest or {})
+    result_text = str(manifest.get("resultText") or "").strip()
+    if not result_text and firing.chat_session_id:
+        from src.storage.database import get_latest_assistant_chat_message
+
+        record = get_latest_assistant_chat_message(firing.chat_session_id)
+        result_text = str((record or {}).get("content") or "").strip()
+        if result_text:
+            manifest["resultText"] = result_text
     return {
         "id": firing.id,
         "jobId": firing.job_id,
@@ -195,7 +204,8 @@ def serialize_firing(firing: ScheduledJobRun) -> dict[str, Any]:
         "chatRunId": firing.chat_run_id,
         "errorCode": firing.error_code,
         "errorMessage": firing.error_message,
-        "outputManifest": firing.output_manifest,
+        "outputManifest": manifest,
+        "resultText": result_text,
         "deliveryStatus": firing.delivery_status,
         "startedAt": firing.started_at,
         "completedAt": firing.completed_at,

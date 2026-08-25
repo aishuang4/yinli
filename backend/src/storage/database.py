@@ -1124,6 +1124,30 @@ def append_workflow_event(
     )
 
 
+def get_latest_assistant_chat_message(session_id: str) -> dict[str, Any] | None:
+    """读取某个会话里最近一条助手消息。"""
+
+    ensure_db()
+    with _lock, _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM chat_messages
+            WHERE session_id = ? AND role = 'assistant'
+            ORDER BY sort_order DESC, created_at DESC
+            LIMIT 1
+            """,
+            (session_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "sessionId": row["session_id"],
+        "role": row["role"],
+        "content": row["content"] or "",
+    }
+
+
 def get_latest_user_chat_message(session_id: str, content: str | None = None) -> dict[str, Any] | None:
     """读取某个会话里最近一条用户消息，可按内容精确匹配。"""
 

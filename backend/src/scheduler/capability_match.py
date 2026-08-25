@@ -81,7 +81,7 @@ USER_INTENT_TOKENS: dict[str, tuple[str, ...]] = {
     "office.generate": ("周报", "日报", "纪要", "生成文档"),
     "file.write": ("写文件", "生成文档"),
     "http.call": ("调用 http", "通用 api", "http 接口"),
-    "web.fetch": ("抓网页", "webfetch"),
+    "web.fetch": ("抓网页", "webfetch", "天气", "weather", "气温", "天气预报"),
     "shell.execute": ("bash", "跑脚本"),
     "knowledge.search": ("知识库", "检索知识"),
 }
