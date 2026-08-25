@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card } from '@/components/design';
 import { ModelSettingsForm, type ModelSettings } from '../features/settings/ModelSettingsForm';
 import { NotificationSettingsCard } from '../features/notifications/NotificationSettingsCard';
+import { ScheduledJobsSettingsCard } from '../features/settings/ScheduledJobsSettingsCard';
 import { ConversationContextSettingsCard } from '../features/settings/ConversationContextSettingsCard';
 import { UserDataSettingsCard } from '../features/settings/UserDataSettingsCard';
 import { useSettingsStore } from '../stores/settingsStore';
@@ -181,11 +182,15 @@ export function SettingsPage() {
           <div>
             <h1 className="text-xl font-semibold text-[var(--color-text-primary)]">系统设置</h1>
             <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-              管理默认模型、消息通知与新会话使用的工作上下文。
+              管理定时任务调度、默认模型、消息通知与新会话使用的工作上下文。
             </p>
           </div>
           <span className="text-xs text-[var(--color-text-tertiary)]">保存后将在下一轮对话生效</span>
         </header>
+
+        <div className="mb-6">
+          <ScheduledJobsSettingsCard />
+        </div>
 
         <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_352px]">
           <section className="min-w-0">

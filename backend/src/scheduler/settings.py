@@ -1,4 +1,4 @@
-"""定时任务运行时开关。默认关闭，直到 ticker 与管理页就绪。"""
+"""定时任务运行时开关。开发库默认关闭；桌面安装版首次启动写入打开。"""
 
 from __future__ import annotations
 
@@ -49,3 +49,27 @@ def set_scheduled_jobs_enabled(enabled: bool) -> None:
     """测试与后续设置页写入主开关；必须保留 capability_gate。"""
 
     set_scheduled_jobs_settings(enabled=enabled)
+
+
+def get_scheduled_jobs_settings_public() -> dict[str, bool]:
+    """设置页读取存储值，不因主开关关闭而隐藏 capability_gate。"""
+
+    raw = _read_scheduled_jobs_settings()
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "capabilityGate": bool(raw.get("capability_gate", False)),
+    }
+
+
+def ensure_desktop_scheduled_jobs_defaults(*, desktop: bool | None = None) -> dict[str, Any] | None:
+    """桌面安装版首次启动写入打开，不覆盖用户已经保存过的开关。"""
+
+    if desktop is None:
+        from src.config.runtime_paths import USING_CUSTOM_DATA_ROOT
+
+        desktop = USING_CUSTOM_DATA_ROOT
+    if not desktop:
+        return None
+    if get_json_record(SYSTEM_SETTINGS_NAMESPACE, SCHEDULED_JOBS_SETTINGS_KEY) is not None:
+        return None
+    return set_scheduled_jobs_settings(enabled=True, capability_gate=True)

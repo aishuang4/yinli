@@ -12,7 +12,7 @@ from src.scheduler.firing import ensure_firing_terminal, run_firing
 from src.scheduler.models import TERMINAL_FIRING_STATUSES, ScheduledJob
 from src.scheduler.schedule import parse_stored_datetime, to_utc_iso
 from src.scheduler.service import ScheduledJobService
-from src.scheduler.settings import is_scheduled_jobs_enabled
+from src.scheduler.settings import ensure_desktop_scheduled_jobs_defaults, is_scheduled_jobs_enabled
 from src.server.routes.chat.background_runs import reconcile_interrupted_chat_runs
 
 logger = logging.getLogger(__name__)
@@ -57,6 +57,18 @@ class JobScheduler:
         self._ticker_task = asyncio.create_task(
             self._loop(), name="job-scheduler-ticker",
         )
+
+    def set_running(self, enabled: bool) -> None:
+        """设置页开关：打开则扫描到期任务，关闭只停 ticker，不杀在途 firing。"""
+
+        if enabled:
+            self.start()
+            return
+        self._stopped = True
+        ticker = self._ticker_task
+        if ticker is not None and not ticker.done():
+            ticker.cancel()
+        self._ticker_task = None
 
     async def stop(self) -> None:
         """取消 ticker 与 in-flight Task，须在 close_db 之前调用。"""
@@ -239,24 +251,32 @@ def reset_job_scheduler() -> None:
 
 
 def bootstrap_scheduler(*, now: datetime | None = None) -> dict[str, int]:
-    """启动顺序：Chat 孤儿 → job_runs →（flag 开启时）start ticker。"""
+    """启动顺序：桌面缺省开关 → Chat 孤儿 → job_runs →（flag 开启时）start ticker。"""
 
+    seeded = ensure_desktop_scheduled_jobs_defaults()
     chat_n = reconcile_interrupted_chat_runs()
     job_n = get_job_scheduler().service.reconcile_interrupted_job_runs(now=now)
     started = 0
     if is_scheduled_jobs_enabled():
         get_job_scheduler().start()
         started = 1
-    if chat_n or job_n or started:
+    if chat_n or job_n or started or seeded:
         logger.info(
-            "scheduler bootstrap chat_runs=%s job_runs=%s ticker_started=%s",
-            chat_n, job_n, started,
+            "scheduler bootstrap chat_runs=%s job_runs=%s ticker_started=%s defaults_seeded=%s",
+            chat_n, job_n, started, 1 if seeded else 0,
         )
     return {
         "chat_runs": chat_n,
         "job_runs": job_n,
         "ticker_started": started,
+        "defaults_seeded": 1 if seeded else 0,
     }
+
+
+def apply_scheduler_enabled(enabled: bool) -> None:
+    """设置页切换主开关时启动或停掉 ticker。"""
+
+    get_job_scheduler().set_running(enabled)
 
 
 async def shutdown_scheduler() -> None:

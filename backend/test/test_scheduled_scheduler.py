@@ -13,7 +13,13 @@ import pytest
 from src.scheduler.models import ScheduledJobConflictError
 from src.scheduler.schedule import grace_seconds_for_schedule, to_utc_iso
 from src.scheduler.service import ON_TIME_SLACK_SECONDS, ScheduledJobService
-from src.scheduler.settings import is_scheduled_jobs_enabled, set_scheduled_jobs_enabled
+from src.scheduler.settings import (
+    ensure_desktop_scheduled_jobs_defaults,
+    is_capability_gate_enabled,
+    is_scheduled_jobs_enabled,
+    set_scheduled_jobs_enabled,
+    set_scheduled_jobs_settings,
+)
 from src.scheduler.ticker import (
     MAX_SCHEDULED_FIRINGS,
     JobScheduler,
@@ -150,6 +156,19 @@ def test_feature_flag_false_does_not_start_ticker(isolated_db):
         assert get_job_scheduler()._ticker_task is None
 
     asyncio.run(run_case())
+
+
+def test_desktop_first_run_seeds_scheduler_enabled(isolated_db):
+    ensure_db()
+    assert is_scheduled_jobs_enabled() is False
+    seeded = ensure_desktop_scheduled_jobs_defaults(desktop=True)
+    assert seeded is not None
+    assert is_scheduled_jobs_enabled() is True
+    assert is_capability_gate_enabled() is True
+    set_scheduled_jobs_settings(enabled=False, capability_gate=False)
+    assert ensure_desktop_scheduled_jobs_defaults(desktop=True) is None
+    assert is_scheduled_jobs_enabled() is False
+    assert ensure_desktop_scheduled_jobs_defaults(desktop=False) is None
 
 
 def test_claim_queued_inserts_unique_and_skips_duplicate(isolated_db):

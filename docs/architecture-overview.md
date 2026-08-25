@@ -151,6 +151,8 @@ RunState、DisplayEvent、旧 `event_hub`、旧 adapter/reducer 和旧 Snapshot 
 
 ## 定时任务 Job Agent
 
+定时任务写接口受 `system_settings/scheduled_jobs.enabled` 控制；开发库默认关闭。桌面安装版（`AGENT_WORKSTATION_DATA_DIR`）首次启动若从未写过该键，会默认打开调度和能力门禁。设置页可随时开关。
+
 定时任务的到期执行者必须是 `role=job` 的 Job Agent，不能使用 Chat 助手。Job Agent 在配置里拆成必注入与可选注入两层工具：必注入到期一定带上，`CheckJobFeasibility` 只认领可选层。系统 `default` 助手不能改成 Job Agent；Job Agent 不出现在 Chat 选择器里。
 
 ## 消息通知

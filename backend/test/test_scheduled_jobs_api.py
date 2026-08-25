@@ -11,7 +11,7 @@ import pytest
 from src.scheduler.notifications import create_notification
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.settings import is_scheduled_jobs_enabled, set_scheduled_jobs_enabled
-from src.server.routes import chat, notifications, scheduled_jobs
+from src.server.routes import chat, notifications, scheduled_jobs, settings as settings_routes
 from src.server.routes.chat.background_runs import MAX_BACKGROUND_RUNS
 from src.storage import database
 from src.storage.database import (
@@ -49,6 +49,7 @@ def client(isolated_db):
     app = FastAPI()
     app.include_router(scheduled_jobs.router, prefix="/api")
     app.include_router(notifications.router, prefix="/api")
+    app.include_router(settings_routes.router, prefix="/api/settings")
     app.include_router(chat.router, prefix="/api/chat")
     with TestClient(app) as test_client:
         yield test_client
@@ -84,6 +85,7 @@ def test_main_registers_scheduled_job_and_notification_routes():
     assert "/api/notifications/unread-count" in paths
     assert "/api/notifications/stream" in paths
     assert "/api/notifications/settings" in paths
+    assert "/api/settings/scheduled-jobs" in paths
 
 
 def test_flag_off_write_is_403_and_list_still_readable(client):
@@ -113,6 +115,30 @@ def test_flag_off_write_is_403_and_list_still_readable(client):
     assert pause.status_code == 403
     delete = client.delete(f"/api/scheduled-jobs/{created.id}")
     assert delete.status_code == 403
+
+
+def test_scheduled_jobs_settings_round_trip(client):
+    listed = client.get("/api/settings/scheduled-jobs")
+    assert listed.status_code == 200
+    assert listed.json() == {"enabled": False, "capabilityGate": False}
+
+    saved = client.put("/api/settings/scheduled-jobs", json={
+        "enabled": True,
+        "capabilityGate": False,
+    })
+    assert saved.status_code == 200
+    assert saved.json() == {"enabled": True, "capabilityGate": False}
+    assert client.post("/api/scheduled-jobs", json=_create_payload(name="设置页打开后可登记")).status_code == 201
+
+    closed = client.put("/api/settings/scheduled-jobs", json={
+        "enabled": False,
+        "capabilityGate": True,
+    })
+    assert closed.status_code == 200
+    assert closed.json()["enabled"] is False
+    assert closed.json()["capabilityGate"] is True
+    denied = client.post("/api/scheduled-jobs", json=_create_payload(name="关闭后不能登记"))
+    assert denied.status_code == 403
 
 
 def test_confirm_activates_job(client):
