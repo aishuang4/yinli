@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card } from '@/components/design';
 import { ModelSettingsForm, type ModelSettings } from '../features/settings/ModelSettingsForm';
 import { ConversationContextSettingsCard } from '../features/settings/ConversationContextSettingsCard';
+import { UserDataSettingsCard } from '../features/settings/UserDataSettingsCard';
 import { useSettingsStore } from '../stores/settingsStore';
 import type { ThemeName } from '../types/theme';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
@@ -20,6 +21,10 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState('');
+  const [userDataPath, setUserDataPath] = useState<string | null>(null);
+  const [userDataLoading, setUserDataLoading] = useState(false);
+  const [userDataError, setUserDataError] = useState('');
+  const [openingUserData, setOpeningUserData] = useState(false);
 
   const selectedProvider = settings?.providers.find((item) => item.id === provider);
   const apiKeyEditable = selectedProvider?.requiresApiKey || selectedProvider?.id === 'custom_openai';
@@ -63,6 +68,39 @@ export function SettingsPage() {
   useEffect(() => {
     void loadSettings();
   }, [loadSettings]);
+
+  const loadUserDataPath = useCallback(async () => {
+    if (!window.electronAPI) return;
+    setUserDataLoading(true);
+    setUserDataError('');
+    try {
+      setUserDataPath(await window.electronAPI.getUserDataPath());
+    } catch (error) {
+      setUserDataPath(null);
+      setUserDataError(getErrorMessage(error, '用户数据目录读取失败'));
+    } finally {
+      setUserDataLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadUserDataPath();
+  }, [loadUserDataPath]);
+
+  const handleOpenUserData = async () => {
+    if (!window.electronAPI || !userDataPath || openingUserData) return;
+    setOpeningUserData(true);
+    try {
+      const result = await window.electronAPI.openPath(userDataPath);
+      if (!result.ok) {
+        notifyError(`用户数据目录打开失败：${result.error || '未知错误'}`);
+      }
+    } catch (error) {
+      notifyError(`用户数据目录打开失败：${getErrorMessage(error, '未知错误')}`);
+    } finally {
+      setOpeningUserData(false);
+    }
+  };
 
   const handleProviderChange = (value: string) => {
     const nextProvider = settings?.providers.find((item) => item.id === value);
@@ -184,6 +222,16 @@ export function SettingsPage() {
           <aside className="space-y-4 xl:sticky xl:top-0">
             <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
             <ConversationContextSettingsCard />
+            {window.electronAPI && (
+              <UserDataSettingsCard
+                path={userDataPath}
+                loading={userDataLoading}
+                opening={openingUserData}
+                error={userDataError}
+                onOpen={() => void handleOpenUserData()}
+                onRetry={() => void loadUserDataPath()}
+              />
+            )}
           </aside>
         </div>
       </div>

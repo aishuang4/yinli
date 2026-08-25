@@ -61,6 +61,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** 在系统文件管理器中打开桌面端诊断日志目录。 */
   openDesktopLogs: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('open-desktop-logs'),
 
+  /** 获取桌面端实际用户数据目录。 */
+  getUserDataPath: (): Promise<string> => ipcRenderer.invoke('get-user-data-path'),
+
   /** 订阅内置后端状态变化，返回取消订阅函数。 */
   onBackendStatus: (callback: (status: DesktopBackendStatus) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, status: DesktopBackendStatus) => callback(status);

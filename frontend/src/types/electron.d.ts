@@ -25,6 +25,8 @@ interface ElectronAPI {
   restartBackend(): Promise<DesktopBackendStatus>;
   /** 打开桌面端诊断日志目录 */
   openDesktopLogs(): Promise<{ ok: boolean; error?: string }>;
+  /** 获取桌面端实际用户数据目录 */
+  getUserDataPath(): Promise<string>;
   /** 订阅内置后端状态变化 */
   onBackendStatus(callback: (status: DesktopBackendStatus) => void): () => void;
 }

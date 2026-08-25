@@ -92,6 +92,13 @@ function desktopLogsPath(): string {
   return logsPath;
 }
 
+/** 返回并确保安装版用户数据目录存在，供设置页展示和打开。 */
+function userDataPath(): string {
+  const dataPath = app.getPath('userData');
+  fs.mkdirSync(dataPath, { recursive: true });
+  return dataPath;
+}
+
 /** 将桌面端关键运行信息写入本地日志，便于无控制台的安装包排障。 */
 function appendDesktopLog(fileName: string, message: string): void {
   try {
@@ -580,6 +587,9 @@ ipcMain.handle('open-desktop-logs', async () => {
   const error = await shell.openPath(desktopLogsPath());
   return error ? { ok: false, error } : { ok: true };
 });
+
+/** 返回桌面端实际用户数据目录；路径由主进程作为唯一事实源提供。 */
+ipcMain.handle('get-user-data-path', () => userDataPath());
 
 /**
  * 获取应用版本号
