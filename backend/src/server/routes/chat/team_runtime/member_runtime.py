@@ -6,20 +6,10 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 
-from agentscope.event import (
-    ConfirmResult,
-    ExternalExecutionResultEvent,
-    UserConfirmResultEvent,
-)
 from agentscope.message import UserMsg
-from agentscope.message import (
-    TextBlock,
-    ToolCallBlock,
-    ToolResultBlock,
-    ToolResultState,
-)
 
 from src.agents.factory import RuntimeToolScope
+from src.server.routes.chat.hitl import build_automatic_confirm_resume
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import ChatRunContext
 from src.server.routes.chat.runtime import _build_user_content, _guardrail_cache_key
@@ -491,30 +481,15 @@ def _restrict_member_recovery_tools(agent: object) -> None:
 def _build_team_tool_denial(
     event_type: str,
     data: dict,
-) -> UserConfirmResultEvent | ExternalExecutionResultEvent:
-    """构建 Team Member 交互式工具的拒绝恢复事件。"""
+):
+    """构建 Team Member 交互式工具的拒绝恢复事件。决策始终 deny。"""
 
-    tool_calls = [ToolCallBlock.model_validate(item) for item in data.get("tool_calls") or []]
-    reply_id = str(data.get("reply_id") or "")
-    if event_type == "REQUIRE_USER_CONFIRM":
-        return UserConfirmResultEvent(
-            reply_id=reply_id,
-            confirm_results=[
-                ConfirmResult(confirmed=False, tool_call=tool_call, rules=None)
-                for tool_call in tool_calls
-            ],
-        )
-    return ExternalExecutionResultEvent(
-        reply_id=reply_id,
-        execution_results=[
-            ToolResultBlock(
-                id=tool_call.id,
-                name=tool_call.name,
-                output=[TextBlock(text="Team Member 不允许暂停等待人工处理，该工具已拒绝。")],
-                state=ToolResultState.DENIED,
-            )
-            for tool_call in tool_calls
-        ],
+    return build_automatic_confirm_resume(
+        event_type=event_type,
+        reply_id=str(data.get("reply_id") or ""),
+        tool_calls=[dict(item) for item in (data.get("tool_calls") or []) if isinstance(item, dict)],
+        default_confirmed=False,
+        denial_message="Team Member 不允许暂停等待人工处理，该工具已拒绝。",
     )
 
 

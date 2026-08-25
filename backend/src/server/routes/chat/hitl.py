@@ -1,5 +1,6 @@
 """HITL 人工审批 — pending interaction 的创建/清理/序列化与恢复事件构建。"""
 
+import json
 import uuid
 
 from agentscope.event import (
@@ -25,6 +26,62 @@ from src.server.routes.chat.models import (
 )
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.trace_recorder import _record_run_event
+
+_DEFAULT_AUTOMATIC_DENIAL_MESSAGE = "该工具已自动拒绝。"
+
+
+def build_automatic_confirm_resume(
+    *,
+    event_type: str,
+    reply_id: str,
+    tool_calls: list[dict],
+    confirmed_by_id: dict[str, bool] | None = None,
+    default_confirmed: bool = False,
+    denial_message: str = "",
+) -> UserConfirmResultEvent | ExternalExecutionResultEvent:
+    """构造自动批准/拒绝的 AgentScope 恢复事件。
+
+    Team Member 与 scheduled Leader 只共享事件形状，不共享决策。
+    """
+
+    blocks = [_as_tool_call_block(item) for item in tool_calls]
+    message = denial_message.strip() or _DEFAULT_AUTOMATIC_DENIAL_MESSAGE
+    if event_type == "REQUIRE_USER_CONFIRM":
+        return UserConfirmResultEvent(
+            reply_id=reply_id,
+            confirm_results=[
+                ConfirmResult(
+                    confirmed=(confirmed_by_id or {}).get(block.id, default_confirmed),
+                    tool_call=block,
+                    rules=None,
+                )
+                for block in blocks
+            ],
+        )
+    return ExternalExecutionResultEvent(
+        reply_id=reply_id,
+        execution_results=[
+            ToolResultBlock(
+                id=block.id,
+                name=block.name,
+                output=[TextBlock(text=message)],
+                state=ToolResultState.DENIED,
+            )
+            for block in blocks
+        ],
+    )
+
+
+def _as_tool_call_block(item: dict) -> ToolCallBlock:
+    """把 HITL tool_call 字典规范成 ToolCallBlock。"""
+
+    payload = dict(item)
+    raw_input = payload.get("input")
+    if isinstance(raw_input, dict):
+        payload["input"] = json.dumps(raw_input, ensure_ascii=False)
+    elif raw_input is None:
+        payload["input"] = "{}"
+    return ToolCallBlock.model_validate(payload)
 
 
 def _create_pending_interaction(

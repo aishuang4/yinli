@@ -12,9 +12,11 @@ from fastapi import HTTPException, UploadFile
 
 UPLOAD_DIRECTORY_NAME = ".agent-workstation/uploads"
 SESSION_DIRECTORY_NAME = ".agent-workstation/sessions"
+JOB_DIRECTORY_NAME = ".agent-workstation/jobs"
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _INVALID_FILENAME_CHARS = re.compile(r"[\x00/\\]")
 _SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_JOB_PATH_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 def _validated_session_id(session_id: str) -> str:
@@ -42,6 +44,28 @@ def project_session_directory(project_root: Path, session_id: str) -> Path:
     directory = (project_root / SESSION_DIRECTORY_NAME / _validated_session_id(session_id)).resolve()
     if not directory.is_relative_to(project_root.resolve()):
         raise ValueError("Session 目录超出了 Project root")
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _validated_job_path_id(value: str, *, field_name: str) -> str:
+    """限制 Job / firing ID 用于目录名；领域路径抛 ValueError，避免泄漏 HTTPException。"""
+
+    text = str(value or "").strip()
+    if not _JOB_PATH_ID_PATTERN.fullmatch(text):
+        raise ValueError(f"无效的 {field_name}")
+    return text
+
+
+def project_job_run_directory(project_root: Path, job_id: str, firing_id: str) -> Path:
+    """返回且创建一次 Job firing 的产物工作目录。"""
+
+    root = project_root.resolve()
+    safe_job = _validated_job_path_id(job_id, field_name="Job ID")
+    safe_firing = _validated_job_path_id(firing_id, field_name="firing ID")
+    directory = (root / JOB_DIRECTORY_NAME / safe_job / "runs" / safe_firing).resolve()
+    if not directory.is_relative_to(root):
+        raise ValueError("Job firing 目录超出了 Project root")
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 

@@ -181,6 +181,7 @@ class ChatSession(BaseModel):
     mode: Literal["agent", "team"] = "agent"
     workspace_id: str = "default"
     project_id: str = "default"
+    kind: Literal["chat", "scheduled_job"] = "chat"
     created_at: str
     updated_at: str
     message_count: int = 0

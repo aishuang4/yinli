@@ -33,10 +33,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ),
 
   /**
-   * 在系统文件管理器中打开一个本地文件夹或文件位置
+   * 在系统文件管理器中打开一个本地文件夹或文件位置。
+   * projectRoot 只作提示，主进程不会用它扩大白名单。
    */
-  openPath: (targetPath: string): Promise<{ ok: boolean; error?: string }> => (
-    ipcRenderer.invoke('open-path', targetPath)
+  openPath: (targetPath: string, projectRoot?: string): Promise<{ ok: boolean; error?: string }> => (
+    ipcRenderer.invoke('open-path', targetPath, projectRoot)
   ),
 
   /**

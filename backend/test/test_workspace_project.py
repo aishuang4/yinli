@@ -18,6 +18,7 @@ from src.runtime_context import resolve_runtime_context
 from src.project_files import (
     delete_project_session_files,
     list_project_session_artifacts,
+    project_job_run_directory,
     project_session_directory,
     project_upload_directory,
     resolve_project_session_artifact,
@@ -173,6 +174,8 @@ def test_uploads_are_isolated_by_session(tmp_path):
     assert str(uploaded["path"]).startswith(".agent-workstation/uploads/session-a/")
     output_dir = project_session_directory(tmp_path, "session-a")
     assert output_dir == tmp_path / ".agent-workstation" / "sessions" / "session-a"
+    job_dir = project_job_run_directory(tmp_path, "job-a", "firing-a")
+    assert job_dir == tmp_path / ".agent-workstation" / "jobs" / "job-a" / "runs" / "firing-a"
     validate_session_uploads(
         project_root=tmp_path,
         session_id="session-a",

@@ -22,6 +22,7 @@ from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, Field, HttpUrl
 
 from src.config.runtime_paths import DATA_ROOT
+from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_mcp_tools_from_agents
 from src.storage.database import (
     list_mcp_servers as db_list_mcp_servers,
@@ -31,6 +32,7 @@ from src.storage.database import (
 )
 
 router = APIRouter()
+_job_service = ScheduledJobService()
 
 McpTransport = Literal["stdio", "sse", "websocket"]
 McpInstallStatus = Literal["available", "installed", "error"]
@@ -655,6 +657,7 @@ async def uninstall_mcp_server(server_id: str) -> McpServer:
     )
     _mcp_servers[server_id] = server
     _persist_if_user_server(server_id)
+    _job_service.pause_jobs_for_catalog_change(resource_type="mcp", resource_id=server_id)
     return server
 
 
@@ -668,6 +671,7 @@ async def delete_mcp_server(server_id: str) -> None:
         raise HTTPException(status_code=409, detail="Built-in MCP server cannot be deleted")
 
     server = _mcp_servers.pop(server_id)
+    _job_service.pause_jobs_for_catalog_change(resource_type="mcp", resource_id=server_id)
     remove_mcp_tools_from_agents({tool.id for tool in server.tools})
     _save_user_mcp_servers()
 
@@ -694,4 +698,6 @@ async def set_mcp_server_enabled(
     )
     _mcp_servers[server_id] = server
     _persist_if_user_server(server_id)
+    if not data.enabled:
+        _job_service.pause_jobs_for_catalog_change(resource_type="mcp", resource_id=server_id)
     return server

@@ -29,6 +29,7 @@
 
 ## 后续路线
 
+- `docs/scheduled-jobs-design.md`：对话登记定时任务、到点复用 Chat Run、产物入库、默认通知后确认发送。
 - `docs/debian-http-deployment-v1.md`：Debian 单机 HTTP 临时部署指南，覆盖 Nginx、systemd、持久化、更新与回滚；不属于生产安全基线。
 - `docs/team-member-lifecycle-v2.md`：Team Member 长生命周期、TaskAttempt、多轮返工、Mailbox 唤醒和 Reviewer 闭环方案。
 - `docs/agentscope-2.0.5-upgrade-plan.md`：AgentScope `2.0.3 -> 2.0.5` Runtime 基线迁移实施记录、兼容改造、验收结果、发布门禁与回滚方案。

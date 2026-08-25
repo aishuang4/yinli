@@ -24,6 +24,7 @@ from src.config.runtime_paths import (
 from src.config.settings import settings
 from src.storage.chat_run_records import ChatRunRecordStore
 from src.storage.database_schema import BASE_SCHEMA_SQL
+from src.storage.scheduled_job_records import ScheduledJobRecordStore
 from src.storage.agent_defaults import (
     is_stale_desktop_default_project_path as _is_stale_desktop_default_project_path,
     normalize_guardrails,
@@ -310,6 +311,10 @@ def ensure_db() -> None:
                 conn.execute("ALTER TABLE agents ADD COLUMN knowledge_tools TEXT NOT NULL DEFAULT '[]'")
                 conn.commit()
             _ensure_column(conn, "chat_runs", "updated_at", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "chat_runs", "trigger_source", "TEXT NOT NULL DEFAULT 'user'")
+            _ensure_column(conn, "chat_runs", "scheduled_job_id", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "chat_runs", "scheduled_firing_id", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "chat_sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'")
             _drop_column_if_exists(conn, "chat_runs", "team_id")
             _drop_column_if_exists(conn, "chat_runs", "team_name")
             now = _utc_now()
@@ -727,6 +732,7 @@ def load_chat_store() -> dict[str, Any]:
                 "mode": row["mode"],
                 "workspace_id": row["workspace_id"],
                 "project_id": row["project_id"],
+                "kind": (row["kind"] if "kind" in row.keys() and row["kind"] else "chat"),
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "message_count": row["message_count"],
@@ -747,9 +753,9 @@ def save_chat_store(data: dict[str, Any]) -> None:
         conn.executemany(
             """
             INSERT INTO chat_sessions (
-                id, title, agent_id, agent_name, mode, workspace_id, project_id,
+                id, title, agent_id, agent_name, mode, workspace_id, project_id, kind,
                 created_at, updated_at, message_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -757,6 +763,7 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     item.get("mode", "agent"),
                     item.get("workspace_id", item.get("workspaceId", DEFAULT_WORKSPACE_ID)),
                     item.get("project_id", item.get("projectId", DEFAULT_PROJECT_ID)),
+                    item.get("kind") or "chat",
                     item["created_at"],
                     item["updated_at"], item.get("message_count", 0),
                 )
@@ -999,13 +1006,21 @@ def list_chat_runs(
     limit: int = 50,
     *,
     project_id: str | None = None,
+    trigger_source: str | None = None,
 ) -> list[dict[str, Any]]:
     """列出持久化 Chat Run。"""
 
     return _chat_run_record_store().list(
         limit,
         project_id=project_id,
+        trigger_source=trigger_source,
     )
+
+
+def list_chat_runs_by_statuses(statuses: list[str] | tuple[str, ...] | set[str]) -> list[dict[str, Any]]:
+    """按状态列出全部 Chat Run，不受默认 LIMIT 截断。"""
+
+    return _chat_run_record_store().list_by_statuses(statuses)
 
 
 def get_chat_run(run_id: str) -> dict[str, Any] | None:
@@ -1590,3 +1605,183 @@ async def init_db() -> None:
 async def close_db() -> None:
     """No persistent process-wide connection is kept."""
     print("[DB] SQLite connections closed")
+
+
+def _scheduled_job_record_store() -> ScheduledJobRecordStore:
+    """创建复用当前数据库连接与锁的定时任务存储。"""
+
+    return ScheduledJobRecordStore(
+        ensure_db=ensure_db,
+        connect=_connect,
+        lock=_lock,
+        utc_now=_utc_now,
+        dumps=_dumps,
+        loads=_loads,
+        default_workspace_id=DEFAULT_WORKSPACE_ID,
+        default_project_id=DEFAULT_PROJECT_ID,
+    )
+
+
+def insert_scheduled_job(record: dict[str, Any]) -> dict[str, Any]:
+    """插入一条 ScheduledJob。"""
+
+    return _scheduled_job_record_store().insert_job(record)
+
+
+def update_scheduled_job(job_id: str, changes: dict[str, Any]) -> dict[str, Any] | None:
+    """更新 ScheduledJob 字段。"""
+
+    return _scheduled_job_record_store().update_job(job_id, changes)
+
+
+def get_scheduled_job(job_id: str) -> dict[str, Any] | None:
+    """读取一条 ScheduledJob。"""
+
+    return _scheduled_job_record_store().get_job(job_id)
+
+
+def list_scheduled_jobs(
+    *,
+    project_id: str | None = None,
+    agent_id: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """按 Project / Agent / 状态列出 ScheduledJob。"""
+
+    return _scheduled_job_record_store().list_jobs(
+        project_id=project_id, agent_id=agent_id, status=status,
+    )
+
+
+def delete_scheduled_job(job_id: str) -> None:
+    """删除一条 ScheduledJob，供写入校验失败时回滚。"""
+
+    _scheduled_job_record_store().delete_job(job_id)
+
+
+def insert_scheduled_job_run(record: dict[str, Any]) -> dict[str, Any]:
+    """插入一次 firing。"""
+
+    return _scheduled_job_record_store().insert_firing(record)
+
+
+def update_scheduled_job_run(firing_id: str, changes: dict[str, Any]) -> dict[str, Any] | None:
+    """更新 firing 字段。"""
+
+    return _scheduled_job_record_store().update_firing(firing_id, changes)
+
+
+def get_scheduled_job_run(firing_id: str) -> dict[str, Any] | None:
+    """读取一次 firing。"""
+
+    return _scheduled_job_record_store().get_firing(firing_id)
+
+
+def list_scheduled_job_runs(job_id: str, *, status: str | None = None) -> list[dict[str, Any]]:
+    """列出一个 Job 的 firing 历史。"""
+
+    return _scheduled_job_record_store().list_firings(job_id, status=status)
+
+
+def list_due_scheduled_jobs(now_iso: str) -> list[dict[str, Any]]:
+    """列出已到期的 active Job。"""
+
+    return _scheduled_job_record_store().list_due_jobs(now_iso)
+
+
+def get_scheduled_job_run_by_key(
+    job_id: str,
+    scheduled_for: str,
+    trigger: str,
+) -> dict[str, Any] | None:
+    """按 UNIQUE (job_id, scheduled_for, trigger) 读取 firing。"""
+
+    return _scheduled_job_record_store().get_firing_by_key(job_id, scheduled_for, trigger)
+
+
+def list_non_terminal_scheduled_job_runs() -> list[dict[str, Any]]:
+    """列出全部非终态 firing。"""
+
+    return _scheduled_job_record_store().list_non_terminal_firings()
+
+
+def list_starting_scheduled_job_runs_without_chat_run() -> list[dict[str, Any]]:
+    """列出 starting 且 chat_run_id 仍空的 firing。"""
+
+    return _scheduled_job_record_store().list_starting_without_chat_run()
+
+
+def list_scheduled_job_runs_for_scheduled_for(
+    job_id: str,
+    scheduled_for: str,
+) -> list[dict[str, Any]]:
+    """列出同一 Job 同一 scheduled_for 的 firing，不区分 trigger。"""
+
+    return _scheduled_job_record_store().list_firings_for_scheduled_for(
+        job_id, scheduled_for,
+    )
+
+
+def list_stuck_clock_scheduled_job_runs() -> list[dict[str, Any]]:
+    """列出终态 schedule/catch_up 仍卡住 Job.next_run_at 的 firing。"""
+
+    return _scheduled_job_record_store().list_stuck_clock_firings()
+
+
+def update_scheduled_job_run_and_job(
+    firing_id: str,
+    firing_changes: dict[str, Any],
+    job_id: str,
+    job_changes: dict[str, Any],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """同一事务更新 firing 与 Job。"""
+
+    return _scheduled_job_record_store().update_firing_and_job(
+        firing_id, firing_changes, job_id, job_changes,
+    )
+
+def insert_user_notification(record: dict[str, Any]) -> dict[str, Any]:
+    """写入一条应用内通知。"""
+
+    return _scheduled_job_record_store().insert_notification(record)
+
+
+def get_user_notification(note_id: str) -> dict[str, Any] | None:
+    """读取一条应用内通知。"""
+
+    return _scheduled_job_record_store().get_notification(note_id)
+
+
+def list_user_notifications(
+    *,
+    project_id: str | None = None,
+    unread_only: bool = False,
+    limit: int = 50,
+    before: str | None = None,
+) -> list[dict[str, Any]]:
+    """按时间倒序列出应用内通知。"""
+
+    return _scheduled_job_record_store().list_notifications(
+        project_id=project_id,
+        unread_only=unread_only,
+        limit=limit,
+        before=before,
+    )
+
+
+def count_unread_user_notifications(*, project_id: str | None = None) -> int:
+    """未读通知条数。"""
+
+    return _scheduled_job_record_store().count_unread_notifications(project_id=project_id)
+
+
+def mark_user_notification_read(note_id: str) -> dict[str, Any] | None:
+    """将一条通知标为已读；不存在则返回 None。"""
+
+    return _scheduled_job_record_store().mark_notification_read(note_id)
+
+
+def mark_all_user_notifications_read(*, project_id: str | None = None) -> int:
+    """将未读通知全部标为已读，返回更新行数。"""
+
+    return _scheduled_job_record_store().mark_all_notifications_read(project_id=project_id)

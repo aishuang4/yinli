@@ -19,6 +19,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pytest" },
     { name = "python-dotenv" },
+    { name = "tzdata" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "zvec" },
 ]
@@ -32,6 +33,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.14.1" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "tzdata", specifier = ">=2025.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.49.0" },
     { name = "zvec", specifier = ">=0.5.1" },
 ]

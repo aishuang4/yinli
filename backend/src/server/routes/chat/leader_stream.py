@@ -9,6 +9,10 @@ from agentscope.message import UserMsg
 
 from src.server.routes.chat.helpers import _set_skill_run_status, source_event
 from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload
+from src.server.routes.chat.hitl_unattended import (
+    MAX_UNATTENDED_TOOL_DENIALS,
+    hitl_unattended_resolve,
+)
 from src.server.routes.chat.lifecycle import waiting_reason, waiting_status_for_interaction
 from src.server.routes.chat.models import (
     HITL_EVENT_TYPES,
@@ -87,6 +91,8 @@ class LeaderStreamState:
     reply_finished_reason: str = "completed"
     reply_error: str = ""
     reply_had_thinking: bool = False
+    trigger_source: str = "user"
+    unattended_denials: int = 0
 
 
 def _collect_pending_tool_batch(
@@ -541,6 +547,28 @@ async def stream_leader_agent_reply(
             yield runtime_source_event(runtime_event)
         return
 
+    if pending_hitl_batches and state.trigger_source == "scheduled_job":
+        async for event in _resume_unattended_hitl(
+            pending_hitl_batches,
+            agent=agent,
+            state=state,
+            session_id=session_id,
+            persist=persist,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            model_name=model_name,
+            guardrails=guardrails,
+            message=message,
+            stream_scope=stream_scope,
+            skill_runs=skill_runs,
+            plan_mode_manager=plan_mode_manager,
+            runtime_event_sources=runtime_event_sources,
+            deep_thinking=deep_thinking,
+            sandbox=sandbox,
+        ):
+            yield event
+        return
+
     if pending_hitl_batches:
         if state.active_skill_run and persist:
             state.active_skill_run = update_skill_run_status(
@@ -630,7 +658,7 @@ async def stream_leader_agent_reply(
         state.stop_reason = "hitl"
         return
 
-    clarification = (
+    clarification = None if state.trigger_source == "scheduled_job" else (
         _extract_clarification_request(state.assistant_text)
         or _extract_clarification_request(state.assistant_reasoning_text)
         or _extract_clarification_request(state.assistant_thinking)
@@ -773,6 +801,65 @@ def _should_attempt_final_answer_recovery(state: LeaderStreamState) -> bool:
             or bool(state.assistant_tool_calls)
         )
     )
+
+
+async def _resume_unattended_hitl(
+    pending_hitl_batches: list[dict],
+    *,
+    agent: object,
+    state: LeaderStreamState,
+    session_id: str,
+    persist: bool,
+    agent_id: str,
+    agent_name: str,
+    model_name: str,
+    guardrails: object,
+    message: str,
+    stream_scope: str,
+    skill_runs: list[ChatSkillRun],
+    plan_mode_manager: object | None,
+    runtime_event_sources: list[object] | None,
+    deep_thinking: bool,
+    sandbox: bool,
+) -> AsyncGenerator[str, None]:
+    """cwd Write/Edit 批准、其余拒绝，禁止落入 waiting_* / PENDING_INTERACTIONS。"""
+
+    reply_ids = {str(batch["reply_id"]) for batch in pending_hitl_batches}
+    types = {str(batch["type"]) for batch in pending_hitl_batches}
+    denied_names: list[str] = []
+    resume_event = None
+    for batch in pending_hitl_batches:
+        denied, resume_event = hitl_unattended_resolve(
+            str(batch["type"]),
+            {"reply_id": batch["reply_id"], "tool_calls": list(batch["tool_calls"])},
+            workspace_dir=state.session_workspace_dir,
+        )
+        denied_names.extend(denied)
+    state.unattended_denials += len(denied_names)
+    mixed_pause = len(reply_ids) != 1 or len(types) != 1 or resume_event is None
+    if mixed_pause or state.unattended_denials > MAX_UNATTENDED_TOOL_DENIALS:
+        state.stopped = True
+        state.stop_reason = "hitl_denied"
+        return
+    async for resumed_event in stream_leader_agent_reply(
+        agent=agent,
+        user_msg=resume_event,
+        state=state,
+        session_id=session_id,
+        persist=persist,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        model_name=model_name,
+        guardrails=guardrails,
+        message=message,
+        stream_scope=stream_scope,
+        skill_runs=skill_runs,
+        plan_mode_manager=plan_mode_manager,
+        runtime_event_sources=runtime_event_sources,
+        deep_thinking=deep_thinking,
+        sandbox=sandbox,
+    ):
+        yield resumed_event
 
 
 def _drain_runtime_event_sources(sources: list[object]) -> list[dict]:

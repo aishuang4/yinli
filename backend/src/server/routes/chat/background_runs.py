@@ -27,10 +27,14 @@ from src.server.routes.chat.projection import (
 from src.server.routes.chat.projection.frame_schema import RuntimeFrame, dump_protocol
 from src.server.routes.chat.projection.source_normalizer import ChatProjectionNormalizer
 from src.server.routes.chat.projection.source_events import SourceEvent
-from src.server.routes.chat.store import _update_latest_assistant_display_snapshot
+from src.server.routes.chat.store import (
+    _append_assistant_message,
+    _update_latest_assistant_display_snapshot,
+)
 from src.storage.database import (
     get_chat_run,
     list_chat_runs,
+    list_chat_runs_by_statuses,
     update_chat_run_status,
     upsert_chat_run,
 )
@@ -40,6 +44,7 @@ SourceStreamFactory = Callable[[], AsyncGenerator[SourceEvent, None]]
 CURRENT_BACKGROUND_RUN_ID: ContextVar[str] = ContextVar("current_chat_background_run_id", default="")
 MAX_BACKGROUND_RUNS = 50
 COMPLETED_RUN_TTL = timedelta(hours=2)
+PROCESS_RESTART_ERROR = "进程已重启，请重新发送"
 
 _domain_events = DomainEventRepository()
 _projection_store = ProjectionStreamStore()
@@ -59,7 +64,13 @@ class ChatBackgroundRun:
     agent_name: str = ""
     task_text: str = ""
     mode: str = "agent"
+    trigger_source: str = "user"
+    scheduled_job_id: str = ""
+    scheduled_firing_id: str = ""
     status: str = "running"
+    trigger_source: str = "user"
+    scheduled_job_id: str = ""
+    scheduled_firing_id: str = ""
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     completed_at: str | None = None
     event_count: int = 0
@@ -79,6 +90,52 @@ _runs_lock = asyncio.Lock()
 
 def current_chat_background_run_id() -> str:
     return CURRENT_BACKGROUND_RUN_ID.get()
+
+
+def has_live_chat_background_task(run_id: str) -> bool:
+    """本进程 _runs 中仍有未结束 Task 的 Chat Run。热重载不得误杀。"""
+
+    run = _runs.get(run_id)
+    if run is None:
+        return False
+    task = run.async_task
+    return task is not None and not task.done()
+
+
+def reconcile_interrupted_chat_runs() -> int:
+    """把无活 Task 的 running/waiting_* 标 failed，error 提示进程重启。"""
+
+    completed_at = datetime.now(timezone.utc).isoformat()
+    count = 0
+    for record in list_chat_runs_by_statuses(ACTIVE_RUN_STATUSES):
+        run_id = str(record.get("id") or "")
+        if not run_id or has_live_chat_background_task(run_id):
+            continue
+        update_chat_run_status(run_id, "failed", completed_at)
+        in_memory = _runs.get(run_id)
+        if in_memory is not None and in_memory.status in ACTIVE_RUN_STATUSES:
+            in_memory.status = "failed"
+            in_memory.completed_at = completed_at
+        _append_process_restart_message(record)
+        count += 1
+    return count
+
+
+def _append_process_restart_message(record: dict) -> None:
+    session_id = str(record.get("sessionId") or "")
+    if not session_id:
+        return
+    try:
+        _append_assistant_message(
+            session_id=session_id,
+            agent_id=str(record.get("agentId") or ""),
+            agent_name=str(record.get("agentName") or "Assistant"),
+            model_name="",
+            content="",
+            error=PROCESS_RESTART_ERROR,
+        )
+    except Exception:
+        return
 
 
 async def get_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
@@ -102,14 +159,22 @@ async def attach_chat_background_run_task(run_id: str, task: asyncio.Task) -> bo
         return True
 
 
-async def list_chat_background_runs(project_id: str | None = None) -> list[ChatBackgroundRun]:
+async def list_chat_background_runs(
+    project_id: str | None = None,
+    trigger_source: str | None = None,
+) -> list[ChatBackgroundRun]:
     async with _runs_lock:
         by_id = {
             run.id: run
             for run in _runs.values()
-            if not project_id or run.project_id == project_id
+            if (not project_id or run.project_id == project_id)
+            and (not trigger_source or run.trigger_source == trigger_source)
         }
-    for record in list_chat_runs(MAX_BACKGROUND_RUNS, project_id=project_id):
+    for record in list_chat_runs(
+        MAX_BACKGROUND_RUNS,
+        project_id=project_id,
+        trigger_source=trigger_source,
+    ):
         if record["id"] not in by_id:
             by_id[record["id"]] = _run_from_persisted_record(record)
     return sorted(by_id.values(), key=lambda item: item.completed_at or item.created_at, reverse=True)
@@ -126,6 +191,9 @@ async def start_chat_background_run(
     workspace_id: str = "default",
     project_id: str = "default",
     persist: bool = True,
+    trigger_source: str = "user",
+    scheduled_job_id: str = "",
+    scheduled_firing_id: str = "",
 ) -> ChatBackgroundRun:
     """创建 Run、V3 stream 和根 message Block 后启动后台执行。"""
 
@@ -138,6 +206,9 @@ async def start_chat_background_run(
         agent_name=agent_name,
         task_text=task,
         mode=mode,
+        trigger_source=trigger_source or "user",
+        scheduled_job_id=scheduled_job_id or "",
+        scheduled_firing_id=scheduled_firing_id or "",
     )
     if persist:
         _persist_run(run)
@@ -303,7 +374,13 @@ def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
         "agentName": run.agent_name,
         "task": run.task_text,
         "mode": run.mode,
+        "triggerSource": run.trigger_source,
+        "scheduledJobId": run.scheduled_job_id,
+        "scheduledFiringId": run.scheduled_firing_id,
         "status": run.status,
+        "triggerSource": run.trigger_source,
+        "scheduledJobId": run.scheduled_job_id,
+        "scheduledFiringId": run.scheduled_firing_id,
         "createdAt": run.created_at,
         "completedAt": run.completed_at,
         "eventCount": run.event_count,
@@ -458,6 +535,9 @@ def _persist_run(run: ChatBackgroundRun) -> None:
         "task": run.task_text,
         "mode": run.mode,
         "status": run.status,
+        "triggerSource": run.trigger_source,
+        "scheduledJobId": run.scheduled_job_id,
+        "scheduledFiringId": run.scheduled_firing_id,
         "createdAt": run.created_at,
         "completedAt": run.completed_at,
     })
@@ -474,6 +554,9 @@ def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
         agent_name=record.get("agentName", ""),
         task_text=record.get("task", ""),
         mode=record.get("mode", "agent"),
+        trigger_source=record.get("triggerSource") or "user",
+        scheduled_job_id=record.get("scheduledJobId") or "",
+        scheduled_firing_id=record.get("scheduledFiringId") or "",
         status=record.get("status", "completed"),
         created_at=record.get("createdAt") or datetime.now(timezone.utc).isoformat(),
         completed_at=record.get("completedAt"),

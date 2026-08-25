@@ -96,7 +96,11 @@ def test_react_runtime_only_enables_plan_features_for_explicit_plan_request(monk
         agent_name="Agent",
         persist_run=True,
         intent_route=SimpleNamespace(executor=SimpleNamespace(kind="single_agent")),
-        runtime_context=SimpleNamespace(project_root=Path("/tmp/project")),
+        runtime_context=SimpleNamespace(
+            project_root=Path("/tmp/project"),
+            workspace_id="default",
+            project_id="default",
+        ),
     )
 
     normal_parts = _build_runtime_feature_parts(ctx, ChatMessage(message="直接回答"))
@@ -106,7 +110,14 @@ def test_react_runtime_only_enables_plan_features_for_explicit_plan_request(monk
     )
 
     assert normal_parts[0] is None
-    assert normal_parts[1] == "none"
+    assert "scheduled-job-tools:" in normal_parts[1]
+    assert [tool.name for tool in normal_parts[2]] == [
+        "ScheduleJob",
+        "ListJobs",
+        "PauseJob",
+        "ConfirmJob",
+    ]
     assert plan_parts[0] is not None
     assert plan_parts[0].context.plan_active is True
     assert plan_parts[1].startswith("plan-mode-v2:")
+    assert "scheduled-job-tools:" in plan_parts[1]
