@@ -51,7 +51,9 @@ BASE_SCHEMA_SQL = """
         guardrails TEXT NOT NULL,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'chat',
+        job_toolkit TEXT NOT NULL DEFAULT '{}'
     );
     CREATE TABLE IF NOT EXISTS mcp_servers (
         id TEXT PRIMARY KEY,

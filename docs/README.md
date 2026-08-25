@@ -22,6 +22,7 @@
 - `docs/team-runtime-redesign.md`：一次性 TeamRun、动态 Member、Task List、Mailbox 和 file-first 状态。
 - `docs/subagent-delegation-design.md`：Subagent 文件定义、attached fork/join、wait/read、父结果消费、权限裁剪和任务恢复边界。
 - `docs/memory-system-design.md`：新记忆系统、Markdown 记忆、`memory_nodes`、向量检索和 Skill 自进化。
+- `docs/notifications.md`：通知通道抽象、应用内 inbox、独立 SSE 与外部通道扩展方式。不经过 Chat SSE。
 
 ## 已实施设计
 

@@ -1,6 +1,6 @@
 # 定时任务 v2：到点激活 Agent 与能力合同
 
-> 状态：Draft / 后续路线。2026-08-24。修订：2026-08-24（round 3：PR 1 不加 capability_tags 列；partial AskUser 测试只锁关键字）。
+> 状态：已落地迭代。2026-08-25：Job Agent 与 Chat Agent 拆分；必注入工具不受 CheckJobFeasibility 裁剪。
 > 作者：引力 YINLI 架构。
 > 本文已在 `docs/README.md`「后续路线」登记；落地实现前不得当作在线行为基线。
 > 本文是 `docs/scheduled-jobs-design.md`（Phase 1）的 **升级计划**，不是绿场重写，也不把 Phase 1 文档改写成已经具备本行为。

@@ -8,6 +8,29 @@
 /** Agent 运行状态 */
 export type AgentStatus = 'idle' | 'thinking' | 'working' | 'error';
 
+/** Agent 用途：对话助手或定时任务执行者 */
+export type AgentRole = 'chat' | 'job';
+
+export type JobToolkitKind = 'builtin' | 'mcp' | 'http' | 'knowledge' | 'skill';
+
+export interface JobToolkitItem {
+  kind: JobToolkitKind;
+  id: string;
+}
+
+export interface JobToolkit {
+  required: JobToolkitItem[];
+  optional: JobToolkitItem[];
+}
+
+export const JOB_BUILTIN_OPTIONS: Array<{ id: 'WebFetch' | 'HttpRequest' | 'Bash'; label: string; help: string }> = [
+  { id: 'WebFetch', label: 'WebFetch', help: '读取公开网页，适合查天气、抓页面' },
+  { id: 'HttpRequest', label: 'HttpRequest', help: '调用通用 HTTP API' },
+  { id: 'Bash', label: 'Bash', help: '执行脚本与 Skill scripts/' },
+];
+
+export const EMPTY_JOB_TOOLKIT: JobToolkit = { required: [], optional: [] };
+
 /** 模型配置 */
 export interface ModelConfig {
   /** 主模型名称（如 qwen-max） */
@@ -96,6 +119,10 @@ export interface Agent {
   guardrails: Guardrails;
   /** 当前运行状态 */
   status: AgentStatus;
+  /** chat=对话助手，job=定时任务执行者，不能在 Chat 里选用 */
+  role: AgentRole;
+  /** Job Agent 的必注入 / 可选注入工具 */
+  jobToolkit: JobToolkit;
   /** 创建时间 */
   createdAt: string;
   /** 更新时间 */
@@ -156,6 +183,30 @@ export const DEFAULT_PLAN_CONFIG: PlanConfig = {
 };
 
 /** 创建空 Agent 表单数据 */
+export function applyJobRoleDefaults(form: AgentCreatePayload, role: AgentRole): AgentCreatePayload {
+  if (role !== 'job') {
+    return { ...form, role, jobToolkit: { required: [], optional: [] } };
+  }
+  const required: JobToolkitItem[] = form.jobToolkit.required.length
+    ? form.jobToolkit.required
+    : [
+      ...form.mcpTools.map((id) => ({ kind: 'mcp' as const, id })),
+      ...form.knowledgeTools.map((id) => ({ kind: 'http' as const, id })),
+      ...form.skills.map((id) => ({ kind: 'skill' as const, id })),
+    ];
+  return {
+    ...form,
+    role,
+    jobToolkit: { required, optional: form.jobToolkit.optional },
+    guardrails: {
+      ...form.guardrails,
+      humanApproval: false,
+      toolPermissionProfile: 'trusted_tools',
+      toolPermissionMode: 'bypass',
+    },
+  };
+}
+
 export function createEmptyAgentForm(): AgentCreatePayload {
   return {
     name: '',
@@ -169,5 +220,7 @@ export function createEmptyAgentForm(): AgentCreatePayload {
     tags: [],
     planConfig: { ...DEFAULT_PLAN_CONFIG },
     guardrails: { ...DEFAULT_GUARDRAILS },
+    role: 'chat',
+    jobToolkit: { required: [], optional: [] },
   };
 }

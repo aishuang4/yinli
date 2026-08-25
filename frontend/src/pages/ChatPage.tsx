@@ -29,6 +29,7 @@ import { ChatComposer } from '../features/chat/ChatComposer';
 import { PlanReviewComposer } from '../features/chat/PlanReviewComposer';
 import { PlanFloatingPanel } from '../features/chat/PlanFloatingPanel';
 import { ChatHistoryPanel } from '../features/chat/ChatHistoryPanel';
+import { NotificationBell } from '../features/notifications/NotificationBell';
 import { selectLatestPlan, selectPendingPlanReview, type PlanReviewData } from '../features/chat/planReviewUtils';
 import { selectPendingAskUserInteractions } from '../features/chat/humanInteractionUtils';
 import type { ChatFilePayload, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
@@ -82,12 +83,18 @@ export function ChatPage() {
   } = useChatAttachments({ onError: setChatError });
 
   const availableAgents = useMemo(() => agents.filter((agent) => (
-    agent.id === 'default'
-    || (agent.workspaceId === activeWorkspaceId && enabledByType.agent.has(agent.id))
+    agent.role !== 'job'
+    && (
+      agent.id === 'default'
+      || (agent.workspaceId === activeWorkspaceId && enabledByType.agent.has(agent.id))
+    )
   )), [activeWorkspaceId, agents, enabledByType]);
 
   const selectedAgent = useMemo(
-    () => availableAgents.find((agent) => agent.id === selectedAgentId) || null,
+    () => availableAgents.find((agent) => agent.id === selectedAgentId)
+      || availableAgents.find((agent) => agent.id === 'default')
+      || availableAgents[0]
+      || null,
     [availableAgents, selectedAgentId]
   );
 
@@ -598,6 +605,7 @@ export function ChatPage() {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            <NotificationBell />
             <Tooltip title="工作台设置" placement="bottom" mode="dark">
               <button
                 type="button"

@@ -30,16 +30,28 @@ export function ScheduledJobContractPanel({ job }: ScheduledJobContractPanelProp
         <div className="mb-3 text-sm text-[var(--color-text-secondary)]">
           原意：{contract.taskIntent}
         </div>
+      ) : null}
+      {contract.claimed.some((item) => item.layer === 'required') ? (
+        <div className="mb-3">
+          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">必注入（门禁不能裁）</div>
+          <div className="flex flex-wrap gap-1">
+            {contract.claimed.filter((item) => item.layer === 'required').map((item) => (
+              <Tag key={item.capabilityId} size="small" color="blue">
+                {item.toolName || item.capabilityId}
+              </Tag>
+            ))}
+          </div>
+        </div>
       ) : (
         <div className="mb-3 text-sm text-[var(--color-text-tertiary)]">
           Phase 1 存量任务：到期只生成文件，不会自动带上后来绑定的 MCP。
         </div>
       )}
-      {contract.claimed.length > 0 ? (
+      {contract.claimed.some((item) => item.layer !== 'required') ? (
         <div className="mb-3">
-          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">认领的工具</div>
+          <div className="mb-1 text-xs text-[var(--color-text-tertiary)]">本条认领的可选工具</div>
           <div className="flex flex-wrap gap-1">
-            {contract.claimed.map((item) => (
+            {contract.claimed.filter((item) => item.layer !== 'required').map((item) => (
               <Tag key={item.capabilityId} size="small" color="transparent">
                 {item.toolName || item.capabilityId} ({item.kind})
               </Tag>

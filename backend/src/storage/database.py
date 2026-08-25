@@ -261,6 +261,8 @@ def ensure_db() -> None:
             )
             _ensure_column(conn, "chat_sessions", "mode", "TEXT NOT NULL DEFAULT 'agent'")
             _ensure_column(conn, "agents", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "agents", "role", "TEXT NOT NULL DEFAULT 'chat'")
+            _ensure_column(conn, "agents", "job_toolkit", "TEXT NOT NULL DEFAULT '{}'")
             _ensure_column(conn, "mcp_servers", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "http_tools", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "skills", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")

@@ -95,6 +95,7 @@ function mapContract(raw: unknown): ScheduledJob['capabilityContract'] {
         toolName: String(row.toolName ?? ''),
         tags: Array.isArray(row.tags) ? row.tags.map((tag) => String(tag)) : [],
         unattendedOk: row.unattendedOk === true,
+        layer: row.layer === 'required' ? 'required' : 'optional',
       };
     }),
     missing: missing.filter((item) => item && typeof item === 'object').map((item) => {

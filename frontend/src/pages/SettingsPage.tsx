@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card } from '@/components/design';
 import { ModelSettingsForm, type ModelSettings } from '../features/settings/ModelSettingsForm';
+import { NotificationSettingsCard } from '../features/notifications/NotificationSettingsCard';
 import { ConversationContextSettingsCard } from '../features/settings/ConversationContextSettingsCard';
 import { useSettingsStore } from '../stores/settingsStore';
 import type { ThemeName } from '../types/theme';
@@ -142,7 +143,7 @@ export function SettingsPage() {
           <div>
             <h1 className="text-xl font-semibold text-[var(--color-text-primary)]">系统设置</h1>
             <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-              管理默认模型与新会话使用的工作上下文。
+              管理默认模型、消息通知与新会话使用的工作上下文。
             </p>
           </div>
           <span className="text-xs text-[var(--color-text-tertiary)]">保存后将在下一轮对话生效</span>
@@ -183,6 +184,7 @@ export function SettingsPage() {
 
           <aside className="space-y-4 xl:sticky xl:top-0">
             <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
+            <NotificationSettingsCard />
             <ConversationContextSettingsCard />
           </aside>
         </div>

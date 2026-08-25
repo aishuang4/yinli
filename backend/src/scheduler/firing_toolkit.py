@@ -6,6 +6,7 @@ from typing import Any
 
 from src.scheduler.capability_contract import parse_capability_contract
 from src.scheduler.http_runtime import enabled_http_tools, enabled_knowledge_tools
+from src.scheduler.job_toolkit import JOB_ROLE, agent_role_of, job_toolkit_of
 from src.scheduler.mcp_runtime import resolve_mcp_runtime_servers
 from src.scheduler.models import JobToolScope, ScheduledJob
 from src.scheduler.unattended_policy import agent_approval_policy
@@ -35,7 +36,12 @@ def assemble_scheduled_firing_toolkit_spec(
     scope = getattr(job, "tool_scope", None)
     if not isinstance(scope, JobToolScope):
         scope = JobToolScope.model_validate(scope or {})
-    if contract.is_generate_only() or contract.verdict == "generate_only":
+    if agent is None:
+        from src.server.routes.agents import get_registered_agent
+
+        agent = get_registered_agent(str(getattr(job, "agent_id", "") or ""))
+    job_agent = agent_role_of(agent) == JOB_ROLE
+    if (contract.is_generate_only() or contract.verdict == "generate_only") and not job_agent:
         tool_scope = JobToolScope(
             allow_bash=bool(scope.allow_bash),
             allow_http=False,
@@ -60,10 +66,6 @@ def assemble_scheduled_firing_toolkit_spec(
             "firing_tools_preview": preview,
         }
 
-    if agent is None:
-        from src.server.routes.agents import get_registered_agent
-
-        agent = get_registered_agent(str(getattr(job, "agent_id", "") or ""))
     policy = agent_approval_policy(agent)
     trusted = policy == ApprovalPolicy.TRUSTED_TOOLS
     agent_mcp = {str(item) for item in list(getattr(agent, "mcp_tools", None) or [])}
@@ -74,6 +76,11 @@ def assemble_scheduled_firing_toolkit_spec(
     claimed_mcp = {c.resource_id for c in contract.claimed if c.kind == "mcp"}
     claimed_http = {c.resource_id for c in contract.claimed if c.kind == "http"}
     claimed_knowledge = {c.resource_id for c in contract.claimed if c.kind == "knowledge"}
+    if job_agent:
+        toolkit = job_toolkit_of(agent)
+        claimed_mcp.update(item.id for item in toolkit.required if item.kind == "mcp")
+        claimed_http.update(item.id for item in toolkit.required if item.kind == "http")
+        claimed_knowledge.update(item.id for item in toolkit.required if item.kind == "knowledge")
 
     live_mcp_ids = _live_mcp_resource_ids(
         claimed_mcp, agent_mcp, allowed_server_ids=allowed_mcp,
@@ -107,12 +114,17 @@ def assemble_scheduled_firing_toolkit_spec(
     if missing_knowledge:
         raise CapabilityUnboundError("capability_unbound: " + ", ".join(missing_knowledge))
 
+    required_builtins = set()
+    if job_agent:
+        required_builtins = {
+            item.id for item in job_toolkit_of(agent).required if item.kind == "builtin"
+        }
     tool_scope = JobToolScope(
         allow_mcp=bool(servers),
         allow_knowledge=bool(live_http or live_knowledge),
-        allow_http=bool(contract.allow_http_request and trusted),
-        allow_web=bool(contract.allow_web_fetch and trusted),
-        allow_bash=bool(contract.allow_bash and trusted),
+        allow_http=bool((contract.allow_http_request or "HttpRequest" in required_builtins) and trusted),
+        allow_web=bool((contract.allow_web_fetch or "WebFetch" in required_builtins) and trusted),
+        allow_bash=bool((contract.allow_bash or "Bash" in required_builtins) and trusted),
     )
     preview = list(ALWAYS_PREVIEW)
     if tool_scope.allow_bash:

@@ -1,36 +1,43 @@
-"""应用内通知 REST。不绑定 Chat SSE。"""
+"""通知 REST 与独立 SSE。不绑定 Chat SSE。"""
 
 from __future__ import annotations
 
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
-from src.scheduler.notifications import (
+from src.notifications.inbox import (
     NotificationNotFoundError,
     list_notification_page,
     mark_all_read,
     mark_read,
+    serialize_notification,
     unread_count as count_unread,
 )
+from src.notifications.settings import (
+    NotificationSettingsError,
+    list_channel_settings,
+    save_channel_settings,
+)
+from src.notifications.stream import notification_event_stream
 
 router = APIRouter()
 
 
-def serialize_notification(item: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": item["id"],
-        "workspaceId": item["workspace_id"],
-        "projectId": item["project_id"],
-        "jobId": item["job_id"],
-        "firingId": item["firing_id"],
-        "kind": item["kind"],
-        "title": item["title"],
-        "body": item["body"],
-        "payload": item.get("payload") or {},
-        "readAt": item.get("read_at"),
-        "createdAt": item["created_at"],
-    }
+class ChannelSettingsPatch(BaseModel):
+    """单个通道的设置补丁。"""
+
+    id: str = Field(..., min_length=1)
+    enabled: bool | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class NotificationSettingsUpdate(BaseModel):
+    """通知通道设置更新。"""
+
+    channels: list[ChannelSettingsPatch] = Field(default_factory=list)
 
 
 @router.get("/notifications/unread-count")
@@ -40,6 +47,41 @@ async def get_unread_count(
     """未读通知条数。"""
 
     return {"unreadCount": count_unread(project_id=project_id)}
+
+
+@router.get("/notifications/settings")
+async def get_notification_settings() -> dict[str, Any]:
+    """通知通道目录与当前配置。"""
+
+    return {"channels": list_channel_settings()}
+
+
+@router.put("/notifications/settings")
+async def update_notification_settings(data: NotificationSettingsUpdate) -> dict[str, Any]:
+    """保存通知通道开关与配置。未实现通道不能启用。"""
+
+    try:
+        channels = save_channel_settings([item.model_dump() for item in data.channels])
+    except NotificationSettingsError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"channels": channels}
+
+
+@router.get("/notifications/stream")
+async def stream_notifications(
+    project_id: str | None = Query(default=None, alias="projectId"),
+) -> StreamingResponse:
+    """订阅应用内通知推送。独立于 Chat SSE。"""
+
+    return StreamingResponse(
+        notification_event_stream(project_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/notifications/read-all")

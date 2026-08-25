@@ -21,6 +21,14 @@ from src.scheduler.capability_match import (
     claim_capabilities,
     extract_required_intents,
 )
+from src.scheduler.job_toolkit import (
+    JOB_ROLE,
+    agent_role_of,
+    intents_covered_by_claims,
+    job_toolkit_of,
+    optional_inventory,
+    resolve_required_layer,
+)
 from src.scheduler.unattended_policy import agent_approval_policy, skill_package_has_scripts
 from src.security.permissions import ApprovalPolicy, build_permission_profile
 from src.storage.database import list_agents
@@ -69,7 +77,11 @@ def evaluate_job_feasibility(
     claimed_must_include: frozenset[str] | None = None,
     include_suggestions: bool = True,
 ) -> FeasibilityResult:
-    """纯函数式门禁。不写库。不调模型。"""
+    """纯函数式门禁。不写库。不调模型。
+
+    Job Agent：第一段检查必注入资格，第二段只在可选名单里认领。
+    对话 Agent 不能作为到期执行者。
+    """
 
     intent_text = str(task_intent or "")
     required = extract_required_intents(intent_text, required_intents)
@@ -79,35 +91,114 @@ def evaluate_job_feasibility(
     agent = get_registered_agent(agent_id) if agent_id else None
     profile = build_permission_profile(getattr(agent, "guardrails", None) if agent else None)
     read_only = profile.is_read_only
-    claimed, missing, blocked = claim_capabilities(
-        required, inventory, read_only=read_only,
+    role = agent_role_of(agent)
+    toolkit = job_toolkit_of(agent)
+
+    if role != JOB_ROLE:
+        return FeasibilityResult(
+            verdict="impossible",
+            agent_id=agent_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            task_intent=intent_text,
+            required_intents=required,
+            claimed=[],
+            missing=[JobCapabilityGap(
+                intent="job.agent",
+                reason="not_job_agent",
+                suggested_action="请选择一个 Job Agent 来执行定时任务",
+            )],
+            blocked_by_permission=[],
+            assembled_tool_scope={
+                "allowBash": False,
+                "allowHttp": False,
+                "allowWeb": False,
+                "allowMcp": False,
+                "allowKnowledge": False,
+            },
+            firing_tools_preview=list(_ALWAYS_PREVIEW),
+            unattended_ok=False,
+            message="定时任务必须由 Job Agent 执行。对话助手不能到点无人值守运行。",
+            suggested_agent_ids=_suggest_agents(
+                current_agent_id=agent_id,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                required=required,
+            ) if include_suggestions else [],
+        )
+
+    required_claims, required_missing = resolve_required_layer(toolkit, inventory)
+    if required_missing or not toolkit.required:
+        message = "这个 Job Agent 的必注入工具当前不可无人值守使用，不能创建或启用任务。"
+        if not toolkit.required:
+            message = "Job Agent 必须配置必注入工具，不能把保底能力交给门禁裁剪。"
+        return FeasibilityResult(
+            verdict="impossible",
+            agent_id=agent_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            task_intent=intent_text,
+            required_intents=required,
+            claimed=required_claims,
+            missing=required_missing or [JobCapabilityGap(
+                intent="job.required",
+                reason="empty_required",
+                suggested_action="在 Agent 配置里勾选至少一项必注入工具",
+            )],
+            blocked_by_permission=[],
+            assembled_tool_scope={
+                "allowBash": False,
+                "allowHttp": False,
+                "allowWeb": False,
+                "allowMcp": False,
+                "allowKnowledge": False,
+            },
+            firing_tools_preview=list(_ALWAYS_PREVIEW),
+            unattended_ok=False,
+            message=message,
+            suggested_agent_ids=[],
+        )
+
+    covered = intents_covered_by_claims(required_claims)
+    remaining_intents = [
+        item for item in required
+        if item not in covered and item not in {"file.read", "file.write", "office.generate"}
+    ]
+    optional_rows = optional_inventory(toolkit, inventory)
+    claimed_optional, missing, blocked = claim_capabilities(
+        remaining_intents, optional_rows, read_only=read_only,
     )
+    claimed_optional = [
+        item.model_copy(update={"layer": "optional"}) for item in claimed_optional
+    ]
+    claimed = [*required_claims, *claimed_optional]
     if any("file.write" in item.tags for item in claimed):
         missing = [item for item in missing if item.intent != "office.generate"]
     if claimed_must_include:
-        live_ids = {
+        live_ids = {item.capability_id for item in claimed if item.capability_id}
+        inventory_ok = {
             item.capability_id for item in inventory if item.unattended_ok
         }
         for cap_id in claimed_must_include:
-            if cap_id not in live_ids:
+            if cap_id not in live_ids and cap_id not in inventory_ok:
                 missing.append(JobCapabilityGap(
                     intent=cap_id,
                     reason="claimed_unbound",
-                    suggested_action="合同认领的工具已不可无人值守使用",
+                    suggested_action="合同认领的可选工具已不可无人值守使用",
                 ))
 
-    channel_required = [item for item in required if item in CHANNEL_INTENTS]
-    channel_satisfied = _channel_intents_satisfied(channel_required, claimed)
+    channel_required = [item for item in remaining_intents if item in CHANNEL_INTENTS]
+    channel_satisfied = _channel_intents_satisfied(channel_required, claimed_optional)
     send_only = _is_send_only(intent_text)
     can_write = (not read_only) and (
         "file.write" in required or "office.generate" in required or not send_only
+        or "file.write" in covered
     )
 
     if read_only and ("file.write" in required or "office.generate" in required):
         verdict: Literal["ok", "partial", "impossible"] = "impossible"
     elif channel_required and not channel_satisfied:
-        has_generate = "file.write" in required or "office.generate" in required
-        if send_only or not has_generate:
+        if send_only:
             verdict = "impossible"
         else:
             verdict = "partial" if can_write else "impossible"
@@ -117,6 +208,15 @@ def evaluate_job_feasibility(
         verdict = "ok"
 
     flags = _three_flags(required, intent_text, inventory, claimed)
+    if any(item.resource_id == "WebFetch" for item in claimed):
+        flags["allow_web_fetch"] = True
+    if any(item.resource_id == "HttpRequest" for item in claimed):
+        flags["allow_http_request"] = True
+    if any(item.resource_id == "Bash" or item.kind == "skill" for item in claimed):
+        flags["allow_bash"] = flags["allow_bash"] or any(
+            item.resource_id == "Bash" or (item.kind == "skill" and "shell.execute" in item.tags)
+            for item in claimed
+        )
     scope = {
         "allowBash": flags["allow_bash"],
         "allowHttp": flags["allow_http_request"],
@@ -125,6 +225,12 @@ def evaluate_job_feasibility(
         "allowKnowledge": any(item.kind in {"http", "knowledge"} for item in claimed),
     }
     preview = list(_ALWAYS_PREVIEW)
+    if flags["allow_bash"] and "Bash" not in preview:
+        preview.append("Bash")
+    if flags["allow_http_request"] and "HttpRequest" not in preview:
+        preview.append("HttpRequest")
+    if flags["allow_web_fetch"] and "WebFetch" not in preview:
+        preview.append("WebFetch")
     for item in claimed:
         if item.kind != "builtin" and item.tool_name and item.tool_name not in preview:
             preview.append(item.tool_name)
@@ -217,7 +323,7 @@ def _message(
     blocked: list[JobCapabilityGap],
 ) -> str:
     if verdict == "ok":
-        return "当前 Agent 无人值守可以完成这个定时任务。"
+        return "当前 Job Agent 可以完成这个定时任务；必注入工具会保留。"
     if "email.send" in required:
         if verdict == "impossible":
             return "我不能无人值守发邮件，这个定时任务做不到。"
@@ -247,6 +353,8 @@ def _suggest_agents(
     for record in agents:
         agent_id = str(record.get("id") or "")
         if not agent_id or agent_id == current_agent_id:
+            continue
+        if agent_role_of(record) != JOB_ROLE:
             continue
         scanned += 1
         if scanned > 20:

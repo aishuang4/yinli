@@ -17,6 +17,7 @@ class JobCapabilityClaim(BaseModel):
     tool_name: str = Field(default="", alias="toolName")
     tags: list[str] = Field(default_factory=list)
     unattended_ok: bool = Field(default=True, alias="unattendedOk")
+    layer: Literal["required", "optional"] = Field(default="optional")
 
     model_config = {"populate_by_name": True, "extra": "ignore"}
 

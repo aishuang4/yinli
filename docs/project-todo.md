@@ -75,6 +75,7 @@
 - [ ] 建立 Secret 安全存储和引用机制。
 - [ ] 按 `docs/scheduled-jobs-design.md` 分阶段实现定时任务：先 weekly/once 到点跑并通知，预览发送与 OS 唤醒不与第一批捆绑。
 - [ ] 评估自动化触发、任务队列、预算、失败重试和后台通知。
+- [ ] 在现有 `NotificationChannel` 上接入邮箱、微信、飞书投递；密钥走 secret_store，启用前补投递失败重试与脱敏。
 - [ ] Agent / Subagent preset 市场、多语言 UI 和后续多用户 RBAC。
 
 ## 维护规则

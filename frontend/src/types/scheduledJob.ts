@@ -45,6 +45,7 @@ export interface JobCapabilityClaim {
   toolName: string;
   tags: string[];
   unattendedOk: boolean;
+  layer?: 'required' | 'optional';
 }
 
 export interface JobCapabilityGap {

@@ -6,18 +6,20 @@
 
 import { Alert } from '@/components/design';
 import { FormGrid, SelectField, TextAreaField, TextField } from '../../../components/form';
-import type { AgentCreatePayload, ModelOption } from '../../../types/agent';
+import { applyJobRoleDefaults, type AgentCreatePayload, type AgentRole, type ModelOption } from '../../../types/agent';
 
 interface AgentBasicSectionProps {
   form: AgentCreatePayload;
   primaryModelOptions: ModelOption[];
   onChange: (form: AgentCreatePayload) => void;
+  lockChatRole?: boolean;
 }
 
 export function AgentBasicSection({
   form,
   primaryModelOptions,
   onChange,
+  lockChatRole = false,
 }: AgentBasicSectionProps) {
   return (
     <section className="rounded-xl bg-[var(--color-bg-primary)] p-4 shadow-sm">
@@ -39,6 +41,17 @@ export function AgentBasicSection({
           onChange={(event) => onChange({ ...form, name: event.target.value })}
           placeholder="如：CodeReviewer"
           maxLength={50}
+        />
+        <SelectField
+          label="用途"
+          value={form.role}
+          disabled={lockChatRole}
+          options={[
+            { label: '对话助手', value: 'chat' },
+            { label: '定时任务 Agent', value: 'job' },
+          ]}
+          onChange={(value) => onChange(applyJobRoleDefaults(form, String(value) as AgentRole))}
+          help={lockChatRole ? '系统默认助手只能用于 Chat。' : 'Job Agent 不能在 Chat 里选用，专门给定时任务到点执行。'}
         />
         <TextField
           label="描述"

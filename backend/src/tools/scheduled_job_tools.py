@@ -46,6 +46,25 @@ _ENABLE_ASKUSER_HINT = (
 )
 
 
+def _job_agent_catalog_line() -> str:
+    """把当前可用的 Job Agent 写进登记约定，避免模型拿 Chat 助手去跑任务。"""
+
+    try:
+        from src.scheduler.job_toolkit import JOB_ROLE, job_toolkit_of
+        from src.server.routes.agents import list_registered_agents
+
+        runners = [
+            agent for agent in list_registered_agents()
+            if getattr(agent, "role", "") == JOB_ROLE and job_toolkit_of(agent).required
+        ]
+    except Exception:
+        runners = []
+    if not runners:
+        return "No Job Agent is configured. Tell the user to create one in Agents: set 用途 to 定时任务 Agent and mark at least one required tool."
+    listing = "; ".join(f"{agent.name} ({agent.id})" for agent in runners)
+    return f"Available Job Agents: {listing}. Pass agent_id of one of these to CheckJobFeasibility and ScheduleJob."
+
+
 def scheduled_job_tools_cache_key(tools: list[ToolBase] | None = None) -> str:
     """交互登记路径的 runtime_features_cache_key 片段。"""
 
@@ -57,12 +76,15 @@ def scheduled_job_tools_cache_key(tools: list[ToolBase] | None = None) -> str:
 def scheduled_job_prompt_addendum() -> str:
     """注入主 Agent 的登记约定：AskUser 收集字段后 ScheduleJob，对话内 ConfirmJob 启用。"""
 
+    catalog = _job_agent_catalog_line()
     return "\n".join([
         "",
         "Scheduled job registration:",
-        "First call CheckJobFeasibility with the user's original task_intent before collecting a long schedule. Do not guess capabilities.",
-        "If CheckJobFeasibility verdict is impossible, tell the user this Agent cannot do the unattended job; do not call ScheduleJob.",
-        "If verdict is partial, AskUser options must be exactly: 按降级创建（只生成） (default, first), then 先去补能力. Mention 不能 and 发邮件/外发 vs 生成. Only ScheduleJob with accept_partial=true after they accept the downgrade.",
+        catalog,
+        "Scheduled jobs must run on a Job Agent, never the current chat Agent.",
+        "First pick a Job Agent, then call CheckJobFeasibility(task_intent, agent_id=that Job Agent) before collecting a long schedule. Do not guess capabilities.",
+        "CheckJobFeasibility does not strip the Job Agent's required tools; it only claims optional tools. If verdict is impossible, the Job Agent's required tools are unavailable — do not call ScheduleJob.",
+        "If verdict is partial, AskUser options must be exactly: 按降级创建（只生成） (default, first), then 先去补能力. Mention 不能 and 发邮件/外发 vs 生成. Only ScheduleJob with accept_partial=true after they accept the downgrade. Required tools stay injected.",
         "Use AskUser to collect missing schedule fields, then call ScheduleJob with a complete payload including task_intent. There is no draft status.",
         f"When asking for delivery policy, AskUser options must be exactly: {ASKUSER_DELIVERY_OPTIONS[0]} (default, first), then {ASKUSER_DELIVERY_OPTIONS[1]}.",
         "Do not offer 直接发给客户, auto_send, or sending to the customer.",
@@ -204,7 +226,7 @@ class ScheduleJob(_ScheduledJobToolBase):
                 "description": "Frozen user prompt used at each firing. Must be complete.",
             },
             "summary": {"type": "string", "description": "Short human-readable summary."},
-            "agent_id": {"type": "string", "description": "Agent to run. Defaults to the current Agent."},
+            "agent_id": {"type": "string", "description": "Job Agent that will run the task. Do not use the current chat Agent."},
             "skill_ids": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -434,9 +456,10 @@ class CheckJobFeasibility(_ScheduledJobToolBase):
 
     name: str = "CheckJobFeasibility"
     description: str = (
-        "Check whether the current Agent can unattended-fulfill a scheduled task. "
-        "Pass the user's original words as task_intent. Call this before ScheduleJob. "
-        "Does not write a job."
+        "Check whether a Job Agent can unattended-fulfill a scheduled task. "
+        "Pass agent_id of a Job Agent; required tools are always kept. "
+        "Only optional tools are claimed from the task_intent. "
+        "Call this before ScheduleJob. Does not write a job."
     )
     input_schema: dict[str, Any] = {
         "type": "object",
@@ -447,7 +470,7 @@ class CheckJobFeasibility(_ScheduledJobToolBase):
             },
             "agent_id": {
                 "type": "string",
-                "description": "Agent to activate. Defaults to the current Agent.",
+                "description": "Job Agent to evaluate. Do not pass a chat Agent.",
             },
             "required_intents": {
                 "type": "array",

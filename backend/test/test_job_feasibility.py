@@ -23,7 +23,7 @@ def isolated_db(tmp_path, monkeypatch):
     database._initialized = False
 
 
-def _file_builtins(*, read_only: bool = False) -> list[CapabilityInventoryItem]:
+def _file_builtins(*, read_only: bool = False, web: bool = True) -> list[CapabilityInventoryItem]:
     rows = []
     for name, tags in (
         ("Read", ["file.read"]),
@@ -33,7 +33,14 @@ def _file_builtins(*, read_only: bool = False) -> list[CapabilityInventoryItem]:
         ("Edit", ["file.write"]),
         ("HttpRequest", ["http.call"]),
         ("Bash", ["shell.execute"]),
+        ("WebFetch", ["web.fetch"]),
     ):
+        network = name in {"HttpRequest", "WebFetch", "Bash"}
+        ok = True
+        if read_only and name in {"Write", "Edit", "HttpRequest", "Bash", "WebFetch"}:
+            ok = False
+        if name == "WebFetch" and not web:
+            ok = False
         rows.append(CapabilityInventoryItem(
             capability_id=f"builtin:{name}",
             kind="builtin",
@@ -42,9 +49,28 @@ def _file_builtins(*, read_only: bool = False) -> list[CapabilityInventoryItem]:
             title=name,
             tags=tags,
             tag_source={tag: "declared" for tag in tags},
-            unattended_ok=not (read_only and name in {"Write", "Edit", "HttpRequest", "Bash"}),
+            unattended_ok=ok and not (network and read_only),
         ))
     return rows
+
+
+def _job_agent(*, optional=None):
+    return SimpleNamespace(
+        id="agent-1",
+        role="job",
+        job_toolkit={
+            "required": [{"kind": "builtin", "id": "WebFetch"}],
+            "optional": list(optional or []),
+        },
+        mcp_tools=[],
+        knowledge_tools=[],
+        skills=[],
+        guardrails=SimpleNamespace(
+            tool_permission_profile="trusted_tools",
+            human_approval=False,
+            network_enabled=True,
+        ),
+    )
 
 
 def _gmail_send() -> CapabilityInventoryItem:
@@ -64,13 +90,11 @@ def _gmail_send() -> CapabilityInventoryItem:
 def test_weather_without_web_is_impossible(monkeypatch):
     monkeypatch.setattr(
         "src.scheduler.feasibility.build_agent_capability_inventory",
-        lambda *args, **kwargs: _file_builtins(),
+        lambda *args, **kwargs: _file_builtins(web=False),
     )
     monkeypatch.setattr(
         "src.server.routes.agents.get_registered_agent",
-        lambda agent_id: SimpleNamespace(guardrails=SimpleNamespace(
-            tool_permission_profile="trusted_tools",
-        )),
+        lambda agent_id: _job_agent(),
     )
     result = evaluate_job_feasibility(
         task_intent="2分钟后帮我调用看一下今天天气",
@@ -81,7 +105,7 @@ def test_weather_without_web_is_impossible(monkeypatch):
     )
     assert result.verdict == "impossible"
     assert "web.fetch" in result.required_intents
-    assert "天气" in result.message or "网页" in result.message
+    assert "必注入" in result.message
 
 
 def test_email_without_channel_is_partial(monkeypatch):
@@ -91,9 +115,7 @@ def test_email_without_channel_is_partial(monkeypatch):
     )
     monkeypatch.setattr(
         "src.server.routes.agents.get_registered_agent",
-        lambda agent_id: SimpleNamespace(guardrails=SimpleNamespace(
-            tool_permission_profile="trusted_tools",
-        )),
+        lambda agent_id: _job_agent(),
     )
     result = evaluate_job_feasibility(
         task_intent="每周五给客户发周报邮件",
@@ -119,9 +141,7 @@ def test_email_http_request_only_is_not_ok(monkeypatch):
     )
     monkeypatch.setattr(
         "src.server.routes.agents.get_registered_agent",
-        lambda agent_id: SimpleNamespace(guardrails=SimpleNamespace(
-            tool_permission_profile="trusted_tools",
-        )),
+        lambda agent_id: _job_agent(),
     )
     result = evaluate_job_feasibility(
         task_intent="发邮件给客户",
@@ -141,9 +161,7 @@ def test_trusted_gmail_send_is_ok(monkeypatch):
     )
     monkeypatch.setattr(
         "src.server.routes.agents.get_registered_agent",
-        lambda agent_id: SimpleNamespace(guardrails=SimpleNamespace(
-            tool_permission_profile="trusted_tools",
-        )),
+        lambda agent_id: _job_agent(optional=[{"kind": "mcp", "id": "gmail-send-email"}]),
     )
     result = evaluate_job_feasibility(
         task_intent="每周五给客户发周报邮件",
@@ -166,9 +184,7 @@ def test_send_only_without_channel_is_impossible(monkeypatch):
     )
     monkeypatch.setattr(
         "src.server.routes.agents.get_registered_agent",
-        lambda agent_id: SimpleNamespace(guardrails=SimpleNamespace(
-            tool_permission_profile="trusted_tools",
-        )),
+        lambda agent_id: _job_agent(),
     )
     result = evaluate_job_feasibility(
         task_intent="只发送邮件给客户，不要生成文件",
@@ -189,6 +205,11 @@ def test_schedule_job_gate_rejects_email_without_accept_partial(isolated_db, mon
         "system_prompt": "p",
         "workspaceId": DEFAULT_WORKSPACE_ID,
         "status": "idle",
+        "role": "job",
+        "jobToolkit": {
+            "required": [{"kind": "builtin", "id": "WebFetch"}],
+            "optional": [],
+        },
     })
     monkeypatch.setattr(
         "src.scheduler.feasibility.build_agent_capability_inventory",
@@ -196,9 +217,7 @@ def test_schedule_job_gate_rejects_email_without_accept_partial(isolated_db, mon
     )
     monkeypatch.setattr(
         "src.server.routes.agents.get_registered_agent",
-        lambda agent_id: SimpleNamespace(guardrails=SimpleNamespace(
-            tool_permission_profile="trusted_tools",
-        )),
+        lambda agent_id: _job_agent(),
     )
     service = ScheduledJobService()
     with pytest.raises(ScheduledJobValidationError, match="不能"):
@@ -228,3 +247,70 @@ def test_schedule_job_gate_rejects_email_without_accept_partial(isolated_db, mon
     assert job.capability_contract.verdict == "partial"
     assert job.tool_scope.allow_mcp is False
     assert job.capability_contract.task_intent == "每周五给客户发周报邮件"
+
+
+def test_chat_agent_cannot_run_scheduled_jobs(monkeypatch):
+    monkeypatch.setattr(
+        "src.scheduler.feasibility.build_agent_capability_inventory",
+        lambda *args, **kwargs: _file_builtins(),
+    )
+    monkeypatch.setattr(
+        "src.server.routes.agents.get_registered_agent",
+        lambda agent_id: SimpleNamespace(
+            role="chat",
+            job_toolkit={"required": [], "optional": []},
+            guardrails=SimpleNamespace(tool_permission_profile="trusted_tools"),
+        ),
+    )
+    result = evaluate_job_feasibility(
+        task_intent="2分钟后帮我调用看一下今天天气",
+        agent_id="default",
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        project_id=DEFAULT_PROJECT_ID,
+        include_suggestions=False,
+    )
+    assert result.verdict == "impossible"
+    assert "Job Agent" in result.message
+
+
+def test_required_webfetch_is_not_stripped_for_weather(monkeypatch):
+    monkeypatch.setattr(
+        "src.scheduler.feasibility.build_agent_capability_inventory",
+        lambda *args, **kwargs: _file_builtins(web=True),
+    )
+    monkeypatch.setattr(
+        "src.server.routes.agents.get_registered_agent",
+        lambda agent_id: _job_agent(),
+    )
+    result = evaluate_job_feasibility(
+        task_intent="2分钟后帮我调用看一下今天天气",
+        agent_id="agent-1",
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        project_id=DEFAULT_PROJECT_ID,
+        include_suggestions=False,
+    )
+    assert result.verdict == "ok"
+    assert result.allow_web_fetch is True
+    assert any(item.resource_id == "WebFetch" and item.layer == "required" for item in result.claimed)
+    assert "WebFetch" in result.firing_tools_preview
+
+
+def test_optional_mismatch_keeps_required_tools(monkeypatch):
+    monkeypatch.setattr(
+        "src.scheduler.feasibility.build_agent_capability_inventory",
+        lambda *args, **kwargs: _file_builtins(web=True),
+    )
+    monkeypatch.setattr(
+        "src.server.routes.agents.get_registered_agent",
+        lambda agent_id: _job_agent(),
+    )
+    result = evaluate_job_feasibility(
+        task_intent="每周五给客户发周报邮件",
+        agent_id="agent-1",
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        project_id=DEFAULT_PROJECT_ID,
+        include_suggestions=False,
+    )
+    assert result.verdict == "partial"
+    assert any(item.resource_id == "WebFetch" and item.layer == "required" for item in result.claimed)
+    assert result.allow_web_fetch is True

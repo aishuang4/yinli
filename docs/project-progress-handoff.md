@@ -104,6 +104,13 @@
 - `WebFetch` 已接入主 Agent、Team Member、Subagent 和 Plan Mode，并包含私网、重定向、响应大小、非文本内容和外部 prompt injection 提醒。
 - WebSearch 尚未实现，不能把 WebFetch 描述成网络搜索能力。
 
+### 定时任务与通知
+
+- 定时任务 firing 终态写入通知分发器，应用内通道落 `user_notifications`。
+- Chat 工作台顶栏设置按钮左侧有任务通知铃铛；独立 SSE 推送未读数，断开后轮询。
+- 设置页可配置通道。应用内始终开启；邮箱 / 微信 / 飞书仅占位，不能启用。
+- 通知不进入 Chat SSE，也不新增 `JOB_EVENT`。
+
 ### 管理与桌面端
 
 - Agent CRUD、智能创建、导入导出、模型、工具、Skills、MCP 和权限配置。

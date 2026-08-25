@@ -130,6 +130,7 @@ class ScheduledJobService:
             raise ScheduledJobValidationError("name 不能为空")
         if not str(agent_id).strip():
             raise ScheduledJobValidationError("agent_id 不能为空")
+        self._require_job_runner(agent_id)
         if not str(frozen_prompt).strip():
             raise ScheduledJobValidationError("frozen_prompt 不能为空")
         canonical_expr, timezone_name = self._validate_schedule(
@@ -233,6 +234,7 @@ class ScheduledJobService:
         if job.delivery_policy == "auto_send":
             raise ScheduledJobValidationError("Phase 1 不能启用 auto_send")
         self._assert_resources_available(job)
+        self._require_job_runner(job.agent_id)
         contract_changes = self.assert_contract_satisfiable(job)
         next_run = compute_next_run_at(
             schedule_kind=job.schedule_kind,
@@ -271,6 +273,7 @@ class ScheduledJobService:
         if job.delivery_policy == "auto_send":
             raise ScheduledJobValidationError("Phase 1 不能启用 auto_send")
         self._assert_resources_available(job)
+        self._require_job_runner(job.agent_id)
         contract_changes = self.assert_contract_satisfiable(job)
         next_run = compute_next_run_at(
             schedule_kind=job.schedule_kind,
@@ -1068,6 +1071,19 @@ class ScheduledJobService:
             "tool_scope": derived.to_storage_dict(),
             "capability_contract": payload,
         }
+
+    def _require_job_runner(self, agent_id: str) -> None:
+        """能力门禁开启时，执行者必须是 Job Agent。"""
+
+        if not is_capability_gate_enabled():
+            return
+        from src.scheduler.job_toolkit import JobAgentError, require_job_runner
+        from src.server.routes.agents import get_registered_agent
+
+        try:
+            require_job_runner(get_registered_agent(agent_id), agent_id=agent_id)
+        except JobAgentError as exc:
+            raise ScheduledJobValidationError(str(exc)) from exc
 
     def _assert_resources_available(self, job: ScheduledJob) -> None:
         """confirm / resume 时复检 Project、Agent 与冻结 Skill/MCP/HTTP 是否仍可用。"""

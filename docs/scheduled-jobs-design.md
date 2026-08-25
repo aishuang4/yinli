@@ -614,13 +614,15 @@ Phase 1：`notify` 默认；`confirm_then_send` 当作 notify + UI 标明发送�
 
 **通知**
 
-见 API 节。顶栏徽标用独立 hook 轮询通知 API（例如 15s），不要绑死 `/api/health` 的 10s。Electron `Notification` 可选，非事实源。
+见 API 节与 `docs/notifications.md`。Chat 工作台顶栏设置按钮左侧是铃铛；未读徽标走独立 `/api/notifications/stream`，断开后 15s 轮询 unread-count，不要绑死 `/api/health` 的 10s，也不要写入 Chat SSE。Electron `Notification` 可选，非事实源。
 
 ### 模块与依赖方向
 
 ```text
 routes/scheduled_jobs.py          -> scheduler/service.py
-routes/notifications.py           -> scheduler/notifications.py
+routes/notifications.py           -> notifications/* + scheduler/notifications.py
+notifications/dispatcher.py       -> channels (in_app + 外部占位)
+scheduler/notifications.py        -> notifications.dispatcher
 tools/scheduled_job_tools.py      -> scheduler/service.py
 scheduler/service.py              -> storage/database.py + chat store（建 session）
 scheduler/ticker.py               -> service claim + create_task(firing)
@@ -662,9 +664,12 @@ GET    /api/notifications?projectId=&unreadOnly=&limit=&before=
 POST   /api/notifications/{id}/read
 POST   /api/notifications/read-all
 GET    /api/notifications/unread-count?projectId=
+GET    /api/notifications/stream?projectId=
+GET    /api/notifications/settings
+PUT    /api/notifications/settings
 ```
 
-`GET /api/notifications` 返回 `{ items, unreadCount, nextBefore }`。`limit` 默认 50。
+`GET /api/notifications` 返回 `{ items, unreadCount, nextBefore }`。`limit` 默认 50。应用内推送走独立 SSE，通道设置见 `docs/notifications.md`。
 
 Chat session：
 

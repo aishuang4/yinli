@@ -11,6 +11,7 @@ import { ScheduledJobLandingPage } from '../features/scheduled-jobs/ScheduledJob
 import { useAgents } from '../hooks/useAgents';
 import { useScheduledJobs } from '../hooks/useScheduledJobs';
 import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
+import { useAppStore } from '../stores/appStore';
 import type { ScheduledJob, ScheduledJobRun } from '../types/scheduledJob';
 import { notifyError, notifySuccess } from '../utils/feedback';
 
@@ -31,6 +32,8 @@ export function ScheduledJobsPage() {
   } = useScheduledJobs();
   const { agents } = useAgents();
   const { projects, activeProjectId } = useWorkspaceProjects();
+  const pendingJobId = useAppStore((state) => state.pendingJobId);
+  const clearPendingJobId = useAppStore((state) => state.clearPendingJobId);
 
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -63,6 +66,12 @@ export function ScheduledJobsPage() {
   const selectedJob = useMemo(() => (
     jobs.find((job) => job.id === selectedId) || null
   ), [jobs, selectedId]);
+
+  useEffect(() => {
+    if (!pendingJobId) return;
+    setSelectedId(pendingJobId);
+    clearPendingJobId();
+  }, [clearPendingJobId, pendingJobId]);
 
   useEffect(() => {
     if (!selectedId) {
