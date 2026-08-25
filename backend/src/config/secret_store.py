@@ -36,10 +36,17 @@ def _backend_name() -> str:
     configured = os.getenv("AGENT_WORKSTATION_SECRET_STORE", "").strip().lower()
     if configured:
         return configured
-    if sys.platform == "darwin":
+
+    # 只有 Electron 桌面后端具备稳定的应用身份和系统凭据库授权。
+    # Web/源码模式不能默认访问 macOS Keychain，否则浏览器版启动时会因
+    # 当前进程没有 Keychain 授权而无法读取系统设置。显式配置仍优先。
+    desktop_mode = os.getenv("AGENT_WORKSTATION_DESKTOP_MODE", "").strip() == "1"
+    if sys.platform == "darwin" and desktop_mode:
         return "keychain"
     if sys.platform == "win32":
-        return "dpapi"
+        return "dpapi" if desktop_mode else "memory"
+    if sys.platform == "darwin":
+        return "memory"
     return "unsupported"
 
 
