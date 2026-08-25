@@ -50,12 +50,13 @@ export function ChatHistoryPanel({
     <aside
       className="chat-history-panel chat-workbench-history flex min-h-0 flex-col overflow-hidden"
       data-collapsed={collapsed}
+      data-mac-shell={isMacDesktopShell}
     >
       {isMacDesktopShell && <div className="chat-workbench-electron-spacer" aria-hidden="true" />}
-      <div className="px-4 pb-3 pt-3">
+      <div className="chat-history-header px-4 pb-3 pt-3">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">历史对话</h2>
-          <div className="flex items-center gap-2">
+          <div className="chat-history-actions flex items-center gap-2">
             <Tooltip title="折叠历史对话" placement="bottom" mode="dark">
               <button
                 type="button"

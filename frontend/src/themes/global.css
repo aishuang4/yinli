@@ -356,6 +356,18 @@ button[class*="-btn"] .lucide {
   -webkit-app-region: drag;
 }
 
+/* macOS 红绿灯占用标题栏左侧；历史栏操作留在同一标题栏右侧。 */
+.chat-workbench-history[data-mac-shell="true"] {
+  position: relative;
+}
+
+.chat-workbench-history[data-mac-shell="true"] .chat-history-actions {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  z-index: 1;
+}
+
 .chat-workbench-history button,
 .chat-workbench-topbar button {
   -webkit-app-region: no-drag;
