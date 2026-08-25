@@ -1,6 +1,6 @@
 # 引力 YINLI
 
-引力 YINLI 是面向办公场景的本地优先 AI 工作台，基于 AgentScope 2.0、Electron 和 React 构建。它以 Chat 为主入口，让用户在一个受控桌面环境中读取、整理和产出文档、表格与项目文件，并提供单 Agent 执行、临时 Team 协作、Subagent 委托、Plan Mode、工具权限、长期记忆、运行恢复和 Trace 审计。
+引力 YINLI 是面向办公场景的本地优先 AI 工作台，基于 AgentScope 2.0、Electron 和 React 构建。它以 Chat 为主入口，让用户在一个受控桌面环境中读取、整理和产出文档、表格与项目文件，并提供单 Agent 执行、临时 Team 协作、Subagent 委托、Plan Mode、定时任务 Job Agent、工具权限、长期记忆、运行恢复和 Trace 审计。
 
 项目面向需要反复执行真实任务的本地工作流，不把多 Agent 简化成固定角色聊天。运行过程、任务状态、工具调用和最终成果都有明确的隔离、持久化与恢复边界。
 
@@ -45,6 +45,17 @@
 - 单 Agent 可使用 `plan_enter`、`plan_write`、`todo_write`、`task_output` 和 `plan_exit` 维护计划。
 - Team Runtime 不注入 Plan Mode 工具；需要先规划再协作时，应分成两轮执行。
 
+### 定时任务与 Job Agent
+
+定时任务用来在指定时间或周期自动做事，例如到点查天气、生成材料、调用 MCP / HTTP 接口。它不是再跑一遍对话助手，而是到期激活专门的 Job Agent。
+
+- 在 Chat 里用自然语言登记任务；模型先选 Job Agent 并做能力检查，再写入日程。创建后仍是待确认，用户明确要求启用时可在对话里直接开启，不必必须打开定时任务页。
+- 到期执行者必须是 `role=job` 的 Job Agent，不能使用 Chat 助手。Job Agent 不出现在对话选择器里；系统 `default` 助手也不能改成 Job Agent。
+- Job Agent 的工具分成必注入和可选注入两层。必注入到期一定带上；创建前的能力检查只认领可选层，避免误裁掉这个 Agent 的基线能力。能力不足时会拒绝创建，或部分能力可降级为「只生成、不外发」。
+- 系统设置可开关调度和能力门禁。开发库默认关闭调度；Windows 等桌面安装版首次启动会默认打开。关闭后对话里无法登记新任务。
+- 完成后写入消息中心。Web 在右上角弹出提醒框，Electron 客户端走系统通知；点击可查看本次运行结果。邮箱、微信、飞书通道已预留，尚未接入投递。
+- 工作台「定时任务」页可查看、确认启用、暂停和查阅运行历史。定时任务不新增 Chat `runtime.kind`，也不写入 Chat SSE。
+
 ### 工具、权限与记忆
 
 - 支持 Read、Grep、Glob、Write、Edit、Bash、HTTP、公开网页 WebFetch、MCP、知识库工具和 Skills；WebSearch 尚未接入。
@@ -54,7 +65,7 @@
 
 ### 工作台与审计
 
-- Chat、Runs、Trace、Agents、Subagents、Tools、MCP、Skills、Memory、Sandbox 和 Workflow 使用独立页面。
+- Chat、Runs、定时任务、Trace、Agents、Subagents、Tools、MCP、Skills、Memory、Sandbox、Settings 和 Workflow 使用独立页面。
 - Team 领域事件通过独立 projector 进入统一 DisplaySnapshot，前端 Team Console 只读取 Team Block 子树。
 - Dynamic Workflow 当前是独立实验工作区，后续按 Script Review 和 Runtime Cockpit 路线演进，不进入 Chat Runtime。
 - Electron 支持开发运行和 macOS / Windows 内测打包流程。
@@ -139,6 +150,8 @@ npm run electron:build:win
 backend/src/
   agents/               AgentScope Agent 与模型工厂
   memory/               记忆准入、检索、提炼和 Wiki
+  notifications/        应用内通知通道与 SSE
+  scheduler/            定时任务、Job Agent toolkit 与到期执行
   server/routes/chat/   Chat、RunState、TeamRun 和恢复链路
   subagents/            Subagent 定义、权限和执行
   storage/              SQLite 持久化
@@ -159,6 +172,7 @@ scripts/                 开发、打包和后端构建脚本
 - Subagent 是 ReAct 内部工具委托，不恢复旧 `runtime.kind=subagent`。
 - Plan Mode 是 middleware 能力，不恢复旧独立 Plan Runtime（`runtime.kind=plan`）或 approve / deny 链路。
 - 旧记忆模块已删除；记忆能力只能沿当前 hooks、tools 和后处理方案演进。
+- 定时任务到期激活 Job Agent，不新增 `runtime.kind`，也不把 `JOB_EVENT` 写入 Chat SSE。
 - 新增或变更 Chat `RuntimeFrame`、`Block.kind` 或 DisplaySnapshot 前，必须先更新稳定事件契约。
 
 ## 文档
@@ -169,6 +183,7 @@ scripts/                 开发、打包和后端构建脚本
 - [`docs/chat-sse-event-contract.md`](docs/chat-sse-event-contract.md)：Chat RuntimeFrame / DisplaySnapshot 稳定契约。
 - [`docs/team-runtime-redesign.md`](docs/team-runtime-redesign.md)：一次性 TeamRun、Task List 与 Mailbox。
 - [`docs/subagent-delegation-design.md`](docs/subagent-delegation-design.md)：Subagent 定义和委托模型。
+- [`docs/notifications.md`](docs/notifications.md)：定时任务完成后的消息通知与通道扩展。
 - [`docs/development-guidelines.md`](docs/development-guidelines.md)：开发规范。
 - [`docs/project-todo.md`](docs/project-todo.md)：当前待办。
 
