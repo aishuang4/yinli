@@ -179,3 +179,9 @@
 .notification-bell__footer-link:hover {
   color: var(--color-accent);
 }
+
+.notification-result__body .markdown-content {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--color-text-primary);
+}

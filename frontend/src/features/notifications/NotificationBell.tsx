@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { Bell, CalendarClock, CheckCircle2, CircleAlert, Clock3, PauseCircle } from 'lucide-react';
 import { Tooltip } from '@/components/design';
+import { NotificationResultModal } from './NotificationResultModal';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAppStore } from '../../stores/appStore';
 import type { UserNotification } from '../../types/notification';
@@ -41,6 +42,7 @@ function unreadLabel(count: number): string {
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<UserNotification | null>(null);
   const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
   const rootRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -75,7 +77,7 @@ export function NotificationBell() {
       setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      if (event.key === 'Escape' && !selected) setOpen(false);
     };
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKeyDown);
@@ -83,7 +85,7 @@ export function NotificationBell() {
       window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [open, refresh]);
+  }, [open, refresh, selected]);
 
   const handleToggle = () => {
     setOpen((current) => !current);
@@ -97,10 +99,8 @@ export function NotificationBell() {
     } catch (err) {
       notifyError(getErrorMessage(err, '标记已读失败'));
     }
-    if (item.jobId) {
-      setOpen(false);
-      openScheduledJob(item.jobId);
-    }
+    setOpen(false);
+    setSelected(item);
   };
 
   const handleMarkAll = async () => {
@@ -198,6 +198,14 @@ export function NotificationBell() {
           </div>
         </div>
       ), document.body)}
+      <NotificationResultModal
+        notification={selected}
+        onClose={() => setSelected(null)}
+        onOpenJob={(jobId) => {
+          setSelected(null);
+          openScheduledJob(jobId);
+        }}
+      />
     </div>
   );
 }
