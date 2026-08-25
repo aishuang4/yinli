@@ -22,6 +22,7 @@ from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, Field, HttpUrl
 
 from src.config.runtime_paths import DATA_ROOT
+from src.scheduler.mcp_runtime import resolve_mcp_runtime_servers as _resolve_mcp_runtime_servers
 from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_mcp_tools_from_agents
 from src.storage.database import (
@@ -479,36 +480,12 @@ def resolve_mcp_runtime_servers(
 ) -> list[dict[str, object]]:
     """Resolve selected MCP tool ids into server specs for Agent runtime."""
 
-    selected = set(tool_ids)
-    if not selected:
-        return []
-
-    runtime_servers: list[dict[str, object]] = []
-    for server in _mcp_servers.values():
-        if (
-            allowed_server_ids is not None
-            and server.id not in allowed_server_ids
-            and server.id not in _builtin_mcp_servers
-        ):
-            continue
-        if server.status != "installed" or not server.enabled:
-            continue
-        enabled_tool_names = [
-            tool.name
-            for tool in server.tools
-            if tool.id in selected
-        ]
-        if not enabled_tool_names:
-            continue
-        runtime_servers.append({
-            "name": _slugify(server.id).replace("-", "_"),
-            "transport": server.transport,
-            "url": server.url,
-            "command": server.command,
-            "headers": server.headers,
-            "enable_tools": enabled_tool_names,
-        })
-    return runtime_servers
+    return _resolve_mcp_runtime_servers(
+        tool_ids,
+        list(_mcp_servers.values()),
+        allowed_server_ids=allowed_server_ids,
+        builtin_server_ids=set(_builtin_mcp_servers),
+    )
 
 
 @router.get("", response_model=list[McpServer])

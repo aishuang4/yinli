@@ -75,6 +75,7 @@ _RECONFIRM_FIELDS = frozenset({
     "frozen_prompt",
     "skill_ids",
     "tool_scope",
+    "capability_contract",
     "input_spec",
     "output_spec",
     "delivery_policy",
@@ -116,6 +117,7 @@ class ScheduledJobService:
         max_consecutive_failures: int = 3,
         max_firings_per_day: int = 8,
         required_successes: int = 3,
+        capability_contract: dict[str, Any] | None = None,
     ) -> ScheduledJob:
         """字段齐全后写入 pending_confirmation；未传 tool_scope 则全 false。"""
 
@@ -162,6 +164,7 @@ class ScheduledJobService:
                 "max_consecutive_failures": max_consecutive_failures,
                 "max_firings_per_day": max_firings_per_day,
                 "required_successes": required_successes,
+                "capability_contract": capability_contract or {},
             })
         except UniqueConstraintError as exc:
             raise ScheduledJobConflictError("同项目下任务名称已存在") from exc

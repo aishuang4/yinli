@@ -37,6 +37,9 @@ from src.storage.database import (
     DEFAULT_WORKSPACE_ID,
     create_project,
     ensure_db,
+    replace_skills,
+    upsert_agent,
+    upsert_project_resource_binding,
 )
 
 
@@ -61,6 +64,39 @@ def _service() -> ScheduledJobService:
     return ScheduledJobService()
 
 
+def _ensure_agent(agent_id: str) -> None:
+    upsert_agent({
+        "id": agent_id,
+        "name": agent_id,
+        "system_prompt": "prompt",
+        "workspaceId": DEFAULT_WORKSPACE_ID,
+        "status": "idle",
+    })
+
+
+def _ensure_skill(skill_id: str, *, resource_path: str = "") -> None:
+    replace_skills({
+        skill_id: {
+            "id": skill_id,
+            "name": skill_id,
+            "description": "",
+            "category": "test",
+            "status": "installed",
+            "enabled": True,
+            "resourcePath": resource_path,
+            "resources": ["scripts/"] if resource_path else [],
+            "updatedAt": "2026-08-20T00:00:00+00:00",
+            "workspaceId": DEFAULT_WORKSPACE_ID,
+        },
+    })
+    upsert_project_resource_binding({
+        "project_id": DEFAULT_PROJECT_ID,
+        "resource_type": "skill",
+        "resource_id": skill_id,
+        "enabled": True,
+    })
+
+
 def _weekly_job(service: ScheduledJobService, **overrides):
     payload = {
         "workspace_id": DEFAULT_WORKSPACE_ID,
@@ -73,6 +109,7 @@ def _weekly_job(service: ScheduledJobService, **overrides):
         "frozen_prompt": "生成本周周报，写入 outputs/weekly-report.md",
     }
     payload.update(overrides)
+    _ensure_agent(str(payload["agent_id"]))
     return service.create_job(**payload)
 
 
@@ -103,7 +140,11 @@ def _agent_ctx(*, trigger_source: str, project_root: Path):
         trigger_source=trigger_source,
         tool_name_denylist=set(SCHEDULED_JOB_UNATTENDED_DENYLIST) if trigger_source == "scheduled_job" else set(),
         intent_route=SimpleNamespace(executor=SimpleNamespace(kind="single_agent")),
-        runtime_context=SimpleNamespace(project_root=project_root),
+        runtime_context=SimpleNamespace(
+            project_root=project_root,
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            project_id=DEFAULT_PROJECT_ID,
+        ),
         runtime_model_config=SimpleNamespace(
             model_name="model",
             fallback_names=[],
@@ -502,9 +543,10 @@ def test_confirm_scripts_skill_requires_trusted_tools(isolated_db, tmp_path, mon
     skill_dir = tmp_path / "skill-pack"
     (skill_dir / "scripts").mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+    _ensure_skill("skill-scripts", resource_path=str(skill_dir))
     job = _weekly_job(service, name="脚本周报", skill_ids=["skill-scripts"])
     monkeypatch.setattr(
-        "src.scheduler.unattended_policy.get_installed_skill",
+        "src.server.routes.skills.get_installed_skill",
         lambda skill_id: Skill.model_validate({
             "id": "skill-scripts",
             "name": "scripts",
@@ -517,7 +559,7 @@ def test_confirm_scripts_skill_requires_trusted_tools(isolated_db, tmp_path, mon
         }) if skill_id == "skill-scripts" else None,
     )
     monkeypatch.setattr(
-        "src.scheduler.service.get_registered_agent",
+        "src.server.routes.agents.get_registered_agent",
         lambda agent_id: SimpleNamespace(
             skills=["skill-scripts"],
             guardrails=SimpleNamespace(
@@ -530,7 +572,7 @@ def test_confirm_scripts_skill_requires_trusted_tools(isolated_db, tmp_path, mon
         service.confirm(job.id)
 
     monkeypatch.setattr(
-        "src.scheduler.service.get_registered_agent",
+        "src.server.routes.agents.get_registered_agent",
         lambda agent_id: SimpleNamespace(
             skills=["skill-scripts"],
             guardrails=SimpleNamespace(
@@ -553,9 +595,10 @@ def test_confirm_trusted_tools_with_human_approval_cannot_activate_scripts_job(
     skill_dir = tmp_path / "skill-pack-hitl"
     (skill_dir / "scripts").mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("# skill\n", encoding="utf-8")
+    _ensure_skill("skill-scripts", resource_path=str(skill_dir))
     job = _weekly_job(service, name="人工审批脚本周报", skill_ids=["skill-scripts"])
     monkeypatch.setattr(
-        "src.scheduler.unattended_policy.get_installed_skill",
+        "src.server.routes.skills.get_installed_skill",
         lambda skill_id: Skill.model_validate({
             "id": "skill-scripts",
             "name": "scripts",
@@ -568,7 +611,7 @@ def test_confirm_trusted_tools_with_human_approval_cannot_activate_scripts_job(
         }) if skill_id == "skill-scripts" else None,
     )
     monkeypatch.setattr(
-        "src.scheduler.service.get_registered_agent",
+        "src.server.routes.agents.get_registered_agent",
         lambda agent_id: SimpleNamespace(
             skills=["skill-scripts"],
             guardrails=SimpleNamespace(
@@ -594,7 +637,7 @@ def test_confirm_ask_every_time_markdown_job_allows_cwd_write(isolated_db, monke
     service = _service()
     job = _weekly_job(service, name="Markdown周报")
     monkeypatch.setattr(
-        "src.scheduler.service.get_registered_agent",
+        "src.server.routes.agents.get_registered_agent",
         lambda agent_id: SimpleNamespace(
             skills=[],
             guardrails=SimpleNamespace(
@@ -617,7 +660,7 @@ def test_confirm_read_only_cannot_activate_write_job(isolated_db, monkeypatch):
     service = _service()
     job = _weekly_job(service, name="只读周报")
     monkeypatch.setattr(
-        "src.scheduler.service.get_registered_agent",
+        "src.server.routes.agents.get_registered_agent",
         lambda agent_id: SimpleNamespace(
             skills=[],
             guardrails=SimpleNamespace(

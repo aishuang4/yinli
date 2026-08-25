@@ -129,6 +129,7 @@ def serialize_job(job: ScheduledJob) -> dict[str, Any]:
         "maxConsecutiveFailures": job.max_consecutive_failures,
         "maxFiringsPerDay": job.max_firings_per_day,
         "createdFromSessionId": job.created_from_session_id,
+        "capabilityContract": job.capability_contract.model_dump(by_alias=True),
         "createdAt": job.created_at,
         "updatedAt": job.updated_at,
         "archivedAt": job.archived_at,

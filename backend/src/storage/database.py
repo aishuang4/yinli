@@ -283,6 +283,7 @@ def ensure_db() -> None:
             _ensure_column(conn, "subagent_invocations", "process_instance_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "subagent_invocations", "result_ref", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "subagent_invocations", "delivery_status", "TEXT NOT NULL DEFAULT 'none'")
+            _ensure_column(conn, "scheduled_jobs", "capability_contract", "TEXT NOT NULL DEFAULT '{}'")
             _drop_column_if_exists(conn, "agents", "callable_agents")
             _drop_column_if_exists(conn, "agents", "max_depth")
             _drop_column_if_exists(conn, "chat_messages", "subagent_calls")
