@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { Button, Modal, Spinner, Tag } from '@/components/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import { FIRING_STATUS_LABELS, firingStatusColor, formatDateTime } from '../scheduled-jobs/jobViewUtils';
+import { NOTIFICATION_KIND_LABELS } from './notificationViewUtils';
 import type { UserNotification } from '../../types/notification';
 import type { ScheduledJobRun } from '../../types/scheduledJob';
 import { getErrorMessage } from '../../utils/feedback';
@@ -15,13 +16,6 @@ interface NotificationResultModalProps {
   onClose: () => void;
   onOpenJob?: (jobId: string) => void;
 }
-
-const KIND_LABELS: Record<string, string> = {
-  job_completed: '已完成',
-  job_failed: '执行失败',
-  job_missed: '已错过',
-  job_paused: '已暂停',
-};
 
 function readResultText(payload: Record<string, unknown>): string {
   const resultText = payload.resultText;
@@ -131,7 +125,7 @@ export function NotificationResultModal({
         <div className="notification-result">
           <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
             <Tag size="small" color={failed ? 'red' : status ? firingStatusColor(status) : 'blue'}>
-              {status ? (FIRING_STATUS_LABELS[status] || status) : (KIND_LABELS[notification.kind] || notification.kind)}
+              {status ? (FIRING_STATUS_LABELS[status] || status) : (NOTIFICATION_KIND_LABELS[notification.kind] || notification.kind)}
             </Tag>
             <span>{formatDateTime(run?.completedAt || run?.scheduledFor || notification.createdAt)}</span>
           </div>

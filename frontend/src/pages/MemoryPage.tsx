@@ -311,7 +311,7 @@ export function MemoryPage() {
         </Button>
       )}
     >
-      <main className="h-full min-h-0 overflow-hidden bg-[var(--color-bg-primary)]">
+      <main className="h-full min-h-0 min-w-0 overflow-hidden bg-[var(--color-bg-primary)]">
         {error && (
           <div className="mx-5 mt-4 rounded-md border border-[var(--color-error)] bg-[var(--color-error-bg)] p-3 text-sm text-[var(--color-error)]">
             {error}

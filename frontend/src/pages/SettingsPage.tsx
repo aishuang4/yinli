@@ -177,7 +177,7 @@ export function SettingsPage() {
 
   return (
     <div className="h-full overflow-auto bg-[var(--color-bg-primary)] px-5 py-6 sm:px-8">
-      <div className="mx-auto max-w-7xl">
+      <div className="mx-auto max-w-3xl">
         <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-xl font-semibold text-[var(--color-text-primary)]">系统设置</h1>
@@ -188,58 +188,50 @@ export function SettingsPage() {
           <span className="text-xs text-[var(--color-text-tertiary)]">保存后将在下一轮对话生效</span>
         </header>
 
-        <div className="mb-6">
+        <div className="flex flex-col gap-6">
           <ScheduledJobsSettingsCard />
-        </div>
-
-        <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_352px]">
-          <section className="min-w-0">
-            <ModelSettingsForm
-              settings={settings}
-              loading={loading}
-              saving={saving}
-              notice={notice}
-              provider={provider}
-              selectedProvider={selectedProvider}
-              baseUrl={baseUrl}
-              apiKey={apiKey}
-              apiKeyEditable={Boolean(apiKeyEditable)}
-              defaultModel={defaultModel}
-              customProviderName={customProviderName}
-              customModels={customModels}
-              fallbackModels={fallbackModels}
-              modelOptions={modelOptions}
-              onProviderChange={handleProviderChange}
-              onBaseUrlChange={setBaseUrl}
-              onApiKeyChange={setApiKey}
-              onDefaultModelChange={setDefaultModel}
-              onCustomProviderNameChange={setCustomProviderName}
-              onAddCustomModel={addCustomModel}
-              onUpdateCustomModel={updateCustomModel}
-              onRemoveCustomModel={removeCustomModel}
-              onAddFallbackModel={addFallbackModel}
-              onUpdateFallbackModel={updateFallbackModel}
-              onRemoveFallbackModel={removeFallbackModel}
-              onRefresh={() => void loadSettings()}
-              onSave={(clearApiKey) => void saveSettings(clearApiKey)}
+          <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
+          <ModelSettingsForm
+            settings={settings}
+            loading={loading}
+            saving={saving}
+            notice={notice}
+            provider={provider}
+            selectedProvider={selectedProvider}
+            baseUrl={baseUrl}
+            apiKey={apiKey}
+            apiKeyEditable={Boolean(apiKeyEditable)}
+            defaultModel={defaultModel}
+            customProviderName={customProviderName}
+            customModels={customModels}
+            fallbackModels={fallbackModels}
+            modelOptions={modelOptions}
+            onProviderChange={handleProviderChange}
+            onBaseUrlChange={setBaseUrl}
+            onApiKeyChange={setApiKey}
+            onDefaultModelChange={setDefaultModel}
+            onCustomProviderNameChange={setCustomProviderName}
+            onAddCustomModel={addCustomModel}
+            onUpdateCustomModel={updateCustomModel}
+            onRemoveCustomModel={removeCustomModel}
+            onAddFallbackModel={addFallbackModel}
+            onUpdateFallbackModel={updateFallbackModel}
+            onRemoveFallbackModel={removeFallbackModel}
+            onRefresh={() => void loadSettings()}
+            onSave={(clearApiKey) => void saveSettings(clearApiKey)}
+          />
+          <NotificationSettingsCard />
+          <ConversationContextSettingsCard />
+          {window.electronAPI && (
+            <UserDataSettingsCard
+              path={userDataPath}
+              loading={userDataLoading}
+              opening={openingUserData}
+              error={userDataError}
+              onOpen={() => void handleOpenUserData()}
+              onRetry={() => void loadUserDataPath()}
             />
-          </section>
-
-          <aside className="space-y-4 xl:sticky xl:top-0">
-            <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
-            <NotificationSettingsCard />
-            <ConversationContextSettingsCard />
-            {window.electronAPI && (
-              <UserDataSettingsCard
-                path={userDataPath}
-                loading={userDataLoading}
-                opening={openingUserData}
-                error={userDataError}
-                onOpen={() => void handleOpenUserData()}
-                onRetry={() => void loadUserDataPath()}
-              />
-            )}
-          </aside>
+          )}
         </div>
       </div>
     </div>

@@ -49,3 +49,13 @@ export interface NotificationStreamEvent {
   notification?: UserNotification;
   updatedCount?: number;
 }
+
+/** Electron 主进程系统通知载荷。 */
+export interface DesktopNotificationPayload {
+  id: string;
+  title: string;
+  body: string;
+  kind: string;
+  jobId: string;
+  firingId: string;
+}

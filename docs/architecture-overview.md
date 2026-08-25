@@ -159,7 +159,7 @@ RunState、DisplayEvent、旧 `event_hub`、旧 adapter/reducer 和旧 Snapshot 
 
 通知是独立于 Chat Runtime 的通道抽象：调度器在 firing 终态构造 `NotificationMessage`，由 `src/notifications/dispatcher.py` 分发给已启用通道。
 
-- 应用内通道写入 `user_notifications`，并通过 `/api/notifications/stream` 推送到 Chat 顶栏铃铛；不进入 Chat SSE。
+- 应用内通道写入 `user_notifications`，并通过 `/api/notifications/stream` 推送到 Chat 顶栏铃铛；不进入 Chat SSE。任务完成时 Web 弹出右上角提醒框，Electron 走系统通知。
 - 通道目录与开关存在 `json_store` / `system_settings` / `notifications`。应用内通道始终开启。
 - 邮箱、微信、飞书已登记占位通道，设置页可预填配置，但 `implemented=false` 时不能启用。
 - 新增通道只需实现 `NotificationChannel` 并登记，不要把投递逻辑写进 `scheduler/service.py` 或 Chat handler。

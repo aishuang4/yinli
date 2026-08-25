@@ -8,7 +8,7 @@
  * 4. 注册 IPC 处理器，桥接前端与系统能力
  */
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -45,6 +45,9 @@ if (!isDev) {
   migrateLegacyDesktopUserData();
   app.setPath('userData', DESKTOP_USER_DATA_DIR);
 }
+
+/** Windows 系统通知需要与安装包 appId 一致，否则 toast 可能不出现。 */
+app.setAppUserModelId('com.agentworkstation.desktop');
 
 /** Vite 开发服务器地址 */
 const DEV_SERVER_URL = 'http://localhost:5173';
@@ -652,6 +655,69 @@ ipcMain.handle('open-external', async (_event, url: string) => {
     return { ok: false, error: 'URL is not allowed' };
   }
   await shell.openExternal(url);
+  return { ok: true };
+});
+
+interface DesktopNotificationPayload {
+  id: string;
+  title: string;
+  body: string;
+  kind: string;
+  jobId: string;
+  firingId: string;
+}
+
+function clipNotificationText(value: unknown, max: number): string {
+  if (typeof value !== 'string') return '';
+  return value.trim().slice(0, max);
+}
+
+function parseDesktopNotificationPayload(raw: unknown): DesktopNotificationPayload | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const input = raw as Record<string, unknown>;
+  const id = clipNotificationText(input.id, 80);
+  const title = clipNotificationText(input.title, 120);
+  if (!id || !title) return null;
+  return {
+    id,
+    title,
+    body: clipNotificationText(input.body, 240),
+    kind: clipNotificationText(input.kind, 40),
+    jobId: clipNotificationText(input.jobId, 80),
+    firingId: clipNotificationText(input.firingId, 80),
+  };
+}
+
+function focusMainWindow(): void {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+/**
+ * 弹出操作系统通知。点击后聚焦主窗口并回传给渲染进程打开结果。
+ */
+ipcMain.handle('show-notification', (_event, raw: unknown) => {
+  const payload = parseDesktopNotificationPayload(raw);
+  if (!payload) {
+    return { ok: false, error: 'Invalid notification payload' };
+  }
+  if (!Notification.isSupported()) {
+    return { ok: false, error: 'Desktop notifications are not supported' };
+  }
+  const notification = new Notification({
+    title: payload.title,
+    body: payload.body || '点击查看运行结果',
+    silent: false,
+  });
+  notification.on('click', () => {
+    focusMainWindow();
+    mainWindow?.webContents.send('notification-clicked', payload);
+  });
+  notification.show();
   return { ok: true };
 });
 

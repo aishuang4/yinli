@@ -3,11 +3,14 @@
  *
  * 未读数走 `/api/notifications/stream`，断开后回退 15s 轮询。
  * 不订阅 Chat SSE。
+ * 全局只允许 NotificationLiveHost 以 subscribe: true 建立一条 SSE。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect } from 'react';
+import { useNotificationStore } from '../stores/notificationStore';
 import { useAppStore } from '../stores/appStore';
 import type {
+  DesktopNotificationPayload,
   NotificationListResponse,
   NotificationStreamEvent,
   UserNotification,
@@ -16,6 +19,11 @@ import { resolveApiUrl } from '../utils/apiUrl';
 import { getErrorMessage } from '../utils/feedback';
 
 const POLL_INTERVAL_MS = 15_000;
+
+interface UseNotificationsOptions {
+  /** 为 true 时建立 SSE；全局只应有一处订阅。 */
+  subscribe?: boolean;
+}
 
 interface UseNotificationsReturn {
   items: UserNotification[];
@@ -27,42 +35,43 @@ interface UseNotificationsReturn {
   markAllRead: () => Promise<void>;
 }
 
-function mergeNotification(items: UserNotification[], next: UserNotification): UserNotification[] {
-  const remaining = items.filter((item) => item.id !== next.id);
-  return [next, ...remaining];
+function toDesktopPayload(item: UserNotification): DesktopNotificationPayload {
+  return {
+    id: item.id,
+    title: item.title,
+    body: item.body,
+    kind: item.kind,
+    jobId: item.jobId,
+    firingId: item.firingId,
+  };
 }
 
-export function useNotifications(): UseNotificationsReturn {
+function presentIncomingNotification(item: UserNotification) {
+  const desktop = window.electronAPI?.showNotification;
+  if (desktop) {
+    void desktop(toDesktopPayload(item)).then((result) => {
+      if (!result?.ok) {
+        useNotificationStore.getState().pushToast(item);
+      }
+    }).catch(() => {
+      useNotificationStore.getState().pushToast(item);
+    });
+    return;
+  }
+  useNotificationStore.getState().pushToast(item);
+}
+
+export function useNotifications(options: UseNotificationsOptions = {}): UseNotificationsReturn {
+  const subscribe = Boolean(options.subscribe);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
-  const [items, setItems] = useState<UserNotification[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const hydratedRef = useRef(false);
+  const items = useNotificationStore((state) => state.items);
+  const unreadCount = useNotificationStore((state) => state.unreadCount);
+  const loading = useNotificationStore((state) => state.loading);
+  const error = useNotificationStore((state) => state.error);
   const projectQuery = activeProjectId ? `projectId=${encodeURIComponent(activeProjectId)}` : '';
 
-  const applyStreamEvent = useCallback((event: NotificationStreamEvent) => {
-    if (typeof event.unreadCount === 'number') {
-      setUnreadCount(event.unreadCount);
-    }
-    if (event.type === 'notification' && event.notification && hydratedRef.current) {
-      setItems((current) => mergeNotification(current, event.notification as UserNotification));
-    }
-    if (event.type === 'read' && event.notification && hydratedRef.current) {
-      setItems((current) => current.map((item) => (
-        item.id === event.notification?.id ? event.notification as UserNotification : item
-      )));
-    }
-    if (event.type === 'read_all' && hydratedRef.current) {
-      setItems((current) => current.map((item) => (
-        item.readAt ? item : { ...item, readAt: new Date().toISOString() }
-      )));
-    }
-  }, []);
-
   const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+    useNotificationStore.getState().setInbox({ loading: true, error: null });
     try {
       const query = projectQuery ? `?${projectQuery}` : '';
       const response = await fetch(`/api/notifications${query}`);
@@ -70,13 +79,17 @@ export function useNotifications(): UseNotificationsReturn {
         throw new Error(await response.text());
       }
       const payload = await response.json() as NotificationListResponse;
-      setItems(payload.items);
-      setUnreadCount(payload.unreadCount);
-      hydratedRef.current = true;
+      useNotificationStore.getState().setInbox({
+        items: payload.items,
+        unreadCount: payload.unreadCount,
+        loading: false,
+        error: null,
+      });
     } catch (err) {
-      setError(getErrorMessage(err, '加载通知失败'));
-    } finally {
-      setLoading(false);
+      useNotificationStore.getState().setInbox({
+        loading: false,
+        error: getErrorMessage(err, '加载通知失败'),
+      });
     }
   }, [projectQuery]);
 
@@ -86,7 +99,7 @@ export function useNotifications(): UseNotificationsReturn {
     if (!response.ok) return;
     const payload = await response.json() as { unreadCount?: number };
     if (typeof payload.unreadCount === 'number') {
-      setUnreadCount(payload.unreadCount);
+      useNotificationStore.getState().setInbox({ unreadCount: payload.unreadCount });
     }
   }, [projectQuery]);
 
@@ -98,7 +111,7 @@ export function useNotifications(): UseNotificationsReturn {
       throw new Error(await response.text());
     }
     const record = await response.json() as UserNotification;
-    setItems((current) => current.map((item) => (item.id === record.id ? record : item)));
+    useNotificationStore.getState().mergeItem(record);
     await syncUnreadCount();
     return record;
   }, [syncUnreadCount]);
@@ -109,16 +122,13 @@ export function useNotifications(): UseNotificationsReturn {
     if (!response.ok) {
       throw new Error(await response.text());
     }
-    setItems((current) => current.map((item) => (
-      item.readAt ? item : { ...item, readAt: new Date().toISOString() }
-    )));
-    setUnreadCount(0);
+    useNotificationStore.getState().markItemsRead();
+    useNotificationStore.getState().setInbox({ unreadCount: 0 });
   }, [projectQuery]);
 
   useEffect(() => {
-    hydratedRef.current = false;
-    setItems([]);
-    setUnreadCount(0);
+    if (!subscribe) return undefined;
+    useNotificationStore.getState().reset();
     let closed = false;
     let source: EventSource | null = null;
     let pollTimer: number | null = null;
@@ -138,7 +148,7 @@ export function useNotifications(): UseNotificationsReturn {
         if (!response.ok) return;
         const payload = await response.json() as { unreadCount?: number };
         if (!closed && typeof payload.unreadCount === 'number') {
-          setUnreadCount(payload.unreadCount);
+          useNotificationStore.getState().setInbox({ unreadCount: payload.unreadCount });
         }
       } catch {
         // 轮询失败时保留上次未读数，等待下次重试。
@@ -151,6 +161,23 @@ export function useNotifications(): UseNotificationsReturn {
       pollTimer = window.setInterval(() => {
         void pollUnread();
       }, POLL_INTERVAL_MS);
+    };
+
+    const applyStreamEvent = (event: NotificationStreamEvent) => {
+      const store = useNotificationStore.getState();
+      if (typeof event.unreadCount === 'number') {
+        store.setInbox({ unreadCount: event.unreadCount });
+      }
+      if (event.type === 'notification' && event.notification) {
+        store.mergeItem(event.notification);
+        presentIncomingNotification(event.notification);
+      }
+      if (event.type === 'read' && event.notification) {
+        store.mergeItem(event.notification);
+      }
+      if (event.type === 'read_all') {
+        store.markItemsRead();
+      }
     };
 
     const handleStreamEvent = (event: MessageEvent<string>) => {
@@ -189,7 +216,7 @@ export function useNotifications(): UseNotificationsReturn {
       stopPoll();
       if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [applyStreamEvent, projectQuery]);
+  }, [projectQuery, subscribe]);
 
   return {
     items,

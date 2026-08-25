@@ -24,6 +24,7 @@ import { AppLayout } from './layouts/AppLayout';
 import { FeedbackBridge } from './components/FeedbackBridge';
 import { DesktopBackendGate } from './components/DesktopBackendGate';
 import { ApiKeyOnboardingModal } from './features/settings/ApiKeyOnboardingModal';
+import { NotificationToastHost } from './features/notifications/NotificationToastHost';
 import type { DesktopBackendStatus } from './types/desktopBackend';
 
 const ChatPage = lazy(() => import('./pages/ChatPage').then((module) => ({ default: module.ChatPage })));
@@ -176,6 +177,7 @@ export function App() {
             <>
               <FeedbackBridge />
               <ApiKeyOnboardingModal />
+              <NotificationToastHost />
               <AppLayout>
                 <WorkspacePages
                   workspaceMode={workspaceMode}

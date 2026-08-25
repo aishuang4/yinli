@@ -51,8 +51,8 @@ export function MarkdownMemoryPanel({
   const TargetIcon = selectedTarget.icon;
 
   return (
-    <section className="grid h-full min-h-0 grid-cols-[260px_minmax(0,1fr)] overflow-hidden">
-      <aside className="border-r border-[var(--color-border)] p-5">
+    <section className="grid h-full min-h-0 min-w-0 w-full grid-cols-[260px_minmax(0,1fr)] overflow-hidden">
+      <aside className="min-h-0 min-w-0 overflow-y-auto border-r border-[var(--color-border)] p-5">
         <div className="space-y-2">
           {MARKDOWN_TARGETS.map((item) => {
             const Icon = item.icon;
@@ -80,24 +80,24 @@ export function MarkdownMemoryPanel({
         </div>
       </aside>
 
-      <div className="grid min-h-0 grid-rows-[auto_1fr] overflow-hidden p-5">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <TargetIcon size={18} color="var(--color-accent)" />
-              <h2 className="text-base font-semibold text-[var(--color-text-primary)]">{selectedTarget.label}</h2>
+      <div className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden p-5">
+        <div className="mb-4 flex min-w-0 flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <TargetIcon size={18} className="shrink-0" color="var(--color-accent)" />
+              <h2 className="truncate text-base font-semibold text-[var(--color-text-primary)]">{selectedTarget.label}</h2>
               <Tag size="small" color={doc?.exists ? 'success' : 'info'}>
                 {doc?.exists ? '已创建' : '未创建'}
               </Tag>
             </div>
-            <div className="mt-1 truncate text-xs text-[var(--color-text-tertiary)]">
+            <div className="mt-1 truncate text-xs text-[var(--color-text-tertiary)]" title={doc?.path || undefined}>
               {doc?.path || 'memory file'}
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
             {target === 'agent' && (
               <SelectField
-                className="w-[220px]"
+                className="w-[220px] max-w-full"
                 value={selectedAgentId}
                 loading={agentsLoading}
                 options={agentOptions}
@@ -124,9 +124,10 @@ export function MarkdownMemoryPanel({
           <TextAreaField
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            className="h-full min-h-0"
-            fieldClassName="h-full min-h-0 resize-none"
+            className="h-full min-h-0 min-w-0 w-full overflow-hidden"
+            fieldClassName="h-full min-h-0 min-w-0 w-full max-w-full resize-none"
             style={{
+              width: '100%',
               height: '100%',
               fontFamily: 'var(--font-mono)',
               fontSize: 13,

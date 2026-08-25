@@ -71,7 +71,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('backend-status', listener);
     return () => ipcRenderer.removeListener('backend-status', listener);
   },
+
+  /** 弹出操作系统通知。 */
+  showNotification: (payload: DesktopNotificationPayload): Promise<{ ok: boolean; error?: string }> => (
+    ipcRenderer.invoke('show-notification', payload)
+  ),
+
+  /** 用户点击系统通知时回调。 */
+  onNotificationClicked: (callback: (payload: DesktopNotificationPayload) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: DesktopNotificationPayload) => callback(payload);
+    ipcRenderer.on('notification-clicked', listener);
+    return () => ipcRenderer.removeListener('notification-clicked', listener);
+  },
 });
+
+type DesktopNotificationPayload = {
+  id: string;
+  title: string;
+  body: string;
+  kind: string;
+  jobId: string;
+  firingId: string;
+};
 
 type DesktopBackendStatus = {
   state: 'starting' | 'ready' | 'error';

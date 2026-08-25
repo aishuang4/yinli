@@ -4,50 +4,23 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { Bell, CalendarClock, CheckCircle2, CircleAlert, Clock3, PauseCircle } from 'lucide-react';
+import { Bell } from 'lucide-react';
 import { Tooltip } from '@/components/design';
-import { NotificationResultModal } from './NotificationResultModal';
+import { formatNotificationTime, notificationKindIcon, unreadLabel } from './notificationViewUtils';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAppStore } from '../../stores/appStore';
+import { useNotificationStore } from '../../stores/notificationStore';
 import type { UserNotification } from '../../types/notification';
 import { getErrorMessage, notifyError } from '../../utils/feedback';
 import './NotificationBell.css';
 
-const KIND_ICONS: Record<string, typeof CheckCircle2> = {
-  job_completed: CheckCircle2,
-  job_failed: CircleAlert,
-  job_missed: Clock3,
-  job_paused: PauseCircle,
-};
-
-function formatNotificationTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  const diff = Date.now() - date.getTime();
-  if (diff < 60_000) return '刚刚';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
-  return date.toLocaleString('zh-CN', {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function unreadLabel(count: number): string {
-  if (count <= 0) return '';
-  return count > 99 ? '99+' : String(count);
-}
-
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
-  const [selected, setSelected] = useState<UserNotification | null>(null);
   const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
   const rootRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const setView = useAppStore((state) => state.setView);
-  const openScheduledJob = useAppStore((state) => state.openScheduledJob);
+  const openNotification = useNotificationStore((state) => state.openNotification);
   const {
     items,
     unreadCount,
@@ -77,7 +50,7 @@ export function NotificationBell() {
       setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !selected) setOpen(false);
+      if (event.key === 'Escape' && !useNotificationStore.getState().selected) setOpen(false);
     };
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKeyDown);
@@ -85,7 +58,7 @@ export function NotificationBell() {
       window.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [open, refresh, selected]);
+  }, [open, refresh]);
 
   const handleToggle = () => {
     setOpen((current) => !current);
@@ -100,7 +73,7 @@ export function NotificationBell() {
       notifyError(getErrorMessage(err, '标记已读失败'));
     }
     setOpen(false);
-    setSelected(item);
+    openNotification(item);
   };
 
   const handleMarkAll = async () => {
@@ -155,7 +128,7 @@ export function NotificationBell() {
               <div className="notification-bell__empty">暂无定时任务通知</div>
             ) : (
               items.map((item) => {
-                const Icon = KIND_ICONS[item.kind] || CalendarClock;
+                const Icon = notificationKindIcon(item.kind);
                 const unread = !item.readAt;
                 return (
                   <button
@@ -198,14 +171,6 @@ export function NotificationBell() {
           </div>
         </div>
       ), document.body)}
-      <NotificationResultModal
-        notification={selected}
-        onClose={() => setSelected(null)}
-        onOpenJob={(jobId) => {
-          setSelected(null);
-          openScheduledJob(jobId);
-        }}
-      />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import type { DesktopBackendStatus } from './desktopBackend';
+import type { DesktopNotificationPayload } from './notification';
 
 /**
  * Electron IPC API 类型声明
@@ -29,6 +30,10 @@ interface ElectronAPI {
   getUserDataPath(): Promise<string>;
   /** 订阅内置后端状态变化 */
   onBackendStatus(callback: (status: DesktopBackendStatus) => void): () => void;
+  /** 弹出操作系统通知。 */
+  showNotification(payload: DesktopNotificationPayload): Promise<{ ok: boolean; error?: string }>;
+  /** 用户点击系统通知时回调，返回取消订阅函数。 */
+  onNotificationClicked(callback: (payload: DesktopNotificationPayload) => void): () => void;
 }
 
 declare global {
