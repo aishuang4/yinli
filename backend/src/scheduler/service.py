@@ -233,24 +233,7 @@ class ScheduledJobService:
         if job.delivery_policy == "auto_send":
             raise ScheduledJobValidationError("Phase 1 不能启用 auto_send")
         self._assert_resources_available(job)
-        from src.server.routes.agents import get_registered_agent
-
-        agent = get_registered_agent(job.agent_id)
-        tool_scope = job.tool_scope
-        force_bash = frozen_skills_require_bash(job.skill_ids)
-        if force_bash and not tool_scope.allow_bash:
-            tool_scope = JobToolScope(
-                allow_bash=True,
-                allow_http=tool_scope.allow_http,
-                allow_web=tool_scope.allow_web,
-                allow_mcp=tool_scope.allow_mcp,
-                allow_knowledge=tool_scope.allow_knowledge,
-            )
-        failing = would_fail_unattended_tools(tool_scope=tool_scope, agent=agent)
-        if failing:
-            raise ScheduledJobValidationError(
-                "would_fail_tools: " + ", ".join(failing),
-            )
+        contract_changes = self.assert_contract_satisfiable(job)
         next_run = compute_next_run_at(
             schedule_kind=job.schedule_kind,
             schedule_expr=job.schedule_expr,
@@ -261,9 +244,8 @@ class ScheduledJobService:
             "status": "active",
             "pause_reason": "",
             "next_run_at": to_utc_iso(next_run),
+            **contract_changes,
         }
-        if force_bash and not job.tool_scope.allow_bash:
-            changes["tool_scope"] = tool_scope.to_storage_dict()
         return self._save_job(job_id, changes)
 
     def pause(self, job_id: str, *, reason: str = "user") -> ScheduledJob:
@@ -289,6 +271,7 @@ class ScheduledJobService:
         if job.delivery_policy == "auto_send":
             raise ScheduledJobValidationError("Phase 1 不能启用 auto_send")
         self._assert_resources_available(job)
+        contract_changes = self.assert_contract_satisfiable(job)
         next_run = compute_next_run_at(
             schedule_kind=job.schedule_kind,
             schedule_expr=job.schedule_expr,
@@ -300,6 +283,7 @@ class ScheduledJobService:
             "pause_reason": "",
             "archived_at": None,
             "next_run_at": to_utc_iso(next_run),
+            **contract_changes,
         })
 
     def archive(self, job_id: str, *, now: datetime | None = None) -> ScheduledJob:
@@ -862,6 +846,13 @@ class ScheduledJobService:
                 agent_id=resource_id,
             )
         if resource_type == "mcp":
+            paused = self._pause_jobs_claiming(
+                "capability_unbound",
+                project_id=project_id,
+                mcp_server_id=resource_id,
+            )
+            if paused:
+                return paused
             return self.pause_for_resource_change(
                 "needs_job_update",
                 project_id=project_id,
@@ -886,16 +877,103 @@ class ScheduledJobService:
         if resource_type == "skill":
             return self.pause_for_resource_change("skill_unbound", skill_id=resource_id)
         if resource_type == "mcp":
+            paused = self._pause_jobs_claiming("capability_unbound", mcp_server_id=resource_id)
+            if paused:
+                return paused
             return self.pause_for_resource_change(
                 "needs_job_update",
                 require_tool_flags=("allow_mcp",),
             )
         if resource_type in {"http_tool", "knowledge"}:
+            paused = self._pause_jobs_claiming(
+                "capability_unbound",
+                http_or_knowledge_id=resource_id,
+            )
+            if paused:
+                return paused
             return self.pause_for_resource_change(
                 "needs_job_update",
                 require_tool_flags=("allow_http", "allow_knowledge"),
             )
         return []
+
+    def pause_jobs_for_removed_agent_tools(
+        self,
+        agent_id: str,
+        *,
+        mcp_ids: set[str] | None = None,
+        knowledge_ids: set[str] | None = None,
+        permission_revoked: bool = False,
+    ) -> list[ScheduledJob]:
+        """Agent 解绑 MCP/HTTP 或权限降级时，按合同精确暂停。"""
+
+        reason = "permission_revoked" if permission_revoked else "capability_unbound"
+        paused: list[ScheduledJob] = []
+        for job in self.list_jobs(agent_id=agent_id):
+            if job.status not in _PAUSABLE_JOB_STATUSES:
+                continue
+            if permission_revoked:
+                if self._contract_needs_unattended_outbound(job):
+                    paused.append(self.pause(job.id, reason=reason))
+                continue
+            if mcp_ids and self._job_claims(job, kinds={"mcp"}, resource_ids=mcp_ids):
+                paused.append(self.pause(job.id, reason=reason))
+            elif knowledge_ids and self._job_claims(
+                job, kinds={"http", "knowledge"}, resource_ids=knowledge_ids,
+            ):
+                paused.append(self.pause(job.id, reason=reason))
+        return paused
+
+    def _pause_jobs_claiming(
+        self,
+        reason: str,
+        *,
+        project_id: str | None = None,
+        mcp_server_id: str | None = None,
+        http_or_knowledge_id: str | None = None,
+    ) -> list[ScheduledJob]:
+        paused: list[ScheduledJob] = []
+        for job in self.list_jobs(project_id=project_id):
+            if job.status not in _PAUSABLE_JOB_STATUSES:
+                continue
+            hit = False
+            if mcp_server_id and self._job_claims(job, kinds={"mcp"}, server_id=mcp_server_id):
+                hit = True
+            if http_or_knowledge_id and self._job_claims(
+                job, kinds={"http", "knowledge"}, resource_ids={http_or_knowledge_id},
+            ):
+                hit = True
+            if hit:
+                paused.append(self.pause(job.id, reason=reason))
+        return paused
+
+    def _job_claims(
+        self,
+        job: ScheduledJob,
+        *,
+        kinds: set[str],
+        resource_ids: set[str] | None = None,
+        server_id: str | None = None,
+    ) -> bool:
+        contract = job.capability_contract
+        if contract.is_generate_only():
+            return False
+        for item in contract.claimed:
+            if item.kind not in kinds:
+                continue
+            if resource_ids and item.resource_id in resource_ids:
+                return True
+            if server_id and item.server_id == server_id:
+                return True
+        return False
+
+    def _contract_needs_unattended_outbound(self, job: ScheduledJob) -> bool:
+        contract = job.capability_contract
+        if contract.is_generate_only():
+            return bool(job.tool_scope.allow_bash)
+        if contract.allow_bash or contract.allow_http_request or contract.allow_web_fetch:
+            return True
+        return any(item.kind in {"mcp", "http", "knowledge"} for item in contract.claimed)
 
     def _notify_resource_pause(self, job: ScheduledJob, reason: str) -> None:
         """资源变更暂停后写入一条应用内通知。"""
@@ -918,6 +996,78 @@ class ScheduledJobService:
         if record is None:
             raise ScheduledJobNotFoundError(f"找不到 Job: {job_id}")
         return self._job(record)
+
+    def assert_contract_satisfiable(self, job: ScheduledJob) -> dict[str, Any]:
+        """confirm/resume 第二道门。generate-only 复用今日 would_fail；非空合同再验 claimed。"""
+
+        from src.server.routes.agents import get_registered_agent
+
+        agent = get_registered_agent(job.agent_id)
+        contract = job.capability_contract
+        if contract.is_generate_only() or contract.verdict == "generate_only":
+            tool_scope = job.tool_scope
+            force_bash = frozen_skills_require_bash(job.skill_ids)
+            if force_bash:
+                tool_scope = JobToolScope(
+                    allow_bash=True,
+                    allow_http=False,
+                    allow_web=False,
+                    allow_mcp=False,
+                    allow_knowledge=False,
+                )
+            failing = would_fail_unattended_tools(tool_scope=tool_scope, agent=agent)
+            if failing:
+                raise ScheduledJobValidationError("would_fail_tools: " + ", ".join(failing))
+            if force_bash and not job.tool_scope.allow_bash:
+                return {"tool_scope": tool_scope.to_storage_dict()}
+            return {}
+
+        from src.scheduler.feasibility import evaluate_job_feasibility
+        from src.scheduler.firing_toolkit import (
+            CapabilityUnboundError,
+            assemble_scheduled_firing_toolkit_spec,
+            derived_tool_scope_from_spec,
+        )
+
+        intent = contract.task_intent or ""
+        if not intent:
+            raise ScheduledJobValidationError("合同缺少 task_intent，不能启用")
+        live = evaluate_job_feasibility(
+            task_intent=intent,
+            agent_id=job.agent_id,
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            required_intents=tuple(contract.required_intents),
+            claimed_must_include=frozenset(item.capability_id for item in contract.claimed),
+            include_suggestions=False,
+        )
+        if live.verdict == "impossible":
+            raise ScheduledJobValidationError(live.message)
+        try:
+            spec = assemble_scheduled_firing_toolkit_spec(job, agent=agent)
+        except CapabilityUnboundError as exc:
+            raise ScheduledJobValidationError(str(exc)) from exc
+        derived = derived_tool_scope_from_spec(spec)
+        failing = would_fail_unattended_tools(
+            tool_scope=derived,
+            agent=agent,
+            extra_tool_names=list(spec.get("enable_tools") or []),
+        )
+        if failing:
+            raise ScheduledJobValidationError("would_fail_tools: " + ", ".join(failing))
+        payload = contract.to_storage_dict()
+        payload["confirmedAt"] = datetime.now(timezone.utc).isoformat()
+        payload["assembledToolScope"] = {
+            "allowBash": derived.allow_bash,
+            "allowHttp": derived.allow_http,
+            "allowWeb": derived.allow_web,
+            "allowMcp": derived.allow_mcp,
+            "allowKnowledge": derived.allow_knowledge,
+        }
+        return {
+            "tool_scope": derived.to_storage_dict(),
+            "capability_contract": payload,
+        }
 
     def _assert_resources_available(self, job: ScheduledJob) -> None:
         """confirm / resume 时复检 Project、Agent 与冻结 Skill/MCP/HTTP 是否仍可用。"""

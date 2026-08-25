@@ -98,6 +98,48 @@ def _raise_job_http(exc: Exception) -> None:
     raise exc
 
 
+def _firing_preview(job: ScheduledJob) -> list[str]:
+    try:
+        from src.scheduler.firing_toolkit import assemble_scheduled_firing_toolkit_spec
+
+        spec = assemble_scheduled_firing_toolkit_spec(job)
+        return list(spec.get("firing_tools_preview") or [])
+    except Exception:
+        return ["Read", "Grep", "Glob", "Write", "Edit", "FinalAnswerStart"]
+
+
+@router.post("/scheduled-jobs/{job_id}/recheck-capabilities")
+async def recheck_scheduled_job_capabilities(job_id: str) -> dict[str, Any]:
+    """用合同原话重评能力；空合同 422。"""
+
+    _require_enabled()
+    from src.scheduler.feasibility import contract_from_feasibility, evaluate_job_feasibility
+
+    try:
+        job = _service.get_job(job_id)
+        intent = job.capability_contract.task_intent
+        if not intent:
+            raise HTTPException(status_code=422, detail="空合同必须提供 task_intent")
+        if _service.has_non_terminal_firing(job_id):
+            raise HTTPException(status_code=409, detail="任务正在执行，不能重评合同")
+        result = evaluate_job_feasibility(
+            task_intent=intent,
+            agent_id=job.agent_id,
+            workspace_id=job.workspace_id,
+            project_id=job.project_id,
+            required_intents=tuple(job.capability_contract.required_intents),
+        )
+        updated = _service.update_job(job_id, {
+            "capability_contract": contract_from_feasibility(result).to_storage_dict(),
+        })
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_job_http(exc)
+        raise
+    return serialize_job(updated)
+
+
 def serialize_job(job: ScheduledJob) -> dict[str, Any]:
     return {
         "id": job.id,
@@ -133,6 +175,7 @@ def serialize_job(job: ScheduledJob) -> dict[str, Any]:
         "maxFiringsPerDay": job.max_firings_per_day,
         "createdFromSessionId": job.created_from_session_id,
         "capabilityContract": job.capability_contract.model_dump(by_alias=True),
+        "firingToolsPreview": _firing_preview(job),
         "createdAt": job.created_at,
         "updatedAt": job.updated_at,
         "archivedAt": job.archived_at,

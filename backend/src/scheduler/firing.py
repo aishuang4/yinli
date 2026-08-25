@@ -155,6 +155,17 @@ async def run_firing(
 
 
 def _build_request(job: ScheduledJob, firing: ScheduledJobRun) -> ScheduledRunRequest:
+    from src.scheduler.firing_toolkit import (
+        CapabilityUnboundError,
+        assemble_scheduled_firing_toolkit_spec,
+        derived_tool_scope_from_spec,
+    )
+
+    try:
+        spec = assemble_scheduled_firing_toolkit_spec(job)
+    except CapabilityUnboundError as exc:
+        raise ScheduledChatLaunchError(str(exc)) from exc
+    scope = derived_tool_scope_from_spec(spec)
     return ScheduledRunRequest(
         job_id=job.id,
         firing_id=firing.id,
@@ -163,7 +174,7 @@ def _build_request(job: ScheduledJob, firing: ScheduledJobRun) -> ScheduledRunRe
         agent_id=job.agent_id,
         frozen_prompt=job.frozen_prompt,
         skill_ids=list(job.skill_ids),
-        tool_scope=runtime_tool_scope_from_job(job.tool_scope),
+        tool_scope=runtime_tool_scope_from_job(scope),
         scheduled_for=firing.scheduled_for,
         trigger=firing.trigger,
     )

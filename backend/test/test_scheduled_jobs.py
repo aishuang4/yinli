@@ -299,6 +299,8 @@ def test_empty_contract_assemble_keeps_bash_ignores_dirty_mcp(isolated_db):
     assert spec["tool_scope"]["allow_bash"] is True
     assert spec["tool_scope"]["allow_mcp"] is False
     assert spec["legacy_tool_scope_ignored"] is True
+    assert "FinalAnswerStart" in spec["firing_tools_preview"]
+    assert "AskUser" not in spec["firing_tools_preview"]
 
 
 def test_create_job_rejects_retry_once_and_duplicate_name(isolated_db):

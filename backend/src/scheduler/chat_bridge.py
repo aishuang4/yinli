@@ -239,13 +239,22 @@ async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
 
 
 def _job_view(req: ScheduledRunRequest) -> SimpleNamespace:
-    return SimpleNamespace(
-        id=req.job_id,
-        agent_id=req.agent_id,
-        frozen_prompt=req.frozen_prompt,
-        skill_ids=list(req.skill_ids),
-        tool_scope=req.tool_scope,
-    )
+    from src.scheduler.service import ScheduledJobService
+
+    try:
+        job = ScheduledJobService().get_job(req.job_id)
+        return job
+    except Exception:
+        return SimpleNamespace(
+            id=req.job_id,
+            agent_id=req.agent_id,
+            frozen_prompt=req.frozen_prompt,
+            skill_ids=list(req.skill_ids),
+            tool_scope=req.tool_scope,
+            capability_contract=None,
+            workspace_id=req.workspace_id,
+            project_id=req.project_id,
+        )
 
 
 def _firing_view(req: ScheduledRunRequest) -> SimpleNamespace:

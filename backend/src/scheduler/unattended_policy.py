@@ -81,6 +81,7 @@ def would_fail_unattended_tools(
     *,
     tool_scope: JobToolScope | Any,
     agent: object | None,
+    extra_tool_names: list[str] | tuple[str, ...] = (),
 ) -> list[str]:
     """Agent 策略下会 HITL 且 overlay 不会批准的注入工具。
 
@@ -89,13 +90,24 @@ def would_fail_unattended_tools(
     """
 
     injected = injected_unattended_tools(tool_scope)
+    extras = [
+        str(name) for name in extra_tool_names
+        if str(name) and str(name) not in injected
+    ]
     profile = build_permission_profile(getattr(agent, "guardrails", None))
+    policy = agent_approval_policy(agent)
     if profile.is_read_only:
         return [name for name in injected if name in _OVERLAY_APPROVED_TOOLS]
-    if profile.to_agentscope_permission_mode() == PermissionMode.BYPASS:
-        return []
     failing: list[str] = []
+    bypass = profile.to_agentscope_permission_mode() == PermissionMode.BYPASS
     for name in injected:
-        if name == "Bash":
+        if name == "Bash" and not bypass:
+            failing.append(name)
+    for name in extras:
+        if name in {"Read", "Grep", "Glob", *_OVERLAY_APPROVED_TOOLS}:
+            continue
+        if name == "Bash" and not bypass:
+            failing.append(name)
+        elif name != "Bash" and policy != ApprovalPolicy.TRUSTED_TOOLS:
             failing.append(name)
     return failing

@@ -46,6 +46,34 @@ def _pause_jobs_for_removed_agent_skills(agent_id: str, skill_ids: set[str]) -> 
         )
 
 
+def _pause_jobs_for_agent_capability_change(old_agent: "AgentResponse", new_agent: "AgentResponse") -> None:
+    """MCP/HTTP 解绑或权限降级时按合同暂停 Job。"""
+
+    from src.scheduler.unattended_policy import agent_approval_policy
+
+    removed_mcp = set(old_agent.mcp_tools) - set(new_agent.mcp_tools)
+    removed_knowledge = set(old_agent.knowledge_tools) - set(new_agent.knowledge_tools)
+    old_policy = agent_approval_policy(old_agent)
+    new_policy = agent_approval_policy(new_agent)
+    old_net = bool(getattr(old_agent.guardrails, "network_enabled", True))
+    new_net = bool(getattr(new_agent.guardrails, "network_enabled", True))
+    permission_revoked = (
+        old_policy != new_policy
+        or (old_net and not new_net)
+    )
+    if removed_mcp or removed_knowledge:
+        _job_service.pause_jobs_for_removed_agent_tools(
+            new_agent.id,
+            mcp_ids=removed_mcp,
+            knowledge_ids=removed_knowledge,
+        )
+    if permission_revoked:
+        _job_service.pause_jobs_for_removed_agent_tools(
+            new_agent.id,
+            permission_revoked=True,
+        )
+
+
 DATA_DIR = str(DATA_ROOT)
 AGENTS_REGISTRY_FILE = os.path.join(DATA_DIR, "agents.json")
 AGENTS_NAMESPACE = "agents"
@@ -336,6 +364,7 @@ def remove_mcp_tools_from_agents(tool_ids: set[str]) -> int:
         _agents[agent_id] = updated_agent
         invalidate_agent(agent_id)
         upsert_agent(updated_agent.model_dump(by_alias=True))
+        _job_service.pause_jobs_for_removed_agent_tools(agent_id, mcp_ids=tool_ids)
         changed += 1
     return changed
 
@@ -542,6 +571,7 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
     upsert_agent(updated_agent.model_dump(by_alias=True))
     if removed_skills:
         _pause_jobs_for_removed_agent_skills(agent_id, removed_skills)
+    _pause_jobs_for_agent_capability_change(existing, updated_agent)
     return updated_agent
 
 
@@ -565,6 +595,9 @@ def remove_knowledge_tools_from_agents(tool_ids: set[str]) -> int:
         _agents[agent_id] = updated_agent
         invalidate_agent(agent_id)
         upsert_agent(updated_agent.model_dump(by_alias=True))
+        _job_service.pause_jobs_for_removed_agent_tools(
+            agent_id, knowledge_ids=tool_ids,
+        )
         changed += 1
     return changed
 

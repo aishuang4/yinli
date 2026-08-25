@@ -37,6 +37,40 @@ export interface OnceScheduleExpr {
 
 export type JobScheduleExpr = WeeklyScheduleExpr | OnceScheduleExpr | Record<string, unknown>;
 
+export interface JobCapabilityClaim {
+  capabilityId: string;
+  kind: string;
+  resourceId: string;
+  serverId?: string;
+  toolName: string;
+  tags: string[];
+  unattendedOk: boolean;
+}
+
+export interface JobCapabilityGap {
+  intent: string;
+  reason: string;
+  suggestedAction?: string;
+}
+
+export interface JobCapabilityContract {
+  version: number;
+  verdict: 'ok' | 'partial' | 'generate_only';
+  taskIntent: string;
+  requiredIntents: string[];
+  claimed: JobCapabilityClaim[];
+  missing: JobCapabilityGap[];
+  blockedByPermission: JobCapabilityGap[];
+  acceptedPartial: boolean;
+  allowHttpRequest: boolean;
+  allowWebFetch: boolean;
+  allowBash: boolean;
+  skillIds: string[];
+  assembledToolScope?: JobToolScope;
+  evaluatedAt?: string;
+  confirmedAt?: string | null;
+}
+
 export interface ScheduledJob {
   id: string;
   workspaceId: string;
@@ -70,6 +104,8 @@ export interface ScheduledJob {
   maxConsecutiveFailures: number;
   maxFiringsPerDay: number;
   createdFromSessionId: string;
+  capabilityContract: JobCapabilityContract;
+  firingToolsPreview: string[];
   createdAt: string;
   updatedAt: string;
   archivedAt: string | null;
