@@ -45,6 +45,10 @@ function readApiDetail(payload: unknown, status: number): string {
   if (!payload || typeof payload !== 'object') return `HTTP ${status}`;
   const detail = (payload as { detail?: unknown }).detail;
   if (typeof detail === 'string' && detail.trim()) return detail;
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
   if (Array.isArray(detail)) {
     const messages = detail.map((item) => {
       if (typeof item === 'string') return item;

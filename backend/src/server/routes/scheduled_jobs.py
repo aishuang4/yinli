@@ -50,6 +50,9 @@ class ScheduledJobCreateRequest(BaseModel):
     max_consecutive_failures: int = Field(default=3, alias="maxConsecutiveFailures")
     max_firings_per_day: int = Field(default=8, alias="maxFiringsPerDay")
     required_successes: int = Field(default=3, alias="requiredSuccesses")
+    task_intent: str = Field(default="", alias="taskIntent")
+    accept_partial: bool = Field(default=False, alias="acceptPartial")
+    required_intents: list[str] = Field(default_factory=list, alias="requiredIntents")
 
     model_config = {"populate_by_name": True, "extra": "forbid"}
 
@@ -172,6 +175,34 @@ async def list_scheduled_jobs(
         "jobs": [serialize_job(item) for item in jobs],
         "enabled": is_scheduled_jobs_enabled(),
     }
+
+
+class FeasibilityRequest(BaseModel):
+    """创建前能力门禁查询。"""
+
+    task_intent: str = Field(alias="taskIntent")
+    agent_id: str = Field(alias="agentId")
+    workspace_id: str = Field(alias="workspaceId")
+    project_id: str = Field(alias="projectId")
+    required_intents: list[str] = Field(default_factory=list, alias="requiredIntents")
+
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+
+
+@router.post("/scheduled-jobs/feasibility")
+async def check_scheduled_job_feasibility(data: FeasibilityRequest) -> dict[str, Any]:
+    """不写库的能力门禁。"""
+
+    from src.scheduler.feasibility import evaluate_job_feasibility
+
+    result = evaluate_job_feasibility(
+        task_intent=data.task_intent,
+        agent_id=data.agent_id,
+        workspace_id=data.workspace_id,
+        project_id=data.project_id,
+        required_intents=tuple(data.required_intents),
+    )
+    return result.to_public_json()
 
 
 @router.post("/scheduled-jobs", status_code=201)

@@ -115,7 +115,10 @@ def test_tools_are_ordinary_not_external():
         session_id="s",
         service=ScheduledJobService(),
     )
-    assert [tool.name for tool in tools] == ["ScheduleJob", "ListJobs", "PauseJob", "ConfirmJob"]
+    assert [tool.name for tool in tools] == [
+        "ScheduleJob", "ListJobs", "PauseJob", "ConfirmJob",
+        "CheckJobFeasibility", "RecheckJobCapabilities",
+    ]
     assert all(tool.is_external_tool is False for tool in tools)
     assert PauseJob.input_schema["required"] == ["job_id"]
     assert "name" not in PauseJob.input_schema["properties"]
@@ -240,6 +243,8 @@ def test_team_executor_does_not_inject_scheduled_job_tools(monkeypatch):
         "ListJobs",
         "PauseJob",
         "ConfirmJob",
+        "CheckJobFeasibility",
+        "RecheckJobCapabilities",
     ]
     assert single_parts[1] == scheduled_job_tools_cache_key(single_parts[2])
     assert ASKUSER_DELIVERY_DEFAULT in single_parts[5]

@@ -27,6 +27,7 @@ from src.scheduler.models import (
     ScheduledJobValidationError,
 )
 from src.scheduler.notifications import notify_firing_terminal, notify_job_paused, create_notification
+from src.scheduler.settings import is_capability_gate_enabled
 from src.scheduler.unattended_policy import (
     frozen_skills_require_bash,
     would_fail_unattended_tools,
@@ -118,6 +119,9 @@ class ScheduledJobService:
         max_firings_per_day: int = 8,
         required_successes: int = 3,
         capability_contract: dict[str, Any] | None = None,
+        task_intent: str = "",
+        accept_partial: bool = False,
+        required_intents: list[str] | None = None,
     ) -> ScheduledJob:
         """字段齐全后写入 pending_confirmation；未传 tool_scope 则全 false。"""
 
@@ -136,6 +140,26 @@ class ScheduledJobService:
         if delivery_policy not in DELIVERY_POLICIES:
             raise ScheduledJobValidationError(f"非法 delivery_policy: {delivery_policy}")
         scope = self._frozen_tool_scope(tool_scope)
+        stored_contract: dict[str, Any] = capability_contract or {}
+        if is_capability_gate_enabled():
+            from src.scheduler.feasibility import contract_from_feasibility, evaluate_job_feasibility
+
+            intent = str(task_intent or "").strip()
+            if not intent:
+                raise ScheduledJobValidationError("task_intent 不能为空")
+            result = evaluate_job_feasibility(
+                task_intent=intent,
+                agent_id=agent_id,
+                workspace_id=workspace_id,
+                project_id=project_id,
+                required_intents=tuple(required_intents or ()),
+            )
+            if result.verdict == "impossible":
+                raise ScheduledJobValidationError(result.message)
+            if result.verdict == "partial" and not accept_partial:
+                raise ScheduledJobValidationError(result.message)
+            stored_contract = contract_from_feasibility(result).to_storage_dict()
+            scope = JobToolScope()
         record: dict[str, Any] | None = None
         try:
             record = insert_scheduled_job({
@@ -164,7 +188,7 @@ class ScheduledJobService:
                 "max_consecutive_failures": max_consecutive_failures,
                 "max_firings_per_day": max_firings_per_day,
                 "required_successes": required_successes,
-                "capability_contract": capability_contract or {},
+                "capability_contract": stored_contract,
             })
         except UniqueConstraintError as exc:
             raise ScheduledJobConflictError("同项目下任务名称已存在") from exc

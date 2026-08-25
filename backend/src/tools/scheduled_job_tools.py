@@ -15,7 +15,8 @@ from agentscope.tool import ToolBase, ToolChunk
 
 from src.scheduler.models import ScheduledJob, ScheduledJobError
 from src.scheduler.service import ScheduledJobService
-from src.scheduler.settings import is_scheduled_jobs_enabled
+from src.scheduler.feasibility import contract_from_feasibility, evaluate_job_feasibility
+from src.scheduler.settings import is_capability_gate_enabled, is_scheduled_jobs_enabled
 
 # AskUser 投递选项顺序由测试锁定：第一项且默认选中。
 ASKUSER_DELIVERY_OPTIONS: tuple[str, str] = ("生成后通知我", "不投递")
@@ -24,7 +25,11 @@ ASKUSER_DELIVERY_DEFAULT = ASKUSER_DELIVERY_OPTIONS[0]
 ASKUSER_ENABLE_OPTIONS: tuple[str, str] = ("现在启用", "稍后再说")
 ASKUSER_ENABLE_DEFAULT = ASKUSER_ENABLE_OPTIONS[0]
 SCHEDULED_JOBS_DISABLED_MESSAGE = "调度未启用"
-SCHEDULED_JOB_TOOL_NAMES: tuple[str, ...] = ("ScheduleJob", "ListJobs", "PauseJob", "ConfirmJob")
+SCHEDULED_JOB_TOOL_NAMES: tuple[str, ...] = (
+    "ScheduleJob", "ListJobs", "PauseJob", "ConfirmJob",
+    "CheckJobFeasibility", "RecheckJobCapabilities",
+)
+ASKUSER_PARTIAL_OPTIONS: tuple[str, str] = ("按降级创建（只生成）", "先去补能力")
 
 _DELIVERY_ASKUSER_HINT = (
     "收集投递策略时必须调用 AskUser，options 顺序固定为："
@@ -55,7 +60,10 @@ def scheduled_job_prompt_addendum() -> str:
     return "\n".join([
         "",
         "Scheduled job registration:",
-        "Use AskUser to collect missing schedule fields, then call ScheduleJob with a complete payload. There is no draft status.",
+        "First call CheckJobFeasibility with the user's original task_intent before collecting a long schedule. Do not guess capabilities.",
+        "If CheckJobFeasibility verdict is impossible, tell the user this Agent cannot do the unattended job; do not call ScheduleJob.",
+        "If verdict is partial, AskUser options must be exactly: 按降级创建（只生成） (default, first), then 先去补能力. Mention 不能 and 发邮件/外发 vs 生成. Only ScheduleJob with accept_partial=true after they accept the downgrade.",
+        "Use AskUser to collect missing schedule fields, then call ScheduleJob with a complete payload including task_intent. There is no draft status.",
         f"When asking for delivery policy, AskUser options must be exactly: {ASKUSER_DELIVERY_OPTIONS[0]} (default, first), then {ASKUSER_DELIVERY_OPTIONS[1]}.",
         "Do not offer 直接发给客户, auto_send, or sending to the customer.",
         "ScheduleJob writes pending_confirmation immediately; that is not yet scheduled.",
@@ -94,6 +102,8 @@ def build_scheduled_job_tools(
         ListJobs(**kwargs),
         PauseJob(**kwargs),
         ConfirmJob(**kwargs),
+        CheckJobFeasibility(**kwargs),
+        RecheckJobCapabilities(**kwargs),
     ]
 
 
@@ -221,6 +231,19 @@ class ScheduleJob(_ScheduledJobToolBase):
                 "enum": ["notify", "none"],
                 "description": f"Default notify ({ASKUSER_DELIVERY_DEFAULT}). Phase 1 has no auto send.",
             },
+            "task_intent": {
+                "type": "string",
+                "description": "User's original request, not the frozen_prompt. Required when capability_gate is on.",
+            },
+            "accept_partial": {
+                "type": "boolean",
+                "description": "True only after the user accepted a partial downgrade via AskUser.",
+            },
+            "required_intents": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Optional intent tags already extracted. Server still extracts from task_intent.",
+            },
         },
         "required": ["name", "schedule_kind", "schedule_expr", "timezone", "frozen_prompt"],
     }
@@ -242,6 +265,9 @@ class ScheduleJob(_ScheduledJobToolBase):
         missed_policy: str = "catch_up_once",
         failure_policy: str = "notify_keep_schedule",
         delivery_policy: str = "notify",
+        task_intent: str = "",
+        accept_partial: bool = False,
+        required_intents: list[str] | None = None,
         **kwargs: Any,
     ) -> ToolChunk:
         disabled = self._require_enabled()
@@ -266,6 +292,9 @@ class ScheduleJob(_ScheduledJobToolBase):
                 failure_policy=failure_policy or "notify_keep_schedule",
                 delivery_policy=delivery_policy or "notify",
                 created_from_session_id=self.session_id,
+                task_intent=task_intent,
+                accept_partial=bool(accept_partial),
+                required_intents=list(required_intents or []),
             )
         except (ScheduledJobError, ValueError) as exc:
             return self._failure(exc)
@@ -398,6 +427,110 @@ class ConfirmJob(_ScheduledJobToolBase):
             else "任务已启用。"
         )
         return self._success(payload)
+
+
+class CheckJobFeasibility(_ScheduledJobToolBase):
+    """创建前能力门禁；不写库。"""
+
+    name: str = "CheckJobFeasibility"
+    description: str = (
+        "Check whether the current Agent can unattended-fulfill a scheduled task. "
+        "Pass the user's original words as task_intent. Call this before ScheduleJob. "
+        "Does not write a job."
+    )
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "task_intent": {
+                "type": "string",
+                "description": "User's original request, e.g. 每周五给客户发周报邮件.",
+            },
+            "agent_id": {
+                "type": "string",
+                "description": "Agent to activate. Defaults to the current Agent.",
+            },
+            "required_intents": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["task_intent"],
+    }
+    is_read_only: bool = True
+    is_concurrency_safe: bool = True
+
+    async def __call__(
+        self,
+        task_intent: str,
+        agent_id: str = "",
+        required_intents: list[str] | None = None,
+        **kwargs: Any,
+    ) -> ToolChunk:
+        try:
+            result = evaluate_job_feasibility(
+                task_intent=task_intent,
+                agent_id=(agent_id or self.agent_id).strip(),
+                workspace_id=self.workspace_id,
+                project_id=self.project_id,
+                required_intents=tuple(required_intents or ()),
+            )
+        except Exception as exc:
+            return self._failure(exc)
+        return self._success(result.to_public_json())
+
+
+class RecheckJobCapabilities(_ScheduledJobToolBase):
+    """按用户原话重评已有 Job 合同；省略 task_intent 时用合同原话。"""
+
+    name: str = "RecheckJobCapabilities"
+    description: str = (
+        "Re-evaluate an existing job's capability contract. "
+        "Omit task_intent to reuse the stored original request. "
+        "To add email sending to an existing job, pass the user's new original words."
+    )
+    input_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "job_id": {"type": "string"},
+            "task_intent": {
+                "type": "string",
+                "description": "Optional. Defaults to the contract's stored task_intent. Empty Phase 1 jobs require this.",
+            },
+        },
+        "required": ["job_id"],
+    }
+    is_read_only: bool = False
+
+    async def __call__(self, job_id: str = "", task_intent: str = "", **kwargs: Any) -> ToolChunk:
+        if not str(job_id or "").strip():
+            return self._failure("RecheckJobCapabilities 必须提供 job_id")
+        disabled = self._require_enabled()
+        if disabled is not None:
+            return disabled
+        try:
+            job = self._service.get_job(job_id)
+            if job.project_id != self.project_id:
+                return self._failure(f"找不到 Job: {job_id}")
+            intent = str(task_intent or "").strip() or job.capability_contract.task_intent
+            if not intent:
+                return self._failure("空合同必须提供 task_intent，不能回退 frozen_prompt")
+            result = evaluate_job_feasibility(
+                task_intent=intent,
+                agent_id=job.agent_id,
+                workspace_id=job.workspace_id,
+                project_id=job.project_id,
+            )
+            updated = self._service.update_job(job_id, {
+                "capability_contract": contract_from_feasibility(result).to_storage_dict(),
+            })
+        except ScheduledJobError as exc:
+            return self._failure(exc)
+        except Exception as exc:
+            return self._failure(exc)
+        return self._success({
+            **_job_payload(updated),
+            "feasibility": result.to_public_json(),
+        })
 
 
 def _job_payload(job: ScheduledJob) -> dict[str, Any]:
