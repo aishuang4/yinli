@@ -13,6 +13,24 @@ export type ViewType = 'chat' | 'runs' | 'jobs' | 'traces' | 'sandbox' | 'agents
 /** 顶层产品工作空间模式 */
 export type WorkspaceMode = 'workstation' | 'workflow';
 
+/** Chat 之上的工作室表面，不是第三个 TitleBar 产品世界。 */
+export type StudioSurface = 'none' | 'group-studio';
+
+/** Chat ↔ 工作室过渡相位。idle 时才允许再次切换。 */
+export type StudioTransition =
+  | 'idle'
+  | 'enter-collapse'
+  | 'enter-expand'
+  | 'enter-settle'
+  | 'leave-collapse'
+  | 'leave-expand'
+  | 'leave-settle';
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== 'undefined'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 /** 应用状态接口 */
 interface AppState {
   /** 当前激活的视图 */
@@ -29,6 +47,12 @@ interface AppState {
   activeProjectId: string;
   /** 通知入口要打开的定时任务，消费后清空。 */
   pendingJobId: string | null;
+  /** 工作室表面。不持久化，刷新回 Chat。 */
+  studioSurface: StudioSurface;
+  /** 过渡相位。非 idle 时两个 pane 同时可见。 */
+  studioTransition: StudioTransition;
+  /** 当前打开或刚刚离开的工作室 id。 */
+  activeGroupStudioId: string | null;
 
   // Actions
   /** 切换视图 */
@@ -45,6 +69,12 @@ interface AppState {
   openScheduledJob: (jobId: string) => void;
   /** 消费通知跳转后的 pending Job。 */
   clearPendingJobId: () => void;
+  /** 打开工作室表面。不改 TitleBar 的 WorkspaceMode 集合；若在任务流则先回到工作台 Chat。 */
+  openGroupStudio: (groupId: string) => void;
+  /** 收起工作室，回到 Chat。 */
+  closeGroupStudio: () => void;
+  /** 由 App 壳层推进过渡相位。 */
+  advanceStudioTransition: () => void;
 }
 
 export const useAppStore = create<AppState>()((set) => ({
@@ -56,6 +86,9 @@ export const useAppStore = create<AppState>()((set) => ({
   activeWorkspaceId: 'default',
   activeProjectId: 'default',
   pendingJobId: null,
+  studioSurface: 'none',
+  studioTransition: 'idle',
+  activeGroupStudioId: null,
 
   // Actions
   setView: (view) => set({ currentView: view }),
@@ -73,4 +106,51 @@ export const useAppStore = create<AppState>()((set) => ({
     pendingJobId: jobId,
   }),
   clearPendingJobId: () => set({ pendingJobId: null }),
+  openGroupStudio: (groupId) => set((state) => {
+    const nextBase = {
+      currentView: 'chat' as const,
+      workspaceMode: 'workstation' as const,
+      activeGroupStudioId: groupId,
+    };
+    if (state.studioTransition !== 'idle') {
+      return nextBase;
+    }
+    if (state.studioSurface === 'group-studio' && state.activeGroupStudioId === groupId) {
+      return nextBase;
+    }
+    if (prefersReducedMotion()) {
+      return { ...nextBase, studioSurface: 'group-studio' as const, studioTransition: 'idle' as const };
+    }
+    return { ...nextBase, studioTransition: 'enter-collapse' as const };
+  }),
+  closeGroupStudio: () => set((state) => {
+    if (state.studioTransition !== 'idle' || state.studioSurface !== 'group-studio') {
+      return state;
+    }
+    if (prefersReducedMotion()) {
+      return { studioSurface: 'none', studioTransition: 'idle' };
+    }
+    return { studioTransition: 'leave-collapse' };
+  }),
+  advanceStudioTransition: () => set((state) => {
+    if (state.studioTransition === 'enter-collapse') {
+      return { studioTransition: 'enter-expand' };
+    }
+    if (state.studioTransition === 'enter-expand') {
+      return { studioTransition: 'enter-settle' };
+    }
+    if (state.studioTransition === 'enter-settle') {
+      return { studioTransition: 'idle', studioSurface: 'group-studio' };
+    }
+    if (state.studioTransition === 'leave-collapse') {
+      return { studioTransition: 'leave-expand' };
+    }
+    if (state.studioTransition === 'leave-expand') {
+      return { studioTransition: 'leave-settle' };
+    }
+    if (state.studioTransition === 'leave-settle') {
+      return { studioTransition: 'idle', studioSurface: 'none' };
+    }
+    return state;
+  }),
 }));

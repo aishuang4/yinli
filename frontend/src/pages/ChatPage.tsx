@@ -13,7 +13,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Bot, ChevronDown, MessageSquare, PanelLeftOpen, Plus, Settings } from 'lucide-react';
+import { Bot, ChevronDown, MessageSquare, PanelLeftOpen, Plus, Settings, Users } from 'lucide-react';
 import { Tag, Tooltip } from '@/components/design';
 import { useEventStream } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
@@ -30,6 +30,7 @@ import { PlanReviewComposer } from '../features/chat/PlanReviewComposer';
 import { PlanFloatingPanel } from '../features/chat/PlanFloatingPanel';
 import { ChatHistoryPanel } from '../features/chat/ChatHistoryPanel';
 import { NotificationBell } from '../features/notifications/NotificationBell';
+import { useGroupStudioEntry } from '../features/group-studio/useGroupStudioEntry';
 import { selectLatestPlan, selectPendingPlanReview, type PlanReviewData } from '../features/chat/planReviewUtils';
 import { selectPendingAskUserInteractions } from '../features/chat/humanInteractionUtils';
 import type { ChatFilePayload, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
@@ -148,6 +149,28 @@ export function ChatPage() {
     setPlanPanelOpen(true);
   }, [planIdentity]);
   const hasLiveResponse = state.isStreaming || snapshot.order.length > 0 || Boolean(state.error);
+  const chatRunBlocking = state.isStreaming
+    || Boolean(activeAskUserInteraction)
+    || Boolean(pendingPlanReview)
+    || (Boolean(state.currentRunId) && !snapshot.streamDone);
+  const {
+    buttonLabel: studioButtonLabel,
+    entering: studioEntering,
+    flagEnabled: studioFlagEnabled,
+    handleToggle: handleStudioToggle,
+    shortcutLabel: studioShortcut,
+  } = useGroupStudioEntry({
+    activeProjectId,
+    activeSessionId,
+    agentId: runtimeAgent?.id || 'default',
+    chatRunBlocking,
+    draftText: inputValue,
+    fileAttachments,
+    hasImages: imageAttachments.length > 0,
+    isComposingRef,
+    setActiveSessionId,
+    uploadFilesForSession,
+  });
   const activeSession = useMemo(() => (
     sessions.find((session) => session.id === activeSessionId) || null
   ), [activeSessionId, sessions]);
@@ -605,6 +628,20 @@ export function ChatPage() {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {studioFlagEnabled ? (
+              <Tooltip title={`${studioButtonLabel} ${studioShortcut}`} placement="bottom" mode="dark">
+                <button
+                  type="button"
+                  className="icon-button chat-workbench-top-action inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs"
+                  onClick={handleStudioToggle}
+                  disabled={studioEntering || chatRunBlocking}
+                  aria-label={studioButtonLabel}
+                >
+                  <Users size={16} />
+                  <span>{studioButtonLabel}</span>
+                </button>
+              </Tooltip>
+            ) : null}
             <NotificationBell />
             <Tooltip title="工作台设置" placement="bottom" mode="dark">
               <button

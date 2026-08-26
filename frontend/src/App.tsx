@@ -25,6 +25,7 @@ import { FeedbackBridge } from './components/FeedbackBridge';
 import { DesktopBackendGate } from './components/DesktopBackendGate';
 import { ApiKeyOnboardingModal } from './features/settings/ApiKeyOnboardingModal';
 import { NotificationToastHost } from './features/notifications/NotificationToastHost';
+import { useStudioTransition } from './features/group-studio/useStudioTransition';
 import type { DesktopBackendStatus } from './types/desktopBackend';
 
 const ChatPage = lazy(() => import('./pages/ChatPage').then((module) => ({ default: module.ChatPage })));
@@ -40,6 +41,7 @@ const SkillsPage = lazy(() => import('./pages/SkillsPage').then((module) => ({ d
 const MemoryPage = lazy(() => import('./pages/MemoryPage').then((module) => ({ default: module.MemoryPage })));
 const ScheduledJobsPage = lazy(() => import('./pages/ScheduledJobsPage').then((module) => ({ default: module.ScheduledJobsPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })));
+const GroupStudioPage = lazy(() => import('./pages/GroupStudioPage').then((module) => ({ default: module.GroupStudioPage })));
 
 /**
  * 视图 → 页面组件映射表
@@ -200,14 +202,33 @@ interface WorkspacePagesProps {
 }
 
 function WorkspacePages({ workspaceMode, activeView, cachedViews }: WorkspacePagesProps) {
+  const studioSurface = useAppStore((state) => state.studioSurface);
+  const studioTransition = useAppStore((state) => state.studioTransition);
+  useStudioTransition();
   const workflowActive = workspaceMode === 'workflow';
+  const studioBusy = studioTransition !== 'idle';
+  const studioVisible = !workflowActive && (studioSurface === 'group-studio' || studioBusy);
+  const workstationVisible = !workflowActive && (studioSurface === 'none' || studioBusy);
   return (
-    <div className="app-workspace-switcher" data-mode={workspaceMode}>
+    <div
+      className="app-workspace-switcher"
+      data-mode={workspaceMode}
+      data-studio-surface={studioSurface}
+      data-studio-transition={studioTransition}
+    >
       <section
         className="app-workspace-pane app-workspace-pane--workstation"
-        aria-hidden={workflowActive}
+        aria-hidden={!workstationVisible}
       >
         <CachedPages activeView={activeView} cachedViews={cachedViews} />
+      </section>
+      <section
+        className="app-workspace-pane app-workspace-pane--group-studio"
+        aria-hidden={!studioVisible}
+      >
+        <Suspense fallback={<PageSkeleton />}>
+          <GroupStudioPage />
+        </Suspense>
       </section>
       <section
         className="app-workspace-pane app-workspace-pane--workflow"
