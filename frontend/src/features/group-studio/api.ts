@@ -1,6 +1,7 @@
 /** 群聊工作室 HTTP 客户端。不走 Chat SSE。 */
 
 import type {
+  GroupStudioApproval,
   GroupStudioFile,
   GroupStudioMember,
   GroupStudioSettings,
@@ -116,6 +117,22 @@ export async function uploadStudioFile(
   return await response.json() as GroupStudioFile;
 }
 
+export async function decideStudioApproval(groupId: string, input: {
+  projectId: string;
+  approvalId: string;
+  decision: 'approve' | 'deny';
+}): Promise<GroupStudioApproval> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/approvals`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法处理审批'));
+  }
+  return await response.json() as GroupStudioApproval;
+}
+
 export async function addStudioMember(groupId: string, input: {
   projectId: string;
   agentId: string;
@@ -184,6 +201,12 @@ export async function readDetail(response: Response, fallback: string): Promise<
   }
   if (detail === 'invalid_upload') {
     return '文件过大或路径不合法';
+  }
+  if (detail === 'approval_not_pending') {
+    return '这条审批已经处理过了';
+  }
+  if (detail === 'worker_session_lost') {
+    return '工人会话已丢失，请重新发起这一轮';
   }
   if (typeof detail === 'string' && detail.trim()) {
     return detail;

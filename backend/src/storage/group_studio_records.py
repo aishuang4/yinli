@@ -526,6 +526,80 @@ class GroupStudioRecordStore:
             "createdAt": now,
         }
 
+    def insert_approval(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.ensure_db()
+        now = payload.get("createdAt") or self.utc_now()
+        approval_id = payload.get("id") or f"gapr_{now}"
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO group_approvals (
+                    id, group_id, run_id, member_id, reply_id, tool_calls_json,
+                    arguments_preview, status, created_at, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    approval_id,
+                    payload["groupId"],
+                    payload["runId"],
+                    payload["memberId"],
+                    payload.get("replyId") or "",
+                    self.dumps(payload.get("toolCalls") or []),
+                    payload.get("argumentsPreview") or "",
+                    payload.get("status") or "pending",
+                    now,
+                    None,
+                ),
+            )
+        row = self.get_approval(approval_id)
+        return row or {"id": approval_id}
+
+    def get_approval(self, approval_id: str) -> dict[str, Any] | None:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM group_approvals WHERE id = ?",
+                (approval_id,),
+            ).fetchone()
+        return self._approval_from_row(row)
+
+    def get_pending_approval(self, group_id: str, run_id: str | None = None) -> dict[str, Any] | None:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            if run_id:
+                row = conn.execute(
+                    """
+                    SELECT * FROM group_approvals
+                    WHERE group_id = ? AND run_id = ? AND status = 'pending'
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (group_id, run_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT * FROM group_approvals
+                    WHERE group_id = ? AND status = 'pending'
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    (group_id,),
+                ).fetchone()
+        return self._approval_from_row(row)
+
+    def update_approval_status(self, approval_id: str, status: str) -> dict[str, Any] | None:
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE group_approvals
+                SET status = ?, resolved_at = ?, created_at = created_at
+                WHERE id = ?
+                """,
+                (status, now, approval_id),
+            )
+        return self.get_approval(approval_id)
+
     def list_events_after(self, group_id: str, after_seq: int) -> list[dict[str, Any]]:
         self.ensure_db()
         with self.lock, self.connect() as conn:

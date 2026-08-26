@@ -56,3 +56,10 @@ def assert_can_start_execution(status: str, goal: str) -> None:
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
     if not goal.strip():
         raise GroupStudioError(422, GOAL_REQUIRED)
+
+
+def assert_serial_run(current_run_id: str | None) -> None:
+    """P0 同时只能有一条 GroupRun。"""
+
+    if current_run_id:
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)

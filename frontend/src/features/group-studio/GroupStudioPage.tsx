@@ -10,6 +10,7 @@ import { useAppStore } from '../../stores/appStore';
 import { getErrorMessage, notifyError, notifySuccess } from '../../utils/feedback';
 import {
   addStudioMember,
+  decideStudioApproval,
   fetchGroupStudio,
   fetchStudioFiles,
   muteStudioMember,
@@ -17,8 +18,9 @@ import {
   updateTaskCard,
   uploadStudioFile,
 } from './api';
+import { GroupApprovalBar } from './GroupApprovalBar';
 import { StudioTopbar } from './StudioTopbar';
-import type { GroupStudioBlackboard, GroupStudioFile, GroupStudioMember, GroupStudioSnapshot } from './types';
+import type { GroupStudioApproval, GroupStudioBlackboard, GroupStudioFile, GroupStudioMember, GroupStudioSnapshot } from './types';
 import { useGroupStudioStream } from './useGroupStudioStream';
 import './GroupStudioPage.css';
 
@@ -49,6 +51,7 @@ export function GroupStudioPage() {
   const [adding, setAdding] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [memberBusyId, setMemberBusyId] = useState('');
+  const [approvalBusy, setApprovalBusy] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState('default');
   const isMac = window.electronAPI?.getPlatform() === 'darwin'
     || (!window.electronAPI && /Mac/i.test(navigator.platform));
@@ -114,6 +117,22 @@ export function GroupStudioPage() {
         setFiles((current) => (
           current.some((item) => item.id === file.id) ? current : [...current, file]
         ));
+        return;
+      }
+      if (event.type === 'GROUP_APPROVAL') {
+        const approval = event.payload as unknown as GroupStudioApproval;
+        setStudio((current) => (
+          current ? { ...current, currentApproval: approval } : current
+        ));
+        return;
+      }
+      if (event.type === 'GROUP_RUN_ENDED') {
+        setStudio((current) => {
+          if (!current || current.currentApproval?.status === 'pending') {
+            return current;
+          }
+          return { ...current, currentApproval: null };
+        });
       }
     },
   );
@@ -219,9 +238,33 @@ export function GroupStudioPage() {
     }
   };
 
+  const handleApproval = async (decision: 'approve' | 'deny') => {
+    if (!studio?.currentApproval) {
+      return;
+    }
+    setApprovalBusy(true);
+    try {
+      const updated = await decideStudioApproval(studio.id, {
+        projectId: studio.projectId,
+        approvalId: studio.currentApproval.id,
+        decision,
+      });
+      setStudio((current) => (current ? { ...current, currentApproval: updated } : current));
+      notifySuccess(decision === 'approve' ? '已允许工人继续' : '已拒绝这次工具调用');
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法处理审批'));
+    } finally {
+      setApprovalBusy(false);
+    }
+  };
+
   const blackboard = studio?.blackboard;
   const openQuestions = (blackboard?.openQuestions ?? []).filter((item) => !item.resolved);
   const decisions = blackboard?.decisions ?? [];
+  const pendingApproval = studio?.currentApproval?.status === 'pending' ? studio.currentApproval : null;
+  const approvalMemberName = pendingApproval
+    ? (members.find((item) => item.id === pendingApproval.memberId)?.displayName || '工人')
+    : '';
 
   return (
     <div className="group-studio-shell">
@@ -292,6 +335,14 @@ export function GroupStudioPage() {
           </aside>
           <section className="group-studio-pane group-studio-pane--timeline">
             <div className="group-studio-pane__label">时间线</div>
+            {pendingApproval ? (
+              <GroupApprovalBar
+                approval={pendingApproval}
+                memberName={approvalMemberName}
+                submitting={approvalBusy}
+                onDecide={(decision) => void handleApproval(decision)}
+              />
+            ) : null}
             {timeline.length === 0 ? (
               <p className="group-studio-placeholder">
                 {studio?.status === 'drafting'

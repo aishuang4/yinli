@@ -6,6 +6,7 @@ import asyncio
 import os
 
 from src.group_studio.host_runtime import run_host_discussion
+from src.group_studio.worker_runtime import run_worker_turn
 from src.storage.database import get_group_studio_snapshot
 
 
@@ -36,9 +37,26 @@ def schedule_host_turn(group_id: str) -> None:
     loop.create_task(_run_host_guarded(group_id))
 
 
+def schedule_worker_turn(group_id: str, member_id: str) -> None:
+    """Host 指派后启动工人一轮。pytest 下不自动点火。"""
+
+    if not should_auto_start_host():
+        return
+    snapshot = get_group_studio_snapshot(group_id, message_limit=1)
+    if snapshot is None or snapshot.get("currentRunId"):
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(_run_worker_guarded(group_id, member_id))
+
+
 async def _run_host_guarded(group_id: str) -> None:
     try:
-        await run_host_discussion(group_id)
+        assigned = await run_host_discussion(group_id)
+        if assigned:
+            await _run_worker_guarded(group_id, assigned)
     except Exception:
         from src.group_studio.events import emit_envelope
 
@@ -46,4 +64,18 @@ async def _run_host_guarded(group_id: str) -> None:
             group_id=group_id,
             event_type="GROUP_ERROR",
             payload={"code": "host_failed", "message": "host turn crashed"},
+        )
+
+
+async def _run_worker_guarded(group_id: str, member_id: str) -> None:
+    try:
+        await run_worker_turn(group_id, member_id)
+        schedule_host_turn(group_id)
+    except Exception:
+        from src.group_studio.events import emit_envelope
+
+        emit_envelope(
+            group_id=group_id,
+            event_type="GROUP_ERROR",
+            payload={"code": "worker_failed", "message": "worker turn crashed"},
         )

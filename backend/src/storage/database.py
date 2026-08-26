@@ -1223,6 +1223,22 @@ def insert_group_studio_artifact(payload: dict[str, Any]) -> dict[str, Any]:
     return _group_studio_record_store().insert_artifact(payload)
 
 
+def insert_group_studio_approval(payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().insert_approval(payload)
+
+
+def get_group_studio_approval(approval_id: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().get_approval(approval_id)
+
+
+def get_group_studio_pending_approval(group_id: str, run_id: str | None = None) -> dict[str, Any] | None:
+    return _group_studio_record_store().get_pending_approval(group_id, run_id)
+
+
+def update_group_studio_approval_status(approval_id: str, status: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().update_approval_status(approval_id, status)
+
+
 def update_workflow_run_status(
     run_id: str,
     status: str,

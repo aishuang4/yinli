@@ -75,6 +75,18 @@ export interface GroupStudioMessage {
   visibleInTimeline: boolean;
 }
 
+export interface GroupStudioApproval {
+  id: string;
+  groupId: string;
+  runId: string;
+  memberId: string;
+  replyId: string;
+  toolCalls: Array<{ id?: string; name?: string; input?: unknown }>;
+  toolNames: string[];
+  argumentsPreview: string;
+  status: 'pending' | 'approved' | 'denied' | 'cancelled';
+}
+
 export interface GroupStudioSnapshot {
   id: string;
   projectId: string;
@@ -85,6 +97,7 @@ export interface GroupStudioSnapshot {
   taskCard: GroupStudioTaskCard;
   blackboard?: GroupStudioBlackboard;
   members: GroupStudioMember[];
+  currentApproval?: GroupStudioApproval | null;
   messages?: GroupStudioMessage[];
   awaitingRestatement: boolean;
   createdAt: string;

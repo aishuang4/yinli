@@ -11,7 +11,7 @@ from src.agents.runtime_types import AgentGuardrails, AgentModelOptions, Runtime
 from src.config.runtime_settings import get_effective_model_settings
 from src.group_studio.events import emit_envelope
 from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID
-from src.group_studio.orchestrator import assert_floor_allowed
+from src.group_studio.orchestrator import assert_floor_allowed, assert_serial_run
 from src.group_studio.tools_host import HOST_STOP_TOOLS, HostToolContext, host_tools
 from src.security.permissions import build_permission_profile
 from src.server.routes.chat.runtime_builder import (
@@ -121,13 +121,14 @@ async def run_host_discussion(
     group_id: str,
     *,
     agent_factory: AgentFactory | None = None,
-) -> None:
-    """给 Host 一轮讨论发言权并消费 reply_stream。"""
+) -> str:
+    """给 Host 一轮讨论发言权并消费 reply_stream。成功指派则返回工人 member_id。"""
 
     snapshot = get_group_studio_snapshot(group_id)
     if snapshot is None:
-        return
+        return ""
     assert_floor_allowed(str(snapshot.get("status") or ""))
+    assert_serial_run(snapshot.get("currentRunId"))
     host_member = next(
         (
             item for item in (snapshot.get("members") or [])
@@ -137,7 +138,7 @@ async def run_host_discussion(
     )
     if host_member is None:
         emit_envelope(group_id=group_id, event_type="GROUP_ERROR", payload={"code": "host_required", "message": "缺少主持人"})
-        return
+        return ""
     spec, ctx, _tools = build_host_runtime_spec(snapshot, host_member)
     run_id = f"grun_{uuid.uuid4().hex[:16]}"
     ctx.run_id = run_id
@@ -253,6 +254,7 @@ async def run_host_discussion(
         run_id=run_id,
         payload={"runId": run_id, "status": run_status},
     )
+    return ctx.assigned_member_id if run_status == "completed" else ""
 
 
 def _host_turn_user_message(snapshot: dict[str, Any]) -> str:

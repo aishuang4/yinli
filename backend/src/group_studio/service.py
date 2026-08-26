@@ -21,6 +21,7 @@ from src.group_studio.errors import (
 from src.group_studio.files import ensure_studio_dirs, save_studio_upload
 from src.group_studio.models import (
     GROUP_STUDIO_HOST_AGENT_ID,
+    GroupApproval,
     GroupArtifact,
     GroupMemberCreateRequest,
     GroupStudio,
@@ -65,6 +66,7 @@ from src.storage.database import (
     replace_group_studio_blackboard,
     set_group_studio_member_muted,
     set_group_studio_member_removed,
+    set_group_studio_status,
 )
 
 
@@ -438,13 +440,36 @@ def add_member(group_id: str, request: GroupMemberCreateRequest) -> Membership:
     return membership
 
 
-def prepare_start_execution(group_id: str, project_id: str) -> None:
-    """校验可以进入执行期；真正跑 Worker 在后续 PR。"""
+def prepare_start_execution(group_id: str, project_id: str) -> GroupStudio:
+    """进入执行期。"""
 
     studio = _load_studio(group_id)
-    if project_id and project_id != studio.project_id:
-        raise GroupStudioError(422, CROSS_PROJECT_SESSION)
+    _assert_project(studio, project_id)
     assert_can_start_execution(studio.status, studio.task_card.goal)
+    set_group_studio_status(group_id, "executing")
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_STATUS",
+        payload={"from": studio.status, "to": "executing", "reason": "human_start_execution"},
+    )
+    return get_studio(group_id)
+
+
+def decide_studio_approval(
+    group_id: str,
+    *,
+    project_id: str,
+    approval_id: str,
+    decision: str,
+) -> GroupApproval:
+    from src.group_studio.approvals import decide_approval
+
+    return decide_approval(
+        group_id,
+        project_id=project_id,
+        approval_id=approval_id,
+        decision=decision,
+    )
 
 
 def _assert_project(studio: GroupStudio, project_id: str) -> None:

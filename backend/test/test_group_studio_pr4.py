@@ -124,7 +124,7 @@ def test_start_execution_in_drafting_is_forbidden(client):
     assert response.json()["detail"] == DRAFTING_NO_FLOOR
 
 
-def test_start_execution_in_discussing_still_unimplemented(client):
+def test_start_execution_in_discussing_enters_executing(client):
     studio = _create_studio(client, "sess-exec")
     client.put(f"/api/group-studio/{studio['id']}/task-card", json={
         "projectId": DEFAULT_PROJECT_ID,
@@ -133,7 +133,8 @@ def test_start_execution_in_discussing_still_unimplemented(client):
     response = client.post(f"/api/group-studio/{studio['id']}/start-execution", json={
         "projectId": DEFAULT_PROJECT_ID,
     })
-    assert response.status_code == 501
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "executing"
 
 
 def test_goal_change_without_runs_does_not_restatement(client):

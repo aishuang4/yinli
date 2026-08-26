@@ -1,7 +1,7 @@
 """群聊工作室独立路由。
 
 flag 关闭时全部 404 `group_studio_disabled`。
-from-chat / 任务卡 / 成员 / 黑板 / 文件已实现；pause、消息、审批仍 501。
+from-chat / 任务卡 / 成员 / 黑板 / 文件 / 审批 / 执行期已实现；pause、消息仍 501。
 """
 
 import asyncio
@@ -16,6 +16,7 @@ from src.group_studio.errors import (
     group_studio_http_error,
 )
 from src.group_studio.models import (
+    GroupApproval,
     GroupApprovalDecisionRequest,
     GroupArtifact,
     GroupCloseRequest,
@@ -36,6 +37,7 @@ from src.group_studio.models import (
 )
 from src.group_studio.service import (
     add_member,
+    decide_studio_approval,
     from_chat,
     get_studio,
     get_studio_by_chat_session,
@@ -241,17 +243,24 @@ async def confirm_restatement(group_id: str, _body: GroupConfirmRestatementReque
 
 
 @router.post("/{group_id}/approvals", dependencies=[EnabledDep])
-async def decide_approval(group_id: str, _body: GroupApprovalDecisionRequest) -> None:
-    _not_implemented()
+async def decide_approval(group_id: str, body: GroupApprovalDecisionRequest) -> GroupApproval:
+    try:
+        return decide_studio_approval(
+            group_id,
+            project_id=body.project_id,
+            approval_id=body.approval_id,
+            decision=body.decision,
+        )
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.post("/{group_id}/start-execution", dependencies=[EnabledDep])
-async def start_execution(group_id: str, body: GroupStartPhaseRequest) -> None:
+async def start_execution(group_id: str, body: GroupStartPhaseRequest) -> GroupStudio:
     try:
-        prepare_start_execution(group_id, body.project_id)
+        return prepare_start_execution(group_id, body.project_id)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
-    _not_implemented()
 
 
 @router.post("/{group_id}/start-review", dependencies=[EnabledDep])
