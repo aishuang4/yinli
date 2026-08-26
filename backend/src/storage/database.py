@@ -36,6 +36,7 @@ from src.storage.resource_catalog_records import ResourceCatalogRecordStore
 from src.storage.skill_run_records import SkillRunRecordStore
 from src.storage.skill_evolution_records import SkillEvolutionRecordStore
 from src.storage.trace_records import TraceRecordStore
+from src.storage.group_studio_records import GroupStudioRecordStore
 from src.storage.workflow_records import WorkflowRecordStore
 from src.storage.workspace_project_records import WorkspaceProjectRecordStore
 
@@ -1061,6 +1062,62 @@ def get_workflow_run(run_id: str, *, event_limit: int | None = None) -> dict[str
     """读取 Dynamic Workflow Run 完整快照。"""
 
     return _workflow_record_store().get(run_id, event_limit=event_limit)
+
+
+def _group_studio_record_store() -> GroupStudioRecordStore:
+    """创建复用当前数据库连接与锁的群聊工作室存储。"""
+
+    return GroupStudioRecordStore(
+        ensure_db=ensure_db,
+        connect=_connect,
+        lock=_lock,
+        utc_now=_utc_now,
+        dumps=_dumps,
+        loads=_loads,
+    )
+
+
+def create_group_studio_from_chat(payload: dict[str, Any]) -> dict[str, Any]:
+    """创建或返回当前 Chat 会话已有的未归档工作室。"""
+
+    return _group_studio_record_store().create_from_chat(payload)
+
+
+def get_group_studio_snapshot(group_id: str, *, message_limit: int = 100) -> dict[str, Any] | None:
+    """读取工作室 GET /{id} 快照。"""
+
+    return _group_studio_record_store().get_snapshot(group_id, message_limit=message_limit)
+
+
+def get_active_group_studio_by_chat_session(chat_session_id: str) -> dict[str, Any] | None:
+    """按 Chat session 读取未归档工作室。"""
+
+    return _group_studio_record_store().get_active_by_chat_session(chat_session_id)
+
+
+def lookup_active_group_studios_by_chat_session_ids(
+    session_ids: list[str],
+) -> dict[str, dict[str, str]]:
+    """catalog 查询：session_id -> 活跃工作室摘要。"""
+
+    return _group_studio_record_store().lookup_active_by_chat_session_ids(session_ids)
+
+
+def list_group_studio_messages(
+    group_id: str,
+    *,
+    before: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """分页读取群消息。"""
+
+    return _group_studio_record_store().list_messages(group_id, before=before, limit=limit)
+
+
+def archive_group_studio(group_id: str) -> None:
+    """把工作室标为 archived。"""
+
+    _group_studio_record_store().archive(group_id)
 
 
 def update_workflow_run_status(

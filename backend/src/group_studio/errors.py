@@ -23,6 +23,18 @@ WORKER_SESSION_LOST = "worker_session_lost"
 APPROVAL_BATCH_INCOMPLETE = "approval_batch_incomplete"
 
 
+GROUP_STUDIO_NOT_FOUND = "not_found"
+
+
+class GroupStudioError(Exception):
+    """领域错误，由路由层映射为稳定 HTTP code。"""
+
+    def __init__(self, status_code: int, code: str) -> None:
+        super().__init__(code)
+        self.status_code = status_code
+        self.code = code
+
+
 def group_studio_http_error(status_code: int, code: str) -> HTTPException:
     """构造 detail 为稳定 code 的 HTTPException。"""
 

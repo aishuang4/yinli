@@ -101,12 +101,9 @@ def test_get_by_chat_404_when_disabled(client):
     assert response.json()["detail"] == GROUP_STUDIO_DISABLED
 
 
-def test_from_chat_501_when_enabled(client):
+def test_pause_501_when_enabled(client):
     set_group_studio_settings(enabled=True)
-    response = client.post("/api/group-studio/from-chat", json={
-        "projectId": "default",
-        "chatSessionId": "sess-1",
-    })
+    response = client.post("/api/group-studio/gstu_x/pause", json={"projectId": "default"})
 
     assert response.status_code == 501
     assert response.json()["detail"] == GROUP_STUDIO_NOT_IMPLEMENTED

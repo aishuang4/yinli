@@ -1,7 +1,7 @@
 """群聊工作室独立路由。
 
-P0 第一期只挂空壳：flag 关闭时全部 404 `group_studio_disabled`；
-打开后尚未实现的写/读接口返回 501 `group_studio_not_implemented`。
+flag 关闭时全部 404 `group_studio_disabled`。
+from-chat / GET / by-chat 已实现；其余写接口仍 501。
 不渲染 Chat 入口，不启动 LLM。
 """
 
@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 from src.group_studio.errors import (
     GROUP_STUDIO_DISABLED,
     GROUP_STUDIO_NOT_IMPLEMENTED,
+    GroupStudioError,
     group_studio_http_error,
 )
 from src.group_studio.models import (
@@ -24,8 +25,15 @@ from src.group_studio.models import (
     GroupPauseRequest,
     GroupResumeRequest,
     GroupStartPhaseRequest,
+    GroupStudio,
     GroupStudioFromChatRequest,
     GroupTaskCardUpdateRequest,
+)
+from src.group_studio.service import (
+    from_chat,
+    get_studio,
+    get_studio_by_chat_session,
+    list_studio_messages,
 )
 from src.group_studio.settings import is_group_studio_enabled
 
@@ -47,31 +55,40 @@ EnabledDep = Depends(require_group_studio_enabled)
 
 
 @router.post("/from-chat", dependencies=[EnabledDep])
-async def create_from_chat(_body: GroupStudioFromChatRequest) -> None:
+async def create_from_chat(body: GroupStudioFromChatRequest) -> GroupStudio:
     """从 Chat 会话升级或回到工作室。"""
 
-    _not_implemented()
+    try:
+        return from_chat(body)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.get("/by-chat/{session_id}", dependencies=[EnabledDep])
-async def get_by_chat_session(session_id: str) -> None:
+async def get_by_chat_session(session_id: str) -> GroupStudio | None:
     """按 Chat session 探活未归档工作室。"""
 
-    _not_implemented()
+    return get_studio_by_chat_session(session_id)
 
 
 @router.get("/{group_id}", dependencies=[EnabledDep])
-async def get_studio(group_id: str) -> None:
+async def get_studio_snapshot(group_id: str) -> GroupStudio:
     """读取工作室快照（含最近 100 条 messages）。"""
 
-    _not_implemented()
+    try:
+        return get_studio(group_id)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.get("/{group_id}/messages", dependencies=[EnabledDep])
-async def list_messages(group_id: str, before: str | None = None, limit: int = 100) -> None:
+async def list_messages(group_id: str, before: str | None = None, limit: int = 100) -> dict:
     """分页读取更早的群消息。"""
 
-    _not_implemented()
+    try:
+        return {"messages": list_studio_messages(group_id, before=before, limit=limit)}
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.get("/{group_id}/events", dependencies=[EnabledDep])

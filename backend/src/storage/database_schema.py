@@ -605,4 +605,133 @@ BASE_SCHEMA_SQL = """
         ON user_notifications(project_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_user_notifications_unread
         ON user_notifications(project_id, read_at, created_at DESC);
+    CREATE TABLE IF NOT EXISTS group_studios (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        chat_session_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        phase_before_pause TEXT,
+        current_task_card_id TEXT NOT NULL,
+        awaiting_restatement INTEGER NOT NULL DEFAULT 0,
+        orchestrator_meta TEXT NOT NULL DEFAULT '{}',
+        budget_json TEXT NOT NULL,
+        current_run_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_group_studios_active_chat
+        ON group_studios(chat_session_id)
+        WHERE status NOT IN ('archived', 'failed');
+    CREATE TABLE IF NOT EXISTS group_task_cards (
+        id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        background TEXT NOT NULL DEFAULT '',
+        constraints_json TEXT NOT NULL DEFAULT '[]',
+        dod_json TEXT NOT NULL DEFAULT '[]',
+        seed_from_chat INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(group_id) REFERENCES group_studios(id) ON DELETE CASCADE
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_group_task_cards_one_current
+        ON group_task_cards(group_id)
+        WHERE status IN ('draft', 'active', 'frozen_for_close');
+    CREATE TABLE IF NOT EXISTS group_memberships (
+        id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        muted INTEGER NOT NULL DEFAULT 0,
+        last_spoke_at TEXT,
+        crash_count INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(group_id) REFERENCES group_studios(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS group_blackboards (
+        group_id TEXT PRIMARY KEY,
+        revision INTEGER NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(group_id) REFERENCES group_studios(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS group_messages (
+        id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        run_id TEXT NOT NULL DEFAULT '',
+        speaker_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        intent TEXT NOT NULL,
+        body TEXT NOT NULL,
+        mentions_json TEXT NOT NULL DEFAULT '[]',
+        attachments_json TEXT NOT NULL DEFAULT '[]',
+        visible_in_timeline INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        sort_order INTEGER NOT NULL,
+        FOREIGN KEY(group_id) REFERENCES group_studios(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_group_messages_group_order
+        ON group_messages(group_id, sort_order);
+    CREATE TABLE IF NOT EXISTS group_runs (
+        id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        speaker_member_id TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        token_input INTEGER NOT NULL DEFAULT 0,
+        token_output INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(group_id) REFERENCES group_studios(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS group_approvals (
+        id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        member_id TEXT NOT NULL,
+        reply_id TEXT NOT NULL,
+        tool_calls_json TEXT NOT NULL,
+        arguments_preview TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        resolved_at TEXT,
+        FOREIGN KEY(group_id) REFERENCES group_studios(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_group_approvals_run
+        ON group_approvals(run_id, status);
+    CREATE TABLE IF NOT EXISTS group_artifacts (
+        id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        path TEXT NOT NULL,
+        media_type TEXT NOT NULL DEFAULT '',
+        byte_size INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(group_id) REFERENCES group_studios(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS group_studio_events (
+        id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        run_id TEXT NOT NULL DEFAULT '',
+        event_type TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT '',
+        payload TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        sort_order INTEGER NOT NULL,
+        FOREIGN KEY(group_id) REFERENCES group_studios(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_group_studio_events_group_order
+        ON group_studio_events(group_id, sort_order);
 """

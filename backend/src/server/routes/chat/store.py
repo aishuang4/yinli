@@ -103,6 +103,58 @@ def _append_user_message(
     _save_store(store)
 
 
+class ChatSessionProjectConflict(ValueError):
+    """已有 Chat session 属于另一个 Project。"""
+
+    def __init__(self, session_id: str, existing_project_id: str, requested_project_id: str) -> None:
+        super().__init__(
+            f"Session {session_id} 属于 Project {existing_project_id}，"
+            f"不能在 Project {requested_project_id} 中继续。"
+        )
+        self.session_id = session_id
+        self.existing_project_id = existing_project_id
+        self.requested_project_id = requested_project_id
+
+
+def ensure_chat_session(
+    *,
+    session_id: str,
+    agent_id: str,
+    agent_name: str,
+    workspace_id: str,
+    project_id: str,
+    title: str = "",
+) -> ChatSession:
+    """经 ChatStore 确保 kind=chat 的 session 存在；禁止 group_studio_records 直接 SQL INSERT。
+
+    send 与 from-chat 共用。已有 session 若 project 不一致则抛 ChatSessionProjectConflict。
+    """
+
+    now = datetime.now(timezone.utc).isoformat()
+    store = _load_store()
+    existing = next((session for session in store.sessions if session.id == session_id), None)
+    if existing is not None:
+        if existing.project_id != project_id:
+            raise ChatSessionProjectConflict(session_id, existing.project_id, project_id)
+        return existing
+    session = ChatSession(
+        id=session_id,
+        title=_make_session_title(title) if title.strip() else "新对话",
+        agent_id=agent_id,
+        agent_name=agent_name,
+        mode="agent",
+        workspace_id=workspace_id,
+        project_id=project_id,
+        kind="chat",
+        created_at=now,
+        updated_at=now,
+        message_count=0,
+    )
+    store.sessions.append(session)
+    _save_store(store)
+    return session
+
+
 def ensure_scheduled_job_session(
     *,
     session_id: str,
