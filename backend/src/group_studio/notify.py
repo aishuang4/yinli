@@ -24,10 +24,11 @@ def notify_studio(
     *,
     kind: str,
     body: str = "",
+    title: str | None = None,
 ) -> None:
     """投递一条群聊工作室通知。"""
 
-    title = _TITLES.get(kind, "工作室通知")
+    title = title or _TITLES.get(kind, "工作室通知")
     dispatch_notification(NotificationMessage(
         kind=kind,
         title=title,

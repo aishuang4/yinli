@@ -126,6 +126,9 @@ export function ChatHistoryPanel({
                                 <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
                                   <span className="truncate">{session.agent_name}</span>
                                   <span>{session.message_count} 条</span>
+                                  {(session.groupStudio || session.group_studio) ? (
+                                    <span className="chat-session-studio-badge">工作室</span>
+                                  ) : null}
                                 </div>
                               </div>
                               <span

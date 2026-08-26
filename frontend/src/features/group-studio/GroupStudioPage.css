@@ -243,6 +243,24 @@
   margin-top: 16px;
 }
 
+.group-studio-dod {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.group-studio-dod label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.group-studio-composer input,
 .group-studio-composer textarea {
   width: 100%;
   resize: vertical;

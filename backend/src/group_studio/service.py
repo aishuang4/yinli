@@ -10,6 +10,7 @@ from src.group_studio.errors import (
     AGENT_NOT_BOUND,
     CHAT_RUN_ACTIVE,
     CROSS_PROJECT_SESSION,
+    DOD_INCOMPLETE,
     GOAL_REQUIRED,
     GROUP_STUDIO_NOT_FOUND,
     HOST_REQUIRED,
@@ -394,6 +395,17 @@ def update_task_card(group_id: str, request: GroupTaskCardUpdateRequest) -> Task
         event_type="GROUP_TASK_CARD",
         payload=updated.task_card.model_dump(by_alias=True),
     )
+    if dod_changed:
+        emit_envelope(
+            group_id=group_id,
+            event_type="GROUP_DOD",
+            payload={
+                "taskCardId": updated.task_card.id,
+                "dodChecklist": [
+                    item.model_dump(by_alias=True) for item in updated.task_card.dod_checklist
+                ],
+            },
+        )
     if updated.status == "awaiting_human" and studio.status != "awaiting_human":
         from src.group_studio.interrupt import cancel_active_run
         from src.group_studio.notify import KIND_AWAITING, notify_studio
@@ -466,6 +478,99 @@ def prepare_start_execution(group_id: str, project_id: str) -> GroupStudio:
         payload={"from": studio.status, "to": "executing", "reason": "human_start_execution"},
     )
     return get_studio(group_id)
+
+
+def prepare_start_review(group_id: str, project_id: str) -> GroupStudio:
+    """进入验收期。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    if studio.status != "executing":
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    set_group_studio_status(group_id, "reviewing")
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_STATUS",
+        payload={"from": "executing", "to": "reviewing", "reason": "human_start_review"},
+    )
+    return get_studio(group_id)
+
+
+def _dod_complete(studio: GroupStudio) -> bool:
+    items = studio.task_card.dod_checklist
+    if not items:
+        return False
+    return all(item.checked for item in items)
+
+
+def propose_close(group_id: str, *, project_id: str = "") -> GroupStudio:
+    """进入 closing，任务卡冻结 Goal/约束，DoD 仍可勾。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    if studio.status not in {"reviewing", "discussing", "executing"}:
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    from src.group_studio.interrupt import cancel_active_run
+
+    cancel_active_run(group_id, source="pause")
+    apply_group_studio_task_card_update(
+        group_id,
+        goal=studio.task_card.goal,
+        background=studio.task_card.background,
+        constraints=list(studio.task_card.constraints),
+        dod_checklist=[item.model_dump(by_alias=True) for item in studio.task_card.dod_checklist],
+        card_status="frozen_for_close",
+        studio_status="closing",
+        awaiting_restatement=False,
+        phase_before_pause=None,
+        bump_revision=False,
+    )
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_STATUS",
+        payload={"from": studio.status, "to": "closing", "reason": "propose_close"},
+    )
+    return get_studio(group_id)
+
+
+def close_studio(group_id: str, *, project_id: str, confirm: bool) -> GroupStudio:
+    """confirm=false 进入 closing；confirm=true 在 DoD 齐后归档。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    if not confirm:
+        if studio.status != "reviewing":
+            raise GroupStudioError(409, ILLEGAL_TRANSITION)
+        return propose_close(group_id, project_id=project_id)
+    if studio.status != "closing":
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    if not _dod_complete(studio):
+        raise GroupStudioError(409, DOD_INCOMPLETE)
+    from src.group_studio.interrupt import cancel_active_run
+    from src.group_studio.notify import KIND_COMPLETED, notify_studio
+
+    cancel_active_run(group_id, source="pause")
+    archive_group_studio(group_id)
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_DOD",
+        payload={
+            "taskCardId": studio.task_card.id,
+            "dodChecklist": [item.model_dump(by_alias=True) for item in studio.task_card.dod_checklist],
+        },
+    )
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_STATUS",
+        payload={"from": "closing", "to": "archived", "reason": "close_confirm"},
+    )
+    snapshot = get_studio(group_id)
+    notify_studio(
+        snapshot.model_dump(by_alias=True),
+        kind=KIND_COMPLETED,
+        body=studio.task_card.goal or studio.title,
+    )
+    return snapshot
 
 
 def decide_studio_approval(

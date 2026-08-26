@@ -760,6 +760,33 @@ class GroupStudioRecordStore:
             )
         return self.get_snapshot(group_id) or {}
 
+    def list_with_current_run(self) -> list[dict[str, Any]]:
+        """启动对账：仍挂着 current_run_id 的未终态工作室。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, status, current_run_id, workspace_id, project_id,
+                       chat_session_id, title
+                FROM group_studios
+                WHERE current_run_id != ''
+                  AND status NOT IN ('archived', 'failed')
+                """,
+            ).fetchall()
+        return [
+            {
+                "id": str(row["id"]),
+                "status": str(row["status"]),
+                "currentRunId": str(row["current_run_id"] or ""),
+                "workspaceId": str(row["workspace_id"]),
+                "projectId": str(row["project_id"]),
+                "chatSessionId": str(row["chat_session_id"]),
+                "title": str(row["title"]),
+            }
+            for row in rows
+        ]
+
     def archive(self, group_id: str) -> None:
         """测试与删除会话用：把工作室标为 archived。"""
 

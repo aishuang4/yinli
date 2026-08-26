@@ -1,7 +1,7 @@
 """群聊工作室独立路由。
 
 flag 关闭时全部 404 `group_studio_disabled`。
-from-chat / 任务卡 / 成员 / 黑板 / 文件 / 审批 / 插话 / 熔断已实现；结项仍 501。
+from-chat / 任务卡 / 成员 / 黑板 / 文件 / 审批 / 插话 / 熔断 / 结项已实现。
 """
 
 import asyncio
@@ -50,8 +50,10 @@ from src.group_studio.service import (
     pause_studio,
     post_human_message,
     prepare_start_execution,
+    prepare_start_review,
     remove_member,
     resume_studio,
+    close_studio as close_group_studio,
     update_task_card,
     upload_studio_file,
 )
@@ -257,8 +259,11 @@ async def remove_member_route(
 
 
 @router.post("/{group_id}/close", dependencies=[EnabledDep])
-async def close_studio(group_id: str, _body: GroupCloseRequest) -> None:
-    _not_implemented()
+async def close_studio_route(group_id: str, body: GroupCloseRequest) -> GroupStudio:
+    try:
+        return close_group_studio(group_id, project_id=body.project_id, confirm=body.confirm)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.post("/{group_id}/confirm-restatement", dependencies=[EnabledDep])
@@ -291,8 +296,11 @@ async def start_execution(group_id: str, body: GroupStartPhaseRequest) -> GroupS
 
 
 @router.post("/{group_id}/start-review", dependencies=[EnabledDep])
-async def start_review(group_id: str, _body: GroupStartPhaseRequest) -> None:
-    _not_implemented()
+async def start_review(group_id: str, body: GroupStartPhaseRequest) -> GroupStudio:
+    try:
+        return prepare_start_review(group_id, body.project_id)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.post("/{group_id}/files", dependencies=[EnabledDep])

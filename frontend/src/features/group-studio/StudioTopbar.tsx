@@ -13,6 +13,8 @@ interface StudioTopbarProps {
   onPause?: () => void;
   onResume?: () => void;
   onInterrupt?: () => void;
+  onClose?: () => void;
+  closeLabel?: string;
 }
 
 export function StudioTopbar({
@@ -25,6 +27,8 @@ export function StudioTopbar({
   onPause,
   onResume,
   onInterrupt,
+  onClose,
+  closeLabel,
 }: StudioTopbarProps) {
   const isDesktopShell = Boolean(window.electronAPI);
   const desktopPlatform = window.electronAPI?.getPlatform();
@@ -92,6 +96,16 @@ export function StudioTopbar({
           >
             <Square size={14} />
             <span>停止</span>
+          </button>
+          <button
+            type="button"
+            className="icon-button group-studio-topbar__ghost"
+            onClick={onClose}
+            disabled={!onClose}
+            aria-label={closeLabel || '结束工作室'}
+          >
+            <Square size={14} />
+            <span>{closeLabel || '结束'}</span>
           </button>
         </div>
       </header>

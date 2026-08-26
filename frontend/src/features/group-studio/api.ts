@@ -45,6 +45,7 @@ export async function updateTaskCard(groupId: string, input: {
   goal?: string;
   background?: string;
   constraints?: string[];
+  dodChecklist?: GroupStudioSnapshot['taskCard']['dodChecklist'];
 }): Promise<GroupStudioSnapshot['taskCard']> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/task-card`, {
     method: 'PUT',
@@ -169,6 +170,30 @@ export async function interruptStudio(groupId: string, projectId: string): Promi
   }
 }
 
+export async function closeStudio(groupId: string, projectId: string, confirm: boolean): Promise<GroupStudioSnapshot> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/close`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, confirm }),
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法结项'));
+  }
+  return await response.json() as GroupStudioSnapshot;
+}
+
+export async function startStudioReview(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/start-review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId }),
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法进入验收'));
+  }
+  return await response.json() as GroupStudioSnapshot;
+}
+
 export async function confirmStudioRestatement(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/confirm-restatement`, {
     method: 'POST',
@@ -283,6 +308,9 @@ export async function readDetail(response: Response, fallback: string): Promise<
   }
   if (detail === 'restatement_missing') {
     return '主持人还没有复述新目标';
+  }
+  if (detail === 'dod_incomplete') {
+    return '请先勾齐验收清单再结项';
   }
   if (typeof detail === 'string' && detail.trim()) {
     return detail;

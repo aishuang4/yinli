@@ -31,6 +31,12 @@ export interface GroupStudioTaskCard {
   background: string;
   constraints: string[];
   seedFromChat: boolean;
+  dodChecklist?: Array<{
+    id: string;
+    text: string;
+    checked: boolean;
+    autoChecked?: boolean;
+  }>;
 }
 
 export interface GroupStudioQuestion {

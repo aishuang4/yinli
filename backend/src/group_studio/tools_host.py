@@ -353,19 +353,14 @@ class GroupProposeClose(HostTool):
     input_schema = {"type": "object", "properties": {}, "required": []}
 
     async def __call__(self) -> ToolChunk:
-        snapshot = get_group_studio_snapshot(self.ctx.group_id) or {}
-        if str(snapshot.get("status") or "") not in {"reviewing", "discussing", "executing"}:
-            return self.error("illegal_transition")
-        previous = str(snapshot.get("status") or "")
-        set_group_studio_status(self.ctx.group_id, "closing")
+        from src.group_studio.service import propose_close
+
+        try:
+            studio = propose_close(self.ctx.group_id)
+        except GroupStudioError as exc:
+            return self.error(exc.code)
         self.ctx.last_stop_tool = self.name
-        emit_envelope(
-            group_id=self.ctx.group_id,
-            event_type="GROUP_STATUS",
-            run_id=self.ctx.run_id,
-            payload={"from": previous, "to": "closing", "reason": "host_propose_close"},
-        )
-        return self.success({"status": "closing"})
+        return self.success({"status": studio.status})
 
 
 def host_tools(ctx: HostToolContext) -> list[HostTool]:

@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.server.routes import agent_builder, agents, chat, group_studio, health, mcp, memory, notifications, sandbox, settings as settings_routes, scheduled_jobs, skills, subagents, tools, traces, workflows, workspaces
 from src.config.settings import settings
+from src.group_studio.lifecycle import reconcile_interrupted_studios
 from src.storage.database import close_db, init_db, list_projects, reconcile_interrupted_subagent_invocations
 from src.subagents.task_store import reconcile_interrupted_file_tasks
 from src.server.routes.chat.team_runtime.maintenance import maintain_team_runtime_runs
@@ -54,6 +55,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     scheduler_bootstrap = bootstrap_scheduler()
     if any(scheduler_bootstrap.values()):
         print(f"[Scheduler] bootstrap: {scheduler_bootstrap}")
+    studio_reconciled = reconcile_interrupted_studios()
+    if studio_reconciled:
+        print(f"[GroupStudio] reconciled {studio_reconciled} interrupted studio(s)")
     print(f"[Server] 引力 YINLI Backend started on {settings.host}:{settings.port}")
     deepseek_key_display = ("***" + settings.deepseek_api_key[-4:]) if settings.deepseek_api_key else "NOT SET"
     print(f"[Server] DeepSeek API Key: {deepseek_key_display}")

@@ -28,6 +28,7 @@ const BOARD_EVENTS = new Set([
   'GROUP_RUN_ENDED',
   'GROUP_BUDGET',
   'GROUP_CIRCUIT',
+  'GROUP_DOD',
 ]);
 
 export function useGroupStudioStream(

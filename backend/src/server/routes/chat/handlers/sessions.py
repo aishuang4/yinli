@@ -8,6 +8,10 @@ from fastapi import HTTPException, Query
 from src.project_files import delete_project_session_files
 from src.server.routes.chat.models import ChatSession, StoredChatMessage
 from src.server.routes.chat.router import router
+from src.server.routes.chat.session_studio import (
+    archive_studio_on_session_delete,
+    attach_group_studio_hints,
+)
 from src.server.routes.chat.store import _load_store, _save_store
 from src.server.routes.chat.team_runtime.maintenance import (
     delete_team_runs_for_session,
@@ -43,11 +47,11 @@ async def list_sessions(
     matched = [
         session for session in store.sessions if session.project_id == project_id
     ]
-    return sorted(
+    return attach_group_studio_hints(sorted(
         _filter_sessions_by_kind(matched, kind),
         key=lambda item: item.updated_at,
         reverse=True,
-    )
+    ))
 
 
 @router.get("/sessions/catalog")
@@ -57,11 +61,11 @@ async def list_session_catalog(
     """列出全部工作上下文中的会话，用于按 Workspace / Project 构建历史目录。"""
 
     store = _load_store()
-    return sorted(
+    return attach_group_studio_hints(sorted(
         _filter_sessions_by_kind(store.sessions, kind),
         key=lambda item: item.updated_at,
         reverse=True,
-    )
+    ))
 
 
 @router.get("/sessions/{session_id}/messages")
@@ -102,6 +106,7 @@ async def delete_session(
         raise HTTPException(status_code=409, detail="会话所属 Project root 不可用，无法清理私有文件")
 
     try:
+        archive_studio_on_session_delete(session_id)
         delete_team_runs_for_session(session_id)
         delete_project_session_files(project_root=project_root, session_id=session_id)
     except (OSError, ValueError, TeamStoreError) as exc:

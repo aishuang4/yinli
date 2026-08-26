@@ -10,6 +10,7 @@ import { useAppStore } from '../../stores/appStore';
 import { getErrorMessage, notifyError, notifySuccess } from '../../utils/feedback';
 import {
   addStudioMember,
+  closeStudio,
   confirmStudioRestatement,
   decideStudioApproval,
   fetchGroupStudio,
@@ -59,6 +60,7 @@ export function GroupStudioPage() {
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [dodDraft, setDodDraft] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState('default');
   const isMac = window.electronAPI?.getPlatform() === 'darwin'
     || (!window.electronAPI && /Mac/i.test(navigator.platform));
@@ -152,6 +154,10 @@ export function GroupStudioPage() {
         setStudio((current) => (
           current ? { ...current, status: 'circuit_broken' } : current
         ));
+        return;
+      }
+      if (event.type === 'GROUP_DOD' && studio) {
+        void refreshStudio(studio.id).catch(() => undefined);
       }
     },
   );
@@ -344,6 +350,51 @@ export function GroupStudioPage() {
     }
   };
 
+  const handleClose = async () => {
+    if (!studio) {
+      return;
+    }
+    try {
+      const snapshot = await closeStudio(studio.id, studio.projectId, studio.status === 'closing');
+      setStudio(snapshot);
+      notifySuccess(snapshot.status === 'archived' ? '工作室已归档' : '已进入结项，请勾齐验收清单。');
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法结项'));
+    }
+  };
+
+  const handleToggleDod = async (itemId: string, checked: boolean) => {
+    if (!studio) {
+      return;
+    }
+    const checklist = (studio.taskCard.dodChecklist ?? []).map((item) => (
+      item.id === itemId ? { ...item, checked } : item
+    ));
+    try {
+      await updateTaskCard(studio.id, { projectId: studio.projectId, dodChecklist: checklist });
+      await refreshStudio(studio.id);
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法更新验收清单'));
+    }
+  };
+
+  const handleAddDod = async () => {
+    if (!studio || !dodDraft.trim()) {
+      return;
+    }
+    const checklist = [
+      ...(studio.taskCard.dodChecklist ?? []),
+      { id: `gdod_${Date.now()}`, text: dodDraft.trim(), checked: false },
+    ];
+    try {
+      await updateTaskCard(studio.id, { projectId: studio.projectId, dodChecklist: checklist });
+      setDodDraft('');
+      await refreshStudio(studio.id);
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法添加验收项'));
+    }
+  };
+
   const blackboard = studio?.blackboard;
   const openQuestions = (blackboard?.openQuestions ?? []).filter((item) => !item.resolved);
   const decisions = blackboard?.decisions ?? [];
@@ -364,6 +415,10 @@ export function GroupStudioPage() {
         onPause={studio ? () => void handlePause() : undefined}
         onResume={studio ? () => void handleResume() : undefined}
         onInterrupt={studio ? () => void handleInterrupt() : undefined}
+        onClose={studio && (studio.status === 'reviewing' || studio.status === 'closing')
+          ? () => void handleClose()
+          : undefined}
+        closeLabel={studio?.status === 'closing' ? '确认结项' : '结束'}
       />
       {error ? (
         <div className="group-studio-error">{error}</div>
@@ -493,11 +548,43 @@ export function GroupStudioPage() {
             <Button
               size="small"
               loading={savingCard}
-              disabled={savingCard || !studio}
+              disabled={savingCard || !studio || studio.status === 'closing' || studio.status === 'archived'}
               onClick={() => void handleSaveGoal()}
             >
               保存任务卡
             </Button>
+            <div className="group-studio-pane__label" style={{ marginTop: 20 }}>验收清单</div>
+            {(studio?.taskCard.dodChecklist ?? []).length === 0 ? (
+              <p className="group-studio-placeholder">结项前需要至少一项已勾选的验收标准。</p>
+            ) : (
+              <ul className="group-studio-dod">
+                {(studio?.taskCard.dodChecklist ?? []).map((item) => (
+                  <li key={item.id}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={item.checked}
+                        disabled={studio?.status === 'archived'}
+                        onChange={(event) => void handleToggleDod(item.id, event.target.checked)}
+                      />
+                      <span>{item.text}</span>
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {studio && studio.status !== 'archived' ? (
+              <div className="group-studio-composer">
+                <input
+                  value={dodDraft}
+                  onChange={(event) => setDodDraft(event.target.value)}
+                  placeholder="添加验收项"
+                />
+                <Button size="small" disabled={!dodDraft.trim()} onClick={() => void handleAddDod()}>
+                  添加
+                </Button>
+              </div>
+            ) : null}
             <div className="group-studio-pane__label" style={{ marginTop: 20 }}>黑板</div>
             {decisions.length === 0 && openQuestions.length === 0 ? (
               <p className="group-studio-placeholder">共识决策会写在这里，不翻长聊天记录。</p>

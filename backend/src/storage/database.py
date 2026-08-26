@@ -1103,6 +1103,10 @@ def lookup_active_group_studios_by_chat_session_ids(
     return _group_studio_record_store().lookup_active_by_chat_session_ids(session_ids)
 
 
+def list_group_studios_with_current_run() -> list[dict[str, Any]]:
+    return _group_studio_record_store().list_with_current_run()
+
+
 def list_group_studio_messages(
     group_id: str,
     *,
