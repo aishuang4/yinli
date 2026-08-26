@@ -9,14 +9,27 @@ from src.group_studio.errors import (
     AGENT_NOT_BOUND,
     CHAT_RUN_ACTIVE,
     CROSS_PROJECT_SESSION,
+    GOAL_REQUIRED,
     GROUP_STUDIO_NOT_FOUND,
+    HOST_REQUIRED,
+    ILLEGAL_TRANSITION,
     JOB_AGENT_FORBIDDEN,
+    MEMBER_CAP,
     GroupStudioError,
 )
 from src.group_studio.models import (
     GROUP_STUDIO_HOST_AGENT_ID,
+    GroupMemberCreateRequest,
     GroupStudio,
     GroupStudioFromChatRequest,
+    GroupTaskCardUpdateRequest,
+    Membership,
+    TaskCard,
+)
+from src.group_studio.orchestrator import (
+    assert_can_mutate,
+    assert_can_start_execution,
+    max_members,
 )
 from src.group_studio.settings import get_group_studio_settings_public
 from src.project_resources import resolve_project_resource_access
@@ -28,10 +41,15 @@ from src.server.routes.chat.store import (
     ensure_chat_session,
 )
 from src.storage.database import (
+    apply_group_studio_task_card_update,
     archive_group_studio,
+    count_group_studio_active_members,
     create_group_studio_from_chat,
+    find_group_studio_member_by_agent,
     get_active_group_studio_by_chat_session,
     get_group_studio_snapshot,
+    group_studio_has_runs,
+    insert_group_studio_member,
     list_agents,
     list_chat_runs_by_statuses,
     list_group_studio_messages,
@@ -264,3 +282,142 @@ def archive_studio_for_session_delete(group_id: str) -> None:
     """删除 Chat session 时归档工作室。"""
 
     archive_group_studio(group_id)
+
+
+def _load_studio(group_id: str) -> GroupStudio:
+    return get_studio(group_id)
+
+
+def update_task_card(group_id: str, request: GroupTaskCardUpdateRequest) -> TaskCard:
+    """按转移表更新任务卡。drafting 首次填 Goal 不 restatement。"""
+
+    studio = _load_studio(group_id)
+    if request.project_id and request.project_id != studio.project_id:
+        raise GroupStudioError(422, CROSS_PROJECT_SESSION)
+    assert_can_mutate(studio.status)
+
+    card = studio.task_card
+    next_goal = card.goal if request.goal is None else request.goal
+    next_background = card.background if request.background is None else request.background
+    next_constraints = card.constraints if request.constraints is None else request.constraints
+    next_dod = (
+        [item.model_dump(by_alias=True) for item in card.dod_checklist]
+        if request.dod_checklist is None
+        else [item.model_dump(by_alias=True) for item in request.dod_checklist]
+    )
+    goal = next_goal.strip()
+    old_goal = card.goal.strip()
+    old_constraints = list(card.constraints)
+    goal_changed = goal != old_goal
+    constraints_changed = next_constraints != old_constraints
+    background_changed = next_background != card.background
+    dod_changed = request.dod_checklist is not None
+
+    studio_status = studio.status
+    card_status = card.status
+    awaiting = studio.awaiting_restatement
+    phase_before = studio.phase_before_pause
+    bump = False
+    title: str | None = None
+
+    if studio.status == "drafting":
+        if goal:
+            studio_status = "discussing"
+            card_status = "active"
+            bump = True
+            title = goal[:28] + ("..." if len(goal) > 28 else "")
+        elif not (background_changed or dod_changed or constraints_changed):
+            raise GroupStudioError(422, GOAL_REQUIRED)
+    elif studio.status in {"discussing", "executing", "reviewing"}:
+        semantic_change = goal_changed or constraints_changed
+        had_old_target = bool(old_goal or old_constraints)
+        if semantic_change and had_old_target and group_studio_has_runs(group_id):
+            studio_status = "awaiting_human"
+            awaiting = True
+            phase_before = studio.status
+            bump = True
+        elif semantic_change or background_changed or dod_changed:
+            bump = semantic_change or dod_changed
+            if goal and studio.status == "discussing":
+                title = goal[:28] + ("..." if len(goal) > 28 else "")
+    elif studio.status == "awaiting_human":
+        if semantic_change := (goal_changed or constraints_changed):
+            bump = True
+        elif background_changed or dod_changed:
+            bump = dod_changed
+        else:
+            raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    elif studio.status == "closing":
+        if goal_changed or constraints_changed:
+            raise GroupStudioError(409, ILLEGAL_TRANSITION)
+        bump = dod_changed
+    else:
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+
+    snapshot = apply_group_studio_task_card_update(
+        group_id,
+        goal=goal,
+        background=next_background,
+        constraints=next_constraints,
+        dod_checklist=next_dod,
+        card_status=card_status,
+        studio_status=studio_status,
+        awaiting_restatement=awaiting,
+        phase_before_pause=phase_before,
+        bump_revision=bump,
+        title=title,
+    )
+    if not snapshot:
+        raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
+    return _snapshot_to_model(snapshot).task_card
+
+
+def add_member(group_id: str, request: GroupMemberCreateRequest) -> Membership:
+    """加人：Project 白名单、Job 过滤、人数硬顶 6、Host 哨兵不可当 Worker。"""
+
+    studio = _load_studio(group_id)
+    if request.project_id and request.project_id != studio.project_id:
+        raise GroupStudioError(422, CROSS_PROJECT_SESSION)
+    assert_can_mutate(studio.status)
+    if request.agent_id == GROUP_STUDIO_HOST_AGENT_ID:
+        raise GroupStudioError(409, HOST_REQUIRED)
+
+    worker = _resolve_worker(request.agent_id)
+    existing = find_group_studio_member_by_agent(group_id, worker["id"])
+    if existing is not None:
+        return Membership.model_validate(existing)
+
+    if count_group_studio_active_members(group_id) >= max_members():
+        raise GroupStudioError(409, MEMBER_CAP)
+
+    try:
+        context = resolve_runtime_context(
+            project_id=studio.project_id,
+            session_id=studio.chat_session_id,
+            run_id="",
+            agent_id=worker["id"],
+        )
+        resolve_project_resource_access(context).require_agent(worker["id"])
+    except ValueError as exc:
+        raise GroupStudioError(403, AGENT_NOT_BOUND) from exc
+
+    row = insert_group_studio_member(group_id, {
+        "id": _new_id("gmbr"),
+        "role": "worker",
+        "agentId": worker["id"],
+        "displayName": worker["name"],
+        "status": "active",
+        "muted": False,
+        "crashCount": 0,
+    })
+    return Membership.model_validate(row)
+
+
+def prepare_start_execution(group_id: str, project_id: str) -> None:
+    """校验可以进入执行期；真正跑 Worker 在后续 PR。"""
+
+    studio = _load_studio(group_id)
+    if project_id and project_id != studio.project_id:
+        raise GroupStudioError(422, CROSS_PROJECT_SESSION)
+    assert_can_start_execution(studio.status, studio.task_card.goal)
+

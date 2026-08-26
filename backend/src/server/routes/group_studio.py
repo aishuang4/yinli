@@ -28,12 +28,17 @@ from src.group_studio.models import (
     GroupStudio,
     GroupStudioFromChatRequest,
     GroupTaskCardUpdateRequest,
+    Membership,
+    TaskCard,
 )
 from src.group_studio.service import (
+    add_member,
     from_chat,
     get_studio,
     get_studio_by_chat_session,
     list_studio_messages,
+    prepare_start_execution,
+    update_task_card,
 )
 from src.group_studio.settings import is_group_studio_enabled
 
@@ -119,13 +124,19 @@ async def interrupt_studio(group_id: str, _body: GroupInterruptRequest) -> None:
 
 
 @router.put("/{group_id}/task-card", dependencies=[EnabledDep])
-async def update_task_card(group_id: str, _body: GroupTaskCardUpdateRequest) -> None:
-    _not_implemented()
+async def update_task_card_route(group_id: str, body: GroupTaskCardUpdateRequest) -> TaskCard:
+    try:
+        return update_task_card(group_id, body)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.post("/{group_id}/members", dependencies=[EnabledDep])
-async def add_member(group_id: str, _body: GroupMemberCreateRequest) -> None:
-    _not_implemented()
+async def add_member_route(group_id: str, body: GroupMemberCreateRequest) -> Membership:
+    try:
+        return add_member(group_id, body)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.post("/{group_id}/members/{member_id}/mute", dependencies=[EnabledDep])
@@ -154,7 +165,11 @@ async def decide_approval(group_id: str, _body: GroupApprovalDecisionRequest) ->
 
 
 @router.post("/{group_id}/start-execution", dependencies=[EnabledDep])
-async def start_execution(group_id: str, _body: GroupStartPhaseRequest) -> None:
+async def start_execution(group_id: str, body: GroupStartPhaseRequest) -> None:
+    try:
+        prepare_start_execution(group_id, body.project_id)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
     _not_implemented()
 
 

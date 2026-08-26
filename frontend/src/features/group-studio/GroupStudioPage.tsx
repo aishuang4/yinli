@@ -1,10 +1,14 @@
-/** 群聊工作室独立界面骨架。不复用 Chat 气泡 / Composer / Team Blocks。 */
+/** 群聊工作室独立界面。任务卡与加人可编辑；主持发言仍待后续 PR。 */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Users } from 'lucide-react';
-import { Spinner } from '@/components/design';
+import { Button, Spinner } from '@/components/design';
+import { SelectField, TextAreaField } from '../../components/form';
+import { useAgents } from '../../hooks/useAgents';
+import { useProjectResources } from '../../hooks/useProjectResources';
 import { useAppStore } from '../../stores/appStore';
-import { fetchGroupStudio } from './api';
+import { getErrorMessage, notifyError, notifySuccess } from '../../utils/feedback';
+import { addStudioMember, fetchGroupStudio, updateTaskCard } from './api';
 import { StudioTopbar } from './StudioTopbar';
 import type { GroupStudioSnapshot } from './types';
 import './GroupStudioPage.css';
@@ -26,8 +30,14 @@ export function GroupStudioPage() {
   const groupId = useAppStore((state) => state.activeGroupStudioId);
   const closeGroupStudio = useAppStore((state) => state.closeGroupStudio);
   const studioSurface = useAppStore((state) => state.studioSurface);
+  const { agents } = useAgents();
   const [studio, setStudio] = useState<GroupStudioSnapshot | null>(null);
+  const { enabledByType } = useProjectResources(studio?.projectId || '');
   const [error, setError] = useState('');
+  const [goal, setGoal] = useState('');
+  const [savingCard, setSavingCard] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState('default');
   const isMac = window.electronAPI?.getPlatform() === 'darwin'
     || (!window.electronAPI && /Mac/i.test(navigator.platform));
   const shortcutLabel = isMac ? '⌘⇧G' : 'Ctrl+Shift+G';
@@ -42,6 +52,7 @@ export function GroupStudioPage() {
       .then((snapshot) => {
         if (mounted) {
           setStudio(snapshot);
+          setGoal(snapshot.taskCard.goal);
         }
       })
       .catch((cause: unknown) => {
@@ -55,6 +66,58 @@ export function GroupStudioPage() {
   }, [groupId, studioSurface]);
 
   const members = (studio?.members ?? []).filter((member) => member.status !== 'removed');
+  const memberOptions = useMemo(() => {
+    const occupied = new Set(
+      (studio?.members ?? [])
+        .filter((member) => member.status !== 'removed')
+        .map((member) => member.agentId),
+    );
+    return agents
+      .filter((agent) => (
+        agent.role !== 'job'
+        && (agent.id === 'default' || enabledByType.agent.has(agent.id))
+        && !occupied.has(agent.id)
+      ))
+      .map((agent) => ({
+        label: agent.id === 'default' ? `${agent.name} · 默认助手` : agent.name,
+        value: agent.id,
+      }));
+  }, [agents, enabledByType.agent, studio?.members]);
+
+  const handleSaveGoal = async () => {
+    if (!studio) {
+      return;
+    }
+    setSavingCard(true);
+    try {
+      await updateTaskCard(studio.id, { projectId: studio.projectId, goal });
+      const snapshot = await fetchGroupStudio(studio.id);
+      setStudio(snapshot);
+      setGoal(snapshot.taskCard.goal);
+      notifySuccess(snapshot.status === 'discussing' ? '任务卡已生效，可以开始讨论。' : '任务卡已保存。');
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法更新任务卡'));
+    } finally {
+      setSavingCard(false);
+    }
+  };
+
+  const handleAddMember = async () => {
+    if (!studio || !selectedAgentId) {
+      return;
+    }
+    setAdding(true);
+    try {
+      await addStudioMember(studio.id, { projectId: studio.projectId, agentId: selectedAgentId });
+      const snapshot = await fetchGroupStudio(studio.id);
+      setStudio(snapshot);
+      notifySuccess('已加入工作室');
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法加人'));
+    } finally {
+      setAdding(false);
+    }
+  };
 
   return (
     <div className="group-studio-shell">
@@ -88,19 +151,50 @@ export function GroupStudioPage() {
                 </li>
               ))}
             </ul>
+            <div className="group-studio-add-member">
+              <SelectField
+                label="加人"
+                value={selectedAgentId}
+                options={memberOptions}
+                onChange={(value) => setSelectedAgentId(String(value))}
+              />
+              <Button
+                size="small"
+                loading={adding}
+                disabled={adding || memberOptions.length === 0}
+                onClick={() => void handleAddMember()}
+              >
+                加入
+              </Button>
+            </div>
           </aside>
           <section className="group-studio-pane group-studio-pane--timeline">
             <div className="group-studio-pane__label">时间线</div>
             <p className="group-studio-placeholder">
-              讨论与执行过程将显示在这里。当前版本只完成入口与布局，主持人尚未开始发言。
+              {studio?.status === 'drafting'
+                ? '先在右侧填写目标。没有目标时主持人不发言。'
+                : '讨论与执行过程将显示在这里。主持人发言尚未接通。'}
             </p>
           </section>
           <aside className="group-studio-pane group-studio-pane--board">
             <div className="group-studio-pane__label">任务卡</div>
-            <p className="group-studio-goal">
-              {studio?.taskCard.goal || '还没有目标。在右侧补全任务卡后才会开始讨论。'}
-            </p>
-            <div className="group-studio-pane__label" style={{ marginTop: 16 }}>黑板</div>
+            <TextAreaField
+              label="目标"
+              required
+              rows={5}
+              value={goal}
+              onChange={(event) => setGoal(event.target.value)}
+              placeholder="这间工作室要完成什么？"
+            />
+            <Button
+              size="small"
+              loading={savingCard}
+              disabled={savingCard || !studio}
+              onClick={() => void handleSaveGoal()}
+            >
+              保存任务卡
+            </Button>
+            <div className="group-studio-pane__label" style={{ marginTop: 20 }}>黑板</div>
             <p className="group-studio-placeholder">共识决策会写在这里，不翻长聊天记录。</p>
           </aside>
         </div>

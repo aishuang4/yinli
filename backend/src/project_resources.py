@@ -45,9 +45,9 @@ class ProjectResourceAccess:
         ]
 
     def require_agent(self, agent_id: str) -> None:
-        """拒绝运行未绑定的持久 Agent；系统 default Agent 不属于持久资源。"""
+        """拒绝运行未绑定的持久 Agent；系统 default / 群聊 Host 哨兵不属于持久资源。"""
 
-        if agent_id == "default":
+        if agent_id in {"default", "group-studio-host"}:
             return
         _require_workspace_resource(
             workspace_id=self.workspace_id,

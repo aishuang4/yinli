@@ -1120,6 +1120,53 @@ def archive_group_studio(group_id: str) -> None:
     _group_studio_record_store().archive(group_id)
 
 
+def group_studio_has_runs(group_id: str) -> bool:
+    """工作室是否已经产生过 GroupRun。"""
+
+    return _group_studio_record_store().has_runs(group_id)
+
+
+def count_group_studio_active_members(group_id: str) -> int:
+    return _group_studio_record_store().count_active_members(group_id)
+
+
+def find_group_studio_member_by_agent(group_id: str, agent_id: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().find_active_member_by_agent(group_id, agent_id)
+
+
+def insert_group_studio_member(group_id: str, member: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().insert_member(group_id, member)
+
+
+def apply_group_studio_task_card_update(
+    group_id: str,
+    *,
+    goal: str,
+    background: str,
+    constraints: list[str],
+    dod_checklist: list[dict[str, Any]],
+    card_status: str,
+    studio_status: str,
+    awaiting_restatement: bool,
+    phase_before_pause: str | None,
+    bump_revision: bool,
+    title: str | None = None,
+) -> dict[str, Any]:
+    return _group_studio_record_store().apply_task_card_update(
+        group_id,
+        goal=goal,
+        background=background,
+        constraints=constraints,
+        dod_checklist=dod_checklist,
+        card_status=card_status,
+        studio_status=studio_status,
+        awaiting_restatement=awaiting_restatement,
+        phase_before_pause=phase_before_pause,
+        bump_revision=bump_revision,
+        title=title,
+    )
+
+
 def update_workflow_run_status(
     run_id: str,
     status: str,

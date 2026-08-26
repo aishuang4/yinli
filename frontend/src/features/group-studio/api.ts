@@ -1,6 +1,6 @@
 /** 群聊工作室 HTTP 客户端。不走 Chat SSE。 */
 
-import type { GroupStudioSettings, GroupStudioSnapshot } from './types';
+import type { GroupStudioMember, GroupStudioSettings, GroupStudioSnapshot } from './types';
 
 export async function fetchGroupStudioSettings(): Promise<GroupStudioSettings> {
   const response = await fetch('/api/settings/group-studio');
@@ -31,6 +31,38 @@ export async function fetchGroupStudio(groupId: string): Promise<GroupStudioSnap
     throw new Error(await readDetail(response, '无法加载工作室'));
   }
   return await response.json() as GroupStudioSnapshot;
+}
+
+export async function updateTaskCard(groupId: string, input: {
+  projectId: string;
+  goal?: string;
+  background?: string;
+  constraints?: string[];
+}): Promise<GroupStudioSnapshot['taskCard']> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/task-card`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法更新任务卡'));
+  }
+  return await response.json() as GroupStudioSnapshot['taskCard'];
+}
+
+export async function addStudioMember(groupId: string, input: {
+  projectId: string;
+  agentId: string;
+}): Promise<GroupStudioMember> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/members`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法加人'));
+  }
+  return await response.json() as GroupStudioMember;
 }
 
 export async function createStudioFromChat(input: {
@@ -68,6 +100,15 @@ export async function readDetail(response: Response, fallback: string): Promise<
   }
   if (detail === 'agent_not_bound') {
     return '当前 Agent 未绑定到此 Project';
+  }
+  if (detail === 'member_cap') {
+    return '工作室人数已达上限';
+  }
+  if (detail === 'goal_required') {
+    return '请先填写任务目标';
+  }
+  if (detail === 'drafting_no_floor') {
+    return '还没有目标，主持人不能开始发言';
   }
   if (typeof detail === 'string' && detail.trim()) {
     return detail;

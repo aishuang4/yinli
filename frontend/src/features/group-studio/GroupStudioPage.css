@@ -140,6 +140,17 @@
   color: var(--color-error);
 }
 
+.group-studio-add-member {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.group-studio-pane--board button {
+  margin-top: 8px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .group-studio-shell,
   .group-studio-columns,

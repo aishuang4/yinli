@@ -197,6 +197,161 @@ class GroupStudioRecordStore:
             raise RuntimeError(f"group studio {group_id} 写入后无法读取")
         return snapshot
 
+    def has_runs(self, group_id: str) -> bool:
+        """是否已经有过 GroupRun。PR 5 之前为 false，决定要不要走 restatement。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM group_runs WHERE group_id = ? LIMIT 1",
+                (group_id,),
+            ).fetchone()
+        return row is not None
+
+    def count_active_members(self, group_id: str) -> int:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM group_memberships
+                WHERE group_id = ? AND status != 'removed'
+                """,
+                (group_id,),
+            ).fetchone()
+        return int(row["n"] if row is not None else 0)
+
+    def find_active_member_by_agent(self, group_id: str, agent_id: str) -> dict[str, Any] | None:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM group_memberships
+                WHERE group_id = ? AND agent_id = ? AND status != 'removed'
+                LIMIT 1
+                """,
+                (group_id, agent_id),
+            ).fetchone()
+        return self._member_from_row(row) if row is not None else None
+
+    def insert_member(self, group_id: str, member: dict[str, Any]) -> dict[str, Any]:
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO group_memberships (
+                    id, group_id, role, agent_id, display_name, status, muted,
+                    last_spoke_at, crash_count, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    member["id"],
+                    group_id,
+                    member["role"],
+                    member["agentId"],
+                    member["displayName"],
+                    member.get("status") or "active",
+                    1 if member.get("muted") else 0,
+                    None,
+                    int(member.get("crashCount") or 0),
+                    now,
+                    now,
+                ),
+            )
+        found = self.find_active_member_by_agent(group_id, member["agentId"])
+        if found is None:
+            raise RuntimeError("member insert failed")
+        return found
+
+    def apply_task_card_update(
+        self,
+        group_id: str,
+        *,
+        goal: str,
+        background: str,
+        constraints: list[str],
+        dod_checklist: list[dict[str, Any]],
+        card_status: str,
+        studio_status: str,
+        awaiting_restatement: bool,
+        phase_before_pause: str | None,
+        bump_revision: bool,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        """更新当前任务卡、工作室阶段，并投影 Goal/约束到黑板。"""
+
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            studio = conn.execute(
+                "SELECT current_task_card_id FROM group_studios WHERE id = ?",
+                (group_id,),
+            ).fetchone()
+            if studio is None:
+                return {}
+            card_id = str(studio["current_task_card_id"])
+            current = conn.execute(
+                "SELECT revision FROM group_task_cards WHERE id = ?",
+                (card_id,),
+            ).fetchone()
+            revision = int(current["revision"] if current is not None else 1)
+            if bump_revision:
+                revision += 1
+            conn.execute(
+                """
+                UPDATE group_task_cards
+                SET revision = ?, status = ?, goal = ?, background = ?,
+                    constraints_json = ?, dod_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    revision,
+                    card_status,
+                    goal,
+                    background,
+                    self.dumps(constraints),
+                    self.dumps(dod_checklist),
+                    now,
+                    card_id,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE group_studios
+                SET status = ?, awaiting_restatement = ?, phase_before_pause = ?,
+                    title = COALESCE(?, title), updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    studio_status,
+                    1 if awaiting_restatement else 0,
+                    phase_before_pause,
+                    title,
+                    now,
+                    group_id,
+                ),
+            )
+            blackboard = conn.execute(
+                "SELECT revision, payload_json FROM group_blackboards WHERE group_id = ?",
+                (group_id,),
+            ).fetchone()
+            payload = self.loads(blackboard["payload_json"], {}) if blackboard else {}
+            if not isinstance(payload, dict):
+                payload = {}
+            payload["goal"] = goal
+            payload["constraints"] = constraints
+            payload["taskCardId"] = card_id
+            board_revision = int(blackboard["revision"] if blackboard else 1) + (1 if bump_revision else 0)
+            conn.execute(
+                """
+                UPDATE group_blackboards
+                SET revision = ?, payload_json = ?, updated_at = ?
+                WHERE group_id = ?
+                """,
+                (board_revision, self.dumps(payload), now, group_id),
+            )
+        return self.get_snapshot(group_id) or {}
+
     def archive(self, group_id: str) -> None:
         """测试与删除会话用：把工作室标为 archived。"""
 
