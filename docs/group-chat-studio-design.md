@@ -2,7 +2,7 @@
 
 | 字段 | 值 |
 | --- | --- |
-| 状态 | Draft（草案待审核，不是当前架构事实） |
+| 状态 | P0 已落地。当前架构事实以 `AGENTS.md` / `docs/architecture-overview.md` 为准 |
 | 作者 | 引力 YINLI |
 | 日期 | 2026-08-26 |
 | 修订 | R3（权限策略、restatement 守卫、热键挂 ChatPage、一轮结束协议、完整路由表、pause 收口） |
@@ -10,7 +10,7 @@
 | 范围 | 全新独立功能；不替换、不增强当前 Chat Team Runtime |
 | 实现前必须先冻结 | `docs/group-studio-event-contract.md`（本设计含契约草案，落地 PR 之前拆出） |
 
-> 本文是实现方案。已拍板的隔离墙、入口、调度规则不得在实现时重新打开。`AGENTS.md` / `docs/architecture-overview.md` 在本功能落地前不要改成“已在线”。
+> 本文是实现方案。已拍板的隔离墙、入口、调度规则不得重新打开。P0 已上线；P1 只进 `docs/project-todo.md`。
 
 ---
 
@@ -1039,10 +1039,10 @@ E. Host = 选中 Agent — **否决**（已冻结哨兵 `group-studio-host`）�
 ## Rollout Plan
 
 ```json
-{ "enabled": false, "maxMembers": 6, "maxParallelWorkers": 1, "maxTurns": 40 }
+{ "enabled": true, "maxMembers": 6, "maxParallelWorkers": 1, "maxTurns": 40 }
 ```
 
-`json_store` `system_settings/group_studio`。Settings 卡片在 flag PR 落地。默认 false。最后一个实现 PR 再开。回滚：关 flag，不删表。删除 Chat session 的归档逻辑 **无论 flag** 都要在。
+`json_store` `system_settings/group_studio`。Settings 卡片可关。默认 true。回滚：关 flag，不删表。删除 Chat session 的归档逻辑 **无论 flag** 都要在。
 
 ---
 

@@ -1,6 +1,6 @@
 # 引力 YINLI TODO
 
-> 最后更新：2026-08-05。本文只保留尚未完成的任务。
+> 最后更新：2026-08-26。本文只保留尚未完成的任务。
 
 ## P0. Runtime 稳定性
 
@@ -8,6 +8,16 @@
 - [ ] 补齐 RuntimeFrame / DisplaySnapshot V4 浏览器回归矩阵，覆盖 Plan finalized、HITL、AskUser、工具失败、取消和刷新恢复。
 - [ ] 增加关键 Chat 工作流的 Playwright 测试，避免只依赖 reducer 和后端单测。
 - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor 和 ToolScope 摘要。
+
+## P1. 群聊工作室后续
+
+- [ ] 把 `MainAgentRuntimeSpec` / cache key 从 `routes/chat/runtime_builder.py` 下沉到 `agents/` 或 `runtime/`，Chat 与 group_studio 平级调用。
+- [ ] P1 并行 Worker（`maxParallelWorkers>1`）与 `parent_run_id` / child runs；P0 保持全串行。
+- [ ] 时间旅行快照表不要叫 `group_snapshots`，以免和 `GROUP_STUDIO_STATE` 口语撞车。
+- [ ] 群事件进入 Trace 页前给 `run_events` 增加 `source` 默认 `chat`，且 `session_id` 必须是真实 Chat session。
+- [ ] `max_cost_usd` 熔断；P0 只记 token，不按金额熔断。
+- [ ] 归档后 MemoryAdmissionGate 只用最终 Goal、黑板决策和人类可见结论，禁止用 `group-studio-host` 写 agent memory。
+- [ ] 工作室列表入口与跨群切换（P0 一 Chat session 一间未归档工作室，不提供群目录）。
 
 ## P1. Event Stream 后续加固
 

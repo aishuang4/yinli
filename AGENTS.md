@@ -66,11 +66,13 @@ npm run lint     # eslint
 
 11. **`agents/agentscope_usage_patch.py`** — 启动时 `patch_agentscope_usage_events()` 给 AgentScope 打补丁以捕获 usage 事件。
 
+12. **群聊工作室（Group Chat Studio）** — 独立于 Chat Team Runtime 的跨多轮协作产品，不替换、不增强一次性 `TeamRun`。入口是 Chat 顶栏按钮 / `⌘⇧G`，520ms 重叠过渡切到独立 pane，不是 Agent/Team 分段，也不是 TitleBar 第三 workspace。领域包 `backend/src/group_studio/`，路由 `/api/group-studio`，独立 SSE（`docs/group-studio-event-contract.md`，`GROUP_*` 事件；DELTA 不落库）。SQLite `group_*` 表是领域事实源；一 Chat session 对应一间未归档工作室；一群一张任务卡。Host 哨兵 `group-studio-host`（`include_default_tools=False`、控场工具 allowlist、`PermissionMode.BYPASS`）；选中 Chat Agent 是第一 Worker。P0 全串行。Orchestrator / 黑板记录员是系统服务，不进群。Worker 强制 `human_approval` + `ASK_EVERY_TIME` → `PermissionMode.DEFAULT`，审批走 `group_approvals`，禁止写入 Chat `PENDING_INTERACTIONS`。通知走 `src/notifications/`，kind 前缀 `group_studio_`，点击 `openGroupStudio`，不进 Chat SSE / ResultModal。`require_agent` 跳过 `default` 与 `group-studio-host`。Chat handlers / Team Runtime 禁止 import `group_studio`；catalog 通过 `session_studio.py` 附加徽章。开关在 `json_store system_settings/group_studio`，默认 `enabled=true`。
+
 ### 持久化
 
 `backend/src/storage/database.py` 用同步 `sqlite3`（线程锁 `RLock`）封装所有存储，尽管依赖里有 `aiosqlite`。两类存储模式：
 
-- **结构化表**：`workspaces`、`projects`、`project_resource_bindings`、`agents`、`mcp_servers`、`skills`、`chat_sessions`、`chat_messages`、`chat_runs`、`run_events`、`memory_nodes`、`subagent_invocations`。启动时创建稳定的 `default` Workspace / Project 并回填历史空归属。持久 Team 的 `teams` / `team_members` 表在启动迁移中删除；历史库中可能仍残留 `memory_facts` / `memory_events` / `memory_candidates` 表，但旧记忆模块已删除，不再作为当前运行时能力。
+- **结构化表**：`workspaces`、`projects`、`project_resource_bindings`、`agents`、`mcp_servers`、`skills`、`chat_sessions`、`chat_messages`、`chat_runs`、`run_events`、`memory_nodes`、`subagent_invocations`、`group_studios` / `group_task_cards` / `group_blackboards` / `group_memberships` / `group_messages` / `group_runs` / `group_approvals` / `group_artifacts` / `group_studio_events`。启动时创建稳定的 `default` Workspace / Project 并回填历史空归属。持久 Team 的 `teams` / `team_members` 表在启动迁移中删除；历史库中可能仍残留 `memory_facts` / `memory_events` / `memory_candidates` 表，但旧记忆模块已删除，不再作为当前运行时能力。群聊工作室不恢复持久 `teams` 表。
 - **Markdown 记忆文件**：新记忆 MVP 使用 `backend/data/memory/users/user_memory.md`、`backend/data/memory/agents/agent_memory.md`、`backend/data/memory/global/global_memory.md` 作为默认文件；非默认 owner 使用 `users/{user_id}/user_memory.md`、`agents/{agent_id}/agent_memory.md`、`global/{workspace_id}/global_memory.md`。不兼容读取旧 `default.md`。
 - **向量存储**：全局 `VectorStoreBackend` 抽象支持 `disabled` 和 `zvec` provider。`VECTOR_STORE_PROVIDER` 只在首次初始化时生效，之后读取持久化 `VectorStorePolicy`；向量库只索引历史记忆底层表 `memory_nodes`，Markdown 记忆不进入向量库。
 - **`json_store` 表**：`(namespace, key) -> JSON`，用于系统设置等 Pydantic 文档。运行时模型设置存于 namespace `system_settings`、key `model`，由 `config/runtime_settings.py` 读写。
@@ -109,5 +111,6 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 - 文件均带中文 docstring 说明职责，遵循既有风格。
 - 前端遵循若干约定（见 `App.tsx` 注释）：派生状态不用 effect、对象映射表代替 switch、初始化只做一次。
 - 文档入口见 `docs/README.md`；当前架构见 `docs/architecture-overview.md`；记忆模块重设计见 `docs/memory-system-design.md`；通知通道见 `docs/notifications.md`；项目现状与待办见 `docs/project-progress-handoff.md` 和 `docs/project-todo.md`；开发规范见 `docs/development-guidelines.md`。
-- 消息通知走 `src/notifications/` 通道抽象：定时任务终态由 `scheduler/notifications.py` 适配后交给分发器。当前只实现应用内 inbox（Chat 顶栏设置左侧铃铛 + `/api/notifications/stream`）。任务完成时 Web 弹出右上角提醒框，Electron 客户端走系统通知。邮箱 / 微信 / 飞书是占位通道，不得假装已投递。禁止把通知写入 Chat SSE。
+- 消息通知走 `src/notifications/` 通道抽象：定时任务终态由 `scheduler/notifications.py` 适配后交给分发器。当前只实现应用内 inbox（Chat 顶栏设置左侧铃铛 + `/api/notifications/stream`）。任务完成时 Web 弹出右上角提醒框，Electron 客户端走系统通知。邮箱 / 微信 / 飞书是占位通道，不得假装已投递。禁止把通知写入 Chat SSE。`kind` 以 `group_studio_` 开头的通知点击后 `openGroupStudio`，不进 ResultModal。
+- 群聊工作室是独立产品，不是 Chat Team Runtime 的第三 mode。后续不要把工作室能力补丁回 `POST /api/chat/send`、`RUNTIME_EVENT` 或持久 `teams` 表。P1 并行 Worker、时间旅行快照、群事件进 Trace 页等只写入 `docs/project-todo.md`。
 - 定时任务执行者必须是 Job Agent（`role=job`），不能在 Chat 里选用。Job Agent 有必注入 / 可选注入两层工具；`CheckJobFeasibility` 只认领可选层，必注入到期一定带上。系统 `default` 助手不能改成 Job Agent。

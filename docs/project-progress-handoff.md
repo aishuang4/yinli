@@ -1,6 +1,6 @@
 # 引力 YINLI 项目进展与协作交接
 
-> 更新时间：2026-07-31。本文只记录当前完成度、验证结果和已知缺口。
+> 更新时间：2026-08-26。本文只记录当前完成度、验证结果和已知缺口。
 
 ## 当前阶段
 
@@ -31,6 +31,11 @@
 - 正式 Artifact ownership 与浏览器级跨 Project 自动化回归仍待实现。
 
 ## 已在线能力
+
+### 群聊工作室
+
+- 独立于 Chat Team Runtime：Chat 顶栏 / 快捷键进入独立 pane，SQLite `group_*` + `/api/group-studio` + 独立 SSE。
+- 开关默认开启；Host 哨兵 `group-studio-host`；Worker 独立审批；通知点击打开工作室。
 
 ### Chat 与运行状态
 

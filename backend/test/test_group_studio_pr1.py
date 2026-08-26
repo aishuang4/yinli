@@ -1,4 +1,4 @@
-"""群聊工作室 PR 1：flag 默认关闭、空壳路由、隔离墙、include_default_tools。"""
+"""群聊工作室 PR 1：flag、空壳路由、隔离墙、include_default_tools。"""
 
 from __future__ import annotations
 
@@ -48,22 +48,22 @@ def client(isolated_db):
         yield test_client
 
 
-def test_flag_defaults_disabled(isolated_db):
+def test_flag_defaults_enabled(isolated_db):
     ensure_db()
 
-    assert is_group_studio_enabled() is False
+    assert is_group_studio_enabled() is True
     public = get_group_studio_settings_public()
-    assert public["enabled"] is False
+    assert public["enabled"] is True
     assert public["maxMembers"] == 6
     assert public["maxParallelWorkers"] == 1
     assert public["maxTurns"] == 40
 
 
-def test_settings_readable_when_disabled(client):
+def test_settings_readable_by_default(client):
     response = client.get("/api/settings/group-studio")
 
     assert response.status_code == 200
-    assert response.json()["enabled"] is False
+    assert response.json()["enabled"] is True
 
 
 def test_settings_put_enables_and_clamps_parallel(client):
@@ -84,6 +84,7 @@ def test_settings_put_enables_and_clamps_parallel(client):
 
 
 def test_from_chat_404_when_disabled(client):
+    set_group_studio_settings(enabled=False)
     response = client.post("/api/group-studio/from-chat", json={
         "projectId": "default",
         "chatSessionId": "sess-1",
@@ -95,6 +96,7 @@ def test_from_chat_404_when_disabled(client):
 
 
 def test_get_by_chat_404_when_disabled(client):
+    set_group_studio_settings(enabled=False)
     response = client.get("/api/group-studio/by-chat/sess-1")
 
     assert response.status_code == 404

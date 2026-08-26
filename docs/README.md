@@ -16,11 +16,11 @@
 
 - `docs/chat-sse-event-contract.md`：Chat `RUNTIME_EVENT: RuntimeFrame` 与 DisplaySnapshot V4 稳定契约。变更协议前必须先更新。
 - `docs/workflow-event-contract.md`：Dynamic Workflow 独立事件契约，不属于 Chat SSE。
-- `docs/group-studio-event-contract.md`：群聊工作室独立 SSE 契约，不属于 Chat SSE / Workflow。落地前冻结；实现不得偏离。
+- `docs/group-studio-event-contract.md`：群聊工作室独立 SSE 契约，不属于 Chat SSE / Workflow。前端只依赖该契约中的稳定事件。
 
 ## 在线领域设计
 
-- `docs/group-chat-studio-design.md`：Agent 群聊工作室（Group Chat Studio）设计实现方案。**草案待审核**，不是当前架构事实；独立于 Chat Team Runtime 与 Chat SSE。
+- `docs/group-chat-studio-design.md`：Agent 群聊工作室（Group Chat Studio）设计实现方案。P0 已落地；当前架构事实以 `AGENTS.md` 与 `docs/architecture-overview.md` 为准。独立于 Chat Team Runtime 与 Chat SSE。
 - `docs/team-runtime-redesign.md`：一次性 TeamRun、动态 Member、Task List、Mailbox 和 file-first 状态。
 - `docs/subagent-delegation-design.md`：Subagent 文件定义、attached fork/join、wait/read、父结果消费、权限裁剪和任务恢复边界。
 - `docs/memory-system-design.md`：新记忆系统、Markdown 记忆、`memory_nodes`、向量检索和 Skill 自进化。

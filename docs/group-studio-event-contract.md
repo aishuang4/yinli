@@ -1,6 +1,6 @@
 # Group Chat Studio 事件契约
 
-> 状态：2026-08-26 草案。落地前冻结本文件；实现不得偏离下表。
+> 状态：2026-08-26 生效。实现不得偏离下表。
 > 本文是群聊工作室实时展示、刷新恢复的唯一前端事件契约。
 > **不属于 Chat SSE。** 禁止复用 `RUNTIME_EVENT`、DisplaySnapshot V4、Chat projector、`run_events`。
 

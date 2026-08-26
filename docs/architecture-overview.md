@@ -1,6 +1,6 @@
 # 引力 YINLI 当前架构总览
 
-> 状态：2026-07-27 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
+> 状态：2026-08-26 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
 
 ## 项目定位
 
@@ -71,6 +71,17 @@ Team Runtime 是一次性 `TeamRun`。用户在单 Agent 模式选择 Agent，�
 - 用户可以向任意 Member 发送 mailbox 消息，作为本轮运行中的直接干预。
 - Member 提交结果前必须清空未读 Mailbox；综合阶段使用完整 Mailbox，综合期间的新消息会触发重新综合。
 - Team 领域状态仍以 file-first store 和领域事件为事实源；Chat 只读取 `kind=team` 投影 Block，不读取 Team 文件状态或顶层业务 SSE。
+
+## 群聊工作室
+
+群聊工作室是独立于 Chat Team Runtime 的跨多轮协作空间，不替换一次性 `TeamRun`。
+
+- 入口在 Chat 顶栏铃铛左侧和 `⌘⇧G` / `Ctrl+Shift+G`，520ms 重叠过渡切到独立 pane；不改 `WorkspaceMode`，不是 Agent/Team 分段。
+- 后端前缀 `/api/group-studio`，领域包 `backend/src/group_studio/`。开关 `json_store system_settings/group_studio`，默认开启；关闭后写/建接口 404 `group_studio_disabled`。
+- SQLite `group_*` 表是领域事实源。一 Chat session 对应一间未归档工作室；一群一张任务卡（Goal / 约束 / DoD）。产出在 `{project_root}/.agent-workstation/group-studios/{group_id}/`。
+- 独立 SSE，契约见 `docs/group-studio-event-contract.md`。`GROUP_MESSAGE_DELTA` / `GROUP_ACTIVITY_DELTA` 不落 `group_studio_events`。禁止写入 Chat `run_events`、`RUNTIME_EVENT` 或 `PENDING_INTERACTIONS`。
+- Host 是系统哨兵 `group-studio-host`，无默认工具，只做控场。选中 Chat Agent 是第一 Worker。P0 全串行。Worker 强制人工审批（`ASK_EVERY_TIME` / `PermissionMode.DEFAULT`），审批行在 `group_approvals`。
+- 通知 kind 前缀 `group_studio_`，点击打开工作室，不进定时任务结果弹窗。删除 Chat session 无论开关都归档绑定工作室。启动时对未收口 Run 按暂停收口。
 
 ## Event Stream 与前端主展示
 

@@ -1,4 +1,4 @@
-/** GroupStudioSettingsCard — 系统设置中的群聊工作室开关。默认关闭。 */
+/** GroupStudioSettingsCard — 系统设置中的群聊工作室开关。默认开启。 */
 
 import { useCallback, useEffect, useState } from 'react';
 import { Button, Card } from '@/components/design';
@@ -67,7 +67,7 @@ export function GroupStudioSettingsCard() {
       <div className="p-5">
         <div className="text-sm font-medium text-[var(--color-text-primary)]">群聊工作室</div>
         <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
-          关闭后无法从 Chat 升级为工作室，相关 API 返回不可用。默认关闭；工作室界面尚未上线。
+          关闭后无法从 Chat 进入工作室，相关 API 返回不可用。默认开启。
         </p>
         {error ? (
           <div className="mt-4 flex items-center justify-between gap-2">
