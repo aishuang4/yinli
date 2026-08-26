@@ -19,6 +19,7 @@
 
 ## 在线领域设计
 
+- `docs/group-chat-studio-design.md`：Agent 群聊工作室（Group Chat Studio）设计实现方案。**草案待审核**，不是当前架构事实；独立于 Chat Team Runtime 与 Chat SSE。
 - `docs/team-runtime-redesign.md`：一次性 TeamRun、动态 Member、Task List、Mailbox 和 file-first 状态。
 - `docs/subagent-delegation-design.md`：Subagent 文件定义、attached fork/join、wait/read、父结果消费、权限裁剪和任务恢复边界。
 - `docs/memory-system-design.md`：新记忆系统、Markdown 记忆、`memory_nodes`、向量检索和 Skill 自进化。
