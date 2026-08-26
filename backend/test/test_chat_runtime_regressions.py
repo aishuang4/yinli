@@ -2423,6 +2423,7 @@ def test_create_main_agent_from_spec_delegates_to_factory(monkeypatch):
     assert calls["model_name"] == "model"
     assert calls["session_id"] == "session"
     assert calls["tool_scope"] is tool_scope
+    assert calls["include_default_tools"] is True
     assert callable(calls["on_fallback_event"])
 
 

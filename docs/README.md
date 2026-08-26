@@ -16,6 +16,7 @@
 
 - `docs/chat-sse-event-contract.md`：Chat `RUNTIME_EVENT: RuntimeFrame` 与 DisplaySnapshot V4 稳定契约。变更协议前必须先更新。
 - `docs/workflow-event-contract.md`：Dynamic Workflow 独立事件契约，不属于 Chat SSE。
+- `docs/group-studio-event-contract.md`：群聊工作室独立 SSE 契约，不属于 Chat SSE / Workflow。落地前冻结；实现不得偏离。
 
 ## 在线领域设计
 
