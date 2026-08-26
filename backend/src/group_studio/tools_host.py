@@ -200,6 +200,9 @@ class GroupAssignFloor(HostTool):
     }
 
     async def __call__(self, memberId: str) -> ToolChunk:
+        snapshot = get_group_studio_snapshot(self.ctx.group_id) or {}
+        if str(snapshot.get("status") or "") == "awaiting_human":
+            return self.error("awaiting_restatement")
         member = get_group_studio_member(self.ctx.group_id, memberId)
         if member is None or member.get("status") == "removed":
             return self.error("member_not_found")

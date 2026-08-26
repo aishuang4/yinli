@@ -1,7 +1,7 @@
 """群聊工作室独立路由。
 
 flag 关闭时全部 404 `group_studio_disabled`。
-from-chat / 任务卡 / 成员 / 黑板 / 文件 / 审批 / 执行期已实现；pause、消息仍 501。
+from-chat / 任务卡 / 成员 / 黑板 / 文件 / 审批 / 插话 / 熔断已实现；结项仍 501。
 """
 
 import asyncio
@@ -25,6 +25,7 @@ from src.group_studio.models import (
     GroupMemberCreateRequest,
     GroupMemberMuteRequest,
     GroupMemberRemoveRequest,
+    GroupMessage,
     GroupMessageCreateRequest,
     GroupPauseRequest,
     GroupResumeRequest,
@@ -37,15 +38,20 @@ from src.group_studio.models import (
 )
 from src.group_studio.service import (
     add_member,
+    confirm_restatement as confirm_studio_restatement,
     decide_studio_approval,
     from_chat,
     get_studio,
     get_studio_by_chat_session,
+    interrupt_run,
     list_studio_files,
     list_studio_messages,
     mute_member,
+    pause_studio,
+    post_human_message,
     prepare_start_execution,
     remove_member,
+    resume_studio,
     update_task_card,
     upload_studio_file,
 )
@@ -173,23 +179,41 @@ async def _heartbeat_wrapper(source):
 
 
 @router.post("/{group_id}/pause", dependencies=[EnabledDep])
-async def pause_studio(group_id: str, _body: GroupPauseRequest) -> None:
-    _not_implemented()
+async def pause_studio_route(group_id: str, body: GroupPauseRequest) -> GroupStudio:
+    try:
+        return pause_studio(group_id, project_id=body.project_id)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.post("/{group_id}/resume", dependencies=[EnabledDep])
-async def resume_studio(group_id: str, _body: GroupResumeRequest) -> None:
-    _not_implemented()
+async def resume_studio_route(group_id: str, body: GroupResumeRequest) -> GroupStudio:
+    try:
+        return resume_studio(group_id, project_id=body.project_id, max_turns=body.max_turns)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.post("/{group_id}/messages", dependencies=[EnabledDep])
-async def post_message(group_id: str, _body: GroupMessageCreateRequest) -> None:
-    _not_implemented()
+async def post_message(group_id: str, body: GroupMessageCreateRequest) -> GroupMessage:
+    try:
+        return post_human_message(
+            group_id,
+            project_id=body.project_id,
+            body=body.body,
+            mentions=body.mentions,
+        )
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.post("/{group_id}/interrupt", dependencies=[EnabledDep])
-async def interrupt_studio(group_id: str, _body: GroupInterruptRequest) -> None:
-    _not_implemented()
+async def interrupt_studio(group_id: str, body: GroupInterruptRequest) -> dict:
+    try:
+        interrupt_run(group_id, project_id=body.project_id)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
+    return {"ok": True}
 
 
 @router.put("/{group_id}/task-card", dependencies=[EnabledDep])
@@ -238,8 +262,11 @@ async def close_studio(group_id: str, _body: GroupCloseRequest) -> None:
 
 
 @router.post("/{group_id}/confirm-restatement", dependencies=[EnabledDep])
-async def confirm_restatement(group_id: str, _body: GroupConfirmRestatementRequest) -> None:
-    _not_implemented()
+async def confirm_restatement_route(group_id: str, body: GroupConfirmRestatementRequest) -> GroupStudio:
+    try:
+        return confirm_studio_restatement(group_id, project_id=body.project_id)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.post("/{group_id}/approvals", dependencies=[EnabledDep])

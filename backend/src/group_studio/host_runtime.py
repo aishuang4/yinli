@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import Any, Callable
 
@@ -9,9 +10,16 @@ from agentscope.message import UserMsg
 
 from src.agents.runtime_types import AgentGuardrails, AgentModelOptions, RuntimeToolScope
 from src.config.runtime_settings import get_effective_model_settings
+from src.group_studio.circuit import on_run_finished, progress_fingerprint
 from src.group_studio.events import emit_envelope
 from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID
 from src.group_studio.orchestrator import assert_floor_allowed, assert_serial_run
+from src.group_studio.sessions import (
+    drop_run_task,
+    register_run_task,
+    remember_fingerprint,
+    take_interrupt,
+)
 from src.group_studio.tools_host import HOST_STOP_TOOLS, HostToolContext, host_tools
 from src.security.permissions import build_permission_profile
 from src.server.routes.chat.runtime_builder import (
@@ -127,7 +135,7 @@ async def run_host_discussion(
     snapshot = get_group_studio_snapshot(group_id)
     if snapshot is None:
         return ""
-    assert_floor_allowed(str(snapshot.get("status") or ""))
+    assert_floor_allowed(str(snapshot.get("status") or ""), role="host")
     assert_serial_run(snapshot.get("currentRunId"))
     host_member = next(
         (
@@ -156,6 +164,8 @@ async def run_host_discussion(
         run_id=run_id,
         payload={"memberId": host_member["id"], "runId": run_id, "reason": "host_default"},
     )
+    restating = str(snapshot.get("status") or "") == "awaiting_human"
+    intent = "restatement" if restating else "discuss"
     message_id = f"gmsg_{uuid.uuid4().hex[:16]}"
     insert_group_studio_message({
         "id": message_id,
@@ -163,7 +173,7 @@ async def run_host_discussion(
         "runId": run_id,
         "speakerId": host_member["id"],
         "role": "host",
-        "intent": "discuss",
+        "intent": intent,
         "body": "",
         "visibleInTimeline": True,
     })
@@ -175,7 +185,7 @@ async def run_host_discussion(
             "messageId": message_id,
             "speakerId": host_member["id"],
             "role": "host",
-            "intent": "discuss",
+            "intent": intent,
             "visibleInTimeline": True,
         },
     )
@@ -184,6 +194,8 @@ async def run_host_discussion(
     outcome = "completed"
     run_status = "completed"
     error_text = ""
+    remember_fingerprint(run_id, progress_fingerprint(snapshot))
+    register_run_task(group_id, asyncio.current_task())
     try:
         agent = factory(spec)
         last_chars_flush = 0
@@ -228,6 +240,10 @@ async def run_host_discussion(
         if ctx.last_stop_tool:
             outcome = "completed"
             run_status = "completed"
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        run_status = "cancelled"
+        error_text = "cancelled"
     except Exception as exc:
         outcome = "failed"
         run_status = "failed"
@@ -238,6 +254,8 @@ async def run_host_discussion(
             run_id=run_id,
             payload={"code": "host_failed", "message": error_text},
         )
+    finally:
+        drop_run_task(group_id)
     body = "".join(body_parts)
     update_group_studio_message_body(message_id, body)
     emit_envelope(
@@ -246,6 +264,9 @@ async def run_host_discussion(
         run_id=run_id,
         payload={"messageId": message_id, "body": body, "outcome": outcome},
     )
+    interrupted = take_interrupt(group_id)
+    if interrupted:
+        return ""
     update_group_studio_run_status(run_id, run_status, error_text)
     set_group_studio_current_run_id(group_id, None)
     emit_envelope(
@@ -254,11 +275,25 @@ async def run_host_discussion(
         run_id=run_id,
         payload={"runId": run_id, "status": run_status},
     )
+    tripped = on_run_finished(
+        group_id,
+        run_id=run_id,
+        run_status=run_status,
+        interrupt_source=interrupted,
+    )
+    if tripped or restating:
+        return ""
     return ctx.assigned_member_id if run_status == "completed" else ""
 
 
 def _host_turn_user_message(snapshot: dict[str, Any]) -> str:
     card = snapshot.get("taskCard") or {}
+    if str(snapshot.get("status") or "") == "awaiting_human":
+        return (
+            "任务目标或约束已变更。请用复述说明新目标，等待人类确认。"
+            "不要指派工人。"
+            f"新目标：{card.get('goal') or ''}"
+        )
     return (
         "请主持本轮讨论。先简要复述目标，指出下一步该谁发言或是否进入执行。"
         f"目标：{card.get('goal') or ''}"

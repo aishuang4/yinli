@@ -92,6 +92,7 @@ type DesktopNotificationPayload = {
   kind: string;
   jobId: string;
   firingId: string;
+  groupStudioId: string;
 };
 
 type DesktopBackendStatus = {

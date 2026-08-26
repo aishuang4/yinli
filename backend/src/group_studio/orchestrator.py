@@ -35,8 +35,8 @@ def assert_can_mutate(status: str) -> None:
         raise GroupStudioError(409, code)
 
 
-def assert_floor_allowed(status: str) -> None:
-    """drafting / paused / 等待人类 时禁止 Host/Worker reply。"""
+def assert_floor_allowed(status: str, *, role: str = "host") -> None:
+    """drafting / paused / 熔断禁止发言。awaiting_human 只允许 Host 复述。"""
 
     if status == "drafting":
         raise GroupStudioError(409, DRAFTING_NO_FLOOR)
@@ -44,6 +44,10 @@ def assert_floor_allowed(status: str) -> None:
         raise GroupStudioError(409, STUDIO_PAUSED)
     if status == "circuit_broken":
         raise GroupStudioError(409, STUDIO_CIRCUIT_BROKEN)
+    if status == "awaiting_human":
+        if role != "host":
+            raise GroupStudioError(409, ILLEGAL_TRANSITION)
+        return
     if status not in FLOOR_ALLOWED_STATUSES:
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
 

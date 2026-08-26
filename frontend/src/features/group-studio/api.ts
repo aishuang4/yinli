@@ -4,6 +4,7 @@ import type {
   GroupStudioApproval,
   GroupStudioFile,
   GroupStudioMember,
+  GroupStudioMessage,
   GroupStudioSettings,
   GroupStudioSnapshot,
 } from './types';
@@ -117,6 +118,69 @@ export async function uploadStudioFile(
   return await response.json() as GroupStudioFile;
 }
 
+export async function postStudioMessage(groupId: string, input: {
+  projectId: string;
+  body: string;
+  mentions?: string[];
+}): Promise<GroupStudioMessage> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法发送消息'));
+  }
+  return await response.json() as GroupStudioMessage;
+}
+
+export async function pauseStudio(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/pause`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId }),
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法暂停工作室'));
+  }
+  return await response.json() as GroupStudioSnapshot;
+}
+
+export async function resumeStudio(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId }),
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法恢复工作室'));
+  }
+  return await response.json() as GroupStudioSnapshot;
+}
+
+export async function interruptStudio(groupId: string, projectId: string): Promise<void> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/interrupt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId }),
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法停止当前发言'));
+  }
+}
+
+export async function confirmStudioRestatement(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/confirm-restatement`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId }),
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法确认复述'));
+  }
+  return await response.json() as GroupStudioSnapshot;
+}
+
 export async function decideStudioApproval(groupId: string, input: {
   projectId: string;
   approvalId: string;
@@ -207,6 +271,18 @@ export async function readDetail(response: Response, fallback: string): Promise<
   }
   if (detail === 'worker_session_lost') {
     return '工人会话已丢失，请重新发起这一轮';
+  }
+  if (detail === 'studio_paused') {
+    return '工作室已暂停';
+  }
+  if (detail === 'studio_circuit_broken') {
+    return '工作室已熔断，请先恢复';
+  }
+  if (detail === 'not_awaiting_restatement') {
+    return '当前不需要确认复述';
+  }
+  if (detail === 'restatement_missing') {
+    return '主持人还没有复述新目标';
   }
   if (typeof detail === 'string' && detail.trim()) {
     return detail;

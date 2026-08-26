@@ -16,6 +16,9 @@ from src.group_studio.errors import (
     ILLEGAL_TRANSITION,
     JOB_AGENT_FORBIDDEN,
     MEMBER_CAP,
+    NOT_AWAITING_RESTATEMENT,
+    RESTATEMENT_MISSING,
+    STUDIO_CIRCUIT_BROKEN,
     GroupStudioError,
 )
 from src.group_studio.files import ensure_studio_dirs, save_studio_upload
@@ -24,6 +27,7 @@ from src.group_studio.models import (
     GroupApproval,
     GroupArtifact,
     GroupMemberCreateRequest,
+    GroupMessage,
     GroupStudio,
     GroupStudioFromChatRequest,
     GroupTaskCardUpdateRequest,
@@ -59,6 +63,7 @@ from src.storage.database import (
     group_studio_has_runs,
     insert_group_studio_artifact,
     insert_group_studio_member,
+    insert_group_studio_message,
     list_agents,
     list_chat_runs_by_statuses,
     list_group_studio_artifacts,
@@ -67,6 +72,7 @@ from src.storage.database import (
     set_group_studio_member_muted,
     set_group_studio_member_removed,
     set_group_studio_status,
+    update_group_studio_state,
 )
 
 
@@ -388,6 +394,13 @@ def update_task_card(group_id: str, request: GroupTaskCardUpdateRequest) -> Task
         event_type="GROUP_TASK_CARD",
         payload=updated.task_card.model_dump(by_alias=True),
     )
+    if updated.status == "awaiting_human" and studio.status != "awaiting_human":
+        from src.group_studio.interrupt import cancel_active_run
+        from src.group_studio.notify import KIND_AWAITING, notify_studio
+
+        cancel_active_run(group_id, source="task_card")
+        notify_studio(updated.model_dump(by_alias=True), kind=KIND_AWAITING, body="目标已变更，请确认复述。")
+        schedule_host_turn(group_id)
     if studio.status == "drafting" and updated.status == "discussing":
         schedule_host_turn(group_id)
     return updated.task_card
@@ -470,6 +483,150 @@ def decide_studio_approval(
         approval_id=approval_id,
         decision=decision,
     )
+
+
+def post_human_message(group_id: str, *, project_id: str, body: str, mentions: list[str] | None = None) -> GroupMessage:
+    """人类输入。paused 只入列；否则 inline interrupt 后派 Host。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    if studio.status == "circuit_broken":
+        raise GroupStudioError(409, STUDIO_CIRCUIT_BROKEN)
+    if studio.status in {"archived", "failed"}:
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    queued = studio.status == "paused"
+    if not queued:
+        from src.group_studio.interrupt import cancel_active_run
+
+        cancel_active_run(group_id, source="human_message")
+    text = body.strip()
+    row = insert_group_studio_message({
+        "id": _new_id("gmsg"),
+        "groupId": group_id,
+        "speakerId": "human",
+        "role": "human",
+        "intent": "human_directive",
+        "body": text,
+        "mentions": mentions or [],
+        "visibleInTimeline": True,
+    })
+    message = GroupMessage.model_validate(row)
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_MESSAGE_OPEN",
+        payload={
+            "messageId": message.id,
+            "speakerId": "human",
+            "role": "human",
+            "intent": "human_directive",
+            "visibleInTimeline": True,
+        },
+    )
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_MESSAGE_CLOSE",
+        payload={"messageId": message.id, "body": text, "outcome": "completed"},
+    )
+    if not queued and studio.status in {"discussing", "executing", "reviewing", "awaiting_human"}:
+        schedule_host_turn(group_id)
+    return message
+
+
+def interrupt_run(group_id: str, *, project_id: str) -> None:
+    """只停不说话。无活动 Run 视为成功。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    from src.group_studio.interrupt import cancel_active_run
+
+    cancel_active_run(group_id, source="stop_button")
+
+
+def pause_studio(group_id: str, *, project_id: str) -> GroupStudio:
+    """暂停工作室并取消当前 Run。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    if studio.status in {"paused", "archived", "failed"}:
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    from src.group_studio.interrupt import cancel_active_run
+
+    cancel_active_run(group_id, source="pause")
+    previous = studio.status
+    snapshot = update_group_studio_state(
+        group_id,
+        status="paused",
+        phase_before_pause=previous,
+    )
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_STATUS",
+        payload={"from": previous, "to": "paused", "reason": "pause"},
+    )
+    return _snapshot_to_model(snapshot)
+
+
+def resume_studio(group_id: str, *, project_id: str, max_turns: int | None = None) -> GroupStudio:
+    """从 paused / circuit_broken 恢复。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    if studio.status not in {"paused", "circuit_broken"}:
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    nxt = studio.phase_before_pause or "discussing"
+    if nxt not in {"discussing", "executing", "reviewing", "awaiting_human"}:
+        nxt = "discussing"
+    budget = studio.budget.model_dump(by_alias=True)
+    if max_turns is not None:
+        budget["maxTurns"] = int(max_turns)
+    snapshot = update_group_studio_state(
+        group_id,
+        status=nxt,
+        clear_phase_before_pause=True,
+        budget=budget,
+    )
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_STATUS",
+        payload={"from": studio.status, "to": nxt, "reason": "resume"},
+    )
+    updated = _snapshot_to_model(snapshot)
+    if nxt in {"discussing", "executing", "reviewing", "awaiting_human"}:
+        schedule_host_turn(group_id)
+    return updated
+
+
+def confirm_restatement(group_id: str, *, project_id: str) -> GroupStudio:
+    """人类确认 Host 复述后恢复阶段。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    if not studio.awaiting_restatement:
+        raise GroupStudioError(409, NOT_AWAITING_RESTATEMENT)
+    messages = list_group_studio_messages(group_id, limit=50)
+    restated = any(
+        item.get("role") == "host" and item.get("intent") == "restatement" and str(item.get("body") or "").strip()
+        for item in messages
+    )
+    if not restated:
+        raise GroupStudioError(409, RESTATEMENT_MISSING)
+    nxt = studio.phase_before_pause or "discussing"
+    if nxt not in {"discussing", "executing", "reviewing"}:
+        nxt = "discussing"
+    snapshot = update_group_studio_state(
+        group_id,
+        status=nxt,
+        awaiting_restatement=False,
+        clear_phase_before_pause=True,
+    )
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_STATUS",
+        payload={"from": studio.status, "to": nxt, "reason": "confirm_restatement"},
+    )
+    updated = _snapshot_to_model(snapshot)
+    schedule_host_turn(group_id)
+    return updated
 
 
 def _assert_project(studio: GroupStudio, project_id: str) -> None:

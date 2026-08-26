@@ -236,6 +236,24 @@
   gap: 8px;
 }
 
+.group-studio-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.group-studio-composer textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-bg-primary);
+  padding: 10px 12px;
+  font-size: 14px;
+  color: var(--color-text-primary);
+}
+
 .group-studio-placeholder,
 .group-studio-goal {
   margin: 0;

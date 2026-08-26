@@ -309,6 +309,53 @@ class GroupStudioRecordStore:
                 (status, now, group_id),
             )
 
+    def update_studio_state(
+        self,
+        group_id: str,
+        *,
+        status: str | None = None,
+        phase_before_pause: str | None = None,
+        clear_phase_before_pause: bool = False,
+        awaiting_restatement: bool | None = None,
+        budget: dict[str, Any] | None = None,
+        current_run_id: str | None = None,
+        clear_current_run: bool = False,
+    ) -> dict[str, Any]:
+        """部分更新工作室生命周期字段。"""
+
+        self.ensure_db()
+        now = self.utc_now()
+        assignments: list[str] = ["updated_at = ?"]
+        params: list[Any] = [now]
+        if status is not None:
+            assignments.append("status = ?")
+            params.append(status)
+        if clear_phase_before_pause:
+            assignments.append("phase_before_pause = ?")
+            params.append(None)
+        elif phase_before_pause is not None:
+            assignments.append("phase_before_pause = ?")
+            params.append(phase_before_pause)
+        if awaiting_restatement is not None:
+            assignments.append("awaiting_restatement = ?")
+            params.append(1 if awaiting_restatement else 0)
+        if budget is not None:
+            assignments.append("budget_json = ?")
+            params.append(self.dumps(budget))
+        if clear_current_run:
+            assignments.append("current_run_id = ?")
+            params.append("")
+        elif current_run_id is not None:
+            assignments.append("current_run_id = ?")
+            params.append(current_run_id)
+        params.append(group_id)
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                f"UPDATE group_studios SET {', '.join(assignments)} WHERE id = ?",
+                tuple(params),
+            )
+        return self.get_snapshot(group_id) or {}
+
     def set_current_run_id(self, group_id: str, run_id: str | None) -> None:
         self.ensure_db()
         now = self.utc_now()

@@ -10,11 +10,16 @@ import { useAppStore } from '../../stores/appStore';
 import { getErrorMessage, notifyError, notifySuccess } from '../../utils/feedback';
 import {
   addStudioMember,
+  confirmStudioRestatement,
   decideStudioApproval,
   fetchGroupStudio,
   fetchStudioFiles,
+  interruptStudio,
   muteStudioMember,
+  pauseStudio,
+  postStudioMessage,
   removeStudioMember,
+  resumeStudio,
   updateTaskCard,
   uploadStudioFile,
 } from './api';
@@ -52,6 +57,8 @@ export function GroupStudioPage() {
   const [uploading, setUploading] = useState(false);
   const [memberBusyId, setMemberBusyId] = useState('');
   const [approvalBusy, setApprovalBusy] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState('default');
   const isMac = window.electronAPI?.getPlatform() === 'darwin'
     || (!window.electronAPI && /Mac/i.test(navigator.platform));
@@ -133,6 +140,18 @@ export function GroupStudioPage() {
           }
           return { ...current, currentApproval: null };
         });
+        return;
+      }
+      if (event.type === 'GROUP_BUDGET') {
+        setStudio((current) => (
+          current ? { ...current, budget: event.payload as unknown as GroupStudioSnapshot['budget'] } : current
+        ));
+        return;
+      }
+      if (event.type === 'GROUP_CIRCUIT') {
+        setStudio((current) => (
+          current ? { ...current, status: 'circuit_broken' } : current
+        ));
       }
     },
   );
@@ -258,6 +277,73 @@ export function GroupStudioPage() {
     }
   };
 
+  const handleSend = async () => {
+    if (!studio || !draft.trim()) {
+      return;
+    }
+    setSending(true);
+    try {
+      await postStudioMessage(studio.id, { projectId: studio.projectId, body: draft.trim() });
+      setDraft('');
+      await refreshStudio(studio.id);
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法发送消息'));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handlePause = async () => {
+    if (!studio) {
+      return;
+    }
+    try {
+      const snapshot = await pauseStudio(studio.id, studio.projectId);
+      setStudio(snapshot);
+      notifySuccess('工作室已暂停');
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法暂停'));
+    }
+  };
+
+  const handleResume = async () => {
+    if (!studio) {
+      return;
+    }
+    try {
+      const snapshot = await resumeStudio(studio.id, studio.projectId);
+      setStudio(snapshot);
+      notifySuccess('工作室已继续');
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法恢复'));
+    }
+  };
+
+  const handleInterrupt = async () => {
+    if (!studio) {
+      return;
+    }
+    try {
+      await interruptStudio(studio.id, studio.projectId);
+      await refreshStudio(studio.id);
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法停止'));
+    }
+  };
+
+  const handleConfirmRestatement = async () => {
+    if (!studio) {
+      return;
+    }
+    try {
+      const snapshot = await confirmStudioRestatement(studio.id, studio.projectId);
+      setStudio(snapshot);
+      notifySuccess('已确认新目标');
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法确认复述'));
+    }
+  };
+
   const blackboard = studio?.blackboard;
   const openQuestions = (blackboard?.openQuestions ?? []).filter((item) => !item.resolved);
   const decisions = blackboard?.decisions ?? [];
@@ -273,6 +359,11 @@ export function GroupStudioPage() {
         shortcutLabel={shortcutLabel}
         title={studio?.title || '工作室'}
         statusLabel={studio ? (STATUS_LABEL[liveStatus || studio.status] || liveStatus || studio.status) : '加载中'}
+        budgetLabel={studio?.budget ? `已用 ${studio.budget.usedTurns}/${studio.budget.maxTurns} 轮` : undefined}
+        paused={studio?.status === 'paused' || studio?.status === 'circuit_broken'}
+        onPause={studio ? () => void handlePause() : undefined}
+        onResume={studio ? () => void handleResume() : undefined}
+        onInterrupt={studio ? () => void handleInterrupt() : undefined}
       />
       {error ? (
         <div className="group-studio-error">{error}</div>
@@ -335,6 +426,16 @@ export function GroupStudioPage() {
           </aside>
           <section className="group-studio-pane group-studio-pane--timeline">
             <div className="group-studio-pane__label">时间线</div>
+            {studio?.awaitingRestatement ? (
+              <div className="group-studio-approval">
+                <div className="group-studio-approval__title">目标已变更，请确认主持人复述后再继续。</div>
+                <div className="group-studio-approval__actions">
+                  <Button size="small" onClick={() => void handleConfirmRestatement()}>
+                    确认复述
+                  </Button>
+                </div>
+              </div>
+            ) : null}
             {pendingApproval ? (
               <GroupApprovalBar
                 approval={pendingApproval}
@@ -354,13 +455,30 @@ export function GroupStudioPage() {
                 {timeline.map((item) => (
                   <li key={item.id} data-role={item.role}>
                     <div className="group-studio-timeline__meta">
-                      {item.role === 'host' ? '主持人' : item.role}
+                      {item.role === 'host' ? '主持人' : item.role === 'human' ? '你' : item.role}
                     </div>
                     <div className="group-studio-timeline__body">{item.body || '…'}</div>
                   </li>
                 ))}
               </ol>
             )}
+            <div className="group-studio-composer">
+              <textarea
+                rows={3}
+                value={draft}
+                disabled={!studio || sending || studio.status === 'circuit_broken'}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder={studio?.status === 'paused' ? '暂停中，消息会先入列' : '对工作室说话…'}
+              />
+              <Button
+                size="small"
+                loading={sending}
+                disabled={sending || !studio || !draft.trim() || studio.status === 'circuit_broken'}
+                onClick={() => void handleSend()}
+              >
+                发送
+              </Button>
+            </div>
           </section>
           <aside className="group-studio-pane group-studio-pane--board">
             <div className="group-studio-pane__label">任务卡</div>

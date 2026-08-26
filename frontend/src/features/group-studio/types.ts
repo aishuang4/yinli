@@ -87,6 +87,13 @@ export interface GroupStudioApproval {
   status: 'pending' | 'approved' | 'denied' | 'cancelled';
 }
 
+export interface GroupStudioBudget {
+  maxTurns: number;
+  maxNoProgressTurns: number;
+  usedTurns: number;
+  noProgressTurns: number;
+}
+
 export interface GroupStudioSnapshot {
   id: string;
   projectId: string;
@@ -94,9 +101,11 @@ export interface GroupStudioSnapshot {
   chatSessionId: string;
   title: string;
   status: GroupStudioStatus;
+  phaseBeforePause?: string | null;
   taskCard: GroupStudioTaskCard;
   blackboard?: GroupStudioBlackboard;
   members: GroupStudioMember[];
+  budget?: GroupStudioBudget;
   currentApproval?: GroupStudioApproval | null;
   messages?: GroupStudioMessage[];
   awaitingRestatement: boolean;

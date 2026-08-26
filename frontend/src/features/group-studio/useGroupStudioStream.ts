@@ -20,7 +20,15 @@ interface StudioEvent {
   payload: Record<string, unknown>;
 }
 
-const BOARD_EVENTS = new Set(['GROUP_BLACKBOARD', 'GROUP_MEMBER', 'GROUP_FILE', 'GROUP_APPROVAL', 'GROUP_RUN_ENDED']);
+const BOARD_EVENTS = new Set([
+  'GROUP_BLACKBOARD',
+  'GROUP_MEMBER',
+  'GROUP_FILE',
+  'GROUP_APPROVAL',
+  'GROUP_RUN_ENDED',
+  'GROUP_BUDGET',
+  'GROUP_CIRCUIT',
+]);
 
 export function useGroupStudioStream(
   groupId: string | null,

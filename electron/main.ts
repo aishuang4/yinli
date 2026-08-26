@@ -665,6 +665,7 @@ interface DesktopNotificationPayload {
   kind: string;
   jobId: string;
   firingId: string;
+  groupStudioId: string;
 }
 
 function clipNotificationText(value: unknown, max: number): string {
@@ -685,6 +686,7 @@ function parseDesktopNotificationPayload(raw: unknown): DesktopNotificationPaylo
     kind: clipNotificationText(input.kind, 40),
     jobId: clipNotificationText(input.jobId, 80),
     firingId: clipNotificationText(input.firingId, 80),
+    groupStudioId: clipNotificationText(input.groupStudioId, 80),
   };
 }
 

@@ -1183,6 +1183,10 @@ def set_group_studio_status(group_id: str, status: str) -> None:
     _group_studio_record_store().set_studio_status(group_id, status)
 
 
+def update_group_studio_state(group_id: str, **changes: Any) -> dict[str, Any]:
+    return _group_studio_record_store().update_studio_state(group_id, **changes)
+
+
 def set_group_studio_current_run_id(group_id: str, run_id: str | None) -> None:
     _group_studio_record_store().set_current_run_id(group_id, run_id)
 

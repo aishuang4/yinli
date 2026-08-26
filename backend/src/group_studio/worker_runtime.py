@@ -13,11 +13,20 @@ from agentscope.permission import PermissionMode
 from src.agents.runtime_types import AgentGuardrails, AgentModelOptions, RuntimeToolScope
 from src.config.runtime_settings import get_effective_model_settings
 from src.group_studio.approvals import create_pending_approval
+from src.group_studio.circuit import on_run_finished, progress_fingerprint
 from src.group_studio.errors import GroupStudioError
 from src.group_studio.events import emit_envelope
 from src.group_studio.files import ensure_studio_dirs
 from src.group_studio.orchestrator import assert_floor_allowed, assert_serial_run
-from src.group_studio.sessions import WorkerSession, drop_session, register_session
+from src.group_studio.sessions import (
+    WorkerSession,
+    drop_run_task,
+    drop_session,
+    register_run_task,
+    register_session,
+    remember_fingerprint,
+    take_interrupt,
+)
 from src.group_studio.tools_worker import WORKER_STOP_TOOLS, WorkerToolContext, worker_tools
 from src.project_resources import resolve_project_resource_access
 from src.runtime_context import resolve_runtime_context
@@ -248,7 +257,7 @@ async def run_worker_turn(
     snapshot = get_group_studio_snapshot(group_id)
     if snapshot is None:
         return
-    assert_floor_allowed(str(snapshot.get("status") or ""))
+    assert_floor_allowed(str(snapshot.get("status") or ""), role="worker")
     assert_serial_run(snapshot.get("currentRunId"))
     member = next(
         (
@@ -318,6 +327,8 @@ async def run_worker_turn(
     outcome = "completed"
     run_status = "completed"
     error_text = ""
+    remember_fingerprint(run_id, progress_fingerprint(snapshot))
+    register_run_task(group_id, asyncio.current_task())
     try:
         next_input: Any = UserMsg(name="user", content=_worker_user_message(snapshot, member))
         last_chars_flush = 0
@@ -421,6 +432,10 @@ async def run_worker_turn(
             body_parts = [ctx.posted_body]
     except GroupStudioError:
         raise
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        run_status = "cancelled"
+        error_text = "cancelled"
     except Exception as exc:
         outcome = "failed"
         run_status = "failed"
@@ -433,6 +448,7 @@ async def run_worker_turn(
         )
     finally:
         drop_session(group_id, member_id, run_id)
+        drop_run_task(group_id)
 
     body = "".join(body_parts)
     update_group_studio_message_body(message_id, body)
@@ -442,6 +458,9 @@ async def run_worker_turn(
         run_id=run_id,
         payload={"messageId": message_id, "body": body, "outcome": outcome},
     )
+    interrupted = take_interrupt(group_id)
+    if interrupted:
+        return
     update_group_studio_run_status(run_id, run_status, error_text)
     set_group_studio_current_run_id(group_id, None)
     emit_envelope(
@@ -449,6 +468,12 @@ async def run_worker_turn(
         event_type="GROUP_RUN_ENDED",
         run_id=run_id,
         payload={"runId": run_id, "status": run_status},
+    )
+    on_run_finished(
+        group_id,
+        run_id=run_id,
+        run_status=run_status,
+        interrupt_source=interrupted,
     )
 
 

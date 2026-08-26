@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from src.agents.runtime_types import AgentGuardrails, AgentModelOptions, RuntimeToolScope
-from src.group_studio.errors import GROUP_STUDIO_DISABLED, GROUP_STUDIO_NOT_IMPLEMENTED
+from src.group_studio.errors import GROUP_STUDIO_DISABLED
 from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID, GroupStudioFromChatRequest
 from src.group_studio.settings import (
     get_group_studio_settings_public,
@@ -101,12 +101,12 @@ def test_get_by_chat_404_when_disabled(client):
     assert response.json()["detail"] == GROUP_STUDIO_DISABLED
 
 
-def test_pause_501_when_enabled(client):
+def test_pause_404_when_studio_missing(client):
     set_group_studio_settings(enabled=True)
     response = client.post("/api/group-studio/gstu_x/pause", json={"projectId": "default"})
 
-    assert response.status_code == 501
-    assert response.json()["detail"] == GROUP_STUDIO_NOT_IMPLEMENTED
+    assert response.status_code == 404
+    assert response.json()["detail"] == "not_found"
 
 
 def test_main_registers_group_studio_routes():

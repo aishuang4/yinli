@@ -1,6 +1,6 @@
-/** 工作室顶栏：返回 Chat、标题、占位控制；复制 Chat 的 Electron spacer / drag。 */
+/** 工作室顶栏：返回 Chat、预算、暂停/停止；复制 Chat 的 Electron spacer / drag。 */
 
-import { ArrowLeft, Pause, Square } from 'lucide-react';
+import { ArrowLeft, Pause, Play, Square } from 'lucide-react';
 import { Tooltip } from '@/components/design';
 
 interface StudioTopbarProps {
@@ -8,6 +8,11 @@ interface StudioTopbarProps {
   shortcutLabel: string;
   title: string;
   statusLabel: string;
+  budgetLabel?: string;
+  paused?: boolean;
+  onPause?: () => void;
+  onResume?: () => void;
+  onInterrupt?: () => void;
 }
 
 export function StudioTopbar({
@@ -15,6 +20,11 @@ export function StudioTopbar({
   shortcutLabel,
   title,
   statusLabel,
+  budgetLabel,
+  paused,
+  onPause,
+  onResume,
+  onInterrupt,
 }: StudioTopbarProps) {
   const isDesktopShell = Boolean(window.electronAPI);
   const desktopPlatform = window.electronAPI?.getPlatform();
@@ -44,27 +54,44 @@ export function StudioTopbar({
           </Tooltip>
           <div className="group-studio-topbar__title min-w-0">
             <div className="truncate text-sm font-semibold text-[var(--color-text-primary)]">{title}</div>
-            <div className="truncate text-xs text-[var(--color-text-tertiary)]">{statusLabel}</div>
+            <div className="truncate text-xs text-[var(--color-text-tertiary)]">
+              {statusLabel}
+              {budgetLabel ? ` · ${budgetLabel}` : ''}
+            </div>
           </div>
         </div>
         <div className="group-studio-topbar__right">
+          {paused ? (
+            <button
+              type="button"
+              className="icon-button group-studio-topbar__action"
+              onClick={onResume}
+              aria-label="继续工作室"
+            >
+              <Play size={15} />
+              <span>继续</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="icon-button group-studio-topbar__ghost"
+              onClick={onPause}
+              disabled={!onPause}
+              aria-label="暂停工作室"
+            >
+              <Pause size={15} />
+              <span>暂停</span>
+            </button>
+          )}
           <button
             type="button"
             className="icon-button group-studio-topbar__ghost"
-            disabled
-            aria-label="暂停工作室"
-          >
-            <Pause size={15} />
-            <span>暂停</span>
-          </button>
-          <button
-            type="button"
-            className="icon-button group-studio-topbar__ghost"
-            disabled
-            aria-label="结束工作室"
+            onClick={onInterrupt}
+            disabled={!onInterrupt}
+            aria-label="停止当前发言"
           >
             <Square size={14} />
-            <span>结束</span>
+            <span>停止</span>
           </button>
         </div>
       </header>

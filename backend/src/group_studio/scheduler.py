@@ -26,7 +26,7 @@ def schedule_host_turn(group_id: str) -> None:
         return
     status = str(snapshot.get("status") or "")
     goal = str((snapshot.get("taskCard") or {}).get("goal") or "").strip()
-    if status not in {"discussing", "executing", "reviewing"} or not goal:
+    if status not in {"discussing", "executing", "reviewing", "awaiting_human"} or not goal:
         return
     if snapshot.get("currentRunId"):
         return
@@ -44,6 +44,8 @@ def schedule_worker_turn(group_id: str, member_id: str) -> None:
         return
     snapshot = get_group_studio_snapshot(group_id, message_limit=1)
     if snapshot is None or snapshot.get("currentRunId"):
+        return
+    if str(snapshot.get("status") or "") == "awaiting_human":
         return
     try:
         loop = asyncio.get_running_loop()
