@@ -33,6 +33,39 @@ export interface GroupStudioTaskCard {
   seedFromChat: boolean;
 }
 
+export interface GroupStudioQuestion {
+  id: string;
+  text: string;
+  askedBy: string;
+  resolved: boolean;
+  resolution: string;
+}
+
+export interface GroupStudioDecision {
+  id: string;
+  text: string;
+}
+
+export interface GroupStudioBlackboard {
+  groupId: string;
+  revision: number;
+  goal: string;
+  constraints: string[];
+  decisions: GroupStudioDecision[];
+  openQuestions: GroupStudioQuestion[];
+  artifacts: string[];
+}
+
+export interface GroupStudioFile {
+  id: string;
+  groupId: string;
+  title: string;
+  path: string;
+  mediaType: string;
+  byteSize: number;
+  createdBy: string;
+}
+
 export interface GroupStudioMessage {
   id: string;
   speakerId: string;
@@ -50,6 +83,7 @@ export interface GroupStudioSnapshot {
   title: string;
   status: GroupStudioStatus;
   taskCard: GroupStudioTaskCard;
+  blackboard?: GroupStudioBlackboard;
   members: GroupStudioMember[];
   messages?: GroupStudioMessage[];
   awaitingRestatement: boolean;

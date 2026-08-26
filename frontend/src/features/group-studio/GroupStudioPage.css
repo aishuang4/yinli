@@ -118,6 +118,72 @@
   color: var(--color-text-tertiary);
 }
 
+.group-studio-member-list li[data-muted="true"] {
+  opacity: 0.65;
+}
+
+.group-studio-member-list__actions {
+  display: flex;
+  margin-left: auto;
+  gap: 4px;
+}
+
+.group-studio-member-list__actions button {
+  border: 0;
+  background: transparent;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.group-studio-member-list__actions button:disabled {
+  opacity: 0.4;
+}
+
+.group-studio-board__list,
+.group-studio-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.group-studio-board__list li,
+.group-studio-file-list li {
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.group-studio-file-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--color-text-secondary);
+}
+
+.group-studio-upload {
+  display: inline-flex;
+  align-items: center;
+  margin-top: 8px;
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.group-studio-upload input {
+  display: none;
+}
+
 .group-studio-placeholder,
 .group-studio-goal {
   margin: 0;

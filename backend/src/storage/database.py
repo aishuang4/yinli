@@ -1211,6 +1211,18 @@ def list_group_studio_events_after(group_id: str, after_seq: int) -> list[dict[s
     return _group_studio_record_store().list_events_after(group_id, after_seq)
 
 
+def replace_group_studio_blackboard(group_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().replace_blackboard_payload(group_id, payload)
+
+
+def list_group_studio_artifacts(group_id: str) -> list[dict[str, Any]]:
+    return _group_studio_record_store().list_artifacts(group_id)
+
+
+def insert_group_studio_artifact(payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().insert_artifact(payload)
+
+
 def update_workflow_run_status(
     run_id: str,
     status: str,

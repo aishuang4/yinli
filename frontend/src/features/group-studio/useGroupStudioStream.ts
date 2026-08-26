@@ -1,6 +1,6 @@
 /** 订阅工作室独立 SSE，把 MESSAGE 事件折成时间线。 */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export interface StudioTimelineMessage {
   id: string;
@@ -20,9 +20,17 @@ interface StudioEvent {
   payload: Record<string, unknown>;
 }
 
-export function useGroupStudioStream(groupId: string | null, enabled: boolean) {
+const BOARD_EVENTS = new Set(['GROUP_BLACKBOARD', 'GROUP_MEMBER', 'GROUP_FILE']);
+
+export function useGroupStudioStream(
+  groupId: string | null,
+  enabled: boolean,
+  onDomainEvent?: (event: StudioEvent) => void,
+) {
   const [messages, setMessages] = useState<StudioTimelineMessage[]>([]);
   const [status, setStatus] = useState('');
+  const domainEventRef = useRef(onDomainEvent);
+  domainEventRef.current = onDomainEvent;
 
   useEffect(() => {
     if (!groupId || !enabled) {
@@ -78,6 +86,10 @@ export function useGroupStudioStream(groupId: string | null, enabled: boolean) {
         setMessages((current) => current.map((item) => (
           item.id === messageId ? { ...item, body } : item
         )));
+        return;
+      }
+      if (BOARD_EVENTS.has(event.type)) {
+        domainEventRef.current?.(event);
       }
     };
 

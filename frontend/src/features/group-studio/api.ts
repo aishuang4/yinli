@@ -1,6 +1,11 @@
 /** 群聊工作室 HTTP 客户端。不走 Chat SSE。 */
 
-import type { GroupStudioMember, GroupStudioSettings, GroupStudioSnapshot } from './types';
+import type {
+  GroupStudioFile,
+  GroupStudioMember,
+  GroupStudioSettings,
+  GroupStudioSnapshot,
+} from './types';
 
 export async function fetchGroupStudioSettings(): Promise<GroupStudioSettings> {
   const response = await fetch('/api/settings/group-studio');
@@ -48,6 +53,67 @@ export async function updateTaskCard(groupId: string, input: {
     throw new Error(await readDetail(response, '无法更新任务卡'));
   }
   return await response.json() as GroupStudioSnapshot['taskCard'];
+}
+
+export async function muteStudioMember(groupId: string, memberId: string, input: {
+  projectId: string;
+  muted: boolean;
+}): Promise<GroupStudioMember> {
+  const response = await fetch(
+    `/api/group-studio/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/mute`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法静音成员'));
+  }
+  return await response.json() as GroupStudioMember;
+}
+
+export async function removeStudioMember(groupId: string, memberId: string, input: {
+  projectId: string;
+}): Promise<GroupStudioMember> {
+  const response = await fetch(
+    `/api/group-studio/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/remove`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法移除成员'));
+  }
+  return await response.json() as GroupStudioMember;
+}
+
+export async function fetchStudioFiles(groupId: string): Promise<GroupStudioFile[]> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/files`);
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法加载文件库'));
+  }
+  const payload = await response.json() as { files?: GroupStudioFile[] };
+  return payload.files ?? [];
+}
+
+export async function uploadStudioFile(
+  groupId: string,
+  projectId: string,
+  file: File,
+): Promise<GroupStudioFile> {
+  const body = new FormData();
+  body.append('file', file);
+  const response = await fetch(
+    `/api/group-studio/${encodeURIComponent(groupId)}/files?projectId=${encodeURIComponent(projectId)}`,
+    { method: 'POST', body },
+  );
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法上传文件'));
+  }
+  return await response.json() as GroupStudioFile;
 }
 
 export async function addStudioMember(groupId: string, input: {
@@ -109,6 +175,15 @@ export async function readDetail(response: Response, fallback: string): Promise<
   }
   if (detail === 'drafting_no_floor') {
     return '还没有目标，主持人不能开始发言';
+  }
+  if (detail === 'host_required') {
+    return '不能静音或移除主持人';
+  }
+  if (detail === 'open_questions_dropped') {
+    return '未决问题不能从黑板上抹掉';
+  }
+  if (detail === 'invalid_upload') {
+    return '文件过大或路径不合法';
   }
   if (typeof detail === 'string' && detail.trim()) {
     return detail;

@@ -107,9 +107,11 @@ def _host_system_prompt(snapshot: dict[str, Any]) -> str:
         f"目标：{card.get('goal') or '（空）'}\n"
         f"约束：{card.get('constraints') or []}\n"
         f"成员：\n{member_lines}\n"
-        "可用工具：group_read_task_card、group_read_blackboard、group_assign_floor、"
-        "group_invite_member、group_mute_member、group_remove_member、"
+        "可用工具：group_read_task_card、group_read_blackboard、group_patch_blackboard、"
+        "group_assign_floor、group_invite_member、group_mute_member、group_remove_member、"
         "group_start_execution、group_start_review、group_propose_close。\n"
+        "每次先读黑板，把已确认决策和未决问题写进 group_patch_blackboard；"
+        "不得丢掉未 resolved 的 openQuestions。\n"
         "指派工人后应立刻 group_assign_floor。方案已定后用 group_start_execution。\n"
         "不要调用 AskUser 或 FinalAnswerStart。纯文本发言会结束本轮。"
     )

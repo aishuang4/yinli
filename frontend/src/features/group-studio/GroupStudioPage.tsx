@@ -1,6 +1,6 @@
-/** 群聊工作室独立界面。任务卡与加人可编辑；主持发言仍待后续 PR。 */
+/** 群聊工作室独立界面。任务卡、黑板、成员静音与共享文件可编辑。 */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Users } from 'lucide-react';
 import { Button, Spinner } from '@/components/design';
 import { SelectField, TextAreaField } from '../../components/form';
@@ -8,9 +8,17 @@ import { useAgents } from '../../hooks/useAgents';
 import { useProjectResources } from '../../hooks/useProjectResources';
 import { useAppStore } from '../../stores/appStore';
 import { getErrorMessage, notifyError, notifySuccess } from '../../utils/feedback';
-import { addStudioMember, fetchGroupStudio, updateTaskCard } from './api';
+import {
+  addStudioMember,
+  fetchGroupStudio,
+  fetchStudioFiles,
+  muteStudioMember,
+  removeStudioMember,
+  updateTaskCard,
+  uploadStudioFile,
+} from './api';
 import { StudioTopbar } from './StudioTopbar';
-import type { GroupStudioSnapshot } from './types';
+import type { GroupStudioBlackboard, GroupStudioFile, GroupStudioMember, GroupStudioSnapshot } from './types';
 import { useGroupStudioStream } from './useGroupStudioStream';
 import './GroupStudioPage.css';
 
@@ -33,15 +41,29 @@ export function GroupStudioPage() {
   const studioSurface = useAppStore((state) => state.studioSurface);
   const { agents } = useAgents();
   const [studio, setStudio] = useState<GroupStudioSnapshot | null>(null);
+  const [files, setFiles] = useState<GroupStudioFile[]>([]);
   const { enabledByType } = useProjectResources(studio?.projectId || '');
   const [error, setError] = useState('');
   const [goal, setGoal] = useState('');
   const [savingCard, setSavingCard] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [memberBusyId, setMemberBusyId] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState('default');
   const isMac = window.electronAPI?.getPlatform() === 'darwin'
     || (!window.electronAPI && /Mac/i.test(navigator.platform));
   const shortcutLabel = isMac ? '⌘⇧G' : 'Ctrl+Shift+G';
+
+  const refreshStudio = useCallback(async (targetId: string) => {
+    const [snapshot, nextFiles] = await Promise.all([
+      fetchGroupStudio(targetId),
+      fetchStudioFiles(targetId),
+    ]);
+    setStudio(snapshot);
+    setGoal(snapshot.taskCard.goal);
+    setFiles(nextFiles);
+    return snapshot;
+  }, []);
 
   useEffect(() => {
     if (!groupId || studioSurface === 'none') {
@@ -49,26 +71,51 @@ export function GroupStudioPage() {
     }
     let mounted = true;
     setError('');
-    void fetchGroupStudio(groupId)
-      .then((snapshot) => {
-        if (mounted) {
-          setStudio(snapshot);
-          setGoal(snapshot.taskCard.goal);
-        }
-      })
-      .catch((cause: unknown) => {
-        if (mounted) {
-          setError(cause instanceof Error ? cause.message : '无法加载工作室');
-        }
-      });
+    void refreshStudio(groupId).catch((cause: unknown) => {
+      if (mounted) {
+        setError(cause instanceof Error ? cause.message : '无法加载工作室');
+      }
+    });
     return () => {
       mounted = false;
     };
-  }, [groupId, studioSurface]);
+  }, [groupId, refreshStudio, studioSurface]);
 
   const { messages, status: liveStatus } = useGroupStudioStream(
     studio?.id || groupId,
     Boolean(studio && studioSurface !== 'none'),
+    (event) => {
+      if (event.type === 'GROUP_BLACKBOARD') {
+        setStudio((current) => (
+          current
+            ? { ...current, blackboard: event.payload as unknown as GroupStudioBlackboard }
+            : current
+        ));
+        return;
+      }
+      if (event.type === 'GROUP_MEMBER') {
+        const member = event.payload as unknown as GroupStudioMember;
+        setStudio((current) => {
+          if (!current) {
+            return current;
+          }
+          const exists = current.members.some((item) => item.id === member.id);
+          return {
+            ...current,
+            members: exists
+              ? current.members.map((item) => (item.id === member.id ? member : item))
+              : [...current.members, member],
+          };
+        });
+        return;
+      }
+      if (event.type === 'GROUP_FILE') {
+        const file = event.payload as unknown as GroupStudioFile;
+        setFiles((current) => (
+          current.some((item) => item.id === file.id) ? current : [...current, file]
+        ));
+      }
+    },
   );
   const members = (studio?.members ?? []).filter((member) => member.status !== 'removed');
   const timeline = messages.length > 0
@@ -99,9 +146,7 @@ export function GroupStudioPage() {
     setSavingCard(true);
     try {
       await updateTaskCard(studio.id, { projectId: studio.projectId, goal });
-      const snapshot = await fetchGroupStudio(studio.id);
-      setStudio(snapshot);
-      setGoal(snapshot.taskCard.goal);
+      const snapshot = await refreshStudio(studio.id);
       notifySuccess(snapshot.status === 'discussing' ? '任务卡已生效，可以开始讨论。' : '任务卡已保存。');
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法更新任务卡'));
@@ -117,8 +162,7 @@ export function GroupStudioPage() {
     setAdding(true);
     try {
       await addStudioMember(studio.id, { projectId: studio.projectId, agentId: selectedAgentId });
-      const snapshot = await fetchGroupStudio(studio.id);
-      setStudio(snapshot);
+      await refreshStudio(studio.id);
       notifySuccess('已加入工作室');
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法加人'));
@@ -126,6 +170,58 @@ export function GroupStudioPage() {
       setAdding(false);
     }
   };
+
+  const handleMuteMember = async (memberId: string, muted: boolean) => {
+    if (!studio) {
+      return;
+    }
+    setMemberBusyId(memberId);
+    try {
+      await muteStudioMember(studio.id, memberId, { projectId: studio.projectId, muted });
+      await refreshStudio(studio.id);
+      notifySuccess(muted ? '已静音' : '已取消静音');
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法更新静音'));
+    } finally {
+      setMemberBusyId('');
+    }
+  };
+
+  const handleRemoveMember = async (memberId: string) => {
+    if (!studio) {
+      return;
+    }
+    setMemberBusyId(memberId);
+    try {
+      await removeStudioMember(studio.id, memberId, { projectId: studio.projectId });
+      await refreshStudio(studio.id);
+      notifySuccess('已移出工作室');
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法移除成员'));
+    } finally {
+      setMemberBusyId('');
+    }
+  };
+
+  const handleUploadFile = async (fileList: FileList | null) => {
+    if (!studio || !fileList || fileList.length === 0) {
+      return;
+    }
+    setUploading(true);
+    try {
+      await uploadStudioFile(studio.id, studio.projectId, fileList[0]);
+      await refreshStudio(studio.id);
+      notifySuccess('已加入共享文件库');
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法上传文件'));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const blackboard = studio?.blackboard;
+  const openQuestions = (blackboard?.openQuestions ?? []).filter((item) => !item.resolved);
+  const decisions = blackboard?.decisions ?? [];
 
   return (
     <div className="group-studio-shell">
@@ -148,14 +244,32 @@ export function GroupStudioPage() {
             <div className="group-studio-pane__label">成员</div>
             <ul className="group-studio-member-list">
               {members.map((member) => (
-                <li key={member.id} data-role={member.role}>
+                <li key={member.id} data-role={member.role} data-muted={member.muted}>
                   <span className="group-studio-member-list__icon"><Users size={14} /></span>
                   <span className="min-w-0 truncate">
                     {member.displayName}
                     <span className="group-studio-member-list__role">
-                      {member.role === 'host' ? '主持人' : '执行'}
+                      {member.role === 'host' ? '主持人' : member.muted ? '已静音' : '执行'}
                     </span>
                   </span>
+                  {member.role === 'worker' ? (
+                    <span className="group-studio-member-list__actions">
+                      <button
+                        type="button"
+                        disabled={memberBusyId === member.id}
+                        onClick={() => void handleMuteMember(member.id, !member.muted)}
+                      >
+                        {member.muted ? '唤醒' : '静音'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={memberBusyId === member.id}
+                        onClick={() => void handleRemoveMember(member.id)}
+                      >
+                        移除
+                      </button>
+                    </span>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -216,10 +330,66 @@ export function GroupStudioPage() {
               保存任务卡
             </Button>
             <div className="group-studio-pane__label" style={{ marginTop: 20 }}>黑板</div>
-            <p className="group-studio-placeholder">共识决策会写在这里，不翻长聊天记录。</p>
+            {decisions.length === 0 && openQuestions.length === 0 ? (
+              <p className="group-studio-placeholder">共识决策会写在这里，不翻长聊天记录。</p>
+            ) : (
+              <div className="group-studio-board">
+                {decisions.length > 0 ? (
+                  <ul className="group-studio-board__list">
+                    {decisions.map((item) => (
+                      <li key={item.id}>{item.text}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {openQuestions.length > 0 ? (
+                  <>
+                    <div className="group-studio-pane__label">未决问题</div>
+                    <ul className="group-studio-board__list">
+                      {openQuestions.map((item) => (
+                        <li key={item.id}>{item.text}</li>
+                      ))}
+                    </ul>
+                  </>
+                ) : null}
+              </div>
+            )}
+            <div className="group-studio-pane__label" style={{ marginTop: 20 }}>共享文件</div>
+            {files.length === 0 ? (
+              <p className="group-studio-placeholder">还没有文件。上传后工人和主持人都能看见。</p>
+            ) : (
+              <ul className="group-studio-file-list">
+                {files.map((item) => (
+                  <li key={item.id}>
+                    <span className="min-w-0 truncate">{item.title}</span>
+                    <span>{formatBytes(item.byteSize)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <label className="group-studio-upload">
+              <input
+                type="file"
+                disabled={uploading || !studio}
+                onChange={(event) => {
+                  void handleUploadFile(event.target.files);
+                  event.target.value = '';
+                }}
+              />
+              <span>{uploading ? '上传中…' : '上传文件'}</span>
+            </label>
           </aside>
         </div>
       )}
     </div>
   );
+}
+
+function formatBytes(size: number): string {
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }

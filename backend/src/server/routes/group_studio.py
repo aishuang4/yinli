@@ -1,13 +1,12 @@
 """群聊工作室独立路由。
 
 flag 关闭时全部 404 `group_studio_disabled`。
-from-chat / GET / by-chat 已实现；其余写接口仍 501。
-不渲染 Chat 入口，不启动 LLM。
+from-chat / 任务卡 / 成员 / 黑板 / 文件已实现；pause、消息、审批仍 501。
 """
 
 import asyncio
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from src.group_studio.errors import (
@@ -18,6 +17,7 @@ from src.group_studio.errors import (
 )
 from src.group_studio.models import (
     GroupApprovalDecisionRequest,
+    GroupArtifact,
     GroupCloseRequest,
     GroupConfirmRestatementRequest,
     GroupInterruptRequest,
@@ -39,9 +39,13 @@ from src.group_studio.service import (
     from_chat,
     get_studio,
     get_studio_by_chat_session,
+    list_studio_files,
     list_studio_messages,
+    mute_member,
     prepare_start_execution,
+    remove_member,
     update_task_card,
+    upload_studio_file,
 )
 from src.group_studio.settings import is_group_studio_enabled
 from src.group_studio.stream import format_sse, heartbeat_comment, subscribe
@@ -203,13 +207,27 @@ async def add_member_route(group_id: str, body: GroupMemberCreateRequest) -> Mem
 
 
 @router.post("/{group_id}/members/{member_id}/mute", dependencies=[EnabledDep])
-async def mute_member(group_id: str, member_id: str, _body: GroupMemberMuteRequest) -> None:
-    _not_implemented()
+async def mute_member_route(
+    group_id: str,
+    member_id: str,
+    body: GroupMemberMuteRequest,
+) -> Membership:
+    try:
+        return mute_member(group_id, member_id, body.muted, project_id=body.project_id)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.post("/{group_id}/members/{member_id}/remove", dependencies=[EnabledDep])
-async def remove_member(group_id: str, member_id: str, _body: GroupMemberRemoveRequest) -> None:
-    _not_implemented()
+async def remove_member_route(
+    group_id: str,
+    member_id: str,
+    body: GroupMemberRemoveRequest,
+) -> Membership:
+    try:
+        return remove_member(group_id, member_id, project_id=body.project_id)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.post("/{group_id}/close", dependencies=[EnabledDep])
@@ -242,10 +260,20 @@ async def start_review(group_id: str, _body: GroupStartPhaseRequest) -> None:
 
 
 @router.post("/{group_id}/files", dependencies=[EnabledDep])
-async def upload_file(group_id: str) -> None:
-    _not_implemented()
+async def upload_file(
+    group_id: str,
+    file: UploadFile = File(...),
+    project_id: str = Query("", alias="projectId"),
+) -> GroupArtifact:
+    try:
+        return await upload_studio_file(group_id, file, project_id=project_id)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
 
 
 @router.get("/{group_id}/files", dependencies=[EnabledDep])
-async def list_files(group_id: str) -> None:
-    _not_implemented()
+async def list_files(group_id: str) -> dict:
+    try:
+        return {"files": list_studio_files(group_id)}
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc

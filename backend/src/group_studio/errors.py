@@ -21,6 +21,8 @@ GOAL_REQUIRED = "goal_required"
 CROSS_PROJECT_SESSION = "cross_project_session"
 WORKER_SESSION_LOST = "worker_session_lost"
 APPROVAL_BATCH_INCOMPLETE = "approval_batch_incomplete"
+OPEN_QUESTIONS_DROPPED = "open_questions_dropped"
+INVALID_UPLOAD = "invalid_upload"
 
 
 GROUP_STUDIO_NOT_FOUND = "not_found"

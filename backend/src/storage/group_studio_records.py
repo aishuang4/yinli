@@ -446,6 +446,86 @@ class GroupStudioRecordStore:
             "createdAt": now,
         }
 
+    def replace_blackboard_payload(self, group_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT revision FROM group_blackboards WHERE group_id = ?",
+                (group_id,),
+            ).fetchone()
+            if row is None:
+                return {}
+            revision = int(row["revision"] or 1) + 1
+            conn.execute(
+                """
+                UPDATE group_blackboards
+                SET revision = ?, payload_json = ?, updated_at = ?
+                WHERE group_id = ?
+                """,
+                (revision, self.dumps(payload), now, group_id),
+            )
+        snapshot = self.get_snapshot(group_id) or {}
+        return snapshot.get("blackboard") or {}
+
+    def list_artifacts(self, group_id: str) -> list[dict[str, Any]]:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM group_artifacts
+                WHERE group_id = ?
+                ORDER BY created_at ASC
+                """,
+                (group_id,),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "groupId": row["group_id"],
+                "title": row["title"],
+                "path": row["path"],
+                "mediaType": row["media_type"] or "",
+                "byteSize": int(row["byte_size"] or 0),
+                "createdBy": row["created_by"] or "",
+                "createdAt": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def insert_artifact(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.ensure_db()
+        now = payload.get("createdAt") or self.utc_now()
+        artifact_id = payload.get("id") or f"gart_{now}"
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO group_artifacts (
+                    id, group_id, title, path, media_type, byte_size, created_by, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    artifact_id,
+                    payload["groupId"],
+                    payload.get("title") or payload.get("path") or "file",
+                    payload["path"],
+                    payload.get("mediaType") or "",
+                    int(payload.get("byteSize") or 0),
+                    payload.get("createdBy") or "",
+                    now,
+                ),
+            )
+        return {
+            "id": artifact_id,
+            "groupId": payload["groupId"],
+            "title": payload.get("title") or payload.get("path") or "file",
+            "path": payload["path"],
+            "mediaType": payload.get("mediaType") or "",
+            "byteSize": int(payload.get("byteSize") or 0),
+            "createdBy": payload.get("createdBy") or "",
+            "createdAt": now,
+        }
+
     def list_events_after(self, group_id: str, after_seq: int) -> list[dict[str, Any]]:
         self.ensure_db()
         with self.lock, self.connect() as conn:

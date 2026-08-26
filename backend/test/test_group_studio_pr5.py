@@ -122,7 +122,6 @@ def test_host_spec_has_no_default_tools(client):
     assert spec.parent_agent_id == GROUP_STUDIO_HOST_AGENT_ID
     assert spec.tool_name_denylist >= {"AskUser", "FinalAnswerStart"}
     names = {tool.name for tool in tools}
-    assert "group_patch_blackboard" not in names
     assert "group_assign_floor" in names
     assert HOST_STOP_TOOLS <= names
     assert spec.model_options.max_react_iters == 16

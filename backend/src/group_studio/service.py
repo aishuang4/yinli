@@ -1,10 +1,11 @@
-"""群聊工作室应用服务：from-chat 绑定、快照读取。不启动 LLM。"""
+"""群聊工作室应用服务：绑定、任务卡、成员、黑板与文件库。"""
 
 from __future__ import annotations
 
 import uuid
 from pathlib import Path
 
+from src.group_studio.blackboard import merge_blackboard
 from src.group_studio.errors import (
     AGENT_NOT_BOUND,
     CHAT_RUN_ACTIVE,
@@ -17,8 +18,10 @@ from src.group_studio.errors import (
     MEMBER_CAP,
     GroupStudioError,
 )
+from src.group_studio.files import ensure_studio_dirs, save_studio_upload
 from src.group_studio.models import (
     GROUP_STUDIO_HOST_AGENT_ID,
+    GroupArtifact,
     GroupMemberCreateRequest,
     GroupStudio,
     GroupStudioFromChatRequest,
@@ -49,12 +52,19 @@ from src.storage.database import (
     create_group_studio_from_chat,
     find_group_studio_member_by_agent,
     get_active_group_studio_by_chat_session,
+    get_group_studio_member,
     get_group_studio_snapshot,
+    get_project,
     group_studio_has_runs,
+    insert_group_studio_artifact,
     insert_group_studio_member,
     list_agents,
     list_chat_runs_by_statuses,
+    list_group_studio_artifacts,
     list_group_studio_messages,
+    replace_group_studio_blackboard,
+    set_group_studio_member_muted,
+    set_group_studio_member_removed,
 )
 
 
@@ -100,16 +110,6 @@ def _message_count(session_id: str) -> int:
     if session is not None:
         return int(session.message_count or 0)
     return len(store.messages.get(session_id) or [])
-
-
-def _studio_workspace(project_root: Path, group_id: str) -> Path:
-    return project_root / ".agent-workstation" / "group-studios" / group_id
-
-
-def _ensure_workspace_dirs(project_root: Path, group_id: str) -> None:
-    root = _studio_workspace(project_root, group_id)
-    for name in ("inputs", "workspace", "outputs"):
-        (root / name).mkdir(parents=True, exist_ok=True)
 
 
 def _snapshot_to_model(raw: dict) -> GroupStudio:
@@ -276,7 +276,7 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
         "artifacts": artifacts,
     }
     snapshot = create_group_studio_from_chat(payload)
-    _ensure_workspace_dirs(context.project_root, snapshot["id"])
+    ensure_studio_dirs(context.project_root, snapshot["id"])
     studio = _snapshot_to_model(snapshot)
     if studio.status == "discussing" and studio.task_card.goal.strip():
         schedule_host_turn(studio.id)
@@ -445,4 +445,163 @@ def prepare_start_execution(group_id: str, project_id: str) -> None:
     if project_id and project_id != studio.project_id:
         raise GroupStudioError(422, CROSS_PROJECT_SESSION)
     assert_can_start_execution(studio.status, studio.task_card.goal)
+
+
+def _assert_project(studio: GroupStudio, project_id: str) -> None:
+    if project_id and project_id != studio.project_id:
+        raise GroupStudioError(422, CROSS_PROJECT_SESSION)
+
+
+def _blackboard_inner(payload: dict) -> dict:
+    return {
+        "taskCardId": payload.get("taskCardId") or "",
+        "goal": payload.get("goal") or "",
+        "constraints": list(payload.get("constraints") or []),
+        "decisions": list(payload.get("decisions") or []),
+        "openQuestions": list(payload.get("openQuestions") or []),
+        "artifacts": list(payload.get("artifacts") or []),
+    }
+
+
+def patch_blackboard(
+    group_id: str,
+    patch: dict,
+    *,
+    asked_by: str = "host",
+    source_message_id: str | None = None,
+    source_run_id: str | None = None,
+) -> dict:
+    """合并黑板补丁。丢弃未决问题会抛 `open_questions_dropped`。"""
+
+    studio = _load_studio(group_id)
+    assert_can_mutate(studio.status)
+    current = studio.blackboard.model_dump(by_alias=True)
+    merged = merge_blackboard(
+        current,
+        patch,
+        asked_by=asked_by,
+        source_message_id=source_message_id,
+        source_run_id=source_run_id,
+    )
+    inner = _blackboard_inner(merged)
+    if inner == _blackboard_inner(current):
+        return current
+    board = replace_group_studio_blackboard(group_id, inner)
+    if not board:
+        raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_BLACKBOARD",
+        run_id=source_run_id,
+        payload=board,
+    )
+    return board
+
+
+def mute_member(
+    group_id: str,
+    member_id: str,
+    muted: bool,
+    *,
+    project_id: str = "",
+    run_id: str | None = None,
+) -> Membership:
+    """静音或唤醒工人。主持人不可静音。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    assert_can_mutate(studio.status)
+    member = get_group_studio_member(group_id, member_id)
+    if member is None or member.get("status") == "removed":
+        raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
+    if member.get("role") == "host":
+        raise GroupStudioError(409, HOST_REQUIRED)
+    updated = set_group_studio_member_muted(group_id, member_id, muted)
+    if updated is None:
+        raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
+    membership = Membership.model_validate(updated)
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_MEMBER",
+        run_id=run_id,
+        payload={**membership.model_dump(by_alias=True), "change": "muted" if muted else "unmuted"},
+    )
+    return membership
+
+
+def remove_member(
+    group_id: str,
+    member_id: str,
+    *,
+    project_id: str = "",
+    run_id: str | None = None,
+) -> Membership:
+    """移除工人。主持人不可移除。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    assert_can_mutate(studio.status)
+    member = get_group_studio_member(group_id, member_id)
+    if member is None:
+        raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
+    if member.get("role") == "host":
+        raise GroupStudioError(409, HOST_REQUIRED)
+    if member.get("status") == "removed":
+        return Membership.model_validate(member)
+    updated = set_group_studio_member_removed(group_id, member_id)
+    if updated is None:
+        raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
+    membership = Membership.model_validate(updated)
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_MEMBER",
+        run_id=run_id,
+        payload={**membership.model_dump(by_alias=True), "change": "removed"},
+    )
+    return membership
+
+
+def list_studio_files(group_id: str) -> list[dict]:
+    _load_studio(group_id)
+    return list_group_studio_artifacts(group_id)
+
+
+async def upload_studio_file(
+    group_id: str,
+    upload,
+    *,
+    project_id: str = "",
+    created_by: str = "human",
+) -> GroupArtifact:
+    """上传到工作室 inputs/，并写入黑板 artifact 列表。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    assert_can_mutate(studio.status)
+    project = get_project(studio.project_id)
+    if project is None:
+        raise GroupStudioError(422, CROSS_PROJECT_SESSION)
+    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
+    stored = await save_studio_upload(
+        project_root=project_root,
+        group_id=group_id,
+        upload=upload,
+    )
+    row = insert_group_studio_artifact({
+        "id": _new_id("gart"),
+        "groupId": group_id,
+        "title": stored["title"],
+        "path": stored["path"],
+        "mediaType": stored["mediaType"],
+        "byteSize": stored["byteSize"],
+        "createdBy": created_by,
+    })
+    artifact = GroupArtifact.model_validate(row)
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_FILE",
+        payload=artifact.model_dump(by_alias=True),
+    )
+    patch_blackboard(group_id, {"addArtifactIds": [artifact.id]})
+    return artifact
 

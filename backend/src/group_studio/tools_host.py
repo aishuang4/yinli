@@ -1,4 +1,4 @@
-"""Host 控场工具。PR 5 不含 group_patch_blackboard。"""
+"""Host 控场工具，含黑板写入。"""
 
 from __future__ import annotations
 
@@ -16,8 +16,6 @@ from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID
 from src.storage.database import (
     get_group_studio_member,
     get_group_studio_snapshot,
-    set_group_studio_member_muted,
-    set_group_studio_member_removed,
     set_group_studio_status,
 )
 
@@ -100,6 +98,98 @@ class GroupReadBlackboard(HostTool):
         return self.success({"blackboard": snapshot.get("blackboard")})
 
 
+class GroupPatchBlackboard(HostTool):
+    name = "group_patch_blackboard"
+    description = (
+        "Update the consensus blackboard. Never drop unresolved openQuestions; "
+        "use resolveQuestions or keep every unresolved id in a full replacement."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "addDecisions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            },
+            "addQuestions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            },
+            "resolveQuestions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "resolution": {"type": "string"},
+                    },
+                    "required": ["id"],
+                },
+            },
+            "openQuestions": {
+                "type": "array",
+                "items": {"type": "object"},
+            },
+            "addArtifactIds": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "goal": {"type": "string"},
+            "constraints": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": [],
+    }
+
+    async def __call__(
+        self,
+        addDecisions: list | None = None,
+        addQuestions: list | None = None,
+        resolveQuestions: list | None = None,
+        openQuestions: list | None = None,
+        addArtifactIds: list | None = None,
+        goal: str | None = None,
+        constraints: list | None = None,
+    ) -> ToolChunk:
+        from src.group_studio.service import patch_blackboard
+
+        patch: dict[str, Any] = {}
+        if addDecisions:
+            patch["addDecisions"] = addDecisions
+        if addQuestions:
+            patch["addQuestions"] = addQuestions
+        if resolveQuestions:
+            patch["resolveQuestions"] = resolveQuestions
+        if openQuestions is not None:
+            patch["openQuestions"] = openQuestions
+        if addArtifactIds:
+            patch["addArtifactIds"] = addArtifactIds
+        if goal is not None:
+            patch["goal"] = goal
+        if constraints is not None:
+            patch["constraints"] = constraints
+        try:
+            board = patch_blackboard(
+                self.ctx.group_id,
+                patch,
+                asked_by="host",
+                source_run_id=self.ctx.run_id or None,
+            )
+        except GroupStudioError as exc:
+            return self.error(exc.code)
+        return self.success({"blackboard": board})
+
+
 class GroupAssignFloor(HostTool):
     name = "group_assign_floor"
     description = "Give the next speaking/working turn to one worker member. Ends this host turn."
@@ -174,19 +264,18 @@ class GroupMuteMember(HostTool):
     }
 
     async def __call__(self, memberId: str, muted: bool) -> ToolChunk:
-        member = get_group_studio_member(self.ctx.group_id, memberId)
-        if member is None:
-            return self.error("member_not_found")
-        if member.get("role") == "host":
-            return self.error(HOST_REQUIRED)
-        updated = set_group_studio_member_muted(self.ctx.group_id, memberId, muted)
-        emit_envelope(
-            group_id=self.ctx.group_id,
-            event_type="GROUP_MEMBER",
-            run_id=self.ctx.run_id,
-            payload={**(updated or member), "change": "muted" if muted else "unmuted"},
-        )
-        return self.success({"member": updated})
+        from src.group_studio.service import mute_member
+
+        try:
+            membership = mute_member(
+                self.ctx.group_id,
+                memberId,
+                muted,
+                run_id=self.ctx.run_id or None,
+            )
+        except GroupStudioError as exc:
+            return self.error(exc.code)
+        return self.success({"member": membership.model_dump(by_alias=True)})
 
 
 class GroupRemoveMember(HostTool):
@@ -199,19 +288,17 @@ class GroupRemoveMember(HostTool):
     }
 
     async def __call__(self, memberId: str) -> ToolChunk:
-        member = get_group_studio_member(self.ctx.group_id, memberId)
-        if member is None:
-            return self.error("member_not_found")
-        if member.get("role") == "host":
-            return self.error(HOST_REQUIRED)
-        updated = set_group_studio_member_removed(self.ctx.group_id, memberId)
-        emit_envelope(
-            group_id=self.ctx.group_id,
-            event_type="GROUP_MEMBER",
-            run_id=self.ctx.run_id,
-            payload={**(updated or member), "change": "removed"},
-        )
-        return self.success({"member": updated})
+        from src.group_studio.service import remove_member
+
+        try:
+            membership = remove_member(
+                self.ctx.group_id,
+                memberId,
+                run_id=self.ctx.run_id or None,
+            )
+        except GroupStudioError as exc:
+            return self.error(exc.code)
+        return self.success({"member": membership.model_dump(by_alias=True)})
 
 
 class GroupStartExecution(HostTool):
@@ -279,11 +366,12 @@ class GroupProposeClose(HostTool):
 
 
 def host_tools(ctx: HostToolContext) -> list[HostTool]:
-    """PR 5 Host 工具集，不含黑板写入。"""
+    """Host 控场工具集，含黑板写入。"""
 
     return [
         GroupReadTaskCard(ctx),
         GroupReadBlackboard(ctx),
+        GroupPatchBlackboard(ctx),
         GroupAssignFloor(ctx),
         GroupInviteMember(ctx),
         GroupMuteMember(ctx),
