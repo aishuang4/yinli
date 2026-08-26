@@ -1167,6 +1167,50 @@ def apply_group_studio_task_card_update(
     )
 
 
+def get_group_studio_member(group_id: str, member_id: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().get_member(group_id, member_id)
+
+
+def set_group_studio_member_muted(group_id: str, member_id: str, muted: bool) -> dict[str, Any] | None:
+    return _group_studio_record_store().set_member_muted(group_id, member_id, muted)
+
+
+def set_group_studio_member_removed(group_id: str, member_id: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().set_member_removed(group_id, member_id)
+
+
+def set_group_studio_status(group_id: str, status: str) -> None:
+    _group_studio_record_store().set_studio_status(group_id, status)
+
+
+def set_group_studio_current_run_id(group_id: str, run_id: str | None) -> None:
+    _group_studio_record_store().set_current_run_id(group_id, run_id)
+
+
+def insert_group_studio_run(payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().insert_run(payload)
+
+
+def update_group_studio_run_status(run_id: str, status: str, error: str = "") -> None:
+    _group_studio_record_store().update_run_status(run_id, status, error)
+
+
+def insert_group_studio_message(payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().insert_message(payload)
+
+
+def update_group_studio_message_body(message_id: str, body: str) -> None:
+    _group_studio_record_store().update_message_body(message_id, body)
+
+
+def append_group_studio_event(payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().append_event(payload)
+
+
+def list_group_studio_events_after(group_id: str, after_seq: int) -> list[dict[str, Any]]:
+    return _group_studio_record_store().list_events_after(group_id, after_seq)
+
+
 def update_workflow_run_status(
     run_id: str,
     status: str,

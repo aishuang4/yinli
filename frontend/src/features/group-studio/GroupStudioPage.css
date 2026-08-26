@@ -151,6 +151,28 @@
   margin-top: 8px;
 }
 
+.group-studio-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.group-studio-timeline__meta {
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.group-studio-timeline__body {
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--color-text-primary);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .group-studio-shell,
   .group-studio-columns,

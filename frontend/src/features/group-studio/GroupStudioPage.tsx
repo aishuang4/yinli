@@ -11,6 +11,7 @@ import { getErrorMessage, notifyError, notifySuccess } from '../../utils/feedbac
 import { addStudioMember, fetchGroupStudio, updateTaskCard } from './api';
 import { StudioTopbar } from './StudioTopbar';
 import type { GroupStudioSnapshot } from './types';
+import { useGroupStudioStream } from './useGroupStudioStream';
 import './GroupStudioPage.css';
 
 const STATUS_LABEL: Record<string, string> = {
@@ -65,7 +66,14 @@ export function GroupStudioPage() {
     };
   }, [groupId, studioSurface]);
 
+  const { messages, status: liveStatus } = useGroupStudioStream(
+    studio?.id || groupId,
+    Boolean(studio && studioSurface !== 'none'),
+  );
   const members = (studio?.members ?? []).filter((member) => member.status !== 'removed');
+  const timeline = messages.length > 0
+    ? messages
+    : (studio?.messages ?? []).filter((item) => item.visibleInTimeline !== false);
   const memberOptions = useMemo(() => {
     const occupied = new Set(
       (studio?.members ?? [])
@@ -125,7 +133,7 @@ export function GroupStudioPage() {
         onBack={closeGroupStudio}
         shortcutLabel={shortcutLabel}
         title={studio?.title || '工作室'}
-        statusLabel={studio ? (STATUS_LABEL[studio.status] || studio.status) : '加载中'}
+        statusLabel={studio ? (STATUS_LABEL[liveStatus || studio.status] || liveStatus || studio.status) : '加载中'}
       />
       {error ? (
         <div className="group-studio-error">{error}</div>
@@ -170,11 +178,24 @@ export function GroupStudioPage() {
           </aside>
           <section className="group-studio-pane group-studio-pane--timeline">
             <div className="group-studio-pane__label">时间线</div>
-            <p className="group-studio-placeholder">
-              {studio?.status === 'drafting'
-                ? '先在右侧填写目标。没有目标时主持人不发言。'
-                : '讨论与执行过程将显示在这里。主持人发言尚未接通。'}
-            </p>
+            {timeline.length === 0 ? (
+              <p className="group-studio-placeholder">
+                {studio?.status === 'drafting'
+                  ? '先在右侧填写目标。没有目标时主持人不发言。'
+                  : '主持人正在准备发言，或还没有消息。'}
+              </p>
+            ) : (
+              <ol className="group-studio-timeline">
+                {timeline.map((item) => (
+                  <li key={item.id} data-role={item.role}>
+                    <div className="group-studio-timeline__meta">
+                      {item.role === 'host' ? '主持人' : item.role}
+                    </div>
+                    <div className="group-studio-timeline__body">{item.body || '…'}</div>
+                  </li>
+                ))}
+              </ol>
+            )}
           </section>
           <aside className="group-studio-pane group-studio-pane--board">
             <div className="group-studio-pane__label">任务卡</div>

@@ -33,6 +33,15 @@ export interface GroupStudioTaskCard {
   seedFromChat: boolean;
 }
 
+export interface GroupStudioMessage {
+  id: string;
+  speakerId: string;
+  role: string;
+  intent: string;
+  body: string;
+  visibleInTimeline: boolean;
+}
+
 export interface GroupStudioSnapshot {
   id: string;
   projectId: string;
@@ -42,6 +51,7 @@ export interface GroupStudioSnapshot {
   status: GroupStudioStatus;
   taskCard: GroupStudioTaskCard;
   members: GroupStudioMember[];
+  messages?: GroupStudioMessage[];
   awaitingRestatement: boolean;
   createdAt: string;
   updatedAt: string;

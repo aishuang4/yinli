@@ -5,7 +5,10 @@ from-chat / GET / by-chat 已实现；其余写接口仍 501。
 不渲染 Chat 入口，不启动 LLM。
 """
 
+import asyncio
+
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 
 from src.group_studio.errors import (
     GROUP_STUDIO_DISABLED,
@@ -41,6 +44,8 @@ from src.group_studio.service import (
     update_task_card,
 )
 from src.group_studio.settings import is_group_studio_enabled
+from src.group_studio.stream import format_sse, heartbeat_comment, subscribe
+from src.storage.database import get_group_studio_snapshot, list_group_studio_events_after
 
 router = APIRouter()
 
@@ -97,10 +102,68 @@ async def list_messages(group_id: str, before: str | None = None, limit: int = 1
 
 
 @router.get("/{group_id}/events", dependencies=[EnabledDep])
-async def stream_events(group_id: str, afterSeq: int | None = None) -> None:
+async def stream_events(group_id: str, afterSeq: int | None = None):
     """独立 SSE。契约见 docs/group-studio-event-contract.md。"""
 
-    _not_implemented()
+    snapshot = get_group_studio_snapshot(group_id)
+    if snapshot is None:
+        raise group_studio_http_error(404, "not_found")
+
+    async def event_stream():
+        state = dict(snapshot)
+        yield format_sse({
+            "seq": None,
+            "groupId": group_id,
+            "runId": snapshot.get("currentRunId"),
+            "type": "GROUP_STUDIO_STATE",
+            "status": snapshot.get("status") or "",
+            "payload": state,
+            "createdAt": snapshot.get("updatedAt") or snapshot.get("createdAt"),
+        })
+        after = int(afterSeq or 0)
+        for event in list_group_studio_events_after(group_id, after):
+            yield format_sse(event)
+        async for live in subscribe(group_id):
+            seq = live.get("seq")
+            if seq is not None and int(seq) <= after:
+                continue
+            yield format_sse(live)
+
+    return StreamingResponse(
+        _heartbeat_wrapper(event_stream()),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def _heartbeat_wrapper(source):
+    """在订阅空闲时输出 : heartbeat。"""
+
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def pump():
+        async for chunk in source:
+            await queue.put(chunk)
+        await queue.put(None)
+
+    task = asyncio.create_task(pump())
+    try:
+        while True:
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=15)
+            except asyncio.TimeoutError:
+                yield heartbeat_comment()
+                continue
+            if item is None:
+                break
+            yield item
+    finally:
+        task.cancel()
+
 
 
 @router.post("/{group_id}/pause", dependencies=[EnabledDep])

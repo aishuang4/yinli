@@ -40,6 +40,8 @@ from src.server.routes.chat.store import (
     _load_store,
     ensure_chat_session,
 )
+from src.group_studio.events import emit_envelope
+from src.group_studio.scheduler import schedule_host_turn
 from src.storage.database import (
     apply_group_studio_task_card_update,
     archive_group_studio,
@@ -275,7 +277,10 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
     }
     snapshot = create_group_studio_from_chat(payload)
     _ensure_workspace_dirs(context.project_root, snapshot["id"])
-    return _snapshot_to_model(snapshot)
+    studio = _snapshot_to_model(snapshot)
+    if studio.status == "discussing" and studio.task_card.goal.strip():
+        schedule_host_turn(studio.id)
+    return studio
 
 
 def archive_studio_for_session_delete(group_id: str) -> None:
@@ -369,7 +374,21 @@ def update_task_card(group_id: str, request: GroupTaskCardUpdateRequest) -> Task
     )
     if not snapshot:
         raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
-    return _snapshot_to_model(snapshot).task_card
+    updated = _snapshot_to_model(snapshot)
+    if studio.status != updated.status:
+        emit_envelope(
+            group_id=group_id,
+            event_type="GROUP_STATUS",
+            payload={"from": studio.status, "to": updated.status, "reason": "task_card"},
+        )
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_TASK_CARD",
+        payload=updated.task_card.model_dump(by_alias=True),
+    )
+    if studio.status == "drafting" and updated.status == "discussing":
+        schedule_host_turn(group_id)
+    return updated.task_card
 
 
 def add_member(group_id: str, request: GroupMemberCreateRequest) -> Membership:
@@ -410,7 +429,13 @@ def add_member(group_id: str, request: GroupMemberCreateRequest) -> Membership:
         "muted": False,
         "crashCount": 0,
     })
-    return Membership.model_validate(row)
+    membership = Membership.model_validate(row)
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_MEMBER",
+        payload={**membership.model_dump(by_alias=True), "change": "joined"},
+    )
+    return membership
 
 
 def prepare_start_execution(group_id: str, project_id: str) -> None:

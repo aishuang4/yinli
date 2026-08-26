@@ -263,6 +263,213 @@ class GroupStudioRecordStore:
             raise RuntimeError("member insert failed")
         return found
 
+    def get_member(self, group_id: str, member_id: str) -> dict[str, Any] | None:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM group_memberships WHERE group_id = ? AND id = ?",
+                (group_id, member_id),
+            ).fetchone()
+        return self._member_from_row(row) if row is not None else None
+
+    def set_member_muted(self, group_id: str, member_id: str, muted: bool) -> dict[str, Any] | None:
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE group_memberships
+                SET muted = ?, updated_at = ?
+                WHERE group_id = ? AND id = ?
+                """,
+                (1 if muted else 0, now, group_id, member_id),
+            )
+        return self.get_member(group_id, member_id)
+
+    def set_member_removed(self, group_id: str, member_id: str) -> dict[str, Any] | None:
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE group_memberships
+                SET status = 'removed', updated_at = ?
+                WHERE group_id = ? AND id = ?
+                """,
+                (now, group_id, member_id),
+            )
+        return self.get_member(group_id, member_id)
+
+    def set_studio_status(self, group_id: str, status: str) -> None:
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                "UPDATE group_studios SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now, group_id),
+            )
+
+    def set_current_run_id(self, group_id: str, run_id: str | None) -> None:
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                "UPDATE group_studios SET current_run_id = ?, updated_at = ? WHERE id = ?",
+                (run_id or "", now, group_id),
+            )
+
+    def insert_run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.ensure_db()
+        now = self.utc_now()
+        run_id = payload["id"]
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO group_runs (
+                    id, group_id, kind, status, speaker_member_id, error,
+                    token_input, token_output, created_at, completed_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    payload["groupId"],
+                    payload.get("kind") or "discussion",
+                    payload.get("status") or "running",
+                    payload.get("speakerMemberId") or "",
+                    "",
+                    0,
+                    0,
+                    now,
+                    None,
+                    now,
+                ),
+            )
+        return {"id": run_id, "createdAt": now}
+
+    def update_run_status(self, run_id: str, status: str, error: str = "") -> None:
+        self.ensure_db()
+        now = self.utc_now()
+        completed = now if status in {"completed", "cancelled", "failed"} else None
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE group_runs
+                SET status = ?, error = ?, completed_at = COALESCE(?, completed_at), updated_at = ?
+                WHERE id = ?
+                """,
+                (status, error, completed, now, run_id),
+            )
+
+    def next_message_sort_order(self, group_id: str) -> int:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) AS n FROM group_messages WHERE group_id = ?",
+                (group_id,),
+            ).fetchone()
+        return int(row["n"] if row is not None else 0) + 1
+
+    def insert_message(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.ensure_db()
+        now = payload.get("createdAt") or self.utc_now()
+        sort_order = int(payload.get("sortOrder") or self.next_message_sort_order(payload["groupId"]))
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO group_messages (
+                    id, group_id, run_id, speaker_id, role, intent, body,
+                    mentions_json, attachments_json, visible_in_timeline,
+                    created_at, sort_order
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["id"],
+                    payload["groupId"],
+                    payload.get("runId") or "",
+                    payload["speakerId"],
+                    payload["role"],
+                    payload.get("intent") or "discuss",
+                    payload.get("body") or "",
+                    self.dumps(payload.get("mentions") or []),
+                    self.dumps(payload.get("attachments") or []),
+                    1 if payload.get("visibleInTimeline", True) else 0,
+                    now,
+                    sort_order,
+                ),
+            )
+        return {**payload, "createdAt": now, "sortOrder": sort_order}
+
+    def update_message_body(self, message_id: str, body: str) -> None:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                "UPDATE group_messages SET body = ? WHERE id = ?",
+                (body, message_id),
+            )
+
+    def append_event(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """持久化一条非 DELTA 事件，返回带 seq 的信封。"""
+
+        self.ensure_db()
+        now = payload.get("createdAt") or self.utc_now()
+        event_id = payload.get("id") or f"gevt_{now}"
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) AS n FROM group_studio_events WHERE group_id = ?",
+                (payload["groupId"],),
+            ).fetchone()
+            seq = int(row["n"] if row is not None else 0) + 1
+            conn.execute(
+                """
+                INSERT INTO group_studio_events (
+                    id, group_id, run_id, event_type, status, payload, created_at, sort_order
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event_id,
+                    payload["groupId"],
+                    payload.get("runId") or "",
+                    payload["type"],
+                    payload.get("status") or "",
+                    self.dumps(payload.get("payload") or {}),
+                    now,
+                    seq,
+                ),
+            )
+        return {
+            "seq": seq,
+            "groupId": payload["groupId"],
+            "runId": payload.get("runId") or None,
+            "type": payload["type"],
+            "status": payload.get("status") or "",
+            "payload": payload.get("payload") or {},
+            "createdAt": now,
+        }
+
+    def list_events_after(self, group_id: str, after_seq: int) -> list[dict[str, Any]]:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM group_studio_events
+                WHERE group_id = ? AND sort_order > ?
+                ORDER BY sort_order ASC
+                """,
+                (group_id, after_seq),
+            ).fetchall()
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            events.append({
+                "seq": int(row["sort_order"]),
+                "groupId": row["group_id"],
+                "runId": row["run_id"] or None,
+                "type": row["event_type"],
+                "status": row["status"] or "",
+                "payload": self.loads(row["payload"], {}),
+                "createdAt": row["created_at"],
+            })
+        return events
+
     def apply_task_card_update(
         self,
         group_id: str,
