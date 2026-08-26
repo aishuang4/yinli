@@ -5,7 +5,7 @@
  */
 
 import { Bot, HelpCircle, List, Plus, Trash2, WandSparkles } from 'lucide-react';
-import { Button } from '@/components/design';
+import { Button, Tag } from '@/components/design';
 import {
   WorkbenchEmptyPanel,
   WorkbenchList,
@@ -85,7 +85,7 @@ export function AgentLandingPage({
                 agent={agent}
                 last={index === chatAgents.length - 1}
                 onSelect={() => onSelectAgent(agent.id)}
-                onDelete={() => onDeleteAgent(agent.id)}
+                onDelete={agent.systemManaged ? undefined : () => onDeleteAgent(agent.id)}
               />
             ))}
           </WorkbenchList>
@@ -106,7 +106,7 @@ export function AgentLandingPage({
                 agent={agent}
                 last={index === jobAgents.length - 1}
                 onSelect={() => onSelectAgent(agent.id)}
-                onDelete={() => onDeleteAgent(agent.id)}
+                onDelete={agent.systemManaged ? undefined : () => onDeleteAgent(agent.id)}
               />
             ))}
           </WorkbenchList>
@@ -138,6 +138,9 @@ function AgentListRow({
       onSelect={onSelect}
       trailing={(
         <>
+          {agent.systemManaged ? (
+            <Tag size="small" color="transparent">系统内置</Tag>
+          ) : null}
           <button
             type="button"
             onClick={onSelect}

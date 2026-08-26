@@ -25,6 +25,7 @@
 - `docs/notifications.md`：通知通道抽象、应用内 inbox、完成时提醒框 / 系统通知、独立 SSE 与外部通道扩展方式。不经过 Chat SSE。
 - `docs/scheduled-jobs-design.md`：对话登记定时任务、待确认后启用、到期执行与通知。
 - `docs/scheduled-jobs-v2-agent-activation.md`：Job Agent、创建前能力门禁、必注入 / 可选注入工具分层。
+- `docs/default-websearch-job-agent-plan.md`：已实施的系统默认 WebSearch Job Agent 初始化、跨 Workspace 可用、系统资源保护与能力边界。
 
 ## 已实施设计
 

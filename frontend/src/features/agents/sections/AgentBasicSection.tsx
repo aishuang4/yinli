@@ -12,14 +12,14 @@ interface AgentBasicSectionProps {
   form: AgentCreatePayload;
   primaryModelOptions: ModelOption[];
   onChange: (form: AgentCreatePayload) => void;
-  lockChatRole?: boolean;
+  lockRole?: boolean;
 }
 
 export function AgentBasicSection({
   form,
   primaryModelOptions,
   onChange,
-  lockChatRole = false,
+  lockRole = false,
 }: AgentBasicSectionProps) {
   return (
     <section className="rounded-xl bg-[var(--color-bg-primary)] p-4 shadow-sm">
@@ -45,13 +45,15 @@ export function AgentBasicSection({
         <SelectField
           label="用途"
           value={form.role}
-          disabled={lockChatRole}
+          disabled={lockRole}
           options={[
             { label: '对话助手', value: 'chat' },
             { label: '定时任务 Agent', value: 'job' },
           ]}
           onChange={(value) => onChange(applyJobRoleDefaults(form, String(value) as AgentRole))}
-          help={lockChatRole ? '系统默认助手只能用于 Chat。' : 'Job Agent 不能在 Chat 里选用，专门给定时任务到点执行。'}
+          help={lockRole
+            ? `系统内置 Agent 的用途固定为${form.role === 'job' ? '定时任务 Agent' : '对话助手'}。`
+            : 'Job Agent 不能在 Chat 里选用，专门给定时任务到点执行。'}
         />
         <TextField
           label="描述"

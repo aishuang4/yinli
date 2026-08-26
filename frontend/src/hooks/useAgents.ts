@@ -44,6 +44,7 @@ interface UseAgentsReturn {
 /** API 响应中的 Agent（snake_case） */
 interface AgentApiData {
   id: string;
+  systemManaged?: boolean;
   workspaceId?: string;
   name: string;
   avatar: string;
@@ -156,6 +157,7 @@ function mapApiAgent(api: AgentApiData): Agent {
         id: item.id,
       })),
     },
+    systemManaged: api.systemManaged === true,
   };
 }
 
@@ -245,7 +247,7 @@ export function useAgents(): UseAgentsReturn {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: AgentApiData[] = await res.json();
       setAgents(data.map(mapApiAgent).filter((agent) => (
-        agent.id === 'default' || agent.workspaceId === activeWorkspaceId
+        agent.systemManaged || agent.workspaceId === activeWorkspaceId
       )));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load agents');

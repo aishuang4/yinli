@@ -123,6 +123,8 @@ export interface Agent {
   role: AgentRole;
   /** Job Agent 的必注入 / 可选注入工具 */
   jobToolkit: JobToolkit;
+  /** 是否为后端按稳定 ID 管理的系统内置 Agent */
+  systemManaged: boolean;
   /** 创建时间 */
   createdAt: string;
   /** 更新时间 */
@@ -130,7 +132,7 @@ export interface Agent {
 }
 
 /** 创建 Agent 请求体（不含 id/时间/状态） */
-export type AgentCreatePayload = Omit<Agent, 'id' | 'createdAt' | 'updatedAt' | 'status'>;
+export type AgentCreatePayload = Omit<Agent, 'id' | 'createdAt' | 'updatedAt' | 'status' | 'systemManaged'>;
 
 /** 更新 Agent 请求体（所有字段可选） */
 export type AgentUpdatePayload = Partial<AgentCreatePayload>;

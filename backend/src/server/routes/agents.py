@@ -12,13 +12,19 @@ Agent 管理路由
 
 import os
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from typing import Annotated, Optional
 from datetime import datetime, timezone
 import uuid
 
 from src.agents.factory import invalidate_agent
 from src.agents.runtime_types import MAX_REACT_ITERS, WORKSPACE_DIR
+from src.agents.system_agents import (
+    DEFAULT_WEBSEARCH_JOB_AGENT_ID,
+    is_default_chat_agent_id,
+    is_default_websearch_job_agent_id,
+    is_system_agent_id,
+)
 from src.config.runtime_paths import DATA_ROOT
 from src.config.runtime_settings import get_current_model_options, get_effective_model_settings
 from src.scheduler.job_toolkit import (
@@ -90,6 +96,7 @@ DATA_DIR = str(DATA_ROOT)
 AGENTS_REGISTRY_FILE = os.path.join(DATA_DIR, "agents.json")
 AGENTS_NAMESPACE = "agents"
 DEFAULT_AGENT_PROMPT_VERSION_TAG = "prompt-contract-v2"
+DEFAULT_WEBSEARCH_JOB_AGENT_VERSION_TAG = "system-websearch-job-v1"
 DEFAULT_AGENT_FINAL_DELIVERY_RULES = """
 
 # 最终交付规则
@@ -231,6 +238,13 @@ class AgentResponse(BaseModel):
     role: str = Field(default="chat")
     job_toolkit: JobToolkit = Field(default_factory=JobToolkit, alias="jobToolkit")
 
+    @computed_field(alias="systemManaged")
+    @property
+    def system_managed(self) -> bool:
+        """系统身份由稳定 ID 派生，不依赖可编辑名称或 tags。"""
+
+        return is_system_agent_id(self.id)
+
     model_config = {"populate_by_name": True}
 
 
@@ -301,6 +315,55 @@ def _build_default_agent() -> AgentResponse:
     })
 
 
+def _build_default_websearch_job_agent() -> AgentResponse:
+    """构建开箱即用的系统联网定时任务 Agent。"""
+
+    now = datetime.now(timezone.utc).isoformat()
+    return AgentResponse.model_validate({
+        "id": DEFAULT_WEBSEARCH_JOB_AGENT_ID,
+        "name": "WebSearch",
+        "avatar": "",
+        "description": "能够联网搜索的agent",
+        "system_prompt": "请根据用户需要完成定时任务",
+        "modelConfig": {
+            "primary": "deepseek-v4-flash",
+            "fallback": [],
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "max_tokens": 4096,
+            "maxReactIters": 40,
+        },
+        "mcpTools": [],
+        "knowledgeTools": [],
+        "skills": [],
+        "tags": [
+            "system",
+            "scheduled-job",
+            "websearch",
+            DEFAULT_WEBSEARCH_JOB_AGENT_VERSION_TAG,
+        ],
+        "planConfig": PlanConfig(),
+        "guardrails": Guardrails(
+            network_enabled=True,
+            human_approval=False,
+            toolPermissionProfile="trusted_tools",
+            toolPermissionMode="bypass",
+        ),
+        "status": "idle",
+        "created_at": now,
+        "updated_at": now,
+        "workspaceId": "default",
+        "role": JOB_ROLE,
+        "jobToolkit": {
+            "required": [
+                {"kind": "builtin", "id": "WebFetch"},
+                {"kind": "builtin", "id": "HttpRequest"},
+            ],
+            "optional": [],
+        },
+    })
+
+
 def _ensure_default_agent() -> None:
     """为历史数据库补齐默认 Agent，已有用户配置保持不变。"""
 
@@ -311,6 +374,23 @@ def _ensure_default_agent() -> None:
     default_agent = _build_default_agent()
     _agents[default_agent.id] = default_agent
     upsert_agent(default_agent.model_dump(by_alias=True))
+
+
+def _ensure_default_websearch_job_agent() -> None:
+    """为新旧数据库幂等补齐系统 WebSearch Job Agent。"""
+
+    if DEFAULT_WEBSEARCH_JOB_AGENT_ID in _agents:
+        return
+    agent = _build_default_websearch_job_agent()
+    _agents[agent.id] = agent
+    upsert_agent(agent.model_dump(by_alias=True))
+
+
+def _ensure_system_agents() -> None:
+    """统一确保系统 Chat Agent 与 Job Agent 存在。"""
+
+    _ensure_default_agent()
+    _ensure_default_websearch_job_agent()
 
 
 def _upgrade_default_agent_prompt(agent: AgentResponse) -> None:
@@ -379,7 +459,7 @@ def _load_agents() -> None:
     for item in records:
         agent = AgentResponse.model_validate(item)
         _agents[agent.id] = agent
-    _ensure_default_agent()
+    _ensure_system_agents()
 
 
 def _save_agents() -> None:
@@ -482,7 +562,7 @@ async def list_agents(
     return [
         agent
         for agent in _agents.values()
-        if agent.id == "default" or agent.workspace_id == workspace_id
+        if is_system_agent_id(agent.id) or agent.workspace_id == workspace_id
     ]
 
 
@@ -634,10 +714,19 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
     existing_dict = existing.model_dump(by_alias=True)
     existing_dict.update(update_dict)
     existing_dict["updated_at"] = datetime.now(timezone.utc).isoformat()
-    if agent_id == "default":
+    if is_default_chat_agent_id(agent_id):
         existing_dict["role"] = CHAT_ROLE
         existing_dict["jobToolkit"] = empty_job_toolkit().model_dump()
     else:
+        if is_default_websearch_job_agent_id(agent_id):
+            existing_dict["role"] = JOB_ROLE
+            guardrails = Guardrails.model_validate(existing_dict.get("guardrails") or {})
+            existing_dict["guardrails"] = guardrails.model_copy(update={
+                "network_enabled": True,
+                "human_approval": False,
+                "tool_permission_profile": "trusted_tools",
+                "tool_permission_mode": "bypass",
+            }).model_dump(by_alias=True)
         role, toolkit, guardrails, mcp_tools, knowledge_tools, skills = _apply_job_agent_fields(
             agent_id=agent_id,
             role=str(existing_dict.get("role") or CHAT_ROLE),
@@ -709,8 +798,8 @@ async def delete_agent(agent_id: str) -> None:
     """
     if agent_id not in _agents:
         raise HTTPException(status_code=404, detail="Agent not found")
-    if agent_id == "default":
-        raise HTTPException(status_code=403, detail="默认 Agent 不能删除，只能修改配置")
+    if is_system_agent_id(agent_id):
+        raise HTTPException(status_code=403, detail="系统 Agent 不能删除，只能修改配置")
     _job_service.pause_for_resource_change("agent_missing", agent_id=agent_id)
     del _agents[agent_id]
     invalidate_agent(agent_id)

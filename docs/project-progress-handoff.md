@@ -106,6 +106,7 @@
 
 ### 定时任务与通知
 
+- 系统内置 `system-websearch-job`（名称 `WebSearch`）已作为默认 Job Agent 接入：新旧数据库启动时幂等补齐，主模型为 `deepseek-v4-flash`，必注入 `WebFetch` / `HttpRequest`，跨 Workspace 可用且不可删除或改为 Chat Agent。系统身份只豁免 Agent 自身 binding，外部资源继续按 Project 白名单裁剪。
 - 定时任务 firing 终态写入通知分发器，应用内通道落 `user_notifications`。
 - Chat 工作台顶栏设置按钮左侧有任务通知铃铛；独立 SSE 推送未读数，断开后轮询。
 - 设置页可配置通道。应用内始终开启；邮箱 / 微信 / 飞书仅占位，不能启用。
