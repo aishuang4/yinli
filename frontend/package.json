@@ -16,9 +16,9 @@
     "electron:dev": "../scripts/electron-dev.sh",
     "electron:dev:win": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/debug-windows-source.ps1",
     "electron:dev:win:install": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/debug-windows-source.ps1 -InstallDependencies",
-    "electron:pack": "../scripts/electron-package.sh",
-    "electron:build:mac": "../scripts/electron-package.sh mac",
-    "electron:build:win": "../scripts/electron-package.sh win"
+    "electron:pack": "node ../scripts/electron-package.mjs",
+    "electron:build:mac": "node ../scripts/electron-package.mjs mac",
+    "electron:build:win": "node ../scripts/electron-package.mjs win"
   },
   "dependencies": {
     "@agentscope-ai/chat": "^1.1.67",
