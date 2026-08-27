@@ -67,6 +67,23 @@ def _enter_reviewing(client: TestClient, group_id: str) -> None:
     assert reviewing.json()["status"] == "reviewing"
 
 
+def test_empty_dod_can_confirm_close(client):
+    studio = _create_discussing(client, "sess-empty-dod")
+    group_id = studio["id"]
+    _enter_reviewing(client, group_id)
+    closing = client.post(f"/api/group-studio/{group_id}/close", json={
+        "projectId": DEFAULT_PROJECT_ID,
+        "confirm": False,
+    })
+    assert closing.status_code == 200
+    archived = client.post(f"/api/group-studio/{group_id}/close", json={
+        "projectId": DEFAULT_PROJECT_ID,
+        "confirm": True,
+    })
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["status"] == "archived"
+
+
 def test_close_requires_review_then_complete_dod(client):
     studio = _create_discussing(client, "sess-close")
     group_id = studio["id"]
@@ -85,13 +102,6 @@ def test_close_requires_review_then_complete_dod(client):
     assert closing.status_code == 200, closing.text
     assert closing.json()["status"] == "closing"
     assert closing.json()["taskCard"]["status"] == "frozen_for_close"
-
-    empty = client.post(f"/api/group-studio/{group_id}/close", json={
-        "projectId": DEFAULT_PROJECT_ID,
-        "confirm": True,
-    })
-    assert empty.status_code == 409
-    assert empty.json()["detail"] == DOD_INCOMPLETE
 
     added = client.put(f"/api/group-studio/{group_id}/task-card", json={
         "projectId": DEFAULT_PROJECT_ID,

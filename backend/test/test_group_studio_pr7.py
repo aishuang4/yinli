@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
-from src.group_studio.errors import APPROVAL_NOT_PENDING, ILLEGAL_TRANSITION
+from src.group_studio.errors import APPROVAL_NOT_PENDING, ILLEGAL_TRANSITION, MODEL_NOT_CONFIGURED
 from src.group_studio.host_runtime import run_host_discussion
 from src.group_studio.settings import set_group_studio_settings
 from src.group_studio.worker_runtime import build_worker_runtime_spec, run_worker_turn
@@ -90,18 +90,49 @@ class _HitlAgent:
         )
 
 
-def test_worker_spec_uses_default_permission_mode(client):
+def test_worker_spec_bypasses_tool_permission(client):
     studio = _create_discussing(client, "sess-mode")
     worker = next(item for item in studio["members"] if item["role"] == "worker")
     spec, _ctx, tools = build_worker_runtime_spec(studio, worker)
     assert spec.include_default_tools is True
-    assert spec.guardrails.human_approval is True
-    assert spec.guardrails.tool_permission_profile == "ask_every_time"
-    assert spec.guardrails.permission_profile.to_agentscope_permission_mode() == PermissionMode.DEFAULT
+    assert spec.guardrails.human_approval is False
+    assert spec.guardrails.network_enabled is True
+    assert spec.guardrails.tool_permission_mode == "bypass"
+    assert spec.guardrails.tool_permission_profile == "trusted_tools"
+    assert spec.guardrails.permission_profile.to_agentscope_permission_mode() == PermissionMode.BYPASS
     assert spec.model_options.max_react_iters == 40
     names = {tool.name for tool in tools}
     assert "group_post_message" in names
     assert "AskUser" not in names
+
+
+def test_worker_blocks_without_api_key(client, monkeypatch):
+    from types import SimpleNamespace
+
+    from src.group_studio import worker_runtime
+
+    monkeypatch.setattr(
+        "src.group_studio.startup_checks.get_effective_model_settings",
+        lambda: SimpleNamespace(provider="deepseek", api_key=""),
+    )
+    called = {"create": False}
+
+    def boom(_spec):
+        called["create"] = True
+        raise AssertionError("must not construct worker agent without api key")
+
+    monkeypatch.setattr(worker_runtime, "create_main_agent_from_spec", boom)
+    studio = _create_discussing(client, "sess-worker-no-key")
+    worker = next(item for item in studio["members"] if item["role"] == "worker")
+    asyncio.run(run_worker_turn(studio["id"], worker["id"]))
+    events = list_group_studio_events_after(studio["id"], 0)
+    error = next(item for item in events if item["type"] == "GROUP_ERROR")
+    assert error["payload"]["code"] == MODEL_NOT_CONFIGURED
+    assert called["create"] is False
+    snapshot = get_group_studio_snapshot(studio["id"])
+    assert snapshot is not None
+    assert snapshot["currentRunId"] is None
+    assert snapshot["messages"] == []
 
 
 def test_worker_turn_persists_message_not_delta(client):

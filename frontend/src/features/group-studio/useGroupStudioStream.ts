@@ -8,7 +8,10 @@ export interface StudioTimelineMessage {
   role: string;
   intent: string;
   body: string;
+  thinking?: string;
   visibleInTimeline: boolean;
+  streaming?: boolean;
+  thinkingStreaming?: boolean;
 }
 
 interface StudioEvent {
@@ -29,6 +32,7 @@ const BOARD_EVENTS = new Set([
   'GROUP_BUDGET',
   'GROUP_CIRCUIT',
   'GROUP_DOD',
+  'GROUP_ERROR',
 ]);
 
 export function useGroupStudioStream(
@@ -42,6 +46,8 @@ export function useGroupStudioStream(
   domainEventRef.current = onDomainEvent;
 
   useEffect(() => {
+    setMessages([]);
+    setStatus('');
     if (!groupId || !enabled) {
       return;
     }
@@ -53,7 +59,14 @@ export function useGroupStudioStream(
         const payload = event.payload as { messages?: StudioTimelineMessage[]; status?: string };
         setStatus(String(payload.status || event.status || ''));
         setMessages(
-          (payload.messages || []).filter((item) => item.visibleInTimeline !== false),
+          (payload.messages || [])
+            .filter((item) => item.visibleInTimeline !== false)
+            .map((item) => ({
+              ...item,
+              thinking: item.thinking || '',
+              streaming: false,
+              thinkingStreaming: false,
+            })),
         );
         return;
       }
@@ -75,7 +88,10 @@ export function useGroupStudioStream(
               role: String(event.payload.role || 'host'),
               intent: String(event.payload.intent || 'discuss'),
               body: '',
+              thinking: '',
               visibleInTimeline: event.payload.visibleInTimeline !== false,
+              streaming: true,
+              thinkingStreaming: false,
             },
           ];
         });
@@ -84,16 +100,42 @@ export function useGroupStudioStream(
       if (event.type === 'GROUP_MESSAGE_DELTA') {
         const messageId = String(event.payload.messageId || '');
         const text = String(event.payload.text || '');
-        setMessages((current) => current.map((item) => (
-          item.id === messageId ? { ...item, body: item.body + text } : item
-        )));
+        const kind = String(event.payload.kind || 'answer');
+        setMessages((current) => current.map((item) => {
+          if (item.id !== messageId) {
+            return item;
+          }
+          if (kind === 'thinking') {
+            return {
+              ...item,
+              thinking: `${item.thinking || ''}${text}`,
+              streaming: true,
+              thinkingStreaming: true,
+            };
+          }
+          return {
+            ...item,
+            body: item.body + text,
+            streaming: true,
+            thinkingStreaming: false,
+          };
+        }));
         return;
       }
       if (event.type === 'GROUP_MESSAGE_CLOSE') {
         const messageId = String(event.payload.messageId || '');
         const body = String(event.payload.body || '');
+        const thinking = String(event.payload.thinking || '');
         setMessages((current) => current.map((item) => (
-          item.id === messageId ? { ...item, body } : item
+          item.id === messageId
+            ? {
+              ...item,
+              body,
+              thinking: thinking || item.thinking || '',
+              streaming: false,
+              thinkingStreaming: false,
+            }
+            : item
         )));
         return;
       }

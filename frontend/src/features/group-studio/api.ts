@@ -3,11 +3,21 @@
 import type {
   GroupStudioApproval,
   GroupStudioFile,
+  GroupStudioListItem,
   GroupStudioMember,
   GroupStudioMessage,
   GroupStudioSettings,
   GroupStudioSnapshot,
 } from './types';
+
+export async function fetchStudioList(projectId: string): Promise<GroupStudioListItem[]> {
+  const response = await fetch(`/api/group-studio?projectId=${encodeURIComponent(projectId)}`);
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法加载群聊列表'));
+  }
+  const payload = await response.json() as { studios?: GroupStudioListItem[] };
+  return payload.studios ?? [];
+}
 
 export async function fetchGroupStudioSettings(): Promise<GroupStudioSettings> {
   const response = await fetch('/api/settings/group-studio');
@@ -243,6 +253,7 @@ export async function createStudioFromChat(input: {
   agentId: string;
   draftText: string;
   filePaths: string[];
+  reuseBlankDraft?: boolean;
 }): Promise<GroupStudioSnapshot> {
   const response = await fetch('/api/group-studio/from-chat', {
     method: 'POST',

@@ -249,6 +249,13 @@ def ensure_db() -> None:
                 )
             """)
             conn.executescript(BASE_SCHEMA_SQL)
+            _ensure_column(conn, "group_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(
+                conn,
+                "group_studios",
+                "pending_speaker_member_id",
+                "TEXT NOT NULL DEFAULT ''",
+            )
             _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'")
@@ -1103,6 +1110,16 @@ def lookup_active_group_studios_by_chat_session_ids(
     return _group_studio_record_store().lookup_active_by_chat_session_ids(session_ids)
 
 
+def list_group_studios_by_project(project_id: str) -> list[dict[str, Any]]:
+    """列出某 Project 未归档工作室。"""
+
+    return _group_studio_record_store().list_active_by_project(project_id)
+
+
+def find_blank_group_studio_draft_id(project_id: str) -> str | None:
+    return _group_studio_record_store().find_blank_draft_id(project_id)
+
+
 def list_group_studios_with_current_run() -> list[dict[str, Any]]:
     return _group_studio_record_store().list_with_current_run()
 
@@ -1183,6 +1200,14 @@ def set_group_studio_member_removed(group_id: str, member_id: str) -> dict[str, 
     return _group_studio_record_store().set_member_removed(group_id, member_id)
 
 
+def set_group_studio_member_last_spoke(
+    group_id: str,
+    member_id: str,
+    spoke_at: str | None = None,
+) -> None:
+    _group_studio_record_store().set_member_last_spoke(group_id, member_id, spoke_at)
+
+
 def set_group_studio_status(group_id: str, status: str) -> None:
     _group_studio_record_store().set_studio_status(group_id, status)
 
@@ -1193,6 +1218,14 @@ def update_group_studio_state(group_id: str, **changes: Any) -> dict[str, Any]:
 
 def set_group_studio_current_run_id(group_id: str, run_id: str | None) -> None:
     _group_studio_record_store().set_current_run_id(group_id, run_id)
+
+
+def set_group_studio_pending_speaker(group_id: str, member_id: str | None) -> None:
+    _group_studio_record_store().set_pending_speaker(group_id, member_id)
+
+
+def get_group_studio_pending_speaker(group_id: str) -> str:
+    return _group_studio_record_store().get_pending_speaker(group_id)
 
 
 def insert_group_studio_run(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1207,8 +1240,8 @@ def insert_group_studio_message(payload: dict[str, Any]) -> dict[str, Any]:
     return _group_studio_record_store().insert_message(payload)
 
 
-def update_group_studio_message_body(message_id: str, body: str) -> None:
-    _group_studio_record_store().update_message_body(message_id, body)
+def update_group_studio_message_body(message_id: str, body: str, thinking: str | None = None) -> None:
+    _group_studio_record_store().update_message_body(message_id, body, thinking)
 
 
 def append_group_studio_event(payload: dict[str, Any]) -> dict[str, Any]:

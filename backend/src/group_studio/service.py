@@ -56,6 +56,7 @@ from src.storage.database import (
     archive_group_studio,
     count_group_studio_active_members,
     create_group_studio_from_chat,
+    find_blank_group_studio_draft_id,
     find_group_studio_member_by_agent,
     get_active_group_studio_by_chat_session,
     get_group_studio_member,
@@ -68,10 +69,12 @@ from src.storage.database import (
     list_agents,
     list_chat_runs_by_statuses,
     list_group_studio_artifacts,
+    list_group_studios_by_project,
     list_group_studio_messages,
     replace_group_studio_blackboard,
     set_group_studio_member_muted,
     set_group_studio_member_removed,
+    set_group_studio_pending_speaker,
     set_group_studio_status,
     update_group_studio_state,
 )
@@ -102,6 +105,44 @@ def _resolve_worker(agent_id: str) -> dict[str, str]:
             "role": role,
         }
     raise GroupStudioError(403, AGENT_NOT_BOUND)
+
+
+def list_invitable_agents(group_id: str) -> list[dict[str, str]]:
+    """列出当前项目里还能拉进本群的 Agent（已在群内 / Job / Host 哨兵除外）。"""
+
+    studio = _load_studio(group_id)
+    occupied = {
+        str(member.agent_id)
+        for member in studio.members
+        if member.status != "removed"
+    }
+    occupied.add(GROUP_STUDIO_HOST_AGENT_ID)
+    try:
+        context = resolve_runtime_context(
+            project_id=studio.project_id,
+            session_id=studio.chat_session_id,
+            run_id="",
+            agent_id="default",
+        )
+        access = resolve_project_resource_access(context)
+        allowed = access.agent_ids
+    except ValueError:
+        allowed = None
+    candidates: list[dict[str, str]] = []
+    for agent in list_agents():
+        agent_id = str(agent.get("id") or "")
+        if not agent_id or agent_id in occupied:
+            continue
+        if str(agent.get("role") or "chat") == "job":
+            continue
+        if agent_id != "default" and allowed is not None and agent_id not in allowed:
+            continue
+        candidates.append({
+            "id": agent_id,
+            "name": str(agent.get("name") or agent_id),
+            "description": str(agent.get("description") or ""),
+        })
+    return candidates
 
 
 def _last_user_message(session_id: str) -> str:
@@ -139,6 +180,12 @@ def get_studio_by_chat_session(session_id: str) -> GroupStudio | None:
     return _snapshot_to_model(raw)
 
 
+def list_studios(project_id: str) -> list[dict]:
+    """群聊侧栏列表；不经过 Chat catalog。"""
+
+    return list_group_studios_by_project(project_id)
+
+
 def list_studio_messages(
     group_id: str,
     *,
@@ -161,6 +208,13 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
         if request.project_id and str(existing.get("projectId") or "") != request.project_id:
             raise GroupStudioError(422, CROSS_PROJECT_SESSION)
         return _snapshot_to_model(existing)
+
+    if request.reuse_blank_draft and not request.draft_text.strip() and not request.file_paths:
+        blank_id = find_blank_group_studio_draft_id(request.project_id)
+        if blank_id:
+            blank = get_group_studio_snapshot(blank_id)
+            if blank is not None:
+                return _snapshot_to_model(blank)
 
     worker = _resolve_worker(request.agent_id)
     try:
@@ -295,7 +349,10 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
 def archive_studio_for_session_delete(group_id: str) -> None:
     """删除 Chat session 时归档工作室。"""
 
+    from src.group_studio.sessions import drop_group_tool_contexts
+
     archive_group_studio(group_id)
+    drop_group_tool_contexts(group_id)
 
 
 def _load_studio(group_id: str) -> GroupStudio:
@@ -497,9 +554,11 @@ def prepare_start_review(group_id: str, project_id: str) -> GroupStudio:
 
 
 def _dod_complete(studio: GroupStudio) -> bool:
+    """未设验收清单视为已完成；有条目则必须全部勾选。"""
+
     items = studio.task_card.dod_checklist
     if not items:
-        return False
+        return True
     return all(item.checked for item in items)
 
 
@@ -551,6 +610,9 @@ def close_studio(group_id: str, *, project_id: str, confirm: bool) -> GroupStudi
 
     cancel_active_run(group_id, source="pause")
     archive_group_studio(group_id)
+    from src.group_studio.sessions import drop_group_tool_contexts
+
+    drop_group_tool_contexts(group_id)
     emit_envelope(
         group_id=group_id,
         event_type="GROUP_DOD",
@@ -604,6 +666,7 @@ def post_human_message(group_id: str, *, project_id: str, body: str, mentions: l
         from src.group_studio.interrupt import cancel_active_run
 
         cancel_active_run(group_id, source="human_message")
+        set_group_studio_pending_speaker(group_id, None)
     text = body.strip()
     row = insert_group_studio_message({
         "id": _new_id("gmsg"),
@@ -682,6 +745,7 @@ def resume_studio(group_id: str, *, project_id: str, max_turns: int | None = Non
     if nxt not in {"discussing", "executing", "reviewing", "awaiting_human"}:
         nxt = "discussing"
     budget = studio.budget.model_dump(by_alias=True)
+    budget["noProgressTurns"] = 0
     if max_turns is not None:
         budget["maxTurns"] = int(max_turns)
     snapshot = update_group_studio_state(
@@ -783,6 +847,134 @@ def patch_blackboard(
         payload=board,
     )
     return board
+
+
+_DELIVERY_SUFFIXES = {
+    ".md",
+    ".txt",
+    ".pdf",
+    ".docx",
+    ".xlsx",
+    ".csv",
+    ".json",
+    ".html",
+    ".png",
+    ".jpg",
+}
+_SKIP_DIR_NAMES = {".git", "__pycache__", "node_modules", ".venv", ".DS_Store"}
+
+
+def record_worker_delivery(
+    group_id: str,
+    *,
+    member: dict,
+    body: str,
+    run_id: str,
+    message_id: str,
+) -> None:
+    """执行/验收期工人交稿后写入黑板，并登记 workspace/outputs 新文件。"""
+
+    text = str(body or "").strip()
+    if not text:
+        return
+    snapshot = get_group_studio_snapshot(group_id, message_limit=1)
+    if snapshot is None:
+        return
+    status = str(snapshot.get("status") or "")
+    if status not in {"executing", "reviewing"}:
+        return
+    board = snapshot.get("blackboard") or {}
+    already = any(
+        str(item.get("sourceRunId") or "") == run_id
+        for item in (board.get("decisions") or [])
+        if isinstance(item, dict)
+    )
+    name = str(member.get("displayName") or member.get("agentId") or "工人")
+    snippet = " ".join(text.split())
+    if len(snippet) > 240:
+        snippet = snippet[:239] + "…"
+    artifact_ids = _register_untracked_workspace_files(
+        group_id,
+        member_id=str(member.get("id") or ""),
+        project_id=str(snapshot.get("projectId") or ""),
+    )
+    patch: dict = {}
+    if not already:
+        patch["addDecisions"] = [{
+            "text": f"「{name}」已交稿：{snippet}",
+            "sourceMessageId": message_id,
+            "sourceRunId": run_id,
+        }]
+    if artifact_ids:
+        patch["addArtifactIds"] = artifact_ids
+    if not patch:
+        return
+    try:
+        patch_blackboard(
+            group_id,
+            patch,
+            asked_by=str(member.get("id") or "worker"),
+            source_message_id=message_id,
+            source_run_id=run_id,
+        )
+    except GroupStudioError:
+        return
+
+
+def _register_untracked_workspace_files(
+    group_id: str,
+    *,
+    member_id: str,
+    project_id: str,
+) -> list[str]:
+    """把尚未入库的 outputs/workspace 交付文件登记为产物。"""
+
+    from src.group_studio.files import ensure_studio_dirs
+
+    project = get_project(project_id) or {}
+    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
+    if not project_root.is_dir():
+        return []
+    studio_root = ensure_studio_dirs(project_root, group_id)
+    existing = {str(item.get("path") or "") for item in list_group_studio_artifacts(group_id)}
+    registered: list[str] = []
+    for folder in ("outputs", "workspace"):
+        base = studio_root / folder
+        if not base.is_dir():
+            continue
+        for path in base.rglob("*"):
+            if not path.is_file():
+                continue
+            if any(part in _SKIP_DIR_NAMES or part.startswith(".") for part in path.relative_to(studio_root).parts):
+                continue
+            if folder == "workspace" and path.suffix.lower() not in _DELIVERY_SUFFIXES:
+                continue
+            try:
+                rel = str(path.relative_to(project_root))
+            except ValueError:
+                continue
+            if rel in existing:
+                continue
+            row = insert_group_studio_artifact({
+                "id": _new_id("gart"),
+                "groupId": group_id,
+                "title": path.name,
+                "path": rel,
+                "mediaType": "",
+                "byteSize": path.stat().st_size,
+                "createdBy": member_id,
+            })
+            existing.add(rel)
+            artifact_id = str(row.get("id") or "")
+            if not artifact_id:
+                continue
+            registered.append(artifact_id)
+            emit_envelope(
+                group_id=group_id,
+                event_type="GROUP_FILE",
+                payload=row,
+            )
+    return registered
 
 
 def mute_member(

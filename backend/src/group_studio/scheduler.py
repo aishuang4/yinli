@@ -17,7 +17,10 @@ def should_auto_start_host() -> bool:
 
 
 def schedule_host_turn(group_id: str) -> None:
-    """若工作室可发言且没有进行中的 Run，则后台启动 Host 一轮。"""
+    """若工作室可发言且没有进行中的 Run，则后台启动 Host 一轮。
+
+    已落库但尚未开工的指派优先拉工人，避免 Host 缓存 miss 后房间空转。
+    """
 
     if not should_auto_start_host():
         return
@@ -33,6 +36,10 @@ def schedule_host_turn(group_id: str) -> None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
+        return
+    pending = str(snapshot.get("pendingSpeakerMemberId") or "").strip()
+    if pending and status != "awaiting_human":
+        loop.create_task(_run_worker_guarded(group_id, pending))
         return
     loop.create_task(_run_host_guarded(group_id))
 
@@ -54,11 +61,22 @@ def schedule_worker_turn(group_id: str, member_id: str) -> None:
     loop.create_task(_run_worker_guarded(group_id, member_id))
 
 
-async def _run_host_guarded(group_id: str) -> None:
+async def _run_host_guarded(group_id: str, *, phase_followup: bool = False) -> None:
     try:
+        before = get_group_studio_snapshot(group_id, message_limit=1) or {}
+        before_status = str(before.get("status") or "")
         assigned = await run_host_discussion(group_id)
         if assigned:
             await _run_worker_guarded(group_id, assigned)
+            return
+        after = get_group_studio_snapshot(group_id, message_limit=1) or {}
+        after_status = str(after.get("status") or "")
+        if (
+            not phase_followup
+            and after_status in {"executing", "reviewing"}
+            and after_status != before_status
+        ):
+            await _run_host_guarded(group_id, phase_followup=True)
     except Exception:
         from src.group_studio.events import emit_envelope
 

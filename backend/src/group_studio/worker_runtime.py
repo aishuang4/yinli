@@ -1,4 +1,4 @@
-"""Worker 串行运行时。权限强制 ASK_EVERY_TIME；禁止接入 Chat pending 字典。"""
+"""Worker 串行运行时。群聊内工具权限 BYPASS；禁止接入 Chat pending 字典。"""
 
 from __future__ import annotations
 
@@ -14,8 +14,9 @@ from src.agents.runtime_types import AgentGuardrails, AgentModelOptions, Runtime
 from src.config.runtime_settings import get_effective_model_settings
 from src.group_studio.approvals import create_pending_approval
 from src.group_studio.circuit import on_run_finished, progress_fingerprint
-from src.group_studio.errors import GroupStudioError
+from src.group_studio.errors import MODEL_NOT_CONFIGURED, GroupStudioError
 from src.group_studio.events import emit_envelope
+from src.group_studio.startup_checks import get_group_studio_model_error
 from src.group_studio.files import ensure_studio_dirs
 from src.group_studio.orchestrator import assert_floor_allowed, assert_serial_run
 from src.group_studio.sessions import (
@@ -27,7 +28,13 @@ from src.group_studio.sessions import (
     remember_fingerprint,
     take_interrupt,
 )
-from src.group_studio.tools_worker import WORKER_STOP_TOOLS, WorkerToolContext, worker_tools
+from src.group_studio.text_events import message_text_delta
+from src.group_studio.turn_context import format_turn_context, note_member_spoke
+from src.group_studio.tools_worker import (
+    WORKER_STOP_TOOLS,
+    acquire_worker_tool_context,
+    worker_tools,
+)
 from src.project_resources import resolve_project_resource_access
 from src.runtime_context import resolve_runtime_context
 from src.security.permissions import build_permission_profile
@@ -48,6 +55,7 @@ from src.storage.database import (
     insert_group_studio_run,
     list_agents,
     set_group_studio_current_run_id,
+    set_group_studio_pending_speaker,
     update_group_studio_message_body,
     update_group_studio_run_status,
 )
@@ -71,7 +79,7 @@ AgentFactory = Callable[[Any], Any]
 
 
 def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
-    """构造 Worker spec：复制 Agent 能力，强制人工审批。"""
+    """构造 Worker spec：复制 Agent 能力，群聊内工具权限全部放开。"""
 
     agent_row = _agent_row(str(member.get("agentId") or "default"))
     project = get_project(str(snapshot.get("projectId") or "")) or {}
@@ -89,10 +97,10 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
     guardrails = AgentGuardrails(
         filesystem_scope=str(raw_guardrails.get("filesystem_scope") or context.project_root),
         shell_blacklist=list(raw_guardrails.get("shell_blacklist") or ["rm -rf /", "sudo"]),
-        network_enabled=bool(raw_guardrails.get("network_enabled", True)),
-        human_approval=True,
-        tool_permission_mode="ask_every_time",
-        tool_permission_profile="ask_every_time",
+        network_enabled=True,
+        human_approval=False,
+        tool_permission_mode="bypass",
+        tool_permission_profile="trusted_tools",
         execution_backend=str(raw_guardrails.get("execution_backend") or "local"),
         docker_image=str(raw_guardrails.get("docker_image") or "python:3.11-slim"),
         persistent_sandbox=bool(raw_guardrails.get("persistent_sandbox", False)),
@@ -101,10 +109,10 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
     guardrails = AgentGuardrails(
         filesystem_scope=guardrails.filesystem_scope,
         shell_blacklist=list(guardrails.shell_blacklist),
-        network_enabled=guardrails.network_enabled,
-        human_approval=True,
-        tool_permission_mode="ask_every_time",
-        tool_permission_profile="ask_every_time",
+        network_enabled=True,
+        human_approval=False,
+        tool_permission_mode="bypass",
+        tool_permission_profile="trusted_tools",
         execution_backend=guardrails.execution_backend,
         docker_image=guardrails.docker_image,
         persistent_sandbox=guardrails.persistent_sandbox,
@@ -125,11 +133,10 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
     skill_ids = access.filter_ids("skill", [str(item) for item in (agent_row.get("skills") or [])])
     skill_paths = _skill_paths(skill_ids)
 
-    ctx = WorkerToolContext(
-        group_id=str(snapshot["id"]),
-        run_id="",
-        member_id=str(member["id"]),
-        agent_id=str(agent_row.get("id") or member.get("agentId") or ""),
+    ctx = acquire_worker_tool_context(
+        str(snapshot["id"]),
+        str(member["id"]),
+        str(agent_row.get("id") or member.get("agentId") or ""),
     )
     tools = worker_tools(ctx)
     allowlist = set(WORKER_BASE_TOOLS)
@@ -160,14 +167,14 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
         session_id=f"{snapshot['id']}:{member['id']}",
         system_prompt=_worker_system_prompt(snapshot, member),
         model_config=model_config,
-        deep_thinking=False,
+        deep_thinking=True,
         used_skills=[],
         skill_paths=skill_paths,
         guardrails=guardrails,
         mcp_servers=mcp_servers,
         knowledge_tools=knowledge_tools,
         runtime_tool_scope=scope,
-        guardrail_cache_key=f"group-studio-worker-ask:{guardrails.permission_profile.cache_key()}",
+        guardrail_cache_key=f"group-studio-worker-bypass:{guardrails.permission_profile.cache_key()}",
         runtime_features_cache_key="group-studio",
         extra_tools=tools,
         tool_name_allowlist=allowlist,
@@ -224,10 +231,12 @@ def _worker_system_prompt(snapshot: dict[str, Any], member: dict[str, Any]) -> s
     return (
         f"你是群聊工作室的执行成员「{member.get('displayName') or member.get('agentId')}」。\n"
         "先读黑板，再行动。讨论期用文字或 group_post_message 发言；"
-        "执行期可以读写文件和跑命令，最后必须 group_post_message 交付。\n"
+        "执行期可以读写文件和跑命令，最后必须 group_post_message 交付；"
+        "系统会把交稿摘要写入黑板，你仍必须发群消息。\n"
         f"目标：{card.get('goal') or ''}\n"
         f"约束：{card.get('constraints') or []}\n"
         f"未决问题：{[item.get('text') for item in (board.get('openQuestions') or []) if not item.get('resolved')]}\n"
+        "对群可见的发言只写结论与证据，不要把内心推理过程写进正文。\n"
         "不要调用 AskUser 或 FinalAnswerStart。"
     )
 
@@ -238,11 +247,13 @@ def _worker_user_message(snapshot: dict[str, Any], member: dict[str, Any]) -> st
     if status == "executing":
         return (
             f"请推进执行并在结束时 group_post_message 汇报。"
-            f"目标：{card.get('goal') or ''}"
+            f"目标：{card.get('goal') or ''}\n"
+            f"{format_turn_context(snapshot)}"
         )
     return (
         f"轮到你发言。简要给出看法或方案，并用 group_post_message 发到群里。"
-        f"目标：{card.get('goal') or ''}"
+        f"目标：{card.get('goal') or ''}\n"
+        f"{format_turn_context(snapshot)}"
     )
 
 
@@ -267,15 +278,27 @@ async def run_worker_turn(
         None,
     )
     if member is None or member.get("role") != "worker":
+        set_group_studio_pending_speaker(group_id, None)
         emit_envelope(group_id=group_id, event_type="GROUP_ERROR", payload={"code": "not_found", "message": "工人不存在"})
         return
     if member.get("muted"):
+        set_group_studio_pending_speaker(group_id, None)
         emit_envelope(group_id=group_id, event_type="GROUP_ERROR", payload={"code": "member_muted", "message": "工人已静音"})
         return
+    if agent_factory is None:
+        model_error = get_group_studio_model_error()
+        if model_error:
+            emit_envelope(
+                group_id=group_id,
+                event_type="GROUP_ERROR",
+                payload={"code": MODEL_NOT_CONFIGURED, "message": model_error},
+            )
+            return
 
     spec, ctx, _tools = build_worker_runtime_spec(snapshot, member)
     run_id = f"grun_{uuid.uuid4().hex[:16]}"
-    ctx.run_id = run_id
+    ctx.begin_run(run_id)
+    set_group_studio_pending_speaker(group_id, None)
     kind = "execution" if str(snapshot.get("status") or "") == "executing" else "discussion"
     intent = "report_progress" if kind == "execution" else "discuss"
     insert_group_studio_run({
@@ -324,6 +347,7 @@ async def run_worker_turn(
         agent=agent,
     ))
     body_parts: list[str] = []
+    thinking_parts: list[str] = []
     outcome = "completed"
     run_status = "completed"
     error_text = ""
@@ -337,22 +361,27 @@ async def run_worker_turn(
             async for raw_event in agent.reply_stream(next_input):
                 data = raw_event.model_dump(mode="json") if hasattr(raw_event, "model_dump") else dict(raw_event)
                 event_type = str(data.get("type") or "")
-                if event_type == "TEXT_BLOCK_DELTA":
-                    delta = str(data.get("delta") or "")
-                    if not delta:
-                        continue
-                    body_parts.append(delta)
+                text_delta = message_text_delta(data)
+                if text_delta is not None:
+                    kind, delta = text_delta
+                    target = thinking_parts if kind == "thinking" else body_parts
+                    target.append(delta)
                     emit_envelope(
                         group_id=group_id,
                         event_type="GROUP_MESSAGE_DELTA",
                         run_id=run_id,
                         persist=False,
-                        payload={"messageId": message_id, "text": delta},
+                        payload={"messageId": message_id, "text": delta, "kind": kind},
                     )
-                    joined = "".join(body_parts)
-                    if len(joined) - last_chars_flush >= 256:
-                        update_group_studio_message_body(message_id, joined)
-                        last_chars_flush = len(joined)
+                    if kind == "answer":
+                        joined = "".join(body_parts)
+                        if len(joined) - last_chars_flush >= 256:
+                            update_group_studio_message_body(
+                                message_id,
+                                joined,
+                                thinking="".join(thinking_parts),
+                            )
+                            last_chars_flush = len(joined)
                 elif event_type in {"TOOL_RESULT_START", "TOOL_CALL", "TOOL_START"}:
                     emit_envelope(
                         group_id=group_id,
@@ -451,16 +480,28 @@ async def run_worker_turn(
         drop_run_task(group_id)
 
     body = "".join(body_parts)
-    update_group_studio_message_body(message_id, body)
+    thinking = "".join(thinking_parts)
+    update_group_studio_message_body(message_id, body, thinking)
+    note_member_spoke(group_id, member_id, role="worker", body=body)
     emit_envelope(
         group_id=group_id,
         event_type="GROUP_MESSAGE_CLOSE",
         run_id=run_id,
-        payload={"messageId": message_id, "body": body, "outcome": outcome},
+        payload={"messageId": message_id, "body": body, "thinking": thinking, "outcome": outcome},
     )
     interrupted = take_interrupt(group_id)
     if interrupted:
         return
+    if run_status == "completed":
+        from src.group_studio.service import record_worker_delivery
+
+        record_worker_delivery(
+            group_id,
+            member=member,
+            body=body,
+            run_id=run_id,
+            message_id=message_id,
+        )
     update_group_studio_run_status(run_id, run_status, error_text)
     set_group_studio_current_run_id(group_id, None)
     emit_envelope(

@@ -7,7 +7,7 @@ const PHASE_MS: Record<Exclude<StudioTransition, 'idle'>, number> = {
   'enter-collapse': 180,
   'enter-expand': 220,
   'enter-settle': 120,
-  'leave-collapse': 180,
+  'leave-collapse': 260,
   'leave-expand': 220,
   'leave-settle': 120,
 };

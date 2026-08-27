@@ -13,7 +13,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Bot, ChevronDown, MessageSquare, PanelLeftOpen, Plus, Settings, Users } from 'lucide-react';
+import { Bot, ChevronDown, MessageSquare, PanelLeftOpen, Plus, Settings } from 'lucide-react';
 import { Tag, Tooltip } from '@/components/design';
 import { useEventStream } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
@@ -174,6 +174,10 @@ export function ChatPage() {
   const activeSession = useMemo(() => (
     sessions.find((session) => session.id === activeSessionId) || null
   ), [activeSessionId, sessions]);
+  const chatOnlySessions = useMemo(
+    () => sessions.filter((session) => !session.groupStudio && !session.group_studio),
+    [sessions],
+  );
   const handleCollapseHistory = useCallback(() => {
     if (historyTransitionTimerRef.current !== null) {
       window.clearTimeout(historyTransitionTimerRef.current);
@@ -553,7 +557,7 @@ export function ChatPage() {
           isMacDesktopShell={isMacDesktopShell}
           isStreaming={state.isStreaming}
           loading={sessionsLoading}
-          sessions={sessions}
+          sessions={chatOnlySessions}
           workspaces={workspaces}
           onCollapse={handleCollapseHistory}
           onDeleteSession={(session) => { void handleDeleteSession(session); }}
@@ -596,9 +600,23 @@ export function ChatPage() {
                 </Tooltip>
               </>
             )}
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)]">
-              <MessageSquare size={17} strokeWidth={1.7} />
-            </div>
+            {studioFlagEnabled ? (
+              <Tooltip title={`${studioButtonLabel} ${studioShortcut}`} placement="bottom" mode="dark">
+                <button
+                  type="button"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)]"
+                  onClick={handleStudioToggle}
+                  disabled={studioEntering || chatRunBlocking}
+                  aria-label={studioButtonLabel}
+                >
+                  <MessageSquare size={17} strokeWidth={1.7} />
+                </button>
+              </Tooltip>
+            ) : (
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)]">
+                <MessageSquare size={17} strokeWidth={1.7} />
+              </div>
+            )}
             <div className="min-w-0">
               <div className="truncate text-base font-semibold text-[var(--color-text-primary)]">
                 {activeSession?.title || '新对话'}
@@ -628,20 +646,6 @@ export function ChatPage() {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {studioFlagEnabled ? (
-              <Tooltip title={`${studioButtonLabel} ${studioShortcut}`} placement="bottom" mode="dark">
-                <button
-                  type="button"
-                  className="icon-button chat-workbench-top-action inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs"
-                  onClick={handleStudioToggle}
-                  disabled={studioEntering || chatRunBlocking}
-                  aria-label={studioButtonLabel}
-                >
-                  <Users size={16} />
-                  <span>{studioButtonLabel}</span>
-                </button>
-              </Tooltip>
-            ) : null}
             <NotificationBell />
             <Tooltip title="工作台设置" placement="bottom" mode="dark">
               <button

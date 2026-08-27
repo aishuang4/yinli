@@ -23,6 +23,7 @@ WORKER_SESSION_LOST = "worker_session_lost"
 APPROVAL_BATCH_INCOMPLETE = "approval_batch_incomplete"
 OPEN_QUESTIONS_DROPPED = "open_questions_dropped"
 INVALID_UPLOAD = "invalid_upload"
+MODEL_NOT_CONFIGURED = "model_not_configured"
 
 
 GROUP_STUDIO_NOT_FOUND = "not_found"

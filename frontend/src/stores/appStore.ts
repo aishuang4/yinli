@@ -53,6 +53,8 @@ interface AppState {
   studioTransition: StudioTransition;
   /** 当前打开或刚刚离开的工作室 id。 */
   activeGroupStudioId: string | null;
+  /** 未落库草稿的 Chat 会话绑定；持久化后清空。 */
+  localStudioSeed: { chatSessionId: string; agentId: string } | null;
 
   // Actions
   /** 切换视图 */
@@ -70,7 +72,7 @@ interface AppState {
   /** 消费通知跳转后的 pending Job。 */
   clearPendingJobId: () => void;
   /** 打开工作室表面。不改 TitleBar 的 WorkspaceMode 集合；若在任务流则先回到工作台 Chat。 */
-  openGroupStudio: (groupId: string) => void;
+  openGroupStudio: (groupId: string, seed?: { chatSessionId: string; agentId: string }) => void;
   /** 收起工作室，回到 Chat。 */
   closeGroupStudio: () => void;
   /** 由 App 壳层推进过渡相位。 */
@@ -89,6 +91,7 @@ export const useAppStore = create<AppState>()((set) => ({
   studioSurface: 'none',
   studioTransition: 'idle',
   activeGroupStudioId: null,
+  localStudioSeed: null,
 
   // Actions
   setView: (view) => set({ currentView: view }),
@@ -106,17 +109,20 @@ export const useAppStore = create<AppState>()((set) => ({
     pendingJobId: jobId,
   }),
   clearPendingJobId: () => set({ pendingJobId: null }),
-  openGroupStudio: (groupId) => set((state) => {
+  openGroupStudio: (groupId, seed) => set((state) => {
     const nextBase = {
       currentView: 'chat' as const,
       workspaceMode: 'workstation' as const,
       activeGroupStudioId: groupId,
+      localStudioSeed: groupId.startsWith('gstu_local_')
+        ? (seed ?? state.localStudioSeed)
+        : null,
     };
     if (state.studioTransition !== 'idle') {
       return nextBase;
     }
-    if (state.studioSurface === 'group-studio' && state.activeGroupStudioId === groupId) {
-      return nextBase;
+    if (state.studioSurface === 'group-studio') {
+      return { ...nextBase, studioSurface: 'group-studio' as const };
     }
     if (prefersReducedMotion()) {
       return { ...nextBase, studioSurface: 'group-studio' as const, studioTransition: 'idle' as const };

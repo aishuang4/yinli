@@ -16,6 +16,7 @@ from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID
 from src.storage.database import (
     get_group_studio_member,
     get_group_studio_snapshot,
+    set_group_studio_pending_speaker,
     set_group_studio_status,
 )
 
@@ -29,13 +30,47 @@ HOST_STOP_TOOLS = {
 
 @dataclass
 class HostToolContext:
-    """一次 Host Run 内的可变上下文。"""
+    """按群复用的 Host 工具上下文。
+
+    Agent 工厂会缓存 Host 实例，工具闭包必须指向同一对象；
+    每轮只改 run_id / assigned_member_id，不能新建 ctx。
+    """
 
     group_id: str
     run_id: str
     host_member_id: str
     last_stop_tool: str = ""
     assigned_member_id: str = ""
+
+    def begin_run(self, run_id: str) -> None:
+        """绑定本轮 Run，清空上一轮指派。"""
+
+        self.run_id = run_id
+        self.last_stop_tool = ""
+        self.assigned_member_id = ""
+
+
+_HOST_CONTEXTS: dict[str, HostToolContext] = {}
+
+
+def acquire_host_tool_context(group_id: str, host_member_id: str) -> HostToolContext:
+    """返回该工作室的 Host 工具上下文；缓存 Agent 与调度器共用。"""
+
+    existing = _HOST_CONTEXTS.get(group_id)
+    if existing is None or existing.host_member_id != host_member_id:
+        existing = HostToolContext(
+            group_id=group_id,
+            run_id="",
+            host_member_id=host_member_id,
+        )
+        _HOST_CONTEXTS[group_id] = existing
+    return existing
+
+
+def drop_host_tool_context(group_id: str) -> None:
+    """归档时丢掉进程内 Host 上下文。"""
+
+    _HOST_CONTEXTS.pop(group_id, None)
 
 
 class HostTool(ToolBase):
@@ -190,6 +225,36 @@ class GroupPatchBlackboard(HostTool):
         return self.success({"blackboard": board})
 
 
+def _resolve_assignee(group_id: str, member_id: str) -> tuple[dict[str, Any] | None, str]:
+    """校验可被指派的工人；失败返回错误码。"""
+
+    snapshot = get_group_studio_snapshot(group_id) or {}
+    if str(snapshot.get("status") or "") == "awaiting_human":
+        return None, "awaiting_restatement"
+    member = get_group_studio_member(group_id, member_id)
+    if member is None or member.get("status") == "removed":
+        return None, "member_not_found"
+    if member.get("role") == "host":
+        return None, "cannot_assign_host"
+    if member.get("muted"):
+        return None, "member_muted"
+    return member, ""
+
+
+def _commit_floor_assignment(ctx: HostToolContext, member: dict[str, Any]) -> None:
+    """写入本轮指派并落库 pending speaker。"""
+
+    member_id = str(member["id"])
+    ctx.assigned_member_id = member_id
+    set_group_studio_pending_speaker(ctx.group_id, member_id)
+    emit_envelope(
+        group_id=ctx.group_id,
+        event_type="GROUP_FLOOR",
+        run_id=ctx.run_id,
+        payload={"memberId": member_id, "runId": ctx.run_id, "reason": "host_assign"},
+    )
+
+
 class GroupAssignFloor(HostTool):
     name = "group_assign_floor"
     description = "Give the next speaking/working turn to one worker member. Ends this host turn."
@@ -200,30 +265,39 @@ class GroupAssignFloor(HostTool):
     }
 
     async def __call__(self, memberId: str) -> ToolChunk:
-        snapshot = get_group_studio_snapshot(self.ctx.group_id) or {}
-        if str(snapshot.get("status") or "") == "awaiting_human":
-            return self.error("awaiting_restatement")
-        member = get_group_studio_member(self.ctx.group_id, memberId)
-        if member is None or member.get("status") == "removed":
-            return self.error("member_not_found")
-        if member.get("role") == "host":
-            return self.error("cannot_assign_host")
-        if member.get("muted"):
-            return self.error("member_muted")
+        member, error = _resolve_assignee(self.ctx.group_id, memberId)
+        if error or member is None:
+            return self.error(error or "member_not_found")
         self.ctx.last_stop_tool = self.name
-        self.ctx.assigned_member_id = memberId
-        emit_envelope(
-            group_id=self.ctx.group_id,
-            event_type="GROUP_FLOOR",
-            run_id=self.ctx.run_id,
-            payload={"memberId": memberId, "runId": self.ctx.run_id, "reason": "host_assign"},
-        )
+        _commit_floor_assignment(self.ctx, member)
         return self.success({"assigned": member})
+
+
+class GroupListAvailableAgents(HostTool):
+    name = "group_list_available_agents"
+    description = (
+        "List project Agents that can still be invited into this studio. "
+        "Use this before group_invite_member when the current members cannot cover the goal."
+    )
+    input_schema = {"type": "object", "properties": {}, "required": []}
+    is_read_only = True
+
+    async def __call__(self) -> ToolChunk:
+        from src.group_studio.orchestrator import max_members
+        from src.group_studio.service import list_invitable_agents
+        from src.storage.database import count_group_studio_active_members
+
+        agents = list_invitable_agents(self.ctx.group_id)
+        remaining = max(0, max_members() - count_group_studio_active_members(self.ctx.group_id))
+        return self.success({
+            "agents": agents,
+            "remainingSlots": remaining,
+        })
 
 
 class GroupInviteMember(HostTool):
     name = "group_invite_member"
-    description = "Invite an existing project Agent as a worker. Do not invite the host sentinel."
+    description = "Invite an existing project Agent as a worker. Do not invite the host sentinel. agentId comes from group_list_available_agents."
     input_schema = {
         "type": "object",
         "properties": {
@@ -306,16 +380,28 @@ class GroupRemoveMember(HostTool):
 
 class GroupStartExecution(HostTool):
     name = "group_start_execution"
-    description = "Move the studio from discussion into execution. Ends this host turn."
-    input_schema = {"type": "object", "properties": {}, "required": []}
+    description = (
+        "Move the studio from discussion into execution. Ends this host turn. "
+        "Pass memberId to also assign who writes the deliverable in this same turn."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {"memberId": {"type": "string"}},
+        "required": [],
+    }
 
-    async def __call__(self) -> ToolChunk:
+    async def __call__(self, memberId: str = "") -> ToolChunk:
         snapshot = get_group_studio_snapshot(self.ctx.group_id) or {}
         if str(snapshot.get("status") or "") != "discussing":
             return self.error("illegal_transition")
         goal = str((snapshot.get("taskCard") or {}).get("goal") or "").strip()
         if not goal:
             return self.error("goal_required")
+        assigned = None
+        if memberId:
+            assigned, error = _resolve_assignee(self.ctx.group_id, memberId)
+            if error or assigned is None:
+                return self.error(error or "member_not_found")
         set_group_studio_status(self.ctx.group_id, "executing")
         self.ctx.last_stop_tool = self.name
         emit_envelope(
@@ -324,18 +410,32 @@ class GroupStartExecution(HostTool):
             run_id=self.ctx.run_id,
             payload={"from": "discussing", "to": "executing", "reason": "host_start_execution"},
         )
-        return self.success({"status": "executing"})
+        if assigned is not None:
+            _commit_floor_assignment(self.ctx, assigned)
+        return self.success({"status": "executing", "assigned": assigned})
 
 
 class GroupStartReview(HostTool):
     name = "group_start_review"
-    description = "Move the studio from execution into review. Ends this host turn."
-    input_schema = {"type": "object", "properties": {}, "required": []}
+    description = (
+        "Move the studio from execution into review. Ends this host turn. "
+        "Pass memberId to assign who checks the deliverable."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {"memberId": {"type": "string"}},
+        "required": [],
+    }
 
-    async def __call__(self) -> ToolChunk:
+    async def __call__(self, memberId: str = "") -> ToolChunk:
         snapshot = get_group_studio_snapshot(self.ctx.group_id) or {}
         if str(snapshot.get("status") or "") != "executing":
             return self.error("illegal_transition")
+        assigned = None
+        if memberId:
+            assigned, error = _resolve_assignee(self.ctx.group_id, memberId)
+            if error or assigned is None:
+                return self.error(error or "member_not_found")
         set_group_studio_status(self.ctx.group_id, "reviewing")
         self.ctx.last_stop_tool = self.name
         emit_envelope(
@@ -344,7 +444,9 @@ class GroupStartReview(HostTool):
             run_id=self.ctx.run_id,
             payload={"from": "executing", "to": "reviewing", "reason": "host_start_review"},
         )
-        return self.success({"status": "reviewing"})
+        if assigned is not None:
+            _commit_floor_assignment(self.ctx, assigned)
+        return self.success({"status": "reviewing", "assigned": assigned})
 
 
 class GroupProposeClose(HostTool):
@@ -371,6 +473,7 @@ def host_tools(ctx: HostToolContext) -> list[HostTool]:
         GroupReadBlackboard(ctx),
         GroupPatchBlackboard(ctx),
         GroupAssignFloor(ctx),
+        GroupListAvailableAgents(ctx),
         GroupInviteMember(ctx),
         GroupMuteMember(ctx),
         GroupRemoveMember(ctx),

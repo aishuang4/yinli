@@ -46,6 +46,7 @@ from src.group_studio.service import (
     interrupt_run,
     list_studio_files,
     list_studio_messages,
+    list_studios,
     mute_member,
     pause_studio,
     post_human_message,
@@ -76,6 +77,13 @@ def _not_implemented() -> None:
 
 
 EnabledDep = Depends(require_group_studio_enabled)
+
+
+@router.get("", dependencies=[EnabledDep])
+async def list_studios_route(projectId: str = Query(..., alias="projectId")) -> dict:
+    """列出当前 Project 未归档工作室，独立于 Chat 历史。"""
+
+    return {"studios": list_studios(projectId)}
 
 
 @router.post("/from-chat", dependencies=[EnabledDep])

@@ -57,7 +57,7 @@ Dynamic Workflow 证明了可复用的**隔离模式**（独立路由 + SQLite �
 - 预算按 turn / 无进展熔断；达阈值暂停并走通知通道。
 - 人类输入框发言即中止当前生成；Goal/约束变更强制 Host 复述。
 - Worker 高风险工具走独立 `GROUP_APPROVAL`，禁止写入 Chat `PENDING_INTERACTIONS`。
-- 结项必须勾 DoD；规则能勾的自动勾。
+- 结项时若已设 DoD 必须勾齐；未设验收清单视为已完成，可直接归档。规则能勾的自动勾。
 - 群共享文件库（基本版本）。
 - 独立 SSE；前端只依赖该契约。
 
@@ -91,10 +91,13 @@ Dynamic Workflow 证明了可复用的**隔离模式**（独立路由 + SQLite �
 12. **Host 哨兵 `agent_id="group-studio-host"`。** 选中 Chat Agent = 第一 Worker。Host 不进 Agents 页，不参与 MemoryAdmissionGate，`require_agent` 跳过该 id 与 `"default"`。
 13. **路由前缀 `/api/group-studio`。** 包名 `group_studio`。
 14. **工具装配对齐 Team allowlist，并补 `include_default_tools`。** Host：`include_default_tools=False` + 控场工具 allowlist。Worker：显式 allowlist（普通工具 + 群工具），**denylist `AskUser` / `FinalAnswerStart`**。禁止 Host/Worker 默认吃到 Chat HITL 工具。
-15. **P0 Worker HITL = 方案 B 最小集，且权限策略由工作室自有、不抄 Chat Agent profile。** Host 固定 `PermissionMode.BYPASS`。Worker 固定 `human_approval=True` + `tool_policy=ASK_EVERY_TIME` → `PermissionMode.DEFAULT`，才能稳定打出 `REQUIRE_USER_CONFIRM`。`group_approvals` 持久化 `reply_id` + 完整 `tool_calls_json`。同一次 pause 的多个 tool_call 必须一次决策完才能 resume。进程内必须持有该 Worker AgentScope 实例直到 approved/denied/cancelled。不得写入 Chat `PENDING_INTERACTIONS`。
+15. **群聊内工具权限全部放开，且策略由工作室自有、不抄 Chat Agent profile。** Host 固定 `PermissionMode.BYPASS`。Worker 同样固定 `human_approval=False` + `trusted_tools` → `PermissionMode.BYPASS`，Bash/Write/网络工具直接执行，不再弹出 `GROUP_APPROVAL`。Chat 里该 Agent 的审批配置保持不变。`group_approvals` 仍保留，仅当运行时仍打出 `REQUIRE_USER_CONFIRM` 时使用。不得写入 Chat `PENDING_INTERACTIONS`。
 16. **P0 只熔断 turn 与无进展。** `max_cost_usd` 为 P1 字段，API 可返回但不生效。
 17. **Feature flag 默认 `enabled=false`。** 开 flag 是最后一个实现 PR。关 flag 拒绝新 from-chat，已有 Run 继续到 pause/archive。
 18. **三个 ID 不得互冒。** `chat_session_id` → `RuntimeContext.session_id`；`group_id` → 工作室身份与文件根；`membership_id` → Agent cache key。
+19. **Host/Worker 工具上下文按群复用。** `get_or_create_agent()` 缓存命中时 extra_tools 不会换成新对象；`HostToolContext` / `WorkerToolContext` 必须按 `group_id`（工人再加 `member_id`）单例，每轮只改 `run_id` 并清空指派/正文。`group_assign_floor` 同时把 `pending_speaker_member_id` 写入 `group_studios`；Host 结束后调度读 ctx 或该列，空闲时未消费指派优先拉工人。人类新指令清空该列。
+20. **进入执行必须调工具。** `group_start_execution` 可带 `memberId` 在同一轮指定谁写交付。口头宣布「进入执行」无效：Host 运行时会 nudge 一次要求调工具；若只切了阶段没指派，调度再给 Host 一轮去 `group_assign_floor`。
+21. **每轮注入最近 8 条可见消息。** Host/Worker 的本轮 user 消息必须带 `lastSpokeAt` 与最近 8 条 `visibleInTimeline` 消息；可见发言回写 `lastSpokeAt`。执行/验收期工人交稿后系统把「已交稿」摘要写入黑板，并登记 `workspace/` `outputs/` 新文件。主持人不得只因黑板 artifacts 为空就判未响应。
 
 ---
 
@@ -360,10 +363,10 @@ group_studio                                            ✓ get_or_create_agent 
 
 | 角色 | `human_approval` | `tool_policy` | AgentScope mode |
 | --- | --- | --- | --- |
-| Host | `False` | 忽略（无写工具） | `PermissionMode.BYPASS` |
-| Worker | **`True`（强制覆盖）** | **`ASK_EVERY_TIME`（强制覆盖）** | `PermissionMode.DEFAULT` |
+| Host | `False` | `trusted_tools` | `PermissionMode.BYPASS` |
+| Worker | `False` | `trusted_tools` | `PermissionMode.BYPASS` |
 
-Worker 仍复制该 Agent 的 filesystem_scope / network / docker / Skill / MCP 白名单，**只覆盖审批两项**。覆盖必须进 `guardrail_cache_key`，避免和 Chat 实例撞 cache。
+Worker 仍复制该 Agent 的 filesystem_scope / docker / Skill / MCP 白名单，**覆盖审批为 BYPASS，并打开网络**。覆盖必须进 `guardrail_cache_key`，避免和 Chat 实例撞 cache。
 
 **Host**
 
@@ -729,7 +732,7 @@ class ChatSessionGroupStudioHint(BaseModel):
 | `GROUP_APPROVAL` | 是 | 完整 `GroupApproval`（含 `replyId`、`toolCalls`） |
 | `GROUP_FILE` | 是 | 完整 artifact |
 | `GROUP_DOD` | 是 | `taskCardId`, `dodChecklist` |
-| `GROUP_ERROR` | 是 | `code`, `message` |
+| `GROUP_ERROR` | 是 | `code`, `message`。缺 API Key 时为 `model_not_configured`，不创建 Run、不打模型 |
 | `GROUP_RUN_ENDED` | 是 | `runId`, `status` |
 
 公共信封：
@@ -1081,7 +1084,7 @@ pytest：binding unique、archived 后再开、`chat_run_active`（含 waiting�
 | 默认 toolkit 带入 AskUser | 高 | allowlist + denylist + `include_default_tools=False`（Host）+ 测试 |
 | 阶段机空转 | 高 | drafting 禁 reply；转移表 |
 | HITL 卡死 | 高 | 工作室自有 `DEFAULT` 权限 + 持久化 `reply_id`/`tool_calls` + 持有实例 |
-| 抄 Chat profile 导致 BYPASS | 高 | Worker 强制覆盖 `human_approval`/`ASK_EVERY_TIME` |
+| 抄 Chat profile 导致误审批 | 中 | Worker 强制覆盖为 BYPASS，Chat 配置不变 |
 | 首次填 Goal 误进 restatement | 中 | drafting 行与 restatement 行互斥，old_goal 空不触发 |
 | `run_events` 孤儿行 | 高 | P0 不写 |
 | Host `require_agent` 403 | 高 | 哨兵豁免 |
@@ -1154,7 +1157,7 @@ pytest：binding unique、archived 后再开、`chat_run_active`（含 waiting�
 - **标题：** `feat(group-studio): serial worker runs and independent approvals`
 - **依赖：** PR 5、PR 6
 - **影响：** worker_runtime、`group_approvals`、`POST /approvals`、`GroupApprovalBar`、activity 流、Skill/MCP 从 Agent 配置复制
-- **说明：** Worker 强制 `human_approval` + `ASK_EVERY_TIME` → `PermissionMode.DEFAULT`；`group_approvals.reply_id` + `tool_calls_json`；同 pause 一次决策；持有 Agent 实例直到终态；`group_post_message` 后 `stop_after_tool_name`；`max_react_iters=40`；禁止 `PENDING_INTERACTIONS`；`maxParallelWorkers=1`。
+- **说明：** Worker 强制 `human_approval=False` + `trusted_tools` → `PermissionMode.BYPASS`；`group_approvals` 仍保留兜底；`group_post_message` 后 `stop_after_tool_name`；`max_react_iters=40`；禁止 `PENDING_INTERACTIONS`；`maxParallelWorkers=1`。
 
 ### PR 8 — 人类消息 inline interrupt、复述、turn 熔断、通知点击
 

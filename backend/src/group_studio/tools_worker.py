@@ -18,7 +18,10 @@ WORKER_STOP_TOOLS = {"group_post_message"}
 
 @dataclass
 class WorkerToolContext:
-    """一次 Worker Run 内的可变上下文。"""
+    """按成员复用的 Worker 工具上下文。
+
+    缓存 Agent 的工具闭包必须指向同一对象；每轮只改 run_id / posted_body。
+    """
 
     group_id: str
     run_id: str
@@ -27,6 +30,46 @@ class WorkerToolContext:
     last_stop_tool: str = ""
     posted_body: str = ""
     posted_intent: str = ""
+
+    def begin_run(self, run_id: str) -> None:
+        """绑定本轮 Run，清空上一轮正文。"""
+
+        self.run_id = run_id
+        self.last_stop_tool = ""
+        self.posted_body = ""
+        self.posted_intent = ""
+
+
+_WORKER_CONTEXTS: dict[tuple[str, str], WorkerToolContext] = {}
+
+
+def acquire_worker_tool_context(
+    group_id: str,
+    member_id: str,
+    agent_id: str,
+) -> WorkerToolContext:
+    """返回该成员的 Worker 工具上下文；缓存 Agent 与运行时共用。"""
+
+    key = (group_id, member_id)
+    existing = _WORKER_CONTEXTS.get(key)
+    if existing is None:
+        existing = WorkerToolContext(
+            group_id=group_id,
+            run_id="",
+            member_id=member_id,
+            agent_id=agent_id,
+        )
+        _WORKER_CONTEXTS[key] = existing
+    else:
+        existing.agent_id = agent_id
+    return existing
+
+
+def drop_worker_tool_contexts(group_id: str) -> None:
+    """归档时丢掉该工作室全部 Worker 上下文。"""
+
+    for key in [item for item in _WORKER_CONTEXTS if item[0] == group_id]:
+        _WORKER_CONTEXTS.pop(key, None)
 
 
 class WorkerTool(ToolBase):

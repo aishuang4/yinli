@@ -207,12 +207,14 @@ function WorkspacePages({ workspaceMode, activeView, cachedViews }: WorkspacePag
   useStudioTransition();
   const workflowActive = workspaceMode === 'workflow';
   const studioBusy = studioTransition !== 'idle';
-  const studioVisible = !workflowActive && (studioSurface === 'group-studio' || studioBusy);
-  const workstationVisible = !workflowActive && (studioSurface === 'none' || studioBusy);
+  const chatActive = !workflowActive && activeView === 'chat';
+  const studioVisible = chatActive && (studioSurface === 'group-studio' || studioBusy);
+  const workstationVisible = !workflowActive && (!chatActive || studioSurface === 'none' || studioBusy);
   return (
     <div
       className="app-workspace-switcher"
       data-mode={workspaceMode}
+      data-view={activeView}
       data-studio-surface={studioSurface}
       data-studio-transition={studioTransition}
     >
@@ -225,6 +227,7 @@ function WorkspacePages({ workspaceMode, activeView, cachedViews }: WorkspacePag
       <section
         className="app-workspace-pane app-workspace-pane--group-studio"
         aria-hidden={!studioVisible}
+        hidden={!studioVisible}
       >
         <Suspense fallback={<PageSkeleton />}>
           <GroupStudioPage />

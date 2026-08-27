@@ -89,3 +89,13 @@ def remember_fingerprint(run_id: str, fingerprint: tuple[Any, ...]) -> None:
 
 def take_fingerprint(run_id: str) -> tuple[Any, ...] | None:
     return _FINGERPRINTS.pop(run_id, None)
+
+
+def drop_group_tool_contexts(group_id: str) -> None:
+    """归档时丢掉该群的 Host/Worker 工具上下文。"""
+
+    from src.group_studio.tools_host import drop_host_tool_context
+    from src.group_studio.tools_worker import drop_worker_tool_contexts
+
+    drop_host_tool_context(group_id)
+    drop_worker_tool_contexts(group_id)

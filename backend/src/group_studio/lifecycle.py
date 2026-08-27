@@ -24,6 +24,9 @@ def archive_for_chat_session_delete(session_id: str) -> None:
     previous = str(raw.get("status") or "")
     cancel_active_run(group_id, source="pause")
     archive_group_studio(group_id)
+    from src.group_studio.sessions import drop_group_tool_contexts
+
+    drop_group_tool_contexts(group_id)
     emit_envelope(
         group_id=group_id,
         event_type="GROUP_STATUS",

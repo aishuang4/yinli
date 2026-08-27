@@ -228,6 +228,64 @@ def test_upload_rejects_illegal_path_and_oversize(client, tmp_path, monkeypatch)
     assert oversize.json()["detail"] == INVALID_UPLOAD
 
 
+class _FakeEvent:
+    def __init__(self, **payload: object) -> None:
+        self._payload = payload
+
+    def model_dump(self, mode: str = "json") -> dict:
+        return dict(self._payload)
+
+
+class _PostAgent:
+    def __init__(self, tools: list) -> None:
+        self._tools = tools
+
+    async def reply_stream(self, _message: object):
+        tool = next(item for item in self._tools if item.name == "group_post_message")
+        await tool(body="【最终交付】不买，仓位 0%。", intent="report_progress")
+        yield _FakeEvent(type="TOOL_RESULT_END", tool_call_name="group_post_message", state="success")
+        yield _FakeEvent(type="REPLY_END", finished_reason="completed")
+
+
+def test_execution_delivery_updates_spoke_and_blackboard(client, tmp_path):
+    import asyncio
+
+    from src.group_studio.files import ensure_studio_dirs
+    from src.group_studio.worker_runtime import run_worker_turn
+    from src.storage.database import (
+        get_group_studio_member,
+        get_group_studio_snapshot,
+        set_group_studio_status,
+        update_project,
+    )
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    update_project(DEFAULT_PROJECT_ID, {"rootPath": str(project_root)})
+    studio = _create_studio(client, "sess-delivery")
+    worker = next(item for item in studio["members"] if item["role"] == "worker")
+    set_group_studio_status(studio["id"], "executing")
+    workspace = ensure_studio_dirs(project_root, studio["id"]) / "outputs"
+    (workspace / "advice.md").write_text("不买，仓位0%", encoding="utf-8")
+
+    def factory(spec: object) -> _PostAgent:
+        return _PostAgent(list(getattr(spec, "extra_tools", []) or []))
+
+    asyncio.run(run_worker_turn(studio["id"], worker["id"], agent_factory=factory))
+    snapshot = get_group_studio_snapshot(studio["id"])
+    assert snapshot is not None
+    assert "最终交付" in snapshot["messages"][-1]["body"]
+    updated = get_group_studio_member(studio["id"], worker["id"])
+    assert updated is not None
+    assert updated["lastSpokeAt"]
+    decisions = " ".join(item["text"] for item in snapshot["blackboard"]["decisions"])
+    assert "已交稿" in decisions
+    assert snapshot["blackboard"]["artifacts"]
+    events = list_group_studio_events_after(studio["id"], 0)
+    assert any(item["type"] == "GROUP_FILE" for item in events)
+    assert any(item["type"] == "GROUP_BLACKBOARD" for item in events)
+
+
 def test_illegal_filename_rejected():
     with pytest.raises(GroupStudioError) as exc:
         _reject_illegal_filename("../secret.txt")

@@ -7,9 +7,26 @@ from typing import Any
 from src.group_studio.events import emit_envelope
 from src.group_studio.notify import KIND_CIRCUIT, notify_studio
 from src.group_studio.sessions import take_fingerprint
-from src.storage.database import get_group_studio_snapshot, update_group_studio_state
+from src.storage.database import (
+    get_group_studio_snapshot,
+    list_group_studio_messages,
+    update_group_studio_state,
+)
 
 BILLABLE_STATUSES = frozenset({"discussing", "executing", "reviewing"})
+
+
+def _worker_delivered(group_id: str, run_id: str) -> bool:
+    """工人本轮写出了可见正文，算有效进展。"""
+
+    for item in list_group_studio_messages(group_id, limit=30):
+        if str(item.get("runId") or "") != run_id:
+            continue
+        if str(item.get("role") or "") != "worker":
+            continue
+        if str(item.get("body") or "").strip():
+            return True
+    return False
 
 
 def progress_fingerprint(snapshot: dict[str, Any]) -> tuple[Any, ...]:
@@ -63,10 +80,11 @@ def on_run_finished(
     started = take_fingerprint(run_id)
     if run_status == "completed":
         budget["usedTurns"] = int(budget.get("usedTurns") or 0) + 1
-        if started is not None and started == progress_fingerprint(snapshot):
-            budget["noProgressTurns"] = int(budget.get("noProgressTurns") or 0) + 1
-        else:
+        board_moved = started is None or started != progress_fingerprint(snapshot)
+        if board_moved or _worker_delivered(group_id, run_id):
             budget["noProgressTurns"] = 0
+        else:
+            budget["noProgressTurns"] = int(budget.get("noProgressTurns") or 0) + 1
     elif human_cancel:
         pass
     else:

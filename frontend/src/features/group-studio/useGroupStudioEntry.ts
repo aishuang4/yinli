@@ -10,6 +10,7 @@ import {
   fetchGroupStudioSettings,
   fetchStudioByChat,
 } from './api';
+import { createLocalStudioId } from './localStudio';
 import type { GroupStudioSnapshot } from './types';
 import { useGroupStudioHotkey } from './useGroupStudioHotkey';
 
@@ -117,18 +118,29 @@ export function useGroupStudioEntry({
     }
     setEntering(true);
     try {
+      const existing = await fetchStudioByChat(sessionId);
+      if (existing) {
+        setExistingStudio(existing);
+        openGroupStudio(existing.id);
+        return;
+      }
       const files = fileAttachments.length > 0
         ? await uploadFilesForSession(fileAttachments, activeProjectId, sessionId)
         : [];
-      const studio = await createStudioFromChat({
-        projectId: activeProjectId,
-        chatSessionId: sessionId,
-        agentId,
-        draftText,
-        filePaths: files.map((file) => file.path).filter(Boolean),
-      });
-      setExistingStudio(studio);
-      openGroupStudio(studio.id);
+      const filePaths = files.map((file) => file.path).filter(Boolean);
+      if (draftText.trim() || filePaths.length > 0) {
+        const studio = await createStudioFromChat({
+          projectId: activeProjectId,
+          chatSessionId: sessionId,
+          agentId,
+          draftText,
+          filePaths,
+        });
+        setExistingStudio(studio);
+        openGroupStudio(studio.id);
+        return;
+      }
+      openGroupStudio(createLocalStudioId(), { chatSessionId: sessionId, agentId });
     } catch (error) {
       notifyError(getErrorMessage(error, '无法进入工作室'));
     } finally {

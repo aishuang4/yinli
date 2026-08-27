@@ -84,6 +84,77 @@ class GroupStudioRecordStore:
             for row in rows
         }
 
+    _BLANK_DRAFT_SQL = """
+        s.status = 'drafting'
+        AND TRIM(COALESCE(t.goal, '')) = ''
+        AND TRIM(COALESCE(t.dod_json, '[]')) IN ('', '[]')
+        AND (
+            SELECT COUNT(*) FROM group_memberships mb
+            WHERE mb.group_id = s.id AND mb.status != 'removed'
+        ) <= 2
+        AND NOT EXISTS (
+            SELECT 1 FROM group_messages m
+            WHERE m.group_id = s.id
+              AND IFNULL(m.visible_in_timeline, 1) = 1
+              AND TRIM(IFNULL(m.body, '')) != ''
+        )
+        AND NOT EXISTS (SELECT 1 FROM group_artifacts a WHERE a.group_id = s.id)
+        AND NOT EXISTS (SELECT 1 FROM group_runs r WHERE r.group_id = s.id)
+    """
+
+    def list_active_by_project(self, project_id: str) -> list[dict[str, Any]]:
+        """列出某 Project 下未归档工作室，供群聊侧栏独立于 Chat catalog。
+
+        无目标、无可见消息、无产物、无 Run 的 drafting 空白稿不进历史。
+        """
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT s.id, s.title, s.status, s.project_id, s.workspace_id,
+                       s.chat_session_id, s.updated_at
+                FROM group_studios s
+                JOIN group_task_cards t ON t.id = s.current_task_card_id
+                WHERE s.project_id = ? AND s.status NOT IN ('archived', 'failed')
+                  AND NOT ({self._BLANK_DRAFT_SQL})
+                ORDER BY s.updated_at DESC
+                """,
+                (project_id,),
+            ).fetchall()
+        return [
+            {
+                "id": str(row["id"]),
+                "title": str(row["title"] or "未命名工作室"),
+                "status": str(row["status"]),
+                "projectId": str(row["project_id"]),
+                "workspaceId": str(row["workspace_id"]),
+                "chatSessionId": str(row["chat_session_id"]),
+                "updatedAt": str(row["updated_at"]),
+            }
+            for row in rows
+        ]
+
+    def find_blank_draft_id(self, project_id: str) -> str | None:
+        """同一 Project 下最新一份空白 drafting 工作室。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                f"""
+                SELECT s.id
+                FROM group_studios s
+                JOIN group_task_cards t ON t.id = s.current_task_card_id
+                WHERE s.project_id = ? AND {self._BLANK_DRAFT_SQL}
+                ORDER BY s.updated_at DESC
+                LIMIT 1
+                """,
+                (project_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["id"])
+
     def get_snapshot(self, group_id: str, *, message_limit: int = 100) -> dict[str, Any] | None:
         """组装 GET /{id} 形状的快照。"""
 
@@ -153,6 +224,11 @@ class GroupStudioRecordStore:
                 "noProgressTurns": 0,
             }),
             "currentRunId": studio["current_run_id"] or None,
+            "pendingSpeakerMemberId": (
+                (str(studio["pending_speaker_member_id"] or "") or None)
+                if "pending_speaker_member_id" in studio.keys()
+                else None
+            ),
             "currentApproval": None if hide_approval else self._approval_from_row(pending),
             "messages": [self._message_from_row(row) for row in ordered_messages],
             "awaitingRestatement": bool(studio["awaiting_restatement"]),
@@ -286,6 +362,23 @@ class GroupStudioRecordStore:
             )
         return self.get_member(group_id, member_id)
 
+    def set_member_last_spoke(self, group_id: str, member_id: str, spoke_at: str | None = None) -> None:
+        """工人/主持人可见发言后更新 last_spoke_at。"""
+
+        if not group_id or not member_id or member_id == "human":
+            return
+        self.ensure_db()
+        now = spoke_at or self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE group_memberships
+                SET last_spoke_at = ?, updated_at = ?
+                WHERE group_id = ? AND id = ?
+                """,
+                (now, now, group_id, member_id),
+            )
+
     def set_member_removed(self, group_id: str, member_id: str) -> dict[str, Any] | None:
         self.ensure_db()
         now = self.utc_now()
@@ -365,6 +458,34 @@ class GroupStudioRecordStore:
                 (run_id or "", now, group_id),
             )
 
+    def set_pending_speaker(self, group_id: str, member_id: str | None) -> None:
+        """写入或清空尚未开工的指派工人。"""
+
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE group_studios
+                SET pending_speaker_member_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (member_id or "", now, group_id),
+            )
+
+    def get_pending_speaker(self, group_id: str) -> str:
+        """读取尚未开工的指派工人；没有则空字符串。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT pending_speaker_member_id FROM group_studios WHERE id = ?",
+                (group_id,),
+            ).fetchone()
+        if row is None:
+            return ""
+        return str(row["pending_speaker_member_id"] or "")
+
     def insert_run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.ensure_db()
         now = self.utc_now()
@@ -424,10 +545,10 @@ class GroupStudioRecordStore:
             conn.execute(
                 """
                 INSERT INTO group_messages (
-                    id, group_id, run_id, speaker_id, role, intent, body,
+                    id, group_id, run_id, speaker_id, role, intent, body, thinking,
                     mentions_json, attachments_json, visible_in_timeline,
                     created_at, sort_order
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["id"],
@@ -437,6 +558,7 @@ class GroupStudioRecordStore:
                     payload["role"],
                     payload.get("intent") or "discuss",
                     payload.get("body") or "",
+                    payload.get("thinking") or "",
                     self.dumps(payload.get("mentions") or []),
                     self.dumps(payload.get("attachments") or []),
                     1 if payload.get("visibleInTimeline", True) else 0,
@@ -446,13 +568,19 @@ class GroupStudioRecordStore:
             )
         return {**payload, "createdAt": now, "sortOrder": sort_order}
 
-    def update_message_body(self, message_id: str, body: str) -> None:
+    def update_message_body(self, message_id: str, body: str, thinking: str | None = None) -> None:
         self.ensure_db()
         with self.lock, self.connect() as conn:
-            conn.execute(
-                "UPDATE group_messages SET body = ? WHERE id = ?",
-                (body, message_id),
-            )
+            if thinking is None:
+                conn.execute(
+                    "UPDATE group_messages SET body = ? WHERE id = ?",
+                    (body, message_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE group_messages SET body = ?, thinking = ? WHERE id = ?",
+                    (body, thinking, message_id),
+                )
 
     def append_event(self, payload: dict[str, Any]) -> dict[str, Any]:
         """持久化一条非 DELTA 事件，返回带 seq 的信封。"""
@@ -865,8 +993,9 @@ class GroupStudioRecordStore:
                 id, workspace_id, project_id, chat_session_id, title, status,
                 phase_before_pause, current_task_card_id, awaiting_restatement,
                 orchestrator_meta, budget_json, current_run_id,
+                pending_speaker_member_id,
                 created_at, updated_at, archived_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 group_id,
@@ -880,6 +1009,7 @@ class GroupStudioRecordStore:
                 0,
                 self.dumps(payload.get("orchestratorMeta") or {}),
                 self.dumps(payload["budget"]),
+                "",
                 "",
                 now,
                 now,
@@ -1020,6 +1150,7 @@ class GroupStudioRecordStore:
             "role": row["role"],
             "intent": row["intent"],
             "body": row["body"] or "",
+            "thinking": row["thinking"] if "thinking" in row.keys() else "",
             "mentions": self.loads(row["mentions_json"], []),
             "attachments": self.loads(row["attachments_json"], []),
             "visibleInTimeline": bool(row["visible_in_timeline"]),

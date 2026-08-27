@@ -153,6 +153,7 @@ class GroupMessage(CamelModel):
     role: Literal["human", "host", "worker", "system"]
     intent: MessageIntent
     body: str
+    thinking: str = ""
     mentions: list[str] = Field(default_factory=list)
     attachments: list[str] = Field(default_factory=list)
     visible_in_timeline: bool = Field(default=True, alias="visibleInTimeline")
@@ -212,6 +213,7 @@ class GroupStudio(CamelModel):
     members: list[Membership] = Field(default_factory=list)
     budget: GroupBudget
     current_run_id: str | None = Field(default=None, alias="currentRunId")
+    pending_speaker_member_id: str | None = Field(default=None, alias="pendingSpeakerMemberId")
     current_approval: GroupApproval | None = Field(default=None, alias="currentApproval")
     messages: list[GroupMessage] = Field(default_factory=list)
     awaiting_restatement: bool = Field(alias="awaitingRestatement")
@@ -236,6 +238,7 @@ class GroupStudioFromChatRequest(CamelModel):
     draft_text: str = Field(default="", alias="draftText", max_length=8000)
     file_paths: list[str] = Field(default_factory=list, alias="filePaths")
     title: str | None = None
+    reuse_blank_draft: bool = Field(default=False, alias="reuseBlankDraft")
 
 
 class GroupPauseRequest(CamelModel):

@@ -60,8 +60,8 @@ heartbeat 不带 `seq`，不进入 `group_studio_events`，也不进入前端 re
 | `GROUP_MEMBER` | 是 | 完整 `Membership` + `change`: `joined\|muted\|unmuted\|removed\|crashed` |
 | `GROUP_FLOOR` | 是 | `memberId`, `runId`, `reason`: `host_assign\|mention\|human_return\|host_default` |
 | `GROUP_MESSAGE_OPEN` | 是 | `messageId`, `speakerId`, `role`, `intent`, `visibleInTimeline` |
-| `GROUP_MESSAGE_DELTA` | **否** | `messageId`, `text` |
-| `GROUP_MESSAGE_CLOSE` | 是 | `messageId`, `body`（全文）, `outcome`: `completed\|cancelled\|failed` |
+| `GROUP_MESSAGE_DELTA` | **否** | `messageId`, `text`；可选 `kind`: `answer`（缺省）\| `thinking`。思考增量不得写入 `body` |
+| `GROUP_MESSAGE_CLOSE` | 是 | `messageId`, `body`（对群可见全文）, `outcome`: `completed\|cancelled\|failed`；可选 `thinking`（思考全文，缺省 `""`） |
 | `GROUP_ACTIVITY_OPEN` | 是 | `runId`, `memberId`, `toolName?` |
 | `GROUP_ACTIVITY_DELTA` | 否 | `runId`, `memberId`, `text` |
 | `GROUP_ACTIVITY_CLOSE` | 是 | `runId`, `memberId`, `toolName?` |
@@ -71,7 +71,7 @@ heartbeat 不带 `seq`，不进入 `group_studio_events`，也不进入前端 re
 | `GROUP_APPROVAL` | 是 | 完整 `GroupApproval`（含 `replyId`、`toolCalls`） |
 | `GROUP_FILE` | 是 | 完整 `GroupArtifact` |
 | `GROUP_DOD` | 是 | `taskCardId`, `dodChecklist` |
-| `GROUP_ERROR` | 是 | `code`, `message` |
+| `GROUP_ERROR` | 是 | `code`, `message`。已知 `code`：`model_not_configured`（缺 API Key，不创建 Run）、`host_failed`、`worker_failed`、`host_required`、`member_muted`、`not_found`、`worker_session_lost` |
 | `GROUP_RUN_ENDED` | 是 | `runId`, `status` |
 
 **DELTA 不落 SQLite。** 只持久化 OPEN / CLOSE / 状态类事件。运行中 `group_messages.body` 可由运行时每 256 字符或 200ms upsert 一次，刷新不靠 DELTA replay。

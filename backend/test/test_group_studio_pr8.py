@@ -252,6 +252,22 @@ def test_no_progress_from_max_iters(client):
     assert snapshot["budget"]["noProgressTurns"] >= 1
 
 
+def test_resume_clears_no_progress(client):
+    studio = _create_discussing(client, "sess-resume-noprog")
+    update_group_studio_state(studio["id"], budget={
+        "maxTurns": 40,
+        "maxNoProgressTurns": 3,
+        "usedTurns": 4,
+        "noProgressTurns": 3,
+    }, status="circuit_broken", phase_before_pause="discussing")
+    resumed = client.post(f"/api/group-studio/{studio['id']}/resume", json={
+        "projectId": DEFAULT_PROJECT_ID,
+    })
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["status"] == "discussing"
+    assert resumed.json()["budget"]["noProgressTurns"] == 0
+
+
 def test_pause_twice_is_illegal(client):
     studio = _create_discussing(client, "sess-pause2")
     first = client.post(f"/api/group-studio/{studio['id']}/pause", json={

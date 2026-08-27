@@ -1,20 +1,33 @@
-/** 群聊工作室独立界面。任务卡、黑板、成员静音与共享文件可编辑。 */
+/** 群聊工作室独立界面。布局对齐 Chat：左列表、中对话、右可折叠上下文。 */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Users } from 'lucide-react';
-import { Button, Spinner } from '@/components/design';
-import { SelectField, TextAreaField } from '../../components/form';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  Pause,
+  Play,
+  Plus,
+  Settings,
+  Square,
+  Users,
+} from 'lucide-react';
+import { Spinner, Tag, Tooltip } from '@/components/design';
+import { NotificationBell } from '../notifications/NotificationBell';
 import { useAgents } from '../../hooks/useAgents';
 import { useProjectResources } from '../../hooks/useProjectResources';
 import { useAppStore } from '../../stores/appStore';
 import { getErrorMessage, notifyError, notifySuccess } from '../../utils/feedback';
+import { createId } from '../../utils/id';
 import {
   addStudioMember,
   closeStudio,
   confirmStudioRestatement,
+  createStudioFromChat,
   decideStudioApproval,
   fetchGroupStudio,
   fetchStudioFiles,
+  fetchStudioList,
   interruptStudio,
   muteStudioMember,
   pauseStudio,
@@ -25,10 +38,27 @@ import {
   uploadStudioFile,
 } from './api';
 import { GroupApprovalBar } from './GroupApprovalBar';
-import { StudioTopbar } from './StudioTopbar';
-import type { GroupStudioApproval, GroupStudioBlackboard, GroupStudioFile, GroupStudioMember, GroupStudioSnapshot } from './types';
+import { StudioComposer } from './StudioComposer';
+import { StudioContextPanel } from './StudioContextPanel';
+import { StudioHistoryPanel } from './StudioHistoryPanel';
+import { StudioMessageList } from './StudioMessageList';
+import type {
+  GroupStudioApproval,
+  GroupStudioBlackboard,
+  GroupStudioFile,
+  GroupStudioListItem,
+  GroupStudioMember,
+  GroupStudioSnapshot,
+} from './types';
+import {
+  createLocalStudioId,
+  createLocalStudioSnapshot,
+  isLocalStudioId,
+} from './localStudio';
 import { useGroupStudioStream } from './useGroupStudioStream';
 import './GroupStudioPage.css';
+
+const HISTORY_PANEL_TRANSITION_MS = 260;
 
 const STATUS_LABEL: Record<string, string> = {
   drafting: '填写任务卡',
@@ -46,12 +76,20 @@ const STATUS_LABEL: Record<string, string> = {
 export function GroupStudioPage() {
   const groupId = useAppStore((state) => state.activeGroupStudioId);
   const closeGroupStudio = useAppStore((state) => state.closeGroupStudio);
+  const openGroupStudio = useAppStore((state) => state.openGroupStudio);
   const studioSurface = useAppStore((state) => state.studioSurface);
+  const localStudioSeed = useAppStore((state) => state.localStudioSeed);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
+  const setView = useAppStore((state) => state.setView);
   const { agents } = useAgents();
   const [studio, setStudio] = useState<GroupStudioSnapshot | null>(null);
   const [files, setFiles] = useState<GroupStudioFile[]>([]);
-  const { enabledByType } = useProjectResources(studio?.projectId || '');
+  const [studios, setStudios] = useState<GroupStudioListItem[]>([]);
+  const [studiosLoading, setStudiosLoading] = useState(false);
+  const { enabledByType } = useProjectResources(studio?.projectId || activeProjectId);
   const [error, setError] = useState('');
+  const [runtimeError, setRuntimeError] = useState('');
   const [goal, setGoal] = useState('');
   const [savingCard, setSavingCard] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -60,9 +98,17 @@ export function GroupStudioPage() {
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-  const [dodDraft, setDodDraft] = useState('');
-  const [selectedAgentId, setSelectedAgentId] = useState('default');
-  const isMac = window.electronAPI?.getPlatform() === 'darwin'
+
+  const [addingAgentId, setAddingAgentId] = useState('');
+  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [historyPanelMounted, setHistoryPanelMounted] = useState(true);
+  const [contextCollapsed, setContextCollapsed] = useState(false);
+  const historyTransitionTimerRef = useRef<number | null>(null);
+  const isDesktopShell = Boolean(window.electronAPI);
+  const desktopPlatform = window.electronAPI?.getPlatform();
+  const isMacDesktopShell = desktopPlatform === 'darwin';
+  const isWindowsDesktopShell = desktopPlatform === 'win32';
+  const isMac = desktopPlatform === 'darwin'
     || (!window.electronAPI && /Mac/i.test(navigator.platform));
   const shortcutLabel = isMac ? '⌘⇧G' : 'Ctrl+Shift+G';
 
@@ -81,8 +127,31 @@ export function GroupStudioPage() {
     if (!groupId || studioSurface === 'none') {
       return;
     }
+    if (isLocalStudioId(groupId)) {
+      setError('');
+      setRuntimeError('');
+      setFiles([]);
+      setStudio((current) => {
+        if (current?.id === groupId) {
+          return current;
+        }
+        const seed = localStudioSeed ?? { chatSessionId: createId(), agentId: 'default' };
+        const agent = agents.find((item) => item.id === seed.agentId);
+        return createLocalStudioSnapshot({
+          id: groupId,
+          projectId: activeProjectId,
+          workspaceId: activeWorkspaceId,
+          chatSessionId: seed.chatSessionId,
+          agentId: seed.agentId,
+          agentName: agent?.name,
+        });
+      });
+      setGoal('');
+      return;
+    }
     let mounted = true;
     setError('');
+    setRuntimeError('');
     void refreshStudio(groupId).catch((cause: unknown) => {
       if (mounted) {
         setError(cause instanceof Error ? cause.message : '无法加载工作室');
@@ -91,12 +160,102 @@ export function GroupStudioPage() {
     return () => {
       mounted = false;
     };
-  }, [groupId, refreshStudio, studioSurface]);
+  }, [activeProjectId, activeWorkspaceId, agents, groupId, localStudioSeed, refreshStudio, studioSurface]);
+
+  const refreshStudioList = useCallback(async () => {
+    setStudiosLoading(true);
+    try {
+      setStudios(await fetchStudioList(activeProjectId));
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法加载群聊列表'));
+    } finally {
+      setStudiosLoading(false);
+    }
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    if (studioSurface === 'none') {
+      return;
+    }
+    void refreshStudioList();
+  }, [refreshStudioList, studioSurface]);
+
+  const handleCollapseHistory = useCallback(() => {
+    if (historyTransitionTimerRef.current !== null) {
+      window.clearTimeout(historyTransitionTimerRef.current);
+    }
+    setHistoryCollapsed(true);
+    historyTransitionTimerRef.current = window.setTimeout(() => {
+      setHistoryPanelMounted(false);
+      historyTransitionTimerRef.current = null;
+    }, HISTORY_PANEL_TRANSITION_MS);
+  }, []);
+
+  const handleExpandHistory = useCallback(() => {
+    if (historyTransitionTimerRef.current !== null) {
+      window.clearTimeout(historyTransitionTimerRef.current);
+      historyTransitionTimerRef.current = null;
+    }
+    setHistoryPanelMounted(true);
+    setHistoryCollapsed(true);
+    window.requestAnimationFrame(() => setHistoryCollapsed(false));
+  }, []);
+
+  const handleToggleContext = useCallback(() => {
+    setContextCollapsed((value) => !value);
+  }, []);
+
+  const persistStudio = useCallback(async (
+    current: GroupStudioSnapshot,
+    extras?: { goal?: string },
+  ): Promise<GroupStudioSnapshot> => {
+    if (!isLocalStudioId(current.id)) {
+      return current;
+    }
+    const worker = current.members.find((item) => item.role === 'worker' && item.status !== 'removed');
+    const created = await createStudioFromChat({
+      projectId: current.projectId,
+      chatSessionId: current.chatSessionId || createId(),
+      agentId: worker?.agentId || 'default',
+      draftText: extras?.goal ?? current.taskCard.goal,
+      filePaths: [],
+    });
+    openGroupStudio(created.id);
+    setStudio(created);
+    setGoal(created.taskCard.goal);
+    await refreshStudioList();
+    return created;
+  }, [openGroupStudio, refreshStudioList]);
+
+  const handleNewStudio = () => {
+    const seed = { chatSessionId: createId(), agentId: 'default' };
+    const localId = createLocalStudioId();
+    const agent = agents.find((item) => item.id === 'default');
+    setError('');
+    setRuntimeError('');
+    setFiles([]);
+    setGoal('');
+    setStudio(createLocalStudioSnapshot({
+      id: localId,
+      projectId: activeProjectId,
+      workspaceId: activeWorkspaceId,
+      chatSessionId: seed.chatSessionId,
+      agentId: seed.agentId,
+      agentName: agent?.name,
+    }));
+    openGroupStudio(localId, seed);
+  };
 
   const { messages, status: liveStatus } = useGroupStudioStream(
     studio?.id || groupId,
-    Boolean(studio && studioSurface !== 'none'),
+    Boolean(studio && studioSurface !== 'none' && !isLocalStudioId(studio.id)),
     (event) => {
+      if (event.type === 'GROUP_ERROR') {
+        const message = String(event.payload.message || '工作室运行失败');
+        setRuntimeError(message);
+        notifyError(message);
+        return;
+      }
       if (event.type === 'GROUP_BLACKBOARD') {
         setStudio((current) => (
           current
@@ -178,19 +337,26 @@ export function GroupStudioPage() {
         && !occupied.has(agent.id)
       ))
       .map((agent) => ({
-        label: agent.id === 'default' ? `${agent.name} · 默认助手` : agent.name,
-        value: agent.id,
+        id: agent.id,
+        name: agent.id === 'default' ? `${agent.name} · 默认助手` : agent.name,
+        description: agent.description || '',
       }));
   }, [agents, enabledByType.agent, studio?.members]);
 
-  const handleSaveGoal = async () => {
-    if (!studio) {
+  const handleSaveGoal = async (nextGoal: string) => {
+    if (!studio || !nextGoal.trim()) {
       return;
     }
     setSavingCard(true);
     try {
-      await updateTaskCard(studio.id, { projectId: studio.projectId, goal });
-      const snapshot = await refreshStudio(studio.id);
+      let snapshot: GroupStudioSnapshot;
+      if (isLocalStudioId(studio.id)) {
+        snapshot = await persistStudio(studio, { goal: nextGoal.trim() });
+      } else {
+        await updateTaskCard(studio.id, { projectId: studio.projectId, goal: nextGoal.trim() });
+        snapshot = await refreshStudio(studio.id);
+      }
+      await refreshStudioList();
       notifySuccess(snapshot.status === 'discussing' ? '任务卡已生效，可以开始讨论。' : '任务卡已保存。');
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法更新任务卡'));
@@ -199,24 +365,42 @@ export function GroupStudioPage() {
     }
   };
 
-  const handleAddMember = async () => {
-    if (!studio || !selectedAgentId) {
+  const handleAddMember = async (agentId: string) => {
+    if (!studio || !agentId) {
       return;
     }
     setAdding(true);
+    setAddingAgentId(agentId);
     try {
-      await addStudioMember(studio.id, { projectId: studio.projectId, agentId: selectedAgentId });
-      await refreshStudio(studio.id);
+      const persisted = await persistStudio(studio);
+      await addStudioMember(persisted.id, { projectId: persisted.projectId, agentId });
+      await refreshStudio(persisted.id);
+      await refreshStudioList();
       notifySuccess('已加入工作室');
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法加人'));
     } finally {
       setAdding(false);
+      setAddingAgentId('');
     }
   };
 
   const handleMuteMember = async (memberId: string, muted: boolean) => {
     if (!studio) {
+      return;
+    }
+    if (isLocalStudioId(studio.id)) {
+      setStudio((current) => (
+        current
+          ? {
+            ...current,
+            members: current.members.map((item) => (
+              item.id === memberId ? { ...item, muted } : item
+            )),
+          }
+          : current
+      ));
+      notifySuccess(muted ? '已静音' : '已取消静音');
       return;
     }
     setMemberBusyId(memberId);
@@ -233,6 +417,20 @@ export function GroupStudioPage() {
 
   const handleRemoveMember = async (memberId: string) => {
     if (!studio) {
+      return;
+    }
+    if (isLocalStudioId(studio.id)) {
+      setStudio((current) => (
+        current
+          ? {
+            ...current,
+            members: current.members.map((item) => (
+              item.id === memberId ? { ...item, status: 'removed' as const } : item
+            )),
+          }
+          : current
+      ));
+      notifySuccess('已移出工作室');
       return;
     }
     setMemberBusyId(memberId);
@@ -253,8 +451,10 @@ export function GroupStudioPage() {
     }
     setUploading(true);
     try {
-      await uploadStudioFile(studio.id, studio.projectId, fileList[0]);
-      await refreshStudio(studio.id);
+      const persisted = await persistStudio(studio);
+      await uploadStudioFile(persisted.id, persisted.projectId, fileList[0]);
+      await refreshStudio(persisted.id);
+      await refreshStudioList();
       notifySuccess('已加入共享文件库');
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法上传文件'));
@@ -289,9 +489,11 @@ export function GroupStudioPage() {
     }
     setSending(true);
     try {
-      await postStudioMessage(studio.id, { projectId: studio.projectId, body: draft.trim() });
+      const persisted = await persistStudio(studio);
+      await postStudioMessage(persisted.id, { projectId: persisted.projectId, body: draft.trim() });
       setDraft('');
-      await refreshStudio(studio.id);
+      await refreshStudio(persisted.id);
+      await refreshStudioList();
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法发送消息'));
     } finally {
@@ -301,6 +503,9 @@ export function GroupStudioPage() {
 
   const handlePause = async () => {
     if (!studio) {
+      return;
+    }
+    if (isLocalStudioId(studio.id)) {
       return;
     }
     try {
@@ -313,7 +518,7 @@ export function GroupStudioPage() {
   };
 
   const handleResume = async () => {
-    if (!studio) {
+    if (!studio || isLocalStudioId(studio.id)) {
       return;
     }
     try {
@@ -326,7 +531,7 @@ export function GroupStudioPage() {
   };
 
   const handleInterrupt = async () => {
-    if (!studio) {
+    if (!studio || isLocalStudioId(studio.id)) {
       return;
     }
     try {
@@ -354,10 +559,21 @@ export function GroupStudioPage() {
     if (!studio) {
       return;
     }
+    if (isLocalStudioId(studio.id)) {
+      closeGroupStudio();
+      setStudio(null);
+      return;
+    }
     try {
       const snapshot = await closeStudio(studio.id, studio.projectId, studio.status === 'closing');
       setStudio(snapshot);
-      notifySuccess(snapshot.status === 'archived' ? '工作室已归档' : '已进入结项，请勾齐验收清单。');
+      notifySuccess(
+        snapshot.status === 'archived'
+          ? '工作室已归档'
+          : (snapshot.taskCard.dodChecklist ?? []).length > 0
+            ? '已进入结项，请勾齐验收清单。'
+            : '已进入结项。没有验收清单，可直接确认结项。',
+      );
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法结项'));
     }
@@ -371,281 +587,292 @@ export function GroupStudioPage() {
       item.id === itemId ? { ...item, checked } : item
     ));
     try {
-      await updateTaskCard(studio.id, { projectId: studio.projectId, dodChecklist: checklist });
-      await refreshStudio(studio.id);
+      const persisted = await persistStudio(studio);
+      await updateTaskCard(persisted.id, { projectId: persisted.projectId, dodChecklist: checklist });
+      await refreshStudio(persisted.id);
+      await refreshStudioList();
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法更新验收清单'));
     }
   };
 
-  const handleAddDod = async () => {
-    if (!studio || !dodDraft.trim()) {
+  const handleAddDod = async (text: string) => {
+    if (!studio || !text.trim()) {
       return;
     }
     const checklist = [
       ...(studio.taskCard.dodChecklist ?? []),
-      { id: `gdod_${Date.now()}`, text: dodDraft.trim(), checked: false },
+      { id: `gdod_${Date.now()}`, text: text.trim(), checked: false },
     ];
     try {
-      await updateTaskCard(studio.id, { projectId: studio.projectId, dodChecklist: checklist });
-      setDodDraft('');
-      await refreshStudio(studio.id);
+      const persisted = await persistStudio(studio);
+      await updateTaskCard(persisted.id, { projectId: persisted.projectId, dodChecklist: checklist });
+      await refreshStudio(persisted.id);
+      await refreshStudioList();
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法添加验收项'));
     }
   };
 
-  const blackboard = studio?.blackboard;
-  const openQuestions = (blackboard?.openQuestions ?? []).filter((item) => !item.resolved);
-  const decisions = blackboard?.decisions ?? [];
   const pendingApproval = studio?.currentApproval?.status === 'pending' ? studio.currentApproval : null;
   const approvalMemberName = pendingApproval
     ? (members.find((item) => item.id === pendingApproval.memberId)?.displayName || '工人')
     : '';
+  const statusText = studio
+    ? (STATUS_LABEL[liveStatus || studio.status] || liveStatus || studio.status)
+    : '加载中';
+  const paused = studio?.status === 'paused' || studio?.status === 'circuit_broken';
 
   return (
-    <div className="group-studio-shell">
-      <StudioTopbar
-        onBack={closeGroupStudio}
-        shortcutLabel={shortcutLabel}
-        title={studio?.title || '工作室'}
-        statusLabel={studio ? (STATUS_LABEL[liveStatus || studio.status] || liveStatus || studio.status) : '加载中'}
-        budgetLabel={studio?.budget ? `已用 ${studio.budget.usedTurns}/${studio.budget.maxTurns} 轮` : undefined}
-        paused={studio?.status === 'paused' || studio?.status === 'circuit_broken'}
-        onPause={studio ? () => void handlePause() : undefined}
-        onResume={studio ? () => void handleResume() : undefined}
-        onInterrupt={studio ? () => void handleInterrupt() : undefined}
-        onClose={studio && (studio.status === 'reviewing' || studio.status === 'closing')
-          ? () => void handleClose()
-          : undefined}
-        closeLabel={studio?.status === 'closing' ? '确认结项' : '结束'}
-      />
-      {error ? (
-        <div className="group-studio-error">{error}</div>
-      ) : !studio && groupId ? (
-        <div className="group-studio-loading">
-          <Spinner />
-          <span>正在打开工作室…</span>
-        </div>
-      ) : (
-        <div className="group-studio-columns">
-          <aside className="group-studio-pane group-studio-pane--members">
-            <div className="group-studio-pane__label">成员</div>
-            <ul className="group-studio-member-list">
-              {members.map((member) => (
-                <li key={member.id} data-role={member.role} data-muted={member.muted}>
-                  <span className="group-studio-member-list__icon"><Users size={14} /></span>
-                  <span className="min-w-0 truncate">
-                    {member.displayName}
-                    <span className="group-studio-member-list__role">
-                      {member.role === 'host' ? '主持人' : member.muted ? '已静音' : '执行'}
-                    </span>
-                  </span>
-                  {member.role === 'worker' ? (
-                    <span className="group-studio-member-list__actions">
-                      <button
-                        type="button"
-                        disabled={memberBusyId === member.id}
-                        onClick={() => void handleMuteMember(member.id, !member.muted)}
-                      >
-                        {member.muted ? '唤醒' : '静音'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={memberBusyId === member.id}
-                        onClick={() => void handleRemoveMember(member.id)}
-                      >
-                        移除
-                      </button>
-                    </span>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-            <div className="group-studio-add-member">
-              <SelectField
-                label="加人"
-                value={selectedAgentId}
-                options={memberOptions}
-                onChange={(value) => setSelectedAgentId(String(value))}
-              />
-              <Button
-                size="small"
-                loading={adding}
-                disabled={adding || memberOptions.length === 0}
-                onClick={() => void handleAddMember()}
-              >
-                加入
-              </Button>
-            </div>
-          </aside>
-          <section className="group-studio-pane group-studio-pane--timeline">
-            <div className="group-studio-pane__label">时间线</div>
-            {studio?.awaitingRestatement ? (
-              <div className="group-studio-approval">
-                <div className="group-studio-approval__title">目标已变更，请确认主持人复述后再继续。</div>
-                <div className="group-studio-approval__actions">
-                  <Button size="small" onClick={() => void handleConfirmRestatement()}>
-                    确认复述
-                  </Button>
+    <div
+      className="chat-page-shell chat-workbench-shell group-studio-shell grid h-full min-h-0 overflow-hidden"
+      data-history-mounted={historyPanelMounted}
+      data-history-collapsed={historyCollapsed}
+      data-context-collapsed={contextCollapsed}
+      data-electron-shell={isDesktopShell}
+      data-windows-shell={isWindowsDesktopShell}
+      style={{
+        gridTemplateColumns: [
+          historyPanelMounted ? (historyCollapsed ? '0px' : '286px') : '',
+          'minmax(0, 1fr)',
+          'auto',
+        ].filter(Boolean).join(' '),
+        transition: `grid-template-columns ${HISTORY_PANEL_TRANSITION_MS}ms var(--ease-out)`,
+      }}
+    >
+      {historyPanelMounted ? (
+        <StudioHistoryPanel
+          activeGroupId={groupId}
+          collapsed={historyCollapsed}
+          isMacDesktopShell={isMacDesktopShell}
+          loading={studiosLoading}
+          studios={studios}
+          statusLabel={(status) => STATUS_LABEL[status] || status}
+          onCollapse={handleCollapseHistory}
+          onNewStudio={() => void handleNewStudio()}
+          onSelectStudio={(item) => openGroupStudio(item.id)}
+        />
+      ) : null}
+
+      <section className="chat-main-panel chat-workbench-main grid min-h-0 grid-cols-1 overflow-hidden">
+        <div className="grid min-h-0 grid-rows-[auto_1fr_auto] overflow-hidden">
+          <header
+            className="chat-workbench-topbar flex items-center justify-between gap-4 px-8 py-2"
+            style={isMacDesktopShell && (!historyPanelMounted || historyCollapsed) ? { paddingLeft: 128 } : undefined}
+          >
+            <div className="flex min-w-0 items-center gap-3">
+              {historyCollapsed ? (
+                <>
+                  <Tooltip title="展开群聊列表" placement="bottom" mode="dark">
+                    <button
+                      type="button"
+                      className="icon-button chat-history-collapse-button"
+                      onClick={handleExpandHistory}
+                      aria-label="展开群聊列表"
+                    >
+                      <PanelLeftOpen size={17} strokeWidth={1.7} />
+                    </button>
+                  </Tooltip>
+                  <Tooltip title="新建群聊" placement="bottom" mode="dark">
+                    <button
+                      type="button"
+                      className="icon-button chat-history-new-button"
+                      onClick={() => void handleNewStudio()}
+                      aria-label="新建群聊"
+                    >
+                      <Plus size={15} />
+                    </button>
+                  </Tooltip>
+                </>
+              ) : null}
+              <Tooltip title={`返回 Chat ${shortcutLabel}`} placement="bottom" mode="dark">
+                <button
+                  type="button"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)]"
+                  onClick={closeGroupStudio}
+                  aria-label="返回 Chat"
+                >
+                  <Users size={17} strokeWidth={1.7} />
+                </button>
+              </Tooltip>
+              <div className="min-w-0">
+                <div className="truncate text-base font-semibold text-[var(--color-text-primary)]">
+                  {studio?.title || '工作室'}
+                </div>
+                <div className="truncate text-xs text-[var(--color-text-tertiary)]">
+                  {statusText}
+                  {studio?.budget ? ` · 已用 ${studio.budget.usedTurns}/${studio.budget.maxTurns} 轮` : ''}
                 </div>
               </div>
-            ) : null}
-            {pendingApproval ? (
-              <GroupApprovalBar
-                approval={pendingApproval}
-                memberName={approvalMemberName}
-                submitting={approvalBusy}
-                onDecide={(decision) => void handleApproval(decision)}
-              />
-            ) : null}
-            {timeline.length === 0 ? (
-              <p className="group-studio-placeholder">
-                {studio?.status === 'drafting'
-                  ? '先在右侧填写目标。没有目标时主持人不发言。'
-                  : '主持人正在准备发言，或还没有消息。'}
-              </p>
-            ) : (
-              <ol className="group-studio-timeline">
-                {timeline.map((item) => (
-                  <li key={item.id} data-role={item.role}>
-                    <div className="group-studio-timeline__meta">
-                      {item.role === 'host' ? '主持人' : item.role === 'human' ? '你' : item.role}
-                    </div>
-                    <div className="group-studio-timeline__body">{item.body || '…'}</div>
-                  </li>
-                ))}
-              </ol>
-            )}
-            <div className="group-studio-composer">
-              <textarea
-                rows={3}
-                value={draft}
-                disabled={!studio || sending || studio.status === 'circuit_broken'}
-                onChange={(event) => setDraft(event.target.value)}
-                placeholder={studio?.status === 'paused' ? '暂停中，消息会先入列' : '对工作室说话…'}
-              />
-              <Button
-                size="small"
-                loading={sending}
-                disabled={sending || !studio || !draft.trim() || studio.status === 'circuit_broken'}
-                onClick={() => void handleSend()}
-              >
-                发送
-              </Button>
+              {studio ? (
+                <Tag className="chat-workbench-status-tag" size="small" color="transparent">
+                  {statusText}
+                </Tag>
+              ) : null}
             </div>
-          </section>
-          <aside className="group-studio-pane group-studio-pane--board">
-            <div className="group-studio-pane__label">任务卡</div>
-            <TextAreaField
-              label="目标"
-              required
-              rows={5}
-              value={goal}
-              onChange={(event) => setGoal(event.target.value)}
-              placeholder="这间工作室要完成什么？"
-            />
-            <Button
-              size="small"
-              loading={savingCard}
-              disabled={savingCard || !studio || studio.status === 'closing' || studio.status === 'archived'}
-              onClick={() => void handleSaveGoal()}
-            >
-              保存任务卡
-            </Button>
-            <div className="group-studio-pane__label" style={{ marginTop: 20 }}>验收清单</div>
-            {(studio?.taskCard.dodChecklist ?? []).length === 0 ? (
-              <p className="group-studio-placeholder">结项前需要至少一项已勾选的验收标准。</p>
-            ) : (
-              <ul className="group-studio-dod">
-                {(studio?.taskCard.dodChecklist ?? []).map((item) => (
-                  <li key={item.id}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={item.checked}
-                        disabled={studio?.status === 'archived'}
-                        onChange={(event) => void handleToggleDod(item.id, event.target.checked)}
-                      />
-                      <span>{item.text}</span>
-                    </label>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {studio && studio.status !== 'archived' ? (
-              <div className="group-studio-composer">
-                <input
-                  value={dodDraft}
-                  onChange={(event) => setDodDraft(event.target.value)}
-                  placeholder="添加验收项"
-                />
-                <Button size="small" disabled={!dodDraft.trim()} onClick={() => void handleAddDod()}>
-                  添加
-                </Button>
-              </div>
-            ) : null}
-            <div className="group-studio-pane__label" style={{ marginTop: 20 }}>黑板</div>
-            {decisions.length === 0 && openQuestions.length === 0 ? (
-              <p className="group-studio-placeholder">共识决策会写在这里，不翻长聊天记录。</p>
-            ) : (
-              <div className="group-studio-board">
-                {decisions.length > 0 ? (
-                  <ul className="group-studio-board__list">
-                    {decisions.map((item) => (
-                      <li key={item.id}>{item.text}</li>
-                    ))}
-                  </ul>
-                ) : null}
-                {openQuestions.length > 0 ? (
+            <div className="flex shrink-0 items-center gap-2">
+              {paused ? (
+                <button
+                  type="button"
+                  className="icon-button chat-workbench-top-action inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs"
+                  onClick={() => void handleResume()}
+                  aria-label="继续工作室"
+                >
+                  <Play size={15} />
+                  <span>继续</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="icon-button chat-workbench-top-action inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs"
+                  onClick={() => void handlePause()}
+                  disabled={!studio}
+                  aria-label="暂停工作室"
+                >
+                  <Pause size={15} />
+                  <span>暂停</span>
+                </button>
+              )}
+              <button
+                type="button"
+                className="icon-button chat-workbench-top-action inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs"
+                onClick={() => void handleInterrupt()}
+                disabled={!studio}
+                aria-label="停止当前发言"
+              >
+                <Square size={14} />
+                <span>停止</span>
+              </button>
+              {studio && (studio.status === 'reviewing' || studio.status === 'closing') ? (
+                <button
+                  type="button"
+                  className="icon-button chat-workbench-top-action inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs"
+                  onClick={() => void handleClose()}
+                  aria-label={studio.status === 'closing' ? '确认结项' : '结束'}
+                >
+                  <Square size={14} />
+                  <span>{studio.status === 'closing' ? '确认结项' : '结束'}</span>
+                </button>
+              ) : null}
+              <Tooltip title={contextCollapsed ? '展开成员与黑板' : '折叠成员与黑板'} placement="bottom" mode="dark">
+                <button
+                  type="button"
+                  className="icon-button chat-workbench-top-action h-9 w-9 rounded-xl"
+                  onClick={handleToggleContext}
+                  aria-label={contextCollapsed ? '展开成员与黑板' : '折叠成员与黑板'}
+                >
+                  {contextCollapsed ? <PanelRightOpen size={17} /> : <PanelRightClose size={17} />}
+                </button>
+              </Tooltip>
+              <NotificationBell />
+              <Tooltip title="工作台设置" placement="bottom" mode="dark">
+                <button
+                  type="button"
+                  className="icon-button chat-workbench-top-action h-9 w-9 rounded-xl"
+                  onClick={() => setView('settings')}
+                  aria-label="进入工作台设置"
+                >
+                  <Settings size={17} />
+                </button>
+              </Tooltip>
+            </div>
+          </header>
+
+          <div className="relative min-h-0 overflow-hidden">
+            <div className="h-full min-h-0 overflow-auto px-8 py-4" role="log" aria-live="polite" aria-label="群聊消息">
+              <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4">
+                {error ? (
+                  <div className="group-studio-runtime-error">{error}</div>
+                ) : !studio && groupId ? (
+                  <div className="chat-empty-state flex flex-1 flex-col items-center justify-center gap-3 text-center text-[var(--color-text-tertiary)]">
+                    <Spinner />
+                    <div>正在打开工作室…</div>
+                  </div>
+                ) : (
                   <>
-                    <div className="group-studio-pane__label">未决问题</div>
-                    <ul className="group-studio-board__list">
-                      {openQuestions.map((item) => (
-                        <li key={item.id}>{item.text}</li>
-                      ))}
-                    </ul>
+                    {runtimeError ? <div className="group-studio-runtime-error">{runtimeError}</div> : null}
+                    {studio?.awaitingRestatement ? (
+                      <div className="group-studio-approval">
+                        <div className="group-studio-approval__title">目标已变更，请确认主持人复述后再继续。</div>
+                        <div className="group-studio-approval__actions">
+                          <button
+                            type="button"
+                            className="icon-button chat-workbench-top-action inline-flex h-9 items-center rounded-xl px-3 text-xs"
+                            onClick={() => void handleConfirmRestatement()}
+                          >
+                            确认复述
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                    {pendingApproval ? (
+                      <GroupApprovalBar
+                        approval={pendingApproval}
+                        memberName={approvalMemberName}
+                        submitting={approvalBusy}
+                        onDecide={(decision) => void handleApproval(decision)}
+                      />
+                    ) : null}
+                    {timeline.length === 0 ? (
+                      <div className="chat-empty-state flex flex-1 flex-col items-center justify-center gap-3 text-center text-[var(--color-text-tertiary)]">
+                        <div className="chat-empty-state__icon">
+                          <Users size={42} strokeWidth={1.2} />
+                        </div>
+                        <div className="text-lg font-medium">开始群聊</div>
+                        <div className="max-w-[420px] text-sm">
+                          {studio?.status === 'drafting'
+                            ? '先在右侧填写目标。没有目标时主持人不发言。'
+                            : '主持人正在准备发言，或还没有消息。'}
+                        </div>
+                      </div>
+                    ) : (
+                      <StudioMessageList members={members} messages={timeline} />
+                    )}
                   </>
-                ) : null}
+                )}
               </div>
-            )}
-            <div className="group-studio-pane__label" style={{ marginTop: 20 }}>共享文件</div>
-            {files.length === 0 ? (
-              <p className="group-studio-placeholder">还没有文件。上传后工人和主持人都能看见。</p>
-            ) : (
-              <ul className="group-studio-file-list">
-                {files.map((item) => (
-                  <li key={item.id}>
-                    <span className="min-w-0 truncate">{item.title}</span>
-                    <span>{formatBytes(item.byteSize)}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <label className="group-studio-upload">
-              <input
-                type="file"
-                disabled={uploading || !studio}
-                onChange={(event) => {
-                  void handleUploadFile(event.target.files);
-                  event.target.value = '';
-                }}
-              />
-              <span>{uploading ? '上传中…' : '上传文件'}</span>
-            </label>
-          </aside>
+            </div>
+          </div>
+
+          <StudioComposer
+            disabled={!studio || sending || studio.status === 'circuit_broken'}
+            sending={sending}
+            value={draft}
+            placeholder={studio?.status === 'paused' ? '暂停中，消息会先入列' : '对工作室说话…'}
+            onChange={setDraft}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                void handleSend();
+              }
+            }}
+            onSend={() => void handleSend()}
+          />
         </div>
-      )}
+      </section>
+
+      <div className="group-studio-context-slot" data-collapsed={contextCollapsed || undefined}>
+        <StudioContextPanel
+          adding={adding}
+          addingAgentId={addingAgentId}
+          collapsed={contextCollapsed}
+          files={files}
+          goal={goal}
+          memberBusyId={memberBusyId}
+          memberOptions={memberOptions}
+          members={members}
+          savingCard={savingCard}
+          studio={studio}
+          uploading={uploading}
+          onAddDod={(text) => void handleAddDod(text)}
+          onAddMember={(agentId) => void handleAddMember(agentId)}
+          onMuteMember={(memberId, muted) => void handleMuteMember(memberId, muted)}
+          onRemoveMember={(memberId) => void handleRemoveMember(memberId)}
+          onSaveGoal={(nextGoal) => void handleSaveGoal(nextGoal)}
+          onToggleDod={(itemId, checked) => void handleToggleDod(itemId, checked)}
+          onUploadFile={(fileList) => void handleUploadFile(fileList)}
+        />
+      </div>
     </div>
   );
-}
-
-function formatBytes(size: number): string {
-  if (size < 1024) {
-    return `${size} B`;
-  }
-  if (size < 1024 * 1024) {
-    return `${(size / 1024).toFixed(1)} KB`;
-  }
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }

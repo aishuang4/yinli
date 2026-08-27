@@ -91,6 +91,27 @@ def test_empty_draft_creates_drafting_studio(client):
     assert "sess-empty" in session_ids
 
 
+def test_empty_draft_is_hidden_from_history_list(client):
+    created = _from_chat(client, chatSessionId="sess-blank-hidden")
+    assert created.status_code == 200
+    listed = client.get("/api/group-studio", params={"projectId": DEFAULT_PROJECT_ID})
+    ids = [item["id"] for item in listed.json()["studios"]]
+    assert created.json()["id"] not in ids
+
+
+def test_reuse_blank_draft_returns_existing(client):
+    first = _from_chat(client, chatSessionId="sess-blank-a")
+    second = client.post("/api/group-studio/from-chat", json={
+        "projectId": DEFAULT_PROJECT_ID,
+        "chatSessionId": "sess-blank-b",
+        "agentId": "default",
+        "reuseBlankDraft": True,
+    })
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["id"] == second.json()["id"]
+
+
 def test_draft_text_enters_discussing(client):
     response = _from_chat(client, chatSessionId="sess-draft", draftText="  写一份方案  ")
 

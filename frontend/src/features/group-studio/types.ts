@@ -22,6 +22,12 @@ export interface GroupStudioMember {
   muted: boolean;
 }
 
+export interface GroupStudioAgentOption {
+  id: string;
+  name: string;
+  description: string;
+}
+
 export interface GroupStudioTaskCard {
   id: string;
   groupId: string;
@@ -78,6 +84,7 @@ export interface GroupStudioMessage {
   role: string;
   intent: string;
   body: string;
+  thinking?: string;
   visibleInTimeline: boolean;
 }
 
@@ -112,6 +119,8 @@ export interface GroupStudioSnapshot {
   blackboard?: GroupStudioBlackboard;
   members: GroupStudioMember[];
   budget?: GroupStudioBudget;
+  currentRunId?: string | null;
+  pendingSpeakerMemberId?: string | null;
   currentApproval?: GroupStudioApproval | null;
   messages?: GroupStudioMessage[];
   awaitingRestatement: boolean;
@@ -124,4 +133,14 @@ export interface GroupStudioSettings {
   maxMembers: number;
   maxParallelWorkers: number;
   maxTurns: number;
+}
+
+export interface GroupStudioListItem {
+  id: string;
+  title: string;
+  status: GroupStudioStatus;
+  projectId: string;
+  workspaceId: string;
+  chatSessionId: string;
+  updatedAt: string;
 }

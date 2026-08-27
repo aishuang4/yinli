@@ -116,7 +116,23 @@ def test_main_registers_group_studio_routes():
 
     paths = {getattr(route, "path", "") for route in app.routes}
     assert "/api/group-studio/from-chat" in paths
+    assert "/api/group-studio" in paths
     assert "/api/settings/group-studio" in paths
+
+
+def test_list_studios_is_independent_of_chat_catalog(client):
+    set_group_studio_settings(enabled=True)
+    created = client.post("/api/group-studio/from-chat", json={
+        "projectId": "default",
+        "chatSessionId": "sess-list",
+        "agentId": "default",
+        "draftText": "宇树研究",
+    })
+    assert created.status_code == 200, created.text
+    listed = client.get("/api/group-studio", params={"projectId": "default"})
+    assert listed.status_code == 200
+    ids = [item["id"] for item in listed.json()["studios"]]
+    assert created.json()["id"] in ids
 
 
 def test_host_sentinel_constant():
