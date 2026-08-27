@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from src.agents.system_agents import is_system_agent_id
 from src.runtime_context import RuntimeContext
 from src.storage.database import (
     PROJECT_RESOURCE_TYPES,
@@ -45,9 +46,9 @@ class ProjectResourceAccess:
         ]
 
     def require_agent(self, agent_id: str) -> None:
-        """拒绝运行未绑定的持久 Agent；系统 default Agent 不属于持久资源。"""
+        """拒绝运行未绑定的持久 Agent；系统内置 Agent 不依赖普通 binding。"""
 
-        if agent_id == "default":
+        if is_system_agent_id(agent_id):
             return
         _require_workspace_resource(
             workspace_id=self.workspace_id,

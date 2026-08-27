@@ -155,6 +155,8 @@ RunState、DisplayEvent、旧 `event_hub`、旧 adapter/reducer 和旧 Snapshot 
 
 定时任务的到期执行者必须是 `role=job` 的 Job Agent，不能使用 Chat 助手。Job Agent 在配置里拆成必注入与可选注入两层工具：必注入到期一定带上，`CheckJobFeasibility` 只认领可选层。系统 `default` 助手不能改成 Job Agent；Job Agent 不出现在 Chat 选择器里。
 
+系统启动时会为新旧数据库幂等补齐稳定 ID `system-websearch-job`（名称 `WebSearch`）作为默认 Job Agent。其主模型为 `deepseek-v4-flash`，必注入 `WebFetch` 与 `HttpRequest`，固定开启网络并使用 trusted tools 无人值守权限。该 Agent 跨 Workspace 可见且不依赖普通 Agent Project binding，不可删除或切换成 Chat 角色；它绑定的外部 Skill、MCP、HTTP Tool 仍必须满足当前 Project resource binding。名称不代表真正的开放式搜索能力，`WebFetch` 仍只读取已知公开 URL。
+
 ## 消息通知
 
 通知是独立于 Chat Runtime 的通道抽象：调度器在 firing 终态构造 `NotificationMessage`，由 `src/notifications/dispatcher.py` 分发给已启用通道。

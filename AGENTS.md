@@ -110,4 +110,4 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 - 前端遵循若干约定（见 `App.tsx` 注释）：派生状态不用 effect、对象映射表代替 switch、初始化只做一次。
 - 文档入口见 `docs/README.md`；当前架构见 `docs/architecture-overview.md`；记忆模块重设计见 `docs/memory-system-design.md`；通知通道见 `docs/notifications.md`；项目现状与待办见 `docs/project-progress-handoff.md` 和 `docs/project-todo.md`；开发规范见 `docs/development-guidelines.md`。
 - 消息通知走 `src/notifications/` 通道抽象：定时任务终态由 `scheduler/notifications.py` 适配后交给分发器。当前只实现应用内 inbox（Chat 顶栏设置左侧铃铛 + `/api/notifications/stream`）。任务完成时 Web 弹出右上角提醒框，Electron 客户端走系统通知。邮箱 / 微信 / 飞书是占位通道，不得假装已投递。禁止把通知写入 Chat SSE。
-- 定时任务执行者必须是 Job Agent（`role=job`），不能在 Chat 里选用。Job Agent 有必注入 / 可选注入两层工具；`CheckJobFeasibility` 只认领可选层，必注入到期一定带上。系统 `default` 助手不能改成 Job Agent。
+- 定时任务执行者必须是 Job Agent（`role=job`），不能在 Chat 里选用。Job Agent 有必注入 / 可选注入两层工具；`CheckJobFeasibility` 只认领可选层，必注入到期一定带上。系统 `default` 助手不能改成 Job Agent。系统内置 `system-websearch-job`（名称 `WebSearch`）作为跨 Workspace 可用的默认 Job Agent，必注入 `WebFetch` / `HttpRequest`，不可删除或改为 Chat Agent；只豁免 Agent 自身的 Project binding，外部 Skill / MCP / HTTP Tool 仍按 Project 白名单裁剪。`WebFetch` 只读取已知公开 URL，不等同于真正的 WebSearch。

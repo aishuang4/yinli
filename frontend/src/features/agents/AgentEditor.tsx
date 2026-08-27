@@ -282,7 +282,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
           form={form}
           primaryModelOptions={primaryModelOptions}
           onChange={setForm}
-          lockChatRole={agent?.id === 'default'}
+          lockRole={agent?.systemManaged === true}
         />
 
         <button
@@ -370,6 +370,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
         <AgentGuardrailsSection
           form={form}
           onChange={setForm}
+          lockUnattendedPolicy={agent?.systemManaged === true && agent.role === 'job'}
         />
 
           </div>

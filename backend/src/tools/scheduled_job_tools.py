@@ -13,6 +13,7 @@ from agentscope.message import TextBlock, ToolResultState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.tool import ToolBase, ToolChunk
 
+from src.agents.system_agents import is_system_agent_id
 from src.scheduler.models import ScheduledJob, ScheduledJobError
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.feasibility import contract_from_feasibility, evaluate_job_feasibility
@@ -46,7 +47,7 @@ _ENABLE_ASKUSER_HINT = (
 )
 
 
-def _job_agent_catalog_line() -> str:
+def _job_agent_catalog_line(workspace_id: str = "default") -> str:
     """把当前可用的 Job Agent 写进登记约定，避免模型拿 Chat 助手去跑任务。"""
 
     try:
@@ -55,7 +56,14 @@ def _job_agent_catalog_line() -> str:
 
         runners = [
             agent for agent in list_registered_agents()
-            if getattr(agent, "role", "") == JOB_ROLE and job_toolkit_of(agent).required
+            if (
+                getattr(agent, "role", "") == JOB_ROLE
+                and job_toolkit_of(agent).required
+                and (
+                    is_system_agent_id(str(getattr(agent, "id", "") or ""))
+                    or str(getattr(agent, "workspace_id", "") or "") == workspace_id
+                )
+            )
         ]
     except Exception:
         runners = []
@@ -73,10 +81,10 @@ def scheduled_job_tools_cache_key(tools: list[ToolBase] | None = None) -> str:
     return f"scheduled-job-tools:{fingerprint}"
 
 
-def scheduled_job_prompt_addendum() -> str:
+def scheduled_job_prompt_addendum(workspace_id: str = "default") -> str:
     """注入主 Agent 的登记约定：AskUser 收集字段后 ScheduleJob，对话内 ConfirmJob 启用。"""
 
-    catalog = _job_agent_catalog_line()
+    catalog = _job_agent_catalog_line(workspace_id)
     return "\n".join([
         "",
         "Scheduled job registration:",

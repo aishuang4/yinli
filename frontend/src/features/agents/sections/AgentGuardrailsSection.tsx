@@ -10,6 +10,7 @@ import type { AgentCreatePayload } from '../../../types/agent';
 interface AgentGuardrailsSectionProps {
   form: AgentCreatePayload;
   onChange: (form: AgentCreatePayload) => void;
+  lockUnattendedPolicy?: boolean;
 }
 
 function legacyModeFromProfile(profile: string): 'ask_every_time' | 'accept_edits' | 'bypass' {
@@ -45,6 +46,7 @@ function permissionProfileLabel(profile: string): string {
 export function AgentGuardrailsSection({
   form,
   onChange,
+  lockUnattendedPolicy = false,
 }: AgentGuardrailsSectionProps) {
   return (
     <section className="rounded-xl bg-[var(--color-bg-primary)] p-4 shadow-sm">
@@ -61,6 +63,7 @@ export function AgentGuardrailsSection({
           <div className="text-sm text-[var(--color-text-primary)]">允许网络访问</div>
           <ToggleField
             checked={form.guardrails.networkEnabled}
+            disabled={lockUnattendedPolicy}
             onChange={(checked) => onChange({
               ...form,
               guardrails: { ...form.guardrails, networkEnabled: checked },
@@ -120,6 +123,7 @@ export function AgentGuardrailsSection({
           <SelectField
             label="工具权限与审批"
             value={permissionStrategyValue(form)}
+            disabled={lockUnattendedPolicy}
             onChange={(value) => {
               const strategy = String(value);
               if (strategy === FORCE_HUMAN_APPROVAL) {
@@ -146,7 +150,9 @@ export function AgentGuardrailsSection({
               { label: '每次工具调用都确认', value: 'ask_every_time' },
               { label: '强制人工审批 - 所有可用工具均需确认', value: FORCE_HUMAN_APPROVAL },
             ]}
-            help={permissionStrategyHelp(form)}
+            help={lockUnattendedPolicy
+              ? '系统定时任务 Agent 固定开启网络，并使用可信工具无人值守执行。'
+              : permissionStrategyHelp(form)}
           />
         </div>
 

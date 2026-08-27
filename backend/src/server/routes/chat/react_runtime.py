@@ -116,7 +116,9 @@ def _build_runtime_feature_parts(
         )
         extra_tools.extend(job_tools)
         feature_keys.append(scheduled_job_tools_cache_key(job_tools))
-        prompt_addenda.append(scheduled_job_prompt_addendum())
+        prompt_addenda.append(
+            scheduled_job_prompt_addendum(str(ctx.runtime_context.workspace_id))
+        )
 
     catalog = load_subagent_catalog(workspace_dir=str(ctx.runtime_context.project_root))
     if catalog.definitions:

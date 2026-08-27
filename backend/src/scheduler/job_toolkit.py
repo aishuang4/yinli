@@ -6,6 +6,7 @@ from typing import Any, Iterable, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.agents.system_agents import is_default_chat_agent_id
 from src.scheduler.capability_catalog import CapabilityInventoryItem
 from src.scheduler.capability_contract import JobCapabilityClaim, JobCapabilityGap
 from src.scheduler.capability_match import _claim_from_row
@@ -80,7 +81,7 @@ def require_job_runner(agent: Any, *, agent_id: str = "") -> None:
     )
     if agent is None:
         raise JobAgentError("找不到要执行定时任务的 Agent")
-    if ident == "default" or agent_role_of(agent) != JOB_ROLE:
+    if is_default_chat_agent_id(ident) or agent_role_of(agent) != JOB_ROLE:
         raise JobAgentError("定时任务必须选择 Job Agent，对话助手不能到点运行")
     toolkit = job_toolkit_of(agent)
     if not toolkit.required:
@@ -119,7 +120,7 @@ def validate_job_agent_config(
 ) -> JobToolkit:
     """保存前校验。对话 Agent 清空 toolkit；Job Agent 必注入不能空。"""
 
-    if agent_id == "default" and role == JOB_ROLE:
+    if is_default_chat_agent_id(agent_id) and role == JOB_ROLE:
         raise JobAgentError("系统默认助手不能改成 Job Agent")
     if role != JOB_ROLE:
         return empty_job_toolkit()
