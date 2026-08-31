@@ -256,6 +256,24 @@ def ensure_db() -> None:
                 "pending_speaker_member_id",
                 "TEXT NOT NULL DEFAULT ''",
             )
+            _ensure_column(
+                conn,
+                "group_studios",
+                "awaiting_intake_confirm",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            _ensure_column(
+                conn,
+                "group_studios",
+                "speaker_queue_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
+            _ensure_column(
+                conn,
+                "group_studios",
+                "claim_round_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
             _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'")
@@ -1226,6 +1244,65 @@ def set_group_studio_pending_speaker(group_id: str, member_id: str | None) -> No
 
 def get_group_studio_pending_speaker(group_id: str) -> str:
     return _group_studio_record_store().get_pending_speaker(group_id)
+
+
+def get_group_studio_speaker_queue(group_id: str) -> list[str]:
+    return _group_studio_record_store().get_speaker_queue(group_id)
+
+
+def set_group_studio_speaker_queue(group_id: str, member_ids: list[str]) -> None:
+    _group_studio_record_store().set_speaker_queue(group_id, member_ids)
+
+
+def pop_group_studio_speaker_queue_head(group_id: str, expected: str | None = None) -> str:
+    return _group_studio_record_store().pop_speaker_queue_head(group_id, expected)
+
+
+def get_group_studio_claim_round(group_id: str) -> list[str]:
+    return _group_studio_record_store().get_claim_round(group_id)
+
+
+def set_group_studio_claim_round(group_id: str, member_ids: list[str]) -> None:
+    _group_studio_record_store().set_claim_round(group_id, member_ids)
+
+
+def pop_group_studio_claim_round_head(group_id: str, expected: str | None = None) -> str:
+    return _group_studio_record_store().pop_claim_round_head(group_id, expected)
+
+
+def insert_group_studio_work_item(payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().insert_work_item(payload)
+
+
+def list_group_studio_work_items(group_id: str) -> list[dict[str, Any]]:
+    return _group_studio_record_store().list_work_items(group_id)
+
+
+def claim_group_studio_work_item(
+    group_id: str,
+    work_item_id: str,
+    *,
+    member_id: str,
+    run_id: str,
+) -> dict[str, Any] | None:
+    return _group_studio_record_store().claim_work_item(
+        group_id, work_item_id, member_id=member_id, run_id=run_id,
+    )
+
+
+def complete_group_studio_work_item(
+    group_id: str,
+    work_item_id: str,
+    *,
+    member_id: str,
+) -> dict[str, Any] | None:
+    return _group_studio_record_store().complete_work_item(
+        group_id, work_item_id, member_id=member_id,
+    )
+
+
+def cancel_group_studio_work_item(group_id: str, work_item_id: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().cancel_work_item(group_id, work_item_id)
 
 
 def insert_group_studio_run(payload: dict[str, Any]) -> dict[str, Any]:

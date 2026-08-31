@@ -55,7 +55,6 @@ from src.storage.database import (
     insert_group_studio_run,
     list_agents,
     set_group_studio_current_run_id,
-    set_group_studio_pending_speaker,
     update_group_studio_message_body,
     update_group_studio_run_status,
 )
@@ -175,7 +174,7 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
         knowledge_tools=knowledge_tools,
         runtime_tool_scope=scope,
         guardrail_cache_key=f"group-studio-worker-bypass:{guardrails.permission_profile.cache_key()}",
-        runtime_features_cache_key="group-studio",
+        runtime_features_cache_key="group-studio-workboard-v1",
         extra_tools=tools,
         tool_name_allowlist=allowlist,
         tool_name_denylist=WORKER_DENYLIST,
@@ -237,13 +236,33 @@ def _worker_system_prompt(snapshot: dict[str, Any], member: dict[str, Any]) -> s
         f"约束：{card.get('constraints') or []}\n"
         f"未决问题：{[item.get('text') for item in (board.get('openQuestions') or []) if not item.get('resolved')]}\n"
         "对群可见的发言只写结论与证据，不要把内心推理过程写进正文。\n"
+        "口头「我来」无效，必须 group_claim_work_item。"
+        "认领轮只认领或跳过，不要写交付文件。"
+        "被点名干活时先 claim 再做，最后 group_complete_work_item 和 group_post_message。\n"
         "不要调用 AskUser 或 FinalAnswerStart。"
     )
 
 
-def _worker_user_message(snapshot: dict[str, Any], member: dict[str, Any]) -> str:
+def _worker_user_message(
+    snapshot: dict[str, Any],
+    member: dict[str, Any],
+    *,
+    duty: str = "queue",
+) -> str:
     card = snapshot.get("taskCard") or {}
     status = str(snapshot.get("status") or "")
+    items = snapshot.get("workItems") or []
+    open_items = [
+        f"{item.get('id')}:{item.get('title')}"
+        for item in items
+        if item.get("status") in {"open", "claimed"}
+    ]
+    if duty == "claim":
+        return (
+            "这是认领回合，认领或说跳过，不要开工；用 group_claim_work_item，最后 group_post_message。"
+            f"开放工作项：{open_items}\n"
+            f"{format_turn_context(snapshot)}"
+        )
     if status == "executing":
         return (
             f"请推进执行并在结束时 group_post_message 汇报。"
@@ -252,7 +271,9 @@ def _worker_user_message(snapshot: dict[str, Any], member: dict[str, Any]) -> st
         )
     return (
         f"轮到你发言。简要给出看法或方案，并用 group_post_message 发到群里。"
+        f"若有 open 工作项，先 group_claim_work_item 再干活。"
         f"目标：{card.get('goal') or ''}\n"
+        f"工作项：{open_items}\n"
         f"{format_turn_context(snapshot)}"
     )
 
@@ -262,6 +283,7 @@ async def run_worker_turn(
     member_id: str,
     *,
     agent_factory: AgentFactory | None = None,
+    duty: str = "queue",
 ) -> None:
     """给指定工人一轮发言/执行权。"""
 
@@ -278,11 +300,15 @@ async def run_worker_turn(
         None,
     )
     if member is None or member.get("role") != "worker":
-        set_group_studio_pending_speaker(group_id, None)
+        from src.group_studio.speaker_queue import pop_head, pop_unrunnable_head
+
+        pop_unrunnable_head(group_id)
         emit_envelope(group_id=group_id, event_type="GROUP_ERROR", payload={"code": "not_found", "message": "工人不存在"})
         return
     if member.get("muted"):
-        set_group_studio_pending_speaker(group_id, None)
+        from src.group_studio.speaker_queue import pop_unrunnable_head
+
+        pop_unrunnable_head(group_id)
         emit_envelope(group_id=group_id, event_type="GROUP_ERROR", payload={"code": "member_muted", "message": "工人已静音"})
         return
     if agent_factory is None:
@@ -298,7 +324,36 @@ async def run_worker_turn(
     spec, ctx, _tools = build_worker_runtime_spec(snapshot, member)
     run_id = f"grun_{uuid.uuid4().hex[:16]}"
     ctx.begin_run(run_id)
-    set_group_studio_pending_speaker(group_id, None)
+    from src.group_studio.speaker_queue import get_queue, pop_head
+    from src.group_studio.workboard import get_claim_round, pop_claim_head
+
+    floor_reason = "host_assign"
+    if duty == "claim":
+        claim_before = get_claim_round(group_id)
+        if claim_before and claim_before[0] == member_id:
+            pop_claim_head(group_id, member_id)
+            floor_reason = "claim_round"
+        elif claim_before and claim_before[0] != member_id:
+            emit_envelope(
+                group_id=group_id,
+                event_type="GROUP_ERROR",
+                payload={"code": "floor_not_granted", "message": "当前没有你的发言权"},
+            )
+            return
+        else:
+            floor_reason = "claim_round"
+    else:
+        queue_before = get_queue(group_id)
+        if queue_before and queue_before[0] == member_id:
+            pop_head(group_id, member_id)
+            floor_reason = "host_assign" if len(queue_before) > 1 else "queue_next"
+        elif queue_before and queue_before[0] != member_id:
+            emit_envelope(
+                group_id=group_id,
+                event_type="GROUP_ERROR",
+                payload={"code": "floor_not_granted", "message": "当前没有你的发言权"},
+            )
+            return
     kind = "execution" if str(snapshot.get("status") or "") == "executing" else "discussion"
     intent = "report_progress" if kind == "execution" else "discuss"
     insert_group_studio_run({
@@ -313,7 +368,7 @@ async def run_worker_turn(
         group_id=group_id,
         event_type="GROUP_FLOOR",
         run_id=run_id,
-        payload={"memberId": member_id, "runId": run_id, "reason": "host_assign"},
+        payload={"memberId": member_id, "runId": run_id, "reason": floor_reason},
     )
     message_id = f"gmsg_{uuid.uuid4().hex[:16]}"
     insert_group_studio_message({
@@ -354,7 +409,7 @@ async def run_worker_turn(
     remember_fingerprint(run_id, progress_fingerprint(snapshot))
     register_run_task(group_id, asyncio.current_task())
     try:
-        next_input: Any = UserMsg(name="user", content=_worker_user_message(snapshot, member))
+        next_input: Any = UserMsg(name="user", content=_worker_user_message(snapshot, member, duty=duty))
         last_chars_flush = 0
         while not session.cancelled:
             paused = False
@@ -515,6 +570,7 @@ async def run_worker_turn(
         run_id=run_id,
         run_status=run_status,
         interrupt_source=interrupted,
+        duty=duty,
     )
 
 

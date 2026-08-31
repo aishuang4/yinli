@@ -200,6 +200,17 @@ class GroupStudioRecordStore:
                 """,
                 (group_id,),
             ).fetchone()
+            try:
+                work_rows = conn.execute(
+                    """
+                    SELECT * FROM group_work_items
+                    WHERE group_id = ?
+                    ORDER BY sort_order ASC, created_at ASC
+                    """,
+                    (group_id,),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                work_rows = []
         if task is None or blackboard is None:
             return None
         ordered_messages = list(reversed(messages))
@@ -229,9 +240,13 @@ class GroupStudioRecordStore:
                 if "pending_speaker_member_id" in studio.keys()
                 else None
             ),
+            "speakerQueue": self.loads(studio["speaker_queue_json"], []) if "speaker_queue_json" in studio.keys() else [],
+            "claimRoundMemberIds": self.loads(studio["claim_round_json"], []) if "claim_round_json" in studio.keys() else [],
+            "workItems": [self._work_item_from_row(row) for row in work_rows],
             "currentApproval": None if hide_approval else self._approval_from_row(pending),
             "messages": [self._message_from_row(row) for row in ordered_messages],
             "awaitingRestatement": bool(studio["awaiting_restatement"]),
+            "awaitingIntakeConfirm": bool(studio["awaiting_intake_confirm"]) if "awaiting_intake_confirm" in studio.keys() else False,
             "createdAt": studio["created_at"],
             "updatedAt": studio["updated_at"],
         }
@@ -410,6 +425,7 @@ class GroupStudioRecordStore:
         phase_before_pause: str | None = None,
         clear_phase_before_pause: bool = False,
         awaiting_restatement: bool | None = None,
+        awaiting_intake_confirm: bool | None = None,
         budget: dict[str, Any] | None = None,
         current_run_id: str | None = None,
         clear_current_run: bool = False,
@@ -432,6 +448,9 @@ class GroupStudioRecordStore:
         if awaiting_restatement is not None:
             assignments.append("awaiting_restatement = ?")
             params.append(1 if awaiting_restatement else 0)
+        if awaiting_intake_confirm is not None:
+            assignments.append("awaiting_intake_confirm = ?")
+            params.append(1 if awaiting_intake_confirm else 0)
         if budget is not None:
             assignments.append("budget_json = ?")
             params.append(self.dumps(budget))
@@ -459,8 +478,19 @@ class GroupStudioRecordStore:
             )
 
     def set_pending_speaker(self, group_id: str, member_id: str | None) -> None:
-        """写入或清空尚未开工的指派工人。"""
+        """兼容包装：空队列时把单人写入队列，清空则整队清空。"""
 
+        if member_id:
+            queue = self.get_speaker_queue(group_id)
+            if not queue:
+                self.set_speaker_queue(group_id, [member_id])
+                return
+            if queue[0] != member_id:
+                self.set_speaker_queue(group_id, [member_id, *[item for item in queue if item != member_id]])
+                return
+        else:
+            self.set_speaker_queue(group_id, [])
+            return
         self.ensure_db()
         now = self.utc_now()
         with self.lock, self.connect() as conn:
@@ -476,15 +506,251 @@ class GroupStudioRecordStore:
     def get_pending_speaker(self, group_id: str) -> str:
         """读取尚未开工的指派工人；没有则空字符串。"""
 
+        queue = self.get_speaker_queue(group_id)
+        return queue[0] if queue else ""
+
+    def get_speaker_queue(self, group_id: str) -> list[str]:
+        """FIFO 点名队列。空 JSON 时回退 pending 并一次性迁入。"""
+
         self.ensure_db()
         with self.lock, self.connect() as conn:
             row = conn.execute(
-                "SELECT pending_speaker_member_id FROM group_studios WHERE id = ?",
+                """
+                SELECT pending_speaker_member_id, speaker_queue_json
+                FROM group_studios WHERE id = ?
+                """,
                 (group_id,),
             ).fetchone()
         if row is None:
+            return []
+        keys = row.keys()
+        queue = self.loads(row["speaker_queue_json"], []) if "speaker_queue_json" in keys else []
+        if not isinstance(queue, list):
+            queue = []
+        cleaned = [str(item) for item in queue if str(item or "").strip()]
+        pending = str(row["pending_speaker_member_id"] or "").strip() if "pending_speaker_member_id" in keys else ""
+        if not cleaned and pending:
+            self.set_speaker_queue(group_id, [pending])
+            return [pending]
+        return cleaned
+
+    def set_speaker_queue(self, group_id: str, member_ids: list[str]) -> None:
+        """写入队列并同步队首到 pending 缓存列。"""
+
+        cleaned: list[str] = []
+        for item in member_ids:
+            text = str(item or "").strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE group_studios
+                SET speaker_queue_json = ?, pending_speaker_member_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (self.dumps(cleaned), cleaned[0] if cleaned else "", now, group_id),
+            )
+
+    def pop_speaker_queue_head(self, group_id: str, expected: str | None = None) -> str:
+        """弹出队首。expected 非空且不匹配则不弹，返回空串。"""
+
+        queue = self.get_speaker_queue(group_id)
+        if not queue:
             return ""
-        return str(row["pending_speaker_member_id"] or "")
+        if expected and queue[0] != expected:
+            return ""
+        head = queue[0]
+        self.set_speaker_queue(group_id, queue[1:])
+        return head
+
+    def get_claim_round(self, group_id: str) -> list[str]:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT claim_round_json FROM group_studios WHERE id = ?",
+                (group_id,),
+            ).fetchone()
+        if row is None or "claim_round_json" not in row.keys():
+            return []
+        raw = self.loads(row["claim_round_json"], [])
+        if not isinstance(raw, list):
+            return []
+        return [str(item) for item in raw if str(item or "").strip()]
+
+    def set_claim_round(self, group_id: str, member_ids: list[str]) -> None:
+        cleaned: list[str] = []
+        for item in member_ids:
+            text = str(item or "").strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE group_studios
+                SET claim_round_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (self.dumps(cleaned), now, group_id),
+            )
+
+    def pop_claim_round_head(self, group_id: str, expected: str | None = None) -> str:
+        queue = self.get_claim_round(group_id)
+        if not queue:
+            return ""
+        if expected and queue[0] != expected:
+            return ""
+        head = queue[0]
+        self.set_claim_round(group_id, queue[1:])
+        return head
+
+    def _work_item_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        def _blank(value: Any) -> str | None:
+            text = str(value or "").strip()
+            return text or None
+
+        return {
+            "id": str(row["id"]),
+            "groupId": str(row["group_id"]),
+            "taskCardId": str(row["task_card_id"]),
+            "title": str(row["title"] or ""),
+            "description": str(row["description"] or ""),
+            "status": str(row["status"]),
+            "assigneeMemberId": _blank(row["assignee_member_id"]),
+            "sortOrder": int(row["sort_order"] or 0),
+            "sourceRunId": _blank(row["source_run_id"]),
+            "claimRunId": _blank(row["claim_run_id"]),
+            "claimedAt": row["claimed_at"],
+            "completedAt": row["completed_at"],
+            "createdAt": str(row["created_at"]),
+            "updatedAt": str(row["updated_at"]),
+        }
+
+    def insert_work_item(self, payload: dict[str, Any]) -> dict[str, Any]:
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO group_work_items (
+                    id, group_id, task_card_id, title, description, status,
+                    assignee_member_id, sort_order, source_run_id, claim_run_id,
+                    claimed_at, completed_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload["id"],
+                    payload["groupId"],
+                    payload["taskCardId"],
+                    payload["title"],
+                    payload.get("description") or "",
+                    payload.get("status") or "open",
+                    payload.get("assigneeMemberId") or "",
+                    int(payload.get("sortOrder") or 0),
+                    payload.get("sourceRunId") or "",
+                    payload.get("claimRunId") or "",
+                    payload.get("claimedAt"),
+                    payload.get("completedAt"),
+                    now,
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM group_work_items WHERE id = ?", (payload["id"],)).fetchone()
+        return self._work_item_from_row(row)
+
+    def list_work_items(self, group_id: str) -> list[dict[str, Any]]:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM group_work_items
+                    WHERE group_id = ?
+                    ORDER BY sort_order ASC, created_at ASC
+                    """,
+                    (group_id,),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return []
+        return [self._work_item_from_row(row) for row in rows]
+
+    def claim_work_item(
+        self,
+        group_id: str,
+        work_item_id: str,
+        *,
+        member_id: str,
+        run_id: str,
+    ) -> dict[str, Any] | None:
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE group_work_items
+                SET status = 'claimed', assignee_member_id = ?, claim_run_id = ?,
+                    claimed_at = ?, updated_at = ?
+                WHERE id = ? AND group_id = ? AND status = 'open'
+                """,
+                (member_id, run_id or "", now, now, work_item_id, group_id),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = conn.execute(
+                "SELECT * FROM group_work_items WHERE id = ?",
+                (work_item_id,),
+            ).fetchone()
+        return self._work_item_from_row(row) if row is not None else None
+
+    def complete_work_item(
+        self,
+        group_id: str,
+        work_item_id: str,
+        *,
+        member_id: str,
+    ) -> dict[str, Any] | None:
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE group_work_items
+                SET status = 'done', completed_at = ?, updated_at = ?
+                WHERE id = ? AND group_id = ? AND status = 'claimed' AND assignee_member_id = ?
+                """,
+                (now, now, work_item_id, group_id, member_id),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = conn.execute(
+                "SELECT * FROM group_work_items WHERE id = ?",
+                (work_item_id,),
+            ).fetchone()
+        return self._work_item_from_row(row) if row is not None else None
+
+    def cancel_work_item(self, group_id: str, work_item_id: str) -> dict[str, Any] | None:
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE group_work_items
+                SET status = 'cancelled', updated_at = ?
+                WHERE id = ? AND group_id = ? AND status IN ('open', 'claimed')
+                """,
+                (now, work_item_id, group_id),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = conn.execute(
+                "SELECT * FROM group_work_items WHERE id = ?",
+                (work_item_id,),
+            ).fetchone()
+        return self._work_item_from_row(row) if row is not None else None
 
     def insert_run(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.ensure_db()
@@ -992,10 +1258,11 @@ class GroupStudioRecordStore:
             INSERT INTO group_studios (
                 id, workspace_id, project_id, chat_session_id, title, status,
                 phase_before_pause, current_task_card_id, awaiting_restatement,
+                awaiting_intake_confirm,
                 orchestrator_meta, budget_json, current_run_id,
-                pending_speaker_member_id,
+                pending_speaker_member_id, speaker_queue_json, claim_round_json,
                 created_at, updated_at, archived_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 group_id,
@@ -1007,10 +1274,13 @@ class GroupStudioRecordStore:
                 None,
                 task["id"],
                 0,
+                0,
                 self.dumps(payload.get("orchestratorMeta") or {}),
                 self.dumps(payload["budget"]),
                 "",
                 "",
+                "[]",
+                "[]",
                 now,
                 now,
                 None,

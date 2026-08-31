@@ -206,6 +206,54 @@ class GroupRequestHelp(WorkerTool):
         return self.success({"blackboard": board})
 
 
+class GroupClaimWorkItem(WorkerTool):
+    name = "group_claim_work_item"
+    description = "Claim an open work item. Saying 'I'll take it' in chat is not a claim."
+    input_schema = {
+        "type": "object",
+        "properties": {"workItemId": {"type": "string"}},
+        "required": ["workItemId"],
+    }
+
+    async def __call__(self, workItemId: str) -> ToolChunk:
+        from src.group_studio.workboard import claim_item
+
+        try:
+            row = claim_item(
+                self.ctx.group_id,
+                workItemId,
+                member_id=self.ctx.member_id,
+                run_id=self.ctx.run_id,
+            )
+        except GroupStudioError as exc:
+            return self.error(exc.code)
+        return self.success({"item": row})
+
+
+class GroupCompleteWorkItem(WorkerTool):
+    name = "group_complete_work_item"
+    description = "Mark your claimed work item done. You must still group_post_message to end the turn."
+    input_schema = {
+        "type": "object",
+        "properties": {"workItemId": {"type": "string"}},
+        "required": ["workItemId"],
+    }
+
+    async def __call__(self, workItemId: str) -> ToolChunk:
+        from src.group_studio.workboard import complete_item
+
+        try:
+            row = complete_item(
+                self.ctx.group_id,
+                workItemId,
+                member_id=self.ctx.member_id,
+                run_id=self.ctx.run_id,
+            )
+        except GroupStudioError as exc:
+            return self.error(exc.code)
+        return self.success({"item": row})
+
+
 def worker_tools(ctx: WorkerToolContext) -> list[WorkerTool]:
     """Worker 群协作工具。"""
 
@@ -214,4 +262,6 @@ def worker_tools(ctx: WorkerToolContext) -> list[WorkerTool]:
         GroupPostMessage(ctx),
         GroupProposeDecision(ctx),
         GroupRequestHelp(ctx),
+        GroupClaimWorkItem(ctx),
+        GroupCompleteWorkItem(ctx),
     ]

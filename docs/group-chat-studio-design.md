@@ -10,7 +10,9 @@
 | 范围 | 全新独立功能；不替换、不增强当前 Chat Team Runtime |
 | 实现前必须先冻结 | `docs/group-studio-event-contract.md`（本设计含契约草案，落地 PR 之前拆出） |
 
-> 本文是实现方案。已拍板的隔离墙、入口、调度规则不得重新打开。P0 已上线；P1 只进 `docs/project-todo.md`。
+> 本文是 P0 实现方案。已拍板的隔离墙、入口、Host 哨兵、一 session 一间未归档工作室不得重新打开。P0 已上线。
+>
+> **已评审、待实现的增量**见 `docs/group-studio-intake-and-workboard.md`：`drafting` 改为 intake 对谈（写卡 ≠ 开会，人类确认密度后才 `discussing`）；接手后用 FIFO 点名队列 + 工作项认领。真并行仍是 P1。该增量会作废本文「from-chat 且 goal 非空 → discussing」「drafting 禁止 Host floor」两条转移，实施时以增量文档为准。
 
 ---
 

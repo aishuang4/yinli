@@ -112,15 +112,17 @@ def test_reuse_blank_draft_returns_existing(client):
     assert first.json()["id"] == second.json()["id"]
 
 
-def test_draft_text_enters_discussing(client):
+def test_draft_text_stays_drafting_and_seeds_message(client):
     response = _from_chat(client, chatSessionId="sess-draft", draftText="  写一份方案  ")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "discussing"
-    assert body["taskCard"]["goal"] == "写一份方案"
-    assert body["taskCard"]["status"] == "active"
+    assert body["status"] == "drafting"
+    assert body["taskCard"]["goal"] == ""
+    assert body["taskCard"]["status"] == "draft"
     assert body["taskCard"]["seedFromChat"] is False
+    bodies = [item["body"] for item in body["messages"] if item.get("visibleInTimeline")]
+    assert "写一份方案" in bodies
 
 
 def test_existing_messages_seed_from_last_user(client):
@@ -139,9 +141,12 @@ def test_existing_messages_seed_from_last_user(client):
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "discussing"
-    assert body["taskCard"]["goal"] == "请拆解这个任务"
+    assert body["status"] == "drafting"
+    assert body["taskCard"]["goal"] == ""
     assert body["taskCard"]["seedFromChat"] is True
+    bodies = [item["body"] for item in body["messages"] if item.get("visibleInTimeline")]
+    assert "请拆解这个任务" in bodies
+    assert "这段草稿应被忽略" not in bodies
 
 
 def test_second_from_chat_returns_same_studio(client):
@@ -163,7 +168,7 @@ def test_archived_session_can_open_new_studio(client):
     second = _from_chat(client, chatSessionId="sess-arch", draftText="新目标")
     assert second.status_code == 200
     assert second.json()["id"] != group_id
-    assert second.json()["status"] == "discussing"
+    assert second.json()["status"] == "drafting"
 
 
 def test_get_and_by_chat(client):

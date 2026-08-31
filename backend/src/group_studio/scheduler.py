@@ -1,11 +1,18 @@
-"""发言权调度：进入 discussing 后给 Host 一轮。pytest 下默认不自动点火以免打到真实模型。"""
+"""发言权调度：Host 自然结束默认停；工人结束弹队列下一人。"""
 
 from __future__ import annotations
 
 import asyncio
 import os
 
+from src.group_studio.events import emit_envelope
 from src.group_studio.host_runtime import run_host_discussion
+from src.group_studio.speaker_queue import get_queue, pop_unrunnable_head
+from src.group_studio.workboard import (
+    enqueue_claimed_assignees,
+    get_claim_round,
+    pop_unrunnable_claim,
+)
 from src.group_studio.worker_runtime import run_worker_turn
 from src.storage.database import get_group_studio_snapshot
 
@@ -17,10 +24,7 @@ def should_auto_start_host() -> bool:
 
 
 def schedule_host_turn(group_id: str) -> None:
-    """若工作室可发言且没有进行中的 Run，则后台启动 Host 一轮。
-
-    已落库但尚未开工的指派优先拉工人，避免 Host 缓存 miss 后房间空转。
-    """
+    """后台启动 Host 一轮。不派工人。"""
 
     if not should_auto_start_host():
         return
@@ -29,7 +33,9 @@ def schedule_host_turn(group_id: str) -> None:
         return
     status = str(snapshot.get("status") or "")
     goal = str((snapshot.get("taskCard") or {}).get("goal") or "").strip()
-    if status not in {"discussing", "executing", "reviewing", "awaiting_human"} or not goal:
+    if status not in {"drafting", "discussing", "executing", "reviewing", "awaiting_human"}:
+        return
+    if status != "drafting" and not goal:
         return
     if snapshot.get("currentRunId"):
         return
@@ -37,15 +43,44 @@ def schedule_host_turn(group_id: str) -> None:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    pending = str(snapshot.get("pendingSpeakerMemberId") or "").strip()
-    if pending and status != "awaiting_human":
-        loop.create_task(_run_worker_guarded(group_id, pending))
-        return
     loop.create_task(_run_host_guarded(group_id))
 
 
+def schedule_next(group_id: str) -> None:
+    """只派工人。队列空或 awaiting_human 则 return。"""
+
+    if not should_auto_start_host():
+        return
+    snapshot = get_group_studio_snapshot(group_id, message_limit=1)
+    if snapshot is None or snapshot.get("currentRunId"):
+        return
+    status = str(snapshot.get("status") or "")
+    if status == "awaiting_human":
+        return
+    if status not in {"discussing", "executing", "reviewing"}:
+        return
+    pop_unrunnable_head(group_id)
+    pop_unrunnable_claim(group_id)
+    queue = get_queue(group_id)
+    if queue:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(_run_worker_guarded(group_id, queue[0], duty="queue"))
+        return
+    claim = get_claim_round(group_id)
+    if not claim:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(_run_worker_guarded(group_id, claim[0], duty="claim"))
+
+
 def schedule_worker_turn(group_id: str, member_id: str) -> None:
-    """Host 指派后启动工人一轮。pytest 下不自动点火。"""
+    """显式启动指定工人一轮。pytest 下不自动点火。"""
 
     if not should_auto_start_host():
         return
@@ -58,16 +93,21 @@ def schedule_worker_turn(group_id: str, member_id: str) -> None:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         return
-    loop.create_task(_run_worker_guarded(group_id, member_id))
+    loop.create_task(_run_worker_guarded(group_id, member_id, duty="queue"))
 
 
 async def _run_host_guarded(group_id: str, *, phase_followup: bool = False) -> None:
     try:
         before = get_group_studio_snapshot(group_id, message_limit=1) or {}
         before_status = str(before.get("status") or "")
-        assigned = await run_host_discussion(group_id)
-        if assigned:
-            await _run_worker_guarded(group_id, assigned)
+        await run_host_discussion(group_id)
+        queue = get_queue(group_id)
+        if queue:
+            await _run_worker_guarded(group_id, queue[0], duty="queue")
+            return
+        claim = get_claim_round(group_id)
+        if claim:
+            await _run_worker_guarded(group_id, claim[0], duty="claim")
             return
         after = get_group_studio_snapshot(group_id, message_limit=1) or {}
         after_status = str(after.get("status") or "")
@@ -78,8 +118,6 @@ async def _run_host_guarded(group_id: str, *, phase_followup: bool = False) -> N
         ):
             await _run_host_guarded(group_id, phase_followup=True)
     except Exception:
-        from src.group_studio.events import emit_envelope
-
         emit_envelope(
             group_id=group_id,
             event_type="GROUP_ERROR",
@@ -87,13 +125,32 @@ async def _run_host_guarded(group_id: str, *, phase_followup: bool = False) -> N
         )
 
 
-async def _run_worker_guarded(group_id: str, member_id: str) -> None:
+async def _run_worker_guarded(group_id: str, member_id: str, *, duty: str = "queue") -> None:
     try:
-        await run_worker_turn(group_id, member_id)
+        await run_worker_turn(group_id, member_id, duty=duty)
+        if duty == "claim":
+            pop_unrunnable_claim(group_id)
+            remaining_claim = get_claim_round(group_id)
+            if remaining_claim:
+                await _run_worker_guarded(group_id, remaining_claim[0], duty="claim")
+                return
+            enqueue_claimed_assignees(group_id)
+        pop_unrunnable_head(group_id)
+        remaining = get_queue(group_id)
+        if remaining:
+            await _run_worker_guarded(group_id, remaining[0], duty="queue")
+            return
+        leftover_claim = get_claim_round(group_id)
+        if leftover_claim:
+            await _run_worker_guarded(group_id, leftover_claim[0], duty="claim")
+            return
+        emit_envelope(
+            group_id=group_id,
+            event_type="GROUP_SPEAKER_QUEUE",
+            payload={"memberIds": [], "kind": "drained", "pendingMemberId": None},
+        )
         schedule_host_turn(group_id)
     except Exception:
-        from src.group_studio.events import emit_envelope
-
         emit_envelope(
             group_id=group_id,
             event_type="GROUP_ERROR",

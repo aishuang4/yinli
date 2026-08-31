@@ -45,14 +45,15 @@ def client(isolated_db):
 
 
 def _create_discussing(client: TestClient, session_id: str = "sess-pr9") -> dict:
+    from test.group_studio_helpers import confirm_intake_for_tests
+
     created = client.post("/api/group-studio/from-chat", json={
         "projectId": DEFAULT_PROJECT_ID,
         "chatSessionId": session_id,
         "agentId": "default",
-        "draftText": "完成竞品分析",
     })
     assert created.status_code == 200, created.text
-    return created.json()
+    return confirm_intake_for_tests(client, created.json()["id"], goal="完成竞品分析")
 
 
 def _enter_reviewing(client: TestClient, group_id: str) -> None:
@@ -139,7 +140,7 @@ def test_close_requires_review_then_complete_dod(client):
     })
     assert again.status_code == 200
     assert again.json()["id"] != group_id
-    assert again.json()["status"] == "discussing"
+    assert again.json()["status"] == "drafting"
 
 
 def test_catalog_attaches_group_studio_hint(client):

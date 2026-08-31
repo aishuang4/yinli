@@ -33,6 +33,11 @@ const BOARD_EVENTS = new Set([
   'GROUP_CIRCUIT',
   'GROUP_DOD',
   'GROUP_ERROR',
+  'GROUP_TASK_CARD',
+  'GROUP_STATUS',
+  'GROUP_INTAKE',
+  'GROUP_WORK_ITEM',
+  'GROUP_SPEAKER_QUEUE',
 ]);
 
 export function useGroupStudioStream(

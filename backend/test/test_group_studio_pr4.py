@@ -8,12 +8,14 @@ import pytest
 
 from src.group_studio.errors import (
     AGENT_NOT_BOUND,
-    DRAFTING_NO_FLOOR,
     GOAL_REQUIRED,
     HOST_REQUIRED,
+    ILLEGAL_TRANSITION,
+    INTAKE_NOT_CONFIRMED,
     JOB_AGENT_FORBIDDEN,
     MEMBER_CAP,
 )
+from test.group_studio_helpers import confirm_intake_for_tests
 from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID
 from src.group_studio.settings import set_group_studio_settings
 from src.project_resources import ProjectResourceAccess
@@ -87,7 +89,7 @@ def test_require_agent_skips_host_sentinel():
     access.require_agent(GROUP_STUDIO_HOST_AGENT_ID)
 
 
-def test_drafting_put_goal_enters_discussing_without_restatement(client):
+def test_drafting_put_goal_stays_drafting(client):
     studio = _create_studio(client)
     group_id = studio["id"]
     response = client.put(f"/api/group-studio/{group_id}/task-card", json={
@@ -97,11 +99,11 @@ def test_drafting_put_goal_enters_discussing_without_restatement(client):
     assert response.status_code == 200
     card = response.json()
     assert card["goal"] == "完成竞品分析"
-    assert card["status"] == "active"
+    assert card["status"] == "draft"
     assert card["revision"] == 2
 
     snapshot = client.get(f"/api/group-studio/{group_id}").json()
-    assert snapshot["status"] == "discussing"
+    assert snapshot["status"] == "drafting"
     assert snapshot["awaitingRestatement"] is False
     assert snapshot["blackboard"]["goal"] == "完成竞品分析"
 
@@ -121,15 +123,12 @@ def test_start_execution_in_drafting_is_forbidden(client):
         "projectId": DEFAULT_PROJECT_ID,
     })
     assert response.status_code == 409
-    assert response.json()["detail"] == DRAFTING_NO_FLOOR
+    assert response.json()["detail"] == ILLEGAL_TRANSITION
 
 
 def test_start_execution_in_discussing_enters_executing(client):
     studio = _create_studio(client, "sess-exec")
-    client.put(f"/api/group-studio/{studio['id']}/task-card", json={
-        "projectId": DEFAULT_PROJECT_ID,
-        "goal": "开始执行",
-    })
+    confirm_intake_for_tests(client, studio["id"], goal="开始执行")
     response = client.post(f"/api/group-studio/{studio['id']}/start-execution", json={
         "projectId": DEFAULT_PROJECT_ID,
     })
@@ -150,7 +149,7 @@ def test_goal_change_without_runs_does_not_restatement(client):
     })
     assert response.status_code == 200
     snapshot = client.get(f"/api/group-studio/{group_id}").json()
-    assert snapshot["status"] == "discussing"
+    assert snapshot["status"] == "drafting"
     assert snapshot["awaitingRestatement"] is False
     assert snapshot["taskCard"]["goal"] == "改后的目标"
 
@@ -158,10 +157,7 @@ def test_goal_change_without_runs_does_not_restatement(client):
 def test_goal_change_with_runs_enters_restatement(client, monkeypatch):
     studio = _create_studio(client, "sess-restate")
     group_id = studio["id"]
-    client.put(f"/api/group-studio/{group_id}/task-card", json={
-        "projectId": DEFAULT_PROJECT_ID,
-        "goal": "旧目标",
-    })
+    confirm_intake_for_tests(client, group_id, goal="旧目标")
     monkeypatch.setattr("src.group_studio.service.group_studio_has_runs", lambda _gid: True)
     response = client.put(f"/api/group-studio/{group_id}/task-card", json={
         "projectId": DEFAULT_PROJECT_ID,
@@ -174,8 +170,20 @@ def test_goal_change_with_runs_enters_restatement(client, monkeypatch):
     assert snapshot["phaseBeforePause"] == "discussing"
 
 
+def test_add_member_in_drafting_is_forbidden(client):
+    studio = _create_studio(client, "sess-intake-member")
+    _bind_agent("agent-draft", "对谈工人")
+    response = client.post(f"/api/group-studio/{studio['id']}/members", json={
+        "projectId": DEFAULT_PROJECT_ID,
+        "agentId": "agent-draft",
+    })
+    assert response.status_code == 409
+    assert response.json()["detail"] == INTAKE_NOT_CONFIRMED
+
+
 def test_add_member_and_idempotent(client):
     studio = _create_studio(client, "sess-add")
+    confirm_intake_for_tests(client, studio["id"], goal="加人")
     _bind_agent("agent-1", "研究员")
     first = client.post(f"/api/group-studio/{studio['id']}/members", json={
         "projectId": DEFAULT_PROJECT_ID,
@@ -194,6 +202,7 @@ def test_add_member_and_idempotent(client):
 
 def test_cannot_add_host_sentinel_as_worker(client):
     studio = _create_studio(client, "sess-host")
+    confirm_intake_for_tests(client, studio["id"], goal="主持")
     response = client.post(f"/api/group-studio/{studio['id']}/members", json={
         "projectId": DEFAULT_PROJECT_ID,
         "agentId": GROUP_STUDIO_HOST_AGENT_ID,
@@ -204,6 +213,7 @@ def test_cannot_add_host_sentinel_as_worker(client):
 
 def test_job_and_unbound_member_rejected(client):
     studio = _create_studio(client, "sess-deny")
+    confirm_intake_for_tests(client, studio["id"], goal="拒绝")
     upsert_agent({
         "id": "job-1",
         "name": "Job",
@@ -238,6 +248,7 @@ def test_job_and_unbound_member_rejected(client):
 def test_member_cap(client):
     studio = _create_studio(client, "sess-cap")
     group_id = studio["id"]
+    confirm_intake_for_tests(client, group_id, goal="满员")
     for index in range(1, 5):
         agent_id = f"agent-{index}"
         _bind_agent(agent_id, f"成员{index}")

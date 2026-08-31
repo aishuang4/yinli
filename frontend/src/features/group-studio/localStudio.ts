@@ -89,6 +89,10 @@ export function createLocalStudioSnapshot(input: {
     currentApproval: null,
     messages: [],
     awaitingRestatement: false,
+    awaitingIntakeConfirm: false,
+    speakerQueue: [],
+    claimRoundMemberIds: [],
+    workItems: [],
     createdAt: now,
     updatedAt: now,
   };

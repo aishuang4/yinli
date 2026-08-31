@@ -61,6 +61,9 @@ GroupStudioEventType = Literal[
     "GROUP_DOD",
     "GROUP_ERROR",
     "GROUP_RUN_ENDED",
+    "GROUP_INTAKE",
+    "GROUP_WORK_ITEM",
+    "GROUP_SPEAKER_QUEUE",
 ]
 
 
@@ -184,6 +187,28 @@ class GroupApproval(CamelModel):
     created_at: str = Field(alias="createdAt")
 
 
+WorkItemStatus = Literal["open", "claimed", "done", "cancelled"]
+
+
+class WorkItem(CamelModel):
+    """任务卡下的可认领工作项。"""
+
+    id: str
+    group_id: str = Field(alias="groupId")
+    task_card_id: str = Field(alias="taskCardId")
+    title: str
+    description: str = ""
+    status: WorkItemStatus
+    assignee_member_id: str | None = Field(default=None, alias="assigneeMemberId")
+    sort_order: int = Field(alias="sortOrder")
+    source_run_id: str | None = Field(default=None, alias="sourceRunId")
+    claim_run_id: str | None = Field(default=None, alias="claimRunId")
+    claimed_at: str | None = Field(default=None, alias="claimedAt")
+    completed_at: str | None = Field(default=None, alias="completedAt")
+    created_at: str = Field(alias="createdAt")
+    updated_at: str = Field(alias="updatedAt")
+
+
 class GroupArtifact(CamelModel):
     """共享文件库条目。"""
 
@@ -214,9 +239,13 @@ class GroupStudio(CamelModel):
     budget: GroupBudget
     current_run_id: str | None = Field(default=None, alias="currentRunId")
     pending_speaker_member_id: str | None = Field(default=None, alias="pendingSpeakerMemberId")
+    speaker_queue: list[str] = Field(default_factory=list, alias="speakerQueue")
+    claim_round_member_ids: list[str] = Field(default_factory=list, alias="claimRoundMemberIds")
+    work_items: list[WorkItem] = Field(default_factory=list, alias="workItems")
     current_approval: GroupApproval | None = Field(default=None, alias="currentApproval")
     messages: list[GroupMessage] = Field(default_factory=list)
     awaiting_restatement: bool = Field(alias="awaitingRestatement")
+    awaiting_intake_confirm: bool = Field(default=False, alias="awaitingIntakeConfirm")
     created_at: str = Field(alias="createdAt")
     updated_at: str = Field(alias="updatedAt")
 
@@ -292,6 +321,12 @@ class GroupCloseRequest(CamelModel):
 
 
 class GroupConfirmRestatementRequest(CamelModel):
+    project_id: str = Field(alias="projectId")
+
+
+class GroupConfirmIntakeRequest(CamelModel):
+    """人类确认 intake 密度，进入 discussing。"""
+
     project_id: str = Field(alias="projectId")
 
 

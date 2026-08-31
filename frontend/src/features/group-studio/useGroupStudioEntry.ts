@@ -22,6 +22,7 @@ interface UseGroupStudioEntryOptions {
   draftText: string;
   fileAttachments: ChatFileAttachment[];
   hasImages: boolean;
+  userMessageCount?: number;
   isComposingRef: RefObject<boolean>;
   setActiveSessionId: (sessionId: string) => void;
   uploadFilesForSession: (
@@ -39,6 +40,7 @@ export function useGroupStudioEntry({
   draftText,
   fileAttachments,
   hasImages,
+  userMessageCount = 0,
   isComposingRef,
   setActiveSessionId,
   uploadFilesForSession,
@@ -128,7 +130,7 @@ export function useGroupStudioEntry({
         ? await uploadFilesForSession(fileAttachments, activeProjectId, sessionId)
         : [];
       const filePaths = files.map((file) => file.path).filter(Boolean);
-      if (draftText.trim() || filePaths.length > 0) {
+      if (userMessageCount >= 1 || draftText.trim() || filePaths.length > 0) {
         const studio = await createStudioFromChat({
           projectId: activeProjectId,
           chatSessionId: sessionId,
@@ -156,6 +158,7 @@ export function useGroupStudioEntry({
     fileAttachments,
     flagEnabled,
     hasImages,
+    userMessageCount,
     openGroupStudio,
     setActiveSessionId,
     uploadFilesForSession,

@@ -55,6 +55,7 @@ def on_run_finished(
     run_id: str,
     run_status: str,
     interrupt_source: str | None = None,
+    duty: str | None = None,
 ) -> bool:
     """计费 Run 结束后更新预算；触顶则熔断。返回是否已熔断。"""
 
@@ -78,7 +79,10 @@ def on_run_finished(
         "pause",
     }
     started = take_fingerprint(run_id)
-    if run_status == "completed":
+    if duty == "claim":
+        if run_status == "completed":
+            budget["usedTurns"] = int(budget.get("usedTurns") or 0) + 1
+    elif run_status == "completed":
         budget["usedTurns"] = int(budget.get("usedTurns") or 0) + 1
         board_moved = started is None or started != progress_fingerprint(snapshot)
         if board_moved or _worker_delivered(group_id, run_id):

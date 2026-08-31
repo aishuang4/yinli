@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 from src.group_studio.errors import (
-    DRAFTING_NO_FLOOR,
     GOAL_REQUIRED,
     ILLEGAL_TRANSITION,
+    INTAKE_WORKER_FORBIDDEN,
     STUDIO_CIRCUIT_BROKEN,
     STUDIO_PAUSED,
     GroupStudioError,
 )
 from src.group_studio.settings import DEFAULT_MAX_MEMBERS, get_group_studio_settings_public
 
-FLOOR_ALLOWED_STATUSES = frozenset({"discussing", "executing", "reviewing"})
+HOST_FLOOR_STATUSES = frozenset({
+    "drafting",
+    "discussing",
+    "executing",
+    "reviewing",
+    "awaiting_human",
+})
+WORKER_FLOOR_STATUSES = frozenset({"discussing", "executing", "reviewing"})
+FLOOR_ALLOWED_STATUSES = HOST_FLOOR_STATUSES
 MUTATION_BLOCKED = {
     "paused": STUDIO_PAUSED,
     "circuit_broken": STUDIO_CIRCUIT_BROKEN,
@@ -36,19 +44,21 @@ def assert_can_mutate(status: str) -> None:
 
 
 def assert_floor_allowed(status: str, *, role: str = "host") -> None:
-    """drafting / paused / 熔断禁止发言。awaiting_human 只允许 Host 复述。"""
+    """paused / 熔断禁止发言。drafting 只允许 Host；awaiting_human 只允许 Host 复述。"""
 
-    if status == "drafting":
-        raise GroupStudioError(409, DRAFTING_NO_FLOOR)
     if status == "paused":
         raise GroupStudioError(409, STUDIO_PAUSED)
     if status == "circuit_broken":
         raise GroupStudioError(409, STUDIO_CIRCUIT_BROKEN)
-    if status == "awaiting_human":
-        if role != "host":
+    if role == "host":
+        if status not in HOST_FLOOR_STATUSES:
             raise GroupStudioError(409, ILLEGAL_TRANSITION)
         return
-    if status not in FLOOR_ALLOWED_STATUSES:
+    if status == "drafting":
+        raise GroupStudioError(409, INTAKE_WORKER_FORBIDDEN)
+    if status == "awaiting_human":
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    if status not in WORKER_FLOOR_STATUSES:
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
 
 

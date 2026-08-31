@@ -68,6 +68,21 @@ export async function updateTaskCard(groupId: string, input: {
   return await response.json() as GroupStudioSnapshot['taskCard'];
 }
 
+export async function confirmStudioIntake(
+  groupId: string,
+  projectId: string,
+): Promise<GroupStudioSnapshot> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/confirm-intake`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId }),
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法确认开始'));
+  }
+  return await response.json() as GroupStudioSnapshot;
+}
+
 export async function muteStudioMember(groupId: string, memberId: string, input: {
   projectId: string;
   muted: boolean;
@@ -288,10 +303,19 @@ export async function readDetail(response: Response, fallback: string): Promise<
     return '工作室人数已达上限';
   }
   if (detail === 'goal_required') {
-    return '请先填写任务目标';
+    return '请先和主持人把目标说清楚';
   }
   if (detail === 'drafting_no_floor') {
-    return '还没有目标，主持人不能开始发言';
+    return '还在对谈中，主持人会继续问你';
+  }
+  if (detail === 'intake_not_confirmed') {
+    return '确认开始后才能邀请工人或进入执行';
+  }
+  if (detail === 'intake_not_ready') {
+    return '主持人还没有请你确认开始';
+  }
+  if (detail === 'intake_worker_forbidden') {
+    return '对谈期工人还不能发言';
   }
   if (detail === 'host_required') {
     return '不能静音或移除主持人';

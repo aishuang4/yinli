@@ -47,11 +47,9 @@ def _create_discussing(client: TestClient, session_id: str = "sess-pr5") -> dict
     })
     assert created.status_code == 200
     group_id = created.json()["id"]
-    updated = client.put(f"/api/group-studio/{group_id}/task-card", json={
-        "projectId": DEFAULT_PROJECT_ID,
-        "goal": "写一份竞品分析",
-    })
-    assert updated.status_code == 200
+    from test.group_studio_helpers import confirm_intake_for_tests
+
+    confirm_intake_for_tests(client, group_id, goal="写一份竞品分析")
     return client.get(f"/api/group-studio/{group_id}").json()
 
 
@@ -281,7 +279,7 @@ def test_pending_speaker_survives_stale_tool_context(client):
     assert assigned == worker["id"]
 
 
-def test_schedule_host_turn_starts_pending_worker(client, monkeypatch):
+def test_schedule_next_starts_queued_worker(client, monkeypatch):
     import asyncio
 
     from src.group_studio import scheduler
@@ -291,14 +289,14 @@ def test_schedule_host_turn_starts_pending_worker(client, monkeypatch):
     worker = next(item for item in studio["members"] if item["role"] == "worker")
     called: list[str] = []
 
-    async def fake_worker(group_id: str, member_id: str) -> None:
+    async def fake_worker(group_id: str, member_id: str, **_kwargs) -> None:
         called.append(member_id)
 
     async def scenario() -> None:
         monkeypatch.setattr(scheduler, "should_auto_start_host", lambda: True)
         monkeypatch.setattr(scheduler, "_run_worker_guarded", fake_worker)
         set_group_studio_pending_speaker(studio["id"], worker["id"])
-        scheduler.schedule_host_turn(studio["id"])
+        scheduler.schedule_next(studio["id"])
         await asyncio.sleep(0.05)
 
     asyncio.run(scenario())
@@ -370,7 +368,7 @@ def test_scheduler_followup_host_after_execution_without_member(client, monkeypa
     import asyncio
 
     from src.group_studio import scheduler
-    from src.storage.database import set_group_studio_status
+    from src.storage.database import set_group_studio_speaker_queue, set_group_studio_status
 
     studio = _create_discussing(client, "sess-exec-followup")
     worker = next(item for item in studio["members"] if item["role"] == "worker")
@@ -382,9 +380,10 @@ def test_scheduler_followup_host_after_execution_without_member(client, monkeypa
         if host_calls["n"] == 1:
             set_group_studio_status(group_id, "executing")
             return ""
+        set_group_studio_speaker_queue(group_id, [worker["id"]])
         return worker["id"]
 
-    async def fake_worker(group_id: str, member_id: str) -> None:
+    async def fake_worker(group_id: str, member_id: str, **_kwargs) -> None:
         worker_calls.append(member_id)
 
     async def scenario() -> None:

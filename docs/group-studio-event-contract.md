@@ -1,6 +1,6 @@
 # Group Chat Studio 事件契约
 
-> 状态：2026-08-26 生效。实现不得偏离下表。
+> 状态：2026-08-28 生效。实现不得偏离下表。
 > 本文是群聊工作室实时展示、刷新恢复的唯一前端事件契约。
 > **不属于 Chat SSE。** 禁止复用 `RUNTIME_EVENT`、DisplaySnapshot V4、Chat projector、`run_events`。
 
@@ -58,7 +58,7 @@ heartbeat 不带 `seq`，不进入 `group_studio_events`，也不进入前端 re
 | `GROUP_TASK_CARD` | 是 | 完整 `TaskCard` |
 | `GROUP_BLACKBOARD` | 是 | 完整 `Blackboard`（必须含全部 `openQuestions`，含已 resolved） |
 | `GROUP_MEMBER` | 是 | 完整 `Membership` + `change`: `joined\|muted\|unmuted\|removed\|crashed` |
-| `GROUP_FLOOR` | 是 | `memberId`, `runId`, `reason`: `host_assign\|mention\|human_return\|host_default` |
+| `GROUP_FLOOR` | 是 | `memberId`, `runId`, `reason`: `host_assign\|mention\|human_return\|host_default\|queue_next\|claim_round`。可选 `remainingMemberIds` |
 | `GROUP_MESSAGE_OPEN` | 是 | `messageId`, `speakerId`, `role`, `intent`, `visibleInTimeline` |
 | `GROUP_MESSAGE_DELTA` | **否** | `messageId`, `text`；可选 `kind`: `answer`（缺省）\| `thinking`。思考增量不得写入 `body` |
 | `GROUP_MESSAGE_CLOSE` | 是 | `messageId`, `body`（对群可见全文）, `outcome`: `completed\|cancelled\|failed`；可选 `thinking`（思考全文，缺省 `""`） |
@@ -71,12 +71,19 @@ heartbeat 不带 `seq`，不进入 `group_studio_events`，也不进入前端 re
 | `GROUP_APPROVAL` | 是 | 完整 `GroupApproval`（含 `replyId`、`toolCalls`） |
 | `GROUP_FILE` | 是 | 完整 `GroupArtifact` |
 | `GROUP_DOD` | 是 | `taskCardId`, `dodChecklist` |
-| `GROUP_ERROR` | 是 | `code`, `message`。已知 `code`：`model_not_configured`（缺 API Key，不创建 Run）、`host_failed`、`worker_failed`、`host_required`、`member_muted`、`not_found`、`worker_session_lost` |
+| `GROUP_ERROR` | 是 | `code`, `message`。已知 `code`：`model_not_configured`（缺 API Key，不创建 Run）、`host_failed`、`worker_failed`、`host_required`、`member_muted`、`not_found`、`worker_session_lost`、`intake_not_confirmed`、`intake_not_ready`、`intake_worker_forbidden`、`work_item_claimed`、`work_item_not_owned`、`floor_not_granted` |
 | `GROUP_RUN_ENDED` | 是 | `runId`, `status` |
+| `GROUP_INTAKE` | 是 | `awaitingConfirm`（bool）, `reason`: `host_request\|confirmed`。普通对话不发本事件 |
+| `GROUP_WORK_ITEM` | 是 | `change`: `created\|claimed\|completed\|cancelled\|updated`；`items`: 工作项数组（created 可多项，其余通常一项） |
+| `GROUP_SPEAKER_QUEUE` | 是 | `memberIds`（剩余队列或认领轮）, `kind`: `assign\|claim_round\|interrupt\|restatement\|drained`, `pendingMemberId`（`string\|null`） |
+
+`GROUP_SPEAKER_QUEUE.kind=drained` 只在工人队列与认领轮都空、即将综合 Host 之前发一次。`interrupt` / `restatement` / Host 自然结束不发 `drained`。`GROUP_INTAKE` 只在主持人提请确认或人类确认接手时发出，普通对谈不发。
 
 **DELTA 不落 SQLite。** 只持久化 OPEN / CLOSE / 状态类事件。运行中 `group_messages.body` 可由运行时每 256 字符或 200ms upsert 一次，刷新不靠 DELTA replay。
 
 禁止新增未列入本表的前端事件名。P1 时间旅行对象不得命名为 `GROUP_SNAPSHOT`，以免与 `GROUP_STUDIO_STATE` 口语撞车。
+
+intake / 任务台快照增补字段（`awaitingIntakeConfirm`、`speakerQueue`、`claimRoundMemberIds`、`workItems`）随 `GROUP_STUDIO_STATE` 与 `GET /{id}` 下发，字段语义见 `docs/group-studio-intake-and-workboard.md`。
 
 ## 4. 隔离约束
 

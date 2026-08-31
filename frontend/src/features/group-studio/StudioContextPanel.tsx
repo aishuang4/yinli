@@ -27,6 +27,7 @@ interface StudioContextPanelProps {
   uploading: boolean;
   onAddDod: (text: string) => void;
   onAddMember: (agentId: string) => void;
+  onConfirmIntake: () => void;
   onMuteMember: (memberId: string, muted: boolean) => void;
   onRemoveMember: (memberId: string) => void;
   onSaveGoal: (goal: string) => void;
@@ -48,6 +49,7 @@ export function StudioContextPanel({
   uploading,
   onAddDod,
   onAddMember,
+  onConfirmIntake,
   onMuteMember,
   onRemoveMember,
   onSaveGoal,
@@ -58,6 +60,7 @@ export function StudioContextPanel({
   const openQuestions = (blackboard?.openQuestions ?? []).filter((item) => !item.resolved);
   const decisions = blackboard?.decisions ?? [];
   const checklist = studio?.taskCard.dodChecklist ?? [];
+  const speakerQueue = studio?.speakerQueue ?? [];
   const archived = studio?.status === 'archived';
   const cardLocked = !studio || studio.status === 'closing' || archived;
   const [memberModalOpen, setMemberModalOpen] = useState(false);
@@ -112,15 +115,28 @@ export function StudioContextPanel({
         role="button"
         tabIndex={0}
         aria-label="管理成员"
-        onClick={() => openModal(() => setMemberModalOpen(true))}
-        onKeyDown={openOnEnter(() => setMemberModalOpen(true))}
+        onClick={() => {
+          if (studio?.status !== 'drafting') {
+            openModal(() => setMemberModalOpen(true));
+          }
+        }}
+        onKeyDown={openOnEnter(() => {
+          if (studio?.status !== 'drafting') {
+            setMemberModalOpen(true);
+          }
+        })}
       >
         <div className="group-studio-section__head">
           <span>成员 · {members.length}</span>
         </div>
         <ul className="group-studio-member-list group-studio-member-list--preview">
           {members.map((member) => (
-            <li key={member.id} data-muted={member.muted}>
+            <li
+              key={member.id}
+              data-muted={member.muted}
+              data-queued={speakerQueue[0] === member.id || speakerQueue.includes(member.id) || undefined}
+              data-next={speakerQueue[0] === member.id || undefined}
+            >
               <span className="group-studio-member-list__avatar" aria-hidden="true">
                 {member.displayName.slice(0, 1)}
               </span>
@@ -156,6 +172,19 @@ export function StudioContextPanel({
         <p className={`group-studio-goal-preview${goal.trim() ? '' : ' group-studio-muted'}`}>
           {goal.trim() || '暂无'}
         </p>
+        {studio?.status === 'drafting' ? (
+          <button
+            type="button"
+            className="icon-button chat-workbench-top-action inline-flex h-8 items-center rounded-xl px-3 text-xs"
+            disabled={!goal.trim() || !studio || cardLocked}
+            onClick={(event) => {
+              event.stopPropagation();
+              onConfirmIntake();
+            }}
+          >
+            {studio.awaitingIntakeConfirm ? '确认并开始' : '想开始的话点这里'}
+          </button>
+        ) : null}
       </section>
 
       <section
@@ -186,6 +215,26 @@ export function StudioContextPanel({
               <li key={item.id} data-checked={item.checked}>
                 <span className="group-studio-dod__mark">{item.checked ? '✓' : '○'}</span>
                 <span>{item.text}</span>
+              </li>
+            ))
+          )}
+        </ul>
+      </section>
+
+      <section className="group-studio-section">
+        <div className="group-studio-section__head">
+          <span>工作项 · {(studio?.workItems ?? []).length}</span>
+        </div>
+        <ul className="group-studio-dod group-studio-clip group-studio-clip--4">
+          {(studio?.workItems ?? []).length === 0 ? (
+            <li className="group-studio-muted">暂无</li>
+          ) : (
+            (studio?.workItems ?? []).map((item) => (
+              <li key={item.id}>
+                <span className="group-studio-dod__mark">
+                  {item.status === 'done' ? '✓' : item.status === 'claimed' ? '●' : '○'}
+                </span>
+                <span>{item.title}</span>
               </li>
             ))
           )}

@@ -3,25 +3,26 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from agentscope.message import TextBlock, ToolResultState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.tool import ToolBase, ToolChunk
 
-from src.group_studio.errors import HOST_REQUIRED, GroupStudioError
+from src.group_studio.errors import HOST_REQUIRED, INTAKE_NOT_CONFIRMED, GroupStudioError
 from src.group_studio.events import emit_envelope
 from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID
 from src.storage.database import (
     get_group_studio_member,
     get_group_studio_snapshot,
-    set_group_studio_pending_speaker,
     set_group_studio_status,
 )
 
 HOST_STOP_TOOLS = {
     "group_assign_floor",
+    "group_request_intake_confirm",
+    "group_publish_work_items",
     "group_start_execution",
     "group_start_review",
     "group_propose_close",
@@ -41,6 +42,8 @@ class HostToolContext:
     host_member_id: str
     last_stop_tool: str = ""
     assigned_member_id: str = ""
+    assigned_member_ids: list[str] = field(default_factory=list)
+    published_work_item_ids: list[str] = field(default_factory=list)
 
     def begin_run(self, run_id: str) -> None:
         """绑定本轮 Run，清空上一轮指派。"""
@@ -48,6 +51,8 @@ class HostToolContext:
         self.run_id = run_id
         self.last_stop_tool = ""
         self.assigned_member_id = ""
+        self.assigned_member_ids = []
+        self.published_work_item_ids = []
 
 
 _HOST_CONTEXTS: dict[str, HostToolContext] = {}
@@ -225,6 +230,102 @@ class GroupPatchBlackboard(HostTool):
         return self.success({"blackboard": board})
 
 
+def _assert_intake_confirmed(group_id: str) -> str:
+    """drafting 下禁止邀请/点名/发布工作项。"""
+
+    snapshot = get_group_studio_snapshot(group_id) or {}
+    if str(snapshot.get("status") or "") == "drafting":
+        return INTAKE_NOT_CONFIRMED
+    return ""
+
+
+class GroupUpdateTaskCard(HostTool):
+    name = "group_update_task_card"
+    description = (
+        "Write the current task card: goal, background, constraints, and definition of done. "
+        "Does not start group discussion."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "goal": {"type": "string"},
+            "background": {"type": "string"},
+            "constraints": {"type": "array", "items": {"type": "string"}},
+            "dodChecklist": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "text": {"type": "string"},
+                        "checked": {"type": "boolean"},
+                    },
+                    "required": ["text"],
+                },
+            },
+        },
+        "required": [],
+    }
+
+    async def __call__(
+        self,
+        goal: str | None = None,
+        background: str | None = None,
+        constraints: list | None = None,
+        dodChecklist: list | None = None,
+    ) -> ToolChunk:
+        from src.group_studio.models import DodItem, GroupTaskCardUpdateRequest
+        from src.group_studio.service import update_task_card
+
+        snapshot = get_group_studio_snapshot(self.ctx.group_id) or {}
+        try:
+            card = update_task_card(
+                self.ctx.group_id,
+                GroupTaskCardUpdateRequest(
+                    project_id=str(snapshot.get("projectId") or ""),
+                    goal=goal,
+                    background=background,
+                    constraints=constraints,
+                    dod_checklist=(
+                        [
+                            DodItem.model_validate({
+                                **(item if isinstance(item, dict) else {"text": str(item)}),
+                                "id": (item.get("id") if isinstance(item, dict) else "") or f"gdod_{index}",
+                            })
+                            for index, item in enumerate(dodChecklist)
+                        ]
+                        if dodChecklist is not None
+                        else None
+                    ),
+                ),
+            )
+        except GroupStudioError as exc:
+            return self.error(exc.code)
+        return self.success({"taskCard": card.model_dump(by_alias=True)})
+
+
+class GroupRequestIntakeConfirm(HostTool):
+    name = "group_request_intake_confirm"
+    description = (
+        "Ask the human to confirm that the task card is ready so the group can start. "
+        "Does not enter discussing by itself. Requires a nonempty goal. Empty DoD is allowed."
+    )
+    input_schema = {"type": "object", "properties": {}, "required": []}
+
+    async def __call__(self) -> ToolChunk:
+        from src.group_studio.service import request_intake_confirm
+
+        try:
+            studio = request_intake_confirm(self.ctx.group_id)
+        except GroupStudioError as exc:
+            return self.error(exc.code)
+        self.ctx.last_stop_tool = self.name
+        return self.success({
+            "awaitingIntakeConfirm": studio.awaiting_intake_confirm,
+            "status": studio.status,
+        })
+
+
 def _resolve_assignee(group_id: str, member_id: str) -> tuple[dict[str, Any] | None, str]:
     """校验可被指派的工人；失败返回错误码。"""
 
@@ -242,35 +343,137 @@ def _resolve_assignee(group_id: str, member_id: str) -> tuple[dict[str, Any] | N
 
 
 def _commit_floor_assignment(ctx: HostToolContext, member: dict[str, Any]) -> None:
-    """写入本轮指派并落库 pending speaker。"""
+    """单人兼容入口。"""
 
-    member_id = str(member["id"])
-    ctx.assigned_member_id = member_id
-    set_group_studio_pending_speaker(ctx.group_id, member_id)
-    emit_envelope(
-        group_id=ctx.group_id,
-        event_type="GROUP_FLOOR",
-        run_id=ctx.run_id,
-        payload={"memberId": member_id, "runId": ctx.run_id, "reason": "host_assign"},
-    )
+    _commit_floor_queue(ctx, [member])
+
+
+def _commit_floor_queue(ctx: HostToolContext, members: list[dict[str, Any]]) -> None:
+    """写入 FIFO 点名队列。GROUP_FLOOR 仍给队首（兼容缓存 Host 测试）。"""
+
+    from src.group_studio.speaker_queue import set_queue
+
+    ids = [str(item["id"]) for item in members]
+    ctx.assigned_member_ids = list(ids)
+    ctx.assigned_member_id = ids[0] if ids else ""
+    remaining = set_queue(ctx.group_id, ids, kind="assign", run_id=ctx.run_id or None)
+    if remaining:
+        emit_envelope(
+            group_id=ctx.group_id,
+            event_type="GROUP_FLOOR",
+            run_id=ctx.run_id,
+            payload={"memberId": remaining[0], "runId": ctx.run_id, "reason": "host_assign"},
+        )
 
 
 class GroupAssignFloor(HostTool):
     name = "group_assign_floor"
-    description = "Give the next speaking/working turn to one worker member. Ends this host turn."
+    description = (
+        "Give the next speaking/working turns to one or more workers. "
+        "memberIds is a FIFO queue; memberId is the single-worker form. Ends this host turn."
+    )
     input_schema = {
         "type": "object",
-        "properties": {"memberId": {"type": "string"}},
-        "required": ["memberId"],
+        "properties": {
+            "memberId": {"type": "string"},
+            "memberIds": {"type": "array", "items": {"type": "string"}},
+        },
     }
 
-    async def __call__(self, memberId: str) -> ToolChunk:
-        member, error = _resolve_assignee(self.ctx.group_id, memberId)
-        if error or member is None:
-            return self.error(error or "member_not_found")
+    async def __call__(self, memberId: str = "", memberIds: list | None = None) -> ToolChunk:
+        blocked = _assert_intake_confirmed(self.ctx.group_id)
+        if blocked:
+            return self.error(blocked)
+        raw_ids = [str(item) for item in (memberIds or []) if str(item).strip()]
+        if not raw_ids and memberId.strip():
+            raw_ids = [memberId.strip()]
+        if not raw_ids:
+            return self.error("member_not_found")
+        unique: list[str] = []
+        for item in raw_ids:
+            if item not in unique:
+                unique.append(item)
+        resolved: list[dict[str, Any]] = []
+        for mid in unique:
+            member, error = _resolve_assignee(self.ctx.group_id, mid)
+            if error or member is None:
+                return self.error(error or "member_not_found")
+            resolved.append(member)
         self.ctx.last_stop_tool = self.name
-        _commit_floor_assignment(self.ctx, member)
-        return self.success({"assigned": member})
+        _commit_floor_queue(self.ctx, resolved)
+        return self.success({"assigned": resolved, "memberIds": [item["id"] for item in resolved]})
+
+
+class GroupPublishWorkItems(HostTool):
+    name = "group_publish_work_items"
+    description = (
+        "Publish work items onto the studio workboard. "
+        "Optional assigneeMemberId claims that item and enqueues the worker. "
+        "Ends this host turn."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "description": {"type": "string"},
+                        "assigneeMemberId": {"type": "string"},
+                    },
+                    "required": ["title"],
+                },
+            },
+        },
+        "required": ["items"],
+    }
+
+    async def __call__(self, items: list | None = None) -> ToolChunk:
+        blocked = _assert_intake_confirmed(self.ctx.group_id)
+        if blocked:
+            return self.error(blocked)
+        from src.group_studio.workboard import publish_work_items
+
+        payload = list(items or [])
+        try:
+            created, enqueue = publish_work_items(
+                self.ctx.group_id,
+                payload,
+                run_id=self.ctx.run_id,
+                assigned_member_ids=list(self.ctx.assigned_member_ids),
+            )
+        except GroupStudioError as exc:
+            return self.error(exc.code)
+        self.ctx.published_work_item_ids = [str(item.get("id") or "") for item in created]
+        self.ctx.assigned_member_ids = enqueue
+        self.ctx.assigned_member_id = enqueue[0] if enqueue else self.ctx.assigned_member_id
+        self.ctx.last_stop_tool = self.name
+        return self.success({"items": created, "queued": enqueue})
+
+
+class GroupCancelWorkItem(HostTool):
+    name = "group_cancel_work_item"
+    description = "Cancel an open or claimed work item."
+    input_schema = {
+        "type": "object",
+        "properties": {"workItemId": {"type": "string"}},
+        "required": ["workItemId"],
+    }
+
+    async def __call__(self, workItemId: str) -> ToolChunk:
+        blocked = _assert_intake_confirmed(self.ctx.group_id)
+        if blocked:
+            return self.error(blocked)
+        from src.group_studio.workboard import cancel_item
+
+        try:
+            row = cancel_item(self.ctx.group_id, workItemId, run_id=self.ctx.run_id)
+        except GroupStudioError as exc:
+            return self.error(exc.code)
+        return self.success({"item": row})
 
 
 class GroupListAvailableAgents(HostTool):
@@ -308,6 +511,9 @@ class GroupInviteMember(HostTool):
     }
 
     async def __call__(self, agentId: str, displayName: str = "") -> ToolChunk:
+        blocked = _assert_intake_confirmed(self.ctx.group_id)
+        if blocked:
+            return self.error(blocked)
         if agentId == GROUP_STUDIO_HOST_AGENT_ID:
             return self.error(HOST_REQUIRED)
         from src.group_studio.models import GroupMemberCreateRequest
@@ -472,6 +678,10 @@ def host_tools(ctx: HostToolContext) -> list[HostTool]:
         GroupReadTaskCard(ctx),
         GroupReadBlackboard(ctx),
         GroupPatchBlackboard(ctx),
+        GroupUpdateTaskCard(ctx),
+        GroupRequestIntakeConfirm(ctx),
+        GroupPublishWorkItems(ctx),
+        GroupCancelWorkItem(ctx),
         GroupAssignFloor(ctx),
         GroupListAvailableAgents(ctx),
         GroupInviteMember(ctx),

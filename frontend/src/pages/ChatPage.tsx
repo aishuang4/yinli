@@ -167,6 +167,10 @@ export function ChatPage() {
     draftText: inputValue,
     fileAttachments,
     hasImages: imageAttachments.length > 0,
+    userMessageCount: Math.max(
+      messages.filter((item) => item.role === 'user').length,
+      sessions.find((item) => item.id === activeSessionId)?.message_count ?? 0,
+    ),
     isComposingRef,
     setActiveSessionId,
     uploadFilesForSession,

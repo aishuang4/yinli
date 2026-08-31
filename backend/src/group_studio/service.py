@@ -15,6 +15,8 @@ from src.group_studio.errors import (
     GROUP_STUDIO_NOT_FOUND,
     HOST_REQUIRED,
     ILLEGAL_TRANSITION,
+    INTAKE_NOT_CONFIRMED,
+    INTAKE_NOT_READY,
     JOB_AGENT_FORBIDDEN,
     MEMBER_CAP,
     NOT_AWAITING_RESTATEMENT,
@@ -74,7 +76,6 @@ from src.storage.database import (
     replace_group_studio_blackboard,
     set_group_studio_member_muted,
     set_group_studio_member_removed,
-    set_group_studio_pending_speaker,
     set_group_studio_status,
     update_group_studio_state,
 )
@@ -198,7 +199,10 @@ def list_studio_messages(
 
 
 def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
-    """升级或回到当前 Chat 会话对应的未归档工作室。"""
+    """升级或回到当前 Chat 会话对应的未归档工作室。
+
+    `draftText` 与 Chat 上一句是开场白，不是 Goal；新建恒为 drafting。
+    """
 
     session_id = request.chat_session_id.strip()
     _raise_if_chat_run_active(session_id)
@@ -258,15 +262,14 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
     message_count = _message_count(session_id)
     draft = request.draft_text.strip()
     last_user = _last_user_message(session_id) if message_count >= 1 else ""
-    if message_count >= 1:
-        goal = last_user
-        seed = True
-    else:
-        goal = draft
-        seed = False
-    studio_status = "discussing" if goal else "drafting"
-    card_status = "active" if goal else "draft"
-    title = (request.title or "").strip() or (goal[:28] + ("..." if len(goal) > 28 else "") if goal else "未命名工作室")
+    seed_text = last_user if message_count >= 1 else draft
+    seed = message_count >= 1
+    studio_status = "drafting"
+    card_status = "draft"
+    goal = ""
+    title = (request.title or "").strip() or (
+        seed_text[:28] + ("..." if len(seed_text) > 28 else "") if seed_text else "未命名工作室"
+    )
     settings = get_group_studio_settings_public()
     group_id = _new_id("gstu")
     task_id = _new_id("gtask")
@@ -341,8 +344,10 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
     snapshot = create_group_studio_from_chat(payload)
     ensure_studio_dirs(context.project_root, snapshot["id"])
     studio = _snapshot_to_model(snapshot)
-    if studio.status == "discussing" and studio.task_card.goal.strip():
+    if seed_text.strip() and not any(item.body.strip() for item in studio.messages):
+        _emit_human_timeline_message(studio.id, seed_text)
         schedule_host_turn(studio.id)
+        studio = get_studio(studio.id)
     return studio
 
 
@@ -392,9 +397,8 @@ def update_task_card(group_id: str, request: GroupTaskCardUpdateRequest) -> Task
     title: str | None = None
 
     if studio.status == "drafting":
+        card_status = "draft"
         if goal:
-            studio_status = "discussing"
-            card_status = "active"
             bump = True
             title = goal[:28] + ("..." if len(goal) > 28 else "")
         elif not (background_changed or dod_changed or constraints_changed):
@@ -468,9 +472,10 @@ def update_task_card(group_id: str, request: GroupTaskCardUpdateRequest) -> Task
         from src.group_studio.notify import KIND_AWAITING, notify_studio
 
         cancel_active_run(group_id, source="task_card")
+        from src.group_studio.speaker_queue import clear_queue
+
+        clear_queue(group_id, kind="restatement")
         notify_studio(updated.model_dump(by_alias=True), kind=KIND_AWAITING, body="目标已变更，请确认复述。")
-        schedule_host_turn(group_id)
-    if studio.status == "drafting" and updated.status == "discussing":
         schedule_host_turn(group_id)
     return updated.task_card
 
@@ -482,6 +487,8 @@ def add_member(group_id: str, request: GroupMemberCreateRequest) -> Membership:
     if request.project_id and request.project_id != studio.project_id:
         raise GroupStudioError(422, CROSS_PROJECT_SESSION)
     assert_can_mutate(studio.status)
+    if studio.status == "drafting":
+        raise GroupStudioError(409, INTAKE_NOT_CONFIRMED)
     if request.agent_id == GROUP_STUDIO_HOST_AGENT_ID:
         raise GroupStudioError(409, HOST_REQUIRED)
 
@@ -652,22 +659,14 @@ def decide_studio_approval(
     )
 
 
-def post_human_message(group_id: str, *, project_id: str, body: str, mentions: list[str] | None = None) -> GroupMessage:
-    """人类输入。paused 只入列；否则 inline interrupt 后派 Host。"""
+def _emit_human_timeline_message(
+    group_id: str,
+    text: str,
+    *,
+    mentions: list[str] | None = None,
+) -> GroupMessage:
+    """写入一条人类可见消息并发 OPEN/CLOSE，不调度。"""
 
-    studio = _load_studio(group_id)
-    _assert_project(studio, project_id)
-    if studio.status == "circuit_broken":
-        raise GroupStudioError(409, STUDIO_CIRCUIT_BROKEN)
-    if studio.status in {"archived", "failed"}:
-        raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    queued = studio.status == "paused"
-    if not queued:
-        from src.group_studio.interrupt import cancel_active_run
-
-        cancel_active_run(group_id, source="human_message")
-        set_group_studio_pending_speaker(group_id, None)
-    text = body.strip()
     row = insert_group_studio_message({
         "id": _new_id("gmsg"),
         "groupId": group_id,
@@ -695,8 +694,102 @@ def post_human_message(group_id: str, *, project_id: str, body: str, mentions: l
         event_type="GROUP_MESSAGE_CLOSE",
         payload={"messageId": message.id, "body": text, "outcome": "completed"},
     )
-    if not queued and studio.status in {"discussing", "executing", "reviewing", "awaiting_human"}:
-        schedule_host_turn(group_id)
+    return message
+
+
+def request_intake_confirm(group_id: str) -> GroupStudio:
+    """Host 提请人类确认密度。不切 discussing。"""
+
+    studio = _load_studio(group_id)
+    if studio.status != "drafting":
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    if not studio.task_card.goal.strip():
+        raise GroupStudioError(422, GOAL_REQUIRED)
+    snapshot = update_group_studio_state(group_id, awaiting_intake_confirm=True)
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_INTAKE",
+        payload={"awaitingConfirm": True, "reason": "host_request"},
+    )
+    return _snapshot_to_model(snapshot)
+
+
+def confirm_intake(group_id: str, *, project_id: str) -> GroupStudio:
+    """人类确认密度后进入 discussing。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    if studio.status != "drafting":
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    if not studio.awaiting_intake_confirm:
+        raise GroupStudioError(409, INTAKE_NOT_READY)
+    goal = studio.task_card.goal.strip()
+    if not goal:
+        raise GroupStudioError(422, GOAL_REQUIRED)
+    assert_can_mutate(studio.status)
+    title = goal[:28] + ("..." if len(goal) > 28 else "")
+    apply_group_studio_task_card_update(
+        group_id,
+        goal=goal,
+        background=studio.task_card.background,
+        constraints=list(studio.task_card.constraints),
+        dod_checklist=[item.model_dump(by_alias=True) for item in studio.task_card.dod_checklist],
+        card_status="active",
+        studio_status="discussing",
+        awaiting_restatement=False,
+        phase_before_pause=None,
+        bump_revision=True,
+        title=title,
+    )
+    snapshot = update_group_studio_state(group_id, awaiting_intake_confirm=False)
+    updated = _snapshot_to_model(snapshot)
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_STATUS",
+        payload={"from": "drafting", "to": "discussing", "reason": "confirm_intake"},
+    )
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_TASK_CARD",
+        payload=updated.task_card.model_dump(by_alias=True),
+    )
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_INTAKE",
+        payload={"awaitingConfirm": False, "reason": "confirmed"},
+    )
+    schedule_host_turn(group_id)
+    return updated
+
+
+def post_human_message(group_id: str, *, project_id: str, body: str, mentions: list[str] | None = None) -> GroupMessage:
+    """人类输入。paused 只入列；否则 inline interrupt 后派 Host。"""
+
+    from src.group_studio.intake import IntakePhraseResult, maybe_confirm_intake
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    if studio.status == "circuit_broken":
+        raise GroupStudioError(409, STUDIO_CIRCUIT_BROKEN)
+    if studio.status in {"archived", "failed"}:
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    queued = studio.status == "paused"
+    if not queued:
+        from src.group_studio.interrupt import cancel_active_run
+
+        cancel_active_run(group_id, source="human_message")
+        from src.group_studio.speaker_queue import clear_queue
+
+        clear_queue(group_id, kind="interrupt")
+    text = body.strip()
+    message = _emit_human_timeline_message(group_id, text, mentions=mentions)
+    if not queued:
+        phrase = maybe_confirm_intake(studio, text)
+        if phrase is IntakePhraseResult.confirmed:
+            confirm_intake(group_id, project_id=project_id)
+            return message
+        if studio.status in {"drafting", "discussing", "executing", "reviewing", "awaiting_human"}:
+            schedule_host_turn(group_id)
     return message
 
 
@@ -708,6 +801,9 @@ def interrupt_run(group_id: str, *, project_id: str) -> None:
     from src.group_studio.interrupt import cancel_active_run
 
     cancel_active_run(group_id, source="stop_button")
+    from src.group_studio.speaker_queue import clear_queue
+
+    clear_queue(group_id, kind="interrupt")
 
 
 def pause_studio(group_id: str, *, project_id: str) -> GroupStudio:
@@ -720,6 +816,9 @@ def pause_studio(group_id: str, *, project_id: str) -> GroupStudio:
     from src.group_studio.interrupt import cancel_active_run
 
     cancel_active_run(group_id, source="pause")
+    from src.group_studio.speaker_queue import clear_queue
+
+    clear_queue(group_id, kind="interrupt")
     previous = studio.status
     snapshot = update_group_studio_state(
         group_id,
@@ -742,7 +841,7 @@ def resume_studio(group_id: str, *, project_id: str, max_turns: int | None = Non
     if studio.status not in {"paused", "circuit_broken"}:
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
     nxt = studio.phase_before_pause or "discussing"
-    if nxt not in {"discussing", "executing", "reviewing", "awaiting_human"}:
+    if nxt not in {"drafting", "discussing", "executing", "reviewing", "awaiting_human"}:
         nxt = "discussing"
     budget = studio.budget.model_dump(by_alias=True)
     budget["noProgressTurns"] = 0
@@ -760,7 +859,7 @@ def resume_studio(group_id: str, *, project_id: str, max_turns: int | None = Non
         payload={"from": studio.status, "to": nxt, "reason": "resume"},
     )
     updated = _snapshot_to_model(snapshot)
-    if nxt in {"discussing", "executing", "reviewing", "awaiting_human"}:
+    if nxt in {"drafting", "discussing", "executing", "reviewing", "awaiting_human"}:
         schedule_host_turn(group_id)
     return updated
 

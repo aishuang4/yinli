@@ -49,14 +49,15 @@ def client(isolated_db):
 
 
 def _create_discussing(client: TestClient, session_id: str = "sess-pr8") -> dict:
+    from test.group_studio_helpers import confirm_intake_for_tests
+
     created = client.post("/api/group-studio/from-chat", json={
         "projectId": DEFAULT_PROJECT_ID,
         "chatSessionId": session_id,
         "agentId": "default",
-        "draftText": "完成竞品分析",
     })
     assert created.status_code == 200, created.text
-    return created.json()
+    return confirm_intake_for_tests(client, created.json()["id"], goal="完成竞品分析")
 
 
 class _FakeEvent:

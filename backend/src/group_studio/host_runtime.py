@@ -97,7 +97,7 @@ def build_host_runtime_spec(snapshot: dict[str, Any], host_member: dict[str, Any
         knowledge_tools=[],
         runtime_tool_scope=DISABLED_TOOL_SCOPE,
         guardrail_cache_key="group-studio-host-bypass",
-        runtime_features_cache_key="group-studio",
+        runtime_features_cache_key="group-studio-workboard-v1",
         extra_tools=tools,
         tool_name_allowlist=allowlist,
         tool_name_denylist=HOST_DENYLIST,
@@ -120,6 +120,25 @@ def _host_system_prompt(snapshot: dict[str, Any]) -> str:
         f"- {item['name']} agentId={item['id']}：{item['description'] or '暂无描述'}"
         for item in list_invitable_agents(str(snapshot.get("id") or ""))
     ) or "- （没有可邀请的 Agent）"
+    status = str(snapshot.get("status") or "")
+    if status == "drafting":
+        return (
+            "你是群聊工作室的主持人。当前是 intake 对谈，群聊还没开始。只和人类把任务卡写清楚，不要亲自写代码或长文交付。\n"
+            f"目标：{card.get('goal') or '（空）'}\n"
+            f"约束：{card.get('constraints') or []}\n"
+            f"验收：{card.get('dodChecklist') or []}\n"
+            f"当前成员（工人入座但不发言）：\n{member_lines}\n"
+            f"可建议邀请的项目 Agent：\n{invite_lines}\n"
+            "可用工具：group_read_task_card、group_read_blackboard、group_patch_blackboard、"
+            "group_update_task_card、group_request_intake_confirm、group_list_available_agents、"
+            "group_mute_member、group_remove_member。\n"
+            "根据人类最近消息追问目标、约束、验收和范围。信息落到任务卡时必须 group_update_task_card，"
+            "不要只用 group_patch_blackboard.goal。默认给出 3～7 条 DoD；用户说不要验收就把 dodChecklist 写成空数组。\n"
+            "可以口头建议拉谁，但不要 group_invite_member、不要 group_assign_floor、不要 group_start_execution。\n"
+            "目标已有且你认为密度够了：调用 group_request_intake_confirm，请用户说「开始 / 就这样」或点右侧确认。"
+            "空 DoD 允许确认。用户过早说开始：列出缺口，不要 group_request_intake_confirm。Goal 仍空是硬条件。\n"
+            "对群可见的发言只写结论和问题，不要把内心推理过程写进正文。不要调用 AskUser 或 FinalAnswerStart。"
+        )
     return (
         "你是群聊工作室的主持人，只负责控场、拆解目标和指派发言，不要亲自写代码或长文交付。\n"
         "每次发言先阅读任务卡和黑板。\n"
@@ -128,17 +147,17 @@ def _host_system_prompt(snapshot: dict[str, Any]) -> str:
         f"当前成员：\n{member_lines}\n"
         f"可邀请的项目 Agent（尚未进群，邀请时用 agentId 调 group_invite_member）：\n{invite_lines}\n"
         "可用工具：group_read_task_card、group_read_blackboard、group_patch_blackboard、"
-        "group_list_available_agents、group_invite_member、group_assign_floor、"
+        "group_update_task_card、group_list_available_agents、group_invite_member、group_assign_floor、"
         "group_mute_member、group_remove_member、"
         "group_start_execution、group_start_review、group_propose_close。\n"
         "若目标需要多种专业能力，且群里还没有对应工人，先 group_invite_member 拉人（含主持人最多 6 人），"
-        "再 group_assign_floor。不要把调研、分析、风控全部丢给默认助手。\n"
+        "再 group_assign_floor(memberIds=[...]) 一次点多人，不要一人问完再问下一个。\n"
         "每次先读黑板，把已确认决策和未决问题写进 group_patch_blackboard；"
         "不得丢掉未 resolved 的 openQuestions。\n"
         "判断工人是否完成：先看本轮消息里的「最近群消息」和 lastSpokeAt。"
         "时间线上已有交付就不能当未响应，更不能因此静音或换人；黑板 artifacts 为空不等于没交稿。\n"
-        "指派工人后应立刻 group_assign_floor。方案已定后必须调用 group_start_execution，"
-        "建议同时传 memberId 指定谁写最终交付；口头说「进入执行」无效。\n"
+        "指派后立刻 group_assign_floor；可以一次传入 memberIds。"
+        "方案已定后必须调用 group_start_execution，建议同时传 memberId；口头说「进入执行」无效。\n"
         "对群可见的发言只写结论和安排，不要把内心推理过程写进正文。\n"
         "不要调用 AskUser 或 FinalAnswerStart。"
         "纯文本不能代替控场工具：未结束讨论就 group_assign_floor，进入执行必须 group_start_execution。"
@@ -339,7 +358,13 @@ async def run_host_discussion(
         return ""
     if run_status != "completed":
         return ""
-    return ctx.assigned_member_id or get_group_studio_pending_speaker(group_id)
+    from src.group_studio.workboard import finalize_host_dispatch
+
+    finalize_host_dispatch(ctx, group_id)
+    from src.group_studio.speaker_queue import get_queue
+
+    queue = get_queue(group_id)
+    return ctx.assigned_member_id or (queue[0] if queue else "") or get_group_studio_pending_speaker(group_id)
 
 
 HOST_PHASE_ANNOUNCE_MARKERS = (
@@ -362,6 +387,16 @@ def _host_announced_phase(body: str) -> bool:
 def _host_turn_user_message(snapshot: dict[str, Any]) -> str:
     card = snapshot.get("taskCard") or {}
     status = str(snapshot.get("status") or "")
+    if status == "drafting":
+        awaiting = bool(snapshot.get("awaitingIntakeConfirm"))
+        return (
+            "当前是 intake 对谈，还没有开始群聊。只和人类把任务卡写清楚。"
+            "写卡用 group_update_task_card；不要进入执行、不要点名、不要邀请。"
+            f"目标：{card.get('goal') or '（空）'}。"
+            f"{'你已提请确认，等待人类点确认或说开始。' if awaiting else '目标仍空：继续问。目标已有且你认为密度够：group_request_intake_confirm（空 DoD 允许）。'}"
+            "人类刚要求开始但你尚未提请确认：拦住并列出缺口（Goal 仍是硬条件；约束/范围由你判断）。\n"
+            f"{format_turn_context(snapshot)}"
+        )
     if status == "awaiting_human":
         return (
             "任务目标或约束已变更。请用复述说明新目标，等待人类确认。"
@@ -384,7 +419,7 @@ def _host_turn_user_message(snapshot: dict[str, Any]) -> str:
         )
     return (
         "请主持本轮讨论。先看可邀请 Agent 是否覆盖目标所需能力；缺人就邀请，再指派发言。"
-        "先简要复述目标，指出下一步该谁发言或是否进入执行。"
+        "可以一次 group_assign_floor 传入多人，中间不要等自己再问。"
         "若讨论已结束，必须调用 group_start_execution（可带 memberId），不要只发文本。"
         f"目标：{card.get('goal') or ''}\n"
         f"{format_turn_context(snapshot)}"

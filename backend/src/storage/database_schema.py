@@ -615,10 +615,13 @@ BASE_SCHEMA_SQL = """
         phase_before_pause TEXT,
         current_task_card_id TEXT NOT NULL,
         awaiting_restatement INTEGER NOT NULL DEFAULT 0,
+        awaiting_intake_confirm INTEGER NOT NULL DEFAULT 0,
         orchestrator_meta TEXT NOT NULL DEFAULT '{}',
         budget_json TEXT NOT NULL,
         current_run_id TEXT NOT NULL DEFAULT '',
         pending_speaker_member_id TEXT NOT NULL DEFAULT '',
+        speaker_queue_json TEXT NOT NULL DEFAULT '[]',
+        claim_round_json TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         archived_at TEXT,
@@ -723,6 +726,25 @@ BASE_SCHEMA_SQL = """
         created_at TEXT NOT NULL,
         FOREIGN KEY(group_id) REFERENCES group_studios(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS group_work_items (
+        id TEXT PRIMARY KEY,
+        group_id TEXT NOT NULL,
+        task_card_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        assignee_member_id TEXT NOT NULL DEFAULT '',
+        sort_order INTEGER NOT NULL,
+        source_run_id TEXT NOT NULL DEFAULT '',
+        claim_run_id TEXT NOT NULL DEFAULT '',
+        claimed_at TEXT,
+        completed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(group_id) REFERENCES group_studios(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_group_work_items_group_status
+        ON group_work_items(group_id, status, sort_order);
     CREATE TABLE IF NOT EXISTS group_studio_events (
         id TEXT PRIMARY KEY,
         group_id TEXT NOT NULL,

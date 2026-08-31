@@ -22,6 +22,7 @@ import { createId } from '../../utils/id';
 import {
   addStudioMember,
   closeStudio,
+  confirmStudioIntake,
   confirmStudioRestatement,
   createStudioFromChat,
   decideStudioApproval,
@@ -61,7 +62,7 @@ import './GroupStudioPage.css';
 const HISTORY_PANEL_TRANSITION_MS = 260;
 
 const STATUS_LABEL: Record<string, string> = {
-  drafting: '填写任务卡',
+  drafting: '对谈中',
   discussing: '讨论中',
   executing: '执行中',
   reviewing: '验收中',
@@ -207,7 +208,6 @@ export function GroupStudioPage() {
 
   const persistStudio = useCallback(async (
     current: GroupStudioSnapshot,
-    extras?: { goal?: string },
   ): Promise<GroupStudioSnapshot> => {
     if (!isLocalStudioId(current.id)) {
       return current;
@@ -217,7 +217,7 @@ export function GroupStudioPage() {
       projectId: current.projectId,
       chatSessionId: current.chatSessionId || createId(),
       agentId: worker?.agentId || 'default',
-      draftText: extras?.goal ?? current.taskCard.goal,
+      draftText: '',
       filePaths: [],
     });
     openGroupStudio(created.id);
@@ -315,7 +315,13 @@ export function GroupStudioPage() {
         ));
         return;
       }
-      if (event.type === 'GROUP_DOD' && studio) {
+      if (
+        (event.type === 'GROUP_DOD'
+          || event.type === 'GROUP_TASK_CARD'
+          || event.type === 'GROUP_STATUS'
+          || event.type === 'GROUP_INTAKE')
+        && studio
+      ) {
         void refreshStudio(studio.id).catch(() => undefined);
       }
     },
@@ -351,13 +357,15 @@ export function GroupStudioPage() {
     try {
       let snapshot: GroupStudioSnapshot;
       if (isLocalStudioId(studio.id)) {
-        snapshot = await persistStudio(studio, { goal: nextGoal.trim() });
+        snapshot = await persistStudio(studio);
+        await updateTaskCard(snapshot.id, { projectId: snapshot.projectId, goal: nextGoal.trim() });
+        snapshot = await refreshStudio(snapshot.id);
       } else {
         await updateTaskCard(studio.id, { projectId: studio.projectId, goal: nextGoal.trim() });
         snapshot = await refreshStudio(studio.id);
       }
       await refreshStudioList();
-      notifySuccess(snapshot.status === 'discussing' ? '任务卡已生效，可以开始讨论。' : '任务卡已保存。');
+      notifySuccess(snapshot.status === 'drafting' ? '已记到任务卡，确认后才开始群聊。' : '任务卡已保存。');
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法更新任务卡'));
     } finally {
@@ -552,6 +560,25 @@ export function GroupStudioPage() {
       notifySuccess('已确认新目标');
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法确认复述'));
+    }
+  };
+
+  const handleConfirmIntake = async () => {
+    if (!studio || isLocalStudioId(studio.id) || !goal.trim()) {
+      return;
+    }
+    try {
+      if (studio.awaitingIntakeConfirm) {
+        const snapshot = await confirmStudioIntake(studio.id, studio.projectId);
+        setStudio(snapshot);
+        setGoal(snapshot.taskCard.goal);
+        notifySuccess('已开始群聊');
+        return;
+      }
+      await postStudioMessage(studio.id, { projectId: studio.projectId, body: '确认并开始' });
+      await refreshStudio(studio.id);
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法确认开始'));
     }
   };
 
@@ -791,6 +818,21 @@ export function GroupStudioPage() {
                 ) : (
                   <>
                     {runtimeError ? <div className="group-studio-runtime-error">{runtimeError}</div> : null}
+                    {studio?.status === 'drafting' && studio.awaitingIntakeConfirm ? (
+                      <div className="group-studio-approval">
+                        <div className="group-studio-approval__title">主持人认为可以开始了。确认后才会拉人开会。</div>
+                        <div className="group-studio-approval__actions">
+                          <button
+                            type="button"
+                            className="icon-button chat-workbench-top-action inline-flex h-9 items-center rounded-xl px-3 text-xs"
+                            disabled={!goal.trim()}
+                            onClick={() => void handleConfirmIntake()}
+                          >
+                            确认并开始
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
                     {studio?.awaitingRestatement ? (
                       <div className="group-studio-approval">
                         <div className="group-studio-approval__title">目标已变更，请确认主持人复述后再继续。</div>
@@ -821,7 +863,7 @@ export function GroupStudioPage() {
                         <div className="text-lg font-medium">开始群聊</div>
                         <div className="max-w-[420px] text-sm">
                           {studio?.status === 'drafting'
-                            ? '先在右侧填写目标。没有目标时主持人不发言。'
+                            ? '先在下面跟主持人说说这次要做什么。目标和验收会出现在右侧，你确认后才开始群聊。'
                             : '主持人正在准备发言，或还没有消息。'}
                         </div>
                       </div>
@@ -838,7 +880,13 @@ export function GroupStudioPage() {
             disabled={!studio || sending || studio.status === 'circuit_broken'}
             sending={sending}
             value={draft}
-            placeholder={studio?.status === 'paused' ? '暂停中，消息会先入列' : '对工作室说话…'}
+            placeholder={
+              studio?.status === 'paused'
+                ? '暂停中，消息会先入列'
+                : studio?.status === 'drafting'
+                  ? '跟主持人说说目标、约束和验收…'
+                  : '对工作室说话…'
+            }
             onChange={setDraft}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -868,6 +916,7 @@ export function GroupStudioPage() {
           onAddMember={(agentId) => void handleAddMember(agentId)}
           onMuteMember={(memberId, muted) => void handleMuteMember(memberId, muted)}
           onRemoveMember={(memberId) => void handleRemoveMember(memberId)}
+          onConfirmIntake={() => void handleConfirmIntake()}
           onSaveGoal={(nextGoal) => void handleSaveGoal(nextGoal)}
           onToggleDod={(itemId, checked) => void handleToggleDod(itemId, checked)}
           onUploadFile={(fileList) => void handleUploadFile(fileList)}

@@ -124,6 +124,15 @@ export interface GroupStudioSnapshot {
   currentApproval?: GroupStudioApproval | null;
   messages?: GroupStudioMessage[];
   awaitingRestatement: boolean;
+  awaitingIntakeConfirm?: boolean;
+  speakerQueue?: string[];
+  claimRoundMemberIds?: string[];
+  workItems?: Array<{
+    id: string;
+    title: string;
+    status: string;
+    assigneeMemberId?: string | null;
+  }>;
   createdAt: string;
   updatedAt: string;
 }

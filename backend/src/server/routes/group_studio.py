@@ -20,6 +20,7 @@ from src.group_studio.models import (
     GroupApprovalDecisionRequest,
     GroupArtifact,
     GroupCloseRequest,
+    GroupConfirmIntakeRequest,
     GroupConfirmRestatementRequest,
     GroupInterruptRequest,
     GroupMemberCreateRequest,
@@ -38,6 +39,7 @@ from src.group_studio.models import (
 )
 from src.group_studio.service import (
     add_member,
+    confirm_intake as confirm_studio_intake,
     confirm_restatement as confirm_studio_restatement,
     decide_studio_approval,
     from_chat,
@@ -200,6 +202,16 @@ async def pause_studio_route(group_id: str, body: GroupPauseRequest) -> GroupStu
 async def resume_studio_route(group_id: str, body: GroupResumeRequest) -> GroupStudio:
     try:
         return resume_studio(group_id, project_id=body.project_id, max_turns=body.max_turns)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
+
+
+@router.post("/{group_id}/confirm-intake", dependencies=[EnabledDep])
+async def confirm_intake_route(group_id: str, body: GroupConfirmIntakeRequest) -> GroupStudio:
+    """人类确认 intake 密度，进入 discussing。"""
+
+    try:
+        return confirm_studio_intake(group_id, project_id=body.project_id)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
 
