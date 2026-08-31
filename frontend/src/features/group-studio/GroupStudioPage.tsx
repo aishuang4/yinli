@@ -12,6 +12,8 @@ import {
   Square,
   Users,
 } from 'lucide-react';
+import { ScrollToBottomButton } from '../../components/ScrollToBottomButton';
+import { useMessageScroll } from '../../components/useMessageScroll';
 import { Spinner, Tag, Tooltip } from '@/components/design';
 import { NotificationBell } from '../notifications/NotificationBell';
 import { useAgents } from '../../hooks/useAgents';
@@ -56,7 +58,7 @@ import {
   createLocalStudioSnapshot,
   isLocalStudioId,
 } from './localStudio';
-import { useGroupStudioStream } from './useGroupStudioStream';
+import { useGroupStudioStream, type StudioTimelineMessage } from './useGroupStudioStream';
 import './GroupStudioPage.css';
 
 const HISTORY_PANEL_TRANSITION_MS = 260;
@@ -327,9 +329,38 @@ export function GroupStudioPage() {
     },
   );
   const members = (studio?.members ?? []).filter((member) => member.status !== 'removed');
-  const timeline = messages.length > 0
+  const timeline: StudioTimelineMessage[] = messages.length > 0
     ? messages
-    : (studio?.messages ?? []).filter((item) => item.visibleInTimeline !== false);
+    : (studio?.messages ?? [])
+      .filter((item) => item.visibleInTimeline !== false)
+      .map((item) => ({
+        ...item,
+        streaming: false,
+        thinkingStreaming: false,
+      }));
+  const lastTimeline = timeline[timeline.length - 1];
+  const isStreaming = Boolean(
+    sending
+    || lastTimeline?.streaming
+    || lastTimeline?.thinkingStreaming
+    || studio?.currentRunId,
+  );
+  const {
+    cancelProgrammaticScroll,
+    handleMessagesScroll,
+    handleMessagesWheel,
+    messagesContainerRef,
+    messagesEndRef,
+    resetScroll,
+    scrollToBottom,
+    showScrollToBottom,
+  } = useMessageScroll({
+    contentVersion: `${studio?.id || ''}:${timeline.length}:${lastTimeline?.id || ''}:${lastTimeline?.body.length || 0}:${lastTimeline?.thinking?.length || 0}`,
+    isStreaming,
+  });
+  useEffect(() => {
+    resetScroll();
+  }, [groupId, resetScroll]);
   const memberOptions = useMemo(() => {
     const occupied = new Set(
       (studio?.members ?? [])
@@ -806,7 +837,16 @@ export function GroupStudioPage() {
           </header>
 
           <div className="relative min-h-0 overflow-hidden">
-            <div className="h-full min-h-0 overflow-auto px-8 py-4" role="log" aria-live="polite" aria-label="群聊消息">
+            <div
+              ref={messagesContainerRef}
+              className="h-full min-h-0 overflow-auto px-8 py-4"
+              onScroll={handleMessagesScroll}
+              onWheel={handleMessagesWheel}
+              onPointerDown={cancelProgrammaticScroll}
+              role="log"
+              aria-live="polite"
+              aria-label="群聊消息"
+            >
               <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4">
                 {error ? (
                   <div className="group-studio-runtime-error">{error}</div>
@@ -868,12 +908,19 @@ export function GroupStudioPage() {
                         </div>
                       </div>
                     ) : (
-                      <StudioMessageList members={members} messages={timeline} />
+                      <>
+                        <StudioMessageList members={members} messages={timeline} />
+                        <div ref={messagesEndRef} />
+                      </>
                     )}
                   </>
                 )}
               </div>
             </div>
+            <ScrollToBottomButton
+              visible={showScrollToBottom}
+              onClick={() => scrollToBottom('smooth')}
+            />
           </div>
 
           <StudioComposer
