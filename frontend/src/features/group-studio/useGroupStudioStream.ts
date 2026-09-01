@@ -48,7 +48,10 @@ export function useGroupStudioStream(
   const [messages, setMessages] = useState<StudioTimelineMessage[]>([]);
   const [status, setStatus] = useState('');
   const domainEventRef = useRef(onDomainEvent);
-  domainEventRef.current = onDomainEvent;
+
+  useEffect(() => {
+    domainEventRef.current = onDomainEvent;
+  }, [onDomainEvent]);
 
   useEffect(() => {
     setMessages([]);

@@ -101,7 +101,7 @@ export function StudioContextPanel({
     lockClicks();
   };
 
-  const openOnEnter = (open: () => void) => (event: KeyboardEvent<HTMLElement>) => {
+  const openOnEnter = (event: KeyboardEvent<HTMLElement>, open: () => void) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       openModal(open);
@@ -120,7 +120,7 @@ export function StudioContextPanel({
             openModal(() => setMemberModalOpen(true));
           }
         }}
-        onKeyDown={openOnEnter(() => {
+        onKeyDown={(event) => openOnEnter(event, () => {
           if (studio?.status !== 'drafting') {
             setMemberModalOpen(true);
           }
@@ -160,7 +160,7 @@ export function StudioContextPanel({
             openModal(() => setGoalModalOpen(true));
           }
         }}
-        onKeyDown={openOnEnter(() => {
+        onKeyDown={(event) => openOnEnter(event, () => {
           if (studio) {
             setGoalModalOpen(true);
           }
@@ -198,7 +198,7 @@ export function StudioContextPanel({
             openModal(() => setDodModalOpen(true));
           }
         }}
-        onKeyDown={openOnEnter(() => {
+        onKeyDown={(event) => openOnEnter(event, () => {
           if (studio) {
             setDodModalOpen(true);
           }
@@ -252,7 +252,7 @@ export function StudioContextPanel({
             openModal(() => setBoardModalOpen(true));
           }
         }}
-        onKeyDown={openOnEnter(() => {
+        onKeyDown={(event) => openOnEnter(event, () => {
           if (studio) {
             setBoardModalOpen(true);
           }

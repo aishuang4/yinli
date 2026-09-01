@@ -5,7 +5,7 @@
  * 同时持有全局 SSE，避免只在 Chat 铃铛挂载时才能收到完成事件。
  */
 
-import { useEffect } from 'react';
+import { createElement, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { NotificationResultModal } from './NotificationResultModal';
@@ -93,8 +93,6 @@ function NotificationToast({
   onOpen: () => void;
   onDismiss: () => void;
 }) {
-  const Icon = notificationKindIcon(item.kind);
-
   useEffect(() => {
     const timer = window.setTimeout(() => {
       useNotificationStore.getState().dismissToast(item.id);
@@ -110,7 +108,7 @@ function NotificationToast({
         onClick={onOpen}
       >
         <span className="notification-toast__icon">
-          <Icon size={16} strokeWidth={1.8} />
+          {createElement(notificationKindIcon(item.kind), { size: 16, strokeWidth: 1.8 })}
         </span>
         <span className="notification-toast__copy">
           <span className="notification-toast__title">{item.title}</span>
