@@ -119,7 +119,8 @@ class SubagentDelegationManager:
     def get_definition(self, name: str) -> SubagentDefinition | None:
         """按名称读取 Subagent 定义。"""
 
-        return self.catalog.definitions.get(name)
+        definition = self.catalog.definitions.get(name)
+        return definition if definition is None or definition.enabled else None
 
     def drain_runtime_events(self) -> list[dict[str, Any]]:
         """取出待进入父 Run projection 的轻量任务事件。"""

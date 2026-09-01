@@ -10,7 +10,21 @@ from typing import Any
 from src.config.runtime_paths import USER_SUBAGENT_ROOT
 
 SUBAGENT_PROJECT_DIR = ".agents/subagents"
+SUBAGENT_COMPAT_PROJECT_DIRS = (
+    ".claude/agents",
+    ".agents/agents",
+    ".agents/subagents",
+    ".agent/agents",
+    ".agent/subagents",
+)
 SUBAGENT_USER_DIR = str(USER_SUBAGENT_ROOT)
+SUBAGENT_COMPAT_USER_DIRS = (
+    ".claude/agents",
+    ".agents/agents",
+    ".agents/subagents",
+    ".agent/agents",
+    ".agent/subagents",
+)
 
 
 @dataclass(frozen=True)
@@ -32,6 +46,7 @@ class SubagentDefinition:
     color: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
     content_hash: str = ""
+    enabled: bool = True
 
 
 @dataclass(frozen=True)

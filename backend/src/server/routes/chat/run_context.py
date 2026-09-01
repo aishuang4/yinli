@@ -51,7 +51,13 @@ from src.server.routes.chat.skill_runs import (
     get_skill_for_run,
     update_skill_run_status,
 )
-from src.server.routes.skills import Skill, get_installed_skill, list_skill_usage_details, resolve_runtime_skill_paths
+from src.server.routes.skills import (
+    Skill,
+    discover_external_skills,
+    get_installed_skill,
+    list_skill_usage_details,
+    resolve_runtime_skill_paths,
+)
 from src.storage.database import get_project
 
 
@@ -129,6 +135,7 @@ async def build_chat_run_context(
     )
     persist_run = not run_data.sandbox
 
+    external_skills = discover_external_skills(runtime_context.project_root)
     configured_skill_ids = list(agent_config.skills if agent_config else run_data.skill_ids)
     requested_skill_ids = set(run_data.skill_ids or configured_skill_ids)
     skill_ids = project_resources.filter_ids(
@@ -182,8 +189,9 @@ async def build_chat_run_context(
             skill_ids=skill_ids,
             message=run_data.message,
             active_skill=active_skill,
+            external_skills=external_skills,
         )
-    skill_paths = resolve_runtime_skill_paths(used_skills)
+    skill_paths = resolve_runtime_skill_paths(used_skills, runtime_context=runtime_context)
     used_skill_details = list_skill_usage_details(used_skills)
     skill_runs: list[ChatSkillRun] = []
     model_name = runtime_model_config.model_name
@@ -341,7 +349,7 @@ async def build_scheduled_run_context(
         executor=ExecutorRoute(kind="single_agent", reason="scheduled_job"),
         main_agent_instruction="",
     )
-    skill_paths = resolve_runtime_skill_paths(used_skills)
+    skill_paths = resolve_runtime_skill_paths(used_skills, runtime_context=runtime_context)
     used_skill_details = list_skill_usage_details(used_skills)
     memory_prompt = build_memory_injection_text(
         MemoryRetrievalContext(

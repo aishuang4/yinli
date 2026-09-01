@@ -22,7 +22,7 @@
 - 原子、高置信、通过安全校验且未发现相似已安装 Skill 的候选会注册为标准 Skill，不自动绑定 Agent。
 - 相似 Skill 合并首版已实现：注册前综合名称、描述、触发条件、标签、正文步骤和关键概念 token 判断相似能力；命中时把候选记录关联到已有 Skill，不创建重复 Skill。
 - 用户显式说“把这个生成 Skill / 把刚才流程生成 skills”时，会读取同一会话上一轮完整 user / assistant 对话作为 Skill 提炼输入，不把短命令本身当作 Skill 内容。
-- 自动生成 / 手动注册 Skill 会写入 `backend/data/skill_packages/{skill_name}/SKILL.md`，并可从 Skills 页面按 Skill 名称导出 zip。
+- 自动生成 / 手动注册 Skill 会写入运行时 `skills/{skill_name}/SKILL.md`，并可从 Skills 页面按 Skill 名称导出 zip。
 - 历史 registry 中缺少 `resourcePath/resources` 的用户 Skill 在加载时会自动 backfill 标准 `SKILL.md` 包目录。
 - 历史记忆持久化、后台反思和 Agent 主动调用 `memory_node_tree` / `memory_node_query` 的召回行为会写入 `MEMORY_AUDIT` Trace 审计；Chat 页面只展示 “Skills 生成中” 轻量提示。
 - 运行后历史记忆持久化只保存用户输入和 Agent 最终输出，不保存工具调用过程。

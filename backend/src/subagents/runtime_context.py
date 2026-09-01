@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
 from src.runtime_context import RuntimeContext as PlatformRuntimeContext
 from src.project_resources import resolve_project_resource_access
-from src.server.routes.skills import Skill, resolve_installed_skills, resolve_runtime_skill_paths
+from src.server.routes.skills import Skill, discover_external_skills, resolve_installed_skills, resolve_runtime_skill_paths
 from src.subagents.models import SubagentDefinition
 
 
@@ -54,13 +54,21 @@ def build_subagent_runtime_context(
 
     errors: list[str] = []
     try:
-        loaded_skills, missing_skill_refs = resolve_installed_skills(definition.skills)
+        external_skills = discover_external_skills(platform_context.project_root) if platform_context else []
+        loaded_skills, missing_skill_refs = resolve_installed_skills(
+            definition.skills,
+            external_skills=external_skills,
+        )
         if platform_context is not None:
             allowed_skill_ids = resolve_project_resource_access(platform_context).skill_ids
             denied_refs = [skill.name for skill in loaded_skills if skill.id not in allowed_skill_ids]
-            loaded_skills = [skill for skill in loaded_skills if skill.id in allowed_skill_ids]
+            loaded_skills = [
+                skill
+                for skill in loaded_skills
+                if skill.id in allowed_skill_ids or skill.source_scope == "project"
+            ]
             missing_skill_refs.extend(denied_refs)
-        skill_paths = resolve_runtime_skill_paths(loaded_skills)
+        skill_paths = resolve_runtime_skill_paths(loaded_skills, runtime_context=platform_context)
     except Exception as exc:
         loaded_skills = []
         missing_skill_refs = list(definition.skills)

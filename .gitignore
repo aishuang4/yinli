@@ -34,6 +34,7 @@ backend/data/
 /data/
 /sessions/
 /skills/
+backend/skills/
 /tmp/
 /frontend/build/
 !/frontend/build/

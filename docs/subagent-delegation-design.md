@@ -32,7 +32,7 @@ Subagent 是 ReAct 内部的 attached fork/join 任务，不是新的 Runtime ar
 
 ## 3. 定义文件
 
-项目级定义位于 `.agents/subagents/**/*.md`，用户级定义位于运行时用户数据目录的 `subagents/**/*.md`。同名定义以项目级优先；解析错误不阻塞 Chat，会在 Subagents 页面展示。
+项目级定义位于 `.agents/subagents/**/*.md`，用户级定义位于运行时用户数据根目录的 `subagents/**/*.md`。同名定义以项目级优先；解析错误不阻塞 Chat，会在 Subagents 页面展示。
 
 ```markdown
 ---

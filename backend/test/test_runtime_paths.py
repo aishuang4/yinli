@@ -63,6 +63,29 @@ print(json.dumps({
     assert paths
     for path in paths.values():
         assert Path(path).is_relative_to(user_data_root), path
+    assert Path(paths["subagents"]).parent == user_data_root
+
+
+def test_legacy_subagents_migrate_to_top_level_root(tmp_path: Path, monkeypatch) -> None:
+    """旧 data/subagents 内容迁移到新的 userData/subagents，且不覆盖现有定义。"""
+
+    from src.config import runtime_paths
+
+    legacy_root = tmp_path / "data" / "subagents"
+    target_root = tmp_path / "subagents"
+    legacy_root.mkdir(parents=True)
+    (legacy_root / "reviewer.md").write_text("legacy", encoding="utf-8")
+    (legacy_root / "shared.md").write_text("legacy shared", encoding="utf-8")
+    target_root.mkdir()
+    (target_root / "shared.md").write_text("current", encoding="utf-8")
+
+    monkeypatch.setattr(runtime_paths, "LEGACY_SUBAGENT_ROOT", legacy_root)
+    monkeypatch.setattr(runtime_paths, "SUBAGENT_ROOT", target_root)
+    runtime_paths._migrate_legacy_subagents()
+
+    assert (target_root / "reviewer.md").read_text(encoding="utf-8") == "legacy"
+    assert (target_root / "shared.md").read_text(encoding="utf-8") == "current"
+    assert (legacy_root / "shared.md").exists()
 
 
 def test_ephemeral_desktop_defaults_migrate_to_stable_workspace(tmp_path, monkeypatch) -> None:

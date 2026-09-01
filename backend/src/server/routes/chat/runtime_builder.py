@@ -95,6 +95,7 @@ def build_runtime_skills(
     skill_ids: list[str],
     message: str,
     active_skill: Skill | None,
+    external_skills: list[Skill] | None = None,
 ) -> list[Skill]:
     """选择本轮 Skill；正在恢复的 Skill 优先。"""
 
@@ -102,6 +103,7 @@ def build_runtime_skills(
         skill_ids=skill_ids,
         message=message,
         active_skill=active_skill,
+        external_skills=external_skills,
     )
 
 

@@ -6,11 +6,13 @@ MVP 阶段使用内存 registry + JSON 文件持久化用户 Skill。
 """
 
 import json
+import hashlib
 import os
 import re
 import shutil
 from io import BytesIO
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated, Literal, Optional
 from urllib.parse import quote
 
@@ -19,7 +21,7 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.config.runtime_paths import DATA_ROOT
+from src.config.runtime_paths import DATA_ROOT, USER_DATA_ROOT, USER_HOME_ROOT, ensure_runtime_directories
 from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_skills_from_agents
 from src.server.routes.skill_packages import (
@@ -37,10 +39,12 @@ from src.server.routes.skill_packages import (
     _write_skill_package as _write_skill_package_impl,
 )
 from src.storage.database import (
+    get_project,
     list_skills as db_list_skills,
     list_json_records,
     migrate_json_list_file,
     replace_skills,
+    upsert_json_record,
 )
 
 router = APIRouter()
@@ -51,6 +55,8 @@ SkillInstallStatus = Literal["available", "installed", "error"]
 DATA_DIR = str(DATA_ROOT)
 USER_SKILLS_REGISTRY_FILE = os.path.join(DATA_DIR, "skills.json")
 SKILLS_NAMESPACE = "skills"
+EXTERNAL_SKILL_OVERRIDES_NAMESPACE = "external_skill_overrides"
+_external_skill_enabled_overrides: dict[str, bool] = {}
 
 
 class Skill(BaseModel):
@@ -71,6 +77,10 @@ class Skill(BaseModel):
     installed_at: Optional[str] = Field(default=None, alias="installedAt")
     updated_at: str = Field(alias="updatedAt")
     workspace_id: str = Field(default="default", alias="workspaceId")
+    source_kind: str = Field(default="native", alias="sourceKind")
+    source_scope: str = Field(default="system", alias="sourceScope")
+    source_path: str = Field(default="", alias="sourcePath")
+    content_hash: str = Field(default="", alias="contentHash")
 
     model_config = {"populate_by_name": True}
 
@@ -363,6 +373,7 @@ _skills: dict[str, Skill] = dict(_builtin_skills)
 
 
 def _load_user_skills() -> None:
+    ensure_runtime_directories()
     migrate_json_list_file(SKILLS_NAMESPACE, USER_SKILLS_REGISTRY_FILE)
     records = db_list_skills()
     if not records:
@@ -375,6 +386,81 @@ def _load_user_skills() -> None:
             skill = _ensure_skill_package(skill)
         _skills[skill.id] = skill
     _save_user_skills()
+    _external_skill_enabled_overrides.update({
+        str(item.get("id")): bool(item.get("enabled"))
+        for item in list_json_records(EXTERNAL_SKILL_OVERRIDES_NAMESPACE)
+        if item.get("id")
+    })
+
+
+def discover_external_skills(
+    project_root: Path,
+    *,
+    user_data_root: Path = USER_DATA_ROOT,
+    user_home_root: Path = USER_HOME_ROOT,
+) -> list[Skill]:
+    """发现标准 Agent/Claude Skill 包；项目级默认启用，用户级默认关闭。"""
+
+    roots = [
+        (project_root, "project", True, "external_agents"),
+        (user_data_root, "user", False, "external_agents"),
+        (user_home_root, "user", False, "external_agents"),
+    ]
+    discovered: list[Skill] = []
+    seen_ids: set[str] = set()
+    for base, scope, enabled, source_kind in roots:
+        for directory_name in (".agents/skills", ".agent/skills", ".claude/skills"):
+            root = (base / directory_name).resolve()
+            if not root.is_dir():
+                continue
+            for skill_md in sorted(root.glob("*/SKILL.md")):
+                try:
+                    # 保留符号链接入口路径；共享用户 Skill 目录常用链接映射到实际安装位置。
+                    package_dir = skill_md.parent.absolute()
+                    if not package_dir.is_relative_to(root) or not skill_md.is_file():
+                        continue
+                    markdown = skill_md.read_text(encoding="utf-8")
+                    metadata, body = _split_frontmatter(markdown)
+                    name = str(metadata.get("name") or package_dir.name).strip()
+                    description = str(metadata.get("description") or "").strip()
+                    if not name or not description:
+                        continue
+                    content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()[:16]
+                    skill_id = f"external-{content_hash}"
+                    if skill_id in seen_ids:
+                        continue
+                    resources = [str(path.relative_to(package_dir)) for path in package_dir.rglob("*") if path.is_file()]
+                    skill = Skill.model_validate({
+                        "id": skill_id,
+                        "name": name,
+                        "description": description,
+                        "category": "外部导入",
+                        "trigger": str(metadata.get("trigger") or description),
+                        "content": markdown.strip() or body,
+                        "tags": [scope, source_kind],
+                        "resourcePath": str(package_dir),
+                        "resources": sorted(resources),
+                        "warnings": [],
+                        "status": "installed",
+                        "enabled": _external_skill_enabled_overrides.get(skill_id, enabled),
+                        "updatedAt": _utc_now(),
+                        "workspaceId": "default",
+                        "sourceKind": source_kind,
+                        "sourceScope": scope,
+                        "sourcePath": str(skill_md),
+                        "contentHash": content_hash,
+                    })
+                    discovered.append(skill)
+                    seen_ids.add(skill_id)
+                except (OSError, UnicodeError, yaml.YAMLError):
+                    continue
+    return discovered
+
+
+def get_runtime_skill_catalog(project_root: Path) -> list[Skill]:
+    """返回当前 Project 的原生和外部 Skill catalog。"""
+
+    return [*_skills.values(), *discover_external_skills(project_root)]
 
 
 def _save_user_skills() -> None:
@@ -473,22 +559,54 @@ def list_skill_usage_details(skills: list[Skill]) -> list[dict[str, object]]:
     ]
 
 
-def resolve_runtime_skill_paths(skills: list[Skill]) -> list[str]:
+def resolve_runtime_skill_paths(
+    skills: list[Skill],
+    *,
+    runtime_context: object | None = None,
+) -> list[str]:
     """把已裁剪的持久 Skill 转换为 AgentScope 可加载的安全包目录。"""
 
     packages_root = os.path.realpath(SKILL_PACKAGES_DIR)
+    trusted_roots = [packages_root]
+    trusted_entry_roots: list[str] = []
+    if runtime_context is not None:
+        project_root = Path(str(getattr(runtime_context, "project_root", ""))).resolve()
+        user_root = Path(USER_DATA_ROOT).resolve()
+        trusted_entry_roots.extend(
+            os.path.abspath(str(project_root / relative))
+            for relative in (".agents/skills", ".agent/skills", ".claude/skills")
+        )
+        trusted_entry_roots.extend(
+            os.path.abspath(str(user_root / relative))
+            for relative in (".agents/skills", ".agent/skills", ".claude/skills")
+        )
+        trusted_entry_roots.extend(
+            os.path.abspath(str(USER_HOME_ROOT / relative))
+            for relative in (".agents/skills", ".agent/skills", ".claude/skills")
+        )
+        trusted_roots.extend(os.path.realpath(path) for path in trusted_entry_roots)
     paths: list[str] = []
     seen: set[str] = set()
     for skill in skills:
         if not skill.resource_path:
             continue
         package_dir = os.path.realpath(os.path.abspath(skill.resource_path))
+        entry_path = os.path.abspath(skill.resource_path)
         try:
-            inside_packages_root = os.path.commonpath([packages_root, package_dir]) == packages_root
+            inside_packages_root = any(
+                os.path.commonpath([trusted_root, package_dir]) == trusted_root
+                for trusted_root in trusted_roots
+            )
+            inside_trusted_entry = any(
+                os.path.commonpath([trusted_root, entry_path]) == trusted_root
+                for trusted_root in trusted_entry_roots
+            )
         except ValueError:
             inside_packages_root = False
+            inside_trusted_entry = False
         if (
             not inside_packages_root
+            and not inside_trusted_entry
             or package_dir in seen
             or not os.path.isdir(package_dir)
             or not os.path.isfile(os.path.join(package_dir, "SKILL.md"))
@@ -507,7 +625,11 @@ def get_installed_skill(skill_id: str) -> Skill | None:
     return skill
 
 
-def resolve_installed_skills(skill_refs: list[str]) -> tuple[list[Skill], list[str]]:
+def resolve_installed_skills(
+    skill_refs: list[str],
+    *,
+    external_skills: list[Skill] | None = None,
+) -> tuple[list[Skill], list[str]]:
     """按 ID 或名称解析已安装启用的 Skill，保留输入顺序并返回未命中引用。"""
 
     resolved: list[Skill] = []
@@ -518,6 +640,7 @@ def resolve_installed_skills(skill_refs: list[str]) -> tuple[list[Skill], list[s
         for skill in _skills.values()
         if skill.status == "installed" and skill.enabled
     ]
+    enabled_skills.extend(skill for skill in (external_skills or []) if skill.status == "installed" and skill.enabled)
     by_normalized_name = {
         _normalized_skill_name(skill.name): skill
         for skill in enabled_skills
@@ -613,6 +736,7 @@ async def list_skills(
     category: str = "",
     installed: Optional[bool] = None,
     workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
+    project_id: Annotated[str, Query(alias="projectId")] = "",
 ) -> list[Skill]:
     """获取 Skill 列表，支持搜索、分类和安装状态筛选。"""
 
@@ -622,6 +746,10 @@ async def list_skills(
         for skill in _skills.values()
         if skill.id in _builtin_skills or skill.workspace_id == workspace_id
     ]
+    if project_id:
+        project = get_project(project_id)
+        if project and str(project.get("workspaceId") or "") == workspace_id:
+            result.extend(discover_external_skills(Path(str(project.get("rootPath") or ""))))
 
     if query:
         result = [
@@ -801,11 +929,30 @@ async def delete_skill(skill_id: str) -> None:
 
 
 @router.post("/{skill_id}/enable", response_model=Skill)
-async def set_skill_enabled(skill_id: str, data: SkillInstallRequest) -> Skill:
+async def set_skill_enabled(
+    skill_id: str,
+    data: SkillInstallRequest,
+    project_id: Annotated[str, Query(alias="projectId")] = "default",
+) -> Skill:
     """启用或停用已安装的 Skill。"""
 
     if skill_id not in _skills:
-        raise HTTPException(status_code=404, detail="Skill not found")
+        project = get_project(project_id)
+        external = (
+            discover_external_skills(Path(str(project.get("rootPath") or "")))
+            if project
+            else []
+        )
+        current = next((skill for skill in external if skill.id == skill_id), None)
+        if current is None:
+            raise HTTPException(status_code=404, detail="Skill not found")
+        _external_skill_enabled_overrides[skill_id] = data.enabled
+        upsert_json_record(
+            EXTERNAL_SKILL_OVERRIDES_NAMESPACE,
+            skill_id,
+            {"id": skill_id, "enabled": data.enabled},
+        )
+        return current.model_copy(update={"enabled": data.enabled, "updated_at": _utc_now()})
 
     current = _skills[skill_id]
     if current.status != "installed":
