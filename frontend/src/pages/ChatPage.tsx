@@ -13,7 +13,9 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Bot, ChevronDown, MessageSquare, PanelLeftOpen, Plus, Settings } from 'lucide-react';
+import { Bot, MessageSquare, PanelLeftOpen, Plus, Settings } from 'lucide-react';
+import { ScrollToBottomButton } from '../components/ScrollToBottomButton';
+import { useMessageScroll } from '../components/useMessageScroll';
 import { Tag, Tooltip } from '@/components/design';
 import { useEventStream } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
@@ -30,11 +32,12 @@ import { PlanReviewComposer } from '../features/chat/PlanReviewComposer';
 import { PlanFloatingPanel } from '../features/chat/PlanFloatingPanel';
 import { ChatHistoryPanel } from '../features/chat/ChatHistoryPanel';
 import { NotificationBell } from '../features/notifications/NotificationBell';
+import { useGroupStudioEntry } from '../features/group-studio/useGroupStudioEntry';
 import { selectLatestPlan, selectPendingPlanReview, type PlanReviewData } from '../features/chat/planReviewUtils';
 import { selectPendingAskUserInteractions } from '../features/chat/humanInteractionUtils';
 import type { ChatFilePayload, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
 import { runtimeError, runtimeText } from '../features/runtime-stream/selectors';
-import { useChatScroll } from '../features/chat/useChatScroll';
+
 import { useChatAttachments } from '../features/chat/useChatAttachments';
 
 const HISTORY_PANEL_TRANSITION_MS = 260;
@@ -121,7 +124,7 @@ export function ChatPage() {
     resetScroll,
     scrollToBottom,
     showScrollToBottom,
-  } = useChatScroll({
+  } = useMessageScroll({
     contentVersion: `${messages.length}:${snapshot.lastSeq}`,
     isStreaming: state.isStreaming,
   });
@@ -148,9 +151,39 @@ export function ChatPage() {
     setPlanPanelOpen(true);
   }, [planIdentity]);
   const hasLiveResponse = state.isStreaming || snapshot.order.length > 0 || Boolean(state.error);
+  const chatRunBlocking = state.isStreaming
+    || Boolean(activeAskUserInteraction)
+    || Boolean(pendingPlanReview)
+    || (Boolean(state.currentRunId) && !snapshot.streamDone);
+  const {
+    buttonLabel: studioButtonLabel,
+    entering: studioEntering,
+    flagEnabled: studioFlagEnabled,
+    handleToggle: handleStudioToggle,
+    shortcutLabel: studioShortcut,
+  } = useGroupStudioEntry({
+    activeProjectId,
+    activeSessionId,
+    agentId: runtimeAgent?.id || 'default',
+    chatRunBlocking,
+    draftText: inputValue,
+    fileAttachments,
+    hasImages: imageAttachments.length > 0,
+    userMessageCount: Math.max(
+      messages.filter((item) => item.role === 'user').length,
+      sessions.find((item) => item.id === activeSessionId)?.message_count ?? 0,
+    ),
+    isComposingRef,
+    setActiveSessionId,
+    uploadFilesForSession,
+  });
   const activeSession = useMemo(() => (
     sessions.find((session) => session.id === activeSessionId) || null
   ), [activeSessionId, sessions]);
+  const chatOnlySessions = useMemo(
+    () => sessions.filter((session) => !session.groupStudio && !session.group_studio),
+    [sessions],
+  );
   const handleCollapseHistory = useCallback(() => {
     if (historyTransitionTimerRef.current !== null) {
       window.clearTimeout(historyTransitionTimerRef.current);
@@ -530,7 +563,7 @@ export function ChatPage() {
           isMacDesktopShell={isMacDesktopShell}
           isStreaming={state.isStreaming}
           loading={sessionsLoading}
-          sessions={sessions}
+          sessions={chatOnlySessions}
           workspaces={workspaces}
           onCollapse={handleCollapseHistory}
           onDeleteSession={(session) => { void handleDeleteSession(session); }}
@@ -573,9 +606,23 @@ export function ChatPage() {
                 </Tooltip>
               </>
             )}
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)]">
-              <MessageSquare size={17} strokeWidth={1.7} />
-            </div>
+            {studioFlagEnabled ? (
+              <Tooltip title={`${studioButtonLabel} ${studioShortcut}`} placement="bottom" mode="dark">
+                <button
+                  type="button"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)]"
+                  onClick={handleStudioToggle}
+                  disabled={studioEntering || chatRunBlocking}
+                  aria-label={studioButtonLabel}
+                >
+                  <MessageSquare size={17} strokeWidth={1.7} />
+                </button>
+              </Tooltip>
+            ) : (
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)]">
+                <MessageSquare size={17} strokeWidth={1.7} />
+              </div>
+            )}
             <div className="min-w-0">
               <div className="truncate text-base font-semibold text-[var(--color-text-primary)]">
                 {activeSession?.title || '新对话'}
@@ -670,19 +717,10 @@ export function ChatPage() {
                 )}
               </div>
             </div>
-            <button
-              type="button"
-              className={`icon-button absolute bottom-4 left-1/2 h-9 w-9 -translate-x-1/2 rounded-full border border-[var(--color-border)] bg-[var(--color-bg-primary)]/70 p-0 text-[var(--color-text-secondary)] shadow-sm backdrop-blur transition-all duration-300 ease-out hover:-translate-y-0.5 hover:bg-[var(--color-bg-hover)] ${
-                showScrollToBottom
-                  ? 'pointer-events-auto opacity-100'
-                  : 'pointer-events-none translate-y-2 opacity-0'
-              }`}
+            <ScrollToBottomButton
+              visible={showScrollToBottom}
               onClick={() => scrollToBottom('smooth')}
-              aria-label="滚动到底部"
-              aria-hidden={!showScrollToBottom}
-            >
-              <ChevronDown size={16} />
-            </button>
+            />
             {latestPlan ? (
               <PlanFloatingPanel
                 key={latestPlan.planId}

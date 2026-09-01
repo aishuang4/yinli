@@ -58,4 +58,5 @@ export interface DesktopNotificationPayload {
   kind: string;
   jobId: string;
   firingId: string;
+  groupStudioId: string;
 }

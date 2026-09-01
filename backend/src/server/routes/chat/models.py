@@ -185,6 +185,9 @@ class ChatSession(BaseModel):
     created_at: str
     updated_at: str
     message_count: int = 0
+    group_studio: dict | None = Field(default=None, alias="groupStudio")
+
+    model_config = {"populate_by_name": True}
 
 
 class ChatStore(BaseModel):

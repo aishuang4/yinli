@@ -60,6 +60,7 @@ class MainAgentRuntimeSpec:
     skill_paths: list[str]
     workspace_dir: str = ""
     write_scope_dir: str = ""
+    include_default_tools: bool = True
 
 
 def build_runtime_model_config(
@@ -190,6 +191,7 @@ def build_main_agent_runtime_spec(
     middlewares: list[MiddlewareBase] | None = None,
     workspace_dir: str = "",
     write_scope_dir: str = "",
+    include_default_tools: bool = True,
 ) -> MainAgentRuntimeSpec:
     """构建主 Agent 工厂参数，不包含 trace 回调。"""
 
@@ -230,6 +232,7 @@ def build_main_agent_runtime_spec(
         skill_paths=list(skill_paths or []),
         workspace_dir=workspace_dir,
         write_scope_dir=write_scope_dir,
+        include_default_tools=include_default_tools,
     )
 
 
@@ -264,4 +267,5 @@ def create_main_agent_from_spec(
         skill_paths=spec.skill_paths,
         workspace_dir=spec.workspace_dir or None,
         write_scope_dir=spec.write_scope_dir or None,
+        include_default_tools=spec.include_default_tools,
     )

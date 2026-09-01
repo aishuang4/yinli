@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card } from '@/components/design';
 import { ModelSettingsForm, type ModelSettings } from '../features/settings/ModelSettingsForm';
 import { NotificationSettingsCard } from '../features/notifications/NotificationSettingsCard';
+import { GroupStudioSettingsCard } from '../features/settings/GroupStudioSettingsCard';
 import { ScheduledJobsSettingsCard } from '../features/settings/ScheduledJobsSettingsCard';
 import { ConversationContextSettingsCard } from '../features/settings/ConversationContextSettingsCard';
 import { UserDataSettingsCard } from '../features/settings/UserDataSettingsCard';
@@ -190,6 +191,7 @@ export function SettingsPage() {
 
         <div className="flex flex-col gap-6">
           <ScheduledJobsSettingsCard />
+          <GroupStudioSettingsCard />
           <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
           <ModelSettingsForm
             settings={settings}

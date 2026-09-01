@@ -5,6 +5,10 @@ from pydantic import BaseModel, Field
 
 from src.agents.factory import clear_all_agents
 from src.config.runtime_settings import get_model_settings_public, save_model_settings
+from src.group_studio.settings import (
+    get_group_studio_settings_public,
+    set_group_studio_settings,
+)
 from src.scheduler.settings import (
     get_scheduled_jobs_settings_public,
     set_scheduled_jobs_settings,
@@ -73,3 +77,32 @@ async def update_scheduled_jobs_settings(data: ScheduledJobsSettingsUpdate) -> d
     )
     apply_scheduler_enabled(data.enabled)
     return get_scheduled_jobs_settings_public()
+
+
+class GroupStudioSettingsUpdate(BaseModel):
+    enabled: bool
+    max_members: int | None = Field(default=None, alias="maxMembers")
+    max_parallel_workers: int | None = Field(default=None, alias="maxParallelWorkers")
+    max_turns: int | None = Field(default=None, alias="maxTurns")
+
+    model_config = {"populate_by_name": True}
+
+
+@router.get("/group-studio")
+async def get_group_studio_settings() -> dict:
+    """读取群聊工作室开关。flag 关闭时本接口仍可用。"""
+
+    return get_group_studio_settings_public()
+
+
+@router.put("/group-studio")
+async def update_group_studio_settings(data: GroupStudioSettingsUpdate) -> dict:
+    """保存工作室开关。关闭后 /api/group-studio 写接口返回 404。"""
+
+    set_group_studio_settings(
+        enabled=data.enabled,
+        max_members=data.max_members,
+        max_parallel_workers=data.max_parallel_workers,
+        max_turns=data.max_turns,
+    )
+    return get_group_studio_settings_public()

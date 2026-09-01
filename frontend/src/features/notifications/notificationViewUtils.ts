@@ -2,14 +2,19 @@
  * 通知展示用的图标、时间和未读文案。
  */
 
-import { CalendarClock, CheckCircle2, CircleAlert, Clock3, PauseCircle } from 'lucide-react';
-import type { UserNotification } from '../../types/notification';
+import { CalendarClock, CheckCircle2, CircleAlert, Clock3, PauseCircle, Users } from 'lucide-react';
+import type { DesktopNotificationPayload, UserNotification } from '../../types/notification';
+import { useAppStore } from '../../stores/appStore';
 
 export const NOTIFICATION_KIND_ICONS: Record<string, typeof CheckCircle2> = {
   job_completed: CheckCircle2,
   job_failed: CircleAlert,
   job_missed: Clock3,
   job_paused: PauseCircle,
+  group_studio_circuit: PauseCircle,
+  group_studio_awaiting_human: Users,
+  group_studio_completed: CheckCircle2,
+  group_studio_failed: CircleAlert,
 };
 
 export const NOTIFICATION_KIND_LABELS: Record<string, string> = {
@@ -17,7 +22,29 @@ export const NOTIFICATION_KIND_LABELS: Record<string, string> = {
   job_failed: '执行失败',
   job_missed: '已错过',
   job_paused: '已暂停',
+  group_studio_circuit: '工作室熔断',
+  group_studio_awaiting_human: '等待确认',
+  group_studio_completed: '工作室完成',
+  group_studio_failed: '工作室失败',
 };
+
+export function isGroupStudioNotification(kind: string): boolean {
+  return kind.startsWith('group_studio_');
+}
+
+export function routeNotificationClick(
+  item: UserNotification,
+  openInbox: (item: UserNotification) => void,
+): void {
+  if (isGroupStudioNotification(item.kind)) {
+    const groupId = String(item.payload?.groupStudioId || '');
+    if (groupId) {
+      useAppStore.getState().openGroupStudio(groupId);
+      return;
+    }
+  }
+  openInbox(item);
+}
 
 export function notificationKindIcon(kind: string) {
   return NOTIFICATION_KIND_ICONS[kind] || CalendarClock;
@@ -43,14 +70,7 @@ export function unreadLabel(count: number): string {
   return count > 99 ? '99+' : String(count);
 }
 
-export function notificationFromDesktopPayload(payload: {
-  id: string;
-  title: string;
-  body: string;
-  kind: string;
-  jobId: string;
-  firingId: string;
-}): UserNotification {
+export function notificationFromDesktopPayload(payload: DesktopNotificationPayload): UserNotification {
   return {
     id: payload.id,
     workspaceId: '',
@@ -60,7 +80,7 @@ export function notificationFromDesktopPayload(payload: {
     kind: payload.kind,
     title: payload.title,
     body: payload.body,
-    payload: {},
+    payload: payload.groupStudioId ? { groupStudioId: payload.groupStudioId } : {},
     readAt: null,
     createdAt: new Date().toISOString(),
   };

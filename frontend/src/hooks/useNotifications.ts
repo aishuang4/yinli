@@ -43,6 +43,7 @@ function toDesktopPayload(item: UserNotification): DesktopNotificationPayload {
     kind: item.kind,
     jobId: item.jobId,
     firingId: item.firingId,
+    groupStudioId: String(item.payload?.groupStudioId || ''),
   };
 }
 

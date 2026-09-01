@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { Bell } from 'lucide-react';
 import { Tooltip } from '@/components/design';
-import { formatNotificationTime, notificationKindIcon, unreadLabel } from './notificationViewUtils';
+import { formatNotificationTime, notificationKindIcon, routeNotificationClick, unreadLabel } from './notificationViewUtils';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAppStore } from '../../stores/appStore';
 import { useNotificationStore } from '../../stores/notificationStore';
@@ -73,7 +73,7 @@ export function NotificationBell() {
       notifyError(getErrorMessage(err, '标记已读失败'));
     }
     setOpen(false);
-    openNotification(item);
+    routeNotificationClick(item, openNotification);
   };
 
   const handleMarkAll = async () => {

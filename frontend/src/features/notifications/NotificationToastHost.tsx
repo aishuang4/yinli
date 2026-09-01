@@ -13,6 +13,7 @@ import {
   formatNotificationTime,
   notificationFromDesktopPayload,
   notificationKindIcon,
+  routeNotificationClick,
 } from './notificationViewUtils';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAppStore } from '../../stores/appStore';
@@ -38,7 +39,7 @@ export function NotificationToastHost() {
     return subscribe((payload: DesktopNotificationPayload) => {
       const existing = useNotificationStore.getState().items.find((item) => item.id === payload.id);
       const item = existing || notificationFromDesktopPayload(payload);
-      openNotification(item);
+      routeNotificationClick(item, openNotification);
       if (!item.readAt) {
         void markRead(item.id).catch(() => {
           // 系统通知点击后标已读失败不阻断打开结果。
@@ -48,7 +49,7 @@ export function NotificationToastHost() {
   }, [markRead, openNotification]);
 
   const handleOpen = async (item: UserNotification) => {
-    openNotification(item);
+    routeNotificationClick(item, openNotification);
     if (item.readAt) return;
     try {
       await markRead(item.id);

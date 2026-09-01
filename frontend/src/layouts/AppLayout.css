@@ -124,11 +124,122 @@
     transform 260ms var(--ease-out);
 }
 
-.app-workspace-switcher[data-mode="workstation"] .app-workspace-pane--workstation,
+.app-workspace-switcher[data-mode="workstation"][data-studio-surface="none"] .app-workspace-pane--workstation,
+.app-workspace-switcher[data-mode="workstation"][data-studio-surface="group-studio"][data-studio-transition="idle"] .app-workspace-pane--group-studio,
 .app-workspace-switcher[data-mode="workflow"] .app-workspace-pane--workflow {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0) scale(1);
+}
+
+.app-workspace-switcher[data-mode="workstation"][data-studio-transition^="enter"] .app-workspace-pane--workstation,
+.app-workspace-switcher[data-mode="workstation"][data-studio-transition^="enter"] .app-workspace-pane--group-studio {
+  opacity: 1;
+  pointer-events: auto;
+  transform: none;
+  transition: none;
+}
+
+.app-workspace-switcher[data-mode="workstation"][data-studio-surface="group-studio"][data-studio-transition="idle"] .app-workspace-pane--group-studio {
+  animation: none;
+}
+
+.app-workspace-switcher[data-mode="workstation"][data-studio-transition^="leave"] .app-workspace-pane--workstation {
+  opacity: 1 !important;
+  pointer-events: auto;
+  transform: none !important;
+  transition: none;
+}
+
+.app-workspace-switcher[data-mode="workstation"][data-studio-transition^="leave"] .app-workspace-pane--group-studio {
+  animation: studio-pane-leave 260ms var(--ease-out) both;
+  pointer-events: none;
+  transition: none;
+}
+
+@keyframes studio-pane-leave {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.992);
+  }
+}
+
+.app-workspace-pane--group-studio {
+  z-index: 2;
+}
+
+.app-workspace-switcher[data-studio-transition="enter-collapse"] .app-workspace-pane--workstation .chat-workbench-history,
+.app-workspace-switcher[data-studio-transition="enter-collapse"] .app-workspace-pane--workstation .chat-composer {
+  animation: studio-chrome-collapse 180ms var(--ease-out) both;
+  pointer-events: none;
+  transition: none;
+}
+
+.app-workspace-pane--group-studio .group-studio-shell {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.app-workspace-switcher[data-studio-transition="enter-expand"] .group-studio-shell {
+  animation: studio-shell-enter 220ms var(--ease-out) both;
+}
+
+.app-workspace-switcher[data-studio-transition="enter-settle"] .group-studio-shell,
+.app-workspace-switcher[data-studio-surface="group-studio"] .group-studio-shell {
+  opacity: 1;
+  transform: none;
+}
+
+/* 工作室是 Chat 表层：切到设置等页面时露出工作台，不拆掉 studioSurface。 */
+.app-workspace-switcher[data-mode="workstation"][data-view]:not([data-view="chat"]) .app-workspace-pane--workstation {
+  opacity: 1 !important;
+  pointer-events: auto;
+  transform: none !important;
+}
+
+.app-workspace-switcher[data-mode="workstation"][data-view]:not([data-view="chat"]) .app-workspace-pane--group-studio,
+.app-workspace-pane--group-studio[hidden] {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none;
+  animation: none;
+}
+
+@keyframes studio-chrome-collapse {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes studio-shell-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-workspace-pane {
+    transition: none;
+  }
+
+  .app-workspace-switcher[data-studio-transition="enter-collapse"] .app-workspace-pane--workstation .chat-workbench-history,
+  .app-workspace-switcher[data-studio-transition="enter-collapse"] .app-workspace-pane--workstation .chat-composer,
+  .app-workspace-switcher[data-studio-transition="enter-expand"] .group-studio-shell {
+    animation: none;
+  }
+
+  .app-workspace-switcher[data-mode="workstation"][data-studio-transition^="leave"] .app-workspace-pane--group-studio {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 .workbench-menu-page {

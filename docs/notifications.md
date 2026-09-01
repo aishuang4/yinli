@@ -48,7 +48,9 @@ SSE 事件名：`snapshot`、`notification`、`read`、`read_all`。心跳为注
 
 ## 前端
 
-Chat 工作台顶栏设置按钮左侧是铃铛。点击打开当前 Project 的定时任务通知；未读徽标来自独立 SSE，断开后 15s 轮询 unread-count。点击带 `jobId` 的通知打开运行结果弹窗，页脚可跳转到定时任务详情。通道配置在 Settings 页「消息通知」卡片。
+Chat 工作台顶栏设置按钮左侧是铃铛。点击打开当前 Project 的定时任务通知；未读徽标来自独立 SSE，断开后 15s 轮询 unread-count。点击带 `jobId` 的通知打开运行结果弹窗，页脚可跳转到定时任务详情。`kind` 以 `group_studio_` 开头的通知点击后打开对应工作室（`openGroupStudio(payload.groupStudioId)`），不进结果弹窗。通道配置在 Settings 页「消息通知」卡片。
+
+Electron `DesktopNotificationPayload` 含可选 `groupStudioId`（缺省 `''`）。
 
 完成时的即时提醒不走 Chat SSE：
 

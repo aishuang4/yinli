@@ -36,6 +36,7 @@ from src.storage.resource_catalog_records import ResourceCatalogRecordStore
 from src.storage.skill_run_records import SkillRunRecordStore
 from src.storage.skill_evolution_records import SkillEvolutionRecordStore
 from src.storage.trace_records import TraceRecordStore
+from src.storage.group_studio_records import GroupStudioRecordStore
 from src.storage.workflow_records import WorkflowRecordStore
 from src.storage.workspace_project_records import WorkspaceProjectRecordStore
 
@@ -248,6 +249,31 @@ def ensure_db() -> None:
                 )
             """)
             conn.executescript(BASE_SCHEMA_SQL)
+            _ensure_column(conn, "group_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(
+                conn,
+                "group_studios",
+                "pending_speaker_member_id",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            _ensure_column(
+                conn,
+                "group_studios",
+                "awaiting_intake_confirm",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            _ensure_column(
+                conn,
+                "group_studios",
+                "speaker_queue_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
+            _ensure_column(
+                conn,
+                "group_studios",
+                "claim_round_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
             _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'")
@@ -1061,6 +1087,274 @@ def get_workflow_run(run_id: str, *, event_limit: int | None = None) -> dict[str
     """读取 Dynamic Workflow Run 完整快照。"""
 
     return _workflow_record_store().get(run_id, event_limit=event_limit)
+
+
+def _group_studio_record_store() -> GroupStudioRecordStore:
+    """创建复用当前数据库连接与锁的群聊工作室存储。"""
+
+    return GroupStudioRecordStore(
+        ensure_db=ensure_db,
+        connect=_connect,
+        lock=_lock,
+        utc_now=_utc_now,
+        dumps=_dumps,
+        loads=_loads,
+    )
+
+
+def create_group_studio_from_chat(payload: dict[str, Any]) -> dict[str, Any]:
+    """创建或返回当前 Chat 会话已有的未归档工作室。"""
+
+    return _group_studio_record_store().create_from_chat(payload)
+
+
+def get_group_studio_snapshot(group_id: str, *, message_limit: int = 100) -> dict[str, Any] | None:
+    """读取工作室 GET /{id} 快照。"""
+
+    return _group_studio_record_store().get_snapshot(group_id, message_limit=message_limit)
+
+
+def get_active_group_studio_by_chat_session(chat_session_id: str) -> dict[str, Any] | None:
+    """按 Chat session 读取未归档工作室。"""
+
+    return _group_studio_record_store().get_active_by_chat_session(chat_session_id)
+
+
+def lookup_active_group_studios_by_chat_session_ids(
+    session_ids: list[str],
+) -> dict[str, dict[str, str]]:
+    """catalog 查询：session_id -> 活跃工作室摘要。"""
+
+    return _group_studio_record_store().lookup_active_by_chat_session_ids(session_ids)
+
+
+def list_group_studios_by_project(project_id: str) -> list[dict[str, Any]]:
+    """列出某 Project 未归档工作室。"""
+
+    return _group_studio_record_store().list_active_by_project(project_id)
+
+
+def find_blank_group_studio_draft_id(project_id: str) -> str | None:
+    return _group_studio_record_store().find_blank_draft_id(project_id)
+
+
+def list_group_studios_with_current_run() -> list[dict[str, Any]]:
+    return _group_studio_record_store().list_with_current_run()
+
+
+def list_group_studio_messages(
+    group_id: str,
+    *,
+    before: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """分页读取群消息。"""
+
+    return _group_studio_record_store().list_messages(group_id, before=before, limit=limit)
+
+
+def archive_group_studio(group_id: str) -> None:
+    """把工作室标为 archived。"""
+
+    _group_studio_record_store().archive(group_id)
+
+
+def group_studio_has_runs(group_id: str) -> bool:
+    """工作室是否已经产生过 GroupRun。"""
+
+    return _group_studio_record_store().has_runs(group_id)
+
+
+def count_group_studio_active_members(group_id: str) -> int:
+    return _group_studio_record_store().count_active_members(group_id)
+
+
+def find_group_studio_member_by_agent(group_id: str, agent_id: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().find_active_member_by_agent(group_id, agent_id)
+
+
+def insert_group_studio_member(group_id: str, member: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().insert_member(group_id, member)
+
+
+def apply_group_studio_task_card_update(
+    group_id: str,
+    *,
+    goal: str,
+    background: str,
+    constraints: list[str],
+    dod_checklist: list[dict[str, Any]],
+    card_status: str,
+    studio_status: str,
+    awaiting_restatement: bool,
+    phase_before_pause: str | None,
+    bump_revision: bool,
+    title: str | None = None,
+) -> dict[str, Any]:
+    return _group_studio_record_store().apply_task_card_update(
+        group_id,
+        goal=goal,
+        background=background,
+        constraints=constraints,
+        dod_checklist=dod_checklist,
+        card_status=card_status,
+        studio_status=studio_status,
+        awaiting_restatement=awaiting_restatement,
+        phase_before_pause=phase_before_pause,
+        bump_revision=bump_revision,
+        title=title,
+    )
+
+
+def get_group_studio_member(group_id: str, member_id: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().get_member(group_id, member_id)
+
+
+def set_group_studio_member_muted(group_id: str, member_id: str, muted: bool) -> dict[str, Any] | None:
+    return _group_studio_record_store().set_member_muted(group_id, member_id, muted)
+
+
+def set_group_studio_member_removed(group_id: str, member_id: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().set_member_removed(group_id, member_id)
+
+
+def set_group_studio_member_last_spoke(
+    group_id: str,
+    member_id: str,
+    spoke_at: str | None = None,
+) -> None:
+    _group_studio_record_store().set_member_last_spoke(group_id, member_id, spoke_at)
+
+
+def set_group_studio_status(group_id: str, status: str) -> None:
+    _group_studio_record_store().set_studio_status(group_id, status)
+
+
+def update_group_studio_state(group_id: str, **changes: Any) -> dict[str, Any]:
+    return _group_studio_record_store().update_studio_state(group_id, **changes)
+
+
+def set_group_studio_current_run_id(group_id: str, run_id: str | None) -> None:
+    _group_studio_record_store().set_current_run_id(group_id, run_id)
+
+
+def set_group_studio_pending_speaker(group_id: str, member_id: str | None) -> None:
+    _group_studio_record_store().set_pending_speaker(group_id, member_id)
+
+
+def get_group_studio_pending_speaker(group_id: str) -> str:
+    return _group_studio_record_store().get_pending_speaker(group_id)
+
+
+def get_group_studio_speaker_queue(group_id: str) -> list[str]:
+    return _group_studio_record_store().get_speaker_queue(group_id)
+
+
+def set_group_studio_speaker_queue(group_id: str, member_ids: list[str]) -> None:
+    _group_studio_record_store().set_speaker_queue(group_id, member_ids)
+
+
+def pop_group_studio_speaker_queue_head(group_id: str, expected: str | None = None) -> str:
+    return _group_studio_record_store().pop_speaker_queue_head(group_id, expected)
+
+
+def get_group_studio_claim_round(group_id: str) -> list[str]:
+    return _group_studio_record_store().get_claim_round(group_id)
+
+
+def set_group_studio_claim_round(group_id: str, member_ids: list[str]) -> None:
+    _group_studio_record_store().set_claim_round(group_id, member_ids)
+
+
+def pop_group_studio_claim_round_head(group_id: str, expected: str | None = None) -> str:
+    return _group_studio_record_store().pop_claim_round_head(group_id, expected)
+
+
+def insert_group_studio_work_item(payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().insert_work_item(payload)
+
+
+def list_group_studio_work_items(group_id: str) -> list[dict[str, Any]]:
+    return _group_studio_record_store().list_work_items(group_id)
+
+
+def claim_group_studio_work_item(
+    group_id: str,
+    work_item_id: str,
+    *,
+    member_id: str,
+    run_id: str,
+) -> dict[str, Any] | None:
+    return _group_studio_record_store().claim_work_item(
+        group_id, work_item_id, member_id=member_id, run_id=run_id,
+    )
+
+
+def complete_group_studio_work_item(
+    group_id: str,
+    work_item_id: str,
+    *,
+    member_id: str,
+) -> dict[str, Any] | None:
+    return _group_studio_record_store().complete_work_item(
+        group_id, work_item_id, member_id=member_id,
+    )
+
+
+def cancel_group_studio_work_item(group_id: str, work_item_id: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().cancel_work_item(group_id, work_item_id)
+
+
+def insert_group_studio_run(payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().insert_run(payload)
+
+
+def update_group_studio_run_status(run_id: str, status: str, error: str = "") -> None:
+    _group_studio_record_store().update_run_status(run_id, status, error)
+
+
+def insert_group_studio_message(payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().insert_message(payload)
+
+
+def update_group_studio_message_body(message_id: str, body: str, thinking: str | None = None) -> None:
+    _group_studio_record_store().update_message_body(message_id, body, thinking)
+
+
+def append_group_studio_event(payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().append_event(payload)
+
+
+def list_group_studio_events_after(group_id: str, after_seq: int) -> list[dict[str, Any]]:
+    return _group_studio_record_store().list_events_after(group_id, after_seq)
+
+
+def replace_group_studio_blackboard(group_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().replace_blackboard_payload(group_id, payload)
+
+
+def list_group_studio_artifacts(group_id: str) -> list[dict[str, Any]]:
+    return _group_studio_record_store().list_artifacts(group_id)
+
+
+def insert_group_studio_artifact(payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().insert_artifact(payload)
+
+
+def insert_group_studio_approval(payload: dict[str, Any]) -> dict[str, Any]:
+    return _group_studio_record_store().insert_approval(payload)
+
+
+def get_group_studio_approval(approval_id: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().get_approval(approval_id)
+
+
+def get_group_studio_pending_approval(group_id: str, run_id: str | None = None) -> dict[str, Any] | None:
+    return _group_studio_record_store().get_pending_approval(group_id, run_id)
+
+
+def update_group_studio_approval_status(approval_id: str, status: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().update_approval_status(approval_id, status)
 
 
 def update_workflow_run_status(

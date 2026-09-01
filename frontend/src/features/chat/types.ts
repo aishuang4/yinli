@@ -59,6 +59,12 @@ export interface ChatFileAttachment {
   size: number;
 }
 
+export interface ChatSessionGroupStudioHint {
+  id: string;
+  status: string;
+  title: string;
+}
+
 export interface ChatSession {
   id: string;
   title: string;
@@ -70,6 +76,8 @@ export interface ChatSession {
   created_at: string;
   updated_at: string;
   message_count: number;
+  groupStudio?: ChatSessionGroupStudioHint | null;
+  group_studio?: ChatSessionGroupStudioHint | null;
 }
 
 export interface StoredChatMessage {

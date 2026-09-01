@@ -292,6 +292,17 @@ button[class*="-btn"] .lucide {
   box-shadow: 0 6px 16px color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 
+.chat-session-studio-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--color-accent);
+}
+
 .chat-empty-state__icon {
   display: inline-flex;
   width: 64px;
