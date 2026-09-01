@@ -1,27 +1,21 @@
 # 引力 YINLI TODO
 
-> 最后更新：2026-08-28。本文只保留尚未完成的任务。
+> 最后更新：2026-09-01。本文只保留尚未完成的任务。
 
 ## P0. Runtime 稳定性
 
-- [ ] 在配置 DeepSeek + 第二供应商凭据且 Docker daemon 可用的发布环境，完成 AgentScope `2.0.5` 真实 Runtime 与 Docker 门禁，结果写回升级记录。
+- [ ] 修复 `master` 上 4 个失败测试：Plan Mode 显式开启、默认 workspace 目录、定时任务 catch-up、过期桌面 Project 路径。
+- [ ] 在配置 DeepSeek + 第二供应商凭据且 Docker daemon 可用的发布环境，完成 AgentScope `2.0.5` 真实 Runtime 与 Docker 门禁，结果写回 `docs/project-progress-handoff.md`。
 - [ ] 补齐 RuntimeFrame / DisplaySnapshot V4 浏览器回归矩阵，覆盖 Plan finalized、HITL、AskUser、工具失败、取消和刷新恢复。
 - [ ] 增加关键 Chat 工作流的 Playwright 测试，避免只依赖 reducer 和后端单测。
 - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor 和 ToolScope 摘要。
 
-## P0. 群聊工作室 Intake 与任务台
-
-按 `docs/group-studio-intake-and-workboard.md` 顺序落地；未完成前不要做真并行。
-
-- [x] PR11：先改 `docs/group-studio-event-contract.md`，登记 `GROUP_INTAKE` / `GROUP_WORK_ITEM` / `GROUP_SPEAKER_QUEUE` 与 `GROUP_FLOOR.reason` 扩展。
-- [x] PR12：intake 对谈。`drafting` 只允许人类 ↔ Host；写卡不切 `discussing`；from-chat 上一句是第一条人类消息不是 Goal；人类确认密度后才开会。
-- [x] PR13：`group_assign_floor` 支持 `memberIds[]` FIFO 队列；工人结束弹下一人，中间不回 Host。
-- [x] PR14：新表 `group_work_items`、发布、串行认领轮、原子认领。`maxParallelWorkers` 仍为 1。
-
 ## P1. 群聊工作室后续
 
+Intake 对谈、FIFO 点名队列、`group_work_items` 认领已在线。下面只保留未做项。
+
 - [ ] 把 `MainAgentRuntimeSpec` / cache key 从 `routes/chat/runtime_builder.py` 下沉到 `agents/` 或 `runtime/`，Chat 与 group_studio 平级调用。
-- [ ] 真并行 Worker（`maxParallelWorkers>1`）与 `parent_run_id` / child runs；须在 Intake/任务台（PR11–14）之后。
+- [ ] 真并行 Worker（`maxParallelWorkers>1`）与 `parent_run_id` / child runs。
 - [ ] 时间旅行快照表不要叫 `group_snapshots`，以免和 `GROUP_STUDIO_STATE` 口语撞车。
 - [ ] 群事件进入 Trace 页前给 `run_events` 增加 `source` 默认 `chat`，且 `session_id` 必须是真实 Chat session。
 - [ ] `max_cost_usd` 熔断；P0 只记 token，不按金额熔断。
@@ -91,9 +85,9 @@
 - [ ] 评估 LangGraph / LangChain 执行引擎，SQLite 继续作为产品事实源。
 - [ ] 建立 Agent / Prompt / Model / TeamRun 的评估和成本体系。
 - [ ] 增加 Agent / Subagent 配置版本、Diff、发布和回滚。
-- [ ] 建立 Secret 安全存储和引用机制。
-- [ ] 按 `docs/scheduled-jobs-design.md` 分阶段实现定时任务：先 weekly/once 到点跑并通知，预览发送与 OS 唤醒不与第一批捆绑。
-- [ ] 评估自动化触发、任务队列、预算、失败重试和后台通知。
+- [ ] 在现有 `secret_store` 上补引用面、轮换和桌面端凭据迁移。
+- [ ] 定时任务预览发送、OS 唤醒与失败重试；第一批 weekly/once 到点跑并通知已在线。
+- [ ] 评估自动化触发、任务队列、预算和后台通知扩展。
 - [ ] 在现有 `NotificationChannel` 上接入邮箱、微信、飞书投递；密钥走 secret_store，启用前补投递失败重试与脱敏。
 - [ ] Agent / Subagent preset 市场、多语言 UI 和后续多用户 RBAC。
 

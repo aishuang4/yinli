@@ -1,11 +1,10 @@
 # 定时任务 v2：到点激活 Agent 与能力合同
 
-> 状态：已落地迭代。2026-08-25：Job Agent 与 Chat Agent 拆分；必注入工具不受 CheckJobFeasibility 裁剪。
+> 状态：已落地。2026-08-25：Job Agent 与 Chat Agent 拆分；必注入工具不受 CheckJobFeasibility 裁剪。
 > 作者：引力 YINLI 架构。
-> 本文已在 `docs/README.md`「后续路线」登记；落地实现前不得当作在线行为基线。
-> 本文是 `docs/scheduled-jobs-design.md`（Phase 1）的 **升级计划**，不是绿场重写，也不把 Phase 1 文档改写成已经具备本行为。
+> 当前架构事实以 `docs/architecture-overview.md` 为准。本文保留 Job Agent 能力合同与创建前门禁的专题边界。
 > 稳定事件字段以 `docs/chat-sse-event-contract.md` 为准；本文 **不** 新增 Chat SSE 字段，**禁止** 顶层 `JOB_EVENT`。
-> 边界对照：`docs/scheduled-jobs-design.md`、`docs/team-runtime-redesign.md`、`docs/subagent-delegation-design.md`。
+> 边界对照：`docs/architecture-overview.md`、`docs/team-runtime-redesign.md`、`docs/subagent-delegation-design.md`。
 
 ---
 
@@ -15,7 +14,7 @@ Phase 1 已经能在对话里登记 `ScheduledJob`，到点经 `start_scheduled_
 
 Phase 2 把定时任务改成：**先证明这个 Agent 在无人值守下做得到，再允许到点把它叫醒。** 能力长在 Agent 上（工具 / MCP / HTTP Tool / Skill）；调度只是按点激活。创建前用真实工具表做能力门禁；Job 持久化本次认领过的 **能力合同（capability contract）**；到期只用合同内能力 ∩ 当前 Agent ∩ Project binding，外加始终开启的读写文件基本工具。后来给 Agent 新接 CRM MCP，旧任务不会自己去改客户系统。
 
-本次升级 **替换** `docs/scheduled-jobs-design.md` 里原「Phase 2 预览发送」的排期位置。预览发送、收件人白名单通道、`auto_send` 仍是后续阶段，不在本文范围；控制面默认仍 `notify`。不新增 `runtime.kind`，不恢复旧 Plan / Subagent / Memory Runtime，不恢复持久 Team。
+本次升级替换原 Phase 1 路线图里「Phase 2 预览发送」的排期位置。预览发送、收件人白名单通道、`auto_send` 仍是后续阶段，不在本文范围；控制面默认仍 `notify`。不新增 `runtime.kind`，不恢复旧 Plan / Subagent / Memory Runtime，不恢复持久 Team。
 
 ---
 
@@ -48,9 +47,9 @@ Phase 2 把定时任务改成：**先证明这个 Agent 在无人值守下做得
 
 ### 与原 Phase 1 路线图的关系
 
-| 原 `scheduled-jobs-design.md` 阶段 | 本文之后 |
+| 原 Phase 1 路线图阶段 | 本文之后 |
 | --- | --- |
-| Phase 1 weekly/once、登记、ticker、产物、notify | 保持；已实现，不改写该文档当成本行为 |
+| Phase 1 weekly/once、登记、ticker、产物、notify | 保持；已实现，现网事实见 `docs/architecture-overview.md` |
 | 原 Phase 2 预览发送 / 白名单通道 | **顺延**，不在本次 |
 | 原 Phase 3 `auto_send` | 仍拒绝进入 `active` |
 | 原 Phase 4 OS 唤醒 / 托盘 | 仍后续 |
@@ -1337,7 +1336,7 @@ Phase 1 不变量 1–24 继续生效。新增：
 
 ## References
 
-- `docs/scheduled-jobs-design.md` — Phase 1 设计（本文不改写）
+- `docs/architecture-overview.md` — 定时任务控制面与 Job Agent 现网事实
 - `docs/chat-sse-event-contract.md` — 稳定 SSE 契约
 - `docs/development-guidelines.md`
 - `AGENTS.md`
@@ -1445,7 +1444,7 @@ Phase 1 不变量 1–24 继续生效。新增：
 ### PR 6 — 回归测试收口与文档
 
 - **标题：** `test(docs): lock scheduled-jobs v2 capability gate and update docs index`
-- **影响文件：** 交叉缺口测试；`docs/scheduled-jobs-v2-agent-activation.md` 保持后续路线直到 handoff 登记；`docs/project-todo.md` P7；**不**改写 `docs/scheduled-jobs-design.md` 当成本行为
+- **影响文件：** 交叉缺口测试；`docs/scheduled-jobs-v2-agent-activation.md` 保留能力合同专题；`docs/project-todo.md` 只记未完成项；现网事实写在 `docs/architecture-overview.md`
 - **依赖：** PR 2–5 已合部分
 - **内容：** 发邮件矩阵必过；partial 文案只锁关键字不锁全文；Phase 1 文档仍是 Phase 1 事实。PR 1 确认未加 `capability_tags` 列。
 

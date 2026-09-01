@@ -1,6 +1,6 @@
 # Group Chat Studio 事件契约
 
-> 状态：2026-08-28 生效。实现不得偏离下表。
+> 状态：2026-09-01 生效。实现不得偏离下表。
 > 本文是群聊工作室实时展示、刷新恢复的唯一前端事件契约。
 > **不属于 Chat SSE。** 禁止复用 `RUNTIME_EVENT`、DisplaySnapshot V4、Chat projector、`run_events`。
 
@@ -83,7 +83,17 @@ heartbeat 不带 `seq`，不进入 `group_studio_events`，也不进入前端 re
 
 禁止新增未列入本表的前端事件名。P1 时间旅行对象不得命名为 `GROUP_SNAPSHOT`，以免与 `GROUP_STUDIO_STATE` 口语撞车。
 
-intake / 任务台快照增补字段（`awaitingIntakeConfirm`、`speakerQueue`、`claimRoundMemberIds`、`workItems`）随 `GROUP_STUDIO_STATE` 与 `GET /{id}` 下发，字段语义见 `docs/group-studio-intake-and-workboard.md`。
+intake / 任务台快照字段随 `GROUP_STUDIO_STATE` 与 `GET /{id}` 下发：
+
+| 字段 | 语义 |
+| --- | --- |
+| `awaitingIntakeConfirm` | drafting 上的布尔，不是新 status。Host 提请确认后为 `true`；人类确认接手后为 `false`。普通对话不自动翻回 `false`。 |
+| `speakerQueue` | FIFO 剩余 `memberId[]`。队首同步到 `pendingSpeakerMemberId`。调度只读本队列 / 认领轮，不把 pending 当第二输入。 |
+| `claimRoundMemberIds` | 串行认领轮剩余工人。成立条件：Host 回合结束时队列为空，且本回合发布了仍为 `open` 的未指派工作项。 |
+| `workItems` | `group_work_items` 投影。`status`：`open \| claimed \| done \| cancelled`。空值字段对外为 `null`。 |
+| `pendingSpeakerMemberId` | 队首兼容列；`string \| null`。 |
+
+阶段机与调度规则以 `docs/architecture-overview.md` 为准。
 
 ## 4. 隔离约束
 

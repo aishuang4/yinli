@@ -1,6 +1,6 @@
 # 引力 YINLI 项目进展与协作交接
 
-> 更新时间：2026-08-26。本文只记录当前完成度、验证结果和已知缺口。
+> 更新时间：2026-09-01。本文只记录当前完成度、验证结果和已知缺口。
 
 ## 当前阶段
 
@@ -14,8 +14,9 @@
 - 已删除覆盖 `Agent._reasoning_impl` 的 usage patch，改由原生 middleware hook 采集 provider prompt cache usage。
 - Write / Edit 异步权限接口、Docker `host_workdir`、Reply `finished_reason` / `error` 和取消终态均已完成兼容适配。
 - 2.0.5 默认 runtime state injection 在工厂中显式关闭，现有 prompt、Plan middleware 和 Event Stream 边界不变。
-- 后端全量 `376 passed`，前端 lint/build、源码后端启动、OpenAPI、macOS arm64 onefile 构建和产物健康检查均通过。
-- 本机未配置模型 API key且 Docker daemon 未运行；真实供应商矩阵与 Docker 执行仍是发布前门禁，详见 `docs/agentscope-2.0.5-upgrade-plan.md`。
+- 后端全量最近一次：`671 passed, 4 failed, 1 skipped`（2026-08-31，`master`）。失败项与群聊无关：Plan Mode 集成、默认 workspace 目录、定时任务 catch-up、过期桌面 Project 路径。
+- 前端 lint/build、源码后端启动、OpenAPI、macOS arm64 onefile 构建和产物健康检查此前已通过。
+- 真实供应商矩阵与 Docker 执行仍是发布前门禁，任务只记在 `docs/project-todo.md`。不阻塞代码审阅；合入发布分支前必须在具备凭据和 Docker 的环境完成。
 
 ### Workspace / Project
 
@@ -35,7 +36,11 @@
 ### 群聊工作室
 
 - 独立于 Chat Team Runtime：Chat 顶栏 / 快捷键进入独立 pane，SQLite `group_*` + `/api/group-studio` + 独立 SSE。
-- 开关默认开启；Host 哨兵 `group-studio-host`；Worker 独立审批；通知点击打开工作室。
+- 开关默认开启；Host 哨兵 `group-studio-host`；群内 Host/Worker 为 `PermissionMode.BYPASS`；通知点击打开工作室。
+- Intake 对谈已上线：`drafting` 只允许人类 ↔ Host，写卡不切 `discussing`，Chat 上一句是开场白不是 Goal，人类确认后才开会。
+- FIFO 点名队列（`memberIds[]`）与 `group_work_items` 原子认领已上线；工人结束弹下一人，中间不回 Host。`maxParallelWorkers=1`。
+- 消息区与 Chat 共用滚到底部按钮。阶段机以 `docs/architecture-overview.md` 为准。
+- 真并行、时间旅行、群事件进 Trace、归档记忆收口仍待做。
 
 ### Chat 与运行状态
 
@@ -129,12 +134,16 @@
 最近一次完整验证：
 
 ```text
-backend pytest: 376 passed
-frontend build: passed
-frontend lint: passed
+backend pytest: 671 passed, 4 failed, 1 skipped (2026-08-31)
+  失败：test_react_runtime_only_enables_plan_features_for_explicit_plan_request
+        test_default_workspace_dir_is_project_root_not_user_home
+        test_catch_up_once_within_grace_uses_catch_up_trigger
+        test_stale_desktop_default_project_paths
+frontend build / lint: 此前 passed
 /api/teams: 404
 legacy Agent Builder mode=team: 422
 legacy teams / team_members tables: removed
+group studio PR 测试（pr1–pr14）：此前在 feat/group-studio 上 116 passed
 ```
 
 2026-07-23 真实浏览器回归：
@@ -161,11 +170,12 @@ legacy teams / team_members tables: removed
 
 ## 主要缺口
 
-1. Team、Subagent、Plan、HITL 和刷新恢复缺少完整 Playwright 回归。
+1. Team、Subagent、Plan、HITL、群聊工作室和刷新恢复缺少完整 Playwright / 浏览器回归。
 2. Artifact 还没有正式生命周期，大体积工具结果主要依赖 Trace 摘要。
 3. Workspace / Project Phase 0 至 Phase 3 已完成；浏览器级跨 Project 自动化隔离和 Artifact ownership 尚未完成。
-4. Agent / Subagent 配置版本、评估指标、自动化调度和 Secret 治理尚未形成平台能力。
+4. Agent / Subagent 配置版本、评估指标和 Secret 轮换尚未形成平台能力。定时任务第一批（到点执行 + 应用内通知）已在线。
 5. Electron 正式签名、公证、Windows 真机、`userData` 迁移和自动更新尚未完成。
+6. 群聊工作室：真并行、时间旅行、群事件进 Trace、归档后记忆收口未做；主持人是否守队列/写卡协议仍依赖模型和 prompt。
 
 ## 核心入口
 
@@ -175,6 +185,8 @@ legacy teams / team_members tables: removed
 - `backend/src/memory/`：记忆准入、检索、提炼和 Wiki。
 - `backend/src/storage/database.py`：SQLite schema 和存储访问。
 - `frontend/src/pages/ChatPage.tsx`：Chat 主工作台。
+- `frontend/src/features/group-studio/`：群聊工作室独立 pane。
+- `backend/src/group_studio/`：群聊工作室领域与 `/api/group-studio`。
 - `frontend/src/pages/AgentsPage.tsx`：持久 Agent 管理。
 - `frontend/src/hooks/useEventStream.ts`：RuntimeFrame SSE 订阅。
 - `frontend/src/features/runtime-stream/`：Block Tree 协议、状态和 renderer。

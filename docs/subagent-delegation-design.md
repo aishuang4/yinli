@@ -1,7 +1,7 @@
 # Subagent 委托能力设计
 
 > 状态：当前在线架构，2026-07-27。本文是 Subagent 定义、attached task、父子消费和前端展示的唯一专题设计。
-> 稳定边界：事件字段以 `docs/chat-sse-event-contract.md` 为准，通用投影与恢复规则以 `docs/event-stream-architecture-redesign.md` 为准。
+> 稳定边界：事件字段以 `docs/chat-sse-event-contract.md` 为准，通用投影与恢复规则以 `docs/architecture-overview.md` 的 Event Stream 节为准。
 
 ## 1. 设计结论
 

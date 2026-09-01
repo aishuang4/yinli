@@ -1,6 +1,6 @@
 # 引力 YINLI 当前架构总览
 
-> 状态：2026-08-26 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
+> 状态：2026-09-01 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
 
 ## 项目定位
 
@@ -14,9 +14,15 @@
 
 - 桌面壳：Electron
 - 前端：React 19、TypeScript、Vite、Zustand、`@agentscope-ai/design`、`@agentscope-ai/chat`、Ant Design
-- 后端：Python 3.11、FastAPI、AgentScope 2.0、SQLite
+- 后端：Python 3.11、FastAPI、AgentScope `2.0.5`、SQLite
 - 模型：DeepSeek 默认，运行时可切换 OpenAI、Anthropic、DashScope、Gemini、Ollama、自定义 OpenAI 兼容等供应商
 - 执行环境：本地 workspace 或 AgentScope DockerWorkspace
+
+## AgentScope 运行时基线
+
+当前依赖固定为 `agentscope==2.0.5`，MCP 保持 `1.27.2`。已删除覆盖 `Agent._reasoning_impl` 的 usage patch，改由 `ProviderCacheUsageMiddleware` 在 `on_model_call` 采集 provider prompt cache usage。`ScopedWrite` / `ScopedEdit` 使用异步 `match_rule()` / `generate_suggestions()`。`DockerWorkspace` 使用 `host_workdir`。工厂显式 `InjectionConfig(inject_runtime_state=False)`，避免默认注入时间/任务状态改变现有 prompt。`REPLY_END.finished_reason` 进入 Runtime payload；`interrupted`、`error`、`exceed_max_iters` 不得映射为成功收口。应用层取消是 Run 终态事实源。
+
+真实供应商矩阵与 Docker 执行仍是发布前门禁，只记在 `docs/project-todo.md`。
 
 ## Chat 核心链路
 
@@ -74,27 +80,84 @@ Team Runtime 是一次性 `TeamRun`。用户在单 Agent 模式选择 Agent，�
 
 ## 群聊工作室
 
-群聊工作室是独立于 Chat Team Runtime 的跨多轮协作空间，不替换一次性 `TeamRun`。
+群聊工作室是独立于 Chat Team Runtime 的跨多轮协作空间，不替换一次性 `TeamRun`。共用 Workspace / Project、Agent、Skill、MCP、HTTP Tool、沙箱、记忆注入、模型设置和 `src/notifications/`；不共用 `POST /api/chat/send`、Chat SSE、TeamRun / Mailbox / Team Block、`chat_messages`，也不把群事件写入 `run_events`。
 
-- 入口在 Chat 顶栏铃铛左侧和 `⌘⇧G` / `Ctrl+Shift+G`，520ms 重叠过渡切到独立 pane；不改 `WorkspaceMode`，不是 Agent/Team 分段。
-- 后端前缀 `/api/group-studio`，领域包 `backend/src/group_studio/`。开关 `json_store system_settings/group_studio`，默认开启；关闭后写/建接口 404 `group_studio_disabled`。
-- SQLite `group_*` 表是领域事实源。一 Chat session 对应一间未归档工作室；一群一张任务卡（Goal / 约束 / DoD）。产出在 `{project_root}/.agent-workstation/group-studios/{group_id}/`。
-- 独立 SSE，契约见 `docs/group-studio-event-contract.md`。`GROUP_MESSAGE_DELTA` / `GROUP_ACTIVITY_DELTA` 不落 `group_studio_events`。禁止写入 Chat `run_events`、`RUNTIME_EVENT` 或 `PENDING_INTERACTIONS`。
-- Host 是系统哨兵 `group-studio-host`，无默认工具，只做控场。选中 Chat Agent 是第一 Worker。P0 全串行。Worker 强制人工审批（`ASK_EVERY_TIME` / `PermissionMode.DEFAULT`），审批行在 `group_approvals`。
-- 通知 kind 前缀 `group_studio_`，点击打开工作室，不进定时任务结果弹窗。删除 Chat session 无论开关都归档绑定工作室。启动时对未收口 Run 按暂停收口。
+### 隔离与入口
+
+- 入口在 Chat 顶栏铃铛左侧和 `⌘⇧G` / `Ctrl+Shift+G`，520ms 重叠过渡切到独立 pane。不改 `WorkspaceMode`，不进 `ChatComposer` Agent/Team 分段，不是 TitleBar 第三 workspace。`TitleBar.MODE_OPTIONS` 保持 `workstation | workflow`。
+- 后端前缀 `/api/group-studio`，领域包 `backend/src/group_studio/`。Chat handlers / Team Runtime 禁止 import `group_studio`；catalog 通过 `session_studio.py` 附加徽章。
+- 开关 `json_store system_settings/group_studio`，默认开启；关闭后写/建接口 404 `group_studio_disabled`。关 flag 拒绝新 from-chat，已有 Run 继续到 pause/archive。
+- SQLite `group_*` 表是领域事实源（含 `group_work_items`）。一 Chat session 对应一间未归档工作室；一群一张任务卡。产出在 `{project_root}/.agent-workstation/group-studios/{group_id}/`。
+- 独立 SSE，契约见 `docs/group-studio-event-contract.md`。`GROUP_MESSAGE_DELTA` / `GROUP_ACTIVITY_DELTA` 不落 `group_studio_events`。禁止写入 Chat `run_events`、`RUNTIME_EVENT` 或 `PENDING_INTERACTIONS`。刷新恢复 = `GET /{id}` + `afterSeq`，不学 Workflow `replay=true`。
+- Chat 活动 Run（含 `waiting_*`）禁止升级，后端 409 `chat_run_active`。切换带走 Workspace/Project、草稿、附件、选中 Agent，不搬气泡 / TeamRun / Plan / AskUser。
+- 三个 ID 不得互冒：`chat_session_id`、`group_id`、`membership_id`。Host/Worker 工具上下文按 `group_id`（工人再加 `member_id`）单例；不要按阶段换 extra_tools 对象。
+- 人数硬顶 6（含 Host）。静音切断上下文。Orchestrator / 黑板记录员是系统服务，不进群。Host 不进 Agents 页，不参与 MemoryAdmissionGate，`require_agent` 跳过 `group-studio-host` 与 `default`。
+
+### 对象
+
+| 对象 | 标识 | 职责 |
+| --- | --- | --- |
+| `GroupStudio` | `gstu_` | 一间工作室，绑定唯一未归档 `chat_session_id` |
+| `TaskCard` | `gtask_` | Goal / 背景 / 约束 / DoD 真源 |
+| `Membership` | `gmbr_` | Host 或 Worker 席位；Host 行 `agent_id` 恒为 `group-studio-host` |
+| `Blackboard` | 1:1 `group_id` | 共识面；不含 DoD 副本，只投影 `taskCardId` |
+| `GroupMessage` / `GroupRun` / `GroupApproval` / `GroupArtifact` | `gmsg_` / `grun_` / `gapv_` / `gart_` | 消息、一次串行生成、独立审批、共享文件 |
+| `WorkItem` | `gwitem_` | 任务卡下可认领切片：`open` / `claimed` / `done` / `cancelled` |
+
+P1 时间旅行对象不得命名为 `group_snapshots`，以免和 `GROUP_STUDIO_STATE` 口语撞车。
+
+### 阶段机
+
+```text
+from-chat / 本地首句落库 → drafting（卡 draft，goal 空）
+drafting → discussing：仅人类确认密度且 goal 非空
+discussing → executing：group_start_execution
+executing → reviewing：group_start_review
+reviewing → closing → archived
+确认后改 Goal/约束 → awaiting_human（restatement，同时清队列）
+另有 paused / circuit_broken
+```
+
+- `from-chat` 一律 `drafting`；Chat 上一句是开场白，禁止写成 `TaskCard.goal`。写卡不切 `discussing`。`card.status=draft` 当且仅当 `studio.status=drafting`。
+- `awaitingIntakeConfirm` 不是新 status，是 drafting 上的布尔。Host 可 `group_request_intake_confirm`，没有 `group_confirm_intake` 工具。离开 drafting 只有人类确认：`POST /confirm-intake` 或确认短语（去句末标点后 fullmatch：`你接手` / `开始` / `就这样` / `确认并开始` / `可以开始` / `就这么定` / `开始讨论` / `开始群聊` / `我们开始吧` / `就这么开始`）。短语但尚未提请 → 当普通消息派 Host。goal 空 → 422 `goal_required`。空 DoD 允许确认。paused 期间确认短语 resume 后不回溯执行。
+- drafting 禁止 invite / assign / publish（409 `intake_not_confirmed`）；Worker 在 drafting 获 floor → `intake_worker_forbidden`。drafting 隐藏加人。drafting Host 轮次不计 `used_turns`。drafting 改卡不 restatement。confirm-intake 之后 `group_studio_has_runs` 恒为 true。
+- 本地草稿 `gstu_local_*` 仅在用户说话或微调时落库；persist 禁止把 goal 当 `draftText` 传给 from-chat。
+- 熔断只计 turn / 无进展；`max_cost_usd` 为 P1。空 DoD 可结项。进入执行必须调 `group_start_execution`，口头宣布无效。每轮注入最近 8 条可见消息。
+
+### Floor、队列、认领
+
+- Host floor：`drafting | discussing | executing | reviewing | awaiting_human`。Worker floor：`discussing | executing | reviewing`。`awaiting_human` 禁止派工人。讨论与执行全串行，`maxParallelWorkers=1`。没有 floor 不得 `reply()`。
+- Host `group_assign_floor(memberIds[])` 写 FIFO；工人结束弹下一人，中间不回 Host。静音者不能被点名、不能认领。
+- Host 可只发 `group_work_items`。认领轮成立 ⇔ Host 回合结束时队列为空且本回合发布了仍为 `open` 的未指派工作项。认领是原子 `UPDATE ... WHERE status='open'`。认领轮 `duty=claim` 任何终态不加 `no_progress_turns`。没有工作项、也不在队列/认领轮的工人不得 `run_worker_turn`。
+- 人类插话 / pause / restatement：取消当前生成，清空队列与认领轮（已 claimed 未 done 保留）。
+- `schedule_next` 只派工人。`after_host` 默认 stop；唯一 Host-after-Host 例外是本回合刚切 `executing`/`reviewing` 且未点名。工人队列与认领轮都空才发 `GROUP_SPEAKER_QUEUE kind=drained` 并派一轮综合 Host。
+- Host：`include_default_tools=False` + 控场 allowlist。Worker：显式 allowlist，denylist `AskUser` / `FinalAnswerStart`。群内 Host/Worker 均 `PermissionMode.BYPASS`，不抄 Chat Agent 审批配置。`group_approvals` 仅在运行时仍打出 `REQUIRE_USER_CONFIRM` 时兜底。
+- 通知 kind 前缀 `group_studio_`，点击打开工作室，不进 ResultModal。删除 Chat session 无论开关都归档绑定工作室。启动时对未收口 Run 按暂停收口。
+- 前端群聊消息区与 Chat 共用 `ScrollToBottomButton` / `useMessageScroll`。真并行、时间旅行、群事件进 Trace 只写入 `docs/project-todo.md`。
 
 ## Event Stream 与前端主展示
 
-Chat 主界面只依赖 `RUNTIME_EVENT: RuntimeFrame` 与 DisplaySnapshot V4：
+Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 与 DisplaySnapshot V4。
 
 - `/api/chat/send/start` 创建后台 Run。
 - `/api/chat/resume/start` 恢复 HITL / AskUser 外部执行暂停的原 Run。
 - `/api/chat/runs/{run_id}/state` 返回 DisplaySnapshot V4。
 - `/api/chat/runs/{run_id}/stream?afterSeq=N` 返回连续 tail；无法连续恢复时返回 Snapshot。
 
-后端固定链路是 `SourceEvent -> DomainEvent -> ProjectionRunner -> per-kind projector -> BlockLifecycleCoordinator -> ProjectionStreamStore`。前端固定链路是 `decodeRuntimeFrame -> streamAdapter -> Block Tree reducer -> kind module/renderer`。
+后端固定链路是 `SourceEvent -> DomainEvent -> ProjectionRunner -> per-kind projector -> BlockLifecycleCoordinator -> ProjectionStreamStore`。前端固定链路是 `decodeRuntimeFrame -> streamAdapter -> Block Tree reducer -> kind module/renderer`。同一 Run 使用全局 `stream_ordinal`、lease/fencing、周期 Snapshot + tail replay。
 
-RunState、DisplayEvent、旧 `event_hub`、旧 adapter/reducer 和旧 Snapshot reader 已删除。稳定契约见 `docs/chat-sse-event-contract.md`，实现说明见 `docs/event-stream-architecture-redesign.md`。
+原则：
+
+1. 前端通用层只理解 Block identity、父子关系、生命周期和 `seq`。
+2. `Block.kind` 决定 reducer 与 renderer；`delta.patch` 合并语义属于对应 kind，不属于公共协议。
+3. Message 本身也是 Block；Tool、Plan、Approval、Artifact、Subagent、Team 都是嵌套 Block。
+4. Snapshot、实时 Frame 和历史 replay 必须得到完全相同的 Block Tree。
+5. 新增展示能力不修改 RuntimeFrame、传输层、通用 reducer 或恢复逻辑。
+6. 线上不双写、不保留 fallback。heartbeat 使用 SSE comment，reset 直接发送新 Snapshot。
+
+已删除：mask registry、`set / append / remove / clear` 公共字段协议、应用层 heartbeat/reset 事件、RunState v2、旧 `event_hub`、DisplayEvent、旧 adapter/reducer 和旧 Snapshot reader。SQLite 检测到旧 Chat 投影表或非 V4 Snapshot 时执行一次性运行域 reset，不转换旧数据。
+
+稳定契约见 `docs/chat-sse-event-contract.md`。
 
 ## Plan Mode
 
@@ -164,7 +227,9 @@ RunState、DisplayEvent、旧 `event_hub`、旧 adapter/reducer 和旧 Snapshot 
 
 定时任务写接口受 `system_settings/scheduled_jobs.enabled` 控制；开发库默认关闭。桌面安装版（`AGENT_WORKSTATION_DATA_DIR`）首次启动若从未写过该键，会默认打开调度和能力门禁。设置页可随时开关。
 
-定时任务的到期执行者必须是 `role=job` 的 Job Agent，不能使用 Chat 助手。Job Agent 在配置里拆成必注入与可选注入两层工具：必注入到期一定带上，`CheckJobFeasibility` 只认领可选层。系统 `default` 助手不能改成 Job Agent；Job Agent 不出现在 Chat 选择器里。
+控制面与执行面拆开：对话工具 `ScheduleJob` / `ListJobs` / `PauseJob` / `ConfirmJob` 立即写 SQLite；到点走领域 API `start_scheduled_chat_run()`，每次 firing 新建 `kind=scheduled_job` 的 Chat session，禁止复用登记会话。firing 去掉 AskUser / Plan Mode / DelegateTask。控制面默认 `notify`；预览发送、收件人白名单、`auto_send` 仍是后续阶段。
+
+定时任务的到期执行者必须是 `role=job` 的 Job Agent，不能使用 Chat 助手。Job Agent 在配置里拆成必注入与可选注入两层工具：必注入到期一定带上，`CheckJobFeasibility` 只认领可选层。系统 `default` 助手不能改成 Job Agent；Job Agent 不出现在 Chat 选择器里。能力合同与创建前门禁见 `docs/scheduled-jobs-v2-agent-activation.md`。
 
 系统启动时会为新旧数据库幂等补齐稳定 ID `system-websearch-job`（名称 `WebSearch`）作为默认 Job Agent。其主模型为 `deepseek-v4-flash`，必注入 `WebFetch` 与 `HttpRequest`，固定开启网络并使用 trusted tools 无人值守权限。该 Agent 跨 Workspace 可见且不依赖普通 Agent Project binding，不可删除或切换成 Chat 角色；它绑定的外部 Skill、MCP、HTTP Tool 仍必须满足当前 Project resource binding。名称不代表真正的开放式搜索能力，`WebFetch` 仍只读取已知公开 URL。
 
