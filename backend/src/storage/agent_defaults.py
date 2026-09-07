@@ -43,6 +43,5 @@ def is_stale_desktop_default_project_path(value: str) -> bool:
     return (
         not value.strip()
         or is_pyinstaller_temp_path(value)
-        or is_macos_ephemeral_path(value)
         or (not path.is_dir() and "agent-workstation" in str(path).lower())
     )

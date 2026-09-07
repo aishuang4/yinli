@@ -1,6 +1,6 @@
 /** 群聊工作室独立界面。布局对齐 Chat：左列表、中对话、右可折叠上下文。 */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   PanelLeftOpen,
   PanelRightClose,
@@ -62,6 +62,21 @@ import { useGroupStudioStream, type StudioTimelineMessage } from './useGroupStud
 import './GroupStudioPage.css';
 
 const HISTORY_PANEL_TRANSITION_MS = 260;
+const HISTORY_AUTO_COLLAPSE_WIDTH = 1180;
+const CONTEXT_AUTO_COLLAPSE_WIDTH = 940;
+
+type ResponsiveCollapseTier = 0 | 1 | 2;
+type ResponsivePanePreference = 'history' | 'context' | null;
+
+function getResponsiveCollapseTier(width: number): ResponsiveCollapseTier {
+  if (width < CONTEXT_AUTO_COLLAPSE_WIDTH) {
+    return 2;
+  }
+  if (width < HISTORY_AUTO_COLLAPSE_WIDTH) {
+    return 1;
+  }
+  return 0;
+}
 
 const STATUS_LABEL: Record<string, string> = {
   drafting: '对谈中',
@@ -106,6 +121,9 @@ export function GroupStudioPage() {
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [historyPanelMounted, setHistoryPanelMounted] = useState(true);
   const [contextCollapsed, setContextCollapsed] = useState(false);
+  const [responsiveCollapseTier, setResponsiveCollapseTier] = useState<ResponsiveCollapseTier>(0);
+  const [responsivePanePreference, setResponsivePanePreference] = useState<ResponsivePanePreference>(null);
+  const shellRef = useRef<HTMLDivElement>(null);
   const historyTransitionTimerRef = useRef<number | null>(null);
   const isDesktopShell = Boolean(window.electronAPI);
   const desktopPlatform = window.electronAPI?.getPlatform();
@@ -114,6 +132,38 @@ export function GroupStudioPage() {
   const isMac = desktopPlatform === 'darwin'
     || (!window.electronAPI && /Mac/i.test(navigator.platform));
   const shortcutLabel = isMac ? '⌘⇧G' : 'Ctrl+Shift+G';
+  const responsiveHistoryCollapsed = responsiveCollapseTier >= 1
+    && responsivePanePreference !== 'history';
+  const responsiveContextCollapsed = responsiveCollapseTier === 2
+    ? responsivePanePreference !== 'context'
+    : responsiveCollapseTier === 1 && responsivePanePreference === 'history';
+  const effectiveHistoryCollapsed = historyCollapsed || responsiveHistoryCollapsed;
+  const effectiveContextCollapsed = contextCollapsed || responsiveContextCollapsed;
+
+  useLayoutEffect(() => {
+    const shell = shellRef.current;
+    if (!shell) {
+      return;
+    }
+
+    const updateTier = (width: number) => {
+      setResponsiveCollapseTier(getResponsiveCollapseTier(width));
+    };
+    updateTier(shell.getBoundingClientRect().width);
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) {
+        updateTier(entry.contentRect.width);
+      }
+    });
+    observer.observe(shell);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    setResponsivePanePreference(null);
+  }, [responsiveCollapseTier]);
 
   const refreshStudio = useCallback(async (targetId: string) => {
     const [snapshot, nextFiles] = await Promise.all([
@@ -187,6 +237,7 @@ export function GroupStudioPage() {
     if (historyTransitionTimerRef.current !== null) {
       window.clearTimeout(historyTransitionTimerRef.current);
     }
+    setResponsivePanePreference((current) => (current === 'history' ? null : current));
     setHistoryCollapsed(true);
     historyTransitionTimerRef.current = window.setTimeout(() => {
       setHistoryPanelMounted(false);
@@ -199,14 +250,21 @@ export function GroupStudioPage() {
       window.clearTimeout(historyTransitionTimerRef.current);
       historyTransitionTimerRef.current = null;
     }
+    setResponsivePanePreference('history');
     setHistoryPanelMounted(true);
     setHistoryCollapsed(true);
     window.requestAnimationFrame(() => setHistoryCollapsed(false));
   }, []);
 
   const handleToggleContext = useCallback(() => {
-    setContextCollapsed((value) => !value);
-  }, []);
+    if (effectiveContextCollapsed) {
+      setContextCollapsed(false);
+      setResponsivePanePreference('context');
+      return;
+    }
+    setContextCollapsed(true);
+    setResponsivePanePreference((current) => (current === 'context' ? null : current));
+  }, [effectiveContextCollapsed]);
 
   const persistStudio = useCallback(async (
     current: GroupStudioSnapshot,
@@ -683,25 +741,18 @@ export function GroupStudioPage() {
 
   return (
     <div
+      ref={shellRef}
       className="chat-page-shell chat-workbench-shell group-studio-shell grid h-full min-h-0 overflow-hidden"
       data-history-mounted={historyPanelMounted}
-      data-history-collapsed={historyCollapsed}
-      data-context-collapsed={contextCollapsed}
+      data-history-collapsed={effectiveHistoryCollapsed}
+      data-context-collapsed={effectiveContextCollapsed}
       data-electron-shell={isDesktopShell}
       data-windows-shell={isWindowsDesktopShell}
-      style={{
-        gridTemplateColumns: [
-          historyPanelMounted ? (historyCollapsed ? '0px' : '286px') : '',
-          'minmax(0, 1fr)',
-          'auto',
-        ].filter(Boolean).join(' '),
-        transition: `grid-template-columns ${HISTORY_PANEL_TRANSITION_MS}ms var(--ease-out)`,
-      }}
     >
       {historyPanelMounted ? (
         <StudioHistoryPanel
           activeGroupId={groupId}
-          collapsed={historyCollapsed}
+          collapsed={effectiveHistoryCollapsed}
           isMacDesktopShell={isMacDesktopShell}
           loading={studiosLoading}
           studios={studios}
@@ -716,10 +767,10 @@ export function GroupStudioPage() {
         <div className="grid min-h-0 grid-rows-[auto_1fr_auto] overflow-hidden">
           <header
             className="chat-workbench-topbar flex items-center justify-between gap-4 px-8 py-2"
-            style={isMacDesktopShell && (!historyPanelMounted || historyCollapsed) ? { paddingLeft: 128 } : undefined}
+            style={isMacDesktopShell && (!historyPanelMounted || effectiveHistoryCollapsed) ? { paddingLeft: 128 } : undefined}
           >
             <div className="flex min-w-0 items-center gap-3">
-              {historyCollapsed ? (
+              {effectiveHistoryCollapsed ? (
                 <>
                   <Tooltip title="展开群聊列表" placement="bottom" mode="dark">
                     <button
@@ -812,14 +863,14 @@ export function GroupStudioPage() {
                   <span>{studio.status === 'closing' ? '确认结项' : '结束'}</span>
                 </button>
               ) : null}
-              <Tooltip title={contextCollapsed ? '展开成员与黑板' : '折叠成员与黑板'} placement="bottom" mode="dark">
+              <Tooltip title={effectiveContextCollapsed ? '展开成员与黑板' : '折叠成员与黑板'} placement="bottom" mode="dark">
                 <button
                   type="button"
                   className="icon-button chat-workbench-top-action h-9 w-9 rounded-xl"
                   onClick={handleToggleContext}
-                  aria-label={contextCollapsed ? '展开成员与黑板' : '折叠成员与黑板'}
+                  aria-label={effectiveContextCollapsed ? '展开成员与黑板' : '折叠成员与黑板'}
                 >
-                  {contextCollapsed ? <PanelRightOpen size={17} /> : <PanelRightClose size={17} />}
+                  {effectiveContextCollapsed ? <PanelRightOpen size={17} /> : <PanelRightClose size={17} />}
                 </button>
               </Tooltip>
               <NotificationBell />
@@ -946,11 +997,11 @@ export function GroupStudioPage() {
         </div>
       </section>
 
-      <div className="group-studio-context-slot" data-collapsed={contextCollapsed || undefined}>
+      <div className="group-studio-context-slot" data-collapsed={effectiveContextCollapsed || undefined}>
         <StudioContextPanel
           adding={adding}
           addingAgentId={addingAgentId}
-          collapsed={contextCollapsed}
+          collapsed={effectiveContextCollapsed}
           files={files}
           goal={goal}
           memberBusyId={memberBusyId}

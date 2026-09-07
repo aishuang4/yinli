@@ -82,9 +82,11 @@ if (Test-Path -LiteralPath $ownerPath) {
   Write-Host 'No stale backend process record found.'
 }
 
-$portOwners = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
+$portOwners = 39100..39299 | ForEach-Object {
+  Get-NetTCPConnection -LocalPort $_ -State Listen -ErrorAction SilentlyContinue
+}
 if ($portOwners) {
-  Write-Host 'Port 8765 is still listening in these processes:' -ForegroundColor Yellow
+  Write-Host 'A YINLI desktop backend port is still listening in these processes:' -ForegroundColor Yellow
   $portOwners | Select-Object LocalAddress, LocalPort, OwningProcess | Format-Table -AutoSize
   $portOwners | ForEach-Object { Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue } |
     Select-Object Id, ProcessName, Path | Format-Table -AutoSize

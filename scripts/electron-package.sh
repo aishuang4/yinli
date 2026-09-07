@@ -31,6 +31,16 @@ fi
 
 cd "$ROOT_DIR/frontend"
 
+if [ "$TARGET" = "win" ]; then
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) ;;
+    *)
+      echo "Windows 安装包必须在 Windows 原生环境构建，以确保内置 backend-server.exe 与目标系统匹配。"
+      exit 1
+      ;;
+  esac
+fi
+
 package_macos() {
   local version package_arch app_path zip_path dmg_path
 

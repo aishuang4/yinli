@@ -1,8 +1,27 @@
 .group-studio-shell {
+  --group-studio-history-width: 286px;
+  --group-studio-context-width: 300px;
+  --group-studio-history-track-width: var(--group-studio-history-width);
+  --group-studio-context-track-width: var(--group-studio-context-width);
+  display: grid;
+  grid-template-columns:
+    var(--group-studio-history-track-width)
+    minmax(0, 1fr)
+    var(--group-studio-context-track-width);
   height: 100%;
   min-height: 0;
   background: var(--chat-workbench-bg, var(--color-bg-primary));
   color: var(--color-text-primary);
+  transition: grid-template-columns 260ms var(--ease-out);
+}
+
+.group-studio-shell[data-history-mounted="false"],
+.group-studio-shell[data-history-collapsed="true"] {
+  --group-studio-history-track-width: 0px;
+}
+
+.group-studio-shell[data-context-collapsed="true"] {
+  --group-studio-context-track-width: 0px;
 }
 
 .group-studio-msg {
@@ -175,10 +194,12 @@
 }
 
 .group-studio-context-slot {
-  width: 300px;
+  width: var(--group-studio-context-width);
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   transition: width 260ms var(--ease-out);
 }
 
@@ -192,7 +213,7 @@
   grid-template-rows: auto auto auto auto auto;
   align-content: start;
   align-items: start;
-  width: 300px;
+  width: var(--group-studio-context-width);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -888,6 +909,55 @@
     width: 100%;
     margin-left: 32px;
     justify-content: flex-end;
+  }
+}
+
+/* 打包后的默认 1280px 窗口需要同时容纳群聊列表、对话与上下文。 */
+@media (max-width: 1400px) {
+  .group-studio-shell {
+    --group-studio-history-width: 240px;
+    --group-studio-context-width: 260px;
+  }
+
+  .group-studio-shell .chat-workbench-topbar {
+    gap: 12px;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .group-studio-shell .chat-workbench-topbar .chat-workbench-top-action > span {
+    display: none;
+  }
+
+  .group-studio-shell .chat-workbench-topbar .chat-workbench-top-action.inline-flex {
+    width: 36px;
+    padding-right: 0;
+    padding-left: 0;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 1024px) {
+  .group-studio-shell {
+    --group-studio-history-width: 200px;
+    --group-studio-context-width: 224px;
+  }
+
+  .group-studio-shell .chat-workbench-history {
+    display: flex;
+  }
+
+  .group-studio-shell .chat-workbench-topbar {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .group-studio-shell .chat-workbench-topbar > :last-child {
+    gap: 4px;
+  }
+
+  .group-studio-shell .chat-workbench-status-tag {
+    display: none;
   }
 }
 

@@ -67,6 +67,12 @@ run(
   buildEnv,
 );
 
+const windowsBackend = resolve(backendDir, 'dist/backend-server.exe');
+if (!existsSync(windowsBackend)) {
+  console.error('Windows 打包中止：未生成 backend/dist/backend-server.exe。请在 Windows 原生环境重新运行。');
+  process.exit(1);
+}
+
 console.log('构建前端...');
 run(process.execPath, [npmCli, 'run', 'build'], frontendDir, buildEnv);
 

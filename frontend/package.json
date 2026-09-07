@@ -13,6 +13,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "electron:compile": "tsc -p ../electron/tsconfig.json && node ../scripts/prepare-electron-dist.mjs",
+    "release:preflight": "node ../scripts/release-preflight.mjs",
     "electron:dev": "../scripts/electron-dev.sh",
     "electron:dev:win": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/debug-windows-source.ps1",
     "electron:dev:win:install": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/debug-windows-source.ps1 -InstallDependencies",

@@ -116,6 +116,8 @@ def test_react_runtime_only_enables_plan_features_for_explicit_plan_request(monk
         "ListJobs",
         "PauseJob",
         "ConfirmJob",
+        "CheckJobFeasibility",
+        "RecheckJobCapabilities",
     ]
     assert plan_parts[0] is not None
     assert plan_parts[0].context.plan_active is True

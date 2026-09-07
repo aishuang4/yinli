@@ -232,9 +232,10 @@ def _provider_configs_from_stored(stored: dict[str, Any], defaults: dict[str, An
             base = _default_provider_config(provider)
             result[provider_id] = {
                 "providerName": str(raw.get("providerName") or base["providerName"]),
+                "apiKeySuppressed": bool(raw.get("apiKeySuppressed")),
                 "apiKeyConfigured": bool(
-                    raw.get("apiKeyConfigured")
-                    or base["apiKeyConfigured"]
+                    not raw.get("apiKeySuppressed")
+                    and (raw.get("apiKeyConfigured") or base["apiKeyConfigured"])
                 ),
                 "baseUrl": str(raw.get("baseUrl") or base["baseUrl"]),
                 "defaultModel": str(raw.get("defaultModel") or base["defaultModel"]),
@@ -252,9 +253,10 @@ def _provider_configs_from_stored(stored: dict[str, Any], defaults: dict[str, An
     }
     result[provider.id] = {
         "providerName": str(stored.get("providerName") or provider.name),
+        "apiKeySuppressed": bool(stored.get("apiKeySuppressed")),
         "apiKeyConfigured": bool(
-            stored.get("apiKeyConfigured")
-            or _default_provider_api_key(provider.id)
+            not stored.get("apiKeySuppressed")
+            and (stored.get("apiKeyConfigured") or _default_provider_api_key(provider.id))
         ),
         "baseUrl": str(stored.get("baseUrl") or provider.default_base_url),
         "defaultModel": str(stored.get("defaultModel") or provider.default_model),
@@ -333,9 +335,11 @@ def _clear_unreadable_provider_key(stored: dict[str, Any], provider_id: str) -> 
         config = provider_configs.get(provider_id)
         if isinstance(config, dict):
             config.pop("apiKey", None)
+            config["apiKeySuppressed"] = True
             config["apiKeyConfigured"] = False
     if str(cleared.get("provider") or "") == provider_id:
         cleared.pop("apiKey", None)
+        cleared["apiKeySuppressed"] = True
         cleared["apiKeyConfigured"] = False
     upsert_json_record(SYSTEM_SETTINGS_NAMESPACE, MODEL_SETTINGS_KEY, cleared)
     return cleared
@@ -353,12 +357,17 @@ def get_model_settings_raw() -> dict[str, Any]:
     provider_configs = _provider_configs_from_stored(stored, defaults)
     current = provider_configs[provider.id]
     try:
-        api_key = get_model_api_key(provider.id) or _default_provider_api_key(provider.id)
+        api_key = (
+            ""
+            if current.get("apiKeySuppressed")
+            else get_model_api_key(provider.id) or _default_provider_api_key(provider.id)
+        )
     except SecretStoreError:
         stored = _clear_unreadable_provider_key(stored, provider.id)
         provider_configs = _provider_configs_from_stored(stored, defaults)
         current = provider_configs[provider.id]
-        api_key = _default_provider_api_key(provider.id)
+        # 安全存储不可读时必须强制重新配置，不能回退到可能已失效的启动期 Key。
+        api_key = ""
     current["apiKeyConfigured"] = bool(api_key)
     return {
         "provider": provider.id,
@@ -422,20 +431,24 @@ def get_model_settings_public() -> dict[str, Any]:
         for item in MODEL_PROVIDERS.values():
             config = raw["providerConfigs"].get(item.id, {})
             config["apiKeyConfigured"] = bool(
-                get_model_api_key(item.id)
-                or _default_provider_api_key(item.id)
+                not config.get("apiKeySuppressed")
+                and (get_model_api_key(item.id) or _default_provider_api_key(item.id))
             )
     except SecretStoreError:
         for item in MODEL_PROVIDERS.values():
             config = raw["providerConfigs"].get(item.id, {})
             try:
-                configured = get_model_api_key(item.id) or _default_provider_api_key(item.id)
+                configured = (
+                    ""
+                    if config.get("apiKeySuppressed")
+                    else get_model_api_key(item.id) or _default_provider_api_key(item.id)
+                )
             except SecretStoreError:
                 _clear_unreadable_provider_key(
                     get_json_record(SYSTEM_SETTINGS_NAMESPACE, MODEL_SETTINGS_KEY) or {},
                     item.id,
                 )
-                configured = _default_provider_api_key(item.id)
+                configured = ""
             config["apiKeyConfigured"] = bool(configured)
     return {
         "provider": raw["provider"],
@@ -499,9 +512,12 @@ def save_model_settings(data: dict[str, Any]) -> dict[str, Any]:
     try:
         if data.get("clearApiKey"):
             delete_model_api_key(provider_id)
-            next_config["apiKeyConfigured"] = bool(_default_provider_api_key(provider_id))
+            # 清除操作也必须覆盖启动期默认 Key 的配置标记。
+            next_config["apiKeySuppressed"] = True
+            next_config["apiKeyConfigured"] = False
         elif str(data.get("apiKey") or "").strip():
             set_model_api_key(provider_id, str(data["apiKey"]))
+            next_config["apiKeySuppressed"] = False
             next_config["apiKeyConfigured"] = True
     except SecretStoreError as exc:
         raise ValueError("API Key 无法写入系统安全凭据库。") from exc

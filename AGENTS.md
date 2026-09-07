@@ -18,7 +18,7 @@ This file provides guidance to AI coding agents when working with code in this r
 uv sync                                                          # 安装依赖
 uv run python -m uvicorn src.server.main:app --reload --port 8765  # 启动 API
 uv run pytest                                                    # 运行全部测试
-uv run pytest test/test_example.py::test_always_passes           # 运行单个测试
+uv run pytest test/test_secret_store.py::test_memory_secret_store_round_trip  # 运行单个测试
 
 # 前端（在 frontend/ 目录）
 npm install

@@ -768,9 +768,17 @@ class ScheduledJobService:
                 from_scheduled = next_weekly_anchor_after(
                     parse_stored_datetime(firing.scheduled_for), **kwargs,
                 )
-                from_now = next_weekly_anchor_after(now, **kwargs)
-                nxt = from_scheduled if from_scheduled >= from_now else from_now
-                changes["next_run_at"] = to_utc_iso(nxt)
+                # 通常只消费当前到期槽之后的第一个锚点；若周期内还有更早的
+                # 锚点已经经过（例如周一/周五任务周六才补跑），再从当前时间续算。
+                # 单一周几没有中间锚点，直接推进一个周期；多周几任务可能
+                # 在补跑前已经错过另一个锚点，才需要从当前时间续算。
+                if len(kwargs["weekdays"]) == 1:
+                    next_run = from_scheduled
+                elif from_scheduled > now:
+                    next_run = from_scheduled
+                else:
+                    next_run = next_weekly_anchor_after(now, **kwargs)
+                changes["next_run_at"] = to_utc_iso(next_run)
             else:
                 nxt = next_weekly_anchor_after(
                     parse_stored_datetime(firing.scheduled_for), **kwargs,
