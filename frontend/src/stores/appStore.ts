@@ -75,6 +75,7 @@ interface AppState {
   openGroupStudio: (groupId: string, seed?: { chatSessionId: string; agentId: string; modelConfigId?: string }) => void;
   /** 收起工作室，回到 Chat。 */
   closeGroupStudio: () => void;
+  clearActiveGroupStudio: () => void;
   /** 由 App 壳层推进过渡相位。 */
   advanceStudioTransition: () => void;
 }
@@ -138,6 +139,7 @@ export const useAppStore = create<AppState>()((set) => ({
     }
     return { studioTransition: 'leave-collapse' };
   }),
+  clearActiveGroupStudio: () => set({ activeGroupStudioId: null, localStudioSeed: null }),
   advanceStudioTransition: () => set((state) => {
     if (state.studioTransition === 'enter-collapse') {
       return { studioTransition: 'enter-expand' };

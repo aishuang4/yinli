@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { ScrollToBottomButton } from '../../components/ScrollToBottomButton';
 import { useMessageScroll } from '../../components/useMessageScroll';
-import { Spinner, Tag, Tooltip } from '@/components/design';
+import { Modal, Spinner, Tag, Tooltip } from '@/components/design';
 import { NotificationBell } from '../notifications/NotificationBell';
 import { useAgents } from '../../hooks/useAgents';
 import { useAppStore } from '../../stores/appStore';
@@ -112,6 +112,7 @@ function getGroupRuntimeErrorMessage(message: string): string {
 export function GroupStudioPage() {
   const groupId = useAppStore((state) => state.activeGroupStudioId);
   const closeGroupStudio = useAppStore((state) => state.closeGroupStudio);
+  const clearActiveGroupStudio = useAppStore((state) => state.clearActiveGroupStudio);
   const openGroupStudio = useAppStore((state) => state.openGroupStudio);
   const studioSurface = useAppStore((state) => state.studioSurface);
   const localStudioSeed = useAppStore((state) => state.localStudioSeed);
@@ -135,6 +136,8 @@ export function GroupStudioPage() {
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<GroupStudioListItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const [addingAgentId, setAddingAgentId] = useState('');
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
@@ -329,18 +332,34 @@ export function GroupStudioPage() {
   };
 
   const handleDeleteStudio = async (item: GroupStudioListItem) => {
-    if (!window.confirm(`确定删除群聊“${item.title || '未命名工作室'}”吗？删除后将从群聊列表移除。`)) {
+    setDeleteConfirm(item);
+  };
+
+  const handleConfirmDeleteStudio = async () => {
+    if (!deleteConfirm) {
       return;
     }
+    const item = deleteConfirm;
+    setDeleting(true);
     try {
       await deleteStudio(item.id, activeProjectId);
-      if (groupId === item.id) {
-        closeGroupStudio();
-      }
       await refreshStudioList();
+      if (groupId === item.id) {
+        const nextStudio = studios.find((studio) => studio.id !== item.id);
+        if (nextStudio) {
+          openGroupStudio(nextStudio.id);
+        } else {
+          clearActiveGroupStudio();
+          setStudio(null);
+          setFiles([]);
+        }
+      }
+      setDeleteConfirm(null);
       notifySuccess('群聊已删除');
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法删除群聊'));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -1116,6 +1135,25 @@ export function GroupStudioPage() {
           onOpenMembers={handleOpenMembers}
         />
       </div>
+      <Modal
+        title="删除群聊"
+        open={Boolean(deleteConfirm)}
+        onCancel={() => {
+          if (!deleting) {
+            setDeleteConfirm(null);
+          }
+        }}
+        onOk={() => void handleConfirmDeleteStudio()}
+        okText="删除"
+        cancelText="取消"
+        okButtonProps={{ danger: true, loading: deleting }}
+        cancelButtonProps={{ disabled: deleting }}
+        destroyOnHidden
+      >
+        <p>
+          确定删除“{deleteConfirm?.title || '未命名工作室'}”吗？删除后将从群聊列表移除。
+        </p>
+      </Modal>
     </div>
   );
 }
