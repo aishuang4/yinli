@@ -240,7 +240,7 @@ def test_job_agent_forbidden(client):
     assert response.json()["detail"] == JOB_AGENT_FORBIDDEN
 
 
-def test_unbound_agent_forbidden(client):
+def test_unbound_agent_is_allowed_within_workspace(client):
     upsert_agent({
         "id": "agent-unbound",
         "name": "未绑定",
@@ -250,8 +250,8 @@ def test_unbound_agent_forbidden(client):
         "role": "chat",
     })
     response = _from_chat(client, chatSessionId="sess-unbound", agentId="agent-unbound")
-    assert response.status_code == 403
-    assert response.json()["detail"] == AGENT_NOT_BOUND
+    assert response.status_code == 200
+    assert any(member["agentId"] == "agent-unbound" for member in response.json()["members"])
 
 
 def test_bound_agent_becomes_first_worker(client):

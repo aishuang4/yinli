@@ -1,6 +1,6 @@
 /** 群聊工作室独立界面。布局对齐 Chat：左列表、中对话、右可折叠上下文。 */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   PanelLeftOpen,
   PanelRightClose,
@@ -18,7 +18,6 @@ import { useMessageScroll } from '../../components/useMessageScroll';
 import { Spinner, Tag, Tooltip } from '@/components/design';
 import { NotificationBell } from '../notifications/NotificationBell';
 import { useAgents } from '../../hooks/useAgents';
-import { useProjectResources } from '../../hooks/useProjectResources';
 import { useAppStore } from '../../stores/appStore';
 import { getErrorMessage, notifyError, notifySuccess } from '../../utils/feedback';
 import { createId } from '../../utils/id';
@@ -30,6 +29,7 @@ import {
   createStudioFromChat,
   decideStudioApproval,
   deleteStudio,
+  fetchAvailableStudioAgents,
   fetchGroupStudio,
   fetchStudioFiles,
   fetchStudioList,
@@ -52,6 +52,7 @@ import { StudioContextPanel } from './StudioContextPanel';
 import { StudioHistoryPanel } from './StudioHistoryPanel';
 import { StudioMessageList } from './StudioMessageList';
 import type {
+  GroupStudioAgentOption,
   GroupStudioApproval,
   GroupStudioBlackboard,
   GroupStudioFile,
@@ -117,13 +118,13 @@ export function GroupStudioPage() {
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
   const setView = useAppStore((state) => state.setView);
-  const { agents, refresh: refreshAgents } = useAgents();
+  const { agents } = useAgents();
   const { catalog: modelCatalog, loading: modelsLoading, error: modelsError } = useModelCatalog();
   const [studio, setStudio] = useState<GroupStudioSnapshot | null>(null);
   const [files, setFiles] = useState<GroupStudioFile[]>([]);
   const [studios, setStudios] = useState<GroupStudioListItem[]>([]);
   const [studiosLoading, setStudiosLoading] = useState(false);
-  const { enabledByType, refresh: refreshProjectResources } = useProjectResources(studio?.projectId || activeProjectId);
+  const [availableAgents, setAvailableAgents] = useState<GroupStudioAgentOption[]>([]);
   const [error, setError] = useState('');
   const [runtimeError, setRuntimeError] = useState('');
   const [goal, setGoal] = useState('');
@@ -134,19 +135,6 @@ export function GroupStudioPage() {
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-
-  // 群聊页面可能在切换到 Agent 管理页时保持挂载；回到前台时刷新，确保智能创建的 Agent 可立即加入。
-  useEffect(() => {
-    const refresh = () => {
-      void refreshAgents();
-    };
-    window.addEventListener('focus', refresh);
-    window.addEventListener('pageshow', refresh);
-    return () => {
-      window.removeEventListener('focus', refresh);
-      window.removeEventListener('pageshow', refresh);
-    };
-  }, [refreshAgents]);
 
   const [addingAgentId, setAddingAgentId] = useState('');
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
@@ -487,24 +475,7 @@ export function GroupStudioPage() {
   useEffect(() => {
     resetScroll();
   }, [groupId, resetScroll]);
-  const memberOptions = useMemo(() => {
-    const occupied = new Set(
-      (studio?.members ?? [])
-        .filter((member) => member.status !== 'removed')
-        .map((member) => member.agentId),
-    );
-    return agents
-      .filter((agent) => (
-        agent.role !== 'job'
-        && (agent.id === 'default' || enabledByType.agent.has(agent.id))
-        && !occupied.has(agent.id)
-      ))
-      .map((agent) => ({
-        id: agent.id,
-        name: agent.id === 'default' ? `${agent.name} · 默认助手` : agent.name,
-        description: agent.description || '',
-      }));
-  }, [agents, enabledByType.agent, studio?.members]);
+  const memberOptions = availableAgents;
 
   const handleSaveGoal = async (nextGoal: string) => {
     if (!studio || !nextGoal.trim()) {
@@ -554,7 +525,12 @@ export function GroupStudioPage() {
   };
 
   const handleOpenMembers = () => {
-    void Promise.all([refreshAgents(), refreshProjectResources()]);
+    if (!studio) {
+      return;
+    }
+    void fetchAvailableStudioAgents(studio.id)
+      .then(setAvailableAgents)
+      .catch((cause) => notifyError(getErrorMessage(cause, '无法加载可加入的 Agent')));
   };
 
   const handleMuteMember = async (memberId: string, muted: boolean) => {

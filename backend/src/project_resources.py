@@ -46,7 +46,7 @@ class ProjectResourceAccess:
         ]
 
     def require_agent(self, agent_id: str) -> None:
-        """拒绝运行未绑定的持久 Agent；系统 default / 群聊 Host 哨兵不属于持久资源。"""
+        """校验普通 Agent 属于当前 Workspace；Agent 不再要求 Project 绑定。"""
 
         if is_system_agent_id(agent_id) or agent_id == "group-studio-host":
             return
@@ -55,8 +55,6 @@ class ProjectResourceAccess:
             resource_type="agent",
             resource_id=agent_id,
         )
-        if agent_id not in self.agent_ids:
-            raise ValueError(f"Agent {agent_id} 未绑定到 Project {self.project_id}。")
 
 
 def resolve_project_resource_access(context: RuntimeContext) -> ProjectResourceAccess:

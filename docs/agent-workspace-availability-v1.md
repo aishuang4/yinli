@@ -1,6 +1,6 @@
 # Agent Workspace 可用性与 Project 解耦方案 v1
 
-> 状态：待评审
+> 状态：已实施 v1
 > 
 > 目标：面向本地个人工作台，取消 Agent 必须绑定 Project 才能使用的隐式前置条件。
 

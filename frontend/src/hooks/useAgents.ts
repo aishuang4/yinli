@@ -15,7 +15,6 @@ import type {
 } from '../types/agent';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { useAppStore } from '../stores/appStore';
-import { bindProjectResource } from '../utils/projectResources';
 
 /** Hook 返回值 */
 interface UseAgentsReturn {
@@ -219,7 +218,6 @@ function profileFromLegacyToolMode(mode: string | undefined): 'read_only' | 'tru
  */
 export function useAgents(): UseAgentsReturn {
   const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -256,7 +254,6 @@ export function useAgents(): UseAgentsReturn {
       }
       const data: AgentApiData = await res.json();
       const agent = mapApiAgent(data);
-      await bindProjectResource(activeProjectId, 'agent', agent.id);
       setAgents((prev) => [...prev, agent]);
       notifySuccess('Agent 创建成功');
       return agent;
@@ -264,7 +261,7 @@ export function useAgents(): UseAgentsReturn {
       notifyError(`Agent 创建失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [activeProjectId, activeWorkspaceId]);
+  }, [activeWorkspaceId]);
 
   /** 更新 Agent */
   const updateAgent = useCallback(async (id: string, payload: AgentUpdatePayload): Promise<Agent> => {

@@ -2,6 +2,7 @@
 
 import type {
   GroupStudioApproval,
+  GroupStudioAgentOption,
   GroupStudioFile,
   GroupStudioListItem,
   GroupStudioMember,
@@ -48,6 +49,14 @@ export async function fetchGroupStudio(groupId: string): Promise<GroupStudioSnap
     throw new Error(await readDetail(response, '无法加载工作室'));
   }
   return await response.json() as GroupStudioSnapshot;
+}
+
+export async function fetchAvailableStudioAgents(groupId: string): Promise<GroupStudioAgentOption[]> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/available-agents`);
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法加载可加入的 Agent'));
+  }
+  return await response.json() as GroupStudioAgentOption[];
 }
 
 export async function updateStudioModel(groupId: string, projectId: string, modelConfigId: string): Promise<GroupStudioSnapshot> {

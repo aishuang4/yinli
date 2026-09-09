@@ -43,7 +43,6 @@ from src.group_studio.orchestrator import (
     max_members,
 )
 from src.group_studio.settings import get_group_studio_settings_public
-from src.project_resources import resolve_project_resource_access
 from src.runtime_context import resolve_runtime_context
 from src.server.routes.chat.lifecycle import ACTIVE_RUN_STATUSES
 from src.server.routes.chat.store import (
@@ -92,12 +91,14 @@ def _raise_if_chat_run_active(session_id: str) -> None:
             raise GroupStudioError(409, CHAT_RUN_ACTIVE)
 
 
-def _resolve_worker(agent_id: str) -> dict[str, str]:
+def _resolve_worker(agent_id: str, workspace_id: str) -> dict[str, str]:
     if agent_id == "default":
         return {"id": "default", "name": "默认助手", "role": "chat"}
     for agent in list_agents():
         if str(agent.get("id") or "") != agent_id:
             continue
+        if str(agent.get("workspaceId") or "default") != workspace_id:
+            raise GroupStudioError(403, AGENT_NOT_BOUND)
         role = str(agent.get("role") or "chat")
         if role == "job":
             raise GroupStudioError(403, JOB_AGENT_FORBIDDEN)
@@ -110,7 +111,7 @@ def _resolve_worker(agent_id: str) -> dict[str, str]:
 
 
 def list_invitable_agents(group_id: str) -> list[dict[str, str]]:
-    """列出当前项目里还能拉进本群的 Agent（已在群内 / Job / Host 哨兵除外）。"""
+    """列出当前 Workspace 里还能拉进本群的普通 Agent。"""
 
     studio = _load_studio(group_id)
     occupied = {
@@ -119,25 +120,14 @@ def list_invitable_agents(group_id: str) -> list[dict[str, str]]:
         if member.status != "removed"
     }
     occupied.add(GROUP_STUDIO_HOST_AGENT_ID)
-    try:
-        context = resolve_runtime_context(
-            project_id=studio.project_id,
-            session_id=studio.chat_session_id,
-            run_id="",
-            agent_id="default",
-        )
-        access = resolve_project_resource_access(context)
-        allowed = access.agent_ids
-    except ValueError:
-        allowed = None
     candidates: list[dict[str, str]] = []
     for agent in list_agents():
         agent_id = str(agent.get("id") or "")
         if not agent_id or agent_id in occupied:
             continue
-        if str(agent.get("role") or "chat") == "job":
+        if str(agent.get("workspaceId") or "default") != studio.workspace_id:
             continue
-        if agent_id != "default" and allowed is not None and agent_id not in allowed:
+        if str(agent.get("role") or "chat") == "job":
             continue
         candidates.append({
             "id": agent_id,
@@ -226,22 +216,16 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
             if blank is not None:
                 return _snapshot_to_model(blank)
 
-    worker = _resolve_worker(request.agent_id)
     try:
         context = resolve_runtime_context(
             project_id=request.project_id,
             session_id="",
             run_id="",
-            agent_id=worker["id"],
+                agent_id=request.agent_id,
         )
     except ValueError as exc:
         raise GroupStudioError(422, CROSS_PROJECT_SESSION) from exc
-
-    try:
-        access = resolve_project_resource_access(context)
-        access.require_agent(worker["id"])
-    except ValueError as exc:
-        raise GroupStudioError(403, AGENT_NOT_BOUND) from exc
+    worker = _resolve_worker(request.agent_id, context.workspace_id)
 
     try:
         ensure_chat_session(
@@ -502,7 +486,7 @@ def update_task_card(group_id: str, request: GroupTaskCardUpdateRequest) -> Task
 
 
 def add_member(group_id: str, request: GroupMemberCreateRequest) -> Membership:
-    """加人：Project 白名单、Job 过滤、人数硬顶 6、Host 哨兵不可当 Worker。"""
+    """加人：Workspace 归属、Job 过滤、人数硬顶 6、Host 哨兵不可当 Worker。"""
 
     studio = _load_studio(group_id)
     if request.project_id and request.project_id != studio.project_id:
@@ -513,24 +497,13 @@ def add_member(group_id: str, request: GroupMemberCreateRequest) -> Membership:
     if request.agent_id == GROUP_STUDIO_HOST_AGENT_ID:
         raise GroupStudioError(409, HOST_REQUIRED)
 
-    worker = _resolve_worker(request.agent_id)
+    worker = _resolve_worker(request.agent_id, studio.workspace_id)
     existing = find_group_studio_member_by_agent(group_id, worker["id"])
     if existing is not None:
         return Membership.model_validate(existing)
 
     if count_group_studio_active_members(group_id) >= max_members():
         raise GroupStudioError(409, MEMBER_CAP)
-
-    try:
-        context = resolve_runtime_context(
-            project_id=studio.project_id,
-            session_id=studio.chat_session_id,
-            run_id="",
-            agent_id=worker["id"],
-        )
-        resolve_project_resource_access(context).require_agent(worker["id"])
-    except ValueError as exc:
-        raise GroupStudioError(403, AGENT_NOT_BOUND) from exc
 
     row = insert_group_studio_member(group_id, {
         "id": _new_id("gmbr"),

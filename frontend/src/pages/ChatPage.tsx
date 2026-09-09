@@ -76,7 +76,7 @@ export function ChatPage() {
   const pendingSessionRef = useRef<ChatSession | null>(null);
   const { state, sendMessage, resumeInteraction, subscribeRun, abort, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
-  const { enabledByType, loading: projectResourcesLoading } = useProjectResources(activeProjectId);
+  const { loading: projectResourcesLoading } = useProjectResources(activeProjectId);
   const { workspaces, allProjects } = useWorkspaceProjects();
   const setActiveContext = useAppStore((state) => state.setActiveContext);
   const {
@@ -95,9 +95,9 @@ export function ChatPage() {
     agent.role !== 'job'
     && (
       agent.id === 'default'
-      || (agent.workspaceId === activeWorkspaceId && enabledByType.agent.has(agent.id))
+      || agent.workspaceId === activeWorkspaceId
     )
-  )), [activeWorkspaceId, agents, enabledByType]);
+  )), [activeWorkspaceId, agents]);
 
   const selectedAgent = useMemo(
     () => availableAgents.find((agent) => agent.id === selectedAgentId)

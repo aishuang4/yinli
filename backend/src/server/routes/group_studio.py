@@ -48,6 +48,7 @@ from src.group_studio.service import (
     get_studio_by_chat_session,
     interrupt_run,
     list_studio_files,
+    list_invitable_agents,
     update_studio_model,
     resolve_studio_file,
     list_studio_messages,
@@ -115,6 +116,16 @@ async def get_studio_snapshot(group_id: str) -> GroupStudio:
 
     try:
         return get_studio(group_id)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
+
+
+@router.get("/{group_id}/available-agents", dependencies=[EnabledDep])
+async def list_available_agents_route(group_id: str) -> list[dict[str, str]]:
+    """返回当前 Workspace 中可加入该群聊的普通 Agent。"""
+
+    try:
+        return list_invitable_agents(group_id)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
 
