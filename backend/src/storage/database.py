@@ -286,6 +286,7 @@ def ensure_db() -> None:
                 "TEXT NOT NULL DEFAULT '{\"version\":4,\"lastSeq\":0,\"streamDone\":false,\"order\":[],\"blocksById\":{}}'",
             )
             _ensure_column(conn, "chat_sessions", "mode", "TEXT NOT NULL DEFAULT 'agent'")
+            _ensure_column(conn, "chat_sessions", "model_config_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "agents", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "agents", "role", "TEXT NOT NULL DEFAULT 'chat'")
             _ensure_column(conn, "agents", "job_toolkit", "TEXT NOT NULL DEFAULT '{}'")
@@ -340,10 +341,13 @@ def ensure_db() -> None:
                 conn.execute("ALTER TABLE agents ADD COLUMN knowledge_tools TEXT NOT NULL DEFAULT '[]'")
                 conn.commit()
             _ensure_column(conn, "chat_runs", "updated_at", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "chat_runs", "model_config_json", "TEXT NOT NULL DEFAULT '{}'")
             _ensure_column(conn, "chat_runs", "trigger_source", "TEXT NOT NULL DEFAULT 'user'")
             _ensure_column(conn, "chat_runs", "scheduled_job_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_runs", "scheduled_firing_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'")
+            _ensure_column(conn, "scheduled_jobs", "model_config_id", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "group_studios", "model_config_id", "TEXT NOT NULL DEFAULT ''")
             _drop_column_if_exists(conn, "chat_runs", "team_id")
             _drop_column_if_exists(conn, "chat_runs", "team_name")
             now = _utc_now()
@@ -762,6 +766,7 @@ def load_chat_store() -> dict[str, Any]:
                 "workspace_id": row["workspace_id"],
                 "project_id": row["project_id"],
                 "kind": (row["kind"] if "kind" in row.keys() and row["kind"] else "chat"),
+                "modelConfigId": row["model_config_id"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
                 "message_count": row["message_count"],
@@ -783,8 +788,8 @@ def save_chat_store(data: dict[str, Any]) -> None:
             """
             INSERT INTO chat_sessions (
                 id, title, agent_id, agent_name, mode, workspace_id, project_id, kind,
-                created_at, updated_at, message_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, message_count, model_config_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -795,6 +800,7 @@ def save_chat_store(data: dict[str, Any]) -> None:
                     item.get("kind") or "chat",
                     item["created_at"],
                     item["updated_at"], item.get("message_count", 0),
+                    item.get("modelConfigId", item.get("model_config_id", "")),
                 )
                 for item in sessions
             ],
@@ -1232,6 +1238,12 @@ def set_group_studio_status(group_id: str, status: str) -> None:
 
 def update_group_studio_state(group_id: str, **changes: Any) -> dict[str, Any]:
     return _group_studio_record_store().update_studio_state(group_id, **changes)
+
+
+def update_group_studio_model_config(group_id: str, model_config_id: str) -> dict[str, Any]:
+    return _group_studio_record_store().update_studio_state(
+        group_id, model_config_id=model_config_id
+    )
 
 
 def set_group_studio_current_run_id(group_id: str, run_id: str | None) -> None:

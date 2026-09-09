@@ -61,10 +61,12 @@ export function useGroupStudioStream(
     }
     const controller = new AbortController();
     let buffer = '';
+    let snapshotStatus = '';
 
     const applyEvent = (event: StudioEvent) => {
       if (event.type === 'GROUP_STUDIO_STATE') {
         const payload = event.payload as { messages?: StudioTimelineMessage[]; status?: string };
+        snapshotStatus = String(payload.status || event.status || '');
         setStatus(String(payload.status || event.status || ''));
         setMessages(
           (payload.messages || [])
@@ -76,6 +78,13 @@ export function useGroupStudioStream(
               thinkingStreaming: false,
             })),
         );
+        return;
+      }
+      // 终态工作室只恢复快照，不把历史熔断/错误重新当作当前故障展示。
+      if (
+        snapshotStatus === 'archived'
+        && (event.type === 'GROUP_ERROR' || event.type === 'GROUP_CIRCUIT')
+      ) {
         return;
       }
       if (event.type === 'GROUP_STATUS') {

@@ -138,7 +138,7 @@ export interface SendMessageOptions {
   agentName?: string;
   mode?: 'agent' | 'team';
   systemPrompt?: string;
-  model?: string;
+  modelConfigId?: string;
   sessionId?: string;
   displayMessage?: string;
   skillIds?: string[];

@@ -10,6 +10,7 @@ import {
   Plus,
   Settings,
   Square,
+  CheckCircle2,
   Users,
 } from 'lucide-react';
 import { ScrollToBottomButton } from '../../components/ScrollToBottomButton';
@@ -28,9 +29,11 @@ import {
   confirmStudioRestatement,
   createStudioFromChat,
   decideStudioApproval,
+  deleteStudio,
   fetchGroupStudio,
   fetchStudioFiles,
   fetchStudioList,
+  downloadStudioFile,
   interruptStudio,
   muteStudioMember,
   pauseStudio,
@@ -38,9 +41,12 @@ import {
   removeStudioMember,
   resumeStudio,
   updateTaskCard,
+  updateStudioModel,
   uploadStudioFile,
 } from './api';
 import { GroupApprovalBar } from './GroupApprovalBar';
+import { ModelSelector } from '../models/ModelSelector';
+import { useModelCatalog } from '../models/useModelCatalog';
 import { StudioComposer } from './StudioComposer';
 import { StudioContextPanel } from './StudioContextPanel';
 import { StudioHistoryPanel } from './StudioHistoryPanel';
@@ -91,6 +97,17 @@ const STATUS_LABEL: Record<string, string> = {
   failed: '失败',
 };
 
+function getGroupRuntimeErrorMessage(message: string): string {
+  const normalized = message.toLowerCase();
+  if (normalized.includes('insufficient balance') || normalized.includes('error code: 402')) {
+    return '当前模型余额不足，工作室已暂停。请切换到有余额的模型或补充供应商 Key，然后点击“继续”恢复。';
+  }
+  if (normalized.includes('invalid api key') || normalized.includes('invalid_api_key') || normalized.includes('authentication')) {
+    return '当前供应商 Key 无效，工作室已暂停。请修正 Key 或切换模型，然后点击“继续”恢复。';
+  }
+  return message;
+}
+
 export function GroupStudioPage() {
   const groupId = useAppStore((state) => state.activeGroupStudioId);
   const closeGroupStudio = useAppStore((state) => state.closeGroupStudio);
@@ -100,12 +117,13 @@ export function GroupStudioPage() {
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
   const setView = useAppStore((state) => state.setView);
-  const { agents } = useAgents();
+  const { agents, refresh: refreshAgents } = useAgents();
+  const { catalog: modelCatalog, loading: modelsLoading, error: modelsError } = useModelCatalog();
   const [studio, setStudio] = useState<GroupStudioSnapshot | null>(null);
   const [files, setFiles] = useState<GroupStudioFile[]>([]);
   const [studios, setStudios] = useState<GroupStudioListItem[]>([]);
   const [studiosLoading, setStudiosLoading] = useState(false);
-  const { enabledByType } = useProjectResources(studio?.projectId || activeProjectId);
+  const { enabledByType, refresh: refreshProjectResources } = useProjectResources(studio?.projectId || activeProjectId);
   const [error, setError] = useState('');
   const [runtimeError, setRuntimeError] = useState('');
   const [goal, setGoal] = useState('');
@@ -116,6 +134,19 @@ export function GroupStudioPage() {
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+
+  // 群聊页面可能在切换到 Agent 管理页时保持挂载；回到前台时刷新，确保智能创建的 Agent 可立即加入。
+  useEffect(() => {
+    const refresh = () => {
+      void refreshAgents();
+    };
+    window.addEventListener('focus', refresh);
+    window.addEventListener('pageshow', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('pageshow', refresh);
+    };
+  }, [refreshAgents]);
 
   const [addingAgentId, setAddingAgentId] = useState('');
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
@@ -196,6 +227,7 @@ export function GroupStudioPage() {
           workspaceId: activeWorkspaceId,
           chatSessionId: seed.chatSessionId,
           agentId: seed.agentId,
+          modelConfigId: seed.modelConfigId,
           agentName: agent?.name,
         });
       });
@@ -275,6 +307,7 @@ export function GroupStudioPage() {
     const worker = current.members.find((item) => item.role === 'worker' && item.status !== 'removed');
     const created = await createStudioFromChat({
       projectId: current.projectId,
+      modelConfigId: current.modelConfigId,
       chatSessionId: current.chatSessionId || createId(),
       agentId: worker?.agentId || 'default',
       draftText: '',
@@ -288,7 +321,7 @@ export function GroupStudioPage() {
   }, [openGroupStudio, refreshStudioList]);
 
   const handleNewStudio = () => {
-    const seed = { chatSessionId: createId(), agentId: 'default' };
+    const seed = { chatSessionId: createId(), agentId: 'default', modelConfigId: modelCatalog?.defaultModelId };
     const localId = createLocalStudioId();
     const agent = agents.find((item) => item.id === 'default');
     setError('');
@@ -302,8 +335,39 @@ export function GroupStudioPage() {
       chatSessionId: seed.chatSessionId,
       agentId: seed.agentId,
       agentName: agent?.name,
+      modelConfigId: seed.modelConfigId,
     }));
     openGroupStudio(localId, seed);
+  };
+
+  const handleDeleteStudio = async (item: GroupStudioListItem) => {
+    if (!window.confirm(`确定删除群聊“${item.title || '未命名工作室'}”吗？删除后将从群聊列表移除。`)) {
+      return;
+    }
+    try {
+      await deleteStudio(item.id, activeProjectId);
+      if (groupId === item.id) {
+        closeGroupStudio();
+      }
+      await refreshStudioList();
+      notifySuccess('群聊已删除');
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法删除群聊'));
+    }
+  };
+
+  const handleModelChange = async (modelConfigId: string) => {
+    if (!studio) return;
+    try {
+      if (isLocalStudioId(studio.id)) {
+        setStudio(current => current ? { ...current, modelConfigId } : current);
+      } else {
+        const updated = await updateStudioModel(studio.id, studio.projectId, modelConfigId);
+        setStudio(updated);
+      }
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法切换群聊模型'));
+    }
   };
 
   const { messages, status: liveStatus } = useGroupStudioStream(
@@ -312,8 +376,9 @@ export function GroupStudioPage() {
     (event) => {
       if (event.type === 'GROUP_ERROR') {
         const message = String(event.payload.message || '工作室运行失败');
-        setRuntimeError(message);
-        notifyError(message);
+        const friendlyMessage = getGroupRuntimeErrorMessage(message);
+        setRuntimeError(friendlyMessage);
+        notifyError(friendlyMessage);
         return;
       }
       if (event.type === 'GROUP_BLACKBOARD') {
@@ -382,6 +447,9 @@ export function GroupStudioPage() {
           || event.type === 'GROUP_INTAKE')
         && studio
       ) {
+        if (event.type === 'GROUP_STATUS' && String(event.payload.to || event.status || '') !== 'circuit_broken') {
+          setRuntimeError('');
+        }
         void refreshStudio(studio.id).catch(() => undefined);
       }
     },
@@ -463,7 +531,10 @@ export function GroupStudioPage() {
   };
 
   const handleAddMember = async (agentId: string) => {
-    if (!studio || !agentId) {
+    if (!studio || !agentId || ['drafting', 'closing', 'archived', 'failed'].includes(studio.status)) {
+      if (studio && ['closing', 'archived', 'failed'].includes(studio.status)) {
+        notifyError('项目已结项，不能再修改群聊成员');
+      }
       return;
     }
     setAdding(true);
@@ -480,6 +551,10 @@ export function GroupStudioPage() {
       setAdding(false);
       setAddingAgentId('');
     }
+  };
+
+  const handleOpenMembers = () => {
+    void Promise.all([refreshAgents(), refreshProjectResources()]);
   };
 
   const handleMuteMember = async (memberId: string, muted: boolean) => {
@@ -560,6 +635,18 @@ export function GroupStudioPage() {
     }
   };
 
+  const handleDownloadFile = async (file: GroupStudioFile) => {
+    if (!studio || isLocalStudioId(studio.id)) {
+      notifyError('本地草稿尚未保存，暂时没有可下载文件');
+      return;
+    }
+    try {
+      await downloadStudioFile(studio.id, file.id, file.title);
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法下载文件'));
+    }
+  };
+
   const handleApproval = async (decision: 'approve' | 'deny') => {
     if (!studio?.currentApproval) {
       return;
@@ -621,6 +708,7 @@ export function GroupStudioPage() {
     try {
       const snapshot = await resumeStudio(studio.id, studio.projectId);
       setStudio(snapshot);
+      setRuntimeError('');
       notifySuccess('工作室已继续');
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法恢复'));
@@ -760,6 +848,7 @@ export function GroupStudioPage() {
           onCollapse={handleCollapseHistory}
           onNewStudio={() => void handleNewStudio()}
           onSelectStudio={(item) => openGroupStudio(item.id)}
+          onDeleteStudio={(item) => void handleDeleteStudio(item)}
         />
       ) : null}
 
@@ -769,7 +858,7 @@ export function GroupStudioPage() {
             className="chat-workbench-topbar flex items-center justify-between gap-4 px-8 py-2"
             style={isMacDesktopShell && (!historyPanelMounted || effectiveHistoryCollapsed) ? { paddingLeft: 128 } : undefined}
           >
-            <div className="flex min-w-0 items-center gap-3">
+            <div className="chat-workbench-title-group flex min-w-0 items-center gap-3">
               {effectiveHistoryCollapsed ? (
                 <>
                   <Tooltip title="展开群聊列表" placement="bottom" mode="dark">
@@ -804,7 +893,7 @@ export function GroupStudioPage() {
                   <Users size={17} strokeWidth={1.7} />
                 </button>
               </Tooltip>
-              <div className="min-w-0">
+              <div className="chat-workbench-title-copy min-w-0">
                 <div className="truncate text-base font-semibold text-[var(--color-text-primary)]">
                   {studio?.title || '工作室'}
                 </div>
@@ -819,50 +908,7 @@ export function GroupStudioPage() {
                 </Tag>
               ) : null}
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-              {paused ? (
-                <button
-                  type="button"
-                  className="icon-button chat-workbench-top-action inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs"
-                  onClick={() => void handleResume()}
-                  aria-label="继续工作室"
-                >
-                  <Play size={15} />
-                  <span>继续</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="icon-button chat-workbench-top-action inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs"
-                  onClick={() => void handlePause()}
-                  disabled={!studio}
-                  aria-label="暂停工作室"
-                >
-                  <Pause size={15} />
-                  <span>暂停</span>
-                </button>
-              )}
-              <button
-                type="button"
-                className="icon-button chat-workbench-top-action inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs"
-                onClick={() => void handleInterrupt()}
-                disabled={!studio}
-                aria-label="停止当前发言"
-              >
-                <Square size={14} />
-                <span>停止</span>
-              </button>
-              {studio && (studio.status === 'reviewing' || studio.status === 'closing') ? (
-                <button
-                  type="button"
-                  className="icon-button chat-workbench-top-action inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs"
-                  onClick={() => void handleClose()}
-                  aria-label={studio.status === 'closing' ? '确认结项' : '结束'}
-                >
-                  <Square size={14} />
-                  <span>{studio.status === 'closing' ? '确认结项' : '结束'}</span>
-                </button>
-              ) : null}
+            <div className="chat-workbench-controls flex min-w-0 shrink items-center gap-2">
               <Tooltip title={effectiveContextCollapsed ? '展开成员与黑板' : '折叠成员与黑板'} placement="bottom" mode="dark">
                 <button
                   type="button"
@@ -874,6 +920,16 @@ export function GroupStudioPage() {
                 </button>
               </Tooltip>
               <NotificationBell />
+              <div className="chat-workbench-model-control min-w-0 shrink">
+                <ModelSelector
+                  catalog={modelCatalog}
+                  value={studio?.modelConfigId || modelCatalog?.defaultModelId || ''}
+                  onChange={(value) => void handleModelChange(value)}
+                  disabled={!studio || sending || studio.status === 'executing' || studio.status === 'reviewing' || Boolean(studio.currentRunId)}
+                  loading={modelsLoading}
+                  error={modelsError}
+                />
+              </div>
               <Tooltip title="工作台设置" placement="bottom" mode="dark">
                 <button
                   type="button"
@@ -909,6 +965,13 @@ export function GroupStudioPage() {
                 ) : (
                   <>
                     {runtimeError ? <div className="group-studio-runtime-error">{runtimeError}</div> : null}
+                    {studio?.status === 'circuit_broken' ? (
+                      <div className="group-studio-approval" role="status">
+                        <div className="group-studio-approval__title">
+                          本轮已暂停，人工处理后才能继续。请先检查供应商 Key 或切换可用模型，再点击顶部“继续”。
+                        </div>
+                      </div>
+                    ) : null}
                     {studio?.status === 'drafting' && studio.awaitingIntakeConfirm ? (
                       <div className="group-studio-approval">
                         <div className="group-studio-approval__title">主持人认为可以开始了。确认后才会拉人开会。</div>
@@ -986,6 +1049,61 @@ export function GroupStudioPage() {
                   : '对工作室说话…'
             }
             onChange={setDraft}
+            controls={(
+              <>
+                {paused ? (
+                  <Tooltip title="继续工作室" placement="top" mode="dark">
+                    <button
+                      type="button"
+                      className="icon-button inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs"
+                      onClick={() => void handleResume()}
+                      aria-label="继续工作室"
+                    >
+                      <Play size={14} />
+                      <span>继续</span>
+                    </button>
+                  </Tooltip>
+                ) : (
+                  <Tooltip title="暂停工作室" placement="top" mode="dark">
+                    <button
+                      type="button"
+                      className="icon-button inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs"
+                      onClick={() => void handlePause()}
+                      disabled={!studio}
+                      aria-label="暂停工作室"
+                    >
+                      <Pause size={14} />
+                      <span>暂停</span>
+                    </button>
+                  </Tooltip>
+                )}
+                <Tooltip title="停止当前发言" placement="top" mode="dark">
+                  <button
+                    type="button"
+                    className="icon-button inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs"
+                    onClick={() => void handleInterrupt()}
+                    disabled={!studio}
+                    aria-label="停止当前发言"
+                  >
+                    <Square size={14} />
+                    <span>停止</span>
+                  </button>
+                </Tooltip>
+                {studio && (studio.status === 'reviewing' || studio.status === 'closing') ? (
+                  <Tooltip title={studio.status === 'closing' ? '确认结项' : '提交结项'} placement="top" mode="dark">
+                    <button
+                      type="button"
+                      className="icon-button inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs"
+                      onClick={() => void handleClose()}
+                      aria-label={studio.status === 'closing' ? '确认结项' : '提交结项'}
+                    >
+                      <CheckCircle2 size={14} />
+                      <span>{studio.status === 'closing' ? '确认结项' : '提交结项'}</span>
+                    </button>
+                  </Tooltip>
+                ) : null}
+              </>
+            )}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
@@ -1018,6 +1136,8 @@ export function GroupStudioPage() {
           onSaveGoal={(nextGoal) => void handleSaveGoal(nextGoal)}
           onToggleDod={(itemId, checked) => void handleToggleDod(itemId, checked)}
           onUploadFile={(fileList) => void handleUploadFile(fileList)}
+          onDownloadFile={(file) => void handleDownloadFile(file)}
+          onOpenMembers={handleOpenMembers}
         />
       </div>
     </div>

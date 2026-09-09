@@ -72,7 +72,7 @@ function RunDetailEmpty({ description }: { description: string }) {
 
 function RunDashboard({ run }: { run: RunDetail }) {
   const duration = formatDuration(run.createdAt, run.completedAt);
-  const activeActors = run.activeActors.length > 0
+  const activeActors = Array.isArray(run.activeActors) && run.activeActors.length > 0
     ? run.activeActors
     : [runDisplayName(run)].filter(Boolean);
 

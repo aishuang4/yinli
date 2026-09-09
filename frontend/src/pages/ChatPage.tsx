@@ -38,11 +38,17 @@ import { selectPendingAskUserInteractions } from '../features/chat/humanInteract
 import type { ChatFilePayload, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
 import { runtimeError, runtimeText } from '../features/runtime-stream/selectors';
 
+import { useModelCatalog } from '../features/models/useModelCatalog';
+import { ModelSelector } from '../features/models/ModelSelector';
+
 import { useChatAttachments } from '../features/chat/useChatAttachments';
 
 const HISTORY_PANEL_TRANSITION_MS = 260;
 
 export function ChatPage() {
+  const { catalog: modelCatalog, loading: modelsLoading, error: modelsError } = useModelCatalog();
+  const [modelChoices, setModelChoices] = useState<Record<string, string>>({});
+  const [savingModelChoice, setSavingModelChoice] = useState(false);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -108,8 +114,23 @@ export function ChatPage() {
       value: agent.id,
     })), [availableAgents]);
 
-  const selectedModelId = runtimeAgent?.modelConfig.primary || 'deepseek-v4-flash';
-  const selectedModelSupportsImages = selectedModelId === 'qwen3.7-plus';
+  const selectedModelId = modelChoices[activeSessionId || 'new'] || sessions.find(s => s.id === activeSessionId)?.modelConfigId || modelCatalog?.defaultModelId || '';
+  const selectedModel = modelCatalog?.models.find(m => m.id === selectedModelId);
+  const selectedModelSupportsImages = Boolean(selectedModel?.capabilities.images);
+  const selectModel = async (value: string) => {
+    const key = activeSessionId || 'new';
+    setSavingModelChoice(true);
+    try {
+      if (activeSessionId && sessions.some(s => s.id === activeSessionId)) {
+        const response = await fetch(`/api/chat/sessions/${encodeURIComponent(activeSessionId)}/model?projectId=${encodeURIComponent(activeProjectId)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelConfigId: value }),
+        });
+        if (!response.ok) { const data = await response.json(); throw new Error(data.detail || '模型选择保存失败'); }
+      }
+      setModelChoices(current => ({ ...current, [key]: value }));
+    } catch (cause) { setChatError(getErrorMessage(cause, '模型选择保存失败')); }
+    finally { setSavingModelChoice(false); }
+  };
   const isDesktopShell = Boolean(window.electronAPI);
   const desktopPlatform = window.electronAPI?.getPlatform();
   const isMacDesktopShell = desktopPlatform === 'darwin';
@@ -162,6 +183,7 @@ export function ChatPage() {
     handleToggle: handleStudioToggle,
     shortcutLabel: studioShortcut,
   } = useGroupStudioEntry({
+    modelConfigId: selectedModelId,
     activeProjectId,
     activeSessionId,
     agentId: runtimeAgent?.id || 'default',
@@ -169,10 +191,6 @@ export function ChatPage() {
     draftText: inputValue,
     fileAttachments,
     hasImages: imageAttachments.length > 0,
-    userMessageCount: Math.max(
-      messages.filter((item) => item.role === 'user').length,
-      sessions.find((item) => item.id === activeSessionId)?.message_count ?? 0,
-    ),
     isComposingRef,
     setActiveSessionId,
     uploadFilesForSession,
@@ -291,6 +309,7 @@ export function ChatPage() {
     openedPlanIdentityRef.current = '';
     setPlanPanelOpen(false);
     setActiveSessionId(null);
+    setModelChoices({});
     setMessages([]);
     resetAttachments();
     setChatError(null);
@@ -364,6 +383,11 @@ export function ChatPage() {
     openedPlanIdentityRef.current = '';
     setPlanPanelOpen(false);
     setActiveSessionId(null);
+    setModelChoices(previous => {
+      const next = { ...previous };
+      delete next.new;
+      return next;
+    });
     setMessages([]);
     resetAttachments();
     setChatError(null);
@@ -418,7 +442,7 @@ export function ChatPage() {
       return;
     }
     if (imageAttachments.length > 0 && !selectedModelSupportsImages) {
-      setChatError(`${selectedModelId} 不支持图片输入，请选择使用 qwen3.7-plus 的 Agent。`);
+      setChatError('所选模型未启用图片能力，请切换模型。');
       return;
     }
 
@@ -445,6 +469,7 @@ export function ChatPage() {
       files,
     };
 
+    setModelChoices(current => ({ ...current, new: '', [sessionId]: selectedModelId }));
     setActiveSessionId(sessionId);
     resetScroll();
     setMessages((prev) => [...prev, userMessage]);
@@ -459,7 +484,7 @@ export function ChatPage() {
       agentName: runtimeAgent?.name,
       mode: targetMode,
       systemPrompt: runtimeAgent?.systemPrompt,
-      model: runtimeAgent?.modelConfig.primary,
+      modelConfigId: selectedModelId,
       skillIds: runtimeAgent?.skills,
       deepThinking,
       planRequested: planMode && targetMode === 'agent',
@@ -494,14 +519,14 @@ export function ChatPage() {
       agentName: runtimeAgent?.name,
       mode: 'agent',
       systemPrompt: runtimeAgent?.systemPrompt,
-      model: runtimeAgent?.modelConfig.primary,
+      modelConfigId: selectedModelId,
       skillIds: runtimeAgent?.skills,
       deepThinking,
       planId: plan.planId,
       planAction: action,
       planFeedback: feedback,
     });
-  }, [activeProjectId, activeSessionId, deepThinking, resetScroll, runtimeAgent, sendMessage, state.isStreaming]);
+  }, [activeProjectId, activeSessionId, deepThinking, resetScroll, runtimeAgent, selectedModelId, sendMessage, state.isStreaming]);
 
   // 当流结束时，将 assistant 回复加入消息历史
   useEffect(() => {
@@ -629,7 +654,7 @@ export function ChatPage() {
               </div>
               <div className="truncate text-xs text-[var(--color-text-tertiary)]">
                 {state.isStreaming
-                  ? runtimeAgent?.modelConfig.primary || 'deepseek-v4-flash'
+                  ? selectedModel?.label || '未选择模型'
                   : targetMode === 'team'
                     ? `${runtimeAgent?.name || 'Assistant'} · Leader 动态组建临时成员`
                     : `${runtimeAgent?.name || 'Assistant'} · ${runtimeAgent?.description || 'DeepSeek'}`}
@@ -703,7 +728,7 @@ export function ChatPage() {
                       <StreamingBubble
                         snapshot={snapshot}
                         isStreaming={state.isStreaming}
-                        modelName={runtimeAgent?.modelConfig.primary || ''}
+                        modelName={selectedModel?.label || ''}
                         error={state.error}
                         createdAt={state.runCompletedAt || undefined}
                         sessionId={activeSessionId || undefined}
@@ -750,6 +775,10 @@ export function ChatPage() {
             />
           ) : (
             <ChatComposer
+            modelSelector={<ModelSelector catalog={modelCatalog} value={selectedModelId}
+              onChange={value => void selectModel(value)}
+              disabled={savingModelChoice || state.isStreaming || pendingAskUserInteractions.length > 0}
+              loading={modelsLoading} error={modelsError} />}
               agentOptions={agentOptions}
               agentsLoading={agentsLoading}
               chatError={chatError}

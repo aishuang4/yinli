@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -42,6 +43,7 @@ class ChatRunRecordStore:
             session_id = (existing or {}).get("sessionId") or ""
         payload = {
             "id": record["id"],
+            "modelConfig": _merged(record, existing, "modelConfig", "model_config", {}),
             "sessionId": session_id,
             "workspaceId": _merged(
                 record, existing, "workspaceId", "workspace_id", self.default_workspace_id,
@@ -75,8 +77,8 @@ class ChatRunRecordStore:
                 INSERT INTO chat_runs (
                     id, session_id, workspace_id, project_id, agent_id, agent_name,
                     task_text, mode, status, trigger_source, scheduled_job_id,
-                    scheduled_firing_id, created_at, completed_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    scheduled_firing_id, created_at, completed_at, updated_at, model_config_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     session_id=excluded.session_id,
                     workspace_id=excluded.workspace_id,
@@ -90,7 +92,8 @@ class ChatRunRecordStore:
                     scheduled_job_id=excluded.scheduled_job_id,
                     scheduled_firing_id=excluded.scheduled_firing_id,
                     completed_at=excluded.completed_at,
-                    updated_at=excluded.updated_at
+                    updated_at=excluded.updated_at,
+                    model_config_json=excluded.model_config_json
                 """,
                 (
                     payload["id"], payload["sessionId"],
@@ -100,6 +103,7 @@ class ChatRunRecordStore:
                     payload["triggerSource"], payload["scheduledJobId"],
                     payload["scheduledFiringId"], created_at,
                     payload["completedAt"], updated_at,
+                    json.dumps(payload["modelConfig"], ensure_ascii=False),
                 ),
             )
             conn.commit()
@@ -164,6 +168,7 @@ class ChatRunRecordStore:
     def _from_row(row: sqlite3.Row) -> dict[str, Any]:
         return {
             "id": row["id"],
+            "modelConfig": json.loads(row["model_config_json"] or "{}"),
             "sessionId": row["session_id"],
             "workspaceId": row["workspace_id"],
             "projectId": row["project_id"],

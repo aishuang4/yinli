@@ -32,6 +32,7 @@ class ScheduledJobCreateRequest(BaseModel):
     project_id: str = Field(alias="projectId")
     name: str
     agent_id: str = Field(alias="agentId")
+    model_config_id: str = Field(default="", alias="modelConfigId")
     schedule_kind: Literal["weekly", "once"] = Field(alias="scheduleKind")
     schedule_expr: dict[str, Any] = Field(alias="scheduleExpr")
     timezone: str
@@ -63,6 +64,7 @@ class ScheduledJobUpdateRequest(BaseModel):
     name: str | None = None
     summary: str | None = None
     agent_id: str | None = Field(default=None, alias="agentId")
+    model_config_id: str | None = Field(default=None, alias="modelConfigId")
     schedule_kind: Literal["weekly", "once"] | None = Field(default=None, alias="scheduleKind")
     schedule_expr: dict[str, Any] | None = Field(default=None, alias="scheduleExpr")
     timezone: str | None = None
@@ -150,6 +152,7 @@ def serialize_job(job: ScheduledJob) -> dict[str, Any]:
         "status": job.status,
         "pauseReason": job.pause_reason,
         "agentId": job.agent_id,
+        "modelConfigId": job.model_config_id,
         "mode": job.mode,
         "scheduleKind": job.schedule_kind,
         "scheduleExpr": job.schedule_expr,

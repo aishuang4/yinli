@@ -22,6 +22,7 @@ export function createLocalStudioSnapshot(input: {
   projectId: string;
   workspaceId: string;
   chatSessionId: string;
+  modelConfigId?: string;
   agentId?: string;
   agentName?: string;
 }): GroupStudioSnapshot {
@@ -36,6 +37,7 @@ export function createLocalStudioSnapshot(input: {
     projectId: input.projectId,
     workspaceId: input.workspaceId,
     chatSessionId: input.chatSessionId,
+    modelConfigId: input.modelConfigId,
     title: '未命名工作室',
     status: 'drafting',
     phaseBeforePause: null,

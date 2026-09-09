@@ -108,6 +108,7 @@ export interface GroupStudioBudget {
 }
 
 export interface GroupStudioSnapshot {
+  modelConfigId?: string;
   id: string;
   projectId: string;
   workspaceId: string;

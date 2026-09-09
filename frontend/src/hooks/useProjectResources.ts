@@ -1,37 +1,39 @@
 /** 当前 Project 资源 binding 读取 Hook。 */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ProjectResourceBinding, ProjectResourceType } from '../types/workspace';
 
 export function useProjectResources(projectId: string) {
   const [bindings, setBindings] = useState<ProjectResourceBinding[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const refresh = useCallback(async (signal?: AbortSignal) => {
+    if (!projectId) {
+      setBindings([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/resources`, {
+        signal,
+        cache: 'no-store',
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setBindings(await response.json() as ProjectResourceBinding[]);
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) setBindings([]);
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
+  }, [projectId]);
+
   useEffect(() => {
     const controller = new AbortController();
     setBindings([]);
-    if (!projectId) {
-      setLoading(false);
-      return () => controller.abort();
-    }
-    setLoading(true);
-    void fetch(`/api/projects/${encodeURIComponent(projectId)}/resources`, {
-      signal: controller.signal,
-      cache: 'no-store',
-    })
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json() as Promise<ProjectResourceBinding[]>;
-      })
-      .then(setBindings)
-      .catch((error) => {
-        if (!(error instanceof DOMException && error.name === 'AbortError')) setBindings([]);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
+    void refresh(controller.signal);
     return () => controller.abort();
-  }, [projectId]);
+  }, [projectId, refresh]);
 
   const enabledByType = useMemo(() => {
     const result: Record<ProjectResourceType, Set<string>> = {
@@ -46,5 +48,5 @@ export function useProjectResources(projectId: string) {
     return result;
   }, [bindings]);
 
-  return { bindings, enabledByType, loading };
+  return { bindings, enabledByType, loading, refresh: () => refresh() };
 }

@@ -26,6 +26,8 @@ from src.server.routes.chat.run_context import build_chat_run_context
 from src.server.routes.chat.runtime_dispatcher import execute_chat_runtime
 from src.server.routes.chat.startup_checks import get_startup_error
 from src.server.routes.chat.projection.source_events import SourceEvent
+from src.config.runtime_settings import resolve_model_binding
+from src.server.routes.chat.store import _load_store
 
 
 @router.post("/send")
@@ -83,11 +85,16 @@ async def start_chat_run(data: ChatMessage):
             run_id="",
             agent_id=data.agent_id or "default",
         )
+        session = next((s for s in _load_store().sessions if s.id == session_id), None)
+        binding = resolve_model_binding(data.model_config_id or (session.model_config_id if session else None))
+        if data.images and not binding.primary.entry.capabilities.images:
+            raise ValueError("所选模型未启用图片能力，请切换模型。")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     run_data = data.model_copy(update={
         "session_id": session_id,
         "project_id": runtime_context.project_id,
+        "model_config_id": binding.primary.entry.id,
     })
     try:
         validate_session_uploads(
@@ -138,4 +145,5 @@ async def start_chat_run(data: ChatMessage):
         mode=run_data.mode,
         workspace_id=runtime_context.workspace_id,
         project_id=runtime_context.project_id,
+        model_binding=binding,
     )

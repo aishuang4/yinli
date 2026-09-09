@@ -75,14 +75,14 @@ npm run lint     # eslint
 - **结构化表**：`workspaces`、`projects`、`project_resource_bindings`、`agents`、`mcp_servers`、`skills`、`chat_sessions`、`chat_messages`、`chat_runs`、`run_events`、`memory_nodes`、`subagent_invocations`、`group_studios` / `group_task_cards` / `group_blackboards` / `group_memberships` / `group_messages` / `group_runs` / `group_approvals` / `group_artifacts` / `group_work_items` / `group_studio_events`。启动时创建稳定的 `default` Workspace / Project 并回填历史空归属。持久 Team 的 `teams` / `team_members` 表在启动迁移中删除；历史库中可能仍残留 `memory_facts` / `memory_events` / `memory_candidates` 表，但旧记忆模块已删除，不再作为当前运行时能力。群聊工作室不恢复持久 `teams` 表。
 - **Markdown 记忆文件**：新记忆 MVP 使用 `backend/data/memory/users/user_memory.md`、`backend/data/memory/agents/agent_memory.md`、`backend/data/memory/global/global_memory.md` 作为默认文件；非默认 owner 使用 `users/{user_id}/user_memory.md`、`agents/{agent_id}/agent_memory.md`、`global/{workspace_id}/global_memory.md`。不兼容读取旧 `default.md`。
 - **向量存储**：全局 `VectorStoreBackend` 抽象支持 `disabled` 和 `zvec` provider。`VECTOR_STORE_PROVIDER` 只在首次初始化时生效，之后读取持久化 `VectorStorePolicy`；向量库只索引历史记忆底层表 `memory_nodes`，Markdown 记忆不进入向量库。
-- **`json_store` 表**：`(namespace, key) -> JSON`，用于系统设置等 Pydantic 文档。运行时模型设置存于 namespace `system_settings`、key `model`，由 `config/runtime_settings.py` 读写。
+- **`json_store` 表**：`(namespace, key) -> JSON`，用于系统设置等 Pydantic 文档。模型配置已迁移到 `USER_DATA_ROOT/models.json`；旧 `system_settings/model` 仅在首次迁移时读取。
 
 Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不用迁移框架。早期 JSON 文件（如 `data/chat_sessions.json`）通过 `migrate_json_*_file()` 一次性导入 SQLite。
 
 ### 配置分层
 
 - `config/settings.py` — `pydantic-settings`，环境变量前缀 `AGENT_WORKSTATION_`，从 `.env` 加载。属启动期静态配置（端口、DB URL、CORS、默认 DeepSeek key）。
-- `config/runtime_settings.py` — 运行时可变的模型供应商配置，持久化在 `json_store`。`MODEL_PROVIDERS` 定义各供应商的 adapter/默认 model/base_url。`get_effective_model_settings()` 是工厂取当前生效模型的入口；公开给前端时 API key 用 `_mask_secret()` 脱敏。
+- `config/model_catalog.py` — `models.json` 唯一配置源，供应商实例与模型条目使用独立 ID；Key 按用户要求保存在本地文件，API 只返回已配置标记。保存采用进程锁、内容版本校验和原子替换。`config/runtime_settings.py` 在新 Run 开始时解析完整连接，并用不可变快照贯穿 Team、Subagent、审批恢复和后台后处理。Chat/Sandbox 选择模型；Agent 只保留 ReAct 上限，不选择模型或采样参数。见 `docs/chat-model-selection-v1.md`。
 
 ### 前端
 

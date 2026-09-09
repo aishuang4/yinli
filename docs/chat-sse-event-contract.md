@@ -423,3 +423,12 @@ TeamStore event 不得携带完整 snapshot。每条事件 payload 必须自包�
 Team 综合阶段必须把模型的 `TEXT_BLOCK_DELTA` 同步投影到当前消息的 `kind=text` Block，逐段发送 `delta` Frame；综合完成后允许发送一次 `replace` 作为最终一致性校正，但不得把它作为首个回答内容。这样成员执行过程和最终回答都沿同一条可恢复的 seq 流实时展示。
 
 Chat 中的 `kind=team` renderer 必须直接从同一 DisplaySnapshot 的 Team 子树派生实时成员、任务和最新活动摘要。运行中的成员、任务和阶段变化应在 Frame 到达后立即更新，并使用局部状态动画表达进行中/完成/失败；完整过程仍由 Team Console 下钻查看。renderer 不得缓存第二份 Team 状态，也不得等待 Team 终态后批量构造组件。
+
+## 模型配置 V1 补充（2026-09-07）
+
+- Chat 请求使用 `modelConfigId`，旧 `model` 请求字段不再接受。Agent 不携带模型选择。
+- `POST /api/chat/send/start` 与 Run REST 元数据增加 `modelConfigId`、`providerId`、`modelName`；持久化只保留无密钥的配置摘要。
+- `RUN_STARTED` 的 trace payload 增加 `modelConfigId` / `providerId`，不新增 SSE 类型或 RuntimeFrame op。
+- 会话返回 `modelConfigId`；`PATCH /api/chat/sessions/{id}/model?projectId=...` 保存下一轮选择，活动运行期间返回 409。
+- 一次 Run 固定完整模型快照。审批恢复、Team、Subagent 和后台后处理沿用快照；配置修改只影响新 Run。
+- 所有公开响应、Trace 和 RuntimeFrame 禁止携带 `apiKey`。

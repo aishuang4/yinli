@@ -6,20 +6,16 @@
 
 import { AlertCircle, CheckCircle2, Sparkles, WandSparkles } from 'lucide-react';
 import { Button, Tag } from '@/components/design';
-import { SelectField, TextAreaField } from '../../components/form';
-import { DEFAULT_MODEL_CONFIG, type ModelsResponse } from '../../types/agent';
+import { TextAreaField } from '../../components/form';
 import type { BuilderPlan } from '../../types/agentBuilder';
 
 interface AgentBuilderWizardProps {
   requirement: string;
-  model: string;
-  models: ModelsResponse | null;
   plan: BuilderPlan | null;
   planning: boolean;
   applying: boolean;
   error: string | null;
   onRequirementChange: (value: string) => void;
-  onModelChange: (value: string) => void;
   onCreatePlan: () => Promise<void>;
   onApplyPlan: () => Promise<void>;
   onResetPlan: () => void;
@@ -27,14 +23,11 @@ interface AgentBuilderWizardProps {
 
 export function AgentBuilderWizard({
   requirement,
-  model,
-  models,
   plan,
   planning,
   applying,
   error,
   onRequirementChange,
-  onModelChange,
   onCreatePlan,
   onApplyPlan,
   onResetPlan,
@@ -54,18 +47,6 @@ export function AgentBuilderWizard({
         </div>
 
         <div className="space-y-4">
-          <SelectField
-            label="规划模型"
-            value={model}
-            onChange={(value) => onModelChange(String(value))}
-            options={[
-              { label: '使用系统默认模型', value: '' },
-              ...(models?.primary || []).map((item) => ({
-                label: item.name,
-                value: item.id,
-              })),
-            ]}
-          />
 
           <TextAreaField
             label="用户需求"
@@ -118,10 +99,9 @@ export function AgentBuilderWizard({
                 </div>
               </div>
               <div className="flex shrink-0 gap-2">
-                <Tag size="small" color="transparent">Agents</Tag>
-                <Tag size="small" color={missingToolCount + missingSkillCount > 0 ? 'orange' : 'green'}>
-                  缺失 {missingToolCount + missingSkillCount}
-                </Tag>
+                <Tag size="small" color="transparent">{plan.agents.length} 个 Agent</Tag>
+                <Tag size="small" color="orange">缺失工具 {missingToolCount}</Tag>
+                <Tag size="small" color="orange">缺失技能 {missingSkillCount}</Tag>
               </div>
             </div>
 
@@ -168,7 +148,6 @@ function BuilderAgentDraftCard({
 }) {
   const matchedTools = (agent.recommendedTools || []).filter((item) => item.matched);
   const matchedSkills = (agent.recommendedSkills || []).filter((item) => item.matched);
-  const modelConfig = agent.modelConfig || DEFAULT_MODEL_CONFIG;
 
   return (
     <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
@@ -186,9 +165,6 @@ function BuilderAgentDraftCard({
             {agent.description || '暂无描述'}
           </div>
         </div>
-        <Tag size="small" color="transparent">
-          {modelConfig.primary}
-        </Tag>
       </div>
 
       <div className="mb-3 line-clamp-3 whitespace-pre-wrap rounded border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 text-xs text-[var(--color-text-tertiary)]">

@@ -57,7 +57,7 @@ export function AgentCard({ agent, selected, onSelect, onDelete }: AgentCardProp
             {agent.name}
           </div>
           <div className="text-xs text-[var(--color-text-secondary)] truncate">
-            {agent.modelConfig.primary}
+            {agent.role === 'job' ? '定时任务 Agent' : '对话助手'}
           </div>
         </div>
 

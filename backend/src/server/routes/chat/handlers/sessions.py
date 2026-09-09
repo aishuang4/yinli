@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import HTTPException, Query
+from pydantic import BaseModel, Field
 
 from src.project_files import delete_project_session_files
 from src.server.routes.chat.models import ChatSession, StoredChatMessage
@@ -20,6 +21,32 @@ from src.server.routes.chat.team_runtime.store import TeamStoreError
 from src.storage.database import DEFAULT_PROJECT_ID, get_project
 
 _SESSION_KINDS = {"chat", "scheduled_job", "all"}
+
+
+class SessionModelUpdate(BaseModel):
+    """只保存模型配置身份，不保存连接凭据。"""
+    model_config_id: str = Field(alias="modelConfigId", min_length=1)
+
+
+@router.patch("/sessions/{session_id}/model")
+async def update_session_model(session_id: str, data: SessionModelUpdate,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId")) -> dict:
+    from src.config.runtime_settings import resolve_model_binding
+    from src.storage.database import list_chat_runs_by_statuses
+    from src.server.routes.chat.lifecycle import ACTIVE_RUN_STATUSES
+    if any(run["sessionId"] == session_id for run in list_chat_runs_by_statuses(ACTIVE_RUN_STATUSES)):
+        raise HTTPException(status_code=409, detail="当前会话仍有运行或待审批任务。")
+    store = _load_store()
+    session = next((s for s in store.sessions if s.id == session_id and s.project_id == project_id), None)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        binding = resolve_model_binding(data.model_config_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    session.model_config_id = binding.primary.entry.id
+    _save_store(store)
+    return {"modelConfigId": session.model_config_id}
 
 
 def _filter_sessions_by_kind(sessions: list[ChatSession], kind: str) -> list[ChatSession]:

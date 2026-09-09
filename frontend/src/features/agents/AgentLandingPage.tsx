@@ -131,8 +131,8 @@ function AgentListRow({
     <WorkbenchListRow
       icon={<AgentIcon agent={agent} />}
       title={agent.name}
-      subtitle={agent.role === 'job' ? `定时任务 · ${agent.modelConfig.primary}` : agent.modelConfig.primary}
-      description={agent.description || (agent.role === 'job' ? '到点执行，Chat 中不可选用' : '配置模型、工具和执行边界')}
+      subtitle={agent.role === 'job' ? '定时任务 Agent' : agent.description}
+      description={agent.description || (agent.role === 'job' ? '到点执行，Chat 中不可选用' : '配置工具和执行边界')}
       last={last}
       layout="columns"
       onSelect={onSelect}

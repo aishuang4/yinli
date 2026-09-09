@@ -18,11 +18,11 @@ interface UseGroupStudioEntryOptions {
   activeProjectId: string;
   activeSessionId: string | null;
   agentId: string;
+  modelConfigId?: string;
   chatRunBlocking: boolean;
   draftText: string;
   fileAttachments: ChatFileAttachment[];
   hasImages: boolean;
-  userMessageCount?: number;
   isComposingRef: RefObject<boolean>;
   setActiveSessionId: (sessionId: string) => void;
   uploadFilesForSession: (
@@ -36,11 +36,11 @@ export function useGroupStudioEntry({
   activeProjectId,
   activeSessionId,
   agentId,
+  modelConfigId,
   chatRunBlocking,
   draftText,
   fileAttachments,
   hasImages,
-  userMessageCount = 0,
   isComposingRef,
   setActiveSessionId,
   uploadFilesForSession,
@@ -130,11 +130,13 @@ export function useGroupStudioEntry({
         ? await uploadFilesForSession(fileAttachments, activeProjectId, sessionId)
         : [];
       const filePaths = files.map((file) => file.path).filter(Boolean);
-      if (userMessageCount >= 1 || draftText.trim() || filePaths.length > 0) {
+      // 切换入口创建空白工作室；只有当前输入框草稿或附件才作为明确的开场内容带入。
+      if (draftText.trim() || filePaths.length > 0) {
         const studio = await createStudioFromChat({
           projectId: activeProjectId,
           chatSessionId: sessionId,
           agentId,
+          modelConfigId,
           draftText,
           filePaths,
         });
@@ -142,7 +144,7 @@ export function useGroupStudioEntry({
         openGroupStudio(studio.id);
         return;
       }
-      openGroupStudio(createLocalStudioId(), { chatSessionId: sessionId, agentId });
+      openGroupStudio(createLocalStudioId(), { chatSessionId: sessionId, agentId, modelConfigId });
     } catch (error) {
       notifyError(getErrorMessage(error, '无法进入工作室'));
     } finally {
@@ -152,13 +154,13 @@ export function useGroupStudioEntry({
     activeProjectId,
     activeSessionId,
     agentId,
+    modelConfigId,
     busy,
     chatRunBlocking,
     draftText,
     fileAttachments,
     flagEnabled,
     hasImages,
-    userMessageCount,
     openGroupStudio,
     setActiveSessionId,
     uploadFilesForSession,

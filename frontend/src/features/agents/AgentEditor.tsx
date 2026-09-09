@@ -3,7 +3,7 @@
  *
  * 使用 Compound Component 模式组织多个表单区块：
  * - Identity: 名称、头像、描述、系统提示词
- * - ModelConfig: 模型选择、Fallback 链、温度参数
+ * - ModelConfig: ReAct 执行上限
  * - Tools: 默认工具（锁定）+ MCP + Skills
  * - Guardrails: 安全边界
  *
@@ -37,7 +37,6 @@ import {
 import type {
   Agent,
   AgentCreatePayload,
-  ModelOption,
 } from '../../types/agent';
 import { DEFAULT_MODEL_CONFIG, createEmptyAgentForm } from '../../types/agent';
 import { useMcp } from '../../hooks/useMcp';
@@ -73,11 +72,6 @@ function syncBoundIds(
 interface AgentEditorProps {
   /** 编辑的 Agent（null 表示创建模式） */
   agent: Agent | null;
-  /** 可用模型列表 */
-  models: {
-    primary: ModelOption[];
-    fallback: ModelOption[];
-  } | null;
   /** 当前已有 Agent。保留字段兼容父组件调用。 */
   availableAgents?: Agent[];
   /** 保存回调 */
@@ -89,7 +83,7 @@ interface AgentEditorProps {
 /**
  * AgentEditor 组件
  */
-export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProps) {
+export function AgentEditor({ agent, onSave, onCancel }: AgentEditorProps) {
   const [form, setForm] = useState<AgentCreatePayload>(createEmptyAgentForm());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -126,14 +120,6 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
   const selectedKnowledgeTools = useMemo(() => (
     knowledgeTools.filter((tool) => form.knowledgeTools.includes(tool.id))
   ), [form.knowledgeTools, knowledgeTools]);
-
-  const primaryModelOptions = useMemo(() => {
-    return models?.primary ?? [];
-  }, [models?.primary]);
-
-  const fallbackModelOptions = useMemo(() => {
-    return models?.fallback ?? [];
-  }, [models?.fallback]);
 
   const selectedSkills = useMemo(() => (
     enabledSkills.filter((skill) => form.skills.includes(skill.id))
@@ -253,7 +239,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
                 {agent ? '编辑 Agent' : '创建 Agent'}
               </h2>
               <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-                配置 Agent 的身份、模型、工具能力和运行边界。
+                配置 Agent 的身份、工具能力和运行边界。
               </div>
             </div>
             <div className="flex shrink-0 gap-2">
@@ -280,7 +266,6 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
 
         <AgentBasicSection
           form={form}
-          primaryModelOptions={primaryModelOptions}
           onChange={setForm}
           lockRole={agent?.systemManaged === true}
         />
@@ -297,7 +282,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
             <div className="min-w-0">
               <div className="text-sm font-medium text-[var(--color-text-primary)]">高级设置</div>
               <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
-                模型参数、工具、Skills、权限、计划和协作配置。
+                执行上限、工具、Skills、权限、计划和协作配置。
               </div>
             </div>
           </div>
@@ -314,7 +299,7 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
           onClose={() => setAdvancedOpen(false)}
           width={760}
           showDivider={false}
-          destroyOnClose={false}
+          destroyOnHidden={false}
           footer={(
             <div className="flex justify-end gap-2">
               <Button onClick={() => setAdvancedOpen(false)}>关闭</Button>
@@ -363,7 +348,6 @@ export function AgentEditor({ agent, models, onSave, onCancel }: AgentEditorProp
 
         <AgentModelAdvancedSection
           form={form}
-          fallbackModelOptions={fallbackModelOptions}
           onChange={setForm}
         />
 

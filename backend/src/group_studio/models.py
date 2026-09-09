@@ -229,6 +229,7 @@ class GroupStudio(CamelModel):
     project_id: str = Field(alias="projectId")
     workspace_id: str = Field(alias="workspaceId")
     chat_session_id: str = Field(alias="chatSessionId")
+    model_config_id: str = Field(default="", alias="modelConfigId")
     title: str
     status: GroupStudioStatus
     phase_before_pause: str | None = Field(default=None, alias="phaseBeforePause")
@@ -263,11 +264,19 @@ class GroupStudioFromChatRequest(CamelModel):
 
     project_id: str = Field(alias="projectId")
     chat_session_id: str = Field(alias="chatSessionId", min_length=1)
+    model_config_id: str = Field(default="", alias="modelConfigId")
     agent_id: str = Field(default="default", alias="agentId")
     draft_text: str = Field(default="", alias="draftText", max_length=8000)
     file_paths: list[str] = Field(default_factory=list, alias="filePaths")
     title: str | None = None
     reuse_blank_draft: bool = Field(default=False, alias="reuseBlankDraft")
+
+
+class GroupStudioModelUpdateRequest(CamelModel):
+    """更新尚未开始运行的工作室模型。"""
+
+    project_id: str = Field(alias="projectId")
+    model_config_id: str = Field(alias="modelConfigId", min_length=1)
 
 
 class GroupPauseRequest(CamelModel):

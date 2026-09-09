@@ -119,7 +119,7 @@ export function NotificationResultModal({
         </div>
       )}
       width={720}
-      destroyOnClose
+      destroyOnHidden
     >
       {notification ? (
         <div className="notification-result">

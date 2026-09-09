@@ -50,6 +50,15 @@ export async function fetchGroupStudio(groupId: string): Promise<GroupStudioSnap
   return await response.json() as GroupStudioSnapshot;
 }
 
+export async function updateStudioModel(groupId: string, projectId: string, modelConfigId: string): Promise<GroupStudioSnapshot> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/model`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId, modelConfigId }),
+  });
+  if (!response.ok) throw new Error(await readDetail(response, '无法切换群聊模型'));
+  return await response.json() as GroupStudioSnapshot;
+}
+
 export async function updateTaskCard(groupId: string, input: {
   projectId: string;
   goal?: string;
@@ -125,6 +134,39 @@ export async function fetchStudioFiles(groupId: string): Promise<GroupStudioFile
   }
   const payload = await response.json() as { files?: GroupStudioFile[] };
   return payload.files ?? [];
+}
+
+export async function downloadStudioFile(groupId: string, artifactId: string, filename?: string): Promise<void> {
+  const response = await fetch(
+    `/api/group-studio/${encodeURIComponent(groupId)}/files/${encodeURIComponent(artifactId)}/download`,
+  );
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法下载文件'));
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename || getDownloadFilename(response.headers.get('Content-Disposition')) || 'download';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
+
+function getDownloadFilename(contentDisposition: string | null): string | undefined {
+  if (!contentDisposition) return undefined;
+  const encoded = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const plain = contentDisposition.match(/filename="?([^";]+)"?/i)?.[1];
+  let candidate = plain;
+  if (encoded) {
+    try {
+      candidate = decodeURIComponent(encoded);
+    } catch {
+      candidate = plain;
+    }
+  }
+  return candidate?.replace(/[\\/\0]/g, '').trim() || undefined;
 }
 
 export async function uploadStudioFile(
@@ -207,6 +249,16 @@ export async function closeStudio(groupId: string, projectId: string, confirm: b
   return await response.json() as GroupStudioSnapshot;
 }
 
+export async function deleteStudio(groupId: string, projectId: string): Promise<void> {
+  const response = await fetch(
+    `/api/group-studio/${encodeURIComponent(groupId)}?projectId=${encodeURIComponent(projectId)}`,
+    { method: 'DELETE' },
+  );
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法删除群聊'));
+  }
+}
+
 export async function startStudioReview(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/start-review`, {
     method: 'POST',
@@ -263,6 +315,7 @@ export async function addStudioMember(groupId: string, input: {
 }
 
 export async function createStudioFromChat(input: {
+  modelConfigId?: string;
   projectId: string;
   chatSessionId: string;
   agentId: string;

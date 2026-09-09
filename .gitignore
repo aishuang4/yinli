@@ -52,3 +52,7 @@ backend/data/*.db
 # Local Agent Workstation runtime data
 .agent-workstation/
 .mcp.json
+# 用户模型连接及密钥文件
+models.json
+models.lock
+.models-*.tmp

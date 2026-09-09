@@ -31,6 +31,7 @@
 
 ## 后续路线
 
+- `docs/chat-model-selection-v1.md`：待确认的 Chat 模型选择与 models.json 唯一配置源方案，包含供应商绑定、凭据、迁移和各运行入口规则。
 - `docs/debian-http-deployment-v1.md`：Debian 单机 HTTP 临时部署指南，覆盖 Nginx、systemd、持久化、更新与回滚；不属于生产安全基线。
 - `docs/team-member-lifecycle-v2.md`：Team Member 长生命周期、TaskAttempt、多轮返工、Mailbox 唤醒和 Reviewer 闭环方案。
 - `docs/dynamic-workflows-plan.md`：Dynamic Workflow 的 Script Review、Runtime Cockpit 和 AgentScope Bridge 路线。

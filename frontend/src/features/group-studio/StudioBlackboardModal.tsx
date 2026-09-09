@@ -28,7 +28,7 @@ export function StudioBlackboardModal({
       width={520}
       className="group-studio-sheet-modal"
       centered
-      destroyOnClose
+      destroyOnHidden
       styles={{ body: { overflow: 'hidden', paddingTop: 8, paddingBottom: 4 } }}
     >
       <div className="group-studio-board-dialog">

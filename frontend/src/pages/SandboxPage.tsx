@@ -8,7 +8,13 @@ import { RuntimeBlockTree } from '../features/runtime-stream/RuntimeBlockTree';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
+import { useModelCatalog } from '../features/models/useModelCatalog';
+import { ModelSelector } from '../features/models/ModelSelector';
+
 export function SandboxPage() {
+  const { catalog, loading: modelsLoading, error: modelsError } = useModelCatalog();
+  const [modelChoice, setModelChoice] = useState('');
+  const modelConfigId = modelChoice || catalog?.defaultModelId || '';
   const { agents, loading: agentsLoading } = useAgents();
   const { state, sendMessage, abort, reset } = useEventStream();
   const [mode, setMode] = useState<'agent' | 'team'>('agent');
@@ -52,6 +58,7 @@ export function SandboxPage() {
             agentId: runtimeAgent.id,
             agentName: runtimeAgent.name,
             message,
+            modelConfigId,
           },
         }),
       });
@@ -77,6 +84,7 @@ export function SandboxPage() {
     setMode(item.payload.mode);
     setAgentId(item.payload.agentId);
     setMessage(item.payload.message);
+    setModelChoice(item.payload.modelConfigId || '');
     setCaseName(item.name);
     reset();
   };
@@ -103,7 +111,7 @@ export function SandboxPage() {
       agentName: runtimeAgent.name,
       mode,
       systemPrompt: runtimeAgent.systemPrompt,
-      model: runtimeAgent.modelConfig.primary,
+      modelConfigId,
       skillIds: runtimeAgent.skills,
       sandbox: true,
       images: [],
@@ -115,6 +123,8 @@ export function SandboxPage() {
   return (
     <div className="grid h-full min-h-0 grid-cols-[360px_1fr] gap-4 overflow-hidden p-4">
       <SandboxControlPanel
+        modelSelector={<ModelSelector catalog={catalog} value={modelConfigId} onChange={setModelChoice}
+          disabled={state.isStreaming} loading={modelsLoading} error={modelsError} />}
         loading={loading}
         mode={mode}
         setMode={setMode}

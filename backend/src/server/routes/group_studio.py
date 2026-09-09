@@ -7,7 +7,7 @@ from-chat / 任务卡 / 成员 / 黑板 / 文件 / 审批 / 插话 / 熔断 / �
 import asyncio
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from src.group_studio.errors import (
     GROUP_STUDIO_DISABLED,
@@ -33,6 +33,7 @@ from src.group_studio.models import (
     GroupStartPhaseRequest,
     GroupStudio,
     GroupStudioFromChatRequest,
+    GroupStudioModelUpdateRequest,
     GroupTaskCardUpdateRequest,
     Membership,
     TaskCard,
@@ -47,6 +48,8 @@ from src.group_studio.service import (
     get_studio_by_chat_session,
     interrupt_run,
     list_studio_files,
+    update_studio_model,
+    resolve_studio_file,
     list_studio_messages,
     list_studios,
     mute_member,
@@ -57,6 +60,7 @@ from src.group_studio.service import (
     remove_member,
     resume_studio,
     close_studio as close_group_studio,
+    delete_studio,
     update_task_card,
     upload_studio_file,
 )
@@ -113,6 +117,26 @@ async def get_studio_snapshot(group_id: str) -> GroupStudio:
         return get_studio(group_id)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
+
+
+@router.delete("/{group_id}", dependencies=[EnabledDep], status_code=204)
+async def delete_studio_route(group_id: str, projectId: str = Query(..., alias="projectId")) -> None:
+    """删除群聊并从当前工作室列表移除。"""
+
+    try:
+        delete_studio(group_id, project_id=projectId)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
+
+
+@router.patch("/{group_id}/model", dependencies=[EnabledDep])
+async def update_model(group_id: str, body: GroupStudioModelUpdateRequest) -> GroupStudio:
+    try:
+        return update_studio_model(group_id, body.project_id, body.model_config_id)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
+    except ValueError as exc:
+        raise group_studio_http_error(422, str(exc)) from exc
 
 
 @router.get("/{group_id}/messages", dependencies=[EnabledDep])
@@ -341,3 +365,18 @@ async def list_files(group_id: str) -> dict:
         return {"files": list_studio_files(group_id)}
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
+
+
+@router.get("/{group_id}/files/{artifact_id}/download", dependencies=[EnabledDep])
+async def download_file(group_id: str, artifact_id: str):
+    """下载已登记的工作室产物，禁止通过请求路径直接读取任意文件。"""
+
+    try:
+        artifact = resolve_studio_file(group_id, artifact_id)
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
+    return FileResponse(
+        path=str(artifact["absolutePath"]),
+        media_type=str(artifact.get("mediaType") or "application/octet-stream"),
+        filename=str(artifact.get("title") or "download"),
+    )

@@ -66,6 +66,7 @@ export interface ChatSessionGroupStudioHint {
 }
 
 export interface ChatSession {
+  modelConfigId?: string;
   id: string;
   title: string;
   agent_id: string;

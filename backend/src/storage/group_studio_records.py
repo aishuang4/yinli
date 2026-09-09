@@ -222,6 +222,7 @@ class GroupStudioRecordStore:
             "workspaceId": studio["workspace_id"],
             "chatSessionId": studio["chat_session_id"],
             "title": studio["title"],
+            "modelConfigId": studio["model_config_id"],
             "status": status,
             "phaseBeforePause": studio["phase_before_pause"] or None,
             "currentTaskCardId": studio["current_task_card_id"],
@@ -1261,8 +1262,8 @@ class GroupStudioRecordStore:
                 awaiting_intake_confirm,
                 orchestrator_meta, budget_json, current_run_id,
                 pending_speaker_member_id, speaker_queue_json, claim_round_json,
-                created_at, updated_at, archived_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                created_at, updated_at, archived_at, model_config_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 group_id,
@@ -1284,6 +1285,7 @@ class GroupStudioRecordStore:
                 now,
                 now,
                 None,
+                payload.get("modelConfigId") or "",
             ),
         )
         conn.execute(

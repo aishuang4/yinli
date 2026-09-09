@@ -42,7 +42,7 @@ export function StudioGoalModal({
       width={520}
       className="group-studio-sheet-modal"
       centered
-      destroyOnClose
+      destroyOnHidden
       styles={{ body: { overflow: 'hidden', paddingTop: 8 } }}
     >
       <div className="group-studio-editor">

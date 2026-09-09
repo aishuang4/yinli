@@ -6,6 +6,7 @@ import type { GroupStudioAgentOption, GroupStudioMember } from './types';
 interface StudioMemberModalProps {
   adding: boolean;
   addingAgentId: string;
+  canAddMembers: boolean;
   memberBusyId: string;
   memberOptions: GroupStudioAgentOption[];
   members: GroupStudioMember[];
@@ -19,6 +20,7 @@ interface StudioMemberModalProps {
 export function StudioMemberModal({
   adding,
   addingAgentId,
+  canAddMembers,
   memberBusyId,
   memberOptions,
   members,
@@ -37,14 +39,18 @@ export function StudioMemberModal({
       width={840}
       className="group-studio-member-modal"
       centered
-      destroyOnClose
+      destroyOnHidden
       styles={{ body: { overflow: 'hidden', paddingTop: 12, paddingBottom: 4 } }}
     >
       <div className="group-studio-member-dialog">
         <section className="group-studio-member-dialog__pane">
           <div className="group-studio-member-dialog__title">可加入</div>
           <div className="group-studio-member-dialog__body">
-            {memberOptions.length === 0 ? (
+            {!canAddMembers ? (
+              <p className="group-studio-member-dialog__notice" role="status">
+                当前工作室阶段不允许添加成员。
+              </p>
+            ) : memberOptions.length === 0 ? (
               <p className="group-studio-muted">没有可加入的 Agent，或人数已达上限。</p>
             ) : (
               <div className="group-studio-agent-grid">
@@ -55,9 +61,13 @@ export function StudioMemberModal({
                       key={agent.id}
                       type="button"
                       className="group-studio-agent-card"
-                      disabled={adding}
+                      disabled={adding || !canAddMembers}
                       data-pending={pending}
-                      onClick={() => onAddMember(agent.id)}
+                      onClick={() => {
+                        if (canAddMembers) {
+                          onAddMember(agent.id);
+                        }
+                      }}
                     >
                       <span className="group-studio-agent-card__name">{agent.name}</span>
                       <span className="group-studio-agent-card__desc">

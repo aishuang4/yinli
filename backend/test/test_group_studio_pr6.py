@@ -191,6 +191,12 @@ def test_upload_and_list_files(client, tmp_path, monkeypatch):
     files = listed.json()["files"]
     assert len(files) == 1
     assert files[0]["id"] == body["id"]
+    downloaded = client.get(
+        f"/api/group-studio/{studio['id']}/files/{body['id']}/download"
+    )
+    assert downloaded.status_code == 200
+    assert "brief.txt" in downloaded.headers.get("content-disposition", "")
+    assert downloaded.content == b"hello group"
     snapshot = client.get(f"/api/group-studio/{studio['id']}").json()
     assert body["id"] in snapshot["blackboard"]["artifacts"]
     events = list_group_studio_events_after(studio["id"], 0)

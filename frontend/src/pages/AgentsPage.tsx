@@ -17,14 +17,13 @@ import type { AgentCreatePayload } from '../types/agent';
 import type { BuilderPlan } from '../types/agentBuilder';
 
 export function AgentsPage() {
-  const { agents, loading, models, createAgent, updateAgent, deleteAgent, refresh } = useAgents();
+  const { agents, loading, createAgent, updateAgent, deleteAgent, refresh } = useAgents();
   const { planning, applying, error: builderError, createPlan, applyPlan } = useAgentBuilder();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [builderOpen, setBuilderOpen] = useState(false);
   const [builderRequirement, setBuilderRequirement] = useState('');
-  const [builderModel, setBuilderModel] = useState('');
   const [builderPlan, setBuilderPlan] = useState<BuilderPlan | null>(null);
 
   const selectedAgent = agents.find((agent) => agent.id === selectedId) || null;
@@ -56,10 +55,9 @@ export function AgentsPage() {
     if (!builderRequirement.trim()) return;
     const plan = await createPlan({
       requirement: builderRequirement.trim(),
-      preferredModel: builderModel || undefined,
     });
     setBuilderPlan(plan);
-  }, [builderModel, builderRequirement, createPlan]);
+  }, [builderRequirement, createPlan]);
 
   const handleApplyBuilderPlan = useCallback(async () => {
     if (!builderPlan) return;
@@ -116,14 +114,11 @@ export function AgentsPage() {
       >
         <AgentBuilderWizard
           requirement={builderRequirement}
-          model={builderModel}
-          models={models}
           plan={builderPlan}
           planning={planning}
           applying={applying}
           error={builderError}
           onRequirementChange={setBuilderRequirement}
-          onModelChange={setBuilderModel}
           onCreatePlan={handleCreateBuilderPlan}
           onApplyPlan={handleApplyBuilderPlan}
           onResetPlan={() => setBuilderPlan(null)}
@@ -137,7 +132,6 @@ export function AgentsPage() {
       <>
         <AgentEditor
           agent={null}
-          models={models}
           availableAgents={agents}
           onSave={handleCreate}
           onCancel={goList}
@@ -152,14 +146,13 @@ export function AgentsPage() {
       <>
         <AgentDetailShell
           title={selectedAgent.name}
-          subtitle={selectedAgent.description || '配置这个智能体的模型、工具和运行边界'}
+          subtitle={selectedAgent.description || '配置这个智能体的工具和运行边界'}
           onBack={goList}
           onExport={() => void handleExportAgent()}
           onDelete={selectedAgent.systemManaged ? undefined : () => setDeleteConfirm(selectedAgent.id)}
         >
           <AgentEditor
             agent={selectedAgent}
-            models={models}
             availableAgents={agents}
             onSave={handleUpdate}
             onCancel={goList}

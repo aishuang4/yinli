@@ -12,6 +12,7 @@ import { FileImportButton } from '../../components/FileImportButton';
 import type { ChatFileAttachment, ChatImageAttachment } from './types';
 
 interface ChatComposerProps {
+  modelSelector?: ReactNode;
   agentOptions: Array<{ label: string; value: string }>;
   agentsLoading: boolean;
   chatError: string | null;
@@ -172,6 +173,9 @@ export function ChatComposer(props: ChatComposerProps) {
               style={{ width: 160 }}
             />
           )}
+          <div className="chat-composer-model-slot min-w-0 max-w-[230px] shrink">
+            {props.modelSelector}
+          </div>
           <div className="ml-auto flex items-center gap-2">
             {targetMode === 'agent' ? (
               <Tooltip title={planMode ? '点击关闭计划模式' : '点击开启计划模式'} placement="top" mode="dark">

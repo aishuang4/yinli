@@ -72,19 +72,12 @@ def build_runtime_model_config(
     """合成本轮实际使用的主模型、fallback 和采样参数。"""
 
     model_config_data = agent_config.model_config_data if agent_config else None
-    model_name = (
-        run_data.model
-        or (model_config_data.primary if model_config_data else None)
-        or runtime_model_settings.default_model
-    )
-    fallback_names = model_config_data.fallback if model_config_data else runtime_model_settings.fallback_models
+    model_name = runtime_model_settings.default_model
+    fallback_names = runtime_model_settings.fallback_models
     return RuntimeModelConfig(
         model_name=model_name,
         fallback_names=fallback_names,
         model_options=AgentModelOptions(
-            temperature=model_config_data.temperature if model_config_data else None,
-            top_p=model_config_data.top_p if model_config_data else None,
-            max_tokens=model_config_data.max_tokens if model_config_data else None,
             max_react_iters=int(getattr(model_config_data, "max_react_iters", 40) or 40) if model_config_data else 40,
         ),
     )

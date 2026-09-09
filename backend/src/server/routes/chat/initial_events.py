@@ -1,6 +1,7 @@
 """Chat Run 开场事件、Trace 和上下文事件输出。"""
 
 from typing import AsyncGenerator
+from src.config.runtime_settings import current_model_binding
 
 from src.server.routes.chat.helpers import source_event
 from src.server.routes.chat.intent_router import route_trace_payload
@@ -55,6 +56,7 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
 
 async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str, None]:
     """输出 SESSION 事件并记录本轮启动 trace。"""
+    binding = current_model_binding()
 
     yield runtime_trace_source_event(
         "RUN_STARTED",
@@ -67,6 +69,8 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
             "mode": run_data.mode,
             "model": ctx.model_name,
             "sandbox": run_data.sandbox,
+            "modelConfigId": binding.primary.entry.id if binding else "",
+            "providerId": binding.primary.provider if binding else "",
         },
     )
     if run_data.sandbox:

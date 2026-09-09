@@ -33,16 +33,6 @@ export const EMPTY_JOB_TOOLKIT: JobToolkit = { required: [], optional: [] };
 
 /** 模型配置 */
 export interface ModelConfig {
-  /** 主模型名称（如 qwen-max） */
-  primary: string;
-  /** 降级模型链（有序） */
-  fallback: string[];
-  /** 温度参数 (0-2) */
-  temperature: number;
-  /** 核采样参数 (0-1) */
-  topP: number;
-  /** 最大输出 token 数 */
-  maxTokens: number;
   /** ReAct 最大循环次数 */
   maxReactIters: number;
 }
@@ -138,27 +128,10 @@ export type AgentCreatePayload = Omit<Agent, 'id' | 'createdAt' | 'updatedAt' | 
 export type AgentUpdatePayload = Partial<AgentCreatePayload>;
 
 /** 可用模型信息 */
-export interface ModelOption {
-  id: string;
-  name: string;
-  description: string;
-}
 
-/** 模型列表 API 响应 */
-export interface ModelsResponse {
-  primary: ModelOption[];
-  fallback: ModelOption[];
-}
 
 /** 默认模型配置 */
-export const DEFAULT_MODEL_CONFIG: ModelConfig = {
-  primary: 'deepseek-v4-flash',
-  fallback: ['deepseek-v4-pro'],
-  temperature: 0.7,
-  topP: 0.8,
-  maxTokens: 4096,
-  maxReactIters: 40,
-};
+export const DEFAULT_MODEL_CONFIG: ModelConfig = { maxReactIters: 40 };
 
 /** 默认安全边界 */
 export const DEFAULT_GUARDRAILS: Guardrails = {

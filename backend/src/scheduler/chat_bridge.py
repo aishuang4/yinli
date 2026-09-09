@@ -65,6 +65,7 @@ class ScheduledRunRequest:
     tool_scope: RuntimeToolScope
     scheduled_for: str
     trigger: Literal["schedule", "manual", "catch_up"]
+    model_config_id: str = ""
 
 
 def scheduled_chat_run_timeout_seconds(agent_id: str) -> float:
@@ -145,6 +146,8 @@ async def await_scheduled_chat_run(
 
 async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
     _validate_request(req)
+    from src.config.runtime_settings import resolve_model_binding
+    binding = resolve_model_binding(req.model_config_id)
     session_id = f"sched-{uuid.uuid4().hex}"
     runtime_context = resolve_runtime_context(
         project_id=req.project_id,
@@ -234,6 +237,7 @@ async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
         trigger_source="scheduled_job",
         scheduled_job_id=req.job_id,
         scheduled_firing_id=req.firing_id,
+        model_binding=binding,
     )
     return run.id
 

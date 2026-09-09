@@ -217,7 +217,8 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 ## 配置与权限
 
 - 启动期静态配置在 `config/settings.py`，环境变量前缀为 `AGENT_WORKSTATION_`。
-- 运行时模型设置在 `config/runtime_settings.py`，非敏感配置持久化到 `json_store`；模型 API Key 不进入 SQLite，macOS 使用 Keychain，Windows 使用当前用户 DPAPI 加密并将密文保存在统一 `userData/data/secrets/` 目录。旧版 SQLite 明文 Key 会在安全写入成功后自动迁移并删除原字段。
+- 模型配置和 Key 统一存于 `USER_DATA_ROOT/models.json`，由 `config/model_catalog.py` 校验、脱敏和原子保存。SQLite / Keychain / DPAPI / 环境变量仅在文件首次初始化时迁移，之后不再作为在线补充来源。Key 在本地文件中为明文，macOS 使用 0600，Windows 使用受限当前用户 ACL；不进入前端响应、Agent 导出或安装包。
+- Chat/Sandbox 使用模型配置 ID；会话记住选择。Agent 仅保存 ReAct 上限。新 Run 固定完整供应商连接、模型参数和降级链；Team、Subagent、审批恢复和后处理继承该快照。定时任务按自己的 `modelConfigId` 或每次触发时的全局默认，工作室创建时固定模型配置 ID。
 - Agent 运行时由 `agents/factory.py` 统一创建和缓存。
 - 工具范围由 `RuntimeToolScope` 与 `tool_scope_resolver.py` 控制。
 - 权限策略由 guardrails 归一化为统一权限模型，再映射到 AgentScope permission mode、工具注入和 Trace。

@@ -194,6 +194,7 @@
 }
 
 .group-studio-context-slot {
+  grid-column: 3;
   width: var(--group-studio-context-width);
   min-width: 0;
   min-height: 0;
@@ -221,6 +222,11 @@
   background: var(--chat-workbench-history-bg, var(--color-bg-secondary));
   padding: 10px 12px 12px;
   gap: 8px;
+}
+
+/* 左侧历史列表收缩动画期间会暂时卸载列表节点，显式列位避免主区落入 0px 轨道。 */
+.group-studio-shell > .chat-workbench-main {
+  grid-column: 2;
 }
 
 .group-studio-section {
@@ -837,6 +843,17 @@
   color: var(--color-text-secondary);
 }
 
+.group-studio-member-dialog__notice {
+  margin: 0;
+  border: 1px solid var(--chat-workbench-border-subtle, var(--color-border));
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+}
+
 .group-studio-member-dialog__body {
   flex: 1 1 auto;
   min-height: 0;
@@ -912,6 +929,80 @@
   }
 }
 
+/* 顶栏控件需要在中等宽度下收缩，否则模型选择器会被右侧上下文栏裁切。 */
+.group-studio-shell .chat-workbench-main > div {
+  width: 100%;
+  min-width: 0;
+}
+
+.group-studio-shell .chat-workbench-topbar {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.group-studio-shell .chat-workbench-topbar > :first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.group-studio-shell .chat-workbench-title-group {
+  min-width: 0;
+}
+
+.group-studio-shell .chat-workbench-title-group > button,
+.group-studio-shell .chat-workbench-title-group .chat-history-collapse-button,
+.group-studio-shell .chat-workbench-title-group .chat-history-new-button {
+  flex: 0 0 36px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+}
+
+.group-studio-shell .chat-workbench-title-copy {
+  width: min(28vw, 420px);
+  max-width: 100%;
+  flex: 0 1 420px;
+  overflow: hidden;
+}
+
+.group-studio-shell .chat-workbench-controls {
+  min-width: 0;
+  flex: 0 0 auto;
+  max-width: none;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.group-studio-shell .chat-workbench-controls > *,
+.group-studio-shell .chat-workbench-controls .notification-bell,
+.group-studio-shell .chat-workbench-controls .chat-workbench-top-action,
+.group-studio-shell .chat-workbench-controls .notification-bell__trigger {
+  flex: 0 0 auto;
+  flex-shrink: 0;
+}
+
+.group-studio-shell .chat-workbench-controls .chat-workbench-top-action,
+.group-studio-shell .chat-workbench-controls .notification-bell__trigger {
+  min-width: 36px;
+  min-height: 36px;
+}
+
+.group-studio-shell .chat-workbench-model-control {
+  flex: 0 0 210px;
+  width: 210px;
+  max-width: 24vw;
+}
+
+.group-studio-shell .chat-workbench-model-control .ant-select,
+.group-studio-shell .chat-workbench-model-control .ant-select-selector {
+  width: 100% !important;
+  max-width: 100%;
+}
+
 /* 打包后的默认 1280px 窗口需要同时容纳群聊列表、对话与上下文。 */
 @media (max-width: 1400px) {
   .group-studio-shell {
@@ -935,6 +1026,24 @@
     padding-left: 0;
     justify-content: center;
   }
+
+  /* 结项是不可逆的主要操作，始终保留文字，避免与“停止发言”混淆。 */
+  .group-studio-shell .chat-workbench-topbar .group-studio-close-action {
+    width: auto;
+    min-width: 88px;
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .group-studio-shell .chat-workbench-topbar .group-studio-close-action > span {
+    display: inline;
+  }
+
+  .group-studio-shell .chat-workbench-model-control {
+    flex-basis: 150px;
+    width: 150px;
+    max-width: 18vw;
+  }
 }
 
 @media (max-width: 1024px) {
@@ -956,8 +1065,54 @@
     gap: 4px;
   }
 
+  .group-studio-shell .chat-workbench-model-control {
+    flex-basis: 130px;
+    width: 130px;
+    max-width: 16vw;
+  }
+
   .group-studio-shell .chat-workbench-status-tag {
     display: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .group-studio-shell .chat-workbench-title-copy {
+    width: 140px;
+    flex-basis: 140px;
+  }
+
+  .group-studio-shell .chat-workbench-title-copy > :nth-child(2) {
+    display: none;
+  }
+
+  .group-studio-shell .chat-workbench-controls {
+    gap: 4px;
+  }
+
+  .group-studio-shell .chat-workbench-model-control {
+    flex-basis: 112px;
+    width: 112px;
+    max-width: 112px;
+  }
+}
+
+/* 群聊工作室始终保留三列语义；全局 Chat 的两列响应式规则不能把右侧上下文栏挪到主区左侧。 */
+@media (max-width: 1180px) {
+  .group-studio-shell {
+    grid-template-columns:
+      var(--group-studio-history-track-width)
+      minmax(0, 1fr)
+      var(--group-studio-context-track-width);
+  }
+}
+
+@media (max-width: 860px) {
+  .group-studio-shell {
+    grid-template-columns:
+      var(--group-studio-history-track-width)
+      minmax(0, 1fr)
+      var(--group-studio-context-track-width);
   }
 }
 

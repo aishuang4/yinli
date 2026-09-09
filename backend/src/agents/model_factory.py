@@ -27,8 +27,7 @@ from agentscope.credential import (
 from agentscope.tool import ToolChoice
 
 from src.agents.runtime_types import AgentModelOptions, FallbackEventCallback
-from src.config.runtime_settings import get_effective_model_settings
-from src.config.settings import settings
+from src.config.runtime_settings import ResolvedModel, binding_for_model
 
 
 def create_model(
@@ -36,6 +35,7 @@ def create_model(
     stream: bool = True,
     thinking_enable: bool = False,
     model_options: AgentModelOptions | None = None,
+    resolved_model: ResolvedModel | None = None,
 ):
     """
     创建当前运行供应商的聊天模型实例。
@@ -48,18 +48,15 @@ def create_model(
         ChatModelBase: 配置好的模型实例
     """
 
+    runtime = resolved_model or binding_for_model(model_name).primary
+    model_name = runtime.default_model
+    configured = runtime.entry.parameters
     parameters: dict[str, object] = {
         "thinking_enable": thinking_enable,
+        "temperature": configured.temperature,
+        "top_p": configured.top_p,
+        "max_tokens": configured.max_tokens,
     }
-    if model_options:
-        if model_options.temperature is not None:
-            parameters["temperature"] = model_options.temperature
-        if model_options.top_p is not None:
-            parameters["top_p"] = model_options.top_p
-        if model_options.max_tokens is not None:
-            parameters["max_tokens"] = model_options.max_tokens
-
-    runtime = get_effective_model_settings()
     api_key = SecretStr(runtime.api_key)
     base_url = runtime.base_url or None
 
@@ -90,6 +87,7 @@ def create_model(
     if runtime.adapter == "gemini":
         return GeminiChatModel(
             credential=GeminiCredential(api_key=api_key),
+            client_kwargs={"http_options": {"base_url": base_url}} if base_url else {},
             model=model_name,
             parameters=GeminiChatModel.Parameters(**parameters),
             stream=stream,
@@ -120,7 +118,7 @@ def create_model(
     return DashScopeChatModel(
         credential=DashScopeCredential(
             api_key=api_key,
-            base_url=runtime.base_url or settings.dashscope_base_url,
+            base_url=runtime.base_url,
         ),
         model=model_name,
         parameters=DashScopeChatModel.Parameters(**parameters),
@@ -190,7 +188,7 @@ class FallbackChainModel(ChatModelBase):
                     "model": model.model,
                     "index": index,
                     "total": total,
-                    "error": str(exc),
+                    "error": type(exc).__name__,
                 })
         if last_error:
             raise last_error
@@ -210,27 +208,20 @@ def create_model_chain(
     thinking_enable: bool = False,
     model_options: AgentModelOptions | None = None,
     on_fallback_event: FallbackEventCallback | None = None,
+    resolved_models: tuple[ResolvedModel, ...] | None = None,
 ) -> ChatModelBase:
     """Create a primary + fallback chain as one AgentScope-compatible model."""
 
-    cleaned_names: list[str] = []
-    seen_names: set[str] = set()
-    for raw_name in model_names:
-        name = str(raw_name).strip()
-        if not name or name in seen_names:
-            continue
-        seen_names.add(name)
-        cleaned_names.append(name)
-    if not cleaned_names:
-        raise ValueError("At least one model name is required")
+    chain = resolved_models or binding_for_model(model_names[0] if model_names else None).chain
     models = [
         create_model(
-            name,
+            item.default_model,
             stream=True,
             thinking_enable=thinking_enable,
             model_options=model_options,
+            resolved_model=item,
         )
-        for name in cleaned_names
+        for item in chain
     ]
     if len(models) == 1:
         return models[0]

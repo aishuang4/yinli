@@ -172,6 +172,7 @@ def _build_rerun_chat_message(source_run) -> ChatMessage:
         raise HTTPException(status_code=404, detail="Agent for rerun not found")
     return ChatMessage(
         session_id=source_run.session_id,
+        modelConfigId=getattr(source_run, "model_metadata", {}).get("modelConfigId") or None,
         project_id=getattr(source_run, "project_id", DEFAULT_PROJECT_ID),
         message=message,
         agent_id=source_run.agent_id or None,

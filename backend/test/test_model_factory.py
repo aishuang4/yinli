@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from src.agents import model_factory
 
 
-def test_create_model_chain_removes_duplicate_models(monkeypatch) -> None:
+def test_create_model_chain_uses_catalog_fallbacks(monkeypatch) -> None:
     """主模型与 fallback 重复时只创建并展示一次。"""
 
     created: list[str] = []
@@ -30,15 +30,15 @@ def test_create_model_chain_removes_duplicate_models(monkeypatch) -> None:
         ),
     )
 
-    model = model_factory.create_model_chain([
-        "deepseek-v4-flash",
-        "deepseek-v4-flash",
-        " deepseek-reasoner ",
-        "deepseek-reasoner",
-    ])
+    from src.config.model_catalog import read_catalog, save_catalog
+    catalog, etag = read_catalog()
+    payload = catalog.model_dump(mode="json", by_alias=True)
+    payload["models"][0]["fallbackModelIds"] = ["deepseek-v4-pro"]
+    save_catalog(payload, etag)
+    model = model_factory.create_model_chain(["deepseek-v4-flash"])
 
-    assert created == ["deepseek-v4-flash", "deepseek-reasoner"]
-    assert model.model == "deepseek-v4-flash -> deepseek-reasoner"
+    assert created == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert model.model == "deepseek-v4-flash -> deepseek-v4-pro"
 
 
 def test_create_model_chain_returns_single_model_after_deduplication(monkeypatch) -> None:

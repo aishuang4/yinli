@@ -1,6 +1,13 @@
 # 引力 YINLI 项目进展与协作交接
 
-> 更新时间：2026-09-01。本文只记录当前完成度、验证结果和已知缺口。
+> 更新时间：2026-09-07。本文只记录当前完成度、验证结果和已知缺口。
+
+## 本轮模型配置改造
+
+- 已实施 [Chat 模型选择与 models.json 配置 V1](./chat-model-selection-v1.md)：Agent 不再选模型，Chat / Sandbox 按配置 ID 选择，所有连接与 Key 从用户数据目录 `models.json` 读取。
+- Run 固定完整连接快照，Team / Subagent / 审批恢复 / 后处理继承；会话、Job 和工作室存配置 ID。旧 SQLite 与安全凭据库仅在首次迁移读取。
+- 后端全量 `690 passed, 2 skipped`，最终模型专项 `14 passed, 1 skipped`；前端 lint/build、Electron 编译、新模块 Ruff 检查通过。旧基线测试记录见下文，不代表当前结果。
+- 双模拟供应商实际 HTTP 请求、浏览器配置保存与会话选择、macOS arm64 后端打包及启动检查通过。Windows CI 已添加但未执行，完整安装包安装与真实供应商矩阵仍待发布验收。
 
 ## 当前阶段
 

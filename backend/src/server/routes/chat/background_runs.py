@@ -9,6 +9,7 @@ from collections.abc import AsyncGenerator, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from src.config.runtime_settings import set_model_binding, reset_model_binding
 
 from src.server.routes.chat.lifecycle import (
     ACTIVE_RUN_STATUSES,
@@ -78,6 +79,8 @@ class ChatBackgroundRun:
     async_task: asyncio.Task | None = None
     persisted: bool = False
     normalizer: ChatProjectionNormalizer | None = None
+    model_binding: object | None = field(default=None, repr=False)
+    model_metadata: dict = field(default_factory=dict)
 
     @property
     def stream_key(self) -> str:
@@ -194,6 +197,7 @@ async def start_chat_background_run(
     trigger_source: str = "user",
     scheduled_job_id: str = "",
     scheduled_firing_id: str = "",
+    model_binding=None,
 ) -> ChatBackgroundRun:
     """创建 Run、V3 stream 和根 message Block 后启动后台执行。"""
 
@@ -209,6 +213,17 @@ async def start_chat_background_run(
         trigger_source=trigger_source or "user",
         scheduled_job_id=scheduled_job_id or "",
         scheduled_firing_id=scheduled_firing_id or "",
+        model_binding=model_binding,
+        model_metadata={
+            "modelConfigId": model_binding.primary.entry.id,
+            "providerId": model_binding.primary.provider,
+            "modelName": model_binding.primary.default_model,
+            "revision": model_binding.catalog.revision,
+            "chain": [{"modelConfigId": item.entry.id, "providerId": item.provider,
+                       "model": item.default_model, "adapter": item.adapter,
+                       "baseUrl": item.base_url, "parameters": item.entry.parameters.model_dump(by_alias=True)}
+                      for item in model_binding.chain],
+        } if model_binding else {},
     )
     if persist:
         _persist_run(run)
@@ -339,6 +354,7 @@ async def relay_chat_background_run_events(
         raise RuntimeError(f"Chat Run {run_id} 没有可恢复的活动 projection context")
     await mark_chat_background_run_status(run_id, "running")
     token = CURRENT_BACKGROUND_RUN_ID.set(run_id)
+    model_token = set_model_binding(run.model_binding)
     try:
         async for event in events:
             frames = await _ingest_source_event(run, event)
@@ -362,6 +378,7 @@ async def relay_chat_background_run_events(
         if run.status in TERMINAL_RUN_STATUSES:
             await _close_subscribers(run)
         CURRENT_BACKGROUND_RUN_ID.reset(token)
+        reset_model_binding(model_token)
 
 
 def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
@@ -374,6 +391,7 @@ def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
         "agentName": run.agent_name,
         "task": run.task_text,
         "mode": run.mode,
+        **{key: run.model_metadata.get(key, "") for key in ("modelConfigId", "providerId", "modelName")},
         "triggerSource": run.trigger_source,
         "scheduledJobId": run.scheduled_job_id,
         "scheduledFiringId": run.scheduled_firing_id,
@@ -392,6 +410,7 @@ def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
 
 async def _consume_source_events(run: ChatBackgroundRun, factory: SourceStreamFactory) -> None:
     token = CURRENT_BACKGROUND_RUN_ID.set(run.id)
+    model_token = set_model_binding(run.model_binding)
     try:
         async for event in factory():
             await _ingest_source_event(run, event)
@@ -409,6 +428,7 @@ async def _consume_source_events(run: ChatBackgroundRun, factory: SourceStreamFa
         if run.status in TERMINAL_RUN_STATUSES:
             await _close_subscribers(run)
         CURRENT_BACKGROUND_RUN_ID.reset(token)
+        reset_model_binding(model_token)
 
 
 async def _ingest_source_event(run: ChatBackgroundRun, source_event: SourceEvent) -> list[str]:
@@ -527,6 +547,7 @@ def _source_error_signal(message: str) -> SourceEvent:
 def _persist_run(run: ChatBackgroundRun) -> None:
     upsert_chat_run({
         "id": run.id,
+        "modelConfig": run.model_metadata,
         "sessionId": run.session_id,
         "workspaceId": run.workspace_id,
         "projectId": run.project_id,
@@ -547,6 +568,7 @@ def _persist_run(run: ChatBackgroundRun) -> None:
 def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
     return ChatBackgroundRun(
         id=record["id"],
+        model_metadata=record.get("modelConfig") or {},
         session_id=record["sessionId"],
         workspace_id=record.get("workspaceId", "default"),
         project_id=record.get("projectId", "default"),

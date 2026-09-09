@@ -2233,7 +2233,7 @@ def test_runtime_tool_scope_cache_key_is_stable():
     assert scope.cache_key() == "mcp-0:knowledge-1:bash-0:http-1:web-1"
 
 
-def test_runtime_builder_model_config_prefers_request_model():
+def test_runtime_builder_ignores_legacy_request_and_agent_models():
     config = build_runtime_model_config(
         run_data=SimpleNamespace(model="request-model"),
         agent_config=SimpleNamespace(
@@ -2252,9 +2252,83 @@ def test_runtime_builder_model_config_prefers_request_model():
         ),
     )
 
-    assert config.model_name == "request-model"
-    assert config.fallback_names == ["fallback-a"]
+    assert config.model_name == "runtime-model"
+    assert config.fallback_names == ["runtime-fallback"]
+    assert config.model_options.temperature is None
     assert config.model_options.max_react_iters == 12
+
+
+def test_runtime_builder_default_agent_follows_runtime_model_settings():
+    config = build_runtime_model_config(
+        run_data=SimpleNamespace(model=""),
+        agent_config=SimpleNamespace(
+            id="default",
+            model_config_data=SimpleNamespace(
+                primary="old-provider-model",
+                fallback=["old-fallback"],
+                temperature=0.2,
+                top_p=0.9,
+                max_tokens=1024,
+                max_react_iters=12,
+            ),
+        ),
+        runtime_model_settings=SimpleNamespace(
+            default_model="new-provider-model",
+            fallback_models=["new-fallback"],
+        ),
+    )
+
+    assert config.model_name == "new-provider-model"
+    assert config.fallback_names == ["new-fallback"]
+    assert config.model_options.max_react_iters == 12
+
+
+def test_runtime_builder_custom_agent_uses_run_model():
+    config = build_runtime_model_config(
+        run_data=SimpleNamespace(model=""),
+        agent_config=SimpleNamespace(
+            id="custom-agent",
+            model_config_data=SimpleNamespace(
+                primary="custom-model",
+                fallback=["custom-fallback"],
+                temperature=0.7,
+                top_p=0.8,
+                max_tokens=4096,
+                max_react_iters=40,
+            ),
+        ),
+        runtime_model_settings=SimpleNamespace(
+            default_model="runtime-model",
+            fallback_models=["runtime-fallback"],
+        ),
+    )
+
+    assert config.model_name == "runtime-model"
+    assert config.fallback_names == ["runtime-fallback"]
+
+
+def test_runtime_builder_legacy_pinned_agent_uses_run_model():
+    config = build_runtime_model_config(
+        run_data=SimpleNamespace(model=""),
+        agent_config=SimpleNamespace(
+            id="default",
+            model_config_data=SimpleNamespace(
+                primary="pinned-model",
+                fallback=["pinned-fallback"],
+                temperature=0.7,
+                top_p=0.8,
+                max_tokens=4096,
+                max_react_iters=40,
+            ),
+        ),
+        runtime_model_settings=SimpleNamespace(
+            default_model="runtime-model",
+            fallback_models=["runtime-fallback"],
+        ),
+    )
+
+    assert config.model_name == "runtime-model"
+    assert config.fallback_names == ["runtime-fallback"]
 
 
 def test_runtime_builder_cache_key_includes_tool_scope():

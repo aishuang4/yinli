@@ -77,6 +77,7 @@ from src.storage.database import (
     set_group_studio_member_muted,
     set_group_studio_member_removed,
     set_group_studio_status,
+    update_group_studio_model_config,
     update_group_studio_state,
 )
 
@@ -201,10 +202,15 @@ def list_studio_messages(
 def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
     """升级或回到当前 Chat 会话对应的未归档工作室。
 
-    `draftText` 与 Chat 上一句是开场白，不是 Goal；新建恒为 drafting。
+    `draftText` 与 Chat 上一句只作为开场白展示，不是 Goal；新建恒为 drafting，
+    必须等用户在工作室内明确操作后才启动主持人。
     """
 
     session_id = request.chat_session_id.strip()
+    from src.config.runtime_settings import resolve_model_binding
+    from src.server.routes.chat.store import _load_store
+    session = next((s for s in _load_store().sessions if s.id == session_id), None)
+    model_binding = resolve_model_binding(request.model_config_id or (session.model_config_id if session else None), validate=False)
     _raise_if_chat_run_active(session_id)
 
     existing = get_active_group_studio_by_chat_session(session_id)
@@ -293,6 +299,7 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
         "workspaceId": context.workspace_id,
         "projectId": context.project_id,
         "chatSessionId": session_id,
+        "modelConfigId": model_binding.primary.entry.id,
         "title": title,
         "status": studio_status,
         "budget": {
@@ -346,7 +353,6 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
     studio = _snapshot_to_model(snapshot)
     if seed_text.strip() and not any(item.body.strip() for item in studio.messages):
         _emit_human_timeline_message(studio.id, seed_text)
-        schedule_host_turn(studio.id)
         studio = get_studio(studio.id)
     return studio
 
@@ -357,6 +363,21 @@ def archive_studio_for_session_delete(group_id: str) -> None:
     from src.group_studio.sessions import drop_group_tool_contexts
 
     archive_group_studio(group_id)
+    drop_group_tool_contexts(group_id)
+
+
+def delete_studio(group_id: str, *, project_id: str) -> None:
+    """删除群聊：归档其领域数据并从当前群聊列表移除。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    if studio.current_run_id:
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    if studio.status == "archived":
+        return
+    archive_group_studio(group_id)
+    from src.group_studio.sessions import drop_group_tool_contexts
+
     drop_group_tool_contexts(group_id)
 
 
@@ -1144,6 +1165,35 @@ def list_studio_files(group_id: str) -> list[dict]:
     return list_group_studio_artifacts(group_id)
 
 
+def update_studio_model(group_id: str, project_id: str, model_config_id: str) -> GroupStudio:
+    """工作室进入运行阶段前允许切换模型。"""
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    if studio.status not in {"drafting", "discussing"} or studio.current_run_id:
+        raise GroupStudioError(409, ILLEGAL_TRANSITION)
+    from src.config.runtime_settings import resolve_model_binding
+    resolve_model_binding(model_config_id)
+    return _snapshot_to_model(update_group_studio_model_config(group_id, model_config_id))
+
+
+def resolve_studio_file(group_id: str, artifact_id: str) -> dict[str, object]:
+    """解析工作室产物路径，并限制在所属 Project 根目录内。"""
+
+    studio = _load_studio(group_id)
+    artifact = next(
+        (item for item in list_group_studio_artifacts(group_id) if str(item.get("id")) == artifact_id),
+        None,
+    )
+    if artifact is None:
+        raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
+    project = get_project(studio.project_id)
+    project_root = Path(str((project or {}).get("rootPath") or "")).expanduser().resolve()
+    candidate = (project_root / str(artifact.get("path") or "")).resolve()
+    if not project_root.is_dir() or not candidate.is_relative_to(project_root) or not candidate.is_file():
+        raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
+    return {**artifact, "absolutePath": candidate}
+
+
 async def upload_studio_file(
     group_id: str,
     upload,
@@ -1182,4 +1232,3 @@ async def upload_studio_file(
     )
     patch_blackboard(group_id, {"addArtifactIds": [artifact.id]})
     return artifact
-

@@ -208,7 +208,7 @@ export function useEventStream(): UseEventStreamReturn {
           agent_name: options?.agentName,
           mode: options?.mode || 'agent',
           system_prompt: options?.systemPrompt,
-          model: options?.model,
+          modelConfigId: options?.modelConfigId,
           session_id: options?.sessionId,
           skill_ids: options?.skillIds,
           deep_thinking: options?.deepThinking,

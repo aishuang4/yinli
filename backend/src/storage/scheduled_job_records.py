@@ -27,7 +27,7 @@ _JOB_JSON_FIELDS = {
 }
 _JOB_UPDATE_FIELDS = (
     "workspace_id", "project_id", "name", "summary", "status", "pause_reason",
-    "agent_id", "mode", "schedule_kind", "schedule_expr", "timezone",
+    "agent_id", "mode", "schedule_kind", "schedule_expr", "timezone", "model_config_id",
     "next_run_at", "last_run_at", "frozen_prompt", "skill_ids", "tool_scope",
     "capability_contract",
     "input_spec", "output_spec", "missed_policy", "failure_policy",
@@ -87,10 +87,10 @@ class ScheduledJobRecordStore:
                         delivery_channel_ref, recipient_ids, unattended_permission,
                         auto_send_enabled_at, required_successes, consecutive_successes,
                         consecutive_failures, max_consecutive_failures, max_firings_per_day,
-                        created_from_session_id, created_at, updated_at, archived_at
+                        created_from_session_id, created_at, updated_at, archived_at, model_config_id
                     ) VALUES (
                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
                     """,
                     self._job_params(payload),
@@ -602,6 +602,7 @@ class ScheduledJobRecordStore:
             record["created_at"],
             record["updated_at"],
             record.get("archived_at"),
+            record.get("model_config_id") or "",
         )
 
     def _job_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
@@ -617,6 +618,7 @@ class ScheduledJobRecordStore:
             "status": row["status"],
             "pause_reason": row["pause_reason"],
             "agent_id": row["agent_id"],
+            "model_config_id": row["model_config_id"],
             "mode": row["mode"],
             "schedule_kind": row["schedule_kind"],
             "schedule_expr": self.loads(row["schedule_expr"], {}),

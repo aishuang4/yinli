@@ -1,6 +1,7 @@
 /** 右侧可折叠上下文：用现有表单组件，紧凑分区尽量一屏看完。 */
 
 import { useRef, useState, type KeyboardEvent } from 'react';
+import { Download } from 'lucide-react';
 import { FileImportButton } from '../../components/FileImportButton';
 import { StudioBlackboardModal } from './StudioBlackboardModal';
 import { StudioDodModal } from './StudioDodModal';
@@ -33,6 +34,8 @@ interface StudioContextPanelProps {
   onSaveGoal: (goal: string) => void;
   onToggleDod: (itemId: string, checked: boolean) => void;
   onUploadFile: (files: FileList | null) => void;
+  onDownloadFile: (file: GroupStudioFile) => void;
+  onOpenMembers: () => void;
 }
 
 export function StudioContextPanel({
@@ -55,6 +58,8 @@ export function StudioContextPanel({
   onSaveGoal,
   onToggleDod,
   onUploadFile,
+  onDownloadFile,
+  onOpenMembers,
 }: StudioContextPanelProps) {
   const blackboard = studio?.blackboard;
   const openQuestions = (blackboard?.openQuestions ?? []).filter((item) => !item.resolved);
@@ -63,6 +68,7 @@ export function StudioContextPanel({
   const speakerQueue = studio?.speakerQueue ?? [];
   const archived = studio?.status === 'archived';
   const cardLocked = !studio || studio.status === 'closing' || archived;
+  const memberAddingLocked = !studio || ['drafting', 'closing', 'archived', 'failed'].includes(studio.status);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
   const [goalModalOpen, setGoalModalOpen] = useState(false);
   const [dodModalOpen, setDodModalOpen] = useState(false);
@@ -113,16 +119,19 @@ export function StudioContextPanel({
       <section
         className="group-studio-section group-studio-section--hit"
         role="button"
-        tabIndex={0}
-        aria-label="管理成员"
+        tabIndex={studio ? 0 : -1}
+        aria-label={memberAddingLocked ? '查看成员（当前阶段不可修改）' : '管理成员'}
+        aria-disabled={!studio}
         onClick={() => {
-          if (studio?.status !== 'drafting') {
+          if (studio) {
             openModal(() => setMemberModalOpen(true));
+            onOpenMembers();
           }
         }}
         onKeyDown={(event) => openOnEnter(event, () => {
-          if (studio?.status !== 'drafting') {
+          if (studio) {
             setMemberModalOpen(true);
+            onOpenMembers();
           }
         })}
       >
@@ -302,6 +311,15 @@ export function StudioContextPanel({
               <li key={item.id} className="group-studio-file-row">
                 <span className="min-w-0 truncate">{item.title}</span>
                 <span>{formatBytes(item.byteSize)}</span>
+                <button
+                  type="button"
+                  className="icon-button h-7 w-7 shrink-0"
+                  aria-label={`下载 ${item.title}`}
+                  title={`下载 ${item.title}`}
+                  onClick={() => onDownloadFile(item)}
+                >
+                  <Download size={14} />
+                </button>
               </li>
             ))
           )}
@@ -313,6 +331,7 @@ export function StudioContextPanel({
         memberOptions={memberOptions}
         adding={adding}
         addingAgentId={addingAgentId}
+        canAddMembers={!memberAddingLocked}
         memberBusyId={memberBusyId}
         onClose={closeMemberModal}
         onAddMember={onAddMember}

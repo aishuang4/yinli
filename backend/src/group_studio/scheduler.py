@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 
 from src.group_studio.events import emit_envelope
@@ -14,7 +15,13 @@ from src.group_studio.workboard import (
     pop_unrunnable_claim,
 )
 from src.group_studio.worker_runtime import run_worker_turn
-from src.storage.database import get_group_studio_snapshot
+from src.storage.database import (
+    get_group_studio_snapshot,
+    set_group_studio_current_run_id,
+    update_group_studio_run_status,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def should_auto_start_host() -> bool:
@@ -118,6 +125,12 @@ async def _run_host_guarded(group_id: str, *, phase_followup: bool = False) -> N
         ):
             await _run_host_guarded(group_id, phase_followup=True)
     except Exception:
+        logger.exception("群聊 Host turn crashed: group_id=%s", group_id)
+        snapshot = get_group_studio_snapshot(group_id, message_limit=1) or {}
+        run_id = snapshot.get("currentRunId")
+        if run_id:
+            update_group_studio_run_status(str(run_id), "failed", "host turn crashed")
+            set_group_studio_current_run_id(group_id, None)
         emit_envelope(
             group_id=group_id,
             event_type="GROUP_ERROR",
@@ -151,6 +164,25 @@ async def _run_worker_guarded(group_id: str, member_id: str, *, duty: str = "que
         )
         schedule_host_turn(group_id)
     except Exception:
+        logger.exception(
+            "群聊 Worker turn crashed: group_id=%s member_id=%s duty=%s",
+            group_id,
+            member_id,
+            duty,
+        )
+        snapshot = get_group_studio_snapshot(group_id, message_limit=1) or {}
+        run_id = snapshot.get("currentRunId")
+        if run_id:
+            update_group_studio_run_status(str(run_id), "failed", "worker turn crashed")
+            set_group_studio_current_run_id(group_id, None)
+            emit_envelope(
+                group_id=group_id,
+                event_type="GROUP_RUN_ENDED",
+                run_id=str(run_id),
+                payload={"runId": str(run_id), "status": "failed"},
+            )
+        pop_unrunnable_head(group_id)
+        pop_unrunnable_claim(group_id)
         emit_envelope(
             group_id=group_id,
             event_type="GROUP_ERROR",

@@ -16,7 +16,7 @@ from src.tools import scheduled_job_tools
 
 
 def test_default_websearch_job_agent_config_is_exact() -> None:
-    """内置配置使用稳定 ID、指定模型和两个必注入网络工具。"""
+    """内置配置使用稳定 ID、执行上限和两个必注入网络工具。"""
 
     agent = agents_routes._build_default_websearch_job_agent()
 
@@ -24,8 +24,7 @@ def test_default_websearch_job_agent_config_is_exact() -> None:
     assert agent.name == "WebSearch"
     assert agent.description == "能够联网搜索的agent"
     assert agent.system_prompt == "请根据用户需要完成定时任务"
-    assert agent.model_config_data.primary == "deepseek-v4-flash"
-    assert agent.model_config_data.fallback == []
+    assert set(agent.model_config_data.model_dump()) == {"max_react_iters"}
     assert agent.role == "job"
     assert [item.model_dump() for item in agent.job_toolkit.required] == [
         {"kind": "builtin", "id": "WebFetch"},

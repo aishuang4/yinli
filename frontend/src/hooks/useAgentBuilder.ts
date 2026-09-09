@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import type { BuilderApplyResponse, BuilderPlan, BuilderPlanPayload } from '../types/agentBuilder';
+import { useAppStore } from '../stores/appStore';
 
 interface UseAgentBuilderReturn {
   planning: boolean;
@@ -19,6 +20,8 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function useAgentBuilder(): UseAgentBuilderReturn {
+  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const [planning, setPlanning] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +54,11 @@ export function useAgentBuilder(): UseAgentBuilderReturn {
       return await requestJson<BuilderApplyResponse>('/api/agent-builder/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan }),
+        body: JSON.stringify({
+          plan,
+          workspaceId: activeWorkspaceId,
+          projectId: activeProjectId,
+        }),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : '创建失败';
@@ -60,7 +67,7 @@ export function useAgentBuilder(): UseAgentBuilderReturn {
     } finally {
       setApplying(false);
     }
-  }, []);
+  }, [activeProjectId, activeWorkspaceId]);
 
   return { planning, applying, error, createPlan, applyPlan };
 }

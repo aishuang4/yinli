@@ -12,7 +12,6 @@ import type {
   Agent,
   AgentCreatePayload,
   AgentUpdatePayload,
-  ModelsResponse,
 } from '../types/agent';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { useAppStore } from '../stores/appStore';
@@ -26,8 +25,6 @@ interface UseAgentsReturn {
   loading: boolean;
   /** 错误信息 */
   error: string | null;
-  /** 可用模型列表 */
-  models: ModelsResponse | null;
 
   /** 刷新 Agent 列表 */
   refresh: () => Promise<void>;
@@ -110,11 +107,6 @@ function mapApiAgent(api: AgentApiData): Agent {
     description: api.description,
     systemPrompt: api.system_prompt,
     modelConfig: {
-      primary: api.modelConfig.primary,
-      fallback: api.modelConfig.fallback,
-      temperature: api.modelConfig.temperature,
-      topP: api.modelConfig.top_p ?? 0.8,
-      maxTokens: api.modelConfig.max_tokens,
       maxReactIters: api.modelConfig.max_react_iters ?? api.modelConfig.maxReactIters ?? 40,
     },
     mcpTools: api.mcpTools,
@@ -191,11 +183,6 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
 
   if ('modelConfig' in data && data.modelConfig) {
     result.modelConfig = {
-      primary: data.modelConfig.primary,
-      fallback: data.modelConfig.fallback,
-      temperature: data.modelConfig.temperature,
-      top_p: data.modelConfig.topP,
-      max_tokens: data.modelConfig.maxTokens,
       max_react_iters: data.modelConfig.maxReactIters,
     };
   }
@@ -234,7 +221,6 @@ export function useAgents(): UseAgentsReturn {
   const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const [agents, setAgents] = useState<Agent[]>([]);
-  const [models, setModels] = useState<ModelsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -255,19 +241,6 @@ export function useAgents(): UseAgentsReturn {
       setLoading(false);
     }
   }, [activeWorkspaceId]);
-
-  /** 获取可用模型列表 */
-  const loadModels = useCallback(async () => {
-    try {
-      const res = await fetch('/api/agents/models');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setModels(data);
-    } catch {
-      // 模型列表加载失败不阻塞 UI
-      console.warn('Failed to load models list');
-    }
-  }, []);
 
   /** 创建 Agent */
   const createAgent = useCallback(async (payload: AgentCreatePayload): Promise<Agent> => {
@@ -340,14 +313,13 @@ export function useAgents(): UseAgentsReturn {
   // 初始加载
   useEffect(() => {
     refresh();
-    loadModels();
-  }, [refresh, loadModels]);
+  }, [refresh]);
+
 
   return {
     agents,
     loading,
     error,
-    models,
     refresh,
     createAgent,
     updateAgent,

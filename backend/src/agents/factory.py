@@ -41,7 +41,7 @@ from src.agents.runtime_types import (
     RuntimeToolScope,
     WORKSPACE_DIR,
 )
-from src.config.runtime_settings import get_effective_model_settings
+from src.config.runtime_settings import binding_for_model
 from src.config.runtime_paths import SANDBOX_ROOT
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.tools.ask_user import AskUser
@@ -641,14 +641,14 @@ def get_or_create_agent(
     Returns:
         Agent: AgentScope Agent 实例
     """
-    # 缓存命中则直接返回
-    if agent_id in _agent_cache:
+    binding = binding_for_model(model_name)
+    # 完整配置比较只驻留内存；Key 不进入缓存键、日志或运行记录。
+    if agent_id in _agent_cache and getattr(_agent_cache[agent_id], "_model_binding", None) == binding:
         return _agent_cache[agent_id]
 
     # 使用配置默认值
-    runtime = get_effective_model_settings()
-    primary_model = model_name or runtime.default_model
-    fallbacks = fallback_names if fallback_names is not None else runtime.fallback_models
+    primary_model = binding.primary.default_model
+    fallbacks = [item.default_model for item in binding.chain[1:]]
 
     # 创建应用层模型链：primary -> fallback1 -> fallback2 ...
     main_model = create_model_chain(
@@ -656,6 +656,7 @@ def get_or_create_agent(
         thinking_enable=thinking_enable,
         model_options=model_options,
         on_fallback_event=on_fallback_event,
+        resolved_models=binding.chain,
     )
 
     # 创建 Workspace — local 默认，docker 用 AgentScope 内置容器沙盒
@@ -730,6 +731,7 @@ def get_or_create_agent(
     )
 
     # 缓存并返回
+    agent._model_binding = binding
     _agent_cache[agent_id] = agent
     return agent
 

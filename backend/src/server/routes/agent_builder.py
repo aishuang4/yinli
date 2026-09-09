@@ -8,17 +8,19 @@ import json
 import re
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from agentscope.message import UserMsg
 from agentscope.permission import PermissionMode
 
 from src.agents.factory import get_or_create_agent
-from src.config.runtime_settings import MODEL_PROVIDERS, get_effective_model_settings
+from src.config.legacy_model_settings import MODEL_PROVIDERS
+from src.config.runtime_settings import get_effective_model_settings
 from src.server.routes.agents import AgentCreate, AgentResponse, Guardrails, ModelConfig, create_agent
 from src.server.routes.mcp import _mcp_servers
 from src.server.routes.skills import _skills
+from src.storage.database import get_project, upsert_project_resource_binding
 
 router = APIRouter()
 
@@ -74,8 +76,10 @@ class BuilderApplyRequest(BaseModel):
     """Apply a confirmed builder draft."""
 
     plan: BuilderPlanResponse
+    workspace_id: str = Field(default="default", alias="workspaceId")
+    project_id: str = Field(default="", alias="projectId")
 
-    model_config = {"extra": "forbid"}
+    model_config = {"populate_by_name": True, "extra": "forbid"}
 
 
 class BuilderApplyResponse(BaseModel):
@@ -89,6 +93,13 @@ class BuilderApplyResponse(BaseModel):
 
 @router.post("/plan", response_model=BuilderPlanResponse)
 async def plan_agents(data: BuilderPlanRequest) -> BuilderPlanResponse:
+    """规划开始后固定系统默认模型。"""
+    from src.config.runtime_settings import resolve_model_binding, model_binding_scope
+    with model_binding_scope(resolve_model_binding(validate=False)):
+        return await _plan_agents(data)
+
+
+async def _plan_agents(data: BuilderPlanRequest) -> BuilderPlanResponse:
     """生成可审核的 Agent 创建草案。"""
 
     warnings: list[str] = []
@@ -115,6 +126,12 @@ async def plan_agents(data: BuilderPlanRequest) -> BuilderPlanResponse:
 async def apply_agents(data: BuilderApplyRequest) -> BuilderApplyResponse:
     """从确认后的草案创建独立 Agent。"""
 
+    project = get_project(data.project_id) if data.project_id else None
+    if data.project_id and project is None:
+        raise HTTPException(status_code=422, detail=f"Project 不存在: {data.project_id}")
+    if project is not None and str(project.get("workspaceId") or "default") != data.workspace_id:
+        raise HTTPException(status_code=422, detail="Project 不属于当前 Workspace")
+
     created_agents: list[AgentResponse] = []
     warnings = list(data.plan.warnings)
 
@@ -128,8 +145,16 @@ async def apply_agents(data: BuilderApplyRequest) -> BuilderApplyResponse:
             skills=draft.skills,
             tags=draft.tags,
             guardrails=Guardrails(human_approval=True),
+            workspaceId=data.workspace_id,
         ))
         created_agents.append(agent)
+        if data.project_id:
+            upsert_project_resource_binding({
+                "project_id": data.project_id,
+                "resource_type": "agent",
+                "resource_id": agent.id,
+                "enabled": True,
+            })
 
     return BuilderApplyResponse(
         createdAgents=created_agents,
@@ -165,7 +190,7 @@ async def _generate_plan_with_model(data: BuilderPlanRequest) -> dict:
         "Generate one or more standalone Agents. Never create a Team or fixed member list.",
     ])
     runtime_settings = get_effective_model_settings()
-    model_name = data.preferred_model or runtime_settings.default_model
+    model_name = runtime_settings.default_model
     agent = get_or_create_agent(
         agent_id=f"agent-builder:{model_name}",
         name="Agent Builder",
@@ -178,9 +203,33 @@ async def _generate_plan_with_model(data: BuilderPlanRequest) -> dict:
     text = ""
     async for event in agent.reply_stream(UserMsg(name="user", content=user_prompt)):
         event_data = event.model_dump(mode="json")
-        if event_data.get("type") == "TEXT_BLOCK_DELTA":
-            text += str(event_data.get("delta", ""))
+        text += _event_text(event_data)
     return _parse_json_object(text)
+
+
+def _event_text(event_data: dict) -> str:
+    """兼容 AgentScope 的增量文本、完整文本块和消息内容事件。"""
+
+    event_type = str(event_data.get("type") or "")
+    if event_type in {"TEXT_BLOCK_DELTA", "TEXT_MESSAGE_CONTENT"}:
+        return _content_text(event_data.get("delta", event_data.get("content")))
+    if event_type in {"TEXT_BLOCK", "TEXT_MESSAGE"}:
+        return _content_text(event_data.get("text", event_data.get("content")))
+    return ""
+
+
+def _content_text(value: object) -> str:
+    """把 AgentScope 文本字段统一转换成字符串。"""
+
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(_content_text(item) for item in value)
+    if isinstance(value, dict):
+        for key in ("text", "content", "value"):
+            if key in value:
+                return _content_text(value[key])
+    return ""
 
 
 def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
@@ -202,17 +251,11 @@ def _normalize_plan(data: BuilderPlanRequest, raw: dict) -> BuilderPlanResponse:
 
         name = str(item.get("name") or f"Agent {index + 1}").strip()
         description = str(item.get("description") or "").strip()
-        runtime_settings = get_effective_model_settings()
         draft = BuilderAgentDraft(
             name=name[:50],
             description=description[:200],
             systemPrompt=str(item.get("systemPrompt") or item.get("system_prompt") or _default_agent_prompt(name, description)),
-            modelConfig=ModelConfig(
-                primary=data.preferred_model or runtime_settings.default_model,
-                fallback=runtime_settings.fallback_models[:3] or ["deepseek-v4-pro"],
-                temperature=0.7,
-                max_tokens=4096,
-            ),
+            modelConfig=ModelConfig(),
             mcpTools=[item.id for item in resolved_tools if item.id],
             skills=[item.id for item in resolved_skills if item.id],
             tags=_as_string_list(item.get("tags"))[:6],

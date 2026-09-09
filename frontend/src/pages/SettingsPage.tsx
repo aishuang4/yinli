@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Card } from '@/components/design';
-import { ModelSettingsForm, type ModelSettings } from '../features/settings/ModelSettingsForm';
+import { ModelsManager } from '../features/models/ModelsManager';
 import { NotificationSettingsCard } from '../features/notifications/NotificationSettingsCard';
 import { GroupStudioSettingsCard } from '../features/settings/GroupStudioSettingsCard';
 import { ScheduledJobsSettingsCard } from '../features/settings/ScheduledJobsSettingsCard';
@@ -8,69 +8,15 @@ import { ConversationContextSettingsCard } from '../features/settings/Conversati
 import { UserDataSettingsCard } from '../features/settings/UserDataSettingsCard';
 import { useSettingsStore } from '../stores/settingsStore';
 import type { ThemeName } from '../types/theme';
-import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
+import { getErrorMessage, notifyError } from '../utils/feedback';
 
 export function SettingsPage() {
   const theme = useSettingsStore((state) => state.theme);
   const setTheme = useSettingsStore((state) => state.setTheme);
-  const [settings, setSettings] = useState<ModelSettings | null>(null);
-  const [provider, setProvider] = useState('deepseek');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [defaultModel, setDefaultModel] = useState('');
-  const [fallbackModels, setFallbackModels] = useState<string[]>([]);
-  const [customModels, setCustomModels] = useState<string[]>([]);
-  const [customProviderName, setCustomProviderName] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState('');
   const [userDataPath, setUserDataPath] = useState<string | null>(null);
   const [userDataLoading, setUserDataLoading] = useState(false);
   const [userDataError, setUserDataError] = useState('');
   const [openingUserData, setOpeningUserData] = useState(false);
-
-  const selectedProvider = settings?.providers.find((item) => item.id === provider);
-  const apiKeyEditable = selectedProvider?.requiresApiKey || selectedProvider?.id === 'custom_openai';
-  const modelOptions = useMemo(() => {
-    const providerModels = selectedProvider?.models ?? [];
-    return Array.from(new Set([
-      ...providerModels,
-      defaultModel,
-      ...fallbackModels,
-      ...customModels,
-    ].map((item) => item.trim()).filter(Boolean)));
-  }, [customModels, defaultModel, fallbackModels, selectedProvider]);
-
-  const applySettings = useCallback((data: ModelSettings) => {
-    setSettings(data);
-    setProvider(data.provider);
-    setBaseUrl(data.baseUrl);
-    setDefaultModel(data.defaultModel);
-    setFallbackModels(data.fallbackModels.length ? data.fallbackModels : []);
-    setCustomModels(data.customModels.length ? data.customModels : []);
-    setCustomProviderName(data.providerName);
-    setApiKey('');
-  }, []);
-
-  const loadSettings = useCallback(async () => {
-    setLoading(true);
-    setNotice('');
-    try {
-      const response = await fetch('/api/settings/model');
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-      applySettings(await response.json());
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
-  }, [applySettings]);
-
-  useEffect(() => {
-    void loadSettings();
-  }, [loadSettings]);
 
   const loadUserDataPath = useCallback(async () => {
     if (!window.electronAPI) return;
@@ -105,77 +51,6 @@ export function SettingsPage() {
     }
   };
 
-  const handleProviderChange = (value: string) => {
-    const nextProvider = settings?.providers.find((item) => item.id === value);
-    setProvider(value);
-    if (nextProvider) {
-      setBaseUrl(nextProvider.baseUrl || nextProvider.defaultBaseUrl);
-      setDefaultModel(nextProvider.configuredDefaultModel || nextProvider.defaultModel);
-      setFallbackModels(nextProvider.fallbackModels || []);
-      setCustomModels(nextProvider.customModels || []);
-      setCustomProviderName(nextProvider.providerName || nextProvider.name);
-      setApiKey('');
-    }
-  };
-
-  const saveSettings = async (clearApiKey = false) => {
-    setSaving(true);
-    setNotice('');
-    try {
-      const response = await fetch('/api/settings/model', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          provider,
-          providerName: customProviderName,
-          baseUrl,
-          defaultModel,
-          fallbackModels,
-          customModels,
-          apiKey: apiKey || undefined,
-          clearApiKey,
-        }),
-      });
-      if (!response.ok) {
-        throw new Error(await response.text());
-      }
-      applySettings(await response.json());
-      const nextNotice = clearApiKey ? 'API Key 已清除。' : '模型设置已保存，下一轮对话生效。';
-      setNotice(nextNotice);
-      notifySuccess(nextNotice);
-    } catch (error) {
-      const message = getErrorMessage(error, '模型设置保存失败');
-      setNotice(message);
-      notifyError(`模型设置保存失败：${message}`);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const addFallbackModel = () => {
-    setFallbackModels((current) => [...current, '']);
-  };
-
-  const updateFallbackModel = (index: number, value: string) => {
-    setFallbackModels((current) => current.map((item, itemIndex) => (itemIndex === index ? value : item)));
-  };
-
-  const removeFallbackModel = (index: number) => {
-    setFallbackModels((current) => current.filter((_, itemIndex) => itemIndex !== index));
-  };
-
-  const addCustomModel = () => {
-    setCustomModels((current) => [...current, '']);
-  };
-
-  const updateCustomModel = (index: number, value: string) => {
-    setCustomModels((current) => current.map((item, itemIndex) => (itemIndex === index ? value : item)));
-  };
-
-  const removeCustomModel = (index: number) => {
-    setCustomModels((current) => current.filter((_, itemIndex) => itemIndex !== index));
-  };
-
   return (
     <div className="h-full overflow-auto bg-[var(--color-bg-primary)] px-5 py-6 sm:px-8">
       <div className="mx-auto max-w-3xl">
@@ -193,35 +68,7 @@ export function SettingsPage() {
           <ScheduledJobsSettingsCard />
           <GroupStudioSettingsCard />
           <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
-          <ModelSettingsForm
-            settings={settings}
-            loading={loading}
-            saving={saving}
-            notice={notice}
-            provider={provider}
-            selectedProvider={selectedProvider}
-            baseUrl={baseUrl}
-            apiKey={apiKey}
-            apiKeyEditable={Boolean(apiKeyEditable)}
-            defaultModel={defaultModel}
-            customProviderName={customProviderName}
-            customModels={customModels}
-            fallbackModels={fallbackModels}
-            modelOptions={modelOptions}
-            onProviderChange={handleProviderChange}
-            onBaseUrlChange={setBaseUrl}
-            onApiKeyChange={setApiKey}
-            onDefaultModelChange={setDefaultModel}
-            onCustomProviderNameChange={setCustomProviderName}
-            onAddCustomModel={addCustomModel}
-            onUpdateCustomModel={updateCustomModel}
-            onRemoveCustomModel={removeCustomModel}
-            onAddFallbackModel={addFallbackModel}
-            onUpdateFallbackModel={updateFallbackModel}
-            onRemoveFallbackModel={removeFallbackModel}
-            onRefresh={() => void loadSettings()}
-            onSave={(clearApiKey) => void saveSettings(clearApiKey)}
-          />
+          <ModelsManager />
           <NotificationSettingsCard />
           <ConversationContextSettingsCard />
           {window.electronAPI && (

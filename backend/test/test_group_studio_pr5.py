@@ -154,14 +154,13 @@ def test_host_thinking_stays_out_of_body(client):
 
 def test_host_blocks_without_api_key(client, monkeypatch):
     import asyncio
-    from types import SimpleNamespace
-
     from src.group_studio import host_runtime
     from src.group_studio.errors import MODEL_NOT_CONFIGURED
 
     monkeypatch.setattr(
-        "src.group_studio.startup_checks.get_effective_model_settings",
-        lambda: SimpleNamespace(provider="deepseek", api_key=""),
+        host_runtime,
+        "get_group_studio_model_error",
+        lambda *_args: "DeepSeek API Key 未配置。请在系统设置中配置模型供应商和 API Key。",
     )
     called = {"create": False}
 

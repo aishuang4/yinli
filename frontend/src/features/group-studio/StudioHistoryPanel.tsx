@@ -1,6 +1,6 @@
 /** 群聊工作室独立历史列表，不展示 Chat 会话。 */
 
-import { PanelLeftClose, Plus, Search, Users } from 'lucide-react';
+import { PanelLeftClose, Plus, Search, Trash2, Users } from 'lucide-react';
 import { Empty, Spinner, Tooltip } from '@/components/design';
 import type { GroupStudioListItem } from './types';
 
@@ -14,6 +14,7 @@ interface StudioHistoryPanelProps {
   onCollapse: () => void;
   onNewStudio: () => void;
   onSelectStudio: (studio: GroupStudioListItem) => void;
+  onDeleteStudio: (studio: GroupStudioListItem) => void;
 }
 
 export function StudioHistoryPanel({
@@ -26,6 +27,7 @@ export function StudioHistoryPanel({
   onCollapse,
   onNewStudio,
   onSelectStudio,
+  onDeleteStudio,
 }: StudioHistoryPanelProps) {
   return (
     <aside
@@ -72,17 +74,15 @@ export function StudioHistoryPanel({
         ) : (
           <div className="space-y-1">
             {studios.map((studio) => (
-              <button
+              <div
                 key={studio.id}
-                type="button"
-                onClick={() => onSelectStudio(studio)}
-                className={`chat-session-item group w-full rounded-lg px-3 py-2 text-left transition-all duration-300 ease-out ${
+                className={`chat-session-item group flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition-all duration-300 ease-out ${
                   activeGroupId === studio.id
                     ? 'chat-session-item--active'
                     : 'hover:bg-[var(--color-bg-hover)]'
                 }`}
               >
-                <div className="flex items-start gap-2">
+                <button type="button" className="flex min-w-0 flex-1 items-start gap-2 text-left" onClick={() => onSelectStudio(studio)}>
                   <Users size={14} className="mt-0.5 shrink-0 text-[var(--color-text-tertiary)]" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">
@@ -92,8 +92,21 @@ export function StudioHistoryPanel({
                       {statusLabel(studio.status)}
                     </div>
                   </div>
-                </div>
-              </button>
+                </button>
+                <Tooltip title="删除群聊" placement="right" mode="dark">
+                  <button
+                    type="button"
+                    className="icon-button mt-0.5 h-7 w-7 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+                    aria-label={`删除 ${studio.title || '未命名工作室'}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDeleteStudio(studio);
+                    }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </Tooltip>
+              </div>
             ))}
           </div>
         )}

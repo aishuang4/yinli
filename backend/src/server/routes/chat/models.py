@@ -176,6 +176,7 @@ class ChatSession(BaseModel):
 
     id: str
     title: str
+    model_config_id: str = Field(default="", alias="modelConfigId")
     agent_id: str
     agent_name: str
     mode: Literal["agent", "team"] = "agent"
@@ -263,7 +264,7 @@ class ChatMessage(BaseModel):
     system_prompt: str | None = None
     """Agent 系统提示词（可选，用于临时自定义）"""
 
-    model: str | None = None
+    model_config_id: str | None = Field(default=None, alias="modelConfigId")
     """指定模型（可选，覆盖默认配置）"""
 
     skill_ids: list[str] = Field(default_factory=list)

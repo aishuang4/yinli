@@ -33,7 +33,7 @@ interface WorkbenchMenuItem {
 
 /** 工作台菜单按 ViewType 穷尽，chat 走 ActivityBar，workflow 是顶层模式。 */
 const WORKBENCH_PAGES: Record<Exclude<ViewType, 'chat'>, WorkbenchMenuItem> = {
-  agents: { id: 'agents', label: 'Agents', description: 'Agent 模型、工具与运行边界', icon: Bot },
+  agents: { id: 'agents', label: 'Agents', description: 'Agent 工具与运行边界', icon: Bot },
   subagents: { id: 'subagents', label: 'Subagents', description: '子 Agent 定义与调用历史', icon: Network },
   tools: { id: 'tools', label: 'Tools', description: '内置工具与 HTTP 工具', icon: Wrench },
   mcp: { id: 'mcp', label: 'MCP', description: '外部工具服务连接', icon: GitBranch },

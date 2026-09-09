@@ -169,6 +169,20 @@ async def run_host_discussion(
     *,
     agent_factory: AgentFactory | None = None,
 ) -> str:
+    """一次 Host 发言固定工作室的模型连接。"""
+    from src.config.runtime_settings import resolve_model_binding, model_binding_scope
+    snapshot = get_group_studio_snapshot(group_id)
+    if snapshot is None:
+        return ""
+    with model_binding_scope(resolve_model_binding(snapshot.get("modelConfigId"), validate=False)):
+        return await _run_host_discussion(group_id, agent_factory=agent_factory)
+
+
+async def _run_host_discussion(
+    group_id: str,
+    *,
+    agent_factory: AgentFactory | None = None,
+) -> str:
     """给 Host 一轮讨论发言权并消费 reply_stream。成功指派则返回工人 member_id。"""
 
     snapshot = get_group_studio_snapshot(group_id)
@@ -187,7 +201,7 @@ async def run_host_discussion(
         emit_envelope(group_id=group_id, event_type="GROUP_ERROR", payload={"code": "host_required", "message": "缺少主持人"})
         return ""
     if agent_factory is None:
-        model_error = get_group_studio_model_error()
+        model_error = get_group_studio_model_error(snapshot.get("modelConfigId"))
         if model_error:
             emit_envelope(
                 group_id=group_id,

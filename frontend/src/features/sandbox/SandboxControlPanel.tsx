@@ -4,6 +4,7 @@
  * 负责测试用例选择、运行对象选择和测试输入，避免 SandboxPage 承担大段表单 JSX。
  */
 
+import type { ReactNode } from 'react';
 import { Bot, FlaskConical, Save, Send, Square, Trash2, Users } from 'lucide-react';
 import { Button, Spinner } from '@/components/design';
 import { FormField, SelectField, TextAreaField, TextField } from '../../components/form';
@@ -18,12 +19,14 @@ export interface SandboxCase {
     agentId: string;
     agentName: string;
     message: string;
+    modelConfigId?: string;
   };
   createdAt: string;
   updatedAt: string;
 }
 
 interface SandboxControlPanelProps {
+  modelSelector?: ReactNode;
   loading: boolean;
   mode: 'agent' | 'team';
   setMode: (mode: 'agent' | 'team') => void;
@@ -50,6 +53,7 @@ interface SandboxControlPanelProps {
 }
 
 export function SandboxControlPanel({
+  modelSelector,
   loading,
   mode,
   setMode,
@@ -135,7 +139,7 @@ export function SandboxControlPanel({
               label="Agent"
               value={agentId || selectedAgent?.id}
               onChange={(value) => setAgentId(String(value))}
-              options={agents.map((agent) => ({ label: `${agent.name} · ${agent.modelConfig.primary}`, value: agent.id }))}
+              options={agents.map((agent) => ({ label: agent.name, value: agent.id }))}
               placeholder="选择 Agent"
             />
           )}
@@ -145,7 +149,7 @@ export function SandboxControlPanel({
               {runtimeAgent?.name || '未选择运行对象'}
             </div>
             <div className="mt-1 text-xs text-[var(--color-text-secondary)]">
-              {runtimeAgent?.modelConfig.primary || '选择 Agent 后开始测试'}
+              {modelSelector}
             </div>
             {mode === 'team' && runtimeAgent && (
               <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">作为 Leader 动态组建临时成员</div>

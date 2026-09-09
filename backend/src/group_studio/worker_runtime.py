@@ -285,6 +285,22 @@ async def run_worker_turn(
     agent_factory: AgentFactory | None = None,
     duty: str = "queue",
 ) -> None:
+    """一次 Worker 发言固定工作室的模型连接。"""
+    from src.config.runtime_settings import resolve_model_binding, model_binding_scope
+    snapshot = get_group_studio_snapshot(group_id)
+    if snapshot is None:
+        return
+    with model_binding_scope(resolve_model_binding(snapshot.get("modelConfigId"), validate=False)):
+        await _run_worker_turn(group_id, member_id, agent_factory=agent_factory, duty=duty)
+
+
+async def _run_worker_turn(
+    group_id: str,
+    member_id: str,
+    *,
+    agent_factory: AgentFactory | None = None,
+    duty: str = "queue",
+) -> None:
     """给指定工人一轮发言/执行权。"""
 
     snapshot = get_group_studio_snapshot(group_id)
@@ -312,7 +328,7 @@ async def run_worker_turn(
         emit_envelope(group_id=group_id, event_type="GROUP_ERROR", payload={"code": "member_muted", "message": "工人已静音"})
         return
     if agent_factory is None:
-        model_error = get_group_studio_model_error()
+        model_error = get_group_studio_model_error(snapshot.get("modelConfigId"))
         if model_error:
             emit_envelope(
                 group_id=group_id,

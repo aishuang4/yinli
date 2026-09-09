@@ -5,15 +5,11 @@
 import { useEffect, useState } from 'react';
 import { Button, Modal, Tag } from '@/components/design';
 import { KeyRound, Settings2 } from 'lucide-react';
+import { catalogRequest, modelAvailable } from '../models/useModelCatalog';
 import { useAppStore } from '../../stores/appStore';
 
 const DISMISSED_STORAGE_KEY = 'agent-workstation.api-key-onboarding.dismissed.v1';
 
-interface ModelSetupStatus {
-  providerName: string;
-  requiresApiKey: boolean;
-  apiKeyConfigured: boolean;
-}
 
 function onboardingDismissed(): boolean {
   try {
@@ -46,13 +42,11 @@ export function ApiKeyOnboardingModal() {
     let active = true;
     const checkModelSetup = async () => {
       try {
-        const response = await fetch('/api/settings/model', { cache: 'no-store' });
-        if (!response.ok) {
-          return;
-        }
-        const status = await response.json() as ModelSetupStatus;
-        if (active && status.requiresApiKey && !status.apiKeyConfigured) {
-          setProviderName(status.providerName || '模型供应商');
+        const catalog = await catalogRequest();
+        const model = catalog.models.find(item => item.id === catalog.defaultModelId);
+        const provider = catalog.providers.find(item => item.id === model?.providerId);
+        if (active && (!model || !modelAvailable(catalog, model))) {
+          setProviderName(provider?.name || '模型供应商');
           setOpen(true);
         }
       } catch {

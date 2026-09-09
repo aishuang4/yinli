@@ -90,6 +90,7 @@ class ScheduledJob(BaseModel):
     status: JobStatus
     pause_reason: str = ""
     agent_id: str
+    model_config_id: str = ""
     mode: Literal["agent"] = "agent"
     schedule_kind: ScheduleKind
     schedule_expr: dict[str, Any]

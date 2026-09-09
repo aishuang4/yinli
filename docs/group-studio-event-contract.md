@@ -19,6 +19,10 @@ heartbeat 不带 `seq`，不进入 `group_studio_events`，也不进入前端 re
 
 连接后若 `afterSeq` 缺省或空洞：先发一条 `GROUP_STUDIO_STATE`（payload = `GET /{id}` 的完整 `GroupStudio`，已含最近 100 条 `messages`），再从持久 seq 续推。刷新恢复 = `GET /{id}` 快照 + `afterSeq` 追状态事件。不要学 Workflow 的 `replay=true` 全量重放。
 
+2026-09-07 起，`GroupStudio` 快照含 `modelConfigId`：创建请求记录 Chat 所选模型配置 ID，Host / Worker 在各轮开始时解析该配置并固定本轮连接。历史空值按文件默认模型解析。该字段不包含 Key、地址或完整连接，不新增 SSE 事件类型。
+
+工作室右侧“文件”列表中的每个产物都有下载按钮，对应 `GET /api/group-studio/{groupId}/files/{artifactId}/download`。服务端只允许下载已登记且位于当前 Project 根目录内的文件，不接受任意路径。
+
 `GROUP_RUN_ENDED` 表示当前 `GroupRun` 结束，**SSE 连接保持**。归档不靠断连。
 
 ## 2. 公共信封

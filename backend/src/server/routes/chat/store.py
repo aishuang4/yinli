@@ -63,6 +63,8 @@ def _append_user_message(
     """追加用户消息，并创建或更新会话摘要"""
     now = datetime.now(timezone.utc).isoformat()
     store = _load_store()
+    from src.config.runtime_settings import current_model_binding
+    binding = current_model_binding()
     messages = store.messages.setdefault(session_id, [])
     messages.append(StoredChatMessage(
         id=uuid.uuid4().hex,
@@ -86,6 +88,8 @@ def _append_user_message(
         existing.project_id = project_id
         existing.updated_at = now
         existing.message_count = len(messages)
+        if binding:
+            existing.model_config_id = binding.primary.entry.id
     else:
         store.sessions.append(ChatSession(
             id=session_id,
@@ -98,6 +102,7 @@ def _append_user_message(
             created_at=now,
             updated_at=now,
             message_count=len(messages),
+            modelConfigId=binding.primary.entry.id if binding else "",
         ))
 
     _save_store(store)

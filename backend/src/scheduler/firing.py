@@ -175,6 +175,7 @@ def _build_request(job: ScheduledJob, firing: ScheduledJobRun) -> ScheduledRunRe
         workspace_id=job.workspace_id,
         project_id=job.project_id,
         agent_id=job.agent_id,
+        model_config_id=job.model_config_id,
         frozen_prompt=job.frozen_prompt,
         skill_ids=list(job.skill_ids),
         tool_scope=runtime_tool_scope_from_job(scope),

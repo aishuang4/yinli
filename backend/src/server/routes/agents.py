@@ -26,7 +26,6 @@ from src.agents.system_agents import (
     is_system_agent_id,
 )
 from src.config.runtime_paths import DATA_ROOT
-from src.config.runtime_settings import get_current_model_options, get_effective_model_settings
 from src.scheduler.job_toolkit import (
     CHAT_ROLE,
     JOB_ROLE,
@@ -109,12 +108,7 @@ DEFAULT_AGENT_FINAL_DELIVERY_RULES = """
 
 
 class ModelConfig(BaseModel):
-    """模型配置"""
-    primary: str = Field(default="deepseek-v4-flash", description="主模型")
-    fallback: list[str] = Field(default_factory=lambda: ["deepseek-v4-pro"], description="降级模型链")
-    temperature: float = Field(default=0.7, ge=0, le=2, description="温度参数")
-    top_p: float = Field(default=0.8, ge=0, le=1, description="核采样参数")
-    max_tokens: int = Field(default=4096, gt=0, description="最大输出 token 数")
+    """Agent 执行上限；历史模型字段在导入时忽略。"""
     max_react_iters: int = Field(
         default=40,
         ge=1,
@@ -281,20 +275,17 @@ _agents: dict[str, AgentResponse] = {}
 def _build_default_agent() -> AgentResponse:
     """构建可持久配置、但不可删除的系统默认 Agent。"""
 
-    runtime_settings = get_effective_model_settings()
     now = datetime.now(timezone.utc).isoformat()
     return AgentResponse.model_validate({
         "id": "default",
         "name": "Assistant",
         "avatar": "",
-        "description": "默认助手，可配置模型、工具、Skills 和运行边界",
+        "description": "默认助手，可配置工具、Skills 和运行边界",
         "system_prompt": "\n\n".join([
             "你是用户的通用办公助手，负责完成文档、表格、演示文稿、数据分析和文件处理任务。默认使用中文沟通；信息足够时直接执行，只有缺少会改变结果的关键信息时才提问。",
             DEFAULT_AGENT_FINAL_DELIVERY_RULES,
         ]),
         "modelConfig": {
-            "primary": runtime_settings.default_model,
-            "fallback": runtime_settings.fallback_models,
             "temperature": 0.7,
             "top_p": 0.8,
             "max_tokens": 4096,
@@ -532,21 +523,6 @@ def remove_skills_from_agents(skill_ids: set[str]) -> int:
         _pause_jobs_for_removed_agent_skills(agent_id, skill_ids)
         changed += 1
     return changed
-
-
-@router.get("/models")
-async def list_models() -> dict:
-    """
-    获取可用模型列表
-
-    Returns:
-        dict: 模型列表（按类别分组）
-    """
-    options = [
-        {"id": model, "name": model, "description": "系统设置中的可用模型"}
-        for model in get_current_model_options()
-    ]
-    return {"primary": options, "fallback": options}
 
 
 @router.get("", response_model=list[AgentResponse])

@@ -137,7 +137,16 @@ class SubagentRunner:
             },
         )
 
-    async def run(
+    async def run(self, **kwargs) -> SubagentRunResult:
+        """子任务完整继承父快照，显式模型定义要求无歧义配置。"""
+        from src.config.runtime_settings import binding_for_model, binding_for_explicit_model, model_binding_scope
+        definition = kwargs["definition"]
+        binding = (binding_for_model() if definition.model == "inherit"
+                   else binding_for_explicit_model(definition.model))
+        with model_binding_scope(binding):
+            return await self._run(**kwargs)
+
+    async def _run(
         self,
         *,
         invocation_id: str,

@@ -75,3 +75,9 @@ def test_existing_default_agent_gets_final_delivery_prompt_once(monkeypatch) -> 
 
     agents_routes._ensure_default_agent()
     assert upgraded.system_prompt == agents_routes._agents["default"].system_prompt
+
+
+def test_agent_export_omits_legacy_model_binding():
+    """历史模型字段不进入新的 Agent 导出。"""
+    config = agents_routes.ModelConfig(primary="old", fallback=["other"], maxReactIters=17)
+    assert config.model_dump(by_alias=True) == {"maxReactIters": 17}

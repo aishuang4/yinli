@@ -3,8 +3,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.agents.factory import clear_all_agents
-from src.config.runtime_settings import get_model_settings_public, save_model_settings
+from src.config.model_catalog import CatalogConflict, public_catalog, save_catalog
 from src.group_studio.settings import (
     get_group_studio_settings_public,
     set_group_studio_settings,
@@ -18,39 +17,26 @@ from src.scheduler.ticker import apply_scheduler_enabled
 router = APIRouter()
 
 
-class ModelSettingsUpdate(BaseModel):
-    provider: str = Field(..., min_length=1)
-    provider_name: str = Field(default="", alias="providerName")
-    api_key: str | None = Field(default=None, alias="apiKey")
-    clear_api_key: bool = Field(default=False, alias="clearApiKey")
-    base_url: str = Field(default="", alias="baseUrl")
-    default_model: str = Field(..., alias="defaultModel")
-    fallback_models: list[str] = Field(default_factory=list, alias="fallbackModels")
-    custom_models: list[str] = Field(default_factory=list, alias="customModels")
-
-    model_config = {"populate_by_name": True}
-
-
-@router.get("/model")
-async def get_model_settings() -> dict:
-    """Return model provider settings without exposing the API key."""
-
+@router.get("/models")
+async def get_models_catalog() -> dict:
+    """读取脱敏模型目录。"""
     try:
-        return get_model_settings_public()
+        return public_catalog()
     except ValueError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
-@router.put("/model")
-async def update_model_settings(data: ModelSettingsUpdate) -> dict:
-    """Update runtime model provider settings and clear cached Agents."""
-
+@router.put("/models")
+async def update_models_catalog(data: dict) -> dict:
+    """按版本原子保存目录，运行中 Agent 保留自己的快照。"""
+    payload = dict(data)
+    etag = str(payload.pop("etag", ""))
     try:
-        result = save_model_settings(data.model_dump(by_alias=True))
+        return save_catalog(payload, etag)
+    except CatalogConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    clear_all_agents()
-    return result
+        raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 class ScheduledJobsSettingsUpdate(BaseModel):
