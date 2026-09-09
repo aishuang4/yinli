@@ -28,7 +28,12 @@ export function ModelsManager() {
 
 function CatalogEditor({ initial, onSaved }: { initial: ModelCatalog; onSaved: () => Promise<void> }) {
   const [draft, setDraft] = useState(initial);
-  const [expandedProviderId, setExpandedProviderId] = useState(initial.models.find(m => m.id === initial.defaultModelId)?.providerId || '');
+  const isProviderConfigured = (item: ModelProvider) => Boolean(
+    item.apiKeyConfigured || (!item.requiresApiKey && item.baseUrl.trim()),
+  );
+  const [expandedProviderId, setExpandedProviderId] = useState(
+    initial.providers.find(item => isProviderConfigured(item))?.id || '',
+  );
   const [expandedModelId, setExpandedModelId] = useState('');
   const [saving, setSaving] = useState(false); const [error, setError] = useState('');
   const provider = draft.providers.find(item => item.id === expandedProviderId);
@@ -40,7 +45,7 @@ function CatalogEditor({ initial, onSaved }: { initial: ModelCatalog; onSaved: (
   const removeModels = (ids: Set<string>) => setDraft(current => ({ ...current, defaultModelId: ids.has(current.defaultModelId) ? '' : current.defaultModelId, models: current.models.filter(item => !ids.has(item.id)).map(item => ({ ...item, fallbackModelIds: item.fallbackModelIds.filter(id => !ids.has(id)) })) }));
   const removeProvider = () => { if (!provider) return; removeModels(new Set(draft.models.filter(m => m.providerId === provider.id).map(m => m.id))); setDraft(current => ({ ...current, providers: current.providers.filter(p => p.id !== provider.id) })); setExpandedProviderId(draft.providers.find(p => p.id !== provider.id)?.id || ''); setExpandedModelId(''); };
   const addModel = () => { if (!provider) return; const id = crypto.randomUUID(); setDraft(current => ({ ...current, models: [...current.models, { id, providerId: provider.id, model: '', label: '', enabled: true, fallbackModelIds: [], parameters: { temperature: 0.7, topP: 0.8, maxTokens: 4096 }, capabilities: { images: false } }] })); setExpandedModelId(id); };
-  const visibleProviders = draft.providers.filter(item => configuredModels(item.id).length > 0 || item.id === expandedProviderId);
+  const visibleProviders = draft.providers.filter(item => isProviderConfigured(item) || item.id === expandedProviderId);
   const hiddenProviders = draft.providers.filter(item => !visibleProviders.some(visible => visible.id === item.id));
   return <fieldset disabled={saving} className="min-w-0 space-y-4">
     <SelectField label="新会话默认模型" aria-label="新会话默认模型" style={{ width: '100%', marginTop: 6 }} value={draft.defaultModelId || undefined} showSearch optionFilterProp="label" placeholder="选择默认模型" onChange={value => setDraft({ ...draft, defaultModelId: String(value) })} options={draft.models.filter(m => modelAvailable(draft, m)).map(m => ({ value: m.id, label: `${m.label} · ${draft.providers.find(p => p.id === m.providerId)?.name}` }))} />
