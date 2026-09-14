@@ -10,13 +10,17 @@ export function usePageActive(): boolean {
   return useContext(PageActiveContext);
 }
 
-/** 从隐藏回到显示时为 true，只在这一拍成立。 */
-export function usePageBecameActive(): boolean {
+/** 页面从隐藏回到显示时执行一次回调；首次挂载不触发。回调始终取最新引用。 */
+export function useOnPageBecameActive(callback: () => void): void {
   const active = usePageActive();
-  const prev = useRef(active);
-  const becameActive = active && !prev.current;
+  const wasActive = useRef(active);
+  const latest = useRef(callback);
   useEffect(() => {
-    prev.current = active;
+    latest.current = callback;
+  }, [callback]);
+  useEffect(() => {
+    const becameActive = active && !wasActive.current;
+    wasActive.current = active;
+    if (becameActive) latest.current();
   }, [active]);
-  return becameActive;
 }

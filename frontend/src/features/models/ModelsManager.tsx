@@ -49,7 +49,12 @@ function CatalogEditor({ initial, onSaved }: { initial: ModelCatalog; onSaved: (
         revision: draft.revision,
         defaultModelId: draft.defaultModelId,
         etag: draft.etag,
-        providers: draft.providers.map(({ apiKeyConfigured: _configured, ...item }) => item),
+        providers: draft.providers.map((item) => {
+          // apiKeyConfigured 是服务端派生标记，不回传。
+          const payload: Partial<typeof item> = { ...item };
+          delete payload.apiKeyConfigured;
+          return payload;
+        }),
         models: draft.models.filter((item) => item.label.trim() && item.model.trim()),
       };
       await catalogRequest({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });

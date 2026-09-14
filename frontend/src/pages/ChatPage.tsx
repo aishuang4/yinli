@@ -19,7 +19,7 @@ import { useMessageScroll } from '../components/useMessageScroll';
 import { Tag, Tooltip } from '@/components/design';
 import { useEventStream } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
-import { usePageBecameActive } from '../hooks/usePageActive';
+import { useOnPageBecameActive } from '../hooks/usePageActive';
 import { useAgentsStore } from '../stores/agentsStore';
 import { useProjectResources } from '../hooks/useProjectResources';
 import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
@@ -79,7 +79,6 @@ export function ChatPage() {
   const pendingSessionRef = useRef<ChatSession | null>(null);
   const { state, sendMessage, resumeInteraction, subscribeRun, abort, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
-  const chatBecameActive = usePageBecameActive();
   const { loading: projectResourcesLoading } = useProjectResources(activeProjectId);
   const { workspaces, allProjects } = useWorkspaceProjects();
   const setActiveContext = useAppStore((state) => state.setActiveContext);
@@ -95,12 +94,10 @@ export function ChatPage() {
     uploadFilesForSession,
   } = useChatAttachments({ onError: setChatError });
 
-  useEffect(() => {
-    if (!chatBecameActive) {
-      return;
-    }
+  // 打包桌面端 Chat keep-alive 不卸载，回到本页时静默同步 Agent 列表。
+  useOnPageBecameActive(() => {
     void useAgentsStore.getState().syncFromServer(activeWorkspaceId, { silent: true });
-  }, [activeWorkspaceId, chatBecameActive]);
+  });
 
   const availableAgents = useMemo(() => agents.filter((agent) => (
     agent.role !== 'job'
@@ -123,6 +120,12 @@ export function ChatPage() {
   const selectedModelId = modelChoices[activeSessionId || 'new'] || sessions.find(s => s.id === activeSessionId)?.modelConfigId || modelCatalog?.defaultModelId || '';
   const selectedModel = modelCatalog?.models.find(m => m.id === selectedModelId);
   const selectedModelSupportsImages = Boolean(selectedModel?.capabilities.images);
+  // 顶栏副标题：单行截断，完整内容放 title 供悬停查看。
+  const topbarSubtitle = state.isStreaming
+    ? selectedModel?.label || '未选择模型'
+    : targetMode === 'team'
+      ? `${runtimeAgent?.name || 'Assistant'} · Leader 动态组建临时成员`
+      : `${runtimeAgent?.name || 'Assistant'} · ${runtimeAgent?.description || 'DeepSeek'}`;
   const selectModel = async (value: string) => {
     const key = activeSessionId || 'new';
     setSavingModelChoice(true);
@@ -618,12 +621,12 @@ export function ChatPage() {
       <section
         className="chat-main-panel chat-workbench-main grid min-h-0 grid-cols-1 overflow-hidden"
       >
-        <div className="grid min-h-0 grid-rows-[auto_1fr_auto] overflow-hidden">
+        <div className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_1fr_auto] overflow-hidden">
           <header
-            className="chat-workbench-topbar flex items-center justify-between gap-4 px-8 py-2"
+            className="chat-workbench-topbar flex min-w-0 items-center justify-between gap-4 overflow-hidden px-8 py-2"
             style={isMacDesktopShell && (!historyPanelMounted || historyCollapsed) ? { paddingLeft: 128 } : undefined}
           >
-          <div className="flex min-w-0 items-center gap-3">
+          <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
             {historyCollapsed && (
               <>
                 <Tooltip title="展开历史对话" placement="bottom" mode="dark">
@@ -670,12 +673,8 @@ export function ChatPage() {
               <div className="truncate text-base font-semibold text-[var(--color-text-primary)]">
                 {activeSession?.title || '新对话'}
               </div>
-              <div className="truncate text-xs text-[var(--color-text-tertiary)]">
-                {state.isStreaming
-                  ? selectedModel?.label || '未选择模型'
-                  : targetMode === 'team'
-                    ? `${runtimeAgent?.name || 'Assistant'} · Leader 动态组建临时成员`
-                    : `${runtimeAgent?.name || 'Assistant'} · ${runtimeAgent?.description || 'DeepSeek'}`}
+              <div className="truncate text-xs text-[var(--color-text-tertiary)]" title={topbarSubtitle}>
+                {topbarSubtitle}
               </div>
             </div>
             {activeSessionId && (
