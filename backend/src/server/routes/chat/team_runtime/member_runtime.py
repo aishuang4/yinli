@@ -244,6 +244,7 @@ def _create_team_agent(
         extra_tools=extra_tools,
         tool_name_allowlist=tool_allowlist,
         workspace_dir=str(getattr(ctx, "session_workspace_dir", "") or ""),
+        extra_filesystem_scopes=list(getattr(ctx, "extra_filesystem_scopes", None) or []),
     )
     return create_main_agent_from_spec(
         spec,

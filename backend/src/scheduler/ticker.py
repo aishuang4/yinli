@@ -254,6 +254,20 @@ def bootstrap_scheduler(*, now: datetime | None = None) -> dict[str, int]:
     """启动顺序：桌面缺省开关 → Chat 孤儿 → job_runs →（flag 开启时）start ticker。"""
 
     seeded = ensure_desktop_scheduled_jobs_defaults()
+    try:
+        from src.catalog.sync_jobs import persist_job_definition, sync_job_definitions
+        from src.storage.database import list_scheduled_jobs
+        from src.scheduler.service import ScheduledJobService
+
+        service = ScheduledJobService()
+        for item in list_scheduled_jobs():
+            try:
+                persist_job_definition(service.get_job(str(item["id"])))
+            except Exception:
+                continue
+        sync_job_definitions()
+    except Exception:
+        logger.exception("同步 Job 定义文件失败")
     chat_n = reconcile_interrupted_chat_runs()
     job_n = get_job_scheduler().service.reconcile_interrupted_job_runs(now=now)
     started = 0

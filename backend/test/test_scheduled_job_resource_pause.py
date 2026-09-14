@@ -44,6 +44,7 @@ def isolated_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
     monkeypatch.setattr(database, "_initialized", False)
+    monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path / "user-data")
     yield
     database._initialized = False
 
@@ -273,6 +274,11 @@ def test_update_agent_removing_skill_pauses_jobs(isolated_db, monkeypatch):
         "workspaceId": DEFAULT_WORKSPACE_ID,
     })
     monkeypatch.setattr(agents_routes, "_agents", {"agent-1": agent})
+    monkeypatch.setattr(
+        agents_routes,
+        "get_registered_agent",
+        lambda agent_id: agents_routes._agents.get(agent_id),
+    )
     monkeypatch.setattr(agents_routes, "invalidate_agent", lambda _agent_id: None)
     monkeypatch.setattr(agents_routes, "upsert_agent", lambda _data: None)
 

@@ -110,6 +110,7 @@ export interface ScheduledJob {
   createdAt: string;
   updatedAt: string;
   archivedAt: string | null;
+  sourcePath?: string;
 }
 
 export interface JobOutputFile {

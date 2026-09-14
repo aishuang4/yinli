@@ -4,7 +4,7 @@
 路由、运行时配置、缓存 key 和 SSE 事件处理。
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import os
 from typing import Any, Callable
@@ -61,6 +61,7 @@ class MainAgentRuntimeSpec:
     workspace_dir: str = ""
     write_scope_dir: str = ""
     include_default_tools: bool = True
+    extra_filesystem_scopes: list[str] = field(default_factory=list)
 
 
 def build_runtime_model_config(
@@ -153,6 +154,8 @@ def build_runtime_agent_cache_key(
     )
     knowledge_cache_key = ",".join(tool.id for tool in knowledge_tools)
     system_prompt_cache_key = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
+    from src.catalog.loader import catalog_fingerprint
+
     return (
         f"{agent_id}:{session_id}:{model_name}:thinking-{deep_thinking}:"
         f"fallbacks-{fallback_cache_key}:"
@@ -160,7 +163,8 @@ def build_runtime_agent_cache_key(
         f"tools-{runtime_tool_scope.cache_key()}:"
         f"prompt-{system_prompt_cache_key}:"
         f"features-{runtime_features_cache_key}:"
-        f"guardrails-{guardrail_cache_key}"
+        f"guardrails-{guardrail_cache_key}:"
+        f"catalog-{catalog_fingerprint()}"
     )
 
 
@@ -187,6 +191,7 @@ def build_main_agent_runtime_spec(
     workspace_dir: str = "",
     write_scope_dir: str = "",
     include_default_tools: bool = True,
+    extra_filesystem_scopes: list[str] | None = None,
 ) -> MainAgentRuntimeSpec:
     """构建主 Agent 工厂参数，不包含 trace 回调。"""
 
@@ -228,6 +233,7 @@ def build_main_agent_runtime_spec(
         workspace_dir=workspace_dir,
         write_scope_dir=write_scope_dir,
         include_default_tools=include_default_tools,
+        extra_filesystem_scopes=list(extra_filesystem_scopes or []),
     )
 
 
@@ -263,4 +269,5 @@ def create_main_agent_from_spec(
         workspace_dir=spec.workspace_dir or None,
         write_scope_dir=spec.write_scope_dir or None,
         include_default_tools=spec.include_default_tools,
+        extra_filesystem_scopes=spec.extra_filesystem_scopes,
     )

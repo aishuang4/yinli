@@ -67,6 +67,14 @@ Intake 对谈、FIFO 点名队列、`group_work_items` 认领已在线。下面�
 
 暂缓：复杂召回质量视图、模型评分评估、`memory_change_log`、Git-backed vault、Wiki 反向合并和专业图谱组件。
 
+## P1. 系统定义文件化
+
+规格见 `docs/file-catalog-v1.md`。第一期（持久 Agent + INDEX）在本轮实施。
+
+- [x] 第二期：Skill 去掉库内正文双写；项目 `.agents/skills` 默认可运行；seed `word-documents` / `yinli-charts`（本轮实施）。
+- [x] 第三期：MCP / HTTP 定义文件化，密钥走 secret_store（本轮实施）。
+- [x] 第四期：Job 定义收到同一棵树，撤回模型侧 `ScheduleJob` 平行入口（本轮实施）。
+
 ## P6. 桌面端与前端
 
 - [ ] 验证 macOS / Windows 真机 PyInstaller 后端产物。

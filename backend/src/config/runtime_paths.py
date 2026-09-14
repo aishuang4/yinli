@@ -37,6 +37,8 @@ SUBAGENT_ROOT = USER_DATA_ROOT / "subagents"
 LEGACY_SUBAGENT_ROOT = DATA_ROOT / "subagents"
 USER_SUBAGENT_ROOT = SUBAGENT_ROOT
 SANDBOX_ROOT = DATA_ROOT / "sandboxes"
+# 与默认 Project 根 `workspace`（单数）区分：这里是 Workspace catalog 权威树。
+WORKSPACES_CATALOG_ROOT = USER_DATA_ROOT / "workspaces"
 
 # 桌面安装版的默认 Project 必须是稳定目录；开发模式继续使用仓库根目录。
 DEFAULT_PROJECT_ROOT = (
@@ -57,6 +59,7 @@ def ensure_runtime_directories() -> None:
         DEFAULT_PROJECT_ROOT,
         SKILL_PACKAGES_ROOT,
         SUBAGENT_ROOT,
+        WORKSPACES_CATALOG_ROOT,
     ):
         path.mkdir(parents=True, exist_ok=True)
     _migrate_legacy_skill_packages()

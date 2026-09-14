@@ -48,6 +48,7 @@ def isolated_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
     monkeypatch.setattr(database, "_initialized", False)
+    monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path / "user-data")
     yield
     for run in list(background_runs_module._runs.values()):
         if run.async_task is not None and not run.async_task.done():

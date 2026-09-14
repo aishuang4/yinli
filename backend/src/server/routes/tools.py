@@ -9,6 +9,10 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from src.catalog.http_files import HttpToolFileRecord, discover_http_files, runtime_auth_config, write_http_file
+from src.catalog.migrate_mcp_http import ensure_http_file_catalog, is_http_catalog_migrated
+from src.catalog.paths import http_tools_dir
+from src.catalog.secrets import delete_named_secret, redact_headers, resolve_headers
 from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_knowledge_tools_from_agents
 from src.project_files import resolve_project_session_artifact
@@ -193,9 +197,46 @@ def get_enabled_knowledge_tools(tool_ids: list[str]) -> list[dict[str, Any]]:
     ]
 
 
-def _http_tool_records() -> list[HttpToolResponse]:
+def _http_response_from_file(record: HttpToolFileRecord, *, for_runtime: bool) -> HttpToolResponse:
+    headers = resolve_headers(record.headers, record.header_refs) if for_runtime else redact_headers(record.headers)
+    auth_config = runtime_auth_config(record) if for_runtime else {}
+    return HttpToolResponse.model_validate({
+        "id": record.id,
+        "name": record.name,
+        "description": record.description,
+        "category": record.category,
+        "method": record.method,
+        "url": record.url,
+        "authType": record.auth_type,
+        "authConfig": auth_config,
+        "headers": headers,
+        "queryTemplate": record.query_template,
+        "bodyTemplate": record.body_template,
+        "parameterSchema": record.parameter_schema,
+        "parameterInstructions": record.parameter_instructions,
+        "responseMode": record.response_mode,
+        "responsePath": record.response_path,
+        "readonly": record.readonly,
+        "approvalPolicy": record.approval_policy,
+        "enabled": record.enabled,
+        "workspaceId": record.workspace_id,
+        "createdAt": record.created_at or _utc_now(),
+        "updatedAt": record.updated_at or _utc_now(),
+    })
+
+
+def _http_tool_records(*, for_runtime: bool = False) -> list[HttpToolResponse]:
     _migrate_legacy_knowledge_tools_to_http()
-    return [HttpToolResponse.model_validate(item) for item in db_list_http_tools()]
+    ensure_http_file_catalog()
+    by_id: dict[str, HttpToolResponse] = {}
+    for item in db_list_http_tools():
+        tool = HttpToolResponse.model_validate(item)
+        if not for_runtime:
+            tool = tool.model_copy(update={"auth_config": {}, "headers": redact_headers(tool.headers)})
+        by_id[tool.id] = tool
+    for record in discover_http_files():
+        by_id[record.id] = _http_response_from_file(record, for_runtime=for_runtime)
+    return list(by_id.values())
 
 
 def _migrate_legacy_knowledge_tools_to_http() -> None:
@@ -261,7 +302,7 @@ def get_enabled_http_tools(tool_ids: list[str]) -> list[dict[str, Any]]:
     selected = set(tool_ids)
     return [
         item.model_dump(by_alias=True)
-        for item in _http_tool_records()
+        for item in _http_tool_records(for_runtime=True)
         if item.enabled and item.id in selected
     ]
 
@@ -447,6 +488,35 @@ async def create_http_tool_config(data: HttpToolCreate) -> HttpToolResponse:
         "createdAt": now,
         "updatedAt": now,
     }
+    if is_http_catalog_migrated():
+        file_record = HttpToolFileRecord(
+            id=str(record["id"]),
+            name=str(record["name"]),
+            description=str(record.get("description") or ""),
+            category=str(record.get("category") or "custom"),
+            method=str(record.get("method") or "POST"),
+            url=str(record["url"]),
+            auth_type=str(record.get("authType") or "none"),
+            headers=dict(record.get("headers") or {}),
+            query_template=dict(record.get("queryTemplate") or {}),
+            body_template=dict(record.get("bodyTemplate") or {}),
+            parameter_schema=dict(record.get("parameterSchema") or {}),
+            parameter_instructions=str(record.get("parameterInstructions") or ""),
+            response_mode=str(record.get("responseMode") or "full"),
+            response_path=str(record.get("responsePath") or ""),
+            readonly=bool(record.get("readonly", True)),
+            approval_policy=str(record.get("approvalPolicy") or "inherit"),
+            enabled=bool(record.get("enabled", True)),
+            workspace_id=str(record.get("workspaceId") or "default"),
+            created_at=now,
+            updated_at=now,
+        )
+        write_http_file(
+            http_tools_dir(file_record.workspace_id) / f"{file_record.id}.yaml",
+            file_record,
+            auth_config=dict(record.get("authConfig") or {}),
+        )
+        return _http_response_from_file(file_record, for_runtime=False)
     return HttpToolResponse.model_validate(upsert_http_tool(record))
 
 
@@ -454,12 +524,42 @@ async def create_http_tool_config(data: HttpToolCreate) -> HttpToolResponse:
 async def update_http_tool_config(tool_id: str, data: HttpToolUpdate) -> HttpToolResponse:
     """更新一个通用 HTTP 工具配置。"""
 
-    existing = next((item for item in _http_tool_records() if item.id == tool_id), None)
+    existing = next((item for item in _http_tool_records(for_runtime=True) if item.id == tool_id), None)
     if existing is None:
         raise HTTPException(status_code=404, detail="HTTP tool not found")
     next_data = existing.model_dump(by_alias=True)
     next_data.update(data.model_dump(exclude_unset=True, by_alias=True))
     next_data["updatedAt"] = _utc_now()
+    if is_http_catalog_migrated():
+        file_record = HttpToolFileRecord(
+            id=tool_id,
+            name=str(next_data["name"]),
+            description=str(next_data.get("description") or ""),
+            category=str(next_data.get("category") or "custom"),
+            method=str(next_data.get("method") or "POST"),
+            url=str(next_data["url"]),
+            auth_type=str(next_data.get("authType") or "none"),
+            headers=dict(next_data.get("headers") or {}),
+            query_template=dict(next_data.get("queryTemplate") or {}),
+            body_template=dict(next_data.get("bodyTemplate") or {}),
+            parameter_schema=dict(next_data.get("parameterSchema") or {}),
+            parameter_instructions=str(next_data.get("parameterInstructions") or ""),
+            response_mode=str(next_data.get("responseMode") or "full"),
+            response_path=str(next_data.get("responsePath") or ""),
+            readonly=bool(next_data.get("readonly", True)),
+            approval_policy=str(next_data.get("approvalPolicy") or "inherit"),
+            enabled=bool(next_data.get("enabled", True)),
+            workspace_id=str(next_data.get("workspaceId") or "default"),
+            created_at=str(next_data.get("createdAt") or ""),
+            updated_at=str(next_data.get("updatedAt") or ""),
+        )
+        incoming_auth = data.auth_config if data.auth_config is not None else existing.auth_config
+        write_http_file(
+            http_tools_dir(file_record.workspace_id) / f"{file_record.id}.yaml",
+            file_record,
+            auth_config=dict(incoming_auth or {}),
+        )
+        return _http_response_from_file(file_record, for_runtime=False)
     return HttpToolResponse.model_validate(upsert_http_tool(next_data))
 
 
@@ -467,7 +567,17 @@ async def update_http_tool_config(tool_id: str, data: HttpToolUpdate) -> HttpToo
 async def delete_http_tool_config(tool_id: str) -> None:
     """删除一个通用 HTTP 工具配置。"""
 
-    if not db_delete_http_tool(tool_id):
+    existing = next((item for item in _http_tool_records() if item.id == tool_id), None)
+    deleted = db_delete_http_tool(tool_id)
+    yaml_path = http_tools_dir(existing.workspace_id if existing else "default") / f"{tool_id}.yaml"
+    file_existed = yaml_path.exists()
+    if file_existed:
+        yaml_path.unlink()
+    try:
+        delete_named_secret(f"secret:http:{tool_id}:auth")
+    except Exception:
+        pass
+    if not deleted and not file_existed:
         raise HTTPException(status_code=404, detail="HTTP tool not found")
     _job_service.pause_jobs_for_catalog_change(resource_type="http_tool", resource_id=tool_id)
     remove_knowledge_tools_from_agents({tool_id})
@@ -477,7 +587,7 @@ async def delete_http_tool_config(tool_id: str) -> None:
 async def debug_http_tool_config(tool_id: str, data: HttpToolDebugRequest) -> HttpToolDebugResponse:
     """用给定参数调试一个通用 HTTP 工具。"""
 
-    existing = next((item for item in _http_tool_records() if item.id == tool_id), None)
+    existing = next((item for item in _http_tool_records(for_runtime=True) if item.id == tool_id), None)
     if existing is None:
         raise HTTPException(status_code=404, detail="HTTP tool not found")
     try:

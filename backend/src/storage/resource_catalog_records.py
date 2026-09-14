@@ -81,6 +81,7 @@ class ResourceCatalogRecordStore:
         return records
 
     def upsert_agent(self, data: dict[str, Any]) -> None:
+        """仅供迁移前与 marker 未 done 时写入。迁移完成后 database.upsert_agent 不得再调这里。"""
         self.ensure_db()
         column_names = [
             "id", "name", "avatar", "description", "system_prompt", "model_config",

@@ -23,10 +23,13 @@ class ProjectResourceAccess:
     skill_ids: frozenset[str]
     mcp_server_ids: frozenset[str]
     http_tool_ids: frozenset[str]
+    project_skill_refs: frozenset[str] = frozenset()
 
     def allows(self, resource_type: str, resource_id: str) -> bool:
         """判断资源是否位于对应类型的有效白名单。"""
 
+        if resource_type == "skill" and resource_id in self.project_skill_refs:
+            return True
         resources = {
             "agent": self.agent_ids,
             "skill": self.skill_ids,
@@ -69,13 +72,21 @@ def resolve_project_resource_access(context: RuntimeContext) -> ProjectResourceA
         resource = get_workspace_resource(resource_type, resource_id)
         if resource and resource["workspaceId"] == context.workspace_id:
             enabled[resource_type].add(resource_id)
+    from src.catalog.http_files import project_http_ids
+    from src.catalog.mcp_files import project_mcp_ids
+    from src.catalog.skills import project_skill_refs
+
+    project_refs = frozenset(project_skill_refs(context.project_root))
+    project_mcp = frozenset(project_mcp_ids(context.project_root))
+    project_http = frozenset(project_http_ids(context.project_root))
     return ProjectResourceAccess(
         workspace_id=context.workspace_id,
         project_id=context.project_id,
         agent_ids=frozenset(enabled["agent"]),
-        skill_ids=frozenset(enabled["skill"]),
-        mcp_server_ids=frozenset(enabled["mcp"]),
-        http_tool_ids=frozenset(enabled["http_tool"]),
+        skill_ids=frozenset(enabled["skill"] | project_refs),
+        mcp_server_ids=frozenset(enabled["mcp"] | project_mcp),
+        http_tool_ids=frozenset(enabled["http_tool"] | project_http),
+        project_skill_refs=project_refs,
     )
 
 

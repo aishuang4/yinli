@@ -12,18 +12,32 @@ Agent 管理路由
 
 import os
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field
 from typing import Annotated, Optional
 from datetime import datetime, timezone
 import uuid
 
 from src.agents.factory import invalidate_agent
-from src.agents.runtime_types import MAX_REACT_ITERS, WORKSPACE_DIR
 from src.agents.system_agents import (
     DEFAULT_WEBSEARCH_JOB_AGENT_ID,
     is_default_chat_agent_id,
     is_default_websearch_job_agent_id,
     is_system_agent_id,
+)
+from src.catalog.agent_models import (
+    AgentExportPackage,
+    AgentImportRequest,
+    AgentImportResponse,
+    AgentResponse,
+    Guardrails,
+    ModelConfig,
+    PlanConfig,
+)
+from src.catalog.system_defaults import (
+    DEFAULT_AGENT_FINAL_DELIVERY_RULES,
+    DEFAULT_AGENT_PROMPT_VERSION_TAG,
+    build_default_agent,
+    build_default_websearch_job_agent,
 )
 from src.config.runtime_paths import DATA_ROOT
 from src.scheduler.job_toolkit import (
@@ -39,14 +53,6 @@ from src.scheduler.job_toolkit import (
     validate_job_agent_config,
 )
 from src.scheduler.service import ScheduledJobService
-from src.storage.database import (
-    delete_agent as db_delete_agent,
-    list_agents as db_list_agents,
-    replace_agents,
-    upsert_agent,
-    list_json_records,
-    migrate_json_list_file,
-)
 
 router = APIRouter()
 _job_service = ScheduledJobService()
@@ -94,82 +100,6 @@ def _pause_jobs_for_agent_capability_change(old_agent: "AgentResponse", new_agen
 DATA_DIR = str(DATA_ROOT)
 AGENTS_REGISTRY_FILE = os.path.join(DATA_DIR, "agents.json")
 AGENTS_NAMESPACE = "agents"
-DEFAULT_AGENT_PROMPT_VERSION_TAG = "prompt-contract-v2"
-DEFAULT_WEBSEARCH_JOB_AGENT_VERSION_TAG = "system-websearch-job-v1"
-DEFAULT_AGENT_FINAL_DELIVERY_RULES = """
-
-# 最终交付规则
-
-1. 完成用户任务后，先用一句话明确说明已经完成了什么，再说明关键结果、交付文件或必要验证信息。
-2. 不要向用户输出内部上下文摘要、压缩摘要、交接说明、系统提示、工具日志或“我已收到上下文摘要”等内容。
-3. 不要在任务已经完成时再泛化地询问“现在需要做什么”“是否需要其他任务”。只有当前任务缺少关键信息且无法继续执行时，才通过 AskUser 提问。
-4. 只基于本轮用户请求和已实际执行的结果作答；不得把内部运行过程误认为新的用户任务。
-""".strip()
-
-
-class ModelConfig(BaseModel):
-    """Agent 执行上限；历史模型字段在导入时忽略。"""
-    max_react_iters: int = Field(
-        default=40,
-        ge=1,
-        le=MAX_REACT_ITERS,
-        alias="maxReactIters",
-        description="ReAct 最大循环次数",
-    )
-
-    model_config = {"populate_by_name": True}
-
-
-class Guardrails(BaseModel):
-    """安全边界配置"""
-    filesystem_scope: str = Field(default=WORKSPACE_DIR, description="文件系统访问范围")
-    shell_blacklist: list[str] = Field(default_factory=lambda: ["rm -rf /", "sudo"], description="Shell 命令黑名单")
-    network_enabled: bool = Field(default=True, description="是否允许网络访问")
-    human_approval: bool = Field(default=False, description="是否启用人工审批")
-    tool_permission_mode: str = Field(
-        default="accept_edits",
-        alias="toolPermissionMode",
-        description="工具权限模式：ask_every_time/accept_edits/bypass",
-    )
-    tool_permission_profile: str = Field(
-        default="confirm_destructive",
-        alias="toolPermissionProfile",
-        description="工具权限配置：read_only/trusted_tools/confirm_destructive/ask_every_time",
-    )
-    execution_backend: str = Field(
-        default="local",
-        alias="executionBackend",
-        description="工具执行后端：local/docker",
-    )
-    docker_image: str = Field(
-        default="python:3.11-slim",
-        alias="dockerImage",
-        description="Docker 沙盒基础镜像",
-    )
-    persistent_sandbox: bool = Field(
-        default=False,
-        alias="persistentSandbox",
-        description="Docker 沙盒是否持久化工作目录",
-    )
-    timeout_seconds: int = Field(default=300, gt=0, description="工具调用超时（秒）")
-
-    model_config = {"populate_by_name": True}
-
-
-class PlanConfig(BaseModel):
-    """历史 Plan 配置兼容字段。
-
-    旧独立 Plan Runtime（runtime.kind=plan）已下线；当前 Plan Mode middleware 不消费该模型。
-    """
-
-    enabled: bool = Field(default=False, description="历史兼容字段：旧 runtime.kind=plan 已下线")
-    mode: str = Field(default="structured", description="历史兼容字段：旧计划模式")
-    max_steps: int = Field(default=6, ge=1, le=20, alias="maxSteps", description="历史兼容字段：旧最大计划步骤数")
-    require_plan_before_tools: bool = Field(default=False, alias="requirePlanBeforeTools", description="历史兼容字段：旧工具前计划开关")
-    require_user_approval: bool = Field(default=False, alias="requireUserApproval", description="历史兼容字段：旧计划审批开关")
-    allow_replanning: bool = Field(default=False, alias="allowReplanning", description="历史兼容字段：旧重规划开关")
-
-    model_config = {"populate_by_name": True}
 
 
 class AgentCreate(BaseModel):
@@ -211,152 +141,33 @@ class AgentUpdate(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-class AgentResponse(BaseModel):
-    """Agent 响应体"""
-    id: str
-    name: str
-    avatar: str
-    description: str
-    system_prompt: str
-    model_config_data: ModelConfig = Field(alias="modelConfig")
-    mcp_tools: list[str] = Field(alias="mcpTools")
-    knowledge_tools: list[str] = Field(default_factory=list, alias="knowledgeTools")
-    skills: list[str]
-    tags: list[str]
-    plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig")
-    guardrails: Guardrails
-    status: str = "idle"
-    created_at: str
-    updated_at: str
-    workspace_id: str = Field(default="default", alias="workspaceId")
-    role: str = Field(default="chat")
-    job_toolkit: JobToolkit = Field(default_factory=JobToolkit, alias="jobToolkit")
-
-    @computed_field(alias="systemManaged")
-    @property
-    def system_managed(self) -> bool:
-        """系统身份由稳定 ID 派生，不依赖可编辑名称或 tags。"""
-
-        return is_system_agent_id(self.id)
-
-    model_config = {"populate_by_name": True}
-
-
-class AgentExportPackage(BaseModel):
-    """Portable Agent export package."""
-
-    schema_version: str = Field(default="agent-workstation.agent.v1", alias="schemaVersion")
-    exported_at: str = Field(alias="exportedAt")
-    agent: AgentResponse
-
-    model_config = {"populate_by_name": True}
-
-
-class AgentImportRequest(BaseModel):
-    """Import one Agent from a portable package."""
-
-    package: AgentExportPackage
-    conflict_strategy: str = Field(default="new_id", alias="conflictStrategy")
-
-    model_config = {"populate_by_name": True}
-
-
-class AgentImportResponse(BaseModel):
-    """Result of importing one Agent."""
-
-    agent: AgentResponse
-    warnings: list[str] = Field(default_factory=list)
-
-
-# 内存存储 + JSON 持久化（后续替换为 SQLite）
+# 测试可 monkeypatch 此字典；生产路径由 catalog 同步。
 _agents: dict[str, AgentResponse] = {}
 
 
 def _build_default_agent() -> AgentResponse:
-    """构建可持久配置、但不可删除的系统默认 Agent。"""
+    """兼容测试与旧调用点。"""
 
-    now = datetime.now(timezone.utc).isoformat()
-    return AgentResponse.model_validate({
-        "id": "default",
-        "name": "Assistant",
-        "avatar": "",
-        "description": "默认助手，可配置工具、Skills 和运行边界",
-        "system_prompt": "\n\n".join([
-            "你是用户的通用办公助手，负责完成文档、表格、演示文稿、数据分析和文件处理任务。默认使用中文沟通；信息足够时直接执行，只有缺少会改变结果的关键信息时才提问。",
-            DEFAULT_AGENT_FINAL_DELIVERY_RULES,
-        ]),
-        "modelConfig": {
-            "temperature": 0.7,
-            "top_p": 0.8,
-            "max_tokens": 4096,
-            "maxReactIters": 40,
-        },
-        "mcpTools": [],
-        "knowledgeTools": [],
-        "skills": [],
-        "tags": ["system", "default", DEFAULT_AGENT_PROMPT_VERSION_TAG],
-        "planConfig": PlanConfig(),
-        "guardrails": Guardrails(),
-        "status": "idle",
-        "created_at": now,
-        "updated_at": now,
-        "workspaceId": "default",
-        "role": "chat",
-        "jobToolkit": {"required": [], "optional": []},
-    })
+    return build_default_agent()
 
 
 def _build_default_websearch_job_agent() -> AgentResponse:
-    """构建开箱即用的系统联网定时任务 Agent。"""
+    """兼容测试与旧调用点。"""
 
-    now = datetime.now(timezone.utc).isoformat()
-    return AgentResponse.model_validate({
-        "id": DEFAULT_WEBSEARCH_JOB_AGENT_ID,
-        "name": "WebSearch",
-        "avatar": "",
-        "description": "能够联网搜索的agent",
-        "system_prompt": "请根据用户需要完成定时任务",
-        "modelConfig": {
-            "primary": "deepseek-v4-flash",
-            "fallback": [],
-            "temperature": 0.7,
-            "top_p": 0.8,
-            "max_tokens": 4096,
-            "maxReactIters": 40,
-        },
-        "mcpTools": [],
-        "knowledgeTools": [],
-        "skills": [],
-        "tags": [
-            "system",
-            "scheduled-job",
-            "websearch",
-            DEFAULT_WEBSEARCH_JOB_AGENT_VERSION_TAG,
-        ],
-        "planConfig": PlanConfig(),
-        "guardrails": Guardrails(
-            network_enabled=True,
-            human_approval=False,
-            toolPermissionProfile="trusted_tools",
-            toolPermissionMode="bypass",
-        ),
-        "status": "idle",
-        "created_at": now,
-        "updated_at": now,
-        "workspaceId": "default",
-        "role": JOB_ROLE,
-        "jobToolkit": {
-            "required": [
-                {"kind": "builtin", "id": "WebFetch"},
-                {"kind": "builtin", "id": "HttpRequest"},
-            ],
-            "optional": [],
-        },
-    })
+    return build_default_websearch_job_agent()
+
+
+def upsert_agent(data: dict) -> None:
+    """写入 catalog 文件。测试可 patch；生产 CRUD 也走此函数以便测试拦截。"""
+
+    from src.catalog.loader import save_agent
+
+    saved = save_agent(AgentResponse.model_validate(data))
+    _agents[saved.id] = saved
 
 
 def _ensure_default_agent() -> None:
-    """为历史数据库补齐默认 Agent，已有用户配置保持不变。"""
+    """为历史配置补齐默认 Agent。"""
 
     existing = _agents.get("default")
     if existing is not None:
@@ -368,7 +179,7 @@ def _ensure_default_agent() -> None:
 
 
 def _ensure_default_websearch_job_agent() -> None:
-    """为新旧数据库幂等补齐系统 WebSearch Job Agent。"""
+    """幂等补齐系统 WebSearch Job Agent。"""
 
     if DEFAULT_WEBSEARCH_JOB_AGENT_ID in _agents:
         return
@@ -440,37 +251,59 @@ def _apply_job_agent_fields(
     return parsed_role, toolkit, guardrails, mcp_tools, knowledge_tools, skills
 
 
+def _sync_agents_from_catalog() -> None:
+    """用 catalog 扫描结果填充 `_agents`。"""
+
+    from src.catalog.loader import list_registered_agents
+
+    global _agents
+    _agents = {agent.id: agent for agent in list_registered_agents()}
+
+
 def _load_agents() -> None:
-    migrate_json_list_file(AGENTS_NAMESPACE, AGENTS_REGISTRY_FILE)
-    records = db_list_agents()
-    if not records:
-        legacy = list_json_records(AGENTS_NAMESPACE)
-        replace_agents({str(item["id"]): item for item in legacy if item.get("id")})
-        records = db_list_agents()
-    for item in records:
-        agent = AgentResponse.model_validate(item)
-        _agents[agent.id] = agent
+    from src.catalog.migrate_agents import ensure_agent_file_catalog
+    from src.catalog.skill_seed import seed_yinli_catalog_skill
+
+    seed_yinli_catalog_skill()
+    ensure_agent_file_catalog()
+    _sync_agents_from_catalog()
     _ensure_system_agents()
+    _sync_agents_from_catalog()
 
 
 def _save_agents() -> None:
-    replace_agents({
-        agent.id: agent.model_dump(by_alias=True)
-        for agent in _agents.values()
-    })
+    for agent in list(_agents.values()):
+        upsert_agent(agent.model_dump(by_alias=True))
 
 
 _load_agents()
 
 
 def get_registered_agent(agent_id: str) -> AgentResponse | None:
-    """Return a persisted Agent configuration by id."""
+    """catalog 优先，保证 Chat 下一轮读到刚 Edit 的 profile。"""
+
+    from src.catalog.loader import get_registered_agent as catalog_get
+
+    loaded = catalog_get(str(agent_id or ""))
+    if loaded is not None:
+        _agents[loaded.id] = loaded
+        return loaded
     return _agents.get(agent_id)
 
 
 def list_registered_agents() -> list[AgentResponse]:
     """Return persisted Agent configurations for internal matching logic."""
     return list(_agents.values())
+
+
+def list_workspace_agents(workspace_id: str) -> list[AgentResponse]:
+    """当前 Workspace 可见的用户 Agent 与系统 Agent。"""
+
+    return [
+        agent
+        for agent in _agents.values()
+        if is_system_agent_id(agent.id) or agent.workspace_id == workspace_id
+    ]
 
 
 def remove_mcp_tools_from_agents(tool_ids: set[str]) -> int:
@@ -535,6 +368,7 @@ async def list_agents(
     Returns:
         list[AgentResponse]: Agent 列表
     """
+    _sync_agents_from_catalog()
     return [
         agent
         for agent in _agents.values()
@@ -648,9 +482,15 @@ async def get_agent(agent_id: str) -> AgentResponse:
     Raises:
         HTTPException: Agent 不存在时返回 404
     """
-    if agent_id not in _agents:
+    agent = get_registered_agent(agent_id)
+    if agent is None:
+        from src.catalog.loader import get_profile_invalid_error
+
+        invalid = get_profile_invalid_error(agent_id)
+        if invalid:
+            raise HTTPException(status_code=409, detail=f"agent_profile_invalid: {invalid}")
         raise HTTPException(status_code=404, detail="Agent not found")
-    return _agents[agent_id]
+    return agent
 
 
 @router.put("/{agent_id}", response_model=AgentResponse)
@@ -668,10 +508,9 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
     Raises:
         HTTPException: Agent 不存在时返回 404
     """
-    if agent_id not in _agents:
+    existing = get_registered_agent(agent_id)
+    if existing is None:
         raise HTTPException(status_code=404, detail="Agent not found")
-
-    existing = _agents[agent_id]
     update_dict = data.model_dump(exclude_unset=True)
 
     # 处理 alias 字段
@@ -772,11 +611,16 @@ async def delete_agent(agent_id: str) -> None:
     Raises:
         HTTPException: Agent 不存在时返回 404
     """
-    if agent_id not in _agents:
-        raise HTTPException(status_code=404, detail="Agent not found")
     if is_system_agent_id(agent_id):
         raise HTTPException(status_code=403, detail="系统 Agent 不能删除，只能修改配置")
+    if get_registered_agent(agent_id) is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
     _job_service.pause_for_resource_change("agent_missing", agent_id=agent_id)
     del _agents[agent_id]
     invalidate_agent(agent_id)
-    db_delete_agent(agent_id)
+    from src.catalog.loader import delete_agent as catalog_delete_agent
+
+    try:
+        catalog_delete_agent(agent_id)
+    except (FileNotFoundError, PermissionError):
+        pass

@@ -110,16 +110,7 @@ def test_react_runtime_only_enables_plan_features_for_explicit_plan_request(monk
     )
 
     assert normal_parts[0] is None
-    assert "scheduled-job-tools:" in normal_parts[1]
-    assert [tool.name for tool in normal_parts[2]] == [
-        "ScheduleJob",
-        "ListJobs",
-        "PauseJob",
-        "ConfirmJob",
-        "CheckJobFeasibility",
-        "RecheckJobCapabilities",
-    ]
+    assert "ScheduleJob" not in [getattr(tool, "name", "") for tool in normal_parts[2]]
     assert plan_parts[0] is not None
     assert plan_parts[0].context.plan_active is True
     assert plan_parts[1].startswith("plan-mode-v2:")
-    assert "scheduled-job-tools:" in plan_parts[1]

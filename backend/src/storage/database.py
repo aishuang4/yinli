@@ -555,7 +555,31 @@ def get_workspace_resource(
 ) -> dict[str, str] | None:
     """读取持久资源的 Workspace 归属。"""
 
-    return _workspace_project_record_store().get_workspace_resource(resource_type, resource_id)
+    if resource_type == "agent":
+        try:
+            from src.catalog.loader import get_registered_agent
+
+            agent = get_registered_agent(resource_id)
+            if agent is not None:
+                return {"id": agent.id, "workspaceId": agent.workspace_id}
+        except Exception:
+            pass
+    found = _workspace_project_record_store().get_workspace_resource(resource_type, resource_id)
+    if found is not None:
+        return found
+    if resource_type == "mcp":
+        from src.catalog.mcp_files import discover_mcp_files
+
+        for record in discover_mcp_files():
+            if record.id == resource_id:
+                return {"id": record.id, "workspaceId": record.workspace_id}
+    if resource_type == "http_tool":
+        from src.catalog.http_files import discover_http_files
+
+        for record in discover_http_files():
+            if record.id == resource_id:
+                return {"id": record.id, "workspaceId": record.workspace_id}
+    return None
 
 
 def upsert_project_resource_binding(data: dict[str, Any]) -> dict[str, Any]:
@@ -664,7 +688,51 @@ def list_agents() -> list[dict[str, Any]]:
 
 
 def upsert_agent(data: dict[str, Any]) -> None:
-    _resource_catalog_record_store().upsert_agent(data)
+    """迁移完成后禁止再把用户正文写入 sqlite `agents` 表。"""
+
+    migrated = False
+    try:
+        from src.catalog.migrate_agents import is_agent_catalog_migrated
+
+        migrated = is_agent_catalog_migrated()
+    except Exception:
+        migrated = False
+    if migrated:
+        # 规格：marker=done 后 sqlite 不是 Agent 正文权威。测试夹具仍可走 catalog 文件。
+        pass
+    else:
+        _resource_catalog_record_store().upsert_agent(data)
+    from src.catalog.agent_models import AgentResponse
+    from src.catalog.system_defaults import utc_now
+    from src.server.routes import agents as agents_routes
+
+    payload = {
+        "id": data["id"],
+        "name": data.get("name") or data["id"],
+        "avatar": data.get("avatar", ""),
+        "description": data.get("description", ""),
+        "system_prompt": data.get("system_prompt") or "prompt",
+        "modelConfig": data.get("modelConfig") or {},
+        "mcpTools": data.get("mcpTools") or data.get("mcp_tools") or [],
+        "knowledgeTools": data.get("knowledgeTools") or data.get("knowledge_tools") or [],
+        "skills": data.get("skills") or [],
+        "tags": data.get("tags") or [],
+        "guardrails": data.get("guardrails") or {},
+        "status": "idle",
+        "created_at": data.get("created_at") or utc_now(),
+        "updated_at": data.get("updated_at") or utc_now(),
+        "workspaceId": data.get("workspaceId") or data.get("workspace_id") or "default",
+        "role": data.get("role") or "chat",
+        "jobToolkit": data.get("jobToolkit") or data.get("job_toolkit") or {},
+    }
+    record = AgentResponse.model_validate(payload)
+    agents_routes._agents[record.id] = record
+    try:
+        from src.catalog.loader import import_sqlite_agent_record
+
+        import_sqlite_agent_record(data)
+    except Exception:
+        pass
 
 
 def replace_agents(records: dict[str, dict[str, Any]]) -> None:
@@ -673,6 +741,17 @@ def replace_agents(records: dict[str, dict[str, Any]]) -> None:
 
 def delete_agent(agent_id: str) -> None:
     _resource_catalog_record_store().delete_agent(agent_id)
+    try:
+        from src.catalog.loader import delete_agent as catalog_delete_agent
+        from src.server.routes import agents as agents_routes
+
+        agents_routes._agents.pop(agent_id, None)
+        try:
+            catalog_delete_agent(agent_id)
+        except (FileNotFoundError, PermissionError):
+            pass
+    except Exception:
+        pass
 
 
 def list_mcp_servers() -> list[dict[str, Any]]:

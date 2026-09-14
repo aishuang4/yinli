@@ -21,6 +21,10 @@ from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, Field, HttpUrl
 
+from src.catalog.mcp_files import McpFileRecord, discover_mcp_files, write_mcp_file
+from src.catalog.migrate_mcp_http import ensure_mcp_file_catalog, is_mcp_catalog_migrated
+from src.catalog.paths import mcp_dir
+from src.catalog.secrets import delete_named_secret, resolve_headers
 from src.config.runtime_paths import DATA_ROOT
 from src.scheduler.mcp_runtime import resolve_mcp_runtime_servers as _resolve_mcp_runtime_servers
 from src.scheduler.service import ScheduledJobService
@@ -244,6 +248,7 @@ _builtin_mcp_servers: dict[str, McpServer] = {
 }
 
 _mcp_servers: dict[str, McpServer] = dict(_builtin_mcp_servers)
+_mcp_header_refs: dict[str, dict[str, str]] = {}
 
 
 def _normalize_remote_tools(server_id: str, raw_tools: object) -> list[McpTool]:
@@ -445,6 +450,42 @@ async def _fetch_remote_mcp_tools(
             ) from fallback_exc
 
 
+def _server_from_file(record: McpFileRecord) -> McpServer:
+    server = McpServer.model_validate({
+        "id": record.id,
+        "name": record.name,
+        "description": record.description,
+        "category": record.category,
+        "transport": record.transport,
+        "command": record.command,
+        "url": record.url,
+        "homepage": record.homepage,
+        "headers": record.headers,
+        "tags": record.tags,
+        "tools": record.tools,
+        "status": record.status,
+        "enabled": record.enabled,
+        "updatedAt": record.updated_at or _utc_now(),
+        "workspaceId": record.workspace_id,
+    })
+    _mcp_header_refs[record.id] = dict(record.header_refs)
+    return server
+
+
+def _refresh_mcp_files() -> None:
+    file_ids: set[str] = set()
+    for record in discover_mcp_files():
+        file_ids.add(record.id)
+        if record.id in _builtin_mcp_servers:
+            continue
+        _mcp_servers[record.id] = _server_from_file(record)
+    for server_id in list(_mcp_servers):
+        if server_id in _builtin_mcp_servers or server_id in file_ids:
+            continue
+        # sqlite 测试夹具仍可能提供用户 server
+        continue
+
+
 def _load_user_mcp_servers() -> None:
     migrate_json_list_file(MCP_NAMESPACE, USER_MCP_REGISTRY_FILE)
     records = db_list_mcp_servers()
@@ -455,9 +496,36 @@ def _load_user_mcp_servers() -> None:
     for item in records:
         server = McpServer.model_validate(item)
         _mcp_servers[server.id] = server
+    ensure_mcp_file_catalog(builtin_ids=set(_builtin_mcp_servers))
+    _refresh_mcp_files()
 
 
 def _save_user_mcp_servers() -> None:
+    if is_mcp_catalog_migrated():
+        for server_id, server in list(_mcp_servers.items()):
+            if server_id in _builtin_mcp_servers:
+                continue
+            record = McpFileRecord(
+                id=server.id,
+                name=server.name,
+                description=server.description,
+                category=server.category,
+                transport=server.transport,
+                command=server.command,
+                url=server.url,
+                homepage=server.homepage,
+                headers=dict(server.headers),
+                header_refs=dict(_mcp_header_refs.get(server.id) or {}),
+                tags=list(server.tags),
+                tools=[tool.model_dump(by_alias=True) for tool in server.tools],
+                status=server.status,
+                enabled=server.enabled,
+                workspace_id=server.workspace_id,
+            )
+            write_mcp_file(mcp_dir(server.workspace_id) / f"{server.id}.yaml", record)
+            _mcp_header_refs[server.id] = record.header_refs
+            _mcp_servers[server.id] = server.model_copy(update={"headers": record.headers})
+        return
     replace_mcp_servers({
         server_id: server.model_dump(by_alias=True)
         for server_id, server in _mcp_servers.items()
@@ -480,9 +548,14 @@ def resolve_mcp_runtime_servers(
 ) -> list[dict[str, object]]:
     """Resolve selected MCP tool ids into server specs for Agent runtime."""
 
+    _refresh_mcp_files()
+    runtime_servers = []
+    for server in _mcp_servers.values():
+        headers = resolve_headers(server.headers, _mcp_header_refs.get(server.id) or {})
+        runtime_servers.append(server.model_copy(update={"headers": headers}))
     return _resolve_mcp_runtime_servers(
         tool_ids,
-        list(_mcp_servers.values()),
+        runtime_servers,
         allowed_server_ids=allowed_server_ids,
         builtin_server_ids=set(_builtin_mcp_servers),
     )
@@ -497,6 +570,7 @@ async def list_mcp_servers(
 ) -> list[McpServer]:
     """获取 MCP Server 列表，支持搜索、分类和安装状态筛选。"""
 
+    _refresh_mcp_files()
     query = q.strip().lower()
     result = [
         server
@@ -648,6 +722,15 @@ async def delete_mcp_server(server_id: str) -> None:
         raise HTTPException(status_code=409, detail="Built-in MCP server cannot be deleted")
 
     server = _mcp_servers.pop(server_id)
+    refs = _mcp_header_refs.pop(server_id, {})
+    for ref in refs.values():
+        try:
+            delete_named_secret(ref)
+        except Exception:
+            pass
+    yaml_path = mcp_dir(server.workspace_id) / f"{server.id}.yaml"
+    if yaml_path.exists():
+        yaml_path.unlink()
     _job_service.pause_jobs_for_catalog_change(resource_type="mcp", resource_id=server_id)
     remove_mcp_tools_from_agents({tool.id for tool in server.tools})
     _save_user_mcp_servers()

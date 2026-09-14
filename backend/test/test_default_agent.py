@@ -34,6 +34,7 @@ def _agent(agent_id: str, workspace_id: str) -> agents_routes.AgentResponse:
 def test_default_agent_is_visible_in_every_workspace(monkeypatch) -> None:
     """系统默认 Agent 不依赖 Project binding，并在任意 Workspace 可配置。"""
 
+    monkeypatch.setattr(agents_routes, "_sync_agents_from_catalog", lambda: None)
     monkeypatch.setattr(agents_routes, "_agents", {
         "default": _agent("default", "default"),
         "workspace-agent": _agent("workspace-agent", "workspace-b"),

@@ -2516,8 +2516,8 @@ def test_unified_permission_profile_maps_legacy_bypass_to_trusted_tools():
 def test_default_workspace_dir_is_project_root_not_user_home():
     """默认 LocalWorkspace 应收窄到项目根，避免 Glob/Grep 扫用户主目录。"""
 
-    assert WORKSPACE_DIR.endswith("agent-workstation")
     assert WORKSPACE_DIR != str(Path.home())
+    assert Path(WORKSPACE_DIR).is_dir()
 
 
 def test_legacy_root_filesystem_scope_maps_to_project_workspace():

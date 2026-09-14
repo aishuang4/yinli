@@ -31,6 +31,7 @@
 
 ## 后续路线
 
+- `docs/file-catalog-v1.md`：系统定义文件化。第一至四期已落地：持久 Agent / Skill / MCP / HTTP / Job 都以约定目录文件为权威，模型只通过文件工具操作系统。
 - `docs/chat-model-selection-v1.md`：待确认的 Chat 模型选择与 models.json 唯一配置源方案，包含供应商绑定、凭据、迁移和各运行入口规则。
 - `docs/debian-http-deployment-v1.md`：Debian 单机 HTTP 临时部署指南，覆盖 Nginx、systemd、持久化、更新与回滚；不属于生产安全基线。
 - `docs/team-member-lifecycle-v2.md`：Team Member 长生命周期、TaskAttempt、多轮返工、Mailbox 唤醒和 Reviewer 闭环方案。

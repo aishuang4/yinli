@@ -17,10 +17,17 @@ class ScopedRead(Read):
         "in-scope absolute path or a path relative to the current workspace."
     )
 
-    def __init__(self, *, base_dir: str | None = None, scope_dir: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        base_dir: str | None = None,
+        scope_dir: str | None = None,
+        extra_scopes: list[str] | None = None,
+    ) -> None:
         super().__init__()
         self.base_dir = base_dir
         self.scope_dir = scope_dir
+        self.extra_scopes = extra_scopes or []
 
     async def __call__(  # type: ignore[override]
         self,
@@ -45,4 +52,5 @@ class ScopedRead(Read):
             file_path,
             base_dir=self.base_dir,
             scope_dir=self.scope_dir,
+            extra_scopes=self.extra_scopes,
         )

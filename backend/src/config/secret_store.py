@@ -11,6 +11,7 @@ import ctypes
 import errno
 import hashlib
 import os
+import re
 import select
 import subprocess
 import sys
@@ -88,6 +89,85 @@ def delete_model_api_key(provider_id: str) -> None:
     with _lock:
         _delete_secret(account)
         _cache[account] = ""
+
+
+_CATALOG_REF_RE = re.compile(r"^secret:[A-Za-z0-9:._-]{1,180}$")
+
+
+def _catalog_account(ref: str) -> str:
+    if not _CATALOG_REF_RE.match(ref):
+        raise SecretStoreError(f"非法 catalog secret ref: {ref}")
+    return f"catalog-ref:{ref}"
+
+
+def get_named_secret(ref: str) -> str:
+    """读取 MCP/HTTP 定义引用的密钥。"""
+
+    account = _catalog_account(ref)
+    with _lock:
+        if account in _cache:
+            return _cache[account]
+        try:
+            secret = _read_secret(account)
+        except SecretStoreError:
+            secret = _read_catalog_file_secret(account)
+        _cache[account] = secret
+        return secret
+
+
+def set_named_secret(ref: str, value: str) -> None:
+    """保存 MCP/HTTP 定义引用的密钥。"""
+
+    secret = value.strip()
+    if not secret:
+        delete_named_secret(ref)
+        return
+    if "\n" in secret or "\r" in secret:
+        raise SecretStoreError("密钥不能包含换行符。")
+    account = _catalog_account(ref)
+    with _lock:
+        try:
+            _write_secret(account, secret)
+        except SecretStoreError:
+            _write_catalog_file_secret(account, secret)
+        _cache[account] = secret
+
+
+def delete_named_secret(ref: str) -> None:
+    """删除 MCP/HTTP 定义引用的密钥。"""
+
+    account = _catalog_account(ref)
+    with _lock:
+        try:
+            _delete_secret(account)
+        except SecretStoreError:
+            pass
+        _delete_catalog_file_secret(account)
+        _cache[account] = ""
+
+
+def _catalog_file_path(account: str) -> Path:
+    digest = hashlib.sha256(account.encode("utf-8")).hexdigest()
+    return SECRET_DIR / "catalog" / digest
+
+
+def _read_catalog_file_secret(account: str) -> str:
+    path = _catalog_file_path(account)
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def _write_catalog_file_secret(account: str, value: str) -> None:
+    path = _catalog_file_path(account)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value, encoding="utf-8")
+
+
+def _delete_catalog_file_secret(account: str) -> None:
+    path = _catalog_file_path(account)
+    if path.exists():
+        path.unlink()
 
 
 def _read_secret(account: str) -> str:

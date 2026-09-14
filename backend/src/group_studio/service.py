@@ -67,7 +67,6 @@ from src.storage.database import (
     insert_group_studio_artifact,
     insert_group_studio_member,
     insert_group_studio_message,
-    list_agents,
     list_chat_runs_by_statuses,
     list_group_studio_artifacts,
     list_group_studios_by_project,
@@ -94,20 +93,21 @@ def _raise_if_chat_run_active(session_id: str) -> None:
 def _resolve_worker(agent_id: str, workspace_id: str) -> dict[str, str]:
     if agent_id == "default":
         return {"id": "default", "name": "默认助手", "role": "chat"}
-    for agent in list_agents():
-        if str(agent.get("id") or "") != agent_id:
-            continue
-        if str(agent.get("workspaceId") or "default") != workspace_id:
-            raise GroupStudioError(403, AGENT_NOT_BOUND)
-        role = str(agent.get("role") or "chat")
-        if role == "job":
-            raise GroupStudioError(403, JOB_AGENT_FORBIDDEN)
-        return {
-            "id": agent_id,
-            "name": str(agent.get("name") or agent_id),
-            "role": role,
-        }
-    raise GroupStudioError(403, AGENT_NOT_BOUND)
+    from src.server.routes.agents import get_registered_agent, list_workspace_agents
+
+    agent = get_registered_agent(agent_id)
+    if agent is None:
+        raise GroupStudioError(403, AGENT_NOT_BOUND)
+    visible = {item.id for item in list_workspace_agents(workspace_id)}
+    if agent.id not in visible:
+        raise GroupStudioError(403, AGENT_NOT_BOUND)
+    if agent.role == "job":
+        raise GroupStudioError(403, JOB_AGENT_FORBIDDEN)
+    return {
+        "id": agent_id,
+        "name": agent.name or agent_id,
+        "role": agent.role,
+    }
 
 
 def list_invitable_agents(group_id: str) -> list[dict[str, str]]:
@@ -121,18 +121,18 @@ def list_invitable_agents(group_id: str) -> list[dict[str, str]]:
     }
     occupied.add(GROUP_STUDIO_HOST_AGENT_ID)
     candidates: list[dict[str, str]] = []
-    for agent in list_agents():
-        agent_id = str(agent.get("id") or "")
+    from src.server.routes.agents import list_workspace_agents
+
+    for agent in list_workspace_agents(studio.workspace_id):
+        agent_id = agent.id
         if not agent_id or agent_id in occupied:
             continue
-        if str(agent.get("workspaceId") or "default") != studio.workspace_id:
-            continue
-        if str(agent.get("role") or "chat") == "job":
+        if agent.role == "job":
             continue
         candidates.append({
             "id": agent_id,
-            "name": str(agent.get("name") or agent_id),
-            "description": str(agent.get("description") or ""),
+            "name": agent.name or agent_id,
+            "description": agent.description or "",
         })
     return candidates
 

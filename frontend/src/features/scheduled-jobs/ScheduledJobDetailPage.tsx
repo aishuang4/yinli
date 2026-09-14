@@ -123,6 +123,10 @@ export function ScheduledJobDetailPage({
               <DetailField label="错过策略" value={job.missedPolicy} />
               <DetailField label="失败策略" value={job.failurePolicy} />
               <DetailField label="暂停原因" value={job.pauseReason || '无'} />
+              <DetailField
+                label="定义文件"
+                value={job.sourcePath || '尚未写入 catalog'}
+              />
             </div>
           </section>
 
@@ -142,7 +146,10 @@ export function ScheduledJobDetailPage({
           />
 
           <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
-            <div className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">冻结提示词</div>
+            <div className="mb-1 text-sm font-semibold text-[var(--color-text-primary)]">冻结提示词</div>
+            <div className="mb-3 text-xs text-[var(--color-text-tertiary)]">
+              定义权威是 Markdown 文件。改提示词、Agent 或策略请 Edit 定义文件，下一轮列表会读文件。
+            </div>
             <pre className="max-h-[240px] overflow-auto whitespace-pre-wrap rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-xs leading-6 text-[var(--color-text-primary)]">
               {job.frozenPrompt || '未配置'}
             </pre>

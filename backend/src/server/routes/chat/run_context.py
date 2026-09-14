@@ -95,6 +95,7 @@ class ChatRunContext:
     write_scope_dir: str = ""
     scheduled_job_id: str = ""
     scheduled_firing_id: str = ""
+    extra_filesystem_scopes: list[str] = field(default_factory=list)
 
 
 def resolve_run_workspace_dir(
@@ -191,6 +192,11 @@ async def build_chat_run_context(
             active_skill=active_skill,
             external_skills=external_skills,
         )
+    used_skills = _merge_file_catalog_skills(
+        used_skills,
+        external_skills=external_skills,
+        inject=str(getattr(run_data, "mode", "agent") or "agent") != "team",
+    )
     skill_paths = resolve_runtime_skill_paths(used_skills, runtime_context=runtime_context)
     used_skill_details = list_skill_usage_details(used_skills)
     skill_runs: list[ChatSkillRun] = []
@@ -255,6 +261,13 @@ async def build_chat_run_context(
         has_team=run_data.mode == "team",
         has_images=bool(run_data.images),
     )
+    extra_filesystem_scopes = _catalog_scopes(runtime_context.workspace_id)
+    _refresh_index_quietly(
+        runtime_context.project_root,
+        workspace_id=runtime_context.workspace_id,
+        project_id=runtime_context.project_id,
+        docker=guardrails.execution_backend == "docker",
+    )
     return ChatRunContext(
         session_id=session_id,
         runtime_context=runtime_context,
@@ -287,6 +300,7 @@ async def build_chat_run_context(
         ),
         session_workspace_dir=session_workspace_dir,
         session_artifact_paths_before=session_artifact_paths_before,
+        extra_filesystem_scopes=extra_filesystem_scopes,
     )
 
 
@@ -490,6 +504,63 @@ def _build_project_context_prompt(runtime_context: RuntimeContext) -> str:
     if instructions:
         parts.extend(["", "## Project Instructions", instructions])
     return "\n".join(parts)
+
+
+def _catalog_scopes(workspace_id: str) -> list[str]:
+    """当前 Workspace 的文件工具 catalog 根。"""
+
+    from src.catalog.paths import extra_filesystem_scopes_for_workspace
+
+    try:
+        return extra_filesystem_scopes_for_workspace(workspace_id)
+    except ValueError:
+        return []
+
+
+def _refresh_index_quietly(project_root, *, workspace_id: str, project_id: str, docker: bool) -> None:
+    """INDEX 写失败不得打断 Chat。"""
+
+    from src.catalog.index import refresh_project_index
+
+    try:
+        refresh_project_index(
+            project_root,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            docker=docker,
+        )
+    except Exception:
+        return
+
+
+def _merge_file_catalog_skills(used_skills: list, *, external_skills: list, inject: bool) -> list:
+    """单 Agent Chat 合并项目 Skill 与系统包，不新增 CRUD 工具。"""
+
+    if not inject:
+        return used_skills
+    from src.catalog.skill_seed import seed_system_skills
+    from src.catalog.skills import SYSTEM_SKILL_IDS
+    from src.server.routes.skills import get_installed_skill
+
+    seed_system_skills()
+    merged = list(used_skills)
+    seen = {getattr(skill, "id", "") for skill in merged}
+    for skill in external_skills:
+        if getattr(skill, "source_scope", "") != "project" or not getattr(skill, "enabled", False):
+            continue
+        if skill.id in seen:
+            continue
+        merged.append(skill)
+        seen.add(skill.id)
+    for skill_id in SYSTEM_SKILL_IDS:
+        if skill_id in seen:
+            continue
+        skill = get_installed_skill(skill_id)
+        if skill is None:
+            continue
+        merged.append(skill)
+        seen.add(skill.id)
+    return merged
 
 
 def _build_file_attachments_prompt(files) -> str:

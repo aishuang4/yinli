@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from src.catalog.job_files import job_definition_path, job_source_path_index
 from src.scheduler.models import (
     JOB_STATUSES,
     ScheduledJob,
@@ -142,7 +144,18 @@ async def recheck_scheduled_job_capabilities(job_id: str) -> dict[str, Any]:
     return serialize_job(updated)
 
 
-def serialize_job(job: ScheduledJob) -> dict[str, Any]:
+def _source_path_for(job: ScheduledJob, index: dict[str, str] | None = None) -> str:
+    if index and job.id in index:
+        return index[job.id]
+    path = job_definition_path(
+        workspace_id=job.workspace_id,
+        project_id=job.project_id,
+        job_id=job.id,
+    )
+    return str(path) if path.is_file() else ""
+
+
+def serialize_job(job: ScheduledJob, *, source_path: str | None = None) -> dict[str, Any]:
     return {
         "id": job.id,
         "workspaceId": job.workspace_id,
@@ -182,6 +195,7 @@ def serialize_job(job: ScheduledJob) -> dict[str, Any]:
         "createdAt": job.created_at,
         "updatedAt": job.updated_at,
         "archivedAt": job.archived_at,
+        "sourcePath": source_path if source_path is not None else _source_path_for(job),
     }
 
 
@@ -227,8 +241,22 @@ async def list_scheduled_jobs(
     if status and status not in JOB_STATUSES:
         raise HTTPException(status_code=422, detail=f"非法 Job 状态: {status}")
     jobs = _service.list_jobs(project_id=project_id, status=status)
+    index: dict[str, str] = {}
+    try:
+        from src.storage.database import get_project
+
+        project = get_project(project_id) if project_id else None
+        raw_root = str((project or {}).get("rootPath") or "").strip()
+        workspace_id = str((project or {}).get("workspaceId") or "default")
+        index = job_source_path_index(
+            project_root=Path(raw_root) if raw_root else None,
+            project_id=project_id or "default",
+            workspace_id=workspace_id,
+        )
+    except Exception:
+        index = {}
     return {
-        "jobs": [serialize_job(item) for item in jobs],
+        "jobs": [serialize_job(item, source_path=_source_path_for(item, index)) for item in jobs],
         "enabled": is_scheduled_jobs_enabled(),
     }
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
@@ -69,6 +71,7 @@ from src.storage.database import (
 )
 from src.storage.scheduled_job_records import UniqueConstraintError
 
+logger = logging.getLogger(__name__)
 ON_TIME_SLACK_SECONDS = 60
 DUE_SLOT_TRIGGERS = frozenset({"schedule", "catch_up"})
 _RECONFIRM_FIELDS = frozenset({
@@ -123,6 +126,8 @@ class ScheduledJobService:
         task_intent: str = "",
         accept_partial: bool = False,
         required_intents: list[str] | None = None,
+        job_id: str = "",
+        persist_file: bool = True,
     ) -> ScheduledJob:
         """字段齐全后写入 pending_confirmation；未传 tool_scope 则全 false。"""
 
@@ -165,6 +170,7 @@ class ScheduledJobService:
         record: dict[str, Any] | None = None
         try:
             record = insert_scheduled_job({
+                **({"id": job_id} if str(job_id or "").strip() else {}),
                 "workspace_id": workspace_id,
                 "project_id": project_id,
                 "name": name.strip(),
@@ -196,10 +202,13 @@ class ScheduledJobService:
         except UniqueConstraintError as exc:
             raise ScheduledJobConflictError("同项目下任务名称已存在") from exc
         try:
-            return self._job(record)
+            job = self._job(record, hydrate=False)
         except ScheduledJobValidationError:
             delete_scheduled_job(record["id"])
             raise
+        if persist_file:
+            self._persist_definition(job)
+        return self._job(record)
 
     def get_job(self, job_id: str) -> ScheduledJob:
         record = get_scheduled_job(job_id)
@@ -214,6 +223,18 @@ class ScheduledJobService:
         agent_id: str | None = None,
         status: str | None = None,
     ) -> list[ScheduledJob]:
+        try:
+            from src.catalog.sync_jobs import sync_job_definitions
+            from src.storage.database import get_project
+
+            project = get_project(project_id) if project_id else None
+            raw_root = str((project or {}).get("rootPath") or "").strip()
+            sync_job_definitions(
+                project_root=Path(raw_root) if raw_root else None,
+                project_id=project_id or "default",
+            )
+        except Exception:
+            pass
         jobs: list[ScheduledJob] = []
         for item in list_scheduled_jobs(
             project_id=project_id, agent_id=agent_id, status=status,
@@ -224,7 +245,7 @@ class ScheduledJobService:
                 continue
         return jobs
 
-    def confirm(self, job_id: str, *, now: datetime | None = None) -> ScheduledJob:
+    def confirm(self, job_id: str, *, now: datetime | None = None, persist_file: bool = True) -> ScheduledJob:
         """对话 ConfirmJob 与 Jobs 页 REST 共用的启用路径；已 active 则幂等返回。"""
 
         job = self.get_job(job_id)
@@ -250,9 +271,9 @@ class ScheduledJobService:
             "next_run_at": to_utc_iso(next_run),
             **contract_changes,
         }
-        return self._save_job(job_id, changes)
+        return self._save_job(job_id, changes, persist_file=persist_file)
 
-    def pause(self, job_id: str, *, reason: str = "user") -> ScheduledJob:
+    def pause(self, job_id: str, *, reason: str = "user", persist_file: bool = True) -> ScheduledJob:
         job = self.get_job(job_id)
         if job.status == "paused":
             return job
@@ -260,12 +281,12 @@ class ScheduledJobService:
         updated = self._save_job(job_id, {
             "status": "paused",
             "pause_reason": reason,
-        })
+        }, persist_file=persist_file)
         if reason and reason != "user":
             notify_job_paused(updated)
         return updated
 
-    def resume(self, job_id: str, *, now: datetime | None = None) -> ScheduledJob:
+    def resume(self, job_id: str, *, now: datetime | None = None, persist_file: bool = True) -> ScheduledJob:
         job = self.get_job(job_id)
         if job.status == "active":
             return job
@@ -289,9 +310,9 @@ class ScheduledJobService:
             "archived_at": None,
             "next_run_at": to_utc_iso(next_run),
             **contract_changes,
-        })
+        }, persist_file=persist_file)
 
-    def archive(self, job_id: str, *, now: datetime | None = None) -> ScheduledJob:
+    def archive(self, job_id: str, *, now: datetime | None = None, persist_file: bool = True) -> ScheduledJob:
         job = self.get_job(job_id)
         if job.status == "archived":
             return job
@@ -300,9 +321,16 @@ class ScheduledJobService:
         return self._save_job(job_id, {
             "status": "archived",
             "archived_at": to_utc_iso(stamped),
-        })
+        }, persist_file=persist_file)
 
-    def update_job(self, job_id: str, changes: dict[str, Any], *, now: datetime | None = None) -> ScheduledJob:
+    def update_job(
+        self,
+        job_id: str,
+        changes: dict[str, Any],
+        *,
+        now: datetime | None = None,
+        persist_file: bool = True,
+    ) -> ScheduledJob:
         """部分更新冻结规格。改投递/收件人/Skill 等需回到 pending_confirmation。"""
 
         job = self.get_job(job_id)
@@ -353,7 +381,7 @@ class ScheduledJobService:
             payload["next_run_at"] = to_utc_iso(next_run)
         if not payload:
             return job
-        return self._save_job(job_id, payload)
+        return self._save_job(job_id, payload, persist_file=persist_file)
 
     def run_now(self, job_id: str, *, now: datetime | None = None) -> ScheduledJobRun:
         """立即插入 trigger=manual 的 queued firing；已有非终态 firing 时冲突。"""
@@ -1001,13 +1029,24 @@ class ScheduledJobService:
             payload={"pause_reason": reason},
         )
 
-    def _save_job(self, job_id: str, changes: dict[str, Any]) -> ScheduledJob:
+    def _persist_definition(self, job: ScheduledJob) -> None:
+        try:
+            from src.catalog.sync_jobs import persist_job_definition
+
+            persist_job_definition(job)
+        except Exception:
+            logger.warning("写入 Job 定义文件失败: %s", getattr(job, "id", ""), exc_info=True)
+
+    def _save_job(self, job_id: str, changes: dict[str, Any], *, persist_file: bool = True) -> ScheduledJob:
         try:
             record = update_scheduled_job(job_id, changes)
         except UniqueConstraintError as exc:
             raise ScheduledJobConflictError("同项目下任务名称已存在") from exc
         if record is None:
             raise ScheduledJobNotFoundError(f"找不到 Job: {job_id}")
+        snapshot = self._job(record, hydrate=False)
+        if persist_file:
+            self._persist_definition(snapshot)
         return self._job(record)
 
     def assert_contract_satisfiable(self, job: ScheduledJob) -> dict[str, Any]:
@@ -1219,9 +1258,23 @@ class ScheduledJobService:
         if target not in ALLOWED_JOB_TRANSITIONS.get(current, frozenset()):
             raise ScheduledJobStateError(f"不能从 {current} 迁移到 {target}")
 
-    def _job(self, record: dict[str, Any]) -> ScheduledJob:
+    def _job(self, record: dict[str, Any], *, hydrate: bool = True) -> ScheduledJob:
+        payload = dict(record)
+        if hydrate:
+            try:
+                from src.catalog.job_files import load_job_definition_file, overlay_instance_with_file
+
+                file = load_job_definition_file(
+                    job_id=str(payload.get("id") or ""),
+                    workspace_id=str(payload.get("workspace_id") or ""),
+                    project_id=str(payload.get("project_id") or ""),
+                )
+                if file is not None:
+                    payload = overlay_instance_with_file(payload, file)
+            except Exception:
+                pass
         try:
-            return ScheduledJob.model_validate(record)
+            return ScheduledJob.model_validate(payload)
         except ValidationError as exc:
             raise ScheduledJobValidationError(str(exc)) from exc
 

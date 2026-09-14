@@ -34,10 +34,17 @@ class ScopedGlob(Glob):
     }
     max_results: ClassVar[int] = 500
 
-    def __init__(self, *, base_dir: str | None = None, scope_dir: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        base_dir: str | None = None,
+        scope_dir: str | None = None,
+        extra_scopes: list[str] | None = None,
+    ) -> None:
         super().__init__()
         self.base_dir = base_dir
         self.scope_dir = scope_dir
+        self.extra_scopes = extra_scopes or []
 
     def _is_ignored_directory(self, path: str) -> bool:
         return os.path.basename(os.path.normpath(path)) in self.ignored_directories
@@ -140,6 +147,7 @@ class ScopedGlob(Glob):
             path or ".",
             base_dir=self.base_dir,
             scope_dir=self.scope_dir,
+            extra_scopes=self.extra_scopes,
         )
         if not os.path.exists(base_dir):
             return ToolChunk(

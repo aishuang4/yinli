@@ -53,7 +53,6 @@ from src.storage.database import (
     get_project,
     insert_group_studio_message,
     insert_group_studio_run,
-    list_agents,
     set_group_studio_current_run_id,
     update_group_studio_message_body,
     update_group_studio_run_status,
@@ -181,8 +180,18 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
         include_default_tools=True,
         workspace_dir=workspace,
         write_scope_dir=workspace,
+        extra_filesystem_scopes=_catalog_scopes(str(snapshot.get("workspaceId") or "default")),
     )
     return spec, ctx, tools
+
+
+def _catalog_scopes(workspace_id: str) -> list[str]:
+    from src.catalog.paths import extra_filesystem_scopes_for_workspace
+
+    try:
+        return extra_filesystem_scopes_for_workspace(workspace_id)
+    except ValueError:
+        return []
 
 
 def _agent_row(agent_id: str) -> dict[str, Any]:
@@ -195,9 +204,11 @@ def _agent_row(agent_id: str) -> dict[str, Any]:
             "knowledgeTools": [],
             "skills": [],
         }
-    for agent in list_agents():
-        if str(agent.get("id") or "") == agent_id:
-            return agent
+    from src.server.routes.agents import get_registered_agent
+
+    agent = get_registered_agent(agent_id)
+    if agent is not None:
+        return agent.model_dump(by_alias=True)
     return {
         "id": agent_id,
         "name": agent_id,

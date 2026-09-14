@@ -31,7 +31,7 @@ from src.scheduler.job_toolkit import (
 )
 from src.scheduler.unattended_policy import agent_approval_policy, skill_package_has_scripts
 from src.security.permissions import ApprovalPolicy, build_permission_profile
-from src.storage.database import list_agents
+from src.server.routes.agents import list_registered_agents
 
 _ALWAYS_PREVIEW = [
     "Read", "Grep", "Glob", "Write", "Edit",
@@ -345,13 +345,13 @@ def _suggest_agents(
     required: list[str],
 ) -> list[str]:
     try:
-        agents = list_agents()
+        agents = list_registered_agents()
     except Exception:
         return []
     hits: list[str] = []
     scanned = 0
     for record in agents:
-        agent_id = str(record.get("id") or "")
+        agent_id = str(getattr(record, "id", "") or "")
         if not agent_id or agent_id == current_agent_id:
             continue
         if agent_role_of(record) != JOB_ROLE:

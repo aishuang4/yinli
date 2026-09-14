@@ -34,10 +34,17 @@ class ScopedGrep(Grep):
         "xml": {".xml"},
     }
 
-    def __init__(self, *, base_dir: str | None = None, scope_dir: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        base_dir: str | None = None,
+        scope_dir: str | None = None,
+        extra_scopes: list[str] | None = None,
+    ) -> None:
         super().__init__()
         self.base_dir = base_dir
         self.scope_dir = scope_dir
+        self.extra_scopes = extra_scopes or []
 
     async def __call__(  # type: ignore[override]
         self,
@@ -63,6 +70,7 @@ class ScopedGrep(Grep):
             path or ".",
             base_dir=self.base_dir,
             scope_dir=self.scope_dir,
+            extra_scopes=self.extra_scopes,
         )
         if shutil.which("rg") is None:
             return self._python_fallback(

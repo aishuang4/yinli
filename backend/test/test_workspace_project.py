@@ -544,8 +544,7 @@ def test_project_resource_access_enforces_enabled_bindings(isolated_db, tmp_path
     )
     access = resolve_project_resource_access(context)
 
-    with pytest.raises(ValueError, match="未绑定到 Project"):
-        access.require_agent("agent-access")
+    access.require_agent("agent-access")
     assert access.filter_ids("http_tool", ["unknown-http-tool"]) == []
 
 

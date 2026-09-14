@@ -62,7 +62,7 @@ export function ScheduledJobScheduleForm({
   }
 
   return (
-    <FormSection title="Weekly 调度" description="改调度可保持 active，不会回到待确认。">
+    <FormSection title="Weekly 调度" description="保存会写回定义文件；改调度可保持 active，不会回到待确认。">
       <div className="grid gap-3 md:grid-cols-2">
         <SelectField
           label="星期"

@@ -58,27 +58,32 @@ def test_load_agents_backfills_system_job_agent_in_existing_database(
     tmp_path,
     monkeypatch,
 ) -> None:
-    """真实 SQLite 加载链路保留历史 Agent，并补齐两个系统 Agent。"""
+    """迁移后用户 Agent 进 profile 文件，系统 Agent 由代码提供，sqlite 表清空。"""
 
+    monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
     monkeypatch.setattr(database, "_initialized", False)
-    monkeypatch.setattr(agents_routes, "_agents", {})
-    monkeypatch.setattr(agents_routes, "migrate_json_list_file", lambda *_args: None)
+    from src.storage.database import upsert_json_record
+
+    upsert_json_record("catalog", "agent_migration_v1", {"status": "pending"})
     database.upsert_agent({
         "id": "existing-agent",
         "name": "Existing",
         "system_prompt": "prompt",
         "workspaceId": "default",
+        "guardrails": {},
+        "skills": [],
+        "mcpTools": [],
+        "tags": [],
+        "role": "chat",
     })
-
+    upsert_json_record("catalog", "agent_migration_v1", {"status": ""})
     agents_routes._load_agents()
 
-    assert set(agents_routes._agents) == {
-        "existing-agent",
-        "default",
-        DEFAULT_WEBSEARCH_JOB_AGENT_ID,
-    }
-    assert {item["id"] for item in database.list_agents()} == set(agents_routes._agents)
+    assert "existing-agent" in agents_routes._agents
+    assert "default" in agents_routes._agents
+    assert DEFAULT_WEBSEARCH_JOB_AGENT_ID in agents_routes._agents
+    assert all(row["id"] != "existing-agent" for row in database.list_agents())
 
 
 def test_system_agents_are_visible_in_every_workspace(monkeypatch) -> None:
@@ -94,6 +99,7 @@ def test_system_agents_are_visible_in_every_workspace(monkeypatch) -> None:
         "id": "other-job",
         "workspace_id": "workspace-a",
     })
+    monkeypatch.setattr(agents_routes, "_sync_agents_from_catalog", lambda: None)
     monkeypatch.setattr(agents_routes, "_agents", {
         default_agent.id: default_agent,
         websearch_agent.id: websearch_agent,

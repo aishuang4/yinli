@@ -189,6 +189,10 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 - **Skill 自进化现状**：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、router gate、workflow evidence、颗粒度 gate、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和用户显式请求生成 Skill 的手动触发流；自动生成 / 手动注册 Skill 会写入运行时 `skills/{skill_name}/SKILL.md` 并支持按 Skill 名称导出 zip。Memory 页面已能查看和操作候选队列；注册后不自动绑定 Agent。
 - **向量存储**：全局 `VectorStoreBackend` 抽象已支持 `disabled` / `zvec`，`VECTOR_STORE_PROVIDER` 仅首次初始化生效，之后按持久化 `VectorStorePolicy` 启动。
 
+## 文件 Catalog
+
+持久 Agent 定义的权威是 Workspace 目录 `<USER_DATA_ROOT>/workspaces/<id>/.agents/profiles/<id>.md`，不是 `agents` 表。系统 Agent 仍由代码提供，用户覆盖写在 `workspaces/_system/.agents/profiles/`。Skill 正文只来自包内 `SKILL.md`（sqlite `content` 不再保存正文）；项目 `.agents/skills` 默认可运行。系统包 `yinli-catalog` / `yinli-charts` / `word-documents` seed 到运行时 skills 目录。MCP / HTTP 工具定义是 Workspace/Project 下的 YAML，密钥只走 `secret_ref` / secret_store，禁止写进 YAML。Job 定义是 `.agents/jobs/<id>.md`；`scheduled_jobs` 的权威实例字段是 status / next_run_at / 连续失败 / 能力合同等，定义列只是派生缓存，读路径以文件覆盖。模型通过 Read/Edit 这些文件操作系统，不再注入 `ScheduleJob` / `PauseJob` 平行工具；Chat 会生成项目 `.agents/INDEX.md`。规格见 `docs/file-catalog-v1.md`。
+
 ## 存储
 
 `backend/src/storage/database.py` 使用同步 `sqlite3 + RLock`。核心结构化表包括：
@@ -228,7 +232,7 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 
 定时任务写接口受 `system_settings/scheduled_jobs.enabled` 控制；开发库默认关闭。桌面安装版（`AGENT_WORKSTATION_DATA_DIR`）首次启动若从未写过该键，会默认打开调度和能力门禁。设置页可随时开关。
 
-控制面与执行面拆开：对话工具 `ScheduleJob` / `ListJobs` / `PauseJob` / `ConfirmJob` 立即写 SQLite；到点走领域 API `start_scheduled_chat_run()`，每次 firing 新建 `kind=scheduled_job` 的 Chat session，禁止复用登记会话。firing 去掉 AskUser / Plan Mode / DelegateTask。控制面默认 `notify`；预览发送、收件人白名单、`auto_send` 仍是后续阶段。
+控制面与执行面拆开：Job 定义由 catalog 文件权威，Jobs 页 / REST 是同一棵文件树的门面；sqlite `scheduled_jobs` 保存运行实例。到点走领域 API `start_scheduled_chat_run()`，每次 firing 新建 `kind=scheduled_job` 的 Chat session，禁止复用登记会话。firing 去掉 AskUser / Plan Mode / DelegateTask。单 Agent Chat 不再注入 `ScheduleJob` 工具组。控制面默认 `notify`；预览发送、收件人白名单、`auto_send` 仍是后续阶段。
 
 定时任务的到期执行者必须是 `role=job` 的 Job Agent，不能使用 Chat 助手。Job Agent 在配置里拆成必注入与可选注入两层工具：必注入到期一定带上，`CheckJobFeasibility` 只认领可选层。系统 `default` 助手不能改成 Job Agent；Job Agent 不出现在 Chat 选择器里。能力合同与创建前门禁见 `docs/scheduled-jobs-v2-agent-activation.md`。
 

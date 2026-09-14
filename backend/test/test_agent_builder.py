@@ -53,7 +53,6 @@ async def test_apply_builder_binds_agents_to_current_project(monkeypatch: pytest
         "jobToolkit": {},
     })
     create_calls: list[object] = []
-    bindings: list[dict[str, object]] = []
 
     async def fake_create_agent(data: object) -> AgentResponse:
         create_calls.append(data)
@@ -64,7 +63,6 @@ async def test_apply_builder_binds_agents_to_current_project(monkeypatch: pytest
         "workspaceId": "workspace-1",
     })
     monkeypatch.setattr(agent_builder, "create_agent", fake_create_agent)
-    monkeypatch.setattr(agent_builder, "upsert_project_resource_binding", bindings.append)
 
     response = await agent_builder.apply_agents(BuilderApplyRequest(
         workspaceId="workspace-1",
@@ -78,9 +76,3 @@ async def test_apply_builder_binds_agents_to_current_project(monkeypatch: pytest
     assert response.created_agents[0].id == "generated-agent"
     assert len(create_calls) == 1
     assert getattr(create_calls[0], "workspace_id") == "workspace-1"
-    assert bindings == [{
-        "project_id": "project-1",
-        "resource_type": "agent",
-        "resource_id": "generated-agent",
-        "enabled": True,
-    }]

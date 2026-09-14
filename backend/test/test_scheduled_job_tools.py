@@ -39,6 +39,7 @@ def isolated_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
     monkeypatch.setattr(database, "_initialized", False)
+    monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path / "user-data")
     yield
     database._initialized = False
 
@@ -238,15 +239,5 @@ def test_team_executor_does_not_inject_scheduled_job_tools(monkeypatch):
     assert [tool.name for tool in team_parts[2]] == []
     assert "scheduled-job-tools" not in team_parts[1]
     assert "ScheduleJob" not in team_parts[5]
-    assert [tool.name for tool in single_parts[2]] == [
-        "ScheduleJob",
-        "ListJobs",
-        "PauseJob",
-        "ConfirmJob",
-        "CheckJobFeasibility",
-        "RecheckJobCapabilities",
-    ]
-    assert single_parts[1] == scheduled_job_tools_cache_key(single_parts[2])
-    assert ASKUSER_DELIVERY_DEFAULT in single_parts[5]
-    assert ASKUSER_ENABLE_DEFAULT in single_parts[5]
-    assert "call ConfirmJob(jobId) immediately" in single_parts[5]
+    assert "ScheduleJob" not in [tool.name for tool in single_parts[2]]
+    assert "scheduled-job-tools" not in single_parts[1]

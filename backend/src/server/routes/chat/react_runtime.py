@@ -39,11 +39,6 @@ from src.server.routes.chat.runtime_events import runtime_source_event
 from src.subagents.manager import SubagentDelegationManager
 from src.subagents.registry import load_subagent_catalog
 from src.tools.delegate_task import build_subagent_tools
-from src.tools.scheduled_job_tools import (
-    build_scheduled_job_tools,
-    scheduled_job_prompt_addendum,
-    scheduled_job_tools_cache_key,
-)
 
 
 def _build_plan_mode_runtime_parts(
@@ -108,17 +103,8 @@ def _build_runtime_feature_parts(
         middlewares.extend(plan_middlewares)
 
     if not is_team:
-        job_tools = build_scheduled_job_tools(
-            workspace_id=str(ctx.runtime_context.workspace_id),
-            project_id=str(ctx.runtime_context.project_id),
-            agent_id=ctx.agent_id,
-            session_id=ctx.session_id,
-        )
-        extra_tools.extend(job_tools)
-        feature_keys.append(scheduled_job_tools_cache_key(job_tools))
-        prompt_addenda.append(
-            scheduled_job_prompt_addendum(str(ctx.runtime_context.workspace_id))
-        )
+        # 第四期：Job 定义走文件，不再向模型注入 ScheduleJob 平行工具。
+        pass
 
     catalog = load_subagent_catalog(workspace_dir=str(ctx.runtime_context.project_root))
     if catalog.definitions:
@@ -251,6 +237,7 @@ async def execute_react_runtime(
             middlewares=middlewares,
             workspace_dir=ctx.session_workspace_dir,
             write_scope_dir=str(getattr(ctx, "write_scope_dir", "") or ""),
+            extra_filesystem_scopes=list(getattr(ctx, "extra_filesystem_scopes", None) or []),
         )
         agent = create_main_agent_from_spec(
             main_agent_spec,

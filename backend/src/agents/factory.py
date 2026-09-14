@@ -15,6 +15,7 @@ import os
 import signal
 import shutil
 from collections.abc import AsyncGenerator, Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from agentscope.agent import Agent
@@ -414,6 +415,20 @@ class RuntimePathSkillLoader(LocalSkillLoader):
         ]
 
 
+def _seed_catalog_profiles_readonly(host_workdir: Path, extra_filesystem_scopes: list[str]) -> None:
+    """把 host catalog profiles 只读复制进持久 Docker sandbox，不回写。"""
+
+    dest = host_workdir / ".agents" / "profiles"
+    dest.mkdir(parents=True, exist_ok=True)
+    for scope in extra_filesystem_scopes:
+        source = Path(scope) / "profiles"
+        if not source.is_dir():
+            continue
+        for item in source.glob("*.md"):
+            target = dest / item.name
+            shutil.copy2(item, target)
+
+
 def _safe_workspace_dir(guardrails: AgentGuardrails | None) -> str:
     scope = (guardrails.filesystem_scope if guardrails else WORKSPACE_DIR) or WORKSPACE_DIR
     expanded = os.path.abspath(os.path.expanduser(scope))
@@ -482,6 +497,7 @@ def _create_default_toolkit(
     skill_runtime_root: str | None = None,
     workspace_dir: str | None = None,
     write_scope_dir: str | None = None,
+    extra_filesystem_scopes: list[str] | None = None,
 ) -> Toolkit:
     """
     创建默认工具集
@@ -504,12 +520,13 @@ def _create_default_toolkit(
     scope = tool_scope or RuntimeToolScope()
     filesystem_scope = _safe_workspace_dir(guardrails)
     write_scope = _safe_explicit_dir(write_scope_dir) or filesystem_scope
+    extra_scopes = list(extra_filesystem_scopes or [])
 
     local_tools = [
         *((
-            ScopedRead(base_dir=workspace_dir, scope_dir=filesystem_scope),
-            ScopedGrep(base_dir=workspace_dir, scope_dir=filesystem_scope),
-            ScopedGlob(base_dir=workspace_dir, scope_dir=filesystem_scope),
+            ScopedRead(base_dir=workspace_dir, scope_dir=filesystem_scope, extra_scopes=extra_scopes),
+            ScopedGrep(base_dir=workspace_dir, scope_dir=filesystem_scope, extra_scopes=extra_scopes),
+            ScopedGlob(base_dir=workspace_dir, scope_dir=filesystem_scope, extra_scopes=extra_scopes),
             AskUser(),
             FinalAnswerStart(),
             MemoryNodeTree(
@@ -527,8 +544,8 @@ def _create_default_toolkit(
     ]
     if include_default_tools and not read_only:
         local_tools.extend([
-            ScopedWrite(base_dir=workspace_dir, scope_dir=write_scope),
-            ScopedEdit(base_dir=workspace_dir, scope_dir=write_scope),
+            ScopedWrite(base_dir=workspace_dir, scope_dir=write_scope, extra_scopes=extra_scopes),
+            ScopedEdit(base_dir=workspace_dir, scope_dir=write_scope, extra_scopes=extra_scopes),
         ])
 
     if scope.allow_bash and permission_profile.can_execute:
@@ -625,6 +642,7 @@ def get_or_create_agent(
     skill_paths: list[str] | None = None,
     workspace_dir: str | None = None,
     write_scope_dir: str | None = None,
+    extra_filesystem_scopes: list[str] | None = None,
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -675,6 +693,11 @@ def get_or_create_agent(
             ),
             skill_paths=skill_paths,
         )
+        if guardrails.persistent_sandbox and extra_filesystem_scopes:
+            _seed_catalog_profiles_readonly(
+                Path(str(SANDBOX_ROOT / agent_id.replace(":", "-").replace("/", "-"))),
+                extra_filesystem_scopes,
+            )
     else:
         workspace = LocalWorkspace(workdir=workspace_dir or _safe_workspace_dir(guardrails))
 
@@ -707,6 +730,7 @@ def get_or_create_agent(
             skill_runtime_root=docker_skill_runtime_root,
             workspace_dir=workspace_dir,
             write_scope_dir=write_scope_dir,
+            extra_filesystem_scopes=extra_filesystem_scopes,
         ),
         state=agent_state,
         offloader=workspace,

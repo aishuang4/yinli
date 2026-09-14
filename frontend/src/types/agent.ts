@@ -115,6 +115,10 @@ export interface Agent {
   jobToolkit: JobToolkit;
   /** 是否为后端按稳定 ID 管理的系统内置 Agent */
   systemManaged: boolean;
+  /** 定义文件绝对路径，页面可选展示 */
+  sourcePath?: string;
+  /** profile / system / system_overlay */
+  sourceKind?: string;
   /** 创建时间 */
   createdAt: string;
   /** 更新时间 */
