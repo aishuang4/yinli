@@ -8,7 +8,7 @@
 - Chat 消息渲染新增 `EchartsContent`：只按内置 Skill `yinli-charts` 合同识别闭合的 ```echarts / ```echarts-json 围栏，普通 ```json 不渲染，只允许 `bar` / `line` / `pie` / `scatter`，拒绝 `dataset` / `graphic` / `calendar` / `custom`。解析逻辑在 `echartsMarkdown.ts`，echarts 运行时通过 `React.lazy` 独立分包（约 560 KB，仅在出现图表时下载），首屏 chunk 不受影响。
 - 前端引入 `vitest` 作为单测框架（`npm test`），首个用例覆盖图表围栏解析；RuntimeFrame / reducer 单测仍在 TODO。
 - `word-documents` 系统 Skill 完整包（4 个脚本、`references/`）在 `artifacts/skills/word-documents/`，启动时 seed 到运行时 `skills/` 目录并覆盖旧副本；开发机上出现只剩 `SKILL.md` 的目录属于 seed 前的本地残留，不是仓库缺失。脚本只依赖标准库。
-- 2026-09-14 桌面打包版人工验证：配置多个真实模型供应商并在 Chat 中切换可用；模型可按提示输出 ECharts JSON 并在前端渲染。该验证发生在 `EchartsContent` 收紧围栏规则之前（当时仍接受 ```json），严格围栏版需重新确认。Docker 沙箱门禁仍未验证。
+- 2026-09-14 桌面打包版人工验证：配置多个真实模型供应商并在 Chat 中切换可用；模型输出的是 ```echarts 围栏并在前端渲染成功，与严格围栏版 `EchartsContent` 规则一致，无需放宽到 ```json。Docker 沙箱门禁仍未验证。
 - 仓库尚无 git tag；Debian HTTP 部署方案无认证无 TLS，不能作为对外上线形态。
 
 ## 本轮模型配置改造

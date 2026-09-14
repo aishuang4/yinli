@@ -5,7 +5,6 @@
 ## P0. Runtime 稳定性
 
 - [ ] 在 Docker daemon 可用的环境完成 `DockerWorkspace` 真实 Runtime 门禁（多供应商切换已于 2026-09-14 桌面打包版验证通过，见 handoff），结果写回 `docs/project-progress-handoff.md`。
-- [ ] 用严格围栏版 `EchartsContent`（只认 ```echarts / ```echarts-json）重新验证 `yinli-charts` 全链路；2026-09-14 打包版验证时前端仍接受 ```json，结论不能直接沿用。
 - [ ] 补齐 RuntimeFrame / DisplaySnapshot V4 浏览器回归矩阵，覆盖 Plan finalized、HITL、AskUser、工具失败、取消和刷新恢复。
 - [ ] 增加关键 Chat 工作流的 Playwright 测试，避免只依赖 reducer 和后端单测。
 - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor 和 ToolScope 摘要。
