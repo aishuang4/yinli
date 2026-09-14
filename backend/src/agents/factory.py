@@ -30,6 +30,7 @@ from agentscope.permission import PermissionBehavior, PermissionContext, Permiss
 from agentscope.permission._types import PermissionMode
 from agentscope.workspace import DockerWorkspace, LocalWorkspace
 
+from src.runtime.agent_python import agent_shell_env
 from src.agents.model_factory import create_model_chain
 from src.agents.agentscope_usage_middleware import ProviderCacheUsageMiddleware
 from src.agents.runtime_types import (
@@ -179,6 +180,22 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
         self.shell_blacklist = [item.strip() for item in shell_blacklist if item.strip()]
         self.timeout_seconds = timeout_seconds
 
+    async def _exec_windows_shell(self, shell_path: str, command: str, *, timeout_ms: int):
+        payload = [shell_path, "/d", "/c", _windows_utf8_command(command)]
+        try:
+            return await self._backend.exec_shell(
+                payload,
+                cwd=self._cwd,
+                timeout=timeout_ms / 1000.0,
+                env=agent_shell_env(),
+            )
+        except TypeError:
+            return await self._backend.exec_shell(
+                payload,
+                cwd=self._cwd,
+                timeout=timeout_ms / 1000.0,
+            )
+
     async def call(  # type: ignore[override]
         self,
         command: str,
@@ -207,10 +224,10 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
             return
 
         try:
-            result = await self._backend.exec_shell(
-                [shell_path, "/d", "/c", _windows_utf8_command(command)],
-                cwd=self._cwd,
-                timeout=timeout_ms / 1000.0,
+            result = await self._exec_windows_shell(
+                shell_path,
+                command,
+                timeout_ms=timeout_ms,
             )
         except Exception as exc:
             detail = str(exc) or repr(exc) or exc.__class__.__name__
@@ -255,6 +272,7 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
             "-c",
             command,
             cwd=self._cwd,
+            env=agent_shell_env(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             start_new_session=True,

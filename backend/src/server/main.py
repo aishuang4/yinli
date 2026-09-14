@@ -59,6 +59,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if studio_reconciled:
         print(f"[GroupStudio] reconciled {studio_reconciled} interrupted studio(s)")
     print(f"[Server] 引力 YINLI Backend started on {settings.host}:{settings.port}")
+    try:
+        from src.runtime.agent_python import ensure_agent_venv
+
+        agent_venv = ensure_agent_venv()
+        if agent_venv is not None:
+            print(f"[Server] Agent Python: {agent_venv.python}")
+        else:
+            print("[Server] Agent Python: 隔离环境不可用，Bash 回退到用户 PATH")
+    except Exception as exc:
+        print(f"[Server] Agent Python 环境初始化失败: {exc}")
     deepseek_key_display = ("***" + settings.deepseek_api_key[-4:]) if settings.deepseek_api_key else "NOT SET"
     print(f"[Server] DeepSeek API Key: {deepseek_key_display}")
 
