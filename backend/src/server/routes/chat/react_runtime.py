@@ -24,7 +24,12 @@ from src.server.routes.chat.leader_stream import LeaderStreamState
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.plan_mode.manager import PlanModeManager
 from src.server.routes.chat.plan_mode.middleware import PlanModeMiddleware
+from src.server.routes.chat.skill_context_middleware import (
+    SkillContextMiddleware,
+    restore_activated_skills,
+)
 from src.server.routes.chat.steer_middleware import RunSteerMiddleware
+from src.storage.database import list_recent_skill_run_names
 from src.server.routes.chat.plan_mode.tools import build_plan_mode_tools
 from src.server.routes.chat.runtime import _build_user_content, _guardrail_cache_key
 from src.server.routes.chat.run_context import ChatRunContext
@@ -107,7 +112,9 @@ def _build_runtime_feature_parts(
 
     if not is_team:
         middlewares.append(RunSteerMiddleware())
-        feature_keys.append("run-steer")
+        # 已读过的 SKILL.md 正文跨轮保留、压缩 / 截断 / 重建后自动补回。
+        middlewares.append(SkillContextMiddleware())
+        feature_keys.append("run-steer:skill-context")
 
     catalog = load_subagent_catalog(workspace_dir=str(ctx.runtime_context.project_root))
     if catalog.definitions:
@@ -275,7 +282,15 @@ async def execute_react_runtime(
 
     # 进程内没有这条会话的 AgentScope 上下文（首轮 / 重启 / 实例被淘汰）时，
     # 用已持久化的正文重建精简历史；否则直接沿用实例自带的对话记忆。
-    seed_context_from_history(agent, ctx.session_history)
+    seeded = seed_context_from_history(agent, ctx.session_history)
+    if seeded and ctx.session_id and ctx.persist_run:
+        # 历史里的 Skill tool result 不会被重建；用 skill_runs 记录恢复"模型已读过哪些说明书"，
+        # 正文由 SkillContextMiddleware 在本轮 on_reply 时补回 context，避免再读一遍。
+        restore_activated_skills(
+            agent,
+            recent_skill_names=list_recent_skill_run_names(ctx.session_id, ctx.agent_id),
+            available_skills=ctx.used_skills,
+        )
     user_text = ctx.effective_user_message
     note = str(getattr(ctx, "user_message_note", "") or "")
     if note:

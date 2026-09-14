@@ -4,7 +4,7 @@
 
 ## 2026-09-14 上线前核查
 
-- 分支 `feat/file-catalog-agents`：后端全量 `758 passed, 2 skipped`（含本日 ReAct 上下文改造）；前端 `lint` / `build` / `vitest` 通过。`master` 上因 `e9cc7b9`（Agent 跨 Project 可用）遗留的 3 个过时测试已在本分支修复。
+- 分支 `feat/file-catalog-agents`：后端全量 `769 passed, 2 skipped`（含本日 ReAct 上下文改造）；前端 `lint` / `build` / `vitest` 通过。`master` 上因 `e9cc7b9`（Agent 跨 Project 可用）遗留的 3 个过时测试已在本分支修复。
 - Chat 消息渲染新增 `EchartsContent`：只按内置 Skill `yinli-charts` 合同识别闭合的 ```echarts / ```echarts-json 围栏，普通 ```json 不渲染，只允许 `bar` / `line` / `pie` / `scatter`，拒绝 `dataset` / `graphic` / `calendar` / `custom`。解析逻辑在 `echartsMarkdown.ts`，echarts 运行时通过 `React.lazy` 独立分包（约 560 KB，仅在出现图表时下载），首屏 chunk 不受影响。
 - 前端引入 `vitest` 作为单测框架（`npm test`），首个用例覆盖图表围栏解析；RuntimeFrame / reducer 单测仍在 TODO。
 - `word-documents` 系统 Skill 完整包（4 个脚本、`references/`）在 `artifacts/skills/word-documents/`，启动时 seed 到运行时 `skills/` 目录并覆盖旧副本；开发机上出现只剩 `SKILL.md` 的目录属于 seed 前的本地残留，不是仓库缺失。脚本只依赖标准库。
@@ -23,8 +23,10 @@
 - 记忆注入：节点树重复标题、无总预算、`# Summary` 与来源章节重抄；现在总预算 2500 字、按标题去重、每日 3 条、Summary 优先。
 - 无意义模型调用：readiness 在规则已判定 ready 时仍调模型且结果不可能改判；`INTENT_CATALOG` 只有 `react` 时 router 仍调模型。现在规则优先，仅模糊输入 / 多 architecture 时调模型，两者均清空系统 Agent 上下文并把 `modelCalled` / `durationMs` 写入 trace。
 - `FinalAnswerStart` 强制：无工具的直接回答也要多一次模型往返；现在无工具直接回答可写纯文本，超过 600 字时 `leader_stream` 以 `optimistic: true` 提前流式投影，工具调用后仍必须显式 `FinalAnswerStart`（契约见 `docs/chat-sse-event-contract.md`）。
+- 中途补充消息：`RunSteerMiddleware` 原来写 `agent.memory.add`，AgentScope 2.0.5 的 Agent 没有 `memory`，实际是 no-op；现在写入 `state.context`，且只在下一次 reasoning 前写，避免插在 tool_calls 与 tool 结果之间。
+- Skill 正文生命周期：`Skill` 工具读到的 SKILL.md 只是一条 tool result，截断 / 压缩 / 实例重建后丢失，模型下一轮常常再读一遍。新增 `SkillContextMiddleware` 捕获正文、检测缺失并以 `<activated-skill>` HintBlock 补回，重启后由 `skill_runs` 记录恢复；`SkillRun` 每轮关闭的语义不变。system prompt 新增稳定的 `## Skill Context` 规则。真实 Agent 烟测：读取 → 压缩清空 → 下一轮自动补回通过。
 - Trace 观测：`MODEL_CALL_START` 增加 `contextStats`；`TOOL_CALL_END` / `TOOL_RESULT_START` 增加脱敏 `inputPreview`；`sanitizer` 新增 JSON 凭据模式。
-- 验证：后端全量 `758 passed, 2 skipped`；真实 AgentScope 实例烟测（重建历史 → HintBlock 注入 → 配置变化搬运上下文）通过。真实供应商多轮 token 曲线尚未复测，记在 TODO。
+- 验证：后端全量 `769 passed, 2 skipped`；真实 AgentScope 实例烟测（重建历史 → HintBlock 注入 → 配置变化搬运上下文）通过。真实供应商多轮 token 曲线尚未复测，记在 TODO。
 
 ## 本轮模型配置改造
 

@@ -59,6 +59,15 @@ Agent 实例生命周期在 `agents/factory.py`：`runtime_agent_id` 只含影�
 （`chat_messages` 最近 20 条正文）重建精简上下文。缓存有 LRU 上限与 6h 闲置淘汰，正在执行或等待用户回应
 （AskUser / 审批）的实例不淘汰；用户不回应而直接发新消息时，工厂先补 `ToolResult` 关闭等待再复用。绑定本轮
 Run 的能力（Plan Mode、DelegateTask manager）把 run id 写进 feature key，因此这类 Run 使用带上下文快照的新实例。
+**Skill 正文的生命周期**遵循主流 Agent Skills 约定：未触发时 system prompt 只有 `<agent-skills>` 的 name /
+description / dir；模型用 `Skill` 工具读过 SKILL.md 后正文留在会话里，后续 ReAct 步骤和后续几轮都可见；
+`references/` 与脚本仍按需 Read / 执行。AgentScope 只把正文当一条 tool result，会被 `tool_result_limit` 截断、
+被压缩摘要掉、在实例重建后丢失，因此 `routes/chat/skill_context_middleware.py` 的 `SkillContextMiddleware`
+在 `on_acting` 捕获 `Skill` 工具的完整输出写入 `state.middle_context`（随实例搬运），在 `on_reply` /
+刚读完后的 `on_reasoning` / 真正发生过压缩的 `on_compress_context` 用头尾指纹检查正文是否仍完整在 context
+中，缺失时以 `<activated-skill>` HintBlock 补回；总预算 12000 字、单个 6000 字，超出淘汰最早启用的。进程
+重启后 `react_runtime` 用 `skill_runs` 记录中最近 3 个仍在本轮 catalog 内的 Skill 恢复该集合。平台侧
+`SkillRun` 仍每轮关闭，它记录"本轮用了哪个 Skill"，与"模型已读过哪些说明书"是两件事。
 Readiness / IntentRouter 系统 Agent 是一次性任务，每次调用前清空上下文；当前 `INTENT_CATALOG` 只有 `react`
 时不调用模型，readiness 只在规则发现模糊执行型请求时才调模型，是否调用与耗时写入 `READINESS_GATE` /
 `INTENT_ROUTE` trace。`MODEL_CALL_START` trace 附带 `contextStats`（prompt / summary / context 字符数与消息数、

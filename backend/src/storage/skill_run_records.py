@@ -58,6 +58,27 @@ class SkillRunRecordStore:
             ).fetchone()
         return self._from_row(row) if row else None
 
+    def list_recent_skill_names(self, session_id: str, agent_id: str, *, limit: int = 5) -> list[str]:
+        """返回该会话中该 Agent 最近读取过的 Skill 名称（去重，按最近使用倒序）。
+
+        用于进程重启 / 实例淘汰后恢复"模型已经读过哪些说明书"，不区分 SkillRun 状态。
+        """
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT skill_name, MAX(updated_at) AS last_used
+                FROM skill_runs
+                WHERE session_id = ? AND agent_id = ? AND skill_name != ''
+                GROUP BY skill_name
+                ORDER BY last_used DESC
+                LIMIT ?
+                """,
+                (session_id, agent_id, int(limit)),
+            ).fetchall()
+        return [str(row["skill_name"]) for row in rows]
+
     def get_by_pending_interaction(self, interaction_id: str) -> dict[str, Any] | None:
         self.ensure_db()
         with self.lock, self.connect() as conn:

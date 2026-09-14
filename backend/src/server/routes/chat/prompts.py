@@ -49,6 +49,22 @@ def _build_runtime_context_prompt() -> str:
     )
 
 
+def _build_skill_context_prompt() -> str:
+    """Stable rules for how Skill bodies live in the conversation.
+
+    Bodies read through the ``Skill`` tool stay in context for the rest of the
+    session and are re-attached automatically inside an ``<activated-skill>``
+    block after context compression, truncation, or an instance rebuild.
+    """
+
+    return "\n".join([
+        "## Skill Context",
+        "Only Skill names and descriptions are listed up front. Read a Skill's full instructions with the Skill tool the first time you need it.",
+        "Once read, a Skill's instructions stay in this conversation (as the tool result or a re-attached <activated-skill> block). Do not call the Skill tool again for a Skill whose instructions are already visible in the conversation.",
+        "references/ files and scripts inside a Skill directory are still loaded on demand with Read / Bash when the instructions tell you to; do not read the whole package up front.",
+    ])
+
+
 def _build_clarification_system_prompt() -> str:
     """Instructions for asking the user for missing information."""
 

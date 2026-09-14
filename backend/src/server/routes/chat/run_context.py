@@ -28,6 +28,7 @@ from src.server.routes.chat.prompts import (
     _build_file_attachments_user_note,
     _build_final_answer_system_prompt,
     _build_runtime_context_prompt,
+    _build_skill_context_prompt,
 )
 from src.server.routes.chat.store import _load_store
 from src.server.routes.chat.runtime import (
@@ -284,6 +285,7 @@ async def build_chat_run_context(
                 else _build_session_workspace_prompt(session_workspace_dir)
             ),
             _build_runtime_context_prompt(),
+            _build_skill_context_prompt() if used_skills else "",
             intent_route.main_agent_instruction,
             build_skill_run_system_prompt(active_skill_run),
             memory_prompt,

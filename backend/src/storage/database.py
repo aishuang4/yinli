@@ -802,6 +802,10 @@ def get_active_skill_run(session_id: str, agent_id: str) -> dict[str, Any] | Non
     return _skill_run_record_store().get_active(session_id, agent_id)
 
 
+def list_recent_skill_run_names(session_id: str, agent_id: str, *, limit: int = 5) -> list[str]:
+    return _skill_run_record_store().list_recent_skill_names(session_id, agent_id, limit=limit)
+
+
 def get_skill_run_by_pending_interaction(interaction_id: str) -> dict[str, Any] | None:
     return _skill_run_record_store().get_by_pending_interaction(interaction_id)
 
