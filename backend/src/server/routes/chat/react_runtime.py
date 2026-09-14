@@ -22,6 +22,7 @@ from src.server.routes.chat.leader_stream import LeaderStreamState
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.plan_mode.manager import PlanModeManager
 from src.server.routes.chat.plan_mode.middleware import PlanModeMiddleware
+from src.server.routes.chat.steer_middleware import RunSteerMiddleware
 from src.server.routes.chat.plan_mode.tools import build_plan_mode_tools
 from src.server.routes.chat.runtime import _build_user_content, _guardrail_cache_key
 from src.server.routes.chat.run_context import ChatRunContext
@@ -103,8 +104,8 @@ def _build_runtime_feature_parts(
         middlewares.extend(plan_middlewares)
 
     if not is_team:
-        # 第四期：Job 定义走文件，不再向模型注入 ScheduleJob 平行工具。
-        pass
+        middlewares.append(RunSteerMiddleware())
+        feature_keys.append("run-steer")
 
     catalog = load_subagent_catalog(workspace_dir=str(ctx.runtime_context.project_root))
     if catalog.definitions:

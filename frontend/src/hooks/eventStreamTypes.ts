@@ -25,6 +25,8 @@ export interface StreamState {
   runtime: RuntimeStreamState;
   /** 错误信息 */
   error: string | null;
+  /** 用户主动停止本轮 */
+  cancelled: boolean;
 }
 
 /** 工具调用信息 */
@@ -127,6 +129,8 @@ export interface UseEventStreamReturn {
   subscribeRun: (runId: string) => Promise<void>;
   /** 中止当前流 */
   abort: () => Promise<void>;
+  /** 向进行中的 Run 补充用户消息 */
+  steer: (message: string, options?: { agentId?: string; agentName?: string }) => Promise<void>;
   /** 重置状态 */
   reset: () => void;
 }

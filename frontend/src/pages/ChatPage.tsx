@@ -77,7 +77,7 @@ export function ChatPage() {
   const sessionsRequestRef = useRef(0);
   const messagesRequestRef = useRef(0);
   const pendingSessionRef = useRef<ChatSession | null>(null);
-  const { state, sendMessage, resumeInteraction, subscribeRun, abort, reset } = useEventStream();
+  const { state, sendMessage, resumeInteraction, subscribeRun, abort, steer, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
   const chatBecameActive = usePageBecameActive();
   const { loading: projectResourcesLoading } = useProjectResources(activeProjectId);
@@ -456,7 +456,26 @@ export function ChatPage() {
 
   /** 发送消息 */
   const handleSend = useCallback(async () => {
-    if ((!inputValue.trim() && imageAttachments.length === 0 && fileAttachments.length === 0) || state.isStreaming) return;
+    if (!inputValue.trim() && imageAttachments.length === 0 && fileAttachments.length === 0) return;
+    if (state.isStreaming) {
+      const steerText = inputValue.trim();
+      if (!steerText || !state.currentRunId) return;
+      const userMessage: LocalMessage = {
+        id: `user-steer-${Date.now()}`,
+        role: 'user',
+        content: steerText,
+        createdAt: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, userMessage]);
+      setInputValue('');
+      setChatError(null);
+      try {
+        await steer(steerText, { agentId: runtimeAgent?.id, agentName: runtimeAgent?.name });
+      } catch (err) {
+        setChatError(getErrorMessage(err, '补充消息发送失败。'));
+      }
+      return;
+    }
     if (!activeProjectId) {
       setChatError('请先在设置中选择 Workspace 和 Project。');
       return;
@@ -510,7 +529,7 @@ export function ChatPage() {
       images,
       files,
     });
-  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, imageAttachments, inputValue, planMode, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.isStreaming, targetMode, uploadFilesForSession]);
+  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, imageAttachments, inputValue, planMode, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, uploadFilesForSession]);
 
   const handlePlanReview = useCallback(async (
     plan: PlanReviewData,
@@ -551,8 +570,8 @@ export function ChatPage() {
     if (
       !state.isStreaming &&
       !answerAnimating &&
-      snapshot.streamDone &&
       snapshot.order.length > 0 &&
+      (snapshot.streamDone || state.cancelled || Boolean(state.error)) &&
       (messages.length === 0 || messages[messages.length - 1].role === 'user')
     ) {
       const assistantMessage: LocalMessage = {
@@ -564,12 +583,13 @@ export function ChatPage() {
         processCompletedAt: state.runCompletedAt || new Date().toISOString(),
         displaySnapshot: snapshot,
         error: state.error || projectedError || undefined,
+        cancelled: state.cancelled,
       };
       setMessages((prev) => [...prev, assistantMessage]);
       reset();
       loadSessions({ silent: true });
     }
-  }, [answerAnimating, liveText, loadSessions, messages, projectedError, reset, snapshot, state.error, state.isStreaming, state.runCompletedAt, state.runStartedAt]);
+  }, [answerAnimating, liveText, loadSessions, messages, projectedError, reset, snapshot, state.cancelled, state.error, state.isStreaming, state.runCompletedAt, state.runStartedAt]);
 
   /** 回车发送 */
   const handleKeyDown = useCallback(
@@ -751,6 +771,7 @@ export function ChatPage() {
                       <StreamingBubble
                         snapshot={snapshot}
                         isStreaming={state.isStreaming}
+                        cancelled={state.cancelled}
                         modelName={selectedModel?.label || ''}
                         error={state.error}
                         createdAt={state.runCompletedAt || undefined}
@@ -800,7 +821,7 @@ export function ChatPage() {
             <ChatComposer
             modelSelector={<ModelSelector catalog={modelCatalog} value={selectedModelId}
               onChange={value => void selectModel(value)}
-              disabled={savingModelChoice || state.isStreaming || pendingAskUserInteractions.length > 0}
+              disabled={savingModelChoice || pendingAskUserInteractions.length > 0}
               loading={modelsLoading} error={modelsError} />}
               agentsLoading={agentsLoading}
               chatError={chatError}

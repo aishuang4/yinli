@@ -38,6 +38,7 @@ function initialState(): StreamState {
     runCompletedAt: '',
     runtime: createRuntimeStreamState(),
     error: null,
+    cancelled: false,
   };
 }
 
@@ -111,6 +112,10 @@ export function useEventStream(): UseEventStreamReturn {
 
   const abort = useCallback(async () => {
     const runId = stateRef.current.currentRunId;
+    setState((current) => ({
+      ...current,
+      cancelled: true,
+    }));
     if (runId) {
       try {
         const params = new URLSearchParams({ projectId: activeProjectId });
@@ -119,7 +124,6 @@ export function useEventStream(): UseEventStreamReturn {
           { method: 'POST' },
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        // 保持现有订阅，等待后端 cancelled close Frame 与 done 收口全部 Block。
         return;
       } catch (error) {
         console.warn('[RuntimeStream] cancel failed:', error);
@@ -131,10 +135,31 @@ export function useEventStream(): UseEventStreamReturn {
     setState((current) => ({
       ...current,
       isStreaming: false,
-      error: current.error || '用户已停止本轮执行。',
+      cancelled: true,
       runCompletedAt: current.runCompletedAt || new Date().toISOString(),
     }));
   }, [activeProjectId, setState]);
+
+  const steer = useCallback(async (message: string, options?: { agentId?: string; agentName?: string }) => {
+    const runId = stateRef.current.currentRunId;
+    if (!runId || !stateRef.current.isStreaming) {
+      throw new Error('当前没有进行中的对话');
+    }
+    const params = new URLSearchParams({ projectId: activeProjectId });
+    const response = await fetch(
+      `/api/chat/runs/${encodeURIComponent(runId)}/steer?${params.toString()}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message,
+          agent_id: options?.agentId || '',
+          agent_name: options?.agentName || '',
+        }),
+      },
+    );
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }, [activeProjectId]);
 
   const subscribeRun = useCallback(async (runId: string) => {
     if (!runId) return;
@@ -274,7 +299,7 @@ export function useEventStream(): UseEventStreamReturn {
     }
   }, [setState, subscribeRun]);
 
-  return { state, sendMessage, resumeInteraction, subscribeRun, abort, reset };
+  return { state, sendMessage, resumeInteraction, subscribeRun, abort, steer, reset };
 }
 
 function parseSSEEvent(raw: string): SSEEvent | null {

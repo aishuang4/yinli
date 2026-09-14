@@ -7,27 +7,29 @@ import type { DisplayBlock } from './protocol';
 export function RuntimeProcessGroup({
   blocks,
   hasFinalAnswer,
+  stopped = false,
   children,
 }: {
   blocks: DisplayBlock[];
   hasFinalAnswer: boolean;
+  stopped?: boolean;
   children: React.ReactNode;
 }) {
   const hasOpenBlock = blocks.some((block) => block.phase === 'open');
   const hasFailedBlock = blocks.some((block) => block.outcome === 'failed');
-  const [expanded, setExpanded] = useState(hasOpenBlock || !hasFinalAnswer);
+  const [expanded, setExpanded] = useState(hasOpenBlock || !hasFinalAnswer || stopped);
   const previousOpenRef = useRef(hasOpenBlock);
   const previousFinalAnswerRef = useRef(hasFinalAnswer);
 
   useEffect(() => {
-    if (!previousOpenRef.current && hasOpenBlock) {
+    if (stopped || (!previousOpenRef.current && hasOpenBlock)) {
       setExpanded(true);
-    } else if (!previousFinalAnswerRef.current && hasFinalAnswer && !hasOpenBlock) {
+    } else if (!previousFinalAnswerRef.current && hasFinalAnswer && !hasOpenBlock && !stopped) {
       setExpanded(false);
     }
     previousOpenRef.current = hasOpenBlock;
     previousFinalAnswerRef.current = hasFinalAnswer;
-  }, [hasFinalAnswer, hasOpenBlock]);
+  }, [hasFinalAnswer, hasOpenBlock, stopped]);
 
   return (
     <div className="rounded-md bg-[var(--runtime-process-surface)] p-1 text-sm [--runtime-process-surface:color-mix(in_srgb,var(--color-bg-secondary)_68%,transparent)]">
@@ -48,7 +50,7 @@ export function RuntimeProcessGroup({
           )}
         </span>
         <span className="min-w-0 flex-1 truncate">
-          {hasOpenBlock ? '正在执行' : '已完成'}
+          {hasOpenBlock ? '正在执行' : stopped ? '已停止' : '已完成'}
         </span>
         {hasFailedBlock ? (
           <span className="inline-flex items-center gap-1 text-[var(--color-error)]">
