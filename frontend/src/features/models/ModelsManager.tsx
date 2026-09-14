@@ -40,7 +40,30 @@ function CatalogEditor({ initial, onSaved }: { initial: ModelCatalog; onSaved: (
   const configuredModels = (providerId: string) => draft.models.filter(item => item.providerId === providerId && item.label.trim() && item.model.trim());
   const updateProvider = (patch: Partial<ModelProvider>) => setDraft(current => ({ ...current, providers: current.providers.map(item => item.id === expandedProviderId ? { ...item, ...patch } : item) }));
   const updateModel = (id: string, patch: Partial<ModelEntry>) => setDraft(current => ({ ...current, models: current.models.map(item => item.id === id ? { ...item, ...patch } : item) }));
-  const save = async () => { setSaving(true); setError(''); try { await catalogRequest({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft) }); notifySuccess('模型配置已保存'); window.dispatchEvent(new Event('agent-workstation:model-settings-updated')); await onSaved(); } catch (cause) { const message = cause instanceof Error ? cause.message : '保存失败'; setError(message); notifyError(message); } finally { setSaving(false); } };
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const payload = {
+        schemaVersion: draft.schemaVersion,
+        revision: draft.revision,
+        defaultModelId: draft.defaultModelId,
+        etag: draft.etag,
+        providers: draft.providers.map(({ apiKeyConfigured: _configured, ...item }) => item),
+        models: draft.models.filter((item) => item.label.trim() && item.model.trim()),
+      };
+      await catalogRequest({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      notifySuccess('模型配置已保存');
+      window.dispatchEvent(new Event('agent-workstation:model-settings-updated'));
+      await onSaved();
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : '保存失败';
+      setError(message);
+      notifyError(message);
+    } finally {
+      setSaving(false);
+    }
+  };
   const addProvider = () => { const id = crypto.randomUUID(); setDraft(current => ({ ...current, providers: [...current.providers, { id, name: '新供应商', adapter: 'openai', baseUrl: '', enabled: true, requiresApiKey: true, apiKeyConfigured: false }] })); setExpandedProviderId(id); setExpandedModelId(''); };
   const removeModels = (ids: Set<string>) => setDraft(current => ({ ...current, defaultModelId: ids.has(current.defaultModelId) ? '' : current.defaultModelId, models: current.models.filter(item => !ids.has(item.id)).map(item => ({ ...item, fallbackModelIds: item.fallbackModelIds.filter(id => !ids.has(id)) })) }));
   const removeProvider = () => { if (!provider) return; removeModels(new Set(draft.models.filter(m => m.providerId === provider.id).map(m => m.id))); setDraft(current => ({ ...current, providers: current.providers.filter(p => p.id !== provider.id) })); setExpandedProviderId(draft.providers.find(p => p.id !== provider.id)?.id || ''); setExpandedModelId(''); };

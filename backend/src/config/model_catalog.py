@@ -182,8 +182,18 @@ def _parse(payload: bytes | dict) -> ModelCatalog:
         return (
             ModelCatalog.model_validate(payload)
         )
-    except (ValidationError, ValueError, TypeError):
-        raise CatalogError("models.json 格式或引用无效，请检查配置后重试。") from None
+    except ValidationError as exc:
+        parts: list[str] = []
+        for item in exc.errors()[:4]:
+            loc = ".".join(str(part) for part in item.get("loc", ()) if part not in {"body"})
+            msg = str(item.get("msg") or "无效")
+            parts.append(f"{loc}: {msg}" if loc else msg)
+        raise CatalogError(
+            "models.json 格式或引用无效" + (f"：{'；'.join(parts)}" if parts else "，请检查配置后重试。")
+        ) from None
+    except (ValueError, TypeError) as exc:
+        message = str(exc).strip() or "格式或引用无效"
+        raise CatalogError(message) from None
 
 
 def _secure_file(path: Path) -> None:
@@ -380,6 +390,7 @@ def save_catalog(payload: dict, expected_etag: str) -> dict:
         keys = {provider.id: provider.api_key for provider in current.providers}
         data = dict(payload)
         data.pop("modelsPath", None)
+        data.pop("etag", None)
         try:
             data["providers"] = [
                 {
@@ -391,6 +402,12 @@ def save_catalog(payload: dict, expected_etag: str) -> dict:
                     "apiKey": item.get("apiKey", keys.get(item.get("id"), "")),
                 }
                 for item in data.get("providers", [])
+            ]
+            data["models"] = [
+                item
+                for item in data.get("models") or []
+                if str((item or {}).get("model") or "").strip()
+                and str((item or {}).get("label") or "").strip()
             ]
         except (AttributeError, TypeError):
             raise CatalogError("供应商配置格式无效。") from None
