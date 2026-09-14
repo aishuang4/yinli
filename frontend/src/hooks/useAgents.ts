@@ -7,13 +7,14 @@
  * @see 后端 API: GET/POST/PUT/DELETE /api/agents
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 import type {
   Agent,
   AgentCreatePayload,
   AgentUpdatePayload,
 } from '../types/agent';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
+import { mapApiAgent, useAgentsStore } from '../stores/agentsStore';
 import { useAppStore } from '../stores/appStore';
 
 /** Hook 返回值 */
@@ -25,8 +26,8 @@ interface UseAgentsReturn {
   /** 错误信息 */
   error: string | null;
 
-  /** 刷新 Agent 列表 */
-  refresh: () => Promise<void>;
+  /** 刷新 Agent 列表。silent 时不把已有列表打成 loading，避免 Chat 下拉被冻住。 */
+  refresh: (options?: { silent?: boolean }) => Promise<void>;
   /** 创建 Agent */
   createAgent: (data: AgentCreatePayload) => Promise<Agent>;
   /** 更新 Agent */
@@ -35,121 +36,6 @@ interface UseAgentsReturn {
   deleteAgent: (id: string) => Promise<void>;
   /** 获取单个 Agent */
   getAgent: (id: string) => Promise<Agent>;
-}
-
-/** API 响应中的 Agent（snake_case） */
-interface AgentApiData {
-  id: string;
-  systemManaged?: boolean;
-  workspaceId?: string;
-  name: string;
-  avatar: string;
-  description: string;
-  system_prompt: string;
-  modelConfig: {
-    primary: string;
-    fallback: string[];
-    temperature: number;
-    top_p?: number;
-    max_tokens: number;
-    max_react_iters?: number;
-    maxReactIters?: number;
-  };
-  mcpTools: string[];
-  knowledgeTools?: string[];
-  skills: string[];
-  tags: string[];
-  planConfig?: {
-    enabled: boolean;
-    mode: 'lightweight' | 'structured' | 'strict';
-    maxSteps: number;
-    requirePlanBeforeTools: boolean;
-    requireUserApproval: boolean;
-    allowReplanning: boolean;
-  };
-  guardrails: {
-    filesystem_scope: string;
-    shell_blacklist: string[];
-    network_enabled: boolean;
-    human_approval: boolean;
-    tool_permission_mode?: 'ask_every_time' | 'accept_edits' | 'bypass';
-    toolPermissionMode?: 'ask_every_time' | 'accept_edits' | 'bypass';
-    tool_permission_profile?: 'read_only' | 'trusted_tools' | 'confirm_destructive' | 'ask_every_time';
-    toolPermissionProfile?: 'read_only' | 'trusted_tools' | 'confirm_destructive' | 'ask_every_time';
-    execution_backend?: 'local' | 'docker';
-    executionBackend?: 'local' | 'docker';
-    docker_image?: string;
-    dockerImage?: string;
-    persistent_sandbox?: boolean;
-    persistentSandbox?: boolean;
-    timeout_seconds: number;
-  };
-  status: string;
-  created_at: string;
-  updated_at: string;
-  role?: 'chat' | 'job';
-  jobToolkit?: {
-    required?: Array<{ kind: string; id: string }>;
-    optional?: Array<{ kind: string; id: string }>;
-  };
-}
-
-/**
- * 将 API 响应的 snake_case 转换为前端 camelCase
- */
-function mapApiAgent(api: AgentApiData): Agent {
-  return {
-    id: api.id,
-    workspaceId: api.workspaceId ?? 'default',
-    name: api.name,
-    avatar: api.avatar,
-    description: api.description,
-    systemPrompt: api.system_prompt,
-    modelConfig: {
-      maxReactIters: api.modelConfig.max_react_iters ?? api.modelConfig.maxReactIters ?? 40,
-    },
-    mcpTools: api.mcpTools,
-    knowledgeTools: api.knowledgeTools ?? [],
-    skills: api.skills,
-    tags: api.tags,
-    planConfig: {
-      enabled: api.planConfig?.enabled ?? false,
-      mode: api.planConfig?.mode ?? 'structured',
-      maxSteps: api.planConfig?.maxSteps ?? 6,
-      requirePlanBeforeTools: api.planConfig?.requirePlanBeforeTools ?? false,
-      requireUserApproval: api.planConfig?.requireUserApproval ?? false,
-      allowReplanning: api.planConfig?.allowReplanning ?? false,
-    },
-    guardrails: {
-      filesystemScope: api.guardrails.filesystem_scope,
-      shellBlacklist: api.guardrails.shell_blacklist,
-      networkEnabled: api.guardrails.network_enabled,
-      humanApproval: api.guardrails.human_approval,
-      toolPermissionMode: api.guardrails.tool_permission_mode ?? api.guardrails.toolPermissionMode ?? 'accept_edits',
-      toolPermissionProfile: api.guardrails.tool_permission_profile
-        ?? api.guardrails.toolPermissionProfile
-        ?? profileFromLegacyToolMode(api.guardrails.tool_permission_mode ?? api.guardrails.toolPermissionMode),
-      executionBackend: api.guardrails.execution_backend ?? api.guardrails.executionBackend ?? 'local',
-      dockerImage: api.guardrails.docker_image ?? api.guardrails.dockerImage ?? 'python:3.11-slim',
-      persistentSandbox: api.guardrails.persistent_sandbox ?? api.guardrails.persistentSandbox ?? false,
-      timeoutSeconds: api.guardrails.timeout_seconds,
-    },
-    status: api.status as Agent['status'],
-    createdAt: api.created_at,
-    updatedAt: api.updated_at,
-    role: api.role === 'job' ? 'job' : 'chat',
-    jobToolkit: {
-      required: (api.jobToolkit?.required ?? []).map((item) => ({
-        kind: item.kind as Agent['jobToolkit']['required'][number]['kind'],
-        id: item.id,
-      })),
-      optional: (api.jobToolkit?.optional ?? []).map((item) => ({
-        kind: item.kind as Agent['jobToolkit']['optional'][number]['kind'],
-        id: item.id,
-      })),
-    },
-    systemManaged: api.systemManaged === true,
-  };
 }
 
 /**
@@ -207,37 +93,19 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
   return result;
 }
 
-function profileFromLegacyToolMode(mode: string | undefined): 'read_only' | 'trusted_tools' | 'confirm_destructive' | 'ask_every_time' {
-  if (mode === 'ask_every_time') return 'ask_every_time';
-  if (mode === 'bypass') return 'trusted_tools';
-  return 'confirm_destructive';
-}
-
 /**
  * useAgents Hook
  */
 export function useAgents(): UseAgentsReturn {
   const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const agents = useAgentsStore((state) => state.agents);
+  const loading = useAgentsStore((state) => state.loading);
+  const error = useAgentsStore((state) => state.error);
+  const upsertAgent = useAgentsStore((state) => state.upsertAgent);
+  const removeAgent = useAgentsStore((state) => state.removeAgent);
 
-  /** 获取 Agent 列表 */
-  const refresh = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const res = await fetch(`/api/agents?workspaceId=${encodeURIComponent(activeWorkspaceId)}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: AgentApiData[] = await res.json();
-      setAgents(data.map(mapApiAgent).filter((agent) => (
-        agent.systemManaged || agent.workspaceId === activeWorkspaceId
-      )));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load agents');
-    } finally {
-      setLoading(false);
-    }
+  const refresh = useCallback(async (options?: { silent?: boolean }) => {
+    await useAgentsStore.getState().syncFromServer(activeWorkspaceId, options);
   }, [activeWorkspaceId]);
 
   /** 创建 Agent */
@@ -252,16 +120,15 @@ export function useAgents(): UseAgentsReturn {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
-      const data: AgentApiData = await res.json();
-      const agent = mapApiAgent(data);
-      setAgents((prev) => [...prev, agent]);
+      const agent = mapApiAgent(await res.json());
+      upsertAgent(agent);
       notifySuccess('Agent 创建成功');
       return agent;
     } catch (err) {
       notifyError(`Agent 创建失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, upsertAgent]);
 
   /** 更新 Agent */
   const updateAgent = useCallback(async (id: string, payload: AgentUpdatePayload): Promise<Agent> => {
@@ -275,41 +142,38 @@ export function useAgents(): UseAgentsReturn {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${res.status}`);
       }
-      const data: AgentApiData = await res.json();
-      const agent = mapApiAgent(data);
-      setAgents((prev) => prev.map((a) => (a.id === id ? agent : a)));
+      const agent = mapApiAgent(await res.json());
+      upsertAgent(agent);
       notifySuccess('Agent 保存成功');
       return agent;
     } catch (err) {
       notifyError(`Agent 保存失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, []);
+  }, [upsertAgent]);
 
   /** 删除 Agent */
   const deleteAgent = useCallback(async (id: string): Promise<void> => {
     try {
       const res = await fetch(`/api/agents/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setAgents((prev) => prev.filter((a) => a.id !== id));
+      removeAgent(id);
       notifySuccess('Agent 删除成功');
     } catch (err) {
       notifyError(`Agent 删除失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, []);
+  }, [removeAgent]);
 
   /** 获取单个 Agent */
   const getAgent = useCallback(async (id: string): Promise<Agent> => {
     const res = await fetch(`/api/agents/${id}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data: AgentApiData = await res.json();
-    return mapApiAgent(data);
+    return mapApiAgent(await res.json());
   }, []);
 
-  // 初始加载
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
 

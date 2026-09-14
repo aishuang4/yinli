@@ -23,7 +23,7 @@ export function ConversationContextSettingsCard() {
 
   return (
     <>
-      <Card bodyStyle={{ padding: 0 }}>
+      <Card styles={{ body: { padding: 0 } }}>
         <div className="p-5">
           <div className="text-sm font-medium text-[var(--color-text-primary)]">对话上下文</div>
           <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">

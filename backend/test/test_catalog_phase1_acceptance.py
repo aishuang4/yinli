@@ -13,6 +13,8 @@ from src.catalog.loader import catalog_fingerprint, invalidate_catalog
 from src.catalog.migrate_agents import ensure_agent_file_catalog
 from src.catalog.paths import extra_filesystem_scopes_for_workspace, profile_path
 from src.server.routes import agents as agents_routes
+from src.server.routes.chat.models import ChatMessage
+from src.server.routes.chat.run_context import resolve_agent_system_prompt
 from src.server.routes.chat.runtime_builder import build_runtime_agent_cache_key
 from src.storage import database
 from src.tools.scoped_edit import ScopedEdit
@@ -148,6 +150,12 @@ def test_phase1_chat_reads_index_and_edit_changes_next_round(phase1_root) -> Non
     )
     assert catalog_fingerprint() != before_fp
     assert after_key != before_key
+    stale_request = ChatMessage(
+        message="你好",
+        agent_id=created.id,
+        system_prompt="你是验收助手。每次回答第一句必须是：【旧提示词生效】",
+    )
+    assert resolve_agent_system_prompt(after, stale_request) == "下一轮新提示词"
 
 
 def test_phase1_no_system_crud_tools_and_secret_write_denied(phase1_root) -> None:

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useAppStore } from '../stores/appStore';
 import { FlaskConical, Loader2 } from 'lucide-react';
 import { Tag } from '@/components/design';
 import { SandboxControlPanel, type SandboxCase } from '../features/sandbox/SandboxControlPanel';
@@ -15,7 +16,8 @@ export function SandboxPage() {
   const { catalog, loading: modelsLoading, error: modelsError } = useModelCatalog();
   const [modelChoice, setModelChoice] = useState('');
   const modelConfigId = modelChoice || catalog?.defaultModelId || '';
-  const { agents, loading: agentsLoading } = useAgents();
+  const currentView = useAppStore((state) => state.currentView);
+  const { agents, loading: agentsLoading, refresh: refreshAgents } = useAgents();
   const { state, sendMessage, abort, reset } = useEventStream();
   const [mode, setMode] = useState<'agent' | 'team'>('agent');
   const [agentId, setAgentId] = useState('');
@@ -31,6 +33,11 @@ export function SandboxPage() {
     [agentId, chatAgents]
   );
   const runtimeAgent = selectedAgent;
+
+  useEffect(() => {
+    if (currentView !== 'sandbox') return;
+    void refreshAgents();
+  }, [currentView, refreshAgents]);
 
   const loadCases = useCallback(async () => {
     const response = await fetch('/api/sandbox/cases');
@@ -110,7 +117,6 @@ export function SandboxPage() {
       agentId: runtimeAgent.id,
       agentName: runtimeAgent.name,
       mode,
-      systemPrompt: runtimeAgent.systemPrompt,
       modelConfigId,
       skillIds: runtimeAgent.skills,
       sandbox: true,

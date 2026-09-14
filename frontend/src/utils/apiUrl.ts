@@ -12,6 +12,10 @@ export function setDesktopApiOrigin(origin: string): void {
   desktopApiOrigin = origin.replace(/\/$/, '');
 }
 
+export function getDesktopApiOrigin(): string {
+  return desktopApiOrigin;
+}
+
 export function resolveApiUrl(value: string): string {
   if (!window.electronAPI || !value.startsWith('/api')) {
     return value;

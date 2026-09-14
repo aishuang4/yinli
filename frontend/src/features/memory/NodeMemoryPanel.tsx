@@ -167,7 +167,7 @@ export function NodeMemoryPanel({
           </div>
           {loading ? (
             <div className="flex justify-center py-10">
-              <Spinner tip="加载历史记忆..." />
+              <Spinner tip="加载历史记忆..."><div className="min-h-12 w-12" /></Spinner>
             </div>
           ) : groupedTimeline.length === 0 ? (
             <div className="p-6">
@@ -217,7 +217,7 @@ export function NodeMemoryPanel({
           </div>
           {loading ? (
             <div className="flex justify-center py-12">
-              <Spinner tip="查询历史记忆..." />
+              <Spinner tip="查询历史记忆..."><div className="min-h-12 w-12" /></Spinner>
             </div>
           ) : !selectedTimelineItem ? (
             <div className="p-6">

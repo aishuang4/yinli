@@ -2403,7 +2403,6 @@ def test_chat_run_context_includes_memory_prompt(monkeypatch):
         ),
     )
 
-    assert "base prompt" in ctx.system_prompt
     assert "# Memory\n记忆注入片段" in ctx.system_prompt
 
 

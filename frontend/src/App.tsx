@@ -19,7 +19,7 @@ import { carbonDarkTheme, carbonTheme } from '@/components/design/theme';
 import { useAppStore } from './stores/appStore';
 import type { ViewType } from './stores/appStore';
 import { useSettingsStore } from './stores/settingsStore';
-import { setDesktopApiOrigin } from './utils/apiUrl';
+import { getDesktopApiOrigin, setDesktopApiOrigin } from './utils/apiUrl';
 import { AppLayout } from './layouts/AppLayout';
 import { FeedbackBridge } from './components/FeedbackBridge';
 import { DesktopBackendGate } from './components/DesktopBackendGate';
@@ -27,6 +27,7 @@ import { ApiKeyOnboardingModal } from './features/settings/ApiKeyOnboardingModal
 import { NotificationToastHost } from './features/notifications/NotificationToastHost';
 import { useStudioTransition } from './features/group-studio/useStudioTransition';
 import type { DesktopBackendStatus } from './types/desktopBackend';
+import { PageActiveContext } from './hooks/usePageActive';
 
 const ChatPage = lazy(() => import('./pages/ChatPage').then((module) => ({ default: module.ChatPage })));
 const WorkflowPage = lazy(() => import('./pages/WorkflowPage').then((module) => ({ default: module.WorkflowPage })));
@@ -82,6 +83,7 @@ export function App() {
   const [desktopBackendStatus, setDesktopBackendStatus] = useState<DesktopBackendStatus>(
     isDesktopShell ? { state: 'starting' } : { state: 'ready' },
   );
+  const [desktopApiOriginReady, setDesktopApiOriginReady] = useState(!isDesktopShell);
 
   // 同步主题到 DOM（useLayoutEffect 确保在绘制前应用，避免闪烁）
   useLayoutEffect(() => {
@@ -109,6 +111,7 @@ export function App() {
       setBackendUrl(runtimeBackendUrl);
       setDesktopApiOrigin(runtimeBackendUrl);
       setAppVersion(runtimeVersion);
+      setDesktopApiOriginReady(true);
     };
 
     void loadDesktopRuntimeInfo();
@@ -129,12 +132,31 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const electronAPI = window.electronAPI;
+    if (!electronAPI || desktopBackendStatus.state !== 'ready') {
+      return;
+    }
+    let mounted = true;
+    void electronAPI.getBackendUrl().then((url) => {
+      if (!mounted || !url) {
+        return;
+      }
+      setBackendUrl(url);
+      setDesktopApiOrigin(url);
+      setDesktopApiOriginReady(true);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [desktopBackendStatus.state, setBackendUrl]);
+
+  useEffect(() => {
     let mounted = true;
 
     const checkBackend = async () => {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 3000);
-      const healthUrl = window.electronAPI ? `${backendUrl}/api/health` : '/api/health';
+      const healthUrl = window.electronAPI ? `${getDesktopApiOrigin()}/api/health` : '/api/health';
       try {
         const response = await fetch(healthUrl, {
           signal: controller.signal,
@@ -152,13 +174,16 @@ export function App() {
       }
     };
 
+    if (window.electronAPI && !desktopApiOriginReady) {
+      return;
+    }
     void checkBackend();
     const interval = window.setInterval(checkBackend, 10000);
     return () => {
       mounted = false;
       window.clearInterval(interval);
     };
-  }, [backendUrl, setBackendConnected]);
+  }, [backendUrl, desktopApiOriginReady, setBackendConnected]);
 
   useEffect(() => {
     setCachedViews((views) => nextCachedViews(views, currentView));
@@ -173,7 +198,7 @@ export function App() {
     <StyleProvider linters={[]}>
       <ConfigProvider {...sparkTheme}>
         <AntdApp>
-          {isDesktopShell && desktopBackendStatus.state !== 'ready' ? (
+          {isDesktopShell && (desktopBackendStatus.state !== 'ready' || !desktopApiOriginReady) ? (
             <DesktopBackendGate status={desktopBackendStatus} onRetry={retryDesktopBackend} />
           ) : (
             <>
@@ -289,10 +314,12 @@ function CachedPages({ activeView, cachedViews }: CachedPagesProps) {
             key={view}
             className="h-full min-h-0 overflow-hidden"
             style={{ display: active ? 'block' : 'none' }}
-            aria-hidden={!active}
+            inert={!active}
           >
             <Suspense fallback={<PageSkeleton />}>
-              <PageComponent />
+              <PageActiveContext.Provider value={active}>
+                <PageComponent />
+              </PageActiveContext.Provider>
             </Suspense>
           </section>
         );

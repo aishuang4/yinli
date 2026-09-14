@@ -17,8 +17,16 @@ import { randomUUID } from 'crypto';
 
 /** 当前是否处于开发模式（Vite dev server 运行中） */
 const isDev = process.env.NODE_ENV === 'development';
-/** Windows 安装包排障时由调试脚本开启，允许查看渲染进程 DevTools。 */
-const desktopDebugEnabled = process.env.AGENT_WORKSTATION_DESKTOP_DEBUG === '1';
+function isDesktopDebugEnabled(): boolean {
+  if (process.env.AGENT_WORKSTATION_DESKTOP_DEBUG === '1') {
+    return true;
+  }
+  try {
+    return fs.existsSync(path.join(app.getPath('userData'), 'desktop-debug'));
+  } catch {
+    return false;
+  }
+}
 
 /** 安装版在用户主目录下统一保存应用数据，便于用户备份与排障。 */
 const DESKTOP_USER_DATA_DIR = path.join(app.getPath('home'), '.agent-workstation');
@@ -197,10 +205,29 @@ function createMainWindow(): void {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
-    if (desktopDebugEnabled) {
+    if (isDesktopDebugEnabled()) {
       mainWindow.webContents.openDevTools({ mode: 'detach' });
     }
   }
+
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') {
+      return;
+    }
+    const key = input.key.toLowerCase();
+    const toggle = key === 'f12'
+      || (input.meta && input.alt && key === 'i')
+      || (input.control && input.shift && key === 'i');
+    if (!toggle) {
+      return;
+    }
+    event.preventDefault();
+    if (mainWindow?.webContents.isDevToolsOpened()) {
+      mainWindow.webContents.closeDevTools();
+    } else {
+      mainWindow?.webContents.openDevTools({ mode: 'detach' });
+    }
+  });
 
   // 外部链接用系统浏览器打开
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {

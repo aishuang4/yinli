@@ -50,11 +50,15 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'agent-workstation-settings',
-      // 只持久化主题和后端地址
+      version: 2,
+      // 打包后端端口每次启动都会变，不能把 backendUrl 写进 localStorage。
       partialize: (state) => ({
         theme: state.theme,
-        backendUrl: state.backendUrl,
       }),
+      migrate: (persisted) => {
+        const data = persisted as { theme?: 'light' | 'dark' };
+        return { theme: data.theme === 'dark' ? 'dark' : 'light' };
+      },
     }
   )
 );

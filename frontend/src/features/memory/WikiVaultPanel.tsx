@@ -115,7 +115,7 @@ export function WikiVaultPanel({
           <WikiGraphView graph={graph} loading={graphLoading} onLoadGraph={onLoadGraph} />
         ) : syncing ? (
           <div className="flex justify-center py-12">
-            <Spinner tip="同步 Memory Wiki..." />
+            <Spinner tip="同步 Memory Wiki..."><div className="min-h-12 w-12" /></Spinner>
           </div>
         ) : !result ? (
           <div className="p-6">
@@ -192,7 +192,7 @@ function WikiGraphView({
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <Spinner tip="加载 Wiki 图谱..." />
+        <Spinner tip="加载 Wiki 图谱..."><div className="min-h-12 w-12" /></Spinner>
       </div>
     );
   }

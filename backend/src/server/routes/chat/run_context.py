@@ -98,6 +98,22 @@ class ChatRunContext:
     extra_filesystem_scopes: list[str] = field(default_factory=list)
 
 
+def resolve_agent_system_prompt(agent_config: Any, run_data: ChatMessage) -> str:
+    """持久 Agent 提示词以 catalog 文件为准。
+
+    Chat 前端会把列表里缓存的 systemPrompt 随请求带上；文件被 Edit 后
+    这份缓存仍是旧值。有注册 Agent 时忽略请求覆盖。
+    """
+
+    catalog_prompt = str(getattr(agent_config, "system_prompt", "") or "").strip()
+    if catalog_prompt:
+        return catalog_prompt
+    request_prompt = str(getattr(run_data, "system_prompt", None) or "").strip()
+    if request_prompt:
+        return request_prompt
+    return "You are a helpful AI assistant."
+
+
 def resolve_run_workspace_dir(
     *,
     filesystem_scope: str | Path,
@@ -129,11 +145,7 @@ async def build_chat_run_context(
     if agent_id != "default" and agent_config is None:
         raise ValueError(f"Agent 配置不存在: {agent_id}")
     agent_name = run_data.agent_name or (agent_config.name if agent_config else "Assistant")
-    base_system_prompt = (
-        run_data.system_prompt
-        or (agent_config.system_prompt if agent_config else None)
-        or "You are a helpful AI assistant."
-    )
+    base_system_prompt = resolve_agent_system_prompt(agent_config, run_data)
     persist_run = not run_data.sandbox
 
     external_skills = discover_external_skills(runtime_context.project_root)
@@ -335,11 +347,7 @@ async def build_scheduled_run_context(
     project_resources = resolve_project_resource_access(runtime_context)
     project_resources.require_agent(agent_id)
     agent_name = run_data.agent_name or (agent_config.name if agent_config else "Assistant")
-    base_system_prompt = (
-        run_data.system_prompt
-        or (agent_config.system_prompt if agent_config else None)
-        or "You are a helpful AI assistant."
-    )
+    base_system_prompt = resolve_agent_system_prompt(agent_config, run_data)
     frozen_skill_ids = [str(item) for item in list(getattr(job, "skill_ids", None) or run_data.skill_ids or [])]
     used_skills = _resolve_frozen_runtime_skills(
         frozen_skill_ids,
