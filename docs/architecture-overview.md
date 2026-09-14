@@ -44,7 +44,8 @@
 主 Agent 发给模型的 messages 由三层组成，职责不得混淆：
 
 - **system prompt（跨轮稳定）**：Agent profile 正文、Project / Session Workspace 说明、Runtime Context 规则、
-  路由指令、Skill Run 提示、记忆摘要（受 `memory/retrieval.py` 预算约束，`# Summary` 存在时不重抄被摘要章节）、
+  路由指令、Skill Run 提示、记忆摘要（受 `memory/retrieval.py` 预算约束，`# Summary` 存在时不重抄被摘要章节，
+  并由 `memory_prompt_cache.py` 按会话冻结，避免每轮新增的历史记忆节点改写 prompt 打破供应商前缀 cache）、
   Clarification / Final Answer 契约。它不含时钟、不含会话历史、不含本轮附件；prompt 正文不进 Agent 缓存键，
   工厂在复用实例时直接刷新 `_system_prompt`。
 - **AgentScope `state.context` / `state.summary`（会话记忆）**：这是在线对话记忆的唯一事实源，包含历史 user /

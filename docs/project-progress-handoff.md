@@ -25,6 +25,7 @@
 - `FinalAnswerStart` 强制：无工具的直接回答也要多一次模型往返；现在无工具直接回答可写纯文本，超过 600 字时 `leader_stream` 以 `optimistic: true` 提前流式投影，工具调用后仍必须显式 `FinalAnswerStart`（契约见 `docs/chat-sse-event-contract.md`）。
 - 中途补充消息：`RunSteerMiddleware` 原来写 `agent.memory.add`，AgentScope 2.0.5 的 Agent 没有 `memory`，实际是 no-op；现在写入 `state.context`，且只在下一次 reasoning 前写，避免插在 tool_calls 与 tool 结果之间。
 - Skill 正文生命周期：`Skill` 工具读到的 SKILL.md 只是一条 tool result，截断 / 压缩 / 实例重建后丢失，模型下一轮常常再读一遍。新增 `SkillContextMiddleware` 捕获正文、检测缺失并以 `<activated-skill>` HintBlock 补回，重启后由 `skill_runs` 记录恢复；`SkillRun` 每轮关闭的语义不变。system prompt 新增稳定的 `## Skill Context` 规则。真实 Agent 烟测：读取 → 压缩清空 → 下一轮自动补回通过。
+- 桌面端真实轨迹复核（qwen3.8-27b，5 轮 24 次模型调用）：同一轮内 `cache_input_tokens` 从 5760 逐步升到 25728，前缀 cache 正常命中；但每个新轮次的第一次调用 `cache_input_tokens` 都是 0。原因是每轮结束后台新增一条历史记忆节点，下一轮的记忆摘要（在 system prompt 里）变了几十个字符。现在记忆注入文本按 `(agent_id, session_id)` 冻结（`routes/chat/memory_prompt_cache.py`，TTL 6h，Memory 页面手动改写时失效），会话内 system prompt 字节一致。
 - Trace 观测：`MODEL_CALL_START` 增加 `contextStats`；`TOOL_CALL_END` / `TOOL_RESULT_START` 增加脱敏 `inputPreview`；`sanitizer` 新增 JSON 凭据模式。
 - 验证：后端全量 `769 passed, 2 skipped`；真实 AgentScope 实例烟测（重建历史 → HintBlock 注入 → 配置变化搬运上下文）通过。真实供应商多轮 token 曲线尚未复测，记在 TODO。
 

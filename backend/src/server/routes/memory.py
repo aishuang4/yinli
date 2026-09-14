@@ -16,6 +16,7 @@ from src.memory.settings import get_memory_admission_policy, save_memory_admissi
 from src.memory.skill_evolution import register_skill_evolution_record
 from src.memory.trace import MEMORY_AUDIT_EVENT_TYPE, record_memory_audit_event
 from src.memory.wiki_vault import MemoryWikiVaultSyncer
+from src.server.routes.chat.memory_prompt_cache import invalidate_memory_prompts
 from src.storage.database import (
     get_memory_node,
     get_skill_evolution_record,
@@ -359,6 +360,7 @@ async def update_node_status(
     if not existing or str(existing.get("project_id") or "default") != project_id:
         raise HTTPException(status_code=404, detail="Memory node not found")
     updated = update_memory_node_status(node_id, status=data.status)
+    invalidate_memory_prompts()
     if not updated:
         raise HTTPException(status_code=404, detail="Memory node not found")
     synced = MemoryNodeService().sync_node_to_vector(node_id)
@@ -635,6 +637,7 @@ async def write_agent_markdown_memory(agent_id: str, data: MarkdownMemoryUpdate)
     """保存 Agent Markdown 记忆；首次保存时创建文件。"""
 
     doc = MarkdownMemoryStore().write_agent_memory(agent_id, data.content)
+    invalidate_memory_prompts()
     return _markdown_doc_response(doc)
 
 
@@ -651,6 +654,7 @@ async def write_default_user_markdown_memory(data: MarkdownMemoryUpdate) -> dict
     """保存唯一用户 Markdown 记忆；首次保存时创建文件。"""
 
     doc = MarkdownMemoryStore().write_user_memory("default", data.content)
+    invalidate_memory_prompts()
     return _markdown_doc_response(doc)
 
 
@@ -667,6 +671,7 @@ async def write_user_markdown_memory(user_id: str, data: MarkdownMemoryUpdate) -
     """保存用户 Markdown 记忆；首次保存时创建文件。"""
 
     doc = MarkdownMemoryStore().write_user_memory(user_id, data.content)
+    invalidate_memory_prompts()
     return _markdown_doc_response(doc)
 
 
@@ -683,6 +688,7 @@ async def write_default_global_markdown_memory(data: MarkdownMemoryUpdate) -> di
     """保存唯一全局偏好 Markdown 记忆；首次保存时创建文件。"""
 
     doc = MarkdownMemoryStore().write_global_memory("default", data.content)
+    invalidate_memory_prompts()
     return _markdown_doc_response(doc)
 
 
@@ -699,4 +705,5 @@ async def write_global_markdown_memory(workspace_id: str, data: MarkdownMemoryUp
     """保存全局偏好 Markdown 记忆；首次保存时创建文件。"""
 
     doc = MarkdownMemoryStore().write_global_memory(workspace_id, data.content)
+    invalidate_memory_prompts()
     return _markdown_doc_response(doc)

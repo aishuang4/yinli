@@ -23,6 +23,7 @@ from src.server.routes.chat.intent_router import (
 )
 from src.server.routes.chat.models import ChatMessage, ChatSkillRun
 from src.agents.session_context import SessionHistoryMessage
+from src.server.routes.chat.memory_prompt_cache import session_memory_prompt
 from src.server.routes.chat.prompts import (
     _build_clarification_system_prompt,
     _build_file_attachments_user_note,
@@ -240,13 +241,19 @@ async def build_chat_run_context(
     used_skill_details = list_skill_usage_details(used_skills)
     skill_runs: list[ChatSkillRun] = []
     model_name = runtime_model_config.model_name
+    # 记忆摘要按会话冻结：每轮后台新增的历史记忆节点不再改写 system prompt，
+    # 供应商前缀 cache 才能跨轮命中（见 memory_prompt_cache.py）。
     memory_prompt = (
-        build_memory_injection_text(
-            MemoryRetrievalContext(
-                agent_id=agent_id,
-                agent_name=agent_name,
-                workspace_id=runtime_context.workspace_id,
-                project_id=runtime_context.project_id,
+        session_memory_prompt(
+            agent_id=agent_id,
+            session_id=session_id if persist_run else None,
+            build=lambda: build_memory_injection_text(
+                MemoryRetrievalContext(
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    workspace_id=runtime_context.workspace_id,
+                    project_id=runtime_context.project_id,
+                ),
             ),
         )
         if readiness.ready
