@@ -4,8 +4,8 @@
 
 ## P0. Runtime 稳定性
 
-- [ ] 在配置 DeepSeek + 第二供应商凭据且 Docker daemon 可用的发布环境，完成 AgentScope `2.0.5` 真实 Runtime 与 Docker 门禁，结果写回 `docs/project-progress-handoff.md`。DashScope 上一次为 `401 invalid_api_key`，需要有效 Key。
-- [ ] 内测前在真实模型上验证 `yinli-charts` 全链路：模型输出 ```echarts 围栏 -> 前端 `EchartsContent` 渲染，覆盖流式未闭合、多图、非法 JSON 回退。
+- [ ] 在 Docker daemon 可用的环境完成 `DockerWorkspace` 真实 Runtime 门禁（多供应商切换已于 2026-09-14 桌面打包版验证通过，见 handoff），结果写回 `docs/project-progress-handoff.md`。
+- [ ] 用严格围栏版 `EchartsContent`（只认 ```echarts / ```echarts-json）重新验证 `yinli-charts` 全链路；2026-09-14 打包版验证时前端仍接受 ```json，结论不能直接沿用。
 - [ ] 补齐 RuntimeFrame / DisplaySnapshot V4 浏览器回归矩阵，覆盖 Plan finalized、HITL、AskUser、工具失败、取消和刷新恢复。
 - [ ] 增加关键 Chat 工作流的 Playwright 测试，避免只依赖 reducer 和后端单测。
 - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor 和 ToolScope 摘要。
