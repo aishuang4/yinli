@@ -4,12 +4,27 @@
 
 ## 2026-09-14 上线前核查
 
-- 分支 `feat/file-catalog-agents`：后端全量 `731 passed, 2 skipped`；前端 `lint` / `build` / `vitest` 通过。`master` 上因 `e9cc7b9`（Agent 跨 Project 可用）遗留的 3 个过时测试已在本分支修复。
+- 分支 `feat/file-catalog-agents`：后端全量 `758 passed, 2 skipped`（含本日 ReAct 上下文改造）；前端 `lint` / `build` / `vitest` 通过。`master` 上因 `e9cc7b9`（Agent 跨 Project 可用）遗留的 3 个过时测试已在本分支修复。
 - Chat 消息渲染新增 `EchartsContent`：只按内置 Skill `yinli-charts` 合同识别闭合的 ```echarts / ```echarts-json 围栏，普通 ```json 不渲染，只允许 `bar` / `line` / `pie` / `scatter`，拒绝 `dataset` / `graphic` / `calendar` / `custom`。解析逻辑在 `echartsMarkdown.ts`，echarts 运行时通过 `React.lazy` 独立分包（约 560 KB，仅在出现图表时下载），首屏 chunk 不受影响。
 - 前端引入 `vitest` 作为单测框架（`npm test`），首个用例覆盖图表围栏解析；RuntimeFrame / reducer 单测仍在 TODO。
 - `word-documents` 系统 Skill 完整包（4 个脚本、`references/`）在 `artifacts/skills/word-documents/`，启动时 seed 到运行时 `skills/` 目录并覆盖旧副本；开发机上出现只剩 `SKILL.md` 的目录属于 seed 前的本地残留，不是仓库缺失。脚本只依赖标准库。
 - 2026-09-14 桌面打包版人工验证：配置多个真实模型供应商并在 Chat 中切换可用；模型输出的是 ```echarts 围栏并在前端渲染成功，与严格围栏版 `EchartsContent` 规则一致，无需放宽到 ```json。Docker 沙箱门禁仍未验证。
 - 仓库尚无 git tag；Debian HTTP 部署方案无认证无 TLS，不能作为对外上线形态。
+
+## 2026-09-14 ReAct 上下文管理改造
+
+按桌面端运行轨迹核查后确认的问题与处理（设计见 `docs/architecture-overview.md` "ReAct 上下文管理"）：
+
+- Skill 注入越界：`_merge_file_catalog_skills` 曾无条件把项目 Skill 和全部系统 Skill 注入任意 Agent；现在只有 `yinli-catalog` 无条件注入，其余按 Agent 配置裁剪（`ALWAYS_INJECTED_SKILL_IDS`，测试 `test_chat_skill_injection_scope.py`）。
+- 启动崩溃：历史自进化 Skill 的 `trigger` 超过 200 字导致 `_load_user_skills` 抛 `ValidationError`，桌面端升级后无法启动；已改为字段截断 + warning、单条失败跳过，并用含超长字段的桌面 DB 副本验证启动成功。
+- 每轮新建 Agent 实例：system prompt 正文进了缓存键，记忆摘要每轮变化导致每轮新实例、AgentScope 会话记忆丢失且旧实例泄漏。现已去掉 prompt hash，加 LRU（48）/ 闲置 6h 淘汰，配置变化时把上下文搬到新实例（`agents/session_context.py`）。
+- 双份历史：`chat_messages` 曾扁平拼进 system prompt，与 AgentScope `state.context` 重复；现在 system prompt 只放稳定内容，历史只存在于 `state.context`，进程重启后用最近 20 条正文重建。本轮附件说明改为用户消息的 `<attached_files>` 段。
+- 时间戳：精确到秒的 `当前时间` 写在 system prompt 中，每轮破坏供应商 prompt cache；改用 AgentScope `InjectionConfig`（上海时区、`%Y-%m-%d %H:%M`、0.5h 间隔）以 HintBlock 注入。
+- 记忆注入：节点树重复标题、无总预算、`# Summary` 与来源章节重抄；现在总预算 2500 字、按标题去重、每日 3 条、Summary 优先。
+- 无意义模型调用：readiness 在规则已判定 ready 时仍调模型且结果不可能改判；`INTENT_CATALOG` 只有 `react` 时 router 仍调模型。现在规则优先，仅模糊输入 / 多 architecture 时调模型，两者均清空系统 Agent 上下文并把 `modelCalled` / `durationMs` 写入 trace。
+- `FinalAnswerStart` 强制：无工具的直接回答也要多一次模型往返；现在无工具直接回答可写纯文本，超过 600 字时 `leader_stream` 以 `optimistic: true` 提前流式投影，工具调用后仍必须显式 `FinalAnswerStart`（契约见 `docs/chat-sse-event-contract.md`）。
+- Trace 观测：`MODEL_CALL_START` 增加 `contextStats`；`TOOL_CALL_END` / `TOOL_RESULT_START` 增加脱敏 `inputPreview`；`sanitizer` 新增 JSON 凭据模式。
+- 验证：后端全量 `758 passed, 2 skipped`；真实 AgentScope 实例烟测（重建历史 → HintBlock 注入 → 配置变化搬运上下文）通过。真实供应商多轮 token 曲线尚未复测，记在 TODO。
 
 ## 本轮模型配置改造
 
@@ -29,7 +44,7 @@
 - Runtime 依赖已从 `2.0.3` 升级到 `2.0.5`，锁文件保持 MCP `1.27.2`，仅新增上游必需的 `tzdata`。
 - 已删除覆盖 `Agent._reasoning_impl` 的 usage patch，改由原生 middleware hook 采集 provider prompt cache usage。
 - Write / Edit 异步权限接口、Docker `host_workdir`、Reply `finished_reason` / `error` 和取消终态均已完成兼容适配。
-- 2.0.5 默认 runtime state injection 在工厂中显式关闭，现有 prompt、Plan middleware 和 Event Stream 边界不变。
+- 2.0.5 runtime state injection 最初在工厂中关闭；2026-09-14 起改为显式启用（上海时区、半小时刷新、不外发 hint 事件），用来替代 system prompt 里的时钟。
 - 后端全量最近一次：`671 passed, 4 failed, 1 skipped`（2026-08-31，`master`）。失败项与群聊无关：Plan Mode 集成、默认 workspace 目录、定时任务 catch-up、过期桌面 Project 路径。
 - 前端 lint/build、源码后端启动、OpenAPI、macOS arm64 onefile 构建和产物健康检查此前已通过。
 - 真实供应商矩阵与 Docker 执行仍是发布前门禁，任务只记在 `docs/project-todo.md`。不阻塞代码审阅；合入发布分支前必须在具备凭据和 Docker 的环境完成。

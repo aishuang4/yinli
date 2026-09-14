@@ -20,6 +20,7 @@ from src.agents.factory import (
     RuntimeToolScope,
     get_or_create_agent,
 )
+from src.agents.session_context import session_context_key
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.skill_selector import select_runtime_skills
 from src.server.routes.chat.tool_scope_resolver import resolve_runtime_tool_scope
@@ -62,6 +63,14 @@ class MainAgentRuntimeSpec:
     write_scope_dir: str = ""
     include_default_tools: bool = True
     extra_filesystem_scopes: list[str] = field(default_factory=list)
+
+    @property
+    def session_context_key(self) -> str:
+        """同一持久 Agent + session 的对话上下文标识，供工厂做实例间上下文搬运。"""
+
+        if not self.session_id:
+            return ""
+        return session_context_key(self.parent_agent_id, self.session_id)
 
 
 def build_runtime_model_config(
@@ -153,15 +162,17 @@ def build_runtime_agent_cache_key(
         for server in mcp_servers
     )
     knowledge_cache_key = ",".join(tool.id for tool in knowledge_tools)
-    system_prompt_cache_key = hashlib.sha256(system_prompt.encode("utf-8")).hexdigest()[:16]
     from src.catalog.loader import catalog_fingerprint
 
+    # system prompt 正文刻意不进 key：它每轮都会随记忆摘要、Skill Run 等变化，
+    # 进 key 会导致每轮新建实例、AgentScope 会话记忆丢失并且旧实例泄漏。
+    # 工厂在复用实例时会直接刷新 `_system_prompt`。
+    del system_prompt
     return (
         f"{agent_id}:{session_id}:{model_name}:thinking-{deep_thinking}:"
         f"fallbacks-{fallback_cache_key}:"
         f"skills-{skill_cache_key}:mcp-{mcp_cache_key}:knowledge-{knowledge_cache_key}:"
         f"tools-{runtime_tool_scope.cache_key()}:"
-        f"prompt-{system_prompt_cache_key}:"
         f"features-{runtime_features_cache_key}:"
         f"guardrails-{guardrail_cache_key}:"
         f"catalog-{catalog_fingerprint()}"
@@ -270,4 +281,5 @@ def create_main_agent_from_spec(
         write_scope_dir=spec.write_scope_dir or None,
         include_default_tools=spec.include_default_tools,
         extra_filesystem_scopes=spec.extra_filesystem_scopes,
+        session_context_key=spec.session_context_key or None,
     )

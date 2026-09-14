@@ -7,6 +7,7 @@ ReadinessAgent 在本模块前判断信息是否足够；本模块只负责：
 
 import json
 import re
+import time
 from typing import Any, Literal
 
 from agentscope.message import UserMsg
@@ -14,6 +15,7 @@ from agentscope.permission import PermissionMode
 from pydantic import BaseModel, Field
 
 from src.agents.factory import AgentGuardrails, AgentModelOptions, RuntimeToolScope, get_or_create_agent
+from src.agents.session_context import reset_agent_context
 from src.server.routes.chat.models import ChatImagePayload
 
 
@@ -97,6 +99,18 @@ async def route_chat_message_with_model(
     fallback_route = route_chat_message(
         execution_mode=execution_mode,
     )
+    if not model_routing_required():
+        # 目录里只有一种 architecture 时，模型路由不可能改变结果，直接省掉这次模型调用。
+        fallback_route.decisions.append(RouteDecision(
+            name="architecture_router_source",
+            enabled=True,
+            confidence=1.0,
+            reason="INTENT_CATALOG 只有一种 architecture，按规则路由，不调用模型。",
+            payload={"modelCalled": False, "catalogSize": len(INTENT_CATALOG)},
+        ))
+        return fallback_route
+
+    started = time.perf_counter()
     model_payload = await _run_model_intent_router(
         message=message,
         agent_config=agent_config,
@@ -104,14 +118,31 @@ async def route_chat_message_with_model(
         model_name=model_name,
         fallback_names=fallback_names or [],
     )
+    duration_ms = int((time.perf_counter() - started) * 1000)
+    source_decision = RouteDecision(
+        name="architecture_router_source",
+        enabled=True,
+        confidence=1.0,
+        reason="模型路由" if model_payload is not None else "模型路由无有效返回，回退规则路由",
+        payload={"modelCalled": True, "modelName": model_name, "durationMs": duration_ms},
+    )
     if model_payload is None:
+        fallback_route.decisions.append(source_decision)
         return fallback_route
 
-    return _sanitize_model_route(
+    route = _sanitize_model_route(
         payload=model_payload,
         fallback_route=fallback_route,
         execution_mode=execution_mode,
     )
+    route.decisions.append(source_decision)
+    return route
+
+
+def model_routing_required() -> bool:
+    """只有当目录里存在多种 architecture 时，模型路由才有意义。"""
+
+    return len({str(item.get("runtimeKind") or "") for item in INTENT_CATALOG}) > 1
 
 
 def route_chat_message(
@@ -188,6 +219,8 @@ async def _run_model_intent_router(
             ),
             include_default_tools=False,
         )
+        # 系统 Agent 跨请求复用，每次路由前清空上一次的对话上下文。
+        reset_agent_context(agent)
         text = ""
         async for event in agent.reply_stream(UserMsg(name="user", content=_build_model_router_user_prompt(
             message=message,

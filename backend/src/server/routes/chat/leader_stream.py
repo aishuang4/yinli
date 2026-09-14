@@ -131,6 +131,21 @@ def _collect_pending_tool_batch(
         seen_ids.add(tool_call_id)
 
 
+# 直接回答提前流式投影的文本阈值（字符）。工具调用前的过程说明通常只有一两句，
+# 超过该长度且本次 reply 还没有任何工具调用时，按最终回答处理。见 docs/chat-sse-event-contract.md §6。
+DIRECT_ANSWER_STREAM_THRESHOLD = 600
+
+
+def _should_stream_direct_answer(state: LeaderStreamState, runtime_event_sources: list[object]) -> bool:
+    """本次 reply 尚无业务工具调用且文本足够长时，把累计文本视为直接回答开始流式投影。"""
+
+    if state.reply_had_tool_call or state.final_answer_started or state.subagent_completion_blocked_reason:
+        return False
+    if len(state.pending_text) < DIRECT_ANSWER_STREAM_THRESHOLD:
+        return False
+    return not _runtime_completion_error(runtime_event_sources)
+
+
 def _flush_pending_reasoning_events(
     state: LeaderStreamState,
     *,
@@ -300,6 +315,8 @@ async def stream_leader_agent_reply(
             scope=stream_scope,
             agent_id=agent_id,
             agent_name=agent_name,
+            tool_calls=state.assistant_tool_calls,
+            agent=agent,
         )
         _record_permission_decision(
             session_id=session_id,
@@ -384,6 +401,27 @@ async def stream_leader_agent_reply(
                 yield source_event("FINAL_ANSWER_DELTA", {"delta": delta})
             else:
                 state.pending_text += delta
+                if _should_stream_direct_answer(state, runtime_event_sources or []):
+                    # 本次 reply 没有任何业务工具调用、文本已足够长：按契约视为直接回答，
+                    # 提前开始流式投影，省掉 FinalAnswerStart 那一次模型往返。
+                    pending = state.pending_text
+                    state.pending_text = ""
+                    state.final_answer_started = True
+                    state.assistant_text += pending
+                    yield runtime_trace_source_event(
+                        "AGENT_FINAL_ANSWER_STARTED", session_id=session_id, scope=stream_scope,
+                        source="runtime", source_event_type=event_type, agent_id=agent_id,
+                        agent_name=agent_name, status="running", reason="direct_text_stream",
+                        payload={"recovered": False, "direct": True, "optimistic": True},
+                        collect=state.runtime_events,
+                    )
+                    yield runtime_trace_source_event(
+                        "AGENT_FINAL_ANSWER_DELTA", session_id=session_id, scope=stream_scope,
+                        source="runtime", source_event_type=event_type, agent_id=agent_id,
+                        agent_name=agent_name, status="running", reason="direct_text_stream",
+                        payload={"delta": pending, "direct": True}, collect=state.runtime_events,
+                    )
+                    yield source_event("FINAL_ANSWER_DELTA", {"delta": pending})
             continue
         elif event_type == "THINKING_BLOCK_DELTA":
             state.reply_had_thinking = True

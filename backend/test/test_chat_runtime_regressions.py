@@ -30,7 +30,9 @@ from src.server.routes.chat.intent_router import (
     route_chat_message_with_model,
     route_trace_payload,
 )
+from src.agents.session_context import SessionHistoryMessage
 from src.server.routes.chat.models import (
+    ChatFilePayload,
     ChatMessage,
     ChatResumeRequest,
     ChatToolRun,
@@ -115,8 +117,30 @@ def test_final_answer_prompt_requires_phase_marker_for_streaming():
     prompt = _build_final_answer_system_prompt()
     assert "FinalAnswerStart" in prompt
     assert "required phase marker" in prompt
-    assert "including direct answers and responses with native provider thinking" in prompt
+    # 直接回答不要求标记，用过工具后才要求
+    assert "Do NOT call FinalAnswerStart for such direct answers" in prompt
+    assert "Once you have called any business tool or AskUser in this turn" in prompt
     assert "after a tool or AskUser resumes" in prompt
+
+
+def test_direct_answer_streams_before_reply_end_when_no_tool_call():
+    """本次 reply 无工具调用且文本超过阈值时，提前把累计文本投影为最终回答。"""
+
+    from src.server.routes.chat import leader_stream
+
+    state = LeaderStreamState()
+    state.pending_text = "答" * (leader_stream.DIRECT_ANSWER_STREAM_THRESHOLD - 1)
+    assert leader_stream._should_stream_direct_answer(state, []) is False
+    state.pending_text += "案"
+    assert leader_stream._should_stream_direct_answer(state, []) is True
+
+    tooling = LeaderStreamState(reply_had_tool_call=True)
+    tooling.pending_text = "过程说明" * 400
+    assert leader_stream._should_stream_direct_answer(tooling, []) is False
+
+    blocked = LeaderStreamState(subagent_completion_blocked_reason="attached task pending")
+    blocked.pending_text = "文" * 1000
+    assert leader_stream._should_stream_direct_answer(blocked, []) is False
 
 
 def test_default_agent_prompt_mentions_final_answer_marker():
@@ -2179,6 +2203,8 @@ def test_model_intent_route_ignores_legacy_plan_subagent_and_tool_scope(monkeypa
         "src.server.routes.chat.intent_router.get_or_create_agent",
         lambda **kwargs: _FakeRouterAgent(router_json),
     )
+    # 当前目录只有 react，默认不调模型；这里强制走模型路径以验证 sanitizer。
+    monkeypatch.setattr("src.server.routes.chat.intent_router.model_routing_required", lambda: True)
 
     route = asyncio.run(route_chat_message_with_model(
         message="请让代码 Agent 修复项目中的测试问题，并运行 pytest 验证。",
@@ -2196,6 +2222,69 @@ def test_model_intent_route_ignores_legacy_plan_subagent_and_tool_scope(monkeypa
     assert not hasattr(route, "tool_scope")
     model_decision = next(decision for decision in route.decisions if decision.name == "architecture_route")
     assert model_decision.payload["intent"] == "code_change"
+    source = next(decision for decision in route.decisions if decision.name == "architecture_router_source")
+    assert source.payload["modelCalled"] is True
+
+
+def test_intent_route_skips_model_when_only_one_architecture(monkeypatch):
+    """INTENT_CATALOG 只有 react 时不得调用模型，INTENT_ROUTE trace 记录 modelCalled=False。"""
+
+    def boom(**kwargs):
+        raise AssertionError("single-architecture catalog must not call the model")
+
+    monkeypatch.setattr("src.server.routes.chat.intent_router.get_or_create_agent", boom)
+
+    route = asyncio.run(route_chat_message_with_model(
+        message="帮我整理一下这周的会议纪要",
+        agent_config=None,
+        execution_mode="agent",
+        images=[],
+        model_name="test-model",
+    ))
+
+    assert route.mode == "react"
+    source = next(decision for decision in route.decisions if decision.name == "architecture_router_source")
+    assert source.payload["modelCalled"] is False
+
+
+def test_readiness_skips_model_when_rule_finds_no_gap(monkeypatch):
+    """规则没发现缺口时 readiness 不调模型；发现模糊执行型请求时才调，并记录 modelCalled。"""
+
+    from src.server.routes.chat import readiness_gate
+
+    calls = {"count": 0}
+
+    async def fake_agent_run(**kwargs):
+        calls["count"] += 1
+        return readiness_gate.ModelReadinessPayload(ready=True, confidence=0.8, reason="模型判断可以开始")
+
+    monkeypatch.setattr(readiness_gate, "_run_readiness_agent", fake_agent_run)
+
+    clear = asyncio.run(readiness_gate.check_message_readiness_with_model(
+        message="请总结 docs/architecture-overview.md 的要点",
+        agent_config=None,
+        skill_ids=[],
+        execution_mode="agent",
+        images=[],
+        model_name="test-model",
+    ))
+    assert clear.ready is True
+    assert clear.model_called is False
+    assert calls["count"] == 0
+
+    ambiguous = asyncio.run(readiness_gate.check_message_readiness_with_model(
+        message="帮我修改一下",
+        agent_config=None,
+        skill_ids=[],
+        execution_mode="agent",
+        images=[],
+        model_name="test-model",
+    ))
+    assert ambiguous.ready is True
+    assert ambiguous.model_called is True
+    assert ambiguous.model_name == "test-model"
+    assert ambiguous.reason == "模型判断可以开始"
+    assert calls["count"] == 1
 
 
 def test_model_intent_route_falls_back_to_rules_on_invalid_json(monkeypatch):
@@ -2203,6 +2292,7 @@ def test_model_intent_route_falls_back_to_rules_on_invalid_json(monkeypatch):
         "src.server.routes.chat.intent_router.get_or_create_agent",
         lambda **kwargs: _FakeRouterAgent("not json"),
     )
+    monkeypatch.setattr("src.server.routes.chat.intent_router.model_routing_required", lambda: True)
 
     route = asyncio.run(route_chat_message_with_model(
         message="请修复一下。",
@@ -2348,7 +2438,8 @@ def test_runtime_builder_cache_key_includes_tool_scope():
 
     assert "tools-mcp-0:knowledge-0:bash-1:http-0" in key
     assert "plan-" not in key
-    assert "prompt-" in key
+    # system prompt 正文不进缓存键：同一 session 多轮复用同一实例，AgentScope 上下文即会话记忆。
+    assert "prompt-" not in key
 
 
 def test_chat_run_context_includes_memory_prompt(monkeypatch):
@@ -2406,7 +2497,71 @@ def test_chat_run_context_includes_memory_prompt(monkeypatch):
     assert "# Memory\n记忆注入片段" in ctx.system_prompt
 
 
-def test_runtime_builder_cache_key_changes_with_system_prompt():
+def test_chat_run_context_keeps_history_out_of_system_prompt(monkeypatch):
+    """会话历史进 AgentScope 上下文快照而不是 system prompt；附件说明随用户消息走；prompt 不含时钟。"""
+
+    async def fake_readiness(**kwargs):
+        return SimpleNamespace(ready=True)
+
+    async def fake_route(**kwargs):
+        return IntentRoute(
+            runtime={"kind": "react"},
+            executor={"kind": "single_agent"},
+            main_agent_instruction="",
+            trace_payload={},
+        )
+
+    monkeypatch.setattr("src.server.routes.chat.run_context.check_message_readiness_with_model", fake_readiness)
+    monkeypatch.setattr("src.server.routes.chat.run_context.route_chat_message_with_model", fake_route)
+    monkeypatch.setattr(
+        "src.server.routes.chat.run_context.get_effective_model_settings",
+        lambda: SimpleNamespace(default_model="model", fallback_models=[]),
+    )
+    monkeypatch.setattr("src.server.routes.chat.run_context.build_memory_injection_text", lambda context: "")
+    monkeypatch.setattr(
+        "src.server.routes.chat.run_context.resolve_project_resource_access",
+        lambda runtime_context: SimpleNamespace(
+            require_agent=lambda agent_id: None,
+            filter_ids=lambda resource_type, resource_ids: resource_ids,
+            skill_ids=frozenset(),
+            mcp_server_ids=frozenset(),
+            http_tool_ids=frozenset(),
+        ),
+    )
+    monkeypatch.setattr(
+        "src.server.routes.chat.run_context.snapshot_session_history",
+        lambda session_id, limit=40: [
+            SessionHistoryMessage(role="user", content="上一轮：请整理会议纪要"),
+            SessionHistoryMessage(role="assistant", content="上一轮回答：已整理"),
+        ],
+    )
+
+    ctx = asyncio.run(
+        build_chat_run_context(
+            ChatMessage(
+                session_id="session-1",
+                message="继续推进",
+                agent_id="default",
+                agent_name="Agent",
+                system_prompt="base prompt",
+                files=[
+                    ChatFilePayload(name="报表.xlsx", path="uploads/session-1/报表.xlsx", size=12, media_type="application/octet-stream"),
+                ],
+            ),
+            _test_runtime_context(),
+        ),
+    )
+
+    assert "上一轮：请整理会议纪要" not in ctx.system_prompt
+    assert "## Conversation History" not in ctx.system_prompt
+    assert "Current date/time" not in ctx.system_prompt
+    assert "<current-time>" in ctx.system_prompt
+    assert "报表.xlsx" not in ctx.system_prompt
+    assert "<attached_files>" in ctx.user_message_note and "报表.xlsx" in ctx.user_message_note
+    assert [item.role for item in ctx.session_history] == ["user", "assistant"]
+
+
+def test_runtime_builder_cache_key_ignores_system_prompt():
     base_kwargs = dict(
         agent_id="agent",
         session_id="session",
@@ -2422,7 +2577,8 @@ def test_runtime_builder_cache_key_changes_with_system_prompt():
     key_a = build_runtime_agent_cache_key(system_prompt="prompt-a", **base_kwargs)
     key_b = build_runtime_agent_cache_key(system_prompt="prompt-b", **base_kwargs)
 
-    assert key_a != key_b
+    # 记忆摘要 / Skill Run 提示每轮都会改动 prompt，若进 key 会导致每轮新建实例并丢失会话记忆。
+    assert key_a == key_b
 
 
 def test_main_agent_runtime_spec_wraps_factory_inputs():
@@ -2451,7 +2607,8 @@ def test_main_agent_runtime_spec_wraps_factory_inputs():
     assert spec.session_id == "session"
     assert spec.tool_scope is tool_scope
     assert "thinking-True" in spec.runtime_agent_id
-    assert "prompt-" in spec.runtime_agent_id
+    assert "prompt-" not in spec.runtime_agent_id
+    assert spec.session_context_key == "agent::session"
 
 
 def test_create_main_agent_from_spec_delegates_to_factory(monkeypatch):

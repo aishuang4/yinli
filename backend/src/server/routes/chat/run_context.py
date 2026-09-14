@@ -22,12 +22,14 @@ from src.server.routes.chat.intent_router import (
     route_chat_message_with_model,
 )
 from src.server.routes.chat.models import ChatMessage, ChatSkillRun
+from src.agents.session_context import SessionHistoryMessage
 from src.server.routes.chat.prompts import (
     _build_clarification_system_prompt,
-    _build_conversation_history_prompt,
+    _build_file_attachments_user_note,
     _build_final_answer_system_prompt,
     _build_runtime_context_prompt,
 )
+from src.server.routes.chat.store import _load_store
 from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
     _build_runtime_knowledge_tools,
@@ -96,6 +98,29 @@ class ChatRunContext:
     scheduled_job_id: str = ""
     scheduled_firing_id: str = ""
     extra_filesystem_scopes: list[str] = field(default_factory=list)
+    # 本轮开始前的会话正文快照（不含本轮用户消息），只在进程内没有
+    # AgentScope 上下文时用于重建，不再拼进 system prompt。
+    session_history: list[SessionHistoryMessage] = field(default_factory=list)
+    # 本轮附件说明，作为用户消息的一部分进入对话上下文，而不是 system prompt。
+    user_message_note: str = ""
+
+
+def snapshot_session_history(session_id: str | None, *, limit: int = 40) -> list[SessionHistoryMessage]:
+    """读取会话已持久化的 user / assistant 正文，供 AgentScope 上下文重建。"""
+
+    if not session_id:
+        return []
+    store = _load_store()
+    messages = store.messages.get(session_id, [])
+    return [
+        SessionHistoryMessage(
+            role="user" if message.role == "user" else "assistant",
+            content=message.content or "",
+            file_names=tuple(item.name for item in message.files),
+        )
+        for message in messages[-limit:]
+        if message.role in {"user", "assistant"} and not getattr(message, "error", None)
+    ]
 
 
 def resolve_agent_system_prompt(agent_config: Any, run_data: ChatMessage) -> str:
@@ -245,6 +270,9 @@ async def build_chat_run_context(
         )
         if str(item.get("path") or "")
     ]
+    # 会话历史不再扁平化进 system prompt：AgentScope `state.context` 是在线记忆，
+    # 这里只留一份快照供进程重启后重建。
+    session_history = snapshot_session_history(session_id) if persist_run else []
     system_prompt = "\n\n".join(
         part
         for part in [
@@ -255,10 +283,8 @@ async def build_chat_run_context(
                 if workspace_override
                 else _build_session_workspace_prompt(session_workspace_dir)
             ),
-            _build_file_attachments_prompt(run_data.files),
             _build_runtime_context_prompt(),
             intent_route.main_agent_instruction,
-            _build_conversation_history_prompt(session_id),
             build_skill_run_system_prompt(active_skill_run),
             memory_prompt,
             _build_clarification_system_prompt(),
@@ -314,6 +340,8 @@ async def build_chat_run_context(
         session_workspace_dir=session_workspace_dir,
         session_artifact_paths_before=session_artifact_paths_before,
         extra_filesystem_scopes=extra_filesystem_scopes,
+        session_history=session_history,
+        user_message_note=_build_file_attachments_user_note(run_data.files),
     )
 
 
@@ -406,9 +434,7 @@ async def build_scheduled_run_context(
             base_system_prompt,
             _build_project_context_prompt(runtime_context),
             _build_job_workspace_prompt(workspace_dir),
-            _build_file_attachments_prompt(run_data.files),
             _build_runtime_context_prompt(),
-            _build_conversation_history_prompt(session_id),
             memory_prompt,
             _build_final_answer_system_prompt(),
         ]
@@ -463,6 +489,7 @@ async def build_scheduled_run_context(
         write_scope_dir=workspace_dir,
         scheduled_job_id=str(getattr(job, "id", "") or getattr(firing, "job_id", "") or ""),
         scheduled_firing_id=str(getattr(firing, "id", "") or ""),
+        user_message_note=_build_file_attachments_user_note(run_data.files),
     )
 
 
@@ -585,22 +612,6 @@ def _merge_file_catalog_skills(
         merged.append(skill)
         seen.add(skill.id)
     return merged
-
-
-def _build_file_attachments_prompt(files) -> str:
-    """声明本轮普通附件在 Project 内的位置，避免模型自行猜测路径。"""
-
-    if not files:
-        return ""
-    lines = [
-        "## Attached Files",
-        "The user uploaded these files to the current Project. Read or modify them using the listed relative paths.",
-    ]
-    lines.extend(
-        f"- {item.name}: `{item.path}` ({item.size} bytes, {item.media_type})"
-        for item in files
-    )
-    return "\n".join(lines)
 
 
 def _build_session_workspace_prompt(session_workspace_dir: str) -> str:

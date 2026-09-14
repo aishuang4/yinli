@@ -6,6 +6,7 @@
 
 import json
 import re
+import time
 import uuid
 from typing import Any, Literal
 from datetime import datetime, timezone
@@ -15,6 +16,7 @@ from agentscope.permission import PermissionMode
 from pydantic import BaseModel, Field
 
 from src.agents.factory import AgentGuardrails, AgentModelOptions, RuntimeToolScope, get_or_create_agent
+from src.agents.session_context import reset_agent_context
 from src.server.routes.chat.models import ChatImagePayload
 
 
@@ -26,6 +28,18 @@ class ReadinessDecision(BaseModel):
     reason: str = ""
     clarification: dict[str, Any] | None = None
     source: str = "rule"
+    # 可观测字段：本轮是否真的调用了模型、耗时、使用的模型，写入 READINESS_GATE trace。
+    model_called: bool = Field(default=False, alias="modelCalled")
+    model_name: str = Field(default="", alias="modelName")
+    duration_ms: int = Field(default=0, alias="durationMs")
+
+    model_config = {"populate_by_name": True}
+
+
+# 规则已判定没有明显缺口时不再调用模型：模型结果无论如何都不能把 ready 改成 false
+# （业务缺口交给主 Agent 的 AskUser），额外一次模型调用只是延迟和费用。
+# 只有规则发现"像执行型任务但缺目标"这类模糊输入时，才用模型补一条更准确的 reason。
+READINESS_MODEL_FOR_AMBIGUOUS_ONLY = True
 
 
 class ModelReadinessPayload(BaseModel):
@@ -54,7 +68,10 @@ async def check_message_readiness_with_model(
     fallback = check_message_readiness_by_rule(message)
     if not message.strip():
         return fallback
+    if READINESS_MODEL_FOR_AMBIGUOUS_ONLY and _detect_missing_required_context(message) is None:
+        return fallback
 
+    started = time.perf_counter()
     model_payload = await _run_readiness_agent(
         message=message,
         agent_config=agent_config,
@@ -64,9 +81,20 @@ async def check_message_readiness_with_model(
         model_name=model_name,
         fallback_names=fallback_names or [],
     )
+    duration_ms = int((time.perf_counter() - started) * 1000)
     if model_payload is None:
-        return fallback
-    return _sanitize_readiness_payload(model_payload, fallback=fallback)
+        return fallback.model_copy(update={
+            "model_called": True,
+            "model_name": model_name,
+            "duration_ms": duration_ms,
+            "reason": f"{fallback.reason}（ReadinessAgent 无有效返回，按规则结果处理）",
+        })
+    decision = _sanitize_readiness_payload(model_payload, fallback=fallback)
+    return decision.model_copy(update={
+        "model_called": True,
+        "model_name": model_name,
+        "duration_ms": duration_ms,
+    })
 
 
 def check_message_readiness_by_rule(message: str) -> ReadinessDecision:
@@ -130,6 +158,9 @@ async def _run_readiness_agent(
             ),
             include_default_tools=False,
         )
+        # 系统 Agent 跨请求复用：每次判断都是独立的一次性任务，必须清空上一次的
+        # 对话上下文，否则 AgentScope 会把所有历史请求一起发给模型。
+        reset_agent_context(agent)
         text = ""
         async for event in agent.reply_stream(UserMsg(
             name="user",

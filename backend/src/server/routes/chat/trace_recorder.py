@@ -276,6 +276,70 @@ def _permission_reason(
     return "decision inherited from parent policy"
 
 
+TOOL_INPUT_PREVIEW_LIMIT = 600
+
+
+def _tool_input_preview(tool_calls: list[ChatToolRun] | None, tool_call_id: str) -> str:
+    """取工具调用已累计的输入参数，脱敏并截断后写入 trace。"""
+
+    if not tool_calls or not tool_call_id:
+        return ""
+    for item in tool_calls:
+        if str(getattr(item, "id", "") or "") == tool_call_id:
+            args = str(getattr(item, "args", "") or "")
+            if not args:
+                return ""
+            from src.memory.sanitizer import redact_sensitive_text
+
+            return _trim_text(redact_sensitive_text(args).text, TOOL_INPUT_PREVIEW_LIMIT)
+    return ""
+
+
+def build_model_call_context_stats(agent: object) -> dict[str, int]:
+    """统计本次模型调用的上下文规模：system prompt / 压缩摘要 / 对话消息数与字符数 / 工具数。
+
+    只做字符级估算，不再多调一次模型或 tokenizer；用于在 Trace 里定位上下文膀胀来源。
+    """
+
+    stats: dict[str, int] = {}
+    system_prompt = getattr(agent, "_system_prompt", None)
+    if isinstance(system_prompt, str):
+        stats["systemPromptChars"] = len(system_prompt)
+    state = getattr(agent, "state", None)
+    if state is not None:
+        summary = getattr(state, "summary", "")
+        stats["summaryChars"] = len(summary) if isinstance(summary, str) else len(str(summary or ""))
+        context = list(getattr(state, "context", []) or [])
+        stats["contextMessages"] = len(context)
+        chars = 0
+        tool_results = 0
+        for msg in context:
+            for block in getattr(msg, "content", []) or []:
+                block_type = str(getattr(block, "type", "") or "")
+                if block_type == "text":
+                    chars += len(str(getattr(block, "text", "") or ""))
+                elif block_type == "hint":
+                    hint = getattr(block, "hint", "")
+                    chars += len(hint) if isinstance(hint, str) else sum(
+                        len(str(getattr(item, "text", "") or "")) for item in hint
+                    )
+                elif block_type == "tool_call":
+                    chars += len(str(getattr(block, "input", "") or ""))
+                elif block_type == "tool_result":
+                    tool_results += 1
+                    output = getattr(block, "output", "")
+                    chars += len(output) if isinstance(output, str) else sum(
+                        len(str(getattr(item, "text", "") or "")) for item in output
+                    )
+        stats["contextChars"] = chars
+        stats["toolResultBlocks"] = tool_results
+    toolkit = getattr(agent, "toolkit", None)
+    groups = getattr(toolkit, "tool_groups", None)
+    if isinstance(groups, list):
+        stats["toolCount"] = sum(len(getattr(group, "tools", []) or []) for group in groups)
+    return stats
+
+
 def _record_agent_scope_event(
     *,
     session_id: str,
@@ -285,8 +349,14 @@ def _record_agent_scope_event(
     scope: str,
     agent_id: str,
     agent_name: str,
+    tool_calls: list[ChatToolRun] | None = None,
+    agent: object | None = None,
 ) -> None:
-    """Record selected AgentScope events as compact trace events."""
+    """Record selected AgentScope events as compact trace events.
+
+    `tool_calls` 提供时，TOOL_CALL_END / TOOL_RESULT_START 会附带脱敏后的输入参数预览；
+    `agent` 提供时，MODEL_CALL_START 会附带上下文规模统计。
+    """
     if event_type not in TRACE_EVENT_TYPES:
         return
     tool_name = str(event_data.get("tool_call_name") or "")
@@ -318,6 +388,15 @@ def _record_agent_scope_event(
     payload = dict(event_data)
     if "delta" in payload:
         payload["delta"] = _trim_text(str(payload.get("delta") or ""), 240)
+    if event_type in {"TOOL_CALL_END", "TOOL_RESULT_START"}:
+        preview = _tool_input_preview(tool_calls, str(event_data.get("tool_call_id") or ""))
+        if preview:
+            payload["inputPreview"] = preview
+    if event_type == "MODEL_CALL_START" and agent is not None:
+        try:
+            payload["contextStats"] = build_model_call_context_stats(agent)
+        except Exception:
+            pass
     _record_run_event(
         session_id=session_id,
         event_type=event_type,

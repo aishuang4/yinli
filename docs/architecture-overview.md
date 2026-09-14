@@ -39,6 +39,31 @@
 11. `background_runs.py` 将后台 Run 与前端 SSE 订阅解耦，把结构化 SourceEvent 送入 Domain Event 和 ProjectionRunner。
 12. `projection/` 按 Run 内全局 ordinal 串行投影为 RuntimeFrame，并维护 DisplaySnapshot V4、tail replay、retention 和 terminal done。
 
+### ReAct 上下文管理
+
+主 Agent 发给模型的 messages 由三层组成，职责不得混淆：
+
+- **system prompt（跨轮稳定）**：Agent profile 正文、Project / Session Workspace 说明、Runtime Context 规则、
+  路由指令、Skill Run 提示、记忆摘要（受 `memory/retrieval.py` 预算约束，`# Summary` 存在时不重抄被摘要章节）、
+  Clarification / Final Answer 契约。它不含时钟、不含会话历史、不含本轮附件；prompt 正文不进 Agent 缓存键，
+  工厂在复用实例时直接刷新 `_system_prompt`。
+- **AgentScope `state.context` / `state.summary`（会话记忆）**：这是在线对话记忆的唯一事实源，包含历史 user /
+  assistant 消息、工具调用与结果，由 AgentScope `ContextConfig` 在接近上下文窗口时压缩。本轮附件说明作为用户
+  消息的 `<attached_files>` 段进入上下文，后续轮次仍可见。不再把 `chat_messages` 扁平化拼进 system prompt。
+- **HintBlock（运行时状态）**：时间和上下文长度由 AgentScope `InjectionConfig` 以 `<system-reminder>` 注入
+  （上海时区、每 0.5h 最多刷新一次、`emit_hint_event=False` 不外发事件）。
+
+Agent 实例生命周期在 `agents/factory.py`：`runtime_agent_id` 只含影响工具集 / 模型 / 权限 / Skill 包的稳定配置，
+同一 `(agent_id, session_id)` 多轮默认复用同一实例；配置变化换实例时由 `agents/session_context.py` 把旧实例的
+`context` / `summary` / `middle_context` 搬到新实例并释放旧实例；进程重启或实例被淘汰后，用 `ChatRunContext.session_history`
+（`chat_messages` 最近 20 条正文）重建精简上下文。缓存有 LRU 上限与 6h 闲置淘汰，正在执行或等待用户回应
+（AskUser / 审批）的实例不淘汰；用户不回应而直接发新消息时，工厂先补 `ToolResult` 关闭等待再复用。绑定本轮
+Run 的能力（Plan Mode、DelegateTask manager）把 run id 写进 feature key，因此这类 Run 使用带上下文快照的新实例。
+Readiness / IntentRouter 系统 Agent 是一次性任务，每次调用前清空上下文；当前 `INTENT_CATALOG` 只有 `react`
+时不调用模型，readiness 只在规则发现模糊执行型请求时才调模型，是否调用与耗时写入 `READINESS_GATE` /
+`INTENT_ROUTE` trace。`MODEL_CALL_START` trace 附带 `contextStats`（prompt / summary / context 字符数与消息数、
+工具数），`TOOL_CALL_END` / `TOOL_RESULT_START` 附带脱敏后的 `inputPreview`。
+
 ## Workspace / Project
 
 当前归属关系固定为 `Workspace -> Project -> Session -> Run`：Workspace 是资源和策略边界，Project 是目录、上下文和运行数据边界。

@@ -11,13 +11,13 @@ Agent 工厂模块 — 从配置创建 AgentScope 2.0 Agent 实例
 
 import asyncio
 import codecs
+import logging
 import os
 import signal
 import shutil
+import time
 from collections.abc import AsyncGenerator, Callable, Mapping
 from pathlib import Path
-from typing import Any
-
 from agentscope.agent import Agent
 from agentscope.agent._config import ContextConfig, InjectionConfig, ModelConfig, ReActConfig
 from agentscope.mcp import HttpMCPConfig, MCPClient
@@ -33,6 +33,7 @@ from agentscope.workspace import DockerWorkspace, LocalWorkspace
 from src.runtime.agent_python import agent_shell_env
 from src.agents.model_factory import create_model_chain
 from src.agents.agentscope_usage_middleware import ProviderCacheUsageMiddleware
+from src.agents.session_context import carry_over_context, settle_awaiting_tool_calls
 from src.agents.runtime_types import (
     AgentGuardrails,
     AgentModelOptions,
@@ -59,11 +60,26 @@ from src.tools.scoped_grep import ScopedGrep
 from src.tools.scoped_read import ScopedRead
 from src.tools.scoped_write import ScopedWrite
 
+logger = logging.getLogger(__name__)
 
 # ============================================================================
-# Agent 实例缓存 — 按 agent_id 缓存，避免重复创建
+# Agent 实例缓存 — 按 runtime agent_id 缓存，避免重复创建
+#
+# - `_agent_cache`：runtime_agent_id -> 实例。Chat 主 Agent 的 key 由
+#   runtime_builder 生成，只包含影响工具集 / 模型 / 权限的稳定配置，不含
+#   system prompt 正文和 run id，因此同一 session 的多轮默认复用同一实例，
+#   AgentScope 自身的 `state.context` 就是会话记忆。
+# - `_session_agents`：session_context_key -> 当前 runtime_agent_id。配置变化
+#   导致换实例时，把旧实例上下文搬到新实例并释放旧实例，避免实例泄漏。
+# - `_agent_last_used`：LRU / 闲置淘汰依据；等待用户回应中的实例不淘汰。
 # ============================================================================
 _agent_cache: dict[str, Agent] = {}
+_session_agents: dict[str, str] = {}
+_agent_last_used: dict[str, float] = {}
+
+AGENT_CACHE_MAX_SIZE = 48
+AGENT_CACHE_IDLE_SECONDS = 6 * 60 * 60
+_BUSY_ATTR = "_aw_busy_run_id"
 
 AGENT_WORKSTATION_SKILL_INSTRUCTION = """<agent-skills>
 Skills are instruction packages that extend your capabilities. Skills are not tools and cannot be called directly.
@@ -153,6 +169,23 @@ def _build_context_config() -> ContextConfig:
         ),
         summary_schema=summary_schema,
         tool_result_limit=4000,
+    )
+
+
+RUNTIME_STATE_TIMEZONE = "Asia/Shanghai"
+
+
+def _build_injection_config() -> InjectionConfig:
+    """创建运行时状态注入配置：时间按上海时区、每半小时最多刷新一次。"""
+
+    return InjectionConfig(
+        inject_runtime_state=True,
+        timezone=RUNTIME_STATE_TIMEZONE,
+        # 时区由 AgentScope 另起 <timezone> 字段注入；格式里不能带 %Z，否则 strptime 回读失败会每轮重复注入。
+        time_format="%Y-%m-%d %H:%M",
+        time_interval=0.5,
+        context_buffer_ratio=0.15,
+        emit_hint_event=False,
     )
 
 
@@ -661,6 +694,7 @@ def get_or_create_agent(
     workspace_dir: str | None = None,
     write_scope_dir: str | None = None,
     extra_filesystem_scopes: list[str] | None = None,
+    session_context_key: str | None = None,
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -673,14 +707,31 @@ def get_or_create_agent(
         system_prompt: 系统提示词
         model_name: 主模型名称（默认使用 settings.default_model）
         fallback_names: Fallback 模型名称列表
+        session_context_key: Chat 会话上下文标识；提供时，同一会话换实例会
+            搬运 AgentScope 对话上下文并释放旧实例。
 
     Returns:
         Agent: AgentScope Agent 实例
     """
     binding = binding_for_model(model_name)
     # 完整配置比较只驻留内存；Key 不进入缓存键、日志或运行记录。
-    if agent_id in _agent_cache and getattr(_agent_cache[agent_id], "_model_binding", None) == binding:
-        return _agent_cache[agent_id]
+    cached = _agent_cache.get(agent_id)
+    if cached is not None and getattr(cached, "_model_binding", None) == binding:
+        if getattr(cached, _BUSY_ATTR, None):
+            # 同一实例仍在执行上一轮（前端异常并发或后台 Run 未结束）：不能共享
+            # AgentState，改为创建一份带上下文快照的新实例。
+            logger.warning("Agent %s 仍在运行，改用快照实例承接新一轮", agent_id)
+            agent_id = f"{agent_id}:fork-{int(time.time() * 1000)}"
+        else:
+            _touch_agent(agent_id)
+            # system prompt 正文不进缓存键；配置文件被编辑后这里同步刷新。
+            if getattr(cached, "_system_prompt", None) != system_prompt:
+                cached._system_prompt = system_prompt
+            # fallback 事件回调绑定本轮 trace recorder，复用实例时同步刷新。
+            if on_fallback_event is not None and hasattr(cached.model, "on_event"):
+                cached.model.on_event = on_fallback_event
+            settle_awaiting_tool_calls(cached)
+            return cached
 
     # 使用配置默认值
     primary_model = binding.primary.default_model
@@ -767,15 +818,119 @@ def get_or_create_agent(
                 ),
             ),
         ),
-        # 2.0.5 默认注入时间、任务和上下文状态。升级阶段保持现有 prompt 行为，
-        # 后续若采用该能力需单独完成产品语义和 HINT_BLOCK 契约设计。
-        injection_config=InjectionConfig(inject_runtime_state=False),
+        # 时间 / 上下文长度用 AgentScope 原生 HintBlock 注入：只在首轮、超过
+        # time_interval 或临近压缩阈值时追加一条用户侧提示，而不是每轮改写
+        # system prompt，这样供应商侧 prompt cache 才能命中。HintBlockEvent
+        # 不外发，Chat SSE 契约无需新增事件。
+        injection_config=_build_injection_config(),
     )
 
     # 缓存并返回
     agent._model_binding = binding
     _agent_cache[agent_id] = agent
+    _touch_agent(agent_id)
+    if session_context_key:
+        _adopt_session_context(session_context_key, agent_id, agent)
+    _evict_idle_agents()
     return agent
+
+
+def _touch_agent(agent_id: str) -> None:
+    _agent_last_used[agent_id] = time.monotonic()
+
+
+def _adopt_session_context(session_context_key: str, agent_id: str, agent: Agent) -> None:
+    """同一会话换实例：搬运对话上下文并释放旧实例。"""
+
+    previous_id = _session_agents.get(session_context_key)
+    _session_agents[session_context_key] = agent_id
+    if not previous_id or previous_id == agent_id:
+        return
+    previous = _agent_cache.get(previous_id)
+    if previous is None:
+        return
+    if getattr(previous, _BUSY_ATTR, None):
+        # 旧实例仍在执行：只复制快照，不动它的状态，也不释放它。
+        carry_over_context(previous, agent, settle=False)
+        return
+    moved = carry_over_context(previous, agent)
+    logger.debug("会话 %s 换 Agent 实例，搬运 %s 条上下文", session_context_key, moved)
+    _drop_agent(previous_id)
+
+
+def _drop_agent(agent_id: str) -> None:
+    _agent_cache.pop(agent_id, None)
+    _agent_last_used.pop(agent_id, None)
+
+
+def _agent_is_pinned(agent: Agent) -> bool:
+    """正在执行或等待用户回应的实例不淘汰。"""
+
+    if getattr(agent, _BUSY_ATTR, None):
+        return True
+    state = getattr(agent, "state", None)
+    try:
+        return bool(state is not None and state.has_awaiting_tool_calls(agent.name))
+    except Exception:
+        return False
+
+
+def _evict_idle_agents(
+    *,
+    now: float | None = None,
+    max_size: int = AGENT_CACHE_MAX_SIZE,
+    idle_seconds: float = AGENT_CACHE_IDLE_SECONDS,
+) -> list[str]:
+    """按闲置时长和 LRU 上限淘汰实例；不被任何会话引用的旧实例优先。"""
+
+    current = time.monotonic() if now is None else now
+    active_ids = set(_session_agents.values())
+    evicted: list[str] = []
+    for agent_id, last_used in list(_agent_last_used.items()):
+        agent = _agent_cache.get(agent_id)
+        if agent is None:
+            _agent_last_used.pop(agent_id, None)
+            continue
+        if current - last_used >= idle_seconds and not _agent_is_pinned(agent):
+            evicted.append(agent_id)
+    if len(_agent_cache) - len(evicted) > max_size:
+        ordered = sorted(_agent_last_used.items(), key=lambda item: item[1])
+        for agent_id, _ in ordered:
+            if len(_agent_cache) - len(evicted) <= max_size:
+                break
+            if agent_id in evicted:
+                continue
+            agent = _agent_cache.get(agent_id)
+            if agent is None or _agent_is_pinned(agent):
+                continue
+            # 仍是某会话当前实例的，最后才考虑
+            if agent_id in active_ids and len(_agent_cache) - len(evicted) <= max_size * 2:
+                continue
+            evicted.append(agent_id)
+    for agent_id in evicted:
+        _drop_agent(agent_id)
+    if evicted:
+        for key, value in list(_session_agents.items()):
+            if value in evicted:
+                _session_agents.pop(key, None)
+        logger.debug("淘汰 %s 个闲置 Agent 实例", len(evicted))
+    return evicted
+
+
+def mark_agent_busy(agent: Agent, run_id: str) -> None:
+    """标记实例正在执行某个 Run，期间不复用、不淘汰。"""
+
+    setattr(agent, _BUSY_ATTR, run_id or "running")
+
+
+def mark_agent_idle(agent: Agent) -> None:
+    """Run 结束（含暂停等待用户）后解除执行标记。"""
+
+    if hasattr(agent, _BUSY_ATTR):
+        try:
+            delattr(agent, _BUSY_ATTR)
+        except AttributeError:
+            pass
 
 
 def _filter_tools_by_name(
@@ -818,9 +973,15 @@ def invalidate_agent(agent_id: str) -> None:
         if key == agent_id or key.startswith(f"{agent_id}:")
     ]
     for key in keys_to_remove:
-        _agent_cache.pop(key, None)
+        _drop_agent(key)
+    # 会话映射保留：下一轮创建新实例时找不到旧实例，会回退到 chat_messages 重建。
+    for key, value in list(_session_agents.items()):
+        if value in keys_to_remove:
+            _session_agents.pop(key, None)
 
 
 def clear_all_agents() -> None:
     """清除所有 Agent 缓存"""
     _agent_cache.clear()
+    _session_agents.clear()
+    _agent_last_used.clear()

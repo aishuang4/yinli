@@ -8,51 +8,42 @@ from datetime import datetime, timedelta, timezone
 # 上海全年固定 UTC+8、无夏令时，直接用固定偏移避免依赖系统 IANA 时区库（Windows 上常缺失）
 SHANGHAI_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
 
-from src.server.routes.chat.store import _load_store
 
+def _build_file_attachments_user_note(files) -> str:
+    """本轮附件说明。
 
-def _build_conversation_history_prompt(session_id: str | None, limit: int = 12) -> str:
-    if not session_id:
+    附件是这一轮用户消息的事实，随用户消息进入 AgentScope 对话上下文，
+    这样后续轮次模型仍知道之前上传过什么；不再写进 system prompt。
+    """
+
+    if not files:
         return ""
-
-    store = _load_store()
-    messages = store.messages.get(session_id, [])
-    if not messages:
-        return ""
-
-    recent = messages[-limit:]
     lines = [
-        "## Conversation History",
-        "The following are recent messages from this session. Use them for continuity, but prioritize the latest user request.",
+        "<attached_files>",
+        "The user uploaded these files to the current Project. Read or modify them using the listed relative paths.",
     ]
-    for message in recent:
-        content = " ".join((message.content or "").split())
-        files = [
-            f"{item.name} (path: {item.path})"
-            for item in message.files
-        ]
-        if not content and not files:
-            continue
-        if len(content) > 1200:
-            content = content[:1200] + "..."
-        role = "User" if message.role == "user" else "Assistant"
-        suffix = f" [Attached files: {', '.join(files)}]" if files else ""
-        lines.append(f"{role}: {content}{suffix}")
-
-    return "\n".join(lines) if len(lines) > 2 else ""
+    lines.extend(
+        f"- {item.name}: `{item.path}` ({item.size} bytes, {item.media_type})"
+        for item in files
+    )
+    lines.append("</attached_files>")
+    return "\n".join(lines)
 
 
 def _build_runtime_context_prompt() -> str:
-    """Build concrete runtime context that should be stable for every model call."""
+    """Stable runtime-context rules. Must not contain anything that changes between calls.
 
-    shanghai_now = datetime.now(SHANGHAI_TZ)
-    utc_now = datetime.now(timezone.utc)
+    The concrete wall-clock time is injected by AgentScope as a
+    ``<system-reminder>`` hint block (``<current-time>`` / ``<timezone>``)
+    on the first reply and whenever enough time has elapsed, so the system
+    prompt stays byte-identical across turns and provider prompt caching works.
+    """
+
     return "\n".join(
         [
             "## Runtime Context",
-            f"Current date/time: {shanghai_now.strftime('%Y-%m-%d %H:%M:%S %Z')} (Asia/Shanghai).",
-            f"Current UTC time: {utc_now.strftime('%Y-%m-%d %H:%M:%S UTC')}.",
-            'Treat the Asia/Shanghai date above as "today" unless the user specifies another timezone.',
+            "The current date/time is provided in the conversation inside a <system-reminder> block as <current-time> with its <timezone> (Asia/Shanghai by default).",
+            'Treat the most recent <current-time> as "today" unless the user specifies another timezone; earlier reminders are outdated.',
             "For current-events or web-search tasks, include the current year/date when useful, prefer recent sources, and verify freshness before answering.",
         ]
     )
@@ -78,9 +69,10 @@ def _build_final_answer_system_prompt() -> str:
 
     return "\n".join([
         "## Final Answer Contract",
-        "During analysis, tool use, and intermediate reasoning, you may write brief progress text.",
-        "FinalAnswerStart is the required phase marker for every final user-facing answer, including direct answers and responses with native provider thinking.",
-        "Call business tools and AskUser first. Only when no more business tool or clarification is needed, call FinalAnswerStart exactly once and then write the final answer.",
+        "If you can answer the user without calling any business tool, write the final answer directly as plain text. Do NOT call FinalAnswerStart for such direct answers; it only costs an extra round trip.",
+        "Once you have called any business tool or AskUser in this turn, FinalAnswerStart becomes the required phase marker for the final user-facing answer.",
+        "During analysis, tool use, and intermediate reasoning, you may write brief progress text. Keep progress text before a tool call short (one or two sentences); long text without a tool call is treated as the final answer.",
+        "After tool use: only when no more business tool or clarification is needed, call FinalAnswerStart exactly once and then write the final answer.",
         "Never treat the transition from native thinking to normal text as the final-answer boundary; the model may still call a business tool afterward.",
         "Never write a final answer as plain text after a tool or AskUser resumes; call FinalAnswerStart first.",
         "Do not put the final answer inside FinalAnswerStart arguments. The tool only marks the phase boundary.",

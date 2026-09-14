@@ -12,6 +12,8 @@ from typing import AsyncGenerator
 
 from agentscope.message import UserMsg
 
+from src.agents.factory import mark_agent_busy, mark_agent_idle
+from src.agents.session_context import seed_context_from_history
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.completion import (
     emit_failed_startup_run,
@@ -128,7 +130,9 @@ def _build_runtime_feature_parts(
         )
         extra_tools.extend(build_subagent_tools(subagent_manager))
         runtime_event_sources.append(subagent_manager)
-        feature_keys.append(f"subagents-{catalog.fingerprint}")
+        # DelegateTask 工具绑定的是本轮 manager（含 run_id），实例必须按 Run 隔离；
+        # 会话对话上下文由工厂在实例间搬运，不因此丢失。
+        feature_keys.append(f"subagents-{catalog.fingerprint}:{current_chat_background_run_id() or ''}")
         prompt_addenda.append(_build_subagent_prompt_addendum(catalog.definitions))
 
     return (
@@ -269,10 +273,17 @@ async def execute_react_runtime(
             yield failure_event
         return
 
+    # 进程内没有这条会话的 AgentScope 上下文（首轮 / 重启 / 实例被淘汰）时，
+    # 用已持久化的正文重建精简历史；否则直接沿用实例自带的对话记忆。
+    seed_context_from_history(agent, ctx.session_history)
+    user_text = ctx.effective_user_message
+    note = str(getattr(ctx, "user_message_note", "") or "")
+    if note:
+        user_text = f"{user_text}\n\n{note}"
     user_msg = UserMsg(
         name="user",
         content=_build_user_content(
-            ctx.effective_user_message,
+            user_text,
             run_data.images,
         ),
     )
@@ -288,23 +299,28 @@ async def execute_react_runtime(
         for runtime_event in plan_mode_manager.drain_runtime_events():
             leader_stream_state.runtime_events.append(runtime_event)
             yield runtime_source_event(runtime_event)
-    async for event in execute_and_finalize_leader_reply(
-        agent=agent,
-        input_event=user_msg,
-        state=leader_stream_state,
-        session_id=ctx.session_id,
-        persist=ctx.persist_run,
-        agent_id=ctx.agent_id,
-        agent_name=ctx.agent_name,
-        model_name=ctx.model_name,
-        guardrails=ctx.guardrails,
-        user_message=ctx.effective_user_message,
-        stream_scope=stream_scope,
-        skill_runs=ctx.skill_runs,
-        plan_mode_manager=plan_mode_manager,
-        runtime_event_sources=runtime_event_sources,
-        runtime_context=ctx.runtime_context,
-        deep_thinking=run_data.deep_thinking,
-        sandbox=run_data.sandbox,
-    ):
-        yield event
+    # 执行期间标记实例忙碌：同会话并发新一轮时工厂会改用快照实例，闲置淘汰也会跳过它。
+    mark_agent_busy(agent, current_chat_background_run_id() or "")
+    try:
+        async for event in execute_and_finalize_leader_reply(
+            agent=agent,
+            input_event=user_msg,
+            state=leader_stream_state,
+            session_id=ctx.session_id,
+            persist=ctx.persist_run,
+            agent_id=ctx.agent_id,
+            agent_name=ctx.agent_name,
+            model_name=ctx.model_name,
+            guardrails=ctx.guardrails,
+            user_message=ctx.effective_user_message,
+            stream_scope=stream_scope,
+            skill_runs=ctx.skill_runs,
+            plan_mode_manager=plan_mode_manager,
+            runtime_event_sources=runtime_event_sources,
+            runtime_context=ctx.runtime_context,
+            deep_thinking=run_data.deep_thinking,
+            sandbox=run_data.sandbox,
+        ):
+            yield event
+    finally:
+        mark_agent_idle(agent)

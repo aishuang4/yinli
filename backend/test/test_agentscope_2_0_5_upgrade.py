@@ -192,7 +192,7 @@ def test_scoped_write_permission_rule_precedence(tmp_path, rule_bucket: str, beh
 
 
 def test_agent_factory_uses_2_0_5_workspace_middleware_and_injection_config(monkeypatch, tmp_path):
-    """工厂使用 host_workdir，并显式关闭 2.0.5 默认 runtime state 注入。"""
+    """工厂使用 host_workdir，并以上海时区、不外发事件的方式启用 runtime state 注入。"""
 
     captured: dict = {}
 
@@ -222,7 +222,12 @@ def test_agent_factory_uses_2_0_5_workspace_middleware_and_injection_config(monk
 
     assert "host_workdir" in captured["workspace"]
     assert "workdir" not in captured["workspace"]
-    assert captured["agent"]["injection_config"].inject_runtime_state is False
+    # 时间 / 上下文长度用原生 HintBlock 注入，system prompt 保持稳定；不外发 HintBlockEvent。
+    injection = captured["agent"]["injection_config"]
+    assert injection.inject_runtime_state is True
+    assert injection.timezone == "Asia/Shanghai"
+    assert injection.emit_hint_event is False
+    assert "%Z" not in injection.time_format
     assert any(
         isinstance(item, ProviderCacheUsageMiddleware)
         for item in captured["agent"]["middlewares"]

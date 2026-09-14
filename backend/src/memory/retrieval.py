@@ -7,6 +7,14 @@ from dataclasses import dataclass
 from src.memory.markdown_store import MarkdownMemoryStore
 from src.memory.nodes import MemoryNodeService
 
+# 注入预算：记忆只是摘要索引，详情靠 memory_node_* 工具按需读取。
+# 预算过大既浪费上下文，也会因内容频繁变化破坏供应商 prompt cache。
+MEMORY_INJECTION_TOTAL_CHARS = 2500
+MEMORY_MARKDOWN_SECTION_CHARS = 700
+MEMORY_NODE_TREE_LIMIT = 12
+MEMORY_NODE_PER_DAY_LIMIT = 3
+MEMORY_NODE_TREE_CHARS = 1000
+
 
 @dataclass(frozen=True)
 class MemoryRetrievalContext:
@@ -58,24 +66,47 @@ def build_memory_injection_text(
             workspace_id=context.workspace_id,
             project_id=context.project_id,
             user_id=context.user_id,
-            limit=20,
+            limit=MEMORY_NODE_TREE_LIMIT * 3,
         )
         node_text = _format_node_tree(tree.get("nodes", []))
         if node_text:
-            sections.append("Recent memory node tree, last 30 days:\n" + node_text)
+            sections.append("Recent memory nodes (last 30 days, `date | nodeId | title — summary`):\n" + node_text)
 
     if not sections:
         return _empty_memory_hint()
 
+    body = _fit_sections_to_budget(sections, MEMORY_INJECTION_TOTAL_CHARS)
     return "\n".join(
         [
             "# Memory",
             "以下是可用长期记忆摘要。若与本轮用户明确要求冲突，以本轮用户消息为准。",
             "这里只注入摘要索引；需要查看某天、某个主题或 nodeId 的详情时，使用 memory_node_tree 或 memory_node_query 工具。",
             "",
-            "\n\n".join(sections),
+            body,
         ],
     )
+
+
+def _fit_sections_to_budget(sections: list[str], budget: int) -> str:
+    """把各段落压进总预算：超出时从最后一段（节点索引）开始裁，再依次向前。"""
+
+    parts = list(sections)
+    separator_cost = 2 * max(0, len(parts) - 1)
+    total = sum(len(part) for part in parts) + separator_cost
+    index = len(parts) - 1
+    while total > budget and index >= 0:
+        overflow = total - budget
+        part = parts[index]
+        keep = max(0, len(part) - overflow)
+        # 段落至少留一行标题，避免残缺半句
+        head = part.split("\n", 1)[0]
+        trimmed = part[:keep].rstrip() if keep > len(head) else head
+        if trimmed != part:
+            trimmed = trimmed + "\n…(已按注入预算截断，详情请用 memory_node_query 查询)"
+        total -= len(part) - len(trimmed)
+        parts[index] = trimmed
+        index -= 1
+    return "\n\n".join(parts)
 
 
 def _empty_memory_hint() -> str:
@@ -89,21 +120,43 @@ def _empty_memory_hint() -> str:
 
 
 def _extract_markdown_injection(content: str) -> str:
+    """从 Markdown 记忆文件抽取注入段落。
+
+    `# Summary` 本身就是其余章节的压缩摘要；存在时只注入 Summary 加上
+    直接约束行为的 Corrections / Negative Rules，不再把被摘要过的原始
+    章节重抄一遍。没有 Summary 时才逐章节注入。
+    """
+
     sections = _parse_markdown_sections(content)
+    summary = _strip_comments(sections.get("Summary", "")).strip()
+    if summary:
+        titles: tuple[str, ...] = ("Summary", "Corrections", "Negative Rules")
+    else:
+        titles = (
+            "Stable Preferences",
+            "Stable Behaviors",
+            "Profile",
+            "Workspace Rules",
+            "Corrections",
+            "Negative Rules",
+        )
     parts = []
-    for title in (
-        "Summary",
-        "Stable Preferences",
-        "Stable Behaviors",
-        "Profile",
-        "Workspace Rules",
-        "Corrections",
-        "Negative Rules",
-    ):
+    for title in titles:
         text = _strip_comments(sections.get(title, "")).strip()
         if text:
-            parts.append(f"## {title}\n{text}")
+            parts.append(f"## {title}\n{_trim_block(text, MEMORY_MARKDOWN_SECTION_CHARS)}")
     return "\n\n".join(parts)
+
+
+def _trim_block(text: str, limit: int) -> str:
+    """按字符预算裁多行文本，尽量在行边界截断。"""
+
+    if len(text) <= limit:
+        return text
+    cut = text.rfind("\n", 0, limit)
+    if cut < limit // 2:
+        cut = limit
+    return text[:cut].rstrip() + "\n…"
 
 
 def _parse_markdown_sections(content: str) -> dict[str, str]:
@@ -132,22 +185,31 @@ def _strip_comments(content: str) -> str:
 
 
 def _format_node_tree(nodes: list[dict]) -> str:
+    """把历史记忆节点压成单行索引：按标题去重、每天最多若干条、总量受限。"""
+
     if not nodes:
         return ""
     lines: list[str] = []
-    for node in nodes[:20]:
-        tags = ",".join(node.get("tags") or [])
-        lines.extend(
-            [
-                f"- {node.get('date', '')}",
-                f"  - agent: {node.get('agentId', '')}",
-                f"    nodeId: {node.get('nodeId', '')}",
-                f"    title: {_trim(node.get('title', ''), 80)}",
-                f"    summary: {_trim(node.get('summary', ''), 180)}",
-                f"    tags: {tags}",
-            ],
-        )
-    return "\n".join(lines)
+    seen_titles: set[str] = set()
+    per_day: dict[str, int] = {}
+    for node in nodes:
+        if len(lines) >= MEMORY_NODE_TREE_LIMIT:
+            break
+        title = _trim(node.get("title", ""), 60)
+        title_key = " ".join(title.lower().split())
+        if title_key and title_key in seen_titles:
+            continue
+        date = str(node.get("date", "") or "")
+        if per_day.get(date, 0) >= MEMORY_NODE_PER_DAY_LIMIT:
+            continue
+        seen_titles.add(title_key)
+        per_day[date] = per_day.get(date, 0) + 1
+        summary = _trim(node.get("summary", ""), 120)
+        line = f"- {date} | {node.get('nodeId', '')} | {title}"
+        if summary and summary != title:
+            line += f" — {summary}"
+        lines.append(line)
+    return _trim_block("\n".join(lines), MEMORY_NODE_TREE_CHARS)
 
 
 def _trim(value: str, limit: int) -> str:

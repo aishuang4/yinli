@@ -204,11 +204,25 @@ Block，不得用 thinking 到普通文本的边界推断最终回答已经开�
 工具前输出过程说明。尚未出现 `FinalAnswerStart`、无法判定用途的普通文本按 ReAct reasoning
 规则处理，避免把执行过程提前投影为最终回答。
 
-`FinalAnswerStart` 是最终回答的必需阶段标记。Agent 只有在本轮不再需要调用其他业务工具、准备
-输出最终用户答案时才能调用一次；无论本轮是否开启深度思考、是否使用过工具、是否经过 HITL
-暂停恢复，标记后的正文都必须按上游 `TEXT_BLOCK_DELTA` 原始节奏逐片投影。若模型违反契约并在
-`REPLY_END.finished_reason=completed` 前直接输出尾部文本，后端仍把尾部文本作为最终回答一次性
-投影，作为防止答案丢失的兼容兜底，不得额外强制发起模型调用。
+`FinalAnswerStart` 是**用过业务工具之后**最终回答的必需阶段标记。Agent 只有在本轮不再需要调用
+其他业务工具、准备输出最终用户答案时才能调用一次；无论本轮是否开启深度思考、是否经过 HITL
+暂停恢复，标记后的正文都必须按上游 `TEXT_BLOCK_DELTA` 原始节奏逐片投影。
+
+**直接回答（本次 reply 尚无任何业务工具调用）不要求 `FinalAnswerStart`**，以免每次简单问答都多付一
+次模型往返。后端按以下规则投影直接回答：
+
+- 本次 reply 尚未出现任何 `TOOL_CALL_*`，且累计普通文本达到 `DIRECT_ANSWER_STREAM_THRESHOLD`
+  （当前 600 字符）时，后端把已累计文本一次性投影为最终回答并开始逐片流式投影后续 delta；
+  对应 `AGENT_FINAL_ANSWER_STARTED.reason=direct_text_stream`，payload `{direct: true, optimistic: true}`。
+- 文本未达阈值就结束 reply（`REPLY_END.finished_reason=completed`）的，尾部文本仍按原兜底一次性投影
+  （`reason=direct_text_response`）。
+- 若模型在阈值之后才调用业务工具（长篇过程说明被误判为回答），最终回答 `text` Block 继续追加
+  后续正文，工具 Block 照常出现，与模型先调 `FinalAnswerStart` 再调工具的既有容错一致；前端不需要
+  新增回收逻辑。
+- 一旦本次 reply 出现过任何业务工具调用，普通文本回到 ReAct reasoning 规则，必须等 `FinalAnswerStart`。
+
+若模型在用过工具后违反契约、在 `REPLY_END.finished_reason=completed` 前直接输出尾部文本，后端仍把
+尾部文本作为最终回答一次性投影，作为防止答案丢失的兼容兜底，不得额外强制发起模型调用。
 
 支持增量结果的长耗时工具必须在执行期间持续发送结果 delta。内置 Bash 在本地执行时必须按
 stdout/stderr 可读节奏产生 `TOOL_RESULT_TEXT_DELTA`，使对应 `tool` Block 的 `outputPreview`

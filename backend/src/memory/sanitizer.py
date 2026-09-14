@@ -28,6 +28,14 @@ _SENSITIVE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL),
     ),
     (
+        # JSON 形式的凭据（工具入参 / HTTP 头），例如 "Authorization": "Bearer xxx"、"apiKey": "..."
+        "json_credential",
+        re.compile(
+            r"(?i)\"(api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|secret|cookie|authorization|x-api-key)\""
+            r"\s*:\s*\"[^\"]*\"",
+        ),
+    ),
+    (
         "credential_assignment",
         re.compile(r"(?i)\b(api[_-]?key|token|password|secret|cookie)\b\s*[:=]\s*\S+"),
     ),
