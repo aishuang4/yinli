@@ -1,6 +1,14 @@
 # 引力 YINLI 项目进展与协作交接
 
-> 更新时间：2026-09-07。本文只记录当前完成度、验证结果和已知缺口。
+> 更新时间：2026-09-14。本文只记录当前完成度、验证结果和已知缺口。
+
+## 2026-09-14 上线前核查
+
+- 分支 `feat/file-catalog-agents`：后端全量 `731 passed, 2 skipped`；前端 `lint` / `build` / `vitest` 通过。`master` 上因 `e9cc7b9`（Agent 跨 Project 可用）遗留的 3 个过时测试已在本分支修复。
+- Chat 消息渲染新增 `EchartsContent`：只按内置 Skill `yinli-charts` 合同识别闭合的 ```echarts / ```echarts-json 围栏，普通 ```json 不渲染，只允许 `bar` / `line` / `pie` / `scatter`，拒绝 `dataset` / `graphic` / `calendar` / `custom`。解析逻辑在 `echartsMarkdown.ts`，echarts 运行时通过 `React.lazy` 独立分包（约 560 KB，仅在出现图表时下载），首屏 chunk 不受影响。
+- 前端引入 `vitest` 作为单测框架（`npm test`），首个用例覆盖图表围栏解析；RuntimeFrame / reducer 单测仍在 TODO。
+- `word-documents` 系统 Skill 完整包（4 个脚本、`references/`）在 `artifacts/skills/word-documents/`，启动时 seed 到运行时 `skills/` 目录并覆盖旧副本；开发机上出现只剩 `SKILL.md` 的目录属于 seed 前的本地残留，不是仓库缺失。脚本只依赖标准库。
+- 仓库尚无 git tag；Debian HTTP 部署方案无认证无 TLS，不能作为对外上线形态。
 
 ## 本轮模型配置改造
 
@@ -141,12 +149,9 @@
 最近一次完整验证：
 
 ```text
-backend pytest: 671 passed, 4 failed, 1 skipped (2026-08-31)
-  失败：test_react_runtime_only_enables_plan_features_for_explicit_plan_request
-        test_default_workspace_dir_is_project_root_not_user_home
-        test_catch_up_once_within_grace_uses_catch_up_trigger
-        test_stale_desktop_default_project_paths
-frontend build / lint: 此前 passed
+backend pytest: 731 passed, 2 skipped (2026-09-14, feat/file-catalog-agents)
+frontend lint / build / vitest: passed (2026-09-14)
+  build 仅剩 EchartsChart 懒加载 chunk 超过 500 KB 提示，属按需下载
 /api/teams: 404
 legacy Agent Builder mode=team: 422
 legacy teams / team_members tables: removed

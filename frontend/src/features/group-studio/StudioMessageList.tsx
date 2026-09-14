@@ -1,7 +1,7 @@
 /** 群聊时间线：气泡消息；Agent 超过五行默认折叠。 */
 
 import { useLayoutEffect, useRef, useState } from 'react';
-import { MarkdownContent } from '../../components/MarkdownContent';
+import { EchartsContent } from '../../components/EchartsContent';
 import type { GroupStudioMember } from './types';
 import type { StudioTimelineMessage } from './useGroupStudioStream';
 
@@ -185,7 +185,7 @@ function AgentBubble({
             data-clamped={clamped ? 'true' : undefined}
             data-overflow={overflows ? 'true' : undefined}
           >
-            <MarkdownContent content={visibleAnswer || '…'} streaming={streaming && !thinkingStreaming} />
+            <EchartsContent content={visibleAnswer || '…'} streaming={streaming && !thinkingStreaming} />
           </div>
           {!streaming && overflows ? (
             <button

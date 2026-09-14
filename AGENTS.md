@@ -30,6 +30,7 @@ npm run electron:build:mac  # 生成 macOS 内测包
 npm run electron:build:win  # 生成 Windows 内测包
 npm run build    # tsc -b && vite build
 npm run lint     # eslint
+npm test         # vitest 单测
 
 # 后端桌面端可执行文件（在目标平台分别执行）
 ./scripts/build-backend-desktop.sh

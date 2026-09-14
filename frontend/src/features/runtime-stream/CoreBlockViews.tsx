@@ -24,6 +24,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { MarkdownContent } from '../../components/MarkdownContent';
+import { EchartsContent } from '../../components/EchartsContent';
 import { HitlApprovalBlock } from '../chat/HumanInteractionBlocks';
 import { useSmoothStreamingText } from '../chat/useSmoothStreamingText';
 import {
@@ -182,7 +183,7 @@ export function TextBlockView({ block }: { block: DisplayBlock<string> }) {
   if (!block.data && !visible.content) return null;
   return (
     <div className="chat-message-content chat-message-content--assistant px-1 py-2 text-[var(--color-text-primary)]">
-      <MarkdownContent content={visible.content} streaming={visible.isAnimating} />
+      <EchartsContent content={visible.content} streaming={visible.isAnimating} />
     </div>
   );
 }

@@ -35,6 +35,8 @@ backend/data/
 /sessions/
 /skills/
 backend/skills/
+# 开发模式 USER_DATA_ROOT=backend/，文件 catalog 运行时写入
+backend/workspaces/
 /tmp/
 /frontend/build/
 !/frontend/build/

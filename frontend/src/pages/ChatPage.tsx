@@ -50,6 +50,7 @@ export function ChatPage() {
   const [modelChoices, setModelChoices] = useState<Record<string, string>>({});
   const [savingModelChoice, setSavingModelChoice] = useState(false);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -264,6 +265,8 @@ export function ChatPage() {
   const loadSessionMessages = useCallback(async (sessionId: string, projectId = activeProjectId) => {
     const requestId = messagesRequestRef.current + 1;
     messagesRequestRef.current = requestId;
+    setMessagesLoading(true);
+    try {
     const params = new URLSearchParams({ projectId });
     const response = await fetch(`/api/chat/sessions/${sessionId}/messages?${params.toString()}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -285,6 +288,13 @@ export function ChatPage() {
     if (messagesRequestRef.current === requestId) {
       setMessages(loadedMessages);
     }
+    } catch (error) {
+      if (messagesRequestRef.current === requestId) {
+        setChatError(getErrorMessage(error, '无法加载历史消息'));
+      }
+    } finally {
+      if (messagesRequestRef.current === requestId) setMessagesLoading(false);
+    }
   }, [activeProjectId]);
 
   const activateSession = useCallback(async (session: ChatSession) => {
@@ -305,6 +315,7 @@ export function ChatPage() {
   useEffect(() => {
     sessionsRequestRef.current += 1;
     messagesRequestRef.current += 1;
+    setMessagesLoading(false);
     recoveredRunRef.current = '';
     openedPlanIdentityRef.current = '';
     setPlanPanelOpen(false);
@@ -378,6 +389,8 @@ export function ChatPage() {
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
+    messagesRequestRef.current += 1;
+    setMessagesLoading(false);
     pendingSessionRef.current = null;
     recoveredRunRef.current = '';
     openedPlanIdentityRef.current = '';
@@ -418,6 +431,8 @@ export function ChatPage() {
       if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
       setSessions((current) => current.filter((item) => item.id !== session.id));
       if (activeSessionId === session.id) {
+        messagesRequestRef.current += 1;
+        setMessagesLoading(false);
         recoveredRunRef.current = '';
         openedPlanIdentityRef.current = '';
         setPlanPanelOpen(false);
@@ -703,7 +718,12 @@ export function ChatPage() {
               aria-label="对话消息"
             >
               <div className="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4">
-                {messages.length === 0 && !hasLiveResponse ? (
+                {messagesLoading && messages.length === 0 && !hasLiveResponse ? (
+                  <div role="status" aria-label="正在加载历史消息" className="flex flex-1 flex-col gap-4 py-6">
+                    <div className="h-16 w-2/3 self-end rounded-md bg-[var(--color-bg-secondary)]" />
+                    <div className="h-40 w-full rounded-md bg-[var(--color-bg-secondary)]" />
+                  </div>
+                ) : messages.length === 0 && !hasLiveResponse && !chatError ? (
                   <div className="chat-empty-state flex flex-1 flex-col items-center justify-center gap-3 text-center text-[var(--color-text-tertiary)]">
                     <div className="chat-empty-state__icon">
                       <Bot size={42} strokeWidth={1.2} />

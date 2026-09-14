@@ -10,6 +10,7 @@
 cd frontend
 npm ci
 npm run lint
+npm test
 npm run build
 npm run electron:compile
 npm run release:preflight

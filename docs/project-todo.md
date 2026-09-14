@@ -1,11 +1,11 @@
 # 引力 YINLI TODO
 
-> 最后更新：2026-09-01。本文只保留尚未完成的任务。
+> 最后更新：2026-09-14。本文只保留尚未完成的任务。
 
 ## P0. Runtime 稳定性
 
-- [ ] 修复 `master` 上 4 个失败测试：Plan Mode 显式开启、默认 workspace 目录、定时任务 catch-up、过期桌面 Project 路径。
-- [ ] 在配置 DeepSeek + 第二供应商凭据且 Docker daemon 可用的发布环境，完成 AgentScope `2.0.5` 真实 Runtime 与 Docker 门禁，结果写回 `docs/project-progress-handoff.md`。
+- [ ] 在配置 DeepSeek + 第二供应商凭据且 Docker daemon 可用的发布环境，完成 AgentScope `2.0.5` 真实 Runtime 与 Docker 门禁，结果写回 `docs/project-progress-handoff.md`。DashScope 上一次为 `401 invalid_api_key`，需要有效 Key。
+- [ ] 内测前在真实模型上验证 `yinli-charts` 全链路：模型输出 ```echarts 围栏 -> 前端 `EchartsContent` 渲染，覆盖流式未闭合、多图、非法 JSON 回退。
 - [ ] 补齐 RuntimeFrame / DisplaySnapshot V4 浏览器回归矩阵，覆盖 Plan finalized、HITL、AskUser、工具失败、取消和刷新恢复。
 - [ ] 增加关键 Chat 工作流的 Playwright 测试，避免只依赖 reducer 和后端单测。
 - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor 和 ToolScope 摘要。
@@ -24,7 +24,7 @@ Intake 对谈、FIFO 点名队列、`group_work_items` 认领已在线。下面�
 
 ## P1. Event Stream 后续加固
 
-- [ ] 增加前端 RuntimeFrame decoder、gap recovery 和 kind reducer 的独立单元测试，减少只靠 production build 与浏览器回归发现问题的风险。
+- [ ] 在已有 `vitest` 基础上增加前端 RuntimeFrame decoder、gap recovery 和 kind reducer 的独立单元测试，减少只靠 production build 与浏览器回归发现问题的风险。当前只有 `echartsMarkdown.test.ts` 一个前端单测。
 - [ ] 为 ProjectionRunner backlog、Snapshot fallback、retention 和 invariant repair 增加可观测指标。
 
 ## P2. TeamRun 与 Subagent
@@ -57,6 +57,7 @@ Intake 对谈、FIFO 点名队列、`group_work_items` 认领已在线。下面�
 - [ ] MCP 调用加强 Secret 脱敏、超时和错误提示。
 - [ ] Skills 补等待用户、失败恢复、产物路径和引用资源状态。
 - [ ] 用至少两个模型供应商完成 AgentScope 原生 Skills Sandbox 行为验证，覆盖 `scripts/`、`references/`、Office 文件和 fallback 模型。
+- [ ] 补 Excel / CSV（`openpyxl`）与 PDF 读取的系统 Skill 包，与 `word-documents` 同样放在 `artifacts/skills/` 并加入 `SYSTEM_SKILL_IDS`；当前 Office 能力只有 Word。
 - [ ] 为非持久 DockerWorkspace 设计一次性 Skill seed 与运行结束清理，解除当前“Docker + Skills 必须启用 persistent_sandbox”的限制。
 
 ## P5. Memory 稳定化
@@ -84,6 +85,7 @@ Intake 对谈、FIFO 点名队列、`group_work_items` 认领已在线。下面�
 - [ ] 拆分 RunsPage 和 ChatPage 的高复杂度区域。
 - [ ] 抽取卡片式 tab、可选择列表项、时间线节点和工具条按钮组。
 - [ ] 增加非 Chat 表单与超大组件的轻量自动检查。
+- [ ] 在仓库打 `v0.1.0-beta.1` tag 并按 `docs/beta-release-checklist.md` 在 macOS arm64 / Windows 真机逐项验收；当前仓库没有任何 tag。
 
 ## P7. 长期路线
 

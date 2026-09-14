@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { FileText, Loader2 } from 'lucide-react';
 
-import { MarkdownContent } from '../../components/MarkdownContent';
+import { EchartsContent } from '../../components/EchartsContent';
 import type { ChatFilePayload, ChatImagePayload } from './types';
 import { useSmoothStreamingText } from './useSmoothStreamingText';
 
@@ -98,7 +98,7 @@ export function MessageContentBlock({
         whiteSpace: isUser ? 'pre-wrap' : undefined,
       }}
     >
-      {isUser ? content : <MarkdownContent content={visible.content} streaming={visible.isAnimating} />}
+      {isUser ? content : <EchartsContent content={visible.content} streaming={visible.isAnimating} />}
     </div>
   );
 }
