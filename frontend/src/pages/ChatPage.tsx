@@ -19,6 +19,8 @@ import { useMessageScroll } from '../components/useMessageScroll';
 import { Tag, Tooltip } from '@/components/design';
 import { useEventStream } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
+import { usePageBecameActive } from '../hooks/usePageActive';
+import { useAgentsStore } from '../stores/agentsStore';
 import { useProjectResources } from '../hooks/useProjectResources';
 import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
 import { useAppStore } from '../stores/appStore';
@@ -76,6 +78,7 @@ export function ChatPage() {
   const pendingSessionRef = useRef<ChatSession | null>(null);
   const { state, sendMessage, resumeInteraction, subscribeRun, abort, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
+  const chatBecameActive = usePageBecameActive();
   const { loading: projectResourcesLoading } = useProjectResources(activeProjectId);
   const { workspaces, allProjects } = useWorkspaceProjects();
   const setActiveContext = useAppStore((state) => state.setActiveContext);
@@ -90,6 +93,13 @@ export function ChatPage() {
     resetAttachments,
     uploadFilesForSession,
   } = useChatAttachments({ onError: setChatError });
+
+  useEffect(() => {
+    if (!chatBecameActive) {
+      return;
+    }
+    void useAgentsStore.getState().syncFromServer(activeWorkspaceId, { silent: true });
+  }, [activeWorkspaceId, chatBecameActive]);
 
   const availableAgents = useMemo(() => agents.filter((agent) => (
     agent.role !== 'job'
@@ -108,11 +118,6 @@ export function ChatPage() {
   );
 
   const runtimeAgent = selectedAgent;
-
-  const agentOptions = useMemo(() => availableAgents.map((agent) => ({
-      label: agent.id === 'default' ? `${agent.name} - 默认助手` : agent.name,
-      value: agent.id,
-    })), [availableAgents]);
 
   const selectedModelId = modelChoices[activeSessionId || 'new'] || sessions.find(s => s.id === activeSessionId)?.modelConfigId || modelCatalog?.defaultModelId || '';
   const selectedModel = modelCatalog?.models.find(m => m.id === selectedModelId);
@@ -483,7 +488,6 @@ export function ChatPage() {
       agentId: runtimeAgent?.id,
       agentName: runtimeAgent?.name,
       mode: targetMode,
-      systemPrompt: runtimeAgent?.systemPrompt,
       modelConfigId: selectedModelId,
       skillIds: runtimeAgent?.skills,
       deepThinking,
@@ -518,7 +522,6 @@ export function ChatPage() {
       agentId: runtimeAgent?.id,
       agentName: runtimeAgent?.name,
       mode: 'agent',
-      systemPrompt: runtimeAgent?.systemPrompt,
       modelConfigId: selectedModelId,
       skillIds: runtimeAgent?.skills,
       deepThinking,
@@ -779,7 +782,6 @@ export function ChatPage() {
               onChange={value => void selectModel(value)}
               disabled={savingModelChoice || state.isStreaming || pendingAskUserInteractions.length > 0}
               loading={modelsLoading} error={modelsError} />}
-              agentOptions={agentOptions}
               agentsLoading={agentsLoading}
               chatError={chatError}
               deepThinking={deepThinking}

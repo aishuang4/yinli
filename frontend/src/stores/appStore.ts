@@ -55,7 +55,6 @@ interface AppState {
   activeGroupStudioId: string | null;
   /** 未落库草稿的 Chat 会话绑定；持久化后清空。 */
   localStudioSeed: { chatSessionId: string; agentId: string; modelConfigId?: string } | null;
-
   // Actions
   /** 切换视图 */
   setView: (view: ViewType) => void;

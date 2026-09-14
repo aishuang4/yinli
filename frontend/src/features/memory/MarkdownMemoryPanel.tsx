@@ -118,7 +118,7 @@ export function MarkdownMemoryPanel({
           <Empty type="noData" description="暂无 Agent 记忆" />
         ) : loading ? (
           <div className="flex justify-center py-12">
-            <Spinner tip="加载记忆..." />
+            <Spinner tip="加载记忆..."><div className="min-h-12 w-12" /></Spinner>
           </div>
         ) : (
           <TextAreaField

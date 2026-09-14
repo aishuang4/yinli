@@ -174,7 +174,9 @@ export function WorkbenchListRow({
 export function WorkbenchLoadingPanel({ tip = '加载中...' }: { tip?: string }) {
   return (
     <div className="flex justify-center rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] py-8">
-      <Spinner tip={tip} />
+      <Spinner tip={tip}>
+        <div className="min-h-12 w-12" />
+      </Spinner>
     </div>
   );
 }

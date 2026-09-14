@@ -7,13 +7,13 @@ import {
   SparkReinforcementLearningLine,
   SparkRenyizhuanrenyiAnyToanyLine,
 } from '@agentscope-ai/icons';
-import { Select, Tooltip } from '@/components/design';
+import { Tooltip } from '@/components/design';
 import { FileImportButton } from '../../components/FileImportButton';
+import { ChatAgentSelect } from './ChatAgentSelect';
 import type { ChatFileAttachment, ChatImageAttachment } from './types';
 
 interface ChatComposerProps {
   modelSelector?: ReactNode;
-  agentOptions: Array<{ label: string; value: string }>;
   agentsLoading: boolean;
   chatError: string | null;
   deepThinking: boolean;
@@ -45,7 +45,7 @@ interface ChatComposerProps {
 
 export function ChatComposer(props: ChatComposerProps) {
   const {
-    agentOptions, agentsLoading, chatError, deepThinking, fileAttachments,
+    agentsLoading, chatError, deepThinking, fileAttachments,
     imageAttachments, imageInputRef, inputValue, isStreaming, messageInputRef, planMode,
     projectResourcesLoading, selectedAgentId, targetMode, onAbort,
     onCompositionEnd, onCompositionStart, onFile, onImageFiles, onInputChange,
@@ -163,14 +163,10 @@ export function ChatComposer(props: ChatComposerProps) {
             />
           </div>
           {targetMode === 'agent' && (
-            <Select
-              value={selectedAgentId}
+            <ChatAgentSelect
+              selectedAgentId={selectedAgentId}
+              disabled={isStreaming || agentsLoading || projectResourcesLoading}
               onChange={onSelectedAgentChange}
-              options={agentOptions}
-              loading={agentsLoading || projectResourcesLoading}
-              disabled={isStreaming}
-              placeholder="选择 Agent"
-              style={{ width: 160 }}
             />
           )}
           <div className="chat-composer-model-slot min-w-0 max-w-[230px] shrink">

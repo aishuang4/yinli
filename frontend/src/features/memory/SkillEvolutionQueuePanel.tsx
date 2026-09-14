@@ -84,7 +84,7 @@ export function SkillEvolutionQueuePanel({
           </div>
           {loading ? (
             <div className="flex justify-center py-10">
-              <Spinner tip="加载 Skill 队列..." />
+              <Spinner tip="加载 Skill 队列..."><div className="min-h-12 w-12" /></Spinner>
             </div>
           ) : records.length === 0 ? (
             <div className="p-6">
@@ -149,7 +149,7 @@ export function SkillEvolutionQueuePanel({
           </div>
           {loading ? (
             <div className="flex justify-center py-12">
-              <Spinner tip="加载详情..." />
+              <Spinner tip="加载详情..."><div className="min-h-12 w-12" /></Spinner>
             </div>
           ) : !selectedRecord ? (
             <div className="p-6">

@@ -101,7 +101,7 @@ export function MemorySettingsPanel({
           </div>
           {loading && !settings ? (
             <div className="flex justify-center py-12">
-              <Spinner tip="加载 Memory 设置..." />
+              <Spinner tip="加载 Memory 设置..."><div className="min-h-12 w-12" /></Spinner>
             </div>
           ) : !settings ? (
             <div className="p-6">
@@ -257,7 +257,7 @@ export function MemorySettingsPanel({
           </div>
           {loading && auditEvents.length === 0 ? (
             <div className="flex justify-center py-12">
-              <Spinner tip="加载 Memory 审计..." />
+              <Spinner tip="加载 Memory 审计..."><div className="min-h-12 w-12" /></Spinner>
             </div>
           ) : auditEvents.length === 0 ? (
             <div className="p-6">
