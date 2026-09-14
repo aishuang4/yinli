@@ -34,7 +34,11 @@ export function MessageBubble({ message, sessionId }: { message: LocalMessage; s
     <MessageFrame containIntrinsicSize="220px">
       <MessageImages images={message.images} align="left" />
       {message.displaySnapshot ? (
-        <RuntimeBlockTree snapshot={message.displaySnapshot} sessionId={sessionId} />
+        <RuntimeBlockTree
+          snapshot={message.displaySnapshot}
+          sessionId={sessionId}
+          processStopped={Boolean(message.cancelled || message.error)}
+        />
       ) : (
         <MessageContentBlock content={message.content} role="assistant" surface="transparent" />
       )}
@@ -47,6 +51,7 @@ export function MessageBubble({ message, sessionId }: { message: LocalMessage; s
 export function StreamingBubble({
   snapshot,
   isStreaming,
+  cancelled = false,
   modelName,
   error,
   createdAt,
@@ -56,6 +61,7 @@ export function StreamingBubble({
 }: {
   snapshot: DisplaySnapshot;
   isStreaming: boolean;
+  cancelled?: boolean;
   modelName: string;
   error: string | null;
   createdAt?: string;
@@ -72,6 +78,7 @@ export function StreamingBubble({
         <RuntimeBlockTree
           snapshot={snapshot}
           sessionId={sessionId}
+          processStopped={!isStreaming && cancelled}
           actions={{ onResolveInteraction }}
           onAnswerAnimationChange={onAnswerAnimationChange}
         />

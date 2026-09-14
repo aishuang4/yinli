@@ -15,11 +15,13 @@ export function RuntimeBlockTree({
   snapshot,
   actions,
   sessionId,
+  processStopped = false,
   onAnswerAnimationChange,
 }: {
   snapshot: DisplaySnapshot;
   actions?: RuntimeBlockActions;
   sessionId?: string;
+  processStopped?: boolean;
   onAnswerAnimationChange?: RuntimeAnimationReporter;
 }) {
   const [openTeamId, setOpenTeamId] = useState<string | null>(null);
@@ -74,6 +76,7 @@ export function RuntimeBlockTree({
                 key={`process:${id}`}
                 blocks={processChildren.map((processId) => snapshot.blocksById[processId])}
                 hasFinalAnswer={hasFinalAnswer}
+                stopped={processStopped}
               >
                 {processChildren.map(renderBranch)}
               </RuntimeProcessGroup>

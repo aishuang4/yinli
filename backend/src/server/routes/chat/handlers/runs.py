@@ -13,6 +13,7 @@ from src.server.routes.chat.background_runs import (
     get_chat_projection_snapshot,
     list_chat_background_runs,
     serialize_chat_background_run,
+    steer_chat_background_run,
     subscribe_chat_background_run,
 )
 from src.server.routes.chat.handlers.send import start_chat_run
@@ -142,6 +143,39 @@ async def rerun_run(
 
     new_run = await start_chat_run(_build_rerun_chat_message(source_run))
     return serialize_chat_background_run(new_run)
+
+
+class SteerRunRequest(BaseModel):
+    """向进行中的 Run 补充用户消息。"""
+
+    message: str = Field(min_length=1, max_length=20_000)
+    agent_id: str = ""
+    agent_name: str = ""
+
+
+@router.post("/runs/{run_id}/steer")
+async def steer_run(
+    run_id: str,
+    payload: SteerRunRequest,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+) -> dict:
+    """执行中途补充信息，不新开一轮、不打断当前 ReAct。"""
+
+    await _get_project_run(run_id, project_id)
+    try:
+        run = await steer_chat_background_run(
+            run_id,
+            message=payload.message,
+            agent_id=payload.agent_id,
+            agent_name=payload.agent_name,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Run not found") from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    return serialize_chat_background_run(run)
 
 
 @router.post("/runs/{run_id}/cancel")

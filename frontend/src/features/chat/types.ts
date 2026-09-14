@@ -24,6 +24,8 @@ export interface LocalMessage {
   modelName?: string;
   /** 错误信息 */
   error?: string;
+  /** 用户主动停止本轮，过程区应保持展开 */
+  cancelled?: boolean;
   /** 图片输入 */
   images?: ChatImagePayload[];
   /** 用户上传到当前 Session 的普通附件 */

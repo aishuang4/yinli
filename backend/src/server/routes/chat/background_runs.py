@@ -78,6 +78,7 @@ class ChatBackgroundRun:
     subscribers: set[asyncio.Queue[str | None]] = field(default_factory=set)
     async_task: asyncio.Task | None = None
     persisted: bool = False
+    pending_steers: list[str] = field(default_factory=list)
     normalizer: ChatProjectionNormalizer | None = None
     model_binding: object | None = field(default=None, repr=False)
     model_metadata: dict = field(default_factory=dict)
@@ -290,6 +291,52 @@ def get_chat_projection_snapshot(run_id: str) -> dict:
 
     state = _projection_store.load_materialized(f"chat:{run_id}", _coordinator)
     return dump_protocol(state.snapshot)
+
+
+def take_run_steers(run_id: str) -> list[str]:
+    """取出本轮用户补充，供下一轮推理消费。"""
+
+    run = _runs.get(run_id)
+    if run is None or not run.pending_steers:
+        return []
+    notes = [item for item in run.pending_steers if str(item).strip()]
+    run.pending_steers.clear()
+    return notes
+
+
+async def steer_chat_background_run(
+    run_id: str,
+    *,
+    message: str,
+    agent_id: str = "",
+    agent_name: str = "",
+) -> ChatBackgroundRun:
+    """把用户补充写入进行中的 Run，不新开一轮。"""
+
+    text = str(message or "").strip()
+    if not text:
+        raise ValueError("补充内容不能为空")
+    async with _runs_lock:
+        run = _runs.get(run_id)
+    if run is None:
+        raise KeyError(run_id)
+    if run.status in TERMINAL_RUN_STATUSES:
+        raise RuntimeError("已结束的 Run 不能再补充")
+    run.pending_steers.append(text)
+    from src.server.routes.chat.store import _append_user_message
+
+    _append_user_message(
+        session_id=run.session_id,
+        agent_id=agent_id or run.agent_id,
+        agent_name=agent_name or run.agent_name,
+        mode=run.mode,
+        model_name="",
+        content=text,
+        images=[],
+        workspace_id=run.workspace_id,
+        project_id=run.project_id,
+    )
+    return run
 
 
 async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:

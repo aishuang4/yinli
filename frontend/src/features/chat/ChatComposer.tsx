@@ -77,10 +77,9 @@ export function ChatComposer(props: ChatComposerProps) {
           onKeyDown={onKeyDown}
           onCompositionStart={onCompositionStart}
           onCompositionEnd={onCompositionEnd}
-          placeholder={isStreaming ? 'Agent 正在回复中...' : '输入消息...'}
+          placeholder={isStreaming ? '给正在执行的 Agent 补充信息...' : '输入消息...'}
           rows={2}
-          disabled={isStreaming}
-          className="block max-h-[180px] w-full resize-none rounded-t-lg border-0 bg-transparent px-4 pb-0 pt-3 text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:bg-[var(--color-bg-tertiary)]"
+          className="block max-h-[180px] w-full resize-none rounded-t-lg border-0 bg-transparent px-4 pb-0 pt-3 text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
           aria-label="消息输入框"
         />
 
@@ -212,16 +211,30 @@ export function ChatComposer(props: ChatComposerProps) {
                 </button>
               </span>
             </Tooltip>
-            <Tooltip title={isStreaming ? '停止回复' : '发送消息'} placement="top" mode="dark">
+            {isStreaming ? (
+              <Tooltip title="停止回复" placement="top" mode="dark">
+                <span className="inline-flex">
+                  <button
+                    type="button"
+                    className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-text-primary)] bg-[var(--color-bg-primary)] text-[var(--color-text-primary)] transition-opacity duration-200 hover:opacity-90"
+                    onClick={onAbort}
+                    aria-label="停止回复"
+                  >
+                    <Square size={16} />
+                  </button>
+                </span>
+              </Tooltip>
+            ) : null}
+            <Tooltip title={isStreaming ? '补充给 Agent' : '发送消息'} placement="top" mode="dark">
               <span className="inline-flex">
                 <button
                   type="button"
                   className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-opacity duration-200 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-                  onClick={isStreaming ? onAbort : onSend}
-                  disabled={!isStreaming && !inputValue.trim() && imageAttachments.length === 0 && fileAttachments.length === 0}
-                  aria-label={isStreaming ? '停止回复' : '发送消息'}
+                  onClick={onSend}
+                  disabled={!inputValue.trim() && imageAttachments.length === 0 && fileAttachments.length === 0}
+                  aria-label={isStreaming ? '补充给 Agent' : '发送消息'}
                 >
-                  {isStreaming ? <Square size={16} /> : <Send size={16} />}
+                  <Send size={16} />
                 </button>
               </span>
             </Tooltip>
