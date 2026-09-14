@@ -709,6 +709,8 @@ Workspace 级 / 用户级 Skill 仍需启用或 binding（与现外部用户级�
 
 `artifacts/skills/word-documents` seed 到 `SKILL_PACKAGES_ROOT`，作为系统包，禁止删除。图表围栏约定作为独立 `yinli-charts` Skill 说明书，前端渲染不在第二期强制绑定。
 
+系统包 seed 只保证「可选」，不等于「已启用」：`word-documents` / `yinli-charts` 和项目 `.agents/skills` 都必须出现在 Agent 配置的 `skills` 里才进入本轮 Runtime。只有 §9.2 的 `yinli-catalog` 允许绕过 Agent 配置无条件注入（代码常量 `ALWAYS_INJECTED_SKILL_IDS`）。Agent 配置是能力上限。
+
 ### 13.4 INDEX 第二期增加章节 `## Skills`，列出 name、path、enabled、source。
 
 ---

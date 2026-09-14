@@ -208,6 +208,7 @@ async def build_chat_run_context(
         used_skills,
         external_skills=external_skills,
         inject=str(getattr(run_data, "mode", "agent") or "agent") != "team",
+        configured_skill_ids=configured_skill_ids,
     )
     skill_paths = resolve_runtime_skill_paths(used_skills, runtime_context=runtime_context)
     used_skill_details = list_skill_usage_details(used_skills)
@@ -541,27 +542,42 @@ def _refresh_index_quietly(project_root, *, workspace_id: str, project_id: str, 
         return
 
 
-def _merge_file_catalog_skills(used_skills: list, *, external_skills: list, inject: bool) -> list:
-    """单 Agent Chat 合并项目 Skill 与系统包，不新增 CRUD 工具。"""
+def _merge_file_catalog_skills(
+    used_skills: list,
+    *,
+    external_skills: list,
+    inject: bool,
+    configured_skill_ids: list[str],
+) -> list:
+    """单 Agent Chat 合并项目 Skill 与系统包，不新增 CRUD 工具。
+
+    - `yinli-catalog` 说明书无条件追加（file-catalog-v1 §9.2）。
+    - 项目 `.agents/skills` 免 Project binding（§13.2），但仍必须出现在 Agent 配置里。
+    - 其余系统包（word-documents / yinli-charts）同样只在 Agent 配置列出时加入。
+    Agent 配置是能力上限，不能因为包已 seed 就对所有 Agent 生效。
+    """
 
     if not inject:
         return used_skills
     from src.catalog.skill_seed import seed_system_skills
-    from src.catalog.skills import SYSTEM_SKILL_IDS
+    from src.catalog.skills import ALWAYS_INJECTED_SKILL_IDS, SYSTEM_SKILL_IDS
     from src.server.routes.skills import get_installed_skill
 
     seed_system_skills()
+    allowed = set(configured_skill_ids)
     merged = list(used_skills)
     seen = {getattr(skill, "id", "") for skill in merged}
     for skill in external_skills:
         if getattr(skill, "source_scope", "") != "project" or not getattr(skill, "enabled", False):
             continue
-        if skill.id in seen:
+        if skill.id in seen or skill.id not in allowed:
             continue
         merged.append(skill)
         seen.add(skill.id)
     for skill_id in SYSTEM_SKILL_IDS:
         if skill_id in seen:
+            continue
+        if skill_id not in ALWAYS_INJECTED_SKILL_IDS and skill_id not in allowed:
             continue
         skill = get_installed_skill(skill_id)
         if skill is None:

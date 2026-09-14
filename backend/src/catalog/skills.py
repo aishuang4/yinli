@@ -16,6 +16,8 @@ from src.catalog.paths import workspace_catalog_root
 from src.config.runtime_paths import SKILL_PACKAGES_ROOT
 
 SYSTEM_SKILL_IDS = ("yinli-catalog", "yinli-charts", "word-documents")
+# 单 Agent Chat 无条件追加的系统说明书（file-catalog-v1 §9.2）；其余系统包仍受 Agent 配置约束。
+ALWAYS_INJECTED_SKILL_IDS = ("yinli-catalog",)
 _SKILL_DIR_NAMES = (".agents/skills", ".agent/skills", ".claude/skills")
 _FRONTMATTER_RE = re.compile(r"\A---\s*\n(?P<yaml>.*?)\n---\s*\n?(?P<body>.*)\Z", re.DOTALL)
 
