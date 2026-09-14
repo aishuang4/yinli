@@ -170,6 +170,31 @@ def test_register_user_skill_writes_standard_skill_package(tmp_path, monkeypatch
         skills_routes._skills.update(original_skills)
 
 
+def test_ensure_skill_package_tolerates_overlong_legacy_fields(tmp_path, monkeypatch):
+    """历史自进化 Skill 的 trigger 超过 200 字时不得抛 ValidationError，而应截断后落包。"""
+
+    import src.server.routes.skills as skills_routes
+
+    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    legacy = skills_routes.Skill(
+        id="legacy-long-trigger",
+        name="历史超长触发词",
+        description="自进化产生的 Skill。",
+        category="自进化",
+        trigger="当用户" + "反复要求整理会议纪要并输出行动项" * 30,
+        content="1. 整理纪要。\n",
+        updatedAt="2026-09-01T00:00:00+00:00",
+    )
+    assert len(legacy.trigger) > 200
+
+    ensured = skills_routes._ensure_skill_package(legacy)
+
+    assert ensured.content.startswith("---")
+    assert (tmp_path / "skill_packages" / "历史超长触发词" / "SKILL.md").exists()
+    metadata, _ = skills_routes._split_frontmatter(ensured.content)
+    assert len(str(metadata["trigger"])) <= 200
+
+
 def test_export_skill_archive_contains_standard_skill_md(tmp_path, monkeypatch):
     """导出 Skill 时 zip 内必须包含标准 SKILL.md。"""
 

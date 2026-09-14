@@ -7,6 +7,7 @@ MVP 阶段使用内存 registry + JSON 文件持久化用户 Skill。
 
 import json
 import hashlib
+import logging
 import os
 import re
 import shutil
@@ -49,6 +50,7 @@ from src.storage.database import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 _job_service = ScheduledJobService()
 
 SkillInstallStatus = Literal["available", "installed", "error"]
@@ -234,6 +236,16 @@ def _skill_markdown_from_registration(data: SkillRegisterRequest) -> str:
     return f"---\n{frontmatter}\n---\n\n{body.strip()}\n"
 
 
+def _clip_text(value: Optional[str], limit: int) -> str:
+    """把字段裁到注册请求允许的最大长度，超长时记录 warning。"""
+
+    text = (value or "").strip()
+    if len(text) <= limit:
+        return text
+    logger.warning("Skill 字段超过 %s 字，已截断: %r", limit, text[:40])
+    return text[:limit].rstrip()
+
+
 def _ensure_skill_package(skill: Skill) -> Skill:
     """为历史用户 Skill 补齐标准 Skill 包目录。"""
 
@@ -249,13 +261,15 @@ def _ensure_skill_package(skill: Skill) -> Skill:
 
     markdown = (skill.content or "").strip()
     if not markdown.startswith("---"):
+        # 历史 / 自进化 Skill 的字段可能超过注册请求上限（例如 trigger > 200 字），
+        # 这里按上限截断而不是抛 ValidationError，否则启动导入会整体崩溃。
         markdown = _skill_markdown_from_registration(
             SkillRegisterRequest(
-                name=skill.name,
-                description=skill.description,
-                category=skill.category,
-                trigger=skill.trigger,
-                content=markdown,
+                name=_clip_text(skill.name, 80) or skill.id,
+                description=_clip_text(skill.description, 300),
+                category=_clip_text(skill.category, 40) or "自定义",
+                trigger=_clip_text(skill.trigger, 200),
+                content=_clip_text(markdown, 12000),
                 tags=skill.tags,
             )
         )
@@ -431,10 +445,18 @@ def _load_user_skills() -> None:
         replace_skills({str(item["id"]): item for item in legacy if item.get("id")})
         records = db_list_skills()
     for item in records:
-        skill = Skill.model_validate(item)
+        try:
+            skill = Skill.model_validate(item)
+        except Exception:
+            logger.exception("跳过无法解析的 Skill 记录: %s", item.get("id"))
+            continue
         if skill.id not in _builtin_skills:
-            skill = _ensure_skill_package(skill)
-            skill = _hydrate_skill(skill)
+            # 单个历史 Skill 补包失败不能拖垮整个后端启动，退回原始记录继续加载。
+            try:
+                skill = _ensure_skill_package(skill)
+                skill = _hydrate_skill(skill)
+            except Exception:
+                logger.exception("Skill %s 补齐标准包失败，按原始记录加载", skill.id)
         _skills[skill.id] = skill
     _load_system_packages()
     _save_user_skills()

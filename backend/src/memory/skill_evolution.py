@@ -261,13 +261,14 @@ def register_skill_evolution_record(record: dict[str, Any]) -> tuple[dict[str, A
 
     from src.server.routes.skills import SkillRegisterRequest, register_user_skill
 
+    # 草稿字段由模型生成，长度不受控；按注册请求上限裁剪，避免 ValidationError 中断注册。
     skill = register_user_skill(
         SkillRegisterRequest(
-            name=str(record.get("draftSkillName") or "").strip(),
-            description=str(record.get("draftSkillDescription") or "").strip(),
+            name=str(record.get("draftSkillName") or "").strip()[:80],
+            description=str(record.get("draftSkillDescription") or "").strip()[:300],
             category="自进化",
-            trigger=str(record.get("triggerDescription") or "").strip(),
-            content=str(record.get("draftSkillContent") or "").strip(),
+            trigger=str(record.get("triggerDescription") or "").strip()[:200],
+            content=str(record.get("draftSkillContent") or "").strip()[:12000],
             tags=[
                 str(tag).strip()
                 for tag in list(record.get("draftTags") or [])
