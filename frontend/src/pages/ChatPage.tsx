@@ -33,6 +33,8 @@ import { ChatComposer } from '../features/chat/ChatComposer';
 import { PlanReviewComposer } from '../features/chat/PlanReviewComposer';
 import { PlanFloatingPanel } from '../features/chat/PlanFloatingPanel';
 import { ChatHistoryPanel } from '../features/chat/ChatHistoryPanel';
+import { ChatContextMeter } from '../features/chat/ChatContextMeter';
+import { selectLatestContextUsage } from '../features/chat/contextUsage';
 import { NotificationBell } from '../features/notifications/NotificationBell';
 import { useGroupStudioEntry } from '../features/group-studio/useGroupStudioEntry';
 import { selectLatestPlan, selectPendingPlanReview, type PlanReviewData } from '../features/chat/planReviewUtils';
@@ -171,6 +173,10 @@ export function ChatPage() {
   );
   const latestPlan = useMemo(
     () => selectLatestPlan(messages.map((message) => message.displaySnapshot), snapshot),
+    [messages, snapshot],
+  );
+  const contextUsage = useMemo(
+    () => selectLatestContextUsage(snapshot, messages),
     [messages, snapshot],
   );
   const planIdentity = latestPlan ? `${latestPlan.planId}:${latestPlan.revision}` : '';
@@ -713,7 +719,8 @@ export function ChatPage() {
               </Tag>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-3">
+            <ChatContextMeter usage={contextUsage} />
             <NotificationBell />
             <Tooltip title="工作台设置" placement="bottom" mode="dark">
               <button

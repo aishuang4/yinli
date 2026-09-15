@@ -127,6 +127,7 @@ export function createCoreBlockRegistry(): BlockRegistry {
   registry.register(textModule('thinking', '思考', ProcessTextBlockView, 'process'));
   registry.register(toolModule);
   registry.register(recordModule('skill', 'Skill', SkillBlockView));
+  registry.register(recordModule('context', '上下文', () => null, 'detached'));
   registry.register(recordModule('approval', '人工确认', ApprovalBlockView));
   registry.register(recordModule('plan', '计划', PlanBlockView, 'detached'));
   registry.register(recordModule('artifact', '产物', ArtifactBlockView, 'supplement'));

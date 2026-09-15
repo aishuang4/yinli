@@ -76,6 +76,7 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
             "CLARIFICATION_REQUIRED": self._interaction_started,
             "TEAM_DOMAIN_EVENT": self._team_event,
             "ERROR": self._error,
+            "CONTEXT_USAGE": self._context_usage,
             "RUN_CANCELLED": lambda value: self.finish("cancelled", value),
         }.get(event_type)
         if handler:
@@ -225,6 +226,37 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
         )
         self._active.pop(block_id, None)
         return [event]
+
+    def _context_usage(self, data: dict[str, Any]) -> list[DomainEvent]:
+        payload = data.get("payload") if isinstance(data.get("payload"), dict) else data
+        if not isinstance(payload, dict) or not payload:
+            return []
+        block_id = f"context:{self.run_id}"
+        stats = {
+            key: payload.get(key)
+            for key in (
+                "systemPromptChars",
+                "summaryChars",
+                "contextChars",
+                "contextMessages",
+                "toolResultBlocks",
+                "toolCount",
+                "contextWindow",
+                "triggerRatio",
+                "triggerTokens",
+                "estimatedTokens",
+                "compressed",
+                "overTrigger",
+                "inputTokens",
+                "outputTokens",
+            )
+            if key in payload
+        }
+        if not stats:
+            return []
+        if block_id not in self._active:
+            return self._start_block("context", block_id, "context", stats)
+        return [self._delta_block("context", block_id, "context", stats, event_suffix="updated")]
 
     def _skill_started(self, data: dict[str, Any]) -> list[DomainEvent]:
         produced: list[DomainEvent] = []

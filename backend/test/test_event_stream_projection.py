@@ -429,6 +429,46 @@ def test_source_normalizer_closes_all_activity_before_run_completed(projection_d
     assert state.snapshot.blocks_by_id["message:run-normalized"].outcome == "completed"
 
 
+def test_source_normalizer_projects_context_usage_and_closes_before_done(projection_db) -> None:
+    events, store, coordinator, runner = create_runtime()
+    normalizer = ChatProjectionNormalizer(
+        stream_key="stream-context",
+        run_id="run-context",
+        session_id="session-context",
+        events=events,
+    )
+    normalizer.start(agent_name="Agent")
+    started = normalizer.ingest("CONTEXT_USAGE", {
+        "contextWindow": 32_768,
+        "triggerRatio": 0.8,
+        "triggerTokens": 26_214,
+        "estimatedTokens": 1_200,
+        "compressed": 0,
+        "overTrigger": 0,
+        "contextMessages": 4,
+    })
+    updated = normalizer.ingest("CONTEXT_USAGE", {
+        "inputTokens": 1_800,
+        "outputTokens": 40,
+        "overTrigger": 0,
+    })
+    normalizer.ingest("FINAL_ANSWER_DELTA", {"delta": "结果"})
+    terminal = normalizer.ingest("RUN_COMPLETED", {"payload": {}})
+
+    assert started[0].type == "context.started"
+    assert updated[0].type == "context.updated"
+    assert terminal[-1].type == "run.completed"
+    assert runner.run_available("stream-context", "run-context") == len(events.list("stream-context"))
+    state = store.load_materialized("stream-context", coordinator)
+    block = state.snapshot.blocks_by_id["context:run-context"]
+    assert state.snapshot.stream_done is True
+    assert block.phase == "closed"
+    assert block.data["estimatedTokens"] == 1_200
+    assert block.data["inputTokens"] == 1_800
+    assert block.data["contextWindow"] == 32_768
+    assert all(item.phase == "closed" for item in state.snapshot.blocks_by_id.values())
+
+
 def test_real_team_outbox_projects_incremental_block_tree(projection_db, tmp_path) -> None:
     """真实 TeamStore 事件必须生成规范化子树，且发布事件不得携带完整 snapshot。"""
 

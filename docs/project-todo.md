@@ -7,7 +7,7 @@
 - [ ] 在 Docker daemon 可用的环境完成 `DockerWorkspace` 真实 Runtime 门禁（多供应商切换已于 2026-09-14 桌面打包版验证通过，见 handoff），结果写回 `docs/project-progress-handoff.md`。
 - [ ] 补齐 RuntimeFrame / DisplaySnapshot V4 浏览器回归矩阵，覆盖 Plan finalized、HITL、AskUser、工具失败、取消和刷新恢复。
 - [ ] 增加关键 Chat 工作流的 Playwright 测试，避免只依赖 reducer 和后端单测。
-- [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor 和 ToolScope 摘要，以及 `MODEL_CALL_START.contextStats`（2026-09-14 后端已写入，前端未展示）。
+- [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor 和 ToolScope 摘要，以及 `MODEL_CALL_START.contextStats`（Chat 顶栏已展示上下文占用，Trace 页仍未展示）。
 - [ ] 用真实供应商验证 2026-09-14 的 ReAct 上下文改造：多轮同会话 token 曲线应不再随轮次线性增长；`FinalAnswerStart` 放宽后无工具回答的乐观流式阈值（600 字）是否合理；实例搬运后 AskUser 未回应场景无 `tool_call_id` 不匹配报错。
 - [ ] Agent 缓存的 LRU 上限 / 闲置时长目前是常量（48 / 6h），后续如需按部署规模调节再进系统设置。
 - [ ] `SkillContextMiddleware` 目前只挂在单 Agent；Team Leader / Member（`team_runtime/member_runtime.py`）与群聊工作室 Worker 仍是"读完即扔"，需要时按同一 middleware 接入。Skill 正文补回目前不发 SSE 事件，前端看不到"哪些 Skill 仍在生效"。

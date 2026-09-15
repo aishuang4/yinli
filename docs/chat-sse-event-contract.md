@@ -185,6 +185,7 @@ type DisplaySnapshot = {
 | `thinking` | 模型思考 | 字符串追加或 `{replace}` |
 | `tool` | 工具调用与结果摘要 | 结构化合并；input/output delta 追加 |
 | `skill` | Skill 生命周期 | 浅合并结构化字段 |
+| `context` | 当前会话上下文占用与压缩阈值 | 浅合并结构化字段；Chat 顶栏读取，消息树不渲染 |
 | `approval` | HITL / AskUser | 浅合并；resume 后 close |
 | `plan` | Plan Mode 和任务进度 | 浅合并结构化字段 |
 | `artifact` | 产物摘要与下载引用 | 浅合并结构化字段 |
@@ -198,6 +199,32 @@ type DisplaySnapshot = {
 | `team-mail` | 单条 Mailbox 消息与 delivery 状态 | 浅合并结构化字段 |
 
 新增展示能力只能新增一个后端 per-kind projector 和一个前端 Block module。不得增加 RuntimeFrame op、顶层 SSE 事件、公共 reducer 分支或 payload 反解析。
+
+`kind=context` 是 detached Block：消息树不渲染，Chat 顶栏读取当前会话最近一次模型调用的占用。同一 Run 只有一个 `context:{runId}` Block，后续 `MODEL_CALL_START/END` 浅合并更新。`data` 固定包含：
+
+```ts
+type ContextBlockData = {
+  systemPromptChars?: number;
+  summaryChars?: number;
+  contextChars?: number;
+  contextMessages?: number;
+  toolResultBlocks?: number;
+  toolCount?: number;
+  contextWindow?: number;
+  triggerRatio?: number;
+  triggerTokens?: number;
+  estimatedTokens?: number;
+  compressed?: 0 | 1;
+  overTrigger?: 0 | 1;
+  inputTokens?: number;
+  outputTokens?: number;
+};
+```
+
+- `estimatedTokens` 是字符级估算（不额外调用 tokenizer）；`inputTokens` 在模型调用结束后为供应商回报，顶栏优先显示它。
+- `compressed=1` 表示 AgentScope `state.summary` 已有压缩摘要。
+- `overTrigger=1` 表示占用已达到 `ContextConfig.trigger_ratio`（默认窗口的 80%）阈值。
+- `contextWindow` 来自模型 `context_size`（AgentScope 默认 32768）。
 
 最终回答的 `text` Block 必须保留上游模型的增量节奏。Provider thinking 只投影到 `thinking`
 Block，不得用 thinking 到普通文本的边界推断最终回答已经开始；深度思考模型仍可能在调用业务

@@ -60,6 +60,7 @@ def default_projection_registry() -> ProjectionRegistry:
     from .projectors.subagent import EVENT_TYPES as SUBAGENT_EVENTS, project as project_subagent
     from .projectors.team import EVENT_TYPES as TEAM_EVENTS, project as project_team
     from .projectors.thinking import EVENT_TYPES as THINKING_EVENTS, project as project_thinking
+    from .projectors.context import EVENT_TYPES as CONTEXT_EVENTS, project as project_context
 
     registry = ProjectionRegistry()
     registry.register(MESSAGE_EVENTS, project_message)
@@ -74,4 +75,5 @@ def default_projection_registry() -> ProjectionRegistry:
     registry.register(ERROR_EVENTS, project_error)
     registry.register(SUBAGENT_EVENTS, project_subagent)
     registry.register(TEAM_EVENTS, project_team)
+    registry.register(CONTEXT_EVENTS, project_context)
     return registry

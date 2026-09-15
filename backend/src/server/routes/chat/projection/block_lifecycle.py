@@ -94,6 +94,7 @@ DEFAULT_BLOCK_MODULES = {
     "thinking": BlockDataModule(empty="", reduce=_append_text),
     "tool": BlockDataModule(empty={}, reduce=_reduce_tool),
     "skill": BlockDataModule(empty={}, reduce=_merge_mapping),
+    "context": BlockDataModule(empty={}, reduce=_merge_mapping),
     "approval": BlockDataModule(empty={}, reduce=_merge_mapping),
     "plan": BlockDataModule(empty={}, reduce=_merge_mapping),
     "artifact": BlockDataModule(empty={}, reduce=_merge_mapping),

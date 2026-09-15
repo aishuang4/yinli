@@ -5,6 +5,7 @@
 
 import json
 import re
+from typing import Any
 
 from src.agents.factory import AgentGuardrails
 from src.security.permissions import (
@@ -295,13 +296,13 @@ def _tool_input_preview(tool_calls: list[ChatToolRun] | None, tool_call_id: str)
     return ""
 
 
-def build_model_call_context_stats(agent: object) -> dict[str, int]:
+def build_model_call_context_stats(agent: object) -> dict[str, Any]:
     """统计本次模型调用的上下文规模：system prompt / 压缩摘要 / 对话消息数与字符数 / 工具数。
 
-    只做字符级估算，不再多调一次模型或 tokenizer；用于在 Trace 里定位上下文膀胀来源。
+    只做字符级估算，不再多调一次模型或 tokenizer；供 Trace 和 Chat 顶栏对照窗口、压缩阈值。
     """
 
-    stats: dict[str, int] = {}
+    stats: dict[str, Any] = {}
     system_prompt = getattr(agent, "_system_prompt", None)
     if isinstance(system_prompt, str):
         stats["systemPromptChars"] = len(system_prompt)
@@ -337,7 +338,39 @@ def build_model_call_context_stats(agent: object) -> dict[str, int]:
     groups = getattr(toolkit, "tool_groups", None)
     if isinstance(groups, list):
         stats["toolCount"] = sum(len(getattr(group, "tools", []) or []) for group in groups)
+    model = getattr(agent, "model", None)
+    window = int(getattr(model, "context_size", 0) or 0)
+    if window > 0:
+        stats["contextWindow"] = window
+    config = getattr(agent, "context_config", None)
+    trigger_ratio = float(getattr(config, "trigger_ratio", 0.8) or 0.8)
+    stats["triggerRatio"] = round(trigger_ratio, 3)
+    if window > 0:
+        stats["triggerTokens"] = int(window * trigger_ratio)
+    total_chars = int(stats.get("systemPromptChars") or 0) + int(stats.get("summaryChars") or 0) + int(stats.get("contextChars") or 0)
+    # 中文接近 1 字 1 token，英文约 4 字符；取折中估算，供 UI 对照窗口。
+    stats["estimatedTokens"] = max(1, total_chars // 2) if total_chars else 0
+    stats["compressed"] = 1 if int(stats.get("summaryChars") or 0) > 0 else 0
+    apply_context_usage_threshold(stats)
     return stats
+
+
+def apply_context_usage_threshold(stats: dict[str, Any]) -> dict[str, Any]:
+    """按供应商回报 token 优先、否则按估算，对照压缩阈值。"""
+
+    used = int(stats.get("inputTokens") or stats.get("estimatedTokens") or 0)
+    trigger = int(stats.get("triggerTokens") or 0)
+    if trigger:
+        stats["overTrigger"] = 1 if used >= trigger else 0
+    return stats
+
+
+def apply_model_call_token_usage(stats: dict[str, Any], event_data: dict[str, Any]) -> dict[str, Any]:
+    """把 MODEL_CALL_END 的供应商用量写进占用统计，并重算是否越过压缩阈值。"""
+
+    stats["inputTokens"] = int(event_data.get("input_tokens") or 0)
+    stats["outputTokens"] = int(event_data.get("output_tokens") or 0)
+    return apply_context_usage_threshold(stats)
 
 
 def _record_agent_scope_event(

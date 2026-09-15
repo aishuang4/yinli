@@ -25,6 +25,7 @@ class DomainCompletionBarrier:
         "thinking": "thinking",
         "tool": "tool.result",
         "skill": "skill",
+        "context": "context",
         "approval": "interaction",
         "plan": "plan",
         "artifact": "artifact",

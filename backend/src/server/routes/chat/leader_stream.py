@@ -8,6 +8,10 @@ from agentscope.event import ExternalExecutionResultEvent
 from agentscope.message import UserMsg
 
 from src.server.routes.chat.helpers import _set_skill_run_status, source_event
+from src.server.routes.chat.trace_recorder import (
+    apply_model_call_token_usage,
+    build_model_call_context_stats,
+)
 from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload
 from src.server.routes.chat.hitl_unattended import (
     MAX_UNATTENDED_TOOL_DENIALS,
@@ -318,6 +322,15 @@ async def stream_leader_agent_reply(
             tool_calls=state.assistant_tool_calls,
             agent=agent,
         )
+        if event_type in {"MODEL_CALL_START", "MODEL_CALL_END"}:
+            try:
+                stats = build_model_call_context_stats(agent)
+            except Exception:
+                stats = {}
+            if event_type == "MODEL_CALL_END":
+                apply_model_call_token_usage(stats, event_data)
+            if stats:
+                yield source_event("CONTEXT_USAGE", stats)
         _record_permission_decision(
             session_id=session_id,
             event_type=event_type,
