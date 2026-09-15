@@ -18,7 +18,7 @@ from src.server.routes.chat.team_runtime.maintenance import (
     delete_team_runs_for_session,
 )
 from src.server.routes.chat.team_runtime.store import TeamStoreError
-from src.storage.database import DEFAULT_PROJECT_ID, get_project
+from src.storage.database import DEFAULT_PROJECT_ID, delete_session_context_state, get_project
 
 _SESSION_KINDS = {"chat", "scheduled_job", "all"}
 
@@ -141,6 +141,8 @@ async def delete_session(
     store.sessions = [session for session in store.sessions if session.id != session_id]
     store.messages.pop(session_id, None)
     _save_store(store)
+    # 压缩摘要 / 已启用 Skill 等会话级上下文状态一并清理。
+    delete_session_context_state(session_id)
 
 
 def _normalize_history_messages(

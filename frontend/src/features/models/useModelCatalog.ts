@@ -8,6 +8,8 @@ export interface ModelProvider {
 export interface ModelEntry {
   id: string; providerId: string; model: string; label: string; enabled: boolean;
   fallbackModelIds: string[];
+  /** 上下文窗口（tokens）；0 表示按供应商默认，后端据此决定压缩阈值。 */
+  contextSize?: number;
   parameters: { temperature: number; topP: number; maxTokens: number };
   capabilities: { images: boolean };
 }

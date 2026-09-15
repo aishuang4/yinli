@@ -1,6 +1,6 @@
 # 引力 YINLI TODO
 
-> 最后更新：2026-09-14。本文只保留尚未完成的任务。
+> 最后更新：2026-09-15。本文只保留尚未完成的任务。
 
 ## P0. Runtime 稳定性
 
@@ -9,6 +9,9 @@
 - [ ] 增加关键 Chat 工作流的 Playwright 测试，避免只依赖 reducer 和后端单测。
 - [ ] 在 Trace 前端展示 `INTENT_ROUTE` 的 readiness、runtime、executor 和 ToolScope 摘要，以及 `MODEL_CALL_START.contextStats`（Chat 顶栏已展示上下文占用，Trace 页仍未展示）。
 - [ ] 用真实供应商验证 2026-09-14 的 ReAct 上下文改造：多轮同会话 token 曲线应不再随轮次线性增长；`FinalAnswerStart` 放宽后无工具回答的乐观流式阈值（600 字）是否合理；实例搬运后 AskUser 未回应场景无 `tool_call_id` 不匹配报错。
+- [ ] 用真实供应商验证 2026-09-15 的上下文治理：顶栏 `estimateErrorPct` 在中文 / 代码 / 表格场景的分布（若系统性偏低需给 bytes/4 加权）；长会话中 `stubbedToolResults` 增长后模型是否会为存根重新调用工具；`CONTEXT_COMPRESSED` 后 `context_to_preserve` 是否真的带上已读 Skill 名称；`reserve_ratio=0.2` 是否让压缩后立刻再触发。
+- [ ] 一级整理目前只做"存根化"，没有把原文写到 workspace 供模型 Read 回来；如果实测模型经常需要旧输出，改为落盘 + 存根里给路径。
+- [ ] `session_context_state` 只在单 Agent ReAct 路径读写；Team Leader / Member 与群聊 Worker 的压缩摘要仍不落库。
 - [ ] Agent 缓存的 LRU 上限 / 闲置时长目前是常量（48 / 6h），后续如需按部署规模调节再进系统设置。
 - [ ] `SkillContextMiddleware` 目前只挂在单 Agent；Team Leader / Member（`team_runtime/member_runtime.py`）与群聊工作室 Worker 仍是"读完即扔"，需要时按同一 middleware 接入。Skill 正文补回目前不发 SSE 事件，前端看不到"哪些 Skill 仍在生效"。
 

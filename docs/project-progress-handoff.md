@@ -1,6 +1,6 @@
 # 引力 YINLI 项目进展与协作交接
 
-> 更新时间：2026-09-14。本文只记录当前完成度、验证结果和已知缺口。
+> 更新时间：2026-09-15。本文只记录当前完成度、验证结果和已知缺口。
 
 ## 2026-09-14 上线前核查
 
@@ -28,6 +28,20 @@
 - 桌面端真实轨迹复核（qwen3.8-27b，5 轮 24 次模型调用）：同一轮内 `cache_input_tokens` 从 5760 逐步升到 25728，前缀 cache 正常命中；但每个新轮次的第一次调用 `cache_input_tokens` 都是 0。原因是每轮结束后台新增一条历史记忆节点，下一轮的记忆摘要（在 system prompt 里）变了几十个字符。现在记忆注入文本按 `(agent_id, session_id)` 冻结（`routes/chat/memory_prompt_cache.py`，TTL 6h，Memory 页面手动改写时失效），会话内 system prompt 字节一致。
 - Trace 观测：`MODEL_CALL_START` 增加 `contextStats`；`TOOL_CALL_END` / `TOOL_RESULT_START` 增加脱敏 `inputPreview`；`sanitizer` 新增 JSON 凭据模式。
 - 验证：后端全量 `769 passed, 2 skipped`；真实 AgentScope 实例烟测（重建历史 → HintBlock 注入 → 配置变化搬运上下文）通过。真实供应商多轮 token 曲线尚未复测，记在 TODO。
+
+## 2026-09-15 上下文窗口与压缩治理
+
+在 Chat 顶栏上下文占用 meter（`e7439df`）之上，按 `docs/architecture-overview.md` "上下文窗口与压缩治理" 落地：
+
+- 窗口按模型：`ModelEntry.contextSize`（models.json / 模型管理页新增字段，0 = 按供应商默认）+ adapter 默认表 + 降级链取最小；此前所有模型都用 AgentScope 默认 32768，128k 模型在 26k 就触发压缩。
+- 估算同源：`estimatedTokens` 改为与 AgentScope `count_tokens` 同一算法（utf-8 字节 / 4 + 工具 schema JSON + DataBlock 2000），`MODEL_CALL_END` 后记录 `estimateErrorPct` 供校准；此前是字符折半，另一套口径。桌面轨迹粗算（52.9k 字符 + 工具 schema → 27.7k 实际 tokens）显示 bytes/4 对中英混合内容偏差不大，不另加 CJK 权重。
+- `ContextConfig`：`trigger_ratio` 0.8 → 0.75、`reserve_ratio` 0.1 → 0.2；summary schema 去掉从未被模板渲染的 `title` / `summary` 字段，改用 `additionalProperties=True` 容忍；`maxLength` 保持 2000 / 1200（jsonschema 严格校验，收紧会让压缩失败中断运行）。
+- 一级无模型整理 `ContextHygieneMiddleware`：早于最近 2 轮、超过 600 字的工具输出存根化，旧图片换文字占位；`Skill` 正文不动。累计计数进入 `CONTEXT_USAGE`。
+- 压缩可观测 `ContextCompressionMiddleware`：真正压缩时记录前后消息数 / 摘要长度 / 耗时，写 `CONTEXT_COMPRESSED` trace；`state.session_id` 设为 Chat session，offloader 目录不再随机。
+- 会话状态落库：新增 `session_context_state` 表保存 `state.summary` + 可 JSON 化的 `middle_context`（已启用 Skill 正文、治理计数），每轮结束写、实例重建时恢复、会话删除时清理。
+- system prompt 瘦身：Clarification / Final Answer 契约从约 2.5k 字压到约 1.1k，问题数量 / 类型 / `FinalAnswerStart` 用法细节移入 `AskUser` / `FinalAnswerStart` 工具 description；历史记忆索引只留 `date | nodeId | title`，节点 `summary` 改为"请求要点 → 结果要点"一句话（≤170 字，去 Markdown 噪音），不再复制 700 字原文。
+- 观测：`contextStats` / `CONTEXT_USAGE` 新增 `promptSections`（system prompt 分段字数）、`toolSchemaChars`、`dataBlocks`、`compressionCount`、`stubbedToolResults` / `droppedImages` / `hygieneSavedChars`；顶栏 tooltip 展示压缩次数、整理统计、估算偏差和最大的几段 prompt。`contextUsage.ts` 不再依赖 `runtime-stream/selectors`（避免把 Block 渲染模块拉进纯数据层，vitest 因此能跑）。
+- 验证：后端全量 `790 passed, 2 skipped`；前端 `vitest` 12 passed、`tsc -b`、`eslint` 通过。真实供应商下的压缩触发 / 存根化效果尚未复测，记在 TODO。
 
 ## 本轮模型配置改造
 

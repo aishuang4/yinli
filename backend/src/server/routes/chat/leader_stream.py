@@ -10,7 +10,8 @@ from agentscope.message import UserMsg
 from src.server.routes.chat.helpers import _set_skill_run_status, source_event
 from src.server.routes.chat.trace_recorder import (
     apply_model_call_token_usage,
-    build_model_call_context_stats,
+    build_model_call_context_stats_async,
+    record_context_compression_events,
 )
 from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload
 from src.server.routes.chat.hitl_unattended import (
@@ -311,6 +312,23 @@ async def stream_leader_agent_reply(
             if cache_entry:
                 state.assistant_model_caches.append(cache_entry)
 
+        stats: dict = {}
+        if event_type in {"MODEL_CALL_START", "MODEL_CALL_END"}:
+            # 先把 AgentScope 刚完成的压缩写成 trace，再统计本次调用的上下文规模。
+            record_context_compression_events(
+                agent=agent,
+                session_id=session_id,
+                persist=persist,
+                scope=stream_scope,
+                agent_id=agent_id,
+                agent_name=agent_name,
+            )
+            try:
+                stats = await build_model_call_context_stats_async(agent)
+            except Exception:
+                stats = {}
+            if event_type == "MODEL_CALL_END":
+                apply_model_call_token_usage(stats, event_data)
         _record_agent_scope_event(
             session_id=session_id,
             event_type=event_type,
@@ -321,16 +339,10 @@ async def stream_leader_agent_reply(
             agent_name=agent_name,
             tool_calls=state.assistant_tool_calls,
             agent=agent,
+            context_stats=stats or None,
         )
-        if event_type in {"MODEL_CALL_START", "MODEL_CALL_END"}:
-            try:
-                stats = build_model_call_context_stats(agent)
-            except Exception:
-                stats = {}
-            if event_type == "MODEL_CALL_END":
-                apply_model_call_token_usage(stats, event_data)
-            if stats:
-                yield source_event("CONTEXT_USAGE", stats)
+        if stats:
+            yield source_event("CONTEXT_USAGE", stats)
         _record_permission_decision(
             session_id=session_id,
             event_type=event_type,

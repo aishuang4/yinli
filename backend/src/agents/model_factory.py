@@ -30,6 +30,29 @@ from src.agents.runtime_types import AgentModelOptions, FallbackEventCallback
 from src.config.runtime_settings import ResolvedModel, binding_for_model
 
 
+# 各 adapter 的默认上下文窗口（tokens）。AgentScope 默认 32768 会让 128k 模型在用掉四分之一时就触发压缩；
+# 这里按当前主流模型给保守默认值，用户可在 models.json 的 contextSize 覆盖。
+DEFAULT_CONTEXT_SIZE_BY_ADAPTER: dict[str, int] = {
+    "deepseek": 128_000,
+    "dashscope": 131_072,
+    "openai": 128_000,
+    "moonshot": 128_000,
+    "anthropic": 200_000,
+    "gemini": 1_000_000,
+    "ollama": 32_768,
+}
+FALLBACK_CONTEXT_SIZE = 32_768
+
+
+def resolve_context_size(resolved: ResolvedModel) -> int:
+    """模型条目显式配置优先，否则按 adapter 默认；都没有时回到 AgentScope 默认 32k。"""
+
+    configured = int(getattr(resolved.entry, "context_size", 0) or 0)
+    if configured > 0:
+        return configured
+    return DEFAULT_CONTEXT_SIZE_BY_ADAPTER.get(str(resolved.adapter), FALLBACK_CONTEXT_SIZE)
+
+
 def create_model(
     model_name: str,
     stream: bool = True,
@@ -59,6 +82,7 @@ def create_model(
     }
     api_key = SecretStr(runtime.api_key)
     base_url = runtime.base_url or None
+    context_size = resolve_context_size(runtime)
 
     if runtime.adapter == "openai":
         return OpenAIChatModel(
@@ -67,6 +91,7 @@ def create_model(
             parameters=OpenAIChatModel.Parameters(**parameters),
             stream=stream,
             max_retries=3,
+            context_size=context_size,
         )
     if runtime.adapter == "deepseek":
         return DeepSeekChatModel(
@@ -75,6 +100,7 @@ def create_model(
             parameters=DeepSeekChatModel.Parameters(**parameters),
             stream=stream,
             max_retries=3,
+            context_size=context_size,
         )
     if runtime.adapter == "moonshot":
         return MoonshotChatModel(
@@ -83,6 +109,7 @@ def create_model(
             parameters=MoonshotChatModel.Parameters(**parameters),
             stream=stream,
             max_retries=3,
+            context_size=context_size,
         )
     if runtime.adapter == "gemini":
         return GeminiChatModel(
@@ -92,6 +119,7 @@ def create_model(
             parameters=GeminiChatModel.Parameters(**parameters),
             stream=stream,
             max_retries=3,
+            context_size=context_size,
         )
     if runtime.adapter == "anthropic":
         anthropic_parameters = {
@@ -105,6 +133,7 @@ def create_model(
             parameters=AnthropicChatModel.Parameters(**anthropic_parameters),
             stream=stream,
             max_retries=3,
+            context_size=context_size,
         )
     if runtime.adapter == "ollama":
         return OllamaChatModel(
@@ -113,6 +142,7 @@ def create_model(
             parameters=OllamaChatModel.Parameters(**parameters),
             stream=stream,
             max_retries=3,
+            context_size=context_size,
         )
 
     return DashScopeChatModel(
@@ -124,6 +154,7 @@ def create_model(
         parameters=DashScopeChatModel.Parameters(**parameters),
         stream=stream,
         max_retries=3,
+        context_size=context_size,
     )
 
 
@@ -145,7 +176,10 @@ class FallbackChainModel(ChatModelBase):
             parameters=models[0].parameters,
             stream=models[0].stream,
             max_retries=0,
-            context_size=models[0].context_size,
+            # 降级链任何一环都可能真正承接请求，压缩阈值必须按链上最小窗口算。
+            context_size=min(
+                int(getattr(model, "context_size", 0) or FALLBACK_CONTEXT_SIZE) for model in models
+            ),
         )
 
     async def _call_api(

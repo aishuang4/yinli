@@ -105,6 +105,8 @@ class ChatRunContext:
     session_history: list[SessionHistoryMessage] = field(default_factory=list)
     # 本轮附件说明，作为用户消息的一部分进入对话上下文，而不是 system prompt。
     user_message_note: str = ""
+    # system prompt 各段字符数（段名 -> chars），只用于 contextStats / CONTEXT_USAGE 定位膨胀来源。
+    system_prompt_sections: dict[str, int] = field(default_factory=dict)
 
 
 def snapshot_session_history(session_id: str | None, *, limit: int = 40) -> list[SessionHistoryMessage]:
@@ -281,26 +283,25 @@ async def build_chat_run_context(
     # 会话历史不再扁平化进 system prompt：AgentScope `state.context` 是在线记忆，
     # 这里只留一份快照供进程重启后重建。
     session_history = snapshot_session_history(session_id) if persist_run else []
-    system_prompt = "\n\n".join(
-        part
-        for part in [
-            base_system_prompt,
-            _build_project_context_prompt(runtime_context),
-            (
-                _build_job_workspace_prompt(session_workspace_dir)
-                if workspace_override
-                else _build_session_workspace_prompt(session_workspace_dir)
-            ),
-            _build_runtime_context_prompt(),
-            _build_skill_context_prompt() if used_skills else "",
-            intent_route.main_agent_instruction,
-            build_skill_run_system_prompt(active_skill_run),
-            memory_prompt,
-            _build_clarification_system_prompt(),
-            _build_final_answer_system_prompt(),
-        ]
-        if part
-    )
+    prompt_sections: list[tuple[str, str]] = [
+        ("agent", base_system_prompt),
+        ("project", _build_project_context_prompt(runtime_context)),
+        (
+            "workspace",
+            _build_job_workspace_prompt(session_workspace_dir)
+            if workspace_override
+            else _build_session_workspace_prompt(session_workspace_dir),
+        ),
+        ("runtime", _build_runtime_context_prompt()),
+        ("skills", _build_skill_context_prompt() if used_skills else ""),
+        ("route", intent_route.main_agent_instruction),
+        ("skillRun", build_skill_run_system_prompt(active_skill_run)),
+        ("memory", memory_prompt),
+        ("clarification", _build_clarification_system_prompt()),
+        ("finalAnswer", _build_final_answer_system_prompt()),
+    ]
+    system_prompt = "\n\n".join(part for _, part in prompt_sections if part)
+    system_prompt_sections = {name: len(part) for name, part in prompt_sections if part}
 
     runtime_tool_scope = resolve_react_runtime_tool_scope(
         message=run_data.message,
@@ -351,6 +352,7 @@ async def build_chat_run_context(
         extra_filesystem_scopes=extra_filesystem_scopes,
         session_history=session_history,
         user_message_note=_build_file_attachments_user_note(run_data.files),
+        system_prompt_sections=system_prompt_sections,
     )
 
 

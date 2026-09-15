@@ -23,9 +23,9 @@ def test_memory_injection_includes_markdown_sections_and_node_tree():
     assert "Negative Rules" in text
     assert "不要恢复旧 Plan Runtime。" in text
     assert "memory_node_tree" in text
-    # 节点索引压成单行：date | nodeId | title — summary
-    assert "| node-1 |" in text
-    assert "讨论了记忆模块。" in text
+    # 节点索引压成单行、只留标题：date | nodeId | title；摘要按需用 memory_node_query 读取
+    assert "| node-1 | 记忆模块" in text
+    assert "讨论了记忆模块。" not in text
 
 
 def test_memory_injection_prefers_summary_over_source_sections():

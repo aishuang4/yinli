@@ -70,7 +70,7 @@ def build_memory_injection_text(
         )
         node_text = _format_node_tree(tree.get("nodes", []))
         if node_text:
-            sections.append("Recent memory nodes (last 30 days, `date | nodeId | title — summary`):\n" + node_text)
+            sections.append("Recent memory nodes (last 30 days, `date | nodeId | title`; use memory_node_query for details):\n" + node_text)
 
     if not sections:
         return _empty_memory_hint()
@@ -204,11 +204,9 @@ def _format_node_tree(nodes: list[dict]) -> str:
             continue
         seen_titles.add(title_key)
         per_day[date] = per_day.get(date, 0) + 1
-        summary = _trim(node.get("summary", ""), 120)
-        line = f"- {date} | {node.get('nodeId', '')} | {title}"
-        if summary and summary != title:
-            line += f" — {summary}"
-        lines.append(line)
+        # 索引只留日期 / nodeId / 标题：摘要和原文由模型按需通过 memory_node_query 读取，
+        # 不在每轮 system prompt 里重复携带。
+        lines.append(f"- {date} | {node.get('nodeId', '')} | {title}")
     return _trim_block("\n".join(lines), MEMORY_NODE_TREE_CHARS)
 
 

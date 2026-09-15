@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date
 
@@ -71,16 +72,37 @@ def _title_from_user_message(value: str) -> str:
     return normalized[:40].rstrip() + "..."
 
 
+_MARKDOWN_NOISE = re.compile(r"(```.*?```|`[^`]*`|^\s{0,3}#{1,6}\s*|^\s*[-*+]\s+|^\s*\d+\.\s+|\*\*|__|[|>])", re.DOTALL | re.MULTILINE)
+_SENTENCE_END = re.compile(r"(?<=[。！？!?；;])\s*|(?<=[.])\s+")
+
+
+def _first_sentence(value: str, limit: int) -> str:
+    """去掉 Markdown 噪音后取第一句；没有句号就按长度裁。"""
+
+    text = _MARKDOWN_NOISE.sub(" ", value or "")
+    text = " ".join(text.split())
+    if not text:
+        return ""
+    for piece in _SENTENCE_END.split(text):
+        piece = piece.strip()
+        # 跳过"好的""已完成"这类过短的开场白。
+        if len(piece) >= 6:
+            return _trim(piece, limit)
+    return _trim(text, limit)
+
+
 def _summary_from_turn(user_message: str, assistant_text: str) -> str:
-    return _trim(
-        "\n".join(
-            [
-                f"用户请求：{_trim(user_message, 280)}",
-                f"Agent 输出：{_trim(assistant_text, 420)}",
-            ],
-        ),
-        900,
-    )
+    """一句话摘要：请求要点 + 结果要点，控制在约 160 字，供检索命中时快速判断相关性。
+
+    完整原文仍保存在 `user_inputs` / `agent_final_outputs`；摘要不再复制大段输出，
+    否则注入索引和向量文本都会被同一段话撑大。
+    """
+
+    request = _first_sentence(user_message, 60)
+    result = _first_sentence(assistant_text, 100)
+    if request and result:
+        return _trim(f"{request} → {result}", 170)
+    return _trim(request or result or "对话记忆", 170)
 
 
 def _digest_from_turn(user_message: str, assistant_text: str) -> str:

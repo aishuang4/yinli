@@ -12,9 +12,11 @@ class FinalAnswerStart(ToolBase):
 
     name: str = "FinalAnswerStart"
     description: str = (
-        "Call this exactly once immediately before the final user-facing answer. A successful run "
-        "must not end with a final answer unless this tool has been called. Do not put the final "
-        "answer inside this tool; call it, then continue with the final answer as normal assistant text."
+        "Phase marker for the final user-facing answer. Required only after any business tool or AskUser "
+        "has been used in this turn: call it exactly once when no more tools or clarification are needed, "
+        "then write the final answer as normal assistant text. Do not call it for direct answers that used "
+        "no tools, and do not put the answer inside its arguments. The thinking-to-text transition is not "
+        "the final-answer boundary; you may still call tools after thinking."
     )
     input_schema: dict[str, Any] = {
         "type": "object",

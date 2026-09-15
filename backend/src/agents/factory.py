@@ -102,22 +102,31 @@ Rules:
 </agent-skills>
 """
 
+# 压缩摘要各字段上限（字符）。jsonschema 会严格校验 maxLength，模型超长会让压缩失败并中断运行，
+# 因此上限只能放宽不能收紧；靠 compression_prompt 引导精炼。
 CONTEXT_SUMMARY_FIELD_LIMIT = 2000
 CONTEXT_SUMMARY_NEXT_STEPS_LIMIT = 1200
+# 何时压缩 / 压缩后保留多少：窗口的 75% 触发，保留最近约 20% 的原文。
+# 触发点比 AgentScope 默认 0.8 略早，是给 InjectionConfig 提前量 + 一轮工具输出留余量；
+# 保留比例比默认 0.1 高，避免刚压完就丢掉正在处理的文件内容。
+CONTEXT_COMPRESSION_TRIGGER_RATIO = 0.75
+CONTEXT_COMPRESSION_RESERVE_RATIO = 0.2
+# 单条 tool result 进入上下文的 token 上限；超过部分由 AgentScope 截断并写入 workspace。
+CONTEXT_TOOL_RESULT_LIMIT = 4000
+
 
 def _build_context_config() -> ContextConfig:
-    """创建 AgentScope 上下文压缩配置，避免默认摘要字段过短导致运行中断。"""
+    """创建 AgentScope 上下文压缩配置。
+
+    只声明 `summary_template` 会消费的五个字段；此前的 `title` / `summary` 兼容字段
+    从未被模板渲染，只会让模型多花输出 tokens，改为用 additionalProperties 容忍。
+    """
 
     summary_schema = {
         "title": "SummarySchema",
         "description": "用于生成长上下文压缩摘要的结构化模型。",
         "type": "object",
         "properties": {
-            "title": {
-                "type": "string",
-                "maxLength": CONTEXT_SUMMARY_FIELD_LIMIT,
-                "description": "压缩摘要标题；AgentScope 2.0.5 可能在结构化输出中返回该字段。",
-            },
             "task_overview": {
                 "title": "Task Overview",
                 "type": "string",
@@ -146,29 +155,27 @@ def _build_context_config() -> ContextConfig:
                 "title": "Context To Preserve",
                 "type": "string",
                 "maxLength": CONTEXT_SUMMARY_FIELD_LIMIT,
-                "description": "需要保留的用户偏好、项目约定和上下文。",
-            },
-            "summary": {
-                "title": "Legacy Summary",
-                "type": "string",
-                "maxLength": CONTEXT_SUMMARY_FIELD_LIMIT * 3,
-                "description": "兼容旧格式的单字段摘要。优先使用结构化字段；仅在模型无法稳定输出结构化字段时使用。",
+                "description": "需要保留的用户偏好、项目约定、已读过的 Skill 名称和上下文。",
             },
         },
-        "additionalProperties": False,
+        # 不写 required、允许额外字段：模型偶尔多返回 title / summary 之类字段时不能让整轮运行失败；
+        # 缺字段会让 AgentScope 的 summary_template 渲染报错，所以由 compression_prompt 明确要求五段都填。
+        "additionalProperties": True,
     }
     return ContextConfig(
+        trigger_ratio=CONTEXT_COMPRESSION_TRIGGER_RATIO,
+        reserve_ratio=CONTEXT_COMPRESSION_RESERVE_RATIO,
         compression_prompt=(
             "<system-hint>You are compressing the previous conversation so the "
             "agent can continue reliably. Keep every field concise, factual, "
             "and under the schema maxLength. Prefer compact Chinese bullets "
-            "when the conversation is Chinese. Output the structured fields "
+            "when the conversation is Chinese. Fill all five fields "
             "task_overview, current_state, important_discoveries, next_steps, "
-            "and context_to_preserve when possible. Do not copy long tool "
-            "outputs verbatim.</system-hint>"
+            "and context_to_preserve. Use absolute file paths, identifiers and "
+            "dates. Do not copy long tool outputs verbatim.</system-hint>"
         ),
         summary_schema=summary_schema,
-        tool_result_limit=4000,
+        tool_result_limit=CONTEXT_TOOL_RESULT_LIMIT,
     )
 
 

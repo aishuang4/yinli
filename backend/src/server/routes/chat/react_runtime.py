@@ -8,12 +8,17 @@
 第一层 architecture 路由和第二层 executor 选择均在进入本模块前完成。
 """
 
+import logging
 from typing import AsyncGenerator
 
 from agentscope.message import UserMsg
 
 from src.agents.factory import mark_agent_busy, mark_agent_idle
-from src.agents.session_context import seed_context_from_history
+from src.agents.session_context import (
+    restore_session_context_state,
+    seed_context_from_history,
+    snapshot_session_context_state,
+)
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.completion import (
     emit_failed_startup_run,
@@ -24,12 +29,21 @@ from src.server.routes.chat.leader_stream import LeaderStreamState
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.plan_mode.manager import PlanModeManager
 from src.server.routes.chat.plan_mode.middleware import PlanModeMiddleware
+from src.server.routes.chat.context_middleware import (
+    ContextCompressionMiddleware,
+    ContextHygieneMiddleware,
+    set_context_session_id,
+)
 from src.server.routes.chat.skill_context_middleware import (
     SkillContextMiddleware,
     restore_activated_skills,
 )
 from src.server.routes.chat.steer_middleware import RunSteerMiddleware
-from src.storage.database import list_recent_skill_run_names
+from src.storage.database import (
+    list_recent_skill_run_names,
+    load_session_context_state,
+    save_session_context_state,
+)
 from src.server.routes.chat.plan_mode.tools import build_plan_mode_tools
 from src.server.routes.chat.runtime import _build_user_content, _guardrail_cache_key
 from src.server.routes.chat.run_context import ChatRunContext
@@ -42,12 +56,14 @@ from src.server.routes.chat.runtime_builder import (
     build_main_agent_runtime_spec,
     create_main_agent_from_spec,
 )
-from src.server.routes.chat.trace_recorder import _make_fallback_trace_recorder
+from src.server.routes.chat.trace_recorder import PROMPT_SECTIONS_ATTR, _make_fallback_trace_recorder
 from src.server.routes.chat.runtime_events import runtime_source_event
 from src.subagents.manager import SubagentDelegationManager
 from src.subagents.registry import load_subagent_catalog
 from src.tools.delegate_task import build_subagent_tools
 
+
+logger = logging.getLogger(__name__)
 
 def _build_plan_mode_runtime_parts(
     ctx: ChatRunContext,
@@ -114,7 +130,10 @@ def _build_runtime_feature_parts(
         middlewares.append(RunSteerMiddleware())
         # 已读过的 SKILL.md 正文跨轮保留、压缩 / 截断 / 重建后自动补回。
         middlewares.append(SkillContextMiddleware())
-        feature_keys.append("run-steer:skill-context")
+        # 一级无模型整理 + 压缩可观测；都只读写 state.middle_context，实例搬运时随 state 一起走。
+        middlewares.append(ContextHygieneMiddleware())
+        middlewares.append(ContextCompressionMiddleware())
+        feature_keys.append("run-steer:skill-context:context-governance")
 
     catalog = load_subagent_catalog(workspace_dir=str(ctx.runtime_context.project_root))
     if catalog.definitions:
@@ -282,10 +301,15 @@ async def execute_react_runtime(
 
     # 进程内没有这条会话的 AgentScope 上下文（首轮 / 重启 / 实例被淘汰）时，
     # 用已持久化的正文重建精简历史；否则直接沿用实例自带的对话记忆。
+    # offloader 目录和压缩落盘按 Chat 会话分目录；system prompt 分段字数供 CONTEXT_USAGE 定位膨胀来源。
+    set_context_session_id(agent, ctx.session_id)
+    setattr(agent, PROMPT_SECTIONS_ATTR, dict(getattr(ctx, "system_prompt_sections", None) or {}))
     seeded = seed_context_from_history(agent, ctx.session_history)
     if seeded and ctx.session_id and ctx.persist_run:
-        # 历史里的 Skill tool result 不会被重建；用 skill_runs 记录恢复"模型已读过哪些说明书"，
-        # 正文由 SkillContextMiddleware 在本轮 on_reply 时补回 context，避免再读一遍。
+        # 先恢复上一轮落库的压缩摘要与 middleware 跨轮数据（已启用 Skill 正文、治理计数），
+        # 再用 skill_runs 记录兜底恢复"模型已读过哪些说明书"；正文由 SkillContextMiddleware
+        # 在本轮 on_reply 时补回 context，避免再读一遍。
+        _restore_persisted_context_state(agent, ctx.session_id)
         restore_activated_skills(
             agent,
             recent_skill_names=list_recent_skill_run_names(ctx.session_id, ctx.agent_id),
@@ -339,3 +363,37 @@ async def execute_react_runtime(
             yield event
     finally:
         mark_agent_idle(agent)
+        if ctx.persist_run and ctx.session_id:
+            _persist_context_state(agent, ctx.session_id, ctx.agent_id)
+
+
+def _restore_persisted_context_state(agent: object, session_id: str) -> None:
+    """进程内没有会话上下文时，从 SQLite 恢复压缩摘要与 middleware 跨轮数据。"""
+
+    try:
+        record = load_session_context_state(session_id)
+    except Exception:
+        logger.debug("读取会话上下文状态失败", exc_info=True)
+        return
+    if not record:
+        return
+    restore_session_context_state(
+        agent,
+        str(record.get("summary") or ""),
+        record.get("middleContext") if isinstance(record.get("middleContext"), dict) else None,
+    )
+
+
+def _persist_context_state(agent: object, session_id: str, agent_id: str) -> None:
+    """每轮结束把压缩摘要与 middleware 跨轮数据落库；失败不影响主流程。"""
+
+    try:
+        summary, middle_context = snapshot_session_context_state(agent)
+        save_session_context_state(
+            session_id=session_id,
+            agent_id=agent_id,
+            summary=summary,
+            middle_context=middle_context,
+        )
+    except Exception:
+        logger.debug("保存会话上下文状态失败", exc_info=True)

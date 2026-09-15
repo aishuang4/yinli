@@ -416,6 +416,15 @@ BASE_SCHEMA_SQL = """
     );
     CREATE INDEX IF NOT EXISTS idx_skill_runs_session_agent_status
         ON skill_runs(session_id, agent_id, status, updated_at);
+    -- 会话级 AgentScope 上下文状态：压缩摘要 + middleware 跨轮数据（已启用 Skill、治理计数）。
+    -- 进程重启 / 实例淘汰后重建上下文时恢复，避免压缩摘要和"已读过哪些 Skill"丢失。
+    CREATE TABLE IF NOT EXISTS session_context_state (
+        session_id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        summary TEXT NOT NULL DEFAULT '',
+        middle_context TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS memory_nodes (
         id TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL DEFAULT 'default',

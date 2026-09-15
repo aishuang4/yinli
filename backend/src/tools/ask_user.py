@@ -12,9 +12,11 @@ class AskUser(ToolBase):
 
     name: str = "AskUser"
     description: str = (
-        "Ask the human user for missing information and pause the current ReAct loop. "
-        "Use this when a task, Skill, or Agent workflow cannot continue reliably without user input. "
-        "Prefer focused questions; do not use this for normal final answers."
+        "Ask the human user for missing information and pause the current ReAct loop; it resumes after "
+        "the user answers. Use only when the task cannot continue reliably without the input. At most 3 "
+        "focused questions; choice / multi_choice questions need 2-5 concise options; set required=true "
+        "only for information that truly blocks execution. Never ask blocking questions as plain text, and "
+        "do not use this for normal final answers."
     )
     input_schema: dict[str, Any] = {
         "type": "object",

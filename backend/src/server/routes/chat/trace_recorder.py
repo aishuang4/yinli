@@ -296,48 +296,110 @@ def _tool_input_preview(tool_calls: list[ChatToolRun] | None, tool_call_id: str)
     return ""
 
 
-def build_model_call_context_stats(agent: object) -> dict[str, Any]:
-    """统计本次模型调用的上下文规模：system prompt / 压缩摘要 / 对话消息数与字符数 / 工具数。
+# react_runtime 把 system prompt 分段字数挂在实例上，供 contextStats 定位膨胀来源。
+PROMPT_SECTIONS_ATTR = "_aw_prompt_sections"
+# 最近一次成功取到的工具 schema JSON 字节数缓存：同步路径拿不到 async schema 时复用。
+TOOL_SCHEMA_BYTES_ATTR = "_aw_tool_schema_bytes"
+# AgentScope `ChatModelBase.count_tokens` 对每个多模态 DataBlock 的固定估算。
+MULTIMODAL_BLOCK_TOKENS = 2000
 
-    只做字符级估算，不再多调一次模型或 tokenizer；供 Trace 和 Chat 顶栏对照窗口、压缩阈值。
+
+def _utf8_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _collect_context_stats(agent: object) -> tuple[dict[str, Any], int, int]:
+    """遍历 system prompt / summary / context，返回 (统计, 文本字节数, DataBlock 数)。
+
+    文本字节数与 AgentScope `count_tokens` 同源（utf-8 bytes），这样 `estimatedTokens`
+    与真正触发压缩的判定一致，而不是另一套字符折算。
     """
 
     stats: dict[str, Any] = {}
+    text_bytes = 0
+    data_blocks = 0
     system_prompt = getattr(agent, "_system_prompt", None)
     if isinstance(system_prompt, str):
         stats["systemPromptChars"] = len(system_prompt)
+        text_bytes += _utf8_len(system_prompt)
+    sections = getattr(agent, PROMPT_SECTIONS_ATTR, None)
+    if isinstance(sections, dict) and sections:
+        stats["promptSections"] = {str(key): int(value) for key, value in sections.items()}
     state = getattr(agent, "state", None)
     if state is not None:
         summary = getattr(state, "summary", "")
-        stats["summaryChars"] = len(summary) if isinstance(summary, str) else len(str(summary or ""))
+        summary_text = summary if isinstance(summary, str) else "".join(
+            str(getattr(item, "text", "") or "") for item in (summary or [])
+        )
+        stats["summaryChars"] = len(summary_text)
+        text_bytes += _utf8_len(summary_text)
         context = list(getattr(state, "context", []) or [])
         stats["contextMessages"] = len(context)
         chars = 0
         tool_results = 0
         for msg in context:
-            for block in getattr(msg, "content", []) or []:
+            content = getattr(msg, "content", []) or []
+            if isinstance(content, str):
+                chars += len(content)
+                text_bytes += _utf8_len(content)
+                continue
+            for block in content:
                 block_type = str(getattr(block, "type", "") or "")
+                text = ""
                 if block_type == "text":
-                    chars += len(str(getattr(block, "text", "") or ""))
+                    text = str(getattr(block, "text", "") or "")
+                elif block_type == "thinking":
+                    text = str(getattr(block, "thinking", "") or "")
                 elif block_type == "hint":
                     hint = getattr(block, "hint", "")
-                    chars += len(hint) if isinstance(hint, str) else sum(
-                        len(str(getattr(item, "text", "") or "")) for item in hint
-                    )
+                    if isinstance(hint, str):
+                        text = hint
+                    else:
+                        for item in hint or []:
+                            if str(getattr(item, "type", "")) == "data":
+                                data_blocks += 1
+                            else:
+                                text += str(getattr(item, "text", "") or "")
                 elif block_type == "tool_call":
-                    chars += len(str(getattr(block, "input", "") or ""))
+                    text = str(getattr(block, "input", "") or "")
                 elif block_type == "tool_result":
                     tool_results += 1
                     output = getattr(block, "output", "")
-                    chars += len(output) if isinstance(output, str) else sum(
-                        len(str(getattr(item, "text", "") or "")) for item in output
-                    )
+                    if isinstance(output, str):
+                        text = output
+                    else:
+                        for item in output or []:
+                            if str(getattr(item, "type", "")) == "data":
+                                data_blocks += 1
+                            else:
+                                text += str(getattr(item, "text", "") or "")
+                elif block_type == "data":
+                    data_blocks += 1
+                chars += len(text)
+                text_bytes += _utf8_len(text)
         stats["contextChars"] = chars
         stats["toolResultBlocks"] = tool_results
-    toolkit = getattr(agent, "toolkit", None)
-    groups = getattr(toolkit, "tool_groups", None)
-    if isinstance(groups, list):
-        stats["toolCount"] = sum(len(getattr(group, "tools", []) or []) for group in groups)
+        if data_blocks:
+            stats["dataBlocks"] = data_blocks
+    return stats, text_bytes, data_blocks
+
+
+def _finish_context_stats(agent: object, stats: dict[str, Any], text_bytes: int, data_blocks: int, tool_schema_bytes: int | None) -> dict[str, Any]:
+    if tool_schema_bytes is None:
+        cached = getattr(agent, TOOL_SCHEMA_BYTES_ATTR, None)
+        tool_schema_bytes = int(cached) if isinstance(cached, int) else 0
+    else:
+        try:
+            setattr(agent, TOOL_SCHEMA_BYTES_ATTR, int(tool_schema_bytes))
+        except Exception:
+            pass
+    if tool_schema_bytes:
+        stats["toolSchemaChars"] = int(tool_schema_bytes)
+    if "toolCount" not in stats:
+        toolkit = getattr(agent, "toolkit", None)
+        groups = getattr(toolkit, "tool_groups", None)
+        if isinstance(groups, list):
+            stats["toolCount"] = sum(len(getattr(group, "tools", []) or []) for group in groups)
     model = getattr(agent, "model", None)
     window = int(getattr(model, "context_size", 0) or 0)
     if window > 0:
@@ -347,12 +409,48 @@ def build_model_call_context_stats(agent: object) -> dict[str, Any]:
     stats["triggerRatio"] = round(trigger_ratio, 3)
     if window > 0:
         stats["triggerTokens"] = int(window * trigger_ratio)
-    total_chars = int(stats.get("systemPromptChars") or 0) + int(stats.get("summaryChars") or 0) + int(stats.get("contextChars") or 0)
-    # 中文接近 1 字 1 token，英文约 4 字符；取折中估算，供 UI 对照窗口。
-    stats["estimatedTokens"] = max(1, total_chars // 2) if total_chars else 0
+    # 与 AgentScope count_tokens 同一算法：utf-8 字节 / 4 + 每个 DataBlock 固定 2000。
+    stats["estimatedTokens"] = int((text_bytes + int(tool_schema_bytes or 0)) / 4 + 0.5) + data_blocks * MULTIMODAL_BLOCK_TOKENS
+    stats["estimateMethod"] = "bytes/4"
     stats["compressed"] = 1 if int(stats.get("summaryChars") or 0) > 0 else 0
+    try:
+        from src.server.routes.chat.context_middleware import context_governance_stats
+
+        stats.update(context_governance_stats(agent))
+    except Exception:
+        pass
     apply_context_usage_threshold(stats)
     return stats
+
+
+def build_model_call_context_stats(agent: object) -> dict[str, Any]:
+    """统计本次模型调用的上下文规模（同步版）。
+
+    不调模型、不调 tokenizer。工具 schema 字节数用最近一次 async 统计缓存的值；
+    供 Trace 和 Chat 顶栏对照窗口、压缩阈值、定位膨胀来源。
+    """
+
+    stats, text_bytes, data_blocks = _collect_context_stats(agent)
+    return _finish_context_stats(agent, stats, text_bytes, data_blocks, None)
+
+
+async def build_model_call_context_stats_async(agent: object) -> dict[str, Any]:
+    """同上，但按 AgentScope 实际下发的工具 schema 精确统计 `toolSchemaChars`。"""
+
+    stats, text_bytes, data_blocks = _collect_context_stats(agent)
+    tool_schema_bytes: int | None = None
+    toolkit = getattr(agent, "toolkit", None)
+    getter = getattr(toolkit, "get_tool_schemas", None)
+    if callable(getter):
+        try:
+            state = getattr(agent, "state", None)
+            activated = list(getattr(getattr(state, "tool_context", None), "activated_groups", []) or [])
+            schemas = await getter(activated)
+            tool_schema_bytes = _utf8_len(json.dumps(schemas, ensure_ascii=False)) if schemas else 0
+            stats["toolCount"] = len(schemas or [])
+        except Exception:
+            tool_schema_bytes = None
+    return _finish_context_stats(agent, stats, text_bytes, data_blocks, tool_schema_bytes)
 
 
 def apply_context_usage_threshold(stats: dict[str, Any]) -> dict[str, Any]:
@@ -366,11 +464,51 @@ def apply_context_usage_threshold(stats: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_model_call_token_usage(stats: dict[str, Any], event_data: dict[str, Any]) -> dict[str, Any]:
-    """把 MODEL_CALL_END 的供应商用量写进占用统计，并重算是否越过压缩阈值。"""
+    """把 MODEL_CALL_END 的供应商用量写进占用统计，记录估算偏差，并重算是否越过压缩阈值。"""
 
     stats["inputTokens"] = int(event_data.get("input_tokens") or 0)
     stats["outputTokens"] = int(event_data.get("output_tokens") or 0)
+    estimated = int(stats.get("estimatedTokens") or 0)
+    if stats["inputTokens"] > 0 and estimated > 0:
+        # 正值 = 估算偏高（压缩会提前触发），负值 = 估算偏低（有超窗风险）。
+        stats["estimateErrorPct"] = round((estimated - stats["inputTokens"]) / stats["inputTokens"] * 100, 1)
     return apply_context_usage_threshold(stats)
+
+
+def record_context_compression_events(
+    *,
+    agent: object,
+    session_id: str,
+    persist: bool,
+    scope: str,
+    agent_id: str,
+    agent_name: str,
+) -> list[dict[str, Any]]:
+    """把 ContextCompressionMiddleware 记下的压缩事件写成 `CONTEXT_COMPRESSED` trace。"""
+
+    try:
+        from src.server.routes.chat.context_middleware import drain_compression_records
+
+        records = drain_compression_records(agent)
+    except Exception:
+        return []
+    for record in records:
+        _record_run_event(
+            session_id=session_id,
+            event_type="CONTEXT_COMPRESSED",
+            persist=persist,
+            scope=scope,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            status="completed",
+            title=f"Context compressed #{record.get('index', 1)}",
+            content=(
+                f"messages {record.get('messagesBefore')} -> {record.get('messagesAfter')}, "
+                f"summary {record.get('summaryCharsAfter')} chars"
+            ),
+            payload=dict(record),
+        )
+    return records
 
 
 def _record_agent_scope_event(
@@ -384,11 +522,12 @@ def _record_agent_scope_event(
     agent_name: str,
     tool_calls: list[ChatToolRun] | None = None,
     agent: object | None = None,
+    context_stats: dict[str, Any] | None = None,
 ) -> None:
     """Record selected AgentScope events as compact trace events.
 
     `tool_calls` 提供时，TOOL_CALL_END / TOOL_RESULT_START 会附带脱敏后的输入参数预览；
-    `agent` 提供时，MODEL_CALL_START 会附带上下文规模统计。
+    `agent` 提供时，MODEL_CALL_START 会附带上下文规模统计（`context_stats` 已算好时直接复用）。
     """
     if event_type not in TRACE_EVENT_TYPES:
         return
@@ -425,11 +564,14 @@ def _record_agent_scope_event(
         preview = _tool_input_preview(tool_calls, str(event_data.get("tool_call_id") or ""))
         if preview:
             payload["inputPreview"] = preview
-    if event_type == "MODEL_CALL_START" and agent is not None:
-        try:
-            payload["contextStats"] = build_model_call_context_stats(agent)
-        except Exception:
-            pass
+    if event_type == "MODEL_CALL_START":
+        if context_stats:
+            payload["contextStats"] = dict(context_stats)
+        elif agent is not None:
+            try:
+                payload["contextStats"] = build_model_call_context_stats(agent)
+            except Exception:
+                pass
     _record_run_event(
         session_id=session_id,
         event_type=event_type,

@@ -249,6 +249,15 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
                 "overTrigger",
                 "inputTokens",
                 "outputTokens",
+                "estimateMethod",
+                "estimateErrorPct",
+                "promptSections",
+                "toolSchemaChars",
+                "dataBlocks",
+                "compressionCount",
+                "stubbedToolResults",
+                "droppedImages",
+                "hygieneSavedChars",
             )
             if key in payload
         }

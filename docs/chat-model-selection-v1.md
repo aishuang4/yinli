@@ -52,6 +52,7 @@
       "label": "DeepSeek V4 Flash",
       "enabled": true,
       "fallbackModelIds": [],
+      "contextSize": 0,
       "parameters": {"temperature": 0.7, "topP": 0.8, "maxTokens": 4096},
       "capabilities": {"images": false}
     }
@@ -60,6 +61,7 @@
 ```
 
 - 供应商 ID 是连接实例身份；允许多个 OpenAI 兼容网关使用相同 adapter，分别持有地址和 Key。
+- `contextSize` 是模型上下文窗口（tokens），决定 AgentScope 何时压缩上下文；`0` 或缺省表示按 adapter 默认（deepseek / openai / moonshot 128k、dashscope 131072、anthropic 200k、gemini 1M、ollama 32k）。降级链按链上最小窗口计算压缩阈值。
 - 模型配置 ID 是引用身份，与供应商真实模型名分开；不同供应商可有同名模型。
 - fallback 引用模型配置 ID，每个 fallback 使用自己的供应商、Key 和地址；拒绝缺失引用、循环及重复。
 - 按用户要求 Key 也落在该文件中，因此是明文配置。前端读取接口仅返回已配置标记，不返回 Key；日志、Trace、导出 Agent、模型列表均不携带 Key。

@@ -71,8 +71,25 @@ description / dir；模型用 `Skill` 工具读过 SKILL.md 后正文留在会�
 `SkillRun` 仍每轮关闭，它记录"本轮用了哪个 Skill"，与"模型已读过哪些说明书"是两件事。
 Readiness / IntentRouter 系统 Agent 是一次性任务，每次调用前清空上下文；当前 `INTENT_CATALOG` 只有 `react`
 时不调用模型，readiness 只在规则发现模糊执行型请求时才调模型，是否调用与耗时写入 `READINESS_GATE` /
-`INTENT_ROUTE` trace。`MODEL_CALL_START` trace 附带 `contextStats`（prompt / summary / context 字符数与消息数、
-工具数），`TOOL_CALL_END` / `TOOL_RESULT_START` 附带脱敏后的 `inputPreview`。
+`INTENT_ROUTE` trace。`MODEL_CALL_START` trace 附带 `contextStats`（prompt 分段字数 / summary / context 字符数与消息数、
+工具 schema 字节数、与 AgentScope 同源的 `estimatedTokens`、治理计数），`TOOL_CALL_END` / `TOOL_RESULT_START` 附带脱敏后的 `inputPreview`。
+
+**上下文窗口与压缩治理**（`routes/chat/context_middleware.py`）分三级：
+
+1. **窗口按模型给**：`models.json` 的 `ModelEntry.contextSize` 显式配置优先，否则 `agents/model_factory.py` 按 adapter 默认
+   （deepseek / openai / moonshot 128k、dashscope 131072、anthropic 200k、gemini 1M、ollama 32k）；`FallbackChainModel`
+   取链上最小值。不再让所有模型用 AgentScope 默认 32768，否则 128k 模型用到四分之一就开始压缩。
+2. **一级无模型整理**（`ContextHygieneMiddleware.on_reply`）：每轮开始前把早于最近 2 轮、超过 600 字的工具输出换成一行
+   存根（保留工具名、字数和开头 120 字），旧图片 DataBlock 换成文字占位；不改消息顺序、不破坏 tool_call / tool_result
+   配对，`Skill` 工具输出和 HintBlock 不动。目的是把二级压缩的触发点往后推。
+3. **二级 AgentScope 压缩**（`ContextConfig`）：`trigger_ratio=0.75`、`reserve_ratio=0.2`、`tool_result_limit=4000`；
+   summary schema 只声明模板会渲染的五段，`additionalProperties=True` 容忍模型多返回字段。`ContextCompressionMiddleware.on_compress_context`
+   只在 context 变短或摘要变化时记一条记录，由 `leader_stream` 在下一次模型调用前写成 `CONTEXT_COMPRESSED` trace，并把
+   `compressionCount` 并入 `CONTEXT_USAGE`。`state.session_id` 设为 Chat session id，offloader 落盘按会话分目录。
+
+`state.summary` 与 `state.middle_context`（已启用 Skill 正文、治理计数、Plan 计数等）在每轮结束写入 SQLite
+`session_context_state` 表；进程重启 / 实例淘汰后 `react_runtime` 先用 `chat_messages` 重建正文，再从该表恢复摘要和
+middleware 数据，最后才用 `skill_runs` 兜底恢复已读 Skill。会话删除时一并清理。
 
 ## Workspace / Project
 

@@ -33,6 +33,7 @@ from src.storage.json_document_store import JsonDocumentStore
 from src.storage.memory_records import MemoryRecordStore
 from src.storage.plan_records import PlanRecordStore
 from src.storage.resource_catalog_records import ResourceCatalogRecordStore
+from src.storage.session_context_state import SessionContextStateStore
 from src.storage.skill_run_records import SkillRunRecordStore
 from src.storage.skill_evolution_records import SkillEvolutionRecordStore
 from src.storage.trace_records import TraceRecordStore
@@ -808,6 +809,40 @@ def list_recent_skill_run_names(session_id: str, agent_id: str, *, limit: int = 
 
 def get_skill_run_by_pending_interaction(interaction_id: str) -> dict[str, Any] | None:
     return _skill_run_record_store().get_by_pending_interaction(interaction_id)
+
+
+def _session_context_state_store() -> SessionContextStateStore:
+    """创建复用当前数据库基础设施的会话上下文状态存储。"""
+
+    return SessionContextStateStore(
+        ensure_db=ensure_db,
+        connect=_connect,
+        lock=_lock,
+        utc_now=_utc_now,
+    )
+
+
+def save_session_context_state(
+    *,
+    session_id: str,
+    agent_id: str,
+    summary: str,
+    middle_context: dict[str, Any] | None,
+) -> None:
+    _session_context_state_store().save(
+        session_id=session_id,
+        agent_id=agent_id,
+        summary=summary,
+        middle_context=middle_context,
+    )
+
+
+def load_session_context_state(session_id: str) -> dict[str, Any] | None:
+    return _session_context_state_store().load(session_id)
+
+
+def delete_session_context_state(session_id: str) -> None:
+    _session_context_state_store().delete(session_id)
 
 
 def upsert_skill_run(record: dict[str, Any]) -> dict[str, Any]:

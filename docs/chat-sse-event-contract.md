@@ -218,13 +218,24 @@ type ContextBlockData = {
   overTrigger?: 0 | 1;
   inputTokens?: number;
   outputTokens?: number;
+  estimateMethod?: 'bytes/4';
+  estimateErrorPct?: number;
+  promptSections?: Record<string, number>;
+  toolSchemaChars?: number;
+  dataBlocks?: number;
+  compressionCount?: number;
+  stubbedToolResults?: number;
+  droppedImages?: number;
+  hygieneSavedChars?: number;
 };
 ```
 
-- `estimatedTokens` 是字符级估算（不额外调用 tokenizer）；`inputTokens` 在模型调用结束后为供应商回报，顶栏优先显示它。
-- `compressed=1` 表示 AgentScope `state.summary` 已有压缩摘要。
-- `overTrigger=1` 表示占用已达到 `ContextConfig.trigger_ratio`（默认窗口的 80%）阈值。
-- `contextWindow` 来自模型 `context_size`（AgentScope 默认 32768）。
+- `estimatedTokens` 与 AgentScope `ChatModelBase.count_tokens` 同源：system prompt + summary + context 文本 + 工具 schema JSON 的 utf-8 字节 / 4，每个 DataBlock 固定 2000；不额外调用 tokenizer。`inputTokens` 在模型调用结束后为供应商回报，顶栏优先显示它；`estimateErrorPct = (estimated - input) / input * 100`，正值表示估算偏高（压缩会提前触发）。
+- `promptSections` 是 system prompt 各段字符数（`agent` / `project` / `workspace` / `runtime` / `skills` / `route` / `skillRun` / `memory` / `clarification` / `finalAnswer`），用于定位膨胀来源。
+- `compressed=1` 表示 AgentScope `state.summary` 已有压缩摘要；`compressionCount` 是本会话真正压缩的累计次数（每次同时写入 `CONTEXT_COMPRESSED` trace 事件）。
+- `stubbedToolResults` / `droppedImages` / `hygieneSavedChars` 是一级无模型整理（`ContextHygieneMiddleware`）累计：早于最近 2 轮、超过 600 字的工具输出被换成一行存根，旧图片换成文字占位。
+- `overTrigger=1` 表示占用已达到 `ContextConfig.trigger_ratio`（当前窗口的 75%）阈值。
+- `contextWindow` 来自模型 `context_size`：`models.json` 的 `contextSize` 优先，否则按 adapter 默认（deepseek / openai / moonshot 128k、dashscope 131072、anthropic 200k、gemini 1M、ollama 32k）；降级链取链上最小值。
 
 最终回答的 `text` Block 必须保留上游模型的增量节奏。Provider thinking 只投影到 `thinking`
 Block，不得用 thinking 到普通文本的边界推断最终回答已经开始；深度思考模型仍可能在调用业务

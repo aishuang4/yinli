@@ -134,6 +134,40 @@ def seed_context_from_history(
     return len(messages)
 
 
+def snapshot_session_context_state(agent: Any) -> tuple[str, dict[str, Any]]:
+    """取出可落库的会话级状态：压缩摘要文本 + middleware 跨轮数据。"""
+
+    state = getattr(agent, "state", None)
+    if state is None:
+        return "", {}
+    summary = getattr(state, "summary", "")
+    if not isinstance(summary, str):
+        summary = "".join(str(getattr(item, "text", "") or "") for item in (summary or []))
+    middle_context = getattr(state, "middle_context", None)
+    return summary, dict(middle_context) if isinstance(middle_context, dict) else {}
+
+
+def restore_session_context_state(agent: Any, summary: str, middle_context: dict[str, Any] | None) -> bool:
+    """实例重建后恢复压缩摘要与 middleware 跨轮数据；已有值不覆盖。返回是否有恢复动作。"""
+
+    state = getattr(agent, "state", None)
+    if state is None:
+        return False
+    restored = False
+    if summary and not getattr(state, "summary", ""):
+        state.summary = summary
+        restored = True
+    store = getattr(state, "middle_context", None)
+    if isinstance(store, dict) and middle_context:
+        for key, value in middle_context.items():
+            if key not in store:
+                store[key] = copy.deepcopy(value)
+                restored = True
+    if restored:
+        logger.debug("已恢复会话上下文状态：summary=%s 字，middle_context=%s 项", len(summary or ""), len(middle_context or {}))
+    return restored
+
+
 def reset_agent_context(agent: Any) -> None:
     """清空实例对话上下文。供 Readiness / IntentRouter 这类一次性系统 Agent 每次调用前使用。"""
 

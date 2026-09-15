@@ -1973,10 +1973,21 @@ def test_context_compression_schema_allows_project_discovery_summaries():
 
     assert schema["properties"]["important_discoveries"]["maxLength"] >= 1000
     assert schema["properties"]["next_steps"]["maxLength"] >= 1000
-    assert schema["properties"]["title"]["type"] == "string"
-    assert "summary" in schema["properties"]
+    # 只声明 summary_template 会渲染的五段；模型多返回 title / summary 时靠 additionalProperties 容忍。
+    assert set(schema["properties"]) == {
+        "task_overview",
+        "current_state",
+        "important_discoveries",
+        "next_steps",
+        "context_to_preserve",
+    }
+    assert schema["additionalProperties"] is True
     assert "required" not in schema
     assert "under the schema maxLength" in context_config.compression_prompt
+    # 触发点早于 AgentScope 默认 0.8，保留比例高于默认 0.1。
+    assert context_config.trigger_ratio == 0.75
+    assert context_config.reserve_ratio == 0.2
+    assert context_config.tool_result_limit == 4000
 
 
 def test_resume_text_event_scopes_are_separated():

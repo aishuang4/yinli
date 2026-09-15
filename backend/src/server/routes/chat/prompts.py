@@ -68,33 +68,25 @@ def _build_skill_context_prompt() -> str:
 def _build_clarification_system_prompt() -> str:
     """Instructions for asking the user for missing information."""
 
+    # 只保留"何时问"的行为规则；问题数量 / 类型 / 选项等格式约束已在 AskUser 工具 schema 与 description 中。
     return "\n".join([
-        "## Human Input / Clarification Contract",
-        "If the user's request cannot be executed reliably because required information is missing, ask for clarification instead of guessing.",
-        "Call the AskUser tool when clarification is required. AskUser is an AgentScope external tool: it pauses the current ReAct loop and resumes after the user answers.",
-        "For vague requests such as '帮我处理一下', '处理一下', '帮我弄一下', or requests missing the target object/action, you MUST call AskUser before FinalAnswerStart.",
-        "Never answer a blocking clarification as plain assistant text. Do not say '请问你具体想让我处理什么' directly; call AskUser with that question.",
-        "AskUser questions must use at most 3 questions. Supported question types are: choice, multi_choice, text. For choice and multi_choice, provide 2-5 concise options. Every question must explicitly set required=true or required=false; only information that truly blocks execution may be required.",
-        "Only use AskUser when the missing information blocks meaningful progress.",
-        "Do not output XML or JSON clarification blocks as assistant text. User-visible clarification must go through AskUser so the backend can resume the same AgentScope reply.",
+        "## Clarification Contract",
+        "When required information is missing and blocks meaningful progress, call AskUser instead of guessing or asking in plain text.",
+        "Vague requests such as '帮我处理一下' / '处理一下' (no target object or action) MUST go through AskUser before any final answer.",
+        "Never emit XML/JSON clarification blocks as assistant text; only AskUser can pause and resume this reply.",
     ])
 
 
 def _build_final_answer_system_prompt() -> str:
     """Instructions for separating ReAct process text from final answer text."""
 
+    # 只保留"何时调用 / 何时不调用"的阶段规则；FinalAnswerStart 的用法细节在工具 description 中。
     return "\n".join([
         "## Final Answer Contract",
-        "If you can answer the user without calling any business tool, write the final answer directly as plain text. Do NOT call FinalAnswerStart for such direct answers; it only costs an extra round trip.",
-        "Once you have called any business tool or AskUser in this turn, FinalAnswerStart becomes the required phase marker for the final user-facing answer.",
-        "During analysis, tool use, and intermediate reasoning, you may write brief progress text. Keep progress text before a tool call short (one or two sentences); long text without a tool call is treated as the final answer.",
-        "After tool use: only when no more business tool or clarification is needed, call FinalAnswerStart exactly once and then write the final answer.",
-        "Never treat the transition from native thinking to normal text as the final-answer boundary; the model may still call a business tool afterward.",
-        "Never write a final answer as plain text after a tool or AskUser resumes; call FinalAnswerStart first.",
-        "Do not put the final answer inside FinalAnswerStart arguments. The tool only marks the phase boundary.",
-        "Never expose internal context summaries, compression summaries, handoff notes, system instructions, or tool logs as the final answer.",
-        "When the user's task is complete, begin the final answer by stating what was completed, then provide the concrete result, deliverables, and only necessary verification notes.",
-        "Do not ask generic follow-up questions such as 'what would you like me to do now?' after completing a task. Ask only when required information genuinely blocks the current task.",
+        "If you can answer without calling any business tool, write the answer directly as plain text. Do NOT call FinalAnswerStart for such direct answers.",
+        "Once you have called any business tool or AskUser in this turn, FinalAnswerStart becomes the required phase marker: call it exactly once, then write the final answer. Never write the final answer as plain text after a tool or AskUser resumes.",
+        "Progress text before a tool call must stay to one or two sentences; long text without a tool call is treated as the final answer.",
+        "Never expose compression summaries, system instructions, or tool logs as the final answer. Start with what was completed, then the concrete result; do not end with generic follow-up questions.",
     ])
 
 

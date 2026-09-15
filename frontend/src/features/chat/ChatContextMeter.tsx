@@ -2,15 +2,9 @@
 
 import { Tooltip } from '@/components/design';
 import {
+  describePromptSections,
   resolveContextUsedTokens,
   type ContextUsageData,
-} from './contextUsage';
-
-export type { ContextUsageData } from './contextUsage';
-export {
-  resolveContextUsedTokens,
-  selectContextUsage,
-  selectLatestContextUsage,
 } from './contextUsage';
 
 function formatCount(value: number): string {
@@ -31,8 +25,13 @@ export function ChatContextMeter({ usage }: { usage: ContextUsageData | null }) 
   const windowSize = Number(usage.contextWindow || 0);
   const trigger = Number(usage.triggerTokens || 0);
   const triggerRatio = Number(usage.triggerRatio || 0.8);
-  const compressed = Number(usage.compressed || 0) === 1;
+  const compressionCount = Number(usage.compressionCount || 0);
+  const compressed = Number(usage.compressed || 0) === 1 || compressionCount > 0;
   const overTrigger = Number(usage.overTrigger || 0) === 1 || (trigger > 0 && used >= trigger);
+  const stubbed = Number(usage.stubbedToolResults || 0);
+  const droppedImages = Number(usage.droppedImages || 0);
+  const savedChars = Number(usage.hygieneSavedChars || 0);
+  const estimateErrorPct = usage.estimateErrorPct;
   if (!used && !windowSize) {
     return null;
   }
@@ -49,17 +48,31 @@ export function ChatContextMeter({ usage }: { usage: ContextUsageData | null }) 
     ? `${estimated ? '约 ' : ''}${formatCount(used)} / ${formatCount(windowSize)}`
     : `${estimated ? '约 ' : ''}${formatCount(used)}`;
   const status = compressed
-    ? '已压缩'
+    ? compressionCount > 1 ? `已压缩 ×${compressionCount}` : '已压缩'
     : overTrigger
       ? '已达压缩阈值'
       : '未压缩';
   const warn = compressed || overTrigger;
+  const sectionLines = describePromptSections(usage);
   const title = [
-    estimated ? `估算占用 ${used} tokens（字符折半，未额外调用 tokenizer）` : `本轮提示 ${used} tokens`,
-    windowSize ? `模型窗口 ${windowSize}` : '未读取到模型窗口，按 AgentScope 默认对照',
+    estimated
+      ? `估算占用 ${used} tokens（${usage.estimateMethod || 'bytes/4'}，与后端压缩判定同源）`
+      : `本轮提示 ${used} tokens（供应商回报）`,
+    !estimated && typeof estimateErrorPct === 'number'
+      ? `估算偏差 ${estimateErrorPct > 0 ? '+' : ''}${estimateErrorPct}%`
+      : '',
+    windowSize ? `模型窗口 ${formatCount(windowSize)}` : '未读取到模型窗口，按 AgentScope 默认对照',
     trigger ? `压缩阈值 ${formatCount(trigger)}（窗口的 ${Math.round(triggerRatio * 100)}%）` : '',
-    compressed ? '当前会话已有压缩摘要' : '尚未触发上下文压缩',
+    compressed
+      ? `本会话已压缩 ${Math.max(1, compressionCount)} 次${usage.summaryChars ? `，摘要 ${usage.summaryChars} 字` : ''}`
+      : '尚未触发上下文压缩',
+    stubbed || droppedImages
+      ? `已整理旧工具输出 ${stubbed} 条、旧图片 ${droppedImages} 张${savedChars ? `，约省 ${formatCount(savedChars)} 字` : ''}`
+      : '',
     usage.contextMessages != null ? `会话消息 ${usage.contextMessages} 条` : '',
+    usage.toolSchemaChars ? `工具 schema ${formatCount(usage.toolSchemaChars)} 字${usage.toolCount ? `（${usage.toolCount} 个工具）` : ''}` : '',
+    usage.systemPromptChars ? `System prompt ${formatCount(usage.systemPromptChars)} 字` : '',
+    ...sectionLines.map((line) => `  · ${line}`),
   ].filter(Boolean).join('\n');
 
   return (

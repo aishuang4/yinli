@@ -100,6 +100,8 @@ class ModelEntry(ConfigValue):
     label: str = Field(min_length=1)
     enabled: bool = True
     fallback_model_ids: tuple[str, ...] = Field(default=(), alias="fallbackModelIds")
+    # 模型上下文窗口（tokens）。0 表示按供应商 adapter 的默认值；AgentScope 用它决定何时压缩上下文。
+    context_size: int = Field(default=0, alias="contextSize", ge=0)
     parameters: ModelParameters = Field(default_factory=ModelParameters)
     capabilities: Capabilities = Field(default_factory=Capabilities)
 

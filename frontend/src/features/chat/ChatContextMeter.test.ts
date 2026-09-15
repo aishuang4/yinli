@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptyDisplaySnapshot, type DisplaySnapshot } from '../runtime-stream/protocol';
 import {
+  describePromptSections,
   resolveContextUsedTokens,
   selectContextUsage,
   selectLatestContextUsage,
@@ -41,6 +42,13 @@ describe('selectLatestContextUsage', () => {
     expect(selectLatestContextUsage(live, [historical])?.inputTokens).toBe(1800);
     expect(selectLatestContextUsage(emptyDisplaySnapshot(), [historical])?.compressed).toBe(1);
     expect(selectContextUsage(emptyDisplaySnapshot())).toBeNull();
+  });
+
+  it('system prompt 分段按字符数倒序、最多列出前几段', () => {
+    expect(describePromptSections({
+      promptSections: { agent: 1200, memory: 3000, runtime: 0, clarification: 400, finalAnswer: 700, project: 500 },
+    })).toEqual(['记忆注入 3000 字', 'Agent 提示词 1200 字', '最终回答契约 700 字', '项目上下文 500 字']);
+    expect(describePromptSections({})).toEqual([]);
   });
 
   it('供应商回报 token 优先于字符估算', () => {

@@ -394,3 +394,21 @@ class FakeMemoryNodeService:
     def upsert_node(self, item):
         self.items.append(item)
         return {"id": "node-1"}
+
+
+def test_summary_from_turn_is_one_sentence_without_markdown_noise():
+    from src.memory.node_persist import _summary_from_turn
+
+    user = "帮我把 Q3 销售表按地区汇总。顺便看看有没有异常值。"
+    assistant = (
+        "好的。\n\n## 结果\n\n- **已生成** `q3_by_region.xlsx`，共 5 个地区。\n"
+        "- 华东异常偏高，建议复核。\n\n```python\nprint(1)\n```\n" + "详细说明。" * 200
+    )
+
+    summary = _summary_from_turn(user, assistant)
+
+    assert summary.startswith("帮我把 Q3 销售表按地区汇总。 → ")
+    assert "已生成" in summary
+    assert "**" not in summary and "```" not in summary and "##" not in summary
+    assert len(summary) <= 170
+    assert _summary_from_turn("", "") == "对话记忆"
