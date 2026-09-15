@@ -239,11 +239,22 @@ export function StudioContextPanel({
             <li className="group-studio-muted">暂无</li>
           ) : (
             (studio?.workItems ?? []).map((item) => (
-              <li key={item.id}>
+              <li key={item.id} title={item.reviewNote || undefined}>
                 <span className="group-studio-dod__mark">
-                  {item.status === 'done' ? '✓' : item.status === 'claimed' ? '●' : '○'}
+                  {item.reviewStatus === 'accepted'
+                    ? '✔'
+                    : item.reviewStatus === 'rework' && item.status !== 'done'
+                      ? '↺'
+                      : item.status === 'done'
+                        ? '✓'
+                        : item.status === 'claimed'
+                          ? '●'
+                          : '○'}
                 </span>
                 <span>{item.title}</span>
+                {item.reviewStatus === 'rework' && item.status !== 'done' ? (
+                  <span className="group-studio-muted"> 退回</span>
+                ) : null}
               </li>
             ))
           )}

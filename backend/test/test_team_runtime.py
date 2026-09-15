@@ -149,7 +149,7 @@ def test_claim_result_and_dependency_unlock_invariants(tmp_path) -> None:
     assert completed_snapshot["resultPreview"] == "research result"
     assert store.is_blocked(store.task(second["id"])) is False
     assert any(event["type"] == "task.unlocked" for event in store.events_after(0))
-    with pytest.raises(TeamStoreError, match="仍有任务未成功"):
+    with pytest.raises(TeamStoreError, match="仍有任务未结束"):
         store.complete_run()
 
 
@@ -945,3 +945,156 @@ def test_member_stream_fails_after_recovery_budget_is_exhausted(tmp_path) -> Non
         event["type"] == "member.iteration.exhausted"
         for event in store.events_after(0)
     )
+
+
+def test_store_caps_members_tasks_and_result_length(tmp_path) -> None:
+    from src.server.routes.chat.team_runtime.store import MAX_TASK_RESULT_CHARS, MAX_TEAM_MEMBERS, MAX_TEAM_TASKS
+
+    store = create_store(tmp_path)
+    members = [store.spawn_member(name=f"M{i}", role="member", runtime_prompt="work") for i in range(MAX_TEAM_MEMBERS)]
+    with pytest.raises(TeamStoreError, match="最多创建"):
+        store.spawn_member(name="extra", role="member", runtime_prompt="work")
+
+    for i in range(MAX_TEAM_TASKS):
+        store.create_task(title=f"T{i}", brief="b", created_by="leader")
+    with pytest.raises(TeamStoreError, match="最多创建"):
+        store.create_task(title="extra", brief="b", created_by="leader")
+
+    # 结果超长必须写文件，而不是塞进 result
+    task = store.tasks()[0]
+    member = members[0]
+    store.claim_task(task["id"], member["id"])
+    store.read_inbox(member["id"])
+    with pytest.raises(TeamStoreError, match="超过"):
+        store.complete_task(task["id"], member["id"], "x" * (MAX_TASK_RESULT_CHARS + 1))
+    store.complete_task(task["id"], member["id"], "x" * MAX_TASK_RESULT_CHARS)
+    assert store.task(task["id"])["status"] == "succeeded"
+
+
+def test_store_rejects_dependency_cycle_from_tampered_task_graph(tmp_path) -> None:
+    from src.server.routes.chat.team_runtime.store import _dependency_cycle
+
+    tasks = [
+        {"id": "a", "dependsOn": ["b"]},
+        {"id": "b", "dependsOn": ["a"]},
+    ]
+    assert _dependency_cycle(tasks, ["a"]) is True
+    assert _dependency_cycle([{"id": "a", "dependsOn": []}, {"id": "b", "dependsOn": ["a"]}], ["b"]) is False
+
+
+def test_coordinator_retries_failed_task_once_then_partial_completes(tmp_path, monkeypatch) -> None:
+    """任务失败先重派一次；仍失败则保留 failed、级联下游，只要有成功任务就返回让综合阶段做部分综合。"""
+
+    store = create_store(tmp_path)
+    good = store.spawn_member(name="Good", role="member", runtime_prompt="work")
+    bad = store.spawn_member(name="Bad", role="member", runtime_prompt="work")
+    ok_task = store.create_task(title="OK", brief="b", created_by="leader", assigned_member_id=good["id"])
+    flaky = store.create_task(title="Flaky", brief="b", created_by="leader", assigned_member_id=bad["id"])
+    downstream = store.create_task(title="Downstream", brief="b", created_by="leader", depends_on=[flaky["id"]])
+    attempts: dict[str, int] = {}
+
+    async def fake_member_task(*, store, member, task, **_kwargs):
+        attempts[task["id"]] = attempts.get(task["id"], 0) + 1
+        if task["id"] == flaky["id"]:
+            raise RuntimeError("tool exploded")
+        store.read_inbox(member["id"])
+        store.complete_task(task["id"], member["id"], f"result {task['id']}")
+
+    async def flush_events() -> None:
+        return None
+
+    monkeypatch.setattr("src.server.routes.chat.team_runtime.coordinator.run_member_task", fake_member_task)
+    coordinator = TeamCoordinator(store=store, ctx=SimpleNamespace(), run_data=SimpleNamespace(), flush_events=flush_events)
+
+    asyncio.run(coordinator.run())
+
+    assert attempts[flaky["id"]] == 2  # 首次 + 重派一次
+    assert attempts[ok_task["id"]] == 1
+    by_id = {task["id"]: task for task in store.tasks()}
+    assert by_id[ok_task["id"]]["status"] == "succeeded"
+    assert by_id[flaky["id"]]["status"] == "failed"
+    assert by_id[flaky["id"]]["retryCount"] == 1
+    assert by_id[downstream["id"]]["status"] == "failed"
+    assert by_id[downstream["id"]]["retryable"] is False
+    assert "依赖任务已失败" in by_id[downstream["id"]]["failureReason"]
+    assert any(event["type"] == "task.retry.scheduled" for event in store.events_after(0))
+
+    run = store.complete_run()
+    assert run["status"] == "completed"
+    assert run["partial"] is True and run["failedTaskCount"] == 2
+
+
+def test_coordinator_fails_when_every_task_fails(tmp_path, monkeypatch) -> None:
+    from src.server.routes.chat.team_runtime.coordinator import TeamCoordinatorError
+
+    store = create_store(tmp_path)
+    member = store.spawn_member(name="Bad", role="member", runtime_prompt="work")
+    store.create_task(title="Only", brief="b", created_by="leader", assigned_member_id=member["id"])
+
+    async def fake_member_task(**_kwargs):
+        raise RuntimeError("boom")
+
+    async def flush_events() -> None:
+        return None
+
+    monkeypatch.setattr("src.server.routes.chat.team_runtime.coordinator.run_member_task", fake_member_task)
+    coordinator = TeamCoordinator(store=store, ctx=SimpleNamespace(), run_data=SimpleNamespace(), flush_events=flush_events)
+    with pytest.raises(TeamCoordinatorError, match="任务全部失败"):
+        asyncio.run(coordinator.run())
+    with pytest.raises(TeamStoreError, match="没有任何成功任务"):
+        store.complete_run()
+
+
+def test_coordinator_times_out_stuck_member_task(tmp_path, monkeypatch) -> None:
+    from src.server.routes.chat.team_runtime import coordinator as coordinator_module
+
+    store = create_store(tmp_path)
+    member = store.spawn_member(name="Slow", role="member", runtime_prompt="work")
+    task = store.create_task(title="Slow", brief="b", created_by="leader", assigned_member_id=member["id"])
+    calls = 0
+
+    async def fake_member_task(*, store, member, task, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.sleep(1)
+        store.read_inbox(member["id"])
+        store.complete_task(task["id"], member["id"], "late but fine")
+
+    async def flush_events() -> None:
+        return None
+
+    monkeypatch.setattr(coordinator_module, "run_member_task", fake_member_task)
+    monkeypatch.setattr(coordinator_module, "TASK_TIMEOUT_SECONDS", 0.05)
+    coordinator = TeamCoordinator(store=store, ctx=SimpleNamespace(), run_data=SimpleNamespace(), flush_events=flush_events)
+    asyncio.run(coordinator.run())
+
+    assert calls == 2
+    assert store.task(task["id"])["status"] == "succeeded"
+    assert store.task(task["id"])["retryCount"] == 1
+
+
+def test_synthesis_prompt_is_json_with_failed_tasks_and_trimmed_mail(tmp_path) -> None:
+    import json
+
+    from src.server.routes.chat.team_runtime.member_runtime import _synthesis_user_prompt
+
+    store = create_store(tmp_path)
+    member = store.spawn_member(name="M", role="member", runtime_prompt="work")
+    done = store.create_task(title="Done", brief="b", created_by="leader", assigned_member_id=member["id"])
+    failed = store.create_task(title="Failed", brief="b", created_by="leader")
+    store.claim_task(done["id"], member["id"])
+    store.read_inbox(member["id"])
+    store.complete_task(done["id"], member["id"], "the result")
+    store.fail_task(failed["id"], "", "network down", retryable=False)
+    store.send_mail(sender="user", recipient="leader", kind="user_note", subject="补充", content="y" * 2000)
+
+    payload = json.loads(_synthesis_user_prompt(store, "目标"))
+
+    assert payload["userGoal"] == "目标"
+    assert payload["successfulResults"] == [{"title": "Done", "result": "the result"}]
+    assert payload["failedOrCancelledTasks"][0]["title"] == "Failed"
+    assert "network down" in payload["failedOrCancelledTasks"][0]["reason"]
+    # 结果邮件不重复进 mailbox；长邮件被裁
+    assert all(mail["kind"] != "result" for mail in payload["mailbox"])
+    assert max(len(mail["content"]) for mail in payload["mailbox"]) <= 600

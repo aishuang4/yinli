@@ -133,6 +133,10 @@ export interface GroupStudioSnapshot {
     title: string;
     status: string;
     assigneeMemberId?: string | null;
+    /** 验收结果：accepted 通过，rework 退回原工人补做。 */
+    reviewStatus?: 'accepted' | 'rework' | null;
+    reviewNote?: string;
+    reworkCount?: number;
   }>;
   createdAt: string;
   updatedAt: string;

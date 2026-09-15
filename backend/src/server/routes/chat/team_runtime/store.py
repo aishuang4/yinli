@@ -17,6 +17,13 @@ from typing import Any
 from src.config.runtime_paths import TEAM_RUNTIME_ROOT
 
 TERMINAL_TASK_STATUSES = {"succeeded", "failed", "cancelled"}
+# 一次 TeamRun 的机械上限：Leader 拆得再细也不能无限开成员 / 开任务，超出在工具层直接拒绝。
+MAX_TEAM_MEMBERS = 6
+MAX_TEAM_TASKS = 12
+# 单个任务失败后自动重派的次数（同一任务换新 session 再跑一次）。
+MAX_TASK_RETRIES = 1
+# team_submit_result 的正文上限：更长的内容应写文件，result 只留路径 + 摘要，否则综合阶段撞窗口。
+MAX_TASK_RESULT_CHARS = 6000
 TEAM_RUN_ID_PATTERN = re.compile(r"^trun_[0-9a-f]{32}$")
 MEMBER_ID_PATTERN = re.compile(r"^(leader|member_[0-9a-f]{12})$")
 TASK_ID_PATTERN = re.compile(r"^task_[0-9a-f]{12}$")
@@ -203,17 +210,26 @@ class TeamStore:
             return run
 
     def complete_run(self, *, expected_mailbox_version: int | None = None) -> dict[str, Any]:
+        """TeamRun 完成。允许存在已彻底失败的任务（部分综合），但不允许还有未结束的任务。"""
+
         with self._lock:
             if expected_mailbox_version is not None and len(self.mailbox()) != expected_mailbox_version:
                 raise TeamMailboxChangedError("Mailbox 在综合期间发生变化")
-            unfinished = [task for task in self.tasks() if task.get("status") != "succeeded"]
+            tasks = self.tasks()
+            unfinished = [task for task in tasks if task.get("status") not in TERMINAL_TASK_STATUSES]
             if unfinished:
-                raise TeamStoreError("仍有任务未成功，TeamRun 不能完成")
+                raise TeamStoreError("仍有任务未结束，TeamRun 不能完成")
+            succeeded = [task for task in tasks if task.get("status") == "succeeded"]
+            if tasks and not succeeded:
+                raise TeamStoreError("没有任何成功任务，TeamRun 不能完成")
+            failed = [task for task in tasks if task.get("status") != "succeeded"]
             now = utc_now()
             run = {
                 **self.run(),
                 "status": "completed",
                 "phase": "completed",
+                "partial": bool(failed),
+                "failedTaskCount": len(failed),
                 "completedAt": now,
                 "updatedAt": now,
             }
@@ -301,6 +317,11 @@ class TeamStore:
         with self._lock:
             if not runtime_prompt.strip():
                 raise TeamStoreError("Member runtime prompt 不能为空")
+            existing = [member for member in self.members() if member.get("role") != "leader"]
+            if len(existing) >= MAX_TEAM_MEMBERS:
+                raise TeamStoreError(
+                    f"本轮最多创建 {MAX_TEAM_MEMBERS} 个临时成员，已达上限；请复用已有成员承接任务"
+                )
             member_id = f"member_{uuid.uuid4().hex[:12]}"
             now = utc_now()
             member = {
@@ -388,10 +409,19 @@ class TeamStore:
                 if member.get("role") == "leader":
                     raise TeamStoreError("Leader 只负责协调，不能承接任务")
             dependencies = list(dict.fromkeys(depends_on or []))
-            known_task_ids = {str(task.get("id") or "") for task in self.tasks()}
+            existing_tasks = self.tasks()
+            if len(existing_tasks) >= MAX_TEAM_TASKS:
+                raise TeamStoreError(
+                    f"本轮最多创建 {MAX_TEAM_TASKS} 个任务，已达上限；请合并任务或调用 team_finish_coordination"
+                )
+            known_task_ids = {str(task.get("id") or "") for task in existing_tasks}
             unknown = [task_id for task_id in dependencies if task_id not in known_task_ids]
             if unknown:
                 raise TeamStoreError(f"任务依赖不存在: {', '.join(unknown)}")
+            # 依赖只能指向已存在的任务，新任务不可能被旧任务依赖，因此这里天然无环；
+            # 但仍检查依赖链里是否已经存在环（防止外部写入的 task.json 被篡改）。
+            if _dependency_cycle(existing_tasks, dependencies):
+                raise TeamStoreError("任务依赖形成环，无法创建")
 
             task_id = f"task_{uuid.uuid4().hex[:12]}"
             task_path = self.ref.path / "tasks" / task_id
@@ -417,6 +447,8 @@ class TeamStore:
                 "claimedAt": "",
                 "completedAt": "",
                 "failureReason": "",
+                "retryCount": 0,
+                "retryable": True,
                 "createdAt": now,
                 "updatedAt": now,
             }
@@ -617,6 +649,11 @@ class TeamStore:
             normalized = result.strip()
             if not normalized:
                 raise TeamStoreError("任务结果不能为空")
+            if len(normalized) > MAX_TASK_RESULT_CHARS:
+                raise TeamStoreError(
+                    f"任务结果超过 {MAX_TASK_RESULT_CHARS} 字（当前 {len(normalized)}）。"
+                    "请把完整内容写入工作目录文件，result 只保留文件路径和不超过上限的摘要"
+                )
             task = self.task(task_id)
             if task.get("status") != "running" or task.get("ownerMemberId") != member_id:
                 raise TeamStoreError("只能由当前 owner 完成 running 任务")
@@ -686,7 +723,9 @@ class TeamStore:
             self.write_snapshot()
             return task
 
-    def fail_task(self, task_id: str, member_id: str, reason: str) -> dict[str, Any]:
+    def fail_task(self, task_id: str, member_id: str, reason: str, *, retryable: bool = True) -> dict[str, Any]:
+        """任务失败。`retryable=False` 表示不再自动重派（例如依赖任务已彻底失败）。"""
+
         with self._lock:
             task = self.task(task_id)
             if task.get("status") not in {"queued", "running"}:
@@ -711,6 +750,7 @@ class TeamStore:
                 "ownerMemberId": member_id or str(task.get("ownerMemberId") or ""),
                 "currentAttemptId": "",
                 "failureReason": reason.strip() or "Task failed",
+                "retryable": bool(task.get("retryable", True)) and retryable,
                 "completedAt": now,
                 "updatedAt": now,
             }
@@ -728,6 +768,52 @@ class TeamStore:
             )
             self.write_snapshot()
             return task
+
+    def can_retry_task(self, task: dict[str, Any]) -> bool:
+        return (
+            task.get("status") == "failed"
+            and bool(task.get("retryable", True))
+            and int(task.get("retryCount") or 0) < MAX_TASK_RETRIES
+        )
+
+    def retry_failed_task(self, task_id: str) -> dict[str, Any]:
+        """把失败任务重新排队自动重派：保留历史 Attempt，把失败原因带给下一次尝试。"""
+
+        with self._lock:
+            task = self.task(task_id)
+            if not self.can_retry_task(task):
+                raise TeamStoreError("任务不可重试")
+            now = utc_now()
+            failed_member = str(task.get("ownerMemberId") or "")
+            requeued = {
+                **task,
+                "status": "queued",
+                "ownerMemberId": "",
+                "currentAttemptId": "",
+                "completedAt": "",
+                "retryCount": int(task.get("retryCount") or 0) + 1,
+                "lastReviewReason": f"上一次尝试失败：{task.get('failureReason') or '未知原因'}",
+                "updatedAt": now,
+            }
+            self._write_json(self._task_path(task_id) / "task.json", requeued)
+            # 失败成员回到 idle 才能被重新分派；它的下一次 session 是全新实例。
+            if failed_member and failed_member != "leader":
+                member = self.member(failed_member)
+                if member.get("status") == "failed":
+                    self.set_member_status(failed_member, "idle")
+            self._record(
+                "task.retry.scheduled",
+                actor_id="leader",
+                task_id=task_id,
+                status="queued",
+                payload={
+                    "task": self._public_task(requeued),
+                    "message": requeued["lastReviewReason"],
+                    "retryCount": requeued["retryCount"],
+                },
+            )
+            self.write_snapshot()
+            return requeued
 
     def cancel_task(self, task_id: str, member_id: str, reason: str) -> dict[str, Any]:
         """把尚未结束的任务落为 cancelled。"""
@@ -1021,6 +1107,8 @@ class TeamStore:
                 "updatedAt",
                 "completedAt",
                 "failureReason",
+                "partial",
+                "failedTaskCount",
             )
         }
 
@@ -1074,6 +1162,8 @@ class TeamStore:
                 "attemptCount",
                 "reviewCount",
                 "lastReviewReason",
+                "retryCount",
+                "retryable",
                 "origin",
                 "originMailId",
                 "createdAt",
@@ -1202,3 +1292,26 @@ class TeamEventPublisher:
         if events:
             self.cursor = max(int(event.get("seq") or 0) for event in events)
         return events
+
+
+def _dependency_cycle(tasks: list[dict[str, Any]], new_dependencies: list[str]) -> bool:
+    """检查已有任务图加上"新任务依赖 new_dependencies"后是否存在环。"""
+
+    graph = {str(task.get("id") or ""): [str(dep) for dep in (task.get("dependsOn") or [])] for task in tasks}
+    graph["__new__"] = list(new_dependencies)
+    state: dict[str, int] = {}
+
+    def visit(node: str) -> bool:
+        mark = state.get(node, 0)
+        if mark == 1:
+            return True
+        if mark == 2:
+            return False
+        state[node] = 1
+        for dep in graph.get(node, []):
+            if visit(dep):
+                return True
+        state[node] = 2
+        return False
+
+    return any(visit(node) for node in list(graph))

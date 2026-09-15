@@ -773,6 +773,9 @@ BASE_SCHEMA_SQL = """
         claim_run_id TEXT NOT NULL DEFAULT '',
         claimed_at TEXT,
         completed_at TEXT,
+        review_status TEXT NOT NULL DEFAULT '',
+        review_note TEXT NOT NULL DEFAULT '',
+        rework_count INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY(group_id) REFERENCES group_studios(id) ON DELETE CASCADE

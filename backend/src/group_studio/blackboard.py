@@ -17,6 +17,38 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
+# 黑板 decisions 上限：超过后把最早的一批归并成一条"早期结论"摘要，原文留在事件流里可追溯。
+MAX_BLACKBOARD_DECISIONS = 20
+# 每次归并折叠的条数，以及归并条里每条原文保留的字符数。
+DECISION_FOLD_BATCH = 8
+DECISION_FOLD_ITEM_CHARS = 60
+FOLDED_DECISION_PREFIX = "早期结论归并"
+
+
+def consolidate_decisions(decisions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """decisions 超过上限时，把最早的一批（已归并条除外）折叠成一条摘要。"""
+
+    if len(decisions) <= MAX_BLACKBOARD_DECISIONS:
+        return decisions
+    folded = [item for item in decisions if str(item.get("text") or "").startswith(FOLDED_DECISION_PREFIX)]
+    plain = [item for item in decisions if not str(item.get("text") or "").startswith(FOLDED_DECISION_PREFIX)]
+    while len(folded) + len(plain) > MAX_BLACKBOARD_DECISIONS and len(plain) > DECISION_FOLD_BATCH:
+        batch, plain = plain[:DECISION_FOLD_BATCH], plain[DECISION_FOLD_BATCH:]
+        pieces = []
+        for item in batch:
+            text = " ".join(str(item.get("text") or "").split())
+            pieces.append(text[:DECISION_FOLD_ITEM_CHARS] + ("…" if len(text) > DECISION_FOLD_ITEM_CHARS else ""))
+        folded.append({
+            "id": _new_id("gdec"),
+            "text": f"{FOLDED_DECISION_PREFIX}（{len(batch)} 条）：" + "；".join(pieces),
+            "sourceMessageId": None,
+            "sourceRunId": None,
+            "createdAt": str(batch[-1].get("createdAt") or _utc_now()),
+            "foldedIds": [str(item.get("id") or "") for item in batch],
+        })
+    return folded + plain
+
+
 def merge_blackboard(
     current: dict[str, Any],
     patch: dict[str, Any],
@@ -115,7 +147,7 @@ def merge_blackboard(
 
     return {
         **current,
-        "decisions": decisions,
+        "decisions": consolidate_decisions(decisions),
         "openQuestions": questions,
         "artifacts": artifacts,
         "goal": patch.get("goal", current.get("goal") or ""),

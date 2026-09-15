@@ -16,6 +16,14 @@
 - [ ] Agent 缓存的 LRU 上限 / 闲置时长目前是常量（48 / 6h），后续如需按部署规模调节再进系统设置。
 - [ ] Skill 正文补回目前不发 SSE 事件，前端看不到"哪些 Skill 仍在生效"。
 
+## P1. Team / 群聊后续（2026-09-15 审查遗留）
+
+- [ ] Team Leader 验收步骤：综合前让 Leader 看各任务结果摘要，允许补派修正任务或放行；目前"完成"仍是全部任务终态的机械判定。
+- [ ] Team 跨轮连续性：每个 Chat 轮次新建 TeamRun，Leader 不知道上一轮组了谁、产出了什么；可让 Leader 读上一轮 `events.jsonl` 任务摘要。
+- [ ] Team 成员的 Bash 仍可写私有目录之外的位置（只有 Write/Edit 受 `write_scope_dir` 约束）。
+- [ ] 群聊讨论 → 执行缺客观收敛准则：任务卡加"进入执行的条件"由系统机械检查，不满足超 N 轮时 Host 必须向人提问。
+- [ ] 群聊工作室 Host / Worker 的 `CONTEXT_USAGE` trace、Chat 切模型与工作室固定连接不一致的 UI 提示、按 run 汇总 token 成本视图。
+
 ## P1. 群聊工作室后续
 
 Intake 对谈、FIFO 点名队列、`group_work_items` 认领已在线。下面只保留未做项。
@@ -25,7 +33,6 @@ Intake 对谈、FIFO 点名队列、`group_work_items` 认领已在线。下面�
 - [ ] 时间旅行快照表不要叫 `group_snapshots`，以免和 `GROUP_STUDIO_STATE` 口语撞车。
 - [ ] 群事件进入 Trace 页前给 `run_events` 增加 `source` 默认 `chat`，且 `session_id` 必须是真实 Chat session。
 - [ ] `max_cost_usd` 熔断；P0 只记 token，不按金额熔断。
-- [ ] 归档后 MemoryAdmissionGate 只用最终 Goal、黑板决策和人类可见结论，禁止用 `group-studio-host` 写 agent memory。
 - [ ] 工作室列表入口与跨群切换（P0 一 Chat session 一间未归档工作室，不提供群目录）。
 
 ## P1. Event Stream 后续加固

@@ -476,6 +476,45 @@ class GroupCancelWorkItem(HostTool):
         return self.success({"item": row})
 
 
+class GroupReviewWorkItem(HostTool):
+    name = "group_review_work_item"
+    description = (
+        "Review a completed (done) work item during the review phase. "
+        "verdict=accept marks it accepted; verdict=rework reopens it for the same worker with your note "
+        "(what is missing or wrong). Use before group_propose_close; every done item should be accepted or reworked."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "workItemId": {"type": "string"},
+            "verdict": {"type": "string", "enum": ["accept", "rework"]},
+            "note": {"type": "string", "description": "Chinese review note; required for rework."},
+        },
+        "required": ["workItemId", "verdict"],
+    }
+
+    async def __call__(self, workItemId: str, verdict: str, note: str = "") -> ToolChunk:
+        snapshot = get_group_studio_snapshot(self.ctx.group_id) or {}
+        if str(snapshot.get("status") or "") not in {"reviewing", "executing"}:
+            return self.error("illegal_transition")
+        if verdict == "rework" and not str(note or "").strip():
+            return self.error("review_note_required")
+        from src.group_studio.workboard import review_item
+
+        try:
+            row = review_item(self.ctx.group_id, workItemId, verdict=verdict, note=note, run_id=self.ctx.run_id)
+        except GroupStudioError as exc:
+            return self.error(exc.code)
+        if verdict == "rework":
+            # 退回的工作项直接点名原认领人继续，不用再走认领轮。
+            assignee = str(row.get("assigneeMemberId") or "")
+            if assignee:
+                assigned, error = _resolve_assignee(self.ctx.group_id, assignee)
+                if assigned is not None and not error:
+                    _commit_floor_assignment(self.ctx, assigned)
+        return self.success({"item": row})
+
+
 class GroupListAvailableAgents(HostTool):
     name = "group_list_available_agents"
     description = (
@@ -682,6 +721,7 @@ def host_tools(ctx: HostToolContext) -> list[HostTool]:
         GroupRequestIntakeConfirm(ctx),
         GroupPublishWorkItems(ctx),
         GroupCancelWorkItem(ctx),
+        GroupReviewWorkItem(ctx),
         GroupAssignFloor(ctx),
         GroupListAvailableAgents(ctx),
         GroupInviteMember(ctx),

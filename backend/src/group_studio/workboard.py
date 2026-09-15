@@ -23,6 +23,7 @@ from src.storage.database import (
     insert_group_studio_work_item,
     list_group_studio_work_items,
     pop_group_studio_claim_round_head,
+    review_group_studio_work_item,
     set_group_studio_claim_round,
 )
 
@@ -169,6 +170,28 @@ def complete_item(group_id: str, work_item_id: str, *, member_id: str, run_id: s
         event_type="GROUP_WORK_ITEM",
         run_id=run_id,
         payload={"change": "completed", "items": [row]},
+    )
+    return row
+
+
+def review_item(
+    group_id: str,
+    work_item_id: str,
+    *,
+    verdict: str,
+    note: str = "",
+    run_id: str = "",
+) -> dict[str, Any]:
+    """验收期对 done 工作项打 accept / rework；rework 退回 open 并把意见带给原认领人。"""
+
+    row = review_group_studio_work_item(group_id, work_item_id, verdict=verdict, note=note)
+    if row is None:
+        raise GroupStudioError(409, WORK_ITEM_NOT_OWNED)
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_WORK_ITEM",
+        run_id=run_id or None,
+        payload={"change": "accepted" if verdict == "accept" else "rework", "items": [row]},
     )
     return row
 

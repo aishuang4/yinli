@@ -633,6 +633,10 @@ def close_studio(group_id: str, *, project_id: str, confirm: bool) -> GroupStudi
         kind=KIND_COMPLETED,
         body=studio.task_card.goal or studio.title,
     )
+    # 归档后把 Goal + 黑板结论 + DoD 当作一轮完成对话沉淀进记忆（后台，不阻塞）。
+    from src.group_studio.archive_memory import schedule_archive_memory
+
+    schedule_archive_memory(snapshot)
     return snapshot
 
 

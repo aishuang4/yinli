@@ -78,7 +78,7 @@ heartbeat 不带 `seq`，不进入 `group_studio_events`，也不进入前端 re
 | `GROUP_ERROR` | 是 | `code`, `message`。已知 `code`：`model_not_configured`（缺 API Key，不创建 Run）、`host_failed`、`worker_failed`、`host_required`、`member_muted`、`not_found`、`worker_session_lost`、`intake_not_confirmed`、`intake_not_ready`、`intake_worker_forbidden`、`work_item_claimed`、`work_item_not_owned`、`floor_not_granted` |
 | `GROUP_RUN_ENDED` | 是 | `runId`, `status` |
 | `GROUP_INTAKE` | 是 | `awaitingConfirm`（bool）, `reason`: `host_request\|confirmed`。普通对话不发本事件 |
-| `GROUP_WORK_ITEM` | 是 | `change`: `created\|claimed\|completed\|cancelled\|updated`；`items`: 工作项数组（created 可多项，其余通常一项） |
+| `GROUP_WORK_ITEM` | 是 | `change`: `created\|claimed\|completed\|accepted\|rework\|cancelled\|updated`；`items`: 工作项数组（created 可多项，其余通常一项）。工作项带 `reviewStatus`（`accepted` / `rework` / 空）、`reviewNote`、`reworkCount`；`rework` 会把 done 项退回 `open` 并保留 `assigneeMemberId` |
 | `GROUP_SPEAKER_QUEUE` | 是 | `memberIds`（剩余队列或认领轮）, `kind`: `assign\|claim_round\|interrupt\|restatement\|drained`, `pendingMemberId`（`string\|null`） |
 
 `GROUP_SPEAKER_QUEUE.kind=drained` 只在工人队列与认领轮都空、即将综合 Host 之前发一次。`interrupt` / `restatement` / Host 自然结束不发 `drained`。`GROUP_INTAKE` 只在主持人提请确认或人类确认接手时发出，普通对谈不发。

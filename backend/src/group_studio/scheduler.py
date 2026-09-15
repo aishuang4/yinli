@@ -149,20 +149,6 @@ async def _run_worker_guarded(group_id: str, member_id: str, *, duty: str = "que
                 return
             enqueue_claimed_assignees(group_id)
         pop_unrunnable_head(group_id)
-        remaining = get_queue(group_id)
-        if remaining:
-            await _run_worker_guarded(group_id, remaining[0], duty="queue")
-            return
-        leftover_claim = get_claim_round(group_id)
-        if leftover_claim:
-            await _run_worker_guarded(group_id, leftover_claim[0], duty="claim")
-            return
-        emit_envelope(
-            group_id=group_id,
-            event_type="GROUP_SPEAKER_QUEUE",
-            payload={"memberIds": [], "kind": "drained", "pendingMemberId": None},
-        )
-        schedule_host_turn(group_id)
     except Exception:
         logger.exception(
             "群聊 Worker turn crashed: group_id=%s member_id=%s duty=%s",
@@ -181,10 +167,34 @@ async def _run_worker_guarded(group_id: str, member_id: str, *, duty: str = "que
                 run_id=str(run_id),
                 payload={"runId": str(run_id), "status": "failed"},
             )
+        # 只移除崩溃的这一个人，队列里其他人继续；不再让整场卡在这里等人。
         pop_unrunnable_head(group_id)
         pop_unrunnable_claim(group_id)
         emit_envelope(
             group_id=group_id,
             event_type="GROUP_ERROR",
-            payload={"code": "worker_failed", "message": "worker turn crashed"},
+            payload={"code": "worker_failed", "message": f"worker turn crashed: {member_id}", "memberId": member_id},
         )
+    await _continue_after_worker(group_id)
+
+
+async def _continue_after_worker(group_id: str) -> None:
+    """一个 Worker 回合结束（成功或崩溃）后：队列里还有人就继续，否则回到 Host。"""
+
+    try:
+        remaining = get_queue(group_id)
+        if remaining:
+            await _run_worker_guarded(group_id, remaining[0], duty="queue")
+            return
+        leftover_claim = get_claim_round(group_id)
+        if leftover_claim:
+            await _run_worker_guarded(group_id, leftover_claim[0], duty="claim")
+            return
+        emit_envelope(
+            group_id=group_id,
+            event_type="GROUP_SPEAKER_QUEUE",
+            payload={"memberIds": [], "kind": "drained", "pendingMemberId": None},
+        )
+        schedule_host_turn(group_id)
+    except Exception:
+        logger.exception("群聊 Worker 队列续跑失败: group_id=%s", group_id)

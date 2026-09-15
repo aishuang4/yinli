@@ -205,6 +205,10 @@ class WorkItem(CamelModel):
     claim_run_id: str | None = Field(default=None, alias="claimRunId")
     claimed_at: str | None = Field(default=None, alias="claimedAt")
     completed_at: str | None = Field(default=None, alias="completedAt")
+    # 验收：accepted 通过；rework 退回 open（保留认领人），review_note 是给工人的修改意见。
+    review_status: Literal["accepted", "rework"] | None = Field(default=None, alias="reviewStatus")
+    review_note: str = Field(default="", alias="reviewNote")
+    rework_count: int = Field(default=0, alias="reworkCount")
     created_at: str = Field(alias="createdAt")
     updated_at: str = Field(alias="updatedAt")
 

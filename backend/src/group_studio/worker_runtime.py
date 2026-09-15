@@ -114,7 +114,8 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
     )
     guardrails = AgentGuardrails(
         filesystem_scope=guardrails.filesystem_scope,
-        shell_blacklist=list(guardrails.shell_blacklist),
+        # Worker 是 BYPASS，没有人工审批兜底：破坏性 shell 操作靠黑名单硬拦（bypass_immune）。
+        shell_blacklist=_merge_shell_blacklist(list(guardrails.shell_blacklist)),
         network_enabled=True,
         human_approval=False,
         tool_permission_mode="bypass",
@@ -203,6 +204,35 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
         extra_filesystem_scopes=_catalog_scopes(str(snapshot.get("workspaceId") or "default")),
     )
     return spec, ctx, tools
+
+
+# 群聊 Worker 额外禁止的破坏性 shell 片段（子串匹配）。写文件仍限制在工作室 workspace 目录。
+WORKER_SHELL_BLACKLIST: tuple[str, ...] = (
+    "rm -rf",
+    "rm -fr",
+    "rm -r ",
+    "rmdir ",
+    "git reset --hard",
+    "git clean -f",
+    "git push --force",
+    "git push -f",
+    "mkfs",
+    "dd if=",
+    "> /dev/",
+    "chmod -R 777",
+    "chown -R",
+    ":(){",
+    "shutdown",
+    "reboot",
+)
+
+
+def _merge_shell_blacklist(base: list[str]) -> list[str]:
+    merged = [item for item in base if str(item).strip()]
+    for item in WORKER_SHELL_BLACKLIST:
+        if item not in merged:
+            merged.append(item)
+    return merged
 
 
 def _catalog_scopes(workspace_id: str) -> list[str]:
@@ -341,6 +371,21 @@ def _worker_user_message(
         return (
             "这是认领回合，认领或说跳过，不要开工；用 group_claim_work_item，最后 group_post_message。"
             f"开放工作项：{open_items}\n"
+            f"{format_turn_context(snapshot)}"
+        )
+    rework_items = [
+        f"{item.get('id')}:{item.get('title')} — 验收意见：{item.get('reviewNote') or ''}"
+        for item in items
+        if item.get("reviewStatus") == "rework"
+        and item.get("status") in {"open", "claimed"}
+        and str(item.get("assigneeMemberId") or "") == str(member.get("id") or "")
+    ]
+    if rework_items:
+        return (
+            "你的交付被退回，请按验收意见补做：先 group_claim_work_item 重新认领（若尚未认领），"
+            "修改后 group_complete_work_item 并 group_post_message 说明改了什么。\n"
+            f"退回项：{rework_items}\n"
+            f"目标：{card.get('goal') or ''}\n"
             f"{format_turn_context(snapshot)}"
         )
     if status == "executing":

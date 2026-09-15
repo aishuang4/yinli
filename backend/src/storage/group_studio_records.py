@@ -627,9 +627,52 @@ class GroupStudioRecordStore:
             "claimRunId": _blank(row["claim_run_id"]),
             "claimedAt": row["claimed_at"],
             "completedAt": row["completed_at"],
+            "reviewStatus": _blank(row["review_status"]) if "review_status" in row.keys() else None,
+            "reviewNote": str(row["review_note"] or "") if "review_note" in row.keys() else "",
+            "reworkCount": int(row["rework_count"] or 0) if "rework_count" in row.keys() else 0,
             "createdAt": str(row["created_at"]),
             "updatedAt": str(row["updated_at"]),
         }
+
+    def review_work_item(
+        self,
+        group_id: str,
+        work_item_id: str,
+        *,
+        verdict: str,
+        note: str = "",
+    ) -> dict[str, Any] | None:
+        """验收一个 done 工作项：accept 记录通过；rework 退回 open 并保留原认领人，带上意见。"""
+
+        if verdict not in {"accept", "rework"}:
+            raise ValueError(f"unknown review verdict: {verdict}")
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            if verdict == "accept":
+                cursor = conn.execute(
+                    """
+                    UPDATE group_work_items
+                    SET review_status = 'accepted', review_note = ?, updated_at = ?
+                    WHERE id = ? AND group_id = ? AND status = 'done'
+                    """,
+                    (note[:600], now, work_item_id, group_id),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    UPDATE group_work_items
+                    SET status = 'open', review_status = 'rework', review_note = ?,
+                        rework_count = rework_count + 1, completed_at = NULL, claimed_at = NULL,
+                        claim_run_id = '', updated_at = ?
+                    WHERE id = ? AND group_id = ? AND status = 'done'
+                    """,
+                    (note[:600], now, work_item_id, group_id),
+                )
+            if cursor.rowcount != 1:
+                return None
+            row = conn.execute("SELECT * FROM group_work_items WHERE id = ?", (work_item_id,)).fetchone()
+        return self._work_item_from_row(row)
 
     def insert_work_item(self, payload: dict[str, Any]) -> dict[str, Any]:
         self.ensure_db()

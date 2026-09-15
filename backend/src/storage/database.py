@@ -350,6 +350,9 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'")
             _ensure_column(conn, "scheduled_jobs", "model_config_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_studios", "model_config_id", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "group_work_items", "review_status", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "group_work_items", "review_note", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "group_work_items", "rework_count", "INTEGER NOT NULL DEFAULT 0")
             _drop_column_if_exists(conn, "chat_runs", "team_id")
             _drop_column_if_exists(conn, "chat_runs", "team_name")
             now = _utc_now()
@@ -1477,6 +1480,16 @@ def complete_group_studio_work_item(
 
 def cancel_group_studio_work_item(group_id: str, work_item_id: str) -> dict[str, Any] | None:
     return _group_studio_record_store().cancel_work_item(group_id, work_item_id)
+
+
+def review_group_studio_work_item(
+    group_id: str,
+    work_item_id: str,
+    *,
+    verdict: str,
+    note: str = "",
+) -> dict[str, Any] | None:
+    return _group_studio_record_store().review_work_item(group_id, work_item_id, verdict=verdict, note=note)
 
 
 def insert_group_studio_run(payload: dict[str, Any]) -> dict[str, Any]:

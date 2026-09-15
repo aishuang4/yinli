@@ -440,8 +440,23 @@ def _host_turn_user_message(snapshot: dict[str, Any]) -> str:
             f"{format_turn_context(snapshot)}"
         )
     if status == "reviewing":
+        items = snapshot.get("workItems") or []
+        pending_review = [
+            f"{item.get('id')}:{item.get('title')}"
+            for item in items
+            if item.get("status") == "done" and not item.get("reviewStatus")
+        ]
+        reworking = [
+            f"{item.get('id')}:{item.get('title')}"
+            for item in items
+            if item.get("status") in {"open", "claimed"} and item.get("reviewStatus") == "rework"
+        ]
         return (
-            "当前已进入验收。核对 DoD 与最近交稿，必要时指派工人补材料，齐了就 group_propose_close。"
+            "当前已进入验收。逐个核对已完成工作项与 DoD："
+            "合格的 group_review_work_item(verdict=accept)；不合格的 verdict=rework 并写清缺什么，系统会点名原工人补做。"
+            "全部 accepted 且 DoD 齐了才 group_propose_close；不要在还有未验收或退回中的工作项时提议关闭。"
+            f"待验收：{pending_review}\n"
+            f"退回中：{reworking}\n"
             f"目标：{card.get('goal') or ''}\n"
             f"{format_turn_context(snapshot)}"
         )

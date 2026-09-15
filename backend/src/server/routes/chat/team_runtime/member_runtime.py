@@ -3,6 +3,7 @@
 本模块直接消费 AgentScope 事件，不复用 Chat Leader 的阶段、HITL 或最终答案流。
 """
 
+import json
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 
@@ -26,7 +27,7 @@ from src.server.routes.chat.runtime_governance import (
     prepare_agent_governance,
     record_memory_recall_audit,
 )
-from src.server.routes.chat.team_runtime.store import TeamStore
+from src.server.routes.chat.team_runtime.store import MAX_TASK_RESULT_CHARS, TERMINAL_TASK_STATUSES, TeamStore
 from src.server.routes.chat.team_runtime.tools import leader_tools, member_tools
 from src.server.routes.chat.trace_recorder import _make_fallback_trace_recorder
 
@@ -138,15 +139,20 @@ async def run_member_task(
         *(tool.name for tool in tools),
     }
     actor_name = str(member.get("name") or member_id)
+    retry_count = int(task.get("retryCount") or 0)
+    # 每个成员只能写自己的目录：并行成员不会互相覆盖文件；结果通过 result 里的路径交给综合阶段。
+    write_dir = _member_write_dir(ctx, store, member_id)
     # Member 按自己的任务召回历史记忆（不是按用户原始目标）；Markdown 摘要沿用 Leader 所属 Agent 的。
     member_recall_text = _member_memory_recall(ctx, actor_name=actor_name, task=task)
     agent = _create_team_agent(
         ctx=ctx,
         actor_id=member_id,
         actor_name=actor_name,
-        session_id=f"{ctx.session_id}:{store.ref.id}:{member_id}",
-        system_prompt=_with_memory_prompt(_member_system_prompt(store, member, task), ctx.memory_prompt),
-        runtime_key=f"team-member-{store.ref.id}-{member_id}-{task_id}",
+        session_id=f"{ctx.session_id}:{store.ref.id}:{member_id}:r{retry_count}",
+        system_prompt=_with_memory_prompt(_member_system_prompt(store, member, task, write_dir=write_dir), ctx.memory_prompt),
+        # 重派后的 key 不同：失败那次的实例（及其上下文）不复用。
+        runtime_key=f"team-member-{store.ref.id}-{member_id}-{task_id}-r{retry_count}",
+        write_scope_dir=write_dir,
         extra_tools=tools,
         tool_allowlist=allowlist,
         used_skills=ctx.used_skills,
@@ -186,9 +192,12 @@ async def run_synthesis(
 ) -> str:
     """使用独立无工具 session 综合最终答案。"""
 
-    unfinished = [task for task in store.tasks() if task.get("status") != "succeeded"]
+    tasks = store.tasks()
+    unfinished = [task for task in tasks if task.get("status") not in TERMINAL_TASK_STATUSES]
     if unfinished:
-        raise TeamSessionError("存在未成功任务，不能进入综合阶段")
+        raise TeamSessionError("存在未结束任务，不能进入综合阶段")
+    if not any(task.get("status") == "succeeded" for task in tasks):
+        raise TeamSessionError("没有任何成功任务，不能进入综合阶段")
     store.set_phase("synthesizing")
     store.set_member_status("leader", "running")
     await flush_events()
@@ -242,6 +251,7 @@ def _create_team_agent(
     knowledge_tools: list | None = None,
     max_react_iters: int,
     skill_context: bool = False,
+    write_scope_dir: str = "",
 ):
     """使用唯一 cache key 创建隔离 Team Member Agent，并挂上与单 Agent 相同的上下文治理 middleware。"""
 
@@ -271,6 +281,7 @@ def _create_team_agent(
         tool_name_allowlist=tool_allowlist,
         middlewares=build_context_governance_middlewares(skill_context=skill_context),
         workspace_dir=str(getattr(ctx, "session_workspace_dir", "") or ""),
+        write_scope_dir=write_scope_dir,
         extra_filesystem_scopes=list(getattr(ctx, "extra_filesystem_scopes", None) or []),
     )
     agent = create_main_agent_from_spec(
@@ -605,8 +616,24 @@ def _leader_system_prompt(store: TeamStore, run_data: ChatMessage) -> str:
     ])
 
 
-def _member_system_prompt(store: TeamStore, member: dict, task: dict) -> str:
-    return "\n".join([
+def _member_write_dir(ctx: ChatRunContext, store: TeamStore, member_id: str) -> str:
+    """成员私有可写目录：<session workspace>/team/<run>/<member>，不存在则创建。"""
+
+    base = str(getattr(ctx, "session_workspace_dir", "") or "")
+    if not base:
+        return ""
+    from pathlib import Path
+
+    directory = Path(base) / "team" / store.ref.id / member_id
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return ""
+    return str(directory)
+
+
+def _member_system_prompt(store: TeamStore, member: dict, task: dict, *, write_dir: str = "") -> str:
+    lines = [
         "You are an isolated temporary TeamRun member.",
         f"TeamRun id: {store.ref.id}",
         f"Member id: {member.get('id')}",
@@ -618,20 +645,32 @@ def _member_system_prompt(store: TeamStore, member: dict, task: dict) -> str:
         "Communicate only through team_send_mail.",
         "Interactive tools are denied in TeamRun; if one is denied, continue with available tools and submit the result.",
         "Call team_read_mailbox immediately before team_submit_result and incorporate every new inbound message.",
-        "The only successful task exit is team_submit_result with a complete non-empty result.",
+        f"The only successful task exit is team_submit_result with a complete non-empty result (max {MAX_TASK_RESULT_CHARS} chars; put longer deliverables in files and reference their paths).",
         "Do not ask the user directly and do not claim another task.",
-    ])
+    ]
+    if write_dir:
+        lines.append(
+            f"Write / Edit are restricted to your private directory: {write_dir}. Other members run in parallel; "
+            "never assume you can modify shared project files. Save deliverables there and list the paths in your result."
+        )
+    return "\n".join(lines)
 
 
 def _member_user_prompt(store: TeamStore, member_id: str, task: dict) -> str:
     inbox = store.read_inbox(member_id)[-20:]
-    return "\n\n".join([
+    parts = [
         f"Execute task {task.get('id')}: {task.get('title')}",
         "Task brief:",
         store.task_brief(str(task["id"])),
-        "Mailbox:",
-        str(inbox),
-    ])
+    ]
+    if int(task.get("retryCount") or 0) > 0 and task.get("lastReviewReason"):
+        parts.extend([
+            "This is a retry. Previous attempt outcome:",
+            str(task.get("lastReviewReason") or ""),
+            "Avoid the same failure path; if a tool keeps failing, deliver the best result with available evidence.",
+        ])
+    parts.extend(["Mailbox:", json.dumps(inbox, ensure_ascii=False, default=str)])
+    return "\n\n".join(parts)
 
 
 def _synthesis_system_prompt() -> str:
@@ -639,15 +678,54 @@ def _synthesis_system_prompt() -> str:
         "You are the final synthesis stage of a completed TeamRun.",
         "Use only the supplied successful task results and mailbox evidence.",
         "Answer the user's goal directly with one polished final answer.",
+        "If some tasks failed, say so briefly at the end: which part of the goal is not covered and why, "
+        "so the user can decide whether to retry. Never invent content for failed tasks.",
         "Do not mention internal IDs, coordination steps, task states, or mailbox routing unless asked.",
         "Do not call tools.",
     ])
 
 
+# 综合输入的字符预算：结果正文与邮件分别裁剪，避免把整份报告和 100 封信一起塞进无工具的综合 session。
+SYNTHESIS_RESULT_CHARS = MAX_TASK_RESULT_CHARS
+SYNTHESIS_MAILBOX_LIMIT = 40
+SYNTHESIS_MAIL_CHARS = 600
+
+
 def _synthesis_user_prompt(store: TeamStore, goal: str) -> str:
-    evidence = [{
-        "title": task.get("title"),
-        "result": store.task_result(str(task["id"])),
-    } for task in store.tasks() if task.get("status") == "succeeded"]
-    mailbox = store.mailbox()[-100:]
-    return f"User goal:\n{goal}\n\nSuccessful Team results:\n{evidence}\n\nTeam Mailbox:\n{mailbox}"
+    tasks = store.tasks()
+    evidence = [
+        {
+            "title": task.get("title"),
+            "result": store.task_result(str(task["id"]))[:SYNTHESIS_RESULT_CHARS],
+        }
+        for task in tasks
+        if task.get("status") == "succeeded"
+    ]
+    failed = [
+        {
+            "title": task.get("title"),
+            "status": task.get("status"),
+            "reason": str(task.get("failureReason") or "")[:300],
+        }
+        for task in tasks
+        if task.get("status") != "succeeded"
+    ]
+    mailbox = [
+        {
+            "from": mail.get("sender") or mail.get("from"),
+            "to": mail.get("recipient") or mail.get("to"),
+            "kind": mail.get("kind"),
+            "subject": mail.get("subject"),
+            "content": str(mail.get("content") or "")[:SYNTHESIS_MAIL_CHARS],
+        }
+        for mail in store.mailbox()[-SYNTHESIS_MAILBOX_LIMIT:]
+        # 任务结果邮件与 evidence 重复，不再抄一遍。
+        if str(mail.get("kind") or "") != "result"
+    ]
+    payload = {
+        "userGoal": goal,
+        "successfulResults": evidence,
+        "failedOrCancelledTasks": failed,
+        "mailbox": mailbox,
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=1)

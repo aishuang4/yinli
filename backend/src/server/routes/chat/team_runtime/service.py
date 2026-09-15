@@ -13,6 +13,7 @@ from src.server.routes.chat.team_runtime.events import team_source_event
 from src.server.routes.chat.team_runtime.member_runtime import TeamSessionError, run_leader_coordination, run_synthesis
 from src.server.routes.chat.team_runtime.registry import register_team_service, unregister_team_service
 from src.server.routes.chat.team_runtime.store import (
+    TERMINAL_TASK_STATUSES,
     TeamEventPublisher,
     TeamMailboxChangedError,
     TeamStoreError,
@@ -79,6 +80,18 @@ class TeamRunService:
                 subject="本轮目标",
                 content=self.run_data.message,
             )
+            if bool(getattr(self.ctx.guardrails, "human_approval", False)):
+                # Team 不暂停等人：需要审批的工具在成员里会被自动拒绝。提前告诉用户，而不是让成员莫名失败。
+                self.store.send_mail(
+                    sender="leader",
+                    recipient="user",
+                    kind="notice",
+                    subject="Team 模式权限提示",
+                    content=(
+                        "当前 Agent 开启了人工审批。TeamRun 不会暂停等待审批，成员调用需要审批的工具（如 Write / Edit / Bash）"
+                        "会被自动拒绝并改用只读方式继续；如需成员写文件，请改用信任工具的 Agent 或在单 Agent 模式下执行。"
+                    ),
+                )
             await self.flush_events()
 
             await run_leader_coordination(
@@ -105,7 +118,9 @@ class TeamRunService:
                         on_output_delta=self._publish_final_answer_delta,
                     )
                 except (TeamStoreError, TeamSessionError):
-                    if any(task.get("status") != "succeeded" for task in self.store.tasks()):
+                    # 只有还有未结束任务（用户邮件触发的 rework 等）才回到 coordinator；
+                    # 已彻底失败的任务是部分综合的一部分，不能再循环。
+                    if any(task.get("status") not in TERMINAL_TASK_STATUSES for task in self.store.tasks()):
                         continue
                     raise
                 try:

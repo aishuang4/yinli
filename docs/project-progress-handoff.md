@@ -65,6 +65,23 @@
 - 观测：Team `_run_agent_stream` 新增 `on_model_call` 回调 → `observe_model_call_event()` 写 `CONTEXT_COMPRESSED` / `CONTEXT_USAGE` trace（scope `team_leader` / `team_member` / `team_synthesis`）。群聊暂不写（run_events 尚无 `source` 字段）。
 - 验证：后端全量 `807 passed, 2 skipped`。
 
+## 2026-09-15 Team / 群聊链路修正
+
+按 `docs/project-todo.md` 审查结论落地（后端全量 `819 passed, 2 skipped`）：
+
+Team（`team_runtime/`）：
+- 失败任务自动重派一次（`store.retry_failed_task`，新 session、`lastReviewReason` 带失败原因进用户提示、runtime key 含 retryCount），仍失败保留 failed 并把依赖它的任务级联失败（`retryable=False`）；`TeamCoordinator.run()` 只要有成功任务就返回，综合阶段做部分综合（prompt 明说哪些任务未完成），`complete_run` 允许 `partial`；全部失败才抛错。`service.py` 的综合重试循环改为只在还有未结束任务时回到 coordinator，避免部分失败时死循环。
+- 上限：成员 6、任务 12（工具层拒绝并提示 Leader），单任务 10 分钟 `asyncio.wait_for` 超时，`team_submit_result` ≤ 6000 字；`create_task` 做依赖环检测。
+- 成员 Write/Edit 限制在 `<session workspace>/team/<run>/<member>/` 私有目录并写进 system prompt；综合输入改 JSON，结果邮件不重复、邮件正文裁 600 字、最多 40 封。
+- 开启人工审批的 Agent 进入 Team 模式时，Leader 先给用户发一封 `notice` 邮件说明需审批工具会被自动拒绝。
+
+群聊（`group_studio/`）：
+- 归档记忆收口 `archive_memory.py`：Goal + 黑板 decisions + 已解决问题 + 完成工作项 + DoD 拼成纪要，走 `evaluate_turn_admission` → 历史节点 → `MemoryReflectionAgent`（归档结论放行 Markdown 提炼，user / global 仍进待确认队列），归属第一个 Worker 的 Agent，写 `MEMORY_AUDIT.group_archive_*`。
+- 验收：新 Host 工具 `group_review_work_item(accept|rework)`，`group_work_items` 新增 `review_status / review_note / rework_count`；rework 退回 open 保留认领人并点名其继续，Worker 提示里带验收意见；Host 验收期提示列出待验收 / 退回中项，全部 accepted 才 propose_close。前端工作项列表显示 ✔ / ↺。
+- Worker 崩溃只移出本人，`_continue_after_worker` 续跑队列或回 Host；黑板 decisions > 20 自动把最早 8 条归并为一条；Worker shell 黑名单加破坏性命令（bypass 免疫）。
+
+未做（记 TODO）：Leader 验收步骤、Team 跨轮连续性、群聊收敛准则、成员 Bash 越界写。
+
 ## 本轮模型配置改造
 
 - 已实施 [Chat 模型选择与 models.json 配置 V1](./chat-model-selection-v1.md)：Agent 不再选模型，Chat / Sandbox 按配置 ID 选择，所有连接与 Key 从用户数据目录 `models.json` 读取。
