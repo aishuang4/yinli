@@ -955,11 +955,11 @@
 .group-studio-shell .chat-workbench-title-group > button,
 .group-studio-shell .chat-workbench-title-group .chat-history-collapse-button,
 .group-studio-shell .chat-workbench-title-group .chat-history-new-button {
-  flex: 0 0 36px;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  min-height: 36px;
+  flex: 0 0 32px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
 }
 
 .group-studio-shell .chat-workbench-title-copy {

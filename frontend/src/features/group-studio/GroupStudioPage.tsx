@@ -855,7 +855,7 @@ export function GroupStudioPage() {
           >
             <div className="chat-workbench-title-group flex min-w-0 items-center gap-3">
               {effectiveHistoryCollapsed ? (
-                <>
+                <div className="flex shrink-0 items-center gap-2">
                   <Tooltip title="展开群聊列表" placement="bottom" mode="dark">
                     <button
                       type="button"
@@ -876,7 +876,7 @@ export function GroupStudioPage() {
                       <Plus size={15} />
                     </button>
                   </Tooltip>
-                </>
+                </div>
               ) : null}
               <Tooltip title={`返回 Chat ${shortcutLabel}`} placement="bottom" mode="dark">
                 <button

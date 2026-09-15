@@ -654,7 +654,7 @@ export function ChatPage() {
           >
           <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
             {historyCollapsed && (
-              <>
+              <div className="flex shrink-0 items-center gap-2">
                 <Tooltip title="展开历史对话" placement="bottom" mode="dark">
                   <button
                     type="button"
@@ -676,7 +676,7 @@ export function ChatPage() {
                     <Plus size={15} />
                   </button>
                 </Tooltip>
-              </>
+              </div>
             )}
             {studioFlagEnabled ? (
               <Tooltip title={`${studioButtonLabel} ${studioShortcut}`} placement="bottom" mode="dark">
