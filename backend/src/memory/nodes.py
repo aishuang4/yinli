@@ -14,14 +14,22 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from src.storage.database import (
+    find_session_day_memory_node,
     get_memory_node,
     list_memory_retrieval_feedback_scores,
     list_memory_nodes,
+    list_stale_active_memory_node_ids,
     mark_memory_node_used,
     search_memory_nodes,
+    update_memory_node_status,
     update_memory_node_vector_state,
     upsert_memory_node,
 )
+
+# 超过这么多天未被命中（且未置顶）的历史记忆自动归档：不删除、不进注入 / 召回，Memory 页可恢复。
+MEMORY_NODE_STALE_DAYS = 90
+# 同一会话同一天聚合进一个节点时，最多保留多少轮原文。
+MEMORY_NODE_MAX_TURNS = 40
 from src.vector_store.base import (
     VectorCollectionConfig,
     VectorDocument,
@@ -103,6 +111,73 @@ class MemoryNodeService:
             },
         )
         return self.sync_node_to_vector(node["id"])
+
+    def append_turn_to_session_day_node(
+        self,
+        item: MemoryNodeWrite,
+        *,
+        turn_summary: str,
+        turn_digest: str,
+    ) -> dict[str, Any] | None:
+        """同一会话、同一天已有节点时把本轮并进去，返回更新后的节点；没有则返回 None。
+
+        标题保留首轮（它是这段会话的主题），summary 记录"首轮要点 ｜ 最近一轮要点（共 N 轮）"，
+        digest 用最新一轮，原文列表追加。这样一段多轮会话在索引和召回里只占一条。
+        """
+
+        existing = find_session_day_memory_node(
+            workspace_id=item.workspace_id,
+            project_id=item.project_id,
+            agent_id=item.agent_id,
+            node_date=item.node_date,
+            source_session_id=item.source_session_id,
+        )
+        if not existing:
+            return None
+        user_inputs = list(existing.get("user_inputs") or []) + list(item.user_inputs)
+        outputs = list(existing.get("agent_final_outputs") or []) + list(item.agent_final_outputs)
+        user_inputs = user_inputs[-MEMORY_NODE_MAX_TURNS:]
+        outputs = outputs[-MEMORY_NODE_MAX_TURNS:]
+        turns = len(user_inputs)
+        first_summary = str(existing.get("summary") or "").split(" ｜ ", 1)[0]
+        summary = f"{first_summary} ｜ 最近：{turn_summary}（共 {turns} 轮）"
+        tags = list(dict.fromkeys([*(existing.get("tags") or []), *item.tags]))
+        merged = MemoryNodeWrite(
+            id=existing["id"],
+            agent_id=item.agent_id,
+            node_date=item.node_date,
+            title=str(existing.get("title") or item.title),
+            summary=summary[:260],
+            conversation_digest=turn_digest,
+            user_inputs=user_inputs,
+            agent_final_outputs=outputs,
+            tags=tags,
+            workspace_id=item.workspace_id,
+            project_id=item.project_id,
+            user_id=item.user_id,
+            source=item.source,
+            source_session_id=item.source_session_id,
+            source_run_id=item.source_run_id,
+            source_message_id=item.source_message_id,
+            confidence=max(float(existing.get("confidence") or 0.0), item.confidence),
+            status="active",
+            pinned=bool(existing.get("pinned")),
+        )
+        return self.upsert_node(merged)
+
+    def archive_stale_nodes(self, *, stale_days: int = MEMORY_NODE_STALE_DAYS, limit: int = 200) -> list[str]:
+        """把长期未命中的活跃节点改为 archived 并从向量库移除。返回归档的 id。"""
+
+        cutoff = (date.today() - timedelta(days=stale_days)).isoformat()
+        archived: list[str] = []
+        for node_id in list_stale_active_memory_node_ids(before_date=cutoff, unused_since=cutoff, limit=limit):
+            update_memory_node_status(node_id, status="archived")
+            try:
+                self.sync_node_to_vector(node_id)
+            except Exception:
+                pass
+            archived.append(node_id)
+        return archived
 
     def sync_node_to_vector(self, node_id: str) -> dict[str, Any]:
         """把单个 SQLite 节点同步到向量库。"""
@@ -188,8 +263,12 @@ class MemoryNodeService:
         project_id: str = "default",
         user_id: str | None = None,
         status: str | None = "active",
+        mark_used: bool = True,
     ) -> dict[str, Any]:
-        """按语义或日期查询节点详情。"""
+        """按语义或日期查询节点详情。
+
+        `mark_used=False` 供运行前自动召回使用：自动召回不代表模型真的用到了，不计入 use_count。
+        """
 
         vector_results = self._query_vector(
             query_text=query_text,
@@ -237,8 +316,9 @@ class MemoryNodeService:
         for node in nodes:
             node["_feedback_score"] = feedback_scores.get(str(node.get("id") or ""), 0.0)
         nodes = _rerank_nodes(nodes, query_text=query_text)
-        for node in nodes[:limit]:
-            mark_memory_node_used(node["id"])
+        if mark_used:
+            for node in nodes[:limit]:
+                mark_memory_node_used(node["id"])
         results = nodes[:limit]
         return {
             "results": [_node_query_payload(node) for node in results],
@@ -398,6 +478,8 @@ def _node_query_payload(node: dict[str, Any]) -> dict[str, Any]:
         "conversationDigest": node["conversation_digest"],
         "sourceRunIds": [node["source_run_id"]] if node["source_run_id"] else [],
         "tags": node["tags"],
+        "rankScore": round(float(node.get("_rank_score") or 0.0), 3),
+        "matchedTerms": list(node.get("_matched_terms") or []),
     }
 
 
@@ -469,7 +551,8 @@ def _node_rank_score(node: dict[str, Any], *, query_terms: set[str]) -> tuple[fl
         ]
     ).lower()
     matched_terms = {term for term in query_terms if term in text}
-    lexical = float(len(matched_terms))
+    # 中文滑窗后命中数会偏多，封顶避免压过向量分和反馈分。
+    lexical = min(float(len(matched_terms)), 4.0)
     vector = min(float(node.get("_vector_score") or 0), 1.0) * 0.35
     feedback = max(-1.0, min(float(node.get("_feedback_score") or 0), 1.0))
     pinned = 0.4 if node.get("pinned") else 0.0
@@ -488,10 +571,19 @@ def _load_retrieval_feedback_scores(limit: int = 200) -> dict[str, float]:
 
 
 def _rank_terms(value: str) -> set[str]:
-    return {
-        token.lower()
-        for token in re.findall(r"[A-Za-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", value)
-    }
+    """查询词：英文 / 数字按 token，中文按 2 字滑窗。
+
+    此前中文连续串只算一个词（"帮我把销售表按地区汇总"），几乎不可能整段命中；
+    滑窗后"销售表"、"地区"这类片段能命中标题 / 摘要。
+    """
+
+    terms: set[str] = set()
+    for token in re.findall(r"[A-Za-z0-9_]{2,}", value):
+        terms.add(token.lower())
+    for run in re.findall(r"[\u4e00-\u9fff]{2,}", value):
+        for index in range(len(run) - 1):
+            terms.add(run[index : index + 2])
+    return terms
 
 
 def _build_search_text(item: MemoryNodeWrite) -> str:

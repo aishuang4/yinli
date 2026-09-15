@@ -70,10 +70,14 @@ def memory_reflection_audit_payload(result: Any) -> dict[str, Any]:
         }
         for update in updates[:12]
     ]
+    candidates = list(getattr(result, "candidates", []) or [])
     return {
         "markdownUpdateCount": len(updates),
         "markdownScopes": scopes,
         "markdownOperations": operations,
+        # user / global 层待用户确认的候选，采纳前不写文件。
+        "markdownCandidateCount": len(candidates),
+        "markdownCandidateIds": [str(item.get("id") or "") for item in candidates[:12] if isinstance(item, dict)],
         "skillCandidateKept": skill_candidate is not None,
         "skillEvolutionRecordId": str(skill_record.get("id") or ""),
         "skillEvolutionStatus": str(skill_record.get("status") or ""),

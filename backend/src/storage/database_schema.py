@@ -416,6 +416,31 @@ BASE_SCHEMA_SQL = """
     );
     CREATE INDEX IF NOT EXISTS idx_skill_runs_session_agent_status
         ON skill_runs(session_id, agent_id, status, updated_at);
+    -- 待用户确认的 Markdown 记忆候选：user / global 层由模型提炼后先进队列，采纳后才写文件。
+    CREATE TABLE IF NOT EXISTS memory_markdown_candidates (
+        id TEXT PRIMARY KEY,
+        scope TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        section TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        note TEXT NOT NULL DEFAULT '',
+        exact_text TEXT NOT NULL DEFAULT '',
+        replacement_text TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '',
+        confidence REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'pending',
+        resolution TEXT NOT NULL DEFAULT '',
+        agent_id TEXT NOT NULL DEFAULT '',
+        agent_name TEXT NOT NULL DEFAULT '',
+        workspace_id TEXT NOT NULL DEFAULT 'default',
+        project_id TEXT NOT NULL DEFAULT 'default',
+        source_session_id TEXT NOT NULL DEFAULT '',
+        source_run_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_memory_markdown_candidates_status
+        ON memory_markdown_candidates(status, created_at);
     -- 会话级 AgentScope 上下文状态：压缩摘要 + middleware 跨轮数据（已启用 Skill、治理计数）。
     -- 进程重启 / 实例淘汰后重建上下文时恢复，避免压缩摘要和"已读过哪些 Skill"丢失。
     CREATE TABLE IF NOT EXISTS session_context_state (

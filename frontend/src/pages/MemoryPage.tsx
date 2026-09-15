@@ -9,6 +9,7 @@ import { RefreshCw } from 'lucide-react';
 import { Button } from '@/components/design';
 import { WorkbenchDetailShell } from '../components/workbench';
 import { MarkdownMemoryPanel } from '../features/memory/MarkdownMemoryPanel';
+import { MemoryCandidatePanel } from '../features/memory/MemoryCandidatePanel';
 import { MemoryLandingPage } from '../features/memory/MemoryLandingPage';
 import { MemorySettingsPanel } from '../features/memory/MemorySettingsPanel';
 import { NodeMemoryPanel } from '../features/memory/NodeMemoryPanel';
@@ -26,6 +27,9 @@ import type {
   MarkdownMemoryDocument,
   MarkdownMemoryScope,
   MemoryAuditEvent,
+  MemoryCandidateAction,
+  MemoryCandidateStatus,
+  MemoryMarkdownCandidate,
   MemoryNodeQueryResult,
   MemoryNodeStatus,
   MemoryRetrievalFeedbackPayload,
@@ -49,6 +53,8 @@ export function MemoryPage() {
     updateNodeStatus,
     loadSkillEvolutionRecords,
     updateSkillEvolutionRecord,
+    loadMemoryCandidates,
+    updateMemoryCandidate,
     loadMemoryAuditEvents,
     sendRetrievalFeedback,
     loadMemorySettings,
@@ -71,6 +77,10 @@ export function MemoryPage() {
   const [nodeTree, setNodeTree] = useState<MemoryNodeTreeItem[]>([]);
   const [nodeResults, setNodeResults] = useState<MemoryNodeQueryResult[]>([]);
   const [nodesLoading, setNodesLoading] = useState(false);
+  const [candidateStatus, setCandidateStatus] = useState<MemoryCandidateStatus | 'all'>('pending');
+  const [candidates, setCandidates] = useState<MemoryMarkdownCandidate[]>([]);
+  const [pendingCandidateCount, setPendingCandidateCount] = useState(0);
+  const [candidatesLoading, setCandidatesLoading] = useState(false);
   const [skillStatus, setSkillStatus] = useState<SkillEvolutionRecordStatus | 'all'>('all');
   const [skillAgentId, setSkillAgentId] = useState('');
   const [skillRecords, setSkillRecords] = useState<SkillEvolutionRecord[]>([]);
@@ -112,13 +122,22 @@ export function MemoryPage() {
     setNodeTree([]);
     setNodeResults([]);
     setSkillRecords([]);
+    setCandidates([]);
     setAuditEvents([]);
     setWikiGraph(null);
     setWikiResult(null);
     void loadNodes();
     void loadSkillQueue();
+    void loadCandidates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProjectId]);
+
+  useEffect(() => {
+    if (activeTab === 'candidates') {
+      void loadCandidates();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, candidateStatus]);
 
   useEffect(() => {
     if (activeTab === 'wiki' && !wikiGraph && !wikiGraphLoading) {
@@ -192,6 +211,36 @@ export function MemoryPage() {
       setError(err instanceof Error ? err.message : '历史记忆状态更新失败');
     } finally {
       setNodesLoading(false);
+    }
+  }
+
+  async function loadCandidates() {
+    try {
+      setCandidatesLoading(true);
+      setError('');
+      const data = await loadMemoryCandidates(candidateStatus);
+      setCandidates(data.records);
+      setPendingCandidateCount(data.pendingCount);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '待确认记忆加载失败');
+    } finally {
+      setCandidatesLoading(false);
+    }
+  }
+
+  async function resolveCandidate(recordId: string, action: MemoryCandidateAction, reason = '') {
+    try {
+      setCandidatesLoading(true);
+      setError('');
+      await updateMemoryCandidate(recordId, action, reason);
+      await loadCandidates();
+      // 采纳会改写 Markdown；当前正在看的文件同步刷新。
+      if (action === 'accept' && doc) await loadMarkdown();
+      if (activeTab === 'settings') await loadSettingsAndAudit();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '记忆候选操作失败');
+    } finally {
+      setCandidatesLoading(false);
     }
   }
 
@@ -279,6 +328,7 @@ export function MemoryPage() {
     void refreshAgents();
     if (!activeTab) return;
     if (activeTab === 'markdown') void loadMarkdown();
+    if (activeTab === 'candidates') void loadCandidates();
     if (activeTab === 'nodes') void loadNodes();
     if (activeTab === 'skills') void loadSkillQueue();
     if (activeTab === 'wiki') {
@@ -290,6 +340,7 @@ export function MemoryPage() {
   if (!activeTab) {
     return (
       <MemoryLandingPage
+        pendingCandidateCount={pendingCandidateCount}
         onSelectTab={setActiveTab}
         onRefresh={() => {
           void refreshAgents();
@@ -336,6 +387,16 @@ export function MemoryPage() {
             dirty={markdownDirty}
             onSave={saveMarkdown}
             onRefresh={loadMarkdown}
+          />
+        ) : activeTab === 'candidates' ? (
+          <MemoryCandidatePanel
+            status={candidateStatus}
+            setStatus={setCandidateStatus}
+            records={candidates}
+            pendingCount={pendingCandidateCount}
+            loading={candidatesLoading}
+            onSearch={loadCandidates}
+            onAction={resolveCandidate}
           />
         ) : activeTab === 'nodes' ? (
           <NodeMemoryPanel

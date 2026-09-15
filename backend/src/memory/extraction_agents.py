@@ -32,7 +32,7 @@ MemorySection = Literal[
 MemoryOperation = Literal["append", "update", "delete", "skip"]
 SkillGranularity = Literal["too_small", "atomic", "too_broad"]
 
-MEMORY_REFLECTION_PROMPT_VERSION = "2026-07-06-v5"
+MEMORY_REFLECTION_PROMPT_VERSION = "2026-09-15-v6-unified"
 SKILL_EVOLUTION_PROMPT_VERSION = "2026-07-06-v1"
 MEMORY_ADMISSION_PROMPT_VERSION = "2026-07-07-v1"
 
@@ -121,41 +121,41 @@ async def run_memory_reflection_agent(
     assistant_text: str,
     agent_id: str,
     agent_name: str,
-    memory_file: MemoryFileToolSet,
+    memory_files: dict[str, MemoryFileToolSet],
+    tool_trajectory: list[dict[str, Any]] | None = None,
     model_name: str,
     fallback_names: list[str] | None = None,
     invocation_key: str = "",
 ) -> MemoryReflectionAgentPayload | None:
-    """调用指定 scope 的 MemoryReflectionAgent 提炼 Markdown 记忆候选。"""
+    """一次调用提炼 user / agent / global 三层 Markdown 记忆候选。
 
-    kind, name = _memory_agent_identity(memory_file.scope)
+    此前每层一个 Agent 并行三次调用，且各自只看用户消息与最终回答。现在合成一路：
+    模型同时看到三个文件的当前内容与本轮工具轨迹摘要，输出带 scope 的候选列表；
+    是否直接写入还是进待确认队列由 reflection.py 按 scope 决定。不再给模型挂写工具，
+    避免它在同一轮里把同一条内容写进多个 scope。
+    """
+
     text = await _run_json_agent(
         agent_id=_system_agent_id(
-            kind,
+            "memory-reflection",
             model_name,
             fallback_names or [],
-            f"{MEMORY_REFLECTION_PROMPT_VERSION}:{memory_file.scope}:{memory_file.owner_id}:{invocation_key}",
+            f"{MEMORY_REFLECTION_PROMPT_VERSION}:{invocation_key}",
         ),
-        name=name,
-        system_prompt=_build_memory_reflection_system_prompt(memory_file.scope),
+        name="MemoryReflectionAgent",
+        system_prompt=_build_memory_reflection_system_prompt(),
         user_prompt=_build_memory_reflection_user_prompt(
             user_message=user_message,
             assistant_text=assistant_text,
             agent_id=agent_id,
             agent_name=agent_name,
-            memory_file=memory_file,
+            memory_files=memory_files,
+            tool_trajectory=tool_trajectory or [],
         ),
         model_name=model_name,
         fallback_names=fallback_names or [],
-        max_tokens=1600,
-        extra_tools=memory_file.tools(),
+        max_tokens=1800,
     )
-    if memory_file.operations:
-        return MemoryReflectionAgentPayload.model_validate({
-            "shouldWrite": True,
-            "reason": "MemoryReflectionAgent updated the bound memory file with memory tools.",
-            "memories": memory_file.operations,
-        })
     data = _extract_json_object(text)
     if not data:
         return None
@@ -300,14 +300,6 @@ def _system_agent_id(kind: str, model_name: str, fallback_names: list[str], prom
     return f"system:{kind}:{sha256(raw.encode('utf-8')).hexdigest()[:16]}"
 
 
-def _memory_agent_identity(scope: str) -> tuple[str, str]:
-    if scope == "agent":
-        return "agent-memory-reflection", "AgentMemoryReflectionAgent"
-    if scope == "global_preference":
-        return "global-memory-reflection", "GlobalMemoryReflectionAgent"
-    return "user-memory-reflection", "UserMemoryReflectionAgent"
-
-
 def _scope_policy(scope: str) -> str:
     if scope == "agent":
         return "只编辑 agent memory：记录这个具体 Agent 在协作过程中的可复用工作方法、解决方案、反面案例、纠正和行为边界。"
@@ -389,32 +381,35 @@ def _scope_policy_payload(scope: str) -> dict[str, object]:
     }
 
 
-def _build_memory_reflection_system_prompt(scope: str) -> str:
-    _, name = _memory_agent_identity(scope)
+def _build_memory_reflection_system_prompt() -> str:
     return "\n".join([
-        f"你是 {name}，一个后台基础设施 Agent。",
-        "只返回一个紧凑、合法的 JSON 对象。不要写 markdown fence。",
-        "你正在编辑且只能编辑一个已绑定的 Markdown 记忆文件。",
-        _scope_policy(scope),
-        *_scope_focus_lines(scope),
-        "所有提取出的信息都必须以中文记录，必须使用中文记录 shouldWrite reason、memories.reason、note、replacementText、工具参数、工具操作摘要和后续 Skill 草稿。",
-        "即使原始对话是英文，也要把可沉淀的事实、规则、偏好和修正翻译成中文后写入记忆。",
-        "英文技术名词、代码标识符、文件名、API 名称、环境变量、命令和专有产品名可以保留原文，但解释性文本必须是中文。",
-        "不要把英文原句直接作为记忆内容保存，除非它本身是必须精确保留的代码、命令、路径、配置项或专有名词。",
+        "你是 MemoryReflectionAgent，一个后台基础设施 Agent。",
+        "只返回一个紧凑、合法的 JSON 对象。不要写 markdown fence。你没有任何工具。",
+        "你同时负责三层 Markdown 记忆：user（用户本人）、agent（当前 Agent 的工作方法）、global_preference（整个工作台共享规则）。",
+        "输入里给出三层文件的当前内容和本轮已完成对话（用户消息、Agent 最终回答、工具调用轨迹摘要）。",
+        "## 各层边界",
+        _scope_policy("user"),
+        *_scope_focus_lines("user"),
+        _scope_policy("agent"),
+        *_scope_focus_lines("agent"),
+        _scope_policy("global_preference"),
+        *_scope_focus_lines("global_preference"),
+        "## 工具轨迹怎么用",
+        "toolTrajectory 是本轮 Agent 实际做过的事：用了哪些工具、参数要点、成功还是失败、结果开头。",
+        "agent 层记忆主要从这里提炼：哪条路径有效、哪个工具在这个项目上会失败及原因、关键文件和产物在哪、下次应先做什么。",
+        "不要把轨迹逐条抄进记忆；只沉淀下次可复用的结论。user / global 层不要引用工具细节。",
+        "## 通用规则",
+        "所有提取出的信息都必须以中文记录（reason、note、replacementText）；英文技术名词、代码标识符、文件名、命令、路径可保留原文。",
         "对长期重要实体使用 Obsidian Wiki 链接，格式为 [[类型:名称]]，例如 [[项目:Agent Workstation]]、[[规则:禁止恢复独立 Plan Runtime 分支]]、[[模块:MemoryAdmissionGate]]、[[Skill:Memory Gate]]。",
         "只给项目、规则、模块、Skill、工具、文件、错误类型、主题等稳定实体加链接；不要给普通词、整句描述或一次性细节过度加链接。",
-        "只提取本轮已完成对话中长期稳定、未来有用的信息。",
+        "只提取本轮已完成对话中长期稳定、未来有用的信息；临时的、重复的、低置信度的不要写。",
         "禁止记录 secrets、tokens、passwords、private keys、cookies、一次性验证码或大段复制内容。",
-        "不要记录工具调用过程、observation、chain-of-thought 或实现噪音。",
-        "修改记忆前必须先调用 memory_read 查看当前文件内容。",
-        "使用 memory_add 添加新记忆，使用 memory_update 精确替换已有条目，使用 memory_delete 删除过期条目。",
-        "这些 memory tools 已绑定唯一文件路径；禁止要求、猜测或编造其他路径。",
-        "如果本轮信息是临时的、重复的、低置信度的，或与当前绑定 scope 无关，不要编辑。",
-        "如果信息同时可能属于多层记忆，只写入最精确的一层；不要为了凑数把同一条内容写入多个 scope。",
+        "如果某条信息同时可能属于多层，只写入最精确的一层；禁止把同一条内容写进多个 scope。",
+        "update / delete 必须给出目标文件里已存在的 exactText（逐字），否则该操作会被丢弃；不确定就用 append。",
+        "已有条目表达了相同意思时不要 append，改用 update 或直接跳过。",
         "记忆必须对未来运行有帮助，并且不能与用户最新指令冲突。",
-        f"这个 Agent 唯一允许的 scope 是：{scope}。",
+        "每层最多 3 条操作，全部合计最多 6 条；没有值得写的就返回 shouldWrite=false。",
         "可用章节：Stable Preferences, Stable Behaviors, Profile, Workspace Rules, Corrections, Negative Rules。",
-        "如果已经成功使用 memory tools，工具调用后只返回一个最小 JSON 摘要。",
         "Schema:",
         json.dumps(
             {
@@ -424,10 +419,10 @@ def _build_memory_reflection_system_prompt(scope: str) -> str:
                     {
                         "scope": "user | agent | global_preference",
                         "section": "Stable Preferences | Stable Behaviors | Profile | Workspace Rules | Corrections | Negative Rules",
-                        "operation": "append | update | delete | skip",
-                        "note": "一条简短中文记忆",
-                        "exactText": "需要修改或删除的原文，如适用",
-                        "replacementText": "中文替换文本，如适用",
+                        "operation": "append | update | delete",
+                        "note": "一条简短中文记忆（append 用）",
+                        "exactText": "需要修改或删除的原文（update / delete 用）",
+                        "replacementText": "中文替换文本（update 用）",
                         "confidence": 0.0,
                         "reason": "为什么这是长期稳定记忆",
                     },
@@ -501,38 +496,51 @@ def _build_memory_admission_user_prompt(
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+# 每层文件喂给模型的字符上限；超过时保留开头（Summary 与前几章）。
+MEMORY_FILE_PROMPT_CHARS = 2400
+
+
 def _build_memory_reflection_user_prompt(
     *,
     user_message: str,
     assistant_text: str,
     agent_id: str,
     agent_name: str,
-    memory_file: MemoryFileToolSet,
+    memory_files: dict[str, MemoryFileToolSet],
+    tool_trajectory: list[dict[str, Any]],
 ) -> str:
+    files_payload = {}
+    for scope, memory_file in memory_files.items():
+        try:
+            content = memory_file.read_content()
+        except Exception:
+            content = ""
+        if len(content) > MEMORY_FILE_PROMPT_CHARS:
+            content = content[:MEMORY_FILE_PROMPT_CHARS].rstrip() + "\n…(已截断)"
+        files_payload[scope] = {
+            "ownerId": memory_file.owner_id,
+            "content": content,
+            "scopeBoundary": _scope_policy_payload(scope),
+        }
     payload = {
         "agent": {"id": agent_id, "name": agent_name},
-        "boundMemoryFile": {
-            "scope": memory_file.scope,
-            "ownerId": memory_file.owner_id,
-            "filePath": memory_file.file_path,
-        },
         "userMessage": user_message,
         "assistantFinalOutput": assistant_text,
+        "toolTrajectory": tool_trajectory,
+        "memoryFiles": files_payload,
         "policy": {
             "markdownOnly": True,
-            "maxOperations": 4,
+            "maxOperationsPerScope": 3,
+            "maxOperationsTotal": 6,
             "skipIfTemporary": True,
             "skipIfSensitive": True,
-            "mustUseBoundMemoryToolsForWrite": True,
             "outputLanguage": "zh-CN",
             "allExtractedInformationMustBeChinese": True,
-            "translateSourceFactsToChinese": True,
-            "notesAndReasonsMustBeChinese": True,
             "preserveEnglishOnlyForTechnicalIdentifiers": True,
             "useObsidianEntityLinks": True,
             "entityLinkFormat": "[[类型:名称]]",
             "entityLinkKinds": ["项目", "规则", "模块", "Skill", "工具", "文件", "错误", "主题"],
-            "scopeBoundary": _scope_policy_payload(memory_file.scope),
+            "oneScopePerFact": True,
         },
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

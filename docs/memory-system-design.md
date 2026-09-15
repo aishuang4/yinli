@@ -1,6 +1,20 @@
 # 记忆系统设计
 
-> 状态：MVP 在线并进入稳定化阶段，2026-07-27。本文记录新记忆系统的当前设计、在线边界和后续约束。不复用旧三层记忆模块、旧 `memory_*` 事件或旧运行时补丁。
+> 状态：MVP 在线并进入稳定化阶段，2026-07-27；2026-09-15 完成"沉淀 / 注入"第二轮修正（见下节）。本文记录新记忆系统的当前设计、在线边界和后续约束。不复用旧三层记忆模块、旧 `memory_*` 事件或旧运行时补丁。
+
+## 2026-09-15 沉淀与注入修正
+
+针对首版审查发现的六个问题（提炼只看最终回答、注入与本轮问题无关、node 每轮新建、user / global 静默写入、双闸门口径不一致、三路提炼成本），当前实现改为：
+
+- **注入分两段**：system prompt 里只保留三份 Markdown 的 Summary / Corrections / Negative Rules（按会话冻结，保证前缀 cache）；历史记忆不再注入"最近 30 天 12 条标题索引"，改为 `retrieval.build_memory_recall()` 用本轮用户消息做向量 + 词汇召回，取排序分 ≥ 0.45、排除本会话、去重后最多 4 条的 `date | nodeId | title — summary`，以 `<recalled-memory>` 段附在用户消息后（随轮变化，不进 system prompt）。用户消息不足 6 字不召回；召回不计 `use_count`；结果写 `MEMORY_AUDIT.memory_recall`。`_rank_terms` 中文改 2 字滑窗，词命中封顶 4。`# Memory` 段明确要求用户提到"上次 / 之前 / 按老规矩"时先 `memory_node_query`。
+- **提炼一路**：`UserMemoryReflectionAgent` / `AgentMemoryReflectionAgent` / `GlobalMemoryReflectionAgent` 合并为一个无工具的 `MemoryReflectionAgent`，一次调用同时看到三份文件当前内容（每份 ≤ 2400 字）、用户消息、最终回答和 `build_tool_trajectory()` 生成的脱敏工具轨迹（≤ 12 步，保留头尾；工具名 / 状态 / 参数 160 字 / 结果 200 字），输出带 `scope` 的操作列表（每层 ≤ 3、合计 ≤ 6）。agent 层记忆主要从工具轨迹提炼"哪条路径有效、哪个工具在这个项目会失败"。操作由 `reflection._apply_memory_operations()` 用绑定文件的 `MemoryAdd / MemoryUpdate / MemoryDelete` 执行，保留去重 / 冲突合并 / Summary 重建。模型明确返回 `shouldWrite=false` 时不再走规则兜底；只有模型调用失败才兜底。一轮最多 3 次基础设施模型调用（可选准入评分 + 提炼 + Skill）。
+- **user / global 待确认**：`MemoryAdmissionPolicy.confirm_user_markdown` / `confirm_global_markdown` 默认开启时，这两层的操作不直接写文件，进 `memory_markdown_candidates` 表（同 scope / owner 同内容的 pending 只留一条）；Memory 页新增"待确认记忆" tab，采纳（`PATCH /api/memory/markdown-candidates/{id}` `accept`）时才真正执行操作并让注入缓存失效，拒绝 / 采纳失败均落状态与原因并写 `MEMORY_AUDIT`。agent 层仍直接写。规则兜底路径同样遵守这一分流。
+- **准入一轮一评**：`completion.py` 用 `reflection.evaluate_turn_admission()` 算一次规则准入，历史节点持久化与 Markdown 提炼共用；模型评分只在其上叠加，不再各评一次。
+- **node 会话日聚合**：`persist_completed_run_memory_node()` 先查同 Agent、同日期、同 `source_session_id` 的活跃节点，有则 `append_turn_to_session_day_node()` 追加原文（最多 40 轮）、标题保留首轮、summary 记"首轮要点 ｜ 最近：本轮要点（共 N 轮）"、digest 用最新轮；一段多轮会话在索引和召回里只占一条。
+- **自动归档**：`MemoryNodeService.archive_stale_nodes()` 把 90 天前创建、90 天内未被命中、未置顶的活跃节点改为 `archived` 并从向量库移除；每个进程每天在首次持久化后跑一次。Memory 页可恢复。
+- 节点 `summary` 改为"请求要点 → 结果要点"一句话（≤ 170 字，去 Markdown 噪音），不再复制 700 字原文。
+
+未做：Markdown 文件整体大小硬上限；Team Leader / Member 与群聊 Worker 的注入仍是旧的静态索引路径。
 
 ## 当前实现快照
 

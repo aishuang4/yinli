@@ -33,6 +33,7 @@ from src.storage.json_document_store import JsonDocumentStore
 from src.storage.memory_records import MemoryRecordStore
 from src.storage.plan_records import PlanRecordStore
 from src.storage.resource_catalog_records import ResourceCatalogRecordStore
+from src.storage.memory_markdown_candidates import MemoryMarkdownCandidateStore
 from src.storage.session_context_state import SessionContextStateStore
 from src.storage.skill_run_records import SkillRunRecordStore
 from src.storage.skill_evolution_records import SkillEvolutionRecordStore
@@ -809,6 +810,49 @@ def list_recent_skill_run_names(session_id: str, agent_id: str, *, limit: int = 
 
 def get_skill_run_by_pending_interaction(interaction_id: str) -> dict[str, Any] | None:
     return _skill_run_record_store().get_by_pending_interaction(interaction_id)
+
+
+def _memory_markdown_candidate_store() -> MemoryMarkdownCandidateStore:
+    """创建复用当前数据库基础设施的 Markdown 记忆候选存储。"""
+
+    return MemoryMarkdownCandidateStore(
+        ensure_db=ensure_db,
+        connect=_connect,
+        lock=_lock,
+        utc_now=_utc_now,
+    )
+
+
+def create_memory_markdown_candidate(payload: dict[str, Any]) -> dict[str, Any]:
+    return _memory_markdown_candidate_store().create(payload)
+
+
+def find_pending_memory_markdown_candidate(*, scope: str, owner_id: str, note: str, exact_text: str) -> dict[str, Any] | None:
+    return _memory_markdown_candidate_store().find_pending_duplicate(
+        scope=scope, owner_id=owner_id, note=note, exact_text=exact_text
+    )
+
+
+def get_memory_markdown_candidate(record_id: str) -> dict[str, Any] | None:
+    return _memory_markdown_candidate_store().get(record_id)
+
+
+def list_memory_markdown_candidates(
+    *,
+    status: str | None = "pending",
+    scope: str | None = None,
+    project_id: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    return _memory_markdown_candidate_store().list(status=status, scope=scope, project_id=project_id, limit=limit)
+
+
+def count_pending_memory_markdown_candidates() -> int:
+    return _memory_markdown_candidate_store().count_pending()
+
+
+def set_memory_markdown_candidate_status(record_id: str, *, status: str, resolution: str = "") -> dict[str, Any] | None:
+    return _memory_markdown_candidate_store().set_status(record_id, status=status, resolution=resolution)
 
 
 def _session_context_state_store() -> SessionContextStateStore:
@@ -1799,6 +1843,22 @@ def update_memory_node_status(node_id: str, *, status: str) -> dict[str, Any] | 
 
 def mark_memory_node_used(node_id: str) -> dict[str, Any] | None:
     return _memory_record_store().mark_used(node_id)
+
+
+def find_session_day_memory_node(
+    *, workspace_id: str, project_id: str, agent_id: str, node_date: str, source_session_id: str
+) -> dict[str, Any] | None:
+    return _memory_record_store().find_session_day_node(
+        workspace_id=workspace_id,
+        project_id=project_id,
+        agent_id=agent_id,
+        node_date=node_date,
+        source_session_id=source_session_id,
+    )
+
+
+def list_stale_active_memory_node_ids(*, before_date: str, unused_since: str, limit: int = 200) -> list[str]:
+    return _memory_record_store().list_stale_active(before_date=before_date, unused_since=unused_since, limit=limit)
 
 
 def record_memory_retrieval_feedback(data: dict[str, Any]) -> dict[str, Any]:

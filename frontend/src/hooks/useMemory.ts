@@ -9,6 +9,9 @@ import type {
   MarkdownMemoryDocument,
   MarkdownMemoryScope,
   MemoryAuditEvent,
+  MemoryCandidateAction,
+  MemoryCandidateStatus,
+  MemoryMarkdownCandidate,
   MemoryAdmissionPolicyUpdate,
   MemoryNodeStatus,
   MemoryRetrievalFeedbackPayload,
@@ -51,6 +54,8 @@ interface UseMemoryReturn {
     action: SkillEvolutionRecordAction,
     reason?: string,
   ) => Promise<SkillEvolutionRecord>;
+  loadMemoryCandidates: (status?: MemoryCandidateStatus | 'all') => Promise<{ records: MemoryMarkdownCandidate[]; pendingCount: number }>;
+  updateMemoryCandidate: (recordId: string, action: MemoryCandidateAction, reason?: string) => Promise<MemoryMarkdownCandidate>;
   loadMemoryAuditEvents: (limit?: number) => Promise<MemoryAuditEvent[]>;
   sendRetrievalFeedback: (payload: MemoryRetrievalFeedbackPayload) => Promise<void>;
   loadMemorySettings: () => Promise<MemorySettingsSnapshot>;
@@ -200,6 +205,37 @@ export function useMemory(): UseMemoryReturn {
     return result;
   }, [activeProjectId]);
 
+  const loadMemoryCandidates = useCallback(async (status: MemoryCandidateStatus | 'all' = 'pending') => {
+    const params = new URLSearchParams({ projectId: activeProjectId, limit: '100' });
+    if (status !== 'all') params.set('status', status);
+    return requestJson<{ records: MemoryMarkdownCandidate[]; pendingCount: number }>(
+      `/api/memory/markdown-candidates?${params.toString()}`,
+    );
+  }, [activeProjectId]);
+
+  const updateMemoryCandidate = useCallback(async (
+    recordId: string,
+    action: MemoryCandidateAction,
+    reason = '',
+  ) => {
+    const result = await requestJson<MemoryMarkdownCandidate>(
+      `/api/memory/markdown-candidates/${encodeURIComponent(recordId)}?projectId=${encodeURIComponent(activeProjectId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, reason }),
+      },
+    );
+    notifySuccess(
+      result.status === 'accepted'
+        ? '记忆候选已采纳并写入'
+        : result.status === 'rejected'
+          ? '记忆候选已拒绝'
+          : `记忆候选处理失败：${result.resolution || '未知原因'}`,
+    );
+    return result;
+  }, [activeProjectId]);
+
   const loadMemoryAuditEvents = useCallback(async (limit = 50) => {
     const params = new URLSearchParams({
       projectId: activeProjectId,
@@ -269,6 +305,8 @@ export function useMemory(): UseMemoryReturn {
     updateNodeStatus,
     loadSkillEvolutionRecords,
     updateSkillEvolutionRecord,
+    loadMemoryCandidates,
+    updateMemoryCandidate,
     loadMemoryAuditEvents,
     sendRetrievalFeedback,
     loadMemorySettings,

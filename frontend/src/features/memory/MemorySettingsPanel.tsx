@@ -215,6 +215,16 @@ export function MemorySettingsPanel({
                       checked={Boolean(draft.enableRedaction ?? settings.admission.enableRedaction)}
                       onChange={(value) => updateDraft('enableRedaction', value)}
                     />
+                    <CheckboxField
+                      label="用户记忆需确认"
+                      checked={Boolean(draft.confirmUserMarkdown ?? settings.admission.confirmUserMarkdown)}
+                      onChange={(value) => updateDraft('confirmUserMarkdown', value)}
+                    />
+                    <CheckboxField
+                      label="全局记忆需确认"
+                      checked={Boolean(draft.confirmGlobalMarkdown ?? settings.admission.confirmGlobalMarkdown)}
+                      onChange={(value) => updateDraft('confirmGlobalMarkdown', value)}
+                    />
                   </div>
                   <Button size="small" onClick={() => void saveAdmission()} loading={saving}>
                     保存准入策略

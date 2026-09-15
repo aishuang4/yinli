@@ -32,6 +32,17 @@ class MemoryAdmissionPolicy:
     summary_max_items_per_section: int = 8
     summary_max_chars: int = 1200
     markdown_write_retries: int = 2
+    # user / global 层 Markdown 记忆影响用户所有会话：模型提炼后默认先进待确认队列，采纳后才写文件。
+    # agent 层是 Agent 自己的工作笔记，始终直接写。
+    confirm_user_markdown: bool = True
+    confirm_global_markdown: bool = True
+
+    def requires_confirmation(self, scope: str) -> bool:
+        if scope == "user":
+            return self.confirm_user_markdown
+        if scope == "global_preference":
+            return self.confirm_global_markdown
+        return False
 
     def to_api_dict(self) -> dict[str, Any]:
         """转换为前端 API 使用的 camelCase 结构。"""
@@ -50,6 +61,8 @@ class MemoryAdmissionPolicy:
             "summaryMaxItemsPerSection": self.summary_max_items_per_section,
             "summaryMaxChars": self.summary_max_chars,
             "markdownWriteRetries": self.markdown_write_retries,
+            "confirmUserMarkdown": self.confirm_user_markdown,
+            "confirmGlobalMarkdown": self.confirm_global_markdown,
             "mode": "model_scoring" if self.enable_model_scoring else "rules_scoring",
         }
 
@@ -121,6 +134,10 @@ def memory_admission_policy_from_payload(
             source.markdown_write_retries,
             0,
             5,
+        ),
+        confirm_user_markdown=_bool(payload, "confirm_user_markdown", "confirmUserMarkdown", source.confirm_user_markdown),
+        confirm_global_markdown=_bool(
+            payload, "confirm_global_markdown", "confirmGlobalMarkdown", source.confirm_global_markdown
         ),
     )
 

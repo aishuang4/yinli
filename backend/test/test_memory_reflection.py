@@ -21,6 +21,19 @@ from src.memory.extraction_agents import _build_memory_reflection_system_prompt,
 from src.tools.memory_reflection import MemoryFileToolSet
 from src.server.routes.chat.models import ChatToolRun
 from src.storage import database
+from src.memory.settings import save_memory_admission_policy
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolated_memory_db(tmp_path, monkeypatch):
+    """隔离 SQLite（候选队列 / 设置），并默认关闭 user / global 待确认，让既有直写断言成立。"""
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "memory-reflection.db")
+    monkeypatch.setattr(database, "_initialized", False)
+    save_memory_admission_policy({"confirmUserMarkdown": False, "confirmGlobalMarkdown": False})
+    yield
+    monkeypatch.setattr(database, "_initialized", False)
 
 
 def test_reflection_writes_user_preference_memory(tmp_path):
@@ -231,22 +244,31 @@ def test_memory_add_tool_redacts_sensitive_note_before_write(tmp_path):
 
 
 def test_reflection_with_agents_writes_model_memories(tmp_path, monkeypatch):
-    captured_scopes = []
+    captured: dict = {}
 
     async def fake_memory_agent(**kwargs):
-        memory_file = kwargs["memory_file"]
-        captured_scopes.append((memory_file.scope, memory_file.file_path))
-        if memory_file.scope == "global_preference":
-            add_tool = memory_file.tools()[1]
-            await add_tool(
-                section="Workspace Rules",
-                note="整个工作台默认通过 hooks 和 tools 接入记忆，不新增 memory runtime.kind。",
-                reason="全局架构规则。",
-            )
+        captured.update(kwargs)
         return MemoryReflectionAgentPayload(
             shouldWrite=True,
             reason="用户明确给出长期规则。",
-            memories=[],
+            memories=[
+                {
+                    "scope": "global_preference",
+                    "section": "Workspace Rules",
+                    "operation": "append",
+                    "note": "整个工作台默认通过 hooks 和 tools 接入记忆，不新增 memory runtime.kind。",
+                    "confidence": 0.9,
+                    "reason": "全局架构规则。",
+                },
+                {
+                    "scope": "agent",
+                    "section": "Stable Behaviors",
+                    "operation": "append",
+                    "note": "接记忆能力时先看 [[模块:MemoryAdmissionGate]] 再改 hooks。",
+                    "confidence": 0.8,
+                    "reason": "本轮工具轨迹验证过的路径。",
+                },
+            ],
         )
 
     async def fake_skill_agent(**kwargs):
@@ -265,20 +287,99 @@ def test_reflection_with_agents_writes_model_memories(tmp_path, monkeypatch):
                 agent_name="Agent",
                 user_message="整个工作台以后默认记忆都通过 hook 和 tools 实现。",
                 assistant_text="收到，我会按这个规则处理。",
+                tool_calls=[
+                    ChatToolRun(id="c1", name="Read", args='{"file_path":"src/memory/admission.py"}', result="class MemoryAdmissionGate", status="completed"),
+                ],
             ),
             model_name="model",
             store=store,
         ),
     )
 
+    # 一次调用同时拿到三层文件与工具轨迹
+    assert set(captured["memory_files"]) == {"user", "agent", "global_preference"}
+    assert captured["memory_files"]["global_preference"].file_path.endswith("/global/global_memory.md")
+    assert captured["memory_files"]["agent"].file_path.endswith("/agents/agent-1/agent_memory.md")
+    assert captured["tool_trajectory"] == [
+        {"tool": "Read", "status": "completed", "args": '{"file_path":"src/memory/admission.py"}', "result": "class MemoryAdmissionGate"},
+    ]
     assert result.ignored_reason == ""
-    assert result.updates[0].scope == "global_preference"
-    assert [scope for scope, _path in captured_scopes] == ["user", "agent", "global_preference"]
-    assert captured_scopes[0][1].endswith("/users/user_memory.md")
-    assert captured_scopes[1][1].endswith("/agents/agent-1/agent_memory.md")
-    assert captured_scopes[2][1].endswith("/global/global_memory.md")
+    assert sorted(update.scope for update in result.updates) == ["agent", "global_preference"]
     content = (tmp_path / "memory" / "global" / "global_memory.md").read_text(encoding="utf-8")
     assert "不新增 memory runtime.kind" in content
+    agent_content = (tmp_path / "memory" / "agents" / "agent-1" / "agent_memory.md").read_text(encoding="utf-8")
+    assert "[[模块:MemoryAdmissionGate]]" in agent_content
+
+
+def test_reflection_with_agents_queues_user_and_global_candidates_when_confirmation_enabled(tmp_path, monkeypatch):
+    save_memory_admission_policy({"confirmUserMarkdown": True, "confirmGlobalMarkdown": True})
+
+    async def fake_memory_agent(**kwargs):
+        return MemoryReflectionAgentPayload(
+            shouldWrite=True,
+            reason="有长期偏好。",
+            memories=[
+                {"scope": "user", "section": "Stable Preferences", "operation": "append", "note": "回答默认用中文。", "confidence": 0.9},
+                {"scope": "user", "section": "Stable Preferences", "operation": "append", "note": "回答默认用中文。", "confidence": 0.9},
+                {"scope": "agent", "section": "Stable Behaviors", "operation": "append", "note": "先读 admission.py。", "confidence": 0.7},
+            ],
+        )
+
+    async def fake_skill_agent(**kwargs):
+        return None
+
+    monkeypatch.setattr("src.memory.reflection.run_memory_reflection_agent", fake_memory_agent)
+    monkeypatch.setattr("src.memory.reflection.run_skill_evolution_agent", fake_skill_agent)
+    store = MarkdownMemoryStore(root=tmp_path / "memory")
+
+    result = asyncio.run(
+        reflect_completed_run_memory_with_agents(
+            MemoryReflectionInput(
+                session_id="session-1",
+                agent_id="agent-1",
+                agent_name="Agent",
+                user_message="以后回答默认用中文。",
+                assistant_text="好的。",
+                source_run_id="run-1",
+            ),
+            model_name="model",
+            store=store,
+        ),
+    )
+
+    # agent 层直接写；user 层进队列且去重
+    assert [update.scope for update in result.updates] == ["agent"]
+    assert len(result.candidates) == 1
+    candidate = result.candidates[0]
+    assert candidate["scope"] == "user" and candidate["status"] == "pending"
+    assert candidate["sourceRunId"] == "run-1"
+    assert not (tmp_path / "memory" / "users").exists()
+    assert database.count_pending_memory_markdown_candidates() == 1
+
+    # 采纳后才真正写文件
+    from src.memory.reflection import apply_markdown_candidate
+
+    ok, path = asyncio.run(apply_markdown_candidate(candidate, store=store))
+    assert ok and path.endswith("/users/user_memory.md")
+    assert "回答默认用中文。" in (tmp_path / "memory" / "users" / "user_memory.md").read_text(encoding="utf-8")
+    # 再采纳一次是重复
+    ok, reason = asyncio.run(apply_markdown_candidate(candidate, store=store))
+    assert not ok and reason == "duplicate_or_exact_text_not_found"
+
+
+def test_build_tool_trajectory_redacts_and_keeps_head_and_tail():
+    from src.memory.reflection import build_tool_trajectory
+
+    calls = [
+        ChatToolRun(id=str(i), name=f"T{i}", args=f'{{"i":{i}}}', result="ok", status="completed") for i in range(20)
+    ]
+    calls[3] = ChatToolRun(id="3", name="Bash", args='{"command":"curl -H \'Authorization: Bearer sk-abcdef1234567890\'"}', result="x", status="failed")
+    trajectory = build_tool_trajectory(calls, limit=6)
+    assert len(trajectory) == 6
+    assert [step["tool"] for step in trajectory][:3] == ["T0", "T1", "T2"]
+    assert trajectory[-1]["tool"] == "T19"
+    assert "sk-abcdef" not in " ".join(step["args"] for step in trajectory)
+    assert build_tool_trajectory([]) == []
 
 
 def test_memory_reflection_prompt_requires_chinese_entity_links():
@@ -290,30 +391,30 @@ def test_memory_reflection_prompt_requires_chinese_entity_links():
         write_content=lambda _content: None,
     )
 
-    system_prompt = _build_memory_reflection_system_prompt("global_preference")
+    system_prompt = _build_memory_reflection_system_prompt()
     user_prompt = _build_memory_reflection_user_prompt(
         user_message="整个工作台不要恢复旧 Plan Runtime。",
         assistant_text="收到。",
         agent_id="agent-1",
         agent_name="Agent",
-        memory_file=tool_set,
+        memory_files={"global_preference": tool_set},
+        tool_trajectory=[{"tool": "Read", "status": "completed", "args": "{}"}],
     )
 
     assert "[[类型:名称]]" in system_prompt
     assert "[[规则:禁止恢复独立 Plan Runtime 分支]]" in system_prompt
+    assert "toolTrajectory" in system_prompt
     assert '"useObsidianEntityLinks":true' in user_prompt
+    assert '"toolTrajectory":[{"tool":"Read"' in user_prompt
+    assert '"global_preference":{"ownerId":"default","content":"# Summary\\n"' in user_prompt
 
 
-def test_reflection_with_agents_runs_three_memory_agents_in_parallel(tmp_path, monkeypatch):
-    started = []
+def test_reflection_with_agents_calls_reflection_once_and_skips_fallback_when_model_declines(tmp_path, monkeypatch):
+    calls: list[dict] = []
 
     async def fake_memory_agent(**kwargs):
-        memory_file = kwargs["memory_file"]
-        started.append(memory_file.scope)
-        if len(started) < 3:
-            while len(started) < 3:
-                await asyncio.sleep(0)
-        return None
+        calls.append(kwargs)
+        return MemoryReflectionAgentPayload(shouldWrite=False, reason="临时确认，不值得写。", memories=[])
 
     async def fake_skill_agent(**kwargs):
         return None
@@ -322,24 +423,23 @@ def test_reflection_with_agents_runs_three_memory_agents_in_parallel(tmp_path, m
     monkeypatch.setattr("src.memory.reflection.run_skill_evolution_agent", fake_skill_agent)
 
     result = asyncio.run(
-        asyncio.wait_for(
-            reflect_completed_run_memory_with_agents(
-                MemoryReflectionInput(
-                    session_id="session-1",
-                    agent_id="agent-1",
-                    agent_name="Agent",
-                    user_message="以后默认用中文回答。",
-                    assistant_text="好的。",
-                ),
-                model_name="model",
-                store=MarkdownMemoryStore(root=tmp_path / "memory"),
+        reflect_completed_run_memory_with_agents(
+            MemoryReflectionInput(
+                session_id="session-1",
+                agent_id="agent-1",
+                agent_name="Agent",
+                user_message="以后默认用中文回答。",
+                assistant_text="好的。",
             ),
-            timeout=1,
+            model_name="model",
+            store=MarkdownMemoryStore(root=tmp_path / "memory"),
         ),
     )
 
-    assert started == ["user", "agent", "global_preference"]
-    assert result.updates
+    # 三层合成一路：只调一次；模型明确说不写时不走规则兜底
+    assert len(calls) == 1
+    assert not result.updates and not result.candidates
+    assert not (tmp_path / "memory").exists()
 
 
 def test_reflection_with_agents_returns_skill_candidate(tmp_path, monkeypatch):

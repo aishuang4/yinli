@@ -12,7 +12,13 @@ from src.config.runtime_settings import get_effective_model_settings
 from src.project_files import list_project_session_artifacts, project_session_directory
 from src.project_resources import ProjectResourceAccess, resolve_project_resource_access
 from src.runtime_context import RuntimeContext, load_project_instructions
-from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
+from src.memory.retrieval import (
+    MemoryRecallResult,
+    MemoryRetrievalContext,
+    build_memory_injection_text,
+    build_memory_recall,
+)
+from src.memory.trace import record_memory_audit_event
 from src.server.routes.agents import get_registered_agent
 from src.server.routes.chat.intent_router import (
     ExecutorRoute,
@@ -107,6 +113,33 @@ class ChatRunContext:
     user_message_note: str = ""
     # system prompt 各段字符数（段名 -> chars），只用于 contextStats / CONTEXT_USAGE 定位膨胀来源。
     system_prompt_sections: dict[str, int] = field(default_factory=dict)
+
+
+def _record_memory_recall_audit(
+    *,
+    session_id: str,
+    agent_id: str,
+    agent_name: str,
+    recall: MemoryRecallResult,
+) -> None:
+    """把运行前自动召回写进 MEMORY_AUDIT：命中哪些 nodeId、候选多少、是否注入。"""
+
+    record_memory_audit_event(
+        session_id=session_id,
+        persist=True,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        action="memory_recall",
+        status="completed",
+        title="Memory recalled for turn" if recall.node_ids else "Memory recall found nothing relevant",
+        content=f"injected={len(recall.node_ids)}, candidates={recall.candidate_count}",
+        payload={
+            "nodeIds": recall.node_ids,
+            "candidateCount": recall.candidate_count,
+            "queryChars": recall.query_chars,
+            "injectedChars": len(recall.text),
+        },
+    )
 
 
 def snapshot_session_history(session_id: str | None, *, limit: int = 40) -> list[SessionHistoryMessage]:
@@ -245,22 +278,40 @@ async def build_chat_run_context(
     model_name = runtime_model_config.model_name
     # 记忆摘要按会话冻结：每轮后台新增的历史记忆节点不再改写 system prompt，
     # 供应商前缀 cache 才能跨轮命中（见 memory_prompt_cache.py）。
+    memory_context = MemoryRetrievalContext(
+        agent_id=agent_id,
+        agent_name=agent_name,
+        workspace_id=runtime_context.workspace_id,
+        project_id=runtime_context.project_id,
+        # 静态的"最近 30 天节点标题索引"与本轮问题无关，改为下面按消息召回；system prompt 只留 Markdown 摘要。
+        include_node_tree=False,
+    )
     memory_prompt = (
         session_memory_prompt(
             agent_id=agent_id,
             session_id=session_id if persist_run else None,
-            build=lambda: build_memory_injection_text(
-                MemoryRetrievalContext(
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    workspace_id=runtime_context.workspace_id,
-                    project_id=runtime_context.project_id,
-                ),
-            ),
+            build=lambda: build_memory_injection_text(memory_context),
         )
         if readiness.ready
         else ""
     )
+    # 按本轮用户消息召回相关历史记忆：随轮变化，附在用户消息后，不进 system prompt。
+    memory_recall = (
+        build_memory_recall(
+            memory_context,
+            query_text=run_data.message,
+            exclude_session_id=session_id or "",
+        )
+        if readiness.ready
+        else None
+    )
+    if memory_recall is not None and persist_run:
+        _record_memory_recall_audit(
+            session_id=session_id,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            recall=memory_recall,
+        )
     guardrails = scope_guardrails_to_project(
         _build_runtime_guardrails(agent_config),
         runtime_context.project_root,
@@ -351,7 +402,14 @@ async def build_chat_run_context(
         session_artifact_paths_before=session_artifact_paths_before,
         extra_filesystem_scopes=extra_filesystem_scopes,
         session_history=session_history,
-        user_message_note=_build_file_attachments_user_note(run_data.files),
+        user_message_note="\n\n".join(
+            part
+            for part in [
+                _build_file_attachments_user_note(run_data.files),
+                memory_recall.text if memory_recall else "",
+            ]
+            if part
+        ),
         system_prompt_sections=system_prompt_sections,
     )
 

@@ -43,6 +43,33 @@ export interface MemoryNodeQueryResult {
   useCount?: number;
 }
 
+export type MemoryCandidateStatus = 'pending' | 'accepted' | 'rejected' | 'failed';
+export type MemoryCandidateAction = 'accept' | 'reject';
+
+/** user / global 层待用户确认的 Markdown 记忆候选；采纳后才真正写入文件。 */
+export interface MemoryMarkdownCandidate {
+  id: string;
+  scope: 'user' | 'agent' | 'global_preference';
+  ownerId: string;
+  section: string;
+  operation: 'append' | 'update' | 'delete';
+  note: string;
+  exactText: string;
+  replacementText: string;
+  reason: string;
+  confidence: number;
+  status: MemoryCandidateStatus;
+  resolution: string;
+  agentId: string;
+  agentName: string;
+  workspaceId: string;
+  projectId: string;
+  sourceSessionId: string;
+  sourceRunId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type SkillEvolutionRecordStatus = 'draft' | 'registered' | 'skipped' | 'failed';
 export type SkillEvolutionRecordAction = 'skip' | 'restore_draft' | 'mark_failed' | 'register';
 
@@ -176,6 +203,8 @@ export interface MemorySettingsSnapshot {
     summaryMaxItemsPerSection: number;
     summaryMaxChars: number;
     markdownWriteRetries: number;
+    confirmUserMarkdown: boolean;
+    confirmGlobalMarkdown: boolean;
     mode: string;
   };
   markdownPaths: Record<string, string>;

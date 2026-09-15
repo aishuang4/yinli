@@ -16,11 +16,13 @@ import {
 import { MEMORY_TABS, type MemoryTab } from './memoryViewConfig';
 
 interface MemoryLandingPageProps {
+  pendingCandidateCount?: number;
   onSelectTab: (tab: MemoryTab) => void;
   onRefresh: () => void;
 }
 
 export function MemoryLandingPage({
+  pendingCandidateCount = 0,
   onSelectTab,
   onRefresh,
 }: MemoryLandingPageProps) {
@@ -49,7 +51,9 @@ export function MemoryLandingPage({
                     <Icon size={20} strokeWidth={1.8} />
                   </WorkbenchListIcon>
                 )}
-                title={item.label}
+                title={item.key === 'candidates' && pendingCandidateCount > 0
+                  ? `${item.label}（${pendingCandidateCount} 条待处理）`
+                  : item.label}
                 subtitle={memoryTabDescription(item.key)}
                 last={index === MEMORY_TABS.length - 1}
                 onSelect={() => onSelectTab(item.key)}
@@ -74,6 +78,7 @@ export function MemoryLandingPage({
 
 function memoryTabDescription(tab: MemoryTab): string {
   if (tab === 'markdown') return '管理用户、Agent 和全局 Markdown 长期记忆';
+  if (tab === 'candidates') return '采纳或拒绝模型提炼出的用户 / 全局记忆，采纳后才写入文件';
   if (tab === 'nodes') return '检索、禁用、归档或恢复历史记忆节点';
   if (tab === 'skills') return '查看和处理 Skill 自进化候选队列';
   if (tab === 'wiki') return '同步只读 Wiki 视图并查看实体关系';

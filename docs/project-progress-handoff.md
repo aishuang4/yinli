@@ -44,6 +44,17 @@
 - 验证：后端全量 `790 passed, 2 skipped`；前端 `vitest` 12 passed、`tsc -b`、`eslint` 通过。
 - 2026-09-15 桌面打包版真实供应商人工验证通过（`contextSize=6144` 的测试配置，6 轮用例）：顶栏窗口 / 阈值 / 分段字数正确；无工具直接回答为纯文本，用过工具后有 `FinalAnswerStart`；多轮读文件后触发 `CONTEXT_COMPRESSED` 且回答不泄出摘要；旧工具输出被存根化后模型能重新读取回答；重启后同会话不重读 Skill、压缩状态保留。`estimateErrorPct` 的长期分布仍待观察。
 
+## 2026-09-15 记忆沉淀与注入修正
+
+按 `docs/memory-system-design.md` "2026-09-15 沉淀与注入修正" 落地：
+
+- 注入 query-aware：静态 12 条标题索引移出 system prompt，改为按本轮用户消息召回 ≤ 4 条带摘要的节点附在用户消息后；system prompt 记忆段只剩 Markdown 摘要且继续按会话冻结。`_rank_terms` 中文 2 字滑窗，召回不计 use_count，写 `MEMORY_AUDIT.memory_recall`。
+- 提炼合成一路 `MemoryReflectionAgent`：无工具、一次看三份文件 + 用户消息 + 最终回答 + 脱敏工具轨迹（`build_tool_trajectory`），输出带 scope 的操作；模型说不写就不兜底。一轮基础设施模型调用上限 5 → 3。
+- user / global 层待确认：新表 `memory_markdown_candidates` + `GET/PATCH /api/memory/markdown-candidates`，Memory 页新增"待确认记忆" tab（入口显示待处理数）与设置页两个开关（默认开）。agent 层直接写。
+- 准入一轮一评：`evaluate_turn_admission()` 结果同时给节点持久化和 Markdown 提炼。
+- 历史节点会话日聚合 + 90 天未命中自动 archived（每进程每天一次）。
+- 验证：后端全量 `800 passed, 2 skipped`；前端 vitest 12 passed、`tsc -b`、eslint 通过。真实供应商下的召回相关性、候选队列体感尚未验证。
+
 ## 本轮模型配置改造
 
 - 已实施 [Chat 模型选择与 models.json 配置 V1](./chat-model-selection-v1.md)：Agent 不再选模型，Chat / Sandbox 按配置 ID 选择，所有连接与 Key 从用户数据目录 `models.json` 读取。

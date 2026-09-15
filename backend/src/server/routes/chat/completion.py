@@ -6,6 +6,7 @@ from typing import AsyncGenerator
 from src.memory.node_persist import MemoryNodePersistInput, persist_completed_run_memory_node
 from src.memory.reflection import (
     MemoryReflectionInput,
+    evaluate_turn_admission,
     is_manual_skill_generation_request,
     reflect_completed_run_memory_with_agents,
 )
@@ -206,7 +207,14 @@ async def finalize_successful_leader_run(
             runtime_events=runtime_events,
             runtime_context=resolved_runtime_context,
         )
-        _schedule_memory_reflection(reflection_input, model_name=model_name, persist=persist)
+        # 本轮准入只评一次：历史节点与 Markdown 提炼共用，避免"node 写了、Markdown 说不值得"这类口径漂移。
+        turn_admission = evaluate_turn_admission(reflection_input)
+        _schedule_memory_reflection(
+            reflection_input,
+            model_name=model_name,
+            persist=persist,
+            rule_admission=turn_admission,
+        )
         if _should_emit_skill_generating_notice(reflection_input):
             yield runtime_trace_source_event(
                 MEMORY_SKILL_GENERATING_EVENT_TYPE,
@@ -231,6 +239,7 @@ async def finalize_successful_leader_run(
                     project_id=resolved_runtime_context.project_id,
                     source_run_id=source_run_id,
                 ),
+                admission=turn_admission,
             )
             record_memory_audit_event(
                 session_id=session_id,
@@ -299,13 +308,21 @@ async def finalize_successful_leader_run(
         )
 
 
-def _schedule_memory_reflection(item: MemoryReflectionInput, *, model_name: str, persist: bool) -> None:
+def _schedule_memory_reflection(
+    item: MemoryReflectionInput,
+    *,
+    model_name: str,
+    persist: bool,
+    rule_admission: object | None = None,
+) -> None:
     """后台触发 Markdown 记忆提炼，不阻塞 Chat 成功收尾。"""
 
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(
-            _run_memory_reflection_background(item, model_name=model_name, persist=persist),
+            _run_memory_reflection_background(
+                item, model_name=model_name, persist=persist, rule_admission=rule_admission
+            ),
             name=f"memory-reflection-{item.session_id}-{item.agent_id}",
         )
     except RuntimeError:
@@ -318,11 +335,14 @@ async def _run_memory_reflection_background(
     *,
     model_name: str,
     persist: bool,
+    rule_admission: object | None = None,
 ) -> None:
-    """后台运行三路记忆提炼 Agent，异常只记录为内部失败。"""
+    """后台运行统一记忆提炼 Agent 与 Skill 进化，异常只记录为内部失败。"""
 
     try:
-        result = await reflect_completed_run_memory_with_agents(item, model_name=model_name)
+        result = await reflect_completed_run_memory_with_agents(
+            item, model_name=model_name, rule_admission=rule_admission
+        )
         payload = memory_reflection_audit_payload(result)
         updated = int(payload.get("markdownUpdateCount") or 0)
         skill_status = str(payload.get("skillEvolutionStatus") or "")

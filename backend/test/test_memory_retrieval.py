@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
+from src.memory.retrieval import (
+    MEMORY_RECALL_MIN_SCORE,
+    MemoryRetrievalContext,
+    build_memory_injection_text,
+    build_memory_recall,
+)
 
 
 def test_memory_injection_includes_markdown_sections_and_node_tree():
@@ -22,7 +27,7 @@ def test_memory_injection_includes_markdown_sections_and_node_tree():
     assert "以后默认用中文解释。" in text
     assert "Negative Rules" in text
     assert "不要恢复旧 Plan Runtime。" in text
-    assert "memory_node_tree" in text
+    assert "memory_node_query" in text
     # 节点索引压成单行、只留标题：date | nodeId | title；摘要按需用 memory_node_query 读取
     assert "| node-1 | 记忆模块" in text
     assert "讨论了记忆模块。" not in text
@@ -208,3 +213,74 @@ class FakeNodeService:
 class EmptyNodeService:
     def tree(self, **kwargs):
         return {"nodes": []}
+
+
+class RecallNodeService:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def query(self, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "results": [
+                {"nodeId": "n-same", "date": "2026-09-01", "agentId": "agent-1", "title": "本会话", "summary": "x",
+                 "sourceSessionId": "s-current", "rankScore": 3.0},
+                {"nodeId": "n-hit", "date": "2026-08-30", "agentId": "agent-1", "title": "Q3 销售表按地区汇总",
+                 "summary": "帮我把 Q3 销售表按地区汇总 → 已生成 q3_by_region.xlsx", "sourceSessionId": "s-old", "rankScore": 2.1},
+                {"nodeId": "n-dup", "date": "2026-08-29", "agentId": "agent-2", "title": "q3 销售表按地区汇总",
+                 "summary": "重复标题", "sourceSessionId": "s-old2", "rankScore": 1.5},
+                {"nodeId": "n-other", "date": "2026-08-28", "agentId": "agent-2", "title": "合同审阅",
+                 "summary": "审阅了合同", "sourceSessionId": "s-old3", "rankScore": 1.0},
+                {"nodeId": "n-weak", "date": "2026-08-27", "agentId": "agent-1", "title": "无关",
+                 "summary": "无关", "sourceSessionId": "s-old4", "rankScore": MEMORY_RECALL_MIN_SCORE - 0.01},
+            ],
+            "meta": {},
+        }
+
+
+def test_memory_recall_filters_current_session_duplicates_and_weak_scores():
+    service = RecallNodeService()
+    result = build_memory_recall(
+        MemoryRetrievalContext(agent_id="agent-1", agent_name="Agent"),
+        query_text="再帮我把 Q3 销售表按地区汇总一下",
+        exclude_session_id="s-current",
+        node_service=service,
+    )
+
+    assert service.calls[0]["mark_used"] is False
+    assert service.calls[0]["agent_id"] is None
+    assert result.node_ids == ["n-hit", "n-other"]
+    assert result.candidate_count == 5
+    assert "<recalled-memory>" in result.text
+    assert "n-hit | Q3 销售表按地区汇总 — 帮我把 Q3" in result.text
+    # 其他 Agent 的节点标出来源 Agent
+    assert "n-other (agent-2) | 合同审阅" in result.text
+    assert "n-same" not in result.text and "n-weak" not in result.text
+
+
+def test_memory_recall_skips_short_queries_and_swallows_errors():
+    service = RecallNodeService()
+    short = build_memory_recall(
+        MemoryRetrievalContext(agent_id="agent-1", agent_name="Agent"),
+        query_text="继续",
+        node_service=service,
+    )
+    assert short.text == "" and service.calls == []
+
+    class Broken:
+        def query(self, **kwargs):
+            raise RuntimeError("vector down")
+
+    failed = build_memory_recall(
+        MemoryRetrievalContext(agent_id="agent-1", agent_name="Agent"),
+        query_text="帮我把销售表按地区汇总",
+        node_service=Broken(),
+    )
+    assert failed.text == "" and failed.node_ids == []
+
+
+def test_rank_terms_split_chinese_into_bigrams():
+    from src.memory.nodes import _rank_terms
+
+    terms = _rank_terms("帮我把Q3销售表汇总 openpyxl")
+    assert "销售" in terms and "售表" in terms and "q3" in terms and "openpyxl" in terms

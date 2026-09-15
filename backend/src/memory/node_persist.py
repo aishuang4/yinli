@@ -25,33 +25,42 @@ class MemoryNodePersistInput:
     source_message_id: str = ""
 
 
+# 过期归档每个进程每天只跑一次，避免每轮都扫表。
+_last_stale_sweep_date: str = ""
+
+
 def persist_completed_run_memory_node(
     item: MemoryNodePersistInput,
     *,
     service: MemoryNodeService | None = None,
+    admission: object | None = None,
 ) -> dict | None:
     """把成功完成的单轮对话写入长期节点记忆。
 
     只保存用户输入、Agent 最终输出和规则摘要，不保存工具调用、observation 或 thinking。
+    同一会话同一天的多轮并进同一个节点；`admission` 可传入本轮已算好的准入结果，
+    避免与 Markdown 提炼各评一次、口径不一致。
     """
 
     user_message = item.user_message.strip()
     assistant_text = item.assistant_text.strip()
-    admission = evaluate_memory_admission(
+    decision = admission or evaluate_memory_admission(
         MemoryAdmissionInput(
             user_message=user_message,
             assistant_text=assistant_text,
         )
     )
-    if not admission.should_persist_history:
+    if not getattr(decision, "should_persist_history", False):
         return None
     node_date = date.today().isoformat()
+    turn_summary = _summary_from_turn(user_message, assistant_text)
+    turn_digest = _digest_from_turn(user_message, assistant_text)
     node = MemoryNodeWrite(
         agent_id=item.agent_id,
         node_date=node_date,
         title=_title_from_user_message(user_message),
-        summary=_summary_from_turn(user_message, assistant_text),
-        conversation_digest=_digest_from_turn(user_message, assistant_text),
+        summary=turn_summary,
+        conversation_digest=turn_digest,
         user_inputs=[user_message],
         agent_final_outputs=[assistant_text],
         tags=_tags_from_text(user_message + "\n" + assistant_text),
@@ -62,7 +71,23 @@ def persist_completed_run_memory_node(
         source_message_id=item.source_message_id,
         confidence=0.7,
     )
-    return (service or MemoryNodeService()).upsert_node(node)
+    node_service = service or MemoryNodeService()
+    merged = node_service.append_turn_to_session_day_node(node, turn_summary=turn_summary, turn_digest=turn_digest)
+    result = merged or node_service.upsert_node(node)
+    _sweep_stale_nodes_once_per_day(node_service, today=node_date)
+    return result
+
+
+def _sweep_stale_nodes_once_per_day(service: MemoryNodeService, *, today: str) -> None:
+    global _last_stale_sweep_date
+    if _last_stale_sweep_date == today:
+        return
+    _last_stale_sweep_date = today
+    try:
+        service.archive_stale_nodes()
+    except Exception:
+        # 归档只是整理，不能影响本轮持久化。
+        return
 
 
 def _title_from_user_message(value: str) -> str:

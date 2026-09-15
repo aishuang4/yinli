@@ -14,6 +14,13 @@ MEMORY_MARKDOWN_SECTION_CHARS = 700
 MEMORY_NODE_TREE_LIMIT = 12
 MEMORY_NODE_PER_DAY_LIMIT = 3
 MEMORY_NODE_TREE_CHARS = 1000
+# 运行前按本轮用户消息召回：只取最相关的几条，带一句话摘要，附在用户消息后而不是 system prompt。
+MEMORY_RECALL_LIMIT = 4
+MEMORY_RECALL_CHARS = 900
+# 低于这个排序分的候选不注入：一次词命中约 1.0；只有向量分时需 ≥0.8 才能过（0.8*0.35 + 0.7*0.25）。
+MEMORY_RECALL_MIN_SCORE = 0.45
+# 用户消息太短（"继续"、"好的"）不做召回，避免噪音。
+MEMORY_RECALL_MIN_QUERY_CHARS = 6
 
 
 @dataclass(frozen=True)
@@ -80,10 +87,96 @@ def build_memory_injection_text(
         [
             "# Memory",
             "以下是可用长期记忆摘要。若与本轮用户明确要求冲突，以本轮用户消息为准。",
-            "这里只注入摘要索引；需要查看某天、某个主题或 nodeId 的详情时，使用 memory_node_tree 或 memory_node_query 工具。",
+            "与本轮消息相关的历史记忆会以 <recalled-memory> 附在用户消息后；"
+            "当用户提到\"上次 / 之前 / 以前做过 / 按老规矩\"或需要历史决策、历史产物路径时，"
+            "先用 memory_node_query 查询（可按 nodeId、关键词或日期），不要凭印象回答。",
             "",
             body,
         ],
+    )
+
+
+@dataclass(frozen=True)
+class MemoryRecallResult:
+    """运行前自动召回结果：注入文本 + 审计用元数据。"""
+
+    text: str
+    node_ids: list[str]
+    candidate_count: int
+    query_chars: int
+
+
+def build_memory_recall(
+    context: MemoryRetrievalContext,
+    *,
+    query_text: str,
+    exclude_session_id: str = "",
+    node_service: MemoryNodeService | None = None,
+    limit: int = MEMORY_RECALL_LIMIT,
+) -> MemoryRecallResult:
+    """按本轮用户消息召回最相关的历史记忆节点，生成附在用户消息后的 `<recalled-memory>` 段。
+
+    与 system prompt 里的 Markdown 摘要不同，这段随每轮变化，所以不能进 system prompt
+    （会打破供应商前缀 cache）。本会话自己产生的节点已经在对话上下文里，排除。
+    """
+
+    query = " ".join(str(query_text or "").split())
+    empty = MemoryRecallResult(text="", node_ids=[], candidate_count=0, query_chars=len(query))
+    if len(query) < MEMORY_RECALL_MIN_QUERY_CHARS:
+        return empty
+    try:
+        payload = (node_service or MemoryNodeService()).query(
+            query_text=query,
+            agent_id=None,
+            limit=limit * 3,
+            workspace_id=context.workspace_id,
+            project_id=context.project_id,
+            user_id=context.user_id,
+            mark_used=False,
+        )
+    except Exception:
+        return empty
+    results = list(payload.get("results") or [])
+    picked: list[dict] = []
+    seen_titles: set[str] = set()
+    for node in results:
+        if exclude_session_id and str(node.get("sourceSessionId") or "") == exclude_session_id:
+            continue
+        if float(node.get("rankScore") or 0.0) < MEMORY_RECALL_MIN_SCORE:
+            continue
+        title_key = " ".join(str(node.get("title") or "").lower().split())
+        if title_key in seen_titles:
+            continue
+        seen_titles.add(title_key)
+        picked.append(node)
+        if len(picked) >= limit:
+            break
+    if not picked:
+        return MemoryRecallResult(text="", node_ids=[], candidate_count=len(results), query_chars=len(query))
+    lines = []
+    for node in picked:
+        summary = _trim(str(node.get("summary") or ""), 150)
+        title = _trim(str(node.get("title") or ""), 50)
+        agent_id = str(node.get("agentId") or "")
+        who = f" ({agent_id})" if agent_id and agent_id != context.agent_id else ""
+        line = f"- {node.get('date', '')} | {node.get('nodeId', '')}{who} | {title}"
+        if summary and summary != title:
+            line += f" — {summary}"
+        lines.append(line)
+    body = _trim_block("\n".join(lines), MEMORY_RECALL_CHARS)
+    text = "\n".join(
+        [
+            "<recalled-memory>",
+            "以下是与本轮消息相关的历史记忆（自动召回，可能不完全相关；需要原文时用 memory_node_query 按 nodeId 查询）：",
+            body,
+            "</recalled-memory>",
+        ]
+    )
+    return MemoryRecallResult(
+        text=text,
+        node_ids=[str(node.get("nodeId") or "") for node in picked],
+        candidate_count=len(results),
+        query_chars=len(query),
     )
 
 

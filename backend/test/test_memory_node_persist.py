@@ -107,7 +107,7 @@ def test_persist_completed_run_memory_node_skips_sensitive_turn():
 def test_successful_completion_triggers_memory_persist(isolated_db, monkeypatch):
     calls = []
 
-    def fake_persist(item):
+    def fake_persist(item, **_kwargs):
         calls.append(item)
         return {"id": "node-1"}
 
@@ -142,7 +142,7 @@ def test_successful_completion_triggers_memory_persist(isolated_db, monkeypatch)
 
 
 def test_successful_completion_records_memory_node_trace_without_chat_event(isolated_db, monkeypatch):
-    def fake_persist(item):
+    def fake_persist(item, **_kwargs):
         return {
             "id": "node-1",
             "title": "节点记忆",
@@ -186,7 +186,7 @@ def test_successful_completion_records_memory_node_trace_without_chat_event(isol
 
 
 def test_successful_completion_ignores_memory_persist_failure(isolated_db, monkeypatch):
-    def fake_persist(item):
+    def fake_persist(item, **_kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(
@@ -227,7 +227,7 @@ def test_successful_completion_does_not_wait_for_memory_reflection(isolated_db, 
     )
     monkeypatch.setattr(
         "src.server.routes.chat.completion.persist_completed_run_memory_node",
-        lambda item: {"id": "node-1"},
+        lambda item, **_kwargs: {"id": "node-1"},
     )
 
     started = time.monotonic()
@@ -300,7 +300,7 @@ def test_memory_reflection_background_records_memory_trace(isolated_db, monkeypa
 def test_successful_completion_emits_skill_generating_notice_only(isolated_db, monkeypatch):
     monkeypatch.setattr(
         "src.server.routes.chat.completion.persist_completed_run_memory_node",
-        lambda item: {"id": "node-1"},
+        lambda item, **_kwargs: {"id": "node-1"},
     )
 
     events = asyncio.run(
@@ -394,6 +394,12 @@ class FakeMemoryNodeService:
     def upsert_node(self, item):
         self.items.append(item)
         return {"id": "node-1"}
+
+    def append_turn_to_session_day_node(self, item, **_kwargs):
+        return None
+
+    def archive_stale_nodes(self, **_kwargs):
+        return []
 
 
 def test_summary_from_turn_is_one_sentence_without_markdown_noise():

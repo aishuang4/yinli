@@ -141,6 +141,8 @@ class MemoryReflectionResult:
     """运行后记忆反思结果。"""
 
     updates: list[MemoryMarkdownUpdate] = field(default_factory=list)
+    # user / global 层进入待确认队列的候选（已落库记录）。
+    candidates: list[dict] = field(default_factory=list)
     skill_candidate: SkillEvolutionAgentPayload | None = None
     skill_evolution_record: dict | None = None
     ignored_reason: str = ""
@@ -164,10 +166,14 @@ def reflect_completed_run_memory(
     section = _classify_section(user_message, target)
     note = _build_note(user_message, item)
     memory_store = store or MarkdownMemoryStore()
-    update = _append_note(memory_store, target, item, section, note)
-    if not update:
+    update, candidate = _route_note(memory_store, target, item, section, note, reason="规则识别的长期偏好 / 规则", confidence=0.5)
+    if not update and not candidate:
         return MemoryReflectionResult(ignored_reason="duplicate", admission=admission)
-    return MemoryReflectionResult(updates=[update], admission=admission)
+    return MemoryReflectionResult(
+        updates=[update] if update else [],
+        candidates=[candidate] if candidate else [],
+        admission=admission,
+    )
 
 
 async def reflect_completed_run_memory_with_agents(
@@ -176,8 +182,13 @@ async def reflect_completed_run_memory_with_agents(
     model_name: str,
     fallback_names: list[str] | None = None,
     store: MarkdownMemoryStore | None = None,
+    rule_admission: object | None = None,
 ) -> MemoryReflectionResult:
-    """调用专用系统 Agent 提炼记忆和 Skill 候选，失败时使用规则兜底。"""
+    """调用专用系统 Agent 提炼记忆和 Skill 候选，失败时使用规则兜底。
+
+    `rule_admission` 是本轮已算好的规则准入结果（与历史节点持久化共用一份），
+    这里只在其上叠加可选的模型评分，不再重新评一次。
+    """
 
     user_message = _normalize_text(item.user_message)
     assistant_text = _normalize_text(item.assistant_text)
@@ -187,50 +198,49 @@ async def reflect_completed_run_memory_with_agents(
         assistant_text,
         model_name=model_name,
         fallback_names=fallback_names or [],
+        rule_decision=rule_admission,
     )
     if admission.sensitive or admission.reason == "empty_turn":
         return MemoryReflectionResult(ignored_reason=admission.reason, admission=admission)
 
     memory_store = store or MarkdownMemoryStore()
     updates: list[MemoryMarkdownUpdate] = []
+    candidates: list[dict] = []
     memory_reason = ""
     if admission.should_write_markdown:
-        reflection_results = await asyncio.gather(
-            *[
-                _run_scoped_memory_reflection(
-                    scope=scope,
+        memory_files = {
+            scope: _build_memory_file_tool_set(memory_store, item, scope) for scope in _all_memory_scopes()
+        }
+        # 一路模型调用同时提炼三层；模型不挂写工具，操作由这里按 scope 决定直接写还是进待确认队列。
+        try:
+            payload = await run_memory_reflection_agent(
+                user_message=user_message,
+                assistant_text=assistant_text,
+                agent_id=item.agent_id,
+                agent_name=item.agent_name,
+                memory_files=memory_files,
+                tool_trajectory=build_tool_trajectory(item.tool_calls),
+                model_name=model_name,
+                fallback_names=fallback_names or [],
+                invocation_key=_reflection_invocation_key(item, "markdown"),
+            )
+        except Exception:
+            payload = None
+        if payload is not None:
+            memory_reason = payload.reason
+            if payload.should_write:
+                applied_updates, applied_candidates = await _apply_memory_operations(
+                    payload.memories,
+                    memory_files=memory_files,
                     item=item,
-                    user_message=user_message,
-                    assistant_text=assistant_text,
-                    memory_store=memory_store,
-                    model_name=model_name,
-                    fallback_names=fallback_names or [],
                 )
-                for scope in _all_memory_scopes()
-            ],
-        )
-        for scope, memory_file, payload in reflection_results:
-            if memory_file.operations:
-                updates.extend(_updates_from_memory_file_operations(memory_file.operations))
-                memory_reason = payload.reason if payload else memory_reason
-                continue
-            if payload and payload.should_write:
-                for memory in payload.memories[:4]:
-                    if memory.operation != "append":
-                        continue
-                    update = _append_note(
-                        memory_store,
-                        scope,
-                        item,
-                        _safe_section(memory.section, scope),
-                        _build_note(memory.note, item),
-                    )
-                    if update:
-                        updates.append(update)
-            memory_reason = payload.reason if payload else memory_reason
-        if not updates:
+                updates.extend(applied_updates)
+                candidates.extend(applied_candidates)
+        else:
+            # 模型不可用才用规则兜底；模型明确说"没有值得写的"不兜底。
             fallback = reflect_completed_run_memory(item, store=memory_store)
             updates.extend(fallback.updates)
+            candidates.extend(fallback.candidates)
             memory_reason = memory_reason or fallback.ignored_reason
 
     skill_candidate = None
@@ -295,9 +305,10 @@ async def reflect_completed_run_memory_with_agents(
             risk_notes=gate.reason,
         )
 
-    if updates or skill_candidate or skill_evolution_record:
+    if updates or candidates or skill_candidate or skill_evolution_record:
         return MemoryReflectionResult(
             updates=updates,
+            candidates=candidates,
             skill_candidate=skill_candidate,
             skill_evolution_record=skill_evolution_record,
             admission=admission,
@@ -355,6 +366,12 @@ def _skill_evolution_gate_for_item(
     )
 
 
+def evaluate_turn_admission(item: MemoryReflectionInput):
+    """本轮规则准入：历史节点持久化与 Markdown 提炼共用同一份结果。"""
+
+    return _admission_for_item(item, _normalize_text(item.user_message), _normalize_text(item.assistant_text))
+
+
 def _admission_for_item(
     item: MemoryReflectionInput,
     user_message: str,
@@ -378,10 +395,11 @@ async def _admission_for_item_with_model(
     *,
     model_name: str,
     fallback_names: list[str],
+    rule_decision: object | None = None,
 ):
     """规则准入 + 可选模型评分增强。"""
 
-    decision = _admission_for_item(item, user_message, assistant_text)
+    decision = rule_decision or _admission_for_item(item, user_message, assistant_text)
     if not decision.policy.enable_model_scoring or decision.reason in {"empty_turn", "sensitive_content"}:
         return decision
     try:
@@ -510,6 +528,251 @@ def _all_memory_scopes() -> tuple[MemoryScope, MemoryScope, MemoryScope]:
     return ("user", "agent", "global_preference")
 
 
+# 工具轨迹摘要：条数与单条字符上限。只给 agent 层提炼"哪条路径有效"用，不进记忆正文。
+TOOL_TRAJECTORY_LIMIT = 12
+TOOL_TRAJECTORY_ARGS_CHARS = 160
+TOOL_TRAJECTORY_RESULT_CHARS = 200
+# 一次提炼最多应用的操作数（与 prompt 中的 maxOperationsTotal 一致）。
+MAX_MEMORY_OPERATIONS_PER_SCOPE = 3
+MAX_MEMORY_OPERATIONS_TOTAL = 6
+
+
+def build_tool_trajectory(tool_calls: list[object] | tuple[object, ...], *, limit: int = TOOL_TRAJECTORY_LIMIT) -> list[dict]:
+    """把本轮工具调用压成脱敏的短轨迹：工具名、状态、参数要点、结果开头。"""
+
+    trajectory: list[dict] = []
+    calls = list(tool_calls or [])
+    # 超过上限时保留开头几步和最后几步：开头是探索路径，结尾是产出。
+    if len(calls) > limit:
+        head = limit // 2
+        calls = calls[:head] + calls[-(limit - head):]
+    for call in calls:
+        name = str(getattr(call, "name", "") or (call.get("name") if isinstance(call, dict) else "") or "")
+        status = str(getattr(call, "status", "") or (call.get("status") if isinstance(call, dict) else "") or "")
+        args = str(getattr(call, "args", "") or (call.get("args") if isinstance(call, dict) else "") or "")
+        result = str(getattr(call, "result", "") or (call.get("result") if isinstance(call, dict) else "") or "")
+        if not name:
+            continue
+        entry = {
+            "tool": name,
+            "status": status or "completed",
+            "args": _trim(sanitize_memory_note_text(args), TOOL_TRAJECTORY_ARGS_CHARS),
+        }
+        if result:
+            entry["result"] = _trim(sanitize_memory_note_text(result), TOOL_TRAJECTORY_RESULT_CHARS)
+        trajectory.append(entry)
+    return trajectory
+
+
+async def _apply_memory_operations(
+    memories: list,
+    *,
+    memory_files: dict[str, MemoryFileToolSet],
+    item: MemoryReflectionInput,
+) -> tuple[list[MemoryMarkdownUpdate], list[dict]]:
+    """按 scope 应用模型给出的操作：agent 层直接写文件，需确认的层进候选队列。"""
+
+    policy = get_memory_admission_policy()
+    updates: list[MemoryMarkdownUpdate] = []
+    candidates: list[dict] = []
+    per_scope: dict[str, int] = {}
+    total = 0
+    for memory in memories:
+        if total >= MAX_MEMORY_OPERATIONS_TOTAL:
+            break
+        scope = str(getattr(memory, "scope", "") or "")
+        operation = str(getattr(memory, "operation", "append") or "append")
+        if scope not in memory_files or operation == "skip":
+            continue
+        if per_scope.get(scope, 0) >= MAX_MEMORY_OPERATIONS_PER_SCOPE:
+            continue
+        note = _sanitize_memory_note(str(getattr(memory, "note", "") or ""))
+        exact_text = str(getattr(memory, "exact_text", "") or "").strip()
+        replacement = _sanitize_memory_note(str(getattr(memory, "replacement_text", "") or "")).lstrip("- ").strip()
+        reason = str(getattr(memory, "reason", "") or "")
+        confidence = float(getattr(memory, "confidence", 0.5) or 0.0)
+        section = _safe_section(str(getattr(memory, "section", "") or ""), scope)  # type: ignore[arg-type]
+        if operation == "append" and not note:
+            continue
+        if operation in {"update", "delete"} and not exact_text:
+            continue
+        if operation == "update" and not replacement:
+            continue
+        per_scope[scope] = per_scope.get(scope, 0) + 1
+        total += 1
+        if policy.requires_confirmation(scope):
+            candidate = _enqueue_candidate(
+                item,
+                scope=scope,
+                owner_id=memory_files[scope].owner_id,
+                section=section,
+                operation=operation,
+                note=note,
+                exact_text=exact_text,
+                replacement_text=replacement,
+                reason=reason,
+                confidence=confidence,
+            )
+            if candidate:
+                candidates.append(candidate)
+            continue
+        applied = await _apply_operation_to_file(
+            memory_files[scope],
+            operation=operation,
+            section=section,
+            note=note,
+            exact_text=exact_text,
+            replacement_text=replacement,
+            reason=reason,
+        )
+        if applied:
+            updates.append(applied)
+    return updates, candidates
+
+
+async def _apply_operation_to_file(
+    memory_file: MemoryFileToolSet,
+    *,
+    operation: str,
+    section: str,
+    note: str,
+    exact_text: str,
+    replacement_text: str,
+    reason: str,
+) -> MemoryMarkdownUpdate | None:
+    """用绑定文件的内部工具真正执行一次操作（带去重 / 冲突合并 / Summary 重建）。"""
+
+    from src.tools.memory_reflection import MemoryAdd, MemoryDelete, MemoryUpdate
+
+    before = len(memory_file.operations)
+    try:
+        if operation == "append":
+            await MemoryAdd(memory_file)(section=section, note=note, reason=reason)
+        elif operation == "update":
+            await MemoryUpdate(memory_file)(exactText=exact_text, replacementText=replacement_text, reason=reason)
+        elif operation == "delete":
+            await MemoryDelete(memory_file)(exactText=exact_text, reason=reason)
+        else:
+            return None
+    except Exception:
+        return None
+    new_ops = memory_file.operations[before:]
+    if not new_ops:
+        return None
+    return _updates_from_memory_file_operations(new_ops)[-1]
+
+
+def _enqueue_candidate(
+    item: MemoryReflectionInput,
+    *,
+    scope: str,
+    owner_id: str,
+    section: str,
+    operation: str,
+    note: str,
+    exact_text: str,
+    replacement_text: str,
+    reason: str,
+    confidence: float,
+) -> dict | None:
+    """把一条需要用户确认的操作写进候选队列；同内容的 pending 候选只留一条。"""
+
+    from src.storage.database import create_memory_markdown_candidate, find_pending_memory_markdown_candidate
+
+    try:
+        if find_pending_memory_markdown_candidate(scope=scope, owner_id=owner_id, note=note, exact_text=exact_text):
+            return None
+        return create_memory_markdown_candidate({
+            "scope": scope,
+            "ownerId": owner_id,
+            "section": section,
+            "operation": operation,
+            "note": note,
+            "exactText": exact_text,
+            "replacementText": replacement_text,
+            "reason": reason,
+            "confidence": confidence,
+            "agentId": item.agent_id,
+            "agentName": item.agent_name,
+            "workspaceId": item.workspace_id,
+            "projectId": item.project_id,
+            "sourceSessionId": item.session_id,
+            "sourceRunId": item.source_run_id,
+        })
+    except Exception:
+        return None
+
+
+def _route_note(
+    store: MarkdownMemoryStore,
+    scope: MemoryScope,
+    item: MemoryReflectionInput,
+    section: str,
+    note: str,
+    *,
+    reason: str,
+    confidence: float,
+) -> tuple[MemoryMarkdownUpdate | None, dict | None]:
+    """规则兜底路径的写入分流：需确认的 scope 进队列，否则直接 append。"""
+
+    policy = get_memory_admission_policy()
+    if policy.requires_confirmation(scope):
+        owner = _owner_id_for_scope(item, scope)
+        return None, _enqueue_candidate(
+            item,
+            scope=scope,
+            owner_id=owner,
+            section=section,
+            operation="append",
+            note=_sanitize_memory_note(note),
+            exact_text="",
+            replacement_text="",
+            reason=reason,
+            confidence=confidence,
+        )
+    return _append_note(store, scope, item, section, note), None
+
+
+def _owner_id_for_scope(item: MemoryReflectionInput, scope: str) -> str:
+    if scope == "global_preference":
+        return item.workspace_id
+    if scope == "agent":
+        return item.agent_id
+    return item.user_id
+
+
+async def apply_markdown_candidate(record: dict, *, store: MarkdownMemoryStore | None = None) -> tuple[bool, str]:
+    """用户采纳候选：按记录里的 scope / owner 绑定文件并执行操作。返回 (成功, 原因)。"""
+
+    scope = str(record.get("scope") or "")
+    if scope not in {"user", "agent", "global_preference"}:
+        return False, "unknown_scope"
+    item = MemoryReflectionInput(
+        session_id=str(record.get("sourceSessionId") or ""),
+        agent_id=str(record.get("agentId") or "") if scope != "agent" else str(record.get("ownerId") or ""),
+        agent_name=str(record.get("agentName") or ""),
+        user_message="",
+        assistant_text="",
+        user_id=str(record.get("ownerId") or "default") if scope == "user" else "default",
+        workspace_id=str(record.get("ownerId") or "default") if scope == "global_preference" else str(record.get("workspaceId") or "default"),
+        project_id=str(record.get("projectId") or "default"),
+        source_run_id=str(record.get("sourceRunId") or ""),
+    )
+    memory_file = _build_memory_file_tool_set(store or MarkdownMemoryStore(), item, scope)  # type: ignore[arg-type]
+    applied = await _apply_operation_to_file(
+        memory_file,
+        operation=str(record.get("operation") or "append"),
+        section=_safe_section(str(record.get("section") or ""), scope),  # type: ignore[arg-type]
+        note=str(record.get("note") or ""),
+        exact_text=str(record.get("exactText") or ""),
+        replacement_text=str(record.get("replacementText") or ""),
+        reason=str(record.get("reason") or ""),
+    )
+    if applied is None:
+        return False, "duplicate_or_exact_text_not_found"
+    return True, applied.path
+
+
 def _persist_skill_evolution_record(
     *,
     item: MemoryReflectionInput,
@@ -544,33 +807,6 @@ def _persist_skill_evolution_record(
         )
     except Exception:
         return None
-
-
-async def _run_scoped_memory_reflection(
-    *,
-    scope: MemoryScope,
-    item: MemoryReflectionInput,
-    user_message: str,
-    assistant_text: str,
-    memory_store: MarkdownMemoryStore,
-    model_name: str,
-    fallback_names: list[str],
-) -> tuple[MemoryScope, MemoryFileToolSet, object | None]:
-    memory_file = _build_memory_file_tool_set(memory_store, item, scope)
-    try:
-        payload = await run_memory_reflection_agent(
-            user_message=user_message,
-            assistant_text=assistant_text,
-            agent_id=item.agent_id,
-            agent_name=item.agent_name,
-            memory_file=memory_file,
-            model_name=model_name,
-            fallback_names=fallback_names,
-            invocation_key=_reflection_invocation_key(item, scope),
-        )
-    except Exception:
-        payload = None
-    return scope, memory_file, payload
 
 
 def _build_memory_file_tool_set(

@@ -358,3 +358,62 @@ class FailingQueryBackend(FakeVectorBackend):
 class FailingUpsertBackend(FakeVectorBackend):
     def upsert(self, collection, documents):
         raise RuntimeError("upsert boom")
+
+
+def test_session_day_turns_aggregate_into_one_node(isolated_db):
+    from src.memory.node_persist import MemoryNodePersistInput, persist_completed_run_memory_node
+    from src.memory.admission import MemoryAdmissionInput, evaluate_memory_admission
+
+    backend = FakeVectorBackend()
+    service = MemoryNodeService(vector_backend=backend)
+    admission = evaluate_memory_admission(MemoryAdmissionInput(user_message="帮我把 Q3 销售表按地区汇总生成 xlsx 文件", assistant_text="已生成 q3_by_region.xlsx，共 5 个地区。"))
+    assert admission.should_persist_history
+
+    first = persist_completed_run_memory_node(
+        MemoryNodePersistInput(session_id="s-1", agent_id="agent-1", agent_name="A",
+                               user_message="帮我把 Q3 销售表按地区汇总生成 xlsx 文件",
+                               assistant_text="已生成 q3_by_region.xlsx，共 5 个地区。", source_run_id="run-1"),
+        service=service, admission=admission,
+    )
+    second = persist_completed_run_memory_node(
+        MemoryNodePersistInput(session_id="s-1", agent_id="agent-1", agent_name="A",
+                               user_message="再把华东的明细单独导出一份 csv",
+                               assistant_text="已导出 huadong_detail.csv。", source_run_id="run-2"),
+        service=service, admission=admission,
+    )
+    other_session = persist_completed_run_memory_node(
+        MemoryNodePersistInput(session_id="s-2", agent_id="agent-1", agent_name="A",
+                               user_message="帮我审阅这份采购合同的付款条款",
+                               assistant_text="付款条款有两处风险。", source_run_id="run-3"),
+        service=service, admission=admission,
+    )
+
+    assert first["id"] == second["id"]
+    assert other_session["id"] != first["id"]
+    assert second["title"] == first["title"]
+    assert second["user_inputs"] == ["帮我把 Q3 销售表按地区汇总生成 xlsx 文件", "再把华东的明细单独导出一份 csv"]
+    assert "共 2 轮" in second["summary"] and "最近：" in second["summary"]
+    assert second["source_run_id"] == "run-2"
+    assert len(database.list_memory_nodes(workspace_id="default", project_id="default")) == 2
+
+
+def test_archive_stale_nodes_skips_pinned_and_recently_used(isolated_db):
+    from datetime import date, timedelta
+
+    backend = FakeVectorBackend()
+    service = MemoryNodeService(vector_backend=backend)
+    old = (date.today() - timedelta(days=120)).isoformat()
+    for node_id, pinned in (("old-plain", False), ("old-pinned", True)):
+        service.upsert_node(MemoryNodeWrite(id=node_id, agent_id="agent-1", node_date=old, title=node_id, summary="s", pinned=pinned))
+    service.upsert_node(MemoryNodeWrite(id="old-used", agent_id="agent-1", node_date=old, title="used", summary="s"))
+    database.mark_memory_node_used("old-used")
+    service.upsert_node(MemoryNodeWrite(id="fresh", agent_id="agent-1", node_date=date.today().isoformat(), title="fresh", summary="s"))
+
+    archived = service.archive_stale_nodes()
+
+    assert archived == ["old-plain"]
+    assert database.get_memory_node("old-plain")["status"] == "archived"
+    assert database.get_memory_node("old-plain")["vector_status"] == "deleted"
+    assert database.get_memory_node("old-pinned")["status"] == "active"
+    assert database.get_memory_node("old-used")["status"] == "active"
+    assert database.get_memory_node("fresh")["status"] == "active"

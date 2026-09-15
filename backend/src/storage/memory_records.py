@@ -141,6 +141,42 @@ class MemoryRecordStore:
     def update_status(self, node_id: str, *, status: str) -> dict[str, Any] | None:
         return self._update_node(node_id, "status = ?, updated_at = ?", (status, self.utc_now()))
 
+    def find_session_day_node(self, *, workspace_id: str, project_id: str, agent_id: str,
+                              node_date: str, source_session_id: str) -> dict[str, Any] | None:
+        """同一会话、同一天、同一 Agent 的历史记忆聚合成一个节点。"""
+
+        if not source_session_id:
+            return None
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM memory_nodes
+                WHERE workspace_id = ? AND project_id = ? AND agent_id = ? AND node_date = ?
+                  AND source_session_id = ? AND status = 'active'
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                (workspace_id or self.default_workspace_id, project_id or self.default_project_id,
+                 agent_id, node_date, source_session_id),
+            ).fetchone()
+        return self._node_from_row(row) if row else None
+
+    def list_stale_active(self, *, before_date: str, unused_since: str, limit: int = 200) -> list[str]:
+        """早于 before_date 创建、且 unused_since 之后没被命中的未置顶活跃节点 id。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM memory_nodes
+                WHERE status = 'active' AND pinned = 0 AND node_date < ?
+                  AND (last_used_at IS NULL OR last_used_at < ?)
+                ORDER BY node_date ASC LIMIT ?
+                """,
+                (before_date, unused_since, int(limit)),
+            ).fetchall()
+        return [str(row["id"]) for row in rows]
+
     def mark_used(self, node_id: str) -> dict[str, Any] | None:
         now = self.utc_now()
         return self._update_node(
