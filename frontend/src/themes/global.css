@@ -737,9 +737,15 @@ button[class*="-btn"] .lucide {
 .markdown-content h3 { font-size: 1.08em; }
 .markdown-content h4 { font-size: 1em; }
 
-.markdown-content ul,
-.markdown-content ol {
+.markdown-content ul {
   padding-left: 1.4em;
+}
+
+.markdown-content ol {
+  /* 覆盖 x-markdown --padding-ul-ol（1em），否则 10. 起的序号会溢出被过程区裁掉。 */
+  --padding-ul-ol: 0 0 0 2.4em;
+  padding-left: 2.4em;
+  list-style-position: outside;
 }
 
 .markdown-content li + li {

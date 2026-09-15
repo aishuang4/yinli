@@ -198,7 +198,7 @@ export function ProcessTextBlockView({ block }: { block: DisplayBlock<string> })
     >
       <div className="relative min-h-5">
         <RuntimeStatusMarker block={block} icon={<BrainCircuit size={14} />} timeline />
-        <div className="max-h-64 overflow-auto text-xs text-[var(--color-text-secondary)]">
+        <div className="max-h-64 overflow-auto pl-1 text-xs text-[var(--color-text-secondary)]">
           <MarkdownContent content={block.data} />
         </div>
       </div>
