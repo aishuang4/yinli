@@ -41,7 +41,8 @@
 - 会话状态落库：新增 `session_context_state` 表保存 `state.summary` + 可 JSON 化的 `middle_context`（已启用 Skill 正文、治理计数），每轮结束写、实例重建时恢复、会话删除时清理。
 - system prompt 瘦身：Clarification / Final Answer 契约从约 2.5k 字压到约 1.1k，问题数量 / 类型 / `FinalAnswerStart` 用法细节移入 `AskUser` / `FinalAnswerStart` 工具 description；历史记忆索引只留 `date | nodeId | title`，节点 `summary` 改为"请求要点 → 结果要点"一句话（≤170 字，去 Markdown 噪音），不再复制 700 字原文。
 - 观测：`contextStats` / `CONTEXT_USAGE` 新增 `promptSections`（system prompt 分段字数）、`toolSchemaChars`、`dataBlocks`、`compressionCount`、`stubbedToolResults` / `droppedImages` / `hygieneSavedChars`；顶栏 tooltip 展示压缩次数、整理统计、估算偏差和最大的几段 prompt。`contextUsage.ts` 不再依赖 `runtime-stream/selectors`（避免把 Block 渲染模块拉进纯数据层，vitest 因此能跑）。
-- 验证：后端全量 `790 passed, 2 skipped`；前端 `vitest` 12 passed、`tsc -b`、`eslint` 通过。真实供应商下的压缩触发 / 存根化效果尚未复测，记在 TODO。
+- 验证：后端全量 `790 passed, 2 skipped`；前端 `vitest` 12 passed、`tsc -b`、`eslint` 通过。
+- 2026-09-15 桌面打包版真实供应商人工验证通过（`contextSize=6144` 的测试配置，6 轮用例）：顶栏窗口 / 阈值 / 分段字数正确；无工具直接回答为纯文本，用过工具后有 `FinalAnswerStart`；多轮读文件后触发 `CONTEXT_COMPRESSED` 且回答不泄出摘要；旧工具输出被存根化后模型能重新读取回答；重启后同会话不重读 Skill、压缩状态保留。`estimateErrorPct` 的长期分布仍待观察。
 
 ## 本轮模型配置改造
 
