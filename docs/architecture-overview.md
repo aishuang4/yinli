@@ -87,6 +87,8 @@ Readiness / IntentRouter 系统 Agent 是一次性任务，每次调用前清空
    只在 context 变短或摘要变化时记一条记录，由 `leader_stream` 在下一次模型调用前写成 `CONTEXT_COMPRESSED` trace，并把
    `compressionCount` 并入 `CONTEXT_USAGE`。`state.session_id` 设为 Chat session id，offloader 落盘按会话分目录。
 
+以上 middleware、记忆两段注入、会话状态落库和 `CONTEXT_USAGE` 观测都由 `routes/chat/runtime_governance.py` 提供，单 Agent、TeamRun（Leader / Member / 综合）和群聊工作室（Host / Worker）调同一组函数，差别只在是否挂 `SkillContextMiddleware`、召回用哪段文本、以及会话是否跨轮（群聊跨轮才落库）。
+
 `state.summary` 与 `state.middle_context`（已启用 Skill 正文、治理计数、Plan 计数等）在每轮结束写入 SQLite
 `session_context_state` 表；进程重启 / 实例淘汰后 `react_runtime` 先用 `chat_messages` 重建正文，再从该表恢复摘要和
 middleware 数据，最后才用 `skill_runs` 兜底恢复已读 Skill。会话删除时一并清理。

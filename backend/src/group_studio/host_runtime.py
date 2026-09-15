@@ -35,6 +35,12 @@ from src.server.routes.chat.runtime_builder import (
     build_main_agent_runtime_spec,
     create_main_agent_from_spec,
 )
+from src.server.routes.chat.runtime_governance import (
+    build_context_governance_middlewares,
+    persist_agent_session_state,
+    prepare_agent_governance,
+    restore_agent_session_state,
+)
 from src.storage.database import (
     get_group_studio_pending_speaker,
     get_group_studio_snapshot,
@@ -101,6 +107,8 @@ def build_host_runtime_spec(snapshot: dict[str, Any], host_member: dict[str, Any
         extra_tools=tools,
         tool_name_allowlist=allowlist,
         tool_name_denylist=HOST_DENYLIST,
+        # Host 没有 Skill；只挂一级整理 + 压缩可观测，长讨论不至于把窗口撑满。
+        middlewares=build_context_governance_middlewares(skill_context=False),
         include_default_tools=False,
     )
     return spec, ctx, tools
@@ -259,8 +267,12 @@ async def _run_host_discussion(
     error_text = ""
     remember_fingerprint(run_id, progress_fingerprint(snapshot))
     register_run_task(group_id, asyncio.current_task())
+    agent = None
     try:
         agent = factory(spec)
+        prepare_agent_governance(agent, session_id=spec.session_id)
+        if not list(getattr(getattr(agent, "state", None), "context", []) or []):
+            restore_agent_session_state(agent, spec.session_id)
         last_chars_flush = 0
         next_input: Any = UserMsg(name="user", content=_host_turn_user_message(snapshot))
         nudged = False
@@ -340,6 +352,8 @@ async def _run_host_discussion(
             payload={"code": "host_failed", "message": error_text},
         )
     finally:
+        if agent is not None:
+            persist_agent_session_state(agent, session_id=spec.session_id, agent_id=spec.parent_agent_id)
         drop_run_task(group_id)
     body = "".join(body_parts)
     thinking = "".join(thinking_parts)

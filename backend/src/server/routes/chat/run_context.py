@@ -12,13 +12,7 @@ from src.config.runtime_settings import get_effective_model_settings
 from src.project_files import list_project_session_artifacts, project_session_directory
 from src.project_resources import ProjectResourceAccess, resolve_project_resource_access
 from src.runtime_context import RuntimeContext, load_project_instructions
-from src.memory.retrieval import (
-    MemoryRecallResult,
-    MemoryRetrievalContext,
-    build_memory_injection_text,
-    build_memory_recall,
-)
-from src.memory.trace import record_memory_audit_event
+from src.server.routes.chat.runtime_governance import build_memory_prompt_and_recall, record_memory_recall_audit
 from src.server.routes.agents import get_registered_agent
 from src.server.routes.chat.intent_router import (
     ExecutorRoute,
@@ -29,7 +23,6 @@ from src.server.routes.chat.intent_router import (
 )
 from src.server.routes.chat.models import ChatMessage, ChatSkillRun
 from src.agents.session_context import SessionHistoryMessage
-from src.server.routes.chat.memory_prompt_cache import session_memory_prompt
 from src.server.routes.chat.prompts import (
     _build_clarification_system_prompt,
     _build_file_attachments_user_note,
@@ -113,33 +106,10 @@ class ChatRunContext:
     user_message_note: str = ""
     # system prompt 各段字符数（段名 -> chars），只用于 contextStats / CONTEXT_USAGE 定位膨胀来源。
     system_prompt_sections: dict[str, int] = field(default_factory=dict)
-
-
-def _record_memory_recall_audit(
-    *,
-    session_id: str,
-    agent_id: str,
-    agent_name: str,
-    recall: MemoryRecallResult,
-) -> None:
-    """把运行前自动召回写进 MEMORY_AUDIT：命中哪些 nodeId、候选多少、是否注入。"""
-
-    record_memory_audit_event(
-        session_id=session_id,
-        persist=True,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        action="memory_recall",
-        status="completed",
-        title="Memory recalled for turn" if recall.node_ids else "Memory recall found nothing relevant",
-        content=f"injected={len(recall.node_ids)}, candidates={recall.candidate_count}",
-        payload={
-            "nodeIds": recall.node_ids,
-            "candidateCount": recall.candidate_count,
-            "queryChars": recall.query_chars,
-            "injectedChars": len(recall.text),
-        },
-    )
+    # 记忆注入的两段：Markdown 摘要（已在 system_prompt 中）与本轮召回（已在 user_message_note 中）；
+    # 单独保留是给 Team Leader / 综合阶段复用，不必再算一次。
+    memory_prompt: str = ""
+    memory_recall_text: str = ""
 
 
 def snapshot_session_history(session_id: str | None, *, limit: int = 40) -> list[SessionHistoryMessage]:
@@ -278,40 +248,26 @@ async def build_chat_run_context(
     model_name = runtime_model_config.model_name
     # 记忆摘要按会话冻结：每轮后台新增的历史记忆节点不再改写 system prompt，
     # 供应商前缀 cache 才能跨轮命中（见 memory_prompt_cache.py）。
-    memory_context = MemoryRetrievalContext(
-        agent_id=agent_id,
-        agent_name=agent_name,
-        workspace_id=runtime_context.workspace_id,
-        project_id=runtime_context.project_id,
-        # 静态的"最近 30 天节点标题索引"与本轮问题无关，改为下面按消息召回；system prompt 只留 Markdown 摘要。
-        include_node_tree=False,
-    )
-    memory_prompt = (
-        session_memory_prompt(
-            agent_id=agent_id,
-            session_id=session_id if persist_run else None,
-            build=lambda: build_memory_injection_text(memory_context),
-        )
-        if readiness.ready
-        else ""
-    )
-    # 按本轮用户消息召回相关历史记忆：随轮变化，附在用户消息后，不进 system prompt。
-    memory_recall = (
-        build_memory_recall(
-            memory_context,
-            query_text=run_data.message,
-            exclude_session_id=session_id or "",
-        )
-        if readiness.ready
-        else None
-    )
-    if memory_recall is not None and persist_run:
-        _record_memory_recall_audit(
-            session_id=session_id,
+    # 记忆摘要按会话冻结（供应商前缀 cache），历史记忆按本轮消息召回并附在用户消息后（见 runtime_governance.py）。
+    memory_prompt, memory_recall = ("", None)
+    if readiness.ready:
+        memory_prompt, memory_recall = build_memory_prompt_and_recall(
             agent_id=agent_id,
             agent_name=agent_name,
-            recall=memory_recall,
+            workspace_id=runtime_context.workspace_id,
+            project_id=runtime_context.project_id,
+            query_text=run_data.message,
+            freeze_session_id=session_id if persist_run else None,
+            exclude_session_id=session_id or "",
         )
+        if persist_run and memory_recall is not None:
+            record_memory_recall_audit(
+                session_id=session_id,
+                persist=True,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                recall=memory_recall,
+            )
     guardrails = scope_guardrails_to_project(
         _build_runtime_guardrails(agent_config),
         runtime_context.project_root,
@@ -411,6 +367,8 @@ async def build_chat_run_context(
             if part
         ),
         system_prompt_sections=system_prompt_sections,
+        memory_prompt=memory_prompt,
+        memory_recall_text=memory_recall.text if memory_recall else "",
     )
 
 
@@ -471,13 +429,14 @@ async def build_scheduled_run_context(
     )
     skill_paths = resolve_runtime_skill_paths(used_skills, runtime_context=runtime_context)
     used_skill_details = list_skill_usage_details(used_skills)
-    memory_prompt = build_memory_injection_text(
-        MemoryRetrievalContext(
-            agent_id=agent_id,
-            agent_name=agent_name,
-            workspace_id=runtime_context.workspace_id,
-            project_id=runtime_context.project_id,
-        ),
+    # 定时任务每次都是新会话：摘要不冻结，按任务正文召回历史记忆。
+    memory_prompt, job_recall = build_memory_prompt_and_recall(
+        agent_id=agent_id,
+        agent_name=agent_name,
+        workspace_id=runtime_context.workspace_id,
+        project_id=runtime_context.project_id,
+        query_text=run_data.message,
+        freeze_session_id=None,
     )
     guardrails = scope_guardrails_to_project(
         _build_runtime_guardrails(agent_config),
@@ -558,7 +517,13 @@ async def build_scheduled_run_context(
         write_scope_dir=workspace_dir,
         scheduled_job_id=str(getattr(job, "id", "") or getattr(firing, "job_id", "") or ""),
         scheduled_firing_id=str(getattr(firing, "id", "") or ""),
-        user_message_note=_build_file_attachments_user_note(run_data.files),
+        user_message_note="\n\n".join(
+            part
+            for part in [_build_file_attachments_user_note(run_data.files), job_recall.text if job_recall else ""]
+            if part
+        ),
+        memory_prompt=memory_prompt,
+        memory_recall_text=job_recall.text if job_recall else "",
     )
 
 

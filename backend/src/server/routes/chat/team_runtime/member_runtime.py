@@ -18,7 +18,15 @@ from src.server.routes.chat.runtime_events import (
     agentscope_reply_finished_reason,
 )
 from src.server.routes.chat.runtime_builder import build_main_agent_runtime_spec, create_main_agent_from_spec
-from src.server.routes.chat.team_runtime.store import TeamStore, TeamStoreError
+from src.server.routes.chat.runtime_governance import (
+    append_user_note,
+    build_context_governance_middlewares,
+    build_memory_prompt_and_recall,
+    observe_model_call_event,
+    prepare_agent_governance,
+    record_memory_recall_audit,
+)
+from src.server.routes.chat.team_runtime.store import TeamStore
 from src.server.routes.chat.team_runtime.tools import leader_tools, member_tools
 from src.server.routes.chat.trace_recorder import _make_fallback_trace_recorder
 
@@ -62,24 +70,29 @@ async def run_leader_coordination(
     await flush_events()
     tools = leader_tools(store)
     allowlist = {tool.name for tool in tools}
+    # Leader 复用 Chat 已算好的记忆两段：Markdown 摘要进 system prompt，本轮召回附在目标后面。
     agent = _create_team_agent(
         ctx=ctx,
         actor_id="leader",
         actor_name=ctx.agent_name,
         session_id=f"{ctx.session_id}:{store.ref.id}:leader",
-        system_prompt=_leader_system_prompt(store, run_data),
+        system_prompt=_with_memory_prompt(_leader_system_prompt(store, run_data), ctx.memory_prompt),
         runtime_key=f"team-leader-{store.ref.id}",
         extra_tools=tools,
         tool_allowlist=allowlist,
         used_skills=[],
         max_react_iters=LEADER_MAX_REACT_ITERS,
+        skill_context=False,
     )
     await _run_agent_stream(
         agent=agent,
         user_msg=UserMsg(
             name="user",
             content=_build_user_content(
-                f"为本轮目标组建团队并创建共享任务：\n{run_data.message}",
+                append_user_note(
+                    f"为本轮目标组建团队并创建共享任务：\n{run_data.message}",
+                    ctx.memory_recall_text,
+                ),
                 run_data.images,
             ),
         ),
@@ -88,6 +101,7 @@ async def run_leader_coordination(
         task_id="",
         flush_events=flush_events,
         stop_after_tool_name="team_finish_coordination",
+        on_model_call=_model_call_observer(ctx, scope="team_leader", agent_id="leader", agent_name=ctx.agent_name),
     )
     if store.run().get("phase") != "executing":
         raise TeamSessionError("Leader 未调用 team_finish_coordination")
@@ -123,12 +137,15 @@ async def run_member_task(
         *(str(tool.name) for tool in ctx.knowledge_tools),
         *(tool.name for tool in tools),
     }
+    actor_name = str(member.get("name") or member_id)
+    # Member 按自己的任务召回历史记忆（不是按用户原始目标）；Markdown 摘要沿用 Leader 所属 Agent 的。
+    member_recall_text = _member_memory_recall(ctx, actor_name=actor_name, task=task)
     agent = _create_team_agent(
         ctx=ctx,
         actor_id=member_id,
-        actor_name=str(member.get("name") or member_id),
+        actor_name=actor_name,
         session_id=f"{ctx.session_id}:{store.ref.id}:{member_id}",
-        system_prompt=_member_system_prompt(store, member, task),
+        system_prompt=_with_memory_prompt(_member_system_prompt(store, member, task), ctx.memory_prompt),
         runtime_key=f"team-member-{store.ref.id}-{member_id}-{task_id}",
         extra_tools=tools,
         tool_allowlist=allowlist,
@@ -137,18 +154,23 @@ async def run_member_task(
         mcp_servers=ctx.mcp_servers,
         knowledge_tools=ctx.knowledge_tools,
         max_react_iters=MEMBER_MAX_REACT_ITERS,
+        skill_context=bool(ctx.used_skills),
     )
     await _run_agent_stream(
         agent=agent,
         user_msg=UserMsg(
             name="user",
-            content=_build_user_content(_member_user_prompt(store, member_id, task), run_data.images),
+            content=_build_user_content(
+                append_user_note(_member_user_prompt(store, member_id, task), member_recall_text),
+                run_data.images,
+            ),
         ),
         store=store,
         actor_id=member_id,
         task_id=task_id,
         flush_events=flush_events,
         allow_iteration_recovery=True,
+        on_model_call=_model_call_observer(ctx, scope="team_member", agent_id=member_id, agent_name=actor_name),
     )
     if store.task(task_id).get("status") != "succeeded":
         raise TeamSessionError("Member session 结束时没有通过 team_submit_result 完成当前任务")
@@ -175,12 +197,14 @@ async def run_synthesis(
         actor_id="leader",
         actor_name=ctx.agent_name,
         session_id=f"{ctx.session_id}:{store.ref.id}:synthesis",
-        system_prompt=_synthesis_system_prompt(),
+        # 综合阶段没有工具，但用户的格式 / 语言偏好（Markdown 记忆）仍应生效。
+        system_prompt=_with_memory_prompt(_synthesis_system_prompt(), ctx.memory_prompt),
         runtime_key=f"team-synthesis-{store.ref.id}",
         extra_tools=[],
         tool_allowlist=set(),
         used_skills=[],
         max_react_iters=SYNTHESIS_MAX_REACT_ITERS,
+        skill_context=False,
     )
     text = await _run_agent_stream(
         agent=agent,
@@ -193,6 +217,7 @@ async def run_synthesis(
         task_id="",
         flush_events=flush_events,
         on_output_delta=on_output_delta,
+        on_model_call=_model_call_observer(ctx, scope="team_synthesis", agent_id="leader", agent_name=ctx.agent_name),
     )
     if not text.strip():
         raise TeamSessionError("综合 session 没有生成最终答案")
@@ -216,8 +241,9 @@ def _create_team_agent(
     mcp_servers: list | None = None,
     knowledge_tools: list | None = None,
     max_react_iters: int,
+    skill_context: bool = False,
 ):
-    """使用唯一 cache key 创建隔离 Team Member Agent。"""
+    """使用唯一 cache key 创建隔离 Team Member Agent，并挂上与单 Agent 相同的上下文治理 middleware。"""
 
     team_model_config = replace(
         ctx.runtime_model_config,
@@ -243,10 +269,11 @@ def _create_team_agent(
         runtime_features_cache_key=f"{runtime_key}-iters-{max_react_iters}",
         extra_tools=extra_tools,
         tool_name_allowlist=tool_allowlist,
+        middlewares=build_context_governance_middlewares(skill_context=skill_context),
         workspace_dir=str(getattr(ctx, "session_workspace_dir", "") or ""),
         extra_filesystem_scopes=list(getattr(ctx, "extra_filesystem_scopes", None) or []),
     )
-    return create_main_agent_from_spec(
+    agent = create_main_agent_from_spec(
         spec,
         on_fallback_event=_make_fallback_trace_recorder(
             session_id=ctx.session_id,
@@ -256,6 +283,72 @@ def _create_team_agent(
             agent_name=actor_name,
         ),
     )
+    memory_chars = len(str(getattr(ctx, "memory_prompt", "") or ""))
+    prepare_agent_governance(
+        agent,
+        session_id=session_id,
+        prompt_sections={"team": max(0, len(system_prompt) - memory_chars), "memory": memory_chars},
+    )
+    return agent
+
+
+def _with_memory_prompt(system_prompt: str, memory_prompt: str) -> str:
+    return f"{system_prompt}\n\n{memory_prompt}" if memory_prompt else system_prompt
+
+
+def _member_memory_recall(ctx: ChatRunContext, *, actor_name: str, task: dict) -> str:
+    """按 Member 的任务标题 + 简述召回历史记忆，写入 MEMORY_AUDIT 后返回可附加的文本。"""
+
+    query = " ".join(str(part) for part in (task.get("title"), task.get("description"), task.get("brief")) if part)
+    if not query.strip():
+        return ""
+    try:
+        _prompt, recall = build_memory_prompt_and_recall(
+            agent_id=ctx.agent_id,
+            agent_name=actor_name,
+            workspace_id=ctx.runtime_context.workspace_id,
+            project_id=ctx.runtime_context.project_id,
+            query_text=query,
+            freeze_session_id=None,
+            exclude_session_id=ctx.session_id or "",
+            include_markdown=False,
+        )
+    except Exception:
+        return ""
+    if recall is None:
+        return ""
+    if ctx.persist_run:
+        record_memory_recall_audit(
+            session_id=ctx.session_id,
+            persist=True,
+            agent_id=ctx.agent_id,
+            agent_name=actor_name,
+            recall=recall,
+            scope_label="team_member",
+        )
+    return recall.text
+
+
+def _model_call_observer(ctx: ChatRunContext, *, scope: str, agent_id: str, agent_name: str):
+    """给 `_run_agent_stream` 的模型调用回调：写 CONTEXT_COMPRESSED / CONTEXT_USAGE trace。"""
+
+    async def observe(agent: object, event_type: str, event_data: dict) -> None:
+        try:
+            await observe_model_call_event(
+                agent=agent,
+                event_type=event_type,
+                event_data=event_data,
+                session_id=ctx.session_id,
+                persist=ctx.persist_run,
+                scope=scope,
+                agent_id=agent_id,
+                agent_name=agent_name,
+            )
+        except Exception:
+            # 观测失败不能影响 Team 执行。
+            return
+
+    return observe
 
 
 async def _run_agent_stream(
@@ -269,6 +362,7 @@ async def _run_agent_stream(
     allow_iteration_recovery: bool = False,
     stop_after_tool_name: str = "",
     on_output_delta: Callable[[str], Awaitable[None]] | None = None,
+    on_model_call: Callable[[object, str, dict], Awaitable[None]] | None = None,
 ) -> str:
     """把 AgentScope 过程转换为 Team domain event。"""
 
@@ -302,6 +396,8 @@ async def _run_agent_stream(
         async for raw_event in agent.reply_stream(next_input):
             data = raw_event.model_dump(mode="json")
             event_type = str(data.pop("type", "UNKNOWN"))
+            if on_model_call is not None and event_type in {"MODEL_CALL_START", "MODEL_CALL_END"}:
+                await on_model_call(agent, event_type, data)
             if event_type in {"REQUIRE_USER_CONFIRM", "REQUIRE_EXTERNAL_EXECUTION"}:
                 await flush_pending_delta()
                 automatic_denials += 1

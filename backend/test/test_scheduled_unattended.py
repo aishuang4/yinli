@@ -429,7 +429,7 @@ def test_build_scheduled_run_context_skips_model_readiness_and_tool_scope_resolv
         lambda: SimpleNamespace(default_model="model", fallback_models=[], provider="deepseek", api_key="x"),
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.run_context.build_memory_injection_text",
+        "src.server.routes.chat.runtime_governance.build_memory_injection_text",
         lambda context: "",
     )
     monkeypatch.setattr(
@@ -499,7 +499,7 @@ def test_frozen_skills_must_equal_used_skills_or_skill_unbound(isolated_db, tmp_
         lambda: SimpleNamespace(default_model="model", fallback_models=[], provider="deepseek", api_key="x"),
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.run_context.build_memory_injection_text",
+        "src.server.routes.chat.runtime_governance.build_memory_injection_text",
         lambda context: "",
     )
     monkeypatch.setattr(

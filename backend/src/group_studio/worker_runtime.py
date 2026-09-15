@@ -48,6 +48,14 @@ from src.server.routes.chat.runtime_builder import (
     build_main_agent_runtime_spec,
     create_main_agent_from_spec,
 )
+from src.server.routes.chat.runtime_governance import (
+    append_user_note,
+    build_context_governance_middlewares,
+    build_memory_prompt_and_recall,
+    persist_agent_session_state,
+    prepare_agent_governance,
+    restore_agent_session_state,
+)
 from src.storage.database import (
     get_group_studio_snapshot,
     get_project,
@@ -159,11 +167,21 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
         fallback_names=list(runtime.fallback_models or []),
         model_options=AgentModelOptions(max_react_iters=WORKER_MAX_REACT_ITERS),
     )
+    worker_agent_id = str(agent_row.get("id") or member.get("agentId") or "default")
+    worker_agent_name = str(member.get("displayName") or agent_row.get("name") or "工人")
+    worker_session_id = f"{snapshot['id']}:{member['id']}"
+    # Worker 是 Chat catalog 里的 Agent：与单 Agent 一样带自己的 Markdown 记忆摘要（按工作室会话冻结）。
+    memory_prompt = _worker_memory_prompt(
+        snapshot,
+        agent_id=worker_agent_id,
+        agent_name=worker_agent_name,
+        session_id=worker_session_id,
+    )
     spec = build_main_agent_runtime_spec(
-        agent_id=str(agent_row.get("id") or member.get("agentId") or "default"),
-        agent_name=str(member.get("displayName") or agent_row.get("name") or "工人"),
-        session_id=f"{snapshot['id']}:{member['id']}",
-        system_prompt=_worker_system_prompt(snapshot, member),
+        agent_id=worker_agent_id,
+        agent_name=worker_agent_name,
+        session_id=worker_session_id,
+        system_prompt=_with_memory_prompt(_worker_system_prompt(snapshot, member), memory_prompt),
         model_config=model_config,
         deep_thinking=True,
         used_skills=[],
@@ -177,6 +195,8 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
         extra_tools=tools,
         tool_name_allowlist=allowlist,
         tool_name_denylist=WORKER_DENYLIST,
+        # 已读 Skill 正文保留 + 一级无模型整理 + 压缩可观测，与单 Agent 同一套。
+        middlewares=build_context_governance_middlewares(skill_context=True),
         include_default_tools=True,
         workspace_dir=workspace,
         write_scope_dir=workspace,
@@ -233,6 +253,55 @@ def _skill_paths(skill_ids: list[str]) -> list[str]:
         return list(resolve_runtime_skill_paths(skills) or [])
     except Exception:
         return []
+
+
+def _with_memory_prompt(system_prompt: str, memory_prompt: str) -> str:
+    return f"{system_prompt}\n\n{memory_prompt}" if memory_prompt else system_prompt
+
+
+def _worker_memory_prompt(snapshot: dict[str, Any], *, agent_id: str, agent_name: str, session_id: str) -> str:
+    """Worker 的 Markdown 记忆摘要；召回在每轮 `_worker_memory_recall` 单独做。"""
+
+    try:
+        memory_prompt, _recall = build_memory_prompt_and_recall(
+            agent_id=agent_id,
+            agent_name=agent_name,
+            workspace_id=str(snapshot.get("workspaceId") or "default"),
+            project_id=str(snapshot.get("projectId") or "default"),
+            query_text="",
+            freeze_session_id=session_id,
+        )
+    except Exception:
+        return ""
+    return memory_prompt
+
+
+def _worker_memory_recall(snapshot: dict[str, Any], *, agent_id: str, agent_name: str, duty: str) -> str:
+    """按任务卡目标 + 开放工作项召回历史记忆；群聊事件暂不写 run_events，这里不做审计。"""
+
+    card = snapshot.get("taskCard") or {}
+    items = [
+        str(item.get("title") or "")
+        for item in (snapshot.get("workItems") or [])
+        if item.get("status") in {"open", "claimed"}
+    ]
+    query = " ".join(part for part in [str(card.get("goal") or ""), *items] if part)
+    if duty == "claim" or not query.strip():
+        return ""
+    try:
+        _prompt, recall = build_memory_prompt_and_recall(
+            agent_id=agent_id,
+            agent_name=agent_name,
+            workspace_id=str(snapshot.get("workspaceId") or "default"),
+            project_id=str(snapshot.get("projectId") or "default"),
+            query_text=query,
+            freeze_session_id=None,
+            exclude_session_id=str(snapshot.get("chatSessionId") or ""),
+            include_markdown=False,
+        )
+    except Exception:
+        return ""
+    return recall.text if recall else ""
 
 
 def _worker_system_prompt(snapshot: dict[str, Any], member: dict[str, Any]) -> str:
@@ -422,6 +491,11 @@ async def _run_worker_turn(
     )
     factory = agent_factory or (lambda built_spec: create_main_agent_from_spec(built_spec))
     agent = factory(spec)
+    # 工作室跨多轮：offloader 按 studio+member 分目录；实例重建时恢复压缩摘要与已读 Skill。
+    prepare_agent_governance(agent, session_id=spec.session_id)
+    if not list(getattr(getattr(agent, "state", None), "context", []) or []):
+        restore_agent_session_state(agent, spec.session_id)
+    recall_note = _worker_memory_recall(snapshot, agent_id=spec.parent_agent_id, agent_name=spec.parent_agent_name, duty=duty)
     session = register_session(WorkerSession(
         group_id=group_id,
         run_id=run_id,
@@ -436,7 +510,10 @@ async def _run_worker_turn(
     remember_fingerprint(run_id, progress_fingerprint(snapshot))
     register_run_task(group_id, asyncio.current_task())
     try:
-        next_input: Any = UserMsg(name="user", content=_worker_user_message(snapshot, member, duty=duty))
+        next_input: Any = UserMsg(
+            name="user",
+            content=append_user_note(_worker_user_message(snapshot, member, duty=duty), recall_note),
+        )
         last_chars_flush = 0
         while not session.cancelled:
             paused = False
@@ -558,6 +635,7 @@ async def _run_worker_turn(
             payload={"code": "worker_failed", "message": error_text},
         )
     finally:
+        persist_agent_session_state(agent, session_id=spec.session_id, agent_id=spec.parent_agent_id)
         drop_session(group_id, member_id, run_id)
         drop_run_task(group_id)
 

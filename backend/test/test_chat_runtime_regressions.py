@@ -2478,7 +2478,7 @@ def test_chat_run_context_includes_memory_prompt(monkeypatch):
         lambda: SimpleNamespace(default_model="model", fallback_models=[]),
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.run_context.build_memory_injection_text",
+        "src.server.routes.chat.runtime_governance.build_memory_injection_text",
         lambda context: "# Memory\n记忆注入片段",
     )
     monkeypatch.setattr(
@@ -2528,7 +2528,7 @@ def test_chat_run_context_keeps_history_out_of_system_prompt(monkeypatch):
         "src.server.routes.chat.run_context.get_effective_model_settings",
         lambda: SimpleNamespace(default_model="model", fallback_models=[]),
     )
-    monkeypatch.setattr("src.server.routes.chat.run_context.build_memory_injection_text", lambda context: "")
+    monkeypatch.setattr("src.server.routes.chat.runtime_governance.build_memory_injection_text", lambda context: "")
     monkeypatch.setattr(
         "src.server.routes.chat.run_context.resolve_project_resource_access",
         lambda runtime_context: SimpleNamespace(

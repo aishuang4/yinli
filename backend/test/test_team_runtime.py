@@ -230,6 +230,64 @@ def test_team_agent_overrides_parent_iteration_budget(monkeypatch) -> None:
 
     assert captured["spec"].model_options.max_react_iters == 32
     assert ctx.runtime_model_config.model_options.max_react_iters == 99
+    # Team 成员与单 Agent 共用上下文治理 middleware；未用 Skill 时不挂 SkillContextMiddleware
+    names = [type(item).__name__ for item in captured["spec"].middlewares]
+    assert names == ["ContextHygieneMiddleware", "ContextCompressionMiddleware"]
+
+
+def test_team_agent_with_skills_keeps_skill_context_and_memory_prompt(monkeypatch) -> None:
+    captured = {}
+
+    class FakeAgent:
+        def __init__(self):
+            from agentscope.state import AgentState
+
+            self.state = AgentState()
+
+    def fake_create(spec, **_kwargs):
+        captured["spec"] = spec
+        return FakeAgent()
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.team_runtime.member_runtime.create_main_agent_from_spec",
+        fake_create,
+    )
+    ctx = SimpleNamespace(
+        agent_id="leader-agent",
+        session_id="session-new",
+        persist_run=False,
+        memory_prompt="# Memory\n用户偏好中文。",
+        runtime_model_config=RuntimeModelConfig(
+            model_name="test-model",
+            fallback_names=[],
+            model_options=AgentModelOptions(max_react_iters=99),
+        ),
+        guardrails=AgentGuardrails(),
+    )
+
+    agent = _create_team_agent(
+        ctx=ctx,
+        actor_id="member-test",
+        actor_name="Member",
+        session_id="member-session",
+        system_prompt="work\n\n# Memory\n用户偏好中文。",
+        runtime_key="team-member-test",
+        extra_tools=[],
+        tool_allowlist=set(),
+        used_skills=[],
+        max_react_iters=32,
+        skill_context=True,
+    )
+
+    names = [type(item).__name__ for item in captured["spec"].middlewares]
+    assert names == ["SkillContextMiddleware", "ContextHygieneMiddleware", "ContextCompressionMiddleware"]
+    # offloader 按 Team session 分目录；prompt 分段字数供 contextStats
+    assert agent.state.session_id == "member-session"
+    from src.server.routes.chat.trace_recorder import PROMPT_SECTIONS_ATTR
+
+    sections = getattr(agent, PROMPT_SECTIONS_ATTR)
+    assert sections["memory"] == len(ctx.memory_prompt)
+    assert sections["team"] == len("work\n\n")
 
 
 def test_coordinator_runs_independent_tasks_concurrently(tmp_path, monkeypatch) -> None:
@@ -618,6 +676,48 @@ def test_member_stream_forwards_synthesis_output_deltas_immediately(tmp_path) ->
 
     assert forwarded == ["第一段", "第二段"]
     assert output == "第一段第二段"
+
+
+def test_member_stream_reports_model_calls_to_observer(tmp_path) -> None:
+    """MODEL_CALL_START / END 交给观测回调（写 CONTEXT_USAGE trace），不进 Team 领域事件。"""
+
+    store = create_store(tmp_path)
+
+    class FakeEvent:
+        def __init__(self, data: dict) -> None:
+            self.data = data
+
+        def model_dump(self, **_kwargs) -> dict:
+            return dict(self.data)
+
+    class FakeAgent:
+        async def reply_stream(self, _message):
+            yield FakeEvent({"type": "MODEL_CALL_START", "model_name": "m"})
+            yield FakeEvent({"type": "TEXT_BLOCK_DELTA", "delta": "ok"})
+            yield FakeEvent({"type": "MODEL_CALL_END", "model_name": "m", "input_tokens": 12, "output_tokens": 3})
+
+    seen: list[tuple[str, int]] = []
+
+    async def flush_events() -> None:
+        return None
+
+    async def on_model_call(agent, event_type, data) -> None:
+        assert isinstance(agent, FakeAgent)
+        seen.append((event_type, int(data.get("input_tokens") or 0)))
+
+    output = asyncio.run(_run_agent_stream(
+        agent=FakeAgent(),
+        user_msg=SimpleNamespace(),
+        store=store,
+        actor_id="leader",
+        task_id="",
+        flush_events=flush_events,
+        on_model_call=on_model_call,
+    ))
+
+    assert output == "ok"
+    assert seen == [("MODEL_CALL_START", 0), ("MODEL_CALL_END", 12)]
+    assert not any("model" in str(event.get("type") or "").lower() for event in store.events_after(0))
 
 
 def test_leader_stream_stops_after_finish_coordination_tool(tmp_path) -> None:

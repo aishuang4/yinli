@@ -193,6 +193,11 @@ def test_host_spec_has_no_default_tools(client):
     assert "group_assign_floor" in names
     assert HOST_STOP_TOOLS <= names
     assert spec.model_options.max_react_iters == 16
+    # Host 没有 Skill，只挂一级整理 + 压缩可观测
+    assert [type(item).__name__ for item in spec.middlewares] == [
+        "ContextHygieneMiddleware",
+        "ContextCompressionMiddleware",
+    ]
 
 
 def test_pytest_does_not_auto_start_host(client):

@@ -55,6 +55,16 @@
 - 历史节点会话日聚合 + 90 天未命中自动 archived（每进程每天一次）。
 - 验证：后端全量 `800 passed, 2 skipped`；前端 vitest 12 passed、`tsc -b`、eslint 通过。真实供应商下的召回相关性、候选队列体感尚未验证。
 
+## 2026-09-15 Team / 群聊对齐单 Agent 治理
+
+新增 `routes/chat/runtime_governance.py` 收拢共用组件，三条 Runtime 改为同一入口：
+
+- middleware：`build_context_governance_middlewares(skill_context=)` = SkillContext（可选）+ ContextHygiene + ContextCompression。单 Agent 另加 RunSteer；Team Leader / 综合不挂 Skill，Member 按是否带 Skill 决定；群聊 Host 不挂 Skill，Worker 挂。
+- 记忆：`build_memory_prompt_and_recall()` 返回（冻结的 Markdown 摘要，按文本召回）。Team Leader / 综合复用 `ChatRunContext.memory_prompt` / `memory_recall_text`；Member 按任务标题 + 简述召回并写 `MEMORY_AUDIT`（scope_label `team_member`）；群聊 Worker 带自己 Agent 的 Markdown 摘要（按 studio+member 会话冻结），按任务卡目标 + 开放工作项召回，认领轮不召回。定时任务路径也改为同一函数（不冻结）。Team 此前根本没有记忆注入，AGENTS.md 的描述已修正。
+- 会话状态：群聊 Host / Worker 跨轮，`prepare_agent_governance` + `restore_agent_session_state`（实例重建时）+ `persist_agent_session_state`（每轮 finally）；Team 会话是 run-scoped，只做 `prepare`。
+- 观测：Team `_run_agent_stream` 新增 `on_model_call` 回调 → `observe_model_call_event()` 写 `CONTEXT_COMPRESSED` / `CONTEXT_USAGE` trace（scope `team_leader` / `team_member` / `team_synthesis`）。群聊暂不写（run_events 尚无 `source` 字段）。
+- 验证：后端全量 `807 passed, 2 skipped`。
+
 ## 本轮模型配置改造
 
 - 已实施 [Chat 模型选择与 models.json 配置 V1](./chat-model-selection-v1.md)：Agent 不再选模型，Chat / Sandbox 按配置 ID 选择，所有连接与 Key 从用户数据目录 `models.json` 读取。

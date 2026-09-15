@@ -107,6 +107,26 @@ def test_worker_spec_bypasses_tool_permission(client):
     assert "AskUser" not in names
 
 
+def test_worker_spec_carries_context_governance_and_memory(client, monkeypatch):
+    """Worker 与单 Agent 同一套上下文治理 middleware，并带自己的 Markdown 记忆摘要。"""
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.runtime_governance.build_memory_injection_text",
+        lambda context: f"# Memory\n{context.agent_id} 的偏好",
+    )
+    studio = _create_discussing(client, "sess-governance")
+    worker = next(item for item in studio["members"] if item["role"] == "worker")
+    spec, _ctx, _tools = build_worker_runtime_spec(studio, worker)
+
+    assert [type(item).__name__ for item in spec.middlewares] == [
+        "SkillContextMiddleware",
+        "ContextHygieneMiddleware",
+        "ContextCompressionMiddleware",
+    ]
+    assert spec.system_prompt.endswith(f"# Memory\n{spec.parent_agent_id} 的偏好")
+    assert spec.system_prompt.startswith("你是群聊工作室的执行成员")
+
+
 def test_worker_blocks_without_api_key(client, monkeypatch):
     from src.group_studio import worker_runtime
 
