@@ -38,7 +38,7 @@
 
 只放尚未落地、仍准备做的方案。
 
-- `docs/group-studio-v2.md`：群聊改成「使用者组的群」。房间留下、主持流程拆掉。现行实现仍以架构总览为准。
+- `docs/group-studio-v2.md`：群聊 V2 产品模型（已落地）。房间留下、主持流程拆掉。契约见 `docs/group-studio-event-contract.md`。
 - `docs/team-member-lifecycle-v2.md`：Team Member 长生命周期、TaskAttempt、Mailbox 唤醒和 Reviewer 闭环。在线基线仍是 `team-runtime-redesign.md`。
 - `docs/dynamic-workflows-plan.md`：Dynamic Workflow 的 Script Review、Runtime Cockpit 和 AgentScope Bridge。
 - `docs/electron-packaging-plan.md`：桌面正式打包、签名、公证、数据目录和双平台验证。

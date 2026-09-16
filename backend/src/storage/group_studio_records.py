@@ -8,15 +8,30 @@ from typing import Any
 
 
 ACTIVE_STUDIO_STATUSES = (
-    "drafting",
-    "discussing",
-    "executing",
-    "reviewing",
-    "awaiting_human",
+    "open",
     "paused",
-    "circuit_broken",
-    "closing",
 )
+
+ENDED_STUDIO_STATUSES = ("done", "archived", "failed", "deleted")
+
+_LEGACY_STATUS_MAP = {
+    "drafting": "open",
+    "discussing": "open",
+    "executing": "open",
+    "reviewing": "open",
+    "awaiting_human": "open",
+    "closing": "open",
+    "failed": "open",
+    "circuit_broken": "paused",
+    "archived": "done",
+}
+
+
+def normalize_studio_status(status: str) -> str:
+    """旧阶段机收成 V2 四态。"""
+
+    raw = str(status or "")
+    return _LEGACY_STATUS_MAP.get(raw, raw)
 
 
 class GroupStudioRecordStore:
@@ -47,7 +62,7 @@ class GroupStudioRecordStore:
             row = conn.execute(
                 """
                 SELECT id FROM group_studios
-                WHERE chat_session_id = ? AND status NOT IN ('archived', 'failed', 'deleted')
+                WHERE chat_session_id = ? AND status NOT IN ('done', 'archived', 'failed', 'deleted')
                 LIMIT 1
                 """,
                 (chat_session_id,),
@@ -71,7 +86,7 @@ class GroupStudioRecordStore:
                 f"""
                 SELECT id, chat_session_id, status, title FROM group_studios
                 WHERE chat_session_id IN ({placeholders})
-                  AND status NOT IN ('archived', 'failed', 'deleted')
+                  AND status NOT IN ('done', 'archived', 'failed', 'deleted')
                 """,
                 tuple(session_ids),
             ).fetchall()
@@ -118,8 +133,7 @@ class GroupStudioRecordStore:
                 FROM group_studios s
                 JOIN group_task_cards t ON t.id = s.current_task_card_id
                 WHERE s.project_id = ? AND s.status != 'deleted'
-                  AND NOT ({self._BLANK_DRAFT_SQL})
-                ORDER BY CASE WHEN s.status IN ('archived', 'failed') THEN 1 ELSE 0 END,
+                ORDER BY CASE WHEN s.status IN ('done', 'archived', 'failed') THEN 1 ELSE 0 END,
                          s.updated_at DESC
                 """,
                 (project_id,),
@@ -128,7 +142,7 @@ class GroupStudioRecordStore:
             {
                 "id": str(row["id"]),
                 "title": str(row["title"] or "未命名工作室"),
-                "status": str(row["status"]),
+                "status": normalize_studio_status(str(row["status"])),
                 "projectId": str(row["project_id"]),
                 "workspaceId": str(row["workspace_id"]),
                 "chatSessionId": str(row["chat_session_id"]),
@@ -202,6 +216,15 @@ class GroupStudioRecordStore:
                 """,
                 (group_id,),
             ).fetchone()
+            current_run_id = str(studio["current_run_id"] or "")
+            current_speaker = ""
+            if current_run_id:
+                current_run = conn.execute(
+                    "SELECT speaker_member_id, status FROM group_runs WHERE id = ?",
+                    (current_run_id,),
+                ).fetchone()
+                if current_run is not None and str(current_run["status"] or "") == "running":
+                    current_speaker = str(current_run["speaker_member_id"] or "")
             try:
                 work_rows = conn.execute(
                     """
@@ -216,8 +239,19 @@ class GroupStudioRecordStore:
         if task is None or blackboard is None:
             return None
         ordered_messages = list(reversed(messages))
-        status = str(studio["status"])
-        hide_approval = status in {"paused", "circuit_broken", "awaiting_human"}
+        raw_status = str(studio["status"])
+        status = normalize_studio_status(raw_status)
+        pause_reason = None
+        if status == "paused":
+            stored = str(studio["phase_before_pause"] or "").strip()
+            pause_reason = stored if stored in {"user", "startup", "circuit"} else "user"
+        hide_approval = status == "paused"
+        task_card = self._task_card_from_row(task)
+        visible_members = [
+            self._member_from_row(row)
+            for row in members
+            if str(row["role"] or "") != "host" and str(row["status"] or "") != "removed"
+        ]
         return {
             "id": studio["id"],
             "projectId": studio["project_id"],
@@ -226,11 +260,18 @@ class GroupStudioRecordStore:
             "title": studio["title"],
             "modelConfigId": studio["model_config_id"],
             "status": status,
-            "phaseBeforePause": studio["phase_before_pause"] or None,
+            "pauseReason": pause_reason,
+            "phaseBeforePause": pause_reason,
             "currentTaskCardId": studio["current_task_card_id"],
-            "taskCard": self._task_card_from_row(task),
+            "taskCard": task_card,
+            "pin": {
+                "title": str(studio["title"] or ""),
+                "goal": str(task_card.get("goal") or ""),
+                "notes": str(task_card.get("background") or ""),
+                "updatedAt": str(task_card.get("updatedAt") or studio["updated_at"]),
+            },
             "blackboard": self._blackboard_from_row(blackboard, studio["current_task_card_id"]),
-            "members": [self._member_from_row(row) for row in members],
+            "members": visible_members,
             "budget": self.loads(studio["budget_json"], {
                 "maxTurns": 40,
                 "maxNoProgressTurns": 3,
@@ -238,18 +279,19 @@ class GroupStudioRecordStore:
                 "noProgressTurns": 0,
             }),
             "currentRunId": studio["current_run_id"] or None,
+            "currentSpeakerMemberId": current_speaker or None,
             "pendingSpeakerMemberId": (
                 (str(studio["pending_speaker_member_id"] or "") or None)
                 if "pending_speaker_member_id" in studio.keys()
                 else None
             ),
             "speakerQueue": self.loads(studio["speaker_queue_json"], []) if "speaker_queue_json" in studio.keys() else [],
-            "claimRoundMemberIds": self.loads(studio["claim_round_json"], []) if "claim_round_json" in studio.keys() else [],
-            "workItems": [self._work_item_from_row(row) for row in work_rows],
+            "claimRoundMemberIds": [],
+            "workItems": [],
             "currentApproval": None if hide_approval else self._approval_from_row(pending),
             "messages": [self._message_from_row(row) for row in ordered_messages],
-            "awaitingRestatement": bool(studio["awaiting_restatement"]),
-            "awaitingIntakeConfirm": bool(studio["awaiting_intake_confirm"]) if "awaiting_intake_confirm" in studio.keys() else False,
+            "awaitingRestatement": False,
+            "awaitingIntakeConfirm": False,
             "createdAt": studio["created_at"],
             "updatedAt": studio["updated_at"],
         }
@@ -263,7 +305,7 @@ class GroupStudioRecordStore:
             existing = conn.execute(
                 """
                 SELECT id FROM group_studios
-                WHERE chat_session_id = ? AND status NOT IN ('archived', 'failed', 'deleted')
+                WHERE chat_session_id = ? AND status NOT IN ('done', 'archived', 'failed', 'deleted')
                 LIMIT 1
                 """,
                 (payload["chatSessionId"],),
@@ -278,7 +320,7 @@ class GroupStudioRecordStore:
                     raced = conn.execute(
                         """
                         SELECT id FROM group_studios
-                        WHERE chat_session_id = ? AND status NOT IN ('archived', 'failed', 'deleted')
+                        WHERE chat_session_id = ? AND status NOT IN ('done', 'archived', 'failed', 'deleted')
                         LIMIT 1
                         """,
                         (payload["chatSessionId"],),
@@ -308,7 +350,7 @@ class GroupStudioRecordStore:
             row = conn.execute(
                 """
                 SELECT COUNT(*) AS n FROM group_memberships
-                WHERE group_id = ? AND status != 'removed'
+                WHERE group_id = ? AND status != 'removed' AND role != 'host'
                 """,
                 (group_id,),
             ).fetchone()
@@ -365,6 +407,75 @@ class GroupStudioRecordStore:
                 (group_id, member_id),
             ).fetchone()
         return self._member_from_row(row) if row is not None else None
+
+    def set_member_status(
+        self,
+        group_id: str,
+        member_id: str,
+        status: str,
+        *,
+        refresh_joined_at: bool = False,
+    ) -> dict[str, Any] | None:
+        """改席位状态；恢复 crashed 时可刷新 joinedAt。"""
+
+        self.ensure_db()
+        now = self.utc_now()
+        with self.lock, self.connect() as conn:
+            if refresh_joined_at:
+                conn.execute(
+                    """
+                    UPDATE group_memberships
+                    SET status = ?, created_at = ?, updated_at = ?
+                    WHERE group_id = ? AND id = ?
+                    """,
+                    (status, now, now, group_id, member_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE group_memberships
+                    SET status = ?, updated_at = ?
+                    WHERE group_id = ? AND id = ?
+                    """,
+                    (status, now, group_id, member_id),
+                )
+        return self.get_member(group_id, member_id)
+
+    def migrate_legacy_v2(self) -> int:
+        """一次性把旧阶段机收成 open/paused/done，并移出 Host 席位。"""
+
+        self.ensure_db()
+        changed = 0
+        with self.lock, self.connect() as conn:
+            rows = conn.execute("SELECT id, status FROM group_studios").fetchall()
+            now = self.utc_now()
+            for row in rows:
+                nxt = normalize_studio_status(str(row["status"]))
+                if nxt != str(row["status"]):
+                    pause = "circuit" if str(row["status"]) == "circuit_broken" else None
+                    if nxt == "paused" and str(row["status"]) == "paused":
+                        pause = "user"
+                    conn.execute(
+                        """
+                        UPDATE group_studios
+                        SET status = ?, phase_before_pause = COALESCE(?, phase_before_pause),
+                            awaiting_intake_confirm = 0, awaiting_restatement = 0,
+                            claim_round_json = '[]', updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (nxt, pause, now, row["id"]),
+                    )
+                    changed += 1
+                host_rows = conn.execute(
+                    """
+                    UPDATE group_memberships
+                    SET status = 'removed', updated_at = ?
+                    WHERE group_id = ? AND role = 'host' AND status != 'removed'
+                    """,
+                    (now, row["id"]),
+                )
+                changed += int(host_rows.rowcount or 0)
+        return changed
 
     def set_member_muted(self, group_id: str, member_id: str, muted: bool) -> dict[str, Any] | None:
         self.ensure_db()
@@ -1087,6 +1198,17 @@ class GroupStudioRecordStore:
             )
         return self.get_approval(approval_id)
 
+    def max_event_seq(self, group_id: str) -> int:
+        """当前最大持久 seq；没有事件则为 0。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) AS n FROM group_studio_events WHERE group_id = ?",
+                (group_id,),
+            ).fetchone()
+        return int(row["n"] if row is not None else 0)
+
     def list_events_after(self, group_id: str, after_seq: int) -> list[dict[str, Any]]:
         self.ensure_db()
         with self.lock, self.connect() as conn:
@@ -1211,7 +1333,7 @@ class GroupStudioRecordStore:
                        chat_session_id, title
                 FROM group_studios
                 WHERE current_run_id != ''
-                  AND status NOT IN ('archived', 'failed', 'deleted')
+                  AND status NOT IN ('done', 'archived', 'failed', 'deleted')
                 """,
             ).fetchall()
         return [
@@ -1456,6 +1578,7 @@ class GroupStudioRecordStore:
             "status": row["status"],
             "muted": bool(row["muted"]),
             "lastSpokeAt": row["last_spoke_at"] or None,
+            "joinedAt": row["created_at"] if "created_at" in row.keys() else None,
             "crashCount": int(row["crash_count"] or 0),
         }
 

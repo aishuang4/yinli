@@ -2,6 +2,7 @@
 
 import { useLayoutEffect, useRef, useState } from 'react';
 import { EchartsContent } from '../../components/EchartsContent';
+import { MessageToolbar } from '../chat/MessageToolbar';
 import type { GroupStudioMember } from './types';
 import type { StudioTimelineMessage } from './useGroupStudioStream';
 
@@ -84,9 +85,12 @@ export function StudioMessageList({ members, messages }: StudioMessageListProps)
               </div>
             )}
             {isUser ? (
-              <div className="group-studio-bubble group-studio-bubble--user">
-                {item.body}
-              </div>
+              <>
+                <div className="group-studio-bubble group-studio-bubble--user">
+                  {item.body}
+                </div>
+                {item.body.trim() ? <MessageToolbar markdown={item.body} /> : null}
+              </>
             ) : (
               <AgentBubble
                 content={item.body}
@@ -198,6 +202,7 @@ function AgentBubble({
           ) : null}
         </div>
       ) : null}
+      {!streaming && visibleAnswer.trim() ? <MessageToolbar markdown={visibleAnswer} /> : null}
     </div>
   );
 }

@@ -1,26 +1,16 @@
 /** 群聊工作室前端类型，对齐 /api/group-studio camelCase JSON。 */
 
-export type GroupStudioStatus =
-  | 'drafting'
-  | 'discussing'
-  | 'executing'
-  | 'reviewing'
-  | 'awaiting_human'
-  | 'paused'
-  | 'circuit_broken'
-  | 'closing'
-  | 'archived'
-  | 'failed'
-  | 'deleted';
+export type GroupStudioStatus = 'open' | 'paused' | 'done' | 'deleted';
 
 export interface GroupStudioMember {
   id: string;
   groupId: string;
-  role: 'host' | 'worker';
+  role: 'worker' | 'host';
   agentId: string;
   displayName: string;
   status: 'active' | 'crashed' | 'removed';
   muted: boolean;
+  joinedAt?: string;
 }
 
 export interface GroupStudioAgentOption {
@@ -29,44 +19,11 @@ export interface GroupStudioAgentOption {
   description: string;
 }
 
-export interface GroupStudioTaskCard {
-  id: string;
-  groupId: string;
-  revision: number;
-  status: 'draft' | 'active' | 'frozen_for_close' | 'archived';
+export interface GroupStudioPin {
+  title: string;
   goal: string;
-  background: string;
-  constraints: string[];
-  seedFromChat: boolean;
-  dodChecklist?: Array<{
-    id: string;
-    text: string;
-    checked: boolean;
-    autoChecked?: boolean;
-  }>;
-}
-
-export interface GroupStudioQuestion {
-  id: string;
-  text: string;
-  askedBy: string;
-  resolved: boolean;
-  resolution: string;
-}
-
-export interface GroupStudioDecision {
-  id: string;
-  text: string;
-}
-
-export interface GroupStudioBlackboard {
-  groupId: string;
-  revision: number;
-  goal: string;
-  constraints: string[];
-  decisions: GroupStudioDecision[];
-  openQuestions: GroupStudioQuestion[];
-  artifacts: string[];
+  notes: string;
+  updatedAt: string;
 }
 
 export interface GroupStudioFile {
@@ -116,29 +73,16 @@ export interface GroupStudioSnapshot {
   chatSessionId: string;
   title: string;
   status: GroupStudioStatus;
-  phaseBeforePause?: string | null;
-  taskCard: GroupStudioTaskCard;
-  blackboard?: GroupStudioBlackboard;
+  pauseReason?: string | null;
+  pin: GroupStudioPin;
   members: GroupStudioMember[];
   budget?: GroupStudioBudget;
   currentRunId?: string | null;
+  currentSpeakerMemberId?: string | null;
   pendingSpeakerMemberId?: string | null;
+  speakerQueue?: string[];
   currentApproval?: GroupStudioApproval | null;
   messages?: GroupStudioMessage[];
-  awaitingRestatement: boolean;
-  awaitingIntakeConfirm?: boolean;
-  speakerQueue?: string[];
-  claimRoundMemberIds?: string[];
-  workItems?: Array<{
-    id: string;
-    title: string;
-    status: string;
-    assigneeMemberId?: string | null;
-    /** 验收结果：accepted 通过，rework 退回原工人补做。 */
-    reviewStatus?: 'accepted' | 'rework' | null;
-    reviewNote?: string;
-    reworkCount?: number;
-  }>;
   createdAt: string;
   updatedAt: string;
 }

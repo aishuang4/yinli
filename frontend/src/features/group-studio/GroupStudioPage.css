@@ -1,9 +1,11 @@
+.chat-workbench-shell.group-studio-shell,
 .group-studio-shell {
   --group-studio-history-width: 286px;
-  --group-studio-context-width: 300px;
+  --group-studio-context-width: 280px;
   --group-studio-history-track-width: var(--group-studio-history-width);
   --group-studio-context-track-width: var(--group-studio-context-width);
   display: grid;
+  grid-auto-columns: 0;
   grid-template-columns:
     var(--group-studio-history-track-width)
     minmax(0, 1fr)
@@ -74,6 +76,7 @@
   font-size: var(--text-base);
   line-height: var(--leading-normal);
   word-break: break-word;
+  user-select: text;
 }
 
 .group-studio-bubble--agent {
@@ -87,6 +90,19 @@
   background: var(--color-accent);
   color: var(--color-text-inverse);
   white-space: pre-wrap;
+}
+
+.group-studio-bubble--agent::selection,
+.group-studio-bubble--agent *::selection,
+.group-studio-thinking__body::selection {
+  background: var(--color-accent);
+  color: var(--color-text-inverse);
+}
+
+.group-studio-bubble--user::selection,
+.group-studio-bubble--user *::selection {
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
 }
 
 .group-studio-bubble__body {
@@ -195,50 +211,112 @@
 
 .group-studio-context-slot {
   grid-column: 3;
-  width: var(--group-studio-context-width);
   min-width: 0;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
+  height: 100%;
+  overflow: hidden;
   overscroll-behavior: contain;
-  transition: width 260ms var(--ease-out);
 }
 
 .group-studio-context-slot[data-collapsed="true"] {
-  width: 0;
+  pointer-events: none;
 }
 
 .group-studio-context {
-  display: grid;
+  display: flex;
   box-sizing: border-box;
-  grid-template-rows: auto auto auto auto auto;
-  align-content: start;
-  align-items: start;
-  width: var(--group-studio-context-width);
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   border-left: 1px solid var(--chat-workbench-border, var(--color-border));
   background: var(--chat-workbench-history-bg, var(--color-bg-secondary));
-  padding: 10px 12px 12px;
-  gap: 8px;
+}
+
+.group-studio-context__chrome {
+  flex: 0 0 auto;
+  min-height: 56px;
+  border-bottom: 1px solid var(--chat-workbench-border-subtle, var(--color-border));
+  -webkit-app-region: drag;
+}
+
+.group-studio-context__body,
+.group-studio-context__body button,
+.group-studio-context__body [role="button"] {
+  -webkit-app-region: no-drag;
+}
+
+.group-studio-context__title {
+  display: flex;
+  box-sizing: border-box;
+  height: 56px;
+  align-items: center;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+}
+
+.group-studio-shell[data-windows-shell="true"] .group-studio-context__title {
+  padding-right: 12px;
+}
+
+.group-studio-context__body {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.group-studio-empty-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-tertiary);
+  overflow-wrap: break-word;
+  word-break: keep-all;
 }
 
 /* 左侧历史列表收缩动画期间会暂时卸载列表节点，显式列位避免主区落入 0px 轨道。 */
+.group-studio-shell > .chat-workbench-history {
+  grid-column: 1;
+}
+
 .group-studio-shell > .chat-workbench-main {
   grid-column: 2;
 }
 
 .group-studio-section {
+  display: flex;
   min-width: 0;
-  align-self: start;
+  min-height: 0;
+  flex-direction: column;
+  align-self: stretch;
+  overflow: hidden;
+  padding: 10px 12px 12px;
+  border-bottom: 1px solid var(--chat-workbench-border-subtle, var(--color-border));
+}
+
+.group-studio-section:last-child {
+  border-bottom: none;
+}
+
+.group-studio-section__scroll {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .group-studio-section--hit {
-  width: calc(100% + 8px);
-  margin: 0 -4px;
   border-radius: 8px;
-  padding: 6px 8px;
   cursor: pointer;
   transition: background-color 120ms ease;
 }
@@ -272,11 +350,18 @@
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.group-studio-section__head > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .group-studio-section__head .ant-btn,
-.group-studio-inline .ant-btn,
-.group-studio-section__head .file-import-button-upload {
+.group-studio-inline .ant-btn {
   flex: 0 0 auto;
 }
 
@@ -291,38 +376,8 @@
   list-style: none;
 }
 
-.group-studio-clip {
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding-right: 10px;
-}
-
-.group-studio-clip--4 {
-  height: calc(4 * 28px + 3 * 6px);
-}
-
-.group-studio-clip--3 {
-  height: calc(3 * 32px + 2 * 6px);
-}
-
-.group-studio-clip--4 > li,
-.group-studio-clip--4 label {
-  height: 28px;
-  min-height: 28px;
-  flex: 0 0 auto;
-}
-
-.group-studio-clip--3 > li {
-  height: 32px;
-  min-height: 32px;
-  flex: 0 0 auto;
-}
-
 .group-studio-member-list--preview {
-  height: calc(5 * 32px + 4 * 6px);
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding-right: 10px;
+  overflow: visible;
 }
 
 .group-studio-member-list--preview .group-studio-member-list__role {
@@ -362,6 +417,7 @@
 
 .group-studio-member-list__name {
   min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -436,16 +492,14 @@
 }
 
 .group-studio-goal-preview {
-  height: 40px;
-  overflow: hidden;
   margin: 0;
+  min-height: 20px;
   font-size: 13px;
   line-height: 20px;
   color: var(--color-text-primary);
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  overflow-wrap: break-word;
+  word-break: keep-all;
+  white-space: pre-wrap;
 }
 
 .group-studio-dod li,
@@ -844,6 +898,7 @@
 }
 
 .group-studio-member-dialog__notice {
+  flex: 0 0 auto;
   margin: 0;
   border: 1px solid var(--chat-workbench-border-subtle, var(--color-border));
   border-radius: 8px;
@@ -855,8 +910,11 @@
 }
 
 .group-studio-member-dialog__body {
-  flex: 1 1 auto;
+  display: flex;
   min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 12px;
   overflow: auto;
   overscroll-behavior: contain;
 }
@@ -1005,6 +1063,7 @@
 
 /* 打包后的默认 1280px 窗口需要同时容纳群聊列表、对话与上下文。 */
 @media (max-width: 1400px) {
+  .chat-workbench-shell.group-studio-shell,
   .group-studio-shell {
     --group-studio-history-width: 240px;
     --group-studio-context-width: 260px;
@@ -1027,18 +1086,6 @@
     justify-content: center;
   }
 
-  /* 结项是不可逆的主要操作，始终保留文字，避免与“停止发言”混淆。 */
-  .group-studio-shell .chat-workbench-topbar .group-studio-close-action {
-    width: auto;
-    min-width: 88px;
-    padding-right: 10px;
-    padding-left: 10px;
-  }
-
-  .group-studio-shell .chat-workbench-topbar .group-studio-close-action > span {
-    display: inline;
-  }
-
   .group-studio-shell .chat-workbench-model-control {
     flex-basis: 150px;
     width: 150px;
@@ -1047,9 +1094,10 @@
 }
 
 @media (max-width: 1024px) {
+  .chat-workbench-shell.group-studio-shell,
   .group-studio-shell {
     --group-studio-history-width: 200px;
-    --group-studio-context-width: 224px;
+    --group-studio-context-width: 240px;
   }
 
   .group-studio-shell .chat-workbench-history {
@@ -1097,8 +1145,9 @@
   }
 }
 
-/* 群聊工作室始终保留三列语义；全局 Chat 的两列响应式规则不能把右侧上下文栏挪到主区左侧。 */
+/* 群聊工作室始终保留三列语义；压过 Chat 在 1180/860 的两列规则。 */
 @media (max-width: 1180px) {
+  .chat-workbench-shell.group-studio-shell,
   .group-studio-shell {
     grid-template-columns:
       var(--group-studio-history-track-width)
@@ -1108,6 +1157,7 @@
 }
 
 @media (max-width: 860px) {
+  .chat-workbench-shell.group-studio-shell,
   .group-studio-shell {
     grid-template-columns:
       var(--group-studio-history-track-width)

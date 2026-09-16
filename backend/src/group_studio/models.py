@@ -9,17 +9,20 @@ from pydantic import BaseModel, Field
 GROUP_STUDIO_HOST_AGENT_ID = "group-studio-host"
 
 GroupStudioStatus = Literal[
+    "open",
+    "paused",
+    "done",
+    "deleted",
+    # 读取层会归一；保留旧值只为迁移期校验不炸。
     "drafting",
     "discussing",
     "executing",
     "reviewing",
     "awaiting_human",
-    "paused",
     "circuit_broken",
     "closing",
     "archived",
     "failed",
-    "deleted",
 ]
 MemberStatus = Literal["active", "crashed", "removed"]
 GroupRunStatus = Literal[
@@ -59,11 +62,9 @@ GroupStudioEventType = Literal[
     "GROUP_INTERRUPT",
     "GROUP_APPROVAL",
     "GROUP_FILE",
-    "GROUP_DOD",
+    "GROUP_PIN",
     "GROUP_ERROR",
     "GROUP_RUN_ENDED",
-    "GROUP_INTAKE",
-    "GROUP_WORK_ITEM",
     "GROUP_SPEAKER_QUEUE",
 ]
 
@@ -75,7 +76,7 @@ class CamelModel(BaseModel):
 
 
 class DodItem(CamelModel):
-    """任务卡验收条目。DoD 只存在于 TaskCard。"""
+    """V1 遗留：任务卡验收条目。快照兼容保留，V2 不展示。"""
 
     id: str
     text: str
@@ -85,7 +86,7 @@ class DodItem(CamelModel):
 
 
 class TaskCard(CamelModel):
-    """一群一卡。"""
+    """V1 任务卡。V2 对外用 `GroupPin`，本模型只服务存储兼容。"""
 
     id: str
     group_id: str = Field(alias="groupId")
@@ -120,7 +121,7 @@ class OpenQuestion(CamelModel):
 
 
 class Blackboard(CamelModel):
-    """共识面。不含 DoD 副本，只投影 taskCardId。"""
+    """V1 遗留黑板。快照兼容保留，V2 第一版不读写。"""
 
     group_id: str = Field(alias="groupId")
     revision: int
@@ -144,6 +145,7 @@ class Membership(CamelModel):
     status: MemberStatus
     muted: bool = False
     last_spoke_at: str | None = Field(default=None, alias="lastSpokeAt")
+    joined_at: str | None = Field(default=None, alias="joinedAt")
     crash_count: int = Field(default=0, alias="crashCount")
 
 
@@ -192,7 +194,7 @@ WorkItemStatus = Literal["open", "claimed", "done", "cancelled"]
 
 
 class WorkItem(CamelModel):
-    """任务卡下的可认领工作项。"""
+    """V1 遗留工作项。快照兼容保留，V2 第一版不调度。"""
 
     id: str
     group_id: str = Field(alias="groupId")
@@ -227,6 +229,15 @@ class GroupArtifact(CamelModel):
     created_at: str = Field(alias="createdAt")
 
 
+class GroupPin(CamelModel):
+    """置顶备注。空 Goal 不挡发言。"""
+
+    title: str = ""
+    goal: str = ""
+    notes: str = ""
+    updated_at: str = Field(default="", alias="updatedAt")
+
+
 class GroupStudio(CamelModel):
     """GET /{id} 与 GROUP_STUDIO_STATE 的完整快照。"""
 
@@ -237,20 +248,23 @@ class GroupStudio(CamelModel):
     model_config_id: str = Field(default="", alias="modelConfigId")
     title: str
     status: GroupStudioStatus
+    pause_reason: str | None = Field(default=None, alias="pauseReason")
     phase_before_pause: str | None = Field(default=None, alias="phaseBeforePause")
     current_task_card_id: str = Field(alias="currentTaskCardId")
     task_card: TaskCard = Field(alias="taskCard")
+    pin: GroupPin = Field(default_factory=GroupPin)
     blackboard: Blackboard
     members: list[Membership] = Field(default_factory=list)
     budget: GroupBudget
     current_run_id: str | None = Field(default=None, alias="currentRunId")
+    current_speaker_member_id: str | None = Field(default=None, alias="currentSpeakerMemberId")
     pending_speaker_member_id: str | None = Field(default=None, alias="pendingSpeakerMemberId")
     speaker_queue: list[str] = Field(default_factory=list, alias="speakerQueue")
     claim_round_member_ids: list[str] = Field(default_factory=list, alias="claimRoundMemberIds")
     work_items: list[WorkItem] = Field(default_factory=list, alias="workItems")
     current_approval: GroupApproval | None = Field(default=None, alias="currentApproval")
     messages: list[GroupMessage] = Field(default_factory=list)
-    awaiting_restatement: bool = Field(alias="awaitingRestatement")
+    awaiting_restatement: bool = Field(default=False, alias="awaitingRestatement")
     awaiting_intake_confirm: bool = Field(default=False, alias="awaitingIntakeConfirm")
     created_at: str = Field(alias="createdAt")
     updated_at: str = Field(alias="updatedAt")
@@ -274,7 +288,7 @@ class GroupStudioFromChatRequest(CamelModel):
     draft_text: str = Field(default="", alias="draftText", max_length=8000)
     file_paths: list[str] = Field(default_factory=list, alias="filePaths")
     title: str | None = None
-    reuse_blank_draft: bool = Field(default=False, alias="reuseBlankDraft")
+    reuse_blank_draft: bool = Field(default=False, alias="reuseBlankDraft")  # 已废弃，忽略
 
 
 class GroupStudioModelUpdateRequest(CamelModel):

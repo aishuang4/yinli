@@ -1,7 +1,7 @@
 """群聊工作室独立路由。
 
 flag 关闭时全部 404 `group_studio_disabled`。
-from-chat / 任务卡 / 成员 / 黑板 / 文件 / 审批 / 插话 / 熔断 / 结项已实现。
+V2：进群即 open；旧 intake / 阶段推进接口 410。
 """
 
 import asyncio
@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 
 from src.group_studio.errors import (
     GROUP_STUDIO_DISABLED,
-    GROUP_STUDIO_NOT_IMPLEMENTED,
+    ILLEGAL_TRANSITION,
     GroupStudioError,
     group_studio_http_error,
 )
@@ -40,8 +40,6 @@ from src.group_studio.models import (
 )
 from src.group_studio.service import (
     add_member,
-    confirm_intake as confirm_studio_intake,
-    confirm_restatement as confirm_studio_restatement,
     decide_studio_approval,
     from_chat,
     get_studio,
@@ -56,8 +54,6 @@ from src.group_studio.service import (
     mute_member,
     pause_studio,
     post_human_message,
-    prepare_start_execution,
-    prepare_start_review,
     remove_member,
     resume_studio,
     close_studio as close_group_studio,
@@ -67,7 +63,11 @@ from src.group_studio.service import (
 )
 from src.group_studio.settings import is_group_studio_enabled
 from src.group_studio.stream import format_sse, heartbeat_comment, subscribe
-from src.storage.database import get_group_studio_snapshot, list_group_studio_events_after
+from src.storage.database import (
+    get_group_studio_max_event_seq,
+    get_group_studio_snapshot,
+    list_group_studio_events_after,
+)
 
 router = APIRouter()
 
@@ -79,23 +79,25 @@ def require_group_studio_enabled() -> None:
         raise group_studio_http_error(404, GROUP_STUDIO_DISABLED)
 
 
-def _not_implemented() -> None:
-    raise group_studio_http_error(501, GROUP_STUDIO_NOT_IMPLEMENTED)
-
-
 EnabledDep = Depends(require_group_studio_enabled)
+
+
+def _gone() -> None:
+    """V1 阶段机入口已删除。"""
+
+    raise group_studio_http_error(410, ILLEGAL_TRANSITION)
 
 
 @router.get("", dependencies=[EnabledDep])
 async def list_studios_route(projectId: str = Query(..., alias="projectId")) -> dict:
-    """列出当前 Project 未归档工作室，独立于 Chat 历史。"""
+    """列出当前 Project 工作室（含 done，不含 deleted）。"""
 
     return {"studios": list_studios(projectId)}
 
 
 @router.post("/from-chat", dependencies=[EnabledDep])
 async def create_from_chat(body: GroupStudioFromChatRequest) -> GroupStudio:
-    """从 Chat 会话升级或回到工作室。"""
+    """从 Chat 会话升级或回到未结束房间。立刻 open，不自动开跑。"""
 
     try:
         return from_chat(body)
@@ -105,7 +107,7 @@ async def create_from_chat(body: GroupStudioFromChatRequest) -> GroupStudio:
 
 @router.get("/by-chat/{session_id}", dependencies=[EnabledDep])
 async def get_by_chat_session(session_id: str) -> GroupStudio | None:
-    """按 Chat session 探活未归档工作室。"""
+    """按 Chat session 探活未结束房间。"""
 
     return get_studio_by_chat_session(session_id)
 
@@ -132,7 +134,7 @@ async def list_available_agents_route(group_id: str) -> list[dict[str, str]]:
 
 @router.delete("/{group_id}", dependencies=[EnabledDep], status_code=204)
 async def delete_studio_route(group_id: str, projectId: str = Query(..., alias="projectId")) -> None:
-    """删除群聊并从当前工作室列表移除。"""
+    """删除群聊：标 deleted，不再出现在列表。"""
 
     try:
         delete_studio(group_id, project_id=projectId)
@@ -161,12 +163,13 @@ async def list_messages(group_id: str, before: str | None = None, limit: int = 1
 
 
 @router.get("/{group_id}/events", dependencies=[EnabledDep])
-async def stream_events(group_id: str, afterSeq: int | None = None):
-    """独立 SSE。契约见 docs/group-studio-event-contract.md。"""
+async def stream_events(group_id: str, afterSeq: int | None = Query(default=None)):
+    """独立 SSE。afterSeq 缺省从当前最大 seq 续，不重放历史。"""
 
     snapshot = get_group_studio_snapshot(group_id)
     if snapshot is None:
         raise group_studio_http_error(404, "not_found")
+    after = int(afterSeq) if afterSeq is not None else get_group_studio_max_event_seq(group_id)
 
     async def event_stream():
         state = dict(snapshot)
@@ -179,7 +182,6 @@ async def stream_events(group_id: str, afterSeq: int | None = None):
             "payload": state,
             "createdAt": snapshot.get("updatedAt") or snapshot.get("createdAt"),
         })
-        after = int(afterSeq or 0)
         for event in list_group_studio_events_after(group_id, after):
             yield format_sse(event)
         async for live in subscribe(group_id):
@@ -224,7 +226,6 @@ async def _heartbeat_wrapper(source):
         task.cancel()
 
 
-
 @router.post("/{group_id}/pause", dependencies=[EnabledDep])
 async def pause_studio_route(group_id: str, body: GroupPauseRequest) -> GroupStudio:
     try:
@@ -243,12 +244,10 @@ async def resume_studio_route(group_id: str, body: GroupResumeRequest) -> GroupS
 
 @router.post("/{group_id}/confirm-intake", dependencies=[EnabledDep])
 async def confirm_intake_route(group_id: str, body: GroupConfirmIntakeRequest) -> GroupStudio:
-    """人类确认 intake 密度，进入 discussing。"""
+    """V1 已删除。"""
 
-    try:
-        return confirm_studio_intake(group_id, project_id=body.project_id)
-    except GroupStudioError as exc:
-        raise group_studio_http_error(exc.status_code, exc.code) from exc
+    _gone()
+    raise AssertionError("unreachable")
 
 
 @router.post("/{group_id}/messages", dependencies=[EnabledDep])
@@ -273,8 +272,11 @@ async def interrupt_studio(group_id: str, body: GroupInterruptRequest) -> dict:
     return {"ok": True}
 
 
+@router.put("/{group_id}/pin", dependencies=[EnabledDep])
 @router.put("/{group_id}/task-card", dependencies=[EnabledDep])
-async def update_task_card_route(group_id: str, body: GroupTaskCardUpdateRequest) -> TaskCard:
+async def update_pin_route(group_id: str, body: GroupTaskCardUpdateRequest) -> TaskCard:
+    """更新置顶备注。沿用 task-card 路径兼容旧客户端。"""
+
     try:
         return update_task_card(group_id, body)
     except GroupStudioError as exc:
@@ -323,10 +325,10 @@ async def close_studio_route(group_id: str, body: GroupCloseRequest) -> GroupStu
 
 @router.post("/{group_id}/confirm-restatement", dependencies=[EnabledDep])
 async def confirm_restatement_route(group_id: str, body: GroupConfirmRestatementRequest) -> GroupStudio:
-    try:
-        return confirm_studio_restatement(group_id, project_id=body.project_id)
-    except GroupStudioError as exc:
-        raise group_studio_http_error(exc.status_code, exc.code) from exc
+    """V1 已删除。"""
+
+    _gone()
+    raise AssertionError("unreachable")
 
 
 @router.post("/{group_id}/approvals", dependencies=[EnabledDep])
@@ -344,18 +346,18 @@ async def decide_approval(group_id: str, body: GroupApprovalDecisionRequest) -> 
 
 @router.post("/{group_id}/start-execution", dependencies=[EnabledDep])
 async def start_execution(group_id: str, body: GroupStartPhaseRequest) -> GroupStudio:
-    try:
-        return prepare_start_execution(group_id, body.project_id)
-    except GroupStudioError as exc:
-        raise group_studio_http_error(exc.status_code, exc.code) from exc
+    """V1 已删除。"""
+
+    _gone()
+    raise AssertionError("unreachable")
 
 
 @router.post("/{group_id}/start-review", dependencies=[EnabledDep])
 async def start_review(group_id: str, body: GroupStartPhaseRequest) -> GroupStudio:
-    try:
-        return prepare_start_review(group_id, body.project_id)
-    except GroupStudioError as exc:
-        raise group_studio_http_error(exc.status_code, exc.code) from exc
+    """V1 已删除。"""
+
+    _gone()
+    raise AssertionError("unreachable")
 
 
 @router.post("/{group_id}/files", dependencies=[EnabledDep])

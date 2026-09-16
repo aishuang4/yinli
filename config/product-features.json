@@ -16,7 +16,7 @@
   },
   "surfaces": {
     "workflow": true,
-    "groupStudio": false,
+    "groupStudio": true,
     "teamMode": true,
     "planMode": true
   }

@@ -13,7 +13,7 @@ from src.storage.database import (
     update_group_studio_state,
 )
 
-BILLABLE_STATUSES = frozenset({"discussing", "executing", "reviewing"})
+BILLABLE_STATUSES = frozenset({"open"})
 
 
 def _worker_delivered(group_id: str, run_id: str) -> bool:
@@ -30,7 +30,7 @@ def _worker_delivered(group_id: str, run_id: str) -> bool:
 
 
 def progress_fingerprint(snapshot: dict[str, Any]) -> tuple[Any, ...]:
-    """黑板 revision / 产物 / 任务卡 revision / DoD 勾选。"""
+    """无进展指纹。V2 主要看工人是否写出可见正文；快照字段仅作辅证。"""
 
     board = snapshot.get("blackboard") or {}
     card = snapshot.get("taskCard") or {}
@@ -109,15 +109,18 @@ def on_run_finished(
         return False
     update_group_studio_state(
         group_id,
-        status="circuit_broken",
-        phase_before_pause=status,
+        status="paused",
+        phase_before_pause="circuit",
         budget=budget,
     )
     emit_envelope(
         group_id=group_id,
         event_type="GROUP_STATUS",
-        payload={"from": status, "to": "circuit_broken", "reason": reason},
+        payload={"from": status, "to": "paused", "reason": "circuit"},
     )
+    from src.group_studio.service import _emit_system_notice
+
+    _emit_system_notice(group_id, "先停一下：这一轮说得有点多。点继续或再发一条就可以接着聊。")
     emit_envelope(
         group_id=group_id,
         event_type="GROUP_CIRCUIT",

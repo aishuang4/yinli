@@ -88,7 +88,7 @@ Team（`team_runtime/`）：
 - 2026-09-15 结项后历史消失：列表故意丢掉 `archived`；from-chat 的 Chat session 没初始化 `messages`，回 Chat 点会话 404。现改为归档保留在群聊列表（删除才隐藏），并补上空消息列表。前端不再把 `illegal_transition` / `not_found` 原文弹给用户。
 - Worker 崩溃只移出本人，`_continue_after_worker` 续跑队列或回 Host；黑板 decisions > 20 自动把最早 8 条归并为一条；Worker shell 黑名单加破坏性命令（bypass 免疫）。
 
-未做（记 TODO）：Leader 验收步骤、Team 跨轮连续性、成员 Bash 越界写。群聊下一版见 `docs/group-studio-v2.md`。
+未做（记 TODO）：Leader 验收步骤、Team 跨轮连续性、成员 Bash 越界写。群聊 V2 第一版已落地。
 
 ## 本轮模型配置改造
 
@@ -131,11 +131,9 @@ Team（`team_runtime/`）：
 ### 群聊工作室
 
 - 独立于 Chat Team Runtime：Chat 顶栏 / 快捷键进入独立 pane，SQLite `group_*` + `/api/group-studio` + 独立 SSE。
-- 开关默认开启；Host 哨兵 `group-studio-host`；群内 Host/Worker 为 `PermissionMode.BYPASS`；通知点击打开工作室。
-- Intake 对谈已上线：`drafting` 只允许人类 ↔ Host 发言，可预邀工人入座，写卡不切 `discussing`，Chat 上一句是开场白不是 Goal，人类确认后才开会。
-- FIFO 点名队列（`memberIds[]`）与 `group_work_items` 原子认领已上线；工人结束弹下一人，中间不回 Host。`maxParallelWorkers=1`。
-- 消息区与 Chat 共用滚到底部按钮。阶段机以 `docs/architecture-overview.md` 为准。
-- 归档记忆已收口。真并行、时间旅行、群事件进 Trace 等不再沿现行阶段机加功能，下一版见 `docs/group-studio-v2.md`。
+- V2 已落地：进群 / 新建先空白画布，第一条消息才落库 `open`；无确认开始、无可见 Host、无阶段机。人类 `mentions[]` 点名，空则全员一轮，说完停。
+- Worker 只留 `group_post_message`，`PermissionMode.BYPASS`；通知点击打开工作室。
+- 消息区与 Chat 共用滚到底部按钮。SSE `afterSeq` 缺省不重放。结束 `done` 后走归档记忆。
 
 ### Chat 与运行状态
 
@@ -267,7 +265,7 @@ group studio PR 测试（pr1–pr14）：此前在 feat/group-studio 上 116 pas
 3. Workspace / Project Phase 0 至 Phase 3 已完成；浏览器级跨 Project 自动化隔离和 Artifact ownership 尚未完成。
 4. Agent / Subagent 配置版本、评估指标和 Secret 轮换尚未形成平台能力。定时任务第一批（到点执行 + 应用内通知）已在线。
 5. Electron 正式签名、公证、Windows 真机、`userData` 迁移和自动更新尚未完成。
-6. 群聊工作室现行实现仍依赖主持人阶段机；产品下一版见 `docs/group-studio-v2.md`。归档记忆已收口。
+6. 群聊 V2 第一版已落地。真并行、时间旅行、群事件进 Trace 仍未做。
 
 ## 核心入口
 

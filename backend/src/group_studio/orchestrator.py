@@ -1,80 +1,56 @@
-"""系统级调度台。不进群、不调用模型；只做阶段机与人数/发言权硬规则。"""
+"""系统级硬规则。不进群、不调用模型。"""
 
 from __future__ import annotations
 
 from src.group_studio.errors import (
-    GOAL_REQUIRED,
     ILLEGAL_TRANSITION,
-    INTAKE_WORKER_FORBIDDEN,
-    STUDIO_CIRCUIT_BROKEN,
+    STUDIO_NOT_OPEN,
     STUDIO_PAUSED,
     GroupStudioError,
 )
 from src.group_studio.settings import DEFAULT_MAX_MEMBERS, get_group_studio_settings_public
 
-HOST_FLOOR_STATUSES = frozenset({
-    "drafting",
-    "discussing",
-    "executing",
-    "reviewing",
-    "awaiting_human",
-})
-WORKER_FLOOR_STATUSES = frozenset({"discussing", "executing", "reviewing"})
-FLOOR_ALLOWED_STATUSES = HOST_FLOOR_STATUSES
 MUTATION_BLOCKED = {
-    "paused": STUDIO_PAUSED,
-    "circuit_broken": STUDIO_CIRCUIT_BROKEN,
-    "archived": ILLEGAL_TRANSITION,
-    "failed": ILLEGAL_TRANSITION,
+    "done": STUDIO_NOT_OPEN,
+    "archived": STUDIO_NOT_OPEN,
     "deleted": ILLEGAL_TRANSITION,
+    "failed": STUDIO_NOT_OPEN,
 }
 
 
 def max_members() -> int:
-    """单群人数硬顶（含 Host）。"""
+    """单群 Worker 人数硬顶。"""
 
     return int(get_group_studio_settings_public().get("maxMembers") or DEFAULT_MAX_MEMBERS)
 
 
 def assert_can_mutate(status: str) -> None:
-    """暂停/熔断/终态不得推进任务卡或加人。"""
+    """结束/删除的房间不能改成员或置顶。paused 仍可拉人。"""
 
     code = MUTATION_BLOCKED.get(status)
     if code is not None:
         raise GroupStudioError(409, code)
 
 
-def assert_floor_allowed(status: str, *, role: str = "host") -> None:
-    """paused / 熔断禁止发言。drafting 只允许 Host；awaiting_human 只允许 Host 复述。"""
+def assert_floor_allowed(status: str, *, role: str = "worker") -> None:
+    """只有 open 能生成。"""
 
     if status == "paused":
         raise GroupStudioError(409, STUDIO_PAUSED)
-    if status == "circuit_broken":
-        raise GroupStudioError(409, STUDIO_CIRCUIT_BROKEN)
+    if status != "open":
+        raise GroupStudioError(409, STUDIO_NOT_OPEN if status in {"done", "deleted"} else ILLEGAL_TRANSITION)
     if role == "host":
-        if status not in HOST_FLOOR_STATUSES:
-            raise GroupStudioError(409, ILLEGAL_TRANSITION)
-        return
-    if status == "drafting":
-        raise GroupStudioError(409, INTAKE_WORKER_FORBIDDEN)
-    if status == "awaiting_human":
-        raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    if status not in WORKER_FLOOR_STATUSES:
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
 
 
 def assert_can_start_execution(status: str, goal: str) -> None:
-    """人类或 Host 进入执行期的守卫。"""
+    """V2 没有执行期。"""
 
-    assert_floor_allowed(status)
-    if status != "discussing":
-        raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    if not goal.strip():
-        raise GroupStudioError(422, GOAL_REQUIRED)
+    raise GroupStudioError(410, ILLEGAL_TRANSITION)
 
 
 def assert_serial_run(current_run_id: str | None) -> None:
-    """P0 同时只能有一条 GroupRun。"""
+    """同时只能有一条 GroupRun。"""
 
     if current_run_id:
         raise GroupStudioError(409, ILLEGAL_TRANSITION)

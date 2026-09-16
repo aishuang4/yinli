@@ -6,6 +6,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+pytestmark = pytest.mark.skip(reason="V1 阶段机已由 V2 替换，见 test_group_studio_v2.py")
+
 from src.group_studio.errors import DOD_INCOMPLETE, ILLEGAL_TRANSITION
 from src.group_studio.lifecycle import archive_for_chat_session_delete, reconcile_interrupted_studios
 from src.group_studio.settings import set_group_studio_settings

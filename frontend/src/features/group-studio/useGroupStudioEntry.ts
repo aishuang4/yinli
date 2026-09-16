@@ -1,4 +1,4 @@
-/** Chat 进入/返回工作室：探活、from-chat、上传附件、热键。 */
+/** Chat 进入/返回工作室：探活已有房间；没有则只打开空白画布，第一条消息才 from-chat。 */
 
 import { useCallback, useEffect, useState, type RefObject } from 'react';
 import { useAppStore } from '../../stores/appStore';
@@ -7,14 +7,17 @@ import { useProductFeaturesStore } from '../../stores/productFeaturesStore';
 import { createId } from '../../utils/id';
 import { getErrorMessage, notifyError } from '../../utils/feedback';
 import type { ChatFileAttachment } from '../chat/types';
-import {
-  createStudioFromChat,
-  fetchGroupStudioSettings,
-  fetchStudioByChat,
-} from './api';
-import { createLocalStudioId } from './localStudio';
+import { fetchGroupStudioSettings, fetchStudioByChat } from './api';
 import type { GroupStudioSnapshot } from './types';
 import { useGroupStudioHotkey } from './useGroupStudioHotkey';
+
+let pendingComposerPrefill = '';
+
+export function takeStudioComposerPrefill(): string {
+  const value = pendingComposerPrefill;
+  pendingComposerPrefill = '';
+  return value;
+}
 
 interface UseGroupStudioEntryOptions {
   activeProjectId: string;
@@ -23,6 +26,7 @@ interface UseGroupStudioEntryOptions {
   modelConfigId?: string;
   chatRunBlocking: boolean;
   draftText: string;
+  lastUserMessage: string;
   fileAttachments: ChatFileAttachment[];
   hasImages: boolean;
   isComposingRef: RefObject<boolean>;
@@ -41,11 +45,10 @@ export function useGroupStudioEntry({
   modelConfigId,
   chatRunBlocking,
   draftText,
-  fileAttachments,
+  lastUserMessage,
   hasImages,
   isComposingRef,
   setActiveSessionId,
-  uploadFilesForSession,
 }: UseGroupStudioEntryOptions) {
   const workspaceMode = useAppStore((state) => state.workspaceMode);
   const studioSurface = useAppStore((state) => state.studioSurface);
@@ -127,28 +130,17 @@ export function useGroupStudioEntry({
       const existing = await fetchStudioByChat(sessionId);
       if (existing) {
         setExistingStudio(existing);
+        pendingComposerPrefill = draftText.trim();
         openGroupStudio(existing.id);
         return;
       }
-      const files = fileAttachments.length > 0
-        ? await uploadFilesForSession(fileAttachments, activeProjectId, sessionId)
-        : [];
-      const filePaths = files.map((file) => file.path).filter(Boolean);
-      // 切换入口创建空白工作室；只有当前输入框草稿或附件才作为明确的开场内容带入。
-      if (draftText.trim() || filePaths.length > 0) {
-        const studio = await createStudioFromChat({
-          projectId: activeProjectId,
-          chatSessionId: sessionId,
-          agentId,
-          modelConfigId,
-          draftText,
-          filePaths,
-        });
-        setExistingStudio(studio);
-        openGroupStudio(studio.id);
-        return;
-      }
-      openGroupStudio(createLocalStudioId(), { chatSessionId: sessionId, agentId, modelConfigId });
+      pendingComposerPrefill = draftText.trim() || lastUserMessage.trim();
+      openGroupStudio(null, {
+        chatSessionId: sessionId,
+        agentId,
+        modelConfigId,
+        nonce: createId(),
+      });
     } catch (error) {
       notifyError(getErrorMessage(error, '无法进入工作室'));
     } finally {
@@ -162,12 +154,11 @@ export function useGroupStudioEntry({
     busy,
     chatRunBlocking,
     draftText,
-    fileAttachments,
     enabled,
     hasImages,
+    lastUserMessage,
     openGroupStudio,
     setActiveSessionId,
-    uploadFilesForSession,
     workspaceMode,
   ]);
 
@@ -194,8 +185,8 @@ export function useGroupStudioEntry({
   const buttonLabel = inStudio
     ? '返回 Chat'
     : existingStudio
-      ? '回到工作室'
-      : '进入工作室';
+      ? '回到群聊'
+      : '进入群聊';
 
   return {
     buttonLabel,

@@ -8,6 +8,7 @@ CHAT_RUN_ACTIVE = "chat_run_active"
 MEMBER_CAP = "member_cap"
 AGENT_NOT_BOUND = "agent_not_bound"
 JOB_AGENT_FORBIDDEN = "job_agent_forbidden"
+DEFAULT_AGENT_FORBIDDEN = "default_agent_forbidden"
 HOST_REQUIRED = "host_required"
 STUDIO_PAUSED = "studio_paused"
 STUDIO_CIRCUIT_BROKEN = "studio_circuit_broken"
@@ -33,6 +34,10 @@ MODEL_NOT_CONFIGURED = "model_not_configured"
 
 
 GROUP_STUDIO_NOT_FOUND = "not_found"
+STUDIO_NOT_OPEN = "studio_not_open"
+NO_ELIGIBLE_SPEAKER = "no_eligible_speaker"
+ALREADY_MEMBER = "already_member"
+MEMBER_LIMIT = "member_limit"
 
 
 class GroupStudioError(Exception):

@@ -6,6 +6,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+pytestmark = pytest.mark.skip(reason="V1 阶段机已由 V2 替换，见 test_group_studio_v2.py")
+
 from src.group_studio.host_runtime import build_host_runtime_spec, run_host_discussion
 from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID
 from src.group_studio.settings import set_group_studio_settings

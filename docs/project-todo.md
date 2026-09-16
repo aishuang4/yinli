@@ -27,8 +27,8 @@
 
 产品方向改为 `docs/group-studio-v2.md`：房间留下、主持流程拆掉。下列旧项（真并行、时间旅行、群事件进 Trace、跨群目录）等 V2 第一版可用后再做。Intake / 工作项 / Host 每轮必出不再作为增强项。
 
-- [ ] 按 `docs/group-studio-v2.md` 落地第一版：进群即 `open`、拉人踢人、无确认开始、@谁谁说 / 无 @ 全员一轮、说完停、卸可见 Host 与阶段机。
-- [ ] 群聊 SSE 补 `afterSeq`、断线重连、切群换订阅；历史 `GROUP_ERROR` 不重复 toast。
+- [x] 按 `docs/group-studio-v2.md` 落地第一版：进群即 `open`、拉人踢人、无确认开始、@谁谁说 / 无 @ 全员一轮、说完停、卸可见 Host 与阶段机。
+- [x] 群聊 SSE 补 `afterSeq`、断线重连、切群换订阅；历史 `GROUP_ERROR` 不重复 toast。
 - [ ] 把 `MainAgentRuntimeSpec` / cache key 从 `routes/chat/runtime_builder.py` 下沉到 `agents/` 或 `runtime/`，Chat 与 group_studio 平级调用。
 
 ## P1. Event Stream 后续加固

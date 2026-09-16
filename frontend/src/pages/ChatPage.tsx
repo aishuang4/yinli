@@ -220,6 +220,7 @@ export function ChatPage() {
     agentId: runtimeAgent?.id || 'default',
     chatRunBlocking,
     draftText: inputValue,
+    lastUserMessage: [...messages].reverse().find((item) => item.role === 'user' && item.content.trim())?.content ?? '',
     fileAttachments,
     hasImages: imageAttachments.length > 0,
     isComposingRef,

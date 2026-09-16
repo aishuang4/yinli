@@ -8,6 +8,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+pytestmark = pytest.mark.skip(reason="V1 阶段机已由 V2 替换，见 test_group_studio_v2.py")
+
 from src.group_studio.errors import INTAKE_NOT_CONFIRMED, WORK_ITEM_CLAIMED
 from src.group_studio.settings import set_group_studio_settings
 from src.group_studio.tools_host import GroupPublishWorkItems, HostToolContext

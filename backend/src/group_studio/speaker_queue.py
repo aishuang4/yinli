@@ -1,4 +1,4 @@
-"""点名 FIFO 队列：写库、弹不可运行队首、发 GROUP_SPEAKER_QUEUE。"""
+"""发言队列：只认 Worker，不解析正文 @。"""
 
 from __future__ import annotations
 
@@ -38,16 +38,72 @@ def set_queue(group_id: str, member_ids: list[str], *, kind: str, run_id: str | 
 
 
 def clear_queue(group_id: str, *, kind: str, run_id: str | None = None) -> None:
-    """清空点名队列与认领轮。interrupt / restatement 用；不发 drained。"""
-
-    from src.group_studio.workboard import clear_claim_round
+    """清空点名队列。interrupt 用；不发 drained。"""
 
     set_queue(group_id, [], kind=kind, run_id=run_id)
-    clear_claim_round(group_id)
+
+
+def drop_member(group_id: str, member_id: str, *, kind: str = "interrupt") -> list[str]:
+    """从队列拿掉一个人。"""
+
+    remaining = [item for item in get_queue(group_id) if item != member_id]
+    return set_queue(group_id, remaining, kind=kind)
+
+
+def is_runnable_worker(member: dict[str, Any] | None) -> bool:
+    """未静音、未移除、未崩溃的 Worker。"""
+
+    if member is None:
+        return False
+    if str(member.get("role") or "worker") == "host":
+        return False
+    if member.get("status") in {"removed", "crashed"}:
+        return False
+    if member.get("muted"):
+        return False
+    return True
+
+
+def runnable_workers(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """按 joinedAt、id 排序的可跑 Worker。"""
+
+    members = [
+        item
+        for item in (snapshot.get("members") or [])
+        if is_runnable_worker(item)
+    ]
+    return sorted(
+        members,
+        key=lambda item: (str(item.get("joinedAt") or ""), str(item.get("id") or "")),
+    )
+
+
+def build_turn_queue(snapshot: dict[str, Any], mentions: list[str] | None) -> tuple[list[str], str]:
+    """从人类 mentions 算本轮队列。
+
+    返回 (member_ids, kind)。kind 为 assign / all_round / empty。
+    mentions 非空但一个都不能跑 → ([], "assign")，调用方发 no_eligible_speaker。
+    mentions 为空且没人可跑 → ([], "all_round")。
+    """
+
+    by_id = {
+        str(item.get("id") or ""): item
+        for item in (snapshot.get("members") or [])
+    }
+    cleaned = [str(item or "").strip() for item in (mentions or []) if str(item or "").strip()]
+    if cleaned:
+        seen: list[str] = []
+        for member_id in cleaned:
+            if member_id in seen:
+                continue
+            if is_runnable_worker(by_id.get(member_id)):
+                seen.append(member_id)
+        return seen, "assign"
+    return [str(item.get("id")) for item in runnable_workers(snapshot)], "all_round"
 
 
 def pop_unrunnable_head(group_id: str) -> None:
-    """弹出 muted / removed / crashed / 缺失的队首，直到队首可运行或队列空。"""
+    """弹出 muted / removed / crashed / 缺失的队首。"""
 
     snapshot = get_group_studio_snapshot(group_id, message_limit=1) or {}
     members = {
@@ -55,31 +111,24 @@ def pop_unrunnable_head(group_id: str) -> None:
         for item in (snapshot.get("members") or [])
     }
     queue = get_group_studio_speaker_queue(group_id)
-    _rewrite_runnable_prefix(group_id, queue, members)
-
-
-def _rewrite_runnable_prefix(
-    group_id: str,
-    queue: list[str],
-    members: dict[str, Any],
-) -> None:
-    remaining = list(queue)
-    while remaining:
-        member = members.get(remaining[0])
-        if (
-            member is None
-            or member.get("role") != "worker"
-            or member.get("status") in {"removed", "crashed"}
-            or member.get("muted")
-        ):
-            remaining = remaining[1:]
-            continue
-        break
+    remaining = [item for item in queue if is_runnable_worker(members.get(item))]
     if remaining != queue:
         set_group_studio_speaker_queue(group_id, remaining)
 
 
 def pop_head(group_id: str, member_id: str) -> str:
-    """工人 Run 开始时弹出自己。不匹配则空串。"""
+    """工人 Run 开始时弹出自己，并广播剩余队列。不匹配则空串。"""
 
-    return pop_group_studio_speaker_queue_head(group_id, member_id)
+    popped = pop_group_studio_speaker_queue_head(group_id, member_id)
+    if popped:
+        remaining = get_group_studio_speaker_queue(group_id)
+        emit_envelope(
+            group_id=group_id,
+            event_type="GROUP_SPEAKER_QUEUE",
+            payload={
+                "memberIds": remaining,
+                "kind": "queue_next",
+                "pendingMemberId": remaining[0] if remaining else None,
+            },
+        )
+    return popped

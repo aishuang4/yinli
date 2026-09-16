@@ -15,6 +15,7 @@ interface StudioHistoryPanelProps {
   onNewStudio: () => void;
   onSelectStudio: (studio: GroupStudioListItem) => void;
   onDeleteStudio: (studio: GroupStudioListItem) => void;
+  newDisabled?: boolean;
 }
 
 export function StudioHistoryPanel({
@@ -28,6 +29,7 @@ export function StudioHistoryPanel({
   onNewStudio,
   onSelectStudio,
   onDeleteStudio,
+  newDisabled = false,
 }: StudioHistoryPanelProps) {
   return (
     <aside
@@ -54,6 +56,7 @@ export function StudioHistoryPanel({
               type="button"
               className="icon-button chat-history-new-button"
               onClick={onNewStudio}
+              disabled={newDisabled}
               aria-label="新建群聊"
               title="新建群聊"
             >

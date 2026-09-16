@@ -1,21 +1,18 @@
 /** 群聊工作室独立界面。布局对齐 Chat：左列表、中对话、右可折叠上下文。 */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
-  Pause,
-  Play,
   Plus,
   Settings,
   Square,
-  CheckCircle2,
   Users,
 } from 'lucide-react';
 import { ScrollToBottomButton } from '../../components/ScrollToBottomButton';
 import { useMessageScroll } from '../../components/useMessageScroll';
-import { Modal, Spinner, Tag, Tooltip } from '@/components/design';
+import { Modal, Spinner, Tooltip } from '@/components/design';
 import { NotificationBell } from '../notifications/NotificationBell';
 import { useAgents } from '../../hooks/useAgents';
 import { useAppStore } from '../../stores/appStore';
@@ -23,9 +20,6 @@ import { getErrorMessage, notifyError, notifySuccess } from '../../utils/feedbac
 import { createId } from '../../utils/id';
 import {
   addStudioMember,
-  closeStudio,
-  confirmStudioIntake,
-  confirmStudioRestatement,
   createStudioFromChat,
   decideStudioApproval,
   deleteStudio,
@@ -37,35 +31,28 @@ import {
   downloadStudioFile,
   interruptStudio,
   muteStudioMember,
-  pauseStudio,
   postStudioMessage,
   removeStudioMember,
-  resumeStudio,
-  updateTaskCard,
+  updateStudioPin,
   updateStudioModel,
   uploadStudioFile,
 } from './api';
 import { GroupApprovalBar } from './GroupApprovalBar';
 import { ModelSelector } from '../models/ModelSelector';
 import { useModelCatalog } from '../models/useModelCatalog';
-import { StudioComposer } from './StudioComposer';
+import { StudioComposer, type StudioComposerAttachment } from './StudioComposer';
 import { StudioContextPanel } from './StudioContextPanel';
 import { StudioHistoryPanel } from './StudioHistoryPanel';
 import { StudioMessageList } from './StudioMessageList';
 import type {
   GroupStudioAgentOption,
   GroupStudioApproval,
-  GroupStudioBlackboard,
   GroupStudioFile,
   GroupStudioListItem,
   GroupStudioMember,
   GroupStudioSnapshot,
 } from './types';
-import {
-  createLocalStudioId,
-  createLocalStudioSnapshot,
-  isLocalStudioId,
-} from './localStudio';
+import { takeStudioComposerPrefill } from './useGroupStudioEntry';
 import { useGroupStudioStream, type StudioTimelineMessage } from './useGroupStudioStream';
 import './GroupStudioPage.css';
 
@@ -87,26 +74,41 @@ function getResponsiveCollapseTier(width: number): ResponsiveCollapseTier {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  drafting: '对谈中',
-  discussing: '讨论中',
-  executing: '执行中',
-  reviewing: '验收中',
-  awaiting_human: '等待你确认',
+  open: '进行中',
   paused: '已暂停',
-  circuit_broken: '已熔断',
-  closing: '待结项',
-  archived: '已归档',
-  failed: '失败',
+  done: '已结束',
   deleted: '已删除',
 };
+
+const HOST_AGENT_ID = 'group-studio-host';
+const MAX_DRAFT_MEMBERS = 6;
+
+function makeLocalMember(agentId: string, displayName: string): GroupStudioMember {
+  return {
+    id: `local_${agentId}`,
+    groupId: '',
+    role: 'worker',
+    agentId,
+    displayName,
+    status: 'active',
+    muted: false,
+  };
+}
+
+function isInvitableAgent(agentId: string, role?: string): boolean {
+  return Boolean(agentId)
+    && agentId !== 'default'
+    && agentId !== HOST_AGENT_ID
+    && role !== 'job';
+}
 
 function getGroupRuntimeErrorMessage(message: string): string {
   const normalized = message.toLowerCase();
   if (normalized.includes('insufficient balance') || normalized.includes('error code: 402')) {
-    return '当前模型余额不足，工作室已暂停。请切换到有余额的模型或补充供应商 Key，然后点击“继续”恢复。';
+    return '当前模型余额不足，工作室已暂停。请切换到有余额的模型或补充供应商 Key，然后再发一条恢复。';
   }
   if (normalized.includes('invalid api key') || normalized.includes('invalid_api_key') || normalized.includes('authentication')) {
-    return '当前供应商 Key 无效，工作室已暂停。请修正 Key 或切换模型，然后点击“继续”恢复。';
+    return '当前供应商 Key 无效，工作室已暂停。请修正 Key 或切换模型，然后再发一条恢复。';
   }
   return friendlyGroupStudioError(message, message);
 }
@@ -114,15 +116,15 @@ function getGroupRuntimeErrorMessage(message: string): string {
 export function GroupStudioPage() {
   const groupId = useAppStore((state) => state.activeGroupStudioId);
   const closeGroupStudio = useAppStore((state) => state.closeGroupStudio);
-  const clearActiveGroupStudio = useAppStore((state) => state.clearActiveGroupStudio);
   const openGroupStudio = useAppStore((state) => state.openGroupStudio);
   const studioSurface = useAppStore((state) => state.studioSurface);
   const localStudioSeed = useAppStore((state) => state.localStudioSeed);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
   const setView = useAppStore((state) => state.setView);
-  const { agents } = useAgents();
   const { catalog: modelCatalog, loading: modelsLoading, error: modelsError } = useModelCatalog();
+  const { agents, refresh: refreshAgents } = useAgents();
+  const isDraft = studioSurface !== 'none' && !groupId;
   const [studio, setStudio] = useState<GroupStudioSnapshot | null>(null);
   const [files, setFiles] = useState<GroupStudioFile[]>([]);
   const [studios, setStudios] = useState<GroupStudioListItem[]>([]);
@@ -133,13 +135,23 @@ export function GroupStudioPage() {
   const [goal, setGoal] = useState('');
   const [savingCard, setSavingCard] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [uploading, setUploading] = useState(false);
+  const [fileAttachments, setFileAttachments] = useState<StudioComposerAttachment[]>([]);
   const [memberBusyId, setMemberBusyId] = useState('');
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [draft, setDraft] = useState('');
+  const [mentions, setMentions] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<GroupStudioListItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [draftMembers, setDraftMembers] = useState<GroupStudioMember[]>([]);
+  const [draftModelId, setDraftModelId] = useState('');
+  const [pendingOpenSend, setPendingOpenSend] = useState<{
+    groupId: string;
+    projectId: string;
+    body: string;
+    mentions: string[];
+    files: StudioComposerAttachment[];
+  } | null>(null);
 
   const [addingAgentId, setAddingAgentId] = useState('');
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
@@ -195,41 +207,37 @@ export function GroupStudioPage() {
       fetchStudioFiles(targetId),
     ]);
     setStudio(snapshot);
-    setGoal(snapshot.taskCard.goal);
+    setGoal(snapshot.pin?.goal || '');
     setFiles(nextFiles);
     return snapshot;
   }, []);
 
   useEffect(() => {
-    if (!groupId || studioSurface === 'none') {
+    if (studioSurface === 'none') {
       return;
     }
-    if (isLocalStudioId(groupId)) {
+    if (!groupId) {
+      setStudio(null);
+      setFiles([]);
+      setGoal('');
+      setDraftMembers([]);
+      setMentions([]);
+      setFileAttachments([]);
+      setPendingOpenSend(null);
       setError('');
       setRuntimeError('');
-      setFiles([]);
-      setStudio((current) => {
-        if (current?.id === groupId) {
-          return current;
-        }
-        const seed = localStudioSeed ?? { chatSessionId: createId(), agentId: 'default' };
-        const agent = agents.find((item) => item.id === seed.agentId);
-        return createLocalStudioSnapshot({
-          id: groupId,
-          projectId: activeProjectId,
-          workspaceId: activeWorkspaceId,
-          chatSessionId: seed.chatSessionId,
-          agentId: seed.agentId,
-          modelConfigId: seed.modelConfigId,
-          agentName: agent?.name,
-        });
-      });
-      setGoal('');
+      setDraftModelId(localStudioSeed?.modelConfigId || '');
+      setDraft(takeStudioComposerPrefill());
       return;
     }
     let mounted = true;
     setError('');
     setRuntimeError('');
+    const prefill = takeStudioComposerPrefill();
+    if (prefill) {
+      setDraft(prefill);
+      setMentions([]);
+    }
     void refreshStudio(groupId).catch((cause: unknown) => {
       if (mounted) {
         setError(cause instanceof Error ? cause.message : '无法加载工作室');
@@ -238,7 +246,14 @@ export function GroupStudioPage() {
     return () => {
       mounted = false;
     };
-  }, [activeProjectId, activeWorkspaceId, agents, groupId, localStudioSeed, refreshStudio, studioSurface]);
+  }, [groupId, localStudioSeed?.nonce, refreshStudio, studioSurface]);
+
+  useEffect(() => {
+    if (!isDraft || draftModelId || !modelCatalog?.defaultModelId) {
+      return;
+    }
+    setDraftModelId(modelCatalog.defaultModelId);
+  }, [draftModelId, isDraft, modelCatalog?.defaultModelId]);
 
   const refreshStudioList = useCallback(async () => {
     setStudiosLoading(true);
@@ -291,46 +306,37 @@ export function GroupStudioPage() {
     setResponsivePanePreference((current) => (current === 'context' ? null : current));
   }, [effectiveContextCollapsed]);
 
-  const persistStudio = useCallback(async (
-    current: GroupStudioSnapshot,
-  ): Promise<GroupStudioSnapshot> => {
-    if (!isLocalStudioId(current.id)) {
-      return current;
+  useEffect(() => {
+    if (!isDraft) {
+      return;
     }
-    const worker = current.members.find((item) => item.role === 'worker' && item.status !== 'removed');
-    const created = await createStudioFromChat({
-      projectId: current.projectId,
-      modelConfigId: current.modelConfigId,
-      chatSessionId: current.chatSessionId || createId(),
-      agentId: worker?.agentId || 'default',
-      draftText: '',
-      filePaths: [],
-    });
-    openGroupStudio(created.id);
-    setStudio(created);
-    setGoal(created.taskCard.goal);
-    await refreshStudioList();
-    return created;
-  }, [openGroupStudio, refreshStudioList]);
+    const agentId = localStudioSeed?.agentId || '';
+    if (!isInvitableAgent(agentId)) {
+      return;
+    }
+    const agent = agents.find((item) => item.id === agentId);
+    if (!agent || !isInvitableAgent(agent.id, agent.role)) {
+      return;
+    }
+    setDraftMembers((current) => (
+      current.some((item) => item.agentId === agentId)
+        ? current
+        : [makeLocalMember(agent.id, agent.name), ...current]
+    ));
+  }, [agents, isDraft, localStudioSeed?.agentId, localStudioSeed?.nonce]);
 
   const handleNewStudio = () => {
-    const seed = { chatSessionId: createId(), agentId: 'default', modelConfigId: modelCatalog?.defaultModelId };
-    const localId = createLocalStudioId();
-    const agent = agents.find((item) => item.id === 'default');
+    if (sending || Boolean(studio?.currentRunId)) {
+      return;
+    }
     setError('');
     setRuntimeError('');
-    setFiles([]);
-    setGoal('');
-    setStudio(createLocalStudioSnapshot({
-      id: localId,
-      projectId: activeProjectId,
-      workspaceId: activeWorkspaceId,
-      chatSessionId: seed.chatSessionId,
-      agentId: seed.agentId,
-      agentName: agent?.name,
-      modelConfigId: seed.modelConfigId,
-    }));
-    openGroupStudio(localId, seed);
+    openGroupStudio(null, {
+      chatSessionId: createId(),
+      agentId: 'default',
+      modelConfigId: modelCatalog?.defaultModelId,
+      nonce: createId(),
+    });
   };
 
   const handleDeleteStudio = async (item: GroupStudioListItem) => {
@@ -351,9 +357,12 @@ export function GroupStudioPage() {
         if (nextStudio) {
           openGroupStudio(nextStudio.id);
         } else {
-          clearActiveGroupStudio();
-          setStudio(null);
-          setFiles([]);
+          openGroupStudio(null, {
+            chatSessionId: createId(),
+            agentId: 'default',
+            modelConfigId: modelCatalog?.defaultModelId,
+            nonce: createId(),
+          });
         }
       }
       setDeleteConfirm(null);
@@ -366,34 +375,37 @@ export function GroupStudioPage() {
   };
 
   const handleModelChange = async (modelConfigId: string) => {
+    if (isDraft) {
+      setDraftModelId(modelConfigId);
+      return;
+    }
     if (!studio) return;
     try {
-      if (isLocalStudioId(studio.id)) {
-        setStudio(current => current ? { ...current, modelConfigId } : current);
-      } else {
-        const updated = await updateStudioModel(studio.id, studio.projectId, modelConfigId);
-        setStudio(updated);
-      }
+      const updated = await updateStudioModel(studio.id, studio.projectId, modelConfigId);
+      setStudio(updated);
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法切换群聊模型'));
     }
   };
 
-  const { messages, status: liveStatus } = useGroupStudioStream(
+  const { messages, status: liveStatus, ready: streamReady } = useGroupStudioStream(
     studio?.id || groupId,
-    Boolean(studio && studioSurface !== 'none' && !isLocalStudioId(studio.id)),
+    Boolean(studio?.id && studioSurface !== 'none'),
     (event) => {
       if (event.type === 'GROUP_ERROR') {
+        const code = String(event.payload.code || '');
         const message = String(event.payload.message || '工作室运行失败');
-        const friendlyMessage = getGroupRuntimeErrorMessage(message);
+        const friendlyMessage = getGroupRuntimeErrorMessage(code || message);
         setRuntimeError(friendlyMessage);
         notifyError(friendlyMessage);
         return;
       }
-      if (event.type === 'GROUP_BLACKBOARD') {
+      if (event.type === 'GROUP_PIN') {
+        const pin = event.payload as { goal?: string; notes?: string; title?: string; updatedAt?: string };
+        setGoal(pin.goal || '');
         setStudio((current) => (
           current
-            ? { ...current, blackboard: event.payload as unknown as GroupStudioBlackboard }
+            ? { ...current, pin: { title: pin.title || '', goal: pin.goal || '', notes: pin.notes || '', updatedAt: pin.updatedAt || '' } }
             : current
         ));
         return;
@@ -430,10 +442,15 @@ export function GroupStudioPage() {
       }
       if (event.type === 'GROUP_RUN_ENDED') {
         setStudio((current) => {
-          if (!current || current.currentApproval?.status === 'pending') {
+          if (!current) {
             return current;
           }
-          return { ...current, currentApproval: null };
+          return {
+            ...current,
+            currentRunId: null,
+            currentSpeakerMemberId: null,
+            currentApproval: current.currentApproval?.status === 'pending' ? current.currentApproval : null,
+          };
         });
         return;
       }
@@ -445,25 +462,81 @@ export function GroupStudioPage() {
       }
       if (event.type === 'GROUP_CIRCUIT') {
         setStudio((current) => (
-          current ? { ...current, status: 'circuit_broken' } : current
+          current ? { ...current, status: 'paused', pauseReason: 'circuit' } : current
         ));
         return;
       }
-      if (
-        (event.type === 'GROUP_DOD'
-          || event.type === 'GROUP_TASK_CARD'
-          || event.type === 'GROUP_STATUS'
-          || event.type === 'GROUP_INTAKE')
-        && studio
-      ) {
-        if (event.type === 'GROUP_STATUS' && String(event.payload.to || event.status || '') !== 'circuit_broken') {
+      if (event.type === 'GROUP_FLOOR') {
+        const memberId = String(event.payload.memberId || '');
+        setStudio((current) => (
+          current
+            ? {
+              ...current,
+              currentSpeakerMemberId: memberId || null,
+              currentRunId: String(event.payload.runId || current.currentRunId || '') || null,
+            }
+            : current
+        ));
+        return;
+      }
+      if (event.type === 'GROUP_SPEAKER_QUEUE') {
+        const memberIds = Array.isArray(event.payload.memberIds)
+          ? event.payload.memberIds.map((item) => String(item))
+          : [];
+        const pending = event.payload.pendingMemberId;
+        setStudio((current) => (
+          current
+            ? {
+              ...current,
+              speakerQueue: memberIds,
+              pendingSpeakerMemberId: pending == null ? (memberIds[0] || null) : String(pending),
+            }
+            : current
+        ));
+        return;
+      }
+      if (event.type === 'GROUP_STATUS' && studio) {
+        const next = String(event.payload.to || event.status || '');
+        if (next !== 'paused') {
           setRuntimeError('');
         }
         void refreshStudio(studio.id).catch(() => undefined);
       }
     },
   );
-  const members = (studio?.members ?? []).filter((member) => member.status !== 'removed');
+  const viewStudio = useMemo<GroupStudioSnapshot | null>(() => {
+    if (studio) {
+      return studio;
+    }
+    if (!isDraft) {
+      return null;
+    }
+    return {
+      id: '',
+      projectId: activeProjectId,
+      workspaceId: activeWorkspaceId,
+      chatSessionId: localStudioSeed?.chatSessionId || '',
+      title: '',
+      status: 'open',
+      pin: { title: '', goal, notes: '', updatedAt: '' },
+      members: draftMembers,
+      modelConfigId: draftModelId || modelCatalog?.defaultModelId || '',
+      messages: [],
+      createdAt: '',
+      updatedAt: '',
+    };
+  }, [
+    activeProjectId,
+    activeWorkspaceId,
+    draftMembers,
+    draftModelId,
+    goal,
+    isDraft,
+    localStudioSeed?.chatSessionId,
+    modelCatalog?.defaultModelId,
+    studio,
+  ]);
+  const members = (viewStudio?.members ?? []).filter((member) => member.status !== 'removed');
   const timeline: StudioTimelineMessage[] = messages.length > 0
     ? messages
     : (studio?.messages ?? [])
@@ -496,47 +569,99 @@ export function GroupStudioPage() {
   useEffect(() => {
     resetScroll();
   }, [groupId, resetScroll]);
-  const memberOptions = availableAgents;
+  const speakingMemberId = useMemo(() => {
+    const live = timeline.find((item) => (
+      item.role === 'worker' && (item.streaming || item.thinkingStreaming)
+    ));
+    if (live?.speakerId) {
+      return live.speakerId;
+    }
+    return studio?.currentSpeakerMemberId || '';
+  }, [studio?.currentSpeakerMemberId, timeline]);
+
+  const memberOptions = useMemo(() => {
+    const seated = new Set(members.map((item) => item.agentId));
+    if (isDraft) {
+      return agents
+        .filter((agent) => (
+          isInvitableAgent(agent.id, agent.role)
+          && !seated.has(agent.id)
+          && (!agent.workspaceId || agent.workspaceId === activeWorkspaceId)
+        ))
+        .map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          description: agent.description || '',
+        }));
+    }
+    return availableAgents.filter((agent) => agent.id !== 'default' && !seated.has(agent.id));
+  }, [activeWorkspaceId, agents, availableAgents, isDraft, members]);
+
+  const refreshAvailableAgents = useCallback((targetId: string) => {
+    return fetchAvailableStudioAgents(targetId)
+      .then(setAvailableAgents)
+      .catch((cause: unknown) => notifyError(getErrorMessage(cause, '无法加载可加入的 Agent')));
+  }, []);
 
   const handleSaveGoal = async (nextGoal: string) => {
-    if (!studio || !nextGoal.trim()) {
+    const trimmed = nextGoal.trim();
+    if (isDraft) {
+      setGoal(trimmed);
+      notifySuccess('置顶备注已保存');
+      return;
+    }
+    if (!studio) {
       return;
     }
     setSavingCard(true);
     try {
-      let snapshot: GroupStudioSnapshot;
-      if (isLocalStudioId(studio.id)) {
-        snapshot = await persistStudio(studio);
-        await updateTaskCard(snapshot.id, { projectId: snapshot.projectId, goal: nextGoal.trim() });
-        snapshot = await refreshStudio(snapshot.id);
-      } else {
-        await updateTaskCard(studio.id, { projectId: studio.projectId, goal: nextGoal.trim() });
-        snapshot = await refreshStudio(studio.id);
-      }
+      await updateStudioPin(studio.id, { projectId: studio.projectId, goal: trimmed });
+      await refreshStudio(studio.id);
       await refreshStudioList();
-      notifySuccess(snapshot.status === 'drafting' ? '已记到任务卡，确认后才开始群聊。' : '任务卡已保存。');
+      notifySuccess('置顶备注已保存');
     } catch (cause) {
-      notifyError(getErrorMessage(cause, '无法更新任务卡'));
+      notifyError(getErrorMessage(cause, '无法更新置顶备注'));
     } finally {
       setSavingCard(false);
     }
   };
 
   const handleAddMember = async (agentId: string) => {
-    if (!studio || !agentId || ['closing', 'archived', 'failed'].includes(studio.status)) {
-      if (studio && ['closing', 'archived', 'failed'].includes(studio.status)) {
-        notifyError('项目已结项，不能再修改群聊成员');
+    if (!agentId) {
+      return;
+    }
+    if (isDraft) {
+      if (draftMembers.length >= MAX_DRAFT_MEMBERS) {
+        notifyError('工作室人数已达上限');
+        return;
+      }
+      const agent = agents.find((item) => item.id === agentId);
+      if (!agent || !isInvitableAgent(agent.id, agent.role)) {
+        notifyError('这个人不能入群');
+        return;
+      }
+      if (draftMembers.some((item) => item.agentId === agentId)) {
+        notifyError('这个人已经在群里');
+        return;
+      }
+      setDraftMembers((current) => [...current, makeLocalMember(agent.id, agent.name)]);
+      notifySuccess('已加入群聊');
+      return;
+    }
+    if (!studio || studio.status === 'done' || studio.status === 'deleted') {
+      if (studio && (studio.status === 'done' || studio.status === 'deleted')) {
+        notifyError('群聊已结束，不能再改成员');
       }
       return;
     }
     setAdding(true);
     setAddingAgentId(agentId);
     try {
-      const persisted = await persistStudio(studio);
-      await addStudioMember(persisted.id, { projectId: persisted.projectId, agentId });
-      await refreshStudio(persisted.id);
+      await addStudioMember(studio.id, { projectId: studio.projectId, agentId });
+      await refreshStudio(studio.id);
+      await refreshAvailableAgents(studio.id);
       await refreshStudioList();
-      notifySuccess('已加入工作室');
+      notifySuccess('已加入群聊');
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法加人'));
     } finally {
@@ -546,35 +671,29 @@ export function GroupStudioPage() {
   };
 
   const handleOpenMembers = () => {
+    if (isDraft) {
+      void refreshAgents({ silent: true });
+      return;
+    }
     if (!studio) {
       return;
     }
-    if (['closing', 'archived', 'failed'].includes(studio.status)) {
+    if (studio.status === 'done' || studio.status === 'deleted') {
       setAvailableAgents([]);
       return;
     }
-    void persistStudio(studio)
-      .then((persisted) => fetchAvailableStudioAgents(persisted.id))
-      .then(setAvailableAgents)
-      .catch((cause) => notifyError(getErrorMessage(cause, '无法加载可加入的 Agent')));
+    void refreshAvailableAgents(studio.id);
   };
 
   const handleMuteMember = async (memberId: string, muted: boolean) => {
-    if (!studio) {
+    if (isDraft) {
+      setDraftMembers((current) => current.map((item) => (
+        item.id === memberId ? { ...item, muted } : item
+      )));
+      notifySuccess(muted ? '已静音' : '已取消静音');
       return;
     }
-    if (isLocalStudioId(studio.id)) {
-      setStudio((current) => (
-        current
-          ? {
-            ...current,
-            members: current.members.map((item) => (
-              item.id === memberId ? { ...item, muted } : item
-            )),
-          }
-          : current
-      ));
-      notifySuccess(muted ? '已静音' : '已取消静音');
+    if (!studio) {
       return;
     }
     setMemberBusyId(memberId);
@@ -590,27 +709,20 @@ export function GroupStudioPage() {
   };
 
   const handleRemoveMember = async (memberId: string) => {
-    if (!studio) {
+    if (isDraft) {
+      setDraftMembers((current) => current.filter((item) => item.id !== memberId));
+      setMentions((current) => current.filter((item) => item !== memberId));
+      notifySuccess('已移出工作室');
       return;
     }
-    if (isLocalStudioId(studio.id)) {
-      setStudio((current) => (
-        current
-          ? {
-            ...current,
-            members: current.members.map((item) => (
-              item.id === memberId ? { ...item, status: 'removed' as const } : item
-            )),
-          }
-          : current
-      ));
-      notifySuccess('已移出工作室');
+    if (!studio) {
       return;
     }
     setMemberBusyId(memberId);
     try {
       await removeStudioMember(studio.id, memberId, { projectId: studio.projectId });
       await refreshStudio(studio.id);
+      await refreshAvailableAgents(studio.id);
       notifySuccess('已移出工作室');
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法移除成员'));
@@ -619,27 +731,25 @@ export function GroupStudioPage() {
     }
   };
 
-  const handleUploadFile = async (fileList: FileList | null) => {
-    if (!studio || !fileList || fileList.length === 0) {
+  const handleComposerFile = (file: File) => {
+    if (file.size > 50 * 1024 * 1024) {
+      notifyError('单个附件不能超过 50 MB。');
       return;
     }
-    setUploading(true);
-    try {
-      const persisted = await persistStudio(studio);
-      await uploadStudioFile(persisted.id, persisted.projectId, fileList[0]);
-      await refreshStudio(persisted.id);
-      await refreshStudioList();
-      notifySuccess('已加入共享文件库');
-    } catch (cause) {
-      notifyError(getErrorMessage(cause, '无法上传文件'));
-    } finally {
-      setUploading(false);
-    }
+    setFileAttachments((current) => {
+      if (current.length >= 10) {
+        notifyError('单次最多上传 10 个附件。');
+        return current;
+      }
+      if (current.some((item) => item.name === file.name && item.size === file.size)) {
+        return current;
+      }
+      return [...current, { id: createId(), file, name: file.name, size: file.size }];
+    });
   };
 
   const handleDownloadFile = async (file: GroupStudioFile) => {
-    if (!studio || isLocalStudioId(studio.id)) {
-      notifyError('本地草稿尚未保存，暂时没有可下载文件');
+    if (!studio) {
       return;
     }
     try {
@@ -669,56 +779,127 @@ export function GroupStudioPage() {
     }
   };
 
+  const postToStudio = async (
+    target: { id: string; projectId: string },
+    body: string,
+    nextMentions: string[],
+    attachments: StudioComposerAttachment[],
+  ) => {
+    const uploaded: GroupStudioFile[] = [];
+    for (const attachment of attachments) {
+      uploaded.push(await uploadStudioFile(target.id, target.projectId, attachment.file));
+    }
+    const names = uploaded.map((item) => item.title).join('、');
+    const text = body.trim() || (names ? `上传了文件：${names}` : '');
+    await postStudioMessage(target.id, {
+      projectId: target.projectId,
+      body: text,
+      mentions: nextMentions,
+    });
+    setDraft('');
+    setMentions([]);
+    setFileAttachments([]);
+    await refreshStudio(target.id);
+    await refreshStudioList();
+  };
+
+  const persistDraftStudio = async () => {
+    const firstAgentId = draftMembers.find((item) => isInvitableAgent(item.agentId))?.agentId || 'default';
+    const created = await createStudioFromChat({
+      projectId: activeProjectId,
+      chatSessionId: localStudioSeed?.chatSessionId || createId(),
+      agentId: firstAgentId,
+      modelConfigId: draftModelId || modelCatalog?.defaultModelId,
+      title: draft.trim().slice(0, 40) || undefined,
+    });
+    const mentionMap = new Map<string, string>();
+    for (const member of draftMembers) {
+      const seated = created.members.find((item) => (
+        item.agentId === member.agentId && item.status !== 'removed'
+      ));
+      let live = seated;
+      if (!live) {
+        live = await addStudioMember(created.id, {
+          projectId: created.projectId,
+          agentId: member.agentId,
+        });
+      }
+      mentionMap.set(member.id, live.id);
+      if (member.muted && !live.muted) {
+        await muteStudioMember(created.id, live.id, {
+          projectId: created.projectId,
+          muted: true,
+        });
+      }
+    }
+    if (goal.trim()) {
+      await updateStudioPin(created.id, {
+        projectId: created.projectId,
+        goal: goal.trim(),
+      });
+    }
+    const snapshot = await refreshStudio(created.id);
+    return {
+      created: snapshot,
+      mentions: mentions.map((item) => mentionMap.get(item) || item).filter((item) => !item.startsWith('local_')),
+    };
+  };
+
+  useEffect(() => {
+    if (!pendingOpenSend || !streamReady || studio?.id !== pendingOpenSend.groupId) {
+      return;
+    }
+    const pending = pendingOpenSend;
+    const timer = window.setTimeout(() => {
+      setPendingOpenSend(null);
+      void postToStudio(
+        { id: pending.groupId, projectId: pending.projectId },
+        pending.body,
+        pending.mentions,
+        pending.files,
+      )
+        .catch((cause: unknown) => notifyError(getErrorMessage(cause, '无法发送消息')))
+        .finally(() => setSending(false));
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [pendingOpenSend, streamReady, studio?.id]);
+
   const handleSend = async () => {
-    if (!studio || !draft.trim()) {
+    if ((!studio && !isDraft) || (!draft.trim() && fileAttachments.length === 0)) {
       return;
     }
     setSending(true);
+    let waitingForStream = false;
     try {
-      const persisted = await persistStudio(studio);
-      await postStudioMessage(persisted.id, { projectId: persisted.projectId, body: draft.trim() });
-      setDraft('');
-      await refreshStudio(persisted.id);
-      await refreshStudioList();
+      if (isDraft) {
+        const persisted = await persistDraftStudio();
+        setDraftMembers([]);
+        openGroupStudio(persisted.created.id);
+        setPendingOpenSend({
+          groupId: persisted.created.id,
+          projectId: persisted.created.projectId,
+          body: draft.trim(),
+          mentions: persisted.mentions,
+          files: fileAttachments,
+        });
+        waitingForStream = true;
+        return;
+      }
+      if (!studio) {
+        return;
+      }
+      await postToStudio(studio, draft.trim(), mentions, fileAttachments);
     } catch (cause) {
       notifyError(getErrorMessage(cause, '无法发送消息'));
     } finally {
-      setSending(false);
-    }
-  };
-
-  const handlePause = async () => {
-    if (!studio) {
-      return;
-    }
-    if (isLocalStudioId(studio.id)) {
-      return;
-    }
-    try {
-      const snapshot = await pauseStudio(studio.id, studio.projectId);
-      setStudio(snapshot);
-      notifySuccess('工作室已暂停');
-    } catch (cause) {
-      notifyError(getErrorMessage(cause, '无法暂停'));
-    }
-  };
-
-  const handleResume = async () => {
-    if (!studio || isLocalStudioId(studio.id)) {
-      return;
-    }
-    try {
-      const snapshot = await resumeStudio(studio.id, studio.projectId);
-      setStudio(snapshot);
-      setRuntimeError('');
-      notifySuccess('工作室已继续');
-    } catch (cause) {
-      notifyError(getErrorMessage(cause, '无法恢复'));
+      if (!waitingForStream) {
+        setSending(false);
+      }
     }
   };
 
   const handleInterrupt = async () => {
-    if (!studio || isLocalStudioId(studio.id)) {
+    if (!studio) {
       return;
     }
     try {
@@ -729,106 +910,17 @@ export function GroupStudioPage() {
     }
   };
 
-  const handleConfirmRestatement = async () => {
-    if (!studio) {
-      return;
-    }
-    try {
-      const snapshot = await confirmStudioRestatement(studio.id, studio.projectId);
-      setStudio(snapshot);
-      notifySuccess('已确认新目标');
-    } catch (cause) {
-      notifyError(getErrorMessage(cause, '无法确认复述'));
-    }
-  };
-
-  const handleConfirmIntake = async () => {
-    if (!studio || isLocalStudioId(studio.id) || !goal.trim()) {
-      return;
-    }
-    try {
-      if (studio.awaitingIntakeConfirm) {
-        const snapshot = await confirmStudioIntake(studio.id, studio.projectId);
-        setStudio(snapshot);
-        setGoal(snapshot.taskCard.goal);
-        notifySuccess('已开始群聊');
-        return;
-      }
-      await postStudioMessage(studio.id, { projectId: studio.projectId, body: '确认并开始' });
-      await refreshStudio(studio.id);
-    } catch (cause) {
-      notifyError(getErrorMessage(cause, '无法确认开始'));
-    }
-  };
-
-  const handleClose = async () => {
-    if (!studio) {
-      return;
-    }
-    if (isLocalStudioId(studio.id)) {
-      closeGroupStudio();
-      setStudio(null);
-      return;
-    }
-    try {
-      const snapshot = await closeStudio(studio.id, studio.projectId, studio.status === 'closing');
-      setStudio(snapshot);
-      await refreshStudioList();
-      notifySuccess(
-        snapshot.status === 'archived'
-          ? '工作室已归档，可在左侧历史里回看。'
-          : (snapshot.taskCard.dodChecklist ?? []).length > 0
-            ? '已进入结项，请勾齐验收清单。'
-            : '已进入结项。没有验收清单，可直接确认结项。',
-      );
-    } catch (cause) {
-      notifyError(getErrorMessage(cause, '无法结项'));
-    }
-  };
-
-  const handleToggleDod = async (itemId: string, checked: boolean) => {
-    if (!studio) {
-      return;
-    }
-    const checklist = (studio.taskCard.dodChecklist ?? []).map((item) => (
-      item.id === itemId ? { ...item, checked } : item
-    ));
-    try {
-      const persisted = await persistStudio(studio);
-      await updateTaskCard(persisted.id, { projectId: persisted.projectId, dodChecklist: checklist });
-      await refreshStudio(persisted.id);
-      await refreshStudioList();
-    } catch (cause) {
-      notifyError(getErrorMessage(cause, '无法更新验收清单'));
-    }
-  };
-
-  const handleAddDod = async (text: string) => {
-    if (!studio || !text.trim()) {
-      return;
-    }
-    const checklist = [
-      ...(studio.taskCard.dodChecklist ?? []),
-      { id: `gdod_${Date.now()}`, text: text.trim(), checked: false },
-    ];
-    try {
-      const persisted = await persistStudio(studio);
-      await updateTaskCard(persisted.id, { projectId: persisted.projectId, dodChecklist: checklist });
-      await refreshStudio(persisted.id);
-      await refreshStudioList();
-    } catch (cause) {
-      notifyError(getErrorMessage(cause, '无法添加验收项'));
-    }
-  };
-
   const pendingApproval = studio?.currentApproval?.status === 'pending' ? studio.currentApproval : null;
   const approvalMemberName = pendingApproval
     ? (members.find((item) => item.id === pendingApproval.memberId)?.displayName || '工人')
     : '';
-  const statusText = studio
-    ? (STATUS_LABEL[liveStatus || studio.status] || liveStatus || studio.status)
-    : '加载中';
-  const paused = studio?.status === 'paused' || studio?.status === 'circuit_broken';
+  const statusText = isDraft
+    ? '发送后才会出现在列表里'
+    : studio
+      ? (STATUS_LABEL[liveStatus || studio.status] || liveStatus || studio.status)
+      : '加载中';
+  const ended = studio?.status === 'done' || studio?.status === 'deleted';
+  const composerReady = isDraft || Boolean(studio);
 
   return (
     <div
@@ -839,6 +931,16 @@ export function GroupStudioPage() {
       data-context-collapsed={effectiveContextCollapsed}
       data-electron-shell={isDesktopShell}
       data-windows-shell={isWindowsDesktopShell}
+      style={{
+        gridTemplateColumns: [
+          historyPanelMounted && !effectiveHistoryCollapsed
+            ? 'var(--group-studio-history-width)'
+            : '0px',
+          'minmax(0, 1fr)',
+          effectiveContextCollapsed ? '0px' : 'var(--group-studio-context-width)',
+        ].join(' '),
+        transition: `grid-template-columns ${HISTORY_PANEL_TRANSITION_MS}ms var(--ease-out)`,
+      }}
     >
       {historyPanelMounted ? (
         <StudioHistoryPanel
@@ -849,8 +951,15 @@ export function GroupStudioPage() {
           studios={studios}
           statusLabel={(status) => STATUS_LABEL[status] || status}
           onCollapse={handleCollapseHistory}
-          onNewStudio={() => void handleNewStudio()}
-          onSelectStudio={(item) => openGroupStudio(item.id)}
+          onNewStudio={handleNewStudio}
+          newDisabled={sending || Boolean(studio?.currentRunId)}
+          onSelectStudio={(item) => {
+            setDraft('');
+            setMentions([]);
+            setFileAttachments([]);
+            setPendingOpenSend(null);
+            openGroupStudio(item.id);
+          }}
           onDeleteStudio={(item) => void handleDeleteStudio(item)}
         />
       ) : null}
@@ -878,7 +987,8 @@ export function GroupStudioPage() {
                     <button
                       type="button"
                       className="icon-button chat-history-new-button"
-                      onClick={() => void handleNewStudio()}
+                      onClick={handleNewStudio}
+                      disabled={sending || Boolean(studio?.currentRunId)}
                       aria-label="新建群聊"
                     >
                       <Plus size={15} />
@@ -898,26 +1008,21 @@ export function GroupStudioPage() {
               </Tooltip>
               <div className="chat-workbench-title-copy min-w-0">
                 <div className="truncate text-base font-semibold text-[var(--color-text-primary)]">
-                  {studio?.title || '工作室'}
+                  {isDraft ? '新群聊' : (studio?.title || '工作室')}
                 </div>
                 <div className="truncate text-xs text-[var(--color-text-tertiary)]">
                   {statusText}
                   {studio?.budget ? ` · 已用 ${studio.budget.usedTurns}/${studio.budget.maxTurns} 轮` : ''}
                 </div>
               </div>
-              {studio ? (
-                <Tag className="chat-workbench-status-tag" size="small" color="transparent">
-                  {statusText}
-                </Tag>
-              ) : null}
             </div>
             <div className="chat-workbench-controls flex min-w-0 shrink items-center gap-2">
-              <Tooltip title={effectiveContextCollapsed ? '展开成员与黑板' : '折叠成员与黑板'} placement="bottom" mode="dark">
+              <Tooltip title={effectiveContextCollapsed ? '展开成员与备注' : '折叠成员与备注'} placement="bottom" mode="dark">
                 <button
                   type="button"
                   className="icon-button chat-workbench-top-action h-9 w-9 rounded-xl"
                   onClick={handleToggleContext}
-                  aria-label={effectiveContextCollapsed ? '展开成员与黑板' : '折叠成员与黑板'}
+                  aria-label={effectiveContextCollapsed ? '展开成员与备注' : '折叠成员与备注'}
                 >
                   {effectiveContextCollapsed ? <PanelRightOpen size={17} /> : <PanelRightClose size={17} />}
                 </button>
@@ -926,9 +1031,9 @@ export function GroupStudioPage() {
               <div className="chat-workbench-model-control min-w-0 shrink">
                 <ModelSelector
                   catalog={modelCatalog}
-                  value={studio?.modelConfigId || modelCatalog?.defaultModelId || ''}
+                  value={viewStudio?.modelConfigId || modelCatalog?.defaultModelId || ''}
                   onChange={(value) => void handleModelChange(value)}
-                  disabled={!studio || sending || studio.status === 'executing' || studio.status === 'reviewing' || Boolean(studio.currentRunId)}
+                  disabled={!composerReady || sending || ended || Boolean(studio?.currentRunId)}
                   loading={modelsLoading}
                   error={modelsError}
                 />
@@ -968,39 +1073,10 @@ export function GroupStudioPage() {
                 ) : (
                   <>
                     {runtimeError ? <div className="group-studio-runtime-error">{runtimeError}</div> : null}
-                    {studio?.status === 'circuit_broken' ? (
+                    {studio?.pauseReason === 'circuit' && studio.status === 'paused' ? (
                       <div className="group-studio-approval" role="status">
                         <div className="group-studio-approval__title">
-                          本轮已暂停，人工处理后才能继续。请先检查供应商 Key 或切换可用模型，再点击顶部“继续”。
-                        </div>
-                      </div>
-                    ) : null}
-                    {studio?.status === 'drafting' && studio.awaitingIntakeConfirm ? (
-                      <div className="group-studio-approval">
-                        <div className="group-studio-approval__title">主持人认为可以开始了。确认后才会拉人开会。</div>
-                        <div className="group-studio-approval__actions">
-                          <button
-                            type="button"
-                            className="icon-button chat-workbench-top-action inline-flex h-9 items-center rounded-xl px-3 text-xs"
-                            disabled={!goal.trim()}
-                            onClick={() => void handleConfirmIntake()}
-                          >
-                            确认并开始
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
-                    {studio?.awaitingRestatement ? (
-                      <div className="group-studio-approval">
-                        <div className="group-studio-approval__title">目标已变更，请确认主持人复述后再继续。</div>
-                        <div className="group-studio-approval__actions">
-                          <button
-                            type="button"
-                            className="icon-button chat-workbench-top-action inline-flex h-9 items-center rounded-xl px-3 text-xs"
-                            onClick={() => void handleConfirmRestatement()}
-                          >
-                            确认复述
-                          </button>
+                          先停一下：这一轮说得有点多。再发一条就可以接着聊。
                         </div>
                       </div>
                     ) : null}
@@ -1019,9 +1095,7 @@ export function GroupStudioPage() {
                         </div>
                         <div className="text-lg font-medium">开始群聊</div>
                         <div className="max-w-[420px] text-sm">
-                          {studio?.status === 'drafting'
-                            ? '先在下面跟主持人说说这次要做什么。目标和验收会出现在右侧，你确认后才开始群聊。'
-                            : '主持人正在准备发言，或还没有消息。'}
+                          先在右侧把人拉进来，再发一句。用 @ 菜单点名；不点名就是全员各说一轮。
                         </div>
                       </div>
                     ) : (
@@ -1040,72 +1114,38 @@ export function GroupStudioPage() {
             />
           </div>
 
+          {ended ? null : (
           <StudioComposer
-            disabled={!studio || sending || ['circuit_broken', 'closing', 'archived', 'failed', 'deleted'].includes(studio.status)}
+            disabled={!composerReady || sending}
             sending={sending}
             value={draft}
+            members={members}
+            mentions={mentions}
+            fileAttachments={fileAttachments}
+            onFile={handleComposerFile}
+            onRemoveFile={(id) => setFileAttachments((current) => current.filter((item) => item.id !== id))}
             placeholder={
               studio?.status === 'paused'
-                ? '暂停中，消息会先入列'
-                : studio?.status === 'drafting'
-                  ? '跟主持人说说目标、约束和验收…'
-                  : '对工作室说话…'
+                ? '暂停中，发送会恢复并按这句开跑。用 @ 菜单点名。'
+                : isDraft
+                  ? '说一句才会创建群聊。用 @ 菜单点名；不点名就是全员各说一轮。'
+                  : '说一句，或用 @ 菜单点名。不点名就是全员各说一轮。'
             }
             onChange={setDraft}
+            onMentionsChange={setMentions}
             controls={(
-              <>
-                {paused ? (
-                  <Tooltip title="继续工作室" placement="top" mode="dark">
-                    <button
-                      type="button"
-                      className="icon-button inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs"
-                      onClick={() => void handleResume()}
-                      aria-label="继续工作室"
-                    >
-                      <Play size={14} />
-                      <span>继续</span>
-                    </button>
-                  </Tooltip>
-                ) : (
-                  <Tooltip title="暂停工作室" placement="top" mode="dark">
-                    <button
-                      type="button"
-                      className="icon-button inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs"
-                      onClick={() => void handlePause()}
-                      disabled={!studio}
-                      aria-label="暂停工作室"
-                    >
-                      <Pause size={14} />
-                      <span>暂停</span>
-                    </button>
-                  </Tooltip>
-                )}
-                <Tooltip title="停止当前发言" placement="top" mode="dark">
-                  <button
-                    type="button"
-                    className="icon-button inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs"
-                    onClick={() => void handleInterrupt()}
-                    disabled={!studio}
-                    aria-label="停止当前发言"
-                  >
-                    <Square size={14} />
-                    <span>停止</span>
-                  </button>
-                </Tooltip>
-                {studio && (studio.status === 'reviewing' || studio.status === 'closing') ? (
-                  <Tooltip title={studio.status === 'closing' ? '确认结项' : '提交结项'} placement="top" mode="dark">
-                    <button
-                      type="button"
-                      className="icon-button inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs"
-                      onClick={() => void handleClose()}
-                      aria-label={studio.status === 'closing' ? '确认结项' : '提交结项'}
-                    >
-                      <CheckCircle2 size={14} />
-                      <span>{studio.status === 'closing' ? '确认结项' : '提交结项'}</span>
-                    </button>
-                  </Tooltip>
-                ) : null}
-              </>
+              <Tooltip title="停止当前发言" placement="top" mode="dark">
+                <button
+                  type="button"
+                  className="icon-button inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs"
+                  onClick={() => void handleInterrupt()}
+                  disabled={!studio}
+                  aria-label="停止当前发言"
+                >
+                  <Square size={14} />
+                  <span>停止</span>
+                </button>
+              </Tooltip>
             )}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -1115,6 +1155,7 @@ export function GroupStudioPage() {
             }}
             onSend={() => void handleSend()}
           />
+          )}
         </div>
       </section>
 
@@ -1125,20 +1166,18 @@ export function GroupStudioPage() {
           collapsed={effectiveContextCollapsed}
           files={files}
           goal={goal}
+          isMacDesktopShell={isMacDesktopShell}
+          isWindowsDesktopShell={isWindowsDesktopShell}
           memberBusyId={memberBusyId}
           memberOptions={memberOptions}
           members={members}
           savingCard={savingCard}
-          studio={studio}
-          uploading={uploading}
-          onAddDod={(text) => void handleAddDod(text)}
+          speakingMemberId={speakingMemberId}
+          studio={viewStudio}
           onAddMember={(agentId) => void handleAddMember(agentId)}
           onMuteMember={(memberId, muted) => void handleMuteMember(memberId, muted)}
           onRemoveMember={(memberId) => void handleRemoveMember(memberId)}
-          onConfirmIntake={() => void handleConfirmIntake()}
           onSaveGoal={(nextGoal) => void handleSaveGoal(nextGoal)}
-          onToggleDod={(itemId, checked) => void handleToggleDod(itemId, checked)}
-          onUploadFile={(fileList) => void handleUploadFile(fileList)}
           onDownloadFile={(file) => void handleDownloadFile(file)}
           onOpenMembers={handleOpenMembers}
         />

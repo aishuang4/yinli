@@ -1,4 +1,4 @@
-/** 群聊成员管理弹窗：左侧可选 Agent 卡片，右侧已有成员。 */
+/** 群聊成员管理弹窗：左侧可选 Agent，右侧已有成员。 */
 
 import { Button, Modal } from '@/components/design';
 import type { GroupStudioAgentOption, GroupStudioMember } from './types';
@@ -7,7 +7,6 @@ interface StudioMemberModalProps {
   adding: boolean;
   addingAgentId: string;
   canAddMembers: boolean;
-  drafting: boolean;
   memberBusyId: string;
   memberOptions: GroupStudioAgentOption[];
   members: GroupStudioMember[];
@@ -22,7 +21,6 @@ export function StudioMemberModal({
   adding,
   addingAgentId,
   canAddMembers,
-  drafting,
   memberBusyId,
   memberOptions,
   members,
@@ -50,15 +48,13 @@ export function StudioMemberModal({
           <div className="group-studio-member-dialog__body">
             {!canAddMembers ? (
               <p className="group-studio-member-dialog__notice" role="status">
-                当前工作室阶段不允许添加成员。
+                结束后不能再改成员。
               </p>
             ) : (
               <>
-                {drafting ? (
-                  <p className="group-studio-member-dialog__notice" role="status">
-                    对谈期可以先拉人入座，确认开始后他们才会发言。
-                  </p>
-                ) : null}
+                <p className="group-studio-member-dialog__notice" role="status">
+                  先把人拉进来，发消息后被点到的人才会说话。
+                </p>
                 {memberOptions.length === 0 ? (
                   <p className="group-studio-muted">没有可加入的 Agent，或人数已达上限。</p>
                 ) : (
@@ -103,10 +99,10 @@ export function StudioMemberModal({
                   <span className="min-w-0">
                     <span className="group-studio-member-list__name">{member.displayName}</span>
                     <span className="group-studio-member-list__role">
-                      {member.role === 'host' ? '主持人' : member.muted ? '已静音' : '执行'}
+                      {member.muted ? '已静音' : '成员'}
                     </span>
                   </span>
-                  {member.role === 'worker' ? (
+                  {canAddMembers ? (
                     <span className="group-studio-member-list__actions">
                       <Button
                         size="small"

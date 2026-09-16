@@ -256,7 +256,7 @@ def ensure_db() -> None:
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_group_studios_active_chat
                     ON group_studios(chat_session_id)
-                    WHERE status NOT IN ('archived', 'failed', 'deleted')
+                    WHERE status NOT IN ('done', 'archived', 'failed', 'deleted')
                 """
             )
             _ensure_column(conn, "group_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
@@ -1321,6 +1321,27 @@ def list_group_studios_with_current_run() -> list[dict[str, Any]]:
     return _group_studio_record_store().list_with_current_run()
 
 
+def migrate_group_studio_v2() -> int:
+    """启动时把旧群聊阶段机收成 V2。"""
+
+    return _group_studio_record_store().migrate_legacy_v2()
+
+
+def set_group_studio_member_status(
+    group_id: str,
+    member_id: str,
+    status: str,
+    *,
+    refresh_joined_at: bool = False,
+) -> dict[str, Any] | None:
+    return _group_studio_record_store().set_member_status(
+        group_id,
+        member_id,
+        status,
+        refresh_joined_at=refresh_joined_at,
+    )
+
+
 def list_group_studio_messages(
     group_id: str,
     *,
@@ -1522,6 +1543,12 @@ def append_group_studio_event(payload: dict[str, Any]) -> dict[str, Any]:
 
 def list_group_studio_events_after(group_id: str, after_seq: int) -> list[dict[str, Any]]:
     return _group_studio_record_store().list_events_after(group_id, after_seq)
+
+
+def get_group_studio_max_event_seq(group_id: str) -> int:
+    """当前最大持久 seq；没有事件则为 0。"""
+
+    return _group_studio_record_store().max_event_seq(group_id)
 
 
 def replace_group_studio_blackboard(group_id: str, payload: dict[str, Any]) -> dict[str, Any]:

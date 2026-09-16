@@ -1,4 +1,4 @@
-/** 订阅工作室独立 SSE，把 MESSAGE 事件折成时间线。 */
+/** 订阅工作室独立 SSE。断线用已应用的最大持久 seq 重连，不从 0 重放。 */
 
 import { useEffect, useRef, useState } from 'react';
 
@@ -14,7 +14,7 @@ export interface StudioTimelineMessage {
   thinkingStreaming?: boolean;
 }
 
-interface StudioEvent {
+export interface StudioEvent {
   seq: number | null;
   groupId: string;
   runId: string | null;
@@ -24,20 +24,17 @@ interface StudioEvent {
 }
 
 const BOARD_EVENTS = new Set([
-  'GROUP_BLACKBOARD',
   'GROUP_MEMBER',
   'GROUP_FILE',
   'GROUP_APPROVAL',
   'GROUP_RUN_ENDED',
   'GROUP_BUDGET',
   'GROUP_CIRCUIT',
-  'GROUP_DOD',
   'GROUP_ERROR',
-  'GROUP_TASK_CARD',
+  'GROUP_PIN',
   'GROUP_STATUS',
-  'GROUP_INTAKE',
-  'GROUP_WORK_ITEM',
   'GROUP_SPEAKER_QUEUE',
+  'GROUP_FLOOR',
 ]);
 
 export function useGroupStudioStream(
@@ -47,6 +44,7 @@ export function useGroupStudioStream(
 ) {
   const [messages, setMessages] = useState<StudioTimelineMessage[]>([]);
   const [status, setStatus] = useState('');
+  const [ready, setReady] = useState(false);
   const domainEventRef = useRef(onDomainEvent);
 
   useEffect(() => {
@@ -56,18 +54,24 @@ export function useGroupStudioStream(
   useEffect(() => {
     setMessages([]);
     setStatus('');
+    setReady(false);
     if (!groupId || !enabled) {
       return;
     }
     const controller = new AbortController();
     let buffer = '';
     let snapshotStatus = '';
+    let lastSeq = 0;
+    let reconnectTimer = 0;
 
     const applyEvent = (event: StudioEvent) => {
+      if (typeof event.seq === 'number' && event.seq > lastSeq) {
+        lastSeq = event.seq;
+      }
       if (event.type === 'GROUP_STUDIO_STATE') {
         const payload = event.payload as { messages?: StudioTimelineMessage[]; status?: string };
         snapshotStatus = String(payload.status || event.status || '');
-        setStatus(String(payload.status || event.status || ''));
+        setStatus(snapshotStatus);
         setMessages(
           (payload.messages || [])
             .filter((item) => item.visibleInTimeline !== false)
@@ -78,17 +82,20 @@ export function useGroupStudioStream(
               thinkingStreaming: false,
             })),
         );
+        setReady(true);
         return;
       }
-      // 终态工作室只恢复快照，不把历史熔断/错误重新当作当前故障展示。
       if (
-        snapshotStatus === 'archived'
+        snapshotStatus === 'done'
         && (event.type === 'GROUP_ERROR' || event.type === 'GROUP_CIRCUIT')
       ) {
         return;
       }
       if (event.type === 'GROUP_STATUS') {
-        setStatus(String(event.payload.to || event.status || ''));
+        const next = String(event.payload.to || event.status || '');
+        snapshotStatus = next;
+        setStatus(next);
+        domainEventRef.current?.(event);
         return;
       }
       if (event.type === 'GROUP_MESSAGE_OPEN') {
@@ -102,7 +109,7 @@ export function useGroupStudioStream(
             {
               id: messageId,
               speakerId: String(event.payload.speakerId || ''),
-              role: String(event.payload.role || 'host'),
+              role: String(event.payload.role || 'worker'),
               intent: String(event.payload.intent || 'discuss'),
               body: '',
               thinking: '',
@@ -161,13 +168,17 @@ export function useGroupStudioStream(
       }
     };
 
-    const consume = async () => {
-      const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/events`, {
-        signal: controller.signal,
-        headers: { Accept: 'text/event-stream' },
-      });
+    const consume = async (afterSeq: number | null) => {
+      const query = afterSeq === null ? '' : `?afterSeq=${afterSeq}`;
+      const response = await fetch(
+        `/api/group-studio/${encodeURIComponent(groupId)}/events${query}`,
+        {
+          signal: controller.signal,
+          headers: { Accept: 'text/event-stream' },
+        },
+      );
       if (!response.ok || !response.body) {
-        return;
+        throw new Error('sse_unavailable');
       }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -188,15 +199,36 @@ export function useGroupStudioStream(
       }
     };
 
-    void consume().catch((error: unknown) => {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        return;
+    const loop = async () => {
+      let first = true;
+      while (!controller.signal.aborted) {
+        try {
+          await consume(first ? null : lastSeq);
+          first = false;
+        } catch (error: unknown) {
+          if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+            return;
+          }
+        }
+        if (controller.signal.aborted) {
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          reconnectTimer = window.setTimeout(resolve, 1200);
+        });
       }
-    });
-    return () => controller.abort();
+    };
+
+    void loop();
+    return () => {
+      controller.abort();
+      if (reconnectTimer) {
+        window.clearTimeout(reconnectTimer);
+      }
+    };
   }, [enabled, groupId]);
 
-  return { messages, status };
+  return { messages, status, ready };
 }
 
 function parseSseBlock(block: string): StudioEvent | null {

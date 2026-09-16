@@ -18,6 +18,14 @@ export type WorkspaceMode = 'workstation' | 'workflow';
 /** Chat 之上的工作室表面，不是第三个 TitleBar 产品世界。 */
 export type StudioSurface = 'none' | 'group-studio';
 
+/** 未发送的新群聊只在前端画布；第一条消息才 from-chat。禁止 gstu_local_* 假 id。 */
+export interface GroupStudioDraftSeed {
+  chatSessionId: string;
+  agentId: string;
+  modelConfigId?: string;
+  nonce: string;
+}
+
 /** Chat ↔ 工作室过渡相位。idle 时才允许再次切换。 */
 export type StudioTransition =
   | 'idle'
@@ -55,8 +63,8 @@ interface AppState {
   studioTransition: StudioTransition;
   /** 当前打开或刚刚离开的工作室 id。 */
   activeGroupStudioId: string | null;
-  /** 未落库草稿的 Chat 会话绑定；持久化后清空。 */
-  localStudioSeed: { chatSessionId: string; agentId: string; modelConfigId?: string } | null;
+  /** 未发送新群聊的 Chat 会话绑定；第一条消息落库后清空。 */
+  localStudioSeed: GroupStudioDraftSeed | null;
   // Actions
   /** 切换视图 */
   setView: (view: ViewType) => void;
@@ -73,7 +81,7 @@ interface AppState {
   /** 消费通知跳转后的 pending Job。 */
   clearPendingJobId: () => void;
   /** 打开工作室表面。不改 TitleBar 的 WorkspaceMode 集合；若在任务流则先回到工作台 Chat。 */
-  openGroupStudio: (groupId: string, seed?: { chatSessionId: string; agentId: string; modelConfigId?: string }) => void;
+  openGroupStudio: (groupId: string | null, seed?: GroupStudioDraftSeed) => void;
   /** 收起工作室，回到 Chat。 */
   closeGroupStudio: () => void;
   clearActiveGroupStudio: () => void;
@@ -135,9 +143,7 @@ export const useAppStore = create<AppState>()((set) => ({
       currentView: 'chat' as const,
       workspaceMode: 'workstation' as const,
       activeGroupStudioId: groupId,
-      localStudioSeed: groupId.startsWith('gstu_local_')
-        ? (seed ?? state.localStudioSeed)
-        : null,
+      localStudioSeed: groupId ? null : (seed ?? state.localStudioSeed),
     };
     if (state.studioTransition !== 'idle') {
       return nextBase;

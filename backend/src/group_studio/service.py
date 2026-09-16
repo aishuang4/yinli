@@ -1,4 +1,9 @@
-"""群聊工作室应用服务：绑定、任务卡、成员、黑板与文件库。"""
+"""群聊工作室应用服务：人类 API 编排。
+
+本文件只编排进群、成员、置顶、发言、暂停、结束。
+队列算法在 `speaker_queue`，点火在 `scheduler`，硬规则在 `orchestrator`。
+文件后半「V1 遗留」只给旧路由/Host 工具过渡，新能力不要往那里加。
+"""
 
 from __future__ import annotations
 
@@ -10,17 +15,18 @@ from src.group_studio.errors import (
     AGENT_NOT_BOUND,
     CHAT_RUN_ACTIVE,
     CROSS_PROJECT_SESSION,
-    DOD_INCOMPLETE,
+    DEFAULT_AGENT_FORBIDDEN,
     GOAL_REQUIRED,
     GROUP_STUDIO_NOT_FOUND,
+    ALREADY_MEMBER,
     HOST_REQUIRED,
     ILLEGAL_TRANSITION,
-    INTAKE_NOT_READY,
     JOB_AGENT_FORBIDDEN,
     MEMBER_CAP,
+    NO_ELIGIBLE_SPEAKER,
+    STUDIO_NOT_OPEN,
     NOT_AWAITING_RESTATEMENT,
     RESTATEMENT_MISSING,
-    STUDIO_CIRCUIT_BROKEN,
     GroupStudioError,
 )
 from src.group_studio.files import ensure_studio_dirs, save_studio_upload
@@ -50,19 +56,17 @@ from src.server.routes.chat.store import (
     ensure_chat_session,
 )
 from src.group_studio.events import emit_envelope
-from src.group_studio.scheduler import schedule_host_turn
+from src.group_studio.scheduler import schedule_next
 from src.storage.database import (
     apply_group_studio_task_card_update,
     archive_group_studio,
     count_group_studio_active_members,
     create_group_studio_from_chat,
-    find_blank_group_studio_draft_id,
     find_group_studio_member_by_agent,
     get_active_group_studio_by_chat_session,
     get_group_studio_member,
     get_group_studio_snapshot,
     get_project,
-    group_studio_has_runs,
     insert_group_studio_artifact,
     insert_group_studio_member,
     insert_group_studio_message,
@@ -73,6 +77,7 @@ from src.storage.database import (
     replace_group_studio_blackboard,
     set_group_studio_member_muted,
     set_group_studio_member_removed,
+    set_group_studio_member_status,
     set_group_studio_status,
     update_group_studio_model_config,
     update_group_studio_state,
@@ -80,16 +85,22 @@ from src.storage.database import (
 
 
 def _new_id(prefix: str) -> str:
+    """生成带前缀的短 id。"""
+
     return f"{prefix}_{uuid.uuid4().hex[:16]}"
 
 
 def _raise_if_chat_run_active(session_id: str) -> None:
+    """Chat 进行中禁止升级群聊。"""
+
     for run in list_chat_runs_by_statuses(ACTIVE_RUN_STATUSES):
         if str(run.get("sessionId") or "") == session_id:
             raise GroupStudioError(409, CHAT_RUN_ACTIVE)
 
 
 def _resolve_worker(agent_id: str, workspace_id: str) -> dict[str, str]:
+    """校验可入座的 Chat Agent。default 只给解析用，入座由 `_maybe_seat_worker` 挡住。"""
+
     if agent_id == "default":
         return {"id": "default", "name": "默认助手", "role": "chat"}
     from src.server.routes.agents import get_registered_agent, list_workspace_agents
@@ -118,6 +129,7 @@ def list_invitable_agents(group_id: str) -> list[dict[str, str]]:
         for member in studio.members
         if member.status != "removed"
     }
+    occupied.add("default")
     occupied.add(GROUP_STUDIO_HOST_AGENT_ID)
     candidates: list[dict[str, str]] = []
     from src.server.routes.agents import list_workspace_agents
@@ -136,28 +148,15 @@ def list_invitable_agents(group_id: str) -> list[dict[str, str]]:
     return candidates
 
 
-def _last_user_message(session_id: str) -> str:
-    store = _load_store()
-    messages = store.messages.get(session_id) or []
-    for message in reversed(messages):
-        if message.role == "user" and message.content.strip():
-            return message.content.strip()
-    return ""
-
-
-def _message_count(session_id: str) -> int:
-    store = _load_store()
-    session = next((item for item in store.sessions if item.id == session_id), None)
-    if session is not None:
-        return int(session.message_count or 0)
-    return len(store.messages.get(session_id) or [])
-
-
 def _snapshot_to_model(raw: dict) -> GroupStudio:
+    """存储快照转对外模型。"""
+
     return GroupStudio.model_validate(raw)
 
 
 def get_studio(group_id: str) -> GroupStudio:
+    """按 id 取房间；不存在则 404。"""
+
     raw = get_group_studio_snapshot(group_id)
     if raw is None:
         raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
@@ -165,6 +164,8 @@ def get_studio(group_id: str) -> GroupStudio:
 
 
 def get_studio_by_chat_session(session_id: str) -> GroupStudio | None:
+    """当前 Chat session 未结束的房间；没有则 None。"""
+
     raw = get_active_group_studio_by_chat_session(session_id)
     if raw is None:
         return None
@@ -183,17 +184,15 @@ def list_studio_messages(
     before: str | None = None,
     limit: int = 100,
 ) -> list[dict]:
+    """分页读时间线。"""
+
     if get_group_studio_snapshot(group_id, message_limit=1) is None:
         raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
     return list_group_studio_messages(group_id, before=before, limit=limit)
 
 
 def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
-    """升级或回到当前 Chat 会话对应的未归档工作室。
-
-    `draftText` 与 Chat 上一句只作为开场白展示，不是 Goal；新建恒为 drafting，
-    必须等用户在工作室内明确操作后才启动主持人。
-    """
+    """升级或回到当前 Chat 会话对应的未结束房间。进群即 open，不自动开跑。"""
 
     session_id = request.chat_session_id.strip()
     from src.config.runtime_settings import resolve_model_binding
@@ -208,29 +207,24 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
             raise GroupStudioError(422, CROSS_PROJECT_SESSION)
         return _snapshot_to_model(existing)
 
-    if request.reuse_blank_draft and not request.draft_text.strip() and not request.file_paths:
-        blank_id = find_blank_group_studio_draft_id(request.project_id)
-        if blank_id:
-            blank = get_group_studio_snapshot(blank_id)
-            if blank is not None:
-                return _snapshot_to_model(blank)
-
     try:
         context = resolve_runtime_context(
             project_id=request.project_id,
             session_id="",
             run_id="",
-                agent_id=request.agent_id,
+            agent_id=request.agent_id or "default",
         )
     except ValueError as exc:
         raise GroupStudioError(422, CROSS_PROJECT_SESSION) from exc
-    worker = _resolve_worker(request.agent_id, context.workspace_id)
+
+    seated = _maybe_seat_worker(request.agent_id, context.workspace_id)
+    session_agent = seated or {"id": "default", "name": "默认助手"}
 
     try:
         ensure_chat_session(
             session_id=session_id,
-            agent_id=worker["id"],
-            agent_name=worker["name"],
+            agent_id=session_agent["id"],
+            agent_name=session_agent["name"],
             workspace_id=context.workspace_id,
             project_id=context.project_id,
             title=request.title or request.draft_text,
@@ -243,27 +237,15 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
             project_id=request.project_id,
             session_id=session_id,
             run_id="",
-            agent_id=worker["id"],
+            agent_id=session_agent["id"],
         )
     except ValueError as exc:
         raise GroupStudioError(422, CROSS_PROJECT_SESSION) from exc
 
-    message_count = _message_count(session_id)
-    draft = request.draft_text.strip()
-    last_user = _last_user_message(session_id) if message_count >= 1 else ""
-    seed_text = last_user if message_count >= 1 else draft
-    seed = message_count >= 1
-    studio_status = "drafting"
-    card_status = "draft"
-    goal = ""
-    title = (request.title or "").strip() or (
-        seed_text[:28] + ("..." if len(seed_text) > 28 else "") if seed_text else "未命名工作室"
-    )
+    title = (request.title or "").strip() or "未命名工作室"
     settings = get_group_studio_settings_public()
     group_id = _new_id("gstu")
     task_id = _new_id("gtask")
-    host_id = _new_id("gmbr")
-    worker_id = _new_id("gmbr")
     artifacts = []
     for path in request.file_paths:
         cleaned = str(path or "").strip()
@@ -277,6 +259,17 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
             "byteSize": 0,
             "createdBy": "human",
         })
+    members = []
+    if seated:
+        members.append({
+            "id": _new_id("gmbr"),
+            "role": "worker",
+            "agentId": seated["id"],
+            "displayName": seated["name"],
+            "status": "active",
+            "muted": False,
+            "crashCount": 0,
+        })
     payload = {
         "id": group_id,
         "workspaceId": context.workspace_id,
@@ -284,7 +277,7 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
         "chatSessionId": session_id,
         "modelConfigId": model_binding.primary.entry.id,
         "title": title,
-        "status": studio_status,
+        "status": "open",
         "budget": {
             "maxTurns": int(settings["maxTurns"]),
             "maxNoProgressTurns": 3,
@@ -294,50 +287,44 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
         "taskCard": {
             "id": task_id,
             "revision": 1,
-            "status": card_status,
-            "goal": goal,
+            "status": "active",
+            "goal": "",
             "background": "",
             "constraints": [],
             "dodChecklist": [],
-            "seedFromChat": seed,
+            "seedFromChat": False,
         },
         "blackboard": {
             "revision": 1,
-            "goal": goal,
+            "goal": "",
             "constraints": [],
             "decisions": [],
             "openQuestions": [],
             "artifacts": [item["id"] for item in artifacts],
         },
-        "members": [
-            {
-                "id": host_id,
-                "role": "host",
-                "agentId": GROUP_STUDIO_HOST_AGENT_ID,
-                "displayName": "主持人",
-                "status": "active",
-                "muted": False,
-                "crashCount": 0,
-            },
-            {
-                "id": worker_id,
-                "role": "worker",
-                "agentId": worker["id"],
-                "displayName": worker["name"],
-                "status": "active",
-                "muted": False,
-                "crashCount": 0,
-            },
-        ],
+        "members": members,
         "artifacts": artifacts,
     }
     snapshot = create_group_studio_from_chat(payload)
     ensure_studio_dirs(context.project_root, snapshot["id"])
     studio = _snapshot_to_model(snapshot)
-    if seed_text.strip() and not any(item.body.strip() for item in studio.messages):
-        _emit_human_timeline_message(studio.id, seed_text)
-        studio = get_studio(studio.id)
+    emit_envelope(
+        group_id=studio.id,
+        event_type="GROUP_STATUS",
+        payload={"from": None, "to": "open", "reason": "created"},
+    )
     return studio
+
+
+def _maybe_seat_worker(agent_id: str, workspace_id: str) -> dict[str, str] | None:
+    """default / Job / Host 不能入座。"""
+
+    if not agent_id or agent_id in {"default", GROUP_STUDIO_HOST_AGENT_ID}:
+        return None
+    try:
+        return _resolve_worker(agent_id, workspace_id)
+    except GroupStudioError:
+        return None
 
 
 def archive_studio_for_session_delete(group_id: str) -> None:
@@ -365,11 +352,13 @@ def delete_studio(group_id: str, *, project_id: str) -> None:
 
 
 def _load_studio(group_id: str) -> GroupStudio:
+    """内部读房间别名。"""
+
     return get_studio(group_id)
 
 
 def update_task_card(group_id: str, request: GroupTaskCardUpdateRequest) -> TaskCard:
-    """按转移表更新任务卡。drafting 首次填 Goal 不 restatement。"""
+    """更新置顶备注。不切状态、不取消当前生成。"""
 
     studio = _load_studio(group_id)
     if request.project_id and request.project_id != studio.project_id:
@@ -380,124 +369,60 @@ def update_task_card(group_id: str, request: GroupTaskCardUpdateRequest) -> Task
     next_goal = card.goal if request.goal is None else request.goal
     next_background = card.background if request.background is None else request.background
     next_constraints = card.constraints if request.constraints is None else request.constraints
-    next_dod = (
-        [item.model_dump(by_alias=True) for item in card.dod_checklist]
-        if request.dod_checklist is None
-        else [item.model_dump(by_alias=True) for item in request.dod_checklist]
-    )
-    goal = next_goal.strip()
-    old_goal = card.goal.strip()
-    old_constraints = list(card.constraints)
-    goal_changed = goal != old_goal
-    constraints_changed = next_constraints != old_constraints
-    background_changed = next_background != card.background
-    dod_changed = request.dod_checklist is not None
-
-    studio_status = studio.status
-    card_status = card.status
-    awaiting = studio.awaiting_restatement
-    phase_before = studio.phase_before_pause
-    bump = False
-    title: str | None = None
-
-    if studio.status == "drafting":
-        card_status = "draft"
-        if goal:
-            bump = True
-            title = goal[:28] + ("..." if len(goal) > 28 else "")
-        elif not (background_changed or dod_changed or constraints_changed):
-            raise GroupStudioError(422, GOAL_REQUIRED)
-    elif studio.status in {"discussing", "executing", "reviewing"}:
-        semantic_change = goal_changed or constraints_changed
-        had_old_target = bool(old_goal or old_constraints)
-        if semantic_change and had_old_target and group_studio_has_runs(group_id):
-            studio_status = "awaiting_human"
-            awaiting = True
-            phase_before = studio.status
-            bump = True
-        elif semantic_change or background_changed or dod_changed:
-            bump = semantic_change or dod_changed
-            if goal and studio.status == "discussing":
-                title = goal[:28] + ("..." if len(goal) > 28 else "")
-    elif studio.status == "awaiting_human":
-        if semantic_change := (goal_changed or constraints_changed):
-            bump = True
-        elif background_changed or dod_changed:
-            bump = dod_changed
-        else:
-            raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    elif studio.status == "closing":
-        if goal_changed or constraints_changed:
-            raise GroupStudioError(409, ILLEGAL_TRANSITION)
-        bump = dod_changed
-    else:
-        raise GroupStudioError(409, ILLEGAL_TRANSITION)
-
     snapshot = apply_group_studio_task_card_update(
         group_id,
-        goal=goal,
+        goal=next_goal.strip(),
         background=next_background,
         constraints=next_constraints,
-        dod_checklist=next_dod,
-        card_status=card_status,
-        studio_status=studio_status,
-        awaiting_restatement=awaiting,
-        phase_before_pause=phase_before,
-        bump_revision=bump,
-        title=title,
+        dod_checklist=[item.model_dump(by_alias=True) for item in card.dod_checklist],
+        card_status="active",
+        studio_status=studio.status,
+        awaiting_restatement=False,
+        phase_before_pause=studio.phase_before_pause,
+        bump_revision=True,
+        title=studio.title,
     )
     if not snapshot:
         raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
     updated = _snapshot_to_model(snapshot)
-    if studio.status != updated.status:
-        emit_envelope(
-            group_id=group_id,
-            event_type="GROUP_STATUS",
-            payload={"from": studio.status, "to": updated.status, "reason": "task_card"},
-        )
     emit_envelope(
         group_id=group_id,
-        event_type="GROUP_TASK_CARD",
-        payload=updated.task_card.model_dump(by_alias=True),
+        event_type="GROUP_PIN",
+        payload=updated.pin.model_dump(by_alias=True),
     )
-    if dod_changed:
-        emit_envelope(
-            group_id=group_id,
-            event_type="GROUP_DOD",
-            payload={
-                "taskCardId": updated.task_card.id,
-                "dodChecklist": [
-                    item.model_dump(by_alias=True) for item in updated.task_card.dod_checklist
-                ],
-            },
-        )
-    if updated.status == "awaiting_human" and studio.status != "awaiting_human":
-        from src.group_studio.interrupt import cancel_active_run
-        from src.group_studio.notify import KIND_AWAITING, notify_studio
-
-        cancel_active_run(group_id, source="task_card")
-        from src.group_studio.speaker_queue import clear_queue
-
-        clear_queue(group_id, kind="restatement")
-        notify_studio(updated.model_dump(by_alias=True), kind=KIND_AWAITING, body="目标已变更，请确认复述。")
-        schedule_host_turn(group_id)
     return updated.task_card
 
 
 def add_member(group_id: str, request: GroupMemberCreateRequest) -> Membership:
-    """加人：Workspace 归属、Job 过滤、人数硬顶 6、Host 哨兵不可当 Worker。drafting 可预邀，入座但不发言。"""
+    """加人。open/paused 都可；不加入当前进行中的队列。"""
 
     studio = _load_studio(group_id)
     if request.project_id and request.project_id != studio.project_id:
         raise GroupStudioError(422, CROSS_PROJECT_SESSION)
     assert_can_mutate(studio.status)
+    if request.agent_id == "default":
+        raise GroupStudioError(403, DEFAULT_AGENT_FORBIDDEN)
     if request.agent_id == GROUP_STUDIO_HOST_AGENT_ID:
         raise GroupStudioError(409, HOST_REQUIRED)
 
     worker = _resolve_worker(request.agent_id, studio.workspace_id)
     existing = find_group_studio_member_by_agent(group_id, worker["id"])
     if existing is not None:
-        return Membership.model_validate(existing)
+        if str(existing.get("status") or "") == "crashed":
+            row = set_group_studio_member_status(
+                group_id,
+                str(existing["id"]),
+                "active",
+                refresh_joined_at=True,
+            )
+            membership = Membership.model_validate(row or existing)
+            emit_envelope(
+                group_id=group_id,
+                event_type="GROUP_MEMBER",
+                payload={**membership.model_dump(by_alias=True), "change": "reactivated"},
+            )
+            return membership
+        raise GroupStudioError(409, ALREADY_MEMBER)
 
     if count_group_studio_active_members(group_id) >= max_members():
         raise GroupStudioError(409, MEMBER_CAP)
@@ -520,8 +445,13 @@ def add_member(group_id: str, request: GroupMemberCreateRequest) -> Membership:
     return membership
 
 
+# ---------------------------------------------------------------------------
+# 以下为 V1 遗留入口。路由改 410 之前先留着，禁止往这里加新逻辑。
+# ---------------------------------------------------------------------------
+
+
 def prepare_start_execution(group_id: str, project_id: str) -> GroupStudio:
-    """进入执行期。"""
+    """V1 遗留：进入执行期。V2 没有执行阶段。"""
 
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
@@ -536,7 +466,7 @@ def prepare_start_execution(group_id: str, project_id: str) -> GroupStudio:
 
 
 def prepare_start_review(group_id: str, project_id: str) -> GroupStudio:
-    """进入验收期。"""
+    """V1 遗留：进入验收期。"""
 
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
@@ -552,7 +482,7 @@ def prepare_start_review(group_id: str, project_id: str) -> GroupStudio:
 
 
 def _dod_complete(studio: GroupStudio) -> bool:
-    """未设验收清单视为已完成；有条目则必须全部勾选。"""
+    """V1 遗留：DoD 是否勾完。"""
 
     items = studio.task_card.dod_checklist
     if not items:
@@ -561,7 +491,7 @@ def _dod_complete(studio: GroupStudio) -> bool:
 
 
 def propose_close(group_id: str, *, project_id: str = "") -> GroupStudio:
-    """进入 closing，任务卡冻结 Goal/约束，DoD 仍可勾。"""
+    """V1 遗留：进入 closing。"""
 
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
@@ -595,50 +525,37 @@ def propose_close(group_id: str, *, project_id: str = "") -> GroupStudio:
 
 
 def close_studio(group_id: str, *, project_id: str, confirm: bool) -> GroupStudio:
-    """confirm=false 进入 closing；confirm=true 在 DoD 齐后归档。"""
+    """confirm=true 结束房间为 done 并走归档记忆。"""
 
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
-    if not confirm:
-        if studio.status == "closing":
-            return studio
-        if studio.status != "reviewing":
-            raise GroupStudioError(409, ILLEGAL_TRANSITION)
-        return propose_close(group_id, project_id=project_id)
-    if studio.status == "archived":
+    if studio.status == "done":
         return studio
-    if studio.status != "closing":
+    if studio.status not in {"open", "paused"}:
+        raise GroupStudioError(409, STUDIO_NOT_OPEN)
+    if not confirm:
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    if not _dod_complete(studio):
-        raise GroupStudioError(409, DOD_INCOMPLETE)
     from src.group_studio.interrupt import cancel_active_run
     from src.group_studio.notify import KIND_COMPLETED, notify_studio
+    from src.group_studio.speaker_queue import clear_queue
 
     cancel_active_run(group_id, source="pause")
-    archive_group_studio(group_id)
+    clear_queue(group_id, kind="interrupt")
+    archive_group_studio(group_id, status="done")
     from src.group_studio.sessions import drop_group_tool_contexts
 
     drop_group_tool_contexts(group_id)
     emit_envelope(
         group_id=group_id,
-        event_type="GROUP_DOD",
-        payload={
-            "taskCardId": studio.task_card.id,
-            "dodChecklist": [item.model_dump(by_alias=True) for item in studio.task_card.dod_checklist],
-        },
-    )
-    emit_envelope(
-        group_id=group_id,
         event_type="GROUP_STATUS",
-        payload={"from": "closing", "to": "archived", "reason": "close_confirm"},
+        payload={"from": studio.status, "to": "done", "reason": "close"},
     )
     snapshot = get_studio(group_id)
     notify_studio(
         snapshot.model_dump(by_alias=True),
         kind=KIND_COMPLETED,
-        body=studio.task_card.goal or studio.title,
+        body=studio.pin.goal or studio.title,
     )
-    # 归档后把 Goal + 黑板结论 + DoD 当作一轮完成对话沉淀进记忆（后台，不阻塞）。
     from src.group_studio.archive_memory import schedule_archive_memory
 
     schedule_archive_memory(snapshot)
@@ -701,7 +618,7 @@ def _emit_human_timeline_message(
 
 
 def request_intake_confirm(group_id: str) -> GroupStudio:
-    """Host 提请人类确认密度。不切 discussing。"""
+    """V1 遗留：Host 提请确认 intake。"""
 
     studio = _load_studio(group_id)
     if studio.status != "drafting":
@@ -718,7 +635,7 @@ def request_intake_confirm(group_id: str) -> GroupStudio:
 
 
 def confirm_intake(group_id: str, *, project_id: str) -> GroupStudio:
-    """人类确认密度后进入 discussing。"""
+    """V1 遗留：确认 intake 后进 discussing。"""
 
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
@@ -766,34 +683,92 @@ def confirm_intake(group_id: str, *, project_id: str) -> GroupStudio:
 
 
 def post_human_message(group_id: str, *, project_id: str, body: str, mentions: list[str] | None = None) -> GroupMessage:
-    """人类输入。paused 只入列；否则 inline interrupt 后派 Host。"""
-
-    from src.group_studio.intake import IntakePhraseResult, maybe_confirm_intake
+    """人类输入：取消当前生成，按 mentions 重算队列，只跑 Worker。"""
 
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
-    if studio.status == "circuit_broken":
-        raise GroupStudioError(409, STUDIO_CIRCUIT_BROKEN)
-    if studio.status in {"archived", "failed"}:
-        raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    queued = studio.status == "paused"
-    if not queued:
-        from src.group_studio.interrupt import cancel_active_run
+    if studio.status in {"done", "deleted"}:
+        raise GroupStudioError(409, STUDIO_NOT_OPEN)
+    from src.group_studio.interrupt import cancel_active_run
+    from src.group_studio.speaker_queue import build_turn_queue, clear_queue, set_queue
 
-        cancel_active_run(group_id, source="human_message")
-        from src.group_studio.speaker_queue import clear_queue
+    if studio.status == "paused":
+        update_group_studio_state(group_id, status="open", clear_phase_before_pause=True)
+        emit_envelope(
+            group_id=group_id,
+            event_type="GROUP_STATUS",
+            payload={"from": "paused", "to": "open", "reason": "human_message"},
+        )
+        studio = get_studio(group_id)
 
-        clear_queue(group_id, kind="interrupt")
+    cancel_active_run(group_id, source="human_message")
+    clear_queue(group_id, kind="interrupt")
     text = body.strip()
+    if not text:
+        raise GroupStudioError(422, "empty_body")
+    mentions = [str(item).strip() for item in (mentions or []) if str(item).strip()]
     message = _emit_human_timeline_message(group_id, text, mentions=mentions)
-    if not queued:
-        phrase = maybe_confirm_intake(studio, text)
-        if phrase is IntakePhraseResult.confirmed:
-            confirm_intake(group_id, project_id=project_id)
-            return message
-        if studio.status in {"drafting", "discussing", "executing", "reviewing", "awaiting_human"}:
-            schedule_host_turn(group_id)
+    if not studio.title or studio.title == "未命名工作室":
+        apply_group_studio_task_card_update(
+            group_id,
+            goal=studio.task_card.goal,
+            background=studio.task_card.background,
+            constraints=list(studio.task_card.constraints),
+            dod_checklist=[item.model_dump(by_alias=True) for item in studio.task_card.dod_checklist],
+            card_status="active",
+            studio_status="open",
+            awaiting_restatement=False,
+            phase_before_pause=None,
+            bump_revision=False,
+            title=text[:40] + ("..." if len(text) > 40 else ""),
+        )
+
+    snapshot = get_group_studio_snapshot(group_id) or {}
+    queue, kind = build_turn_queue(snapshot, mentions)
+    if mentions and not queue:
+        emit_envelope(
+            group_id=group_id,
+            event_type="GROUP_ERROR",
+            payload={"code": NO_ELIGIBLE_SPEAKER, "message": "点到的人现在不能发言（已静音、已移出或不在群里）。"},
+        )
+        _emit_system_notice(group_id, "点到的人现在不能发言（已静音、已移出或不在群里）。")
+        return message
+    if not mentions and not queue:
+        _emit_system_notice(group_id, "还没有可以发言的成员，请先在右侧把人拉进来。")
+        return message
+    set_queue(group_id, queue, kind=kind)
+    schedule_next(group_id)
     return message
+
+
+def _emit_system_notice(group_id: str, text: str) -> None:
+    """时间线系统提示，不调度工人。"""
+
+    row = insert_group_studio_message({
+        "id": _new_id("gmsg"),
+        "groupId": group_id,
+        "speakerId": "system",
+        "role": "system",
+        "intent": "system_notice",
+        "body": text,
+        "visibleInTimeline": True,
+    })
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_MESSAGE_OPEN",
+        payload={
+            "messageId": row["id"],
+            "speakerId": "system",
+            "role": "system",
+            "intent": "system_notice",
+            "visibleInTimeline": True,
+        },
+    )
+    emit_envelope(
+        group_id=group_id,
+        event_type="GROUP_MESSAGE_CLOSE",
+        payload={"messageId": row["id"], "body": text, "outcome": "completed"},
+    )
 
 
 def interrupt_run(group_id: str, *, project_id: str) -> None:
@@ -810,65 +785,59 @@ def interrupt_run(group_id: str, *, project_id: str) -> None:
 
 
 def pause_studio(group_id: str, *, project_id: str) -> GroupStudio:
-    """暂停工作室并取消当前 Run。"""
+    """暂停：取消当前 Run，保留队列。"""
 
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
-    if studio.status in {"paused", "archived", "failed"}:
+    if studio.status != "open":
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
     from src.group_studio.interrupt import cancel_active_run
 
     cancel_active_run(group_id, source="pause")
-    from src.group_studio.speaker_queue import clear_queue
-
-    clear_queue(group_id, kind="interrupt")
-    previous = studio.status
     snapshot = update_group_studio_state(
         group_id,
         status="paused",
-        phase_before_pause=previous,
+        phase_before_pause="user",
     )
     emit_envelope(
         group_id=group_id,
         event_type="GROUP_STATUS",
-        payload={"from": previous, "to": "paused", "reason": "pause"},
+        payload={"from": "open", "to": "paused", "reason": "human_pause"},
     )
     return _snapshot_to_model(snapshot)
 
 
 def resume_studio(group_id: str, *, project_id: str, max_turns: int | None = None) -> GroupStudio:
-    """从 paused / circuit_broken 恢复。"""
+    """从暂停恢复。有残留队列就继续跑。"""
 
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
-    if studio.status not in {"paused", "circuit_broken"}:
+    if studio.status != "paused":
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    nxt = studio.phase_before_pause or "discussing"
-    if nxt not in {"drafting", "discussing", "executing", "reviewing", "awaiting_human"}:
-        nxt = "discussing"
     budget = studio.budget.model_dump(by_alias=True)
     budget["noProgressTurns"] = 0
-    if max_turns is not None:
+    if studio.pause_reason == "circuit" or studio.phase_before_pause == "circuit":
+        budget["maxTurns"] = max(int(budget.get("maxTurns") or 40) + 20, int(max_turns or 0) or 0)
+    elif max_turns is not None:
         budget["maxTurns"] = int(max_turns)
     snapshot = update_group_studio_state(
         group_id,
-        status=nxt,
+        status="open",
         clear_phase_before_pause=True,
         budget=budget,
     )
     emit_envelope(
         group_id=group_id,
         event_type="GROUP_STATUS",
-        payload={"from": studio.status, "to": nxt, "reason": "resume"},
+        payload={"from": "paused", "to": "open", "reason": "human_resume"},
     )
     updated = _snapshot_to_model(snapshot)
-    if nxt in {"drafting", "discussing", "executing", "reviewing", "awaiting_human"}:
-        schedule_host_turn(group_id)
+    schedule_next(group_id)
     return updated
 
 
 def confirm_restatement(group_id: str, *, project_id: str) -> GroupStudio:
-    """人类确认 Host 复述后恢复阶段。"""
+    """V1 遗留：确认 Host 复述。"""
 
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
@@ -901,11 +870,14 @@ def confirm_restatement(group_id: str, *, project_id: str) -> GroupStudio:
 
 
 def _assert_project(studio: GroupStudio, project_id: str) -> None:
+    """请求 project_id 必须与房间一致。"""
+
     if project_id and project_id != studio.project_id:
         raise GroupStudioError(422, CROSS_PROJECT_SESSION)
 
 
 def _blackboard_inner(payload: dict) -> dict:
+    """V1 遗留：抽出黑板可比较字段。"""
     return {
         "taskCardId": payload.get("taskCardId") or "",
         "goal": payload.get("goal") or "",
@@ -924,7 +896,7 @@ def patch_blackboard(
     source_message_id: str | None = None,
     source_run_id: str | None = None,
 ) -> dict:
-    """合并黑板补丁。丢弃未决问题会抛 `open_questions_dropped`。"""
+    """V1 遗留：合并黑板。V2 第一版不写黑板。"""
 
     studio = _load_studio(group_id)
     assert_can_mutate(studio.status)
@@ -974,7 +946,7 @@ def record_worker_delivery(
     run_id: str,
     message_id: str,
 ) -> None:
-    """执行/验收期工人交稿后写入黑板，并登记 workspace/outputs 新文件。"""
+    """V1 遗留：执行期交稿写黑板。V2 工人只发言，不走这里。"""
 
     text = str(body or "").strip()
     if not text:
@@ -1107,6 +1079,17 @@ def mute_member(
         run_id=run_id,
         payload={**membership.model_dump(by_alias=True), "change": "muted" if muted else "unmuted"},
     )
+    if muted:
+        from src.group_studio.speaker_queue import drop_member
+
+        drop_member(group_id, member_id)
+        if studio.current_run_id:
+            from src.group_studio.interrupt import cancel_active_run
+
+            cancel_active_run(group_id, source="stop_button")
+            from src.group_studio.scheduler import schedule_next
+
+            schedule_next(group_id)
     return membership
 
 
@@ -1139,19 +1122,32 @@ def remove_member(
         run_id=run_id,
         payload={**membership.model_dump(by_alias=True), "change": "removed"},
     )
+    from src.group_studio.speaker_queue import drop_member
+
+    drop_member(group_id, member_id)
+    if studio.current_run_id:
+        from src.group_studio.interrupt import cancel_active_run
+
+        cancel_active_run(group_id, source="stop_button")
+        from src.group_studio.scheduler import schedule_next
+
+        schedule_next(group_id)
     return membership
 
 
 def list_studio_files(group_id: str) -> list[dict]:
+    """列出工作室产物。"""
+
     _load_studio(group_id)
     return list_group_studio_artifacts(group_id)
 
 
 def update_studio_model(group_id: str, project_id: str, model_config_id: str) -> GroupStudio:
-    """工作室进入运行阶段前允许切换模型。"""
+    """无当前 Run 时允许切换模型。"""
+
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
-    if studio.status not in {"drafting", "discussing"} or studio.current_run_id:
+    if studio.status not in {"open", "paused"} or studio.current_run_id:
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
     from src.config.runtime_settings import resolve_model_binding
     resolve_model_binding(model_config_id)
@@ -1183,7 +1179,7 @@ async def upload_studio_file(
     project_id: str = "",
     created_by: str = "human",
 ) -> GroupArtifact:
-    """上传到工作室 inputs/，并写入黑板 artifact 列表。"""
+    """上传到工作室 inputs/。产物入库；不再写黑板。"""
 
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
@@ -1212,5 +1208,4 @@ async def upload_studio_file(
         event_type="GROUP_FILE",
         payload=artifact.model_dump(by_alias=True),
     )
-    patch_blackboard(group_id, {"addArtifactIds": [artifact.id]})
     return artifact

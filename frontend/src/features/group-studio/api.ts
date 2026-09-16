@@ -7,6 +7,7 @@ import type {
   GroupStudioListItem,
   GroupStudioMember,
   GroupStudioMessage,
+  GroupStudioPin,
   GroupStudioSettings,
   GroupStudioSnapshot,
 } from './types';
@@ -40,7 +41,8 @@ export async function fetchStudioByChat(sessionId: string): Promise<GroupStudioS
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法查询工作室'));
   }
-  return await response.json() as GroupStudioSnapshot | null;
+  const payload = await response.json() as GroupStudioSnapshot | null;
+  return payload ? normalizeSnapshot(payload) : null;
 }
 
 export async function fetchGroupStudio(groupId: string): Promise<GroupStudioSnapshot> {
@@ -48,7 +50,7 @@ export async function fetchGroupStudio(groupId: string): Promise<GroupStudioSnap
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法加载工作室'));
   }
-  return await response.json() as GroupStudioSnapshot;
+  return normalizeSnapshot(await response.json());
 }
 
 export async function fetchAvailableStudioAgents(groupId: string): Promise<GroupStudioAgentOption[]> {
@@ -65,40 +67,29 @@ export async function updateStudioModel(groupId: string, projectId: string, mode
     body: JSON.stringify({ projectId, modelConfigId }),
   });
   if (!response.ok) throw new Error(await readDetail(response, '无法切换群聊模型'));
-  return await response.json() as GroupStudioSnapshot;
+  return normalizeSnapshot(await response.json());
 }
 
-export async function updateTaskCard(groupId: string, input: {
+export async function updateStudioPin(groupId: string, input: {
   projectId: string;
   goal?: string;
   background?: string;
-  constraints?: string[];
-  dodChecklist?: GroupStudioSnapshot['taskCard']['dodChecklist'];
-}): Promise<GroupStudioSnapshot['taskCard']> {
-  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/task-card`, {
+}): Promise<GroupStudioPin> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/pin`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
   });
   if (!response.ok) {
-    throw new Error(await readDetail(response, '无法更新任务卡'));
+    throw new Error(await readDetail(response, '无法更新置顶备注'));
   }
-  return await response.json() as GroupStudioSnapshot['taskCard'];
-}
-
-export async function confirmStudioIntake(
-  groupId: string,
-  projectId: string,
-): Promise<GroupStudioSnapshot> {
-  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/confirm-intake`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId }),
-  });
-  if (!response.ok) {
-    throw new Error(await readDetail(response, '无法确认开始'));
-  }
-  return await response.json() as GroupStudioSnapshot;
+  const card = await response.json() as { goal?: string; background?: string; updatedAt?: string };
+  return {
+    title: '',
+    goal: card.goal || '',
+    notes: card.background || '',
+    updatedAt: card.updatedAt || '',
+  };
 }
 
 export async function muteStudioMember(groupId: string, memberId: string, input: {
@@ -220,7 +211,7 @@ export async function pauseStudio(groupId: string, projectId: string): Promise<G
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法暂停工作室'));
   }
-  return await response.json() as GroupStudioSnapshot;
+  return normalizeSnapshot(await response.json());
 }
 
 export async function resumeStudio(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
@@ -232,7 +223,7 @@ export async function resumeStudio(groupId: string, projectId: string): Promise<
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法恢复工作室'));
   }
-  return await response.json() as GroupStudioSnapshot;
+  return normalizeSnapshot(await response.json());
 }
 
 export async function interruptStudio(groupId: string, projectId: string): Promise<void> {
@@ -253,9 +244,9 @@ export async function closeStudio(groupId: string, projectId: string, confirm: b
     body: JSON.stringify({ projectId, confirm }),
   });
   if (!response.ok) {
-    throw new Error(await readDetail(response, '无法结项'));
+    throw new Error(await readDetail(response, '无法结束群聊'));
   }
-  return await response.json() as GroupStudioSnapshot;
+  return normalizeSnapshot(await response.json());
 }
 
 export async function deleteStudio(groupId: string, projectId: string): Promise<void> {
@@ -266,30 +257,6 @@ export async function deleteStudio(groupId: string, projectId: string): Promise<
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法删除群聊'));
   }
-}
-
-export async function startStudioReview(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
-  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/start-review`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId }),
-  });
-  if (!response.ok) {
-    throw new Error(await readDetail(response, '无法进入验收'));
-  }
-  return await response.json() as GroupStudioSnapshot;
-}
-
-export async function confirmStudioRestatement(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
-  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/confirm-restatement`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectId }),
-  });
-  if (!response.ok) {
-    throw new Error(await readDetail(response, '无法确认复述'));
-  }
-  return await response.json() as GroupStudioSnapshot;
 }
 
 export async function decideStudioApproval(groupId: string, input: {
@@ -328,9 +295,9 @@ export async function createStudioFromChat(input: {
   projectId: string;
   chatSessionId: string;
   agentId: string;
-  draftText: string;
-  filePaths: string[];
-  reuseBlankDraft?: boolean;
+  draftText?: string;
+  filePaths?: string[];
+  title?: string;
 }): Promise<GroupStudioSnapshot> {
   const response = await fetch('/api/group-studio/from-chat', {
     method: 'POST',
@@ -340,7 +307,7 @@ export async function createStudioFromChat(input: {
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法进入工作室'));
   }
-  return await response.json() as GroupStudioSnapshot;
+  return normalizeSnapshot(await response.json());
 }
 
 const GROUP_STUDIO_ERROR_TEXT: Record<string, string> = {
@@ -348,29 +315,19 @@ const GROUP_STUDIO_ERROR_TEXT: Record<string, string> = {
   group_studio_disabled: '群聊工作室未开启',
   cross_project_session: '当前会话属于其他 Project，无法升级为工作室',
   job_agent_forbidden: 'Job Agent 不能进入工作室',
+  default_agent_forbidden: '系统默认助手不能入群，请用普通 Chat Agent',
   agent_not_bound: '当前 Agent 未绑定到此 Project',
   member_cap: '工作室人数已达上限',
-  goal_required: '请先和主持人把目标说清楚',
-  drafting_no_floor: '还在对谈中，主持人会继续问你',
-  intake_not_confirmed: '确认开始后才能派发言或进入执行',
-  intake_not_ready: '主持人还没有请你确认开始',
-  intake_worker_forbidden: '对谈期工人还不能发言',
-  host_required: '不能静音或移除主持人',
-  open_questions_dropped: '未决问题不能从黑板上抹掉',
+  already_member: '这个人已经在群里',
+  no_eligible_speaker: '点到的人现在不能发言（已静音、已移出或不在群里）。',
+  studio_not_open: '这间群聊已经结束',
+  empty_body: '请先写点内容再发送',
   invalid_upload: '文件过大或路径不合法',
   approval_not_pending: '这条审批已经处理过了',
   worker_session_lost: '工人会话已丢失，请重新发起这一轮',
   studio_paused: '工作室已暂停',
-  studio_circuit_broken: '工作室已熔断，请先恢复',
-  not_awaiting_restatement: '当前不需要确认复述',
-  restatement_missing: '主持人还没有复述新目标',
-  dod_incomplete: '请先勾齐验收清单再结项',
-  illegal_transition: '当前阶段不能做这个操作',
+  illegal_transition: '现在不能做这个操作',
   not_found: '找不到这个工作室或成员',
-  member_not_found: '找不到这个成员',
-  work_item_claimed: '这项工作已被认领',
-  work_item_not_owned: '这项工作不属于当前工人',
-  floor_not_granted: '现在还没轮到这个人发言',
   model_not_configured: '还没有配置可用模型',
   approval_batch_incomplete: '还有审批未处理完',
 };
@@ -387,4 +344,17 @@ export async function readDetail(response: Response, fallback: string): Promise<
     return friendlyGroupStudioError(detail, fallback);
   }
   return fallback;
+}
+
+function normalizeSnapshot(raw: GroupStudioSnapshot & {
+  taskCard?: { goal?: string; background?: string };
+  pin?: GroupStudioPin;
+}): GroupStudioSnapshot {
+  const pin = raw.pin ?? {
+    title: raw.title || '',
+    goal: raw.taskCard?.goal || '',
+    notes: raw.taskCard?.background || '',
+    updatedAt: raw.updatedAt,
+  };
+  return { ...raw, pin };
 }

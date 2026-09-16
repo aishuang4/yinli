@@ -1,4 +1,4 @@
-/** 编辑任务目标弹窗：写作面板，而不是裸表单。 */
+/** 编辑置顶备注。可空，不挡发言。 */
 
 import { useEffect, useState } from 'react';
 import { Modal } from '@/components/design';
@@ -31,13 +31,13 @@ export function StudioGoalModal({
 
   return (
     <Modal
-      title="编辑目标"
+      title="置顶备注"
       open={open}
       onCancel={onClose}
       onOk={() => onSave(draft.trim())}
       okText="保存"
       confirmLoading={saving}
-      okButtonProps={{ disabled: locked || !draft.trim() }}
+      okButtonProps={{ disabled: locked }}
       cancelButtonProps={{ style: { display: 'none' } }}
       width={520}
       className="group-studio-sheet-modal"
@@ -50,11 +50,11 @@ export function StudioGoalModal({
           autoSize={{ minRows: 6, maxRows: 14 }}
           value={draft}
           disabled={locked || saving}
-          placeholder="例如：给出能否买入的结论，含仓位和失效条件。"
+          placeholder="可选。空着也不影响大家说话。"
           onChange={(event) => setDraft(event.target.value)}
         />
         <div className="group-studio-editor__footer">
-          <span>写清楚要交付什么。主持人会按这个目标拆任务。</span>
+          <span>只是置顶备注，改它不会打断正在说的人。</span>
           <span>{draft.trim().length} 字</span>
         </div>
       </div>

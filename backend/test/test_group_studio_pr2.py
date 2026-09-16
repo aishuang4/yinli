@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.skip(reason="V1 阶段机已由 V2 替换，见 test_group_studio_v2.py")
+
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-import pytest
 
 from src.group_studio.errors import (
     AGENT_NOT_BOUND,

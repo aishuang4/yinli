@@ -309,13 +309,8 @@ def _worker_memory_prompt(snapshot: dict[str, Any], *, agent_id: str, agent_name
 def _worker_memory_recall(snapshot: dict[str, Any], *, agent_id: str, agent_name: str, duty: str) -> str:
     """按任务卡目标 + 开放工作项召回历史记忆；群聊事件暂不写 run_events，这里不做审计。"""
 
-    card = snapshot.get("taskCard") or {}
-    items = [
-        str(item.get("title") or "")
-        for item in (snapshot.get("workItems") or [])
-        if item.get("status") in {"open", "claimed"}
-    ]
-    query = " ".join(part for part in [str(card.get("goal") or ""), *items] if part)
+    pin = snapshot.get("pin") or snapshot.get("taskCard") or {}
+    query = str(pin.get("goal") or pin.get("title") or "")
     if duty == "claim" or not query.strip():
         return ""
     try:
@@ -335,20 +330,19 @@ def _worker_memory_recall(snapshot: dict[str, Any], *, agent_id: str, agent_name
 
 
 def _worker_system_prompt(snapshot: dict[str, Any], member: dict[str, Any]) -> str:
-    card = snapshot.get("taskCard") or {}
-    board = snapshot.get("blackboard") or {}
+    pin = snapshot.get("pin") or snapshot.get("taskCard") or {}
+    names = [
+        str(item.get("displayName") or item.get("agentId") or "")
+        for item in (snapshot.get("members") or [])
+        if item.get("status") != "removed"
+    ]
     return (
-        f"你是群聊工作室的执行成员「{member.get('displayName') or member.get('agentId')}」。\n"
-        "先读黑板，再行动。讨论期用文字或 group_post_message 发言；"
-        "执行期可以读写文件和跑命令，最后必须 group_post_message 交付；"
-        "系统会把交稿摘要写入黑板，你仍必须发群消息。\n"
-        f"目标：{card.get('goal') or ''}\n"
-        f"约束：{card.get('constraints') or []}\n"
-        f"未决问题：{[item.get('text') for item in (board.get('openQuestions') or []) if not item.get('resolved')]}\n"
-        "对群可见的发言只写结论与证据，不要把内心推理过程写进正文。\n"
-        "口头「我来」无效，必须 group_claim_work_item。"
-        "认领轮只认领或跳过，不要写交付文件。"
-        "被点名干活时先 claim 再做，最后 group_complete_work_item 和 group_post_message。\n"
+        f"你是群聊成员「{member.get('displayName') or member.get('agentId')}」，不是主持人。\n"
+        "说完必须调用 group_post_message。不要指挥别人，不要等待主持人。\n"
+        f"置顶：{pin.get('goal') or pin.get('title') or '（无）'}\n"
+        f"备注：{pin.get('notes') or pin.get('background') or ''}\n"
+        f"当前成员：{names}\n"
+        "对群可见的发言只写结论，不要把内心推理写进正文。\n"
         "不要调用 AskUser 或 FinalAnswerStart。"
     )
 
@@ -359,46 +353,10 @@ def _worker_user_message(
     *,
     duty: str = "queue",
 ) -> str:
-    card = snapshot.get("taskCard") or {}
-    status = str(snapshot.get("status") or "")
-    items = snapshot.get("workItems") or []
-    open_items = [
-        f"{item.get('id')}:{item.get('title')}"
-        for item in items
-        if item.get("status") in {"open", "claimed"}
-    ]
-    if duty == "claim":
-        return (
-            "这是认领回合，认领或说跳过，不要开工；用 group_claim_work_item，最后 group_post_message。"
-            f"开放工作项：{open_items}\n"
-            f"{format_turn_context(snapshot)}"
-        )
-    rework_items = [
-        f"{item.get('id')}:{item.get('title')} — 验收意见：{item.get('reviewNote') or ''}"
-        for item in items
-        if item.get("reviewStatus") == "rework"
-        and item.get("status") in {"open", "claimed"}
-        and str(item.get("assigneeMemberId") or "") == str(member.get("id") or "")
-    ]
-    if rework_items:
-        return (
-            "你的交付被退回，请按验收意见补做：先 group_claim_work_item 重新认领（若尚未认领），"
-            "修改后 group_complete_work_item 并 group_post_message 说明改了什么。\n"
-            f"退回项：{rework_items}\n"
-            f"目标：{card.get('goal') or ''}\n"
-            f"{format_turn_context(snapshot)}"
-        )
-    if status == "executing":
-        return (
-            f"请推进执行并在结束时 group_post_message 汇报。"
-            f"目标：{card.get('goal') or ''}\n"
-            f"{format_turn_context(snapshot)}"
-        )
+    pin = snapshot.get("pin") or snapshot.get("taskCard") or {}
     return (
-        f"轮到你发言。简要给出看法或方案，并用 group_post_message 发到群里。"
-        f"若有 open 工作项，先 group_claim_work_item 再干活。"
-        f"目标：{card.get('goal') or ''}\n"
-        f"工作项：{open_items}\n"
+        "轮到你发言。用 group_post_message 发到群里，然后结束。\n"
+        f"置顶：{pin.get('goal') or pin.get('title') or '（无）'}\n"
         f"{format_turn_context(snapshot)}"
     )
 
@@ -698,6 +656,7 @@ async def _run_worker_turn(
     if interrupted:
         return
     if run_status == "completed":
+        # V1 交稿写黑板；V2 房间是 open，record_worker_delivery 会直接返回。
         from src.group_studio.service import record_worker_delivery
 
         record_worker_delivery(
