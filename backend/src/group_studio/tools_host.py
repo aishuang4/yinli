@@ -231,7 +231,7 @@ class GroupPatchBlackboard(HostTool):
 
 
 def _assert_intake_confirmed(group_id: str) -> str:
-    """drafting 下禁止邀请/点名/发布工作项。"""
+    """drafting 下禁止点名、发布或取消工作项；预邀工人已放开。"""
 
     snapshot = get_group_studio_snapshot(group_id) or {}
     if str(snapshot.get("status") or "") == "drafting":
@@ -539,7 +539,11 @@ class GroupListAvailableAgents(HostTool):
 
 class GroupInviteMember(HostTool):
     name = "group_invite_member"
-    description = "Invite an existing project Agent as a worker. Do not invite the host sentinel. agentId comes from group_list_available_agents."
+    description = (
+        "Invite an existing project Agent as a worker. Allowed during intake drafting; "
+        "invited workers sit silently until the human confirms start. "
+        "Do not invite the host sentinel. agentId comes from group_list_available_agents."
+    )
     input_schema = {
         "type": "object",
         "properties": {
@@ -550,9 +554,6 @@ class GroupInviteMember(HostTool):
     }
 
     async def __call__(self, agentId: str, displayName: str = "") -> ToolChunk:
-        blocked = _assert_intake_confirmed(self.ctx.group_id)
-        if blocked:
-            return self.error(blocked)
         if agentId == GROUP_STUDIO_HOST_AGENT_ID:
             return self.error(HOST_REQUIRED)
         from src.group_studio.models import GroupMemberCreateRequest

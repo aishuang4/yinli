@@ -19,8 +19,12 @@ def _read_group_studio_settings() -> dict[str, Any]:
 
 
 def is_group_studio_enabled() -> bool:
-    """读取 group_studio.enabled；缺省或未写入时为 true。"""
+    """产品档 surfaces.groupStudio 与 json_store enabled 同时开启才可用。"""
 
+    from src.config.product_features import is_surface_enabled
+
+    if not is_surface_enabled("groupStudio"):
+        return False
     return bool(_read_group_studio_settings().get("enabled", True))
 
 

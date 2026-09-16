@@ -15,7 +15,6 @@ from src.group_studio.errors import (
     GROUP_STUDIO_NOT_FOUND,
     HOST_REQUIRED,
     ILLEGAL_TRANSITION,
-    INTAKE_NOT_CONFIRMED,
     INTAKE_NOT_READY,
     JOB_AGENT_FORBIDDEN,
     MEMBER_CAP,
@@ -351,15 +350,15 @@ def archive_studio_for_session_delete(group_id: str) -> None:
 
 
 def delete_studio(group_id: str, *, project_id: str) -> None:
-    """删除群聊：归档其领域数据并从当前群聊列表移除。"""
+    """删除群聊：标为 deleted，不再出现在群聊历史。"""
 
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
     if studio.current_run_id:
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    if studio.status == "archived":
+    if studio.status == "deleted":
         return
-    archive_group_studio(group_id)
+    archive_group_studio(group_id, status="deleted")
     from src.group_studio.sessions import drop_group_tool_contexts
 
     drop_group_tool_contexts(group_id)
@@ -486,14 +485,12 @@ def update_task_card(group_id: str, request: GroupTaskCardUpdateRequest) -> Task
 
 
 def add_member(group_id: str, request: GroupMemberCreateRequest) -> Membership:
-    """加人：Workspace 归属、Job 过滤、人数硬顶 6、Host 哨兵不可当 Worker。"""
+    """加人：Workspace 归属、Job 过滤、人数硬顶 6、Host 哨兵不可当 Worker。drafting 可预邀，入座但不发言。"""
 
     studio = _load_studio(group_id)
     if request.project_id and request.project_id != studio.project_id:
         raise GroupStudioError(422, CROSS_PROJECT_SESSION)
     assert_can_mutate(studio.status)
-    if studio.status == "drafting":
-        raise GroupStudioError(409, INTAKE_NOT_CONFIRMED)
     if request.agent_id == GROUP_STUDIO_HOST_AGENT_ID:
         raise GroupStudioError(409, HOST_REQUIRED)
 
@@ -568,11 +565,15 @@ def propose_close(group_id: str, *, project_id: str = "") -> GroupStudio:
 
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
+    if studio.status == "closing":
+        return studio
     if studio.status not in {"reviewing", "discussing", "executing"}:
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    from src.group_studio.interrupt import cancel_active_run
+    # 不要 cancel 当前 Host Run：工具是在该 Run 内调用的，cancel 会把本轮打成
+    # pause / 空气泡，前端看起来像报错。清队列即可，避免收口后再派工人。
+    from src.group_studio.speaker_queue import clear_queue
 
-    cancel_active_run(group_id, source="pause")
+    clear_queue(group_id, kind="propose_close")
     apply_group_studio_task_card_update(
         group_id,
         goal=studio.task_card.goal,
@@ -599,9 +600,13 @@ def close_studio(group_id: str, *, project_id: str, confirm: bool) -> GroupStudi
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
     if not confirm:
+        if studio.status == "closing":
+            return studio
         if studio.status != "reviewing":
             raise GroupStudioError(409, ILLEGAL_TRANSITION)
         return propose_close(group_id, project_id=project_id)
+    if studio.status == "archived":
+        return studio
     if studio.status != "closing":
         raise GroupStudioError(409, ILLEGAL_TRANSITION)
     if not _dod_complete(studio):

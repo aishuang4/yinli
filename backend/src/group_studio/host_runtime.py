@@ -136,13 +136,14 @@ def _host_system_prompt(snapshot: dict[str, Any]) -> str:
             f"约束：{card.get('constraints') or []}\n"
             f"验收：{card.get('dodChecklist') or []}\n"
             f"当前成员（工人入座但不发言）：\n{member_lines}\n"
-            f"可建议邀请的项目 Agent：\n{invite_lines}\n"
+            f"可预邀的项目 Agent：\n{invite_lines}\n"
             "可用工具：group_read_task_card、group_read_blackboard、group_patch_blackboard、"
             "group_update_task_card、group_request_intake_confirm、group_list_available_agents、"
-            "group_mute_member、group_remove_member。\n"
+            "group_invite_member、group_mute_member、group_remove_member。\n"
             "根据人类最近消息追问目标、约束、验收和范围。信息落到任务卡时必须 group_update_task_card，"
             "不要只用 group_patch_blackboard.goal。默认给出 3～7 条 DoD；用户说不要验收就把 dodChecklist 写成空数组。\n"
-            "可以口头建议拉谁，但不要 group_invite_member、不要 group_assign_floor、不要 group_start_execution。\n"
+            "人类或你都可以 group_invite_member 预邀工人入座；他们在人类确认开始前不会发言。"
+            "不要 group_assign_floor、不要 group_publish_work_items、不要 group_start_execution。\n"
             "目标已有且你认为密度够了：调用 group_request_intake_confirm，请用户说「开始 / 就这样」或点右侧确认。"
             "空 DoD 允许确认。用户过早说开始：列出缺口，不要 group_request_intake_confirm。Goal 仍空是硬条件。\n"
             "对群可见的发言只写结论和问题，不要把内心推理过程写进正文。不要调用 AskUser 或 FinalAnswerStart。"
@@ -386,6 +387,9 @@ async def _run_host_discussion(
         return ""
     if run_status != "completed":
         return ""
+    snapshot = get_group_studio_snapshot(group_id, message_limit=1) or {}
+    if str(snapshot.get("status") or "") == "closing":
+        return ""
     from src.group_studio.workboard import finalize_host_dispatch
 
     finalize_host_dispatch(ctx, group_id)
@@ -419,7 +423,7 @@ def _host_turn_user_message(snapshot: dict[str, Any]) -> str:
         awaiting = bool(snapshot.get("awaitingIntakeConfirm"))
         return (
             "当前是 intake 对谈，还没有开始群聊。只和人类把任务卡写清楚。"
-            "写卡用 group_update_task_card；不要进入执行、不要点名、不要邀请。"
+            "写卡用 group_update_task_card；可以 group_invite_member 预邀工人入座，但不要点名、不要进入执行。"
             f"目标：{card.get('goal') or '（空）'}。"
             f"{'你已提请确认，等待人类点确认或说开始。' if awaiting else '目标仍空：继续问。目标已有且你认为密度够：group_request_intake_confirm（空 DoD 允许）。'}"
             "人类刚要求开始但你尚未提请确认：拦住并列出缺口（Goal 仍是硬条件；约束/范围由你判断）。\n"

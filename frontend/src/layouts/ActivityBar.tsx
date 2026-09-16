@@ -12,6 +12,8 @@
  */
 
 import { MessageSquare, Bot, Wrench, Package, Settings, Sun, Moon, Activity, FlaskConical, ListRestart, Brain, Network, GitBranch, CalendarClock } from 'lucide-react';
+import { isViewEnabled } from '../stores/productFeatures';
+import { useProductFeaturesStore } from '../stores/productFeaturesStore';
 import { useAppStore, type ViewType } from '../stores/appStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { cn } from '../utils/cn';
@@ -63,6 +65,7 @@ const navButtonStyle = {
 export function ActivityBar() {
   const currentView = useAppStore((s) => s.currentView);
   const setView = useAppStore((s) => s.setView);
+  const features = useProductFeaturesStore((s) => s.features);
   const theme = useSettingsStore((s) => s.theme);
   const toggleTheme = useSettingsStore((s) => s.toggleTheme);
 
@@ -82,7 +85,7 @@ export function ActivityBar() {
     >
       {/* 顶部导航项 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        {Object.values(NAV_ITEMS).map((item) => {
+        {Object.values(NAV_ITEMS).filter((item) => isViewEnabled(features, item.id)).map((item) => {
           const isActive = currentView === item.id;
           const Icon = item.icon;
           return (

@@ -1,0 +1,23 @@
+{
+  "_comment": "打包前由管理员修改本文件，决定安装后对用户开放哪些入口。true=开放，false=隐藏入口并关闭对应页面 API。chat / settings 强制开启，写 false 也不会关掉。改完后重新打包；开发机改完重启后端即可。Chat 运行时 /api/chat/runs、Agent/Skill/MCP 执行时 API 不随页面关闭。上线建议可参考同目录 product-features.packaging.example.json。",
+  "views": {
+    "chat": true,
+    "runs": false,
+    "traces": true,
+    "sandbox": false,
+    "jobs": true,
+    "memory": true,
+    "agents": true,
+    "tools": true,
+    "mcp": true,
+    "skills": true,
+    "subagents": true,
+    "settings": true
+  },
+  "surfaces": {
+    "workflow": true,
+    "groupStudio": false,
+    "teamMode": true,
+    "planMode": true
+  }
+}

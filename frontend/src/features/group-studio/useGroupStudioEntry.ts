@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState, type RefObject } from 'react';
 import { useAppStore } from '../../stores/appStore';
+import { isSurfaceEnabled } from '../../stores/productFeatures';
+import { useProductFeaturesStore } from '../../stores/productFeaturesStore';
 import { createId } from '../../utils/id';
 import { getErrorMessage, notifyError } from '../../utils/feedback';
 import type { ChatFileAttachment } from '../chat/types';
@@ -50,12 +52,14 @@ export function useGroupStudioEntry({
   const studioTransition = useAppStore((state) => state.studioTransition);
   const openGroupStudio = useAppStore((state) => state.openGroupStudio);
   const closeGroupStudio = useAppStore((state) => state.closeGroupStudio);
+  const productEnabled = useProductFeaturesStore((state) => isSurfaceEnabled(state.features, 'groupStudio'));
   const [flagEnabled, setFlagEnabled] = useState(false);
   const [existingStudio, setExistingStudio] = useState<GroupStudioSnapshot | null>(null);
   const [entering, setEntering] = useState(false);
   const isMac = window.electronAPI?.getPlatform() === 'darwin'
     || (!window.electronAPI && /Mac/i.test(navigator.platform));
   const shortcutLabel = isMac ? '⌘⇧G' : 'Ctrl+Shift+G';
+  const enabled = flagEnabled && productEnabled;
   const inStudio = studioSurface === 'group-studio' || studioTransition.startsWith('enter');
   const busy = studioTransition !== 'idle' || entering;
 
@@ -78,7 +82,7 @@ export function useGroupStudioEntry({
   }, []);
 
   useEffect(() => {
-    if (!flagEnabled || !activeSessionId) {
+    if (!enabled || !activeSessionId) {
       setExistingStudio(null);
       return;
     }
@@ -97,10 +101,10 @@ export function useGroupStudioEntry({
     return () => {
       mounted = false;
     };
-  }, [activeSessionId, flagEnabled, studioSurface]);
+  }, [activeSessionId, enabled, studioSurface]);
 
   const enterStudio = useCallback(async () => {
-    if (!flagEnabled || busy || workspaceMode !== 'workstation') {
+    if (!enabled || busy || workspaceMode !== 'workstation') {
       return;
     }
     if (chatRunBlocking) {
@@ -159,7 +163,7 @@ export function useGroupStudioEntry({
     chatRunBlocking,
     draftText,
     fileAttachments,
-    flagEnabled,
+    enabled,
     hasImages,
     openGroupStudio,
     setActiveSessionId,
@@ -168,7 +172,7 @@ export function useGroupStudioEntry({
   ]);
 
   const handleToggle = useCallback(() => {
-    if (!flagEnabled || workspaceMode !== 'workstation') {
+    if (!enabled || workspaceMode !== 'workstation') {
       return;
     }
     if (busy) {
@@ -179,10 +183,10 @@ export function useGroupStudioEntry({
       return;
     }
     void enterStudio();
-  }, [busy, closeGroupStudio, enterStudio, flagEnabled, inStudio, workspaceMode]);
+  }, [busy, closeGroupStudio, enterStudio, enabled, inStudio, workspaceMode]);
 
   useGroupStudioHotkey({
-    enabled: flagEnabled,
+    enabled,
     isComposingRef,
     onToggle: handleToggle,
   });
@@ -196,7 +200,7 @@ export function useGroupStudioEntry({
   return {
     buttonLabel,
     entering,
-    flagEnabled,
+    flagEnabled: enabled,
     handleToggle,
     inStudio,
     shortcutLabel,

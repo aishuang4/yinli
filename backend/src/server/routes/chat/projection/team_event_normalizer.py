@@ -6,6 +6,9 @@ from typing import Any
 
 from .domain_events import DomainEvent
 
+# 与 TeamStore.MAX_TASK_RETRIES 对齐，但不反向 import team_runtime，避免循环依赖。
+_RETRYABLE_FAILURE_LIMIT = 1
+
 
 class TeamEventNormalizerMixin:
     """依赖宿主提供公共 Block append/open/delta/close 原语。"""
@@ -136,19 +139,25 @@ class TeamEventNormalizerMixin:
                     parent_id=team_block_id,
                 ))
             return produced
-        if source_type in {"task.claimed", "task.unlocked"}:
-            task_block_id = self._team_task_block_id(team_id, task_id)
+        if source_type == "task.retry.scheduled":
             task = payload.get("task") if isinstance(payload.get("task"), dict) else {}
-            if task_block_id in self._active:
-                produced.append(self._delta_block(
-                    "team.task", task_id, "team-task", task,
-                    block_id=task_block_id, event_suffix="updated",
-                ))
+            produced.extend(self._revive_team_task(team_id, task_id or str(task.get("id") or ""), task, team_block_id))
+            return produced
+        if source_type in {"task.claimed", "task.unlocked"}:
+            task = payload.get("task") if isinstance(payload.get("task"), dict) else {}
+            produced.extend(self._revive_team_task(team_id, task_id or str(task.get("id") or ""), task, team_block_id))
             return produced
         if source_type in {"task.completed", "task.failed", "task.cancelled"}:
             task_block_id = self._team_task_block_id(team_id, task_id)
-            self._terminal_team_tasks.add(task_block_id)
             task = payload.get("task") if isinstance(payload.get("task"), dict) else {}
+            if source_type == "task.failed" and bool(task.get("retryable", True)) and int(task.get("retryCount") or 0) < _RETRYABLE_FAILURE_LIMIT:
+                if task_block_id in self._active:
+                    produced.append(self._delta_block(
+                        "team.task", task_id, "team-task", task,
+                        block_id=task_block_id, event_suffix="updated",
+                    ))
+                return produced
+            self._terminal_team_tasks.add(task_block_id)
             outcome = "failed" if source_type == "task.failed" else (
                 "cancelled" if source_type == "task.cancelled" else "completed"
             )

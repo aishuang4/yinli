@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from src.config.model_catalog import CatalogConflict, public_catalog, save_catalog
+from src.config.product_features import load_product_features
 from src.group_studio.settings import (
     get_group_studio_settings_public,
     set_group_studio_settings,
@@ -15,6 +16,13 @@ from src.scheduler.settings import (
 from src.scheduler.ticker import apply_scheduler_enabled
 
 router = APIRouter()
+
+
+@router.get("/product-features")
+async def get_product_features() -> dict:
+    """读取打包期产品功能档；运行时只读，不落 SQLite。"""
+
+    return load_product_features().as_public_dict()
 
 
 @router.get("/models")

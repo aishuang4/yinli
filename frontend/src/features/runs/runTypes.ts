@@ -22,6 +22,7 @@ export interface RunSummary {
   resultLength: number;
   memberTotal: number;
   memberCompleted: number;
+  error: string;
 }
 
 export interface RunDetail extends RunSummary {

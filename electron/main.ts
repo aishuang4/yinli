@@ -360,6 +360,7 @@ async function ensurePythonBackend(): Promise<boolean> {
 
     backendInstanceId = randomUUID();
     appendDesktopLog('electron-main.log', `Starting backend from ${backendProcess.command}`);
+    const productFeaturesPath = resolveProductFeaturesPath();
     const env = {
       ...process.env,
       PYTHONUNBUFFERED: '1',
@@ -369,6 +370,9 @@ async function ensurePythonBackend(): Promise<boolean> {
       AGENT_WORKSTATION_DATABASE_URL: `sqlite+aiosqlite:///${path.join(dataPath, 'agent_workstation.db')}`,
       AGENT_WORKSTATION_PORT: String(backendPort),
       AGENT_WORKSTATION_CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000","null","file://"]',
+      ...(productFeaturesPath
+        ? { AGENT_WORKSTATION_PRODUCT_FEATURES_PATH: productFeaturesPath }
+        : {}),
     };
 
     pythonProcess = spawn(backendProcess.command, backendProcess.args, {
@@ -441,6 +445,19 @@ interface BackendProcessConfig {
   command: string;
   args: string[];
   cwd: string;
+}
+
+/** 安装包 extraResources 中的产品档；开发模式回退仓库 config。 */
+function resolveProductFeaturesPath(): string | undefined {
+  const packaged = path.join(process.resourcesPath, 'product-features.json');
+  if (app.isPackaged && fs.existsSync(packaged)) {
+    return packaged;
+  }
+  const repoFile = path.join(__dirname, '..', '..', 'config', 'product-features.json');
+  if (fs.existsSync(repoFile)) {
+    return repoFile;
+  }
+  return undefined;
 }
 
 function resolvePackagedBackendProcess(): BackendProcessConfig | null {

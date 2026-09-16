@@ -113,11 +113,8 @@ export function RunsPage() {
       setDetail(null);
       return;
     }
-    setDetailLoading(true);
-    window.setTimeout(() => {
-      setDetail({ ...selectedRun, events: [] });
-      setDetailLoading(false);
-    }, 0);
+    setDetail({ ...selectedRun, events: [] });
+    setDetailLoading(false);
   }, [selectedRun]);
 
   if (!selectedRunId) {

@@ -68,6 +68,35 @@ def _enter_reviewing(client: TestClient, group_id: str) -> None:
     assert reviewing.json()["status"] == "reviewing"
 
 
+def test_propose_close_does_not_cancel_current_host_run(client):
+    studio = _create_discussing(client, "sess-close-keep-run")
+    group_id = studio["id"]
+    _enter_reviewing(client, group_id)
+    insert_group_studio_run({
+        "id": "grun_host_close",
+        "groupId": group_id,
+        "kind": "discussion",
+        "status": "running",
+        "speakerMemberId": studio["members"][0]["id"],
+    })
+    set_group_studio_current_run_id(group_id, "grun_host_close")
+
+    closing = client.post(f"/api/group-studio/{group_id}/close", json={
+        "projectId": DEFAULT_PROJECT_ID,
+        "confirm": False,
+    })
+    assert closing.status_code == 200, closing.text
+    assert closing.json()["status"] == "closing"
+
+    snapshot = get_group_studio_snapshot(group_id)
+    assert snapshot is not None
+    assert snapshot["currentRunId"] == "grun_host_close"
+    assert not any(
+        item["type"] == "GROUP_INTERRUPT"
+        for item in list_group_studio_events_after(group_id, 0)
+    )
+
+
 def test_empty_dod_can_confirm_close(client):
     studio = _create_discussing(client, "sess-empty-dod")
     group_id = studio["id"]
@@ -103,6 +132,12 @@ def test_close_requires_review_then_complete_dod(client):
     assert closing.status_code == 200, closing.text
     assert closing.json()["status"] == "closing"
     assert closing.json()["taskCard"]["status"] == "frozen_for_close"
+    again = client.post(f"/api/group-studio/{group_id}/close", json={
+        "projectId": DEFAULT_PROJECT_ID,
+        "confirm": False,
+    })
+    assert again.status_code == 200
+    assert again.json()["status"] == "closing"
 
     added = client.put(f"/api/group-studio/{group_id}/task-card", json={
         "projectId": DEFAULT_PROJECT_ID,
@@ -131,6 +166,14 @@ def test_close_requires_review_then_complete_dod(client):
     assert archived.status_code == 200, archived.text
     assert archived.json()["status"] == "archived"
     assert get_active_group_studio_by_chat_session("sess-close") is None
+    listed = client.get("/api/group-studio", params={"projectId": DEFAULT_PROJECT_ID})
+    assert listed.status_code == 200
+    assert any(item["id"] == group_id and item["status"] == "archived" for item in listed.json()["studios"])
+
+    deleted = client.delete(f"/api/group-studio/{group_id}", params={"projectId": DEFAULT_PROJECT_ID})
+    assert deleted.status_code == 204
+    listed_after = client.get("/api/group-studio", params={"projectId": DEFAULT_PROJECT_ID})
+    assert group_id not in [item["id"] for item in listed_after.json()["studios"]]
 
     again = client.post("/api/group-studio/from-chat", json={
         "projectId": DEFAULT_PROJECT_ID,
@@ -141,6 +184,22 @@ def test_close_requires_review_then_complete_dod(client):
     assert again.status_code == 200
     assert again.json()["id"] != group_id
     assert again.json()["status"] == "drafting"
+
+
+def test_from_chat_session_messages_are_readable(client):
+    created = client.post("/api/group-studio/from-chat", json={
+        "projectId": DEFAULT_PROJECT_ID,
+        "chatSessionId": "sess-readable",
+        "agentId": "default",
+        "draftText": "写方案",
+    })
+    assert created.status_code == 200
+    messages = client.get(
+        "/api/chat/sessions/sess-readable/messages",
+        params={"projectId": DEFAULT_PROJECT_ID},
+    )
+    assert messages.status_code == 200
+    assert messages.json() == []
 
 
 def test_catalog_attaches_group_studio_hint(client):

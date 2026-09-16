@@ -13,6 +13,7 @@ from src.agents.factory import RuntimeToolScope
 from src.server.routes.chat.hitl import build_automatic_confirm_resume
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import ChatRunContext
+from src.server.routes.chat.prompts import _build_file_attachments_user_note
 from src.server.routes.chat.runtime import _build_user_content, _guardrail_cache_key
 from src.server.routes.chat.runtime_events import (
     agentscope_reply_error_message,
@@ -27,7 +28,13 @@ from src.server.routes.chat.runtime_governance import (
     prepare_agent_governance,
     record_memory_recall_audit,
 )
-from src.server.routes.chat.team_runtime.store import MAX_TASK_RESULT_CHARS, TERMINAL_TASK_STATUSES, TeamStore
+from src.server.routes.chat.team_runtime.store import (
+    MAX_TASK_RESULT_CHARS,
+    MAX_TEAM_MEMBERS,
+    MAX_TEAM_TASKS,
+    TERMINAL_TASK_STATUSES,
+    TeamStore,
+)
 from src.server.routes.chat.team_runtime.tools import leader_tools, member_tools
 from src.server.routes.chat.trace_recorder import _make_fallback_trace_recorder
 
@@ -41,7 +48,9 @@ DISABLED_TOOL_SCOPE = RuntimeToolScope(
     allow_web=False,
 )
 MAX_AUTOMATIC_TOOL_DENIALS = 8
-LEADER_MAX_REACT_ITERS = 16
+# Leader 常把 spawn / create_task 各算一轮；复杂依赖图再加邮件/列表查询会吃很多轮。
+# 真正干活的是 Member（256）；这里只给协调阶段留足预算，仍有上限避免空转。
+LEADER_MAX_REACT_ITERS = 64
 MEMBER_MAX_REACT_ITERS = 256
 MEMBER_RECOVERY_MAX_REACT_ITERS = 8
 SYNTHESIS_MAX_REACT_ITERS = 8
@@ -85,27 +94,33 @@ async def run_leader_coordination(
         max_react_iters=LEADER_MAX_REACT_ITERS,
         skill_context=False,
     )
-    await _run_agent_stream(
-        agent=agent,
-        user_msg=UserMsg(
-            name="user",
-            content=_build_user_content(
-                append_user_note(
-                    f"为本轮目标组建团队并创建共享任务：\n{run_data.message}",
-                    ctx.memory_recall_text,
+    try:
+        await _run_agent_stream(
+            agent=agent,
+            user_msg=UserMsg(
+                name="user",
+                content=_build_user_content(
+                    append_user_note(
+                        f"为本轮目标组建团队并创建共享任务：\n{run_data.message}",
+                        # 含本轮 <attached_files> 路径 + 记忆召回，和单 Agent 同一段 user_message_note。
+                        str(getattr(ctx, "user_message_note", "") or ctx.memory_recall_text),
+                    ),
+                    run_data.images,
                 ),
-                run_data.images,
             ),
-        ),
-        store=store,
-        actor_id="leader",
-        task_id="",
-        flush_events=flush_events,
-        stop_after_tool_name="team_finish_coordination",
-        on_model_call=_model_call_observer(ctx, scope="team_leader", agent_id="leader", agent_name=ctx.agent_name),
-    )
+            store=store,
+            actor_id="leader",
+            task_id="",
+            flush_events=flush_events,
+            stop_after_tool_name="team_finish_coordination",
+            on_model_call=_model_call_observer(ctx, scope="team_leader", agent_id="leader", agent_name=ctx.agent_name),
+        )
+    except TeamSessionError:
+        if not _finish_coordination_if_ready(store, reason="Leader session 在调用 team_finish_coordination 前结束"):
+            raise
     if store.run().get("phase") != "executing":
-        raise TeamSessionError("Leader 未调用 team_finish_coordination")
+        if not _finish_coordination_if_ready(store, reason="Leader 未调用 team_finish_coordination"):
+            raise TeamSessionError("Leader 未调用 team_finish_coordination")
     store.set_member_status("leader", "idle")
     await flush_events()
 
@@ -167,7 +182,17 @@ async def run_member_task(
         user_msg=UserMsg(
             name="user",
             content=_build_user_content(
-                append_user_note(_member_user_prompt(store, member_id, task), member_recall_text),
+                append_user_note(
+                    _member_user_prompt(store, member_id, task),
+                    "\n\n".join(
+                        part
+                        for part in (
+                            _build_file_attachments_user_note(getattr(run_data, "files", None) or []),
+                            member_recall_text,
+                        )
+                        if part
+                    ),
+                ),
                 run_data.images,
             ),
         ),
@@ -601,16 +626,42 @@ def _build_team_tool_denial(
     )
 
 
+def _coordination_ready(store: TeamStore) -> bool:
+    """已有临时成员和至少一条任务时，协调阶段可以收口。"""
+
+    members = [member for member in store.members() if member.get("id") != "leader"]
+    return bool(members) and bool(store.tasks())
+
+
+def _finish_coordination_if_ready(store: TeamStore, *, reason: str) -> bool:
+    """Leader 没显式收口、但任务图已经能跑时，自动进入 executing，避免整轮在协调阶段失败。"""
+
+    if store.run().get("phase") == "executing":
+        return True
+    if not _coordination_ready(store):
+        return False
+    store.set_phase("executing")
+    store.record_member_event(
+        "member.iteration.recovery",
+        member_id="leader",
+        status="recovering",
+        payload={"reason": reason, "autoFinish": True},
+    )
+    return True
+
+
 def _leader_system_prompt(store: TeamStore, run_data: ChatMessage) -> str:
     return "\n".join([
         "You are the coordination-only Leader of a one-off TeamRun.",
         f"TeamRun goal: {run_data.message}",
         "Create temporary members with names, roles, capability boundaries, and dynamic runtime prompts tailored to this goal.",
+        f"Hard limits: at most {MAX_TEAM_MEMBERS} members and {MAX_TEAM_TASKS} tasks. If the user asks for more people, assign multiple tasks to one member instead of spawning extra members.",
+        "Prefer multiple tool calls in one turn. Create one task per user-requested role; do not invent extra tasks.",
         "Create tasks using exact returned task IDs for dependencies.",
         "Model communication prerequisites explicitly: if A must message B before B can work, create A's communication task first and make B depend on it.",
         "Never create a task that waits for a member whose own task is blocked by that waiting task.",
         "Do not perform deliverable work yourself and do not answer the user.",
-        "When member creation and task planning are complete, call team_finish_coordination.",
+        "As soon as the required members and tasks exist, call team_finish_coordination in the same turn. Do not list, poll, or keep creating tasks.",
         "After team_finish_coordination succeeds, do not poll tasks or mailbox; the runtime starts members mechanically.",
         f"TeamRun id: {store.ref.id}",
     ])

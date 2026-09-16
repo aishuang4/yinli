@@ -6,6 +6,8 @@
  */
 
 import { create } from 'zustand';
+import { isSurfaceEnabled, isViewEnabled } from './productFeatures';
+import { useProductFeaturesStore } from './productFeaturesStore';
 
 /** 应用视图类型（对应 Activity Bar 选项） */
 export type ViewType = 'chat' | 'runs' | 'jobs' | 'traces' | 'sandbox' | 'agents' | 'subagents' | 'tools' | 'mcp' | 'skills' | 'memory' | 'settings';
@@ -94,8 +96,18 @@ export const useAppStore = create<AppState>()((set) => ({
   localStudioSeed: null,
 
   // Actions
-  setView: (view) => set({ currentView: view }),
-  setWorkspaceMode: (mode) => set({ workspaceMode: mode }),
+  setView: (view) => {
+    const features = useProductFeaturesStore.getState().features;
+    set({ currentView: isViewEnabled(features, view) ? view : 'chat' });
+  },
+  setWorkspaceMode: (mode) => {
+    const features = useProductFeaturesStore.getState().features;
+    if (mode === 'workflow' && !isSurfaceEnabled(features, 'workflow')) {
+      set({ workspaceMode: 'workstation', currentView: 'chat' });
+      return;
+    }
+    set({ workspaceMode: mode });
+  },
   toggleDetailPanel: () =>
     set((state) => ({ detailPanelOpen: !state.detailPanelOpen })),
   setBackendConnected: (connected) => set({ backendConnected: connected }),
@@ -103,13 +115,22 @@ export const useAppStore = create<AppState>()((set) => ({
     activeWorkspaceId,
     activeProjectId,
   }),
-  openScheduledJob: (jobId) => set({
-    currentView: 'jobs',
-    workspaceMode: 'workstation',
-    pendingJobId: jobId,
-  }),
+  openScheduledJob: (jobId) => {
+    const features = useProductFeaturesStore.getState().features;
+    if (!isViewEnabled(features, 'jobs')) {
+      return;
+    }
+    set({
+      currentView: 'jobs',
+      workspaceMode: 'workstation',
+      pendingJobId: jobId,
+    });
+  },
   clearPendingJobId: () => set({ pendingJobId: null }),
   openGroupStudio: (groupId, seed) => set((state) => {
+    if (!isSurfaceEnabled(useProductFeaturesStore.getState().features, 'groupStudio')) {
+      return state;
+    }
     const nextBase = {
       currentView: 'chat' as const,
       workspaceMode: 'workstation' as const,

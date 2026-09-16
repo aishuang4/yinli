@@ -95,7 +95,7 @@ Intake 对谈、FIFO 点名队列、`group_work_items` 认领已在线。下面�
 - [ ] 完成 Electron 签名、公证、安装包过滤、日志和异常展示。
 - [ ] 将运行时数据稳定迁移到 Electron `userData`，并设计备份与恢复。
 - [ ] 评估桌面自动更新。
-- [ ] 拆分 RunsPage 和 ChatPage 的高复杂度区域。
+- [ ] 独立 Runs 页由 `config/product-features.json` 的 `views.runs` 控制（默认关）；若重新打开入口，再拆分 RunsPage 和 ChatPage 的高复杂度区域。
 - [ ] 抽取卡片式 tab、可选择列表项、时间线节点和工具条按钮组。
 - [ ] 增加非 Chat 表单与超大组件的轻量自动检查。
 - [ ] 在仓库打 `v0.1.0-beta.1` tag 并按 `docs/beta-release-checklist.md` 在 macOS arm64 / Windows 真机逐项验收；当前仓库没有任何 tag。

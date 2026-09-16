@@ -26,6 +26,7 @@ MUTATION_BLOCKED = {
     "circuit_broken": STUDIO_CIRCUIT_BROKEN,
     "archived": ILLEGAL_TRANSITION,
     "failed": ILLEGAL_TRANSITION,
+    "deleted": ILLEGAL_TRANSITION,
 }
 
 

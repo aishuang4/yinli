@@ -16,8 +16,9 @@ import { App as AntdApp } from 'antd';
 import { StyleProvider } from '@ant-design/cssinjs';
 import { ConfigProvider, Spinner } from '@/components/design';
 import { carbonDarkTheme, carbonTheme } from '@/components/design/theme';
-import { useAppStore } from './stores/appStore';
-import type { ViewType } from './stores/appStore';
+import { useAppStore, type ViewType } from './stores/appStore';
+import { isSurfaceEnabled, isViewEnabled } from './stores/productFeatures';
+import { useProductFeaturesStore } from './stores/productFeaturesStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { getDesktopApiOrigin, setDesktopApiOrigin } from './utils/apiUrl';
 import { AppLayout } from './layouts/AppLayout';
@@ -73,6 +74,7 @@ const MAX_CACHED_VIEWS = 3;
 export function App() {
   const currentView = useAppStore((s) => s.currentView);
   const workspaceMode = useAppStore((s) => s.workspaceMode);
+  const backendConnected = useAppStore((s) => s.backendConnected);
   const setBackendConnected = useAppStore((s) => s.setBackendConnected);
   const theme = useSettingsStore((s) => s.theme);
   const backendUrl = useSettingsStore((s) => s.backendUrl);
@@ -186,6 +188,22 @@ export function App() {
   }, [backendUrl, desktopApiOriginReady, setBackendConnected]);
 
   useEffect(() => {
+    if (!backendConnected) {
+      return;
+    }
+    void useProductFeaturesStore.getState().refresh().then(() => {
+      const features = useProductFeaturesStore.getState().features;
+      const { currentView: view, workspaceMode: mode, setView, setWorkspaceMode } = useAppStore.getState();
+      if (!isViewEnabled(features, view)) {
+        setView('chat');
+      }
+      if (!isSurfaceEnabled(features, 'workflow') && mode === 'workflow') {
+        setWorkspaceMode('workstation');
+      }
+    });
+  }, [backendConnected]);
+
+  useEffect(() => {
     setCachedViews((views) => nextCachedViews(views, currentView));
   }, [currentView]);
 
@@ -229,11 +247,14 @@ interface WorkspacePagesProps {
 function WorkspacePages({ workspaceMode, activeView, cachedViews }: WorkspacePagesProps) {
   const studioSurface = useAppStore((state) => state.studioSurface);
   const studioTransition = useAppStore((state) => state.studioTransition);
+  const features = useProductFeaturesStore((state) => state.features);
   useStudioTransition();
-  const workflowActive = workspaceMode === 'workflow';
+  const workflowAllowed = isSurfaceEnabled(features, 'workflow');
+  const studioAllowed = isSurfaceEnabled(features, 'groupStudio');
+  const workflowActive = workflowAllowed && workspaceMode === 'workflow';
   const studioBusy = studioTransition !== 'idle';
   const chatActive = !workflowActive && activeView === 'chat';
-  const studioVisible = chatActive && (studioSurface === 'group-studio' || studioBusy);
+  const studioVisible = studioAllowed && chatActive && (studioSurface === 'group-studio' || studioBusy);
   const workstationVisible = !workflowActive && (!chatActive || studioSurface === 'none' || studioBusy);
   return (
     <div
@@ -249,23 +270,27 @@ function WorkspacePages({ workspaceMode, activeView, cachedViews }: WorkspacePag
       >
         <CachedPages activeView={activeView} cachedViews={cachedViews} />
       </section>
-      <section
-        className="app-workspace-pane app-workspace-pane--group-studio"
-        aria-hidden={!studioVisible}
-        hidden={!studioVisible}
-      >
-        <Suspense fallback={<PageSkeleton />}>
-          <GroupStudioPage />
-        </Suspense>
-      </section>
-      <section
-        className="app-workspace-pane app-workspace-pane--workflow"
-        aria-hidden={!workflowActive}
-      >
-        <Suspense fallback={<PageSkeleton />}>
-          <WorkflowPage />
-        </Suspense>
-      </section>
+      {studioAllowed ? (
+        <section
+          className="app-workspace-pane app-workspace-pane--group-studio"
+          aria-hidden={!studioVisible}
+          hidden={!studioVisible}
+        >
+          <Suspense fallback={<PageSkeleton />}>
+            <GroupStudioPage />
+          </Suspense>
+        </section>
+      ) : null}
+      {workflowAllowed ? (
+        <section
+          className="app-workspace-pane app-workspace-pane--workflow"
+          aria-hidden={!workflowActive}
+        >
+          <Suspense fallback={<PageSkeleton />}>
+            <WorkflowPage />
+          </Suspense>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -303,11 +328,12 @@ interface CachedPagesProps {
 }
 
 function CachedPages({ activeView, cachedViews }: CachedPagesProps) {
+  const features = useProductFeaturesStore((state) => state.features);
   const uniqueCachedViews = Array.from(new Set(cachedViews));
   return (
     <div className="h-full min-h-0 overflow-hidden">
       {uniqueCachedViews.map((view) => {
-        const PageComponent = VIEW_PAGES[view] ?? ChatPage;
+        const PageComponent = isViewEnabled(features, view) ? (VIEW_PAGES[view] ?? ChatPage) : ChatPage;
         const active = view === activeView;
         return (
           <section

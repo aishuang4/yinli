@@ -3,6 +3,10 @@ from pathlib import Path
 
 import pytest
 
+from agentscope.permission import PermissionBehavior, PermissionContext
+from agentscope.permission._types import PermissionMode
+
+from src.agents.factory import AgentGuardrails, _create_default_toolkit, _resolve_write_tool_base
 from src.tools.scoped_edit import ScopedEdit
 from src.tools.scoped_grep import ScopedGrep
 from src.tools.scoped_write import ScopedWrite
@@ -128,3 +132,42 @@ def test_scoped_grep_falls_back_when_ripgrep_is_unavailable(tmp_path: Path, monk
     assert chunk.state.value == "success"
     assert "兼容模式" in chunk.content[0].text
     assert "Needle value" in chunk.content[0].text
+
+
+def test_write_check_permissions_denies_instead_of_raising_when_base_outside_scope(tmp_path: Path):
+    """Team 旧配置把 session 当 Write base、成员目录当 scope，权限检查不得抛错打断 session。"""
+
+    session = tmp_path / "session"
+    member_dir = session / "team" / "member"
+    session.mkdir()
+    member_dir.mkdir(parents=True)
+    context = PermissionContext(mode=PermissionMode.ACCEPT_EDITS, working_directories={})
+    decision = asyncio.run(ScopedWrite(base_dir=str(session), scope_dir=str(member_dir)).check_permissions(
+        {"file_path": "out.md", "content": "x"},
+        context,
+    ))
+    assert decision.behavior == PermissionBehavior.DENY
+    assert "outside filesystem scope" in decision.message
+
+
+def test_write_tool_base_narrows_to_member_write_scope(tmp_path: Path):
+    """write_scope 比 session cwd 更窄时，Write/Edit 必须以私有目录为 base。"""
+
+    session = tmp_path / "session"
+    member_dir = session / "team" / "member"
+    session.mkdir()
+    member_dir.mkdir(parents=True)
+    assert _resolve_write_tool_base(str(session), str(member_dir)) == str(member_dir.resolve())
+    toolkit = _create_default_toolkit(
+        guardrails=AgentGuardrails(filesystem_scope=str(tmp_path)),
+        workspace_dir=str(session),
+        write_scope_dir=str(member_dir),
+    )
+    tools = [tool for group in toolkit.tool_groups for tool in group.tools]
+    write = next(tool for tool in tools if tool.name == "Write")
+    edit = next(tool for tool in tools if tool.name == "Edit")
+    read = next(tool for tool in tools if tool.name == "Read")
+    assert Path(write.base_dir) == member_dir.resolve()
+    assert Path(write.scope_dir) == member_dir.resolve()
+    assert Path(edit.base_dir) == member_dir.resolve()
+    assert Path(read.base_dir) == session.resolve()

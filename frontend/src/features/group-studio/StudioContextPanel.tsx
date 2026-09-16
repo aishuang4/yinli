@@ -68,7 +68,7 @@ export function StudioContextPanel({
   const speakerQueue = studio?.speakerQueue ?? [];
   const archived = studio?.status === 'archived';
   const cardLocked = !studio || studio.status === 'closing' || archived;
-  const memberAddingLocked = !studio || ['drafting', 'closing', 'archived', 'failed'].includes(studio.status);
+  const memberAddingLocked = !studio || ['closing', 'archived', 'failed'].includes(studio.status);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
   const [goalModalOpen, setGoalModalOpen] = useState(false);
   const [dodModalOpen, setDodModalOpen] = useState(false);
@@ -343,6 +343,7 @@ export function StudioContextPanel({
         adding={adding}
         addingAgentId={addingAgentId}
         canAddMembers={!memberAddingLocked}
+        drafting={studio?.status === 'drafting'}
         memberBusyId={memberBusyId}
         onClose={closeMemberModal}
         onAddMember={onAddMember}

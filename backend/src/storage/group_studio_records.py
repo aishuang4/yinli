@@ -47,7 +47,7 @@ class GroupStudioRecordStore:
             row = conn.execute(
                 """
                 SELECT id FROM group_studios
-                WHERE chat_session_id = ? AND status NOT IN ('archived', 'failed')
+                WHERE chat_session_id = ? AND status NOT IN ('archived', 'failed', 'deleted')
                 LIMIT 1
                 """,
                 (chat_session_id,),
@@ -71,7 +71,7 @@ class GroupStudioRecordStore:
                 f"""
                 SELECT id, chat_session_id, status, title FROM group_studios
                 WHERE chat_session_id IN ({placeholders})
-                  AND status NOT IN ('archived', 'failed')
+                  AND status NOT IN ('archived', 'failed', 'deleted')
                 """,
                 tuple(session_ids),
             ).fetchall()
@@ -103,8 +103,9 @@ class GroupStudioRecordStore:
     """
 
     def list_active_by_project(self, project_id: str) -> list[dict[str, Any]]:
-        """列出某 Project 下未归档工作室，供群聊侧栏独立于 Chat catalog。
+        """列出某 Project 下工作室，供群聊侧栏独立于 Chat catalog。
 
+        结项归档后仍保留，方便回看；用户删除的 `deleted` 不进历史。
         无目标、无可见消息、无产物、无 Run 的 drafting 空白稿不进历史。
         """
 
@@ -116,9 +117,10 @@ class GroupStudioRecordStore:
                        s.chat_session_id, s.updated_at
                 FROM group_studios s
                 JOIN group_task_cards t ON t.id = s.current_task_card_id
-                WHERE s.project_id = ? AND s.status NOT IN ('archived', 'failed')
+                WHERE s.project_id = ? AND s.status != 'deleted'
                   AND NOT ({self._BLANK_DRAFT_SQL})
-                ORDER BY s.updated_at DESC
+                ORDER BY CASE WHEN s.status IN ('archived', 'failed') THEN 1 ELSE 0 END,
+                         s.updated_at DESC
                 """,
                 (project_id,),
             ).fetchall()
@@ -261,7 +263,7 @@ class GroupStudioRecordStore:
             existing = conn.execute(
                 """
                 SELECT id FROM group_studios
-                WHERE chat_session_id = ? AND status NOT IN ('archived', 'failed')
+                WHERE chat_session_id = ? AND status NOT IN ('archived', 'failed', 'deleted')
                 LIMIT 1
                 """,
                 (payload["chatSessionId"],),
@@ -276,7 +278,7 @@ class GroupStudioRecordStore:
                     raced = conn.execute(
                         """
                         SELECT id FROM group_studios
-                        WHERE chat_session_id = ? AND status NOT IN ('archived', 'failed')
+                        WHERE chat_session_id = ? AND status NOT IN ('archived', 'failed', 'deleted')
                         LIMIT 1
                         """,
                         (payload["chatSessionId"],),
@@ -1209,7 +1211,7 @@ class GroupStudioRecordStore:
                        chat_session_id, title
                 FROM group_studios
                 WHERE current_run_id != ''
-                  AND status NOT IN ('archived', 'failed')
+                  AND status NOT IN ('archived', 'failed', 'deleted')
                 """,
             ).fetchall()
         return [
@@ -1225,19 +1227,20 @@ class GroupStudioRecordStore:
             for row in rows
         ]
 
-    def archive(self, group_id: str) -> None:
-        """测试与删除会话用：把工作室标为 archived。"""
+    def archive(self, group_id: str, *, status: str = "archived") -> None:
+        """把工作室标为 archived（结项保留）或 deleted（列表隐藏）。"""
 
+        next_status = status if status in {"archived", "deleted"} else "archived"
         self.ensure_db()
         now = self.utc_now()
         with self.lock, self.connect() as conn:
             conn.execute(
                 """
                 UPDATE group_studios
-                SET status = 'archived', archived_at = ?, updated_at = ?
+                SET status = ?, archived_at = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (now, now, group_id),
+                (next_status, now, now, group_id),
             )
             conn.execute(
                 """

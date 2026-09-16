@@ -26,6 +26,7 @@ from src.server.routes.chat.run_context import build_chat_run_context
 from src.server.routes.chat.runtime_dispatcher import execute_chat_runtime
 from src.server.routes.chat.startup_checks import get_startup_error
 from src.server.routes.chat.projection.source_events import SourceEvent
+from src.config.product_features import is_surface_enabled
 from src.config.runtime_settings import resolve_model_binding
 from src.server.routes.chat.store import _load_store
 
@@ -77,6 +78,10 @@ async def start_chat_run(data: ChatMessage):
         raise HTTPException(status_code=422, detail="Plan 审核与执行只支持单 Agent 模式。")
     if data.plan_action == "revise" and not data.plan_feedback.strip():
         raise HTTPException(status_code=422, detail="修改计划必须提供自然语言反馈。")
+    if data.mode == "team" and not is_surface_enabled("teamMode"):
+        raise HTTPException(status_code=403, detail="team_mode_disabled")
+    if data.plan_requested and not data.plan_action and not is_surface_enabled("planMode"):
+        raise HTTPException(status_code=403, detail="plan_mode_disabled")
     session_id = data.session_id or uuid.uuid4().hex
     try:
         runtime_context = resolve_runtime_context(

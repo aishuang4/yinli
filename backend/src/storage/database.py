@@ -251,6 +251,14 @@ def ensure_db() -> None:
                 )
             """)
             conn.executescript(BASE_SCHEMA_SQL)
+            conn.execute("DROP INDEX IF EXISTS idx_group_studios_active_chat")
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_group_studios_active_chat
+                    ON group_studios(chat_session_id)
+                    WHERE status NOT IN ('archived', 'failed', 'deleted')
+                """
+            )
             _ensure_column(conn, "group_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(
                 conn,
@@ -1300,7 +1308,7 @@ def lookup_active_group_studios_by_chat_session_ids(
 
 
 def list_group_studios_by_project(project_id: str) -> list[dict[str, Any]]:
-    """列出某 Project 未归档工作室。"""
+    """列出某 Project 工作室（含已归档，不含用户删除）。"""
 
     return _group_studio_record_store().list_active_by_project(project_id)
 
@@ -1324,10 +1332,10 @@ def list_group_studio_messages(
     return _group_studio_record_store().list_messages(group_id, before=before, limit=limit)
 
 
-def archive_group_studio(group_id: str) -> None:
-    """把工作室标为 archived。"""
+def archive_group_studio(group_id: str, *, status: str = "archived") -> None:
+    """把工作室标为 archived（结项保留）或 deleted（列表隐藏）。"""
 
-    _group_studio_record_store().archive(group_id)
+    _group_studio_record_store().archive(group_id, status=status)
 
 
 def group_studio_has_runs(group_id: str) -> bool:

@@ -13,6 +13,8 @@ import { Select, Tooltip } from '@/components/design';
 import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
 import { ContextCreateModal } from '../features/workspaces/ContextCreateModal';
 import { useAppStore, type WorkspaceMode } from '../stores/appStore';
+import { isSurfaceEnabled } from '../stores/productFeatures';
+import { useProductFeaturesStore } from '../stores/productFeaturesStore';
 import { cn } from '../utils/cn';
 import './TitleBar.css';
 
@@ -28,6 +30,8 @@ const MODE_OPTIONS: Array<{
 export function TitleBar() {
   const workspaceMode = useAppStore((s) => s.workspaceMode);
   const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
+  const workflowEnabled = useProductFeaturesStore((s) => isSurfaceEnabled(s.features, 'workflow'));
+  const modeOptions = MODE_OPTIONS.filter((option) => option.id !== 'workflow' || workflowEnabled);
   const setActiveContext = useAppStore((s) => s.setActiveContext);
   const [createOpen, setCreateOpen] = useState(false);
   const {
@@ -45,9 +49,10 @@ export function TitleBar() {
     <div
       className="titlebar"
     >
+      {modeOptions.length > 1 ? (
       <div className="titlebar__mode-switch" role="tablist" aria-label="切换产品工作空间">
         <span className="titlebar__mode-indicator" data-mode={workspaceMode} />
-        {MODE_OPTIONS.map((option) => {
+        {modeOptions.map((option) => {
           const active = option.id === workspaceMode;
           const Icon = option.icon;
           return (
@@ -65,6 +70,7 @@ export function TitleBar() {
           );
         })}
       </div>
+      ) : null}
       {workspaceMode === 'workstation' && (
         <div className="titlebar__runtime-context" title={error || undefined}>
           <Tooltip title="Workspace 资源边界">

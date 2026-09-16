@@ -26,7 +26,9 @@ from src.server.routes.chat.projection import (
     default_projection_registry,
 )
 from src.server.routes.chat.projection.frame_schema import RuntimeFrame, dump_protocol
+from src.server.routes.chat.projection.projection_writer import ProjectionConflict
 from src.server.routes.chat.projection.source_normalizer import ChatProjectionNormalizer
+from src.server.routes.chat.run_dashboard import summarize_run_dashboard
 from src.server.routes.chat.projection.source_events import SourceEvent
 from src.server.routes.chat.store import (
     _append_assistant_message,
@@ -429,6 +431,12 @@ async def relay_chat_background_run_events(
 
 
 def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
+    dashboard = summarize_run_dashboard(
+        status=run.status,
+        agent_name=run.agent_name,
+        mode=run.mode,
+        snapshot=_dashboard_snapshot(run.id),
+    )
     return {
         "id": run.id,
         "sessionId": run.session_id,
@@ -443,16 +451,21 @@ def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
         "scheduledJobId": run.scheduled_job_id,
         "scheduledFiringId": run.scheduled_firing_id,
         "status": run.status,
-        "triggerSource": run.trigger_source,
-        "scheduledJobId": run.scheduled_job_id,
-        "scheduledFiringId": run.scheduled_firing_id,
         "createdAt": run.created_at,
         "completedAt": run.completed_at,
         "eventCount": run.event_count,
         "subscriberCount": len(run.subscribers),
-        "resultPreview": "",
-        "error": "",
+        **dashboard,
     }
+
+
+def _dashboard_snapshot(run_id: str) -> dict | None:
+    """Runs 汇总只读 Snapshot；没有投影流时退回状态机。"""
+
+    try:
+        return get_chat_projection_snapshot(run_id)
+    except (KeyError, ProjectionConflict):
+        return None
 
 
 async def _consume_source_events(run: ChatBackgroundRun, factory: SourceStreamFactory) -> None:

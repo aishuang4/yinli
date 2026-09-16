@@ -31,6 +31,7 @@ import {
   deleteStudio,
   fetchAvailableStudioAgents,
   fetchGroupStudio,
+  friendlyGroupStudioError,
   fetchStudioFiles,
   fetchStudioList,
   downloadStudioFile,
@@ -96,6 +97,7 @@ const STATUS_LABEL: Record<string, string> = {
   closing: '待结项',
   archived: '已归档',
   failed: '失败',
+  deleted: '已删除',
 };
 
 function getGroupRuntimeErrorMessage(message: string): string {
@@ -106,7 +108,7 @@ function getGroupRuntimeErrorMessage(message: string): string {
   if (normalized.includes('invalid api key') || normalized.includes('invalid_api_key') || normalized.includes('authentication')) {
     return '当前供应商 Key 无效，工作室已暂停。请修正 Key 或切换模型，然后点击“继续”恢复。';
   }
-  return message;
+  return friendlyGroupStudioError(message, message);
 }
 
 export function GroupStudioPage() {
@@ -521,7 +523,7 @@ export function GroupStudioPage() {
   };
 
   const handleAddMember = async (agentId: string) => {
-    if (!studio || !agentId || ['drafting', 'closing', 'archived', 'failed'].includes(studio.status)) {
+    if (!studio || !agentId || ['closing', 'archived', 'failed'].includes(studio.status)) {
       if (studio && ['closing', 'archived', 'failed'].includes(studio.status)) {
         notifyError('项目已结项，不能再修改群聊成员');
       }
@@ -547,7 +549,12 @@ export function GroupStudioPage() {
     if (!studio) {
       return;
     }
-    void fetchAvailableStudioAgents(studio.id)
+    if (['closing', 'archived', 'failed'].includes(studio.status)) {
+      setAvailableAgents([]);
+      return;
+    }
+    void persistStudio(studio)
+      .then((persisted) => fetchAvailableStudioAgents(persisted.id))
       .then(setAvailableAgents)
       .catch((cause) => notifyError(getErrorMessage(cause, '无法加载可加入的 Agent')));
   };
@@ -766,9 +773,10 @@ export function GroupStudioPage() {
     try {
       const snapshot = await closeStudio(studio.id, studio.projectId, studio.status === 'closing');
       setStudio(snapshot);
+      await refreshStudioList();
       notifySuccess(
         snapshot.status === 'archived'
-          ? '工作室已归档'
+          ? '工作室已归档，可在左侧历史里回看。'
           : (snapshot.taskCard.dodChecklist ?? []).length > 0
             ? '已进入结项，请勾齐验收清单。'
             : '已进入结项。没有验收清单，可直接确认结项。',
@@ -1033,7 +1041,7 @@ export function GroupStudioPage() {
           </div>
 
           <StudioComposer
-            disabled={!studio || sending || studio.status === 'circuit_broken'}
+            disabled={!studio || sending || ['circuit_broken', 'closing', 'archived', 'failed', 'deleted'].includes(studio.status)}
             sending={sending}
             value={draft}
             placeholder={

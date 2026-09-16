@@ -15,12 +15,15 @@ from src.agents.factory import AgentGuardrails, AgentModelOptions
 from src.server.routes.chat.lifecycle import can_transition_run_status, waiting_status_for_interaction
 from src.server.routes.chat.team_runtime.coordinator import TeamCoordinator
 from src.server.routes.chat.team_runtime.member_runtime import (
+    LEADER_MAX_REACT_ITERS,
     MEMBER_MAX_REACT_ITERS,
     MEMBER_RECOVERY_MAX_REACT_ITERS,
     MEMBER_RECOVERY_TOOLS,
     TeamSessionError,
     _create_team_agent,
+    _finish_coordination_if_ready,
     _run_agent_stream,
+    run_leader_coordination,
 )
 from src.server.routes.chat.runtime_builder import RuntimeModelConfig
 from src.server.routes.chat.team_runtime.maintenance import (
@@ -1022,6 +1025,32 @@ def test_coordinator_retries_failed_task_once_then_partial_completes(tmp_path, m
     run = store.complete_run()
     assert run["status"] == "completed"
     assert run["partial"] is True and run["failedTaskCount"] == 2
+    assert store.member(bad["id"])["status"] == "idle"
+
+
+def test_coordinator_does_not_abort_when_blocked_tasks_exist_and_assignee_was_failed(tmp_path, monkeypatch) -> None:
+    """成员被标成 failed 时，只要还有可执行任务就不能因为下游 blocked 而整队中止。"""
+
+    store = create_store(tmp_path)
+    member = store.spawn_member(name="Worker", role="member", runtime_prompt="work")
+    ready = store.create_task(title="Ready", brief="b", created_by="leader", assigned_member_id=member["id"])
+    blocked = store.create_task(title="Blocked", brief="b", created_by="leader", depends_on=[ready["id"]])
+    store.set_member_status(member["id"], "failed")
+
+    async def fake_member_task(*, store, member, task, **_kwargs):
+        store.read_inbox(member["id"])
+        store.complete_task(task["id"], member["id"], f"result {task['id']}")
+
+    async def flush_events() -> None:
+        return None
+
+    monkeypatch.setattr("src.server.routes.chat.team_runtime.coordinator.run_member_task", fake_member_task)
+    coordinator = TeamCoordinator(store=store, ctx=SimpleNamespace(), run_data=SimpleNamespace(), flush_events=flush_events)
+    asyncio.run(coordinator.run())
+
+    assert store.task(ready["id"])["status"] == "succeeded"
+    assert store.task(blocked["id"])["status"] == "succeeded"
+    assert store.member(member["id"])["status"] == "idle"
 
 
 def test_coordinator_fails_when_every_task_fails(tmp_path, monkeypatch) -> None:
@@ -1098,3 +1127,105 @@ def test_synthesis_prompt_is_json_with_failed_tasks_and_trimmed_mail(tmp_path) -
     # 结果邮件不重复进 mailbox；长邮件被裁
     assert all(mail["kind"] != "result" for mail in payload["mailbox"])
     assert max(len(mail["content"]) for mail in payload["mailbox"]) <= 600
+
+
+def test_finish_coordination_if_ready_requires_member_and_task(tmp_path) -> None:
+    store = create_store(tmp_path)
+    assert _finish_coordination_if_ready(store, reason="empty") is False
+    assert store.run()["phase"] == "created"
+
+    store.spawn_member(name="Writer", role="writer", runtime_prompt="write")
+    assert _finish_coordination_if_ready(store, reason="no-task") is False
+
+    store.create_task(title="Draft", brief="write copy", created_by="leader")
+    assert _finish_coordination_if_ready(store, reason="ready") is True
+    assert store.run()["phase"] == "executing"
+    assert any(
+        event["type"] == "member.iteration.recovery" and event["payload"].get("autoFinish")
+        for event in store.events_after(0)
+    )
+
+
+def test_leader_coordination_autofinishes_after_max_iters(tmp_path, monkeypatch) -> None:
+    store = create_store(tmp_path)
+    member = store.spawn_member(name="Writer", role="writer", runtime_prompt="write")
+    store.create_task(title="Draft", brief="write copy", created_by="leader", assigned_member_id=member["id"])
+    captured: dict = {}
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.team_runtime.member_runtime._create_team_agent",
+        lambda **kwargs: captured.update(kwargs) or object(),
+    )
+
+    async def boom(**_kwargs):
+        raise TeamSessionError("Team session 达到最大 ReAct 轮数")
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.team_runtime.member_runtime._run_agent_stream",
+        boom,
+    )
+    ctx = SimpleNamespace(
+        agent_id="leader-agent",
+        agent_name="Leader",
+        session_id="session-new",
+        persist_run=False,
+        memory_prompt="",
+        memory_recall_text="",
+        user_message_note="",
+    )
+    run_data = SimpleNamespace(message="写一篇发布稿", images=[], files=[])
+
+    async def flush_events() -> None:
+        return None
+
+    asyncio.run(run_leader_coordination(
+        store=store,
+        ctx=ctx,
+        run_data=run_data,
+        flush_events=flush_events,
+    ))
+
+    assert captured["max_react_iters"] == LEADER_MAX_REACT_ITERS == 64
+    assert store.run()["phase"] == "executing"
+    assert store.member("leader")["status"] == "idle"
+
+
+def test_leader_coordination_still_fails_without_tasks(tmp_path, monkeypatch) -> None:
+    store = create_store(tmp_path)
+    store.spawn_member(name="Writer", role="writer", runtime_prompt="write")
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.team_runtime.member_runtime._create_team_agent",
+        lambda **_kwargs: object(),
+    )
+
+    async def boom(**_kwargs):
+        raise TeamSessionError("Team session 达到最大 ReAct 轮数")
+
+    monkeypatch.setattr(
+        "src.server.routes.chat.team_runtime.member_runtime._run_agent_stream",
+        boom,
+    )
+    ctx = SimpleNamespace(
+        agent_id="leader-agent",
+        agent_name="Leader",
+        session_id="session-new",
+        persist_run=False,
+        memory_prompt="",
+        memory_recall_text="",
+        user_message_note="",
+    )
+    run_data = SimpleNamespace(message="写一篇发布稿", images=[], files=[])
+
+    async def flush_events() -> None:
+        return None
+
+    with pytest.raises(TeamSessionError, match="最大 ReAct"):
+        asyncio.run(run_leader_coordination(
+            store=store,
+            ctx=ctx,
+            run_data=run_data,
+            flush_events=flush_events,
+        ))
+
+    assert store.run()["phase"] == "coordinating"

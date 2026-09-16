@@ -10,6 +10,8 @@
 
 import { type ComponentType, type ReactNode } from 'react';
 import { Activity, ArrowLeft, Bot, Brain, CalendarClock, FlaskConical, GitBranch, ListRestart, Network, Package, Settings, Wrench } from 'lucide-react';
+import { isSurfaceEnabled, isViewEnabled } from '../stores/productFeatures';
+import { useProductFeaturesStore } from '../stores/productFeaturesStore';
 import { useAppStore, type ViewType, type WorkspaceMode } from '../stores/appStore';
 import { TitleBar } from './TitleBar';
 import { ActivityBar } from './ActivityBar';
@@ -116,6 +118,7 @@ function WorkbenchMenu() {
   const currentView = useAppStore((s) => s.currentView);
   const setView = useAppStore((s) => s.setView);
   const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
+  const features = useProductFeaturesStore((s) => s.features);
 
   return (
     <nav
@@ -133,7 +136,12 @@ function WorkbenchMenu() {
         <span>返回 Chat</span>
       </button>
       <div className="workbench-menu-page__items">
-        {WORKBENCH_MENU_ITEMS.map((item) => {
+        {WORKBENCH_MENU_ITEMS.filter((item) => {
+          if (item.id === 'workflow') {
+            return isSurfaceEnabled(features, 'workflow');
+          }
+          return isViewEnabled(features, item.id);
+        }).map((item) => {
           const active = currentView === item.id;
           const Icon = item.icon;
           return (

@@ -132,6 +132,22 @@ def test_host_spec_includes_invite_tools(client):
     assert "group_invite_member 拉人" in spec.system_prompt
 
 
+def test_host_drafting_prompt_allows_preinvite(client):
+    created = client.post("/api/group-studio/from-chat", json={
+        "projectId": DEFAULT_PROJECT_ID,
+        "chatSessionId": "sess-pr5-draft-invite",
+        "agentId": "default",
+    })
+    studio = created.json()
+    host = next(item for item in studio["members"] if item["role"] == "host")
+    spec, _ctx, tools = build_host_runtime_spec(studio, host)
+    names = {tool.name for tool in tools}
+    assert "group_invite_member" in names
+    assert "group_invite_member 预邀" in spec.system_prompt
+    assert "不要 group_assign_floor" in spec.system_prompt
+    assert "不要 group_invite_member" not in spec.system_prompt
+
+
 class _ThinkingAgent:
     async def reply_stream(self, _message: object):
         yield _FakeEvent(type="THINKING_BLOCK_DELTA", delta="内心推理不该进正文。")

@@ -8,8 +8,12 @@ import { Tag } from '@/components/design';
 export function TraceStatus({ status }: { status: string }) {
   const Icon = status === 'failed' ? XCircle : status === 'running' || status === 'waiting' ? Clock3 : CheckCircle2;
   return (
-    <Tag size="small" color={status === 'failed' ? 'red' : status === 'waiting' ? 'orange' : 'green'}>
-      <Icon size={12} />
+    <Tag
+      size="small"
+      color={status === 'failed' ? 'red' : status === 'waiting' ? 'orange' : 'green'}
+      className="inline-flex items-center gap-1 whitespace-nowrap"
+      icon={<Icon size={12} />}
+    >
       {status}
     </Tag>
   );

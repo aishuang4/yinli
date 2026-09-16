@@ -128,13 +128,18 @@ function RunDashboard({ run }: { run: RunDetail }) {
             </span>
           ) : null}
         </div>
+        {run.error ? (
+          <div className="mb-3 rounded-lg bg-[var(--color-bg-primary)] px-3 py-3 text-sm text-[var(--color-error)]">
+            {run.error}
+          </div>
+        ) : null}
         {run.resultPreview ? (
           <div className="max-h-[360px] overflow-auto rounded-lg bg-[var(--color-bg-primary)] px-3 py-3 text-sm leading-6 text-[var(--color-text-primary)]">
             <MarkdownContent content={run.resultPreview} />
           </div>
         ) : (
           <div className="rounded-lg border border-dashed border-[var(--color-border)] px-3 py-6 text-center text-sm text-[var(--color-text-tertiary)]">
-            {ACTIVE_RUN_STATUSES.has(run.status) ? '结果生成中' : '暂无结果摘要'}
+            {ACTIVE_RUN_STATUSES.has(run.status) ? '结果生成中' : (run.error ? '本次没有可展示的回复正文' : '暂无结果摘要')}
           </div>
         )}
       </section>

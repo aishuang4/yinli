@@ -506,6 +506,22 @@ def _safe_explicit_dir(path: str | None) -> str | None:
     return expanded
 
 
+def _resolve_write_tool_base(workspace_dir: str | None, write_scope: str) -> str:
+    """Write/Edit 的 base 必须位于 scope 内。
+
+    Team Member 的 write_scope 是 session 下的私有子目录。若仍用更宽的 session
+    当 base，权限检查会判定 base 越界并抛 ValueError，直接打断整个 Member session。
+    """
+
+    scope = Path(write_scope).expanduser().resolve()
+    if not str(workspace_dir or "").strip():
+        return str(scope)
+    workspace = Path(workspace_dir).expanduser().resolve()
+    if workspace == scope or workspace.is_relative_to(scope):
+        return str(workspace)
+    return str(scope)
+
+
 def _create_mcp_clients(
     mcp_servers: list[McpRuntimeSpec],
     guardrails: AgentGuardrails | None,
@@ -578,6 +594,7 @@ def _create_default_toolkit(
     scope = tool_scope or RuntimeToolScope()
     filesystem_scope = _safe_workspace_dir(guardrails)
     write_scope = _safe_explicit_dir(write_scope_dir) or filesystem_scope
+    write_base = _resolve_write_tool_base(workspace_dir, write_scope)
     extra_scopes = list(extra_filesystem_scopes or [])
 
     local_tools = [
@@ -602,8 +619,8 @@ def _create_default_toolkit(
     ]
     if include_default_tools and not read_only:
         local_tools.extend([
-            ScopedWrite(base_dir=workspace_dir, scope_dir=write_scope, extra_scopes=extra_scopes),
-            ScopedEdit(base_dir=workspace_dir, scope_dir=write_scope, extra_scopes=extra_scopes),
+            ScopedWrite(base_dir=write_base, scope_dir=write_scope, extra_scopes=extra_scopes),
+            ScopedEdit(base_dir=write_base, scope_dir=write_scope, extra_scopes=extra_scopes),
         ])
 
     if scope.allow_bash and permission_profile.can_execute:

@@ -2,6 +2,10 @@
 
 > 更新时间：2026-09-15。本文只记录当前完成度、验证结果和已知缺口。
 
+## 2026-09-15 产品功能配置档
+
+管理员在打包前改 `config/product-features.json`，决定安装后对用户开放哪些页面和横切能力（任务流 / 群聊工作室 / Team / Plan）。前端不再写死 `OFFLINE_VIEWS`。仓库默认只关独立 Runs 页；上线建议档是 `config/product-features.packaging.example.json`（再关 Trace / Sandbox / Subagents / Workflow）。`chat` / `settings` 强制开启。关闭页面只 404 管理 API，Chat `/api/chat/runs` 仍给取消、重跑、订阅和 Team 干预用。
+
 ## 2026-09-14 上线前核查
 
 - 分支 `feat/file-catalog-agents`：后端全量 `769 passed, 2 skipped`（含本日 ReAct 上下文改造）；前端 `lint` / `build` / `vitest` 通过。`master` 上因 `e9cc7b9`（Agent 跨 Project 可用）遗留的 3 个过时测试已在本分支修复。
@@ -73,11 +77,15 @@ Team（`team_runtime/`）：
 - 失败任务自动重派一次（`store.retry_failed_task`，新 session、`lastReviewReason` 带失败原因进用户提示、runtime key 含 retryCount），仍失败保留 failed 并把依赖它的任务级联失败（`retryable=False`）；`TeamCoordinator.run()` 只要有成功任务就返回，综合阶段做部分综合（prompt 明说哪些任务未完成），`complete_run` 允许 `partial`；全部失败才抛错。`service.py` 的综合重试循环改为只在还有未结束任务时回到 coordinator，避免部分失败时死循环。
 - 上限：成员 6、任务 12（工具层拒绝并提示 Leader），单任务 10 分钟 `asyncio.wait_for` 超时，`team_submit_result` ≤ 6000 字；`create_task` 做依赖环检测。
 - 成员 Write/Edit 限制在 `<session workspace>/team/<run>/<member>/` 私有目录并写进 system prompt；综合输入改 JSON，结果邮件不重复、邮件正文裁 600 字、最多 40 封。
+- 2026-09-15 桌面 Team 复测：成员一写文件就整队“卡住”。根因是 Write/Edit 的 `base_dir` 仍是 session cwd、`scope_dir` 是更窄的成员目录，权限检查抛 `Tool base directory is outside filesystem scope` 并打断 session；同时 `if blocked: raise` 会在仍有可执行任务时误杀整队，`task.failed` 关闭 Block 后重派过程不再投影。已改为 Write/Edit base 收窄到成员目录、越界改 DENY、失败成员回 idle、blocked 与 claimable 分开判断、重派重新打开 Task Block，并在 Console 展示 `failureReason`。
+- 2026-09-15 Leader 协调复测：4 人流水线在 Leader 阶段整轮失败（`Team session 达到最大 ReAct 轮数`）。根因是 Leader 一轮只调一个工具、逐个 spawn / create_task、从不调用 `team_finish_coordination`，16 轮触顶。已把 Leader 预算提到 64，并在已有成员+任务时自动收口进入 executing。
 - 开启人工审批的 Agent 进入 Team 模式时，Leader 先给用户发一封 `notice` 邮件说明需审批工具会被自动拒绝。
 
 群聊（`group_studio/`）：
 - 归档记忆收口 `archive_memory.py`：Goal + 黑板 decisions + 已解决问题 + 完成工作项 + DoD 拼成纪要，走 `evaluate_turn_admission` → 历史节点 → `MemoryReflectionAgent`（归档结论放行 Markdown 提炼，user / global 仍进待确认队列），归属第一个 Worker 的 Agent，写 `MEMORY_AUDIT.group_archive_*`。
 - 验收：新 Host 工具 `group_review_work_item(accept|rework)`，`group_work_items` 新增 `review_status / review_note / rework_count`；rework 退回 open 保留认领人并点名其继续，Worker 提示里带验收意见；Host 验收期提示列出待验收 / 退回中项，全部 accepted 才 propose_close。前端工作项列表显示 ✔ / ↺。
+- 2026-09-15 桌面群聊复测：`group_propose_close` 会 `cancel_active_run(pause)` 掐掉正在跑的 Host 轮，空气泡 + 像报错；本地草稿点成员会打 `gstu_local_*/available-agents` 404。已改为提议关群不清自己的 Run，本地草稿不再请求该接口。
+- 2026-09-15 结项后历史消失：列表故意丢掉 `archived`；from-chat 的 Chat session 没初始化 `messages`，回 Chat 点会话 404。现改为归档保留在群聊列表（删除才隐藏），并补上空消息列表。前端不再把 `illegal_transition` / `not_found` 原文弹给用户。
 - Worker 崩溃只移出本人，`_continue_after_worker` 续跑队列或回 Host；黑板 decisions > 20 自动把最早 8 条归并为一条；Worker shell 黑名单加破坏性命令（bypass 免疫）。
 
 未做（记 TODO）：Leader 验收步骤、Team 跨轮连续性、群聊收敛准则、成员 Bash 越界写。
@@ -124,7 +132,7 @@ Team（`team_runtime/`）：
 
 - 独立于 Chat Team Runtime：Chat 顶栏 / 快捷键进入独立 pane，SQLite `group_*` + `/api/group-studio` + 独立 SSE。
 - 开关默认开启；Host 哨兵 `group-studio-host`；群内 Host/Worker 为 `PermissionMode.BYPASS`；通知点击打开工作室。
-- Intake 对谈已上线：`drafting` 只允许人类 ↔ Host，写卡不切 `discussing`，Chat 上一句是开场白不是 Goal，人类确认后才开会。
+- Intake 对谈已上线：`drafting` 只允许人类 ↔ Host 发言，可预邀工人入座，写卡不切 `discussing`，Chat 上一句是开场白不是 Goal，人类确认后才开会。
 - FIFO 点名队列（`memberIds[]`）与 `group_work_items` 原子认领已上线；工人结束弹下一人，中间不回 Host。`maxParallelWorkers=1`。
 - 消息区与 Chat 共用滚到底部按钮。阶段机以 `docs/architecture-overview.md` 为准。
 - 真并行、时间旅行、群事件进 Trace、归档记忆收口仍待做。
@@ -133,7 +141,7 @@ Team（`team_runtime/`）：
 
 - Readiness Gate、Intent Router、ReAct Runtime 和 ToolScope。
 - 单 Agent 流式执行、AskUser、HITL、取消、重跑和刷新恢复。
-- 后台 Run、Event Stream V3、DisplaySnapshot V4、Runs 和 Trace。
+- 后台 Run、Event Stream V3、DisplaySnapshot V4 和 Trace。独立 Runs 页由产品档控制，Chat 仍使用 `/api/chat/runs`。
 - send / resume 共用 Leader 流处理和 completion 收口；顶层 Run 区分用户输入、权限审批和外部执行等待，终态不可逆。
 - Plan Mode 通过 middleware 接入且仅支持单 Agent；已具备持久化 revision、人工审核、自然语言模型修订、确认后执行、重新规划和实时步骤投影。删除的是旧独立 Plan Runtime（`runtime.kind=plan`），不是当前 Plan Mode 能力。
 
@@ -213,7 +221,7 @@ Team（`team_runtime/`）：
 
 - Agent CRUD、智能创建、导入导出、模型、工具、Skills、MCP 和权限配置。
 - 系统 `default` Agent 已持久化并在管理页单独展示，可配置模型、系统提示词、Skills、MCP、HTTP 工具和 Guardrails；该 Agent 跨 Workspace 可见且禁止删除。
-- Agents、Subagents、Tools、MCP、Skills、Memory、Runs、Trace、Sandbox、Workflow、Settings 页面。
+- Agents、Subagents、Tools、MCP、Skills、Memory、Trace、Sandbox、Workflow、Settings 页面。入口由 `config/product-features.json` 控制，默认只关独立 Runs 页。
 - Electron 开发窗口、后端启动和 macOS / Windows 内测打包脚本。
 
 ## 当前验证

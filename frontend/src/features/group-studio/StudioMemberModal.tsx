@@ -7,6 +7,7 @@ interface StudioMemberModalProps {
   adding: boolean;
   addingAgentId: string;
   canAddMembers: boolean;
+  drafting: boolean;
   memberBusyId: string;
   memberOptions: GroupStudioAgentOption[];
   members: GroupStudioMember[];
@@ -21,6 +22,7 @@ export function StudioMemberModal({
   adding,
   addingAgentId,
   canAddMembers,
+  drafting,
   memberBusyId,
   memberOptions,
   members,
@@ -50,33 +52,42 @@ export function StudioMemberModal({
               <p className="group-studio-member-dialog__notice" role="status">
                 当前工作室阶段不允许添加成员。
               </p>
-            ) : memberOptions.length === 0 ? (
-              <p className="group-studio-muted">没有可加入的 Agent，或人数已达上限。</p>
             ) : (
-              <div className="group-studio-agent-grid">
-                {memberOptions.map((agent) => {
-                  const pending = adding && addingAgentId === agent.id;
-                  return (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      className="group-studio-agent-card"
-                      disabled={adding || !canAddMembers}
-                      data-pending={pending}
-                      onClick={() => {
-                        if (canAddMembers) {
-                          onAddMember(agent.id);
-                        }
-                      }}
-                    >
-                      <span className="group-studio-agent-card__name">{agent.name}</span>
-                      <span className="group-studio-agent-card__desc">
-                        {pending ? '正在加入…' : (agent.description || '暂无描述')}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
+              <>
+                {drafting ? (
+                  <p className="group-studio-member-dialog__notice" role="status">
+                    对谈期可以先拉人入座，确认开始后他们才会发言。
+                  </p>
+                ) : null}
+                {memberOptions.length === 0 ? (
+                  <p className="group-studio-muted">没有可加入的 Agent，或人数已达上限。</p>
+                ) : (
+                  <div className="group-studio-agent-grid">
+                    {memberOptions.map((agent) => {
+                      const pending = adding && addingAgentId === agent.id;
+                      return (
+                        <button
+                          key={agent.id}
+                          type="button"
+                          className="group-studio-agent-card"
+                          disabled={adding || !canAddMembers}
+                          data-pending={pending}
+                          onClick={() => {
+                            if (canAddMembers) {
+                              onAddMember(agent.id);
+                            }
+                          }}
+                        >
+                          <span className="group-studio-agent-card__name">{agent.name}</span>
+                          <span className="group-studio-agent-card__desc">
+                            {pending ? '正在加入…' : (agent.description || '暂无描述')}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </div>
         </section>

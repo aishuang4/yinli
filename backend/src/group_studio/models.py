@@ -19,6 +19,7 @@ GroupStudioStatus = Literal[
     "closing",
     "archived",
     "failed",
+    "deleted",
 ]
 MemberStatus = Literal["active", "crashed", "removed"]
 GroupRunStatus = Literal[

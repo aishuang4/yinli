@@ -10,7 +10,7 @@ from agentscope.message import TextBlock, ToolResultState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.tool import ToolBase, ToolChunk
 
-from src.server.routes.chat.team_runtime.store import TeamStore, TeamStoreError
+from src.server.routes.chat.team_runtime.store import MAX_TEAM_MEMBERS, MAX_TEAM_TASKS, TeamStore, TeamStoreError
 
 
 class TeamTool(ToolBase):
@@ -56,7 +56,11 @@ class SpawnMember(TeamTool):
     """Leader 动态创建本轮临时成员。"""
 
     name = "team_spawn_member"
-    description = "Spawn one temporary isolated member for the current TeamRun."
+    description = (
+        f"Spawn one temporary isolated member for the current TeamRun. "
+        f"At most {MAX_TEAM_MEMBERS} members; extra calls return an error. "
+        "You may spawn multiple members in one turn."
+    )
     input_schema = {
         "type": "object",
         "properties": {
@@ -100,7 +104,11 @@ class CreateTask(TeamTool):
     """Leader 创建共享任务。"""
 
     name = "team_create_task"
-    description = "Create a shared task. Dependencies must use exact task IDs returned earlier in this TeamRun."
+    description = (
+        f"Create a shared task. Dependencies must use exact task IDs returned earlier in this TeamRun. "
+        f"At most {MAX_TEAM_TASKS} tasks. Prefer one task per requested role; "
+        "after the last required task, call team_finish_coordination in the same turn."
+    )
     input_schema = {
         "type": "object",
         "properties": {
@@ -213,7 +221,10 @@ class FinishCoordination(TeamTool):
     """Leader 显式结束建队和任务拆分阶段。"""
 
     name = "team_finish_coordination"
-    description = "Finish coordination after at least one temporary member and one task exist."
+    description = (
+        "Finish coordination after at least one temporary member and one task exist. "
+        "Call this immediately after the last required task is created; do not keep spawning or polling."
+    )
     input_schema = {"type": "object", "properties": {}, "required": []}
 
     async def __call__(self) -> ToolChunk:

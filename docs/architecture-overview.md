@@ -104,7 +104,7 @@ middleware 数据，最后才用 `skill_runs` 兜底恢复已读 Skill。会话�
 - TeamRun、Subagent invocation、Memory、Trace、Domain Event 和 Projection stream 继承父运行归属。
 - Project resource binding 已作为运行时白名单参与 Agent、Skill、MCP Server 和 HTTP Tool 裁剪；资源必须属于 Project 所在 Workspace，Project 只能收窄 Agent 配置。
 - 已有 Project 升级时建立一次性资源基线；新建 Project 快照绑定创建时已有的 Workspace 资源，后续新增资源不会自动授权给既有 Project。
-- 前端使用统一 Workspace / Project 上下文；Chat、Runs、Trace、Memory 和资源管理按当前上下文筛选，切换 Project 时清理 Chat 与 Team 运行投影。
+- 前端使用统一 Workspace / Project 上下文；Chat、Trace、Memory 和资源管理按当前上下文筛选，切换 Project 时清理 Chat 与 Team 运行投影。独立 Runs 页由产品档 `views.runs` 控制，默认关闭。
 - Workspace 与首个 Project 通过 bootstrap API 原子创建；正式 Artifact ownership 留在 Artifact Phase。
 - Project 删除默认使用归档语义，不直接级联删除历史 Session、Run、Memory 或 Trace。
 
@@ -125,9 +125,11 @@ Team Runtime 是一次性 `TeamRun`。用户在单 Agent 模式选择 Agent，�
 
 核心语义：
 
-- Team Lead 是主协调会话，负责动态生成临时队友、拆任务和协调 Mailbox；最终答案由独立综合阶段生成。
+- Team Lead 是主协调会话，负责动态生成临时队友、拆任务和协调 Mailbox；最终答案由独立综合阶段生成。协调预算 64 轮；未调用 `team_finish_coordination` 但已有成员和任务时，Runtime 自动进入 executing。
 - Teammate 是隔离 AgentScope Agent 会话，拥有独立上下文窗口，不继承 Lead 对话历史。
 - 共享事实只允许通过 Task List、Mailbox、member directory、result artifacts 和 events/snapshots 表达。
+- 成员 Write/Edit 的 base 与 scope 都是 `<session workspace>/team/<run>/<member>/`。不能把更宽的 session cwd 当作 Write base，否则权限检查会判定越界并打断 Member session。Read/Grep/Glob 仍以 session cwd 为工作目录、Project scope 为上限。
+- 单个任务失败后成员回到 idle 并自动重派一次；前端 Task Block 在可重试失败时保持打开，重派过程继续投影。有依赖的排队任务不能因为其中一条 blocked 就判定整队无法推进。
 - 用户可以向任意 Member 发送 mailbox 消息，作为本轮运行中的直接干预。
 - Member 提交结果前必须清空未读 Mailbox；综合阶段使用完整 Mailbox，综合期间的新消息会触发重新综合。
 - Team 领域状态仍以 file-first store 和领域事件为事实源；Chat 只读取 `kind=team` 投影 Block，不读取 Team 文件状态或顶层业务 SSE。
@@ -174,7 +176,7 @@ reviewing → closing → archived
 
 - `from-chat` 一律 `drafting`；Chat 上一句是开场白，禁止写成 `TaskCard.goal`。写卡不切 `discussing`。`card.status=draft` 当且仅当 `studio.status=drafting`。
 - `awaitingIntakeConfirm` 不是新 status，是 drafting 上的布尔。Host 可 `group_request_intake_confirm`，没有 `group_confirm_intake` 工具。离开 drafting 只有人类确认：`POST /confirm-intake` 或确认短语（去句末标点后 fullmatch：`你接手` / `开始` / `就这样` / `确认并开始` / `可以开始` / `就这么定` / `开始讨论` / `开始群聊` / `我们开始吧` / `就这么开始`）。短语但尚未提请 → 当普通消息派 Host。goal 空 → 422 `goal_required`。空 DoD 允许确认。paused 期间确认短语 resume 后不回溯执行。
-- drafting 禁止 invite / assign / publish（409 `intake_not_confirmed`）；Worker 在 drafting 获 floor → `intake_worker_forbidden`。drafting 隐藏加人。drafting Host 轮次不计 `used_turns`。drafting 改卡不 restatement。confirm-intake 之后 `group_studio_has_runs` 恒为 true。
+- drafting 允许预邀（`add_member` / `group_invite_member`），工人入座但不发言；禁止 assign / publish（409 `intake_not_confirmed`）。Worker 在 drafting 获 floor → `intake_worker_forbidden`。drafting Host 轮次不计 `used_turns`。drafting 改卡不 restatement。confirm-intake 之后 `group_studio_has_runs` 恒为 true。
 - 本地草稿 `gstu_local_*` 仅在用户说话或微调时落库；persist 禁止把 goal 当 `draftText` 传给 from-chat。
 - 熔断只计 turn / 无进展；`max_cost_usd` 为 P1。空 DoD 可结项。进入执行必须调 `group_start_execution`，口头宣布无效。每轮注入最近 8 条可见消息。
 
@@ -195,6 +197,7 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 
 - `/api/chat/send/start` 创建后台 Run。
 - `/api/chat/resume/start` 恢复 HITL / AskUser 外部执行暂停的原 Run。
+- `/api/chat/runs` 仍给 Chat 取消、重跑、订阅和 Team 干预用。独立 Runs 页是否对用户开放由 `config/product-features.json` 的 `views.runs` 决定，默认关闭；汇总字段保留，打开该键即可恢复入口。
 - `/api/chat/runs/{run_id}/state` 返回 DisplaySnapshot V4。
 - `/api/chat/runs/{run_id}/stream?afterSeq=N` 返回连续 tail；无法连续恢复时返回 Snapshot。
 
@@ -275,6 +278,7 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 ## 配置与权限
 
 - 启动期静态配置在 `config/settings.py`，环境变量前缀为 `AGENT_WORKSTATION_`。
+- 产品功能档是 `config/product-features.json`：管理员在打包前改 `views` / `surfaces`，安装后前后端读同一份。`GET /api/settings/product-features` 只读，不进 SQLite。`chat` / `settings` 不能关。关闭 `traces` / `sandbox` / `subagents` / `workflow` 会 404 对应页面 API；Chat 运行时 `/api/chat/runs` 与 Agent/Skill/MCP 执行时 API 不随页面关闭。群聊与定时任务还要叠加 `system_settings` 开关。上线建议见 `config/product-features.packaging.example.json`。
 - 模型配置和 Key 统一存于 `USER_DATA_ROOT/models.json`，由 `config/model_catalog.py` 校验、脱敏和原子保存。SQLite / Keychain / DPAPI / 环境变量仅在文件首次初始化时迁移，之后不再作为在线补充来源。Key 在本地文件中为明文，macOS 使用 0600，Windows 使用受限当前用户 ACL；不进入前端响应、Agent 导出或安装包。
 - Chat/Sandbox 使用模型配置 ID；会话记住选择。Agent 仅保存 ReAct 上限。新 Run 固定完整供应商连接、模型参数和降级链；Team、Subagent、审批恢复和后处理继承该快照。定时任务按自己的 `modelConfigId` 或每次触发时的全局默认，工作室创建时固定模型配置 ID。
 - Agent 运行时由 `agents/factory.py` 统一创建和缓存。

@@ -341,6 +341,8 @@ def test_list_runs_filter_by_trigger_source(client):
     assert scheduled["triggerSource"] == "scheduled_job"
     assert scheduled["scheduledJobId"] == "job-1"
     assert scheduled["scheduledFiringId"] == "firing-1"
+    assert scheduled["progress"] == 100
+    assert scheduled["currentStage"] == "已完成"
 
     unfiltered = client.get("/api/chat/runs", params={"projectId": DEFAULT_PROJECT_ID})
     assert unfiltered.status_code == 200

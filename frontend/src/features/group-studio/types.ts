@@ -10,7 +10,8 @@ export type GroupStudioStatus =
   | 'circuit_broken'
   | 'closing'
   | 'archived'
-  | 'failed';
+  | 'failed'
+  | 'deleted';
 
 export interface GroupStudioMember {
   id: string;

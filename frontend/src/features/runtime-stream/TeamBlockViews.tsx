@@ -34,6 +34,10 @@ function text(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
 
+function taskFailureReason(data: TeamRecord): string {
+  return text(data.failureReason, text(data.lastReviewReason));
+}
+
 function record(value: unknown): TeamRecord {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as TeamRecord : {};
 }
@@ -179,11 +183,18 @@ export function TeamBlockView({ block }: { block: DisplayBlock<TeamRecord> }) {
         <div className="mt-2 space-y-1">
           {tasks.slice(0, 4).map((task) => {
             const taskStatus = text(task.data.status, task.phase === 'open' ? 'running' : text(task.outcome));
+            const reason = taskFailureReason(task.data);
             return (
-              <div key={task.id} className="flex min-h-7 items-center gap-2 rounded px-1.5 text-xs transition-colors duration-300 hover:bg-[var(--color-bg-hover)]">
+              <div
+                key={task.id}
+                className="flex min-h-7 items-center gap-2 rounded px-1.5 text-xs transition-colors duration-300 hover:bg-[var(--color-bg-hover)]"
+                title={reason || undefined}
+              >
                 <span className={`shrink-0 ${statusTone(taskStatus)}`}><StatusIcon status={taskStatus} /></span>
                 <span className="min-w-0 flex-1 truncate text-[var(--color-text-secondary)]">{text(task.data.title, '未命名任务')}</span>
-                <span className={`shrink-0 ${statusTone(taskStatus)}`}>{statusText(taskStatus)}</span>
+                <span className={`max-w-36 shrink-0 truncate ${statusTone(taskStatus)}`}>
+                  {taskStatus === 'failed' && reason ? reason : statusText(taskStatus)}
+                </span>
               </div>
             );
           })}
@@ -345,6 +356,7 @@ function TaskList({ tasks, members, onSelect }: { tasks: TeamRecordBlock[]; memb
       {tasks.map((task) => {
         const status = text(task.data.status, task.phase === 'open' ? 'running' : text(task.outcome));
         const owner = text(task.data.ownerMemberId, text(task.data.assignedMemberId));
+        const reason = taskFailureReason(task.data);
         return (
           <button
             type="button"
@@ -358,6 +370,9 @@ function TaskList({ tasks, members, onSelect }: { tasks: TeamRecordBlock[]; memb
               <span className="mt-1 block text-xs text-[var(--color-text-tertiary)]">
                 {owner ? names.get(owner) || owner : '等待分配'} · {statusText(status)}
               </span>
+              {status === 'failed' && reason ? (
+                <span className="mt-1 block text-xs text-[var(--color-error)]">{reason}</span>
+              ) : null}
             </span>
             <ChevronRight size={15} className="mt-0.5 shrink-0 text-[var(--color-text-tertiary)]" />
           </button>
@@ -385,6 +400,11 @@ function TaskDetail({ snapshot, task, members, onBack }: { snapshot: DisplaySnap
             <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">{owner ? names.get(owner) || owner : '等待分配'} · {statusText(status)}</div>
           </div>
         </div>
+        {taskFailureReason(task.data) ? (
+          <div className="mt-3 rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-xs leading-5 text-[var(--color-error)]">
+            {taskFailureReason(task.data)}
+          </div>
+        ) : null}
         {text(task.data.briefPreview) ? <div className="mt-3 text-sm leading-6 text-[var(--color-text-secondary)]"><MarkdownContent content={text(task.data.briefPreview)} /></div> : null}
       </section>
       <section>

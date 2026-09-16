@@ -22,6 +22,8 @@ from src.storage.database import close_db, init_db, list_projects, reconcile_int
 from src.subagents.task_store import reconcile_interrupted_file_tasks
 from src.server.routes.chat.team_runtime.maintenance import maintain_team_runtime_runs
 from src.server.local_access import LocalAccessMiddleware
+from src.server.product_feature_gate import ProductFeatureGateMiddleware
+from src.config.product_features import load_product_features
 from src.scheduler.ticker import bootstrap_scheduler, shutdown_scheduler
 
 
@@ -59,6 +61,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if studio_reconciled:
         print(f"[GroupStudio] reconciled {studio_reconciled} interrupted studio(s)")
     print(f"[Server] 引力 YINLI Backend started on {settings.host}:{settings.port}")
+    product_features = load_product_features()
+    disabled = [
+        *[key for key, enabled in product_features.views.items() if not enabled],
+        *[key for key, enabled in product_features.surfaces.items() if not enabled],
+    ]
+    source = product_features.source_path or "built-in defaults"
+    print(f"[Server] Product features: {source}; disabled={disabled or 'none'}")
     try:
         from src.runtime.agent_python import ensure_agent_venv
 
@@ -91,6 +100,7 @@ app = FastAPI(
 # CORS 配置 — 开发模式允许前端 dev server 跨域
 # 本地访问中间件必须覆盖全部路由；即使误绑定到 0.0.0.0，也不接受局域网请求。
 app.add_middleware(LocalAccessMiddleware)
+app.add_middleware(ProductFeatureGateMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

@@ -106,9 +106,9 @@ async def list_session_messages(
         (item for item in store.sessions if item.id == session_id and item.project_id == project_id),
         None,
     )
-    if session is None or session_id not in store.messages:
+    if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    return _normalize_history_messages(store.messages[session_id])
+    return _normalize_history_messages(store.messages.get(session_id) or [])
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
@@ -122,7 +122,7 @@ async def delete_session(
         (item for item in store.sessions if item.id == session_id and item.project_id == project_id),
         None,
     )
-    if session is None or session_id not in store.messages:
+    if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
     project = get_project(session.project_id)

@@ -170,15 +170,37 @@ def test_goal_change_with_runs_enters_restatement(client, monkeypatch):
     assert snapshot["phaseBeforePause"] == "discussing"
 
 
-def test_add_member_in_drafting_is_forbidden(client):
+def test_add_member_in_drafting_is_allowed(client):
     studio = _create_studio(client, "sess-intake-member")
     _bind_agent("agent-draft", "对谈工人")
     response = client.post(f"/api/group-studio/{studio['id']}/members", json={
         "projectId": DEFAULT_PROJECT_ID,
         "agentId": "agent-draft",
     })
-    assert response.status_code == 409
-    assert response.json()["detail"] == INTAKE_NOT_CONFIRMED
+    assert response.status_code == 200
+    assert response.json()["agentId"] == "agent-draft"
+    assert response.json()["role"] == "worker"
+    snapshot = client.get(f"/api/group-studio/{studio['id']}").json()
+    assert snapshot["status"] == "drafting"
+    assert any(item["agentId"] == "agent-draft" for item in snapshot["members"])
+
+
+def test_invite_in_drafting_allowed_assign_blocked(client):
+    import asyncio
+
+    from src.group_studio.tools_host import GroupAssignFloor, GroupInviteMember, HostToolContext
+
+    studio = _create_studio(client, "sess-intake-invite")
+    _bind_agent("agent-invite", "预邀工人")
+    host = next(item for item in studio["members"] if item["role"] == "host")
+    ctx = HostToolContext(group_id=studio["id"], run_id="grun_invite", host_member_id=host["id"])
+    invited = asyncio.run(GroupInviteMember(ctx)(agentId="agent-invite"))
+    assert "agent-invite" in str(invited.content)
+    snapshot = client.get(f"/api/group-studio/{studio['id']}").json()
+    worker = next(item for item in snapshot["members"] if item["agentId"] == "agent-invite")
+    blocked = asyncio.run(GroupAssignFloor(ctx)(memberId=worker["id"]))
+    assert INTAKE_NOT_CONFIRMED in str(blocked.content)
+    assert snapshot["status"] == "drafting"
 
 
 def test_add_member_and_idempotent(client):

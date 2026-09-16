@@ -1,0 +1,23 @@
+{
+  "_comment": "上线打包建议档。复制覆盖 product-features.json 后打包，即可对办公用户隐藏开发向页面。不要关 chat / settings。需要 Team / 计划 / 群聊 / 定时任务时保持对应 surfaces 或 views 为 true。",
+  "views": {
+    "chat": true,
+    "runs": false,
+    "traces": false,
+    "sandbox": false,
+    "jobs": true,
+    "memory": true,
+    "agents": true,
+    "tools": true,
+    "mcp": true,
+    "skills": true,
+    "subagents": false,
+    "settings": true
+  },
+  "surfaces": {
+    "workflow": false,
+    "groupStudio": true,
+    "teamMode": true,
+    "planMode": true
+  }
+}

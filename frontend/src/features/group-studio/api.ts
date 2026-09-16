@@ -343,74 +343,48 @@ export async function createStudioFromChat(input: {
   return await response.json() as GroupStudioSnapshot;
 }
 
+const GROUP_STUDIO_ERROR_TEXT: Record<string, string> = {
+  chat_run_active: '请先停止或完成当前回复',
+  group_studio_disabled: '群聊工作室未开启',
+  cross_project_session: '当前会话属于其他 Project，无法升级为工作室',
+  job_agent_forbidden: 'Job Agent 不能进入工作室',
+  agent_not_bound: '当前 Agent 未绑定到此 Project',
+  member_cap: '工作室人数已达上限',
+  goal_required: '请先和主持人把目标说清楚',
+  drafting_no_floor: '还在对谈中，主持人会继续问你',
+  intake_not_confirmed: '确认开始后才能派发言或进入执行',
+  intake_not_ready: '主持人还没有请你确认开始',
+  intake_worker_forbidden: '对谈期工人还不能发言',
+  host_required: '不能静音或移除主持人',
+  open_questions_dropped: '未决问题不能从黑板上抹掉',
+  invalid_upload: '文件过大或路径不合法',
+  approval_not_pending: '这条审批已经处理过了',
+  worker_session_lost: '工人会话已丢失，请重新发起这一轮',
+  studio_paused: '工作室已暂停',
+  studio_circuit_broken: '工作室已熔断，请先恢复',
+  not_awaiting_restatement: '当前不需要确认复述',
+  restatement_missing: '主持人还没有复述新目标',
+  dod_incomplete: '请先勾齐验收清单再结项',
+  illegal_transition: '当前阶段不能做这个操作',
+  not_found: '找不到这个工作室或成员',
+  member_not_found: '找不到这个成员',
+  work_item_claimed: '这项工作已被认领',
+  work_item_not_owned: '这项工作不属于当前工人',
+  floor_not_granted: '现在还没轮到这个人发言',
+  model_not_configured: '还没有配置可用模型',
+  approval_batch_incomplete: '还有审批未处理完',
+};
+
+export function friendlyGroupStudioError(code: string, fallback = ''): string {
+  const key = code.trim();
+  return GROUP_STUDIO_ERROR_TEXT[key] || fallback || key;
+}
+
 export async function readDetail(response: Response, fallback: string): Promise<string> {
   const payload = await response.json().catch(() => ({})) as { detail?: unknown };
   const detail = payload.detail;
-  if (detail === 'chat_run_active') {
-    return '请先停止或完成当前回复';
-  }
-  if (detail === 'group_studio_disabled') {
-    return '群聊工作室未开启';
-  }
-  if (detail === 'cross_project_session') {
-    return '当前会话属于其他 Project，无法升级为工作室';
-  }
-  if (detail === 'job_agent_forbidden') {
-    return 'Job Agent 不能进入工作室';
-  }
-  if (detail === 'agent_not_bound') {
-    return '当前 Agent 未绑定到此 Project';
-  }
-  if (detail === 'member_cap') {
-    return '工作室人数已达上限';
-  }
-  if (detail === 'goal_required') {
-    return '请先和主持人把目标说清楚';
-  }
-  if (detail === 'drafting_no_floor') {
-    return '还在对谈中，主持人会继续问你';
-  }
-  if (detail === 'intake_not_confirmed') {
-    return '确认开始后才能邀请工人或进入执行';
-  }
-  if (detail === 'intake_not_ready') {
-    return '主持人还没有请你确认开始';
-  }
-  if (detail === 'intake_worker_forbidden') {
-    return '对谈期工人还不能发言';
-  }
-  if (detail === 'host_required') {
-    return '不能静音或移除主持人';
-  }
-  if (detail === 'open_questions_dropped') {
-    return '未决问题不能从黑板上抹掉';
-  }
-  if (detail === 'invalid_upload') {
-    return '文件过大或路径不合法';
-  }
-  if (detail === 'approval_not_pending') {
-    return '这条审批已经处理过了';
-  }
-  if (detail === 'worker_session_lost') {
-    return '工人会话已丢失，请重新发起这一轮';
-  }
-  if (detail === 'studio_paused') {
-    return '工作室已暂停';
-  }
-  if (detail === 'studio_circuit_broken') {
-    return '工作室已熔断，请先恢复';
-  }
-  if (detail === 'not_awaiting_restatement') {
-    return '当前不需要确认复述';
-  }
-  if (detail === 'restatement_missing') {
-    return '主持人还没有复述新目标';
-  }
-  if (detail === 'dod_incomplete') {
-    return '请先勾齐验收清单再结项';
-  }
   if (typeof detail === 'string' && detail.trim()) {
-    return detail;
+    return friendlyGroupStudioError(detail, fallback);
   }
   return fallback;
 }

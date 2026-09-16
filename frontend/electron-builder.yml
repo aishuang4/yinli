@@ -15,6 +15,8 @@ extraResources:
     filter:
       - backend-server
       - backend-server.exe
+  - from: ../../config/product-features.json
+    to: product-features.json
 asar: true
 mac:
   icon: icon.icns

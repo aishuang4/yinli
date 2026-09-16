@@ -45,6 +45,9 @@ class Settings(BaseSettings):
         "http://localhost:3000",  # Electron dev
     ]
 
+    # === 产品功能档（打包前改 config/product-features.json）===
+    product_features_path: str = ""
+
     model_config = {
         "env_prefix": "AGENT_WORKSTATION_",
         "env_file": ".env",

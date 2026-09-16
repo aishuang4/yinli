@@ -215,6 +215,9 @@ def cancel_item(group_id: str, work_item_id: str, *, run_id: str = "") -> dict[s
 def finalize_host_dispatch(ctx: Any, group_id: str) -> None:
     """Host 回合结束：队列非空则清认领轮；否则有未指派 open 项则开认领轮。"""
 
+    snapshot = get_group_studio_snapshot(group_id, message_limit=1) or {}
+    if str(snapshot.get("status") or "") == "closing":
+        return
     assigned = list(getattr(ctx, "assigned_member_ids", None) or [])
     queue = get_queue(group_id)
     if assigned or queue:

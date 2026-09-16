@@ -29,7 +29,7 @@ export function TraceDetailView({
               {trace.mode === 'team' ? `${trace.agentName || 'Agent'} · Team Leader` : trace.agentName}
             </div>
           </div>
-          <div className="flex shrink-0 gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <TraceStatus status={trace.status} />
             <Tag size="small" color="transparent">{trace.toolCallCount} 工具调用</Tag>
           </div>

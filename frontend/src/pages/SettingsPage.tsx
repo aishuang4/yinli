@@ -7,11 +7,14 @@ import { ScheduledJobsSettingsCard } from '../features/settings/ScheduledJobsSet
 import { ConversationContextSettingsCard } from '../features/settings/ConversationContextSettingsCard';
 import { UserDataSettingsCard } from '../features/settings/UserDataSettingsCard';
 import { useSettingsStore } from '../stores/settingsStore';
+import { isSurfaceEnabled, isViewEnabled } from '../stores/productFeatures';
+import { useProductFeaturesStore } from '../stores/productFeaturesStore';
 import type { ThemeName } from '../types/theme';
 import { getErrorMessage, notifyError } from '../utils/feedback';
 
 export function SettingsPage() {
   const theme = useSettingsStore((state) => state.theme);
+  const features = useProductFeaturesStore((state) => state.features);
   const setTheme = useSettingsStore((state) => state.setTheme);
   const [userDataPath, setUserDataPath] = useState<string | null>(null);
   const [userDataLoading, setUserDataLoading] = useState(false);
@@ -65,8 +68,8 @@ export function SettingsPage() {
         </header>
 
         <div className="flex flex-col gap-6">
-          <ScheduledJobsSettingsCard />
-          <GroupStudioSettingsCard />
+          {isViewEnabled(features, 'jobs') ? <ScheduledJobsSettingsCard /> : null}
+          {isSurfaceEnabled(features, 'groupStudio') ? <GroupStudioSettingsCard /> : null}
           <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
           <ModelsManager />
           <NotificationSettingsCard />

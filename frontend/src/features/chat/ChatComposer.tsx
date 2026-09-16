@@ -41,6 +41,8 @@ interface ChatComposerProps {
   onTargetModeChange: (mode: 'agent' | 'team') => void;
   onToggleDeepThinking: () => void;
   onTogglePlanMode: () => void;
+  teamModeEnabled?: boolean;
+  planModeEnabled?: boolean;
 }
 
 export function ChatComposer(props: ChatComposerProps) {
@@ -52,6 +54,8 @@ export function ChatComposer(props: ChatComposerProps) {
     onKeyDown, onRemoveFile, onRemoveImage, onSelectedAgentChange, onSend,
     onTargetModeChange, onToggleDeepThinking, onTogglePlanMode,
   } = props;
+  const teamModeEnabled = props.teamModeEnabled !== false;
+  const planModeEnabled = props.planModeEnabled !== false;
 
   return (
     <div className="px-8 pb-6 pt-2">
@@ -145,6 +149,7 @@ export function ChatComposer(props: ChatComposerProps) {
               </FileImportButton>
             </span>
           </Tooltip>
+          {teamModeEnabled ? (
           <div className="flex h-8 gap-1 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-[3px]">
             <ModeButton
               active={targetMode === 'agent'}
@@ -161,6 +166,7 @@ export function ChatComposer(props: ChatComposerProps) {
               icon={<SparkRenyizhuanrenyiAnyToanyLine size={16} />}
             />
           </div>
+          ) : null}
           {targetMode === 'agent' && (
             <ChatAgentSelect
               selectedAgentId={selectedAgentId}
@@ -172,7 +178,7 @@ export function ChatComposer(props: ChatComposerProps) {
             {props.modelSelector}
           </div>
           <div className="ml-auto flex items-center gap-2">
-            {targetMode === 'agent' ? (
+            {targetMode === 'agent' && planModeEnabled ? (
               <Tooltip title={planMode ? '点击关闭计划模式' : '点击开启计划模式'} placement="top" mode="dark">
                 <span className="inline-flex">
                   <button

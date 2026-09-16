@@ -16,8 +16,12 @@ def _read_scheduled_jobs_settings() -> dict[str, Any]:
 
 
 def is_scheduled_jobs_enabled() -> bool:
-    """读取 scheduled_jobs.enabled；缺省或未写入时为 false。"""
+    """产品档 views.jobs 与 json_store enabled 同时开启才调度。"""
 
+    from src.config.product_features import is_view_enabled
+
+    if not is_view_enabled("jobs"):
+        return False
     return bool(_read_scheduled_jobs_settings().get("enabled", False))
 
 

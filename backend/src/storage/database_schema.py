@@ -663,7 +663,7 @@ BASE_SCHEMA_SQL = """
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_group_studios_active_chat
         ON group_studios(chat_session_id)
-        WHERE status NOT IN ('archived', 'failed');
+        WHERE status NOT IN ('archived', 'failed', 'deleted');
     CREATE TABLE IF NOT EXISTS group_task_cards (
         id TEXT PRIMARY KEY,
         group_id TEXT NOT NULL,

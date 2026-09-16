@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from agentscope.permission import PermissionContext, PermissionDecision, PermissionRule
+from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision, PermissionRule
 from agentscope.state import AgentState
 from agentscope.tool import Edit
 from agentscope.tool._response import ToolChunk
@@ -37,37 +37,47 @@ class ScopedEdit(Edit):
         tool_input: dict[str, Any],
         context: PermissionContext,
     ) -> PermissionDecision:
-        return await super().check_permissions(
-            resolved_tool_input(
+        try:
+            resolved = resolved_tool_input(
                 tool_input, "file_path",
                 base_dir=self.base_dir, scope_dir=self.scope_dir, extra_scopes=self.extra_scopes,
-            ),
-            context,
-        )
+            )
+        except ValueError as exc:
+            # 越界必须变成拒绝，不能抛到 AgentScope permission 层，否则整个 Member session 会被打断。
+            return PermissionDecision(
+                behavior=PermissionBehavior.DENY,
+                message=str(exc),
+                decision_reason="Path is outside filesystem scope",
+                bypass_immune=True,
+            )
+        return await super().check_permissions(resolved, context)
 
     async def match_rule(
         self,
         rule_content: str | None,
         tool_input: dict[str, Any],
     ) -> bool:
-        return await super().match_rule(
-            rule_content,
-            resolved_tool_input(
+        try:
+            resolved = resolved_tool_input(
                 tool_input, "file_path",
                 base_dir=self.base_dir, scope_dir=self.scope_dir, extra_scopes=self.extra_scopes,
-            ),
-        )
+            )
+        except ValueError:
+            return False
+        return await super().match_rule(rule_content, resolved)
 
     async def generate_suggestions(
         self,
         tool_input: dict[str, Any],
     ) -> list[PermissionRule]:
-        return await super().generate_suggestions(
-            resolved_tool_input(
+        try:
+            resolved = resolved_tool_input(
                 tool_input, "file_path",
                 base_dir=self.base_dir, scope_dir=self.scope_dir, extra_scopes=self.extra_scopes,
-            ),
-        )
+            )
+        except ValueError:
+            return []
+        return await super().generate_suggestions(resolved)
 
     async def __call__(  # type: ignore[override]
         self,

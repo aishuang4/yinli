@@ -377,6 +377,34 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
     def _team_event(self, data: dict[str, Any]) -> list[DomainEvent]:
         return super()._team_event(data)
 
+    def _revive_team_task(
+        self,
+        team_id: str,
+        task_id: str,
+        task: dict[str, Any],
+        team_block_id: str,
+    ) -> list[DomainEvent]:
+        """重派后重新打开已关闭的 Task Block，并允许后续 output / tool 再投影。"""
+
+        if not task_id:
+            return []
+        task_block_id = self._team_task_block_id(team_id, task_id)
+        self._terminal_team_tasks.discard(task_block_id)
+        self._pending_team_task_terminals.pop(task_block_id, None)
+        if task_block_id in self._active:
+            return [self._delta_block(
+                "team.task", task_id, "team-task", task,
+                block_id=task_block_id, event_suffix="updated",
+            )]
+        return self._start_block(
+            "team.task",
+            task_block_id,
+            "team-task",
+            {"teamRunId": team_id, **task},
+            aggregate_id=task_id,
+            parent_id=team_block_id,
+        )
+
     def _start_team_member(
         self,
         team_id: str,

@@ -156,6 +156,7 @@ def ensure_chat_session(
         message_count=0,
     )
     store.sessions.append(session)
+    store.messages.setdefault(session_id, [])
     _save_store(store)
     return session
 

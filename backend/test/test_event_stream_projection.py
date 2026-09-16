@@ -697,3 +697,49 @@ def test_clarification_source_opens_approval_and_keeps_run_resumable(projection_
     assert approval.phase == "open"
     assert approval.data["status"] == "waiting"
     assert state.snapshot.stream_done is False
+
+
+def test_team_task_retry_reopens_projection_and_keeps_retry_output(projection_db, tmp_path) -> None:
+    """可重试失败不得永久关闭 Task Block，否则重派后的过程对前端不可见，看起来像整队卡住。"""
+
+    team_store = TeamStore.create(
+        session_id="session-team-retry",
+        chat_run_id="run-team-retry",
+        goal="重派可见",
+        leader_agent_id="agent-leader",
+        leader_name="Leader",
+        project_id="project-team",
+        root=tmp_path / "team-runtime-retry",
+    )
+    member = team_store.spawn_member(name="Writer", role="write", runtime_prompt="write")
+    task = team_store.create_task(title="写摘要", brief="写一段摘要", created_by="leader", assigned_member_id=member["id"])
+    team_store.claim_task(task["id"], member["id"])
+    team_store.fail_task(task["id"], member["id"], "Tool base directory is outside filesystem scope: /tmp/session")
+    team_store.retry_failed_task(task["id"])
+    team_store.set_member_status(member["id"], "idle")
+    team_store.claim_task(task["id"], member["id"])
+    team_store.record_member_event(
+        "member.output.delta",
+        member_id=member["id"],
+        task_id=task["id"],
+        payload={"delta": "重派后的可见输出"},
+    )
+
+    events, display_store, coordinator, runner = create_runtime()
+    normalizer = ChatProjectionNormalizer(
+        stream_key="stream-team-retry",
+        run_id="run-team-retry",
+        session_id="session-team-retry",
+        events=events,
+    )
+    normalizer.start(agent_name="Leader")
+    for source in TeamEventPublisher(team_store).drain():
+        normalizer.ingest("TEAM_DOMAIN_EVENT", source)
+    runner.run_available("stream-team-retry", "run-team-retry")
+    snapshot = display_store.load_materialized("stream-team-retry", coordinator).snapshot
+    task_block = snapshot.blocks_by_id[f"team-task:{team_store.ref.id}:{task['id']}"]
+    output_block = snapshot.blocks_by_id[f"team-activity:{team_store.ref.id}:{task['id']}:output"]
+
+    assert task_block.phase == "open"
+    assert task_block.data["status"] == "running"
+    assert output_block.data["content"] == "重派后的可见输出"

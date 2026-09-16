@@ -24,6 +24,8 @@ import { useAgentsStore } from '../stores/agentsStore';
 import { useProjectResources } from '../hooks/useProjectResources';
 import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
 import { useAppStore } from '../stores/appStore';
+import { isSurfaceEnabled } from '../stores/productFeatures';
+import { useProductFeaturesStore } from '../stores/productFeaturesStore';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList';
@@ -68,6 +70,8 @@ export function ChatPage() {
   const [answerAnimating, setAnswerAnimating] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [historyPanelMounted, setHistoryPanelMounted] = useState(true);
+  const teamModeEnabled = useProductFeaturesStore((state) => isSurfaceEnabled(state.features, 'teamMode'));
+  const planModeEnabled = useProductFeaturesStore((state) => isSurfaceEnabled(state.features, 'planMode'));
   const setView = useAppStore((state) => state.setView);
   const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
@@ -100,6 +104,18 @@ export function ChatPage() {
   useOnPageBecameActive(() => {
     void useAgentsStore.getState().syncFromServer(activeWorkspaceId, { silent: true });
   });
+
+  useEffect(() => {
+    if (!teamModeEnabled && targetMode === 'team') {
+      setTargetMode('agent');
+    }
+  }, [teamModeEnabled, targetMode]);
+
+  useEffect(() => {
+    if (!planModeEnabled && planMode) {
+      setPlanMode(false);
+    }
+  }, [planModeEnabled, planMode]);
 
   const availableAgents = useMemo(() => agents.filter((agent) => (
     agent.role !== 'job'
@@ -530,15 +546,15 @@ export function ChatPage() {
       sessionId,
       agentId: runtimeAgent?.id,
       agentName: runtimeAgent?.name,
-      mode: targetMode,
+      mode: teamModeEnabled ? targetMode : 'agent',
       modelConfigId: selectedModelId,
       skillIds: runtimeAgent?.skills,
       deepThinking,
-      planRequested: planMode && targetMode === 'agent',
+      planRequested: planModeEnabled && planMode && targetMode === 'agent',
       images,
       files,
     });
-  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, imageAttachments, inputValue, planMode, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, uploadFilesForSession]);
+  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, imageAttachments, inputValue, planMode, planModeEnabled, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, teamModeEnabled, uploadFilesForSession]);
 
   const handlePlanReview = useCallback(async (
     plan: PlanReviewData,
@@ -856,6 +872,8 @@ export function ChatPage() {
               onTargetModeChange={setTargetMode}
               onToggleDeepThinking={() => setDeepThinking((value) => !value)}
               onTogglePlanMode={() => setPlanMode((value) => !value)}
+              teamModeEnabled={teamModeEnabled}
+              planModeEnabled={planModeEnabled}
             />
           )}
 

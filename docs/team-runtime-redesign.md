@@ -74,6 +74,7 @@ team_finish_coordination
 ```
 
 协调阶段不使用 `FinalAnswerStart`，也不拥有普通 Write、Edit、Bash、HTTP、知识库或 MCP 工具。`team_finish_coordination` 只有在至少存在一个 Member 和一个任务时才能成功。
+Leader 协调预算为 64 轮 ReAct。若 Leader session 在未调用 `team_finish_coordination` 时结束，但已有至少一个临时成员和一条任务，Runtime 自动进入 `executing`，不得因此把整轮判失败。
 `team_finish_coordination` 成功后 Runtime 必须立即终止 Leader session 并启动 Coordinator，禁止 Leader 在协调 session 内轮询任务或 Mailbox。成员间通信前置条件必须建模为显式任务依赖，不得创建“A 等 B 消息、B 的任务又依赖 A 完成”的隐性环。
 
 ### MemberSessionRuntime
@@ -216,7 +217,7 @@ mail.acted
 
 Member session 不开放单 Agent HITL。遇到权限确认或外部执行事件时，Runtime 自动返回拒绝结果并恢复同一 session，同时记录 `member.tool.denied`；连续请求超过保护上限才判定该 Member 失败。
 
-Team 不继承普通 Agent 的 `maxReactIters`。Leader 协调固定 16 轮，Member 主执行固定 32 轮，综合固定 8 轮。Member 首次耗尽时在同一 Agent session 追加一次 8 轮恢复，恢复轮只保留 `team_read_tasks`、`team_read_mailbox`、`team_send_mail`、`team_submit_result`，要求基于已有证据立即提交；恢复轮再次耗尽才失败。
+Team 不继承普通 Agent 的 `maxReactIters`。Leader 协调固定 64 轮，Member 主执行固定 256 轮，综合固定 8 轮。Member 首次耗尽时在同一 Agent session 追加一次 8 轮恢复，恢复轮只保留 `team_read_tasks`、`team_read_mailbox`、`team_send_mail`、`team_submit_result`，要求基于已有证据立即提交；恢复轮再次耗尽才失败。
 
 每个事件 payload 必须包含 projector 所需的白名单字段，projector 禁止回读 Team 文件补充展示数据。`TeamEventPublisher` 只按 `seq` 转发事件，不再为每条事件计算或附加 `snapshot`。Chat normalizer 将其翻译为带 `team.` 前缀的 Domain Event，并由单一 ProjectionRunner 按 `stream_ordinal` 串行消费。
 
