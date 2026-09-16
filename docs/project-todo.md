@@ -1,6 +1,6 @@
 # 引力 YINLI TODO
 
-> 最后更新：2026-09-15。本文只保留尚未完成的任务。
+> 最后更新：2026-09-16。本文只保留尚未完成的任务。
 
 ## P0. Runtime 稳定性
 
@@ -21,19 +21,15 @@
 - [ ] Team Leader 验收步骤：综合前让 Leader 看各任务结果摘要，允许补派修正任务或放行；目前"完成"仍是全部任务终态的机械判定。
 - [ ] Team 跨轮连续性：每个 Chat 轮次新建 TeamRun，Leader 不知道上一轮组了谁、产出了什么；可让 Leader 读上一轮 `events.jsonl` 任务摘要。
 - [ ] Team 成员的 Bash 仍可写私有目录之外的位置（只有 Write/Edit 受 `write_scope_dir` 约束）。
-- [ ] 群聊讨论 → 执行缺客观收敛准则：任务卡加"进入执行的条件"由系统机械检查，不满足超 N 轮时 Host 必须向人提问。
-- [ ] 群聊工作室 Host / Worker 的 `CONTEXT_USAGE` trace、Chat 切模型与工作室固定连接不一致的 UI 提示、按 run 汇总 token 成本视图。
+- [ ] 群聊按 `docs/group-studio-v2.md` 重做后，再补 Worker `CONTEXT_USAGE` 观测、Chat 切模型与房间固定连接不一致的 UI 提示、按 run 汇总 token 成本。不再做「讨论 → 执行」收敛或 Host 向人提问。
 
 ## P1. 群聊工作室后续
 
-Intake 对谈、FIFO 点名队列、`group_work_items` 认领已在线。下面只保留未做项。
+产品方向改为 `docs/group-studio-v2.md`：房间留下、主持流程拆掉。下列旧项（真并行、时间旅行、群事件进 Trace、跨群目录）等 V2 第一版可用后再做。Intake / 工作项 / Host 每轮必出不再作为增强项。
 
+- [ ] 按 `docs/group-studio-v2.md` 落地第一版：进群即 `open`、拉人踢人、无确认开始、@谁谁说 / 无 @ 全员一轮、说完停、卸可见 Host 与阶段机。
+- [ ] 群聊 SSE 补 `afterSeq`、断线重连、切群换订阅；历史 `GROUP_ERROR` 不重复 toast。
 - [ ] 把 `MainAgentRuntimeSpec` / cache key 从 `routes/chat/runtime_builder.py` 下沉到 `agents/` 或 `runtime/`，Chat 与 group_studio 平级调用。
-- [ ] 真并行 Worker（`maxParallelWorkers>1`）与 `parent_run_id` / child runs。
-- [ ] 时间旅行快照表不要叫 `group_snapshots`，以免和 `GROUP_STUDIO_STATE` 口语撞车。
-- [ ] 群事件进入 Trace 页前给 `run_events` 增加 `source` 默认 `chat`，且 `session_id` 必须是真实 Chat session。
-- [ ] `max_cost_usd` 熔断；P0 只记 token，不按金额熔断。
-- [ ] 工作室列表入口与跨群切换（P0 一 Chat session 一间未归档工作室，不提供群目录）。
 
 ## P1. Event Stream 后续加固
 
@@ -80,14 +76,6 @@ Intake 对谈、FIFO 点名队列、`group_work_items` 认领已在线。下面�
 - [ ] 建立 Memory 回归集和手动冒烟流程，确认主干稳定后再扩展召回实验。
 
 暂缓：复杂召回质量视图、模型评分评估、`memory_change_log`、Git-backed vault、Wiki 反向合并和专业图谱组件。
-
-## P1. 系统定义文件化
-
-规格见 `docs/file-catalog-v1.md`。第一期（持久 Agent + INDEX）在本轮实施。
-
-- [x] 第二期：Skill 去掉库内正文双写；项目 `.agents/skills` 默认可运行；seed `word-documents` / `yinli-charts`（本轮实施）。
-- [x] 第三期：MCP / HTTP 定义文件化，密钥走 secret_store（本轮实施）。
-- [x] 第四期：Job 定义收到同一棵树，撤回模型侧 `ScheduleJob` 平行入口（本轮实施）。
 
 ## P6. 桌面端与前端
 

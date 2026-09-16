@@ -1,8 +1,7 @@
 # 定时任务 v2：到点激活 Agent 与能力合同
 
-> 状态：已落地。2026-08-25：Job Agent 与 Chat Agent 拆分；必注入工具不受 CheckJobFeasibility 裁剪。
-> 作者：引力 YINLI 架构。
-> 当前架构事实以 `docs/architecture-overview.md` 为准。本文保留 Job Agent 能力合同与创建前门禁的专题边界。
+> 状态：已落地，是 Job Agent 能力合同专题，不是待做路线图。2026-08-25：Job Agent 与 Chat Agent 拆分；必注入工具不受 CheckJobFeasibility 裁剪。
+> 当前架构事实以 `docs/architecture-overview.md` 为准。未完成项只记 `docs/project-todo.md`。
 > 稳定事件字段以 `docs/chat-sse-event-contract.md` 为准；本文 **不** 新增 Chat SSE 字段，**禁止** 顶层 `JOB_EVENT`。
 > 边界对照：`docs/architecture-overview.md`、`docs/team-runtime-redesign.md`、`docs/subagent-delegation-design.md`。
 

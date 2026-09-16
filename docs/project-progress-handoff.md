@@ -88,7 +88,7 @@ Team（`team_runtime/`）：
 - 2026-09-15 结项后历史消失：列表故意丢掉 `archived`；from-chat 的 Chat session 没初始化 `messages`，回 Chat 点会话 404。现改为归档保留在群聊列表（删除才隐藏），并补上空消息列表。前端不再把 `illegal_transition` / `not_found` 原文弹给用户。
 - Worker 崩溃只移出本人，`_continue_after_worker` 续跑队列或回 Host；黑板 decisions > 20 自动把最早 8 条归并为一条；Worker shell 黑名单加破坏性命令（bypass 免疫）。
 
-未做（记 TODO）：Leader 验收步骤、Team 跨轮连续性、群聊收敛准则、成员 Bash 越界写。
+未做（记 TODO）：Leader 验收步骤、Team 跨轮连续性、成员 Bash 越界写。群聊下一版见 `docs/group-studio-v2.md`。
 
 ## 本轮模型配置改造
 
@@ -119,7 +119,7 @@ Team（`team_runtime/`）：
 - Chat 在创建 Agent 前解析不可变 `RuntimeContext`；Session 不能跨 Project 继续。
 - Project root 与 Agent filesystem scope 取交集，不相交时拒绝运行。
 - TeamRun、Subagent、Memory、Trace、Domain Event 和 Projection stream 已继承 Workspace / Project，并按当前 Project 隔离。
-- Project resource binding 已作为持久资源白名单参与 Runtime：Agent 必须绑定，Skill、MCP 和 HTTP Tool 取 Agent 配置与 enabled binding 的交集。
+- Project resource binding 裁剪 Skill、MCP 和 HTTP Tool（与 Agent 配置取交集）。普通 Chat Agent 按 Workspace 可用，不再要求 Project Agent binding。
 - 已有 Project 在升级时建立一次性资源基线，新建 Project 快照绑定创建时的 Workspace 资源；后续新增资源不会自动授权。
 - Chat 历史区按 Workspace / Project 分类，点击 Session 自动恢复其归属；新对话在首次输入前选择或创建工作上下文。管理侧栏保留资源上下文切换入口。
 - Session、Runs、Trace、Memory 与 Agent、Skill、MCP、HTTP Tool 管理已读取当前上下文；新建持久资源会显式绑定当前 Project。
@@ -135,7 +135,7 @@ Team（`team_runtime/`）：
 - Intake 对谈已上线：`drafting` 只允许人类 ↔ Host 发言，可预邀工人入座，写卡不切 `discussing`，Chat 上一句是开场白不是 Goal，人类确认后才开会。
 - FIFO 点名队列（`memberIds[]`）与 `group_work_items` 原子认领已上线；工人结束弹下一人，中间不回 Host。`maxParallelWorkers=1`。
 - 消息区与 Chat 共用滚到底部按钮。阶段机以 `docs/architecture-overview.md` 为准。
-- 真并行、时间旅行、群事件进 Trace、归档记忆收口仍待做。
+- 归档记忆已收口。真并行、时间旅行、群事件进 Trace 等不再沿现行阶段机加功能，下一版见 `docs/group-studio-v2.md`。
 
 ### Chat 与运行状态
 
@@ -162,7 +162,7 @@ Team（`team_runtime/`）：
 - Member session 隔离，通过 Task List、Mailbox 和任务结果协作。
 - 用户可向指定成员或全员发送 Mailbox 消息。
 - Team 以 file-first 状态和 `events.jsonl` outbox 为事实源，不再给每条事件附加完整 snapshot；Chat 将 Run、Member、Task、Activity、Tool 和 Mail 分别投影为规范化 Block 子树。
-- Team Member Lifecycle V2 的 Phase 1/2 已在 `codex/team-member-lifecycle-v2` 分支实现：TaskAttempt 事实源、Attempt Block、Mailbox `dispatchMode`、idle Member 追加 Task 和综合期间回到 Coordinator；Reviewer 自动审核、原 Task rework 与跨进程恢复尚未实现。
+- Team Member Lifecycle V2 未作为 master 行为上线。现网已有 Mailbox `dispatchMode`；Reviewer、原 Task rework 与跨进程恢复仍未做。在线基线仍是 `docs/team-runtime-redesign.md`，目标草案见 `docs/team-member-lifecycle-v2.md`。
 - 前端 Team Console 只从 DisplaySnapshot V4 派生任务、成员、过程和 Mailbox，并支持通过 active TeamRun Mailbox API 向成员或全体发送干预消息；命令结果仍以 RuntimeFrame 回流为准。
 - 持久 Team CRUD、template、固定成员列表、`/api/teams`、`teams` / `team_members` 表已经删除。
 
@@ -267,7 +267,7 @@ group studio PR 测试（pr1–pr14）：此前在 feat/group-studio 上 116 pas
 3. Workspace / Project Phase 0 至 Phase 3 已完成；浏览器级跨 Project 自动化隔离和 Artifact ownership 尚未完成。
 4. Agent / Subagent 配置版本、评估指标和 Secret 轮换尚未形成平台能力。定时任务第一批（到点执行 + 应用内通知）已在线。
 5. Electron 正式签名、公证、Windows 真机、`userData` 迁移和自动更新尚未完成。
-6. 群聊工作室：真并行、时间旅行、群事件进 Trace、归档后记忆收口未做；主持人是否守队列/写卡协议仍依赖模型和 prompt。
+6. 群聊工作室现行实现仍依赖主持人阶段机；产品下一版见 `docs/group-studio-v2.md`。归档记忆已收口。
 
 ## 核心入口
 

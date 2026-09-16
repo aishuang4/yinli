@@ -1,8 +1,8 @@
 # Team Member Lifecycle V2 设计
 
-> 状态：方案草案，待批准后实施。更新时间：2026-08-05。
+> 状态：方案草案，未合入 master 行为。更新时间：2026-09-16。
 >
-> 本文定义 V2 目标状态；Phase 1/2 已在 `codex/team-member-lifecycle-v2` 分支实现，Reviewer、原 Task rework 和跨进程恢复仍未实现。当前在线基线仍以 `docs/team-runtime-redesign.md` 为准。
+> 本文定义 V2 目标状态。现网已有部分 Mailbox `dispatchMode`；Reviewer、原 Task rework 和跨进程恢复仍未实现。当前在线基线仍以 `docs/team-runtime-redesign.md` 为准。
 
 ## 1. 背景与核心问题
 

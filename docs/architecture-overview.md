@@ -102,7 +102,8 @@ middleware 数据，最后才用 `skill_runs` 兜底恢复已读 Skill。会话�
 - `runtime_context.py` 在 Runtime 创建前解析 Project root、instructions 和 ownership。
 - Project root 与 Agent filesystem scope 取交集；不相交时拒绝执行。
 - TeamRun、Subagent invocation、Memory、Trace、Domain Event 和 Projection stream 继承父运行归属。
-- Project resource binding 已作为运行时白名单参与 Agent、Skill、MCP Server 和 HTTP Tool 裁剪；资源必须属于 Project 所在 Workspace，Project 只能收窄 Agent 配置。
+- 普通 Chat Agent 是否可用于 Chat / 群聊，只看 Workspace 归属、`role` 不是 `job`、不是 `group-studio-host`。不再要求 `project_resource_bindings` 里有 Agent 行；历史 Agent 绑定可留着，但不作为可用性条件。
+- Project resource binding 继续裁剪 Skill、MCP、HTTP Tool 和知识库工具；资源必须属于 Project 所在 Workspace，Project 只能收窄 Agent 配置。Job Agent 的定时任务权限模型不变。
 - 已有 Project 升级时建立一次性资源基线；新建 Project 快照绑定创建时已有的 Workspace 资源，后续新增资源不会自动授权给既有 Project。
 - 前端使用统一 Workspace / Project 上下文；Chat、Trace、Memory 和资源管理按当前上下文筛选，切换 Project 时清理 Chat 与 Team 运行投影。独立 Runs 页由产品档 `views.runs` 控制，默认关闭。
 - Workspace 与首个 Project 通过 bootstrap API 原子创建；正式 Artifact ownership 留在 Artifact Phase。
