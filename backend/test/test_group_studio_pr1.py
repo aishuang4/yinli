@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from src.agents.runtime_types import AgentGuardrails, AgentModelOptions, RuntimeToolScope
-from src.group_studio.errors import GROUP_STUDIO_DISABLED
+from src.group_studio.errors import GROUP_STUDIO_DISABLED, HOST_REQUIRED
 from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID, GroupStudioFromChatRequest
 from src.group_studio.settings import (
     get_group_studio_settings_public,
@@ -137,6 +137,37 @@ def test_list_studios_is_independent_of_chat_catalog(client):
 
 def test_host_sentinel_constant():
     assert GROUP_STUDIO_HOST_AGENT_ID == "group-studio-host"
+
+
+def test_from_chat_snapshot_omits_v1_board_fields(client):
+    set_group_studio_settings(enabled=True)
+    created = client.post("/api/group-studio/from-chat", json={
+        "projectId": "default",
+        "chatSessionId": "sess-slim",
+        "agentId": "default",
+    })
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert "pin" in body
+    assert "workItems" not in body
+    assert "blackboard" not in body
+    assert "awaitingIntakeConfirm" not in body
+
+
+def test_host_sentinel_cannot_join(client):
+    set_group_studio_settings(enabled=True)
+    created = client.post("/api/group-studio/from-chat", json={
+        "projectId": "default",
+        "chatSessionId": "sess-host",
+        "agentId": "default",
+    })
+    assert created.status_code == 200, created.text
+    response = client.post(f"/api/group-studio/{created.json()['id']}/members", json={
+        "projectId": "default",
+        "agentId": GROUP_STUDIO_HOST_AGENT_ID,
+    })
+    assert response.status_code == 409
+    assert response.json()["detail"] == HOST_REQUIRED
 
 
 def test_from_chat_request_accepts_camel_case():

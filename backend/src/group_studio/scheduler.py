@@ -24,12 +24,6 @@ def should_auto_run() -> bool:
     return not os.environ.get("PYTEST_CURRENT_TEST")
 
 
-def schedule_host_turn(group_id: str) -> None:
-    """V2 不再派 Host。保留符号避免旧调用炸。"""
-
-    return
-
-
 def schedule_next(group_id: str) -> None:
     """只派队列里的下一个 Worker。队列空则 drained 后停。"""
 

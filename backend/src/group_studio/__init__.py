@@ -11,8 +11,8 @@
 - `lifecycle` / `circuit`：启动对账、删除 session、熔断
 - `storage/group_studio_records`：SQLite 读写，不写 Chat 表
 
-V1 主持/阶段机/黑板/工作项仍散落在 `host_runtime`、`tools_host`、
-`workboard`、`intake`、`blackboard`。新逻辑不要往这些文件加。
+V1 主持/阶段机模块（`host_runtime`、`tools_host`、`workboard`、
+`intake`、`blackboard`）已删除，不要恢复。
 """
 
 from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID

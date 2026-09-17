@@ -672,7 +672,7 @@ projectId, body (1–20000), mentions: membershipId[]
 | `scheduler.py` / `speaker_queue.py` / `lifecycle.py` | 重写 |
 | `service.py` | 第一条消息才 from-chat 落库 open；成员不再看阶段；删 intake/restatement/phase API |
 | `worker_runtime.py` / `tools_worker.py` | 瘦提示词与工具 |
-| `host_runtime.py` / `tools_host.py` / `intake.py` / `workboard.py` | 停止调用；可先留文件但路由与调度不得 import |
+| `host_runtime.py` / `tools_host.py` / `intake.py` / `workboard.py` / `blackboard.py` | 已删除，不要恢复 |
 | `circuit.py` | 按第 12 节 |
 | `archive_memory.py` | 按 13.3 |
 | `startup_checks.py` | 第 17 节迁移 |

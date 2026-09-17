@@ -30,22 +30,21 @@ def _worker_delivered(group_id: str, run_id: str) -> bool:
 
 
 def progress_fingerprint(snapshot: dict[str, Any]) -> tuple[Any, ...]:
-    """无进展指纹。V2 主要看工人是否写出可见正文；快照字段仅作辅证。"""
+    """无进展指纹：置顶修订、可见工人正文。"""
 
-    board = snapshot.get("blackboard") or {}
+    pin = snapshot.get("pin") or {}
     card = snapshot.get("taskCard") or {}
-    dod = card.get("dodChecklist") or []
-    checked = tuple(
-        str(item.get("id") or "")
-        for item in dod
-        if isinstance(item, dict) and item.get("checked")
+    messages = snapshot.get("messages") or []
+    worker_bodies = tuple(
+        str(item.get("body") or "")
+        for item in messages
+        if str(item.get("role") or "") == "worker" and str(item.get("body") or "").strip()
     )
-    artifacts = tuple(str(item) for item in (board.get("artifacts") or []))
     return (
-        int(board.get("revision") or 0),
-        artifacts,
+        str(pin.get("goal") or ""),
+        str(pin.get("notes") or ""),
         int(card.get("revision") or 0),
-        checked,
+        worker_bodies[-3:],
     )
 
 
@@ -79,10 +78,7 @@ def on_run_finished(
         "pause",
     }
     started = take_fingerprint(run_id)
-    if duty == "claim":
-        if run_status == "completed":
-            budget["usedTurns"] = int(budget.get("usedTurns") or 0) + 1
-    elif run_status == "completed":
+    if run_status == "completed":
         budget["usedTurns"] = int(budget.get("usedTurns") or 0) + 1
         board_moved = started is None or started != progress_fingerprint(snapshot)
         if board_moved or _worker_delivered(group_id, run_id):

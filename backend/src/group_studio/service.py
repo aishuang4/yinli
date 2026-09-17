@@ -2,7 +2,6 @@
 
 本文件只编排进群、成员、置顶、发言、暂停、结束。
 队列算法在 `speaker_queue`，点火在 `scheduler`，硬规则在 `orchestrator`。
-文件后半「V1 遗留」只给旧路由/Host 工具过渡，新能力不要往那里加。
 """
 
 from __future__ import annotations
@@ -10,13 +9,11 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from src.group_studio.blackboard import merge_blackboard
 from src.group_studio.errors import (
     AGENT_NOT_BOUND,
     CHAT_RUN_ACTIVE,
     CROSS_PROJECT_SESSION,
     DEFAULT_AGENT_FORBIDDEN,
-    GOAL_REQUIRED,
     GROUP_STUDIO_NOT_FOUND,
     ALREADY_MEMBER,
     HOST_REQUIRED,
@@ -25,8 +22,6 @@ from src.group_studio.errors import (
     MEMBER_CAP,
     NO_ELIGIBLE_SPEAKER,
     STUDIO_NOT_OPEN,
-    NOT_AWAITING_RESTATEMENT,
-    RESTATEMENT_MISSING,
     GroupStudioError,
 )
 from src.group_studio.files import ensure_studio_dirs, save_studio_upload
@@ -44,7 +39,6 @@ from src.group_studio.models import (
 )
 from src.group_studio.orchestrator import (
     assert_can_mutate,
-    assert_can_start_execution,
     max_members,
 )
 from src.group_studio.settings import get_group_studio_settings_public
@@ -74,11 +68,9 @@ from src.storage.database import (
     list_group_studio_artifacts,
     list_group_studios_by_project,
     list_group_studio_messages,
-    replace_group_studio_blackboard,
     set_group_studio_member_muted,
     set_group_studio_member_removed,
     set_group_studio_member_status,
-    set_group_studio_status,
     update_group_studio_model_config,
     update_group_studio_state,
 )
@@ -445,85 +437,6 @@ def add_member(group_id: str, request: GroupMemberCreateRequest) -> Membership:
     return membership
 
 
-# ---------------------------------------------------------------------------
-# 以下为 V1 遗留入口。路由改 410 之前先留着，禁止往这里加新逻辑。
-# ---------------------------------------------------------------------------
-
-
-def prepare_start_execution(group_id: str, project_id: str) -> GroupStudio:
-    """V1 遗留：进入执行期。V2 没有执行阶段。"""
-
-    studio = _load_studio(group_id)
-    _assert_project(studio, project_id)
-    assert_can_start_execution(studio.status, studio.task_card.goal)
-    set_group_studio_status(group_id, "executing")
-    emit_envelope(
-        group_id=group_id,
-        event_type="GROUP_STATUS",
-        payload={"from": studio.status, "to": "executing", "reason": "human_start_execution"},
-    )
-    return get_studio(group_id)
-
-
-def prepare_start_review(group_id: str, project_id: str) -> GroupStudio:
-    """V1 遗留：进入验收期。"""
-
-    studio = _load_studio(group_id)
-    _assert_project(studio, project_id)
-    if studio.status != "executing":
-        raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    set_group_studio_status(group_id, "reviewing")
-    emit_envelope(
-        group_id=group_id,
-        event_type="GROUP_STATUS",
-        payload={"from": "executing", "to": "reviewing", "reason": "human_start_review"},
-    )
-    return get_studio(group_id)
-
-
-def _dod_complete(studio: GroupStudio) -> bool:
-    """V1 遗留：DoD 是否勾完。"""
-
-    items = studio.task_card.dod_checklist
-    if not items:
-        return True
-    return all(item.checked for item in items)
-
-
-def propose_close(group_id: str, *, project_id: str = "") -> GroupStudio:
-    """V1 遗留：进入 closing。"""
-
-    studio = _load_studio(group_id)
-    _assert_project(studio, project_id)
-    if studio.status == "closing":
-        return studio
-    if studio.status not in {"reviewing", "discussing", "executing"}:
-        raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    # 不要 cancel 当前 Host Run：工具是在该 Run 内调用的，cancel 会把本轮打成
-    # pause / 空气泡，前端看起来像报错。清队列即可，避免收口后再派工人。
-    from src.group_studio.speaker_queue import clear_queue
-
-    clear_queue(group_id, kind="propose_close")
-    apply_group_studio_task_card_update(
-        group_id,
-        goal=studio.task_card.goal,
-        background=studio.task_card.background,
-        constraints=list(studio.task_card.constraints),
-        dod_checklist=[item.model_dump(by_alias=True) for item in studio.task_card.dod_checklist],
-        card_status="frozen_for_close",
-        studio_status="closing",
-        awaiting_restatement=False,
-        phase_before_pause=None,
-        bump_revision=False,
-    )
-    emit_envelope(
-        group_id=group_id,
-        event_type="GROUP_STATUS",
-        payload={"from": studio.status, "to": "closing", "reason": "propose_close"},
-    )
-    return get_studio(group_id)
-
-
 def close_studio(group_id: str, *, project_id: str, confirm: bool) -> GroupStudio:
     """confirm=true 结束房间为 done 并走归档记忆。"""
 
@@ -615,71 +528,6 @@ def _emit_human_timeline_message(
         payload={"messageId": message.id, "body": text, "outcome": "completed"},
     )
     return message
-
-
-def request_intake_confirm(group_id: str) -> GroupStudio:
-    """V1 遗留：Host 提请确认 intake。"""
-
-    studio = _load_studio(group_id)
-    if studio.status != "drafting":
-        raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    if not studio.task_card.goal.strip():
-        raise GroupStudioError(422, GOAL_REQUIRED)
-    snapshot = update_group_studio_state(group_id, awaiting_intake_confirm=True)
-    emit_envelope(
-        group_id=group_id,
-        event_type="GROUP_INTAKE",
-        payload={"awaitingConfirm": True, "reason": "host_request"},
-    )
-    return _snapshot_to_model(snapshot)
-
-
-def confirm_intake(group_id: str, *, project_id: str) -> GroupStudio:
-    """V1 遗留：确认 intake 后进 discussing。"""
-
-    studio = _load_studio(group_id)
-    _assert_project(studio, project_id)
-    if studio.status != "drafting":
-        raise GroupStudioError(409, ILLEGAL_TRANSITION)
-    if not studio.awaiting_intake_confirm:
-        raise GroupStudioError(409, INTAKE_NOT_READY)
-    goal = studio.task_card.goal.strip()
-    if not goal:
-        raise GroupStudioError(422, GOAL_REQUIRED)
-    assert_can_mutate(studio.status)
-    title = goal[:28] + ("..." if len(goal) > 28 else "")
-    apply_group_studio_task_card_update(
-        group_id,
-        goal=goal,
-        background=studio.task_card.background,
-        constraints=list(studio.task_card.constraints),
-        dod_checklist=[item.model_dump(by_alias=True) for item in studio.task_card.dod_checklist],
-        card_status="active",
-        studio_status="discussing",
-        awaiting_restatement=False,
-        phase_before_pause=None,
-        bump_revision=True,
-        title=title,
-    )
-    snapshot = update_group_studio_state(group_id, awaiting_intake_confirm=False)
-    updated = _snapshot_to_model(snapshot)
-    emit_envelope(
-        group_id=group_id,
-        event_type="GROUP_STATUS",
-        payload={"from": "drafting", "to": "discussing", "reason": "confirm_intake"},
-    )
-    emit_envelope(
-        group_id=group_id,
-        event_type="GROUP_TASK_CARD",
-        payload=updated.task_card.model_dump(by_alias=True),
-    )
-    emit_envelope(
-        group_id=group_id,
-        event_type="GROUP_INTAKE",
-        payload={"awaitingConfirm": False, "reason": "confirmed"},
-    )
-    schedule_host_turn(group_id)
-    return updated
 
 
 def post_human_message(group_id: str, *, project_id: str, body: str, mentions: list[str] | None = None) -> GroupMessage:
@@ -836,219 +684,11 @@ def resume_studio(group_id: str, *, project_id: str, max_turns: int | None = Non
     return updated
 
 
-def confirm_restatement(group_id: str, *, project_id: str) -> GroupStudio:
-    """V1 遗留：确认 Host 复述。"""
-
-    studio = _load_studio(group_id)
-    _assert_project(studio, project_id)
-    if not studio.awaiting_restatement:
-        raise GroupStudioError(409, NOT_AWAITING_RESTATEMENT)
-    messages = list_group_studio_messages(group_id, limit=50)
-    restated = any(
-        item.get("role") == "host" and item.get("intent") == "restatement" and str(item.get("body") or "").strip()
-        for item in messages
-    )
-    if not restated:
-        raise GroupStudioError(409, RESTATEMENT_MISSING)
-    nxt = studio.phase_before_pause or "discussing"
-    if nxt not in {"discussing", "executing", "reviewing"}:
-        nxt = "discussing"
-    snapshot = update_group_studio_state(
-        group_id,
-        status=nxt,
-        awaiting_restatement=False,
-        clear_phase_before_pause=True,
-    )
-    emit_envelope(
-        group_id=group_id,
-        event_type="GROUP_STATUS",
-        payload={"from": studio.status, "to": nxt, "reason": "confirm_restatement"},
-    )
-    updated = _snapshot_to_model(snapshot)
-    schedule_host_turn(group_id)
-    return updated
-
-
 def _assert_project(studio: GroupStudio, project_id: str) -> None:
     """请求 project_id 必须与房间一致。"""
 
     if project_id and project_id != studio.project_id:
         raise GroupStudioError(422, CROSS_PROJECT_SESSION)
-
-
-def _blackboard_inner(payload: dict) -> dict:
-    """V1 遗留：抽出黑板可比较字段。"""
-    return {
-        "taskCardId": payload.get("taskCardId") or "",
-        "goal": payload.get("goal") or "",
-        "constraints": list(payload.get("constraints") or []),
-        "decisions": list(payload.get("decisions") or []),
-        "openQuestions": list(payload.get("openQuestions") or []),
-        "artifacts": list(payload.get("artifacts") or []),
-    }
-
-
-def patch_blackboard(
-    group_id: str,
-    patch: dict,
-    *,
-    asked_by: str = "host",
-    source_message_id: str | None = None,
-    source_run_id: str | None = None,
-) -> dict:
-    """V1 遗留：合并黑板。V2 第一版不写黑板。"""
-
-    studio = _load_studio(group_id)
-    assert_can_mutate(studio.status)
-    current = studio.blackboard.model_dump(by_alias=True)
-    merged = merge_blackboard(
-        current,
-        patch,
-        asked_by=asked_by,
-        source_message_id=source_message_id,
-        source_run_id=source_run_id,
-    )
-    inner = _blackboard_inner(merged)
-    if inner == _blackboard_inner(current):
-        return current
-    board = replace_group_studio_blackboard(group_id, inner)
-    if not board:
-        raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
-    emit_envelope(
-        group_id=group_id,
-        event_type="GROUP_BLACKBOARD",
-        run_id=source_run_id,
-        payload=board,
-    )
-    return board
-
-
-_DELIVERY_SUFFIXES = {
-    ".md",
-    ".txt",
-    ".pdf",
-    ".docx",
-    ".xlsx",
-    ".csv",
-    ".json",
-    ".html",
-    ".png",
-    ".jpg",
-}
-_SKIP_DIR_NAMES = {".git", "__pycache__", "node_modules", ".venv", ".DS_Store"}
-
-
-def record_worker_delivery(
-    group_id: str,
-    *,
-    member: dict,
-    body: str,
-    run_id: str,
-    message_id: str,
-) -> None:
-    """V1 遗留：执行期交稿写黑板。V2 工人只发言，不走这里。"""
-
-    text = str(body or "").strip()
-    if not text:
-        return
-    snapshot = get_group_studio_snapshot(group_id, message_limit=1)
-    if snapshot is None:
-        return
-    status = str(snapshot.get("status") or "")
-    if status not in {"executing", "reviewing"}:
-        return
-    board = snapshot.get("blackboard") or {}
-    already = any(
-        str(item.get("sourceRunId") or "") == run_id
-        for item in (board.get("decisions") or [])
-        if isinstance(item, dict)
-    )
-    name = str(member.get("displayName") or member.get("agentId") or "工人")
-    snippet = " ".join(text.split())
-    if len(snippet) > 240:
-        snippet = snippet[:239] + "…"
-    artifact_ids = _register_untracked_workspace_files(
-        group_id,
-        member_id=str(member.get("id") or ""),
-        project_id=str(snapshot.get("projectId") or ""),
-    )
-    patch: dict = {}
-    if not already:
-        patch["addDecisions"] = [{
-            "text": f"「{name}」已交稿：{snippet}",
-            "sourceMessageId": message_id,
-            "sourceRunId": run_id,
-        }]
-    if artifact_ids:
-        patch["addArtifactIds"] = artifact_ids
-    if not patch:
-        return
-    try:
-        patch_blackboard(
-            group_id,
-            patch,
-            asked_by=str(member.get("id") or "worker"),
-            source_message_id=message_id,
-            source_run_id=run_id,
-        )
-    except GroupStudioError:
-        return
-
-
-def _register_untracked_workspace_files(
-    group_id: str,
-    *,
-    member_id: str,
-    project_id: str,
-) -> list[str]:
-    """把尚未入库的 outputs/workspace 交付文件登记为产物。"""
-
-    from src.group_studio.files import ensure_studio_dirs
-
-    project = get_project(project_id) or {}
-    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
-    if not project_root.is_dir():
-        return []
-    studio_root = ensure_studio_dirs(project_root, group_id)
-    existing = {str(item.get("path") or "") for item in list_group_studio_artifacts(group_id)}
-    registered: list[str] = []
-    for folder in ("outputs", "workspace"):
-        base = studio_root / folder
-        if not base.is_dir():
-            continue
-        for path in base.rglob("*"):
-            if not path.is_file():
-                continue
-            if any(part in _SKIP_DIR_NAMES or part.startswith(".") for part in path.relative_to(studio_root).parts):
-                continue
-            if folder == "workspace" and path.suffix.lower() not in _DELIVERY_SUFFIXES:
-                continue
-            try:
-                rel = str(path.relative_to(project_root))
-            except ValueError:
-                continue
-            if rel in existing:
-                continue
-            row = insert_group_studio_artifact({
-                "id": _new_id("gart"),
-                "groupId": group_id,
-                "title": path.name,
-                "path": rel,
-                "mediaType": "",
-                "byteSize": path.stat().st_size,
-                "createdBy": member_id,
-            })
-            existing.add(rel)
-            artifact_id = str(row.get("id") or "")
-            if not artifact_id:
-                continue
-            registered.append(artifact_id)
-            emit_envelope(
-                group_id=group_id,
-                event_type="GROUP_FILE",
-                payload=row,
-            )
-    return registered
 
 
 def mute_member(

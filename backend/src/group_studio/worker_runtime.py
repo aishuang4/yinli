@@ -192,7 +192,7 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
         knowledge_tools=knowledge_tools,
         runtime_tool_scope=scope,
         guardrail_cache_key=f"group-studio-worker-bypass:{guardrails.permission_profile.cache_key()}",
-        runtime_features_cache_key="group-studio-workboard-v1",
+        runtime_features_cache_key="group-studio-worker-v2",
         extra_tools=tools,
         tool_name_allowlist=allowlist,
         tool_name_denylist=WORKER_DENYLIST,
@@ -311,7 +311,7 @@ def _worker_memory_recall(snapshot: dict[str, Any], *, agent_id: str, agent_name
 
     pin = snapshot.get("pin") or snapshot.get("taskCard") or {}
     query = str(pin.get("goal") or pin.get("title") or "")
-    if duty == "claim" or not query.strip():
+    if not query.strip():
         return ""
     try:
         _prompt, recall = build_memory_prompt_and_recall(
@@ -424,37 +424,22 @@ async def _run_worker_turn(
     run_id = f"grun_{uuid.uuid4().hex[:16]}"
     ctx.begin_run(run_id)
     from src.group_studio.speaker_queue import get_queue, pop_head
-    from src.group_studio.workboard import get_claim_round, pop_claim_head
 
-    floor_reason = "host_assign"
-    if duty == "claim":
-        claim_before = get_claim_round(group_id)
-        if claim_before and claim_before[0] == member_id:
-            pop_claim_head(group_id, member_id)
-            floor_reason = "claim_round"
-        elif claim_before and claim_before[0] != member_id:
-            emit_envelope(
-                group_id=group_id,
-                event_type="GROUP_ERROR",
-                payload={"code": "floor_not_granted", "message": "当前没有你的发言权"},
-            )
-            return
-        else:
-            floor_reason = "claim_round"
+    queue_before = get_queue(group_id)
+    if queue_before and queue_before[0] == member_id:
+        pop_head(group_id, member_id)
+        floor_reason = "mention" if len(queue_before) > 1 else "queue_next"
+    elif queue_before and queue_before[0] != member_id:
+        emit_envelope(
+            group_id=group_id,
+            event_type="GROUP_ERROR",
+            payload={"code": "floor_not_granted", "message": "当前没有你的发言权"},
+        )
+        return
     else:
-        queue_before = get_queue(group_id)
-        if queue_before and queue_before[0] == member_id:
-            pop_head(group_id, member_id)
-            floor_reason = "host_assign" if len(queue_before) > 1 else "queue_next"
-        elif queue_before and queue_before[0] != member_id:
-            emit_envelope(
-                group_id=group_id,
-                event_type="GROUP_ERROR",
-                payload={"code": "floor_not_granted", "message": "当前没有你的发言权"},
-            )
-            return
-    kind = "execution" if str(snapshot.get("status") or "") == "executing" else "discussion"
-    intent = "report_progress" if kind == "execution" else "discuss"
+        floor_reason = "queue_next"
+    kind = "discussion"
+    intent = "discuss"
     insert_group_studio_run({
         "id": run_id,
         "groupId": group_id,
@@ -655,17 +640,6 @@ async def _run_worker_turn(
     interrupted = take_interrupt(group_id)
     if interrupted:
         return
-    if run_status == "completed":
-        # V1 交稿写黑板；V2 房间是 open，record_worker_delivery 会直接返回。
-        from src.group_studio.service import record_worker_delivery
-
-        record_worker_delivery(
-            group_id,
-            member=member,
-            body=body,
-            run_id=run_id,
-            message_id=message_id,
-        )
     update_group_studio_run_status(run_id, run_status, error_text)
     set_group_studio_current_run_id(group_id, None)
     emit_envelope(

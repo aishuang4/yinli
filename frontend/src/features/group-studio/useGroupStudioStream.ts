@@ -37,6 +37,8 @@ const BOARD_EVENTS = new Set([
   'GROUP_FLOOR',
 ]);
 
+/** 历史 V1 事件名不进 BOARD_EVENTS，因此被忽略：GROUP_INTAKE / GROUP_WORK_ITEM / GROUP_DOD / GROUP_BLACKBOARD / GROUP_TASK_CARD */
+
 export function useGroupStudioStream(
   groupId: string | null,
   enabled: boolean,

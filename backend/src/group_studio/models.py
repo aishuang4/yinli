@@ -13,16 +13,6 @@ GroupStudioStatus = Literal[
     "paused",
     "done",
     "deleted",
-    # 读取层会归一；保留旧值只为迁移期校验不炸。
-    "drafting",
-    "discussing",
-    "executing",
-    "reviewing",
-    "awaiting_human",
-    "circuit_broken",
-    "closing",
-    "archived",
-    "failed",
 ]
 MemberStatus = Literal["active", "crashed", "removed"]
 GroupRunStatus = Literal[
@@ -100,40 +90,6 @@ class TaskCard(CamelModel):
     updated_at: str = Field(alias="updatedAt")
 
 
-class BlackboardDecision(CamelModel):
-    """黑板上的已确认决策。"""
-
-    id: str
-    text: str
-    source_message_id: str | None = Field(default=None, alias="sourceMessageId")
-    source_run_id: str | None = Field(default=None, alias="sourceRunId")
-    created_at: str = Field(alias="createdAt")
-
-
-class OpenQuestion(CamelModel):
-    """未决问题；摘要不得丢弃未 resolved 项。"""
-
-    id: str
-    text: str
-    asked_by: str = Field(alias="askedBy")
-    resolved: bool = False
-    resolution: str = ""
-
-
-class Blackboard(CamelModel):
-    """V1 遗留黑板。快照兼容保留，V2 第一版不读写。"""
-
-    group_id: str = Field(alias="groupId")
-    revision: int
-    task_card_id: str = Field(alias="taskCardId")
-    goal: str
-    constraints: list[str] = Field(default_factory=list)
-    decisions: list[BlackboardDecision] = Field(default_factory=list)
-    open_questions: list[OpenQuestion] = Field(default_factory=list, alias="openQuestions")
-    artifacts: list[str] = Field(default_factory=list)
-    updated_at: str = Field(alias="updatedAt")
-
-
 class Membership(CamelModel):
     """Host 或 Worker 席位。Host 行 agent_id 恒为 group-studio-host。"""
 
@@ -190,32 +146,6 @@ class GroupApproval(CamelModel):
     created_at: str = Field(alias="createdAt")
 
 
-WorkItemStatus = Literal["open", "claimed", "done", "cancelled"]
-
-
-class WorkItem(CamelModel):
-    """V1 遗留工作项。快照兼容保留，V2 第一版不调度。"""
-
-    id: str
-    group_id: str = Field(alias="groupId")
-    task_card_id: str = Field(alias="taskCardId")
-    title: str
-    description: str = ""
-    status: WorkItemStatus
-    assignee_member_id: str | None = Field(default=None, alias="assigneeMemberId")
-    sort_order: int = Field(alias="sortOrder")
-    source_run_id: str | None = Field(default=None, alias="sourceRunId")
-    claim_run_id: str | None = Field(default=None, alias="claimRunId")
-    claimed_at: str | None = Field(default=None, alias="claimedAt")
-    completed_at: str | None = Field(default=None, alias="completedAt")
-    # 验收：accepted 通过；rework 退回 open（保留认领人），review_note 是给工人的修改意见。
-    review_status: Literal["accepted", "rework"] | None = Field(default=None, alias="reviewStatus")
-    review_note: str = Field(default="", alias="reviewNote")
-    rework_count: int = Field(default=0, alias="reworkCount")
-    created_at: str = Field(alias="createdAt")
-    updated_at: str = Field(alias="updatedAt")
-
-
 class GroupArtifact(CamelModel):
     """共享文件库条目。"""
 
@@ -253,19 +183,14 @@ class GroupStudio(CamelModel):
     current_task_card_id: str = Field(alias="currentTaskCardId")
     task_card: TaskCard = Field(alias="taskCard")
     pin: GroupPin = Field(default_factory=GroupPin)
-    blackboard: Blackboard
     members: list[Membership] = Field(default_factory=list)
     budget: GroupBudget
     current_run_id: str | None = Field(default=None, alias="currentRunId")
     current_speaker_member_id: str | None = Field(default=None, alias="currentSpeakerMemberId")
     pending_speaker_member_id: str | None = Field(default=None, alias="pendingSpeakerMemberId")
     speaker_queue: list[str] = Field(default_factory=list, alias="speakerQueue")
-    claim_round_member_ids: list[str] = Field(default_factory=list, alias="claimRoundMemberIds")
-    work_items: list[WorkItem] = Field(default_factory=list, alias="workItems")
     current_approval: GroupApproval | None = Field(default=None, alias="currentApproval")
     messages: list[GroupMessage] = Field(default_factory=list)
-    awaiting_restatement: bool = Field(default=False, alias="awaitingRestatement")
-    awaiting_intake_confirm: bool = Field(default=False, alias="awaitingIntakeConfirm")
     created_at: str = Field(alias="createdAt")
     updated_at: str = Field(alias="updatedAt")
 
@@ -326,7 +251,6 @@ class GroupTaskCardUpdateRequest(CamelModel):
     goal: str | None = None
     background: str | None = None
     constraints: list[str] | None = None
-    dod_checklist: list[DodItem] | None = Field(default=None, alias="dodChecklist")
 
 
 class GroupMemberCreateRequest(CamelModel):

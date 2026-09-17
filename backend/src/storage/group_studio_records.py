@@ -186,10 +186,6 @@ class GroupStudioRecordStore:
                 "SELECT * FROM group_task_cards WHERE id = ?",
                 (studio["current_task_card_id"],),
             ).fetchone()
-            blackboard = conn.execute(
-                "SELECT * FROM group_blackboards WHERE group_id = ?",
-                (group_id,),
-            ).fetchone()
             members = conn.execute(
                 """
                 SELECT * FROM group_memberships
@@ -225,18 +221,7 @@ class GroupStudioRecordStore:
                 ).fetchone()
                 if current_run is not None and str(current_run["status"] or "") == "running":
                     current_speaker = str(current_run["speaker_member_id"] or "")
-            try:
-                work_rows = conn.execute(
-                    """
-                    SELECT * FROM group_work_items
-                    WHERE group_id = ?
-                    ORDER BY sort_order ASC, created_at ASC
-                    """,
-                    (group_id,),
-                ).fetchall()
-            except sqlite3.OperationalError:
-                work_rows = []
-        if task is None or blackboard is None:
+        if task is None:
             return None
         ordered_messages = list(reversed(messages))
         raw_status = str(studio["status"])
@@ -270,7 +255,6 @@ class GroupStudioRecordStore:
                 "notes": str(task_card.get("background") or ""),
                 "updatedAt": str(task_card.get("updatedAt") or studio["updated_at"]),
             },
-            "blackboard": self._blackboard_from_row(blackboard, studio["current_task_card_id"]),
             "members": visible_members,
             "budget": self.loads(studio["budget_json"], {
                 "maxTurns": 40,
@@ -286,12 +270,8 @@ class GroupStudioRecordStore:
                 else None
             ),
             "speakerQueue": self.loads(studio["speaker_queue_json"], []) if "speaker_queue_json" in studio.keys() else [],
-            "claimRoundMemberIds": [],
-            "workItems": [],
             "currentApproval": None if hide_approval else self._approval_from_row(pending),
             "messages": [self._message_from_row(row) for row in ordered_messages],
-            "awaitingRestatement": False,
-            "awaitingIntakeConfirm": False,
             "createdAt": studio["created_at"],
             "updatedAt": studio["updated_at"],
         }

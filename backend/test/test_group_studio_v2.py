@@ -6,12 +6,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+import sqlite3
+
 from src.group_studio.errors import (
     ALREADY_MEMBER,
     DEFAULT_AGENT_FORBIDDEN,
+    HOST_REQUIRED,
     ILLEGAL_TRANSITION,
     NO_ELIGIBLE_SPEAKER,
 )
+from src.group_studio.models import GROUP_STUDIO_HOST_AGENT_ID
 from src.group_studio.speaker_queue import build_turn_queue, is_runnable_worker
 from src.group_studio.settings import set_group_studio_settings
 from src.server.routes import group_studio, settings as settings_routes
@@ -68,8 +72,26 @@ def test_from_chat_opens_without_host_or_first_message(client):
     assert body["pin"]["goal"] == ""
     assert all(item.get("role") != "host" for item in body["members"])
     assert body["messages"] == []
+    assert "workItems" not in body
+    assert "blackboard" not in body
+    assert "awaitingIntakeConfirm" not in body
     messages = list_group_studio_messages(body["id"])
     assert messages == []
+
+
+def test_legacy_discussing_status_normalizes_to_open(client):
+    body = _create(client)
+    with sqlite3.connect(database.DB_PATH) as conn:
+        conn.execute("UPDATE group_studios SET status = 'discussing' WHERE id = ?", (body["id"],))
+        conn.commit()
+    snapshot = client.get(f"/api/group-studio/{body['id']}")
+    assert snapshot.status_code == 200
+    payload = snapshot.json()
+    assert payload["status"] == "open"
+    assert "workItems" not in payload
+    assert "blackboard" not in payload
+    assert "awaitingIntakeConfirm" not in payload
+    assert "pin" in payload
 
 
 def test_legacy_phase_routes_are_gone(client):
@@ -84,6 +106,48 @@ def test_legacy_phase_routes_are_gone(client):
         response = client.post(path, json={"projectId": DEFAULT_PROJECT_ID})
         assert response.status_code == 410, path
         assert response.json()["detail"] == ILLEGAL_TRANSITION
+        snapshot = client.get(f"/api/group-studio/{group_id}")
+        assert snapshot.status_code == 200
+        assert snapshot.json()["status"] == "open"
+
+
+def test_host_sentinel_cannot_join(client):
+    body = _create(client)
+    response = client.post(f"/api/group-studio/{body['id']}/members", json={
+        "projectId": DEFAULT_PROJECT_ID,
+        "agentId": GROUP_STUDIO_HOST_AGENT_ID,
+    })
+    assert response.status_code == 409
+    assert response.json()["detail"] == HOST_REQUIRED
+    snapshot = client.get(f"/api/group-studio/{body['id']}")
+    assert all(item.get("agentId") != GROUP_STUDIO_HOST_AGENT_ID for item in snapshot.json()["members"])
+
+
+def test_empty_mentions_queues_workers_only(client, monkeypatch):
+    monkeypatch.setattr(
+        "src.group_studio.service._resolve_worker",
+        lambda agent_id, _workspace_id: {"id": agent_id, "name": agent_id, "role": "chat"},
+    )
+    body = _create(client)
+    first = client.post(f"/api/group-studio/{body['id']}/members", json={
+        "projectId": DEFAULT_PROJECT_ID,
+        "agentId": "writer",
+    })
+    second = client.post(f"/api/group-studio/{body['id']}/members", json={
+        "projectId": DEFAULT_PROJECT_ID,
+        "agentId": "reviewer",
+    })
+    assert first.status_code == 200 and second.status_code == 200
+    posted = client.post(f"/api/group-studio/{body['id']}/messages", json={
+        "projectId": DEFAULT_PROJECT_ID,
+        "body": "大家都说一句",
+        "mentions": [],
+    })
+    assert posted.status_code == 200, posted.text
+    snapshot = client.get(f"/api/group-studio/{body['id']}").json()
+    assert snapshot["speakerQueue"] == [first.json()["id"], second.json()["id"]]
+    assert all(item["role"] != "host" for item in snapshot["messages"])
+    assert all(item.get("role") != "host" for item in snapshot["members"])
 
 
 def test_empty_room_message_does_not_schedule(client):
