@@ -304,6 +304,34 @@ def test_empty_contract_assemble_keeps_bash_ignores_dirty_mcp(isolated_db):
     assert "AskUser" not in spec["firing_tools_preview"]
 
 
+def test_create_job_rejects_missing_agent_even_when_gate_off(isolated_db):
+    from src.scheduler.models import ScheduledJobValidationError
+    from src.scheduler.settings import set_scheduled_jobs_settings
+
+    set_scheduled_jobs_settings(enabled=True, capability_gate=False)
+    service = _service()
+    with pytest.raises(ScheduledJobValidationError, match="找不到要执行定时任务的 Agent"):
+        service.create_job(
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            project_id=DEFAULT_PROJECT_ID,
+            name="幽灵执行者",
+            agent_id="agent-does-not-exist",
+            schedule_kind="weekly",
+            schedule_expr={"weekdays": ["fri"], "at": "18:00"},
+            timezone="Asia/Shanghai",
+            frozen_prompt="只写一句测试",
+        )
+
+
+def test_update_job_rejects_missing_agent(isolated_db):
+    from src.scheduler.models import ScheduledJobValidationError
+
+    service = _service()
+    job = _weekly_job(service, name="改执行者")
+    with pytest.raises(ScheduledJobValidationError, match="找不到要执行定时任务的 Agent"):
+        service.update_job(job.id, {"agent_id": "agent-does-not-exist"})
+
+
 def test_create_job_rejects_retry_once_and_duplicate_name(isolated_db):
     from src.scheduler.models import ScheduledJobConflictError, ScheduledJobValidationError
 

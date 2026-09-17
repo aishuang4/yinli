@@ -142,6 +142,23 @@ def test_scheduled_jobs_settings_round_trip(client):
     assert denied.status_code == 403
 
 
+def test_create_rejects_missing_agent_when_gate_off(client):
+    """BUG-016：门禁关闭也不能把不存在的 agentId 写成待确认草稿。"""
+
+    saved = client.put("/api/settings/scheduled-jobs", json={
+        "enabled": True,
+        "capabilityGate": False,
+    })
+    assert saved.status_code == 200
+    assert saved.json() == {"enabled": True, "capabilityGate": False}
+    created = client.post(
+        "/api/scheduled-jobs",
+        json=_create_payload(name="幽灵草稿", agentId="agent-does-not-exist"),
+    )
+    assert created.status_code == 422
+    assert created.json()["detail"] == "找不到要执行定时任务的 Agent"
+
+
 def test_confirm_activates_job(client):
     _enable_jobs()
     listed = client.get("/api/scheduled-jobs")

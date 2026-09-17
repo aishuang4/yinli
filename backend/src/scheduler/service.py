@@ -136,6 +136,7 @@ class ScheduledJobService:
             raise ScheduledJobValidationError("name 不能为空")
         if not str(agent_id).strip():
             raise ScheduledJobValidationError("agent_id 不能为空")
+        self._require_agent_exists(agent_id)
         self._require_job_runner(agent_id)
         if not str(frozen_prompt).strip():
             raise ScheduledJobValidationError("frozen_prompt 不能为空")
@@ -342,8 +343,12 @@ class ScheduledJobService:
             if not name:
                 raise ScheduledJobValidationError("name 不能为空")
             payload["name"] = name
-        if "agent_id" in payload and not str(payload.get("agent_id") or "").strip():
-            raise ScheduledJobValidationError("agent_id 不能为空")
+        if "agent_id" in payload:
+            next_agent_id = str(payload.get("agent_id") or "").strip()
+            if not next_agent_id:
+                raise ScheduledJobValidationError("agent_id 不能为空")
+            self._require_agent_exists(next_agent_id)
+            self._require_job_runner(next_agent_id)
         if "frozen_prompt" in payload and not str(payload.get("frozen_prompt") or "").strip():
             raise ScheduledJobValidationError("frozen_prompt 不能为空")
         if "delivery_policy" in payload and payload["delivery_policy"] not in DELIVERY_POLICIES:
@@ -1121,6 +1126,27 @@ class ScheduledJobService:
             "capability_contract": payload,
         }
 
+    def _agent_is_available(self, agent_id: str) -> bool:
+        """default、Workspace 资源或已注册 catalog 任一命中即视为还在。"""
+
+        ident = str(agent_id or "").strip()
+        if not ident:
+            return False
+        if ident == "default":
+            return True
+        if get_workspace_resource("agent", ident) is not None:
+            return True
+        from src.server.routes.agents import get_registered_agent
+
+        return get_registered_agent(ident) is not None
+
+    def _require_agent_exists(self, agent_id: str) -> None:
+        """登记草稿也要求执行者仍在；不代替能力门禁。"""
+
+        if self._agent_is_available(agent_id):
+            return
+        raise ScheduledJobValidationError("找不到要执行定时任务的 Agent")
+
     def _require_job_runner(self, agent_id: str) -> None:
         """能力门禁开启时，执行者必须是 Job Agent。"""
 
@@ -1145,13 +1171,8 @@ class ScheduledJobService:
         if str(project.get("workspaceId") or "") != job.workspace_id:
             raise ScheduledJobStateError("project_id 与 workspace_id 不一致")
 
-        if job.agent_id != "default":
-            agent = get_workspace_resource("agent", job.agent_id)
-            if agent is None:
-                from src.server.routes.agents import get_registered_agent
-
-                if get_registered_agent(job.agent_id) is None:
-                    raise ScheduledJobStateError("Agent 不可用，不能启用任务")
+        if not self._agent_is_available(job.agent_id):
+            raise ScheduledJobStateError("Agent 不可用，不能启用任务")
 
         live = self._live_project_resources(job.project_id, job.workspace_id)
         skill_catalog = {str(item.get("id") or ""): item for item in list_skills()}
