@@ -338,7 +338,8 @@ def _worker_system_prompt(snapshot: dict[str, Any], member: dict[str, Any]) -> s
     ]
     return (
         f"你是群聊成员「{member.get('displayName') or member.get('agentId')}」，不是主持人。\n"
-        "说完必须调用 group_post_message。不要指挥别人，不要等待主持人。\n"
+        "说完必须调用 group_post_message。需要同伴接着说时，可带对方 membershipId 作为 nextMemberId；"
+        "不要指挥全场，也不要等主持人下令。\n"
         f"置顶：{pin.get('goal') or pin.get('title') or '（无）'}\n"
         f"备注：{pin.get('notes') or pin.get('background') or ''}\n"
         f"当前成员：{names}\n"
@@ -640,6 +641,12 @@ async def _run_worker_turn(
     interrupted = take_interrupt(group_id)
     if interrupted:
         return
+    if run_status in {"completed", "failed"}:
+        from src.group_studio.speaker_queue import enqueue_handoff, note_wave_spoken
+
+        note_wave_spoken(group_id, member_id)
+        if run_status == "completed" and ctx.posted_next_member_id:
+            enqueue_handoff(group_id, member_id, ctx.posted_next_member_id)
     update_group_studio_run_status(run_id, run_status, error_text)
     set_group_studio_current_run_id(group_id, None)
     emit_envelope(

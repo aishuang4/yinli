@@ -168,6 +168,13 @@ class GroupPin(CamelModel):
     updated_at: str = Field(default="", alias="updatedAt")
 
 
+class GroupLastTurn(CamelModel):
+    """上一波人类点名，供再来一轮重算队列。"""
+
+    kind: Literal["assign", "all_round"]
+    mentions: list[str] = Field(default_factory=list)
+
+
 class GroupStudio(CamelModel):
     """GET /{id} 与 GROUP_STUDIO_STATE 的完整快照。"""
 
@@ -189,6 +196,8 @@ class GroupStudio(CamelModel):
     current_speaker_member_id: str | None = Field(default=None, alias="currentSpeakerMemberId")
     pending_speaker_member_id: str | None = Field(default=None, alias="pendingSpeakerMemberId")
     speaker_queue: list[str] = Field(default_factory=list, alias="speakerQueue")
+    last_turn: GroupLastTurn | None = Field(default=None, alias="lastTurn")
+    can_rerun: bool = Field(default=False, alias="canRerun")
     current_approval: GroupApproval | None = Field(default=None, alias="currentApproval")
     messages: list[GroupMessage] = Field(default_factory=list)
     created_at: str = Field(alias="createdAt")
@@ -242,6 +251,12 @@ class GroupMessageCreateRequest(CamelModel):
 
 class GroupInterruptRequest(CamelModel):
     """只停不说话（顶栏停止）。"""
+
+    project_id: str = Field(alias="projectId")
+
+
+class GroupRerunRequest(CamelModel):
+    """按上一波点名再来一轮，不写人类气泡。"""
 
     project_id: str = Field(alias="projectId")
 

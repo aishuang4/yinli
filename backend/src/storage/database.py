@@ -284,6 +284,18 @@ def ensure_db() -> None:
                 "claim_round_json",
                 "TEXT NOT NULL DEFAULT '[]'",
             )
+            _ensure_column(
+                conn,
+                "group_studios",
+                "last_turn_json",
+                "TEXT NOT NULL DEFAULT '{}'",
+            )
+            _ensure_column(
+                conn,
+                "group_studios",
+                "wave_spoken_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
             _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
             _ensure_column(conn, "chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'")
@@ -1469,6 +1481,22 @@ def get_group_studio_speaker_queue(group_id: str) -> list[str]:
 
 def set_group_studio_speaker_queue(group_id: str, member_ids: list[str]) -> None:
     _group_studio_record_store().set_speaker_queue(group_id, member_ids)
+
+
+def get_group_studio_last_turn(group_id: str) -> dict[str, Any] | None:
+    return _group_studio_record_store().get_last_turn(group_id)
+
+
+def set_group_studio_last_turn(group_id: str, last_turn: dict[str, Any] | None) -> None:
+    _group_studio_record_store().set_last_turn(group_id, last_turn)
+
+
+def get_group_studio_wave_spoken(group_id: str) -> list[str]:
+    return _group_studio_record_store().get_wave_spoken(group_id)
+
+
+def set_group_studio_wave_spoken(group_id: str, member_ids: list[str]) -> None:
+    _group_studio_record_store().set_wave_spoken(group_id, member_ids)
 
 
 def pop_group_studio_speaker_queue_head(group_id: str, expected: str | None = None) -> str:

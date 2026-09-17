@@ -27,6 +27,7 @@ class WorkerToolContext:
     last_stop_tool: str = ""
     posted_body: str = ""
     posted_intent: str = ""
+    posted_next_member_id: str = ""
 
     def begin_run(self, run_id: str) -> None:
         """绑定本轮 Run，清空上一轮正文。"""
@@ -35,6 +36,7 @@ class WorkerToolContext:
         self.last_stop_tool = ""
         self.posted_body = ""
         self.posted_intent = ""
+        self.posted_next_member_id = ""
 
 
 _WORKER_CONTEXTS: dict[tuple[str, str], WorkerToolContext] = {}
@@ -132,18 +134,31 @@ class GroupPostMessage(WorkerTool):
                     "request_help",
                 ],
             },
+            "nextMemberId": {"type": "string"},
         },
         "required": ["body"],
     }
 
-    async def __call__(self, body: str, intent: str = "discuss") -> ToolChunk:
+    async def __call__(
+        self,
+        body: str,
+        intent: str = "discuss",
+        nextMemberId: str = "",
+    ) -> ToolChunk:
         text = str(body or "").strip()
         if not text:
             return self.error("empty_body")
         self.ctx.last_stop_tool = self.name
         self.ctx.posted_body = text
         self.ctx.posted_intent = intent or "discuss"
-        return self.success({"posted": True, "intent": self.ctx.posted_intent})
+        nominated = str(nextMemberId or "").strip()
+        if nominated and not self.ctx.posted_next_member_id:
+            self.ctx.posted_next_member_id = nominated
+        return self.success({
+            "posted": True,
+            "intent": self.ctx.posted_intent,
+            "nextMemberId": self.ctx.posted_next_member_id or None,
+        })
 
 
 def worker_tools(ctx: WorkerToolContext) -> list[WorkerTool]:

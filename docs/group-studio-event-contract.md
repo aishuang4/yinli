@@ -84,9 +84,9 @@ heartbeat 不带 `seq`，不进入 `group_studio_events`，也不进入前端 re
 | `GROUP_FILE` | 是 | 完整 `GroupArtifact` |
 | `GROUP_ERROR` | 是 | `code`, `message` |
 | `GROUP_RUN_ENDED` | 是 | `runId`, `status` |
-| `GROUP_SPEAKER_QUEUE` | 是 | `memberIds`（剩余队列）, `kind`: `assign\|all_round\|queue_next\|interrupt\|drained`, `pendingMemberId`（`string\|null`） |
+| `GROUP_SPEAKER_QUEUE` | 是 | `memberIds`（剩余队列）, `kind`: `assign\|all_round\|queue_next\|interrupt\|drained\|handoff\|rerun`, `pendingMemberId`（`string\|null`） |
 
-`GROUP_SPEAKER_QUEUE.kind=drained` 只在本轮点名说完、不再派人时发一次。停止 / 插话发 `interrupt`，不发 `drained`。没有综合 Host。
+`GROUP_SPEAKER_QUEUE.kind=drained` 只在本轮点名说完、不再派人时发一次。停止 / 插话发 `interrupt`，不发 `drained`。工人有效提名发 `handoff`；人类「再来一轮」发 `rerun`。没有综合 Host。
 
 **DELTA 不落 SQLite。** 只持久化 OPEN / CLOSE / 状态类事件。运行中 `group_messages.body` 可由运行时每 256 字符或 200ms upsert 一次，刷新不靠 DELTA replay。
 
@@ -102,11 +102,13 @@ heartbeat 不带 `seq`，不进入 `group_studio_events`，也不进入前端 re
 | `speakerQueue` | 还没轮到的 Worker `memberId[]`。队首是下一位，不是正在说的人 |
 | `pendingSpeakerMemberId` | 队列下一位；`string \| null`。不要用来标「正在说」 |
 | `currentSpeakerMemberId` | 当前 Run 的发言工人；无 Run 时 `null` |
+| `lastTurn` | 上一波人类点名。`{ kind: assign\|all_round, mentions: string[] } \| null` |
+| `canRerun` | `open` 且无当前 Run、队列已空、且有 `lastTurn` 时为 true |
 | `members` | 未移除的 Worker。没有 Host 行 |
 
 前端必须忽略历史事件名：`GROUP_INTAKE`、`GROUP_WORK_ITEM`、`GROUP_DOD`、`GROUP_BLACKBOARD`、`GROUP_TASK_CARD`。
 
-已知 `GROUP_ERROR.code`：`model_not_configured`、`worker_failed`、`member_muted`、`not_found`、`worker_session_lost`、`no_eligible_speaker`、`member_limit`、`already_member`、`studio_not_open`、`chat_run_active`、`group_studio_disabled`。
+已知 `GROUP_ERROR.code`：`model_not_configured`、`worker_failed`、`member_muted`、`not_found`、`worker_session_lost`、`no_eligible_speaker`、`no_last_turn`、`studio_busy`、`member_limit`、`already_member`、`studio_not_open`、`chat_run_active`、`group_studio_disabled`。
 
 历史 `GROUP_ERROR` / 重放事件不得再次 toast。
 

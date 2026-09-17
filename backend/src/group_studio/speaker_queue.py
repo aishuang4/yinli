@@ -8,8 +8,10 @@ from src.group_studio.events import emit_envelope
 from src.storage.database import (
     get_group_studio_snapshot,
     get_group_studio_speaker_queue,
+    get_group_studio_wave_spoken,
     pop_group_studio_speaker_queue_head,
     set_group_studio_speaker_queue,
+    set_group_studio_wave_spoken,
 )
 
 
@@ -114,6 +116,52 @@ def pop_unrunnable_head(group_id: str) -> None:
     remaining = [item for item in queue if is_runnable_worker(members.get(item))]
     if remaining != queue:
         set_group_studio_speaker_queue(group_id, remaining)
+
+
+def get_wave_spoken(group_id: str) -> list[str]:
+    """本波已完成回合的工人。"""
+
+    return get_group_studio_wave_spoken(group_id)
+
+
+def reset_wave_spoken(group_id: str) -> None:
+    """人类新消息 / 停止后清空本波已发言。"""
+
+    set_group_studio_wave_spoken(group_id, [])
+
+
+def note_wave_spoken(group_id: str, member_id: str) -> list[str]:
+    """工人回合终态记入本波。"""
+
+    spoken = get_wave_spoken(group_id)
+    cleaned = str(member_id or "").strip()
+    if cleaned and cleaned not in spoken:
+        spoken = [*spoken, cleaned]
+        set_group_studio_wave_spoken(group_id, spoken)
+    return spoken
+
+
+def enqueue_handoff(group_id: str, from_id: str, next_id: str) -> bool:
+    """把有效提名追加到剩余队列末尾。无效返回 False，不改队列。"""
+
+    source = str(from_id or "").strip()
+    target = str(next_id or "").strip()
+    if not target or target == source:
+        return False
+    snapshot = get_group_studio_snapshot(group_id) or {}
+    members = {
+        str(item.get("id") or ""): item
+        for item in (snapshot.get("members") or [])
+    }
+    if not is_runnable_worker(members.get(target)):
+        return False
+    if target in get_wave_spoken(group_id):
+        return False
+    remaining = get_queue(group_id)
+    if target in remaining:
+        return False
+    set_queue(group_id, [*remaining, target], kind="handoff")
+    return True
 
 
 def pop_head(group_id: str, member_id: str) -> str:

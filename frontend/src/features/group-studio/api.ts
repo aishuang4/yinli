@@ -226,6 +226,18 @@ export async function resumeStudio(groupId: string, projectId: string): Promise<
   return normalizeSnapshot(await response.json());
 }
 
+export async function rerunStudio(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
+  const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/rerun`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId }),
+  });
+  if (!response.ok) {
+    throw new Error(await readDetail(response, '无法再来一轮'));
+  }
+  return normalizeSnapshot(await response.json());
+}
+
 export async function interruptStudio(groupId: string, projectId: string): Promise<void> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/interrupt`, {
     method: 'POST',
@@ -320,6 +332,8 @@ const GROUP_STUDIO_ERROR_TEXT: Record<string, string> = {
   member_cap: '工作室人数已达上限',
   already_member: '这个人已经在群里',
   no_eligible_speaker: '点到的人现在不能发言（已静音、已移出或不在群里）。',
+  no_last_turn: '还没有上一轮可以重来',
+  studio_busy: '现在还有人在说或队列没走完',
   studio_not_open: '这间群聊已经结束',
   empty_body: '请先写点内容再发送',
   invalid_upload: '文件过大或路径不合法',

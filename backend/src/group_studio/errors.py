@@ -35,6 +35,8 @@ MODEL_NOT_CONFIGURED = "model_not_configured"
 
 GROUP_STUDIO_NOT_FOUND = "not_found"
 STUDIO_NOT_OPEN = "studio_not_open"
+STUDIO_BUSY = "studio_busy"
+NO_LAST_TURN = "no_last_turn"
 NO_ELIGIBLE_SPEAKER = "no_eligible_speaker"
 ALREADY_MEMBER = "already_member"
 MEMBER_LIMIT = "member_limit"

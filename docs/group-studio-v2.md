@@ -323,17 +323,21 @@ else:
 1. `set_queue(queue, kind=assign|all_round)`，发 `GROUP_SPEAKER_QUEUE`。
 2. 取队首，发 `GROUP_FLOOR`（`reason=mention` 若来自 mentions，否则 `queue_next`），创建 `GroupRun`，跑 Worker。
 3. Run 终态后：从队列弹出该人（若仍在队首），`kind=queue_next`。
-4. 还有剩余 → 下一人。空了 → `GROUP_SPEAKER_QUEUE kind=drained`，**停**。不派 Host。
-5. `GROUP_RUN_ENDED` 每条 Run 都发。SSE 连接保持。
+4. 工人本轮 `group_post_message` 可带 `nextMemberId`。有效则追加到剩余队列末尾，`kind=handoff`。自己、本波已说过、已在队列、不可跑席位忽略，不写调度气泡。
+5. 还有剩余 → 下一人。空了 → `GROUP_SPEAKER_QUEUE kind=drained`，**停**。不派 Host，不自动再来一轮。
+6. `GROUP_RUN_ENDED` 每条 Run 都发。SSE 连接保持。
 
-`drained` 只表示「这一轮点名说完了」。不是综合、不是阶段切换。
+`drained` 只表示「这一波点名和 handoff 说完了」。不是综合、不是阶段切换。
+
+人类消息成功后写入 `lastTurn`。队列空、无 Run、房间 `open` 时，`POST /{id}/rerun` 按 `lastTurn.mentions` 重算队列（`kind=rerun`），不写人类气泡。`paused` 不 rerun。
 
 ### 8.4 插话、停止、暂停、恢复
 
 | 动作 | 当前 Run | 旧队列 | 房间状态 | 接着做什么 |
 | --- | --- | --- | --- | --- |
 | 人类再发一条 | 取消，`interrupt source=human_message` | 丢弃 | `open`（若原是 paused 也回到 open） | 按新消息重算 |
-| 输入列停止 | 取消，`source=stop_button` | 清空 | 仍 `open` | 等下一条 |
+| 输入列停止 | 取消，`source=stop_button` | 清空 | 仍 `open` | 等下一条或再来一轮 |
+| 再来一轮 | 拒绝（须无 Run 且队列空） | 按 `lastTurn` 重建 | 仍 `open` | 开跑，不写人类气泡 |
 | 踢走正在说话的人 | 取消其 Run | 去掉此人 | 不变 | 下一人；没人则 drained |
 | 静音正在说话的人 | 取消其 Run | 去掉此人 | 不变 | 同上 |
 | 踢走 / 静音队列里还没说的人 | 不动当前 Run | 去掉此人 | 不变 | — |
@@ -517,6 +521,7 @@ drafting 不计费的旧规则删除（没有 drafting）。
 | `GET` | `/{id}/messages` | 留。分页 |
 | `GET` | `/{id}/events?afterSeq=` | 留。见 16 |
 | `POST` | `/{id}/messages` | 改。唯一人类写入口。按第 8 节调度 |
+| `POST` | `/{id}/rerun` | 新。按上一波点名再来一轮，不写人类气泡 |
 | `POST` | `/{id}/interrupt` | 留。停止，不清成 paused |
 | `POST` | `/{id}/pause` | 留 |
 | `POST` | `/{id}/resume` | 留 |

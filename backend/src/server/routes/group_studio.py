@@ -29,6 +29,7 @@ from src.group_studio.models import (
     GroupMessage,
     GroupMessageCreateRequest,
     GroupPauseRequest,
+    GroupRerunRequest,
     GroupResumeRequest,
     GroupStartPhaseRequest,
     GroupStudio,
@@ -55,6 +56,7 @@ from src.group_studio.service import (
     pause_studio,
     post_human_message,
     remove_member,
+    rerun_last_turn,
     resume_studio,
     close_studio as close_group_studio,
     delete_studio,
@@ -259,6 +261,14 @@ async def post_message(group_id: str, body: GroupMessageCreateRequest) -> GroupM
             body=body.body,
             mentions=body.mentions,
         )
+    except GroupStudioError as exc:
+        raise group_studio_http_error(exc.status_code, exc.code) from exc
+
+
+@router.post("/{group_id}/rerun", dependencies=[EnabledDep])
+async def rerun_studio(group_id: str, body: GroupRerunRequest) -> GroupStudio:
+    try:
+        return rerun_last_turn(group_id, project_id=body.project_id)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
 

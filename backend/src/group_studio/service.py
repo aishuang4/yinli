@@ -21,6 +21,8 @@ from src.group_studio.errors import (
     JOB_AGENT_FORBIDDEN,
     MEMBER_CAP,
     NO_ELIGIBLE_SPEAKER,
+    NO_LAST_TURN,
+    STUDIO_BUSY,
     STUDIO_NOT_OPEN,
     GroupStudioError,
 )
@@ -68,6 +70,7 @@ from src.storage.database import (
     list_group_studio_artifacts,
     list_group_studios_by_project,
     list_group_studio_messages,
+    set_group_studio_last_turn,
     set_group_studio_member_muted,
     set_group_studio_member_removed,
     set_group_studio_member_status,
@@ -538,7 +541,12 @@ def post_human_message(group_id: str, *, project_id: str, body: str, mentions: l
     if studio.status in {"done", "deleted"}:
         raise GroupStudioError(409, STUDIO_NOT_OPEN)
     from src.group_studio.interrupt import cancel_active_run
-    from src.group_studio.speaker_queue import build_turn_queue, clear_queue, set_queue
+    from src.group_studio.speaker_queue import (
+        build_turn_queue,
+        clear_queue,
+        reset_wave_spoken,
+        set_queue,
+    )
 
     if studio.status == "paused":
         update_group_studio_state(group_id, status="open", clear_phase_before_pause=True)
@@ -551,11 +559,16 @@ def post_human_message(group_id: str, *, project_id: str, body: str, mentions: l
 
     cancel_active_run(group_id, source="human_message")
     clear_queue(group_id, kind="interrupt")
+    reset_wave_spoken(group_id)
     text = body.strip()
     if not text:
         raise GroupStudioError(422, "empty_body")
     mentions = [str(item).strip() for item in (mentions or []) if str(item).strip()]
     message = _emit_human_timeline_message(group_id, text, mentions=mentions)
+    set_group_studio_last_turn(group_id, {
+        "kind": "assign" if mentions else "all_round",
+        "mentions": mentions,
+    })
     if not studio.title or studio.title == "未命名工作室":
         apply_group_studio_task_card_update(
             group_id,
@@ -627,9 +640,34 @@ def interrupt_run(group_id: str, *, project_id: str) -> None:
     from src.group_studio.interrupt import cancel_active_run
 
     cancel_active_run(group_id, source="stop_button")
-    from src.group_studio.speaker_queue import clear_queue
+    from src.group_studio.speaker_queue import clear_queue, reset_wave_spoken
 
     clear_queue(group_id, kind="interrupt")
+    reset_wave_spoken(group_id)
+
+
+def rerun_last_turn(group_id: str, *, project_id: str) -> GroupStudio:
+    """按上一波人类点名重跑，不写新的人类气泡。"""
+
+    studio = _load_studio(group_id)
+    _assert_project(studio, project_id)
+    if studio.status != "open":
+        raise GroupStudioError(409, STUDIO_NOT_OPEN)
+    if studio.current_run_id or studio.speaker_queue:
+        raise GroupStudioError(409, STUDIO_BUSY)
+    last_turn = studio.last_turn
+    if last_turn is None:
+        raise GroupStudioError(409, NO_LAST_TURN)
+    from src.group_studio.speaker_queue import build_turn_queue, reset_wave_spoken, set_queue
+
+    snapshot = get_group_studio_snapshot(group_id) or {}
+    queue, _kind = build_turn_queue(snapshot, list(last_turn.mentions))
+    if not queue:
+        raise GroupStudioError(409, NO_ELIGIBLE_SPEAKER)
+    reset_wave_spoken(group_id)
+    set_queue(group_id, queue, kind="rerun")
+    schedule_next(group_id)
+    return get_studio(group_id)
 
 
 def pause_studio(group_id: str, *, project_id: str) -> GroupStudio:

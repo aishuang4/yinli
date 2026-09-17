@@ -1,10 +1,23 @@
-/** 群聊输入器。@ 弹出成员菜单，选中写入 mentions[]；文件和 Chat 一样在输入框附上再发送。 */
+/** 群聊输入器。@ 弹出成员菜单，选中写入 mentions[]；点名只留在正文里，不再重复画标签。 */
 
 import { useMemo, useState, type KeyboardEventHandler, type ReactNode } from 'react';
 import { AtSign, FileText, Paperclip, Send, X } from 'lucide-react';
 import { FileImportButton } from '../../components/FileImportButton';
 import { Tooltip } from '@/components/design';
 import type { GroupStudioMember } from './types';
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** 正文里是否还留着该成员的 @显示名（手删后要从 mentions[] 拿掉）。 */
+function textHasMentionToken(text: string, displayName: string): boolean {
+  const name = displayName.trim();
+  if (!name) {
+    return false;
+  }
+  return new RegExp(`[@＠]${escapeRegExp(name)}(?=$|[\\s,，、。.!！?？;；:：])`).test(text);
+}
 
 export interface StudioComposerAttachment {
   id: string;
@@ -54,11 +67,6 @@ export function StudioComposer({
     [members],
   );
 
-  const mentionedMembers = useMemo(
-    () => mentionable.filter((member) => mentions.includes(member.id)),
-    [mentionable, mentions],
-  );
-
   const candidates = useMemo(() => {
     const q = mentionQuery.trim().toLowerCase();
     return mentionable.filter((member) => {
@@ -81,6 +89,16 @@ export function StudioComposer({
     }
     setMentionOpen(false);
     setMentionQuery('');
+  };
+
+  const syncMentionsWithText = (next: string) => {
+    const kept = mentions.filter((id) => {
+      const member = mentionable.find((item) => item.id === id);
+      return member ? textHasMentionToken(next, member.displayName) : false;
+    });
+    if (kept.length !== mentions.length) {
+      onMentionsChange(kept);
+    }
   };
 
   const pickMember = (member: GroupStudioMember) => {
@@ -145,6 +163,7 @@ export function StudioComposer({
             const next = event.target.value;
             onChange(next);
             syncMentionFromValue(next);
+            syncMentionsWithText(next);
           }}
           onKeyDown={(event) => {
             if (mentionOpen && event.key === 'Escape') {
@@ -164,26 +183,6 @@ export function StudioComposer({
           className="block max-h-[180px] w-full resize-none rounded-t-lg border-0 bg-transparent px-4 pb-0 pt-3 text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] disabled:bg-[var(--color-bg-tertiary)]"
           aria-label="群聊消息输入框"
         />
-        {mentionedMembers.length > 0 ? (
-          <div className="flex flex-wrap gap-1.5 px-3 pt-1" aria-label="已点名成员">
-            {mentionedMembers.map((member) => (
-              <span
-                key={member.id}
-                className="inline-flex max-w-48 items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-2 py-0.5 text-xs text-[var(--color-text-secondary)]"
-              >
-                <span className="truncate">@{member.displayName}</span>
-                <button
-                  type="button"
-                  className="icon-button flex h-4 w-4 shrink-0 items-center justify-center rounded text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-                  onClick={() => onMentionsChange(mentions.filter((id) => id !== member.id))}
-                  aria-label={`取消点名 ${member.displayName}`}
-                >
-                  <X size={10} />
-                </button>
-              </span>
-            ))}
-          </div>
-        ) : null}
         {fileAttachments.length > 0 ? (
           <div className="flex max-h-[104px] flex-wrap gap-2 overflow-y-auto px-3 py-2">
             {fileAttachments.map((file) => (

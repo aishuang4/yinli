@@ -237,7 +237,7 @@ class GroupStudioRecordStore:
             for row in members
             if str(row["role"] or "") != "host" and str(row["status"] or "") != "removed"
         ]
-        return {
+        snapshot = {
             "id": studio["id"],
             "projectId": studio["project_id"],
             "workspaceId": studio["workspace_id"],
@@ -270,11 +270,15 @@ class GroupStudioRecordStore:
                 else None
             ),
             "speakerQueue": self.loads(studio["speaker_queue_json"], []) if "speaker_queue_json" in studio.keys() else [],
+            "lastTurn": self._last_turn_from_studio(studio),
+            "canRerun": False,
             "currentApproval": None if hide_approval else self._approval_from_row(pending),
             "messages": [self._message_from_row(row) for row in ordered_messages],
             "createdAt": studio["created_at"],
             "updatedAt": studio["updated_at"],
         }
+        snapshot["canRerun"] = self._can_rerun(snapshot)
+        return snapshot
 
     def create_from_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         """事务创建工作室、任务卡、黑板、成员与可选附件。冲突则返回已有活跃工作室。"""
@@ -1517,6 +1521,85 @@ class GroupStudioRecordStore:
                     now,
                 ),
             )
+
+    def _last_turn_from_studio(self, studio: sqlite3.Row) -> dict[str, Any] | None:
+        """缺列或空 JSON 视为没有上一波。"""
+
+        if "last_turn_json" not in studio.keys():
+            return None
+        raw = self.loads(studio["last_turn_json"], {})
+        return self.parse_last_turn(raw)
+
+    @staticmethod
+    def parse_last_turn(raw: Any) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            return None
+        kind = str(raw.get("kind") or "")
+        if kind not in {"assign", "all_round"}:
+            return None
+        mentions = [str(item).strip() for item in (raw.get("mentions") or []) if str(item or "").strip()]
+        return {"kind": kind, "mentions": mentions}
+
+    @staticmethod
+    def _can_rerun(snapshot: dict[str, Any]) -> bool:
+        if str(snapshot.get("status") or "") != "open":
+            return False
+        if snapshot.get("currentRunId"):
+            return False
+        if snapshot.get("speakerQueue"):
+            return False
+        last_turn = snapshot.get("lastTurn") or {}
+        return str(last_turn.get("kind") or "") in {"assign", "all_round"}
+
+    def get_last_turn(self, group_id: str) -> dict[str, Any] | None:
+        snapshot = self.get_snapshot(group_id, message_limit=1)
+        if snapshot is None:
+            return None
+        return snapshot.get("lastTurn")
+
+    def set_last_turn(self, group_id: str, last_turn: dict[str, Any] | None) -> None:
+        self.ensure_db()
+        now = self.utc_now()
+        payload = last_turn if last_turn else {}
+        with self.lock, self.connect() as conn:
+            if not self._has_column(conn, "last_turn_json"):
+                return
+            conn.execute(
+                "UPDATE group_studios SET last_turn_json = ?, updated_at = ? WHERE id = ?",
+                (self.dumps(payload), now, group_id),
+            )
+
+    def get_wave_spoken(self, group_id: str) -> list[str]:
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            if not self._has_column(conn, "wave_spoken_json"):
+                return []
+            row = conn.execute(
+                "SELECT wave_spoken_json FROM group_studios WHERE id = ?",
+                (group_id,),
+            ).fetchone()
+        if row is None:
+            return []
+        raw = self.loads(row["wave_spoken_json"], [])
+        if not isinstance(raw, list):
+            return []
+        return [str(item).strip() for item in raw if str(item or "").strip()]
+
+    def set_wave_spoken(self, group_id: str, member_ids: list[str]) -> None:
+        self.ensure_db()
+        now = self.utc_now()
+        cleaned = [str(item).strip() for item in member_ids if str(item or "").strip()]
+        with self.lock, self.connect() as conn:
+            if not self._has_column(conn, "wave_spoken_json"):
+                return
+            conn.execute(
+                "UPDATE group_studios SET wave_spoken_json = ?, updated_at = ? WHERE id = ?",
+                (self.dumps(cleaned), now, group_id),
+            )
+
+    def _has_column(self, conn: sqlite3.Connection, name: str) -> bool:
+        rows = conn.execute("PRAGMA table_info(group_studios)").fetchall()
+        return any(str(row["name"] if "name" in row.keys() else row[1]) == name for row in rows)
 
     def _task_card_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         return {

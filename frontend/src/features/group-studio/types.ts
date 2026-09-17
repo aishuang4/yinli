@@ -81,6 +81,8 @@ export interface GroupStudioSnapshot {
   currentSpeakerMemberId?: string | null;
   pendingSpeakerMemberId?: string | null;
   speakerQueue?: string[];
+  lastTurn?: { kind: 'assign' | 'all_round'; mentions: string[] } | null;
+  canRerun?: boolean;
   currentApproval?: GroupStudioApproval | null;
   messages?: GroupStudioMessage[];
   createdAt: string;

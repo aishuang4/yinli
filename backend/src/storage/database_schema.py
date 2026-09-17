@@ -656,6 +656,8 @@ BASE_SCHEMA_SQL = """
         pending_speaker_member_id TEXT NOT NULL DEFAULT '',
         speaker_queue_json TEXT NOT NULL DEFAULT '[]',
         claim_round_json TEXT NOT NULL DEFAULT '[]',
+        last_turn_json TEXT NOT NULL DEFAULT '{}',
+        wave_spoken_json TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         archived_at TEXT,

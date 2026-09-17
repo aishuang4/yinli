@@ -7,6 +7,7 @@ import {
   PanelRightOpen,
   Plus,
   Settings,
+  Repeat2,
   Square,
   Users,
 } from 'lucide-react';
@@ -33,6 +34,7 @@ import {
   muteStudioMember,
   postStudioMessage,
   removeStudioMember,
+  rerunStudio,
   updateStudioPin,
   updateStudioModel,
   uploadStudioFile,
@@ -490,6 +492,10 @@ export function GroupStudioPage() {
               ...current,
               speakerQueue: memberIds,
               pendingSpeakerMemberId: pending == null ? (memberIds[0] || null) : String(pending),
+              canRerun: current.status === 'open'
+                && !current.currentRunId
+                && memberIds.length === 0
+                && Boolean(current.lastTurn?.kind),
             }
             : current
         ));
@@ -910,6 +916,18 @@ export function GroupStudioPage() {
     }
   };
 
+  const handleRerun = async () => {
+    if (!studio?.canRerun) {
+      return;
+    }
+    try {
+      const next = await rerunStudio(studio.id, studio.projectId);
+      setStudio(next);
+    } catch (cause) {
+      notifyError(getErrorMessage(cause, '无法再来一轮'));
+    }
+  };
+
   const pendingApproval = studio?.currentApproval?.status === 'pending' ? studio.currentApproval : null;
   const approvalMemberName = pendingApproval
     ? (members.find((item) => item.id === pendingApproval.memberId)?.displayName || '工人')
@@ -1134,18 +1152,32 @@ export function GroupStudioPage() {
             onChange={setDraft}
             onMentionsChange={setMentions}
             controls={(
-              <Tooltip title="停止当前发言" placement="top" mode="dark">
-                <button
-                  type="button"
-                  className="icon-button inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs"
-                  onClick={() => void handleInterrupt()}
-                  disabled={!studio}
-                  aria-label="停止当前发言"
-                >
-                  <Square size={14} />
-                  <span>停止</span>
-                </button>
-              </Tooltip>
+              <>
+                <Tooltip title="停止当前发言" placement="top" mode="dark">
+                  <button
+                    type="button"
+                    className="icon-button inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs"
+                    onClick={() => void handleInterrupt()}
+                    disabled={!studio}
+                    aria-label="停止当前发言"
+                  >
+                    <Square size={14} />
+                    <span>停止</span>
+                  </button>
+                </Tooltip>
+                <Tooltip title="按上一轮点名再来一轮" placement="top" mode="dark">
+                  <button
+                    type="button"
+                    className="icon-button inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs"
+                    onClick={() => void handleRerun()}
+                    disabled={!studio?.canRerun}
+                    aria-label="再来一轮"
+                  >
+                    <Repeat2 size={14} />
+                    <span>再来一轮</span>
+                  </button>
+                </Tooltip>
+              </>
             )}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
