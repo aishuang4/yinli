@@ -4,6 +4,7 @@
 
 import { Checkbox, Modal, Tag } from '@/components/design';
 import type { Skill } from '../../../types/skill';
+import { isSkillShared } from '../../../types/skill';
 
 type SkillSelectionModalProps = {
   open: boolean;
@@ -55,6 +56,11 @@ export function SkillSelectionModal({
                 {skill.description || skill.trigger || skill.id}
               </div>
               <div className="mt-2 flex max-h-7 flex-nowrap gap-2 overflow-hidden">
+                {isSkillShared(skill) ? (
+                  <Tag size="small" color="green">
+                    所有 Agent 可用
+                  </Tag>
+                ) : null}
                 <Tag size="small" color="blue">
                   {skill.category}
                 </Tag>

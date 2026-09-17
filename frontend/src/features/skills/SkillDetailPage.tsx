@@ -10,6 +10,7 @@ import { MarkdownContent } from '../../components/MarkdownContent';
 import { WorkbenchDetailShell, WorkbenchListIcon } from '../../components/workbench';
 import { ToggleButton } from '../../components/ToggleButton';
 import type { Skill } from '../../types/skill';
+import { isSkillShareLocked, isSkillShared } from '../../types/skill';
 
 interface SkillDetailPageProps {
   skill: Skill;
@@ -20,6 +21,7 @@ interface SkillDetailPageProps {
   onUninstall: () => void;
   onDelete: () => void;
   onToggle: (enabled: boolean) => void;
+  onToggleShare: (availableToAllAgents: boolean) => void;
 }
 
 export function SkillDetailPage({
@@ -31,6 +33,7 @@ export function SkillDetailPage({
   onUninstall,
   onDelete,
   onToggle,
+  onToggleShare,
 }: SkillDetailPageProps) {
   const installed = skill.status === 'installed';
   const statusText = installed ? (skill.enabled ? '已启用' : '已停用') : '未安装';
@@ -43,14 +46,24 @@ export function SkillDetailPage({
       actions={(
         <>
           {installed ? (
-            <ToggleButton
-              checked={skill.enabled}
-              checkedLabel="启用中"
-              uncheckedLabel="已停用"
-              disabled={busy}
-              ariaLabel={`${skill.name} 启停状态`}
-              onChange={onToggle}
-            />
+            <>
+              <ToggleButton
+                checked={skill.enabled}
+                checkedLabel="启用中"
+                uncheckedLabel="已停用"
+                disabled={busy}
+                ariaLabel={`${skill.name} 启停状态`}
+                onChange={onToggle}
+              />
+              <ToggleButton
+                checked={isSkillShared(skill)}
+                checkedLabel="所有 Agent 可用"
+                uncheckedLabel="需手动绑定"
+                disabled={busy || isSkillShareLocked(skill)}
+                ariaLabel={`${skill.name} 是否对所有 Agent 可用`}
+                onChange={onToggleShare}
+              />
+            </>
           ) : null}
           <Button size="small" icon={<Download size={13} />} loading={busy} onClick={onExport}>
             导出
@@ -83,6 +96,11 @@ export function SkillDetailPage({
                   <Tag size="small" color={installed ? 'green' : 'blue'}>{installed ? '已安装' : '可安装'}</Tag>
                   <Tag size="small" color="transparent">{statusText}</Tag>
                   <Tag size="small" color="transparent">{skill.category}</Tag>
+                  {installed ? (
+                    <Tag size="small" color={isSkillShared(skill) ? 'blue' : 'transparent'}>
+                      {isSkillShared(skill) ? '所有 Agent 可用' : '需手动绑定'}
+                    </Tag>
+                  ) : null}
                 </div>
               </div>
             </div>

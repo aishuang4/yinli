@@ -52,6 +52,7 @@ export function SkillsPage() {
     uninstallSkill,
     deleteSkill,
     setSkillEnabled,
+    setSkillShared,
   } = useSkills();
 
   const [query, setQuery] = useState('');
@@ -211,6 +212,10 @@ export function SkillsPage() {
           onToggle={(enabled) => void runSkillAction(
             selectedSkill.id,
             () => setSkillEnabled(selectedSkill.id, enabled),
+          )}
+          onToggleShare={(availableToAllAgents) => void runSkillAction(
+            selectedSkill.id,
+            () => setSkillShared(selectedSkill.id, availableToAllAgents),
           )}
         />
         {modals}

@@ -90,9 +90,9 @@ async def run_leader_coordination(
         runtime_key=f"team-leader-{store.ref.id}",
         extra_tools=tools,
         tool_allowlist=allowlist,
-        used_skills=[],
+        used_skills=list(getattr(ctx, "used_skills", None) or []),
         max_react_iters=LEADER_MAX_REACT_ITERS,
-        skill_context=False,
+        skill_context=bool(getattr(ctx, "used_skills", None)),
     )
     try:
         await _run_agent_stream(
@@ -159,6 +159,7 @@ async def run_member_task(
     write_dir = _member_write_dir(ctx, store, member_id)
     # Member 按自己的任务召回历史记忆（不是按用户原始目标）；Markdown 摘要沿用 Leader 所属 Agent 的。
     member_recall_text = _member_memory_recall(ctx, actor_name=actor_name, task=task)
+    member_skills = _member_runtime_skills(ctx)
     agent = _create_team_agent(
         ctx=ctx,
         actor_id=member_id,
@@ -170,12 +171,12 @@ async def run_member_task(
         write_scope_dir=write_dir,
         extra_tools=tools,
         tool_allowlist=allowlist,
-        used_skills=ctx.used_skills,
+        used_skills=member_skills,
         runtime_tool_scope=ctx.runtime_tool_scope,
         mcp_servers=ctx.mcp_servers,
         knowledge_tools=ctx.knowledge_tools,
         max_react_iters=MEMBER_MAX_REACT_ITERS,
-        skill_context=bool(ctx.used_skills),
+        skill_context=bool(member_skills),
     )
     await _run_agent_stream(
         agent=agent,
@@ -260,6 +261,34 @@ async def run_synthesis(
     return text.strip()
 
 
+def _member_runtime_skills(ctx: ChatRunContext) -> list:
+    """Member 只保留 Leader Agent profile 里点名的技能，不吃共享开关。"""
+
+    configured = {
+        str(item)
+        for item in list(getattr(getattr(ctx, "agent_config", None), "skills", None) or [])
+    }
+    return [
+        skill
+        for skill in list(getattr(ctx, "used_skills", None) or [])
+        if getattr(skill, "id", "") in configured
+    ]
+
+
+def _skill_paths_for(ctx: ChatRunContext, used_skills: list) -> list[str]:
+    """Skill 目录路径与本次实际挂上的 used_skills 对齐。"""
+
+    if not used_skills:
+        return []
+    used_ids = {getattr(skill, "id", "") for skill in used_skills}
+    context_ids = {getattr(skill, "id", "") for skill in list(getattr(ctx, "used_skills", None) or [])}
+    if used_ids == context_ids:
+        return list(getattr(ctx, "skill_paths", None) or [])
+    from src.server.routes.skills import resolve_runtime_skill_paths
+
+    return resolve_runtime_skill_paths(used_skills, runtime_context=getattr(ctx, "runtime_context", None))
+
+
 def _create_team_agent(
     *,
     ctx: ChatRunContext,
@@ -295,7 +324,7 @@ def _create_team_agent(
         model_config=team_model_config,
         deep_thinking=False,
         used_skills=used_skills,
-        skill_paths=(ctx.skill_paths if used_skills else []),
+        skill_paths=_skill_paths_for(ctx, used_skills),
         guardrails=ctx.guardrails,
         mcp_servers=mcp_servers or [],
         knowledge_tools=knowledge_tools or [],

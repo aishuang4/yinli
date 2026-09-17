@@ -7,6 +7,15 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 
+def _row_available_to_all_agents(row: sqlite3.Row) -> bool:
+    """旧库缺列时按全体可用处理，与 DEFAULT 1 对齐。"""
+
+    keys = set(row.keys())
+    if "available_to_all_agents" not in keys:
+        return True
+    return bool(row["available_to_all_agents"])
+
+
 class ResourceCatalogRecordStore:
     """封装 Workspace 级持久资源目录的读写。"""
 
@@ -261,6 +270,7 @@ class ResourceCatalogRecordStore:
                 "resources": self.loads(row["resources"], []), "status": row["status"],
                 "enabled": bool(row["enabled"]), "installedAt": row["installed_at"],
                 "updatedAt": row["updated_at"], "workspaceId": row["workspace_id"],
+                "availableToAllAgents": _row_available_to_all_agents(row),
             }
             for row in rows
         ]
@@ -273,8 +283,9 @@ class ResourceCatalogRecordStore:
                 """
                 INSERT INTO skills (
                     id, name, description, category, trigger, content, tags,
-                    resource_path, resources, status, enabled, installed_at, updated_at, workspace_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    resource_path, resources, status, enabled, installed_at, updated_at,
+                    workspace_id, available_to_all_agents
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -285,6 +296,10 @@ class ResourceCatalogRecordStore:
                         data.get("status", "available"), int(bool(data.get("enabled", False))),
                         data.get("installedAt"), data.get("updatedAt") or self.utc_now(),
                         data.get("workspaceId", self.default_workspace_id),
+                        int(bool(data.get(
+                            "availableToAllAgents",
+                            data.get("available_to_all_agents", True),
+                        ))),
                     )
                     for data in records.values()
                 ],

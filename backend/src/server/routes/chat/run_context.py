@@ -239,7 +239,7 @@ async def build_chat_run_context(
     used_skills = _merge_file_catalog_skills(
         used_skills,
         external_skills=external_skills,
-        inject=str(getattr(run_data, "mode", "agent") or "agent") != "team",
+        inject=True,
         configured_skill_ids=configured_skill_ids,
     )
     skill_paths = resolve_runtime_skill_paths(used_skills, runtime_context=runtime_context)
@@ -603,6 +603,17 @@ def _refresh_index_quietly(project_root, *, workspace_id: str, project_id: str, 
         return
 
 
+def _skill_is_shared(skill) -> bool:
+    """已启用包是否绕过 Agent 绑定进入合格 Chat 目录。"""
+
+    from src.catalog.skills import ALWAYS_INJECTED_SKILL_IDS
+
+    skill_id = str(getattr(skill, "id", "") or "")
+    if skill_id in ALWAYS_INJECTED_SKILL_IDS:
+        return True
+    return bool(getattr(skill, "available_to_all_agents", True))
+
+
 def _merge_file_catalog_skills(
     used_skills: list,
     *,
@@ -610,41 +621,53 @@ def _merge_file_catalog_skills(
     inject: bool,
     configured_skill_ids: list[str],
 ) -> list:
-    """单 Agent Chat 合并项目 Skill 与系统包，不新增 CRUD 工具。
+    """合格 Chat 合并项目 Skill、系统包与共享开关，不新增 CRUD 工具。
 
     - `yinli-catalog` 说明书无条件追加（file-catalog-v1 §9.2）。
-    - 项目 `.agents/skills` 免 Project binding（§13.2），但仍必须出现在 Agent 配置里。
-    - 其余系统包（word-documents / yinli-charts）同样只在 Agent 配置列出时加入。
-    Agent 配置是能力上限，不能因为包已 seed 就对所有 Agent 生效。
+    - 项目 `.agents/skills` 免 Project binding（§13.2）；未共享时仍须出现在 Agent 配置。
+    - 其余已启用且 `availableToAllAgents` 的包并入单 Agent / Team Leader 目录。
+    - `inject=False` 留给 Team Member 等不合格路径，不因开关追加。
     """
 
     if not inject:
         return used_skills
     from src.catalog.skill_seed import seed_system_skills
-    from src.catalog.skills import ALWAYS_INJECTED_SKILL_IDS, SYSTEM_SKILL_IDS
-    from src.server.routes.skills import get_installed_skill
+    from src.catalog.skills import SYSTEM_SKILL_IDS
+    from src.server.routes.skills import get_installed_skill, list_installed_enabled_skills
 
     seed_system_skills()
     allowed = set(configured_skill_ids)
     merged = list(used_skills)
     seen = {getattr(skill, "id", "") for skill in merged}
+
+    def _append(skill) -> None:
+        skill_id = str(getattr(skill, "id", "") or "")
+        if not skill_id or skill_id in seen:
+            return
+        merged.append(skill)
+        seen.add(skill_id)
+
     for skill in external_skills:
         if getattr(skill, "source_scope", "") != "project" or not getattr(skill, "enabled", False):
             continue
-        if skill.id in seen or skill.id not in allowed:
+        if skill.id not in allowed and not _skill_is_shared(skill):
             continue
-        merged.append(skill)
-        seen.add(skill.id)
+        _append(skill)
     for skill_id in SYSTEM_SKILL_IDS:
         if skill_id in seen:
-            continue
-        if skill_id not in ALWAYS_INJECTED_SKILL_IDS and skill_id not in allowed:
             continue
         skill = get_installed_skill(skill_id)
         if skill is None:
             continue
-        merged.append(skill)
-        seen.add(skill.id)
+        if skill_id not in allowed and not _skill_is_shared(skill):
+            continue
+        _append(skill)
+    for skill in list_installed_enabled_skills():
+        if getattr(skill, "id", "") in SYSTEM_SKILL_IDS:
+            continue
+        if skill.id not in allowed and not _skill_is_shared(skill):
+            continue
+        _append(skill)
     return merged
 
 

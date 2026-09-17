@@ -598,11 +598,11 @@ source_kind: str = Field(default="profile", alias="sourceKind")
 
 ### 9.2 运行时注入
 
-第一期：`run_context` 在 `select_runtime_skills` 之后，若本轮是单 Agent Chat（非 scheduled unattended、非 Team 综合），把该 Skill **追加**进 `used_skills` / `skill_paths`，即使 profile.skills 未列出。
+第一期：`run_context` 在 `select_runtime_skills` 之后，若本轮是合格 Chat（单 Agent / Sandbox / Team Leader；非 scheduled unattended、非 Team Member、非群聊 Worker），把该 Skill **追加**进 `used_skills` / `skill_paths`，即使 profile.skills 未列出。开关视为锁定打开，不能关成无人可用。
 
 目的：模型不依赖用户先绑定才能学会改文件。
 
-群聊 Host（无默认工具）不注入。Job unattended 不注入（无人改 catalog）。
+群聊 Host（无默认工具）不注入。Job unattended 不注入（无人改 catalog）。Team Member session 不因共享开关自动挂上说明书。
 
 ### 9.3 SKILL.md 正文必须写清
 
@@ -709,7 +709,7 @@ Workspace 级 / 用户级 Skill 仍需启用或 binding（与现外部用户级�
 
 `artifacts/skills/word-documents` seed 到 `SKILL_PACKAGES_ROOT`，作为系统包，禁止删除。图表围栏约定作为独立 `yinli-charts` Skill 说明书，前端渲染不在第二期强制绑定。
 
-系统包 seed 只保证「可选」，不等于「已启用」：`word-documents` / `yinli-charts` 和项目 `.agents/skills` 都必须出现在 Agent 配置的 `skills` 里才进入本轮 Runtime。只有 §9.2 的 `yinli-catalog` 允许绕过 Agent 配置无条件注入（代码常量 `ALWAYS_INJECTED_SKILL_IDS`）。Agent 配置是能力上限。
+系统包 seed 只保证「可选」，不等于「已启用」。已安装且已启用的 `word-documents` / `yinli-charts` 与项目 `.agents/skills` 在 `availableToAllAgents=true`（缺省 true）时进入合格 Chat 目录，不必写进 Agent `skills:`；关掉开关后仍须出现在该 Agent 配置里。只有 §9.2 的 `yinli-catalog` 锁定共享（代码常量 `ALWAYS_INJECTED_SKILL_IDS`）。Job firing、群聊 Worker / Host、Team Member 与无工具基础设施 Agent 不因该开关自动获得 Skill。Agent 配置仍是未共享包的能力上限。
 
 ### 13.4 INDEX 第二期增加章节 `## Skills`，列出 name、path、enabled、source。
 

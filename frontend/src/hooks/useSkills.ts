@@ -23,6 +23,7 @@ interface UseSkillsReturn {
   uninstallSkill: (id: string) => Promise<Skill>;
   deleteSkill: (id: string) => Promise<void>;
   setSkillEnabled: (id: string, enabled: boolean) => Promise<Skill>;
+  setSkillShared: (id: string, availableToAllAgents: boolean) => Promise<Skill>;
 }
 
 interface UseEnabledSkillsReturn {
@@ -187,6 +188,22 @@ export function useSkills(): UseSkillsReturn {
     }
   }, []);
 
+  const setSkillShared = useCallback(async (id: string, availableToAllAgents: boolean) => {
+    try {
+      const skill = await requestJson<Skill>(`/api/skills/${id}/share?projectId=${encodeURIComponent(activeProjectId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ availableToAllAgents }),
+      });
+      updateSkill(skill);
+      notifySuccess(availableToAllAgents ? '已对所有 Agent 开放此 Skill' : '已改为需要手动绑定');
+      return skill;
+    } catch (err) {
+      notifyError(`Skill 共享状态更新失败：${getErrorMessage(err, '未知错误')}`);
+      throw err;
+    }
+  }, [activeProjectId, updateSkill]);
+
   const setSkillEnabled = useCallback(async (id: string, enabled: boolean) => {
     try {
       const skill = await requestJson<Skill>(`/api/skills/${id}/enable?projectId=${encodeURIComponent(activeProjectId)}`, {
@@ -220,6 +237,7 @@ export function useSkills(): UseSkillsReturn {
     uninstallSkill,
     deleteSkill,
     setSkillEnabled,
+    setSkillShared,
   };
 }
 

@@ -22,7 +22,13 @@ from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.catalog.skills import SYSTEM_SKILL_IDS, DiscoveredSkill, discover_skill_packages, read_package_markdown
+from src.catalog.skills import (
+    ALWAYS_INJECTED_SKILL_IDS,
+    SYSTEM_SKILL_IDS,
+    DiscoveredSkill,
+    discover_skill_packages,
+    read_package_markdown,
+)
 from src.config.runtime_paths import DATA_ROOT, USER_DATA_ROOT, USER_HOME_ROOT, ensure_runtime_directories
 from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_skills_from_agents
@@ -59,7 +65,8 @@ DATA_DIR = str(DATA_ROOT)
 USER_SKILLS_REGISTRY_FILE = os.path.join(DATA_DIR, "skills.json")
 SKILLS_NAMESPACE = "skills"
 EXTERNAL_SKILL_OVERRIDES_NAMESPACE = "external_skill_overrides"
-_external_skill_enabled_overrides: dict[str, bool] = {}
+# {skill_id: {"enabled"?: bool, "availableToAllAgents"?: bool}}
+_external_skill_overrides: dict[str, dict[str, bool]] = {}
 
 
 class Skill(BaseModel):
@@ -77,6 +84,7 @@ class Skill(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     status: SkillInstallStatus = "available"
     enabled: bool = False
+    available_to_all_agents: bool = Field(default=True, alias="availableToAllAgents")
     installed_at: Optional[str] = Field(default=None, alias="installedAt")
     updated_at: str = Field(alias="updatedAt")
     workspace_id: str = Field(default="default", alias="workspaceId")
@@ -92,6 +100,14 @@ class SkillInstallRequest(BaseModel):
     """安装/配置 Skill 请求"""
 
     enabled: bool = True
+
+
+class SkillShareRequest(BaseModel):
+    """切换「所有 Agent 可用」请求。"""
+
+    available_to_all_agents: bool = Field(alias="availableToAllAgents")
+
+    model_config = {"populate_by_name": True}
 
 
 class SkillRegisterRequest(BaseModel):
@@ -387,6 +403,48 @@ _builtin_skills: dict[str, Skill] = {
 _skills: dict[str, Skill] = dict(_builtin_skills)
 
 
+def _is_share_locked(skill_id: str) -> bool:
+    """yinli-catalog 对合格 Chat 锁定全体可用。"""
+
+    return skill_id in ALWAYS_INJECTED_SKILL_IDS
+
+
+def _override_record(skill_id: str) -> dict[str, bool]:
+    return dict(_external_skill_overrides.get(skill_id) or {})
+
+
+def _upsert_external_override(skill_id: str, **fields: bool) -> dict[str, bool]:
+    """写入磁盘发现包与系统包的 enabled / 共享覆盖，不丢另一字段。"""
+
+    current = _override_record(skill_id)
+    current.update(fields)
+    _external_skill_overrides[skill_id] = current
+    upsert_json_record(
+        EXTERNAL_SKILL_OVERRIDES_NAMESPACE,
+        skill_id,
+        {"id": skill_id, **current},
+    )
+    return current
+
+
+def _resolved_share_flag(skill: Skill) -> bool:
+    if _is_share_locked(skill.id):
+        return True
+    record = _override_record(skill.id)
+    if "availableToAllAgents" in record:
+        return bool(record["availableToAllAgents"])
+    return bool(skill.available_to_all_agents)
+
+
+def _with_share_flag(skill: Skill) -> Skill:
+    """对外 JSON / Runtime 统一叠共享开关，yinli-catalog 恒为 true。"""
+
+    flag = _resolved_share_flag(skill)
+    if flag == skill.available_to_all_agents:
+        return skill
+    return skill.model_copy(update={"available_to_all_agents": flag})
+
+
 def _hydrate_skill(skill: Skill) -> Skill:
     """API / 运行时正文从 SKILL.md 读取，不信任 sqlite content。"""
 
@@ -431,9 +489,10 @@ def _load_system_packages() -> None:
             "enabled": True,
             "status": "installed",
             "category": "系统",
+            "available_to_all_agents": True,
         })
         _builtin_skills[skill.id] = skill
-        _skills[skill.id] = skill
+        _skills[skill.id] = _with_share_flag(skill)
 
 
 def _load_user_skills() -> None:
@@ -444,6 +503,7 @@ def _load_user_skills() -> None:
         legacy = list_json_records(SKILLS_NAMESPACE)
         replace_skills({str(item["id"]): item for item in legacy if item.get("id")})
         records = db_list_skills()
+    _load_external_skill_overrides()
     for item in records:
         try:
             skill = Skill.model_validate(item)
@@ -457,14 +517,9 @@ def _load_user_skills() -> None:
                 skill = _hydrate_skill(skill)
             except Exception:
                 logger.exception("Skill %s 补齐标准包失败，按原始记录加载", skill.id)
-        _skills[skill.id] = skill
+        _skills[skill.id] = _with_share_flag(skill)
     _load_system_packages()
     _save_user_skills()
-    _external_skill_enabled_overrides.update({
-        str(item.get("id")): bool(item.get("enabled"))
-        for item in list_json_records(EXTERNAL_SKILL_OVERRIDES_NAMESPACE)
-        if item.get("id")
-    })
 
 
 def discover_external_skills(
@@ -484,8 +539,15 @@ def discover_external_skills(
         workspace_id=workspace_id,
     ):
         skill = _skill_from_discovered(item)
-        enabled = _external_skill_enabled_overrides.get(skill.id, item.enabled)
-        discovered.append(skill.model_copy(update={"enabled": enabled}))
+        record = _override_record(skill.id)
+        enabled = bool(record["enabled"]) if "enabled" in record else item.enabled
+        share = True if _is_share_locked(skill.id) else (
+            bool(record["availableToAllAgents"]) if "availableToAllAgents" in record else True
+        )
+        discovered.append(skill.model_copy(update={
+            "enabled": enabled,
+            "available_to_all_agents": share,
+        }))
     return discovered
 
 
@@ -493,6 +555,23 @@ def get_runtime_skill_catalog(project_root: Path) -> list[Skill]:
     """返回当前 Project 的原生和外部 Skill catalog。"""
 
     return [*_skills.values(), *discover_external_skills(project_root)]
+
+
+def _load_external_skill_overrides() -> None:
+    """加载 enabled 与 availableToAllAgents 覆盖。"""
+
+    _external_skill_overrides.clear()
+    for item in list_json_records(EXTERNAL_SKILL_OVERRIDES_NAMESPACE):
+        skill_id = str(item.get("id") or "")
+        if not skill_id:
+            continue
+        record: dict[str, bool] = {}
+        if "enabled" in item:
+            record["enabled"] = bool(item["enabled"])
+        if "availableToAllAgents" in item:
+            record["availableToAllAgents"] = bool(item["availableToAllAgents"])
+        if record:
+            _external_skill_overrides[skill_id] = record
 
 
 def _save_user_skills() -> None:
@@ -660,7 +739,17 @@ def get_installed_skill(skill_id: str) -> Skill | None:
     skill = _skills.get(skill_id)
     if not skill or skill.status != "installed" or not skill.enabled:
         return None
-    return skill
+    return _with_share_flag(skill)
+
+
+def list_installed_enabled_skills() -> list[Skill]:
+    """已安装且启用的登记 Skill，供 Chat 目录合并共享项。"""
+
+    return [
+        _with_share_flag(skill)
+        for skill in _skills.values()
+        if skill.status == "installed" and skill.enabled
+    ]
 
 
 def resolve_installed_skills(
@@ -809,7 +898,7 @@ async def list_skills(
             if (skill.status == "installed") is installed
         ]
 
-    return result
+    return [_with_share_flag(skill) for skill in result]
 
 
 @router.get("/categories", response_model=list[str])
@@ -826,7 +915,7 @@ async def list_enabled_skills(
     """获取已安装并启用的 Skills，用于 Agent 配置选择。"""
 
     return [
-        skill
+        _with_share_flag(skill)
         for skill in _skills.values()
         if skill.status == "installed"
         and skill.enabled
@@ -882,7 +971,7 @@ async def get_skill(skill_id: str) -> Skill:
 
     if skill_id not in _skills:
         raise HTTPException(status_code=404, detail="Skill not found")
-    return _hydrate_skill(_skills[skill_id])
+    return _with_share_flag(_hydrate_skill(_skills[skill_id]))
 
 
 @router.get("/{skill_id}/export")
@@ -984,13 +1073,8 @@ async def set_skill_enabled(
         current = next((skill for skill in external if skill.id == skill_id), None)
         if current is None:
             raise HTTPException(status_code=404, detail="Skill not found")
-        _external_skill_enabled_overrides[skill_id] = data.enabled
-        upsert_json_record(
-            EXTERNAL_SKILL_OVERRIDES_NAMESPACE,
-            skill_id,
-            {"id": skill_id, "enabled": data.enabled},
-        )
-        return current.model_copy(update={"enabled": data.enabled, "updated_at": _utc_now()})
+        _upsert_external_override(skill_id, enabled=data.enabled)
+        return _with_share_flag(current.model_copy(update={"enabled": data.enabled, "updated_at": _utc_now()}))
 
     current = _skills[skill_id]
     if current.status != "installed":
@@ -1006,4 +1090,49 @@ async def set_skill_enabled(
     _persist_if_user_skill(skill_id)
     if not data.enabled:
         _job_service.pause_jobs_for_catalog_change(resource_type="skill", resource_id=skill_id)
-    return skill
+    return _with_share_flag(skill)
+
+
+@router.post("/{skill_id}/share", response_model=Skill)
+async def set_skill_shared(
+    skill_id: str,
+    data: SkillShareRequest,
+    project_id: Annotated[str, Query(alias="projectId")] = "default",
+) -> Skill:
+    """打开或关闭「所有 Agent 可用」。"""
+
+    if _is_share_locked(skill_id):
+        raise HTTPException(status_code=409, detail="系统说明书技能固定对所有 Agent 可用，不能关闭共享")
+
+    if skill_id not in _skills:
+        project = get_project(project_id)
+        external = (
+            discover_external_skills(Path(str(project.get("rootPath") or "")))
+            if project
+            else []
+        )
+        current = next((skill for skill in external if skill.id == skill_id), None)
+        if current is None:
+            raise HTTPException(status_code=404, detail="Skill not found")
+        if current.status != "installed":
+            raise HTTPException(status_code=409, detail="Skill is not installed")
+        _upsert_external_override(skill_id, availableToAllAgents=data.available_to_all_agents)
+        return current.model_copy(update={
+            "available_to_all_agents": data.available_to_all_agents,
+            "updated_at": _utc_now(),
+        })
+
+    current = _skills[skill_id]
+    if current.status != "installed":
+        raise HTTPException(status_code=409, detail="Skill is not installed")
+
+    skill = current.model_copy(
+        update={
+            "available_to_all_agents": data.available_to_all_agents,
+            "updated_at": _utc_now(),
+        }
+    )
+    _skills[skill_id] = skill
+    _persist_if_user_skill(skill_id)
+    _upsert_external_override(skill_id, availableToAllAgents=data.available_to_all_agents)
+    return _with_share_flag(skill)

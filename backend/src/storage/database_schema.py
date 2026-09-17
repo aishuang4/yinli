@@ -107,7 +107,8 @@ BASE_SCHEMA_SQL = """
         status TEXT NOT NULL,
         enabled INTEGER NOT NULL,
         installed_at TEXT,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        available_to_all_agents INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE IF NOT EXISTS chat_sessions (
         id TEXT PRIMARY KEY,

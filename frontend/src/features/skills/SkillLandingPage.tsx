@@ -19,6 +19,7 @@ import {
 } from '../../components/workbench';
 import { ToggleButton } from '../../components/ToggleButton';
 import type { Skill } from '../../types/skill';
+import { isSkillShared } from '../../types/skill';
 
 interface SkillLandingPageProps {
   skills: Skill[];
@@ -191,12 +192,15 @@ function SkillListRow({
       layout="columns"
       onSelect={onSelect}
       meta={(
-        <span className="grid w-full grid-cols-[5rem_5rem_7rem] items-center gap-2">
+        <span className="grid w-full grid-cols-[5rem_5rem_8rem_7rem] items-center gap-2">
           <span className="justify-self-start">
             <Tag size="small" color={installed ? 'green' : 'blue'}>{installed ? '已安装' : '可安装'}</Tag>
           </span>
           <span className="min-w-0 justify-self-start">
             <Tag size="small" color="transparent">{skill.category}</Tag>
+          </span>
+          <span className="justify-self-start">
+            {isSkillShared(skill) ? <Tag size="small" color="blue">所有 Agent 可用</Tag> : <Tag size="small" color="transparent">需绑定</Tag>}
           </span>
           <span className="justify-self-start">
             {(skill.warnings?.length ?? 0) > 0 ? <Tag size="small" color="orange">平台兼容提示</Tag> : null}
