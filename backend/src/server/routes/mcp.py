@@ -445,8 +445,8 @@ async def _fetch_remote_mcp_tools(
             )
         except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as fallback_exc:
             raise HTTPException(
-                status_code=502,
-                detail=f"Failed to fetch MCP tools: {fallback_exc or mcp_exc}",
+                status_code=422,
+                detail=f"无法连接该 MCP 地址：{fallback_exc or mcp_exc}",
             ) from fallback_exc
 
 

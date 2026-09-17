@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from src.storage.database import (
     DEFAULT_PROJECT_ID,
+    count_subagent_transcript_items,
     get_project,
     get_subagent_invocation,
     list_subagent_invocations,
@@ -104,11 +105,22 @@ async def get_invocation_transcript(
     invocation_id: str,
     projectId: str = DEFAULT_PROJECT_ID,
     limit: int = 500,
+    offset: int = 0,
 ) -> dict:
     """读取 task 的规范化 transcript，供后续 detail drawer 复用。"""
 
     _get_project_invocation(invocation_id, projectId)
-    return {"items": list_subagent_transcript_items(invocation_id, limit=max(1, min(limit, 2_000)))}
+    safe_limit = max(1, min(int(limit or 100), 2_000))
+    safe_offset = max(0, int(offset or 0))
+    items = list_subagent_transcript_items(invocation_id, limit=safe_limit, offset=safe_offset)
+    total = count_subagent_transcript_items(invocation_id)
+    return {
+        "items": items,
+        "total": total,
+        "limit": safe_limit,
+        "offset": safe_offset,
+        "hasMore": safe_offset + len(items) < total,
+    }
 
 
 @router.post("/invocations/{invocation_id}/cancel")

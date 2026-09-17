@@ -417,14 +417,36 @@ class TraceRecordStore:
             conn.commit()
         return {"id": item_id, "invocationId": invocation_id, "seq": seq, "kind": kind, "payload": payload, "createdAt": created_at}
 
-    def list_transcript_items(self, invocation_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
+    def count_transcript_items(self, invocation_id: str) -> int:
+        """统计 invocation transcript 条数。"""
+
+        self.ensure_db()
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM subagent_transcript_items WHERE invocation_id = ?",
+                (invocation_id,),
+            ).fetchone()
+        return int(row["n"] if row else 0)
+
+    def list_transcript_items(
+        self,
+        invocation_id: str,
+        *,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
         """读取 invocation 的 transcript，供后续 detail drawer 和恢复使用。"""
 
         self.ensure_db()
         with self.lock, self.connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM subagent_transcript_items WHERE invocation_id = ? ORDER BY seq ASC LIMIT ?",
-                (invocation_id, max(1, min(limit, 2_000))),
+                """
+                SELECT * FROM subagent_transcript_items
+                WHERE invocation_id = ?
+                ORDER BY seq ASC
+                LIMIT ? OFFSET ?
+                """,
+                (invocation_id, max(1, min(limit, 2_000)), max(0, offset)),
             ).fetchall()
         return [
             {"id": row["id"], "invocationId": row["invocation_id"], "seq": row["seq"], "kind": row["kind"], "payload": self.loads(row["payload"], {}), "createdAt": row["created_at"]}

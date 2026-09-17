@@ -15,14 +15,19 @@ interface ScheduledJobContractPanelProps {
   job: ScheduledJob;
 }
 
+const NETWORK_PREVIEW_TOOLS = new Set(['HttpRequest', 'WebFetch', 'Bash']);
+
 export function ScheduledJobContractPanel({ job }: ScheduledJobContractPanelProps) {
   const contract = job.capabilityContract;
+  const gateOffPreview = contract.verdict === 'generate_only'
+    && contract.claimed.length === 0
+    && job.firingToolsPreview.some((name) => NETWORK_PREVIEW_TOOLS.has(name));
   return (
     <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
       <div className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">能力合同</div>
       <div className="mb-3 flex flex-wrap gap-1">
         <Tag size="small" color={contract.verdict === 'ok' ? 'green' : contract.verdict === 'partial' ? 'gold' : 'transparent'}>
-          {VERDICT_LABELS[contract.verdict]}
+          {gateOffPreview ? '门禁未开启' : VERDICT_LABELS[contract.verdict]}
         </Tag>
         {contract.acceptedPartial ? <Tag size="small" color="blue">用户同意降级</Tag> : null}
       </div>
@@ -44,7 +49,9 @@ export function ScheduledJobContractPanel({ job }: ScheduledJobContractPanelProp
         </div>
       ) : (
         <div className="mb-3 text-sm text-[var(--color-text-tertiary)]">
-          Phase 1 存量任务：到期只生成文件，不会自动带上后来绑定的 MCP。
+          {gateOffPreview
+            ? '能力门禁未开启：到期按下面预览的 Agent 默认工具执行，空合同不会裁掉 HttpRequest / WebFetch。'
+            : 'Phase 1 存量任务：到期只生成文件，不会自动带上后来绑定的 MCP。'}
         </div>
       )}
       {contract.claimed.some((item) => item.layer !== 'required') ? (

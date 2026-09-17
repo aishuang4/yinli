@@ -952,6 +952,9 @@ def test_subagent_transcript_is_ordered_by_invocation(tmp_path: Path, monkeypatc
 
     assert [item["seq"] for item in items] == [1, 2]
     assert [item["id"] for item in items] == [first["id"], second["id"]]
+    assert database.count_subagent_transcript_items(invocation["id"]) == 2
+    page = database.list_subagent_transcript_items(invocation["id"], limit=1, offset=0)
+    assert [item["seq"] for item in page] == [1]
 
 
 def test_delegation_manager_marks_subagent_waiting_on_hitl(tmp_path: Path, monkeypatch) -> None:

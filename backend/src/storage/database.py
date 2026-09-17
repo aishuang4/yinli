@@ -1155,10 +1155,21 @@ def append_subagent_transcript_item(
     )
 
 
-def list_subagent_transcript_items(invocation_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
+def count_subagent_transcript_items(invocation_id: str) -> int:
+    """统计 Subagent invocation transcript 条数。"""
+
+    return _trace_record_store().count_transcript_items(invocation_id)
+
+
+def list_subagent_transcript_items(
+    invocation_id: str,
+    *,
+    limit: int = 500,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
     """列出 Subagent invocation transcript。"""
 
-    return _trace_record_store().list_transcript_items(invocation_id, limit=limit)
+    return _trace_record_store().list_transcript_items(invocation_id, limit=limit, offset=offset)
 
 
 def list_run_events_by_type(

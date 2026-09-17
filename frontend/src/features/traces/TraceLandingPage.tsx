@@ -16,6 +16,7 @@ import {
   WorkbenchSection,
 } from '../../components/workbench';
 import type { TraceSummary } from './traceTypes';
+import { formatTraceTime } from './traceUtils';
 
 interface TraceLandingPageProps {
   traces: TraceSummary[];
@@ -89,7 +90,7 @@ function TraceListRow({
       )}
       title={trace.title}
       subtitle={trace.mode === 'team' ? `${trace.agentName || 'Agent'} · Team Leader` : trace.agentName || 'Agent'}
-      description={trace.updatedAt || trace.createdAt}
+      description={formatTraceTime(trace.updatedAt || trace.createdAt)}
       last={last}
       layout="columns"
       onSelect={onSelect}

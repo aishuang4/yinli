@@ -36,7 +36,7 @@ npm test         # vitest 单测
 ./scripts/build-backend-desktop.sh
 ```
 
-首次运行需 `cp backend/.env.example backend/.env` 并填入 `AGENT_WORKSTATION_DEEPSEEK_API_KEY`。环境要求：Node >= 20（dev.sh 优先用 nvm 切到 24）、Python >= 3.11、uv。
+首次运行需 `cp backend/.env.example backend/.env` 并填入 `AGENT_WORKSTATION_DEEPSEEK_API_KEY`。环境要求：Node >= 22.12（dev.sh 优先用 nvm 切到 24；Electron / Vitest 不支持 Node 20）、Python >= 3.11、uv。
 
 ## 架构要点
 

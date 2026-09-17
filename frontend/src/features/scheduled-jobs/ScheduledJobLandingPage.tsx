@@ -188,7 +188,7 @@ function ScheduledJobRow({
             {JOB_STATUS_LABELS[job.status] || job.status}
           </Tag>
           <Tag size="small" color="transparent">
-            {job.nextRunAt ? `下次 ${formatDateTime(job.nextRunAt)}` : '无下次运行'}
+            {job.nextRunAt ? `下次 ${formatDateTime(job.nextRunAt, job.timezone)}` : '无下次运行'}
           </Tag>
         </>
       )}

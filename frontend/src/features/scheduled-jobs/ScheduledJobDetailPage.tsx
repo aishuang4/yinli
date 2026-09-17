@@ -117,8 +117,8 @@ export function ScheduledJobDetailPage({
             <div className="grid gap-3 text-sm md:grid-cols-2">
               <DetailField label="Agent" value={agentName} />
               <DetailField label="调度" value={formatSchedule(job)} />
-              <DetailField label="下次运行" value={formatDateTime(job.nextRunAt)} />
-              <DetailField label="上次运行" value={formatDateTime(job.lastRunAt)} />
+              <DetailField label="下次运行" value={formatDateTime(job.nextRunAt, job.timezone)} />
+              <DetailField label="上次运行" value={formatDateTime(job.lastRunAt, job.timezone)} />
               <DetailField label="投递策略" value={job.deliveryPolicy} />
               <DetailField label="错过策略" value={job.missedPolicy} />
               <DetailField label="失败策略" value={job.failurePolicy} />

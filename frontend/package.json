@@ -5,6 +5,9 @@
   "description": "YINLI local-first AI workstation for office work",
   "author": "YINLI",
   "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "main": "electron-dist/main.js",
   "scripts": {
     "dev": "vite",

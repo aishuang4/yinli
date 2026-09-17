@@ -78,7 +78,7 @@ export function ScheduledJobHistory({
                 </WorkbenchListIcon>
               )}
               title={FIRING_STATUS_LABELS[run.status] || run.status}
-              subtitle={`${run.trigger} · ${formatDateTime(run.scheduledFor)}`}
+              subtitle={`${run.trigger} · ${formatDateTime(run.scheduledFor, job.timezone)}`}
               description={run.errorMessage || run.errorCode || run.chatRunId || '无附加信息'}
               last
               meta={(

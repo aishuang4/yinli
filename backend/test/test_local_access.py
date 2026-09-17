@@ -13,6 +13,21 @@ def test_backend_defaults_to_loopback_host():
     assert Settings().host == "127.0.0.1"
 
 
+def test_settings_ignores_vector_store_env_file_keys(tmp_path, monkeypatch):
+    """复制 .env.example 后 VECTOR_STORE_* 不得让 Settings 启动失败。"""
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "VECTOR_STORE_PROVIDER=zvec\n"
+        "EMBEDDING_PROVIDER=disabled\n"
+        "AGENT_WORKSTATION_HOST=127.0.0.1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    loaded = Settings(_env_file=env_file)
+    assert loaded.host == "127.0.0.1"
+
+
 def test_local_access_recognizes_loopback_and_rejects_lan_addresses():
     """访问控制同时覆盖 IPv4、IPv6 与 IPv4-mapped IPv6。"""
 

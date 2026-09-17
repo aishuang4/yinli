@@ -62,11 +62,17 @@ export function firingStatusColor(status: FiringStatus): string {
   return 'transparent';
 }
 
-export function formatDateTime(value: string | null | undefined): string {
+export function formatDateTime(
+  value: string | null | undefined,
+  timeZone?: string | null,
+): string {
   if (!value) return '未设置';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleString('zh-CN', { hour12: false });
+  return parsed.toLocaleString('zh-CN', {
+    hour12: false,
+    ...(timeZone ? { timeZone } : {}),
+  });
 }
 
 export function readWeekdays(job: ScheduledJob): string[] {

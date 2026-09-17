@@ -2,12 +2,13 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.catalog.http_files import HttpToolFileRecord, discover_http_files, runtime_auth_config, write_http_file
 from src.catalog.migrate_mcp_http import ensure_http_file_catalog, is_http_catalog_migrated
@@ -37,6 +38,16 @@ KNOWLEDGE_TOOLS_NAMESPACE = "knowledge_tools"
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _require_http_url(value: str) -> str:
+    """创建/更新 HTTP 工具时拒绝非 http(s) 绝对地址。"""
+
+    cleaned = str(value or "").strip()
+    parsed = urlparse(cleaned)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("URL must be absolute and start with http:// or https://")
+    return cleaned
 
 
 def _default_payload() -> dict[str, Any]:
@@ -118,6 +129,11 @@ class HttpToolBase(BaseModel):
 
     model_config = {"populate_by_name": True}
 
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        return _require_http_url(value)
+
 
 class HttpToolCreate(HttpToolBase):
     pass
@@ -143,6 +159,13 @@ class HttpToolUpdate(BaseModel):
     enabled: bool | None = None
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return _require_http_url(value)
 
 
 class HttpToolResponse(HttpToolBase):

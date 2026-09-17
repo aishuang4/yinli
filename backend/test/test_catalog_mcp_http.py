@@ -2,7 +2,11 @@
 
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from src.catalog.http_files import HttpToolFileRecord, parse_http_yaml, write_http_file
+from src.server.routes.tools import HttpToolCreate
 from src.catalog.mcp_files import McpFileRecord, parse_mcp_yaml, write_mcp_file
 from src.catalog.secrets import resolve_headers
 from src.config.secret_store import get_named_secret
@@ -25,6 +29,14 @@ def test_mcp_yaml_strips_authorization(tmp_path: Path) -> None:
     assert resolved["Authorization"] == "Bearer super-secret"
     assert resolved["X-Debug"] == "1"
     assert get_named_secret(parsed.header_refs["Authorization"]) == "Bearer super-secret"
+
+
+@pytest.mark.parametrize("url", ["not-a-valid-url", "ftp://example.com/x"])
+def test_http_tool_create_rejects_non_http_url(url: str) -> None:
+    """创建 HTTP 工具时无效 URL 必须 4xx，不能等到 debug 才失败。"""
+
+    with pytest.raises(ValidationError, match="http:// or https://"):
+        HttpToolCreate(name="Bad", url=url)
 
 
 def test_http_yaml_stores_auth_config_in_secret(tmp_path: Path) -> None:
@@ -115,3 +127,26 @@ def test_mcp_http_migration_exports_sqlite(tmp_path, monkeypatch) -> None:
     assert "migrate-me" not in mcp_text
     assert "http-secret" not in http_text
     assert all(row["id"] != "http-mig" for row in database.list_http_tools())
+
+
+@pytest.mark.anyio
+async def test_mcp_unreachable_address_is_422(monkeypatch) -> None:
+    from urllib.error import URLError
+
+    from fastapi import HTTPException
+
+    from src.server.routes import mcp as mcp_routes
+
+    async def _client_down(*_args, **_kwargs):
+        raise RuntimeError("mcp client failed")
+
+    def _refused(*_args, **_kwargs):
+        raise URLError("Connection refused")
+
+    monkeypatch.setattr(mcp_routes, "_fetch_tools_with_mcp_client", _client_down)
+    monkeypatch.setattr(mcp_routes, "_fetch_remote_mcp_tools_json_fallback", _refused)
+
+    with pytest.raises(HTTPException) as exc:
+        await mcp_routes._fetch_remote_mcp_tools("http://127.0.0.1:9/x", "s1", None)
+    assert exc.value.status_code == 422
+    assert "无法连接该 MCP 地址" in str(exc.value.detail)

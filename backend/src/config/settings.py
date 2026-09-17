@@ -52,6 +52,9 @@ class Settings(BaseSettings):
         "env_prefix": "AGENT_WORKSTATION_",
         "env_file": ".env",
         "env_file_encoding": "utf-8",
+        # .env.example 里的 VECTOR_STORE_PROVIDER / EMBEDDING_* 由 VectorStorePolicy 读，
+        # 不是本 Settings 字段；忽略以免复制即启动失败。
+        "extra": "ignore",
     }
 
 
