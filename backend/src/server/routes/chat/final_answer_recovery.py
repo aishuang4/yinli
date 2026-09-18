@@ -8,6 +8,7 @@ from agentscope._utils._common import _generate_id
 from agentscope.message import Msg, UserMsg
 from agentscope.tool import ToolChoice
 
+from src.server.routes.chat.generation_snapshot import snapshot_model_input
 from src.server.routes.chat.helpers import source_event
 from src.server.routes.chat.models import ChatToolRun
 from src.server.routes.chat.runtime_events import (
@@ -64,6 +65,7 @@ async def stream_final_answer_recovery_events(
         async for event in agent._reasoning(tool_choice=marker_choice):
             async for sse_event in _handle_final_answer_recovery_event(
                 event,
+                agent=agent,
                 state=state,
                 session_id=session_id,
                 persist=persist,
@@ -78,6 +80,7 @@ async def stream_final_answer_recovery_events(
         async for event in _execute_recovery_tool_calls(agent):
             async for sse_event in _handle_final_answer_recovery_event(
                 event,
+                agent=agent,
                 state=state,
                 session_id=session_id,
                 persist=persist,
@@ -96,6 +99,7 @@ async def stream_final_answer_recovery_events(
         async for event in agent._reasoning(tool_choice=answer_choice):
             async for sse_event in _handle_final_answer_recovery_event(
                 event,
+                agent=agent,
                 state=state,
                 session_id=session_id,
                 persist=persist,
@@ -146,6 +150,7 @@ async def _execute_recovery_tool_calls(agent: object) -> AsyncGenerator[object, 
 async def _handle_final_answer_recovery_event(
     event: object,
     *,
+    agent: object,
     state: Any,
     session_id: str,
     persist: bool,
@@ -242,6 +247,11 @@ async def _handle_final_answer_recovery_event(
     )
     if runtime_event:
         yield runtime_event
+    if event_type == "MODEL_CALL_START":
+        try:
+            event_data["observationInput"] = snapshot_model_input(agent, model_name=model_name)
+        except Exception:
+            event_data["observationInput"] = {"model": model_name}
     yield source_event(event_type, event_data)
 
 

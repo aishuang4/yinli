@@ -402,7 +402,7 @@ AgentScope/provider
 ```
 
 - SourceEvent 是进程内输入，不是前端协议，也不允许先序列化为 SSE 再反解析。
-- Domain Event 是业务事实；Trace Event 是诊断事实；RuntimeFrame 是 UI projection，三者不得混用。
+- Domain Event 是业务事实；Chat Trace Observation 是按 Run 的诊断步骤（见 `docs/trace-run-observations.md`）；RuntimeFrame 是 UI projection，三者不得混用。
 - 同一 Run 由唯一 `stream_ordinal` 排序，ProjectionRunner 使用 lease/fencing 串行投影。
 - projector 不直接写 SSE，handler 不直接修改 DisplaySnapshot。
 - Snapshot checkpoint、tail Frame、消费水位和 seq 由 projection store 原子维护。

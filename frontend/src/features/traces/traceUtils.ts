@@ -1,117 +1,98 @@
 /**
- * traceUtils — 运行轨迹展示辅助函数。
+ * traceUtils — 运行轨迹时间线展示辅助。
  */
 
-import type { TraceEvent, TraceEventFilter } from './traceTypes';
+import type { ObservationKind, TraceObservation } from './traceTypes';
 
-export const TRACE_FILTERS: Array<{ key: TraceEventFilter; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'runtime', label: 'Runtime' },
-  { key: 'permissions', label: '权限审计' },
-  { key: 'tools', label: '工具' },
-  { key: 'models', label: '模型' },
-  { key: 'hitl', label: '人工介入' },
-];
+export const MAX_PAYLOAD_PREVIEW_LENGTH = 16000;
 
-export const TRACE_RENDER_BATCH_SIZE = 30;
-export const MAX_MESSAGE_PREVIEW_LENGTH = 2500;
-export const MAX_PAYLOAD_PREVIEW_LENGTH = 3000;
+const KIND_LABEL: Record<string, string> = {
+  run: '整轮',
+  generation: '模型',
+  tool: '工具',
+  skill: 'Skill',
+  approval: '等待确认',
+  subagent: 'Subagent',
+  'team-task': 'Team 任务',
+};
 
-export function shouldShowTracePayload(event: TraceEvent) {
-  return (
-    event.eventType === 'WORKSPACE_CONFIG' ||
-    event.eventType === 'PERMISSION_POLICY' ||
-    event.eventType === 'PERMISSION_DECISION' ||
-    event.eventType === 'MODEL_CACHE_USAGE' ||
-    event.eventType === 'COMMAND_RESULT' ||
-    event.eventType === 'FILE_CHANGE' ||
-    event.eventType === 'RUNTIME_EVENT' ||
-    event.eventType.startsWith('MODEL_FALLBACK_')
-  );
-}
-
-export function matchesTraceFilter(event: TraceEvent, filter: TraceEventFilter) {
-  if (filter === 'all') return true;
-  if (filter === 'runtime') return isRuntimeEvent(event);
-  if (filter === 'permissions') return isPermissionEvent(event);
-  if (filter === 'tools') return event.eventType.includes('TOOL') || event.eventType === 'COMMAND_RESULT' || event.eventType === 'FILE_CHANGE';
-  if (filter === 'models') return event.eventType.startsWith('MODEL_');
-  if (filter === 'hitl') return event.eventType.includes('HITL') || event.eventType.includes('CLARIFICATION');
-  return true;
-}
-
-export function isRuntimeEvent(event: TraceEvent) {
-  return event.eventType === 'RUNTIME_EVENT';
-}
-
-export function isPermissionEvent(event: TraceEvent) {
-  return event.eventType === 'PERMISSION_POLICY' || event.eventType === 'PERMISSION_DECISION';
-}
-
-export function permissionDecisionColor(decision: string) {
-  if (decision === 'deny') return 'red';
-  if (decision === 'ask') return 'orange';
-  if (decision === 'allow' || decision === 'configured') return 'green';
-  return 'transparent';
-}
-
-export function getRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-export function formatPayloadPreview(payload: Record<string, unknown>): string {
-  const text = JSON.stringify(payload || {}, null, 2);
-  return formatLongTextPreview(text, MAX_PAYLOAD_PREVIEW_LENGTH);
-}
-
-export function formatLongTextPreview(text: string, limit: number): string {
-  const value = String(text || '');
-  if (value.length <= limit) return value;
-  return `${value.slice(0, limit)}\n\n...（内容过长，已在运行轨迹页截断）`;
-}
-
-export function parseHttpToolSummary(text: string): { method: string; url: string; statusCode: number; durationMs: number } | null {
-  if (!text) return null;
-  try {
-    const data = JSON.parse(text);
-    const method = String(data.method || '');
-    const url = String(data.url || '');
-    const statusCode = Number(data.status_code || 0);
-    const durationMs = Number(data.duration_ms || 0);
-    if (!method || !url || !statusCode) return null;
-    return { method, url, statusCode, durationMs };
-  } catch {
-    return null;
-  }
-}
-
-export async function copyTextToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', 'true');
-  textarea.style.position = 'fixed';
-  textarea.style.left = '-9999px';
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand('copy');
-  document.body.removeChild(textarea);
-}
-
-export function normalizeToolDisplayName(name: string): string {
-  const value = String(name || 'tool');
-  const parts = value.split('_');
-  if (parts.length === 2 && parts[0] && parts[0] === parts[1]) {
-    return parts[0];
-  }
-  return value;
+export function observationKindLabel(kind: ObservationKind | string): string {
+  return KIND_LABEL[kind] || kind;
 }
 
 export function formatTraceTime(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+export function formatDuration(ms: number | null | undefined): string {
+  if (ms == null || Number.isNaN(ms)) return '进行中';
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))} ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)} s`;
+  const minutes = Math.floor(seconds / 60);
+  const remain = Math.round(seconds % 60);
+  if (minutes < 60) return remain ? `${minutes}m ${remain}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainMinutes = minutes % 60;
+  return remainMinutes ? `${hours}h ${remainMinutes}m` : `${hours}h`;
+}
+
+export function formatJsonPreview(value: unknown): string {
+  const text = JSON.stringify(value ?? {}, null, 2);
+  if (text.length <= MAX_PAYLOAD_PREVIEW_LENGTH) return text;
+  return `${text.slice(0, MAX_PAYLOAD_PREVIEW_LENGTH)}\n\n...（已截断，完整内容以 Chat 历史为准）`;
+}
+
+export function observationAccent(kind: string, status: string): string {
+  if (status === 'failed') return 'var(--color-error)';
+  if (kind === 'approval' || status.startsWith('waiting')) return 'var(--color-warning, #d97706)';
+  if (kind === 'generation') return 'var(--color-accent)';
+  if (kind === 'tool') return 'var(--color-success, #16a34a)';
+  if (kind === 'skill') return '#7c3aed';
+  if (kind === 'subagent') return '#0f766e';
+  if (kind === 'team-task') return '#0369a1';
+  return 'var(--color-text-tertiary)';
+}
+
+export function timelineRange(observations: TraceObservation[], nowMs = Date.now()) {
+  const starts = observations
+    .map((item) => Date.parse(item.startedAt))
+    .filter((value) => Number.isFinite(value));
+  const start = starts.length ? Math.min(...starts) : nowMs;
+  const ends = observations.map((item) => (
+    item.endedAt ? Date.parse(item.endedAt) : nowMs
+  )).filter((value) => Number.isFinite(value));
+  const end = Math.max(start + 1, ends.length ? Math.max(...ends) : nowMs);
+  return { start, end, durationMs: end - start };
+}
+
+export interface TimelineLane {
+  observation: TraceObservation;
+  lane: number;
+  left: number;
+  width: number;
+}
+
+export function layoutTimelineLanes(
+  observations: TraceObservation[],
+  nowMs = Date.now(),
+): { lanes: TimelineLane[]; laneCount: number; range: ReturnType<typeof timelineRange> } {
+  const range = timelineRange(observations, nowMs);
+  const span = Math.max(1, range.end - range.start);
+  const segments = observations
+    .filter((item) => item.kind !== 'run')
+    .slice()
+    .sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt));
+  const lanes: TimelineLane[] = segments.map((observation, lane) => {
+    const started = Date.parse(observation.startedAt);
+    const ended = observation.endedAt ? Date.parse(observation.endedAt) : nowMs;
+    const safeStart = Number.isFinite(started) ? started : range.start;
+    const safeEnd = Number.isFinite(ended) ? Math.max(safeStart + 1, ended) : range.end;
+    const left = ((safeStart - range.start) / span) * 100;
+    const width = Math.max(1.6, ((safeEnd - safeStart) / span) * 100);
+    return { observation, lane, left, width: Math.min(width, 100 - left) };
+  });
+  return { lanes, laneCount: Math.max(1, lanes.length), range };
 }

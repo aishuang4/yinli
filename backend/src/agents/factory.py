@@ -584,7 +584,7 @@ def _create_default_toolkit(
     - Glob: 按模式查找文件
     - Bash: 执行 Shell 命令
     - HttpRequest: 调用 HTTP 接口
-    - WebFetch: 读取公开网页正文
+    - WebFetch: 读取公开 / 本机 / 内网网页正文
 
     Returns:
         Toolkit: 包含默认工具的 Toolkit 实例

@@ -1,210 +1,161 @@
 /**
- * TraceEventTimeline — 运行轨迹事件时间线。
+ * TraceEventTimeline — 一行一步的墙钟时间线：左侧名称/耗时，右侧对齐总时长。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { UIEvent } from 'react';
-import { Activity, ShieldCheck } from 'lucide-react';
-import { Tag } from '@/components/design';
-import type { TraceEvent, TraceEventFilter } from './traceTypes';
+import type { ReactNode } from 'react';
+import type { TraceDetail, TraceObservation } from './traceTypes';
 import {
-  formatPayloadPreview,
-  formatTraceTime,
-  getRecord,
-  isPermissionEvent,
-  isRuntimeEvent,
-  matchesTraceFilter,
-  permissionDecisionColor,
-  shouldShowTracePayload,
-  TRACE_FILTERS,
-  TRACE_RENDER_BATCH_SIZE,
+  formatDuration,
+  layoutTimelineLanes,
+  observationAccent,
+  observationKindLabel,
 } from './traceUtils';
 
 interface TraceEventTimelineProps {
-  events: TraceEvent[];
-  eventTotal: number;
-  loadingMore: boolean;
-  onLoadMore: () => void;
+  trace: TraceDetail;
+  selectedId: string;
+  onSelect: (observation: TraceObservation) => void;
 }
 
 export function TraceEventTimeline({
-  events,
-  eventTotal,
-  loadingMore,
-  onLoadMore,
+  trace,
+  selectedId,
+  onSelect,
 }: TraceEventTimelineProps) {
-  const [filter, setFilter] = useState<TraceEventFilter>('all');
-  const [visibleCount, setVisibleCount] = useState(TRACE_RENDER_BATCH_SIZE);
-  const filteredEvents = useMemo(
-    () => events.filter((event) => matchesTraceFilter(event, filter)),
-    [events, filter],
-  );
-  const visibleEvents = useMemo(
-    () => filteredEvents.slice(0, visibleCount),
-    [filteredEvents, visibleCount],
-  );
-  const hasMoreLocalEvents = visibleCount < filteredEvents.length;
-  const hasMoreRemoteEvents = events.length < eventTotal;
-  const permissionCount = useMemo(
-    () => events.filter((event) => matchesTraceFilter(event, 'permissions')).length,
-    [events],
-  );
-  const runtimeCount = useMemo(
-    () => events.filter((event) => matchesTraceFilter(event, 'runtime')).length,
-    [events],
-  );
-  const loadMoreEvents = useCallback(() => {
-    if (hasMoreLocalEvents) {
-      setVisibleCount((current) => Math.min(current + TRACE_RENDER_BATCH_SIZE, filteredEvents.length));
-      return;
-    }
-    if (hasMoreRemoteEvents && !loadingMore) {
-      onLoadMore();
-    }
-  }, [filteredEvents.length, hasMoreLocalEvents, hasMoreRemoteEvents, loadingMore, onLoadMore]);
-  const handleEventListScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
-    const target = event.currentTarget;
-    if (target.scrollTop + target.clientHeight >= target.scrollHeight - 80) {
-      loadMoreEvents();
-    }
-  }, [loadMoreEvents]);
-
-  useEffect(() => {
-    setVisibleCount(TRACE_RENDER_BATCH_SIZE);
-  }, [filter, events]);
+  const { lanes, range } = layoutTimelineLanes(trace.observations);
+  const root = trace.observations.find((item) => item.kind === 'run') || null;
 
   return (
     <section className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
-          <Activity size={15} color="var(--color-accent)" />
-          <span>事件时间线</span>
-        </div>
-        <div className="flex items-center gap-2">
-          {runtimeCount > 0 && <Tag size="small" color="blue">{runtimeCount} Runtime</Tag>}
-          {permissionCount > 0 && <Tag size="small" color="green">{permissionCount} 权限</Tag>}
-          <Tag size="small" color="transparent">{events.length}/{eventTotal} 事件</Tag>
+        <div className="text-sm font-medium text-[var(--color-text-primary)]">墙钟时间线</div>
+        <div className="text-xs text-[var(--color-text-tertiary)]">
+          总耗时 {formatDuration(trace.durationMs ?? range.durationMs)}
         </div>
       </div>
-      <div className="mb-3 flex flex-wrap gap-2">
-        {TRACE_FILTERS.map((item) => (
-          <button
-            key={item.key}
-            type="button"
-            onClick={() => setFilter(item.key)}
-            className={[
-              'ui-card-transition rounded-md px-3 py-1.5 text-xs',
-              filter === item.key
-                ? 'bg-[var(--color-accent-bg)] text-[var(--color-accent)]'
-                : 'bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]',
-            ].join(' ')}
-          >
-            {item.label}
-          </button>
-        ))}
+
+      <div className="mb-2 grid min-w-0 grid-cols-[minmax(0,220px)_64px_minmax(0,1fr)] items-center gap-2 px-1 text-[11px] text-[var(--color-text-tertiary)]">
+        <span>步骤</span>
+        <span className="text-right">耗时</span>
+        <span className="flex justify-between px-1">
+          <span>0</span>
+          <span>{formatDuration(trace.durationMs ?? range.durationMs)}</span>
+        </span>
       </div>
-      <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1" onScroll={handleEventListScroll}>
-        {visibleEvents.map((event) => (
-          <TraceEventRow key={event.id} event={event} />
-        ))}
-        {(hasMoreLocalEvents || hasMoreRemoteEvents) && (
-          <button
-            type="button"
-            className="w-full rounded-md bg-[var(--color-bg-primary)] p-3 text-center text-xs text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)]"
-            onClick={loadMoreEvents}
-            disabled={loadingMore}
-          >
-            {loadingMore
-              ? '正在加载更多事件...'
-              : `已显示 ${visibleEvents.length}/${eventTotal} 条，继续滚动或点击加载 30 条`}
-          </button>
-        )}
-        {filteredEvents.length === 0 && (
-          <div className="rounded-md bg-[var(--color-bg-primary)] p-6 text-center text-sm text-[var(--color-text-tertiary)]">
-            当前筛选下暂无事件
-          </div>
-        )}
-      </div>
+
+      <button
+        type="button"
+        onClick={() => root && onSelect(root)}
+        className={rowClass(selectedId === root?.id)}
+      >
+        <RowLabel kind="run" name={root?.name || '整轮'} />
+        <span className="text-right text-[11px] text-[var(--color-text-tertiary)]">
+          {formatDuration(root?.durationMs ?? trace.durationMs)}
+        </span>
+        <Track>
+          <Bar
+            left={0}
+            width={100}
+            color={observationAccent('run', root?.status || trace.status)}
+            selected={selectedId === root?.id}
+          />
+        </Track>
+      </button>
+
+      {lanes.length === 0 ? (
+        <div className="mt-2 rounded-md bg-[var(--color-bg-primary)] p-6 text-center text-sm text-[var(--color-text-tertiary)]">
+          本轮还没有可展示的步骤
+        </div>
+      ) : (
+        <div className="mt-1 max-h-80 min-w-0 space-y-1 overflow-x-hidden overflow-y-auto">
+          {lanes.map((item) => {
+            const selected = selectedId === item.observation.id;
+            const waiting = item.observation.kind === 'approval' || item.observation.status.startsWith('waiting');
+            return (
+              <button
+                key={item.observation.id}
+                type="button"
+                title={`${observationKindLabel(item.observation.kind)} · ${item.observation.name}`}
+                onClick={() => onSelect(item.observation)}
+                className={rowClass(selected)}
+              >
+                <RowLabel kind={item.observation.kind} name={item.observation.name} />
+                <span className="text-right text-[11px] text-[var(--color-text-tertiary)]">
+                  {formatDuration(item.observation.durationMs)}
+                </span>
+                <Track>
+                  <Bar
+                    left={item.left}
+                    width={item.width}
+                    color={observationAccent(item.observation.kind, item.observation.status)}
+                    selected={selected}
+                    dashed={waiting}
+                  />
+                </Track>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
 
-function TraceEventRow({ event }: { event: TraceEvent }) {
+function RowLabel({ kind, name }: { kind: string; name: string }) {
   return (
-    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3">
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="truncate text-sm font-medium text-[var(--color-text-primary)]">
-              {event.title || event.eventType}
-            </span>
-            <Tag size="small" color={event.scope === 'team_member' ? 'mauve' : 'blue'}>{event.scope}</Tag>
-            {event.status && (
-              <Tag size="small" color={event.status === 'failed' ? 'red' : event.status === 'waiting' ? 'orange' : event.status === 'completed' ? 'green' : 'transparent'}>
-                {event.status}
-              </Tag>
-            )}
-          </div>
-          <div className="mt-1 flex min-w-0 flex-wrap gap-2 text-xs text-[var(--color-text-tertiary)]">
-            <span>{event.eventType}</span>
-            {isRuntimeEvent(event) && <span>{String(event.payload.type || '')}</span>}
-            {event.agentName && <span>{event.agentName}</span>}
-          </div>
-        </div>
-        <time className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
-          {formatTraceTime(event.createdAt)}
-        </time>
-      </div>
-      {event.content && (
-        <div className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-xs text-[var(--color-text-secondary)]">
-          {event.content}
-        </div>
-      )}
-      {isPermissionEvent(event) && <PermissionAuditSummary event={event} />}
-      {shouldShowTracePayload(event) && (
-        <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-[var(--color-bg-secondary)] p-2 text-[11px] text-[var(--color-text-tertiary)]">
-          {formatPayloadPreview(event.payload)}
-        </pre>
-      )}
-    </div>
+    <span className="flex min-w-0 items-center gap-2 text-left">
+      <span
+        className="h-2 w-2 shrink-0 rounded-full"
+        style={{ background: observationAccent(kind, 'completed') }}
+      />
+      <span className="truncate text-xs text-[var(--color-text-primary)]">
+        {observationKindLabel(kind)} · {name}
+      </span>
+    </span>
   );
 }
 
-function PermissionAuditSummary({ event }: { event: TraceEvent }) {
-  const payload = event.payload;
-  const policy = getRecord(payload.policy);
-  const decision = String(payload.decision || event.status || '');
-  const resourceType = String(payload.resourceType || '');
-  const resourceId = String(payload.resourceId || '');
-  const action = String(payload.action || '');
-  const reason = String(payload.reason || '');
-  const toolPolicy = String(policy.toolPolicy || payload.toolPolicy || '');
-  const networkEnabled = policy.networkEnabled;
-
+function Track({ children }: { children: ReactNode }) {
   return (
-    <div className="mt-3 rounded-md bg-[var(--color-bg-secondary)] p-3">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <ShieldCheck size={14} color="var(--color-accent)" />
-        <Tag size="small" color={permissionDecisionColor(decision)}>{decision || 'configured'}</Tag>
-        {resourceType && <Tag size="small" color="transparent">{resourceType}</Tag>}
-        {action && <Tag size="small" color="transparent">{action}</Tag>}
-        {toolPolicy && <Tag size="small" color="blue">{toolPolicy}</Tag>}
-        {typeof networkEnabled === 'boolean' && (
-          <Tag size="small" color={networkEnabled ? 'green' : 'orange'}>
-            network {networkEnabled ? 'on' : 'off'}
-          </Tag>
-        )}
-      </div>
-      {resourceId && (
-        <div className="truncate text-sm font-medium text-[var(--color-text-primary)]" title={resourceId}>
-          {resourceId}
-        </div>
-      )}
-      {reason && (
-        <div className="mt-1 line-clamp-2 text-xs text-[var(--color-text-secondary)]">
-          {reason}
-        </div>
-      )}
-    </div>
+    <span className="relative block h-6 min-w-0 overflow-hidden rounded-sm bg-[var(--color-bg-primary)]">
+      <span className="pointer-events-none absolute inset-x-1 top-1/2 h-px -translate-y-1/2 bg-[var(--color-border)]" />
+      <span className="absolute inset-y-[3px] inset-x-1 min-w-0">{children}</span>
+    </span>
   );
+}
+
+function Bar({
+  left,
+  width,
+  color,
+  selected,
+  dashed = false,
+}: {
+  left: number;
+  width: number;
+  color: string;
+  selected: boolean;
+  dashed?: boolean;
+}) {
+  return (
+    <span
+      className={[
+        'absolute inset-y-0 rounded-sm',
+        selected ? 'ring-2 ring-inset ring-[var(--color-accent)]' : '',
+        dashed ? 'border border-dashed border-white/70' : '',
+      ].join(' ')}
+      style={{
+        left: `${left}%`,
+        width: `${width}%`,
+        background: color,
+      }}
+    />
+  );
+}
+
+function rowClass(selected: boolean) {
+  return [
+    'grid w-full min-w-0 grid-cols-[minmax(0,220px)_64px_minmax(0,1fr)] items-center gap-2 rounded-md px-1 py-0.5 text-left',
+    selected ? 'bg-[var(--color-accent-bg)]' : 'hover:bg-[var(--color-bg-hover)]',
+  ].join(' ');
 }

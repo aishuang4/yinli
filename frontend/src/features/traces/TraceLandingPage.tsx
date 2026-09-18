@@ -1,7 +1,5 @@
 /**
- * TraceLandingPage — 运行轨迹第一层列表页。
- *
- * 只展示历史 Run 列表；点击后进入二级详情页查看消息、事件和工具调用。
+ * TraceLandingPage — 按 Chat Run 列出轨迹：状态与总耗时。
  */
 
 import { Activity, List, RefreshCw } from 'lucide-react';
@@ -16,7 +14,8 @@ import {
   WorkbenchSection,
 } from '../../components/workbench';
 import type { TraceSummary } from './traceTypes';
-import { formatTraceTime } from './traceUtils';
+import { TraceStatus } from './TraceStatus';
+import { formatDuration, formatTraceTime } from './traceUtils';
 
 interface TraceLandingPageProps {
   traces: TraceSummary[];
@@ -39,7 +38,7 @@ export function TraceLandingPage({
       icon={<Activity size={18} />}
       actions={(
         <>
-          <Tag size="small" color="blue">{traces.length} 条历史运行</Tag>
+          <Tag size="small" color="blue">{traces.length} 条 Run</Tag>
           <Button icon={<RefreshCw size={14} />} onClick={onRefresh} loading={loading}>
             刷新
           </Button>
@@ -96,12 +95,9 @@ function TraceListRow({
       onSelect={onSelect}
       meta={(
         <>
-          <Tag size="small" color={trace.status === 'failed' ? 'red' : trace.status === 'waiting' ? 'orange' : 'green'}>
-            {trace.status}
-          </Tag>
-          <Tag size="small" color="transparent">{trace.messageCount} 消息</Tag>
-          <Tag size="small" color="transparent">{trace.toolCallCount} 工具</Tag>
-          {trace.memberCount > 0 ? <Tag size="small" color="transparent">{trace.memberCount} Member</Tag> : null}
+          <TraceStatus status={trace.status} />
+          <Tag size="small" color="transparent">{formatDuration(trace.durationMs)}</Tag>
+          {trace.mode === 'team' ? <Tag size="small" color="transparent">Team</Tag> : null}
         </>
       )}
       trailing={(

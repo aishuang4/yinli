@@ -191,7 +191,7 @@ Team（`team_runtime/`）：
 - macOS 当前运行环境提供 `python3`，不提供 `python`；Skill 示例和后续 Office Skills 应显式使用 `python3`，或在脚本前探测解释器。
 - DashScope `qwen-plus` 已到达真实供应商接口，但返回 `401 invalid_api_key`，因此第二供应商行为验证仍未完成。
 - 真实 Run 发现 Runtime Event 路径仍把 `Skill` viewer 写入 DisplaySnapshot 普通工具项；已在 projector 层过滤并增加回归测试。
-- 真实 Run 中一次 Bash 失败后成功恢复，Trace 摘要仍被历史 failed 事件锁死；已改为按最后一个顶层终态事件判定，并保留中间失败事件用于审计。
+- 真实 Run 中一次 Bash 失败后成功恢复，旧 Trace 摘要曾被历史 failed 事件锁死。2026-09-18 起 Trace 身份改为 Chat Run，状态直接读 `chat_runs`，时间线来自 `trace_observations`，不再用 `run_events` 启发式。generation 第二层改为快照 `state.context`，并在 thinking / 工具声明齐了再关，避免 `MODEL_CALL_END` 时尚无正文。
 
 ### Memory
 
@@ -203,8 +203,8 @@ Team（`team_runtime/`）：
 
 ### 网络工具
 
-- `HttpRequest` 用于显式 API 请求；`WebFetch` 用于读取已知公开网页并提取正文，两者使用独立 ToolScope。
-- `WebFetch` 已接入主 Agent、Team Member、Subagent 和 Plan Mode，并包含私网、重定向、响应大小、非文本内容和外部 prompt injection 提醒。
+- `HttpRequest` 用于显式 API 请求；`WebFetch` 用于读取已知 HTTP(S) 网页（公网 / 本机 / 内网）并提取正文，两者使用独立 ToolScope。
+- `WebFetch` 已接入主 Agent、Team Member、Subagent 和 Plan Mode；允许公网 / 本机 / RFC1918·ULA 内网，仍拦截链路本地、云元数据、本机 API 端口、凭据 URL、危险重定向、超大响应、非文本内容和外部 prompt injection。
 - WebSearch 尚未实现，不能把 WebFetch 描述成网络搜索能力。
 
 ### 定时任务与通知

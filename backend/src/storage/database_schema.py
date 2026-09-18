@@ -219,6 +219,27 @@ BASE_SCHEMA_SQL = """
     );
     CREATE INDEX IF NOT EXISTS idx_run_events_session_order
         ON run_events(session_id, sort_order, created_at);
+    CREATE TABLE IF NOT EXISTS trace_observations (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        session_id TEXT NOT NULL DEFAULT '',
+        workspace_id TEXT NOT NULL DEFAULT 'default',
+        project_id TEXT NOT NULL DEFAULT 'default',
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        parent_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running',
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        duration_ms INTEGER,
+        input_json TEXT NOT NULL DEFAULT '{}',
+        output_json TEXT NOT NULL DEFAULT '{}',
+        metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_trace_observations_run_started
+        ON trace_observations(run_id, started_at);
+    CREATE INDEX IF NOT EXISTS idx_trace_observations_project_started
+        ON trace_observations(project_id, started_at DESC);
     CREATE TABLE IF NOT EXISTS subagent_invocations (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,

@@ -38,6 +38,7 @@ from src.storage.session_context_state import SessionContextStateStore
 from src.storage.skill_run_records import SkillRunRecordStore
 from src.storage.skill_evolution_records import SkillEvolutionRecordStore
 from src.storage.trace_records import TraceRecordStore
+from src.storage.observation_records import ObservationRecordStore
 from src.storage.group_studio_records import GroupStudioRecordStore
 from src.storage.workflow_records import WorkflowRecordStore
 from src.storage.workspace_project_records import WorkspaceProjectRecordStore
@@ -449,6 +450,10 @@ def ensure_db() -> None:
                     ON memory_nodes(project_id, node_date DESC);
                 CREATE INDEX IF NOT EXISTS idx_subagent_invocations_project_run
                     ON subagent_invocations(project_id, run_id, started_at);
+                CREATE INDEX IF NOT EXISTS idx_trace_observations_run_started
+                    ON trace_observations(run_id, started_at);
+                CREATE INDEX IF NOT EXISTS idx_trace_observations_project_started
+                    ON trace_observations(project_id, started_at DESC);
             """)
             conn.commit()
             _initialized = True
@@ -1034,6 +1039,88 @@ def _trace_record_store() -> TraceRecordStore:
         default_workspace_id=DEFAULT_WORKSPACE_ID,
         default_project_id=DEFAULT_PROJECT_ID,
     )
+
+
+def _observation_record_store() -> ObservationRecordStore:
+    """创建复用当前数据库基础设施的 Observation 存储。"""
+
+    return ObservationRecordStore(
+        ensure_db=ensure_db,
+        connect=_connect,
+        lock=_lock,
+        utc_now=_utc_now,
+        dumps=_dumps,
+        loads=_loads,
+        default_workspace_id=DEFAULT_WORKSPACE_ID,
+        default_project_id=DEFAULT_PROJECT_ID,
+    )
+
+
+def insert_trace_observation(record: dict[str, Any]) -> dict[str, Any]:
+    """写入一条 Trace Observation。"""
+
+    return _observation_record_store().insert(record)
+
+
+def close_trace_observation(
+    observation_id: str,
+    *,
+    status: str,
+    output: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    ended_at: str | None = None,
+) -> dict[str, Any] | None:
+    """关闭一条 Trace Observation。"""
+
+    return _observation_record_store().close(
+        observation_id,
+        status=status,
+        output=output,
+        metadata=metadata,
+        ended_at=ended_at,
+    )
+
+
+def update_trace_observation(
+    observation_id: str,
+    *,
+    input_data: dict[str, Any] | None = None,
+    output: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    name: str | None = None,
+) -> dict[str, Any] | None:
+    """更新一条未关闭的 Observation 字段。"""
+
+    return _observation_record_store().update_fields(
+        observation_id,
+        input_data=input_data,
+        output=output,
+        metadata=metadata,
+        name=name,
+    )
+
+
+def get_trace_observation(observation_id: str) -> dict[str, Any] | None:
+    """按 id 读取 Observation。"""
+
+    return _observation_record_store().get(observation_id)
+
+
+def list_trace_observations(run_id: str) -> list[dict[str, Any]]:
+    """列出一个 Chat Run 的全部 Observation。"""
+
+    return _observation_record_store().list_by_run(run_id)
+
+
+def find_open_trace_observation(
+    *,
+    run_id: str,
+    kind: str,
+    name: str | None = None,
+) -> dict[str, Any] | None:
+    """查找 Run 内仍打开的指定类型 Observation。"""
+
+    return _observation_record_store().find_open(run_id=run_id, kind=kind, name=name)
 
 
 def append_run_event(

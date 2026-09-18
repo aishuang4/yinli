@@ -1,54 +1,60 @@
 /**
- * traceTypes — 运行轨迹页面类型定义。
+ * traceTypes — 按 Chat Run 组织的 Observation 时间线。
  */
 
-import type { ToolCallInfo } from '../../hooks/useEventStream';
+export type ObservationKind =
+  | 'run'
+  | 'generation'
+  | 'tool'
+  | 'skill'
+  | 'approval'
+  | 'subagent'
+  | 'team-task';
 
 export interface TraceSummary {
   id: string;
+  sessionId: string;
+  workspaceId: string;
+  projectId: string;
   title: string;
   agentId: string | null;
   agentName: string | null;
-  mode: 'agent' | 'team';
-  messageCount: number;
-  toolCallCount: number;
-  memberCount: number;
+  mode: 'agent' | 'team' | string;
   status: string;
+  durationMs: number | null;
+  observationCount: number;
+  toolCount: number;
   createdAt: string;
+  completedAt: string | null;
   updatedAt: string;
 }
 
-export interface TraceMessage {
+export interface TraceObservation {
   id: string;
-  role: string;
-  content: string;
-  agentId: string | null;
-  agentName: string | null;
-  modelName: string | null;
-  error: string | null;
-  toolCalls: ToolCallInfo[];
-  createdAt: string;
-}
-
-export interface TraceEvent {
-  id: string;
+  runId: string;
   sessionId: string;
-  eventType: string;
-  scope: string;
-  agentId: string | null;
-  agentName: string | null;
+  workspaceId: string;
+  projectId: string;
+  kind: ObservationKind | string;
+  name: string;
+  parentId: string | null;
   status: string;
-  title: string;
-  content: string;
-  payload: Record<string, unknown>;
-  createdAt: string;
-  sortOrder: number;
+  startedAt: string;
+  endedAt: string | null;
+  durationMs: number | null;
+  input: Record<string, unknown>;
+  output: Record<string, unknown>;
+  metadata: Record<string, unknown>;
 }
 
 export interface TraceDetail extends TraceSummary {
-  messages: TraceMessage[];
-  events: TraceEvent[];
-  eventTotal: number;
+  observations: TraceObservation[];
 }
 
-export type TraceEventFilter = 'all' | 'runtime' | 'permissions' | 'tools' | 'models' | 'hitl';
+export const ACTIVE_TRACE_STATUSES = new Set([
+  'running',
+  'waiting',
+  'waiting_user',
+  'waiting_permission',
+  'waiting_external',
+]);

@@ -15,6 +15,7 @@ description: 创建、读取、检查和修改 Microsoft Word DOCX 文档，并�
 4. 每次创建或修改后都重新检查文档结构。
 5. 环境存在 LibreOffice 时必须渲染为 PDF/PNG 并检查；不存在时说明只完成了结构检查。
 6. 最终只交付用户要求的 DOCX，不交付临时 PDF、PNG 或中间文件，除非用户明确要求。
+7. `source.md`、渲染 PDF/PNG、检查脚本输出必须写在 `render/` 或 `_scratch/`，不要写到 Session 工作目录根上；前台下载列表只展示最终 DOCX。
 
 ## 快速工作流
 

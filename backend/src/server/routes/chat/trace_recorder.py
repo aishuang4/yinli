@@ -15,6 +15,7 @@ from src.security.permissions import (
 )
 from src.storage.database import append_run_event
 
+from src.project_files import is_user_facing_session_artifact
 from src.server.routes.chat.helpers import _trim_text
 from src.server.routes.chat.models import ChatModelCacheRun, ChatToolRun, TRACE_EVENT_TYPES
 from src.server.routes.chat.tool_state import _tool_result_status
@@ -558,6 +559,8 @@ def _record_agent_scope_event(
     else:
         status = "running"
     payload = dict(event_data)
+    for key in ("observationInput", "observationOutput", "previousGenerationOutput", "observationText"):
+        payload.pop(key, None)
     if "delta" in payload:
         payload["delta"] = _trim_text(str(payload.get("delta") or ""), 240)
     if event_type in {"TOOL_CALL_END", "TOOL_RESULT_START"}:
@@ -734,7 +737,7 @@ def build_tool_artifact_runtime_event(
         return None
     args = _parse_tool_args(tool_call.args)
     file_path = str(args.get("file_path") or "")
-    if not file_path:
+    if not file_path or not is_user_facing_session_artifact(file_path):
         return None
     operation = "write" if tool_name == "Write" else "edit"
     runtime_type = "ARTIFACT_CREATED" if operation == "write" else "ARTIFACT_UPDATED"

@@ -34,6 +34,11 @@ from src.server.routes.chat.store import (
     _append_assistant_message,
     _update_latest_assistant_display_snapshot,
 )
+from src.server.routes.chat.observation_runtime import (
+    close_run_root,
+    observe_source_event,
+    open_run_root,
+)
 from src.storage.database import (
     get_chat_run,
     list_chat_runs,
@@ -230,6 +235,16 @@ async def start_chat_background_run(
     )
     if persist:
         _persist_run(run)
+        open_run_root(
+            persist=True,
+            run_id=run.id,
+            session_id=run.session_id,
+            task=task,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            agent_name=agent_name,
+            mode=mode,
+        )
     _projection_store.ensure_stream(run.stream_key, run.id)
     run.normalizer = ChatProjectionNormalizer(
         stream_key=run.stream_key,
@@ -495,6 +510,7 @@ async def _ingest_source_event(run: ChatBackgroundRun, source_event: SourceEvent
     if run.normalizer is None or run.status in TERMINAL_RUN_STATUSES:
         return []
     event_type, data = source_event.event_type, source_event.data
+    _observe_run_source(run, event_type, data)
     previous_seq = _projection_store.load_materialized(run.stream_key, _coordinator).last_seq
     produced = run.normalizer.ingest(event_type, data)
     if event_type == "ERROR":
@@ -520,6 +536,12 @@ async def _project_terminal(run: ChatBackgroundRun, outcome: str, data: dict) ->
     previous_seq = _projection_store.load_materialized(run.stream_key, _coordinator).last_seq
     produced = run.normalizer.finish(outcome, data)
     run.event_count += len(produced)
+    close_run_root(
+        persist=run.persisted,
+        run_id=run.id,
+        outcome=outcome if outcome in {"completed", "failed", "cancelled"} else run.status,
+        output=_run_observation_output(run, outcome, data),
+    )
     if not produced:
         return []
     _run_projection(run)
@@ -573,6 +595,47 @@ def _update_status_from_signal(run: ChatBackgroundRun, event_type: str, data: di
         update_chat_run_status(run.id, status, run.completed_at)
 
 
+def _observe_run_source(run: ChatBackgroundRun, event_type: str, data: dict) -> None:
+    """把源信号映射为 Observation；失败不影响投影。"""
+
+    try:
+        observe_source_event(
+            persist=run.persisted,
+            run_id=run.id,
+            session_id=run.session_id,
+            event_type=event_type,
+            data=data if isinstance(data, dict) else {},
+            workspace_id=run.workspace_id,
+            project_id=run.project_id,
+        )
+    except Exception as exc:
+        print(f"[TraceObservation] ingest failed run={run.id} type={event_type}: {exc}")
+
+
+def _run_observation_output(run: ChatBackgroundRun, outcome: str, data: dict) -> dict:
+    """从当前 Snapshot 抽取最终回答，供根 Observation output。"""
+
+    answer = ""
+    try:
+        snapshot = get_chat_projection_snapshot(run.id)
+        blocks = snapshot.get("blocksById") if isinstance(snapshot.get("blocksById"), dict) else {}
+        for block_id in snapshot.get("order") or []:
+            block = blocks.get(block_id)
+            if not isinstance(block, dict) or block.get("kind") != "text":
+                continue
+            payload = block.get("data") if isinstance(block.get("data"), dict) else {}
+            text = str(payload.get("text") or payload.get("content") or "").strip()
+            if text:
+                answer = text
+    except Exception:
+        answer = ""
+    return {
+        "answer": answer,
+        "error": str(data.get("message") or data.get("error") or ""),
+        "outcome": outcome,
+    }
+
+
 def _persist_display_snapshot(run: ChatBackgroundRun) -> None:
     try:
         state = _projection_store.load_materialized(run.stream_key, _coordinator)
@@ -592,6 +655,12 @@ def _finalize_run_persistence(run: ChatBackgroundRun) -> None:
         return
     run.completed_at = run.completed_at or datetime.now(timezone.utc).isoformat()
     update_chat_run_status(run.id, run.status, run.completed_at)
+    close_run_root(
+        persist=run.persisted,
+        run_id=run.id,
+        outcome=run.status,
+        output=_run_observation_output(run, run.status, {}),
+    )
     _persist_display_snapshot(run)
 
 

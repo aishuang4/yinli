@@ -7,6 +7,7 @@ from typing import AsyncGenerator
 from agentscope.event import ExternalExecutionResultEvent
 from agentscope.message import UserMsg
 
+from src.server.routes.chat.generation_snapshot import snapshot_model_input
 from src.server.routes.chat.helpers import _set_skill_run_status, source_event
 from src.server.routes.chat.trace_recorder import (
     apply_model_call_token_usage,
@@ -98,6 +99,28 @@ class LeaderStreamState:
     reply_had_thinking: bool = False
     trigger_source: str = "user"
     unattended_denials: int = 0
+
+
+def _fill_tool_result_output(event_data: dict, tool_calls: list[ChatToolRun]) -> None:
+    """AgentScope TOOL_RESULT_END 常常只有 state，stdout 在 delta 里。"""
+
+    if event_data.get("output") not in (None, "", []) or event_data.get("result") not in (None, ""):
+        return
+    call_id = str(event_data.get("tool_call_id") or "")
+    match = next((item for item in tool_calls if item.id == call_id), None)
+    if match and match.result:
+        event_data["output"] = match.result
+
+
+def _fill_tool_call_input(event_data: dict, tool_calls: list[ChatToolRun]) -> None:
+    """AgentScope TOOL_CALL_END 可能只有 delta 累计参数，补到 Observation。"""
+
+    if event_data.get("input") not in (None, "") or event_data.get("arguments") not in (None, ""):
+        return
+    call_id = str(event_data.get("tool_call_id") or "")
+    match = next((item for item in tool_calls if item.id == call_id), None)
+    if match and match.args:
+        event_data["input"] = match.args
 
 
 def _collect_pending_tool_batch(
@@ -311,6 +334,14 @@ async def stream_leader_agent_reply(
             cache_entry = _model_cache_from_event(event_data, model_name)
             if cache_entry:
                 state.assistant_model_caches.append(cache_entry)
+            observation_text = (
+                state.assistant_reasoning_text
+                or state.assistant_thinking
+                or state.pending_text
+                or ""
+            ).strip()
+            if observation_text:
+                event_data["observationText"] = observation_text
 
         stats: dict = {}
         if event_type in {"MODEL_CALL_START", "MODEL_CALL_END"}:
@@ -518,6 +549,19 @@ async def stream_leader_agent_reply(
         )
         if runtime_event:
             yield runtime_event
+        if event_type == "MODEL_CALL_START":
+            try:
+                event_data["observationInput"] = snapshot_model_input(
+                    agent,
+                    model_name=model_name,
+                    extra_message=user_msg,
+                )
+            except Exception:
+                event_data["observationInput"] = {"model": model_name}
+        if event_type == "TOOL_CALL_END":
+            _fill_tool_call_input(event_data, state.assistant_tool_calls)
+        if event_type == "TOOL_RESULT_END":
+            _fill_tool_result_output(event_data, state.assistant_tool_calls)
         yield source_event(event_type, event_data)
         for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
             state.runtime_events.append(runtime_event)

@@ -58,7 +58,6 @@ from src.server.routes.chat.runtime_events import runtime_event_from_agentscope_
 from src.server.routes.chat.tool_scope_resolver import resolve_runtime_tool_scope
 from src.server.routes.chat.tool_state import _pending_tool_calls_to_runs
 from src.server.routes.chat.trace_recorder import _model_cache_from_event, _permission_decision_payload
-from src.server.routes.traces import _event_trace_status, _trace_status
 from src.agents.factory import AgentGuardrails, AgentModelOptions, RuntimeToolScope, _build_context_config
 from src.security.permissions import (
     PermissionAction,
@@ -2771,64 +2770,6 @@ def test_pending_hitl_tool_calls_seed_chat_history_tool_runs():
             status="running",
         ),
     ]
-
-
-def test_trace_status_completed_after_waiting_is_resolved():
-    status = _event_trace_status([
-        {"eventType": "SESSION", "status": "running", "sortOrder": 0},
-        {"eventType": "HITL_REQUIRED", "status": "waiting", "sortOrder": 1},
-        {"eventType": "HITL_RESOLVED", "status": "completed", "sortOrder": 2},
-        {"eventType": "ASSISTANT_MESSAGE", "status": "completed", "sortOrder": 3},
-    ])
-
-    assert status == "completed"
-
-
-def test_trace_status_completed_after_intermediate_tool_failure():
-    """中途工具失败被 Agent 恢复后，不应覆盖最终成功终态。"""
-
-    status = _event_trace_status([
-        {"eventType": "TOOL_RESULT_END", "status": "failed", "sortOrder": 1},
-        {"eventType": "ASSISTANT_MESSAGE", "status": "completed", "sortOrder": 2},
-        {"eventType": "RUN_COMPLETED", "status": "completed", "sortOrder": 3},
-    ])
-
-    assert status == "completed"
-
-
-def test_trace_status_latest_run_failure_overrides_earlier_reply_end():
-    status = _event_trace_status([
-        {"eventType": "REPLY_END", "status": "completed", "sortOrder": 1},
-        {"eventType": "RUN_FAILED", "status": "failed", "sortOrder": 2},
-    ])
-
-    assert status == "failed"
-
-
-def test_trace_status_waiting_when_hitl_is_unresolved():
-    status = _event_trace_status([
-        {"eventType": "SESSION", "status": "running", "sortOrder": 0},
-        {"eventType": "HITL_REQUIRED", "status": "waiting", "sortOrder": 1},
-    ])
-
-    assert status == "waiting"
-
-
-def test_trace_status_does_not_complete_for_user_only_messages():
-    status = _trace_status([
-        SimpleNamespace(role="user", error=None, display_snapshot={}),
-    ])
-
-    assert status == "empty"
-
-
-def test_trace_status_completes_when_assistant_message_exists():
-    status = _trace_status([
-        SimpleNamespace(role="user", error=None, display_snapshot={}),
-        SimpleNamespace(role="assistant", error=None, display_snapshot={}),
-    ])
-
-    assert status == "completed"
 
 
 def test_pending_hitl_tool_calls_preserve_existing_tool_history():

@@ -41,18 +41,19 @@
 
 ### ReAct 上下文管理
 
-主 Agent 发给模型的 messages 由三层组成，职责不得混淆：
+主 Agent 发给模型的内容由两层组成，职责不得混淆：
 
 - **system prompt（跨轮稳定）**：Agent profile 正文、Project / Session Workspace 说明、Runtime Context 规则、
   路由指令、Skill Run 提示、记忆摘要（受 `memory/retrieval.py` 预算约束，`# Summary` 存在时不重抄被摘要章节，
   并由 `memory_prompt_cache.py` 按会话冻结，避免每轮新增的历史记忆节点改写 prompt 打破供应商前缀 cache）、
   Clarification / Final Answer 契约。它不含时钟、不含会话历史、不含本轮附件；prompt 正文不进 Agent 缓存键，
   工厂在复用实例时直接刷新 `_system_prompt`。
-- **AgentScope `state.context` / `state.summary`（会话记忆）**：这是在线对话记忆的唯一事实源，包含历史 user /
+- **messages（`state.context` / `state.summary`）**：这是在线对话记忆的唯一事实源，包含历史 user /
   assistant 消息、工具调用与结果，由 AgentScope `ContextConfig` 在接近上下文窗口时压缩。本轮附件说明作为用户
-  消息的 `<attached_files>` 段进入上下文，后续轮次仍可见。不再把 `chat_messages` 扁平化拼进 system prompt。
-- **HintBlock（运行时状态）**：时间和上下文长度由 AgentScope `InjectionConfig` 以 `<system-reminder>` 注入
-  （上海时区、每 0.5h 最多刷新一次、`emit_hint_event=False` 不外发事件）。
+  消息的 `<attached_files>` 段进入上下文，后续轮次仍可见。时间和上下文长度由 `InjectionConfig` 以 HintBlock
+  （`<system-reminder>` / `<current-time>`）追加进同一条 context，formatter 送模时拆成 user 消息；Skill 补回
+  的 `<activated-skill>` 同样走这条消息路径。不再把 `chat_messages` 扁平化拼进 system prompt，也不把 Hint
+  当成独立于 messages 的第三层。
 
 Agent 实例生命周期在 `agents/factory.py`：`runtime_agent_id` 只含影响工具集 / 模型 / 权限 / Skill 包的稳定配置，
 同一 `(agent_id, session_id)` 多轮默认复用同一实例；配置变化换实例时由 `agents/session_context.py` 把旧实例的
@@ -246,6 +247,7 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 - `chat_sessions`
 - `chat_messages`
 - `chat_runs`
+- `trace_observations`
 - `chat_run_events`
 - `chat_run_states`
 - `run_events`
@@ -258,6 +260,8 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 
 历史开发库可能仍有 `memory_facts`、`memory_events`、`memory_candidates`，但旧记忆模块已删除，不再代表当前运行时能力。
 
+Chat Trace 身份是一次 `chat_runs` 记录，步骤存在 `trace_observations`。`GET /api/traces` 按当前 Project 列 Run，详情返回 Observation 墙钟时间线；generation 第二层展示真实送模 messages 与模型产出（thinking / 文本 / 工具声明 / token）。`run_events` 只保留 Memory 等审计，不再当 Trace 主数据。群聊不写 Chat Observation。契约见 `docs/trace-run-observations.md`。
+
 桌面安装版把 Electron `userData` 固定为 `agent-workstation-desktop`。`config/runtime_paths.py` 是所有运行时可写路径的唯一入口；SQLite、Markdown / Wiki Memory、向量库、TeamRun、Skill 包、用户级 Subagent、持久沙盒、日志和默认 Workspace 都必须位于该根目录。macOS 对应 `~/Library/Application Support/agent-workstation-desktop/`，Windows 对应 `%APPDATA%\\agent-workstation-desktop\\`。安装目录和 PyInstaller `_MEI...` 临时目录只允许读取代码资源，不能保存用户数据。
 
 ## 配置与权限
@@ -269,7 +273,7 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 - Agent 运行时由 `agents/factory.py` 统一创建和缓存。
 - 工具范围由 `RuntimeToolScope` 与 `tool_scope_resolver.py` 控制。
 - 权限策略由 guardrails 归一化为统一权限模型，再映射到 AgentScope permission mode、工具注入和 Trace。
-- `WebFetch` 是独立的只读公开网页工具：只接收已知 HTTP(S) URL，逐次校验重定向目标，拒绝私网、本机、保留地址、URL 凭据、超大响应和非文本内容，并把网页正文标记为不可信外部数据。它不复用 `HttpRequest` 的通用 API 语义，也不提供 WebSearch。
+- `WebFetch` 是独立的只读网页工具：只接收已知 HTTP(S) URL，逐次校验重定向目标。允许公网、本机 loopback 和 RFC1918/ULA 内网页面；拒绝链路本地 / 云元数据、保留地址、本机 API 端口、URL 凭据、超大响应和非文本内容，并把网页正文标记为不可信外部数据。它不复用 `HttpRequest` 的通用 API 语义，也不提供 WebSearch。
 
 ## 定时任务 Job Agent
 
@@ -279,7 +283,7 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 
 定时任务的到期执行者必须是 `role=job` 的 Job Agent，不能使用 Chat 助手。Job Agent 在配置里拆成必注入与可选注入两层工具：必注入到期一定带上，`CheckJobFeasibility` 只认领可选层。系统 `default` 助手不能改成 Job Agent；Job Agent 不出现在 Chat 选择器里。能力合同与创建前门禁见 `docs/scheduled-jobs-v2-agent-activation.md`。
 
-系统启动时会为新旧数据库幂等补齐稳定 ID `system-websearch-job`（名称 `WebSearch`）作为默认 Job Agent。其主模型为 `deepseek-v4-flash`，必注入 `WebFetch` 与 `HttpRequest`，固定开启网络并使用 trusted tools 无人值守权限。该 Agent 跨 Workspace 可见且不依赖普通 Agent Project binding，不可删除或切换成 Chat 角色；它绑定的外部 Skill、MCP、HTTP Tool 仍必须满足当前 Project resource binding。名称不代表真正的开放式搜索能力，`WebFetch` 仍只读取已知公开 URL。
+系统启动时会为新旧数据库幂等补齐稳定 ID `system-websearch-job`（名称 `WebSearch`）作为默认 Job Agent。其主模型为 `deepseek-v4-flash`，必注入 `WebFetch` 与 `HttpRequest`，固定开启网络并使用 trusted tools 无人值守权限。该 Agent 跨 Workspace 可见且不依赖普通 Agent Project binding，不可删除或切换成 Chat 角色；它绑定的外部 Skill、MCP、HTTP Tool 仍必须满足当前 Project resource binding。名称不代表真正的开放式搜索能力；`WebFetch` 读取已知 HTTP(S) URL（含本机与内网），不是开放式搜索。
 
 ## 消息通知
 

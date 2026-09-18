@@ -406,7 +406,7 @@ def _system_tool_records() -> list[SystemToolResponse]:
         },
         {
             "name": "WebFetch",
-            "description": "安全读取公开网页并提取正文，不提供网络搜索。",
+            "description": "安全读取公网、本机或内网网页并提取正文，不提供网络搜索。",
             "category": "network",
             "action": "read",
             "risk": "medium",

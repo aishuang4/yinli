@@ -26,6 +26,8 @@ from src.project_files import (
     validate_session_uploads,
 )
 from src.server.routes.chat.intent_router import IntentRoute
+from src.server.routes.chat.models import ChatToolRun
+from src.server.routes.chat.trace_recorder import build_tool_artifact_runtime_event
 from src.server.routes.chat.handlers.runs import _get_project_run
 from src.server.routes.chat.handlers.sessions import delete_session, list_session_catalog
 from src.server.routes.chat.models import ChatMessage
@@ -240,6 +242,49 @@ def test_session_artifacts_are_listed_and_resolved_within_session_directory(tmp_
             session_id="session-artifacts",
             relative_path="outside.docx",
         )
+
+
+def test_session_artifacts_hide_internal_and_word_intermediates(tmp_path):
+    """前台只列出用户可交付文件，不列出工具卸载、渲染校验和中间稿。"""
+
+    output_dir = project_session_directory(tmp_path, "session-artifacts")
+    (output_dir / "北京天气.docx").write_bytes(b"word")
+    (output_dir / "北京天气.pdf").write_bytes(b"pdf")
+    (output_dir / "北京天气.png").write_bytes(b"png")
+    (output_dir / "source.md").write_text("# draft")
+    (output_dir / "tool_result_call_00_abc.txt").write_text("offload")
+    (output_dir / "tool_result-call_01.txt").write_text("offload")
+    render = output_dir / "render"
+    render.mkdir()
+    (render / "page-1.png").write_bytes(b"page")
+    (output_dir / "独立图表.png").write_bytes(b"chart")
+
+    artifacts = list_project_session_artifacts(
+        project_root=tmp_path,
+        session_id="session-artifacts",
+    )
+    names = {item["name"] for item in artifacts}
+
+    assert names == {"北京天气.docx", "独立图表.png"}
+
+
+def test_write_artifact_event_skips_word_intermediates():
+    """Write source.md / 工具卸载文件不进入前台产物 Block。"""
+
+    hidden = build_tool_artifact_runtime_event(
+        event_type="TOOL_RESULT_END",
+        event_data={"tool_call_id": "c1"},
+        tool_calls=[ChatToolRun(id="c1", name="Write", args='{"file_path":"source.md"}', status="completed")],
+    )
+    visible = build_tool_artifact_runtime_event(
+        event_type="TOOL_RESULT_END",
+        event_data={"tool_call_id": "c2"},
+        tool_calls=[ChatToolRun(id="c2", name="Write", args='{"file_path":"北京天气.docx"}', status="completed")],
+    )
+    assert hidden is None
+    assert visible is not None
+    assert visible[0] == "ARTIFACT_CREATED"
+    assert visible[1]["downloadPath"] == "北京天气.docx"
 
 
 def test_delete_session_removes_its_uploaded_and_generated_files(isolated_db, tmp_path):

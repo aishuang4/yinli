@@ -1,4 +1,4 @@
-"""WebFetch 公开网页读取与安全边界测试。"""
+"""WebFetch 网页读取与安全边界测试。"""
 
 from __future__ import annotations
 
@@ -10,9 +10,10 @@ from agentscope.message import ToolResultState
 from src.tools.web_fetch import PinnedAsyncHTTPTransport, WebFetch
 
 
-async def _allow_public_host(hostname: str, port: int) -> None:
-    if hostname in {"127.0.0.1", "localhost", "169.254.169.254"}:
-        raise ValueError("WebFetch blocks local, private, reserved, and link-local network targets.")
+async def _allow_public_host(hostname: str, port: int) -> tuple[str, ...]:
+    if hostname in {"169.254.169.254"}:
+        raise ValueError("WebFetch blocks link-local, reserved, unspecified, and multicast network targets.")
+    return ("93.184.216.34",)
 
 
 def _payload(chunk) -> dict:
@@ -52,16 +53,46 @@ def test_web_fetch_extracts_readable_html_and_removes_scripts():
     assert payload["security_notice"]
 
 
-def test_web_fetch_blocks_direct_private_ip_before_request():
+def test_web_fetch_allows_localhost_and_private_lan():
+    seen: list[str] = []
+
     async def handler(request: httpx.Request) -> httpx.Response:
-        raise AssertionError("private target must be rejected before HTTP request")
+        seen.append(str(request.url))
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain"},
+            text="local weather ok",
+            request=request,
+        )
 
     import asyncio
 
-    chunk = asyncio.run(WebFetch(transport=httpx.MockTransport(handler))("http://127.0.0.1/admin"))
+    local = asyncio.run(WebFetch(transport=httpx.MockTransport(handler))("http://127.0.0.1:8080/weather"))
+    ipv6 = asyncio.run(WebFetch(transport=httpx.MockTransport(handler))("http://[::1]:8080/weather"))
+    lan = asyncio.run(WebFetch(transport=httpx.MockTransport(handler))("http://192.168.1.10/status"))
 
-    assert chunk.state == ToolResultState.ERROR
-    assert "blocks local, private" in chunk.content[0].text
+    assert local.state == ToolResultState.SUCCESS
+    assert ipv6.state == ToolResultState.SUCCESS
+    assert lan.state == ToolResultState.SUCCESS
+    assert "local weather ok" in local.content[0].text
+    assert seen[0].startswith("http://127.0.0.1:8080/weather")
+
+
+def test_web_fetch_blocks_link_local_and_local_api_port():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("blocked target must be rejected before HTTP request")
+
+    import asyncio
+
+    metadata = asyncio.run(WebFetch(transport=httpx.MockTransport(handler))("http://169.254.169.254/latest/meta-data"))
+    aliyun = asyncio.run(WebFetch(transport=httpx.MockTransport(handler))("http://100.100.100.200/latest/meta-data"))
+    api = asyncio.run(WebFetch(transport=httpx.MockTransport(handler))("http://127.0.0.1:8765/api/settings/models"))
+
+    assert metadata.state == ToolResultState.ERROR
+    assert "link-local" in metadata.content[0].text
+    assert aliyun.state == ToolResultState.ERROR
+    assert api.state == ToolResultState.ERROR
+    assert "local workstation API" in api.content[0].text
 
 
 def test_web_fetch_revalidates_redirect_target():
@@ -69,7 +100,7 @@ def test_web_fetch_revalidates_redirect_target():
 
     async def handler(request: httpx.Request) -> httpx.Response:
         requests.append(str(request.url))
-        return httpx.Response(302, headers={"location": "http://127.0.0.1/private"}, request=request)
+        return httpx.Response(302, headers={"location": "http://169.254.169.254/private"}, request=request)
 
     import asyncio
 
@@ -80,7 +111,7 @@ def test_web_fetch_revalidates_redirect_target():
 
     assert chunk.state == ToolResultState.ERROR
     assert requests == ["https://example.com/start"]
-    assert "blocks local, private" in chunk.content[0].text
+    assert "link-local" in chunk.content[0].text
 
 
 def test_web_fetch_rejects_embedded_credentials_and_non_http_urls():

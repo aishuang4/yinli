@@ -58,7 +58,7 @@
 
 ### 工具、权限与记忆
 
-- 支持 Read、Grep、Glob、Write、Edit、Bash、HTTP、公开网页 WebFetch、MCP、知识库工具和 Skills；WebSearch 尚未接入。
+- 支持 Read、Grep、Glob、Write、Edit、Bash、HTTP、网页 WebFetch（公网 / 本机 / 内网）、MCP、知识库工具和 Skills；WebSearch 尚未接入。
 - LocalWorkspace 与 DockerWorkspace 提供本地或容器执行环境。
 - 新记忆系统通过运行前注入、memory tools、运行后准入和后台提炼接入 ReAct。
 - 历史记忆使用 SQLite `memory_nodes`，长期偏好使用 user / agent / global Markdown 文件，向量检索支持 `disabled` 和 `zvec` provider。

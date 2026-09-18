@@ -17,6 +17,7 @@
 变更协议前必须先改对应文件。前端只依赖契约中的稳定事件。
 
 - `docs/chat-sse-event-contract.md`：Chat `RUNTIME_EVENT: RuntimeFrame` 与 DisplaySnapshot V4。
+- `docs/trace-run-observations.md`：Chat Trace 按 Run 的 Observation 时间线；不进 Chat SSE。
 - `docs/workflow-event-contract.md`：Dynamic Workflow 独立事件，不属于 Chat SSE。
 - `docs/group-studio-event-contract.md`：群聊工作室独立 SSE，不属于 Chat SSE / Workflow。
 

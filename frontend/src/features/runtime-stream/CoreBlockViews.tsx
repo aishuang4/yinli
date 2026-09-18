@@ -372,6 +372,7 @@ export function PlanBlockView({ block }: { block: DisplayBlock<RecordData> }) {
 export function ArtifactBlockView({ block }: { block: DisplayBlock<RecordData> }) {
   const actions = useContext(RuntimeBlockActionsContext);
   const files = artifactFiles(block.data);
+  if (!files.length) return null;
   return (
     <RuntimeItem
       icon={<FileText size={14} />}
@@ -432,10 +433,34 @@ function artifactFiles(data: RecordData): ArtifactFile[] {
       extension: text(value.extension),
     }];
   }) : [];
-  if (files.length) return files;
+  if (files.length) return visibleArtifactFiles(files);
 
   const path = text(data.path, text(data.downloadPath, text(data.filePath)));
-  return path ? [{ path, name: text(data.name, fileNameFromPath(path)), extension: text(data.extension) }] : [];
+  const single = path ? [{ path, name: text(data.name, fileNameFromPath(path)), extension: text(data.extension) }] : [];
+  return visibleArtifactFiles(single);
+}
+
+function visibleArtifactFiles(files: ArtifactFile[]): ArtifactFile[] {
+  const officeStems = new Set(
+    files
+      .filter((file) => /\.(docx|xlsx|pptx)$/i.test(file.name))
+      .map((file) => fileStem(file.name)),
+  );
+  return files.filter((file) => {
+    const name = file.name.toLowerCase();
+    const path = file.path.replaceAll('\\', '/').toLowerCase();
+    if (!name || name.startsWith('.') || name.startsWith('tool_result')) return false;
+    if (name === 'source.md') return false;
+    if (path.split('/').some((part) => ['render', 'tmp', 'temp', '_scratch', 'subagents', 'team'].includes(part))) {
+      return false;
+    }
+    if (officeStems.has(fileStem(file.name)) && /\.(pdf|png|jpe?g|webp)$/i.test(name)) return false;
+    return true;
+  });
+}
+
+function fileStem(name: string): string {
+  return name.replace(/\.[^.]+$/, '');
 }
 
 function fileNameFromPath(path: string): string {

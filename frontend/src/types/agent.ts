@@ -24,7 +24,7 @@ export interface JobToolkit {
 }
 
 export const JOB_BUILTIN_OPTIONS: Array<{ id: 'WebFetch' | 'HttpRequest' | 'Bash'; label: string; help: string }> = [
-  { id: 'WebFetch', label: 'WebFetch', help: '读取公开网页，适合查天气、抓页面' },
+  { id: 'WebFetch', label: 'WebFetch', help: '读取公网、本机或内网网页，适合查天气、抓页面' },
   { id: 'HttpRequest', label: 'HttpRequest', help: '调用通用 HTTP API' },
   { id: 'Bash', label: 'Bash', help: '执行脚本与 Skill scripts/' },
 ];

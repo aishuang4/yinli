@@ -17,6 +17,16 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 _INVALID_FILENAME_CHARS = re.compile(r"[\x00/\\]")
 _SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _JOB_PATH_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_INTERNAL_ARTIFACT_NAME = re.compile(
+    r"^(tool_result([._-].*)?\.txt|\.ds_store|thumbs\.db)$",
+    re.IGNORECASE,
+)
+_SCRATCH_DIR_NAMES = frozenset({
+    "render", "tmp", "temp", "_scratch", ".cache", "__pycache__", "subagents", "team",
+})
+_OFFICE_SUFFIXES = frozenset({".docx", ".xlsx", ".pptx"})
+_VALIDATION_SUFFIXES = frozenset({".pdf", ".png", ".jpg", ".jpeg", ".webp"})
+_INTERMEDIATE_NAMES = frozenset({"source.md"})
 
 
 def _validated_session_id(session_id: str) -> str:
@@ -96,10 +106,10 @@ def list_project_session_artifacts(
     for candidate in sorted(directory.rglob("*")):
         if not candidate.is_file() or candidate.is_symlink():
             continue
-        if candidate.is_relative_to(directory / "subagents"):
-            continue
         resolved = candidate.resolve()
         if not resolved.is_relative_to(directory) or not resolved.is_relative_to(root):
+            continue
+        if not is_user_facing_session_artifact(resolved):
             continue
         relative_path = str(resolved.relative_to(root))
         artifacts.append({
@@ -109,6 +119,36 @@ def list_project_session_artifacts(
             "size": resolved.stat().st_size,
         })
     return artifacts
+
+
+def is_user_facing_session_artifact(path: Path | str) -> bool:
+    """判断文件是否应出现在 Chat 前台下载列表。
+
+    Session 目录里还有工具结果卸载、Word 校验渲染和中间稿；这些对用户没有交付意义。
+    """
+
+    candidate = Path(str(path or "").strip())
+    name = candidate.name
+    if not name or name.startswith("."):
+        return False
+    if _INTERNAL_ARTIFACT_NAME.match(name):
+        return False
+    if any(part.lower() in _SCRATCH_DIR_NAMES for part in candidate.parts[:-1]):
+        return False
+    suffix = candidate.suffix.lower()
+    parent = candidate.parent
+    siblings: list[Path] = []
+    if parent.is_dir():
+        try:
+            siblings = [item for item in parent.iterdir() if item.is_file() and not item.is_symlink()]
+        except OSError:
+            siblings = []
+    office_stems = {item.stem for item in siblings if item.suffix.lower() in _OFFICE_SUFFIXES}
+    if name.lower() in _INTERMEDIATE_NAMES:
+        return False
+    if suffix in _VALIDATION_SUFFIXES and candidate.stem in office_stems:
+        return False
+    return True
 
 
 def resolve_project_session_artifact(
