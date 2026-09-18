@@ -182,6 +182,27 @@ def ensure_activated_skills_in_context(agent: Any) -> list[str]:
     return missing
 
 
+def activate_forced_skills(agent: Any, skills: Iterable[Any]) -> list[str]:
+    """把用户本轮强制开启的 Skill 正文预写入会话，等同于已经用 Skill 工具读过。"""
+
+    from src.catalog.skills import read_package_markdown
+
+    activated: list[str] = []
+    for skill in skills or []:
+        name = str(getattr(skill, "name", "") or getattr(skill, "id", "") or "").strip()
+        markdown = str(getattr(skill, "content", "") or "").strip()
+        resource_path = str(getattr(skill, "resource_path", "") or "")
+        if not markdown and resource_path:
+            markdown = read_package_markdown(resource_path).strip()
+        if not name or not markdown:
+            continue
+        if activate_skill(agent, name, markdown):
+            activated.append(name)
+    if activated:
+        ensure_activated_skills_in_context(agent)
+    return activated
+
+
 def restore_activated_skills(
     agent: Any,
     *,

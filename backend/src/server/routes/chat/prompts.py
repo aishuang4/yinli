@@ -30,6 +30,26 @@ def _build_file_attachments_user_note(files) -> str:
     return "\n".join(lines)
 
 
+def _build_forced_skills_user_note(skills) -> str:
+    """本轮用户强制开启的 Skill，作为用户消息附注，不进 system prompt。"""
+
+    items = [skill for skill in (skills or []) if getattr(skill, "name", "") or getattr(skill, "id", "")]
+    if not items:
+        return ""
+    lines = [
+        "<pinned-skill>",
+        "The user explicitly pinned the following Skill(s) for this turn. Follow their instructions.",
+        "If an <activated-skill> block for these names is already in the conversation, do not call the Skill tool again.",
+        "Load references/ and scripts only when the instructions require it.",
+    ]
+    for skill in items:
+        name = str(getattr(skill, "name", "") or getattr(skill, "id", "")).strip()
+        desc = str(getattr(skill, "description", "") or getattr(skill, "trigger", "") or "").strip()
+        lines.append(f"- {name}: {desc}" if desc else f"- {name}")
+    lines.append("</pinned-skill>")
+    return "\n".join(lines)
+
+
 def _build_runtime_context_prompt() -> str:
     """Stable runtime-context rules. Must not contain anything that changes between calls.
 
@@ -61,6 +81,7 @@ def _build_skill_context_prompt() -> str:
         "## Skill Context",
         "Only Skill names and descriptions are listed up front. Read a Skill's full instructions with the Skill tool the first time you need it.",
         "Once read, a Skill's instructions stay in this conversation (as the tool result or a re-attached <activated-skill> block). Do not call the Skill tool again for a Skill whose instructions are already visible in the conversation.",
+        "If the user pinned a Skill in a <pinned-skill> note, follow it this turn. When an <activated-skill> block for that name is already present, do not call the Skill tool again.",
         "references/ files and scripts inside a Skill directory are still loaded on demand with Read / Bash when the instructions tell you to; do not read the whole package up front.",
     ])
 

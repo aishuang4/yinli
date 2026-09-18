@@ -19,10 +19,15 @@ from src.server.routes.chat.background_runs import (
     subscribe_chat_background_run,
 )
 from src.project_files import validate_session_uploads
+from src.project_resources import resolve_project_resource_access
 from src.runtime_context import resolve_runtime_context
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.router import router
-from src.server.routes.chat.run_context import build_chat_run_context
+from src.server.routes.chat.run_context import (
+    build_chat_run_context,
+    resolve_forced_runtime_skills,
+)
+from src.server.routes.skills import discover_external_skills
 from src.server.routes.chat.runtime_dispatcher import execute_chat_runtime
 from src.server.routes.chat.startup_checks import get_startup_error
 from src.server.routes.chat.projection.source_events import SourceEvent
@@ -106,6 +111,14 @@ async def start_chat_run(data: ChatMessage):
             project_root=runtime_context.project_root,
             session_id=session_id,
             paths=[item.path for item in run_data.files],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        resolve_forced_runtime_skills(
+            list(run_data.forced_skill_ids or []),
+            project_resources=resolve_project_resource_access(runtime_context),
+            external_skills=discover_external_skills(runtime_context.project_root),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

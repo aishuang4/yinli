@@ -27,6 +27,7 @@ from src.server.routes.chat.prompts import (
     _build_clarification_system_prompt,
     _build_file_attachments_user_note,
     _build_final_answer_system_prompt,
+    _build_forced_skills_user_note,
     _build_runtime_context_prompt,
     _build_skill_context_prompt,
 )
@@ -110,6 +111,8 @@ class ChatRunContext:
     # 单独保留是给 Team Leader / 综合阶段复用，不必再算一次。
     memory_prompt: str = ""
     memory_recall_text: str = ""
+    # 本轮用户在发送框强制开启的 Skill；已并入 used_skills，单独保留供预启用。
+    forced_skills: list[Skill] = field(default_factory=list)
 
 
 def snapshot_session_history(session_id: str | None, *, limit: int = 40) -> list[SessionHistoryMessage]:
@@ -242,6 +245,12 @@ async def build_chat_run_context(
         inject=True,
         configured_skill_ids=configured_skill_ids,
     )
+    forced_skills = resolve_forced_runtime_skills(
+        list(run_data.forced_skill_ids or []),
+        project_resources=project_resources,
+        external_skills=external_skills,
+    )
+    used_skills = _merge_forced_skills(used_skills, forced_skills)
     skill_paths = resolve_runtime_skill_paths(used_skills, runtime_context=runtime_context)
     used_skill_details = list_skill_usage_details(used_skills)
     skill_runs: list[ChatSkillRun] = []
@@ -338,6 +347,7 @@ async def build_chat_run_context(
         intent_route=intent_route,
         effective_user_message=run_data.message,
         used_skills=used_skills,
+        forced_skills=forced_skills,
         skill_paths=skill_paths,
         used_skill_details=used_skill_details,
         skill_runs=skill_runs,
@@ -362,6 +372,7 @@ async def build_chat_run_context(
             part
             for part in [
                 _build_file_attachments_user_note(run_data.files),
+                _build_forced_skills_user_note(forced_skills),
                 memory_recall.text if memory_recall else "",
             ]
             if part
@@ -557,6 +568,64 @@ def _resolve_frozen_runtime_skills(
         unique = list(dict.fromkeys(missing or frozen))
         raise ValueError(f"skill_unbound: {', '.join(unique)}")
     return used
+
+
+MAX_FORCED_SKILLS = 3
+
+
+def resolve_forced_runtime_skills(
+    skill_ids: list[str],
+    *,
+    project_resources: ProjectResourceAccess,
+    external_skills: list[Skill] | None = None,
+) -> list[Skill]:
+    """解析发送框强制开启的 Skill：须已安装启用且过 Project binding。"""
+
+    requested = list(dict.fromkeys(str(skill_id).strip() for skill_id in skill_ids if str(skill_id).strip()))
+    if not requested:
+        return []
+    if len(requested) > MAX_FORCED_SKILLS:
+        raise ValueError(f"本轮最多强制开启 {MAX_FORCED_SKILLS} 个 Skill。")
+
+    by_id = {str(getattr(skill, "id", "") or ""): skill for skill in (external_skills or [])}
+    resolved: list[Skill] = []
+    missing: list[str] = []
+    for skill_id in requested:
+        skill = get_installed_skill(skill_id) or by_id.get(skill_id)
+        if skill is None or not bool(getattr(skill, "enabled", True)):
+            missing.append(skill_id)
+            continue
+        resolved.append(skill)
+    if missing:
+        raise ValueError(f"强制开启的 Skill 不存在或未启用：{', '.join(missing)}")
+
+    allowed = set(project_resources.filter_ids("skill", requested))
+    blocked = [
+        skill.id
+        for skill in resolved
+        if skill.id not in allowed
+        and not _skill_is_shared(skill)
+        and str(getattr(skill, "source_scope", "") or "") != "project"
+    ]
+    if blocked:
+        raise ValueError(f"强制开启的 Skill 未授权给当前 Project：{', '.join(blocked)}")
+    return resolved
+
+
+def _merge_forced_skills(used_skills: list[Skill], forced_skills: list[Skill]) -> list[Skill]:
+    """把本轮强制开启的 Skill 并入 catalog，已存在的保持原顺序。"""
+
+    if not forced_skills:
+        return used_skills
+    merged = list(used_skills)
+    seen = {str(getattr(skill, "id", "") or "") for skill in merged}
+    for skill in forced_skills:
+        skill_id = str(getattr(skill, "id", "") or "")
+        if not skill_id or skill_id in seen:
+            continue
+        merged.append(skill)
+        seen.add(skill_id)
+    return merged
 
 
 def _build_project_context_prompt(runtime_context: RuntimeContext) -> str:

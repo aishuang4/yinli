@@ -20,6 +20,7 @@ from src.server.routes.chat.runtime_events import (
     agentscope_reply_finished_reason,
 )
 from src.server.routes.chat.runtime_builder import build_main_agent_runtime_spec, create_main_agent_from_spec
+from src.server.routes.chat.skill_context_middleware import activate_forced_skills
 from src.server.routes.chat.runtime_governance import (
     append_user_note,
     build_context_governance_middlewares,
@@ -262,16 +263,24 @@ async def run_synthesis(
 
 
 def _member_runtime_skills(ctx: ChatRunContext) -> list:
-    """Member 只保留 Leader Agent profile 里点名的技能，不吃共享开关。"""
+    """Member 只保留 Leader Agent profile 里点名的技能，不吃共享开关。
+
+    用户本轮在发送框强制开启的 Skill 例外，随任务一起带给 Member。
+    """
 
     configured = {
         str(item)
         for item in list(getattr(getattr(ctx, "agent_config", None), "skills", None) or [])
     }
+    forced = {
+        str(getattr(skill, "id", "") or "")
+        for skill in list(getattr(ctx, "forced_skills", None) or [])
+    }
+    allowed = configured | {item for item in forced if item}
     return [
         skill
         for skill in list(getattr(ctx, "used_skills", None) or [])
-        if getattr(skill, "id", "") in configured
+        if getattr(skill, "id", "") in allowed
     ]
 
 
@@ -354,6 +363,16 @@ def _create_team_agent(
         session_id=session_id,
         prompt_sections={"team": max(0, len(system_prompt) - memory_chars), "memory": memory_chars},
     )
+    if skill_context:
+        used_ids = {str(getattr(skill, "id", "") or "") for skill in used_skills}
+        activate_forced_skills(
+            agent,
+            [
+                skill
+                for skill in list(getattr(ctx, "forced_skills", None) or [])
+                if str(getattr(skill, "id", "") or "") in used_ids
+            ],
+        )
     return agent
 
 

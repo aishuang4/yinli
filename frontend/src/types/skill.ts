@@ -23,6 +23,8 @@ export interface Skill {
   installedAt: string | null;
   updatedAt: string;
   workspaceId?: string;
+  sourceKind?: string;
+  sourceScope?: string;
 }
 
 export const LOCKED_SHARED_SKILL_ID = 'yinli-catalog';

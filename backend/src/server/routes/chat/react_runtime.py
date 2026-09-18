@@ -25,7 +25,10 @@ from src.server.routes.chat.leader_stream import LeaderStreamState
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.plan_mode.manager import PlanModeManager
 from src.server.routes.chat.plan_mode.middleware import PlanModeMiddleware
-from src.server.routes.chat.skill_context_middleware import restore_activated_skills
+from src.server.routes.chat.skill_context_middleware import (
+    activate_forced_skills,
+    restore_activated_skills,
+)
 from src.server.routes.chat.steer_middleware import RunSteerMiddleware
 from src.storage.database import list_recent_skill_run_names
 from src.server.routes.chat.plan_mode.tools import build_plan_mode_tools
@@ -306,6 +309,7 @@ async def execute_react_runtime(
             recent_skill_names=list_recent_skill_run_names(ctx.session_id, ctx.agent_id),
             available_skills=ctx.used_skills,
         )
+    activate_forced_skills(agent, getattr(ctx, "forced_skills", None) or [])
     user_text = ctx.effective_user_message
     note = str(getattr(ctx, "user_message_note", "") or "")
     if note:

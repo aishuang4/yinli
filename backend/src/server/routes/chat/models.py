@@ -270,6 +270,9 @@ class ChatMessage(BaseModel):
     skill_ids: list[str] = Field(default_factory=list)
     """当前 Agent 绑定的 Skill ID 列表"""
 
+    forced_skill_ids: list[str] = Field(default_factory=list, alias="forcedSkillIds")
+    """本轮用户在发送框强制开启的 Skill ID；与 skill_ids 绑定语义分开。"""
+
     deep_thinking: bool = False
     """是否启用深度思考"""
 

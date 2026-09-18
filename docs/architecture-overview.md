@@ -33,7 +33,7 @@
 5. `runtime_dispatcher.py` 只按 architecture 分发；当前只分发到 ReAct。
 6. `react_runtime.py` 按 executor 执行单 Agent 或 Team。
 7. `runtime_builder.py` 组装模型配置、Skill 包路径、ToolScope 和主 Agent runtime spec；Chat 请求不接收持久 Team 或固定成员上下文。
-8. `run_context.py` 在 readiness 通过后按 Workspace、Project、Agent 和请求白名单裁剪可用 Skill catalog，并注入记忆上下文；完整 `SKILL.md` 不预注入 system prompt。
+8. `run_context.py` 在 readiness 通过后按 Workspace、Project、Agent 和请求白名单裁剪可用 Skill catalog，并注入记忆上下文；完整 `SKILL.md` 不预注入 system prompt。Chat 发送框可另传 `forced_skill_ids`（最多 3 个）本轮强制开启：须已安装启用且过 Project binding，可临时突破未共享 Skill 的 Agent 绑定；正文通过 `activate_skill` 预启用，并在用户消息附 `<pinned-skill>`，不灌进 system prompt。
 9. `leader_stream.py` 消费 AgentScope `reply_stream()`，转换文本、工具、权限、Plan Mode、Skill 和 HITL 事件。
 10. `completion.py` 完成消息落库、Trace、Skill 状态和错误收尾，并在轻量 `MemoryAdmissionGate` 后触发 Markdown 记忆提炼和历史记忆持久化。
 11. `background_runs.py` 将后台 Run 与前端 SSE 订阅解耦，把结构化 SourceEvent 送入 Domain Event 和 ProjectionRunner。
@@ -113,7 +113,7 @@ middleware 数据，最后才用 `skill_runs` 兜底恢复已读 Skill。会话�
 ## AgentScope 原生 Skills
 
 - 应用层继续负责安装、SQLite、Workspace / Project binding、Agent 配置、权限和 UI；AgentScope 负责运行时 catalog、渐进式披露和内置 `Skill` viewer。
-- Toolkit 通过 `skills_or_loaders` 接收已裁剪的绝对 Skill 包目录；system prompt 只包含 `name`、`description` 和 `dir`，模型实际调用 `Skill` 后才读取完整指令。
+- Toolkit 通过 `skills_or_loaders` 接收已裁剪的绝对 Skill 包目录；system prompt 只包含 `name`、`description` 和 `dir`，模型实际调用 `Skill` 后才读取完整指令。用户在 Chat Composer 勾选的 Skill 走 `forced_skill_ids`，本轮预启用 SKILL.md 并要求模型按说明书执行。
 - Skill 正文使用 `scripts/foo.py`、`references/bar.md` 等标准相对路径。模型根据 catalog 中的 `dir` 转成绝对路径后调用普通 Read、Grep、Glob 或 Bash；不使用 `$SKILL_DIR`，也不新增每脚本工具。
 - Skill script 复用单一 `GuardedBash`；本地 execute 权限与 network 权限独立。Shell 黑名单仅是拦截明显误操作的提示级防护，不能抵抗命令混淆；真正的执行隔离依赖 DockerWorkspace 与权限审批。Skill 不突破 Agent 的 ToolScope、filesystem 或审批边界。
 - 持久 DockerWorkspace 会把允许的 Skill 包 seed 到容器 `/workspace/skills`，catalog 披露容器路径；非持久 Docker sandbox 暂不支持 Skills，启动时返回明确错误。
@@ -206,7 +206,8 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 
 当前 Plan Mode 不是旧 `runtime.kind=plan`。它基于 AgentScope middleware hooks 接入 ReAct：
 
-- Chat Composer 可显式开启 Plan Mode；仅支持单 Agent，不进入 Team Runtime。
+- Chat Composer 用左下角 `+` 双栏菜单收纳添加文件、模式（计划 / 深度思考 / 单 Agent 与 Team）、Agent 和本轮 Skill；工具栏展示当前 Agent，串流中只显示停止、空闲只显示发送。输入 `/` 仍可过滤 Skill。Plan Mode 仅支持单 Agent，不进入 Team Runtime。
+- Chat Composer 勾选的本轮强制 Skill 最多 3 个；请求字段是 `forced_skill_ids`，不要重载 Agent 绑定用的 `skill_ids`。
 - `plan_enter` 创建持久化 Plan，会话由 `plans / plan_revisions / plan_steps / plan_events` 保存。
 - `plan_write` / `plan_set_steps` 替换当前未提交 revision 的 Markdown 和结构化步骤。
 - middleware 在起草、模型修订和重新规划期间只允许读取类工具与安全只读 Bash，拒绝变更型工具。

@@ -146,6 +146,7 @@ export interface SendMessageOptions {
   sessionId?: string;
   displayMessage?: string;
   skillIds?: string[];
+  forcedSkillIds?: string[];
   deepThinking?: boolean;
   planId?: string;
   planAction?: 'revise' | 'approve' | 'cancel';

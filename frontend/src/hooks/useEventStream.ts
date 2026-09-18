@@ -236,6 +236,7 @@ export function useEventStream(): UseEventStreamReturn {
           modelConfigId: options?.modelConfigId,
           session_id: options?.sessionId,
           skill_ids: options?.skillIds,
+          forced_skill_ids: options?.forcedSkillIds,
           deep_thinking: options?.deepThinking,
           plan_id: options?.planId,
           plan_action: options?.planAction,
@@ -246,7 +247,7 @@ export function useEventStream(): UseEventStreamReturn {
           files: options?.files,
         }),
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      if (!response.ok) throw new Error(await readApiError(response, '发送失败'));
       const payload = await response.json();
       const runId = String(payload?.run?.id || payload?.runId || '');
       if (!runId) throw new Error('Run was not started');
@@ -300,6 +301,21 @@ export function useEventStream(): UseEventStreamReturn {
   }, [setState, subscribeRun]);
 
   return { state, sendMessage, resumeInteraction, subscribeRun, abort, steer, reset };
+}
+
+async function readApiError(response: Response, fallback: string): Promise<string> {
+  try {
+    const payload = await response.json() as { detail?: unknown };
+    const detail = payload.detail;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+    if (Array.isArray(detail)) {
+      const first = detail[0] as { msg?: string } | undefined;
+      if (typeof first?.msg === 'string' && first.msg.trim()) return first.msg;
+    }
+  } catch {
+    /* 响应不是 JSON 时回退到状态码 */
+  }
+  return `${fallback}（HTTP ${response.status}）`;
 }
 
 function parseSSEEvent(raw: string): SSEEvent | null {

@@ -48,6 +48,8 @@ import { useModelCatalog } from '../features/models/useModelCatalog';
 import { ModelSelector } from '../features/models/ModelSelector';
 
 import { useChatAttachments } from '../features/chat/useChatAttachments';
+import { useEnabledSkills } from '../hooks/useSkills';
+import { filterComposerSkills } from '../features/chat/forcedSkills';
 
 const HISTORY_PANEL_TRANSITION_MS = 260;
 
@@ -65,6 +67,7 @@ export function ChatPage() {
   const [inputValue, setInputValue] = useState('');
   const [deepThinking, setDeepThinking] = useState(false);
   const [planMode, setPlanMode] = useState(false);
+  const [forcedSkillIds, setForcedSkillIds] = useState<string[]>([]);
   const [planPanelOpen, setPlanPanelOpen] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [answerAnimating, setAnswerAnimating] = useState(false);
@@ -85,7 +88,8 @@ export function ChatPage() {
   const pendingSessionRef = useRef<ChatSession | null>(null);
   const { state, sendMessage, resumeInteraction, subscribeRun, abort, steer, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
-  const { loading: projectResourcesLoading } = useProjectResources(activeProjectId);
+  const { enabledByType, loading: projectResourcesLoading } = useProjectResources(activeProjectId);
+  const { skills: enabledSkills, loading: skillsLoading } = useEnabledSkills();
   const { workspaces, allProjects } = useWorkspaceProjects();
   const setActiveContext = useAppStore((state) => state.setActiveContext);
   const {
@@ -134,6 +138,15 @@ export function ChatPage() {
   );
 
   const runtimeAgent = selectedAgent;
+  const composerSkills = useMemo(
+    () => filterComposerSkills(enabledSkills, enabledByType.skill),
+    [enabledByType.skill, enabledSkills],
+  );
+
+  useEffect(() => {
+    const allowed = new Set(composerSkills.map((skill) => skill.id));
+    setForcedSkillIds((current) => current.filter((id) => allowed.has(id)));
+  }, [composerSkills]);
 
   const selectedModelId = modelChoices[activeSessionId || 'new'] || sessions.find(s => s.id === activeSessionId)?.modelConfigId || modelCatalog?.defaultModelId || '';
   const selectedModel = modelCatalog?.models.find(m => m.id === selectedModelId);
@@ -550,12 +563,13 @@ export function ChatPage() {
       mode: teamModeEnabled ? targetMode : 'agent',
       modelConfigId: selectedModelId,
       skillIds: runtimeAgent?.skills,
+      forcedSkillIds,
       deepThinking,
       planRequested: planModeEnabled && planMode && targetMode === 'agent',
       images,
       files,
     });
-  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, imageAttachments, inputValue, planMode, planModeEnabled, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, teamModeEnabled, uploadFilesForSession]);
+  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, forcedSkillIds, imageAttachments, inputValue, planMode, planModeEnabled, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, teamModeEnabled, uploadFilesForSession]);
 
   const handlePlanReview = useCallback(async (
     plan: PlanReviewData,
@@ -584,12 +598,13 @@ export function ChatPage() {
       mode: 'agent',
       modelConfigId: selectedModelId,
       skillIds: runtimeAgent?.skills,
+      forcedSkillIds,
       deepThinking,
       planId: plan.planId,
       planAction: action,
       planFeedback: feedback,
     });
-  }, [activeProjectId, activeSessionId, deepThinking, resetScroll, runtimeAgent, selectedModelId, sendMessage, state.isStreaming]);
+  }, [activeProjectId, activeSessionId, deepThinking, forcedSkillIds, resetScroll, runtimeAgent, selectedModelId, sendMessage, state.isStreaming]);
 
   // 当流结束时，将 assistant 回复加入消息历史
   useEffect(() => {
@@ -875,6 +890,10 @@ export function ChatPage() {
               onTogglePlanMode={() => setPlanMode((value) => !value)}
               teamModeEnabled={teamModeEnabled}
               planModeEnabled={planModeEnabled}
+              composerSkills={composerSkills}
+              forcedSkillIds={forcedSkillIds}
+              skillsLoading={skillsLoading || projectResourcesLoading}
+              onForcedSkillIdsChange={setForcedSkillIds}
             />
           )}
 

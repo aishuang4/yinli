@@ -1,15 +1,20 @@
 /** Chat 输入器，负责附件预览、运行模式和发送控制。 */
 
-import type { ChangeEvent, KeyboardEventHandler, ReactNode, RefObject } from 'react';
-import { AlertCircle, FileText, ImagePlus, ListChecks, Paperclip, Send, Square, X } from 'lucide-react';
-import {
-  SparkDeepThinkLine,
-  SparkReinforcementLearningLine,
-  SparkRenyizhuanrenyiAnyToanyLine,
-} from '@agentscope-ai/icons';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEventHandler, type ReactNode, type RefObject } from 'react';
+import { AlertCircle, FileText, Send, Square, X } from 'lucide-react';
 import { Tooltip } from '@/components/design';
 import { FileImportButton } from '../../components/FileImportButton';
-import { ChatAgentSelect } from './ChatAgentSelect';
+import { ChatAgentChip, useChatComposerAgents } from './ChatAgentSelect';
+import { ChatComposerPlusMenu, ChatDeepThinkChip, ChatPlanChip } from './ChatComposerPlusMenu';
+import type { PlusMenuCategory } from './plusMenu';
+import { ChatForcedSkillChips, ChatSkillSlashMenu } from './ChatSkillPicker';
+import {
+  consumeSlashQuery,
+  filterSkillsBySlashQuery,
+  readSlashQuery,
+  toggleForcedSkillId,
+} from './forcedSkills';
+import type { Skill } from '../../types/skill';
 import type { ChatFileAttachment, ChatImageAttachment } from './types';
 
 interface ChatComposerProps {
@@ -43,6 +48,10 @@ interface ChatComposerProps {
   onTogglePlanMode: () => void;
   teamModeEnabled?: boolean;
   planModeEnabled?: boolean;
+  composerSkills?: Skill[];
+  forcedSkillIds?: string[];
+  skillsLoading?: boolean;
+  onForcedSkillIdsChange?: (ids: string[]) => void;
 }
 
 export function ChatComposer(props: ChatComposerProps) {
@@ -53,9 +62,96 @@ export function ChatComposer(props: ChatComposerProps) {
     onCompositionEnd, onCompositionStart, onFile, onImageFiles, onInputChange,
     onKeyDown, onRemoveFile, onRemoveImage, onSelectedAgentChange, onSend,
     onTargetModeChange, onToggleDeepThinking, onTogglePlanMode,
+    composerSkills = [], forcedSkillIds = [], skillsLoading = false, onForcedSkillIdsChange,
   } = props;
   const teamModeEnabled = props.teamModeEnabled !== false;
   const planModeEnabled = props.planModeEnabled !== false;
+  const [cursor, setCursor] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const [plusOpen, setPlusOpen] = useState(false);
+  const [plusCategory, setPlusCategory] = useState<PlusMenuCategory>('files');
+  const fileImportHostRef = useRef<HTMLSpanElement>(null);
+  const { agents, loading: composerAgentsLoading, hostRef: agentHostRef } = useChatComposerAgents();
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0] ?? null;
+  const showChips = (targetMode === 'agent' && planModeEnabled && planMode)
+    || deepThinking
+    || forcedSkillIds.length > 0;
+  const slashQuery = onForcedSkillIdsChange ? readSlashQuery(inputValue, cursor) : null;
+  const slashOpen = Boolean(slashQuery) && !slashDismissed && !isStreaming;
+  const slashSkills = useMemo(
+    () => filterSkillsBySlashQuery(composerSkills, slashQuery?.query || ''),
+    [composerSkills, slashQuery?.query],
+  );
+
+  useEffect(() => {
+    setSlashDismissed(false);
+    setHighlightedIndex(0);
+  }, [slashQuery?.start, slashQuery?.query]);
+
+  useEffect(() => {
+    if (highlightedIndex >= slashSkills.length) {
+      setHighlightedIndex(0);
+    }
+  }, [highlightedIndex, slashSkills.length]);
+
+  const applyCursor = (next: string, nextCursor: number) => {
+    onInputChange(next);
+    setCursor(nextCursor);
+    requestAnimationFrame(() => {
+      const el = messageInputRef.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(nextCursor, nextCursor);
+    });
+  };
+
+  const pinForcedSkill = (skill: Skill) => {
+    if (!onForcedSkillIdsChange) return;
+    if (!forcedSkillIds.includes(skill.id)) {
+      onForcedSkillIdsChange(toggleForcedSkillId(forcedSkillIds, skill.id));
+    }
+  };
+
+  const pickSlashSkill = (skill: Skill) => {
+    if (!slashQuery) return;
+    pinForcedSkill(skill);
+    const next = consumeSlashQuery(inputValue, slashQuery);
+    applyCursor(next, Math.min(slashQuery.start, next.length));
+    setSlashDismissed(true);
+  };
+
+  const triggerFileImport = () => {
+    fileImportHostRef.current?.querySelector('button')?.click();
+  };
+
+  const handleComposerKeyDown: KeyboardEventHandler<HTMLTextAreaElement> = (event) => {
+    if (slashOpen) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setSlashDismissed(true);
+        return;
+      }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setHighlightedIndex((index) => (slashSkills.length === 0 ? 0 : (index + 1) % slashSkills.length));
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setHighlightedIndex((index) => (
+          slashSkills.length === 0 ? 0 : (index - 1 + slashSkills.length) % slashSkills.length
+        ));
+        return;
+      }
+      if ((event.key === 'Enter' || event.key === 'Tab') && !event.nativeEvent.isComposing && slashSkills[highlightedIndex]) {
+        event.preventDefault();
+        pickSlashSkill(slashSkills[highlightedIndex]);
+        return;
+      }
+    }
+    onKeyDown(event);
+  };
 
   return (
     <div className="px-8 pb-6 pt-2">
@@ -65,7 +161,18 @@ export function ChatComposer(props: ChatComposerProps) {
           {chatError}
         </div>
       )}
-      <div className="chat-composer mx-auto max-w-4xl rounded-xl bg-[var(--color-bg-secondary)]">
+      <div className="chat-composer relative mx-auto max-w-4xl rounded-xl bg-[var(--color-bg-secondary)]">
+        {slashOpen ? (
+          <ChatSkillSlashMenu
+            skills={slashSkills}
+            selectedIds={forcedSkillIds}
+            highlightedIndex={highlightedIndex}
+            loading={skillsLoading}
+            query={slashQuery?.query || ''}
+            onHighlight={setHighlightedIndex}
+            onPick={pickSlashSkill}
+          />
+        ) : null}
         <input
           ref={imageInputRef}
           type="file"
@@ -77,15 +184,39 @@ export function ChatComposer(props: ChatComposerProps) {
         <textarea
           ref={messageInputRef}
           value={inputValue}
-          onChange={(event) => onInputChange(event.target.value)}
-          onKeyDown={onKeyDown}
+          onChange={(event) => {
+            onInputChange(event.target.value);
+            setCursor(event.target.selectionStart ?? event.target.value.length);
+          }}
+          onSelect={(event) => setCursor(event.currentTarget.selectionStart ?? 0)}
+          onClick={(event) => setCursor(event.currentTarget.selectionStart ?? 0)}
+          onKeyUp={(event) => setCursor(event.currentTarget.selectionStart ?? 0)}
+          onKeyDown={handleComposerKeyDown}
           onCompositionStart={onCompositionStart}
           onCompositionEnd={onCompositionEnd}
-          placeholder={isStreaming ? '给正在执行的 Agent 补充信息...' : '输入消息...'}
+          placeholder={isStreaming ? '给正在执行的 Agent 补充信息...' : '输入消息，或用 / 选择 Skill...'}
           rows={2}
           className="block max-h-[180px] w-full resize-none rounded-t-lg border-0 bg-transparent px-4 pb-0 pt-3 text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
           aria-label="消息输入框"
         />
+        {showChips ? (
+          <div className="flex flex-wrap gap-1.5 px-3 pt-2">
+            {targetMode === 'agent' && planModeEnabled && planMode ? (
+              <ChatPlanChip disabled={isStreaming} onRemove={onTogglePlanMode} />
+            ) : null}
+            {deepThinking ? (
+              <ChatDeepThinkChip disabled={isStreaming} onRemove={onToggleDeepThinking} />
+            ) : null}
+            {onForcedSkillIdsChange ? (
+              <ChatForcedSkillChips
+                skills={composerSkills}
+                selectedIds={forcedSkillIds}
+                disabled={isStreaming}
+                onRemove={(skillId) => onForcedSkillIdsChange(forcedSkillIds.filter((id) => id !== skillId))}
+              />
+            ) : null}
+          </div>
+        ) : null}
 
         {imageAttachments.length > 0 && (
           <div className="flex max-h-[88px] flex-wrap gap-2 overflow-hidden px-3 py-2">
@@ -124,99 +255,60 @@ export function ChatComposer(props: ChatComposerProps) {
           </div>
         )}
 
+        <span ref={fileImportHostRef} aria-hidden="true" className="pointer-events-none absolute h-px w-px overflow-hidden opacity-0">
+          <FileImportButton
+            onFile={onFile}
+            disabled={isStreaming || fileAttachments.length >= 10}
+            className="h-8 w-8 p-0"
+          >
+            上传文件
+          </FileImportButton>
+        </span>
         <div className="flex flex-wrap items-center gap-2 px-3 py-2">
-          <Tooltip title="上传图片" placement="top" mode="dark">
-            <span className="inline-flex">
-              <button
-                type="button"
-                className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-                onClick={() => imageInputRef.current?.click()}
-                disabled={isStreaming || imageAttachments.length >= 4}
-                aria-label="上传图片"
-              >
-                <ImagePlus size={16} />
-              </button>
-            </span>
-          </Tooltip>
-          <Tooltip title="上传文件" placement="top" mode="dark">
-            <span className="inline-flex">
-              <FileImportButton
-                onFile={onFile}
-                disabled={isStreaming || fileAttachments.length >= 10}
-                className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-0 text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-              >
-                <Paperclip size={16} />
-              </FileImportButton>
-            </span>
-          </Tooltip>
-          {teamModeEnabled ? (
-          <div className="flex h-8 gap-1 rounded-[10px] border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-[3px]">
-            <ModeButton
-              active={targetMode === 'agent'}
-              disabled={isStreaming}
-              label="单 Agent"
-              onClick={() => onTargetModeChange('agent')}
-              icon={<SparkReinforcementLearningLine size={16} />}
-            />
-            <ModeButton
-              active={targetMode === 'team'}
-              disabled={isStreaming}
-              label="Team"
-              onClick={() => onTargetModeChange('team')}
-              icon={<SparkRenyizhuanrenyiAnyToanyLine size={16} />}
+          <ChatComposerPlusMenu
+            open={plusOpen}
+            category={plusCategory}
+            onOpenChange={setPlusOpen}
+            onCategoryChange={setPlusCategory}
+            retainRef={agentHostRef}
+            disabled={isStreaming}
+            planMode={planMode}
+            deepThinking={deepThinking}
+            targetMode={targetMode}
+            showPlan={targetMode === 'agent' && planModeEnabled}
+            showTeam={teamModeEnabled}
+            agents={agents}
+            selectedAgentId={selectedAgent?.id || selectedAgentId}
+            agentsLoading={composerAgentsLoading || agentsLoading}
+            skills={composerSkills}
+            selectedSkillIds={forcedSkillIds}
+            skillsEnabled={Boolean(onForcedSkillIdsChange)}
+            skillsLoading={skillsLoading}
+            imageDisabled={imageAttachments.length >= 4}
+            fileDisabled={fileAttachments.length >= 10}
+            onTogglePlan={onTogglePlanMode}
+            onToggleDeepThinking={onToggleDeepThinking}
+            onTargetModeChange={onTargetModeChange}
+            onPickAgent={onSelectedAgentChange}
+            onPickSkill={pinForcedSkill}
+            onUploadImage={() => imageInputRef.current?.click()}
+            onUploadFile={triggerFileImport}
+          />
+          <div ref={agentHostRef} className="inline-flex">
+            <ChatAgentChip
+              agent={selectedAgent}
+              teamMode={targetMode === 'team'}
+              disabled={isStreaming || agentsLoading || projectResourcesLoading}
+              onClick={() => {
+                setPlusCategory('agents');
+                setPlusOpen(true);
+              }}
             />
           </div>
-          ) : null}
-          {targetMode === 'agent' && (
-            <ChatAgentSelect
-              selectedAgentId={selectedAgentId}
-              disabled={isStreaming || agentsLoading || projectResourcesLoading}
-              onChange={onSelectedAgentChange}
-            />
-          )}
-          <div className="chat-composer-model-slot min-w-0 max-w-[230px] shrink">
+          <div className="chat-composer-model-slot min-w-0 max-w-[168px] shrink">
             {props.modelSelector}
           </div>
           <div className="ml-auto flex items-center gap-2">
-            {targetMode === 'agent' && planModeEnabled ? (
-              <Tooltip title={planMode ? '点击关闭计划模式' : '点击开启计划模式'} placement="top" mode="dark">
-                <span className="inline-flex">
-                  <button
-                    type="button"
-                    className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-[10px] border px-2.5 text-xs transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
-                      planMode
-                        ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
-                        : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
-                    }`}
-                    onClick={onTogglePlanMode}
-                    disabled={isStreaming}
-                    aria-label={planMode ? '关闭计划模式' : '开启计划模式'}
-                    aria-pressed={planMode}
-                  >
-                    <ListChecks size={16} />
-                    <span>{planMode ? '计划开启' : '计划关闭'}</span>
-                  </button>
-                </span>
-              </Tooltip>
-            ) : null}
-            <Tooltip title={deepThinking ? '深度思考已开启' : '开启深度思考'} placement="top" mode="dark">
-              <span className="inline-flex">
-                <button
-                  type="button"
-                  className={`icon-button h-8 w-8 rounded-[10px] border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
-                    deepThinking
-                      ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
-                      : 'border-[var(--color-border)] bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
-                  }`}
-                  onClick={onToggleDeepThinking}
-                  disabled={isStreaming}
-                  aria-label={deepThinking ? '关闭深度思考' : '开启深度思考'}
-                  aria-pressed={deepThinking}
-                >
-                  <SparkDeepThinkLine size={16} />
-                </button>
-              </span>
-            </Tooltip>
             {isStreaming ? (
               <Tooltip title="停止回复" placement="top" mode="dark">
                 <span className="inline-flex">
@@ -230,58 +322,24 @@ export function ChatComposer(props: ChatComposerProps) {
                   </button>
                 </span>
               </Tooltip>
-            ) : null}
-            <Tooltip title={isStreaming ? '补充给 Agent' : '发送消息'} placement="top" mode="dark">
-              <span className="inline-flex">
-                <button
-                  type="button"
-                  className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-opacity duration-200 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-                  onClick={onSend}
-                  disabled={!inputValue.trim() && imageAttachments.length === 0 && fileAttachments.length === 0}
-                  aria-label={isStreaming ? '补充给 Agent' : '发送消息'}
-                >
-                  <Send size={16} />
-                </button>
-              </span>
-            </Tooltip>
+            ) : (
+              <Tooltip title="发送消息" placement="top" mode="dark">
+                <span className="inline-flex">
+                  <button
+                    type="button"
+                    className="icon-button h-8 w-8 rounded-[10px] border border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] transition-opacity duration-200 hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                    onClick={onSend}
+                    disabled={!inputValue.trim() && imageAttachments.length === 0 && fileAttachments.length === 0}
+                    aria-label="发送消息"
+                  >
+                    <Send size={16} />
+                  </button>
+                </span>
+              </Tooltip>
+            )}
           </div>
         </div>
       </div>
     </div>
-  );
-}
-
-function ModeButton({
-  active,
-  disabled,
-  icon,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  disabled: boolean;
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <Tooltip title={label} placement="top" mode="dark">
-      <span className="inline-flex">
-        <button
-          type="button"
-          className={`icon-button h-6 w-6 rounded-[10px] border transition-colors duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${
-            active
-              ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-bg-primary)] shadow-sm'
-              : 'border-transparent bg-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
-          }`}
-          disabled={disabled}
-          onClick={onClick}
-          aria-label={label}
-          aria-pressed={active}
-        >
-          {icon}
-        </button>
-      </span>
-    </Tooltip>
   );
 }

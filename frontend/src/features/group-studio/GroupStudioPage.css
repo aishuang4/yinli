@@ -1050,15 +1050,9 @@
 }
 
 .group-studio-shell .chat-workbench-model-control {
-  flex: 0 0 210px;
-  width: 210px;
-  max-width: 24vw;
-}
-
-.group-studio-shell .chat-workbench-model-control .ant-select,
-.group-studio-shell .chat-workbench-model-control .ant-select-selector {
-  width: 100% !important;
-  max-width: 100%;
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 168px;
 }
 
 /* 打包后的默认 1280px 窗口需要同时容纳群聊列表、对话与上下文。 */
@@ -1087,9 +1081,9 @@
   }
 
   .group-studio-shell .chat-workbench-model-control {
-    flex-basis: 150px;
-    width: 150px;
-    max-width: 18vw;
+    flex: 0 1 auto;
+    width: auto;
+    max-width: 140px;
   }
 }
 
@@ -1114,9 +1108,9 @@
   }
 
   .group-studio-shell .chat-workbench-model-control {
-    flex-basis: 130px;
-    width: 130px;
-    max-width: 16vw;
+    flex: 0 1 auto;
+    width: auto;
+    max-width: 120px;
   }
 
   .group-studio-shell .chat-workbench-status-tag {
@@ -1139,9 +1133,9 @@
   }
 
   .group-studio-shell .chat-workbench-model-control {
-    flex-basis: 112px;
-    width: 112px;
-    max-width: 112px;
+    flex: 0 1 auto;
+    width: auto;
+    max-width: 108px;
   }
 }
 
