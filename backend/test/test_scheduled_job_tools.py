@@ -239,5 +239,6 @@ def test_team_executor_does_not_inject_scheduled_job_tools(monkeypatch):
     assert [tool.name for tool in team_parts[2]] == []
     assert "scheduled-job-tools" not in team_parts[1]
     assert "ScheduleJob" not in team_parts[5]
-    assert "ScheduleJob" not in [tool.name for tool in single_parts[2]]
-    assert "scheduled-job-tools" not in single_parts[1]
+    assert "ScheduleJob" in [tool.name for tool in single_parts[2]]
+    assert "scheduled-job-tools" in single_parts[1]
+    assert "ScheduleJob" in single_parts[5]

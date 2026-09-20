@@ -237,7 +237,7 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 
 ## 文件 Catalog
 
-持久 Agent 定义的权威是 Workspace 目录 `<USER_DATA_ROOT>/workspaces/<id>/.agents/profiles/<id>.md`，不是 `agents` 表。系统 Agent 仍由代码提供，用户覆盖写在 `workspaces/_system/.agents/profiles/`。Skill 正文只来自包内 `SKILL.md`（sqlite `content` 不再保存正文）；项目 `.agents/skills` 默认可运行。系统包 `yinli-catalog` / `yinli-charts` / `word-documents` seed 到运行时 skills 目录。MCP / HTTP 工具定义是 Workspace/Project 下的 YAML，密钥只走 `secret_ref` / secret_store，禁止写进 YAML。Job 定义是 `.agents/jobs/<id>.md`；`scheduled_jobs` 的权威实例字段是 status / next_run_at / 连续失败 / 能力合同等，定义列只是派生缓存，读路径以文件覆盖。模型通过 Read/Edit 这些文件操作系统，不再注入 `ScheduleJob` / `PauseJob` 平行工具；Chat 会生成项目 `.agents/INDEX.md`。规格见 `docs/file-catalog-v1.md`。
+持久 Agent 定义的权威是 Workspace 目录 `<USER_DATA_ROOT>/workspaces/<id>/.agents/profiles/<id>.md`，不是 `agents` 表。系统 Agent 仍由代码提供，用户覆盖写在 `workspaces/_system/.agents/profiles/`。Skill 正文只来自包内 `SKILL.md`（sqlite `content` 不再保存正文）；项目 `.agents/skills` 默认可运行。系统包 `yinli-catalog` / `yinli-charts` / `word-documents` seed 到运行时 skills 目录。MCP / HTTP 工具定义是 Workspace/Project 下的 YAML，密钥只走 `secret_ref` / secret_store，禁止写进 YAML。Job 定义是 `.agents/jobs/<id>.md`；`scheduled_jobs` 的权威实例字段是 status / next_run_at / 连续失败 / 能力合同等，定义列只是派生缓存，读路径以文件覆盖。交互式 Chat 仍注入 `ScheduleJob` 工具组登记任务（写库并落 `.agents/jobs/<id>.md`）；Team 与 firing 不注入。禁止再发明第二套系统 CRUD。Chat 会生成项目 `.agents/INDEX.md`。规格见 `docs/file-catalog-v1.md`。
 
 ## 存储
 
@@ -282,7 +282,7 @@ Chat Trace 身份是一次 `chat_runs` 记录，步骤存在 `trace_observations
 
 定时任务写接口受 `system_settings/scheduled_jobs.enabled` 控制；开发库默认关闭。桌面安装版（`AGENT_WORKSTATION_DATA_DIR`）首次启动若从未写过该键，会默认打开调度和能力门禁。设置页可随时开关。
 
-控制面与执行面拆开：Job 定义由 catalog 文件权威，Jobs 页 / REST 是同一棵文件树的门面；sqlite `scheduled_jobs` 保存运行实例。到点走领域 API `start_scheduled_chat_run()`，每次 firing 新建 `kind=scheduled_job` 的 Chat session，禁止复用登记会话。firing 去掉 AskUser / Plan Mode / DelegateTask。单 Agent Chat 不再注入 `ScheduleJob` 工具组。控制面默认 `notify`；预览发送、收件人白名单、`auto_send` 仍是后续阶段。
+控制面与执行面拆开：Job 定义由 catalog 文件权威，Jobs 页 / REST 是同一棵文件树的门面；sqlite `scheduled_jobs` 保存运行实例。到点走领域 API `start_scheduled_chat_run()`，每次 firing 新建 `kind=scheduled_job` 的 Chat session，禁止复用登记会话。firing 去掉 AskUser / Plan Mode / DelegateTask。单 Agent Chat 注入 `ScheduleJob` 工具组做对话登记；到期 firing 不带这组工具。控制面默认 `notify`；预览发送、收件人白名单、`auto_send` 仍是后续阶段。
 
 定时任务的到期执行者必须是 `role=job` 的 Job Agent，不能使用 Chat 助手。Job Agent 在配置里拆成必注入与可选注入两层工具：必注入到期一定带上，`CheckJobFeasibility` 只认领可选层。系统 `default` 助手不能改成 Job Agent；Job Agent 不出现在 Chat 选择器里。能力合同与创建前门禁见 `docs/scheduled-jobs-v2-agent-activation.md`。
 

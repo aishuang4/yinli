@@ -38,7 +38,7 @@ tools/<id>.yaml
 
 ## 定时任务
 
-不要调用 ScheduleJob 工具。在项目下新建：
+Chat 对话里优先用 `ScheduleJob` / `ConfirmJob` 登记。也可以在项目下新建：
 
 ```text
 .agents/jobs/<id>.md

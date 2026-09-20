@@ -49,6 +49,11 @@ from src.server.routes.chat.runtime_governance import (
     prepare_agent_governance,
     restore_agent_session_state,
 )
+from src.tools.scheduled_job_tools import (
+    build_scheduled_job_tools,
+    scheduled_job_prompt_addendum,
+    scheduled_job_tools_cache_key,
+)
 from src.server.routes.chat.trace_recorder import _make_fallback_trace_recorder
 from src.server.routes.chat.runtime_events import runtime_source_event
 from src.subagents.manager import SubagentDelegationManager
@@ -90,6 +95,7 @@ def _build_runtime_feature_parts(
     Team Runtime 有独立的 TeamRun / Task / Mailbox 控制面，当前不复用
     单 Agent Plan Mode 或 ScheduleJob 工具。scheduled firing 使用
     `scheduled-job-unattended`，不得走本函数注入登记工具。
+    交互式单 Agent 仍注入 ScheduleJob 工具组，方便对话里登记任务。
     """
 
     feature_keys: list[str] = []
@@ -125,6 +131,16 @@ def _build_runtime_feature_parts(
         # 已读 Skill 正文保留 + 一级无模型整理 + 压缩可观测；都只读写 state.middle_context，实例搬运时随 state 一起走。
         middlewares.extend(build_context_governance_middlewares(skill_context=True))
         feature_keys.append("run-steer:skill-context:context-governance")
+        if ctx.persist_run:
+            job_tools = build_scheduled_job_tools(
+                workspace_id=ctx.runtime_context.workspace_id,
+                project_id=ctx.runtime_context.project_id,
+                agent_id=ctx.agent_id,
+                session_id=ctx.session_id,
+            )
+            extra_tools.extend(job_tools)
+            prompt_addenda.append(scheduled_job_prompt_addendum(ctx.runtime_context.workspace_id))
+            feature_keys.append(scheduled_job_tools_cache_key(job_tools))
 
     catalog = load_subagent_catalog(workspace_dir=str(ctx.runtime_context.project_root))
     if catalog.definitions:
