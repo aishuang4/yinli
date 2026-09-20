@@ -1,15 +1,22 @@
-/** 模型和供应商连接管理：默认展示摘要，按需展开详细配置。 */
+/** 模型和供应商连接管理：卡片摘要 + 按供应商展开配置。 */
+
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
-import { TextField, PasswordField, SelectField, NumberField, ToggleField } from '../../components/form';
+import { FileJson, Plus, RefreshCw, Save } from 'lucide-react';
+import { Button, Card, Tag } from '@/components/design';
+import { SelectField } from '../../components/form';
+import { ModelProviderEditor } from './ModelProviderEditor';
+import {
+  catalogDraftDirty,
+  emptyModel,
+  emptyProvider,
+  isProviderConfigured,
+} from './modelCatalogUi';
 import { catalogRequest, modelAvailable, useModelCatalog, type ModelCatalog, type ModelEntry, type ModelProvider } from './useModelCatalog';
 import { notifyError, notifySuccess } from '../../utils/feedback';
 
-const iconClass = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-[var(--color-bg-hover)] disabled:opacity-40';
-const adapters = ['openai', 'deepseek', 'dashscope', 'moonshot', 'gemini', 'anthropic', 'ollama'];
-
 export function ModelsManager() {
   const { catalog, error, loading, reload } = useModelCatalog(false);
+
   const openModelsFile = async () => {
     if (!catalog?.modelsPath) return;
     if (!window.electronAPI) {
@@ -19,27 +26,128 @@ export function ModelsManager() {
     const result = await window.electronAPI.openPath(catalog.modelsPath);
     if (!result.ok) notifyError(result.error || '无法打开 models.json');
   };
-  return <section className="border-y border-[var(--color-border)] py-5">
-    <header className="mb-4 flex items-start justify-between gap-4"><div><h2 className="text-base font-medium">模型管理</h2>{catalog?.modelsPath && <button type="button" className="mt-1 max-w-full truncate text-left text-xs text-[var(--color-text-tertiary)] underline decoration-dotted underline-offset-2 hover:text-[var(--color-text-primary)]" title="打开 models.json" onClick={() => void openModelsFile()}>{catalog.modelsPath}</button>}</div><button className={iconClass} aria-label="重新读取模型配置" title="重新读取" disabled={loading} onClick={() => void reload()}><RefreshCw size={16} /></button></header>
-    {error && <p role="alert" className="mb-3 text-sm text-[var(--color-error)]">{error}</p>}
-    {catalog ? <CatalogEditor key={catalog.etag} initial={catalog} onSaved={reload} /> : loading ? <p>加载中...</p> : null}
-  </section>;
+
+  return (
+    <Card styles={{ body: { padding: 0 } }}>
+      <div className="p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-[var(--color-text-primary)]">模型管理</div>
+            <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
+              配置供应商连接和可选模型。Chat 只从这里选模型，不在 Agent 里改。
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {catalog?.modelsPath ? (
+              <button
+                type="button"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+                title="打开配置文件"
+                aria-label="打开配置文件"
+                onClick={() => void openModelsFile()}
+              >
+                <FileJson size={16} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
+              aria-label="重新读取模型配置"
+              title="重新读取"
+              disabled={loading}
+              onClick={() => void reload()}
+            >
+              <RefreshCw size={16} />
+            </button>
+          </div>
+        </div>
+        {error ? <p role="alert" className="mt-3 text-sm text-[var(--color-error)]">{error}</p> : null}
+        {catalog ? (
+          <CatalogEditor key={catalog.etag} initial={catalog} onSaved={reload} />
+        ) : loading ? (
+          <p className="mt-4 text-sm text-[var(--color-text-tertiary)]">正在加载模型配置…</p>
+        ) : null}
+      </div>
+    </Card>
+  );
 }
 
 function CatalogEditor({ initial, onSaved }: { initial: ModelCatalog; onSaved: () => Promise<void> }) {
   const [draft, setDraft] = useState(initial);
-  const isProviderConfigured = (item: ModelProvider) => Boolean(
-    item.apiKeyConfigured || (!item.requiresApiKey && item.baseUrl.trim()),
-  );
   const [expandedProviderId, setExpandedProviderId] = useState(
-    initial.providers.find(item => isProviderConfigured(item))?.id || '',
+    initial.providers.find((item) => item.apiKeyConfigured || (!item.requiresApiKey && item.baseUrl.trim()))?.id
+      || initial.providers[0]?.id
+      || '',
   );
   const [expandedModelId, setExpandedModelId] = useState('');
-  const [saving, setSaving] = useState(false); const [error, setError] = useState('');
-  const provider = draft.providers.find(item => item.id === expandedProviderId);
-  const modelsForProvider = (providerId: string) => draft.models.filter(item => item.providerId === providerId);
-  const updateProvider = (patch: Partial<ModelProvider>) => setDraft(current => ({ ...current, providers: current.providers.map(item => item.id === expandedProviderId ? { ...item, ...patch } : item) }));
-  const updateModel = (id: string, patch: Partial<ModelEntry>) => setDraft(current => ({ ...current, models: current.models.map(item => item.id === id ? { ...item, ...patch } : item) }));
+  const [showAllProviders, setShowAllProviders] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const dirty = catalogDraftDirty(draft, initial);
+  const availableModels = draft.models.filter((item) => modelAvailable(draft, item));
+  const defaultModel = draft.models.find((item) => item.id === draft.defaultModelId);
+  const visibleProviders = draft.providers.filter((item) => (
+    showAllProviders
+    || isProviderConfigured(item)
+    || item.id === expandedProviderId
+  ));
+  const hiddenProviderCount = draft.providers.length - draft.providers.filter((item) => (
+    isProviderConfigured(item) || item.id === expandedProviderId
+  )).length;
+
+  const modelsForProvider = (providerId: string) => draft.models.filter((item) => item.providerId === providerId);
+
+  const updateProvider = (providerId: string, patch: Partial<ModelProvider>) => {
+    setDraft((current) => ({
+      ...current,
+      providers: current.providers.map((item) => (item.id === providerId ? { ...item, ...patch } : item)),
+    }));
+  };
+
+  const updateModel = (id: string, patch: Partial<ModelEntry>) => {
+    setDraft((current) => ({
+      ...current,
+      models: current.models.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    }));
+  };
+
+  const removeModels = (ids: Set<string>) => {
+    setDraft((current) => ({
+      ...current,
+      defaultModelId: ids.has(current.defaultModelId) ? '' : current.defaultModelId,
+      models: current.models
+        .filter((item) => !ids.has(item.id))
+        .map((item) => ({ ...item, fallbackModelIds: item.fallbackModelIds.filter((id) => !ids.has(id)) })),
+    }));
+  };
+
+  const addProvider = () => {
+    const next = emptyProvider();
+    setDraft((current) => ({ ...current, providers: [...current.providers, next] }));
+    setExpandedProviderId(next.id);
+    setExpandedModelId('');
+  };
+
+  const removeProvider = (providerId: string) => {
+    const modelIds = new Set(draft.models.filter((item) => item.providerId === providerId).map((item) => item.id));
+    setDraft((current) => ({
+      ...current,
+      defaultModelId: modelIds.has(current.defaultModelId) ? '' : current.defaultModelId,
+      providers: current.providers.filter((item) => item.id !== providerId),
+      models: current.models
+        .filter((item) => item.providerId !== providerId)
+        .map((item) => ({ ...item, fallbackModelIds: item.fallbackModelIds.filter((id) => !modelIds.has(id)) })),
+    }));
+    setExpandedProviderId((current) => (current === providerId ? '' : current));
+    setExpandedModelId('');
+  };
+
+  const addModel = (providerId: string) => {
+    const next = emptyModel(providerId);
+    setDraft((current) => ({ ...current, models: [...current.models, next] }));
+    setExpandedModelId(next.id);
+  };
+
   const save = async () => {
     setSaving(true);
     setError('');
@@ -50,10 +158,9 @@ function CatalogEditor({ initial, onSaved }: { initial: ModelCatalog; onSaved: (
         defaultModelId: draft.defaultModelId,
         etag: draft.etag,
         providers: draft.providers.map((item) => {
-          // apiKeyConfigured 是服务端派生标记，不回传。
-          const payload: Partial<typeof item> = { ...item };
-          delete payload.apiKeyConfigured;
-          return payload;
+          const next: Partial<typeof item> = { ...item };
+          delete next.apiKeyConfigured;
+          return next;
         }),
         models: draft.models.filter((item) => item.label.trim() && item.model.trim()),
       };
@@ -69,19 +176,94 @@ function CatalogEditor({ initial, onSaved }: { initial: ModelCatalog; onSaved: (
       setSaving(false);
     }
   };
-  const addProvider = () => { const id = crypto.randomUUID(); setDraft(current => ({ ...current, providers: [...current.providers, { id, name: '新供应商', adapter: 'openai', baseUrl: '', enabled: true, requiresApiKey: true, apiKeyConfigured: false }] })); setExpandedProviderId(id); setExpandedModelId(''); };
-  const removeModels = (ids: Set<string>) => setDraft(current => ({ ...current, defaultModelId: ids.has(current.defaultModelId) ? '' : current.defaultModelId, models: current.models.filter(item => !ids.has(item.id)).map(item => ({ ...item, fallbackModelIds: item.fallbackModelIds.filter(id => !ids.has(id)) })) }));
-  const removeProvider = () => { if (!provider) return; removeModels(new Set(draft.models.filter(m => m.providerId === provider.id).map(m => m.id))); setDraft(current => ({ ...current, providers: current.providers.filter(p => p.id !== provider.id) })); setExpandedProviderId(draft.providers.find(p => p.id !== provider.id)?.id || ''); setExpandedModelId(''); };
-  const addModel = () => { if (!provider) return; const id = crypto.randomUUID(); setDraft(current => ({ ...current, models: [...current.models, { id, providerId: provider.id, model: '', label: '', enabled: true, fallbackModelIds: [], contextSize: 0, parameters: { temperature: 0.7, topP: 0.8, maxTokens: 4096 }, capabilities: { images: false } }] })); setExpandedModelId(id); };
-  const visibleProviders = draft.providers.filter(item => isProviderConfigured(item) || item.id === expandedProviderId);
-  return <fieldset disabled={saving} className="min-w-0 space-y-4">
-    <SelectField label="新会话默认模型" aria-label="新会话默认模型" style={{ width: '100%', marginTop: 6 }} value={draft.defaultModelId || undefined} showSearch optionFilterProp="label" placeholder="选择默认模型" onChange={value => setDraft({ ...draft, defaultModelId: String(value) })} options={draft.models.filter(m => modelAvailable(draft, m)).map(m => ({ value: m.id, label: `${m.label} · ${draft.providers.find(p => p.id === m.providerId)?.name}` }))} />
-    <div className="flex items-center justify-between border-b border-[var(--color-border)] pb-2"><span className="text-sm font-medium">已配置供应商</span><button type="button" className={iconClass} title="添加供应商" aria-label="添加供应商" onClick={addProvider}><Plus size={16} /></button></div>
-    <div className="divide-y divide-[var(--color-border)] rounded-md border border-[var(--color-border)]">{visibleProviders.map(item => { const models = modelsForProvider(item.id); const open = item.id === expandedProviderId; return <div key={item.id}><button type="button" className="flex w-full items-center gap-2 px-3 py-3 text-left" onClick={() => { setExpandedProviderId(open ? '' : item.id); setExpandedModelId(''); }}>{open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}<span className="font-medium">{item.name || '未命名供应商'}</span><span className="text-xs text-[var(--color-text-tertiary)]">{item.adapter} · {models.length} 个模型</span><span className={`ml-auto rounded-full px-2 py-0.5 text-xs ${item.apiKeyConfigured ? 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400' : 'bg-amber-500/12 text-amber-700 dark:text-amber-400'}`}>{item.apiKeyConfigured ? 'Key 已配置' : 'Key 未配置'}</span></button>{open && <div className="space-y-4 border-t border-[var(--color-border)] p-4"><div className="grid grid-cols-2 gap-3"><TextField label="供应商名称" aria-label="供应商名称" value={item.name} onChange={e => updateProvider({ name: e.target.value })} /><SelectField label="协议" aria-label="供应商协议" style={{ width: '100%' }} value={item.adapter} onChange={adapter => updateProvider({ adapter: String(adapter), requiresApiKey: adapter !== 'ollama' })} options={adapters.map(value => ({ value, label: value }))} /><TextField className="col-span-2" label="Base URL" aria-label="Base URL" value={item.baseUrl} onChange={e => updateProvider({ baseUrl: e.target.value })} /><PasswordField className="col-span-2" label="API Key" aria-label="API Key" autoComplete="new-password" value={item.apiKey ?? ''} placeholder={item.apiKeyConfigured ? '已配置' : '未配置'} onChange={e => updateProvider({ apiKey: e.target.value })} /></div><div className="flex flex-wrap items-center gap-4 text-xs"><ToggleField label="启用供应商" checked={item.enabled} onChange={enabled => updateProvider({ enabled })} /><ToggleField label="需要 API Key" checked={item.requiresApiKey} onChange={requiresApiKey => updateProvider({ requiresApiKey })} /><button type="button" className="text-[var(--color-error)]" onClick={() => updateProvider({ apiKey: '', apiKeyConfigured: false })}>清除 Key</button><button type="button" className="ml-auto text-[var(--color-error)]" onClick={removeProvider}>删除供应商</button></div><div className="flex items-center justify-between border-b border-[var(--color-border)] pb-2 text-sm"><span>模型</span><button type="button" className={iconClass} title="添加模型" aria-label="添加模型" onClick={addModel}><Plus size={16} /></button></div>{models.map(model => <ModelRow key={model.id} model={model} draft={draft} open={expandedModelId === model.id} onToggle={() => setExpandedModelId(expandedModelId === model.id ? '' : model.id)} onChange={patch => updateModel(model.id, patch)} onDelete={() => removeModels(new Set([model.id]))} />)}{models.length === 0 && <p className="text-sm text-[var(--color-text-tertiary)]">暂无已配置模型，请点击右侧加号添加。</p>}</div>}</div>; })}{visibleProviders.length === 0 && <p className="p-4 text-sm text-[var(--color-text-tertiary)]">暂无已配置供应商。点击上方加号开始配置。</p>}</div>
-    {error && <p role="alert" className="text-sm text-[var(--color-error)]">{error}</p>}<div className="flex justify-end"><button type="button" disabled={saving} onClick={() => void save()} className="flex items-center gap-2 rounded-md bg-[var(--color-text-primary)] px-4 py-2 text-sm text-[var(--color-bg-primary)]"><Save size={15} />{saving ? '保存中...' : '保存配置'}</button></div>
-  </fieldset>;
-}
 
-function ModelRow({ model, draft, open, onToggle, onChange, onDelete }: { model: ModelEntry; draft: ModelCatalog; open: boolean; onToggle: () => void; onChange: (patch: Partial<ModelEntry>) => void; onDelete: () => void }) {
-  return <div className="border-b border-[var(--color-border)] last:border-b-0"><div className="flex items-center gap-2 py-3"><button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={onToggle}>{open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}<span className="truncate font-medium">{model.label}</span><span className="truncate text-xs text-[var(--color-text-tertiary)]">{model.model}</span></button><span className={`rounded-full px-2 py-0.5 text-xs ${model.enabled ? 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400' : 'bg-slate-500/12 text-slate-500 dark:text-slate-400'}`}>{model.enabled ? '模型已启用' : '模型已停用'}</span><button type="button" className={iconClass} title="删除模型" aria-label={`删除模型 ${model.label}`} onClick={onDelete}><Trash2 size={15} /></button></div>{open && <div className="space-y-3 pb-4"><div className="flex items-end gap-2"><TextField className="min-w-0 flex-1" label="显示名称" aria-label="模型显示名称" value={model.label} onChange={e => onChange({ label: e.target.value })} /><TextField className="min-w-0 flex-1" label="模型名称" aria-label="模型名称" value={model.model} onChange={e => onChange({ model: e.target.value })} /></div><div className="grid grid-cols-3 gap-3">{([['temperature', '温度', 0, 2, 0.1], ['topP', 'Top P', 0, 1, 0.05], ['maxTokens', '最大输出 Token', 1, undefined, 1]] as const).map(([key, label, min, max, step]) => <NumberField key={key} label={label} min={min} max={max} step={step} value={model.parameters[key]} onChange={value => onChange({ parameters: { ...model.parameters, [key]: Number(value) } })} />)}</div><NumberField label="上下文窗口 Token（0 = 按供应商默认，决定何时压缩上下文）" min={0} step={1024} value={model.contextSize ?? 0} onChange={value => onChange({ contextSize: Math.max(0, Math.floor(Number(value) || 0)) })} /><SelectField aria-label={`${model.label} 降级模型`} mode="multiple" style={{ width: '100%' }} placeholder="降级模型（按选择顺序）" value={model.fallbackModelIds} onChange={ids => onChange({ fallbackModelIds: Array.isArray(ids) ? ids.map(String) : [] })} options={draft.models.filter(item => item.id !== model.id && item.label.trim() && item.model.trim()).map(item => ({ value: item.id, label: `${item.label} · ${draft.providers.find(p => p.id === item.providerId)?.name}` }))} /><div className="flex gap-4 text-xs"><ToggleField label="启用模型" checked={model.enabled} onChange={enabled => onChange({ enabled })} /><ToggleField label="支持图片" checked={model.capabilities.images} onChange={images => onChange({ capabilities: { images } })} /></div></div>}</div>;
+  return (
+    <fieldset disabled={saving} className="mt-5 min-w-0 space-y-5">
+      <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
+        <SelectField
+          label="新会话默认模型"
+          aria-label="新会话默认模型"
+          style={{ width: '100%' }}
+          value={draft.defaultModelId || undefined}
+          showSearch
+          optionFilterProp="label"
+          placeholder="选择默认模型"
+          onChange={(value) => setDraft({ ...draft, defaultModelId: String(value) })}
+          options={availableModels.map((item) => ({
+            value: item.id,
+            label: `${item.label} · ${draft.providers.find((entry) => entry.id === item.providerId)?.name || '供应商'}`,
+          }))}
+        />
+        <div className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--color-text-tertiary)]">
+          <span>{visibleProviders.length} 个已连接供应商</span>
+          <span>·</span>
+          <span>{availableModels.length} 个可用模型</span>
+          {defaultModel ? (
+            <>
+              <span>·</span>
+              <span>当前默认 {defaultModel.label || defaultModel.model}</span>
+            </>
+          ) : (
+            <>
+              <span>·</span>
+              <span>尚未选择默认模型</span>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-sm font-medium text-[var(--color-text-primary)]">供应商</div>
+        <Button size="small" icon={<Plus size={14} />} onClick={addProvider}>添加供应商</Button>
+      </div>
+
+      {draft.providers.length === 0 ? (
+        <p className="rounded-xl border border-dashed border-[var(--color-border)] px-4 py-8 text-center text-sm text-[var(--color-text-tertiary)]">
+          还没有供应商。添加一个连接后，再给它配置模型。
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {visibleProviders.map((provider) => (
+            <ModelProviderEditor
+              key={provider.id}
+              provider={provider}
+              models={modelsForProvider(provider.id)}
+              draft={draft}
+              open={provider.id === expandedProviderId}
+              expandedModelId={expandedModelId}
+              isDefaultProvider={modelsForProvider(provider.id).some((item) => item.id === draft.defaultModelId)}
+              onToggle={() => {
+                setExpandedProviderId(provider.id === expandedProviderId ? '' : provider.id);
+                setExpandedModelId('');
+              }}
+              onChange={(patch) => updateProvider(provider.id, patch)}
+              onRemove={() => removeProvider(provider.id)}
+              onAddModel={() => addModel(provider.id)}
+              onToggleModel={(id) => setExpandedModelId((current) => (current === id ? '' : id))}
+              onChangeModel={updateModel}
+              onRemoveModel={(id) => removeModels(new Set([id]))}
+            />
+          ))}
+          {hiddenProviderCount > 0 ? (
+            <button
+              type="button"
+              className="w-full rounded-xl border border-dashed border-[var(--color-border)] px-3 py-2.5 text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+              onClick={() => setShowAllProviders((current) => !current)}
+            >
+              {showAllProviders ? '只看已连接供应商' : `显示其余 ${hiddenProviderCount} 个未连接供应商`}
+            </button>
+          ) : null}
+        </div>
+      )}
+
+      {error ? <p role="alert" className="text-sm text-[var(--color-error)]">{error}</p> : null}
+
+      <div className="flex items-center justify-end gap-3 border-t border-[var(--color-border)] pt-4">
+        {dirty ? <Tag size="small" color="orange" style={{ marginInlineEnd: 0 }}>有未保存的更改</Tag> : null}
+        <Button type="primary" icon={<Save size={15} />} loading={saving} onClick={() => void save()}>
+          {saving ? '保存中…' : '保存配置'}
+        </Button>
+      </div>
+    </fieldset>
+  );
 }

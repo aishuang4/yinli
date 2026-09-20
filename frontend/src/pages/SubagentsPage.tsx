@@ -20,7 +20,7 @@ import {
 } from '../components/workbench';
 import { SubagentInvocationList } from '../features/subagents/SubagentInvocationList';
 import { SubagentTaskDetail } from '../features/subagents/SubagentTaskDetail';
-import { matchText, compactHash } from '../features/subagents/subagentViewUtils';
+import { matchText } from '../features/subagents/subagentViewUtils';
 import { useSubagents } from '../hooks/useSubagents';
 import type { SubagentDefinition, SubagentInvocation } from '../types/subagent';
 import { useAppStore } from '../stores/appStore';
@@ -34,7 +34,6 @@ export function SubagentsPage() {
     invocations,
     errors,
     warnings,
-    fingerprint,
     loading,
     error,
     refresh,
@@ -127,7 +126,11 @@ export function SubagentsPage() {
         title={resolvedSelectedInvocation.subagentName}
         subtitle="持久任务详情"
         onBack={() => setSelectedInvocation(null)}
-        actions={<Tag size="small" color="transparent">{resolvedSelectedInvocation.id}</Tag>}
+        actions={(
+          <Tag size="small" color="transparent">
+            {resolvedSelectedInvocation.parentAgentName || '主 Agent'}
+          </Tag>
+        )}
       >
         <div className="h-full overflow-y-auto p-5">
           <SubagentTaskDetail invocation={resolvedSelectedInvocation} projectId={activeProjectId} onRefresh={refresh} />
@@ -201,7 +204,6 @@ export function SubagentsPage() {
           {waitingCount > 0 && <Tag size="small" color="mauve">{waitingCount} 个等待人工</Tag>}
           <Tag size="small" color="green">{completedCount} 次完成</Tag>
           {failedCount > 0 && <Tag size="small" color="red">{failedCount} 次失败</Tag>}
-          <Tag size="small" color="transparent">fp {compactHash(fingerprint)}</Tag>
           <Button icon={<RefreshCw size={14} />} onClick={refresh} loading={loading}>
             刷新
           </Button>
@@ -383,11 +385,10 @@ function SubagentDefinitionDetail({ definition }: { definition: SubagentDefiniti
           <ShieldCheck size={16} color="var(--color-accent)" />
           运行策略
         </div>
-        <div className="grid gap-3 text-sm md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 text-sm md:grid-cols-3">
           <DetailField label="权限模式" value={definition.permissionMode || 'default'} />
           <DetailField label="模型" value={definition.model || 'inherit'} />
           <DetailField label="最大轮次" value={`max ${definition.maxTurns}`} />
-          <DetailField label="内容指纹" value={compactHash(definition.contentHash)} />
         </div>
       </section>
 

@@ -2,7 +2,7 @@
  * SubagentInvocationList — 展示 Subagent 委托调用审计记录。
  */
 
-import { Clock, ExternalLink, Eye, ListChecks } from 'lucide-react';
+import { Clock, Eye, ListChecks } from 'lucide-react';
 import { Button, Empty, Tag } from '@/components/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import type { SubagentInvocation } from '../../types/subagent';
@@ -77,7 +77,7 @@ function InvocationCard({ invocation, onSelect }: { invocation: SubagentInvocati
             </Tag>
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-            <span>{invocation.parentAgentName || invocation.parentAgentId || '主 Agent'}</span>
+            <span>{invocation.parentAgentName || '主 Agent'}</span>
             <span>·</span>
             <span>{formatDateTime(invocation.startedAt)}</span>
             {duration && (
@@ -87,10 +87,6 @@ function InvocationCard({ invocation, onSelect }: { invocation: SubagentInvocati
               </>
             )}
           </div>
-        </div>
-        <div className="flex max-w-[42%] items-center gap-1 text-xs text-[var(--color-text-tertiary)]">
-          <ExternalLink size={12} className="shrink-0" />
-          <span className="truncate">{invocation.runId || invocation.sessionId}</span>
         </div>
         {onSelect && <Button icon={<Eye size={14} />} onClick={() => onSelect(invocation)} aria-label="查看任务详情" />}
       </div>

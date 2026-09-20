@@ -52,11 +52,6 @@ export function deliveryStatusLabel(status: SubagentDeliveryStatus): string {
   return '尚无结果';
 }
 
-export function compactHash(value: string): string {
-  if (!value) return 'empty';
-  return value.length > 12 ? `${value.slice(0, 12)}...` : value;
-}
-
 export function matchText(query: string, values: string[]): boolean {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return true;

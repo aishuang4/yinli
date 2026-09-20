@@ -1,6 +1,6 @@
 /** Chat 发送框 + 菜单：左侧分类，右侧子清单。 */
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import {
   BookOpen,
@@ -27,8 +27,14 @@ import {
   buildPlusMenuCategories,
   buildPlusMenuItems,
   COMPOSER_STATUS_CHIP_CLASS,
+  computePlusMenuPrimaryPosition,
+  computePlusMenuSubmenuTop,
+  PLUS_MENU_CATEGORY_HOVER_DELAY_MS,
   PLUS_MENU_CATEGORY_LABELS,
+  PLUS_MENU_LEFT_WIDTH,
+  PLUS_MENU_RIGHT_WIDTH,
   PLUS_MENU_SEARCH_PLACEHOLDERS,
+  PLUS_MENU_VIEWPORT_PAD,
   plusMenuItemKey,
   type PlusMenuCategory,
   type PlusMenuItem,
@@ -143,6 +149,7 @@ export function ChatComposerPlusMenu({
 }: ChatComposerPlusMenuProps) {
   const [query, setQuery] = useState('');
   const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const [anchorRect, setAnchorRect] = useState<{ left: number; top: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const categoryRef = useRef<HTMLDivElement>(null);
   const submenuRef = useRef<HTMLDivElement>(null);
@@ -182,6 +189,26 @@ export function ChatComposerPlusMenu({
     const frame = requestAnimationFrame(() => searchRef.current?.focus());
     return () => cancelAnimationFrame(frame);
   }, [open, category]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const updateAnchor = () => {
+      const rect = buttonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setAnchorRect((prev) => (
+        prev && prev.left === rect.left && prev.top === rect.top
+          ? prev
+          : { left: rect.left, top: rect.top }
+      ));
+    };
+    updateAnchor();
+    window.addEventListener('resize', updateAnchor);
+    window.addEventListener('scroll', updateAnchor, true);
+    return () => {
+      window.removeEventListener('resize', updateAnchor);
+      window.removeEventListener('scroll', updateAnchor, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     setHighlightedIndex(0);
@@ -313,7 +340,13 @@ export function ChatComposerPlusMenu({
         className={`icon-button h-8 w-8 rounded-[10px] text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40 ${
           open ? 'bg-[var(--color-bg-hover)] text-[var(--color-text-primary)]' : ''
         }`}
-        onClick={() => onOpenChange(!open)}
+        onClick={() => {
+          if (!open) {
+            const rect = buttonRef.current?.getBoundingClientRect();
+            if (rect) setAnchorRect({ left: rect.left, top: rect.top });
+          }
+          onOpenChange(!open);
+        }}
         disabled={disabled}
         aria-label="添加文件、模式、Agent 或技能"
         aria-haspopup="menu"
@@ -328,7 +361,7 @@ export function ChatComposerPlusMenu({
           listRef={listRef}
           highlightedRef={highlightedRef}
           searchRef={searchRef}
-          anchor={buttonRef.current}
+          anchorRect={anchorRect}
           categories={categories}
           category={category}
           query={query}
@@ -361,7 +394,7 @@ function PlusMenuFlyout({
   listRef,
   highlightedRef,
   searchRef,
-  anchor,
+  anchorRect,
   categories,
   category,
   query,
@@ -387,7 +420,7 @@ function PlusMenuFlyout({
   listRef: { current: HTMLDivElement | null };
   highlightedRef: { current: HTMLButtonElement | null };
   searchRef: { current: HTMLInputElement | null };
-  anchor: HTMLButtonElement | null;
+  anchorRect: { left: number; top: number } | null;
   categories: PlusMenuCategory[];
   category: PlusMenuCategory;
   query: string;
@@ -410,29 +443,68 @@ function PlusMenuFlyout({
 }) {
   const selectedSet = new Set(selectedSkillIds);
   const atLimit = selectedSkillIds.length >= MAX_FORCED_SKILLS;
-  const rect = anchor?.getBoundingClientRect();
-  const leftWidth = 188;
-  const rightWidth = 300;
-  const gap = 6;
-  let left = rect?.left ?? 8;
-  if (left + leftWidth > window.innerWidth - 8) {
-    left = window.innerWidth - 8 - leftWidth;
-  }
-  left = Math.max(8, left);
-  let rightLeft = left + leftWidth + gap;
-  if (rightLeft + rightWidth > window.innerWidth - 8) {
-    rightLeft = left - gap - rightWidth;
-  }
-  rightLeft = Math.max(8, rightLeft);
-  const bottom = rect ? window.innerHeight - rect.top + 8 : 24;
+  const categoryButtonRefs = useRef(new Map<PlusMenuCategory, HTMLButtonElement | null>());
+  const hoverTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const [submenuTop, setSubmenuTop] = useState(PLUS_MENU_VIEWPORT_PAD);
   const panelClass = 'fixed z-[70] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] shadow-[0_18px_44px_rgba(0,0,0,0.18)]';
+  const primary = computePlusMenuPrimaryPosition({
+    anchorLeft: anchorRect?.left ?? PLUS_MENU_VIEWPORT_PAD,
+    anchorTop: anchorRect?.top ?? window.innerHeight - 24,
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight,
+  });
+
+  useLayoutEffect(() => {
+    const update = () => {
+      const itemEl = categoryButtonRefs.current.get(category);
+      const submenuEl = submenuRef.current;
+      if (!itemEl || !submenuEl) return;
+      const next = computePlusMenuSubmenuTop({
+        categoryItemTop: itemEl.getBoundingClientRect().top,
+        submenuHeight: submenuEl.offsetHeight,
+        viewportHeight: window.innerHeight,
+      });
+      setSubmenuTop((prev) => (prev === next ? prev : next));
+    };
+    update();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    if (submenuRef.current) observer?.observe(submenuRef.current);
+    return () => observer?.disconnect();
+  }, [anchorRect, category, items, query, skillsLoading, agentsLoading, submenuRef, targetMode, primary.primaryBottom, primary.left]);
+
+  useEffect(() => () => {
+    if (hoverTimerRef.current != null) window.clearTimeout(hoverTimerRef.current);
+  }, []);
+
+  const clearHoverTimer = () => {
+    if (hoverTimerRef.current == null) return;
+    window.clearTimeout(hoverTimerRef.current);
+    hoverTimerRef.current = null;
+  };
+
+  const commitCategory = (next: PlusMenuCategory) => {
+    clearHoverTimer();
+    if (next !== category) onCategoryChange(next);
+  };
+
+  const previewCategory = (next: PlusMenuCategory) => {
+    if (next === category) {
+      clearHoverTimer();
+      return;
+    }
+    clearHoverTimer();
+    hoverTimerRef.current = window.setTimeout(() => {
+      hoverTimerRef.current = null;
+      onCategoryChange(next);
+    }, PLUS_MENU_CATEGORY_HOVER_DELAY_MS);
+  };
 
   return (
     <>
       <div
         ref={categoryRef}
         className={panelClass}
-        style={{ left, bottom, width: leftWidth }}
+        style={{ left: primary.left, bottom: primary.primaryBottom, width: PLUS_MENU_LEFT_WIDTH }}
         role="menu"
         aria-label="发送框菜单分类"
       >
@@ -442,6 +514,10 @@ function PlusMenuFlyout({
             return (
               <button
                 key={item}
+                ref={(node) => {
+                  if (node) categoryButtonRefs.current.set(item, node);
+                  else categoryButtonRefs.current.delete(item);
+                }}
                 type="button"
                 role="menuitem"
                 aria-haspopup="true"
@@ -451,9 +527,9 @@ function PlusMenuFlyout({
                     ? 'bg-[var(--color-bg-hover)] text-[var(--color-text-primary)]'
                     : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
                 }`}
-                onMouseEnter={() => onCategoryChange(item)}
+                onMouseEnter={() => previewCategory(item)}
                 onMouseDown={(event) => event.preventDefault()}
-                onClick={() => onCategoryChange(item)}
+                onClick={() => commitCategory(item)}
               >
                 <span className="flex h-4 w-4 shrink-0 items-center justify-center">
                   {categoryIcon(item)}
@@ -468,9 +544,10 @@ function PlusMenuFlyout({
       <div
         ref={submenuRef}
         className={panelClass}
-        style={{ left: rightLeft, bottom, width: rightWidth }}
+        style={{ left: primary.rightLeft, top: submenuTop, width: PLUS_MENU_RIGHT_WIDTH }}
         role="listbox"
         aria-label={PLUS_MENU_CATEGORY_LABELS[category]}
+        onMouseEnter={clearHoverTimer}
       >
         <label className="flex items-center gap-2 px-3 py-2.5">
           <Search size={14} className="shrink-0 text-[var(--color-text-tertiary)]" />

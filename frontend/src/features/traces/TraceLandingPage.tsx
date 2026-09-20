@@ -94,11 +94,17 @@ function TraceListRow({
       layout="columns"
       onSelect={onSelect}
       meta={(
-        <>
+        <span className="grid grid-cols-[5.75rem_4.75rem_2.5rem] items-center justify-items-end gap-x-2">
           <TraceStatus status={trace.status} />
-          <Tag size="small" color="transparent">{formatDuration(trace.durationMs)}</Tag>
-          {trace.mode === 'team' ? <Tag size="small" color="transparent">Team</Tag> : null}
-        </>
+          <span className="w-full truncate text-right text-xs tabular-nums text-[var(--color-text-secondary)]">
+            {formatDuration(trace.durationMs)}
+          </span>
+          {trace.mode === 'team' ? (
+            <Tag size="small" color="transparent" style={{ marginInlineEnd: 0 }}>Team</Tag>
+          ) : (
+            <span />
+          )}
+        </span>
       )}
       trailing={(
         <button

@@ -29,9 +29,10 @@
   /* === 主题色 (Accent) === */
   --color-accent: #339cff;
   --color-accent-hover: #5ab0ff;
-  --color-accent-active: #83c4ff;
+  --color-accent-active: #1f8df0;
   --color-accent-bg: #12314d;
   --color-accent-text: #9fd0ff;
+  --color-on-accent: #ffffff;
 
   /* === 语义色 === */
   --color-success: #6fcf97;

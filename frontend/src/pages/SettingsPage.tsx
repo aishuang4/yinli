@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Card } from '@/components/design';
 import { ModelsManager } from '../features/models/ModelsManager';
 import { NotificationSettingsCard } from '../features/notifications/NotificationSettingsCard';
@@ -6,6 +6,8 @@ import { GroupStudioSettingsCard } from '../features/settings/GroupStudioSetting
 import { ScheduledJobsSettingsCard } from '../features/settings/ScheduledJobsSettingsCard';
 import { ConversationContextSettingsCard } from '../features/settings/ConversationContextSettingsCard';
 import { UserDataSettingsCard } from '../features/settings/UserDataSettingsCard';
+import { SettingsToc } from '../features/settings/SettingsToc';
+import { visibleSettingsNavItems } from '../features/settings/settingsNav';
 import { useSettingsStore } from '../stores/settingsStore';
 import { isSurfaceEnabled, isViewEnabled } from '../stores/productFeatures';
 import { useProductFeaturesStore } from '../stores/productFeaturesStore';
@@ -20,6 +22,13 @@ export function SettingsPage() {
   const [userDataLoading, setUserDataLoading] = useState(false);
   const [userDataError, setUserDataError] = useState('');
   const [openingUserData, setOpeningUserData] = useState(false);
+  const [activeSection, setActiveSection] = useState('settings-appearance');
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const navItems = useMemo(() => visibleSettingsNavItems({
+    jobs: isViewEnabled(features, 'jobs'),
+    groupStudio: isSurfaceEnabled(features, 'groupStudio'),
+    userData: Boolean(window.electronAPI),
+  }), [features]);
 
   const loadUserDataPath = useCallback(async () => {
     if (!window.electronAPI) return;
@@ -39,6 +48,49 @@ export function SettingsPage() {
     void loadUserDataPath();
   }, [loadUserDataPath]);
 
+  useEffect(() => {
+    if (!navItems.some((item) => item.id === activeSection)) {
+      setActiveSection(navItems[0]?.id || '');
+    }
+  }, [activeSection, navItems]);
+
+  useEffect(() => {
+    const root = scrollerRef.current;
+    if (!root || navItems.length === 0) return undefined;
+    const ratios = new Map<string, number>();
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.target.id) ratios.set(entry.target.id, entry.intersectionRatio);
+      });
+      const next = navItems
+        .slice()
+        .reverse()
+        .find((item) => (ratios.get(item.id) || 0) > 0.12);
+      if (next) setActiveSection(next.id);
+    }, { root, rootMargin: '-12% 0px -64% 0px', threshold: [0, 0.12, 0.3, 0.6] });
+    navItems.forEach((item) => {
+      const node = root.querySelector(`#${item.id}`);
+      if (node) observer.observe(node);
+    });
+    return () => observer.disconnect();
+  }, [navItems]);
+
+  const jumpToSection = (id: string) => {
+    const target = document.getElementById(id);
+    if (!target) return;
+    setActiveSection(id);
+    let scroller: HTMLElement | null = scrollerRef.current;
+    if (!scroller || scroller.scrollHeight <= scroller.clientHeight + 2) {
+      scroller = target.parentElement;
+      while (scroller && scroller.scrollHeight <= scroller.clientHeight + 2) {
+        scroller = scroller.parentElement;
+      }
+    }
+    if (!scroller) return;
+    const top = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - 16;
+    scroller.scrollTo({ top: Math.max(0, top) });
+  };
+
   const handleOpenUserData = async () => {
     if (!window.electronAPI || !userDataPath || openingUserData) return;
     setOpeningUserData(true);
@@ -55,35 +107,56 @@ export function SettingsPage() {
   };
 
   return (
-    <div className="h-full overflow-auto bg-[var(--color-bg-primary)] px-5 py-6 sm:px-8">
-      <div className="mx-auto max-w-3xl">
-        <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-semibold text-[var(--color-text-primary)]">系统设置</h1>
-            <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-              管理定时任务调度、默认模型、消息通知与新会话使用的工作上下文。
-            </p>
-          </div>
-          <span className="text-xs text-[var(--color-text-tertiary)]">保存后将在下一轮对话生效</span>
-        </header>
+    <div ref={scrollerRef} className="h-full overflow-auto bg-[var(--color-bg-primary)] px-5 py-6 sm:px-8">
+      <div className="mx-auto grid max-w-5xl gap-8 lg:grid-cols-[11rem_minmax(0,1fr)]">
+        <SettingsToc items={navItems} activeId={activeSection} onSelect={jumpToSection} />
+        <div className="min-w-0 max-w-3xl">
+          <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h1 className="text-xl font-semibold text-[var(--color-text-primary)]">系统设置</h1>
+              <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
+                管理定时任务调度、默认模型、消息通知与新会话使用的工作上下文。
+              </p>
+            </div>
+            <span className="text-xs text-[var(--color-text-tertiary)]">保存后将在下一轮对话生效</span>
+          </header>
 
-        <div className="flex flex-col gap-6">
-          {isViewEnabled(features, 'jobs') ? <ScheduledJobsSettingsCard /> : null}
-          {isSurfaceEnabled(features, 'groupStudio') ? <GroupStudioSettingsCard /> : null}
-          <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
-          <ModelsManager />
-          <NotificationSettingsCard />
-          <ConversationContextSettingsCard />
-          {window.electronAPI && (
-            <UserDataSettingsCard
-              path={userDataPath}
-              loading={userDataLoading}
-              opening={openingUserData}
-              error={userDataError}
-              onOpen={() => void handleOpenUserData()}
-              onRetry={() => void loadUserDataPath()}
-            />
-          )}
+          <div className="flex flex-col gap-6">
+            {isViewEnabled(features, 'jobs') ? (
+              <section id="settings-jobs" className="scroll-mt-16 lg:scroll-mt-4">
+                <ScheduledJobsSettingsCard />
+              </section>
+            ) : null}
+            {isSurfaceEnabled(features, 'groupStudio') ? (
+              <section id="settings-group-studio" className="scroll-mt-16 lg:scroll-mt-4">
+                <GroupStudioSettingsCard />
+              </section>
+            ) : null}
+            <section id="settings-appearance" className="scroll-mt-16 lg:scroll-mt-4">
+              <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
+            </section>
+            <section id="settings-models" className="scroll-mt-16 lg:scroll-mt-4">
+              <ModelsManager />
+            </section>
+            <section id="settings-notifications" className="scroll-mt-16 lg:scroll-mt-4">
+              <NotificationSettingsCard />
+            </section>
+            <section id="settings-context" className="scroll-mt-16 lg:scroll-mt-4">
+              <ConversationContextSettingsCard />
+            </section>
+            {window.electronAPI ? (
+              <section id="settings-user-data" className="scroll-mt-16 lg:scroll-mt-4">
+                <UserDataSettingsCard
+                  path={userDataPath}
+                  loading={userDataLoading}
+                  opening={openingUserData}
+                  error={userDataError}
+                  onOpen={() => void handleOpenUserData()}
+                  onRetry={() => void loadUserDataPath()}
+                />
+              </section>
+            ) : null}
+          </div>
         </div>
       </div>
     </div>

@@ -169,6 +169,10 @@ function ScheduledJobRow({
   onResume: () => void;
   onDelete: () => void;
 }) {
+  const nextRunCopy = job.nextRunAt
+    ? `下次 ${formatDateTime(job.nextRunAt, job.timezone)}`
+    : '无下次运行';
+
   return (
     <WorkbenchListRow
       icon={(
@@ -183,17 +187,25 @@ function ScheduledJobRow({
       layout="columns"
       onSelect={onSelect}
       meta={(
-        <>
-          <Tag size="small" color={jobStatusColor(job.status)}>
+        <span className="grid grid-cols-[6.25rem_9rem] items-center justify-items-end gap-x-2">
+          <Tag
+            size="small"
+            color={jobStatusColor(job.status)}
+            className="max-w-full truncate"
+            style={{ marginInlineEnd: 0 }}
+          >
             {JOB_STATUS_LABELS[job.status] || job.status}
           </Tag>
-          <Tag size="small" color="transparent">
-            {job.nextRunAt ? `下次 ${formatDateTime(job.nextRunAt, job.timezone)}` : '无下次运行'}
-          </Tag>
-        </>
+          <span
+            className="w-full truncate text-right text-xs text-[var(--color-text-secondary)]"
+            title={nextRunCopy}
+          >
+            {nextRunCopy}
+          </span>
+        </span>
       )}
       trailing={(
-        <>
+        <span className="flex items-center justify-end gap-1">
           <button
             type="button"
             onClick={onSelect}
@@ -202,33 +214,37 @@ function ScheduledJobRow({
           >
             <List size={17} />
           </button>
-          {job.status === 'pending_confirmation' ? (
-            <Button size="small" type="primary" loading={busy} disabled={!writesEnabled} onClick={onConfirm}>
-              确认启用
-            </Button>
-          ) : null}
-          {job.status === 'active' ? (
-            <Button size="small" icon={<Pause size={13} />} loading={busy} disabled={!writesEnabled} onClick={onPause}>
-              暂停
-            </Button>
-          ) : null}
-          {job.status === 'paused' ? (
-            <Button size="small" type="primary" icon={<Play size={13} />} loading={busy} disabled={!writesEnabled} onClick={onResume}>
-              恢复
-            </Button>
-          ) : null}
-          {job.status !== 'archived' ? (
-            <button
-              type="button"
-              onClick={onDelete}
-              disabled={!writesEnabled || busy}
-              className="icon-button h-8 w-8 rounded-md text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-error-bg)] hover:text-[var(--color-error)] disabled:opacity-40"
-              aria-label={`删除 ${job.name}`}
-            >
-              <Trash2 size={15} />
-            </button>
-          ) : null}
-        </>
+          <span className="flex h-8 w-24 items-center">
+            {job.status === 'pending_confirmation' ? (
+              <Button className="w-full justify-center" size="small" type="primary" loading={busy} disabled={!writesEnabled} onClick={onConfirm}>
+                确认启用
+              </Button>
+            ) : null}
+            {job.status === 'active' ? (
+              <Button className="w-full justify-center" size="small" icon={<Pause size={13} />} loading={busy} disabled={!writesEnabled} onClick={onPause}>
+                暂停
+              </Button>
+            ) : null}
+            {job.status === 'paused' ? (
+              <Button className="w-full justify-center" size="small" type="primary" icon={<Play size={13} />} loading={busy} disabled={!writesEnabled} onClick={onResume}>
+                恢复
+              </Button>
+            ) : null}
+          </span>
+          <span className="flex h-8 w-8 items-center justify-center">
+            {job.status !== 'archived' ? (
+              <button
+                type="button"
+                onClick={onDelete}
+                disabled={!writesEnabled || busy}
+                className="icon-button h-8 w-8 rounded-md text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-error-bg)] hover:text-[var(--color-error)] disabled:opacity-40"
+                aria-label={`删除 ${job.name}`}
+              >
+                <Trash2 size={15} />
+              </button>
+            ) : null}
+          </span>
+        </span>
       )}
     />
   );

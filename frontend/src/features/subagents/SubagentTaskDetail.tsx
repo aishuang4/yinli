@@ -75,7 +75,6 @@ export function SubagentTaskDetail({ invocation, projectId, onRefresh }: Subagen
           <Tag size="small" color={invocation.deliveryStatus === 'consumed' ? 'green' : 'transparent'}>
             {deliveryStatusLabel(invocation.deliveryStatus)}
           </Tag>
-          <Tag size="small" color="transparent">{invocation.id}</Tag>
           <span className="inline-flex items-center gap-1 text-xs text-[var(--color-text-tertiary)]"><Clock size={13} />{formatDateTime(invocation.startedAt)} {formatDuration(invocation.startedAt, invocation.completedAt)}</span>
         </div>
         <div className="flex items-center gap-2">

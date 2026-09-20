@@ -120,7 +120,7 @@ export function WorkbenchListRow({
   );
 
   const columnsClassName = meta
-    ? 'lg:grid-cols-[2.5rem_minmax(10rem,14rem)_minmax(0,1fr)_minmax(15rem,18rem)]'
+    ? 'lg:grid-cols-[2.5rem_minmax(10rem,14rem)_minmax(0,1fr)_minmax(16rem,19rem)]'
     : 'lg:grid-cols-[2.5rem_minmax(10rem,14rem)_minmax(0,1fr)]';
 
   const content = layout === 'columns' ? (
@@ -132,7 +132,7 @@ export function WorkbenchListRow({
           {description}
         </span>
       ) : null}
-      {meta ? <span className="hidden min-w-0 items-center justify-end gap-1 lg:flex">{meta}</span> : null}
+      {meta ? <span className="hidden shrink-0 items-center justify-end gap-1 lg:flex">{meta}</span> : null}
     </span>
   ) : (
     <>
@@ -166,7 +166,7 @@ export function WorkbenchListRow({
           {content}
         </div>
       )}
-      {trailing}
+      {trailing ? <span className="flex shrink-0 items-center">{trailing}</span> : null}
     </div>
   );
 }

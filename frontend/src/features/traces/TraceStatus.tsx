@@ -47,6 +47,7 @@ export function TraceStatus({ status }: { status: string }) {
       color={color}
       className="inline-flex items-center gap-1 whitespace-nowrap"
       icon={<Icon size={12} className={status === 'running' ? 'animate-spin' : undefined} />}
+      style={{ marginInlineEnd: 0 }}
     >
       {label}
     </Tag>

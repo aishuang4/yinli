@@ -32,6 +32,7 @@
   --color-accent-active: #1678d2;
   --color-accent-bg: #e8f3ff;
   --color-accent-text: #1268b8;
+  --color-on-accent: #ffffff;
 
   /* === 语义色 === */
   --color-success: #10b981;

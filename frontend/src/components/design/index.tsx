@@ -57,13 +57,21 @@ const TAG_COLORS: Record<string, string | undefined> = {
   transparent: undefined,
 };
 
-export function Tag({ size: _size, color, style, ...props }: TagProps & { size?: 'small' | 'medium' }) {
-  const normalizedColor = color ? (TAG_COLORS[color] ?? color) : undefined;
+export function Tag({
+  size: _size,
+  color,
+  style,
+  className,
+  ...props
+}: TagProps & { size?: 'small' | 'medium' }) {
+  const muted = color === 'transparent' || color === 'default' || color == null;
+  const normalizedColor = muted ? undefined : (TAG_COLORS[color] ?? color);
   return (
     <AntdTag
       {...props}
       color={normalizedColor}
-      bordered={color !== 'transparent'}
+      bordered
+      className={muted ? ['yinli-tag-muted', className].filter(Boolean).join(' ') : className}
       style={{ fontSize: _size === 'small' ? 12 : undefined, ...style }}
     />
   );

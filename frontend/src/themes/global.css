@@ -133,33 +133,107 @@ body {
   background: transparent;
 }
 
-/* Spark Design 的内置暗色按钮偏亮，收口到应用主题色。 */
-[data-theme="dark"] .spark-button.ant-btn-default,
+/* 暗色按钮：主操作走重点蓝，默认按钮走暗底描边。覆盖 Carbon 浅灰主按钮。 */
+[data-theme="dark"] .ant-btn-default:not(.ant-btn-dangerous),
+[data-theme="dark"] .ant-btn-color-default.ant-btn-variant-outlined,
+[data-theme="dark"] .spark-button.ant-btn-default:not(.ant-btn-dangerous),
 [data-theme="dark"] .spark-button.ant-btn-color-default.ant-btn-variant-outlined {
   border-color: var(--color-border-strong);
   background-color: var(--color-bg-secondary);
   color: var(--color-text-secondary);
 }
 
-[data-theme="dark"] .spark-button.ant-btn-default:not(:disabled):hover,
+[data-theme="dark"] .ant-btn-default:not(.ant-btn-dangerous):not(:disabled):hover,
+[data-theme="dark"] .ant-btn-color-default.ant-btn-variant-outlined:not(:disabled):hover,
+[data-theme="dark"] .spark-button.ant-btn-default:not(.ant-btn-dangerous):not(:disabled):hover,
 [data-theme="dark"] .spark-button.ant-btn-color-default.ant-btn-variant-outlined:not(:disabled):hover {
   border-color: var(--color-border-strong);
   background-color: var(--color-bg-hover);
   color: var(--color-text-primary);
 }
 
-[data-theme="dark"] .spark-button.ant-btn-primary,
-[data-theme="dark"] .spark-button.ant-btn-color-primary.ant-btn-variant-solid {
+[data-theme="dark"] .ant-btn-primary:not(.ant-btn-dangerous),
+[data-theme="dark"] .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous),
+[data-theme="dark"] .spark-button.ant-btn-primary:not(.ant-btn-dangerous),
+[data-theme="dark"] .spark-button.ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous) {
   border-color: transparent;
   background-color: var(--color-accent);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
 }
 
-[data-theme="dark"] .spark-button.ant-btn-primary:not(:disabled):hover,
-[data-theme="dark"] .spark-button.ant-btn-color-primary.ant-btn-variant-solid:not(:disabled):hover {
+[data-theme="dark"] .ant-btn-primary:not(.ant-btn-dangerous):not(:disabled):hover,
+[data-theme="dark"] .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):not(:disabled):hover,
+[data-theme="dark"] .spark-button.ant-btn-primary:not(.ant-btn-dangerous):not(:disabled):hover,
+[data-theme="dark"] .spark-button.ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):not(:disabled):hover {
   border-color: transparent;
   background-color: var(--color-accent-hover);
-  color: var(--color-text-inverse);
+  color: var(--color-on-accent);
+}
+
+[data-theme="dark"] .ant-btn-primary:not(.ant-btn-dangerous):not(:disabled):active,
+[data-theme="dark"] .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):not(:disabled):active {
+  border-color: transparent;
+  background-color: var(--color-accent-active);
+  color: var(--color-on-accent);
+}
+
+[data-theme="dark"] .ant-btn-primary:not(.ant-btn-dangerous):disabled,
+[data-theme="dark"] .ant-btn-primary.ant-btn-disabled:not(.ant-btn-dangerous),
+[data-theme="dark"] .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):disabled {
+  border-color: transparent;
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-tertiary);
+}
+
+/* 亮色按钮：主操作走重点蓝白字，默认按钮浅底深字，避免 Carbon 黑底或白字浅底。 */
+[data-theme="light"] .ant-btn-default:not(.ant-btn-dangerous),
+[data-theme="light"] .ant-btn-color-default.ant-btn-variant-outlined {
+  border-color: var(--color-border-strong);
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+}
+
+[data-theme="light"] .ant-btn-default:not(.ant-btn-dangerous):not(:disabled):hover,
+[data-theme="light"] .ant-btn-color-default.ant-btn-variant-outlined:not(:disabled):hover {
+  border-color: var(--color-border-strong);
+  background-color: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+[data-theme="light"] .ant-btn-primary:not(.ant-btn-dangerous),
+[data-theme="light"] .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous) {
+  border-color: transparent;
+  background-color: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+[data-theme="light"] .ant-btn-primary:not(.ant-btn-dangerous):not(:disabled):hover,
+[data-theme="light"] .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):not(:disabled):hover {
+  border-color: transparent;
+  background-color: var(--color-accent-hover);
+  color: var(--color-on-accent);
+}
+
+[data-theme="light"] .ant-btn-primary:not(.ant-btn-dangerous):not(:disabled):active,
+[data-theme="light"] .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):not(:disabled):active {
+  border-color: transparent;
+  background-color: var(--color-accent-active);
+  color: var(--color-on-accent);
+}
+
+[data-theme="light"] .ant-btn-primary:not(.ant-btn-dangerous):disabled,
+[data-theme="light"] .ant-btn-primary.ant-btn-disabled:not(.ant-btn-dangerous),
+[data-theme="light"] .ant-btn-color-primary.ant-btn-variant-solid:not(.ant-btn-dangerous):disabled {
+  border-color: transparent;
+  background-color: var(--color-bg-tertiary);
+  color: var(--color-text-tertiary);
+}
+
+/* 无色 Tag：Carbon 无边框 Tag 会用白字，浅底上完全看不见。 */
+#root .yinli-tag-muted.ant-tag {
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-border);
 }
 
 .spark-btn svg,
