@@ -9,7 +9,7 @@
  */
 
 import { type ComponentType, type ReactNode } from 'react';
-import { Activity, ArrowLeft, Bot, Brain, CalendarClock, FlaskConical, GitBranch, ListRestart, Network, Package, Settings, Wrench } from 'lucide-react';
+import { Activity, ArrowLeft, Bot, Brain, CalendarClock, Cpu, FlaskConical, GitBranch, ListRestart, Network, Package, Settings, Wrench } from 'lucide-react';
 import { isSurfaceEnabled, isViewEnabled } from '../stores/productFeatures';
 import { useProductFeaturesStore } from '../stores/productFeaturesStore';
 import { useAppStore, type ViewType, type WorkspaceMode } from '../stores/appStore';
@@ -36,6 +36,7 @@ interface WorkbenchMenuItem {
 /** 工作台菜单按 ViewType 穷尽，chat 走 ActivityBar，workflow 是顶层模式。 */
 const WORKBENCH_PAGES: Record<Exclude<ViewType, 'chat'>, WorkbenchMenuItem> = {
   agents: { id: 'agents', label: 'Agents', description: 'Agent 工具与运行边界', icon: Bot },
+  models: { id: 'models', label: '模型', description: '供应商连接与模型目录', icon: Cpu },
   subagents: { id: 'subagents', label: 'Subagents', description: '子 Agent 定义与调用历史', icon: Network },
   tools: { id: 'tools', label: 'Tools', description: '内置工具与 HTTP 工具', icon: Wrench },
   mcp: { id: 'mcp', label: 'MCP', description: '外部工具服务连接', icon: GitBranch },
@@ -45,11 +46,12 @@ const WORKBENCH_PAGES: Record<Exclude<ViewType, 'chat'>, WorkbenchMenuItem> = {
   runs: { id: 'runs', label: 'Runs', description: '运行任务与恢复', icon: ListRestart },
   jobs: { id: 'jobs', label: '定时任务', description: '周期任务、确认启用与运行历史', icon: CalendarClock },
   sandbox: { id: 'sandbox', label: 'Sandbox', description: '测试沙盒', icon: FlaskConical },
-  settings: { id: 'settings', label: 'Settings', description: '模型、主题与系统设置', icon: Settings },
+  settings: { id: 'settings', label: 'Settings', description: '主题、通知与系统设置', icon: Settings },
 };
 
 const WORKBENCH_MENU_ITEMS: WorkbenchMenuItem[] = [
   WORKBENCH_PAGES.agents,
+  WORKBENCH_PAGES.models,
   WORKBENCH_PAGES.subagents,
   WORKBENCH_PAGES.tools,
   WORKBENCH_PAGES.mcp,

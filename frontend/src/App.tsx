@@ -42,6 +42,7 @@ const MCPPage = lazy(() => import('./pages/MCPPage').then((module) => ({ default
 const SkillsPage = lazy(() => import('./pages/SkillsPage').then((module) => ({ default: module.SkillsPage })));
 const MemoryPage = lazy(() => import('./pages/MemoryPage').then((module) => ({ default: module.MemoryPage })));
 const ScheduledJobsPage = lazy(() => import('./pages/ScheduledJobsPage').then((module) => ({ default: module.ScheduledJobsPage })));
+const ModelsPage = lazy(() => import('./pages/ModelsPage').then((module) => ({ default: module.ModelsPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => ({ default: module.SettingsPage })));
 const GroupStudioPage = lazy(() => import('./pages/GroupStudioPage').then((module) => ({ default: module.GroupStudioPage })));
 
@@ -56,6 +57,7 @@ const VIEW_PAGES: Record<ViewType, ComponentType> = {
   traces: TracePage,
   sandbox: SandboxPage,
   agents: AgentsPage,
+  models: ModelsPage,
   subagents: SubagentsPage,
   tools: ToolsPage,
   mcp: MCPPage,

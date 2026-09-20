@@ -1,8 +1,8 @@
-/** 模型和供应商连接管理：卡片摘要 + 按供应商展开配置。 */
+/** 模型和供应商连接管理：顶栏保存，下方供应商列表滚动。 */
 
 import { useState } from 'react';
-import { FileJson, Plus, RefreshCw, Save } from 'lucide-react';
-import { Button, Card, Tag } from '@/components/design';
+import { Cpu, FileJson, Plus, RefreshCw, Save } from 'lucide-react';
+import { Button, Tag } from '@/components/design';
 import { SelectField } from '../../components/form';
 import { ModelProviderEditor } from './ModelProviderEditor';
 import {
@@ -27,52 +27,106 @@ export function ModelsManager() {
     if (!result.ok) notifyError(result.error || '无法打开 models.json');
   };
 
-  return (
-    <Card styles={{ body: { padding: 0 } }}>
-      <div className="p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-sm font-medium text-[var(--color-text-primary)]">模型管理</div>
-            <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
-              配置供应商连接和可选模型。Chat 只从这里选模型，不在 Agent 里改。
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {catalog?.modelsPath ? (
-              <button
-                type="button"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-                title="打开配置文件"
-                aria-label="打开配置文件"
-                onClick={() => void openModelsFile()}
-              >
-                <FileJson size={16} />
-              </button>
-            ) : null}
-            <button
-              type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
-              aria-label="重新读取模型配置"
-              title="重新读取"
-              disabled={loading}
-              onClick={() => void reload()}
-            >
-              <RefreshCw size={16} />
-            </button>
+  if (!catalog) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <ModelsToolbar loading={loading} onReload={() => void reload()} />
+        <div className="min-h-0 flex-1 overflow-auto px-8 py-6">
+          <div className="mx-auto max-w-5xl">
+            {error ? <p role="alert" className="text-sm text-[var(--color-error)]">{error}</p> : null}
+            {loading ? <p className="text-sm text-[var(--color-text-tertiary)]">正在加载模型配置…</p> : null}
           </div>
         </div>
-        {error ? <p role="alert" className="mt-3 text-sm text-[var(--color-error)]">{error}</p> : null}
-        {catalog ? (
-          <CatalogEditor key={catalog.etag} initial={catalog} onSaved={reload} />
-        ) : loading ? (
-          <p className="mt-4 text-sm text-[var(--color-text-tertiary)]">正在加载模型配置…</p>
-        ) : null}
       </div>
-    </Card>
+    );
+  }
+
+  return (
+    <CatalogEditor
+      key={catalog.etag}
+      initial={catalog}
+      loading={loading}
+      loadError={error}
+      onSaved={reload}
+      onReload={reload}
+      onOpenFile={() => void openModelsFile()}
+    />
   );
 }
 
-function CatalogEditor({ initial, onSaved }: { initial: ModelCatalog; onSaved: () => Promise<void> }) {
+function ModelsToolbar({
+  loading,
+  dirty,
+  saving,
+  modelsPath,
+  onReload,
+  onOpenFile,
+  onSave,
+}: {
+  loading: boolean;
+  dirty?: boolean;
+  saving?: boolean;
+  modelsPath?: string;
+  onReload: () => void;
+  onOpenFile?: () => void;
+  onSave?: () => void;
+}) {
+  return (
+    <header className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-bg-primary)] px-8 py-4">
+      <div className="mx-auto flex max-w-5xl items-center justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="text-2xl font-semibold text-[var(--color-text-primary)]">模型</h1>
+          <Cpu size={18} className="shrink-0 text-[var(--color-text-tertiary)]" />
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {dirty ? <Tag size="small" color="orange" style={{ marginInlineEnd: 0 }}>有未保存的更改</Tag> : null}
+          {modelsPath && onOpenFile ? (
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+              title="打开配置文件"
+              aria-label="打开配置文件"
+              onClick={onOpenFile}
+            >
+              <FileJson size={16} />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
+            aria-label="重新读取模型配置"
+            title="重新读取"
+            disabled={loading || saving}
+            onClick={onReload}
+          >
+            <RefreshCw size={16} />
+          </button>
+          {onSave ? (
+            <Button type="primary" icon={<Save size={15} />} loading={saving} onClick={onSave}>
+              {saving ? '保存中…' : '保存配置'}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function CatalogEditor({
+  initial,
+  loading,
+  loadError,
+  onSaved,
+  onReload,
+  onOpenFile,
+}: {
+  initial: ModelCatalog;
+  loading: boolean;
+  loadError: string;
+  onSaved: () => Promise<void>;
+  onReload: () => Promise<void>;
+  onOpenFile: () => void;
+}) {
   const [draft, setDraft] = useState(initial);
   const [expandedProviderId, setExpandedProviderId] = useState(
     initial.providers.find((item) => item.apiKeyConfigured || (!item.requiresApiKey && item.baseUrl.trim()))?.id
@@ -178,8 +232,23 @@ function CatalogEditor({ initial, onSaved }: { initial: ModelCatalog; onSaved: (
   };
 
   return (
-    <fieldset disabled={saving} className="mt-5 min-w-0 space-y-5">
-      <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
+    <div className="flex h-full min-h-0 flex-col">
+      <ModelsToolbar
+        loading={loading}
+        dirty={dirty}
+        saving={saving}
+        modelsPath={initial.modelsPath}
+        onReload={() => void onReload()}
+        onOpenFile={onOpenFile}
+        onSave={() => void save()}
+      />
+      <div className="min-h-0 flex-1 overflow-auto px-8 py-6">
+        <fieldset disabled={saving} className="mx-auto max-w-5xl min-w-0 space-y-5">
+          <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
+            配置供应商连接和可选模型。Chat 只从这里选模型，不在 Agent 里改。
+          </p>
+          {loadError ? <p role="alert" className="text-sm text-[var(--color-error)]">{loadError}</p> : null}
+          <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
         <SelectField
           label="新会话默认模型"
           aria-label="新会话默认模型"
@@ -257,13 +326,8 @@ function CatalogEditor({ initial, onSaved }: { initial: ModelCatalog; onSaved: (
       )}
 
       {error ? <p role="alert" className="text-sm text-[var(--color-error)]">{error}</p> : null}
-
-      <div className="flex items-center justify-end gap-3 border-t border-[var(--color-border)] pt-4">
-        {dirty ? <Tag size="small" color="orange" style={{ marginInlineEnd: 0 }}>有未保存的更改</Tag> : null}
-        <Button type="primary" icon={<Save size={15} />} loading={saving} onClick={() => void save()}>
-          {saving ? '保存中…' : '保存配置'}
-        </Button>
+        </fieldset>
       </div>
-    </fieldset>
+    </div>
   );
 }

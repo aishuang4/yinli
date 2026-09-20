@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Card } from '@/components/design';
-import { ModelsManager } from '../features/models/ModelsManager';
+import { Button, Card } from '@/components/design';
 import { NotificationSettingsCard } from '../features/notifications/NotificationSettingsCard';
 import { GroupStudioSettingsCard } from '../features/settings/GroupStudioSettingsCard';
 import { ScheduledJobsSettingsCard } from '../features/settings/ScheduledJobsSettingsCard';
@@ -8,6 +7,7 @@ import { ConversationContextSettingsCard } from '../features/settings/Conversati
 import { UserDataSettingsCard } from '../features/settings/UserDataSettingsCard';
 import { SettingsToc } from '../features/settings/SettingsToc';
 import { visibleSettingsNavItems } from '../features/settings/settingsNav';
+import { useAppStore } from '../stores/appStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { isSurfaceEnabled, isViewEnabled } from '../stores/productFeatures';
 import { useProductFeaturesStore } from '../stores/productFeaturesStore';
@@ -18,6 +18,7 @@ export function SettingsPage() {
   const theme = useSettingsStore((state) => state.theme);
   const features = useProductFeaturesStore((state) => state.features);
   const setTheme = useSettingsStore((state) => state.setTheme);
+  const setView = useAppStore((state) => state.setView);
   const [userDataPath, setUserDataPath] = useState<string | null>(null);
   const [userDataLoading, setUserDataLoading] = useState(false);
   const [userDataError, setUserDataError] = useState('');
@@ -108,14 +109,14 @@ export function SettingsPage() {
 
   return (
     <div ref={scrollerRef} className="h-full overflow-auto bg-[var(--color-bg-primary)] px-5 py-6 sm:px-8">
-      <div className="mx-auto grid max-w-5xl gap-8 lg:grid-cols-[11rem_minmax(0,1fr)]">
-        <SettingsToc items={navItems} activeId={activeSection} onSelect={jumpToSection} />
+      <div className="mx-auto grid max-w-5xl gap-8 lg:grid-cols-[minmax(0,1fr)_11rem]">
         <div className="min-w-0 max-w-3xl">
+          <SettingsToc items={navItems} activeId={activeSection} onSelect={jumpToSection} variant="chips" />
           <header className="mb-6 flex flex-wrap items-end justify-between gap-3">
             <div>
               <h1 className="text-xl font-semibold text-[var(--color-text-primary)]">系统设置</h1>
               <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-                管理定时任务调度、默认模型、消息通知与新会话使用的工作上下文。
+                管理主题、通知、定时任务调度与新会话使用的工作上下文。
               </p>
             </div>
             <span className="text-xs text-[var(--color-text-tertiary)]">保存后将在下一轮对话生效</span>
@@ -135,9 +136,21 @@ export function SettingsPage() {
             <section id="settings-appearance" className="scroll-mt-16 lg:scroll-mt-4">
               <AppearanceSettingsCard theme={theme} onThemeChange={setTheme} />
             </section>
-            <section id="settings-models" className="scroll-mt-16 lg:scroll-mt-4">
-              <ModelsManager />
-            </section>
+            {isViewEnabled(features, 'models') ? (
+              <section id="settings-models-link" className="scroll-mt-16 lg:scroll-mt-4">
+                <Card styles={{ body: { padding: 0 } }}>
+                  <div className="flex items-center justify-between gap-3 p-5">
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-[var(--color-text-primary)]">模型连接</div>
+                      <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
+                        供应商、API Key 和模型目录已移到工作台「模型」菜单。
+                      </p>
+                    </div>
+                    <Button size="small" onClick={() => setView('models')}>打开模型</Button>
+                  </div>
+                </Card>
+              </section>
+            ) : null}
             <section id="settings-notifications" className="scroll-mt-16 lg:scroll-mt-4">
               <NotificationSettingsCard />
             </section>
@@ -158,6 +171,7 @@ export function SettingsPage() {
             ) : null}
           </div>
         </div>
+        <SettingsToc items={navItems} activeId={activeSection} onSelect={jumpToSection} variant="rail" />
       </div>
     </div>
   );

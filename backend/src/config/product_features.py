@@ -15,6 +15,7 @@ VIEW_KEYS = (
     "jobs",
     "memory",
     "agents",
+    "models",
     "tools",
     "mcp",
     "skills",

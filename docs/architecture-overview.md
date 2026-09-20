@@ -270,7 +270,7 @@ Chat Trace 身份是一次 `chat_runs` 记录，步骤存在 `trace_observations
 - 启动期静态配置在 `config/settings.py`，环境变量前缀为 `AGENT_WORKSTATION_`。
 - 产品功能档是 `config/product-features.json`：管理员在打包前改 `views` / `surfaces`，安装后前后端读同一份。`GET /api/settings/product-features` 只读，不进 SQLite。`chat` / `settings` 不能关。关闭 `traces` / `sandbox` / `subagents` / `workflow` 会 404 对应页面 API；Chat 运行时 `/api/chat/runs` 与 Agent/Skill/MCP 执行时 API 不随页面关闭。群聊与定时任务还要叠加 `system_settings` 开关。上线建议见 `config/product-features.packaging.example.json`。
 - 模型配置和 Key 统一存于 `USER_DATA_ROOT/models.json`，由 `config/model_catalog.py` 校验、脱敏和原子保存。SQLite / Keychain / DPAPI / 环境变量仅在文件首次初始化时迁移，之后不再作为在线补充来源。Key 在本地文件中为明文，macOS 使用 0600，Windows 使用受限当前用户 ACL；不进入前端响应、Agent 导出或安装包。
-- Chat/Sandbox 使用模型配置 ID；会话记住选择。Agent 仅保存 ReAct 上限。新 Run 固定完整供应商连接、模型参数和降级链；Team、Subagent、审批恢复和后处理继承该快照。定时任务按自己的 `modelConfigId` 或每次触发时的全局默认，工作室创建时固定模型配置 ID。
+- Chat/Sandbox 使用模型配置 ID；会话记住选择。供应商与模型目录在工作台「模型」页维护，不在 Settings。Agent 仅保存 ReAct 上限。新 Run 固定完整供应商连接、模型参数和降级链；Team、Subagent、审批恢复和后处理继承该快照。定时任务按自己的 `modelConfigId` 或每次触发时的全局默认，工作室创建时固定模型配置 ID。关闭 `views.models` 只藏入口；`/api/settings/models` 仍给 Chat 选择器使用。
 - Agent 运行时由 `agents/factory.py` 统一创建和缓存。
 - 工具范围由 `RuntimeToolScope` 与 `tool_scope_resolver.py` 控制。
 - 权限策略由 guardrails 归一化为统一权限模型，再映射到 AgentScope permission mode、工具注入和 Trace。

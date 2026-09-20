@@ -11,7 +11,7 @@
  * - 使用 Lucide 线性图标
  */
 
-import { MessageSquare, Bot, Wrench, Package, Settings, Sun, Moon, Activity, FlaskConical, ListRestart, Brain, Network, GitBranch, CalendarClock } from 'lucide-react';
+import { MessageSquare, Bot, Wrench, Package, Settings, Sun, Moon, Activity, FlaskConical, ListRestart, Brain, Network, GitBranch, CalendarClock, Cpu } from 'lucide-react';
 import { isViewEnabled } from '../stores/productFeatures';
 import { useProductFeaturesStore } from '../stores/productFeaturesStore';
 import { useAppStore, type ViewType } from '../stores/appStore';
@@ -36,6 +36,7 @@ const NAV_ITEMS: Record<ViewType, NavItem> = {
   jobs: { id: 'jobs', label: '定时任务', icon: CalendarClock },
   sandbox: { id: 'sandbox', label: '测试沙盒', icon: FlaskConical },
   agents: { id: 'agents', label: 'Agents', icon: Bot },
+  models: { id: 'models', label: '模型', icon: Cpu },
   subagents: { id: 'subagents', label: 'Subagents', icon: Network },
   tools: { id: 'tools', label: '工具管理', icon: Wrench },
   mcp: { id: 'mcp', label: 'MCP', icon: GitBranch },

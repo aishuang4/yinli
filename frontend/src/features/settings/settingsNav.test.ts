@@ -4,11 +4,10 @@ import { describe, expect, it } from 'vitest';
 import { visibleSettingsNavItems } from './settingsNav';
 
 describe('visibleSettingsNavItems', () => {
-  it('始终包含外观、模型、通知和对话上下文', () => {
+  it('始终包含外观、通知和对话上下文', () => {
     const items = visibleSettingsNavItems({ jobs: false, groupStudio: false, userData: false });
     expect(items.map((item) => item.id)).toEqual([
       'settings-appearance',
-      'settings-models',
       'settings-notifications',
       'settings-context',
     ]);
@@ -20,7 +19,6 @@ describe('visibleSettingsNavItems', () => {
       'settings-jobs',
       'settings-group-studio',
       'settings-appearance',
-      'settings-models',
       'settings-notifications',
       'settings-context',
       'settings-user-data',

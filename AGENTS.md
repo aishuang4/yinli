@@ -83,7 +83,7 @@ Schema 演进用 `_ensure_column()` / `ALTER TABLE` 原地升级开发库，不�
 ### 配置分层
 
 - `config/settings.py` — `pydantic-settings`，环境变量前缀 `AGENT_WORKSTATION_`，从 `.env` 加载。属启动期静态配置（端口、DB URL、CORS、默认 DeepSeek key）。
-- `config/product-features.json` — 打包前由管理员改的产品功能档。`views` 控制侧栏/工作台页面，`surfaces` 控制任务流、群聊工作室、Team 模式、Plan Mode。`chat` / `settings` 强制开启。前端启动后读 `GET /api/settings/product-features`，不要再写死 `OFFLINE_VIEWS`。关闭页面只藏入口并 404 对应管理 API（`/api/traces`、`/api/sandbox`、`/api/subagents`、`/api/workflows`）；**不要**因此关掉 Chat `/api/chat/runs` 或 Agent/Skill/MCP 执行时 API。群聊 / 定时任务还要叠加各自的 `json_store` 运行时开关。上线建议档见 `config/product-features.packaging.example.json`。Electron 安装包把该文件打进 `extraResources`，后端读 `AGENT_WORKSTATION_PRODUCT_FEATURES_PATH`。
+- `config/product-features.json` — 打包前由管理员改的产品功能档。`views` 控制侧栏/工作台页面，`surfaces` 控制任务流、群聊工作室、Team 模式、Plan Mode。`chat` / `settings` 强制开启。前端启动后读 `GET /api/settings/product-features`，不要再写死 `OFFLINE_VIEWS`。关闭页面只藏入口并 404 对应管理 API（`/api/traces`、`/api/sandbox`、`/api/subagents`、`/api/workflows`）；**不要**因此关掉 Chat `/api/chat/runs`、Agent/Skill/MCP 执行时 API，或模型目录 `/api/settings/models`。工作台「模型」页由 `views.models` 控制入口，默认开。群聊 / 定时任务还要叠加各自的 `json_store` 运行时开关。上线建议档见 `config/product-features.packaging.example.json`。Electron 安装包把该文件打进 `extraResources`，后端读 `AGENT_WORKSTATION_PRODUCT_FEATURES_PATH`。
 - `config/model_catalog.py` — `models.json` 唯一配置源，供应商实例与模型条目使用独立 ID；Key 按用户要求保存在本地文件，API 只返回已配置标记。保存采用进程锁、内容版本校验和原子替换。`config/runtime_settings.py` 在新 Run 开始时解析完整连接，并用不可变快照贯穿 Team、Subagent、审批恢复和后台后处理。Chat/Sandbox 选择模型；Agent 只保留 ReAct 上限，不选择模型或采样参数。见 `docs/chat-model-selection-v1.md`。
 
 ### 前端

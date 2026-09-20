@@ -172,7 +172,7 @@ export function ModelSelector({
           }}
           onAdd={() => {
             setOpen(false);
-            setView('settings');
+            setView('models');
           }}
         />,
         document.body,

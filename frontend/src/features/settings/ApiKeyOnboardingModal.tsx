@@ -65,10 +65,10 @@ export function ApiKeyOnboardingModal() {
     setOpen(false);
   };
 
-  const openSettings = () => {
+  const openModels = () => {
     dismiss();
     setWorkspaceMode('workstation');
-    setView('settings');
+    setView('models');
   };
 
   return (
@@ -84,8 +84,8 @@ export function ApiKeyOnboardingModal() {
       footer={(
         <div className="flex justify-end gap-2">
           <Button onClick={dismiss}>稍后配置</Button>
-          <Button type="primary" icon={<Settings2 size={15} />} onClick={openSettings}>
-            前往设置
+          <Button type="primary" icon={<Settings2 size={15} />} onClick={openModels}>
+            前往配置模型
           </Button>
         </div>
       )}
