@@ -33,6 +33,7 @@ import {
   toHitlRequest,
 } from '../chat/humanInteractionUtils';
 import { resolveApiUrl } from '../../utils/apiUrl';
+import { artifactDownloadUrl, downloadableArtifactPath } from '../file-preview/filePreview';
 import type { DisplayBlock } from './protocol';
 import { RuntimeAnimationContext } from './RuntimeAnimationContext';
 import { RuntimeBlockActionsContext } from './runtimeBlockActions';
@@ -385,11 +386,21 @@ export function ArtifactBlockView({ block }: { block: DisplayBlock<RecordData> }
         <div className="divide-y divide-[var(--color-border)]">
           {files.map((file) => {
             const downloadPath = downloadableArtifactPath(file.path, actions?.sessionId);
-            const downloadUrl = actions?.sessionId && downloadPath
-              ? resolveApiUrl(`/api/tools/files/download?sessionId=${encodeURIComponent(actions.sessionId)}&path=${encodeURIComponent(downloadPath)}`)
+            const downloadHref = actions?.sessionId && downloadPath
+              ? resolveApiUrl(artifactDownloadUrl(actions.sessionId, downloadPath))
               : '';
-            return (
-              <div key={file.path} className="flex min-w-0 items-center gap-3 py-2">
+            const canPreview = Boolean(actions?.sessionId && downloadPath && actions.onOpenPreview);
+            const selected = Boolean(canPreview && actions?.previewPath === downloadPath);
+            const openPreview = () => {
+              if (!canPreview || !actions?.sessionId || !actions.onOpenPreview) return;
+              actions.onOpenPreview({
+                sessionId: actions.sessionId,
+                path: downloadPath,
+                name: file.name,
+              });
+            };
+            const fileMeta = (
+              <>
                 <FileText size={16} className="shrink-0 text-[var(--color-text-tertiary)]" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium text-[var(--color-text-primary)]" title={file.name}>
@@ -399,13 +410,36 @@ export function ArtifactBlockView({ block }: { block: DisplayBlock<RecordData> }
                     {file.extension ? `${file.extension} 文件` : file.path}
                   </div>
                 </div>
-                {downloadUrl ? (
+              </>
+            );
+            return (
+              <div
+                key={file.path}
+                className={`flex min-w-0 items-center gap-2 rounded-md px-1 ${selected ? 'bg-[var(--color-bg-secondary)]' : canPreview ? 'hover:bg-[var(--color-bg-hover)]' : ''}`}
+              >
+                {canPreview ? (
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-3 py-2 text-left"
+                    onClick={openPreview}
+                    aria-pressed={selected}
+                    aria-label={`预览 ${file.name}`}
+                  >
+                    {fileMeta}
+                  </button>
+                ) : (
+                  <div className="flex min-w-0 flex-1 items-center gap-3 py-2">
+                    {fileMeta}
+                  </div>
+                )}
+                {downloadHref ? (
                   <a
-                    href={downloadUrl}
+                    href={downloadHref}
                     download={file.name}
                     title={`下载 ${file.name}`}
                     aria-label={`下载 ${file.name}`}
                     className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+                    onClick={(event) => event.stopPropagation()}
                   >
                     <Download size={16} />
                   </a>
@@ -465,15 +499,6 @@ function fileStem(name: string): string {
 
 function fileNameFromPath(path: string): string {
   return path.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) || '生成文件';
-}
-
-function downloadableArtifactPath(path: string, sessionId?: string): string {
-  if (!sessionId) return '';
-  const normalized = path.replaceAll('\\', '/');
-  const marker = `.agent-workstation/sessions/${sessionId}/`;
-  const markerIndex = normalized.indexOf(marker);
-  if (markerIndex >= 0) return normalized.slice(markerIndex);
-  return normalized.startsWith('/') ? '' : normalized;
 }
 
 export function ErrorBlockView({ block }: { block: DisplayBlock<RecordData> }) {

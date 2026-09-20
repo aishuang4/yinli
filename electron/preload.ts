@@ -41,6 +41,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ),
 
   /**
+   * 把系统文件预览嵌进当前窗口矩形，不弹出系统 Quick Look 面板。
+   */
+  embedFilePreview: (
+    payload: { path: string; x: number; y: number; width: number; height: number },
+  ): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('embed-file-preview', payload),
+
+  updateEmbeddedPreview: (
+    payload: { x: number; y: number; width: number; height: number },
+  ): Promise<{ ok: boolean }> => ipcRenderer.invoke('update-embedded-preview', payload),
+
+  closeEmbeddedPreview: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('close-embedded-preview'),
+
+  /**
    * 打开安全白名单内的外部链接
    */
   openExternal: (url: string): Promise<{ ok: boolean; error?: string }> => (

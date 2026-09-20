@@ -50,6 +50,8 @@ import { ModelSelector } from '../features/models/ModelSelector';
 import { useChatAttachments } from '../features/chat/useChatAttachments';
 import { useEnabledSkills } from '../hooks/useSkills';
 import { filterComposerSkills } from '../features/chat/forcedSkills';
+import { FilePreviewPane } from '../features/file-preview/FilePreviewPane';
+import { isDesktopFilePreviewEnabled, type FilePreviewTarget } from '../features/file-preview/filePreview';
 
 const HISTORY_PANEL_TRANSITION_MS = 260;
 
@@ -73,6 +75,7 @@ export function ChatPage() {
   const [answerAnimating, setAnswerAnimating] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [historyPanelMounted, setHistoryPanelMounted] = useState(true);
+  const [previewTarget, setPreviewTarget] = useState<FilePreviewTarget | null>(null);
   const teamModeEnabled = useProductFeaturesStore((state) => isSurfaceEnabled(state.features, 'teamMode'));
   const planModeEnabled = useProductFeaturesStore((state) => isSurfaceEnabled(state.features, 'planMode'));
   const setView = useAppStore((state) => state.setView);
@@ -345,6 +348,7 @@ export function ChatPage() {
     recoveredRunRef.current = '';
     openedPlanIdentityRef.current = '';
     setPlanPanelOpen(false);
+    setPreviewTarget(null);
     setMessages([]);
     reset();
     setActiveSessionId(session.id);
@@ -363,6 +367,7 @@ export function ChatPage() {
     recoveredRunRef.current = '';
     openedPlanIdentityRef.current = '';
     setPlanPanelOpen(false);
+    setPreviewTarget(null);
     setActiveSessionId(null);
     setModelChoices({});
     setMessages([]);
@@ -439,6 +444,7 @@ export function ChatPage() {
     recoveredRunRef.current = '';
     openedPlanIdentityRef.current = '';
     setPlanPanelOpen(false);
+    setPreviewTarget(null);
     setActiveSessionId(null);
     setModelChoices(previous => {
       const next = { ...previous };
@@ -455,6 +461,12 @@ export function ChatPage() {
   const handleScenarioSelect = useCallback((prompt: string) => {
     setInputValue(prompt);
     window.requestAnimationFrame(() => messageInputRef.current?.focus());
+  }, []);
+
+  const filePreviewEnabled = isDesktopFilePreviewEnabled();
+  const handleOpenPreview = useCallback((target: FilePreviewTarget) => {
+    if (!isDesktopFilePreviewEnabled()) return;
+    setPreviewTarget(target);
   }, []);
 
   const handleSelectSession = useCallback(async (session: ChatSession) => {
@@ -480,6 +492,7 @@ export function ChatPage() {
         recoveredRunRef.current = '';
         openedPlanIdentityRef.current = '';
         setPlanPanelOpen(false);
+        setPreviewTarget(null);
         setActiveSessionId(null);
         setMessages([]);
         resetAttachments();
@@ -648,14 +661,15 @@ export function ChatPage() {
       className="chat-page-shell chat-workbench-shell grid h-full min-h-0 overflow-hidden"
       data-history-mounted={historyPanelMounted}
       data-history-collapsed={historyCollapsed}
+      data-preview-open={Boolean(previewTarget)}
       data-electron-shell={isDesktopShell}
       data-windows-shell={isWindowsDesktopShell}
       style={{
-        gridTemplateColumns: historyPanelMounted
-          ? historyCollapsed
-            ? '0px minmax(0, 1fr)'
-            : '286px minmax(0, 1fr)'
-          : 'minmax(0, 1fr)',
+        gridTemplateColumns: chatShellColumns({
+          historyMounted: historyPanelMounted,
+          historyCollapsed,
+          previewOpen: Boolean(previewTarget),
+        }),
         transition: `grid-template-columns ${HISTORY_PANEL_TRANSITION_MS}ms var(--ease-out)`,
       }}
     >
@@ -677,7 +691,7 @@ export function ChatPage() {
       )}
 
       <section
-        className="chat-main-panel chat-workbench-main grid min-h-0 grid-cols-1 overflow-hidden"
+        className="chat-main-panel chat-workbench-main grid min-h-0 min-w-[280px] grid-cols-1 overflow-hidden"
       >
         <div className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_1fr_auto] overflow-hidden">
           <header
@@ -802,6 +816,8 @@ export function ChatPage() {
                         key={msg.id}
                         message={msg}
                         sessionId={activeSessionId || undefined}
+                        previewPath={previewTarget?.path}
+                        onOpenPreview={filePreviewEnabled ? handleOpenPreview : undefined}
                       />
                     ))}
 
@@ -814,6 +830,8 @@ export function ChatPage() {
                         error={state.error}
                         createdAt={state.runCompletedAt || undefined}
                         sessionId={activeSessionId || undefined}
+                        previewPath={previewTarget?.path}
+                        onOpenPreview={filePreviewEnabled ? handleOpenPreview : undefined}
                         onResolveInteraction={resumeInteraction}
                         onAnswerAnimationChange={setAnswerAnimating}
                       />
@@ -899,6 +917,25 @@ export function ChatPage() {
 
         </div>
       </section>
+      {filePreviewEnabled && previewTarget ? (
+        <FilePreviewPane target={previewTarget} onClose={() => setPreviewTarget(null)} />
+      ) : null}
     </div>
   );
+}
+
+function chatShellColumns({
+  historyMounted,
+  historyCollapsed,
+  previewOpen,
+}: {
+  historyMounted: boolean;
+  historyCollapsed: boolean;
+  previewOpen: boolean;
+}): string {
+  const preview = previewOpen ? ' minmax(280px, min(36vw, 480px))' : '';
+  if (!historyMounted) return `minmax(0, 1fr)${preview}`;
+  return historyCollapsed
+    ? `0px minmax(0, 1fr)${preview}`
+    : `286px minmax(0, 1fr)${preview}`;
 }

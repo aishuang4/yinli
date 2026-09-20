@@ -16,6 +16,21 @@ interface ElectronAPI {
   selectProjectDirectory(): Promise<{ canceled: boolean; path?: string; name?: string }>;
   /** 在系统文件管理器中打开本地路径。projectRoot 仅作提示，主进程不据此扩大白名单。 */
   openPath(targetPath: string, projectRoot?: string): Promise<{ ok: boolean; error?: string }>;
+  /** 把系统文件预览嵌进当前窗口矩形。 */
+  embedFilePreview(payload: {
+    path: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): Promise<{ ok: boolean; error?: string }>;
+  updateEmbeddedPreview(payload: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): Promise<{ ok: boolean }>;
+  closeEmbeddedPreview(): Promise<{ ok: boolean }>;
   /** 打开安全白名单内的外部链接 */
   openExternal(url: string): Promise<{ ok: boolean; error?: string }>;
   /** 获取当前平台 */

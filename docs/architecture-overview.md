@@ -193,7 +193,7 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 
 1. 前端通用层只理解 Block identity、父子关系、生命周期和 `seq`。
 2. `Block.kind` 决定 reducer 与 renderer；`delta.patch` 合并语义属于对应 kind，不属于公共协议。
-3. Message 本身也是 Block；Tool、Plan、Approval、Artifact、Subagent、Team、Context 都是嵌套 Block。`kind=context` 为 detached，Chat 顶栏读取占用与压缩阈值，消息树不渲染。
+3. Message 本身也是 Block；Tool、Plan、Approval、Artifact、Subagent、Team、Context 都是嵌套 Block。`kind=context` 为 detached，Chat 顶栏读取占用与压缩阈值，消息树不渲染。Chat 点击 artifact 行仅在 macOS / Windows 桌面端打开右侧预览（系统预览嵌进栏内：macOS `QLPreviewView`、Windows `IPreviewHandler`；失败则 Word 回退 `docx-preview`、Excel 抽表）。Linux 与浏览器不开放预览，只保留下载。走 `GET /api/tools/files/preview` 与内联 `GET /api/tools/files/content`，不改 SSE，也不恢复 Artifact Phase。
 4. Snapshot、实时 Frame 和历史 replay 必须得到完全相同的 Block Tree。
 5. 新增展示能力不修改 RuntimeFrame、传输层、通用 reducer 或恢复逻辑。
 6. 线上不双写、不保留 fallback。heartbeat 使用 SSE comment，reset 直接发送新 Snapshot。
@@ -299,6 +299,7 @@ Chat Trace 身份是一次 `chat_runs` 记录，步骤存在 `trace_observations
 
 - `frontend/src/App.tsx`：页面映射、主题同步和健康检查。
 - `frontend/src/pages/ChatPage.tsx`：Chat 主页面。
+- `frontend/src/features/file-preview/`：Chat 右侧产物预览栏。
 - `frontend/src/hooks/useEventStream.ts`：RuntimeFrame SSE 订阅入口。
 - `frontend/src/features/runtime-stream/`：协议 decoder、stream adapter、Block Tree reducer、kind registry 和 renderer。
 - `frontend/src/features/chat/*`：Chat 输入、消息布局和 HITL 命令组件。

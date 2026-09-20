@@ -4,11 +4,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 import uuid
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
+
+from src.generated_file_preview import build_preview_payload, guess_media_type
 
 from src.catalog.http_files import HttpToolFileRecord, discover_http_files, runtime_auth_config, write_http_file
 from src.catalog.migrate_mcp_http import ensure_http_file_catalog, is_http_catalog_migrated
@@ -101,8 +103,12 @@ class GeneratedFilePreviewResponse(BaseModel):
     path: str
     name: str
     size: int
-    content: str
+    kind: Literal["markdown", "text", "csv", "image", "pdf", "docx", "xlsx", "binary"] = "text"
+    media_type: str = Field(default="", alias="mediaType")
+    content: str = ""
     truncated: bool = False
+
+    model_config = {"populate_by_name": True, "ser_json_by_alias": True}
 
 
 class HttpToolBase(BaseModel):
@@ -644,27 +650,26 @@ async def download_generated_file(
     )
 
 
+@router.get("/files/content")
+async def serve_generated_file_content(
+    path: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1, max_length=128, alias="sessionId"),
+) -> FileResponse:
+    """以内联方式提供产物，供图片 / PDF 在右侧预览栏展示。"""
+    file_path = _resolve_downloadable_file(session_id=session_id, path=path)
+    return FileResponse(
+        path=str(file_path),
+        filename=file_path.name,
+        media_type=guess_media_type(file_path.name),
+        content_disposition_type="inline",
+    )
+
+
 @router.get("/files/preview", response_model=GeneratedFilePreviewResponse)
 async def preview_generated_file(
     path: str = Query(..., min_length=1),
     session_id: str = Query(..., min_length=1, max_length=128, alias="sessionId"),
 ) -> GeneratedFilePreviewResponse:
-    """预览 Agent 工具生成的文本文件。"""
+    """预览 Agent 工具生成的会话产物。"""
     file_path = _resolve_downloadable_file(session_id=session_id, path=path)
-    max_preview_bytes = 200 * 1024
-    size = file_path.stat().st_size
-    raw = file_path.read_bytes()[: max_preview_bytes + 1]
-    truncated = len(raw) > max_preview_bytes
-    if truncated:
-        raw = raw[:max_preview_bytes]
-    try:
-        content = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        content = raw.decode("utf-8", errors="replace")
-    return GeneratedFilePreviewResponse(
-        path=str(file_path),
-        name=file_path.name,
-        size=size,
-        content=content,
-        truncated=truncated or size > max_preview_bytes,
-    )
+    return GeneratedFilePreviewResponse.model_validate(build_preview_payload(file_path))

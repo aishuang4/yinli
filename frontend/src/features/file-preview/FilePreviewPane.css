@@ -1,0 +1,185 @@
+/** Chat 右侧产物预览栏。 */
+
+.chat-file-preview {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--chat-workbench-border-subtle);
+  background: var(--chat-workbench-main-bg);
+}
+
+.chat-file-preview__header {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--chat-workbench-border-subtle);
+  background: var(--chat-workbench-topbar-bg);
+  padding: 0 16px;
+}
+
+.chat-workbench-shell[data-windows-shell="true"] .chat-file-preview__header {
+  padding-right: 148px;
+  -webkit-app-region: drag;
+}
+
+.chat-workbench-shell[data-windows-shell="true"] .chat-file-preview__header button,
+.chat-workbench-shell[data-windows-shell="true"] .chat-file-preview__header a {
+  -webkit-app-region: no-drag;
+}
+
+.chat-file-preview__title {
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-file-preview__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.chat-file-preview__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.chat-file-preview__card {
+  margin: 16px 16px 0;
+  border: 1px solid var(--chat-workbench-border);
+  border-radius: 12px;
+  background: var(--color-bg-secondary);
+  padding: 12px 14px;
+}
+
+.chat-file-preview__card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.chat-file-preview__card-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}
+
+.chat-file-preview__body {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+}
+
+.chat-file-preview__body--canvas {
+  padding: 0;
+  background: #e8eaed;
+  overflow-x: hidden;
+}
+
+.chat-file-preview__body--embedded {
+  overflow: hidden;
+}
+
+[data-theme="dark"] .chat-file-preview__body--canvas {
+  background: #2a2a2a;
+}
+
+.chat-file-preview__docx-shell {
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.chat-file-preview__docx .docx-wrapper {
+  background: transparent !important;
+  padding: 20px 16px 32px !important;
+}
+
+.chat-file-preview__docx .docx-wrapper > section.docx {
+  box-shadow: 0 10px 28px rgba(26, 28, 31, 0.12);
+  margin-bottom: 16px !important;
+}
+
+.chat-file-preview__status {
+  display: flex;
+  min-height: 160px;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+}
+
+.chat-file-preview__text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--color-text-secondary);
+}
+
+.chat-file-preview__table-wrap {
+  overflow: auto;
+  border: 1px solid var(--chat-workbench-border-subtle);
+  border-radius: 10px;
+}
+
+.chat-file-preview__table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.chat-file-preview__table th,
+.chat-file-preview__table td {
+  border-bottom: 1px solid var(--chat-workbench-border-subtle);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+  color: var(--color-text-secondary);
+}
+
+.chat-file-preview__table th {
+  background: var(--color-bg-secondary);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.chat-file-preview__image,
+.chat-file-preview__pdf {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 10px;
+  background: var(--color-bg-secondary);
+}
+
+.chat-file-preview__image {
+  height: auto;
+}
+
+.chat-file-preview__pdf {
+  min-height: calc(100vh - 180px);
+}
+
+.chat-file-preview__hint {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+}

@@ -18,6 +18,8 @@ extraResources:
   - from: ../../config/product-features.json
     to: product-features.json
 asar: true
+asarUnpack:
+  - 'electron-dist/native/**/*.node'
 mac:
   icon: icon.icns
   identity: '-'

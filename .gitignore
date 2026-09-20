@@ -7,6 +7,7 @@ frontend/dist/
 frontend/.vite/
 electron/dist/
 frontend/electron-dist/
+electron/native/build/
 frontend/desktop-package/
 release/
 backend/build/

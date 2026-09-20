@@ -8,12 +8,17 @@
  * 4. 注册 IPC 处理器，桥接前端与系统能力
  */
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, screen, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as net from 'net';
 import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
+import {
+  closeEmbeddedPreview,
+  showEmbeddedPreview,
+  updateEmbeddedPreview,
+} from './macosQlPreview';
 
 /** 当前是否处于开发模式（Vite dev server 运行中） */
 const isDev = process.env.NODE_ENV === 'development';
@@ -204,12 +209,14 @@ function createMainWindow(): void {
   });
 
   mainWindow.on('closed', () => {
+    closeEmbeddedPreview();
     mainWindow = null;
   });
 
   // macOS 的 Command + W 仅隐藏窗口，保留渲染进程和当前工作状态；
   // Command + Q 触发 appQuitting 后才允许窗口真正销毁并退出应用。
   mainWindow.on('close', (event) => {
+    closeEmbeddedPreview();
     if (process.platform === 'darwin' && !appQuitting) {
       event.preventDefault();
       mainWindow?.hide();
@@ -660,6 +667,58 @@ ipcMain.handle('open-path', async (_event, targetPath: string, projectRoot?: str
 });
 
 /**
+ * 把系统预览嵌进当前 Electron 窗口的指定矩形（macOS QLPreviewView）。
+ * 不是 BrowserWindow.previewFile 弹出的系统 Quick Look 面板。
+ */
+ipcMain.handle('embed-file-preview', async (_event, payload: unknown) => {
+  const request = parseEmbedPreviewRequest(payload);
+  if (!request) {
+    return { ok: false, error: 'Invalid preview request' };
+  }
+  const resolvedPath = await resolveSafeLocalPath(request.path);
+  if (!resolvedPath) {
+    return { ok: false, error: 'Path is not allowed' };
+  }
+  try {
+    if (!fs.statSync(resolvedPath).isFile()) {
+      return { ok: false, error: 'Path is not a file' };
+    }
+  } catch {
+    return { ok: false, error: 'File does not exist' };
+  }
+  const metrics = embedPreviewMetrics();
+  const ok = showEmbeddedPreview(
+    resolvedPath,
+    request.x * metrics.scale,
+    request.y * metrics.scale,
+    request.width * metrics.scale,
+    request.height * metrics.scale,
+    metrics.hwnd,
+  );
+  return ok ? { ok: true } : { ok: false, error: 'Embedded system preview is unavailable' };
+});
+
+ipcMain.handle('update-embedded-preview', (_event, payload: unknown) => {
+  const request = parseEmbedPreviewRequest({ path: 'unused', ...(payload as object) });
+  if (!request || !mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false };
+  }
+  const metrics = embedPreviewMetrics();
+  updateEmbeddedPreview(
+    request.x * metrics.scale,
+    request.y * metrics.scale,
+    request.width * metrics.scale,
+    request.height * metrics.scale,
+  );
+  return { ok: true };
+});
+
+ipcMain.handle('close-embedded-preview', () => {
+  closeEmbeddedPreview();
+  return { ok: true };
+});
+
+/**
  * 打开外部链接。当前只允许 Obsidian vault 深链。
  */
 ipcMain.handle('open-external', async (_event, url: string) => {
@@ -781,6 +840,42 @@ async function refreshTrustedProjectRootsFromBackend(): Promise<void> {
   } catch {
     // 后端未就绪时仍允许 cwd / home / 已选择的 Project root。
   }
+}
+
+function embedPreviewMetrics(): { scale: number; hwnd?: Buffer } {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { scale: 1 };
+  }
+  const zoom = mainWindow.webContents.getZoomFactor();
+  const scale = process.platform === 'win32'
+    ? zoom * screen.getDisplayMatching(mainWindow.getBounds()).scaleFactor
+    : zoom;
+  return {
+    scale,
+    hwnd: process.platform === 'win32' ? mainWindow.getNativeWindowHandle() : undefined,
+  };
+}
+
+function parseEmbedPreviewRequest(raw: unknown): {
+  path: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+} | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const input = raw as Record<string, unknown>;
+  const filePath = typeof input.path === 'string' ? input.path : '';
+  const x = Number(input.x);
+  const y = Number(input.y);
+  const width = Number(input.width);
+  const height = Number(input.height);
+  if (![x, y, width, height].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+  return { path: filePath, x, y, width, height };
 }
 
 async function resolveSafeLocalPath(targetPath: string, projectRoot?: string): Promise<string | null> {

@@ -7,6 +7,7 @@ import { hasVisibleRuntimeContent, runtimeText } from '../runtime-stream/selecto
 import { MessageContentBlock, MessageFiles, MessageImages, StreamingPlaceholder } from './MessageAtoms';
 import { MessageFrame } from './MessageFrame';
 import { MessageToolbar } from './MessageToolbar';
+import type { FilePreviewTarget } from '../file-preview/filePreview';
 import type { LocalMessage } from './types';
 
 type ResolveInteraction = (
@@ -16,7 +17,17 @@ type ResolveInteraction = (
   rememberApproval?: boolean,
 ) => Promise<void>;
 
-export function MessageBubble({ message, sessionId }: { message: LocalMessage; sessionId?: string }) {
+export function MessageBubble({
+  message,
+  sessionId,
+  previewPath,
+  onOpenPreview,
+}: {
+  message: LocalMessage;
+  sessionId?: string;
+  previewPath?: string;
+  onOpenPreview?: (target: FilePreviewTarget) => void;
+}) {
   if (message.role === 'user') {
     return (
       <MessageFrame isUser containIntrinsicSize="88px">
@@ -38,6 +49,7 @@ export function MessageBubble({ message, sessionId }: { message: LocalMessage; s
           snapshot={message.displaySnapshot}
           sessionId={sessionId}
           processStopped={Boolean(message.cancelled || message.error)}
+          actions={{ previewPath, onOpenPreview }}
         />
       ) : (
         <MessageContentBlock content={message.content} role="assistant" surface="transparent" />
@@ -56,6 +68,8 @@ export function StreamingBubble({
   error,
   createdAt,
   sessionId,
+  previewPath,
+  onOpenPreview,
   onResolveInteraction,
   onAnswerAnimationChange,
 }: {
@@ -66,6 +80,8 @@ export function StreamingBubble({
   error: string | null;
   createdAt?: string;
   sessionId?: string;
+  previewPath?: string;
+  onOpenPreview?: (target: FilePreviewTarget) => void;
   onResolveInteraction: ResolveInteraction;
   onAnswerAnimationChange?: (isAnimating: boolean) => void;
 }) {
@@ -79,7 +95,7 @@ export function StreamingBubble({
           snapshot={snapshot}
           sessionId={sessionId}
           processStopped={!isStreaming && cancelled}
-          actions={{ onResolveInteraction }}
+          actions={{ onResolveInteraction, previewPath, onOpenPreview }}
           onAnswerAnimationChange={onAnswerAnimationChange}
         />
       ) : isStreaming ? (
