@@ -7,7 +7,7 @@ from typing import AsyncGenerator
 from agentscope.event import ExternalExecutionResultEvent
 from agentscope.message import UserMsg
 
-from src.server.routes.chat.generation_snapshot import snapshot_model_input
+from src.server.routes.chat.generation_snapshot import snapshot_model_input_async
 from src.server.routes.chat.helpers import _set_skill_run_status, source_event
 from src.server.routes.chat.trace_recorder import (
     apply_model_call_token_usage,
@@ -551,7 +551,7 @@ async def stream_leader_agent_reply(
             yield runtime_event
         if event_type == "MODEL_CALL_START":
             try:
-                event_data["observationInput"] = snapshot_model_input(
+                event_data["observationInput"] = await snapshot_model_input_async(
                     agent,
                     model_name=model_name,
                     extra_message=user_msg,

@@ -42,12 +42,34 @@ function GenerationPayload({
   const summary = textOf(input.summary);
   const thinking = textOf(output.thinking);
   const text = textOf(output.text);
+  const skills = Array.isArray(input.skills) ? input.skills.filter(isRecord) : [];
 
   return (
     <div className="space-y-3">
       <section className="space-y-2">
         <SectionTitle>Input · 发给模型的内容</SectionTitle>
         {textOf(input.model) ? <MetaLine label="模型" value={textOf(input.model)} /> : null}
+        {skills.length > 0 ? (
+          <div className="space-y-1.5">
+            <div className="text-xs text-[var(--color-text-tertiary)]">
+              本轮 Skill 目录 · {skills.length}（送模 system 末尾的 name / description）
+            </div>
+            {skills.map((item, index) => (
+              <div
+                key={`${textOf(item.name) || 'skill'}-${index}`}
+                className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2"
+              >
+                <div className="text-sm font-medium text-[var(--color-text-primary)]">{textOf(item.name) || '未命名 Skill'}</div>
+                {textOf(item.description) ? (
+                  <div className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">{textOf(item.description)}</div>
+                ) : null}
+                {textOf(item.dir) ? (
+                  <div className="mt-1 truncate text-[11px] text-[var(--color-text-tertiary)]">{textOf(item.dir)}</div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
         {system ? <TextBlock title="System prompt" value={system} /> : null}
         {summary ? <TextBlock title="Context summary" value={summary} /> : null}
         {messages.length > 0 ? (

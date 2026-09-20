@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from typing import Any
 
@@ -10,6 +11,7 @@ MAX_SUMMARY_CHARS = 2000
 MAX_BLOCK_CHARS = 4000
 MAX_MESSAGES = 24
 MAX_BLOCKS = 16
+MAX_SKILLS = 50
 
 
 def _clip(text: str, limit: int) -> str:
@@ -26,6 +28,8 @@ def snapshot_model_input(
     *,
     model_name: str = "",
     extra_message: object | None = None,
+    system: str | None = None,
+    skills: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """读取即将发给模型的 system / summary / context，供 Trace 调优。"""
 
@@ -35,19 +39,84 @@ def snapshot_model_input(
         or str(getattr(model, "model_name", "") or "")
         or str(getattr(model, "model", "") or "")
     )
-    system = getattr(agent, "_system_prompt", None)
+    if system is None:
+        system = str(getattr(agent, "_system_prompt", "") or "")
     state = getattr(agent, "state", None)
     summary = getattr(state, "summary", "") if state is not None else ""
     context = list(getattr(state, "context", []) or []) if state is not None else []
     if extra_message is not None and extra_message not in context:
         context = [*context, extra_message]
-    return {
+    payload: dict[str, Any] = {
         "model": resolved,
         "system": _clip(str(system or ""), MAX_SYSTEM_CHARS),
         "summary": _clip(_summary_text(summary), MAX_SUMMARY_CHARS),
         # HintBlock 在 context 里常挂在 assistant 上，送模时会被 formatter 拆成 user 消息。
         "messages": _serialize_messages(context)[-MAX_MESSAGES:],
     }
+    if skills:
+        payload["skills"] = skills[:MAX_SKILLS]
+    return payload
+
+
+async def snapshot_model_input_async(
+    agent: object,
+    *,
+    model_name: str = "",
+    extra_message: object | None = None,
+) -> dict[str, Any]:
+    """同 snapshot_model_input，但 system 用 AgentScope 实际送模文本（含 Skill 目录）。"""
+
+    return snapshot_model_input(
+        agent,
+        model_name=model_name,
+        extra_message=extra_message,
+        system=await _sent_system_prompt(agent),
+        skills=await _skill_catalog(agent),
+    )
+
+
+async def _sent_system_prompt(agent: object) -> str:
+    """优先 `_get_system_prompt()`：静态规则 + 本轮 `<agent-skills>` 目录。"""
+
+    getter = getattr(agent, "_get_system_prompt", None)
+    if callable(getter):
+        try:
+            result = getter()
+            if inspect.isawaitable(result):
+                result = await result
+            text = str(result or "").strip()
+            if text:
+                return text
+        except Exception:
+            pass
+    return str(getattr(agent, "_system_prompt", "") or "")
+
+
+async def _skill_catalog(agent: object) -> list[dict[str, str]]:
+    """本轮 Toolkit 里可用 Skill 的 name / description / dir。"""
+
+    toolkit = getattr(agent, "toolkit", None)
+    getter = getattr(toolkit, "_get_available_skills", None)
+    if not callable(getter):
+        return []
+    try:
+        state = getattr(agent, "state", None)
+        activated = list(getattr(getattr(state, "tool_context", None), "activated_groups", []) or [])
+        skills = await getter(activated or None)
+    except Exception:
+        return []
+    items = skills.values() if isinstance(skills, dict) else []
+    catalog: list[dict[str, str]] = []
+    for skill in items:
+        name = str(getattr(skill, "name", "") or "").strip()
+        if not name:
+            continue
+        catalog.append({
+            "name": name,
+            "description": str(getattr(skill, "description", "") or "").strip(),
+            "dir": str(getattr(skill, "dir", "") or "").strip(),
+        })
+    return catalog
 
 
 def generation_output_payload(

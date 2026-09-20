@@ -53,6 +53,41 @@ def test_web_fetch_extracts_readable_html_and_removes_scripts():
     assert payload["security_notice"]
 
 
+def test_web_fetch_allows_cgnat_and_ignores_blocked_extra_dns_records():
+    """100.64/10 可抓；公网记录旁的非法 IPv6 不应整站拦截。"""
+
+    import asyncio
+    import socket
+    from src.tools.web_fetch import _validate_fetch_host
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/plain"}, text="cgnat ok", request=request)
+
+    chunk = asyncio.run(WebFetch(transport=httpx.MockTransport(handler))("http://100.64.12.8/page"))
+    assert chunk.state == ToolResultState.SUCCESS
+    assert "cgnat ok" in chunk.content[0].text
+
+    metadata = asyncio.run(WebFetch(transport=httpx.MockTransport(handler))("http://100.100.100.200/latest/meta-data"))
+    assert metadata.state == ToolResultState.ERROR
+
+    original = socket.getaddrinfo
+
+    def fake_getaddrinfo(host, port, *args, **kwargs):
+        if host == "mixed.example":
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port)),
+                (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::1", port, 0, 0)),
+            ]
+        return original(host, port, *args, **kwargs)
+
+    socket.getaddrinfo = fake_getaddrinfo
+    try:
+        addresses = asyncio.run(_validate_fetch_host("mixed.example", 443))
+    finally:
+        socket.getaddrinfo = original
+    assert addresses == ("93.184.216.34",)
+
+
 def test_web_fetch_allows_localhost_and_private_lan():
     seen: list[str] = []
 

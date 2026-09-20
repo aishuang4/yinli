@@ -275,6 +275,8 @@ _LAN_NETWORKS = (
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("fc00::/7"),
 )
+_CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+_NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 _METADATA_IPS = {
     ipaddress.ip_address("169.254.169.254"),
     ipaddress.ip_address("169.254.170.2"),
@@ -293,8 +295,9 @@ async def _validate_fetch_host(hostname: str, port: int) -> tuple[str, ...]:
     except ValueError:
         direct_ip = None
     if direct_ip is not None:
-        _require_allowed_ip(direct_ip, port=port)
-        return (str(direct_ip),)
+        ip = _normalized_ip(direct_ip)
+        _require_allowed_ip(ip, port=port)
+        return (str(ip),)
 
     loop = asyncio.get_running_loop()
     records = await loop.run_in_executor(
@@ -304,22 +307,48 @@ async def _validate_fetch_host(hostname: str, port: int) -> tuple[str, ...]:
     addresses = {str(record[4][0]) for record in records if record[4]}
     if not addresses:
         raise ValueError("WebFetch hostname did not resolve to an address.")
+    allowed: list[str] = []
+    first_error: ValueError | None = None
     for address in addresses:
-        _require_allowed_ip(ipaddress.ip_address(address), port=port)
-    return tuple(sorted(addresses))
+        try:
+            ip = _normalized_ip(ipaddress.ip_address(address))
+            _require_allowed_ip(ip, port=port)
+            allowed.append(str(ip))
+        except ValueError as exc:
+            first_error = first_error or exc
+    if not allowed:
+        raise first_error or ValueError("WebFetch blocks this network target.")
+    return tuple(sorted(set(allowed)))
+
+
+def _normalized_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """IPv4-mapped / NAT64 按内嵌 IPv4 判定，避免合法公网被 IPv6 形态误拦。"""
+
+    if isinstance(address, ipaddress.IPv6Address):
+        mapped = address.ipv4_mapped
+        if mapped is not None:
+            return mapped
+        if address in _NAT64_PREFIX:
+            return ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+    return address
 
 
 def _is_lan_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return any(address in network for network in _LAN_NETWORKS)
 
 
+def _is_cgnat_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return address.version == 4 and address in _CGNAT_NETWORK
+
+
 def _require_allowed_ip(address: ipaddress.IPv4Address | ipaddress.IPv6Address, *, port: int) -> None:
+    address = _normalized_ip(address)
     if address in _METADATA_IPS or address.is_unspecified or address.is_multicast or address.is_link_local:
         raise ValueError("WebFetch blocks link-local, reserved, unspecified, and multicast network targets.")
     # 部分 Python 把 IPv6 loopback 标成 reserved，本机抓取仍应放行。
     if address.is_reserved and not address.is_loopback:
         raise ValueError("WebFetch blocks link-local, reserved, unspecified, and multicast network targets.")
-    if not (address.is_global or address.is_loopback or _is_lan_address(address)):
+    if not (address.is_global or address.is_loopback or _is_lan_address(address) or _is_cgnat_address(address)):
         raise ValueError("WebFetch blocks this network target.")
     if port in _local_api_ports() and (address.is_loopback or _is_lan_address(address)):
         raise ValueError("WebFetch blocks the local workstation API.")

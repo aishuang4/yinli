@@ -24,7 +24,7 @@
 
 `generation` 与它触发的 `tool` 是兄弟，不把工具 stdout 收进模型步。不把 `TOOL_CALL_START` / delta / `RUNTIME_EVENT` 写成独立 Observation。
 
-`generation.input` 是 `MODEL_CALL_START` 时从 Agent `state.context` 快照的真实送模内容（`system` / `summary` / `messages`），不是只有模型名。`HintBlock`（时间、Skill 补回等）按 formatter 规则展开成 `messages` 里的 user 消息，不再单独标 `type=hint`。`generation.output` 等 thinking / 文本 / 工具声明齐了再关：`MODEL_CALL_END` 只补 `usage`（读 `input_tokens` / `output_tokens`），`REPLY_END`、`HITL_REQUIRED`、`TOOL_RESULT_START` 或下一轮 `MODEL_CALL_START` 才闭环。`output.toolCalls` 是模型这一步声明要调的工具（含 `FinalAnswerStart`）；工具执行结果仍在兄弟 `tool` 步，stdout 来自 `TOOL_RESULT_TEXT_DELTA` 累计，不依赖 `TOOL_RESULT_END.output`。
+`generation.input` 是 `MODEL_CALL_START` 时即将发给模型的内容：`system` 用 AgentScope `_get_system_prompt()`（静态规则 + 本轮 `<agent-skills>` 目录，含 name / description / dir），`skills` 是同一份目录的结构化列表，`summary` / `messages` 来自 `state.context`。`HintBlock`（时间、Skill 补回等）按 formatter 规则展开成 `messages` 里的 user 消息，不再单独标 `type=hint`。`generation.output` 等 thinking / 文本 / 工具声明齐了再关：`MODEL_CALL_END` 只补 `usage`（读 `input_tokens` / `output_tokens`），`REPLY_END`、`HITL_REQUIRED`、`TOOL_RESULT_START` 或下一轮 `MODEL_CALL_START` 才闭环。`output.toolCalls` 是模型这一步声明要调的工具（含 `FinalAnswerStart`）；工具执行结果仍在兄弟 `tool` 步，stdout 来自 `TOOL_RESULT_TEXT_DELTA` 累计，不依赖 `TOOL_RESULT_END.output`。
 
 第一层时间线一行一步：左侧步骤名与耗时，右侧按整轮墙钟对齐，不再把重叠步骤挤进同一条。
 

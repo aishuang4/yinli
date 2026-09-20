@@ -25,6 +25,7 @@
 
 这些是现行行为的专题合同，不是待做路线图。
 
+- `docs/chat-react-runtime.md`：Chat 单 Agent ReAct 循环。发送、组装、Think / Act / Observe、AskUser / 权限暂停、收口。不含 Plan、Skill、Team。
 - `docs/team-runtime-redesign.md`：一次性 TeamRun、动态 Member、Task List、Mailbox、file-first 状态。
 - `docs/subagent-delegation-design.md`：Subagent 文件定义、attached fork/join、wait/read、权限裁剪。
 - `docs/memory-system-design.md`：新记忆系统、Markdown 记忆、`memory_nodes`、向量检索和 Skill 自进化。

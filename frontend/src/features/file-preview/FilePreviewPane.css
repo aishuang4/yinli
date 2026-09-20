@@ -19,14 +19,17 @@
   padding: 0 16px;
 }
 
-.chat-workbench-shell[data-windows-shell="true"] .chat-file-preview__header {
-  padding-right: 148px;
+.chat-workbench-shell[data-electron-shell="true"] .chat-file-preview__header {
   -webkit-app-region: drag;
 }
 
-.chat-workbench-shell[data-windows-shell="true"] .chat-file-preview__header button,
-.chat-workbench-shell[data-windows-shell="true"] .chat-file-preview__header a {
+.chat-workbench-shell[data-electron-shell="true"] .chat-file-preview__header button,
+.chat-workbench-shell[data-electron-shell="true"] .chat-file-preview__header a {
   -webkit-app-region: no-drag;
+}
+
+.chat-workbench-shell[data-windows-shell="true"] .chat-file-preview__header {
+  padding-right: 148px;
 }
 
 .chat-file-preview__title {

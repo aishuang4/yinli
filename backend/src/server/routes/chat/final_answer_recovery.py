@@ -8,7 +8,7 @@ from agentscope._utils._common import _generate_id
 from agentscope.message import Msg, UserMsg
 from agentscope.tool import ToolChoice
 
-from src.server.routes.chat.generation_snapshot import snapshot_model_input
+from src.server.routes.chat.generation_snapshot import snapshot_model_input_async
 from src.server.routes.chat.helpers import source_event
 from src.server.routes.chat.models import ChatToolRun
 from src.server.routes.chat.runtime_events import (
@@ -249,7 +249,7 @@ async def _handle_final_answer_recovery_event(
         yield runtime_event
     if event_type == "MODEL_CALL_START":
         try:
-            event_data["observationInput"] = snapshot_model_input(agent, model_name=model_name)
+            event_data["observationInput"] = await snapshot_model_input_async(agent, model_name=model_name)
         except Exception:
             event_data["observationInput"] = {"model": model_name}
     yield source_event(event_type, event_data)

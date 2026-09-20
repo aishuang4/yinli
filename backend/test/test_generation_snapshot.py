@@ -1,11 +1,13 @@
 """generation Observation 的上下文快照。"""
 
+import asyncio
 from types import SimpleNamespace
 
 from src.server.routes.chat.generation_snapshot import (
     merge_generation_output,
     parse_tool_arguments,
     snapshot_model_input,
+    snapshot_model_input_async,
     tool_output_text,
 )
 
@@ -69,6 +71,32 @@ def test_snapshot_flattens_hint_block_into_user_message() -> None:
     assert "<current-time>2026-09-18 11:07</current-time>" in snapshot["messages"][0]["text"]
     assert snapshot["messages"][0].get("blocks") is None
     assert snapshot["messages"][1]["text"] == "今天武汉天气"
+
+
+def test_snapshot_async_uses_sent_system_prompt_and_skill_catalog() -> None:
+    async def sent_prompt() -> str:
+        return "你是助手。\n<agent-skills>\n<name>workbook-inspector</name>\n</agent-skills>"
+
+    async def available_skills(_groups: list[str] | None = None) -> dict[str, object]:
+        return {
+            "workbook-inspector": SimpleNamespace(
+                name="workbook-inspector",
+                description="Inspect workbook structure.",
+                dir="/skills/workbook-inspector",
+            ),
+        }
+
+    agent = SimpleNamespace(
+        _system_prompt="你是助手。",
+        _get_system_prompt=sent_prompt,
+        toolkit=SimpleNamespace(_get_available_skills=available_skills),
+        model=SimpleNamespace(model_name="deepseek-v4-flash"),
+        state=SimpleNamespace(summary="", context=[], tool_context=SimpleNamespace(activated_groups=["basic"])),
+    )
+    snapshot = asyncio.run(snapshot_model_input_async(agent))
+    assert "workbook-inspector" in snapshot["system"]
+    assert snapshot["skills"][0]["name"] == "workbook-inspector"
+    assert snapshot["skills"][0]["description"] == "Inspect workbook structure."
 
 
 def test_merge_generation_output_does_not_wipe_existing_text() -> None:

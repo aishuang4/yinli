@@ -26,6 +26,8 @@
 
 ## Chat 核心链路
 
+ReAct 专题合同见 `docs/chat-react-runtime.md`。这里只保留总览步骤。
+
 1. `routes/chat/handlers/send.py` 接收用户消息，先按 `project_id` 解析 `RuntimeContext`，再落库、创建后台 Run 并编排 SSE。
 2. `readiness_gate.py` 只做进入 Runtime 前的轻量启动判断；业务信息缺口交给主 Agent 在 ReAct 内通过 `AskUser` 外部工具暂停并恢复。
 3. `intent_router.py` 只决定第一层 architecture。当前在线值为 `react`。

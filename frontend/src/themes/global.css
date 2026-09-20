@@ -519,16 +519,22 @@ button[class*="-btn"] .lucide {
   padding-left: 128px;
 }
 
-/* Windows 使用透明标题栏覆盖层：保留可拖拽区域，并避开右上角窗口控制按钮。 */
-.chat-workbench-shell[data-windows-shell="true"] .chat-workbench-topbar {
-  padding-right: 148px;
+/* Electron 无边框窗口：Chat / 群聊顶栏空白处拖动、双击缩放；按钮保持可点。 */
+.chat-workbench-shell[data-electron-shell="true"] .chat-workbench-topbar {
   -webkit-app-region: drag;
 }
 
-.chat-workbench-shell[data-windows-shell="true"] .chat-workbench-topbar button,
-.chat-workbench-shell[data-windows-shell="true"] .chat-workbench-topbar [role="button"],
-.chat-workbench-shell[data-windows-shell="true"] .chat-workbench-context-meter {
+.chat-workbench-shell[data-electron-shell="true"] .chat-workbench-topbar button,
+.chat-workbench-shell[data-electron-shell="true"] .chat-workbench-topbar [role="button"],
+.chat-workbench-shell[data-electron-shell="true"] .chat-workbench-topbar a,
+.chat-workbench-shell[data-electron-shell="true"] .chat-workbench-topbar input,
+.chat-workbench-shell[data-electron-shell="true"] .chat-workbench-context-meter {
   -webkit-app-region: no-drag;
+}
+
+/* Windows 使用透明标题栏覆盖层：避开右上角窗口控制按钮。 */
+.chat-workbench-shell[data-windows-shell="true"] .chat-workbench-topbar {
+  padding-right: 148px;
 }
 
 .chat-workbench-context-meter {
