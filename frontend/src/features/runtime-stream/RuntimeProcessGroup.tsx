@@ -15,8 +15,9 @@ export function RuntimeProcessGroup({
   stopped?: boolean;
   children: React.ReactNode;
 }) {
-  const hasOpenBlock = blocks.some((block) => block.phase === 'open');
+  const hasOpenBlock = !stopped && blocks.some((block) => block.phase === 'open');
   const hasFailedBlock = blocks.some((block) => block.outcome === 'failed');
+  const interrupted = stopped || blocks.some((block) => block.outcome === 'cancelled');
   const [expanded, setExpanded] = useState(hasOpenBlock || !hasFinalAnswer || stopped);
   const previousOpenRef = useRef(hasOpenBlock);
   const previousFinalAnswerRef = useRef(hasFinalAnswer);
@@ -50,7 +51,7 @@ export function RuntimeProcessGroup({
           )}
         </span>
         <span className="min-w-0 flex-1 truncate">
-          {hasOpenBlock ? '正在执行' : stopped ? '已停止' : '已完成'}
+          {hasOpenBlock ? '正在执行' : interrupted || stopped ? '已中断' : '已完成'}
         </span>
         {hasFailedBlock ? (
           <span className="inline-flex items-center gap-1 text-[var(--color-error)]">

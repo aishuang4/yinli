@@ -68,6 +68,22 @@ export function emptyDisplaySnapshot(): DisplaySnapshot {
   return { version: 4, lastSeq: 0, streamDone: false, order: [], blocksById: {} };
 }
 
+/** 历史消息里未关闭的 Block 视为进程已结束，避免一直显示转圈。 */
+export function abandonOpenBlocks(snapshot: DisplaySnapshot): DisplaySnapshot {
+  let changed = false;
+  const blocksById: Record<string, DisplayBlock> = {};
+  for (const [id, block] of Object.entries(snapshot.blocksById)) {
+    if (block.phase !== 'open') {
+      blocksById[id] = block;
+      continue;
+    }
+    changed = true;
+    blocksById[id] = { ...block, phase: 'closed', outcome: 'cancelled' };
+  }
+  if (!changed) return snapshot;
+  return { ...snapshot, streamDone: true, blocksById };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

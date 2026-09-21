@@ -5,15 +5,15 @@ import { AlertCircle, FileText, Send, Square, X } from 'lucide-react';
 import { Tooltip } from '@/components/design';
 import { FileImportButton } from '../../components/FileImportButton';
 import { ChatAgentChip, useChatComposerAgents } from './ChatAgentSelect';
-import { ChatComposerPlusMenu, ChatDeepThinkChip, ChatPlanChip } from './ChatComposerPlusMenu';
+import { ChatComposerPlusMenu, ChatCompressChip, ChatDeepThinkChip, ChatPlanChip } from './ChatComposerPlusMenu';
 import type { PlusMenuCategory } from './plusMenu';
 import { ChatForcedSkillChips, ChatSkillSlashMenu } from './ChatSkillPicker';
 import {
   consumeSlashQuery,
-  filterSkillsBySlashQuery,
   readSlashQuery,
   toggleForcedSkillId,
 } from './forcedSkills';
+import { buildSlashList, type ComposerSlashCommand } from './slashCommands';
 import type { Skill } from '../../types/skill';
 import type { ChatFileAttachment, ChatImageAttachment } from './types';
 
@@ -46,6 +46,8 @@ interface ChatComposerProps {
   onTargetModeChange: (mode: 'agent' | 'team') => void;
   onToggleDeepThinking: () => void;
   onTogglePlanMode: () => void;
+  forceCompress?: boolean;
+  onForceCompressChange?: (value: boolean) => void;
   teamModeEnabled?: boolean;
   planModeEnabled?: boolean;
   composerSkills?: Skill[];
@@ -63,6 +65,7 @@ export function ChatComposer(props: ChatComposerProps) {
     onKeyDown, onRemoveFile, onRemoveImage, onSelectedAgentChange, onSend,
     onTargetModeChange, onToggleDeepThinking, onTogglePlanMode,
     composerSkills = [], forcedSkillIds = [], skillsLoading = false, onForcedSkillIdsChange,
+    forceCompress = false, onForceCompressChange,
   } = props;
   const teamModeEnabled = props.teamModeEnabled !== false;
   const planModeEnabled = props.planModeEnabled !== false;
@@ -76,12 +79,18 @@ export function ChatComposer(props: ChatComposerProps) {
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? agents[0] ?? null;
   const showChips = (targetMode === 'agent' && planModeEnabled && planMode)
     || deepThinking
+    || forceCompress
     || forcedSkillIds.length > 0;
-  const slashQuery = onForcedSkillIdsChange ? readSlashQuery(inputValue, cursor) : null;
+  const slashQuery = readSlashQuery(inputValue, cursor);
   const slashOpen = Boolean(slashQuery) && !slashDismissed && !isStreaming;
-  const slashSkills = useMemo(
-    () => filterSkillsBySlashQuery(composerSkills, slashQuery?.query || ''),
-    [composerSkills, slashQuery?.query],
+  const slashItems = useMemo(
+    () => buildSlashList({
+      query: slashQuery?.query || '',
+      skills: onForcedSkillIdsChange ? composerSkills : [],
+      planEnabled: targetMode === 'agent' && planModeEnabled,
+      teamEnabled: teamModeEnabled,
+    }),
+    [composerSkills, onForcedSkillIdsChange, planModeEnabled, slashQuery?.query, targetMode, teamModeEnabled],
   );
 
   useEffect(() => {
@@ -90,10 +99,10 @@ export function ChatComposer(props: ChatComposerProps) {
   }, [slashQuery?.start, slashQuery?.query]);
 
   useEffect(() => {
-    if (highlightedIndex >= slashSkills.length) {
+    if (highlightedIndex >= slashItems.length) {
       setHighlightedIndex(0);
     }
-  }, [highlightedIndex, slashSkills.length]);
+  }, [highlightedIndex, slashItems.length]);
 
   const applyCursor = (next: string, nextCursor: number) => {
     onInputChange(next);
@@ -121,6 +130,22 @@ export function ChatComposer(props: ChatComposerProps) {
     setSlashDismissed(true);
   };
 
+  const pickSlashCommand = (command: ComposerSlashCommand) => {
+    if (!slashQuery) return;
+    if (command.id === 'compress') onForceCompressChange?.(true);
+    if (command.id === 'plan') {
+      if (!planMode) onTogglePlanMode();
+    }
+    if (command.id === 'think') {
+      if (!deepThinking) onToggleDeepThinking();
+    }
+    if (command.id === 'team') onTargetModeChange('team');
+    if (command.id === 'agent') onTargetModeChange('agent');
+    const next = consumeSlashQuery(inputValue, slashQuery);
+    applyCursor(next, Math.min(slashQuery.start, next.length));
+    setSlashDismissed(true);
+  };
+
   const triggerFileImport = () => {
     fileImportHostRef.current?.querySelector('button')?.click();
   };
@@ -134,19 +159,21 @@ export function ChatComposer(props: ChatComposerProps) {
       }
       if (event.key === 'ArrowDown') {
         event.preventDefault();
-        setHighlightedIndex((index) => (slashSkills.length === 0 ? 0 : (index + 1) % slashSkills.length));
+        setHighlightedIndex((index) => (slashItems.length === 0 ? 0 : (index + 1) % slashItems.length));
         return;
       }
       if (event.key === 'ArrowUp') {
         event.preventDefault();
         setHighlightedIndex((index) => (
-          slashSkills.length === 0 ? 0 : (index - 1 + slashSkills.length) % slashSkills.length
+          slashItems.length === 0 ? 0 : (index - 1 + slashItems.length) % slashItems.length
         ));
         return;
       }
-      if ((event.key === 'Enter' || event.key === 'Tab') && !event.nativeEvent.isComposing && slashSkills[highlightedIndex]) {
+      if ((event.key === 'Enter' || event.key === 'Tab') && !event.nativeEvent.isComposing && slashItems[highlightedIndex]) {
         event.preventDefault();
-        pickSlashSkill(slashSkills[highlightedIndex]);
+        const item = slashItems[highlightedIndex];
+        if (item.kind === 'command') pickSlashCommand(item.command);
+        else pickSlashSkill(item.skill);
         return;
       }
     }
@@ -164,13 +191,14 @@ export function ChatComposer(props: ChatComposerProps) {
       <div className="chat-composer relative mx-auto max-w-4xl rounded-xl bg-[var(--color-bg-secondary)]">
         {slashOpen ? (
           <ChatSkillSlashMenu
-            skills={slashSkills}
+            items={slashItems}
             selectedIds={forcedSkillIds}
             highlightedIndex={highlightedIndex}
             loading={skillsLoading}
             query={slashQuery?.query || ''}
             onHighlight={setHighlightedIndex}
-            onPick={pickSlashSkill}
+            onPickCommand={pickSlashCommand}
+            onPickSkill={pickSlashSkill}
           />
         ) : null}
         <input
@@ -194,7 +222,7 @@ export function ChatComposer(props: ChatComposerProps) {
           onKeyDown={handleComposerKeyDown}
           onCompositionStart={onCompositionStart}
           onCompositionEnd={onCompositionEnd}
-          placeholder={isStreaming ? '给正在执行的 Agent 补充信息...' : '输入消息，或用 / 选择 Skill...'}
+          placeholder={isStreaming ? '给正在执行的 Agent 补充信息...' : '输入消息，或用 / 选择指令和 Skill...'}
           rows={2}
           className="block max-h-[180px] w-full resize-none rounded-t-lg border-0 bg-transparent px-4 pb-0 pt-3 text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
           aria-label="消息输入框"
@@ -206,6 +234,9 @@ export function ChatComposer(props: ChatComposerProps) {
             ) : null}
             {deepThinking ? (
               <ChatDeepThinkChip disabled={isStreaming} onRemove={onToggleDeepThinking} />
+            ) : null}
+            {forceCompress ? (
+              <ChatCompressChip disabled={isStreaming} onRemove={() => onForceCompressChange?.(false)} />
             ) : null}
             {onForcedSkillIdsChange ? (
               <ChatForcedSkillChips

@@ -242,6 +242,7 @@ export function useEventStream(): UseEventStreamReturn {
           plan_action: options?.planAction,
           plan_feedback: options?.planFeedback,
           plan_requested: options?.planRequested,
+          force_compress: options?.forceCompress,
           sandbox: options?.sandbox,
           images: options?.images,
           files: options?.files,

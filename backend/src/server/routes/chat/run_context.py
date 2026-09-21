@@ -113,6 +113,7 @@ class ChatRunContext:
     memory_recall_text: str = ""
     # 本轮用户在发送框强制开启的 Skill；已并入 used_skills，单独保留供预启用。
     forced_skills: list[Skill] = field(default_factory=list)
+    force_compress: bool = False
 
 
 def snapshot_session_history(session_id: str | None, *, limit: int = 40) -> list[SessionHistoryMessage]:
@@ -380,6 +381,7 @@ async def build_chat_run_context(
         system_prompt_sections=system_prompt_sections,
         memory_prompt=memory_prompt,
         memory_recall_text=memory_recall.text if memory_recall else "",
+        force_compress=bool(getattr(run_data, "force_compress", False)),
     )
 
 

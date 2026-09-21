@@ -297,4 +297,7 @@ class ChatMessage(BaseModel):
     plan_requested: bool = False
     """显式要求本轮先进入只读 Plan Mode。"""
 
+    force_compress: bool = False
+    """本轮回复前主动触发上下文压缩，不要求已越过自动阈值。"""
+
     model_config = {"populate_by_name": True, "extra": "forbid"}

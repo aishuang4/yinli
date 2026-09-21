@@ -47,7 +47,7 @@ function text(value: unknown, fallback = ''): string {
 function statusLabel(block: DisplayBlock): string {
   if (block.phase === 'open') return '进行中';
   if (block.outcome === 'failed') return '失败';
-  if (block.outcome === 'cancelled') return '已取消';
+  if (block.outcome === 'cancelled') return '已中断';
   return '';
 }
 

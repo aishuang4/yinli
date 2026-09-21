@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ImagePlus,
   ListChecks,
+  Minimize2,
   Paperclip,
   Plus,
   Search,
@@ -57,6 +58,30 @@ export function ChatPlanChip({
         onClick={onRemove}
         disabled={disabled}
         aria-label="关闭计划模式"
+      >
+        <X size={10} />
+      </button>
+    </span>
+  );
+}
+
+export function ChatCompressChip({
+  disabled,
+  onRemove,
+}: {
+  disabled?: boolean;
+  onRemove: () => void;
+}) {
+  return (
+    <span className={COMPOSER_STATUS_CHIP_CLASS}>
+      <Minimize2 size={12} className="shrink-0" />
+      <span>压缩上下文</span>
+      <button
+        type="button"
+        className="icon-button flex h-4 w-4 items-center justify-center rounded-full text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
+        onClick={onRemove}
+        disabled={disabled}
+        aria-label="取消压缩上下文"
       >
         <X size={10} />
       </button>

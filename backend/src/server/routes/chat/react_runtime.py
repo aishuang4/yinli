@@ -326,6 +326,12 @@ async def execute_react_runtime(
             available_skills=ctx.used_skills,
         )
     activate_forced_skills(agent, getattr(ctx, "forced_skills", None) or [])
+    if getattr(ctx, "force_compress", False):
+        from src.server.routes.chat.context_middleware import force_compress_context
+
+        await force_compress_context(agent)
+        if ctx.session_id and ctx.persist_run:
+            persist_agent_session_state(agent, session_id=ctx.session_id, agent_id=ctx.agent_id)
     user_text = ctx.effective_user_message
     note = str(getattr(ctx, "user_message_note", "") or "")
     if note:

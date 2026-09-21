@@ -1,10 +1,11 @@
-/** Chat 发送框 Skill 选择：/ 唤起列表，按钮插入 /，选中后以标签强制开启。 */
+/** Chat 发送框 / 菜单：常见指令 + Skill。 */
 
 import { useEffect, useRef } from 'react';
-import { BookOpen, X } from 'lucide-react';
+import { BookOpen, ListChecks, Minimize2, Sparkles, Users, UserRound, X } from 'lucide-react';
 import type { Skill } from '../../types/skill';
 import { MAX_FORCED_SKILLS } from './forcedSkills';
 import { COMPOSER_STATUS_CHIP_CLASS } from './plusMenu';
+import type { ComposerSlashCommand, SlashListItem } from './slashCommands';
 
 type ScrollBox = {
   scrollTop: number;
@@ -16,6 +17,7 @@ type HighlightBox = {
 };
 
 /** 只滚动 Skill 列表容器，避免 scrollIntoView 带动整页。 */
+// eslint-disable-next-line react-refresh/only-export-components -- 列表滚动纯函数，测试与菜单共用
 export function alignSkillHighlightInView(container: ScrollBox, item: HighlightBox): void {
   const containerRect = container.getBoundingClientRect();
   const itemRect = item.getBoundingClientRect();
@@ -28,59 +30,100 @@ export function alignSkillHighlightInView(container: ScrollBox, item: HighlightB
   }
 }
 
+function commandIcon(command: ComposerSlashCommand) {
+  if (command.id === 'compress') return <Minimize2 size={14} className="shrink-0" />;
+  if (command.id === 'plan') return <ListChecks size={14} className="shrink-0" />;
+  if (command.id === 'think') return <Sparkles size={14} className="shrink-0" />;
+  if (command.id === 'team') return <Users size={14} className="shrink-0" />;
+  return <UserRound size={14} className="shrink-0" />;
+}
+
 export function ChatSkillSlashMenu({
-  skills,
+  items,
   selectedIds,
   highlightedIndex,
   loading = false,
   query,
   onHighlight,
-  onPick,
+  onPickCommand,
+  onPickSkill,
 }: {
-  skills: Skill[];
+  items: SlashListItem[];
   selectedIds: string[];
   highlightedIndex: number;
   loading?: boolean;
   query: string;
   onHighlight: (index: number) => void;
-  onPick: (skill: Skill) => void;
+  onPickCommand: (command: ComposerSlashCommand) => void;
+  onPickSkill: (skill: Skill) => void;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const highlightedRef = useRef<HTMLButtonElement>(null);
   const selectedSet = new Set(selectedIds);
   const atLimit = selectedIds.length >= MAX_FORCED_SKILLS;
+  const commandCount = items.filter((item) => item.kind === 'command').length;
 
   useEffect(() => {
     const container = listRef.current;
     const item = highlightedRef.current;
     if (!container || !item) return;
     alignSkillHighlightInView(container, item);
-  }, [highlightedIndex, skills]);
+  }, [highlightedIndex, items]);
 
   return (
     <div
       className="border-b border-[var(--color-border)] bg-[var(--color-bg-primary)]"
       role="listbox"
-      aria-label="选择要强制开启的 Skill"
+      aria-label="选择斜杠指令或 Skill"
     >
       <div className="px-3 pb-1 pt-2 text-xs text-[var(--color-text-tertiary)]">
-        输入 / 选择 Skill，最多 {MAX_FORCED_SKILLS} 个。继续输入可过滤。
+        输入 / 选择指令或 Skill。Skill 最多 {MAX_FORCED_SKILLS} 个。
       </div>
-      <div ref={listRef} className="max-h-56 overflow-y-auto py-1">
-        {loading ? (
-          <div className="px-3 py-6 text-center text-xs text-[var(--color-text-tertiary)]">正在加载 Skills…</div>
-        ) : skills.length === 0 ? (
+      <div ref={listRef} className="max-h-64 overflow-y-auto py-1">
+        {loading && items.length === 0 ? (
+          <div className="px-3 py-6 text-center text-xs text-[var(--color-text-tertiary)]">正在加载…</div>
+        ) : items.length === 0 ? (
           <div className="px-3 py-6 text-center text-xs text-[var(--color-text-tertiary)]">
-            {query ? `没有匹配 “/${query}” 的 Skill` : '当前没有可强制开启的 Skill。'}
+            {query ? `没有匹配 “/${query}” 的指令或 Skill` : '当前没有可选项。'}
           </div>
         ) : (
-          skills.map((skill, index) => {
-            const checked = selectedSet.has(skill.id);
-            const itemDisabled = !checked && atLimit;
+          items.map((item, index) => {
             const active = index === highlightedIndex;
+            if (item.kind === 'command') {
+              return (
+                <button
+                  key={`command:${item.command.id}`}
+                  ref={active ? highlightedRef : undefined}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  className={`flex w-full items-start gap-2 px-3 py-1.5 text-left ${
+                    active ? 'bg-[var(--color-bg-hover)]' : 'hover:bg-[var(--color-bg-hover)]'
+                  }`}
+                  onMouseEnter={() => onHighlight(index)}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    onPickCommand(item.command);
+                  }}
+                >
+                  <span className="mt-0.5 text-[var(--color-text-secondary)]">{commandIcon(item.command)}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate font-mono text-sm text-[var(--color-text-primary)]">/{item.command.token}</span>
+                      <span className="truncate text-xs text-[var(--color-text-secondary)]">{item.command.title}</span>
+                    </span>
+                    <span className="mt-0.5 block w-full min-w-0 overflow-hidden break-words line-clamp-2 text-xs text-[var(--color-text-tertiary)]">
+                      {item.command.description}
+                    </span>
+                  </span>
+                </button>
+              );
+            }
+            const checked = selectedSet.has(item.skill.id);
+            const itemDisabled = !checked && atLimit;
             return (
               <button
-                key={skill.id}
+                key={`skill:${item.skill.id}`}
                 ref={active ? highlightedRef : undefined}
                 type="button"
                 role="option"
@@ -92,17 +135,20 @@ export function ChatSkillSlashMenu({
                 onMouseEnter={() => onHighlight(index)}
                 onMouseDown={(event) => {
                   event.preventDefault();
-                  if (!itemDisabled) onPick(skill);
+                  if (!itemDisabled) onPickSkill(item.skill);
                 }}
               >
+                {index === commandCount && commandCount > 0 ? (
+                  <span className="mb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-tertiary)]">Skill</span>
+                ) : null}
                 <span className="flex min-w-0 w-full items-center gap-2">
-                  <span className="truncate font-mono text-sm text-[var(--color-text-primary)]">/{skill.name}</span>
+                  <span className="truncate font-mono text-sm text-[var(--color-text-primary)]">/{item.skill.name}</span>
                   {checked ? (
                     <span className="shrink-0 text-[10px] text-[var(--color-text-tertiary)]">已开启</span>
                   ) : null}
                 </span>
                 <span className="mt-0.5 w-full min-w-0 overflow-hidden break-words line-clamp-2 text-xs text-[var(--color-text-tertiary)]">
-                  {skill.description || skill.trigger || skill.id}
+                  {item.skill.description || item.skill.trigger || item.skill.id}
                 </span>
               </button>
             );

@@ -69,6 +69,7 @@ export function ChatPage() {
   const [inputValue, setInputValue] = useState('');
   const [deepThinking, setDeepThinking] = useState(false);
   const [planMode, setPlanMode] = useState(false);
+  const [forceCompress, setForceCompress] = useState(false);
   const [forcedSkillIds, setForcedSkillIds] = useState<string[]>([]);
   const [planPanelOpen, setPlanPanelOpen] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
@@ -508,7 +509,7 @@ export function ChatPage() {
 
   /** 发送消息 */
   const handleSend = useCallback(async () => {
-    if (!inputValue.trim() && imageAttachments.length === 0 && fileAttachments.length === 0) return;
+    if (!inputValue.trim() && imageAttachments.length === 0 && fileAttachments.length === 0 && !forceCompress) return;
     if (state.isStreaming) {
       const steerText = inputValue.trim();
       if (!steerText || !state.currentRunId) return;
@@ -537,7 +538,11 @@ export function ChatPage() {
       return;
     }
 
-    const userText = inputValue.trim() || (fileAttachments.length > 0 ? '请处理我上传的文件。' : '请分析这张图片。');
+    const typed = inputValue.trim();
+    const userText = typed
+      || (fileAttachments.length > 0 ? '请处理我上传的文件。' : imageAttachments.length > 0 ? '请分析这张图片。' : forceCompress ? '请压缩当前会话上下文，然后用一两句话说明是否已整理完毕。' : '');
+    if (!userText) return;
+    const displayMessage = typed || (forceCompress && fileAttachments.length === 0 && imageAttachments.length === 0 ? '压缩上下文' : undefined);
     const sessionId = activeSessionId || createId();
     const images = imageAttachments.map(({ name, media_type, data }) => ({
       name,
@@ -554,7 +559,7 @@ export function ChatPage() {
     const userMessage: LocalMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
-      content: userText,
+      content: displayMessage || userText,
       createdAt: new Date().toISOString(),
       images,
       files,
@@ -567,6 +572,8 @@ export function ChatPage() {
     setInputValue('');
     resetAttachments();
     setChatError(null);
+    const compressThisTurn = forceCompress;
+    setForceCompress(false);
 
     await sendMessage(userText, {
       projectId: activeProjectId,
@@ -579,10 +586,12 @@ export function ChatPage() {
       forcedSkillIds,
       deepThinking,
       planRequested: planModeEnabled && planMode && targetMode === 'agent',
+      forceCompress: compressThisTurn,
+      displayMessage,
       images,
       files,
     });
-  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, forcedSkillIds, imageAttachments, inputValue, planMode, planModeEnabled, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, teamModeEnabled, uploadFilesForSession]);
+  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, forceCompress, forcedSkillIds, imageAttachments, inputValue, planMode, planModeEnabled, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, teamModeEnabled, uploadFilesForSession]);
 
   const handlePlanReview = useCallback(async (
     plan: PlanReviewData,
@@ -906,6 +915,8 @@ export function ChatPage() {
               onTargetModeChange={setTargetMode}
               onToggleDeepThinking={() => setDeepThinking((value) => !value)}
               onTogglePlanMode={() => setPlanMode((value) => !value)}
+              forceCompress={forceCompress}
+              onForceCompressChange={setForceCompress}
               teamModeEnabled={teamModeEnabled}
               planModeEnabled={planModeEnabled}
               composerSkills={composerSkills}

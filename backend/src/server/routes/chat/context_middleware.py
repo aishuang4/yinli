@@ -223,6 +223,36 @@ class ContextCompressionMiddleware(MiddlewareBase):
         )
 
 
+async def force_compress_context(agent: Any) -> None:
+    """用户主动压缩：先做一级整理，再把阈值降到接近 0 以触发 AgentScope 摘要。"""
+
+    try:
+        compact_stale_context(agent)
+    except Exception:
+        logger.warning("主动压缩前的一级整理失败，继续尝试摘要", exc_info=True)
+    config = getattr(agent, "context_config", None)
+    forced = None
+    if config is not None:
+        try:
+            payload = config.model_dump()
+            payload["trigger_ratio"] = 1e-9
+            forced = type(config).model_construct(**payload)
+        except Exception:
+            logger.debug("无法复制 context_config，改用默认强制阈值", exc_info=True)
+    try:
+        compress = getattr(agent, "compress_context", None)
+        if not callable(compress):
+            return
+        if forced is None:
+            await compress()
+        else:
+            await compress(context_config=forced)
+    except RuntimeError:
+        logger.info("主动压缩跳过：上下文过短或无法压缩")
+    except Exception:
+        logger.warning("主动压缩失败", exc_info=True)
+
+
 def drain_compression_records(agent: Any) -> list[dict[str, Any]]:
     """取走尚未写入 trace 的压缩记录。"""
 

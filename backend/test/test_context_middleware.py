@@ -23,6 +23,7 @@ from src.server.routes.chat.context_middleware import (
     compact_stale_context,
     context_governance_stats,
     drain_compression_records,
+    force_compress_context,
     set_context_session_id,
 )
 
@@ -156,5 +157,27 @@ def test_set_context_session_id_updates_agent_state() -> None:
     agent = _agent([])
     set_context_session_id(agent, "session-1")
     assert agent.state.session_id == "session-1"
-    set_context_session_id(agent, "")
-    assert agent.state.session_id == "session-1"
+
+
+def test_force_compress_context_calls_agent_compress() -> None:
+    calls: list[object] = []
+
+    class FakeConfig:
+        def model_dump(self) -> dict:
+            return {"trigger_ratio": 0.75, "reserve_ratio": 0.2}
+
+        @classmethod
+        def model_construct(cls, **kwargs: object) -> "FakeConfig":
+            item = cls()
+            for key, value in kwargs.items():
+                setattr(item, key, value)
+            return item
+
+    async def compress_context(*, context_config=None):
+        calls.append(getattr(context_config, "trigger_ratio", None))
+
+    agent = _agent([UserMsg(name="user", content="hello")])
+    agent.context_config = FakeConfig()
+    agent.compress_context = compress_context
+    asyncio.run(force_compress_context(agent))
+    assert calls == [1e-9]

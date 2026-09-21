@@ -2,7 +2,7 @@
 
 import { AlertCircle } from 'lucide-react';
 import { RuntimeBlockTree } from '../runtime-stream/RuntimeBlockTree';
-import type { DisplaySnapshot } from '../runtime-stream/protocol';
+import { abandonOpenBlocks, type DisplaySnapshot } from '../runtime-stream/protocol';
 import { hasVisibleRuntimeContent, runtimeText } from '../runtime-stream/selectors';
 import { MessageContentBlock, MessageFiles, MessageImages, StreamingPlaceholder } from './MessageAtoms';
 import { MessageFrame } from './MessageFrame';
@@ -37,18 +37,19 @@ export function MessageBubble({
       </MessageFrame>
     );
   }
-  const markdown = message.displaySnapshot ? runtimeText(message.displaySnapshot) : message.content;
-  if (message.displaySnapshot && !hasVisibleRuntimeContent(message.displaySnapshot) && !message.error) {
+  const historySnapshot = message.displaySnapshot ? abandonOpenBlocks(message.displaySnapshot) : undefined;
+  const markdown = historySnapshot ? runtimeText(historySnapshot) : message.content;
+  if (historySnapshot && !hasVisibleRuntimeContent(historySnapshot) && !message.error) {
     return null;
   }
   return (
     <MessageFrame containIntrinsicSize="220px">
       <MessageImages images={message.images} align="left" />
-      {message.displaySnapshot ? (
+      {historySnapshot ? (
         <RuntimeBlockTree
-          snapshot={message.displaySnapshot}
+          snapshot={historySnapshot}
           sessionId={sessionId}
-          processStopped={Boolean(message.cancelled || message.error)}
+          processStopped={Boolean(message.cancelled || message.error) || historySnapshot !== message.displaySnapshot}
           actions={{ previewPath, onOpenPreview }}
         />
       ) : (
@@ -85,17 +86,19 @@ export function StreamingBubble({
   onResolveInteraction: ResolveInteraction;
   onAnswerAnimationChange?: (isAnimating: boolean) => void;
 }) {
-  const markdown = runtimeText(snapshot);
-  const hasVisibleContent = hasVisibleRuntimeContent(snapshot);
+  const live = isStreaming;
+  const displaySnapshot = live ? snapshot : abandonOpenBlocks(snapshot);
+  const markdown = runtimeText(displaySnapshot);
+  const hasVisibleContent = hasVisibleRuntimeContent(displaySnapshot);
   if (!hasVisibleContent && !isStreaming && !error) return null;
   return (
     <MessageFrame containIntrinsicSize="220px">
       {hasVisibleContent ? (
         <RuntimeBlockTree
-          snapshot={snapshot}
+          snapshot={displaySnapshot}
           sessionId={sessionId}
-          processStopped={!isStreaming && cancelled}
-          actions={{ onResolveInteraction, previewPath, onOpenPreview }}
+          processStopped={!live && (cancelled || Boolean(error) || displaySnapshot !== snapshot)}
+          actions={{ onResolveInteraction: live ? onResolveInteraction : undefined, previewPath, onOpenPreview }}
           onAnswerAnimationChange={onAnswerAnimationChange}
         />
       ) : isStreaming ? (

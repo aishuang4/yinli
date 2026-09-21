@@ -152,6 +152,7 @@ export interface SendMessageOptions {
   planAction?: 'revise' | 'approve' | 'cancel';
   planFeedback?: string;
   planRequested?: boolean;
+  forceCompress?: boolean;
   sandbox?: boolean;
   images?: Array<{
     name: string;
