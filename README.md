@@ -183,7 +183,6 @@ scripts/                 开发、打包和后端构建脚本
 - [`docs/chat-sse-event-contract.md`](docs/chat-sse-event-contract.md)：Chat RuntimeFrame / DisplaySnapshot 稳定契约。
 - [`docs/team-runtime-redesign.md`](docs/team-runtime-redesign.md)：一次性 TeamRun、Task List 与 Mailbox。
 - [`docs/subagent-delegation-design.md`](docs/subagent-delegation-design.md)：Subagent 定义和委托模型。
-- [`docs/notifications.md`](docs/notifications.md)：定时任务完成后的消息通知与通道扩展。
 - [`docs/development-guidelines.md`](docs/development-guidelines.md)：开发规范。
 - [`docs/project-todo.md`](docs/project-todo.md)：当前待办。
 

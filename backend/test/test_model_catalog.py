@@ -501,5 +501,8 @@ def test_unreadable_legacy_key_does_not_delete_old_configuration(monkeypatch):
 
     monkeypatch.setattr(secret_store, "get_model_api_key", fail)
     catalog = store._migrate()
+    assert [p.id for p in catalog.providers] == ["deepseek"]
+    assert [m.model for m in catalog.models] == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert catalog.default_model_id == "deepseek:deepseek-v4-flash"
     assert next(p for p in catalog.providers if p.id == "deepseek").api_key == ""
     assert old["providerConfigs"]["deepseek"]["apiKeyConfigured"] is True

@@ -267,6 +267,8 @@ Chat Trace 身份是一次 `chat_runs` 记录，步骤存在 `trace_observations
 
 桌面安装版把 Electron `userData` 固定为 `agent-workstation-desktop`。`config/runtime_paths.py` 是所有运行时可写路径的唯一入口；SQLite、Markdown / Wiki Memory、向量库、TeamRun、Skill 包、用户级 Subagent、持久沙盒、日志和默认 Workspace 都必须位于该根目录。macOS 对应 `~/Library/Application Support/agent-workstation-desktop/`，Windows 对应 `%APPDATA%\\agent-workstation-desktop\\`。安装目录和 PyInstaller `_MEI...` 临时目录只允许读取代码资源，不能保存用户数据。
 
+Windows NSIS 卸载默认保留用户数据。确认框选「是」才删除固定目录 `%USERPROFILE%\\.agent-workstation`，并清理历史目录 `%APPDATA%\\agent-workstation-desktop`；删目录失败不阻断卸载。不接受用户输入路径，也不按用户主目录或 `%APPDATA%` 递归删除。macOS 不增加卸载器。设置页「用户数据」只在桌面端显示实际目录，并用受限 `open-path` 打开。真机验收用例见 `docs/windows-data-uninstall-test-case.md`。
+
 ## 配置与权限
 
 - 启动期静态配置在 `config/settings.py`，环境变量前缀为 `AGENT_WORKSTATION_`。
@@ -294,8 +296,10 @@ Chat Trace 身份是一次 `chat_runs` 记录，步骤存在 `trace_observations
 
 - 应用内通道写入 `user_notifications`，并通过 `/api/notifications/stream` 推送到 Chat 顶栏铃铛；不进入 Chat SSE。任务完成时 Web 弹出右上角提醒框，Electron 走系统通知。
 - 通道目录与开关存在 `json_store` / `system_settings` / `notifications`。应用内通道始终开启。
-- 邮箱、微信、飞书已登记占位通道，设置页可预填配置，但 `implemented=false` 时不能启用。
-- 新增通道只需实现 `NotificationChannel` 并登记，不要把投递逻辑写进 `scheduler/service.py` 或 Chat handler。
+- 邮箱、微信、飞书已登记占位通道，设置页可预填配置，但 `implemented=false` 时不能启用。密钥走 `secret_store`，不要写入 `json_store`。
+- 新增通道只需实现 `NotificationChannel` 并登记，不要把投递逻辑写进 `scheduler/service.py` 或 Chat handler。模块在 `src/notifications/`（`protocol.py`、`dispatcher.py`、`channels/in_app.py`、`channels/external.py`、`settings.py`、`hub.py`、`inbox.py`）；Job 终态适配在 `scheduler/notifications.py`。
+- REST：`GET /api/notifications`、`unread-count`、`settings`，`PUT /api/notifications/settings`，`GET /api/notifications/stream`，`POST /{id}/read` 与 `read-all`。SSE 事件名 `snapshot` / `notification` / `read` / `read_all`，心跳是 `: ping`。
+- 铃铛只显示当前 Project 的定时任务通知。`kind` 以 `group_studio_` 开头的点击后 `openGroupStudio`，不进结果弹窗。即时提醒由 `NotificationToastHost` 全局订阅一次，不依赖铃铛是否挂载。
 
 ## 前端入口
 
