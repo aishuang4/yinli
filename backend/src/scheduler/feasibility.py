@@ -35,7 +35,7 @@ from src.server.routes.agents import list_registered_agents
 
 _ALWAYS_PREVIEW = [
     "Read", "Grep", "Glob", "Write", "Edit",
-    "FinalAnswerStart", "MemoryNodeTree", "MemoryNodeQuery",
+    "TimelineRetrieve", "TimelineIngest",
 ]
 
 

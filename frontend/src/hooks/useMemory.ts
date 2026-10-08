@@ -16,10 +16,10 @@ import type {
   MemoryNodeStatus,
   MemoryRetrievalFeedbackPayload,
   MemorySettingsSnapshot,
-  MemoryWikiGraph,
-  MemoryWikiSyncResult,
   MemoryNodeQueryResult,
   MemoryNodeTreeItem,
+  TimelineQuery,
+  TimelineQueryResult,
   SkillEvolutionRecordAction,
   SkillEvolutionRecord,
   SkillEvolutionRecordStatus,
@@ -60,8 +60,11 @@ interface UseMemoryReturn {
   sendRetrievalFeedback: (payload: MemoryRetrievalFeedbackPayload) => Promise<void>;
   loadMemorySettings: () => Promise<MemorySettingsSnapshot>;
   saveAdmissionPolicy: (payload: MemoryAdmissionPolicyUpdate) => Promise<MemorySettingsSnapshot['admission']>;
-  syncWikiVault: (historyLimit?: number) => Promise<MemoryWikiSyncResult>;
-  loadWikiGraph: (historyLimit?: number, edgeLimit?: number) => Promise<MemoryWikiGraph>;
+  readHabits: () => Promise<MarkdownMemoryDocument>;
+  saveHabits: (content: string) => Promise<MarkdownMemoryDocument>;
+  readProfessional: (agentId: string) => Promise<MarkdownMemoryDocument>;
+  saveProfessional: (agentId: string, content: string) => Promise<MarkdownMemoryDocument>;
+  loadTimeline: (filters?: TimelineQuery) => Promise<TimelineQueryResult>;
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -275,31 +278,59 @@ export function useMemory(): UseMemoryReturn {
     }
   }, []);
 
-  const syncWikiVault = useCallback(async (historyLimit = 200) => {
-    try {
-      const params = new URLSearchParams({ historyLimit: String(historyLimit) });
-      const result = await requestJson<MemoryWikiSyncResult>(`/api/memory/wiki/sync?${params.toString()}`, {
-        method: 'POST',
-      });
-      notifySuccess(`Memory Wiki 已同步：${result.filesWritten} 个文件`);
-      return result;
-    } catch (error) {
-      notifyError(`Memory Wiki 同步失败：${getErrorMessage(error, '未知错误')}`);
-      throw error;
-    }
+  const readHabits = useCallback(async () => {
+    return requestJson<MarkdownMemoryDocument>('/api/memory/habits');
   }, []);
 
-  const loadWikiGraph = useCallback(async (historyLimit = 200, edgeLimit = 300) => {
-    const params = new URLSearchParams({
-      historyLimit: String(historyLimit),
-      edgeLimit: String(edgeLimit),
+  const saveHabits = useCallback(async (content: string) => {
+    const doc = await requestJson<MarkdownMemoryDocument>('/api/memory/habits', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
     });
-    return requestJson<MemoryWikiGraph>(`/api/memory/wiki/graph?${params.toString()}`);
+    notifySuccess('习惯已保存');
+    return doc;
   }, []);
+
+  const readProfessional = useCallback(async (agentId: string) => {
+    return requestJson<MarkdownMemoryDocument>(`/api/memory/professional/${encodeURIComponent(agentId)}`);
+  }, []);
+
+  const saveProfessional = useCallback(async (agentId: string, content: string) => {
+    const doc = await requestJson<MarkdownMemoryDocument>(
+      `/api/memory/professional/${encodeURIComponent(agentId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      },
+    );
+    notifySuccess('专业区已保存');
+    return doc;
+  }, []);
+
+  const loadTimeline = useCallback(async (filters: TimelineQuery = {}) => {
+    const params = new URLSearchParams();
+    const workspaceId = filters.workspaceId ?? activeWorkspaceId;
+    const projectId = filters.projectId ?? activeProjectId;
+    if (workspaceId) params.set('workspaceId', workspaceId);
+    if (projectId) params.set('projectId', projectId);
+    if (filters.agentId) params.set('agentId', filters.agentId);
+    if (filters.surface) params.set('surface', filters.surface);
+    if (filters.timeFrom) params.set('timeFrom', filters.timeFrom);
+    if (filters.timeTo) params.set('timeTo', filters.timeTo);
+    if (filters.queryText) params.set('queryText', filters.queryText);
+    return requestJson<TimelineQueryResult>(`/api/memory/timeline?${params.toString()}`);
+  }, [activeProjectId, activeWorkspaceId]);
 
   return {
     readMarkdownMemory,
     saveMarkdownMemory,
+    readHabits,
+    saveHabits,
+    readProfessional,
+    saveProfessional,
+    loadTimeline,
     loadNodeTree,
     queryNodes,
     updateNodeStatus,
@@ -311,7 +342,5 @@ export function useMemory(): UseMemoryReturn {
     sendRetrievalFeedback,
     loadMemorySettings,
     saveAdmissionPolicy,
-    syncWikiVault,
-    loadWikiGraph,
   };
 }

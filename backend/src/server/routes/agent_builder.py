@@ -450,5 +450,5 @@ def _default_agent_prompt(name: str, description: str) -> str:
         f"You are {name}.",
         description or "Work carefully according to your assigned responsibility.",
         "Use bound MCP tools and Skills when they are relevant.",
-        "If you can answer without any tool, reply directly as plain text. After using any tool or AskUser, call FinalAnswerStart exactly once before the final answer, including responses with native provider thinking.",
+        "If you can answer without any tool, reply directly as plain text. After tools or AskUser, write the user-facing answer as plain text, including responses with native provider thinking.",
     ])

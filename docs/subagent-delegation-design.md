@@ -170,7 +170,7 @@ afterDeny = base - disallowedTools
 effective = tools ? intersection(afterDeny, tools) : afterDeny
 ```
 
-Subagent 定义只能收窄能力，不能扩大父 Agent 的 ToolScope、filesystem、Project binding、MCP/HTTP 白名单或 guardrails。`FinalAnswerStart` 等运行时内部工具由系统保留，依赖主会话状态的 AskUser、Plan、等待类工具和 `DelegateTask` 不注入 child。
+Subagent 定义只能收窄能力，不能扩大父 Agent 的 ToolScope、filesystem、Project binding、MCP/HTTP 白名单或 guardrails。依赖主会话状态的 AskUser、Plan、等待类工具和 `DelegateTask` 不注入 child。收尾正文是这一次没有工具调用的生成；空摘要视为失败。
 
 child 不读取父会话历史，只接收自包含 task、必要 context/constraints、Project 规则摘要、受控 git 状态、记忆摘要和已裁剪 Skill catalog。内置低成本研究定义可以跳过与任务无关的启动上下文。
 

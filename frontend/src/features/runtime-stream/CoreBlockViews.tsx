@@ -1,28 +1,20 @@
 /** Chat Runtime Block 的领域 renderer。 */
 
-import { useContext, useEffect, useState } from 'react';
+import { Children, useContext, useEffect } from 'react';
 import {
   AlertCircle,
   Bot,
-  BrainCircuit,
   CheckCircle2,
   Circle,
   CircleDot,
-  ChevronRight,
   Download,
-  FilePenLine,
-  FilePlus2,
-  FileSearch,
   FileText,
-  FolderSearch,
-  Globe2,
   ListChecks,
   Loader2,
   MessageCircleQuestion,
   Puzzle,
-  Terminal,
-  Wrench,
 } from 'lucide-react';
+import { toolIcon } from './toolIcon';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import { EchartsContent } from '../../components/EchartsContent';
 import { HitlApprovalBlock } from '../chat/HumanInteractionBlocks';
@@ -35,6 +27,7 @@ import {
 import { resolveApiUrl } from '../../utils/apiUrl';
 import { artifactDownloadUrl, downloadableArtifactPath } from '../file-preview/filePreview';
 import type { DisplayBlock } from './protocol';
+import { toolDetail } from './processTrace';
 import { RuntimeAnimationContext } from './RuntimeAnimationContext';
 import { RuntimeBlockActionsContext } from './runtimeBlockActions';
 
@@ -51,118 +44,52 @@ function statusLabel(block: DisplayBlock): string {
   return '';
 }
 
-function RuntimeStatusMarker({
-  block,
-  icon,
-  timeline,
-}: {
-  block: DisplayBlock;
-  icon: React.ReactNode;
-  timeline: boolean;
-}) {
-  const failed = block.outcome === 'failed';
-  return (
-    <span
-      className={`${
-        timeline
-          ? 'absolute -left-[34px] top-0 z-10 flex h-5 w-5 rounded-full bg-[var(--runtime-process-surface)]'
-          : 'flex h-6 w-6 rounded-md border bg-[var(--color-bg-primary)]'
-      } shrink-0 items-center justify-center ${
-        failed
-          ? timeline
-            ? 'text-[var(--color-error)]'
-            : 'border-[var(--color-error)] text-[var(--color-error)]'
-          : block.phase === 'open'
-            ? timeline
-              ? 'text-[var(--color-text-link)]'
-              : 'border-[var(--color-border-focus)] text-[var(--color-text-link)]'
-            : timeline
-              ? 'text-[var(--color-text-tertiary)]'
-              : 'border-[var(--color-border)] text-[var(--color-text-tertiary)]'
-      }`}
-    >
-      {block.phase === 'open' ? (
-        <Loader2 size={timeline ? 14 : 13} className="animate-spin" />
-      ) : icon}
-    </span>
-  );
-}
-
 function RuntimeItem({
   icon,
   title,
   block,
   children,
-  collapsible = false,
-  timeline = true,
 }: {
   icon: React.ReactNode;
   title: string;
   block: DisplayBlock;
   children?: React.ReactNode;
-  collapsible?: boolean;
-  timeline?: boolean;
 }) {
   const failed = block.outcome === 'failed';
   const cancelled = block.outcome === 'cancelled';
+  const open = block.phase === 'open';
   const status = statusLabel(block);
-  const [expanded, setExpanded] = useState(false);
-  const header = (
-    <>
-      <RuntimeStatusMarker block={block} icon={icon} timeline={timeline} />
-      <span className="min-w-0 flex-1 truncate font-medium text-[var(--color-text-secondary)]">{title}</span>
-      {status ? (
+  const body = Children.toArray(children).filter(Boolean);
+  return (
+    <div className={`py-1 text-sm ${failed ? 'text-[var(--color-error)]' : 'text-[var(--color-text-secondary)]'}`}>
+      <div className="flex min-h-6 items-center gap-2">
         <span
-          className={`shrink-0 text-[11px] ${
+          className={`flex h-4 w-4 shrink-0 items-center justify-center ${
             failed
               ? 'text-[var(--color-error)]'
-              : cancelled
-                ? 'text-[var(--color-warning)]'
-                : 'text-[var(--color-text-link)]'
+              : open
+                ? 'text-[var(--color-text-secondary)]'
+                : 'text-[var(--color-text-tertiary)]'
           }`}
         >
-          {status}
+          {open ? <Loader2 size={14} className="animate-spin" /> : icon}
         </span>
-      ) : null}
-      {collapsible && children ? (
-        <ChevronRight
-          size={14}
-          className={`shrink-0 text-[var(--color-text-tertiary)] transition-transform ${expanded ? 'rotate-90' : ''}`}
-        />
-      ) : null}
-    </>
-  );
-  return (
-    <div
-      className={`relative rounded-md px-2 py-2 text-sm transition-colors ${
-        failed
-          ? 'bg-[var(--color-error-bg)]'
-          : !timeline
-            ? 'border border-[var(--color-border)] bg-[var(--color-bg-secondary)]'
-            : expanded
-              ? 'bg-[var(--color-bg-primary)]'
-              : 'hover:bg-[var(--color-bg-hover)]'
-      }`}
-    >
-      {collapsible && children ? (
-        <button
-          type="button"
-          aria-expanded={expanded}
-          className={`relative flex min-h-6 w-full items-center gap-2 border-0 bg-transparent p-0 text-left ${failed ? 'text-[var(--color-error)]' : 'text-[var(--color-text-secondary)]'}`}
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {header}
-        </button>
-      ) : (
-        <div className={`relative flex min-h-6 items-center gap-2 ${failed ? 'text-[var(--color-error)]' : 'text-[var(--color-text-secondary)]'}`}>
-          {header}
-        </div>
-      )}
-      {children && (!collapsible || expanded) ? (
-        <div className={`mt-1.5 pl-0.5 ${failed ? 'text-[var(--color-error)]' : 'text-[var(--color-text-secondary)]'}`}>
-          {children}
-        </div>
-      ) : null}
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        {status ? (
+          <span
+            className={`shrink-0 text-[11px] ${
+              failed
+                ? 'text-[var(--color-error)]'
+                : cancelled
+                  ? 'text-[var(--color-warning)]'
+                  : 'text-[var(--color-text-tertiary)]'
+            }`}
+          >
+            {status}
+          </span>
+        ) : null}
+      </div>
+      {body.length ? <div className="mt-1.5 pl-6">{body}</div> : null}
     </div>
   );
 }
@@ -173,8 +100,10 @@ export function MessageBlockView() {
 
 export function TextBlockView({ block }: { block: DisplayBlock<string> }) {
   const reportAnimation = useContext(RuntimeAnimationContext);
+  // 折叠切换会换父节点。已收到的正文直接显示，只补这次挂载之后新到的字。
   const visible = useSmoothStreamingText(block.data, block.phase === 'open', {
-    animateOnMount: Boolean(reportAnimation),
+    animateOnMount: false,
+    animateStreamingOnMount: false,
     charsPerSecond: 96,
     maxCharsPerFrame: 18,
   });
@@ -189,19 +118,21 @@ export function TextBlockView({ block }: { block: DisplayBlock<string> }) {
   );
 }
 
-export function ProcessTextBlockView({ block }: { block: DisplayBlock<string> }) {
-  if (!block.data) return null;
+export function ProcessTextBlockView({
+  block,
+  hideLabel = false,
+}: {
+  block: DisplayBlock;
+  hideLabel?: boolean;
+}) {
+  const content = text(block.data);
+  if (!content) return null;
+  const label = block.kind === 'thinking' ? '思考过程' : '过程';
   return (
-    <div
-      className={`relative rounded-md px-2 py-2 text-sm transition-colors ${
-        block.outcome === 'failed' ? 'bg-[var(--color-error-bg)]' : 'hover:bg-[var(--color-bg-hover)]'
-      }`}
-    >
-      <div className="relative min-h-5">
-        <RuntimeStatusMarker block={block} icon={<BrainCircuit size={14} />} timeline />
-        <div className="max-h-64 overflow-auto pl-1 text-xs text-[var(--color-text-secondary)]">
-          <MarkdownContent content={block.data} />
-        </div>
+    <div className="py-1 text-sm">
+      {hideLabel ? null : <div className="mb-1 text-[13px] text-[var(--color-text-tertiary)]">{label}</div>}
+      <div className="text-xs leading-5 text-[var(--color-text-secondary)]">
+        <MarkdownContent content={content} />
       </div>
     </div>
   );
@@ -209,57 +140,19 @@ export function ProcessTextBlockView({ block }: { block: DisplayBlock<string> })
 
 export function ToolBlockView({ block }: { block: DisplayBlock<RecordData> }) {
   const name = text(block.data.name, 'Tool');
-  const input = text(block.data.inputPreview);
-  const output = text(block.data.outputPreview) || text(block.data.error);
+  const detail = toolDetail(block);
+  const open = block.phase === 'open';
   return (
-    <RuntimeItem icon={toolIcon(name)} title={name} block={block} collapsible>
-      {input ? <ToolDataPanel label="输入" value={input} /> : null}
-      {output ? <ToolDataPanel label="输出" value={output} className={input ? 'mt-2' : ''} /> : null}
-    </RuntimeItem>
-  );
-}
-
-function toolIcon(name: string): React.ReactNode {
-  const tokens = new Set(
-    name
-      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter(Boolean),
-  );
-  const has = (...names: string[]) => names.some((value) => tokens.has(value));
-
-  if (has('bash', 'shell', 'terminal')) return <Terminal size={14} />;
-  if (has('read')) return <FileText size={14} />;
-  if (has('edit', 'patch')) return <FilePenLine size={14} />;
-  if (has('write', 'create')) return <FilePlus2 size={14} />;
-  if (has('grep', 'search')) return <FileSearch size={14} />;
-  if (has('glob', 'list')) return <FolderSearch size={14} />;
-  if (has('http', 'web', 'fetch')) return <Globe2 size={14} />;
-  if (has('ask')) return <MessageCircleQuestion size={14} />;
-  if (has('delegate', 'subagent')) return <Bot size={14} />;
-  if (has('plan', 'todo', 'task')) return <ListChecks size={14} />;
-  if (has('skill')) return <Puzzle size={14} />;
-  return <Wrench size={14} />;
-}
-
-function ToolDataPanel({ label, value, className = '' }: { label: string; value: string; className?: string }) {
-  return (
-    <div className={className}>
-      <div className="mb-1 text-[11px] font-medium text-[var(--color-text-tertiary)]">{label}</div>
-      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-2 font-mono text-xs leading-5 text-[var(--color-text-secondary)]">
-        {formatToolTextValue(value)}
-      </pre>
+    <div className="flex items-start gap-2 px-1 py-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
+      <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
+        {open ? <Loader2 size={14} className="animate-spin" /> : toolIcon(name)}
+      </span>
+      <span className="min-w-0">
+        <span className="block break-words">{detail.title}</span>
+        {detail.note ? <span className="mt-0.5 block break-words">{detail.note}</span> : null}
+      </span>
     </div>
   );
-}
-
-function formatToolTextValue(value: string): string {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2);
-  } catch {
-    return value;
-  }
 }
 
 export function SkillBlockView({ block }: { block: DisplayBlock<RecordData> }) {
@@ -379,8 +272,6 @@ export function ArtifactBlockView({ block }: { block: DisplayBlock<RecordData> }
       icon={<FileText size={14} />}
       title={files.length > 1 ? `已生成 ${files.length} 个文件` : files[0]?.name || '生成文件'}
       block={block}
-      collapsible
-      timeline={false}
     >
       {files.length ? (
         <div className="divide-y divide-[var(--color-border)]">
@@ -503,7 +394,7 @@ function fileNameFromPath(path: string): string {
 
 export function ErrorBlockView({ block }: { block: DisplayBlock<RecordData> }) {
   return (
-    <RuntimeItem icon={<AlertCircle size={14} />} title="执行失败" block={block} timeline={false}>
+    <RuntimeItem icon={<AlertCircle size={14} />} title="执行失败" block={block}>
       <div className="text-sm text-[var(--color-error)]">{text(block.data.message, '未知错误')}</div>
     </RuntimeItem>
   );

@@ -21,7 +21,7 @@ UI_STATE_TOOLS = {
 }
 NESTING_TOOLS = {"DelegateTask"}
 WRITE_TOOLS = {"Write", "Edit"}
-REQUIRED_INTERNAL_TOOLS = {"FinalAnswerStart"}
+REQUIRED_INTERNAL_TOOLS: set[str] = set()
 
 
 @dataclass(frozen=True)
@@ -98,9 +98,8 @@ def _parent_available_tools(
         "Grep",
         "Glob",
         "AskUser",
-        "FinalAnswerStart",
-        "memory_node_tree",
-        "memory_node_query",
+        "timeline_retrieve",
+        "timeline_ingest",
     }
     if not read_only:
         tools.update(WRITE_TOOLS)

@@ -128,6 +128,46 @@ class MarkdownMemoryStore:
             content=content,
         )
 
+    def read_habits(self, user_id: str = "default") -> MarkdownMemoryDocument:
+        """读取这个人的习惯全文；不存在时返回空内容且不创建文件。"""
+
+        return self._read_document(
+            scope="habits",
+            owner_id=user_id,
+            path=self._habits_path(user_id),
+            template="",
+        )
+
+    def write_habits(self, user_id: str, content: str) -> MarkdownMemoryDocument:
+        """覆盖保存习惯全文。"""
+
+        return self._write_document(
+            scope="habits",
+            owner_id=user_id,
+            path=self._habits_path(user_id),
+            content=content,
+        )
+
+    def read_professional(self, agent_id: str) -> MarkdownMemoryDocument:
+        """读取某个智能体的专业区全文；不存在时返回空内容且不创建文件。"""
+
+        return self._read_document(
+            scope="professional",
+            owner_id=agent_id,
+            path=self._professional_path(agent_id),
+            template="",
+        )
+
+    def write_professional(self, agent_id: str, content: str) -> MarkdownMemoryDocument:
+        """覆盖保存专业区全文。允许比旧文更短，用来删除过时段落。"""
+
+        return self._write_document(
+            scope="professional",
+            owner_id=agent_id,
+            path=self._professional_path(agent_id),
+            content=content,
+        )
+
     def _read_document(
         self,
         *,
@@ -183,6 +223,14 @@ class MarkdownMemoryStore:
         if _safe_id(workspace_id) == "default":
             return self.root / "global" / "global_memory.md"
         return self.root / "global" / _safe_id(workspace_id) / "global_memory.md"
+
+    def _habits_path(self, user_id: str) -> Path:
+        if _safe_id(user_id) == "default":
+            return self.root / "users" / "habits.md"
+        return self.root / "users" / _safe_id(user_id) / "habits.md"
+
+    def _professional_path(self, agent_id: str) -> Path:
+        return self.root / "agents" / _safe_id(agent_id) / "professional.md"
 
 
 def _safe_id(value: str) -> str:

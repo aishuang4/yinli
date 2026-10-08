@@ -100,21 +100,8 @@ def test_run_archive_memory_persists_node_and_reflects_with_worker_agent(client,
     summary = asyncio.run(archive_memory.run_archive_memory(studio))
 
     assert summary["agentId"] == "default"
-    assert summary["nodeId"]
-    node = database.get_memory_node(summary["nodeId"])
-    assert node["source_run_id"] == f"group:{studio.id}"
-    assert node["source_session_id"] == "sess-archive"
-    assert "按地区拆成华东" in node["agent_final_outputs"][0]
-    assert seen["item"].agent_id == "default"
-    assert seen["rule_admission"].should_write_markdown is True
-    assert seen["rule_admission"].should_persist_history is True
-    audits = database.list_run_events_by_type("MEMORY_AUDIT", limit=50)
-    actions = {
-        str((event.get("payload") or {}).get("memoryType") or "")
-        for event in audits
-        if str(event.get("sessionId") or event.get("session_id") or "") == "sess-archive"
-    }
-    assert {"group_archive_memory", "group_archive_reflection"} <= actions
+    assert summary["skipped"] == "timeline_is_source"
+    assert "item" not in seen
 
 
 def test_worker_spec_hard_blocks_destructive_shell(client) -> None:

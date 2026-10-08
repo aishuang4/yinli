@@ -1,4 +1,4 @@
-"""最终答案恢复轮：处理模型漏调 FinalAnswerStart 的受限补救。"""
+"""最终答案恢复轮：收尾正文为空时再要一轮纯文本。"""
 
 from __future__ import annotations
 
@@ -8,6 +8,12 @@ from agentscope._utils._common import _generate_id
 from agentscope.message import Msg, UserMsg
 from agentscope.tool import ToolChoice
 
+from src.server.routes.chat.answer_generation import (
+    answer_ready_events,
+    append_generation_text,
+    begin_model_generation,
+    mark_generation_tool,
+)
 from src.server.routes.chat.generation_snapshot import snapshot_model_input_async
 from src.server.routes.chat.helpers import source_event
 from src.server.routes.chat.models import ChatToolRun
@@ -36,18 +42,10 @@ async def stream_final_answer_recovery_events(
     message: str,
     stream_scope: str,
 ) -> AsyncGenerator[str, None]:
-    """在模型漏调 FinalAnswerStart 时执行一次受限最终答案恢复。"""
+    """回复结束时没有终态正文时，再要一轮不调用工具的正文。"""
 
     state.final_answer_recovery_attempted = True
-    if not all(
-        hasattr(agent, attr)
-        for attr in (
-            "_handle_incoming_messages",
-            "_reasoning",
-            "_get_last_msg",
-            "_batch_tool_calls",
-        )
-    ):
+    if not all(hasattr(agent, attr) for attr in ("_handle_incoming_messages", "_reasoning")):
         return
 
     recovery_prompt = build_final_answer_recovery_prompt(
@@ -61,8 +59,7 @@ async def stream_final_answer_recovery_events(
         await agent._handle_incoming_messages(UserMsg(name="user", content=recovery_prompt))
         agent.state.reply_id = _generate_id()
         agent.state.cur_iter = 0
-        marker_choice = ToolChoice(mode="FinalAnswerStart", tools=["FinalAnswerStart"])
-        async for event in agent._reasoning(tool_choice=marker_choice):
+        async for event in agent._reasoning(tool_choice=ToolChoice(mode="none")):
             async for sse_event in _handle_final_answer_recovery_event(
                 event,
                 agent=agent,
@@ -76,40 +73,17 @@ async def stream_final_answer_recovery_events(
                 stream_scope=stream_scope,
             ):
                 yield sse_event
-
-        async for event in _execute_recovery_tool_calls(agent):
-            async for sse_event in _handle_final_answer_recovery_event(
-                event,
-                agent=agent,
-                state=state,
-                session_id=session_id,
-                persist=persist,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                model_name=model_name,
-                guardrails=guardrails,
-                stream_scope=stream_scope,
-            ):
-                yield sse_event
-
-        if not state.final_answer_started:
-            return
-
-        answer_choice = ToolChoice(mode="none")
-        async for event in agent._reasoning(tool_choice=answer_choice):
-            async for sse_event in _handle_final_answer_recovery_event(
-                event,
-                agent=agent,
-                state=state,
-                session_id=session_id,
-                persist=persist,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                model_name=model_name,
-                guardrails=guardrails,
-                stream_scope=stream_scope,
-            ):
-                yield sse_event
+        for ready_event in answer_ready_events(
+            state,
+            session_id=session_id,
+            stream_scope=stream_scope,
+            source_event_type="FINAL_ANSWER_RECOVERY",
+            agent_id=agent_id,
+            agent_name=agent_name,
+            reason="recover_missing_final_answer",
+            recovered=True,
+        ):
+            yield ready_event
         if state.assistant_text.strip():
             state.exceeded_max_iters = False
     except Exception as exc:
@@ -126,25 +100,6 @@ async def stream_final_answer_recovery_events(
             payload={"message": str(exc)},
             collect=state.runtime_events,
         )
-
-
-async def _execute_recovery_tool_calls(agent: object) -> AsyncGenerator[object, None]:
-    """执行恢复轮强制生成的 FinalAnswerStart 工具调用。"""
-
-    last_msg = agent._get_last_msg()
-    if last_msg is None:
-        return
-    tool_calls = last_msg.get_content_blocks("tool_call")
-    if not tool_calls:
-        return
-    for batch in await agent._batch_tool_calls(tool_calls):
-        if batch.type == "sequential":
-            event_generator = agent._execute_sequential_tool_calls(batch.tool_calls)
-        else:
-            event_generator = agent._execute_concurrent_tool_calls(batch.tool_calls)
-        async for event in event_generator:
-            yield event
-        break
 
 
 async def _handle_final_answer_recovery_event(
@@ -166,27 +121,10 @@ async def _handle_final_answer_recovery_event(
         return
     event_data = event.model_dump(mode="json")
     event_type = event_data.pop("type", "UNKNOWN")
-    if _is_final_answer_tool_event(event_type, event_data, state):
-        if event_type == "TOOL_CALL_START":
-            state.final_answer_started = True
-            yield runtime_trace_source_event(
-                "AGENT_FINAL_ANSWER_STARTED",
-                session_id=session_id,
-                scope=stream_scope,
-                source="runtime",
-                source_event_type=event_type,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                status="running",
-                reason="recover_missing_final_answer_marker",
-                payload={
-                    "tool_call_id": str(event_data.get("tool_call_id") or ""),
-                    "tool_call_name": str(event_data.get("tool_call_name") or "FinalAnswerStart"),
-                    "recovered": True,
-                },
-                collect=state.runtime_events,
-            )
-        return
+    if event_type == "MODEL_CALL_START":
+        begin_model_generation(state)
+    elif event_type in {"TOOL_CALL_START", "TOOL_CALL_DELTA", "TOOL_CALL_END"}:
+        mark_generation_tool(state)
 
     _attach_provider_cache_usage(event_type, event_data)
     if event_type == "MODEL_CALL_END":
@@ -215,22 +153,8 @@ async def _handle_final_answer_recovery_event(
 
     if event_type == "TEXT_BLOCK_DELTA":
         delta = str(event_data.get("delta", ""))
-        if state.final_answer_started:
-            state.assistant_text += delta
-            yield runtime_trace_source_event(
-                "AGENT_FINAL_ANSWER_DELTA",
-                session_id=session_id,
-                scope=stream_scope,
-                source="runtime",
-                source_event_type="FINAL_ANSWER_RECOVERY",
-                agent_id=agent_id,
-                agent_name=agent_name,
-                status="running",
-                reason="recover_missing_final_answer_marker",
-                payload={"delta": delta, "recovered": True},
-                collect=state.runtime_events,
-            )
-            yield source_event("FINAL_ANSWER_DELTA", {"delta": delta})
+        generation = append_generation_text(state, delta)
+        yield source_event("FINAL_ANSWER_DELTA", {"delta": delta, "generation": generation})
         return
     if event_type == "THINKING_BLOCK_DELTA":
         state.assistant_thinking += str(event_data.get("delta", ""))
@@ -277,10 +201,10 @@ def build_final_answer_recovery_prompt(
         (
             "The previous ReAct loop reached the maximum iteration limit before producing a final answer."
             if exceeded_max_iters
-            else "The previous response ended without calling FinalAnswerStart, so it was treated as process text."
+            else "The previous response ended without a user-facing answer, so its text stayed process notes."
         ),
-        "Do not perform new investigation or call any tool except FinalAnswerStart.",
-        "First call FinalAnswerStart exactly once. After that tool succeeds, provide the final user-facing answer as normal assistant text.",
+        "Do not perform new investigation and do not call any tool.",
+        "Write the final user-facing answer now as normal assistant text.",
         "Use the available process text, thinking summary, and tool results below to produce the best possible final answer.",
         "If the available information is incomplete, still answer concisely with what is known and mention what could not be verified; do not ask a new question here.",
         "Original user request:",
@@ -320,18 +244,4 @@ def _trim_recovery_text(text: str, limit: int = 900) -> str:
     return value[: limit // 2] + "\n...[trimmed]...\n" + value[-limit // 2:]
 
 
-def _is_final_answer_tool_event(event_type: str, event_data: dict, state: Any) -> bool:
-    """判断 AgentScope 工具事件是否属于 FinalAnswerStart 阶段标记。"""
 
-    tool_call_id = str(event_data.get("tool_call_id") or "")
-    tool_name = str(event_data.get("tool_call_name") or "")
-    normalized = tool_name.replace(" ", "").replace("_", "").lower()
-    if event_type == "TOOL_CALL_START" and normalized.endswith("finalanswerstart"):
-        if tool_call_id:
-            state.final_answer_tool_call_ids.add(tool_call_id)
-        return True
-    return bool(
-        tool_call_id
-        and tool_call_id in state.final_answer_tool_call_ids
-        and event_type.startswith("TOOL_")
-    )

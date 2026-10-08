@@ -4,17 +4,19 @@
  * 只负责记忆页面的数据装配、刷新入口和视图切换；具体面板放在 features/memory。
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { Button } from '@/components/design';
 import { WorkbenchDetailShell } from '../components/workbench';
+import { HabitMemoryPanel } from '../features/memory/HabitMemoryPanel';
 import { MarkdownMemoryPanel } from '../features/memory/MarkdownMemoryPanel';
+import { ProfessionalMemoryPanel } from '../features/memory/ProfessionalMemoryPanel';
+import { TimelineMemoryPanel } from '../features/memory/TimelineMemoryPanel';
 import { MemoryCandidatePanel } from '../features/memory/MemoryCandidatePanel';
 import { MemoryLandingPage } from '../features/memory/MemoryLandingPage';
 import { MemorySettingsPanel } from '../features/memory/MemorySettingsPanel';
 import { NodeMemoryPanel } from '../features/memory/NodeMemoryPanel';
 import { SkillEvolutionQueuePanel } from '../features/memory/SkillEvolutionQueuePanel';
-import { WikiVaultPanel } from '../features/memory/WikiVaultPanel';
 import {
   MARKDOWN_TARGETS,
   MEMORY_TABS,
@@ -35,8 +37,6 @@ import type {
   MemoryRetrievalFeedbackPayload,
   MemoryNodeTreeItem,
   MemorySettingsSnapshot,
-  MemoryWikiGraph,
-  MemoryWikiSyncResult,
   SkillEvolutionRecordAction,
   SkillEvolutionRecord,
   SkillEvolutionRecordStatus,
@@ -50,7 +50,6 @@ export function MemoryPage() {
     saveMarkdownMemory,
     loadNodeTree,
     queryNodes,
-    updateNodeStatus,
     loadSkillEvolutionRecords,
     updateSkillEvolutionRecord,
     loadMemoryCandidates,
@@ -59,10 +58,14 @@ export function MemoryPage() {
     sendRetrievalFeedback,
     loadMemorySettings,
     saveAdmissionPolicy,
-    syncWikiVault,
-    loadWikiGraph,
+    readHabits,
+    saveHabits,
+    readProfessional,
+    saveProfessional,
+    loadTimeline,
   } = useMemory();
   const [activeTab, setActiveTab] = useState<MemoryTab | null>(null);
+  const [livedRefresh, setLivedRefresh] = useState(0);
   const [target, setTarget] = useState<MarkdownMemoryScope>('user');
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [doc, setDoc] = useState<MarkdownMemoryDocument | null>(null);
@@ -85,20 +88,12 @@ export function MemoryPage() {
   const [skillAgentId, setSkillAgentId] = useState('');
   const [skillRecords, setSkillRecords] = useState<SkillEvolutionRecord[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(false);
-  const [wikiSyncing, setWikiSyncing] = useState(false);
-  const [wikiResult, setWikiResult] = useState<MemoryWikiSyncResult | null>(null);
-  const [wikiGraph, setWikiGraph] = useState<MemoryWikiGraph | null>(null);
-  const [wikiGraphLoading, setWikiGraphLoading] = useState(false);
   const [memorySettings, setMemorySettings] = useState<MemorySettingsSnapshot | null>(null);
   const [auditEvents, setAuditEvents] = useState<MemoryAuditEvent[]>([]);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [error, setError] = useState('');
 
   const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || agents[0] || null;
-  const agentOptions = useMemo(() => agents.map((agent) => ({
-    label: agent.name,
-    value: agent.id,
-  })), [agents]);
   const selectedTarget = MARKDOWN_TARGETS.find((item) => item.key === target) || MARKDOWN_TARGETS[0];
   const markdownDirty = doc ? draft !== doc.content : false;
 
@@ -124,8 +119,6 @@ export function MemoryPage() {
     setSkillRecords([]);
     setCandidates([]);
     setAuditEvents([]);
-    setWikiGraph(null);
-    setWikiResult(null);
     void loadNodes();
     void loadSkillQueue();
     void loadCandidates();
@@ -140,9 +133,6 @@ export function MemoryPage() {
   }, [activeTab, candidateStatus]);
 
   useEffect(() => {
-    if (activeTab === 'wiki' && !wikiGraph && !wikiGraphLoading) {
-      void loadWikiGraphData();
-    }
     if (activeTab === 'settings' && !memorySettings && !settingsLoading) {
       void loadSettingsAndAudit();
     }
@@ -195,20 +185,6 @@ export function MemoryPage() {
       setNodeResults(results);
     } catch (err) {
       setError(err instanceof Error ? err.message : '历史记忆加载失败');
-    } finally {
-      setNodesLoading(false);
-    }
-  }
-
-  async function updateHistoryStatus(nodeId: string, status: MemoryNodeStatus, reason = '') {
-    try {
-      setNodesLoading(true);
-      setError('');
-      await updateNodeStatus(nodeId, status, reason);
-      await loadNodes();
-      if (activeTab === 'settings') await loadSettingsAndAudit();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '历史记忆状态更新失败');
     } finally {
       setNodesLoading(false);
     }
@@ -275,33 +251,6 @@ export function MemoryPage() {
     }
   }
 
-  async function syncWiki() {
-    try {
-      setWikiSyncing(true);
-      setError('');
-      const result = await syncWikiVault(200);
-      setWikiResult(result);
-      await loadWikiGraphData();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Memory Wiki 同步失败');
-    } finally {
-      setWikiSyncing(false);
-    }
-  }
-
-  async function loadWikiGraphData() {
-    try {
-      setWikiGraphLoading(true);
-      setError('');
-      const graph = await loadWikiGraph(200, 300);
-      setWikiGraph(graph);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Memory Wiki 图谱加载失败');
-    } finally {
-      setWikiGraphLoading(false);
-    }
-  }
-
   async function loadSettingsAndAudit() {
     try {
       setSettingsLoading(true);
@@ -327,13 +276,13 @@ export function MemoryPage() {
   function refreshActiveTab() {
     void refreshAgents();
     if (!activeTab) return;
+    if (activeTab === 'habits' || activeTab === 'professional' || activeTab === 'timeline') {
+      setLivedRefresh((value) => value + 1);
+    }
     if (activeTab === 'markdown') void loadMarkdown();
     if (activeTab === 'candidates') void loadCandidates();
     if (activeTab === 'nodes') void loadNodes();
     if (activeTab === 'skills') void loadSkillQueue();
-    if (activeTab === 'wiki') {
-      void syncWiki();
-    }
     if (activeTab === 'settings') void loadSettingsAndAudit();
   }
 
@@ -368,11 +317,21 @@ export function MemoryPage() {
             {error}
           </div>
         )}
-        {activeTab === 'markdown' ? (
+        {activeTab === 'habits' ? (
+          <HabitMemoryPanel key={livedRefresh} readHabits={readHabits} saveHabits={saveHabits} />
+        ) : activeTab === 'professional' ? (
+          <ProfessionalMemoryPanel
+            key={livedRefresh}
+            agents={agents}
+            readProfessional={readProfessional}
+            saveProfessional={saveProfessional}
+          />
+        ) : activeTab === 'timeline' ? (
+          <TimelineMemoryPanel key={livedRefresh} agents={agents} loadTimeline={loadTimeline} />
+        ) : activeTab === 'markdown' ? (
           <MarkdownMemoryPanel
             agents={agents}
             agentsLoading={agentsLoading}
-            agentOptions={agentOptions}
             target={target}
             selectedTarget={selectedTarget}
             selectedAgent={selectedAgent}
@@ -415,7 +374,6 @@ export function MemoryPage() {
             nodeTree={nodeTree}
             nodeResults={nodeResults}
             onSearch={loadNodes}
-            onUpdateStatus={updateHistoryStatus}
           />
         ) : activeTab === 'skills' ? (
           <SkillEvolutionQueuePanel
@@ -428,15 +386,6 @@ export function MemoryPage() {
             loading={skillsLoading}
             onSearch={loadSkillQueue}
             onAction={updateSkillRecord}
-          />
-        ) : activeTab === 'wiki' ? (
-          <WikiVaultPanel
-            result={wikiResult}
-            graph={wikiGraph}
-            graphLoading={wikiGraphLoading}
-            syncing={wikiSyncing}
-            onSync={syncWiki}
-            onLoadGraph={loadWikiGraphData}
           />
         ) : (
           <MemorySettingsPanel

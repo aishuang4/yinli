@@ -235,7 +235,7 @@ def test_team_agent_overrides_parent_iteration_budget(monkeypatch) -> None:
     assert ctx.runtime_model_config.model_options.max_react_iters == 99
     # Team 成员与单 Agent 共用上下文治理 middleware；未用 Skill 时不挂 SkillContextMiddleware
     names = [type(item).__name__ for item in captured["spec"].middlewares]
-    assert names == ["ContextHygieneMiddleware", "ContextCompressionMiddleware"]
+    assert names == ["TimelineRecallMiddleware", "ContextHygieneMiddleware", "ContextCompressionMiddleware"]
 
 
 def test_team_agent_with_skills_keeps_skill_context_and_memory_prompt(monkeypatch) -> None:
@@ -283,7 +283,12 @@ def test_team_agent_with_skills_keeps_skill_context_and_memory_prompt(monkeypatc
     )
 
     names = [type(item).__name__ for item in captured["spec"].middlewares]
-    assert names == ["SkillContextMiddleware", "ContextHygieneMiddleware", "ContextCompressionMiddleware"]
+    assert names == [
+        "SkillContextMiddleware",
+        "TimelineRecallMiddleware",
+        "ContextHygieneMiddleware",
+        "ContextCompressionMiddleware",
+    ]
     # offloader 按 Team session 分目录；prompt 分段字数供 contextStats
     assert agent.state.session_id == "member-session"
     from src.server.routes.chat.trace_recorder import PROMPT_SECTIONS_ATTR

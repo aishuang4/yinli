@@ -12,6 +12,8 @@ export interface LocalMessage {
   processStartedAt?: string;
   /** Agent 处理结束时间 */
   processCompletedAt?: string;
+  /** 历史回放里由 Run 起止时间算出的秒数 */
+  elapsedSeconds?: number | null;
   /** 后端投影后的消息展示快照 */
   displaySnapshot?: DisplaySnapshot;
   /** 思考链内容（仅 assistant 消息） */
@@ -100,5 +102,6 @@ export interface StoredChatMessage {
   clarification_requests?: ClarificationRequestInfo[];
   clarificationResolved?: boolean;
   clarification_resolved?: boolean;
+  elapsedSeconds?: number | null;
   created_at: string;
 }

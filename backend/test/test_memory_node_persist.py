@@ -11,7 +11,7 @@ from src.memory.node_persist import MemoryNodePersistInput, persist_completed_ru
 from src.memory.reflection import MemoryReflectionInput, MemoryReflectionResult
 from src.server.routes.chat.completion import (
     _build_memory_reflection_input,
-    _run_memory_reflection_background,
+    _run_skill_evolution_background,
     finalize_successful_leader_run,
 )
 from src.server.routes.chat.models import ChatToolRun
@@ -107,13 +107,12 @@ def test_persist_completed_run_memory_node_skips_sensitive_turn():
 def test_successful_completion_triggers_memory_persist(isolated_db, monkeypatch):
     calls = []
 
-    def fake_persist(item, **_kwargs):
-        calls.append(item)
-        return {"id": "node-1"}
+    def fake_professional(**kwargs):
+        calls.append(kwargs)
 
     monkeypatch.setattr(
-        "src.server.routes.chat.completion.persist_completed_run_memory_node",
-        fake_persist,
+        "src.server.routes.chat.completion.schedule_professional_update",
+        fake_professional,
     )
 
     events = asyncio.run(
@@ -137,22 +136,14 @@ def test_successful_completion_triggers_memory_persist(isolated_db, monkeypatch)
     )
 
     assert any(event.event_type == "RUN_COMPLETED" for event in events)
-    assert calls[0].user_message == "用户输入"
-    assert calls[0].assistant_text == "最终回答"
+    assert calls[0]["user_message"] == "用户输入"
+    assert calls[0]["assistant_text"] == "最终回答"
 
 
 def test_successful_completion_records_memory_node_trace_without_chat_event(isolated_db, monkeypatch):
-    def fake_persist(item, **_kwargs):
-        return {
-            "id": "node-1",
-            "title": "节点记忆",
-            "node_date": "2026-07-06",
-            "vector_status": "synced",
-        }
-
     monkeypatch.setattr(
-        "src.server.routes.chat.completion.persist_completed_run_memory_node",
-        fake_persist,
+        "src.server.routes.chat.completion.schedule_professional_update",
+        lambda **_kwargs: None,
     )
 
     events = asyncio.run(
@@ -178,20 +169,13 @@ def test_successful_completion_records_memory_node_trace_without_chat_event(isol
     memory_events = [event for event in trace_events if event["eventType"] == "MEMORY_AUDIT"]
 
     assert not any(event.event_type == "MEMORY_AUDIT" for event in events)
-    assert memory_events
-    assert memory_events[0]["scope"] == "memory"
-    assert memory_events[0]["payload"]["type"] == "memory"
-    assert memory_events[0]["payload"]["memoryType"] == "memory_node_persist"
-    assert memory_events[0]["payload"]["nodeId"] == "node-1"
+    assert not any(event["payload"].get("memoryType") == "memory_node_persist" for event in memory_events)
 
 
 def test_successful_completion_ignores_memory_persist_failure(isolated_db, monkeypatch):
-    def fake_persist(item, **_kwargs):
-        raise RuntimeError("boom")
-
     monkeypatch.setattr(
-        "src.server.routes.chat.completion.persist_completed_run_memory_node",
-        fake_persist,
+        "src.server.routes.chat.completion.schedule_professional_update",
+        lambda **_kwargs: None,
     )
 
     events = asyncio.run(
@@ -226,8 +210,8 @@ def test_successful_completion_does_not_wait_for_memory_reflection(isolated_db, 
         slow_reflection,
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.completion.persist_completed_run_memory_node",
-        lambda item, **_kwargs: {"id": "node-1"},
+        "src.server.routes.chat.completion.schedule_professional_update",
+        lambda **_kwargs: None,
     )
 
     started = time.monotonic()
@@ -271,7 +255,7 @@ def test_memory_reflection_background_records_memory_trace(isolated_db, monkeypa
     )
 
     asyncio.run(
-        _run_memory_reflection_background(
+        _run_skill_evolution_background(
             MemoryReflectionInput(
                 session_id="session-1",
                 agent_id="agent-1",
@@ -299,8 +283,8 @@ def test_memory_reflection_background_records_memory_trace(isolated_db, monkeypa
 
 def test_successful_completion_emits_skill_generating_notice_only(isolated_db, monkeypatch):
     monkeypatch.setattr(
-        "src.server.routes.chat.completion.persist_completed_run_memory_node",
-        lambda item, **_kwargs: {"id": "node-1"},
+        "src.server.routes.chat.completion.schedule_professional_update",
+        lambda **_kwargs: None,
     )
 
     events = asyncio.run(

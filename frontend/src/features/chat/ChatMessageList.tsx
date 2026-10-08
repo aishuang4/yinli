@@ -1,6 +1,7 @@
 /** Chat 历史与实时消息统一使用 DisplaySnapshot V4 Block Tree。 */
 
 import { AlertCircle } from 'lucide-react';
+import { elapsedSeconds } from '../runtime-stream/processTrace';
 import { RuntimeBlockTree } from '../runtime-stream/RuntimeBlockTree';
 import { abandonOpenBlocks, type DisplaySnapshot } from '../runtime-stream/protocol';
 import { hasVisibleRuntimeContent, runtimeText } from '../runtime-stream/selectors';
@@ -49,7 +50,8 @@ export function MessageBubble({
         <RuntimeBlockTree
           snapshot={historySnapshot}
           sessionId={sessionId}
-          processStopped={Boolean(message.cancelled || message.error) || historySnapshot !== message.displaySnapshot}
+          processStopped={Boolean(message.cancelled || message.error)}
+          elapsedSeconds={elapsedSeconds(message.processStartedAt, message.processCompletedAt) ?? message.elapsedSeconds ?? null}
           actions={{ previewPath, onOpenPreview }}
         />
       ) : (
@@ -68,6 +70,8 @@ export function StreamingBubble({
   modelName,
   error,
   createdAt,
+  startedAt,
+  elapsedSeconds: elapsedOverride,
   sessionId,
   previewPath,
   onOpenPreview,
@@ -80,6 +84,8 @@ export function StreamingBubble({
   modelName: string;
   error: string | null;
   createdAt?: string;
+  startedAt?: string;
+  elapsedSeconds?: number | null;
   sessionId?: string;
   previewPath?: string;
   onOpenPreview?: (target: FilePreviewTarget) => void;
@@ -97,7 +103,8 @@ export function StreamingBubble({
         <RuntimeBlockTree
           snapshot={displaySnapshot}
           sessionId={sessionId}
-          processStopped={!live && (cancelled || Boolean(error) || displaySnapshot !== snapshot)}
+          processStopped={!live && (cancelled || Boolean(error))}
+          elapsedSeconds={elapsedOverride ?? elapsedSeconds(startedAt, createdAt)}
           actions={{ onResolveInteraction: live ? onResolveInteraction : undefined, previewPath, onOpenPreview }}
           onAnswerAnimationChange={onAnswerAnimationChange}
         />

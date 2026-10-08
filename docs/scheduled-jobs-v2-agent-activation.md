@@ -63,7 +63,7 @@ Phase 2 把定时任务改成：**先证明这个 Agent 在无人值守下做得
 1. 用真实 MCP / HTTP Tool / Skill / 内置工具表登记 Agent 的 **无人值守能力**，不靠模型猜。
 2. 提供普通工具 `CheckJobFeasibility`：输入任务意图与 Agent，输出 `ok` / `partial` / `impossible`。
 3. `ScheduleJob` 在门禁失败时拒绝创建；部分可行必须明示缺口并得到用户同意才建。
-4. Job 持久化本次认领的能力合同；到期 toolkit = 合同 ∩ 当前 Agent ∩ Project binding ∪ Phase 1 默认本地工具（含 `FinalAnswerStart` / 记忆工具，减去 denylist）。
+4. Job 持久化本次认领的能力合同；到期 toolkit = 合同 ∩ 当前 Agent ∩ Project binding ∪ Phase 1 默认本地工具（含记忆工具，减去 denylist）。
 5. `confirm()` / `resume()` 第二道门：合同仍可满足，权限仍允许无人值守。
 6. Agent / MCP / HTTP / Skill 绑定变化时，按 **合同内资源 id** 暂停或要求重新确认，并通知。
 7. Jobs 页展示合同、缺能力、拒绝原因、到期将跑哪些工具。
@@ -75,7 +75,7 @@ Phase 2 把定时任务改成：**先证明这个 Agent 在无人值守下做得
 
 - 不新增 `runtime.kind`，到期仍走 `start_scheduled_chat_run()` / ReAct / `mode=agent`。
 - 不恢复旧 Plan / Subagent / Memory Runtime，不恢复持久 Team。
-- firing 仍去掉 AskUser / Plan Mode / DelegateTask / ScheduleJob / CheckJobFeasibility / RecheckJobCapabilities 工具组；缺信息就失败。不得用窄 `tool_name_allowlist` 把 `FinalAnswerStart` 裁掉。
+- firing 仍去掉 AskUser / Plan Mode / DelegateTask / ScheduleJob / CheckJobFeasibility / RecheckJobCapabilities 工具组；缺信息就失败。不得改用窄 `tool_name_allowlist` 替换 denylist。
 - ReadinessAgent 仍然只判断「这轮对话能不能开跑」，不选 Agent、不选 MCP、不决定 Job 能不能建。
 - 不改 Chat SSE 契约，不引入顶层 `JOB_EVENT`。
 - 不把 `auto_send` 做成默认；生成 vs 系统代发通道仍拆开。Agent 用自己合同内的 MCP 发出去算完成任务；控制面默认仍 notify。
@@ -100,7 +100,7 @@ Phase 2 把定时任务改成：**先证明这个 Agent 在无人值守下做得
 9. **Phase 1 存量 Job 视为 generate-only，但必须复用今日五旗语义。** 空合同 **保留** `allow_bash`（`frozen_skills_require_bash`）；只忽略脏的外呼旗（`allow_mcp` / `allow_http` / `allow_web` / `allow_knowledge`）并打 `legacy_tool_scope_ignored`。用户改任务或重新确认后才扩合同。
 10. **合同才是 Phase 2 firing 事实源；列上五旗在装配 PR 落地前必须继续全 false。** PR 2 可把派生 scope 写进合同 JSON 的 `assembledToolScope`，**禁止**把 `allow_mcp=true` 写进 `scheduled_jobs.tool_scope` 列，否则今日 `_build_runtime_mcp_servers(agent 全量)` 会整表注入。PR 3 的 `assemble_scheduled_firing_toolkit_spec` 同时改 `enable_tools` 子集与列快照。
 11. **资源变更按合同资源 id 精确匹配，不再只看 `allow_mcp`。** 卸掉无关 MCP 不应暂停 generate-only 周报。`update_agent` 必须比较 `mcp_tools` / `knowledge_tools` / `guardrails.tool_permission_profile` / `human_approval` / `network_enabled`。
-12. **不改 SSE，不新增 `JOB_EVENT`。** Jobs 页继续 REST；Chat 里可行性结果走普通 `tool` Block。firing **继续 denylist、不用窄 allowlist**，必须保留 `FinalAnswerStart`（Chat SSE 最终回答协议）。
+12. **不改 SSE，不新增 `JOB_EVENT`。** Jobs 页继续 REST；Chat 里可行性结果走普通 `tool` Block。firing **继续 denylist、不用窄 allowlist**。最终回答由收尾这一次无工具生成的正文决定，firing 不注入阶段标记工具。
 13. **feature 子开关 `scheduled_jobs.capability_gate`，JSON 缺省为 `false`。** 主开关仍是 `scheduled_jobs.enabled`。显式打开门禁后才拒绝空头 Job。`set_scheduled_jobs_enabled()` 必须读-改-写合并，不得整文档覆盖以致抹掉 `capability_gate`。
 14. **`CheckJobFeasibility` 尽量在收集一长串调度字段之前调用。** 先回答「做不做得到」，再问周五几点。扩已有 Job 走 `RecheckJobCapabilities`，不假设尚不存在的 `UpdateJob` 对话工具。
 
@@ -126,7 +126,7 @@ Phase 2 把定时任务改成：**先证明这个 Agent 在无人值守下做得
 
 到期
   start_scheduled_chat_run
-  toolkit = Phase 1 默认本地工具（Read/Grep/Glob/Write/Edit/FinalAnswerStart/MemoryNode*）
+  toolkit = Phase 1 默认本地工具（Read/Grep/Glob/Write/Edit/MemoryNode*）
             减去 denylist
             ∪ (合同 claimed ∩ 当前 Agent.mcp_tools/knowledge_tools/skills
                ∩ Project binding ∩ 仍 installed/enabled ∩ 仍 unattended_ok)
@@ -574,7 +574,7 @@ def evaluate_job_feasibility(
   "allowHttpRequest": false,
   "allowWebFetch": false,
   "allowBash": false,
-  "firingToolsPreview": ["Read", "Grep", "Glob", "Write", "Edit", "FinalAnswerStart", "MemoryNodeTree", "MemoryNodeQuery"],
+  "firingToolsPreview": ["Read", "Grep", "Glob", "Write", "Edit", "MemoryNodeTree", "MemoryNodeQuery"],
   "unattendedOk": false,
   "suggestedAgentIds": [],
   "message": "我没有无人值守发邮件的能力，只能降级为到点生成周报并通知你。"
@@ -583,7 +583,7 @@ def evaluate_job_feasibility(
 
 上表 `message` / `downgradeOffer.summary` 是示例，**测试不得锁全文**；只 assert 同时出现关键字「不能」「发邮件」或「外发」「生成」。
 
-真实 **ok** 示例要点：`verdict=ok`，`missing=[]`，`claimed` 含 `mcp:{send_email tool id}` 与文件 builtin，`assembledToolScope.allowMcp=true`，`unattendedOk=true`，`firingToolsPreview` 含 `send_email` 与 `FinalAnswerStart`，不含 `list_messages`。
+真实 **ok** 示例要点：`verdict=ok`，`missing=[]`，`claimed` 含 `mcp:{send_email tool id}` 与文件 builtin，`assembledToolScope.allowMcp=true`，`unattendedOk=true`，`firingToolsPreview` 含 `send_email`，不含 `list_messages`。
 
 `verdict` 规则：
 
@@ -788,7 +788,6 @@ flowchart LR
     L[Glob]
     W[Write cwd]
     E[Edit cwd]
-    F[FinalAnswerStart]
     M1[MemoryNodeTree]
     M2[MemoryNodeQuery]
   end
@@ -827,7 +826,7 @@ flowchart LR
         但将 allow_mcp/http/web/knowledge 的脏 true 置 false
       allow_bash 保持列值（scripts Skill）
       本地工具 = 工厂默认 − SCHEDULED_JOB_UNATTENDED_DENYLIST
-      （含 FinalAnswerStart、MemoryNodeTree、MemoryNodeQuery）
+      （含 MemoryNodeTree、MemoryNodeQuery）
       不传 tool_name_allowlist
 
 否则（非空合同）:
@@ -863,7 +862,7 @@ flowchart LR
     本地工具：**不要**设 tool_name_allowlist
       denylist = SCHEDULED_JOB_UNATTENDED_DENYLIST
                  ∪ {CheckJobFeasibility, RecheckJobCapabilities}
-      工厂默认仍注入 FinalAnswerStart / MemoryNode*
+      工厂默认仍注入 MemoryNode*
       Bash / HttpRequest / WebFetch 仅当对应 RuntimeToolScope 旗为 true（现网工厂已按旗注入）
     MCP 靠 enable_tools 收口
 ```
@@ -872,7 +871,7 @@ PR 3 才允许把派生五旗 **写回 Job 列**（与 `enable_tools` 子集同�
 
 `build_scheduled_run_context()`：`mcp_servers` / `knowledge_tools` 传入合同 id 子集。`runtime_features_cache_key` = `scheduled-job-unattended:{denylist_fp}:{contract_fp}`。
 
-测试锁定 firing schemas **含** `FinalAnswerStart`，**不含** AskUser / CheckJobFeasibility / RecheckJobCapabilities。记忆工具 **保留**（与 Phase 1 及 AGENTS.md「定时 Run 仍注入记忆」一致）；若要删除必须另开 PR 并改测试，本文不删。
+测试锁定 firing schemas **不含** AskUser / CheckJobFeasibility / RecheckJobCapabilities。记忆工具 **保留**（与 Phase 1 及 AGENTS.md「定时 Run 仍注入记忆」一致）；若要删除必须另开 PR 并改测试，本文不删。
 
 Write/Edit 的 `write_scope_dir=workspace_dir` 不变。HITL overlay 不变。
 
@@ -1033,7 +1032,7 @@ generate-only 合同：MCP/HTTP 卸载 **不停**（空 claimed）。scripts Ski
    - claimed：工具名、kind、tags、server
    - missing / blockedByPermission（降级任务也要留下当时缺口，避免用户以为会发信）
    - `acceptedPartial`
-2. **到期将跑的工具** = GET 详情调用 `assemble_scheduled_firing_toolkit_spec` 的 dry 预览（PR 3 导出；PR 5 不得在前端重算）。空合同显示 Phase 1 集合（含 `FinalAnswerStart`，scripts 时含 Bash）
+2. **到期将跑的工具** = GET 详情调用 `assemble_scheduled_firing_toolkit_spec` 的 dry 预览（PR 3 导出；PR 5 不得在前端重算）。空合同显示 Phase 1 集合（scripts 时含 Bash）
 3. **拒绝创建原因**
    - 对话：普通 tool Block
    - REST 422：`readApiDetail` 读 `detail.message`（PR 2 已改 hook）
@@ -1054,7 +1053,6 @@ firing 路径继续：`hitl_unattended_resolve` + 窄 Write `scope_dir`。Phase 
 | --- | --- | --- |
 | Read/Grep/Glob | 注入，无 HITL | 同 |
 | Write/Edit | cwd 自动批准 | 同；`read_only` 仍不能 confirm |
-| FinalAnswerStart | 注入（SSE 最终回答） | **必留**；禁止窄 allowlist 裁掉 |
 | MemoryNodeTree / MemoryNodeQuery | 注入 | **保留** |
 | Bash | 默认不注入；scripts Skill confirm 可开 | generate-only 复用列旗；非空合同仅 `allow_bash` 且 `agent_approval_policy==TRUSTED_TOOLS` |
 | HttpRequest | 默认不注入 | 仅合同 `allow_http_request`（§2.3.1）；`email.send` 不得置位 |
@@ -1253,7 +1251,7 @@ PR 1 就改合并写入。测试：先写 `enabled=true, capability_gate=false`�
 | `backend/test/test_capability_catalog.py` | **新建**。库存子集、stdio（含 stdio+url）不可用、HTTP MCP 谓词、Project 未绑定剔除、Skill tags、`approvalPolicy=ask` → 非 unattended；`list_messages` 不得打 `email.send`；`send_email` 可打；`kind=knowledge` 即使 tags 含 `email.send` 也不得认领发信；`import src.scheduler.feasibility` 与 `import src.server.routes.mcp` **以及** `routes.tools` 烟测 |
 | `backend/test/test_job_feasibility.py` | **新建**。发邮件矩阵：无通道 partial；只发送 impossible；HITL partial/impossible；trusted+Gmail ok 且 claimed 不含 `list_messages`；仅 HttpRequest 不匹配；仅 Skill tags 不能 ok；仅 knowledge 行不能 ok；`http.call` 在发信 token 下不置 `allow_http_request`；read_only impossible。partial `message` / AskUser 相关字符串 **只 assert 关键字**「不能」「发邮件」或「外发」「生成」，不锁全文 |
 | `test_scheduled_job_tools.py` | Check / Recheck 注入与 cache key；`task_intent` 含发邮件 + frozen_prompt 只写文件 + 无 `accept_partial` → ScheduleJob 失败；Check schema 无 `accept_partial`；ok 发信合同上 Recheck 省略 task_intent 仍按合同原话、不得变成 generate-only；空合同省略 task_intent → 422；prompt addendum 的 partial AskUser 只锁关键字串，不锁完整句子 |
-| `test_scheduled_unattended.py` | PR 2：有 MCP claim 的 Job **列** `allow_mcp is False`。PR 3：合同 MCP 注入、合同外不注入、空合同不注入 MCP、空合同+scripts Skill+trusted_tools **仍注入 Bash**、空合同+脏 `allow_mcp` 不注入 MCP。firing schemas 含 `FinalAnswerStart`，不含 AskUser/Check/Recheck。cwd Write 仍批准。`would_fail` 收紧 confirm_destructive+MCP |
+| `test_scheduled_unattended.py` | PR 2：有 MCP claim 的 Job **列** `allow_mcp is False`。PR 3：合同 MCP 注入、合同外不注入、空合同不注入 MCP、空合同+scripts Skill+trusted_tools **仍注入 Bash**、空合同+脏 `allow_mcp` 不注入 MCP。firing schemas 不含 AskUser/Check/Recheck。cwd Write 仍批准。`would_fail` 收紧 confirm_destructive+MCP |
 | `test_scheduled_job_resource_pause.py` | 卸无关 MCP 不停 generate-only；卸合同内 MCP/HTTP/knowledge 暂停；`update_agent` 删 mcp_tools / knowledge_tools / 降级 profile / 打开 human_approval / 关 network 暂停外呼合同 |
 | `test_scheduled_jobs.py` / `test_scheduled_jobs_api.py` | 合同 INSERT 往返；空 `{}` → generate_only；confirm/resume 422 结构；recheck 走 `update_job` → pending_confirmation 且 `next_run_at is None`；非终态 firing 时 recheck 409；settings 合并写入 |
 | `test_scheduled_chat_bridge.py` | `enable_tools` 等于合同；knowledge id 交集 |
@@ -1272,7 +1270,7 @@ PR 1 就改合并写入。测试：先写 `enabled=true, capability_gate=false`�
 | 高 | 标签过粗：任意含「mail」的 list 工具被当成 send | 库存 `email.send` 仅名称 send_* / 声明标签；每个 intent 最少一行；`list_messages` 测试锁定不得入合同 |
 | 高 | `trusted_tools` + 过宽 MCP，合同只写了 allow_mcp | 合同必须是 tool id 列表；PR 2 禁止把派生 true 写入列；测试锁定 enable_tools 子集 |
 | 高 | PR 2 提前把 `allow_mcp=true` 写入列导致整表 MCP | DoD：列保持全 false 直到 PR 3 同时改 enable_tools |
-| 高 | 窄 allowlist 裁掉 `FinalAnswerStart` | firing 继续 denylist；测试锁定 schemas |
+| 高 | 窄 allowlist 替换 denylist，裁掉默认本地工具 | firing 继续 denylist；测试锁定 schemas |
 | 高 | 存量 Job 被误升格，突然外呼 | 空合同只忽略脏外呼旗，**保留** `allow_bash`；不自动扩合同 |
 | 中 | 启发式漏匹配，用户有 Gmail 仍 impossible | missing 带库存摘要（Agent 已绑 MCP 名），便于人工 `required_intents` 或补 tags |
 | 中 | Skill 正文声称会发信 | Skill 不能单独满足通道 intent |
@@ -1305,7 +1303,7 @@ Phase 1 不变量 1–24 继续生效。新增：
 28. 合同内资源缺失或不再 `unattended_ok` 时，禁止静默交集；应 `capability_unbound` 失败或在 confirm/resume **422**。
 29. `builtin:HttpRequest` 不得满足 `email.send`；发信 token 存在时不得置 `allow_http_request`。
 30. 空合同 Job 的到期行为与 Phase 1 一致（含 Skill scripts → Bash）；不得因防脏数据丢掉 `allow_bash`。
-31. Chat SSE 仍只有契约内事件；firing 必须保留 `FinalAnswerStart`。
+31. Chat SSE 仍只有契约内事件。firing 不注入最终答案阶段标记；收尾正文走既有 `text` 投影。
 32. PR 3 之前，即使合同 claimed 含 MCP，**列** `tool_scope.allow_mcp` 必须仍为 false。
 33. `set_scheduled_jobs_enabled` 不得抹掉 `capability_gate`。
 34. `RecheckJobCapabilities` / REST recheck 省略 `task_intent` 时只能用 `contract.task_intent`；仍空则 422，禁止 `frozen_prompt` 或空串保底。
@@ -1320,7 +1318,7 @@ Phase 1 不变量 1–24 继续生效。新增：
 | --- | --- |
 | 顶层 `JOB_EVENT` | 违反 Event Stream V3 / SSE 契约流程 |
 | firing 现场 `RuntimeToolScope()` 或继承 Agent 全量 MCP | 合同被绕过 |
-| 用窄 `tool_name_allowlist` 替换 denylist | 会裁掉 `FinalAnswerStart`，破坏 SSE 最终回答 |
+| 用窄 `tool_name_allowlist` 替换 denylist | 会裁掉默认本地工具与记忆工具 |
 | 把 session `kind=scheduled_job` 写成 `runtime.kind` | architecture 只保留 `react` |
 | catalog import `routes.mcp` / `routes.tools` | 顶层 `_job_service` 与 service→feasibility 环依赖 |
 | Recheck 空 `task_intent` 回退 `frozen_prompt` 或 `file.write` 保底 | 会把发信合同重写成 generate-only |
@@ -1413,7 +1411,7 @@ Phase 1 不变量 1–24 继续生效。新增：
   - `backend/test/test_scheduled_unattended.py`
   - `backend/test/test_scheduled_chat_bridge.py`
 - **依赖：** PR 1、PR 2（**不可**与 PR 2 并行合并：PR 2 DoD 已锁列五旗 false，必须等本 PR 同时改 enable_tools 才写回列）
-- **DoD：** 空合同 = Phase 1（含 Bash 旗、含 FinalAnswerStart、脏 allow_mcp 不注入 MCP）；非空合同 claimed ∩ live；缺资源 `capability_unbound`；schemas 含 FinalAnswerStart、不含 AskUser/Check/Recheck。本 PR 才把派生五旗写回列。
+- **DoD：** 空合同 = Phase 1（含 Bash 旗、脏 allow_mcp 不注入 MCP）；非空合同 claimed ∩ live；缺资源 `capability_unbound`；schemas 不含 AskUser/Check/Recheck。本 PR 才把派生五旗写回列。
 
 ### PR 4 — confirm/resume 第二道门 + 绑定变更精确暂停
 

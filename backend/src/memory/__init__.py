@@ -8,13 +8,6 @@ from src.memory.markdown_store import MarkdownMemoryStore
 from src.memory.admission import MemoryAdmissionInput, MemoryAdmissionDecision, evaluate_memory_admission
 from src.memory.node_persist import MemoryNodePersistInput, persist_completed_run_memory_node
 from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
-from src.memory.wiki_vault import (
-    MemoryWikiVaultSyncer,
-    WikiVaultGraphEdge,
-    WikiVaultGraphNode,
-    WikiVaultGraphResult,
-    WikiVaultSyncResult,
-)
 
 __all__ = [
     "MemoryNodeService",
@@ -29,11 +22,6 @@ __all__ = [
     "MemoryReflectionInput",
     "reflect_completed_run_memory",
     "reflect_completed_run_memory_with_agents",
-    "MemoryWikiVaultSyncer",
-    "WikiVaultGraphEdge",
-    "WikiVaultGraphNode",
-    "WikiVaultGraphResult",
-    "WikiVaultSyncResult",
 ]
 
 _REFLECTION_EXPORTS = {

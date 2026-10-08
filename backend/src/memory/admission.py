@@ -191,7 +191,7 @@ def evaluate_memory_admission(item: MemoryAdmissionInput) -> MemoryAdmissionDeci
     if _has_substantive_marker(user_message + "\n" + assistant_text):
         signals.append("substantive_marker")
 
-    if _is_trivial_turn(user_message, assistant_text):
+    if is_trivial_turn(user_message, assistant_text):
         return MemoryAdmissionDecision(
             should_persist_history=False,
             should_write_markdown=False,
@@ -351,7 +351,58 @@ def _score_admission(
     )
 
 
-def _is_trivial_turn(user_message: str, assistant_text: str) -> bool:
+_HABIT_SIGNALS = (
+    "以后",
+    "以後",
+    "下次",
+    "默认",
+    "默認",
+    "记住",
+    "記住",
+    "长期",
+    "長期",
+    "一直",
+    "每次",
+    "不要",
+    "别再",
+    "別再",
+    "不要再",
+    "禁止",
+    "喜欢",
+    "喜歡",
+    "语气",
+    "語氣",
+    "人设",
+    "人設",
+    "习惯",
+    "習慣",
+    "风格",
+    "風格",
+    "remember",
+    "prefer",
+    "always",
+)
+
+
+def is_trivial_user_message(text: str) -> bool:
+    """寒暄或过短的用户句，不叫醒习惯智能体。"""
+
+    user = _normalize_text(text).lower()
+    if not user or len(user) < 6:
+        return True
+    return user in _TRIVIAL_MESSAGES
+
+
+def has_habit_signal(text: str) -> bool:
+    """这句话像在说偏好、语气或人设时，才值得叫醒习惯智能体。"""
+
+    lowered = _normalize_text(text).lower()
+    return any(signal in lowered for signal in _HABIT_SIGNALS)
+
+
+def is_trivial_turn(user_message: str, assistant_text: str) -> bool:
+    """寒暄对答不改专业区。"""
+
     user = user_message.strip().lower()
     assistant = assistant_text.strip().lower()
     if user in _TRIVIAL_MESSAGES and len(assistant) <= 20:

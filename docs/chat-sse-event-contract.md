@@ -180,7 +180,7 @@ type DisplaySnapshot = {
 | kind | 用途 | patch 语义 |
 | --- | --- | --- |
 | `message` | 单轮根节点 | 浅合并结构化字段 |
-| `text` | 最终回答 | 字符串追加或 `{replace}` |
+| `text` | 模型正文。终态由消息 `data.answerGeneration` 指向的那一块承担 | 字符串追加或 `{replace}` |
 | `reasoning` | 执行过程 | 字符串追加或 `{replace}` |
 | `thinking` | 模型思考 | 字符串追加或 `{replace}` |
 | `tool` | 工具调用与结果摘要 | 结构化合并；input/output delta 追加 |
@@ -238,29 +238,25 @@ type ContextBlockData = {
 - `contextWindow` 来自模型 `context_size`：`models.json` 的 `contextSize` 优先，否则按 adapter 默认（deepseek / openai / moonshot 128k、dashscope 131072、anthropic 200k、gemini 1M、ollama 32k）；降级链取链上最小值。
 
 最终回答的 `text` Block 必须保留上游模型的增量节奏。Provider thinking 只投影到 `thinking`
-Block，不得用 thinking 到普通文本的边界推断最终回答已经开始；深度思考模型仍可能在调用业务
-工具前输出过程说明。尚未出现 `FinalAnswerStart`、无法判定用途的普通文本按 ReAct reasoning
-规则处理，避免把执行过程提前投影为最终回答。
+Block。思考块只表示模型思考，不能当成终态信号，也不能用 thinking 到普通文本的边界推断最终回答已经开始。
 
-`FinalAnswerStart` 是**用过业务工具之后**最终回答的必需阶段标记。Agent 只有在本轮不再需要调用
-其他业务工具、准备输出最终用户答案时才能调用一次；无论本轮是否开启深度思考、是否经过 HITL
-暂停恢复，标记后的正文都必须按上游 `TEXT_BLOCK_DELTA` 原始节奏逐片投影。
+一次模型生成对应一个 `text` Block。普通 `TEXT_BLOCK_DELTA` 从第一个 token 起就投影为 `FINAL_ANSWER_DELTA`，
+payload 带 `generation`（从 1 递增的正整数）。同一 Run 里人工确认恢复后续用暂停前的编号，不从 1 重新开始。
+`generation > 0` 时 Block id 为 `text:{runId}:{generation}`；
+缺省、非整数或 `<= 0` 时仍使用 `text:{runId}`，供 Team 综合和计划审核摘要沿用单块正文。
+正文不积压、不改判成 `reasoning`，也不存在按字数提前晋升。同一次生成里若出现工具调用，该 Block 保持为过程正文，循环继续。
 
-**直接回答（本次 reply 尚无任何业务工具调用）不要求 `FinalAnswerStart`**，以免每次简单问答都多付一
-次模型往返。后端按以下规则投影直接回答：
+终态信号只在 `REPLY_END.finished_reason=completed`、这次生成没有工具调用、且正文非空时发出。
+投影为消息 Block 的 `data.answerGeneration`，值是对应 `text` Block 的 id。这不是新的 SSE op：
+前端只看到既有 `delta` Frame 在消息上补上该字段。`AGENT_FINAL_ANSWER_STARTED.reason=reply_completed`，
+payload 为 `{generation, direct: true}`，不携带工具名。已经流过的正文不再整段重发 `FINAL_ANSWER_DELTA`。
 
-- 本次 reply 尚未出现任何 `TOOL_CALL_*`，且累计普通文本达到 `DIRECT_ANSWER_STREAM_THRESHOLD`
-  （当前 600 字符）时，后端把已累计文本一次性投影为最终回答并开始逐片流式投影后续 delta；
-  对应 `AGENT_FINAL_ANSWER_STARTED.reason=direct_text_stream`，payload `{direct: true, optimistic: true}`。
-- 文本未达阈值就结束 reply（`REPLY_END.finished_reason=completed`）的，尾部文本仍按原兜底一次性投影
-  （`reason=direct_text_response`）。
-- 若模型在阈值之后才调用业务工具（长篇过程说明被误判为回答），最终回答 `text` Block 继续追加
-  后续正文，工具 Block 照常出现，与模型先调 `FinalAnswerStart` 再调工具的既有容错一致；前端不需要
-  新增回收逻辑。
-- 一旦本次 reply 出现过任何业务工具调用，普通文本回到 ReAct reasoning 规则，必须等 `FinalAnswerStart`。
+中断、失败、等待 AskUser，以及这次生成带了工具调用时，不写 `answerGeneration`。收尾正文为空、
+但已有工具、推理、思考或达到轮次上限时，再要一轮 `tool_choice=none` 的纯文本；这一轮仍按上面的生成规则投影。
+仍然为空时沿用缺答案或超轮次失败。
 
-若模型在用过工具后违反契约、在 `REPLY_END.finished_reason=completed` 前直接输出尾部文本，后端仍把
-尾部文本作为最终回答一次性投影，作为防止答案丢失的兼容兜底，不得额外强制发起模型调用。
+计划审核摘要和 Team 综合继续直接流最终正文。它们不带 `generation`，结束时把 `text:{runId}` 写入 `answerGeneration`。
+旧快照没有该字段时，展示层把已完成消息里的 `kind=text` 当作当年的最终答案；不回写历史库。
 
 支持增量结果的长耗时工具必须在执行期间持续发送结果 delta。内置 Bash 在本地执行时必须按
 stdout/stderr 可读节奏产生 `TOOL_RESULT_TEXT_DELTA`，使对应 `tool` Block 的 `outputPreview`

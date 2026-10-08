@@ -24,8 +24,17 @@ def isolated_db(tmp_path, monkeypatch):
 def test_middleware_chain_shape() -> None:
     with_skill = [type(item).__name__ for item in governance.build_context_governance_middlewares(skill_context=True)]
     without = [type(item).__name__ for item in governance.build_context_governance_middlewares(skill_context=False)]
-    assert with_skill == ["SkillContextMiddleware", "ContextHygieneMiddleware", "ContextCompressionMiddleware"]
-    assert without == ["ContextHygieneMiddleware", "ContextCompressionMiddleware"]
+    assert with_skill == [
+        "SkillContextMiddleware",
+        "TimelineRecallMiddleware",
+        "ContextHygieneMiddleware",
+        "ContextCompressionMiddleware",
+    ]
+    assert without == [
+        "TimelineRecallMiddleware",
+        "ContextHygieneMiddleware",
+        "ContextCompressionMiddleware",
+    ]
 
 
 def test_prepare_restore_persist_round_trip(isolated_db) -> None:
@@ -79,26 +88,22 @@ def test_observe_model_call_writes_context_usage_and_compression_traces(isolated
 
 
 def test_memory_prompt_and_recall_split(monkeypatch) -> None:
-    monkeypatch.setattr(governance, "build_memory_injection_text", lambda context: "# Memory\n摘要")
-    monkeypatch.setattr(
-        governance,
-        "build_memory_recall",
-        lambda context, *, query_text, exclude_session_id="": SimpleNamespace(
-            text=f"<recalled-memory>{query_text}</recalled-memory>", node_ids=["n1"], candidate_count=3, query_chars=len(query_text),
-        ),
-    )
+    from src.server.routes.chat.memory_prompt_cache import invalidate_memory_prompts
+
+    invalidate_memory_prompts()
+    monkeypatch.setattr(governance, "build_habit_prompt", lambda *args, **kwargs: "# Habits\n摘要")
+    monkeypatch.setattr(governance, "build_professional_prompt", lambda *args, **kwargs: "")
     prompt, recall = governance.build_memory_prompt_and_recall(
         agent_id="a", agent_name="A", workspace_id="w", project_id="p",
         query_text="汇总销售表", freeze_session_id=None, exclude_session_id="s-1",
     )
-    assert prompt == "# Memory\n摘要"
-    assert recall.text == "<recalled-memory>汇总销售表</recalled-memory>"
+    assert "# Habits" in prompt
+    assert recall is None
 
     prompt, recall = governance.build_memory_prompt_and_recall(
         agent_id="a", agent_name="A", workspace_id="w", project_id="p",
         query_text="汇总销售表", freeze_session_id=None, include_markdown=False,
     )
     assert prompt == ""
-    assert recall.node_ids == ["n1"]
-    assert governance.append_user_note("正文", recall.text) == f"正文\n\n{recall.text}"
+    assert recall is None
     assert governance.append_user_note("正文", "") == "正文"

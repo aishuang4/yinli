@@ -73,3 +73,4 @@ async def stream_pending_plan_review_events(
         )
         if index < len(deltas) - 1:
             await asyncio.sleep(_PLAN_FINAL_ANSWER_CHUNK_DELAY_SECONDS)
+    yield source_event("ANSWER_READY", {})

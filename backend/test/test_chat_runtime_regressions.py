@@ -38,7 +38,6 @@ from src.server.routes.chat.models import (
     ChatToolRun,
 )
 from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
-from src.server.routes.chat.final_answer_recovery import _execute_recovery_tool_calls
 from src.server.routes.chat.prompts import _build_final_answer_system_prompt
 from src.server.routes.chat.runtime import _permission_mode_for_guardrails
 from src.server.routes.chat.react_runtime import execute_react_runtime
@@ -112,39 +111,62 @@ def _final_answer_deltas(events: list[SourceEvent]) -> list[str]:
     ]
 
 
-def test_final_answer_prompt_requires_phase_marker_for_streaming():
+def test_final_answer_prompt_asks_for_plain_text():
     prompt = _build_final_answer_system_prompt()
-    assert "FinalAnswerStart" in prompt
-    assert "required phase marker" in prompt
-    # 直接回答不要求标记，用过工具后才要求
-    assert "Do NOT call FinalAnswerStart for such direct answers" in prompt
-    assert "Once you have called any business tool or AskUser in this turn" in prompt
-    assert "after a tool or AskUser resumes" in prompt
+    assert "Final Answer Contract" in prompt
+    assert "plain text" in prompt
+    assert "FinalAnswerStart" not in prompt
 
 
-def test_direct_answer_streams_before_reply_end_when_no_tool_call():
-    """本次 reply 无工具调用且文本超过阈值时，提前把累计文本投影为最终回答。"""
+def test_short_direct_answer_streams_immediately_and_commits_on_reply_end():
+    """短回答也从第一个 token 流出，回复结束且这次生成没有工具时才标成最终答案。"""
 
-    from src.server.routes.chat import leader_stream
+    class FakeDirectAgent:
+        async def reply_stream(self, _user_msg):
+            yield _FakeAgentScopeEvent({"type": "MODEL_CALL_START", "reply_id": "reply-direct"})
+            yield _FakeAgentScopeEvent({
+                "type": "TEXT_BLOCK_DELTA",
+                "reply_id": "reply-direct",
+                "delta": "短回答",
+            })
+            yield _FakeAgentScopeEvent({
+                "type": "REPLY_END",
+                "reply_id": "reply-direct",
+                "finished_reason": "completed",
+            })
 
-    state = LeaderStreamState()
-    state.pending_text = "答" * (leader_stream.DIRECT_ANSWER_STREAM_THRESHOLD - 1)
-    assert leader_stream._should_stream_direct_answer(state, []) is False
-    state.pending_text += "案"
-    assert leader_stream._should_stream_direct_answer(state, []) is True
+    async def run_case():
+        state = LeaderStreamState()
+        events = [
+            event
+            async for event in stream_leader_agent_reply(
+                agent=FakeDirectAgent(),
+                user_msg=object(),
+                state=state,
+                session_id="session-direct",
+                persist=False,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="deepseek-chat",
+                guardrails=[],
+                message="直接回答",
+                stream_scope="single",
+                skill_runs=[],
+            )
+        ]
+        return state, events
 
-    tooling = LeaderStreamState(reply_had_tool_call=True)
-    tooling.pending_text = "过程说明" * 400
-    assert leader_stream._should_stream_direct_answer(tooling, []) is False
-
-    blocked = LeaderStreamState(subagent_completion_blocked_reason="attached task pending")
-    blocked.pending_text = "文" * 1000
-    assert leader_stream._should_stream_direct_answer(blocked, []) is False
+    state, events = asyncio.run(run_case())
+    assert _final_answer_deltas(events) == ["短回答"]
+    ready = [event for event in events if _event_is(event, "ANSWER_READY")]
+    assert [event.data.get("generation") for event in ready] == [1]
+    assert state.assistant_text == "短回答"
 
 
-def test_default_agent_prompt_mentions_final_answer_marker():
+def test_default_agent_prompt_asks_for_plain_text_answer():
     prompt = _default_agent_prompt("Assistant", "Help the user.")
-    assert "FinalAnswerStart" in prompt
+    assert "plain text" in prompt
+    assert "FinalAnswerStart" not in prompt
 
 
 def _projection_run() -> ChatBackgroundRun:
@@ -181,10 +203,8 @@ class _FakeDelegateTaskParentAgent:
         if isinstance(user_msg, ExternalExecutionResultEvent):
             self.resume_events.append(user_msg)
             yield _FakeAgentScopeEvent({
-                "type": "TOOL_CALL_START",
+                "type": "MODEL_CALL_START",
                 "reply_id": "reply-parent",
-                "tool_call_id": "final-1",
-                "tool_call_name": "FinalAnswerStart",
             })
             yield _FakeAgentScopeEvent({
                 "type": "TEXT_BLOCK_DELTA",
@@ -218,10 +238,8 @@ class _FakeParallelDelegateTaskParentAgent(_FakeDelegateTaskParentAgent):
         if isinstance(user_msg, ExternalExecutionResultEvent):
             self.resume_events.append(user_msg)
             yield _FakeAgentScopeEvent({
-                "type": "TOOL_CALL_START",
+                "type": "MODEL_CALL_START",
                 "reply_id": "reply-parallel",
-                "tool_call_id": "final-parallel",
-                "tool_call_name": "FinalAnswerStart",
             })
             yield _FakeAgentScopeEvent({
                 "type": "TEXT_BLOCK_DELTA",
@@ -344,6 +362,7 @@ class _FakeMultiToolHitlAgent:
 
 class _FakeResumeFinalAnswerAgent:
     async def reply_stream(self, resume_event):
+        yield _FakeAgentScopeEvent({"type": "MODEL_CALL_START", "reply_id": "reply-1"})
         yield _FakeAgentScopeEvent({
             "type": "TEXT_BLOCK_DELTA",
             "reply_id": "reply-1",
@@ -352,26 +371,21 @@ class _FakeResumeFinalAnswerAgent:
         yield _FakeAgentScopeEvent({
             "type": "TOOL_CALL_START",
             "reply_id": "reply-1",
-            "tool_call_id": "call-final",
-            "tool_call_name": "FinalAnswerStart",
+            "tool_call_id": "call-read-after",
+            "tool_call_name": "Read",
         })
         yield _FakeAgentScopeEvent({
             "type": "TOOL_CALL_END",
             "reply_id": "reply-1",
-            "tool_call_id": "call-final",
-        })
-        yield _FakeAgentScopeEvent({
-            "type": "TOOL_RESULT_START",
-            "reply_id": "reply-1",
-            "tool_call_id": "call-final",
-            "tool_call_name": "FinalAnswerStart",
+            "tool_call_id": "call-read-after",
         })
         yield _FakeAgentScopeEvent({
             "type": "TOOL_RESULT_END",
             "reply_id": "reply-1",
-            "tool_call_id": "call-final",
+            "tool_call_id": "call-read-after",
             "state": "success",
         })
+        yield _FakeAgentScopeEvent({"type": "MODEL_CALL_START", "reply_id": "reply-1"})
         yield _FakeAgentScopeEvent({
             "type": "TEXT_BLOCK_DELTA",
             "reply_id": "reply-1",
@@ -380,6 +394,7 @@ class _FakeResumeFinalAnswerAgent:
         yield _FakeAgentScopeEvent({
             "type": "REPLY_END",
             "reply_id": "reply-1",
+            "finished_reason": "completed",
         })
 
 
@@ -415,50 +430,14 @@ class _FakeRecoverableNoFinalAnswerAgent:
         self.recovery_message = msgs
 
     async def _reasoning(self, tool_choice=None):
-        if getattr(tool_choice, "mode", "") == "FinalAnswerStart":
-            yield _FakeAgentScopeEvent({
-                "type": "TOOL_CALL_START",
-                "reply_id": "reply-recovery-marker",
-                "tool_call_id": "call-recovery-final",
-                "tool_call_name": "FinalAnswerStart",
-            })
-            yield _FakeAgentScopeEvent({
-                "type": "TOOL_CALL_END",
-                "reply_id": "reply-recovery-marker",
-                "tool_call_id": "call-recovery-final",
-            })
-            return
-        if getattr(tool_choice, "mode", "") == "none":
-            yield _FakeAgentScopeEvent({
-                "type": "TEXT_BLOCK_DELTA",
-                "reply_id": "reply-recovery-answer",
-                "delta": "恢复后的最终答案",
-            })
-            yield _FakeAgentScopeEvent({
-                "type": "REPLY_END",
-                "reply_id": "reply-recovery-answer",
-            })
-
-    def _get_last_msg(self):
-        tool_calls = [SimpleNamespace(id="call-recovery-final")]
-        return SimpleNamespace(get_content_blocks=lambda block_type: tool_calls if block_type == "tool_call" else [])
-
-    async def _batch_tool_calls(self, tool_calls):
-        return [SimpleNamespace(type="concurrent", tool_calls=tool_calls)]
-
-    async def _execute_concurrent_tool_calls(self, tool_calls):
+        assert getattr(tool_choice, "mode", "") == "none"
+        yield _FakeAgentScopeEvent({"type": "MODEL_CALL_START", "reply_id": "reply-recovery-answer"})
         yield _FakeAgentScopeEvent({
-            "type": "TOOL_RESULT_START",
-            "reply_id": "reply-recovery-marker",
-            "tool_call_id": "call-recovery-final",
-            "tool_call_name": "FinalAnswerStart",
+            "type": "TEXT_BLOCK_DELTA",
+            "reply_id": "reply-recovery-answer",
+            "delta": "恢复后的最终答案",
         })
-        yield _FakeAgentScopeEvent({
-            "type": "TOOL_RESULT_END",
-            "reply_id": "reply-recovery-marker",
-            "tool_call_id": "call-recovery-final",
-            "state": "success",
-        })
+        yield _FakeAgentScopeEvent({"type": "MODEL_CALL_END", "reply_id": "reply-recovery-answer"})
 
 
 class _FakeExceedMaxItersAgent:
@@ -709,24 +688,26 @@ def test_tool_result_runtime_event_preserves_failed_state():
     assert event["payload"]["state"] == "error"
 
 
-def test_reasoning_is_flushed_before_each_tool_call():
-    """多轮 ReAct 必须在每次工具调用前产出独立 reasoning，不能拖到整轮 REPLY_END。"""
+def test_each_generation_streams_body_and_only_the_clean_tail_is_the_answer():
+    """每次生成的正文立即流出；只有没有工具的收尾生成写入 assistant_text。"""
 
     class FakeMultiStepAgent:
         async def reply_stream(self, _user_msg):
             for payload in (
                 {"type": "REPLY_START", "reply_id": "reply-1"},
+                {"type": "MODEL_CALL_START", "reply_id": "reply-1"},
                 {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-1", "delta": "先检查配置。"},
                 {"type": "TOOL_CALL_START", "reply_id": "reply-1", "tool_call_id": "call-1", "tool_call_name": "Read"},
                 {"type": "TOOL_CALL_END", "reply_id": "reply-1", "tool_call_id": "call-1"},
                 {"type": "TOOL_RESULT_END", "reply_id": "reply-1", "tool_call_id": "call-1", "state": "success"},
+                {"type": "MODEL_CALL_START", "reply_id": "reply-1"},
                 {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-1", "delta": "再搜索引用。"},
                 {"type": "TOOL_CALL_START", "reply_id": "reply-1", "tool_call_id": "call-2", "tool_call_name": "Grep"},
                 {"type": "TOOL_CALL_END", "reply_id": "reply-1", "tool_call_id": "call-2"},
                 {"type": "TOOL_RESULT_END", "reply_id": "reply-1", "tool_call_id": "call-2", "state": "success"},
-                {"type": "TOOL_CALL_START", "reply_id": "reply-1", "tool_call_id": "final-1", "tool_call_name": "FinalAnswerStart"},
+                {"type": "MODEL_CALL_START", "reply_id": "reply-1"},
                 {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-1", "delta": "检查完成。"},
-                {"type": "REPLY_END", "reply_id": "reply-1"},
+                {"type": "REPLY_END", "reply_id": "reply-1", "finished_reason": "completed"},
             ):
                 yield _FakeAgentScopeEvent(payload)
 
@@ -759,13 +740,15 @@ def test_reasoning_is_flushed_before_each_tool_call():
     ]
 
     assert [(event.event_type, event.data.get("delta") or event.data.get("tool_call_id")) for event in application_events] == [
-        ("REASONING_DELTA", "先检查配置。"),
+        ("FINAL_ANSWER_DELTA", "先检查配置。"),
         ("TOOL_CALL_START", "call-1"),
-        ("REASONING_DELTA", "再搜索引用。"),
+        ("FINAL_ANSWER_DELTA", "再搜索引用。"),
         ("TOOL_CALL_START", "call-2"),
         ("FINAL_ANSWER_DELTA", "检查完成。"),
     ]
-    assert state.assistant_reasoning_text == "先检查配置。再搜索引用。"
+    ready = [event for event in events if _event_is(event, "ANSWER_READY")]
+    assert [event.data.get("generation") for event in ready] == [3]
+    assert state.assistant_reasoning_text == "先检查配置。再搜索引用。检查完成。"
     assert state.assistant_text == "检查完成。"
 
 
@@ -778,11 +761,12 @@ def test_deep_thinking_progress_before_tool_stays_out_of_final_answer():
                 {"type": "REPLY_START", "reply_id": "reply-thinking"},
                 {"type": "THINKING_BLOCK_DELTA", "reply_id": "reply-thinking", "delta": "分析中。"},
                 {"type": "THINKING_BLOCK_END", "reply_id": "reply-thinking"},
+                {"type": "MODEL_CALL_START", "reply_id": "reply-thinking"},
                 {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-thinking", "delta": "我先执行任务。"},
                 {"type": "TOOL_CALL_START", "reply_id": "reply-thinking", "tool_call_id": "call-bash", "tool_call_name": "Bash"},
                 {"type": "TOOL_CALL_END", "reply_id": "reply-thinking", "tool_call_id": "call-bash"},
                 {"type": "TOOL_RESULT_END", "reply_id": "reply-thinking", "tool_call_id": "call-bash", "state": "success"},
-                {"type": "TOOL_CALL_START", "reply_id": "reply-thinking", "tool_call_id": "call-final", "tool_call_name": "FinalAnswerStart"},
+                {"type": "MODEL_CALL_START", "reply_id": "reply-thinking"},
                 {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-thinking", "delta": "第一段"},
                 {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-thinking", "delta": "第二段"},
                 {"type": "REPLY_END", "reply_id": "reply-thinking"},
@@ -813,10 +797,12 @@ def test_deep_thinking_progress_before_tool_stays_out_of_final_answer():
 
     state, events = asyncio.run(run_case())
 
-    assert _final_answer_deltas(events) == ["第一段", "第二段"]
+    assert _final_answer_deltas(events) == ["我先执行任务。", "第一段", "第二段"]
     assert state.assistant_thinking == "分析中。"
     assert state.assistant_text == "第一段第二段"
-    assert state.assistant_reasoning_text == "我先执行任务。"
+    assert state.assistant_reasoning_text == "我先执行任务。第一段第二段"
+    ready = [event for event in events if _event_is(event, "ANSWER_READY")]
+    assert [event.data.get("generation") for event in ready] == [2]
     assert sum(
         1
         for event in events
@@ -859,7 +845,7 @@ def test_thinking_events_do_not_stream_direct_answer_when_mode_is_disabled():
 
     events = asyncio.run(run_case())
 
-    assert _final_answer_deltas(events) == ["第一段第二段"]
+    assert _final_answer_deltas(events) == ["第一段", "第二段"]
 
 
 def test_single_agent_hitl_pending_interaction_keeps_stream_scope():
@@ -908,6 +894,88 @@ def test_single_agent_hitl_pending_interaction_keeps_stream_scope():
         PENDING_AGENTS.clear()
 
 
+def test_hitl_resume_continues_text_generation_counter():
+    """审批前已经占用的正文生成号必须续上，恢复后的答案不能写回旧块。"""
+
+    class FakePauseAfterNarration:
+        async def reply_stream(self, _user_msg):
+            for payload in (
+                {"type": "MODEL_CALL_START", "reply_id": "reply-1"},
+                {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-1", "delta": "先看文件。"},
+                {
+                    "type": "TOOL_CALL_START",
+                    "reply_id": "reply-1",
+                    "tool_call_id": "call-read",
+                    "tool_call_name": "Read",
+                },
+                {
+                    "type": "REQUIRE_USER_CONFIRM",
+                    "reply_id": "reply-1",
+                    "tool_calls": [{
+                        "id": "call-read",
+                        "name": "Read",
+                        "input": "{}",
+                        "state": "asking",
+                    }],
+                },
+            ):
+                yield _FakeAgentScopeEvent(payload)
+
+    class FakeResumeAnswer:
+        async def reply_stream(self, _resume_event):
+            for payload in (
+                {"type": "MODEL_CALL_START", "reply_id": "reply-1"},
+                {"type": "TEXT_BLOCK_DELTA", "reply_id": "reply-1", "delta": "文件第一行是标题。"},
+                {"type": "REPLY_END", "reply_id": "reply-1", "finished_reason": "completed"},
+            ):
+                yield _FakeAgentScopeEvent(payload)
+
+    async def run_case():
+        PENDING_INTERACTIONS.clear()
+        PENDING_AGENTS.clear()
+        events = [
+            event
+            async for event in stream_leader_agent_reply(
+                agent=FakePauseAfterNarration(),
+                user_msg=object(),
+                state=LeaderStreamState(),
+                session_id="session-generation-resume",
+                persist=False,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="deepseek-chat",
+                guardrails=AgentGuardrails(),
+                message="读取文件后回答",
+                stream_scope="single",
+                skill_runs=[],
+            )
+        ]
+        interaction = next(iter(PENDING_INTERACTIONS.values()))
+        PENDING_AGENTS[interaction.id] = FakeResumeAnswer()
+        resumed = [
+            event
+            async for event in resume_interaction_events(
+                ChatResumeRequest.model_validate({
+                    "interactionId": interaction.id,
+                    "action": "approve",
+                })
+            )
+        ]
+        return interaction.reply_generation, events, resumed
+
+    saved_generation, events, resumed = asyncio.run(run_case())
+
+    try:
+        assert saved_generation == 1
+        assert _final_answer_deltas(events) == ["先看文件。"]
+        assert _final_answer_deltas(resumed) == ["文件第一行是标题。"]
+        ready = [event for event in resumed if _event_is(event, "ANSWER_READY")]
+        assert [event.data.get("generation") for event in ready] == [2]
+    finally:
+        PENDING_INTERACTIONS.clear()
+        PENDING_AGENTS.clear()
+
+
 def test_permission_resume_continues_plan_runtime_events():
     """权限审批恢复后必须继续投递 Plan 步骤事件，避免进度面板停在旧步骤。"""
 
@@ -951,10 +1019,8 @@ def test_permission_resume_continues_plan_runtime_events():
                     "state": "success",
                 },
                 {
-                    "type": "TOOL_CALL_START",
+                    "type": "MODEL_CALL_START",
                     "reply_id": "reply-plan-resume",
-                    "tool_call_id": "final-plan-resume",
-                    "tool_call_name": "FinalAnswerStart",
                 },
                 {
                     "type": "TEXT_BLOCK_DELTA",
@@ -1131,7 +1197,7 @@ def test_delegate_task_external_executor_is_recovered_from_agent_toolkit():
 
 
 def test_subagent_completion_barrier_withholds_early_final_answer_and_resumes_parent():
-    """父 Agent忘记消费 attached child 时，候选答案不能泄漏到前端。"""
+    """父 Agent 忘记消费 attached child 时，这段正文可以流出，但不能标成最终答案。"""
 
     class BarrierSource:
         def __init__(self) -> None:
@@ -1151,18 +1217,18 @@ def test_subagent_completion_barrier_withholds_early_final_answer_and_resumes_pa
         async def reply_stream(self, _event):
             self.calls += 1
             text = "不应展示" if self.calls == 1 else "已消费后回答"
-            yield _FakeAgentScopeEvent({
-                "type": "TOOL_CALL_START",
-                "reply_id": f"reply-{self.calls}",
-                "tool_call_id": f"final-{self.calls}",
-                "tool_call_name": "FinalAnswerStart",
-            })
+            if self.calls > 1:
+                yield _FakeAgentScopeEvent({"type": "MODEL_CALL_START", "reply_id": f"reply-{self.calls}"})
             yield _FakeAgentScopeEvent({
                 "type": "TEXT_BLOCK_DELTA",
                 "reply_id": f"reply-{self.calls}",
                 "delta": text,
             })
-            yield _FakeAgentScopeEvent({"type": "REPLY_END", "reply_id": f"reply-{self.calls}"})
+            yield _FakeAgentScopeEvent({
+                "type": "REPLY_END",
+                "reply_id": f"reply-{self.calls}",
+                "finished_reason": "completed",
+            })
 
     async def run_case():
         agent = BarrierAgent()
@@ -1189,8 +1255,9 @@ def test_subagent_completion_barrier_withholds_early_final_answer_and_resumes_pa
     agent, events = asyncio.run(run_case())
 
     assert agent.calls == 2
-    assert _final_answer_deltas(events) == ["已消费后回答"]
-    assert not any(_event_contains(event, "不应展示") for event in events)
+    assert _final_answer_deltas(events) == ["不应展示", "已消费后回答"]
+    ready = [event for event in events if _event_is(event, "ANSWER_READY")]
+    assert [event.data.get("generation") for event in ready] == [2]
 
 
 def test_single_agent_without_final_answer_marker_does_not_fallback_to_final_answer():
@@ -1250,45 +1317,6 @@ def test_single_agent_recovers_missing_final_answer_marker_with_extra_call():
     assert any(_event_contains(event, "工具后的过程总结") for event in final_events)
     assert not any(_event_contains(event, "恢复后的最终答案") for event in final_events)
     assert not any(_event_contains(event, "recover_missing_final_answer_marker") for event in events)
-
-
-def test_final_answer_recovery_passes_tool_calls_to_agentscope_2_0_5_batcher():
-    """恢复轮必须按 AgentScope 2.0.5 签名向 batcher 传入 ToolCallBlock。"""
-
-    expected_tool_calls = [SimpleNamespace(id="call-final", name="FinalAnswerStart")]
-
-    class FakeLastMessage:
-        def get_content_blocks(self, block_type):
-            assert block_type == "tool_call"
-            return expected_tool_calls
-
-    class FakeAgent:
-        def __init__(self):
-            self.received_tool_calls = None
-
-        def _get_last_msg(self):
-            return FakeLastMessage()
-
-        async def _batch_tool_calls(self, tool_calls):
-            self.received_tool_calls = tool_calls
-            return [SimpleNamespace(type="concurrent", tool_calls=tool_calls)]
-
-        async def _execute_concurrent_tool_calls(self, tool_calls):
-            yield _FakeAgentScopeEvent({
-                "type": "TOOL_RESULT_END",
-                "tool_call_id": tool_calls[0].id,
-                "state": "success",
-            })
-
-    async def run_case():
-        agent = FakeAgent()
-        events = [event async for event in _execute_recovery_tool_calls(agent)]
-        return agent, events
-
-    agent, events = asyncio.run(run_case())
-
-    assert agent.received_tool_calls is expected_tool_calls
-    assert events[0].model_dump()["tool_call_id"] == "call-final"
 
 
 def test_react_runtime_fails_when_agent_ends_without_final_answer(monkeypatch):
@@ -1411,7 +1439,7 @@ def test_react_runtime_reports_agentscope_max_iters(monkeypatch):
 
     events = asyncio.run(run_case())
 
-    assert any(_event_is(event, "REASONING_DELTA") for event in events)
+    assert any(_event_is(event, "FINAL_ANSWER_DELTA") and _event_contains(event, "还在继续分析") for event in events)
     assert any(event.data.get("reason") == "max_react_iterations" for event in events)
     assert any(_event_contains(event, "RUN_FAILED") for event in events)
     assert any(_event_is(event, "ERROR") and _event_contains(event, "最大 ReAct 迭代次数") for event in events)
@@ -1475,7 +1503,7 @@ def test_react_runtime_recovers_final_answer_after_max_iters(monkeypatch):
 
     events = asyncio.run(run_case())
 
-    assert any(_event_is(event, "REASONING_DELTA") for event in events)
+    assert any(_event_is(event, "FINAL_ANSWER_DELTA") and _event_contains(event, "达到迭代上限前的过程总结") for event in events)
     assert any(_event_is(event, "FINAL_ANSWER_DELTA") and _event_contains(event, "恢复后的最终答案") for event in events)
     assert any(_event_contains(event, "RUN_COMPLETED") for event in events)
     assert not any(_event_contains(event, "RUN_FAILED") for event in events)
@@ -1688,7 +1716,7 @@ def test_resume_event_can_remember_tool_approval_for_current_session():
 
 
 def test_resume_text_before_final_answer_marker_stays_out_of_final_body():
-    """审批恢复后的过程文本不能闪进正文，只有 FinalAnswerStart 后的文本进入正文。"""
+    """审批恢复后，带工具的生成和后面的纯文本都会流出，只有后者标成最终答案。"""
 
     async def run_case():
         PENDING_INTERACTIONS.clear()
@@ -1728,8 +1756,10 @@ def test_resume_text_before_final_answer_marker_stays_out_of_final_body():
             event for event in events
             if _event_is(event, "FINAL_ANSWER_DELTA")
         ]
-        assert not any(_event_contains(event, "过程文本") for event in final_events)
+        assert any(_event_contains(event, "过程文本") for event in final_events)
         assert any(_event_contains(event, "最终文本") for event in final_events)
+        ready = [event for event in events if _event_is(event, "ANSWER_READY")]
+        assert [event.data.get("generation") for event in ready] == [2]
     finally:
         PENDING_INTERACTIONS.clear()
         PENDING_AGENTS.clear()
@@ -1772,6 +1802,7 @@ def test_permission_resume_promotes_completed_tail_text_without_final_answer_mar
                     "tool_call_name": "Read",
                     "state": "success",
                 },
+                {"type": "MODEL_CALL_START", "reply_id": "reply-permission"},
                 {
                     "type": "TEXT_BLOCK_DELTA",
                     "reply_id": "reply-permission",
@@ -1829,7 +1860,7 @@ def test_permission_resume_promotes_completed_tail_text_without_final_answer_mar
 
 
 def test_resume_without_final_answer_marker_does_not_fallback_to_final_answer():
-    """resume 阶段没有 FinalAnswerStart 时，也不能把过程文本兜底成最终答案。"""
+    """resume 阶段没有工具的正文，在回复完成时就是最终答案。"""
 
     async def run_case():
         PENDING_INTERACTIONS.clear()
@@ -1876,7 +1907,7 @@ def test_resume_without_final_answer_marker_does_not_fallback_to_final_answer():
 
 
 def test_resume_recovers_missing_final_answer_marker_with_extra_call():
-    """resume 阶段漏调 FinalAnswerStart 时，也通过受限恢复轮重新生成最终答案。"""
+    """resume 阶段没有工具的收尾正文直接成为最终答案，不再另开恢复轮。"""
 
     async def run_case():
         PENDING_INTERACTIONS.clear()
@@ -2453,6 +2484,10 @@ def test_runtime_builder_cache_key_includes_tool_scope():
 
 
 def test_chat_run_context_includes_memory_prompt(monkeypatch):
+    from src.memory.prompt_cache import invalidate_memory_prompts
+
+    invalidate_memory_prompts()
+
     async def fake_readiness(**kwargs):
         return SimpleNamespace(ready=True)
 
@@ -2477,8 +2512,12 @@ def test_chat_run_context_includes_memory_prompt(monkeypatch):
         lambda: SimpleNamespace(default_model="model", fallback_models=[]),
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.runtime_governance.build_memory_injection_text",
-        lambda context: "# Memory\n记忆注入片段",
+        "src.server.routes.chat.runtime_governance.build_habit_prompt",
+        lambda *args, **kwargs: "# Habits\n记忆注入片段",
+    )
+    monkeypatch.setattr(
+        "src.server.routes.chat.runtime_governance.build_professional_prompt",
+        lambda *args, **kwargs: "",
     )
     monkeypatch.setattr(
         "src.server.routes.chat.run_context.resolve_project_resource_access",
@@ -2504,7 +2543,7 @@ def test_chat_run_context_includes_memory_prompt(monkeypatch):
         ),
     )
 
-    assert "# Memory\n记忆注入片段" in ctx.system_prompt
+    assert "# Habits\n记忆注入片段" in ctx.system_prompt
 
 
 def test_chat_run_context_keeps_history_out_of_system_prompt(monkeypatch):
@@ -2527,7 +2566,8 @@ def test_chat_run_context_keeps_history_out_of_system_prompt(monkeypatch):
         "src.server.routes.chat.run_context.get_effective_model_settings",
         lambda: SimpleNamespace(default_model="model", fallback_models=[]),
     )
-    monkeypatch.setattr("src.server.routes.chat.runtime_governance.build_memory_injection_text", lambda context: "")
+    monkeypatch.setattr("src.server.routes.chat.runtime_governance.build_habit_prompt", lambda *args, **kwargs: "")
+    monkeypatch.setattr("src.server.routes.chat.runtime_governance.build_professional_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "src.server.routes.chat.run_context.resolve_project_resource_access",
         lambda runtime_context: SimpleNamespace(

@@ -174,7 +174,7 @@ def test_trusted_gmail_send_is_ok(monkeypatch):
     assert result.verdict == "ok"
     assert any(item.capability_id == "mcp:gmail-send-email" for item in result.claimed)
     assert "send_email" in result.firing_tools_preview
-    assert "FinalAnswerStart" in result.firing_tools_preview
+    assert "FinalAnswerStart" not in result.firing_tools_preview
     assert "list_messages" not in result.firing_tools_preview
 
 

@@ -3,10 +3,9 @@
 import asyncio
 from typing import AsyncGenerator
 
-from src.memory.node_persist import MemoryNodePersistInput, persist_completed_run_memory_node
+from src.memory.professional_update import schedule_professional_update
 from src.memory.reflection import (
     MemoryReflectionInput,
-    evaluate_turn_admission,
     is_manual_skill_generation_request,
     reflect_completed_run_memory_with_agents,
 )
@@ -207,13 +206,19 @@ async def finalize_successful_leader_run(
             runtime_events=runtime_events,
             runtime_context=resolved_runtime_context,
         )
-        # 本轮准入只评一次：历史节点与 Markdown 提炼共用，避免"node 写了、Markdown 说不值得"这类口径漂移。
-        turn_admission = evaluate_turn_admission(reflection_input)
-        _schedule_memory_reflection(
+        _schedule_skill_evolution(
             reflection_input,
             model_name=model_name,
             persist=persist,
-            rule_admission=turn_admission,
+        )
+        schedule_professional_update(
+            agent_id=agent_id,
+            agent_name=agent_name,
+            user_message=user_message,
+            assistant_text=assistant_text,
+            model_name=model_name,
+            session_id=session_id,
+            persist_audit=persist,
         )
         if _should_emit_skill_generating_notice(reflection_input):
             yield runtime_trace_source_event(
@@ -226,48 +231,6 @@ async def finalize_successful_leader_run(
                 agent_name=agent_name,
                 status="running",
                 payload=memory_skill_generating_payload(),
-            )
-        try:
-            node = persist_completed_run_memory_node(
-                MemoryNodePersistInput(
-                    session_id=session_id,
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    user_message=user_message,
-                    assistant_text=assistant_text,
-                    workspace_id=resolved_runtime_context.workspace_id,
-                    project_id=resolved_runtime_context.project_id,
-                    source_run_id=source_run_id,
-                ),
-                admission=turn_admission,
-            )
-            record_memory_audit_event(
-                session_id=session_id,
-                persist=persist,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                action="memory_node_persist",
-                status="completed" if node else "skipped",
-                title="Memory node persisted" if node else "Memory node skipped",
-                content=str((node or {}).get("title") or ""),
-                payload={
-                    "nodeId": str((node or {}).get("id") or ""),
-                    "nodeDate": str((node or {}).get("node_date") or (node or {}).get("nodeDate") or ""),
-                    "vectorStatus": str((node or {}).get("vector_status") or (node or {}).get("vectorStatus") or ""),
-                    "sourceRunId": source_run_id,
-                },
-            )
-        except Exception as exc:
-            record_memory_audit_event(
-                session_id=session_id,
-                persist=persist,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                action="memory_node_persist",
-                status="failed",
-                title="Memory node persist failed",
-                content=type(exc).__name__,
-                payload={"sourceRunId": source_run_id},
             )
     if session_artifacts:
         yield runtime_trace_source_event(
@@ -308,40 +271,37 @@ async def finalize_successful_leader_run(
         )
 
 
-def _schedule_memory_reflection(
+def _schedule_skill_evolution(
     item: MemoryReflectionInput,
     *,
     model_name: str,
     persist: bool,
-    rule_admission: object | None = None,
 ) -> None:
-    """后台触发 Markdown 记忆提炼，不阻塞 Chat 成功收尾。"""
+    """后台只跑普通技能自进化，不阻塞 Chat 成功收尾。"""
 
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(
-            _run_memory_reflection_background(
-                item, model_name=model_name, persist=persist, rule_admission=rule_admission
-            ),
-            name=f"memory-reflection-{item.session_id}-{item.agent_id}",
+            _run_skill_evolution_background(item, model_name=model_name, persist=persist),
+            name=f"skill-evolution-{item.session_id}-{item.agent_id}",
         )
     except RuntimeError:
-        # 极端情况下没有运行中的事件循环时，直接跳过后台记忆提炼，不能影响主流程。
         pass
 
 
-async def _run_memory_reflection_background(
+async def _run_skill_evolution_background(
     item: MemoryReflectionInput,
     *,
     model_name: str,
     persist: bool,
-    rule_admission: object | None = None,
 ) -> None:
-    """后台运行统一记忆提炼 Agent 与 Skill 进化，异常只记录为内部失败。"""
+    """后台运行 Skill 自进化，异常只记录为内部失败。"""
 
     try:
         result = await reflect_completed_run_memory_with_agents(
-            item, model_name=model_name, rule_admission=rule_admission
+            item,
+            model_name=model_name,
+            include_markdown=False,
         )
         payload = memory_reflection_audit_payload(result)
         updated = int(payload.get("markdownUpdateCount") or 0)

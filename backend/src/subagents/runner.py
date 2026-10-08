@@ -215,7 +215,9 @@ class SubagentRunner:
             workspace_dir=workspace_dir,
         )
 
-        final_started = False
+        reply_generation = 0
+        generation_text = ""
+        generation_had_tool = False
         final_text = ""
         reasoning_text = ""
         next_input = UserMsg(
@@ -256,7 +258,31 @@ class SubagentRunner:
                             partial_result=final_text or reasoning_text,
                             duration_ms=_duration_ms(started),
                         )
+                    if event_type == "MODEL_CALL_START":
+                        reply_generation += 1
+                        generation_text = ""
+                        generation_had_tool = False
+                    elif event_type in {"TOOL_CALL_START", "TOOL_CALL_DELTA", "TOOL_CALL_END"}:
+                        generation_had_tool = True
+                    elif event_type == "TEXT_BLOCK_DELTA":
+                        if reply_generation <= 0:
+                            reply_generation = 1
+                        delta = str(event_data.get("delta") or "")
+                        generation_text += delta
+                        reasoning_text += delta
+                    elif event_type == "REPLY_END":
+                        finished = str(event_data.get("finished_reason") or "completed").lower()
+                        if finished == "completed" and not generation_had_tool and generation_text.strip():
+                            final_text = generation_text
+                            if runtime_event_sink is not None:
+                                runtime_event_sink(event_type, {
+                                    **event_data,
+                                    "subagentFinalAnswer": True,
+                                })
+                        elif finished == "completed":
+                            final_text = ""
                     if event_type == "EXCEED_MAX_ITERS":
+                        final_text = ""
                         if not iteration_recovery_used and _prepare_iteration_recovery(agent):
                             iteration_recovery_used = True
                             retry_with_recovery = True
@@ -264,36 +290,22 @@ class SubagentRunner:
                                 name="user",
                                 content=_build_iteration_recovery_message(
                                     task=task,
-                                    partial_result=final_text or reasoning_text,
+                                    partial_result=reasoning_text,
                                 ),
                             )
                             break
                         suffix = "（已尝试受限收尾）" if iteration_recovery_used else ""
                         raise SubagentRunError(
                             f"Subagent 超过最大 ReAct 轮次{suffix}。",
-                            partial_result=final_text or reasoning_text,
+                            partial_result=reasoning_text,
                             duration_ms=_duration_ms(started),
                         )
-                    if _is_final_answer_marker(event_type, event_data):
-                        final_started = True
-                        continue
-                    if event_type == "TEXT_BLOCK_DELTA":
-                        delta = str(event_data.get("delta") or "")
-                        if final_started:
-                            final_text += delta
-                            if runtime_event_sink is not None:
-                                runtime_event_sink(event_type, {
-                                    **event_data,
-                                    "subagentFinalAnswerDelta": True,
-                                })
-                        else:
-                            reasoning_text += delta
                 if retry_with_recovery:
                     continue
                 break
             if not final_text.strip():
                 raise SubagentRunError(
-                    "Subagent 未调用 FinalAnswerStart 或未输出最终摘要。",
+                    "Subagent 未输出最终摘要。",
                     partial_result=reasoning_text,
                     duration_ms=_duration_ms(started),
                 )
@@ -329,8 +341,7 @@ def _build_child_system_prompt(
             runtime_context.memory_prompt,
             (
                 "你是 Agent Workstation 的 Subagent。你在独立上下文中完成委托任务，"
-                "不要引用你看不到的主会话历史。完成后必须调用 FinalAnswerStart，"
-                "并只输出可被主 Agent 消化的简明结果摘要。"
+                "不要引用你看不到的主会话历史。完成后直接用正文给出可被主 Agent 消化的简明结果摘要。"
             ),
         ]
         if part.strip()
@@ -366,11 +377,7 @@ def _prepare_iteration_recovery(agent: object) -> bool:
         return False
     react_config.max_iters = 2
     for group in getattr(toolkit, "tool_groups", []):
-        group.tools = [
-            tool
-            for tool in group.tools
-            if str(getattr(tool, "name", "")) == "FinalAnswerStart"
-        ]
+        group.tools = []
         group.mcps = []
         group.skills_or_loaders = []
     return True
@@ -384,7 +391,7 @@ def _build_iteration_recovery_message(*, task: str, partial_result: str) -> str:
         compact_partial = compact_partial[-6000:]
     return "\n\n".join([
         "You reached the Subagent iteration budget. Ordinary tools are now unavailable.",
-        "Stop investigating. Call FinalAnswerStart exactly once, then immediately provide the best concise result from the evidence already gathered.",
+        "Stop investigating. Write the best concise plain-text summary from the evidence already gathered.",
         "If evidence is incomplete, state that clearly instead of retrying tools.",
         f"Original delegated task:\n{task.strip()}",
         f"Available partial result:\n{compact_partial or '(none)'}",
@@ -406,12 +413,6 @@ def _build_child_task_message(
     if constraints:
         sections.append("约束:\n" + "\n".join(f"- {item}" for item in constraints if item.strip()))
     return "\n\n".join(sections)
-
-
-def _is_final_answer_marker(event_type: str, event_data: dict[str, Any]) -> bool:
-    if event_type != "TOOL_CALL_START":
-        return False
-    return str(event_data.get("tool_call_name") or "") == "FinalAnswerStart"
 
 
 def _duration_ms(started: float) -> int:

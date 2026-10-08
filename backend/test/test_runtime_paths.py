@@ -24,7 +24,6 @@ from src.agents.runtime_types import WORKSPACE_DIR
 from src.config import runtime_paths
 from src.config.secret_store import SECRET_DIR
 from src.memory.markdown_store import MarkdownMemoryStore
-from src.memory.wiki_vault import MemoryWikiVaultSyncer
 from src.server.routes import agents, mcp, skills
 from src.server.routes.chat.models import CHAT_DATA_PATH
 from src.server.routes.chat.team_runtime.store import TEAM_RUNTIME_ROOT
@@ -35,7 +34,6 @@ from src.vector_store.providers.zvec import ZvecVectorStoreBackend
 print(json.dumps({
     "database": str(DB_PATH),
     "memory": str(MarkdownMemoryStore().root),
-    "wiki": str(MemoryWikiVaultSyncer().wiki_root),
     "vector": str(ZvecVectorStoreBackend._collection_path("memory_nodes")),
     "team": str(TEAM_RUNTIME_ROOT),
     "skills": str(skills.SKILL_PACKAGES_DIR),

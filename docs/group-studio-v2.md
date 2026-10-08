@@ -400,7 +400,7 @@ Host 历史行：启动迁移标 `removed`，列表与 available 都不出现。
 - 全部 Host 控场工具。
 - `group_read_blackboard` / `group_propose_decision` / `group_request_help`。
 - 工作项 claim / complete / review。
-- `AskUser`、`FinalAnswerStart`、DelegateTask / Plan / ScheduleJob。
+- `AskUser`、DelegateTask / Plan / ScheduleJob。
 
 权限：`human_approval=false` + `trusted_tools` → `PermissionMode.BYPASS`，不抄 Chat Agent profile。`group_approvals` 仅兜底。禁止写入 Chat `PENDING_INTERACTIONS`。
 

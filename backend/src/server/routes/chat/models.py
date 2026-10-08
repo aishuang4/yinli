@@ -213,6 +213,7 @@ class PendingInteraction(BaseModel):
     resume_tool_calls: list[dict] | None = None
     message: str
     assistant_text: str = ""
+    reply_generation: int = 0
     assistant_tool_calls: list[ChatToolRun] = Field(default_factory=list)
     skill_runs: list[ChatSkillRun] = Field(default_factory=list)
     scope: str = "single"

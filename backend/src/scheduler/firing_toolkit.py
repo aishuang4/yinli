@@ -16,7 +16,7 @@ from src.storage.database import list_http_tools, list_json_records, list_mcp_se
 KNOWLEDGE_TOOLS_NAMESPACE = "knowledge_tools"
 ALWAYS_PREVIEW = [
     "Read", "Grep", "Glob", "Write", "Edit",
-    "FinalAnswerStart", "MemoryNodeTree", "MemoryNodeQuery",
+    "TimelineRetrieve", "TimelineIngest",
 ]
 
 

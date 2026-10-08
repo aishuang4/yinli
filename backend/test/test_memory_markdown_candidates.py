@@ -23,7 +23,10 @@ def isolated_db(tmp_path, monkeypatch):
 def client(isolated_db, tmp_path, monkeypatch):
     database.ensure_db()
     # 让候选采纳写到临时目录，而不是开发机的真实记忆文件。
-    monkeypatch.setattr("src.memory.reflection.MarkdownMemoryStore", lambda: MarkdownMemoryStore(root=tmp_path / "memory"))
+    monkeypatch.setattr(
+        "src.memory.markdown_reflection.MarkdownMemoryStore",
+        lambda: MarkdownMemoryStore(root=tmp_path / "memory"),
+    )
     app = FastAPI()
     app.include_router(memory_routes.router, prefix="/api/memory")
     with TestClient(app) as test_client:

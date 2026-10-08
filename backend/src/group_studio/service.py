@@ -598,8 +598,41 @@ def post_human_message(group_id: str, *, project_id: str, body: str, mentions: l
         _emit_system_notice(group_id, "还没有可以发言的成员，请先在右侧把人拉进来。")
         return message
     set_queue(group_id, queue, kind=kind)
-    schedule_next(group_id)
+    _defer_workers_until_habit(group_id, text)
     return message
+
+
+def _defer_workers_until_habit(group_id: str, text: str) -> None:
+    """习惯判断完成后再让工人开口，这样这一轮就能用上新习惯。"""
+
+    import asyncio
+
+    async def _run() -> None:
+        try:
+            from src.config.runtime_settings import get_effective_model_settings, model_binding_scope, resolve_model_binding
+            from src.memory.habit_update import apply_habit_update
+
+            studio = get_studio(group_id)
+            model_config_id = str(getattr(studio, "model_config_id", "") or "")
+            with model_binding_scope(resolve_model_binding(model_config_id, validate=False)):
+                await apply_habit_update(
+                    user_message=text,
+                    model_name=get_effective_model_settings().default_model,
+                    session_id=str(getattr(studio, "chat_session_id", "") or ""),
+                    agent_id="default",
+                    agent_name="习惯",
+                )
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("群聊习惯判断失败", exc_info=True)
+        schedule_next(group_id)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        schedule_next(group_id)
+        return
+    loop.create_task(_run(), name=f"group-habit-{group_id}")
 
 
 def _emit_system_notice(group_id: str, text: str) -> None:

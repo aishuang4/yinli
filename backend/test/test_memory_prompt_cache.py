@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from src.server.routes.chat import memory_prompt_cache as mpc
+from src.memory import prompt_cache as mpc
 
 
 def setup_function() -> None:
+    mpc.invalidate_memory_prompts()
+
+
+def teardown_function() -> None:
     mpc.invalidate_memory_prompts()
 
 
@@ -54,3 +58,16 @@ def test_ttl_expiry(monkeypatch) -> None:
     assert mpc.session_memory_prompt(agent_id="a", session_id="s", build=build) == "v0"
     now[0] += 11
     assert mpc.session_memory_prompt(agent_id="a", session_id="s", build=build) == "v1"
+
+
+def test_habit_invalidation_rebuilds_next_prompt() -> None:
+    calls: list[str] = []
+
+    def build() -> str:
+        calls.append("x")
+        return f"habit v{len(calls)}"
+
+    assert mpc.session_habit_prompt(user_id="default", build=build) == "habit v1"
+    assert mpc.session_habit_prompt(user_id="default", build=build) == "habit v1"
+    mpc.invalidate_habit_prompts()
+    assert mpc.session_habit_prompt(user_id="default", build=build) == "habit v2"

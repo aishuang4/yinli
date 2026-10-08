@@ -23,6 +23,7 @@ from src.config.runtime_paths import (
 )
 from src.config.settings import settings
 from src.storage.chat_run_records import ChatRunRecordStore
+from src.storage.chat_session_records import ChatSessionRecordStore
 from src.storage.database_schema import BASE_SCHEMA_SQL
 from src.storage.scheduled_job_records import ScheduledJobRecordStore
 from src.storage.agent_defaults import (
@@ -622,18 +623,7 @@ def upsert_project_resource_binding(data: dict[str, Any]) -> dict[str, Any]:
 def get_chat_session_ownership(session_id: str) -> dict[str, str] | None:
     """读取 Session 的 Workspace / Project 归属。"""
 
-    ensure_db()
-    with _lock, _connect() as conn:
-        row = conn.execute(
-            "SELECT workspace_id, project_id FROM chat_sessions WHERE id = ?",
-            (session_id,),
-        ).fetchone()
-    if row is None:
-        return None
-    return {
-        "workspaceId": str(row["workspace_id"] or DEFAULT_WORKSPACE_ID),
-        "projectId": str(row["project_id"] or DEFAULT_PROJECT_ID),
-    }
+    return _chat_session_record_store().get_ownership(session_id)
 
 
 def _json_document_store() -> JsonDocumentStore:
@@ -922,108 +912,31 @@ def upsert_skill_run(record: dict[str, Any]) -> dict[str, Any]:
     return _skill_run_record_store().upsert(record)
 
 
+def _chat_session_record_store() -> ChatSessionRecordStore:
+    """创建复用当前数据库连接与锁的聊天会话存储。"""
+
+    return ChatSessionRecordStore(
+        ensure_db=ensure_db,
+        connect=_connect,
+        lock=_lock,
+        dumps=_dumps,
+        loads=_loads,
+        empty_display_snapshot=EMPTY_DISPLAY_SNAPSHOT,
+        default_workspace_id=DEFAULT_WORKSPACE_ID,
+        default_project_id=DEFAULT_PROJECT_ID,
+    )
+
+
 def load_chat_store() -> dict[str, Any]:
-    ensure_db()
-    with _lock, _connect() as conn:
-        sessions = conn.execute(
-            "SELECT * FROM chat_sessions ORDER BY updated_at ASC"
-        ).fetchall()
-        messages = conn.execute(
-            "SELECT * FROM chat_messages ORDER BY session_id, sort_order ASC"
-        ).fetchall()
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for row in messages:
-        grouped.setdefault(row["session_id"], []).append({
-            "id": row["id"],
-            "role": row["role"],
-            "content": row["content"],
-            "agent_id": row["agent_id"],
-            "agent_name": row["agent_name"],
-            "model_name": row["model_name"],
-            "error": row["error"],
-            "thinking": row["thinking"],
-            "images": _loads(row["images"], []),
-            "displaySnapshot": _loads(row["display_snapshot"], EMPTY_DISPLAY_SNAPSHOT),
-            "created_at": row["created_at"],
-        })
-    return {
-        "sessions": [
-            {
-                "id": row["id"],
-                "title": row["title"],
-                "agent_id": row["agent_id"],
-                "agent_name": row["agent_name"],
-                "mode": row["mode"],
-                "workspace_id": row["workspace_id"],
-                "project_id": row["project_id"],
-                "kind": (row["kind"] if "kind" in row.keys() and row["kind"] else "chat"),
-                "modelConfigId": row["model_config_id"],
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-                "message_count": row["message_count"],
-            }
-            for row in sessions
-        ],
-        "messages": grouped,
-    }
+    """读取全部聊天会话和消息。"""
+
+    return _chat_session_record_store().load_store()
 
 
 def save_chat_store(data: dict[str, Any]) -> None:
-    ensure_db()
-    sessions = data.get("sessions", [])
-    messages_by_session = data.get("messages", {})
-    with _lock, _connect() as conn:
-        conn.execute("DELETE FROM chat_messages")
-        conn.execute("DELETE FROM chat_sessions")
-        conn.executemany(
-            """
-            INSERT INTO chat_sessions (
-                id, title, agent_id, agent_name, mode, workspace_id, project_id, kind,
-                created_at, updated_at, message_count, model_config_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    item["id"], item["title"], item["agent_id"], item["agent_name"],
-                    item.get("mode", "agent"),
-                    item.get("workspace_id", item.get("workspaceId", DEFAULT_WORKSPACE_ID)),
-                    item.get("project_id", item.get("projectId", DEFAULT_PROJECT_ID)),
-                    item.get("kind") or "chat",
-                    item["created_at"],
-                    item["updated_at"], item.get("message_count", 0),
-                    item.get("modelConfigId", item.get("model_config_id", "")),
-                )
-                for item in sessions
-            ],
-        )
-        rows = []
-        for session_id, messages in messages_by_session.items():
-            for index, item in enumerate(messages):
-                rows.append((
-                    item["id"], session_id, item["role"], item.get("content", ""),
-                    item.get("agent_id"), item.get("agent_name"), item.get("model_name"),
-                    item.get("error"), item.get("thinking", ""), _dumps(item.get("images", [])),
-                    _dumps([]),
-                    _dumps([]),
-                    _dumps([]),
-                    _dumps([]),
-                    _dumps([]),
-                    _dumps(item.get("displaySnapshot", item.get("display_snapshot", EMPTY_DISPLAY_SNAPSHOT))),
-                    item["created_at"], index,
-                ))
-        conn.executemany(
-            """
-            INSERT INTO chat_messages (
-                id, session_id, role, content, agent_id, agent_name, model_name,
-                error, thinking, images, tool_calls, skill_calls,
-                model_caches, runtime_events, plan_runs,
-                display_snapshot, created_at,
-                sort_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
-        conn.commit()
+    """整份覆盖聊天会话和消息。"""
+
+    _chat_session_record_store().save_store(data)
 
 
 def _trace_record_store() -> TraceRecordStore:
@@ -1772,95 +1685,19 @@ def append_workflow_event(
 def get_latest_assistant_chat_message(session_id: str) -> dict[str, Any] | None:
     """读取某个会话里最近一条助手消息。"""
 
-    ensure_db()
-    with _lock, _connect() as conn:
-        row = conn.execute(
-            """
-            SELECT * FROM chat_messages
-            WHERE session_id = ? AND role = 'assistant'
-            ORDER BY sort_order DESC, created_at DESC
-            LIMIT 1
-            """,
-            (session_id,),
-        ).fetchone()
-    if not row:
-        return None
-    return {
-        "id": row["id"],
-        "sessionId": row["session_id"],
-        "role": row["role"],
-        "content": row["content"] or "",
-    }
+    return _chat_session_record_store().latest_assistant(session_id)
 
 
 def get_latest_user_chat_message(session_id: str, content: str | None = None) -> dict[str, Any] | None:
     """读取某个会话里最近一条用户消息，可按内容精确匹配。"""
 
-    ensure_db()
-    with _lock, _connect() as conn:
-        if content is None:
-            row = conn.execute(
-                """
-                SELECT * FROM chat_messages
-                WHERE session_id = ? AND role = 'user'
-                ORDER BY sort_order DESC, created_at DESC
-                LIMIT 1
-                """,
-                (session_id,),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                """
-                SELECT * FROM chat_messages
-                WHERE session_id = ? AND role = 'user' AND content = ?
-                ORDER BY sort_order DESC, created_at DESC
-                LIMIT 1
-                """,
-                (session_id, content),
-            ).fetchone()
-    if not row:
-        return None
-    return {
-        "id": row["id"],
-        "sessionId": row["session_id"],
-        "workspaceId": row["workspace_id"],
-        "projectId": row["project_id"],
-        "role": row["role"],
-        "content": row["content"],
-        "agentId": row["agent_id"],
-        "agentName": row["agent_name"],
-        "modelName": row["model_name"],
-        "images": _loads(row["images"], []),
-        "createdAt": row["created_at"],
-    }
+    return _chat_session_record_store().latest_user(session_id, content)
 
 
 def get_latest_assistant_message_preview(session_id: str) -> dict[str, Any] | None:
     """读取某个会话最近一条非空 Assistant 文本，用于轻量结果摘要。"""
 
-    ensure_db()
-    with _lock, _connect() as conn:
-        row = conn.execute(
-            """
-            SELECT id, content, agent_name, model_name, created_at
-            FROM chat_messages
-            WHERE session_id = ?
-              AND role = 'assistant'
-              AND length(trim(content)) > 0
-            ORDER BY sort_order DESC, created_at DESC
-            LIMIT 1
-            """,
-            (session_id,),
-        ).fetchone()
-    if not row:
-        return None
-    return {
-        "id": row["id"],
-        "content": row["content"],
-        "agentName": row["agent_name"],
-        "modelName": row["model_name"],
-        "createdAt": row["created_at"],
-    }
+    return _chat_session_record_store().latest_assistant_preview(session_id)
 
 
 def get_latest_completed_user_assistant_turn(
@@ -1870,74 +1707,10 @@ def get_latest_completed_user_assistant_turn(
 ) -> dict[str, Any] | None:
     """读取当前用户消息之前最近一轮完整 user -> assistant 对话。"""
 
-    ensure_db()
-    with _lock, _connect() as conn:
-        before_sort_order: int | None = None
-        if before_user_content is not None:
-            current_user = conn.execute(
-                """
-                SELECT sort_order FROM chat_messages
-                WHERE session_id = ? AND role = 'user' AND content = ?
-                ORDER BY sort_order DESC, created_at DESC
-                LIMIT 1
-                """,
-                (session_id, before_user_content),
-            ).fetchone()
-            if current_user:
-                before_sort_order = int(current_user["sort_order"])
-
-        if before_sort_order is None:
-            assistant_row = conn.execute(
-                """
-                SELECT * FROM chat_messages
-                WHERE session_id = ?
-                  AND role = 'assistant'
-                  AND length(trim(content)) > 0
-                ORDER BY sort_order DESC, created_at DESC
-                LIMIT 1
-                """,
-                (session_id,),
-            ).fetchone()
-        else:
-            assistant_row = conn.execute(
-                """
-                SELECT * FROM chat_messages
-                WHERE session_id = ?
-                  AND role = 'assistant'
-                  AND length(trim(content)) > 0
-                  AND sort_order < ?
-                ORDER BY sort_order DESC, created_at DESC
-                LIMIT 1
-                """,
-                (session_id, before_sort_order),
-            ).fetchone()
-
-        if not assistant_row:
-            return None
-
-        user_row = conn.execute(
-            """
-            SELECT * FROM chat_messages
-            WHERE session_id = ?
-              AND role = 'user'
-              AND sort_order < ?
-            ORDER BY sort_order DESC, created_at DESC
-            LIMIT 1
-            """,
-            (session_id, int(assistant_row["sort_order"])),
-        ).fetchone()
-
-    if not user_row:
-        return None
-    return {
-        "userMessageId": user_row["id"],
-        "assistantMessageId": assistant_row["id"],
-        "userMessage": user_row["content"],
-        "assistantText": assistant_row["content"],
-        "toolCalls": _loads(assistant_row["tool_calls"], []),
-        "runtimeEvents": _loads(assistant_row["runtime_events"], []),
-        "createdAt": assistant_row["created_at"],
-    }
+    return _chat_session_record_store().latest_completed_turn(
+        session_id,
+        before_user_content=before_user_content,
+    )
 
 
 def _memory_record_store() -> MemoryRecordStore:

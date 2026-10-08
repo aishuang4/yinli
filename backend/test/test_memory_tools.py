@@ -115,16 +115,16 @@ def test_default_toolkit_includes_memory_tools():
     toolkit = _create_default_toolkit()
     tool_names = asyncio.run(_tool_names(toolkit))
 
-    assert "memory_node_tree" in tool_names
-    assert "memory_node_query" in tool_names
+    assert "timeline_retrieve" in tool_names
+    assert "timeline_ingest" in tool_names
 
 
 def test_infrastructure_toolkit_can_exclude_memory_tools():
     toolkit = _create_default_toolkit(include_default_tools=False)
     tool_names = asyncio.run(_tool_names(toolkit))
 
-    assert "memory_node_tree" not in tool_names
-    assert "memory_node_query" not in tool_names
+    assert "timeline_retrieve" not in tool_names
+    assert "timeline_ingest" not in tool_names
 
 
 def _tool_payload(chunk) -> dict:

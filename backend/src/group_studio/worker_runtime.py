@@ -50,8 +50,8 @@ from src.server.routes.chat.runtime_builder import (
 )
 from src.server.routes.chat.runtime_governance import (
     append_user_note,
+    build_actor_memory_prompt,
     build_context_governance_middlewares,
-    build_memory_prompt_and_recall,
     persist_agent_session_state,
     prepare_agent_governance,
     restore_agent_session_state,
@@ -67,7 +67,7 @@ from src.storage.database import (
 )
 
 WORKER_MAX_REACT_ITERS = 40
-WORKER_DENYLIST = {"AskUser", "FinalAnswerStart"}
+WORKER_DENYLIST = {"AskUser"}
 WORKER_BASE_TOOLS = {
     "Read",
     "Write",
@@ -77,8 +77,8 @@ WORKER_BASE_TOOLS = {
     "Bash",
     "HttpRequest",
     "WebFetch",
-    "memory_node_tree",
-    "memory_node_query",
+    "timeline_retrieve",
+    "timeline_ingest",
 }
 
 AgentFactory = Callable[[Any], Any]
@@ -290,43 +290,13 @@ def _with_memory_prompt(system_prompt: str, memory_prompt: str) -> str:
 
 
 def _worker_memory_prompt(snapshot: dict[str, Any], *, agent_id: str, agent_name: str, session_id: str) -> str:
-    """Worker 的 Markdown 记忆摘要；召回在每轮 `_worker_memory_recall` 单独做。"""
+    """Worker 注入这个人的习惯和自己的专业全文。"""
 
+    del agent_name
     try:
-        memory_prompt, _recall = build_memory_prompt_and_recall(
-            agent_id=agent_id,
-            agent_name=agent_name,
-            workspace_id=str(snapshot.get("workspaceId") or "default"),
-            project_id=str(snapshot.get("projectId") or "default"),
-            query_text="",
-            freeze_session_id=session_id,
-        )
+        return build_actor_memory_prompt(user_id="default", agent_id=agent_id, session_id=session_id)
     except Exception:
         return ""
-    return memory_prompt
-
-
-def _worker_memory_recall(snapshot: dict[str, Any], *, agent_id: str, agent_name: str, duty: str) -> str:
-    """按任务卡目标 + 开放工作项召回历史记忆；群聊事件暂不写 run_events，这里不做审计。"""
-
-    pin = snapshot.get("pin") or snapshot.get("taskCard") or {}
-    query = str(pin.get("goal") or pin.get("title") or "")
-    if not query.strip():
-        return ""
-    try:
-        _prompt, recall = build_memory_prompt_and_recall(
-            agent_id=agent_id,
-            agent_name=agent_name,
-            workspace_id=str(snapshot.get("workspaceId") or "default"),
-            project_id=str(snapshot.get("projectId") or "default"),
-            query_text=query,
-            freeze_session_id=None,
-            exclude_session_id=str(snapshot.get("chatSessionId") or ""),
-            include_markdown=False,
-        )
-    except Exception:
-        return ""
-    return recall.text if recall else ""
 
 
 def _worker_system_prompt(snapshot: dict[str, Any], member: dict[str, Any]) -> str:
@@ -344,7 +314,7 @@ def _worker_system_prompt(snapshot: dict[str, Any], member: dict[str, Any]) -> s
         f"备注：{pin.get('notes') or pin.get('background') or ''}\n"
         f"当前成员：{names}\n"
         "对群可见的发言只写结论，不要把内心推理写进正文。\n"
-        "不要调用 AskUser 或 FinalAnswerStart。"
+        "不要调用 AskUser。"
     )
 
 
@@ -484,7 +454,7 @@ async def _run_worker_turn(
     prepare_agent_governance(agent, session_id=spec.session_id)
     if not list(getattr(getattr(agent, "state", None), "context", []) or []):
         restore_agent_session_state(agent, spec.session_id)
-    recall_note = _worker_memory_recall(snapshot, agent_id=spec.parent_agent_id, agent_name=spec.parent_agent_name, duty=duty)
+    recall_note = ""
     session = register_session(WorkerSession(
         group_id=group_id,
         run_id=run_id,
@@ -647,6 +617,19 @@ async def _run_worker_turn(
         note_wave_spoken(group_id, member_id)
         if run_status == "completed" and ctx.posted_next_member_id:
             enqueue_handoff(group_id, member_id, ctx.posted_next_member_id)
+    if run_status == "completed" and body.strip():
+        from src.config.runtime_settings import get_effective_model_settings
+        from src.memory.professional_update import schedule_professional_update
+
+        pin = snapshot.get("pin") or snapshot.get("taskCard") or {}
+        schedule_professional_update(
+            agent_id=str(spec.parent_agent_id or ""),
+            agent_name=str(spec.parent_agent_name or ""),
+            user_message=str(pin.get("goal") or pin.get("title") or ""),
+            assistant_text=body,
+            model_name=get_effective_model_settings().default_model,
+            session_id=str(snapshot.get("chatSessionId") or ""),
+        )
     update_group_studio_run_status(run_id, run_status, error_text)
     set_group_studio_current_run_id(group_id, None)
     emit_envelope(

@@ -2,12 +2,25 @@
 
 import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { partitionMessageChildren } from './answerPartition';
 import { RuntimeBlockRenderer } from './BlockRenderer';
+import { ProcessTextBlockView } from './CoreBlockViews';
 import { coreBlockRegistry } from './coreModules';
+import {
+  CollapsibleTrace,
+  LiveThinking,
+  MessageStatus,
+  ToolCallRow,
+} from './TraceRows';
+import {
+  messageStatusText,
+  segmentTrace,
+  traceBlockLabel,
+  type TraceSegment,
+} from './processTrace';
 import type { DisplaySnapshot } from './protocol';
 import { RuntimeBlockActionsContext, type RuntimeBlockActions } from './runtimeBlockActions';
 import { RuntimeAnimationContext, type RuntimeAnimationReporter } from './RuntimeAnimationContext';
-import { RuntimeProcessGroup } from './RuntimeProcessGroup';
 import { TeamConsole } from './TeamBlockViews';
 import { TeamRuntimeContext } from './TeamRuntimeContext';
 
@@ -16,12 +29,14 @@ export function RuntimeBlockTree({
   actions,
   sessionId,
   processStopped = false,
+  elapsedSeconds = null,
   onAnswerAnimationChange,
 }: {
   snapshot: DisplaySnapshot;
   actions?: RuntimeBlockActions;
   sessionId?: string;
   processStopped?: boolean;
+  elapsedSeconds?: number | null;
   onAnswerAnimationChange?: RuntimeAnimationReporter;
 }) {
   const [openTeamId, setOpenTeamId] = useState<string | null>(null);
@@ -46,46 +61,82 @@ export function RuntimeBlockTree({
     if (!block) return null;
     if (coreBlockRegistry.get(block.kind)?.presentation === 'detached') return null;
     const children = childrenByParent.get(id) || [];
-    const processChildren = block.kind === 'message'
-      ? children.filter((childId) => {
-          const child = snapshot.blocksById[childId];
-          return child && (coreBlockRegistry.get(child.kind)?.presentation || 'process') === 'process';
-        })
+    const partition = block.kind === 'message'
+      ? partitionMessageChildren(snapshot, id, children)
+      : null;
+    const folded = partition?.mode === 'folded';
+    const stopped = processStopped || block.outcome === 'cancelled' || block.outcome === 'failed';
+    const running = Boolean(partition && block.phase === 'open' && !stopped);
+    const trace = partition
+      ? segmentTrace(snapshot, folded ? partition.processIds : visibleChildIds(children))
       : [];
-    const supplementChildren = block.kind === 'message'
-      ? children.filter((childId) => {
-          const child = snapshot.blocksById[childId];
-          return child && coreBlockRegistry.get(child.kind)?.presentation === 'supplement';
-        })
-      : [];
-    const groupedChildSet = new Set([...processChildren, ...supplementChildren]);
-    const mainChildren = block.kind === 'message'
-      ? children.filter((childId) => !groupedChildSet.has(childId))
-      : children;
-    const hasFinalAnswer = block.kind === 'message' && children.some((childId) => {
-      const child = snapshot.blocksById[childId];
-      return child && coreBlockRegistry.get(child.kind)?.presentation === 'answer';
-    });
+    const expandable = Boolean(folded && trace.length);
     return (
       <div key={id} data-runtime-block-id={id} data-runtime-block-kind={block.kind}>
         <RuntimeBlockRenderer block={block} registry={coreBlockRegistry} />
         {children.length > 0 && block.kind !== 'team' ? (
-          <div className={block.kind === 'message' ? 'space-y-2' : 'ml-4 mt-2 space-y-2'}>
-            {processChildren.length ? (
-              <RuntimeProcessGroup
-                key={`process:${id}`}
-                blocks={processChildren.map((processId) => snapshot.blocksById[processId])}
-                hasFinalAnswer={hasFinalAnswer}
-                stopped={processStopped}
+          <div className={block.kind === 'message' ? 'space-y-3' : 'ml-4 mt-2 space-y-2'}>
+            {partition ? (
+              <MessageStatus
+                label={messageStatusText({ running, stopped, seconds: elapsedSeconds })}
+                expandable={expandable}
               >
-                {processChildren.map(renderBranch)}
-              </RuntimeProcessGroup>
+                {expandable ? (
+                  <RuntimeAnimationContext.Provider value={null}>
+                    {trace.map((segment) => renderTraceSegment(segment, false))}
+                  </RuntimeAnimationContext.Provider>
+                ) : null}
+              </MessageStatus>
             ) : null}
-            {mainChildren.map(renderBranch)}
-            {supplementChildren.map(renderBranch)}
+            {folded && partition ? (
+              <>
+                {partition.answerIds.map(renderBranch)}
+                {partition.supplementIds.map(renderBranch)}
+              </>
+            ) : partition ? (
+              trace.map((segment) => renderTraceSegment(segment, true))
+            ) : children.map(renderBranch)}
           </div>
         ) : null}
       </div>
+    );
+  };
+
+  const visibleChildIds = (ids: string[]): string[] => ids.filter((childId) => {
+    const child = snapshot.blocksById[childId];
+    return Boolean(child && coreBlockRegistry.get(child.kind)?.presentation !== 'detached');
+  });
+
+  const renderTraceSegment = (segment: TraceSegment, live: boolean): React.ReactNode => {
+    if (segment.type === 'prose') return renderBranch(segment.id);
+    if (segment.type === 'thinking') {
+      const blocks = segment.ids.flatMap((id) => {
+        const thinking = snapshot.blocksById[id];
+        return thinking ? [thinking] : [];
+      });
+      return (
+        <LiveThinking key={segment.ids.join(':')} spinning={blocks.some((block) => block.phase === 'open')}>
+          {blocks.map((block) => <ProcessTextBlockView key={block.id} block={block} hideLabel />)}
+        </LiveThinking>
+      );
+    }
+    if (segment.type === 'activity') {
+      const tools = segment.ids.flatMap((id) => {
+        const block = snapshot.blocksById[id];
+        return block ? [block] : [];
+      });
+      return (
+        <div key={segment.ids.join(':')} className="space-y-1">
+          {tools.map((tool) => <ToolCallRow key={tool.id} tool={tool} />)}
+        </div>
+      );
+    }
+    const child = snapshot.blocksById[segment.id];
+    if (live || (child?.kind === 'approval' && child.phase === 'open')) return renderBranch(segment.id);
+    return (
+      <CollapsibleTrace key={segment.id} label={traceBlockLabel(child)}>
+        {renderBranch(segment.id)}
+      </CollapsibleTrace>
     );
   };
 

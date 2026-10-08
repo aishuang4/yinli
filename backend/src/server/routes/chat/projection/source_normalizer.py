@@ -66,6 +66,7 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
             "THINKING_BLOCK_DELTA": self._thinking_delta,
             "FINAL_ANSWER_DELTA": self._answer_delta,
             "FINAL_ANSWER_REPLACE": self._answer_replace,
+            "ANSWER_READY": self._answer_ready,
             "TOOL_CALL_START": self._tool_started,
             "TOOL_CALL_DELTA": self._tool_input_delta,
             "TOOL_RESULT_TEXT_DELTA": self._tool_output_delta,
@@ -152,21 +153,31 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
         delta = str(data.get("delta") or "")
         if not delta:
             return []
+        block_id = self._text_block_id(data.get("generation"))
         produced = self._close_process_text()
-        produced.extend(self._ensure_text())
-        produced.append(self._delta_block("agent.output", self._text_id, "text", delta))
+        produced.extend(self._ensure_text(block_id))
+        produced.append(self._delta_block("agent.output", block_id, "text", delta))
         return produced
 
     def _answer_replace(self, data: dict[str, Any]) -> list[DomainEvent]:
+        content = str(data.get("content") or "")
+        block_id = self._text_block_id(data.get("generation"))
         produced = self._close_process_text()
-        produced.extend(self._ensure_text())
+        produced.extend(self._ensure_text(block_id))
         produced.append(self._delta_block(
             "agent.output",
-            self._text_id,
+            block_id,
             "text",
-            {"replace": str(data.get("content") or "")},
+            {"replace": content},
         ))
+        if content.strip():
+            produced.extend(self._mark_answer_ready(block_id))
         return produced
+
+    def _answer_ready(self, data: dict[str, Any]) -> list[DomainEvent]:
+        if not self._started:
+            return []
+        return self._mark_answer_ready(self._text_block_id(data.get("generation")))
 
     def _tool_started(self, data: dict[str, Any]) -> list[DomainEvent]:
         produced = self._close_process_text()
@@ -597,10 +608,37 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
             "message": str(data.get("message") or data.get("error") or "运行失败"),
         }, aggregate_id=error_id)
 
-    def _ensure_text(self) -> list[DomainEvent]:
-        if self._text_id in self._active:
+    def _text_block_id(self, generation: Any) -> str:
+        """正整数 generation 单独成块；缺省时保持历史的单块 id。"""
+
+        if isinstance(generation, bool):
+            return f"text:{self.run_id}"
+        if isinstance(generation, int) and generation > 0:
+            return f"text:{self.run_id}:{generation}"
+        if isinstance(generation, float) and generation.is_integer() and generation > 0:
+            return f"text:{self.run_id}:{int(generation)}"
+        if isinstance(generation, str) and generation.isdigit() and int(generation) > 0:
+            return f"text:{self.run_id}:{int(generation)}"
+        return f"text:{self.run_id}"
+
+    def _ensure_text(self, block_id: str | None = None) -> list[DomainEvent]:
+        target = block_id or f"text:{self.run_id}"
+        self._text_id = target
+        if target in self._active:
             return []
-        return self._start_block("agent.output", self._text_id, "text", "", aggregate_id=self._text_id)
+        return self._start_block("agent.output", target, "text", "", aggregate_id=target)
+
+    def _mark_answer_ready(self, block_id: str) -> list[DomainEvent]:
+        """把终态正文的 Block id 写到仍打开的消息上。消息还没开始时不写。"""
+
+        if not self._started:
+            return []
+        return [self._append(
+            "message.answer.ready",
+            aggregate_type="message",
+            aggregate_id=self.message_id,
+            data={"blockId": self.message_id, "answerGeneration": block_id},
+        )]
 
     def _close_process_text(self) -> list[DomainEvent]:
         produced: list[DomainEvent] = []

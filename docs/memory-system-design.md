@@ -1,10 +1,21 @@
 # 记忆系统设计
 
-> 状态：MVP 在线并进入稳定化阶段，2026-07-27；2026-09-15 完成"沉淀 / 注入"第二轮修正（见下节）。本文记录新记忆系统的当前设计、在线边界和后续约束。不复用旧三层记忆模块、旧 `memory_*` 事件或旧运行时补丁。
+> 2026-09-28 起的运行时契约：时间线是聊天 / 群聊 / 定时任务原文，用 `timeline_retrieve` + `timeline_ingest` 按需读取，不每轮注入。习惯属于这个人，回复前判断并每轮注入全文。专业区属于单个智能体，落库后判断，每轮注入全文，不设长度上限，不是 Skill。下文里仍写着三层 Markdown 自动注入、`<recalled-memory>` 和 `memory_node_*` 的段落是旧快照。
 
-## 2026-09-15 沉淀与注入修正
+> 状态：2026-09-28 契约已接入运行时。自下一节起直到文末，除「现行工具」外，均为历史设计记录，不再描述线上注入和回忆。
 
-针对首版审查发现的六个问题（提炼只看最终回答、注入与本轮问题无关、node 每轮新建、user / global 静默写入、双闸门口径不一致、三路提炼成本），当前实现改为：
+## 现行工具
+
+普通 Agent、Team、群聊 Worker、Subagent 和定时任务执行者默认携带：
+
+- `timeline_retrieve`：按工作区、项目、智能体、场合（`chat` / `group` / `job`）、时间起迄、说话方和关键词读取原始对话。空过滤表示整条时间线，单次仍有笔数和字数上限。
+- `timeline_ingest`：把这次任务需要的内容留在当前会话。不写回时间线、习惯或专业区。成功后检索原文从后续上下文抽掉。
+
+每轮 system prompt 只注入 `users/{user_id}/habits.md` 和 `agents/{agent_id}/professional.md` 的全文。不注入 30 天节点树，也不自动附上 `<recalled-memory>`。
+
+## 2026-09-15 沉淀与注入修正（已被 2026-09-28 契约取代）
+
+针对首版审查发现的六个问题（提炼只看最终回答、注入与本轮问题无关、node 每轮新建、user / global 静默写入、双闸门口径不一致、三路提炼成本），当时的实现改为：
 
 - **注入分两段**：system prompt 里只保留三份 Markdown 的 Summary / Corrections / Negative Rules（按会话冻结，保证前缀 cache）；历史记忆不再注入"最近 30 天 12 条标题索引"，改为 `retrieval.build_memory_recall()` 用本轮用户消息做向量 + 词汇召回，取排序分 ≥ 0.45、排除本会话、去重后最多 4 条的 `date | nodeId | title — summary`，以 `<recalled-memory>` 段附在用户消息后（随轮变化，不进 system prompt）。用户消息不足 6 字不召回；召回不计 `use_count`；结果写 `MEMORY_AUDIT.memory_recall`。`_rank_terms` 中文改 2 字滑窗，词命中封顶 4。`# Memory` 段明确要求用户提到"上次 / 之前 / 按老规矩"时先 `memory_node_query`。
 - **提炼一路**：`UserMemoryReflectionAgent` / `AgentMemoryReflectionAgent` / `GlobalMemoryReflectionAgent` 合并为一个无工具的 `MemoryReflectionAgent`，一次调用同时看到三份文件当前内容（每份 ≤ 2400 字）、用户消息、最终回答和 `build_tool_trajectory()` 生成的脱敏工具轨迹（≤ 12 步，保留头尾；工具名 / 状态 / 参数 160 字 / 结果 200 字），输出带 `scope` 的操作列表（每层 ≤ 3、合计 ≤ 6）。agent 层记忆主要从工具轨迹提炼"哪条路径有效、哪个工具在这个项目会失败"。操作由 `reflection._apply_memory_operations()` 用绑定文件的 `MemoryAdd / MemoryUpdate / MemoryDelete` 执行，保留去重 / 冲突合并 / Summary 重建。模型明确返回 `shouldWrite=false` 时不再走规则兜底；只有模型调用失败才兜底。一轮最多 3 次基础设施模型调用（可选准入评分 + 提炼 + Skill）。
@@ -14,9 +25,9 @@
 - **自动归档**：`MemoryNodeService.archive_stale_nodes()` 把 90 天前创建、90 天内未被命中、未置顶的活跃节点改为 `archived` 并从向量库移除；每个进程每天在首次持久化后跑一次。Memory 页可恢复。
 - 节点 `summary` 改为"请求要点 → 结果要点"一句话（≤ 170 字，去 Markdown 噪音），不再复制 700 字原文。
 
-未做：Markdown 文件整体大小硬上限；Team Leader / Member 与群聊 Worker 的注入仍是旧的静态索引路径。
+该轮未做：Markdown 文件整体大小硬上限。Team、群聊当时仍走静态索引；2026-09-28 起已改成习惯全文、专业全文和时间线工具。
 
-## 当前实现快照
+## 2026-07 历史快照（不再是运行时契约）
 
 已完成：
 
@@ -1000,7 +1011,7 @@ Skill 自进化生成记录表。最终产物必须注册为标准 Skill；本�
 - Team 临时 Member session 运行前按 single agent 同策略注入本轮已解析记忆。
 - 自动写入最低置信度。
 
-## 运行时接入点
+## 运行时接入点（历史方案，线上以文首现行工具为准）
 
 ### 检索与注入
 
@@ -1018,7 +1029,7 @@ Skill 自进化生成记录表。最终产物必须注册为标准 Skill；本�
 
 - 单 Agent：注入主 Agent system prompt 的独立 `Memory` 段落。
 - Team Leader：注入 Leader system prompt 的独立 `Memory` 段落。
-- Team 临时 Member：按 single agent 同策略注入动态 Member system prompt；使用本轮 Team Leader 已解析的 user / agent / global Markdown 摘要和最近历史记忆索引，需要详情时仍通过 `memory_node_tree` / `memory_node_query` 主动查询。
+- Team 临时 Member：历史方案是沿用 Leader 的摘要。2026-09-28 起 Member 注入共用习惯和自己的专业全文，并用 `timeline_retrieve` / `timeline_ingest` 查时间线。
 
 注入格式必须短、可溯源、可覆盖：
 

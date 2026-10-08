@@ -102,7 +102,7 @@ system prompt 里和 ReAct 行为有关的段：
 - Project / workspace 说明
 - Runtime：时间在对话里的 `<system-reminder>`，prompt 本身不写时钟
 - Clarification：缺信息必须调 `AskUser`，禁止纯文本追问
-- Final Answer：没调业务工具可直接写答案；调过工具或 AskUser 之后必须先 `FinalAnswerStart`
+- Final Answer：能直接回答就写正文；用过工具或 AskUser 之后，收尾也直接写正文
 
 本轮用户消息 = 用户原文 + 附件说明（`<attached_files>`）。附件进 `state.context`，不进 system prompt。
 
@@ -134,7 +134,7 @@ AgentScope 侧与循环相关的配置：
 
 ## 5. 循环本体
 
-权威文件：`leader_stream.py`、`leader_execution.py`、`agents/factory.py`、`tools/ask_user.py`、`tools/final_answer.py`。
+权威文件：`leader_stream.py`、`leader_execution.py`、`agents/factory.py`、`tools/ask_user.py`、`answer_generation.py`。
 
 应用层不实现 Think / Act 调度。`stream_leader_agent_reply()` 消费 `reply_stream()`，把 SDK 事件变成 Trace、前端投影和暂停点。
 
@@ -170,7 +170,6 @@ REPLY_END.finished_reason
 | `GuardedBash` | 执行命令。黑名单 + 超时；是否注入还看 ToolScope |
 | `HttpRequest` / `WebFetch` | 网络。由本轮 ToolScope 打开。WebFetch 不是搜索引擎 |
 | `AskUser` | 外部工具。暂停循环，等用户结构化回答 |
-| `FinalAnswerStart` | 阶段标记。告诉应用层：后面的文本是最终答案 |
 
 写工具会走权限策略。需要确认时 SDK 发 `REQUIRE_USER_CONFIRM`。`AskUser` 发 `REQUIRE_EXTERNAL_EXECUTION`。同一 `reply_id` 里可能有多个 REQUIRE 事件，必须排空整批再交给前端，否则 resume 会带回 Agent 并未等待的 `tool_call_id`。
 
@@ -180,14 +179,13 @@ ToolScope 在路由之后解析，不属于 IntentRoute。Bash 默认保留。HT
 
 模型在一圈里可能先写一两句过程说明，再调工具；也可能全程不调工具、直接回答。
 
-规则：
+一次 `MODEL_CALL_START` 到下一次模型调用之前，是同一次生成。这次生成的 `TEXT_BLOCK_DELTA` 从第一个 token 起投影为带 `generation` 的 `text` 块。同一次生成里如果出现工具调用，这段正文留在过程里，循环继续。
 
-1. 本轮没有任何业务工具：直接写普通文本，不要调 `FinalAnswerStart`。累计文本达到 600 字且仍无工具时，按直接回答开始流式投影，省一次模型往返。
-2. 本轮已经调过业务工具或 `AskUser`：必须先调一次 `FinalAnswerStart`，之后的 `TEXT_BLOCK_DELTA` 才是最终答案。
-3. `FinalAnswerStart` 的工具结果不展示给用户。
-4. 漏调标记时，`final_answer_recovery.py` 再跑一圈受限补救，只允许补这个标记，禁止新的调查工具。
+`REPLY_END.finished_reason=completed`、这次生成没有工具调用、且正文非空时，消息 `data.answerGeneration` 指向该 `text` 块。中断、失败、等待 AskUser，以及这次生成带了工具调用时，不写这个字段。
 
-思考增量走 `THINKING_BLOCK_DELTA`，累加到 `assistant_thinking`，和最终答案分流。
+收尾正文为空、但已有工具、推理、思考或达到轮次上限时，`final_answer_recovery.py` 再要一轮 `tool_choice=none` 的纯文本，仍按同一次生成的规则收口。
+
+思考增量走 `THINKING_BLOCK_DELTA`，累加到 `assistant_thinking`。思考不是终态信号。
 
 ### 5.4 AskUser
 
@@ -272,13 +270,13 @@ ReAct 循环会碰到三类出口，不要写串：
 | `steer_middleware.py` | 中途补充 |
 | `leader_stream.py` | 消费 `reply_stream` |
 | `leader_execution.py` | 流消费 + 收口编排 |
-| `final_answer_recovery.py` | 漏调 FinalAnswerStart 时补一圈 |
+| `final_answer_recovery.py` | 收尾正文为空时再要一轮纯文本 |
 | `completion.py` | 成功 / 失败落库 |
 | `projection/` | SourceEvent → RuntimeFrame |
 | `agents/factory.py` | 构造 Agent 与默认工具 |
 | `agents/session_context.py` | 实例间搬运上下文、用历史重建 |
 | `tools/ask_user.py` | 暂停并提问 |
-| `tools/final_answer.py` | 最终答案阶段标记 |
+| `answer_generation.py` | 按模型生成累计正文，并在无工具收尾时发出终态信号 |
 
 ## 10. 红线
 

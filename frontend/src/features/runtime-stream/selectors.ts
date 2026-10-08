@@ -1,5 +1,6 @@
 /** 只读 Block Tree selector；不创建第二套展示状态。 */
 
+import { snapshotAnswerGeneration } from './answerPartition';
 import { coreBlockRegistry } from './coreModules';
 import type { DisplayBlock, DisplaySnapshot } from './protocol';
 
@@ -19,7 +20,10 @@ export function blocksOfKind<T = unknown>(snapshot: DisplaySnapshot, kind: strin
 }
 
 export function runtimeText(snapshot: DisplaySnapshot): string {
-  return blocksOfKind<string>(snapshot, 'text')
+  const answerId = snapshotAnswerGeneration(snapshot);
+  const texts = blocksOfKind<string>(snapshot, 'text');
+  const selected = answerId ? texts.filter((block) => block.id === answerId) : texts;
+  return selected
     .map((block) => typeof block.data === 'string' ? block.data : '')
     .join('');
 }

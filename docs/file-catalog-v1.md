@@ -20,7 +20,7 @@
 - 页面写 SQLite、模型写文件的长期双权威
 - 把 Bash 当作改 catalog 的官方方法（Bash 不得把 catalog 根当 cwd，也不得因此扩大 shell 范围）
 
-允许保留的工具（不是改系统定义的入口）：AskUser、FinalAnswerStart、DelegateTask、Plan Mode、Team/群聊控场、Read/Write/Edit/Glob/Grep/Bash/HttpRequest/WebFetch/MCP/知识库。第四期后禁止再向模型注入 `ScheduleJob` / `PauseJob` / `ListJobs` / `ConfirmJob` 作为改 Job 定义的平行入口。
+允许保留的工具（不是改系统定义的入口）：AskUser、DelegateTask、Plan Mode、Team/群聊控场、Read/Write/Edit/Glob/Grep/Bash/HttpRequest/WebFetch/MCP/知识库。第四期后禁止再向模型注入 `ScheduleJob` / `PauseJob` / `ListJobs` / `ConfirmJob` 作为改 Job 定义的平行入口。
 
 ### 1.2 了解系统 vs 修改系统
 

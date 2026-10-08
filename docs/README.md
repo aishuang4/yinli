@@ -49,6 +49,7 @@
 | `docs/team-member-lifecycle-v2.md` | Member 长生命周期、TaskAttempt、Mailbox 唤醒、Reviewer。基线仍是 Team Runtime。 |
 | `docs/dynamic-workflows-plan.md` | Script Review、Runtime Cockpit、AgentScope Bridge。 |
 | `docs/electron-packaging-plan.md` | 正式打包、签名、公证和双平台验证。 |
+| `docs/web-service-plan.md` | Web 托管的邮箱注册登录、管理员在线状态，以及按账号隔离数据。 |
 
 ## 发布与验收
 

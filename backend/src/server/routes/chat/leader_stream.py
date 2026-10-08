@@ -28,8 +28,13 @@ from src.server.routes.chat.models import (
     ChatToolRun,
 )
 from src.server.routes.chat.prompts import _extract_clarification_request
+from src.server.routes.chat.answer_generation import (
+    answer_ready_events as _answer_ready_events,
+    append_generation_text,
+    begin_model_generation,
+    mark_generation_tool,
+)
 from src.server.routes.chat.final_answer_recovery import (
-    _is_final_answer_tool_event,
     stream_final_answer_recovery_events as _stream_final_answer_recovery_events,
 )
 from src.server.routes.chat.runtime_events import (
@@ -87,6 +92,9 @@ class LeaderStreamState:
     pending_plan_review_answer: str = ""
     final_answer_recovery_attempted: bool = False
     pending_text: str = ""
+    reply_generation: int = 0
+    generation_text: str = ""
+    generation_had_tool: bool = False
     reply_had_tool_call: bool = False
     available_skill_details: list[dict] = field(default_factory=list)
     session_workspace_dir: str = ""
@@ -159,21 +167,6 @@ def _collect_pending_tool_batch(
         seen_ids.add(tool_call_id)
 
 
-# 直接回答提前流式投影的文本阈值（字符）。工具调用前的过程说明通常只有一两句，
-# 超过该长度且本次 reply 还没有任何工具调用时，按最终回答处理。见 docs/chat-sse-event-contract.md §6。
-DIRECT_ANSWER_STREAM_THRESHOLD = 600
-
-
-def _should_stream_direct_answer(state: LeaderStreamState, runtime_event_sources: list[object]) -> bool:
-    """本次 reply 尚无业务工具调用且文本足够长时，把累计文本视为直接回答开始流式投影。"""
-
-    if state.reply_had_tool_call or state.final_answer_started or state.subagent_completion_blocked_reason:
-        return False
-    if len(state.pending_text) < DIRECT_ANSWER_STREAM_THRESHOLD:
-        return False
-    return not _runtime_completion_error(runtime_event_sources)
-
-
 def _flush_pending_reasoning_events(
     state: LeaderStreamState,
     *,
@@ -244,8 +237,12 @@ async def stream_leader_agent_reply(
             state.reply_finished_reason = "completed"
             state.reply_error = ""
             state.reply_had_thinking = False
+            state.generation_text = ""
+            state.generation_had_tool = False
+        elif event_type == "MODEL_CALL_START":
+            begin_model_generation(state)
         elif event_type in {"TOOL_CALL_START", "TOOL_CALL_DELTA", "TOOL_CALL_END"}:
-            state.reply_had_tool_call = True
+            mark_generation_tool(state)
         elif event_type == "REPLY_END":
             state.reply_finished_reason = agentscope_reply_finished_reason(event_data)
             state.reply_error = agentscope_reply_error_message(event_data)
@@ -286,49 +283,6 @@ async def stream_leader_agent_reply(
         for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
             state.runtime_events.append(runtime_event)
             yield runtime_source_event(runtime_event)
-        if _is_final_answer_tool_event(event_type, event_data, state):
-            for reasoning_event in _flush_pending_reasoning_events(
-                state,
-                session_id=session_id,
-                stream_scope=stream_scope,
-                source_event_type=event_type,
-                agent_id=agent_id,
-                agent_name=agent_name,
-            ):
-                yield reasoning_event
-            if event_type == "TOOL_CALL_START":
-                completion_error = _runtime_completion_error(runtime_event_sources or [])
-                if completion_error:
-                    state.subagent_completion_blocked_reason = completion_error
-                    state.blocked_final_text = ""
-                    continue
-                state.final_answer_started = True
-                yield runtime_trace_source_event(
-                    "AGENT_FINAL_ANSWER_STARTED",
-                    session_id=session_id,
-                    scope=stream_scope,
-                    source="runtime",
-                    source_event_type=event_type,
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    status="running",
-                    payload={
-                        "tool_call_id": str(event_data.get("tool_call_id") or ""),
-                        "tool_call_name": str(event_data.get("tool_call_name") or "FinalAnswerStart"),
-                    },
-                    collect=state.runtime_events,
-                )
-            continue
-        if event_type == "TOOL_CALL_START":
-            for reasoning_event in _flush_pending_reasoning_events(
-                state,
-                session_id=session_id,
-                stream_scope=stream_scope,
-                source_event_type=event_type,
-                agent_id=agent_id,
-                agent_name=agent_name,
-            ):
-                yield reasoning_event
         _attach_provider_cache_usage(event_type, event_data)
         if event_type == "MODEL_CALL_END":
             cache_entry = _model_cache_from_event(event_data, model_name)
@@ -443,41 +397,10 @@ async def stream_leader_agent_reply(
 
         if event_type == "TEXT_BLOCK_DELTA":
             delta = str(event_data.get("delta", ""))
+            generation = append_generation_text(state, delta)
             if state.subagent_completion_blocked_reason:
                 state.blocked_final_text += delta
-                continue
-            if state.final_answer_started:
-                state.assistant_text += delta
-                yield runtime_trace_source_event(
-                    "AGENT_FINAL_ANSWER_DELTA", session_id=session_id, scope=stream_scope,
-                    source="runtime", source_event_type=event_type, agent_id=agent_id,
-                    agent_name=agent_name, status="running", payload={"delta": delta},
-                    collect=state.runtime_events,
-                )
-                yield source_event("FINAL_ANSWER_DELTA", {"delta": delta})
-            else:
-                state.pending_text += delta
-                if _should_stream_direct_answer(state, runtime_event_sources or []):
-                    # 本次 reply 没有任何业务工具调用、文本已足够长：按契约视为直接回答，
-                    # 提前开始流式投影，省掉 FinalAnswerStart 那一次模型往返。
-                    pending = state.pending_text
-                    state.pending_text = ""
-                    state.final_answer_started = True
-                    state.assistant_text += pending
-                    yield runtime_trace_source_event(
-                        "AGENT_FINAL_ANSWER_STARTED", session_id=session_id, scope=stream_scope,
-                        source="runtime", source_event_type=event_type, agent_id=agent_id,
-                        agent_name=agent_name, status="running", reason="direct_text_stream",
-                        payload={"recovered": False, "direct": True, "optimistic": True},
-                        collect=state.runtime_events,
-                    )
-                    yield runtime_trace_source_event(
-                        "AGENT_FINAL_ANSWER_DELTA", session_id=session_id, scope=stream_scope,
-                        source="runtime", source_event_type=event_type, agent_id=agent_id,
-                        agent_name=agent_name, status="running", reason="direct_text_stream",
-                        payload={"delta": pending, "direct": True}, collect=state.runtime_events,
-                    )
-                    yield source_event("FINAL_ANSWER_DELTA", {"delta": pending})
+            yield source_event("FINAL_ANSWER_DELTA", {"delta": delta, "generation": generation})
             continue
         elif event_type == "THINKING_BLOCK_DELTA":
             state.reply_had_thinking = True
@@ -513,30 +436,24 @@ async def stream_leader_agent_reply(
             ):
                 yield reasoning_event
 
-        if event_type == "REPLY_END" and state.pending_text and reply_completed:
+        if event_type == "REPLY_END" and reply_completed and not state.exceeded_max_iters:
             completion_error = _runtime_completion_error(runtime_event_sources or [])
             if completion_error:
                 state.subagent_completion_blocked_reason = completion_error
-                state.blocked_final_text = state.pending_text
-                state.pending_text = ""
+                state.blocked_final_text = state.generation_text
+                state.generation_text = ""
+                state.final_answer_started = False
                 continue
-            pending = state.pending_text
-            state.pending_text = ""
-            state.final_answer_started = True
-            state.assistant_text += pending
-            yield runtime_trace_source_event(
-                "AGENT_FINAL_ANSWER_STARTED", session_id=session_id, scope=stream_scope,
-                source="runtime", source_event_type=event_type, agent_id=agent_id,
-                agent_name=agent_name, status="running", reason="direct_text_response",
-                payload={"recovered": False, "direct": True}, collect=state.runtime_events,
-            )
-            yield runtime_trace_source_event(
-                "AGENT_FINAL_ANSWER_DELTA", session_id=session_id, scope=stream_scope,
-                source="runtime", source_event_type=event_type, agent_id=agent_id,
-                agent_name=agent_name, status="running", reason="direct_text_response",
-                payload={"delta": pending, "direct": True}, collect=state.runtime_events,
-            )
-            yield source_event("FINAL_ANSWER_DELTA", {"delta": pending})
+            for ready_event in _answer_ready_events(
+                state,
+                session_id=session_id,
+                stream_scope=stream_scope,
+                source_event_type=event_type,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                reason="reply_completed",
+            ):
+                yield ready_event
 
         runtime_event = runtime_event_from_agentscope_event(
             event_type,
@@ -712,6 +629,7 @@ async def stream_leader_agent_reply(
                 resume_tool_calls=list(batch["tool_calls"]),
                 message=message,
                 assistant_text=state.assistant_text,
+                reply_generation=state.reply_generation,
                 assistant_tool_calls=state.assistant_tool_calls,
                 skill_runs=skill_runs,
                 scope=stream_scope,
@@ -846,6 +764,8 @@ async def stream_leader_agent_reply(
         state.subagent_completion_blocked_reason = ""
         state.blocked_final_text = ""
         state.pending_text = ""
+        state.generation_text = ""
+        state.generation_had_tool = False
         state.final_answer_started = False
         state.subagent_completion_block_count += 1
         async for resumed_event in stream_leader_agent_reply(

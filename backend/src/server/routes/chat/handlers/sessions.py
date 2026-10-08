@@ -1,5 +1,6 @@
 """会话查询端点 — 列表、消息、删除。"""
 
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -18,7 +19,12 @@ from src.server.routes.chat.team_runtime.maintenance import (
     delete_team_runs_for_session,
 )
 from src.server.routes.chat.team_runtime.store import TeamStoreError
-from src.storage.database import DEFAULT_PROJECT_ID, delete_session_context_state, get_project
+from src.storage.database import (
+    DEFAULT_PROJECT_ID,
+    delete_session_context_state,
+    get_chat_run,
+    get_project,
+)
 
 _SESSION_KINDS = {"chat", "scheduled_job", "all"}
 
@@ -153,6 +159,47 @@ def _normalize_history_messages(
     return [_history_message_to_response(message) for message in messages]
 
 
+def message_elapsed_seconds(message: StoredChatMessage) -> int | None:
+    """用 Chat Run 的起止时间给出任务耗时，没有完整时间时留空。"""
+
+    run_id = _message_run_id(message)
+    if not run_id:
+        return None
+    run = get_chat_run(run_id)
+    if not run:
+        return None
+    return elapsed_seconds_between(str(run.get("createdAt") or ""), str(run.get("completedAt") or ""))
+
+
+def elapsed_seconds_between(start: str, end: str) -> int | None:
+    """把两段 ISO 时间收成至少 1 秒的整数。"""
+
+    if not start or not end:
+        return None
+    try:
+        started = datetime.fromisoformat(start)
+        finished = datetime.fromisoformat(end)
+    except ValueError:
+        return None
+    seconds = int(round((finished - started).total_seconds()))
+    if seconds < 0:
+        return None
+    return max(1, seconds)
+
+
+def _message_run_id(message: StoredChatMessage) -> str:
+    blocks = (message.display_snapshot or {}).get("blocksById") or {}
+    if not isinstance(blocks, dict):
+        return ""
+    for block in blocks.values():
+        if not isinstance(block, dict) or block.get("kind") != "message":
+            continue
+        block_id = str(block.get("id") or "")
+        if block_id.startswith("message:"):
+            return block_id.split(":", 1)[1]
+    return ""
+
+
 def _history_message_to_response(message: StoredChatMessage) -> dict[str, Any]:
     """把持久化消息转成前端历史回放契约。"""
 
@@ -170,5 +217,6 @@ def _history_message_to_response(message: StoredChatMessage) -> dict[str, Any]:
         "displaySnapshot": message.display_snapshot,
         "clarificationRequests": message.clarification_requests,
         "clarificationResolved": message.clarification_resolved,
+        "elapsedSeconds": message_elapsed_seconds(message),
         "created_at": message.created_at,
     }

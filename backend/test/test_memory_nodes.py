@@ -168,7 +168,7 @@ def test_memory_node_status_update_disables_and_restores_with_audit(isolated_db,
     import asyncio
 
     service = MemoryNodeService(vector_backend=FakeVectorBackend())
-    monkeypatch.setattr(memory_routes, "MemoryNodeService", lambda: service)
+    monkeypatch.setattr("src.server.routes.memory_api.nodes.MemoryNodeService", lambda: service)
     service.upsert_node(
         MemoryNodeWrite(
             id="node-1",

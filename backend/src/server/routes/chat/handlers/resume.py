@@ -30,7 +30,7 @@ from src.server.routes.chat.background_runs import (
     relay_chat_background_run_events,
 )
 from src.server.routes.chat.completion import max_react_iterations_error, missing_final_answer_error
-from src.server.routes.chat.leader_stream import LeaderStreamState, _is_final_answer_tool_event
+from src.server.routes.chat.leader_stream import LeaderStreamState
 from src.server.routes.chat.leader_execution import execute_and_finalize_leader_reply
 from src.server.routes.chat.lifecycle import waiting_reason, waiting_status_for_interaction
 from src.server.routes.chat.runtime import (
@@ -69,14 +69,15 @@ def _should_wrap_resume_text_as_final(
     scope: str,
     final_answer_started: bool,
 ) -> bool:
-    """判断 resume 阶段 TEXT delta 是否已经进入最终答案阶段。"""
+    """单 Agent 恢复的正文在生成结束且没有工具调用后才是最终答案。"""
 
     return final_answer_started and event_type == "TEXT_BLOCK_DELTA" and _is_final_answer_text_scope(scope)
 
 
 def _should_emit_raw_resume_event(event_type: str, scope: str) -> bool:
-    """过滤已由 final answer 事件重新包装的原始文本。"""
+    """正文改由带 generation 的最终答案事件投影，原始文本事件不再向外送。"""
 
+    del scope
     if event_type == "TEXT_BLOCK_DELTA":
         return False
     return True
@@ -182,6 +183,9 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                 subagent_name = str(subagent_data.get("subagentName") or interaction.agent_name)
                 subagent_guardrails = AgentGuardrails()
                 subagent_stream_state = LeaderStreamState()
+                reply_generation = 0
+                generation_text = ""
+                generation_had_tool = False
                 final_text = ""
                 reasoning_text = interaction.assistant_text or ""
                 duration_ms = 0
@@ -217,10 +221,12 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                         agent_name=interaction.agent_name,
                         guardrails=subagent_guardrails,
                     )
-                    if _is_final_answer_tool_event(event_type, event_data, subagent_stream_state):
-                        if event_type == "TOOL_CALL_START":
-                            subagent_stream_state.final_answer_started = True
-                        continue
+                    if event_type == "MODEL_CALL_START":
+                        reply_generation += 1
+                        generation_text = ""
+                        generation_had_tool = False
+                    elif event_type in {"TOOL_CALL_START", "TOOL_CALL_DELTA", "TOOL_CALL_END"}:
+                        generation_had_tool = True
                     if event_type in HITL_EVENT_TYPES:
                         agentscope_waiting_tool_calls = list(event_data.get("tool_calls") or [])
                         next_interaction = _create_pending_interaction(
@@ -311,10 +317,16 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                         )
                     if event_type == "TEXT_BLOCK_DELTA":
                         delta = str(event_data.get("delta") or "")
-                        if subagent_stream_state.final_answer_started:
-                            final_text += delta
-                        else:
-                            reasoning_text += delta
+                        if reply_generation <= 0:
+                            reply_generation = 1
+                        generation_text += delta
+                        reasoning_text += delta
+                    if event_type == "REPLY_END":
+                        finished = agentscope_reply_finished_reason(event_data)
+                        if finished == "completed" and not generation_had_tool and generation_text.strip():
+                            final_text = generation_text
+                        elif finished == "completed":
+                            final_text = ""
                     runtime_event = runtime_event_from_agentscope_event(
                         event_type,
                         session_id=interaction.session_id,
@@ -436,6 +448,7 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
 
             resume_stream_state = LeaderStreamState(
                 assistant_text=interaction.assistant_text,
+                reply_generation=interaction.reply_generation,
                 assistant_tool_calls=_pending_tool_calls_to_runs(
                     interaction.tool_calls,
                     interaction.assistant_tool_calls,

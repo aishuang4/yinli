@@ -18,7 +18,6 @@ PLAN_CONTROL_TOOL_NAMES = frozenset({
     "task_output",
     "plan_request_replan",
     "plan_complete",
-    "FinalAnswerStart",
 })
 
 READ_ONLY_TOOL_NAMES = frozenset({

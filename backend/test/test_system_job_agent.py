@@ -192,7 +192,7 @@ def test_system_job_agent_required_network_tools_reach_firing_preview() -> None:
     assert spec["tool_scope"]["allow_http"] is True
     assert "WebFetch" in spec["firing_tools_preview"]
     assert "HttpRequest" in spec["firing_tools_preview"]
-    assert "FinalAnswerStart" in spec["firing_tools_preview"]
+    assert "FinalAnswerStart" not in spec["firing_tools_preview"]
 
 
 def test_job_agent_catalog_filters_other_workspaces(monkeypatch) -> None:

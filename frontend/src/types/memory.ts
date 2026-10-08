@@ -11,6 +11,36 @@ export interface MarkdownMemoryDocument {
   exists: boolean;
 }
 
+export interface TimelineMessage {
+  id: string;
+  sessionId: string;
+  groupId: string;
+  role: string;
+  content: string;
+  agentId: string;
+  agentName: string;
+  createdAt: string;
+  surface: string;
+  workspaceId: string;
+  projectId: string;
+}
+
+export interface TimelineQuery {
+  workspaceId?: string;
+  projectId?: string;
+  agentId?: string;
+  surface?: string;
+  timeFrom?: string;
+  timeTo?: string;
+  queryText?: string;
+}
+
+export interface TimelineQueryResult {
+  messages: TimelineMessage[];
+  truncated: boolean;
+  hitCount: number;
+}
+
 export interface MemoryNodeTreeItem {
   nodeId: string;
   date: string;
@@ -119,40 +149,6 @@ export interface SkillEvolutionRecord {
   updatedAt: string;
 }
 
-export interface MemoryWikiSyncResult {
-  path: string;
-  filesWritten: number;
-  markdownMemories: number;
-  historyNodes: number;
-  skills: number;
-  entities: number;
-  files: string[];
-}
-
-export interface MemoryWikiGraphNode {
-  id: string;
-  kind: string;
-  label: string;
-  path: string;
-  documents: string[];
-}
-
-export interface MemoryWikiGraphEdge {
-  id: string;
-  source: string;
-  target: string;
-  type: string;
-  weight: number;
-  documents: string[];
-}
-
-export interface MemoryWikiGraph {
-  nodes: MemoryWikiGraphNode[];
-  edges: MemoryWikiGraphEdge[];
-  documents: number;
-  historyLimit: number;
-}
-
 export interface MemoryAuditEvent {
   id: string;
   sessionId: string;
@@ -208,12 +204,6 @@ export interface MemorySettingsSnapshot {
     mode: string;
   };
   markdownPaths: Record<string, string>;
-  wiki: {
-    root: string;
-    syncMode: string;
-    graphStatus: string;
-    isRuntimeSource: boolean;
-  };
   runtime: {
     memoryRuntimeKind: boolean;
     usesHooksAndTools: boolean;

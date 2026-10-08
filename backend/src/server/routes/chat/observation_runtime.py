@@ -240,12 +240,15 @@ def observe_source_event(
         return
     if event_type == "AGENT_FINAL_ANSWER_STARTED":
         nested = data.get("payload") if isinstance(data.get("payload"), dict) else data
+        tool_name = str(nested.get("tool_call_name") or nested.get("name") or "").strip()
+        if not tool_name:
+            return
         _append_generation_tool_call(
             persist=persist,
             run_id=run_id,
             tool_call={
                 "id": str(nested.get("tool_call_id") or nested.get("id") or ""),
-                "name": str(nested.get("tool_call_name") or nested.get("name") or "FinalAnswerStart"),
+                "name": tool_name,
                 "input": parse_tool_arguments(nested.get("input") or nested.get("arguments") or {}),
             },
         )

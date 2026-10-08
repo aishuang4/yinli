@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from src.memory.retrieval import MemoryRetrievalContext, build_memory_injection_text
+from src.server.routes.chat.runtime_governance import build_actor_memory_prompt
 from src.runtime_context import RuntimeContext as PlatformRuntimeContext
 from src.project_resources import resolve_project_resource_access
 from src.server.routes.skills import Skill, discover_external_skills, resolve_installed_skills, resolve_runtime_skill_paths
@@ -77,13 +77,10 @@ def build_subagent_runtime_context(
 
     memory_agent_id = f"subagent:{definition.name}"
     try:
-        memory_prompt = build_memory_injection_text(
-            MemoryRetrievalContext(
-                agent_id=memory_agent_id,
-                agent_name=f"Subagent {definition.name}",
-                workspace_id=platform_context.workspace_id if platform_context else "default",
-                project_id=platform_context.project_id if platform_context else "default",
-            ),
+        memory_prompt = build_actor_memory_prompt(
+            user_id="default",
+            agent_id=memory_agent_id,
+            session_id=None,
         )
     except Exception as exc:
         memory_prompt = ""

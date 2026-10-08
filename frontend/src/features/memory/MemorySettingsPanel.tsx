@@ -254,7 +254,6 @@ export function MemorySettingsPanel({
                   <Tag size="small" color={settings.runtime.chatShowsMemoryProcess ? 'mauve' : 'success'}>
                     Chat 不展示记忆过程
                   </Tag>
-                  <Tag size="small" color="blue">Wiki {settings.wiki.graphStatus}</Tag>
                 </div>
               </DetailSection>
             </div>

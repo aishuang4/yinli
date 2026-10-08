@@ -5,9 +5,32 @@ from __future__ import annotations
 from src.memory.retrieval import (
     MEMORY_RECALL_MIN_SCORE,
     MemoryRetrievalContext,
+    build_habit_and_professional_prompt,
     build_memory_injection_text,
     build_memory_recall,
 )
+
+
+def test_live_injection_is_habits_and_professional_only():
+    class LiveStore:
+        def read_habits(self, user_id):
+            return type("Doc", (), {"content": "喜欢喝咖啡"})()
+
+        def read_professional(self, agent_id):
+            return type("Doc", (), {"content": "先读再改"})()
+
+    text = build_habit_and_professional_prompt(
+        user_id="default",
+        agent_id="agent-1",
+        markdown_store=LiveStore(),
+    )
+    assert "# Habits" in text
+    assert "喜欢喝咖啡" in text
+    assert "# Professional" in text
+    assert "先读再改" in text
+    assert "<recalled-memory>" not in text
+    assert "memory_node_query" not in text
+    assert "30 天" not in text
 
 
 def test_memory_injection_includes_markdown_sections_and_node_tree():

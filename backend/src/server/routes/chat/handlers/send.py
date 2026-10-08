@@ -28,7 +28,12 @@ from src.server.routes.chat.run_context import (
     resolve_forced_runtime_skills,
 )
 from src.server.routes.skills import discover_external_skills
+from src.memory.habit_update import apply_habit_update
 from src.server.routes.chat.runtime_dispatcher import execute_chat_runtime
+from src.server.routes.chat.runtime_governance import (
+    build_memory_prompt_and_recall,
+    refresh_context_memory_prompt,
+)
 from src.server.routes.chat.startup_checks import get_startup_error
 from src.server.routes.chat.projection.source_events import SourceEvent
 from src.config.product_features import is_surface_enabled
@@ -132,6 +137,26 @@ async def start_chat_run(data: ChatMessage):
             runtime_context.with_run_id(current_chat_background_run_id()),
         )
         persist_user_message_and_trace(ctx, run_data)
+        if ctx.trigger_source != "scheduled_job":
+            updated = await apply_habit_update(
+                user_message=run_data.message,
+                model_name=ctx.model_name,
+                fallback_names=list(getattr(ctx.runtime_model_config, "fallback_names", []) or []),
+                session_id=ctx.session_id,
+                agent_id=ctx.agent_id,
+                agent_name=ctx.agent_name,
+                persist_audit=ctx.persist_run,
+            )
+            if updated is not None:
+                memory_prompt, _recall = build_memory_prompt_and_recall(
+                    agent_id=ctx.agent_id,
+                    agent_name=ctx.agent_name,
+                    workspace_id=ctx.runtime_context.workspace_id,
+                    project_id=ctx.runtime_context.project_id,
+                    query_text="",
+                    freeze_session_id=ctx.session_id if ctx.persist_run else None,
+                )
+                refresh_context_memory_prompt(ctx, memory_prompt)
         async for start_event in emit_start_events(ctx, run_data):
             yield start_event
         async for context_event in emit_context_events(ctx):

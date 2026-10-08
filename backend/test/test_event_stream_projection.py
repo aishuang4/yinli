@@ -427,6 +427,29 @@ def test_source_normalizer_closes_all_activity_before_run_completed(projection_d
     assert state.snapshot.blocks_by_id["team:team-1"].outcome == "completed"
     assert state.snapshot.blocks_by_id["team-member:team-1:leader"].outcome == "completed"
     assert state.snapshot.blocks_by_id["message:run-normalized"].outcome == "completed"
+    assert "answerGeneration" not in state.snapshot.blocks_by_id["message:run-normalized"].data
+
+
+def test_generation_scoped_text_keeps_only_the_ready_block_as_answer(projection_db) -> None:
+    events, store, coordinator, runner = create_runtime()
+    normalizer = ChatProjectionNormalizer(
+        stream_key="stream-answer",
+        run_id="run-answer",
+        session_id="session-answer",
+        events=events,
+    )
+    normalizer.start(agent_name="Agent")
+    normalizer.ingest("FINAL_ANSWER_DELTA", {"delta": "先看文件。", "generation": 1})
+    normalizer.ingest("TOOL_CALL_START", {"tool_call_id": "call-1", "tool_call_name": "Read"})
+    normalizer.ingest("FINAL_ANSWER_DELTA", {"delta": "文件里写着结果。", "generation": 2})
+    normalizer.ingest("ANSWER_READY", {"generation": 2})
+    normalizer.ingest("RUN_COMPLETED", {"payload": {}})
+
+    assert runner.run_available("stream-answer", "run-answer") == len(events.list("stream-answer"))
+    state = store.load_materialized("stream-answer", coordinator)
+    assert state.snapshot.blocks_by_id["text:run-answer:1"].data == "先看文件。"
+    assert state.snapshot.blocks_by_id["text:run-answer:2"].data == "文件里写着结果。"
+    assert state.snapshot.blocks_by_id["message:run-answer"].data["answerGeneration"] == "text:run-answer:2"
 
 
 def test_source_normalizer_projects_context_usage_and_closes_before_done(projection_db) -> None:
@@ -629,6 +652,7 @@ def test_real_team_outbox_projects_incremental_block_tree(projection_db, tmp_pat
     assert submit_tool_block.outcome == "completed"
     assert denied_tool_block.outcome == "failed"
     assert mail_blocks and mail_blocks[0].data["deliveryStatus"] == "read"
+    assert snapshot.blocks_by_id["message:run-team"].data["answerGeneration"] == "text:run-team"
     assert all(block.phase == "closed" for block in snapshot.blocks_by_id.values())
 
 

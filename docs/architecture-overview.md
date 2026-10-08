@@ -221,17 +221,14 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 
 ## 记忆系统 MVP
 
-当前在线的是新记忆系统首版，不是旧 memory summarize：
+当前记忆契约：
 
-- **运行前注入**：`memory/retrieval.py` 读取 user / agent / global Markdown 摘要和最近 30 天节点树；`run_context.py` 在 readiness 通过后注入主 Agent / Team Lead，隔离 Member session 使用本轮解析后的相同记忆上下文，并单独注册裁剪后的 AgentScope Skill catalog。
-- **Subagent 注入**：`subagents/runtime_context.py` 把 frontmatter `skills` 指定的已安装启用 Skill 转换为 AgentScope loader 路径，不注入完整 Skill 正文；同时用 `subagent:{name}` 作为 agent memory owner 注入长期记忆摘要。`subagents/permission_policy.py` 执行 frontmatter `permissionMode` 并按父 Agent guardrails 上限收窄；`subagents/tool_policy.py` 基于父运行时真实工具池执行 `tools` / `disallowedTools` 裁剪，并同步限制传给子 Agent 的 MCP server 与知识库工具；审计通过 `SUBAGENT_CONTEXT` Runtime Event 记录 loadedSkills、missingSkillRefs、memoryAgentId、memoryInjected 和 permission requested / effective 摘要。
-- **历史记忆**：底层 `memory_nodes` 只保存用户输入、Agent 最终输出和摘要索引，不保存工具调用过程；写入后同步到 `VectorStoreBackend` 的 `memory_nodes` collection。
-- **Markdown 长期记忆**：user memory、agent memory、global preference memory 分别保存为 `user_memory.md`、`agent_memory.md`、`global_memory.md`，没有旧 `default.md` 兼容读取。
-- **Memory 管理入口**：前端 Memory 页面首版已接入，用户记忆和全局记忆各只有一个管理入口；Agent 记忆按 Agent 选择，每个 Agent 对应一份 `agent_memory.md`；历史记忆按“Agent -> 时间节点 -> 具体记忆”三段式查看，底层使用 `memory_nodes`。页面已支持历史记忆禁用 / 删除 / 恢复、Skill 自进化队列操作、注册失败原因可视化、设置快照、召回质量摘要、召回命中相关性反馈和 `MEMORY_AUDIT` 审计详情。
-- **Memory Wiki**：`MemoryWikiVaultSyncer` 可从三类 Markdown 记忆、`memory_nodes` 和已注册 Skills 手动生成 `backend/data/memory/wiki/` 只读 Obsidian-compatible 视图，并生成 `entities/` 实体页与 `entities/graph.md` 共现图；`/api/memory/wiki/graph` 提供结构化实体图谱给前端展示。Memory 页面可同步、查看图谱和生成结果、打开文件夹或通过 Obsidian 深链打开 vault。当前不作为运行时事实源，也不反向写回权威存储。
-- **记忆查询工具**：普通 Agent 默认注入 `memory_node_tree` 和 `memory_node_query`，需要详情时由 Agent 主动查询；工具召回会写入 `MEMORY_AUDIT`，记录 query、filters、resultCount、命中 nodeId 和 retrievalQuality 质量指标。
-- **运行后提炼**：`completion.py` 成功收尾后后台并行调用 `UserMemoryReflectionAgent`、`AgentMemoryReflectionAgent`、`GlobalMemoryReflectionAgent`，通过绑定文件的 `memory_read` / `memory_add` / `memory_update` / `memory_delete` 操作 Markdown 记忆，不阻塞主对话。
-- **准入、记忆与召回质量**：`MemoryAdmissionGate` 当前是规则评分 + 可选模型评分增强，会输出 history / markdown / skill 三类评分、阈值、signals、模型评分、失败原因、脱敏摘要和脱敏类型统计；Memory 设置页可编辑准入阈值、模型评分开关和 Markdown 质量参数。Markdown 写入会做敏感信息过滤、近似去重、冲突合并、失败重试和 `# Summary` 压缩摘要；历史记忆查询会合并向量候选和 SQLite 关键词结果，再按查询词命中、向量分数、结构化反馈分、置顶、置信度、使用次数和日期做轻量重排，用户对命中 node 的相关 / 不相关反馈写入 `memory_retrieval_feedback` 表并同步写 `MEMORY_AUDIT` 追溯，Agent 工具查询会进入召回审计并带质量指标。2026-09-15 起运行前注入分两段：system prompt 只留三份 Markdown 摘要（按会话冻结），历史记忆改为用本轮用户消息召回 ≤ 4 条带一句话摘要的节点，以 `<recalled-memory>` 附在用户消息后并写 `MEMORY_AUDIT.memory_recall`；运行后一路 `MemoryReflectionAgent`（输入含脱敏工具轨迹）同时提炼三层，agent 层直接写，user / global 层默认进 `memory_markdown_candidates` 待确认队列；历史节点按同 Agent + 同日 + 同会话聚合，90 天未命中自动归档；准入一轮一评。详见 `docs/memory-system-design.md` "2026-09-15 沉淀与注入修正"。
+- **时间线**：chat、群聊、定时任务的原始消息就是节点，不另存、不每轮注入。普通 Agent 默认有 `timeline_retrieve` 和 `timeline_ingest`。检索按工作区、项目、智能体、场合和时间取原文；摄取只把这次任务需要的内容留在当前会话，原文随后从上下文抽掉。
+- **习惯**：`users/{user_id}/habits.md`，属于这个人，所有智能体每轮注入全文。用户消息落库后、回复前由习惯智能体判断；寒暄不跑，判定后直接写。
+- **专业区**：`agents/{agent_id}/professional.md`，只属于该智能体，每轮注入全文，不设长度上限。该轮落库后由专业区判断智能体决定改写、删除或不改。Team Member 用自己的专业全文；Subagent 的 owner 是 `subagent:{name}`。
+- **普通技能**：成功收尾后仍走 Skill 自进化，不绑定智能体。手动触发只产生普通技能。
+- **旧数据**：`user_memory.md` / `agent_memory.md` / `global_memory.md` 和 `memory_nodes` 不再注入、不再从 Chat 收尾写入。Memory 页旧节点只读。Memory Wiki 已从页面和 API 移除。
+- **Subagent 其他上下文**：`subagents/runtime_context.py` 把 frontmatter `skills` 指定的已安装启用 Skill 转换为 AgentScope loader 路径，不注入完整 Skill 正文。`subagents/permission_policy.py` 执行 frontmatter `permissionMode` 并按父 Agent guardrails 上限收窄；`subagents/tool_policy.py` 基于父运行时真实工具池执行 `tools` / `disallowedTools` 裁剪，并同步限制传给子 Agent 的 MCP server 与知识库工具；审计通过 `SUBAGENT_CONTEXT` Runtime Event 记录 loadedSkills、missingSkillRefs、memoryAgentId、memoryInjected 和 permission requested / effective 摘要。
 - **Skill 自进化现状**：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、router gate、workflow evidence、颗粒度 gate、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和用户显式请求生成 Skill 的手动触发流；自动生成 / 手动注册 Skill 会写入运行时 `skills/{skill_name}/SKILL.md` 并支持按 Skill 名称导出 zip。Memory 页面已能查看和操作候选队列；注册后不自动绑定 Agent。
 - **向量存储**：全局 `VectorStoreBackend` 抽象已支持 `disabled` / `zvec`，`VECTOR_STORE_PROVIDER` 仅首次初始化生效，之后按持久化 `VectorStorePolicy` 启动。
 

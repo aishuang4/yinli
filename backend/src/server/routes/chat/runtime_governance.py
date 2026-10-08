@@ -15,17 +15,17 @@ from typing import Any
 from src.agents.session_context import restore_session_context_state, snapshot_session_context_state
 from src.memory.retrieval import (
     MemoryRecallResult,
-    MemoryRetrievalContext,
-    build_memory_injection_text,
-    build_memory_recall,
+    build_habit_prompt,
+    build_professional_prompt,
 )
 from src.memory.trace import record_memory_audit_event
 from src.server.routes.chat.context_middleware import (
     ContextCompressionMiddleware,
     ContextHygieneMiddleware,
+    TimelineRecallMiddleware,
     set_context_session_id,
 )
-from src.server.routes.chat.memory_prompt_cache import session_memory_prompt
+from src.memory.prompt_cache import session_habit_prompt, session_professional_prompt
 from src.server.routes.chat.skill_context_middleware import SkillContextMiddleware
 from src.server.routes.chat.trace_recorder import (
     PROMPT_SECTIONS_ATTR,
@@ -48,6 +48,7 @@ def build_context_governance_middlewares(*, skill_context: bool = True) -> list[
     middlewares: list[object] = []
     if skill_context:
         middlewares.append(SkillContextMiddleware())
+    middlewares.append(TimelineRecallMiddleware())
     middlewares.append(ContextHygieneMiddleware())
     middlewares.append(ContextCompressionMiddleware())
     return middlewares
@@ -110,32 +111,65 @@ def build_memory_prompt_and_recall(
     freeze_session_id: str | None,
     exclude_session_id: str = "",
     include_markdown: bool = True,
+    user_id: str = "default",
 ) -> tuple[str, MemoryRecallResult | None]:
-    """返回 (进 system prompt 的 Markdown 记忆摘要, 按本轮文本召回的历史记忆)。
+    """返回 (进 system prompt 的习惯全文 + 专业全文, 空召回)。
 
-    摘要按 `freeze_session_id` 冻结（None 表示不冻结）；召回随每次调用变化，调用方把
-    `recall.text` 附到用户消息后，不要放进 system prompt。
+    时间线不再自动注入。`query_text` / `exclude_session_id` 保留签名，避免旧调用点立刻崩掉。
+    习惯按用户冻结，专业全文按智能体和会话冻结。
     """
 
-    context = MemoryRetrievalContext(
+    del agent_name, workspace_id, project_id, query_text, exclude_session_id
+    if not include_markdown:
+        return "", None
+    memory_prompt = _compose_frozen_memory_prompt(
+        user_id=user_id,
         agent_id=agent_id,
-        agent_name=agent_name,
-        workspace_id=workspace_id,
-        project_id=project_id,
-        include_user_markdown=include_markdown,
-        include_agent_markdown=include_markdown,
-        include_global_markdown=include_markdown,
-        include_node_tree=False,
+        session_id=freeze_session_id,
     )
-    memory_prompt = ""
-    if include_markdown:
-        memory_prompt = session_memory_prompt(
+    return memory_prompt, None
+
+
+def build_actor_memory_prompt(
+    *,
+    user_id: str,
+    agent_id: str,
+    session_id: str | None,
+) -> str:
+    """给 Team Member / Subagent 注入共用习惯和它自己的专业全文。"""
+
+    return _compose_frozen_memory_prompt(user_id=user_id, agent_id=agent_id, session_id=session_id)
+
+
+def refresh_context_memory_prompt(ctx: object, memory_prompt: str) -> None:
+    """习惯写入后重拼这一轮的 system prompt，让这次回复用上新全文。"""
+
+    old = str(getattr(ctx, "memory_prompt", "") or "")
+    system_prompt = str(getattr(ctx, "system_prompt", "") or "")
+    if old and old in system_prompt:
+        system_prompt = system_prompt.replace(old, memory_prompt, 1)
+    elif memory_prompt:
+        system_prompt = f"{system_prompt}\n\n{memory_prompt}" if system_prompt else memory_prompt
+    setattr(ctx, "system_prompt", system_prompt)
+    setattr(ctx, "memory_prompt", memory_prompt)
+    sections = dict(getattr(ctx, "system_prompt_sections", {}) or {})
+    sections["memory"] = len(memory_prompt)
+    setattr(ctx, "system_prompt_sections", sections)
+
+
+def _compose_frozen_memory_prompt(*, user_id: str, agent_id: str, session_id: str | None) -> str:
+    habit = session_habit_prompt(
+        user_id=user_id or "default",
+        build=lambda: build_habit_prompt(user_id or "default"),
+    )
+    professional = ""
+    if agent_id:
+        professional = session_professional_prompt(
             agent_id=agent_id,
-            session_id=freeze_session_id,
-            build=lambda: build_memory_injection_text(context),
+            session_id=session_id,
+            build=lambda: build_professional_prompt(agent_id),
         )
-    recall = build_memory_recall(context, query_text=query_text, exclude_session_id=exclude_session_id)
-    return memory_prompt, recall
+    return "\n\n".join(part for part in (habit, professional) if part.strip())
 
 
 def record_memory_recall_audit(

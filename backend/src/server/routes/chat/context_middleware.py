@@ -148,6 +148,58 @@ def compact_stale_context(agent: Any, *, keep_recent_turns: int = KEEP_RECENT_TU
     return result
 
 
+def stub_timeline_retrieve_outputs(agent: Any) -> int:
+    """摄取成功后立刻抽掉本轮检索原文，只留一行存根。"""
+
+    state = getattr(agent, "state", None)
+    context = list(getattr(state, "context", []) or [])
+    stubbed = 0
+    for msg in context:
+        content = getattr(msg, "content", None)
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, ToolResultBlock):
+                continue
+            if str(getattr(block, "name", "") or "") != "timeline_retrieve":
+                continue
+            output = getattr(block, "output", "")
+            if isinstance(output, str) and output.startswith("[时间线已摄取]"):
+                continue
+            length = _text_len(block.output)
+            block.output = (
+                f"[时间线已摄取] timeline_retrieve 的原文（{length} 字）已移出上下文。"
+                "后续只用 timeline_ingest 留下的内容。"
+            )
+            stubbed += 1
+    return stubbed
+
+
+class TimelineRecallMiddleware(MiddlewareBase):
+    """timeline_ingest 成功后，立刻存根本轮的 timeline_retrieve 输出。"""
+
+    async def on_acting(
+        self,
+        agent: Any,
+        input_kwargs: dict[str, Any],
+        next_handler: Callable[..., AsyncGenerator[Any, None]],
+    ) -> AsyncGenerator[Any, None]:
+        tool_call = input_kwargs.get("tool_call")
+        name = str(getattr(tool_call, "name", "") or "")
+        last: Any = None
+        async for item in next_handler(**input_kwargs):
+            last = item
+            yield item
+        if name != "timeline_ingest":
+            return
+        if str(getattr(last, "state", "success") or "success").lower() != "success":
+            return
+        try:
+            stub_timeline_retrieve_outputs(agent)
+        except Exception:
+            logger.debug("抽掉时间线检索原文失败", exc_info=True)
+
+
 class ContextHygieneMiddleware(MiddlewareBase):
     """每轮开始前做一次无模型整理，把压缩触发点往后推。"""
 

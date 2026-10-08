@@ -184,19 +184,35 @@ def test_final_answer_is_recorded_on_generation(isolated_db) -> None:
     observe_source_event(
         persist=True, run_id="run-fa", session_id="sess-f",
         event_type="AGENT_FINAL_ANSWER_STARTED",
-        data={"payload": {"tool_call_id": "fa1", "tool_call_name": "FinalAnswerStart"}},
+        data={"payload": {"generation": 1, "direct": True}},
     )
     observe_source_event(
         persist=True, run_id="run-fa", session_id="sess-f",
-        event_type="TEXT_BLOCK_DELTA", data={"delta": "武汉今天多云。"},
+        event_type="FINAL_ANSWER_DELTA", data={"delta": "武汉今天多云。", "generation": 1},
     )
     observe_source_event(
         persist=True, run_id="run-fa", session_id="sess-f",
         event_type="REPLY_END", data={"finished_reason": "completed"},
     )
     generation = next(item for item in list_trace_observations("run-fa") if item["kind"] == "generation")
-    assert generation["output"]["toolCalls"][0]["name"] == "FinalAnswerStart"
+    assert not generation["output"].get("toolCalls")
     assert generation["output"]["text"] == "武汉今天多云。"
+
+
+def test_legacy_named_final_answer_event_still_records_that_tool(isolated_db) -> None:
+    open_run_root(persist=True, run_id="run-fa-legacy", session_id="sess-f", task="天气")
+    observe_source_event(
+        persist=True, run_id="run-fa-legacy", session_id="sess-f",
+        event_type="MODEL_CALL_START",
+        data={"model_name": "deepseek-v4-flash", "observationInput": {"model": "deepseek-v4-flash", "messages": []}},
+    )
+    observe_source_event(
+        persist=True, run_id="run-fa-legacy", session_id="sess-f",
+        event_type="AGENT_FINAL_ANSWER_STARTED",
+        data={"payload": {"tool_call_id": "fa1", "tool_call_name": "Read"}},
+    )
+    generation = next(item for item in list_trace_observations("run-fa-legacy") if item["kind"] == "generation")
+    assert generation["output"]["toolCalls"][0]["name"] == "Read"
 
 
 def test_waiting_does_not_close_root(isolated_db) -> None:

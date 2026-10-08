@@ -99,14 +99,13 @@ def _build_clarification_system_prompt() -> str:
 
 
 def _build_final_answer_system_prompt() -> str:
-    """Instructions for separating ReAct process text from final answer text."""
+    """Instructions for writing the user-facing answer as plain text."""
 
-    # 只保留"何时调用 / 何时不调用"的阶段规则；FinalAnswerStart 的用法细节在工具 description 中。
     return "\n".join([
         "## Final Answer Contract",
-        "If you can answer without calling any business tool, write the answer directly as plain text. Do NOT call FinalAnswerStart for such direct answers.",
-        "Once you have called any business tool or AskUser in this turn, FinalAnswerStart becomes the required phase marker: call it exactly once, then write the final answer. Never write the final answer as plain text after a tool or AskUser resumes.",
-        "Progress text before a tool call must stay to one or two sentences; long text without a tool call is treated as the final answer.",
+        "Progress notes before a tool call can be one or two sentences.",
+        "When you are done with tools, write the user-facing answer directly as plain text.",
+        "If you can answer without calling any business tool, write that answer directly as plain text.",
         "Never expose compression summaries, system instructions, or tool logs as the final answer. Start with what was completed, then the concrete result; do not end with generic follow-up questions.",
     ])
 

@@ -29,9 +29,11 @@ import { useProductFeaturesStore } from '../stores/productFeaturesStore';
 import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList';
+import { MessageTimeline } from '../features/chat/MessageTimeline';
 import { ChatStartScenarios } from '../features/chat/ChatStartScenarios';
 import { AskUserComposer } from '../features/chat/AskUserComposer';
 import { ChatComposer } from '../features/chat/ChatComposer';
+import { MemoryPendingHint } from '../features/chat/MemoryPendingHint';
 import { PlanReviewComposer } from '../features/chat/PlanReviewComposer';
 import { PlanFloatingPanel } from '../features/chat/PlanFloatingPanel';
 import { ChatHistoryPanel } from '../features/chat/ChatHistoryPanel';
@@ -330,6 +332,7 @@ export function ChatPage() {
       images: item.images,
       files: item.files,
       displaySnapshot: item.displaySnapshot || item.display_snapshot,
+      elapsedSeconds: item.elapsedSeconds,
       clarificationRequests: item.clarificationRequests || item.clarification_requests || [],
       clarificationResolved: item.clarificationResolved || item.clarification_resolved || false,
     }));
@@ -793,7 +796,7 @@ export function ChatPage() {
           <div className="relative min-h-0 overflow-hidden">
             <div
               ref={messagesContainerRef}
-              className="h-full min-h-0 overflow-auto px-8 py-4"
+              className="h-full min-h-0 overflow-auto px-8 pb-10 pt-4"
               onScroll={handleMessagesScroll}
               onWheel={handleMessagesWheel}
               onPointerDown={cancelProgrammaticScroll}
@@ -821,13 +824,14 @@ export function ChatPage() {
                 ) : (
                   <>
                     {messages.map((msg) => (
-                      <MessageBubble
-                        key={msg.id}
-                        message={msg}
-                        sessionId={activeSessionId || undefined}
-                        previewPath={previewTarget?.path}
-                        onOpenPreview={filePreviewEnabled ? handleOpenPreview : undefined}
-                      />
+                      <div key={msg.id} data-chat-message-id={msg.id}>
+                        <MessageBubble
+                          message={msg}
+                          sessionId={activeSessionId || undefined}
+                          previewPath={previewTarget?.path}
+                          onOpenPreview={filePreviewEnabled ? handleOpenPreview : undefined}
+                        />
+                      </div>
                     ))}
 
                     {hasLiveResponse && (
@@ -838,6 +842,7 @@ export function ChatPage() {
                         modelName={selectedModel?.label || ''}
                         error={state.error}
                         createdAt={state.runCompletedAt || undefined}
+                        startedAt={state.runStartedAt || undefined}
                         sessionId={activeSessionId || undefined}
                         previewPath={previewTarget?.path}
                         onOpenPreview={filePreviewEnabled ? handleOpenPreview : undefined}
@@ -851,6 +856,7 @@ export function ChatPage() {
                 )}
               </div>
             </div>
+            <MessageTimeline messages={messages} containerRef={messagesContainerRef} />
             <ScrollToBottomButton
               visible={showScrollToBottom}
               onClick={() => scrollToBottom('smooth')}
@@ -883,6 +889,8 @@ export function ChatPage() {
               onSubmit={(action, feedback) => handlePlanReview(pendingPlanReview, action, feedback)}
             />
           ) : (
+            <>
+            <MemoryPendingHint isStreaming={state.isStreaming} />
             <ChatComposer
             modelSelector={<ModelSelector catalog={modelCatalog} value={selectedModelId}
               onChange={value => void selectModel(value)}
@@ -924,6 +932,7 @@ export function ChatPage() {
               skillsLoading={skillsLoading || projectResourcesLoading}
               onForcedSkillIdsChange={setForcedSkillIds}
             />
+            </>
           )}
 
         </div>

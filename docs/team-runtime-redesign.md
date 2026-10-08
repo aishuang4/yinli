@@ -73,7 +73,7 @@ team_read_mailbox
 team_finish_coordination
 ```
 
-协调阶段不使用 `FinalAnswerStart`，也不拥有普通 Write、Edit、Bash、HTTP、知识库或 MCP 工具。`team_finish_coordination` 只有在至少存在一个 Member 和一个任务时才能成功。
+协调阶段不拥有普通 Write、Edit、Bash、HTTP、知识库或 MCP 工具。`team_finish_coordination` 只有在至少存在一个 Member 和一个任务时才能成功。
 Leader 协调预算为 64 轮 ReAct。若 Leader session 在未调用 `team_finish_coordination` 时结束，但已有至少一个临时成员和一条任务，Runtime 自动进入 `executing`，不得因此把整轮判失败。
 `team_finish_coordination` 成功后 Runtime 必须立即终止 Leader session 并启动 Coordinator，禁止 Leader 在协调 session 内轮询任务或 Mailbox。成员间通信前置条件必须建模为显式任务依赖，不得创建“A 等 B 消息、B 的任务又依赖 A 完成”的隐性环。
 

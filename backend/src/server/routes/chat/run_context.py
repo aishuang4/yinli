@@ -12,7 +12,7 @@ from src.config.runtime_settings import get_effective_model_settings
 from src.project_files import list_project_session_artifacts, project_session_directory
 from src.project_resources import ProjectResourceAccess, resolve_project_resource_access
 from src.runtime_context import RuntimeContext, load_project_instructions
-from src.server.routes.chat.runtime_governance import build_memory_prompt_and_recall, record_memory_recall_audit
+from src.server.routes.chat.runtime_governance import build_memory_prompt_and_recall
 from src.server.routes.agents import get_registered_agent
 from src.server.routes.chat.intent_router import (
     ExecutorRoute,
@@ -270,14 +270,7 @@ async def build_chat_run_context(
             freeze_session_id=session_id if persist_run else None,
             exclude_session_id=session_id or "",
         )
-        if persist_run and memory_recall is not None:
-            record_memory_recall_audit(
-                session_id=session_id,
-                persist=True,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                recall=memory_recall,
-            )
+        del memory_recall
     guardrails = scope_guardrails_to_project(
         _build_runtime_guardrails(agent_config),
         runtime_context.project_root,
@@ -374,13 +367,12 @@ async def build_chat_run_context(
             for part in [
                 _build_file_attachments_user_note(run_data.files),
                 _build_forced_skills_user_note(forced_skills),
-                memory_recall.text if memory_recall else "",
             ]
             if part
         ),
         system_prompt_sections=system_prompt_sections,
         memory_prompt=memory_prompt,
-        memory_recall_text=memory_recall.text if memory_recall else "",
+        memory_recall_text="",
         force_compress=bool(getattr(run_data, "force_compress", False)),
     )
 
@@ -443,7 +435,7 @@ async def build_scheduled_run_context(
     skill_paths = resolve_runtime_skill_paths(used_skills, runtime_context=runtime_context)
     used_skill_details = list_skill_usage_details(used_skills)
     # 定时任务每次都是新会话：摘要不冻结，按任务正文召回历史记忆。
-    memory_prompt, job_recall = build_memory_prompt_and_recall(
+    memory_prompt, _job_recall = build_memory_prompt_and_recall(
         agent_id=agent_id,
         agent_name=agent_name,
         workspace_id=runtime_context.workspace_id,
@@ -530,13 +522,9 @@ async def build_scheduled_run_context(
         write_scope_dir=workspace_dir,
         scheduled_job_id=str(getattr(job, "id", "") or getattr(firing, "job_id", "") or ""),
         scheduled_firing_id=str(getattr(firing, "id", "") or ""),
-        user_message_note="\n\n".join(
-            part
-            for part in [_build_file_attachments_user_note(run_data.files), job_recall.text if job_recall else ""]
-            if part
-        ),
+        user_message_note=_build_file_attachments_user_note(run_data.files),
         memory_prompt=memory_prompt,
-        memory_recall_text=job_recall.text if job_recall else "",
+        memory_recall_text="",
     )
 
 

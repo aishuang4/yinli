@@ -10,7 +10,6 @@ import {
   Clock3,
   Database,
   FileText,
-  FolderSync,
   Globe2,
   Settings2,
   Sparkles,
@@ -26,7 +25,7 @@ import type {
   SkillEvolutionRecordStatus,
 } from '../../types/memory';
 
-export type MemoryTab = 'markdown' | 'candidates' | 'nodes' | 'skills' | 'wiki' | 'settings';
+export type MemoryTab = 'habits' | 'professional' | 'timeline' | 'markdown' | 'candidates' | 'nodes' | 'skills' | 'settings';
 
 export interface MarkdownTarget {
   key: MarkdownMemoryScope;
@@ -42,11 +41,13 @@ export const MARKDOWN_TARGETS: MarkdownTarget[] = [
 ];
 
 export const MEMORY_TABS: Array<{ key: MemoryTab; label: string; icon: typeof FileText }> = [
-  { key: 'markdown', label: 'Markdown 记忆', icon: FileText },
-  { key: 'candidates', label: '待确认记忆', icon: ClipboardCheck },
-  { key: 'nodes', label: '历史记忆', icon: Database },
+  { key: 'habits', label: '习惯', icon: UserRound },
+  { key: 'professional', label: '专业区', icon: Bot },
+  { key: 'timeline', label: '时间线', icon: Clock3 },
   { key: 'skills', label: 'Skill 自进化队列', icon: Sparkles },
-  { key: 'wiki', label: 'Wiki Vault', icon: FolderSync },
+  { key: 'markdown', label: '旧 Markdown', icon: FileText },
+  { key: 'candidates', label: '待确认记忆', icon: ClipboardCheck },
+  { key: 'nodes', label: '旧历史节点', icon: Database },
   { key: 'settings', label: '设置与审计', icon: Settings2 },
 ];
 

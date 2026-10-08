@@ -8,11 +8,30 @@ from ..domain_events import DomainEvent
 from ..frame_schema import DisplaySnapshot
 from ..projection_registry import ProjectionMutation
 
-EVENT_TYPES = {"message.started", "run.completed", "run.failed", "run.cancelled"}
+EVENT_TYPES = {
+    "message.started",
+    "message.answer.ready",
+    "run.completed",
+    "run.failed",
+    "run.cancelled",
+}
 
 
 def project(event: DomainEvent, snapshot: DisplaySnapshot) -> Iterable[ProjectionMutation]:
     data = event.data
+    if event.type == "message.answer.ready":
+        message_id = str(data.get("blockId") or event.aggregate_id)
+        answer_generation = data.get("answerGeneration")
+        if not message_id or not isinstance(answer_generation, str) or not answer_generation:
+            return
+        if message_id not in snapshot.blocks_by_id:
+            return
+        yield ProjectionMutation(
+            op="delta",
+            id=message_id,
+            patch={"answerGeneration": answer_generation},
+        )
+        return
     if event.type == "message.started":
         block_id = str(data.get("blockId") or event.aggregate_id)
         initial = {

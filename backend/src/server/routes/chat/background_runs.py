@@ -619,14 +619,32 @@ def _run_observation_output(run: ChatBackgroundRun, outcome: str, data: dict) ->
     try:
         snapshot = get_chat_projection_snapshot(run.id)
         blocks = snapshot.get("blocksById") if isinstance(snapshot.get("blocksById"), dict) else {}
+        answer_generation = ""
+        for block_id in snapshot.get("order") or []:
+            block = blocks.get(block_id)
+            if not isinstance(block, dict) or block.get("kind") != "message":
+                continue
+            payload = block.get("data") if isinstance(block.get("data"), dict) else {}
+            candidate = str(payload.get("answerGeneration") or "")
+            if candidate:
+                answer_generation = candidate
         for block_id in snapshot.get("order") or []:
             block = blocks.get(block_id)
             if not isinstance(block, dict) or block.get("kind") != "text":
                 continue
-            payload = block.get("data") if isinstance(block.get("data"), dict) else {}
-            text = str(payload.get("text") or payload.get("content") or "").strip()
+            if answer_generation and block_id != answer_generation:
+                continue
+            payload = block.get("data")
+            if isinstance(payload, str):
+                text = payload.strip()
+            elif isinstance(payload, dict):
+                text = str(payload.get("text") or payload.get("content") or "").strip()
+            else:
+                text = ""
             if text:
                 answer = text
+                if answer_generation:
+                    break
     except Exception:
         answer = ""
     return {

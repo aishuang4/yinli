@@ -201,7 +201,6 @@ Prompt.
     assert "Read" in policy.effective_tool_names
     assert "Grep" in policy.effective_tool_names
     assert "Bash" in policy.effective_tool_names
-    assert "FinalAnswerStart" in policy.effective_tool_names
     assert "Write" not in policy.effective_tool_names
     assert "AskUser" not in policy.effective_tool_names
     assert "DelegateTask" not in policy.effective_tool_names
@@ -215,7 +214,7 @@ name: explorer
 description: Read-only explorer.
 tools: Read, Grep, Glob
 disallowedTools:
-  - FinalAnswerStart
+  - Write
 ---
 Prompt.
 """,
@@ -233,8 +232,8 @@ Prompt.
         ),
     )
 
-    assert policy.effective_tool_names == {"Read", "Grep", "Glob", "FinalAnswerStart"}
-    assert "FinalAnswerStart" not in policy.denied_tool_names
+    assert policy.effective_tool_names == {"Read", "Grep", "Glob"}
+    assert "Write" in policy.denied_tool_names
 
 
 def test_tool_policy_applies_mcp_server_patterns_to_runtime_tools(tmp_path: Path) -> None:
@@ -338,11 +337,11 @@ def test_child_scope_keeps_custom_knowledge_and_http_tools_enabled() -> None:
 
     knowledge_scope = _child_tool_scope(
         parent_scope,
-        {"KnowledgeBaseSearch_Product_Docs", "FinalAnswerStart"},
+        {"KnowledgeBaseSearch_Product_Docs"},
     )
     http_scope = _child_tool_scope(
         parent_scope,
-        {"HttpTool_Product_API", "FinalAnswerStart"},
+        {"HttpTool_Product_API"},
     )
 
     assert knowledge_scope.allow_knowledge is True
@@ -384,7 +383,7 @@ Prompt.
         child_guardrails=permission.guardrails,
     )
 
-    assert {"Read", "Grep", "Glob", "Write", "Edit", "Bash", "HttpRequest", "WebFetch", "FinalAnswerStart"} <= policy.effective_tool_names
+    assert {"Read", "Grep", "Glob", "Write", "Edit", "Bash", "HttpRequest", "WebFetch"} <= policy.effective_tool_names
     assert permission.effective_policy == ApprovalPolicy.CONFIRM_DESTRUCTIVE
 
 
@@ -417,7 +416,6 @@ Prompt.
     )
 
     assert "Read" in policy.effective_tool_names
-    assert "FinalAnswerStart" in policy.effective_tool_names
     assert "Write" not in policy.effective_tool_names
     assert "Edit" not in policy.effective_tool_names
     assert "Bash" not in policy.effective_tool_names
@@ -798,8 +796,8 @@ def test_subagent_runner_inherit_uses_parent_resolved_model(monkeypatch) -> None
 
     class FakeAgent:
         async def reply_stream(self, _message):
-            yield FakeEvent({"type": "TOOL_CALL_START", "tool_call_name": "FinalAnswerStart"})
             yield FakeEvent({"type": "TEXT_BLOCK_DELTA", "delta": "Done."})
+            yield FakeEvent({"type": "REPLY_END", "finished_reason": "completed"})
 
     def fake_get_or_create_agent(**kwargs):
         captured.update(kwargs)
@@ -838,8 +836,8 @@ def test_subagent_runner_injects_project_paths_and_uses_session_workspace(tmp_pa
 
     class FakeAgent:
         async def reply_stream(self, _message):
-            yield FakeEvent({"type": "TOOL_CALL_START", "tool_call_name": "FinalAnswerStart"})
             yield FakeEvent({"type": "TEXT_BLOCK_DELTA", "delta": "Done."})
+            yield FakeEvent({"type": "REPLY_END", "finished_reason": "completed"})
 
     def fake_get_or_create_agent(**kwargs):
         captured.update(kwargs)
@@ -879,7 +877,7 @@ def test_subagent_runner_injects_project_paths_and_uses_session_workspace(tmp_pa
 
 
 def test_subagent_runner_uses_restricted_finalization_after_max_iters(monkeypatch) -> None:
-    """首次耗尽轮次后只允许一次 FinalAnswerStart 收尾。"""
+    """首次耗尽轮次后清空工具，再要一轮纯文本摘要。"""
 
     class FakeEvent:
         def __init__(self, data):
@@ -890,7 +888,7 @@ def test_subagent_runner_uses_restricted_finalization_after_max_iters(monkeypatc
 
     class FakeGroup:
         def __init__(self):
-            self.tools = [type("Tool", (), {"name": "Read"})(), type("Tool", (), {"name": "FinalAnswerStart"})()]
+            self.tools = [type("Tool", (), {"name": "Read"})()]
             self.mcps = [object()]
             self.skills_or_loaders = [object()]
 
@@ -906,8 +904,9 @@ def test_subagent_runner_uses_restricted_finalization_after_max_iters(monkeypatc
                 yield FakeEvent({"type": "TEXT_BLOCK_DELTA", "delta": "Known evidence."})
                 yield FakeEvent({"type": "EXCEED_MAX_ITERS"})
                 return
-            yield FakeEvent({"type": "TOOL_CALL_START", "tool_call_name": "FinalAnswerStart"})
+            yield FakeEvent({"type": "MODEL_CALL_START"})
             yield FakeEvent({"type": "TEXT_BLOCK_DELTA", "delta": "Recovered result."})
+            yield FakeEvent({"type": "REPLY_END", "finished_reason": "completed"})
 
     fake_agent = FakeAgent()
     monkeypatch.setattr("src.subagents.runner.get_or_create_agent", lambda **_kwargs: fake_agent)
@@ -927,7 +926,7 @@ def test_subagent_runner_uses_restricted_finalization_after_max_iters(monkeypatc
     assert result.text == "Recovered result."
     assert fake_agent.calls == 2
     assert fake_agent.react_config.max_iters == 2
-    assert [tool.name for tool in fake_agent.toolkit.tool_groups[0].tools] == ["FinalAnswerStart"]
+    assert [tool.name for tool in fake_agent.toolkit.tool_groups[0].tools] == []
     assert fake_agent.toolkit.tool_groups[0].mcps == []
     assert fake_agent.toolkit.tool_groups[0].skills_or_loaders == []
 
@@ -1112,11 +1111,6 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
 
     class FakeSubagent:
         async def reply_stream(self, _event):
-            yield ToolCallStartEvent(
-                reply_id="reply-1",
-                tool_call_id="final-1",
-                tool_call_name="FinalAnswerStart",
-            )
             yield TextBlockDeltaEvent(
                 reply_id="reply-1",
                 block_id="text-1",
@@ -1244,7 +1238,7 @@ def test_child_system_prompt_only_injects_memory_not_skill_manual() -> None:
     assert "/skills/review-style" not in prompt
     assert "Agent Markdown memory" in prompt
     assert "subagent:researcher" not in prompt
-    assert "必须调用 FinalAnswerStart" in prompt
+    assert "完成后直接用正文给出可被主 Agent 消化的简明结果摘要" in prompt
 
 
 def test_permission_mode_plan_restricts_child_to_read_only_tools() -> None:
@@ -1254,7 +1248,7 @@ def test_permission_mode_plan_restricts_child_to_read_only_tools() -> None:
         prompt="Plan only.",
         scope="project",
         path=".agents/subagents/planner.md",
-        tools=["Read", "Write", "Bash", "FinalAnswerStart"],
+        tools=["Read", "Write", "Bash"],
         permission_mode="plan",
     )
     parent_guardrails = AgentGuardrails(
@@ -1271,7 +1265,6 @@ def test_permission_mode_plan_restricts_child_to_read_only_tools() -> None:
     assert permission.effective_policy == ApprovalPolicy.READ_ONLY
     assert permission.agentscope_mode.value == "explore"
     assert "Read" in policy.effective_tool_names
-    assert "FinalAnswerStart" in policy.effective_tool_names
     assert "Write" not in policy.effective_tool_names
     assert "Bash" not in policy.effective_tool_names
 

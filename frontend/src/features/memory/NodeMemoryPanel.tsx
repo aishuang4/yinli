@@ -3,8 +3,8 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Archive, Ban, Bot, Brain, RotateCcw, Trash2 } from 'lucide-react';
-import { Button, Empty, Spinner, Tag } from '@/components/design';
+import { Bot, Brain } from 'lucide-react';
+import { Empty, Spinner, Tag } from '@/components/design';
 import type { Agent } from '../../types/agent';
 import type { MemoryNodeQueryResult, MemoryNodeStatus, MemoryNodeTreeItem } from '../../types/memory';
 import { NodeMemoryFilters } from './NodeMemoryFilters';
@@ -26,7 +26,6 @@ interface NodeMemoryPanelProps {
   nodeTree: MemoryNodeTreeItem[];
   nodeResults: MemoryNodeQueryResult[];
   onSearch: () => Promise<void>;
-  onUpdateStatus: (nodeId: string, status: MemoryNodeStatus, reason?: string) => Promise<void>;
 }
 
 export function NodeMemoryPanel({
@@ -45,7 +44,6 @@ export function NodeMemoryPanel({
   nodeTree,
   nodeResults,
   onSearch,
-  onUpdateStatus,
 }: NodeMemoryPanelProps) {
   const agentNameById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent.name])), [agents]);
   const [selectedHistoryId, setSelectedHistoryId] = useState('');
@@ -242,41 +240,9 @@ export function NodeMemoryPanel({
                 </div>
               </div>
 
-              <div className="mt-4 flex flex-wrap gap-2">
-                {selectedStatus !== 'active' ? (
-                  <Button
-                    icon={<RotateCcw size={14} />}
-                    onClick={() => void onUpdateStatus(selectedTimelineItem.nodeId, 'active', '用户在 Memory 页面恢复历史记忆')}
-                  >
-                    恢复
-                  </Button>
-                ) : (
-                  <>
-                    <Button
-                      icon={<Ban size={14} />}
-                      onClick={() => void onUpdateStatus(selectedTimelineItem.nodeId, 'disabled', '用户在 Memory 页面禁用历史记忆')}
-                    >
-                      禁用
-                    </Button>
-                    <Button
-                      icon={<Archive size={14} />}
-                      onClick={() => void onUpdateStatus(selectedTimelineItem.nodeId, 'archived', '用户在 Memory 页面归档历史记忆')}
-                    >
-                      归档
-                    </Button>
-                    <Button
-                      icon={<Trash2 size={14} />}
-                      onClick={() => {
-                        if (window.confirm('确认软删除这条历史记忆吗？删除后可通过状态筛选查看并恢复。')) {
-                          void onUpdateStatus(selectedTimelineItem.nodeId, 'deleted', '用户在 Memory 页面软删除历史记忆');
-                        }
-                      }}
-                    >
-                      删除
-                    </Button>
-                  </>
-                )}
-              </div>
+              <p className="mt-4 text-xs leading-5 text-[var(--color-text-tertiary)]">
+                这些是已停止写入的旧历史节点，只供查看。新的回忆在「时间线」。
+              </p>
               <p className="mt-3 text-sm leading-6 text-[var(--color-text-secondary)]">
                 {selectedHistory?.summary || selectedTimelineItem.summary}
               </p>

@@ -26,7 +26,7 @@
 - 时间戳：精确到秒的 `当前时间` 写在 system prompt 中，每轮破坏供应商 prompt cache；改用 AgentScope `InjectionConfig`（上海时区、`%Y-%m-%d %H:%M`、0.5h 间隔）以 HintBlock 注入。
 - 记忆注入：节点树重复标题、无总预算、`# Summary` 与来源章节重抄；现在总预算 2500 字、按标题去重、每日 3 条、Summary 优先。
 - 无意义模型调用：readiness 在规则已判定 ready 时仍调模型且结果不可能改判；`INTENT_CATALOG` 只有 `react` 时 router 仍调模型。现在规则优先，仅模糊输入 / 多 architecture 时调模型，两者均清空系统 Agent 上下文并把 `modelCalled` / `durationMs` 写入 trace。
-- `FinalAnswerStart` 强制：无工具的直接回答也要多一次模型往返；现在无工具直接回答可写纯文本，超过 600 字时 `leader_stream` 以 `optimistic: true` 提前流式投影，工具调用后仍必须显式 `FinalAnswerStart`（契约见 `docs/chat-sse-event-contract.md`）。
+- 最终回答按模型生成区分：每次生成的正文从第一个 token 起流式投影；这一次生成没有工具调用且回复完成时，消息 `data.answerGeneration` 指向该正文块。旧快照没有该字段时，已完成消息里的 `kind=text` 仍当作最终答案（契约见 `docs/chat-sse-event-contract.md`）。
 - 中途补充消息：`RunSteerMiddleware` 原来写 `agent.memory.add`，AgentScope 2.0.5 的 Agent 没有 `memory`，实际是 no-op；现在写入 `state.context`，且只在下一次 reasoning 前写，避免插在 tool_calls 与 tool 结果之间。
 - Skill 正文生命周期：`Skill` 工具读到的 SKILL.md 只是一条 tool result，截断 / 压缩 / 实例重建后丢失，模型下一轮常常再读一遍。新增 `SkillContextMiddleware` 捕获正文、检测缺失并以 `<activated-skill>` HintBlock 补回，重启后由 `skill_runs` 记录恢复；`SkillRun` 每轮关闭的语义不变。system prompt 新增稳定的 `## Skill Context` 规则。真实 Agent 烟测：读取 → 压缩清空 → 下一轮自动补回通过。
 - 桌面端真实轨迹复核（qwen3.8-27b，5 轮 24 次模型调用）：同一轮内 `cache_input_tokens` 从 5760 逐步升到 25728，前缀 cache 正常命中；但每个新轮次的第一次调用 `cache_input_tokens` 都是 0。原因是每轮结束后台新增一条历史记忆节点，下一轮的记忆摘要（在 system prompt 里）变了几十个字符。现在记忆注入文本按 `(agent_id, session_id)` 冻结（`routes/chat/memory_prompt_cache.py`，TTL 6h，Memory 页面手动改写时失效），会话内 system prompt 字节一致。
@@ -43,10 +43,10 @@
 - 一级无模型整理 `ContextHygieneMiddleware`：早于最近 2 轮、超过 600 字的工具输出存根化，旧图片换文字占位；`Skill` 正文不动。累计计数进入 `CONTEXT_USAGE`。
 - 压缩可观测 `ContextCompressionMiddleware`：真正压缩时记录前后消息数 / 摘要长度 / 耗时，写 `CONTEXT_COMPRESSED` trace；`state.session_id` 设为 Chat session，offloader 目录不再随机。
 - 会话状态落库：新增 `session_context_state` 表保存 `state.summary` + 可 JSON 化的 `middle_context`（已启用 Skill 正文、治理计数），每轮结束写、实例重建时恢复、会话删除时清理。
-- system prompt 瘦身：Clarification / Final Answer 契约从约 2.5k 字压到约 1.1k，问题数量 / 类型 / `FinalAnswerStart` 用法细节移入 `AskUser` / `FinalAnswerStart` 工具 description；历史记忆索引只留 `date | nodeId | title`，节点 `summary` 改为"请求要点 → 结果要点"一句话（≤170 字，去 Markdown 噪音），不再复制 700 字原文。
+- system prompt 瘦身：Clarification / Final Answer 契约从约 2.5k 字压到约 1.1k，问题数量 / 类型细节留在 `AskUser` 工具 description，最终回答改为正文契约；历史记忆索引只留 `date | nodeId | title`，节点 `summary` 改为"请求要点 → 结果要点"一句话（≤170 字，去 Markdown 噪音），不再复制 700 字原文。
 - 观测：`contextStats` / `CONTEXT_USAGE` 新增 `promptSections`（system prompt 分段字数）、`toolSchemaChars`、`dataBlocks`、`compressionCount`、`stubbedToolResults` / `droppedImages` / `hygieneSavedChars`；顶栏 tooltip 展示压缩次数、整理统计、估算偏差和最大的几段 prompt。`contextUsage.ts` 不再依赖 `runtime-stream/selectors`（避免把 Block 渲染模块拉进纯数据层，vitest 因此能跑）。
 - 验证：后端全量 `790 passed, 2 skipped`；前端 `vitest` 12 passed、`tsc -b`、`eslint` 通过。
-- 2026-09-15 桌面打包版真实供应商人工验证通过（`contextSize=6144` 的测试配置，6 轮用例）：顶栏窗口 / 阈值 / 分段字数正确；无工具直接回答为纯文本，用过工具后有 `FinalAnswerStart`；多轮读文件后触发 `CONTEXT_COMPRESSED` 且回答不泄出摘要；旧工具输出被存根化后模型能重新读取回答；重启后同会话不重读 Skill、压缩状态保留。`estimateErrorPct` 的长期分布仍待观察。
+- 2026-09-15 桌面打包版真实供应商人工验证通过（`contextSize=6144` 的测试配置，6 轮用例）：顶栏窗口 / 阈值 / 分段字数正确；无工具直接回答为纯文本，用过工具后的收尾也是纯文本正文；多轮读文件后触发 `CONTEXT_COMPRESSED` 且回答不泄出摘要；旧工具输出被存根化后模型能重新读取回答；重启后同会话不重读 Skill、压缩状态保留。`estimateErrorPct` 的长期分布仍待观察。
 
 ## 2026-09-15 记忆沉淀与注入修正
 
@@ -186,7 +186,7 @@ Team（`team_runtime/`）：
 
 2026-07-20 真实模型 smoke test：
 
-- DeepSeek `deepseek-v4-flash` 已完成 `Skill -> Read references/ -> Bash scripts/ -> FinalAnswerStart` 全链路，最终结果和 SkillRun 均正确收口。
+- DeepSeek `deepseek-v4-flash` 已完成 `Skill -> Read references/ -> Bash scripts/` 全链路，最终结果和 SkillRun 均正确收口。
 - 测试 Agent 关闭 network 后仍可运行本地 Bash，验证 execute 与 network 权限已解耦。
 - macOS 当前运行环境提供 `python3`，不提供 `python`；Skill 示例和后续 Office Skills 应显式使用 `python3`，或在脚本前探测解释器。
 - DashScope `qwen-plus` 已到达真实供应商接口，但返回 `401 invalid_api_key`，因此第二供应商行为验证仍未完成。

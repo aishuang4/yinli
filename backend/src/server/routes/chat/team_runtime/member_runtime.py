@@ -24,10 +24,9 @@ from src.server.routes.chat.skill_context_middleware import activate_forced_skil
 from src.server.routes.chat.runtime_governance import (
     append_user_note,
     build_context_governance_middlewares,
-    build_memory_prompt_and_recall,
+    build_actor_memory_prompt,
     observe_model_call_event,
     prepare_agent_governance,
-    record_memory_recall_audit,
 )
 from src.server.routes.chat.team_runtime.store import (
     MAX_TASK_RESULT_CHARS,
@@ -149,8 +148,8 @@ async def run_member_task(
         "Bash",
         "HttpRequest",
         "WebFetch",
-        "memory_node_tree",
-        "memory_node_query",
+        "timeline_retrieve",
+        "timeline_ingest",
         *(str(tool.name) for tool in ctx.knowledge_tools),
         *(tool.name for tool in tools),
     }
@@ -158,15 +157,22 @@ async def run_member_task(
     retry_count = int(task.get("retryCount") or 0)
     # 每个成员只能写自己的目录：并行成员不会互相覆盖文件；结果通过 result 里的路径交给综合阶段。
     write_dir = _member_write_dir(ctx, store, member_id)
-    # Member 按自己的任务召回历史记忆（不是按用户原始目标）；Markdown 摘要沿用 Leader 所属 Agent 的。
-    member_recall_text = _member_memory_recall(ctx, actor_name=actor_name, task=task)
     member_skills = _member_runtime_skills(ctx)
+    member_agent_id = str(member.get("agentId") or "") or f"team-member:{member_id}"
+    member_memory_prompt = build_actor_memory_prompt(
+        user_id="default",
+        agent_id=member_agent_id,
+        session_id=f"{ctx.session_id}:{member_id}",
+    )
     agent = _create_team_agent(
         ctx=ctx,
         actor_id=member_id,
         actor_name=actor_name,
         session_id=f"{ctx.session_id}:{store.ref.id}:{member_id}:r{retry_count}",
-        system_prompt=_with_memory_prompt(_member_system_prompt(store, member, task, write_dir=write_dir), ctx.memory_prompt),
+        system_prompt=_with_memory_prompt(
+            _member_system_prompt(store, member, task, write_dir=write_dir),
+            member_memory_prompt,
+        ),
         # 重派后的 key 不同：失败那次的实例（及其上下文）不复用。
         runtime_key=f"team-member-{store.ref.id}-{member_id}-{task_id}-r{retry_count}",
         write_scope_dir=write_dir,
@@ -186,14 +192,7 @@ async def run_member_task(
             content=_build_user_content(
                 append_user_note(
                     _member_user_prompt(store, member_id, task),
-                    "\n\n".join(
-                        part
-                        for part in (
-                            _build_file_attachments_user_note(getattr(run_data, "files", None) or []),
-                            member_recall_text,
-                        )
-                        if part
-                    ),
+                    _build_file_attachments_user_note(getattr(run_data, "files", None) or []),
                 ),
                 run_data.images,
             ),
@@ -378,39 +377,6 @@ def _create_team_agent(
 
 def _with_memory_prompt(system_prompt: str, memory_prompt: str) -> str:
     return f"{system_prompt}\n\n{memory_prompt}" if memory_prompt else system_prompt
-
-
-def _member_memory_recall(ctx: ChatRunContext, *, actor_name: str, task: dict) -> str:
-    """按 Member 的任务标题 + 简述召回历史记忆，写入 MEMORY_AUDIT 后返回可附加的文本。"""
-
-    query = " ".join(str(part) for part in (task.get("title"), task.get("description"), task.get("brief")) if part)
-    if not query.strip():
-        return ""
-    try:
-        _prompt, recall = build_memory_prompt_and_recall(
-            agent_id=ctx.agent_id,
-            agent_name=actor_name,
-            workspace_id=ctx.runtime_context.workspace_id,
-            project_id=ctx.runtime_context.project_id,
-            query_text=query,
-            freeze_session_id=None,
-            exclude_session_id=ctx.session_id or "",
-            include_markdown=False,
-        )
-    except Exception:
-        return ""
-    if recall is None:
-        return ""
-    if ctx.persist_run:
-        record_memory_recall_audit(
-            session_id=ctx.session_id,
-            persist=True,
-            agent_id=ctx.agent_id,
-            agent_name=actor_name,
-            recall=recall,
-            scope_label="team_member",
-        )
-    return recall.text
 
 
 def _model_call_observer(ctx: ChatRunContext, *, scope: str, agent_id: str, agent_name: str):

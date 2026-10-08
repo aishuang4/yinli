@@ -109,7 +109,7 @@ def _firing_preview(job: ScheduledJob) -> list[str]:
         spec = assemble_scheduled_firing_toolkit_spec(job)
         return list(spec.get("firing_tools_preview") or [])
     except Exception:
-        return ["Read", "Grep", "Glob", "Write", "Edit", "FinalAnswerStart"]
+        return ["Read", "Grep", "Glob", "Write", "Edit"]
 
 
 @router.post("/scheduled-jobs/{job_id}/recheck-capabilities")

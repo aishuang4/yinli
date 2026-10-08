@@ -877,6 +877,78 @@ button[class*="-btn"] .lucide {
   padding: 6px 8px;
 }
 
+/* 最终答案：标题拉开，表格铺满并改成行分隔，避免贴着输入框。 */
+.chat-message-content--assistant .markdown-content {
+  line-height: 1.7;
+}
+
+.chat-message-content--assistant .markdown-content h1 {
+  margin: 0 0 0.55em;
+  font-size: 1.2em;
+}
+
+.chat-message-content--assistant .markdown-content h2 {
+  margin: 1.15em 0 0.45em;
+  font-size: 1.02em;
+}
+
+.chat-message-content--assistant .markdown-content table {
+  display: table;
+  width: 100%;
+  margin: 0.2em 0 0.85em;
+  overflow: hidden;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-bg-secondary) 88%, transparent);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.chat-message-content--assistant .markdown-content th,
+.chat-message-content--assistant .markdown-content td {
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  padding: 8px 12px;
+  vertical-align: top;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.chat-message-content--assistant .markdown-content tr:last-child td {
+  border-bottom: 0;
+}
+
+.chat-message-content--assistant .markdown-content th {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  text-align: left;
+}
+
+.chat-message-content--assistant .markdown-content td code {
+  background: transparent;
+  padding: 0;
+}
+
+.thinking-trace .markdown-content {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.thinking-trace .markdown-content p,
+.thinking-trace .markdown-content ul,
+.thinking-trace .markdown-content ol {
+  margin: 0 0 0.4em;
+}
+
+.thinking-trace .markdown-content ul,
+.thinking-trace .markdown-content ol {
+  padding-left: 1.15em;
+}
+
 .markdown-content a {
   color: var(--color-accent);
   text-decoration: none;
