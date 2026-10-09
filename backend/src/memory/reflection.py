@@ -96,6 +96,7 @@ class MemoryReflectionInput:
     tool_calls: list[object] = field(default_factory=list)
     runtime_events: list[dict] = field(default_factory=list)
     manual_skill_request: bool = False
+    review_context: object | None = None
 
 
 @dataclass(frozen=True)
@@ -221,12 +222,12 @@ async def reflect_completed_run_memory_with_agents(
 
     skill_candidate = None
     skill_evolution_record = None
-    gate = _skill_evolution_gate_for_item(
+    gate = await _skill_evolution_gate_for_item(
         item=item,
         user_message=user_message,
         assistant_text=assistant_text,
-        admission_allows_skill=admission.should_evaluate_skill,
-        admission_reason=admission.reason,
+        model_name=model_name,
+        fallback_names=fallback_names or [],
     )
     workflow_evidence = build_workflow_evidence(
         tool_calls=item.tool_calls,
@@ -310,35 +311,77 @@ def is_manual_skill_generation_request(text: str) -> bool:
     return len(normalized) <= 120 or any(marker in normalized for marker in _MANUAL_SKILL_REFERENCES)
 
 
-def _skill_evolution_gate_for_item(
+async def _skill_evolution_gate_for_item(
     *,
     item: MemoryReflectionInput,
     user_message: str,
     assistant_text: str,
-    admission_allows_skill: bool = True,
-    admission_reason: str = "",
+    model_name: str,
+    fallback_names: list[str],
 ) -> SkillEvolutionGateDecision:
-    """为自动或手动 Skill 提炼生成 gate 决策。"""
+    """确定性短路之后，用模型审核决定是否进入技能草稿生成。"""
 
-    if not admission_allows_skill:
-        return SkillEvolutionGateDecision(
-            shouldEvaluate=False,
-            reason=f"MemoryAdmissionGate 跳过 Skill 自进化：{admission_reason or 'not_admitted'}。",
-            risk="skip",
-            signals=["memory_admission_gate"],
-        )
-    if item.manual_skill_request:
-        return SkillEvolutionGateDecision(
-            shouldEvaluate=True,
-            reason="用户显式要求把前序完成工作生成 Skill。",
-            risk="low",
-            signals=["manual_skill_request"],
-        )
-    return evaluate_skill_evolution_router_gate(
+    from src.memory.model_review import (
+        ModelReviewError,
+        deterministic_skill_gate,
+        review,
+        skill_review_request,
+        turn_only_snapshot,
+    )
+    from src.memory.model_review import build_skill_review_prompt
+
+    short = deterministic_skill_gate(
         user_message=user_message,
         assistant_text=assistant_text,
-        tool_calls=item.tool_calls,
-        runtime_events=item.runtime_events,
+        manual_skill_request=item.manual_skill_request,
+    )
+    if short is not None:
+        return _gate_from_review(short)
+
+    snapshot = item.review_context or turn_only_snapshot(
+        user_message=user_message,
+        assistant_text=assistant_text,
+    )
+
+    async def _reviewer(request):
+        from src.memory.extraction_agents import run_model_review_agent
+        from src.memory.model_review import parse_model_review_text
+
+        del request
+        text = await run_model_review_agent(
+            user_prompt=build_skill_review_prompt(snapshot),
+            model_name=model_name,
+            fallback_names=fallback_names,
+            invocation_key=_reflection_invocation_key(item, "model-review"),
+        )
+        return parse_model_review_text(text)
+
+    try:
+        decision = await review(skill_review_request(snapshot), reviewer=_reviewer)
+    except (ModelReviewError, Exception):
+        fallback = evaluate_skill_evolution_router_gate(
+            user_message=user_message,
+            assistant_text=assistant_text,
+            tool_calls=item.tool_calls,
+            runtime_events=item.runtime_events,
+        )
+        signals = [*fallback.signals, "source:fallback"]
+        return fallback.model_copy(update={
+            "reason": f"[fallback] {fallback.reason}",
+            "signals": signals,
+        })
+    return _gate_from_review(decision)
+
+
+def _gate_from_review(decision) -> SkillEvolutionGateDecision:
+    """把审核判定映射成现有 router_gate 记录。"""
+
+    signals = [f"source:{decision.source}", *list(getattr(decision, "signals", ()) or ())]
+    return SkillEvolutionGateDecision(
+        shouldEvaluate=decision.allow,
+        reason=decision.reason,
+        risk="low" if decision.allow else "skip",
+        signals=signals,
     )
 
 
