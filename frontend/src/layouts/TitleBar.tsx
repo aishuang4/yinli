@@ -9,6 +9,7 @@
 
 import { useState } from 'react';
 import { Boxes, FolderKanban, GitBranch, PanelsTopLeft, Plus } from 'lucide-react';
+import { UserMenu } from '../features/auth/UserMenu';
 import { Select, Tooltip } from '@/components/design';
 import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
 import { ContextCreateModal } from '../features/workspaces/ContextCreateModal';
@@ -33,6 +34,8 @@ export function TitleBar() {
   const workflowEnabled = useProductFeaturesStore((s) => isSurfaceEnabled(s.features, 'workflow'));
   const modeOptions = MODE_OPTIONS.filter((option) => option.id !== 'workflow' || workflowEnabled);
   const setActiveContext = useAppStore((s) => s.setActiveContext);
+  const currentView = useAppStore((state) => state.currentView);
+  const userCenterInPageHeader = workspaceMode === 'workstation' && currentView === 'chat';
   const [createOpen, setCreateOpen] = useState(false);
   const {
     workspaces,
@@ -107,6 +110,11 @@ export function TitleBar() {
               <Plus size={15} strokeWidth={1.8} />
             </button>
           </Tooltip>
+        </div>
+      )}
+      {userCenterInPageHeader ? null : (
+        <div className="titlebar__account">
+          <UserMenu className="icon-button h-8 w-8 rounded-lg" />
         </div>
       )}
       <ContextCreateModal

@@ -11,7 +11,9 @@
  * - 使用 Lucide 线性图标
  */
 
-import { MessageSquare, Bot, Wrench, Package, Settings, Sun, Moon, Activity, FlaskConical, ListRestart, Brain, Network, GitBranch, CalendarClock, Cpu } from 'lucide-react';
+import { MessageSquare, Bot, Wrench, Package, Settings, Sun, Moon, Activity, FlaskConical, ListRestart, Brain, Network, GitBranch, CalendarClock, Cpu, Users } from 'lucide-react';
+import { showAdminEntry } from '../features/auth/authRules';
+import { useAuthStore } from '../features/auth/authStore';
 import { isViewEnabled } from '../stores/productFeatures';
 import { useProductFeaturesStore } from '../stores/productFeaturesStore';
 import { useAppStore, type ViewType } from '../stores/appStore';
@@ -67,6 +69,9 @@ export function ActivityBar() {
   const currentView = useAppStore((s) => s.currentView);
   const setView = useAppStore((s) => s.setView);
   const features = useProductFeaturesStore((s) => s.features);
+  const authUser = useAuthStore((state) => state.user);
+  const adminOpen = useAuthStore((state) => state.adminOpen);
+  const setAdminOpen = useAuthStore((state) => state.setAdminOpen);
   const theme = useSettingsStore((s) => s.theme);
   const toggleTheme = useSettingsStore((s) => s.toggleTheme);
 
@@ -86,13 +91,33 @@ export function ActivityBar() {
     >
       {/* 顶部导航项 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        {showAdminEntry(authUser) ? (
+          <button
+            type="button"
+            title="用户管理"
+            aria-label="用户管理"
+            aria-current={adminOpen ? 'page' : undefined}
+            className={cn(adminOpen && 'active')}
+            onClick={() => setAdminOpen(!adminOpen)}
+            style={{
+              ...navButtonStyle,
+              backgroundColor: adminOpen ? 'var(--color-accent-bg)' : 'transparent',
+              color: adminOpen ? 'var(--color-accent)' : 'var(--color-text-tertiary)',
+            }}
+          >
+            <Users size={20} strokeWidth={1.5} />
+          </button>
+        ) : null}
         {Object.values(NAV_ITEMS).filter((item) => isViewEnabled(features, item.id)).map((item) => {
-          const isActive = currentView === item.id;
+          const isActive = currentView === item.id && !adminOpen;
           const Icon = item.icon;
           return (
             <button
               key={item.id}
-              onClick={() => setView(item.id)}
+              onClick={() => {
+                setAdminOpen(false);
+                setView(item.id);
+              }}
               title={item.label}
               aria-label={item.label}
               aria-current={isActive ? 'page' : undefined}

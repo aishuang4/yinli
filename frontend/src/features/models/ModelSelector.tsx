@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Settings } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
+import { mergeSelectableModels } from './platformModels';
 import { modelAvailable, type ModelCatalog } from './useModelCatalog';
 
 const ADAPTER_MARK: Record<string, string> = {
@@ -47,6 +48,9 @@ export function ModelSelector({
   disabled,
   loading,
   error,
+  platformModels = [],
+  platformLoggedIn = false,
+  platformOnly = false,
 }: {
   catalog: ModelCatalog | null;
   value: string;
@@ -54,6 +58,9 @@ export function ModelSelector({
   disabled?: boolean;
   loading?: boolean;
   error?: string;
+  platformModels?: SelectableModel[];
+  platformLoggedIn?: boolean;
+  platformOnly?: boolean;
 }) {
   const setView = useAppStore((state) => state.setView);
   const [open, setOpen] = useState(false);
@@ -62,7 +69,10 @@ export function ModelSelector({
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const highlightedRef = useRef<HTMLButtonElement>(null);
-  const models = useMemo(() => listSelectableModels(catalog), [catalog]);
+  const models = useMemo(
+    () => mergeSelectableModels(listSelectableModels(catalog), platformModels, platformLoggedIn, platformOnly),
+    [catalog, platformModels, platformLoggedIn, platformOnly],
+  );
   const selected = models.find((model) => model.id === value) ?? models[0];
   const triggerLabel = error
     ? '模型配置异常'
@@ -170,6 +180,7 @@ export function ModelSelector({
             onChange(id);
             setOpen(false);
           }}
+          allowAdd={!platformOnly}
           onAdd={() => {
             setOpen(false);
             setView('models');
@@ -191,6 +202,7 @@ function ModelMenuPanel({
   highlightedIndex,
   onHighlight,
   onPick,
+  allowAdd,
   onAdd,
 }: {
   panelRef: { current: HTMLDivElement | null };
@@ -202,6 +214,7 @@ function ModelMenuPanel({
   highlightedIndex: number;
   onHighlight: (index: number) => void;
   onPick: (id: string) => void;
+  allowAdd: boolean;
   onAdd: () => void;
 }) {
   const rect = anchor?.getBoundingClientRect();
@@ -251,15 +264,17 @@ function ModelMenuPanel({
           );
         })}
       </div>
-      <button
-        type="button"
-        className="flex w-full items-center gap-2 border-t border-[var(--color-border)] px-3 py-2.5 text-left text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-        onMouseDown={(event) => event.preventDefault()}
-        onClick={onAdd}
-      >
-        <Settings size={14} />
-        添加模型
-      </button>
+      {allowAdd ? (
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 border-t border-[var(--color-border)] px-3 py-2.5 text-left text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={onAdd}
+        >
+          <Settings size={14} />
+          添加模型
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -9,7 +9,9 @@
  */
 
 import { type ComponentType, type ReactNode } from 'react';
-import { Activity, ArrowLeft, Bot, Brain, CalendarClock, Cpu, FlaskConical, GitBranch, ListRestart, Network, Package, Settings, Wrench } from 'lucide-react';
+import { Activity, ArrowLeft, Bot, Brain, CalendarClock, Cpu, FlaskConical, GitBranch, ListRestart, Network, Package, Settings, Users, Wrench } from 'lucide-react';
+import { showAdminEntry } from '../features/auth/authRules';
+import { useAuthStore } from '../features/auth/authStore';
 import { isSurfaceEnabled, isViewEnabled } from '../stores/productFeatures';
 import { useProductFeaturesStore } from '../stores/productFeaturesStore';
 import { useAppStore, type ViewType, type WorkspaceMode } from '../stores/appStore';
@@ -74,8 +76,9 @@ export function AppLayout({ children, detail }: AppLayoutProps) {
   const workspaceMode = useAppStore((s) => s.workspaceMode);
   const currentView = useAppStore((s) => s.currentView);
   const electronShell = Boolean(window.electronAPI);
-  const chatWorkbench = workspaceMode === 'workstation' && currentView === 'chat';
-  const workbenchMenuPage = workspaceMode === 'workstation' && currentView !== 'chat';
+  const adminOpen = useAuthStore((state) => state.adminOpen);
+  const chatWorkbench = workspaceMode === 'workstation' && currentView === 'chat' && !adminOpen;
+  const workbenchMenuPage = workspaceMode === 'workstation' && (currentView !== 'chat' || adminOpen);
 
   return (
     <div
@@ -121,6 +124,9 @@ function WorkbenchMenu() {
   const setView = useAppStore((s) => s.setView);
   const setWorkspaceMode = useAppStore((s) => s.setWorkspaceMode);
   const features = useProductFeaturesStore((s) => s.features);
+  const authUser = useAuthStore((state) => state.user);
+  const adminOpen = useAuthStore((state) => state.adminOpen);
+  const setAdminOpen = useAuthStore((state) => state.setAdminOpen);
 
   return (
     <nav
@@ -132,12 +138,32 @@ function WorkbenchMenu() {
       <button
         type="button"
         className="workbench-menu-page__back"
-        onClick={() => setView('chat')}
+        onClick={() => {
+          setAdminOpen(false);
+          setView('chat');
+        }}
       >
         <ArrowLeft size={16} strokeWidth={1.8} />
         <span>返回 Chat</span>
       </button>
       <div className="workbench-menu-page__items">
+        {showAdminEntry(authUser) ? (
+          <button
+            type="button"
+            className="workbench-menu-page__item"
+            data-active={adminOpen}
+            aria-current={adminOpen ? 'page' : undefined}
+            onClick={() => setAdminOpen(true)}
+          >
+            <span className="workbench-menu-page__item-icon">
+              <Users size={17} strokeWidth={1.7} />
+            </span>
+            <span className="workbench-menu-page__item-copy">
+              <span className="workbench-menu-page__item-label">用户管理</span>
+              <span className="workbench-menu-page__item-description">在线状态与账号停用</span>
+            </span>
+          </button>
+        ) : null}
         {WORKBENCH_MENU_ITEMS.filter((item) => {
           if (item.id === 'workflow') {
             return isSurfaceEnabled(features, 'workflow');
@@ -153,6 +179,7 @@ function WorkbenchMenu() {
               className="workbench-menu-page__item"
               data-active={active}
               onClick={() => {
+                setAdminOpen(false);
                 if (item.workspaceMode) {
                   setWorkspaceMode(item.workspaceMode);
                   return;

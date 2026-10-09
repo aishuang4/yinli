@@ -87,6 +87,7 @@ class ChatSessionRecordStore:
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                     "message_count": row["message_count"],
+                    "ownerUserId": row["owner_user_id"] if "owner_user_id" in row.keys() else "",
                 }
                 for row in sessions
             ],
@@ -104,8 +105,8 @@ class ChatSessionRecordStore:
                 """
                 INSERT INTO chat_sessions (
                     id, title, agent_id, agent_name, mode, workspace_id, project_id, kind,
-                    created_at, updated_at, message_count, model_config_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, message_count, model_config_id, owner_user_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -117,6 +118,7 @@ class ChatSessionRecordStore:
                         item["created_at"],
                         item["updated_at"], item.get("message_count", 0),
                         item.get("modelConfigId", item.get("model_config_id", "")),
+                        item.get("ownerUserId", item.get("owner_user_id", "")) or "",
                     )
                     for item in sessions
                 ],

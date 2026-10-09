@@ -26,6 +26,8 @@ import { FeedbackBridge } from './components/FeedbackBridge';
 import { DesktopBackendGate } from './components/DesktopBackendGate';
 import { ApiKeyOnboardingModal } from './features/settings/ApiKeyOnboardingModal';
 import { NotificationToastHost } from './features/notifications/NotificationToastHost';
+import { HostedSessionGate } from './features/auth/HostedSessionGate';
+import { AdminUsersHost } from './features/auth/AdminUsersHost';
 import { useStudioTransition } from './features/group-studio/useStudioTransition';
 import type { DesktopBackendStatus } from './types/desktopBackend';
 import { PageActiveContext } from './hooks/usePageActive';
@@ -225,13 +227,17 @@ export function App() {
               <FeedbackBridge />
               <ApiKeyOnboardingModal />
               <NotificationToastHost />
-              <AppLayout>
-                <WorkspacePages
-                  workspaceMode={workspaceMode}
-                  activeView={currentView}
-                  cachedViews={cachedViews}
-                />
-              </AppLayout>
+              <HostedSessionGate>
+                <AppLayout>
+                  <AdminUsersHost>
+                    <WorkspacePages
+                      workspaceMode={workspaceMode}
+                      activeView={currentView}
+                      cachedViews={cachedViews}
+                    />
+                  </AdminUsersHost>
+                </AppLayout>
+              </HostedSessionGate>
             </>
           )}
         </AntdApp>

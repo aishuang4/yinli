@@ -10,7 +10,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -149,13 +149,16 @@ async def start_workflow(run_id: str) -> WorkflowStartResponse:
 
 
 @router.get("/{run_id}/events")
-async def stream_workflow_events(run_id: str, replay: bool = True) -> StreamingResponse:
+async def stream_workflow_events(run_id: str, request: Request, replay: bool = True) -> StreamingResponse:
     """订阅 Dynamic Workflow Run 事件。"""
 
     if not get_workflow_run(run_id):
         raise HTTPException(status_code=404, detail="Workflow run not found")
+    from src.server.auth.presence import iter_with_presence
+    from src.server.auth.routes import token_from_request
+
     return StreamingResponse(
-        _event_stream(run_id, replay=replay),
+        iter_with_presence(_event_stream(run_id, replay=replay), token_from_request(request)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

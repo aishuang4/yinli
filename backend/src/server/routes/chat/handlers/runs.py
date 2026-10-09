@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import HTTPException, Query
+from fastapi import HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -69,14 +69,21 @@ async def send_team_mail(
 @router.get("/runs/{run_id}/stream")
 async def stream_run(
     run_id: str,
+    request: Request,
     after_seq: int | None = Query(default=None, alias="afterSeq", ge=0),
     project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
 ) -> StreamingResponse:
     """重新订阅后台 Chat Run 事件。"""
 
     await _get_project_run(run_id, project_id)
+    from src.server.auth.presence import iter_with_presence
+    from src.server.auth.routes import token_from_request
+
     return StreamingResponse(
-        subscribe_chat_background_run(run_id, after_seq=after_seq),
+        iter_with_presence(
+            subscribe_chat_background_run(run_id, after_seq=after_seq),
+            token_from_request(request),
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

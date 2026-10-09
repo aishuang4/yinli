@@ -3,7 +3,7 @@
 import uuid
 from typing import AsyncGenerator
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from src.server.routes.chat.completion import emit_failed_startup_run
@@ -42,7 +42,7 @@ from src.server.routes.chat.store import _load_store
 
 
 @router.post("/send")
-async def send_message(data: ChatMessage) -> StreamingResponse:
+async def send_message(data: ChatMessage, request: Request) -> StreamingResponse:
     """
     发送消息并通过 SSE 返回 Agent 事件流
 
@@ -59,9 +59,22 @@ async def send_message(data: ChatMessage) -> StreamingResponse:
         StreamingResponse: SSE 事件流（text/event-stream）
     """
 
+    from src.config.settings import settings
+
+    if (
+        settings.serve_mode.strip().lower() != "hosted"
+        and str(data.model_config_id or "").startswith("platform:")
+    ):
+        from src.server.auth.platform_chat import platform_chat_response
+
+        return await platform_chat_response(data)
+
     run = await start_chat_run(data)
+    from src.server.auth.presence import iter_with_presence
+    from src.server.auth.routes import token_from_request
+
     return StreamingResponse(
-        subscribe_chat_background_run(run.id),
+        iter_with_presence(subscribe_chat_background_run(run.id), token_from_request(request)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

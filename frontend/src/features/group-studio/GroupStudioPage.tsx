@@ -29,7 +29,6 @@ export function GroupStudioPage() {
     groupId,
     closeGroupStudio,
     openGroupStudio,
-    setView,
     modelCatalog,
     modelsLoading,
     modelsError,
@@ -155,7 +154,6 @@ export function GroupStudioPage() {
             onClose={closeGroupStudio}
             onToggleContext={handleToggleContext}
             onModelChange={(value) => void handleModelChange(value)}
-            onOpenSettings={() => setView('settings')}
           />
 
           <StudioTranscript

@@ -32,11 +32,23 @@ from src.vector_store.policy import get_vector_store_policy
 
 router = APIRouter()
 
+
+def _habit_user_id(requested: str) -> str:
+    from src.server.auth.ownership import current_owner_id
+
+    owner = current_owner_id()
+    if not owner:
+        return requested or "default"
+    if requested and requested not in {owner, "default"}:
+        raise HTTPException(status_code=404, detail="习惯记忆不存在")
+    return owner
+
+
 @router.get("/habits")
 async def read_habits_memory(user_id: str = Query(default="default", alias="userId")) -> dict[str, Any]:
     """读取这个人的习惯全文。"""
 
-    return _markdown_doc_response(MarkdownMemoryStore().read_habits(user_id))
+    return _markdown_doc_response(MarkdownMemoryStore().read_habits(_habit_user_id(user_id)))
 
 
 @router.put("/habits")
@@ -46,7 +58,7 @@ async def write_habits_memory(
 ) -> dict[str, Any]:
     """覆盖保存习惯全文，并让下一轮注入重新读取。"""
 
-    doc = MarkdownMemoryStore().write_habits(user_id, data.content)
+    doc = MarkdownMemoryStore().write_habits(_habit_user_id(user_id), data.content)
     invalidate_memory_prompts()
     return _markdown_doc_response(doc)
 

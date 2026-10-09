@@ -5,6 +5,8 @@
 import { useEffect, useState } from 'react';
 import { Button, Modal, Tag } from '@/components/design';
 import { KeyRound, Settings2 } from 'lucide-react';
+import { shouldPromptLocalApiKey } from '../auth/authRules';
+import { useAuthStore } from '../auth/authStore';
 import { catalogRequest, modelAvailable } from '../models/useModelCatalog';
 import { useAppStore } from '../../stores/appStore';
 
@@ -31,10 +33,17 @@ export function ApiKeyOnboardingModal() {
   const backendConnected = useAppStore((state) => state.backendConnected);
   const setView = useAppStore((state) => state.setView);
   const setWorkspaceMode = useAppStore((state) => state.setWorkspaceMode);
+  const serveMode = useAuthStore((state) => state.serveMode);
+  const desktopConnected = useAuthStore((state) => state.desktopConnected);
+  const authLoaded = useAuthStore((state) => state.loaded);
   const [providerName, setProviderName] = useState('模型供应商');
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
+    if (!authLoaded || !shouldPromptLocalApiKey(serveMode, desktopConnected)) {
+      setOpen(false);
+      return;
+    }
     if (!backendConnected || onboardingDismissed()) {
       return;
     }
@@ -58,7 +67,7 @@ export function ApiKeyOnboardingModal() {
     return () => {
       active = false;
     };
-  }, [backendConnected]);
+  }, [authLoaded, backendConnected, desktopConnected, serveMode]);
 
   const dismiss = () => {
     rememberOnboardingDismissed();

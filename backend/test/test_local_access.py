@@ -53,3 +53,41 @@ def test_local_access_middleware_blocks_non_loopback_client():
 
     assert response.status_code == 403
     assert response.json()["detail"] == "引力 YINLI 后端仅允许本机访问。"
+
+
+def test_hosted_loopback_still_requires_a_session(monkeypatch):
+    """反向代理把来源变成回环地址时，托管模式仍然要求会话。"""
+
+    from src.server.auth.middleware import HostedSessionMiddleware
+
+    monkeypatch.setattr("src.config.settings.settings.serve_mode", "hosted")
+    app = FastAPI()
+    app.add_middleware(HostedSessionMiddleware)
+    app.add_middleware(LocalAccessMiddleware)
+
+    @app.get("/api/chat/send")
+    async def chat() -> dict[str, bool]:
+        return {"ok": True}
+
+    with TestClient(app, client=("127.0.0.1", 50000)) as client:
+        response = client.get("/api/chat/send")
+    assert response.status_code == 401
+
+
+def test_desktop_loopback_chat_allows_anonymous_local_use(monkeypatch):
+    """桌面本机回环对话不要求登录。"""
+
+    from src.server.auth.middleware import HostedSessionMiddleware
+
+    monkeypatch.setattr("src.config.settings.settings.serve_mode", "desktop")
+    app = FastAPI()
+    app.add_middleware(HostedSessionMiddleware)
+    app.add_middleware(LocalAccessMiddleware)
+
+    @app.get("/api/chat/send")
+    async def chat() -> dict[str, bool]:
+        return {"ok": True}
+
+    with TestClient(app, client=("127.0.0.1", 50000)) as client:
+        response = client.get("/api/chat/send")
+    assert response.status_code == 200

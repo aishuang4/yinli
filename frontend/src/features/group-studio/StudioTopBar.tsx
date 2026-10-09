@@ -2,7 +2,8 @@
  * 群聊工作室顶栏：返回、列表开关、模型和设置。
  */
 
-import { PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Settings, Users } from 'lucide-react';
+import { PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Users } from 'lucide-react';
+import { UserMenu } from '../auth/UserMenu';
 import { Tooltip } from '@/components/design';
 import { NotificationBell } from '../notifications/NotificationBell';
 import { ModelSelector } from '../models/ModelSelector';
@@ -28,7 +29,6 @@ interface StudioTopBarProps {
   onClose: () => void;
   onToggleContext: () => void;
   onModelChange: (value: string) => void;
-  onOpenSettings: () => void;
 }
 
 export function StudioTopBar({
@@ -51,7 +51,6 @@ export function StudioTopBar({
   onClose,
   onToggleContext,
   onModelChange,
-  onOpenSettings,
 }: StudioTopBarProps) {
   return (
     <header
@@ -126,16 +125,7 @@ export function StudioTopBar({
             error={modelsError}
           />
         </div>
-        <Tooltip title="工作台设置" placement="bottom" mode="dark">
-          <button
-            type="button"
-            className="icon-button chat-workbench-top-action h-9 w-9 rounded-xl"
-            onClick={onOpenSettings}
-            aria-label="进入工作台设置"
-          >
-            <Settings size={17} />
-          </button>
-        </Tooltip>
+        <UserMenu className="icon-button chat-workbench-top-action h-9 w-9 rounded-xl" />
       </div>
     </header>
   );

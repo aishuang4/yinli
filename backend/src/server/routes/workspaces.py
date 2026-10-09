@@ -120,9 +120,40 @@ class ProjectFileUploadResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+def _hosted_owner() -> str | None:
+    from src.server.auth.ownership import current_owner_id
+
+    return current_owner_id()
+
+
+def _allocate_hosted_project(project_id: str | None = None) -> tuple[str, str]:
+    """托管新建 Project 时忽略客户端传入的本机路径。"""
+
+    import uuid
+
+    from src.server.auth.ownership import allocate_project_dir
+
+    owner = _hosted_owner()
+    if not owner:
+        raise HTTPException(status_code=401, detail="需要登录")
+    allocated = project_id or f"proj_{uuid.uuid4().hex}"
+    return allocated, str(allocate_project_dir(owner, allocated))
+
+
+def _reject_hosted_escape(root_path: str) -> None:
+    from src.server.auth.ownership import path_is_inside_user
+
+    owner = _hosted_owner()
+    if not owner:
+        return
+    if not path_is_inside_user(owner, Path(root_path)):
+        raise HTTPException(status_code=422, detail="Project root 必须位于当前用户目录内")
+
+
 def _validated_project_paths(root_path: str, instructions_file: str = "") -> tuple[str, str]:
     """规范化 Project root，并限制 instructions_file 位于项目目录内。"""
 
+    _reject_hosted_escape(root_path)
     root = Path(root_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise HTTPException(status_code=422, detail=f"Project root 不是有效目录: {root}")
@@ -142,8 +173,11 @@ def _validated_project_paths(root_path: str, instructions_file: str = "") -> tup
 async def list_workspace_records(
     include_archived: bool = Query(default=False, alias="includeArchived"),
 ) -> list[WorkspaceRecord]:
-    """列出 Workspace。"""
+    """列出 Workspace。托管用户没有自己的工作区时先建一个。"""
 
+    from src.server.auth.ownership import ensure_hosted_home
+
+    ensure_hosted_home()
     return [WorkspaceRecord.model_validate(item) for item in list_workspaces(include_archived=include_archived)]
 
 
@@ -165,18 +199,26 @@ async def bootstrap_workspace(data: WorkspaceBootstrapRequest) -> WorkspaceBoots
     project_name = data.name.strip()
     if not workspace_name or not project_name:
         raise HTTPException(status_code=422, detail="Workspace 和 Project 名称不能为空")
-    root_path, instructions_file = _validated_project_paths(data.root_path, data.instructions_file)
+    if _hosted_owner():
+        project_id, hosted_root = _allocate_hosted_project()
+        root_path, instructions_file = _validated_project_paths(hosted_root, data.instructions_file)
+    else:
+        project_id = None
+        root_path, instructions_file = _validated_project_paths(data.root_path, data.instructions_file)
     workspace = create_workspace({
         "name": workspace_name,
         "description": data.workspace_description.strip(),
     })
-    project = create_project({
+    project_payload = {
         "workspace_id": workspace["id"],
         "name": project_name,
         "description": data.description.strip(),
         "root_path": root_path,
         "instructions_file": instructions_file,
-    })
+    }
+    if project_id:
+        project_payload["id"] = project_id
+    project = create_project(project_payload)
     return WorkspaceBootstrapResponse(
         workspace=WorkspaceRecord.model_validate(workspace),
         project=ProjectRecord.model_validate(project),
@@ -207,14 +249,22 @@ async def create_project_record(workspace_id: str, data: ProjectCreateRequest) -
     name = data.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="Project 名称不能为空")
-    root_path, instructions_file = _validated_project_paths(data.root_path, data.instructions_file)
-    return ProjectRecord.model_validate(create_project({
+    project_id = None
+    if _hosted_owner():
+        project_id, hosted_root = _allocate_hosted_project()
+        root_path, instructions_file = _validated_project_paths(hosted_root, data.instructions_file)
+    else:
+        root_path, instructions_file = _validated_project_paths(data.root_path, data.instructions_file)
+    payload = {
         "workspace_id": workspace_id,
         "name": name,
         "description": data.description.strip(),
         "root_path": root_path,
         "instructions_file": instructions_file,
-    }))
+    }
+    if project_id:
+        payload["id"] = project_id
+    return ProjectRecord.model_validate(create_project(payload))
 
 
 @router.get("/projects/{project_id}", response_model=ProjectRecord)

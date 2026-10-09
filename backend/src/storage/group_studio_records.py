@@ -312,6 +312,18 @@ class GroupStudioRecordStore:
                     if raced is None:
                         raise
                     group_id = str(raced["id"])
+            from src.server.auth.ownership import current_owner_id
+
+            owner = current_owner_id()
+            if owner:
+                conn.execute(
+                    """
+                    UPDATE group_studios
+                    SET owner_user_id = ?
+                    WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = '')
+                    """,
+                    (owner, group_id),
+                )
         snapshot = self.get_snapshot(group_id)
         if snapshot is None:
             raise RuntimeError(f"group studio {group_id} 写入后无法读取")

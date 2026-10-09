@@ -70,6 +70,22 @@ def resolve_model_binding(
     catalog: ModelCatalog | None = None,
     validate: bool = True,
 ) -> RuntimeModelBinding:
+    if (
+        catalog is None
+        and model_config_id
+        and str(model_config_id).startswith("platform:")
+    ):
+        from src.server.auth.key2api import Key2ApiError, binding_for_platform_model, key2api_configured
+        from src.server.auth.ownership import current_owner_id
+
+        if key2api_configured():
+            owner = current_owner_id()
+            if not owner:
+                raise CatalogError("登录后才能使用平台模型")
+            try:
+                return binding_for_platform_model(str(model_config_id), owner)
+            except Key2ApiError as exc:
+                raise CatalogError(str(exc)) from None
     catalog = catalog or read_catalog()[0]
     ident = model_config_id or catalog.default_model_id
     entries = {item.id: item for item in catalog.models}

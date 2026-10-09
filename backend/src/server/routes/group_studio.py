@@ -6,7 +6,7 @@ V2：进群即 open；旧 intake / 阶段推进接口 410。
 
 import asyncio
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
 from src.group_studio.errors import (
@@ -94,7 +94,11 @@ def _gone() -> None:
 async def list_studios_route(projectId: str = Query(..., alias="projectId")) -> dict:
     """列出当前 Project 工作室（含 done，不含 deleted）。"""
 
-    return {"studios": list_studios(projectId)}
+    from src.server.auth.ownership import filter_ids
+
+    studios = list_studios(projectId)
+    allowed = set(filter_ids("group_studios", [str(item.get("id") or "") for item in studios]))
+    return {"studios": [item for item in studios if str(item.get("id") or "") in allowed]}
 
 
 @router.post("/from-chat", dependencies=[EnabledDep])
@@ -118,6 +122,10 @@ async def get_by_chat_session(session_id: str) -> GroupStudio | None:
 async def get_studio_snapshot(group_id: str) -> GroupStudio:
     """读取工作室快照（含最近 100 条 messages）。"""
 
+    from src.server.auth.ownership import visible
+
+    if not visible("group_studios", group_id):
+        raise group_studio_http_error(404, "not_found")
     try:
         return get_studio(group_id)
     except GroupStudioError as exc:
@@ -165,7 +173,7 @@ async def list_messages(group_id: str, before: str | None = None, limit: int = 1
 
 
 @router.get("/{group_id}/events", dependencies=[EnabledDep])
-async def stream_events(group_id: str, afterSeq: int | None = Query(default=None)):
+async def stream_events(group_id: str, request: Request, afterSeq: int | None = Query(default=None)):
     """独立 SSE。afterSeq 缺省从当前最大 seq 续，不重放历史。"""
 
     snapshot = get_group_studio_snapshot(group_id)
@@ -192,8 +200,11 @@ async def stream_events(group_id: str, afterSeq: int | None = Query(default=None
                 continue
             yield format_sse(live)
 
+    from src.server.auth.presence import iter_with_presence
+    from src.server.auth.routes import token_from_request
+
     return StreamingResponse(
-        _heartbeat_wrapper(event_stream()),
+        iter_with_presence(_heartbeat_wrapper(event_stream()), token_from_request(request)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

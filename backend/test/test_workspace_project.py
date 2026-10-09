@@ -410,6 +410,35 @@ def test_project_root_intersects_agent_filesystem_scope(tmp_path):
         )
 
 
+def test_hosted_shared_workspace_scope_narrows_to_user_project(tmp_path, monkeypatch):
+    shared = tmp_path / "workspace"
+    shared.mkdir()
+    user_id = "usr_test"
+    project_root = tmp_path / "users" / user_id / "projects" / "proj_test"
+    project_root.mkdir(parents=True)
+    monkeypatch.setattr("src.config.settings.settings.serve_mode", "hosted")
+    monkeypatch.setattr("src.config.runtime_paths.DEFAULT_PROJECT_ROOT", shared)
+    monkeypatch.setattr("src.server.auth.ownership.USER_DATA_ROOT", tmp_path)
+    from src.server.auth.ownership import reset_owner, set_owner
+
+    token = set_owner(user_id)
+    try:
+        scoped = scope_guardrails_to_project(
+            AgentGuardrails(filesystem_scope=str(shared)),
+            project_root,
+        )
+    finally:
+        reset_owner(token)
+    assert scoped.filesystem_scope == str(project_root.resolve())
+
+    monkeypatch.setattr("src.config.settings.settings.serve_mode", "desktop")
+    with pytest.raises(ValueError, match="不相交"):
+        scope_guardrails_to_project(
+            AgentGuardrails(filesystem_scope=str(shared)),
+            project_root,
+        )
+
+
 def test_legacy_desktop_scope_migrates_only_when_missing(tmp_path):
     """历史桌面安装目录失效时迁移，用户仍存在的范围和未知错误不应被吞掉。"""
 

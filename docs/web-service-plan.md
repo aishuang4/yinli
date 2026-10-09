@@ -1,6 +1,6 @@
 # Web 服务化改造计划
 
-> 状态：草案，2026-10-08。桌面安装包的签名、公证和 SmartScreen 仍由 `docs/electron-packaging-plan.md` 负责。本文只解决「不装客户端也能把引力 YINLI 交给使用者」。在线行为在本文落地前仍以 `docs/architecture-overview.md` 为准。
+> 状态：2026-10-08 起按 `openspec/changes/hosted-account-access` 落地。桌面安装包的签名、公证和 SmartScreen 仍由 `docs/electron-packaging-plan.md` 负责。托管会话、按账号隔离和平台模型以该变更为准；本文保留当时的产品决定。
 
 ## 要解决的问题
 

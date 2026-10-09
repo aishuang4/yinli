@@ -97,6 +97,18 @@ class ScheduledJobRecordStore:
                 )
             except sqlite3.IntegrityError as exc:
                 raise UniqueConstraintError("scheduled_jobs", str(exc)) from exc
+            from src.server.auth.ownership import current_owner_id
+
+            owner = current_owner_id()
+            if owner:
+                conn.execute(
+                    """
+                    UPDATE scheduled_jobs
+                    SET owner_user_id = ?
+                    WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = '')
+                    """,
+                    (owner, job_id),
+                )
             conn.commit()
         stored = self.get_job(job_id)
         assert stored is not None

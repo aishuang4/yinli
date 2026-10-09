@@ -1,0 +1,30 @@
+# Web 托管。只发布 8088，后端与 Caddy 共用网络命名空间，8765 留在回环地址。
+name: yinli
+services:
+  caddy:
+    image: caddy:2
+    ports:
+      - "8088:80"
+    volumes:
+      - ./Caddyfile.http:/etc/caddy/Caddyfile:ro
+      - ../frontend/dist:/srv:ro
+    restart: unless-stopped
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: yinli-backend:local
+    network_mode: "service:caddy"
+    env_file:
+      - backend.env
+    environment:
+      AGENT_WORKSTATION_SERVE_MODE: hosted
+      AGENT_WORKSTATION_HOST: 127.0.0.1
+      AGENT_WORKSTATION_PORT: "8765"
+      AGENT_WORKSTATION_DATA_DIR: /data
+      AGENT_WORKSTATION_PRODUCT_FEATURES_PATH: /app/config/product-features.json
+    volumes:
+      - yinli-data:/data
+    restart: unless-stopped
+volumes:
+  yinli-data:

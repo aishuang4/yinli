@@ -24,6 +24,7 @@ from src.config.runtime_paths import (
 from src.config.settings import settings
 from src.storage.chat_run_records import ChatRunRecordStore
 from src.storage.chat_session_records import ChatSessionRecordStore
+from src.storage.auth_schema import AUTH_SCHEMA_SQL
 from src.storage.database_schema import BASE_SCHEMA_SQL
 from src.storage.scheduled_job_records import ScheduledJobRecordStore
 from src.storage.agent_defaults import (
@@ -253,6 +254,7 @@ def ensure_db() -> None:
                 )
             """)
             conn.executescript(BASE_SCHEMA_SQL)
+            conn.executescript(AUTH_SCHEMA_SQL)
             conn.execute("DROP INDEX IF EXISTS idx_group_studios_active_chat")
             conn.execute(
                 """
@@ -373,6 +375,14 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'")
             _ensure_column(conn, "scheduled_jobs", "model_config_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_studios", "model_config_id", "TEXT NOT NULL DEFAULT ''")
+            for owned_table in (
+                "workspaces",
+                "projects",
+                "chat_sessions",
+                "group_studios",
+                "scheduled_jobs",
+            ):
+                _ensure_column(conn, owned_table, "owner_user_id", "TEXT")
             _ensure_column(conn, "group_work_items", "review_status", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "review_note", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "rework_count", "INTEGER NOT NULL DEFAULT 0")

@@ -44,7 +44,7 @@ async def update_session_model(session_id: str, data: SessionModelUpdate,
         raise HTTPException(status_code=409, detail="当前会话仍有运行或待审批任务。")
     store = _load_store()
     session = next((s for s in store.sessions if s.id == session_id and s.project_id == project_id), None)
-    if session is None:
+    if session is None or not _session_visible(session):
         raise HTTPException(status_code=404, detail="Session not found")
     try:
         binding = resolve_model_binding(data.model_config_id)
@@ -53,6 +53,18 @@ async def update_session_model(session_id: str, data: SessionModelUpdate,
     session.model_config_id = binding.primary.entry.id
     _save_store(store)
     return {"modelConfigId": session.model_config_id}
+
+
+def _session_visible(session: ChatSession) -> bool:
+    """托管请求只看见当前用户的会话。"""
+
+    from src.server.auth.ownership import assert_catalog_ready, current_owner_id
+
+    owner = current_owner_id()
+    if not owner:
+        return True
+    assert_catalog_ready()
+    return (session.owner_user_id or "") == owner
 
 
 def _filter_sessions_by_kind(sessions: list[ChatSession], kind: str) -> list[ChatSession]:
@@ -78,7 +90,8 @@ async def list_sessions(
     """
     store = _load_store()
     matched = [
-        session for session in store.sessions if session.project_id == project_id
+        session for session in store.sessions
+        if session.project_id == project_id and _session_visible(session)
     ]
     return attach_group_studio_hints(sorted(
         _filter_sessions_by_kind(matched, kind),
@@ -95,7 +108,7 @@ async def list_session_catalog(
 
     store = _load_store()
     return attach_group_studio_hints(sorted(
-        _filter_sessions_by_kind(store.sessions, kind),
+        _filter_sessions_by_kind([item for item in store.sessions if _session_visible(item)], kind),
         key=lambda item: item.updated_at,
         reverse=True,
     ))
@@ -112,7 +125,7 @@ async def list_session_messages(
         (item for item in store.sessions if item.id == session_id and item.project_id == project_id),
         None,
     )
-    if session is None:
+    if session is None or not _session_visible(session):
         raise HTTPException(status_code=404, detail="Session not found")
     return _normalize_history_messages(store.messages.get(session_id) or [])
 
@@ -128,7 +141,7 @@ async def delete_session(
         (item for item in store.sessions if item.id == session_id and item.project_id == project_id),
         None,
     )
-    if session is None:
+    if session is None or not _session_visible(session):
         raise HTTPException(status_code=404, detail="Session not found")
 
     project = get_project(session.project_id)

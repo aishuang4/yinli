@@ -1,0 +1,22 @@
+# 只发布 443。后端与 Caddy 共用网络命名空间，8765 只在该命名空间的回环地址上。
+services:
+  caddy:
+    image: caddy:2
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../frontend/dist:/srv:ro
+  backend:
+    image: agent-workstation-backend:local
+    network_mode: "service:caddy"
+    env_file:
+      - backend.env.example
+    environment:
+      AGENT_WORKSTATION_SERVE_MODE: hosted
+      AGENT_WORKSTATION_HOST: 127.0.0.1
+      AGENT_WORKSTATION_PORT: "8765"
+    volumes:
+      - workstation-data:/data
+volumes:
+  workstation-data:

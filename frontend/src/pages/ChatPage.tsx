@@ -13,7 +13,8 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Bot, MessageSquare, PanelLeftOpen, Plus, Settings } from 'lucide-react';
+import { Bot, MessageSquare, PanelLeftOpen, Plus } from 'lucide-react';
+import { UserMenu } from '../features/auth/UserMenu';
 import { ScrollToBottomButton } from '../components/ScrollToBottomButton';
 import { useMessageScroll } from '../components/useMessageScroll';
 import { Tag, Tooltip } from '@/components/design';
@@ -46,7 +47,9 @@ import { selectPendingAskUserInteractions } from '../features/chat/humanInteract
 import type { ChatFilePayload, ChatSession, LocalMessage, StoredChatMessage } from '../features/chat/types';
 import { runtimeError, runtimeText } from '../features/runtime-stream/selectors';
 
+import { useAuthStore } from '../features/auth/authStore';
 import { useModelCatalog } from '../features/models/useModelCatalog';
+import { useProvidedModels } from '../features/models/useProvidedModels';
 import { ModelSelector } from '../features/models/ModelSelector';
 
 import { useChatAttachments } from '../features/chat/useChatAttachments';
@@ -59,6 +62,7 @@ const HISTORY_PANEL_TRANSITION_MS = 260;
 
 export function ChatPage() {
   const { catalog: modelCatalog, loading: modelsLoading, error: modelsError } = useModelCatalog();
+  const providedModels = useProvidedModels();
   const [modelChoices, setModelChoices] = useState<Record<string, string>>({});
   const [savingModelChoice, setSavingModelChoice] = useState(false);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
@@ -81,7 +85,6 @@ export function ChatPage() {
   const [previewTarget, setPreviewTarget] = useState<FilePreviewTarget | null>(null);
   const teamModeEnabled = useProductFeaturesStore((state) => isSurfaceEnabled(state.features, 'teamMode'));
   const planModeEnabled = useProductFeaturesStore((state) => isSurfaceEnabled(state.features, 'planMode'));
-  const setView = useAppStore((state) => state.setView);
   const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const historyTransitionTimerRef = useRef<number | null>(null);
@@ -154,12 +157,17 @@ export function ChatPage() {
     setForcedSkillIds((current) => current.filter((id) => allowed.has(id)));
   }, [composerSkills]);
 
-  const selectedModelId = modelChoices[activeSessionId || 'new'] || sessions.find(s => s.id === activeSessionId)?.modelConfigId || modelCatalog?.defaultModelId || '';
+  const hostedPlatform = useAuthStore((state) => state.serveMode) === 'hosted' && providedModels.source === 'key2api';
+  const storedModelId = modelChoices[activeSessionId || 'new'] || sessions.find(s => s.id === activeSessionId)?.modelConfigId || modelCatalog?.defaultModelId || '';
+  const selectedModelId = hostedPlatform && !storedModelId.startsWith('platform:')
+    ? (providedModels.models[0]?.id || storedModelId)
+    : storedModelId;
   const selectedModel = modelCatalog?.models.find(m => m.id === selectedModelId);
+  const selectedProvided = providedModels.models.find((item) => item.id === selectedModelId);
   const selectedModelSupportsImages = Boolean(selectedModel?.capabilities.images);
   // 顶栏副标题：单行截断，完整内容放 title 供悬停查看。
   const topbarSubtitle = state.isStreaming
-    ? selectedModel?.label || '未选择模型'
+    ? selectedModel?.label || selectedProvided?.label || '未选择模型'
     : targetMode === 'team'
       ? `${runtimeAgent?.name || 'Assistant'} · Leader 动态组建临时成员`
       : `${runtimeAgent?.name || 'Assistant'} · ${runtimeAgent?.description || 'DeepSeek'}`;
@@ -780,16 +788,7 @@ export function ChatPage() {
           <div className="flex shrink-0 items-center gap-3">
             <ChatContextMeter usage={contextUsage} />
             <NotificationBell />
-            <Tooltip title="工作台设置" placement="bottom" mode="dark">
-              <button
-                type="button"
-                className="icon-button chat-workbench-top-action h-9 w-9 rounded-xl"
-                onClick={() => setView('settings')}
-                aria-label="进入工作台设置"
-              >
-                <Settings size={17} />
-              </button>
-            </Tooltip>
+            <UserMenu className="icon-button chat-workbench-top-action h-9 w-9 rounded-xl" />
           </div>
           </header>
 
@@ -892,7 +891,7 @@ export function ChatPage() {
             <>
             <MemoryPendingHint isStreaming={state.isStreaming} />
             <ChatComposer
-            modelSelector={<ModelSelector catalog={modelCatalog} value={selectedModelId}
+            modelSelector={<ModelSelector catalog={modelCatalog} platformModels={providedModels.models} platformLoggedIn={providedModels.loggedIn} platformOnly={hostedPlatform} value={selectedModelId}
               onChange={value => void selectModel(value)}
               disabled={savingModelChoice || pendingAskUserInteractions.length > 0}
               loading={modelsLoading} error={modelsError} />}

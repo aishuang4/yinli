@@ -10,6 +10,12 @@
 
 新版 Subagent 已作为 ReAct 内部 attached fork/join 能力上线：Subagent 定义来自 Markdown + YAML frontmatter 文件，主 Agent 通过 `DelegateTask` 并行 fork fresh-context 子任务，再用 `SubagentTaskWait` / `SubagentResultRead` 等待并消费文件结果。Completion Barrier 保证全部 child 终态且结果已消费后父 Run 才能结束；完整过程进入独立 transcript、Trace 和 `subagent_invocations` 审计，不新增 `runtime.kind=subagent`。Team executor 当前不注入 Subagent 工具。
 
+## 托管账号与桌面登录
+
+`AGENT_WORKSTATION_SERVE_MODE` 默认 `desktop`。桌面本机 API 仍只接受回环访问，不登录即可使用本机 `models.json`、会话和文件。登录是可选项：令牌写在本机 `hosted-account.json`，平台模型 ID 使用 `platform:` 前缀，本机后端把该轮请求转到托管服务的 `/api/models/complete`。供应商 Key 不下发，退出登录后本机模型和本机数据仍在。
+
+`hosted` 用邮箱注册并验证后登录。Web 会话是 HttpOnly Cookie，桌面会话是 Bearer 令牌。回环来源不能代替会话。Workspace、Project、Chat、群聊、定时任务和习惯记忆按登录用户隔离；既有空归属数据要先用 `python -m src.server.auth.assign_owners <user_id>` 划给一个用户。模型 Key 仍在部署级 `models.json`，只有管理员能写。若设置了 `AGENT_WORKSTATION_KEY2API_SYNC_TOKEN`，用户邮箱验证通过后会向 key2api 同步一把 `k2a_`，明文只存在服务器；平台模型从 `http://103.236.80.228:3000/v1/models` 按这把 Key 拉取，对话走同一地址并消耗该用户额度。桌面端自己配置的模型仍用本机 `models.json`。停用账号时同步停用这把 Key。管理员页查看在线状态（90 秒内的 Web / 桌面心跳）并停用账号。停用收回 Web 和平台模型，不删除对方电脑上的文件。同一邮箱的 Web 数据与桌面数据不同步。
+
 ## 技术栈
 
 - 桌面壳：Electron

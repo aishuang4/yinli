@@ -8,7 +8,7 @@
 
 ### Requirement: Only admins can read and change accounts
 
-用户列表、在线状态、停用和恢复 MUST 只对管理员开放。普通用户调用这些接口 MUST 得到拒绝。公开注册 MUST NOT 把新账号创建为管理员。环境变量指定的管理员邮箱在对应账号可登录后 MUST 拥有管理员角色。
+用户列表、在线状态、停用和恢复 MUST 只对管理员开放。普通用户调用这些接口 MUST 得到拒绝。公开注册 MUST NOT 把新账号创建为管理员。环境变量指定的管理员邮箱在对应账号可登录后 MUST 拥有管理员角色。托管模式启动时，若名单中的邮箱还没有账号，系统 MUST 创建一个已验证、可登录的管理员；未配置名单时使用 `admin@yinli.test`。已存在的账号 MUST NOT 被重置密码。
 
 #### Scenario: Regular user cannot open the admin list
 
@@ -24,6 +24,11 @@
 
 - **WHEN** 环境变量中的邮箱完成验证并变为可登录
 - **THEN** 该账号拥有管理员角色
+
+#### Scenario: Hosted startup creates a missing admin
+
+- **WHEN** 托管服务启动，且默认管理员邮箱还没有账号
+- **THEN** 该邮箱成为已验证的管理员，可以用初始密码登录
 
 ### Requirement: Admin sees presence by client
 

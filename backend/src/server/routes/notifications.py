@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -69,12 +69,16 @@ async def update_notification_settings(data: NotificationSettingsUpdate) -> dict
 
 @router.get("/notifications/stream")
 async def stream_notifications(
+    request: Request,
     project_id: str | None = Query(default=None, alias="projectId"),
 ) -> StreamingResponse:
     """订阅应用内通知推送。独立于 Chat SSE。"""
 
+    from src.server.auth.presence import iter_with_presence
+    from src.server.auth.routes import token_from_request
+
     return StreamingResponse(
-        notification_event_stream(project_id),
+        iter_with_presence(notification_event_stream(project_id), token_from_request(request)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

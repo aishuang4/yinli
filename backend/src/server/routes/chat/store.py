@@ -91,6 +91,8 @@ def _append_user_message(
         if binding:
             existing.model_config_id = binding.primary.entry.id
     else:
+        from src.server.auth.ownership import current_owner_id
+
         store.sessions.append(ChatSession(
             id=session_id,
             title=title,
@@ -103,6 +105,7 @@ def _append_user_message(
             updated_at=now,
             message_count=len(messages),
             modelConfigId=binding.primary.entry.id if binding else "",
+            ownerUserId=current_owner_id() or "",
         ))
 
     _save_store(store)

@@ -1,6 +1,6 @@
 """System settings routes."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from src.config.model_catalog import CatalogConflict, public_catalog, save_catalog
@@ -16,6 +16,20 @@ from src.scheduler.settings import (
 from src.scheduler.ticker import apply_scheduler_enabled
 
 router = APIRouter()
+
+
+def _require_hosted_model_admin(request: Request) -> None:
+    """托管普通用户不能写入供应商 Key。桌面本机仍可维护自己的 models.json。"""
+
+    from src.config.settings import settings
+    from src.server.auth.routes import token_from_request
+    from src.server.auth.service import current_user
+
+    if settings.serve_mode.strip().lower() != "hosted":
+        return
+    found = current_user(token_from_request(request))
+    if found is None or found["user"].get("role") != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限")
 
 
 @router.get("/product-features")
@@ -35,8 +49,10 @@ async def get_models_catalog() -> dict:
 
 
 @router.put("/models")
-async def update_models_catalog(data: dict) -> dict:
+async def update_models_catalog(data: dict, request: Request) -> dict:
     """按版本原子保存目录，运行中 Agent 保留自己的快照。"""
+
+    _require_hosted_model_admin(request)
     payload = dict(data)
     etag = str(payload.pop("etag", ""))
     try:

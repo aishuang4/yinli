@@ -16,7 +16,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.server.routes import agent_builder, agents, chat, group_studio, health, mcp, memory, notifications, sandbox, settings as settings_routes, scheduled_jobs, skills, subagents, tools, traces, workflows, workspaces
-from src.config.settings import settings
+from src.config.settings import assert_hosted_email_config, settings
+from src.server.auth.middleware import HostedSessionMiddleware
+from src.server.auth.platform_models import router as platform_model_router
+from src.server.auth.routes import admin_router, auth_router
+from src.server.auth.service import ensure_default_admins
 from src.group_studio.lifecycle import reconcile_interrupted_studios
 from src.storage.database import close_db, init_db, list_projects, reconcile_interrupted_subagent_invocations
 from src.subagents.task_store import reconcile_interrupted_file_tasks
@@ -36,7 +40,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     关闭时：关闭数据库连接、清理资源
     """
     # === 启动 ===
+    assert_hosted_email_config()
     await init_db()
+    ensure_default_admins()
     interrupted_subagents = reconcile_interrupted_subagent_invocations()
     interrupted_subagent_files = reconcile_interrupted_file_tasks([
         Path(str(project.get("rootPath") or ""))
@@ -99,6 +105,7 @@ app = FastAPI(
 
 # CORS 配置 — 开发模式允许前端 dev server 跨域
 # 本地访问中间件必须覆盖全部路由；即使误绑定到 0.0.0.0，也不接受局域网请求。
+app.add_middleware(HostedSessionMiddleware)
 app.add_middleware(LocalAccessMiddleware)
 app.add_middleware(ProductFeatureGateMiddleware)
 app.add_middleware(
@@ -111,6 +118,9 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(health.router, tags=["健康检查"])
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(platform_model_router)
 app.include_router(workspaces.router, prefix="/api", tags=["Workspace / Project"])
 app.include_router(agents.router, prefix="/api/agents", tags=["Agent 管理"])
 app.include_router(agent_builder.router, prefix="/api/agent-builder", tags=["Agent 智能编排"])

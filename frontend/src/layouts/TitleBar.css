@@ -76,6 +76,319 @@
   color: var(--color-text-primary);
 }
 
+.titlebar__account {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  margin-right: 16px;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar__admin {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar__admin--active,
+.titlebar__admin:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent-bg);
+  color: var(--color-accent);
+}
+
+.titlebar__user {
+  position: relative;
+}
+
+.titlebar__user-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 220px;
+  height: 32px;
+  padding: 0 10px 0 4px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.titlebar__user-avatar {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--color-accent-bg);
+  color: var(--color-accent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.titlebar__user-email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.titlebar__user-avatar--lg {
+  width: 40px;
+  height: 40px;
+  font-size: 16px;
+}
+
+.titlebar__user-menu {
+  position: fixed;
+  z-index: 80;
+  display: grid;
+  width: min(300px, calc(100vw - 24px));
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-bg-primary);
+  box-shadow:
+    0 16px 40px color-mix(in srgb, black 14%, transparent),
+    0 1px 0 color-mix(in srgb, white 18%, transparent);
+}
+
+.titlebar__user-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--color-accent) 10%, transparent), transparent 72%),
+    var(--color-bg-primary);
+}
+
+.titlebar__user-card .titlebar__user-email {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.titlebar__user-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.titlebar__user-role {
+  display: inline-flex;
+  height: 20px;
+  align-items: center;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.titlebar__user-role--admin {
+  background: var(--color-accent-bg);
+  color: var(--color-accent);
+}
+
+.titlebar__user-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.titlebar__user-presence::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #22c55e;
+  content: "";
+}
+
+.titlebar__user-usage {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 16px 14px;
+  background:
+    linear-gradient(180deg, transparent, color-mix(in srgb, var(--color-accent) 6%, transparent)),
+    var(--color-bg-primary);
+}
+
+.titlebar__user-usage p {
+  min-width: 0;
+}
+
+.titlebar__user-usage span,
+.titlebar__user-usage strong {
+  display: block;
+}
+
+.titlebar__user-usage span {
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+}
+
+.titlebar__user-usage strong {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.titlebar__user-section {
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border-top: 1px solid var(--color-border);
+}
+
+.titlebar__user-section > p {
+  padding: 6px 8px 2px;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.titlebar__user-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.titlebar__user-item:hover {
+  background: var(--color-bg-secondary);
+}
+
+.titlebar__user-item-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+}
+
+.titlebar__user-item:hover .titlebar__user-item-icon {
+  background: var(--color-bg-primary);
+  color: var(--color-accent);
+}
+
+.titlebar__user-item strong,
+.titlebar__user-item small {
+  display: block;
+}
+
+.titlebar__user-item strong {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.titlebar__user-item small {
+  margin-top: 2px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.titlebar__user-item--danger strong {
+  color: var(--color-error);
+}
+
+.titlebar__user-item--danger .titlebar__user-item-icon {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+.titlebar__user-password {
+  display: grid;
+  gap: 8px;
+  margin: 2px 4px 4px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--color-bg-secondary);
+}
+
+.titlebar__user-password label {
+  display: grid;
+  gap: 4px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.titlebar__user-password input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+
+.titlebar__user-password p {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.titlebar__user-password-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.titlebar__user-password-actions button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.titlebar__user-password-actions button[type="submit"] {
+  border-color: transparent;
+  background: var(--color-accent);
+  color: #fff;
+}
+
 .titlebar__mode-button svg {
   transition: transform 220ms var(--ease-out);
 }

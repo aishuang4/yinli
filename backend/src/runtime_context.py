@@ -55,6 +55,16 @@ def resolve_runtime_context(
 
     project = get_project(resolved_project_id)
     if project is None:
+        from src.server.auth.ownership import current_owner_id, ensure_hosted_home
+        from src.storage.database import list_projects
+
+        if current_owner_id() and (not requested_project_id or requested_project_id == DEFAULT_PROJECT_ID):
+            ensure_hosted_home()
+            owned = list_projects()
+            if owned:
+                resolved_project_id = str(owned[0]["id"])
+                project = get_project(resolved_project_id)
+    if project is None:
         raise ValueError(f"Project 不存在: {resolved_project_id}")
     if str(project.get("status") or "") != "active":
         raise ValueError(f"Project 已归档，不能启动新运行: {resolved_project_id}")

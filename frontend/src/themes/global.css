@@ -76,6 +76,185 @@ body {
   gap: 8px;
 }
 
+/* 托管登录页。输入框使用设计系统字段，避免无边框原生控件贴在白底上。 */
+.auth-screen {
+  display: grid;
+  width: 100vw;
+  height: 100vh;
+  place-items: center;
+  padding: 32px 20px;
+  background: var(--color-bg-secondary);
+}
+
+.auth-screen__card {
+  width: min(400px, 100%);
+  padding: 32px 32px 24px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+}
+
+.auth-screen__header {
+  margin-bottom: 24px;
+}
+
+.auth-screen__product {
+  margin-bottom: 10px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.auth-screen h1 {
+  color: var(--color-text-primary);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.auth-screen__lead {
+  margin-top: 8px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.auth-screen__form {
+  display: grid;
+  gap: 16px;
+}
+
+.auth-screen__form > div > .mb-1 {
+  margin-bottom: 6px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.auth-screen__form .ant-input,
+.auth-screen__form .ant-input-affix-wrapper {
+  border-radius: 6px;
+}
+
+.auth-screen__form .ant-btn {
+  height: 40px;
+  margin-top: 4px;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.auth-screen__links {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 2px;
+  padding-top: 4px;
+}
+
+.auth-screen__links button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.auth-screen__links button:hover {
+  color: var(--color-accent);
+}
+
+.admin-users {
+  min-width: 0;
+}
+
+.admin-users__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.admin-users__stat {
+  padding: 14px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+}
+
+.admin-users__stat span {
+  display: block;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.admin-users__stat strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--color-text-primary);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.admin-users__table-wrap {
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+}
+
+.admin-users__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.admin-users__table th,
+.admin-users__table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-primary);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.admin-users__table th {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--color-bg-secondary);
+}
+
+.admin-users__table tr:last-child td {
+  border-bottom: 0;
+}
+
+.admin-users__online {
+  color: var(--color-success);
+}
+
+.admin-users__actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.admin-users__self,
+.admin-users__empty {
+  color: var(--color-text-tertiary);
+}
+
+.admin-users__empty {
+  text-align: center;
+}
+
+@media (max-width: 860px) {
+  .admin-users__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 /* 减少动画偏好 */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
