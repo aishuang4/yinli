@@ -8,7 +8,7 @@ This file provides guidance to AI coding agents when working with code in this r
 
 技术栈：Electron 壳 + React 19/TypeScript/Vite 前端 + Python/FastAPI/AgentScope 2.0 后端 + SQLite 存储。模型默认接 DeepSeek，运行时可切换至 OpenAI、Anthropic、DashScope、Gemini、Ollama、自定义 OpenAI 兼容等十余个供应商。
 
-`AGENT_WORKSTATION_SERVE_MODE` 默认 `desktop`：本机回环可直接使用，数据留在本机 `models.json` 和数据目录。可选登录只领取平台模型（`platform:` ID，Key 留在托管服务器）。`hosted` 要求邮箱验证后登录；Web 用 Cookie，桌面用 Bearer。托管下的 Workspace、Project、Chat、群聊、定时任务和习惯记忆按 `owner_user_id` 隔离，空归属行需先运行 `python -m src.server.auth.assign_owners <user_id>`。管理员能看 90 秒在线状态并停用账号。Web 与桌面不互相同步会话或文件。
+`AGENT_WORKSTATION_SERVE_MODE` 默认 `desktop`：本机回环可直接使用，数据留在本机 `models.json` 和数据目录。未连接托管账号且本机默认模型没有 Key 时，弹出本机 Key 引导。本机可以保存托管令牌（`hosted-account.json`）并用 `platform:` ID 把该轮对话转到托管 `/api/models/complete`，但工作台还没有登录入口，桌面端现在不会走到这条路径。`hosted` 要求邮箱验证后登录，Web 用 Cookie。新用户会得到自己的 Workspace / Project。Workspace、Project、Chat、群聊、定时任务和习惯记忆按 `owner_user_id` 隔离，空归属行需先运行 `python -m src.server.auth.assign_owners <user_id>`。配置 `AGENT_WORKSTATION_KEY2API_SYNC_TOKEN` 后，验证通过会向 key2api 同步一把 `k2a_`，Chat 只用 `platform:` 模型并消耗该 Key 的额度；用户中心读 `GET /api/auth/usage`。未配置令牌时平台目录仍来自部署级 `models.json`，写入只允许管理员。管理员能看 90 秒在线状态，并能停用或删除账号；删除清掉该用户在这台服务器上的引力数据和用户目录，不删除 key2api 里的账号。同一邮箱再次注册若已属于另一个 `external_id`，同步返回 409，不会把旧 Key 交给新用户。Web 与桌面不互相同步会话或文件。已登录（Web 会话或桌面已连接托管账号）不弹本机 Key 引导。
 
 ## 常用命令
 

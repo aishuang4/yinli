@@ -2,7 +2,7 @@
 
 > 状态：当前在线架构，2026-07-27。Team 功能已硬切换到本文定义的架构，不读取、不投影、不兼容任何旧 Team runtime、旧事件或旧前端 actor 数据。
 >
-> 后续演进草案见 `docs/team-member-lifecycle-v2.md`；在该草案完成契约冻结和实施前，本文仍是唯一在线行为基线。
+> 长生命周期 Member 尚未上线，见 `docs/team-member-lifecycle-v2.md`。在它落地前，本文仍是 Team 的在线行为基线。
 
 ## 1. 产品语义
 

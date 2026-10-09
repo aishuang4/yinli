@@ -1,16 +1,15 @@
 # 引力 YINLI TODO
 
-> 最后更新：2026-10-08。本文只保留尚未完成的任务。
+> 最后更新：2026-10-09。本文只保留尚未完成的任务。
 
 ## P0. Runtime 稳定性
 
-- [ ] 在 Docker daemon 可用的环境完成 `DockerWorkspace` 真实 Runtime 门禁（多供应商切换已于 2026-09-14 桌面打包版验证通过，见 handoff），结果写回 `docs/project-progress-handoff.md`。
+- [ ] 在 Docker daemon 可用的环境完成 `DockerWorkspace` 真实 Runtime 门禁。多供应商切换已在 2026-09-14 的桌面打包版验证过。
 - [ ] 补齐 RuntimeFrame / DisplaySnapshot V4 浏览器回归矩阵，覆盖 Plan finalized、HITL、AskUser、工具失败、取消和刷新恢复。
 - [ ] 增加关键 Chat 工作流的 Playwright 测试，避免只依赖 reducer 和后端单测。
 - [ ] Chat Trace 已改为 Run + Observation 墙钟时间线（`docs/trace-run-observations.md`）。generation 第二层已写真实送模 messages / thinking / 工具声明 / token；Intent / Readiness / `CONTEXT_USAGE` 仍只留 `run_events` 审计，不进时间线。
 - [ ] 用真实供应商验证 2026-09-14 的 ReAct 上下文改造：多轮同会话 token 曲线应不再随轮次线性增长；实例搬运后 AskUser 未回应场景无 `tool_call_id` 不匹配报错。
-- [ ] 上下文治理已于 2026-09-15 在打包版通过 6 轮人工用例（见 handoff）。仍待长期观察：`estimateErrorPct` 在中文 / 代码 / 表格场景的分布（若系统性偏低需给 bytes/4 加权）；`CONTEXT_COMPRESSED` 后 `context_to_preserve` 是否稳定带上已读 Skill 名称；`reserve_ratio=0.2` 在真实长会话里是否让压缩后过快再触发。
-- [ ] 记忆修正（2026-09-15）待真实验证：`<recalled-memory>` 命中相关性与 0.45 阈值是否合适；`MemoryReflectionAgent` 一路提炼三层后 agent 层是否真的从工具轨迹沉淀出路径经验；待确认队列的日常体感（会不会积压）。Markdown 文件整体大小硬上限仍未实现。
+- [ ] 长期观察上下文估算：`estimateErrorPct` 在中文、代码和表格上的分布；压缩后是否还带得上已读 Skill 名称；`reserve_ratio=0.2` 会不会让长会话很快再次压缩。
 - [ ] 一级整理目前只做"存根化"，没有把原文写到 workspace 供模型 Read 回来；如果实测模型经常需要旧输出，改为落盘 + 存根里给路径。
 - [ ] 群聊工作室 Host / Worker 的 `CONTEXT_USAGE` / `CONTEXT_COMPRESSED` 尚未写 trace（群事件进 `run_events` 需先加 `source` 字段，见 P1）；Team 的这两类 trace 已写，但 Chat 顶栏 meter 只读单 Agent 的 `context` Block，Team 运行时顶栏不显示占用。
 - [ ] Agent 缓存的 LRU 上限 / 闲置时长目前是常量（48 / 6h），后续如需按部署规模调节再进系统设置。
@@ -81,7 +80,8 @@
 
 - [ ] 验证 macOS / Windows 真机 PyInstaller 后端产物。
 - [ ] 完成 Electron 签名、公证、安装包过滤、日志和异常展示。
-- [ ] 按 `docs/web-service-plan.md` 做 Web 托管：邮箱注册登录、管理员查看 Web 与桌面在线状态、Web 数据按账号隔离。桌面端可不登录并使用本机模型；登录后领取平台模型，数据仍留在本机。桌面签名仍走打包计划。
+- [x] Web 托管已落地：邮箱注册登录、按账号隔离工作区、管理员在线状态、停用和删除、key2api 平台模型。见 `docs/architecture-overview.md`。
+- [ ] 把桌面端登录入口接到工作台：填写托管地址、登录后领取 `platform:` 模型、退出后回到本机模型。后端令牌文件已在，界面未接。桌面签名仍走打包计划。
 - [ ] 将运行时数据稳定迁移到 Electron `userData`，并设计备份与恢复。
 - [ ] 评估桌面自动更新。
 - [ ] 独立 Runs 页由 `config/product-features.json` 的 `views.runs` 控制（默认关）；若重新打开入口，再拆分 RunsPage 和 ChatPage 的高复杂度区域。

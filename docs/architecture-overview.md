@@ -1,10 +1,10 @@
 # 引力 YINLI 当前架构总览
 
-> 状态：2026-09-01 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
+> 状态：2026-10-09 生效。本文替代早期大而全设计稿，只记录当前仍在线的架构事实。
 
 ## 项目定位
 
-引力 YINLI 是基于 AgentScope 2.0 + Electron + React 的本地优先办公 AI 工作台。用户在 Chat 中选择单个 Agent 或 Team 执行文档、表格、文件和项目任务，运行时支持 MCP、Skills、HTTP 工具、权限控制、HITL、Trace、容器沙箱和新记忆系统 MVP。
+引力 YINLI 是基于 AgentScope 2.0 + Electron + React 的办公 AI 工作台。桌面端本地优先；Web 以 `hosted` 模式按账号提供同一套 Chat。用户在 Chat 中选择单个 Agent 或 Team 执行文档、表格、文件和项目任务，运行时支持 MCP、Skills、HTTP 工具、权限控制、HITL、Trace、容器沙箱和新记忆系统 MVP。
 
 旧记忆模块、旧独立 Plan Runtime（`runtime.kind=plan`）和旧独立 Subagent Runtime（`runtime.kind=subagent`）已下线，不能继续扩展旧链路。这里删除的是独立 architecture / 路由分支，不是当前能力：Plan Mode 仍通过 middleware 接入单 Agent ReAct，Subagent 仍通过 `DelegateTask` 接入 ReAct。旧 Subagent 字段、配置入口、事件兼容分支和前端入口不得作为当前 API / UI / Runtime 事实源保留；历史 SQLite 开发库只允许保留启动所需的最小兼容。当前记忆能力是新方案：通过运行前上下文注入、运行后 `MemoryAdmissionGate` 准入、后台提炼、历史记忆（底层 `memory_nodes`）和 memory tools 接入 ReAct，不新增 `memory` runtime.kind。
 
@@ -12,9 +12,13 @@
 
 ## 托管账号与桌面登录
 
-`AGENT_WORKSTATION_SERVE_MODE` 默认 `desktop`。桌面本机 API 仍只接受回环访问，不登录即可使用本机 `models.json`、会话和文件。登录是可选项：令牌写在本机 `hosted-account.json`，平台模型 ID 使用 `platform:` 前缀，本机后端把该轮请求转到托管服务的 `/api/models/complete`。供应商 Key 不下发，退出登录后本机模型和本机数据仍在。
+`AGENT_WORKSTATION_SERVE_MODE` 默认 `desktop`。桌面本机 API 仍只接受回环访问，不登录即可使用本机 `models.json`、会话和文件。未连接托管账号且默认模型没有 Key 时，前端弹出本机 Key 引导。`hosted-account.json` 和 `platform:` → `/api/models/complete` 的转发还在，但工作台没有登录表单，桌面端当前不会领取平台模型，也不会按用户拆工作区。
 
-`hosted` 用邮箱注册并验证后登录。Web 会话是 HttpOnly Cookie，桌面会话是 Bearer 令牌。回环来源不能代替会话。Workspace、Project、Chat、群聊、定时任务和习惯记忆按登录用户隔离；既有空归属数据要先用 `python -m src.server.auth.assign_owners <user_id>` 划给一个用户。模型 Key 仍在部署级 `models.json`，只有管理员能写。若设置了 `AGENT_WORKSTATION_KEY2API_SYNC_TOKEN`，用户邮箱验证通过后会向 key2api 同步一把 `k2a_`，明文只存在服务器；平台模型从 `http://103.236.80.228:3000/v1/models` 按这把 Key 拉取，对话走同一地址并消耗该用户额度。桌面端自己配置的模型仍用本机 `models.json`。停用账号时同步停用这把 Key。管理员页查看在线状态（90 秒内的 Web / 桌面心跳）并停用账号。停用收回 Web 和平台模型，不删除对方电脑上的文件。同一邮箱的 Web 数据与桌面数据不同步。
+`hosted` 用邮箱注册并验证后登录。Web 会话是 HttpOnly Cookie；Secure 只在 HTTPS 或 `X-Forwarded-Proto: https` 时设置。回环来源不能代替会话。验证或登录时为该用户创建「默认工作区 / 默认项目」，文件在 `USER_DATA_ROOT/users/{user_id}/projects/{project_id}`。请求里的 `default` 项目会改指这个人自己的项目。Workspace、Project、Chat、群聊、定时任务和习惯记忆按 `owner_user_id` 隔离；既有空归属数据要先用 `python -m src.server.auth.assign_owners <user_id>` 划给一个用户。默认 Agent 的文件系统范围若正好是共享的 `DEFAULT_PROJECT_ROOT`，托管模式下会收窄到该用户的项目目录。
+
+配置 `AGENT_WORKSTATION_KEY2API_SYNC_TOKEN` 后，`key2api` 才参与托管模型。验证通过后按引力用户 ID 同步一把名为 `yinli` 的 `k2a_`，明文只写在服务器 `auth_provider_keys`。Chat 选择器只列出 `GET /v1/models` 返回的 `platform:` 模型，对话用这把 Key 打到 `{KEY2API_BASE_URL}/v1`，不走本机 `models.json`。用户中心在 `GET /api/auth/usage` 返回 `available: true` 时显示总额度、已用和剩余。同一邮箱若已绑定另一个 `external_id`，同步得到 409，不返回旧 Key，用量按新 ID 查询会是 404。未配置服务令牌时，平台目录仍来自部署级 `models.json`。这份文件的写入只允许管理员。停用账号时同步停用 Key。管理员可以删除其他用户（不能删除自己或最后一名管理员）：先停用 Key，再清掉该用户拥有的工作区、项目、会话和 `users/{user_id}` 目录。这不删除 key2api 上的用户，邮箱在那边仍然占用。Web 与桌面不互相同步会话或文件。已登录不弹本机 Key 引导。
+
+Web 部署见 `deploy/`。当前线上形态是 `docker-compose.web.yml`：Caddy 公布 `8088`，后端与 Caddy 共用网络命名空间，Uvicorn 监听 `127.0.0.1:8765` 且 `--no-proxy-headers`。对话 Shell 在该容器内执行，映像里带有 `curl`、`git`、`rg`、`unzip`、`zip`、`jq`、`file`、`ps`。Node 与 LibreOffice 不在这个映像里。
 
 ## 技术栈
 
@@ -276,7 +280,7 @@ Windows NSIS 卸载默认保留用户数据。确认框选「是」才删除固�
 
 - 启动期静态配置在 `config/settings.py`，环境变量前缀为 `AGENT_WORKSTATION_`。
 - 产品功能档是 `config/product-features.json`：管理员在打包前改 `views` / `surfaces`，安装后前后端读同一份。`GET /api/settings/product-features` 只读，不进 SQLite。`chat` / `settings` 不能关。关闭 `traces` / `sandbox` / `subagents` / `workflow` 会 404 对应页面 API；Chat 运行时 `/api/chat/runs` 与 Agent/Skill/MCP 执行时 API 不随页面关闭。群聊与定时任务还要叠加 `system_settings` 开关。上线建议见 `config/product-features.packaging.example.json`。
-- 模型配置和 Key 统一存于 `USER_DATA_ROOT/models.json`，由 `config/model_catalog.py` 校验、脱敏和原子保存。SQLite / Keychain / DPAPI / 环境变量仅在文件首次初始化时迁移，之后不再作为在线补充来源。Key 在本地文件中为明文，macOS 使用 0600，Windows 使用受限当前用户 ACL；不进入前端响应、Agent 导出或安装包。
+- 桌面端的模型配置和 Key 存在 `USER_DATA_ROOT/models.json`，由 `config/model_catalog.py` 校验、脱敏和原子保存。SQLite / Keychain / DPAPI / 环境变量仅在文件首次初始化时迁移。Key 在本地文件中为明文，macOS 使用 0600，Windows 使用受限当前用户 ACL；不进入前端响应、Agent 导出或安装包。托管 Web 在配置了 key2api 服务令牌后，对话不读这份文件，而用该用户的 `k2a_`。
 - Chat/Sandbox 使用模型配置 ID；会话记住选择。供应商与模型目录在工作台「模型」页维护，不在 Settings。Agent 仅保存 ReAct 上限。新 Run 固定完整供应商连接、模型参数和降级链；Team、Subagent、审批恢复和后处理继承该快照。定时任务按自己的 `modelConfigId` 或每次触发时的全局默认，工作室创建时固定模型配置 ID。关闭 `views.models` 只藏入口；`/api/settings/models` 仍给 Chat 选择器使用。
 - Agent 运行时由 `agents/factory.py` 统一创建和缓存。
 - 工具范围由 `RuntimeToolScope` 与 `tool_scope_resolver.py` 控制。

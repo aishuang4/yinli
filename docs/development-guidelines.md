@@ -237,7 +237,9 @@ rg -n "<(Input|Select|DatePicker|Switch|Slider|InputNumber|textarea|input|select
 ## 9. 文档规范
 
 - 新增大功能前，先在 `docs/` 写设计或 TODO。
-- 实现完成后更新 `docs/project-todo.md` 或交接文档。
+- 实现完成后，把仍有效的决定写进架构总览或对应专题，并更新 `docs/project-todo.md`。
+- 已经上线的阶段计划、被取代的快照和 PR 清单不留在 `docs/`。需要旧文时看 git 历史。
+- 事件字段只写在对应契约里。其他文档只引用，不复制字段表。
 - 面向开发者的规范写清楚目录、命令、约束和验收方式。
 - 面向用户的说明避免暴露内部实现细节。
 

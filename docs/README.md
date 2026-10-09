@@ -1,6 +1,6 @@
 # 引力 YINLI 文档索引
 
-> 状态：2026-09-20 整理。本文是 `docs/` 的唯一索引。已落地结论进架构总览后，阶段草案删除，不设归档目录。`docs/brand/` 目前为空，不作为文档源。
+> 状态：2026-10-09 整理。本文是 `docs/` 的唯一索引。专题文档只保留现行决定。阶段日记、被取代的快照和 PR 清单已从 `docs/` 删除，需要时看 git 历史。不设归档目录。
 
 首次参与按这个顺序读：`AGENTS.md` → 架构总览 → 开发规范 → 进展交接 → TODO。改协议先改契约；改行为先改对应专题设计。
 
@@ -11,7 +11,7 @@
 | `AGENTS.md` | 仓库根目录。当前事实、架构约束、代理协作规范。冲突时以更新、更严的专题规范为准。 |
 | `docs/development-guidelines.md` | 前后端、Runtime、SQLite、测试、Git 和文档写法。 |
 | `docs/architecture-overview.md` | 当前仍在线的系统架构。群聊阶段、Event Stream、定时任务控制面、默认 Job Agent 以这里为准。 |
-| `docs/project-progress-handoff.md` | 完成度、验证结果、已知缺口。 |
+| `docs/project-progress-handoff.md` | 当前完成度和缺口。不含日期日记。 |
 | `docs/project-todo.md` | 唯一待办清单。专题文档不复制完整 TODO。 |
 
 ## 稳定契约（改协议先改这里）
@@ -34,9 +34,10 @@
 | `docs/chat-react-runtime.md` | 单 Agent ReAct：发送、组装、Think / Act / Observe、AskUser、收口。不含 Plan、Skill、Team。 |
 | `docs/team-runtime-redesign.md` | 一次性 TeamRun、动态 Member、任务、Mailbox。 |
 | `docs/subagent-delegation-design.md` | Subagent 文件定义、attached fork/join、wait/read。 |
-| `docs/memory-system-design.md` | 新记忆、Markdown、`memory_nodes`、向量检索、Skill 自进化、Memory Wiki。 |
+| `docs/memory-system-design.md` | 时间线、习惯和专业区。旧 Markdown 与 `memory_nodes` 不再注入。 |
 | `docs/file-catalog-v1.md` | Agent / Skill / MCP / HTTP / Job 以约定目录为权威。 |
-| `docs/chat-model-selection-v1.md` | Chat / Sandbox 选模型；`models.json` 是唯一配置源。工作台「模型」页维护目录。 |
+| `docs/chat-model-selection-v1.md` | Chat / Sandbox 选模型。桌面端以本机 `models.json` 为配置源。托管且配置了 key2api 时，Web 对话改用该用户的 `platform:` 模型。 |
+| `docs/web-service-plan.md` | Web 托管的产品决定。账号、隔离和 key2api 的在线事实以架构总览为准。桌面登录入口尚未接到工作台。 |
 | `docs/scheduled-jobs-v2-agent-activation.md` | Job Agent 能力合同、创建前门禁、到期装配 toolkit。 |
 | `docs/group-studio-v2.md` | 群聊 V2：房间留下，主持流程拆掉。事件见群聊契约。 |
 
@@ -46,10 +47,9 @@
 
 | 文档 | 还没做的部分 |
 | --- | --- |
-| `docs/team-member-lifecycle-v2.md` | Member 长生命周期、TaskAttempt、Mailbox 唤醒、Reviewer。基线仍是 Team Runtime。 |
-| `docs/dynamic-workflows-plan.md` | Script Review、Runtime Cockpit、AgentScope Bridge。 |
+| `docs/team-member-lifecycle-v2.md` | 未上线。不要按它改现网 TeamRun。 |
+| `docs/dynamic-workflows-plan.md` | 未上线。任务流仍是独立实验页，不是 Chat 模式。 |
 | `docs/electron-packaging-plan.md` | 正式打包、签名、公证和双平台验证。 |
-| `docs/web-service-plan.md` | Web 托管的邮箱注册登录、管理员在线状态，以及按账号隔离数据。 |
 
 ## 发布与验收
 
