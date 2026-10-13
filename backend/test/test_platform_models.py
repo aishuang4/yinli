@@ -88,8 +88,11 @@ def test_complete_writes_audit_not_chat(hosted_models, monkeypatch):
     )
     assert response.status_code == 200
     assert "平台回复" in response.text
+    from src.storage import control_db
+
+    with sqlite3.connect(control_db.control_db_path()) as conn:
+        calls = conn.execute("SELECT model_config_id FROM platform_call_audit").fetchall()
     with sqlite3.connect(database.db_path()) as conn:
-        calls = conn.execute("SELECT model_config_id FROM platform_model_calls").fetchall()
         messages = conn.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0]
     assert calls == [("platform:deepseek-v4-flash",)]
     assert messages == 0

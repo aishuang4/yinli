@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from src.server.auth.secrets import hash_secret
-from src.storage import database
+from src.storage import control_db, database
 
 SESSION_TTL = timedelta(days=14)
 CODE_TTL = timedelta(minutes=15)
@@ -47,10 +47,10 @@ def _user_row(row: Any) -> dict[str, Any]:
 def create_user(*, email: str, password_hash: str, role: str = "user") -> dict[str, Any]:
     """插入待验证用户。"""
 
-    database.ensure_db()
+    control_db.ensure_control_db()
     user_id = f"usr_{uuid.uuid4().hex}"
     created_at = database._utc_now()
-    with database._lock, database._connect() as conn:
+    with control_db._control_lock, control_db.control_connect() as conn:
         conn.execute(
             """
             INSERT INTO auth_users (
@@ -64,15 +64,15 @@ def create_user(*, email: str, password_hash: str, role: str = "user") -> dict[s
 
 
 def get_user_by_email(email: str) -> dict[str, Any] | None:
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
+    control_db.ensure_control_db()
+    with control_db._control_lock, control_db.control_connect() as conn:
         row = conn.execute("SELECT * FROM auth_users WHERE email = ?", (email,)).fetchone()
     return _user_row(row) if row else None
 
 
 def get_user(user_id: str) -> dict[str, Any] | None:
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
+    control_db.ensure_control_db()
+    with control_db._control_lock, control_db.control_connect() as conn:
         row = conn.execute("SELECT * FROM auth_users WHERE id = ?", (user_id,)).fetchone()
     return _user_row(row) if row else None
 
@@ -96,8 +96,8 @@ def update_user(user_id: str, **fields: Any) -> dict[str, Any] | None:
     if not assignments:
         return get_user(user_id)
     params.append(user_id)
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
+    control_db.ensure_control_db()
+    with control_db._control_lock, control_db.control_connect() as conn:
         conn.execute(
             f"UPDATE auth_users SET {', '.join(assignments)} WHERE id = ?",
             params,
@@ -107,8 +107,8 @@ def update_user(user_id: str, **fields: Any) -> dict[str, Any] | None:
 
 
 def list_users() -> list[dict[str, Any]]:
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
+    control_db.ensure_control_db()
+    with control_db._control_lock, control_db.control_connect() as conn:
         rows = conn.execute("SELECT * FROM auth_users ORDER BY created_at ASC").fetchall()
     return [_user_row(row) for row in rows]
 
@@ -118,8 +118,8 @@ def promote_configured_admins(emails: set[str]) -> int:
 
     if not emails:
         return 0
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
+    control_db.ensure_control_db()
+    with control_db._control_lock, control_db.control_connect() as conn:
         changed = 0
         for email in emails:
             cursor = conn.execute(
@@ -137,9 +137,9 @@ def promote_configured_admins(emails: set[str]) -> int:
 def save_email_code(*, email: str, purpose: str, raw_code: str) -> None:
     """保存验证码摘要。明文只存在于调用方的发信过程。"""
 
-    database.ensure_db()
+    control_db.ensure_control_db()
     expires_at = _iso(_now() + CODE_TTL)
-    with database._lock, database._connect() as conn:
+    with control_db._control_lock, control_db.control_connect() as conn:
         conn.execute(
             """
             INSERT INTO auth_email_codes (
@@ -160,10 +160,10 @@ def save_email_code(*, email: str, purpose: str, raw_code: str) -> None:
 def consume_email_code(*, email: str, purpose: str, raw_code: str) -> bool:
     """核销未过期验证码。错误、过期或已使用返回 False。"""
 
-    database.ensure_db()
+    control_db.ensure_control_db()
     now = _now()
     digest = hash_secret(raw_code)
-    with database._lock, database._connect() as conn:
+    with control_db._control_lock, control_db.control_connect() as conn:
         row = conn.execute(
             """
             SELECT id, expires_at FROM auth_email_codes
@@ -188,10 +188,10 @@ def consume_email_code(*, email: str, purpose: str, raw_code: str) -> bool:
 def create_session(*, user_id: str, raw_token: str, client_kind: str) -> dict[str, Any]:
     """保存会话摘要。"""
 
-    database.ensure_db()
+    control_db.ensure_control_db()
     now = _now()
     session_id = f"ses_{uuid.uuid4().hex}"
-    with database._lock, database._connect() as conn:
+    with control_db._control_lock, control_db.control_connect() as conn:
         conn.execute(
             """
             INSERT INTO auth_sessions (
@@ -216,9 +216,9 @@ def get_session_by_token(raw_token: str) -> dict[str, Any] | None:
 
     if not raw_token:
         return None
-    database.ensure_db()
+    control_db.ensure_control_db()
     now = _now()
-    with database._lock, database._connect() as conn:
+    with control_db._control_lock, control_db.control_connect() as conn:
         row = conn.execute(
             "SELECT * FROM auth_sessions WHERE token_hash = ?",
             (hash_secret(raw_token),),
@@ -232,8 +232,8 @@ def get_session_by_token(raw_token: str) -> dict[str, Any] | None:
 
 
 def touch_session(session_id: str) -> None:
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
+    control_db.ensure_control_db()
+    with control_db._control_lock, control_db.control_connect() as conn:
         conn.execute(
             "UPDATE auth_sessions SET last_seen_at = ? WHERE id = ? AND revoked_at IS NULL",
             (database._utc_now(), session_id),
@@ -241,8 +241,8 @@ def touch_session(session_id: str) -> None:
 
 
 def revoke_session(session_id: str) -> None:
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
+    control_db.ensure_control_db()
+    with control_db._control_lock, control_db.control_connect() as conn:
         conn.execute(
             "UPDATE auth_sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
             (database._utc_now(), session_id),
@@ -252,8 +252,8 @@ def revoke_session(session_id: str) -> None:
 def delete_account(user_id: str, email: str) -> None:
     """删除账号、会话、验证码和平台 Key。"""
 
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
+    control_db.ensure_control_db()
+    with control_db._control_lock, control_db.control_connect() as conn:
         conn.execute("DELETE FROM auth_sessions WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM auth_provider_keys WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM auth_email_codes WHERE email = ?", (email,))
@@ -261,8 +261,8 @@ def delete_account(user_id: str, email: str) -> None:
 
 
 def revoke_user_sessions(user_id: str) -> None:
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
+    control_db.ensure_control_db()
+    with control_db._control_lock, control_db.control_connect() as conn:
         conn.execute(
             "UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
             (database._utc_now(), user_id),
@@ -270,8 +270,8 @@ def revoke_user_sessions(user_id: str) -> None:
 
 
 def list_sessions() -> list[dict[str, Any]]:
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
+    control_db.ensure_control_db()
+    with control_db._control_lock, control_db.control_connect() as conn:
         rows = conn.execute("SELECT * FROM auth_sessions").fetchall()
     return [_session_row(row) for row in rows]
 
@@ -305,8 +305,8 @@ def session_is_recent(session: dict[str, Any], *, now: datetime | None = None) -
 def get_provider_key(user_id: str) -> dict[str, Any] | None:
     """读取用户的平台 Key。只给服务端调用，不能放进接口响应。"""
 
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
+    control_db.ensure_control_db()
+    with control_db._control_lock, control_db.control_connect() as conn:
         row = conn.execute(
             "SELECT * FROM auth_provider_keys WHERE user_id = ?",
             (user_id,),
@@ -333,8 +333,8 @@ def save_provider_key(
 ) -> None:
     """保存或更新平台 Key。明文只留在这张表。"""
 
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
+    control_db.ensure_control_db()
+    with control_db._control_lock, control_db.control_connect() as conn:
         conn.execute(
             """
             INSERT INTO auth_provider_keys (

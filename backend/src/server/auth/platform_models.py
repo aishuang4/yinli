@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -14,8 +13,6 @@ from pydantic import BaseModel, Field
 from src.config.model_catalog import public_catalog
 from src.config.runtime_settings import model_binding_scope, resolve_model_binding
 from src.server.auth.routes import require_user
-from src.storage import database
-
 PLATFORM_PREFIX = "platform:"
 router = APIRouter(prefix="/api/models", tags=["平台模型"])
 
@@ -25,21 +22,6 @@ class CompleteRequest(BaseModel):
     text: str = ""
 
     model_config = {"populate_by_name": True}
-
-
-def _ensure_audit_table() -> None:
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS platform_model_calls (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                model_config_id TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
 
 
 def list_provided_models() -> dict[str, Any]:
@@ -61,15 +43,9 @@ def list_provided_models() -> dict[str, Any]:
 
 
 def record_platform_call(*, user_id: str, model_config_id: str) -> None:
-    _ensure_audit_table()
-    with database._lock, database._connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO platform_model_calls (id, user_id, model_config_id, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (f"pmc_{uuid.uuid4().hex}", user_id, model_config_id, database._utc_now()),
-        )
+    from src.storage.control_records import record_platform_call as write_audit
+
+    write_audit(user_id=user_id, model_config_id=model_config_id)
 
 
 def _response_text(response: Any) -> str:

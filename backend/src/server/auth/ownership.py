@@ -226,12 +226,13 @@ def assign_unowned(user_id: str) -> int:
 
     from src.storage import database
 
+    from src.storage import auth_records
+
     database.ensure_db()
+    if auth_records.get_user(user_id) is None:
+        raise ValueError(f"用户不存在: {user_id}")
     changed = 0
     with database._lock, database._connect() as conn:
-        exists = conn.execute("SELECT 1 FROM auth_users WHERE id = ?", (user_id,)).fetchone()
-        if exists is None:
-            raise ValueError(f"用户不存在: {user_id}")
         for table in OWNED_TABLES:
             cursor = conn.execute(
                 f"UPDATE {table} SET owner_user_id = ? WHERE owner_user_id IS NULL OR owner_user_id = ''",

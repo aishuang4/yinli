@@ -21,6 +21,8 @@ from src.server.auth.middleware import HostedSessionMiddleware
 from src.server.auth.platform_models import router as platform_model_router
 from src.server.auth.routes import admin_router, auth_router
 from src.server.auth.service import ensure_default_admins
+from src.storage.control_db import ensure_control_db
+from src.tenancy.context import is_hosted_mode
 from src.group_studio.lifecycle import reconcile_interrupted_studios
 from src.storage.database import close_db, init_db, list_projects, reconcile_interrupted_subagent_invocations
 from src.subagents.task_store import reconcile_interrupted_file_tasks
@@ -42,7 +44,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # === 启动 ===
     assert_hosted_email_config()
     await init_db()
-    ensure_default_admins()
+    if is_hosted_mode():
+        ensure_control_db()
+        ensure_default_admins()
     interrupted_subagents = reconcile_interrupted_subagent_invocations()
     interrupted_subagent_files = reconcile_interrupted_file_tasks([
         Path(str(project.get("rootPath") or ""))
