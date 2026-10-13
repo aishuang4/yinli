@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from src.config.settings import settings
+from src.tenancy.context import is_hosted_mode
 from src.server.auth.service import (
     AuthError,
     admin_directory,
@@ -24,8 +25,22 @@ from src.server.auth.service import (
 from src.storage.auth_records import SESSION_TTL
 
 SESSION_COOKIE = "yinli_session"
+
+
+def require_hosted_mode() -> None:
+    """桌面端没有控制面，账号和管理员接口按不存在处理。"""
+
+    if not is_hosted_mode():
+        raise HTTPException(status_code=404, detail="仅托管服务可用")
+
+
 auth_router = APIRouter(prefix="/api/auth", tags=["账号"])
-admin_router = APIRouter(prefix="/api/admin", tags=["管理员"])
+admin_router = APIRouter(
+    prefix="/api/admin",
+    tags=["管理员"],
+    dependencies=[Depends(require_hosted_mode)],
+)
+_HOSTED = [Depends(require_hosted_mode)]
 
 
 class RegisterRequest(BaseModel):
@@ -163,7 +178,7 @@ async def auth_config() -> dict[str, str]:
     return {"serveMode": mode if mode in {"desktop", "hosted"} else "desktop"}
 
 
-@auth_router.post("/register")
+@auth_router.post("/register", dependencies=_HOSTED)
 async def register(data: RegisterRequest) -> dict[str, bool]:
     try:
         register_user(data.email, data.password)
@@ -172,7 +187,7 @@ async def register(data: RegisterRequest) -> dict[str, bool]:
     return {"ok": True}
 
 
-@auth_router.post("/verify")
+@auth_router.post("/verify", dependencies=_HOSTED)
 async def verify(data: VerifyRequest) -> dict:
     try:
         return {"user": verify_email(data.email, data.code)}
@@ -180,7 +195,7 @@ async def verify(data: VerifyRequest) -> dict:
         _raise(error)
 
 
-@auth_router.post("/login")
+@auth_router.post("/login", dependencies=_HOSTED)
 async def login(data: LoginRequest, request: Request, response: Response) -> dict:
     try:
         result = login_user(data.email, data.password, client_kind=data.client_kind)
@@ -194,19 +209,19 @@ async def login(data: LoginRequest, request: Request, response: Response) -> dic
     return body
 
 
-@auth_router.post("/logout")
+@auth_router.post("/logout", dependencies=_HOSTED)
 async def logout(request: Request, response: Response) -> dict[str, bool]:
     logout_token(token_from_request(request))
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"ok": True}
 
 
-@auth_router.get("/me")
+@auth_router.get("/me", dependencies=_HOSTED)
 async def me(request: Request) -> dict:
     return {"user": require_user(request)["user"]}
 
 
-@auth_router.get("/usage")
+@auth_router.get("/usage", dependencies=_HOSTED)
 async def usage(request: Request) -> dict:
     """当前登录用户自己的平台额度。不返回 Key 或服务令牌。"""
 
@@ -222,13 +237,13 @@ async def usage(request: Request) -> dict:
     return {"available": True, **snapshot}
 
 
-@auth_router.post("/forgot-password")
+@auth_router.post("/forgot-password", dependencies=_HOSTED)
 async def forgot_password(data: EmailRequest) -> dict[str, bool]:
     request_password_reset(data.email)
     return {"ok": True}
 
 
-@auth_router.post("/reset-password")
+@auth_router.post("/reset-password", dependencies=_HOSTED)
 async def reset(data: ResetPasswordRequest) -> dict[str, bool]:
     try:
         reset_password(data.email, data.code, data.password)
@@ -237,7 +252,7 @@ async def reset(data: ResetPasswordRequest) -> dict[str, bool]:
     return {"ok": True}
 
 
-@auth_router.post("/heartbeat")
+@auth_router.post("/heartbeat", dependencies=_HOSTED)
 async def post_heartbeat(request: Request) -> dict:
     try:
         return {"user": heartbeat(token_from_request(request))}

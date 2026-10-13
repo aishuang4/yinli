@@ -271,6 +271,16 @@ def test_desktop_loopback_chat_does_not_require_login(auth_db, monkeypatch):
     assert response.status_code == 200
 
 
+def test_desktop_account_and_admin_routes_are_absent(auth_db, monkeypatch):
+    client = _client(monkeypatch, "desktop")
+    assert client.get("/api/auth/config").status_code == 200
+    assert client.get("/api/auth/desktop/session").status_code == 200
+    hidden = client.post("/api/auth/login", json={"email": "a@example.com", "password": "password1"})
+    assert hidden.status_code == 404
+    assert hidden.json()["detail"] == "仅托管服务可用"
+    assert client.get("/api/admin/users").status_code == 404
+
+
 def test_auth_config_reports_serve_mode_without_secrets(auth_db, monkeypatch):
     hosted = _client(monkeypatch, "hosted")
     assert hosted.get("/api/auth/config").json() == {"serveMode": "hosted"}
