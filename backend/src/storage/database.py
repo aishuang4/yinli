@@ -444,6 +444,17 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_runs", "scheduled_job_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_runs", "scheduled_firing_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'")
+            _ensure_column(conn, "chat_messages", "files", "TEXT NOT NULL DEFAULT '[]'")
+            _ensure_column(conn, "chat_messages", "clarification_requests", "TEXT NOT NULL DEFAULT '[]'")
+            _ensure_column(conn, "chat_messages", "clarification_resolved", "INTEGER NOT NULL DEFAULT 0")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chat_messages_session_order "
+                "ON chat_messages(session_id, sort_order)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chat_sessions_project_kind "
+                "ON chat_sessions(project_id, kind, updated_at DESC)"
+            )
             _ensure_column(conn, "scheduled_jobs", "model_config_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_studios", "model_config_id", "TEXT NOT NULL DEFAULT ''")
             for owned_table in (
@@ -1018,6 +1029,42 @@ def save_chat_store(data: dict[str, Any]) -> None:
     """整份覆盖聊天会话和消息。"""
 
     _chat_session_record_store().save_store(data)
+
+
+def get_chat_session(session_id: str) -> dict[str, Any] | None:
+    return _chat_session_record_store().get_session(session_id)
+
+
+def list_chat_sessions(*, project_id: str | None = None, kind: str | None = None) -> list[dict[str, Any]]:
+    return _chat_session_record_store().list_sessions(project_id=project_id, kind=kind)
+
+
+def insert_chat_session_if_absent(session: dict[str, Any]) -> dict[str, Any]:
+    return _chat_session_record_store().insert_session_if_absent(session)
+
+
+def update_chat_session(session_id: str, **fields: Any) -> None:
+    _chat_session_record_store().update_session(session_id, **fields)
+
+
+def append_chat_message(session_id: str, message: dict[str, Any]) -> dict[str, Any]:
+    return _chat_session_record_store().append_message(session_id, message)
+
+
+def list_chat_messages(session_id: str) -> list[dict[str, Any]]:
+    return _chat_session_record_store().list_messages(session_id)
+
+
+def update_chat_message_snapshot(message_id: str, snapshot: dict[str, Any]) -> None:
+    _chat_session_record_store().update_message_snapshot(message_id, snapshot)
+
+
+def delete_chat_messages(session_id: str, message_ids: list[str]) -> None:
+    _chat_session_record_store().delete_messages(session_id, message_ids)
+
+
+def delete_chat_session(session_id: str) -> None:
+    _chat_session_record_store().delete_session(session_id)
 
 
 def _trace_record_store() -> TraceRecordStore:
