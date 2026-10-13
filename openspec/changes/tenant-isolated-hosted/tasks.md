@@ -45,7 +45,7 @@
 - [x] 3.6 按 §9.2、§9.3 重写 `server/routes/workspaces.py` 中 hosted 的 Project 根目录逻辑
 - [x] 3.7 实现 `disable_tenant` / `enable_tenant` / `delete_tenant`（§9.4），`server/auth/service.py` 改为调用它们
 - [x] 3.8 按 §8.5、§16 的清单删除行级归属的全部代码和测试。完成后执行 §16 的 grep，结果必须为空
-- [ ] 3.9 补全 `hosted_support.py`；测试 `test_control_db.py`、`test_tenant_lifecycle.py`（沙箱部分先跳过，任务组 6 补上）
+- [x] 3.9 补全 `hosted_support.py`；测试 `test_control_db.py`、`test_tenant_lifecycle.py`（沙箱部分先跳过，任务组 6 补上）
 
 ## 4. 后台任务
 

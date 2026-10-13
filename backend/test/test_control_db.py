@@ -55,3 +55,23 @@ def test_hosted_control_db_holds_accounts_tenants_and_audit(hosted_env):
     assert control_records.get_tenant(HOSTED_B)["status"] == "disabled"
     again = control_records.insert_tenant(HOSTED_B)
     assert again["status"] == "disabled"
+
+
+def test_tenant_database_has_no_auth_tables(hosted_env):
+    from src.storage import database
+    from src.tenancy.context import TenantContext, use_tenant
+    from src.tenancy.lifecycle import ensure_tenant
+
+    ensure_tenant({
+        "id": HOSTED_A,
+        "email": "a@example.com",
+        "role": "user",
+        "status": "active",
+    })
+    with use_tenant(TenantContext.hosted(HOSTED_A)):
+        database.ensure_db()
+        path = database.db_path()
+    with sqlite3.connect(path) as conn:
+        names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert not any(name.startswith("auth_") for name in names)
+    assert path != control_db.control_db_path()

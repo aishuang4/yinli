@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -43,6 +44,10 @@ def test_ensure_tenant_is_idempotent_and_seeds_default_project(hosted_env, monke
         settings = get_scheduled_jobs_settings_public()
         assert settings["enabled"] is True
         assert get_registered_agent("default") is not None
+        bindings = database.list_project_resource_bindings("default")
+        kinds = {item["resourceType"] for item in bindings}
+        assert "agent" in kinds
+        assert "skill" in kinds
 
 
 def test_middleware_binds_active_tenant_and_rejects_disabled(hosted_env):
@@ -104,6 +109,7 @@ def test_disable_revokes_sessions_and_delete_removes_directory(hosted_env, monke
             disable_tenant(user["id"])
             assert task.cancelled() or task.cancelling()
             assert control_records.get_tenant(user["id"])["status"] == "disabled"
+            assert user["id"] not in {item.tenant_id for item in control_records.list_active_tenants()}
             assert auth_records.get_session_by_token("life-token") is None
         finally:
             _runs.pop(run.id, None)
@@ -115,3 +121,33 @@ def test_disable_revokes_sessions_and_delete_removes_directory(hosted_env, monke
     assert auth_records.get_user(user["id"]) is None
     assert not root.exists()
     assert control_records.get_tenant(user["id"])["status"] == "deleted"
+
+
+def test_verify_then_delete_blocks_login(hosted_env):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.server.auth.middleware import HostedSessionMiddleware
+    from src.server.auth.routes import auth_router
+    from src.tenancy.lifecycle import delete_tenant, tenant_directory
+    from test.hosted_support import make_user
+
+    app = FastAPI()
+    app.add_middleware(HostedSessionMiddleware)
+    app.include_router(auth_router)
+    client = TestClient(app, client=("127.0.0.1", 50000), base_url="https://testserver")
+    token, user_id = make_user(client, "lifecycle@example.com")
+    assert token
+    assert tenant_directory(user_id).is_dir()
+    delete_tenant(user_id)
+    again = client.post(
+        "/api/auth/login",
+        json={"email": "lifecycle@example.com", "password": "password1"},
+    )
+    assert again.status_code == 401
+    assert not tenant_directory(user_id).exists()
+
+
+@pytest.mark.skip(reason="FakeSandbox 在任务组 6 落地后再断言按标签删除")
+def test_delete_asks_sandbox_to_remove_tenant_label() -> None:
+    """删除租户时 FakeSandbox 应收到 yinli.tenant 标签删除。"""

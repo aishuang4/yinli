@@ -1,6 +1,6 @@
 """hosted 测试工具：托管环境夹具、造用户、取租户上下文。
 
-任务组 1 先实现到能建控制面为止；任务组 3 补全沙箱替换与租户生命周期。
+沙箱替换成 FakeSandbox 要等 sandbox/provider.py，任务组 6 再接入。
 """
 
 from __future__ import annotations
@@ -28,14 +28,19 @@ def hosted_env(tmp_path, monkeypatch):
     from cryptography.fernet import Fernet
 
     from src.config import runtime_paths
+    from src.storage import control_db
 
     root = make_hosted_root(tmp_path)
+    control_db.forget_control_db()
     monkeypatch.setattr(runtime_paths, "USER_DATA_ROOT", root)
     monkeypatch.setenv("AGENT_WORKSTATION_DATA_DIR", str(root))
     monkeypatch.setenv("AGENT_WORKSTATION_SECRET_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "hosted")
     monkeypatch.setattr("src.config.settings.settings.auth_email_mode", "log")
-    return root
+    monkeypatch.setattr("src.config.settings.settings.key2api_sync_token", "")
+    control_db.ensure_control_db()
+    yield root
+    control_db.forget_control_db()
 
 
 def make_user(client, email: str) -> tuple[str, str]:
@@ -50,7 +55,10 @@ def make_user(client, email: str) -> tuple[str, str]:
     try:
         client.post("/api/auth/register", json={"email": email, "password": "password1"})
         client.post("/api/auth/verify", json={"email": email, "code": sent[0]})
-        logged = client.post("/api/auth/login", json={"email": email, "password": "password1"})
+        logged = client.post(
+            "/api/auth/login",
+            json={"email": email, "password": "password1", "clientKind": "desktop"},
+        )
     finally:
         service.deliver_login_code = original
     user = auth_records.get_user_by_email(email)
