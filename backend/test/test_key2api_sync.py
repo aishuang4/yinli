@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from src.config.runtime_settings import resolve_model_binding
 from src.server.auth.middleware import HostedSessionMiddleware
-from src.server.auth.ownership import reset_owner, set_owner
+from src.tenancy.context import TenantContext, use_tenant
 from src.server.auth.platform_models import router as platform_router
 from src.server.auth.routes import auth_router
 from src.server.local_access import LocalAccessMiddleware
@@ -83,9 +83,6 @@ def test_verify_assigns_key_and_lists_only_platform_models(hosted_sync, monkeypa
     assert calls[0][2] == "Bearer svc-token"
     assert calls[0][3]["external_id"] == user["id"]
 
-    from src.server.auth.ownership import assign_unowned
-
-    assign_unowned(user["id"])
     logged = client.post(
         "/api/auth/login",
         json={"email": "user@example.com", "password": "password1", "clientKind": "desktop"},
@@ -107,11 +104,8 @@ def test_verify_assigns_key_and_lists_only_platform_models(hosted_sync, monkeypa
     }]
     assert "k2a_testkey" not in response.text
 
-    owner = set_owner(user["id"])
-    try:
+    with use_tenant(TenantContext.hosted(user["id"], role=user["role"])):
         binding = resolve_model_binding("platform:demo-model")
-    finally:
-        reset_owner(owner)
     assert binding.primary.base_url == "http://key2api.test/v1"
     assert binding.primary.default_model == "demo-model"
     assert binding.primary.api_key == "k2a_testkey"

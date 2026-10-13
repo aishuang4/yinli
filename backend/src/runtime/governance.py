@@ -103,14 +103,6 @@ def persist_agent_session_state(agent: object, *, session_id: str, agent_id: str
         logger.debug("保存会话上下文状态失败", exc_info=True)
 
 
-def _hosted_memory_user(user_id: str) -> str:
-    """托管会话的习惯文件跟登录用户走，桌面端仍用调用方传入的 id。"""
-
-    from src.server.auth.ownership import current_owner_id
-
-    return current_owner_id() or user_id or "default"
-
-
 def build_memory_prompt_and_recall(
     *,
     agent_id: str,
@@ -133,7 +125,7 @@ def build_memory_prompt_and_recall(
     if not include_markdown:
         return "", None
     memory_prompt = _compose_frozen_memory_prompt(
-        user_id=_hosted_memory_user(user_id),
+        user_id=user_id or "default",
         agent_id=agent_id,
         session_id=freeze_session_id,
     )
@@ -149,7 +141,7 @@ def build_actor_memory_prompt(
     """给 Team Member / Subagent 注入共用习惯和它自己的专业全文。"""
 
     return _compose_frozen_memory_prompt(
-        user_id=_hosted_memory_user(user_id),
+        user_id=user_id or "default",
         agent_id=agent_id,
         session_id=session_id,
     )

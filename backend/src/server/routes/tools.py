@@ -22,7 +22,7 @@ from src.project_files import resolve_project_session_artifact
 from src.storage.database import (
     delete_json_record,
     delete_http_tool as db_delete_http_tool,
-    get_chat_session_ownership,
+    get_chat_session_location,
     get_project,
     list_http_tools as db_list_http_tools,
     list_json_records,
@@ -437,10 +437,10 @@ def _system_tool_records() -> list[SystemToolResponse]:
 def _resolve_downloadable_file(*, session_id: str, path: str) -> Path:
     """解析指定会话的可下载产物，拒绝会话目录外的路径。"""
 
-    ownership = get_chat_session_ownership(session_id)
-    if ownership is None:
+    location = get_chat_session_location(session_id)
+    if location is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    project = get_project(str(ownership.get("projectId") or ""))
+    project = get_project(str(location.get("projectId") or ""))
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()

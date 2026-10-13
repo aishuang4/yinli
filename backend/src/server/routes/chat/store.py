@@ -55,11 +55,9 @@ def _append_user_message(
     from src.config.runtime_settings import current_model_binding
     binding = current_model_binding()
     model_config_id = binding.primary.entry.id if binding else ""
-    from src.server.auth.ownership import current_owner_id
 
     existing = get_chat_session(session_id)
     if existing is None:
-        # 归属写入留到 3.4 删掉 409 闸门后再移除，否则空归属会挡住整个托管 API。
         insert_chat_session_if_absent({
             "id": session_id,
             "title": _make_session_title(content),
@@ -71,7 +69,6 @@ def _append_user_message(
             "created_at": now,
             "updated_at": now,
             "modelConfigId": model_config_id,
-            "ownerUserId": current_owner_id() or "",
         })
     else:
         update_chat_session(

@@ -25,7 +25,7 @@
 
 - [x] 2.1 改写 `storage/database.py` 的连接与初始化（§5.1）：`db_path()`、`_lock_for`、线程安全的 `_TenantLockProxy`、`_initialized_paths`、`forget_db` / `forget_all`。**这一步先不要开启 `foreign_keys`**
 - [x] 2.2 删除 `DB_PATH`、`PROJECT_ROOT`、`_initialized`；`DEFAULT_GUARDRAILS` 改为 `default_guardrails()`，并修改全部引用（§5.2）
-- [ ] 2.3 从 `ensure_db()` 删除 `AUTH_SCHEMA_SQL` 和 `owner_user_id` 补列循环；默认 Project 根目录改用 `default_project_root()`（§5.2）。补列与账号表暂留，等 3.2 / 3.8 把写入迁走后再删，否则新库无法满足现有写入
+- [x] 2.3 从 `ensure_db()` 删除 `AUTH_SCHEMA_SQL` 和 `owner_user_id` 补列循环；默认 Project 根目录改用 `default_project_root()`（§5.2）。补列与账号表暂留，等 3.2 / 3.8 把写入迁走后再删，否则新库无法满足现有写入
 - [x] 2.4 修改测试：删除约 87 处 `DB_PATH` / `_initialized` 的 monkeypatch，以及 25 个文件里对路径常量的 patch（§5.3）。`uv run pytest` 全绿后再继续
 - [x] 2.5 ChatStore 增量写：先补 schema（§7.1），然后实现 `ChatSessionRecordStore` 的新方法（§7.2）
 - [x] 2.6 改写 `server/routes/chat/store.py`（§7.3）及其他调用方（§7.4）；实现 `import_legacy_chat_store_once`（§7.5）；删除 `load_store` / `save_store` / `load_chat_store` / `save_chat_store`
@@ -44,7 +44,7 @@
 - [x] 3.5 新建 `tenancy/lifecycle.py::ensure_tenant`（§9.1），接入验证、登录、中间件兜底三个触发点。注意第 7 步要重新绑定资源白名单
 - [x] 3.6 按 §9.2、§9.3 重写 `server/routes/workspaces.py` 中 hosted 的 Project 根目录逻辑
 - [x] 3.7 实现 `disable_tenant` / `enable_tenant` / `delete_tenant`（§9.4），`server/auth/service.py` 改为调用它们
-- [ ] 3.8 按 §8.5、§16 的清单删除行级归属的全部代码和测试。完成后执行 §16 的 grep，结果必须为空
+- [x] 3.8 按 §8.5、§16 的清单删除行级归属的全部代码和测试。完成后执行 §16 的 grep，结果必须为空
 - [ ] 3.9 补全 `hosted_support.py`；测试 `test_control_db.py`、`test_tenant_lifecycle.py`（沙箱部分先跳过，任务组 6 补上）
 
 ## 4. 后台任务
@@ -52,7 +52,7 @@
 - [ ] 4.1 lifespan 改为按租户执行启动对账（§10.1），单个租户失败不阻塞其他租户
 - [ ] 4.2 调度器改造（§10.2）：拆分 bootstrap、tick 遍历租户、记录 firing 所属租户、`set_running` 在 hosted 下的行为
 - [ ] 4.3 核对群聊和记忆后处理的 `create_task` 调用点都在租户上下文内（§10.4、§10.5），不满足的改用 `spawn_in_tenant`
-- [ ] 4.4 记忆用户固定为 `default`：删除 `_hosted_memory_user` 和 `_habit_user_id`（§10.5）
+- [x] 4.4 记忆用户固定为 `default`：删除 `_hosted_memory_user` 和 `_habit_user_id`（§10.5）
 - [ ] 4.5 `cancel_tenant_activity` 接入 Run、firing、群聊（§9.4 第 4 步）
 - [ ] 4.6 测试 `test_tenant_background.py`、`test_tenant_isolation.py`（§17.1）
 - [ ] 4.7 **门槛 B**（§17.3）

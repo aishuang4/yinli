@@ -50,7 +50,7 @@ class ChatSessionRecordStore:
         self.default_workspace_id = default_workspace_id
         self.default_project_id = default_project_id
 
-    def get_ownership(self, session_id: str) -> dict[str, str] | None:
+    def get_location(self, session_id: str) -> dict[str, str] | None:
         self.ensure_db()
         with self.lock, self.connect() as conn:
             row = conn.execute(
@@ -246,7 +246,6 @@ class ChatSessionRecordStore:
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "message_count": row["message_count"],
-            "ownerUserId": (row["owner_user_id"] or "") if "owner_user_id" in keys else "",
         }
 
     def _message_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
@@ -315,8 +314,8 @@ class ChatSessionRecordStore:
                 """
                 INSERT OR IGNORE INTO chat_sessions (
                     id, title, agent_id, agent_name, mode, workspace_id, project_id, kind,
-                    created_at, updated_at, message_count, model_config_id, owner_user_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, message_count, model_config_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session["id"],
@@ -331,7 +330,6 @@ class ChatSessionRecordStore:
                     session.get("updated_at") or session.get("updatedAt") or "",
                     int(session.get("message_count") or session.get("messageCount") or 0),
                     session.get("modelConfigId") or session.get("model_config_id") or "",
-                    session.get("ownerUserId") or session.get("owner_user_id") or "",
                 ),
             )
             row = conn.execute("SELECT * FROM chat_sessions WHERE id = ?", (session["id"],)).fetchone()

@@ -275,26 +275,6 @@ async def disable(user_id: str, request: Request) -> dict:
         _raise(error)
 
 
-class AssignOwnershipRequest(BaseModel):
-    user_id: str = Field(alias="userId")
-
-    model_config = {"populate_by_name": True}
-
-
-@admin_router.post("/ownership/assign")
-async def assign_ownership(data: AssignOwnershipRequest, request: Request) -> dict[str, int]:
-    """把尚未归属的 Workspace、Project、会话、群聊和定时任务划给指定用户。"""
-
-    from src.server.auth.ownership import assign_unowned
-
-    require_admin(request)
-    try:
-        updated = assign_unowned(data.user_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"updated": updated}
-
-
 @admin_router.delete("/users/{user_id}")
 async def remove_user(user_id: str, request: Request) -> dict[str, bool]:
     actor = require_admin(request)

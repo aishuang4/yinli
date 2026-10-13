@@ -9,25 +9,6 @@ from pathlib import Path
 from typing import Any
 
 
-def _keep(table: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    from src.server.auth.ownership import filter_ids
-
-    allowed = set(filter_ids(table, [str(item["id"]) for item in records]))
-    return [item for item in records if str(item["id"]) in allowed]
-
-
-def _visible(table: str, row_id: str) -> bool:
-    from src.server.auth.ownership import visible
-
-    return visible(table, row_id)
-
-
-def _stamp(table: str, row_id: str) -> None:
-    from src.server.auth.ownership import stamp_owner
-
-    stamp_owner(table, row_id)
-
-
 class WorkspaceProjectRecordStore:
     """封装 Workspace、Project 及其资源白名单的领域读写。"""
 
@@ -91,17 +72,13 @@ class WorkspaceProjectRecordStore:
         query += " ORDER BY updated_at DESC, id ASC"
         with self.lock, self.connect() as conn:
             rows = conn.execute(query, params).fetchall()
-        records = [self._workspace_from_row(row) for row in rows]
-        return _keep("workspaces", records)
+        return [self._workspace_from_row(row) for row in rows]
 
     def get_workspace(self, workspace_id: str) -> dict[str, Any] | None:
         self.ensure_db()
         with self.lock, self.connect() as conn:
             row = conn.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
-        record = self._workspace_from_row(row) if row else None
-        if record is None or not _visible("workspaces", str(record["id"])):
-            return None
-        return record
+        return self._workspace_from_row(row) if row else None
 
     def create_workspace(self, data: dict[str, Any]) -> dict[str, Any]:
         self.ensure_db()
@@ -123,7 +100,6 @@ class WorkspaceProjectRecordStore:
                 ),
             )
             conn.commit()
-        _stamp("workspaces", workspace_id)
         return self.get_workspace(workspace_id) or {}
 
     def list_projects(
@@ -146,16 +122,13 @@ class WorkspaceProjectRecordStore:
         query += " ORDER BY updated_at DESC, id ASC"
         with self.lock, self.connect() as conn:
             rows = conn.execute(query, tuple(params)).fetchall()
-        return _keep("projects", [self._project_from_row(row) for row in rows])
+        return [self._project_from_row(row) for row in rows]
 
     def get_project(self, project_id: str) -> dict[str, Any] | None:
         self.ensure_db()
         with self.lock, self.connect() as conn:
             row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
-        record = self._project_from_row(row) if row else None
-        if record is None or not _visible("projects", str(record["id"])):
-            return None
-        return record
+        return self._project_from_row(row) if row else None
 
     def create_project(self, data: dict[str, Any]) -> dict[str, Any]:
         self.ensure_db()
@@ -194,7 +167,6 @@ class WorkspaceProjectRecordStore:
                 now=now,
             )
             conn.commit()
-        _stamp("projects", project_id)
         return self.get_project(project_id) or {}
 
     def update_project(self, project_id: str, changes: dict[str, Any]) -> dict[str, Any] | None:

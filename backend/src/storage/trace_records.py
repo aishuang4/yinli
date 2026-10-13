@@ -70,15 +70,15 @@ class TraceRecordStore:
         event_id = f"evt-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
         created_at = self.utc_now()
         with self.lock, self.connect() as conn:
-            ownership = conn.execute(
+            located = conn.execute(
                 "SELECT workspace_id, project_id FROM chat_sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
             resolved_workspace_id = workspace_id or (
-                str(ownership["workspace_id"]) if ownership else self.default_workspace_id
+                str(located["workspace_id"]) if located else self.default_workspace_id
             )
             resolved_project_id = project_id or (
-                str(ownership["project_id"]) if ownership else self.default_project_id
+                str(located["project_id"]) if located else self.default_project_id
             )
             row = conn.execute(
                 "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM run_events WHERE session_id = ?",

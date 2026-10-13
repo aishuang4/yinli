@@ -26,7 +26,6 @@ from src.config.runtime_paths import (
 from src.config.settings import settings
 from src.storage.chat_run_records import ChatRunRecordStore
 from src.storage.chat_session_records import ChatSessionRecordStore
-from src.storage.auth_schema import AUTH_SCHEMA_SQL
 from src.storage.database_schema import BASE_SCHEMA_SQL
 from src.storage.scheduled_job_records import ScheduledJobRecordStore
 from src.storage.agent_defaults import (
@@ -328,8 +327,6 @@ def ensure_db() -> None:
                 )
             """)
             conn.executescript(BASE_SCHEMA_SQL)
-            # 账号表与归属列要留到任务 3.2 / 3.8：写入代码还在租户库上，提前删掉会让现有测试无法建库。
-            conn.executescript(AUTH_SCHEMA_SQL)
             conn.execute("DROP INDEX IF EXISTS idx_group_studios_active_chat")
             conn.execute(
                 """
@@ -461,14 +458,6 @@ def ensure_db() -> None:
             )
             _ensure_column(conn, "scheduled_jobs", "model_config_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_studios", "model_config_id", "TEXT NOT NULL DEFAULT ''")
-            for owned_table in (
-                "workspaces",
-                "projects",
-                "chat_sessions",
-                "group_studios",
-                "scheduled_jobs",
-            ):
-                _ensure_column(conn, owned_table, "owner_user_id", "TEXT")
             _ensure_column(conn, "group_work_items", "review_status", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "review_note", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "rework_count", "INTEGER NOT NULL DEFAULT 0")
@@ -723,10 +712,10 @@ def upsert_project_resource_binding(data: dict[str, Any]) -> dict[str, Any]:
     return _workspace_project_record_store().upsert_resource_binding(data)
 
 
-def get_chat_session_ownership(session_id: str) -> dict[str, str] | None:
-    """读取 Session 的 Workspace / Project 归属。"""
+def get_chat_session_location(session_id: str) -> dict[str, str] | None:
+    """读取 Session 所在的 Workspace 和 Project。"""
 
-    return _chat_session_record_store().get_ownership(session_id)
+    return _chat_session_record_store().get_location(session_id)
 
 
 def _json_document_store() -> JsonDocumentStore:

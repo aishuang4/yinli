@@ -238,7 +238,6 @@ def ensure_default_admins() -> None:
     """托管启动时保证至少有一个可登录的管理员。已有账号不改密码。"""
 
     from src.config.settings import settings
-    from src.server.auth.ownership import assign_unowned, unassigned_count
     from src.server.auth.passwords import hash_password
 
     if settings.serve_mode.strip().lower() != "hosted":
@@ -260,8 +259,6 @@ def ensure_default_admins() -> None:
                 verified_at=auth_records.database._utc_now(),
                 disabled_at=None,
             )
-            if unassigned_count():
-                assign_unowned(created["id"])
             print(f"[auth] 已创建默认管理员 {email}")
             from src.server.auth.key2api import ensure_provider_key
 

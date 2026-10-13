@@ -179,9 +179,6 @@ def test_register_verify_login_and_duplicate_email(auth_db, monkeypatch):
         json={"email": "user@example.com", "code": sent[0][2]},
     )
     assert verified.status_code == 200
-    from src.server.auth.ownership import assign_unowned
-
-    assign_unowned(verified.json()["user"]["id"])
     assert verified.json()["user"]["role"] == "user"
     assert verified.json()["user"]["status"] == "active"
 

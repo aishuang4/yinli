@@ -250,11 +250,7 @@ async def list_scheduled_jobs(
 
     if status and status not in JOB_STATUSES:
         raise HTTPException(status_code=422, detail=f"非法 Job 状态: {status}")
-    from src.server.auth.ownership import filter_ids
-
     jobs = _service.list_jobs(project_id=project_id, status=status)
-    allowed = set(filter_ids("scheduled_jobs", [str(item.id) for item in jobs]))
-    jobs = [item for item in jobs if str(item.id) in allowed]
     index: dict[str, str] = {}
     try:
         from src.storage.database import get_project

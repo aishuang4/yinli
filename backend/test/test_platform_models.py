@@ -47,11 +47,6 @@ def _token(client: TestClient, monkeypatch) -> str:
     monkeypatch.setattr("src.server.auth.service.deliver_login_code", capture)
     client.post("/api/auth/register", json={"email": "user@example.com", "password": "password1"})
     client.post("/api/auth/verify", json={"email": "user@example.com", "code": sent[0]})
-    from src.server.auth.ownership import assign_unowned
-    from src.storage import auth_records
-
-    user = auth_records.get_user_by_email("user@example.com")
-    assign_unowned(user["id"])
     logged = client.post(
         "/api/auth/login",
         json={"email": "user@example.com", "password": "password1", "clientKind": "desktop"},

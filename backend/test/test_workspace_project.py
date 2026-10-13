@@ -53,7 +53,7 @@ from src.storage.database import (
     create_subagent_invocation,
     create_workspace,
     ensure_db,
-    get_chat_session_ownership,
+    get_chat_session_location,
     get_project,
     get_workspace,
     list_chat_runs,
@@ -136,7 +136,7 @@ def test_startup_backfills_blank_ownership(isolated_db):
     database.forget_db(database.db_path())
     ensure_db()
 
-    assert get_chat_session_ownership("session-old") == {
+    assert get_chat_session_location("session-old") == {
         "workspaceId": DEFAULT_WORKSPACE_ID,
         "projectId": DEFAULT_PROJECT_ID,
     }

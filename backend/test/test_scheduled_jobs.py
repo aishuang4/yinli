@@ -842,8 +842,8 @@ def test_chat_session_kind_survives_insert(isolated_db):
     assert ChatStore.model_validate({"sessions": [loaded], "messages": {}}).sessions[0].kind == "scheduled_job"
 
 
-def test_null_owner_user_id_stays_in_chat_history(isolated_db):
-    """桌面旧库 owner_user_id 为 NULL 时，不能把整份历史目录校验成空。"""
+def test_session_without_extra_columns_stays_in_chat_history(isolated_db):
+    """历史会话不依赖已删除的归属列，仍能出现在目录里。"""
 
     from src.runtime.chat_session import find_chat_session
 
@@ -860,12 +860,9 @@ def test_null_owner_user_id_stays_in_chat_history(isolated_db):
         "created_at": "2026-08-21T00:00:00+00:00",
         "updated_at": "2026-08-21T00:00:00+00:00",
     })
-    with database._connect() as conn:
-        conn.execute("UPDATE chat_sessions SET owner_user_id = NULL")
-        conn.commit()
 
     loaded = database.get_chat_session("sess-old")
-    assert loaded["ownerUserId"] == ""
+    assert loaded["id"] == "sess-old"
     assert find_chat_session("sess-old").id == "sess-old"
 
 

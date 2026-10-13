@@ -69,12 +69,12 @@ async def invoke_platform_model(model_config_id: str, text: str) -> str:
     if not model_config_id.startswith(PLATFORM_PREFIX):
         raise ValueError("不是平台模型")
     from src.server.auth.key2api import key2api_configured
-    from src.server.auth.ownership import current_owner_id
+    from src.tenancy.context import current_tenant
 
     if key2api_configured():
         from src.server.auth.key2api import Key2ApiError, complete_with_platform_key
 
-        owner = current_owner_id()
+        owner = current_tenant().user_id
         if not owner:
             raise ValueError("登录后才能使用平台模型")
         try:

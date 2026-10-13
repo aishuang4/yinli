@@ -76,10 +76,10 @@ def resolve_model_binding(
         and str(model_config_id).startswith("platform:")
     ):
         from src.server.auth.key2api import Key2ApiError, binding_for_platform_model, key2api_configured
-        from src.server.auth.ownership import current_owner_id
+        from src.tenancy.context import current_tenant
 
         if key2api_configured():
-            owner = current_owner_id()
+            owner = current_tenant().user_id
             if not owner:
                 raise CatalogError("登录后才能使用平台模型")
             try:

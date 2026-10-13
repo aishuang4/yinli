@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 
 from src.memory.markdown_store import MarkdownMemoryStore
 from src.memory.nodes import MemoryNodeService, MemoryNodeWrite
@@ -33,22 +33,12 @@ from src.vector_store.policy import get_vector_store_policy
 router = APIRouter()
 
 
-def _habit_user_id(requested: str) -> str:
-    from src.server.auth.ownership import current_owner_id
-
-    owner = current_owner_id()
-    if not owner:
-        return requested or "default"
-    if requested and requested not in {owner, "default"}:
-        raise HTTPException(status_code=404, detail="习惯记忆不存在")
-    return owner
-
-
 @router.get("/habits")
 async def read_habits_memory(user_id: str = Query(default="default", alias="userId")) -> dict[str, Any]:
-    """读取这个人的习惯全文。"""
+    """读取这个人的习惯全文。查询参数保留，值固定为租户内的 default。"""
 
-    return _markdown_doc_response(MarkdownMemoryStore().read_habits(_habit_user_id(user_id)))
+    del user_id
+    return _markdown_doc_response(MarkdownMemoryStore().read_habits("default"))
 
 
 @router.put("/habits")
@@ -58,7 +48,8 @@ async def write_habits_memory(
 ) -> dict[str, Any]:
     """覆盖保存习惯全文，并让下一轮注入重新读取。"""
 
-    doc = MarkdownMemoryStore().write_habits(_habit_user_id(user_id), data.content)
+    del user_id
+    doc = MarkdownMemoryStore().write_habits("default", data.content)
     invalidate_memory_prompts()
     return _markdown_doc_response(doc)
 
