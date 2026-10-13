@@ -258,6 +258,11 @@ def test_session_artifacts_hide_internal_and_word_intermediates(tmp_path):
     render.mkdir()
     (render / "page-1.png").write_bytes(b"page")
     (output_dir / "独立图表.png").write_bytes(b"chart")
+    venv_bin = output_dir / "scratch" / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "activate").write_text("echo venv")
+    (venv_bin.parent / "CACHEDIR.TAG").write_text("signature")
+    (output_dir / "scratch" / "check_cert.py").write_text("print('scratch')")
 
     artifacts = list_project_session_artifacts(
         project_root=tmp_path,
@@ -739,8 +744,8 @@ def test_chat_run_context_applies_project_resource_allowlist(isolated_db, tmp_pa
     monkeypatch.setattr("src.server.routes.chat.run_context.check_message_readiness_with_model", fake_readiness)
     monkeypatch.setattr("src.server.routes.chat.run_context.route_chat_message_with_model", fake_route)
     monkeypatch.setattr("src.server.routes.chat.run_context.get_active_session_skill_run", lambda *args: None)
-    monkeypatch.setattr("src.server.routes.chat.runtime_governance.build_habit_prompt", lambda *args, **kwargs: "")
-    monkeypatch.setattr("src.server.routes.chat.runtime_governance.build_professional_prompt", lambda *args, **kwargs: "")
+    monkeypatch.setattr("src.runtime.governance.build_habit_prompt", lambda *args, **kwargs: "")
+    monkeypatch.setattr("src.runtime.governance.build_professional_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "src.server.routes.chat.run_context.build_runtime_skills",
         lambda *, skill_ids, **kwargs: captured.update(skill_ids=skill_ids) or [],

@@ -18,11 +18,12 @@ _INVALID_FILENAME_CHARS = re.compile(r"[\x00/\\]")
 _SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _JOB_PATH_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _INTERNAL_ARTIFACT_NAME = re.compile(
-    r"^(tool_result([._-].*)?\.txt|\.ds_store|thumbs\.db)$",
+    r"^(tool_result([._-].*)?\.txt|\.ds_store|thumbs\.db|cachedir\.tag|pyvenv\.cfg)$",
     re.IGNORECASE,
 )
 _SCRATCH_DIR_NAMES = frozenset({
-    "render", "tmp", "temp", "_scratch", ".cache", "__pycache__", "subagents", "team",
+    "render", "tmp", "temp", "scratch", "_scratch", ".cache", "__pycache__",
+    "subagents", "team", ".venv", "venv", "node_modules", "site-packages", ".git",
 })
 _OFFICE_SUFFIXES = frozenset({".docx", ".xlsx", ".pptx"})
 _VALIDATION_SUFFIXES = frozenset({".pdf", ".png", ".jpg", ".jpeg", ".webp"})

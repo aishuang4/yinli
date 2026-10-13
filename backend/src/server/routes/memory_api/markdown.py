@@ -43,7 +43,7 @@ async def list_markdown_candidates(
 
     return MarkdownCandidateListResponse(
         records=list_memory_markdown_candidates(status=status, scope=scope, project_id=project_id, limit=limit),
-        pendingCount=count_pending_memory_markdown_candidates(),
+        pendingCount=count_pending_memory_markdown_candidates(project_id=project_id),
     )
 
 

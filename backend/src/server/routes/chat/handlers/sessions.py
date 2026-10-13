@@ -56,7 +56,7 @@ async def update_session_model(session_id: str, data: SessionModelUpdate,
 
 
 def _session_visible(session: ChatSession) -> bool:
-    """托管请求只看见当前用户的会话。"""
+    """桌面端读取本机全部会话；Web 只读取当前登录用户的会话。"""
 
     from src.server.auth.ownership import assert_catalog_ready, current_owner_id
 

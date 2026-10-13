@@ -19,8 +19,26 @@ import {
   type TraceSegment,
 } from './processTrace';
 import type { DisplaySnapshot } from './protocol';
+
+function latestOpenTextId(
+  snapshot: DisplaySnapshot,
+  childIds: string[],
+  childrenByParent: Map<string, string[]>,
+): string | null {
+  let found: string | null = null;
+  const visit = (ids: string[]) => {
+    for (const childId of ids) {
+      const child = snapshot.blocksById[childId];
+      if (!child) continue;
+      if (child.kind === 'text' && child.phase === 'open') found = childId;
+      visit(childrenByParent.get(childId) || []);
+    }
+  };
+  visit(childIds);
+  return found;
+}
 import { RuntimeBlockActionsContext, type RuntimeBlockActions } from './runtimeBlockActions';
-import { RuntimeAnimationContext, type RuntimeAnimationReporter } from './RuntimeAnimationContext';
+import { RuntimeAnimationContext, StreamCaretContext, type RuntimeAnimationReporter } from './RuntimeAnimationContext';
 import { TeamConsole } from './TeamBlockViews';
 import { TeamRuntimeContext } from './TeamRuntimeContext';
 
@@ -71,7 +89,10 @@ export function RuntimeBlockTree({
       ? segmentTrace(snapshot, folded ? partition.processIds : visibleChildIds(children))
       : [];
     const expandable = Boolean(folded && trace.length);
-    return (
+    const caretBlockId = block.kind === 'message'
+      ? latestOpenTextId(snapshot, children, childrenByParent)
+      : undefined;
+    const branch = (
       <div key={id} data-runtime-block-id={id} data-runtime-block-kind={block.kind}>
         <RuntimeBlockRenderer block={block} registry={coreBlockRegistry} />
         {children.length > 0 && block.kind !== 'team' ? (
@@ -99,6 +120,12 @@ export function RuntimeBlockTree({
           </div>
         ) : null}
       </div>
+    );
+    if (caretBlockId === undefined) return branch;
+    return (
+      <StreamCaretContext.Provider key={id} value={caretBlockId}>
+        {branch}
+      </StreamCaretContext.Provider>
     );
   };
 

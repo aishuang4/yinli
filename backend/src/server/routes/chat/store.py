@@ -1,5 +1,6 @@
 """会话持久化 — 读写 ChatStore，追加用户/助手消息并维护会话摘要。"""
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -23,6 +24,8 @@ from src.server.routes.chat.models import (
     StoredChatMessage,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _load_store() -> ChatStore:
     """读取对话存储文件"""
@@ -39,7 +42,36 @@ def _load_store() -> ChatStore:
     try:
         return ChatStore.model_validate(data)
     except Exception:
-        return ChatStore()
+        logger.exception("历史会话整包校验失败，改为逐条读取")
+        return _load_store_lenient(data)
+
+
+def _load_store_lenient(data: dict) -> ChatStore:
+    """跳过单条坏数据，保留其余会话。桌面端和 Web 都走这条读取。"""
+
+    sessions: list[ChatSession] = []
+    for item in data.get("sessions") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            sessions.append(ChatSession.model_validate(item))
+        except Exception:
+            logger.exception("跳过无法读取的会话 %s", item.get("id"))
+    messages: dict[str, list[StoredChatMessage]] = {}
+    raw_messages = data.get("messages") or {}
+    if isinstance(raw_messages, dict):
+        for session_id, items in raw_messages.items():
+            kept: list[StoredChatMessage] = []
+            for item in items or []:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    kept.append(StoredChatMessage.model_validate(item))
+                except Exception:
+                    logger.exception("跳过无法读取的消息 %s", item.get("id"))
+            if kept:
+                messages[str(session_id)] = kept
+    return ChatStore(sessions=sessions, messages=messages)
 
 
 def _save_store(store: ChatStore) -> None:

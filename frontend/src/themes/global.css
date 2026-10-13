@@ -582,6 +582,21 @@ button[class*="-btn"] .lucide {
   border-color: color-mix(in srgb, var(--color-accent) 70%, var(--color-border));
 }
 
+.chat-file-drop {
+  position: absolute;
+  inset: 12px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 16px;
+  border: 1.5px dashed color-mix(in srgb, var(--color-accent) 72%, var(--color-border));
+  background: color-mix(in srgb, var(--color-bg-primary) 88%, transparent);
+  color: var(--color-text-primary);
+  font-size: 14px;
+  pointer-events: none;
+}
+
 [data-theme="dark"] .chat-history-panel,
 [data-theme="dark"] .chat-main-panel,
 [data-theme="dark"] .chat-composer {

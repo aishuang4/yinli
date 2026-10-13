@@ -99,7 +99,7 @@ DEFAULT_MODEL_CONFIG = {
     "temperature": 0.7,
     "topP": 0.8,
     "maxTokens": 4096,
-    "maxReactIters": 40,
+    "maxReactIters": 128,
 }
 EMPTY_DISPLAY_SNAPSHOT = {
     "version": 4,
@@ -876,8 +876,8 @@ def list_memory_markdown_candidates(
     return _memory_markdown_candidate_store().list(status=status, scope=scope, project_id=project_id, limit=limit)
 
 
-def count_pending_memory_markdown_candidates() -> int:
-    return _memory_markdown_candidate_store().count_pending()
+def count_pending_memory_markdown_candidates(*, project_id: str | None = None) -> int:
+    return _memory_markdown_candidate_store().count_pending(project_id=project_id)
 
 
 def set_memory_markdown_candidate_status(record_id: str, *, status: str, resolution: str = "") -> dict[str, Any] | None:

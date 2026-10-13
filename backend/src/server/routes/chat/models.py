@@ -7,7 +7,7 @@
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.config.runtime_paths import DATA_ROOT
 
@@ -190,6 +190,18 @@ class ChatSession(BaseModel):
     group_studio: dict | None = Field(default=None, alias="groupStudio")
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("owner_user_id", mode="before")
+    @classmethod
+    def _blank_owner(cls, value: object) -> object:
+        """旧行的 owner_user_id 可能是 NULL。读成空归属，避免整份目录校验失败。
+
+        桌面端随后仍展示这些会话。Web 端空归属不等于任何登录用户。
+        """
+
+        if value is None:
+            return ""
+        return value
 
 
 class ChatStore(BaseModel):

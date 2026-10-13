@@ -442,6 +442,11 @@ def test_generation_scoped_text_keeps_only_the_ready_block_as_answer(projection_
     normalizer.ingest("FINAL_ANSWER_DELTA", {"delta": "先看文件。", "generation": 1})
     normalizer.ingest("TOOL_CALL_START", {"tool_call_id": "call-1", "tool_call_name": "Read"})
     normalizer.ingest("FINAL_ANSWER_DELTA", {"delta": "文件里写着结果。", "generation": 2})
+    closed_earlier = [
+        event for event in events.list("stream-answer")
+        if event.type == "agent.output.completed" and event.data.get("blockId") == "text:run-answer:1"
+    ]
+    assert closed_earlier
     normalizer.ingest("ANSWER_READY", {"generation": 2})
     normalizer.ingest("RUN_COMPLETED", {"payload": {}})
 

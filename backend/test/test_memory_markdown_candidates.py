@@ -92,6 +92,18 @@ def test_api_accept_writes_markdown_and_reject_keeps_file_untouched(client, tmp_
     assert client.get("/api/memory/markdown-candidates").json()["pendingCount"] == 0
 
 
+def test_pending_count_follows_the_current_project(client) -> None:
+    _candidate(note="这个项目还没处理。")
+    _candidate(note="另一个项目的候选。", projectId="other-project")
+
+    current = client.get("/api/memory/markdown-candidates?projectId=default").json()
+    assert current["pendingCount"] == 1
+    assert [item["note"] for item in current["records"]] == ["这个项目还没处理。"]
+
+    other = client.get("/api/memory/markdown-candidates?projectId=other-project").json()
+    assert other["pendingCount"] == 1
+
+
 def test_api_accept_marks_failed_when_exact_text_missing(client, tmp_path) -> None:
     candidate = _candidate(operation="update", note="", exactText="- 不存在的旧条目", replacementText="新条目")
     response = client.patch(f"/api/memory/markdown-candidates/{candidate['id']}", json={"action": "accept"})

@@ -626,7 +626,23 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
         self._text_id = target
         if target in self._active:
             return []
-        return self._start_block("agent.output", target, "text", "", aggregate_id=target)
+        # 上一句已经说完。只让当前这块继续闪烁，避免每一句末尾都留着光标。
+        produced = self._close_other_text_blocks(target)
+        produced.extend(self._start_block("agent.output", target, "text", "", aggregate_id=target))
+        return produced
+
+    def _close_other_text_blocks(self, keep: str) -> list[DomainEvent]:
+        produced: list[DomainEvent] = []
+        for block in list(self._active.values()):
+            if block.kind == "text" and block.block_id != keep:
+                produced.append(self._close_block(
+                    "agent.output",
+                    block.aggregate_id,
+                    block.block_id,
+                    "completed",
+                    None,
+                ))
+        return produced
 
     def _mark_answer_ready(self, block_id: str) -> list[DomainEvent]:
         """把终态正文的 Block id 写到仍打开的消息上。消息还没开始时不写。"""

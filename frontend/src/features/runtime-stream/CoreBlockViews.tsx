@@ -1,10 +1,11 @@
 /** Chat Runtime Block 的领域 renderer。 */
 
-import { Children, useContext, useEffect } from 'react';
+import { Children, useContext, useEffect, useState } from 'react';
 import {
   AlertCircle,
   Bot,
   CheckCircle2,
+  ChevronDown,
   Circle,
   CircleDot,
   Download,
@@ -28,7 +29,7 @@ import { resolveApiUrl } from '../../utils/apiUrl';
 import { artifactDownloadUrl, downloadableArtifactPath } from '../file-preview/filePreview';
 import type { DisplayBlock } from './protocol';
 import { toolDetail } from './processTrace';
-import { RuntimeAnimationContext } from './RuntimeAnimationContext';
+import { RuntimeAnimationContext, StreamCaretContext } from './RuntimeAnimationContext';
 import { RuntimeBlockActionsContext } from './runtimeBlockActions';
 
 export type RecordData = Record<string, unknown>;
@@ -100,8 +101,10 @@ export function MessageBlockView() {
 
 export function TextBlockView({ block }: { block: DisplayBlock<string> }) {
   const reportAnimation = useContext(RuntimeAnimationContext);
+  const caretBlockId = useContext(StreamCaretContext);
+  const showCaret = block.phase === 'open' && (caretBlockId === undefined || caretBlockId === block.id);
   // 折叠切换会换父节点。已收到的正文直接显示，只补这次挂载之后新到的字。
-  const visible = useSmoothStreamingText(block.data, block.phase === 'open', {
+  const visible = useSmoothStreamingText(block.data, showCaret, {
     animateOnMount: false,
     animateStreamingOnMount: false,
     charsPerSecond: 96,
@@ -263,19 +266,24 @@ export function PlanBlockView({ block }: { block: DisplayBlock<RecordData> }) {
   );
 }
 
+const ARTIFACT_FILE_PREVIEW_LIMIT = 5;
+
 export function ArtifactBlockView({ block }: { block: DisplayBlock<RecordData> }) {
   const actions = useContext(RuntimeBlockActionsContext);
   const files = artifactFiles(block.data);
+  const [expanded, setExpanded] = useState(false);
   if (!files.length) return null;
+  const hiddenCount = Math.max(0, files.length - ARTIFACT_FILE_PREVIEW_LIMIT);
+  const shown = expanded || hiddenCount === 0 ? files : files.slice(0, ARTIFACT_FILE_PREVIEW_LIMIT);
   return (
     <RuntimeItem
       icon={<FileText size={14} />}
       title={files.length > 1 ? `已生成 ${files.length} 个文件` : files[0]?.name || '生成文件'}
       block={block}
     >
-      {files.length ? (
+      {shown.length ? (
         <div className="divide-y divide-[var(--color-border)]">
-          {files.map((file) => {
+          {shown.map((file) => {
             const downloadPath = downloadableArtifactPath(file.path, actions?.sessionId);
             const downloadHref = actions?.sessionId && downloadPath
               ? resolveApiUrl(artifactDownloadUrl(actions.sessionId, downloadPath))
@@ -340,6 +348,17 @@ export function ArtifactBlockView({ block }: { block: DisplayBlock<RecordData> }
           })}
         </div>
       ) : null}
+      {hiddenCount > 0 ? (
+        <button
+          type="button"
+          className="mt-1 flex w-full items-center justify-center gap-1 rounded-md py-1.5 text-xs text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]"
+          onClick={() => setExpanded((current) => !current)}
+          aria-expanded={expanded}
+        >
+          <ChevronDown size={14} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
+          {expanded ? '收起' : `还有 ${hiddenCount} 个文件`}
+        </button>
+      ) : null}
     </RuntimeItem>
   );
 }
@@ -376,9 +395,13 @@ function visibleArtifactFiles(files: ArtifactFile[]): ArtifactFile[] {
     const path = file.path.replaceAll('\\', '/').toLowerCase();
     if (!name || name.startsWith('.') || name.startsWith('tool_result')) return false;
     if (name === 'source.md') return false;
-    if (path.split('/').some((part) => ['render', 'tmp', 'temp', '_scratch', 'subagents', 'team'].includes(part))) {
+    if (path.split('/').some((part) => [
+      'render', 'tmp', 'temp', 'scratch', '_scratch', 'subagents', 'team',
+      '.venv', 'venv', 'node_modules', 'site-packages', '__pycache__', '.cache', '.git',
+    ].includes(part))) {
       return false;
     }
+    if (['cachedir.tag', 'pyvenv.cfg'].includes(name)) return false;
     if (officeStems.has(fileStem(file.name)) && /\.(pdf|png|jpe?g|webp)$/i.test(name)) return false;
     return true;
   });

@@ -212,3 +212,95 @@ def test_two_users_cannot_read_each_other(hosted_app, monkeypatch, tmp_path):
     assert owners == {member_id}
     with pytest.raises(ValueError):
         assign_unowned("missing")
+
+
+def _session_payload(session_id: str, owner_user_id: str, project_id: str = "default") -> dict:
+    return {
+        "id": session_id,
+        "title": session_id,
+        "agent_id": "agent",
+        "agent_name": "Agent",
+        "mode": "agent",
+        "workspace_id": "default",
+        "project_id": project_id,
+        "kind": "chat",
+        "created_at": "2026-08-21T00:00:00+00:00",
+        "updated_at": "2026-08-21T00:00:00+00:00",
+        "message_count": 0,
+        "ownerUserId": owner_user_id,
+    }
+
+
+def test_desktop_catalog_reads_sessions_without_owner(tmp_path, monkeypatch):
+    """客户端不登录，旧库里没有归属的会话仍要出现在历史目录。"""
+
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "desktop.db")
+    monkeypatch.setattr(database, "_initialized", False)
+    monkeypatch.setattr("src.config.settings.settings.serve_mode", "desktop")
+    app = FastAPI()
+    app.include_router(chat.router, prefix="/api/chat")
+    database.ensure_db()
+    database.save_chat_store({
+        "sessions": [_session_payload("sess-desktop", "")],
+        "messages": {},
+    })
+    with sqlite3.connect(database.DB_PATH) as conn:
+        conn.execute("UPDATE chat_sessions SET owner_user_id = NULL")
+        conn.commit()
+
+    client = TestClient(app)
+    response = client.get("/api/chat/sessions/catalog")
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == ["sess-desktop"]
+    database._initialized = False
+
+
+def test_hosted_catalog_reads_only_the_signed_in_user(hosted_app, monkeypatch):
+    """Web 只返回当前用户的会话；一条空归属不会把其他人的历史读成空。"""
+
+    from src.server.routes.chat.store import _load_store
+
+    client = hosted_app
+    admin_token, admin_id = _login(client, monkeypatch, "admin@example.com")
+    member_token, member_id = _login(client, monkeypatch, "member@example.com")
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    member_headers = {"Authorization": f"Bearer {member_token}"}
+    assigned = client.post("/api/admin/ownership/assign", json={"userId": admin_id}, headers=admin_headers)
+    assert assigned.status_code == 200
+
+    database.save_chat_store({
+        "sessions": [
+            _session_payload("sess-admin", admin_id),
+            _session_payload("sess-member", member_id, "proj-member"),
+        ],
+        "messages": {},
+    })
+    admin_catalog = client.get("/api/chat/sessions/catalog", headers=admin_headers)
+    member_catalog = client.get("/api/chat/sessions/catalog", headers=member_headers)
+    assert admin_catalog.status_code == 200
+    assert member_catalog.status_code == 200
+    assert [item["id"] for item in admin_catalog.json()] == ["sess-admin"]
+    assert [item["id"] for item in member_catalog.json()] == ["sess-member"]
+
+    with sqlite3.connect(database.DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO chat_sessions (
+                id, title, agent_id, agent_name, mode, workspace_id, project_id, kind,
+                created_at, updated_at, message_count, model_config_id, owner_user_id
+            ) VALUES (?, ?, ?, ?, 'agent', 'default', 'default', 'chat', ?, ?, 0, '', NULL)
+            """,
+            ("sess-legacy", "旧会话", "agent", "Agent", "2026-08-21T00:00:00+00:00", "2026-08-21T00:00:00+00:00"),
+        )
+        conn.commit()
+
+    blocked = client.get("/api/chat/sessions/catalog", headers=member_headers)
+    assert blocked.status_code == 409
+    assert {session.id for session in _load_store().sessions} == {"sess-admin", "sess-member", "sess-legacy"}
+
+    claimed = client.post("/api/admin/ownership/assign", json={"userId": admin_id}, headers=admin_headers)
+    assert claimed.status_code == 200
+    admin_after = client.get("/api/chat/sessions/catalog", headers=admin_headers)
+    member_after = client.get("/api/chat/sessions/catalog", headers=member_headers)
+    assert {item["id"] for item in admin_after.json()} == {"sess-admin", "sess-legacy"}
+    assert [item["id"] for item in member_after.json()] == ["sess-member"]

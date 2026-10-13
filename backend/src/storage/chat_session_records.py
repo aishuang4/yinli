@@ -87,7 +87,11 @@ class ChatSessionRecordStore:
                     "created_at": row["created_at"],
                     "updated_at": row["updated_at"],
                     "message_count": row["message_count"],
-                    "ownerUserId": row["owner_user_id"] if "owner_user_id" in row.keys() else "",
+                    "ownerUserId": (
+                        row["owner_user_id"] or ""
+                        if "owner_user_id" in row.keys()
+                        else ""
+                    ),
                 }
                 for row in sessions
             ],

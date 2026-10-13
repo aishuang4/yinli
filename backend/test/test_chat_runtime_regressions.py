@@ -2512,11 +2512,11 @@ def test_chat_run_context_includes_memory_prompt(monkeypatch):
         lambda: SimpleNamespace(default_model="model", fallback_models=[]),
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.runtime_governance.build_habit_prompt",
+        "src.runtime.governance.build_habit_prompt",
         lambda *args, **kwargs: "# Habits\n记忆注入片段",
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.runtime_governance.build_professional_prompt",
+        "src.runtime.governance.build_professional_prompt",
         lambda *args, **kwargs: "",
     )
     monkeypatch.setattr(
@@ -2566,8 +2566,8 @@ def test_chat_run_context_keeps_history_out_of_system_prompt(monkeypatch):
         "src.server.routes.chat.run_context.get_effective_model_settings",
         lambda: SimpleNamespace(default_model="model", fallback_models=[]),
     )
-    monkeypatch.setattr("src.server.routes.chat.runtime_governance.build_habit_prompt", lambda *args, **kwargs: "")
-    monkeypatch.setattr("src.server.routes.chat.runtime_governance.build_professional_prompt", lambda *args, **kwargs: "")
+    monkeypatch.setattr("src.runtime.governance.build_habit_prompt", lambda *args, **kwargs: "")
+    monkeypatch.setattr("src.runtime.governance.build_professional_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "src.server.routes.chat.run_context.resolve_project_resource_access",
         lambda runtime_context: SimpleNamespace(
@@ -2669,7 +2669,7 @@ def test_create_main_agent_from_spec_delegates_to_factory(monkeypatch):
         return "agent-instance"
 
     monkeypatch.setattr(
-        "src.server.routes.chat.runtime_builder.get_or_create_agent",
+        "src.runtime.agent_spec.get_or_create_agent",
         fake_get_or_create_agent,
     )
     tool_scope = RuntimeToolScope(allow_mcp=False, allow_knowledge=False, allow_bash=True, allow_http=False)
