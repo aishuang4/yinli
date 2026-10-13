@@ -66,7 +66,7 @@ export function mapApiAgent(api: AgentApiData): Agent {
     description: api.description,
     systemPrompt: api.system_prompt,
     modelConfig: {
-      maxReactIters: api.modelConfig.max_react_iters ?? api.modelConfig.maxReactIters ?? 40,
+      maxReactIters: api.modelConfig.max_react_iters ?? api.modelConfig.maxReactIters ?? 128,
     },
     mcpTools: api.mcpTools,
     knowledgeTools: api.knowledgeTools ?? [],

@@ -20,7 +20,7 @@ class AgentModelOptions:
     temperature: float | None = None
     top_p: float | None = None
     max_tokens: int | None = None
-    max_react_iters: int = 40
+    max_react_iters: int = 128
 
 
 @dataclass(frozen=True)

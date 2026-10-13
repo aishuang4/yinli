@@ -3,7 +3,6 @@
  *
  * 使用 Compound Component 模式组织多个表单区块：
  * - Identity: 名称、头像、描述、系统提示词
- * - ModelConfig: ReAct 执行上限
  * - Tools: 默认工具（锁定）+ MCP + Skills
  * - Guardrails: 安全边界
  *
@@ -19,7 +18,6 @@ import {
 } from '@/components/design';
 import { AgentBasicSection } from './sections/AgentBasicSection';
 import { AgentGuardrailsSection } from './sections/AgentGuardrailsSection';
-import { AgentModelAdvancedSection } from './sections/AgentModelAdvancedSection';
 import { AgentJobToolkitSection } from './sections/AgentJobToolkitSection';
 import { AgentToolCapabilitiesSection } from './sections/AgentToolCapabilitiesSection';
 import { KnowledgeToolSelectionModal } from './sections/KnowledgeToolSelectionModal';
@@ -282,7 +280,7 @@ export function AgentEditor({ agent, onSave, onCancel }: AgentEditorProps) {
             <div className="min-w-0">
               <div className="text-sm font-medium text-[var(--color-text-primary)]">高级设置</div>
               <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
-                执行上限、工具、Skills、权限、计划和协作配置。
+                工具、Skills、权限、计划和协作配置。
               </div>
             </div>
           </div>
@@ -345,11 +343,6 @@ export function AgentEditor({ agent, onSave, onCancel }: AgentEditorProps) {
             onOpenSkillsSelector={() => setSkillsSelectorOpen(true)}
           />
         )}
-
-        <AgentModelAdvancedSection
-          form={form}
-          onChange={setForm}
-        />
 
         <AgentGuardrailsSection
           form={form}

@@ -580,13 +580,7 @@ def get_or_create_agent(
         ),
         context_config=_build_context_config(),
         react_config=ReActConfig(
-            max_iters=max(
-                1,
-                min(
-                    int(model_options.max_react_iters if model_options else 40),
-                    MAX_REACT_ITERS,
-                ),
-            ),
+            max_iters=MAX_REACT_ITERS,
         ),
         # 时间 / 上下文长度用 AgentScope 原生 HintBlock 注入：只在首轮、超过
         # time_interval 或临近压缩阈值时追加一条用户侧提示，而不是每轮改写
