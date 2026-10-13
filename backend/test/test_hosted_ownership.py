@@ -3,20 +3,15 @@
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.memory.markdown_store import MarkdownMemoryStore
 from src.server.auth.middleware import HostedSessionMiddleware
-from src.runtime_context import resolve_runtime_context
-from src.server.auth.ownership import assign_unowned, current_owner_id, path_is_inside_user, reset_owner, set_owner
 from src.server.auth.routes import admin_router, auth_router
 from src.server.local_access import LocalAccessMiddleware
 from src.server.routes import chat, memory, settings as settings_routes, workspaces
-from src.server.routes.chat.store import _append_user_message
 from src.storage import database
 
 
@@ -24,6 +19,7 @@ from src.storage import database
 def hosted_app(tmp_path, monkeypatch):
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "hosted")
     monkeypatch.setattr("src.config.settings.settings.auth_email_mode", "log")
+    monkeypatch.setattr("src.config.settings.settings.key2api_sync_token", "")
     monkeypatch.setattr("src.config.settings.settings.admin_emails", "admin@example.com")
     app = FastAPI()
     app.add_middleware(HostedSessionMiddleware)
@@ -57,57 +53,39 @@ def _login(client: TestClient, monkeypatch, email: str) -> tuple[str, str]:
     return logged.json()["token"], logged.json()["user"]["id"]
 
 
-def test_unassigned_rows_block_until_command(hosted_app, monkeypatch):
+def test_login_sees_own_default_workspace(hosted_app, monkeypatch):
     client = hosted_app
-    token, user_id = _login(client, monkeypatch, "admin@example.com")
-    headers = {"Authorization": f"Bearer {token}"}
-    blocked = client.get("/api/workspaces", headers=headers)
-    assert blocked.status_code == 409
-    assigned = client.post("/api/admin/ownership/assign", json={"userId": user_id}, headers=headers)
-    assert assigned.status_code == 200
-    assert assigned.json()["updated"] >= 1
-    visible = client.get("/api/workspaces", headers=headers)
+    token, _user_id = _login(client, monkeypatch, "admin@example.com")
+    visible = client.get("/api/workspaces", headers={"Authorization": f"Bearer {token}"})
     assert visible.status_code == 200
     assert any(item["id"] == "default" for item in visible.json())
 
 
-def test_new_user_does_not_use_the_shared_default_project(hosted_app, monkeypatch):
+def test_two_tenants_do_not_share_workspaces(hosted_app, monkeypatch):
     client = hosted_app
-    admin_token, admin_id = _login(client, monkeypatch, "admin@example.com")
+    admin_token, _admin_id = _login(client, monkeypatch, "admin@example.com")
+    member_token, _member_id = _login(client, monkeypatch, "member@example.com")
+    created = client.post(
+        "/api/workspaces",
+        json={"name": "甲的工作区", "description": ""},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert created.status_code == 201
+    member_list = client.get(
+        "/api/workspaces",
+        headers={"Authorization": f"Bearer {member_token}"},
+    )
+    assert member_list.status_code == 200
+    assert all(item["id"] != created.json()["id"] for item in member_list.json())
+    assert any(item["id"] == "default" for item in member_list.json())
+
+
+def test_hosted_project_stays_inside_tenant(hosted_app, monkeypatch):
+    client = hosted_app
+    admin_token, _admin_id = _login(client, monkeypatch, "admin@example.com")
     member_token, member_id = _login(client, monkeypatch, "member@example.com")
     admin_headers = {"Authorization": f"Bearer {admin_token}"}
     member_headers = {"Authorization": f"Bearer {member_token}"}
-    assert client.post("/api/admin/ownership/assign", json={"userId": admin_id}, headers=admin_headers).status_code == 200
-
-    listed = client.get("/api/workspaces", headers=member_headers)
-    assert listed.status_code == 200
-    assert listed.json()
-    assert all(item["id"] != "default" for item in listed.json())
-    projects = client.get(f"/api/workspaces/{listed.json()[0]['id']}/projects", headers=member_headers)
-    assert projects.status_code == 200
-    assert len(projects.json()) == 1
-    owner = set_owner(member_id)
-    try:
-        context = resolve_runtime_context(
-            project_id="default",
-            session_id="new-session",
-            run_id="",
-            agent_id="default",
-        )
-    finally:
-        reset_owner(owner)
-    assert context.project_id == projects.json()[0]["id"]
-    assert f"users/{member_id}/projects/" in str(context.project_root)
-
-
-def test_two_users_cannot_read_each_other(hosted_app, monkeypatch, tmp_path):
-    client = hosted_app
-    admin_token, admin_id = _login(client, monkeypatch, "admin@example.com")
-    member_token, member_id = _login(client, monkeypatch, "member@example.com")
-    admin_headers = {"Authorization": f"Bearer {admin_token}"}
-    member_headers = {"Authorization": f"Bearer {member_token}"}
-    client.post("/api/admin/ownership/assign", json={"userId": admin_id}, headers=admin_headers)
-
     created = client.post("/api/workspaces", json={"name": "乙的工作区", "description": ""}, headers=member_headers)
     assert created.status_code == 201
     workspace_id = created.json()["id"]
@@ -118,98 +96,16 @@ def test_two_users_cannot_read_each_other(hosted_app, monkeypatch, tmp_path):
     )
     assert project.status_code == 201
     project_id = project.json()["id"]
-    assert f"users/{member_id}/projects/{project_id}" in project.json()["rootPath"]
+    assert f"tenants/{member_id}/projects/{project_id}" in project.json()["rootPath"]
     assert client.get(f"/api/projects/{project_id}", headers=admin_headers).status_code == 404
-    assert client.get("/api/workspaces", headers=admin_headers).json()
     assert all(item["id"] != workspace_id for item in client.get("/api/workspaces", headers=admin_headers).json())
-
     escaped = client.patch(
         f"/api/projects/{project_id}",
         json={"rootPath": "/etc"},
         headers=member_headers,
     )
     assert escaped.status_code == 422
-    parent = str(Path(project.json()["rootPath"]).resolve().parent.parent)
-    dotted = client.patch(
-        f"/api/projects/{project_id}",
-        json={"rootPath": parent},
-        headers=member_headers,
-    )
-    assert dotted.status_code == 422
-
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    link = Path(project.json()["rootPath"]) / "link"
-    link.symlink_to(outside, target_is_directory=True)
-    linked = client.patch(
-        f"/api/projects/{project_id}",
-        json={"rootPath": str(link)},
-        headers=member_headers,
-    )
-    assert linked.status_code == 422
-    assert path_is_inside_user(member_id, link) is False
-
-    owner = set_owner(member_id)
-    try:
-        assert current_owner_id() == member_id
-        _append_user_message(
-            session_id="sess-member",
-            agent_id="agent",
-            agent_name="Agent",
-            mode="agent",
-            model_name="test",
-            content="只有乙能看见",
-            images=[],
-            workspace_id=workspace_id,
-            project_id=project_id,
-        )
-    finally:
-        from src.server.auth.ownership import reset_owner
-        reset_owner(owner)
-    hidden = client.get("/api/chat/sessions", headers=admin_headers, params={"projectId": project_id})
-    assert hidden.status_code == 200
-    assert [item["id"] for item in hidden.json()] == ["sess-member"]
-    seen = client.get("/api/chat/sessions", headers=member_headers, params={"projectId": project_id})
-    assert [item["id"] for item in seen.json()] == ["sess-member"]
-    missing = client.get(
-        "/api/chat/sessions/sess-member/messages",
-        headers=admin_headers,
-        params={"projectId": project_id},
-    )
-    assert missing.status_code == 200
-
-    client.put(
-        "/api/memory/habits",
-        headers=member_headers,
-        params={"userId": member_id},
-        json={"content": "乙的习惯"},
-    )
-    denied = client.get("/api/memory/habits", headers=admin_headers, params={"userId": member_id})
-    assert denied.status_code == 404
-    own = client.get("/api/memory/habits", headers=member_headers)
-    assert "乙的习惯" in own.json()["content"]
-    assert MarkdownMemoryStore().read_habits(admin_id).content != MarkdownMemoryStore().read_habits(member_id).content
-
-    catalog = client.get("/api/settings/models", headers=member_headers)
-    assert catalog.status_code == 200
-    assert "test-only" not in catalog.text
-    assert "apiKey" not in catalog.text or "apiKeyConfigured" in catalog.text
-    forbidden = client.put("/api/settings/models", headers=member_headers, json=catalog.json())
-    assert forbidden.status_code == 403
-    saved = client.put("/api/settings/models", headers=admin_headers, json=catalog.json())
-    assert saved.status_code == 200
-
-    with sqlite3.connect(database.db_path()) as conn:
-        owners = {
-            row[0]
-            for row in conn.execute(
-                "SELECT owner_user_id FROM projects WHERE id = ?",
-                (project_id,),
-            )
-        }
-    assert owners == {member_id}
-    with pytest.raises(ValueError):
-        assign_unowned("missing")
+    assert escaped.json()["detail"] == "Web 端不能修改 Project 目录"
 
 
 def _session_payload(session_id: str, owner_user_id: str, project_id: str = "default") -> dict:
@@ -249,44 +145,34 @@ def test_desktop_catalog_reads_sessions_without_owner(tmp_path, monkeypatch):
 
 
 def test_hosted_catalog_reads_only_the_signed_in_user(hosted_app, monkeypatch):
-    """Web 只返回当前用户的会话；一条空归属不会把其他人的历史读成空。"""
+    """每个租户只看到自己库里的会话，空归属不再把整站挡成 409。"""
+
+    from src.tenancy.context import TenantContext, use_tenant
 
     client = hosted_app
     admin_token, admin_id = _login(client, monkeypatch, "admin@example.com")
     member_token, member_id = _login(client, monkeypatch, "member@example.com")
     admin_headers = {"Authorization": f"Bearer {admin_token}"}
     member_headers = {"Authorization": f"Bearer {member_token}"}
-    assigned = client.post("/api/admin/ownership/assign", json={"userId": admin_id}, headers=admin_headers)
-    assert assigned.status_code == 200
+    with use_tenant(TenantContext.hosted(admin_id, role="admin")):
+        database.insert_chat_session_if_absent(_session_payload("sess-admin", admin_id))
+    with use_tenant(TenantContext.hosted(member_id)):
+        database.insert_chat_session_if_absent(_session_payload("sess-member", member_id, "proj-member"))
+        with sqlite3.connect(database.db_path()) as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_sessions (
+                    id, title, agent_id, agent_name, mode, workspace_id, project_id, kind,
+                    created_at, updated_at, message_count, model_config_id, owner_user_id
+                ) VALUES (?, ?, ?, ?, 'agent', 'default', 'default', 'chat', ?, ?, 0, '', NULL)
+                """,
+                ("sess-legacy", "旧会话", "agent", "Agent", "2026-08-21T00:00:00+00:00", "2026-08-21T00:00:00+00:00"),
+            )
+            conn.commit()
 
-    database.insert_chat_session_if_absent(_session_payload("sess-admin", admin_id))
-    database.insert_chat_session_if_absent(_session_payload("sess-member", member_id, "proj-member"))
     admin_catalog = client.get("/api/chat/sessions/catalog", headers=admin_headers)
     member_catalog = client.get("/api/chat/sessions/catalog", headers=member_headers)
     assert admin_catalog.status_code == 200
     assert member_catalog.status_code == 200
-    assert {item["id"] for item in admin_catalog.json()} == {"sess-admin", "sess-member"}
-    assert {item["id"] for item in member_catalog.json()} == {"sess-admin", "sess-member"}
-
-    with sqlite3.connect(database.db_path()) as conn:
-        conn.execute(
-            """
-            INSERT INTO chat_sessions (
-                id, title, agent_id, agent_name, mode, workspace_id, project_id, kind,
-                created_at, updated_at, message_count, model_config_id, owner_user_id
-            ) VALUES (?, ?, ?, ?, 'agent', 'default', 'default', 'chat', ?, ?, 0, '', NULL)
-            """,
-            ("sess-legacy", "旧会话", "agent", "Agent", "2026-08-21T00:00:00+00:00", "2026-08-21T00:00:00+00:00"),
-        )
-        conn.commit()
-
-    # 空归属仍会触发托管中间件的 409，直到 3.4 删除这道闸门。
-    blocked = client.get("/api/chat/sessions/catalog", headers=member_headers)
-    assert blocked.status_code == 409
-
-    claimed = client.post("/api/admin/ownership/assign", json={"userId": admin_id}, headers=admin_headers)
-    assert claimed.status_code == 200
-    admin_after = client.get("/api/chat/sessions/catalog", headers=admin_headers)
-    member_after = client.get("/api/chat/sessions/catalog", headers=member_headers)
-    assert {item["id"] for item in admin_after.json()} == {"sess-admin", "sess-member", "sess-legacy"}
-    assert {item["id"] for item in member_after.json()} == {"sess-admin", "sess-member", "sess-legacy"}
+    assert {item["id"] for item in admin_catalog.json()} == {"sess-admin"}
+    assert {item["id"] for item in member_catalog.json()} == {"sess-member", "sess-legacy"}

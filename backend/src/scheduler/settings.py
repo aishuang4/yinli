@@ -65,15 +65,23 @@ def get_scheduled_jobs_settings_public() -> dict[str, bool]:
     }
 
 
-def ensure_desktop_scheduled_jobs_defaults(*, desktop: bool | None = None) -> dict[str, Any] | None:
-    """桌面安装版首次启动写入打开，不覆盖用户已经保存过的开关。"""
+def ensure_scheduled_jobs_defaults(*, desktop: bool | None = None) -> dict[str, Any] | None:
+    """首次写入定时任务默认开关。桌面安装版和托管租户都会写，已有值不覆盖。"""
 
     if desktop is None:
         from src.config.runtime_paths import USING_CUSTOM_DATA_ROOT
 
         desktop = USING_CUSTOM_DATA_ROOT
-    if not desktop:
+    from src.tenancy.context import is_hosted_mode
+
+    if not desktop and not is_hosted_mode():
         return None
     if get_json_record(SYSTEM_SETTINGS_NAMESPACE, SCHEDULED_JOBS_SETTINGS_KEY) is not None:
         return None
     return set_scheduled_jobs_settings(enabled=True, capability_gate=True)
+
+
+def ensure_desktop_scheduled_jobs_defaults(*, desktop: bool | None = None) -> dict[str, Any] | None:
+    """旧名称。调度器改名完成前继续转调。"""
+
+    return ensure_scheduled_jobs_defaults(desktop=desktop)

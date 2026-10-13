@@ -1,5 +1,6 @@
 """Workspace / Project 归属与资源绑定 API。"""
 
+import uuid
 from pathlib import Path
 from typing import Any, Literal
 
@@ -120,40 +121,21 @@ class ProjectFileUploadResponse(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-def _hosted_owner() -> str | None:
-    from src.server.auth.ownership import current_owner_id
+def _hosted_project_root(project_id: str) -> str:
+    """托管 Project 目录由服务端分配在当前租户内，忽略客户端路径。"""
 
-    return current_owner_id()
+    from src.config.runtime_paths import projects_root, tenant_root
 
-
-def _allocate_hosted_project(project_id: str | None = None) -> tuple[str, str]:
-    """托管新建 Project 时忽略客户端传入的本机路径。"""
-
-    import uuid
-
-    from src.server.auth.ownership import allocate_project_dir
-
-    owner = _hosted_owner()
-    if not owner:
-        raise HTTPException(status_code=401, detail="需要登录")
-    allocated = project_id or f"proj_{uuid.uuid4().hex}"
-    return allocated, str(allocate_project_dir(owner, allocated))
-
-
-def _reject_hosted_escape(root_path: str) -> None:
-    from src.server.auth.ownership import path_is_inside_user
-
-    owner = _hosted_owner()
-    if not owner:
-        return
-    if not path_is_inside_user(owner, Path(root_path)):
-        raise HTTPException(status_code=422, detail="Project root 必须位于当前用户目录内")
+    root = (projects_root() / project_id).resolve()
+    if not root.is_relative_to(tenant_root().resolve()):
+        raise HTTPException(status_code=422, detail="Project 目录超出当前租户")
+    root.mkdir(parents=True, exist_ok=True)
+    return str(root)
 
 
 def _validated_project_paths(root_path: str, instructions_file: str = "") -> tuple[str, str]:
     """规范化 Project root，并限制 instructions_file 位于项目目录内。"""
 
-    _reject_hosted_escape(root_path)
     root = Path(root_path).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         raise HTTPException(status_code=422, detail=f"Project root 不是有效目录: {root}")
@@ -173,11 +155,8 @@ def _validated_project_paths(root_path: str, instructions_file: str = "") -> tup
 async def list_workspace_records(
     include_archived: bool = Query(default=False, alias="includeArchived"),
 ) -> list[WorkspaceRecord]:
-    """列出 Workspace。托管用户没有自己的工作区时先建一个。"""
+    """列出 Workspace。"""
 
-    from src.server.auth.ownership import ensure_hosted_home
-
-    ensure_hosted_home()
     return [WorkspaceRecord.model_validate(item) for item in list_workspaces(include_archived=include_archived)]
 
 
@@ -199,9 +178,14 @@ async def bootstrap_workspace(data: WorkspaceBootstrapRequest) -> WorkspaceBoots
     project_name = data.name.strip()
     if not workspace_name or not project_name:
         raise HTTPException(status_code=422, detail="Workspace 和 Project 名称不能为空")
-    if _hosted_owner():
-        project_id, hosted_root = _allocate_hosted_project()
-        root_path, instructions_file = _validated_project_paths(hosted_root, data.instructions_file)
+    from src.tenancy.context import is_hosted_mode
+
+    if is_hosted_mode():
+        project_id = f"proj_{uuid.uuid4().hex}"
+        root_path, instructions_file = _validated_project_paths(
+            _hosted_project_root(project_id),
+            data.instructions_file,
+        )
     else:
         project_id = None
         root_path, instructions_file = _validated_project_paths(data.root_path, data.instructions_file)
@@ -249,10 +233,15 @@ async def create_project_record(workspace_id: str, data: ProjectCreateRequest) -
     name = data.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="Project 名称不能为空")
+    from src.tenancy.context import is_hosted_mode
+
     project_id = None
-    if _hosted_owner():
-        project_id, hosted_root = _allocate_hosted_project()
-        root_path, instructions_file = _validated_project_paths(hosted_root, data.instructions_file)
+    if is_hosted_mode():
+        project_id = f"proj_{uuid.uuid4().hex}"
+        root_path, instructions_file = _validated_project_paths(
+            _hosted_project_root(project_id),
+            data.instructions_file,
+        )
     else:
         root_path, instructions_file = _validated_project_paths(data.root_path, data.instructions_file)
     payload = {
@@ -305,7 +294,11 @@ async def update_project_record(project_id: str, data: ProjectUpdateRequest) -> 
     current = get_project(project_id)
     if current is None:
         raise HTTPException(status_code=404, detail="Project not found")
+    from src.tenancy.context import is_hosted_mode
+
     changes = data.model_dump(exclude_unset=True, by_alias=True)
+    if is_hosted_mode() and "rootPath" in changes:
+        raise HTTPException(status_code=422, detail="Web 端不能修改 Project 目录")
     if "name" in changes and not str(changes["name"]).strip():
         raise HTTPException(status_code=422, detail="Project 名称不能为空")
     if "rootPath" in changes or "instructionsFile" in changes:

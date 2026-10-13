@@ -71,11 +71,9 @@ def verify_email(email: str, code: str) -> dict[str, Any]:
     ):
         raise AuthError(400, "验证码不正确或已过期")
     verified = _mark_active(user)
-    from src.server.auth.key2api import ensure_provider_key
-    from src.server.auth.ownership import ensure_hosted_home
+    from src.tenancy.lifecycle import ensure_tenant
 
-    ensure_hosted_home(str(verified["id"]))
-    ensure_provider_key(verified)
+    ensure_tenant(verified)
     return public_user(verified)
 
 
@@ -93,11 +91,9 @@ def login_user(email: str, password: str, *, client_kind: str) -> dict[str, Any]
         raise AuthError(401, "邮箱或密码不正确")
     token = new_token()
     session = auth_records.create_session(user_id=user["id"], raw_token=token, client_kind=kind)
-    from src.server.auth.key2api import ensure_provider_key
-    from src.server.auth.ownership import ensure_hosted_home
+    from src.tenancy.lifecycle import ensure_tenant
 
-    ensure_hosted_home(str(user["id"]))
-    ensure_provider_key(user)
+    ensure_tenant(user)
     return {"user": public_user(user), "token": token, "sessionId": session["id"], "clientKind": kind}
 
 

@@ -60,9 +60,17 @@ def _token(client: TestClient, monkeypatch) -> str:
 
 
 def test_provided_catalog_hides_keys_and_requires_session(hosted_models, monkeypatch):
+    from src.config.model_catalog import _write, read_catalog
+    from src.storage import auth_records
+    from src.tenancy.context import TenantContext, use_tenant
+
     client = hosted_models
+    catalog, _etag = read_catalog()
     assert client.get("/api/models/provided").status_code == 401
     token = _token(client, monkeypatch)
+    user = auth_records.get_user_by_email("user@example.com")
+    with use_tenant(TenantContext.hosted(user["id"], role=user["role"])):
+        _write(catalog)
     response = client.get("/api/models/provided", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     body = response.json()
