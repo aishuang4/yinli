@@ -40,9 +40,9 @@
 - [x] 3.1 新建 `storage/control_db.py` 和 `storage/control_records.py`（§8.1、§8.2）
 - [x] 3.2 `storage/auth_records.py`（17 处）和 `platform_models.py` 的审计改用控制面（§8.3）；lifespan 中 hosted 才初始化控制面
 - [x] 3.3 desktop 下账号接口和管理员接口返回 404（§8.4）
-- [ ] 3.4 重写 `HostedSessionMiddleware`（§3.3）：会话 → 租户状态 → `set_tenant`；删除 409 闸门
-- [ ] 3.5 新建 `tenancy/lifecycle.py::ensure_tenant`（§9.1），接入验证、登录、中间件兜底三个触发点。注意第 7 步要重新绑定资源白名单
-- [ ] 3.6 按 §9.2、§9.3 重写 `server/routes/workspaces.py` 中 hosted 的 Project 根目录逻辑
+- [x] 3.4 重写 `HostedSessionMiddleware`（§3.3）：会话 → 租户状态 → `set_tenant`；删除 409 闸门
+- [x] 3.5 新建 `tenancy/lifecycle.py::ensure_tenant`（§9.1），接入验证、登录、中间件兜底三个触发点。注意第 7 步要重新绑定资源白名单
+- [x] 3.6 按 §9.2、§9.3 重写 `server/routes/workspaces.py` 中 hosted 的 Project 根目录逻辑
 - [ ] 3.7 实现 `disable_tenant` / `enable_tenant` / `delete_tenant`（§9.4），`server/auth/service.py` 改为调用它们
 - [ ] 3.8 按 §8.5、§16 的清单删除行级归属的全部代码和测试。完成后执行 §16 的 grep，结果必须为空
 - [ ] 3.9 补全 `hosted_support.py`；测试 `test_control_db.py`、`test_tenant_lifecycle.py`（沙箱部分先跳过，任务组 6 补上）
