@@ -1,14 +1,20 @@
-"""托管租户的创建、目录和默认数据。可以重复调用。"""
+"""托管租户的创建、停用和删除。创建可以重复调用。"""
 
 from __future__ import annotations
 
 import logging
+import shutil
+from pathlib import Path
 from typing import Any
 
 from src.catalog.skill_seed import seed_system_skills
-from src.config.runtime_paths import ensure_tenant_directories
-from src.storage import control_records, database
-from src.tenancy.context import TenantContext, use_tenant
+from src.config.runtime_paths import (
+    ensure_tenant_directories,
+    forget_tenant_directories,
+    tenants_root,
+)
+from src.storage import auth_records, control_records, database
+from src.tenancy.context import TENANT_ID_PATTERN, TenantContext, use_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -60,3 +66,121 @@ def _sync_provider_key(user: dict[str, Any]) -> None:
         ensure_provider_key(user)
     except Exception:
         logger.exception("同步平台 Key 失败 tenant=%s", user.get("id"))
+
+
+def disable_tenant(user_id: str) -> None:
+    """停用租户：改状态、吊销会话、同步 key2api，并取消进行中的任务。"""
+
+    user = auth_records.get_user(user_id)
+    _mark_tenant(user_id, "disabled")
+    auth_records.revoke_user_sessions(user_id)
+    if user is not None:
+        _sync_provider_status(user, "disabled")
+    cancel_tenant_activity(user_id)
+
+
+def enable_tenant(user_id: str) -> None:
+    """重新启用租户，并同步 key2api 为 active。"""
+
+    user = auth_records.get_user(user_id)
+    _mark_tenant(user_id, "active")
+    if user is not None:
+        _sync_provider_status(user, "active")
+
+
+def delete_tenant(user_id: str) -> None:
+    """删除租户目录和账号。不删除 key2api 里的账号。"""
+
+    user = auth_records.get_user(user_id)
+    _mark_tenant(user_id, "deleting")
+    auth_records.revoke_user_sessions(user_id)
+    if user is not None:
+        try:
+            _sync_provider_status(user, "disabled")
+        except Exception:
+            logger.exception("删除租户时同步平台状态失败 tenant=%s", user_id)
+    cancel_tenant_activity(user_id)
+    _remove_tenant_sandboxes(user_id)
+    from src.tenancy.registry import evict_tenant
+
+    evict_tenant(user_id)
+    ctx = TenantContext.hosted(user_id)
+    with use_tenant(ctx):
+        database.forget_db(database.db_path())
+    forget_tenant_directories(user_id)
+    _remove_tenant_directory(user_id)
+    _mark_tenant(user_id, "deleted")
+    if user is not None:
+        auth_records.delete_account(user_id, str(user["email"]))
+
+
+def cancel_tenant_activity(user_id: str) -> None:
+    """取消这个租户还在跑的对话、定时任务和群聊 worker。"""
+
+    from src.runtime.scheduled_chat import cancel_chat_runs_for_tenant
+
+    cancel_chat_runs_for_tenant(user_id)
+    from src.scheduler.ticker import get_job_scheduler
+
+    get_job_scheduler().cancel_tenant_firings(user_id)
+    ctx = TenantContext.hosted(user_id)
+    with use_tenant(ctx):
+        _cancel_group_workers()
+
+
+def _mark_tenant(user_id: str, status: str) -> None:
+    if control_records.get_tenant(user_id) is None:
+        control_records.insert_tenant(user_id)
+    control_records.set_tenant_status(user_id, status)
+
+
+def _sync_provider_status(user: dict[str, Any], status: str) -> None:
+    from src.server.auth.key2api import Key2ApiError, sync_provider_status
+
+    try:
+        sync_provider_status(user, status)
+    except Key2ApiError as exc:
+        from src.server.auth.service import AuthError
+
+        raise AuthError(exc.status, str(exc)) from None
+
+
+def _cancel_group_workers() -> None:
+    path = database.db_path()
+    if not path.is_file():
+        return
+    database.ensure_db()
+    with database._lock, database._connect() as conn:
+        rows = conn.execute("SELECT id FROM group_studios").fetchall()
+    from src.group_studio.sessions import cancel_group
+
+    for row in rows:
+        cancel_group(str(row["id"]))
+
+
+def _remove_tenant_sandboxes(tenant_id: str) -> None:
+    """按 yinli.tenant 标签删除沙箱容器。沙箱配置落地前没有 daemon，直接跳过。"""
+
+    from src.config.settings import settings
+
+    host = str(getattr(settings, "sandbox_docker_host", "") or "").strip()
+    if not host:
+        return
+    logger.info("删除租户沙箱 tenant=%s host=%s", tenant_id, host)
+
+
+def _remove_tenant_directory(user_id: str) -> None:
+    if not TENANT_ID_PATTERN.match(user_id):
+        raise ValueError(f"非法租户 ID: {user_id}")
+    root = (tenants_root() / user_id).resolve()
+    parent = tenants_root().resolve()
+    if root.parent != parent or root.name != user_id:
+        raise ValueError(f"拒绝删除租户目录: {root}")
+    if root.is_dir():
+        shutil.rmtree(root)
+    elif root.exists():
+        raise ValueError(f"租户路径不是目录: {root}")
+
+
+def tenant_directory(user_id: str) -> Path:
+    return tenants_root() / user_id

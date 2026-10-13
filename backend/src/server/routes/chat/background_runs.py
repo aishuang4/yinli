@@ -372,6 +372,28 @@ async def steer_chat_background_run(
     return run
 
 
+def cancel_chat_runs_for_tenant(tenant_id: str) -> None:
+    """停用租户时取消该租户还在跑的内存 Run，并写回该租户的库。"""
+
+    from src.storage import database
+    from src.tenancy.context import TenantContext, use_tenant
+
+    now = datetime.now(timezone.utc).isoformat()
+    doomed = [
+        run for run in list(_runs.values())
+        if run.tenant_id == tenant_id and run.status not in TERMINAL_RUN_STATUSES
+    ]
+    with use_tenant(TenantContext.hosted(tenant_id)):
+        database.ensure_db()
+        for run in doomed:
+            run.status = "cancelled"
+            run.completed_at = now
+            task = run.async_task
+            if task is not None and not task.done():
+                task.cancel()
+            database.update_chat_run_status(run.id, "cancelled", now)
+
+
 async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
     async with _runs_lock:
         run = _owned_run(run_id)

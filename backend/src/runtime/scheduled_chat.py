@@ -6,6 +6,7 @@
 
 from src.server.routes.chat.background_runs import (
     cancel_chat_background_run,
+    cancel_chat_runs_for_tenant,
     get_chat_background_run,
     reconcile_interrupted_chat_runs,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "TERMINAL_RUN_STATUSES",
     "assert_job_workspace_in_scope",
     "cancel_chat_background_run",
+    "cancel_chat_runs_for_tenant",
     "get_chat_background_run",
     "launch_scheduled_chat_run",
     "reconcile_interrupted_chat_runs",

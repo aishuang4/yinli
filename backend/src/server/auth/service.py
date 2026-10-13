@@ -152,13 +152,14 @@ def disable_user(actor_id: str, target_id: str) -> dict[str, Any]:
     target = auth_records.get_user(target_id)
     if target is None:
         raise AuthError(404, "用户不存在")
-    _sync_provider_status(target, "disabled")
+    from src.tenancy.lifecycle import disable_tenant
+
+    disable_tenant(target_id)
     updated = auth_records.update_user(
         target_id,
         status="disabled",
         disabled_at=auth_records.database._utc_now(),
     )
-    auth_records.revoke_user_sessions(target_id)
     return public_user(updated or target)
 
 
@@ -177,14 +178,9 @@ def delete_user(actor_id: str, target_id: str) -> None:
         ]
         if not others:
             raise AuthError(409, "不能删除最后一名管理员")
-    try:
-        _sync_provider_status(target, "disabled")
-    except AuthError:
-        pass
-    from src.server.auth.ownership import purge_hosted_user
+    from src.tenancy.lifecycle import delete_tenant
 
-    purge_hosted_user(target_id)
-    auth_records.delete_account(target_id, str(target["email"]))
+    delete_tenant(target_id)
 
 
 def enable_user(target_id: str) -> dict[str, Any]:
@@ -193,7 +189,9 @@ def enable_user(target_id: str) -> dict[str, Any]:
         raise AuthError(404, "用户不存在")
     status = "active" if target.get("verifiedAt") else "pending"
     if status == "active":
-        _sync_provider_status(target, "active")
+        from src.tenancy.lifecycle import enable_tenant
+
+        enable_tenant(target_id)
     updated = auth_records.update_user(target_id, status=status, disabled_at=None)
     return public_user(updated or target)
 

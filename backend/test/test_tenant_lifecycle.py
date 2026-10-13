@@ -77,3 +77,41 @@ def test_middleware_binds_active_tenant_and_rejects_disabled(hosted_env):
     blocked = client.get("/api/who", headers=headers)
     assert blocked.status_code == 403
     assert blocked.json()["detail"] == "账号已停用"
+
+
+def test_disable_revokes_sessions_and_delete_removes_directory(hosted_env, monkeypatch):
+    import asyncio
+
+    from src.server.routes.chat.background_runs import ChatBackgroundRun, _runs
+    from src.tenancy.lifecycle import delete_tenant, disable_tenant, tenant_directory
+
+    monkeypatch.setattr("src.config.settings.settings.key2api_sync_token", "")
+    auth_records.create_user(email="gone@example.com", password_hash="hash")
+    user = auth_records.get_user_by_email("gone@example.com")
+    auth_records.update_user(user["id"], status="active", verified_at="2026-01-01T00:00:00+00:00")
+    user = auth_records.get_user(user["id"])
+    ensure_tenant(user)
+    auth_records.create_session(user_id=user["id"], raw_token="life-token", client_kind="web")
+    root = tenant_directory(user["id"])
+    assert root.is_dir()
+
+    async def scenario() -> None:
+        task = asyncio.create_task(asyncio.sleep(30))
+        run = ChatBackgroundRun(id="run-life", session_id="s", tenant_id=user["id"])
+        run.async_task = task
+        _runs[run.id] = run
+        try:
+            disable_tenant(user["id"])
+            assert task.cancelled() or task.cancelling()
+            assert control_records.get_tenant(user["id"])["status"] == "disabled"
+            assert auth_records.get_session_by_token("life-token") is None
+        finally:
+            _runs.pop(run.id, None)
+            if not task.done():
+                task.cancel()
+
+    asyncio.run(scenario())
+    delete_tenant(user["id"])
+    assert auth_records.get_user(user["id"]) is None
+    assert not root.exists()
+    assert control_records.get_tenant(user["id"])["status"] == "deleted"

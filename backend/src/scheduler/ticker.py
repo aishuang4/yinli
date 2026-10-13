@@ -41,6 +41,7 @@ class JobScheduler:
         self._sem = asyncio.Semaphore(max(1, int(max_inflight)))
         self._inflight: set[asyncio.Task[Any]] = set()
         self._firing_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._firing_tenants: dict[str, str] = {}
         self._ticker_task: asyncio.Task[Any] | None = None
         self._stopped = False
 
@@ -211,14 +212,30 @@ class JobScheduler:
         stats["claimed"] += 1
 
     def _track(self, task: asyncio.Task[Any], firing_id: str) -> None:
+        from src.tenancy.context import current_tenant_or_none
+
         self._inflight.add(task)
         self._firing_tasks[firing_id] = task
+        ctx = current_tenant_or_none()
+        if ctx is not None:
+            self._firing_tenants[firing_id] = ctx.tenant_id
 
         def _done(done: asyncio.Task[Any]) -> None:
             self._inflight.discard(done)
             self._firing_tasks.pop(firing_id, None)
+            self._firing_tenants.pop(firing_id, None)
 
         task.add_done_callback(_done)
+
+    def cancel_tenant_firings(self, tenant_id: str) -> None:
+        """取消属于这个租户、还在跑的 firing 任务。"""
+
+        for firing_id, owner in list(self._firing_tenants.items()):
+            if owner != tenant_id:
+                continue
+            task = self._firing_tasks.get(firing_id)
+            if task is not None and not task.done():
+                task.cancel()
 
     async def _loop(self) -> None:
         while not self._stopped:
