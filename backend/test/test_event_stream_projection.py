@@ -37,11 +37,8 @@ from src.storage import database
 def projection_db(tmp_path, monkeypatch):
     """每个测试使用独立 SQLite，避免污染本地开发数据。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "event-stream.db")
-    monkeypatch.setattr(database, "_initialized", False)
     database.ensure_db()
     yield
-    monkeypatch.setattr(database, "_initialized", False)
 
 
 def draft(

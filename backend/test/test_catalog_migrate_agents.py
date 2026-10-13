@@ -8,8 +8,6 @@ from src.storage import database
 
 def test_migrate_exports_then_clears_sqlite(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     from src.storage.database import get_json_record, upsert_json_record
 
     upsert_json_record("catalog", "agent_migration_v1", {"status": "pending"})
@@ -40,8 +38,6 @@ def test_migrate_exports_then_clears_sqlite(tmp_path, monkeypatch) -> None:
 
 def test_upsert_after_migrate_does_not_write_sqlite(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     invalidate_catalog()
     ensure_agent_file_catalog()
     assert is_agent_catalog_migrated()

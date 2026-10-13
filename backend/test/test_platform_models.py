@@ -22,8 +22,6 @@ from src.storage import database
 
 @pytest.fixture()
 def hosted_models(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "platform.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "hosted")
     monkeypatch.setattr("src.config.settings.settings.auth_email_mode", "log")
     # 开发 .env 里可能配置了 key2api 令牌；这里固定走部署级目录分支，与外部环境无关。
@@ -36,7 +34,7 @@ def hosted_models(tmp_path, monkeypatch):
     database.ensure_db()
     client = TestClient(app, client=("127.0.0.1", 50000), base_url="https://testserver")
     yield client
-    database._initialized = False
+    database.forget_db(database.db_path())
     clear_desktop_account()
 
 
@@ -90,7 +88,7 @@ def test_complete_writes_audit_not_chat(hosted_models, monkeypatch):
     )
     assert response.status_code == 200
     assert "平台回复" in response.text
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         calls = conn.execute("SELECT model_config_id FROM platform_model_calls").fetchall()
         messages = conn.execute("SELECT COUNT(*) FROM chat_messages").fetchone()[0]
     assert calls == [("platform:deepseek-v4-flash",)]
@@ -103,8 +101,6 @@ def test_desktop_platform_turn_stays_local(tmp_path, monkeypatch):
     from fastapi import HTTPException
     from src.server.routes.chat.handlers.send import start_chat_run
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "desktop.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "desktop")
     monkeypatch.setattr(
         "src.server.auth.desktop_account.ACCOUNT_FILE",
@@ -146,4 +142,4 @@ def test_desktop_platform_turn_stays_local(tmp_path, monkeypatch):
         assert seen == ["deepseek-v4-flash"]
 
     asyncio.run(run())
-    database._initialized = False
+    database.forget_db(database.db_path())

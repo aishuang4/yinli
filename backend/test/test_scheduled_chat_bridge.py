@@ -46,15 +46,13 @@ from src.storage.database import (
 def isolated_db(tmp_path, monkeypatch):
     """每个用例独立 SQLite，并收口后台 Chat Run。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path / "user-data")
     yield
     for run in list(background_runs_module._runs.values()):
         if run.async_task is not None and not run.async_task.done():
             run.async_task.cancel()
     background_runs_module._runs.clear()
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def _frozen_scope() -> RuntimeToolScope:

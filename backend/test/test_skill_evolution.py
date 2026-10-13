@@ -17,8 +17,6 @@ from src.storage import database
 
 
 def test_skill_evolution_record_persists_draft_candidate(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     gate = evaluate_skill_evolution_router_gate(
         user_message="帮我实现一个可复用的记忆提炼流程。",
         assistant_text="已完成实现，并通过测试验证。",
@@ -81,8 +79,6 @@ def test_skill_evolution_record_persists_draft_candidate(tmp_path, monkeypatch):
 
 
 def test_memory_route_lists_skill_evolution_records(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     _draft_record(tmp_path, monkeypatch, source_run_id="run-list-1")
 
     response = asyncio.run(skill_evolution_records(status="draft", agent_id="agent-1", limit=10))
@@ -93,8 +89,6 @@ def test_memory_route_lists_skill_evolution_records(tmp_path, monkeypatch):
 
 
 def test_memory_route_updates_skill_evolution_record_status(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     record = _draft_record(tmp_path, monkeypatch, source_run_id="run-action-1")
 
     skipped = asyncio.run(
@@ -118,12 +112,11 @@ def test_memory_route_updates_skill_evolution_record_status(tmp_path, monkeypatc
 
 
 def test_skill_evolution_record_registers_standard_skill(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     import src.server.routes.skills as skills_routes
 
     original_skills = dict(skills_routes._skills)
-    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: tmp_path / "skill_packages")
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: tmp_path / "skill_packages")
     try:
         record = _draft_record(tmp_path, monkeypatch, source_run_id="run-register-1")
 
@@ -145,12 +138,11 @@ def test_skill_evolution_record_registers_standard_skill(tmp_path, monkeypatch):
 
 
 def test_skill_evolution_record_does_not_register_duplicate_skill(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     import src.server.routes.skills as skills_routes
 
     original_skills = dict(skills_routes._skills)
-    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: tmp_path / "skill_packages")
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: tmp_path / "skill_packages")
     try:
         first = _draft_record(tmp_path, monkeypatch, source_run_id="run-register-2")
         updated, reason = register_skill_evolution_record(first)
@@ -172,12 +164,11 @@ def test_skill_evolution_record_does_not_register_duplicate_skill(tmp_path, monk
 
 
 def test_skill_evolution_record_merges_semantically_similar_skill(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     import src.server.routes.skills as skills_routes
 
     original_skills = dict(skills_routes._skills)
-    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: tmp_path / "skill_packages")
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: tmp_path / "skill_packages")
     try:
         first = _draft_record(tmp_path, monkeypatch, source_run_id="run-register-4")
         updated, reason = register_skill_evolution_record(first)

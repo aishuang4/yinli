@@ -22,8 +22,6 @@ from src.storage import database
 
 @pytest.fixture()
 def hosted_app(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "owned.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "hosted")
     monkeypatch.setattr("src.config.settings.settings.auth_email_mode", "log")
     monkeypatch.setattr("src.config.settings.settings.admin_emails", "admin@example.com")
@@ -39,7 +37,7 @@ def hosted_app(tmp_path, monkeypatch):
     database.ensure_db()
     client = TestClient(app, client=("127.0.0.1", 50000), base_url="https://testserver")
     yield client
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def _login(client: TestClient, monkeypatch, email: str) -> tuple[str, str]:
@@ -201,7 +199,7 @@ def test_two_users_cannot_read_each_other(hosted_app, monkeypatch, tmp_path):
     saved = client.put("/api/settings/models", headers=admin_headers, json=catalog.json())
     assert saved.status_code == 200
 
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         owners = {
             row[0]
             for row in conn.execute(
@@ -234,8 +232,6 @@ def _session_payload(session_id: str, owner_user_id: str, project_id: str = "def
 def test_desktop_catalog_reads_sessions_without_owner(tmp_path, monkeypatch):
     """客户端不登录，旧库里没有归属的会话仍要出现在历史目录。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "desktop.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "desktop")
     app = FastAPI()
     app.include_router(chat.router, prefix="/api/chat")
@@ -244,7 +240,7 @@ def test_desktop_catalog_reads_sessions_without_owner(tmp_path, monkeypatch):
         "sessions": [_session_payload("sess-desktop", "")],
         "messages": {},
     })
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         conn.execute("UPDATE chat_sessions SET owner_user_id = NULL")
         conn.commit()
 
@@ -252,7 +248,7 @@ def test_desktop_catalog_reads_sessions_without_owner(tmp_path, monkeypatch):
     response = client.get("/api/chat/sessions/catalog")
     assert response.status_code == 200
     assert [item["id"] for item in response.json()] == ["sess-desktop"]
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def test_hosted_catalog_reads_only_the_signed_in_user(hosted_app, monkeypatch):
@@ -282,7 +278,7 @@ def test_hosted_catalog_reads_only_the_signed_in_user(hosted_app, monkeypatch):
     assert [item["id"] for item in admin_catalog.json()] == ["sess-admin"]
     assert [item["id"] for item in member_catalog.json()] == ["sess-member"]
 
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         conn.execute(
             """
             INSERT INTO chat_sessions (

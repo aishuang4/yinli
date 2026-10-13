@@ -13,10 +13,7 @@ from src.storage import database
 
 @pytest.fixture
 def isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "session-context.db")
-    monkeypatch.setattr(database, "_initialized", False)
     yield
-    monkeypatch.setattr(database, "_initialized", False)
 
 
 def _agent() -> SimpleNamespace:

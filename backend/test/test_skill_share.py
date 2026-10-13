@@ -14,10 +14,7 @@ from src.storage import database
 
 @pytest.fixture
 def isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "skill-share.db")
-    monkeypatch.setattr(database, "_initialized", False)
     yield
-    monkeypatch.setattr(database, "_initialized", False)
 
 
 def _skill_payload(**overrides) -> dict:
@@ -57,8 +54,6 @@ def test_replace_skills_round_trips_share_false(isolated_db) -> None:
 
 def test_legacy_skills_table_without_share_column_defaults_true(tmp_path, monkeypatch) -> None:
     db_path = tmp_path / "legacy-skills.db"
-    monkeypatch.setattr(database, "DB_PATH", db_path)
-    monkeypatch.setattr(database, "_initialized", False)
     conn = sqlite3.connect(db_path)
     conn.execute(
         """
@@ -94,10 +89,14 @@ def test_legacy_skills_table_without_share_column_defaults_true(tmp_path, monkey
     conn.commit()
     conn.close()
 
+    monkeypatch.setattr(
+        "src.config.settings.settings.database_url",
+        "sqlite+aiosqlite:///" + str(db_path),
+    )
+    database.forget_db(db_path)
     rows = database.list_skills()
     assert rows[0]["id"] == "legacy-skill"
     assert rows[0]["availableToAllAgents"] is True
-    monkeypatch.setattr(database, "_initialized", False)
 
 
 def test_save_user_skills_persists_share_and_clears_content(isolated_db) -> None:

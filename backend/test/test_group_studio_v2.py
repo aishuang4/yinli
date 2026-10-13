@@ -44,14 +44,12 @@ from src.storage.database import (
 
 @pytest.fixture()
 def isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr(
         "src.config.product_features.is_surface_enabled",
         lambda key: True,
     )
     yield
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 @pytest.fixture()
@@ -91,7 +89,7 @@ def test_from_chat_opens_without_host_or_first_message(client):
 
 def test_legacy_discussing_status_normalizes_to_open(client):
     body = _create(client)
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         conn.execute("UPDATE group_studios SET status = 'discussing' WHERE id = ?", (body["id"],))
         conn.commit()
     snapshot = client.get(f"/api/group-studio/{body['id']}")

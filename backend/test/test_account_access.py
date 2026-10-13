@@ -18,11 +18,9 @@ from src.storage import auth_records, database
 
 @pytest.fixture()
 def auth_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "auth.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.settings.settings.auth_email_mode", "log")
     yield
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def test_hosted_startup_creates_default_admin(auth_db, monkeypatch):
@@ -89,7 +87,7 @@ def test_auth_tables_store_only_hashes(auth_db):
     """空库启动后三张账号表存在，令牌和验证码不以明文入库。"""
 
     database.ensure_db()
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         names = {
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -100,7 +98,7 @@ def test_auth_tables_store_only_hashes(auth_db):
     code = "654321"
     auth_records.create_session(user_id="usr_hash", raw_token=token, client_kind="web")
     auth_records.save_email_code(email="a@example.com", purpose="register", raw_code=code)
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         session_hash = conn.execute("SELECT token_hash FROM auth_sessions").fetchone()[0]
         code_hash = conn.execute("SELECT code_hash FROM auth_email_codes").fetchone()[0]
         stored = []
@@ -120,7 +118,7 @@ def test_password_hash_round_trip_hides_plaintext(auth_db):
     assert verify_password(password, stored) is True
     assert verify_password("wrong-horse", stored) is False
     auth_records.create_user(email="pw@example.com", password_hash=stored)
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         saved = conn.execute("SELECT password_hash FROM auth_users").fetchone()[0]
     assert saved != password
     assert password not in saved
@@ -159,7 +157,7 @@ def test_register_verify_login_and_duplicate_email(auth_db, monkeypatch):
     sent = _register(client, monkeypatch, "User@Example.com")
     again = _register(client, monkeypatch, "user@example.com")
     assert again == []
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         assert conn.execute("SELECT COUNT(*) FROM auth_users").fetchone()[0] == 1
 
     pending = client.post(
@@ -240,7 +238,7 @@ def test_sse_chunk_refreshes_last_seen(auth_db):
     from src.server.auth.presence import iter_with_presence
 
     auth_records.create_session(user_id="usr_sse", raw_token="sse-token", client_kind="web")
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         conn.execute("UPDATE auth_sessions SET last_seen_at = '2000-01-01T00:00:00+00:00'")
         conn.commit()
 
@@ -252,7 +250,7 @@ def test_sse_chunk_refreshes_last_seen(auth_db):
             pass
 
     asyncio.run(consume())
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         seen = conn.execute("SELECT last_seen_at FROM auth_sessions").fetchone()[0]
     assert seen != "2000-01-01T00:00:00+00:00"
 
@@ -328,7 +326,7 @@ def test_presence_aggregates_web_and_desktop_then_expires(auth_db, monkeypatch):
     assert row["clients"] == ["desktop", "web"]
     assert listing.json()["summary"]["online"] == 1
 
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         conn.execute("UPDATE auth_sessions SET last_seen_at = '2000-01-01T00:00:00+00:00'")
         conn.commit()
     from src.server.auth.service import admin_directory

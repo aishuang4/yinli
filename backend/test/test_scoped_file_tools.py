@@ -15,7 +15,7 @@ from src.tools.scoped_write import ScopedWrite
 def test_scoped_write_accepts_project_relative_paths(tmp_path: Path, monkeypatch):
     """Write 支持项目相对路径并写入项目根内文件。"""
 
-    monkeypatch.setattr("src.tools.scoped_paths.WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr("src.tools.scoped_paths.default_project_root", lambda: tmp_path)
 
     chunk = asyncio.run(ScopedWrite()(file_path="docs/out.txt", content="hello\n"))
 
@@ -47,7 +47,7 @@ def test_scoped_edit_accepts_project_relative_paths(tmp_path: Path, monkeypatch)
     docs.mkdir()
     target = docs / "out.txt"
     target.write_text("hello\n", encoding="utf-8")
-    monkeypatch.setattr("src.tools.scoped_paths.WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr("src.tools.scoped_paths.default_project_root", lambda: tmp_path)
 
     chunk = asyncio.run(ScopedEdit()(
         file_path="docs/out.txt",
@@ -87,7 +87,7 @@ def test_scoped_grep_accepts_project_relative_paths(tmp_path: Path, monkeypatch)
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "out.txt").write_text("needle\n", encoding="utf-8")
-    monkeypatch.setattr("src.tools.scoped_paths.WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setattr("src.tools.scoped_paths.default_project_root", lambda: tmp_path)
 
     chunk = asyncio.run(ScopedGrep()(pattern="needle", path="docs"))
 

@@ -51,11 +51,9 @@ from src.storage.database_schema import BASE_SCHEMA_SQL
 def isolated_db(tmp_path, monkeypatch):
     """每个用例使用独立 SQLite，避免污染开发库。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path / "user-data")
     yield
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def _service() -> ScheduledJobService:

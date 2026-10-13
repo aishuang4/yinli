@@ -17,10 +17,8 @@ BACKEND_SRC = Path(__file__).resolve().parents[1] / "src"
 
 @pytest.fixture()
 def isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     yield
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def _python_files(root: Path) -> list[Path]:
@@ -77,7 +75,7 @@ def test_records_do_not_write_chat_tables():
 
 def test_no_persistent_teams_table(isolated_db):
     ensure_db()
-    with sqlite3.connect(database.DB_PATH) as conn:
+    with sqlite3.connect(database.db_path()) as conn:
         names = {
             str(row[0])
             for row in conn.execute(

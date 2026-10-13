@@ -25,8 +25,8 @@
 
 - [x] 2.1 改写 `storage/database.py` 的连接与初始化（§5.1）：`db_path()`、`_lock_for`、线程安全的 `_TenantLockProxy`、`_initialized_paths`、`forget_db` / `forget_all`。**这一步先不要开启 `foreign_keys`**
 - [x] 2.2 删除 `DB_PATH`、`PROJECT_ROOT`、`_initialized`；`DEFAULT_GUARDRAILS` 改为 `default_guardrails()`，并修改全部引用（§5.2）
-- [x] 2.3 从 `ensure_db()` 删除 `AUTH_SCHEMA_SQL` 和 `owner_user_id` 补列循环；默认 Project 根目录改用 `default_project_root()`（§5.2）
-- [ ] 2.4 修改测试：删除约 87 处 `DB_PATH` / `_initialized` 的 monkeypatch，以及 25 个文件里对路径常量的 patch（§5.3）。`uv run pytest` 全绿后再继续
+- [ ] 2.3 从 `ensure_db()` 删除 `AUTH_SCHEMA_SQL` 和 `owner_user_id` 补列循环；默认 Project 根目录改用 `default_project_root()`（§5.2）。补列与账号表暂留，等 3.2 / 3.8 把写入迁走后再删，否则新库无法满足现有写入
+- [x] 2.4 修改测试：删除约 87 处 `DB_PATH` / `_initialized` 的 monkeypatch，以及 25 个文件里对路径常量的 patch（§5.3）。`uv run pytest` 全绿后再继续
 - [ ] 2.5 ChatStore 增量写：先补 schema（§7.1），然后实现 `ChatSessionRecordStore` 的新方法（§7.2）
 - [ ] 2.6 改写 `server/routes/chat/store.py`（§7.3）及其他调用方（§7.4）；实现 `import_legacy_chat_store_once`（§7.5）；删除 `load_store` / `save_store` / `load_chat_store` / `save_chat_store`
 - [ ] 2.7 按 §5.4 的顺序开启 `foreign_keys`：先 grep 不带 WHERE 的整表 DELETE，逐一确认；开启后修正所有写入顺序问题；local 租户启动时执行 `foreign_key_check` 并记录日志

@@ -232,11 +232,11 @@ def test_read_catalog_accepts_public_catalog_fields():
 def test_file_errors_never_restore_old_credentials(monkeypatch):
     configure()
     store.read_catalog()
-    store.MODELS_PATH.write_text('{"apiKey":"secret-in-bad-json"', encoding="utf-8")
+    store.models_path().write_text('{"apiKey":"secret-in-bad-json"', encoding="utf-8")
     with pytest.raises(store.CatalogError) as error:
         resolve_model_binding()
     assert "secret-in-bad-json" not in str(error.value)
-    store.MODELS_PATH.unlink()
+    store.models_path().unlink()
     with pytest.raises(store.CatalogError, match="不存在"):
         store.read_catalog()
 
@@ -300,7 +300,7 @@ def test_migration_preserves_instances_and_does_not_repeat(monkeypatch):
             ident, ""
         ),
     )
-    store.MODELS_PATH.unlink()
+    store.models_path().unlink()
     catalog, _ = store.read_catalog()
     assert catalog.default_model_id == "openai:MyCaseSensitiveModel"
     assert resolve_model_binding().primary.base_url == "http://localhost:1234/v1"
@@ -318,7 +318,7 @@ def test_migration_preserves_instances_and_does_not_repeat(monkeypatch):
 
 def test_atomic_write_failure_preserves_previous_file(monkeypatch):
     configure()
-    before = store.MODELS_PATH.read_bytes()
+    before = store.models_path().read_bytes()
     public = store.public_catalog()
     etag = public.pop("etag")
     monkeypatch.setattr(
@@ -328,14 +328,14 @@ def test_atomic_write_failure_preserves_previous_file(monkeypatch):
     )
     with pytest.raises(store.CatalogError, match="保存失败"):
         store.save_catalog(public, etag)
-    assert store.MODELS_PATH.read_bytes() == before
-    assert not list(store.MODELS_PATH.parent.glob(".models-*.tmp"))
+    assert store.models_path().read_bytes() == before
+    assert not list(store.models_path().parent.glob(".models-*.tmp"))
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode 位只适用于 macOS/Linux")
 def test_file_is_private():
     configure()
-    assert store.MODELS_PATH.stat().st_mode & 0o777 == 0o600
+    assert store.models_path().stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows CI 检查受限 ACL")
@@ -344,7 +344,7 @@ def test_windows_file_has_protected_owner_acl():
 
     configure()
     subprocess.run(
-        ["icacls", str(store.MODELS_PATH), "/grant", "*S-1-1-0:(R)"],
+        ["icacls", str(store.models_path()), "/grant", "*S-1-1-0:(R)"],
         capture_output=True,
         check=True,
     )
@@ -364,7 +364,7 @@ def test_windows_file_has_protected_owner_acl():
                 "@{sid=$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value; inherited=$_.IsInherited} }); owner=$sid} | ConvertTo-Json -Depth 4"
             ),
         ],
-        env={**os.environ, "YINLI_TEST_FILE": str(store.MODELS_PATH)},
+        env={**os.environ, "YINLI_TEST_FILE": str(store.models_path())},
         capture_output=True,
         text=True,
         check=True,
@@ -453,7 +453,7 @@ def _process_save(path, payload, etag, output):
     """spawn 子进程验证锁文件与原子替换；只传递测试凭据。"""
     from pathlib import Path
 
-    store.MODELS_PATH = Path(path)
+    store.models_path = lambda: Path(path)
     try:
         store.save_catalog(payload, etag)
         output.put("saved")
@@ -471,7 +471,7 @@ def test_concurrent_process_save_only_one_revision_wins():
     output = context.Queue()
     processes = [
         context.Process(
-            target=_process_save, args=(str(store.MODELS_PATH), public, etag, output)
+            target=_process_save, args=(str(store.models_path()), public, etag, output)
         )
         for _ in range(2)
     ]

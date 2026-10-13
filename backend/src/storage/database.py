@@ -14,9 +14,9 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from src.config import runtime_paths
 from src.config.runtime_paths import (
     INSTALL_BACKEND_ROOT,
-    USING_CUSTOM_DATA_ROOT,
     USER_DATA_ROOT,
     data_root,
     default_project_root,
@@ -25,6 +25,7 @@ from src.config.runtime_paths import (
 from src.config.settings import settings
 from src.storage.chat_run_records import ChatRunRecordStore
 from src.storage.chat_session_records import ChatSessionRecordStore
+from src.storage.auth_schema import AUTH_SCHEMA_SQL
 from src.storage.database_schema import BASE_SCHEMA_SQL
 from src.storage.scheduled_job_records import ScheduledJobRecordStore
 from src.storage.agent_defaults import (
@@ -323,6 +324,8 @@ def ensure_db() -> None:
                 )
             """)
             conn.executescript(BASE_SCHEMA_SQL)
+            # 账号表与归属列要留到任务 3.2 / 3.8：写入代码还在租户库上，提前删掉会让现有测试无法建库。
+            conn.executescript(AUTH_SCHEMA_SQL)
             conn.execute("DROP INDEX IF EXISTS idx_group_studios_active_chat")
             conn.execute(
                 """
@@ -443,6 +446,14 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'")
             _ensure_column(conn, "scheduled_jobs", "model_config_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_studios", "model_config_id", "TEXT NOT NULL DEFAULT ''")
+            for owned_table in (
+                "workspaces",
+                "projects",
+                "chat_sessions",
+                "group_studios",
+                "scheduled_jobs",
+            ):
+                _ensure_column(conn, owned_table, "owner_user_id", "TEXT")
             _ensure_column(conn, "group_work_items", "review_status", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "review_note", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "rework_count", "INTEGER NOT NULL DEFAULT 0")
@@ -463,7 +474,7 @@ def ensure_db() -> None:
                     now,
                 ),
             )
-            if USING_CUSTOM_DATA_ROOT:
+            if runtime_paths.USING_CUSTOM_DATA_ROOT:
                 default_project = conn.execute(
                     "SELECT root_path FROM projects WHERE id = ?",
                     (DEFAULT_PROJECT_ID,),

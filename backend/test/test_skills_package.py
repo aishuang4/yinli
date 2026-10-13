@@ -103,7 +103,8 @@ def test_import_skill_package_ignores_build_artifacts_and_macos_metadata(tmp_pat
 
     import src.server.routes.skills as skills_routes
 
-    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: tmp_path / "skill_packages")
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: tmp_path / "skill_packages")
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr(
@@ -140,7 +141,8 @@ def test_existing_skill_package_cleans_duplicate_artifacts(tmp_path, monkeypatch
     (package_dir / "scripts" / "create_docx.py").write_text("print('ok')\n", encoding="utf-8")
     (package_dir / "artifacts" / "skills" / "word-documents").mkdir(parents=True)
     (package_dir / "artifacts" / "skills" / "word-documents" / "SKILL.md").write_text("duplicate", encoding="utf-8")
-    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: tmp_path / "skill_packages")
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: tmp_path / "skill_packages")
     skill = skills_routes.Skill.model_validate({
         "id": "custom-word-documents",
         "name": "word-documents",
@@ -161,12 +163,11 @@ def test_existing_skill_package_cleans_duplicate_artifacts(tmp_path, monkeypatch
 def test_register_user_skill_writes_standard_skill_package(tmp_path, monkeypatch):
     """手动注册 Skill 时必须落标准 SKILL.md 包目录。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     import src.server.routes.skills as skills_routes
 
     original_skills = dict(skills_routes._skills)
-    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: tmp_path / "skill_packages")
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: tmp_path / "skill_packages")
     try:
         skill = skills_routes.register_user_skill(
             skills_routes.SkillRegisterRequest(
@@ -195,7 +196,8 @@ def test_ensure_skill_package_tolerates_overlong_legacy_fields(tmp_path, monkeyp
 
     import src.server.routes.skills as skills_routes
 
-    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: tmp_path / "skill_packages")
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: tmp_path / "skill_packages")
     legacy = skills_routes.Skill(
         id="legacy-long-trigger",
         name="历史超长触发词",
@@ -218,12 +220,11 @@ def test_ensure_skill_package_tolerates_overlong_legacy_fields(tmp_path, monkeyp
 def test_export_skill_archive_contains_standard_skill_md(tmp_path, monkeypatch):
     """导出 Skill 时 zip 内必须包含标准 SKILL.md。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     import src.server.routes.skills as skills_routes
 
     original_skills = dict(skills_routes._skills)
-    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: tmp_path / "skill_packages")
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: tmp_path / "skill_packages")
     try:
         skill = skills_routes.register_user_skill(
             skills_routes.SkillRegisterRequest(
@@ -250,12 +251,11 @@ def test_export_skill_archive_contains_standard_skill_md(tmp_path, monkeypatch):
 def test_load_user_skills_backfills_missing_standard_package(tmp_path, monkeypatch):
     """历史 registry 中缺包目录的 Skill 加载时会自动补齐。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     import src.server.routes.skills as skills_routes
 
     original_skills = dict(skills_routes._skills)
-    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: tmp_path / "skill_packages")
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: tmp_path / "skill_packages")
     try:
         database.replace_skills({
             "custom-old-skill": {
@@ -294,12 +294,11 @@ def test_load_user_skills_backfills_missing_standard_package(tmp_path, monkeypat
 def test_register_user_skill_rejects_duplicate_name(tmp_path, monkeypatch):
     """相同 Skill 名称不能重复注册。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     import src.server.routes.skills as skills_routes
 
     original_skills = dict(skills_routes._skills)
-    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: tmp_path / "skill_packages")
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: tmp_path / "skill_packages")
     try:
         payload = skills_routes.SkillRegisterRequest(
             name="重复 Skill",

@@ -7,10 +7,11 @@ import pytest
 from src.catalog import paths as catalog_paths
 
 
-def test_workspace_catalog_root_uses_plural_workspaces(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
+def test_workspace_catalog_root_uses_plural_workspaces(tmp_path) -> None:
+    from src.config import runtime_paths
+
     root = catalog_paths.workspace_catalog_root("default")
-    assert root == tmp_path / "workspaces" / "default" / ".agents"
+    assert root == runtime_paths.tenant_root() / "workspaces" / "default" / ".agents"
     assert catalog_paths.profiles_dir("default") == root / "profiles"
     assert catalog_paths.jobs_dir("default") == root / "jobs"
     assert catalog_paths.project_jobs_dir(tmp_path) == tmp_path / ".agents" / "jobs"

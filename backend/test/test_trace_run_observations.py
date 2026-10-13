@@ -21,10 +21,7 @@ from src.storage.database import list_trace_observations, upsert_chat_run
 
 @pytest.fixture
 def isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "trace-run-observations.db")
-    monkeypatch.setattr(database, "_initialized", False)
     yield
-    monkeypatch.setattr(database, "_initialized", False)
 
 
 @pytest.fixture

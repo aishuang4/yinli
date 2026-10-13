@@ -16,6 +16,10 @@
 - **`ModelEntry.capabilities` 字段集（§11.5）**：当前只有 `images: bool`。平台能力表只用 `images`，不凭空增加 `tools` / `thinking`。
 - **firing 状态枚举（§12.6）**：`queued / starting / running / succeeded / failed / cancelled / missed / skipped`，没有 `skipped_quota`；实现配额时视语义需要新增或复用 `skipped`。
 
+## 任务 2.3 暂缓删除账号表
+
+`AUTH_SCHEMA_SQL` 和 `owner_user_id` 补列先留在 `ensure_db()`。账号写入和归属写入要到 3.2 / 3.8 才迁走；现在删掉的话，新库无法满足现有 INSERT，测试过不了。默认 Project 根已经改用 `default_project_root()`。
+
 ## 基线修复（开工前）
 
 - `test_migration_preserves_instances_and_does_not_repeat`：cd43c6b 把预置模板缩成 DeepSeek 后，`_migrate` 静默丢弃模板之外的旧供应商实例。已改为按模板 ∪ 旧 providerConfigs 迁移。

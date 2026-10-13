@@ -15,12 +15,10 @@ from src.storage.database import DEFAULT_PROJECT_ID, DEFAULT_WORKSPACE_ID, ensur
 
 @pytest.fixture()
 def isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path / "user-data")
     ensure_db()
     yield tmp_path
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def _paused_record(**overrides) -> JobFileRecord:

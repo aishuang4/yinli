@@ -18,8 +18,6 @@ from src.storage import auth_records, database
 
 @pytest.fixture()
 def hosted_sync(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "key2api.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "hosted")
     monkeypatch.setattr("src.config.settings.settings.auth_email_mode", "log")
     monkeypatch.setattr("src.config.settings.settings.key2api_sync_token", "svc-token")
@@ -59,7 +57,7 @@ def hosted_sync(tmp_path, monkeypatch):
     database.ensure_db()
     client = TestClient(app, client=("127.0.0.1", 50000), base_url="https://testserver")
     yield client, calls
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def _verify(client: TestClient, monkeypatch) -> dict:

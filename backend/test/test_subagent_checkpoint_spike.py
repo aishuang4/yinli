@@ -161,8 +161,6 @@ def test_parent_external_wait_checkpoint_restores_and_continues() -> None:
 def test_task_service_rejects_terminal_state_regression(tmp_path, monkeypatch) -> None:
     """迟到 worker 不能把 completed task 写回 running。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     service = SubagentTaskService()
     task = service.create({
         "run_id": "run-1", "session_id": "session-1", "parent_agent_id": "agent-1",
@@ -246,8 +244,6 @@ def test_supervisor_cancellation_reaches_running_operation() -> None:
 def test_subagent_transcript_query_respects_invocation_identity(tmp_path, monkeypatch) -> None:
     """Task detail 查询必须按 invocation identity 返回对应 transcript。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     first = database.create_subagent_invocation({
         "id": "subagent-one", "session_id": "session-1", "parent_agent_id": "agent-1",
         "parent_agent_name": "Agent", "subagent_name": "reviewer", "task": "One.",
@@ -265,8 +261,6 @@ def test_subagent_transcript_query_respects_invocation_identity(tmp_path, monkey
 def test_startup_reconciliation_interrupts_running_but_preserves_waiting(tmp_path, monkeypatch) -> None:
     """重启不应伪造 running，也不能把可见 HITL waiting 倒退为 interrupted。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     common = {
         "session_id": "session-1", "parent_agent_id": "agent-1", "parent_agent_name": "Agent",
         "subagent_name": "reviewer", "task": "Review.",

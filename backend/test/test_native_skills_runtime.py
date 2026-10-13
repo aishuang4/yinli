@@ -181,7 +181,7 @@ def test_runtime_skill_paths_reject_paths_outside_package_root(tmp_path, monkeyp
     packages_root.mkdir()
     inside = _write_skill(packages_root, "inside")
     outside = _write_skill(tmp_path, "outside")
-    monkeypatch.setattr("src.server.routes.skills.SKILL_PACKAGES_DIR", str(packages_root))
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: packages_root)
     skills = [
         _skill("inside", inside),
         _skill("outside", outside),

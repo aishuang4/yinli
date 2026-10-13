@@ -55,8 +55,6 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 def isolated_db(tmp_path, monkeypatch):
     """每个用例独立 SQLite，并收口 ticker / Chat Run。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path / "user-data")
     yield
     for run in list(background_runs_module._runs.values()):
@@ -64,7 +62,7 @@ def isolated_db(tmp_path, monkeypatch):
             run.async_task.cancel()
     background_runs_module._runs.clear()
     reset_job_scheduler()
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def _service() -> ScheduledJobService:

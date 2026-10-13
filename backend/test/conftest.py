@@ -27,6 +27,11 @@ def local_tenant(tmp_path, monkeypatch):
     root = tmp_path / "tenant-local"
     root.mkdir()
     monkeypatch.setattr(runtime_paths, "USER_DATA_ROOT", root)  # local 租户 data_root 指向这里
+    # 开发 .env 里的 database_url 指向固定库；测试必须改到这份临时根，否则所有用例共用一个库。
+    monkeypatch.setattr(
+        "src.config.settings.settings.database_url",
+        "sqlite+aiosqlite:///" + str(root / "data" / "agent_workstation.db"),
+    )
     ctx = TenantContext.local()
     with use_tenant(ctx):
         yield ctx
