@@ -31,6 +31,7 @@ from src.server.routes.chat.background_runs import (
 )
 from src.server.routes.chat.completion import max_react_iterations_error, missing_final_answer_error
 from src.server.routes.chat.leader_stream import LeaderStreamState
+from src.exception_detail import format_agent_exception
 from src.server.routes.chat.leader_execution import execute_and_finalize_leader_reply
 from src.server.routes.chat.lifecycle import waiting_reason, waiting_status_for_interaction
 from src.server.routes.chat.runtime import (
@@ -489,7 +490,7 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
             return
         except Exception as exc:
             _clear_pending_interaction(interaction.id)
-            error_message = f"Agent 恢复执行异常: {exc}"
+            error_message = format_agent_exception(exc, prefix="Agent 恢复执行异常")
             yield runtime_trace_source_event(
                 "RUN_FAILED",
                 session_id=interaction.session_id,

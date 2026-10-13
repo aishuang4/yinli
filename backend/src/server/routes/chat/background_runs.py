@@ -433,9 +433,12 @@ async def relay_chat_background_run_events(
                 yield frame
         raise
     except Exception as exc:
-        for frame in await _ingest_source_event(run, _source_error_signal(str(exc))):
+        from src.exception_detail import format_agent_exception
+
+        message = format_agent_exception(exc, prefix="Agent 执行异常")
+        for frame in await _ingest_source_event(run, _source_error_signal(message)):
             yield frame
-        for frame in await _project_terminal(run, "failed", {"message": str(exc)}):
+        for frame in await _project_terminal(run, "failed", {"message": message}):
             yield frame
     finally:
         _finalize_run_persistence(run)
@@ -496,8 +499,11 @@ async def _consume_source_events(run: ChatBackgroundRun, factory: SourceStreamFa
             await _project_terminal(run, "cancelled", {})
         raise
     except Exception as exc:
-        await _ingest_source_event(run, _source_error_signal(str(exc)))
-        await _project_terminal(run, "failed", {"message": str(exc)})
+        from src.exception_detail import format_agent_exception
+
+        message = format_agent_exception(exc, prefix="Agent 执行异常")
+        await _ingest_source_event(run, _source_error_signal(message))
+        await _project_terminal(run, "failed", {"message": message})
     finally:
         _finalize_run_persistence(run)
         if run.status in TERMINAL_RUN_STATUSES:

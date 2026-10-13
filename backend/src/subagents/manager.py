@@ -21,6 +21,7 @@ from src.agents.runtime_types import (
     McpRuntimeSpec,
     RuntimeToolScope,
 )
+from src.exception_detail import format_agent_exception
 from src.runtime_context import RuntimeContext
 from src.storage.database import (
     append_subagent_transcript_item,
@@ -52,7 +53,7 @@ def subagent_error_observation(
         "invocationId": invocation_id or str(getattr(exc, "invocation_id", "")),
         "subagentName": subagent_name or str(getattr(exc, "subagent_name", "")),
         "failureCode": failure_code,
-        "error": str(exc),
+        "error": format_agent_exception(exc, prefix="Subagent"),
         "partialResult": partial_result,
     }, ensure_ascii=False)
 
@@ -289,7 +290,7 @@ class SubagentDelegationManager:
             raise
         except Exception as exc:
             run_error = exc if isinstance(exc, SubagentRunError) else SubagentRunError(
-                f"Subagent 委托执行失败: {exc}",
+                format_agent_exception(exc, prefix="Subagent 委托执行失败"),
             )
             partial = str(getattr(run_error, "partial_result", "") or "")
             content = "\n\n".join(part for part in [

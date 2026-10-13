@@ -3,6 +3,7 @@
 import asyncio
 from typing import AsyncGenerator
 
+from src.exception_detail import format_agent_exception
 from src.memory.professional_update import schedule_professional_update
 from src.memory.reflection import (
     MemoryReflectionInput,
@@ -331,7 +332,7 @@ async def _run_skill_evolution_background(
             action="memory_reflection",
             status="failed",
             title="Memory reflection failed",
-            content=type(exc).__name__,
+            content=format_agent_exception(exc, prefix="记忆反思失败"),
             payload={
                 "sourceRunId": item.source_run_id,
                 "sourceMessageId": item.source_message_id,

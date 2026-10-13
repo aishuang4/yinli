@@ -78,6 +78,26 @@ def test_skill_zip_rejects_symbolic_links():
     assert getattr(exc_info.value, "status_code", None) == 422
 
 
+def test_import_skill_archive_rejects_oversized_zip():
+    """超限压缩包应返回 413，不能因为缺少上限常量变成 500。"""
+
+    import asyncio
+
+    import src.server.routes.skills as skills_routes
+    from fastapi import HTTPException
+
+    class _Upload:
+        filename = "skill.zip"
+
+        async def read(self) -> bytes:
+            return b"x" * (skills_routes.MAX_SKILL_ARCHIVE_BYTES + 1)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(skills_routes.import_skill_archive(_Upload()))
+
+    assert exc_info.value.status_code == 413
+
+
 def test_import_skill_package_ignores_build_artifacts_and_macos_metadata(tmp_path, monkeypatch):
     """导入时只保留标准包资源，不能复制构建产物的重复副本。"""
 

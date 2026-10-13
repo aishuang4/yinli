@@ -13,7 +13,7 @@ from pathlib import Path
 
 from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_skills_from_agents
-from src.server.routes.skill_packages import SKILL_PACKAGES_DIR
+from src.server.routes.skill_packages import MAX_SKILL_ARCHIVE_BYTES, SKILL_PACKAGES_DIR
 from src.skills.registry import (
     ALWAYS_INJECTED_SKILL_IDS,
     SYSTEM_SKILL_IDS,

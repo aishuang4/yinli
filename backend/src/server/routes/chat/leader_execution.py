@@ -1,5 +1,6 @@
 """单 Agent Leader 流消费与终态收口的统一编排。"""
 
+import logging
 from typing import AsyncGenerator
 
 from src.server.routes.chat.completion import (
@@ -12,7 +13,10 @@ from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leade
 from src.server.routes.chat.models import ChatSkillRun
 from src.server.routes.chat.plan_mode.manager import PlanModeManager
 from src.server.routes.chat.runtime_events import runtime_source_event
+from src.exception_detail import format_agent_exception
 from src.runtime_context import RuntimeContext
+
+logger = logging.getLogger(__name__)
 
 
 async def _emit_plan_run_failure(
@@ -188,7 +192,8 @@ async def execute_and_finalize_leader_reply(
         ):
             yield event
     except Exception as exc:
-        assistant_error = f"{exception_prefix}: {exc}"
+        assistant_error = format_agent_exception(exc, prefix=exception_prefix)
+        logger.error("Leader 执行失败\n%s", assistant_error)
         async for event in _emit_plan_run_failure(plan_mode_manager, state, assistant_error):
             yield event
         async for event in finalize_failed_leader_run(
