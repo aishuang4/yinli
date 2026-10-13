@@ -36,6 +36,27 @@ PENDING_INTERACTIONS: dict[str, "PendingInteraction"] = {}
 PENDING_AGENTS: dict[str, object] = {}
 
 
+def _pending_tenant_id() -> str:
+    from src.tenancy.context import current_tenant
+
+    return current_tenant().tenant_id
+
+
+def get_pending_interaction(interaction_id: str) -> "PendingInteraction | None":
+    """取出当前租户的待回答交互。别的租户按不存在处理。"""
+
+    interaction = PENDING_INTERACTIONS.get(interaction_id)
+    if interaction is None or interaction.tenant_id != _pending_tenant_id():
+        return None
+    return interaction
+
+
+def get_pending_agent(interaction_id: str) -> object | None:
+    if get_pending_interaction(interaction_id) is None:
+        return None
+    return PENDING_AGENTS.get(interaction_id)
+
+
 def _empty_display_snapshot() -> dict[str, Any]:
     """创建空的 Chat 展示快照。"""
 
@@ -228,6 +249,7 @@ class PendingInteraction(BaseModel):
     model_name: str
     reply_id: str
     run_id: str = ""
+    tenant_id: str = Field(default_factory=_pending_tenant_id)
     tool_calls: list[dict]
     resume_tool_calls: list[dict] | None = None
     message: str

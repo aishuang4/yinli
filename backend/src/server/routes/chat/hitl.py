@@ -19,6 +19,7 @@ from agentscope.permission import PermissionBehavior, PermissionRule
 from src.server.routes.chat.models import (
     PENDING_AGENTS,
     PENDING_INTERACTIONS,
+    _pending_tenant_id,
     ChatResumeRequest,
     ChatSkillRun,
     ChatToolRun,
@@ -128,6 +129,7 @@ def _create_pending_interaction(
         chat_data=chat_data,
         plan_mode_manager=plan_mode_manager,
         runtime_event_sources=runtime_event_sources or [],
+        tenant_id=_pending_tenant_id(),
     )
     PENDING_INTERACTIONS[interaction.id] = interaction
     PENDING_AGENTS[interaction.id] = agent

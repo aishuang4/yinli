@@ -32,7 +32,7 @@
 - [x] 2.7 按 §5.4 的顺序开启 `foreign_keys`：先 grep 不带 WHERE 的整表 DELETE，逐一确认；开启后修正所有写入顺序问题；local 租户启动时执行 `foreign_key_check` 并记录日志
 - [x] 2.8 测试 `test_chat_store_incremental.py`（§17.1）
 - [x] 2.9 按 §6 的清单逐项处理缓存。重点：删除 `agents.py:279`、`mcp/registry.py:533`、`skills/registry.py:865` 三处 import 时加载，改为 `TenantScoped` 懒加载；`_agent_cache` 等的 key 加 `tenant_id`；`secret_store` 的缓存 key 加 `tenant_id`；向量库 backend 按租户；通知 hub 按租户投递
-- [ ] 2.10 后台 Run 按租户过滤（§10.6），`PENDING_INTERACTIONS` 记录并校验 `tenant_id`（§6）
+- [x] 2.10 后台 Run 按租户过滤（§10.6），`PENDING_INTERACTIONS` 记录并校验 `tenant_id`（§6）
 - [ ] 2.11 **门槛 A**（§17.3）
 
 ## 3. 控制面与租户生命周期

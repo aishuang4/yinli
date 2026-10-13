@@ -17,10 +17,10 @@ from src.server.routes.chat.hitl import (
     _hitl_payload,
 )
 from src.server.routes.chat.models import (
-    PENDING_AGENTS,
-    PENDING_INTERACTIONS,
     HITL_EVENT_TYPES,
     ChatResumeRequest,
+    get_pending_agent,
+    get_pending_interaction,
 )
 from src.server.routes.chat.projection.source_events import SourceEvent
 from src.server.routes.chat.router import router
@@ -88,8 +88,8 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
     """构造恢复原 AgentScope ReAct 的结构化源信号流。"""
 
     async def event_stream() -> AsyncGenerator[SourceEvent, None]:
-        interaction = PENDING_INTERACTIONS.get(data.interaction_id)
-        agent = PENDING_AGENTS.get(data.interaction_id)
+        interaction = get_pending_interaction(data.interaction_id)
+        agent = get_pending_agent(data.interaction_id)
         if interaction is None or agent is None:
             stale_skill_run = get_skill_run_for_pending_interaction(data.interaction_id)
             if stale_skill_run:
@@ -511,7 +511,7 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
 async def start_resume_interaction(data: ChatResumeRequest) -> dict:
     """后台恢复 HITL Run，并返回原 Run ID 供前端继续订阅 RuntimeFrame。"""
 
-    pending_interaction = PENDING_INTERACTIONS.get(data.interaction_id)
+    pending_interaction = get_pending_interaction(data.interaction_id)
     if pending_interaction is None or not pending_interaction.run_id:
         raise HTTPException(status_code=404, detail="Pending interaction not found")
     await mark_chat_background_run_resuming(

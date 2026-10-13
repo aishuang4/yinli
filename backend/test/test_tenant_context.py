@@ -135,6 +135,49 @@ def test_tenant_scoped_lazy_loads_per_tenant(monkeypatch):
     assert built == [HOSTED_ID, HOSTED_ID_B]
 
 
+def test_background_run_and_pending_interaction_stay_inside_tenant():
+    import asyncio
+
+    from src.server.routes.chat.background_runs import (
+        ChatBackgroundRun,
+        _runs,
+        get_chat_background_run,
+    )
+    from src.server.routes.chat.models import (
+        PENDING_INTERACTIONS,
+        PendingInteraction,
+        get_pending_interaction,
+    )
+
+    run = ChatBackgroundRun(id="run-tenant-a", session_id="s", tenant_id=HOSTED_ID)
+    _runs[run.id] = run
+    PENDING_INTERACTIONS["hitl-tenant-a"] = PendingInteraction(
+        id="hitl-tenant-a",
+        type="confirm",
+        session_id="s",
+        agent_id="default",
+        agent_name="助手",
+        model_name="test",
+        reply_id="reply",
+        tool_calls=[],
+        message="确认",
+        tenant_id=HOSTED_ID,
+    )
+    try:
+        async def check() -> None:
+            with use_tenant(TenantContext.hosted(HOSTED_ID_B)):
+                assert await get_chat_background_run("run-tenant-a") is None
+                assert get_pending_interaction("hitl-tenant-a") is None
+            with use_tenant(TenantContext.hosted(HOSTED_ID)):
+                assert await get_chat_background_run("run-tenant-a") is not None
+                assert get_pending_interaction("hitl-tenant-a") is not None
+
+        asyncio.run(check())
+    finally:
+        _runs.pop("run-tenant-a", None)
+        PENDING_INTERACTIONS.pop("hitl-tenant-a", None)
+
+
 def test_evict_tenant_clears_scoped_and_dict_caches(monkeypatch):
     monkeypatch.setattr("src.tenancy.context.settings.serve_mode", "hosted")
     scoped = TenantScoped(dict)
