@@ -13,11 +13,11 @@ class ModelConfig(BaseModel):
     """Agent 执行上限；历史模型字段在导入时忽略。"""
 
     max_react_iters: int = Field(
-        default=40,
+        default=128,
         ge=1,
         le=MAX_REACT_ITERS,
         alias="maxReactIters",
-        description="ReAct 最大循环次数",
+        description="一次提问的 ReAct 轮次预算。死循环由工具护栏单独停止。",
     )
 
     model_config = {"populate_by_name": True}

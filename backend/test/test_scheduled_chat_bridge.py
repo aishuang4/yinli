@@ -161,9 +161,9 @@ def _patch_fake_agent(monkeypatch, execute, *, filesystem_scope: str):
         return ctx
 
     monkeypatch.setattr("src.scheduler.chat_bridge.get_registered_agent", lambda agent_id: agent)
-    monkeypatch.setattr("src.scheduler.chat_bridge.build_scheduled_run_context", fake_build)
-    monkeypatch.setattr("src.scheduler.chat_bridge.execute_chat_runtime", execute)
-    monkeypatch.setattr("src.scheduler.chat_bridge.get_startup_error", lambda ctx, data: None)
+    monkeypatch.setattr("src.server.routes.chat.scheduled_launch.build_scheduled_run_context", fake_build)
+    monkeypatch.setattr("src.server.routes.chat.scheduled_launch.execute_chat_runtime", execute)
+    monkeypatch.setattr("src.server.routes.chat.scheduled_launch.get_startup_error", lambda ctx, data: None)
     monkeypatch.setattr(
         "src.server.routes.chat.handlers.send.start_chat_run",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("禁止直接调 start_chat_run")),

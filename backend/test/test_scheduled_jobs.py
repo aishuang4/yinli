@@ -19,6 +19,7 @@ from src.scheduler.models import (
 from src.scheduler.schedule import (
     ScheduleError,
     compute_next_run_at,
+    next_daily_anchor_after,
     next_weekly_anchor_after,
     once_run_at,
     to_utc_iso,
@@ -238,6 +239,79 @@ def test_compute_next_run_at_once_and_weekly():
         after=datetime(2026, 8, 21, 0, 0, tzinfo=timezone.utc),
     )
     assert to_utc_iso(once) == "2026-08-22T10:00:00+00:00"
+
+
+def test_daily_anchor_uses_today_until_the_clock_passes():
+    before = datetime(2026, 8, 21, 9, 0, tzinfo=timezone.utc)  # 上海 17:00
+    today = next_daily_anchor_after(before, at="18:00", timezone_name="Asia/Shanghai")
+    assert to_utc_iso(today) == "2026-08-21T10:00:00+00:00"
+    after = datetime(2026, 8, 21, 10, 0, tzinfo=timezone.utc)  # 上海 18:00
+    tomorrow = next_daily_anchor_after(after, at="18:00", timezone_name="Asia/Shanghai")
+    assert to_utc_iso(tomorrow) == "2026-08-22T10:00:00+00:00"
+    computed = compute_next_run_at(
+        schedule_kind="daily",
+        schedule_expr={"at": "09:00"},
+        timezone_name="Asia/Shanghai",
+        after=datetime(2026, 8, 21, 0, 30, tzinfo=timezone.utc),
+    )
+    assert to_utc_iso(computed) == "2026-08-21T01:00:00+00:00"
+
+
+def test_script_job_daily_confirm_skips_agent(isolated_db):
+    from src.scheduler.models import ScheduledJobValidationError
+
+    service = _service()
+    with pytest.raises(ScheduledJobValidationError, match="不能同时填写"):
+        service.create_job(
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            project_id=DEFAULT_PROJECT_ID,
+            name="混用脚本",
+            agent_id="agent-1",
+            schedule_kind="daily",
+            schedule_expr={"at": "09:00"},
+            timezone="Asia/Shanghai",
+            frozen_prompt="",
+            mode="script",
+            script_filename="check.py",
+            script_source="print('x')\n",
+        )
+    job = service.create_job(
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        project_id=DEFAULT_PROJECT_ID,
+        name="每天脚本",
+        agent_id="",
+        schedule_kind="daily",
+        schedule_expr={"at": "09:00"},
+        timezone="Asia/Shanghai",
+        frozen_prompt="",
+        mode="script",
+        script_filename="check.py",
+        script_source="print('ready')\n",
+    )
+    assert job.mode == "script"
+    assert job.agent_id == ""
+    assert job.input_spec["script_filename"] == "check.py"
+    active = service.confirm(job.id, now=datetime(2026, 8, 21, 0, 30, tzinfo=timezone.utc))
+    assert active.status == "active"
+    assert active.next_run_at == "2026-08-21T01:00:00+00:00"
+
+
+def test_execute_script_in_firing_directory(tmp_path):
+    import asyncio
+
+    from src.scheduler.script_job import execute_script_in_dir
+
+    result = asyncio.run(execute_script_in_dir(
+        source="import pathlib; pathlib.Path('out.txt').write_text('ok')\nprint('ready')\n",
+        filename="check.py",
+        interpreter="python3",
+        args=[],
+        timeout_seconds=30,
+        cwd=tmp_path,
+    ))
+    assert result.exit_code == 0
+    assert "ready" in result.stdout
+    assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "ok"
 
 
 def test_feature_flag_defaults_false(isolated_db):
@@ -778,6 +852,38 @@ def test_chat_session_kind_survives_save_chat_store(isolated_db):
     save_chat_store(store.model_dump(mode="json", by_alias=True))
     reloaded = load_chat_store()
     assert reloaded["sessions"][0]["kind"] == "scheduled_job"
+
+
+def test_null_owner_user_id_stays_in_chat_history(isolated_db):
+    """桌面旧库 owner_user_id 为 NULL 时，不能把整份历史目录校验成空。"""
+
+    from src.server.routes.chat.store import _load_store
+
+    ensure_db()
+    save_chat_store({
+        "sessions": [{
+            "id": "sess-old",
+            "title": "旧对话",
+            "agent_id": "agent-1",
+            "agent_name": "助手",
+            "mode": "agent",
+            "workspace_id": DEFAULT_WORKSPACE_ID,
+            "project_id": DEFAULT_PROJECT_ID,
+            "kind": "chat",
+            "created_at": "2026-08-21T00:00:00+00:00",
+            "updated_at": "2026-08-21T00:00:00+00:00",
+            "message_count": 0,
+        }],
+        "messages": {},
+    })
+    with database._connect() as conn:
+        conn.execute("UPDATE chat_sessions SET owner_user_id = NULL")
+        conn.commit()
+
+    loaded = load_chat_store()
+    assert loaded["sessions"][0]["ownerUserId"] == ""
+    assert ChatStore.model_validate(loaded).sessions[0].id == "sess-old"
+    assert [session.id for session in _load_store().sessions] == ["sess-old"]
 
 
 def test_chat_session_kind_defaults_to_chat(isolated_db):

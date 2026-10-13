@@ -429,11 +429,11 @@ def test_build_scheduled_run_context_skips_model_readiness_and_tool_scope_resolv
         lambda: SimpleNamespace(default_model="model", fallback_models=[], provider="deepseek", api_key="x"),
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.runtime_governance.build_habit_prompt",
+        "src.runtime.governance.build_habit_prompt",
         lambda *args, **kwargs: "",
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.runtime_governance.build_professional_prompt",
+        "src.runtime.governance.build_professional_prompt",
         lambda *args, **kwargs: "",
     )
     monkeypatch.setattr(
@@ -503,11 +503,11 @@ def test_frozen_skills_must_equal_used_skills_or_skill_unbound(isolated_db, tmp_
         lambda: SimpleNamespace(default_model="model", fallback_models=[], provider="deepseek", api_key="x"),
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.runtime_governance.build_habit_prompt",
+        "src.runtime.governance.build_habit_prompt",
         lambda *args, **kwargs: "",
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.runtime_governance.build_professional_prompt",
+        "src.runtime.governance.build_professional_prompt",
         lambda *args, **kwargs: "",
     )
     monkeypatch.setattr(

@@ -93,6 +93,9 @@ export function formatSchedule(job: ScheduledJob): string {
     const days = readWeekdays(job).map((item) => WEEKDAY_LABELS[item] || item).join('、') || '未选星期';
     return `每周 ${days} ${readClock(job) || '--:--'}（${job.timezone}）`;
   }
+  if (job.scheduleKind === 'daily') {
+    return `每天 ${readClock(job) || '--:--'}（${job.timezone}）`;
+  }
   return `单次 ${readClock(job) || '未设置'}（${job.timezone}）`;
 }
 

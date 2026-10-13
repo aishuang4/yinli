@@ -33,12 +33,18 @@ class ScheduledJobCreateRequest(BaseModel):
     workspace_id: str = Field(alias="workspaceId")
     project_id: str = Field(alias="projectId")
     name: str
-    agent_id: str = Field(alias="agentId")
+    agent_id: str = Field(default="", alias="agentId")
     model_config_id: str = Field(default="", alias="modelConfigId")
-    schedule_kind: Literal["weekly", "once"] = Field(alias="scheduleKind")
+    mode: Literal["agent", "script"] = "agent"
+    schedule_kind: Literal["weekly", "daily", "once"] = Field(alias="scheduleKind")
     schedule_expr: dict[str, Any] = Field(alias="scheduleExpr")
     timezone: str
-    frozen_prompt: str = Field(alias="frozenPrompt")
+    frozen_prompt: str = Field(default="", alias="frozenPrompt")
+    script_filename: str = Field(default="", alias="scriptFilename")
+    script_source: str = Field(default="", alias="scriptSource")
+    interpreter: str = "python3"
+    script_args: list[str] = Field(default_factory=list, alias="scriptArgs")
+    timeout_seconds: int = Field(default=300, alias="timeoutSeconds")
     summary: str = ""
     skill_ids: list[str] = Field(default_factory=list, alias="skillIds")
     tool_scope: dict[str, Any] | None = Field(default=None, alias="toolScope")
@@ -67,7 +73,7 @@ class ScheduledJobUpdateRequest(BaseModel):
     summary: str | None = None
     agent_id: str | None = Field(default=None, alias="agentId")
     model_config_id: str | None = Field(default=None, alias="modelConfigId")
-    schedule_kind: Literal["weekly", "once"] | None = Field(default=None, alias="scheduleKind")
+    schedule_kind: Literal["weekly", "daily", "once"] | None = Field(default=None, alias="scheduleKind")
     schedule_expr: dict[str, Any] | None = Field(default=None, alias="scheduleExpr")
     timezone: str | None = None
     frozen_prompt: str | None = Field(default=None, alias="frozenPrompt")
@@ -103,6 +109,10 @@ def _raise_job_http(exc: Exception) -> None:
 
 
 def _firing_preview(job: ScheduledJob) -> list[str]:
+    if job.mode == "script":
+        filename = str((job.input_spec or {}).get("script_filename") or "script")
+        runtime = str((job.input_spec or {}).get("interpreter") or "python3")
+        return [f"{runtime} {filename}"]
     try:
         from src.scheduler.firing_toolkit import assemble_scheduled_firing_toolkit_spec
 

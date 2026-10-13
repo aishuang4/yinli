@@ -144,8 +144,8 @@ function mapJob(raw: Record<string, unknown>): ScheduledJob {
     status: raw.status as ScheduledJob['status'],
     pauseReason: String(raw.pauseReason ?? ''),
     agentId: String(raw.agentId ?? ''),
-    mode: 'agent',
-    scheduleKind: raw.scheduleKind === 'once' ? 'once' : 'weekly',
+    mode: raw.mode === 'script' ? 'script' : 'agent',
+    scheduleKind: raw.scheduleKind === 'once' || raw.scheduleKind === 'daily' ? raw.scheduleKind : 'weekly',
     scheduleExpr: (raw.scheduleExpr && typeof raw.scheduleExpr === 'object'
       ? raw.scheduleExpr
       : {}) as ScheduledJob['scheduleExpr'],

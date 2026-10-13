@@ -13,7 +13,7 @@ from src.scheduler.models import TERMINAL_FIRING_STATUSES, ScheduledJob
 from src.scheduler.schedule import parse_stored_datetime, to_utc_iso
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.settings import ensure_desktop_scheduled_jobs_defaults, is_scheduled_jobs_enabled
-from src.server.routes.chat.background_runs import reconcile_interrupted_chat_runs
+from src.runtime.scheduled_chat import reconcile_interrupted_chat_runs
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +264,7 @@ def bootstrap_scheduler(*, now: datetime | None = None) -> dict[str, int]:
             try:
                 persist_job_definition(service.get_job(str(item["id"])))
             except Exception:
+                logger.exception("同步 Job 定义失败 job=%s", item.get("id"))
                 continue
         sync_job_definitions()
     except Exception:

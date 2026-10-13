@@ -112,7 +112,7 @@ def _build_runtime_feature_parts(
             None,
             scheduled_job_unattended_feature_key(denylist),
             [],
-            [],
+            build_context_governance_middlewares(skill_context=True, hard_stop=True),
             [],
             "",
         )
@@ -288,7 +288,9 @@ async def execute_react_runtime(
             ),
         )
     except Exception as exc:
-        assistant_error = f"Agent 创建失败: {exc}"
+        from src.exception_detail import format_agent_exception
+
+        assistant_error = format_agent_exception(exc, prefix="Agent 创建失败")
         if plan_mode_manager:
             plan_mode_manager.fail_run(reason=assistant_error)
             for runtime_event in plan_mode_manager.drain_runtime_events():

@@ -68,12 +68,15 @@ async def _run_worker_guarded(group_id: str, member_id: str) -> None:
     try:
         await run_worker_turn(group_id, member_id, duty="queue")
         pop_unrunnable_head(group_id)
-    except Exception:
-        logger.exception("群聊 Worker turn crashed: group_id=%s member_id=%s", group_id, member_id)
+    except Exception as exc:
+        from src.exception_detail import format_agent_exception
+
+        message = format_agent_exception(exc, prefix="群聊 Worker 执行失败")
+        logger.error("群聊 Worker turn crashed: group_id=%s member_id=%s\n%s", group_id, member_id, message)
         snapshot = get_group_studio_snapshot(group_id, message_limit=1) or {}
         run_id = snapshot.get("currentRunId")
         if run_id:
-            update_group_studio_run_status(str(run_id), "failed", "worker turn crashed")
+            update_group_studio_run_status(str(run_id), "failed", message)
             set_group_studio_current_run_id(group_id, None)
             emit_envelope(
                 group_id=group_id,
@@ -85,7 +88,7 @@ async def _run_worker_guarded(group_id: str, member_id: str) -> None:
         emit_envelope(
             group_id=group_id,
             event_type="GROUP_ERROR",
-            payload={"code": "worker_failed", "message": f"worker turn crashed: {member_id}", "memberId": member_id},
+            payload={"code": "worker_failed", "message": message, "memberId": member_id},
         )
     await _continue_after_worker(group_id)
 

@@ -197,7 +197,7 @@ def parse_profile_markdown(
         return ProfileParseResult(None, errors, warnings)
 
     try:
-        max_iters = int(payload.get("max_react_iters") or 40)
+        max_iters = int(payload.get("max_react_iters") or 128)
     except (TypeError, ValueError):
         return ProfileParseResult(None, ["max_react_iters 必须是整数"], warnings)
     if max_iters < 1 or max_iters > MAX_REACT_ITERS:

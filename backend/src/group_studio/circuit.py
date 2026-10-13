@@ -1,4 +1,8 @@
-"""轮次与无进展熔断。cancelled 因插话/暂停不计 no_progress。"""
+"""群聊房间的无进展熔断。
+
+长讨论不按写死的发言轮次打断。连续几轮置顶和工人正文都没有变化，才暂停。
+cancelled 因插话或暂停不计 no_progress。
+"""
 
 from __future__ import annotations
 
@@ -96,9 +100,7 @@ def on_run_finished(
         payload=budget,
     )
     reason = ""
-    if int(budget.get("usedTurns") or 0) >= int(budget.get("maxTurns") or 40):
-        reason = "max_turns"
-    elif int(budget.get("noProgressTurns") or 0) >= int(budget.get("maxNoProgressTurns") or 3):
+    if int(budget.get("noProgressTurns") or 0) >= int(budget.get("maxNoProgressTurns") or 3):
         reason = "no_progress"
     update_group_studio_state(group_id, budget=budget)
     if not reason:

@@ -168,9 +168,10 @@ export function ScheduledJobsPage() {
           onResume={() => void runJobAction(selectedJob.id, () => resumeJob(selectedJob.id))}
           onDelete={() => setDeleteConfirm(selectedJob)}
           onSaveSchedule={async (weekdays, at, timezone) => {
+            const daily = selectedJob.scheduleKind === 'daily';
             await runJobAction(selectedJob.id, () => updateSchedule(selectedJob.id, {
-              scheduleKind: 'weekly',
-              scheduleExpr: { weekdays, at },
+              scheduleKind: daily ? 'daily' : 'weekly',
+              scheduleExpr: daily ? { at } : { weekdays, at },
               timezone,
             }));
           }}

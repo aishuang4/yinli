@@ -14,7 +14,8 @@ from src.scheduler.capability_contract import (
 )
 
 JobStatus = Literal["pending_confirmation", "active", "paused", "archived", "completed"]
-ScheduleKind = Literal["weekly", "once"]
+ScheduleKind = Literal["weekly", "daily", "once"]
+JobExecutor = Literal["agent", "script"]
 MissedPolicy = Literal["catch_up_once", "mark_missed", "skip_silent"]
 FailurePolicy = Literal["notify_keep_schedule", "pause_job"]
 DeliveryPolicy = Literal["none", "notify", "confirm_then_send", "auto_send"]
@@ -44,7 +45,8 @@ TERMINAL_FIRING_STATUSES: frozenset[str] = frozenset(
 FAILURE_POLICIES: frozenset[str] = frozenset({"notify_keep_schedule", "pause_job"})
 MISSED_POLICIES: frozenset[str] = frozenset({"catch_up_once", "mark_missed", "skip_silent"})
 DELIVERY_POLICIES: frozenset[str] = frozenset({"none", "notify", "confirm_then_send", "auto_send"})
-SCHEDULE_KINDS: frozenset[str] = frozenset({"weekly", "once"})
+SCHEDULE_KINDS: frozenset[str] = frozenset({"weekly", "daily", "once"})
+JOB_EXECUTORS: frozenset[str] = frozenset({"agent", "script"})
 
 DEFAULT_JOB_TOOL_SCOPE: dict[str, bool] = {
     "allow_bash": False,
@@ -91,7 +93,7 @@ class ScheduledJob(BaseModel):
     pause_reason: str = ""
     agent_id: str
     model_config_id: str = ""
-    mode: Literal["agent"] = "agent"
+    mode: JobExecutor = "agent"
     schedule_kind: ScheduleKind
     schedule_expr: dict[str, Any]
     timezone: str
@@ -142,14 +144,14 @@ class ScheduledJob(BaseModel):
     @classmethod
     def _phase1_schedule_kind(cls, value: str) -> str:
         if value not in SCHEDULE_KINDS:
-            raise ValueError("Phase 1 仅支持 weekly 与 once")
+            raise ValueError("仅支持 weekly、daily 与 once")
         return value
 
     @field_validator("mode")
     @classmethod
-    def _mode_must_be_agent(cls, value: str) -> str:
-        if value != "agent":
-            raise ValueError("定时任务 mode 必须为 agent")
+    def _mode_must_be_executor(cls, value: str) -> str:
+        if value not in JOB_EXECUTORS:
+            raise ValueError("定时任务 mode 必须为 agent 或 script")
         return value
 
     @field_validator("tool_scope", mode="before")
