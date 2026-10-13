@@ -255,7 +255,11 @@ def _write(catalog: ModelCatalog) -> None:
 
 
 def _migrate() -> ModelCatalog:
-    from src.config.legacy_model_settings import MODEL_PROVIDERS
+    from src.config.legacy_model_settings import (
+        LEGACY_PROVIDER_ADAPTERS,
+        MODEL_PROVIDERS,
+        ModelProvider,
+    )
     from src.config.secret_store import SecretStoreError, get_model_api_key
     from src.config.settings import settings
     from src.storage.database import get_json_record
@@ -263,9 +267,23 @@ def _migrate() -> ModelCatalog:
     old = get_json_record("system_settings", "model") or {}
     selected = str(old.get("provider") or "deepseek")
     configs = old.get("providerConfigs") or {selected: old}
+    # 模板之外的旧供应商实例也要保留，否则迁移会静默丢配置。
+    templates = dict(MODEL_PROVIDERS)
+    for ident in configs:
+        if ident in templates:
+            continue
+        config = configs.get(ident) or {}
+        templates[ident] = ModelProvider(
+            id=ident,
+            name=str(config.get("providerName") or ident),
+            default_base_url="",
+            default_model=str(config.get("defaultModel") or ""),
+            models=(),
+            adapter=LEGACY_PROVIDER_ADAPTERS.get(ident, "openai"),
+        )
     providers, models = [], []
     default_id = ""
-    for ident, template in MODEL_PROVIDERS.items():
+    for ident, template in templates.items():
         config = configs.get(ident) or {}
         key = ""
         if not config.get("apiKeySuppressed"):

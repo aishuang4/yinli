@@ -26,6 +26,8 @@ def hosted_models(tmp_path, monkeypatch):
     monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "hosted")
     monkeypatch.setattr("src.config.settings.settings.auth_email_mode", "log")
+    # 开发 .env 里可能配置了 key2api 令牌；这里固定走部署级目录分支，与外部环境无关。
+    monkeypatch.setattr("src.config.settings.settings.key2api_sync_token", "")
     app = FastAPI()
     app.add_middleware(HostedSessionMiddleware)
     app.add_middleware(LocalAccessMiddleware)

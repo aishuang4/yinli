@@ -13,8 +13,10 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "agentscope" },
+    { name = "aiodocker" },
     { name = "aiosqlite" },
     { name = "argon2-cffi" },
+    { name = "cryptography" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pydantic-settings" },
@@ -28,8 +30,10 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agentscope", specifier = "==2.0.5" },
+    { name = "aiodocker", specifier = ">=0.24.0" },
     { name = "aiosqlite", specifier = ">=0.22.1" },
     { name = "argon2-cffi", specifier = ">=23.1.0" },
+    { name = "cryptography", specifier = ">=43.0.0" },
     { name = "fastapi", specifier = ">=0.136.3" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic-settings", specifier = ">=2.14.1" },
@@ -74,6 +78,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d3/38/d34788ef9192cf670b7b4cf6c7e4d58b6a853eb7c7f22a87337deebc4282/agentscope-2.0.5.tar.gz", hash = "sha256:3127803993074ec34062056080f619ab6b883d3d926768afeeddb4172cd1fc9a", size = 672122, upload-time = "2026-07-23T13:29:37.912Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a4/1e/b27656bf3903fcd4ae5017c7b01bca16b6a3ca6cdf75c7b5e4ac92480fbe/agentscope-2.0.5-py3-none-any.whl", hash = "sha256:ae440075c8d72b21a0e6b54458b9c6b9d1d9594f1e3f885611df1ed93950d444", size = 894264, upload-time = "2026-07-23T13:29:36.378Z" },
+]
+
+[[package]]
+name = "aiodocker"
+version = "0.27.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a8/19/f07d8532d7489ed8629847d004d0bbd286287286a76828be43aca7e6b106/aiodocker-0.27.0.tar.gz", hash = "sha256:74586f4929aee4563ee7db50996a1a39ac35e06c80701daad31f94aadb6551c7", size = 328202, upload-time = "2026-05-27T07:06:49.731Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/de/54/cd3aa680c9653b8708e164d610948e7a9aa50bba619705ac6169f61b0837/aiodocker-0.27.0-py3-none-any.whl", hash = "sha256:c55647bdcaf546dd4fc9b52794a9510575e126888dff478a9185f580a40dc45e", size = 55037, upload-time = "2026-05-27T07:06:48.316Z" },
 ]
 
 [[package]]
