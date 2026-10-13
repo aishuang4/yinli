@@ -59,3 +59,7 @@ backend/data/*.db
 models.json
 models.lock
 .models-*.tmp
+
+# 本地演示数据与本机部署说明（含密钥，不入库）
+.hosted-demo-data/
+docs/*.local.md
