@@ -59,9 +59,7 @@ def invalidate_habit_prompts() -> int:
     """习惯写入后清掉全部习惯缓存，让当前回复重新读取。"""
 
     with _lock:
-        count = len(_habit_cache)
-        _habit_cache.clear()
-        return count
+        return _drop(_habit_cache, None)
 
 
 def invalidate_professional_prompts(*, agent_id: str | None = None) -> int:
@@ -78,12 +76,18 @@ def invalidate_memory_prompts(*, agent_id: str | None = None) -> int:
         count = _drop(_cache, agent_id)
         count += _drop(_professional_cache, agent_id)
         if agent_id is None:
-            count += len(_habit_cache)
-            _habit_cache.clear()
+            count += _drop(_habit_cache, None)
         return count
 
 
+def _tenant_prefix() -> str:
+    from src.tenancy.context import current_tenant
+
+    return f"{current_tenant().tenant_id}:"
+
+
 def _cached(store: dict[str, tuple[str, float]], key: str, build: Callable[[], str]) -> str:
+    key = _tenant_prefix() + key
     now = time.monotonic()
     with _lock:
         cached = store.get(key)
@@ -97,11 +101,7 @@ def _cached(store: dict[str, tuple[str, float]], key: str, build: Callable[[], s
 
 
 def _drop(store: dict[str, tuple[str, float]], agent_id: str | None) -> int:
-    if agent_id is None:
-        count = len(store)
-        store.clear()
-        return count
-    prefix = f"{agent_id}::"
+    prefix = _tenant_prefix() if agent_id is None else f"{_tenant_prefix()}{agent_id}::"
     keys = [key for key in store if key.startswith(prefix)]
     for key in keys:
         store.pop(key, None)
