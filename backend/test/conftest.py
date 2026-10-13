@@ -24,6 +24,8 @@ def local_tenant(tmp_path, monkeypatch):
     from src.tenancy.registry import evict_all
     from src.storage import database
 
+    evict_all()
+    database.forget_all()
     root = tmp_path / "tenant-local"
     root.mkdir()
     monkeypatch.setattr(runtime_paths, "USER_DATA_ROOT", root)  # local 租户 data_root 指向这里

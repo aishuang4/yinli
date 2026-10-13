@@ -138,7 +138,7 @@ class AgentUpdate(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-# 测试可 monkeypatch 此字典；生产路径由 catalog 同步。
+# 测试可 monkeypatch 此字典；生产路径按租户懒加载。
 _agents: dict[str, AgentResponse] = {}
 
 
@@ -249,12 +249,13 @@ def _apply_job_agent_fields(
 
 
 def _sync_agents_from_catalog() -> None:
-    """用 catalog 扫描结果填充 `_agents`。"""
+    """用 catalog 扫描结果填充 `_agents`，不替换字典对象。"""
 
     from src.catalog.loader import list_registered_agents
 
-    global _agents
-    _agents = {agent.id: agent for agent in list_registered_agents()}
+    loaded = {agent.id: agent for agent in list_registered_agents()}
+    _agents.clear()
+    _agents.update(loaded)
 
 
 def _load_agents() -> None:
@@ -273,7 +274,17 @@ def _save_agents() -> None:
         upsert_agent(agent.model_dump(by_alias=True))
 
 
-_load_agents()
+def _install_agent_registry() -> None:
+    """第一次访问当前租户时再加载，避免 import 阶段没有租户。"""
+
+    global _agents
+    from src.tenancy.registry import TenantDictProxy, TenantScoped
+
+    scoped: TenantScoped[dict] = TenantScoped(dict)
+    _agents = TenantDictProxy(scoped, _load_agents)  # type: ignore[assignment]
+
+
+_install_agent_registry()
 
 
 def get_registered_agent(agent_id: str) -> AgentResponse | None:

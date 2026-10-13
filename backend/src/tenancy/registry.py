@@ -22,6 +22,73 @@ _cleanup_callbacks: dict[str, Callable[[str | None], None]] = {}
 _registry_lock = RLock()
 
 
+class TenantDictProxy:
+    """把按租户分桶的 dict 暴露成普通映射。
+
+    测试可以用 monkeypatch 换成普通 dict；未替换时，读写都进当前租户的桶，
+    第一次访问才调用 loader。
+    """
+
+    def __init__(self, scoped: TenantScoped[dict], loader: Callable[[], None] | None = None) -> None:
+        self._scoped = scoped
+        self._loader = loader
+        self._loaded: dict[str, dict] = {}
+
+    def _bucket(self, *, load: bool) -> dict:
+        from src.tenancy.context import current_tenant
+
+        tenant_id = current_tenant().tenant_id
+        bucket = self._scoped.get()
+        if load and self._loaded.get(tenant_id) is not bucket:
+            self._loaded[tenant_id] = bucket
+            if self._loader is not None:
+                self._loader()
+        return bucket
+
+    def __getitem__(self, key: object) -> object:
+        return self._bucket(load=True)[key]
+
+    def __setitem__(self, key: object, value: object) -> None:
+        # 写入不触发整表加载，避免把刚写入 sqlite 的行立刻迁走。
+        self._bucket(load=False)[key] = value
+
+    def __delitem__(self, key: object) -> None:
+        del self._bucket(load=True)[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._bucket(load=True)
+
+    def __iter__(self):
+        return iter(self._bucket(load=True))
+
+    def __len__(self) -> int:
+        return len(self._bucket(load=True))
+
+    def get(self, key: object, default: object = None) -> object:
+        return self._bucket(load=True).get(key, default)
+
+    def items(self):
+        return self._bucket(load=True).items()
+
+    def values(self):
+        return self._bucket(load=True).values()
+
+    def keys(self):
+        return self._bucket(load=True).keys()
+
+    def clear(self) -> None:
+        self._bucket(load=False).clear()
+
+    def update(self, other: object) -> None:
+        self._bucket(load=False).update(other)  # type: ignore[arg-type]
+
+    def pop(self, key: object, *args: object) -> object:
+        return self._bucket(load=True).pop(key, *args)
+
+    def setdefault(self, key: object, default: object = None) -> object:
+        return self._bucket(load=True).setdefault(key, default)
+
+
 class TenantScoped(Generic[T]):
     """按 tenant_id 懒加载、可整体驱逐的进程内状态。"""
 

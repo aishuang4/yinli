@@ -869,5 +869,15 @@ def _keyword_tokens(*values: str) -> set[str]:
     return tokens
 
 
-_load_user_skills()
+def _install_skill_registry() -> None:
+    """第一次访问当前租户时再加载用户 Skill。"""
+
+    global _skills, _external_skill_overrides
+    from src.tenancy.registry import TenantDictProxy, TenantScoped
+
+    _skills = TenantDictProxy(TenantScoped(lambda: dict(_builtin_skills)), _load_user_skills)  # type: ignore[assignment]
+    _external_skill_overrides = TenantDictProxy(TenantScoped(dict), None)  # type: ignore[assignment]
+
+
+_install_skill_registry()
 

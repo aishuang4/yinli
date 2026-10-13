@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from threading import Thread
+
 from src.storage import database
 
 
@@ -57,6 +59,29 @@ def test_bad_json_row_is_kept_and_later_writes_survive():
         "created_at": "2026-10-13T00:00:02+00:00",
     })
     assert [item["id"] for item in database.list_chat_messages("s-1")] == ["m-good", "m-next"]
+
+
+def test_concurrent_appends_keep_unique_order():
+    database.insert_chat_session_if_absent(_session("s-concurrent"))
+
+    def worker(worker_id: int) -> None:
+        for index in range(50):
+            database.append_chat_message("s-concurrent", {
+                "id": f"m-{worker_id}-{index}",
+                "role": "user",
+                "content": f"{worker_id}:{index}",
+                "created_at": "2026-10-13T00:00:01+00:00",
+            })
+
+    threads = [Thread(target=worker, args=(worker_id,)) for worker_id in (1, 2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    messages = database.list_chat_messages("s-concurrent")
+    assert len(messages) == 100
+    assert len({item["sort_order"] for item in messages}) == 100
+    assert len({item["id"] for item in messages}) == 100
 
 
 def test_delete_session_cascades_run_events():

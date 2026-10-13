@@ -29,8 +29,8 @@ def secret_dir() -> Path:
     return data_root() / "secrets"
 
 
-_cache: dict[str, str] = {}
-_memory_secrets: dict[str, str] = {}
+_cache: dict[tuple[str, str], str] = {}
+_memory_secrets: dict[tuple[str, str], str] = {}
 _lock = RLock()
 
 
@@ -60,15 +60,21 @@ def _account(provider_id: str) -> str:
     return f"model-provider:{provider_id}"
 
 
+def _cache_key(account: str) -> tuple[str, str]:
+    from src.tenancy.context import current_tenant
+
+    return (current_tenant().tenant_id, account)
+
+
 def get_model_api_key(provider_id: str) -> str:
     """读取供应商 API Key。"""
 
     account = _account(provider_id)
     with _lock:
-        if account in _cache:
-            return _cache[account]
+        if _cache_key(account) in _cache:
+            return _cache[_cache_key(account)]
         secret = _read_secret(account)
-        _cache[account] = secret
+        _cache[_cache_key(account)] = secret
         return secret
 
 
@@ -84,7 +90,7 @@ def set_model_api_key(provider_id: str, value: str) -> None:
     account = _account(provider_id)
     with _lock:
         _write_secret(account, secret)
-        _cache[account] = secret
+        _cache[_cache_key(account)] = secret
 
 
 def delete_model_api_key(provider_id: str) -> None:
@@ -93,7 +99,7 @@ def delete_model_api_key(provider_id: str) -> None:
     account = _account(provider_id)
     with _lock:
         _delete_secret(account)
-        _cache[account] = ""
+        _cache[_cache_key(account)] = ""
 
 
 _CATALOG_REF_RE = re.compile(r"^secret:[A-Za-z0-9:._-]{1,180}$")
@@ -110,13 +116,13 @@ def get_named_secret(ref: str) -> str:
 
     account = _catalog_account(ref)
     with _lock:
-        if account in _cache:
-            return _cache[account]
+        if _cache_key(account) in _cache:
+            return _cache[_cache_key(account)]
         try:
             secret = _read_secret(account)
         except SecretStoreError:
             secret = _read_catalog_file_secret(account)
-        _cache[account] = secret
+        _cache[_cache_key(account)] = secret
         return secret
 
 
@@ -135,7 +141,7 @@ def set_named_secret(ref: str, value: str) -> None:
             _write_secret(account, secret)
         except SecretStoreError:
             _write_catalog_file_secret(account, secret)
-        _cache[account] = secret
+        _cache[_cache_key(account)] = secret
 
 
 def delete_named_secret(ref: str) -> None:
@@ -148,7 +154,7 @@ def delete_named_secret(ref: str) -> None:
         except SecretStoreError:
             pass
         _delete_catalog_file_secret(account)
-        _cache[account] = ""
+        _cache[_cache_key(account)] = ""
 
 
 def _catalog_file_path(account: str) -> Path:
@@ -178,7 +184,7 @@ def _delete_catalog_file_secret(account: str) -> None:
 def _read_secret(account: str) -> str:
     backend = _backend_name()
     if backend == "memory":
-        return _memory_secrets.get(account, "")
+        return _memory_secrets.get(_cache_key(account), "")
     if backend == "keychain":
         return _keychain_read(account)
     if backend == "dpapi":
@@ -189,7 +195,7 @@ def _read_secret(account: str) -> str:
 def _write_secret(account: str, value: str) -> None:
     backend = _backend_name()
     if backend == "memory":
-        _memory_secrets[account] = value
+        _memory_secrets[_cache_key(account)] = value
         return
     if backend == "keychain":
         _keychain_write(account, value)
@@ -203,7 +209,7 @@ def _write_secret(account: str, value: str) -> None:
 def _delete_secret(account: str) -> None:
     backend = _backend_name()
     if backend == "memory":
-        _memory_secrets.pop(account, None)
+        _memory_secrets.pop(_cache_key(account), None)
         return
     if backend == "keychain":
         _keychain_delete(account)

@@ -528,7 +528,17 @@ def _save_user_mcp_servers() -> None:
     })
 
 
-_load_user_mcp_servers()
+def _install_mcp_registry() -> None:
+    """第一次访问当前租户时再加载用户 MCP。"""
+
+    global _mcp_servers, _mcp_header_refs
+    from src.tenancy.registry import TenantDictProxy, TenantScoped
+
+    _mcp_servers = TenantDictProxy(TenantScoped(lambda: dict(_builtin_mcp_servers)), _load_user_mcp_servers)  # type: ignore[assignment]
+    _mcp_header_refs = TenantDictProxy(TenantScoped(dict), None)  # type: ignore[assignment]
+
+
+_install_mcp_registry()
 
 
 def _persist_if_user_server(server_id: str) -> None:

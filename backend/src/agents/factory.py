@@ -77,6 +77,15 @@ _agent_cache: dict[str, Agent] = {}
 _session_agents: dict[str, str] = {}
 _agent_last_used: dict[str, float] = {}
 
+
+def _cache_key(key: str) -> str:
+    """缓存键带上租户，避免不同租户的 default Agent 共用实例。"""
+
+    from src.tenancy.context import current_tenant
+
+    prefix = f"{current_tenant().tenant_id}:"
+    return key if key.startswith(prefix) else f"{prefix}{key}"
+
 AGENT_CACHE_MAX_SIZE = 48
 AGENT_CACHE_IDLE_SECONDS = 6 * 60 * 60
 _BUSY_ATTR = "_aw_busy_run_id"
@@ -484,6 +493,9 @@ def get_or_create_agent(
         Agent: AgentScope Agent 实例
     """
     binding = binding_for_model(model_name)
+    agent_id = _cache_key(agent_id)
+    if session_context_key:
+        session_context_key = _cache_key(session_context_key)
     # 完整配置比较只驻留内存；Key 不进入缓存键、日志或运行记录。
     cached = _agent_cache.get(agent_id)
     if cached is not None and getattr(cached, "_model_binding", None) == binding:
@@ -719,7 +731,7 @@ def _filter_tools_by_name(
 def has_cached_agent(agent_id: str) -> bool:
     """Return whether a runtime Agent instance already exists in cache."""
 
-    return agent_id in _agent_cache
+    return _cache_key(agent_id) in _agent_cache
 
 
 def invalidate_agent(agent_id: str) -> None:
@@ -731,6 +743,7 @@ def invalidate_agent(agent_id: str) -> None:
     Args:
         agent_id: 要清除的 Agent ID
     """
+    agent_id = _cache_key(agent_id)
     keys_to_remove = [
         key
         for key in _agent_cache

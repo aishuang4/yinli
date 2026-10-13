@@ -177,12 +177,12 @@ def test_factory_evicts_idle_instances_but_keeps_awaiting_ones(factory_sandbox):
     idle = agent_factory.get_or_create_agent(agent_id="idle", name="Agent", system_prompt="p")
     waiting = agent_factory.get_or_create_agent(agent_id="waiting", name="Agent", system_prompt="p")
     _awaiting_ask_user(waiting)
-    agent_factory._agent_last_used["idle"] = 0.0
-    agent_factory._agent_last_used["waiting"] = 0.0
+    agent_factory._agent_last_used[agent_factory._cache_key("idle")] = 0.0
+    agent_factory._agent_last_used[agent_factory._cache_key("waiting")] = 0.0
 
     evicted = agent_factory._evict_idle_agents(now=agent_factory.AGENT_CACHE_IDLE_SECONDS + 1)
 
-    assert evicted == ["idle"]
+    assert evicted == [agent_factory._cache_key("idle")]
     assert not agent_factory.has_cached_agent("idle")
     assert agent_factory.has_cached_agent("waiting")
     assert idle is not None
@@ -193,9 +193,12 @@ def test_factory_lru_cap_evicts_oldest_unreferenced(factory_sandbox):
         agent_factory.get_or_create_agent(agent_id=f"agent-{index}", name="Agent", system_prompt="p")
     # 创建阶段会用真实 monotonic 时间做闲置判断，全部创建完再改写 LRU 时间戳。
     for index in range(5):
-        agent_factory._agent_last_used[f"agent-{index}"] = float(index)
+        agent_factory._agent_last_used[agent_factory._cache_key(f"agent-{index}")] = float(index)
 
     evicted = agent_factory._evict_idle_agents(now=10.0, max_size=3, idle_seconds=10_000)
 
-    assert evicted == ["agent-0", "agent-1"]
+    assert evicted == [
+        agent_factory._cache_key("agent-0"),
+        agent_factory._cache_key("agent-1"),
+    ]
     assert len(agent_factory._agent_cache) == 3
