@@ -10,6 +10,7 @@ from src.server.auth.secrets import hash_secret
 from src.storage import control_db, database
 
 SESSION_TTL = timedelta(days=14)
+DESKTOP_SESSION_TTL = timedelta(days=30)
 CODE_TTL = timedelta(minutes=15)
 ONLINE_WINDOW = timedelta(seconds=90)
 
@@ -203,7 +204,7 @@ def create_session(*, user_id: str, raw_token: str, client_kind: str) -> dict[st
                 user_id,
                 hash_secret(raw_token),
                 client_kind,
-                _iso(now + SESSION_TTL),
+                _iso(now + (DESKTOP_SESSION_TTL if client_kind == "desktop" else SESSION_TTL)),
                 _iso(now),
                 _iso(now),
             ),
@@ -232,11 +233,21 @@ def get_session_by_token(raw_token: str) -> dict[str, Any] | None:
 
 
 def touch_session(session_id: str) -> None:
+    """刷新最近活跃时间。桌面令牌顺延 30 天，Web 顺延 14 天。"""
+
     control_db.ensure_control_db()
+    now = _now()
     with control_db._control_lock, control_db.control_connect() as conn:
+        row = conn.execute(
+            "SELECT client_kind FROM auth_sessions WHERE id = ? AND revoked_at IS NULL",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return
+        ttl = DESKTOP_SESSION_TTL if row["client_kind"] == "desktop" else SESSION_TTL
         conn.execute(
-            "UPDATE auth_sessions SET last_seen_at = ? WHERE id = ? AND revoked_at IS NULL",
-            (database._utc_now(), session_id),
+            "UPDATE auth_sessions SET last_seen_at = ?, expires_at = ? WHERE id = ?",
+            (_iso(now), _iso(now + ttl), session_id),
         )
 
 

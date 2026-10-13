@@ -12,13 +12,13 @@
 
 ## 托管账号与桌面登录
 
-`AGENT_WORKSTATION_SERVE_MODE` 默认 `desktop`。桌面本机 API 仍只接受回环访问，不登录即可使用本机 `models.json`、会话和文件。未连接托管账号且默认模型没有 Key 时，前端弹出本机 Key 引导。`hosted-account.json` 和 `platform:` → `/api/models/complete` 的转发还在，但工作台没有登录表单，桌面端当前不会领取平台模型，也不会按用户拆工作区。
+`AGENT_WORKSTATION_SERVE_MODE` 默认 `desktop`。桌面本机 API 仍只接受回环访问，不登录即可使用本机 `models.json`、会话和文件。未连接云端且默认模型没有 Key 时，前端弹出本机 Key 引导。桌面顶栏可以登录引力云端：令牌进本机密钥存储，`hosted-account.json` 只留地址和邮箱。平台模型经 `/api/platform/v1` 进入完整 Agent 运行时，平台 Key 不下发。
 
-`hosted` 用邮箱注册并验证后登录。Web 会话是 HttpOnly Cookie；Secure 只在 HTTPS 或 `X-Forwarded-Proto: https` 时设置。回环来源不能代替会话。验证或登录时为该用户创建「默认工作区 / 默认项目」，文件在 `USER_DATA_ROOT/users/{user_id}/projects/{project_id}`。请求里的 `default` 项目会改指这个人自己的项目。Workspace、Project、Chat、群聊、定时任务和习惯记忆按 `owner_user_id` 隔离；既有空归属数据要先用 `python -m src.server.auth.assign_owners <user_id>` 划给一个用户。默认 Agent 的文件系统范围若正好是共享的 `DEFAULT_PROJECT_ROOT`，托管模式下会收窄到该用户的项目目录。
+`hosted` 用邮箱注册并验证后登录。Web 会话是 HttpOnly Cookie；Secure 只在 HTTPS 或 `X-Forwarded-Proto: https` 时设置。回环来源不能代替会话。每个用户一份数据根 `USER_DATA_ROOT/tenants/<usr_…>/`，账号、会话和平台审计在 `control/control.db`。隔离靠目录分开，不再使用 `owner_user_id`。验证或登录时创建该租户的默认 Workspace / Project，目录由服务端分配。自定义模型写在该租户的 `models.json`，Key 用部署主密钥加密。命令只在容器沙箱执行，本机 MCP 不可用。
 
-配置 `AGENT_WORKSTATION_KEY2API_SYNC_TOKEN` 后，`key2api` 才参与托管模型。验证通过后按引力用户 ID 同步一把名为 `yinli` 的 `k2a_`，明文只写在服务器 `auth_provider_keys`。Chat 选择器只列出 `GET /v1/models` 返回的 `platform:` 模型，对话用这把 Key 打到 `{KEY2API_BASE_URL}/v1`，不走本机 `models.json`。用户中心在 `GET /api/auth/usage` 返回 `available: true` 时显示总额度、已用和剩余。同一邮箱若已绑定另一个 `external_id`，同步得到 409，不返回旧 Key，用量按新 ID 查询会是 404。未配置服务令牌时，平台目录仍来自部署级 `models.json`。这份文件的写入只允许管理员。停用账号时同步停用 Key。管理员可以删除其他用户（不能删除自己或最后一名管理员）：先停用 Key，再清掉该用户拥有的工作区、项目、会话和 `users/{user_id}` 目录。这不删除 key2api 上的用户，邮箱在那边仍然占用。Web 与桌面不互相同步会话或文件。已登录不弹本机 Key 引导。
+托管必须配置 `AGENT_WORKSTATION_KEY2API_SYNC_TOKEN`、`AGENT_WORKSTATION_SECRET_KEY` 和 `AGENT_WORKSTATION_SANDBOX_DOCKER_HOST`，缺少任一项都会拒绝启动。验证通过后按引力用户 ID 同步一把名为 `yinli` 的 `k2a_`，明文只写在控制面 `auth_provider_keys`。Chat 选择器列出 `platform:` 模型，服务端用这把 Key 打到 key2api。用户中心在 `GET /api/auth/usage` 返回 `available: true` 时显示总额度、已用和剩余。同一邮箱若已绑定另一个 `external_id`，同步得到 409，不返回旧 Key。停用账号时同步停用 Key。管理员可以删除其他用户（不能删除自己或最后一名管理员）：先停用 Key，再删该租户目录。这不删除 key2api 上的用户。Web 与桌面不互相同步会话或文件。已登录不弹本机 Key 引导。
 
-Web 部署见 `deploy/`。当前线上形态是 `docker-compose.web.yml`：Caddy 公布 `8088`，后端与 Caddy 共用网络命名空间，Uvicorn 监听 `127.0.0.1:8765` 且 `--no-proxy-headers`。对话 Shell 在该容器内执行，映像里带有 `curl`、`git`、`rg`、`unzip`、`zip`、`jq`、`file`、`ps`。Node 与 LibreOffice 不在这个映像里。
+Web 部署见 `deploy/`。当前编排是 `docker-compose.web.yml`：Caddy 公布 `8088`，后端与 Caddy 共用网络命名空间，Uvicorn 以 `--workers 1` 监听 `127.0.0.1:8765` 且 `--no-proxy-headers`。数据目录是宿主 `/srv/yinli/data`，以同一路径挂进容器。沙箱安装见 `deploy/SANDBOX.md`，备份见 `deploy/BACKUP.md`。对话 Shell 在该容器内执行，映像里带有 `curl`、`git`、`rg`、`unzip`、`zip`、`jq`、`file`、`ps`。Node 与 LibreOffice 不在这个映像里。
 
 ## 技术栈
 

@@ -6,12 +6,57 @@
 
 from __future__ import annotations
 
+import ast
 import logging
+import re
 import sqlite3
 from collections.abc import Callable
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# json.dumps(default=str) 曾把 Pydantic 模型存成 `id='...' name='...'`。
+_MODEL_BLOB = re.compile(
+    r"(\w+)=("
+    r"'(?:\\'|[^'])*'"
+    r"|\"(?:\\\"|[^\"])*\""
+    r"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
+    r"|None|True|False"
+    r")"
+)
+
+
+def _parse_stringified_model(value: str) -> dict[str, Any] | None:
+    """把旧的模型字面量还原成字段字典。不像模型字面量就原样放弃。"""
+
+    if "=" not in value:
+        return None
+    fields: dict[str, Any] = {}
+    pos = 0
+    length = len(value)
+    while pos < length:
+        if value[pos].isspace():
+            pos += 1
+            continue
+        match = _MODEL_BLOB.match(value, pos)
+        if match is None:
+            return None
+        try:
+            fields[match.group(1)] = ast.literal_eval(match.group(2))
+        except (SyntaxError, ValueError):
+            return None
+        pos = match.end()
+    return fields or None
+
+
+def _coerce_loaded(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_coerce_loaded(item) for item in value]
+    if isinstance(value, str):
+        parsed = _parse_stringified_model(value)
+        if parsed is not None:
+            return parsed
+    return value
 
 _SESSION_UPDATE_FIELDS = {
     "title": "title",
@@ -219,14 +264,14 @@ class ChatSessionRecordStore:
             "assistantMessageId": assistant_row["id"],
             "userMessage": user_row["content"],
             "assistantText": assistant_row["content"],
-            "toolCalls": self.loads(assistant_row["tool_calls"], []),
-            "runtimeEvents": self.loads(assistant_row["runtime_events"], []),
+            "toolCalls": _coerce_loaded(self.loads(assistant_row["tool_calls"], [])),
+            "runtimeEvents": _coerce_loaded(self.loads(assistant_row["runtime_events"], [])),
             "createdAt": assistant_row["created_at"],
         }
 
     def _load_json(self, raw: str | None, default: Any, *, row_id: str, column: str) -> Any:
         try:
-            return self.loads(raw, default)
+            return _coerce_loaded(self.loads(raw, default))
         except (TypeError, ValueError):
             logger.warning("聊天记录 JSON 损坏 id=%s column=%s", row_id, column)
             return default

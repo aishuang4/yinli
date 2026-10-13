@@ -86,6 +86,7 @@ export interface ScheduledJob {
   status: JobStatus;
   pauseReason: string;
   agentId: string;
+  modelConfigId: string;
   mode: JobExecutor;
   scheduleKind: ScheduleKind;
   scheduleExpr: JobScheduleExpr;

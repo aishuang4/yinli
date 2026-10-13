@@ -6,7 +6,7 @@
 
 ## 0. 准备
 
-- [ ] 0.1 停掉现有 Web 部署并清空数据卷（§15 最后一条）。在 PR 描述中注明"托管数据已清空，不做迁移"
+- [x] 0.1 停掉现有 Web 部署并清空数据卷（§15 最后一条）。在 PR 描述中注明"托管数据已清空，不做迁移"
 - [x] 0.2 在 `pyproject.toml` 显式加入 `cryptography` 依赖，执行 `uv sync`（§11.3）
 - [x] 0.3 逐项核对 design 中标注"实施前核对"的假设，把结论记在 PR 描述里：model_catalog 能否接受空目录（§9.1-8）；AgentScope Docker 客户端是否读取 `DOCKER_HOST`（§12.4.2）；skill_paths 的挂载方式（§12.4.2）；workspace backend 能否单次执行命令（§12.4.5）；模型 SDK 能否注入 httpx client（§11.4）；`mcp/registry.py:437` 的线程回调是否访问租户数据（§10.7）；key2api 是否支持 tools 和 stream_options（§11.6）；桌面会话 TTL（§11.6）；`/api/sandbox/cases` 的用途（§12.2）；`ModelEntry.capabilities` 的字段集（§11.5）；firing 状态枚举（§12.6）
 
@@ -55,48 +55,48 @@
 - [x] 4.4 记忆用户固定为 `default`：删除 `_hosted_memory_user` 和 `_habit_user_id`（§10.5）
 - [x] 4.5 `cancel_tenant_activity` 接入 Run、firing、群聊（§9.4 第 4 步）
 - [x] 4.6 测试 `test_tenant_background.py`、`test_tenant_isolation.py`（§17.1）
-- [ ] 4.7 **门槛 B**（§17.3）
+- [x] 4.7 **门槛 B**（§17.3）
 
 ## 5. 模型来源
 
-- [ ] 5.1 secret_store 增加 hosted 的 `tenant_encrypted` 后端，缺少主密钥时启动失败（§11.3）。测试 `test_secret_store_tenant.py`
-- [ ] 5.2 新建 `models/platform_layer.py`；改写 `resolve_model_binding` 的 platform 分支和默认模型解析顺序（§11.2）
-- [ ] 5.3 `server/routes/settings.py` 去掉管理员限制，加 `baseUrl` 出站校验（§11.4；egress 模块在 6.1 实现，这里可以先写调用，6.1 完成后再补测试）
-- [ ] 5.4 平台模型能力表与管理员接口（§11.5）；删除部署级 `models.json` 作为平台目录的分支；hosted 缺少 key2api 令牌时启动失败
-- [ ] 5.5 云端转发网关 `server/platform_gateway.py`（§11.6）。测试 `test_platform_gateway.py`
-- [ ] 5.6 桌面端新建 `server/auth/cloud_client.py`，改写 `/api/auth/desktop/session` 和 `_desktop_provided_models`，兼容旧文件里的 token，新增 `cloud_base_url` 设置（§11.6）。测试 `test_cloud_client.py`
-- [ ] 5.7 删除 `platform_chat.py`、`send.py` 中的特殊分支、`/api/models/complete`、`invoke_platform_model`、`complete_with_platform_key`（§11.6）
-- [ ] 5.8 **门槛 C**（§17.3）
+- [x] 5.1 secret_store 增加 hosted 的 `tenant_encrypted` 后端，缺少主密钥时启动失败（§11.3）。测试 `test_secret_store_tenant.py`
+- [x] 5.2 新建 `models/platform_layer.py`；改写 `resolve_model_binding` 的 platform 分支和默认模型解析顺序（§11.2）
+- [x] 5.3 `server/routes/settings.py` 去掉管理员限制，加 `baseUrl` 出站校验（§11.4；egress 模块在 6.1 实现，这里可以先写调用，6.1 完成后再补测试）
+- [x] 5.4 平台模型能力表与管理员接口（§11.5）；删除部署级 `models.json` 作为平台目录的分支；hosted 缺少 key2api 令牌时启动失败
+- [x] 5.5 云端转发网关 `server/platform_gateway.py`（§11.6）。测试 `test_platform_gateway.py`
+- [x] 5.6 桌面端新建 `server/auth/cloud_client.py`，改写 `/api/auth/desktop/session` 和 `_desktop_provided_models`，兼容旧文件里的 token，新增 `cloud_base_url` 设置（§11.6）。测试 `test_cloud_client.py`
+- [x] 5.7 删除 `platform_chat.py`、`send.py` 中的特殊分支、`/api/models/complete`、`invoke_platform_model`、`complete_with_platform_key`（§11.6）
+- [x] 5.8 **门槛 C**（§17.3）
 
 ## 6. Web 执行安全
 
-- [ ] 6.1 新建 `security/egress.py`，把 web_fetch 里的校验逻辑迁过来并接入各调用点（§12.5）。测试 `test_egress.py`
-- [ ] 6.2 新建 `tenancy/capabilities.py`，`/api/auth/config` 下发能力（§12.1）
-- [ ] 6.3 MCP：hosted 下内置 stdio 不可见，拒绝 stdio 的注册 / 安装 / 启用，远程 URL 走出站校验（§12.2、§12.3）
-- [ ] 6.4 沙箱配置项和 hosted 启动检查（§12.4.1）
-- [ ] 6.5 新建 `sandbox/hosted_workspace.py`、`sandbox/provider.py`、`sandbox/fake.py`（§12.4.2、§12.4.8）。容器名必须包含租户和 Project 的哈希
-- [ ] 6.6 `agents/factory.py` 接入（§12.4.3），核对 `create_agent` 的全部调用点并传入 project_id；Agent 保存和运行时都强制改写 guardrails（§12.2）
-- [ ] 6.7 hosted 下 Bash 只能在沙箱中执行的断言，以及系统提示词说明（§12.4.4）
-- [ ] 6.8 script 定时任务走沙箱（§12.4.5）
-- [ ] 6.9 删除 `_hosted_personal_project`；hosted 下不初始化宿主 venv（§12.4.6、§12.4.7）
-- [ ] 6.10 删除租户时清理沙箱容器（§9.4 第 2 步），补上 `test_tenant_lifecycle.py` 中的沙箱用例
-- [ ] 6.11 配额（§12.6）。测试 `test_tenant_quota.py`
-- [ ] 6.12 测试 `test_hosted_execution.py`（§17.1）
-- [ ] 6.13 **门槛 D**（§17.3）
+- [x] 6.1 新建 `security/egress.py`，把 web_fetch 里的校验逻辑迁过来并接入各调用点（§12.5）。测试 `test_egress.py`
+- [x] 6.2 新建 `tenancy/capabilities.py`，`/api/auth/config` 下发能力（§12.1）
+- [x] 6.3 MCP：hosted 下内置 stdio 不可见，拒绝 stdio 的注册 / 安装 / 启用，远程 URL 走出站校验（§12.2、§12.3）
+- [x] 6.4 沙箱配置项和 hosted 启动检查（§12.4.1）
+- [x] 6.5 新建 `sandbox/hosted_workspace.py`、`sandbox/provider.py`、`sandbox/fake.py`（§12.4.2、§12.4.8）。容器名必须包含租户和 Project 的哈希
+- [x] 6.6 `agents/factory.py` 接入（§12.4.3），核对 `create_agent` 的全部调用点并传入 project_id；Agent 保存和运行时都强制改写 guardrails（§12.2）
+- [x] 6.7 hosted 下 Bash 只能在沙箱中执行的断言，以及系统提示词说明（§12.4.4）
+- [x] 6.8 script 定时任务走沙箱（§12.4.5）
+- [x] 6.9 删除 `_hosted_personal_project`；hosted 下不初始化宿主 venv（§12.4.6、§12.4.7）
+- [x] 6.10 删除租户时清理沙箱容器（§9.4 第 2 步），补上 `test_tenant_lifecycle.py` 中的沙箱用例
+- [x] 6.11 配额（§12.6）。测试 `test_tenant_quota.py`
+- [x] 6.12 测试 `test_hosted_execution.py`（§17.1）
+- [x] 6.13 **门槛 D**（§17.3）
 
 ## 7. 前端
 
-- [ ] 7.1 `authStore` 加入 `capabilities` 和 `cloudAccount`；`HostedSessionGate` 读取它们（§14）
-- [ ] 7.2 新建 `stores/resetTenantState.ts` 并接入登录、退出、切换账号；依赖用户的数据加载加上 `user?.id`（§14）
-- [ ] 7.3 按能力开关隐藏入口：Project 路径、执行后端、stdio MCP、script 任务提示（§14）
-- [ ] 7.4 模型页分为平台层和我的模型，hosted 下普通用户可编辑；管理员面板加"平台模型"页签（§14）
-- [ ] 7.5 桌面云端登录入口和 expired 状态提示；`useProvidedModels` 改用 `cloudAccount`（§14）
-- [ ] 7.6 Key 引导弹窗的 localStorage key 按用户区分；hosted 下不弹出（§14）
-- [ ] 7.7 前端测试：`authRules.test.ts`、`resetTenantState` 测试、能力开关渲染测试。`npm test` 全绿
+- [x] 7.1 `authStore` 加入 `capabilities` 和 `cloudAccount`；`HostedSessionGate` 读取它们（§14）
+- [x] 7.2 新建 `stores/resetTenantState.ts` 并接入登录、退出、切换账号；依赖用户的数据加载加上 `user?.id`（§14）
+- [x] 7.3 按能力开关隐藏入口：Project 路径、执行后端、stdio MCP、script 任务提示（§14）
+- [x] 7.4 模型页分为平台层和我的模型，hosted 下普通用户可编辑；管理员面板加"平台模型"页签（§14）
+- [x] 7.5 桌面云端登录入口和 expired 状态提示；`useProvidedModels` 改用 `cloudAccount`（§14）
+- [x] 7.6 Key 引导弹窗的 localStorage key 按用户区分；hosted 下不弹出（§14）
+- [x] 7.7 前端测试：`authRules.test.ts`、`resetTenantState` 测试、能力开关渲染测试。`npm test` 全绿
 
 ## 8. 部署、文档与验收
 
-- [ ] 8.1 按 §15 修改 `docker-compose.web.yml`、`Dockerfile`、`backend.env.example`，新增 `deploy/SANDBOX.md`、`deploy/BACKUP.md`
-- [ ] 8.2 更新 `AGENTS.md` 的项目概述（删除 `owner_user_id`、`assign_owners`、"Web 与桌面数据各自独立"的旧说法，改写为租户模型）、`docs/architecture-overview.md` 的运行形态章节、`docs/web-service-plan.md`
-- [ ] 8.3 在 PR 描述中说明 `hosted-account-access` 的 4.1、4.5 已被取代，两份 change 一起归档
-- [ ] 8.4 **门槛 E**（§17.3）：全量后端和前端测试通过；在全新机器上按文档部署，两个账号完成手动隔离验收
+- [x] 8.1 按 §15 修改 `docker-compose.web.yml`、`Dockerfile`、`backend.env.example`，新增 `deploy/SANDBOX.md`、`deploy/BACKUP.md`
+- [x] 8.2 更新 `AGENTS.md` 的项目概述（删除 `owner_user_id`、`assign_owners`、"Web 与桌面数据各自独立"的旧说法，改写为租户模型）、`docs/architecture-overview.md` 的运行形态章节、`docs/web-service-plan.md`
+- [x] 8.3 在 PR 描述中说明 `hosted-account-access` 的 4.1、4.5 已被取代，两份 change 一起归档
+- [ ] 8.4 **门槛 E**（§17.3）：全量后端和前端测试通过；在全新机器上按文档部署，两个账号完成手动隔离验收。2026-10-13 用户确认：这项目前还没有做手动测试，不要勾掉。

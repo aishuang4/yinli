@@ -17,9 +17,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.server.routes import agent_builder, agents, chat, group_studio, health, mcp, memory, notifications, sandbox, settings as settings_routes, scheduled_jobs, skills, subagents, tools, traces, workflows, workspaces
-from src.config.settings import assert_hosted_email_config, settings
+from src.config.settings import assert_hosted_email_config, assert_hosted_platform_config, assert_hosted_sandbox, settings
 from src.server.auth.middleware import HostedSessionMiddleware
 from src.server.auth.platform_models import router as platform_model_router
+from src.server.platform_gateway import router as platform_gateway_router
 from src.server.auth.routes import admin_router, auth_router
 from src.server.auth.service import ensure_default_admins
 from src.storage.control_db import ensure_control_db
@@ -49,6 +50,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
     # === 启动 ===
     assert_hosted_email_config()
+    from src.config.secret_store import assert_hosted_secret_key
+
+    assert_hosted_secret_key()
+    assert_hosted_platform_config()
+    assert_hosted_sandbox()
     ensure_process_directories()
     if is_hosted_mode():
         ensure_control_db()
@@ -146,6 +152,7 @@ app.include_router(health.router, tags=["健康检查"])
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(platform_model_router)
+app.include_router(platform_gateway_router)
 app.include_router(workspaces.router, prefix="/api", tags=["Workspace / Project"])
 app.include_router(agents.router, prefix="/api/agents", tags=["Agent 管理"])
 app.include_router(agent_builder.router, prefix="/api/agent-builder", tags=["Agent 智能编排"])

@@ -4,7 +4,10 @@
 
 import { CalendarClock, FolderOpen, Pause, Play, Trash2 } from 'lucide-react';
 import { Button, Tag } from '@/components/design';
+import { SelectField } from '../../components/form';
 import { WorkbenchDetailShell, WorkbenchListIcon, WorkbenchSection } from '../../components/workbench';
+import { useAuthStore } from '../auth/authStore';
+import { modelAvailable, type ModelCatalog } from '../models/useModelCatalog';
 import type { ScheduledJob, ScheduledJobRun } from '../../types/scheduledJob';
 import { ScheduledJobContractPanel } from './ScheduledJobContractPanel';
 import { ScheduledJobHistory } from './ScheduledJobHistory';
@@ -34,7 +37,9 @@ interface ScheduledJobDetailPageProps {
   onPause: () => void;
   onResume: () => void;
   onDelete: () => void;
+  catalog: ModelCatalog | null;
   onSaveSchedule: (weekdays: string[], at: string, timezone: string) => Promise<void>;
+  onSaveModel: (modelConfigId: string) => Promise<void>;
   onCancelRun: (run: ScheduledJobRun) => void;
   onOpenDirectory: (targetPath: string) => void;
 }
@@ -55,11 +60,14 @@ export function ScheduledJobDetailPage({
   onPause,
   onResume,
   onDelete,
+  catalog,
   onSaveSchedule,
+  onSaveModel,
   onCancelRun,
   onOpenDirectory,
 }: ScheduledJobDetailPageProps) {
   const writable = schedulerEnabled === true && canWriteJob(job);
+  const localExecution = useAuthStore((state) => state.capabilities.localExecution);
   const jobDir = projectRoot ? jobWorkspaceDir(projectRoot, job.id) : '';
 
   return (
@@ -138,6 +146,18 @@ export function ScheduledJobDetailPage({
 
           <ScheduledJobContractPanel job={job} />
 
+          {job.mode === 'agent' ? (
+            <JobModelField
+              job={job}
+              catalog={catalog}
+              disabled={!writable}
+              saving={busy}
+              onSave={onSaveModel}
+            />
+          ) : (!localExecution ? (
+            <p className="text-sm text-[var(--color-text-secondary)]">在隔离沙箱中运行</p>
+          ) : null)}
+
           <ScheduledJobScheduleForm
             job={job}
             disabled={!writable}
@@ -190,6 +210,50 @@ export function ScheduledJobDetailPage({
         </div>
       </div>
     </WorkbenchDetailShell>
+  );
+}
+
+function JobModelField({
+  job,
+  catalog,
+  disabled,
+  saving,
+  onSave,
+}: {
+  job: ScheduledJob;
+  catalog: ModelCatalog | null;
+  disabled: boolean;
+  saving: boolean;
+  onSave: (modelConfigId: string) => Promise<void>;
+}) {
+  const options = (catalog?.models ?? [])
+    .filter((item) => catalog && modelAvailable(catalog, item))
+    .map((item) => ({ value: item.id, label: item.label || item.model }));
+  return (
+    <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
+      <div className="mb-1 text-sm font-semibold text-[var(--color-text-primary)]">运行模型</div>
+      <p className="mb-3 text-xs text-[var(--color-text-tertiary)]">
+        到期执行用这里的模型。留空则用模型页的默认模型。没有自定义模型时，使用系统内置模型。
+      </p>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="min-w-[240px] flex-1">
+          <SelectField
+            label="模型"
+            aria-label="定时任务运行模型"
+            value={job.modelConfigId || undefined}
+            options={options}
+            placeholder={options.length ? '使用默认模型' : '还没有可用模型'}
+            disabled={disabled || options.length === 0}
+            onChange={(value) => void onSave(String(value || ''))}
+          />
+        </div>
+        {job.modelConfigId ? (
+          <Button size="small" disabled={disabled || saving} onClick={() => void onSave('')}>
+            改回默认
+          </Button>
+        ) : null}
+      </div>
+    </section>
   );
 }
 

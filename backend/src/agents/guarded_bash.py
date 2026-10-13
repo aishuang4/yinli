@@ -69,6 +69,15 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
         """在 Windows 使用 UTF-8 编码的 ``cmd.exe``，避免 PATH 或 Git Bash 依赖。"""
 
         if os.name != "nt" and self._backend.__class__.__name__ == "LocalBackend":
+            from src.tenancy.context import TenantMissing, current_tenant
+
+            try:
+                hosted_bash = current_tenant().is_hosted
+            except TenantMissing:
+                hosted_bash = False
+            if hosted_bash:
+                yield _bash_error_chunk(command, "Web 端命令只能在隔离沙箱中执行")
+                return
             async for chunk in self._call_local_streaming(command, timeout):
                 yield chunk
             return

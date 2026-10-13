@@ -1100,7 +1100,7 @@ def guarded_async_client(**kwargs) -> httpx.AsyncClient
 | 漏改缓存造成串数据 | §6 清单；hosted fail closed；`test_tenant_isolation.py` 对每类资源做交叉测试 |
 | 覆盖 AgentScope 私有方法 | 版本已锁定 2.0.5；升级时必须复查 `HostedDockerWorkspace` |
 | 方案 A 下 docker.sock 等同宿主 root | 使用 runsc、网络隔离、后端不对公网暴露（Caddy 反代）；条件允许时迁到方案 B |
-| 远程 MCP / 模型 SDK 的 DNS rebinding | 保存时和运行前各校验一次；网络层出站规则兜底 |
+| 远程 MCP / 模型 SDK 的 DNS rebinding | 保存时和运行前各校验一次。AgentScope 2.0.5 的 ChatModel 构造函数不能注入 httpx client，绑定之后到真正建连之间仍有窗口；网络层出站规则兜底 |
 | 每个租户一个 SQLite 文件 | 单机数千租户没有问题；ticker 遍历的开销后续可以用控制面索引优化 |
 | 单进程限制 | 后台 Run 在内存中；Web 固定 workers=1，水平扩展另立 change |
 | 租户内设置变为按租户（如定时任务开关、群聊设置、记忆策略） | 这是预期行为；创建租户时用部署默认值播种 |

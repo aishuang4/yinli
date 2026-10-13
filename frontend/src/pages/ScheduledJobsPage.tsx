@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Modal } from '@/components/design';
 import { ScheduledJobDetailPage } from '../features/scheduled-jobs/ScheduledJobDetailPage';
 import { ScheduledJobLandingPage } from '../features/scheduled-jobs/ScheduledJobLandingPage';
+import { useModelCatalog } from '../features/models/useModelCatalog';
 import { useAgents } from '../hooks/useAgents';
 import { useScheduledJobs } from '../hooks/useScheduledJobs';
 import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
@@ -27,10 +28,12 @@ export function ScheduledJobsPage() {
     resumeJob,
     deleteJob,
     updateSchedule,
+    updateModel,
     listRuns,
     cancelRun,
   } = useScheduledJobs();
   const { agents } = useAgents();
+  const { catalog } = useModelCatalog(false);
   const { projects, activeProjectId } = useWorkspaceProjects();
   const pendingJobId = useAppStore((state) => state.pendingJobId);
   const clearPendingJobId = useAppStore((state) => state.clearPendingJobId);
@@ -167,6 +170,10 @@ export function ScheduledJobsPage() {
           onPause={() => void runJobAction(selectedJob.id, () => pauseJob(selectedJob.id))}
           onResume={() => void runJobAction(selectedJob.id, () => resumeJob(selectedJob.id))}
           onDelete={() => setDeleteConfirm(selectedJob)}
+          catalog={catalog}
+          onSaveModel={async (modelConfigId) => {
+            await runJobAction(selectedJob.id, () => updateModel(selectedJob.id, modelConfigId));
+          }}
           onSaveSchedule={async (weekdays, at, timezone) => {
             const daily = selectedJob.scheduleKind === 'daily';
             await runJobAction(selectedJob.id, () => updateSchedule(selectedJob.id, {

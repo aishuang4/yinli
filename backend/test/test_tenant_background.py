@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from src.config.model_catalog import CatalogError
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.settings import set_scheduled_jobs_settings
 from src.scheduler.ticker import JobScheduler, reset_job_scheduler
@@ -127,5 +128,47 @@ def test_platform_binding_uses_tenant_user(hosted_env, monkeypatch):
         binding = resolve_model_binding("platform:demo")
     assert binding.primary.api_key == "k2a_secret"
     with use_tenant(TenantContext.hosted(USER_B["id"], role="user")):
-        with pytest.raises(Exception):
+        with pytest.raises(CatalogError, match="平台模型暂不可用"):
             resolve_model_binding("platform:demo")
+
+
+def test_empty_default_uses_first_platform_model(hosted_env, monkeypatch):
+    from src.config.runtime_paths import shared_root
+    from src.config.runtime_settings import resolve_model_binding
+    from src.storage import auth_records
+
+    ensure_tenant(USER_A)
+    auth_records.save_provider_key(
+        user_id=USER_A["id"],
+        token="k2a_secret",
+        key2api_user_id="k2a-user",
+        key2api_token_id="k2a-token",
+        status="active",
+    )
+    monkeypatch.setattr("src.server.auth.key2api.base_url", lambda: "http://platform.test")
+    monkeypatch.setattr(
+        "src.server.auth.key2api.list_platform_models",
+        lambda user_id: [{"id": "platform:first", "label": "first"}],
+    )
+    shared = shared_root()
+    shared.mkdir(parents=True, exist_ok=True)
+    (shared / "platform-models.json").write_text(
+        '{"version":1,"models":[{"model":"first","capabilities":{"images":true}}]}',
+        encoding="utf-8",
+    )
+    with use_tenant(TenantContext.hosted(USER_A["id"], role="user")):
+        binding = resolve_model_binding()
+    assert binding.primary.default_model == "first"
+    assert binding.primary.api_key == "k2a_secret"
+    assert len(binding.chain) == 1
+    assert binding.primary.entry.capabilities.images is True
+
+
+def test_hosted_without_any_model_reports_catalog_error(hosted_env, monkeypatch):
+    from src.config.runtime_settings import resolve_model_binding
+
+    ensure_tenant(USER_A)
+    monkeypatch.setattr("src.server.auth.key2api.list_platform_models", lambda user_id: [])
+    with use_tenant(TenantContext.hosted(USER_A["id"], role="user")):
+        with pytest.raises(CatalogError, match="没有可用模型"):
+            resolve_model_binding()

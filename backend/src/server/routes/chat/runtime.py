@@ -14,6 +14,7 @@ from src.agents.factory import (
 from src.security.permissions import build_permission_profile
 from src.server.routes.mcp import resolve_mcp_runtime_servers
 from src.server.routes.tools import get_enabled_http_tools, get_enabled_knowledge_tools
+from src.tenancy.capabilities import coerce_hosted_guardrails
 
 from src.server.routes.chat.models import ChatImagePayload
 
@@ -57,7 +58,7 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
         persistent_sandbox=bool(getattr(guardrails, "persistent_sandbox", False)),
         timeout_seconds=int(getattr(guardrails, "timeout_seconds", 300) or 300),
     )
-    return AgentGuardrails(
+    return coerce_hosted_guardrails(AgentGuardrails(
         filesystem_scope=runtime_guardrails.filesystem_scope,
         shell_blacklist=runtime_guardrails.shell_blacklist,
         network_enabled=runtime_guardrails.network_enabled,
@@ -69,7 +70,7 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
         persistent_sandbox=runtime_guardrails.persistent_sandbox,
         timeout_seconds=runtime_guardrails.timeout_seconds,
         permission_profile=build_permission_profile(runtime_guardrails),
-    )
+    ))
 
 
 def scope_guardrails_to_project(
@@ -105,6 +106,10 @@ def scope_guardrails_to_project(
         timeout_seconds=guardrails.timeout_seconds,
         permission_profile=guardrails.permission_profile,
     )
+    from src.tenancy.capabilities import coerce_hosted_guardrails
+
+    coerced = coerce_hosted_guardrails(runtime_guardrails)
+    return coerced if coerced is not None else runtime_guardrails
 
 
 def _is_legacy_desktop_scope(agent_path: Path, project_path: Path) -> bool:
@@ -163,6 +168,10 @@ def _build_runtime_mcp_servers(
             headers=dict(item.get("headers") or {}),
             enable_tools=list(item.get("enable_tools") or []),
         ))
+    from src.tenancy.context import is_hosted_mode
+
+    if is_hosted_mode():
+        specs = [item for item in specs if item.transport != "stdio"]
     return specs
 
 

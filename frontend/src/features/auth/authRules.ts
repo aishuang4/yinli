@@ -9,6 +9,40 @@ export type AuthUser = {
 
 export type ServeMode = 'desktop' | 'hosted';
 
+export type ProductCapabilities = {
+  localProjectPaths: boolean;
+  stdioMcp: boolean;
+  localExecution: boolean;
+  sandboxExecution: boolean;
+  sandboxImages: string[];
+  cloudLogin: boolean;
+  customModels: boolean;
+};
+
+export type CloudAccount = {
+  connected: boolean;
+  email: string;
+  status: string;
+  baseUrl: string;
+};
+
+export const DESKTOP_CAPABILITIES: ProductCapabilities = {
+  localProjectPaths: true,
+  stdioMcp: true,
+  localExecution: true,
+  sandboxExecution: false,
+  sandboxImages: [],
+  cloudLogin: true,
+  customModels: true,
+};
+
+export const EMPTY_CLOUD_ACCOUNT: CloudAccount = {
+  connected: false,
+  email: '',
+  status: '',
+  baseUrl: '',
+};
+
 export function workbenchGate(serveMode: ServeMode, user: AuthUser | null): 'workbench' | 'login' {
   if (serveMode === 'desktop') return 'workbench';
   return user ? 'workbench' : 'login';

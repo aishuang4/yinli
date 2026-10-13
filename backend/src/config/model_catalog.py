@@ -18,6 +18,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from src.config.runtime_paths import tenant_root
 
 
+PLATFORM_PROVIDER_ID = "yinli-platform"
+BUILTIN_PROVIDER_NAME = "系统内置模型"
+
+
 def models_path() -> Path:
     """当前租户的自定义模型目录文件。"""
 
@@ -395,6 +399,139 @@ def read_catalog() -> tuple[ModelCatalog, str]:
                 "system_settings", "models_file_migrated", {"version": 1}
             )
         return catalog, hashlib.sha256(payload).hexdigest()
+
+
+_UPSTREAM_MODEL_LIMIT = 40
+
+
+def list_provider_upstream_models(provider_id: str) -> list[str]:
+    """用已保存的供应商 Key 读取上游 /v1/models。不把 Key 带回调用方。"""
+
+    import ipaddress
+
+    import httpx
+
+    catalog, _etag = read_catalog()
+    provider = next((item for item in catalog.providers if item.id == provider_id), None)
+    if provider is None:
+        raise CatalogError("供应商不存在，请先保存连接。")
+    if provider.requires_api_key and not provider.api_key.strip():
+        raise CatalogError("请先保存该供应商的 API Key，再拉取上游模型。")
+    base = provider.base_url.strip().rstrip("/")
+    if not base:
+        raise CatalogError("请先填写并保存 Base URL。")
+    host = (urlsplit(base).hostname or "").lower()
+    if host in {"localhost", "metadata.google.internal"}:
+        raise CatalogError("不能从本机或元数据地址拉取模型。")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None and (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved):
+        raise CatalogError("不能从内网地址拉取模型。")
+    endpoint = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+    headers = {"Authorization": f"Bearer {provider.api_key}"} if provider.api_key.strip() else {}
+    try:
+        response = httpx.get(endpoint, headers=headers, timeout=12.0, follow_redirects=False)
+    except httpx.HTTPError as exc:
+        raise CatalogError("上游模型列表请求失败。") from exc
+    if response.status_code >= 400:
+        raise CatalogError(f"上游拒绝列出模型（{response.status_code}）。")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise CatalogError("上游模型列表不是 JSON。") from exc
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise CatalogError("上游模型列表格式无法识别。")
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("id") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+        if len(names) >= _UPSTREAM_MODEL_LIMIT:
+            break
+    return names
+
+
+def ensure_hosted_upstream_catalog() -> None:
+    """托管且能拉到上游时，把模型名写入当前租户的 models.json。Key 仍留在控制面。"""
+
+    from src.tenancy.context import current_tenant, is_hosted_mode
+
+    if not is_hosted_mode():
+        return
+    user_id = current_tenant().user_id
+    if not user_id:
+        return
+    from src.server.auth.key2api import Key2ApiError, base_url, key2api_configured, list_platform_models
+
+    if not key2api_configured():
+        return
+    try:
+        remote = list_platform_models(user_id)
+    except Key2ApiError:
+        return
+    names = []
+    seen: set[str] = set()
+    for item in remote:
+        name = str(item.get("label") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+        if len(names) >= _UPSTREAM_MODEL_LIMIT:
+            break
+    if not names:
+        return
+    catalog, _etag = read_catalog()
+    providers = [item for item in catalog.providers if item.id != PLATFORM_PROVIDER_ID]
+    providers.append(ProviderConfig(
+        id=PLATFORM_PROVIDER_ID,
+        name=BUILTIN_PROVIDER_NAME,
+        adapter="openai",
+        baseUrl=f"{base_url()}/v1",
+        apiKey="",
+        requiresApiKey=False,
+        enabled=True,
+    ))
+    kept = [item for item in catalog.models if item.provider_id != PLATFORM_PROVIDER_ID]
+    upstream = []
+    for name in names:
+        upstream.append(ModelEntry(
+            id=f"upstream-{name}",
+            providerId=PLATFORM_PROVIDER_ID,
+            model=name,
+            label=name,
+        ))
+    models = [*kept, *upstream]
+    model_ids = {item.id for item in models}
+    default_id = catalog.default_model_id if catalog.default_model_id in model_ids else upstream[0].id
+    previous = {
+        (item.id, item.model, item.label)
+        for item in catalog.models
+        if item.provider_id == PLATFORM_PROVIDER_ID
+    }
+    current = {(item.id, item.model, item.label) for item in upstream}
+    existing_provider = next((item for item in catalog.providers if item.id == PLATFORM_PROVIDER_ID), None)
+    if (
+        previous == current
+        and catalog.default_model_id == default_id
+        and existing_provider is not None
+        and existing_provider.name == BUILTIN_PROVIDER_NAME
+    ):
+        return
+    _write(ModelCatalog(
+        revision=catalog.revision,
+        defaultModelId=default_id,
+        providers=tuple(providers),
+        models=tuple(models),
+    ))
 
 
 def public_catalog() -> dict:

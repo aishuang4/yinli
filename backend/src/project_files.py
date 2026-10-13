@@ -228,6 +228,15 @@ def sanitize_upload_filename(filename: str | None) -> str:
     return value[:180] or "attachment"
 
 
+def _over_tenant_upload(size: int) -> bool:
+    from src.config.settings import settings
+    from src.tenancy.context import is_hosted_mode
+
+    if not is_hosted_mode():
+        return False
+    return size > int(settings.tenant_upload_mb) * 1024 * 1024
+
+
 async def save_project_upload(
     *,
     project_root: Path,
@@ -248,9 +257,16 @@ async def save_project_upload(
         with destination.open("xb") as output:
             while chunk := await upload.read(1024 * 1024):
                 size += len(chunk)
-                if size > MAX_UPLOAD_BYTES:
+                if size > MAX_UPLOAD_BYTES or _over_tenant_upload(size):
                     output.close()
                     destination.unlink(missing_ok=True)
+                    if _over_tenant_upload(size):
+                        from src.tenancy.quota import QuotaExceeded, assert_upload_size
+
+                        try:
+                            assert_upload_size(size)
+                        except QuotaExceeded as exc:
+                            raise exc.as_http() from None
                     raise HTTPException(status_code=413, detail="单个附件不能超过 50 MB")
                 output.write(chunk)
     except HTTPException:

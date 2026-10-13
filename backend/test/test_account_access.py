@@ -280,12 +280,17 @@ def test_desktop_account_and_admin_routes_are_absent(auth_db, monkeypatch):
 
 def test_auth_config_reports_serve_mode_without_secrets(auth_db, monkeypatch):
     hosted = _client(monkeypatch, "hosted")
-    assert hosted.get("/api/auth/config").json() == {"serveMode": "hosted"}
+    hosted_body = hosted.get("/api/auth/config").json()
+    assert hosted_body["serveMode"] == "hosted"
+    assert hosted_body["capabilities"]["localExecution"] is False
+    assert hosted_body["capabilities"]["customModels"] is True
     desktop = _client(monkeypatch, "desktop")
     body = desktop.get("/api/auth/config").json()
-    assert body == {"serveMode": "desktop"}
-    assert "smtp" not in body
-    assert "password" not in body
+    assert body["serveMode"] == "desktop"
+    assert body["capabilities"]["stdioMcp"] is True
+    rendered = str(body)
+    assert "smtp" not in rendered
+    assert "password" not in rendered
 
 
 def test_admin_can_disable_others_but_not_self(auth_db, monkeypatch):

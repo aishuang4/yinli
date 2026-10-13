@@ -5,6 +5,7 @@ import { Modal } from '@/components/design';
 import { FolderOpen } from 'lucide-react';
 import { FormError, TextField } from '../../components/form';
 import type { ProjectRecord, WorkspaceRecord } from '../../types/workspace';
+import { useAuthStore } from '../auth/authStore';
 import { cn } from '../../utils/cn';
 
 interface ContextCreateModalProps {
@@ -33,13 +34,16 @@ export function ContextCreateModal({
 }: ContextCreateModalProps) {
   const [mode, setMode] = useState<'project' | 'workspace'>('project');
   const [workspaceName, setWorkspaceName] = useState('');
+  const [projectName, setProjectName] = useState('');
   const [projectDirectory, setProjectDirectory] = useState<{ name: string; path: string } | null>(null);
+  const localProjectPaths = useAuthStore((state) => state.capabilities.localProjectPaths);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
   const reset = () => {
     setMode('project');
     setWorkspaceName('');
+    setProjectName('');
     setProjectDirectory(null);
     setError('');
   };
@@ -66,8 +70,9 @@ export function ContextCreateModal({
   };
 
   const handleCreate = async () => {
-    if (!projectDirectory || (mode === 'workspace' && !workspaceName.trim())) {
-      setError(mode === 'workspace' ? '请填写 Workspace 名称并选择 Project 文件夹。' : '请选择 Project 文件夹。');
+    const name = localProjectPaths ? projectDirectory?.name : projectName.trim();
+    if (!name || (localProjectPaths && !projectDirectory) || (mode === 'workspace' && !workspaceName.trim())) {
+      setError(mode === 'workspace' ? '请填写 Workspace 名称和 Project 名称。' : '请填写 Project 名称。');
       return;
     }
     setSubmitting(true);
@@ -83,9 +88,9 @@ export function ContextCreateModal({
             body: JSON.stringify({
               workspaceName: workspaceName.trim(),
               workspaceDescription: '',
-              name: projectDirectory.name,
+              name: projectDirectory?.name || name,
               description: '',
-              rootPath: projectDirectory.path,
+              ...(localProjectPaths && projectDirectory ? { rootPath: projectDirectory.path } : {}),
               instructionsFile: '',
             }),
           },
@@ -100,9 +105,9 @@ export function ContextCreateModal({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            name: projectDirectory.name,
+            name,
             description: '',
-            rootPath: projectDirectory.path,
+            ...(localProjectPaths && projectDirectory ? { rootPath: projectDirectory.path } : {}),
             instructionsFile: '',
           }),
         },
@@ -160,6 +165,7 @@ export function ContextCreateModal({
             maxLength={80}
           />
         )}
+        {localProjectPaths ? (
         <div>
           <div className="mb-2 text-xs font-medium text-[var(--color-text-secondary)]">Project 文件夹 *</div>
           <button
@@ -180,6 +186,15 @@ export function ContextCreateModal({
             </span>
           </button>
         </div>
+        ) : (
+          <TextField
+            label="Project 名称"
+            required
+            value={projectName}
+            onChange={(event) => setProjectName(event.target.value)}
+            maxLength={80}
+          />
+        )}
       </div>
     </Modal>
   );

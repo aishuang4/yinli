@@ -224,6 +224,18 @@ async def start_chat_background_run(
 ) -> ChatBackgroundRun:
     """创建 Run、V3 stream 和根 message Block 后启动后台执行。"""
 
+    from src.tenancy.quota import QuotaExceeded, assert_active_runs
+
+    tenant_id = _current_tenant_id()
+    active = sum(
+        1 for run in _runs.values()
+        if run.tenant_id == tenant_id and run.status not in TERMINAL_RUN_STATUSES
+    )
+    try:
+        assert_active_runs(active)
+    except QuotaExceeded as exc:
+        raise exc.as_http() from None
+
     run = ChatBackgroundRun(
         id=f"run-{uuid.uuid4().hex}",
         tenant_id=_current_tenant_id(),

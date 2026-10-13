@@ -119,6 +119,28 @@ async def execute_script_in_dir(
     if script_path.parent != cwd.resolve():
         raise ScriptJobError("脚本路径超出本次运行目录")
     script_path.write_text(source, encoding="utf-8")
+    from src.tenancy.context import TenantMissing, current_tenant
+
+    try:
+        hosted = current_tenant().is_hosted
+    except TenantMissing:
+        hosted = False
+    if hosted:
+        from src.sandbox.hosted_workspace import build_hosted_spec
+        from src.sandbox.provider import get_sandbox_provider
+
+        spec = build_hosted_spec(
+            tenant_id=current_tenant().tenant_id,
+            project_id="script",
+            agent_id=filename,
+            project_root=cwd,
+            extra="script",
+        )
+        provider = get_sandbox_provider()
+        provider.create(spec)
+        command = ["python3" if interpreter == "python3" else "bash", filename, *args]
+        output = provider.exec(spec.name, command)
+        return ScriptRunResult(stdout=output[:8000], stderr="", exit_code=0)
     executable = _python_executable() if interpreter == "python3" else (shutil.which("bash") or "bash")
     if interpreter == "bash" and not shutil.which("bash"):
         raise ScriptJobError("找不到 bash，无法运行脚本任务")

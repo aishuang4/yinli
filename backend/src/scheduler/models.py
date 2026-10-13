@@ -36,11 +36,11 @@ JOB_STATUSES: frozenset[str] = frozenset(
     {"pending_confirmation", "active", "paused", "archived", "completed"}
 )
 FIRING_STATUSES: frozenset[str] = frozenset(
-    {"queued", "starting", "running", "succeeded", "failed", "cancelled", "missed", "skipped"}
+    {"queued", "starting", "running", "succeeded", "failed", "cancelled", "missed", "skipped", "skipped_quota"}
 )
 NON_TERMINAL_FIRING_STATUSES: frozenset[str] = frozenset({"queued", "starting", "running"})
 TERMINAL_FIRING_STATUSES: frozenset[str] = frozenset(
-    {"succeeded", "failed", "cancelled", "missed", "skipped"}
+    {"succeeded", "failed", "cancelled", "missed", "skipped", "skipped_quota"}
 )
 FAILURE_POLICIES: frozenset[str] = frozenset({"notify_keep_schedule", "pause_job"})
 MISSED_POLICIES: frozenset[str] = frozenset({"catch_up_once", "mark_missed", "skip_silent"})

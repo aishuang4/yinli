@@ -59,16 +59,6 @@ async def send_message(data: ChatMessage, request: Request) -> StreamingResponse
         StreamingResponse: SSE 事件流（text/event-stream）
     """
 
-    from src.config.settings import settings
-
-    if (
-        settings.serve_mode.strip().lower() != "hosted"
-        and str(data.model_config_id or "").startswith("platform:")
-    ):
-        from src.server.auth.platform_chat import platform_chat_response
-
-        return await platform_chat_response(data)
-
     run = await start_chat_run(data)
     from src.server.auth.presence import iter_with_presence
     from src.server.auth.routes import token_from_request

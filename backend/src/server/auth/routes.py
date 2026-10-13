@@ -130,52 +130,42 @@ def _require_desktop_mode() -> None:
 @auth_router.get("/desktop/session")
 async def desktop_session() -> dict:
     _require_desktop_mode()
-    from src.server.auth.desktop_account import public_desktop_account
+    from src.server.auth.cloud_client import public_account
 
-    return public_desktop_account()
+    return public_account()
 
 
 @auth_router.post("/desktop/session")
 async def desktop_login(data: DesktopLoginRequest) -> dict:
-    """向托管服务登录，并把令牌只写在本机用户数据目录。"""
+    """向托管服务登录。令牌写入本机密钥存储，不进 models.json。"""
 
     _require_desktop_mode()
-    import httpx
+    from src.server.auth.cloud_client import CloudSessionError, login_cloud
 
-    from src.server.auth.desktop_account import save_desktop_account
-
-    url = data.base_url.rstrip("/") + "/api/auth/login"
-    async with httpx.AsyncClient(timeout=20) as client:
-        response = await client.post(
-            url,
-            json={"email": data.email, "password": data.password, "clientKind": "desktop"},
-        )
-    if response.status_code != 200:
-        raise HTTPException(status_code=response.status_code, detail="托管登录失败")
-    body = response.json()
-    token = str(body.get("token") or "")
-    if not token:
-        raise HTTPException(status_code=502, detail="托管服务没有返回桌面令牌")
-    email = str((body.get("user") or {}).get("email") or data.email)
-    save_desktop_account(base_url=data.base_url, token=token, email=email)
-    return {"connected": True, "email": email}
+    try:
+        return await login_cloud(base_url=data.base_url, email=data.email, password=data.password)
+    except CloudSessionError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
 
 
 @auth_router.delete("/desktop/session")
 async def desktop_logout() -> dict[str, bool]:
     _require_desktop_mode()
-    from src.server.auth.desktop_account import clear_desktop_account
+    from src.server.auth.cloud_client import logout_cloud
 
-    clear_desktop_account()
+    await logout_cloud()
     return {"ok": True}
 
 
 @auth_router.get("/config")
-async def auth_config() -> dict[str, str]:
+async def auth_config() -> dict:
     """公开当前服务模式，不返回邮件或模型密钥。"""
 
     mode = settings.serve_mode.strip().lower() or "desktop"
-    return {"serveMode": mode if mode in {"desktop", "hosted"} else "desktop"}
+    resolved = mode if mode in {"desktop", "hosted"} else "desktop"
+    from src.tenancy.capabilities import capabilities
+
+    return {"serveMode": resolved, "capabilities": capabilities().as_public()}
 
 
 @auth_router.post("/register", dependencies=_HOSTED)
@@ -258,6 +248,31 @@ async def post_heartbeat(request: Request) -> dict:
         return {"user": heartbeat(token_from_request(request))}
     except AuthError as error:
         _raise(error)
+
+
+@admin_router.get("/platform-models")
+async def read_platform_models(request: Request) -> dict:
+    require_admin(request)
+    from src.models.platform_layer import read_platform_capability_document
+
+    return read_platform_capability_document()
+
+
+@admin_router.put("/platform-models")
+async def write_platform_models(request: Request) -> dict:
+    require_admin(request)
+    from src.models.platform_layer import save_platform_capability_document
+
+    try:
+        payload = await request.json()
+    except (UnicodeError, ValueError):
+        raise HTTPException(status_code=422, detail="平台模型能力表格式无效") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="平台模型能力表格式无效")
+    try:
+        return save_platform_capability_document(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @admin_router.get("/users")

@@ -100,7 +100,7 @@ def test_verify_assigns_key_and_lists_only_platform_models(hosted_sync, monkeypa
         "label": "demo-model",
         "providerName": "引力模型",
         "adapter": "openai",
-        "capabilities": {},
+        "capabilities": {"tools": True, "images": False, "thinking": False},
     }]
     assert "k2a_testkey" not in response.text
 

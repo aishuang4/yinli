@@ -20,9 +20,6 @@ PUBLIC_ENTRY = (
 # 文件相对 backend/src，模块，导入名。群聊和定时任务不在这里。
 ALLOWLIST = {
     ("memory/trace.py", "src.server.routes.chat.trace_recorder", "_record_run_event"),
-    ("server/auth/platform_chat.py", "src.server.routes.chat.models", "ChatMessage"),
-    ("server/auth/platform_chat.py", "src.server.routes.chat.store", "_append_assistant_message"),
-    ("server/auth/platform_chat.py", "src.server.routes.chat.store", "_append_user_message"),
     ("server/main.py", "src.server.routes.chat.team_runtime.maintenance", "maintain_team_runtime_runs"),
     ("subagents/manager.py", "src.server.routes.chat.hitl", "_create_pending_interaction"),
     ("subagents/manager.py", "src.server.routes.chat.runtime_events", "build_runtime_event"),

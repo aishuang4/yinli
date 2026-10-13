@@ -208,9 +208,12 @@ def _remove_tenant_sandboxes(tenant_id: str) -> None:
     from src.config.settings import settings
 
     host = str(getattr(settings, "sandbox_docker_host", "") or "").strip()
-    if not host:
+    from src.sandbox.provider import get_sandbox_provider
+
+    provider = get_sandbox_provider()
+    if not host and provider.__class__.__name__ != "FakeSandbox":
         return
-    logger.info("删除租户沙箱 tenant=%s host=%s", tenant_id, host)
+    provider.delete_by_label("yinli.tenant", tenant_id)
 
 
 def _remove_tenant_directory(user_id: str) -> None:

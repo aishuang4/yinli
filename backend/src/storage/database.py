@@ -13,6 +13,8 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
+
+from pydantic import BaseModel
 from typing import Any
 
 from src.config import runtime_paths
@@ -552,8 +554,16 @@ def ensure_db() -> None:
     import_legacy_chat_store_once()
 
 
+def _json_default(value: Any) -> Any:
+    """Pydantic 模型写成字段字典。其余类型仍退回 str，避免整段 JSON 写失败。"""
+
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json", by_alias=True)
+    return str(value)
+
+
 def _dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, default=str)
+    return json.dumps(value, ensure_ascii=False, default=_json_default)
 
 
 def _loads(value: str | None, default: Any) -> Any:

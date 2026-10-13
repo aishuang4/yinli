@@ -76,7 +76,10 @@ def _guardrails_from_yaml(value: Any, warnings: list[str]) -> Guardrails:
     cleaned = {key: item for key, item in payload.items() if item is not None}
     if filesystem_scope == "":
         cleaned["filesystem_scope"] = ""
-    return Guardrails.model_validate(cleaned or {})
+    parsed = Guardrails.model_validate(cleaned or {})
+    from src.tenancy.capabilities import coerce_hosted_guardrails
+
+    return coerce_hosted_guardrails(parsed)
 
 
 def _dump_filesystem_scope(value: str) -> str:

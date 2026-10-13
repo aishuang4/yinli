@@ -474,6 +474,7 @@ def get_or_create_agent(
     write_scope_dir: str | None = None,
     extra_filesystem_scopes: list[str] | None = None,
     session_context_key: str | None = None,
+    project_id: str = "default",
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -493,6 +494,12 @@ def get_or_create_agent(
         Agent: AgentScope Agent 实例
     """
     binding = binding_for_model(model_name)
+    from src.tenancy.capabilities import coerce_hosted_guardrails
+    from src.tenancy.context import current_tenant
+
+    guardrails = coerce_hosted_guardrails(guardrails)
+    if current_tenant().is_hosted and "Bash 中的 /workspace 就是项目根目录" not in system_prompt:
+        system_prompt = f"{system_prompt}\nBash 中的 /workspace 就是项目根目录。"
     agent_id = _cache_key(agent_id)
     if session_context_key:
         session_context_key = _cache_key(session_context_key)
@@ -530,7 +537,21 @@ def get_or_create_agent(
 
     # 创建 Workspace — local 默认，docker 用 AgentScope 内置容器沙盒
     docker_skill_runtime_root: str | None = None
-    if guardrails and guardrails.execution_backend == "docker":
+    if current_tenant().is_hosted:
+        from src.sandbox.hosted_workspace import HostedDockerWorkspace, open_hosted_workspace
+
+        workspace = open_hosted_workspace(
+            tenant_id=current_tenant().tenant_id,
+            project_id=project_id or "default",
+            agent_id=agent_id,
+            project_root=Path(workspace_dir or _safe_workspace_dir(guardrails)),
+            base_image=(guardrails.docker_image if guardrails else "") or "python:3.11-slim",
+            network_enabled=bool(guardrails.network_enabled) if guardrails else True,
+        )
+        if not isinstance(workspace, HostedDockerWorkspace):
+            raise RuntimeError("托管命令只能在沙箱中执行")
+        docker_skill_runtime_root = "/workspace/skills" if skill_paths else None
+    elif guardrails and guardrails.execution_backend == "docker":
         if skill_paths and not guardrails.persistent_sandbox:
             raise ValueError("DockerWorkspace 使用 Skills 时必须启用 persistent_sandbox。")
         docker_skill_runtime_root = "/workspace/skills" if skill_paths else None

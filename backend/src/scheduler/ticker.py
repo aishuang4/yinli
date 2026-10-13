@@ -198,6 +198,11 @@ class JobScheduler:
                 self._service.pause(job.id, reason="daily_cap")
                 stats["paused_daily_cap"] += 1
             return
+        from src.tenancy.quota import firings_allowed
+
+        if not firings_allowed(self._service.count_firings_today(job, now=now)):
+            stats["skipped_quota"] = stats.get("skipped_quota", 0) + 1
+            return
         scheduled_for = job.next_run_at or to_utc_iso(now)
         occupant = self._service.occupying_due_slot(job.id, scheduled_for)
         if occupant is not None:

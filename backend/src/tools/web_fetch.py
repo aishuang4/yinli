@@ -290,6 +290,13 @@ async def _validate_fetch_host(hostname: str, port: int) -> tuple[str, ...]:
 
     if not hostname:
         raise ValueError("WebFetch URL must include a hostname.")
+    from src.security.egress import EgressBlocked, assert_public_url_sync, egress_enforced
+
+    if egress_enforced():
+        try:
+            assert_public_url_sync(f"http://{hostname}/", purpose="fetch")
+        except EgressBlocked as exc:
+            raise ValueError(str(exc)) from exc
     try:
         direct_ip = ipaddress.ip_address(hostname)
     except ValueError:

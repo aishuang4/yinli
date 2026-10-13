@@ -141,6 +141,12 @@ class ScheduledJobService:
         from src.scheduler.script_job import ScriptJobError, build_script_input_spec
 
         self._require_project(workspace_id, project_id)
+        from src.tenancy.quota import QuotaExceeded, assert_job_count
+
+        try:
+            assert_job_count(len(self.list_jobs()))
+        except QuotaExceeded as exc:
+            raise exc.as_http() from None
         if not str(name).strip():
             raise ScheduledJobValidationError("name 不能为空")
         executor = str(mode or "agent").strip() or "agent"

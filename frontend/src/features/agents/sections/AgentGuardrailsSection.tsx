@@ -5,12 +5,14 @@
  */
 
 import { FormGrid, NumberField, SelectField, TextField, ToggleField } from '../../../components/form';
+import { useAuthStore } from '../../auth/authStore';
 import type { AgentCreatePayload } from '../../../types/agent';
 
 interface AgentGuardrailsSectionProps {
   form: AgentCreatePayload;
   onChange: (form: AgentCreatePayload) => void;
   lockUnattendedPolicy?: boolean;
+  forceSandbox?: boolean;
 }
 
 function legacyModeFromProfile(profile: string): 'ask_every_time' | 'accept_edits' | 'bypass' {
@@ -47,7 +49,11 @@ export function AgentGuardrailsSection({
   form,
   onChange,
   lockUnattendedPolicy = false,
+  forceSandbox = false,
 }: AgentGuardrailsSectionProps) {
+  const storedLocalExecution = useAuthStore((state) => state.capabilities.localExecution);
+  const localExecution = forceSandbox ? false : storedLocalExecution;
+  const sandboxImages = useAuthStore((state) => state.capabilities.sandboxImages);
   return (
     <section className="rounded-xl bg-[var(--color-bg-primary)] p-4 shadow-sm">
       <div className="mb-4">
@@ -77,9 +83,12 @@ export function AgentGuardrailsSection({
           <div className="mb-2">
             <div className="text-sm text-[var(--color-text-primary)]">执行隔离</div>
             <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">
-              本地命令黑名单只能拦截明显误操作；需要安全隔离时请选择 Docker 沙盒。
+              {localExecution
+                ? '本地命令黑名单只能拦截明显误操作；需要安全隔离时请选择 Docker 沙盒。'
+                : 'Web 端命令在隔离沙箱中执行'}
             </div>
           </div>
+          {localExecution ? (
           <SelectField
             value={form.guardrails.executionBackend}
             onChange={(value) => onChange({
@@ -94,7 +103,18 @@ export function AgentGuardrailsSection({
               { label: 'Docker 沙盒', value: 'docker' },
             ]}
           />
-          {form.guardrails.executionBackend === 'docker' && (
+          ) : (
+            <SelectField
+              label="沙箱镜像"
+              value={sandboxImages.includes(form.guardrails.dockerImage) ? form.guardrails.dockerImage : (sandboxImages[0] || '')}
+              onChange={(value) => onChange({
+                ...form,
+                guardrails: { ...form.guardrails, dockerImage: String(value), executionBackend: 'docker' },
+              })}
+              options={sandboxImages.map((image) => ({ label: image, value: image }))}
+            />
+          )}
+          {localExecution && form.guardrails.executionBackend === 'docker' && (
             <FormGrid className="mt-3" columns="auto">
               <TextField
                 label="Docker 基础镜像"

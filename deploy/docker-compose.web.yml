@@ -1,4 +1,6 @@
 # Web 托管。只发布 8088，后端与 Caddy 共用网络命名空间，8765 留在回环地址。
+# 数据用宿主路径，并且以同一路径挂进容器，沙箱 bind mount 才不用再翻译。
+# 旧的命名卷 yinli-data 不再使用。托管数据不迁移，换路径前先按 deploy/BACKUP.md 备份。
 name: yinli
 services:
   caddy:
@@ -13,6 +15,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        USE_CN_MIRROR: ${USE_CN_MIRROR:-1}
     image: yinli-backend:local
     network_mode: "service:caddy"
     env_file:
@@ -21,10 +25,14 @@ services:
       AGENT_WORKSTATION_SERVE_MODE: hosted
       AGENT_WORKSTATION_HOST: 127.0.0.1
       AGENT_WORKSTATION_PORT: "8765"
-      AGENT_WORKSTATION_DATA_DIR: /data
+      AGENT_WORKSTATION_DATA_DIR: /srv/yinli/data
       AGENT_WORKSTATION_PRODUCT_FEATURES_PATH: /app/config/product-features.json
+      AGENT_WORKSTATION_SANDBOX_DOCKER_HOST: unix:///var/run/docker.sock
+      AGENT_WORKSTATION_SANDBOX_HOST_DATA_ROOT: /srv/yinli/data
+      AGENT_WORKSTATION_SANDBOX_RUNTIME: runsc
+      AGENT_WORKSTATION_SANDBOX_NETWORK: yinli-sandbox
+      AGENT_WORKSTATION_SANDBOX_IMAGES: python:3.11-slim
     volumes:
-      - yinli-data:/data
+      - ${YINLI_DATA_DIR:-/srv/yinli/data}:/srv/yinli/data
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
-volumes:
-  yinli-data:

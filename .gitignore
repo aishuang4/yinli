@@ -31,6 +31,7 @@ Thumbs.db
 # Environment
 .env
 backend/.env
+deploy/backend.env
 backend/data/
 /data/
 /sessions/

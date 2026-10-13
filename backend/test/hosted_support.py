@@ -39,7 +39,12 @@ def hosted_env(tmp_path, monkeypatch):
     monkeypatch.setattr("src.config.settings.settings.auth_email_mode", "log")
     monkeypatch.setattr("src.config.settings.settings.key2api_sync_token", "")
     control_db.ensure_control_db()
+    from src.sandbox.fake import FakeSandbox
+    from src.sandbox.provider import set_sandbox_provider
+
+    set_sandbox_provider(FakeSandbox())
     yield root
+    set_sandbox_provider(None)
     control_db.forget_control_db()
 
 

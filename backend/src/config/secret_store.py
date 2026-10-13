@@ -39,6 +39,11 @@ class SecretStoreError(RuntimeError):
 
 
 def _backend_name() -> str:
+    from src.tenancy.context import is_hosted_mode
+
+    # 托管忽略 SECRET_STORE，固定加密文件，避免测试或环境变量把 Key 落成明文。
+    if is_hosted_mode():
+        return "tenant_encrypted"
     configured = os.getenv("AGENT_WORKSTATION_SECRET_STORE", "").strip().lower()
     if configured:
         return configured
@@ -121,6 +126,8 @@ def get_named_secret(ref: str) -> str:
         try:
             secret = _read_secret(account)
         except SecretStoreError:
+            if _backend_name() == "tenant_encrypted":
+                raise
             secret = _read_catalog_file_secret(account)
         _cache[_cache_key(account)] = secret
         return secret
@@ -140,6 +147,8 @@ def set_named_secret(ref: str, value: str) -> None:
         try:
             _write_secret(account, secret)
         except SecretStoreError:
+            if _backend_name() == "tenant_encrypted":
+                raise
             _write_catalog_file_secret(account, secret)
         _cache[_cache_key(account)] = secret
 
@@ -181,8 +190,77 @@ def _delete_catalog_file_secret(account: str) -> None:
         path.unlink()
 
 
+def assert_hosted_secret_key() -> None:
+    """托管启动时必须有可用的 Fernet 主密钥。"""
+
+    from src.config.settings import HostedConfigError
+    from src.tenancy.context import is_hosted_mode
+
+    if not is_hosted_mode():
+        return
+    try:
+        _fernet()
+    except SecretStoreError as exc:
+        raise HostedConfigError(str(exc)) from exc
+
+
+def _fernet():
+    from cryptography.fernet import Fernet
+
+    raw = os.getenv("AGENT_WORKSTATION_SECRET_KEY", "").strip()
+    if not raw:
+        raise SecretStoreError("托管模式必须配置 AGENT_WORKSTATION_SECRET_KEY")
+    try:
+        return Fernet(raw.encode("utf-8"))
+    except (ValueError, TypeError) as exc:
+        raise SecretStoreError("AGENT_WORKSTATION_SECRET_KEY 不是有效的 Fernet 密钥") from exc
+
+
+def _encrypted_path(account: str) -> Path:
+    digest = hashlib.sha256(account.encode("utf-8")).hexdigest()
+    return secret_dir() / f"{digest}.enc"
+
+
+def _tenant_encrypted_read(account: str) -> str:
+    path = _encrypted_path(account)
+    if not path.is_file():
+        return ""
+    from cryptography.fernet import InvalidToken
+
+    try:
+        return _fernet().decrypt(path.read_bytes()).decode("utf-8")
+    except (OSError, UnicodeError, InvalidToken) as exc:
+        raise SecretStoreError("无法解密租户密钥。") from exc
+
+
+def _tenant_encrypted_write(account: str, value: str) -> None:
+    path = _encrypted_path(account)
+    payload = _fernet().encrypt(value.encode("utf-8"))
+    temporary = path.with_suffix(".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_bytes(payload)
+        temporary.chmod(0o600)
+        temporary.replace(path)
+        path.chmod(0o600)
+    except OSError as exc:
+        raise SecretStoreError("无法写入租户密钥文件。") from exc
+    finally:
+        if temporary.exists():
+            temporary.unlink(missing_ok=True)
+
+
+def _tenant_encrypted_delete(account: str) -> None:
+    try:
+        _encrypted_path(account).unlink(missing_ok=True)
+    except OSError as exc:
+        raise SecretStoreError("无法删除租户密钥文件。") from exc
+
+
 def _read_secret(account: str) -> str:
     backend = _backend_name()
+    if backend == "tenant_encrypted":
+        return _tenant_encrypted_read(account)
     if backend == "memory":
         return _memory_secrets.get(_cache_key(account), "")
     if backend == "keychain":
@@ -194,6 +272,9 @@ def _read_secret(account: str) -> str:
 
 def _write_secret(account: str, value: str) -> None:
     backend = _backend_name()
+    if backend == "tenant_encrypted":
+        _tenant_encrypted_write(account, value)
+        return
     if backend == "memory":
         _memory_secrets[_cache_key(account)] = value
         return
@@ -208,6 +289,9 @@ def _write_secret(account: str, value: str) -> None:
 
 def _delete_secret(account: str) -> None:
     backend = _backend_name()
+    if backend == "tenant_encrypted":
+        _tenant_encrypted_delete(account)
+        return
     if backend == "memory":
         _memory_secrets.pop(_cache_key(account), None)
         return

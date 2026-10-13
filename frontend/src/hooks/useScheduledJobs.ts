@@ -26,6 +26,7 @@ interface UseScheduledJobsReturn {
   resumeJob: (jobId: string) => Promise<ScheduledJob>;
   deleteJob: (jobId: string) => Promise<ScheduledJob>;
   updateSchedule: (jobId: string, patch: ScheduledJobSchedulePatch) => Promise<ScheduledJob>;
+  updateModel: (jobId: string, modelConfigId: string) => Promise<ScheduledJob>;
   listRuns: (jobId: string) => Promise<ScheduledJobRun[]>;
   cancelRun: (jobId: string, firingId: string) => Promise<ScheduledJobRun>;
 }
@@ -144,6 +145,7 @@ function mapJob(raw: Record<string, unknown>): ScheduledJob {
     status: raw.status as ScheduledJob['status'],
     pauseReason: String(raw.pauseReason ?? ''),
     agentId: String(raw.agentId ?? ''),
+    modelConfigId: String(raw.modelConfigId ?? ''),
     mode: raw.mode === 'script' ? 'script' : 'agent',
     scheduleKind: raw.scheduleKind === 'once' || raw.scheduleKind === 'daily' ? raw.scheduleKind : 'weekly',
     scheduleExpr: (raw.scheduleExpr && typeof raw.scheduleExpr === 'object'
@@ -305,6 +307,18 @@ export function useScheduledJobs(): UseScheduledJobsReturn {
     )
   ), [runWrite]);
 
+  const updateModel = useCallback((jobId: string, modelConfigId: string) => (
+    runWrite(
+      () => requestJson<Record<string, unknown>>(`/api/scheduled-jobs/${encodeURIComponent(jobId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelConfigId }),
+      }).then(mapJob),
+      '已更新运行模型',
+      '更新运行模型失败',
+    )
+  ), [runWrite]);
+
   const updateSchedule = useCallback((jobId: string, patch: ScheduledJobSchedulePatch) => (
     runWrite(
       () => requestJson<Record<string, unknown>>(`/api/scheduled-jobs/${encodeURIComponent(jobId)}`, {
@@ -356,6 +370,7 @@ export function useScheduledJobs(): UseScheduledJobsReturn {
     resumeJob,
     deleteJob,
     updateSchedule,
+    updateModel,
     listRuns,
     cancelRun,
   };

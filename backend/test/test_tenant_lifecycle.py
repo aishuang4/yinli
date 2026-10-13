@@ -148,6 +148,12 @@ def test_verify_then_delete_blocks_login(hosted_env):
     assert not tenant_directory(user_id).exists()
 
 
-@pytest.mark.skip(reason="FakeSandbox 在任务组 6 落地后再断言按标签删除")
-def test_delete_asks_sandbox_to_remove_tenant_label() -> None:
+def test_delete_asks_sandbox_to_remove_tenant_label(hosted_env):
     """删除租户时 FakeSandbox 应收到 yinli.tenant 标签删除。"""
+
+    from src.sandbox.provider import get_sandbox_provider
+    from src.tenancy.lifecycle import _remove_tenant_sandboxes
+
+    user_id = "usr_" + "a" * 32
+    _remove_tenant_sandboxes(user_id)
+    assert ("yinli.tenant", user_id) in get_sandbox_provider().deleted_labels

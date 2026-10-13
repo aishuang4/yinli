@@ -18,6 +18,42 @@ def _session(session_id: str = "s-1") -> dict:
     }
 
 
+def test_tool_runs_round_trip_and_old_string_blobs_still_load():
+    from src.server.routes.chat.models import ChatModelCacheRun, ChatToolRun
+    from src.server.routes.chat.store import message_model
+
+    database.insert_chat_session_if_absent(_session("s-tools"))
+    tool = ChatToolRun(id="call-1", name="timeline_retrieve", args='{"q":"乙"}', result="{}", status="completed")
+    cache = ChatModelCacheRun(
+        id="cache-1",
+        model_name="grok-4.7",
+        input_tokens=10,
+        output_tokens=2,
+        created_at="2026-10-13T14:19:03.789140",
+    )
+    database.append_chat_message("s-tools", {
+        "id": "m-tools",
+        "role": "assistant",
+        "content": "查过了",
+        "tool_calls": [tool],
+        "model_caches": [cache],
+        "created_at": "2026-10-13T00:00:01+00:00",
+    })
+    loaded = message_model(database.list_chat_messages("s-tools")[0])
+    assert loaded.tool_calls[0].name == "timeline_retrieve"
+    assert loaded.model_caches[0].model_name == "grok-4.7"
+
+    legacy = (
+        '["id=\'call-1\' name=\'timeline_retrieve\' args=\'{\\"q\\": \\"乙\\"}\' '
+        'result=\'{}\' status=\'completed\'"]'
+    )
+    with database._lock, database._connect() as conn:
+        conn.execute("UPDATE chat_messages SET tool_calls = ? WHERE id = ?", (legacy, "m-tools"))
+    again = message_model(database.list_chat_messages("s-tools")[0])
+    assert again.tool_calls[0].id == "call-1"
+    assert again.tool_calls[0].status == "completed"
+
+
 def test_append_keeps_files_and_clarification_fields():
     database.insert_chat_session_if_absent(_session())
     database.append_chat_message("s-1", {
