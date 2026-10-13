@@ -59,8 +59,10 @@ def emit_envelope(
 
 
 def _publish_nowait(group_id: str, envelope: dict[str, Any]) -> None:
+    from src.tenancy.context import current_tenant, spawn_in_tenant
+
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         return
-    loop.create_task(publish(group_id, envelope))
+    spawn_in_tenant(current_tenant(), publish(group_id, envelope), name=f"group-event-{group_id}")

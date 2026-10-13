@@ -18,6 +18,19 @@ from src.storage.database import (
 logger = logging.getLogger(__name__)
 
 
+def _spawn_group_task(coro, *, name: str) -> None:
+    """在当前租户上下文里启动工人。没有事件循环时放弃这一轮。"""
+
+    from src.tenancy.context import current_tenant, spawn_in_tenant
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        coro.close()
+        return
+    spawn_in_tenant(current_tenant(), coro, name=name)
+
+
 def should_auto_run() -> bool:
     """单测默认不点火，避免 from-chat / 发消息测试触发模型。"""
 
@@ -38,11 +51,7 @@ def schedule_next(group_id: str) -> None:
         return
     if not should_auto_run():
         return
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    loop.create_task(_run_worker_guarded(group_id, queue[0]))
+    _spawn_group_task(_run_worker_guarded(group_id, queue[0]), name=f"group-worker-{group_id}")
 
 
 def schedule_worker_turn(group_id: str, member_id: str) -> None:
@@ -55,11 +64,10 @@ def schedule_worker_turn(group_id: str, member_id: str) -> None:
         return
     if not should_auto_run():
         return
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    loop.create_task(_run_worker_guarded(group_id, member_id))
+    _spawn_group_task(
+        _run_worker_guarded(group_id, member_id),
+        name=f"group-worker-{group_id}-{member_id}",
+    )
 
 
 async def _run_worker_guarded(group_id: str, member_id: str) -> None:

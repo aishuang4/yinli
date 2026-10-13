@@ -49,12 +49,12 @@
 
 ## 4. 后台任务
 
-- [ ] 4.1 lifespan 改为按租户执行启动对账（§10.1），单个租户失败不阻塞其他租户
-- [ ] 4.2 调度器改造（§10.2）：拆分 bootstrap、tick 遍历租户、记录 firing 所属租户、`set_running` 在 hosted 下的行为
-- [ ] 4.3 核对群聊和记忆后处理的 `create_task` 调用点都在租户上下文内（§10.4、§10.5），不满足的改用 `spawn_in_tenant`
+- [x] 4.1 lifespan 改为按租户执行启动对账（§10.1），单个租户失败不阻塞其他租户
+- [x] 4.2 调度器改造（§10.2）：拆分 bootstrap、tick 遍历租户、记录 firing 所属租户、`set_running` 在 hosted 下的行为
+- [x] 4.3 核对群聊和记忆后处理的 `create_task` 调用点都在租户上下文内（§10.4、§10.5），不满足的改用 `spawn_in_tenant`
 - [x] 4.4 记忆用户固定为 `default`：删除 `_hosted_memory_user` 和 `_habit_user_id`（§10.5）
-- [ ] 4.5 `cancel_tenant_activity` 接入 Run、firing、群聊（§9.4 第 4 步）
-- [ ] 4.6 测试 `test_tenant_background.py`、`test_tenant_isolation.py`（§17.1）
+- [x] 4.5 `cancel_tenant_activity` 接入 Run、firing、群聊（§9.4 第 4 步）
+- [x] 4.6 测试 `test_tenant_background.py`、`test_tenant_isolation.py`（§17.1）
 - [ ] 4.7 **门槛 B**（§17.3）
 
 ## 5. 模型来源

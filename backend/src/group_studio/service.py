@@ -626,12 +626,15 @@ def _defer_workers_until_habit(group_id: str, text: str) -> None:
             logging.getLogger(__name__).warning("群聊习惯判断失败", exc_info=True)
         schedule_next(group_id)
 
+    from src.tenancy.context import current_tenant, spawn_in_tenant
+
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
+        _run.close()
         schedule_next(group_id)
         return
-    loop.create_task(_run(), name=f"group-habit-{group_id}")
+    spawn_in_tenant(current_tenant(), _run(), name=f"group-habit-{group_id}")
 
 
 def _emit_system_notice(group_id: str, text: str) -> None:

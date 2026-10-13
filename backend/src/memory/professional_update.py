@@ -48,11 +48,14 @@ def schedule_professional_update(
         return
     if is_trivial_turn(user_message, assistant_text):
         return
+    from src.tenancy.context import current_tenant, spawn_in_tenant
+
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         return
-    loop.create_task(
+    spawn_in_tenant(
+        current_tenant(),
         apply_professional_update(
             agent_id=agent_id,
             agent_name=agent_name,

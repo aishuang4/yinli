@@ -19,6 +19,24 @@ from src.tenancy.context import TENANT_ID_PATTERN, TenantContext, use_tenant
 logger = logging.getLogger(__name__)
 
 
+def iter_process_tenants() -> list[TenantContext]:
+    """desktop 用当前租户；hosted 只列出控制面里仍然 active 的租户。"""
+
+    from src.tenancy.context import current_tenant, is_hosted_mode
+
+    if is_hosted_mode():
+        return control_records.list_active_tenants()
+    return [current_tenant()]
+
+
+def startup_tenants() -> list[TenantContext]:
+    return iter_process_tenants()
+
+
+def iter_tick_tenants() -> list[TenantContext]:
+    return iter_process_tenants()
+
+
 def ensure_tenant(user: dict[str, Any]) -> TenantContext:
     """保证这个用户有自己的租户目录、库和默认 Project。"""
 

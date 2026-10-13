@@ -51,6 +51,21 @@ from src.storage.database import (
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _enable_jobs_for_direct_ticks(request, local_tenant):
+    """tick 现在会跳过关闭调度的租户。直接调 tick 的用例先打开开关。"""
+
+    if request.node.name in {
+        "test_feature_flag_false_does_not_start_ticker",
+        "test_desktop_first_run_seeds_scheduler_enabled",
+        "test_lifespan_reconciles_chat_then_jobs_then_starts_and_stops_before_close_db",
+    }:
+        yield
+        return
+    set_scheduled_jobs_enabled(True)
+    yield
+
+
 @pytest.fixture()
 def isolated_db(tmp_path, monkeypatch):
     """每个用例独立 SQLite，并收口 ticker / Chat Run。"""
@@ -124,9 +139,11 @@ def test_weekly_grace_is_six_hours():
 
 def test_lifespan_reconciles_chat_then_jobs_then_starts_and_stops_before_close_db():
     source = (BACKEND_ROOT / "src/server/main.py").read_text(encoding="utf-8")
-    assert "bootstrap_scheduler" in source
+    assert "bootstrap_tenant_scheduler" in source
+    assert "start_if_needed" in source
     assert "shutdown_scheduler" in source
-    assert source.index("bootstrap_scheduler") < source.index("yield")
+    assert source.index("bootstrap_tenant_scheduler") < source.index("yield")
+    assert source.index("start_if_needed") < source.index("yield")
     assert source.index("await shutdown_scheduler()") < source.index("await close_db()")
     ticker_src = (BACKEND_ROOT / "src/scheduler/ticker.py").read_text(encoding="utf-8")
     assert ticker_src.index("reconcile_interrupted_chat_runs") < ticker_src.index(
