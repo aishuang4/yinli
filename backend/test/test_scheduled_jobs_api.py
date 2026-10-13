@@ -20,7 +20,6 @@ from src.storage.database import (
     ensure_db,
     list_chat_runs,
     list_user_notifications,
-    save_chat_store,
     upsert_agent,
     upsert_chat_run,
 )
@@ -261,37 +260,31 @@ def test_run_now_rejects_non_active_job(client):
 
 
 def test_session_catalog_defaults_to_chat_kind(client):
-    save_chat_store({
-        "sessions": [
-            {
-                "id": "sess-chat",
-                "title": "普通对话",
-                "agent_id": "agent-1",
-                "agent_name": "助手",
-                "mode": "agent",
-                "workspace_id": DEFAULT_WORKSPACE_ID,
-                "project_id": DEFAULT_PROJECT_ID,
-                "kind": "chat",
-                "created_at": "2026-08-21T00:00:00+00:00",
-                "updated_at": "2026-08-21T00:00:01+00:00",
-                "message_count": 0,
-            },
-            {
-                "id": "sess-job",
-                "title": "定时执行",
-                "agent_id": "agent-1",
-                "agent_name": "助手",
-                "mode": "agent",
-                "workspace_id": DEFAULT_WORKSPACE_ID,
-                "project_id": DEFAULT_PROJECT_ID,
-                "kind": "scheduled_job",
-                "created_at": "2026-08-21T00:00:00+00:00",
-                "updated_at": "2026-08-21T00:00:02+00:00",
-                "message_count": 0,
-            },
-        ],
-        "messages": {},
-    })
+    from src.storage import database
+
+    for item in (
+        {
+            "id": "sess-chat",
+            "title": "普通对话",
+            "kind": "chat",
+            "updated_at": "2026-08-21T00:00:01+00:00",
+        },
+        {
+            "id": "sess-job",
+            "title": "定时执行",
+            "kind": "scheduled_job",
+            "updated_at": "2026-08-21T00:00:02+00:00",
+        },
+    ):
+        database.insert_chat_session_if_absent({
+            **item,
+            "agent_id": "agent-1",
+            "agent_name": "助手",
+            "mode": "agent",
+            "workspace_id": DEFAULT_WORKSPACE_ID,
+            "project_id": DEFAULT_PROJECT_ID,
+            "created_at": "2026-08-21T00:00:00+00:00",
+        })
     catalog = client.get("/api/chat/sessions/catalog")
     assert catalog.status_code == 200
     catalog_ids = {item["id"] for item in catalog.json()}

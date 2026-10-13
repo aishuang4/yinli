@@ -7,6 +7,7 @@ surface can stay stable while persistence moves off flat files.
 """
 
 import json
+import logging
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -45,6 +46,8 @@ from src.storage.observation_records import ObservationRecordStore
 from src.storage.group_studio_records import GroupStudioRecordStore
 from src.storage.workflow_records import WorkflowRecordStore
 from src.storage.workspace_project_records import WorkspaceProjectRecordStore
+
+logger = logging.getLogger(__name__)
 
 
 BACKEND_ROOT = INSTALL_BACKEND_ROOT
@@ -195,6 +198,7 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -550,6 +554,13 @@ def ensure_db() -> None:
             """)
             conn.commit()
             _initialized_paths.add(path)
+            from src.tenancy.context import current_tenant
+
+            if not current_tenant().is_hosted:
+                violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+                if violations:
+                    logger.warning("本地库外键检查发现 %s 行不一致", len(violations))
+    import_legacy_chat_store_once()
 
 
 def _dumps(value: Any) -> str:
@@ -1019,16 +1030,28 @@ def _chat_session_record_store() -> ChatSessionRecordStore:
     )
 
 
-def load_chat_store() -> dict[str, Any]:
-    """读取全部聊天会话和消息。"""
+def import_legacy_chat_store_once() -> None:
+    """把旧 chat_sessions.json 或 json_store 遗留记录导入一次。库里已有会话则只打标记。"""
 
-    return _chat_session_record_store().load_store()
+    from src.config.runtime_paths import data_root
 
-
-def save_chat_store(data: dict[str, Any]) -> None:
-    """整份覆盖聊天会话和消息。"""
-
-    _chat_session_record_store().save_store(data)
+    migrate_json_object_file("chat_store", "default", data_root() / "chat_sessions.json")
+    if get_json_record("schema_migrations", "chat_store_incremental_v1"):
+        return
+    with _lock, _connect() as conn:
+        existing = int(conn.execute("SELECT COUNT(*) AS n FROM chat_sessions").fetchone()["n"])
+    if existing == 0:
+        legacy = get_json_record("chat_store", "default") or {}
+        for item in legacy.get("sessions") or []:
+            if isinstance(item, dict) and item.get("id"):
+                insert_chat_session_if_absent(item)
+        messages = legacy.get("messages") or {}
+        if isinstance(messages, dict):
+            for session_id, items in messages.items():
+                for item in items or []:
+                    if isinstance(item, dict) and item.get("id"):
+                        append_chat_message(str(session_id), item)
+    upsert_json_record("schema_migrations", "chat_store_incremental_v1", {"done": True})
 
 
 def get_chat_session(session_id: str) -> dict[str, Any] | None:
@@ -1179,6 +1202,17 @@ def append_run_event(
     project_id: str | None = None,
 ) -> dict[str, Any]:
     """Append one normalized runtime event for trace inspection."""
+    if session_id:
+        insert_chat_session_if_absent({
+            "id": session_id,
+            "title": "未命名会话",
+            "agent_id": agent_id or "",
+            "agent_name": agent_name or "",
+            "workspace_id": workspace_id or DEFAULT_WORKSPACE_ID,
+            "project_id": project_id or DEFAULT_PROJECT_ID,
+            "created_at": _utc_now(),
+            "updated_at": _utc_now(),
+        })
     return _trace_record_store().append_event(
         session_id=session_id,
         event_type=event_type,

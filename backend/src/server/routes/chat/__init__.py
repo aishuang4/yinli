@@ -31,8 +31,6 @@ from src.server.routes.chat.models import (
     PendingInteraction,
     StoredChatMessage,
 )
-from src.server.routes.chat.store import _load_store
-
 __all__ = [
     "router",
     "ChatImagePayload",
@@ -44,5 +42,4 @@ __all__ = [
     "ChatToolRun",
     "PendingInteraction",
     "StoredChatMessage",
-    "_load_store",
 ]

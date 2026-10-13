@@ -14,16 +14,21 @@ from src.server.routes.chat.session_studio import (
     archive_studio_on_session_delete,
     attach_group_studio_hints,
 )
-from src.server.routes.chat.store import _load_store, _save_store
+from src.server.routes.chat.store import message_model, session_model
 from src.server.routes.chat.team_runtime.maintenance import (
     delete_team_runs_for_session,
 )
 from src.server.routes.chat.team_runtime.store import TeamStoreError
 from src.storage.database import (
     DEFAULT_PROJECT_ID,
+    delete_chat_session,
     delete_session_context_state,
     get_chat_run,
+    get_chat_session,
     get_project,
+    list_chat_messages,
+    list_chat_sessions,
+    update_chat_session,
 )
 
 _SESSION_KINDS = {"chat", "scheduled_job", "all"}
@@ -42,29 +47,16 @@ async def update_session_model(session_id: str, data: SessionModelUpdate,
     from src.server.routes.chat.lifecycle import ACTIVE_RUN_STATUSES
     if any(run["sessionId"] == session_id for run in list_chat_runs_by_statuses(ACTIVE_RUN_STATUSES)):
         raise HTTPException(status_code=409, detail="当前会话仍有运行或待审批任务。")
-    store = _load_store()
-    session = next((s for s in store.sessions if s.id == session_id and s.project_id == project_id), None)
-    if session is None or not _session_visible(session):
+    record = get_chat_session(session_id)
+    session = session_model(record)
+    if session is None or session.project_id != project_id:
         raise HTTPException(status_code=404, detail="Session not found")
     try:
         binding = resolve_model_binding(data.model_config_id)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    session.model_config_id = binding.primary.entry.id
-    _save_store(store)
-    return {"modelConfigId": session.model_config_id}
-
-
-def _session_visible(session: ChatSession) -> bool:
-    """桌面端读取本机全部会话；Web 只读取当前登录用户的会话。"""
-
-    from src.server.auth.ownership import assert_catalog_ready, current_owner_id
-
-    owner = current_owner_id()
-    if not owner:
-        return True
-    assert_catalog_ready()
-    return (session.owner_user_id or "") == owner
+    update_chat_session(session_id, model_config_id=binding.primary.entry.id)
+    return {"modelConfigId": binding.primary.entry.id}
 
 
 def _filter_sessions_by_kind(sessions: list[ChatSession], kind: str) -> list[ChatSession]:
@@ -88,15 +80,10 @@ async def list_sessions(
     Returns:
         list[ChatSession]: 会话列表
     """
-    store = _load_store()
-    matched = [
-        session for session in store.sessions
-        if session.project_id == project_id and _session_visible(session)
-    ]
-    return attach_group_studio_hints(sorted(
-        _filter_sessions_by_kind(matched, kind),
-        key=lambda item: item.updated_at,
-        reverse=True,
+    records = list_chat_sessions(project_id=project_id, kind=None if kind == "all" else kind)
+    return attach_group_studio_hints(_filter_sessions_by_kind(
+        [session for item in records if (session := session_model(item)) is not None],
+        kind,
     ))
 
 
@@ -106,11 +93,10 @@ async def list_session_catalog(
 ) -> list[ChatSession]:
     """列出全部工作上下文中的会话，用于按 Workspace / Project 构建历史目录。"""
 
-    store = _load_store()
-    return attach_group_studio_hints(sorted(
-        _filter_sessions_by_kind([item for item in store.sessions if _session_visible(item)], kind),
-        key=lambda item: item.updated_at,
-        reverse=True,
+    records = list_chat_sessions(kind=None if kind == "all" else kind)
+    return attach_group_studio_hints(_filter_sessions_by_kind(
+        [session for item in records if (session := session_model(item)) is not None],
+        kind,
     ))
 
 
@@ -120,14 +106,12 @@ async def list_session_messages(
     project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
 ) -> list[dict[str, Any]]:
     """获取指定会话的消息列表"""
-    store = _load_store()
-    session = next(
-        (item for item in store.sessions if item.id == session_id and item.project_id == project_id),
-        None,
-    )
-    if session is None or not _session_visible(session):
+    session = session_model(get_chat_session(session_id))
+    if session is None or session.project_id != project_id:
         raise HTTPException(status_code=404, detail="Session not found")
-    return _normalize_history_messages(store.messages.get(session_id) or [])
+    return _normalize_history_messages([
+        message_model(item) for item in list_chat_messages(session_id)
+    ])
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
@@ -136,12 +120,8 @@ async def delete_session(
     project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
 ) -> None:
     """删除指定会话、消息及其私有附件和产物。"""
-    store = _load_store()
-    session = next(
-        (item for item in store.sessions if item.id == session_id and item.project_id == project_id),
-        None,
-    )
-    if session is None or not _session_visible(session):
+    session = session_model(get_chat_session(session_id))
+    if session is None or session.project_id != project_id:
         raise HTTPException(status_code=404, detail="Session not found")
 
     project = get_project(session.project_id)
@@ -157,9 +137,7 @@ async def delete_session(
         delete_project_session_files(project_root=project_root, session_id=session_id)
     except (OSError, ValueError, TeamStoreError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    store.sessions = [session for session in store.sessions if session.id != session_id]
-    store.messages.pop(session_id, None)
-    _save_store(store)
+    delete_chat_session(session_id)
     # 压缩摘要 / 已启用 Skill 等会话级上下文状态一并清理。
     delete_session_context_state(session_id)
 

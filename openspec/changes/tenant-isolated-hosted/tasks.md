@@ -28,8 +28,8 @@
 - [ ] 2.3 从 `ensure_db()` 删除 `AUTH_SCHEMA_SQL` 和 `owner_user_id` 补列循环；默认 Project 根目录改用 `default_project_root()`（§5.2）。补列与账号表暂留，等 3.2 / 3.8 把写入迁走后再删，否则新库无法满足现有写入
 - [x] 2.4 修改测试：删除约 87 处 `DB_PATH` / `_initialized` 的 monkeypatch，以及 25 个文件里对路径常量的 patch（§5.3）。`uv run pytest` 全绿后再继续
 - [x] 2.5 ChatStore 增量写：先补 schema（§7.1），然后实现 `ChatSessionRecordStore` 的新方法（§7.2）
-- [ ] 2.6 改写 `server/routes/chat/store.py`（§7.3）及其他调用方（§7.4）；实现 `import_legacy_chat_store_once`（§7.5）；删除 `load_store` / `save_store` / `load_chat_store` / `save_chat_store`
-- [ ] 2.7 按 §5.4 的顺序开启 `foreign_keys`：先 grep 不带 WHERE 的整表 DELETE，逐一确认；开启后修正所有写入顺序问题；local 租户启动时执行 `foreign_key_check` 并记录日志
+- [x] 2.6 改写 `server/routes/chat/store.py`（§7.3）及其他调用方（§7.4）；实现 `import_legacy_chat_store_once`（§7.5）；删除 `load_store` / `save_store` / `load_chat_store` / `save_chat_store`
+- [x] 2.7 按 §5.4 的顺序开启 `foreign_keys`：先 grep 不带 WHERE 的整表 DELETE，逐一确认；开启后修正所有写入顺序问题；local 租户启动时执行 `foreign_key_check` 并记录日志
 - [ ] 2.8 测试 `test_chat_store_incremental.py`（§17.1）
 - [ ] 2.9 按 §6 的清单逐项处理缓存。重点：删除 `agents.py:279`、`mcp/registry.py:533`、`skills/registry.py:865` 三处 import 时加载，改为 `TenantScoped` 懒加载；`_agent_cache` 等的 key 加 `tenant_id`；`secret_store` 的缓存 key 加 `tenant_id`；向量库 backend 按租户；通知 hub 按租户投递
 - [ ] 2.10 后台 Run 按租户过滤（§10.6），`PENDING_INTERACTIONS` 记录并校验 `tenant_id`（§6）

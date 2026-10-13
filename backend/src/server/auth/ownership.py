@@ -11,7 +11,8 @@ from src.config.settings import settings
 
 _OWNER: ContextVar[str | None] = ContextVar("hosted_owner_user_id", default=None)
 
-OWNED_TABLES = ("workspaces", "projects", "chat_sessions", "group_studios", "scheduled_jobs")
+# 先删子表。projects 引用 workspaces，group_studios 引用 projects。
+OWNED_TABLES = ("group_studios", "chat_sessions", "scheduled_jobs", "projects", "workspaces")
 
 
 class HostedOwnershipPending(RuntimeError):

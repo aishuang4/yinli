@@ -31,7 +31,8 @@ from src.server.routes.chat.prompts import (
     _build_runtime_context_prompt,
     _build_skill_context_prompt,
 )
-from src.server.routes.chat.store import _load_store
+from src.server.routes.chat.store import message_model
+from src.storage.database import list_chat_messages
 from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
     _build_runtime_knowledge_tools,
@@ -121,8 +122,7 @@ def snapshot_session_history(session_id: str | None, *, limit: int = 40) -> list
 
     if not session_id:
         return []
-    store = _load_store()
-    messages = store.messages.get(session_id, [])
+    messages = [message_model(item) for item in list_chat_messages(session_id)]
     return [
         SessionHistoryMessage(
             role="user" if message.role == "user" else "assistant",
@@ -130,7 +130,7 @@ def snapshot_session_history(session_id: str | None, *, limit: int = 40) -> list
             file_names=tuple(item.name for item in message.files),
         )
         for message in messages[-limit:]
-        if message.role in {"user", "assistant"} and not getattr(message, "error", None)
+        if message.role in {"user", "assistant"} and not message.error
     ]
 
 

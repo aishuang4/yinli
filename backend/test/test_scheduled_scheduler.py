@@ -41,8 +41,8 @@ from src.storage.database import (
     DEFAULT_WORKSPACE_ID,
     ensure_db,
     get_chat_run,
+    list_chat_messages,
     list_user_notifications,
-    load_chat_store,
     update_scheduled_job,
     update_scheduled_job_run,
     upsert_chat_run,
@@ -640,10 +640,9 @@ def test_reconcile_interrupted_chat_runs_fails_orphans_and_skips_live_tasks(isol
         assert get_chat_run("run-orphan")["status"] == "failed"
         assert get_chat_run("run-running-orphan")["status"] == "failed"
         assert get_chat_run("run-live")["status"] == "running"
-        store = load_chat_store()
         errors = [
             item.get("error")
-            for item in store["messages"].get("sess-orphan", [])
+            for item in list_chat_messages("sess-orphan")
         ]
         assert PROCESS_RESTART_ERROR in errors
         blocker.set()

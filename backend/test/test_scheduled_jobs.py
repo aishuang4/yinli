@@ -37,9 +37,7 @@ from src.storage.database import (
     ensure_db,
     get_chat_run,
     list_user_notifications,
-    load_chat_store,
     replace_skills,
-    save_chat_store,
     upsert_agent,
     upsert_chat_run,
     upsert_project_resource_binding,
@@ -825,63 +823,50 @@ def test_schema_tables_and_unique_indexes_exist(isolated_db):
         assert "idx_scheduled_jobs_due" in indexes
 
 
-def test_chat_session_kind_survives_save_chat_store(isolated_db):
+def test_chat_session_kind_survives_insert(isolated_db):
     ensure_db()
-    save_chat_store({
-        "sessions": [{
-            "id": "sess-job",
-            "title": "定时执行",
-            "agent_id": "agent-1",
-            "agent_name": "助手",
-            "mode": "agent",
-            "workspace_id": DEFAULT_WORKSPACE_ID,
-            "project_id": DEFAULT_PROJECT_ID,
-            "kind": "scheduled_job",
-            "created_at": "2026-08-21T00:00:00+00:00",
-            "updated_at": "2026-08-21T00:00:00+00:00",
-            "message_count": 0,
-        }],
-        "messages": {},
+    database.insert_chat_session_if_absent({
+        "id": "sess-job",
+        "title": "定时执行",
+        "agent_id": "agent-1",
+        "agent_name": "助手",
+        "mode": "agent",
+        "workspace_id": DEFAULT_WORKSPACE_ID,
+        "project_id": DEFAULT_PROJECT_ID,
+        "kind": "scheduled_job",
+        "created_at": "2026-08-21T00:00:00+00:00",
+        "updated_at": "2026-08-21T00:00:00+00:00",
     })
-    loaded = load_chat_store()
-    assert loaded["sessions"][0]["kind"] == "scheduled_job"
-    store = ChatStore.model_validate(loaded)
-    assert store.sessions[0].kind == "scheduled_job"
-    save_chat_store(store.model_dump(mode="json", by_alias=True))
-    reloaded = load_chat_store()
-    assert reloaded["sessions"][0]["kind"] == "scheduled_job"
+    loaded = database.get_chat_session("sess-job")
+    assert loaded["kind"] == "scheduled_job"
+    assert ChatStore.model_validate({"sessions": [loaded], "messages": {}}).sessions[0].kind == "scheduled_job"
 
 
 def test_null_owner_user_id_stays_in_chat_history(isolated_db):
     """桌面旧库 owner_user_id 为 NULL 时，不能把整份历史目录校验成空。"""
 
-    from src.server.routes.chat.store import _load_store
+    from src.runtime.chat_session import find_chat_session
 
     ensure_db()
-    save_chat_store({
-        "sessions": [{
-            "id": "sess-old",
-            "title": "旧对话",
-            "agent_id": "agent-1",
-            "agent_name": "助手",
-            "mode": "agent",
-            "workspace_id": DEFAULT_WORKSPACE_ID,
-            "project_id": DEFAULT_PROJECT_ID,
-            "kind": "chat",
-            "created_at": "2026-08-21T00:00:00+00:00",
-            "updated_at": "2026-08-21T00:00:00+00:00",
-            "message_count": 0,
-        }],
-        "messages": {},
+    database.insert_chat_session_if_absent({
+        "id": "sess-old",
+        "title": "旧对话",
+        "agent_id": "agent-1",
+        "agent_name": "助手",
+        "mode": "agent",
+        "workspace_id": DEFAULT_WORKSPACE_ID,
+        "project_id": DEFAULT_PROJECT_ID,
+        "kind": "chat",
+        "created_at": "2026-08-21T00:00:00+00:00",
+        "updated_at": "2026-08-21T00:00:00+00:00",
     })
     with database._connect() as conn:
         conn.execute("UPDATE chat_sessions SET owner_user_id = NULL")
         conn.commit()
 
-    loaded = load_chat_store()
-    assert loaded["sessions"][0]["ownerUserId"] == ""
-    assert ChatStore.model_validate(loaded).sessions[0].id == "sess-old"
-    assert [session.id for session in _load_store().sessions] == ["sess-old"]
+    loaded = database.get_chat_session("sess-old")
+    assert loaded["ownerUserId"] == ""
+    assert find_chat_session("sess-old").id == "sess-old"
 
 
 def test_chat_session_kind_defaults_to_chat(isolated_db):
@@ -895,9 +880,8 @@ def test_chat_session_kind_defaults_to_chat(isolated_db):
         updated_at="2026-08-21T00:00:00+00:00",
     )
     assert session.kind == "chat"
-    save_chat_store({"sessions": [session.model_dump()], "messages": {}})
-    loaded = load_chat_store()
-    assert loaded["sessions"][0]["kind"] == "chat"
+    database.insert_chat_session_if_absent(session.model_dump())
+    assert database.get_chat_session("sess-chat")["kind"] == "chat"
 
 
 def test_chat_run_trigger_source_defaults_to_user(isolated_db):

@@ -16,7 +16,7 @@ from src.server.auth.platform_models import router as platform_router
 from src.server.auth.routes import auth_router
 from src.server.local_access import LocalAccessMiddleware
 from src.server.routes.chat.models import ChatMessage
-from src.server.routes.chat.store import _load_store
+from src.storage.database import list_chat_messages
 from src.storage import database
 
 
@@ -126,8 +126,8 @@ def test_desktop_platform_turn_stays_local(tmp_path, monkeypatch):
         )
         text = "".join([chunk async for chunk in response.body_iterator])
         assert "来自平台" in text
-        store = _load_store()
-        assert any(item.content == "来自平台" for item in store.messages["local-1"])
+        messages = list_chat_messages("local-1")
+        assert any(item["content"] == "来自平台" for item in messages)
 
         seen: list[str | None] = []
 

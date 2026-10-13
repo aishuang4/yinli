@@ -59,6 +59,13 @@ def test_bad_json_row_is_kept_and_later_writes_survive():
     assert [item["id"] for item in database.list_chat_messages("s-1")] == ["m-good", "m-next"]
 
 
+def test_delete_session_cascades_run_events():
+    database.insert_chat_session_if_absent(_session())
+    database.append_run_event(session_id="s-1", event_type="NOTE", title="留下")
+    database.delete_chat_session("s-1")
+    assert database.list_run_events("s-1") == []
+
+
 def test_insert_if_absent_returns_existing_row_and_delete_session_removes_messages():
     first = database.insert_chat_session_if_absent(_session())
     second = database.insert_chat_session_if_absent({**_session(), "title": "别的标题"})

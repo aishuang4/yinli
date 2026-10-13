@@ -12,7 +12,8 @@ from src.server.routes.chat.store import (
     ensure_chat_session,
     ensure_scheduled_job_session,
 )
-from src.server.routes.chat.store import _load_store
+from src.server.routes.chat.store import session_model
+from src.storage.database import get_chat_session
 
 __all__ = [
     "ACTIVE_RUN_STATUSES",
@@ -26,4 +27,4 @@ __all__ = [
 def find_chat_session(session_id: str) -> ChatSession | None:
     """按 id 查找 Chat session。不存在时返回 None。"""
 
-    return next((session for session in _load_store().sessions if session.id == session_id), None)
+    return session_model(get_chat_session(session_id))
