@@ -8,7 +8,8 @@ from typing import Any
 
 import yaml
 
-from src.agents.runtime_types import MAX_REACT_ITERS, WORKSPACE_DIR
+from src.agents.runtime_types import MAX_REACT_ITERS
+from src.config.runtime_paths import default_project_root
 from src.agents.system_agents import (
     is_default_chat_agent_id,
     is_default_websearch_job_agent_id,
@@ -61,7 +62,7 @@ def _guardrails_from_yaml(value: Any, warnings: list[str]) -> Guardrails:
         warnings.append("filesystem_scope=/ 已按空字符串处理")
         filesystem_scope = ""
     payload = {
-        "filesystem_scope": filesystem_scope or WORKSPACE_DIR,
+        "filesystem_scope": filesystem_scope or str(default_project_root()),
         "shell_blacklist": data.get("shell_blacklist"),
         "network_enabled": data.get("network_enabled"),
         "human_approval": data.get("human_approval"),
@@ -80,7 +81,7 @@ def _guardrails_from_yaml(value: Any, warnings: list[str]) -> Guardrails:
 
 def _dump_filesystem_scope(value: str) -> str:
     text = str(value or "").strip()
-    if not text or text == WORKSPACE_DIR or text in {"/", str(Path("/").resolve())}:
+    if not text or text == str(default_project_root()) or text in {"/", str(Path("/").resolve())}:
         return ""
     return text
 

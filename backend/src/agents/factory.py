@@ -43,10 +43,9 @@ from src.agents.runtime_types import (
     MAX_REACT_ITERS,
     McpRuntimeSpec,
     RuntimeToolScope,
-    WORKSPACE_DIR,
 )
 from src.config.runtime_settings import binding_for_model
-from src.config.runtime_paths import SANDBOX_ROOT
+from src.config.runtime_paths import default_project_root, sandbox_root
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.tools.ask_user import AskUser
 from src.tools.configured_http_tool import ConfiguredHttpTool
@@ -235,10 +234,11 @@ def _seed_catalog_profiles_readonly(host_workdir: Path, extra_filesystem_scopes:
 
 
 def _safe_workspace_dir(guardrails: AgentGuardrails | None) -> str:
-    scope = (guardrails.filesystem_scope if guardrails else WORKSPACE_DIR) or WORKSPACE_DIR
+    default_scope = str(default_project_root())
+    scope = (guardrails.filesystem_scope if guardrails else default_scope) or default_scope
     expanded = os.path.abspath(os.path.expanduser(scope))
     if expanded == os.path.abspath(os.sep):
-        return WORKSPACE_DIR
+        return default_scope
     return expanded
 
 
@@ -526,7 +526,7 @@ def get_or_create_agent(
             workspace_id=f"agent-{agent_id}".replace(":", "-")[:120],
             base_image=guardrails.docker_image or "python:3.11-slim",
             host_workdir=(
-                str(SANDBOX_ROOT / agent_id.replace(":", "-").replace("/", "-"))
+                str(sandbox_root() / agent_id.replace(":", "-").replace("/", "-"))
                 if guardrails.persistent_sandbox
                 else None
             ),
@@ -534,7 +534,7 @@ def get_or_create_agent(
         )
         if guardrails.persistent_sandbox and extra_filesystem_scopes:
             _seed_catalog_profiles_readonly(
-                Path(str(SANDBOX_ROOT / agent_id.replace(":", "-").replace("/", "-"))),
+                Path(str(sandbox_root() / agent_id.replace(":", "-").replace("/", "-"))),
                 extra_filesystem_scopes,
             )
     else:

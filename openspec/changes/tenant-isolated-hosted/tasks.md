@@ -7,25 +7,25 @@
 ## 0. 准备
 
 - [ ] 0.1 停掉现有 Web 部署并清空数据卷（§15 最后一条）。在 PR 描述中注明"托管数据已清空，不做迁移"
-- [ ] 0.2 在 `pyproject.toml` 显式加入 `cryptography` 依赖，执行 `uv sync`（§11.3）
-- [ ] 0.3 逐项核对 design 中标注"实施前核对"的假设，把结论记在 PR 描述里：model_catalog 能否接受空目录（§9.1-8）；AgentScope Docker 客户端是否读取 `DOCKER_HOST`（§12.4.2）；skill_paths 的挂载方式（§12.4.2）；workspace backend 能否单次执行命令（§12.4.5）；模型 SDK 能否注入 httpx client（§11.4）；`mcp/registry.py:437` 的线程回调是否访问租户数据（§10.7）；key2api 是否支持 tools 和 stream_options（§11.6）；桌面会话 TTL（§11.6）；`/api/sandbox/cases` 的用途（§12.2）；`ModelEntry.capabilities` 的字段集（§11.5）；firing 状态枚举（§12.6）
+- [x] 0.2 在 `pyproject.toml` 显式加入 `cryptography` 依赖，执行 `uv sync`（§11.3）
+- [x] 0.3 逐项核对 design 中标注"实施前核对"的假设，把结论记在 PR 描述里：model_catalog 能否接受空目录（§9.1-8）；AgentScope Docker 客户端是否读取 `DOCKER_HOST`（§12.4.2）；skill_paths 的挂载方式（§12.4.2）；workspace backend 能否单次执行命令（§12.4.5）；模型 SDK 能否注入 httpx client（§11.4）；`mcp/registry.py:437` 的线程回调是否访问租户数据（§10.7）；key2api 是否支持 tools 和 stream_options（§11.6）；桌面会话 TTL（§11.6）；`/api/sandbox/cases` 的用途（§12.2）；`ModelEntry.capabilities` 的字段集（§11.5）；firing 状态枚举（§12.6）
 
 ## 1. 租户上下文与路径
 
-- [ ] 1.1 新建 `backend/src/tenancy/__init__.py`、`context.py`，按 §3.1 实现。测试 `test_tenant_context.py`（§17.1）
-- [ ] 1.2 新建 `tenancy/registry.py`，实现 `TenantScoped`（含 `get` / `peek` / `replace` / `evict`）、`evict_tenant`、`evict_all`（§3.2）
-- [ ] 1.3 改写 `config/runtime_paths.py`（§4.1）：删除数据类常量，新增函数；拆分 `ensure_process_directories` / `ensure_tenant_directories`（后者按 tenant_id 只执行一次）
-- [ ] 1.4 按 §4.2 的表逐文件修改调用点。重点：所有默认参数里的路径常量改成 `None` 再在函数内解析；删除模块级 `DATA_DIR` / `WORKSPACE_DIR` / `SKILL_PACKAGES_DIR` / `SUBAGENT_USER_DIR` / `CHAT_DATA_PATH` / `SECRET_DIR`。完成后执行 §4.2 末尾的 grep，结果必须为空
-- [ ] 1.5 `user_home_root()` 在 hosted 下返回 `None`，按 §12.7 修改四处发现逻辑
-- [ ] 1.6 修改 `backend/test/conftest.py`：加入 autouse `local_tenant` fixture，改写 `isolated_model_catalog`（§5.3）
-- [ ] 1.7 新建 `backend/test/hosted_support.py`，提供 `hosted_env`、`make_user`、`tenant_of`（§5.3），暂时只实现到能建控制面为止，任务组 3 再补全
-- [ ] 1.8 测试 `test_tenant_paths.py`（§17.1）
+- [x] 1.1 新建 `backend/src/tenancy/__init__.py`、`context.py`，按 §3.1 实现。测试 `test_tenant_context.py`（§17.1）
+- [x] 1.2 新建 `tenancy/registry.py`，实现 `TenantScoped`（含 `get` / `peek` / `replace` / `evict`）、`evict_tenant`、`evict_all`（§3.2）
+- [x] 1.3 改写 `config/runtime_paths.py`（§4.1）：删除数据类常量，新增函数；拆分 `ensure_process_directories` / `ensure_tenant_directories`（后者按 tenant_id 只执行一次）
+- [x] 1.4 按 §4.2 的表逐文件修改调用点。重点：所有默认参数里的路径常量改成 `None` 再在函数内解析；删除模块级 `DATA_DIR` / `WORKSPACE_DIR` / `SKILL_PACKAGES_DIR` / `SUBAGENT_USER_DIR` / `CHAT_DATA_PATH` / `SECRET_DIR`。完成后执行 §4.2 末尾的 grep，结果必须为空
+- [x] 1.5 `user_home_root()` 在 hosted 下返回 `None`，按 §12.7 修改四处发现逻辑
+- [x] 1.6 修改 `backend/test/conftest.py`：加入 autouse `local_tenant` fixture，改写 `isolated_model_catalog`（§5.3）
+- [x] 1.7 新建 `backend/test/hosted_support.py`，提供 `hosted_env`、`make_user`、`tenant_of`（§5.3），暂时只实现到能建控制面为止，任务组 3 再补全
+- [x] 1.8 测试 `test_tenant_paths.py`（§17.1）
 
 ## 2. 存储与缓存
 
-- [ ] 2.1 改写 `storage/database.py` 的连接与初始化（§5.1）：`db_path()`、`_lock_for`、线程安全的 `_TenantLockProxy`、`_initialized_paths`、`forget_db` / `forget_all`。**这一步先不要开启 `foreign_keys`**
-- [ ] 2.2 删除 `DB_PATH`、`PROJECT_ROOT`、`_initialized`；`DEFAULT_GUARDRAILS` 改为 `default_guardrails()`，并修改全部引用（§5.2）
-- [ ] 2.3 从 `ensure_db()` 删除 `AUTH_SCHEMA_SQL` 和 `owner_user_id` 补列循环；默认 Project 根目录改用 `default_project_root()`（§5.2）
+- [x] 2.1 改写 `storage/database.py` 的连接与初始化（§5.1）：`db_path()`、`_lock_for`、线程安全的 `_TenantLockProxy`、`_initialized_paths`、`forget_db` / `forget_all`。**这一步先不要开启 `foreign_keys`**
+- [x] 2.2 删除 `DB_PATH`、`PROJECT_ROOT`、`_initialized`；`DEFAULT_GUARDRAILS` 改为 `default_guardrails()`，并修改全部引用（§5.2）
+- [x] 2.3 从 `ensure_db()` 删除 `AUTH_SCHEMA_SQL` 和 `owner_user_id` 补列循环；默认 Project 根目录改用 `default_project_root()`（§5.2）
 - [ ] 2.4 修改测试：删除约 87 处 `DB_PATH` / `_initialized` 的 monkeypatch，以及 25 个文件里对路径常量的 patch（§5.3）。`uv run pytest` 全绿后再继续
 - [ ] 2.5 ChatStore 增量写：先补 schema（§7.1），然后实现 `ChatSessionRecordStore` 的新方法（§7.2）
 - [ ] 2.6 改写 `server/routes/chat/store.py`（§7.3）及其他调用方（§7.4）；实现 `import_legacy_chat_store_once`（§7.5）；删除 `load_store` / `save_store` / `load_chat_store` / `save_chat_store`

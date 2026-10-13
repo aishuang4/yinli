@@ -39,7 +39,6 @@ from src.catalog.system_defaults import (
     build_default_agent,
     build_default_websearch_job_agent,
 )
-from src.config.runtime_paths import DATA_ROOT
 from src.scheduler.job_toolkit import (
     CHAT_ROLE,
     JOB_ROLE,
@@ -97,8 +96,6 @@ def _pause_jobs_for_agent_capability_change(old_agent: "AgentResponse", new_agen
         )
 
 
-DATA_DIR = str(DATA_ROOT)
-AGENTS_REGISTRY_FILE = os.path.join(DATA_DIR, "agents.json")
 AGENTS_NAMESPACE = "agents"
 
 

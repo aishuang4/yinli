@@ -4,8 +4,9 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from src.config.runtime_paths import team_runtime_root
 from src.server.routes.chat.store import _append_assistant_message
-from src.server.routes.chat.team_runtime.store import TEAM_RUNTIME_ROOT, TeamStore, TeamStoreError
+from src.server.routes.chat.team_runtime.store import TeamStore, TeamStoreError
 from src.storage.database import (
     get_chat_run,
     update_chat_run_status,
@@ -17,7 +18,7 @@ INTERRUPTED_REASON = "TeamRun 因后端重启中断，请重新发起本轮协�
 
 def maintain_team_runtime_runs(
     *,
-    root: Path = TEAM_RUNTIME_ROOT,
+    root: Path | None = None,
     retention_days: int = 30,
     max_records: int = 200,
     now: datetime | None = None,
@@ -25,6 +26,7 @@ def maintain_team_runtime_runs(
     """收口孤儿运行并清理超过保留策略的终态目录。"""
 
     current_time = now or datetime.now(timezone.utc)
+    root = root or team_runtime_root()
     root.mkdir(parents=True, exist_ok=True)
     terminal: list[tuple[datetime, Path]] = []
     interrupted = 0
@@ -60,10 +62,11 @@ def maintain_team_runtime_runs(
     return {"interrupted": interrupted, "removed": len(removable), "skipped": skipped}
 
 
-def delete_team_runs_for_session(session_id: str, *, root: Path = TEAM_RUNTIME_ROOT) -> int:
+def delete_team_runs_for_session(session_id: str, *, root: Path | None = None) -> int:
     """删除 Chat session 对应的终态 TeamRun 文件。"""
 
     removed = 0
+    root = root or team_runtime_root()
     if not root.exists():
         return removed
     for path in list(root.iterdir()):

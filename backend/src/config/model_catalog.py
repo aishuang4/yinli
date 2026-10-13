@@ -15,9 +15,15 @@ from urllib.parse import parse_qsl, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from src.config.runtime_paths import USER_DATA_ROOT
+from src.config.runtime_paths import tenant_root
 
-MODELS_PATH = USER_DATA_ROOT / "models.json"
+
+def models_path() -> Path:
+    """当前租户的自定义模型目录文件。"""
+
+    return tenant_root() / "models.json"
+
+
 _lock = RLock()
 _lock_state = local()
 _secured_windows_files: dict[Path, tuple[int, int, int]] = {}
@@ -30,8 +36,8 @@ def _locked():
         if getattr(_lock_state, "held", False):
             yield
             return
-        MODELS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(MODELS_PATH.with_suffix(".lock"), "a+b") as stream:
+        models_path().parent.mkdir(parents=True, exist_ok=True)
+        with open(models_path().with_suffix(".lock"), "a+b") as stream:
             if os.name == "nt":
                 import msvcrt
 
@@ -232,11 +238,11 @@ def _write(catalog: ModelCatalog) -> None:
     serialized = catalog.model_dump_json(by_alias=True, indent=2)
     if len(serialized.encode("utf-8")) > 4 * 1024 * 1024:
         raise CatalogError("models.json 超过 4 MB 限制。")
-    MODELS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    models_path().parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
         fd, name = tempfile.mkstemp(
-            prefix=".models-", suffix=".tmp", dir=MODELS_PATH.parent
+            prefix=".models-", suffix=".tmp", dir=models_path().parent
         )
         temporary = Path(name)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -244,7 +250,7 @@ def _write(catalog: ModelCatalog) -> None:
             stream.write(serialized)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, MODELS_PATH)
+        os.replace(temporary, models_path())
     except (OSError, subprocess.SubprocessError):
         raise CatalogError(
             "models.json 保存失败，请检查文件权限或文件是否被占用。"
@@ -352,7 +358,7 @@ def read_catalog() -> tuple[ModelCatalog, str]:
     with _locked():
         from src.storage.database import get_json_record, upsert_json_record
 
-        if not MODELS_PATH.exists():
+        if not models_path().exists():
             marker = get_json_record("system_settings", "models_file_migrated")
             if marker:
                 raise CatalogError("models.json 不存在，请恢复配置文件。")
@@ -362,26 +368,26 @@ def read_catalog() -> tuple[ModelCatalog, str]:
                 raise CatalogError("旧模型配置格式无效，迁移未完成。") from None
             _write(migrated)
         try:
-            if MODELS_PATH.stat().st_size > 4 * 1024 * 1024:
+            if models_path().stat().st_size > 4 * 1024 * 1024:
                 raise CatalogError("models.json 超过 4 MB 限制。")
-            payload = MODELS_PATH.read_bytes()
+            payload = models_path().read_bytes()
         except OSError:
             raise CatalogError("models.json 无法读取，请检查权限。") from None
         catalog = _parse(payload)
         try:
-            stat = MODELS_PATH.stat()
+            stat = models_path().stat()
             signature = (stat.st_ino, stat.st_ctime_ns, stat.st_mtime_ns)
             if os.name == "nt":
-                if _secured_windows_files.get(MODELS_PATH) != signature:
-                    _secure_file(MODELS_PATH)
-                    secured = MODELS_PATH.stat()
-                    _secured_windows_files[MODELS_PATH] = (
+                if _secured_windows_files.get(models_path()) != signature:
+                    _secure_file(models_path())
+                    secured = models_path().stat()
+                    _secured_windows_files[models_path()] = (
                         secured.st_ino,
                         secured.st_ctime_ns,
                         secured.st_mtime_ns,
                     )
             elif stat.st_mode & 0o077:
-                _secure_file(MODELS_PATH)
+                _secure_file(models_path())
         except (OSError, subprocess.SubprocessError):
             raise CatalogError("models.json 无法设置仅当前用户访问权限。") from None
         if not get_json_record("system_settings", "models_file_migrated"):
@@ -397,7 +403,7 @@ def public_catalog() -> dict:
     for provider in result["providers"]:
         provider["apiKeyConfigured"] = bool(provider.pop("apiKey"))
     result["etag"] = etag
-    result["modelsPath"] = str(MODELS_PATH)
+    result["modelsPath"] = str(models_path())
     return result
 
 
@@ -434,7 +440,7 @@ def save_catalog(payload: dict, expected_etag: str) -> dict:
         data["revision"] = current.revision + 1
         parsed = _parse(data)
         # 再次检查外部编辑；页面和本进程写操作已由锁串行化。
-        if hashlib.sha256(MODELS_PATH.read_bytes()).hexdigest() != etag:
+        if hashlib.sha256(models_path().read_bytes()).hexdigest() != etag:
             raise CatalogConflict("模型配置已改变，请刷新后重试。")
         _write(parsed)
         return public_catalog()

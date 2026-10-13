@@ -19,11 +19,16 @@ import time
 from pathlib import Path
 from threading import RLock
 
-from src.config.runtime_paths import DATA_ROOT
+from src.config.runtime_paths import data_root
 
 
 SERVICE_NAME = "agent-workstation-desktop.model-credentials.v1"
-SECRET_DIR = DATA_ROOT / "secrets"
+
+
+def secret_dir() -> Path:
+    return data_root() / "secrets"
+
+
 _cache: dict[str, str] = {}
 _memory_secrets: dict[str, str] = {}
 _lock = RLock()
@@ -148,7 +153,7 @@ def delete_named_secret(ref: str) -> None:
 
 def _catalog_file_path(account: str) -> Path:
     digest = hashlib.sha256(account.encode("utf-8")).hexdigest()
-    return SECRET_DIR / "catalog" / digest
+    return secret_dir() / "catalog" / digest
 
 
 def _read_catalog_file_secret(account: str) -> str:
@@ -339,7 +344,7 @@ def _to_blob(value: bytes) -> tuple[_DataBlob, ctypes.Array]:
 
 def _dpapi_path(account: str) -> Path:
     digest = hashlib.sha256(account.encode("utf-8")).hexdigest()
-    return SECRET_DIR / f"{digest}.dpapi"
+    return secret_dir() / f"{digest}.dpapi"
 
 
 def _windows_crypto_apis():

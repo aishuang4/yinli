@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 
 from src.catalog.paths import workspace_catalog_root
-from src.config.runtime_paths import SKILL_PACKAGES_ROOT
+from src.config.runtime_paths import skill_packages_root
 
 SYSTEM_SKILL_IDS = ("yinli-catalog", "yinli-charts", "word-documents")
 # 合格 Chat 无条件追加的系统说明书（file-catalog-v1 §9.2）；其余包可经 availableToAllAgents 共享，或写入 Agent 配置。
@@ -115,17 +115,19 @@ def discover_skill_packages(
     project_root: Path,
     *,
     user_data_root: Path,
-    user_home_root: Path,
+    user_home_root: Path | None,
     workspace_id: str = "default",
 ) -> list[DiscoveredSkill]:
-    """扫描项目 / 用户 / Workspace catalog 下的 Skill 包。"""
+    """扫描项目 / 用户 / Workspace catalog 下的 Skill 包。user_home_root 为 None（hosted）时跳过。"""
 
     roots: list[tuple[Path, str, bool, str]] = []
-    for base, scope, enabled, kind in (
+    bases: list[tuple[Path, str, bool, str]] = [
         (project_root, "project", True, "external_agents"),
         (user_data_root, "user", False, "external_agents"),
-        (user_home_root, "user", False, "external_agents"),
-    ):
+    ]
+    if user_home_root is not None:
+        bases.append((user_home_root, "user", False, "external_agents"))
+    for base, scope, enabled, kind in bases:
         for directory_name in _SKILL_DIR_NAMES:
             roots.append((Path(base) / directory_name, scope, enabled, kind))
     try:
@@ -163,10 +165,10 @@ def discover_skill_packages(
 
 
 def list_system_skill_packages() -> list[DiscoveredSkill]:
-    """SKILL_PACKAGES_ROOT 中的系统包。"""
+    """skill_packages_root() 中的系统包。"""
 
     items: list[DiscoveredSkill] = []
-    root = Path(SKILL_PACKAGES_ROOT)
+    root = skill_packages_root()
     for skill_id in SYSTEM_SKILL_IDS:
         item = _discovered_from_package(
             root / skill_id,

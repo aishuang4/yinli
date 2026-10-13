@@ -8,23 +8,23 @@ surface can stay stable while persistence moves off flat files.
 
 import json
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any
 
 from src.config.runtime_paths import (
-    DATA_ROOT,
-    DEFAULT_PROJECT_ROOT,
     INSTALL_BACKEND_ROOT,
     USING_CUSTOM_DATA_ROOT,
     USER_DATA_ROOT,
-    ensure_runtime_directories,
+    data_root,
+    default_project_root,
+    ensure_tenant_directories,
 )
 from src.config.settings import settings
 from src.storage.chat_run_records import ChatRunRecordStore
 from src.storage.chat_session_records import ChatSessionRecordStore
-from src.storage.auth_schema import AUTH_SCHEMA_SQL
 from src.storage.database_schema import BASE_SCHEMA_SQL
 from src.storage.scheduled_job_records import ScheduledJobRecordStore
 from src.storage.agent_defaults import (
@@ -46,10 +46,7 @@ from src.storage.workflow_records import WorkflowRecordStore
 from src.storage.workspace_project_records import WorkspaceProjectRecordStore
 
 
-_lock = RLock()
-_initialized = False
 BACKEND_ROOT = INSTALL_BACKEND_ROOT
-PROJECT_ROOT = DEFAULT_PROJECT_ROOT
 DEFAULT_WORKSPACE_ID = "default"
 DEFAULT_PROJECT_ID = "default"
 PROJECT_RESOURCE_TYPES = ("agent", "skill", "mcp", "http_tool")
@@ -61,18 +58,21 @@ _PROJECT_RESOURCE_TABLES = {
 }
 _RESOURCE_BINDING_MIGRATION_KEY = "project_resource_bindings_v1"
 
-DEFAULT_GUARDRAILS = {
-    "filesystem_scope": str(PROJECT_ROOT),
-    "shell_blacklist": ["rm -rf /", "sudo"],
-    "network_enabled": True,
-    "human_approval": False,
-    "tool_permission_mode": "accept_edits",
-    "tool_permission_profile": "confirm_destructive",
-    "execution_backend": "local",
-    "docker_image": "python:3.11-slim",
-    "persistent_sandbox": False,
-    "timeout_seconds": 300,
-}
+def default_guardrails() -> dict[str, Any]:
+    """当前租户的默认 guardrails；filesystem_scope 指向当前默认 Project 根。"""
+
+    return {
+        "filesystem_scope": str(default_project_root()),
+        "shell_blacklist": ["rm -rf /", "sudo"],
+        "network_enabled": True,
+        "human_approval": False,
+        "tool_permission_mode": "accept_edits",
+        "tool_permission_profile": "confirm_destructive",
+        "execution_backend": "local",
+        "docker_image": "python:3.11-slim",
+        "persistent_sandbox": False,
+        "timeout_seconds": 300,
+    }
 
 
 def _normalize_guardrails(data: dict[str, Any]) -> dict[str, Any]:
@@ -80,8 +80,8 @@ def _normalize_guardrails(data: dict[str, Any]) -> dict[str, Any]:
 
     return normalize_guardrails(
         data,
-        defaults=DEFAULT_GUARDRAILS,
-        project_root=PROJECT_ROOT,
+        defaults=default_guardrails(),
+        project_root=str(default_project_root()),
     )
 
 DEFAULT_PLAN_CONFIG = {
@@ -114,14 +114,32 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _db_path() -> Path:
+# ---- 按库文件路径维护的连接、锁与初始化状态（§5.1）----
+
+_state_lock = RLock()
+_initialized_paths: set[Path] = set()
+_path_locks: dict[Path, RLock] = {}
+
+
+def db_path() -> Path:
+    """当前租户的库文件路径；hosted 忽略 database_url，固定在租户目录内。"""
+
+    from src.tenancy.context import current_tenant
+
+    ctx = current_tenant()
+    if ctx.kind == "hosted":
+        return ctx.data_root / "data" / "agent_workstation.db"
+    return _local_db_path()
+
+
+def _local_db_path() -> Path:
     url = settings.database_url
     prefix = "sqlite+aiosqlite:///"
     if url.startswith(prefix):
         return _resolve_sqlite_path(url[len(prefix):])
     if url.startswith("sqlite:///"):
         return _resolve_sqlite_path(url[len("sqlite:///"):])
-    return DATA_ROOT / "agent_workstation.db"
+    return data_root() / "agent_workstation.db"
 
 
 def _resolve_sqlite_path(value: str) -> Path:
@@ -133,15 +151,66 @@ def _resolve_sqlite_path(value: str) -> Path:
     return USER_DATA_ROOT / path
 
 
-DB_PATH = _db_path()
+def _lock_for(path: Path) -> RLock:
+    with _state_lock:
+        lock = _path_locks.get(path)
+        if lock is None:
+            lock = _path_locks[path] = RLock()
+        return lock
+
+
+class _TenantLockProxy:
+    """兼容 `with database._lock:` 的旧写法：进入时按当前租户解析到对应路径的 RLock。
+
+    同一个 proxy 可能被多线程同时进入，锁对象放在 threading.local 的栈里，
+    保证 __exit__ 释放的是本线程 __enter__ 取到的那一把。
+    """
+
+    def __init__(self) -> None:
+        self._local = threading.local()
+
+    def __enter__(self) -> RLock:
+        stack = getattr(self._local, "stack", None)
+        if stack is None:
+            stack = self._local.stack = []
+        lock = _lock_for(db_path())
+        stack.append(lock)
+        lock.acquire()
+        return lock
+
+    def __exit__(self, *exc) -> bool:
+        lock = self._local.stack.pop()
+        lock.release()
+        return False
+
+
+_lock = _TenantLockProxy()
 
 
 def _connect() -> sqlite3.Connection:
-    ensure_runtime_directories()
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    ensure_tenant_directories()
+    path = db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
+
+
+def forget_db(path: Path) -> None:
+    """删除租户或测试 teardown 时，丢弃该库的初始化状态与锁。"""
+
+    with _state_lock:
+        _initialized_paths.discard(path)
+        _path_locks.pop(path, None)
+
+
+def forget_all() -> None:
+    """测试 teardown：清空全部初始化状态与锁。"""
+
+    with _state_lock:
+        _initialized_paths.clear()
+        _path_locks.clear()
 
 
 def _ensure_column(
@@ -233,13 +302,13 @@ def _migrate_project_resource_bindings(conn: sqlite3.Connection, *, now: str) ->
 
 
 def ensure_db() -> None:
-    """Create SQLite tables once, safe to call from import-time route loaders."""
-    global _initialized
-    if _initialized:
+    """Create SQLite tables once per tenant database, safe to call from import-time route loaders."""
+    path = db_path()
+    if path in _initialized_paths:
         return
 
-    with _lock:
-        if _initialized:
+    with _lock_for(path):
+        if path in _initialized_paths:
             return
         with _connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
@@ -254,7 +323,6 @@ def ensure_db() -> None:
                 )
             """)
             conn.executescript(BASE_SCHEMA_SQL)
-            conn.executescript(AUTH_SCHEMA_SQL)
             conn.execute("DROP INDEX IF EXISTS idx_group_studios_active_chat")
             conn.execute(
                 """
@@ -375,14 +443,6 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'")
             _ensure_column(conn, "scheduled_jobs", "model_config_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_studios", "model_config_id", "TEXT NOT NULL DEFAULT ''")
-            for owned_table in (
-                "workspaces",
-                "projects",
-                "chat_sessions",
-                "group_studios",
-                "scheduled_jobs",
-            ):
-                _ensure_column(conn, owned_table, "owner_user_id", "TEXT")
             _ensure_column(conn, "group_work_items", "review_status", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "review_note", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "rework_count", "INTEGER NOT NULL DEFAULT 0")
@@ -412,7 +472,7 @@ def ensure_db() -> None:
                 if _is_stale_desktop_default_project_path(current_root):
                     conn.execute(
                         "UPDATE projects SET root_path = ?, updated_at = ? WHERE id = ?",
-                        (str(PROJECT_ROOT), now, DEFAULT_PROJECT_ID),
+                        (str(default_project_root()), now, DEFAULT_PROJECT_ID),
                     )
             conn.execute(
                 """
@@ -426,7 +486,7 @@ def ensure_db() -> None:
                     DEFAULT_WORKSPACE_ID,
                     "默认项目",
                     "历史会话和未显式选择项目的运行所在项目。",
-                    str(PROJECT_ROOT),
+                    str(default_project_root()),
                     now,
                     now,
                 ),
@@ -467,7 +527,7 @@ def ensure_db() -> None:
                     ON trace_observations(project_id, started_at DESC);
             """)
             conn.commit()
-            _initialized = True
+            _initialized_paths.add(path)
 
 
 def _dumps(value: Any) -> str:
@@ -532,7 +592,7 @@ def _workspace_project_record_store() -> WorkspaceProjectRecordStore:
         bind_workspace_resources=_bind_workspace_resources,
         resource_tables=_PROJECT_RESOURCE_TABLES,
         default_workspace_id=DEFAULT_WORKSPACE_ID,
-        project_root=PROJECT_ROOT,
+        project_root=default_project_root(),
     )
 
 
@@ -709,7 +769,7 @@ def _resource_catalog_record_store() -> ResourceCatalogRecordStore:
         normalize_guardrails=_normalize_guardrails,
         default_model_config=DEFAULT_MODEL_CONFIG,
         default_plan_config=DEFAULT_PLAN_CONFIG,
-        default_guardrails=DEFAULT_GUARDRAILS,
+        default_guardrails=default_guardrails(),
         default_workspace_id=DEFAULT_WORKSPACE_ID,
     )
 
@@ -2066,9 +2126,9 @@ def normalized_table_counts() -> dict[str, int]:
 
 
 async def init_db() -> None:
-    """Initialize SQLite storage."""
+    """Initialize SQLite storage for the current tenant."""
     ensure_db()
-    print(f"[DB] SQLite initialized at {DB_PATH}")
+    print(f"[DB] SQLite initialized at {db_path()}")
 
 
 async def close_db() -> None:

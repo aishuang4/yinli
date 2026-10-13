@@ -9,9 +9,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from src.config.runtime_paths import DATA_ROOT
+from src.config.runtime_paths import data_root
 
-CHAT_DATA_PATH = DATA_ROOT / "chat_sessions.json"
+
+def chat_data_path():
+    """旧 JSON 会话存档路径；只在一次性导入时使用（§7.5）。"""
+
+    return data_root() / "chat_sessions.json"
+
+
 CHAT_NAMESPACE = "chat_store"
 CHAT_STORE_KEY = "default"
 MULTIMODAL_MODELS = {"qwen3.7-plus"}

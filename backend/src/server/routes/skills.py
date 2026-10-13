@@ -13,17 +13,13 @@ from pathlib import Path
 
 from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_skills_from_agents
-from src.server.routes.skill_packages import MAX_SKILL_ARCHIVE_BYTES, SKILL_PACKAGES_DIR
+from src.server.routes.skill_packages import MAX_SKILL_ARCHIVE_BYTES
 from src.skills.registry import (
     ALWAYS_INJECTED_SKILL_IDS,
     SYSTEM_SKILL_IDS,
     DiscoveredSkill,
     discover_skill_packages,
     read_package_markdown,
-    DATA_ROOT,
-    USER_DATA_ROOT,
-    USER_HOME_ROOT,
-    ensure_runtime_directories,
     _cleanup_skill_package_artifacts,
     _extract_skill_package_impl,
     _filename_slug,
@@ -40,8 +36,6 @@ from src.skills.registry import (
     migrate_json_list_file,
     replace_skills,
     upsert_json_record,
-    DATA_DIR,
-    USER_SKILLS_REGISTRY_FILE,
     SKILLS_NAMESPACE,
     EXTERNAL_SKILL_OVERRIDES_NAMESPACE,
     _external_skill_overrides,

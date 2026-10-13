@@ -88,10 +88,6 @@ def scope_guardrails_to_project(
         effective_scope = project_path
     elif agent_path.is_relative_to(project_path):
         effective_scope = agent_path
-    elif _hosted_personal_project(agent_path, project_path):
-        # Web 用户的 Project 在自己的目录里，默认 Agent 范围仍指向共享 workspace。
-        # 这时有效范围收成该用户的 Project root，不能写到别人的目录。
-        effective_scope = project_path
     else:
         raise ValueError(
             f"Agent filesystem scope {agent_path} 与 Project root {project_path} 不相交。",
@@ -109,21 +105,6 @@ def scope_guardrails_to_project(
         timeout_seconds=guardrails.timeout_seconds,
         permission_profile=guardrails.permission_profile,
     )
-
-
-def _hosted_personal_project(agent_path: Path, project_path: Path) -> bool:
-    """仅当默认范围是共享 workspace，且 Project 落在当前托管用户目录内。"""
-
-    from src.config.runtime_paths import DEFAULT_PROJECT_ROOT
-    from src.config.settings import settings
-    from src.server.auth.ownership import current_owner_id, path_is_inside_user
-
-    if settings.serve_mode.strip().lower() != "hosted":
-        return False
-    owner = current_owner_id()
-    if not owner or agent_path != DEFAULT_PROJECT_ROOT.resolve():
-        return False
-    return path_is_inside_user(owner, project_path)
 
 
 def _is_legacy_desktop_scope(agent_path: Path, project_path: Path) -> bool:

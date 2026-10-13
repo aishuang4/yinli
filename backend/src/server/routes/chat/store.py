@@ -14,7 +14,7 @@ from src.storage.database import (
 )
 
 from src.server.routes.chat.models import (
-    CHAT_DATA_PATH,
+    chat_data_path,
     CHAT_NAMESPACE,
     CHAT_STORE_KEY,
     ChatImagePayload,
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 def _load_store() -> ChatStore:
     """读取对话存储文件"""
-    migrate_json_object_file(CHAT_NAMESPACE, CHAT_STORE_KEY, CHAT_DATA_PATH)
+    migrate_json_object_file(CHAT_NAMESPACE, CHAT_STORE_KEY, chat_data_path())
     data = load_chat_store()
     if not data.get("sessions") and not data.get("messages"):
         legacy = get_json_record(CHAT_NAMESPACE, CHAT_STORE_KEY)

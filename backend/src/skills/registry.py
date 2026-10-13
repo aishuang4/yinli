@@ -25,7 +25,13 @@ from src.catalog.skills import (
     discover_skill_packages,
     read_package_markdown,
 )
-from src.config.runtime_paths import DATA_ROOT, USER_DATA_ROOT, USER_HOME_ROOT, ensure_runtime_directories
+from src.config.runtime_paths import (
+    data_root,
+    ensure_tenant_directories,
+    skill_packages_root,
+    tenant_root,
+    user_home_root as runtime_user_home_root,
+)
 from src.server.routes.skill_packages import (
     _cleanup_skill_package_artifacts,
     _extract_skill_package as _extract_skill_package_impl,
@@ -51,11 +57,9 @@ logger = logging.getLogger(__name__)
 
 
 def _packages_dir() -> str:
-    """读取路由模块上的包根。测试替换的是那个名字，不是这里的导入副本。"""
+    """当前租户的 Skill 包根。"""
 
-    from src.server.routes.skills import SKILL_PACKAGES_DIR
-
-    return str(SKILL_PACKAGES_DIR)
+    return str(skill_packages_root())
 
 
 def _discover_packages(*args, **kwargs):
@@ -66,8 +70,6 @@ def _discover_packages(*args, **kwargs):
     return discover_skill_packages(*args, **kwargs)
 
 
-DATA_DIR = str(DATA_ROOT)
-USER_SKILLS_REGISTRY_FILE = os.path.join(DATA_DIR, "skills.json")
 SKILLS_NAMESPACE = "skills"
 EXTERNAL_SKILL_OVERRIDES_NAMESPACE = "external_skill_overrides"
 # {skill_id: {"enabled"?: bool, "availableToAllAgents"?: bool}}
@@ -504,8 +506,8 @@ def _load_system_packages() -> None:
 
 
 def _load_user_skills() -> None:
-    ensure_runtime_directories()
-    migrate_json_list_file(SKILLS_NAMESPACE, USER_SKILLS_REGISTRY_FILE)
+    ensure_tenant_directories()
+    migrate_json_list_file(SKILLS_NAMESPACE, str(data_root() / "skills.json"))
     records = db_list_skills()
     if not records:
         legacy = list_json_records(SKILLS_NAMESPACE)
@@ -533,17 +535,20 @@ def _load_user_skills() -> None:
 def discover_external_skills(
     project_root: Path,
     *,
-    user_data_root: Path = USER_DATA_ROOT,
-    user_home_root: Path = USER_HOME_ROOT,
+    user_data_root: Path | None = None,
+    user_home_root: Path | None = None,
     workspace_id: str = "default",
 ) -> list[Skill]:
-    """发现标准 Agent/Claude Skill 包；项目级默认启用，用户级默认关闭。"""
+    """发现标准 Agent/Claude Skill 包；项目级默认启用，用户级默认关闭。
+
+    user_home_root 为 None（hosted）时跳过 HOME scope（§12.7）。
+    """
 
     discovered: list[Skill] = []
     for item in _discover_packages(
         Path(project_root),
-        user_data_root=Path(user_data_root),
-        user_home_root=Path(user_home_root),
+        user_data_root=Path(user_data_root) if user_data_root is not None else tenant_root(),
+        user_home_root=Path(user_home_root) if user_home_root is not None else runtime_user_home_root(),
         workspace_id=workspace_id,
     ):
         skill = _skill_from_discovered(item)
@@ -696,7 +701,7 @@ def resolve_runtime_skill_paths(
     trusted_entry_roots: list[str] = []
     if runtime_context is not None:
         project_root = Path(str(getattr(runtime_context, "project_root", ""))).resolve()
-        user_root = Path(USER_DATA_ROOT).resolve()
+        user_root = tenant_root().resolve()
         trusted_entry_roots.extend(
             os.path.abspath(str(project_root / relative))
             for relative in (".agents/skills", ".agent/skills", ".claude/skills")
@@ -705,10 +710,12 @@ def resolve_runtime_skill_paths(
             os.path.abspath(str(user_root / relative))
             for relative in (".agents/skills", ".agent/skills", ".claude/skills")
         )
-        trusted_entry_roots.extend(
-            os.path.abspath(str(USER_HOME_ROOT / relative))
-            for relative in (".agents/skills", ".agent/skills", ".claude/skills")
-        )
+        home_root = runtime_user_home_root()
+        if home_root is not None:
+            trusted_entry_roots.extend(
+                os.path.abspath(str(home_root / relative))
+                for relative in (".agents/skills", ".agent/skills", ".claude/skills")
+            )
         trusted_roots.extend(os.path.realpath(path) for path in trusted_entry_roots)
     paths: list[str] = []
     seen: set[str] = set()

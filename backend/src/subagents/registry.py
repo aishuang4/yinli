@@ -6,13 +6,11 @@ import hashlib
 from dataclasses import replace
 from pathlib import Path
 
-from src.agents.runtime_types import WORKSPACE_DIR
-from src.config.runtime_paths import USER_HOME_ROOT
+from src.config.runtime_paths import default_project_root, subagent_root, user_home_root
 from src.subagents.loader import scan_subagent_directory
 from src.subagents.models import (
     SUBAGENT_COMPAT_PROJECT_DIRS,
     SUBAGENT_COMPAT_USER_DIRS,
-    SUBAGENT_USER_DIR,
     SubagentCatalog,
     SubagentDefinition,
     SubagentLoadError,
@@ -21,19 +19,24 @@ from src.subagents.models import (
 
 def load_subagent_catalog(
     *,
-    workspace_dir: str = WORKSPACE_DIR,
-    user_dir: str = SUBAGENT_USER_DIR,
-    user_home_dir: Path = USER_HOME_ROOT,
+    workspace_dir: str | None = None,
+    user_dir: str | None = None,
+    user_home_dir: Path | None = None,
 ) -> SubagentCatalog:
     """加载当前工作区可用的 Subagent 定义。
 
     M1 只实现项目级和用户级 scope。项目级覆盖用户级。
+    hosted 下 user_home_root() 为 None，跳过 HOME scope（§12.7）。
     """
+
+    workspace = Path(workspace_dir) if workspace_dir else default_project_root()
+    user = Path(user_dir).expanduser() if user_dir else subagent_root()
+    home = user_home_dir if user_home_dir is not None else user_home_root()
 
     user_definitions: list[SubagentDefinition] = []
     user_errors: list[SubagentLoadError] = []
     for relative_dir in ("", *SUBAGENT_COMPAT_USER_DIRS):
-        definitions, errors = scan_subagent_directory(Path(user_dir).expanduser() / relative_dir, scope="user")
+        definitions, errors = scan_subagent_directory(user / relative_dir, scope="user")
         user_definitions.extend(
             replace(definition, enabled=False) if relative_dir else definition
             for definition in definitions
@@ -41,14 +44,15 @@ def load_subagent_catalog(
         user_errors.extend(errors)
     home_definitions: list[SubagentDefinition] = []
     home_errors: list[SubagentLoadError] = []
-    for relative_dir in SUBAGENT_COMPAT_USER_DIRS:
-        definitions, errors = scan_subagent_directory(user_home_dir / relative_dir, scope="user")
-        home_definitions.extend(replace(definition, enabled=False) for definition in definitions)
-        home_errors.extend(errors)
+    if home is not None:
+        for relative_dir in SUBAGENT_COMPAT_USER_DIRS:
+            definitions, errors = scan_subagent_directory(home / relative_dir, scope="user")
+            home_definitions.extend(replace(definition, enabled=False) for definition in definitions)
+            home_errors.extend(errors)
     project_definitions: list[SubagentDefinition] = []
     project_errors: list[SubagentLoadError] = []
     for relative_dir in SUBAGENT_COMPAT_PROJECT_DIRS:
-        definitions, errors = scan_subagent_directory(Path(workspace_dir) / relative_dir, scope="project")
+        definitions, errors = scan_subagent_directory(workspace / relative_dir, scope="project")
         project_definitions.extend(definitions)
         project_errors.extend(errors)
 

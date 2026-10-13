@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, computed_field
 
-from src.agents.runtime_types import MAX_REACT_ITERS, WORKSPACE_DIR
+from src.agents.runtime_types import MAX_REACT_ITERS
 from src.agents.system_agents import is_system_agent_id
 from src.scheduler.job_toolkit import JobToolkit
 
@@ -26,7 +26,7 @@ class ModelConfig(BaseModel):
 class Guardrails(BaseModel):
     """安全边界配置。"""
 
-    filesystem_scope: str = Field(default=WORKSPACE_DIR, description="文件系统访问范围")
+    filesystem_scope: str = Field(default="", description="文件系统访问范围；空表示默认 Project 根")
     shell_blacklist: list[str] = Field(default_factory=lambda: ["rm -rf /", "sudo"], description="Shell 命令黑名单")
     network_enabled: bool = Field(default=True, description="是否允许网络访问")
     human_approval: bool = Field(default=False, description="是否启用人工审批")

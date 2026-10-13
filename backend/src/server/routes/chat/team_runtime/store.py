@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.config.runtime_paths import TEAM_RUNTIME_ROOT
+from src.config.runtime_paths import team_runtime_root
 
 TERMINAL_TASK_STATUSES = {"succeeded", "failed", "cancelled"}
 # 一次 TeamRun 的机械上限：Leader 拆得再细也不能无限开成员 / 开任务，超出在工具层直接拒绝。
@@ -76,7 +76,7 @@ class TeamStore:
         """创建全新的 TeamRun。"""
 
         team_run_id = f"trun_{uuid.uuid4().hex}"
-        path = (root or TEAM_RUNTIME_ROOT) / team_run_id
+        path = (root or team_runtime_root()) / team_run_id
         for directory in (
             path / "members",
             path / "tasks",
@@ -137,7 +137,7 @@ class TeamStore:
 
         if not TEAM_RUN_ID_PATTERN.fullmatch(team_run_id):
             raise TeamStoreError(f"TeamRun ID 非法: {team_run_id}")
-        path = (root or TEAM_RUNTIME_ROOT) / team_run_id
+        path = (root or team_runtime_root()) / team_run_id
         if not (path / "run.json").exists():
             raise TeamStoreError(f"TeamRun 不存在: {team_run_id}")
         return cls(TeamRunRef(id=team_run_id, path=path))

@@ -13,10 +13,9 @@ from typing import Any
 import yaml
 from fastapi import HTTPException
 
-from src.config.runtime_paths import SKILL_PACKAGES_ROOT
+from src.config.runtime_paths import skill_packages_root
 
 
-SKILL_PACKAGES_DIR = str(SKILL_PACKAGES_ROOT)
 MAX_SKILL_ARCHIVE_BYTES = 10 * 1024 * 1024
 MAX_SKILL_PACKAGE_FILES = 200
 
@@ -31,18 +30,18 @@ def _filename_slug(value: str) -> str:
 def _skill_package_dir(
     skill_name: str,
     *,
-    packages_dir: str = SKILL_PACKAGES_DIR,
+    packages_dir: str | None = None,
 ) -> str:
     """返回 Skill 标准包目录。"""
 
-    return os.path.join(packages_dir, _filename_slug(skill_name))
+    return os.path.join(packages_dir or str(skill_packages_root()), _filename_slug(skill_name))
 
 
 def _write_skill_package(
     skill_name: str,
     markdown: str,
     *,
-    packages_dir: str = SKILL_PACKAGES_DIR,
+    packages_dir: str | None = None,
 ) -> tuple[str, list[str]]:
     """写入标准 Skill 包目录，并返回 resourcePath/resources。"""
 
@@ -202,7 +201,7 @@ def _extract_skill_package(
     skill_path: str,
     skill_name: str,
     *,
-    packages_dir: str = SKILL_PACKAGES_DIR,
+    packages_dir: str | None = None,
 ) -> tuple[str, list[str]]:
     package_dir = _skill_package_dir(skill_name, packages_dir=packages_dir)
     if os.path.exists(package_dir):
