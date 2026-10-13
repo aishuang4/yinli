@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     # 引力模型平台。地址固定为已发布的 key2api；令牌只放在服务器环境变量。
     key2api_base_url: str = "http://103.236.80.228:3000"
     key2api_sync_token: str = ""
+    # 托管租户默认配额。只在 hosted 检查；desktop 不读取。
+    tenant_disk_mb: int = 2048
+    tenant_upload_mb: int = 50
+    tenant_max_active_runs: int = 3
+    tenant_max_jobs: int = 20
+    tenant_max_firings_per_day: int = 50
 
     model_config = {
         "env_prefix": "AGENT_WORKSTATION_",
