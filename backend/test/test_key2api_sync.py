@@ -118,3 +118,121 @@ def test_verify_assigns_key_and_lists_only_platform_models(hosted_sync, monkeypa
     assert usage.json() == {"available": True, "tokenQuota": 1000000, "used": 1200, "remaining": 998800}
     assert "k2a_testkey" not in usage.text
     assert "svc-token" not in usage.text
+
+
+class _Ledger:
+    """按邮箱记住平台账号。同一邮箱再次同步交回原 Key，账号不在则新开一把。"""
+
+    def __init__(self) -> None:
+        self.accounts: dict[str, dict] = {}
+        self.calls: list[tuple] = []
+        self.reply_status: str | None = None
+        self._seq = 0
+
+    def drop(self, email: str) -> None:
+        self.accounts.pop(email, None)
+
+    def request(self, method, url, headers=None, json=None, params=None, timeout=None):
+        self.calls.append((method, url, headers["Authorization"], json, params))
+        if url.endswith("/accounts/sync"):
+            email = json["email"]
+            account = self.accounts.get(email)
+            if account is None:
+                self._seq += 1
+                account = {
+                    "user_id": self._seq,
+                    "token_id": self._seq + 100,
+                    "token": f"k2a_ledger{self._seq}",
+                    "used": 1200,
+                }
+                self.accounts[email] = account
+            account["external_id"] = json["external_id"]
+            replied = self.reply_status or json["status"]
+            return httpx.Response(200, json={
+                "user_id": account["user_id"],
+                "token_id": account["token_id"],
+                "token": account["token"],
+                "status": replied,
+            })
+        if url.endswith("/accounts/usage"):
+            matched = [
+                item for item in self.accounts.values()
+                if item.get("external_id") == params["external_id"]
+            ]
+            assert len(matched) == 1
+            return httpx.Response(200, json={
+                "external_id": params["external_id"],
+                "token_quota": 1000000,
+                "used": matched[0]["used"],
+                "reserved": 0,
+                "remaining": 998800,
+            })
+        if url.endswith("/v1/models"):
+            return httpx.Response(200, json={"object": "list", "data": [{"id": "demo-model"}]})
+        raise AssertionError(url)
+
+
+@pytest.fixture()
+def hosted_ledger(hosted_sync, monkeypatch):
+    client, _calls = hosted_sync
+    ledger = _Ledger()
+    monkeypatch.setattr("src.server.auth.key2api.httpx.request", ledger.request)
+    return client, ledger
+
+
+def _login(client: TestClient) -> dict:
+    logged = client.post(
+        "/api/auth/login",
+        json={"email": "user@example.com", "password": "password1", "clientKind": "desktop"},
+    )
+    assert logged.status_code == 200
+    assert "k2a_" not in logged.text
+    return logged.json()
+
+
+def test_reregister_reuses_platform_key_for_new_user_id(hosted_ledger, monkeypatch, capsys):
+    client, ledger = hosted_ledger
+    first = _verify(client, monkeypatch)
+    old_token = auth_records.get_provider_key(first["id"])["token"]
+    auth_records.delete_account(first["id"], first["email"])
+
+    second = _verify(client, monkeypatch)
+    stored = auth_records.get_provider_key(second["id"])
+    assert second["id"] != first["id"]
+    assert stored["token"] == old_token
+    assert stored["status"] == "active"
+    assert auth_records.get_provider_key(first["id"]) is None
+
+    logged = _login(client)
+    usage = client.get(
+        "/api/auth/usage",
+        headers={"Authorization": f"Bearer {logged['token']}"},
+    )
+    assert usage.status_code == 200
+    assert usage.json()["used"] == 1200
+    assert "k2a_" not in usage.text
+    usage_calls = [item for item in ledger.calls if str(item[1]).endswith("/accounts/usage")]
+    assert usage_calls[-1][4]["external_id"] == second["id"]
+    assert old_token not in capsys.readouterr().out
+
+
+def test_reregister_creates_key_when_platform_account_is_gone(hosted_ledger, monkeypatch):
+    client, ledger = hosted_ledger
+    first = _verify(client, monkeypatch)
+    old_token = auth_records.get_provider_key(first["id"])["token"]
+    auth_records.delete_account(first["id"], first["email"])
+    ledger.drop(first["email"])
+
+    second = _verify(client, monkeypatch)
+    stored = auth_records.get_provider_key(second["id"])
+    assert stored["token"] != old_token
+    assert stored["token"].startswith("k2a_")
+    assert "k2a_" not in client.get("/api/auth/config").text
+
+
+def test_status_mismatch_does_not_store_key(hosted_ledger, monkeypatch, capsys):
+    client, ledger = hosted_ledger
+    ledger.reply_status = "disabled"
+    user = _verify(client, monkeypatch)
+    assert auth_records.get_provider_key(user["id"]) is None
+    assert "k2a_" not in capsys.readouterr().out

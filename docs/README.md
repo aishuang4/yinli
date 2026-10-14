@@ -50,6 +50,8 @@
 | `docs/team-member-lifecycle-v2.md` | 未上线。不要按它改现网 TeamRun。 |
 | `docs/dynamic-workflows-plan.md` | 未上线。任务流仍是独立实验页，不是 Chat 模式。 |
 | `docs/electron-packaging-plan.md` | 正式打包、签名、公证和双平台验证。 |
+| `docs/key2api-email-rebind.md` | 未落地。同一邮箱再次注册时取回原来的平台 Key。须先完成 key2api 适配。 |
+| `docs/key2api-email-rebind-adapter.md` | 给 key2api 的同步适配。按邮箱改绑 `external_id` 并交回原 Key。 |
 
 ## 发布与验收
 

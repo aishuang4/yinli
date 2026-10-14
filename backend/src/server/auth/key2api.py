@@ -65,6 +65,8 @@ def sync_provider_status(user: dict[str, Any], status: str) -> None:
     token = str(payload.get("token") or "")
     if not token.startswith("k2a_"):
         raise Key2ApiError("平台没有返回可用的 Key")
+    if str(payload.get("status") or "") != status:
+        raise Key2ApiError("平台返回的状态与请求不一致")
     auth_records.save_provider_key(
         user_id=str(user["id"]),
         token=token,

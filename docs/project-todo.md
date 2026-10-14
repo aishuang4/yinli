@@ -81,6 +81,7 @@
 - [ ] 验证 macOS / Windows 真机 PyInstaller 后端产物。
 - [ ] 完成 Electron 签名、公证、安装包过滤、日志和异常展示。
 - [x] Web 托管已落地：邮箱注册登录、按账号隔离工作区、管理员在线状态、停用和删除、key2api 平台模型。见 `docs/architecture-overview.md`。
+- [ ] 同一邮箱再次注册时取回原平台 Key。key2api 先按 `docs/key2api-email-rebind-adapter.md` 改同步；引力再按 `docs/key2api-email-rebind.md` 补校验、测试和现行说明。
 - [ ] 把桌面端登录入口接到工作台：填写托管地址、登录后领取 `platform:` 模型、退出后回到本机模型。后端令牌文件已在，界面未接。桌面签名仍走打包计划。
 - [ ] 将运行时数据稳定迁移到 Electron `userData`，并设计备份与恢复。
 - [ ] 评估桌面自动更新。
