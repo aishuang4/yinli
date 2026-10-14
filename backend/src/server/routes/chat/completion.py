@@ -131,6 +131,7 @@ async def finalize_successful_leader_run(
     session_workspace_dir: str = "",
     session_artifact_paths_before: list[str] | None = None,
     sandbox: bool = False,
+    review_context: object | None = None,
 ) -> AsyncGenerator[str, None]:
     """完成 Leader run 成功路径的消息、trace 和 UI 事件。"""
 
@@ -207,6 +208,8 @@ async def finalize_successful_leader_run(
             tool_calls=assistant_tool_calls,
             runtime_events=runtime_events,
             runtime_context=resolved_runtime_context,
+            review_context=review_context,
+            skill_runs=[*completed_skill_runs, *([active_skill_run] if active_skill_run else [])],
         )
         _schedule_skill_evolution(
             reflection_input,
@@ -366,6 +369,8 @@ def _build_memory_reflection_input(
     tool_calls: list[ChatToolRun],
     runtime_events: list[dict],
     runtime_context: RuntimeContext | None = None,
+    review_context: object | None = None,
+    skill_runs: list | None = None,
 ) -> MemoryReflectionInput:
     """构建运行后反思输入，显式 Skill 请求会切换到上一轮完成工作。"""
 
@@ -375,6 +380,13 @@ def _build_memory_reflection_input(
         agent_id=agent_id,
     )
 
+    from src.memory.model_review import turn_only_snapshot
+
+    context = review_context or turn_only_snapshot(
+        user_message=user_message,
+        assistant_text=assistant_text,
+        skill_runs=skill_runs,
+    )
     if is_manual_skill_generation_request(user_message):
         previous_turn = get_latest_completed_user_assistant_turn(
             session_id,
@@ -392,6 +404,7 @@ def _build_memory_reflection_input(
                 tool_calls=list(previous_turn.get("toolCalls") or []),
                 runtime_events=list(previous_turn.get("runtimeEvents") or []),
                 manual_skill_request=True,
+                review_context=context,
                 workspace_id=resolved_context.workspace_id,
                 project_id=resolved_context.project_id,
             )
@@ -405,6 +418,7 @@ def _build_memory_reflection_input(
         source_run_id=source_run_id,
         tool_calls=tool_calls,
         runtime_events=runtime_events,
+        review_context=context,
         workspace_id=resolved_context.workspace_id,
         project_id=resolved_context.project_id,
     )

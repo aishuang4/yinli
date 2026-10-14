@@ -250,6 +250,31 @@ async def run_skill_evolution_agent(
     return SkillEvolutionAgentPayload.model_validate(data)
 
 
+async def run_model_review_agent(
+    *,
+    user_prompt: str,
+    model_name: str,
+    fallback_names: list[str] | None = None,
+    invocation_key: str = "",
+) -> str:
+    """无工具的审核调用。只返回模型文本，解析由 model_review 负责。"""
+
+    return await _run_json_agent(
+        agent_id=_system_agent_id(
+            "model-review",
+            model_name,
+            fallback_names or [],
+            f"{invocation_key}",
+        ),
+        name="ModelReviewAgent",
+        system_prompt="你是模型审核门。只返回一个 JSON 对象，不要写 markdown fence，不要调用工具。",
+        user_prompt=user_prompt,
+        model_name=model_name,
+        fallback_names=fallback_names or [],
+        max_tokens=400,
+    )
+
+
 async def _run_json_agent(
     *,
     agent_id: str,

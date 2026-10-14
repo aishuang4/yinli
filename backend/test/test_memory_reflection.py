@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from src.memory.extraction_agents import (
     MemoryReflectionAgentPayload,
     SkillDraftPayload,
@@ -17,6 +19,16 @@ from src.memory.reflection import (
     reflect_completed_run_memory_with_agents,
 )
 from src.memory.trace import memory_reflection_audit_payload
+
+
+@pytest.fixture(autouse=True)
+def _model_review_unavailable(monkeypatch):
+    """既有反思测试沿用关键词回退，不打真模型。"""
+
+    async def unavailable(**kwargs):
+        raise RuntimeError("unit test has no review model")
+
+    monkeypatch.setattr("src.memory.extraction_agents.run_model_review_agent", unavailable)
 from src.memory.extraction_agents import _build_memory_reflection_system_prompt, _build_memory_reflection_user_prompt
 from src.tools.memory_reflection import MemoryFileToolSet
 from src.server.routes.chat.models import ChatToolRun

@@ -171,7 +171,10 @@ async def execute_and_finalize_leader_reply(
                 yield event
             return
 
+        from src.memory.model_review import snapshot_review_context
+
         async for event in finalize_successful_leader_run(
+            review_context=snapshot_review_context(agent, skill_runs),
             session_id=session_id,
             persist=persist,
             agent_id=agent_id,
