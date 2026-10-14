@@ -25,13 +25,11 @@ from src.tools.scoped_read import ScopedRead
 @pytest.fixture()
 def phase1_root(tmp_path, monkeypatch):
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     invalidate_catalog()
     ensure_agent_file_catalog()
     agents_routes._sync_agents_from_catalog()
     yield tmp_path
-    database._initialized = False
+    database.forget_db(database.db_path())
     invalidate_catalog()
 
 

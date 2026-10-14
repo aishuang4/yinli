@@ -26,7 +26,7 @@ INDEX_GITIGNORE_LINE = "INDEX.md"
 def _skill_index_rows(project_root: Path, workspace_id: str) -> list[list[str]]:
     from src.catalog.skill_seed import seed_system_skills
     from src.catalog.skills import discover_skill_packages, list_system_skill_packages
-    from src.config.runtime_paths import USER_DATA_ROOT, USER_HOME_ROOT
+    from src.config.runtime_paths import tenant_root, user_home_root
 
     seed_system_skills()
     rows: list[list[str]] = []
@@ -34,8 +34,8 @@ def _skill_index_rows(project_root: Path, workspace_id: str) -> list[list[str]]:
         rows.append([item.name, item.resource_path, "true", item.source_scope])
     for item in discover_skill_packages(
         Path(project_root),
-        user_data_root=Path(USER_DATA_ROOT),
-        user_home_root=Path(USER_HOME_ROOT),
+        user_data_root=tenant_root(),
+        user_home_root=user_home_root(),
         workspace_id=workspace_id,
     ):
         rows.append([item.name, item.resource_path, "true" if item.enabled else "false", item.source_scope])

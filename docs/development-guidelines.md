@@ -57,6 +57,23 @@
   - `storage` 不反向依赖 `routes`。
   - `tools` 不直接依赖具体 API 路由。
   - `agents/factory.py` 是 AgentScope 运行时入口，其他模块不要复制运行时构造逻辑；运行时类型和模型降级链应复用 `agents/runtime_types.py`、`agents/model_factory.py`。
+- 产品域是 `routes/chat`、`group_studio`、`scheduler`、`memory`、`subagents`、`notifications`、`catalog`。域和域之间只经公开入口调用，不要为了一个功能去改另一个域的私有函数。
+- 这一轮的公开入口是 `backend/src/runtime/`：
+  - `agent_spec`：主 Agent 规格、缓存 key、按规格创建 Agent。
+  - `governance`：单 Agent、TeamRun、群聊 Worker 共用的上下文 middleware、记忆注入和会话状态。
+  - `chat_session`：查找和确保 Chat session，以及进行中的 Run 状态。
+  - `agent_resources`：MCP、知识库工具和文件范围交集。
+  - `scheduled_chat`：定时任务创建 Run、核对工作目录、读终态、取消、启动时对账。
+- `group_studio` 和 `scheduler` 禁止 `import src.server.routes.chat`。其他域已经存在的 Chat 依赖冻结在 `backend/test/test_import_boundaries.py`，新增会失败。`src/runtime/` 是唯一允许继续调用 Chat 内部模块的适配层。
+- 禁止跨域 import 底线开头的函数，例如 `_load_store`、`_build_runtime_guardrails`。Chat 内部仍可调用自己的私有函数。
+- `routes/chat/runtime_governance.py` 只 re-export。`runtime_builder.py` 里的主 Agent 规格也已 re-export，Chat 自己的模型、Skill 和工具范围选择仍留在那里。新代码走 `src.runtime`。
+- HTTP handler 只做请求和响应。Agent 组装继续只走 `agents/factory.py`。
+- 新的存储查询写进领域 record 文件，例如 `group_studio_records.py`、`scheduled_job_records.py`，不要再往 `storage/database.py` 加函数。
+- 改动放哪里：
+  - 单 Agent / Team 的对话行为留在 `routes/chat`。
+  - 群聊留在 `group_studio`。要建 Agent 或读会话时走 `src.runtime`。
+  - 定时任务留在 `scheduler`。启动 Chat Run 只走 `src.runtime.scheduled_chat`。
+  - 三条 Runtime 共用的上下文治理或 Agent 规格改 `src/runtime`，并保持旧路径 re-export。
 - Electron 推荐依赖方向：
   - `main/preload -> compiled frontend/backend entry`
   - 前端通过 preload 暴露的安全 API 访问桌面能力，不直接使用 Node API。

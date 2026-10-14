@@ -29,11 +29,8 @@ import pytest
 def isolated_memory_db(tmp_path, monkeypatch):
     """隔离 SQLite（候选队列 / 设置），并默认关闭 user / global 待确认，让既有直写断言成立。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "memory-reflection.db")
-    monkeypatch.setattr(database, "_initialized", False)
     save_memory_admission_policy({"confirmUserMarkdown": False, "confirmGlobalMarkdown": False})
     yield
-    monkeypatch.setattr(database, "_initialized", False)
 
 
 def test_reflection_writes_user_preference_memory(tmp_path):
@@ -443,8 +440,6 @@ def test_reflection_with_agents_calls_reflection_once_and_skips_fallback_when_mo
 
 
 def test_reflection_with_agents_returns_skill_candidate(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     import src.server.routes.skills as skills_routes
     original_skills = dict(skills_routes._skills)
 
@@ -508,8 +503,6 @@ def test_reflection_with_agents_returns_skill_candidate(tmp_path, monkeypatch):
 
 
 def test_reflection_with_agents_skips_skill_agent_when_router_gate_rejects(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
 
     async def fake_memory_agent(**kwargs):
         return None
@@ -548,12 +541,11 @@ def test_manual_skill_generation_request_is_detected():
 
 
 def test_manual_skill_request_forces_skill_evolution_agent(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     import src.server.routes.skills as skills_routes
 
     original_skills = dict(skills_routes._skills)
-    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
+    monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: tmp_path / "skill_packages")
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: tmp_path / "skill_packages")
 
     async def fake_memory_agent(**kwargs):
         return None
@@ -604,8 +596,6 @@ def test_manual_skill_request_forces_skill_evolution_agent(tmp_path, monkeypatch
 
 
 def test_reflection_with_agents_rejects_too_broad_skill_candidate(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
 
     async def fake_memory_agent(**kwargs):
         return None

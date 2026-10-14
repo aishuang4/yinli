@@ -39,6 +39,12 @@ class JobFileRecord:
     project_id: str
     agent_id: str
     frozen_prompt: str
+    mode: str = "agent"
+    script_filename: str = ""
+    script_source: str = ""
+    interpreter: str = "python3"
+    script_args: list[str] = field(default_factory=list)
+    timeout_seconds: int = 300
     schedule_kind: str = "weekly"
     schedule_expr: dict[str, Any] = field(default_factory=dict)
     timezone: str = "Asia/Shanghai"
@@ -61,6 +67,7 @@ def dump_job_markdown(record: JobFileRecord) -> str:
         "workspace_id": record.workspace_id,
         "project_id": record.project_id,
         "agent_id": record.agent_id,
+        "mode": record.mode if record.mode in {"agent", "script"} else "agent",
         "schedule_kind": record.schedule_kind,
         "schedule_expr": dict(record.schedule_expr),
         "timezone": record.timezone,
@@ -74,8 +81,14 @@ def dump_job_markdown(record: JobFileRecord) -> str:
         "task_intent": record.task_intent or record.name,
         "updated_at": utc_now(),
     }
+    if frontmatter["mode"] == "script":
+        frontmatter["script_filename"] = record.script_filename
+        frontmatter["interpreter"] = record.interpreter
+        frontmatter["args"] = list(record.script_args)
+        frontmatter["timeout_seconds"] = int(record.timeout_seconds)
     dumped = yaml.safe_dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False).strip()
-    body = (record.frozen_prompt or "").rstrip() + "\n"
+    body_source = record.script_source if frontmatter["mode"] == "script" else record.frozen_prompt
+    body = (body_source or "").rstrip() + "\n"
     return f"---\n{dumped}\n---\n\n{body}"
 
 
@@ -99,12 +112,25 @@ def parse_job_markdown(
     if not ID_PATTERN.match(job_id) or path.stem != job_id:
         raise ValueError(f"Job id 与文件名不一致: {path.name}")
     name = str(payload.get("name") or "").strip()
+    mode = str(payload.get("mode") or "agent").strip() or "agent"
+    if mode not in {"agent", "script"}:
+        raise ValueError("Job mode 必须为 agent 或 script")
     agent_id = str(payload.get("agent_id") or payload.get("agentId") or "").strip()
-    if not name or not agent_id:
-        raise ValueError("Job 文件必须包含 name 与 agent_id")
     prompt = match.group("body").strip()
+    if not name:
+        raise ValueError("Job 文件必须包含 name")
+    if mode == "agent" and not agent_id:
+        raise ValueError("Job 文件必须包含 name 与 agent_id")
     if not prompt:
-        raise ValueError("Job 正文 frozen_prompt 不能为空")
+        raise ValueError("脚本正文不能为空" if mode == "script" else "Job 正文 frozen_prompt 不能为空")
+    script_filename = str(payload.get("script_filename") or payload.get("scriptFilename") or "").strip()
+    interpreter = str(payload.get("interpreter") or "python3").strip() or "python3"
+    raw_args = payload.get("args") or []
+    script_args = [str(item) for item in raw_args] if isinstance(raw_args, list) else []
+    try:
+        timeout_seconds = int(payload.get("timeout_seconds") or payload.get("timeoutSeconds") or 300)
+    except (TypeError, ValueError):
+        timeout_seconds = 300
     desired = str(payload.get("desired_status") or payload.get("desiredStatus") or "paused").strip()
     if desired not in {"active", "paused"}:
         desired = "paused"
@@ -120,7 +146,13 @@ def parse_job_markdown(
         workspace_id=str(payload.get("workspace_id") or payload.get("workspaceId") or workspace_id),
         project_id=str(payload.get("project_id") or payload.get("projectId") or project_id),
         agent_id=agent_id,
-        frozen_prompt=prompt,
+        frozen_prompt="" if mode == "script" else prompt,
+        mode=mode,
+        script_filename=script_filename,
+        script_source=prompt if mode == "script" else "",
+        interpreter=interpreter,
+        script_args=script_args,
+        timeout_seconds=timeout_seconds,
         schedule_kind=str(payload.get("schedule_kind") or payload.get("scheduleKind") or "weekly"),
         schedule_expr=dict(expr),
         timezone=str(payload.get("timezone") or "Asia/Shanghai"),
@@ -245,7 +277,22 @@ def overlay_instance_with_file(record: dict[str, Any], file: JobFileRecord) -> d
         "name": file.name,
         "summary": file.summary,
         "agent_id": file.agent_id,
+        "mode": file.mode,
         "frozen_prompt": file.frozen_prompt,
+        "input_spec": {
+            **dict(record.get("input_spec") or {}),
+            **(
+                {
+                    "script_filename": file.script_filename,
+                    "script_source": file.script_source,
+                    "interpreter": file.interpreter,
+                    "args": list(file.script_args),
+                    "timeout_seconds": file.timeout_seconds,
+                }
+                if file.mode == "script"
+                else {}
+            ),
+        },
         "schedule_kind": file.schedule_kind,
         "schedule_expr": dict(file.schedule_expr),
         "timezone": file.timezone,

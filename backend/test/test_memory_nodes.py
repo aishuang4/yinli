@@ -14,8 +14,6 @@ from src.vector_store.base import VectorQueryResult
 def isolated_db(tmp_path, monkeypatch):
     """使用临时 SQLite，避免污染开发库。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
 
 
 def test_memory_node_upsert_syncs_sqlite_and_vector(isolated_db):

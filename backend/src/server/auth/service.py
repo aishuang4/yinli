@@ -71,11 +71,9 @@ def verify_email(email: str, code: str) -> dict[str, Any]:
     ):
         raise AuthError(400, "验证码不正确或已过期")
     verified = _mark_active(user)
-    from src.server.auth.key2api import ensure_provider_key
-    from src.server.auth.ownership import ensure_hosted_home
+    from src.tenancy.lifecycle import ensure_tenant
 
-    ensure_hosted_home(str(verified["id"]))
-    ensure_provider_key(verified)
+    ensure_tenant(verified)
     return public_user(verified)
 
 
@@ -93,11 +91,9 @@ def login_user(email: str, password: str, *, client_kind: str) -> dict[str, Any]
         raise AuthError(401, "邮箱或密码不正确")
     token = new_token()
     session = auth_records.create_session(user_id=user["id"], raw_token=token, client_kind=kind)
-    from src.server.auth.key2api import ensure_provider_key
-    from src.server.auth.ownership import ensure_hosted_home
+    from src.tenancy.lifecycle import ensure_tenant
 
-    ensure_hosted_home(str(user["id"]))
-    ensure_provider_key(user)
+    ensure_tenant(user)
     return {"user": public_user(user), "token": token, "sessionId": session["id"], "clientKind": kind}
 
 
@@ -156,13 +152,14 @@ def disable_user(actor_id: str, target_id: str) -> dict[str, Any]:
     target = auth_records.get_user(target_id)
     if target is None:
         raise AuthError(404, "用户不存在")
-    _sync_provider_status(target, "disabled")
+    from src.tenancy.lifecycle import disable_tenant
+
+    disable_tenant(target_id)
     updated = auth_records.update_user(
         target_id,
         status="disabled",
         disabled_at=auth_records.database._utc_now(),
     )
-    auth_records.revoke_user_sessions(target_id)
     return public_user(updated or target)
 
 
@@ -181,14 +178,9 @@ def delete_user(actor_id: str, target_id: str) -> None:
         ]
         if not others:
             raise AuthError(409, "不能删除最后一名管理员")
-    try:
-        _sync_provider_status(target, "disabled")
-    except AuthError:
-        pass
-    from src.server.auth.ownership import purge_hosted_user
+    from src.tenancy.lifecycle import delete_tenant
 
-    purge_hosted_user(target_id)
-    auth_records.delete_account(target_id, str(target["email"]))
+    delete_tenant(target_id)
 
 
 def enable_user(target_id: str) -> dict[str, Any]:
@@ -197,7 +189,9 @@ def enable_user(target_id: str) -> dict[str, Any]:
         raise AuthError(404, "用户不存在")
     status = "active" if target.get("verifiedAt") else "pending"
     if status == "active":
-        _sync_provider_status(target, "active")
+        from src.tenancy.lifecycle import enable_tenant
+
+        enable_tenant(target_id)
     updated = auth_records.update_user(target_id, status=status, disabled_at=None)
     return public_user(updated or target)
 
@@ -244,7 +238,6 @@ def ensure_default_admins() -> None:
     """托管启动时保证至少有一个可登录的管理员。已有账号不改密码。"""
 
     from src.config.settings import settings
-    from src.server.auth.ownership import assign_unowned, unassigned_count
     from src.server.auth.passwords import hash_password
 
     if settings.serve_mode.strip().lower() != "hosted":
@@ -266,8 +259,6 @@ def ensure_default_admins() -> None:
                 verified_at=auth_records.database._utc_now(),
                 disabled_at=None,
             )
-            if unassigned_count():
-                assign_unowned(created["id"])
             print(f"[auth] 已创建默认管理员 {email}")
             from src.server.auth.key2api import ensure_provider_key
 

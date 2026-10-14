@@ -39,6 +39,7 @@ from src.scheduler.schedule import (
     compute_next_run_at,
     grace_seconds_for_schedule,
     load_timezone,
+    next_daily_anchor_after,
     next_weekly_anchor_after,
     parse_stored_datetime,
     to_utc_iso,
@@ -128,18 +129,52 @@ class ScheduledJobService:
         required_intents: list[str] | None = None,
         job_id: str = "",
         persist_file: bool = True,
+        mode: str = "agent",
+        script_filename: str = "",
+        script_source: str = "",
+        interpreter: str = "python3",
+        script_args: list[str] | None = None,
+        timeout_seconds: int = 300,
     ) -> ScheduledJob:
         """字段齐全后写入 pending_confirmation；未传 tool_scope 则全 false。"""
 
+        from src.scheduler.script_job import ScriptJobError, build_script_input_spec
+
         self._require_project(workspace_id, project_id)
+        from src.tenancy.quota import QuotaExceeded, assert_job_count
+
+        try:
+            assert_job_count(len(self.list_jobs()))
+        except QuotaExceeded as exc:
+            raise exc.as_http() from None
         if not str(name).strip():
             raise ScheduledJobValidationError("name 不能为空")
-        if not str(agent_id).strip():
-            raise ScheduledJobValidationError("agent_id 不能为空")
-        self._require_agent_exists(agent_id)
-        self._require_job_runner(agent_id)
-        if not str(frozen_prompt).strip():
-            raise ScheduledJobValidationError("frozen_prompt 不能为空")
+        executor = str(mode or "agent").strip() or "agent"
+        if executor not in {"agent", "script"}:
+            raise ScheduledJobValidationError("mode 必须为 agent 或 script")
+        stored_input = dict(input_spec or {})
+        if executor == "script":
+            if str(agent_id or "").strip() or str(frozen_prompt or "").strip() or list(skill_ids or []) or tool_scope:
+                raise ScheduledJobValidationError("脚本任务不能同时填写 agent_id、frozen_prompt、skill_ids 或 tool_scope")
+            try:
+                stored_input = build_script_input_spec(
+                    script_filename=script_filename,
+                    script_source=script_source,
+                    interpreter=interpreter,
+                    args=list(script_args or []),
+                    timeout_seconds=timeout_seconds,
+                )
+            except ScriptJobError as exc:
+                raise ScheduledJobValidationError(str(exc)) from exc
+            agent_id = ""
+            frozen_prompt = ""
+        else:
+            if not str(agent_id).strip():
+                raise ScheduledJobValidationError("agent_id 不能为空")
+            self._require_agent_exists(agent_id)
+            self._require_job_runner(agent_id)
+            if not str(frozen_prompt).strip():
+                raise ScheduledJobValidationError("frozen_prompt 不能为空")
         canonical_expr, timezone_name = self._validate_schedule(
             schedule_kind, schedule_expr, timezone,
         )
@@ -149,7 +184,9 @@ class ScheduledJobService:
             raise ScheduledJobValidationError(f"非法 delivery_policy: {delivery_policy}")
         scope = self._frozen_tool_scope(tool_scope)
         stored_contract: dict[str, Any] = capability_contract or {}
-        if is_capability_gate_enabled():
+        if executor == "script":
+            stored_contract = {}
+        elif is_capability_gate_enabled():
             from src.scheduler.feasibility import contract_from_feasibility, evaluate_job_feasibility
 
             intent = str(task_intent or "").strip()
@@ -179,14 +216,14 @@ class ScheduledJobService:
                 "status": "pending_confirmation",
                 "pause_reason": "",
                 "agent_id": agent_id,
-                "mode": "agent",
+                "mode": executor,
                 "schedule_kind": schedule_kind,
                 "schedule_expr": canonical_expr,
                 "timezone": timezone_name,
                 "frozen_prompt": frozen_prompt,
                 "skill_ids": list(skill_ids or []),
                 "tool_scope": scope.to_storage_dict(),
-                "input_spec": dict(input_spec or {}),
+                "input_spec": stored_input,
                 "model_config_id": model_config_id,
                 "output_spec": dict(output_spec or {}),
                 "missed_policy": missed_policy,
@@ -258,8 +295,10 @@ class ScheduledJobService:
         if job.delivery_policy == "auto_send":
             raise ScheduledJobValidationError("Phase 1 不能启用 auto_send")
         self._assert_resources_available(job)
-        self._require_job_runner(job.agent_id)
-        contract_changes = self.assert_contract_satisfiable(job)
+        contract_changes: dict[str, Any] = {}
+        if job.mode != "script":
+            self._require_job_runner(job.agent_id)
+            contract_changes = self.assert_contract_satisfiable(job)
         next_run = compute_next_run_at(
             schedule_kind=job.schedule_kind,
             schedule_expr=job.schedule_expr,
@@ -297,8 +336,10 @@ class ScheduledJobService:
         if job.delivery_policy == "auto_send":
             raise ScheduledJobValidationError("Phase 1 不能启用 auto_send")
         self._assert_resources_available(job)
-        self._require_job_runner(job.agent_id)
-        contract_changes = self.assert_contract_satisfiable(job)
+        contract_changes: dict[str, Any] = {}
+        if job.mode != "script":
+            self._require_job_runner(job.agent_id)
+            contract_changes = self.assert_contract_satisfiable(job)
         next_run = compute_next_run_at(
             schedule_kind=job.schedule_kind,
             schedule_expr=job.schedule_expr,
@@ -349,7 +390,11 @@ class ScheduledJobService:
                 raise ScheduledJobValidationError("agent_id 不能为空")
             self._require_agent_exists(next_agent_id)
             self._require_job_runner(next_agent_id)
-        if "frozen_prompt" in payload and not str(payload.get("frozen_prompt") or "").strip():
+        if (
+            "frozen_prompt" in payload
+            and not str(payload.get("frozen_prompt") or "").strip()
+            and str(payload.get("mode") or job.mode) != "script"
+        ):
             raise ScheduledJobValidationError("frozen_prompt 不能为空")
         if "delivery_policy" in payload and payload["delivery_policy"] not in DELIVERY_POLICIES:
             raise ScheduledJobValidationError(f"非法 delivery_policy: {payload['delivery_policy']}")
@@ -789,35 +834,35 @@ class ScheduledJobService:
         *,
         now: datetime,
     ) -> dict[str, Any]:
-        if job.schedule_kind == "weekly":
-            expr = validate_schedule_expr("weekly", job.schedule_expr)
-            kwargs = {
-                "weekdays": expr["weekdays"],
+        if job.schedule_kind in {"weekly", "daily"}:
+            expr = validate_schedule_expr(job.schedule_kind, job.schedule_expr)
+            weekly_kwargs = {
+                "weekdays": expr.get("weekdays") or [],
                 "at": expr["at"],
                 "timezone_name": job.timezone,
             }
+
+            def next_anchor(moment: datetime) -> datetime:
+                if job.schedule_kind == "daily":
+                    return next_daily_anchor_after(
+                        moment, at=expr["at"], timezone_name=job.timezone,
+                    )
+                return next_weekly_anchor_after(moment, **weekly_kwargs)
+
+            single_slot = job.schedule_kind == "daily" or len(weekly_kwargs["weekdays"]) == 1
             changes: dict[str, Any] = {}
             if firing.trigger == "manual":
                 pass
             elif firing.trigger == "catch_up":
-                from_scheduled = next_weekly_anchor_after(
-                    parse_stored_datetime(firing.scheduled_for), **kwargs,
-                )
-                # 通常只消费当前到期槽之后的第一个锚点；若周期内还有更早的
-                # 锚点已经经过（例如周一/周五任务周六才补跑），再从当前时间续算。
-                # 单一周几没有中间锚点，直接推进一个周期；多周几任务可能
-                # 在补跑前已经错过另一个锚点，才需要从当前时间续算。
-                if len(kwargs["weekdays"]) == 1:
-                    next_run = from_scheduled
-                elif from_scheduled > now:
+                from_scheduled = next_anchor(parse_stored_datetime(firing.scheduled_for))
+                # 单一锚点直接推进一个周期。多周几任务若补跑前已错过另一个锚点，从现在续算。
+                if single_slot or from_scheduled > now:
                     next_run = from_scheduled
                 else:
-                    next_run = next_weekly_anchor_after(now, **kwargs)
+                    next_run = next_anchor(now)
                 changes["next_run_at"] = to_utc_iso(next_run)
             else:
-                nxt = next_weekly_anchor_after(
-                    parse_stored_datetime(firing.scheduled_for), **kwargs,
-                )
+                nxt = next_anchor(parse_stored_datetime(firing.scheduled_for))
                 changes["next_run_at"] = to_utc_iso(nxt)
             if (
                 firing.status in {"failed", "missed"}
@@ -1171,7 +1216,7 @@ class ScheduledJobService:
         if str(project.get("workspaceId") or "") != job.workspace_id:
             raise ScheduledJobStateError("project_id 与 workspace_id 不一致")
 
-        if not self._agent_is_available(job.agent_id):
+        if job.mode != "script" and not self._agent_is_available(job.agent_id):
             raise ScheduledJobStateError("Agent 不可用，不能启用任务")
 
         live = self._live_project_resources(job.project_id, job.workspace_id)

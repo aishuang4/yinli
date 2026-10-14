@@ -1,6 +1,6 @@
 /** 对话结束后提示：用户 / 全局记忆还在待确认，采纳前不会生效。 */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ClipboardCheck } from 'lucide-react';
 import { useMemory } from '../../hooks/useMemory';
 import { isViewEnabled } from '../../stores/productFeatures';
@@ -9,14 +9,19 @@ import { useProductFeaturesStore } from '../../stores/productFeaturesStore';
 
 export function MemoryPendingHint({ isStreaming }: { isStreaming: boolean }) {
   const memoryEnabled = useProductFeaturesStore((state) => isViewEnabled(state.features, 'memory'));
+  const currentView = useAppStore((state) => state.currentView);
   const setView = useAppStore((state) => state.setView);
   const setWorkspaceMode = useAppStore((state) => state.setWorkspaceMode);
   const { loadMemoryCandidates } = useMemory();
   const [pendingCount, setPendingCount] = useState(0);
+  const wasStreaming = useRef(isStreaming);
 
   useEffect(() => {
-    if (!memoryEnabled || isStreaming) return undefined;
+    const justFinishedStreaming = wasStreaming.current && !isStreaming;
+    wasStreaming.current = isStreaming;
+    if (!memoryEnabled || isStreaming || currentView !== 'chat') return undefined;
     let cancelled = false;
+    // 对话刚结束时候选还在后台写入，稍等再查；回到对话页则立刻重读。
     const timer = window.setTimeout(() => {
       void loadMemoryCandidates('pending')
         .then((data) => {
@@ -25,12 +30,12 @@ export function MemoryPendingHint({ isStreaming }: { isStreaming: boolean }) {
         .catch(() => {
           if (!cancelled) setPendingCount(0);
         });
-    }, 1600);
+    }, justFinishedStreaming ? 1600 : 0);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [isStreaming, loadMemoryCandidates, memoryEnabled]);
+  }, [currentView, isStreaming, loadMemoryCandidates, memoryEnabled]);
 
   if (!memoryEnabled || pendingCount <= 0) return null;
 

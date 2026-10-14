@@ -24,10 +24,8 @@ from src.tools.timeline_memory import TimelineIngest, TimelineRetrieve
 
 @pytest.fixture()
 def isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     yield
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def test_ordinary_question_skips_habit_model(tmp_path, monkeypatch):

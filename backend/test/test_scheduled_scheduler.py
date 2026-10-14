@@ -41,8 +41,8 @@ from src.storage.database import (
     DEFAULT_WORKSPACE_ID,
     ensure_db,
     get_chat_run,
+    list_chat_messages,
     list_user_notifications,
-    load_chat_store,
     update_scheduled_job,
     update_scheduled_job_run,
     upsert_chat_run,
@@ -51,12 +51,25 @@ from src.storage.database import (
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _enable_jobs_for_direct_ticks(request, local_tenant):
+    """tick 现在会跳过关闭调度的租户。直接调 tick 的用例先打开开关。"""
+
+    if request.node.name in {
+        "test_feature_flag_false_does_not_start_ticker",
+        "test_desktop_first_run_seeds_scheduler_enabled",
+        "test_lifespan_reconciles_chat_then_jobs_then_starts_and_stops_before_close_db",
+    }:
+        yield
+        return
+    set_scheduled_jobs_enabled(True)
+    yield
+
+
 @pytest.fixture()
 def isolated_db(tmp_path, monkeypatch):
     """每个用例独立 SQLite，并收口 ticker / Chat Run。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path / "user-data")
     yield
     for run in list(background_runs_module._runs.values()):
@@ -64,7 +77,7 @@ def isolated_db(tmp_path, monkeypatch):
             run.async_task.cancel()
     background_runs_module._runs.clear()
     reset_job_scheduler()
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def _service() -> ScheduledJobService:
@@ -126,9 +139,11 @@ def test_weekly_grace_is_six_hours():
 
 def test_lifespan_reconciles_chat_then_jobs_then_starts_and_stops_before_close_db():
     source = (BACKEND_ROOT / "src/server/main.py").read_text(encoding="utf-8")
-    assert "bootstrap_scheduler" in source
+    assert "bootstrap_tenant_scheduler" in source
+    assert "start_if_needed" in source
     assert "shutdown_scheduler" in source
-    assert source.index("bootstrap_scheduler") < source.index("yield")
+    assert source.index("bootstrap_tenant_scheduler") < source.index("yield")
+    assert source.index("start_if_needed") < source.index("yield")
     assert source.index("await shutdown_scheduler()") < source.index("await close_db()")
     ticker_src = (BACKEND_ROOT / "src/scheduler/ticker.py").read_text(encoding="utf-8")
     assert ticker_src.index("reconcile_interrupted_chat_runs") < ticker_src.index(
@@ -642,10 +657,9 @@ def test_reconcile_interrupted_chat_runs_fails_orphans_and_skips_live_tasks(isol
         assert get_chat_run("run-orphan")["status"] == "failed"
         assert get_chat_run("run-running-orphan")["status"] == "failed"
         assert get_chat_run("run-live")["status"] == "running"
-        store = load_chat_store()
         errors = [
             item.get("error")
-            for item in store["messages"].get("sess-orphan", [])
+            for item in list_chat_messages("sess-orphan")
         ]
         assert PROCESS_RESTART_ERROR in errors
         blocker.set()

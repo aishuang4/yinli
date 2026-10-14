@@ -141,10 +141,18 @@ class MemoryMarkdownCandidateStore:
             ).fetchall()
         return [self._from_row(row) for row in rows]
 
-    def count_pending(self) -> int:
+    def count_pending(self, *, project_id: str | None = None) -> int:
         self.ensure_db()
+        clauses = ["status = 'pending'"]
+        params: list[Any] = []
+        if project_id:
+            clauses.append("project_id = ?")
+            params.append(project_id)
         with self.lock, self.connect() as conn:
-            row = conn.execute("SELECT COUNT(*) AS n FROM memory_markdown_candidates WHERE status = 'pending'").fetchone()
+            row = conn.execute(
+                f"SELECT COUNT(*) AS n FROM memory_markdown_candidates WHERE {' AND '.join(clauses)}",
+                params,
+            ).fetchone()
         return int(row["n"] if row else 0)
 
     def set_status(self, record_id: str, *, status: str, resolution: str = "") -> dict[str, Any] | None:

@@ -13,10 +13,8 @@ from src.storage import database
 
 @pytest.fixture()
 def isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     yield
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 @pytest.fixture()
@@ -90,6 +88,18 @@ def test_api_accept_writes_markdown_and_reject_keeps_file_untouched(client, tmp_
     assert again.status_code == 400
     assert client.patch("/api/memory/markdown-candidates/nope", json={"action": "accept"}).status_code == 404
     assert client.get("/api/memory/markdown-candidates").json()["pendingCount"] == 0
+
+
+def test_pending_count_follows_the_current_project(client) -> None:
+    _candidate(note="这个项目还没处理。")
+    _candidate(note="另一个项目的候选。", projectId="other-project")
+
+    current = client.get("/api/memory/markdown-candidates?projectId=default").json()
+    assert current["pendingCount"] == 1
+    assert [item["note"] for item in current["records"]] == ["这个项目还没处理。"]
+
+    other = client.get("/api/memory/markdown-candidates?projectId=other-project").json()
+    assert other["pendingCount"] == 1
 
 
 def test_api_accept_marks_failed_when_exact_text_missing(client, tmp_path) -> None:

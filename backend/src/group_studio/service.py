@@ -45,11 +45,11 @@ from src.group_studio.orchestrator import (
 )
 from src.group_studio.settings import get_group_studio_settings_public
 from src.runtime_context import resolve_runtime_context
-from src.server.routes.chat.lifecycle import ACTIVE_RUN_STATUSES
-from src.server.routes.chat.store import (
+from src.runtime.chat_session import (
+    ACTIVE_RUN_STATUSES,
     ChatSessionProjectConflict,
-    _load_store,
     ensure_chat_session,
+    find_chat_session,
 )
 from src.group_studio.events import emit_envelope
 from src.group_studio.scheduler import schedule_next
@@ -191,8 +191,7 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
 
     session_id = request.chat_session_id.strip()
     from src.config.runtime_settings import resolve_model_binding
-    from src.server.routes.chat.store import _load_store
-    session = next((s for s in _load_store().sessions if s.id == session_id), None)
+    session = find_chat_session(session_id)
     model_binding = resolve_model_binding(request.model_config_id or (session.model_config_id if session else None), validate=False)
     _raise_if_chat_run_active(session_id)
 
@@ -627,12 +626,15 @@ def _defer_workers_until_habit(group_id: str, text: str) -> None:
             logging.getLogger(__name__).warning("群聊习惯判断失败", exc_info=True)
         schedule_next(group_id)
 
+    from src.tenancy.context import current_tenant, spawn_in_tenant
+
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
+        _run.close()
         schedule_next(group_id)
         return
-    loop.create_task(_run(), name=f"group-habit-{group_id}")
+    spawn_in_tenant(current_tenant(), _run(), name=f"group-habit-{group_id}")
 
 
 def _emit_system_notice(group_id: str, text: str) -> None:

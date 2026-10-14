@@ -205,6 +205,9 @@ class ScheduleJob(_ScheduledJobToolBase):
     name: str = "ScheduleJob"
     description: str = (
         "Register a complete scheduled job for the current Project. "
+        "executor=agent wakes a Job Agent with frozen_prompt. "
+        "executor=script stores script_source and runs that file directly at due time, without a model. "
+        "Do not mix agent fields into a script job, or script fields into an agent job. "
         "Writes pending_confirmation immediately; that does not start the schedule. "
         f"{_ENABLE_ASKUSER_HINT} "
         "Do not sleep until due time. There is no draft. Duplicate names in the same Project are rejected. "
@@ -216,22 +219,50 @@ class ScheduleJob(_ScheduledJobToolBase):
         "type": "object",
         "properties": {
             "name": {"type": "string", "description": "Unique job name within the current Project."},
+            "executor": {
+                "type": "string",
+                "enum": ["agent", "script"],
+                "description": "agent runs a Job Agent. script runs script_source directly. Default agent.",
+            },
             "schedule_kind": {
                 "type": "string",
-                "enum": ["weekly", "once"],
-                "description": "Phase 1 schedule kind. weekly or once; cron is not supported.",
+                "enum": ["weekly", "daily", "once"],
+                "description": "weekly, daily at a fixed clock, or once. cron is not supported.",
             },
             "schedule_expr": {
                 "type": "object",
                 "description": (
                     'weekly: {"weekdays":["fri"],"at":"18:00"}; '
+                    'daily: {"at":"09:00"}; '
                     'once: {"at":"2026-08-22T18:00:00"} without tz offset.'
                 ),
             },
             "timezone": {"type": "string", "description": "IANA timezone, e.g. Asia/Shanghai."},
             "frozen_prompt": {
                 "type": "string",
-                "description": "Frozen user prompt used at each firing. Must be complete.",
+                "description": "Required for executor=agent. Frozen user prompt used at each firing. Omit for script.",
+            },
+            "script_filename": {
+                "type": "string",
+                "description": "Required for executor=script. File name such as check_cert.py or run.sh.",
+            },
+            "script_source": {
+                "type": "string",
+                "description": "Required for executor=script. Full script text saved with the job. Do not point at scratch or .venv.",
+            },
+            "interpreter": {
+                "type": "string",
+                "enum": ["python3", "bash"],
+                "description": "Script runtime. Default python3. python3 requires .py; bash requires .sh.",
+            },
+            "args": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Arguments passed to the script on every firing.",
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "description": "Script timeout in seconds, 1 to 3600. Default 300.",
             },
             "summary": {"type": "string", "description": "Short human-readable summary."},
             "agent_id": {"type": "string", "description": "Job Agent that will run the task. Do not use the current chat Agent."},
@@ -275,7 +306,7 @@ class ScheduleJob(_ScheduledJobToolBase):
                 "description": "Optional intent tags already extracted. Server still extracts from task_intent.",
             },
         },
-        "required": ["name", "schedule_kind", "schedule_expr", "timezone", "frozen_prompt"],
+        "required": ["name", "schedule_kind", "schedule_expr", "timezone"],
     }
     is_read_only: bool = False
 
@@ -285,9 +316,15 @@ class ScheduleJob(_ScheduledJobToolBase):
         schedule_kind: str,
         schedule_expr: dict[str, Any] | str,
         timezone: str,
-        frozen_prompt: str,
+        frozen_prompt: str = "",
         summary: str = "",
         agent_id: str = "",
+        executor: str = "agent",
+        script_filename: str = "",
+        script_source: str = "",
+        interpreter: str = "python3",
+        args: list[str] | None = None,
+        timeout_seconds: int = 300,
         skill_ids: list[str] | None = None,
         tool_scope: dict[str, Any] | str | None = None,
         input_spec: dict[str, Any] | str | None = None,
@@ -304,18 +341,33 @@ class ScheduleJob(_ScheduledJobToolBase):
         if disabled is not None:
             return disabled
         try:
+            chosen = str(executor or "agent").strip() or "agent"
+            if chosen == "script" and (
+                str(frozen_prompt or "").strip()
+                or str(agent_id or "").strip()
+                or list(skill_ids or [])
+                or tool_scope
+            ):
+                return self._failure("脚本任务不能同时填写 agent_id、frozen_prompt、skill_ids 或 tool_scope")
+            resolved_agent_id = "" if chosen == "script" else (agent_id or self.agent_id).strip()
             job = self._service.create_job(
                 workspace_id=self.workspace_id,
                 project_id=self.project_id,
                 name=name,
-                agent_id=(agent_id or self.agent_id).strip(),
+                agent_id=resolved_agent_id,
                 schedule_kind=schedule_kind,
                 schedule_expr=_coerce_mapping(schedule_expr, field="schedule_expr"),
                 timezone=timezone,
-                frozen_prompt=frozen_prompt,
+                frozen_prompt="" if chosen == "script" else frozen_prompt,
                 summary=summary or "",
-                skill_ids=list(skill_ids or []),
-                tool_scope=_coerce_optional_mapping(tool_scope, field="tool_scope"),
+                skill_ids=[] if chosen == "script" else list(skill_ids or []),
+                tool_scope=None if chosen == "script" else _coerce_optional_mapping(tool_scope, field="tool_scope"),
+                mode=chosen,
+                script_filename=script_filename,
+                script_source=script_source,
+                interpreter=interpreter,
+                script_args=list(args or []),
+                timeout_seconds=timeout_seconds,
                 input_spec=_coerce_optional_mapping(input_spec, field="input_spec") or {},
                 output_spec=_coerce_optional_mapping(output_spec, field="output_spec") or {},
                 missed_policy=missed_policy or "catch_up_once",
@@ -571,6 +623,7 @@ def _job_payload(job: ScheduledJob) -> dict[str, Any]:
         "status": job.status,
         "nextRunAt": job.next_run_at,
         "lastRunAt": job.last_run_at,
+        "mode": job.mode,
         "scheduleKind": job.schedule_kind,
         "timezone": job.timezone,
         "deliveryPolicy": job.delivery_policy,

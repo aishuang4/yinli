@@ -41,7 +41,7 @@ def build_default_agent(*, now: str | None = None) -> AgentResponse:
             DEFAULT_AGENT_FINAL_DELIVERY_RULES,
         ]),
         "modelConfig": {
-            "maxReactIters": 40,
+            "maxReactIters": 128,
         },
         "mcpTools": [],
         "knowledgeTools": [],
@@ -71,7 +71,7 @@ def build_default_websearch_job_agent(*, now: str | None = None) -> AgentRespons
         "description": "能够联网搜索的agent",
         "system_prompt": "请根据用户需要完成定时任务",
         "modelConfig": {
-            "maxReactIters": 40,
+            "maxReactIters": 128,
         },
         "mcpTools": [],
         "knowledgeTools": [],

@@ -43,10 +43,9 @@ from src.agents.runtime_types import (
     MAX_REACT_ITERS,
     McpRuntimeSpec,
     RuntimeToolScope,
-    WORKSPACE_DIR,
 )
 from src.config.runtime_settings import binding_for_model
-from src.config.runtime_paths import SANDBOX_ROOT
+from src.config.runtime_paths import default_project_root, sandbox_root
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.tools.ask_user import AskUser
 from src.tools.configured_http_tool import ConfiguredHttpTool
@@ -77,6 +76,15 @@ logger = logging.getLogger(__name__)
 _agent_cache: dict[str, Agent] = {}
 _session_agents: dict[str, str] = {}
 _agent_last_used: dict[str, float] = {}
+
+
+def _cache_key(key: str) -> str:
+    """缓存键带上租户，避免不同租户的 default Agent 共用实例。"""
+
+    from src.tenancy.context import current_tenant
+
+    prefix = f"{current_tenant().tenant_id}:"
+    return key if key.startswith(prefix) else f"{prefix}{key}"
 
 AGENT_CACHE_MAX_SIZE = 48
 AGENT_CACHE_IDLE_SECONDS = 6 * 60 * 60
@@ -235,10 +243,11 @@ def _seed_catalog_profiles_readonly(host_workdir: Path, extra_filesystem_scopes:
 
 
 def _safe_workspace_dir(guardrails: AgentGuardrails | None) -> str:
-    scope = (guardrails.filesystem_scope if guardrails else WORKSPACE_DIR) or WORKSPACE_DIR
+    default_scope = str(default_project_root())
+    scope = (guardrails.filesystem_scope if guardrails else default_scope) or default_scope
     expanded = os.path.abspath(os.path.expanduser(scope))
     if expanded == os.path.abspath(os.sep):
-        return WORKSPACE_DIR
+        return default_scope
     return expanded
 
 
@@ -465,6 +474,7 @@ def get_or_create_agent(
     write_scope_dir: str | None = None,
     extra_filesystem_scopes: list[str] | None = None,
     session_context_key: str | None = None,
+    project_id: str = "default",
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -484,6 +494,15 @@ def get_or_create_agent(
         Agent: AgentScope Agent 实例
     """
     binding = binding_for_model(model_name)
+    from src.tenancy.capabilities import coerce_hosted_guardrails
+    from src.tenancy.context import current_tenant
+
+    guardrails = coerce_hosted_guardrails(guardrails)
+    if current_tenant().is_hosted and "Bash 中的 /workspace 就是项目根目录" not in system_prompt:
+        system_prompt = f"{system_prompt}\nBash 中的 /workspace 就是项目根目录。"
+    agent_id = _cache_key(agent_id)
+    if session_context_key:
+        session_context_key = _cache_key(session_context_key)
     # 完整配置比较只驻留内存；Key 不进入缓存键、日志或运行记录。
     cached = _agent_cache.get(agent_id)
     if cached is not None and getattr(cached, "_model_binding", None) == binding:
@@ -518,7 +537,21 @@ def get_or_create_agent(
 
     # 创建 Workspace — local 默认，docker 用 AgentScope 内置容器沙盒
     docker_skill_runtime_root: str | None = None
-    if guardrails and guardrails.execution_backend == "docker":
+    if current_tenant().is_hosted:
+        from src.sandbox.hosted_workspace import HostedDockerWorkspace, open_hosted_workspace
+
+        workspace = open_hosted_workspace(
+            tenant_id=current_tenant().tenant_id,
+            project_id=project_id or "default",
+            agent_id=agent_id,
+            project_root=Path(workspace_dir or _safe_workspace_dir(guardrails)),
+            base_image=(guardrails.docker_image if guardrails else "") or "python:3.11-slim",
+            network_enabled=bool(guardrails.network_enabled) if guardrails else True,
+        )
+        if not isinstance(workspace, HostedDockerWorkspace):
+            raise RuntimeError("托管命令只能在沙箱中执行")
+        docker_skill_runtime_root = "/workspace/skills" if skill_paths else None
+    elif guardrails and guardrails.execution_backend == "docker":
         if skill_paths and not guardrails.persistent_sandbox:
             raise ValueError("DockerWorkspace 使用 Skills 时必须启用 persistent_sandbox。")
         docker_skill_runtime_root = "/workspace/skills" if skill_paths else None
@@ -526,7 +559,7 @@ def get_or_create_agent(
             workspace_id=f"agent-{agent_id}".replace(":", "-")[:120],
             base_image=guardrails.docker_image or "python:3.11-slim",
             host_workdir=(
-                str(SANDBOX_ROOT / agent_id.replace(":", "-").replace("/", "-"))
+                str(sandbox_root() / agent_id.replace(":", "-").replace("/", "-"))
                 if guardrails.persistent_sandbox
                 else None
             ),
@@ -534,7 +567,7 @@ def get_or_create_agent(
         )
         if guardrails.persistent_sandbox and extra_filesystem_scopes:
             _seed_catalog_profiles_readonly(
-                Path(str(SANDBOX_ROOT / agent_id.replace(":", "-").replace("/", "-"))),
+                Path(str(sandbox_root() / agent_id.replace(":", "-").replace("/", "-"))),
                 extra_filesystem_scopes,
             )
     else:
@@ -580,13 +613,7 @@ def get_or_create_agent(
         ),
         context_config=_build_context_config(),
         react_config=ReActConfig(
-            max_iters=max(
-                1,
-                min(
-                    int(model_options.max_react_iters if model_options else 40),
-                    MAX_REACT_ITERS,
-                ),
-            ),
+            max_iters=MAX_REACT_ITERS,
         ),
         # 时间 / 上下文长度用 AgentScope 原生 HintBlock 注入：只在首轮、超过
         # time_interval 或临近压缩阈值时追加一条用户侧提示，而不是每轮改写
@@ -725,7 +752,7 @@ def _filter_tools_by_name(
 def has_cached_agent(agent_id: str) -> bool:
     """Return whether a runtime Agent instance already exists in cache."""
 
-    return agent_id in _agent_cache
+    return _cache_key(agent_id) in _agent_cache
 
 
 def invalidate_agent(agent_id: str) -> None:
@@ -737,6 +764,7 @@ def invalidate_agent(agent_id: str) -> None:
     Args:
         agent_id: 要清除的 Agent ID
     """
+    agent_id = _cache_key(agent_id)
     keys_to_remove = [
         key
         for key in _agent_cache

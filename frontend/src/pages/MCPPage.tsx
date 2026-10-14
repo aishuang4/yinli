@@ -21,6 +21,7 @@ import {
   WorkbenchSection,
 } from '../components/workbench';
 import { useMcp } from '../hooks/useMcp';
+import { useAuthStore } from '../features/auth/authStore';
 import type { McpServer } from '../types/mcp';
 
 interface MCPPageProps {
@@ -71,18 +72,20 @@ export function MCPPage({ embedded = false }: MCPPageProps) {
     headers: [{ key: '', value: '' }],
   });
 
+  const stdioMcp = useAuthStore((state) => state.capabilities.stdioMcp);
+  const visibleServers = stdioMcp ? servers : servers.filter((server) => server.transport !== 'stdio');
   const filteredServers = useMemo(() => (
-    servers.filter((server) => {
+    visibleServers.filter((server) => {
       if (!serverMatchesQuery(server, query)) return false;
       if (category !== 'all' && server.category !== category) return false;
       if (installFilter === 'installed') return server.status === 'installed';
       if (installFilter === 'available') return server.status !== 'installed';
       return true;
     })
-  ), [servers, query, category, installFilter]);
+  ), [visibleServers, query, category, installFilter]);
 
-  const installedCount = servers.filter((server) => server.status === 'installed').length;
-  const enabledToolCount = servers
+  const installedCount = visibleServers.filter((server) => server.status === 'installed').length;
+  const enabledToolCount = visibleServers
     .filter((server) => server.status === 'installed' && server.enabled)
     .reduce((total, server) => total + server.tools.length, 0);
 

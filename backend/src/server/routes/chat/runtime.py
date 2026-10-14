@@ -14,6 +14,7 @@ from src.agents.factory import (
 from src.security.permissions import build_permission_profile
 from src.server.routes.mcp import resolve_mcp_runtime_servers
 from src.server.routes.tools import get_enabled_http_tools, get_enabled_knowledge_tools
+from src.tenancy.capabilities import coerce_hosted_guardrails
 
 from src.server.routes.chat.models import ChatImagePayload
 
@@ -57,7 +58,7 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
         persistent_sandbox=bool(getattr(guardrails, "persistent_sandbox", False)),
         timeout_seconds=int(getattr(guardrails, "timeout_seconds", 300) or 300),
     )
-    return AgentGuardrails(
+    return coerce_hosted_guardrails(AgentGuardrails(
         filesystem_scope=runtime_guardrails.filesystem_scope,
         shell_blacklist=runtime_guardrails.shell_blacklist,
         network_enabled=runtime_guardrails.network_enabled,
@@ -69,7 +70,7 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
         persistent_sandbox=runtime_guardrails.persistent_sandbox,
         timeout_seconds=runtime_guardrails.timeout_seconds,
         permission_profile=build_permission_profile(runtime_guardrails),
-    )
+    ))
 
 
 def scope_guardrails_to_project(
@@ -88,10 +89,6 @@ def scope_guardrails_to_project(
         effective_scope = project_path
     elif agent_path.is_relative_to(project_path):
         effective_scope = agent_path
-    elif _hosted_personal_project(agent_path, project_path):
-        # Web 用户的 Project 在自己的目录里，默认 Agent 范围仍指向共享 workspace。
-        # 这时有效范围收成该用户的 Project root，不能写到别人的目录。
-        effective_scope = project_path
     else:
         raise ValueError(
             f"Agent filesystem scope {agent_path} 与 Project root {project_path} 不相交。",
@@ -109,21 +106,10 @@ def scope_guardrails_to_project(
         timeout_seconds=guardrails.timeout_seconds,
         permission_profile=guardrails.permission_profile,
     )
+    from src.tenancy.capabilities import coerce_hosted_guardrails
 
-
-def _hosted_personal_project(agent_path: Path, project_path: Path) -> bool:
-    """仅当默认范围是共享 workspace，且 Project 落在当前托管用户目录内。"""
-
-    from src.config.runtime_paths import DEFAULT_PROJECT_ROOT
-    from src.config.settings import settings
-    from src.server.auth.ownership import current_owner_id, path_is_inside_user
-
-    if settings.serve_mode.strip().lower() != "hosted":
-        return False
-    owner = current_owner_id()
-    if not owner or agent_path != DEFAULT_PROJECT_ROOT.resolve():
-        return False
-    return path_is_inside_user(owner, project_path)
+    coerced = coerce_hosted_guardrails(runtime_guardrails)
+    return coerced if coerced is not None else runtime_guardrails
 
 
 def _is_legacy_desktop_scope(agent_path: Path, project_path: Path) -> bool:
@@ -182,6 +168,10 @@ def _build_runtime_mcp_servers(
             headers=dict(item.get("headers") or {}),
             enable_tools=list(item.get("enable_tools") or []),
         ))
+    from src.tenancy.context import is_hosted_mode
+
+    if is_hosted_mode():
+        specs = [item for item in specs if item.transport != "stdio"]
     return specs
 
 

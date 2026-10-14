@@ -28,6 +28,7 @@ from src.server.routes.chat.background_runs import (
     subscribe_chat_background_run,
 )
 from src.server.routes.chat.helpers import source_event
+from src.exception_detail import format_agent_exception
 from src.server.routes.chat.leader_execution import execute_and_finalize_leader_reply
 from src.server.routes.chat.leader_stream import (
     LeaderStreamState,
@@ -233,6 +234,49 @@ def test_agent_factory_uses_2_0_5_workspace_middleware_and_injection_config(monk
         for item in captured["agent"]["middlewares"]
     )
     agent_factory.invalidate_agent(runtime_id)
+
+
+def test_tool_exception_group_keeps_inner_error():
+    """工具异常组不能只留下 sub-exception 计数，内层原因要进失败记录。"""
+
+    class BrokenAgent:
+        async def reply_stream(self, _input):
+            raise ExceptionGroup(
+                "One or more tool calls raised an exception",
+                [RuntimeError("SKILL.md 缺少 name")],
+            )
+            yield None
+
+    async def run_case():
+        state = LeaderStreamState()
+        return [
+            event
+            async for event in execute_and_finalize_leader_reply(
+                agent=BrokenAgent(),
+                input_event=object(),
+                state=state,
+                session_id="session-tool-error",
+                persist=False,
+                agent_id="agent-1",
+                agent_name="Agent",
+                model_name="model",
+                guardrails=AgentGuardrails(),
+                user_message="run",
+                stream_scope="single",
+                skill_runs=[],
+            )
+        ]
+
+    events = asyncio.run(run_case())
+    errors = [event for event in events if event.event_type == "ERROR"]
+    assert errors
+    message = str(errors[-1].data.get("message") or "")
+    assert "RuntimeError: SKILL.md 缺少 name" in message
+    assert "Traceback" in message
+    assert "SKILL.md 缺少 name" in format_agent_exception(
+        ExceptionGroup("One or more tool calls raised an exception", [RuntimeError("SKILL.md 缺少 name")]),
+        prefix="Agent 执行异常",
+    )
 
 
 def test_interrupted_reply_fails_instead_of_completing():

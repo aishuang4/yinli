@@ -1,4 +1,4 @@
-"""会话持久化 — 读写 ChatStore，追加用户/助手消息并维护会话摘要。"""
+"""会话持久化 — 按行追加用户/助手消息并维护会话摘要。"""
 
 import uuid
 from datetime import datetime, timezone
@@ -6,45 +6,35 @@ from datetime import datetime, timezone
 from src.storage.database import (
     DEFAULT_PROJECT_ID,
     DEFAULT_WORKSPACE_ID,
-    get_json_record,
-    load_chat_store,
-    migrate_json_object_file,
-    save_chat_store,
+    append_chat_message,
+    delete_chat_messages,
+    get_chat_session,
+    insert_chat_session_if_absent,
+    list_chat_messages,
+    update_chat_message_snapshot,
+    update_chat_session,
 )
 
 from src.server.routes.chat.models import (
-    CHAT_DATA_PATH,
-    CHAT_NAMESPACE,
-    CHAT_STORE_KEY,
     ChatImagePayload,
     ChatFilePayload,
     ChatSession,
-    ChatStore,
     StoredChatMessage,
 )
 
 
-def _load_store() -> ChatStore:
-    """读取对话存储文件"""
-    migrate_json_object_file(CHAT_NAMESPACE, CHAT_STORE_KEY, CHAT_DATA_PATH)
-    data = load_chat_store()
-    if not data.get("sessions") and not data.get("messages"):
-        legacy = get_json_record(CHAT_NAMESPACE, CHAT_STORE_KEY)
-        if legacy:
-            save_chat_store(legacy)
-            data = load_chat_store()
-    if not data:
-        return ChatStore()
+def session_model(record: dict | None) -> ChatSession | None:
+    """把增量读取的会话行收成 API 模型。"""
 
-    try:
-        return ChatStore.model_validate(data)
-    except Exception:
-        return ChatStore()
+    if record is None:
+        return None
+    return ChatSession.model_validate(record)
 
 
-def _save_store(store: ChatStore) -> None:
-    """写入对话存储文件"""
-    save_chat_store(store.model_dump(mode="json", by_alias=True))
+def message_model(record: dict) -> StoredChatMessage:
+    """把增量读取的消息行收成持久化模型。"""
+
+    return StoredChatMessage.model_validate(record)
 
 
 def _append_user_message(
@@ -62,53 +52,46 @@ def _append_user_message(
 ) -> None:
     """追加用户消息，并创建或更新会话摘要"""
     now = datetime.now(timezone.utc).isoformat()
-    store = _load_store()
     from src.config.runtime_settings import current_model_binding
     binding = current_model_binding()
-    messages = store.messages.setdefault(session_id, [])
-    messages.append(StoredChatMessage(
-        id=uuid.uuid4().hex,
-        role="user",
-        content=content,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        model_name=model_name,
-        images=images,
-        files=files or [],
-        created_at=now,
-    ))
+    model_config_id = binding.primary.entry.id if binding else ""
 
-    title = _make_session_title(content)
-    existing = next((session for session in store.sessions if session.id == session_id), None)
-    if existing:
-        existing.agent_id = agent_id
-        existing.agent_name = agent_name
-        existing.mode = mode
-        existing.workspace_id = workspace_id
-        existing.project_id = project_id
-        existing.updated_at = now
-        existing.message_count = len(messages)
-        if binding:
-            existing.model_config_id = binding.primary.entry.id
+    existing = get_chat_session(session_id)
+    if existing is None:
+        insert_chat_session_if_absent({
+            "id": session_id,
+            "title": _make_session_title(content),
+            "agent_id": agent_id,
+            "agent_name": agent_name,
+            "mode": mode,
+            "workspace_id": workspace_id,
+            "project_id": project_id,
+            "created_at": now,
+            "updated_at": now,
+            "modelConfigId": model_config_id,
+        })
     else:
-        from src.server.auth.ownership import current_owner_id
-
-        store.sessions.append(ChatSession(
-            id=session_id,
-            title=title,
+        update_chat_session(
+            session_id,
             agent_id=agent_id,
             agent_name=agent_name,
             mode=mode,
             workspace_id=workspace_id,
             project_id=project_id,
-            created_at=now,
+            model_config_id=model_config_id or existing.get("modelConfigId") or "",
             updated_at=now,
-            message_count=len(messages),
-            modelConfigId=binding.primary.entry.id if binding else "",
-            ownerUserId=current_owner_id() or "",
-        ))
-
-    _save_store(store)
+        )
+    append_chat_message(session_id, {
+        "id": uuid.uuid4().hex,
+        "role": "user",
+        "content": content,
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "model_name": model_name,
+        "images": [item.model_dump(mode="json") for item in images],
+        "files": [item.model_dump(mode="json") for item in (files or [])],
+        "created_at": now,
+    })
 
 
 class ChatSessionProjectConflict(ValueError):
@@ -139,29 +122,21 @@ def ensure_chat_session(
     """
 
     now = datetime.now(timezone.utc).isoformat()
-    store = _load_store()
-    existing = next((session for session in store.sessions if session.id == session_id), None)
-    if existing is not None:
-        if existing.project_id != project_id:
-            raise ChatSessionProjectConflict(session_id, existing.project_id, project_id)
-        return existing
-    session = ChatSession(
-        id=session_id,
-        title=_make_session_title(title) if title.strip() else "新对话",
-        agent_id=agent_id,
-        agent_name=agent_name,
-        mode="agent",
-        workspace_id=workspace_id,
-        project_id=project_id,
-        kind="chat",
-        created_at=now,
-        updated_at=now,
-        message_count=0,
-    )
-    store.sessions.append(session)
-    store.messages.setdefault(session_id, [])
-    _save_store(store)
-    return session
+    record = insert_chat_session_if_absent({
+        "id": session_id,
+        "title": _make_session_title(title) if title.strip() else "新对话",
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "mode": "agent",
+        "workspace_id": workspace_id,
+        "project_id": project_id,
+        "kind": "chat",
+        "created_at": now,
+        "updated_at": now,
+    })
+    if record["project_id"] != project_id:
+        raise ChatSessionProjectConflict(session_id, record["project_id"], project_id)
+    return session_model(record)
 
 
 def ensure_scheduled_job_session(
@@ -176,26 +151,19 @@ def ensure_scheduled_job_session(
     """经 ChatStore 创建 kind=scheduled_job 的新 session，禁止直接 SQL INSERT。"""
 
     now = datetime.now(timezone.utc).isoformat()
-    store = _load_store()
-    existing = next((session for session in store.sessions if session.id == session_id), None)
-    if existing is not None:
-        return existing
-    session = ChatSession(
-        id=session_id,
-        title=_make_session_title(title) if title.strip() else "定时任务",
-        agent_id=agent_id,
-        agent_name=agent_name,
-        mode="agent",
-        workspace_id=workspace_id,
-        project_id=project_id,
-        kind="scheduled_job",
-        created_at=now,
-        updated_at=now,
-        message_count=0,
-    )
-    store.sessions.append(session)
-    _save_store(store)
-    return session
+    record = insert_chat_session_if_absent({
+        "id": session_id,
+        "title": _make_session_title(title) if title.strip() else "定时任务",
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "mode": "agent",
+        "workspace_id": workspace_id,
+        "project_id": project_id,
+        "kind": "scheduled_job",
+        "created_at": now,
+        "updated_at": now,
+    })
+    return session_model(record)
 
 
 def _append_assistant_message(
@@ -218,41 +186,32 @@ def _append_assistant_message(
 ) -> None:
     """追加助手消息，并更新会话摘要"""
     now = datetime.now(timezone.utc).isoformat()
-    store = _load_store()
-    messages = store.messages.setdefault(session_id, [])
-    _ = skill_calls, tool_calls, model_caches, runtime_events, plan_runs
-    messages.append(StoredChatMessage(
-        id=uuid.uuid4().hex,
-        role="assistant",
-        content=content,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        model_name=model_name,
-        error=error,
-        thinking=thinking,
-        tool_calls=[],
-        skill_calls=[],
-        model_caches=[],
-        runtime_events=[],
-        plan_runs=[],
-        display_snapshot=display_snapshot or {
+    append_chat_message(session_id, {
+        "id": uuid.uuid4().hex,
+        "role": "assistant",
+        "content": content,
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "model_name": model_name,
+        "error": error,
+        "thinking": thinking,
+        "skill_calls": skill_calls or [],
+        "tool_calls": tool_calls or [],
+        "model_caches": model_caches or [],
+        "runtime_events": runtime_events or [],
+        "plan_runs": plan_runs or [],
+        "displaySnapshot": display_snapshot or {
             "version": 4,
             "lastSeq": 0,
             "streamDone": False,
             "order": [],
             "blocksById": {},
         },
-        clarification_requests=clarification_requests or [],
-        clarification_resolved=clarification_resolved,
-        created_at=now,
-    ))
-
-    existing = next((session for session in store.sessions if session.id == session_id), None)
-    if existing:
-        existing.updated_at = now
-        existing.message_count = len(messages)
-
-    _save_store(store)
+        "clarification_requests": clarification_requests or [],
+        "clarification_resolved": clarification_resolved,
+        "created_at": now,
+    })
+    update_chat_session(session_id, updated_at=now)
 
 
 def _update_latest_assistant_display_snapshot(
@@ -263,44 +222,34 @@ def _update_latest_assistant_display_snapshot(
 ) -> None:
     """把 V4 Snapshot 写回最新消息，并移除同一 Run 的旧等待占位消息。"""
 
-    store = _load_store()
-    messages = store.messages.get(session_id) or []
-    target_index: int | None = None
-    for index in range(len(messages) - 1, -1, -1):
-        message = messages[index]
-        if message.role != "assistant":
+    messages = list_chat_messages(session_id)
+    target: dict | None = None
+    for message in reversed(messages):
+        if message.get("role") != "assistant":
             continue
-        if min_created_at and message.created_at < min_created_at:
+        if min_created_at and str(message.get("created_at") or "") < min_created_at:
             return
-        target_index = index
+        target = message
         break
-    if target_index is None:
+    if target is None:
         return
 
-    messages[target_index].display_snapshot = display_snapshot
+    update_chat_message_snapshot(str(target["id"]), display_snapshot)
     root_ids = {
         str(block_id)
         for block_id, block in (display_snapshot.get("blocksById") or {}).items()
         if isinstance(block, dict) and block.get("kind") == "message"
     }
-    if root_ids:
-        duplicate_indices = {
-            index
-            for index, message in enumerate(messages)
-            if index != target_index
-            and message.role == "assistant"
-            and root_ids.intersection(((message.display_snapshot or {}).get("blocksById") or {}).keys())
-        }
-        if duplicate_indices:
-            messages[:] = [
-                message
-                for index, message in enumerate(messages)
-                if index not in duplicate_indices
-            ]
-            session = next((item for item in store.sessions if item.id == session_id), None)
-            if session is not None:
-                session.message_count = len(messages)
-    _save_store(store)
+    if not root_ids:
+        return
+    duplicate_ids = [
+        str(message["id"])
+        for message in messages
+        if message["id"] != target["id"]
+        and message.get("role") == "assistant"
+        and root_ids.intersection(((message.get("displaySnapshot") or {}).get("blocksById") or {}).keys())
+    ]
+    delete_chat_messages(session_id, duplicate_ids)
 
 
 def _make_session_title(content: str) -> str:

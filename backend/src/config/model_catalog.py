@@ -15,9 +15,19 @@ from urllib.parse import parse_qsl, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from src.config.runtime_paths import USER_DATA_ROOT
+from src.config.runtime_paths import tenant_root
 
-MODELS_PATH = USER_DATA_ROOT / "models.json"
+
+PLATFORM_PROVIDER_ID = "yinli-platform"
+BUILTIN_PROVIDER_NAME = "系统内置模型"
+
+
+def models_path() -> Path:
+    """当前租户的自定义模型目录文件。"""
+
+    return tenant_root() / "models.json"
+
+
 _lock = RLock()
 _lock_state = local()
 _secured_windows_files: dict[Path, tuple[int, int, int]] = {}
@@ -30,8 +40,8 @@ def _locked():
         if getattr(_lock_state, "held", False):
             yield
             return
-        MODELS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(MODELS_PATH.with_suffix(".lock"), "a+b") as stream:
+        models_path().parent.mkdir(parents=True, exist_ok=True)
+        with open(models_path().with_suffix(".lock"), "a+b") as stream:
             if os.name == "nt":
                 import msvcrt
 
@@ -232,11 +242,11 @@ def _write(catalog: ModelCatalog) -> None:
     serialized = catalog.model_dump_json(by_alias=True, indent=2)
     if len(serialized.encode("utf-8")) > 4 * 1024 * 1024:
         raise CatalogError("models.json 超过 4 MB 限制。")
-    MODELS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    models_path().parent.mkdir(parents=True, exist_ok=True)
     temporary = None
     try:
         fd, name = tempfile.mkstemp(
-            prefix=".models-", suffix=".tmp", dir=MODELS_PATH.parent
+            prefix=".models-", suffix=".tmp", dir=models_path().parent
         )
         temporary = Path(name)
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -244,7 +254,7 @@ def _write(catalog: ModelCatalog) -> None:
             stream.write(serialized)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, MODELS_PATH)
+        os.replace(temporary, models_path())
     except (OSError, subprocess.SubprocessError):
         raise CatalogError(
             "models.json 保存失败，请检查文件权限或文件是否被占用。"
@@ -255,7 +265,11 @@ def _write(catalog: ModelCatalog) -> None:
 
 
 def _migrate() -> ModelCatalog:
-    from src.config.legacy_model_settings import MODEL_PROVIDERS
+    from src.config.legacy_model_settings import (
+        LEGACY_PROVIDER_ADAPTERS,
+        MODEL_PROVIDERS,
+        ModelProvider,
+    )
     from src.config.secret_store import SecretStoreError, get_model_api_key
     from src.config.settings import settings
     from src.storage.database import get_json_record
@@ -263,9 +277,23 @@ def _migrate() -> ModelCatalog:
     old = get_json_record("system_settings", "model") or {}
     selected = str(old.get("provider") or "deepseek")
     configs = old.get("providerConfigs") or {selected: old}
+    # 模板之外的旧供应商实例也要保留，否则迁移会静默丢配置。
+    templates = dict(MODEL_PROVIDERS)
+    for ident in configs:
+        if ident in templates:
+            continue
+        config = configs.get(ident) or {}
+        templates[ident] = ModelProvider(
+            id=ident,
+            name=str(config.get("providerName") or ident),
+            default_base_url="",
+            default_model=str(config.get("defaultModel") or ""),
+            models=(),
+            adapter=LEGACY_PROVIDER_ADAPTERS.get(ident, "openai"),
+        )
     providers, models = [], []
     default_id = ""
-    for ident, template in MODEL_PROVIDERS.items():
+    for ident, template in templates.items():
         config = configs.get(ident) or {}
         key = ""
         if not config.get("apiKeySuppressed"):
@@ -334,7 +362,7 @@ def read_catalog() -> tuple[ModelCatalog, str]:
     with _locked():
         from src.storage.database import get_json_record, upsert_json_record
 
-        if not MODELS_PATH.exists():
+        if not models_path().exists():
             marker = get_json_record("system_settings", "models_file_migrated")
             if marker:
                 raise CatalogError("models.json 不存在，请恢复配置文件。")
@@ -344,26 +372,26 @@ def read_catalog() -> tuple[ModelCatalog, str]:
                 raise CatalogError("旧模型配置格式无效，迁移未完成。") from None
             _write(migrated)
         try:
-            if MODELS_PATH.stat().st_size > 4 * 1024 * 1024:
+            if models_path().stat().st_size > 4 * 1024 * 1024:
                 raise CatalogError("models.json 超过 4 MB 限制。")
-            payload = MODELS_PATH.read_bytes()
+            payload = models_path().read_bytes()
         except OSError:
             raise CatalogError("models.json 无法读取，请检查权限。") from None
         catalog = _parse(payload)
         try:
-            stat = MODELS_PATH.stat()
+            stat = models_path().stat()
             signature = (stat.st_ino, stat.st_ctime_ns, stat.st_mtime_ns)
             if os.name == "nt":
-                if _secured_windows_files.get(MODELS_PATH) != signature:
-                    _secure_file(MODELS_PATH)
-                    secured = MODELS_PATH.stat()
-                    _secured_windows_files[MODELS_PATH] = (
+                if _secured_windows_files.get(models_path()) != signature:
+                    _secure_file(models_path())
+                    secured = models_path().stat()
+                    _secured_windows_files[models_path()] = (
                         secured.st_ino,
                         secured.st_ctime_ns,
                         secured.st_mtime_ns,
                     )
             elif stat.st_mode & 0o077:
-                _secure_file(MODELS_PATH)
+                _secure_file(models_path())
         except (OSError, subprocess.SubprocessError):
             raise CatalogError("models.json 无法设置仅当前用户访问权限。") from None
         if not get_json_record("system_settings", "models_file_migrated"):
@@ -373,13 +401,146 @@ def read_catalog() -> tuple[ModelCatalog, str]:
         return catalog, hashlib.sha256(payload).hexdigest()
 
 
+_UPSTREAM_MODEL_LIMIT = 40
+
+
+def list_provider_upstream_models(provider_id: str) -> list[str]:
+    """用已保存的供应商 Key 读取上游 /v1/models。不把 Key 带回调用方。"""
+
+    import ipaddress
+
+    import httpx
+
+    catalog, _etag = read_catalog()
+    provider = next((item for item in catalog.providers if item.id == provider_id), None)
+    if provider is None:
+        raise CatalogError("供应商不存在，请先保存连接。")
+    if provider.requires_api_key and not provider.api_key.strip():
+        raise CatalogError("请先保存该供应商的 API Key，再拉取上游模型。")
+    base = provider.base_url.strip().rstrip("/")
+    if not base:
+        raise CatalogError("请先填写并保存 Base URL。")
+    host = (urlsplit(base).hostname or "").lower()
+    if host in {"localhost", "metadata.google.internal"}:
+        raise CatalogError("不能从本机或元数据地址拉取模型。")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None and (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved):
+        raise CatalogError("不能从内网地址拉取模型。")
+    endpoint = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+    headers = {"Authorization": f"Bearer {provider.api_key}"} if provider.api_key.strip() else {}
+    try:
+        response = httpx.get(endpoint, headers=headers, timeout=12.0, follow_redirects=False)
+    except httpx.HTTPError as exc:
+        raise CatalogError("上游模型列表请求失败。") from exc
+    if response.status_code >= 400:
+        raise CatalogError(f"上游拒绝列出模型（{response.status_code}）。")
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise CatalogError("上游模型列表不是 JSON。") from exc
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise CatalogError("上游模型列表格式无法识别。")
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("id") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+        if len(names) >= _UPSTREAM_MODEL_LIMIT:
+            break
+    return names
+
+
+def ensure_hosted_upstream_catalog() -> None:
+    """托管且能拉到上游时，把模型名写入当前租户的 models.json。Key 仍留在控制面。"""
+
+    from src.tenancy.context import current_tenant, is_hosted_mode
+
+    if not is_hosted_mode():
+        return
+    user_id = current_tenant().user_id
+    if not user_id:
+        return
+    from src.server.auth.key2api import Key2ApiError, base_url, key2api_configured, list_platform_models
+
+    if not key2api_configured():
+        return
+    try:
+        remote = list_platform_models(user_id)
+    except Key2ApiError:
+        return
+    names = []
+    seen: set[str] = set()
+    for item in remote:
+        name = str(item.get("label") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+        if len(names) >= _UPSTREAM_MODEL_LIMIT:
+            break
+    if not names:
+        return
+    catalog, _etag = read_catalog()
+    providers = [item for item in catalog.providers if item.id != PLATFORM_PROVIDER_ID]
+    providers.append(ProviderConfig(
+        id=PLATFORM_PROVIDER_ID,
+        name=BUILTIN_PROVIDER_NAME,
+        adapter="openai",
+        baseUrl=f"{base_url()}/v1",
+        apiKey="",
+        requiresApiKey=False,
+        enabled=True,
+    ))
+    kept = [item for item in catalog.models if item.provider_id != PLATFORM_PROVIDER_ID]
+    upstream = []
+    for name in names:
+        upstream.append(ModelEntry(
+            id=f"upstream-{name}",
+            providerId=PLATFORM_PROVIDER_ID,
+            model=name,
+            label=name,
+        ))
+    models = [*kept, *upstream]
+    model_ids = {item.id for item in models}
+    default_id = catalog.default_model_id if catalog.default_model_id in model_ids else upstream[0].id
+    previous = {
+        (item.id, item.model, item.label)
+        for item in catalog.models
+        if item.provider_id == PLATFORM_PROVIDER_ID
+    }
+    current = {(item.id, item.model, item.label) for item in upstream}
+    existing_provider = next((item for item in catalog.providers if item.id == PLATFORM_PROVIDER_ID), None)
+    if (
+        previous == current
+        and catalog.default_model_id == default_id
+        and existing_provider is not None
+        and existing_provider.name == BUILTIN_PROVIDER_NAME
+    ):
+        return
+    _write(ModelCatalog(
+        revision=catalog.revision,
+        defaultModelId=default_id,
+        providers=tuple(providers),
+        models=tuple(models),
+    ))
+
+
 def public_catalog() -> dict:
     catalog, etag = read_catalog()
     result = catalog.model_dump(mode="json", by_alias=True)
     for provider in result["providers"]:
         provider["apiKeyConfigured"] = bool(provider.pop("apiKey"))
     result["etag"] = etag
-    result["modelsPath"] = str(MODELS_PATH)
+    result["modelsPath"] = str(models_path())
     return result
 
 
@@ -416,7 +577,7 @@ def save_catalog(payload: dict, expected_etag: str) -> dict:
         data["revision"] = current.revision + 1
         parsed = _parse(data)
         # 再次检查外部编辑；页面和本进程写操作已由锁串行化。
-        if hashlib.sha256(MODELS_PATH.read_bytes()).hexdigest() != etag:
+        if hashlib.sha256(models_path().read_bytes()).hexdigest() != etag:
             raise CatalogConflict("模型配置已改变，请刷新后重试。")
         _write(parsed)
         return public_catalog()

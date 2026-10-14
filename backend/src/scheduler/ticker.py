@@ -12,8 +12,8 @@ from src.scheduler.firing import ensure_firing_terminal, run_firing
 from src.scheduler.models import TERMINAL_FIRING_STATUSES, ScheduledJob
 from src.scheduler.schedule import parse_stored_datetime, to_utc_iso
 from src.scheduler.service import ScheduledJobService
-from src.scheduler.settings import ensure_desktop_scheduled_jobs_defaults, is_scheduled_jobs_enabled
-from src.server.routes.chat.background_runs import reconcile_interrupted_chat_runs
+from src.scheduler.settings import ensure_scheduled_jobs_defaults, is_scheduled_jobs_enabled
+from src.runtime.scheduled_chat import reconcile_interrupted_chat_runs
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ class JobScheduler:
         self._sem = asyncio.Semaphore(max(1, int(max_inflight)))
         self._inflight: set[asyncio.Task[Any]] = set()
         self._firing_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._firing_tenants: dict[str, str] = {}
         self._ticker_task: asyncio.Task[Any] | None = None
         self._stopped = False
 
@@ -48,19 +49,37 @@ class JobScheduler:
     def service(self) -> ScheduledJobService:
         return self._service
 
-    def start(self) -> None:
-        """启动 ticker 循环。flag 未启用时由调用方不要调用。"""
+    def start(self) -> bool:
+        """启动 ticker 循环。没有正在运行的事件循环时不启动。"""
 
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return False
         if self._ticker_task is not None and not self._ticker_task.done():
-            return
+            return True
         self._stopped = False
         self._ticker_task = asyncio.create_task(
             self._loop(), name="job-scheduler-ticker",
         )
+        return True
+
+    def start_if_needed(self) -> bool:
+        """desktop 沿用租户开关；hosted 的 ticker 总是启动，开关在 tick 内判断。"""
+
+        from src.tenancy.context import is_hosted_mode
+
+        if is_hosted_mode() or is_scheduled_jobs_enabled():
+            return self.start()
+        return False
 
     def set_running(self, enabled: bool) -> None:
-        """设置页开关：打开则扫描到期任务，关闭只停 ticker，不杀在途 firing。"""
+        """设置页开关。hosted 不启停进程级 ticker，只由调用方写入当前租户设置。"""
 
+        from src.tenancy.context import is_hosted_mode
+
+        if is_hosted_mode():
+            return
         if enabled:
             self.start()
             return
@@ -86,9 +105,37 @@ class JobScheduler:
             await asyncio.gather(*pending, return_exceptions=True)
 
     async def tick(self, *, now: datetime | None = None) -> dict[str, int]:
-        """扫描到期 Job：INSERT queued + create_task。绝不 await 信号量或 ReAct。"""
+        """按租户扫描到期 Job。单个租户失败不挡住其他租户。"""
+
+        from src.tenancy.context import use_tenant
+        from src.tenancy.lifecycle import iter_tick_tenants
 
         stamped = now or datetime.now(timezone.utc)
+        totals = {
+            "due_count": 0,
+            "claimed": 0,
+            "skipped_in_flight": 0,
+            "missed": 0,
+            "stale_reclaimed": 0,
+            "clock_repaired": 0,
+            "paused_daily_cap": 0,
+        }
+        for ctx in iter_tick_tenants():
+            with use_tenant(ctx):
+                if not is_scheduled_jobs_enabled():
+                    continue
+                try:
+                    stats = self._tick_current_tenant(now=stamped)
+                except Exception:
+                    logger.exception("tick 失败 tenant=%s", ctx.tenant_id)
+                    continue
+            for key, value in stats.items():
+                totals[key] = totals.get(key, 0) + int(value)
+        return totals
+
+    def _tick_current_tenant(self, *, now: datetime) -> dict[str, int]:
+        """扫描当前租户的到期 Job。绝不 await 信号量或 ReAct。"""
+
         started = time.monotonic()
         stats = {
             "due_count": 0,
@@ -99,14 +146,14 @@ class JobScheduler:
             "clock_repaired": 0,
             "paused_daily_cap": 0,
         }
-        stats["stale_reclaimed"] = self.reclaim_orphan_starting(now=stamped)
-        due_jobs = self._service.list_due_jobs(now=stamped)
+        stats["stale_reclaimed"] = self.reclaim_orphan_starting(now=now)
+        due_jobs = self._service.list_due_jobs(now=now)
         stats["due_count"] = len(due_jobs)
         for job in due_jobs:
-            self._dispatch_due_job(job, now=stamped, stats=stats)
+            self._dispatch_due_job(job, now=now, stats=stats)
         scan_ms = int((time.monotonic() - started) * 1000)
         logger.info(
-            "JobScheduler tick scan_ms=%s due_count=%s claimed=%s skipped_in_flight=%s missed=%s",
+            "JobScheduler tick tenant scan_ms=%s due_count=%s claimed=%s skipped_in_flight=%s missed=%s",
             scan_ms,
             stats["due_count"],
             stats["claimed"],
@@ -150,6 +197,11 @@ class JobScheduler:
             if job.status == "active":
                 self._service.pause(job.id, reason="daily_cap")
                 stats["paused_daily_cap"] += 1
+            return
+        from src.tenancy.quota import firings_allowed
+
+        if not firings_allowed(self._service.count_firings_today(job, now=now)):
+            stats["skipped_quota"] = stats.get("skipped_quota", 0) + 1
             return
         scheduled_for = job.next_run_at or to_utc_iso(now)
         occupant = self._service.occupying_due_slot(job.id, scheduled_for)
@@ -211,14 +263,28 @@ class JobScheduler:
         stats["claimed"] += 1
 
     def _track(self, task: asyncio.Task[Any], firing_id: str) -> None:
+        from src.tenancy.context import current_tenant
+
         self._inflight.add(task)
         self._firing_tasks[firing_id] = task
+        self._firing_tenants[firing_id] = current_tenant().tenant_id
 
         def _done(done: asyncio.Task[Any]) -> None:
             self._inflight.discard(done)
             self._firing_tasks.pop(firing_id, None)
+            self._firing_tenants.pop(firing_id, None)
 
         task.add_done_callback(_done)
+
+    def cancel_tenant_firings(self, tenant_id: str) -> None:
+        """取消属于这个租户、还在跑的 firing 任务。"""
+
+        for firing_id, owner in list(self._firing_tenants.items()):
+            if owner != tenant_id:
+                continue
+            task = self._firing_tasks.get(firing_id)
+            if task is not None and not task.done():
+                task.cancel()
 
     async def _loop(self) -> None:
         while not self._stopped:
@@ -250,10 +316,10 @@ def reset_job_scheduler() -> None:
     _scheduler = None
 
 
-def bootstrap_scheduler(*, now: datetime | None = None) -> dict[str, int]:
-    """启动顺序：桌面缺省开关 → Chat 孤儿 → job_runs →（flag 开启时）start ticker。"""
+def bootstrap_tenant_scheduler(*, now: datetime | None = None) -> dict[str, int]:
+    """当前租户内：默认开关、Job 文件、中断的 Chat Run 和 firing。"""
 
-    seeded = ensure_desktop_scheduled_jobs_defaults()
+    seeded = ensure_scheduled_jobs_defaults()
     try:
         from src.catalog.sync_jobs import persist_job_definition, sync_job_definitions
         from src.storage.database import list_scheduled_jobs
@@ -264,27 +330,32 @@ def bootstrap_scheduler(*, now: datetime | None = None) -> dict[str, int]:
             try:
                 persist_job_definition(service.get_job(str(item["id"])))
             except Exception:
+                logger.exception("同步 Job 定义失败 job=%s", item.get("id"))
                 continue
         sync_job_definitions()
     except Exception:
         logger.exception("同步 Job 定义文件失败")
     chat_n = reconcile_interrupted_chat_runs()
     job_n = get_job_scheduler().service.reconcile_interrupted_job_runs(now=now)
-    started = 0
-    if is_scheduled_jobs_enabled():
-        get_job_scheduler().start()
-        started = 1
-    if chat_n or job_n or started or seeded:
+    if chat_n or job_n or seeded:
         logger.info(
-            "scheduler bootstrap chat_runs=%s job_runs=%s ticker_started=%s defaults_seeded=%s",
-            chat_n, job_n, started, 1 if seeded else 0,
+            "scheduler tenant bootstrap chat_runs=%s job_runs=%s defaults_seeded=%s",
+            chat_n, job_n, 1 if seeded else 0,
         )
     return {
         "chat_runs": chat_n,
         "job_runs": job_n,
-        "ticker_started": started,
         "defaults_seeded": 1 if seeded else 0,
     }
+
+
+def bootstrap_scheduler(*, now: datetime | None = None) -> dict[str, int]:
+    """对当前租户对账，再按模式决定是否启动进程级 ticker。"""
+
+    stats = bootstrap_tenant_scheduler(now=now)
+    started = 1 if get_job_scheduler().start_if_needed() else 0
+    stats["ticker_started"] = started
+    return stats
 
 
 def apply_scheduler_enabled(enabled: bool) -> None:

@@ -33,6 +33,37 @@ export function ScheduledJobScheduleForm({
     setError('');
   }, [job]);
 
+  if (job.scheduleKind === 'daily') {
+    return (
+      <FormSection title="每天调度" description="保存会写回定义文件。时间是 timezone 下的 HH:MM。">
+        <div className="grid gap-3 md:grid-cols-2">
+          <TextField
+            label="时间"
+            required
+            value={at}
+            placeholder="09:00"
+            disabled={disabled}
+            onChange={(event) => setAt(event.target.value)}
+          />
+          <TextField
+            label="时区"
+            required
+            value={timezone}
+            placeholder="Asia/Shanghai"
+            disabled={disabled}
+            onChange={(event) => setTimezone(event.target.value)}
+          />
+        </div>
+        {error ? <div className="text-sm text-[var(--color-error)]">{error}</div> : null}
+        <div className="mt-3">
+          <Button type="primary" size="small" disabled={disabled} loading={saving} onClick={() => void handleDailySave()}>
+            保存调度
+          </Button>
+        </div>
+      </FormSection>
+    );
+  }
+
   if (job.scheduleKind !== 'weekly') {
     return (
       <FormSection title="调度" description="Phase 1 仅支持在此修改 weekly 调度；单次任务保持只读。">
@@ -41,6 +72,20 @@ export function ScheduledJobScheduleForm({
         </div>
       </FormSection>
     );
+  }
+
+  async function handleDailySave() {
+    const clock = at.trim();
+    if (!/^\d{2}:\d{2}$/.test(clock)) {
+      setError('时间格式必须为 HH:MM');
+      return;
+    }
+    if (!timezone.trim()) {
+      setError('时区不能为空');
+      return;
+    }
+    setError('');
+    await onSave([], clock, timezone.trim());
   }
 
   async function handleSave() {

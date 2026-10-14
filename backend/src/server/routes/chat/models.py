@@ -9,9 +9,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from src.config.runtime_paths import DATA_ROOT
+from src.config.runtime_paths import data_root
 
-CHAT_DATA_PATH = DATA_ROOT / "chat_sessions.json"
+
+def chat_data_path():
+    """旧 JSON 会话存档路径；只在一次性导入时使用（§7.5）。"""
+
+    return data_root() / "chat_sessions.json"
+
+
 CHAT_NAMESPACE = "chat_store"
 CHAT_STORE_KEY = "default"
 MULTIMODAL_MODELS = {"qwen3.7-plus"}
@@ -28,6 +34,27 @@ TRACE_EVENT_TYPES = {
 }
 PENDING_INTERACTIONS: dict[str, "PendingInteraction"] = {}
 PENDING_AGENTS: dict[str, object] = {}
+
+
+def _pending_tenant_id() -> str:
+    from src.tenancy.context import current_tenant
+
+    return current_tenant().tenant_id
+
+
+def get_pending_interaction(interaction_id: str) -> "PendingInteraction | None":
+    """取出当前租户的待回答交互。别的租户按不存在处理。"""
+
+    interaction = PENDING_INTERACTIONS.get(interaction_id)
+    if interaction is None or interaction.tenant_id != _pending_tenant_id():
+        return None
+    return interaction
+
+
+def get_pending_agent(interaction_id: str) -> object | None:
+    if get_pending_interaction(interaction_id) is None:
+        return None
+    return PENDING_AGENTS.get(interaction_id)
 
 
 def _empty_display_snapshot() -> dict[str, Any]:
@@ -186,7 +213,6 @@ class ChatSession(BaseModel):
     created_at: str
     updated_at: str
     message_count: int = 0
-    owner_user_id: str = Field(default="", alias="ownerUserId")
     group_studio: dict | None = Field(default=None, alias="groupStudio")
 
     model_config = {"populate_by_name": True}
@@ -210,6 +236,7 @@ class PendingInteraction(BaseModel):
     model_name: str
     reply_id: str
     run_id: str = ""
+    tenant_id: str = Field(default_factory=_pending_tenant_id)
     tool_calls: list[dict]
     resume_tool_calls: list[dict] | None = None
     message: str

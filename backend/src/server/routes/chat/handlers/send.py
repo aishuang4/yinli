@@ -38,7 +38,7 @@ from src.server.routes.chat.startup_checks import get_startup_error
 from src.server.routes.chat.projection.source_events import SourceEvent
 from src.config.product_features import is_surface_enabled
 from src.config.runtime_settings import resolve_model_binding
-from src.server.routes.chat.store import _load_store
+from src.runtime.chat_session import find_chat_session
 
 
 @router.post("/send")
@@ -58,16 +58,6 @@ async def send_message(data: ChatMessage, request: Request) -> StreamingResponse
     Returns:
         StreamingResponse: SSE 事件流（text/event-stream）
     """
-
-    from src.config.settings import settings
-
-    if (
-        settings.serve_mode.strip().lower() != "hosted"
-        and str(data.model_config_id or "").startswith("platform:")
-    ):
-        from src.server.auth.platform_chat import platform_chat_response
-
-        return await platform_chat_response(data)
 
     run = await start_chat_run(data)
     from src.server.auth.presence import iter_with_presence
@@ -113,7 +103,7 @@ async def start_chat_run(data: ChatMessage):
             run_id="",
             agent_id=data.agent_id or "default",
         )
-        session = next((s for s in _load_store().sessions if s.id == session_id), None)
+        session = find_chat_session(session_id)
         binding = resolve_model_binding(data.model_config_id or (session.model_config_id if session else None))
         if data.images and not binding.primary.entry.capabilities.images:
             raise ValueError("所选模型未启用图片能力，请切换模型。")

@@ -313,8 +313,10 @@ class SubagentRunner:
         except SubagentRunError:
             raise
         except Exception as exc:
+            from src.exception_detail import format_agent_exception
+
             raise SubagentRunError(
-                f"Subagent 执行异常: {exc}",
+                format_agent_exception(exc, prefix="Subagent 执行异常"),
                 partial_result=final_text or reasoning_text,
                 duration_ms=_duration_ms(started),
             ) from exc

@@ -8,7 +8,7 @@ import zlib
 from pathlib import Path
 from typing import Any
 
-from src.config.runtime_paths import VECTOR_STORE_ROOT
+from src.config.runtime_paths import vector_store_root
 from src.vector_store.base import (
     ScalarValue,
     VectorCollectionConfig,
@@ -225,7 +225,7 @@ class ZvecVectorStoreBackend:
 
     @staticmethod
     def _collection_path(collection: str) -> Path:
-        return VECTOR_STORE_ROOT / "zvec" / _safe_collection_name(collection)
+        return vector_store_root() / "zvec" / _safe_collection_name(collection)
 
     @staticmethod
     def _flush(collection: Any) -> None:

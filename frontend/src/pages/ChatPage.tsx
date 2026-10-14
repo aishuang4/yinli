@@ -53,6 +53,7 @@ import { useProvidedModels } from '../features/models/useProvidedModels';
 import { ModelSelector } from '../features/models/ModelSelector';
 
 import { useChatAttachments } from '../features/chat/useChatAttachments';
+import { useChatFileDrop } from '../features/chat/useChatFileDrop';
 import { useEnabledSkills } from '../hooks/useSkills';
 import { filterComposerSkills } from '../features/chat/forcedSkills';
 import { FilePreviewPane } from '../features/file-preview/FilePreviewPane';
@@ -112,6 +113,12 @@ export function ChatPage() {
     resetAttachments,
     uploadFilesForSession,
   } = useChatAttachments({ onError: setChatError });
+  const { acceptFiles, dragOver, dropHandlers } = useChatFileDrop({
+    enabled: !state.isStreaming,
+    onFile: handleFile,
+    onImageFiles: handleImageFiles,
+    onReject: () => setChatError('回复进行中，结束后再添加文件。'),
+  });
 
   // 打包桌面端 Chat keep-alive 不卸载，回到本页时静默同步 Agent 列表。
   useOnPageBecameActive(() => {
@@ -711,8 +718,10 @@ export function ChatPage() {
       )}
 
       <section
-        className="chat-main-panel chat-workbench-main grid min-h-0 min-w-[280px] grid-cols-1 overflow-hidden"
+        className="chat-main-panel chat-workbench-main relative grid min-h-0 min-w-[280px] grid-cols-1 overflow-hidden"
+        {...dropHandlers}
       >
+        {dragOver ? <div className="chat-file-drop">松开即可添加文件</div> : null}
         <div className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_1fr_auto] overflow-hidden">
           <header
             className="chat-workbench-topbar flex min-w-0 items-center justify-between gap-4 overflow-hidden px-8 py-2"
@@ -908,6 +917,7 @@ export function ChatPage() {
               projectResourcesLoading={projectResourcesLoading}
               selectedAgentId={selectedAgentId}
               targetMode={targetMode}
+              onAcceptFiles={acceptFiles}
               onAbort={abort}
               onCompositionEnd={() => { isComposingRef.current = false; }}
               onCompositionStart={() => { isComposingRef.current = true; }}

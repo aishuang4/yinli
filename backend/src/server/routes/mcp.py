@@ -31,7 +31,6 @@ from src.mcp.registry import (
     mcp_dir,
     delete_named_secret,
     resolve_headers,
-    DATA_ROOT,
     _resolve_mcp_runtime_servers,
     list_json_records,
     db_list_mcp_servers,
@@ -43,8 +42,6 @@ from src.mcp.registry import (
     McpServer,
     McpInstallRequest,
     McpRegisterRequest,
-    DATA_DIR,
-    USER_MCP_REGISTRY_FILE,
     MCP_NAMESPACE,
     RESERVED_MCP_HEADERS,
     _utc_now,
@@ -75,6 +72,27 @@ from src.mcp.registry import (
 router = APIRouter()
 _job_service = ScheduledJobService()
 
+
+def _hosted_hides_mcp(server: McpServer) -> bool:
+    from src.tenancy.context import is_hosted_mode
+
+    return is_hosted_mode() and str(server.transport or "") == "stdio"
+
+
+def _reject_hosted_mcp(*, transport: str, url: str) -> None:
+    from src.security.egress import EgressBlocked, assert_public_url_sync
+    from src.tenancy.context import is_hosted_mode
+
+    if not is_hosted_mode():
+        return
+    if str(transport or "") == "stdio":
+        raise HTTPException(status_code=403, detail="Web 端不支持本地 MCP")
+    if url:
+        try:
+            assert_public_url_sync(url, purpose="mcp")
+        except EgressBlocked as exc:
+            raise HTTPException(status_code=422, detail="模型地址不能指向内网或本机") from exc
+
 @router.get("", response_model=list[McpServer])
 async def list_mcp_servers(
     q: str = "",
@@ -89,7 +107,8 @@ async def list_mcp_servers(
     result = [
         server
         for server in _mcp_servers.values()
-        if server.id in _builtin_mcp_servers or server.workspace_id == workspace_id
+        if (server.id in _builtin_mcp_servers or server.workspace_id == workspace_id)
+        and not _hosted_hides_mcp(server)
     ]
 
     if query:
@@ -145,6 +164,7 @@ async def register_mcp_server(data: McpRegisterRequest) -> McpServer:
 
     server_id = _unique_server_id(data.name)
     url = str(data.url)
+    _reject_hosted_mcp(transport="sse", url=url)
     headers = _normalize_headers(data.headers)
     tools = await _fetch_remote_mcp_tools(url, server_id, headers)
     now = _utc_now()
@@ -177,7 +197,7 @@ async def register_mcp_server(data: McpRegisterRequest) -> McpServer:
 async def get_mcp_server(server_id: str) -> McpServer:
     """获取单个 MCP Server 详情。"""
 
-    if server_id not in _mcp_servers:
+    if server_id not in _mcp_servers or _hosted_hides_mcp(_mcp_servers[server_id]):
         raise HTTPException(status_code=404, detail="MCP server not found")
     return _mcp_servers[server_id]
 
@@ -189,8 +209,12 @@ async def install_mcp_server(
 ) -> McpServer:
     """标记 MCP Server 为已安装，并设置启用状态。"""
 
-    if server_id not in _mcp_servers:
+    if server_id not in _mcp_servers or _hosted_hides_mcp(_mcp_servers[server_id]):
         raise HTTPException(status_code=404, detail="MCP server not found")
+    _reject_hosted_mcp(
+        transport=str(_mcp_servers[server_id].transport or ""),
+        url=str(_mcp_servers[server_id].url or ""),
+    )
 
     server = _mcp_servers[server_id].model_copy(
         update={

@@ -179,7 +179,9 @@ async def execute_configured_http_tool(
             kwargs["content"] = str(body)
 
     started = time.perf_counter()
-    async with httpx.AsyncClient(follow_redirects=True) as client:
+    from src.security.egress import guarded_async_client
+
+    async with guarded_async_client(follow_redirects=True) as client:
         response = await client.request(**kwargs)
     duration_ms = int((time.perf_counter() - started) * 1000)
 

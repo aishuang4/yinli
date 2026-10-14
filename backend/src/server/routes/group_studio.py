@@ -94,11 +94,7 @@ def _gone() -> None:
 async def list_studios_route(projectId: str = Query(..., alias="projectId")) -> dict:
     """列出当前 Project 工作室（含 done，不含 deleted）。"""
 
-    from src.server.auth.ownership import filter_ids
-
-    studios = list_studios(projectId)
-    allowed = set(filter_ids("group_studios", [str(item.get("id") or "") for item in studios]))
-    return {"studios": [item for item in studios if str(item.get("id") or "") in allowed]}
+    return {"studios": list_studios(projectId)}
 
 
 @router.post("/from-chat", dependencies=[EnabledDep])
@@ -122,10 +118,6 @@ async def get_by_chat_session(session_id: str) -> GroupStudio | None:
 async def get_studio_snapshot(group_id: str) -> GroupStudio:
     """读取工作室快照（含最近 100 条 messages）。"""
 
-    from src.server.auth.ownership import visible
-
-    if not visible("group_studios", group_id):
-        raise group_studio_http_error(404, "not_found")
     try:
         return get_studio(group_id)
     except GroupStudioError as exc:

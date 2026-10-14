@@ -13,34 +13,21 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Literal
+from typing import Any, Literal
 
 from fastapi import HTTPException
 
 from src.agents.runtime_types import RuntimeToolScope
 from src.project_files import project_job_run_directory
+from src.runtime.scheduled_chat import (
+    TERMINAL_RUN_STATUSES,
+    assert_job_workspace_in_scope,
+    cancel_chat_background_run,
+    get_chat_background_run,
+    launch_scheduled_chat_run,
+)
 from src.runtime_context import resolve_runtime_context
 from src.server.routes.agents import get_registered_agent
-from src.server.routes.chat.background_runs import (
-    cancel_chat_background_run,
-    current_chat_background_run_id,
-    get_chat_background_run,
-    start_chat_background_run,
-)
-from src.server.routes.chat.completion import emit_failed_startup_run
-from src.server.routes.chat.initial_events import (
-    emit_context_events,
-    emit_start_events,
-    persist_user_message_and_trace,
-)
-from src.server.routes.chat.lifecycle import TERMINAL_RUN_STATUSES
-from src.server.routes.chat.models import ChatMessage
-from src.server.routes.chat.projection.source_events import SourceEvent
-from src.server.routes.chat.run_context import build_scheduled_run_context
-from src.server.routes.chat.runtime import _build_runtime_guardrails, scope_guardrails_to_project
-from src.server.routes.chat.runtime_dispatcher import execute_chat_runtime
-from src.server.routes.chat.startup_checks import get_startup_error
-from src.server.routes.chat.store import ensure_scheduled_job_session
 
 
 DEFAULT_FIRING_TIMEOUT_SECONDS = 900
@@ -164,82 +151,32 @@ async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
         raise ScheduledChatLaunchError(f"Agent 配置不存在: {req.agent_id}")
     agent_name = agent.name if agent is not None else "Assistant"
 
-    ensure_scheduled_job_session(
-        session_id=session_id,
-        agent_id=req.agent_id,
-        agent_name=agent_name,
-        workspace_id=runtime_context.workspace_id,
-        project_id=runtime_context.project_id,
-        title=req.frozen_prompt,
-    )
     workspace_dir = project_job_run_directory(
         runtime_context.project_root, req.job_id, req.firing_id,
     )
-    _assert_job_workspace_in_scope(
-        workspace_dir, agent=agent, project_root=runtime_context.project_root,
+    assert_job_workspace_in_scope(
+        agent=agent,
+        project_root=runtime_context.project_root,
+        workspace_dir=workspace_dir,
     )
     (workspace_dir / "outputs").mkdir(parents=True, exist_ok=True)
     _write_frozen_spec(workspace_dir, req)
-
-    run_data = ChatMessage(
+    return await launch_scheduled_chat_run(
         session_id=session_id,
-        project_id=runtime_context.project_id,
-        message=req.frozen_prompt,
         agent_id=req.agent_id,
         agent_name=agent_name,
-        mode="agent",
+        frozen_prompt=req.frozen_prompt,
         skill_ids=list(req.skill_ids),
-        plan_requested=False,
-        sandbox=False,
-    )
-
-    async def event_stream() -> AsyncGenerator[SourceEvent, None]:
-        ctx = await build_scheduled_run_context(
-            _job_view(req),
-            _firing_view(req),
-            run_data=run_data,
-            runtime_context=runtime_context.with_run_id(current_chat_background_run_id()),
-            session_workspace_dir=str(workspace_dir),
-        )
-        persist_user_message_and_trace(ctx, run_data)
-        async for start_event in emit_start_events(ctx, run_data):
-            yield start_event
-        async for context_event in emit_context_events(ctx):
-            yield context_event
-
-        assistant_error = get_startup_error(ctx, run_data)
-        if assistant_error:
-            async for failure_event in emit_failed_startup_run(
-                session_id=ctx.session_id,
-                persist=ctx.persist_run,
-                agent_id=ctx.agent_id,
-                agent_name=ctx.agent_name,
-                model_name=ctx.model_name,
-                assistant_error=assistant_error,
-                skill_runs=ctx.skill_runs,
-            ):
-                yield failure_event
-            return
-
-        async for main_event in execute_chat_runtime(ctx=ctx, run_data=run_data):
-            yield main_event
-
-    run = await start_chat_background_run(
-        session_id=session_id,
-        factory=event_stream,
-        agent_id=req.agent_id,
-        agent_name=agent_name,
-        task=req.frozen_prompt,
-        mode="agent",
         workspace_id=runtime_context.workspace_id,
         project_id=runtime_context.project_id,
-        persist=True,
-        trigger_source="scheduled_job",
-        scheduled_job_id=req.job_id,
-        scheduled_firing_id=req.firing_id,
+        workspace_dir=workspace_dir,
+        runtime_context=runtime_context,
+        job=_job_view(req),
+        firing=_firing_view(req),
         model_binding=binding,
+        job_id=req.job_id,
+        firing_id=req.firing_id,
     )
-    return run.id
 
 
 def _job_view(req: ScheduledRunRequest) -> SimpleNamespace:
@@ -276,25 +213,6 @@ def _validate_request(req: ScheduledRunRequest) -> None:
         raise ScheduledChatLaunchError("project_id 不能为空")
     if req.trigger not in {"schedule", "manual", "catch_up"}:
         raise ScheduledChatLaunchError(f"非法 firing trigger: {req.trigger}")
-
-
-def _assert_job_workspace_in_scope(
-    workspace_dir: Path, *, agent, project_root: Path,
-) -> None:
-    """Job cwd 必须落在 Agent∩Project 文件范围内，否则工具无法读写。"""
-
-    try:
-        guardrails = scope_guardrails_to_project(
-            _build_runtime_guardrails(agent),
-            project_root,
-        )
-    except ValueError as exc:
-        raise ScheduledChatLaunchError(str(exc)) from exc
-    scope = Path(guardrails.filesystem_scope).expanduser().resolve()
-    if not workspace_dir.resolve().is_relative_to(scope):
-        raise ScheduledChatLaunchError(
-            f"Job firing 工作目录不在 Agent∩Project 文件范围内: {workspace_dir} vs {scope}",
-        )
 
 
 async def _join_background_task(run, *, task: asyncio.Task | None = None) -> None:

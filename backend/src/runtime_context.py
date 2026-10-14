@@ -7,7 +7,7 @@ from pathlib import Path
 
 from src.storage.database import (
     DEFAULT_PROJECT_ID,
-    get_chat_session_ownership,
+    get_chat_session_location,
     get_project,
     get_workspace,
 )
@@ -41,10 +41,10 @@ def resolve_runtime_context(
 ) -> RuntimeContext:
     """解析 Project，并校验现有 Session 不会跨 Project 继续运行。"""
 
-    session_ownership = get_chat_session_ownership(session_id) if session_id else None
+    session_location = get_chat_session_location(session_id) if session_id else None
     requested_project_id = str(project_id or "").strip()
-    if session_ownership:
-        session_project_id = str(session_ownership["projectId"])
+    if session_location:
+        session_project_id = str(session_location["projectId"])
         if requested_project_id and requested_project_id != session_project_id:
             raise ValueError(
                 f"Session {session_id} 属于 Project {session_project_id}，不能在 Project {requested_project_id} 中继续。",
@@ -55,16 +55,6 @@ def resolve_runtime_context(
 
     project = get_project(resolved_project_id)
     if project is None:
-        from src.server.auth.ownership import current_owner_id, ensure_hosted_home
-        from src.storage.database import list_projects
-
-        if current_owner_id() and (not requested_project_id or requested_project_id == DEFAULT_PROJECT_ID):
-            ensure_hosted_home()
-            owned = list_projects()
-            if owned:
-                resolved_project_id = str(owned[0]["id"])
-                project = get_project(resolved_project_id)
-    if project is None:
         raise ValueError(f"Project 不存在: {resolved_project_id}")
     if str(project.get("status") or "") != "active":
         raise ValueError(f"Project 已归档，不能启动新运行: {resolved_project_id}")
@@ -73,7 +63,7 @@ def resolve_runtime_context(
     workspace = get_workspace(workspace_id)
     if workspace is None or str(workspace.get("status") or "") != "active":
         raise ValueError(f"Workspace 不存在或已归档: {workspace_id}")
-    if session_ownership and str(session_ownership["workspaceId"]) != workspace_id:
+    if session_location and str(session_location["workspaceId"]) != workspace_id:
         raise ValueError(f"Session {session_id} 的 Workspace 归属与 Project 不一致。")
 
     project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()

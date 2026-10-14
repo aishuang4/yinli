@@ -140,12 +140,14 @@ function CatalogEditor({
   const dirty = catalogDraftDirty(draft, initial);
   const availableModels = draft.models.filter((item) => modelAvailable(draft, item));
   const defaultModel = draft.models.find((item) => item.id === draft.defaultModelId);
-  const visibleProviders = draft.providers.filter((item) => (
+  const upstreamModels = draft.models.filter((item) => item.providerId === 'yinli-platform');
+  const customProviders = draft.providers.filter((item) => item.id !== 'yinli-platform');
+  const visibleProviders = customProviders.filter((item) => (
     showAllProviders
     || isProviderConfigured(item)
     || item.id === expandedProviderId
   ));
-  const hiddenProviderCount = draft.providers.length - draft.providers.filter((item) => (
+  const hiddenProviderCount = customProviders.length - customProviders.filter((item) => (
     isProviderConfigured(item) || item.id === expandedProviderId
   )).length;
 
@@ -200,6 +202,17 @@ function CatalogEditor({
     const next = emptyModel(providerId);
     setDraft((current) => ({ ...current, models: [...current.models, next] }));
     setExpandedModelId(next.id);
+  };
+
+  const importUpstreamModels = (providerId: string, names: string[]) => {
+    if (names.length === 0) return;
+    setDraft((current) => ({
+      ...current,
+      models: [
+        ...current.models,
+        ...names.map((name) => ({ ...emptyModel(providerId), model: name, label: name })),
+      ],
+    }));
   };
 
   const save = async () => {
@@ -282,13 +295,29 @@ function CatalogEditor({
       </div>
 
       <div className="flex items-center justify-between gap-3">
-        <div className="text-sm font-medium text-[var(--color-text-primary)]">供应商</div>
+        <div className="text-sm font-medium text-[var(--color-text-primary)]">我的模型</div>
         <Button size="small" icon={<Plus size={14} />} onClick={addProvider}>添加供应商</Button>
       </div>
 
-      {draft.providers.length === 0 ? (
+      {upstreamModels.length > 0 ? (
+        <section className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
+          <div className="text-sm font-medium text-[var(--color-text-primary)]">系统内置模型</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {upstreamModels.map((item) => (
+              <span key={item.id} className="rounded-md bg-[var(--color-bg-primary)] px-2 py-1 text-xs text-[var(--color-text-primary)]">
+                {item.label || item.model}
+                {draft.defaultModelId === item.id ? ' · 默认' : ''}
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {customProviders.length === 0 ? (
         <p className="rounded-xl border border-dashed border-[var(--color-border)] px-4 py-8 text-center text-sm text-[var(--color-text-tertiary)]">
-          还没有供应商。添加一个连接后，再给它配置模型。
+          {upstreamModels.length > 0
+            ? '自定义供应商可以另外添加。系统内置模型已经可以选作默认模型，也可以给定时任务使用。'
+            : '还没有供应商。添加一个连接后，再给它配置模型。'}
         </p>
       ) : (
         <div className="space-y-3">
@@ -308,6 +337,7 @@ function CatalogEditor({
               onChange={(patch) => updateProvider(provider.id, patch)}
               onRemove={() => removeProvider(provider.id)}
               onAddModel={() => addModel(provider.id)}
+              onImportUpstream={(names) => importUpstreamModels(provider.id, names)}
               onToggleModel={(id) => setExpandedModelId((current) => (current === id ? '' : id))}
               onChangeModel={updateModel}
               onRemoveModel={(id) => removeModels(new Set([id]))}

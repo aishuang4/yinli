@@ -4,11 +4,10 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from src.config.runtime_paths import DEFAULT_PROJECT_ROOT
+from src.config.runtime_paths import default_project_root
 from src.security.permissions import UnifiedPermissionProfile, build_permission_profile
 
 
-WORKSPACE_DIR = str(DEFAULT_PROJECT_ROOT)
 MAX_REACT_ITERS = 512
 FallbackEventCallback = Callable[[dict[str, Any]], None]
 
@@ -20,14 +19,14 @@ class AgentModelOptions:
     temperature: float | None = None
     top_p: float | None = None
     max_tokens: int | None = None
-    max_react_iters: int = 40
+    max_react_iters: int = 128
 
 
 @dataclass(frozen=True)
 class AgentGuardrails:
     """Runtime guardrails used while constructing the Agent."""
 
-    filesystem_scope: str = WORKSPACE_DIR
+    filesystem_scope: str = ""
     shell_blacklist: list[str] = field(default_factory=list)
     network_enabled: bool = True
     human_approval: bool = False
@@ -42,10 +41,10 @@ class AgentGuardrails:
     def __post_init__(self) -> None:
         """兼容旧 guardrails 字段，自动补齐统一权限配置。"""
 
-        filesystem_scope = self.filesystem_scope or WORKSPACE_DIR
+        filesystem_scope = self.filesystem_scope or str(default_project_root())
         expanded_scope = os.path.abspath(os.path.expanduser(filesystem_scope))
         if expanded_scope == os.path.abspath(os.sep):
-            expanded_scope = WORKSPACE_DIR
+            expanded_scope = str(default_project_root())
         object.__setattr__(self, "filesystem_scope", expanded_scope)
 
         profile = self.permission_profile

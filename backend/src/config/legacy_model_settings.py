@@ -28,3 +28,12 @@ MODEL_PROVIDERS: dict[str, ModelProvider] = {
         adapter="deepseek",
     ),
 }
+
+# 迁移旧配置时，模板之外的已知供应商适配器；未列出的按 OpenAI 兼容处理。
+LEGACY_PROVIDER_ADAPTERS: dict[str, str] = {
+    "dashscope": "dashscope",
+    "moonshot": "moonshot",
+    "gemini": "gemini",
+    "anthropic": "anthropic",
+    "ollama": "ollama",
+}

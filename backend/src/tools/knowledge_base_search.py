@@ -122,7 +122,9 @@ class KnowledgeBaseSearch(ToolBase):
             request_headers["Authorization"] = self.authorization
 
         try:
-            async with httpx.AsyncClient(follow_redirects=True) as client:
+            from src.security.egress import guarded_async_client
+
+            async with guarded_async_client(follow_redirects=True) as client:
                 response = await client.post(
                     self.url,
                     headers=request_headers,

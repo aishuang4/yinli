@@ -53,7 +53,7 @@ from src.storage.database import (
     create_subagent_invocation,
     create_workspace,
     ensure_db,
-    get_chat_session_ownership,
+    get_chat_session_location,
     get_project,
     get_workspace,
     list_chat_runs,
@@ -74,10 +74,8 @@ from src.storage.database import (
 def isolated_db(tmp_path, monkeypatch):
     """为 Workspace / Project 测试使用独立 SQLite。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     yield
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def _create_project(tmp_path, *, workspace_id: str, project_id: str, name: str = "项目") -> dict:
@@ -99,7 +97,9 @@ def test_default_workspace_and_project_are_created(isolated_db):
 
     assert workspace and workspace["status"] == "active"
     assert project and project["workspaceId"] == DEFAULT_WORKSPACE_ID
-    assert project["rootPath"] == str(database.PROJECT_ROOT)
+    from src.config.runtime_paths import default_project_root
+
+    assert project["rootPath"] == str(default_project_root())
 
 
 def test_startup_backfills_blank_ownership(isolated_db):
@@ -133,10 +133,10 @@ def test_startup_backfills_blank_ownership(isolated_db):
         for table in ("chat_sessions", "chat_runs", "run_events", "memory_nodes", "subagent_invocations"):
             conn.execute(f"UPDATE {table} SET workspace_id = '', project_id = ''")
         conn.commit()
-    database._initialized = False
+    database.forget_db(database.db_path())
     ensure_db()
 
-    assert get_chat_session_ownership("session-old") == {
+    assert get_chat_session_location("session-old") == {
         "workspaceId": DEFAULT_WORKSPACE_ID,
         "projectId": DEFAULT_PROJECT_ID,
     }
@@ -258,6 +258,11 @@ def test_session_artifacts_hide_internal_and_word_intermediates(tmp_path):
     render.mkdir()
     (render / "page-1.png").write_bytes(b"page")
     (output_dir / "独立图表.png").write_bytes(b"chart")
+    venv_bin = output_dir / "scratch" / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "activate").write_text("echo venv")
+    (venv_bin.parent / "CACHEDIR.TAG").write_text("signature")
+    (output_dir / "scratch" / "check_cert.py").write_text("print('scratch')")
 
     artifacts = list_project_session_artifacts(
         project_root=tmp_path,
@@ -410,26 +415,19 @@ def test_project_root_intersects_agent_filesystem_scope(tmp_path):
         )
 
 
-def test_hosted_shared_workspace_scope_narrows_to_user_project(tmp_path, monkeypatch):
+def test_hosted_no_longer_widens_scope_to_a_personal_project(tmp_path, monkeypatch):
+    """租户隔离后，Agent 范围与 Project 不相交就拒绝，不再按用户目录放行。"""
+
     shared = tmp_path / "workspace"
     shared.mkdir()
-    user_id = "usr_test"
-    project_root = tmp_path / "users" / user_id / "projects" / "proj_test"
+    project_root = tmp_path / "users" / "usr_test" / "projects" / "proj_test"
     project_root.mkdir(parents=True)
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "hosted")
-    monkeypatch.setattr("src.config.runtime_paths.DEFAULT_PROJECT_ROOT", shared)
-    monkeypatch.setattr("src.server.auth.ownership.USER_DATA_ROOT", tmp_path)
-    from src.server.auth.ownership import reset_owner, set_owner
-
-    token = set_owner(user_id)
-    try:
-        scoped = scope_guardrails_to_project(
+    with pytest.raises(ValueError, match="不相交"):
+        scope_guardrails_to_project(
             AgentGuardrails(filesystem_scope=str(shared)),
             project_root,
         )
-    finally:
-        reset_owner(token)
-    assert scoped.filesystem_scope == str(project_root.resolve())
 
     monkeypatch.setattr("src.config.settings.settings.serve_mode", "desktop")
     with pytest.raises(ValueError, match="不相交"):
@@ -739,8 +737,8 @@ def test_chat_run_context_applies_project_resource_allowlist(isolated_db, tmp_pa
     monkeypatch.setattr("src.server.routes.chat.run_context.check_message_readiness_with_model", fake_readiness)
     monkeypatch.setattr("src.server.routes.chat.run_context.route_chat_message_with_model", fake_route)
     monkeypatch.setattr("src.server.routes.chat.run_context.get_active_session_skill_run", lambda *args: None)
-    monkeypatch.setattr("src.server.routes.chat.runtime_governance.build_habit_prompt", lambda *args, **kwargs: "")
-    monkeypatch.setattr("src.server.routes.chat.runtime_governance.build_professional_prompt", lambda *args, **kwargs: "")
+    monkeypatch.setattr("src.runtime.governance.build_habit_prompt", lambda *args, **kwargs: "")
+    monkeypatch.setattr("src.runtime.governance.build_professional_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "src.server.routes.chat.run_context.build_runtime_skills",
         lambda *, skill_ids, **kwargs: captured.update(skill_ids=skill_ids) or [],

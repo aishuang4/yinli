@@ -1,4 +1,4 @@
-"""weekly / once 钟面调度计算。Phase 1 只用 zoneinfo + tzdata，不解析 cron。"""
+"""weekly / daily / once 钟面调度计算。不用 cron。"""
 
 from __future__ import annotations
 
@@ -97,7 +97,11 @@ def validate_schedule_expr(kind: str, expr: dict[str, Any] | None) -> dict[str, 
         if parsed.tzinfo is not None:
             raise ScheduleError("once.at 不得带时区偏移")
         return {"at": parsed.replace(microsecond=0).isoformat()}
-    raise ScheduleError(f"Phase 1 不支持 schedule_kind={kind}")
+    if kind == "daily":
+        at = payload.get("at")
+        parse_clock(str(at or ""))
+        return {"at": str(at).strip()}
+    raise ScheduleError(f"不支持 schedule_kind={kind}")
 
 
 def _wall_clock(day: date, hour: int, minute: int, tz: ZoneInfo) -> datetime:
@@ -131,6 +135,29 @@ def next_weekly_anchor_after(
     raise ScheduleError("无法计算下一 weekly 锚点")
 
 
+def next_daily_anchor_after(
+    after: datetime,
+    *,
+    at: str,
+    timezone_name: str,
+) -> datetime:
+    """从 after 之后的下一天同一钟面；今天该时刻还没到则取今天。"""
+
+    tz = load_timezone(timezone_name)
+    after_utc = after if after.tzinfo is not None else after.replace(tzinfo=timezone.utc)
+    after_utc = after_utc.astimezone(timezone.utc)
+    expr = validate_schedule_expr("daily", {"at": at})
+    hour, minute = parse_clock(expr["at"])
+    local = after_utc.astimezone(tz)
+    start_date = local.date()
+    for offset in range(0, 2):
+        day = start_date + timedelta(days=offset)
+        candidate = _wall_clock(day, hour, minute, tz).astimezone(timezone.utc)
+        if candidate > after_utc:
+            return candidate.replace(microsecond=0)
+    raise ScheduleError("无法计算下一 daily 锚点")
+
+
 def once_run_at(at: str, timezone_name: str) -> datetime:
     """once.at 为无偏移本地时间，时区用 timezone 列。"""
 
@@ -151,13 +178,19 @@ def compute_next_run_at(
     timezone_name: str,
     after: datetime,
 ) -> datetime:
-    """确认启用时计算 next_run_at；weekly 取 after 之后下一锚点，once 取定点。"""
+    """确认启用时计算 next_run_at。weekly / daily 取 after 之后下一锚点，once 取定点。"""
 
     expr = validate_schedule_expr(schedule_kind, schedule_expr)
     if schedule_kind == "weekly":
         return next_weekly_anchor_after(
             after,
             weekdays=expr["weekdays"],
+            at=expr["at"],
+            timezone_name=timezone_name,
+        )
+    if schedule_kind == "daily":
+        return next_daily_anchor_after(
+            after,
             at=expr["at"],
             timezone_name=timezone_name,
         )
@@ -189,6 +222,8 @@ def grace_seconds_for_schedule(schedule_kind: str, schedule_expr: dict[str, Any]
     if schedule_kind == "weekly":
         expr = validate_schedule_expr("weekly", schedule_expr)
         interval = weekly_interval_seconds(expr["weekdays"])
+    elif schedule_kind == "daily":
+        interval = _DAY_SECONDS
     else:
         interval = MAX_GRACE_SECONDS * 2
     return int(min(MAX_GRACE_SECONDS, max(MIN_GRACE_SECONDS, interval / 2)))

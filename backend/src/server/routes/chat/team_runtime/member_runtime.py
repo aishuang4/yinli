@@ -4,12 +4,16 @@
 """
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 
 from agentscope.message import UserMsg
 
 from src.agents.factory import RuntimeToolScope
+
+logger = logging.getLogger(__name__)
+from src.agents.runtime_types import MAX_REACT_ITERS
 from src.server.routes.chat.hitl import build_automatic_confirm_resume
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import ChatRunContext
@@ -48,10 +52,9 @@ DISABLED_TOOL_SCOPE = RuntimeToolScope(
     allow_web=False,
 )
 MAX_AUTOMATIC_TOOL_DENIALS = 8
-# Leader 常把 spawn / create_task 各算一轮；复杂依赖图再加邮件/列表查询会吃很多轮。
-# 真正干活的是 Member（256）；这里只给协调阶段留足预算，仍有上限避免空转。
-LEADER_MAX_REACT_ITERS = 64
-MEMBER_MAX_REACT_ITERS = 256
+# 长任务靠工具指纹停死循环，不用小轮次把协调或成员执行打断。512 只兜住异常空转。
+LEADER_MAX_REACT_ITERS = MAX_REACT_ITERS
+MEMBER_MAX_REACT_ITERS = MAX_REACT_ITERS
 MEMBER_RECOVERY_MAX_REACT_ITERS = 8
 SYNTHESIS_MAX_REACT_ITERS = 8
 MEMBER_RECOVERY_TOOLS = {
@@ -395,7 +398,8 @@ def _model_call_observer(ctx: ChatRunContext, *, scope: str, agent_id: str, agen
                 agent_name=agent_name,
             )
         except Exception:
-            # 观测失败不能影响 Team 执行。
+            # 观测失败不能影响 Team 执行，但原因要留在日志里。
+            logger.exception("Team 模型调用观测失败")
             return
 
     return observe

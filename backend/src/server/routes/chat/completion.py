@@ -3,6 +3,7 @@
 import asyncio
 from typing import AsyncGenerator
 
+from src.exception_detail import format_agent_exception
 from src.memory.professional_update import schedule_professional_update
 from src.memory.reflection import (
     MemoryReflectionInput,
@@ -24,7 +25,8 @@ from src.server.routes.chat.runtime_events import runtime_trace_source_event
 from src.server.routes.chat.skill_runs import update_skill_run_status
 from src.server.routes.chat.store import _append_assistant_message
 from src.server.routes.chat.trace_recorder import _record_run_event, _trim_text
-from src.storage.database import DEFAULT_PROJECT_ID, PROJECT_ROOT, get_latest_completed_user_assistant_turn
+from src.config.runtime_paths import default_project_root
+from src.storage.database import DEFAULT_PROJECT_ID, get_latest_completed_user_assistant_turn
 from src.runtime_context import RuntimeContext, resolve_runtime_context
 
 
@@ -331,7 +333,7 @@ async def _run_skill_evolution_background(
             action="memory_reflection",
             status="failed",
             title="Memory reflection failed",
-            content=type(exc).__name__,
+            content=format_agent_exception(exc, prefix="记忆反思失败"),
             payload={
                 "sourceRunId": item.source_run_id,
                 "sourceMessageId": item.source_message_id,
@@ -414,7 +416,7 @@ def _default_runtime_context(*, session_id: str, run_id: str, agent_id: str) -> 
     return RuntimeContext(
         workspace_id="default",
         project_id=DEFAULT_PROJECT_ID,
-        project_root=PROJECT_ROOT,
+        project_root=default_project_root(),
         session_id=session_id,
         run_id=run_id,
         agent_id=agent_id,

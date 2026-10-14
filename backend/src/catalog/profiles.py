@@ -8,7 +8,8 @@ from typing import Any
 
 import yaml
 
-from src.agents.runtime_types import MAX_REACT_ITERS, WORKSPACE_DIR
+from src.agents.runtime_types import MAX_REACT_ITERS
+from src.config.runtime_paths import default_project_root
 from src.agents.system_agents import (
     is_default_chat_agent_id,
     is_default_websearch_job_agent_id,
@@ -61,7 +62,7 @@ def _guardrails_from_yaml(value: Any, warnings: list[str]) -> Guardrails:
         warnings.append("filesystem_scope=/ 已按空字符串处理")
         filesystem_scope = ""
     payload = {
-        "filesystem_scope": filesystem_scope or WORKSPACE_DIR,
+        "filesystem_scope": filesystem_scope or str(default_project_root()),
         "shell_blacklist": data.get("shell_blacklist"),
         "network_enabled": data.get("network_enabled"),
         "human_approval": data.get("human_approval"),
@@ -75,12 +76,15 @@ def _guardrails_from_yaml(value: Any, warnings: list[str]) -> Guardrails:
     cleaned = {key: item for key, item in payload.items() if item is not None}
     if filesystem_scope == "":
         cleaned["filesystem_scope"] = ""
-    return Guardrails.model_validate(cleaned or {})
+    parsed = Guardrails.model_validate(cleaned or {})
+    from src.tenancy.capabilities import coerce_hosted_guardrails
+
+    return coerce_hosted_guardrails(parsed)
 
 
 def _dump_filesystem_scope(value: str) -> str:
     text = str(value or "").strip()
-    if not text or text == WORKSPACE_DIR or text in {"/", str(Path("/").resolve())}:
+    if not text or text == str(default_project_root()) or text in {"/", str(Path("/").resolve())}:
         return ""
     return text
 
@@ -197,7 +201,7 @@ def parse_profile_markdown(
         return ProfileParseResult(None, errors, warnings)
 
     try:
-        max_iters = int(payload.get("max_react_iters") or 40)
+        max_iters = int(payload.get("max_react_iters") or 128)
     except (TypeError, ValueError):
         return ProfileParseResult(None, ["max_react_iters 必须是整数"], warnings)
     if max_iters < 1 or max_iters > MAX_REACT_ITERS:

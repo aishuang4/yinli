@@ -209,7 +209,13 @@ class TeamCoordinator:
             await self.flush_events()
             raise
         except (TeamStoreError, Exception) as exc:
-            self.store.fail_task(task_id, member_id, str(exc))
+            from src.exception_detail import format_agent_exception
+
+            self.store.fail_task(
+                task_id,
+                member_id,
+                format_agent_exception(exc, prefix="Team 成员任务失败"),
+            )
             # 任务失败不等于成员作废；回到 idle 才能被重派或接下一个任务。
             self.store.set_member_status(member_id, "idle")
             await self.flush_events()

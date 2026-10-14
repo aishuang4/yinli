@@ -125,7 +125,7 @@ system prompt 里和 ReAct 行为有关的段：
 
 AgentScope 侧与循环相关的配置：
 
-- `ReActConfig.max_iters`：默认 40，上限 512
+- `ReActConfig.max_iters`：安全底线 512。长任务不会因为 40 或 128 这种小上限被打断。死循环由 `ToolLoopGuardMiddleware` 按工具指纹判断：同一参数反复失败、只读结果不变、连续相同调用，或 2 到 4 步来回打转。Chat、Team、群聊达到阈值都会停掉这一轮，再走不调用工具的总结。
 - `ContextConfig`：占用到窗口 75% 触发压缩，预留 20%，单条工具结果上限 4000 字
 - 时间用 HintBlock 注入，不改写 system prompt
 - 工作目录是 Project session 目录，避免工具扫到用户主目录
@@ -155,7 +155,7 @@ REPLY_END.finished_reason
 
 `finished_reason` 必须原样进入 Runtime payload。`completed` 才能走成功收口。`interrupted`、`error`、`exceed_max_iters` 不得当成成功。
 
-达到 `max_iters` 时 SDK 发 `EXCEED_MAX_ITERS`，应用层停止消费，错误文案是「已达到最大 ReAct 迭代次数」。
+达到轮次预算时 SDK 发 `EXCEED_MAX_ITERS`。若还能写出总结，这一轮按总结收口；写不出来才返回「已达到最大 ReAct 迭代次数」。重复工具调用不会等到这个预算才停。
 
 用户点停止时，应用层取消是 Run 终态事实源。已经 cancelled 的 Run，不要把 SDK 的 `interrupted` 再写成 failed。
 

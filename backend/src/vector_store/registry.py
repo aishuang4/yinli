@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
-
+from src.tenancy.registry import TenantScoped
 from src.vector_store.base import VectorStoreBackend
 from src.vector_store.policy import VectorStorePolicy, get_vector_store_policy
 from src.vector_store.providers.disabled import DisabledVectorStoreBackend
 from src.vector_store.providers.zvec import ZvecVectorStoreBackend
 
+_backends: TenantScoped[VectorStoreBackend] = TenantScoped(
+    lambda: create_vector_store_backend(get_vector_store_policy())
+)
 
-@lru_cache(maxsize=1)
+
 def get_vector_store_backend() -> VectorStoreBackend:
-    """按持久化策略创建全局向量存储 backend。"""
+    """按当前租户的持久化策略创建向量存储 backend。"""
 
-    return create_vector_store_backend(get_vector_store_policy())
+    return _backends.get()
 
 
 def create_vector_store_backend(policy: VectorStorePolicy) -> VectorStoreBackend:

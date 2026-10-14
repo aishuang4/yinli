@@ -9,14 +9,6 @@ from src.config.settings import settings
 from src.server.auth.routes import token_from_request
 from src.server.auth.service import current_user
 
-def _needs_assigned_catalog(path: str) -> bool:
-    """管理员接口要能在归属完成前把旧数据划给用户。"""
-
-    if path.startswith("/api/admin") or path.startswith("/api/auth") or path == "/api/health":
-        return False
-    return path.startswith("/api/")
-
-
 PUBLIC_PATHS = {
     "/api/health",
     "/api/auth/config",
@@ -30,7 +22,7 @@ PUBLIC_PATHS = {
 
 
 class HostedSessionMiddleware:
-    """hosted 时保护工作台 API。desktop 不拦截本机请求。"""
+    """hosted 时校验会话并绑定租户。desktop 不拦截本机请求。"""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -48,27 +40,29 @@ class HostedSessionMiddleware:
             response = JSONResponse(status_code=401, content={"detail": "需要登录"})
             await response(scope, receive, send)
             return
-        from src.server.auth.ownership import HostedOwnershipPending, reset_owner, set_owner, unassigned_count
+        user = found["user"]
+        from src.storage.control_records import get_tenant
+        from src.tenancy.context import TenantContext, reset_tenant, set_tenant
+        from src.tenancy.lifecycle import ensure_tenant
 
+        tenant = get_tenant(str(user["id"]))
+        if tenant is None:
+            ctx = ensure_tenant(user)
+        elif tenant["status"] != "active":
+            response = JSONResponse(status_code=403, content={"detail": "账号已停用"})
+            await response(scope, receive, send)
+            return
+        else:
+            ctx = TenantContext.hosted(str(user["id"]), role=str(user.get("role") or "user"))
         state = scope.setdefault("state", {})
         if isinstance(state, dict):
-            state["auth_user"] = found["user"]
+            state["auth_user"] = user
             state["auth_session"] = found["session"]
-        token = set_owner(str(found["user"]["id"]))
+        token = set_tenant(ctx)
         try:
-            if _needs_assigned_catalog(path) and unassigned_count():
-                response = JSONResponse(
-                    status_code=409,
-                    content={"detail": "既有数据尚未归属到用户"},
-                )
-                await response(scope, receive, send)
-                return
             await self.app(scope, receive, send)
-        except HostedOwnershipPending:
-            response = JSONResponse(status_code=409, content={"detail": "既有数据尚未归属到用户"})
-            await response(scope, receive, send)
         finally:
-            reset_owner(token)
+            reset_tenant(token)
 
 
 class _RequestView:

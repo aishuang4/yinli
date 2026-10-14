@@ -135,7 +135,7 @@ export type AgentUpdatePayload = Partial<AgentCreatePayload>;
 
 
 /** 默认模型配置 */
-export const DEFAULT_MODEL_CONFIG: ModelConfig = { maxReactIters: 40 };
+export const DEFAULT_MODEL_CONFIG: ModelConfig = { maxReactIters: 128 };
 
 /** 默认安全边界 */
 export const DEFAULT_GUARDRAILS: Guardrails = {

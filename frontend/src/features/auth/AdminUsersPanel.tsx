@@ -1,5 +1,6 @@
 /** 管理员看到的用户、在线端和停用操作。 */
 
+import { useState } from 'react';
 import { Button } from '@/components/design';
 import { WorkbenchListPage } from '../../components/workbench/WorkbenchListPage';
 
@@ -54,6 +55,7 @@ export function AdminUsersPanel({
   onEnable: (userId: string) => void;
   onDelete: (userId: string) => void;
 }) {
+  const [tab, setTab] = useState<'users' | 'models'>('users');
   const stats = [
     { label: '注册用户', value: summary.total },
     { label: '当前在线', value: summary.online },
@@ -62,6 +64,11 @@ export function AdminUsersPanel({
   ];
   return (
     <WorkbenchListPage title="用户管理">
+      <div className="mb-3 flex gap-2">
+        <Button size="small" type={tab === 'users' ? 'primary' : 'default'} onClick={() => setTab('users')}>用户</Button>
+        <Button size="small" type={tab === 'models' ? 'primary' : 'default'} onClick={() => setTab('models')}>平台模型</Button>
+      </div>
+      {tab === 'models' ? <PlatformCapabilityEditor /> : (
       <section className="admin-users" aria-label="用户管理">
         <div className="admin-users__stats">
           {stats.map((item) => (
@@ -125,6 +132,44 @@ export function AdminUsersPanel({
           </table>
         </div>
       </section>
+      )}
     </WorkbenchListPage>
+  );
+}
+
+function PlatformCapabilityEditor() {
+  const [text, setText] = useState('{"version":1,"models":[]}');
+  const [message, setMessage] = useState('');
+
+  const load = async () => {
+    const response = await fetch('/api/admin/platform-models', { credentials: 'include' });
+    if (!response.ok) {
+      setMessage('无法读取平台模型能力表');
+      return;
+    }
+    setText(JSON.stringify(await response.json(), null, 2));
+  };
+
+  const save = async () => {
+    setMessage('');
+    const response = await fetch('/api/admin/platform-models', {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: text,
+    });
+    setMessage(response.ok ? '已保存' : '保存失败');
+  };
+
+  return (
+    <section className="space-y-2" aria-label="平台模型">
+      <p className="text-xs text-[var(--color-text-secondary)]">只改能力表。连接和 Key 不在这里。</p>
+      <textarea className="h-48 w-full rounded-md border border-[var(--color-border)] p-2 font-mono text-xs" value={text} onChange={(event) => setText(event.target.value)} />
+      <div className="flex gap-2">
+        <Button size="small" onClick={() => void load()}>读取</Button>
+        <Button size="small" type="primary" onClick={() => void save()}>保存</Button>
+      </div>
+      {message ? <p className="text-xs">{message}</p> : null}
+    </section>
   );
 }

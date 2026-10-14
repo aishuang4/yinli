@@ -28,7 +28,7 @@
 
 - [x] 按 `docs/group-studio-v2.md` 落地第一版：进群即 `open`、拉人踢人、无确认开始、@谁谁说 / 无 @ 全员一轮、说完停、卸可见 Host 与阶段机。
 - [x] 群聊 SSE 补 `afterSeq`、断线重连、切群换订阅；历史 `GROUP_ERROR` 不重复 toast。
-- [ ] 把 `MainAgentRuntimeSpec` / cache key 从 `routes/chat/runtime_builder.py` 下沉到 `agents/` 或 `runtime/`，Chat 与 group_studio 平级调用。
+- [x] 把 `MainAgentRuntimeSpec` / cache key 从 `routes/chat/runtime_builder.py` 下沉到 `src/runtime/`，Chat 与 group_studio 平级调用。旧路径 re-export。
 
 ## P1. Event Stream 后续加固
 

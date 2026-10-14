@@ -26,18 +26,18 @@ def test_extra_scope_allows_absolute_catalog_path(tmp_path: Path) -> None:
     assert Path(resolved) == file.resolve()
 
 
-def test_rejects_user_data_root_and_models_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(runtime_paths, "USER_DATA_ROOT", tmp_path)
+def test_rejects_user_data_root_and_models_json(tmp_path: Path) -> None:
+    root = runtime_paths.tenant_root()
     project = tmp_path / "project"
     project.mkdir()
-    models = tmp_path / "models.json"
+    models = root / "models.json"
     models.write_text("{}", encoding="utf-8")
     with pytest.raises(ValueError, match="Forbidden extra"):
         resolve_workspace_path(
             str(models),
             base_dir=str(project),
             scope_dir=str(project),
-            extra_scopes=[str(tmp_path)],
+            extra_scopes=[str(root)],
         )
     with pytest.raises(ValueError, match="outside filesystem scope"):
         resolve_workspace_path(

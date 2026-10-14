@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { KeyRound, LogOut, Settings, Users } from 'lucide-react';
 import { logout, submitAuth } from './authClient';
-import { showAdminEntry } from './authRules';
+import { EMPTY_CLOUD_ACCOUNT, showAdminEntry } from './authRules';
 import { useAuthStore } from './authStore';
 import { useAppStore } from '../../stores/appStore';
 
@@ -66,6 +66,9 @@ export function UserMenu({ className = '' }: { className?: string }) {
     };
   }, [open]);
 
+  if (serveMode === 'desktop') {
+    return <DesktopCloudEntry className={className} />;
+  }
   if (!user || serveMode !== 'hosted') {
     return (
       <button
@@ -226,6 +229,84 @@ export function UserMenu({ className = '' }: { className?: string }) {
           </div>
         </div>
       ), document.body) : null}
+    </div>
+  );
+}
+
+function DesktopCloudEntry({ className }: { className: string }) {
+  const cloudAccount = useAuthStore((state) => state.cloudAccount);
+  const setSession = useAuthStore((state) => state.setSession);
+  const setView = useAppStore((state) => state.setView);
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState(cloudAccount.email);
+  const [password, setPassword] = useState('');
+  const [baseUrl, setBaseUrl] = useState(cloudAccount.baseUrl);
+  const [advanced, setAdvanced] = useState(false);
+  const [message, setMessage] = useState('');
+
+  const login = async () => {
+    setMessage('');
+    const logged = await submitAuth('/api/auth/desktop/session', {
+      baseUrl: baseUrl.trim(),
+      email: email.trim(),
+      password,
+    }) as { connected?: boolean; email?: string; status?: string; baseUrl?: string };
+    setSession('desktop', null, Boolean(logged.connected), {
+      cloudAccount: {
+        connected: Boolean(logged.connected),
+        email: logged.email || email.trim(),
+        status: logged.status || 'active',
+        baseUrl: logged.baseUrl || baseUrl.trim(),
+      },
+    });
+    setOpen(false);
+  };
+
+  const signOutCloud = async () => {
+    await fetch('/api/auth/desktop/session', { method: 'DELETE', credentials: 'include' });
+    setSession('desktop', null, false, { cloudAccount: EMPTY_CLOUD_ACCOUNT });
+    setOpen(false);
+  };
+
+  const label = cloudAccount.status === 'expired'
+    ? '云端登录已失效，请重新登录'
+    : (cloudAccount.connected ? cloudAccount.email : '登录引力云端（可选）');
+
+  return (
+    <div className="flex items-center gap-1">
+      <button type="button" className={className} onClick={() => setOpen((value) => !value)}>
+        {label}
+      </button>
+      <button type="button" className={className} aria-label="进入工作台设置" onClick={() => setView('settings')}>
+        <Settings size={17} />
+      </button>
+      {open ? (
+        <form
+          className="absolute right-3 top-12 z-20 w-72 space-y-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 shadow-lg"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (cloudAccount.connected) void signOutCloud();
+            else void login().catch((error: unknown) => setMessage(error instanceof Error ? error.message : '登录失败'));
+          }}
+        >
+          <p className="text-xs text-[var(--color-text-secondary)]">登录只用于使用云端模型，本地数据不会上传</p>
+          {cloudAccount.status === 'expired' ? <p className="text-xs text-[var(--color-error)]">云端登录已失效，请重新登录</p> : null}
+          {message ? <p className="text-xs text-[var(--color-error)]">{message}</p> : null}
+          {cloudAccount.connected ? (
+            <button type="submit">退出</button>
+          ) : (
+            <>
+              <input aria-label="邮箱" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" />
+              <input aria-label="密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 8 位" />
+              <button type="button" onClick={() => setAdvanced((value) => !value)}>高级</button>
+              {advanced ? (
+                <input aria-label="云端地址" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="http://127.0.0.1:8876" />
+              ) : null}
+              <button type="submit">登录</button>
+            </>
+          )}
+        </form>
+      ) : null}
     </div>
   );
 }

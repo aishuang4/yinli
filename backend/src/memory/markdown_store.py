@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.config.runtime_paths import MEMORY_ROOT
+from src.config.runtime_paths import memory_root
 
 USER_MEMORY_TEMPLATE = """# Summary
 
@@ -66,7 +66,7 @@ class MarkdownMemoryStore:
     """Markdown 记忆文件存储。"""
 
     def __init__(self, root: Path | None = None):
-        self.root = root or MEMORY_ROOT
+        self.root = root or memory_root()
 
     def read_agent_memory(self, agent_id: str) -> MarkdownMemoryDocument:
         """读取 Agent 记忆；不存在时返回默认模板但不创建文件。"""

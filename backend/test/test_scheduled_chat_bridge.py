@@ -38,7 +38,8 @@ from src.storage.database import (
     create_project,
     ensure_db,
     get_chat_run,
-    load_chat_store,
+    get_chat_session,
+    list_chat_sessions,
 )
 
 
@@ -46,15 +47,13 @@ from src.storage.database import (
 def isolated_db(tmp_path, monkeypatch):
     """每个用例独立 SQLite，并收口后台 Chat Run。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path / "user-data")
     yield
     for run in list(background_runs_module._runs.values()):
         if run.async_task is not None and not run.async_task.done():
             run.async_task.cancel()
     background_runs_module._runs.clear()
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def _frozen_scope() -> RuntimeToolScope:
@@ -161,9 +160,9 @@ def _patch_fake_agent(monkeypatch, execute, *, filesystem_scope: str):
         return ctx
 
     monkeypatch.setattr("src.scheduler.chat_bridge.get_registered_agent", lambda agent_id: agent)
-    monkeypatch.setattr("src.scheduler.chat_bridge.build_scheduled_run_context", fake_build)
-    monkeypatch.setattr("src.scheduler.chat_bridge.execute_chat_runtime", execute)
-    monkeypatch.setattr("src.scheduler.chat_bridge.get_startup_error", lambda ctx, data: None)
+    monkeypatch.setattr("src.server.routes.chat.scheduled_launch.build_scheduled_run_context", fake_build)
+    monkeypatch.setattr("src.server.routes.chat.scheduled_launch.execute_chat_runtime", execute)
+    monkeypatch.setattr("src.server.routes.chat.scheduled_launch.get_startup_error", lambda ctx, data: None)
     monkeypatch.setattr(
         "src.server.routes.chat.handlers.send.start_chat_run",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("禁止直接调 start_chat_run")),
@@ -270,9 +269,8 @@ def test_start_scheduled_chat_run_returns_id_and_persists_columns(isolated_db, t
         live = await get_chat_background_run(chat_run_id)
         assert live is not None
         assert live.status == "running"
-        store = load_chat_store()
-        session = next(item for item in store["sessions"] if item["id"] == live.session_id)
-        assert session["kind"] == "scheduled_job"
+        session = get_chat_session(live.session_id)
+        assert session is not None and session["kind"] == "scheduled_job"
         workspace = project_job_run_directory(
             Path(project["rootPath"]), req.job_id, req.firing_id,
         )
@@ -289,11 +287,8 @@ def test_start_scheduled_chat_run_returns_id_and_persists_columns(isolated_db, t
         assert persisted["triggerSource"] == "scheduled_job"
         assert persisted["scheduledJobId"] == req.job_id
         assert persisted["scheduledFiringId"] == req.firing_id
-        store_after = load_chat_store()
-        session_after = next(
-            item for item in store_after["sessions"] if item["id"] == live.session_id
-        )
-        assert session_after["kind"] == "scheduled_job"
+        session_after = get_chat_session(live.session_id)
+        assert session_after is not None and session_after["kind"] == "scheduled_job"
         manifest = scan_scheduled_run_outputs(workspace)
         assert [item["path"] for item in manifest["files"]] == ["outputs/weekly-report.md"]
         assert passed["session_workspace_dir"] == str(workspace)
@@ -320,10 +315,9 @@ def test_each_firing_creates_a_new_scheduled_session(isolated_db, tmp_path, monk
         right = await get_chat_background_run(second)
         assert left is not None and right is not None
         assert left.session_id != right.session_id
-        store = load_chat_store()
         kinds = {
             item["id"]: item["kind"]
-            for item in store["sessions"]
+            for item in list_chat_sessions()
             if item["id"] in {left.session_id, right.session_id}
         }
         assert kinds[left.session_id] == "scheduled_job"

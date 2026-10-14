@@ -10,7 +10,7 @@ from typing import Any, Callable
 from agentscope.message import UserMsg
 from agentscope.permission import PermissionMode
 
-from src.agents.runtime_types import AgentGuardrails, AgentModelOptions, RuntimeToolScope
+from src.agents.runtime_types import MAX_REACT_ITERS, AgentGuardrails, AgentModelOptions, RuntimeToolScope
 from src.config.runtime_settings import get_effective_model_settings
 from src.group_studio.approvals import create_pending_approval
 from src.group_studio.circuit import on_run_finished, progress_fingerprint
@@ -38,17 +38,17 @@ from src.group_studio.tools_worker import (
 from src.project_resources import resolve_project_resource_access
 from src.runtime_context import resolve_runtime_context
 from src.security.permissions import build_permission_profile
-from src.server.routes.chat.runtime import (
-    _build_runtime_knowledge_tools,
-    _build_runtime_mcp_servers,
+from src.runtime.agent_resources import (
+    build_runtime_knowledge_tools,
+    build_runtime_mcp_servers,
     scope_guardrails_to_project,
 )
-from src.server.routes.chat.runtime_builder import (
+from src.runtime.agent_spec import (
     RuntimeModelConfig,
     build_main_agent_runtime_spec,
     create_main_agent_from_spec,
 )
-from src.server.routes.chat.runtime_governance import (
+from src.runtime.governance import (
     append_user_note,
     build_actor_memory_prompt,
     build_context_governance_middlewares,
@@ -66,7 +66,7 @@ from src.storage.database import (
     update_group_studio_run_status,
 )
 
-WORKER_MAX_REACT_ITERS = 40
+WORKER_MAX_REACT_ITERS = MAX_REACT_ITERS
 WORKER_DENYLIST = {"AskUser"}
 WORKER_BASE_TOOLS = {
     "Read",
@@ -135,8 +135,8 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
         [str(item) for item in (agent_row.get("knowledgeTools") or [])],
     )
     cfg = SimpleNamespace(mcp_tools=mcp_ids, knowledge_tools=knowledge_ids)
-    mcp_servers = _build_runtime_mcp_servers(cfg, allowed_server_ids=access.mcp_server_ids)
-    knowledge_tools = _build_runtime_knowledge_tools(cfg, allowed_tool_ids=access.http_tool_ids)
+    mcp_servers = build_runtime_mcp_servers(cfg, allowed_server_ids=access.mcp_server_ids)
+    knowledge_tools = build_runtime_knowledge_tools(cfg, allowed_tool_ids=access.http_tool_ids)
     skill_ids = access.filter_ids("skill", [str(item) for item in (agent_row.get("skills") or [])])
     skill_paths = _skill_paths(skill_ids)
 
@@ -197,7 +197,7 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
         tool_name_allowlist=allowlist,
         tool_name_denylist=WORKER_DENYLIST,
         # 已读 Skill 正文保留 + 一级无模型整理 + 压缩可观测，与单 Agent 同一套。
-        middlewares=build_context_governance_middlewares(skill_context=True),
+        middlewares=build_context_governance_middlewares(skill_context=True, hard_stop=True),
         include_default_tools=True,
         workspace_dir=workspace,
         write_scope_dir=workspace,
@@ -586,7 +586,9 @@ async def _run_worker_turn(
     except Exception as exc:
         outcome = "failed"
         run_status = "failed"
-        error_text = str(exc)
+        from src.exception_detail import format_agent_exception
+
+        error_text = format_agent_exception(exc, prefix="群聊 Worker 执行失败")
         emit_envelope(
             group_id=group_id,
             event_type="GROUP_ERROR",

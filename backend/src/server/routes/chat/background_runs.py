@@ -60,6 +60,12 @@ _coordinator = BlockLifecycleCoordinator()
 _stream_service = ProjectionStreamService(store=_projection_store, coordinator=_coordinator)
 
 
+def _current_tenant_id() -> str:
+    from src.tenancy.context import current_tenant
+
+    return current_tenant().tenant_id
+
+
 @dataclass
 class ChatBackgroundRun:
     """进程内执行句柄；展示状态的唯一真相在 Projection Stream。"""
@@ -76,9 +82,7 @@ class ChatBackgroundRun:
     scheduled_job_id: str = ""
     scheduled_firing_id: str = ""
     status: str = "running"
-    trigger_source: str = "user"
-    scheduled_job_id: str = ""
-    scheduled_firing_id: str = ""
+    tenant_id: str = field(default_factory=_current_tenant_id)
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     completed_at: str | None = None
     event_count: int = 0
@@ -99,6 +103,15 @@ _runs: dict[str, ChatBackgroundRun] = {}
 _runs_lock = asyncio.Lock()
 
 
+def _owned_run(run_id: str) -> ChatBackgroundRun | None:
+    """内存里的 Run 必须属于当前租户，否则按不存在处理。"""
+
+    run = _runs.get(run_id)
+    if run is None or run.tenant_id != _current_tenant_id():
+        return None
+    return run
+
+
 def current_chat_background_run_id() -> str:
     return CURRENT_BACKGROUND_RUN_ID.get()
 
@@ -106,7 +119,7 @@ def current_chat_background_run_id() -> str:
 def has_live_chat_background_task(run_id: str) -> bool:
     """本进程 _runs 中仍有未结束 Task 的 Chat Run。热重载不得误杀。"""
 
-    run = _runs.get(run_id)
+    run = _owned_run(run_id)
     if run is None:
         return False
     task = run.async_task
@@ -123,7 +136,7 @@ def reconcile_interrupted_chat_runs() -> int:
         if not run_id or has_live_chat_background_task(run_id):
             continue
         update_chat_run_status(run_id, "failed", completed_at)
-        in_memory = _runs.get(run_id)
+        in_memory = _owned_run(run_id)
         if in_memory is not None and in_memory.status in ACTIVE_RUN_STATUSES:
             in_memory.status = "failed"
             in_memory.completed_at = completed_at
@@ -151,7 +164,7 @@ def _append_process_restart_message(record: dict) -> None:
 
 async def get_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
     async with _runs_lock:
-        run = _runs.get(run_id)
+        run = _owned_run(run_id)
     if run is not None:
         return run
     record = get_chat_run(run_id)
@@ -162,7 +175,7 @@ async def attach_chat_background_run_task(run_id: str, task: asyncio.Task) -> bo
     """把 HITL resume 等后续执行任务绑定回原 Run，供 cancel 精确中止。"""
 
     async with _runs_lock:
-        run = _runs.get(run_id)
+        run = _owned_run(run_id)
         if run is None or run.status in TERMINAL_RUN_STATUSES:
             task.cancel()
             return False
@@ -175,10 +188,12 @@ async def list_chat_background_runs(
     trigger_source: str | None = None,
 ) -> list[ChatBackgroundRun]:
     async with _runs_lock:
+        tenant_id = _current_tenant_id()
         by_id = {
             run.id: run
             for run in _runs.values()
-            if (not project_id or run.project_id == project_id)
+            if run.tenant_id == tenant_id
+            and (not project_id or run.project_id == project_id)
             and (not trigger_source or run.trigger_source == trigger_source)
         }
     for record in list_chat_runs(
@@ -209,8 +224,21 @@ async def start_chat_background_run(
 ) -> ChatBackgroundRun:
     """创建 Run、V3 stream 和根 message Block 后启动后台执行。"""
 
+    from src.tenancy.quota import QuotaExceeded, assert_active_runs
+
+    tenant_id = _current_tenant_id()
+    active = sum(
+        1 for run in _runs.values()
+        if run.tenant_id == tenant_id and run.status not in TERMINAL_RUN_STATUSES
+    )
+    try:
+        assert_active_runs(active)
+    except QuotaExceeded as exc:
+        raise exc.as_http() from None
+
     run = ChatBackgroundRun(
         id=f"run-{uuid.uuid4().hex}",
+        tenant_id=_current_tenant_id(),
         session_id=session_id,
         workspace_id=workspace_id,
         project_id=project_id,
@@ -269,7 +297,7 @@ async def subscribe_chat_background_run(
     """订阅唯一 V3 stream，并按 afterSeq 恢复。"""
     queue: asyncio.Queue[str | None] | None = None
     async with _runs_lock:
-        run = _runs.get(run_id)
+        run = _owned_run(run_id)
         if run is not None:
             queue = asyncio.Queue()
             run.subscribers.add(queue)
@@ -298,7 +326,7 @@ async def subscribe_chat_background_run(
     finally:
         if queue is not None:
             async with _runs_lock:
-                current = _runs.get(run_id)
+                current = _owned_run(run_id)
                 if current is not None:
                     current.subscribers.discard(queue)
 
@@ -313,7 +341,7 @@ def get_chat_projection_snapshot(run_id: str) -> dict:
 def take_run_steers(run_id: str) -> list[str]:
     """取出本轮用户补充，供下一轮推理消费。"""
 
-    run = _runs.get(run_id)
+    run = _owned_run(run_id)
     if run is None or not run.pending_steers:
         return []
     notes = [item for item in run.pending_steers if str(item).strip()]
@@ -334,7 +362,7 @@ async def steer_chat_background_run(
     if not text:
         raise ValueError("补充内容不能为空")
     async with _runs_lock:
-        run = _runs.get(run_id)
+        run = _owned_run(run_id)
     if run is None:
         raise KeyError(run_id)
     if run.status in TERMINAL_RUN_STATUSES:
@@ -356,9 +384,31 @@ async def steer_chat_background_run(
     return run
 
 
+def cancel_chat_runs_for_tenant(tenant_id: str) -> None:
+    """停用租户时取消该租户还在跑的内存 Run，并写回该租户的库。"""
+
+    from src.storage import database
+    from src.tenancy.context import TenantContext, use_tenant
+
+    now = datetime.now(timezone.utc).isoformat()
+    doomed = [
+        run for run in list(_runs.values())
+        if run.tenant_id == tenant_id and run.status not in TERMINAL_RUN_STATUSES
+    ]
+    with use_tenant(TenantContext.hosted(tenant_id)):
+        database.ensure_db()
+        for run in doomed:
+            run.status = "cancelled"
+            run.completed_at = now
+            task = run.async_task
+            if task is not None and not task.done():
+                task.cancel()
+            database.update_chat_run_status(run.id, "cancelled", now)
+
+
 async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
     async with _runs_lock:
-        run = _runs.get(run_id)
+        run = _owned_run(run_id)
     if run is None:
         return await get_chat_background_run(run_id)
     if run.status in TERMINAL_RUN_STATUSES:
@@ -376,7 +426,7 @@ async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
 
 async def mark_chat_background_run_status(run_id: str, status: str) -> ChatBackgroundRun | None:
     async with _runs_lock:
-        run = _runs.get(run_id)
+        run = _owned_run(run_id)
     if run is None or not can_transition_run_status(run.status, status):
         return run
     run.status = status
@@ -400,7 +450,7 @@ async def mark_chat_background_run_resuming(
 
 async def emit_chat_background_runtime_event(run_id: str, event: SourceEvent) -> bool:
     async with _runs_lock:
-        run = _runs.get(run_id)
+        run = _owned_run(run_id)
     if run is None:
         return False
     await _ingest_source_event(run, event)
@@ -433,9 +483,12 @@ async def relay_chat_background_run_events(
                 yield frame
         raise
     except Exception as exc:
-        for frame in await _ingest_source_event(run, _source_error_signal(str(exc))):
+        from src.exception_detail import format_agent_exception
+
+        message = format_agent_exception(exc, prefix="Agent 执行异常")
+        for frame in await _ingest_source_event(run, _source_error_signal(message)):
             yield frame
-        for frame in await _project_terminal(run, "failed", {"message": str(exc)}):
+        for frame in await _project_terminal(run, "failed", {"message": message}):
             yield frame
     finally:
         _finalize_run_persistence(run)
@@ -496,8 +549,11 @@ async def _consume_source_events(run: ChatBackgroundRun, factory: SourceStreamFa
             await _project_terminal(run, "cancelled", {})
         raise
     except Exception as exc:
-        await _ingest_source_event(run, _source_error_signal(str(exc)))
-        await _project_terminal(run, "failed", {"message": str(exc)})
+        from src.exception_detail import format_agent_exception
+
+        message = format_agent_exception(exc, prefix="Agent 执行异常")
+        await _ingest_source_event(run, _source_error_signal(message))
+        await _project_terminal(run, "failed", {"message": message})
     finally:
         _finalize_run_persistence(run)
         if run.status in TERMINAL_RUN_STATUSES:
@@ -715,6 +771,7 @@ def _persist_run(run: ChatBackgroundRun) -> None:
 def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
     return ChatBackgroundRun(
         id=record["id"],
+        tenant_id=_current_tenant_id(),
         model_metadata=record.get("modelConfig") or {},
         session_id=record["sessionId"],
         workspace_id=record.get("workspaceId", "default"),

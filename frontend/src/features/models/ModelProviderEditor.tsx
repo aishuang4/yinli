@@ -10,6 +10,7 @@ import {
   providerConnectionLabel,
   providerConnectionStatus,
 } from './modelCatalogUi';
+import { UpstreamModelImport } from './UpstreamModelImport';
 import type { ModelCatalog, ModelEntry, ModelProvider } from './useModelCatalog';
 
 const iconClass = 'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:opacity-40';
@@ -25,6 +26,7 @@ export function ModelProviderEditor({
   onChange,
   onRemove,
   onAddModel,
+  onImportUpstream,
   onToggleModel,
   onChangeModel,
   onRemoveModel,
@@ -39,6 +41,7 @@ export function ModelProviderEditor({
   onChange: (patch: Partial<ModelProvider>) => void;
   onRemove: () => void;
   onAddModel: () => void;
+  onImportUpstream: (names: string[]) => void;
   onToggleModel: (id: string) => void;
   onChangeModel: (id: string, patch: Partial<ModelEntry>) => void;
   onRemoveModel: (id: string) => void;
@@ -147,6 +150,7 @@ export function ModelProviderEditor({
                 ))}
               </div>
             )}
+            <UpstreamModelImport provider={provider} existing={models} onImport={onImportUpstream} />
           </div>
         </div>
       ) : null}

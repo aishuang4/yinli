@@ -75,21 +75,34 @@ def resolve_model_binding(
         and model_config_id
         and str(model_config_id).startswith("platform:")
     ):
-        from src.server.auth.key2api import Key2ApiError, binding_for_platform_model, key2api_configured
-        from src.server.auth.ownership import current_owner_id
+        from src.models.platform_layer import platform_binding
 
-        if key2api_configured():
-            owner = current_owner_id()
-            if not owner:
-                raise CatalogError("登录后才能使用平台模型")
-            try:
-                return binding_for_platform_model(str(model_config_id), owner)
-            except Key2ApiError as exc:
-                raise CatalogError(str(exc)) from None
+        return platform_binding(str(model_config_id))
     catalog = catalog or read_catalog()[0]
-    ident = model_config_id or catalog.default_model_id
+    ident = (model_config_id or catalog.default_model_id or "").strip()
     entries = {item.id: item for item in catalog.models}
     providers = {item.id: item for item in catalog.providers}
+    if not model_config_id and ident not in entries:
+        from src.tenancy.context import is_hosted_mode
+
+        if is_hosted_mode():
+            from src.models.platform_layer import list_platform_models, platform_binding
+
+            models = list_platform_models()
+            if models:
+                return platform_binding(str(models[0]["id"]))
+            raise CatalogError("没有可用模型，请添加自定义模型")
+    selected = entries.get(ident)
+    selected_provider = providers.get(selected.provider_id) if selected is not None else None
+    if (
+        catalog is not None
+        and selected is not None
+        and selected_provider is not None
+        and selected_provider.id == "yinli-platform"
+    ):
+        from src.models.platform_layer import platform_binding
+
+        return platform_binding(f"platform:{selected.model}")
     if ident not in entries:
         raise CatalogError("所选模型配置不存在，请到模型管理重新选择。")
     chain, seen = [], set()

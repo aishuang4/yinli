@@ -480,8 +480,6 @@ def test_delegation_manager_rejects_unknown_subagent() -> None:
 
 
 def test_delegation_manager_emits_started_and_completed_events(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     definition = SubagentDefinition(
         name="reviewer",
         description="Review code.",
@@ -565,8 +563,6 @@ def test_delegation_manager_emits_started_and_completed_events(tmp_path: Path, m
 
 
 def test_attached_fork_returns_before_child_finishes_and_barrier_requires_consumption(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     definition = SubagentDefinition(
         name="explorer", description="Explore code.", prompt="Explore.",
         scope="project", path=".agents/subagents/explorer.md",
@@ -624,8 +620,6 @@ def test_attached_fork_returns_before_child_finishes_and_barrier_requires_consum
 
 
 def test_multiple_attached_children_can_run_in_parallel(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     definition = SubagentDefinition(
         name="explorer", description="Explore code.", prompt="Explore.",
         scope="project", path=".agents/subagents/explorer.md",
@@ -679,8 +673,6 @@ def test_multiple_attached_children_can_run_in_parallel(tmp_path: Path, monkeypa
 def test_cancelling_attached_child_writes_consumable_result(tmp_path: Path, monkeypatch) -> None:
     """取消 child 不取消父 Run，但取消结果仍必须读取和消费。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     definition = SubagentDefinition(
         name="reviewer", description="Review code.", prompt="Review.",
         scope="project", path=".agents/subagents/reviewer.md",
@@ -743,8 +735,6 @@ def test_cancelling_attached_child_writes_consumable_result(tmp_path: Path, monk
 def test_delegation_manager_settles_setup_failure_as_readable_result(tmp_path: Path, monkeypatch) -> None:
     """准备阶段失败也生成 result.md，由父 Agent显式读取。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     definition = SubagentDefinition(
         name="reviewer", description="Review code.", prompt="Review.",
         scope="project", path=".agents/subagents/reviewer.md",
@@ -934,8 +924,6 @@ def test_subagent_runner_uses_restricted_finalization_after_max_iters(monkeypatc
 def test_subagent_transcript_is_ordered_by_invocation(tmp_path: Path, monkeypatch) -> None:
     """M3 transcript 必须以 invocation 内的稳定 seq 作为事实顺序。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     invocation = database.create_subagent_invocation({
         "run_id": "run-1", "session_id": "session-1", "parent_agent_id": "agent-1",
         "parent_agent_name": "Agent", "subagent_name": "reviewer", "status": "running", "task": "Review.",
@@ -957,8 +945,6 @@ def test_subagent_transcript_is_ordered_by_invocation(tmp_path: Path, monkeypatc
 
 
 def test_delegation_manager_marks_subagent_waiting_on_hitl(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     PENDING_INTERACTIONS.clear()
     PENDING_AGENTS.clear()
     definition = SubagentDefinition(
@@ -1061,8 +1047,6 @@ def test_delegation_manager_marks_subagent_waiting_on_hitl(tmp_path: Path, monke
 
 
 def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     PENDING_INTERACTIONS.clear()
     PENDING_AGENTS.clear()
     from src.subagents.task_store import SubagentTaskStore
@@ -1298,8 +1282,6 @@ def test_permission_mode_bypass_cannot_exceed_parent_read_only() -> None:
 
 
 def test_subagent_invocation_audit_create_update_and_list(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
 
     created = database.create_subagent_invocation(
         {
@@ -1341,8 +1323,6 @@ def test_delegate_task_schema_is_attached_fork_and_does_not_advertise_background
 def test_unrecognized_background_input_cannot_change_attached_semantics(tmp_path: Path, monkeypatch) -> None:
     """额外 background 字段不产生 detached 分支，任务仍是 attached。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     definition = SubagentDefinition(
         name="reviewer", description="Review code.", prompt="Review.",
         scope="project", path=".agents/subagents/reviewer.md",
@@ -1419,9 +1399,12 @@ def test_legacy_subagent_agent_columns_are_removed_on_db_startup(tmp_path: Path,
             """
         )
         conn.commit()
-    monkeypatch.setattr(database, "DB_PATH", db_path)
-    monkeypatch.setattr(database, "_initialized", False)
 
+    monkeypatch.setattr(
+        "src.config.settings.settings.database_url",
+        "sqlite+aiosqlite:///" + str(db_path),
+    )
+    database.forget_db(db_path)
     database.ensure_db()
     columns = {
         row[1]

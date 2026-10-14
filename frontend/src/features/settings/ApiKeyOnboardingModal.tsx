@@ -12,18 +12,23 @@ import { useAppStore } from '../../stores/appStore';
 
 const DISMISSED_STORAGE_KEY = 'agent-workstation.api-key-onboarding.dismissed.v1';
 
+function onboardingStorageKey(serveMode: string, userId: string): string {
+  const suffix = serveMode === 'hosted' ? (userId || 'anonymous') : 'local';
+  return `${DISMISSED_STORAGE_KEY}:${suffix}`;
+}
 
-function onboardingDismissed(): boolean {
+
+function onboardingDismissed(serveMode: string, userId: string): boolean {
   try {
-    return window.localStorage.getItem(DISMISSED_STORAGE_KEY) === 'true';
+    return window.localStorage.getItem(onboardingStorageKey(serveMode, userId)) === 'true';
   } catch {
     return false;
   }
 }
 
-function rememberOnboardingDismissed(): void {
+function rememberOnboardingDismissed(serveMode: string, userId: string): void {
   try {
-    window.localStorage.setItem(DISMISSED_STORAGE_KEY, 'true');
+    window.localStorage.setItem(onboardingStorageKey(serveMode, userId), 'true');
   } catch {
     // localStorage 不可用时仍允许用户关闭当前弹窗。
   }
@@ -35,6 +40,7 @@ export function ApiKeyOnboardingModal() {
   const setWorkspaceMode = useAppStore((state) => state.setWorkspaceMode);
   const serveMode = useAuthStore((state) => state.serveMode);
   const desktopConnected = useAuthStore((state) => state.desktopConnected);
+  const userId = useAuthStore((state) => state.user?.id ?? '');
   const authLoaded = useAuthStore((state) => state.loaded);
   const [providerName, setProviderName] = useState('模型供应商');
   const [open, setOpen] = useState(false);
@@ -44,7 +50,7 @@ export function ApiKeyOnboardingModal() {
       setOpen(false);
       return;
     }
-    if (!backendConnected || onboardingDismissed()) {
+    if (!backendConnected || onboardingDismissed(serveMode, userId)) {
       return;
     }
 
@@ -67,10 +73,10 @@ export function ApiKeyOnboardingModal() {
     return () => {
       active = false;
     };
-  }, [authLoaded, backendConnected, desktopConnected, serveMode]);
+  }, [authLoaded, backendConnected, desktopConnected, serveMode, userId]);
 
   const dismiss = () => {
-    rememberOnboardingDismissed();
+    rememberOnboardingDismissed(serveMode, userId);
     setOpen(false);
   };
 

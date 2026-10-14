@@ -15,10 +15,8 @@ from src.storage import database
 
 @pytest.fixture()
 def isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     yield
-    database._initialized = False
+    database.forget_db(database.db_path())
 
 
 def test_middleware_chain_shape() -> None:
@@ -29,11 +27,13 @@ def test_middleware_chain_shape() -> None:
         "TimelineRecallMiddleware",
         "ContextHygieneMiddleware",
         "ContextCompressionMiddleware",
+        "ToolLoopGuardMiddleware",
     ]
     assert without == [
         "TimelineRecallMiddleware",
         "ContextHygieneMiddleware",
         "ContextCompressionMiddleware",
+        "ToolLoopGuardMiddleware",
     ]
 
 
@@ -58,7 +58,7 @@ def test_observe_model_call_writes_context_usage_and_compression_traces(isolated
     def fake_record(**kwargs):
         recorded.append(kwargs)
 
-    monkeypatch.setattr(governance, "_record_run_event", fake_record)
+    monkeypatch.setattr("src.runtime.governance._record_run_event", fake_record)
     # record_context_compression_events 在 trace_recorder 内部用自己的 _record_run_event，这里也拦下来
     monkeypatch.setattr("src.server.routes.chat.trace_recorder._record_run_event", fake_record)
 
@@ -91,8 +91,8 @@ def test_memory_prompt_and_recall_split(monkeypatch) -> None:
     from src.server.routes.chat.memory_prompt_cache import invalidate_memory_prompts
 
     invalidate_memory_prompts()
-    monkeypatch.setattr(governance, "build_habit_prompt", lambda *args, **kwargs: "# Habits\n摘要")
-    monkeypatch.setattr(governance, "build_professional_prompt", lambda *args, **kwargs: "")
+    monkeypatch.setattr("src.runtime.governance.build_habit_prompt", lambda *args, **kwargs: "# Habits\n摘要")
+    monkeypatch.setattr("src.runtime.governance.build_professional_prompt", lambda *args, **kwargs: "")
     prompt, recall = governance.build_memory_prompt_and_recall(
         agent_id="a", agent_name="A", workspace_id="w", project_id="p",
         query_text="汇总销售表", freeze_session_id=None, exclude_session_id="s-1",

@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { AuthScreen, type AuthFormMode } from './AuthScreen';
 import { fetchAuthConfig, fetchCurrentUser, submitAuth } from './authClient';
-import { workbenchGate, type AuthUser } from './authRules';
+import { EMPTY_CLOUD_ACCOUNT, workbenchGate, type AuthUser } from './authRules';
 import { useAuthStore } from './authStore';
 
 export function HostedSessionGate({ children }: { children: ReactNode }) {
@@ -23,17 +23,19 @@ export function HostedSessionGate({ children }: { children: ReactNode }) {
     let cancelled = false;
     void (async () => {
       try {
-        const nextMode = await fetchAuthConfig();
-        const nextUser = nextMode === 'hosted' ? await fetchCurrentUser() : null;
-        let desktopConnected = false;
-        if (nextMode === 'desktop') {
-          const response = await fetch('/api/auth/desktop/session', { credentials: 'include' });
-          if (response.ok) {
-            const payload = await response.json();
-            desktopConnected = Boolean(payload.connected);
-          }
+        const config = await fetchAuthConfig();
+        const nextUser = config.serveMode === 'hosted' ? await fetchCurrentUser() : null;
+        let cloudAccount = EMPTY_CLOUD_ACCOUNT;
+        if (config.serveMode === 'desktop') {
+          const { fetchDesktopSession } = await import('./authClient');
+          cloudAccount = await fetchDesktopSession();
         }
-        if (!cancelled) setSession(nextMode, nextUser, desktopConnected);
+        if (!cancelled) {
+          setSession(config.serveMode, nextUser, cloudAccount.connected, {
+            capabilities: config.capabilities,
+            cloudAccount,
+          });
+        }
       } catch {
         if (!cancelled) setSession('desktop', null, false);
       }
@@ -73,8 +75,19 @@ export function HostedSessionGate({ children }: { children: ReactNode }) {
         return;
       }
       if (window.electronAPI && serviceUrl.trim()) {
-        await submitAuth('/api/auth/desktop/session', { baseUrl: serviceUrl.trim(), email, password });
-        setSession('desktop', null, true);
+        const logged = await submitAuth('/api/auth/desktop/session', {
+          baseUrl: serviceUrl.trim(),
+          email,
+          password,
+        }) as { connected?: boolean; email?: string; status?: string; baseUrl?: string };
+        setSession('desktop', null, Boolean(logged.connected), {
+          cloudAccount: {
+            connected: Boolean(logged.connected),
+            email: logged.email || email,
+            status: logged.status || 'active',
+            baseUrl: logged.baseUrl || serviceUrl.trim(),
+          },
+        });
         return;
       }
       const loggedIn = await submitAuth('/api/auth/login', { email, password, clientKind: 'web' }) as { user?: AuthUser };

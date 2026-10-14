@@ -44,7 +44,7 @@ from src.server.routes.chat.react_runtime import execute_react_runtime
 from src.server.routes.chat.run_context import ChatRunContext
 from src.server.routes.chat.run_context import build_chat_run_context
 from src.agents.factory import _safe_workspace_dir
-from src.agents.runtime_types import WORKSPACE_DIR
+from src.config.runtime_paths import default_project_root
 from src.storage.database import _normalize_guardrails
 from src.server.routes.chat.runtime_builder import (
     RuntimeModelConfig,
@@ -2512,11 +2512,11 @@ def test_chat_run_context_includes_memory_prompt(monkeypatch):
         lambda: SimpleNamespace(default_model="model", fallback_models=[]),
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.runtime_governance.build_habit_prompt",
+        "src.runtime.governance.build_habit_prompt",
         lambda *args, **kwargs: "# Habits\n记忆注入片段",
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.runtime_governance.build_professional_prompt",
+        "src.runtime.governance.build_professional_prompt",
         lambda *args, **kwargs: "",
     )
     monkeypatch.setattr(
@@ -2566,8 +2566,8 @@ def test_chat_run_context_keeps_history_out_of_system_prompt(monkeypatch):
         "src.server.routes.chat.run_context.get_effective_model_settings",
         lambda: SimpleNamespace(default_model="model", fallback_models=[]),
     )
-    monkeypatch.setattr("src.server.routes.chat.runtime_governance.build_habit_prompt", lambda *args, **kwargs: "")
-    monkeypatch.setattr("src.server.routes.chat.runtime_governance.build_professional_prompt", lambda *args, **kwargs: "")
+    monkeypatch.setattr("src.runtime.governance.build_habit_prompt", lambda *args, **kwargs: "")
+    monkeypatch.setattr("src.runtime.governance.build_professional_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr(
         "src.server.routes.chat.run_context.resolve_project_resource_access",
         lambda runtime_context: SimpleNamespace(
@@ -2669,7 +2669,7 @@ def test_create_main_agent_from_spec_delegates_to_factory(monkeypatch):
         return "agent-instance"
 
     monkeypatch.setattr(
-        "src.server.routes.chat.runtime_builder.get_or_create_agent",
+        "src.runtime.agent_spec.get_or_create_agent",
         fake_get_or_create_agent,
     )
     tool_scope = RuntimeToolScope(allow_mcp=False, allow_knowledge=False, allow_bash=True, allow_http=False)
@@ -2722,8 +2722,9 @@ def test_unified_permission_profile_maps_legacy_bypass_to_trusted_tools():
 def test_default_workspace_dir_is_project_root_not_user_home():
     """默认 LocalWorkspace 应收窄到项目根，避免 Glob/Grep 扫用户主目录。"""
 
-    assert WORKSPACE_DIR != str(Path.home())
-    assert Path(WORKSPACE_DIR).is_dir()
+    workspace = str(default_project_root())
+    assert workspace != str(Path.home())
+    assert Path(workspace).is_dir()
 
 
 def test_legacy_root_filesystem_scope_maps_to_project_workspace():
@@ -2731,7 +2732,7 @@ def test_legacy_root_filesystem_scope_maps_to_project_workspace():
 
     guardrails = AgentGuardrails(filesystem_scope="/")
 
-    assert _safe_workspace_dir(guardrails) == WORKSPACE_DIR
+    assert _safe_workspace_dir(guardrails) == str(default_project_root())
 
 
 def test_storage_normalizes_legacy_root_filesystem_scope():
@@ -2739,7 +2740,7 @@ def test_storage_normalizes_legacy_root_filesystem_scope():
 
     guardrails = _normalize_guardrails({"filesystem_scope": "/"})
 
-    assert guardrails["filesystem_scope"] == WORKSPACE_DIR
+    assert guardrails["filesystem_scope"] == str(default_project_root())
 
 
 def test_unified_permission_profile_denies_write_in_read_only():
@@ -3076,15 +3077,26 @@ def test_background_run_resume_relay_marks_original_run_completed(monkeypatch):
     assert all(block["phase"] == "closed" for block in persisted_snapshots[-1]["blocksById"].values())
 
 
-def test_final_snapshot_replaces_same_run_waiting_placeholder(monkeypatch):
+def test_final_snapshot_replaces_same_run_waiting_placeholder():
     """同一 Run 完成后，历史消息只能保留一棵最终 Block Tree。"""
 
+    from src.storage import database
+
     root_id = "message:run-resume-history"
-    waiting_message = SimpleNamespace(
-        id="waiting-placeholder",
-        role="assistant",
-        created_at="2026-07-23T00:00:01+00:00",
-        display_snapshot={
+    database.insert_chat_session_if_absent({
+        "id": "session-resume-history",
+        "title": "恢复",
+        "agent_id": "default",
+        "agent_name": "助手",
+        "created_at": "2026-07-23T00:00:00+00:00",
+        "updated_at": "2026-07-23T00:00:00+00:00",
+    })
+    database.append_chat_message("session-resume-history", {
+        "id": "waiting-placeholder",
+        "role": "assistant",
+        "content": "",
+        "created_at": "2026-07-23T00:00:01+00:00",
+        "displaySnapshot": {
             "version": 4,
             "lastSeq": 4,
             "streamDone": False,
@@ -3093,27 +3105,13 @@ def test_final_snapshot_replaces_same_run_waiting_placeholder(monkeypatch):
                 root_id: {"id": root_id, "kind": "message", "phase": "open", "data": {}},
             },
         },
-    )
-    final_message = SimpleNamespace(
-        id="final-answer",
-        role="assistant",
-        created_at="2026-07-23T00:00:02+00:00",
-        display_snapshot={
-            "version": 4,
-            "lastSeq": 0,
-            "streamDone": False,
-            "order": [],
-            "blocksById": {},
-        },
-    )
-    session = SimpleNamespace(id="session-resume-history", message_count=2)
-    store = SimpleNamespace(
-        messages={"session-resume-history": [waiting_message, final_message]},
-        sessions=[session],
-    )
-    saved: list[object] = []
-    monkeypatch.setattr(chat_store_module, "_load_store", lambda: store)
-    monkeypatch.setattr(chat_store_module, "_save_store", lambda value: saved.append(value))
+    })
+    database.append_chat_message("session-resume-history", {
+        "id": "final-answer",
+        "role": "assistant",
+        "content": "完成",
+        "created_at": "2026-07-23T00:00:02+00:00",
+    })
     final_snapshot = {
         "version": 4,
         "lastSeq": 8,
@@ -3130,10 +3128,10 @@ def test_final_snapshot_replaces_same_run_waiting_placeholder(monkeypatch):
         min_created_at="2026-07-23T00:00:00+00:00",
     )
 
-    assert saved == [store]
-    assert store.messages["session-resume-history"] == [final_message]
-    assert final_message.display_snapshot == final_snapshot
-    assert session.message_count == 1
+    messages = database.list_chat_messages("session-resume-history")
+    assert [item["id"] for item in messages] == ["final-answer"]
+    assert messages[0]["displaySnapshot"] == final_snapshot
+    assert database.get_chat_session("session-resume-history")["message_count"] == 1
 
 
 def test_background_run_resume_relay_preserves_failed_terminal_status():

@@ -7,8 +7,9 @@ import type { SelectableModel } from './ModelSelector';
 export function useProvidedModels(): { models: SelectableModel[]; loggedIn: boolean; source: string } {
   const serveMode = useAuthStore((state) => state.serveMode);
   const user = useAuthStore((state) => state.user);
-  const desktopConnected = useAuthStore((state) => state.desktopConnected);
-  const loggedIn = serveMode === 'hosted' ? Boolean(user) : desktopConnected;
+  const cloudAccount = useAuthStore((state) => state.cloudAccount);
+  const userId = user?.id ?? '';
+  const loggedIn = serveMode === 'hosted' ? Boolean(user) : cloudAccount.connected;
   const [models, setModels] = useState<SelectableModel[]>([]);
   const [source, setSource] = useState('');
 
@@ -36,7 +37,7 @@ export function useProvidedModels(): { models: SelectableModel[]; loggedIn: bool
     return () => {
       cancelled = true;
     };
-  }, [loggedIn]);
+  }, [loggedIn, userId, cloudAccount.connected]);
 
   return { models, loggedIn, source };
 }

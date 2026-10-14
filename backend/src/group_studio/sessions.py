@@ -75,6 +75,15 @@ def cancel_run_task(group_id: str) -> None:
         task.cancel()
 
 
+def cancel_group(group_id: str) -> None:
+    """停用租户时取消该群的 worker 任务和未结束 session。"""
+
+    cancel_run_task(group_id)
+    for session in list(_SESSIONS.values()):
+        if session.group_id == group_id:
+            cancel_session(group_id, session.member_id, session.run_id)
+
+
 def mark_interrupt(group_id: str, source: str) -> None:
     _INTERRUPTS[group_id] = source
 

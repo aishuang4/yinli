@@ -17,8 +17,6 @@ from src.tools.memory_nodes import MemoryNodeQuery, MemoryNodeTree
 def isolated_db(tmp_path, monkeypatch):
     """使用临时 SQLite，避免污染开发库。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
 
 
 def test_memory_node_tree_tool_returns_node_tree(isolated_db):

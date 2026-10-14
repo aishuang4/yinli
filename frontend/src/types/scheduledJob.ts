@@ -3,7 +3,8 @@
 export const SCHEDULER_DISABLED_DETAIL = '调度未启用';
 
 export type JobStatus = 'pending_confirmation' | 'active' | 'paused' | 'archived' | 'completed';
-export type ScheduleKind = 'weekly' | 'once';
+export type ScheduleKind = 'weekly' | 'daily' | 'once';
+export type JobExecutor = 'agent' | 'script';
 export type MissedPolicy = 'catch_up_once' | 'mark_missed' | 'skip_silent';
 export type FailurePolicy = 'notify_keep_schedule' | 'pause_job';
 export type DeliveryPolicy = 'none' | 'notify' | 'confirm_then_send' | 'auto_send';
@@ -35,7 +36,11 @@ export interface OnceScheduleExpr {
   at: string;
 }
 
-export type JobScheduleExpr = WeeklyScheduleExpr | OnceScheduleExpr | Record<string, unknown>;
+export interface DailyScheduleExpr {
+  at: string;
+}
+
+export type JobScheduleExpr = WeeklyScheduleExpr | DailyScheduleExpr | OnceScheduleExpr | Record<string, unknown>;
 
 export interface JobCapabilityClaim {
   capabilityId: string;
@@ -81,7 +86,8 @@ export interface ScheduledJob {
   status: JobStatus;
   pauseReason: string;
   agentId: string;
-  mode: 'agent';
+  modelConfigId: string;
+  mode: JobExecutor;
   scheduleKind: ScheduleKind;
   scheduleExpr: JobScheduleExpr;
   timezone: string;

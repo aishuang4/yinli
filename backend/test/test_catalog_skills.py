@@ -11,9 +11,10 @@ from src.storage import database
 
 
 def test_register_user_skill_does_not_persist_body(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("src.config.runtime_paths.SKILL_PACKAGES_ROOT", tmp_path / "skills")
-    monkeypatch.setattr("src.server.routes.skill_packages.SKILL_PACKAGES_DIR", str(tmp_path / "skills"))
-    monkeypatch.setattr("src.server.routes.skills.SKILL_PACKAGES_DIR", str(tmp_path / "skills"))
+    packages = tmp_path / "skills"
+    monkeypatch.setattr("src.server.routes.skill_packages.skill_packages_root", lambda: packages)
+    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: packages)
+    monkeypatch.setattr("src.catalog.skills.skill_packages_root", lambda: packages)
     skill = register_user_skill(SkillRegisterRequest(
         name="unique-file-skill-xyz",
         description="文件权威",

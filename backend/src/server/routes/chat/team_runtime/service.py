@@ -155,7 +155,9 @@ class TeamRunService:
                 await self.flush_events()
             raise
         except Exception as exc:
-            reason = f"Team Runtime 执行失败: {exc}"
+            from src.exception_detail import format_agent_exception
+
+            reason = format_agent_exception(exc, prefix="Team Runtime 执行失败")
             if self.store is not None:
                 self.store.fail_run(reason)
                 await self.flush_events()

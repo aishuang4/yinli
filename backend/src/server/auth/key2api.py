@@ -144,29 +144,6 @@ def binding_for_platform_model(model_config_id: str, user_id: str) -> RuntimeMod
     return resolve_model_binding(model_config_id, catalog=catalog)
 
 
-async def complete_with_platform_key(model_config_id: str, text: str, user_id: str) -> str:
-    """桌面端网关用该用户的 Key 完成一轮补全。"""
-
-    if not model_config_id.startswith(PLATFORM_PREFIX):
-        raise Key2ApiError("不是平台模型", status=422)
-    record = _active_key(user_id)
-    response = _request(
-        "POST",
-        "/v1/chat/completions",
-        token=record["token"],
-        json={
-            "model": model_config_id[len(PLATFORM_PREFIX):],
-            "messages": [{"role": "user", "content": text or ""}],
-        },
-    )
-    payload = response.json()
-    choices = payload.get("choices") or []
-    if not choices:
-        return ""
-    message = choices[0].get("message") or {}
-    return str(message.get("content") or "")
-
-
 def _active_key(user_id: str) -> dict[str, Any]:
     record = auth_records.get_provider_key(user_id)
     if record is None or record["status"] != "active" or not record["token"]:

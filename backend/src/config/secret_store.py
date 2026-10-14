@@ -19,13 +19,18 @@ import time
 from pathlib import Path
 from threading import RLock
 
-from src.config.runtime_paths import DATA_ROOT
+from src.config.runtime_paths import data_root
 
 
 SERVICE_NAME = "agent-workstation-desktop.model-credentials.v1"
-SECRET_DIR = DATA_ROOT / "secrets"
-_cache: dict[str, str] = {}
-_memory_secrets: dict[str, str] = {}
+
+
+def secret_dir() -> Path:
+    return data_root() / "secrets"
+
+
+_cache: dict[tuple[str, str], str] = {}
+_memory_secrets: dict[tuple[str, str], str] = {}
 _lock = RLock()
 
 
@@ -34,6 +39,11 @@ class SecretStoreError(RuntimeError):
 
 
 def _backend_name() -> str:
+    from src.tenancy.context import is_hosted_mode
+
+    # 托管忽略 SECRET_STORE，固定加密文件，避免测试或环境变量把 Key 落成明文。
+    if is_hosted_mode():
+        return "tenant_encrypted"
     configured = os.getenv("AGENT_WORKSTATION_SECRET_STORE", "").strip().lower()
     if configured:
         return configured
@@ -55,15 +65,21 @@ def _account(provider_id: str) -> str:
     return f"model-provider:{provider_id}"
 
 
+def _cache_key(account: str) -> tuple[str, str]:
+    from src.tenancy.context import current_tenant
+
+    return (current_tenant().tenant_id, account)
+
+
 def get_model_api_key(provider_id: str) -> str:
     """读取供应商 API Key。"""
 
     account = _account(provider_id)
     with _lock:
-        if account in _cache:
-            return _cache[account]
+        if _cache_key(account) in _cache:
+            return _cache[_cache_key(account)]
         secret = _read_secret(account)
-        _cache[account] = secret
+        _cache[_cache_key(account)] = secret
         return secret
 
 
@@ -79,7 +95,7 @@ def set_model_api_key(provider_id: str, value: str) -> None:
     account = _account(provider_id)
     with _lock:
         _write_secret(account, secret)
-        _cache[account] = secret
+        _cache[_cache_key(account)] = secret
 
 
 def delete_model_api_key(provider_id: str) -> None:
@@ -88,7 +104,7 @@ def delete_model_api_key(provider_id: str) -> None:
     account = _account(provider_id)
     with _lock:
         _delete_secret(account)
-        _cache[account] = ""
+        _cache[_cache_key(account)] = ""
 
 
 _CATALOG_REF_RE = re.compile(r"^secret:[A-Za-z0-9:._-]{1,180}$")
@@ -105,13 +121,15 @@ def get_named_secret(ref: str) -> str:
 
     account = _catalog_account(ref)
     with _lock:
-        if account in _cache:
-            return _cache[account]
+        if _cache_key(account) in _cache:
+            return _cache[_cache_key(account)]
         try:
             secret = _read_secret(account)
         except SecretStoreError:
+            if _backend_name() == "tenant_encrypted":
+                raise
             secret = _read_catalog_file_secret(account)
-        _cache[account] = secret
+        _cache[_cache_key(account)] = secret
         return secret
 
 
@@ -129,8 +147,10 @@ def set_named_secret(ref: str, value: str) -> None:
         try:
             _write_secret(account, secret)
         except SecretStoreError:
+            if _backend_name() == "tenant_encrypted":
+                raise
             _write_catalog_file_secret(account, secret)
-        _cache[account] = secret
+        _cache[_cache_key(account)] = secret
 
 
 def delete_named_secret(ref: str) -> None:
@@ -143,12 +163,12 @@ def delete_named_secret(ref: str) -> None:
         except SecretStoreError:
             pass
         _delete_catalog_file_secret(account)
-        _cache[account] = ""
+        _cache[_cache_key(account)] = ""
 
 
 def _catalog_file_path(account: str) -> Path:
     digest = hashlib.sha256(account.encode("utf-8")).hexdigest()
-    return SECRET_DIR / "catalog" / digest
+    return secret_dir() / "catalog" / digest
 
 
 def _read_catalog_file_secret(account: str) -> str:
@@ -170,10 +190,79 @@ def _delete_catalog_file_secret(account: str) -> None:
         path.unlink()
 
 
+def assert_hosted_secret_key() -> None:
+    """托管启动时必须有可用的 Fernet 主密钥。"""
+
+    from src.config.settings import HostedConfigError
+    from src.tenancy.context import is_hosted_mode
+
+    if not is_hosted_mode():
+        return
+    try:
+        _fernet()
+    except SecretStoreError as exc:
+        raise HostedConfigError(str(exc)) from exc
+
+
+def _fernet():
+    from cryptography.fernet import Fernet
+
+    raw = os.getenv("AGENT_WORKSTATION_SECRET_KEY", "").strip()
+    if not raw:
+        raise SecretStoreError("托管模式必须配置 AGENT_WORKSTATION_SECRET_KEY")
+    try:
+        return Fernet(raw.encode("utf-8"))
+    except (ValueError, TypeError) as exc:
+        raise SecretStoreError("AGENT_WORKSTATION_SECRET_KEY 不是有效的 Fernet 密钥") from exc
+
+
+def _encrypted_path(account: str) -> Path:
+    digest = hashlib.sha256(account.encode("utf-8")).hexdigest()
+    return secret_dir() / f"{digest}.enc"
+
+
+def _tenant_encrypted_read(account: str) -> str:
+    path = _encrypted_path(account)
+    if not path.is_file():
+        return ""
+    from cryptography.fernet import InvalidToken
+
+    try:
+        return _fernet().decrypt(path.read_bytes()).decode("utf-8")
+    except (OSError, UnicodeError, InvalidToken) as exc:
+        raise SecretStoreError("无法解密租户密钥。") from exc
+
+
+def _tenant_encrypted_write(account: str, value: str) -> None:
+    path = _encrypted_path(account)
+    payload = _fernet().encrypt(value.encode("utf-8"))
+    temporary = path.with_suffix(".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_bytes(payload)
+        temporary.chmod(0o600)
+        temporary.replace(path)
+        path.chmod(0o600)
+    except OSError as exc:
+        raise SecretStoreError("无法写入租户密钥文件。") from exc
+    finally:
+        if temporary.exists():
+            temporary.unlink(missing_ok=True)
+
+
+def _tenant_encrypted_delete(account: str) -> None:
+    try:
+        _encrypted_path(account).unlink(missing_ok=True)
+    except OSError as exc:
+        raise SecretStoreError("无法删除租户密钥文件。") from exc
+
+
 def _read_secret(account: str) -> str:
     backend = _backend_name()
+    if backend == "tenant_encrypted":
+        return _tenant_encrypted_read(account)
     if backend == "memory":
-        return _memory_secrets.get(account, "")
+        return _memory_secrets.get(_cache_key(account), "")
     if backend == "keychain":
         return _keychain_read(account)
     if backend == "dpapi":
@@ -183,8 +272,11 @@ def _read_secret(account: str) -> str:
 
 def _write_secret(account: str, value: str) -> None:
     backend = _backend_name()
+    if backend == "tenant_encrypted":
+        _tenant_encrypted_write(account, value)
+        return
     if backend == "memory":
-        _memory_secrets[account] = value
+        _memory_secrets[_cache_key(account)] = value
         return
     if backend == "keychain":
         _keychain_write(account, value)
@@ -197,8 +289,11 @@ def _write_secret(account: str, value: str) -> None:
 
 def _delete_secret(account: str) -> None:
     backend = _backend_name()
+    if backend == "tenant_encrypted":
+        _tenant_encrypted_delete(account)
+        return
     if backend == "memory":
-        _memory_secrets.pop(account, None)
+        _memory_secrets.pop(_cache_key(account), None)
         return
     if backend == "keychain":
         _keychain_delete(account)
@@ -339,7 +434,7 @@ def _to_blob(value: bytes) -> tuple[_DataBlob, ctypes.Array]:
 
 def _dpapi_path(account: str) -> Path:
     digest = hashlib.sha256(account.encode("utf-8")).hexdigest()
-    return SECRET_DIR / f"{digest}.dpapi"
+    return secret_dir() / f"{digest}.dpapi"
 
 
 def _windows_crypto_apis():

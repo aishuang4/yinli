@@ -7,24 +7,27 @@ surface can stay stable while persistence moves off flat files.
 """
 
 import json
+import logging
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
+
+from pydantic import BaseModel
 from typing import Any
 
+from src.config import runtime_paths
 from src.config.runtime_paths import (
-    DATA_ROOT,
-    DEFAULT_PROJECT_ROOT,
     INSTALL_BACKEND_ROOT,
-    USING_CUSTOM_DATA_ROOT,
     USER_DATA_ROOT,
-    ensure_runtime_directories,
+    data_root,
+    default_project_root,
+    ensure_tenant_directories,
 )
 from src.config.settings import settings
 from src.storage.chat_run_records import ChatRunRecordStore
 from src.storage.chat_session_records import ChatSessionRecordStore
-from src.storage.auth_schema import AUTH_SCHEMA_SQL
 from src.storage.database_schema import BASE_SCHEMA_SQL
 from src.storage.scheduled_job_records import ScheduledJobRecordStore
 from src.storage.agent_defaults import (
@@ -45,11 +48,10 @@ from src.storage.group_studio_records import GroupStudioRecordStore
 from src.storage.workflow_records import WorkflowRecordStore
 from src.storage.workspace_project_records import WorkspaceProjectRecordStore
 
+logger = logging.getLogger(__name__)
 
-_lock = RLock()
-_initialized = False
+
 BACKEND_ROOT = INSTALL_BACKEND_ROOT
-PROJECT_ROOT = DEFAULT_PROJECT_ROOT
 DEFAULT_WORKSPACE_ID = "default"
 DEFAULT_PROJECT_ID = "default"
 PROJECT_RESOURCE_TYPES = ("agent", "skill", "mcp", "http_tool")
@@ -61,18 +63,21 @@ _PROJECT_RESOURCE_TABLES = {
 }
 _RESOURCE_BINDING_MIGRATION_KEY = "project_resource_bindings_v1"
 
-DEFAULT_GUARDRAILS = {
-    "filesystem_scope": str(PROJECT_ROOT),
-    "shell_blacklist": ["rm -rf /", "sudo"],
-    "network_enabled": True,
-    "human_approval": False,
-    "tool_permission_mode": "accept_edits",
-    "tool_permission_profile": "confirm_destructive",
-    "execution_backend": "local",
-    "docker_image": "python:3.11-slim",
-    "persistent_sandbox": False,
-    "timeout_seconds": 300,
-}
+def default_guardrails() -> dict[str, Any]:
+    """当前租户的默认 guardrails；filesystem_scope 指向当前默认 Project 根。"""
+
+    return {
+        "filesystem_scope": str(default_project_root()),
+        "shell_blacklist": ["rm -rf /", "sudo"],
+        "network_enabled": True,
+        "human_approval": False,
+        "tool_permission_mode": "accept_edits",
+        "tool_permission_profile": "confirm_destructive",
+        "execution_backend": "local",
+        "docker_image": "python:3.11-slim",
+        "persistent_sandbox": False,
+        "timeout_seconds": 300,
+    }
 
 
 def _normalize_guardrails(data: dict[str, Any]) -> dict[str, Any]:
@@ -80,8 +85,8 @@ def _normalize_guardrails(data: dict[str, Any]) -> dict[str, Any]:
 
     return normalize_guardrails(
         data,
-        defaults=DEFAULT_GUARDRAILS,
-        project_root=PROJECT_ROOT,
+        defaults=default_guardrails(),
+        project_root=str(default_project_root()),
     )
 
 DEFAULT_PLAN_CONFIG = {
@@ -99,7 +104,7 @@ DEFAULT_MODEL_CONFIG = {
     "temperature": 0.7,
     "topP": 0.8,
     "maxTokens": 4096,
-    "maxReactIters": 40,
+    "maxReactIters": 128,
 }
 EMPTY_DISPLAY_SNAPSHOT = {
     "version": 4,
@@ -114,14 +119,32 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _db_path() -> Path:
+# ---- 按库文件路径维护的连接、锁与初始化状态（§5.1）----
+
+_state_lock = RLock()
+_initialized_paths: set[Path] = set()
+_path_locks: dict[Path, RLock] = {}
+
+
+def db_path() -> Path:
+    """当前租户的库文件路径；hosted 忽略 database_url，固定在租户目录内。"""
+
+    from src.tenancy.context import current_tenant
+
+    ctx = current_tenant()
+    if ctx.kind == "hosted":
+        return ctx.data_root / "data" / "agent_workstation.db"
+    return _local_db_path()
+
+
+def _local_db_path() -> Path:
     url = settings.database_url
     prefix = "sqlite+aiosqlite:///"
     if url.startswith(prefix):
         return _resolve_sqlite_path(url[len(prefix):])
     if url.startswith("sqlite:///"):
         return _resolve_sqlite_path(url[len("sqlite:///"):])
-    return DATA_ROOT / "agent_workstation.db"
+    return data_root() / "agent_workstation.db"
 
 
 def _resolve_sqlite_path(value: str) -> Path:
@@ -133,15 +156,67 @@ def _resolve_sqlite_path(value: str) -> Path:
     return USER_DATA_ROOT / path
 
 
-DB_PATH = _db_path()
+def _lock_for(path: Path) -> RLock:
+    with _state_lock:
+        lock = _path_locks.get(path)
+        if lock is None:
+            lock = _path_locks[path] = RLock()
+        return lock
+
+
+class _TenantLockProxy:
+    """兼容 `with database._lock:` 的旧写法：进入时按当前租户解析到对应路径的 RLock。
+
+    同一个 proxy 可能被多线程同时进入，锁对象放在 threading.local 的栈里，
+    保证 __exit__ 释放的是本线程 __enter__ 取到的那一把。
+    """
+
+    def __init__(self) -> None:
+        self._local = threading.local()
+
+    def __enter__(self) -> RLock:
+        stack = getattr(self._local, "stack", None)
+        if stack is None:
+            stack = self._local.stack = []
+        lock = _lock_for(db_path())
+        stack.append(lock)
+        lock.acquire()
+        return lock
+
+    def __exit__(self, *exc) -> bool:
+        lock = self._local.stack.pop()
+        lock.release()
+        return False
+
+
+_lock = _TenantLockProxy()
 
 
 def _connect() -> sqlite3.Connection:
-    ensure_runtime_directories()
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    ensure_tenant_directories()
+    path = db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def forget_db(path: Path) -> None:
+    """删除租户或测试 teardown 时，丢弃该库的初始化状态与锁。"""
+
+    with _state_lock:
+        _initialized_paths.discard(path)
+        _path_locks.pop(path, None)
+
+
+def forget_all() -> None:
+    """测试 teardown：清空全部初始化状态与锁。"""
+
+    with _state_lock:
+        _initialized_paths.clear()
+        _path_locks.clear()
 
 
 def _ensure_column(
@@ -233,13 +308,13 @@ def _migrate_project_resource_bindings(conn: sqlite3.Connection, *, now: str) ->
 
 
 def ensure_db() -> None:
-    """Create SQLite tables once, safe to call from import-time route loaders."""
-    global _initialized
-    if _initialized:
+    """Create SQLite tables once per tenant database, safe to call from import-time route loaders."""
+    path = db_path()
+    if path in _initialized_paths:
         return
 
-    with _lock:
-        if _initialized:
+    with _lock_for(path):
+        if path in _initialized_paths:
             return
         with _connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
@@ -254,7 +329,6 @@ def ensure_db() -> None:
                 )
             """)
             conn.executescript(BASE_SCHEMA_SQL)
-            conn.executescript(AUTH_SCHEMA_SQL)
             conn.execute("DROP INDEX IF EXISTS idx_group_studios_active_chat")
             conn.execute(
                 """
@@ -373,16 +447,19 @@ def ensure_db() -> None:
             _ensure_column(conn, "chat_runs", "scheduled_job_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_runs", "scheduled_firing_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "chat_sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'")
+            _ensure_column(conn, "chat_messages", "files", "TEXT NOT NULL DEFAULT '[]'")
+            _ensure_column(conn, "chat_messages", "clarification_requests", "TEXT NOT NULL DEFAULT '[]'")
+            _ensure_column(conn, "chat_messages", "clarification_resolved", "INTEGER NOT NULL DEFAULT 0")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chat_messages_session_order "
+                "ON chat_messages(session_id, sort_order)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chat_sessions_project_kind "
+                "ON chat_sessions(project_id, kind, updated_at DESC)"
+            )
             _ensure_column(conn, "scheduled_jobs", "model_config_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_studios", "model_config_id", "TEXT NOT NULL DEFAULT ''")
-            for owned_table in (
-                "workspaces",
-                "projects",
-                "chat_sessions",
-                "group_studios",
-                "scheduled_jobs",
-            ):
-                _ensure_column(conn, owned_table, "owner_user_id", "TEXT")
             _ensure_column(conn, "group_work_items", "review_status", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "review_note", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "rework_count", "INTEGER NOT NULL DEFAULT 0")
@@ -403,7 +480,7 @@ def ensure_db() -> None:
                     now,
                 ),
             )
-            if USING_CUSTOM_DATA_ROOT:
+            if runtime_paths.USING_CUSTOM_DATA_ROOT:
                 default_project = conn.execute(
                     "SELECT root_path FROM projects WHERE id = ?",
                     (DEFAULT_PROJECT_ID,),
@@ -412,7 +489,7 @@ def ensure_db() -> None:
                 if _is_stale_desktop_default_project_path(current_root):
                     conn.execute(
                         "UPDATE projects SET root_path = ?, updated_at = ? WHERE id = ?",
-                        (str(PROJECT_ROOT), now, DEFAULT_PROJECT_ID),
+                        (str(default_project_root()), now, DEFAULT_PROJECT_ID),
                     )
             conn.execute(
                 """
@@ -426,7 +503,7 @@ def ensure_db() -> None:
                     DEFAULT_WORKSPACE_ID,
                     "默认项目",
                     "历史会话和未显式选择项目的运行所在项目。",
-                    str(PROJECT_ROOT),
+                    str(default_project_root()),
                     now,
                     now,
                 ),
@@ -467,11 +544,26 @@ def ensure_db() -> None:
                     ON trace_observations(project_id, started_at DESC);
             """)
             conn.commit()
-            _initialized = True
+            _initialized_paths.add(path)
+            from src.tenancy.context import current_tenant
+
+            if not current_tenant().is_hosted:
+                violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+                if violations:
+                    logger.warning("本地库外键检查发现 %s 行不一致", len(violations))
+    import_legacy_chat_store_once()
+
+
+def _json_default(value: Any) -> Any:
+    """Pydantic 模型写成字段字典。其余类型仍退回 str，避免整段 JSON 写失败。"""
+
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json", by_alias=True)
+    return str(value)
 
 
 def _dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, default=str)
+    return json.dumps(value, ensure_ascii=False, default=_json_default)
 
 
 def _loads(value: str | None, default: Any) -> Any:
@@ -532,7 +624,7 @@ def _workspace_project_record_store() -> WorkspaceProjectRecordStore:
         bind_workspace_resources=_bind_workspace_resources,
         resource_tables=_PROJECT_RESOURCE_TABLES,
         default_workspace_id=DEFAULT_WORKSPACE_ID,
-        project_root=PROJECT_ROOT,
+        project_root=default_project_root(),
     )
 
 
@@ -630,10 +722,10 @@ def upsert_project_resource_binding(data: dict[str, Any]) -> dict[str, Any]:
     return _workspace_project_record_store().upsert_resource_binding(data)
 
 
-def get_chat_session_ownership(session_id: str) -> dict[str, str] | None:
-    """读取 Session 的 Workspace / Project 归属。"""
+def get_chat_session_location(session_id: str) -> dict[str, str] | None:
+    """读取 Session 所在的 Workspace 和 Project。"""
 
-    return _chat_session_record_store().get_ownership(session_id)
+    return _chat_session_record_store().get_location(session_id)
 
 
 def _json_document_store() -> JsonDocumentStore:
@@ -709,7 +801,7 @@ def _resource_catalog_record_store() -> ResourceCatalogRecordStore:
         normalize_guardrails=_normalize_guardrails,
         default_model_config=DEFAULT_MODEL_CONFIG,
         default_plan_config=DEFAULT_PLAN_CONFIG,
-        default_guardrails=DEFAULT_GUARDRAILS,
+        default_guardrails=default_guardrails(),
         default_workspace_id=DEFAULT_WORKSPACE_ID,
     )
 
@@ -876,8 +968,8 @@ def list_memory_markdown_candidates(
     return _memory_markdown_candidate_store().list(status=status, scope=scope, project_id=project_id, limit=limit)
 
 
-def count_pending_memory_markdown_candidates() -> int:
-    return _memory_markdown_candidate_store().count_pending()
+def count_pending_memory_markdown_candidates(*, project_id: str | None = None) -> int:
+    return _memory_markdown_candidate_store().count_pending(project_id=project_id)
 
 
 def set_memory_markdown_candidate_status(record_id: str, *, status: str, resolution: str = "") -> dict[str, Any] | None:
@@ -937,16 +1029,64 @@ def _chat_session_record_store() -> ChatSessionRecordStore:
     )
 
 
-def load_chat_store() -> dict[str, Any]:
-    """读取全部聊天会话和消息。"""
+def import_legacy_chat_store_once() -> None:
+    """把旧 chat_sessions.json 或 json_store 遗留记录导入一次。库里已有会话则只打标记。"""
 
-    return _chat_session_record_store().load_store()
+    from src.config.runtime_paths import data_root
+
+    migrate_json_object_file("chat_store", "default", data_root() / "chat_sessions.json")
+    if get_json_record("schema_migrations", "chat_store_incremental_v1"):
+        return
+    with _lock, _connect() as conn:
+        existing = int(conn.execute("SELECT COUNT(*) AS n FROM chat_sessions").fetchone()["n"])
+    if existing == 0:
+        legacy = get_json_record("chat_store", "default") or {}
+        for item in legacy.get("sessions") or []:
+            if isinstance(item, dict) and item.get("id"):
+                insert_chat_session_if_absent(item)
+        messages = legacy.get("messages") or {}
+        if isinstance(messages, dict):
+            for session_id, items in messages.items():
+                for item in items or []:
+                    if isinstance(item, dict) and item.get("id"):
+                        append_chat_message(str(session_id), item)
+    upsert_json_record("schema_migrations", "chat_store_incremental_v1", {"done": True})
 
 
-def save_chat_store(data: dict[str, Any]) -> None:
-    """整份覆盖聊天会话和消息。"""
+def get_chat_session(session_id: str) -> dict[str, Any] | None:
+    return _chat_session_record_store().get_session(session_id)
 
-    _chat_session_record_store().save_store(data)
+
+def list_chat_sessions(*, project_id: str | None = None, kind: str | None = None) -> list[dict[str, Any]]:
+    return _chat_session_record_store().list_sessions(project_id=project_id, kind=kind)
+
+
+def insert_chat_session_if_absent(session: dict[str, Any]) -> dict[str, Any]:
+    return _chat_session_record_store().insert_session_if_absent(session)
+
+
+def update_chat_session(session_id: str, **fields: Any) -> None:
+    _chat_session_record_store().update_session(session_id, **fields)
+
+
+def append_chat_message(session_id: str, message: dict[str, Any]) -> dict[str, Any]:
+    return _chat_session_record_store().append_message(session_id, message)
+
+
+def list_chat_messages(session_id: str) -> list[dict[str, Any]]:
+    return _chat_session_record_store().list_messages(session_id)
+
+
+def update_chat_message_snapshot(message_id: str, snapshot: dict[str, Any]) -> None:
+    _chat_session_record_store().update_message_snapshot(message_id, snapshot)
+
+
+def delete_chat_messages(session_id: str, message_ids: list[str]) -> None:
+    _chat_session_record_store().delete_messages(session_id, message_ids)
+
+
+def delete_chat_session(session_id: str) -> None:
+    _chat_session_record_store().delete_session(session_id)
 
 
 def _trace_record_store() -> TraceRecordStore:
@@ -1061,6 +1201,17 @@ def append_run_event(
     project_id: str | None = None,
 ) -> dict[str, Any]:
     """Append one normalized runtime event for trace inspection."""
+    if session_id:
+        insert_chat_session_if_absent({
+            "id": session_id,
+            "title": "未命名会话",
+            "agent_id": agent_id or "",
+            "agent_name": agent_name or "",
+            "workspace_id": workspace_id or DEFAULT_WORKSPACE_ID,
+            "project_id": project_id or DEFAULT_PROJECT_ID,
+            "created_at": _utc_now(),
+            "updated_at": _utc_now(),
+        })
     return _trace_record_store().append_event(
         session_id=session_id,
         event_type=event_type,
@@ -2066,9 +2217,9 @@ def normalized_table_counts() -> dict[str, int]:
 
 
 async def init_db() -> None:
-    """Initialize SQLite storage."""
+    """Initialize SQLite storage for the current tenant."""
     ensure_db()
-    print(f"[DB] SQLite initialized at {DB_PATH}")
+    print(f"[DB] SQLite initialized at {db_path()}")
 
 
 async def close_db() -> None:

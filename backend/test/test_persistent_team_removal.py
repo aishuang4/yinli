@@ -50,8 +50,11 @@ def test_startup_removes_legacy_team_storage(tmp_path, monkeypatch) -> None:
             VALUES ('team_templates', 'legacy-template', '{}', '', '');
         """)
 
-    monkeypatch.setattr(database, "DB_PATH", db_path)
-    monkeypatch.setattr(database, "_initialized", False)
+    monkeypatch.setattr(
+        "src.config.settings.settings.database_url",
+        "sqlite+aiosqlite:///" + str(db_path),
+    )
+    database.forget_db(db_path)
     database.ensure_db()
 
     with sqlite3.connect(db_path) as conn:

@@ -2,6 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { createId } from '../../utils/id';
+import { isImageFile } from './composerFiles';
 import type { ChatFileAttachment, ChatFilePayload, ChatImageAttachment } from './types';
 
 interface UseChatAttachmentsOptions {
@@ -13,9 +14,9 @@ export function useChatAttachments({ onError }: UseChatAttachmentsOptions) {
   const [fileAttachments, setFileAttachments] = useState<ChatFileAttachment[]>([]);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
-  const handleImageFiles = useCallback(async (files: FileList | null) => {
+  const handleImageFiles = useCallback(async (files: FileList | File[] | null) => {
     if (!files?.length) return;
-    const imageFiles = Array.from(files).filter((file) => file.type.startsWith('image/'));
+    const imageFiles = Array.from(files).filter((file) => isImageFile(file));
     const nextAttachments = await Promise.all(imageFiles.map((file) => (
       new Promise<ChatImageAttachment>((resolve, reject) => {
         const reader = new FileReader();

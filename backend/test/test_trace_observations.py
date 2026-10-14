@@ -19,10 +19,7 @@ from src.storage.database import (
 
 @pytest.fixture
 def isolated_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "trace-observations.db")
-    monkeypatch.setattr(database, "_initialized", False)
     yield
-    monkeypatch.setattr(database, "_initialized", False)
 
 
 def test_observation_round_trip_and_list_by_run(isolated_db) -> None:

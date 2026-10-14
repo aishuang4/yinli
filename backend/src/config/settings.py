@@ -63,6 +63,26 @@ class Settings(BaseSettings):
     # 引力模型平台。地址固定为已发布的 key2api；令牌只放在服务器环境变量。
     key2api_base_url: str = "http://103.236.80.228:3000"
     key2api_sync_token: str = ""
+    # 桌面端登录引力云端的默认地址。登录表单可以改。
+    cloud_base_url: str = ""
+    sandbox_docker_host: str = ""
+    sandbox_tls_ca: str = ""
+    sandbox_tls_cert: str = ""
+    sandbox_tls_key: str = ""
+    sandbox_host_data_root: str = ""
+    sandbox_runtime: str = "runsc"
+    sandbox_allow_runc: bool = False
+    sandbox_network: str = "yinli-sandbox"
+    sandbox_images: str = "python:3.11-slim"
+    sandbox_memory_mb: int = 1024
+    sandbox_cpus: float = 1.0
+    sandbox_pids: int = 256
+    sandbox_max_timeout_seconds: int = 600
+    tenant_disk_mb: int = 2048
+    tenant_upload_mb: int = 50
+    tenant_max_active_runs: int = 3
+    tenant_max_jobs: int = 20
+    tenant_max_firings_per_day: int = 50
 
     model_config = {
         "env_prefix": "AGENT_WORKSTATION_",
@@ -102,6 +122,28 @@ def assert_hosted_email_config(config: Settings | None = None) -> None:
         raise HostedConfigError("邮件模式只能是 smtp 或 log")
     if not source.smtp_host.strip() or not source.smtp_from.strip():
         raise HostedConfigError("托管模式必须配置 SMTP 主机和发件人，或把邮件模式设为 log")
+
+
+def assert_hosted_platform_config(config: Settings | None = None) -> None:
+    """托管必须有 key2api 服务令牌，平台目录不再回退部署级 models.json。"""
+
+    source = config if config is not None else settings
+    if (source.serve_mode.strip().lower() or "desktop") != "hosted":
+        return
+    if not source.key2api_sync_token.strip():
+        raise HostedConfigError("托管模式必须配置 AGENT_WORKSTATION_KEY2API_SYNC_TOKEN")
+
+
+def assert_hosted_sandbox(config: Settings | None = None) -> None:
+    """托管必须指定沙箱 daemon。runc 需要显式放行。"""
+
+    source = config if config is not None else settings
+    if (source.serve_mode.strip().lower() or "desktop") != "hosted":
+        return
+    if not source.sandbox_docker_host.strip():
+        raise HostedConfigError("托管模式必须配置 AGENT_WORKSTATION_SANDBOX_DOCKER_HOST")
+    if source.sandbox_runtime.strip() == "runc" and not source.sandbox_allow_runc:
+        raise HostedConfigError("使用 runc 必须同时设置 AGENT_WORKSTATION_SANDBOX_ALLOW_RUNC=true")
 
 
 # 全局配置单例

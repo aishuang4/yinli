@@ -25,7 +25,7 @@ from src.catalog.mcp_files import McpFileRecord, discover_mcp_files, write_mcp_f
 from src.catalog.migrate_mcp_http import ensure_mcp_file_catalog, is_mcp_catalog_migrated
 from src.catalog.paths import mcp_dir
 from src.catalog.secrets import delete_named_secret, resolve_headers
-from src.config.runtime_paths import DATA_ROOT
+from src.config.runtime_paths import data_root
 from src.scheduler.mcp_runtime import resolve_mcp_runtime_servers as _resolve_mcp_runtime_servers
 from src.storage.database import (
     list_json_records,
@@ -90,8 +90,6 @@ class McpRegisterRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-DATA_DIR = str(DATA_ROOT)
-USER_MCP_REGISTRY_FILE = os.path.join(DATA_DIR, "mcp_servers.json")
 MCP_NAMESPACE = "mcp_servers"
 RESERVED_MCP_HEADERS = {"content-type", "accept"}
 
@@ -484,7 +482,7 @@ def _refresh_mcp_files() -> None:
 
 
 def _load_user_mcp_servers() -> None:
-    migrate_json_list_file(MCP_NAMESPACE, USER_MCP_REGISTRY_FILE)
+    migrate_json_list_file(MCP_NAMESPACE, str(data_root() / "mcp_servers.json"))
     records = db_list_mcp_servers()
     if not records:
         legacy = list_json_records(MCP_NAMESPACE)
@@ -530,7 +528,17 @@ def _save_user_mcp_servers() -> None:
     })
 
 
-_load_user_mcp_servers()
+def _install_mcp_registry() -> None:
+    """第一次访问当前租户时再加载用户 MCP。"""
+
+    global _mcp_servers, _mcp_header_refs
+    from src.tenancy.registry import TenantDictProxy, TenantScoped
+
+    _mcp_servers = TenantDictProxy(TenantScoped(lambda: dict(_builtin_mcp_servers)), _load_user_mcp_servers)  # type: ignore[assignment]
+    _mcp_header_refs = TenantDictProxy(TenantScoped(dict), None)  # type: ignore[assignment]
+
+
+_install_mcp_registry()
 
 
 def _persist_if_user_server(server_id: str) -> None:

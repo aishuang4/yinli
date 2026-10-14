@@ -1,4 +1,4 @@
-"""Catalog 约定路径。运行时从 `runtime_paths.USER_DATA_ROOT` 现取，便于测试替换。"""
+"""Catalog 约定路径。运行时从 `runtime_paths.tenant_root()` 现取，按租户隔离且便于测试替换。"""
 
 from __future__ import annotations
 
@@ -22,9 +22,9 @@ MAX_PROFILE_BYTES = 256 * 1024
 
 
 def workspaces_root() -> Path:
-    """Workspace catalog 根：`<USER_DATA_ROOT>/workspaces`。"""
+    """Workspace catalog 根：当前租户 `<tenant>/workspaces`。"""
 
-    return Path(runtime_paths.USER_DATA_ROOT) / WORKSPACES_DIRNAME
+    return runtime_paths.workspaces_catalog_root()
 
 
 def validate_workspace_id(workspace_id: str) -> str:
@@ -152,7 +152,7 @@ def path_stays_inside(path: Path, root: Path) -> bool:
 
 
 def is_forbidden_extra_scope(path: Path) -> bool:
-    """拒绝把 /、HOME、USER_DATA_ROOT 本身当作 extra scope。"""
+    """拒绝把 /、HOME、租户数据根本身当作 extra scope。"""
 
     try:
         resolved = path.expanduser().resolve()
@@ -161,7 +161,7 @@ def is_forbidden_extra_scope(path: Path) -> bool:
     forbidden = {
         Path(os.sep).resolve(),
         Path.home().resolve(),
-        Path(runtime_paths.USER_DATA_ROOT).expanduser().resolve(),
+        runtime_paths.tenant_root().expanduser().resolve(),
     }
     return resolved in forbidden
 

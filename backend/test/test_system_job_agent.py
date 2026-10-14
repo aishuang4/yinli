@@ -61,8 +61,6 @@ def test_load_agents_backfills_system_job_agent_in_existing_database(
     """迁移后用户 Agent 进 profile 文件，系统 Agent 由代码提供，sqlite 表清空。"""
 
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path)
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     from src.storage.database import upsert_json_record
 
     upsert_json_record("catalog", "agent_migration_v1", {"status": "pending"})

@@ -23,8 +23,6 @@ from src.storage import database
 def isolated_db(tmp_path, monkeypatch):
     """使用临时 SQLite，避免污染开发库。"""
 
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
 
 
 def test_persist_completed_run_memory_node_uses_only_user_and_final_output():

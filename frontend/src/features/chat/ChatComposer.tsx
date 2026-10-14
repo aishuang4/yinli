@@ -16,6 +16,7 @@ import {
 import { buildSlashList, type ComposerSlashCommand } from './slashCommands';
 import type { Skill } from '../../types/skill';
 import type { ChatFileAttachment, ChatImageAttachment } from './types';
+import { filesFromTransfer } from './composerFiles';
 
 interface ChatComposerProps {
   modelSelector?: ReactNode;
@@ -35,8 +36,9 @@ interface ChatComposerProps {
   onAbort: () => void;
   onCompositionEnd: () => void;
   onCompositionStart: () => void;
+  onAcceptFiles: (files: File[]) => void;
   onFile: (file: File) => void | Promise<void>;
-  onImageFiles: (files: FileList | null) => void | Promise<void>;
+  onImageFiles: (files: FileList | File[] | null) => void | Promise<void>;
   onInputChange: (value: string) => void;
   onKeyDown: KeyboardEventHandler<HTMLTextAreaElement>;
   onRemoveFile: (id: string) => void;
@@ -61,7 +63,7 @@ export function ChatComposer(props: ChatComposerProps) {
     agentsLoading, chatError, deepThinking, fileAttachments,
     imageAttachments, imageInputRef, inputValue, isStreaming, messageInputRef, planMode,
     projectResourcesLoading, selectedAgentId, targetMode, onAbort,
-    onCompositionEnd, onCompositionStart, onFile, onImageFiles, onInputChange,
+    onAcceptFiles, onCompositionEnd, onCompositionStart, onFile, onImageFiles, onInputChange,
     onKeyDown, onRemoveFile, onRemoveImage, onSelectedAgentChange, onSend,
     onTargetModeChange, onToggleDeepThinking, onTogglePlanMode,
     composerSkills = [], forcedSkillIds = [], skillsLoading = false, onForcedSkillIdsChange,
@@ -220,9 +222,15 @@ export function ChatComposer(props: ChatComposerProps) {
           onClick={(event) => setCursor(event.currentTarget.selectionStart ?? 0)}
           onKeyUp={(event) => setCursor(event.currentTarget.selectionStart ?? 0)}
           onKeyDown={handleComposerKeyDown}
+          onPaste={(event) => {
+            const files = filesFromTransfer(event.clipboardData);
+            if (files.length === 0) return;
+            event.preventDefault();
+            onAcceptFiles(files);
+          }}
           onCompositionStart={onCompositionStart}
           onCompositionEnd={onCompositionEnd}
-          placeholder={isStreaming ? '给正在执行的 Agent 补充信息...' : '输入消息，或用 / 选择指令和 Skill...'}
+          placeholder={isStreaming ? '给正在执行的 Agent 补充信息...' : '输入消息，可粘贴或拖入文件，或用 / 选择指令和 Skill...'}
           rows={2}
           className="block max-h-[180px] w-full resize-none rounded-t-lg border-0 bg-transparent px-4 pb-0 pt-3 text-base text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
           aria-label="消息输入框"

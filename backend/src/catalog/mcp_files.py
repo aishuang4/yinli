@@ -140,6 +140,15 @@ def discover_mcp_files(*, project_root: Path | None = None) -> list[McpFileRecor
             workspace_id="default",
             source_scope="project",
         ))
+    from src.tenancy.context import TenantMissing, current_tenant, is_hosted_mode
+
+    if is_hosted_mode():
+        try:
+            hosted = current_tenant().is_hosted
+        except TenantMissing:
+            hosted = True
+        if hosted:
+            records = [item for item in records if item.transport != "stdio"]
     return records
 
 

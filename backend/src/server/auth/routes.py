@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from src.config.settings import settings
+from src.tenancy.context import is_hosted_mode
 from src.server.auth.service import (
     AuthError,
     admin_directory,
@@ -24,8 +25,22 @@ from src.server.auth.service import (
 from src.storage.auth_records import SESSION_TTL
 
 SESSION_COOKIE = "yinli_session"
+
+
+def require_hosted_mode() -> None:
+    """桌面端没有控制面，账号和管理员接口按不存在处理。"""
+
+    if not is_hosted_mode():
+        raise HTTPException(status_code=404, detail="仅托管服务可用")
+
+
 auth_router = APIRouter(prefix="/api/auth", tags=["账号"])
-admin_router = APIRouter(prefix="/api/admin", tags=["管理员"])
+admin_router = APIRouter(
+    prefix="/api/admin",
+    tags=["管理员"],
+    dependencies=[Depends(require_hosted_mode)],
+)
+_HOSTED = [Depends(require_hosted_mode)]
 
 
 class RegisterRequest(BaseModel):
@@ -115,55 +130,45 @@ def _require_desktop_mode() -> None:
 @auth_router.get("/desktop/session")
 async def desktop_session() -> dict:
     _require_desktop_mode()
-    from src.server.auth.desktop_account import public_desktop_account
+    from src.server.auth.cloud_client import public_account
 
-    return public_desktop_account()
+    return public_account()
 
 
 @auth_router.post("/desktop/session")
 async def desktop_login(data: DesktopLoginRequest) -> dict:
-    """向托管服务登录，并把令牌只写在本机用户数据目录。"""
+    """向托管服务登录。令牌写入本机密钥存储，不进 models.json。"""
 
     _require_desktop_mode()
-    import httpx
+    from src.server.auth.cloud_client import CloudSessionError, login_cloud
 
-    from src.server.auth.desktop_account import save_desktop_account
-
-    url = data.base_url.rstrip("/") + "/api/auth/login"
-    async with httpx.AsyncClient(timeout=20) as client:
-        response = await client.post(
-            url,
-            json={"email": data.email, "password": data.password, "clientKind": "desktop"},
-        )
-    if response.status_code != 200:
-        raise HTTPException(status_code=response.status_code, detail="托管登录失败")
-    body = response.json()
-    token = str(body.get("token") or "")
-    if not token:
-        raise HTTPException(status_code=502, detail="托管服务没有返回桌面令牌")
-    email = str((body.get("user") or {}).get("email") or data.email)
-    save_desktop_account(base_url=data.base_url, token=token, email=email)
-    return {"connected": True, "email": email}
+    try:
+        return await login_cloud(base_url=data.base_url, email=data.email, password=data.password)
+    except CloudSessionError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from None
 
 
 @auth_router.delete("/desktop/session")
 async def desktop_logout() -> dict[str, bool]:
     _require_desktop_mode()
-    from src.server.auth.desktop_account import clear_desktop_account
+    from src.server.auth.cloud_client import logout_cloud
 
-    clear_desktop_account()
+    await logout_cloud()
     return {"ok": True}
 
 
 @auth_router.get("/config")
-async def auth_config() -> dict[str, str]:
+async def auth_config() -> dict:
     """公开当前服务模式，不返回邮件或模型密钥。"""
 
     mode = settings.serve_mode.strip().lower() or "desktop"
-    return {"serveMode": mode if mode in {"desktop", "hosted"} else "desktop"}
+    resolved = mode if mode in {"desktop", "hosted"} else "desktop"
+    from src.tenancy.capabilities import capabilities
+
+    return {"serveMode": resolved, "capabilities": capabilities().as_public()}
 
 
-@auth_router.post("/register")
+@auth_router.post("/register", dependencies=_HOSTED)
 async def register(data: RegisterRequest) -> dict[str, bool]:
     try:
         register_user(data.email, data.password)
@@ -172,7 +177,7 @@ async def register(data: RegisterRequest) -> dict[str, bool]:
     return {"ok": True}
 
 
-@auth_router.post("/verify")
+@auth_router.post("/verify", dependencies=_HOSTED)
 async def verify(data: VerifyRequest) -> dict:
     try:
         return {"user": verify_email(data.email, data.code)}
@@ -180,7 +185,7 @@ async def verify(data: VerifyRequest) -> dict:
         _raise(error)
 
 
-@auth_router.post("/login")
+@auth_router.post("/login", dependencies=_HOSTED)
 async def login(data: LoginRequest, request: Request, response: Response) -> dict:
     try:
         result = login_user(data.email, data.password, client_kind=data.client_kind)
@@ -194,19 +199,19 @@ async def login(data: LoginRequest, request: Request, response: Response) -> dic
     return body
 
 
-@auth_router.post("/logout")
+@auth_router.post("/logout", dependencies=_HOSTED)
 async def logout(request: Request, response: Response) -> dict[str, bool]:
     logout_token(token_from_request(request))
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"ok": True}
 
 
-@auth_router.get("/me")
+@auth_router.get("/me", dependencies=_HOSTED)
 async def me(request: Request) -> dict:
     return {"user": require_user(request)["user"]}
 
 
-@auth_router.get("/usage")
+@auth_router.get("/usage", dependencies=_HOSTED)
 async def usage(request: Request) -> dict:
     """当前登录用户自己的平台额度。不返回 Key 或服务令牌。"""
 
@@ -222,13 +227,13 @@ async def usage(request: Request) -> dict:
     return {"available": True, **snapshot}
 
 
-@auth_router.post("/forgot-password")
+@auth_router.post("/forgot-password", dependencies=_HOSTED)
 async def forgot_password(data: EmailRequest) -> dict[str, bool]:
     request_password_reset(data.email)
     return {"ok": True}
 
 
-@auth_router.post("/reset-password")
+@auth_router.post("/reset-password", dependencies=_HOSTED)
 async def reset(data: ResetPasswordRequest) -> dict[str, bool]:
     try:
         reset_password(data.email, data.code, data.password)
@@ -237,12 +242,37 @@ async def reset(data: ResetPasswordRequest) -> dict[str, bool]:
     return {"ok": True}
 
 
-@auth_router.post("/heartbeat")
+@auth_router.post("/heartbeat", dependencies=_HOSTED)
 async def post_heartbeat(request: Request) -> dict:
     try:
         return {"user": heartbeat(token_from_request(request))}
     except AuthError as error:
         _raise(error)
+
+
+@admin_router.get("/platform-models")
+async def read_platform_models(request: Request) -> dict:
+    require_admin(request)
+    from src.models.platform_layer import read_platform_capability_document
+
+    return read_platform_capability_document()
+
+
+@admin_router.put("/platform-models")
+async def write_platform_models(request: Request) -> dict:
+    require_admin(request)
+    from src.models.platform_layer import save_platform_capability_document
+
+    try:
+        payload = await request.json()
+    except (UnicodeError, ValueError):
+        raise HTTPException(status_code=422, detail="平台模型能力表格式无效") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="平台模型能力表格式无效")
+    try:
+        return save_platform_capability_document(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @admin_router.get("/users")
@@ -258,26 +288,6 @@ async def disable(user_id: str, request: Request) -> dict:
         return {"user": disable_user(actor["user"]["id"], user_id)}
     except AuthError as error:
         _raise(error)
-
-
-class AssignOwnershipRequest(BaseModel):
-    user_id: str = Field(alias="userId")
-
-    model_config = {"populate_by_name": True}
-
-
-@admin_router.post("/ownership/assign")
-async def assign_ownership(data: AssignOwnershipRequest, request: Request) -> dict[str, int]:
-    """把尚未归属的 Workspace、Project、会话、群聊和定时任务划给指定用户。"""
-
-    from src.server.auth.ownership import assign_unowned
-
-    require_admin(request)
-    try:
-        updated = assign_unowned(data.user_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"updated": updated}
 
 
 @admin_router.delete("/users/{user_id}")

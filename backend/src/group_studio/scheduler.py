@@ -18,6 +18,19 @@ from src.storage.database import (
 logger = logging.getLogger(__name__)
 
 
+def _spawn_group_task(coro, *, name: str) -> None:
+    """在当前租户上下文里启动工人。没有事件循环时放弃这一轮。"""
+
+    from src.tenancy.context import current_tenant, spawn_in_tenant
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        coro.close()
+        return
+    spawn_in_tenant(current_tenant(), coro, name=name)
+
+
 def should_auto_run() -> bool:
     """单测默认不点火，避免 from-chat / 发消息测试触发模型。"""
 
@@ -38,11 +51,7 @@ def schedule_next(group_id: str) -> None:
         return
     if not should_auto_run():
         return
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    loop.create_task(_run_worker_guarded(group_id, queue[0]))
+    _spawn_group_task(_run_worker_guarded(group_id, queue[0]), name=f"group-worker-{group_id}")
 
 
 def schedule_worker_turn(group_id: str, member_id: str) -> None:
@@ -55,11 +64,10 @@ def schedule_worker_turn(group_id: str, member_id: str) -> None:
         return
     if not should_auto_run():
         return
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return
-    loop.create_task(_run_worker_guarded(group_id, member_id))
+    _spawn_group_task(
+        _run_worker_guarded(group_id, member_id),
+        name=f"group-worker-{group_id}-{member_id}",
+    )
 
 
 async def _run_worker_guarded(group_id: str, member_id: str) -> None:
@@ -68,12 +76,15 @@ async def _run_worker_guarded(group_id: str, member_id: str) -> None:
     try:
         await run_worker_turn(group_id, member_id, duty="queue")
         pop_unrunnable_head(group_id)
-    except Exception:
-        logger.exception("群聊 Worker turn crashed: group_id=%s member_id=%s", group_id, member_id)
+    except Exception as exc:
+        from src.exception_detail import format_agent_exception
+
+        message = format_agent_exception(exc, prefix="群聊 Worker 执行失败")
+        logger.error("群聊 Worker turn crashed: group_id=%s member_id=%s\n%s", group_id, member_id, message)
         snapshot = get_group_studio_snapshot(group_id, message_limit=1) or {}
         run_id = snapshot.get("currentRunId")
         if run_id:
-            update_group_studio_run_status(str(run_id), "failed", "worker turn crashed")
+            update_group_studio_run_status(str(run_id), "failed", message)
             set_group_studio_current_run_id(group_id, None)
             emit_envelope(
                 group_id=group_id,
@@ -85,7 +96,7 @@ async def _run_worker_guarded(group_id: str, member_id: str) -> None:
         emit_envelope(
             group_id=group_id,
             event_type="GROUP_ERROR",
-            payload={"code": "worker_failed", "message": f"worker turn crashed: {member_id}", "memberId": member_id},
+            payload={"code": "worker_failed", "message": message, "memberId": member_id},
         )
     await _continue_after_worker(group_id)
 

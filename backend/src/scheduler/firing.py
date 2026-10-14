@@ -25,10 +25,7 @@ from src.scheduler.models import (
     TERMINAL_FIRING_STATUSES,
 )
 from src.scheduler.service import ScheduledJobService
-from src.server.routes.chat.background_runs import (
-    cancel_chat_background_run,
-    get_chat_background_run,
-)
+from src.runtime.scheduled_chat import cancel_chat_background_run, get_chat_background_run
 from src.storage.database import get_project
 
 logger = logging.getLogger(__name__)
@@ -94,6 +91,9 @@ async def run_firing(
                 return
             job = service.get_job(job_id)
             service.mark_starting(firing_id)
+            if job.mode == "script":
+                await _run_script_firing(service, job, firing_id)
+                return
             req = _build_request(job, service.get_firing(firing_id))
             chat_run_id = await start_scheduled_chat_run(req)
             session_id = await _chat_session_id(chat_run_id)
@@ -144,8 +144,10 @@ async def run_firing(
     except Exception as exc:
         terminal_status = "failed"
         error_code = "failed"
-        error_message = str(exc)
-        logger.exception("run_firing failed firing=%s", firing_id)
+        from src.exception_detail import format_agent_exception
+
+        error_message = format_agent_exception(exc, prefix="定时任务执行失败")
+        logger.error("run_firing failed firing=%s\n%s", firing_id, error_message)
     finally:
         ensure_firing_terminal(
             service,
@@ -155,6 +157,77 @@ async def run_firing(
             error_message=error_message,
             output_manifest=output_manifest,
         )
+
+
+async def _run_script_firing(
+    service: ScheduledJobService,
+    job: ScheduledJob,
+    firing_id: str,
+) -> None:
+    """脚本任务不拉起模型，只在本次 firing 目录执行冻结脚本。"""
+
+    from src.scheduler.script_job import ScriptJobError, execute_script_in_dir, script_spec_of
+
+    firing = service.get_firing(firing_id)
+    service.mark_running(firing_id, "")
+    try:
+        spec = script_spec_of(job.input_spec)
+    except ScriptJobError as exc:
+        service.complete_firing(
+            firing_id, "failed", error_code="failed", error_message=str(exc),
+        )
+        return
+    project = get_project(job.project_id)
+    if project is None:
+        service.complete_firing(
+            firing_id, "failed", error_code="failed", error_message="Project 不存在",
+        )
+        return
+    root = Path(str(project.get("rootPath") or "")).expanduser()
+    try:
+        workspace = project_job_run_directory(root, job.id, firing.id)
+        result = await execute_script_in_dir(
+            source=str(spec["script_source"]),
+            filename=str(spec["script_filename"]),
+            interpreter=str(spec["interpreter"]),
+            args=list(spec["args"]),
+            timeout_seconds=int(spec["timeout_seconds"]),
+            cwd=workspace,
+        )
+    except (OSError, ValueError, ScriptJobError) as exc:
+        service.complete_firing(
+            firing_id, "failed", error_code="failed", error_message=str(exc),
+        )
+        return
+    output_manifest = _scan_outputs(job, service.get_firing(firing_id))
+    output_manifest = {
+        **output_manifest,
+        "exitCode": result.exit_code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "resultText": result.stdout.strip(),
+    }
+    if result.timed_out:
+        service.complete_firing(
+            firing_id,
+            "failed",
+            error_code="timeout",
+            error_message="脚本执行超时",
+            output_manifest=output_manifest,
+        )
+        return
+    if result.exit_code == 0:
+        service.complete_firing(
+            firing_id, "succeeded", error_code="", output_manifest=output_manifest,
+        )
+        return
+    service.complete_firing(
+        firing_id,
+        "failed",
+        error_code="failed",
+        error_message=result.stderr.strip() or f"脚本退出码 {result.exit_code}",
+        output_manifest=output_manifest,
+    )
 
 
 def _build_request(job: ScheduledJob, firing: ScheduledJobRun) -> ScheduledRunRequest:
