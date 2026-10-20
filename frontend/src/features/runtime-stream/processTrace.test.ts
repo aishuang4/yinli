@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { emptyDisplaySnapshot, type DisplayBlock, type DisplaySnapshot } from './protocol';
-import { activityLabel, bashToolView, elapsedSeconds, formatShellCommand, messageStatusText, segmentTrace, shellSummary, toolCallName, toolDetail, webSearchDetail } from './processTrace';
+import { activityLabel, bashToolView, elapsedSeconds, formatShellCommand, messageStatusText, segmentTrace, shellSummary, toolArgumentText, toolCallName, toolDetail, webSearchDetail } from './processTrace';
 
 function block(partial: {
   id: string;
@@ -162,6 +162,16 @@ describe('segmentTrace', () => {
     expect(messageStatusText({ running: false, stopped: false, seconds: null })).toBe('已完成');
     expect(messageStatusText({ running: false, stopped: true, seconds: 18 })).toBe('已中断 · 18秒');
     expect(messageStatusText({ running: false, stopped: true, seconds: null })).toBe('已中断');
+  });
+
+  it('工具结束后仍保留调用参数', () => {
+    const tool = block({
+      id: 'read-1',
+      kind: 'tool',
+      data: { name: 'Read', inputPreview: '{"file_path":"notes/today.md"}' },
+    });
+    expect(toolArgumentText(tool)).toBe('{\n  "file_path": "notes/today.md"\n}');
+    expect(toolDetail(tool).title).toBe('notes/today.md');
   });
 
   it('用开始和结束时间算秒数', () => {

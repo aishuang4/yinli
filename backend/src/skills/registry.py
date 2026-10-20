@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
@@ -46,6 +47,7 @@ from src.server.routes.skill_packages import (
 )
 from src.storage.database import (
     get_project,
+    delete_json_record,
     list_json_records,
     list_skills as db_list_skills,
     migrate_json_list_file,
@@ -455,13 +457,47 @@ def _with_share_flag(skill: Skill) -> Skill:
     return skill.model_copy(update={"available_to_all_agents": flag})
 
 
+def refresh_skill_package(skill: Skill) -> Skill:
+    """按磁盘上的 SKILL.md 刷新详情。列表和运行时都不停在进程启动时的副本。"""
+
+    if not skill.resource_path:
+        return skill
+    package = Path(skill.resource_path)
+    markdown = read_package_markdown(package)
+    if not markdown.strip():
+        return skill
+    metadata, _body = _split_frontmatter(markdown)
+    name = str(metadata.get("name") or skill.name).strip() or skill.name
+    description = str(metadata.get("description") or skill.description).strip() or skill.description
+    trigger = str(metadata.get("trigger") or description or skill.trigger).strip()
+    resources = skill.resources
+    if package.is_dir():
+        resources = sorted(
+            str(path.relative_to(package))
+            for path in package.rglob("*")
+            if path.is_file()
+        )
+    updated_at = skill.updated_at
+    skill_md = package / "SKILL.md"
+    try:
+        updated_at = datetime.fromtimestamp(skill_md.stat().st_mtime, timezone.utc).isoformat()
+    except OSError:
+        updated_at = skill.updated_at
+    return skill.model_copy(update={
+        "name": name,
+        "description": description,
+        "trigger": trigger,
+        "content": markdown.strip(),
+        "resources": resources,
+        "content_hash": hashlib.sha256(markdown.encode("utf-8")).hexdigest()[:16],
+        "updated_at": updated_at,
+    })
+
+
 def _hydrate_skill(skill: Skill) -> Skill:
     """API / 运行时正文从 SKILL.md 读取，不信任 sqlite content。"""
 
-    markdown = read_package_markdown(skill.resource_path) if skill.resource_path else ""
-    if not markdown:
-        return skill
-    return skill.model_copy(update={"content": markdown})
+    return refresh_skill_package(skill)
 
 
 def _skill_from_discovered(item: DiscoveredSkill) -> Skill:
@@ -553,21 +589,132 @@ def discover_external_skills(
     ):
         skill = _skill_from_discovered(item)
         record = _override_record(skill.id)
-        enabled = bool(record["enabled"]) if "enabled" in record else item.enabled
+        installed, enabled = _external_install_state(item, record)
         share = True if _is_share_locked(skill.id) else (
             bool(record["availableToAllAgents"]) if "availableToAllAgents" in record else True
         )
-        discovered.append(skill.model_copy(update={
+        discovered.append(refresh_skill_package(skill.model_copy(update={
+            "status": "installed" if installed else "available",
             "enabled": enabled,
             "available_to_all_agents": share,
-        }))
+        })))
     return discovered
+
+
+def _external_install_state(item: DiscoveredSkill, record: dict[str, bool]) -> tuple[bool, bool]:
+    """磁盘包的安装状态。用户目录默认未安装；显式覆盖优先于这个默认值。"""
+
+    if "installed" in record:
+        installed = bool(record["installed"])
+    elif "enabled" in record:
+        installed = True
+    else:
+        installed = item.source_scope != "user"
+    if not installed:
+        return False, False
+    enabled = bool(record["enabled"]) if "enabled" in record else item.enabled
+    return True, enabled
 
 
 def get_runtime_skill_catalog(project_root: Path) -> list[Skill]:
     """返回当前 Project 的原生和外部 Skill catalog。"""
 
-    return [*_skills.values(), *discover_external_skills(project_root)]
+    return [
+        *[refresh_skill_package(skill) for skill in _skills.values()],
+        *discover_external_skills(project_root),
+    ]
+
+
+def find_skill(
+    skill_id: str,
+    project_root: Path | None,
+    *,
+    workspace_id: str = "default",
+) -> Skill | None:
+    """按 ID 查找已登记 Skill，或当前 Project 磁盘上的 Skill 包。"""
+
+    if skill_id in _skills:
+        skill = _skills[skill_id]
+        if skill.id in _builtin_skills or skill.workspace_id == workspace_id:
+            return _with_share_flag(refresh_skill_package(skill))
+    if project_root is None:
+        return None
+    for skill in discover_external_skills(project_root, workspace_id=workspace_id):
+        if skill.id == skill_id:
+            return _with_share_flag(skill)
+    return None
+
+
+def install_external_skill(skill: Skill, *, enabled: bool = True) -> Skill:
+    """把磁盘上的 Skill 包标成已安装，不把它抄进用户注册表。"""
+
+    _upsert_external_override(skill.id, installed=True, enabled=enabled)
+    now = _utc_now()
+    return skill.model_copy(update={
+        "status": "installed",
+        "enabled": enabled,
+        "installed_at": skill.installed_at or now,
+        "updated_at": now,
+    })
+
+
+def uninstall_external_skill(skill: Skill) -> Skill:
+    """卸载磁盘 Skill 包：保留文件，只从已安装目录拿掉。"""
+
+    _upsert_external_override(skill.id, installed=False, enabled=False)
+    return skill.model_copy(update={
+        "status": "available",
+        "enabled": False,
+        "installed_at": None,
+        "updated_at": _utc_now(),
+    })
+
+
+def delete_registered_skill_files(skill: Skill) -> None:
+    """删除用户注册 Skill 的包目录。"""
+
+    if skill.resource_path and os.path.isdir(skill.resource_path):
+        shutil.rmtree(skill.resource_path)
+
+
+def delete_external_skill(skill: Skill, *, project_root: Path, workspace_id: str) -> None:
+    """删除当前工作区扫描到的 Skill 包。系统包不能删。"""
+
+    if skill.id in _builtin_skills or skill.id in SYSTEM_SKILL_IDS or skill.source_scope == "system":
+        raise HTTPException(status_code=409, detail="Built-in Skill cannot be deleted")
+    package = Path(skill.resource_path).resolve()
+    if not _package_is_deletable(package, project_root, workspace_id):
+        raise HTTPException(status_code=409, detail="只能删除工作区里的 Skill 包")
+    shutil.rmtree(package)
+    _external_skill_overrides.pop(skill.id, None)
+    delete_json_record(EXTERNAL_SKILL_OVERRIDES_NAMESPACE, skill.id)
+
+
+def _package_is_deletable(package: Path, project_root: Path, workspace_id: str) -> bool:
+    if not (package / "SKILL.md").is_file():
+        return False
+    from src.catalog.paths import workspace_catalog_root
+
+    roots: list[Path] = []
+    bases = [project_root, tenant_root()]
+    home = runtime_user_home_root()
+    if home is not None:
+        bases.append(Path(home))
+    for base in bases:
+        for name in (".agents/skills", ".agent/skills", ".claude/skills"):
+            roots.append(Path(base) / name)
+    try:
+        roots.append(workspace_catalog_root(workspace_id) / "skills")
+    except ValueError:
+        pass
+    for root in roots:
+        try:
+            resolved = root.resolve()
+        except OSError:
+            continue
+        if resolved.is_dir() and package.is_relative_to(resolved):
+            return True
+    return False
 
 
 def _load_external_skill_overrides() -> None:
@@ -583,6 +730,8 @@ def _load_external_skill_overrides() -> None:
             record["enabled"] = bool(item["enabled"])
         if "availableToAllAgents" in item:
             record["availableToAllAgents"] = bool(item["availableToAllAgents"])
+        if "installed" in item:
+            record["installed"] = bool(item["installed"])
         if record:
             _external_skill_overrides[skill_id] = record
 
@@ -754,14 +903,14 @@ def get_installed_skill(skill_id: str) -> Skill | None:
     skill = _skills.get(skill_id)
     if not skill or skill.status != "installed" or not skill.enabled:
         return None
-    return _with_share_flag(skill)
+    return _with_share_flag(refresh_skill_package(skill))
 
 
 def list_installed_enabled_skills() -> list[Skill]:
     """已安装且启用的登记 Skill，供 Chat 目录合并共享项。"""
 
     return [
-        _with_share_flag(skill)
+        _with_share_flag(refresh_skill_package(skill))
         for skill in _skills.values()
         if skill.status == "installed" and skill.enabled
     ]
@@ -853,7 +1002,7 @@ def select_relevant_skills(skill_ids: list[str], message: str) -> list[Skill]:
 
 def _get_loaded_skills(skill_ids: list[str]) -> list[Skill]:
     return [
-        _skills[skill_id]
+        refresh_skill_package(_skills[skill_id])
         for skill_id in skill_ids
         if skill_id in _skills
         and _skills[skill_id].status == "installed"

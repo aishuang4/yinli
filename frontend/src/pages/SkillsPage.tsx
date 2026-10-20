@@ -4,7 +4,7 @@
  * 页面只负责数据编排、筛选状态和弹窗动作；列表和详情交给 features/skills 组件。
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Modal } from '@/components/design';
 import { SkillDetailPage } from '../features/skills/SkillDetailPage';
 import { SkillLandingPage } from '../features/skills/SkillLandingPage';
@@ -74,6 +74,15 @@ export function SkillsPage() {
     content: '',
     tags: '',
   });
+
+  useEffect(() => {
+    setSelectedSkill((current) => {
+      if (!current) return current;
+      return skills.find((skill) => skill.id === current.id)
+        ?? skills.find((skill) => current.resourcePath && skill.resourcePath === current.resourcePath)
+        ?? current;
+    });
+  }, [skills]);
 
   const filteredSkills = useMemo(() => (
     skills.filter((skill) => {
@@ -205,6 +214,8 @@ export function SkillsPage() {
           skill={selectedSkill}
           busy={busyId === selectedSkill.id}
           onBack={() => setSelectedSkill(null)}
+          onRefresh={() => void refresh()}
+          refreshing={loading}
           onExport={() => void handleExportSkill(selectedSkill)}
           onInstall={() => void runSkillAction(selectedSkill.id, () => installSkill(selectedSkill.id))}
           onUninstall={() => void runSkillAction(selectedSkill.id, () => uninstallSkill(selectedSkill.id))}

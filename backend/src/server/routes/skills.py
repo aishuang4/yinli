@@ -71,6 +71,12 @@ from src.skills.registry import (
     _load_user_skills,
     discover_external_skills,
     get_runtime_skill_catalog,
+    find_skill,
+    install_external_skill,
+    uninstall_external_skill,
+    delete_external_skill,
+    delete_registered_skill_files,
+    refresh_skill_package,
     _load_external_skill_overrides,
     _save_user_skills,
     _persist_if_user_skill,
@@ -90,6 +96,18 @@ from src.skills.registry import (
 router = APIRouter()
 _job_service = ScheduledJobService()
 
+
+def _project_root(project_id: str, workspace_id: str) -> Path | None:
+    """当前请求能看到的 Project 根目录。对不上 Workspace 时不扫磁盘包。"""
+
+    if not project_id:
+        return None
+    project = get_project(project_id)
+    if not project or str(project.get("workspaceId") or "") != workspace_id:
+        return None
+    return Path(str(project.get("rootPath") or ""))
+
+
 @router.get("", response_model=list[Skill])
 async def list_skills(
     q: str = "",
@@ -102,14 +120,13 @@ async def list_skills(
 
     query = q.strip().lower()
     result = [
-        skill
+        refresh_skill_package(skill)
         for skill in _skills.values()
         if skill.id in _builtin_skills or skill.workspace_id == workspace_id
     ]
-    if project_id:
-        project = get_project(project_id)
-        if project and str(project.get("workspaceId") or "") == workspace_id:
-            result.extend(discover_external_skills(Path(str(project.get("rootPath") or ""))))
+    project_root = _project_root(project_id, workspace_id)
+    if project_root is not None:
+        result.extend(discover_external_skills(project_root, workspace_id=workspace_id))
 
     if query:
         result = [
@@ -199,22 +216,30 @@ async def import_skill_archive(
 
 
 @router.get("/{skill_id}", response_model=Skill)
-async def get_skill(skill_id: str) -> Skill:
-    """获取单个 Skill 详情。"""
+async def get_skill(
+    skill_id: str,
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
+    project_id: Annotated[str, Query(alias="projectId")] = "",
+) -> Skill:
+    """获取单个 Skill 详情，正文从当前 SKILL.md 重新读取。"""
 
-    if skill_id not in _skills:
+    skill = find_skill(skill_id, _project_root(project_id, workspace_id), workspace_id=workspace_id)
+    if skill is None:
         raise HTTPException(status_code=404, detail="Skill not found")
-    return _with_share_flag(_hydrate_skill(_skills[skill_id]))
+    return skill
 
 
 @router.get("/{skill_id}/export")
-async def export_skill(skill_id: str) -> StreamingResponse:
+async def export_skill(
+    skill_id: str,
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
+    project_id: Annotated[str, Query(alias="projectId")] = "",
+) -> StreamingResponse:
     """导出标准 Skill zip 包。"""
 
-    if skill_id not in _skills:
+    skill = find_skill(skill_id, _project_root(project_id, workspace_id), workspace_id=workspace_id)
+    if skill is None:
         raise HTTPException(status_code=404, detail="Skill not found")
-
-    skill = _skills[skill_id]
     raw = _skill_export_archive(skill)
     filename = _skill_export_filename(skill)
     quoted_filename = quote(filename)
@@ -230,11 +255,19 @@ async def export_skill(skill_id: str) -> StreamingResponse:
 
 
 @router.post("/{skill_id}/install", response_model=Skill)
-async def install_skill(skill_id: str, data: SkillInstallRequest) -> Skill:
+async def install_skill(
+    skill_id: str,
+    data: SkillInstallRequest,
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
+    project_id: Annotated[str, Query(alias="projectId")] = "",
+) -> Skill:
     """标记 Skill 为已安装，并设置启用状态。"""
 
     if skill_id not in _skills:
-        raise HTTPException(status_code=404, detail="Skill not found")
+        current = find_skill(skill_id, _project_root(project_id, workspace_id), workspace_id=workspace_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="Skill not found")
+        return install_external_skill(current, enabled=data.enabled)
 
     current = _skills[skill_id]
     skill = current.model_copy(
@@ -251,11 +284,20 @@ async def install_skill(skill_id: str, data: SkillInstallRequest) -> Skill:
 
 
 @router.post("/{skill_id}/uninstall", response_model=Skill)
-async def uninstall_skill(skill_id: str) -> Skill:
+async def uninstall_skill(
+    skill_id: str,
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
+    project_id: Annotated[str, Query(alias="projectId")] = "",
+) -> Skill:
     """卸载 Skill。"""
 
     if skill_id not in _skills:
-        raise HTTPException(status_code=404, detail="Skill not found")
+        current = find_skill(skill_id, _project_root(project_id, workspace_id), workspace_id=workspace_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="Skill not found")
+        updated = uninstall_external_skill(current)
+        _job_service.pause_jobs_for_catalog_change(resource_type="skill", resource_id=skill_id)
+        return updated
 
     skill = _skills[skill_id].model_copy(
         update={
@@ -272,19 +314,30 @@ async def uninstall_skill(skill_id: str) -> Skill:
 
 
 @router.delete("/{skill_id}", status_code=204)
-async def delete_skill(skill_id: str) -> None:
-    """删除用户注册或导入的 Skill。内置 Skill 只能卸载，不能删除。"""
+async def delete_skill(
+    skill_id: str,
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
+    project_id: Annotated[str, Query(alias="projectId")] = "",
+) -> None:
+    """删除用户注册、导入或当前工作区磁盘上的 Skill。内置 Skill 只能卸载，不能删除。"""
 
     if skill_id not in _skills:
-        raise HTTPException(status_code=404, detail="Skill not found")
+        project_root = _project_root(project_id, workspace_id)
+        current = find_skill(skill_id, project_root, workspace_id=workspace_id)
+        if current is None or project_root is None:
+            raise HTTPException(status_code=404, detail="Skill not found")
+        delete_external_skill(current, project_root=project_root, workspace_id=workspace_id)
+        _job_service.pause_jobs_for_catalog_change(resource_type="skill", resource_id=skill_id)
+        remove_skills_from_agents({skill_id})
+        return
+
     if skill_id in _builtin_skills:
         raise HTTPException(status_code=409, detail="Built-in Skill cannot be deleted")
 
     skill = _skills.pop(skill_id)
     _job_service.pause_jobs_for_catalog_change(resource_type="skill", resource_id=skill_id)
     remove_skills_from_agents({skill_id})
-    if skill.resource_path and os.path.exists(skill.resource_path):
-        shutil.rmtree(skill.resource_path)
+    delete_registered_skill_files(skill)
     _save_user_skills()
 
 
@@ -306,7 +359,11 @@ async def set_skill_enabled(
         current = next((skill for skill in external if skill.id == skill_id), None)
         if current is None:
             raise HTTPException(status_code=404, detail="Skill not found")
+        if current.status != "installed":
+            raise HTTPException(status_code=409, detail="Skill is not installed")
         _upsert_external_override(skill_id, enabled=data.enabled)
+        if not data.enabled:
+            _job_service.pause_jobs_for_catalog_change(resource_type="skill", resource_id=skill_id)
         return _with_share_flag(current.model_copy(update={"enabled": data.enabled, "updated_at": _utc_now()}))
 
     current = _skills[skill_id]

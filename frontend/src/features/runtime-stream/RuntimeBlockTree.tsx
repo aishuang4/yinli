@@ -57,6 +57,15 @@ export function RuntimeBlockTree({
   elapsedSeconds?: number | null;
   onAnswerAnimationChange?: RuntimeAnimationReporter;
 }) {
+  const [openToolIds, setOpenToolIds] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleTool = (toolId: string) => {
+    setOpenToolIds((current) => {
+      const next = new Set(current);
+      if (next.has(toolId)) next.delete(toolId);
+      else next.add(toolId);
+      return next;
+    });
+  };
   const [openTeamId, setOpenTeamId] = useState<string | null>(null);
   const [openTeamTab, setOpenTeamTab] = useState<'tasks' | 'members' | 'mail'>('tasks');
   const openTeam = (teamBlockId: string, tab: 'tasks' | 'members' | 'mail' = 'tasks') => {
@@ -142,7 +151,7 @@ export function RuntimeBlockTree({
         return thinking ? [thinking] : [];
       });
       return (
-        <LiveThinking key={segment.ids.join(':')} spinning={blocks.some((block) => block.phase === 'open')}>
+        <LiveThinking key={segment.ids[0]} spinning={blocks.some((block) => block.phase === 'open')}>
           {blocks.map((block) => <ProcessTextBlockView key={block.id} block={block} hideLabel />)}
         </LiveThinking>
       );
@@ -153,8 +162,15 @@ export function RuntimeBlockTree({
         return block ? [block] : [];
       });
       return (
-        <div key={segment.ids.join(':')} className="space-y-1">
-          {tools.map((tool) => <ToolCallRow key={tool.id} tool={tool} />)}
+        <div key={segment.ids[0]} className="space-y-1">
+          {tools.map((tool) => (
+            <ToolCallRow
+              key={tool.id}
+              tool={tool}
+              expanded={openToolIds.has(tool.id)}
+              onToggle={() => toggleTool(tool.id)}
+            />
+          ))}
         </div>
       );
     }

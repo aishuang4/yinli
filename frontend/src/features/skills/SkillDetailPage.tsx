@@ -4,7 +4,7 @@
  * 用统一详情外壳展示 Skill 元数据、触发条件、提示内容和资源文件。
  */
 
-import { AlertTriangle, Download, Package, Trash2 } from 'lucide-react';
+import { AlertTriangle, Download, Package, RefreshCw, Trash2 } from 'lucide-react';
 import { Button, Tag } from '@/components/design';
 import { MarkdownContent } from '../../components/MarkdownContent';
 import { WorkbenchDetailShell, WorkbenchListIcon } from '../../components/workbench';
@@ -16,6 +16,8 @@ interface SkillDetailPageProps {
   skill: Skill;
   busy: boolean;
   onBack: () => void;
+  onRefresh: () => void;
+  refreshing?: boolean;
   onExport: () => void;
   onInstall: () => void;
   onUninstall: () => void;
@@ -28,6 +30,8 @@ export function SkillDetailPage({
   skill,
   busy,
   onBack,
+  onRefresh,
+  refreshing = false,
   onExport,
   onInstall,
   onUninstall,
@@ -65,6 +69,9 @@ export function SkillDetailPage({
               />
             </>
           ) : null}
+          <Button size="small" icon={<RefreshCw size={13} />} loading={refreshing} onClick={onRefresh}>
+            刷新
+          </Button>
           <Button size="small" icon={<Download size={13} />} loading={busy} onClick={onExport}>
             导出
           </Button>

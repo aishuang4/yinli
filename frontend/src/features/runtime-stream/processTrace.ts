@@ -73,6 +73,18 @@ export function toolCallName(block: DisplayBlock | undefined): string {
   return typeof name === 'string' && name.trim() ? name.trim() : '工具';
 }
 
+/** 展开后保留的调用参数。工具结束后仍然可读，不跟着运行阶段清掉。 */
+export function toolArgumentText(block: DisplayBlock): string {
+  const data = record(block.data);
+  const raw = stringField(data, 'inputPreview') || stringField(data, 'input');
+  if (!raw) return '';
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
 export function toolDetail(block: DisplayBlock): { title: string; note: string } {
   const name = toolName(block) || '工具';
   const target = toolTarget(block.data);

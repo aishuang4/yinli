@@ -33,6 +33,14 @@ interface UseEnabledSkillsReturn {
   refresh: () => Promise<void>;
 }
 
+function skillUrl(id: string, suffix: string, workspaceId: string, projectId: string): string {
+  const params = new URLSearchParams();
+  if (workspaceId) params.set('workspaceId', workspaceId);
+  if (projectId) params.set('projectId', projectId);
+  const query = params.toString();
+  return `/api/skills/${encodeURIComponent(id)}${suffix}${query ? `?${query}` : ''}`;
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, init);
   if (!res.ok) {
@@ -122,7 +130,7 @@ export function useSkills(): UseSkillsReturn {
 
   const exportSkill = useCallback(async (id: string, filename?: string) => {
     try {
-      const response = await fetch(`/api/skills/${id}/export`);
+      const response = await fetch(skillUrl(id, '/export', activeWorkspaceId, activeProjectId));
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${response.status}`);
@@ -141,11 +149,11 @@ export function useSkills(): UseSkillsReturn {
       notifyError(`Skill 导出失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, []);
+  }, [activeProjectId, activeWorkspaceId]);
 
   const installSkill = useCallback(async (id: string) => {
     try {
-      const skill = await requestJson<Skill>(`/api/skills/${id}/install`, {
+      const skill = await requestJson<Skill>(skillUrl(id, '/install', activeWorkspaceId, activeProjectId), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: true }),
@@ -157,11 +165,11 @@ export function useSkills(): UseSkillsReturn {
       notifyError(`Skill 安装失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [updateSkill]);
+  }, [activeProjectId, activeWorkspaceId, updateSkill]);
 
   const uninstallSkill = useCallback(async (id: string) => {
     try {
-      const skill = await requestJson<Skill>(`/api/skills/${id}/uninstall`, {
+      const skill = await requestJson<Skill>(skillUrl(id, '/uninstall', activeWorkspaceId, activeProjectId), {
         method: 'POST',
       });
       updateSkill(skill);
@@ -171,11 +179,11 @@ export function useSkills(): UseSkillsReturn {
       notifyError(`Skill 卸载失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [updateSkill]);
+  }, [activeProjectId, activeWorkspaceId, updateSkill]);
 
   const deleteSkill = useCallback(async (id: string) => {
     try {
-      const response = await fetch(`/api/skills/${id}`, { method: 'DELETE' });
+      const response = await fetch(skillUrl(id, '', activeWorkspaceId, activeProjectId), { method: 'DELETE' });
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
         throw new Error(err.detail || `HTTP ${response.status}`);
@@ -186,11 +194,11 @@ export function useSkills(): UseSkillsReturn {
       notifyError(`Skill 删除失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, []);
+  }, [activeProjectId, activeWorkspaceId]);
 
   const setSkillShared = useCallback(async (id: string, availableToAllAgents: boolean) => {
     try {
-      const skill = await requestJson<Skill>(`/api/skills/${id}/share?projectId=${encodeURIComponent(activeProjectId)}`, {
+      const skill = await requestJson<Skill>(`${skillUrl(id, '/share', activeWorkspaceId, activeProjectId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ availableToAllAgents }),
@@ -202,11 +210,11 @@ export function useSkills(): UseSkillsReturn {
       notifyError(`Skill 共享状态更新失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [activeProjectId, updateSkill]);
+  }, [activeProjectId, activeWorkspaceId, updateSkill]);
 
   const setSkillEnabled = useCallback(async (id: string, enabled: boolean) => {
     try {
-      const skill = await requestJson<Skill>(`/api/skills/${id}/enable?projectId=${encodeURIComponent(activeProjectId)}`, {
+      const skill = await requestJson<Skill>(`${skillUrl(id, '/enable', activeWorkspaceId, activeProjectId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled }),
@@ -218,7 +226,7 @@ export function useSkills(): UseSkillsReturn {
       notifyError(`Skill 状态更新失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [activeProjectId, updateSkill]);
+  }, [activeProjectId, activeWorkspaceId, updateSkill]);
 
   useEffect(() => {
     refresh();

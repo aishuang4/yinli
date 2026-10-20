@@ -6,6 +6,7 @@ import { toolIcon } from './toolIcon';
 import {
   bashToolView,
   blockToolFamily,
+  toolArgumentText,
   toolCallName,
   toolDetail,
   webSearchDetail,
@@ -49,14 +50,20 @@ export function CollapsibleTrace({
   label,
   icon,
   spinning = false,
+  expanded: expandedProp,
+  onToggle,
   children,
 }: {
   label: string;
   icon?: React.ReactNode;
   spinning?: boolean;
+  expanded?: boolean;
+  onToggle?: () => void;
   children: React.ReactNode;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [uncontrolled, setUncontrolled] = useState(false);
+  const expanded = expandedProp ?? uncontrolled;
+  const toggle = onToggle ?? (() => setUncontrolled((current) => !current));
   return (
     <div>
       <TraceToggle
@@ -64,7 +71,7 @@ export function CollapsibleTrace({
         icon={icon}
         spinning={spinning}
         expanded={expanded}
-        onToggle={() => setExpanded((current) => !current)}
+        onToggle={toggle}
       />
       <div hidden={!expanded} className={expanded ? 'mt-1.5 space-y-1 pl-0.5' : undefined}>{children}</div>
     </div>
@@ -72,17 +79,31 @@ export function CollapsibleTrace({
 }
 
 /** 一次工具调用：图标和名称一直可见，参数和结果默认收着。 */
-export function ToolCallRow({ tool }: { tool: DisplayBlock }) {
+export function ToolCallRow({
+  tool,
+  expanded = false,
+  onToggle,
+}: {
+  tool: DisplayBlock;
+  expanded?: boolean;
+  onToggle?: () => void;
+}) {
   const name = toolCallName(tool);
   const bash = bashToolView(tool);
   const label = bash?.summary ? `${name} · ${bash.summary}` : name;
   const details = bash ? <BashDetails command={bash.command} note={bash.note} /> : toolCallDetails(tool);
   const icon = <span className="flex h-4 w-4 items-center justify-center">{toolIcon(name)}</span>;
-  if (!details) {
+  if (!details && !expanded) {
     return <LiveTraceLabel label={label} icon={icon} spinning={tool.phase === 'open'} />;
   }
   return (
-    <CollapsibleTrace label={label} icon={icon} spinning={tool.phase === 'open'}>
+    <CollapsibleTrace
+      label={label}
+      icon={icon}
+      spinning={tool.phase === 'open'}
+      expanded={expanded}
+      onToggle={onToggle}
+    >
       {details}
     </CollapsibleTrace>
   );
@@ -102,15 +123,20 @@ function BashDetails({ command, note }: { command: string; note: string }) {
 function toolCallDetails(tool: DisplayBlock): React.ReactNode {
   if (blockToolFamily(tool) === 'web') {
     const detail = webSearchDetail([tool]);
-    if (!detail.pages.length) return null;
-    return <WebSearchList query={detail.query} pages={detail.pages} />;
+    if (detail.pages.length) return <WebSearchList query={detail.query} pages={detail.pages} />;
   }
   const detail = toolDetail(tool);
   const title = detail.title === toolCallName(tool) ? '' : detail.title;
-  if (!title && !detail.note) return null;
+  const args = toolArgumentText(tool);
+  if (!title && !detail.note && !args) return null;
   return (
     <div className="ml-[7px] min-w-0 border-l border-[var(--color-border)] py-1 pl-3 text-xs leading-5 text-[var(--color-text-tertiary)]">
       {title ? <div className="break-words">{title}</div> : null}
+      {args ? (
+        <pre className="m-0 mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-bg-tertiary)] px-2.5 py-2 font-mono text-[11px] leading-5 text-[var(--color-text-secondary)]">
+          {args}
+        </pre>
+      ) : null}
       {detail.note ? <div className="mt-1 break-words">{detail.note}</div> : null}
     </div>
   );
