@@ -2,18 +2,18 @@
 
 ## Purpose
 
-把几项容易反弹的结构指标变成只减不增的自动检查：复杂度豁免数量、双键兼容读取数量、未引用的顶层函数。同时要求两个事件分发热点在任何重构前先有金标测试，作为后继事件统一变更的回归基线。
+把几项容易反弹的结构指标变成只减不增的自动检查：复杂度豁免数量、双键兼容读取数量、未引用的顶层函数。同时规定事件分发热点改为规则表后必须保持原有的分支顺序与贯穿语义。
 
 ## ADDED Requirements
 
 ### Requirement: Complexity exemptions only shrink
 
-`src/` 中 `# noqa: C901` 的数量 MUST NOT 超过 `test/test_c901_exemption_ratchet.py` 记录的上限。以下 4 个函数 MUST 把圈复杂度降到 15 及以下并去掉豁免：`stream_leader_agent_reply`、`_run_worker_turn`、`evaluate_job_feasibility`、`get_or_create_agent`。`observe_source_event` 与 `TeamEventNormalizerMixin._team_event` MUST 保留豁免，注释改为 `# noqa: C901 - 待 unify-chat-runtime-events 删除`，函数体不得在本变更中改写。
+`src/` 中 `# noqa: C901` 的数量 MUST NOT 超过 `test/test_c901_exemption_ratchet.py` 记录的上限。以下 6 个函数 MUST 把圈复杂度降到 15 及以下并去掉豁免：`observe_source_event`、`TeamEventNormalizerMixin._team_event`、`stream_leader_agent_reply`、`_run_worker_turn`、`evaluate_job_feasibility`、`get_or_create_agent`。
 
 #### Scenario: Named hotspots carry no exemption
 
 - **WHEN** 执行 `uv run ruff check src --select C901`
-- **THEN** 输出不包含上述 4 个函数名，且它们的定义行不带 `noqa: C901`
+- **THEN** 输出不包含上述 6 个函数名，且它们的定义行不带 `noqa: C901`
 
 #### Scenario: New exemption fails
 
@@ -21,25 +21,26 @@
 - **WHEN** 执行 `uv run pytest test/test_c901_exemption_ratchet.py`
 - **THEN** 测试因数量超过上限而失败
 
-### Requirement: Event dispatch hotspots have golden baselines before any rewrite
+### Requirement: Event rule tables preserve branch order and fall-through
 
-`observe_source_event` 与 `TeamEventNormalizerMixin._team_event` MUST 在本变更中获得提交到仓库的金标测试（`test/test_observation_rules_golden.py`、`test/test_team_event_rules_golden.py`）与金标文件（`test/golden/observation_rules.json`、`test/golden/team_event_rules.json`）。金标 MUST 在不改动这两个函数的前提下生成，并对时间字段与随机 id 归一。任何后续变更（含 `unify-chat-runtime-events`）改写这两段翻译逻辑时，金标输出 MUST 逐字节一致，除非该变更的 spec 明文改变了对应行为。
+把按事件类型分支的长函数改为规则表时，规则 MUST 按原代码中 `if` 的出现顺序排列；原分支以 `return` 结束的，对应处理函数 SHALL 返回"停止"；原分支不 `return`、继续执行后续 `if` 的，处理函数 SHALL 返回"继续"。重构前 MUST 先提交金标测试，重构后金标输出 MUST 逐字节一致。
 
-#### Scenario: Golden files are stable across runs
+#### Scenario: Observation golden output is unchanged
 
-- **GIVEN** 金标文件已用 `UPDATE_GOLDEN=1` 生成并提交
-- **WHEN** 不带 `UPDATE_GOLDEN` 连续运行两个金标测试 3 次
-- **THEN** 3 次均通过，金标文件无差异
+- **GIVEN** `test/test_observation_rules_golden.py` 在重构前生成并提交了 `test/golden/observation_rules.json`
+- **WHEN** `observe_source_event` 改为规则表后重跑该测试
+- **THEN** 每个事件之后的观察记录快照（去掉时间字段、ID 按出现顺序归一）与金标文件一致
 
-#### Scenario: Golden covers every branch
+#### Scenario: Team event golden output is unchanged
 
-- **WHEN** 检查 `test/golden/observation_rules.json` 与 `test/golden/team_event_rules.json`
-- **THEN** 前者覆盖 `observe_source_event` 中每一个 `event_type` 分支至少一次（含 `HITL_REQUIRED` 先关闭生成观察再打开审批观察的双分支顺序）；后者覆盖 `_team_event` 中每一个 Team outbox 事件类型至少一次
+- **GIVEN** `test/test_team_event_rules_golden.py` 在重构前生成并提交了 `test/golden/team_event_rules.json`
+- **WHEN** `TeamEventNormalizerMixin._team_event` 改为规则表后重跑该测试
+- **THEN** 每条 Team outbox 事件产出的领域事件列表与金标文件一致
 
-#### Scenario: Hotspots are left untouched in this change
+#### Scenario: A type handled by two branches still runs both
 
-- **WHEN** 本变更归档时比较 `observe_source_event` 与 `_team_event` 的函数体
-- **THEN** 除文件路径迁移与豁免注释文案外与开工前逐行一致
+- **WHEN** 观察到 `HITL_REQUIRED` 事件
+- **THEN** 先执行原"关闭当前生成观察"分支（`_close_open_generation`，不停止），再执行原"打开审批观察"分支（`kind="approval"`，停止），顺序与重构前相同
 
 ### Requirement: Dual-key lookups only shrink
 

@@ -1,285 +1,5 @@
-# Design
-
-## Context
-
-后端 `src/` 下 26 个顶层包中 24 个处在同一个强连通分量里，38 对包互相导入，647 处跨包导入写在函数内部以绕开循环导入。向上导入（低层导入高层）共 66 条，集中在四个枢纽：
-
-| 枢纽 | 向上/反向边 | 性质 |
-| --- | --- | --- |
-| `server/routes/agents.py` 里的 Agent 注册表（`_agents` 缓存、`get_registered_agent` 等） | 11 个非 HTTP 模块导入它 | 领域状态住在路由文件里 |
-| `server/routes/chat/` 下 93 个非 HTTP 文件、1.9 万行 | `runtime`/`subagents`/`memory`/`tools` 反向依赖路由层 20 条 | 对话引擎住在路由层 |
-| `tenancy/lifecycle.py` | 导入 13 个上层包 | 跨模块编排放在最底层 |
-| `config/model_catalog.py` ↔ `tenancy`、`server/auth` | 9/9 与 1/17 互引 | 模型目录是业务，混在配置包 |
-
-其他快照数字（tasks 1.4 会重算）：双键兼容读取 134 处、未引用顶层函数 69–71 个、`# noqa: C901` 29 处、前端含裸 `fetch(` 的文件 40 个、存储层私有 `_lock`/`_connect` 被 17 个外部文件直接使用。
-
-这些数字说明的是同一件事：没有任何一层是真正的底层，所以任何改动都能沿导入链传回"底层"再扩散到所有包。本变更只解决**位置与方向**问题——把文件放到正确的层、把依赖方向固定下来、给结构指标装上棘轮。它刻意不解决另外两个病因：
-
-- 同一个运行时事实在 SourceEvent / RuntimeEvent / DomainEvent / RuntimeFrame 四层各有一份手写表示，且以字符串和 `dict[str, Any]` 连接——由后继变更 `unify-chat-runtime-events` 解决。
-- `storage/database.py`（2373 行）同时拥有十几张表，19 个存储层以外的文件自己写 SQL，"每张表只有一个主人"不成立——由后继变更 `split-storage-by-aggregate` 解决。
-
-与本变更并行、不依赖 `simplify-global-session-context` 的 `define-runtime-contracts` 提供 `contracts/` JSON Schema、前后端对账测试、AgentScope 事件 fixture → RuntimeFrame 序列金标，以及按目录拆分的 AGENTS.md。本变更的 W4 搬迁对话引擎时，以这些对账测试作为"没搬坏"的额外证据。
-
-## Goals / Non-Goals
-
-**Goals**
-
-- `src/server/routes/` 只含 HTTP 适配；Agent 注册表、工具目录、对话引擎、租户编排各归其位。
-- 向上导入从 66 条降到 15 条（全部是存储/配置层的延迟导入），并由 import-linter 与棘轮测试保证只减不增；W5 之后 `src.server` 成为任何非 server 模块都不得导入的叶子（`forbidden` 契约，零例外）。
-- 存储层只通过公开的 `transaction()` / `control_transaction()` 被使用，连接在事务结束时关闭。
-- 每个搬迁目标包在搬入的同一个提交里具备：显式公开面（`__all__` 或 `api.py`）与一份只写不变量和测试锚点的 `AGENTS.md`。
-- 前端所有请求经由统一客户端，不再改写 `window.fetch`。
-- 全程不改变 HTTP 接口、SSE 事件、SQLite 结构与任何用户可见行为（W9 的错误文案除外）。
-
-**Non-Goals**
-
-- 不统一事件类型、不改投影管线、不减少持久化份数（→ `unify-chat-runtime-events`）。
-- 不拆 `database.py`、不迁移表所有权（→ `split-storage-by-aggregate`）。
-- 不把事件分发热点改写为规则表：那段代码在事件统一后整体消失，只保留它们的金标测试作为后继变更的回归基线（见 Decision 13）。
-- 不追求业务模块之间完全无环；`agents ↔ runtime` 这类同层互引不在本变更处理范围。
-- 不重新设计前端交互；W9 只做请求层与 `ChatPage` 的机械拆分。
-
-## Decisions
-
-### 1. 分层契约与基线棘轮
-
-用 import-linter 的 `layers` 契约固定依赖方向，现有向上导入全部写进 `ignore_imports` 作为基线，基线只能减少。初始层次（与 `tools/layer_baseline.py` 的 `DEFAULT_LAYERS` 一致，脚本会优先读取 pyproject 中已配置的契约）：
-
-```toml
-[tool.importlinter]
-root_package = "src"
-include_external_packages = false
-
-[[tool.importlinter.contracts]]
-name = "backend layers"
-type = "layers"
-layers = [
-  "src.server",
-  "src.group_studio | src.scheduler | src.runtime | src.subagents | src.mcp | src.agents | src.tools | src.memory | src.security | src.catalog | src.skills | src.sessions | src.notifications | src.sandbox | src.vector_store | src.project_files | src.project_resources | src.runtime_context | src.session_migration | src.models | src.generated_file_preview",
-  "src.storage",
-  "src.tenancy",
-  "src.config | (src.common) | src.exception_detail",
-]
-ignore_imports = [
-  # 由 tools/layer_baseline.py 生成，整段替换；只删不加
-]
-```
-
-同层之间（`|` 分隔）互相导入不受约束；`(src.common)` 的括号表示该包在 W2 之前尚不存在。`src/` 下每个顶层包和顶层模块都必须出现在某一层，`layer_baseline.py` 的标准错误会列出未归层模块（开工时只有空包 `src.model`，W8 删除）。
-
-W5 结束后层次收成四层（见 Decision 9），并追加第二条零例外契约，使 `src.server` 成为叶子：
-
-```toml
-[[tool.importlinter.contracts]]
-name = "server is a leaf"
-type = "forbidden"
-source_modules = ["src.group_studio", "src.scheduler", "src.runtime", "src.subagents", "src.mcp", "src.agents", "src.tools", "src.memory", "src.security", "src.catalog", "src.skills", "src.sessions", "src.notifications", "src.sandbox", "src.vector_store", "src.models", "src.generated_file_preview", "src.storage", "src.config", "src.tenancy", "src.common", "src.exception_detail"]
-forbidden_modules = ["src.server"]
-```
-
-该契约不允许 `ignore_imports`。它是 DeerFlow `test_harness_boundary.py` 的等价物：整个后端只有这一条边界是绝对的，其余层间关系允许带基线过渡。
-
-基线棘轮 `backend/test/test_layer_baseline_ratchet.py`：
-
-```python
-"""分层基线只减不增：每条 ignore_imports 必须仍对应真实导入，总数不得超过上限。"""
-
-from __future__ import annotations
-
-import re
-import subprocess
-import sys
-import tomllib
-from pathlib import Path
-
-BACKEND = Path(__file__).resolve().parents[1]
-MAX_ENTRIES = 66  # 每删一条基线就下调
-
-
-def _baseline() -> list[str]:
-    config = tomllib.loads((BACKEND / "pyproject.toml").read_text(encoding="utf-8"))
-    for contract in config["tool"]["importlinter"]["contracts"]:
-        if contract["name"] == "backend layers":
-            return list(contract.get("ignore_imports", []))
-    raise AssertionError("pyproject.toml 缺少 backend layers 契约")
-
-
-def _import_exists(source: str, target: str) -> bool:
-    path = BACKEND / Path(*source.split(".")).with_suffix(".py")
-    if not path.exists():
-        path = BACKEND / Path(*source.split(".")) / "__init__.py"
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    parent, _, leaf = target.rpartition(".")
-    patterns = [rf"^\s*import {re.escape(target)}\b", rf"^\s*from {re.escape(target)} import\b"]
-    if parent:
-        patterns.append(rf"^\s*from {re.escape(parent)} import [^\n]*\b{re.escape(leaf)}\b")
-    return any(re.search(p, text, re.MULTILINE) for p in patterns)
-
-
-def test_baseline_entries_are_live() -> None:
-    stale = [entry for entry in _baseline() if not _import_exists(*[s.strip() for s in entry.split("->")])]
-    assert not stale, "以下基线条目对应的导入已不存在，请从 ignore_imports 删除：\n" + "\n".join(stale)
-
-
-def test_baseline_does_not_grow() -> None:
-    count = len(_baseline())
-    assert count <= MAX_ENTRIES, f"分层基线有 {count} 条，超过上限 {MAX_ENTRIES}；新增向上导入要改代码，不要加基线"
-    assert count == MAX_ENTRIES, f"分层基线已减少到 {count} 条，请把 MAX_ENTRIES 下调为 {count}"
-
-
-def test_contract_is_kept() -> None:
-    result = subprocess.run([sys.executable, "-m", "importlinter.cli", "lint-imports"], cwd=BACKEND, capture_output=True, text=True)
-    assert result.returncode == 0, result.stdout + result.stderr
-```
-
-备选：只用 `forbidden` 契约逐对禁止。不采用：26 个包两两组合无法维护，`layers` 一条就表达了全部方向。
-
-### 2. 波次顺序、提交前检查与搬迁包的验收
-
-**波次顺序**：W1（注册表与工具目录）→ W2+W3（密钥与平台客户端）→ W4（对话引擎）→ W5（租户编排）→ W6（存储访问）→ W7（复杂度热点）→ W8（结构检查与清理）；W9（前端）可与后端任一波次并行，合并顺序放最后。W4 依赖 W1（引擎不再引用路由模块后才能整体搬走），W6/W7 依赖 W4（它们改写的文件已在新路径）。
-
-**搬家与改逻辑分开提交**：每个波次里由脚本完成的机械搬迁单独一个提交，手工收尾与任何逻辑改动另一个提交。出了问题要能区分"搬坏的"和"改坏的"。
-
-**提交前检查**（五条，任一失败不得提交）：
-
-```bash
-uv run --no-sync ruff check src test
-uv run --no-sync basedpyright            # 类型基线条数不得增加（scripts/quality-gates.sh 已含该比较）
-uv run --no-sync lint-imports
-uv run --no-sync pytest -q -p no:cacheprovider 2>&1 | grep -E '^(FAILED|ERROR) ' | sort > /tmp/after.txt
-diff /tmp/before.txt /tmp/after.txt      # 必须无输出：失败集合与开工前完全一致
-```
-
-`/tmp/before.txt` 在 tasks 1.3 于未改动代码上生成一次；全程不允许"顺手修"既有失败，也不允许引入新失败。
-
-**搬迁目标包的验收**（W1、W2、W3、W4、W5 每个新建或搬入的包都适用，在搬入的同一提交里完成）：
-
-1. 显式公开面。单文件模块在文件顶部写 `__all__`；多文件包在 `__init__.py` 写 `__all__` 或提供 `api.py`。公开面的内容由脚本算出：所有在该包外部出现的 `from <包> import <名字>` 的名字集合。不在公开面里的名字，外部模块不得再导入（W4 的 `src/runtime/chat/` 例外：该包即将被 `unify-chat-runtime-events` 重塑，只在 `AGENTS.md` 的"入口"段列出被外部导入的模块清单，不强制 `api.py`）。
-2. `AGENTS.md`。固定五段：职责与边界（一句话职责、拥有的表、不得导入什么）；入口（公开面清单，每项一句话）；不变量（每条附"`test/xxx.py` 钉住"）；禁止（本变更中删掉的旧做法，防止长回来）；改动政策（"改本目录代码必须同步更新本文件"）。控制在 800 词以内。每个有 `AGENTS.md` 的目录同时放一行 `CLAUDE.md`：`@AGENTS.md`。
-3. 结构测试 `test/test_agents_md.py`（W1 新建，后续波次只增加目录）：`REQUIRED_DIRS` 中每个目录必须有 `AGENTS.md` 与 `CLAUDE.md`；`AGENTS.md` 中以 `test/` 开头的路径必须存在。
-
-这样做的原因：本仓库大部分代码由编码智能体产出，分层规则如果不写在它们按目录加载的文件里，下一次就会把注册表放回路由文件。文档与结构在同一个提交里产生，不会脱节。
-
-### 3. W1a：Agent 注册表搬到 `src/agents/registry.py`
-
-`src/server/routes/agents.py` 里 7 个路由函数之外有 24 个顶层定义，其中 22 个函数/变量与 2 个请求模型（`AgentCreate`、`AgentUpdate`）。全部搬到 `src/agents/registry.py`，路由模块改为 `from src.agents import registry as agent_registry` 并通过 `agent_registry.<名字>` 访问。22 个函数/变量（按源文件顺序；以 `tools/extract_symbols.py` 的 AST 扫描结果为准）：
-
-`_job_service`、`_pause_jobs_for_agent_capability_change`、`AGENTS_NAMESPACE`、`_agents`、`_build_default_agent`、`_build_default_websearch_job_agent`、`upsert_agent`、`_ensure_default_agent`、`_ensure_default_websearch_job_agent`、`_ensure_system_agents`、`_upgrade_default_agent_prompt`、`_apply_job_agent_fields`、`_sync_agents_from_catalog`、`_load_agents`、`_save_agents`、`_install_agent_registry`、`get_registered_agent`、`list_registered_agents`、`list_workspace_agents`、`remove_mcp_tools_from_agents`、`remove_skills_from_agents`、`remove_knowledge_tools_from_agents`。
-
-两个请求模型随之搬走是因为 `upsert_agent` 等函数的签名引用它们；留在路由模块会让 registry 反向导入 server。路由模块从 registry 重新导入它们用于请求体解析。
-
-```bash
-uv run python $T/extract_symbols.py \
-  --from src/server/routes/agents.py --to src/agents/registry.py --alias agent_registry \
-  --names _job_service,_pause_jobs_for_agent_capability_change,AGENTS_NAMESPACE,_agents,_build_default_agent,_build_default_websearch_job_agent,upsert_agent,_ensure_default_agent,_ensure_default_websearch_job_agent,_ensure_system_agents,_upgrade_default_agent_prompt,_apply_job_agent_fields,_sync_agents_from_catalog,_load_agents,_save_agents,_install_agent_registry,get_registered_agent,list_registered_agents,list_workspace_agents,remove_mcp_tools_from_agents,remove_skills_from_agents,remove_knowledge_tools_from_agents \
-  --by-name AgentCreate,AgentUpdate \
-  --docstring "Agent 注册表：进程内缓存、默认 Agent 保障与按能力移除。路由层只做 HTTP 适配。"
-uv run python $T/move_symbols.py --old src.server.routes.agents --new src.agents.registry --names get_registered_agent,list_registered_agents,list_workspace_agents,remove_mcp_tools_from_agents,remove_skills_from_agents,remove_knowledge_tools_from_agents,AgentCreate,AgentUpdate,upsert_agent
-uv run --no-sync ruff check --select I --fix src test
-uv run --no-sync ruff check --select F401 --fix src/server/routes/agents.py
-```
-
-`_job_service` 原来是模块级实例，会在导入时拉起 `scheduler`，形成 `agents → scheduler → agents` 的导入环。改为延迟创建：
-
-```python
-from functools import cache
-
-@cache
-def _job_service() -> "JobService":
-    from src.scheduler.service import JobService  # 延迟导入：打破 agents → scheduler → agents 环
-    return JobService()
-```
-
-调用处 `_job_service.pause(...)` 改为 `_job_service().pause(...)`。测试若 patch `_job_service`，改为 patch `agent_registry._job_service` 为返回替身的函数。
-
-`_agents` 缓存只有一份：路由模块不再持有自己的 `_agents` 绑定，统一读写 `agent_registry._agents`，这样测试 `monkeypatch.setattr(agent_registry, "_agents", {...})` 对路由同样生效。`_install_agent_registry()` 的顶层调用随函数一起搬到 registry 末尾，保证导入 registry 即完成默认 Agent 保障。
-
-验收（Decision 2）：`src/agents/registry.py` 顶部 `__all__` 列出 9 个被外部导入的名字；新建 `src/agents/AGENTS.md`，不变量至少包含"默认 Agent 与系统 Agent 由 `_ensure_system_agents` 在导入时保障，`test/test_default_agent.py`、`test/test_system_job_agent.py` 钉住"（测试文件名以实际存在者为准）。
-
-### 4. W1b：HTTP/知识库工具目录搬到 `src/tools/http_tool_catalog.py`
-
-`src/server/routes/tools.py` 中被 `src.server` 以外模块引用的名字及其在该文件内的传递依赖，用下面的闭包脚本重算后搬走：
-
-```bash
-uv run python - <<'EOF'
-import ast, pathlib, re
-src = pathlib.Path("src/server/routes/tools.py").read_text(encoding="utf-8")
-tree = ast.parse(src)
-defs = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
-defs |= {t.id: n for n in tree.body if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)}
-external = set()
-for p in pathlib.Path("src").rglob("*.py"):
-    if p.parts[1] == "server": continue
-    for m in re.finditer(r"from src\.server\.routes\.tools import ([^\n]+)", p.read_text(encoding="utf-8")):
-        external |= {x.strip() for x in m.group(1).split(",")}
-seen, todo = set(), list(external)
-while todo:
-    name = todo.pop()
-    if name in seen or name not in defs: continue
-    seen.add(name)
-    todo += [n.id for n in ast.walk(defs[name]) if isinstance(n, ast.Name) and n.id in defs]
-print(",".join(sorted(seen)))
-EOF
-```
-
-输出即 `extract_symbols.py --names` 的参数，目标 `src/tools/http_tool_catalog.py`，alias `http_tool_catalog`。`_require_http_url` 抛 `fastapi.HTTPException`，随之进入 `src/tools/`；改异常类型会改变错误响应，超出本变更范围（Risks 已记录）。
-
-### 5. W1c：引擎直接依赖 `src.skills.*` 与 `src.mcp.registry`
-
-对话引擎中所有 `from src.server.routes.skills import ...`、`from src.server.routes.mcp import ...` 改为从被路由模块再导出的原始模块导入（以路由文件顶部的 import 为准）。`src/mcp/registry.py` 中通过 `src.server.routes.mcp._fetch_*` 绕道调用自身的写法，改为直接调用本模块函数；测试里对 `routes.mcp._fetch_*` 的 patch 改为 patch `src.mcp.registry.<函数>`。
-
-完成判定：
-
-```bash
-grep -rn "server\.routes\.\(skills\|mcp\|agents\|tools\)\|server\.routes import \(skills\|mcp\|agents\|tools\)" src --include=*.py | grep -v "^src/server/"   # 无输出
-grep -rn "routes.mcp._fetch\|mcp_routes" src test   # 无输出
-```
-
-### 6. W2：`server/auth/secrets.py` 搬到 `src/common/secrets.py`
-
-`secrets.py` 只依赖标准库与 `keyring`，却被 `config`、`models`、`tenancy` 导入，是"底层导入 server"中最无理由的一条。新建 `src/common/`（`__init__.py` 只有 docstring 与 `__all__`），`git mv` 后批量改写引用。`src/common` 不得导入任何 `src.*`，由 `grep -n "^from src\|^import src" src/common/*.py` 无输出保证。契约中的 `(src.common)` 改为 `src.common`。
-
-### 7. W3：平台客户端搬到 `src/models/platform/`，模型目录不再调用 auth
-
-`server/auth/key2api.py`、`server/auth/cloud_client.py` 是对上游 key2api 与引力云端的 HTTP 客户端，不是鉴权中间件；`config/model_catalog.py` 通过它们拉取上游模型列表，造成 `config → server.auth` 17 条反向导入。
-
-1. 新建 `src/models/platform/`，`git mv` 两个文件进去；`account_path` 从 `server/auth/__init__.py` 搬到 `cloud_client.py`。
-2. `config/model_catalog.py` 的 `ensure_hosted_upstream_catalog` 拆成两半：纯数据部分保留为 `apply_upstream_models(names: list[str], upstream_base_url: str) -> None`；调用 key2api 的部分新建为 `src/models/platform/upstream_catalog.py::ensure_hosted_upstream_catalog()`，内部先取名单再调用 `apply_upstream_models`。原调用方改调新位置。
-3. 完成判定：`grep -n "key2api" src/config/*.py` 无输出；`grep -n "server" src/models/platform/*.py` 无输出。
-
-验收（Decision 2）：`src/models/platform/__init__.py` 写 `__all__`；新建 `src/models/AGENTS.md`，不变量包含"`config` 只做纯数据合并，任何网络调用都在 `models/platform`"并指向对应测试。
-
-### 8. W4：对话引擎整体搬到 `src/runtime/chat/`
-
-`src/server/routes/chat/` 下除 `__init__.py`、`router.py`、`handlers/` 外的 93 个文件整体 `git mv` 到 `src/runtime/chat/`，与现有 `src/runtime/`（`run_context` 等）合并，`runtime ↔ server.routes.chat` 14/13 的互引随之消失。只搬不改。
-
-```bash
-uv run python $T/move_package.py --old src.server.routes.chat --new src.runtime.chat \
-  --keep __init__.py --keep router.py --keep handlers --dry-run   # 先看"需人工处理"清单
-uv run python $T/move_package.py --old src.server.routes.chat --new src.runtime.chat \
-  --keep __init__.py --keep router.py --keep handlers
-```
-
-脚本改写 `src/`、`test/`、`backend-server.spec` 中的 import、`monkeypatch.setattr` / `mock.patch` 字符串和 `importlib` 字符串。手工收尾五步：
-
-1. `CHAT_PREFIX` 等只被 `router.py` 使用的常量留在路由包；被引擎使用的常量随引擎走，路由包从新位置导入。
-2. `src/server/routes/chat/__init__.py` 的 docstring 改为"Chat HTTP 适配层"，再导出只剩 `router` 与 `handlers`。
-3. `src/runtime/chat/__init__.py` 新建，docstring 写"Chat 运行时：ReAct 循环、投影、Trace、Team Runtime"，不做任何再导出（避免 93 个模块的导入环）。
-4. `backend-server.spec` 的 `hiddenimports` 若含旧路径，由脚本改写；人工复核 `grep -n "routes.chat" *.spec` 只剩 `router`/`handlers`。
-5. `docs/` 与 `AGENTS.md` 中的旧路径按 Decision 19 第 4 步的 grep 清理。
-
-`test/test_import_boundaries.py` 中对 `src.server.routes.chat.*` 的断言改为 `src.runtime.chat.*`。
-
-验收（Decision 2）：新建 `src/runtime/chat/AGENTS.md`，"入口"段由脚本生成——列出被 `handlers/` 与 `src.runtime.chat` 以外模块导入的模块与名字；"不变量"段至少包含 Event Stream V3 契约的五条（`RUNTIME_EVENT` 是唯一 SSE 事件名、Frame 只有 open/delta/close/snapshot/done、`seq` 单 Run 内单调、HITL 不结束订阅、`done` 晚于所有 close），各自指向现有测试；"禁止"段写明"不要在这里新增事件类型的翻译层，事件统一见 `unify-chat-runtime-events`"。本包不强制 `api.py`（理由见 Decision 2）。
-
-备选：搬到 `src/chat/` 新建顶层包。不采用：`src/runtime/` 已存在且内容本来就是 Chat 运行时的一部分，分开只会多一个同层互引。
-
 
 ### 9. W5：租户生命周期编排上移到 `src/server/tenant_lifecycle.py`，合并底层
-
-> 位置说明：租户生命周期是跨模块编排，不是 HTTP 适配。放进 `src/server/` 是因为当前只有它一个编排模块，单独开一层不值得；`split-storage-by-aggregate` 落地后若编排模块增多（启动 reconcile、会话迁移等），再统一迁到 `src/app/`。本变更不为此单独改动。
-
-> W5 完成后立即生效的硬边界：按 Decision 1 追加 `server is a leaf` 的 `forbidden` 契约（零 `ignore_imports`）。此后任何非 `src.server` 模块导入 `src.server.*` 直接使 `lint-imports` 失败，不再进入基线。W5 之前该契约无法通过，因为 `tenancy.lifecycle` 等尚未搬走。
 
 `src/tenancy/lifecycle.py` 导入了 storage、catalog、group_studio、sandbox、agents 等 13 个上层模块，本质是服务层编排。步骤：
 
@@ -561,18 +281,52 @@ grep -rn "_record_run_event" src test   # 必须无输出
 
 `test/test_import_boundaries.py` 的 ALLOWLIST 中引用该名字的字符串会被同一命令改写，无须手工处理。不保留旧名别名。
 
-### 13. W7a：为两个事件分发热点提交金标测试（规则表方案不再实施）
+### 13. W7a：事件分发热点改为有序规则表
 
-`observe_source_event`（复杂度 134）与 `TeamEventNormalizerMixin._team_event`（102）是 SourceEvent → RuntimeEvent / TEAM_DOMAIN_EVENT → DomainEvent 的翻译层。原方案把它们改写成有序规则表以降低圈复杂度；**现在放弃这一步**：规则表仍是按字符串匹配事件名的同一层翻译，而后继变更 `unify-chat-runtime-events` 会把这两段代码连同它们所属的翻译层整体替换为单一的 `RunEvent` 类型，规则表的工作量会被全部丢弃。两个热点保留 `# noqa: C901 - 待 unify-chat-runtime-events 删除`，不计入 W7 要消掉的豁免。
+新文件 `src/runtime/chat/event_rules.py`：
 
-保留并提前提交的是**金标测试**：它们记录"同一事件序列 → 同一观察记录 / 同一 Domain Event 序列"，是后继变更证明"事件统一后行为未变"的回归基线，也是 W4 搬迁后验证"没搬坏"的证据之一。`define-runtime-contracts` 提供的 AgentScope fixture → RuntimeFrame 金标覆盖管线末端，这两个金标覆盖管线中段，三者合起来把整条翻译链钉住。
+```python
+"""有序事件规则表：按原 if 链的顺序匹配；处理函数返回 True 表示原分支以 return 结束。"""
 
-两个金标测试已在沙箱快照上验证：连续运行 3 次结果一致，覆盖了全部分支（观察测试产出 10 条观察记录，Team 测试每类事件都有输出）。
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from typing import Generic, TypeVar
+
+ContextT = TypeVar("ContextT")
+
+
+@dataclass(frozen=True, slots=True)
+class EventRule(Generic[ContextT]):
+    matches: Callable[[str], bool]
+    handle: Callable[[ContextT], bool]
+
+
+def exact(*event_types: str) -> Callable[[str], bool]:
+    allowed = frozenset(event_types)
+    return lambda event_type: event_type in allowed
+
+
+def prefix(value: str) -> Callable[[str], bool]:
+    return lambda event_type: event_type.startswith(value)
+
+
+def run_rules(rules: Iterable[EventRule[ContextT]], event_type: str, context: ContextT) -> bool:
+    """依次执行匹配的规则；遇到返回 True 的处理函数立即停止并返回 True。"""
+
+    for rule in rules:
+        if rule.matches(event_type) and rule.handle(context):
+            return True
+    return False
+```
+
+**先写金标测试，提交后再重构**。两个金标测试已在沙箱快照上验证：连续运行 3 次结果一致，覆盖了全部分支（观察测试产出 10 条观察记录，Team 测试每类事件都有输出）。
 
 `backend/test/test_observation_rules_golden.py`：
 
 ```python
-"""observe_source_event 金标测试：同一事件序列写出的观察记录必须与金标完全一致（供 W4 搬迁与后继事件统一回归使用）。
+"""observe_source_event 金标测试：改为规则表前后，同一事件序列写出的观察记录必须完全一致。
 
 重构前生成金标（只运行一次并提交 test/golden/observation_rules.json）：
     UPDATE_GOLDEN=1 uv run pytest test/test_observation_rules_golden.py
@@ -757,11 +511,79 @@ def test_team_event_rules_match_golden() -> None:
     assert actual == expected
 ```
 
-备选：仍按原方案改写为规则表。不采用：理由见上；降低的是复杂度指标，不是副本数量。
+**`observe_source_event` 的改法**（`src/runtime/chat/observation_runtime.py`）：
+
+1. 新增上下文：
+
+```python
+@dataclass(slots=True)
+class _SourceEvent:
+    persist: bool
+    run_id: str
+    session_id: str
+    event_type: str
+    data: dict[str, Any]
+    payload: dict[str, Any]
+    parent_id: str
+    workspace_id: str
+    project_id: str
+```
+
+2. 原函数中 `parent_id`、`payload` 两行之后的每个顶层 `if`，按出现顺序变成一个模块级函数 `def _on_xxx(event: _SourceEvent) -> bool:`。函数体是原分支体，局部名改为 `event.<字段>`。原分支内的每个 `return` 改为 `return True`。原分支末尾没有 `return`、会继续执行后续 `if` 的，函数末尾加 `return False`。原分支给局部变量重新赋值的，改为给 `event` 的字段赋值。
+3. 规则表（顺序就是原 if 链的顺序，快照共 17 条）：
+
+```python
+_SOURCE_EVENT_RULES: tuple[EventRule[_SourceEvent], ...] = (
+    EventRule(exact("MODEL_CALL_START"), _on_model_call_start),
+    EventRule(exact("MODEL_CALL_END"), _on_model_call_end),
+    EventRule(exact("THINKING_BLOCK_DELTA"), _on_thinking_delta),
+    EventRule(exact("TEXT_BLOCK_DELTA", "REASONING_DELTA", "FINAL_ANSWER_DELTA"), _on_generation_text_delta),
+    # 原分支不 return：先关闭当前生成观察，再交给后面的规则。
+    EventRule(exact("REPLY_END", "HITL_REQUIRED", "CLARIFICATION_REQUIRED", "TOOL_RESULT_START"), _close_generation_at_boundary),
+    EventRule(exact("TOOL_CALL_START"), _on_tool_call_start),
+    EventRule(exact("TOOL_CALL_END"), _on_tool_call_end),
+    EventRule(exact("TOOL_RESULT_TEXT_DELTA"), _on_tool_result_delta),
+    EventRule(exact("TOOL_RESULT_END"), _on_tool_result_end),
+    EventRule(exact("AGENT_FINAL_ANSWER_STARTED"), _on_final_answer_started),
+    EventRule(exact("HITL_REQUIRED", "CLARIFICATION_REQUIRED"), _on_interaction_required),
+    EventRule(exact("HITL_RESOLVED"), _on_interaction_resolved),
+    EventRule(exact("SKILL_CONTEXT"), _on_skill_context),
+    EventRule(exact("SKILL_END"), _on_skill_end),
+    EventRule(exact("SUBAGENT_STARTED", "SUBAGENT_QUEUED"), _on_subagent_started),
+    EventRule(exact("SUBAGENT_COMPLETED", "SUBAGENT_FAILED", "SUBAGENT_CANCELLED"), _on_subagent_finished),
+    EventRule(exact("TEAM_DOMAIN_EVENT"), _on_team_domain_event),
+)
+```
+
+4. 原函数改为：
+
+```python
+def observe_source_event(*, persist, run_id, session_id, event_type, data, workspace_id="default", project_id="default") -> None:
+    """按源信号开闭步骤。未知类型忽略。"""
+
+    if not persist or not run_id:
+        return
+    parent_id = find_open_observation(persist=persist, run_id=run_id, kind="run") or f"obs-run-{run_id}"
+    payload = data.get("payload") if isinstance(data.get("payload"), dict) else data
+    run_rules(_SOURCE_EVENT_RULES, event_type, _SourceEvent(
+        persist=persist, run_id=run_id, session_id=session_id, event_type=event_type, data=data,
+        payload=payload, parent_id=parent_id, workspace_id=workspace_id, project_id=project_id,
+    ))
+```
+
+参数的类型注解保持原样（上面为节省篇幅省略）。归档后若分支数量或顺序变了，以当时源码中 `if` 的出现顺序为准：在规则表上方加注释 `# 顺序与重构前 observe_source_event 的 if 链一致`。
+
+**`_team_event` 的改法**（`src/runtime/chat/projection/team_event_normalizer.py`）：
+
+1. 上下文 `_TeamEvent`（`@dataclass(slots=True)`）包含：`normalizer: TeamEventNormalizerMixin`、`data`、`source_type`、`team_id`、`team_block_id`、`actor_id`、`task_id`、`status`、`phase`、`payload`、`produced: list[DomainEvent]`、`result: list[DomainEvent] | None = None`。
+2. `_team_event` 保留开头的取值、`run.created` 分支、`if team_block_id not in self._active: return []`，以及 `root_patch` 的计算与 `produced.append(self._delta_block(...))`，这一段是所有后续分支共享的前置步骤。之后构造 `_TeamEvent`，执行 `run_rules(_TEAM_RULES, source_type, event)`，最后 `return event.result if event.result is not None else event.produced`。
+3. 其余 16 个 `if`（从 `member.permission.required` 到 `mail.read/acted`）各变成一个模块级函数 `def _on_xxx(event: _TeamEvent) -> bool:`。函数体中的 `self.` 改为 `event.normalizer.`，局部名改为 `event.<字段>`。原分支中的 `return <表达式>` 改为 `event.result = <表达式>` 加 `return True`。规则用 `exact(...)` 表示 `==`/`in` 判断，用 `prefix("attempt.")`、`prefix("member.tool.")` 表示 `startswith`，顺序与原代码一致。
+4. 若 `_team_event` 仍超过 15，把 `run.created` 分支整体抽成方法 `_team_run_created(self, data, team_id, team_block_id, actor_id, payload) -> list[DomainEvent]`，原位置改为 `return self._team_run_created(...)`。
+5. `source_normalizer.py` 中 `ChatProjectionNormalizer._team_event` 对父类的转发保持不变。
+
+备选：用 `match` 语句。不采用：`match` 不能表达"同一事件类型依次进入两个分支"的贯穿语义，复杂度也不会下降。
 
 ### 14. W7b：其余 4 个热点按阶段拆分
-
-> 过渡态说明：本节对 `stream_leader_agent_reply` 的拆分用 `stop / skip_event / break_loop` 标志复刻原控制流，拆出的阶段函数仍共享同一个 `_LeaderStream` 上下文。它降低的是单函数复杂度，不是功能之间的耦合；HITL、Plan、Skill、Subagent、恢复仍通过同一个上下文对象互相影响。终态（loop 只做驱动与状态机，其余能力作为事件订阅者）由 `unify-chat-runtime-events` 实现，本节只要求"只搬不改、测试失败集合不变"。
 
 通用规则：拆出的函数复杂度都不超过 15；只移动代码，不改写条件或顺序；每拆完一个函数都跑一遍相关测试与 Decision 2 的全量对比。原函数中的 `return`、`continue`、`break` 在抽出的函数里用上下文对象上的标志表示，由原函数检查：
 
@@ -811,7 +633,7 @@ async def stream_leader_agent_reply(...原签名...) -> AsyncGenerator[str, None
 
 **`get_or_create_agent`**（`src/agents/factory.py`，复杂度 24）：抽出 `_agent_from_run_snapshot`（514–536）、`_cached_agent_or_none`（缓存命中与失效判断，快照约 552–593）、`_hosted_sandbox_runtime`（约 610–657）、`_construct_agent`（约 661–713）、`_register_agent`（约 715–726）。参数原样透传，不改签名。
 
-验证：`uv run --no-sync ruff check src --select C901` 的输出中不再出现这 4 个函数名，并删除它们定义行上的 `# noqa: C901` 注释。`observe_source_event` 与 `_team_event` 保留豁免，注释改为 `# noqa: C901 - 待 unify-chat-runtime-events 删除`（Decision 13）。
+验证：`uv run --no-sync ruff check src --select C901` 的输出中不再出现这 6 个函数名，并删除它们定义行上的 `# noqa: C901` 注释。
 
 ### 15. W8a：复杂度豁免与双键读取的只减不增检查
 
@@ -828,8 +650,9 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "src"
 # 开工时填 `grep -rn "noqa: C901" src | wc -l` 的结果；每去掉一个豁免就下调。
 MAX_EXEMPTIONS = 29
-# observe_source_event / _team_event 由 unify-chat-runtime-events 整体替换，不在本表（Decision 13）
 HOTSPOTS = (
+    "observe_source_event",
+    "_team_event",
     "stream_leader_agent_reply",
     "_run_worker_turn",
     "evaluate_job_feasibility",
@@ -1286,19 +1109,17 @@ W1、W2、W3、W4、W5、W8（改名）都会移动文件。每次移动后在�
 - [未合并的分支在大范围移动后冲突] → 每个波次合并前通知在途分支；分支作者在变基前对自己的分支运行同一条脚本命令（脚本对已搬迁的路径不做任何事），再变基。
 - [`ClosingConnection` 改变了连接生命周期，块外继续使用连接的代码会报 `ProgrammingError`] → 已核对快照中没有这种写法，全量测试已验证。归档后执行 `grep -rn "= \(self\.connect\|_connect\|database\._connect\)()" src` 与 `grep -rn "with conn:" src` 复核，应无输出。
 - [删除 fetch 桥后，漏改的请求在 Electron 打包版失效（开发模式有 Vite 代理，发现不了）] → `noRawFetch.test.ts` 拦截源码中的裸 `fetch`；合并前用打包版手测登录、对话、群聊工作室、文件下载。
-- [金标测试对易变字段（时间戳、随机 id）敏感而误报] → 金标生成时归一化 `At/Ms/_at/_ms/timestamp` 结尾的键与 `domain-<hex>` id；连续运行 3 次一致后才提交。
+- [规则表重构时弄错分支顺序或贯穿语义] → 重构前先提交金标；金标覆盖全部分支，且每个事件之后都拍一次快照，顺序错误会直接体现为中间状态不同。
 - [`_job_service` 改为延迟创建] → `@cache` 保证每个进程只有一个实例，与原来模块级实例等价；测试若 patch `_job_service`，改为 patch `agent_registry._job_service` 为返回替身的函数。
 - [`fastapi.HTTPException` 随 `_require_http_url` 进入 `src/tools/`] → 接受。改异常类型会改变错误响应，超出本变更范围。
-- [保留的 15 条向上导入仍然存在] → 全部是存储层或配置层的延迟导入，已写进基线且只减不增；由后继变更 `split-storage-by-aggregate` 清零。
-- [AGENTS.md 与代码脱节] → 文档与搬迁在同一提交产生；`test/test_agents_md.py` 检查目录齐全与测试锚点存在；改动政策写进每份 AGENTS.md。
+- [保留的 15 条向上导入仍然存在] → 全部是存储层或配置层的延迟导入，已写进基线且只减不增；拆分 `database.py` 另立变更。
 
 ## Migration Plan
 
 1. 前置：`simplify-global-session-context` 已归档；`fix-runtime-correctness-and-quality-gates` 阶段 B 已合并（`reexport_audit.py` 输出 0、`scripts/quality-gates.sh` 已存在、C901 豁免已标注）。
 2. 按 Decision 2 的顺序逐波次提交，每个波次单独开 PR 或单独提交，合并前通过 `scripts/quality-gates.sh` 与失败集合对比。
 3. W9 可以与后端波次并行开发，合并顺序放最后。
-4. `define-runtime-contracts` 与本变更无文件冲突，应在本变更开工前或并行完成；W4 搬迁时以其对账测试和 fixture 金标作为额外验证。
-5. 全部完成后：分层基线 15 条；`MAX_ENTRIES = 15`；`server is a leaf` 契约生效；`MAX_EXEMPTIONS` 比开工时少 4；前端无裸 `fetch`；`src/agents`、`src/tools`、`src/common`、`src/models`、`src/runtime/chat`、`src/server` 各有 AGENTS.md。
+4. 全部完成后：分层基线 15 条；`MAX_ENTRIES = 15`；`MAX_EXEMPTIONS` 比开工时少 6；前端无裸 `fetch`。
 
 ### Rollback
 
@@ -1309,9 +1130,7 @@ W1、W2、W3、W4、W5、W8（改名）都会移动文件。每次移动后在�
 
 ## Open Questions
 
-无阻塞问题。以下事项已明确交给后继变更，不在本变更内决定：
+无阻塞问题。以下两点不影响实施内容，只影响排期：
 
-- `src/storage/database.py` 按聚合拆分、表所有权、基线 15 → 0：`split-storage-by-aggregate`（本变更归档后开工，可与下一项并行）。
-- SourceEvent / RuntimeEvent / DomainEvent 合并为 `RunEvent`、三份持久化收成一份、loop 变为驱动器 + 订阅者、删除 `observe_source_event` 与 `_team_event` 的 C901 豁免：`unify-chat-runtime-events`（W4 之后开工；其 design 需先决定 loop 由本仓库拥有还是交给 AgentScope ReActAgent + hooks）。
-- `contracts/` JSON Schema、前后端对账、fixture 金标、AGENTS.md 按目录拆分：`define-runtime-contracts`（现在即可开工，不依赖 `simplify-global-session-context`）。
 - W9 是否由前端同学并行完成（不影响设计）。
+- `src/storage/database.py` 的拆分（消除保留的 15 条基线）是否紧接着立项。

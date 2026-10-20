@@ -4,7 +4,7 @@
 
 ## 1. 开工准备
 
-- [ ] 1.1 确认前置条件。验证：在仓库根目录 `ls openspec/changes/archive | grep simplify-global-session-context` 有输出；`fix-runtime-correctness-and-quality-gates` 的 tasks.md 第 10–16 组全部勾选；在 `backend/` 执行 `uv run --no-sync python "$(find ../openspec -path '*fix-runtime-correctness-and-quality-gates/tools/reexport_audit.py' | head -1)"` 输出 `隐式再导出共 0 个`；`test -x ../scripts/quality-gates.sh` 成功。任一不满足就停止，不开工。另建议（不阻塞）：`define-runtime-contracts` 的对账测试与 fixture 金标已合并，W4 搬迁时可作为额外验证
+- [ ] 1.1 确认前置条件。验证：在仓库根目录 `ls openspec/changes/archive | grep simplify-global-session-context` 有输出；`fix-runtime-correctness-and-quality-gates` 的 tasks.md 第 10–16 组全部勾选；在 `backend/` 执行 `uv run --no-sync python "$(find ../openspec -path '*fix-runtime-correctness-and-quality-gates/tools/reexport_audit.py' | head -1)"` 输出 `隐式再导出共 0 个`；`test -x ../scripts/quality-gates.sh` 成功。任一不满足就停止，不开工
 - [ ] 1.2 从最新主分支新建分支 `refactor/code-layering`。验证：`git status --short` 无输出，`git branch --show-current` 输出 `refactor/code-layering`
 - [ ] 1.3 在未改动的代码上用 Decision 2 的 pytest 命令生成 `/tmp/before.txt`。验证：文件存在；把 `wc -l < /tmp/before.txt` 的结果记在本任务下方（全绿时为 0）
 - [ ] 1.4 重算快照数字：`uv run python $T/layer_baseline.py >/dev/null`（标准错误第一行是向上导入条数）、`uv run python $T/dual_key_audit.py | tail -1`、`uv run python $T/dead_code_audit.py | tail -1`、`grep -rn "noqa: C901" src | wc -l`、`grep -rlE '(^|[^.[:alnum:]_$])fetch[[:space:]]*\(' ../frontend/src --include=*.ts --include=*.tsx | grep -v '\.test\.' | wc -l`。验证：把 5 个数字与 design.md Context 的期望值（66、134、69–71、29、40）对照记在本任务下方；差异不改变 Decision 中的规则时继续，改变时先更新 design.md 再继续
@@ -25,9 +25,8 @@
 - [ ] 3.4 验证路由与注册表共用同一份缓存（spec "Route modules contain only HTTP adapters"）。验证：`grep -n "^_agents\b\|^_agents:" src/server/routes/agents.py` 无输出；`grep -c "agent_registry\._agents" src/server/routes/agents.py` 大于 0；`uv run --no-sync pytest -q -k agent` 失败集合不变
 - [ ] 3.5 按 Decision 4 用闭包脚本重算名单，再运行 `extract_symbols.py`/`move_symbols.py` 把 HTTP/知识库工具目录搬到 `src/tools/http_tool_catalog.py`。验证：`grep -rn "server\.routes\.tools\|server\.routes import tools" src --include=*.py | grep -v "^src/server/"` 无输出；`uv run --no-sync pytest -q -k "tool"` 失败集合不变
 - [ ] 3.6 按 Decision 5 把引擎对 `routes/skills.py`、`routes/mcp.py` 的引用改为原始模块，并去掉 `src/mcp/registry.py` 绕道路由模块的调用，同步测试里的 `_fetch_*` patch。验证：Decision 5 末尾的 grep 无输出；`grep -rn "routes.mcp._fetch\|mcp_routes" src test` 无输出
-- [ ] 3.7 按 Decision 2 完成搬迁包验收：`src/agents/registry.py` 顶部写 `__all__`（9 个被外部导入的名字）、`src/tools/http_tool_catalog.py` 顶部写 `__all__`；新建 `src/agents/AGENTS.md`、`src/tools/AGENTS.md`（五段体裁，每条不变量附测试路径）及各自一行 `CLAUDE.md`（内容 `@AGENTS.md`）；新建 `test/test_agents_md.py`，`REQUIRED_DIRS = ("src/agents", "src/tools")`。验证：`uv run --no-sync pytest test/test_agents_md.py` 通过；在 `src/agents/AGENTS.md` 临时写入不存在的 `test/nope.py` 后该测试失败并列出路径，还原；`wc -w src/agents/AGENTS.md` 不超过 800
-- [ ] 3.8 重新生成分层基线并下调 `MAX_ENTRIES`，按 Decision 19 重写类型基线。验证：基线条数为 56（或 1.4 重算值减 10）；`uv run --no-sync pytest test/test_layer_baseline_ratchet.py` 通过；类型基线条数不增加
-- [ ] 3.9 提交 W1。验证：提交前检查通过
+- [ ] 3.7 重新生成分层基线并下调 `MAX_ENTRIES`，按 Decision 19 重写类型基线。验证：基线条数为 56（或 1.4 重算值减 10）；`uv run --no-sync pytest test/test_layer_baseline_ratchet.py` 通过；类型基线条数不增加
+- [ ] 3.8 提交 W1。验证：提交前检查通过
 
 ## 4. W2、W3：密钥与平台客户端（Decision 6–7）
 
@@ -35,8 +34,7 @@
 - [ ] 4.2 按 Decision 7 搬迁 `key2api.py`、`cloud_client.py` 到 `src/models/platform/`，并把 `account_path` 搬到 `cloud_client.py`。验证：`grep -rn "server\.auth\.\(key2api\|cloud_client\)" src test` 无输出；`grep -n "server" src/models/platform/*.py` 无输出；`uv run --no-sync pytest test/test_cloud_client.py` 通过
 - [ ] 4.3 按 Decision 7 拆分 `ensure_hosted_upstream_catalog`：`config/model_catalog.py` 保留 `apply_upstream_models(names, upstream_base_url)`，新建 `src/models/platform/upstream_catalog.py`，更新调用方与测试。验证：`grep -n "key2api" src/config/*.py` 无输出；`uv run --no-sync pytest test/test_upstream_models.py` 通过
 - [ ] 4.4 重新生成分层基线并下调 `MAX_ENTRIES`，按 Decision 19 重写类型基线。验证：基线 52 条；`ls src/server/auth/` 不再包含 `secrets.py`、`key2api.py`、`cloud_client.py`
-- [ ] 4.5 按 Decision 2 完成搬迁包验收：`src/common/__init__.py` 与 `src/models/platform/__init__.py` 写 `__all__`；新建 `src/common/AGENTS.md`（不变量：不导入任何 `src.*`，`grep` 命令写入文件）、`src/models/AGENTS.md`（不变量见 Decision 7）及各自 `CLAUDE.md`；`test_agents_md.py` 的 `REQUIRED_DIRS` 加入 `src/common`、`src/models`。验证：`uv run --no-sync pytest test/test_agents_md.py` 通过
-- [ ] 4.6 提交 W2+W3。验证：提交前检查通过
+- [ ] 4.5 提交 W2+W3。验证：提交前检查通过
 
 ## 5. W4：对话引擎搬到 `src/runtime/chat/`（Decision 8）
 
@@ -44,17 +42,14 @@
 - [ ] 5.2 去掉 `--dry-run` 正式运行。验证：`find src/server/routes/chat -name "*.py" | sort` 只有 `__init__.py`、`router.py`、`handlers/` 下 5 个文件；`uv run --no-sync python -c "import src.server.main"` 成功
 - [ ] 5.3 完成 Decision 8 的手工收尾 1–5（`CHAT_PREFIX`、两个 `__init__.py` 的 docstring 与再导出、`backend-server.spec`、文档路径）。验证：`uv run --no-sync pytest test/test_import_boundaries.py` 通过；`grep -n "routes.chat" *.spec` 只剩 `router`/`handlers`；`grep -rn "from src.server.routes.chat import" src test | grep -v "router\|handlers"` 无输出
 - [ ] 5.4 按 Decision 19 同步 `per-file-ignores` 路径、重写类型基线，重新生成分层基线并下调 `MAX_ENTRIES`。验证：分层基线 32 条；`grep -n "server/routes/chat" pyproject.toml` 只剩路由文件或无输出；类型基线条数不增加
-- [ ] 5.5 按 Decision 8 末段新建 `src/runtime/chat/AGENTS.md` 与 `CLAUDE.md`："入口"段用 `grep -rhoE "from src\.runtime\.chat(\.[a-z_.]+)? import [^\n]+" src/server test | sort -u` 生成后人工精简；"不变量"段至少含 Event Stream V3 的五条并指向现有测试；"禁止"段写明事件翻译层不再新增。`REQUIRED_DIRS` 加入 `src/runtime/chat`。验证：`uv run --no-sync pytest test/test_agents_md.py` 通过；`wc -w` 不超过 800（超出则把细节移到 `docs/chat-sse-event-contract.md` 并链接）
-- [ ] 5.6 提交 W4（可拆为"脚本搬迁"、"手工收尾"、"AGENTS.md"三个提交）。验证：提交前检查通过；在提交说明中写明在途分支要先对自己的分支运行 5.2 的命令再变基
+- [ ] 5.5 提交 W4（可拆为"脚本搬迁"与"手工收尾"两个提交）。验证：提交前检查通过；在提交说明中写明在途分支要先对自己的分支运行 5.2 的命令再变基
 
 ## 6. W5：租户生命周期上移（Decision 9）
 
 - [ ] 6.1 按 Decision 9 `git mv` 到 `src/server/tenant_lifecycle.py` 并批量改写引用。验证：`grep -rn "tenancy\.lifecycle" src test` 无输出
 - [ ] 6.2 把 `iter_process_tenants` 搬到 `src/storage/control_records.py` 末尾，删除 `startup_tenants`、`iter_tick_tenants`，更新 `main.py` 与 `scheduler/ticker.py`。验证：`grep -rn "startup_tenants\|iter_tick_tenants" src test` 无输出；`grep -n "src.server" src/scheduler/ticker.py` 无输出；`uv run --no-sync pytest test/test_tenant_background.py test/test_tenant_lifecycle.py` 通过
 - [ ] 6.3 契约删除单独的 `"src.tenancy"` 层，最底层改为 `"src.config : src.tenancy : src.common : src.exception_detail"`；重新生成基线、下调 `MAX_ENTRIES`、重写类型基线。验证：分层基线 15 条；`uv run --no-sync lint-imports` 输出 `KEPT`
-- [ ] 6.4 按 Decision 1 追加 `server is a leaf` 的 `forbidden` 契约（无 `ignore_imports`），并把 `test_layer_baseline_ratchet.py` 的 `test_contract_is_kept` 覆盖到两条契约。验证：`uv run --no-sync lint-imports` 输出两条 `KEPT`；在 `src/scheduler/ticker.py` 临时加 `import src.server.main  # noqa` 后输出 `server is a leaf BROKEN`，还原
-- [ ] 6.5 新建 `src/server/AGENTS.md` 与 `CLAUDE.md`（不变量：路由模块只含 HTTP 适配，`test/test_import_boundaries.py` 与 `lint-imports` 钉住；`tenant_lifecycle.py` 是编排模块，终态位置见 Decision 9 说明）；`REQUIRED_DIRS` 加入 `src/server`。验证：`uv run --no-sync pytest test/test_agents_md.py` 通过
-- [ ] 6.6 提交 W5。验证：提交前检查通过
+- [ ] 6.4 提交 W5。验证：提交前检查通过
 
 ## 7. W6：存储访问、时间工具与公开名（Decision 10–12）
 
@@ -71,12 +66,13 @@
 
 - [ ] 8.1 新建 `test/test_c901_exemption_ratchet.py`（Decision 15），暂不包含 `test_hotspots_have_no_exemption`，`MAX_EXEMPTIONS` 填 1.4 的重算值。验证：`uv run --no-sync pytest test/test_c901_exemption_ratchet.py` 通过
 - [ ] 8.2 在重构前新建两个金标测试（代码见 Decision 13），先用 `UPDATE_GOLDEN=1` 生成 `test/golden/observation_rules.json`、`test/golden/team_event_rules.json`，单独提交。验证：不带 `UPDATE_GOLDEN` 连续运行 3 次都通过；`team_event_rules.json` 中除 `unknown.type` 与首条 `member.spawned` 外，每帧 `events` 都非空
-- [ ] 8.3 按 Decision 13 把 `observe_source_event` 与 `TeamEventNormalizerMixin._team_event` 定义行的豁免注释改为 `# noqa: C901 - 待 unify-chat-runtime-events 删除`，不改函数体。验证：`uv run --no-sync pytest test/test_observation_rules_golden.py test/test_team_event_rules_golden.py` 通过；`MAX_EXEMPTIONS` 不变
-- [ ] 8.4 按 Decision 14 拆分 `stream_leader_agent_reply`（事件阶段与收尾阶段），删除 `# noqa: C901`。验证：C901 输出不含 `stream_leader_agent_reply` 及任何新拆出的函数；`uv run --no-sync pytest -q -k "leader or hitl or clarification or plan"` 失败集合不变；全量失败集合不变；`MAX_EXEMPTIONS` 减 1
-- [ ] 8.5 按 Decision 14 拆分 `_run_worker_turn`。验证：C901 输出不含该函数；`uv run --no-sync pytest -q -k group_studio` 失败集合不变；`MAX_EXEMPTIONS` 减 1
-- [ ] 8.6 按 Decision 14 拆分 `evaluate_job_feasibility`。验证：C901 输出不含该函数；`uv run --no-sync pytest -q -k feasibility` 失败集合不变；`MAX_EXEMPTIONS` 减 1
-- [ ] 8.7 按 Decision 14 拆分 `get_or_create_agent`，并把 `test_hotspots_have_no_exemption` 加入 `test/test_c901_exemption_ratchet.py`。验证：C901 输出不含 4 个热点；`uv run --no-sync pytest test/test_c901_exemption_ratchet.py` 通过且 `MAX_EXEMPTIONS` 比 8.1 少 4
-- [ ] 8.8 提交 W7（可按热点分多个提交）。验证：每个提交前检查都通过
+- [ ] 8.3 新建 `src/runtime/chat/event_rules.py`，按 Decision 13 把 `observe_source_event` 改为 17 条规则的规则表，并删除其 `# noqa: C901`。验证：`uv run --no-sync pytest test/test_observation_rules_golden.py` 通过；`uv run --no-sync ruff check src --select C901` 输出不含 `observe_source_event`；`MAX_EXEMPTIONS` 减 1
+- [ ] 8.4 按 Decision 13 把 `TeamEventNormalizerMixin._team_event` 的 16 个分支改为规则表，删除 `# noqa: C901`。验证：`uv run --no-sync pytest test/test_team_event_rules_golden.py test/test_event_stream_projection.py` 通过；C901 输出不含 `_team_event`；`MAX_EXEMPTIONS` 减 1
+- [ ] 8.5 按 Decision 14 拆分 `stream_leader_agent_reply`（事件阶段与收尾阶段），删除 `# noqa: C901`。验证：C901 输出不含 `stream_leader_agent_reply` 及任何新拆出的函数；`uv run --no-sync pytest -q -k "leader or hitl or clarification or plan"` 失败集合不变；全量失败集合不变；`MAX_EXEMPTIONS` 减 1
+- [ ] 8.6 按 Decision 14 拆分 `_run_worker_turn`。验证：C901 输出不含该函数；`uv run --no-sync pytest -q -k group_studio` 失败集合不变；`MAX_EXEMPTIONS` 减 1
+- [ ] 8.7 按 Decision 14 拆分 `evaluate_job_feasibility`。验证：C901 输出不含该函数；`uv run --no-sync pytest -q -k feasibility` 失败集合不变；`MAX_EXEMPTIONS` 减 1
+- [ ] 8.8 按 Decision 14 拆分 `get_or_create_agent`，并把 `test_hotspots_have_no_exemption` 加入 `test/test_c901_exemption_ratchet.py`。验证：C901 输出不含 6 个热点；`uv run --no-sync pytest test/test_c901_exemption_ratchet.py` 通过且 `MAX_EXEMPTIONS` 比 8.1 少 6
+- [ ] 8.9 提交 W7（可按热点分多个提交）。验证：每个提交前检查都通过
 
 ## 9. W8：结构检查与清理（Decision 15–16）
 
@@ -100,6 +96,6 @@
 
 ## 11. 收尾
 
-- [ ] 11.1 整体验证。验证：在仓库根目录 `scripts/quality-gates.sh all` 退出码为 0；分层基线 15 条且 `MAX_ENTRIES = 15`；`lint-imports` 两条契约均 `KEPT`；`test/test_agents_md.py` 覆盖 `src/agents`、`src/tools`、`src/common`、`src/models`、`src/runtime/chat`、`src/server`；`diff /tmp/before.txt /tmp/after.txt` 无输出；桌面开发模式与打包版都能完成一轮对话
-- [ ] 11.2 更新仓库文档中的目录说明（根 `AGENTS.md` 及 `docs/` 中提到 `server/routes/chat`、`tenancy/lifecycle`、`server/auth/{secrets,key2api,cloud_client}` 的位置）。根 `AGENTS.md` 只写目录地图、两条契约名、"新增向上导入要改代码、不要加基线"和"进入子目录先读该目录的 AGENTS.md"；不在根文件重复子目录内容（若 `define-runtime-contracts` 已完成根文件拆分，只更新路径）。验证：Decision 19 第 4 步的 grep 对这些旧路径无输出
+- [ ] 11.1 整体验证。验证：在仓库根目录 `scripts/quality-gates.sh all` 退出码为 0；分层基线 15 条且 `MAX_ENTRIES = 15`；`diff /tmp/before.txt /tmp/after.txt` 无输出；桌面开发模式与打包版都能完成一轮对话
+- [ ] 11.2 更新仓库文档中的目录说明（`AGENTS.md` 及 `docs/` 中提到 `server/routes/chat`、`tenancy/lifecycle`、`server/auth/{secrets,key2api,cloud_client}` 的位置），写明分层规则与"新增向上导入要改代码、不要加基线"。验证：Decision 19 第 4 步的 grep 对这些旧路径无输出
 - [ ] 11.3 执行 `openspec validate restructure-code-layering --strict`。验证：输出通过，并把实际基线数字（分层、C901、双键、ALLOWED 条目数）记在本任务下方
