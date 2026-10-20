@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from src.agents.runtime_types import AgentGuardrails
 from src.server.routes.agents import get_registered_agent
 
+from src.server.routes.chat.authorization_display import trace_safe_event_data
 from src.server.routes.chat.helpers import source_event, _trim_text
 from src.server.routes.chat.hitl import (
     _build_resume_event,
@@ -206,7 +207,7 @@ def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceE
                     _record_agent_scope_event(
                         session_id=interaction.session_id,
                         event_type=event_type,
-                        event_data=event_data,
+                        event_data=trace_safe_event_data(agent, event_type, event_data),
                         persist=True,
                         scope="subagent",
                         agent_id=interaction.agent_id,

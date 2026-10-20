@@ -475,6 +475,8 @@ def get_or_create_agent(
     extra_filesystem_scopes: list[str] | None = None,
     session_context_key: str | None = None,
     project_id: str = "default",
+    platform_binding: object | None = None,
+    authorization: object | None = None,
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -497,9 +499,13 @@ def get_or_create_agent(
     from src.tenancy.capabilities import coerce_hosted_guardrails
     from src.tenancy.context import current_tenant
 
+    if platform_binding is None:
+        platform_binding = authorization
     guardrails = coerce_hosted_guardrails(guardrails)
     if current_tenant().is_hosted and "Bash 中的 /workspace 就是项目根目录" not in system_prompt:
         system_prompt = f"{system_prompt}\nBash 中的 /workspace 就是项目根目录。"
+    if platform_binding is not None and hasattr(platform_binding, "cache_key"):
+        agent_id = f"{agent_id}:auth-{platform_binding.cache_key()}"
     agent_id = _cache_key(agent_id)
     if session_context_key:
         session_context_key = _cache_key(session_context_key)
@@ -511,6 +517,8 @@ def get_or_create_agent(
             # AgentState，改为创建一份带上下文快照的新实例。
             logger.warning("Agent %s 仍在运行，改用快照实例承接新一轮", agent_id)
             agent_id = f"{agent_id}:fork-{int(time.time() * 1000)}"
+        elif platform_binding is not None and not hasattr(cached, "bind_authorization"):
+            agent_id = f"{agent_id}:platform"
         else:
             _touch_agent(agent_id)
             # system prompt 正文不进缓存键；配置文件被编辑后这里同步刷新。
@@ -520,6 +528,8 @@ def get_or_create_agent(
             if on_fallback_event is not None and hasattr(cached.model, "on_event"):
                 cached.model.on_event = on_fallback_event
             settle_awaiting_tool_calls(cached)
+            if platform_binding is not None:
+                cached.bind_authorization(platform_binding)
             return cached
 
     # 使用配置默认值
@@ -581,8 +591,18 @@ def get_or_create_agent(
         ),
     )
 
-    # 创建 Agent
-    agent = Agent(
+    # 创建 Agent。带平台绑定时走同一授权适配器，框架 BYPASS 不另开执行链。
+    agent_cls = Agent
+    agent_kwargs: dict = {}
+    if platform_binding is not None:
+        from src.agents.permission_adapter import PlatformAgent
+
+        agent_cls = PlatformAgent
+        agent_kwargs = {
+            "authorization_service": platform_binding.service,
+            "action_builder": platform_binding.action_builder,
+        }
+    agent = agent_cls(
         name=name,
         system_prompt=system_prompt,
         model=main_model,
@@ -620,7 +640,10 @@ def get_or_create_agent(
         # system prompt，这样供应商侧 prompt cache 才能命中。HintBlockEvent
         # 不外发，Chat SSE 契约无需新增事件。
         injection_config=_build_injection_config(),
+        **agent_kwargs,
     )
+    if platform_binding is not None:
+        agent.bind_authorization(platform_binding)
 
     # 缓存并返回
     agent._model_binding = binding

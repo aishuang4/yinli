@@ -53,8 +53,30 @@ export function toHitlRequest(block: DisplayBlock<RecordData>): HitlRequestInfo 
         rawName: text(value.rawName) || undefined,
       }];
     }),
+    decisions: decisionViews(block.data.decisions),
     createdAt: text(block.data.createdAt, new Date().toISOString()),
   };
+}
+
+function decisionViews(value: unknown): HitlRequestInfo['decisions'] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const decision = item as RecordData;
+    return [{
+      reviewable: decision.reviewable === true,
+      reason: text(decision.reason),
+      riskRule: text(decision.riskRule),
+      riskClass: text(decision.riskClass),
+      reasonCode: text(decision.reasonCode),
+      status: text(decision.status),
+    }];
+  });
+}
+
+/** 模型拒绝复核卡。普通人工审批返回 null。 */
+export function modelDenyReview(request: HitlRequestInfo) {
+  return request.decisions.find((item) => item.reviewable) ?? null;
 }
 
 export function buildClarificationRequestFromAskUser(

@@ -195,6 +195,7 @@ def create_main_agent_from_spec(
     spec: MainAgentRuntimeSpec,
     *,
     on_fallback_event: Callable[[dict[str, Any]], None] | None = None,
+    platform_binding: object | None = None,
 ) -> Any:
     """根据 MainAgentRuntimeSpec 创建或复用主 Agent。"""
 
@@ -225,4 +226,5 @@ def create_main_agent_from_spec(
         include_default_tools=spec.include_default_tools,
         extra_filesystem_scopes=spec.extra_filesystem_scopes,
         session_context_key=spec.session_context_key or None,
+        platform_binding=platform_binding,
     )

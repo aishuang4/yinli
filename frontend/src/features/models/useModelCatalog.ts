@@ -13,9 +13,19 @@ export interface ModelEntry {
   parameters: { temperature: number; topP: number; maxTokens: number };
   capabilities: { images: boolean };
 }
+export interface PermissionReviewConfig {
+  modelConfigId: string;
+  timeoutSeconds: number;
+  maxOutputTokens: number;
+  schemaVersion: 1;
+  promptVersion: 'permission-review-v1';
+  probeStatus: 'missing' | 'passed';
+}
+
 export interface ModelCatalog {
   schemaVersion: number; revision: number; etag: string; defaultModelId: string; modelsPath: string;
   providers: ModelProvider[]; models: ModelEntry[];
+  permissionReview?: PermissionReviewConfig | null;
 }
 
 export async function catalogRequest(init?: RequestInit): Promise<ModelCatalog> {

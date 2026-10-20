@@ -30,6 +30,18 @@ from src.storage.database import DEFAULT_PROJECT_ID, get_latest_completed_user_a
 from src.runtime_context import RuntimeContext, resolve_runtime_context
 
 
+def _permission_summary(run_id: str) -> dict:
+    """完成事件使用和 Trace、展示快照相同的权限事实。"""
+
+    if not run_id:
+        return {"outcome": "complete", "counts": {}, "items": []}
+    try:
+        from src.storage.permission_records import PermissionRecordStore
+        return PermissionRecordStore().summarize_run(run_id)
+    except Exception:
+        return {"outcome": "complete", "counts": {}, "items": []}
+
+
 def missing_final_answer_error() -> str:
     """生成没有最终答案时返回给前端的错误说明。"""
 
@@ -196,6 +208,7 @@ async def finalize_successful_leader_run(
                 "model": model_name,
                 "toolCallCount": len(assistant_tool_calls),
                 "skillIds": [item.id for item in completed_skill_runs],
+                "permissionSummary": _permission_summary(source_run_id),
             },
         )
         reflection_input = _build_memory_reflection_input(

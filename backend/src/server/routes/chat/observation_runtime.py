@@ -262,6 +262,7 @@ def observe_source_event(
             for item in tool_calls if isinstance(item, dict)
         ]
         is_ask = any(name.replace(" ", "").lower() in {"askuser"} or name.lower().endswith("askuser") for name in names)
+        facts = _review_trace_facts(payload.get("decisions"))
         open_observation(
             persist=persist,
             run_id=run_id,
@@ -269,7 +270,8 @@ def observe_source_event(
             kind="approval",
             name="AskUser" if is_ask or event_type == "CLARIFICATION_REQUIRED" else "权限确认",
             parent_id=parent_id,
-            input_data={"interactionId": interaction_id, "type": event_type, "toolNames": names},
+            input_data={"interactionId": interaction_id, "type": event_type, "toolNames": names,
+                        "authorizationFacts": facts},
             workspace_id=workspace_id,
             project_id=project_id,
             observation_id=_approval_obs_id(run_id, interaction_id) if interaction_id else None,
@@ -622,6 +624,40 @@ def _skill_obs_id(run_id: str, skill_id: str) -> str:
 
 def _subagent_obs_id(run_id: str, invocation_id: str) -> str:
     return f"obs-subagent-{run_id}-{invocation_id}"
+
+
+def _review_trace_facts(decisions: object) -> list[dict]:
+    """审批观测里原 deny、复核和 execution 各占一个字段。"""
+
+    if not isinstance(decisions, list):
+        return []
+    facts = []
+    for item in decisions:
+        if not isinstance(item, dict) or not item.get("reviewable"):
+            continue
+        execution = None
+        if item.get("executionId"):
+            execution = {"id": item.get("executionId"), "status": item.get("executionStatus")}
+        from src.storage.permission_records import project_permission_fact
+        projected = project_permission_fact(
+            verdict=str(item.get("verdict") or ""),
+            approval_status=str(item.get("status") or "") or None,
+            execution_status=str(item.get("executionStatus") or "") or None,
+            risk_class=str(item.get("riskClass") or ""),
+        )
+        facts.append({
+            "modelDeny": item.get("originalDecision"),
+            "review": {
+                "id": item.get("decisionId"),
+                "verdict": item.get("verdict"),
+                "source": item.get("source"),
+                "reasonCode": item.get("reasonCode"),
+            },
+            "execution": execution,
+            "status": projected["status"],
+            "riskClass": projected["riskClass"],
+        })
+    return facts
 
 
 def _team_task_obs_id(run_id: str, task_id: str) -> str:

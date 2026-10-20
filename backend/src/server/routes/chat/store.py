@@ -49,6 +49,7 @@ def _append_user_message(
     files: list[ChatFilePayload] | None = None,
     workspace_id: str = DEFAULT_WORKSPACE_ID,
     project_id: str = DEFAULT_PROJECT_ID,
+    approval_mode: str | None = None,
 ) -> None:
     """追加用户消息，并创建或更新会话摘要"""
     now = datetime.now(timezone.utc).isoformat()
@@ -69,6 +70,7 @@ def _append_user_message(
             "created_at": now,
             "updated_at": now,
             "modelConfigId": model_config_id,
+            **({"approvalMode": approval_mode} if approval_mode else {}),
         })
     else:
         update_chat_session(

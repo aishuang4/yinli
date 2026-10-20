@@ -27,6 +27,7 @@ def hitl_unattended_resolve(
     data: dict[str, Any],
     *,
     workspace_dir: str,
+    approval_mode: str = "manual",
 ) -> tuple[list[str], UserConfirmResultEvent | ExternalExecutionResultEvent]:
     """在进入 waiting_* 之前决议 HITL。
 
@@ -53,7 +54,7 @@ def hitl_unattended_resolve(
     denied: list[str] = []
     for tool_call in tool_calls:
         tool_id = str(tool_call.get("id") or "")
-        allowed = is_unattended_cwd_write_or_edit(tool_call, workspace_dir)
+        allowed = approval_mode != "manual" and is_unattended_cwd_write_or_edit(tool_call, workspace_dir)
         if tool_id:
             confirmed_by_id[tool_id] = allowed
         if not allowed:

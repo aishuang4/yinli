@@ -7,6 +7,7 @@ import {
   isProviderConfigured,
   providerConnectionLabel,
   providerConnectionStatus,
+  reviewConfigForSelection,
 } from './modelCatalogUi';
 import type { ModelCatalog, ModelProvider } from './useModelCatalog';
 
@@ -76,5 +77,13 @@ describe('catalogDraftDirty', () => {
 
   it('改默认模型时算脏', () => {
     expect(catalogDraftDirty({ ...catalog, defaultModelId: '' }, catalog)).toBe(true);
+  });
+
+  it('改审核模型时算脏，已通过的同一模型不重新探测', () => {
+    const selected = reviewConfigForSelection('m1', null);
+    expect(catalogDraftDirty({ ...catalog, permissionReview: selected }, catalog)).toBe(true);
+    const passed = { ...selected!, probeStatus: 'passed' as const };
+    expect(reviewConfigForSelection('m1', passed)).toEqual(passed);
+    expect(reviewConfigForSelection('', passed)).toBeNull();
   });
 });

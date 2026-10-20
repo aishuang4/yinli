@@ -58,7 +58,7 @@
 
 ## P4. Plan、Trace 与工具
 
-- [ ] Trace 增加权限审计筛选、工具结果大小和截断标记。
+- [ ] Trace 增加权限审计筛选、工具结果大小和截断标记。权限事实已能按 riskClass 投影；筛选入口仍待做。
 - [ ] 对 Bash / Write / Edit 的文件变更记录补可靠性测试。
 - [ ] 完善 HTTP 工具请求预览、响应提取、错误摘要和脱敏展示。
 - [ ] 在 WebFetch 稳定后增加 WebSearch provider 抽象，首批支持 SearXNG 和一个正式云端供应商，并建立来源引用契约。

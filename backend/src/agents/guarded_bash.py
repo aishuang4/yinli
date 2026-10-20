@@ -44,6 +44,23 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
         self.shell_blacklist = [item.strip() for item in shell_blacklist if item.strip()]
         self.timeout_seconds = timeout_seconds
 
+    def validate_execution(self, command: str) -> None:
+        """授權快照前拒絕空命令和黑名單；不在這裡執行。"""
+
+        text = str(command or "")
+        if not text.strip():
+            raise ValueError("命令不能为空")
+        for blocked in self.shell_blacklist:
+            if blocked and blocked in text:
+                raise ValueError("命令命中黑名单")
+
+    def normalize_timeout(self, timeout: int | float | None) -> int:
+        """把調用超時收進 Agent 配置上限，單位毫秒。"""
+
+        value = int(timeout or 120000)
+        cap = max(1, int(self.timeout_seconds)) * 1000
+        return max(1, min(value, cap))
+
     async def _exec_windows_shell(self, shell_path: str, command: str, *, timeout_ms: int):
         payload = [shell_path, "/d", "/c", _windows_utf8_command(command)]
         try:

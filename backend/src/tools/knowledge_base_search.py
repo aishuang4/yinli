@@ -98,6 +98,27 @@ class KnowledgeBaseSearch(ToolBase):
             decision_reason="Knowledge base HTTP search",
         )
 
+    def prepare_execution(self, **inputs: Any) -> dict[str, Any]:
+        """構造知識庫請求。default_payload 的變化會改變執行指紋。"""
+
+        payload = dict(self.default_payload)
+        for key, value in inputs.items():
+            if value is not None:
+                payload[key] = value
+        headers = {
+            "Content-Type": "application/json",
+            **{str(key): str(value) for key, value in self.headers.items() if str(key).strip()},
+        }
+        if self.authorization:
+            headers["Authorization"] = self.authorization
+        return {
+            "method": "POST",
+            "url": self.url,
+            "headers": headers,
+            "content": json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8"),
+            "timeout": max(1.0, min(float(self.timeout_seconds or 30), 120.0)),
+        }
+
     async def __call__(
         self,
         query: str,

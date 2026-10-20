@@ -116,12 +116,24 @@ class ModelEntry(ConfigValue):
     capabilities: Capabilities = Field(default_factory=Capabilities)
 
 
+class PermissionReviewConfig(ConfigValue):
+    """独立权限审核用途；只引用目录连接，不另存 Key。"""
+
+    model_config_id: str = Field(alias="modelConfigId", min_length=1)
+    timeout_seconds: float = Field(default=8, alias="timeoutSeconds", ge=1, le=60)
+    max_output_tokens: int = Field(default=16, alias="maxOutputTokens", ge=16, le=64)
+    schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
+    prompt_version: Literal["permission-review-v1"] = Field(default="permission-review-v1", alias="promptVersion")
+    probe_status: Literal["missing", "passed"] = Field(default="missing", alias="probeStatus")
+
+
 class ModelCatalog(ConfigValue):
     schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
     revision: int = Field(default=1, ge=1)
     default_model_id: str = Field(default="", alias="defaultModelId")
     providers: tuple[ProviderConfig, ...] = ()
     models: tuple[ModelEntry, ...] = ()
+    permission_review: PermissionReviewConfig | None = Field(default=None, alias="permissionReview")
 
     @model_validator(mode="after")
     def validate_references(self):

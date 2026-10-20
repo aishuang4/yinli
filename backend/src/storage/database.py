@@ -29,6 +29,7 @@ from src.config.settings import settings
 from src.storage.chat_run_records import ChatRunRecordStore
 from src.storage.chat_session_records import ChatSessionRecordStore
 from src.storage.database_schema import BASE_SCHEMA_SQL
+from src.storage.permission_schema import PERMISSION_SCHEMA_SQL
 from src.storage.scheduled_job_records import ScheduledJobRecordStore
 from src.storage.agent_defaults import (
     is_stale_desktop_default_project_path as _is_stale_desktop_default_project_path,
@@ -329,6 +330,14 @@ def ensure_db() -> None:
                 )
             """)
             conn.executescript(BASE_SCHEMA_SQL)
+            conn.executescript(PERMISSION_SCHEMA_SQL)
+            _ensure_column(conn, "permission_decisions", "invalidated_at", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "permission_decisions", "expires_at", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "permission_decisions", "related_decision_id", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "chat_runs", "authorization_json", "TEXT NOT NULL DEFAULT '{}'")
+            _ensure_column(conn, "chat_runs", "authorization_invalidated_at", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "chat_sessions", "approval_mode", "TEXT NOT NULL DEFAULT 'manual'")
+            _ensure_column(conn, "scheduled_jobs", "execution_policy", "TEXT NOT NULL DEFAULT '{}'")
             conn.execute("DROP INDEX IF EXISTS idx_group_studios_active_chat")
             conn.execute(
                 """

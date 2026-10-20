@@ -76,6 +76,7 @@ export interface ChatSession {
   agent_id: string;
   agent_name: string;
   mode: 'agent' | 'team';
+  approvalMode?: 'manual' | 'model_review' | 'full_access';
   workspace_id: string;
   project_id: string;
   created_at: string;

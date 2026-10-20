@@ -139,6 +139,13 @@ class WebFetch(ToolBase):
     async def check_read_only(self, tool_input: dict[str, Any]) -> bool:
         return True
 
+    async def validate_execution(self, url: str) -> None:
+        """授權前只檢查 URL 形狀，不發送請求。"""
+
+        error = _validate_url_shape(str(url or "").strip())
+        if error:
+            raise ValueError(error)
+
     async def __call__(
         self,
         url: str,
@@ -177,7 +184,11 @@ class WebFetch(ToolBase):
                                 return self._error("WebFetch redirect response did not include Location.")
                             if redirects >= self.max_redirects:
                                 return self._error("WebFetch exceeded the redirect limit.")
-                            current_url = urljoin(str(response.url), location)
+                            next_url = urljoin(str(response.url), location)
+                            from src.security.authorization.execution_context import validate_fetch_redirect
+
+                            validate_fetch_redirect(current_url, next_url)
+                            current_url = next_url
                             redirects += 1
                             continue
 

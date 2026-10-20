@@ -25,6 +25,15 @@ async def get_product_features() -> dict:
     return load_product_features().as_public_dict()
 
 
+@router.get("/permission-review")
+async def get_permission_review_status() -> dict:
+    """SmartGuard 是否可用来判断危险或不确定的操作。"""
+
+    from src.security.authorization.review_gate import permission_review_status
+
+    return permission_review_status()
+
+
 @router.get("/models")
 async def get_models_catalog() -> dict:
     """读取脱敏模型目录。托管下先把上游模型名写入当前租户目录。"""
@@ -66,6 +75,9 @@ async def update_models_catalog(data: dict, request: Request) -> dict:
     etag = str(payload.pop("etag", ""))
     _reject_private_model_urls(payload)
     try:
+        from src.security.authorization.probe import stamp_smartguard_probe
+
+        payload = await stamp_smartguard_probe(payload)
         return save_catalog(payload, etag)
     except CatalogConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None

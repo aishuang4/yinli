@@ -33,6 +33,7 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
         files=run_data.files,
         workspace_id=ctx.runtime_context.workspace_id,
         project_id=ctx.runtime_context.project_id,
+        approval_mode=getattr(run_data, "approval_mode", None),
     )
     _record_run_event(
         session_id=ctx.session_id,

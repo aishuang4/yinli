@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { AlertCircle, Wrench } from 'lucide-react';
 import { Button, Checkbox, Tag } from '@/components/design';
 import type { ClarificationRequestInfo, HitlRequestInfo } from '../../hooks/useEventStream';
+import { modelDenyReview } from './humanInteractionUtils';
 
 export function HitlApprovalBlock({
   request,
   onResolve,
+  readOnly = false,
 }: {
   request: HitlRequestInfo;
   onResolve: (
@@ -14,10 +16,13 @@ export function HitlApprovalBlock({
     externalResults?: Record<string, string>,
     rememberApproval?: boolean,
   ) => Promise<void>;
+  readOnly?: boolean;
 }) {
   const [submitting, setSubmitting] = useState<'approve' | 'reject' | null>(null);
   const [rememberApproval, setRememberApproval] = useState(false);
   const isExternal = request.type === 'REQUIRE_EXTERNAL_EXECUTION';
+  const review = modelDenyReview(request);
+  const actionable = !readOnly && (!review || !review.status || review.status === 'pending');
   const actorLabel = request.scope === 'subagent'
     ? 'Subagent'
     : request.scope === 'team'
@@ -38,7 +43,7 @@ export function HitlApprovalBlock({
       <div className="flex items-center justify-between gap-3 px-3 py-2">
         <div className="flex min-w-0 items-center gap-2 text-sm font-medium text-[var(--color-text-primary)]">
           <AlertCircle size={14} color="var(--color-warning)" />
-          <span>{isExternal ? '等待外部执行结果' : '等待人工确认'}</span>
+          <span>{review ? '模型拒绝' : isExternal ? '等待外部执行结果' : '等待人工确认'}</span>
         </div>
         <Tag size="small" color="transparent">
           {actorLabel} · {request.agentName}
@@ -60,7 +65,13 @@ export function HitlApprovalBlock({
             )}
           </div>
         ))}
-        {!isExternal && (
+        {review && (
+          <div className="space-y-1 text-xs text-[var(--color-text-secondary)]">
+            <div>拒绝原因：{review.reason || '审核模型拒绝这一次'}</div>
+            {review.riskRule ? <div>风险规则：{review.riskRule}</div> : null}
+          </div>
+        )}
+        {actionable && !isExternal && !review && (
           <Checkbox
             checked={rememberApproval}
             disabled={Boolean(submitting)}
@@ -69,6 +80,7 @@ export function HitlApprovalBlock({
             本会话后续自动允许这些工具
           </Checkbox>
         )}
+        {actionable && (
         <div className="flex justify-end gap-2">
           <Button
             danger
@@ -76,7 +88,7 @@ export function HitlApprovalBlock({
             loading={submitting === 'reject'}
             onClick={() => handleResolve('reject')}
           >
-            拒绝
+            {review ? '维持拒绝' : '拒绝'}
           </Button>
           <Button
             type="primary"
@@ -84,9 +96,10 @@ export function HitlApprovalBlock({
             loading={submitting === 'approve'}
             onClick={() => handleResolve('approve')}
           >
-            批准
+            {review ? '人工批准这一次' : '批准'}
           </Button>
         </div>
+        )}
       </div>
     </div>
   );

@@ -68,6 +68,7 @@ _SESSION_UPDATE_FIELDS = {
     "model_config_id": "model_config_id",
     "updated_at": "updated_at",
     "message_count": "message_count",
+    "approval_mode": "approval_mode",
 }
 
 
@@ -288,6 +289,7 @@ class ChatSessionRecordStore:
             "project_id": row["project_id"] or self.default_project_id,
             "kind": row["kind"] if "kind" in keys and row["kind"] else "chat",
             "modelConfigId": row["model_config_id"] or "",
+            "approvalMode": row["approval_mode"] if "approval_mode" in keys else "manual",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "message_count": row["message_count"],
@@ -353,14 +355,19 @@ class ChatSessionRecordStore:
     def insert_session_if_absent(self, session: dict[str, Any]) -> dict[str, Any]:
         """INSERT OR IGNORE 后返回库里的那一行（可能是并发先插入的）。"""
 
+        raw_mode = session.get("approvalMode", session.get("approval_mode", None))
+        approval_mode = "manual"
+        if raw_mode is not None:
+            from src.security.authorization.models import validate_approval_mode
+            approval_mode = validate_approval_mode(str(raw_mode))
         self.ensure_db()
         with self.lock, self.connect() as conn:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO chat_sessions (
                     id, title, agent_id, agent_name, mode, workspace_id, project_id, kind,
-                    created_at, updated_at, message_count, model_config_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, message_count, model_config_id, approval_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session["id"],
@@ -375,6 +382,7 @@ class ChatSessionRecordStore:
                     session.get("updated_at") or session.get("updatedAt") or "",
                     int(session.get("message_count") or session.get("messageCount") or 0),
                     session.get("modelConfigId") or session.get("model_config_id") or "",
+                    approval_mode,
                 ),
             )
             row = conn.execute("SELECT * FROM chat_sessions WHERE id = ?", (session["id"],)).fetchone()
@@ -386,8 +394,12 @@ class ChatSessionRecordStore:
         for key, column in _SESSION_UPDATE_FIELDS.items():
             if key not in fields:
                 continue
+            value = fields[key]
+            if key == "approval_mode":
+                from src.security.authorization.models import validate_approval_mode
+                value = validate_approval_mode(str(value))
             assignments.append(f"{column} = ?")
-            params.append(fields[key])
+            params.append(value)
         if not assignments:
             return
         params.append(session_id)

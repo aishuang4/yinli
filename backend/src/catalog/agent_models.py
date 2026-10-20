@@ -29,16 +29,18 @@ class Guardrails(BaseModel):
     filesystem_scope: str = Field(default="", description="文件系统访问范围；空表示默认 Project 根")
     shell_blacklist: list[str] = Field(default_factory=lambda: ["rm -rf /", "sudo"], description="Shell 命令黑名单")
     network_enabled: bool = Field(default=True, description="是否允许网络访问")
-    human_approval: bool = Field(default=False, description="是否启用人工审批")
+    human_approval: bool = Field(default=False, exclude=True, description="旧人工审批开关，只用于迁移")
     tool_permission_mode: str = Field(
         default="accept_edits",
         alias="toolPermissionMode",
-        description="工具权限模式：ask_every_time/accept_edits/bypass",
+        exclude=True,
+        description="旧工具权限模式，只用于迁移",
     )
     tool_permission_profile: str = Field(
         default="confirm_destructive",
         alias="toolPermissionProfile",
-        description="工具权限配置：read_only/trusted_tools/confirm_destructive/ask_every_time",
+        exclude=True,
+        description="旧工具权限配置，只用于迁移",
     )
     execution_backend: str = Field(
         default="local",
@@ -58,6 +60,13 @@ class Guardrails(BaseModel):
     timeout_seconds: int = Field(default=300, gt=0, description="工具调用超时（秒）")
 
     model_config = {"populate_by_name": True}
+
+    @computed_field(alias="operationScope")
+    @property
+    def operation_scope(self) -> str:
+        """只讀配置對外是 operationScope；舊模式字段不再出現在導出裡。"""
+
+        return "read_only" if self.tool_permission_profile == "read_only" else "normal"
 
 
 class PlanConfig(BaseModel):

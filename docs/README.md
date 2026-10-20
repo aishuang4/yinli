@@ -39,6 +39,7 @@
 | `docs/chat-model-selection-v1.md` | Chat / Sandbox 选模型。桌面端以本机 `models.json` 为配置源。托管且配置了 key2api 时，Web 对话改用该用户的 `platform:` 模型。 |
 | `docs/web-service-plan.md` | Web 托管的产品决定。账号、隔离和 key2api 的在线事实以架构总览为准。桌面登录入口尚未接到工作台。 |
 | `docs/scheduled-jobs-v2-agent-activation.md` | Job Agent 能力合同、创建前门禁、到期装配 toolkit。 |
+| `docs/permission-system-v2.md` | 三种审批模式、风险分类、SmartGuard 与复核卡。数据表见 `docs/permission-system-v2-data-contract.md`。 |
 | `docs/group-studio-v2.md` | 群聊 V2：房间留下，主持流程拆掉。事件见群聊契约。 |
 
 ## 未落地设计

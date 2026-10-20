@@ -544,24 +544,25 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
         if is_default_websearch_job_agent_id(agent_id):
             existing_dict["role"] = JOB_ROLE
             guardrails = Guardrails.model_validate(existing_dict.get("guardrails") or {})
-            existing_dict["guardrails"] = guardrails.model_copy(update={
+            guardrails = guardrails.model_copy(update={
                 "network_enabled": True,
                 "human_approval": False,
                 "tool_permission_profile": "trusted_tools",
                 "tool_permission_mode": "bypass",
-            }).model_dump(by_alias=True)
+            })
+            existing_dict["guardrails"] = guardrails
         role, toolkit, guardrails, mcp_tools, knowledge_tools, skills = _apply_job_agent_fields(
             agent_id=agent_id,
             role=str(existing_dict.get("role") or CHAT_ROLE),
             job_toolkit=existing_dict.get("jobToolkit"),
-            guardrails=Guardrails.model_validate(existing_dict.get("guardrails") or {}),
+            guardrails=guardrails if isinstance(existing_dict.get("guardrails"), Guardrails) else Guardrails.model_validate(existing_dict.get("guardrails") or {}),
             mcp_tools=list(existing_dict.get("mcpTools") or []),
             knowledge_tools=list(existing_dict.get("knowledgeTools") or []),
             skills=list(existing_dict.get("skills") or []),
         )
         existing_dict["role"] = role
         existing_dict["jobToolkit"] = toolkit.model_dump()
-        existing_dict["guardrails"] = guardrails.model_dump(by_alias=True)
+        existing_dict["guardrails"] = guardrails
         existing_dict["mcpTools"] = mcp_tools
         existing_dict["knowledgeTools"] = knowledge_tools
         existing_dict["skills"] = skills

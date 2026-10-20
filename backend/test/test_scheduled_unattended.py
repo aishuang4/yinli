@@ -16,10 +16,7 @@ from src.scheduler.models import JobToolScope, ScheduledJobValidationError
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.unattended_policy import would_fail_unattended_tools
 from src.server.routes.chat.hitl import PENDING_INTERACTIONS, build_automatic_confirm_resume
-from src.server.routes.chat.hitl_unattended import (
-    MAX_UNATTENDED_TOOL_DENIALS,
-    hitl_unattended_resolve,
-)
+from src.server.routes.chat.hitl_unattended import hitl_unattended_resolve
 from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.react_runtime import _build_runtime_feature_parts
@@ -277,7 +274,7 @@ def test_unattended_write_is_not_team_deny_only(tmp_path):
         }],
     }
     denied, resume = hitl_unattended_resolve(
-        "REQUIRE_USER_CONFIRM", data, workspace_dir=str(workspace),
+        "REQUIRE_USER_CONFIRM", data, workspace_dir=str(workspace), approval_mode="model_review",
     )
     team = _build_team_tool_denial("REQUIRE_USER_CONFIRM", data)
     assert denied == []
@@ -324,6 +321,7 @@ def test_ask_every_time_cwd_write_succeeds_on_scheduled_firing(tmp_path):
                 state=LeaderStreamState(
                     trigger_source="scheduled_job",
                     session_workspace_dir=str(workspace),
+                    approval_mode="model_review",
                 ),
                 session_id="session-sched-write",
                 persist=False,
@@ -385,8 +383,8 @@ def test_unattended_deny_limit_fails_without_pending(tmp_path):
 
     asyncio.run(run_case())
     try:
-        assert state.stop_reason == "hitl_denied"
-        assert state.unattended_denials > MAX_UNATTENDED_TOOL_DENIALS
+        assert state.stop_reason == "job_needs_human"
+        assert state.unattended_denials >= 1
         assert PENDING_INTERACTIONS == {}
     finally:
         PENDING_INTERACTIONS.clear()

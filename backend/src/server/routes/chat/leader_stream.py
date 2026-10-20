@@ -14,6 +14,10 @@ from src.server.routes.chat.trace_recorder import (
     build_model_call_context_stats_async,
     record_context_compression_events,
 )
+from src.server.routes.chat.authorization_display import (
+    public_authorization_event,
+    trace_safe_event_data,
+)
 from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload
 from src.server.routes.chat.hitl_unattended import (
     MAX_UNATTENDED_TOOL_DENIALS,
@@ -106,6 +110,7 @@ class LeaderStreamState:
     reply_error: str = ""
     reply_had_thinking: bool = False
     trigger_source: str = "user"
+    approval_mode: str = "manual"
     unattended_denials: int = 0
 
 
@@ -317,7 +322,7 @@ async def stream_leader_agent_reply(
         _record_agent_scope_event(
             session_id=session_id,
             event_type=event_type,
-            event_data=event_data,
+            event_data=trace_safe_event_data(agent, event_type, event_data),
             persist=persist,
             scope=stream_scope,
             agent_id=agent_id,
@@ -461,7 +466,7 @@ async def stream_leader_agent_reply(
             scope=stream_scope,
             agent_id=agent_id,
             agent_name=agent_name,
-            event_data=event_data,
+            event_data=trace_safe_event_data(agent, event_type, event_data),
             collect=state.runtime_events,
         )
         if runtime_event:
@@ -479,6 +484,8 @@ async def stream_leader_agent_reply(
             _fill_tool_call_input(event_data, state.assistant_tool_calls)
         if event_type == "TOOL_RESULT_END":
             _fill_tool_result_output(event_data, state.assistant_tool_calls)
+        if getattr(agent, "authorization_binding", None) is not None:
+            event_data = public_authorization_event(agent, event_type, event_data)
         yield source_event(event_type, event_data)
         for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
             state.runtime_events.append(runtime_event)
@@ -860,9 +867,14 @@ async def _resume_unattended_hitl(
             str(batch["type"]),
             {"reply_id": batch["reply_id"], "tool_calls": list(batch["tool_calls"])},
             workspace_dir=state.session_workspace_dir,
+            approval_mode=state.approval_mode,
         )
         denied_names.extend(denied)
     state.unattended_denials += len(denied_names)
+    if denied_names:
+        state.stopped = True
+        state.stop_reason = "job_needs_human"
+        return
     mixed_pause = len(reply_ids) != 1 or len(types) != 1 or resume_event is None
     if mixed_pause or state.unattended_denials > MAX_UNATTENDED_TOOL_DENIALS:
         state.stopped = True

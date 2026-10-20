@@ -136,6 +136,16 @@ def reconcile_interrupted_chat_runs() -> int:
         if not run_id or has_live_chat_background_task(run_id):
             continue
         update_chat_run_status(run_id, "failed", completed_at)
+        from src.storage.permission_records import PermissionRecordStore
+
+        if all(record.get(key) for key in ("id", "workspaceId", "projectId", "sessionId")):
+            PermissionRecordStore().invalidate_run_record(
+                run_id,
+                workspace_id=str(record["workspaceId"]),
+                project_id=str(record["projectId"]),
+                session_id=str(record["sessionId"]),
+                interrupted=True,
+            )
         in_memory = _owned_run(run_id)
         if in_memory is not None and in_memory.status in ACTIVE_RUN_STATUSES:
             in_memory.status = "failed"
@@ -406,6 +416,30 @@ def cancel_chat_runs_for_tenant(tenant_id: str) -> None:
             database.update_chat_run_status(run.id, "cancelled", now)
 
 
+def _release_cancelled_run(run: ChatBackgroundRun) -> None:
+    """先让 Run 失效，再清掉待批交互和恢复现场。"""
+
+    from src.server.routes.chat.models import PENDING_AGENTS, PENDING_INTERACTIONS
+    from src.storage.permission_records import PermissionRecordStore
+
+    if run.persisted and run.workspace_id and run.project_id and run.session_id:
+        try:
+            PermissionRecordStore().invalidate_run_record(
+                run.id,
+                workspace_id=run.workspace_id,
+                project_id=run.project_id,
+                session_id=run.session_id,
+                interrupted=False,
+            )
+        except ValueError:
+            pass
+    for interaction_id, interaction in list(PENDING_INTERACTIONS.items()):
+        if interaction.run_id != run.id or interaction.tenant_id != run.tenant_id:
+            continue
+        PENDING_AGENTS.pop(interaction_id, None)
+        PENDING_INTERACTIONS.pop(interaction_id, None)
+
+
 async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
     async with _runs_lock:
         run = _owned_run(run_id)
@@ -418,6 +452,7 @@ async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
     if run.normalizer is not None:
         await _project_terminal(run, "cancelled", {"completedAt": run.completed_at})
     update_chat_run_status(run.id, run.status, run.completed_at)
+    _release_cancelled_run(run)
     if run.async_task is not None and not run.async_task.done():
         run.async_task.cancel()
     await _close_subscribers(run)

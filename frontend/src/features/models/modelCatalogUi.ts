@@ -1,6 +1,6 @@
 /** 模型管理页的供应商/协议展示文案。 */
 
-import type { ModelCatalog, ModelEntry, ModelProvider } from './useModelCatalog';
+import type { ModelCatalog, ModelEntry, ModelProvider, PermissionReviewConfig } from './useModelCatalog';
 
 export const ADAPTER_OPTIONS = [
   { value: 'openai', label: 'OpenAI 兼容' },
@@ -63,6 +63,29 @@ function serializeCatalogDraft(catalog: ModelCatalog) {
       parameters: item.parameters,
       capabilities: item.capabilities,
     })),
+    permissionReview: catalog.permissionReview ?? null,
+  };
+}
+
+export function reviewConfigForSelection(
+  modelConfigId: string,
+  previous: PermissionReviewConfig | null | undefined,
+): PermissionReviewConfig | null {
+  if (!modelConfigId) return null;
+  if (
+    previous
+    && previous.modelConfigId === modelConfigId
+    && previous.probeStatus === 'passed'
+  ) {
+    return previous;
+  }
+  return {
+    modelConfigId,
+    timeoutSeconds: previous?.timeoutSeconds ?? 8,
+    maxOutputTokens: previous?.maxOutputTokens ?? 16,
+    schemaVersion: 1,
+    promptVersion: 'permission-review-v1',
+    probeStatus: 'missing',
   };
 }
 

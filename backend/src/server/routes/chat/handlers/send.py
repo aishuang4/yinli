@@ -39,6 +39,7 @@ from src.server.routes.chat.projection.source_events import SourceEvent
 from src.config.product_features import is_surface_enabled
 from src.config.runtime_settings import resolve_model_binding
 from src.runtime.chat_session import find_chat_session
+from src.storage.database import update_chat_session
 
 
 @router.post("/send")
@@ -107,6 +108,16 @@ async def start_chat_run(data: ChatMessage):
         binding = resolve_model_binding(data.model_config_id or (session.model_config_id if session else None))
         if data.images and not binding.primary.entry.capabilities.images:
             raise ValueError("所选模型未启用图片能力，请切换模型。")
+        requested_mode = data.approval_mode
+        effective_mode = requested_mode or (session.approval_mode if session is not None else "manual")
+        if effective_mode == "model_review":
+            from src.security.authorization.review_gate import permission_review_status
+
+            review = permission_review_status()
+            if not review["available"]:
+                raise ValueError(review["reason"] or "智能审核当前不可用，请切换审批模式。")
+        if session is not None and requested_mode and requested_mode != session.approval_mode:
+            update_chat_session(session_id, approval_mode=requested_mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     run_data = data.model_copy(update={

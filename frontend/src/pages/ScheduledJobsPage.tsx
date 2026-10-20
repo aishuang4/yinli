@@ -154,6 +154,9 @@ export function ScheduledJobsPage() {
   if (selectedJob) {
     return (
       <>
+        <p className="px-4 pt-3 text-xs text-[var(--color-text-secondary)]">
+          若该任务使用智能审核，遇到不确定动作会结束本次运行，不会自动改成完全开放。
+        </p>
         <ScheduledJobDetailPage
           job={selectedJob}
           agentName={agentNames[selectedJob.agentId] || selectedJob.agentId}

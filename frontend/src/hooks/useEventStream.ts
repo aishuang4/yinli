@@ -234,6 +234,7 @@ export function useEventStream(): UseEventStreamReturn {
           mode: options?.mode || 'agent',
           system_prompt: options?.systemPrompt,
           modelConfigId: options?.modelConfigId,
+          approvalMode: options?.approvalMode,
           session_id: options?.sessionId,
           skill_ids: options?.skillIds,
           forced_skill_ids: options?.forcedSkillIds,
