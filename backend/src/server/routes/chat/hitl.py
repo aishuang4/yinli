@@ -179,7 +179,7 @@ def _clear_pending_interaction(interaction_id: str) -> None:
 
 def _hitl_payload(interaction: PendingInteraction) -> dict:
     """Build frontend payload for a pending human interaction."""
-    return {
+    payload = {
         "interactionId": interaction.id,
         "type": interaction.type,
         "sessionId": interaction.session_id,
@@ -191,6 +191,19 @@ def _hitl_payload(interaction: PendingInteraction) -> dict:
         "scope": interaction.scope,
         "createdAt": interaction.created_at,
     }
+    from src.server.routes.chat.authorization_display import public_authorization_event
+    from src.server.routes.chat.models import get_pending_agent
+
+    agent = get_pending_agent(interaction.id)
+    if getattr(agent, "authorization_binding", None) is not None:
+        payload["toolCalls"] = public_authorization_event(agent, interaction.type, {
+            "tool_calls": interaction.tool_calls})["tool_calls"]
+        if interaction.type == "REQUIRE_USER_CONFIRM":
+            details = [agent.authorization_details(str(call.get("id") or "")) for call in interaction.tool_calls]
+            payload.update(version=2, approvalMode=agent.authorization_binding.owner.approval_mode,
+                           actorId=agent.authorization_binding.owner.actor_id,
+                           decisions=[item for item in details if item is not None])
+    return payload
 
 
 def _build_resume_event(
@@ -205,19 +218,22 @@ def _build_resume_event(
     )
     if interaction.type == "REQUIRE_USER_CONFIRM":
         confirmed = data.action == "approve"
-        remembered_tool_names: set[str] = set()
         confirm_results: list[ConfirmResult] = []
+        if (
+            confirmed
+            and not data.remember_approval
+            and (interaction.chat_data or {}).get("rememberApprovalDeclined")
+        ):
+            raise ValueError("不能改用框架规则记住这一次批准")
         for tool_call in resume_tool_calls:
-            tool_name = str(tool_call.get("name") or "").strip()
             rules = None
-            if confirmed and data.remember_approval and tool_name and tool_name not in remembered_tool_names:
-                rules = _session_allow_rules([tool_call])
-                remembered_tool_names.add(tool_name)
             confirm_results.append(ConfirmResult(
                 confirmed=confirmed,
                 tool_call=ToolCallBlock.model_validate(tool_call),
                 rules=rules,
             ))
+        if confirmed and data.remember_approval:
+            interaction.chat_data = {**(interaction.chat_data or {}), "rememberApprovalDeclined": True}
         return UserConfirmResultEvent(
             reply_id=interaction.reply_id,
             confirm_results=confirm_results,

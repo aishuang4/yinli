@@ -111,6 +111,11 @@ class SubagentRunner:
         self.parent_tool_scope = parent_tool_scope
         self.persist = persist
         self.platform_context = platform_context
+        self.parent_authorization = None
+        self.parent_denied: frozenset[str] = frozenset()
+        self.parent_filesystem_scope = ""
+        self.parent_capabilities = None
+        self.parent_service = None
 
     def prepare(self, definition: SubagentDefinition) -> SubagentPreparedRun:
         """解析 Subagent 运行前上下文，供调用方先写审计事件。"""
@@ -175,6 +180,37 @@ class SubagentRunner:
         )
         child_agent_id = f"subagent:{definition.name}:{invocation_id}"
         child_agent_name = f"Subagent {definition.name}"
+        platform_binding = None
+        tool_holder: dict = {}
+        parent = getattr(self, "parent_authorization", None)
+        if parent is not None:
+            from src.runtime.authorization import inherit_child_authorization, open_run_binding
+
+            child_scope = permission.guardrails.filesystem_scope
+            child_owner, denied = inherit_child_authorization(
+                parent,
+                actor_id=child_agent_id,
+                parent_denied=frozenset(getattr(self, "parent_denied", frozenset()) or ()),
+                child_denied=frozenset(policy.denied_tool_names),
+                parent_filesystem_scope=str(getattr(self, "parent_filesystem_scope", "") or ""),
+                child_filesystem_scope=child_scope,
+            )
+
+            async def names():
+                agent = tool_holder.get("agent")
+                if agent is None or not hasattr(agent, "available_tool_names"):
+                    return frozenset()
+                return await agent.available_tool_names()
+
+            parent_reader = getattr(self, "parent_capabilities", None)
+            platform_binding = open_run_binding(
+                child_owner,
+                filesystem_scope=child_scope or str(getattr(self, "parent_filesystem_scope", "") or "/"),
+                denied_tool_names=denied,
+                tool_names=names,
+                parent_capabilities=parent_reader if callable(parent_reader) else None,
+                share_denials_from=getattr(self, "parent_service", None),
+            )
         workspace_dir = (
             str(project_session_directory(Path(permission.guardrails.filesystem_scope), self.session_id))
             if self.platform_context is not None
@@ -213,7 +249,10 @@ class SubagentRunner:
             tool_name_denylist=policy.denied_tool_names,
             skill_paths=runtime_context.skill_paths,
             workspace_dir=workspace_dir,
+            platform_binding=platform_binding,
         )
+        if platform_binding is not None:
+            tool_holder["agent"] = agent
 
         reply_generation = 0
         generation_text = ""

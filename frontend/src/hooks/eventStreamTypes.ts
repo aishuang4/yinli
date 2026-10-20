@@ -76,6 +76,16 @@ export interface SkillCallInfo {
   status: 'running' | 'completed' | 'failed';
 }
 
+/** 审批卡上的一条服务端决定。 */
+export interface HitlDecisionInfo {
+  reviewable?: boolean;
+  reason?: string;
+  riskRule?: string;
+  riskClass?: string;
+  reasonCode?: string;
+  status?: string;
+}
+
 /** 人机交互请求 */
 export interface HitlRequestInfo {
   interactionId: string;
@@ -92,6 +102,7 @@ export interface HitlRequestInfo {
     input: string;
     rawName?: string;
   }>;
+  decisions: HitlDecisionInfo[];
   createdAt: string;
 }
 
@@ -143,6 +154,7 @@ export interface SendMessageOptions {
   mode?: 'agent' | 'team';
   systemPrompt?: string;
   modelConfigId?: string;
+  approvalMode?: 'manual' | 'model_review' | 'full_access';
   sessionId?: string;
   displayMessage?: string;
   skillIds?: string[];

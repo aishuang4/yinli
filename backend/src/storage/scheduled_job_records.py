@@ -637,6 +637,7 @@ class ScheduledJobRecordStore:
             "delivery_channel_ref": row["delivery_channel_ref"],
             "recipient_ids": self.loads(row["recipient_ids"], []),
             "unattended_permission": row["unattended_permission"],
+            "execution_policy": self.loads(row["execution_policy"], {}) if "execution_policy" in row.keys() else {},
             "auto_send_enabled_at": row["auto_send_enabled_at"],
             "required_successes": row["required_successes"],
             "consecutive_successes": row["consecutive_successes"],

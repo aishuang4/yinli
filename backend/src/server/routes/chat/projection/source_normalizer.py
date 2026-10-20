@@ -10,6 +10,26 @@ from .domain_events import DomainEvent, DomainEventDraft, DomainEventRepository
 from .team_event_normalizer import TeamEventNormalizerMixin
 
 
+def _permission_facts(decisions: object) -> list[dict[str, str]]:
+    """展示快照和 Trace 使用同一条权限投影。"""
+
+    from src.storage.permission_records import project_permission_fact
+
+    if not isinstance(decisions, list):
+        return []
+    facts = []
+    for item in decisions:
+        if not isinstance(item, dict):
+            continue
+        facts.append(project_permission_fact(
+            verdict=str(item.get("verdict") or ""),
+            approval_status=str(item.get("status") or "") or None,
+            execution_status=str(item.get("executionStatus") or "") or None,
+            risk_class=str(item.get("riskClass") or ""),
+        ))
+    return facts
+
+
 class ChatProjectionNormalizer(TeamEventNormalizerMixin):
     """单 Run normalizer；源信号不持久化、不作为 SSE 或 replay 契约。"""
 
@@ -323,11 +343,15 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
                 "replyId",
                 "scope",
                 "createdAt",
+                "approvalMode",
+                "actorId",
+                "decisions",
             )
             if data.get(key) is not None
         }
         initial.setdefault("interactionId", interaction_id)
         initial["status"] = "waiting"
+        initial["permissionFacts"] = _permission_facts(initial.get("decisions"))
         return self._start_block("interaction", block_id, "approval", initial, aggregate_id=interaction_id)
 
     def _interaction_completed(self, data: dict[str, Any]) -> list[DomainEvent]:

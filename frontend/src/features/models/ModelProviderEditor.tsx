@@ -51,22 +51,24 @@ export function ModelProviderEditor({
 
   return (
     <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
-      <button
-        type="button"
-        className="flex w-full items-center gap-3 px-4 py-3 text-left"
-        onClick={onToggle}
-        aria-expanded={open}
-      >
-        {open ? <ChevronDown size={16} className="shrink-0 text-[var(--color-text-tertiary)]" /> : <ChevronRight size={16} className="shrink-0 text-[var(--color-text-tertiary)]" />}
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-sm font-medium text-[var(--color-text-primary)]">
-            {provider.name.trim() || '未命名供应商'}
+      <div className="flex w-full items-center gap-3 px-4 py-3">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          onClick={onToggle}
+          aria-expanded={open}
+        >
+          {open ? <ChevronDown size={16} className="shrink-0 text-[var(--color-text-tertiary)]" /> : <ChevronRight size={16} className="shrink-0 text-[var(--color-text-tertiary)]" />}
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium text-[var(--color-text-primary)]">
+              {provider.name.trim() || '未命名供应商'}
+            </span>
+            <span className="mt-0.5 block truncate text-xs text-[var(--color-text-tertiary)]">
+              {adapterLabel(provider.adapter)} · {models.length} 个模型
+              {isDefaultProvider ? ' · 含默认模型' : ''}
+            </span>
           </span>
-          <span className="mt-0.5 block truncate text-xs text-[var(--color-text-tertiary)]">
-            {adapterLabel(provider.adapter)} · {models.length} 个模型
-            {isDefaultProvider ? ' · 含默认模型' : ''}
-          </span>
-        </span>
+        </button>
         {provider.enabled && status !== 'ready' ? (
           <Tag size="small" color={statusColor} style={{ marginInlineEnd: 0 }}>
             {providerConnectionLabel(status)}
@@ -78,7 +80,7 @@ export function ModelProviderEditor({
           offLabel="已停用"
           onChange={(enabled) => onChange({ enabled })}
         />
-      </button>
+      </div>
 
       {open ? (
         <div className="space-y-5 border-t border-[var(--color-border)] bg-[var(--color-bg-primary)] px-4 py-4">

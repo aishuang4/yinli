@@ -300,6 +300,43 @@ def _skill_paths_for(ctx: ChatRunContext, used_skills: list) -> list[str]:
     return resolve_runtime_skill_paths(used_skills, runtime_context=getattr(ctx, "runtime_context", None))
 
 
+def _child_platform_binding(ctx: ChatRunContext, *, actor_id: str, write_scope_dir: str = ""):
+    """Team Leader / Member 繼承父 Run，工具範圍只會再收窄。"""
+
+    parent = getattr(ctx, "platform_binding", None)
+    if parent is None:
+        return None, {}
+    from src.runtime.authorization import inherit_child_authorization, open_run_binding
+
+    parent_scope = str(getattr(ctx, "platform_filesystem", "") or "")
+    child_scope = write_scope_dir or parent_scope
+    child_owner, denied = inherit_child_authorization(
+        parent.owner,
+        actor_id=actor_id,
+        parent_denied=frozenset(getattr(ctx, "platform_denied", frozenset()) or ()),
+        parent_filesystem_scope=parent_scope,
+        child_filesystem_scope=child_scope,
+    )
+    holder: dict = {}
+
+    async def names():
+        agent = holder.get("agent")
+        if agent is None or not hasattr(agent, "available_tool_names"):
+            return frozenset()
+        return await agent.available_tool_names()
+
+    parent_reader = getattr(getattr(parent.service, "boundary_check", None), "capabilities", None)
+    binding = open_run_binding(
+        child_owner,
+        filesystem_scope=parent_scope or child_scope or "/",
+        denied_tool_names=denied,
+        tool_names=names,
+        parent_capabilities=parent_reader if callable(parent_reader) else None,
+        share_denials_from=parent.service,
+    )
+    return binding, holder
+
+
 def _create_team_agent(
     *,
     ctx: ChatRunContext,
@@ -349,6 +386,11 @@ def _create_team_agent(
         write_scope_dir=write_scope_dir,
         extra_filesystem_scopes=list(getattr(ctx, "extra_filesystem_scopes", None) or []),
     )
+    platform_binding, tool_holder = _child_platform_binding(
+        ctx,
+        actor_id=actor_id,
+        write_scope_dir=write_scope_dir,
+    )
     agent = create_main_agent_from_spec(
         spec,
         on_fallback_event=_make_fallback_trace_recorder(
@@ -358,7 +400,10 @@ def _create_team_agent(
             agent_id=actor_id,
             agent_name=actor_name,
         ),
+        platform_binding=platform_binding,
     )
+    if platform_binding is not None:
+        tool_holder["agent"] = agent
     memory_chars = len(str(getattr(ctx, "memory_prompt", "") or ""))
     prepare_agent_governance(
         agent,

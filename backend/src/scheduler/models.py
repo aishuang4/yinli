@@ -66,6 +66,16 @@ ALLOWED_JOB_TRANSITIONS: dict[str, frozenset[str]] = {
 }
 
 
+class JobExecutionPolicy(BaseModel):
+    """Job 的審核模式。缺省人工，不能從舊 bypass 自動推成完全開放。"""
+
+    approval_mode: Literal["manual", "model_review", "full_access"] = Field(
+        default="manual", alias="approvalMode",
+    )
+
+    model_config = {"populate_by_name": True, "extra": "ignore"}
+
+
 class JobToolScope(BaseModel):
     """Job 冻结工具范围；缺键按 false，禁止落入 RuntimeToolScope 全 True。"""
 
@@ -118,6 +128,7 @@ class ScheduledJob(BaseModel):
     max_firings_per_day: int = 8
     created_from_session_id: str = ""
     capability_contract: JobCapabilityContract = Field(default_factory=empty_capability_contract)
+    execution_policy: JobExecutionPolicy = Field(default_factory=JobExecutionPolicy)
     created_at: str
     updated_at: str
     archived_at: str | None = None

@@ -39,6 +39,12 @@ class SessionModelUpdate(BaseModel):
     model_config_id: str = Field(alias="modelConfigId", min_length=1)
 
 
+class SessionApprovalUpdate(BaseModel):
+    """下一轮审批模式。当前 Run 不因这次保存改写。"""
+
+    approval_mode: str = Field(alias="approvalMode", min_length=1)
+
+
 @router.patch("/sessions/{session_id}/model")
 async def update_session_model(session_id: str, data: SessionModelUpdate,
     project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId")) -> dict:
@@ -57,6 +63,30 @@ async def update_session_model(session_id: str, data: SessionModelUpdate,
         raise HTTPException(status_code=422, detail=str(exc)) from None
     update_chat_session(session_id, model_config_id=binding.primary.entry.id)
     return {"modelConfigId": binding.primary.entry.id}
+
+
+@router.patch("/sessions/{session_id}/approval")
+async def update_session_approval(session_id: str, data: SessionApprovalUpdate,
+    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId")) -> dict:
+    """保存下一轮模式。model_review 不可用时拒绝，不静默改成其他模式。"""
+
+    from src.security.authorization.models import validate_approval_mode
+    from src.security.authorization.review_gate import permission_review_status
+
+    record = get_chat_session(session_id)
+    session = session_model(record)
+    if session is None or session.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        mode = validate_approval_mode(data.approval_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    if mode == "model_review":
+        review = permission_review_status()
+        if not review["available"]:
+            raise HTTPException(status_code=422, detail=review["reason"])
+    update_chat_session(session_id, approval_mode=mode)
+    return {"approvalMode": mode, "appliesTo": "next_run"}
 
 
 def _filter_sessions_by_kind(sessions: list[ChatSession], kind: str) -> list[ChatSession]:

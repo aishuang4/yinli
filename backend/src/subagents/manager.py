@@ -117,6 +117,21 @@ class SubagentDelegationManager:
             platform_context=runtime_context,
         )
 
+    def bind_parent_authorization(self, owner, denied, filesystem: str) -> None:
+        """attached Subagent 繼承父 Run 的模式、熔斷和檔案系統上限。"""
+
+        self.parent_authorization = owner
+        self._runner.parent_authorization = owner
+        self._runner.parent_denied = frozenset(denied)
+        self._runner.parent_filesystem_scope = filesystem
+        binding = getattr(self, "platform_binding", None)
+        service = getattr(binding, "service", None)
+        if service is not None:
+            self._runner.parent_service = service
+            self._runner.parent_capabilities = getattr(
+                getattr(service, "boundary_check", None), "capabilities", None,
+            )
+
     def get_definition(self, name: str) -> SubagentDefinition | None:
         """按名称读取 Subagent 定义。"""
 

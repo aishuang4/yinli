@@ -110,6 +110,53 @@ def _extract_response(body: Any, mode: str, path: str) -> Any:
     return body
 
 
+def prepare_configured_http_request(
+    config: dict[str, Any],
+    parameters: dict[str, Any],
+    *,
+    timeout_seconds: float = 30,
+) -> dict[str, Any]:
+    """按配置構造請求，不發送。憑據留在請求裡，公開快照只保留引用。"""
+
+    if str(config.get("approvalPolicy") or config.get("approval_policy") or "").lower() == "deny":
+        raise ValueError("该 HTTP 工具被配置为拒绝执行")
+    method = str(config.get("method") or "GET").upper()
+    url = str(_render_value(config.get("url") or "", parameters))
+    parsed = urlparse(url)
+    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+        raise ValueError(f"Unsupported HTTP method: {method}")
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("URL must be absolute and start with http:// or https://")
+    query = _render_value(deepcopy(config.get("queryTemplate") or config.get("query_template") or {}), parameters)
+    body = _render_value(deepcopy(config.get("bodyTemplate") or config.get("body_template") or {}), parameters)
+    if not isinstance(query, dict):
+        query = {}
+    if isinstance(parameters.get("query"), dict):
+        query = _deep_merge(query, parameters["query"])
+    headers = {
+        str(key): str(value)
+        for key, value in (config.get("headers") or {}).items()
+        if str(key).strip()
+    }
+    auth_headers, auth = _headers_from_auth(config, query)
+    headers.update(auth_headers)
+    payload: dict[str, Any] = {
+        "method": method,
+        "url": url,
+        "headers": headers or None,
+        "params": query or None,
+        "auth": auth,
+        "timeout": max(1.0, min(float(timeout_seconds or 30), 120.0)),
+    }
+    if body not in (None, {}, []) and method not in {"GET", "DELETE"}:
+        if isinstance(body, (dict, list)):
+            payload["headers"] = {**(payload["headers"] or {}), "content-type": "application/json"}
+            payload["content"] = json.dumps(body).encode()
+        else:
+            payload["content"] = str(body)
+    return payload
+
+
 async def execute_configured_http_tool(
     config: dict[str, Any],
     parameters: dict[str, Any],

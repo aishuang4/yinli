@@ -210,6 +210,7 @@ class ChatSession(BaseModel):
     workspace_id: str = "default"
     project_id: str = "default"
     kind: Literal["chat", "scheduled_job"] = "chat"
+    approval_mode: Literal["manual", "model_review", "full_access"] = Field(default="manual", alias="approvalMode")
     created_at: str
     updated_at: str
     message_count: int = 0
@@ -295,6 +296,9 @@ class ChatMessage(BaseModel):
 
     model_config_id: str | None = Field(default=None, alias="modelConfigId")
     """指定模型（可选，覆盖默认配置）"""
+
+    approval_mode: Literal["manual", "model_review", "full_access"] | None = Field(default=None, alias="approvalMode")
+    """本轮审批模式。缺省时沿用会话上已保存的模式。"""
 
     skill_ids: list[str] = Field(default_factory=list)
     """当前 Agent 绑定的 Skill ID 列表"""

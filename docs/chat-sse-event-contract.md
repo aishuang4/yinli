@@ -159,6 +159,7 @@ type DisplaySnapshot = {
 - 不传 `afterSeq` 时返回当前 Snapshot，再继续实时订阅。
 - `GET /api/chat/runs/{runId}/state?projectId=...` 只返回 DisplaySnapshot V4。
 - assistant 历史消息的 `displaySnapshot` 只保存 V4；不存在旧版本 decoder。
+- 模型拒绝复核卡仍是 `approval` Block。`decisions[].reviewable` 为真时展示固定拒绝原因和风险规则；按钮只有「维持拒绝」和「人工批准这一次」。展示参数不得含凭据或审核思维链。
 - `waiting_user` / `waiting_permission` 只暂停 Runtime，不结束同一 Run 的传输订阅。前端必须保持
   当前订阅跨越 HITL，resume 后继续从原 `lastSeq` 实时接收增量 Frame；只有 Run 进入
   `completed | failed | cancelled` 终态后，后端才发送 `done` 并关闭 subscriber。

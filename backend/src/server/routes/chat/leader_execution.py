@@ -78,8 +78,12 @@ async def execute_and_finalize_leader_reply(
         ):
             yield event
 
-        if state.stopped and state.stop_reason == "hitl_denied":
-            assistant_error = "hitl_denied: 无人值守 HITL 拒绝次数超过上限"
+        if state.stopped and state.stop_reason in {"hitl_denied", "job_needs_human"}:
+            assistant_error = (
+                "定时任务遇到需要人工判断的动作，本次运行已结束，未执行该动作。"
+                if state.stop_reason == "job_needs_human"
+                else "hitl_denied: 无人值守 HITL 拒绝次数超过上限"
+            )
             async for event in finalize_failed_leader_run(
                 session_id=session_id,
                 persist=persist,

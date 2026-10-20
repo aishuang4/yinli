@@ -10,6 +10,7 @@ import {
   emptyModel,
   emptyProvider,
   isProviderConfigured,
+  reviewConfigForSelection,
 } from './modelCatalogUi';
 import { catalogRequest, modelAvailable, useModelCatalog, type ModelCatalog, type ModelEntry, type ModelProvider } from './useModelCatalog';
 import { notifyError, notifySuccess } from '../../utils/feedback';
@@ -230,6 +231,7 @@ function CatalogEditor({
           return next;
         }),
         models: draft.models.filter((item) => item.label.trim() && item.model.trim()),
+        permissionReview: draft.permissionReview ?? null,
       };
       await catalogRequest({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       notifySuccess('模型配置已保存');
@@ -292,6 +294,28 @@ function CatalogEditor({
             </>
           )}
         </div>
+      </div>
+
+      <div className="rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4">
+        <SelectField
+          label="自动审核模型"
+          aria-label="自动审核模型"
+          style={{ width: '100%' }}
+          allowClear
+          value={draft.permissionReview?.modelConfigId || undefined}
+          showSearch
+          optionFilterProp="label"
+          placeholder="不使用自动审核"
+          onChange={(value) => setDraft({
+            ...draft,
+            permissionReview: reviewConfigForSelection(String(value || ''), initial.permissionReview),
+          })}
+          options={availableModels.map((item) => ({
+            value: item.id,
+            label: `${item.label} · ${draft.providers.find((entry) => entry.id === item.providerId)?.name || '供应商'}`,
+          }))}
+          help="危险或不确定的操作交给这个模型判断。保存时会用一次无害探测确认它能返回结果。"
+        />
       </div>
 
       <div className="flex items-center justify-between gap-3">

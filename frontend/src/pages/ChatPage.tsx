@@ -13,7 +13,8 @@
  */
 
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Bot, MessageSquare, PanelLeftOpen, Plus } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Bot, Check, ChevronDown, MessageSquare, PanelLeftOpen, Plus } from 'lucide-react';
 import { UserMenu } from '../features/auth/UserMenu';
 import { ScrollToBottomButton } from '../components/ScrollToBottomButton';
 import { useMessageScroll } from '../components/useMessageScroll';
@@ -80,6 +81,7 @@ export function ChatPage() {
   const [forcedSkillIds, setForcedSkillIds] = useState<string[]>([]);
   const [planPanelOpen, setPlanPanelOpen] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [draftApprovalMode, setDraftApprovalMode] = useState<'manual' | 'model_review' | 'full_access'>('manual');
   const [answerAnimating, setAnswerAnimating] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [historyPanelMounted, setHistoryPanelMounted] = useState(true);
@@ -164,6 +166,7 @@ export function ChatPage() {
     setForcedSkillIds((current) => current.filter((id) => allowed.has(id)));
   }, [composerSkills]);
 
+  const approvalMode = sessions.find((item) => item.id === activeSessionId)?.approvalMode || draftApprovalMode;
   const hostedPlatform = useAuthStore((state) => state.serveMode) === 'hosted' && providedModels.source === 'key2api';
   const storedModelId = modelChoices[activeSessionId || 'new'] || sessions.find(s => s.id === activeSessionId)?.modelConfigId || modelCatalog?.defaultModelId || '';
   const selectedModelId = hostedPlatform && !storedModelId.startsWith('platform:')
@@ -388,6 +391,7 @@ export function ChatPage() {
     setPlanPanelOpen(false);
     setPreviewTarget(null);
     setActiveSessionId(null);
+    setDraftApprovalMode('manual');
     setModelChoices({});
     setMessages([]);
     resetAttachments();
@@ -465,6 +469,7 @@ export function ChatPage() {
     setPlanPanelOpen(false);
     setPreviewTarget(null);
     setActiveSessionId(null);
+    setDraftApprovalMode('manual');
     setModelChoices(previous => {
       const next = { ...previous };
       delete next.new;
@@ -600,6 +605,7 @@ export function ChatPage() {
       agentName: runtimeAgent?.name,
       mode: teamModeEnabled ? targetMode : 'agent',
       modelConfigId: selectedModelId,
+      approvalMode,
       skillIds: runtimeAgent?.skills,
       forcedSkillIds,
       deepThinking,
@@ -609,7 +615,7 @@ export function ChatPage() {
       images,
       files,
     });
-  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, forceCompress, forcedSkillIds, imageAttachments, inputValue, planMode, planModeEnabled, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, teamModeEnabled, uploadFilesForSession]);
+  }, [activeProjectId, activeSessionId, approvalMode, deepThinking, fileAttachments, forceCompress, forcedSkillIds, imageAttachments, inputValue, planMode, planModeEnabled, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, teamModeEnabled, uploadFilesForSession]);
 
   const handlePlanReview = useCallback(async (
     plan: PlanReviewData,
@@ -904,6 +910,21 @@ export function ChatPage() {
               onChange={value => void selectModel(value)}
               disabled={savingModelChoice || pendingAskUserInteractions.length > 0}
               loading={modelsLoading} error={modelsError} />}
+            approvalSelector={(
+              <ApprovalModeControl
+                sessionId={activeSessionId}
+                projectId={activeProjectId}
+                mode={approvalMode}
+                disabled={state.isStreaming}
+                onChanged={(mode) => {
+                  setDraftApprovalMode(mode);
+                  if (!activeSessionId) return;
+                  setSessions((current) => current.map((item) => (
+                    item.id === activeSessionId ? { ...item, approvalMode: mode } : item
+                  )));
+                }}
+              />
+            )}
               agentsLoading={agentsLoading}
               chatError={chatError}
               deepThinking={deepThinking}
@@ -950,6 +971,143 @@ export function ChatPage() {
         <FilePreviewPane target={previewTarget} onClose={() => setPreviewTarget(null)} />
       ) : null}
     </div>
+  );
+}
+
+const APPROVAL_MODE_OPTIONS: Array<{
+  id: 'manual' | 'model_review' | 'full_access';
+  label: string;
+}> = [
+  { id: 'manual', label: '人工批准' },
+  { id: 'model_review', label: '智能审核' },
+  { id: 'full_access', label: '完全开放' },
+];
+
+function ApprovalModeControl({
+  sessionId,
+  projectId,
+  mode,
+  disabled,
+  onChanged,
+}: {
+  sessionId: string | null;
+  projectId: string;
+  mode: 'manual' | 'model_review' | 'full_access';
+  disabled: boolean;
+  onChanged: (mode: 'manual' | 'model_review' | 'full_access') => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [reviewReason, setReviewReason] = useState('');
+  const [reviewReady, setReviewReady] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const label = APPROVAL_MODE_OPTIONS.find((item) => item.id === mode)?.label || '人工批准';
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch('/api/settings/permission-review')
+      .then(async (response) => {
+        const body = await response.json() as { available?: boolean; reason?: string };
+        if (cancelled) return;
+        setReviewReady(Boolean(body.available));
+        setReviewReason(body.reason || '');
+      })
+      .catch(() => {
+        if (!cancelled) setReviewReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (buttonRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [open]);
+
+  const save = async (next: 'manual' | 'model_review' | 'full_access') => {
+    setOpen(false);
+    if (next === mode) return;
+    if (!sessionId) {
+      onChanged(next);
+      return;
+    }
+    const params = new URLSearchParams({ projectId });
+    const response = await fetch(`/api/chat/sessions/${sessionId}/approval?${params.toString()}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approvalMode: next }),
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { detail?: string };
+      notifyError(body.detail || '无法切换下一轮审批模式');
+      return;
+    }
+    onChanged(next);
+  };
+
+  const rect = open ? buttonRef.current?.getBoundingClientRect() : null;
+  const width = 220;
+  let left = rect ? rect.left : 8;
+  if (left + width > window.innerWidth - 8) left = window.innerWidth - 8 - width;
+  if (left < 8) left = 8;
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="inline-flex h-8 max-w-full shrink-0 items-center gap-1 rounded-lg px-1.5 text-sm text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+        onClick={() => setOpen((current) => !current)}
+        disabled={disabled}
+        aria-label="选择审核模式"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="min-w-0 truncate">{label}</span>
+        <ChevronDown size={14} className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && rect ? createPortal(
+        <div
+          ref={panelRef}
+          className="fixed z-[70] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] shadow-[0_18px_44px_rgba(0,0,0,0.18)]"
+          style={{ left, bottom: window.innerHeight - rect.top + 8, width }}
+          role="listbox"
+          aria-label="选择审核模式"
+        >
+          <div className="px-1 py-1">
+            {APPROVAL_MODE_OPTIONS.map((item) => {
+              const blocked = item.id === 'model_review' && !reviewReady;
+              const checked = item.id === mode;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="option"
+                  aria-selected={checked}
+                  aria-disabled={blocked}
+                  disabled={blocked}
+                  title={blocked ? (reviewReason || '智能审核当前不可用') : undefined}
+                  className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => void save(item.id)}
+                >
+                  <span className="min-w-0 flex-1 truncate text-sm text-[var(--color-text-primary)]">{item.label}</span>
+                  {checked ? <Check size={14} className="shrink-0 text-[var(--color-text-secondary)]" /> : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+    </>
   );
 }
 

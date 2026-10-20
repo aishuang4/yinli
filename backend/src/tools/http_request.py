@@ -11,6 +11,39 @@ from agentscope.permission import PermissionBehavior, PermissionContext, Permiss
 from agentscope.tool import ToolBase, ToolChunk
 
 
+def prepare_http_request(
+    *,
+    url: str,
+    method: str = "GET",
+    headers: dict | None = None,
+    query: dict | None = None,
+    body: Any = None,
+    timeout_seconds: float = 30,
+) -> dict[str, Any]:
+    """只構造請求，不發送。授權快照用它綁定目標。"""
+
+    method = method.upper()
+    parsed = urlparse(url)
+    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
+        raise ValueError(f"Unsupported HTTP method: {method}")
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("URL must be absolute and start with http:// or https://")
+    payload: dict[str, Any] = {
+        "method": method,
+        "url": url,
+        "headers": {str(key): str(value) for key, value in (headers or {}).items() if str(key).strip()} or None,
+        "params": query or None,
+        "timeout": max(1.0, min(float(timeout_seconds or 30), 120.0)),
+    }
+    if body is not None and method not in {"GET", "HEAD"}:
+        if isinstance(body, (dict, list)):
+            payload["headers"] = {**(payload["headers"] or {}), "content-type": "application/json"}
+            payload["content"] = json.dumps(body).encode()
+        else:
+            payload["content"] = str(body)
+    return payload
+
+
 class HttpRequest(ToolBase):
     """Make outbound HTTP requests from an Agent."""
 

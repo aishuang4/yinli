@@ -213,6 +213,9 @@ async def execute_react_runtime(
 
     try:
         if ctx.intent_route.executor.kind == "team":
+            from src.server.routes.chat.authorization import attach_live_run_authorization
+
+            await attach_live_run_authorization(ctx)
             async for team_event in execute_team_runtime(ctx=ctx, run_data=run_data):
                 yield team_event
             return
@@ -277,6 +280,9 @@ async def execute_react_runtime(
             write_scope_dir=str(getattr(ctx, "write_scope_dir", "") or ""),
             extra_filesystem_scopes=list(getattr(ctx, "extra_filesystem_scopes", None) or []),
         )
+        from src.server.routes.chat.authorization import attach_live_run_authorization
+
+        platform_binding = await attach_live_run_authorization(ctx, plan_mode_manager=plan_mode_manager)
         agent = create_main_agent_from_spec(
             main_agent_spec,
             on_fallback_event=_make_fallback_trace_recorder(
@@ -286,7 +292,15 @@ async def execute_react_runtime(
                 agent_id=ctx.agent_id,
                 agent_name=ctx.agent_name,
             ),
+            platform_binding=platform_binding,
         )
+        if platform_binding is not None:
+            ctx.platform_denied = frozenset(main_agent_spec.tool_name_denylist)
+            for source in runtime_event_sources:
+                bind_parent = getattr(source, "bind_parent_authorization", None)
+                if callable(bind_parent):
+                    source.platform_binding = platform_binding
+                    bind_parent(platform_binding.owner, ctx.platform_denied, ctx.platform_filesystem)
     except Exception as exc:
         from src.exception_detail import format_agent_exception
 
@@ -352,6 +366,7 @@ async def execute_react_runtime(
         session_workspace_dir=ctx.session_workspace_dir,
         session_artifact_paths_before=ctx.session_artifact_paths_before,
         trigger_source=str(getattr(ctx, "trigger_source", "user") or "user"),
+        approval_mode=str(getattr(ctx, "approval_mode", "manual") or "manual"),
     )
     if plan_mode_manager:
         for runtime_event in plan_mode_manager.drain_runtime_events():

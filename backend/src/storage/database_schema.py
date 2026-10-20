@@ -599,6 +599,8 @@ BASE_SCHEMA_SQL = """
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         archived_at TEXT,
+        model_config_id TEXT NOT NULL DEFAULT '',
+        execution_policy TEXT NOT NULL DEFAULT '{}',
         UNIQUE (project_id, name)
     );
     CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_due

@@ -23,6 +23,7 @@ import { useSmoothStreamingText } from '../chat/useSmoothStreamingText';
 import {
   buildClarificationRequestFromAskUser,
   isAskUserToolName,
+  modelDenyReview,
   toHitlRequest,
 } from '../chat/humanInteractionUtils';
 import { resolveApiUrl } from '../../utils/apiUrl';
@@ -183,6 +184,16 @@ export function ApprovalBlockView({ block }: { block: DisplayBlock<RecordData> }
           <div className="mt-1 text-xs text-[var(--color-text-tertiary)]">{clarification.description}</div>
         ) : null}
       </RuntimeItem>
+    );
+  }
+  if (request && modelDenyReview(request)) {
+    const live = block.phase === 'open' && Boolean(actions?.onResolveInteraction);
+    return (
+      <HitlApprovalBlock
+        request={request}
+        readOnly={!live}
+        onResolve={actions?.onResolveInteraction ?? (async () => undefined)}
+      />
     );
   }
   if (block.phase === 'open' && request && actions?.onResolveInteraction) {

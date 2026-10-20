@@ -96,6 +96,7 @@ class ChatRunContext:
     session_workspace_dir: str = ""
     session_artifact_paths_before: list[str] = field(default_factory=list)
     trigger_source: str = "user"
+    approval_mode: str = "manual"
     tool_name_denylist: set[str] = field(default_factory=set)
     write_scope_dir: str = ""
     scheduled_job_id: str = ""
@@ -115,6 +116,9 @@ class ChatRunContext:
     # 本轮用户在发送框强制开启的 Skill；已并入 used_skills，单独保留供预启用。
     forced_skills: list[Skill] = field(default_factory=list)
     force_compress: bool = False
+    platform_binding: object | None = None
+    platform_denied: frozenset[str] = field(default_factory=frozenset)
+    platform_filesystem: str = ""
 
 
 def snapshot_session_history(session_id: str | None, *, limit: int = 40) -> list[SessionHistoryMessage]:
@@ -163,6 +167,54 @@ def resolve_run_workspace_dir(
         directory.mkdir(parents=True, exist_ok=True)
         return str(directory)
     return str(project_session_directory(Path(filesystem_scope), session_id))
+
+
+def approval_mode_for_run(session_id: str, requested: str | None) -> str:
+    """请求里显式给出的模式优先；否则读会话，缺失时保持人工。"""
+
+    if requested in {"manual", "model_review", "full_access"}:
+        return requested
+    return _session_approval_mode(session_id)
+
+
+def _session_approval_mode(session_id: str) -> str:
+    """下一轮模式来自会话；缺失时保持人工，不改写成完全开放。"""
+
+    from src.runtime.chat_session import find_chat_session
+
+    session = find_chat_session(session_id) if session_id else None
+    mode = str(getattr(session, "approval_mode", "") or "manual")
+    return mode if mode in {"manual", "model_review", "full_access"} else "manual"
+
+
+def _job_approval_mode(job: object) -> str:
+    """Job 的审批模式只来自执行策略；没有策略时按人工处理。"""
+
+    import json
+
+    raw = getattr(job, "execution_policy", None)
+    if raw is None:
+        raw = getattr(job, "executionPolicy", None)
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            raw = {}
+    mode = str((raw or {}).get("approvalMode") or "manual") if isinstance(raw, dict) else "manual"
+    return mode if mode in {"manual", "model_review", "full_access"} else "manual"
+
+
+def _require_job_approval_mode(job: object) -> str:
+    """model_review 不可用时直接失败，不把 Job 改成完全开放。"""
+
+    mode = _job_approval_mode(job)
+    if mode == "model_review":
+        from src.security.authorization.review_gate import permission_review_status
+
+        review = permission_review_status()
+        if not review["available"]:
+            raise ValueError(review["reason"] or "智能审核当前不可用，本次定时运行已结束。")
+    return mode
 
 
 async def build_chat_run_context(
@@ -360,6 +412,7 @@ async def build_chat_run_context(
         ),
         session_workspace_dir=session_workspace_dir,
         session_artifact_paths_before=session_artifact_paths_before,
+        approval_mode=approval_mode_for_run(session_id, getattr(run_data, "approval_mode", None)),
         extra_filesystem_scopes=extra_filesystem_scopes,
         session_history=session_history,
         user_message_note="\n\n".join(
@@ -518,6 +571,7 @@ async def build_scheduled_run_context(
         session_workspace_dir=workspace_dir,
         session_artifact_paths_before=session_artifact_paths_before,
         trigger_source="scheduled_job",
+        approval_mode=_require_job_approval_mode(job),
         tool_name_denylist=denylist,
         write_scope_dir=workspace_dir,
         scheduled_job_id=str(getattr(job, "id", "") or getattr(firing, "job_id", "") or ""),
