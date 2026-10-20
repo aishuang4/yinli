@@ -10,7 +10,6 @@ const ALL_SETTINGS_NAV: Array<SettingsNavItem & { key: 'jobs' | 'groupStudio' | 
   { id: 'settings-group-studio', label: '群聊工作室', key: 'groupStudio' },
   { id: 'settings-appearance', label: '界面外观', key: 'always' },
   { id: 'settings-notifications', label: '消息通知', key: 'always' },
-  { id: 'settings-context', label: '对话上下文', key: 'always' },
   { id: 'settings-user-data', label: '用户数据', key: 'userData' },
 ];
 

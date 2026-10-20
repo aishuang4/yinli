@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type KeyboardEv
 import { AlertCircle, FileText, Send, Square, X } from 'lucide-react';
 import { Tooltip } from '@/components/design';
 import { FileImportButton } from '../../components/FileImportButton';
-import { ChatAgentChip, useChatComposerAgents } from './ChatAgentSelect';
+import { ChatAgentChip } from './ChatAgentSelect';
+import { useChatComposerAgents } from './useChatComposerAgents';
 import { ChatComposerPlusMenu, ChatCompressChip, ChatDeepThinkChip, ChatPlanChip } from './ChatComposerPlusMenu';
 import type { PlusMenuCategory } from './plusMenu';
 import { ChatForcedSkillChips, ChatSkillSlashMenu } from './ChatSkillPicker';
@@ -20,6 +21,7 @@ import { filesFromTransfer } from './composerFiles';
 
 interface ChatComposerProps {
   modelSelector?: ReactNode;
+  approvalSelector?: ReactNode;
   agentsLoading: boolean;
   chatError: string | null;
   deepThinking: boolean;
@@ -347,6 +349,7 @@ export function ChatComposer(props: ChatComposerProps) {
           <div className="chat-composer-model-slot min-w-0 max-w-[168px] shrink">
             {props.modelSelector}
           </div>
+          {props.approvalSelector}
           <div className="ml-auto flex items-center gap-2">
             {isStreaming ? (
               <Tooltip title="停止回复" placement="top" mode="dark">

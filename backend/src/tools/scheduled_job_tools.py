@@ -16,6 +16,7 @@ from agentscope.tool import ToolBase, ToolChunk
 from src.agents.system_agents import is_system_agent_id
 from src.scheduler.models import ScheduledJob, ScheduledJobError
 from src.scheduler.service import ScheduledJobService
+from src.scheduler.skill_manifest import SkillManifestError, resolve_job_skill_refs
 from src.scheduler.feasibility import contract_from_feasibility, evaluate_job_feasibility
 from src.scheduler.settings import is_capability_gate_enabled, is_scheduled_jobs_enabled
 
@@ -94,6 +95,7 @@ def scheduled_job_prompt_addendum(workspace_id: str = "default") -> str:
         "CheckJobFeasibility does not strip the Job Agent's required tools; it only claims optional tools. If verdict is impossible, the Job Agent's required tools are unavailable — do not call ScheduleJob.",
         "If verdict is partial, AskUser options must be exactly: 按降级创建（只生成） (default, first), then 先去补能力. Mention 不能 and 发邮件/外发 vs 生成. Only ScheduleJob with accept_partial=true after they accept the downgrade. Required tools stay injected.",
         "Use AskUser to collect missing schedule fields, then call ScheduleJob with a complete payload including task_intent. There is no draft status.",
+        "When a job needs Skills, pass ScheduleJob.skill_ids using the stable <id> values from the <agent-skills> catalog. Never pass file paths, and never send required_skills: ConfirmJob freezes each Skill version and every firing preloads it before the first model call.",
         f"When asking for delivery policy, AskUser options must be exactly: {ASKUSER_DELIVERY_OPTIONS[0]} (default, first), then {ASKUSER_DELIVERY_OPTIONS[1]}.",
         "Do not offer 直接发给客户, auto_send, or sending to the customer.",
         "ScheduleJob writes pending_confirmation immediately; that is not yet scheduled.",
@@ -117,6 +119,7 @@ def build_scheduled_job_tools(
     agent_id: str,
     session_id: str,
     service: ScheduledJobService | None = None,
+    approval_mode: str = "manual",
 ) -> list[ToolBase]:
     """构造交互式单 Agent 的 ScheduleJob 工具组。"""
 
@@ -126,6 +129,7 @@ def build_scheduled_job_tools(
         "agent_id": agent_id,
         "session_id": session_id,
         "service": service or ScheduledJobService(),
+        "approval_mode": approval_mode,
     }
     return [
         ScheduleJob(**kwargs),
@@ -148,21 +152,24 @@ class _ScheduledJobToolBase(ToolBase):
     project_id: str = ""
     agent_id: str = ""
     session_id: str = ""
+    approval_mode: str = "manual"
 
     def __init__(
         self,
         *,
-        workspace_id: str,
-        project_id: str,
+        workspace_id: str = "",
+        project_id: str = "",
         agent_id: str,
         session_id: str,
         service: ScheduledJobService | None = None,
+        approval_mode: str = "manual",
     ) -> None:
         super().__init__()
         self.workspace_id = workspace_id
         self.project_id = project_id
         self.agent_id = agent_id
         self.session_id = session_id
+        self.approval_mode = approval_mode
         self._service = service or ScheduledJobService()
 
     async def check_permissions(
@@ -269,7 +276,18 @@ class ScheduleJob(_ScheduledJobToolBase):
             "skill_ids": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Frozen Skill ids. Do not silently drop any.",
+                "description": (
+                    "Stable Skill ids copied from the <id> element of the <agent-skills> catalog, e.g. skill-1a2b3c. "
+                    "Never pass a file path, directory, or SKILL.md. A unique Skill name is accepted for compatibility "
+                    "and resolved to its id; ambiguous or unknown names are rejected. Do not silently drop any. "
+                    "The server freezes each Skill version on ConfirmJob and preloads it before the first model call "
+                    "of every firing."
+                ),
+            },
+            "context_policy": {
+                "type": "string",
+                "enum": ["fresh"],
+                "description": "Scheduled firing context policy. Default fresh creates an isolated context per firing.",
             },
             "tool_scope": {
                 "type": "object",
@@ -326,6 +344,8 @@ class ScheduleJob(_ScheduledJobToolBase):
         args: list[str] | None = None,
         timeout_seconds: int = 300,
         skill_ids: list[str] | None = None,
+        context_policy: str = "fresh",
+        required_skills: list[dict[str, Any]] | None = None,
         tool_scope: dict[str, Any] | str | None = None,
         input_spec: dict[str, Any] | str | None = None,
         output_spec: dict[str, Any] | str | None = None,
@@ -346,10 +366,16 @@ class ScheduleJob(_ScheduledJobToolBase):
                 str(frozen_prompt or "").strip()
                 or str(agent_id or "").strip()
                 or list(skill_ids or [])
+                or list(required_skills or [])
+                or context_policy != "fresh"
                 or tool_scope
             ):
                 return self._failure("脚本任务不能同时填写 agent_id、frozen_prompt、skill_ids 或 tool_scope")
             resolved_agent_id = "" if chosen == "script" else (agent_id or self.agent_id).strip()
+            # required_skills 不再由模型填写（旧参数照收但忽略）；服务端在 ConfirmJob 时生成冻结 manifest。
+            resolved_skill_ids = [] if chosen == "script" else resolve_job_skill_refs(
+                list(skill_ids or []),
+            )
             job = self._service.create_job(
                 workspace_id=self.workspace_id,
                 project_id=self.project_id,
@@ -360,7 +386,8 @@ class ScheduleJob(_ScheduledJobToolBase):
                 timezone=timezone,
                 frozen_prompt="" if chosen == "script" else frozen_prompt,
                 summary=summary or "",
-                skill_ids=[] if chosen == "script" else list(skill_ids or []),
+                skill_ids=resolved_skill_ids,
+                context_policy=context_policy,
                 tool_scope=None if chosen == "script" else _coerce_optional_mapping(tool_scope, field="tool_scope"),
                 mode=chosen,
                 script_filename=script_filename,
@@ -374,14 +401,18 @@ class ScheduleJob(_ScheduledJobToolBase):
                 failure_policy=failure_policy or "notify_keep_schedule",
                 delivery_policy=delivery_policy or "notify",
                 created_from_session_id=self.session_id,
+                execution_policy={"approvalMode": self.approval_mode},
                 task_intent=task_intent,
                 accept_partial=bool(accept_partial),
                 required_intents=list(required_intents or []),
             )
+        except SkillManifestError as exc:
+            return self._failure(f"{exc.code}: {exc}")
         except (ScheduledJobError, ValueError) as exc:
             return self._failure(exc)
         return self._success({
             **_job_payload(job),
+            "skillIds": list(job.skill_ids or []),
             "message": (
                 "任务已登记为 pending_confirmation，尚未进入调度。"
                 f"用户已明确要求启用时，立即调用 ConfirmJob({job.id})。"
@@ -501,13 +532,13 @@ class ConfirmJob(_ScheduledJobToolBase):
             confirmed = self._service.confirm(job_id)
         except ScheduledJobError as exc:
             return self._failure(exc)
-        payload = _job_payload(confirmed)
+        payload = {**_job_payload(confirmed), **_required_skill_payload(confirmed)}
         next_run = confirmed.next_run_at or ""
         payload["message"] = (
             f"任务已启用。下次运行时间为 {next_run}。"
             if next_run
             else "任务已启用。"
-        )
+        ) + (str(payload.get("skillPreloadMessage") or ""))
         return self._success(payload)
 
 
@@ -555,6 +586,7 @@ class CheckJobFeasibility(_ScheduledJobToolBase):
                 agent_id=(agent_id or self.agent_id).strip(),
                 workspace_id=self.workspace_id,
                 project_id=self.project_id,
+                session_id=self.session_id,
                 required_intents=tuple(required_intents or ()),
             )
         except Exception as exc:
@@ -629,8 +661,40 @@ def _job_payload(job: ScheduledJob) -> dict[str, Any]:
         "deliveryPolicy": job.delivery_policy,
         "agentId": job.agent_id,
         "toolScope": job.tool_scope.model_dump(),
+        "executionPolicy": job.execution_policy.model_dump(by_alias=True),
+        "approvalWarning": ("需要人工批准时本次定时执行会停止并通知你"
+                            if job.execution_policy.approval_mode != "full_access" else ""),
         "pauseReason": job.pause_reason,
     }
+
+
+def _required_skill_payload(job: ScheduledJob) -> dict[str, Any]:
+    """ConfirmJob 回显服务端冻结的 required Skill 元数据与预加载状态；不含 Skill 正文。"""
+
+    items = list(job.required_skills or [])
+    if not items:
+        return {"requiredSkills": [], "skillPreload": "none"}
+    owner = next((item.owner_session_id for item in items if item.owner_session_id), "")
+    versions = [item.owner_grant_version for item in items if item.owner_grant_version is not None]
+    return {
+        "requiredSkills": [
+            {
+                "skillId": item.skill_id,
+                "loadName": item.load_name,
+                "contentSha256": item.content_sha256,
+                "frozenAt": item.frozen_at,
+            }
+            for item in items
+        ],
+        "ownerSessionId": owner,
+        "ownerGrantVersion": versions[0] if versions else None,
+        "skillPreload": "first_model_call",
+        "skillPreloadMessage": (
+            f"已冻结 {len(items)} 个 Skill 版本，每次运行都会在首次模型调用前自动预加载；"
+            "运行时没有 Skill 工具，SKILL.md 变更后需要重新确认任务。"
+        ),
+    }
+
 
 
 def _last_outcome(service: ScheduledJobService, job_id: str) -> str:

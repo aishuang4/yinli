@@ -1,9 +1,10 @@
 """可跨 Chat Run 延续的 Plan 生命周期协调器。"""
 
-import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+
+from src.config.runtime_paths import SessionPathError, session_plan_file
 
 from src.server.routes.chat.plan_mode.events import (
     PlanDomainEvent,
@@ -190,6 +191,8 @@ class PlanModeManager:
         self.context.goal = goal.strip()
         self.context.status = PLAN_STATUS_DRAFTING
         self.context.markdown = f"# {self.context.title}\n\n## Goal\n{self.context.goal}\n"
+        self.context.current_plan_file = self._make_plan_file_path(plan_id)
+        self._sync_plan_file()
         if self.persist:
             self._create_plan_record()
         self._append_runtime_event("PLAN_CREATED", status="running")
@@ -203,6 +206,7 @@ class PlanModeManager:
         if not value:
             raise ValueError("Plan markdown cannot be empty.")
         self.context.markdown = value
+        self._sync_plan_file()
         self._persist_plan(markdown=value)
         self._record("PLAN_CONTENT_REPLACED", f"source={source}")
         self._append_runtime_event("PLAN_CONTENT_REPLACED", status="running")
@@ -450,11 +454,12 @@ class PlanModeManager:
         if not plan or str(plan.get("sessionId") or "") != self.context.session_id:
             raise ValueError("Plan does not exist in the current session.")
         self.context.plan_id = plan_id
-        self.context.current_plan_file = self._make_plan_file_path(plan_id)
         self.context.title = str(plan.get("title") or "Runtime Plan")
         self.context.goal = str(plan.get("goal") or "")
         self.context.status = str(plan.get("status") or "")
         self.context.markdown = str(plan.get("markdown") or "")
+        self.context.current_plan_file = self._make_plan_file_path(plan_id)
+        self._refresh_markdown_from_session_file()
         self.context.steps = list(plan.get("steps") or [])
         self.context.revision = int(plan.get("revision") or 0)
         self.context.approved_revision = plan.get("approvedRevision")
@@ -588,8 +593,39 @@ class PlanModeManager:
         return "running"
 
     def _make_plan_file_path(self, plan_id: str) -> str:
-        safe_session = self.context.session_id.replace("/", "-")
-        return os.path.join(".agent-workstation", "plans", safe_session, f"{plan_id}.md")
+        return f"plans/{plan_id}.md"
+
+    def _session_plan_path(self):
+        plan_id = self.context.plan_id
+        if not plan_id:
+            return None
+        try:
+            return session_plan_file(self.context.session_id, plan_id)
+        except SessionPathError:
+            return None
+
+    def _sync_plan_file(self) -> None:
+        """把目前 Markdown 寫進 Session root。不讀、不寫外部 `.agent-workstation/plans`。"""
+
+        path = self._session_plan_path()
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = self.context.markdown or ""
+        if text and not text.endswith("\n"):
+            text += "\n"
+        path.write_text(text, encoding="utf-8")
+
+    def _refresh_markdown_from_session_file(self) -> None:
+        """刷新與審批恢復只讀 Session 檔。舊的外部 plans 目錄不參與。"""
+
+        path = self._session_plan_path()
+        if path is None:
+            return
+        if path.is_file():
+            self.context.markdown = path.read_text(encoding="utf-8")
+            return
+        self._sync_plan_file()
 
     def _snapshot_payload(self) -> dict[str, Any]:
         return {

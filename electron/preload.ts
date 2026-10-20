@@ -106,6 +106,8 @@ type DesktopNotificationPayload = {
   jobId: string;
   firingId: string;
   groupStudioId: string;
+  ownerSessionId?: string;
+  sessionStatus?: string;
 };
 
 type DesktopBackendStatus = {

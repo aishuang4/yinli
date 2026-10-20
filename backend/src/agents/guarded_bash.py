@@ -44,6 +44,23 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
         self.shell_blacklist = [item.strip() for item in shell_blacklist if item.strip()]
         self.timeout_seconds = timeout_seconds
 
+    def validate_execution(self, command: str) -> None:
+        """平台和执行层共用的硬边界，不能因 SDK 的 ALLOWED/BYPASS 跳过。"""
+
+        for blocked in self.shell_blacklist:
+            if blocked in command:
+                raise ValueError("命令命中 Agent Shell 黑名单")
+        if self._backend.__class__.__name__ == "LocalBackend":
+            from src.tenancy.context import current_tenant
+
+            if current_tenant().is_hosted:
+                raise ValueError("Web 端命令只能在隔离沙箱中执行")
+
+    def normalize_timeout(self, timeout: int) -> int:
+        """动作快照与实际执行使用同一超时上限。"""
+
+        return max(1, min(int(timeout), 600000, max(1, self.timeout_seconds) * 1000))
+
     async def _exec_windows_shell(self, shell_path: str, command: str, *, timeout_ms: int):
         payload = [shell_path, "/d", "/c", _windows_utf8_command(command)]
         try:
@@ -67,6 +84,13 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
         timeout: int = 120000,
     ) -> AsyncGenerator[ToolChunk, None]:
         """在 Windows 使用 UTF-8 编码的 ``cmd.exe``，避免 PATH 或 Git Bash 依赖。"""
+
+        try:
+            self.validate_execution(command)
+            timeout = self.normalize_timeout(timeout)
+        except (ValueError, TypeError):
+            yield _bash_error_chunk(command, "命令不符合 Agent 执行边界")
+            return
 
         if os.name != "nt" and self._backend.__class__.__name__ == "LocalBackend":
             from src.tenancy.context import TenantMissing, current_tenant
@@ -203,19 +227,14 @@ Bash to be installed. On macOS/Linux it uses the POSIX sh shell.
 
     async def check_permissions(self, tool_input: dict, context: PermissionContext) -> PermissionDecision:
         command = str(tool_input.get("command") or "")
-        for blocked in self.shell_blacklist:
-            if blocked and blocked in command:
-                return PermissionDecision(
-                    behavior=PermissionBehavior.DENY,
-                    message=f"Command blocked by Agent guardrails: {blocked}",
-                    decision_reason="Agent shell blacklist matched",
-                    bypass_immune=True,
-                )
-
-        timeout_ms = int(tool_input.get("timeout") or 0)
-        max_timeout_ms = max(1, self.timeout_seconds) * 1000
-        if timeout_ms > max_timeout_ms:
-            tool_input["timeout"] = max_timeout_ms
+        try:
+            self.validate_execution(command)
+            tool_input["timeout"] = self.normalize_timeout(tool_input.get("timeout", 120000))
+        except (ValueError, TypeError) as exc:
+            return PermissionDecision(
+                behavior=PermissionBehavior.DENY, message=str(exc),
+                decision_reason="Agent shell execution boundary", bypass_immune=True,
+            )
 
         return await super().check_permissions(tool_input, context)
 

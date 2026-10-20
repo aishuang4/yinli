@@ -24,6 +24,9 @@ type AuthStore = {
   capabilities: ProductCapabilities;
   cloudAccount: CloudAccount;
   adminOpen: boolean;
+  accountLoginOpen: boolean;
+  openAccountLogin: () => void;
+  closeAccountLogin: () => void;
   setSession: (
     serveMode: ServeMode,
     user: AuthUser | null,
@@ -41,6 +44,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   capabilities: DESKTOP_CAPABILITIES,
   cloudAccount: EMPTY_CLOUD_ACCOUNT,
   adminOpen: false,
+  accountLoginOpen: false,
+  openAccountLogin: () => set({ accountLoginOpen: true }),
+  closeAccountLogin: () => set({ accountLoginOpen: false }),
   setSession: (serveMode, user, desktopConnected = false, patch) => {
     const previous = get();
     const previousId = previous.user?.id ?? null;
@@ -52,6 +58,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       desktopConnected,
       capabilities: patch?.capabilities ?? previous.capabilities,
       cloudAccount: patch?.cloudAccount ?? previous.cloudAccount,
+      accountLoginOpen: desktopConnected ? false : previous.accountLoginOpen,
     });
     if (previous.loaded && previousId !== nextId) resetTenantState();
   },

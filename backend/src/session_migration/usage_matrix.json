@@ -1,0 +1,590 @@
+{
+  "version": 1,
+  "modules": [
+    {
+      "path": "backend/src/agents/factory.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/catalog/agent_models.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/catalog/http_files.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/catalog/index.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/catalog/job_files.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/catalog/loader.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/catalog/mcp_files.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/catalog/migrate_agents.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/catalog/migrate_mcp_http.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/catalog/paths.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/catalog/profiles.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/catalog/skills.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/catalog/sync_jobs.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/catalog/system_defaults.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/group_studio/approvals.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/group_studio/models.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/group_studio/notify.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/group_studio/service.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/mcp/registry.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/memory/markdown_reflection.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/memory/markdown_store.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/memory/node_persist.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/memory/nodes.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/memory/reflection.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/memory/retrieval.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/memory/skill_evolution.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/memory/timeline.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/notifications/channels/in_app.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/notifications/hub.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/notifications/inbox.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/notifications/models.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/notifications/stream.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/project_resources.py",
+      "area": "backend",
+      "target": "deletable"
+    },
+    {
+      "path": "backend/src/runtime/authorization_resources.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/runtime/governance.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/runtime_context.py",
+      "area": "backend",
+      "target": "deletable"
+    },
+    {
+      "path": "backend/src/sandbox/hosted_workspace.py",
+      "area": "backend",
+      "target": "external-directory"
+    },
+    {
+      "path": "backend/src/scheduler/capability_catalog.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/scheduler/chat_bridge.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/scheduler/feasibility.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/scheduler/firing.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/scheduler/models.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/scheduler/notifications.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/scheduler/script_job.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/scheduler/service.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/scheduler/skill_manifest.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/scheduler/unattended_policy.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/security/authorization/evaluation.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/security/authorization/models.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/agent_builder.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/server/routes/agents.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/server/routes/chat/authorization.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/authorization_observation.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/background_runs.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/completion.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/handlers/runs.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/handlers/send.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/handlers/sessions.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/initial_events.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/models.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/observation_runtime.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/observation_writer.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/react_runtime.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/run_context.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/scheduled_launch.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/store.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/team_runtime/service.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/chat/team_runtime/store.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/group_studio.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/mcp.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/server/routes/memory_api/live.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/memory_api/markdown.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/server/routes/memory_api/models.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/memory_api/nodes.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/memory_api/settings.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/server/routes/memory_api/skills.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/notifications.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/scheduled_jobs.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/skills.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/server/routes/subagents.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/tools.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/server/routes/traces.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/server/routes/workspaces.py",
+      "area": "backend",
+      "target": "deletable"
+    },
+    {
+      "path": "backend/src/skills/api_models.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/skills/migration.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/skills/models.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/skills/registry.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/skills/service.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/storage/chat_run_records.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/chat_session_records.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/database.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/database_schema.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/group_studio_records.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/memory_markdown_candidates.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/storage/memory_records.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/observation_records.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/permission_records.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/permission_schema.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/resource_catalog_records.py",
+      "area": "backend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "backend/src/storage/scheduled_job_records.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/skill_evolution_records.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/timeline_records.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/trace_records.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/storage/workspace_project_records.py",
+      "area": "backend",
+      "target": "deletable"
+    },
+    {
+      "path": "backend/src/subagents/manager.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/tools/scheduled_job_tools.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "backend/src/tools/timeline_memory.py",
+      "area": "backend",
+      "target": "session-owner"
+    },
+    {
+      "path": "frontend/src/features/sessions/legacyScopeRequests.test.ts",
+      "area": "frontend",
+      "target": "deletable"
+    },
+    {
+      "path": "frontend/src/features/traces/traceTypes.ts",
+      "area": "frontend",
+      "target": "session-owner"
+    },
+    {
+      "path": "frontend/src/hooks/useScheduledJobs.ts",
+      "area": "frontend",
+      "target": "session-owner"
+    },
+    {
+      "path": "frontend/src/types/agent.ts",
+      "area": "frontend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "frontend/src/types/mcp.ts",
+      "area": "frontend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "frontend/src/types/memory.ts",
+      "area": "frontend",
+      "target": "session-owner"
+    },
+    {
+      "path": "frontend/src/types/notification.ts",
+      "area": "frontend",
+      "target": "session-owner"
+    },
+    {
+      "path": "frontend/src/types/scheduledJob.ts",
+      "area": "frontend",
+      "target": "session-owner"
+    },
+    {
+      "path": "frontend/src/types/skill.ts",
+      "area": "frontend",
+      "target": "global-catalog"
+    },
+    {
+      "path": "frontend/src/types/tool.ts",
+      "area": "frontend",
+      "target": "global-catalog"
+    }
+  ]
+}

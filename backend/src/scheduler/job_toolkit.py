@@ -136,32 +136,10 @@ def validate_job_agent_config(
     for item in cleaned.all_items():
         if item.kind == "builtin" and item.id not in JOB_BUILTIN_IDS:
             raise JobAgentError(f"Job Agent 不支持把 {item.id} 配成注入工具")
-    profile = ""
-    human_approval = False
-    network = True
-    if guardrails is not None:
-        if isinstance(guardrails, dict):
-            profile = str(
-                guardrails.get("toolPermissionProfile")
-                or guardrails.get("tool_permission_profile")
-                or ""
-            )
-            human_approval = bool(
-                guardrails.get("humanApproval", guardrails.get("human_approval", False))
-            )
-            network = bool(
-                guardrails.get("networkEnabled", guardrails.get("network_enabled", True))
-            )
-        else:
-            profile = str(
-                getattr(guardrails, "tool_permission_profile", None)
-                or getattr(guardrails, "toolPermissionProfile", "")
-                or ""
-            )
-            human_approval = bool(getattr(guardrails, "human_approval", False) or getattr(guardrails, "humanApproval", False))
-            network = bool(getattr(guardrails, "network_enabled", True) if hasattr(guardrails, "network_enabled") else getattr(guardrails, "networkEnabled", True))
-    if human_approval or profile in {"ask_every_time", "read_only"}:
-        raise JobAgentError("Job Agent 必须使用可信工具权限，且不能每次都问人")
+    if isinstance(guardrails, dict):
+        network = bool(guardrails.get("networkEnabled", guardrails.get("network_enabled", True)))
+    else:
+        network = bool(getattr(guardrails, "network_enabled", True))
     needs_network = any(
         item.kind == "builtin" and item.id in {"WebFetch", "HttpRequest"}
         for item in cleaned.required
@@ -230,7 +208,7 @@ def find_inventory_item(
     for row in inventory:
         if row.kind != item.kind:
             continue
-        if row.resource_id == item.id or row.capability_id.endswith(f":{item.id}"):
+        if row.resource_id == item.id or row.capability_id.endswith(f":{item.id}") or item.id in getattr(row, "aliases", []):
             return row
     return None
 
@@ -269,7 +247,7 @@ def optional_inventory(
     for row in inventory:
         kind = str(row.kind)
         ident = str(row.resource_id)
-        if (kind, ident) in allowed:
+        if (kind, ident) in allowed or any((kind, ref) in allowed for ref in getattr(row, "aliases", [])):
             result.append(row)
     return result
 

@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 
 from agentscope.workspace import DockerWorkspace
+from src.skills.docker import FileSkillProjectionMixin
 
 from src.config import runtime_paths
 from src.config.settings import settings
@@ -41,14 +42,21 @@ def build_hosted_spec(
     project_root: Path,
     network_enabled: bool = True,
     extra: str = "",
+    mounts: list[dict[str, str]] | None = None,
 ) -> SandboxSpec:
     name = container_name(tenant_id, project_id, agent_id, extra)
-    mounts = [f"{to_daemon_path(project_root)}:/workspace:rw"]
+    if mounts:
+        binds = [
+            f"{to_daemon_path(Path(item['source']))}:{item['target']}:{item.get('mode') or 'rw'}"
+            for item in mounts
+        ]
+    else:
+        binds = [f"{to_daemon_path(project_root)}:/workspace:rw"]
     network = settings.sandbox_network if network_enabled else "none"
     if not network_enabled:
         network = "none"
     host_config = {
-        "Binds": mounts,
+        "Binds": binds,
         "Memory": int(settings.sandbox_memory_mb) * 1024 * 1024,
         "NanoCpus": int(float(settings.sandbox_cpus) * 1_000_000_000),
         "PidsLimit": int(settings.sandbox_pids),
@@ -64,10 +72,10 @@ def build_hosted_spec(
         "yinli.tenant": tenant_id,
         "yinli.project": project_id,
     }
-    return SandboxSpec(name=name, binds=tuple(mounts), labels=labels, host_config=host_config)
+    return SandboxSpec(name=name, binds=tuple(binds), labels=labels, host_config=host_config)
 
 
-class HostedDockerWorkspace(DockerWorkspace):
+class HostedDockerWorkspace(FileSkillProjectionMixin, DockerWorkspace):
     """托管沙箱。真正启动容器时走沙箱提供者，测试里是 FakeSandbox。"""
 
     def __init__(self, spec: SandboxSpec, *, project_root: Path, base_image: str) -> None:
@@ -94,6 +102,7 @@ def open_hosted_workspace(
     base_image: str,
     network_enabled: bool = True,
     extra: str = "",
+    mounts: list[dict[str, str]] | None = None,
 ) -> HostedDockerWorkspace:
     spec = build_hosted_spec(
         tenant_id=tenant_id,
@@ -102,6 +111,7 @@ def open_hosted_workspace(
         project_root=project_root,
         network_enabled=network_enabled,
         extra=extra,
+        mounts=mounts,
     )
     spec = SandboxSpec(
         name=spec.name,

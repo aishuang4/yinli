@@ -14,6 +14,8 @@ def search_timeline_messages(
     *,
     workspace_id: str = "",
     project_id: str = "",
+    session_id: str = "",
+    run_id: str = "",
     agent_id: str = "",
     surface: str = "",
     time_from: str = "",
@@ -33,6 +35,8 @@ def search_timeline_messages(
                 conn,
                 workspace_id=workspace_id,
                 project_id=project_id,
+                session_id=session_id,
+                run_id=run_id,
                 agent_id=agent_id,
                 surface=surface,
                 time_from=time_from,
@@ -46,6 +50,7 @@ def search_timeline_messages(
                 conn,
                 workspace_id=workspace_id,
                 project_id=project_id,
+                session_id=session_id,
                 agent_id=agent_id,
                 time_from=time_from,
                 time_to=time_to,
@@ -117,6 +122,9 @@ def _search_chat(conn, **filters) -> list[dict[str, Any]]:
         clauses.append("s.kind = 'scheduled_job'")
     else:
         clauses.append("s.kind IN ('chat', 'scheduled_job')")
+    if filters.get("session_id"):
+        clauses.append("m.session_id = ?")
+        params.append(filters["session_id"])
     if filters["agent_id"]:
         clauses.append("m.agent_id = ?")
         params.append(filters["agent_id"])
@@ -149,6 +157,10 @@ def _search_group(conn, **filters) -> list[dict[str, Any]]:
         text_column="m.body",
     )
     clauses.append("m.role != 'system'")
+    if filters.get("session_id"):
+        clauses.append("(s.chat_session_id = ? OR s.owner_session_id = ?)")
+        params.append(filters["session_id"])
+        params.append(filters["session_id"])
     if filters["agent_id"]:
         clauses.append("COALESCE(mb.agent_id, '') = ?")
         params.append(filters["agent_id"])

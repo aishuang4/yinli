@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 from src.catalog.paths import is_forbidden_extra_scope
-from src.config.runtime_paths import default_project_root
 
 
 def _normalized_extra_scopes(extra_scopes: list[str] | None) -> list[Path]:
@@ -34,7 +33,9 @@ def resolve_workspace_path(
 ) -> str:
     """解析工具路径，并拒绝绝对路径、``..`` 或符号链接造成的 scope 越界。"""
 
-    scope = Path(scope_dir or base_dir or str(default_project_root())).expanduser().resolve()
+    if not scope_dir and not base_dir:
+        raise ValueError("filesystem scope is required")
+    scope = Path(scope_dir or base_dir).expanduser().resolve()
     base = Path(base_dir or scope).expanduser().resolve()
     if not base.is_relative_to(scope):
         raise ValueError(f"Tool base directory is outside filesystem scope: {base}")

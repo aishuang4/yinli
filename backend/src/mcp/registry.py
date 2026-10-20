@@ -23,7 +23,6 @@ from pydantic import BaseModel, Field, HttpUrl
 
 from src.catalog.mcp_files import McpFileRecord, discover_mcp_files, write_mcp_file
 from src.catalog.migrate_mcp_http import ensure_mcp_file_catalog, is_mcp_catalog_migrated
-from src.catalog.paths import mcp_dir
 from src.catalog.secrets import delete_named_secret, resolve_headers
 from src.config.runtime_paths import data_root
 from src.scheduler.mcp_runtime import resolve_mcp_runtime_servers as _resolve_mcp_runtime_servers
@@ -517,7 +516,9 @@ def _save_user_mcp_servers() -> None:
                 enabled=server.enabled,
                 workspace_id=server.workspace_id,
             )
-            write_mcp_file(mcp_dir(server.workspace_id) / f"{server.id}.yaml", record)
+            from src.config.runtime_paths import global_mcp_root
+
+            write_mcp_file(global_mcp_root() / f"{server.id}.yaml", record)
             _mcp_header_refs[server.id] = record.header_refs
             _mcp_servers[server.id] = server.model_copy(update={"headers": record.headers})
         return

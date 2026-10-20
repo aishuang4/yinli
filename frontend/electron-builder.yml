@@ -17,6 +17,8 @@ extraResources:
       - backend-server.exe
   - from: ../../config/product-features.json
     to: product-features.json
+  - from: ../../config/desktop.json
+    to: desktop.json
 asar: true
 asarUnpack:
   - 'electron-dist/native/**/*.node'

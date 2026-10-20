@@ -15,10 +15,6 @@ from src.server.routes.chat.trace_recorder import (
     record_context_compression_events,
 )
 from src.server.routes.chat.hitl import _create_pending_interaction, _hitl_payload
-from src.server.routes.chat.hitl_unattended import (
-    MAX_UNATTENDED_TOOL_DENIALS,
-    hitl_unattended_resolve,
-)
 from src.server.routes.chat.lifecycle import waiting_reason, waiting_status_for_interaction
 from src.server.routes.chat.models import (
     HITL_EVENT_TYPES,
@@ -61,6 +57,7 @@ from src.server.routes.chat.leader_plan_review import (
 )
 from src.server.routes.chat.store import _append_assistant_message
 from src.server.routes.chat.tool_state import _update_tool_calls
+from src.sessions.run_binding import current_snapshot_audit
 from src.server.routes.chat.trace_recorder import (
     _attach_provider_cache_usage,
     build_tool_artifact_runtime_event,
@@ -231,6 +228,10 @@ async def stream_leader_agent_reply(
     async for event in agent.reply_stream(user_msg):
         event_data = event.model_dump(mode="json")
         event_type = event_data.pop("type", "UNKNOWN")
+        # 恢复/外部分发保存原参数；普通审计使用另一份表示。
+        server_event_data = event_data
+        from src.server.routes.chat.authorization_display import public_authorization_event
+        event_data = public_authorization_event(agent, event_type, event_data)
         if event_type == "REPLY_START":
             state.pending_text = ""
             state.reply_had_tool_call = False
@@ -327,6 +328,18 @@ async def stream_leader_agent_reply(
             context_stats=stats or None,
         )
         if stats:
+            audit = current_snapshot_audit()
+            if audit:
+                stats["session"] = {
+                    "sessionId": session_id,
+                    "snapshotId": audit.get("snapshotId") or "",
+                    "agentId": audit.get("agentId") or "",
+                    "directoryGrantVersion": audit.get("directoryGrantVersion"),
+                    "resourceGrantVersion": audit.get("resourceGrantVersion"),
+                    "workingDirectory": audit.get("workingDirectory") or "",
+                    "skills": list(audit.get("skills") or []),
+                    "tools": list(audit.get("tools") or []),
+                }
             yield source_event("CONTEXT_USAGE", stats)
         _record_permission_decision(
             session_id=session_id,
@@ -388,11 +401,11 @@ async def stream_leader_agent_reply(
             )
 
         if event_type == "REQUIRE_EXTERNAL_EXECUTION" and _is_subagent_task_external_event(event_data):
-            _collect_pending_tool_batch(pending_subagent_batches, event_type, event_data)
+            _collect_pending_tool_batch(pending_subagent_batches, event_type, server_event_data)
             continue
 
         if event_type in HITL_EVENT_TYPES:
-            _collect_pending_tool_batch(pending_hitl_batches, event_type, event_data)
+            _collect_pending_tool_batch(pending_hitl_batches, event_type, server_event_data)
             continue
 
         if event_type == "TEXT_BLOCK_DELTA":
@@ -516,8 +529,13 @@ async def stream_leader_agent_reply(
             for batch in pending_subagent_batches
             for tool_call in batch["tool_calls"]
         ]
+        authorized_executor = getattr(agent, "execute_authorized_external_tool_call", None)
         execution_tasks = [
-            asyncio.create_task(manager.execute_external_tool_call(tool_call))
+            asyncio.create_task(
+                authorized_executor(tool_call, manager.execute_external_tool_call)
+                if callable(authorized_executor)
+                else manager.execute_external_tool_call(tool_call)
+            )
             for tool_call in tool_calls
         ]
         try:
@@ -528,6 +546,11 @@ async def stream_leader_agent_reply(
                 await asyncio.sleep(0.1)
             execution_results = [await task for task in execution_tasks]
         finally:
+            # 父 Run 取消时不能把 external executor 留在后台继续执行。
+            for task in execution_tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*execution_tasks, return_exceptions=True)
             for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
                 state.runtime_events.append(runtime_event)
                 yield runtime_source_event(runtime_event)
@@ -572,25 +595,9 @@ async def stream_leader_agent_reply(
         return
 
     if pending_hitl_batches and state.trigger_source == "scheduled_job":
-        async for event in _resume_unattended_hitl(
-            pending_hitl_batches,
-            agent=agent,
-            state=state,
-            session_id=session_id,
-            persist=persist,
-            agent_id=agent_id,
-            agent_name=agent_name,
-            model_name=model_name,
-            guardrails=guardrails,
-            message=message,
-            stream_scope=stream_scope,
-            skill_runs=skill_runs,
-            plan_mode_manager=plan_mode_manager,
-            runtime_event_sources=runtime_event_sources,
-            deep_thinking=deep_thinking,
-            sandbox=sandbox,
-        ):
-            yield event
+        # 审核模式来自任务快照；遇到人工需求立即结束本次 firing，不写 Chat pending。
+        state.stopped = True
+        state.stop_reason = "hitl_denied"
         return
 
     if pending_hitl_batches:
@@ -828,65 +835,6 @@ def _should_attempt_final_answer_recovery(state: LeaderStreamState) -> bool:
             or bool(state.assistant_tool_calls)
         )
     )
-
-
-async def _resume_unattended_hitl(
-    pending_hitl_batches: list[dict],
-    *,
-    agent: object,
-    state: LeaderStreamState,
-    session_id: str,
-    persist: bool,
-    agent_id: str,
-    agent_name: str,
-    model_name: str,
-    guardrails: object,
-    message: str,
-    stream_scope: str,
-    skill_runs: list[ChatSkillRun],
-    plan_mode_manager: object | None,
-    runtime_event_sources: list[object] | None,
-    deep_thinking: bool,
-    sandbox: bool,
-) -> AsyncGenerator[str, None]:
-    """cwd Write/Edit 批准、其余拒绝，禁止落入 waiting_* / PENDING_INTERACTIONS。"""
-
-    reply_ids = {str(batch["reply_id"]) for batch in pending_hitl_batches}
-    types = {str(batch["type"]) for batch in pending_hitl_batches}
-    denied_names: list[str] = []
-    resume_event = None
-    for batch in pending_hitl_batches:
-        denied, resume_event = hitl_unattended_resolve(
-            str(batch["type"]),
-            {"reply_id": batch["reply_id"], "tool_calls": list(batch["tool_calls"])},
-            workspace_dir=state.session_workspace_dir,
-        )
-        denied_names.extend(denied)
-    state.unattended_denials += len(denied_names)
-    mixed_pause = len(reply_ids) != 1 or len(types) != 1 or resume_event is None
-    if mixed_pause or state.unattended_denials > MAX_UNATTENDED_TOOL_DENIALS:
-        state.stopped = True
-        state.stop_reason = "hitl_denied"
-        return
-    async for resumed_event in stream_leader_agent_reply(
-        agent=agent,
-        user_msg=resume_event,
-        state=state,
-        session_id=session_id,
-        persist=persist,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        model_name=model_name,
-        guardrails=guardrails,
-        message=message,
-        stream_scope=stream_scope,
-        skill_runs=skill_runs,
-        plan_mode_manager=plan_mode_manager,
-        runtime_event_sources=runtime_event_sources,
-        deep_thinking=deep_thinking,
-        sandbox=sandbox,
-    ):
-        yield resumed_event
 
 
 def _drain_runtime_event_sources(sources: list[object]) -> list[dict]:

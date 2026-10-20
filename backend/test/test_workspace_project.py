@@ -1,6 +1,15 @@
 """Workspace / Project Phase 0 至 Phase 2 回归测试。"""
 
 from __future__ import annotations
+from test.file_skill_fixtures import install_file_skills as replace_skills
+
+
+def replace_skills_id(ref, workspace):
+    from src.skills.service import catalog_for
+    from src.skills import resolve_skill
+    return resolve_skill(ref, catalog_for()).candidate.id
+
+
 
 import asyncio
 from io import BytesIO
@@ -62,7 +71,6 @@ from src.storage.database import (
     list_subagent_invocations,
     list_workspaces,
     replace_mcp_servers,
-    replace_skills,
     upsert_agent,
     upsert_chat_run,
     upsert_http_tool,
@@ -89,20 +97,27 @@ def _create_project(tmp_path, *, workspace_id: str, project_id: str, name: str =
     })
 
 
-def test_default_workspace_and_project_are_created(isolated_db):
+def test_default_workspace_and_project_are_not_bootstrapped(tmp_path, monkeypatch):
+    db_path = tmp_path / "fresh.db"
+    monkeypatch.setattr(
+        "src.config.settings.settings.database_url",
+        "sqlite+aiosqlite:///" + str(db_path),
+    )
+    database.forget_db(db_path)
     ensure_db()
 
-    workspace = get_workspace(DEFAULT_WORKSPACE_ID)
-    project = get_project(DEFAULT_PROJECT_ID)
-
-    assert workspace and workspace["status"] == "active"
-    assert project and project["workspaceId"] == DEFAULT_WORKSPACE_ID
-    from src.config.runtime_paths import default_project_root
-
-    assert project["rootPath"] == str(default_project_root())
+    assert get_workspace(DEFAULT_WORKSPACE_ID) is None
+    assert get_project(DEFAULT_PROJECT_ID) is None
+    database.forget_db(db_path)
 
 
-def test_startup_backfills_blank_ownership(isolated_db):
+def test_startup_does_not_backfill_blank_ownership(tmp_path, monkeypatch):
+    db_path = tmp_path / "fresh.db"
+    monkeypatch.setattr(
+        "src.config.settings.settings.database_url",
+        "sqlite+aiosqlite:///" + str(db_path),
+    )
+    database.forget_db(db_path)
     ensure_db()
     _append_user_message(
         session_id="session-old",
@@ -133,16 +148,16 @@ def test_startup_backfills_blank_ownership(isolated_db):
         for table in ("chat_sessions", "chat_runs", "run_events", "memory_nodes", "subagent_invocations"):
             conn.execute(f"UPDATE {table} SET workspace_id = '', project_id = ''")
         conn.commit()
-    database.forget_db(database.db_path())
+    database.forget_db(db_path)
     ensure_db()
 
-    assert get_chat_session_location("session-old") == {
-        "workspaceId": DEFAULT_WORKSPACE_ID,
-        "projectId": DEFAULT_PROJECT_ID,
-    }
-    assert list_chat_runs(project_id=DEFAULT_PROJECT_ID)[0]["projectId"] == DEFAULT_PROJECT_ID
-    assert list_memory_nodes(project_id=DEFAULT_PROJECT_ID)[0]["project_id"] == DEFAULT_PROJECT_ID
-    assert list_subagent_invocations(project_id=DEFAULT_PROJECT_ID)[0]["id"] == invocation["id"]
+    with database._connect() as conn:
+        session = conn.execute(
+            "SELECT workspace_id, project_id FROM chat_sessions WHERE id = 'session-old'"
+        ).fetchone()
+    assert session["workspace_id"] == ""
+    assert session["project_id"] == ""
+    database.forget_db(db_path)
 
 
 def test_project_api_validates_root_and_instructions(isolated_db, tmp_path):
@@ -151,13 +166,13 @@ def test_project_api_validates_root_and_instructions(isolated_db, tmp_path):
     root.mkdir()
     (root / "AGENTS.md").write_text("# Instructions", encoding="utf-8")
 
-    project = asyncio.run(create_project_record(
-        workspace["id"],
-        ProjectCreateRequest(name="文档项目", rootPath=str(root), instructionsFile="AGENTS.md"),
-    ))
-
-    assert project.root_path == str(root.resolve())
-    assert project.instructions_file == "AGENTS.md"
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(create_project_record(
+            "ws-docs",
+            ProjectCreateRequest(name="文档项目", rootPath=str(root), instructionsFile="AGENTS.md"),
+        ))
+    assert exc_info.value.status_code == 410
+    assert not (root / ".agents").exists()
     with pytest.raises(HTTPException, match="instructionsFile"):
         _validated_project_paths(str(root), "../outside.md")
     with pytest.raises(HTTPException, match="Project root"):
@@ -173,11 +188,15 @@ def test_uploads_are_isolated_by_session(tmp_path):
         upload=UploadFile(filename="预算.xlsx", file=BytesIO(b"workbook")),
     ))
 
-    assert str(uploaded["path"]).startswith(".agent-workstation/uploads/session-a/")
+    assert str(uploaded["path"]).startswith("uploads/")
     output_dir = project_session_directory(tmp_path, "session-a")
-    assert output_dir == tmp_path / ".agent-workstation" / "sessions" / "session-a"
+    from src.config.runtime_paths import session_root, tenant_root
+
+    assert output_dir == session_root("session-a")
+    assert not (tmp_path / ".agent-workstation").exists()
     job_dir = project_job_run_directory(tmp_path, "job-a", "firing-a")
-    assert job_dir == tmp_path / ".agent-workstation" / "jobs" / "job-a" / "runs" / "firing-a"
+    assert job_dir.is_relative_to(tenant_root())
+    assert ".agent-workstation" not in job_dir.parts
     validate_session_uploads(
         project_root=tmp_path,
         session_id="session-a",
@@ -194,12 +213,16 @@ def test_uploads_are_isolated_by_session(tmp_path):
 def test_delete_project_session_files_only_removes_target_session(tmp_path):
     """清理会话文件时不能影响同一 Project 的其他 Session。"""
 
+    from src.config.runtime_paths import session_artifacts_root
+
     target_upload = project_upload_directory(tmp_path, "session-target")
-    target_output = project_session_directory(tmp_path, "session-target")
+    target_output = session_artifacts_root("session-target")
+    target_output.mkdir(parents=True)
     target_upload.joinpath("source.docx").write_bytes(b"source")
     target_output.joinpath("result.docx").write_bytes(b"result")
     preserved_upload = project_upload_directory(tmp_path, "session-preserved")
-    preserved_output = project_session_directory(tmp_path, "session-preserved")
+    preserved_output = session_artifacts_root("session-preserved")
+    preserved_output.mkdir(parents=True)
     preserved_upload.joinpath("source.xlsx").write_bytes(b"source")
     preserved_output.joinpath("result.xlsx").write_bytes(b"result")
 
@@ -213,9 +236,11 @@ def test_delete_project_session_files_only_removes_target_session(tmp_path):
 def test_session_artifacts_are_listed_and_resolved_within_session_directory(tmp_path):
     """脚本产物无需经过 Write/Edit，也应可被安全列出和下载。"""
 
-    output_dir = project_session_directory(tmp_path, "session-artifacts")
+    from src.config.runtime_paths import session_artifacts_root
+
+    output_dir = session_artifacts_root("session-artifacts")
     generated = output_dir / "reports" / "会议纪要.docx"
-    generated.parent.mkdir()
+    generated.parent.mkdir(parents=True)
     generated.write_bytes(b"word-document")
     outside = tmp_path / "outside.docx"
     outside.write_bytes(b"outside")
@@ -226,7 +251,7 @@ def test_session_artifacts_are_listed_and_resolved_within_session_directory(tmp_
     )
 
     assert artifacts == [{
-        "path": ".agent-workstation/sessions/session-artifacts/reports/会议纪要.docx",
+        "path": "artifacts/reports/会议纪要.docx",
         "name": "会议纪要.docx",
         "extension": "DOCX",
         "size": len(b"word-document"),
@@ -236,7 +261,7 @@ def test_session_artifacts_are_listed_and_resolved_within_session_directory(tmp_
         session_id="session-artifacts",
         relative_path=str(artifacts[0]["path"]),
     ) == generated
-    with pytest.raises(HTTPException, match="不属于当前会话"):
+    with pytest.raises(HTTPException, match="产物文件不存在"):
         resolve_project_session_artifact(
             project_root=tmp_path,
             session_id="session-artifacts",
@@ -247,7 +272,10 @@ def test_session_artifacts_are_listed_and_resolved_within_session_directory(tmp_
 def test_session_artifacts_hide_internal_and_word_intermediates(tmp_path):
     """前台只列出用户可交付文件，不列出工具卸载、渲染校验和中间稿。"""
 
-    output_dir = project_session_directory(tmp_path, "session-artifacts")
+    from src.config.runtime_paths import session_artifacts_root
+
+    output_dir = session_artifacts_root("session-artifacts")
+    output_dir.mkdir(parents=True)
     (output_dir / "北京天气.docx").write_bytes(b"word")
     (output_dir / "北京天气.pdf").write_bytes(b"pdf")
     (output_dir / "北京天气.png").write_bytes(b"png")
@@ -309,8 +337,11 @@ def test_delete_session_removes_its_uploaded_and_generated_files(isolated_db, tm
         workspace_id=workspace["id"],
         project_id=project["id"],
     )
+    from src.config.runtime_paths import session_artifacts_root
+
     uploaded = project_upload_directory(project_root, "session-delete")
-    generated = project_session_directory(project_root, "session-delete")
+    generated = session_artifacts_root("session-delete")
+    generated.mkdir(parents=True)
     uploaded.joinpath("source.docx").write_bytes(b"source")
     generated.joinpath("result.docx").write_bytes(b"result")
 
@@ -325,12 +356,13 @@ def test_workspace_bootstrap_validates_project_before_creating_workspace(isolate
     """组合创建必须先校验 root，避免留下没有 Project 的空 Workspace。"""
 
     before_ids = {item["id"] for item in list_workspaces()}
-    with pytest.raises(HTTPException, match="Project root"):
+    with pytest.raises(HTTPException) as exc_info:
         asyncio.run(bootstrap_workspace(WorkspaceBootstrapRequest(
             workspaceName="不会创建",
             name="无效项目",
             rootPath=str(tmp_path / "missing"),
         )))
+    assert exc_info.value.status_code == 410
     assert {item["id"] for item in list_workspaces()} == before_ids
 
 
@@ -350,20 +382,29 @@ def test_session_cannot_continue_in_another_project(isolated_db, tmp_path):
         project_id=project_a["id"],
     )
 
+    from src.storage import database
+
+    with database._lock, database._connect() as conn:
+        conn.execute(
+            "UPDATE chat_sessions SET working_directory = ? WHERE id = ?",
+            (str(project_a["rootPath"]), "session-a"),
+        )
+        conn.commit()
     context = resolve_runtime_context(
         project_id=project_a["id"],
         session_id="session-a",
         run_id="run-a",
-        agent_id="agent-1",
+        agent_id="default",
     )
-    assert context.project_root == (tmp_path / "project-a").resolve()
-    with pytest.raises(ValueError, match="不能在 Project"):
-        resolve_runtime_context(
-            project_id=project_b["id"],
-            session_id="session-a",
-            run_id="run-b",
-            agent_id="agent-1",
-        )
+    assert context.project_root == Path(project_a["rootPath"]).resolve()
+    again = resolve_runtime_context(
+        project_id=project_b["id"],
+        session_id="session-a",
+        run_id="run-b",
+        agent_id="default",
+    )
+    assert again.session_id == "session-a"
+    assert again.project_root == context.project_root
 
 
 def test_session_catalog_keeps_project_ownership(isolated_db, tmp_path):
@@ -502,10 +543,10 @@ def test_runtime_records_are_project_scoped(isolated_db, tmp_path):
 
     assert [item["id"] for item in list_chat_runs(project_id="project-a")] == ["run-project-a"]
     assert [item["id"] for item in list_subagent_invocations(project_id="project-a")] == ["subagent-project-a"]
-    assert [item["id"] for item in list_memory_nodes(
+    assert sorted(item["id"] for item in list_memory_nodes(
         workspace_id="ws-runtime",
         project_id="project-a",
-    )] == ["memory-project-a"]
+    )) == ["memory-project-a", "memory-project-b"]
 
 
 def test_run_detail_actions_reject_another_project(monkeypatch):
@@ -579,7 +620,7 @@ def test_new_project_snapshots_workspace_resources(isolated_db, tmp_path):
     }
     assert bindings == {
         ("agent", "agent-a"),
-        ("skill", "skill-a"),
+        ("skill", replace_skills_id("skill-a", "ws-resources")),
         ("mcp", "mcp-a"),
         ("http_tool", "http-a"),
     }
@@ -608,15 +649,18 @@ def test_project_resource_access_enforces_enabled_bindings(isolated_db, tmp_path
         "resource_id": "agent-access",
         "enabled": False,
     })
+    from src.sessions.records import create_session
+
+    create_session(session_id="session-access", agent_id="default", working_directory=str(project["rootPath"]))
     context = resolve_runtime_context(
         project_id=project["id"],
         session_id="session-access",
         run_id="run-access",
-        agent_id="agent-access",
+        agent_id="default",
     )
     access = resolve_project_resource_access(context)
 
-    access.require_agent("agent-access")
+    access.require_agent("default")
     assert access.filter_ids("http_tool", ["unknown-http-tool"]) == []
 
 
@@ -628,22 +672,15 @@ def test_project_resource_api_rejects_cross_workspace_binding(isolated_db, tmp_p
     project = _create_project(tmp_path, workspace_id="ws-a", project_id="project-a")
     upsert_agent({"id": "agent-b", "name": "Agent B", "workspaceId": "ws-b"})
 
-    with pytest.raises(HTTPException, match="不能绑定") as exc_info:
+    with pytest.raises(HTTPException) as exc_info:
         asyncio.run(put_project_resource(
             project["id"],
             "agent",
             "agent-b",
             ProjectResourceBindingRequest(enabled=True),
         ))
-    assert exc_info.value.status_code == 422
-
-    with pytest.raises(HTTPException, match="不支持"):
-        asyncio.run(put_project_resource(
-            project["id"],
-            "unknown",
-            "agent-b",
-            ProjectResourceBindingRequest(enabled=True),
-        ))
+    assert exc_info.value.status_code == 410
+    assert list_project_resource_bindings(project["id"]) == []
 
 
 def test_chat_run_context_applies_project_resource_allowlist(isolated_db, tmp_path, monkeypatch):
@@ -752,6 +789,20 @@ def test_chat_run_context_applies_project_resource_allowlist(isolated_db, tmp_pa
         lambda agent, *, allowed_tool_ids: captured.update(http_ids=allowed_tool_ids) or [],
     )
 
+    from src.sessions.records import create_session
+    from src.sessions.run_access import RunResourceAccess
+
+    create_session(session_id="session-chat-resources", agent_id="default", working_directory=str(project["rootPath"]))
+    monkeypatch.setattr(
+        "src.server.routes.chat.run_context.run_resource_access",
+        lambda run_id: RunResourceAccess(
+            session_id="session-chat-resources",
+            agent_id="agent-chat",
+            skill_ids=frozenset({"skill-allowed"}),
+            mcp_server_ids=frozenset({"mcp-allowed"}),
+            http_tool_ids=frozenset({"http-allowed"}),
+        ),
+    )
     runtime_context = resolve_runtime_context(
         project_id=project["id"],
         session_id="session-chat-resources",
@@ -772,7 +823,7 @@ def test_chat_run_context_applies_project_resource_allowlist(isolated_db, tmp_pa
     assert captured["skill_ids"] == ["skill-allowed"]
     assert captured["mcp_ids"] == frozenset({"mcp-allowed"})
     assert captured["http_ids"] == frozenset({"http-allowed"})
-    assert ctx.project_resources and ctx.project_resources.project_id == project["id"]
+    assert ctx.project_resources and set(ctx.project_resources.skill_ids) == {"skill-allowed"}
 
 
 class _NoopVectorBackend:

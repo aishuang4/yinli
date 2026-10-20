@@ -32,10 +32,30 @@ export function isGroupStudioNotification(kind: string): boolean {
   return kind.startsWith('group_studio_');
 }
 
+export type NotificationClickPlan =
+  | { action: 'openSession'; sessionId: string; status: 'active' | 'archived' }
+  | { action: 'unavailable'; reason: 'deleted' }
+  | { action: 'legacy' };
+
+export function notificationClickPlan(item: UserNotification): NotificationClickPlan {
+  const sessionId = item.ownerSessionId || String(item.payload?.ownerSessionId || '');
+  const status = item.sessionStatus || String(item.payload?.sessionStatus || '');
+  if (!sessionId) return { action: 'legacy' };
+  if (status === 'deleted' || status === 'missing') return { action: 'unavailable', reason: 'deleted' };
+  if (status === 'archived') return { action: 'openSession', sessionId, status: 'archived' };
+  return { action: 'openSession', sessionId, status: 'active' };
+}
+
 export function routeNotificationClick(
   item: UserNotification,
   openInbox: (item: UserNotification) => void,
 ): void {
+  const plan = notificationClickPlan(item);
+  if (plan.action === 'unavailable') return;
+  if (plan.action === 'openSession') {
+    useAppStore.getState().openNotificationSession(plan.sessionId);
+    return;
+  }
   if (isGroupStudioNotification(item.kind)) {
     const groupId = String(item.payload?.groupStudioId || '');
     if (groupId) {
@@ -73,10 +93,10 @@ export function unreadLabel(count: number): string {
 export function notificationFromDesktopPayload(payload: DesktopNotificationPayload): UserNotification {
   return {
     id: payload.id,
-    workspaceId: '',
-    projectId: '',
     jobId: payload.jobId,
     firingId: payload.firingId,
+    ownerSessionId: payload.ownerSessionId,
+    sessionStatus: payload.sessionStatus,
     kind: payload.kind,
     title: payload.title,
     body: payload.body,

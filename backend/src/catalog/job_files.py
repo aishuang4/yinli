@@ -14,10 +14,7 @@ from src.catalog.paths import (
     ID_PATTERN,
     MAX_PROFILE_BYTES,
     atomic_write_text,
-    jobs_dir,
     path_stays_inside,
-    project_jobs_dir,
-    workspaces_root,
 )
 from src.catalog.system_defaults import utc_now
 
@@ -51,7 +48,10 @@ class JobFileRecord:
     desired_status: str = "paused"
     summary: str = ""
     skill_ids: list[str] = field(default_factory=list)
+    required_skills: list[dict[str, Any]] = field(default_factory=list)
+    context_policy: str = "fresh"
     tool_scope: dict[str, bool] = field(default_factory=lambda: dict(DEFAULT_TOOL_SCOPE))
+    execution_policy: dict[str, str] = field(default_factory=dict)
     missed_policy: str = "catch_up_once"
     failure_policy: str = "notify_keep_schedule"
     delivery_policy: str = "notify"
@@ -74,7 +74,10 @@ def dump_job_markdown(record: JobFileRecord) -> str:
         "desired_status": record.desired_status if record.desired_status in {"active", "paused"} else "paused",
         "summary": record.summary,
         "skill_ids": list(record.skill_ids),
+        "required_skills": list(record.required_skills),
+        "context_policy": record.context_policy or "fresh",
         "tool_scope": {**DEFAULT_TOOL_SCOPE, **dict(record.tool_scope or {})},
+        "executionPolicy": record.execution_policy or {"approvalMode": "manual"},
         "missed_policy": record.missed_policy,
         "failure_policy": record.failure_policy,
         "delivery_policy": record.delivery_policy,
@@ -108,8 +111,11 @@ def parse_job_markdown(
     payload = yaml.safe_load(match.group("yaml")) or {}
     if not isinstance(payload, dict):
         raise ValueError("Job frontmatter 必须是对象")
-    job_id = str(payload.get("id") or path.stem).strip()
-    if not ID_PATTERN.match(job_id) or path.stem != job_id:
+    job_id = str(payload.get("id") or ("" if path.stem == "definition" else path.stem)).strip()
+    if path.stem == "definition":
+        if not ID_PATTERN.match(job_id):
+            raise ValueError(f"Job id 不合法: {job_id}")
+    elif not ID_PATTERN.match(job_id) or path.stem != job_id:
         raise ValueError(f"Job id 与文件名不一致: {path.name}")
     name = str(payload.get("name") or "").strip()
     mode = str(payload.get("mode") or "agent").strip() or "agent"
@@ -159,7 +165,10 @@ def parse_job_markdown(
         desired_status=desired,
         summary=str(payload.get("summary") or ""),
         skill_ids=[str(item) for item in list(payload.get("skill_ids") or payload.get("skillIds") or [])],
+        required_skills=[dict(item) for item in list(payload.get("required_skills") or payload.get("requiredSkills") or []) if isinstance(item, dict)],
+        context_policy=str(payload.get("context_policy") or payload.get("contextPolicy") or "fresh"),
         tool_scope={**DEFAULT_TOOL_SCOPE, **{str(key): bool(value) for key, value in scope.items()}},
+        execution_policy=_parse_execution_policy(payload),
         missed_policy=str(payload.get("missed_policy") or payload.get("missedPolicy") or "catch_up_once"),
         failure_policy=str(payload.get("failure_policy") or payload.get("failurePolicy") or "notify_keep_schedule"),
         delivery_policy=str(payload.get("delivery_policy") or payload.get("deliveryPolicy") or "notify"),
@@ -213,38 +222,39 @@ def scan_job_files(
     project_id: str = "default",
     workspace_id: str = "default",
 ) -> tuple[list[JobFileRecord], list[CatalogError]]:
-    """Workspace catalog 优先；同 id 的项目文件被遮蔽。"""
+    """只讀 `<session-root>/jobs/<job>/definition.md`，不掃描 Workspace 或 Project。"""
+
+    del project_root, project_id
+    from src.config.runtime_paths import sessions_root
 
     records: list[JobFileRecord] = []
     errors: list[CatalogError] = []
     seen: set[str] = set()
-
-    def _add(items: list[JobFileRecord], scan_errors: list[CatalogError]) -> None:
-        errors.extend(scan_errors)
-        for item in items:
-            if item.id in seen:
+    root = sessions_root()
+    if not root.is_dir():
+        return records, errors
+    for session_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        jobs_dir_path = session_dir / "jobs"
+        if not jobs_dir_path.is_dir():
+            continue
+        for job_dir in sorted(path for path in jobs_dir_path.iterdir() if path.is_dir()):
+            definition = job_dir / "definition.md"
+            if not definition.is_file():
                 continue
-            seen.add(item.id)
-            records.append(item)
-
-    root = workspaces_root()
-    if root.is_dir():
-        for child in sorted(root.iterdir()):
-            if not child.is_dir() or child.name.startswith("_"):
-                continue
-            _add(*_scan_dir(
-                jobs_dir(child.name),
-                workspace_id=child.name,
-                project_id=project_id,
-                source_scope="workspace",
-            ))
-    if project_root is not None and str(project_root).strip():
-        _add(*_scan_dir(
-            project_jobs_dir(Path(project_root)),
-            workspace_id=workspace_id or "default",
-            project_id=project_id,
-            source_scope="project",
-        ))
+            found, scan_errors = _scan_dir(
+                job_dir,
+                workspace_id=workspace_id or "default",
+                project_id="",
+                source_scope="session",
+            )
+            errors.extend(scan_errors)
+            for item in found:
+                if item.id in seen or definition.name != "definition.md":
+                    continue
+                if Path(item.source_path).name != "definition.md":
+                    continue
+                seen.add(item.id)
+                records.append(item)
     return records, errors
 
 
@@ -263,10 +273,17 @@ def discover_job_files(
 
 
 def job_definition_path(*, workspace_id: str, project_id: str, job_id: str) -> Path:
-    """服务写入 Workspace catalog，避免把运行实例写进用户 git 项目。"""
+    """定義寫在 owner Session。沒有 owner 時不回退到 Workspace catalog。"""
 
-    del project_id
-    return jobs_dir(workspace_id) / f"{job_id}.md"
+    del workspace_id, project_id
+    from src.config.runtime_paths import session_job_root
+    from src.storage.database import get_scheduled_job
+
+    record = get_scheduled_job(job_id) or {}
+    owner = str(record.get("owner_session_id") or record.get("created_from_session_id") or "")
+    if not owner:
+        raise ValueError("Job 沒有 owner Session")
+    return session_job_root(owner, job_id) / "definition.md"
 
 
 def overlay_instance_with_file(record: dict[str, Any], file: JobFileRecord) -> dict[str, Any]:
@@ -297,12 +314,28 @@ def overlay_instance_with_file(record: dict[str, Any], file: JobFileRecord) -> d
         "schedule_expr": dict(file.schedule_expr),
         "timezone": file.timezone,
         "skill_ids": list(file.skill_ids),
+        "required_skills": list(file.required_skills),
+        "context_policy": file.context_policy or "fresh",
         "tool_scope": dict(file.tool_scope),
+        "execution_policy": file.execution_policy or record.get("execution_policy") or {"approvalMode": "manual"},
         "missed_policy": file.missed_policy,
         "failure_policy": file.failure_policy,
         "delivery_policy": file.delivery_policy,
     })
     return overlaid
+
+
+def _parse_execution_policy(payload: dict[str, Any]) -> dict[str, str]:
+    """旧文件缺字段留给一次性迁移；显式无效值不能静默开放。"""
+
+    from src.security.authorization.models import validate_approval_mode
+
+    policy = payload.get("executionPolicy", payload.get("execution_policy"))
+    if policy is None:
+        return {}
+    if not isinstance(policy, dict) or set(policy) - {"approvalMode", "approval_mode"}:
+        raise ValueError("executionPolicy 必须只包含 approvalMode")
+    return {"approvalMode": validate_approval_mode(policy.get("approvalMode", policy.get("approval_mode", "manual")))}
 
 
 def load_job_definition_file(
@@ -311,36 +344,27 @@ def load_job_definition_file(
     workspace_id: str,
     project_id: str,
 ) -> JobFileRecord | None:
-    """按 id 读取定义文件；Workspace catalog 优先。"""
+    """按 owner Session 讀取 definition.md。"""
 
+    del workspace_id, project_id
     if not job_id:
         return None
-    candidates: list[tuple[Path, str]] = [
-        (job_definition_path(workspace_id=workspace_id, project_id=project_id, job_id=job_id), "workspace"),
-    ]
     try:
-        from src.storage.database import get_project
-
-        project = get_project(project_id)
-        raw = str((project or {}).get("rootPath") or "").strip()
-        if raw:
-            candidates.append((project_jobs_dir(Path(raw)) / f"{job_id}.md", "project"))
-    except Exception:
-        pass
-    for path, scope in candidates:
-        if not path.is_file() or not path_stays_inside(path, path.parent):
-            continue
-        try:
-            return parse_job_markdown(
-                path.read_text(encoding="utf-8"),
-                path=path,
-                workspace_id=workspace_id,
-                project_id=project_id,
-                source_scope=scope,
-            )
-        except (OSError, ValueError, yaml.YAMLError):
-            continue
-    return None
+        path = job_definition_path(workspace_id="", project_id="", job_id=job_id)
+    except (OSError, ValueError):
+        return None
+    if not path.is_file():
+        return None
+    try:
+        return parse_job_markdown(
+            path.read_text(encoding="utf-8"),
+            path=path,
+            workspace_id="",
+            project_id="",
+            source_scope="session",
+        )
+    except (OSError, ValueError, yaml.YAMLError):
+        return None
 
 
 def job_source_path_index(

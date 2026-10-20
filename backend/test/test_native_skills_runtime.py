@@ -92,8 +92,11 @@ def test_local_bash_does_not_depend_on_network_permission() -> None:
             tool_policy=ApprovalPolicy.TRUSTED_TOOLS,
         ),
     )
+    from src.config.runtime_paths import tenant_root
+
     toolkit = _create_default_toolkit(
         guardrails=guardrails,
+        workspace_dir=str(tenant_root()),
         tool_scope=RuntimeToolScope(allow_bash=True, allow_http=True, allow_web=True),
     )
 
@@ -176,18 +179,15 @@ def test_local_bash_cancellation_kills_child_processes(tmp_path) -> None:
     assert not marker.exists()
 
 
-def test_runtime_skill_paths_reject_paths_outside_package_root(tmp_path, monkeypatch) -> None:
-    packages_root = tmp_path / "packages"
-    packages_root.mkdir()
-    inside = _write_skill(packages_root, "inside")
+def test_runtime_skill_paths_reject_paths_outside_package_root(tmp_path, monkeypatch):
+    import pytest
+    from src.skills import SkillError
+    from src.skills.registry import register_user_skill, SkillRegisterRequest
+    real = register_user_skill(SkillRegisterRequest(name="inside", description="合法文件包"))
     outside = _write_skill(tmp_path, "outside")
-    monkeypatch.setattr("src.skills.registry.skill_packages_root", lambda: packages_root)
-    skills = [
-        _skill("inside", inside),
-        _skill("outside", outside),
-    ]
-
-    assert resolve_runtime_skill_paths(skills) == [inside]
+    assert resolve_runtime_skill_paths([real]) == [real.resource_path]
+    with pytest.raises(SkillError):
+        resolve_runtime_skill_paths([_skill("outside", outside)])
 
 
 def test_skill_lifecycle_starts_only_after_viewer_call_and_loads_context() -> None:
@@ -257,3 +257,18 @@ async def _tool_names(toolkit) -> list[str]:
         item.get("function", {}).get("name") or item.get("name")
         for item in schemas
     ]
+
+
+def test_bash_direct_call_cannot_skip_shell_blacklist(tmp_path, monkeypatch):
+    """直接执行也复核硬边界，不依赖框架是否调用 check_permissions。"""
+    tool = GuardedBash(["blocked"], timeout_seconds=1, cwd=str(tmp_path))
+    started = []
+    async def should_not_start(*args, **kwargs):
+        started.append(True)
+        raise AssertionError("不应启动 Shell")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", should_not_start)
+    async def run():
+        return [item async for item in tool.call("printf blocked")]
+    chunks = asyncio.run(run())
+    assert not started and chunks[-1].state == "error"
+    assert tool.normalize_timeout(120000) == 1000

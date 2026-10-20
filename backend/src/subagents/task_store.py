@@ -1,7 +1,7 @@
 """Subagent attached task 的文件事实源。
 
-单个 invocation 的定义快照、状态和最终结果都保存在当前 Chat Session 工作目录。
-SQLite invocation 表只作为查询索引，不参与运行时状态判断。
+单个 invocation 的定义快照、状态和最终结果保存在 `<session-root>/subagents/<invocation>`。
+结果引用是 Session 相对路径，不依赖 Project root。
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.project_files import project_session_directory
+from src.config.runtime_paths import session_root, sessions_root
 from src.subagents.models import SubagentDefinition
 
 
@@ -35,9 +35,12 @@ def utc_now() -> str:
 class SubagentTaskStore:
     """管理一个 Session 下的 attached Subagent task directories。"""
 
-    def __init__(self, *, project_root: Path, session_id: str) -> None:
-        self.project_root = project_root.resolve()
-        self.session_root = project_session_directory(self.project_root, session_id)
+    def __init__(self, *, session_id: str, project_root: Path | None = None) -> None:
+        """檔案只放在 `<session-root>/subagents`。project_root 不再決定路徑。"""
+
+        self.session_id = session_id
+        self.project_root = Path(project_root).expanduser().resolve() if project_root else Path()
+        self.session_root = session_root(session_id)
         self.root = self.session_root / "subagents"
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
@@ -56,6 +59,7 @@ class SubagentTaskStore:
         expected_output: str,
         context: str,
         constraints: list[str],
+        parent_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """创建不可变 task snapshot 和初始 queued 状态。"""
 
@@ -88,6 +92,7 @@ class SubagentTaskStore:
                 "expectedOutput": expected_output,
                 "context": context,
                 "constraints": constraints,
+                "parentSnapshot": parent_snapshot,
                 "createdAt": now,
             }
             status = {
@@ -178,7 +183,16 @@ class SubagentTaskStore:
             normalized = content.strip()
             if not normalized and error:
                 normalized = f"Subagent failed.\n\n{error.strip()}"
-            self._write_text(self._task_dir(invocation_id) / "result.md", normalized + ("\n" if normalized else ""))
+            result_path = self._task_dir(invocation_id) / "result.md"
+            self._write_text(result_path, normalized + ("\n" if normalized else ""))
+            from src.sessions.files import catalog_output
+
+            catalog_output(
+                session_id=self.session_id,
+                run_id=invocation_id,
+                path=result_path,
+                kind="managed",
+            )
             current = self.status(invocation_id)
             updated = {
                 **current,
@@ -229,6 +243,13 @@ class SubagentTaskStore:
                 consumed.append(updated)
         return consumed
 
+    def parent_snapshot(self, invocation_id: str) -> dict[str, Any] | None:
+        """讀取建立當下寫入的父 snapshot 子集，不重新解析 grant。"""
+
+        snapshot = self._read_json(self._task_dir(invocation_id) / "task.json")
+        value = snapshot.get("parentSnapshot")
+        return value if isinstance(value, dict) else None
+
     def result_path(self, invocation_id: str) -> Path:
         """返回受控的 result.md 绝对路径。"""
 
@@ -253,7 +274,7 @@ class SubagentTaskStore:
                 }, ensure_ascii=False, separators=(",", ":")) + "\n")
 
     def _result_ref(self, invocation_id: str) -> str:
-        return str((self._task_dir(invocation_id) / "result.md").relative_to(self.project_root))
+        return f"subagents/{invocation_id}/result.md"
 
     def _task_dir(self, invocation_id: str) -> Path:
         if not SUBAGENT_INVOCATION_ID_PATTERN.fullmatch(str(invocation_id or "")):
@@ -288,39 +309,59 @@ def _trim_text(value: str, limit: int) -> str:
     return normalized if len(normalized) <= limit else normalized[: limit - 1] + "…"
 
 
-def reconcile_interrupted_file_tasks(project_roots: list[Path]) -> int:
-    """启动期收口上个进程遗留的 queued/running 文件任务。"""
+def reconcile_interrupted_file_tasks(project_roots: list[Path] | None = None) -> int:
+    """收口 Session root 與歷史 Project 目錄裡尚未結束的檔案任務。"""
 
     reconciled = 0
     seen: set[Path] = set()
-    for raw_root in project_roots:
+    candidates = [sessions_root()]
+    for raw_root in project_roots or []:
         project_root = raw_root.expanduser().resolve()
         if project_root in seen or not project_root.is_dir():
             continue
         seen.add(project_root)
-        sessions_root = project_root / ".agent-workstation" / "sessions"
-        for status_path in sessions_root.glob("*/subagents/subagent-*/status.json"):
-            try:
-                status = SubagentTaskStore._read_json(status_path)
-            except (OSError, json.JSONDecodeError, SubagentTaskStoreError):
-                continue
-            if str(status.get("status") or "") not in {"queued", "running"}:
-                continue
-            invocation_id = str(status.get("invocationId") or "")
-            try:
-                session_id = status_path.parents[2].name
-                store = SubagentTaskStore(project_root=project_root, session_id=session_id)
-                message = "Backend restarted before the attached Subagent task reached a terminal result."
-                store.write_result(invocation_id, "", error=message)
-                interrupted = store.set_status(invocation_id, "interrupted", error=message)
-                from src.storage.database import update_subagent_invocation_delivery
-
-                update_subagent_invocation_delivery(
-                    invocation_id,
-                    delivery_status=str(interrupted.get("deliveryStatus") or "pending"),
-                    result_ref=str(interrupted.get("resultRef") or ""),
-                )
+        candidates.append(project_root / ".agent-workstation" / "sessions")
+    for base in candidates:
+        if not base.is_dir():
+            continue
+        for status_path in base.glob("*/subagents/subagent-*/status.json"):
+            if _interrupt_status_file(status_path):
                 reconciled += 1
-            except (OSError, SubagentTaskStoreError):
-                continue
     return reconciled
+
+
+def _interrupt_status_file(status_path: Path) -> bool:
+    try:
+        status = SubagentTaskStore._read_json(status_path)
+    except (OSError, json.JSONDecodeError, SubagentTaskStoreError):
+        return False
+    if str(status.get("status") or "") not in {"queued", "running"}:
+        return False
+    invocation_id = str(status.get("invocationId") or "")
+    if not SUBAGENT_INVOCATION_ID_PATTERN.fullmatch(invocation_id):
+        return False
+    message = "Backend restarted before the attached Subagent task reached a terminal result."
+    task_dir = status_path.parent
+    try:
+        SubagentTaskStore._write_text(task_dir / "result.md", f"Subagent failed.\n\n{message}\n")
+        now = utc_now()
+        updated = {
+            **status,
+            "status": "interrupted",
+            "error": message,
+            "deliveryStatus": "pending",
+            "resultPreview": message,
+            "completedAt": status.get("completedAt") or now,
+            "updatedAt": now,
+        }
+        SubagentTaskStore._write_json(status_path, updated)
+        from src.storage.database import update_subagent_invocation_delivery
+
+        update_subagent_invocation_delivery(
+            invocation_id,
+            delivery_status="pending",
+            result_ref=str(updated.get("resultRef") or f"subagents/{invocation_id}/result.md"),
+        )
+    except (OSError, SubagentTaskStoreError):
+        return False
+    return True

@@ -1,13 +1,12 @@
 ---
 name: explorer
-description: Use for read-only codebase exploration, locating relevant files, tracing runtime flow, and summarizing findings without editing files.
+description: Use for read-only codebase exploration, locating relevant files, tracing
+  runtime flow, and summarizing findings without editing files.
 tools: Read, Grep, Glob
 model: inherit
-permissionMode: default
 maxTurns: 30
 color: blue
 ---
-
 你是 Agent Workstation 的只读代码库探索 Subagent。
 
 你的职责：

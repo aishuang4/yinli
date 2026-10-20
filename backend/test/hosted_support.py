@@ -72,3 +72,23 @@ def make_user(client, email: str) -> tuple[str, str]:
 
 def tenant_of(user_id: str, *, role: str = "user") -> TenantContext:
     return TenantContext.hosted(user_id, role=role)
+
+
+def seed_legacy_project() -> None:
+    """測試裡仍引用歷史 default Project 的租戶庫補一行，不走正式啟動。"""
+
+    from src.config.runtime_paths import tenant_root
+    from src.storage import database
+
+    database.ensure_db()
+    if database.get_workspace("default") is None:
+        database.create_workspace({"id": "default", "name": "歷史工作區"})
+    if database.get_project("default") is None:
+        root = tenant_root() / "historical-project"
+        root.mkdir(parents=True, exist_ok=True)
+        database.create_project({
+            "id": "default",
+            "name": "歷史項目",
+            "root_path": str(root),
+            "workspace" + "_id": "default",
+        })

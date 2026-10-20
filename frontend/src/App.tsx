@@ -11,12 +11,13 @@
  * - advanced-init-once: 初始化检查只做一次
  */
 
-import { lazy, Suspense, useEffect, useLayoutEffect, useState, type ComponentType } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react';
 import { App as AntdApp } from 'antd';
 import { StyleProvider } from '@ant-design/cssinjs';
 import { ConfigProvider, Spinner } from '@/components/design';
 import { carbonDarkTheme, carbonTheme } from '@/components/design/theme';
 import { useAppStore, type ViewType } from './stores/appStore';
+import { readSessionLocation, writeSessionLocation } from './features/sessions/sessionLocation';
 import { isSurfaceEnabled, isViewEnabled } from './stores/productFeatures';
 import { useProductFeaturesStore } from './stores/productFeaturesStore';
 import { useSettingsStore } from './stores/settingsStore';
@@ -80,6 +81,8 @@ export function App() {
   const workspaceMode = useAppStore((s) => s.workspaceMode);
   const backendConnected = useAppStore((s) => s.backendConnected);
   const setBackendConnected = useAppStore((s) => s.setBackendConnected);
+  const restoreSessionLocation = useAppStore((s) => s.restoreSessionLocation);
+  const restoredView = useRef<string | null>(null);
   const theme = useSettingsStore((s) => s.theme);
   const backendUrl = useSettingsStore((s) => s.backendUrl);
   const setBackendUrl = useSettingsStore((s) => s.setBackendUrl);
@@ -95,6 +98,28 @@ export function App() {
   useLayoutEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  useEffect(() => {
+    const location = readSessionLocation(window.location.search);
+    restoredView.current = location.view || 'chat';
+    const views: ViewType[] = ['chat', 'runs', 'jobs', 'traces', 'sandbox', 'agents', 'models', 'subagents', 'tools', 'mcp', 'skills', 'memory', 'settings'];
+    restoreSessionLocation({
+      view: views.includes(location.view as ViewType) ? location.view as ViewType : undefined,
+      sessionId: location.sessionId,
+      jobId: location.jobId,
+      studioId: location.studioId,
+    });
+  }, [restoreSessionLocation]);
+
+  useEffect(() => {
+    if (restoredView.current && currentView !== restoredView.current) return;
+    restoredView.current = null;
+    const next = writeSessionLocation(window.location.search, { view: currentView === 'chat' ? '' : currentView });
+    const target = `${window.location.pathname}${next}${window.location.hash}`;
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== target) {
+      window.history.replaceState(null, '', target);
+    }
+  }, [currentView]);
 
   useEffect(() => {
     const electronAPI = window.electronAPI;

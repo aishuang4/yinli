@@ -7,8 +7,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
-from src.project_files import save_project_upload
-from src.project_resources import validate_project_resource_binding
+from src.sessions.files import save_project_upload
 from src.scheduler.service import ScheduledJobService
 from src.storage.database import (
     create_project,
@@ -26,6 +25,13 @@ from src.storage.database import (
 router = APIRouter()
 ProjectStatus = Literal["active", "archived"]
 _job_service = ScheduledJobService()
+_LEGACY_WRITE = HTTPException(
+    status_code=410,
+    detail={
+        "code": "legacy_workspace_retired",
+        "message": "Workspace/Project 寫入已停用，不會更改 Session 歸屬或目錄。請改用 Session。",
+    },
+)
 
 
 class WorkspaceRecord(BaseModel):
@@ -162,51 +168,18 @@ async def list_workspace_records(
 
 @router.post("/workspaces", response_model=WorkspaceRecord, status_code=201)
 async def create_workspace_record(data: WorkspaceCreateRequest) -> WorkspaceRecord:
-    """创建 Workspace。"""
+    """舊寫入已停用。"""
 
-    name = data.name.strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="Workspace 名称不能为空")
-    return WorkspaceRecord.model_validate(create_workspace({"name": name, "description": data.description.strip()}))
+    del data
+    raise _LEGACY_WRITE
 
 
 @router.post("/workspaces/bootstrap", response_model=WorkspaceBootstrapResponse, status_code=201)
 async def bootstrap_workspace(data: WorkspaceBootstrapRequest) -> WorkspaceBootstrapResponse:
-    """校验 Project 路径后创建 Workspace 及首个 Project。"""
+    """舊組合建立已停用，不建立 Workspace 或 Project。"""
 
-    workspace_name = data.workspace_name.strip()
-    project_name = data.name.strip()
-    if not workspace_name or not project_name:
-        raise HTTPException(status_code=422, detail="Workspace 和 Project 名称不能为空")
-    from src.tenancy.context import is_hosted_mode
-
-    if is_hosted_mode():
-        project_id = f"proj_{uuid.uuid4().hex}"
-        root_path, instructions_file = _validated_project_paths(
-            _hosted_project_root(project_id),
-            data.instructions_file,
-        )
-    else:
-        project_id = None
-        root_path, instructions_file = _validated_project_paths(data.root_path, data.instructions_file)
-    workspace = create_workspace({
-        "name": workspace_name,
-        "description": data.workspace_description.strip(),
-    })
-    project_payload = {
-        "workspace_id": workspace["id"],
-        "name": project_name,
-        "description": data.description.strip(),
-        "root_path": root_path,
-        "instructions_file": instructions_file,
-    }
-    if project_id:
-        project_payload["id"] = project_id
-    project = create_project(project_payload)
-    return WorkspaceBootstrapResponse(
-        workspace=WorkspaceRecord.model_validate(workspace),
-        project=ProjectRecord.model_validate(project),
-    )
+    del data
+    raise _LEGACY_WRITE
 
 
 @router.get("/workspaces/{workspace_id}/projects", response_model=list[ProjectRecord])
@@ -226,34 +199,10 @@ async def list_workspace_projects(
 
 @router.post("/workspaces/{workspace_id}/projects", response_model=ProjectRecord, status_code=201)
 async def create_project_record(workspace_id: str, data: ProjectCreateRequest) -> ProjectRecord:
-    """在 Workspace 内创建 Project。"""
+    """舊 Project 建立已停用。"""
 
-    if get_workspace(workspace_id) is None:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    name = data.name.strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="Project 名称不能为空")
-    from src.tenancy.context import is_hosted_mode
-
-    project_id = None
-    if is_hosted_mode():
-        project_id = f"proj_{uuid.uuid4().hex}"
-        root_path, instructions_file = _validated_project_paths(
-            _hosted_project_root(project_id),
-            data.instructions_file,
-        )
-    else:
-        root_path, instructions_file = _validated_project_paths(data.root_path, data.instructions_file)
-    payload = {
-        "workspace_id": workspace_id,
-        "name": name,
-        "description": data.description.strip(),
-        "root_path": root_path,
-        "instructions_file": instructions_file,
-    }
-    if project_id:
-        payload["id"] = project_id
-    return ProjectRecord.model_validate(create_project(payload))
+    del workspace_id, data
+    raise _LEGACY_WRITE
 
 
 @router.get("/projects/{project_id}", response_model=ProjectRecord)
@@ -272,50 +221,18 @@ async def upload_project_file(
     session_id: str = Query(..., min_length=1, max_length=128, alias="sessionId"),
     file: UploadFile = File(...),
 ) -> ProjectFileUploadResponse:
-    """上传用户附件到当前 Project，供该 Project 内的 Agent 操作。"""
+    """舊 Project 上傳已停用，避免把附件寫進外部目錄。"""
 
-    project = get_project(project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if str(project.get("status") or "") != "active":
-        raise HTTPException(status_code=409, detail="Project 已归档，不能上传附件")
-    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
-    if not project_root.is_dir():
-        raise HTTPException(status_code=422, detail="Project root 不是有效目录")
-    return ProjectFileUploadResponse.model_validate(
-        await save_project_upload(project_root=project_root, session_id=session_id, upload=file),
-    )
+    del project_id, session_id, file
+    raise _LEGACY_WRITE
 
 
 @router.patch("/projects/{project_id}", response_model=ProjectRecord)
 async def update_project_record(project_id: str, data: ProjectUpdateRequest) -> ProjectRecord:
-    """更新或归档 Project。"""
+    """舊 Project 更新已停用，不能改目錄或歸屬。"""
 
-    current = get_project(project_id)
-    if current is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    from src.tenancy.context import is_hosted_mode
-
-    changes = data.model_dump(exclude_unset=True, by_alias=True)
-    if is_hosted_mode() and "rootPath" in changes:
-        raise HTTPException(status_code=422, detail="Web 端不能修改 Project 目录")
-    if "name" in changes and not str(changes["name"]).strip():
-        raise HTTPException(status_code=422, detail="Project 名称不能为空")
-    if "rootPath" in changes or "instructionsFile" in changes:
-        root_path, instructions_file = _validated_project_paths(
-            str(changes.get("rootPath") or current["rootPath"]),
-            str(changes.get("instructionsFile", current["instructionsFile"])),
-        )
-        changes["rootPath"] = root_path
-        changes["instructionsFile"] = instructions_file
-    updated = update_project(project_id, changes)
-    if (
-        updated is not None
-        and str(current.get("status") or "") != "archived"
-        and str(updated.get("status") or "") == "archived"
-    ):
-        _job_service.pause_for_resource_change("project_archived", project_id=project_id)
-    return ProjectRecord.model_validate(updated)
+    del project_id, data
+    raise _LEGACY_WRITE
 
 
 @router.get("/projects/{project_id}/resources")
@@ -334,30 +251,7 @@ async def put_project_resource(
     resource_id: str,
     data: ProjectResourceBindingRequest,
 ) -> dict[str, Any]:
-    """创建或更新 Project 资源绑定。"""
+    """舊 binding 寫入已停用，不暫停 Job，也不擴大授權。"""
 
-    project = get_project(project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    try:
-        validate_project_resource_binding(
-            workspace_id=str(project["workspaceId"]),
-            resource_type=resource_type,
-            resource_id=resource_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    binding = upsert_project_resource_binding({
-        "project_id": project_id,
-        "resource_type": resource_type,
-        "resource_id": resource_id,
-        "enabled": data.enabled,
-        "config_override": data.config_override,
-    })
-    if not data.enabled:
-        _job_service.pause_jobs_for_binding_change(
-            project_id=project_id,
-            resource_type=resource_type,
-            resource_id=resource_id,
-        )
-    return binding
+    del project_id, resource_type, resource_id, data
+    raise _LEGACY_WRITE

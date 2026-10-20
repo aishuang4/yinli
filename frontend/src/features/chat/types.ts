@@ -1,5 +1,6 @@
 import type { ClarificationRequestInfo } from '../../hooks/useEventStream';
 import type { DisplaySnapshot } from '../runtime-stream/protocol';
+import type { ApprovalMode } from './approvalMode';
 
 /** 本地消息记录 */
 export interface LocalMessage {
@@ -70,14 +71,13 @@ export interface ChatSessionGroupStudioHint {
 }
 
 export interface ChatSession {
+  approvalMode?: ApprovalMode;
   modelConfigId?: string;
   id: string;
   title: string;
   agent_id: string;
   agent_name: string;
   mode: 'agent' | 'team';
-  workspace_id: string;
-  project_id: string;
   created_at: string;
   updated_at: string;
   message_count: number;

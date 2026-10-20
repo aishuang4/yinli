@@ -13,6 +13,7 @@ from src.group_studio.errors import (
     AGENT_NOT_BOUND,
     CHAT_RUN_ACTIVE,
     CROSS_PROJECT_SESSION,
+    CROSS_SESSION,
     DEFAULT_AGENT_FORBIDDEN,
     GROUP_STUDIO_NOT_FOUND,
     ALREADY_MEMBER,
@@ -26,6 +27,7 @@ from src.group_studio.errors import (
     STUDIO_NOT_OPEN,
     GroupStudioError,
 )
+from src.group_studio.access import current_request_session
 from src.group_studio.files import ensure_studio_dirs, save_studio_upload
 from src.group_studio.models import (
     GROUP_STUDIO_HOST_AGENT_ID,
@@ -44,7 +46,8 @@ from src.group_studio.orchestrator import (
     max_members,
 )
 from src.group_studio.settings import get_group_studio_settings_public
-from src.runtime_context import resolve_runtime_context
+from src.runtime.session_context import build_session_context
+from src.sessions.errors import SessionError
 from src.runtime.chat_session import (
     ACTIVE_RUN_STATUSES,
     ChatSessionProjectConflict,
@@ -62,7 +65,6 @@ from src.storage.database import (
     get_active_group_studio_by_chat_session,
     get_group_studio_member,
     get_group_studio_snapshot,
-    get_project,
     insert_group_studio_artifact,
     insert_group_studio_member,
     insert_group_studio_message,
@@ -93,18 +95,15 @@ def _raise_if_chat_run_active(session_id: str) -> None:
             raise GroupStudioError(409, CHAT_RUN_ACTIVE)
 
 
-def _resolve_worker(agent_id: str, workspace_id: str) -> dict[str, str]:
-    """校验可入座的 Chat Agent。default 只给解析用，入座由 `_maybe_seat_worker` 挡住。"""
+def _resolve_worker(agent_id: str, workspace_id: str = "") -> dict[str, str]:
+    """校验可入座的 Chat Agent。全局 catalog 里的 Chat Agent 都可以入座。"""
 
     if agent_id == "default":
         return {"id": "default", "name": "默认助手", "role": "chat"}
-    from src.server.routes.agents import get_registered_agent, list_workspace_agents
+    from src.server.routes.agents import get_registered_agent
 
     agent = get_registered_agent(agent_id)
     if agent is None:
-        raise GroupStudioError(403, AGENT_NOT_BOUND)
-    visible = {item.id for item in list_workspace_agents(workspace_id)}
-    if agent.id not in visible:
         raise GroupStudioError(403, AGENT_NOT_BOUND)
     if agent.role == "job":
         raise GroupStudioError(403, JOB_AGENT_FORBIDDEN)
@@ -150,12 +149,14 @@ def _snapshot_to_model(raw: dict) -> GroupStudio:
 
 
 def get_studio(group_id: str) -> GroupStudio:
-    """按 id 取房间；不存在则 404。"""
+    """按 id 取房间；不存在则 404。带 sessionId 时必须是 owner。"""
 
     raw = get_group_studio_snapshot(group_id)
     if raw is None:
         raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
-    return _snapshot_to_model(raw)
+    studio = _snapshot_to_model(raw)
+    _assert_project(studio, "")
+    return studio
 
 
 def get_studio_by_chat_session(session_id: str) -> GroupStudio | None:
@@ -164,13 +165,24 @@ def get_studio_by_chat_session(session_id: str) -> GroupStudio | None:
     raw = get_active_group_studio_by_chat_session(session_id)
     if raw is None:
         return None
-    return _snapshot_to_model(raw)
+    studio = _snapshot_to_model(raw)
+    requested = current_request_session()
+    if requested and requested != session_id:
+        raise GroupStudioError(422, CROSS_SESSION)
+    return studio
 
 
 def list_studios(project_id: str) -> list[dict]:
     """群聊侧栏列表；不经过 Chat catalog。"""
 
-    return list_group_studios_by_project(project_id)
+    studios = list_group_studios_by_project(project_id)
+    session_id = current_request_session()
+    if not session_id:
+        return studios
+    return [
+        item for item in studios
+        if str(item.get("chatSessionId") or "") == session_id
+    ]
 
 
 def list_studio_messages(
@@ -197,21 +209,12 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
 
     existing = get_active_group_studio_by_chat_session(session_id)
     if existing is not None:
-        if request.project_id and str(existing.get("projectId") or "") != request.project_id:
-            raise GroupStudioError(422, CROSS_PROJECT_SESSION)
+        requested = current_request_session()
+        if requested and requested != session_id:
+            raise GroupStudioError(422, CROSS_SESSION)
         return _snapshot_to_model(existing)
 
-    try:
-        context = resolve_runtime_context(
-            project_id=request.project_id,
-            session_id="",
-            run_id="",
-            agent_id=request.agent_id or "default",
-        )
-    except ValueError as exc:
-        raise GroupStudioError(422, CROSS_PROJECT_SESSION) from exc
-
-    seated = _maybe_seat_worker(request.agent_id, context.workspace_id)
+    seated = _maybe_seat_worker(request.agent_id)
     session_agent = seated or {"id": "default", "name": "默认助手"}
 
     try:
@@ -219,22 +222,15 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
             session_id=session_id,
             agent_id=session_agent["id"],
             agent_name=session_agent["name"],
-            workspace_id=context.workspace_id,
-            project_id=context.project_id,
             title=request.title or request.draft_text,
         )
     except ChatSessionProjectConflict as exc:
         raise GroupStudioError(422, CROSS_PROJECT_SESSION) from exc
 
     try:
-        context = resolve_runtime_context(
-            project_id=request.project_id,
-            session_id=session_id,
-            run_id="",
-            agent_id=session_agent["id"],
-        )
-    except ValueError as exc:
-        raise GroupStudioError(422, CROSS_PROJECT_SESSION) from exc
+        context = build_session_context(session_id, agent_id=session_agent["id"])
+    except SessionError as exc:
+        raise GroupStudioError(422, exc.code) from exc
 
     title = (request.title or "").strip() or "未命名工作室"
     settings = get_group_studio_settings_public()
@@ -266,8 +262,8 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
         })
     payload = {
         "id": group_id,
-        "workspaceId": context.workspace_id,
-        "projectId": context.project_id,
+        "workspaceId": "",
+        "projectId": "",
         "chatSessionId": session_id,
         "modelConfigId": model_binding.primary.entry.id,
         "title": title,
@@ -300,7 +296,7 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
         "artifacts": artifacts,
     }
     snapshot = create_group_studio_from_chat(payload)
-    ensure_studio_dirs(context.project_root, snapshot["id"])
+    ensure_studio_dirs(session_id, snapshot["id"])
     studio = _snapshot_to_model(snapshot)
     emit_envelope(
         group_id=studio.id,
@@ -310,13 +306,13 @@ def from_chat(request: GroupStudioFromChatRequest) -> GroupStudio:
     return studio
 
 
-def _maybe_seat_worker(agent_id: str, workspace_id: str) -> dict[str, str] | None:
+def _maybe_seat_worker(agent_id: str) -> dict[str, str] | None:
     """default / Job / Host 不能入座。"""
 
     if not agent_id or agent_id in {"default", GROUP_STUDIO_HOST_AGENT_ID}:
         return None
     try:
-        return _resolve_worker(agent_id, workspace_id)
+        return _resolve_worker(agent_id)
     except GroupStudioError:
         return None
 
@@ -355,8 +351,6 @@ def update_task_card(group_id: str, request: GroupTaskCardUpdateRequest) -> Task
     """更新置顶备注。不切状态、不取消当前生成。"""
 
     studio = _load_studio(group_id)
-    if request.project_id and request.project_id != studio.project_id:
-        raise GroupStudioError(422, CROSS_PROJECT_SESSION)
     assert_can_mutate(studio.status)
 
     card = studio.task_card
@@ -391,8 +385,6 @@ def add_member(group_id: str, request: GroupMemberCreateRequest) -> Membership:
     """加人。open/paused 都可；不加入当前进行中的队列。"""
 
     studio = _load_studio(group_id)
-    if request.project_id and request.project_id != studio.project_id:
-        raise GroupStudioError(422, CROSS_PROJECT_SESSION)
     assert_can_mutate(studio.status)
     if request.agent_id == "default":
         raise GroupStudioError(403, DEFAULT_AGENT_FORBIDDEN)
@@ -758,10 +750,12 @@ def resume_studio(group_id: str, *, project_id: str, max_turns: int | None = Non
 
 
 def _assert_project(studio: GroupStudio, project_id: str) -> None:
-    """请求 project_id 必须与房间一致。"""
+    """带 sessionId 时只认 owner Session；旧 payload 仍按 projectId 兼容。"""
 
-    if project_id and project_id != studio.project_id:
-        raise GroupStudioError(422, CROSS_PROJECT_SESSION)
+    del project_id
+    session_id = current_request_session()
+    if session_id and session_id != studio.chat_session_id:
+        raise GroupStudioError(422, CROSS_SESSION)
 
 
 def mute_member(
@@ -868,7 +862,9 @@ def update_studio_model(group_id: str, project_id: str, model_config_id: str) ->
 
 
 def resolve_studio_file(group_id: str, artifact_id: str) -> dict[str, object]:
-    """解析工作室产物路径，并限制在所属 Project 根目录内。"""
+    """解析工作室产物，限制在 owner Session root 内。"""
+
+    from src.config.runtime_paths import session_root
 
     studio = _load_studio(group_id)
     artifact = next(
@@ -877,10 +873,9 @@ def resolve_studio_file(group_id: str, artifact_id: str) -> dict[str, object]:
     )
     if artifact is None:
         raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
-    project = get_project(studio.project_id)
-    project_root = Path(str((project or {}).get("rootPath") or "")).expanduser().resolve()
-    candidate = (project_root / str(artifact.get("path") or "")).resolve()
-    if not project_root.is_dir() or not candidate.is_relative_to(project_root) or not candidate.is_file():
+    base = session_root(studio.chat_session_id).resolve()
+    candidate = (base / str(artifact.get("path") or "")).resolve()
+    if not candidate.is_relative_to(base) or not candidate.is_file():
         raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
     return {**artifact, "absolutePath": candidate}
 
@@ -897,12 +892,8 @@ async def upload_studio_file(
     studio = _load_studio(group_id)
     _assert_project(studio, project_id)
     assert_can_mutate(studio.status)
-    project = get_project(studio.project_id)
-    if project is None:
-        raise GroupStudioError(422, CROSS_PROJECT_SESSION)
-    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
     stored = await save_studio_upload(
-        project_root=project_root,
+        session_id=studio.chat_session_id,
         group_id=group_id,
         upload=upload,
     )

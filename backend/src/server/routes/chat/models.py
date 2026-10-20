@@ -89,7 +89,12 @@ class ChatFilePayload(BaseModel):
 
 
 class ChatSkillRun(BaseModel):
-    """本轮对话使用的 Skill 记录"""
+    """本轮对话使用的具体文件 Skill 及版本。"""
+
+    load_name: str = Field(default="", alias="loadName")
+    source_path: str = Field(default="", alias="sourcePath")
+    source_scope: str = Field(default="", alias="sourceScope")
+    content_hash: str = Field(default="", alias="contentHash")
 
     id: str
     name: str
@@ -204,11 +209,12 @@ class ChatSession(BaseModel):
     id: str
     title: str
     model_config_id: str = Field(default="", alias="modelConfigId")
+    approval_mode: Literal["manual", "model_review", "full_access"] = Field(default="manual", alias="approvalMode")
     agent_id: str
     agent_name: str
     mode: Literal["agent", "team"] = "agent"
-    workspace_id: str = "default"
-    project_id: str = "default"
+    workspace_id: str = ""
+    project_id: str = ""
     kind: Literal["chat", "scheduled_job"] = "chat"
     created_at: str
     updated_at: str
@@ -250,6 +256,7 @@ class PendingInteraction(BaseModel):
     plan_mode_manager: Any = Field(default=None, exclude=True)
     runtime_event_sources: list[Any] = Field(default_factory=list, exclude=True)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    resuming: bool = False
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -258,10 +265,10 @@ class ChatResumeRequest(BaseModel):
     """Resume a paused Agent run after human interaction."""
 
     interaction_id: str = Field(alias="interactionId")
-    action: str
+    action: Literal["approve", "reject"]
     external_results: dict[str, str] = Field(default_factory=dict, alias="externalResults")
     remember_approval: bool = Field(default=False, alias="rememberApproval")
-    """确认后在当前会话内自动允许同类工具，不跨会话持久化。"""
+    """仅兼容旧客户端字段，不再产生会话级允许规则。"""
 
     model_config = {"populate_by_name": True}
 
@@ -273,7 +280,7 @@ class ChatMessage(BaseModel):
     """会话 ID（可选，用于上下文连续性）"""
 
     project_id: str | None = None
-    """Project ID；未提供时使用 default Project。"""
+    """已退役，非空返回 410。"""
 
     message: str
     """用户输入的消息文本"""
@@ -295,6 +302,9 @@ class ChatMessage(BaseModel):
 
     model_config_id: str | None = Field(default=None, alias="modelConfigId")
     """指定模型（可选，覆盖默认配置）"""
+
+    approval_mode: Literal["manual", "model_review", "full_access"] | None = Field(default=None, alias="approvalMode")
+    """本轮审核模式；缺失时继承 session 明确选择或 manual，与 Agent profile 无关。"""
 
     skill_ids: list[str] = Field(default_factory=list)
     """当前 Agent 绑定的 Skill ID 列表"""

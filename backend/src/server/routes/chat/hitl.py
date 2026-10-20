@@ -14,7 +14,6 @@ from agentscope.message import (
     ToolResultBlock,
     ToolResultState,
 )
-from agentscope.permission import PermissionBehavior, PermissionRule
 
 from src.server.routes.chat.models import (
     PENDING_AGENTS,
@@ -179,7 +178,7 @@ def _clear_pending_interaction(interaction_id: str) -> None:
 
 def _hitl_payload(interaction: PendingInteraction) -> dict:
     """Build frontend payload for a pending human interaction."""
-    return {
+    payload = {
         "interactionId": interaction.id,
         "type": interaction.type,
         "sessionId": interaction.session_id,
@@ -191,6 +190,19 @@ def _hitl_payload(interaction: PendingInteraction) -> dict:
         "scope": interaction.scope,
         "createdAt": interaction.created_at,
     }
+    from src.server.routes.chat.models import get_pending_agent
+    from src.server.routes.chat.authorization_display import public_authorization_event
+
+    agent = get_pending_agent(interaction.id)
+    if getattr(agent, "authorization_binding", None) is not None:
+        payload["toolCalls"] = public_authorization_event(agent, interaction.type, {
+            "tool_calls": interaction.tool_calls})["tool_calls"]
+        if interaction.type == "REQUIRE_USER_CONFIRM":
+            details = [agent.authorization_details(str(call.get("id") or "")) for call in interaction.tool_calls]
+            payload.update(version=2, approvalMode=agent.authorization_binding.owner.approval_mode,
+                           actorId=agent.authorization_binding.owner.actor_id,
+                           decisions=[item for item in details if item is not None])
+    return payload
 
 
 def _build_resume_event(
@@ -204,19 +216,23 @@ def _build_resume_event(
         else interaction.resume_tool_calls
     )
     if interaction.type == "REQUIRE_USER_CONFIRM":
+        from src.server.routes.chat.models import get_pending_agent
+        from src.tenancy.context import current_tenant
+
+        agent = get_pending_agent(interaction.id)
+        answer = getattr(agent, "answer_authorization", None)
+        if callable(answer):
+            tenant = current_tenant()
+            answer(resume_tool_calls, approved=data.action == "approve",
+                   approved_by=tenant.user_id or "local-user")
         confirmed = data.action == "approve"
-        remembered_tool_names: set[str] = set()
         confirm_results: list[ConfirmResult] = []
         for tool_call in resume_tool_calls:
-            tool_name = str(tool_call.get("name") or "").strip()
-            rules = None
-            if confirmed and data.remember_approval and tool_name and tool_name not in remembered_tool_names:
-                rules = _session_allow_rules([tool_call])
-                remembered_tool_names.add(tool_name)
             confirm_results.append(ConfirmResult(
                 confirmed=confirmed,
                 tool_call=ToolCallBlock.model_validate(tool_call),
-                rules=rules,
+                # 兼容旧客户端字段，但一次确认永不生成整工具允许规则。
+                rules=None,
             ))
         return UserConfirmResultEvent(
             reply_id=interaction.reply_id,
@@ -244,22 +260,3 @@ def _build_resume_event(
         )
 
     raise ValueError(f"Unsupported interaction type: {interaction.type}")
-
-
-def _session_allow_rules(tool_calls: list[dict]) -> list[PermissionRule]:
-    """构建当前会话有效的同类工具允许规则。"""
-
-    tool_names = {
-        str(tool_call.get("name") or "").strip()
-        for tool_call in tool_calls
-        if str(tool_call.get("name") or "").strip()
-    }
-    return [
-        PermissionRule(
-            tool_name=tool_name,
-            rule_content=None,
-            behavior=PermissionBehavior.ALLOW,
-            source="chat_session_approval",
-        )
-        for tool_name in sorted(tool_names)
-    ]

@@ -17,16 +17,7 @@ def select_runtime_skills(
     """返回本轮可发现的 Skills；具体使用哪个 Skill 由模型按需决定。"""
 
     del message
-    external_by_ref = {
-        ref: skill
-        for skill in (external_skills or [])
-        for ref in (skill.id, skill.name)
-    }
-    available = [
-        skill
-        for skill_id in skill_ids
-        if (skill := get_installed_skill(skill_id) or external_by_ref.get(skill_id)) is not None
-    ]
-    if active_skill and all(skill.id != active_skill.id for skill in available):
-        available.insert(0, active_skill)
+    from src.skills.registry import resolve_installed_skills
+    available, _missing = resolve_installed_skills(skill_ids, external_skills=external_skills)
+    # 激活状态不能额外扩大本轮授权目录。
     return available

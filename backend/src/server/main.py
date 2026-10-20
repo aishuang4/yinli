@@ -16,7 +16,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.server.routes import agent_builder, agents, chat, group_studio, health, mcp, memory, notifications, sandbox, settings as settings_routes, scheduled_jobs, skills, subagents, tools, traces, workflows, workspaces
+from src.server.routes import agent_builder, agents, chat, group_studio, health, mcp, memory, notifications, sandbox, settings as settings_routes, scheduled_jobs, session_migration, sessions, skills, subagents, tools, traces, workflows, workspaces
 from src.config.settings import assert_hosted_email_config, assert_hosted_platform_config, assert_hosted_sandbox, settings
 from src.server.auth.middleware import HostedSessionMiddleware
 from src.server.auth.platform_models import router as platform_model_router
@@ -26,7 +26,7 @@ from src.server.auth.service import ensure_default_admins
 from src.storage.control_db import ensure_control_db
 from src.tenancy.context import is_hosted_mode
 from src.group_studio.lifecycle import reconcile_interrupted_studios
-from src.storage.database import close_db, init_db, list_projects, reconcile_interrupted_subagent_invocations
+from src.storage.database import close_db, init_db, reconcile_interrupted_subagent_invocations
 from src.subagents.task_store import reconcile_interrupted_file_tasks
 from src.server.routes.chat.team_runtime.maintenance import maintain_team_runtime_runs
 from src.server.local_access import LocalAccessMiddleware
@@ -66,12 +66,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             try:
                 ensure_tenant_directories()
                 await init_db()
+                from src.catalog.skill_seed import seed_system_skills
+                from src.skills.migration import migrate_tenant_skills
+                seed_system_skills()
+                migrate_tenant_skills()
+                from src.session_migration.runner import ensure_tenant_cutover
+
+                ensure_tenant_cutover()
                 interrupted_subagents = reconcile_interrupted_subagent_invocations()
-                interrupted_subagent_files = reconcile_interrupted_file_tasks([
-                    Path(str(project.get("rootPath") or ""))
-                    for project in list_projects(include_archived=True)
-                    if str(project.get("rootPath") or "")
-                ])
+                interrupted_subagent_files = reconcile_interrupted_file_tasks([])
                 if interrupted_subagents or interrupted_subagent_files:
                     print(
                         "[Subagent] reconciled "
@@ -154,6 +157,8 @@ app.include_router(admin_router)
 app.include_router(platform_model_router)
 app.include_router(platform_gateway_router)
 app.include_router(workspaces.router, prefix="/api", tags=["Workspace / Project"])
+app.include_router(session_migration.router, prefix="/api", tags=["Session 遷移"])
+app.include_router(sessions.router, prefix="/api", tags=["Session"])
 app.include_router(agents.router, prefix="/api/agents", tags=["Agent 管理"])
 app.include_router(agent_builder.router, prefix="/api/agent-builder", tags=["Agent 智能编排"])
 app.include_router(chat.router, prefix="/api/chat", tags=["对话"])

@@ -9,12 +9,11 @@ import { RunDetailPage } from '../features/runs/RunDetailPage';
 import { RunLandingPage } from '../features/runs/RunLandingPage';
 import type { RunDetail, RunSummary } from '../features/runs/runTypes';
 import { ACTIVE_RUN_STATUSES } from '../features/runs/runUtils';
-import { useAppStore } from '../stores/appStore';
+import { readSessionLocation, writeSessionLocation } from '../features/sessions/sessionLocation';
 
 export function RunsPage() {
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const [runs, setRuns] = useState<RunSummary[]>([]);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(() => readSessionLocation(window.location.search).runId || null);
   const [detail, setDetail] = useState<RunDetail | null>(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -40,7 +39,9 @@ export function RunsPage() {
     try {
       if (showRefreshState) setRefreshing(true);
       setError(null);
-      const params = new URLSearchParams({ projectId: activeProjectId });
+      const params = new URLSearchParams();
+      const sessionId = readSessionLocation(window.location.search).sessionId;
+      if (sessionId) params.set('sessionId', sessionId);
       const response = await fetch(`/api/chat/runs?${params.toString()}`, { signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: { runs: RunSummary[] } = await response.json();
@@ -54,12 +55,12 @@ export function RunsPage() {
         if (showRefreshState) setRefreshing(false);
       }
     }
-  }, [activeProjectId]);
+  }, []);
 
   const cancelRun = useCallback(async (runId: string) => {
     try {
       setBusyRunId(runId);
-      const params = new URLSearchParams({ projectId: activeProjectId });
+      const params = new URLSearchParams();
       const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/cancel?${params.toString()}`, {
         method: 'POST',
       });
@@ -71,12 +72,12 @@ export function RunsPage() {
     } finally {
       setBusyRunId(null);
     }
-  }, [activeProjectId]);
+  }, []);
 
   const rerunRun = useCallback(async (runId: string) => {
     try {
       setBusyRunId(runId);
-      const params = new URLSearchParams({ projectId: activeProjectId });
+      const params = new URLSearchParams();
       const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/rerun?${params.toString()}`, {
         method: 'POST',
       });
@@ -89,14 +90,15 @@ export function RunsPage() {
     } finally {
       setBusyRunId(null);
     }
-  }, [activeProjectId]);
+  }, []);
 
   useEffect(() => {
-    setSelectedRunId(null);
-    setDetail(null);
-    setRuns([]);
-    setInitialLoading(true);
-  }, [activeProjectId]);
+    const next = writeSessionLocation(window.location.search, { runId: selectedRunId || '' });
+    const target = `${window.location.pathname}${next}${window.location.hash}`;
+    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== target) {
+      window.history.replaceState(null, '', target);
+    }
+  }, [selectedRunId]);
 
   useEffect(() => {
     void loadRuns();

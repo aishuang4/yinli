@@ -21,7 +21,7 @@ HOSTED_USER = {
 }
 
 
-def test_ensure_tenant_is_idempotent_and_seeds_default_project(hosted_env, monkeypatch):
+def test_ensure_tenant_is_idempotent_without_default_project(hosted_env, monkeypatch):
     from src.catalog.loader import get_registered_agent
     from src.config.model_catalog import models_path
     from src.config.runtime_paths import projects_root, skill_packages_root
@@ -36,18 +36,14 @@ def test_ensure_tenant_is_idempotent_and_seeds_default_project(hosted_env, monke
     assert second.tenant_id == first.tenant_id
     assert control_records.get_tenant(HOSTED_USER["id"])["status"] == "disabled"
     with use_tenant(first):
-        project = database.get_project("default")
-        assert project is not None
-        assert str(project["rootPath"]).startswith(str(projects_root()))
+        assert database.get_project("default") is None
+        assert database.get_workspace("default") is None
         assert skill_packages_root().is_dir()
         assert models_path().is_file()
         settings = get_scheduled_jobs_settings_public()
         assert settings["enabled"] is True
         assert get_registered_agent("default") is not None
-        bindings = database.list_project_resource_bindings("default")
-        kinds = {item["resourceType"] for item in bindings}
-        assert "agent" in kinds
-        assert "skill" in kinds
+        assert database.list_project_resource_bindings("default") == []
 
 
 def test_middleware_binds_active_tenant_and_rejects_disabled(hosted_env):

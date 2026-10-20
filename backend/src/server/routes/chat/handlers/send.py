@@ -18,9 +18,9 @@ from src.server.routes.chat.background_runs import (
     serialize_chat_background_run,
     subscribe_chat_background_run,
 )
-from src.project_files import validate_session_uploads
-from src.project_resources import resolve_project_resource_access
-from src.runtime_context import resolve_runtime_context
+from src.sessions.files import validate_session_uploads
+from src.sessions.run_access import candidate_resource_access
+from src.runtime.session_context import build_session_context
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.router import router
 from src.server.routes.chat.run_context import (
@@ -29,6 +29,7 @@ from src.server.routes.chat.run_context import (
 )
 from src.server.routes.skills import discover_external_skills
 from src.memory.habit_update import apply_habit_update
+from src.sessions.errors import SessionError
 from src.server.routes.chat.runtime_dispatcher import execute_chat_runtime
 from src.server.routes.chat.runtime_governance import (
     build_memory_prompt_and_recall,
@@ -38,7 +39,6 @@ from src.server.routes.chat.startup_checks import get_startup_error
 from src.server.routes.chat.projection.source_events import SourceEvent
 from src.config.product_features import is_surface_enabled
 from src.config.runtime_settings import resolve_model_binding
-from src.runtime.chat_session import find_chat_session
 
 
 @router.post("/send")
@@ -95,24 +95,46 @@ async def start_chat_run(data: ChatMessage):
         raise HTTPException(status_code=403, detail="team_mode_disabled")
     if data.plan_requested and not data.plan_action and not is_surface_enabled("planMode"):
         raise HTTPException(status_code=403, detail="plan_mode_disabled")
+    if data.project_id:
+        raise HTTPException(status_code=410, detail={"code": "legacy_scope_retired", "message": "旧字段已退役"})
     session_id = data.session_id or uuid.uuid4().hex
+    from src.server.routes.session_errors import session_error_http
+    from src.sessions.intake import ensure_session_for_message
+
     try:
-        runtime_context = resolve_runtime_context(
-            project_id=data.project_id,
+        session_id = ensure_session_for_message(
             session_id=session_id,
-            run_id="",
+            agent_id=data.agent_id or "default",
+            title=data.message[:40] if data.message else "",
+        )
+    except SessionError as exc:
+        raise session_error_http(exc, default_status=409) from exc
+    try:
+        runtime_context = build_session_context(
+            session_id,
             agent_id=data.agent_id or "default",
         )
+        from src.runtime.chat_session import find_chat_session
+
         session = find_chat_session(session_id)
+        approval_mode = data.approval_mode or (session.approval_mode if session else "manual")
+        permission_review_binding = None
+        if approval_mode == "model_review":
+            from src.security.authorization.review_gate import validated_review_binding
+
+            permission_review_binding = validated_review_binding()
         binding = resolve_model_binding(data.model_config_id or (session.model_config_id if session else None))
         if data.images and not binding.primary.entry.capabilities.images:
             raise ValueError("所选模型未启用图片能力，请切换模型。")
+    except SessionError as exc:
+        raise session_error_http(exc, default_status=409) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     run_data = data.model_copy(update={
         "session_id": session_id,
-        "project_id": runtime_context.project_id,
+        "project_id": "",
         "model_config_id": binding.primary.entry.id,
+        "approval_mode": approval_mode,
     })
     try:
         validate_session_uploads(
@@ -125,9 +147,15 @@ async def start_chat_run(data: ChatMessage):
     try:
         resolve_forced_runtime_skills(
             list(run_data.forced_skill_ids or []),
-            project_resources=resolve_project_resource_access(runtime_context),
+            project_resources=candidate_resource_access(
+                session_id,
+                agent_id=data.agent_id or "default",
+                permission_mode=data.approval_mode or "manual",
+            ),
             external_skills=discover_external_skills(runtime_context.project_root),
         )
+    except SessionError as exc:
+        raise session_error_http(exc, default_status=409) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -154,8 +182,8 @@ async def start_chat_run(data: ChatMessage):
                 memory_prompt, _recall = build_memory_prompt_and_recall(
                     agent_id=ctx.agent_id,
                     agent_name=ctx.agent_name,
-                    workspace_id=ctx.runtime_context.workspace_id,
-                    project_id=ctx.runtime_context.project_id,
+                    workspace_id="",
+                    project_id="",
                     query_text="",
                     freeze_session_id=ctx.session_id if ctx.persist_run else None,
                 )
@@ -182,14 +210,21 @@ async def start_chat_run(data: ChatMessage):
         async for main_event in execute_chat_runtime(ctx=ctx, run_data=run_data):
             yield main_event
 
-    return await start_chat_background_run(
-        session_id=session_id,
-        factory=event_stream,
-        agent_id=run_data.agent_id or "default",
-        agent_name=run_data.agent_name or "",
-        task=run_data.message,
-        mode=run_data.mode,
-        workspace_id=runtime_context.workspace_id,
-        project_id=runtime_context.project_id,
-        model_binding=binding,
-    )
+    try:
+        return await start_chat_background_run(
+            session_id=session_id,
+            factory=event_stream,
+            agent_id=run_data.agent_id or "default",
+            agent_name=run_data.agent_name or "",
+            task=run_data.message,
+            mode=run_data.mode,
+            workspace_id="",
+            project_id="",
+            model_binding=binding,
+            approval_mode=approval_mode,
+            permission_review_binding=permission_review_binding,
+        )
+    except SessionError as exc:
+        from src.server.routes.session_errors import session_error_http
+
+        raise session_error_http(exc, default_status=409) from exc

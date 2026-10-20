@@ -36,6 +36,19 @@ export function toHitlRequest(block: DisplayBlock<RecordData>): HitlRequestInfo 
     : 'leader';
   return {
     interactionId,
+    approvalMode: ['manual', 'model_review', 'full_access'].includes(text(block.data.approvalMode))
+      ? block.data.approvalMode as HitlRequestInfo['approvalMode'] : undefined,
+    actorId: text(block.data.actorId) || undefined,
+    decisions: Array.isArray(block.data.decisions) ? block.data.decisions.flatMap(item => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+      const value = item as RecordData;
+      if (!text(value.decisionId) || !text(value.callId)) return [];
+      return [{ decisionId: text(value.decisionId), callId: text(value.callId), toolName: text(value.toolName),
+        effect: text(value.effect), targets: Array.isArray(value.targets) ? value.targets.map(item => text(item)) : [],
+        summary: text(value.summary), diffPreview: text(value.diffPreview), outboundPreview: text(value.outboundPreview),
+        source: text(value.source), reasonCode: text(value.reasonCode), reason: text(value.reason),
+        status: text(value.status), expiresAt: text(value.expiresAt) }];
+    }) : undefined,
     type: text(block.data.type, text(block.data.kind, 'HITL_REQUIRED')),
     sessionId: text(block.data.sessionId),
     agentId: text(block.data.agentId),

@@ -17,6 +17,7 @@ export interface StreamState {
   resolvingInteractionId: string;
   /** 当前后台 Run ID */
   currentRunId: string;
+  currentRunApprovalMode?: import('../features/chat/approvalMode').ApprovalMode;
   /** 当前 Run 开始时间 */
   runStartedAt: string;
   /** 当前 Run 结束时间 */
@@ -78,6 +79,13 @@ export interface SkillCallInfo {
 
 /** 人机交互请求 */
 export interface HitlRequestInfo {
+  approvalMode?: import('../features/chat/approvalMode').ApprovalMode;
+  actorId?: string;
+  decisions?: Array<{
+    decisionId: string; callId: string; toolName: string; effect: string; targets: string[];
+    summary?: string; diffPreview?: string; outboundPreview?: string;
+    source: string; reasonCode: string; reason: string; status?: string; expiresAt?: string;
+  }>;
   interactionId: string;
   type: string;
   sessionId: string;
@@ -137,7 +145,7 @@ export interface UseEventStreamReturn {
 
 /** 发送消息选项 */
 export interface SendMessageOptions {
-  projectId?: string;
+  approvalMode?: import('../features/chat/approvalMode').ApprovalMode;
   agentId?: string;
   agentName?: string;
   mode?: 'agent' | 'team';

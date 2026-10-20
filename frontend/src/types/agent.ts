@@ -41,6 +41,7 @@ export interface ModelConfig {
 export type ToolPermissionProfile = 'read_only' | 'trusted_tools' | 'confirm_destructive' | 'ask_every_time';
 
 export interface Guardrails {
+  operationScope?: 'normal' | 'read_only';
   /** 文件系统访问范围 */
   filesystemScope: string;
   /** Shell 命令黑名单 */
@@ -139,6 +140,7 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = { maxReactIters: 128 };
 
 /** 默认安全边界 */
 export const DEFAULT_GUARDRAILS: Guardrails = {
+  operationScope: 'normal',
   filesystemScope: '',
   shellBlacklist: ['rm -rf /', 'sudo'],
   networkEnabled: true,

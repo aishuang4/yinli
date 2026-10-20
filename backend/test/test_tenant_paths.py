@@ -58,12 +58,11 @@ def test_ensure_tenant_directories_runs_once_per_tenant():
         runtime_paths.ensure_tenant_directories()
         for fn in (
             runtime_paths.data_root,
-            runtime_paths.default_project_root,
             runtime_paths.skill_packages_root,
             runtime_paths.subagent_root,
-            runtime_paths.workspaces_catalog_root,
         ):
             assert fn().is_dir()
+        assert not runtime_paths.default_project_root().exists()
 
 
 def test_legacy_path_constants_are_gone_from_source():

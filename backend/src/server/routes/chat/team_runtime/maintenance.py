@@ -4,7 +4,7 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from src.config.runtime_paths import team_runtime_root
+from src.config.runtime_paths import session_root, sessions_root, team_runtime_root
 from src.server.routes.chat.store import _append_assistant_message
 from src.server.routes.chat.team_runtime.store import TeamStore, TeamStoreError
 from src.storage.database import (
@@ -26,17 +26,13 @@ def maintain_team_runtime_runs(
     """收口孤儿运行并清理超过保留策略的终态目录。"""
 
     current_time = now or datetime.now(timezone.utc)
-    root = root or team_runtime_root()
-    root.mkdir(parents=True, exist_ok=True)
     terminal: list[tuple[datetime, Path]] = []
     interrupted = 0
     skipped = 0
 
-    for path in sorted(root.iterdir()):
-        if not path.is_dir():
-            continue
+    for path in _team_run_directories(root):
         try:
-            store = TeamStore.load(path.name, root=root)
+            store = TeamStore.load(path.name, root=path.parent)
             run = store.run()
             if run.get("status") == "running":
                 store.cancel_run(INTERRUPTED_REASON)
@@ -66,14 +62,9 @@ def delete_team_runs_for_session(session_id: str, *, root: Path | None = None) -
     """删除 Chat session 对应的终态 TeamRun 文件。"""
 
     removed = 0
-    root = root or team_runtime_root()
-    if not root.exists():
-        return removed
-    for path in list(root.iterdir()):
-        if not path.is_dir():
-            continue
+    for path in _session_team_directories(session_id, root):
         try:
-            store = TeamStore.load(path.name, root=root)
+            store = TeamStore.load(path.name, root=path.parent)
             run = store.run()
         except (OSError, ValueError, TeamStoreError):
             continue
@@ -84,6 +75,40 @@ def delete_team_runs_for_session(session_id: str, *, root: Path | None = None) -
         shutil.rmtree(path)
         removed += 1
     return removed
+
+
+def _team_run_directories(root: Path | None) -> list[Path]:
+    """顯式 root 維持扁平掃描；預設同時掃描歷史目錄與各 Session 的 team。"""
+
+    if root is not None:
+        root.mkdir(parents=True, exist_ok=True)
+        return [path for path in sorted(root.iterdir()) if path.is_dir()]
+    found: list[Path] = []
+    legacy = team_runtime_root()
+    legacy.mkdir(parents=True, exist_ok=True)
+    found.extend(path for path in sorted(legacy.iterdir()) if path.is_dir())
+    base = sessions_root()
+    if base.is_dir():
+        for session_dir in sorted(base.iterdir()):
+            team = session_dir / "team"
+            if team.is_dir():
+                found.extend(path for path in sorted(team.iterdir()) if (path / "run.json").is_file())
+    return found
+
+
+def _session_team_directories(session_id: str, root: Path | None) -> list[Path]:
+    if root is not None:
+        if not root.exists():
+            return []
+        return [path for path in root.iterdir() if path.is_dir()]
+    found: list[Path] = []
+    legacy = team_runtime_root()
+    if legacy.is_dir():
+        found.extend(path for path in legacy.iterdir() if path.is_dir())
+    team = session_root(session_id) / "team"
+    if team.is_dir():
+        found.extend(path for path in team.iterdir() if path.is_dir())
+    return found
 
 
 def _persist_interrupted_run(store: TeamStore) -> None:

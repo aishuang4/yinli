@@ -6,6 +6,7 @@ import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
+from src.security.authorization.models import ApprovalMode
 
 from src.scheduler.capability_contract import (
     JobCapabilityContract,
@@ -16,6 +17,7 @@ from src.scheduler.capability_contract import (
 JobStatus = Literal["pending_confirmation", "active", "paused", "archived", "completed"]
 ScheduleKind = Literal["weekly", "daily", "once"]
 JobExecutor = Literal["agent", "script"]
+JobContextPolicy = Literal["fresh"]
 MissedPolicy = Literal["catch_up_once", "mark_missed", "skip_silent"]
 FailurePolicy = Literal["notify_keep_schedule", "pause_job"]
 DeliveryPolicy = Literal["none", "notify", "confirm_then_send", "auto_send"]
@@ -81,6 +83,65 @@ class JobToolScope(BaseModel):
         return self.model_dump()
 
 
+class JobExecutionPolicy(BaseModel):
+    """任务级审核模式；与执行 Agent 的能力配置分开保存。"""
+
+    approval_mode: ApprovalMode = Field(default="manual", alias="approvalMode")
+    model_config = {"populate_by_name": True, "extra": "forbid"}
+
+
+class JobRequiredSkill(BaseModel):
+    """Job 确认时冻结的一份 Skill 版本元数据，不保存正文。
+
+    只由服务端在 ConfirmJob 时从 live catalog、owner Session grant 与原始 SKILL.md 生成；
+    `owner_session_id` / `owner_grant_version` 记录冻结时依据的 owner Session 与其资源 grant 版本。
+    旧记录没有这两个字段时保持空值，表示未知。
+    """
+
+    skill_id: str = Field(alias="skillId")
+    source_scope: str = Field(default="", alias="sourceScope")
+    source_path: str = Field(default="", alias="sourcePath")
+    content_sha256: str = Field(default="", alias="contentSha256")
+    load_name: str = Field(default="", alias="loadName")
+    root_key: str = Field(default="", alias="rootKey")
+    owner_key: str = Field(default="", alias="ownerKey")
+    content_chars: int = Field(default=0, alias="contentChars", ge=0)
+    estimated_tokens: int = Field(default=0, alias="estimatedTokens", ge=0)
+    frozen_at: str = Field(default="", alias="frozenAt")
+    owner_session_id: str = Field(default="", alias="ownerSessionId")
+    owner_grant_version: int | None = Field(default=None, alias="ownerGrantVersion", ge=0)
+
+    model_config = {"populate_by_name": True, "extra": "ignore"}
+
+
+def _dedupe_required_skills(value: Any) -> list[JobRequiredSkill]:
+    """读取旧 JSON 时按 Skill ID 去重，保留第一次出现的冻结记录。"""
+
+    if value in (None, "", "null"):
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(value, list):
+        return []
+    result: list[JobRequiredSkill] = []
+    seen: set[str] = set()
+    for item in value:
+        if isinstance(item, str):
+            item = {"skillId": item}
+        try:
+            record = JobRequiredSkill.model_validate(item)
+        except Exception:
+            continue
+        if not record.skill_id or record.skill_id in seen:
+            continue
+        seen.add(record.skill_id)
+        result.append(record)
+    return result
+
+
 class ScheduledJob(BaseModel):
     """SQLite scheduled_jobs 行的领域对象。"""
 
@@ -93,6 +154,9 @@ class ScheduledJob(BaseModel):
     pause_reason: str = ""
     agent_id: str
     model_config_id: str = ""
+    execution_policy: JobExecutionPolicy = Field(default_factory=JobExecutionPolicy)
+    required_skills: list[JobRequiredSkill] = Field(default_factory=list, alias="requiredSkills")
+    context_policy: JobContextPolicy = Field(default="fresh", alias="contextPolicy")
     mode: JobExecutor = "agent"
     schedule_kind: ScheduleKind
     schedule_expr: dict[str, Any]
@@ -121,6 +185,8 @@ class ScheduledJob(BaseModel):
     created_at: str
     updated_at: str
     archived_at: str | None = None
+
+    model_config = {"populate_by_name": True}
 
     @field_validator("status")
     @classmethod
@@ -169,6 +235,16 @@ class ScheduledJob(BaseModel):
     @classmethod
     def _empty_contract_generate_only(cls, value: Any) -> Any:
         return parse_capability_contract(value)
+
+    @field_validator("required_skills", mode="before")
+    @classmethod
+    def _required_skills_compat(cls, value: Any) -> list[JobRequiredSkill]:
+        return _dedupe_required_skills(value)
+
+    @field_validator("context_policy", mode="before")
+    @classmethod
+    def _context_policy_default(cls, value: Any) -> str:
+        return str(value or "fresh")
 
 
 class ScheduledJobRun(BaseModel):

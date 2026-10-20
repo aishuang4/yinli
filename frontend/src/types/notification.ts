@@ -2,10 +2,12 @@
 
 export interface UserNotification {
   id: string;
-  workspaceId: string;
-  projectId: string;
+  workspaceId?: string;
+  projectId?: string;
   jobId: string;
   firingId: string;
+  ownerSessionId?: string;
+  sessionStatus?: 'active' | 'archived' | 'deleted' | '';
   kind: string;
   title: string;
   body: string;
@@ -59,4 +61,6 @@ export interface DesktopNotificationPayload {
   jobId: string;
   firingId: string;
   groupStudioId: string;
+  ownerSessionId?: string;
+  sessionStatus?: 'active' | 'archived' | 'deleted' | '';
 }

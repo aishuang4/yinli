@@ -193,6 +193,32 @@ export function ScheduledJobDetailPage({
             )}
           </section>
 
+          <section className="rounded-xl bg-[var(--color-bg-primary)] p-4">
+            <div className="mb-1 text-sm font-semibold text-[var(--color-text-primary)]">Skill Context</div>
+            <div className="mb-3 text-xs text-[var(--color-text-tertiary)]">
+              每次 firing 使用独立 Context；正文在确认后按版本校验并进入会话 Context，不写入 system prompt。
+            </div>
+            <div className="mb-3 flex flex-wrap gap-2 text-xs">
+              <Tag size="small" color="blue">策略：{job.contextPolicy}</Tag>
+              <Tag size="small" color={job.requiredSkills.length > 0 ? 'green' : 'transparent'}>
+                {job.requiredSkills.length > 0 ? `${job.requiredSkills.length} 个已冻结 Skill` : '未冻结 Skill'}
+              </Tag>
+            </div>
+            {job.requiredSkills.length > 0 ? (
+              <div className="space-y-2">
+                {job.requiredSkills.map((skill) => (
+                  <div key={skill.skillId} className="rounded-md bg-[var(--color-bg-secondary)] px-3 py-2 text-xs">
+                    <div className="font-medium text-[var(--color-text-primary)]">{skill.skillId}</div>
+                    <div className="mt-1 break-all text-[var(--color-text-tertiary)]">
+                      SHA-256：{skill.contentSha256 || '待确认'}
+                      {skill.contentChars != null ? ` · ${skill.contentChars} 字符` : ''}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </section>
+
           <WorkbenchSection title="运行历史" compact>
             <ScheduledJobHistory
               job={job}

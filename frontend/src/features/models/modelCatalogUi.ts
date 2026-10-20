@@ -43,6 +43,7 @@ export function catalogDraftDirty(draft: ModelCatalog, initial: ModelCatalog): b
 function serializeCatalogDraft(catalog: ModelCatalog) {
   return {
     defaultModelId: catalog.defaultModelId,
+    permissionReview: catalog.permissionReview ?? null,
     providers: catalog.providers.map((item) => ({
       id: item.id,
       name: item.name,

@@ -11,7 +11,6 @@ import { ScheduledJobLandingPage } from '../features/scheduled-jobs/ScheduledJob
 import { useModelCatalog } from '../features/models/useModelCatalog';
 import { useAgents } from '../hooks/useAgents';
 import { useScheduledJobs } from '../hooks/useScheduledJobs';
-import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
 import { useAppStore } from '../stores/appStore';
 import type { ScheduledJob, ScheduledJobRun } from '../types/scheduledJob';
 import { notifyError, notifySuccess } from '../utils/feedback';
@@ -34,7 +33,6 @@ export function ScheduledJobsPage() {
   } = useScheduledJobs();
   const { agents } = useAgents();
   const { catalog } = useModelCatalog(false);
-  const { projects, activeProjectId } = useWorkspaceProjects();
   const pendingJobId = useAppStore((state) => state.pendingJobId);
   const clearPendingJobId = useAppStore((state) => state.clearPendingJobId);
 
@@ -51,9 +49,7 @@ export function ScheduledJobsPage() {
     Object.fromEntries(agents.map((agent) => [agent.id, agent.name]))
   ), [agents]);
 
-  const projectRoot = useMemo(() => (
-    projects.find((item) => item.id === activeProjectId)?.rootPath || ''
-  ), [activeProjectId, projects]);
+  const projectRoot = '';
 
   const filteredJobs = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -120,7 +116,7 @@ export function ScheduledJobsPage() {
     if (response.ok) {
       notifySuccess('已打开目录');
     } else {
-      notifyError(`打开目录失败：${response.error || '路径不在当前 Project 白名单内'}`);
+      notifyError(`打开目录失败：${response.error || '路径不在允许的目录内'}`);
     }
   }
 

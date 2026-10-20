@@ -11,7 +11,8 @@ from src.agents.runtime_types import RuntimeToolScope
 from src.catalog.index import refresh_project_index
 from src.catalog.loader import catalog_fingerprint, invalidate_catalog
 from src.catalog.migrate_agents import ensure_agent_file_catalog
-from src.catalog.paths import extra_filesystem_scopes_for_workspace, profile_path
+from src.catalog.paths import extra_filesystem_scopes_for_workspace
+from src.config.runtime_paths import global_agents_root
 from src.server.routes import agents as agents_routes
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import resolve_agent_system_prompt
@@ -43,7 +44,9 @@ def _create_user_agent(prompt: str = "第一期提示词") -> agents_routes.Agen
 
 
 async def _tool_names() -> list[str]:
-    schemas = await _create_default_toolkit().get_tool_schemas()
+    from src.config.runtime_paths import tenant_root
+
+    schemas = await _create_default_toolkit(workspace_dir=str(tenant_root())).get_tool_schemas()
     return [
         item.get("function", {}).get("name") or item.get("name") or ""
         for item in schemas
@@ -54,7 +57,7 @@ def test_phase1_sqlite_empty_file_exists_and_page_save_writes_file(phase1_root) 
     """§19.1–3：重启后表空、磁盘有 profile、页面保存改文件不写 sqlite。"""
 
     created = _create_user_agent()
-    path = profile_path("default", created.id)
+    path = global_agents_root() / f"{created.id}.md"
     assert path.is_file()
     assert "第一期提示词" in path.read_text(encoding="utf-8")
     assert all(row["id"] != created.id for row in database.list_agents())
@@ -77,11 +80,9 @@ def test_phase1_chat_reads_index_and_edit_changes_next_round(phase1_root) -> Non
     project = phase1_root / "project"
     project.mkdir()
     index = refresh_project_index(project, workspace_id="default", project_id="default")
-    assert index is not None
-    index_text = index.read_text(encoding="utf-8")
-    path = profile_path("default", created.id)
-    assert str(path.resolve()) in index_text
-    assert created.id in index_text
+    assert index is None
+    assert not (project / ".agents").exists()
+    path = global_agents_root() / f"{created.id}.md"
 
     extras = extra_filesystem_scopes_for_workspace("default")
     resolved = resolve_workspace_path(

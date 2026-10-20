@@ -110,6 +110,11 @@ class GuardedAsyncTransport(httpx.AsyncHTTPTransport):
 def guarded_async_client(**kwargs: object) -> httpx.AsyncClient:
     """desktop 保持调用方参数。hosted 关闭自动重定向，改由传输层逐跳校验。"""
 
+    from src.security.authorization.execution_context import has_authorized_action
+
+    if has_authorized_action():
+        # 批准仅绑定当前请求；新目标需另建行动，不转发正文或凭据。
+        kwargs["follow_redirects"] = False
     if not egress_enforced():
         return httpx.AsyncClient(**kwargs)  # type: ignore[arg-type]
     kwargs["follow_redirects"] = False

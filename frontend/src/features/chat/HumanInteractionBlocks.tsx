@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { AlertCircle, Wrench } from 'lucide-react';
-import { Button, Checkbox, Tag } from '@/components/design';
+import { Button, Tag } from '@/components/design';
 import type { ClarificationRequestInfo, HitlRequestInfo } from '../../hooks/useEventStream';
 
 export function HitlApprovalBlock({
@@ -16,7 +16,6 @@ export function HitlApprovalBlock({
   ) => Promise<void>;
 }) {
   const [submitting, setSubmitting] = useState<'approve' | 'reject' | null>(null);
-  const [rememberApproval, setRememberApproval] = useState(false);
   const isExternal = request.type === 'REQUIRE_EXTERNAL_EXECUTION';
   const actorLabel = request.scope === 'subagent'
     ? 'Subagent'
@@ -27,7 +26,7 @@ export function HitlApprovalBlock({
   const handleResolve = async (action: 'approve' | 'reject') => {
     setSubmitting(action);
     try {
-      await onResolve(request.interactionId, action, {}, action === 'approve' && rememberApproval);
+      await onResolve(request.interactionId, action, {});
     } finally {
       setSubmitting(null);
     }
@@ -58,17 +57,20 @@ export function HitlApprovalBlock({
                 {formatToolInput(toolCall.input)}
               </pre>
             )}
+            {request.decisions?.filter(decision => decision.callId === toolCall.id).map(decision => (
+              <div key={decision.decisionId} className="mt-2 space-y-2 text-xs text-[var(--color-text-secondary)]">
+                <p>执行者：{request.actorId || request.agentName} · 影响：{decision.effect}</p>
+                {decision.targets.length ? <p className="break-all">目标：{decision.targets.join('、')}</p> : null}
+                <p>{decision.reason}</p>
+                {decision.diffPreview || decision.outboundPreview || decision.summary ? (
+                  <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words rounded bg-[var(--color-bg-tertiary)] p-2">
+                    {decision.diffPreview || decision.outboundPreview || decision.summary}
+                  </pre>
+                ) : null}
+              </div>
+            ))}
           </div>
         ))}
-        {!isExternal && (
-          <Checkbox
-            checked={rememberApproval}
-            disabled={Boolean(submitting)}
-            onChange={(event) => setRememberApproval(event.target.checked)}
-          >
-            本会话后续自动允许这些工具
-          </Checkbox>
-        )}
         <div className="flex justify-end gap-2">
           <Button
             danger
@@ -84,7 +86,7 @@ export function HitlApprovalBlock({
             loading={submitting === 'approve'}
             onClick={() => handleResolve('approve')}
           >
-            批准
+            允许这一次
           </Button>
         </div>
       </div>

@@ -9,8 +9,6 @@ from src.scheduler.http_runtime import enabled_http_tools, enabled_knowledge_too
 from src.scheduler.job_toolkit import JOB_ROLE, agent_role_of, job_toolkit_of
 from src.scheduler.mcp_runtime import resolve_mcp_runtime_servers
 from src.scheduler.models import JobToolScope, ScheduledJob
-from src.scheduler.unattended_policy import agent_approval_policy
-from src.security.permissions import ApprovalPolicy
 from src.storage.database import list_http_tools, list_json_records, list_mcp_servers
 
 KNOWLEDGE_TOOLS_NAMESPACE = "knowledge_tools"
@@ -66,8 +64,6 @@ def assemble_scheduled_firing_toolkit_spec(
             "firing_tools_preview": preview,
         }
 
-    policy = agent_approval_policy(agent)
-    trusted = policy == ApprovalPolicy.TRUSTED_TOOLS
     agent_mcp = {str(item) for item in list(getattr(agent, "mcp_tools", None) or [])}
     agent_http = {str(item) for item in list(getattr(agent, "knowledge_tools", None) or [])}
     allowed_mcp = getattr(project_resources, "mcp_server_ids", None)
@@ -122,9 +118,9 @@ def assemble_scheduled_firing_toolkit_spec(
     tool_scope = JobToolScope(
         allow_mcp=bool(servers),
         allow_knowledge=bool(live_http or live_knowledge),
-        allow_http=bool((contract.allow_http_request or "HttpRequest" in required_builtins) and trusted),
-        allow_web=bool((contract.allow_web_fetch or "WebFetch" in required_builtins) and trusted),
-        allow_bash=bool((contract.allow_bash or "Bash" in required_builtins) and trusted),
+        allow_http=bool((contract.allow_http_request or "HttpRequest" in required_builtins)),
+        allow_web=bool((contract.allow_web_fetch or "WebFetch" in required_builtins)),
+        allow_bash=bool((contract.allow_bash or "Bash" in required_builtins)),
     )
     preview = list(ALWAYS_PREVIEW)
     if tool_scope.allow_bash:

@@ -1,6 +1,6 @@
 # 记忆系统
 
-> 状态：2026-10-09。这是现行契约。旧三层 Markdown 自动注入、`<recalled-memory>`、`memory_node_tree` / `memory_node_query` 和会话日 `memory_nodes` 不再是注入与回忆主路径。历史方案在 git 历史里，不要按那些段落改运行时。
+> 状态：2026-10-09。这是现行契约。习惯和专业区仍按人和智能体存放在 tenant root。时间线原文按 session 归属。旧三层 Markdown 自动注入、`<recalled-memory>`、`memory_node_tree` / `memory_node_query` 和会话日 `memory_nodes` 不再是注入与回忆主路径。历史方案在 git 历史里，不要按那些段落改运行时。
 
 ## 注入
 

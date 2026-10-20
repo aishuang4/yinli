@@ -22,13 +22,14 @@ from src.config.runtime_paths import (
     INSTALL_BACKEND_ROOT,
     USER_DATA_ROOT,
     data_root,
-    default_project_root,
     ensure_tenant_directories,
 )
 from src.config.settings import settings
 from src.storage.chat_run_records import ChatRunRecordStore
 from src.storage.chat_session_records import ChatSessionRecordStore
 from src.storage.database_schema import BASE_SCHEMA_SQL
+from src.sessions.schema import upgrade_session_schema
+from src.storage.permission_schema import PERMISSION_SCHEMA_SQL
 from src.storage.scheduled_job_records import ScheduledJobRecordStore
 from src.storage.agent_defaults import (
     is_stale_desktop_default_project_path as _is_stale_desktop_default_project_path,
@@ -67,7 +68,7 @@ def default_guardrails() -> dict[str, Any]:
     """当前租户的默认 guardrails；filesystem_scope 指向当前默认 Project 根。"""
 
     return {
-        "filesystem_scope": str(default_project_root()),
+        "filesystem_scope": str(runtime_paths.tenant_root()),
         "shell_blacklist": ["rm -rf /", "sudo"],
         "network_enabled": True,
         "human_approval": False,
@@ -86,7 +87,7 @@ def _normalize_guardrails(data: dict[str, Any]) -> dict[str, Any]:
     return normalize_guardrails(
         data,
         defaults=default_guardrails(),
-        project_root=str(default_project_root()),
+        project_root=str(runtime_paths.tenant_root()),
     )
 
 DEFAULT_PLAN_CONFIG = {
@@ -255,6 +256,8 @@ def _bind_workspace_resources(
     """把 Workspace 当前持久资源作为 Project 的初始白名单快照。"""
 
     for resource_type, table in _PROJECT_RESOURCE_TABLES.items():
+        if resource_type == "skill":
+            continue  # Skill 登记表仅供迁移，初始绑定由文件领域编排。
         conn.execute(
             f"""
             INSERT OR IGNORE INTO project_resource_bindings (
@@ -329,6 +332,10 @@ def ensure_db() -> None:
                 )
             """)
             conn.executescript(BASE_SCHEMA_SQL)
+            conn.executescript(PERMISSION_SCHEMA_SQL)
+            _ensure_column(conn, "permission_decisions", "invalidated_at", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "permission_decisions", "expires_at", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "chat_runs", "authorization_invalidated_at", "TEXT NOT NULL DEFAULT ''")
             conn.execute("DROP INDEX IF EXISTS idx_group_studios_active_chat")
             conn.execute(
                 """
@@ -396,8 +403,10 @@ def ensure_db() -> None:
             _ensure_column(conn, "skills", "available_to_all_agents", "INTEGER NOT NULL DEFAULT 1")
             _ensure_column(conn, "chat_sessions", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "chat_sessions", "project_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "chat_sessions", "approval_mode", "TEXT NOT NULL DEFAULT 'manual'")
             _ensure_column(conn, "chat_runs", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "chat_runs", "project_id", "TEXT NOT NULL DEFAULT 'default'")
+            _ensure_column(conn, "chat_runs", "authorization_json", "TEXT NOT NULL DEFAULT '{}'")
             _ensure_column(conn, "plans", "current_revision", "INTEGER NOT NULL DEFAULT 0")
             _ensure_column(conn, "plans", "approved_revision", "INTEGER")
             _ensure_column(conn, "plans", "review_feedback", "TEXT NOT NULL DEFAULT ''")
@@ -414,6 +423,8 @@ def ensure_db() -> None:
             _ensure_column(conn, "subagent_invocations", "result_ref", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "subagent_invocations", "delivery_status", "TEXT NOT NULL DEFAULT 'none'")
             _ensure_column(conn, "scheduled_jobs", "capability_contract", "TEXT NOT NULL DEFAULT '{}'")
+            _ensure_column(conn, "scheduled_jobs", "required_skills", "TEXT NOT NULL DEFAULT '[]'")
+            _ensure_column(conn, "scheduled_jobs", "context_policy", "TEXT NOT NULL DEFAULT 'fresh'")
             _drop_column_if_exists(conn, "agents", "callable_agents")
             _drop_column_if_exists(conn, "agents", "max_depth")
             _drop_column_if_exists(conn, "chat_messages", "subagent_calls")
@@ -459,74 +470,13 @@ def ensure_db() -> None:
                 "ON chat_sessions(project_id, kind, updated_at DESC)"
             )
             _ensure_column(conn, "scheduled_jobs", "model_config_id", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "scheduled_jobs", "execution_policy", "TEXT NOT NULL DEFAULT '{}'")
             _ensure_column(conn, "group_studios", "model_config_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "review_status", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "review_note", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "group_work_items", "rework_count", "INTEGER NOT NULL DEFAULT 0")
             _drop_column_if_exists(conn, "chat_runs", "team_id")
             _drop_column_if_exists(conn, "chat_runs", "team_name")
-            now = _utc_now()
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO workspaces (
-                    id, name, description, status, created_at, updated_at
-                ) VALUES (?, ?, ?, 'active', ?, ?)
-                """,
-                (
-                    DEFAULT_WORKSPACE_ID,
-                    "默认工作区",
-                    "历史数据和未显式指定归属的资源所在工作区。",
-                    now,
-                    now,
-                ),
-            )
-            if runtime_paths.USING_CUSTOM_DATA_ROOT:
-                default_project = conn.execute(
-                    "SELECT root_path FROM projects WHERE id = ?",
-                    (DEFAULT_PROJECT_ID,),
-                ).fetchone()
-                current_root = str(default_project["root_path"] or "") if default_project else ""
-                if _is_stale_desktop_default_project_path(current_root):
-                    conn.execute(
-                        "UPDATE projects SET root_path = ?, updated_at = ? WHERE id = ?",
-                        (str(default_project_root()), now, DEFAULT_PROJECT_ID),
-                    )
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO projects (
-                    id, workspace_id, name, description, root_path,
-                    instructions_file, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, '', 'active', ?, ?)
-                """,
-                (
-                    DEFAULT_PROJECT_ID,
-                    DEFAULT_WORKSPACE_ID,
-                    "默认项目",
-                    "历史会话和未显式选择项目的运行所在项目。",
-                    str(default_project_root()),
-                    now,
-                    now,
-                ),
-            )
-            for table in ("agents", "mcp_servers", "http_tools", "skills"):
-                conn.execute(
-                    f"UPDATE {table} SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''",
-                    (DEFAULT_WORKSPACE_ID,),
-                )
-            for table in ("chat_sessions", "chat_runs", "run_events", "memory_nodes", "subagent_invocations"):
-                conn.execute(
-                    f"UPDATE {table} SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''",
-                    (DEFAULT_WORKSPACE_ID,),
-                )
-                conn.execute(
-                    f"UPDATE {table} SET project_id = ? WHERE project_id IS NULL OR project_id = ''",
-                    (DEFAULT_PROJECT_ID,),
-                )
-            conn.execute(
-                "UPDATE skill_evolution_records SET project_id = ? WHERE project_id IS NULL OR project_id = ''",
-                (DEFAULT_PROJECT_ID,),
-            )
-            _migrate_project_resource_bindings(conn, now=now)
             conn.executescript("""
                 CREATE INDEX IF NOT EXISTS idx_chat_sessions_project_updated
                     ON chat_sessions(project_id, updated_at DESC);
@@ -543,6 +493,7 @@ def ensure_db() -> None:
                 CREATE INDEX IF NOT EXISTS idx_trace_observations_project_started
                     ON trace_observations(project_id, started_at DESC);
             """)
+            upgrade_session_schema(conn)
             conn.commit()
             _initialized_paths.add(path)
             from src.tenancy.context import current_tenant
@@ -624,7 +575,7 @@ def _workspace_project_record_store() -> WorkspaceProjectRecordStore:
         bind_workspace_resources=_bind_workspace_resources,
         resource_tables=_PROJECT_RESOURCE_TABLES,
         default_workspace_id=DEFAULT_WORKSPACE_ID,
-        project_root=default_project_root(),
+        project_root=runtime_paths.tenant_root(),
     )
 
 
@@ -668,7 +619,13 @@ def get_project(project_id: str) -> dict[str, Any] | None:
 def create_project(data: dict[str, Any]) -> dict[str, Any]:
     """创建 Project。"""
 
-    return _workspace_project_record_store().create_project(data)
+    project = _workspace_project_record_store().create_project(data)
+    from src.skills.service import catalog_for
+    catalog = catalog_for()
+    for item in catalog.candidates:
+        if item.state != "invalid" and item.installed:
+            upsert_project_resource_binding({"project_id": project["id"], "resource_type": "skill", "resource_id": item.id, "enabled": True})
+    return project
 
 
 def update_project(project_id: str, changes: dict[str, Any]) -> dict[str, Any] | None:
@@ -698,6 +655,8 @@ def get_workspace_resource(
                 return {"id": agent.id, "workspaceId": agent.workspace_id}
         except Exception:
             pass
+    if resource_type == "skill":
+        return None  # 必须带 Workspace/Project 上下文经文件 resolver 校验。
     found = _workspace_project_record_store().get_workspace_resource(resource_type, resource_id)
     if found is not None:
         return found
@@ -923,6 +882,11 @@ def _skill_run_record_store() -> SkillRunRecordStore:
 
 def get_active_skill_run(session_id: str, agent_id: str) -> dict[str, Any] | None:
     return _skill_run_record_store().get_active(session_id, agent_id)
+
+
+def list_recent_skill_run_refs(session_id: str, agent_id: str, *, limit: int = 5) -> list[str]:
+    """会话 Skill 恢复使用稳定身份，不按同名包猜测。"""
+    return _skill_run_record_store().list_recent_skill_refs(session_id, agent_id, limit=limit)
 
 
 def list_recent_skill_run_names(session_id: str, agent_id: str, *, limit: int = 5) -> list[str]:
@@ -1399,6 +1363,7 @@ def list_chat_runs(
     limit: int = 50,
     *,
     project_id: str | None = None,
+    session_id: str | None = None,
     trigger_source: str | None = None,
 ) -> list[dict[str, Any]]:
     """列出持久化 Chat Run。"""
@@ -1406,6 +1371,7 @@ def list_chat_runs(
     return _chat_run_record_store().list(
         limit,
         project_id=project_id,
+        session_id=session_id,
         trigger_source=trigger_source,
     )
 

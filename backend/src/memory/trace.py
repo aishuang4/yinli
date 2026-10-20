@@ -23,6 +23,7 @@ def record_memory_audit_event(
     title: str,
     content: str = "",
     payload: dict[str, Any] | None = None,
+    run_id: str = "",
 ) -> None:
     """写入单条记忆审计 Trace，失败不能影响主流程。"""
 
@@ -34,6 +35,8 @@ def record_memory_audit_event(
         audit_payload = {
             "type": "memory",
             "memoryType": action,
+            "sessionId": session_id,
+            "runId": run_id,
             **(payload or {}),
         }
         _record_run_event(

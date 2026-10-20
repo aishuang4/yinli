@@ -1,31 +1,21 @@
-"""Skill 包发现。正文只来自 SKILL.md，不依赖 sqlite content。
-
-禁止 import `src.server.routes`。
-"""
-
+"""旧 catalog Skill API 的文件领域兼容投影；不保留第二套扫描规则。"""
 from __future__ import annotations
 
 import hashlib
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
-
-from src.catalog.paths import workspace_catalog_root
+from src.skills.catalog import SYSTEM_SKILL_IDS, build_skill_catalog, current_skill_context, stable_skill_id
+from src.skills.models import SkillError, SkillSourceRoot
+from src.skills.parser import parse_manual
 from src.config.runtime_paths import skill_packages_root
 
-SYSTEM_SKILL_IDS = ("yinli-catalog", "yinli-charts", "word-documents")
-# 合格 Chat 无条件追加的系统说明书（file-catalog-v1 §9.2）；其余包可经 availableToAllAgents 共享，或写入 Agent 配置。
 ALWAYS_INJECTED_SKILL_IDS = ("yinli-catalog",)
-_SKILL_DIR_NAMES = (".agents/skills", ".agent/skills", ".claude/skills")
-_FRONTMATTER_RE = re.compile(r"\A---\s*\n(?P<yaml>.*?)\n---\s*\n?(?P<body>.*)\Z", re.DOTALL)
 
 
 @dataclass(frozen=True)
 class DiscoveredSkill:
-    """磁盘上的一个 Skill 包。"""
-
+    """兼容旧文件发现接口的只读投影。"""
     id: str
     name: str
     description: str
@@ -38,165 +28,75 @@ class DiscoveredSkill:
     source_scope: str = "project"
     source_path: str = ""
     content_hash: str = ""
+    load_name: str = ""
 
 
-def read_package_markdown(resource_path: str | Path) -> str:
-    """读取包内 SKILL.md；缺失则空字符串。"""
-
-    skill_md = Path(resource_path) / "SKILL.md"
-    if not skill_md.is_file():
-        return ""
+def read_package_skill_bytes(resource_path):
     try:
-        return skill_md.read_text(encoding="utf-8")
+        return (Path(resource_path) / "SKILL.md").read_bytes()
     except OSError:
+        return b""
+
+
+def package_skill_sha256(resource_path):
+    raw = read_package_skill_bytes(resource_path)
+    return hashlib.sha256(raw).hexdigest() if raw else ""
+
+
+def read_package_markdown(resource_path):
+    try:
+        return parse_manual(read_package_skill_bytes(resource_path), Path(resource_path).name).markdown
+    except SkillError:
         return ""
 
 
-def _split_frontmatter(markdown: str) -> tuple[dict, str]:
-    match = _FRONTMATTER_RE.match(markdown)
-    if not match:
-        return {}, markdown
+def _discovered_from_package(package_dir, *, enabled, source_kind, source_scope, stable_id=None):
+    """仅供历史调用显式读取一个包；所有目录冲突由 build_skill_catalog 处理。"""
+    directory = Path(package_dir).resolve()
     try:
-        payload = yaml.safe_load(match.group("yaml")) or {}
-    except yaml.YAMLError:
-        return {}, markdown
-    if not isinstance(payload, dict):
-        return {}, markdown
-    return payload, match.group("body")
-
-
-def _package_resources(package_dir: Path) -> list[str]:
-    return sorted(
-        str(path.relative_to(package_dir))
-        for path in package_dir.rglob("*")
-        if path.is_file()
-    )
-
-
-def _discovered_from_package(
-    package_dir: Path,
-    *,
-    enabled: bool,
-    source_kind: str,
-    source_scope: str,
-    stable_id: str | None = None,
-) -> DiscoveredSkill | None:
-    skill_md = package_dir / "SKILL.md"
-    if not skill_md.is_file():
+        manual = parse_manual((directory / "SKILL.md").read_bytes(), directory.name)
+        from src.skills.catalog import _resources
+        resources = _resources(directory)
+    except (OSError, SkillError):
         return None
-    try:
-        markdown = skill_md.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    metadata, body = _split_frontmatter(markdown)
-    name = str(metadata.get("name") or package_dir.name).strip()
-    description = str(metadata.get("description") or "").strip()
-    if not name or not description:
-        return None
-    content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()[:16]
-    skill_id = stable_id or f"external-{content_hash}"
-    return DiscoveredSkill(
-        id=skill_id,
-        name=name,
-        description=description,
-        trigger=str(metadata.get("trigger") or description),
-        markdown=markdown.strip() or body,
-        resource_path=str(package_dir),
-        resources=_package_resources(package_dir),
-        enabled=enabled,
-        source_kind=source_kind,
-        source_scope=source_scope,
-        source_path=str(skill_md),
-        content_hash=content_hash,
-    )
+    root = SkillSourceRoot(key=f"explicit-{source_kind}", owner_key=source_scope, path=directory.parent,
+                           priority=0, scope=source_scope, kind=source_kind)
+    return DiscoveredSkill(id=stable_id or stable_skill_id(root, directory.name), name=manual.name,
+                          description=manual.description, trigger=str(manual.metadata.get("trigger") or manual.description),
+                          markdown=manual.markdown, resource_path=str(directory), resources=list(resources), enabled=enabled,
+                          source_kind=source_kind, source_scope=source_scope, source_path=str(directory / "SKILL.md"),
+                          content_hash=manual.content_hash)
 
 
-def discover_skill_packages(
-    project_root: Path,
-    *,
-    user_data_root: Path,
-    user_home_root: Path | None,
-    workspace_id: str = "default",
-) -> list[DiscoveredSkill]:
-    """扫描项目 / 用户 / Workspace catalog 下的 Skill 包。user_home_root 为 None（hosted）时跳过。"""
-
-    roots: list[tuple[Path, str, bool, str]] = []
-    bases: list[tuple[Path, str, bool, str]] = [
-        (project_root, "project", True, "external_agents"),
-        (user_data_root, "user", False, "external_agents"),
-    ]
-    if user_home_root is not None:
-        bases.append((user_home_root, "user", False, "external_agents"))
-    for base, scope, enabled, kind in bases:
-        for directory_name in _SKILL_DIR_NAMES:
-            roots.append((Path(base) / directory_name, scope, enabled, kind))
-    try:
-        roots.append((workspace_catalog_root(workspace_id) / "skills", "user", False, "workspace"))
-    except ValueError:
-        pass
-
-    discovered: list[DiscoveredSkill] = []
-    seen: set[str] = set()
-    for root, scope, enabled, source_kind in roots:
-        try:
-            resolved = root.resolve()
-        except OSError:
-            continue
-        if not resolved.is_dir():
-            continue
-        for skill_md in sorted(resolved.glob("*/SKILL.md")):
-            package_dir = skill_md.parent.absolute()
-            try:
-                if not package_dir.is_relative_to(resolved):
-                    continue
-            except ValueError:
-                continue
-            item = _discovered_from_package(
-                package_dir,
-                enabled=enabled,
-                source_kind=source_kind,
-                source_scope=scope,
-            )
-            if item is None or item.id in seen:
-                continue
-            seen.add(item.id)
-            discovered.append(item)
-    return discovered
+def _project_context(project_root, workspace_id="default"):
+    return current_skill_context()
 
 
-def list_system_skill_packages() -> list[DiscoveredSkill]:
-    """skill_packages_root() 中的系统包。"""
-
-    items: list[DiscoveredSkill] = []
-    root = skill_packages_root()
-    for skill_id in SYSTEM_SKILL_IDS:
-        item = _discovered_from_package(
-            root / skill_id,
-            enabled=True,
-            source_kind="system",
-            source_scope="system",
-            stable_id=skill_id,
-        )
-        if item is not None:
-            items.append(item)
-    return items
+def discover_skill_packages(project_root, *, user_data_root, user_home_root, workspace_id="default"):
+    context = _project_context(project_root, workspace_id).model_copy(update={"tenant_root": Path(user_data_root), "home_root": user_home_root})
+    catalog = build_skill_catalog(context)
+    from src.skills.reader import read_skill
+    from src.skills.catalog import resolve_skill
+    return [DiscoveredSkill(id=item.id, name=item.name, description=item.description, trigger=item.trigger,
+                            markdown=read_skill(resolve_skill(item.id, catalog, require_enabled=False)).markdown,
+                            resource_path=str(item.package_path), resources=list(item.resources), enabled=item.enabled,
+                            source_kind=item.root.kind, source_scope=item.root.scope, source_path=str(item.source_path),
+                            content_hash=item.content_hash, load_name=item.load_name)
+            for item in catalog.candidates if item.state != "invalid"]
 
 
-def project_skill_refs(project_root: Path) -> set[str]:
-    """当前 Project `.agents/skills` 等目录下默认可运行的 id 与 name。"""
+def discover_project_skill_packages(project_root):
+    """兼容旧调用；Project 不再拥有 Skill 包来源。"""
 
-    refs: set[str] = set()
-    root = Path(project_root)
-    for directory_name in _SKILL_DIR_NAMES:
-        for skill_md in sorted((root / directory_name).glob("*/SKILL.md")) if (root / directory_name).is_dir() else []:
-            item = _discovered_from_package(
-                skill_md.parent.absolute(),
-                enabled=True,
-                source_kind="external_agents",
-                source_scope="project",
-            )
-            if item is None:
-                continue
-            refs.add(item.id)
-            refs.add(item.name)
-    return refs
+    return []
+
+
+def list_system_skill_packages():
+    return [item for skill_id in SYSTEM_SKILL_IDS if (item := _discovered_from_package(
+        skill_packages_root() / skill_id, enabled=True, source_kind="system", source_scope="system", stable_id=skill_id))]
+
+
+def project_skill_refs(project_root):
+    """兼容旧调用；Project Skill 自动放行已删除。"""
+
+    return set()

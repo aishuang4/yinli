@@ -49,7 +49,11 @@ def start_or_resume_skill_run(
         "skillName": skill.name,
         "status": status,
         "currentStep": current_step or (existing or {}).get("currentStep", ""),
-        "collectedInputs": collected_inputs if collected_inputs is not None else (existing or {}).get("collectedInputs", {}),
+        "collectedInputs": {
+            **(collected_inputs if collected_inputs is not None else (existing or {}).get("collectedInputs", {})),
+            "_skillSource": {"id": skill.id, "loadName": skill.load_name, "sourcePath": skill.source_path,
+                             "contentHash": skill.content_hash},
+        },
         "pendingInteractionId": pending_interaction_id,
         "createdAt": (existing or {}).get("createdAt", ""),
     })

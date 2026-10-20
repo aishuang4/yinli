@@ -7,6 +7,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from typing import Any
 
 from agentscope.message import UserMsg
 
@@ -14,7 +15,10 @@ from src.agents.factory import RuntimeToolScope
 
 logger = logging.getLogger(__name__)
 from src.agents.runtime_types import MAX_REACT_ITERS
-from src.server.routes.chat.hitl import build_automatic_confirm_resume
+from src.server.routes.chat.hitl import (
+    _create_pending_interaction,
+    build_automatic_confirm_resume,
+)
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import ChatRunContext
 from src.server.routes.chat.prompts import _build_file_attachments_user_note
@@ -39,11 +43,13 @@ from src.server.routes.chat.team_runtime.store import (
     TERMINAL_TASK_STATUSES,
     TeamStore,
 )
+from src.runtime.authorization import RunAuthorizationBinding
 from src.server.routes.chat.team_runtime.tools import leader_tools, member_tools
 from src.server.routes.chat.trace_recorder import _make_fallback_trace_recorder
 
 
 FlushEvents = Callable[[], Awaitable[None]]
+MemberPermissionWaiter = Callable[[Any], Awaitable[object]]
 DISABLED_TOOL_SCOPE = RuntimeToolScope(
     allow_mcp=False,
     allow_knowledge=False,
@@ -69,12 +75,28 @@ class TeamSessionError(RuntimeError):
     """Team 成员 session 未按领域协议结束。"""
 
 
+async def _build_team_authorization(
+    ctx: ChatRunContext,
+    actor_id: str,
+) -> RunAuthorizationBinding | None:
+    """为 Team Leader/Member 构造独立 actor 授权；离线单测没有后台 Run 时保持旧 fixture。"""
+
+    from src.server.routes.chat.background_runs import current_chat_background_run_id
+
+    if not current_chat_background_run_id():
+        return None
+    from src.server.routes.chat.authorization import build_chat_authorization
+
+    return await build_chat_authorization(ctx, actor_id=actor_id)
+
+
 async def run_leader_coordination(
     *,
     store: TeamStore,
     ctx: ChatRunContext,
     run_data: ChatMessage,
     flush_events: FlushEvents,
+    permission_waiter: MemberPermissionWaiter | None = None,
 ) -> None:
     """运行只负责建队和任务拆分的 Leader session。"""
 
@@ -84,6 +106,7 @@ async def run_leader_coordination(
     tools = leader_tools(store)
     allowlist = {tool.name for tool in tools}
     # Leader 复用 Chat 已算好的记忆两段：Markdown 摘要进 system prompt，本轮召回附在目标后面。
+    authorization = await _build_team_authorization(ctx, "leader")
     agent = _create_team_agent(
         ctx=ctx,
         actor_id="leader",
@@ -96,7 +119,32 @@ async def run_leader_coordination(
         used_skills=list(getattr(ctx, "used_skills", None) or []),
         max_react_iters=LEADER_MAX_REACT_ITERS,
         skill_context=bool(getattr(ctx, "used_skills", None)),
+        authorization=authorization,
     )
+
+    async def wait_for_leader_permission(event_type: str, event_data: dict) -> object:
+        if permission_waiter is None:
+            return _build_team_tool_denial(event_type, event_data)
+        interaction = _create_pending_interaction(
+            interaction_type=event_type,
+            agent=agent,
+            session_id=ctx.session_id,
+            agent_id="leader",
+            agent_name=ctx.agent_name,
+            model_name=ctx.model_name,
+            reply_id=str(event_data.get("reply_id") or ""),
+            tool_calls=list(event_data.get("tool_calls") or []),
+            resume_tool_calls=list(event_data.get("tool_calls") or []),
+            message=run_data.message,
+            assistant_text="",
+            skill_runs=[],
+            scope="team",
+            chat_data={"teamRunId": store.ref.id, "teamMemberId": "leader", "teamMemberInteraction": True},
+            run_id=str(store.run().get("chatRunId") or ""),
+            persist=ctx.persist_run,
+        )
+        return await permission_waiter(interaction)
+
     try:
         await _run_agent_stream(
             agent=agent,
@@ -117,6 +165,7 @@ async def run_leader_coordination(
             flush_events=flush_events,
             stop_after_tool_name="team_finish_coordination",
             on_model_call=_model_call_observer(ctx, scope="team_leader", agent_id="leader", agent_name=ctx.agent_name),
+            permission_waiter=wait_for_leader_permission,
         )
     except TeamSessionError:
         if not _finish_coordination_if_ready(store, reason="Leader session 在调用 team_finish_coordination 前结束"):
@@ -136,6 +185,7 @@ async def run_member_task(
     member: dict,
     task: dict,
     flush_events: FlushEvents,
+    permission_waiter: MemberPermissionWaiter | None = None,
 ) -> None:
     """运行一个 Member 的单任务隔离 session。"""
 
@@ -167,6 +217,7 @@ async def run_member_task(
         agent_id=member_agent_id,
         session_id=f"{ctx.session_id}:{member_id}",
     )
+    authorization = await _build_team_authorization(ctx, member_id)
     agent = _create_team_agent(
         ctx=ctx,
         actor_id=member_id,
@@ -187,7 +238,39 @@ async def run_member_task(
         knowledge_tools=ctx.knowledge_tools,
         max_react_iters=MEMBER_MAX_REACT_ITERS,
         skill_context=bool(member_skills),
+        authorization=authorization,
     )
+
+    async def wait_for_permission(event_type: str, event_data: dict) -> object:
+        """把成员审批挂到 Chat 的精确 interaction，并等待同一个 Agent 恢复事件。"""
+
+        if permission_waiter is None:
+            return _build_team_tool_denial(event_type, event_data)
+        interaction = _create_pending_interaction(
+            interaction_type=event_type,
+            agent=agent,
+            session_id=ctx.session_id,
+            agent_id=member_id,
+            agent_name=actor_name,
+            model_name=ctx.model_name,
+            reply_id=str(event_data.get("reply_id") or ""),
+            tool_calls=list(event_data.get("tool_calls") or []),
+            resume_tool_calls=list(event_data.get("tool_calls") or []),
+            message=run_data.message,
+            assistant_text="",
+            skill_runs=[],
+            scope="team",
+            chat_data={
+                "teamRunId": store.ref.id,
+                "teamMemberId": member_id,
+                "teamTaskId": task_id,
+                "teamMemberInteraction": True,
+            },
+            run_id=str(store.run().get("chatRunId") or ""),
+            persist=ctx.persist_run,
+        )
+        return await permission_waiter(interaction)
+
     await _run_agent_stream(
         agent=agent,
         user_msg=UserMsg(
@@ -206,6 +289,7 @@ async def run_member_task(
         flush_events=flush_events,
         allow_iteration_recovery=True,
         on_model_call=_model_call_observer(ctx, scope="team_member", agent_id=member_id, agent_name=actor_name),
+        permission_waiter=wait_for_permission,
     )
     if store.task(task_id).get("status") != "succeeded":
         raise TeamSessionError("Member session 结束时没有通过 team_submit_result 完成当前任务")
@@ -278,7 +362,10 @@ def _member_runtime_skills(ctx: ChatRunContext) -> list:
         str(getattr(skill, "id", "") or "")
         for skill in list(getattr(ctx, "forced_skills", None) or [])
     }
-    allowed = configured | {item for item in forced if item}
+    from src.skills.registry import resolve_installed_skills
+    available = list(getattr(ctx, "used_skills", None) or [])
+    resolved, _missing = resolve_installed_skills(list(configured), external_skills=available)
+    allowed = configured | {item.id for item in resolved} | {item for item in forced if item}
     return [
         skill
         for skill in list(getattr(ctx, "used_skills", None) or [])
@@ -300,6 +387,18 @@ def _skill_paths_for(ctx: ChatRunContext, used_skills: list) -> list[str]:
     return resolve_runtime_skill_paths(used_skills, runtime_context=getattr(ctx, "runtime_context", None))
 
 
+def _parent_run_snapshot(ctx: ChatRunContext) -> dict | None:
+    """Leader、Member 與綜合讀父 Run 已凍結的 snapshot，不重新解析 grant。"""
+
+    runtime_context = getattr(ctx, "runtime_context", None)
+    run_id = str(getattr(runtime_context, "run_id", "") or "")
+    if not run_id:
+        return None
+    from src.sessions.run_binding import frozen_resources_for_run
+
+    return frozen_resources_for_run(run_id)
+
+
 def _create_team_agent(
     *,
     ctx: ChatRunContext,
@@ -317,6 +416,7 @@ def _create_team_agent(
     max_react_iters: int,
     skill_context: bool = False,
     write_scope_dir: str = "",
+    authorization: RunAuthorizationBinding | None = None,
 ):
     """使用唯一 cache key 创建隔离 Team Member Agent，并挂上与单 Agent 相同的上下文治理 middleware。"""
 
@@ -327,6 +427,11 @@ def _create_team_agent(
             max_react_iters=max_react_iters,
         ),
     )
+    parent_snapshot = _parent_run_snapshot(ctx)
+    if parent_snapshot is None:
+        from src.sessions.errors import SessionError
+
+        raise SessionError("snapshot_required", "Team 成员缺少父 Run 快照")
     spec = build_main_agent_runtime_spec(
         agent_id=f"{ctx.agent_id}:{runtime_key}",
         session_id=session_id,
@@ -348,6 +453,9 @@ def _create_team_agent(
         workspace_dir=str(getattr(ctx, "session_workspace_dir", "") or ""),
         write_scope_dir=write_scope_dir,
         extra_filesystem_scopes=list(getattr(ctx, "extra_filesystem_scopes", None) or []),
+        authorization=authorization,
+        run_snapshot=parent_snapshot,
+        apply_snapshot_filesystem=False,
     )
     agent = create_main_agent_from_spec(
         spec,
@@ -417,6 +525,7 @@ async def _run_agent_stream(
     stop_after_tool_name: str = "",
     on_output_delta: Callable[[str], Awaitable[None]] | None = None,
     on_model_call: Callable[[object, str, dict], Awaitable[None]] | None = None,
+    permission_waiter: Callable[[str, dict], Awaitable[object]] | None = None,
 ) -> str:
     """把 AgentScope 过程转换为 Team domain event。"""
 
@@ -450,33 +559,40 @@ async def _run_agent_stream(
         async for raw_event in agent.reply_stream(next_input):
             data = raw_event.model_dump(mode="json")
             event_type = str(data.pop("type", "UNKNOWN"))
+            from src.runtime.authorization import public_authorization_event
+
+            data = public_authorization_event(agent, event_type, data)
             if on_model_call is not None and event_type in {"MODEL_CALL_START", "MODEL_CALL_END"}:
                 await on_model_call(agent, event_type, data)
             if event_type in {"REQUIRE_USER_CONFIRM", "REQUIRE_EXTERNAL_EXECUTION"}:
                 await flush_pending_delta()
-                automatic_denials += 1
-                if automatic_denials > MAX_AUTOMATIC_TOOL_DENIALS:
-                    raise TeamSessionError(
-                        f"Member session 累计请求交互式工具超过 {MAX_AUTOMATIC_TOOL_DENIALS} 次",
-                    )
-                resume_event = _build_team_tool_denial(event_type, data)
+                if permission_waiter is not None:
+                    resume_event = await permission_waiter(event_type, data)
+                else:
+                    automatic_denials += 1
+                    if automatic_denials > MAX_AUTOMATIC_TOOL_DENIALS:
+                        raise TeamSessionError(
+                            f"Member session 累计请求交互式工具超过 {MAX_AUTOMATIC_TOOL_DENIALS} 次",
+                        )
+                    resume_event = _build_team_tool_denial(event_type, data)
                 reason = (
                     "requires_user_confirmation"
                     if event_type == "REQUIRE_USER_CONFIRM"
                     else "requires_external_execution"
                 )
-                for tool_call in data.get("tool_calls") or []:
-                    store.record_member_event(
-                        "member.tool.denied",
-                        member_id=actor_id,
-                        task_id=task_id,
-                        status="denied",
-                        payload={
-                            "toolCallId": str(tool_call.get("id") or ""),
-                            "name": str(tool_call.get("name") or "tool"),
-                            "reason": reason,
-                        },
-                    )
+                if permission_waiter is None:
+                    for tool_call in data.get("tool_calls") or []:
+                        store.record_member_event(
+                            "member.tool.denied",
+                            member_id=actor_id,
+                            task_id=task_id,
+                            status="denied",
+                            payload={
+                                "toolCallId": str(tool_call.get("id") or ""),
+                                "name": str(tool_call.get("name") or "tool"),
+                                "reason": reason,
+                            },
+                        )
                 await flush_events()
                 break
             if event_type == "EXCEED_MAX_ITERS":
@@ -581,6 +697,15 @@ async def _run_agent_stream(
                     },
                 )
                 recorded = True
+            elif event_type == "TOOL_CALL_END":
+                if data.get("input") is not None:
+                    store.record_member_event(
+                        "member.tool.input", member_id=actor_id, task_id=task_id,
+                        payload={"toolCallId": str(data.get("tool_call_id") or ""),
+                                 "name": tool_names.get(str(data.get("tool_call_id") or ""), "tool"),
+                                 "input": data["input"]},
+                    )
+                    recorded = True
             elif event_type == "TOOL_RESULT_END":
                 tool_call_id = str(data.get("tool_call_id") or "")
                 failed = str(data.get("state") or "").lower() in {"error", "failed", "denied"}
@@ -596,6 +721,7 @@ async def _run_agent_stream(
                         "toolCallId": tool_call_id,
                         "name": completed_tool_name,
                         "state": str(data.get("state") or ""),
+                        "authorization": data.get("authorization") or {},
                     },
                 )
                 recorded = True
@@ -686,18 +812,24 @@ def _leader_system_prompt(store: TeamStore, run_data: ChatMessage) -> str:
 
 
 def _member_write_dir(ctx: ChatRunContext, store: TeamStore, member_id: str) -> str:
-    """成员私有可写目录：<session workspace>/team/<run>/<member>，不存在则创建。"""
+    """成員私有可寫目錄：`<session-root>/team/<run>/<member>`。"""
 
     base = str(getattr(ctx, "session_workspace_dir", "") or "")
-    if not base:
-        return ""
     from pathlib import Path
 
-    directory = Path(base) / "team" / store.ref.id / member_id
+    from src.config.runtime_paths import SessionPathError, session_member_root
+
     try:
+        directory = session_member_root(ctx.session_id, store.ref.id, member_id)
         directory.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return ""
+    except (OSError, SessionPathError, ValueError):
+        if not base:
+            return ""
+        directory = Path(base) / "team" / store.ref.id / member_id
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return ""
     return str(directory)
 
 

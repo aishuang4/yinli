@@ -23,7 +23,6 @@ import { SubagentTaskDetail } from '../features/subagents/SubagentTaskDetail';
 import { matchText } from '../features/subagents/subagentViewUtils';
 import { useSubagents } from '../hooks/useSubagents';
 import type { SubagentDefinition, SubagentInvocation } from '../types/subagent';
-import { useAppStore } from '../stores/appStore';
 
 type SubagentDetailTab = 'definition' | 'history';
 type SubagentPageTab = 'tasks' | 'definitions';
@@ -43,7 +42,6 @@ export function SubagentsPage() {
   const [selectedName, setSelectedName] = useState('');
   const [activeTab, setActiveTab] = useState<SubagentDetailTab>('definition');
   const [selectedInvocation, setSelectedInvocation] = useState<SubagentInvocation | null>(null);
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
 
   const filteredDefinitions = useMemo(() => (
     definitions.filter((definition) => matchText(query, [
@@ -133,7 +131,7 @@ export function SubagentsPage() {
         )}
       >
         <div className="h-full overflow-y-auto p-5">
-          <SubagentTaskDetail invocation={resolvedSelectedInvocation} projectId={activeProjectId} onRefresh={refresh} />
+          <SubagentTaskDetail invocation={resolvedSelectedInvocation} onRefresh={refresh} />
         </div>
       </WorkbenchDetailShell>
     );
@@ -262,7 +260,7 @@ export function SubagentsPage() {
           ) : (
             <SubagentInvocationList
               invocations={taskInvocations}
-              title="当前 Project 的全部任务"
+              title="全部任务"
               emptyDescription="暂无匹配的 Subagent 任务"
               onSelect={setSelectedInvocation}
             />

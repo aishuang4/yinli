@@ -68,8 +68,6 @@ export interface GroupStudioBudget {
 export interface GroupStudioSnapshot {
   modelConfigId?: string;
   id: string;
-  projectId: string;
-  workspaceId: string;
   chatSessionId: string;
   title: string;
   status: GroupStudioStatus;
@@ -100,8 +98,6 @@ export interface GroupStudioListItem {
   id: string;
   title: string;
   status: GroupStudioStatus;
-  projectId: string;
-  workspaceId: string;
   chatSessionId: string;
   updatedAt: string;
 }

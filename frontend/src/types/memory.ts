@@ -26,8 +26,7 @@ export interface TimelineMessage {
 }
 
 export interface TimelineQuery {
-  workspaceId?: string;
-  projectId?: string;
+  sessionId?: string;
   agentId?: string;
   surface?: string;
   timeFrom?: string;

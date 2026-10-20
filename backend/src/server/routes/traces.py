@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from src.storage.database import (
-    DEFAULT_PROJECT_ID,
     get_chat_run,
     list_chat_runs,
     list_trace_observations,
@@ -123,22 +122,33 @@ def _summary_from_run(record: dict, observations: list[dict] | None = None) -> T
 
 @router.get("", response_model=list[TraceSummary])
 async def list_traces(
-    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+    session_id: str | None = Query(default=None, alias="sessionId"),
+    scope: str = Query(default=""),
+    project_id: str = Query(default="", alias="projectId"),
 ) -> list[TraceSummary]:
-    """列出当前 Project 的 Chat Run Trace。"""
+    """按 Session 列出 Trace；scope=tenant 才是當前 tenant 的全局視圖。"""
 
-    return [_summary_from_run(record) for record in list_chat_runs(MAX_TRACE_SUMMARIES, project_id=project_id)]
+    _ = project_id
+    if scope == "tenant":
+        runs = list_chat_runs(MAX_TRACE_SUMMARIES)
+    elif session_id:
+        runs = list_chat_runs(MAX_TRACE_SUMMARIES, session_id=session_id)
+    else:
+        runs = list_chat_runs(MAX_TRACE_SUMMARIES)
+    return [_summary_from_run(record) for record in runs]
 
 
 @router.get("/{trace_id}", response_model=TraceDetail)
 async def get_trace(
     trace_id: str,
-    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+    session_id: str | None = Query(default=None, alias="sessionId"),
+    project_id: str = Query(default="", alias="projectId"),
 ) -> TraceDetail:
-    """按 Chat Run id 返回 Observation 时间线。Session id 会 404。"""
+    """按 Run id 返回時間線，並在帶了 sessionId 時核對歸屬。"""
 
+    _ = project_id
     record = get_chat_run(trace_id)
-    if record is None or str(record.get("projectId") or "") != project_id:
+    if record is None or (session_id and str(record.get("sessionId") or "") != session_id):
         raise HTTPException(status_code=404, detail="Trace not found")
     observations = list_trace_observations(trace_id)
     if not observations:

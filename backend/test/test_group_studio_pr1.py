@@ -17,6 +17,7 @@ from src.group_studio.settings import (
     set_group_studio_settings,
 )
 from src.server.routes import group_studio, settings as settings_routes
+from test.snapshot_support import freeze_test_snapshot
 from src.server.routes.chat.runtime_builder import (
     MainAgentRuntimeSpec,
     RuntimeModelConfig,
@@ -200,6 +201,8 @@ def test_main_agent_spec_defaults_include_default_tools():
         runtime_tool_scope=RuntimeToolScope(),
         guardrail_cache_key="guardrails",
         include_default_tools=False,
+        run_snapshot=freeze_test_snapshot(),
+        apply_snapshot_filesystem=False,
     )
 
     assert isinstance(spec, MainAgentRuntimeSpec)
@@ -222,6 +225,8 @@ def test_main_agent_spec_defaults_include_default_tools():
         knowledge_tools=[],
         runtime_tool_scope=RuntimeToolScope(),
         guardrail_cache_key="guardrails",
+        run_snapshot=freeze_test_snapshot(),
+        apply_snapshot_filesystem=False,
     )
     assert default_spec.include_default_tools is True
 

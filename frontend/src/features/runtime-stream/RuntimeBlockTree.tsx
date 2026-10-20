@@ -153,7 +153,7 @@ export function RuntimeBlockTree({
         return block ? [block] : [];
       });
       return (
-        <div key={segment.ids.join(':')} className="space-y-1">
+        <div key={segment.ids[0]} className="flex min-w-0 flex-col gap-1">
           {tools.map((tool) => <ToolCallRow key={tool.id} tool={tool} />)}
         </div>
       );

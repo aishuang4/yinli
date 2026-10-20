@@ -9,7 +9,6 @@ describe('visibleSettingsNavItems', () => {
     expect(items.map((item) => item.id)).toEqual([
       'settings-appearance',
       'settings-notifications',
-      'settings-context',
     ]);
   });
 
@@ -20,7 +19,6 @@ describe('visibleSettingsNavItems', () => {
       'settings-group-studio',
       'settings-appearance',
       'settings-notifications',
-      'settings-context',
       'settings-user-data',
     ]);
   });

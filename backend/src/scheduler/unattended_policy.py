@@ -1,22 +1,15 @@
-"""无人值守 Job 的 confirm 工具检查。
-
-Skill 含 scripts/ 视为需要 Bash；cwd Write/Edit 由 overlay 批准，
-不计入 would_fail_tools。read_only 不能激活写产物 Job。
-"""
+"""定时任务能力检查；需要人工批准属于执行策略，不能冒充能力缺失。"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from agentscope.permission import PermissionMode
-
 from src.scheduler.models import JobToolScope
-from src.security.permissions import ApprovalPolicy, build_permission_profile
+from src.security.permissions import build_permission_profile
 
 
 _ALWAYS_INJECTED_TOOLS = ("Read", "Grep", "Glob", "Write", "Edit")
-_OVERLAY_APPROVED_TOOLS = frozenset({"Write", "Edit"})
 _SCOPE_TOOL_NAMES = {
     "allow_bash": "Bash",
     "allow_http": "HttpRequest",
@@ -43,28 +36,15 @@ def skill_package_has_scripts(skill: Any | None) -> bool:
     return False
 
 
-def frozen_skills_require_bash(skill_ids: list[str]) -> bool:
+def frozen_skills_require_bash(skill_ids: list[str], *, project_root=None, workspace_id="default") -> bool:
     """任一冻结 Skill 含 scripts/ 则 confirm 时强制 allow_bash。"""
 
-    from src.server.routes.skills import get_installed_skill
+    from src.skills.registry import get_installed_skill
 
     return any(
-        skill_package_has_scripts(get_installed_skill(skill_id))
+        skill_package_has_scripts(get_installed_skill(skill_id, project_root=project_root, workspace_id=workspace_id))
         for skill_id in skill_ids
     )
-
-
-def agent_approval_policy(agent: object | None) -> ApprovalPolicy:
-    """读取无人值守实际生效的审批策略。
-
-    ``human_approval=True`` 会把 AgentScope 打成 DEFAULT，即使 profile
-    仍是 trusted_tools；overlay 只批准 cwd Write/Edit，不能当 BYPASS。
-    """
-
-    profile = build_permission_profile(getattr(agent, "guardrails", None))
-    if profile.human_approval:
-        return ApprovalPolicy.ASK_EVERY_TIME
-    return profile.tool_policy
 
 
 def injected_unattended_tools(tool_scope: JobToolScope | Any) -> list[str]:
@@ -83,31 +63,10 @@ def would_fail_unattended_tools(
     agent: object | None,
     extra_tool_names: list[str] | tuple[str, ...] = (),
 ) -> list[str]:
-    """Agent 策略下会 HITL 且 overlay 不会批准的注入工具。
+    """只阻止能力硬边界；审核可能需人工不等于能力不可用。"""
 
-    与 firing overlay / AgentScope permission mode 对齐：只有真正 BYPASS
-    才能无人值守跑 Bash；human_approval 强制 DEFAULT，Bash 会被 overlay 拒绝。
-    """
-
-    injected = injected_unattended_tools(tool_scope)
-    extras = [
-        str(name) for name in extra_tool_names
-        if str(name) and str(name) not in injected
-    ]
     profile = build_permission_profile(getattr(agent, "guardrails", None))
-    policy = agent_approval_policy(agent)
+    injected = [*injected_unattended_tools(tool_scope), *extra_tool_names]
     if profile.is_read_only:
-        return [name for name in injected if name in _OVERLAY_APPROVED_TOOLS]
-    failing: list[str] = []
-    bypass = profile.to_agentscope_permission_mode() == PermissionMode.BYPASS
-    for name in injected:
-        if name == "Bash" and not bypass:
-            failing.append(name)
-    for name in extras:
-        if name in {"Read", "Grep", "Glob", *_OVERLAY_APPROVED_TOOLS}:
-            continue
-        if name == "Bash" and not bypass:
-            failing.append(name)
-        elif name != "Bash" and policy != ApprovalPolicy.TRUSTED_TOOLS:
-            failing.append(name)
-    return failing
+        return list(dict.fromkeys(name for name in injected if name not in {"Read", "Grep", "Glob"}))
+    return []

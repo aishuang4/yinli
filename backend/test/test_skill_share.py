@@ -99,112 +99,58 @@ def test_legacy_skills_table_without_share_column_defaults_true(tmp_path, monkey
     assert rows[0]["availableToAllAgents"] is True
 
 
-def test_save_user_skills_persists_share_and_clears_content(isolated_db) -> None:
-    from src.server.routes.skills import Skill, _save_user_skills, _skills
-
-    skill = Skill(
-        id="user-share-flag",
-        name="User Share",
-        description="",
-        category="自定义",
-        content="# should be emptied",
-        enabled=True,
-        status="installed",
-        availableToAllAgents=False,
-        updatedAt="2026-09-17T00:00:00Z",
-    )
-    _skills[skill.id] = skill
-    _save_user_skills()
-    stored = next(item for item in database.list_skills() if item["id"] == skill.id)
-    assert stored["availableToAllAgents"] is False
-    assert stored["content"] == ""
-    _skills.pop(skill.id, None)
+def _registered():
+    from src.skills.registry import register_user_skill, SkillRegisterRequest
+    return register_user_skill(SkillRegisterRequest(name="demo-share", description="共享技能", content="说明书"))
 
 
-def test_catalog_share_lock_returns_409() -> None:
+def test_share_policy_does_not_persist_registration_row(isolated_db):
     from src.server.routes.skills import SkillShareRequest, set_skill_shared
+    from src.skills.policy import read_policy
+    item = _registered()
+    asyncio.run(set_skill_shared(item.id, SkillShareRequest(availableToAllAgents=False)))
+    assert database.list_skills() == []
+    assert read_policy(item._catalog_context.policy_path).overrides[item.id].shared is False
 
-    with pytest.raises(HTTPException) as exc_info:
+
+def test_catalog_share_lock_returns_409():
+    from src.server.routes.skills import SkillShareRequest, set_skill_shared
+    with pytest.raises(HTTPException) as error:
         asyncio.run(set_skill_shared("yinli-catalog", SkillShareRequest(availableToAllAgents=False)))
-    assert exc_info.value.status_code == 409
+    assert error.value.status_code == 409
 
 
-def test_uninstalled_skill_cannot_share() -> None:
-    from src.server.routes.skills import Skill, SkillShareRequest, _skills, set_skill_shared
-
-    skill = Skill(
-        id="not-installed-share",
-        name="Pending",
-        description="",
-        category="自定义",
-        status="available",
-        enabled=False,
-        updatedAt="2026-09-17T00:00:00Z",
-    )
-    _skills[skill.id] = skill
-    try:
-        with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(set_skill_shared(skill.id, SkillShareRequest(availableToAllAgents=False)))
-        assert exc_info.value.status_code == 409
-    finally:
-        _skills.pop(skill.id, None)
+def test_uninstalled_skill_cannot_share():
+    from src.server.routes.skills import SkillShareRequest, set_skill_shared, uninstall_skill
+    item = _registered()
+    asyncio.run(uninstall_skill(item.id))
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(set_skill_shared(item.id, SkillShareRequest(availableToAllAgents=False)))
+    assert error.value.status_code == 409
 
 
-def test_share_toggle_and_disable_drops_installed_lookup(isolated_db) -> None:
-    from src.server.routes.skills import (
-        Skill,
-        SkillInstallRequest,
-        SkillShareRequest,
-        _skills,
-        get_installed_skill,
-        set_skill_enabled,
-        set_skill_shared,
-    )
-
-    skill = Skill(
-        id="toggle-share-lookup",
-        name="Toggle",
-        description="",
-        category="自定义",
-        status="installed",
-        enabled=True,
-        availableToAllAgents=True,
-        updatedAt="2026-09-17T00:00:00Z",
-    )
-    _skills[skill.id] = skill
-    try:
-        updated = asyncio.run(set_skill_shared(skill.id, SkillShareRequest(availableToAllAgents=False)))
-        assert updated.available_to_all_agents is False
-        assert get_installed_skill(skill.id) is not None
-        asyncio.run(set_skill_enabled(skill.id, SkillInstallRequest(enabled=False)))
-        assert get_installed_skill(skill.id) is None
-    finally:
-        _skills.pop(skill.id, None)
+def test_share_toggle_and_disable_drops_installed_lookup(isolated_db):
+    from src.server.routes.skills import SkillInstallRequest, SkillShareRequest, set_skill_enabled, set_skill_shared
+    from src.skills.registry import get_installed_skill
+    item = _registered()
+    assert asyncio.run(set_skill_shared(item.id, SkillShareRequest(availableToAllAgents=False))).available_to_all_agents is False
+    assert get_installed_skill(item.id)
+    asyncio.run(set_skill_enabled(item.id, SkillInstallRequest(enabled=False)))
+    assert get_installed_skill(item.id) is None
 
 
-def test_discover_merges_share_override(isolated_db, monkeypatch) -> None:
-    from src.catalog.skills import DiscoveredSkill
-    from src.server.routes import skills as skills_routes
-
-    skills_routes._upsert_external_override("proj-pack", enabled=True, availableToAllAgents=False)
-    item = DiscoveredSkill(
-        id="proj-pack",
-        name="Proj Pack",
-        description="",
-        trigger="",
-        markdown="# SKILL",
-        resource_path="/tmp/proj-pack",
-        resources=["SKILL.md"],
-        enabled=True,
-        source_kind="external_agents",
-        source_scope="project",
-        source_path="/tmp/proj-pack",
-        content_hash="abc",
-    )
-    monkeypatch.setattr(skills_routes, "discover_skill_packages", lambda *args, **kwargs: [item])
-    found = skills_routes.discover_external_skills(Path("/tmp/project"))
-    assert found[0].enabled is True
-    assert found[0].available_to_all_agents is False
+def test_managed_policy_survives_manual_edit(isolated_db, tmp_path):
+    from src.skills.registry import discover_external_skills
+    from src.skills import current_skill_context
+    from src.skills.policy import set_skill_policy
+    directory = current_skill_context().tenant_root / "skills/project"
+    directory.mkdir(parents=True)
+    (directory / "SKILL.md").write_text("---\ndescription: project\n---\n步骤")
+    item = next(item for item in discover_external_skills(tmp_path) if item.name == "project")
+    set_skill_policy(item._catalog_context.policy_path, item.id, enabled=False, availableToAllAgents=False)
+    (directory / "SKILL.md").write_text("---\ndescription: changed\n---\n新步骤")
+    updated = next(candidate for candidate in discover_external_skills(tmp_path) if candidate.id == item.id)
+    assert not updated.enabled and not updated.available_to_all_agents
 
 
 def test_member_runtime_skills_ignore_shared_only() -> None:

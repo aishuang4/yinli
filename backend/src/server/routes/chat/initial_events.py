@@ -22,17 +22,19 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
     if not ctx.persist_run or not run_data.message.strip():
         return
     display_content = (run_data.display_message or run_data.message).strip()
-    _append_user_message(
+    if getattr(ctx, "trigger_source", "user") != "scheduled_job":
+        _append_user_message(
         session_id=ctx.session_id,
         agent_id=ctx.agent_id,
         agent_name=ctx.agent_name,
         mode=run_data.mode,
+        approval_mode=run_data.approval_mode,
         model_name=ctx.model_name,
         content=display_content,
         images=run_data.images,
         files=run_data.files,
-        workspace_id=ctx.runtime_context.workspace_id,
-        project_id=ctx.runtime_context.project_id,
+        workspace_id="",
+        project_id="",
     )
     _record_run_event(
         session_id=ctx.session_id,
@@ -48,8 +50,8 @@ def persist_user_message_and_trace(ctx: ChatRunContext, run_data) -> None:
             "model": ctx.model_name,
             "imageCount": len(run_data.images),
             "fileCount": len(run_data.files),
-            "workspaceId": ctx.runtime_context.workspace_id,
-            "projectId": ctx.runtime_context.project_id,
+            "workspaceId": "",
+            "projectId": "",
         },
     )
 
@@ -88,8 +90,8 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
         )
     yield source_event("SESSION", {
         "session_id": ctx.session_id,
-        "workspace_id": ctx.runtime_context.workspace_id,
-        "project_id": ctx.runtime_context.project_id,
+        "workspace_id": "",
+        "project_id": "",
     })
     _record_run_event(
         session_id=ctx.session_id,
@@ -103,8 +105,8 @@ async def emit_start_events(ctx: ChatRunContext, run_data) -> AsyncGenerator[str
             "mode": run_data.mode,
             "model": ctx.model_name,
             "sandbox": run_data.sandbox,
-            "workspaceId": ctx.runtime_context.workspace_id,
-            "projectId": ctx.runtime_context.project_id,
+            "workspaceId": "",
+            "projectId": "",
             "workspace": _workspace_trace_payload(ctx.guardrails),
         },
     )

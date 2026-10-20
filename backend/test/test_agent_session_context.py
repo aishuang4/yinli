@@ -27,6 +27,21 @@ def _fake_agent(name: str = "Agent", system_prompt: str = "prompt") -> SimpleNam
     )
 
 
+@pytest.fixture(autouse=True)
+def _explicit_workspace(monkeypatch):
+    """快取測試顯式指定 tenant root，不把空範圍當成授權。"""
+
+    from src.config.runtime_paths import tenant_root
+
+    original = agent_factory.get_or_create_agent
+
+    def wrapped(*args, **kwargs):
+        kwargs.setdefault("workspace_dir", str(tenant_root()))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(agent_factory, "get_or_create_agent", wrapped)
+
+
 def _awaiting_ask_user(agent: SimpleNamespace) -> None:
     agent.state.reply_id = "reply-1"
     agent.state.context.append(UserMsg(name="user", content="帮我处理一下"))

@@ -7,7 +7,6 @@ from typing import Any
 
 from src.catalog.http_files import HttpToolFileRecord, write_http_file
 from src.catalog.mcp_files import McpFileRecord, write_mcp_file
-from src.catalog.paths import http_tools_dir, mcp_dir
 from src.catalog.system_defaults import utc_now
 
 logger = logging.getLogger(__name__)
@@ -69,7 +68,9 @@ def ensure_mcp_file_catalog(*, builtin_ids: set[str]) -> None:
                 enabled=bool(row.get("enabled", True)),
                 workspace_id=workspace_id,
             )
-            write_mcp_file(mcp_dir(workspace_id) / f"{server_id}.yaml", record)
+            from src.config.runtime_paths import global_mcp_root
+
+            write_mcp_file(global_mcp_root() / f"{server_id}.yaml", record)
             exported += 1
         replace_mcp_servers(keep)
         _write_marker(MCP_MIGRATION_KEY, {
@@ -119,8 +120,10 @@ def ensure_http_file_catalog() -> None:
                 created_at=str(row.get("createdAt") or ""),
                 updated_at=str(row.get("updatedAt") or ""),
             )
+            from src.config.runtime_paths import global_tools_root
+
             write_http_file(
-                http_tools_dir(workspace_id) / f"{tool_id}.yaml",
+                global_tools_root() / f"{tool_id}.yaml",
                 record,
                 auth_config=dict(row.get("authConfig") or {}),
             )

@@ -22,7 +22,7 @@ from src.agents.runtime_types import (
     RuntimeToolScope,
 )
 from src.exception_detail import format_agent_exception
-from src.runtime_context import RuntimeContext
+from src.runtime.session_context import SessionContext
 from src.storage.database import (
     append_subagent_transcript_item,
     update_subagent_invocation_delivery,
@@ -30,6 +30,7 @@ from src.storage.database import (
 from src.subagents.models import SubagentCatalog, SubagentDefinition
 from src.subagents.runner import SubagentHitlRequired, SubagentRunError, SubagentRunner
 from src.subagents.task_service import SubagentTaskService
+from src.subagents.snapshot_subset import child_snapshot_subset
 from src.subagents.task_store import (
     TERMINAL_SUBAGENT_STATUSES,
     SubagentTaskStore,
@@ -78,7 +79,8 @@ class SubagentDelegationManager:
         knowledge_tools: list[KnowledgeToolRuntimeSpec],
         parent_tool_scope: RuntimeToolScope,
         persist: bool,
-        runtime_context: RuntimeContext | None = None,
+        runtime_context: SessionContext | None = None,
+        plan_mode_manager=None,
     ) -> None:
         self.catalog = catalog
         self.session_id = session_id
@@ -115,6 +117,7 @@ class SubagentDelegationManager:
             parent_tool_scope=parent_tool_scope,
             persist=persist,
             platform_context=runtime_context,
+            plan_mode_manager=plan_mode_manager,
         )
 
     def get_definition(self, name: str) -> SubagentDefinition | None:
@@ -153,6 +156,9 @@ class SubagentDelegationManager:
 
         invocation_id = f"subagent-{uuid4().hex}"
         normalized_constraints = [str(item).strip() for item in constraints or [] if str(item).strip()]
+        from src.sessions.run_binding import frozen_resources_for_run
+
+        parent_snapshot = child_snapshot_subset(frozen_resources_for_run(self.run_id), definition)
         file_status = self._task_store.create(
             invocation_id=invocation_id,
             run_id=self.run_id,
@@ -165,13 +171,14 @@ class SubagentDelegationManager:
             expected_output=expected_output,
             context=context,
             constraints=normalized_constraints,
+            parent_snapshot=parent_snapshot,
         )
         self._task_service.create({
             "id": invocation_id,
             "run_id": self.run_id,
             "session_id": self.session_id,
-            "workspace_id": self.runtime_context.workspace_id if self.runtime_context else "default",
-            "project_id": self.runtime_context.project_id if self.runtime_context else "default",
+            "workspace_id": "",
+            "project_id": "",
             "tool_call_id": tool_call_id,
             "parent_scope": self.parent_scope,
             "parent_agent_id": self.parent_agent_id,
@@ -236,7 +243,11 @@ class SubagentDelegationManager:
             )
             running = self._task_store.set_status(invocation_id, "running")
             self._emit("SUBAGENT_UPDATED", status="running", payload=self._projection_payload(running))
-            prepared = self._runner.prepare(definition)
+            parent_snapshot = self._task_store.parent_snapshot(invocation_id)
+            if isinstance(self._runner, SubagentRunner):
+                prepared = self._runner.prepare(definition, parent_snapshot)
+            else:
+                prepared = self._runner.prepare(definition)
             self._emit("SUBAGENT_CONTEXT", status="running", payload={
                 "invocationId": invocation_id,
                 "toolCallId": tool_call_id,
@@ -252,6 +263,7 @@ class SubagentDelegationManager:
                 runtime_context=prepared.runtime_context,
                 permission=prepared.permission,
                 tool_policy=getattr(prepared, "tool_policy", None),
+                parent_snapshot=parent_snapshot,
                 runtime_event_sink=lambda event_type, event_data: self._record_child_agent_event(
                     invocation_id=invocation_id,
                     event_type=event_type,
@@ -334,7 +346,7 @@ class SubagentDelegationManager:
                 interaction_type=exc.interaction_type,
                 agent=exc.agent,
                 session_id=self.session_id,
-                agent_id=f"subagent:{definition.name}",
+                agent_id=f"subagent:{definition.name}:{invocation_id}",
                 agent_name=f"Subagent {definition.name}",
                 model_name=self.model_name,
                 reply_id=exc.reply_id,

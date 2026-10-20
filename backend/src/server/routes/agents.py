@@ -57,30 +57,19 @@ router = APIRouter()
 _job_service = ScheduledJobService()
 
 
-def _pause_jobs_for_removed_agent_skills(agent_id: str, skill_ids: set[str]) -> None:
-    """Agent 不再绑定某 Skill 时，暂停仍冻结该 Skill 的 Job。"""
-
-    for skill_id in skill_ids:
-        _job_service.pause_for_resource_change(
-            "skill_unbound",
-            agent_id=agent_id,
-            skill_id=skill_id,
-        )
-
-
 def _pause_jobs_for_agent_capability_change(old_agent: "AgentResponse", new_agent: "AgentResponse") -> None:
     """MCP/HTTP 解绑或权限降级时按合同暂停 Job。"""
 
-    from src.scheduler.unattended_policy import agent_approval_policy
+    from src.security.permissions import build_permission_profile
 
     removed_mcp = set(old_agent.mcp_tools) - set(new_agent.mcp_tools)
     removed_knowledge = set(old_agent.knowledge_tools) - set(new_agent.knowledge_tools)
-    old_policy = agent_approval_policy(old_agent)
-    new_policy = agent_approval_policy(new_agent)
+    old_profile = build_permission_profile(old_agent.guardrails)
+    new_profile = build_permission_profile(new_agent.guardrails)
     old_net = bool(getattr(old_agent.guardrails, "network_enabled", True))
     new_net = bool(getattr(new_agent.guardrails, "network_enabled", True))
     permission_revoked = (
-        old_policy != new_policy
+        (not old_profile.is_read_only and new_profile.is_read_only)
         or (old_net and not new_net)
     )
     if removed_mcp or removed_knowledge:
@@ -220,7 +209,7 @@ def _apply_job_agent_fields(
     knowledge_tools: list[str],
     skills: list[str],
 ) -> tuple[str, JobToolkit, Guardrails, list[str], list[str], list[str]]:
-    """校验角色并同步绑定字段。Job Agent 强制可信工具。"""
+    """校验角色并同步绑定字段。审核策略归属任务，Job Agent 只管理能力。"""
 
     parsed_role = parse_agent_role(role)
     toolkit = parse_job_toolkit(job_toolkit)
@@ -238,11 +227,6 @@ def _apply_job_agent_fields(
         mcp_tools = list(bound["mcp"])
         knowledge_tools = list(dict.fromkeys([*bound["http"], *bound["knowledge"]]))
         skills = list(bound["skill"])
-        guardrails = guardrails.model_copy(update={
-            "human_approval": False,
-            "tool_permission_profile": "trusted_tools",
-            "tool_permission_mode": "bypass",
-        })
     else:
         toolkit = empty_job_toolkit()
     return parsed_role, toolkit, guardrails, mcp_tools, knowledge_tools, skills
@@ -361,26 +345,26 @@ def remove_skills_from_agents(skill_ids: set[str]) -> int:
         _agents[agent_id] = updated_agent
         invalidate_agent(agent_id)
         upsert_agent(updated_agent.model_dump(by_alias=True))
-        _pause_jobs_for_removed_agent_skills(agent_id, skill_ids)
         changed += 1
     return changed
 
 
 @router.get("", response_model=list[AgentResponse])
 async def list_agents(
-    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
+    workspace_id: Annotated[str | None, Query(alias="workspaceId")] = None,
 ) -> list[AgentResponse]:
-    """
-    获取所有 Agent 列表
+    """取得全局 Agent 目錄。省略 workspace 時返回全部，不要求 Session。"""
 
-    Returns:
-        list[AgentResponse]: Agent 列表
-    """
     _sync_agents_from_catalog()
+    agents = list(_agents.values())
+    if not workspace_id:
+        return agents
     return [
         agent
-        for agent in _agents.values()
-        if is_system_agent_id(agent.id) or agent.workspace_id == workspace_id
+        for agent in agents
+        if is_system_agent_id(agent.id)
+        or agent.source_kind == "global"
+        or agent.workspace_id in {workspace_id, "global"}
     ]
 
 
@@ -546,9 +530,6 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
             guardrails = Guardrails.model_validate(existing_dict.get("guardrails") or {})
             existing_dict["guardrails"] = guardrails.model_copy(update={
                 "network_enabled": True,
-                "human_approval": False,
-                "tool_permission_profile": "trusted_tools",
-                "tool_permission_mode": "bypass",
             }).model_dump(by_alias=True)
         role, toolkit, guardrails, mcp_tools, knowledge_tools, skills = _apply_job_agent_fields(
             agent_id=agent_id,
@@ -573,8 +554,6 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
     _agents[agent_id] = updated_agent
     invalidate_agent(agent_id)
     upsert_agent(updated_agent.model_dump(by_alias=True))
-    if removed_skills:
-        _pause_jobs_for_removed_agent_skills(agent_id, removed_skills)
     _pause_jobs_for_agent_capability_change(existing, updated_agent)
     if existing.role == JOB_ROLE and updated_agent.role != JOB_ROLE:
         _job_service.pause_for_resource_change("needs_job_update", agent_id=agent_id)

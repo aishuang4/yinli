@@ -9,7 +9,6 @@ from typing import Any
 import yaml
 
 from src.agents.runtime_types import MAX_REACT_ITERS
-from src.config.runtime_paths import default_project_root
 from src.agents.system_agents import (
     is_default_chat_agent_id,
     is_default_websearch_job_agent_id,
@@ -31,7 +30,7 @@ from src.scheduler.job_toolkit import (
 
 _FRONTMATTER_RE = re.compile(r"\A---\s*\n(?P<yaml>.*?)\n---\s*\n?(?P<body>.*)\Z", re.DOTALL)
 _IGNORED_KEYS = {
-    "planConfig", "plan_config", "status", "workspaceId", "workspace_id",
+    "planConfig", "plan_config", "status",
     "systemManaged", "system_managed", "sourcePath", "sourceKind",
     "modelConfig", "model_config",
 }
@@ -62,9 +61,11 @@ def _guardrails_from_yaml(value: Any, warnings: list[str]) -> Guardrails:
         warnings.append("filesystem_scope=/ 已按空字符串处理")
         filesystem_scope = ""
     payload = {
-        "filesystem_scope": filesystem_scope or str(default_project_root()),
+        "filesystem_scope": filesystem_scope,
         "shell_blacklist": data.get("shell_blacklist"),
         "network_enabled": data.get("network_enabled"),
+        "operation_scope": data.get("operation_scope") or data.get("operationScope") or (
+            "read_only" if data.get("tool_permission_profile") == "read_only" else "normal"),
         "human_approval": data.get("human_approval"),
         "tool_permission_mode": data.get("tool_permission_mode"),
         "tool_permission_profile": data.get("tool_permission_profile"),
@@ -84,7 +85,7 @@ def _guardrails_from_yaml(value: Any, warnings: list[str]) -> Guardrails:
 
 def _dump_filesystem_scope(value: str) -> str:
     text = str(value or "").strip()
-    if not text or text == str(default_project_root()) or text in {"/", str(Path("/").resolve())}:
+    if not text or text in {"/", str(Path("/").resolve())}:
         return ""
     return text
 
@@ -119,11 +120,6 @@ def apply_role_invariants(agent: AgentResponse, warnings: list[str]) -> AgentRes
         mcp_tools = list(bound["mcp"])
         knowledge_tools = list(dict.fromkeys([*bound["http"], *bound["knowledge"]]))
         skills = list(bound["skill"])
-        guardrails = guardrails.model_copy(update={
-            "human_approval": False,
-            "tool_permission_profile": "trusted_tools",
-            "tool_permission_mode": "bypass",
-        })
         if is_default_websearch_job_agent_id(agent.id):
             if not guardrails.network_enabled:
                 warnings.append("system-websearch-job 必须保持网络开启")
@@ -210,6 +206,8 @@ def parse_profile_markdown(
     created_at = str(payload.get("created_at") or "").strip() or utc_now()
     updated_at = str(payload.get("updated_at") or "").strip() or utc_now()
     body = match.group("body").rstrip() + "\n"
+    stored_workspace = str(payload.get("workspaceId") or payload.get("workspace_id") or "").strip()
+    resolved_workspace = stored_workspace or workspace_id
     agent = AgentResponse.model_validate({
         "id": agent_id,
         "name": name,
@@ -226,7 +224,7 @@ def parse_profile_markdown(
         "status": "idle",
         "created_at": created_at,
         "updated_at": updated_at,
-        "workspaceId": "default" if is_system_agent_id(agent_id) else workspace_id,
+        "workspaceId": "default" if is_system_agent_id(agent_id) else resolved_workspace,
         "role": role,
         "jobToolkit": parse_job_toolkit(payload.get("job_toolkit")),
         "sourcePath": str(path.resolve()),
@@ -258,9 +256,7 @@ def dump_profile_markdown(agent: AgentResponse) -> str:
             "filesystem_scope": _dump_filesystem_scope(agent.guardrails.filesystem_scope),
             "shell_blacklist": list(agent.guardrails.shell_blacklist),
             "network_enabled": bool(agent.guardrails.network_enabled),
-            "human_approval": bool(agent.guardrails.human_approval),
-            "tool_permission_mode": agent.guardrails.tool_permission_mode,
-            "tool_permission_profile": agent.guardrails.tool_permission_profile,
+            "operation_scope": agent.guardrails.operation_scope,
             "execution_backend": agent.guardrails.execution_backend,
             "docker_image": agent.guardrails.docker_image,
             "persistent_sandbox": bool(agent.guardrails.persistent_sandbox),
@@ -270,6 +266,8 @@ def dump_profile_markdown(agent: AgentResponse) -> str:
         "created_at": agent.created_at,
         "updated_at": agent.updated_at,
     }
+    if not is_system_agent_id(agent.id):
+        frontmatter["workspaceId"] = agent.workspace_id
     dumped = yaml.safe_dump(frontmatter, allow_unicode=True, default_flow_style=False, sort_keys=False).strip()
     body = (agent.system_prompt or "").rstrip() + "\n"
     return f"---\n{dumped}\n---\n\n{body}"

@@ -10,6 +10,40 @@ from .domain_events import DomainEvent, DomainEventDraft, DomainEventRepository
 from .team_event_normalizer import TeamEventNormalizerMixin
 
 
+_SESSION_RESOURCE_FIELDS = (
+    "sessionId",
+    "snapshotId",
+    "agentId",
+    "directoryGrantVersion",
+    "resourceGrantVersion",
+    "workingDirectory",
+    "skills",
+    "tools",
+)
+
+
+def _session_resource_payload(value: Any) -> dict[str, Any]:
+    """只保留契約允許的 Session 資源欄位，丟掉正文與 secret。"""
+
+    if not isinstance(value, dict):
+        return {}
+    payload: dict[str, Any] = {}
+    for key in _SESSION_RESOURCE_FIELDS:
+        if key not in value:
+            continue
+        item = value[key]
+        if key in {"skills", "tools"}:
+            if not isinstance(item, list):
+                continue
+            payload[key] = [str(entry) for entry in item if isinstance(entry, str)]
+        elif key in {"directoryGrantVersion", "resourceGrantVersion"}:
+            if isinstance(item, int) and not isinstance(item, bool):
+                payload[key] = item
+        elif isinstance(item, str):
+            payload[key] = item
+    return payload
+
+
 class ChatProjectionNormalizer(TeamEventNormalizerMixin):
     """单 Run normalizer；源信号不持久化、不作为 SSE 或 replay 契约。"""
 
@@ -69,6 +103,7 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
             "ANSWER_READY": self._answer_ready,
             "TOOL_CALL_START": self._tool_started,
             "TOOL_CALL_DELTA": self._tool_input_delta,
+            "TOOL_CALL_END": self._tool_input_completed,
             "TOOL_RESULT_TEXT_DELTA": self._tool_output_delta,
             "TOOL_RESULT_END": self._tool_completed,
             "SKILL_CONTEXT": self._skill_started,
@@ -222,6 +257,22 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
             data={"blockId": f"tool:{call_id}", "delta": str(data.get("delta") or "")},
         )]
 
+    def _tool_input_completed(self, data: dict[str, Any]) -> list[DomainEvent]:
+        """完整脱敏参数替换流式预览，恢复后和 replay 都不重复追加。"""
+        call_id = str(data.get("tool_call_id") or "")
+        if not call_id or f"tool:{call_id}" not in self._active:
+            return []
+        value = data.get("input") if data.get("input") is not None else data.get("arguments")
+        if value is None:
+            return []
+        import json
+
+        preview = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        return [self._append(
+            "tool.call.updated", aggregate_type="tool", aggregate_id=call_id,
+            data={"blockId": f"tool:{call_id}", "inputPreview": preview[:16_000]},
+        )]
+
     def _tool_completed(self, data: dict[str, Any]) -> list[DomainEvent]:
         call_id = str(data.get("tool_call_id") or "")
         block_id = f"tool:{call_id}"
@@ -233,7 +284,8 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
             f"tool.result.{outcome}",
             aggregate_type="tool",
             aggregate_id=call_id,
-            data={"blockId": block_id, "error": str(data.get("error") or "")},
+            data={"blockId": block_id, "error": str(data.get("error") or ""),
+                  **({"authorization": data["authorization"]} if isinstance(data.get("authorization"), dict) else {})},
         )
         self._active.pop(block_id, None)
         return [event]
@@ -272,6 +324,9 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
             )
             if key in payload
         }
+        session = _session_resource_payload(payload.get("session"))
+        if session:
+            stats["session"] = session
         if not stats:
             return []
         if block_id not in self._active:
@@ -323,6 +378,10 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
                 "replyId",
                 "scope",
                 "createdAt",
+                "version",
+                "approvalMode",
+                "actorId",
+                "decisions",
             )
             if data.get(key) is not None
         }
@@ -478,6 +537,12 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
             )
             self._block_parents[block_id] = parent_id
             produced.append(event)
+        if source_type == "member.tool.input" and block_id in self._active:
+            produced.append(self._append(
+                "tool.call.updated", aggregate_type="tool", aggregate_id=f"team:{team_id}:{tool_call_id}",
+                data={"blockId": block_id, "inputPreview": str(payload.get("input") or "")[:16_000]},
+            ))
+            return produced
         if source_type != "member.tool.started" and block_id in self._active:
             failed = source_type in {"member.tool.failed", "member.tool.denied"}
             event = self._append(

@@ -16,6 +16,7 @@ from src.notifications.inbox import (
 )
 from src.notifications.models import NotificationMessage
 from src.scheduler.models import ScheduledJob, ScheduledJobRun
+from src.scheduler.session_grant_check import owner_session_id
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ JOB_COMPLETED = "job_completed"
 JOB_FAILED = "job_failed"
 JOB_MISSED = "job_missed"
 JOB_PAUSED = "job_paused"
+JOB_PERMISSION_REQUIRED = "job_permission_required"
 
 _FIRING_KIND = {
     "succeeded": JOB_COMPLETED,
@@ -73,7 +75,7 @@ def notify_firing_terminal(
 
     if firing.status == "missed" and job.missed_policy == "skip_silent":
         return None
-    kind = _FIRING_KIND.get(firing.status)
+    kind = JOB_PERMISSION_REQUIRED if firing.error_code == "permission_required" else _FIRING_KIND.get(firing.status)
     suffix = _FIRING_TITLE_SUFFIX.get(firing.status)
     if not kind or not suffix:
         return None
@@ -97,6 +99,7 @@ def notify_firing_terminal(
                 "error_code": firing.error_code,
                 "scheduled_for": firing.scheduled_for,
                 "trigger": firing.trigger,
+                "owner_session_id": owner_session_id(job.id),
             },
         )
     except Exception:

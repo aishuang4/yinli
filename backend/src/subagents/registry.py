@@ -6,10 +6,9 @@ import hashlib
 from dataclasses import replace
 from pathlib import Path
 
-from src.config.runtime_paths import default_project_root, subagent_root, user_home_root
+from src.config.runtime_paths import subagent_root, user_home_root
 from src.subagents.loader import scan_subagent_directory
 from src.subagents.models import (
-    SUBAGENT_COMPAT_PROJECT_DIRS,
     SUBAGENT_COMPAT_USER_DIRS,
     SubagentCatalog,
     SubagentDefinition,
@@ -29,7 +28,7 @@ def load_subagent_catalog(
     hosted 下 user_home_root() 为 None，跳过 HOME scope（§12.7）。
     """
 
-    workspace = Path(workspace_dir) if workspace_dir else default_project_root()
+    del workspace_dir
     user = Path(user_dir).expanduser() if user_dir else subagent_root()
     home = user_home_dir if user_home_dir is not None else user_home_root()
 
@@ -51,10 +50,6 @@ def load_subagent_catalog(
             home_errors.extend(errors)
     project_definitions: list[SubagentDefinition] = []
     project_errors: list[SubagentLoadError] = []
-    for relative_dir in SUBAGENT_COMPAT_PROJECT_DIRS:
-        definitions, errors = scan_subagent_directory(workspace / relative_dir, scope="project")
-        project_definitions.extend(definitions)
-        project_errors.extend(errors)
 
     definitions: dict[str, SubagentDefinition] = {}
     warnings: list[str] = []

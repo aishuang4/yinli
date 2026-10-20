@@ -17,8 +17,10 @@ _DEFAULT_TOOL_SCOPE = {
 }
 
 _JOB_JSON_FIELDS = {
+    "execution_policy",
     "schedule_expr",
     "skill_ids",
+    "required_skills",
     "tool_scope",
     "capability_contract",
     "input_spec",
@@ -26,10 +28,11 @@ _JOB_JSON_FIELDS = {
     "recipient_ids",
 }
 _JOB_UPDATE_FIELDS = (
+    "execution_policy",
     "workspace_id", "project_id", "name", "summary", "status", "pause_reason",
     "agent_id", "mode", "schedule_kind", "schedule_expr", "timezone", "model_config_id",
-    "next_run_at", "last_run_at", "frozen_prompt", "skill_ids", "tool_scope",
-    "capability_contract",
+    "next_run_at", "last_run_at", "frozen_prompt", "skill_ids", "required_skills",
+    "tool_scope", "capability_contract", "context_policy",
     "input_spec", "output_spec", "missed_policy", "failure_policy",
     "delivery_policy", "delivery_channel_ref", "recipient_ids",
     "unattended_permission", "auto_send_enabled_at", "required_successes",
@@ -82,15 +85,16 @@ class ScheduledJobRecordStore:
                     INSERT INTO scheduled_jobs (
                         id, workspace_id, project_id, name, summary, status, pause_reason,
                         agent_id, mode, schedule_kind, schedule_expr, timezone, next_run_at,
-                        last_run_at, frozen_prompt, skill_ids, tool_scope, capability_contract,
+                        last_run_at, frozen_prompt, skill_ids, required_skills, context_policy,
+                        tool_scope, capability_contract,
                         input_spec, output_spec, missed_policy, failure_policy, delivery_policy,
                         delivery_channel_ref, recipient_ids, unattended_permission,
                         auto_send_enabled_at, required_successes, consecutive_successes,
                         consecutive_failures, max_consecutive_failures, max_firings_per_day,
-                        created_from_session_id, created_at, updated_at, archived_at, model_config_id
+                        created_from_session_id, created_at, updated_at, archived_at, model_config_id, execution_policy
                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
                     """,
                     self._job_params(payload),
@@ -438,14 +442,15 @@ class ScheduledJobRecordStore:
             "payload": record.get("payload") or {},
             "read_at": record.get("read_at"),
             "created_at": record.get("created_at") or now,
+            "owner_session_id": record.get("owner_session_id") or "",
         }
         with self.lock, self.connect() as conn:
             conn.execute(
                 """
                 INSERT INTO user_notifications (
                     id, workspace_id, project_id, job_id, firing_id, kind, title,
-                    body, payload, read_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    body, payload, read_at, created_at, owner_session_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["id"],
@@ -459,6 +464,7 @@ class ScheduledJobRecordStore:
                     self.dumps(payload["payload"]),
                     payload["read_at"],
                     payload["created_at"],
+                    payload["owner_session_id"],
                 ),
             )
             conn.commit()
@@ -557,6 +563,7 @@ class ScheduledJobRecordStore:
             "payload": self.loads(row["payload"], {}),
             "read_at": row["read_at"],
             "created_at": row["created_at"],
+            "owner_session_id": row["owner_session_id"] if "owner_session_id" in row.keys() else "",
         }
 
     def _job_params(self, record: dict[str, Any]) -> tuple[Any, ...]:
@@ -582,6 +589,8 @@ class ScheduledJobRecordStore:
             record.get("last_run_at"),
             record.get("frozen_prompt") or "",
             self.dumps(record.get("skill_ids") or []),
+            self.dumps(record.get("required_skills") or []),
+            str(record.get("context_policy") or "fresh"),
             self.dumps(tool_scope),
             self.dumps(_contract_storage(record.get("capability_contract"))),
             self.dumps(record.get("input_spec") or {}),
@@ -603,6 +612,7 @@ class ScheduledJobRecordStore:
             record["updated_at"],
             record.get("archived_at"),
             record.get("model_config_id") or "",
+            self.dumps(record.get("execution_policy") or {"approvalMode": "manual"}),
         )
 
     def _job_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
@@ -619,6 +629,7 @@ class ScheduledJobRecordStore:
             "pause_reason": row["pause_reason"],
             "agent_id": row["agent_id"],
             "model_config_id": row["model_config_id"],
+            "execution_policy": self.loads(row["execution_policy"], {}) or {"approvalMode": "manual"},
             "mode": row["mode"],
             "schedule_kind": row["schedule_kind"],
             "schedule_expr": self.loads(row["schedule_expr"], {}),
@@ -627,6 +638,8 @@ class ScheduledJobRecordStore:
             "last_run_at": row["last_run_at"],
             "frozen_prompt": row["frozen_prompt"],
             "skill_ids": self.loads(row["skill_ids"], []),
+            "required_skills": self.loads(row["required_skills"], []),
+            "context_policy": str(row["context_policy"] or "fresh"),
             "tool_scope": tool_scope,
             "capability_contract": _contract_from_row(row, self.loads),
             "input_spec": self.loads(row["input_spec"], {}),
@@ -644,6 +657,7 @@ class ScheduledJobRecordStore:
             "max_consecutive_failures": row["max_consecutive_failures"],
             "max_firings_per_day": row["max_firings_per_day"],
             "created_from_session_id": row["created_from_session_id"],
+            "owner_session_id": row["owner_session_id"] if "owner_session_id" in row.keys() else "",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "archived_at": row["archived_at"],
@@ -712,12 +726,14 @@ def _contract_from_row(row: sqlite3.Row, loads: Callable[[str | None, Any], Any]
 
 
 def _json_default(field: str) -> Any:
-    if field in {"skill_ids", "recipient_ids"}:
+    if field in {"skill_ids", "required_skills", "recipient_ids"}:
         return []
     if field == "tool_scope":
         return dict(_DEFAULT_TOOL_SCOPE)
     if field == "capability_contract":
         return {}
+    if field == "required_skills":
+        return []
     return {}
 
 

@@ -4,8 +4,6 @@ import uuid
 from datetime import datetime, timezone
 
 from src.storage.database import (
-    DEFAULT_PROJECT_ID,
-    DEFAULT_WORKSPACE_ID,
     append_chat_message,
     delete_chat_messages,
     get_chat_session,
@@ -47,8 +45,9 @@ def _append_user_message(
     content: str,
     images: list[ChatImagePayload],
     files: list[ChatFilePayload] | None = None,
-    workspace_id: str = DEFAULT_WORKSPACE_ID,
-    project_id: str = DEFAULT_PROJECT_ID,
+    workspace_id: str = "",
+    project_id: str = "",
+    approval_mode: str | None = None,
 ) -> None:
     """追加用户消息，并创建或更新会话摘要"""
     now = datetime.now(timezone.utc).isoformat()
@@ -69,6 +68,7 @@ def _append_user_message(
             "created_at": now,
             "updated_at": now,
             "modelConfigId": model_config_id,
+            "approvalMode": approval_mode or "manual",
         })
     else:
         update_chat_session(
@@ -79,6 +79,7 @@ def _append_user_message(
             workspace_id=workspace_id,
             project_id=project_id,
             model_config_id=model_config_id or existing.get("modelConfigId") or "",
+            approval_mode=approval_mode or existing.get("approvalMode") or "manual",
             updated_at=now,
         )
     append_chat_message(session_id, {
@@ -112,31 +113,24 @@ def ensure_chat_session(
     session_id: str,
     agent_id: str,
     agent_name: str,
-    workspace_id: str,
-    project_id: str,
     title: str = "",
 ) -> ChatSession:
-    """经 ChatStore 确保 kind=chat 的 session 存在；禁止 group_studio_records 直接 SQL INSERT。
-
-    send 与 from-chat 共用。已有 session 若 project 不一致则抛 ChatSessionProjectConflict。
-    """
+    """经 ChatStore 确保 kind=chat 的 session 存在。归属只看 session id。"""
 
     now = datetime.now(timezone.utc).isoformat()
-    record = insert_chat_session_if_absent({
+    insert_chat_session_if_absent({
         "id": session_id,
         "title": _make_session_title(title) if title.strip() else "新对话",
         "agent_id": agent_id,
         "agent_name": agent_name,
         "mode": "agent",
-        "workspace_id": workspace_id,
-        "project_id": project_id,
+        "workspace_id": "",
+        "project_id": "",
         "kind": "chat",
         "created_at": now,
         "updated_at": now,
     })
-    if record["project_id"] != project_id:
-        raise ChatSessionProjectConflict(session_id, record["project_id"], project_id)
-    return session_model(record)
+    return session_model(get_chat_session(session_id) or {"id": session_id, "title": title, "agent_id": agent_id, "agent_name": agent_name})
 
 
 def ensure_scheduled_job_session(

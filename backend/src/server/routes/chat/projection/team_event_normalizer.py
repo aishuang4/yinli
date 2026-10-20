@@ -61,6 +61,14 @@ class TeamEventNormalizerMixin:
             block_id=team_block_id, event_suffix="updated",
         ))
 
+        if source_type == "member.permission.required":
+            interaction = payload.get("interaction") or {}
+            produced.extend(self._interaction_started(interaction))
+            return produced
+        if source_type == "member.permission.resolved":
+            produced.extend(self._interaction_completed(payload))
+            return produced
+
         if source_type == "run.phase.changed":
             return produced
         if source_type in {"run.completed", "run.failed", "run.cancelled"}:

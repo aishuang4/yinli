@@ -108,9 +108,9 @@ class MemoryRecordStore:
                      date_to: str | None, status: str | None, query_text: str,
                      limit: int) -> list[dict[str, Any]]:
         self.ensure_db()
-        query = "SELECT * FROM memory_nodes WHERE workspace_id = ? AND project_id = ?"
-        params: list[Any] = [workspace_id or self.default_workspace_id,
-                             project_id or self.default_project_id]
+        del workspace_id, project_id
+        query = "SELECT * FROM memory_nodes WHERE 1 = 1"
+        params: list[Any] = []
         for clause, value in (("status", status), ("agent_id", agent_id), ("user_id", user_id)):
             if value:
                 query += f" AND {clause} = ?"

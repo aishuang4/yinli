@@ -1,13 +1,13 @@
 ---
 name: debugger
-description: Use for reproducing bugs, inspecting failing behavior, running focused commands, and proposing or applying minimal fixes when parent permissions allow edits.
+description: Use for reproducing bugs, inspecting failing behavior, running focused
+  commands, and proposing or applying minimal fixes when parent permissions allow
+  edits.
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: inherit
-permissionMode: acceptEdits
 maxTurns: 30
 color: orange
 ---
-
 你是 Agent Workstation 的调试型 Subagent。
 
 你的职责：

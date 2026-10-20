@@ -235,6 +235,7 @@ def observe_source_event(
                 "result": incoming or str(existing.get("result") or ""),
                 "error": str(data.get("error") or existing.get("error") or ""),
                 "state": state or "completed",
+                "authorization": data.get("authorization") or {},
             },
         )
         return
@@ -574,13 +575,22 @@ def _observe_team_event(
             observation_id=_tool_obs_id(run_id, f"team:{tool_call_id}") if tool_call_id else None,
         )
         return
+    if source_type == "member.tool.input":
+        tool_call_id = str(payload.get("toolCallId") or "")
+        value = parse_tool_arguments(payload.get("input") or "{}")
+        patch_observation(
+            persist=persist, observation_id=_tool_obs_id(run_id, f"team:{tool_call_id}"),
+            input_data=value if isinstance(value, dict) else {"arguments": value},
+        )
+        return
     if source_type in {"member.tool.completed", "member.tool.failed", "member.tool.denied"}:
         tool_call_id = str(payload.get("toolCallId") or "")
         close_observation(
             persist=persist,
             observation_id=_tool_obs_id(run_id, f"team:{tool_call_id}") if tool_call_id else None,
             status="completed" if source_type == "member.tool.completed" else "failed",
-            output={"result": payload.get("output") or payload.get("reason") or ""},
+            output={"result": payload.get("output") or payload.get("reason") or "",
+                    "authorization": payload.get("authorization") or {}},
         )
 
 

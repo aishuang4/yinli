@@ -16,6 +16,18 @@ export interface ModelEntry {
 export interface ModelCatalog {
   schemaVersion: number; revision: number; etag: string; defaultModelId: string; modelsPath: string;
   providers: ModelProvider[]; models: ModelEntry[];
+  permissionReview?: {
+    modelConfigId: string; timeoutSeconds: number; maxOutputTokens: number;
+    schemaVersion: 1; promptVersion: 'permission-review-v1';
+  } | null;
+}
+
+/** 审核只使用 primary，不读主 Agent 的降级链。 */
+export function reviewModelAvailable(catalog: ModelCatalog, model: ModelEntry): boolean {
+  const provider = catalog.providers.find(item => item.id === model.providerId);
+  return Boolean(model.enabled && model.label.trim() && model.model.trim() && provider?.enabled
+    && (provider.adapter === 'gemini' || provider.baseUrl.trim())
+    && (!provider.requiresApiKey || provider.apiKeyConfigured || provider.apiKey));
 }
 
 export async function catalogRequest(init?: RequestInit): Promise<ModelCatalog> {

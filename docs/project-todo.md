@@ -1,6 +1,6 @@
 # 引力 YINLI TODO
 
-> 最后更新：2026-10-09。本文只保留尚未完成的任务。
+> 最后更新：2026-10-19。本文只保留尚未完成的任务。运行归属使用 tenant root、session root、working directory 和 Run workspace。旧 Workspace / Project 表在迁移核對完成前不刪。
 
 ## P0. Runtime 稳定性
 
@@ -14,6 +14,14 @@
 - [ ] 群聊工作室 Host / Worker 的 `CONTEXT_USAGE` / `CONTEXT_COMPRESSED` 尚未写 trace（群事件进 `run_events` 需先加 `source` 字段，见 P1）；Team 的这两类 trace 已写，但 Chat 顶栏 meter 只读单 Agent 的 `context` Block，Team 运行时顶栏不显示占用。
 - [ ] Agent 缓存的 LRU 上限 / 闲置时长目前是常量（48 / 6h），后续如需按部署规模调节再进系统设置。
 - [ ] Skill 正文补回目前不发 SSE 事件，前端看不到"哪些 Skill 仍在生效"。
+
+## P0. 权限系统 V2
+
+运行时已接入，说明见 `docs/permission-system-v2.md`。智能审核在评测通过前不可启用。
+
+- [x] 平台授权适配器、一次精确许可、Chat / Sandbox 三模式、Team 等待、子任务继承和定时任务人工终止已接入，并由后端全量测试覆盖。
+- [x] 收集至少 200 条人工标注并完成数据合同校验；隔离模型评测仍需在配置实际审核模型后完成。这是可选验收，不阻挡智能审核；不要把合成单测样本当成验收数据。
+- [ ] 在桌面浏览器验收批准、拒绝、刷新、取消、多张审批卡，以及当前 Run 与下一轮模式的区分。
 
 ## P1. Team / 群聊后续（2026-09-15 审查遗留）
 
@@ -78,11 +86,12 @@
 
 ## P6. 桌面端与前端
 
+- [x] 重设计托管账号页：深绿品牌场景与独立表单双栏，统一登录、注册、邮箱验证和重置密码；保留已有认证接口，适配暗色主题与窄窗口。使用视口高度修复底部露白，按窗口高度收紧布局，常见桌面尺寸一屏显示。设计依据见 `docs/auth-page-design.md`。
 - [ ] 验证 macOS / Windows 真机 PyInstaller 后端产物。
 - [ ] 完成 Electron 签名、公证、安装包过滤、日志和异常展示。
 - [x] Web 托管已落地：邮箱注册登录、按账号隔离工作区、管理员在线状态、停用和删除、key2api 平台模型。见 `docs/architecture-overview.md`。
 - [ ] 同一邮箱再次注册时取回原平台 Key。key2api 先按 `docs/key2api-email-rebind-adapter.md` 改同步；引力再按 `docs/key2api-email-rebind.md` 补校验、测试和现行说明。
-- [ ] 把桌面端登录入口接到工作台：填写托管地址、登录后领取 `platform:` 模型、退出后回到本机模型。后端令牌文件已在，界面未接。桌面签名仍走打包计划。
+- [ ] 桌面端登录后领取 `platform:` 模型、退出后回到本机模型。云端地址由 `config/desktop.json` 在打包时写入。桌面签名仍走打包计划。
 - [ ] 将运行时数据稳定迁移到 Electron `userData`，并设计备份与恢复。
 - [ ] 评估桌面自动更新。
 - [ ] 独立 Runs 页由 `config/product-features.json` 的 `views.runs` 控制（默认关）；若重新打开入口，再拆分 RunsPage 和 ChatPage 的高复杂度区域。
@@ -94,7 +103,7 @@
 
 - [ ] Dynamic Workflow Phase 0：从固定节点演示改为 Script Review + Runtime Cockpit。
 - [ ] 定义 `workflow.script.v1`，再实现 stage / task / variable / artifact 动态事件。
-- [ ] 接入 AgentScope Bridge，复用 Agent、TeamRun、Skill、权限、Memory 和 HITL。
+- [x] 接入 AgentScope Bridge，复用 Agent、TeamRun、Skill、Memory 和 HITL；权限决策按 `docs/permission-system-v2.md` 由平台统一提供。
 - [ ] 评估 LangGraph / LangChain 执行引擎，SQLite 继续作为产品事实源。
 - [ ] 建立 Agent / Prompt / Model / TeamRun 的评估和成本体系。
 - [ ] 增加 Agent / Subagent 配置版本、Diff、发布和回滚。
@@ -109,3 +118,10 @@
 - 新增 Chat RuntimeFrame、DisplaySnapshot 或 kind 语义前先更新 `docs/chat-sse-event-contract.md`。
 - 新增大功能前写短设计；实现完成后合并事实并删除阶段草案。
 - 已下线能力只能以历史清理边界描述，不能重新写成当前入口。
+
+
+### Skill 文件加载统一（2026-10）
+
+- 统一 filesystem catalog、策略、reader 和 AgentScope adapter；旧 Skill 登记不再参与正常读取/保存。
+- 新包统一写 `<USER_DATA_ROOT>/skills`；稳定身份与正文版本分开，Project 通过 binding 授权，不扫描项目 Skill 目录。
+- 完成 Job 冻结/恢复版本复检、同名精确加载、激活撤销和可恢复迁移；具体回归结果见对应 OpenSpec change 的 validation.md。

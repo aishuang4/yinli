@@ -110,15 +110,14 @@ def _extract_response(body: Any, mode: str, path: str) -> Any:
     return body
 
 
-async def execute_configured_http_tool(
-    config: dict[str, Any],
-    parameters: dict[str, Any],
-    *,
-    timeout_seconds: float = 30,
-    max_response_chars: int = 16000,
+def prepare_configured_http_request(
+    config: dict[str, Any], parameters: dict[str, Any], *, timeout_seconds: float = 30,
 ) -> dict[str, Any]:
-    """按配置执行 HTTP 请求，供 Agent 工具和调试接口复用。"""
+    """执行与授权共用模板、参数合并和凭据解析；返回值只可在受限内存使用。"""
 
+    policy = str(config.get("approvalPolicy") or config.get("approval_policy") or "inherit").lower()
+    if policy == "deny":
+        raise ValueError("HTTP 工具已明确禁止执行")
     method = str(config.get("method") or "GET").upper()
     url = str(_render_value(config.get("url") or "", parameters))
     parsed = urlparse(url)
@@ -177,6 +176,23 @@ async def execute_configured_http_tool(
             kwargs["json"] = body
         else:
             kwargs["content"] = str(body)
+
+    return kwargs
+
+
+async def execute_configured_http_tool(
+    config: dict[str, Any],
+    parameters: dict[str, Any],
+    *,
+    timeout_seconds: float = 30,
+    max_response_chars: int = 16000,
+) -> dict[str, Any]:
+    """按配置执行 HTTP 请求，供 Agent 工具和调试接口复用。"""
+
+    kwargs = prepare_configured_http_request(config, parameters, timeout_seconds=timeout_seconds)
+    method = kwargs["method"]
+    query = kwargs.get("params") or {}
+    body = kwargs.get("json", kwargs.get("content"))
 
     started = time.perf_counter()
     from src.security.egress import guarded_async_client

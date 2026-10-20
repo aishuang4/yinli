@@ -17,7 +17,7 @@ def normalize_guardrails(
     normalized = {**defaults, **data}
     filesystem_scope = str(normalized.get("filesystem_scope") or "").strip()
     if filesystem_scope == "/" or is_pyinstaller_temp_path(filesystem_scope):
-        normalized["filesystem_scope"] = str(project_root)
+        normalized["filesystem_scope"] = ""
     return normalized
 
 

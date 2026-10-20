@@ -180,6 +180,8 @@ def build_permission_profile(source: object | None) -> UnifiedPermissionProfile:
         getattr(source, "tool_permission_profile", None),
         getattr(source, "tool_permission_mode", None),
     )
+    if getattr(source, "operation_scope", None) == "read_only":
+        policy = ApprovalPolicy.READ_ONLY
     return UnifiedPermissionProfile(
         filesystem_scope=str(getattr(source, "filesystem_scope", "/") or "/"),
         network_enabled=bool(getattr(source, "network_enabled", True)),

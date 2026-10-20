@@ -13,6 +13,8 @@ import sqlite3
 from collections.abc import Callable
 from typing import Any
 
+from src.security.authorization.models import validate_approval_mode
+
 logger = logging.getLogger(__name__)
 
 # json.dumps(default=str) 曾把 Pydantic 模型存成 `id='...' name='...'`。
@@ -66,6 +68,7 @@ _SESSION_UPDATE_FIELDS = {
     "workspace_id": "workspace_id",
     "project_id": "project_id",
     "model_config_id": "model_config_id",
+    "approval_mode": "approval_mode",
     "updated_at": "updated_at",
     "message_count": "message_count",
 }
@@ -288,6 +291,7 @@ class ChatSessionRecordStore:
             "project_id": row["project_id"] or self.default_project_id,
             "kind": row["kind"] if "kind" in keys and row["kind"] else "chat",
             "modelConfigId": row["model_config_id"] or "",
+            "approvalMode": row["approval_mode"] or "manual",
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "message_count": row["message_count"],
@@ -353,14 +357,15 @@ class ChatSessionRecordStore:
     def insert_session_if_absent(self, session: dict[str, Any]) -> dict[str, Any]:
         """INSERT OR IGNORE 后返回库里的那一行（可能是并发先插入的）。"""
 
+        approval_mode = validate_approval_mode(session.get("approvalMode") or session.get("approval_mode") or "manual")
         self.ensure_db()
         with self.lock, self.connect() as conn:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO chat_sessions (
                     id, title, agent_id, agent_name, mode, workspace_id, project_id, kind,
-                    created_at, updated_at, message_count, model_config_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, message_count, model_config_id, approval_mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session["id"],
@@ -375,12 +380,15 @@ class ChatSessionRecordStore:
                     session.get("updated_at") or session.get("updatedAt") or "",
                     int(session.get("message_count") or session.get("messageCount") or 0),
                     session.get("modelConfigId") or session.get("model_config_id") or "",
+                    approval_mode,
                 ),
             )
             row = conn.execute("SELECT * FROM chat_sessions WHERE id = ?", (session["id"],)).fetchone()
         return self._session_from_row(row)
 
     def update_session(self, session_id: str, **fields: Any) -> None:
+        if "approval_mode" in fields:
+            validate_approval_mode(fields["approval_mode"])
         assignments: list[str] = []
         params: list[Any] = []
         for key, column in _SESSION_UPDATE_FIELDS.items():

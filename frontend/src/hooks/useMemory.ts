@@ -25,7 +25,6 @@ import type {
   SkillEvolutionRecordStatus,
 } from '../types/memory';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
-import { useAppStore } from '../stores/appStore';
 
 interface MemoryNodeFilters {
   agentId?: string;
@@ -76,27 +75,18 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-function markdownUrl(scope: MarkdownMemoryScope, agentId?: string, workspaceId = 'default'): string {
+function markdownUrl(scope: MarkdownMemoryScope, agentId?: string): string {
   if (scope === 'agent') {
     return `/api/memory/markdown/agent/${encodeURIComponent(agentId || 'default')}`;
   }
   if (scope === 'global') {
-    return workspaceId === 'default'
-      ? '/api/memory/markdown/global'
-      : `/api/memory/markdown/global/${encodeURIComponent(workspaceId)}`;
+    return '/api/memory/markdown/global';
   }
   return '/api/memory/markdown/user';
 }
 
-function nodeQueryParams(
-  filters: MemoryNodeFilters = {},
-  context?: { workspaceId: string; projectId: string },
-): string {
+function nodeQueryParams(filters: MemoryNodeFilters = {}): string {
   const params = new URLSearchParams();
-  if (context) {
-    params.set('workspaceId', context.workspaceId);
-    params.set('projectId', context.projectId);
-  }
   if (filters.agentId) params.set('agentId', filters.agentId);
   if (filters.query) params.set('query', filters.query);
   if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
@@ -106,9 +96,8 @@ function nodeQueryParams(
   return params.toString();
 }
 
-function skillEvolutionQueryParams(filters: SkillEvolutionFilters = {}, projectId?: string): string {
+function skillEvolutionQueryParams(filters: SkillEvolutionFilters = {}): string {
   const params = new URLSearchParams();
-  if (projectId) params.set('projectId', projectId);
   if (filters.status && filters.status !== 'all') params.set('status', filters.status);
   if (filters.agentId) params.set('agentId', filters.agentId);
   if (filters.limit) params.set('limit', String(filters.limit));
@@ -116,11 +105,9 @@ function skillEvolutionQueryParams(filters: SkillEvolutionFilters = {}, projectI
 }
 
 export function useMemory(): UseMemoryReturn {
-  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
-  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const readMarkdownMemory = useCallback(async (scope: MarkdownMemoryScope, agentId?: string) => (
-    requestJson<MarkdownMemoryDocument>(markdownUrl(scope, agentId, activeWorkspaceId))
-  ), [activeWorkspaceId]);
+    requestJson<MarkdownMemoryDocument>(markdownUrl(scope, agentId))
+  ), []);
 
   const saveMarkdownMemory = useCallback(async (
     scope: MarkdownMemoryScope,
@@ -128,7 +115,7 @@ export function useMemory(): UseMemoryReturn {
     agentId?: string,
   ) => {
     try {
-      const doc = await requestJson<MarkdownMemoryDocument>(markdownUrl(scope, agentId, activeWorkspaceId), {
+      const doc = await requestJson<MarkdownMemoryDocument>(markdownUrl(scope, agentId), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content }),
@@ -139,29 +126,23 @@ export function useMemory(): UseMemoryReturn {
       notifyError(`记忆保存失败：${getErrorMessage(error, '未知错误')}`);
       throw error;
     }
-  }, [activeWorkspaceId]);
+  }, []);
 
   const loadNodeTree = useCallback(async (filters: MemoryNodeFilters = {}) => {
-    const params = nodeQueryParams(
-      { ...filters, limit: filters.limit || 30 },
-      { workspaceId: activeWorkspaceId, projectId: activeProjectId },
-    );
+    const params = nodeQueryParams({ ...filters, limit: filters.limit || 30 });
     const data = await requestJson<{ nodes: MemoryNodeTreeItem[] }>(
       `/api/memory/nodes/tree${params ? `?${params}` : ''}`,
     );
     return data.nodes;
-  }, [activeProjectId, activeWorkspaceId]);
+  }, []);
 
   const queryNodes = useCallback(async (filters: MemoryNodeFilters = {}) => {
-    const params = nodeQueryParams(
-      { ...filters, limit: filters.limit || 20 },
-      { workspaceId: activeWorkspaceId, projectId: activeProjectId },
-    );
+    const params = nodeQueryParams({ ...filters, limit: filters.limit || 20 });
     const data = await requestJson<{ results: MemoryNodeQueryResult[] }>(
       `/api/memory/nodes/query${params ? `?${params}` : ''}`,
     );
     return data.results;
-  }, [activeProjectId, activeWorkspaceId]);
+  }, []);
 
   const updateNodeStatus = useCallback(async (
     nodeId: string,
@@ -169,7 +150,7 @@ export function useMemory(): UseMemoryReturn {
     reason = '',
   ) => {
     const result = await requestJson<MemoryNodeQueryResult>(
-      `/api/memory/nodes/${encodeURIComponent(nodeId)}/status?projectId=${encodeURIComponent(activeProjectId)}`,
+      `/api/memory/nodes/${encodeURIComponent(nodeId)}/status`,
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -178,18 +159,15 @@ export function useMemory(): UseMemoryReturn {
     );
     notifySuccess(status === 'active' ? '历史记忆已恢复' : '历史记忆状态已更新');
     return result;
-  }, [activeProjectId]);
+  }, []);
 
   const loadSkillEvolutionRecords = useCallback(async (filters: SkillEvolutionFilters = {}) => {
-    const params = skillEvolutionQueryParams(
-      { ...filters, limit: filters.limit || 50 },
-      activeProjectId,
-    );
+    const params = skillEvolutionQueryParams({ ...filters, limit: filters.limit || 50 });
     const data = await requestJson<{ records: SkillEvolutionRecord[] }>(
       `/api/memory/skill-evolution/records${params ? `?${params}` : ''}`,
     );
     return data.records;
-  }, [activeProjectId]);
+  }, []);
 
   const updateSkillEvolutionRecord = useCallback(async (
     recordId: string,
@@ -197,7 +175,7 @@ export function useMemory(): UseMemoryReturn {
     reason = '',
   ) => {
     const result = await requestJson<SkillEvolutionRecord>(
-      `/api/memory/skill-evolution/records/${encodeURIComponent(recordId)}?projectId=${encodeURIComponent(activeProjectId)}`,
+      `/api/memory/skill-evolution/records/${encodeURIComponent(recordId)}`,
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -206,15 +184,15 @@ export function useMemory(): UseMemoryReturn {
     );
     notifySuccess('Skill 队列已更新');
     return result;
-  }, [activeProjectId]);
+  }, []);
 
   const loadMemoryCandidates = useCallback(async (status: MemoryCandidateStatus | 'all' = 'pending') => {
-    const params = new URLSearchParams({ projectId: activeProjectId, limit: '100' });
+    const params = new URLSearchParams({ limit: '100' });
     if (status !== 'all') params.set('status', status);
     return requestJson<{ records: MemoryMarkdownCandidate[]; pendingCount: number }>(
       `/api/memory/markdown-candidates?${params.toString()}`,
     );
-  }, [activeProjectId]);
+  }, []);
 
   const updateMemoryCandidate = useCallback(async (
     recordId: string,
@@ -222,7 +200,7 @@ export function useMemory(): UseMemoryReturn {
     reason = '',
   ) => {
     const result = await requestJson<MemoryMarkdownCandidate>(
-      `/api/memory/markdown-candidates/${encodeURIComponent(recordId)}?projectId=${encodeURIComponent(activeProjectId)}`,
+      `/api/memory/markdown-candidates/${encodeURIComponent(recordId)}`,
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -237,27 +215,26 @@ export function useMemory(): UseMemoryReturn {
           : `记忆候选处理失败：${result.resolution || '未知原因'}`,
     );
     return result;
-  }, [activeProjectId]);
+  }, []);
 
   const loadMemoryAuditEvents = useCallback(async (limit = 50) => {
     const params = new URLSearchParams({
-      projectId: activeProjectId,
       limit: String(limit),
     });
     const data = await requestJson<{ events: MemoryAuditEvent[] }>(
       `/api/memory/audit/events?${params.toString()}`,
     );
     return data.events;
-  }, [activeProjectId]);
+  }, []);
 
   const sendRetrievalFeedback = useCallback(async (payload: MemoryRetrievalFeedbackPayload) => {
     await requestJson<{ ok: boolean }>('/api/memory/retrieval/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...payload, projectId: activeProjectId }),
+      body: JSON.stringify(payload),
     });
     notifySuccess('召回反馈已记录');
-  }, [activeProjectId]);
+  }, []);
 
   const loadMemorySettings = useCallback(async () => (
     requestJson<MemorySettingsSnapshot>('/api/memory/settings')
@@ -311,17 +288,14 @@ export function useMemory(): UseMemoryReturn {
 
   const loadTimeline = useCallback(async (filters: TimelineQuery = {}) => {
     const params = new URLSearchParams();
-    const workspaceId = filters.workspaceId ?? activeWorkspaceId;
-    const projectId = filters.projectId ?? activeProjectId;
-    if (workspaceId) params.set('workspaceId', workspaceId);
-    if (projectId) params.set('projectId', projectId);
+    if (filters.sessionId) params.set('sessionId', filters.sessionId);
     if (filters.agentId) params.set('agentId', filters.agentId);
     if (filters.surface) params.set('surface', filters.surface);
     if (filters.timeFrom) params.set('timeFrom', filters.timeFrom);
     if (filters.timeTo) params.set('timeTo', filters.timeTo);
     if (filters.queryText) params.set('queryText', filters.queryText);
     return requestJson<TimelineQueryResult>(`/api/memory/timeline?${params.toString()}`);
-  }, [activeProjectId, activeWorkspaceId]);
+  }, []);
 
   return {
     readMarkdownMemory,

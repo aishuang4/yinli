@@ -126,9 +126,8 @@ Project prompt.
 
     catalog = load_subagent_catalog(workspace_dir=str(workspace), user_dir=str(user_dir))
 
-    assert catalog.definitions["reviewer"].description == "Project reviewer."
-    assert catalog.definitions["reviewer"].scope == "project"
-    assert catalog.warnings
+    assert catalog.definitions["reviewer"].description == "User reviewer."
+    assert catalog.definitions["reviewer"].scope == "user"
 
 
 def test_registry_reports_invalid_yaml_and_ignores_duplicate_same_scope(tmp_path: Path) -> None:
@@ -167,10 +166,8 @@ Prompt.
 
     catalog = load_subagent_catalog(workspace_dir=str(workspace), user_dir=str(tmp_path / "missing-user"))
 
-    assert catalog.definitions["reviewer"].description in {"First reviewer.", "Duplicate reviewer."}
-    assert len(catalog.definitions) == 1
-    assert catalog.errors
-    assert any("重复 Subagent name" in warning for warning in catalog.warnings)
+    assert catalog.definitions == {}
+    assert catalog.errors == []
 
 
 def test_tool_policy_inherits_parent_pool_then_applies_deny_and_allow(tmp_path: Path) -> None:
@@ -615,7 +612,10 @@ def test_attached_fork_returns_before_child_finishes_and_barrier_requires_consum
     assert "completed/delivered" in after_read_and_result
     assert "Explorer result." in after_read_and_result
     assert manager.completion_error() == ""
-    result_path = tmp_path / fork["resultRef"]
+    result_path = manager._task_store.result_path(fork["invocationId"])
+    assert fork["resultRef"] == f"subagents/{fork['invocationId']}/result.md"
+    assert result_path.is_relative_to(manager._task_store.session_root)
+    assert ".agent-workstation" not in result_path.parts
     assert result_path.read_text(encoding="utf-8").strip() == "Explorer result."
 
 
@@ -843,6 +843,11 @@ def test_subagent_runner_injects_project_paths_and_uses_session_workspace(tmp_pa
         run_id="run-1",
         agent_id="agent-1",
     )
+    async def fake_authorization(**kwargs):
+        captured["authorization_context"] = kwargs
+        return object()
+
+    monkeypatch.setattr("src.subagents.runner.build_run_authorization", fake_authorization)
     monkeypatch.setattr("src.subagents.runner.get_or_create_agent", fake_get_or_create_agent)
     runner = SubagentRunner(
         session_id="session-1", run_id="run-1", parent_scope="single",
@@ -859,9 +864,12 @@ def test_subagent_runner_injects_project_paths_and_uses_session_workspace(tmp_pa
 
     result = asyncio.run(runner.run(invocation_id="subagent-1", definition=definition, task="Read."))
 
-    expected_workspace = project_root / ".agent-workstation" / "sessions" / "session-1"
+    from src.config.runtime_paths import session_subagent_root
+
+    expected_workspace = session_subagent_root("session-1", "subagent-1")
     assert result.text == "Done."
     assert captured["workspace_dir"] == str(expected_workspace)
+    assert project_root not in expected_workspace.parents
     assert f"Project root: {project_root}" in str(captured["system_prompt"])
     assert f"Effective filesystem scope: {project_root}" in str(captured["system_prompt"])
 
@@ -1059,6 +1067,9 @@ def test_resume_subagent_pending_interaction_completes_invocation(tmp_path: Path
         path=".agents/subagents/debugger.md",
     )
     task_store = SubagentTaskStore(project_root=tmp_path, session_id="session-1")
+    from src.sessions.records import create_session
+
+    create_session(session_id="session-1", agent_id="agent-1")
     invocation_id = "subagent-" + "1" * 32
     task_store.create(
         invocation_id=invocation_id,

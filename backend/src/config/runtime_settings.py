@@ -69,6 +69,7 @@ def resolve_model_binding(
     *,
     catalog: ModelCatalog | None = None,
     validate: bool = True,
+    include_fallbacks: bool = True,
 ) -> RuntimeModelBinding:
     if (
         catalog is None
@@ -100,6 +101,8 @@ def resolve_model_binding(
         and selected_provider is not None
         and selected_provider.id == "yinli-platform"
     ):
+        if validate and (not selected.enabled or not selected_provider.enabled):
+            raise CatalogError("所选模型已停用。")
         from src.models.platform_layer import platform_binding
 
         return platform_binding(f"platform:{selected.model}")
@@ -121,11 +124,22 @@ def resolve_model_binding(
             if provider.adapter != "gemini" and not provider.base_url.strip():
                 raise CatalogError(f"供应商 {provider.name} 尚未配置 Base URL。")
         chain.append(ResolvedModel(entry, provider))
-        for child in entry.fallback_model_ids:
-            append(child)
+        if include_fallbacks:
+            for child in entry.fallback_model_ids:
+                append(child)
 
     append(ident)
     return RuntimeModelBinding(catalog, tuple(chain))
+
+
+def resolve_permission_review_binding(*, catalog: ModelCatalog | None = None) -> RuntimeModelBinding:
+    """仅解析显式审核 primary；其降级链停用不影响审核，也不能静默换模型。"""
+    catalog = catalog or read_catalog()[0]
+    config = catalog.permission_review
+    if config is None:
+        raise CatalogError("尚未配置自动审核模型，请到模型页选择。")
+    binding = resolve_model_binding(config.model_config_id, catalog=catalog, include_fallbacks=False)
+    return RuntimeModelBinding(catalog, (binding.primary,))
 
 
 def current_model_binding() -> RuntimeModelBinding | None:

@@ -29,6 +29,7 @@ import { resolveApiUrl } from '../../utils/apiUrl';
 import { artifactDownloadUrl, downloadableArtifactPath } from '../file-preview/filePreview';
 import type { DisplayBlock } from './protocol';
 import { toolDetail } from './processTrace';
+import { ToolInputPreview } from './ToolInputPreview';
 import { RuntimeAnimationContext, StreamCaretContext } from './RuntimeAnimationContext';
 import { RuntimeBlockActionsContext } from './runtimeBlockActions';
 
@@ -141,10 +142,60 @@ export function ProcessTextBlockView({
   );
 }
 
+function AuthorizationLine({
+  authorization,
+  sessionId,
+}: {
+  authorization: RecordData;
+  sessionId?: string;
+}) {
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  const permissionLabels: Record<string, string> = {
+    readonly: '只读自动通过', manual: '人工批准', model: '智能审核', model_error: '自动审核转人工',
+    boundary: '能力边界拒绝', full_access: '完全开放',
+  };
+  const reviewable = authorization.reviewable === true && text(authorization.verdict) === 'deny';
+  const requestReview = async () => {
+    if (!sessionId || !text(authorization.decisionId)) return;
+    setBusy(true);
+    setMessage('');
+    try {
+      const response = await fetch(resolveApiUrl(`/api/chat/sessions/${encodeURIComponent(sessionId)}/authorization-reviews`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decisionId: text(authorization.decisionId) }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(text(payload.detail, '人工复核没有建立'));
+      setMessage('已建立新的人工复核，不会重放刚才结束的调用。批准后只覆盖这一次。');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '人工复核没有建立');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span className="mt-0.5 block break-words">
+      {permissionLabels[text(authorization.source)] || '权限决定'} · {text(authorization.reason)}
+      {authorization.executionStatus ? ` · 执行：${text(authorization.executionStatus)}` : ' · 未启动执行'}
+      {reviewable && sessionId ? (
+        <button type="button" className="ml-2 underline" disabled={busy} onClick={() => void requestReview()}>
+          人工复核
+        </button>
+      ) : null}
+      {message ? <span className="mt-0.5 block">{message}</span> : null}
+    </span>
+  );
+}
+
 export function ToolBlockView({ block }: { block: DisplayBlock<RecordData> }) {
   const name = text(block.data.name, 'Tool');
   const detail = toolDetail(block);
   const open = block.phase === 'open';
+  const actions = useContext(RuntimeBlockActionsContext);
+  const authorization = block.data.authorization && typeof block.data.authorization === 'object'
+    ? block.data.authorization as RecordData : undefined;
   return (
     <div className="flex items-start gap-2 px-1 py-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
       <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
@@ -153,6 +204,13 @@ export function ToolBlockView({ block }: { block: DisplayBlock<RecordData> }) {
       <span className="min-w-0">
         <span className="block break-words">{detail.title}</span>
         {detail.note ? <span className="mt-0.5 block break-words">{detail.note}</span> : null}
+        {block.data.inputPreview ? (
+          <details className="mt-1">
+            <summary className="cursor-pointer">查看入参</summary>
+            <ToolInputPreview value={block.data.inputPreview} />
+          </details>
+        ) : null}
+        {authorization ? <AuthorizationLine authorization={authorization} sessionId={actions?.sessionId} /> : null}
       </span>
     </div>
   );
@@ -174,7 +232,11 @@ export function ApprovalBlockView({ block }: { block: DisplayBlock<RecordData> }
   const askUserToolCall = request?.toolCalls.find((toolCall) => (
     isAskUserToolName(toolCall.rawName || toolCall.name)
   ));
-  if (block.phase === 'open' && request && askUserToolCall) {
+  // 决策已收口（interrupted/expired/cancelled）或 Run 终态时保持只读，不展示可执行按钮。
+  const decisions = request?.decisions ?? [];
+  const hasPendingDecision = decisions.length === 0 || decisions.some((item) => item.status === 'pending');
+  const actionable = block.phase === 'open' && hasPendingDecision;
+  if (actionable && request && askUserToolCall) {
     const clarification = buildClarificationRequestFromAskUser(askUserToolCall);
     return (
       <RuntimeItem icon={<MessageCircleQuestion size={14} />} title="等待回答" block={block}>
@@ -185,7 +247,7 @@ export function ApprovalBlockView({ block }: { block: DisplayBlock<RecordData> }
       </RuntimeItem>
     );
   }
-  if (block.phase === 'open' && request && actions?.onResolveInteraction) {
+  if (actionable && request && actions?.onResolveInteraction) {
     return <HitlApprovalBlock request={request} onResolve={actions.onResolveInteraction} />;
   }
   return (

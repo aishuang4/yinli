@@ -1,19 +1,18 @@
 /**
- * 时间线原文。按工作区、项目、智能体、场合和时间筛选。
+ * 时间线原文。按 Session、智能体、场合和时间筛选。
  */
 
 import { useEffect, useState } from 'react';
 import { Empty, Spinner } from '@/components/design';
 import { DateField, SelectField, TextField } from '@/components/form';
-import { useWorkspaceProjects } from '../../hooks/useWorkspaceProjects';
 import type { Agent } from '../../types/agent';
 import type { TimelineMessage, TimelineQueryResult } from '../../types/memory';
 
 interface TimelineMemoryPanelProps {
   agents: Agent[];
+  sessionId?: string;
   loadTimeline: (filters: {
-    workspaceId?: string;
-    projectId?: string;
+    sessionId?: string;
     agentId?: string;
     surface?: string;
     timeFrom?: string;
@@ -22,10 +21,7 @@ interface TimelineMemoryPanelProps {
   }) => Promise<TimelineQueryResult>;
 }
 
-export function TimelineMemoryPanel({ agents, loadTimeline }: TimelineMemoryPanelProps) {
-  const { workspaces, allProjects, activeWorkspaceId, activeProjectId } = useWorkspaceProjects();
-  const [workspaceOverride, setWorkspaceOverride] = useState<string | null>(null);
-  const [projectOverride, setProjectOverride] = useState<string | null>(null);
+export function TimelineMemoryPanel({ agents, sessionId = '', loadTimeline }: TimelineMemoryPanelProps) {
   const [agentId, setAgentId] = useState('');
   const [surface, setSurface] = useState('');
   const [queryText, setQueryText] = useState('');
@@ -36,16 +32,11 @@ export function TimelineMemoryPanel({ agents, loadTimeline }: TimelineMemoryPane
   const [loading, setLoading] = useState(false);
   const [openId, setOpenId] = useState('');
 
-  const workspaceId = workspaceOverride === null ? activeWorkspaceId : workspaceOverride;
-  const projectId = projectOverride === null ? activeProjectId : projectOverride;
-  const projects = allProjects.filter((item) => !workspaceId || item.workspaceId === workspaceId);
-
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     void loadTimeline({
-      workspaceId,
-      projectId,
+      sessionId,
       agentId,
       surface,
       queryText,
@@ -61,35 +52,11 @@ export function TimelineMemoryPanel({ agents, loadTimeline }: TimelineMemoryPane
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, projectId, agentId, surface, queryText, timeFrom, timeTo, loadTimeline]);
+  }, [agentId, sessionId, surface, queryText, timeFrom, timeTo, loadTimeline]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 p-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <SelectField
-          value={workspaceId}
-          onChange={(value) => {
-            const next = String(value ?? '');
-            setWorkspaceOverride(next);
-            const currentProject = projectOverride === null ? activeProjectId : projectOverride;
-            const stillVisible = !next || allProjects.some(
-              (item) => item.id === currentProject && item.workspaceId === next,
-            );
-            if (!stillVisible) setProjectOverride('');
-          }}
-          options={[
-            { label: '全部工作区', value: '' },
-            ...workspaces.map((item) => ({ label: item.name || item.id, value: item.id })),
-          ]}
-        />
-        <SelectField
-          value={projectId}
-          onChange={(value) => setProjectOverride(String(value ?? ''))}
-          options={[
-            { label: '全部项目', value: '' },
-            ...projects.map((item) => ({ label: item.name || item.id, value: item.id })),
-          ]}
-        />
         <SelectField
           value={surface}
           onChange={(value) => setSurface(String(value ?? ''))}

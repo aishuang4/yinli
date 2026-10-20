@@ -43,9 +43,16 @@ from src.agents.runtime_types import (
     MAX_REACT_ITERS,
     McpRuntimeSpec,
     RuntimeToolScope,
+    SKILL_LOADING_INTERACTIVE,
+    SKILL_LOADING_MODES,
+    SKILL_LOADING_SCHEDULED,
+    normalize_skill_loading_mode,
 )
+from src.agents.skill_toolkit import PreloadedSkillToolkit, toolkit_skill_loading_mode
 from src.config.runtime_settings import binding_for_model
-from src.config.runtime_paths import default_project_root, sandbox_root
+from src.config.runtime_paths import sandbox_root
+from src.runtime.authorization import RunAuthorizationBinding
+from src.agents.permission_adapter import PlatformAgent
 from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.tools.ask_user import AskUser
 from src.tools.configured_http_tool import ConfiguredHttpTool
@@ -93,10 +100,13 @@ _BUSY_ATTR = "_aw_busy_run_id"
 AGENT_WORKSTATION_SKILL_INSTRUCTION = """<agent-skills>
 Skills are instruction packages that extend your capabilities. Skills are not tools and cannot be called directly.
 To use a Skill, call the `{{ skill_viewer }}` tool with its exact name, read the returned instructions, then use the ordinary tools allowed by this runtime.
+Each Skill has a stable `id`; use that id (not the name or the dir) whenever a Skill must be referenced elsewhere, for example in ScheduleJob.skill_ids.
 
 # Available Skills
 {% for skill in skills %}<skill>
+<id>{{ skill.id }}</id>
 <name>{{ skill.name }}</name>
+<display-name>{{ skill.display_name }}</display-name>
 <description>{{ skill.description }}</description>
 <dir>{{ skill.dir }}</dir>
 </skill>
@@ -207,25 +217,10 @@ def _build_injection_config() -> InjectionConfig:
 
 
 
-class RuntimePathSkillLoader(LocalSkillLoader):
-    """从宿主加载 Skill 正文，但向模型披露实际执行环境中的目录。"""
+from src.skills.sdk import FileSkillLoader, runtime_package_name
 
-    def __init__(self, directory: str, runtime_directory: str) -> None:
-        super().__init__(directory)
-        self.runtime_directory = runtime_directory
-
-    async def list_skills(self) -> list[AgentScopeSkill]:
-        skills = await super().list_skills()
-        return [
-            AgentScopeSkill(
-                name=skill.name,
-                description=skill.description,
-                dir=self.runtime_directory,
-                markdown=skill.markdown,
-                updated_at=skill.updated_at,
-            )
-            for skill in skills
-        ]
+# 兼容历史构造名称；实现只使用统一 parser/reader。
+RuntimePathSkillLoader = FileSkillLoader
 
 
 def _seed_catalog_profiles_readonly(host_workdir: Path, extra_filesystem_scopes: list[str]) -> None:
@@ -243,11 +238,16 @@ def _seed_catalog_profiles_readonly(host_workdir: Path, extra_filesystem_scopes:
 
 
 def _safe_workspace_dir(guardrails: AgentGuardrails | None) -> str:
-    default_scope = str(default_project_root())
-    scope = (guardrails.filesystem_scope if guardrails else default_scope) or default_scope
-    expanded = os.path.abspath(os.path.expanduser(scope))
-    if expanded == os.path.abspath(os.sep):
-        return default_scope
+    """未提供 guardrails 時用 tenant root。明確的空值或 `/` 不是授權。"""
+
+    if guardrails is None:
+        from src.config.runtime_paths import tenant_root
+
+        return str(tenant_root())
+    scope = guardrails.filesystem_scope
+    expanded = os.path.abspath(os.path.expanduser(scope)) if str(scope or "").strip() else ""
+    if not expanded or expanded == os.path.abspath(os.sep):
+        return ""
     return expanded
 
 
@@ -328,6 +328,7 @@ def _create_default_toolkit(
     workspace_dir: str | None = None,
     write_scope_dir: str | None = None,
     extra_filesystem_scopes: list[str] | None = None,
+    skill_loading_mode: str = SKILL_LOADING_INTERACTIVE,
 ) -> Toolkit:
     """
     创建默认工具集
@@ -342,13 +343,21 @@ def _create_default_toolkit(
     - HttpRequest: 调用 HTTP 接口
     - WebFetch: 读取公开 / 本机 / 内网网页正文
 
+    `skill_loading_mode=scheduled_preloaded` 时返回 `PreloadedSkillToolkit`：Skill 包照常挂载，
+    但不注册内置 `Skill` viewer，普通工具集与交互式完全一致。
+
     Returns:
         Toolkit: 包含默认工具的 Toolkit 实例
     """
+    skill_loading_mode = normalize_skill_loading_mode(skill_loading_mode)
     permission_profile = guardrails.permission_profile if guardrails else UnifiedPermissionProfile()
     read_only = permission_profile.tool_policy == ApprovalPolicy.READ_ONLY
     scope = tool_scope or RuntimeToolScope()
     filesystem_scope = _safe_workspace_dir(guardrails)
+    if not filesystem_scope:
+        if not str(workspace_dir or "").strip():
+            raise ValueError("filesystem scope is empty")
+        filesystem_scope = str(workspace_dir)
     write_scope = _safe_explicit_dir(write_scope_dir) or filesystem_scope
     write_base = _resolve_write_tool_base(workspace_dir, write_scope)
     extra_scopes = list(extra_filesystem_scopes or [])
@@ -431,12 +440,15 @@ def _create_default_toolkit(
 
     mcp_clients = [] if read_only or not scope.allow_mcp else _create_mcp_clients(mcp_servers or [], guardrails)
     skills_or_loaders = [
-        RuntimePathSkillLoader(
-            path,
-            os.path.join(skill_runtime_root, os.path.basename(path)),
-        )
+        FileSkillLoader(path, os.path.join(skill_runtime_root, runtime_package_name(path)) if skill_runtime_root else None)
         for path in (skill_paths or [])
-    ] if skill_runtime_root else (skill_paths or None)
+    ] or None
+    if skill_loading_mode == SKILL_LOADING_SCHEDULED:
+        return PreloadedSkillToolkit(
+            tools=[*local_tools],
+            skills_or_loaders=skills_or_loaders,
+            mcps=mcp_clients,
+        )
     return Toolkit(
         tools=[
             *local_tools,
@@ -475,6 +487,9 @@ def get_or_create_agent(
     extra_filesystem_scopes: list[str] | None = None,
     session_context_key: str | None = None,
     project_id: str = "default",
+    authorization: RunAuthorizationBinding | None = None,
+    run_snapshot: dict | None = None,
+    skill_loading_mode: str = SKILL_LOADING_INTERACTIVE,
 ) -> Agent:
     """
     获取或创建 Agent 实例
@@ -489,10 +504,36 @@ def get_or_create_agent(
         fallback_names: Fallback 模型名称列表
         session_context_key: Chat 会话上下文标识；提供时，同一会话换实例会
             搬运 AgentScope 对话上下文并释放旧实例。
+        skill_loading_mode: `interactive_on_demand` 或 `scheduled_preloaded`；决定 Toolkit 是否
+            注册内置 `Skill` viewer。缓存实例模式不一致时不复用。
 
     Returns:
         Agent: AgentScope Agent 实例
     """
+    skill_loading_mode = normalize_skill_loading_mode(skill_loading_mode)
+    if run_snapshot is not None:
+        from src.sessions.factory_snapshot import apply_run_snapshot_to_factory
+
+        applied = apply_run_snapshot_to_factory(
+            run_snapshot,
+            guardrails=guardrails,
+            skill_paths=skill_paths,
+            mcp_servers=mcp_servers,
+            knowledge_tools=knowledge_tools,
+        )
+        guardrails = applied.guardrails
+        skill_paths = list(applied.skill_paths)
+        mcp_servers = list(applied.mcp_servers)
+        knowledge_tools = list(applied.knowledge_tools)
+        workspace_dir = applied.workspace_dir
+        write_scope_dir = applied.write_scope_dir
+        extra_filesystem_scopes = list(applied.extra_filesystem_scopes)
+        from src.sandbox.session_mounts import resolve_sandbox_layout
+
+        sandbox_layout = resolve_sandbox_layout(run_snapshot)
+        workspace_dir = sandbox_layout.cwd
+    else:
+        sandbox_layout = None
     binding = binding_for_model(model_name)
     from src.tenancy.capabilities import coerce_hosted_guardrails
     from src.tenancy.context import current_tenant
@@ -501,12 +542,34 @@ def get_or_create_agent(
     if current_tenant().is_hosted and "Bash 中的 /workspace 就是项目根目录" not in system_prompt:
         system_prompt = f"{system_prompt}\nBash 中的 /workspace 就是项目根目录。"
     agent_id = _cache_key(agent_id)
+    if authorization is not None:
+        if authorization.owner.tenant_id != current_tenant().tenant_id:
+            raise ValueError("Agent 授权租户不匹配")
+        agent_id = f"{agent_id}:authorization-{authorization.cache_key()}"
     if session_context_key:
         session_context_key = _cache_key(session_context_key)
     # 完整配置比较只驻留内存；Key 不进入缓存键、日志或运行记录。
     cached = _agent_cache.get(agent_id)
+    if cached is not None and _agent_skill_loading_mode(cached) != skill_loading_mode:
+        # 模式决定模型可见工具集：即使调用方传来的缓存键没带模式（旧缓存），
+        # 也不能拿另一模式的实例承接本轮，改用带模式后缀的独立实例。
+        logger.warning(
+            "Agent %s 缓存实例的 Skill 加载模式为 %s，本轮需要 %s，改建独立实例",
+            agent_id,
+            _agent_skill_loading_mode(cached),
+            skill_loading_mode,
+        )
+        agent_id = f"{agent_id}:skill-loading-{skill_loading_mode}"
+        cached = _agent_cache.get(agent_id)
     if cached is not None and getattr(cached, "_model_binding", None) == binding:
-        if getattr(cached, _BUSY_ATTR, None):
+        waiting_other_run = (
+            authorization is not None
+            and isinstance(cached, PlatformAgent)
+            and cached.authorization_binding is not None
+            and cached.authorization_binding.owner.run_id != authorization.owner.run_id
+            and cached.has_pending_authorization()
+        )
+        if getattr(cached, _BUSY_ATTR, None) or waiting_other_run:
             # 同一实例仍在执行上一轮（前端异常并发或后台 Run 未结束）：不能共享
             # AgentState，改为创建一份带上下文快照的新实例。
             logger.warning("Agent %s 仍在运行，改用快照实例承接新一轮", agent_id)
@@ -519,7 +582,14 @@ def get_or_create_agent(
             # fallback 事件回调绑定本轮 trace recorder，复用实例时同步刷新。
             if on_fallback_event is not None and hasattr(cached.model, "on_event"):
                 cached.model.on_event = on_fallback_event
-            settle_awaiting_tool_calls(cached)
+            if authorization is None:
+                settle_awaiting_tool_calls(cached)
+            if authorization is not None:
+                if not isinstance(cached, PlatformAgent):
+                    raise ValueError("平台授权缓存实例类型不匹配")
+                cached.bind_authorization(authorization)
+            from src.skills.sdk import resolved_path
+            cached._aw_resolved_skills = {resolved_path(path).candidate.id: resolved_path(path) for path in (skill_paths or [])}
             return cached
 
     # 使用配置默认值
@@ -540,13 +610,17 @@ def get_or_create_agent(
     if current_tenant().is_hosted:
         from src.sandbox.hosted_workspace import HostedDockerWorkspace, open_hosted_workspace
 
+        hosted_root = Path(sandbox_layout.cwd) if sandbox_layout is not None else Path(workspace_dir or _safe_workspace_dir(guardrails))
+        if not str(hosted_root or "").strip():
+            raise ValueError("filesystem scope is empty")
         workspace = open_hosted_workspace(
             tenant_id=current_tenant().tenant_id,
             project_id=project_id or "default",
             agent_id=agent_id,
-            project_root=Path(workspace_dir or _safe_workspace_dir(guardrails)),
+            project_root=hosted_root,
             base_image=(guardrails.docker_image if guardrails else "") or "python:3.11-slim",
             network_enabled=bool(guardrails.network_enabled) if guardrails else True,
+            mounts=list(sandbox_layout.mounts) if sandbox_layout is not None else None,
         )
         if not isinstance(workspace, HostedDockerWorkspace):
             raise RuntimeError("托管命令只能在沙箱中执行")
@@ -555,15 +629,18 @@ def get_or_create_agent(
         if skill_paths and not guardrails.persistent_sandbox:
             raise ValueError("DockerWorkspace 使用 Skills 时必须启用 persistent_sandbox。")
         docker_skill_runtime_root = "/workspace/skills" if skill_paths else None
-        workspace = DockerWorkspace(
+        from src.skills.docker import FileSkillDockerWorkspace
+        persistent_host = str(sandbox_root() / agent_id.replace(":", "-").replace("/", "-"))
+        host_workdir = (
+            sandbox_layout.cwd
+            if sandbox_layout is not None
+            else (persistent_host if guardrails.persistent_sandbox else None)
+        )
+        workspace = FileSkillDockerWorkspace(
             workspace_id=f"agent-{agent_id}".replace(":", "-")[:120],
             base_image=guardrails.docker_image or "python:3.11-slim",
-            host_workdir=(
-                str(sandbox_root() / agent_id.replace(":", "-").replace("/", "-"))
-                if guardrails.persistent_sandbox
-                else None
-            ),
-            skill_paths=skill_paths,
+            host_workdir=host_workdir,
+            skill_paths=None,
         )
         if guardrails.persistent_sandbox and extra_filesystem_scopes:
             _seed_catalog_profiles_readonly(
@@ -571,18 +648,30 @@ def get_or_create_agent(
                 extra_filesystem_scopes,
             )
     else:
-        workspace = LocalWorkspace(workdir=workspace_dir or _safe_workspace_dir(guardrails))
+        workdir = workspace_dir or _safe_workspace_dir(guardrails)
+        if not str(workdir or "").strip():
+            raise ValueError("filesystem scope is empty")
+        workspace = LocalWorkspace(workdir=workdir)
+
+    if docker_skill_runtime_root:
+        workspace._aw_skill_paths = list(skill_paths or [])
 
     # 创建 AgentState — 设置 BYPASS 权限模式
     # BYPASS 模式：跳过所有权限检查，工具自动执行无需确认
     agent_state = AgentState(
         permission_context=PermissionContext(
-            mode=permission_mode,
+            mode=PermissionMode.DEFAULT if authorization is not None else permission_mode,
         ),
     )
 
     # 创建 Agent
-    agent = Agent(
+    agent_class = PlatformAgent if authorization is not None else Agent
+    authorization_options = (
+        {"authorization_service": authorization.service, "action_builder": authorization.action_builder}
+        if authorization is not None else {}
+    )
+    agent = agent_class(
+        **authorization_options,
         name=name,
         system_prompt=system_prompt,
         model=main_model,
@@ -603,6 +692,7 @@ def get_or_create_agent(
             workspace_dir=workspace_dir,
             write_scope_dir=write_scope_dir,
             extra_filesystem_scopes=extra_filesystem_scopes,
+            skill_loading_mode=skill_loading_mode,
         ),
         state=agent_state,
         offloader=workspace,
@@ -622,14 +712,28 @@ def get_or_create_agent(
         injection_config=_build_injection_config(),
     )
 
+    from src.skills.sdk import resolved_path
+    agent._aw_resolved_skills = {resolved_path(path).candidate.id: resolved_path(path) for path in (skill_paths or [])}
+    setattr(agent, "_aw_skill_loading_mode", skill_loading_mode)  # noqa: B010 - AgentScope 动态运行时元数据
     # 缓存并返回
     agent._model_binding = binding
+    if authorization is not None:
+        agent.bind_authorization(authorization)
     _agent_cache[agent_id] = agent
     _touch_agent(agent_id)
     if session_context_key:
         _adopt_session_context(session_context_key, agent_id, agent)
     _evict_idle_agents()
     return agent
+
+
+def _agent_skill_loading_mode(agent: Agent) -> str:
+    """实例创建时记录的 Skill 加载模式；缺失时以 Toolkit 实际类型为准。"""
+
+    recorded = getattr(agent, "_aw_skill_loading_mode", "")
+    if isinstance(recorded, str) and recorded in SKILL_LOADING_MODES:
+        return recorded
+    return toolkit_skill_loading_mode(getattr(agent, "toolkit", None))
 
 
 def _touch_agent(agent_id: str) -> None:

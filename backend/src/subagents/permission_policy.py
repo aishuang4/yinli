@@ -82,7 +82,8 @@ def resolve_subagent_permission(
     normalized_mode = normalize_subagent_permission_mode(requested_mode)
     parent_profile = parent_guardrails.permission_profile
     parent_policy = _effective_parent_policy(parent_profile)
-    requested_policy = _requested_policy_for_mode(normalized_mode, parent_policy)
+    requested_policy = (ApprovalPolicy.READ_ONLY if definition.operation_scope == "read_only"
+                        else _requested_policy_for_mode(normalized_mode, parent_policy))
     effective_policy = _stricter_policy(parent_policy, requested_policy)
     clamped = effective_policy != requested_policy
     agentscope_mode = _agentscope_mode_for_effective_policy(

@@ -15,11 +15,10 @@ import {
 
 interface SubagentTaskDetailProps {
   invocation: SubagentInvocation;
-  projectId: string;
   onRefresh: () => Promise<void>;
 }
 
-export function SubagentTaskDetail({ invocation, projectId, onRefresh }: SubagentTaskDetailProps) {
+export function SubagentTaskDetail({ invocation, onRefresh }: SubagentTaskDetailProps) {
   const [items, setItems] = useState<SubagentTranscriptItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
@@ -28,7 +27,7 @@ export function SubagentTaskDetail({ invocation, projectId, onRefresh }: Subagen
   const loadTranscript = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
     try {
-      const response = await fetch(`/api/subagents/invocations/${encodeURIComponent(invocation.id)}/transcript?projectId=${encodeURIComponent(projectId)}`, { cache: 'no-store' });
+      const response = await fetch(`/api/subagents/invocations/${encodeURIComponent(invocation.id)}/transcript`, { cache: 'no-store' });
       if (!response.ok) throw new Error('加载 transcript 失败');
       const data = await response.json() as { items: SubagentTranscriptItem[] };
       setItems(data.items);
@@ -38,7 +37,7 @@ export function SubagentTaskDetail({ invocation, projectId, onRefresh }: Subagen
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [invocation.id, projectId]);
+  }, [invocation.id]);
 
   useEffect(() => {
     void loadTranscript();
@@ -58,7 +57,7 @@ export function SubagentTaskDetail({ invocation, projectId, onRefresh }: Subagen
   const cancel = async () => {
     setCancelling(true);
     try {
-      const response = await fetch(`/api/subagents/invocations/${encodeURIComponent(invocation.id)}/cancel?projectId=${encodeURIComponent(projectId)}`, { method: 'POST' });
+      const response = await fetch(`/api/subagents/invocations/${encodeURIComponent(invocation.id)}/cancel`, { method: 'POST' });
       if (!response.ok) throw new Error('取消任务失败');
       await onRefresh();
     } finally {

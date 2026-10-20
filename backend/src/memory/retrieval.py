@@ -105,7 +105,7 @@ def build_memory_injection_text(
     store = markdown_store or MarkdownMemoryStore()
 
     if context.include_global_markdown:
-        markdown = store.read_global_memory(context.workspace_id)
+        markdown = store.read_global_memory()
         summary = _extract_markdown_injection(markdown.content)
         if summary:
             sections.append("Global preference Markdown memory:\n" + summary)
@@ -125,8 +125,6 @@ def build_memory_injection_text(
     if context.include_node_tree:
         tree = (node_service or MemoryNodeService()).tree(
             agent_id=context.agent_id,
-            workspace_id=context.workspace_id,
-            project_id=context.project_id,
             user_id=context.user_id,
             limit=MEMORY_NODE_TREE_LIMIT * 3,
         )
@@ -184,8 +182,6 @@ def build_memory_recall(
             query_text=query,
             agent_id=None,
             limit=limit * 3,
-            workspace_id=context.workspace_id,
-            project_id=context.project_id,
             user_id=context.user_id,
             mark_used=False,
         )

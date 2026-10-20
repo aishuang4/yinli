@@ -21,6 +21,7 @@ from src.catalog.paths import (
     system_profiles_dir,
     workspaces_root,
 )
+from src.config.runtime_paths import global_agents_root
 from src.catalog.profiles import parse_profile_markdown, write_profile_file
 from src.catalog.system_defaults import (
     DEFAULT_AGENT_PROMPT_VERSION_TAG,
@@ -41,14 +42,51 @@ def _file_fingerprint(path: Path) -> str:
     return f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}|{digest}"
 
 
-def _collect_profile_files() -> tuple[list[tuple[Path, str, str]], list[CatalogError]]:
-    """返回已接受的 profile 文件，以及 symlink / 大小写冲突。"""
+def _collect_markdown(
+    directory: Path,
+    workspace_id: str,
+    source_kind: str,
+    found: list[tuple[Path, str, str]],
+    errors: list[CatalogError],
+) -> None:
+    """收集一個目錄裡的 profile。舊 Workspace 目錄只讀，不在這裡寫入。"""
 
-    root = workspaces_root()
-    if not root.is_dir():
-        return [], []
+    if not directory.is_dir():
+        return
+    seen_case: dict[str, Path] = {}
+    for path in sorted(directory.glob("*.md")):
+        if path.name.startswith(".") or path.name.endswith(".tmp") or path.name.endswith(".bak"):
+            continue
+        if ".conflict-" in path.name:
+            continue
+        if not path_stays_inside(path, directory):
+            errors.append(CatalogError(
+                path=str(path),
+                message="symlink 或解析路径指向 catalog 根外",
+                agent_id=path.stem,
+            ))
+            continue
+        key = unicodedata.normalize("NFC", path.name).casefold()
+        if key in seen_case:
+            errors.append(CatalogError(
+                path=str(path),
+                message=f"与 {seen_case[key].name} 大小写冲突，已忽略",
+                agent_id=path.stem,
+            ))
+            continue
+        seen_case[key] = path
+        found.append((path, workspace_id, source_kind))
+
+
+def _collect_profile_files() -> tuple[list[tuple[Path, str, str]], list[CatalogError]]:
+    """全局 `<tenant-root>/agents` 優先，Workspace profiles 只作為只讀 adapter。"""
+
     found: list[tuple[Path, str, str]] = []
     errors: list[CatalogError] = []
+    _collect_markdown(global_agents_root(), "default", "global", found, errors)
+    root = workspaces_root()
+    if not root.is_dir():
+        return found, errors
     for child in sorted(root.iterdir(), key=lambda item: item.name):
         if not child.is_dir():
             continue
@@ -62,31 +100,7 @@ def _collect_profile_files() -> tuple[list[tuple[Path, str, str]], list[CatalogE
             source_kind = "profile"
         else:
             continue
-        if not directory.is_dir():
-            continue
-        seen_case: dict[str, Path] = {}
-        for path in sorted(directory.glob("*.md")):
-            if path.name.startswith(".") or path.name.endswith(".tmp") or path.name.endswith(".bak"):
-                continue
-            if ".conflict-" in path.name:
-                continue
-            if not path_stays_inside(path, directory):
-                errors.append(CatalogError(
-                    path=str(path),
-                    message="symlink 或解析路径指向 catalog 根外",
-                    agent_id=path.stem,
-                ))
-                continue
-            key = unicodedata.normalize("NFC", path.name).casefold()
-            if key in seen_case:
-                errors.append(CatalogError(
-                    path=str(path),
-                    message=f"与 {seen_case[key].name} 大小写冲突，已忽略",
-                    agent_id=path.stem,
-                ))
-                continue
-            seen_case[key] = path
-            found.append((path, workspace_id, source_kind))
+        _collect_markdown(directory, workspace_id, source_kind, found, errors)
     return found, errors
 
 
@@ -171,6 +185,8 @@ def _scan() -> CatalogSnapshot:
             continue
         existing = agents.get(agent.id)
         if existing is not None:
+            if existing.source_kind == "global" and source_kind == "profile":
+                continue
             errors.append(CatalogError(
                 path=str(path),
                 message=f"id 冲突，已被 {existing.source_path} 占用",
@@ -243,7 +259,9 @@ def list_workspace_agents(workspace_id: str) -> list[AgentResponse]:
     return [
         agent
         for agent in list_registered_agents()
-        if is_system_agent_id(agent.id) or agent.workspace_id == workspace_id
+        if is_system_agent_id(agent.id)
+        or agent.source_kind == "global"
+        or agent.workspace_id == workspace_id
     ]
 
 
@@ -261,8 +279,8 @@ def save_agent(agent: AgentResponse) -> AgentResponse:
             "source_kind": "system_overlay",
         })
     else:
-        path = profile_path(prepared.workspace_id, prepared.id)
-        prepared = prepared.model_copy(update={"source_kind": "profile"})
+        path = global_agents_root() / f"{prepared.id}.md"
+        prepared = prepared.model_copy(update={"source_kind": "global"})
     if path.exists():
         existing = parse_profile_markdown(
             path.read_text(encoding="utf-8"),

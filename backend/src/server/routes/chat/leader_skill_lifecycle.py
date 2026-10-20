@@ -48,17 +48,9 @@ def skill_lifecycle_events(
         return []
 
     requested_name = skill_name_from_tool_call(tool_call)
-    detail = next(
-        (
-            item for item in state.available_skill_details
-            if str(item.get("name") or "") == requested_name
-        ),
-        None,
-    )
-    if detail is None and requested_name:
-        resolved_skills, _missing = resolve_installed_skills([requested_name])
-        resolved_details = list_skill_usage_details(resolved_skills)
-        detail = resolved_details[0] if resolved_details else None
+    matches = [item for item in state.available_skill_details
+               if str(item.get("loadName") or item.get("name") or "") == requested_name]
+    detail = matches[0] if len(matches) == 1 else None
     failed = str(event_data.get("state") or "").lower() in {"error", "failed", "denied"} or detail is None
     if failed:
         payload = {

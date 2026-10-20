@@ -66,7 +66,7 @@ def resolve_mcp_runtime_servers(
             continue
         status = str(_attr(server, "status") or "")
         enabled = bool(_attr(server, "enabled", False))
-        if status != "installed" or not enabled:
+        if not enabled or status not in {"installed", "available", ""}:
             continue
         tools = list(_attr(server, "tools") or [])
         enabled_tool_names: list[str] = []
@@ -74,9 +74,10 @@ def resolve_mcp_runtime_servers(
             tool_id = str(_attr(tool, "id") or "")
             if tool_id in selected:
                 enabled_tool_names.append(str(_attr(tool, "name") or tool_id))
-        if not enabled_tool_names:
+        if not enabled_tool_names and server_id not in selected:
             continue
         runtime_servers.append({
+            "id": server_id,
             "name": _slugify(server_id).replace("-", "_"),
             "transport": str(_attr(server, "transport") or ""),
             "url": str(_attr(server, "url") or ""),

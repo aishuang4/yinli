@@ -2,7 +2,7 @@
 
 > 状态：2026-10-09。在线摘要见 `docs/architecture-overview.md`「群聊工作室」。事件字段只以 `docs/group-studio-event-contract.md` 为准。不要恢复可见 Host、intake、阶段机、工作项或确认开始。
 
-房间留下，主持流程已拆掉。群聊不是一次性 TeamRun，也不替换 Chat 的 Team 模式。不共用 `POST /api/chat/send`、Chat SSE、Mailbox 或 DisplaySnapshot。
+房间留下，主持流程已拆掉。群聊不是一次性 TeamRun，也不替换 Chat 的 Team 模式。房间文件在 owner Session 的 session root，不写外部 `.agent-workstation`。不共用 `POST /api/chat/send`、Chat SSE、Mailbox 或 DisplaySnapshot。
 
 | ID | 锁定值 |
 | --- | --- |

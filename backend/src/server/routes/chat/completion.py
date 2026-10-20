@@ -17,7 +17,7 @@ from src.memory.trace import (
     memory_skill_generating_payload,
     record_memory_audit_event,
 )
-from src.project_files import list_project_session_artifacts
+from src.sessions.files import list_project_session_artifacts
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.helpers import _set_skill_run_status, source_event
 from src.server.routes.chat.models import ChatModelCacheRun, ChatSkillRun, ChatToolRun
@@ -25,9 +25,10 @@ from src.server.routes.chat.runtime_events import runtime_trace_source_event
 from src.server.routes.chat.skill_runs import update_skill_run_status
 from src.server.routes.chat.store import _append_assistant_message
 from src.server.routes.chat.trace_recorder import _record_run_event, _trim_text
-from src.config.runtime_paths import default_project_root
-from src.storage.database import DEFAULT_PROJECT_ID, get_latest_completed_user_assistant_turn
-from src.runtime_context import RuntimeContext, resolve_runtime_context
+from src.config.runtime_paths import tenant_root
+from src.storage.database import get_latest_completed_user_assistant_turn
+from src.storage.permission_records import PermissionRecordStore
+from src.runtime.session_context import SessionContext, build_session_context
 
 
 def missing_final_answer_error() -> str:
@@ -45,6 +46,46 @@ def max_react_iterations_error() -> str:
     return "Agent 已达到最大 ReAct 迭代次数，执行已停止。请缩小任务范围或提高最大迭代次数后重试。"
 
 
+def _permission_outcome(run_id: str) -> dict | None:
+    """只从持久执行事实读取本轮部分成功摘要。"""
+
+    if not str(run_id or "").strip():
+        return None
+    try:
+        summary = PermissionRecordStore().summarize_run(run_id)
+    except (OSError, ValueError):
+        return None
+    return summary if summary.get("items") else None
+
+
+def _append_partial_execution_notice(text: str, outcome: dict | None) -> str:
+    """部分执行时把已落盘/未执行/结果不明写入最终用户可见答复。"""
+
+    if not outcome or outcome.get("outcome") != "partial":
+        return text
+    counts = outcome.get("counts") or {}
+    return (
+        f"{text.rstrip()}\n\n执行结果为部分完成：已成功 {counts.get('succeeded', 0)} 项，"
+        f"失败 {counts.get('failed', 0)} 项，未执行 {counts.get('denied', 0)} 项，"
+        f"结果不明 {counts.get('unknown', 0)} 项。已成功写入的内容已保留，请按明细继续处理。"
+    ).strip()
+
+
+def _trace_tool_records(tool_calls: list[ChatToolRun]) -> list[dict[str, str]]:
+    """firing 不進 Chat 主訊息時，把工具記錄留在 Trace。"""
+
+    return [
+        {
+            "id": item.id,
+            "name": item.name,
+            "status": item.status,
+            "args": _trim_text(item.args, 500),
+            "result": _trim_text(item.result, 500),
+        }
+        for item in tool_calls
+    ]
+
+
 async def emit_failed_startup_run(
     *,
     session_id: str,
@@ -56,11 +97,12 @@ async def emit_failed_startup_run(
     skill_runs: list[ChatSkillRun],
     assistant_model_caches: list[ChatModelCacheRun] | None = None,
     sandbox: bool = False,
+    record_chat_message: bool = True,
 ) -> AsyncGenerator[str, None]:
     """启动阶段失败的统一持久化和 UI 事件。"""
 
     failed_skill_runs = _set_skill_run_status(skill_runs, "failed")
-    if persist:
+    if persist and record_chat_message:
         _append_assistant_message(
             session_id=session_id,
             agent_id=agent_id,
@@ -127,11 +169,12 @@ async def finalize_successful_leader_run(
     runtime_events: list[dict],
     skill_runs: list[ChatSkillRun],
     active_skill_run: dict | None,
-    runtime_context: RuntimeContext | None = None,
+    runtime_context: SessionContext | None = None,
     session_workspace_dir: str = "",
     session_artifact_paths_before: list[str] | None = None,
     sandbox: bool = False,
     review_context: object | None = None,
+    record_chat_message: bool = True,
 ) -> AsyncGenerator[str, None]:
     """完成 Leader run 成功路径的消息、trace 和 UI 事件。"""
 
@@ -144,13 +187,25 @@ async def finalize_successful_leader_run(
             pending_interaction_id="",
         )
     source_run_id = current_chat_background_run_id()
-    resolved_runtime_context = runtime_context
-    if resolved_runtime_context is None and persist:
-        resolved_runtime_context = resolve_runtime_context(
-            project_id=None,
+    if persist and session_id:
+        from src.runtime.session_context import build_session_context
+        from src.sessions.intake import ensure_session_for_message
+
+        ensure_session_for_message(
             session_id=session_id,
-            run_id=source_run_id,
             agent_id=agent_id,
+        )
+        owner = build_session_context(session_id, agent_id=agent_id, run_id=source_run_id)
+        if owner.session_id != session_id:
+            raise RuntimeError("消息、Run、Trace 與 Artifact 必須屬於同一個 Session")
+    execution_outcome = _permission_outcome(source_run_id)
+    final_assistant_text = _append_partial_execution_notice(assistant_text, execution_outcome)
+    resolved_runtime_context = runtime_context
+    if resolved_runtime_context is None and persist and session_id:
+        resolved_runtime_context = build_session_context(
+            session_id,
+            agent_id=agent_id,
+            run_id=source_run_id,
         )
     if resolved_runtime_context is None:
         resolved_runtime_context = _default_runtime_context(
@@ -168,13 +223,24 @@ async def finalize_successful_leader_run(
         )
         if str(artifact.get("path") or "") not in previous_artifact_paths
     ]
-    if persist:
+    if persist and session_artifacts:
+        from src.sessions.errors import SessionError
+        from src.sessions.file_paths import resolve_managed_file
+        from src.sessions.files import catalog_output
+
+        for artifact in session_artifacts:
+            try:
+                produced = resolve_managed_file(session_id, str(artifact.get("path") or ""))
+            except SessionError:
+                continue
+            catalog_output(session_id=session_id, run_id=source_run_id, path=produced, kind="managed")
+    if persist and record_chat_message:
         _append_assistant_message(
             session_id=session_id,
             agent_id=agent_id,
             agent_name=agent_name,
             model_name=model_name,
-            content=assistant_text,
+            content=final_assistant_text,
             error=None,
             thinking=assistant_thinking,
             skill_calls=completed_skill_runs,
@@ -182,6 +248,7 @@ async def finalize_successful_leader_run(
             model_caches=assistant_model_caches,
             runtime_events=runtime_events,
         )
+    if persist:
         _record_run_event(
             session_id=session_id,
             event_type="ASSISTANT_MESSAGE",
@@ -191,11 +258,16 @@ async def finalize_successful_leader_run(
             agent_name=agent_name,
             status="completed",
             title="Assistant response",
-            content=_trim_text(assistant_text, 1200),
+            content=_trim_text(final_assistant_text, 1200),
             payload={
                 "model": model_name,
                 "toolCallCount": len(assistant_tool_calls),
                 "skillIds": [item.id for item in completed_skill_runs],
+                **(
+                    {"toolCalls": _trace_tool_records(assistant_tool_calls)}
+                    if not record_chat_message
+                    else {}
+                ),
             },
         )
         reflection_input = _build_memory_reflection_input(
@@ -203,7 +275,7 @@ async def finalize_successful_leader_run(
             agent_id=agent_id,
             agent_name=agent_name,
             user_message=user_message,
-            assistant_text=assistant_text,
+            assistant_text=final_assistant_text,
             source_run_id=source_run_id,
             tool_calls=assistant_tool_calls,
             runtime_events=runtime_events,
@@ -259,6 +331,7 @@ async def finalize_successful_leader_run(
         payload={
             "model": model_name,
             "toolCallCount": len(assistant_tool_calls),
+            **({"executionOutcome": execution_outcome} if execution_outcome else {}),
         },
     )
     if sandbox:
@@ -272,6 +345,7 @@ async def finalize_successful_leader_run(
             payload={
                 "model": model_name,
                 "toolCallCount": len(assistant_tool_calls),
+                **({"executionOutcome": execution_outcome} if execution_outcome else {}),
             },
         )
 
@@ -368,7 +442,7 @@ def _build_memory_reflection_input(
     source_run_id: str,
     tool_calls: list[ChatToolRun],
     runtime_events: list[dict],
-    runtime_context: RuntimeContext | None = None,
+    runtime_context: SessionContext | None = None,
     review_context: object | None = None,
     skill_runs: list | None = None,
 ) -> MemoryReflectionInput:
@@ -405,8 +479,8 @@ def _build_memory_reflection_input(
                 runtime_events=list(previous_turn.get("runtimeEvents") or []),
                 manual_skill_request=True,
                 review_context=context,
-                workspace_id=resolved_context.workspace_id,
-                project_id=resolved_context.project_id,
+                workspace_id="",
+                project_id="",
             )
 
     return MemoryReflectionInput(
@@ -419,22 +493,27 @@ def _build_memory_reflection_input(
         tool_calls=tool_calls,
         runtime_events=runtime_events,
         review_context=context,
-        workspace_id=resolved_context.workspace_id,
-        project_id=resolved_context.project_id,
+        workspace_id="",
+        project_id="",
     )
 
 
-def _default_runtime_context(*, session_id: str, run_id: str, agent_id: str) -> RuntimeContext:
+def _default_runtime_context(*, session_id: str, run_id: str, agent_id: str) -> SessionContext:
     """为不持久化运行和纯函数测试构造稳定的默认归属。"""
 
-    return RuntimeContext(
-        workspace_id="default",
-        project_id=DEFAULT_PROJECT_ID,
-        project_root=default_project_root(),
+    root = tenant_root()
+    return SessionContext(
+        tenant_id="",
         session_id=session_id,
-        run_id=run_id,
+        session_kind="chat",
+        session_root=root,
+        working_directory=root,
+        allowed_roots=(),
+        directory_grant_version=0,
+        resource_grant_version=0,
         agent_id=agent_id,
-        project_name="Default Project",
+        run_id=run_id,
+        run_snapshot_id="",
     )
 
 
@@ -450,6 +529,7 @@ async def finalize_failed_leader_run(
     assistant_model_caches: list[ChatModelCacheRun],
     skill_runs: list[ChatSkillRun],
     sandbox: bool = False,
+    record_chat_message: bool = True,
 ) -> AsyncGenerator[str, None]:
     """完成 Leader run 失败路径的持久化与 UI 事件。"""
 
@@ -464,9 +544,10 @@ async def finalize_failed_leader_run(
         status="failed",
         title="Agent execution failed",
         content=assistant_error,
-        payload={"model": model_name},
+        payload={"model": model_name, **({"executionOutcome": _permission_outcome(current_chat_background_run_id())}
+                                         if _permission_outcome(current_chat_background_run_id()) else {})},
     )
-    if persist:
+    if persist and record_chat_message:
         _append_assistant_message(
             session_id=session_id,
             agent_id=agent_id,
@@ -500,7 +581,8 @@ async def finalize_failed_leader_run(
         agent_name=agent_name,
         status="failed",
         reason="agent_error",
-        payload={"message": assistant_error},
+        payload={"message": assistant_error, **({"executionOutcome": _permission_outcome(current_chat_background_run_id())}
+                                                 if _permission_outcome(current_chat_background_run_id()) else {})},
     )
     if sandbox:
         yield runtime_trace_source_event(

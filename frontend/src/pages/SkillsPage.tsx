@@ -45,6 +45,7 @@ export function SkillsPage() {
     loading,
     error,
     refresh,
+    loadSkill,
     registerSkill,
     importSkillArchive,
     exportSkill,
@@ -95,7 +96,7 @@ export function SkillsPage() {
     try {
       setBusyId(skillId);
       const next = await action();
-      setSelectedSkill((current) => (current?.id === next.id ? next : current));
+      setSelectedSkill((current) => (current?.id === next.id ? { ...current, ...next, content: current.content } : current));
     } finally {
       setBusyId(null);
     }
@@ -251,7 +252,7 @@ export function SkillsPage() {
           setImportError(null);
           void handleImportArchive(file);
         }}
-        onSelectSkill={setSelectedSkill}
+        onSelectSkill={(skill) => { void loadSkill(skill.id).then(setSelectedSkill).catch((err) => setImportError(err instanceof Error ? err.message : '读取 Skill 失败')); }}
         onExportSkill={(skill) => void handleExportSkill(skill)}
         onInstallSkill={(skill) => void runSkillAction(skill.id, () => installSkill(skill.id))}
         onUninstallSkill={(skill) => void runSkillAction(skill.id, () => uninstallSkill(skill.id))}

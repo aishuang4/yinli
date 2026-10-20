@@ -12,6 +12,7 @@ from agentscope.message import ToolCallBlock
 from src.group_studio.errors import (
     APPROVAL_NOT_PENDING,
     CROSS_PROJECT_SESSION,
+    CROSS_SESSION,
     GROUP_STUDIO_NOT_FOUND,
     STUDIO_PAUSED,
     WORKER_SESSION_LOST,
@@ -108,7 +109,13 @@ def decide_approval(
     snapshot = get_group_studio_snapshot(group_id, message_limit=1)
     if snapshot is None:
         raise GroupStudioError(404, GROUP_STUDIO_NOT_FOUND)
-    if project_id and project_id != str(snapshot.get("projectId") or ""):
+    from src.group_studio.access import current_request_session
+
+    session_id = current_request_session()
+    owner = str(snapshot.get("chatSessionId") or "")
+    if session_id and session_id != owner:
+        raise GroupStudioError(422, CROSS_SESSION)
+    if not session_id and project_id and project_id != str(snapshot.get("projectId") or ""):
         raise GroupStudioError(422, CROSS_PROJECT_SESSION)
     assert_can_mutate(str(snapshot.get("status") or ""))
     if str(snapshot.get("status") or "") == "paused":

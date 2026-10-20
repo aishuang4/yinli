@@ -29,7 +29,7 @@ from src.scheduler.job_toolkit import (
     optional_inventory,
     resolve_required_layer,
 )
-from src.scheduler.unattended_policy import agent_approval_policy, skill_package_has_scripts
+from src.scheduler.unattended_policy import skill_package_has_scripts
 from src.security.permissions import ApprovalPolicy, build_permission_profile
 from src.server.routes.agents import list_registered_agents
 
@@ -76,6 +76,7 @@ def evaluate_job_feasibility(
     required_intents: tuple[str, ...] | list[str] = (),
     claimed_must_include: frozenset[str] | None = None,
     include_suggestions: bool = True,
+    session_id: str = "",
 ) -> FeasibilityResult:
     """纯函数式门禁。不写库。不调模型。
 
@@ -86,6 +87,10 @@ def evaluate_job_feasibility(
     intent_text = str(task_intent or "")
     required = extract_required_intents(intent_text, required_intents)
     inventory = build_agent_capability_inventory(agent_id, project_id, workspace_id)
+    if session_id:
+        from src.scheduler.session_grant_check import filter_inventory_by_session
+
+        inventory = filter_inventory_by_session(inventory, session_id)
     from src.server.routes.agents import get_registered_agent
 
     agent = get_registered_agent(agent_id) if agent_id else None

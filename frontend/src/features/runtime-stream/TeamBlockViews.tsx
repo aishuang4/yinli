@@ -475,12 +475,11 @@ function MailboxPanel({ root, members, mails }: { root: TeamRecordBlock; members
 
   const send = async () => {
     const runId = text(root.data.chatRunId);
-    const projectId = text(root.data.projectId, 'default');
     if (!runId || !content.trim() || sending) return;
     setSending(true);
     setError('');
     try {
-      const response = await fetch(resolveApiUrl(`/api/chat/runs/${encodeURIComponent(runId)}/team/mail?projectId=${encodeURIComponent(projectId)}`), {
+      const response = await fetch(resolveApiUrl(`/api/chat/runs/${encodeURIComponent(runId)}/team/mail`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ recipient, content: content.trim(), dispatchMode }),

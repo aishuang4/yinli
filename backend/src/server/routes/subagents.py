@@ -5,9 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query
 
 from src.storage.database import (
-    DEFAULT_PROJECT_ID,
     count_subagent_transcript_items,
-    get_project,
     get_subagent_invocation,
     list_subagent_invocations,
     list_subagent_transcript_items,
@@ -21,14 +19,12 @@ router = APIRouter()
 
 @router.get("")
 async def list_subagents(
-    project_id: Annotated[str, Query(alias="projectId")] = DEFAULT_PROJECT_ID,
+    project_id: Annotated[str, Query(alias="projectId")] = "",
 ) -> dict:
-    """列出当前工作区加载到的 Subagent 文件定义。"""
+    """列出目前 tenant 的 Subagent 定義。projectId 不參與過濾。"""
 
-    project = get_project(project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    catalog = load_subagent_catalog(workspace_dir=str(project["rootPath"]))
+    del project_id
+    catalog = load_subagent_catalog()
     return {
         "definitions": [
             {
@@ -66,7 +62,7 @@ async def list_subagents(
 async def list_invocations(
     runId: str = "",
     sessionId: str = "",
-    projectId: str = DEFAULT_PROJECT_ID,
+    projectId: str = "",
     limit: int = 100,
 ) -> dict:
     """列出 Subagent invocation 审计记录。"""
@@ -84,8 +80,9 @@ async def list_invocations(
 def _get_project_invocation(invocation_id: str, project_id: str) -> dict:
     """按 invocation id 读取 task，并保持 Project 隔离。"""
 
+    del project_id
     invocation = get_subagent_invocation(invocation_id)
-    if invocation is None or invocation.get("projectId") != project_id:
+    if invocation is None:
         raise HTTPException(status_code=404, detail="Subagent invocation not found")
     return invocation
 
@@ -93,7 +90,7 @@ def _get_project_invocation(invocation_id: str, project_id: str) -> dict:
 @router.get("/invocations/{invocation_id}")
 async def get_invocation(
     invocation_id: str,
-    projectId: str = DEFAULT_PROJECT_ID,
+    projectId: str = "",
 ) -> dict:
     """读取一个稳定 Subagent task identity 的审计详情。"""
 
@@ -103,7 +100,7 @@ async def get_invocation(
 @router.get("/invocations/{invocation_id}/transcript")
 async def get_invocation_transcript(
     invocation_id: str,
-    projectId: str = DEFAULT_PROJECT_ID,
+    projectId: str = "",
     limit: int = 500,
     offset: int = 0,
 ) -> dict:
@@ -126,7 +123,7 @@ async def get_invocation_transcript(
 @router.post("/invocations/{invocation_id}/cancel")
 async def cancel_invocation(
     invocation_id: str,
-    projectId: str = DEFAULT_PROJECT_ID,
+    projectId: str = "",
 ) -> dict:
     """请求取消当前进程中由 Supervisor 执行的 Subagent task。"""
 

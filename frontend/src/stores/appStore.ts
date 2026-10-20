@@ -51,12 +51,10 @@ interface AppState {
   detailPanelOpen: boolean;
   /** 后端连接状态 */
   backendConnected: boolean;
-  /** 当前资源隔离 Workspace。 */
-  activeWorkspaceId: string;
-  /** 当前会话和运行所属 Project。 */
-  activeProjectId: string;
   /** 通知入口要打开的定时任务，消费后清空。 */
   pendingJobId: string | null;
+  /** 通知要打开的 Session，消费后清空。 */
+  pendingNotificationSessionId: string | null;
   /** 工作室表面。不持久化，刷新回 Chat。 */
   studioSurface: StudioSurface;
   /** 过渡相位。非 idle 时两个 pane 同时可见。 */
@@ -74,12 +72,22 @@ interface AppState {
   toggleDetailPanel: () => void;
   /** 设置后端连接状态 */
   setBackendConnected: (connected: boolean) => void;
-  /** 原子切换 Workspace / Project，避免出现不一致的中间状态。 */
-  setActiveContext: (workspaceId: string, projectId: string) => void;
   /** 从通知跳转到指定定时任务。 */
   openScheduledJob: (jobId: string) => void;
   /** 消费通知跳转后的 pending Job。 */
   clearPendingJobId: () => void;
+  /** 从通知打开 owner Session。 */
+  openNotificationSession: (sessionId: string) => void;
+  clearPendingNotificationSession: () => void;
+  /** 切換 Session 時立刻收起群聊投影，不等過渡動畫。 */
+  discardStudioSurface: () => void;
+  /** 用網址恢復 Session、視圖和 Job，不另外改寫 query。 */
+  restoreSessionLocation: (location: {
+    view?: ViewType;
+    sessionId?: string;
+    jobId?: string;
+    studioId?: string;
+  }) => void;
   /** 打开工作室表面。不改 TitleBar 的 WorkspaceMode 集合；若在任务流则先回到工作台 Chat。 */
   openGroupStudio: (groupId: string | null, seed?: GroupStudioDraftSeed) => void;
   /** 收起工作室，回到 Chat。 */
@@ -95,9 +103,8 @@ export const useAppStore = create<AppState>()((set) => ({
   workspaceMode: 'workstation',
   detailPanelOpen: false,
   backendConnected: false,
-  activeWorkspaceId: 'default',
-  activeProjectId: 'default',
   pendingJobId: null,
+  pendingNotificationSessionId: null,
   studioSurface: 'none',
   studioTransition: 'idle',
   activeGroupStudioId: null,
@@ -119,10 +126,6 @@ export const useAppStore = create<AppState>()((set) => ({
   toggleDetailPanel: () =>
     set((state) => ({ detailPanelOpen: !state.detailPanelOpen })),
   setBackendConnected: (connected) => set({ backendConnected: connected }),
-  setActiveContext: (activeWorkspaceId, activeProjectId) => set({
-    activeWorkspaceId,
-    activeProjectId,
-  }),
   openScheduledJob: (jobId) => {
     const features = useProductFeaturesStore.getState().features;
     if (!isViewEnabled(features, 'jobs')) {
@@ -135,6 +138,31 @@ export const useAppStore = create<AppState>()((set) => ({
     });
   },
   clearPendingJobId: () => set({ pendingJobId: null }),
+  openNotificationSession: (sessionId) => set({
+    currentView: 'chat',
+    workspaceMode: 'workstation',
+    pendingNotificationSessionId: sessionId,
+  }),
+  clearPendingNotificationSession: () => set({ pendingNotificationSessionId: null }),
+  discardStudioSurface: () => set({
+    studioSurface: 'none',
+    studioTransition: 'idle',
+    activeGroupStudioId: null,
+    localStudioSeed: null,
+  }),
+  restoreSessionLocation: ({ view, sessionId, jobId, studioId }) => set((state) => {
+    const features = useProductFeaturesStore.getState().features;
+    const nextView = view && isViewEnabled(features, view) ? view : state.currentView;
+    return {
+      currentView: nextView,
+      workspaceMode: 'workstation',
+      pendingNotificationSessionId: sessionId || null,
+      pendingJobId: jobId || null,
+      activeGroupStudioId: studioId || null,
+      studioSurface: studioId && isSurfaceEnabled(features, 'groupStudio') ? 'group-studio' : state.studioSurface,
+      localStudioSeed: null,
+    };
+  }),
   openGroupStudio: (groupId, seed) => set((state) => {
     if (!isSurfaceEnabled(useProductFeaturesStore.getState().features, 'groupStudio')) {
       return state;
