@@ -140,13 +140,7 @@ class WorkspaceProjectRecordStore:
         with self.lock, self.connect() as conn:
             workspace = conn.execute("SELECT id FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
             if workspace is None:
-                conn.execute(
-                    """
-                    INSERT INTO workspaces (id, name, description, status, created_at, updated_at)
-                    VALUES (?, ?, '', 'active', ?, ?)
-                    """,
-                    (workspace_id, workspace_id, now, now),
-                )
+                raise ValueError(f"Workspace 不存在: {workspace_id}")
             conn.execute(
                 """
                 INSERT INTO projects (
@@ -267,15 +261,6 @@ class WorkspaceProjectRecordStore:
         resource_type = str(data.get("resource_type") or data.get("resourceType") or "")
         resource_id = str(data.get("resource_id") or data.get("resourceId") or "")
         now = self.utc_now()
-        if project_id and self.get_project(project_id) is None:
-            root = Path(self.project_root)
-            root.mkdir(parents=True, exist_ok=True)
-            self.create_project({
-                "id": project_id,
-                "workspace_id": self.default_workspace_id,
-                "name": project_id,
-                "root_path": str(root),
-            })
         with self.lock, self.connect() as conn:
             if conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone() is None:
                 raise ValueError(f"Project 不存在: {project_id}")

@@ -10,7 +10,6 @@ from src.scheduler.settings import set_scheduled_jobs_settings
 from src.storage import database
 from src.tenancy.context import TenantContext, use_tenant
 from src.tenancy.lifecycle import ensure_tenant
-from test.hosted_support import seed_legacy_project
 
 pytest_plugins = ["test.hosted_support"]
 
@@ -37,7 +36,6 @@ def test_tenant_b_cannot_read_tenant_a_resources(hosted_env):
     ensure_tenant(USER_A)
     ensure_tenant(USER_B)
     with use_tenant(TenantContext.hosted(USER_A["id"])):
-        seed_legacy_project()
         database.insert_chat_session_if_absent(_session("sess-a"))
         database.insert_user_notification({
             "id": "ntf-a",

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from types import SimpleNamespace
 
 from src.memory.extraction_agents import SkillDraftPayload, SkillEvolutionAgentPayload
@@ -113,11 +112,12 @@ def test_unparseable_model_text_is_an_error():
 
 
 def test_model_allow_without_keywords_still_drafts(tmp_path, monkeypatch):
-    # autouse local_tenant fixture 已隔离 SQLite，不能再替换旧全局 DB_PATH。
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
     import src.server.routes.skills as skills_routes
 
     original = dict(skills_routes._skills)
-    # Skill 包路径同样由 local_tenant 的数据根派生。
+    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
 
     async def allow_review(**kwargs):
         assert "压缩摘要" in kwargs["user_prompt"] or "user:" in kwargs["user_prompt"]
@@ -164,7 +164,8 @@ def test_model_allow_without_keywords_still_drafts(tmp_path, monkeypatch):
             )
         )
     finally:
-        pass  # 租户文件夹具由 conftest 隔离，无内存登记表需要恢复。
+        skills_routes._skills.clear()
+        skills_routes._skills.update(original)
 
     assert result.skill_evolution_record is not None
     assert result.skill_evolution_record["status"] == "registered"
@@ -172,7 +173,8 @@ def test_model_allow_without_keywords_still_drafts(tmp_path, monkeypatch):
 
 
 def test_model_deny_skips_draft_and_keeps_reason(tmp_path, monkeypatch):
-    # autouse local_tenant fixture 已隔离 SQLite，不能再替换旧全局 DB_PATH。
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
 
     async def deny_review(**kwargs):
         del kwargs
@@ -205,7 +207,8 @@ def test_model_deny_skips_draft_and_keeps_reason(tmp_path, monkeypatch):
 
 
 def test_model_failure_falls_back_to_keyword_gate(tmp_path, monkeypatch):
-    # autouse local_tenant fixture 已隔离 SQLite，不能再替换旧全局 DB_PATH。
+    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
+    monkeypatch.setattr(database, "_initialized", False)
 
     async def broken_review(**kwargs):
         del kwargs

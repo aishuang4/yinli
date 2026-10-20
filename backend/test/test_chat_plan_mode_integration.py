@@ -11,7 +11,6 @@ from src.server.routes.chat.react_runtime import (
     _build_runtime_feature_parts,
 )
 from src.server.routes.chat.runtime_builder import RuntimeModelConfig, build_main_agent_runtime_spec
-from test.snapshot_support import freeze_test_snapshot
 
 
 def test_plan_mode_cache_key_can_be_included_in_runtime_agent_id() -> None:
@@ -35,8 +34,6 @@ def test_plan_mode_cache_key_can_be_included_in_runtime_agent_id() -> None:
         runtime_features_cache_key="plan-mode-v1",
         extra_tools=[],
         middlewares=[],
-        run_snapshot=freeze_test_snapshot(),
-        apply_snapshot_filesystem=False,
     )
 
     assert "features-plan-mode-v1" in spec.runtime_agent_id

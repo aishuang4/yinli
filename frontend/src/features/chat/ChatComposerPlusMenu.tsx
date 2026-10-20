@@ -736,7 +736,7 @@ function describeItem(
   if (item.kind === 'skill') {
     return {
       icon: <BookOpen size={15} />,
-      title: `/${(item.skill.loadName || item.skill.name)}`,
+      title: `/${item.skill.name}`,
       checked: state.skillChecked,
       badge: '已开启',
     };

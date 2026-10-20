@@ -1,8 +1,6 @@
 """定时任务 schema、session kind、weekly/once 调度与状态机回归。"""
 
 from __future__ import annotations
-from test.file_skill_fixtures import install_file_skills as replace_skills
-
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -39,6 +37,7 @@ from src.storage.database import (
     ensure_db,
     get_chat_run,
     list_user_notifications,
+    replace_skills,
     upsert_agent,
     upsert_chat_run,
     upsert_project_resource_binding,
@@ -83,6 +82,12 @@ def _ensure_skill(skill_id: str) -> None:
             "updatedAt": "2026-08-20T00:00:00+00:00",
             "workspaceId": DEFAULT_WORKSPACE_ID,
         },
+    })
+    upsert_project_resource_binding({
+        "project_id": DEFAULT_PROJECT_ID,
+        "resource_type": "skill",
+        "resource_id": skill_id,
+        "enabled": True,
     })
 
 

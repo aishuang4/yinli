@@ -46,7 +46,6 @@ from src.server.routes.chat.run_context import build_chat_run_context
 from src.agents.factory import _safe_workspace_dir
 from src.config.runtime_paths import default_project_root
 from src.storage.database import _normalize_guardrails
-from test.snapshot_support import freeze_test_snapshot as _freeze_test_snapshot
 from src.server.routes.chat.runtime_builder import (
     RuntimeModelConfig,
     build_main_agent_runtime_spec,
@@ -73,13 +72,6 @@ from src.runtime_context import RuntimeContext
 def _test_runtime_context(session_id: str = "session-1", agent_id: str = "agent-1") -> RuntimeContext:
     """构造不依赖持久化 Project 的测试运行上下文。"""
 
-    from src.sessions.records import create_session, get_run_snapshot, get_session
-    from src.sessions.run_binding import begin_run
-
-    if get_session(session_id) is None:
-        create_session(session_id=session_id, agent_id=agent_id or "default")
-    if get_run_snapshot("run-test") is None:
-        begin_run(session_id, "run-test", agent_id="default", start_model=lambda item: item)
     return RuntimeContext(
         workspace_id="default",
         project_id="default",
@@ -1679,8 +1671,8 @@ def test_resume_event_covers_every_pending_tool_call_in_same_reply():
         PENDING_AGENTS.clear()
 
 
-def test_old_remember_approval_field_never_grants_tool_wide_permission():
-    """旧客户端记住字段不再追加规则，批准只涵盖当前列出的调用。"""
+def test_resume_event_can_remember_tool_approval_for_current_session():
+    """用户选择记住确认时，恢复事件向 AgentScope 追加同类工具允许规则。"""
 
     interaction = _create_pending_interaction(
         interaction_type="REQUIRE_USER_CONFIRM",
@@ -1714,9 +1706,10 @@ def test_old_remember_approval_field_never_grants_tool_wide_permission():
         )
 
         rules = resume_event.confirm_results[0].rules
-        assert rules is None
-        assert len(resume_event.confirm_results) == 1
-        assert resume_event.confirm_results[0].tool_call.id == "call-bash"
+        assert rules is not None
+        assert [(rule.tool_name, rule.rule_content, rule.behavior.value, rule.source) for rule in rules] == [
+            ("Bash", None, "allow", "chat_session_approval"),
+        ]
     finally:
         PENDING_INTERACTIONS.clear()
         PENDING_AGENTS.clear()
@@ -2527,7 +2520,7 @@ def test_chat_run_context_includes_memory_prompt(monkeypatch):
         lambda *args, **kwargs: "",
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.run_context.run_resource_access",
+        "src.server.routes.chat.run_context.resolve_project_resource_access",
         lambda context: SimpleNamespace(
             require_agent=lambda agent_id: None,
             filter_ids=lambda resource_type, resource_ids: resource_ids,
@@ -2576,7 +2569,7 @@ def test_chat_run_context_keeps_history_out_of_system_prompt(monkeypatch):
     monkeypatch.setattr("src.runtime.governance.build_habit_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr("src.runtime.governance.build_professional_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr(
-        "src.server.routes.chat.run_context.run_resource_access",
+        "src.server.routes.chat.run_context.resolve_project_resource_access",
         lambda runtime_context: SimpleNamespace(
             require_agent=lambda agent_id: None,
             filter_ids=lambda resource_type, resource_ids: resource_ids,
@@ -2657,8 +2650,6 @@ def test_main_agent_runtime_spec_wraps_factory_inputs():
         knowledge_tools=[],
         runtime_tool_scope=tool_scope,
         guardrail_cache_key="guardrails",
-        run_snapshot=_freeze_test_snapshot(),
-        apply_snapshot_filesystem=False,
     )
 
     assert spec.name == "Agent"
@@ -2699,8 +2690,6 @@ def test_create_main_agent_from_spec_delegates_to_factory(monkeypatch):
         knowledge_tools=[],
         runtime_tool_scope=tool_scope,
         guardrail_cache_key="guardrails",
-        run_snapshot=_freeze_test_snapshot(),
-        apply_snapshot_filesystem=False,
     )
 
     result = create_main_agent_from_spec(
@@ -2738,22 +2727,20 @@ def test_default_workspace_dir_is_project_root_not_user_home():
     assert Path(workspace).is_dir()
 
 
-def test_legacy_root_filesystem_scope_is_not_a_grant():
-    """`/` 與空範圍不再變成 default project root 或 cwd。"""
+def test_legacy_root_filesystem_scope_maps_to_project_workspace():
+    """历史默认 filesystem_scope='/' 不应被映射到用户主目录。"""
 
     guardrails = AgentGuardrails(filesystem_scope="/")
 
-    assert guardrails.filesystem_scope == ""
-    assert _safe_workspace_dir(guardrails) == ""
-    assert _safe_workspace_dir(AgentGuardrails()) == ""
+    assert _safe_workspace_dir(guardrails) == str(default_project_root())
 
 
 def test_storage_normalizes_legacy_root_filesystem_scope():
-    """歷史庫中的 `/` 讀出時保持未授權，不寫成 Project root。"""
+    """历史库中保存的 '/' 读出时也展示为项目根目录。"""
 
     guardrails = _normalize_guardrails({"filesystem_scope": "/"})
 
-    assert guardrails["filesystem_scope"] == ""
+    assert guardrails["filesystem_scope"] == str(default_project_root())
 
 
 def test_unified_permission_profile_denies_write_in_read_only():

@@ -55,15 +55,16 @@ class _AllowSome:
 
 @pytest.fixture
 def installed(monkeypatch: pytest.MonkeyPatch) -> dict[str, Skill]:
-    from src.catalog.skill_seed import seed_system_skills
-    from src.skills.registry import register_user_skill, SkillRegisterRequest, get_installed_skill
-    from src.skills.policy import set_skill_policy
-    seed_system_skills()
-    private = register_user_skill(SkillRegisterRequest(name="private-pack", description="private"))
-    disabled = register_user_skill(SkillRegisterRequest(name="disabled-pack", description="disabled"))
-    set_skill_policy(private._catalog_context.policy_path, private.id, availableToAllAgents=False)
-    set_skill_policy(disabled._catalog_context.policy_path, disabled.id, enabled=False)
-    skills = {key: get_installed_skill(key) for key in ("word-documents", "yinli-charts", "private-pack")}
+    skills = {
+        "word-documents": _skill("word-documents", content=SKILL_BODY),
+        "yinli-charts": _skill("yinli-charts", content="# charts"),
+        "private-pack": _skill("private-pack", available_to_all_agents=False),
+        "disabled-pack": _skill("disabled-pack", enabled=False),
+    }
+    monkeypatch.setattr(
+        "src.server.routes.chat.run_context.get_installed_skill",
+        lambda sid: skill if (skill := skills.get(sid)) is not None and skill.enabled else None,
+    )
     return skills
 
 
@@ -74,7 +75,7 @@ def test_resolve_forced_skills_requires_installed_and_project(installed) -> None
     )
     assert [skill.id for skill in resolved] == ["word-documents"]
 
-    with pytest.raises(ValueError, match="不存在、停用或有歧义"):
+    with pytest.raises(ValueError, match="不存在或未启用"):
         resolve_forced_runtime_skills(["missing-skill"], project_resources=_AllowAll())
 
     with pytest.raises(ValueError, match="未授权给当前 Project"):
@@ -83,9 +84,11 @@ def test_resolve_forced_skills_requires_installed_and_project(installed) -> None
             project_resources=_AllowSome(set()),
         )
 
-    # 共享只绕过 Agent profile，不能越过 Project 白名单。
-    with pytest.raises(ValueError, match="未授权给当前 Project"):
-        resolve_forced_runtime_skills(["word-documents"], project_resources=_AllowSome(set()))
+    shared = resolve_forced_runtime_skills(
+        ["word-documents"],
+        project_resources=_AllowSome(set()),
+    )
+    assert [skill.id for skill in shared] == ["word-documents"]
 
 
 def test_resolve_forced_skills_caps_count(installed) -> None:
@@ -121,21 +124,17 @@ def test_activate_forced_skills_writes_body_into_context(tmp_path, monkeypatch) 
     package.mkdir()
     (package / "SKILL.md").write_text(SKILL_BODY, encoding="utf-8")
     skill = _skill("word-documents")
-    from src.skills.sdk import resolved_path
     skill = skill.model_copy(update={"resource_path": str(package)})
-    skill._resolved_skill = resolved_path(str(package))
-    skill.id = skill._resolved_skill.candidate.id
-    skill.load_name = skill._resolved_skill.candidate.load_name
     agent = _FakeAgent()
 
     assert activate_forced_skills(agent, [skill]) == ["word-documents"]
-    assert skill.id in activated_skills(agent)
+    assert "word-documents" in activated_skills(agent)
     corpus = " ".join(
         str(getattr(block, "hint", "") or getattr(block, "text", "") or "")
         for msg in agent.state.context
         for block in (msg.content or [])
     )
-    assert '<activated-skill name="word-documents"' in corpus
+    assert "<activated-skill name=\"word-documents\">" in corpus
     assert "步骤 1" in corpus
 
 

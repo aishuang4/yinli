@@ -204,7 +204,7 @@ def binding(model_config_id: str) -> RuntimeModelBinding:
 async def login_cloud(*, base_url: str, email: str, password: str) -> dict:
     url = (base_url or settings.cloud_base_url).strip().rstrip("/")
     if not url:
-        raise CloudSessionError("安装包未配置云端地址", status=422)
+        raise CloudSessionError("请填写云端地址", status=422)
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(

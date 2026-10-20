@@ -25,18 +25,6 @@ export interface Skill {
   workspaceId?: string;
   sourceKind?: string;
   sourceScope?: string;
-  sourcePath?: string;
-  contentHash?: string;
-  loadName?: string;
-  rootKey?: string;
-  ownerKey?: string;
-  resolutionState?: 'resolved' | 'shadowed' | 'ambiguous' | 'invalid' | 'missing';
-  errorCode?: string;
-  reason?: string;
-  shadowedBy?: string[];
-  alternatives?: string[];
-  managed?: boolean;
-  catalogVersion?: string;
 }
 
 export const LOCKED_SHARED_SKILL_ID = 'yinli-catalog';

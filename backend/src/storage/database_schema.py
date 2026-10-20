@@ -579,8 +579,6 @@ BASE_SCHEMA_SQL = """
         last_run_at TEXT,
         frozen_prompt TEXT NOT NULL,
         skill_ids TEXT NOT NULL DEFAULT '[]',
-        required_skills TEXT NOT NULL DEFAULT '[]',
-        context_policy TEXT NOT NULL DEFAULT 'fresh',
         tool_scope TEXT NOT NULL DEFAULT '{"allow_bash":false,"allow_http":false,"allow_web":false,"allow_mcp":false,"allow_knowledge":false}',
         capability_contract TEXT NOT NULL DEFAULT '{}',
         input_spec TEXT NOT NULL DEFAULT '{}',
@@ -684,7 +682,8 @@ BASE_SCHEMA_SQL = """
         wave_spoken_json TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        archived_at TEXT
+        archived_at TEXT,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_group_studios_active_chat
         ON group_studios(chat_session_id)

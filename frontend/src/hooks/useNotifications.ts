@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect } from 'react';
 import { useNotificationStore } from '../stores/notificationStore';
+import { useAppStore } from '../stores/appStore';
 import type {
   DesktopNotificationPayload,
   NotificationListResponse,
@@ -63,11 +64,12 @@ function presentIncomingNotification(item: UserNotification) {
 
 export function useNotifications(options: UseNotificationsOptions = {}): UseNotificationsReturn {
   const subscribe = Boolean(options.subscribe);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const items = useNotificationStore((state) => state.items);
   const unreadCount = useNotificationStore((state) => state.unreadCount);
   const loading = useNotificationStore((state) => state.loading);
   const error = useNotificationStore((state) => state.error);
-  const projectQuery = '';
+  const projectQuery = activeProjectId ? `projectId=${encodeURIComponent(activeProjectId)}` : '';
 
   const refresh = useCallback(async () => {
     useNotificationStore.getState().setInbox({ loading: true, error: null });

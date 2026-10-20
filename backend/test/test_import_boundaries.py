@@ -84,11 +84,9 @@ PUBLIC_RUNTIME_MODULES = {
     "src.runtime.agent_python",
     "src.runtime.agent_resources",
     "src.runtime.agent_spec",
-    "src.runtime.authorization",
     "src.runtime.chat_session",
     "src.runtime.governance",
     "src.runtime.scheduled_chat",
-    "src.runtime.session_context",
 }
 
 
@@ -114,15 +112,3 @@ def test_group_studio_and_scheduler_use_public_runtime_entries() -> None:
                 elif module.startswith(CHAT_PREFIX):
                     offenders.append(f"{relative} 直接 import {module}，请改用 {PUBLIC_ENTRY}")
     assert offenders == []
-
-
-def test_skill_core_does_not_depend_on_http_routes_or_legacy_registration():
-    """加载核心保持独立，旧 SQL 登记源只允许迁移模块读取。"""
-    for filename in ("catalog.py", "policy.py", "parser.py", "reader.py", "models.py", "sdk.py"):
-        text = (BACKEND_SRC / "skills" / filename).read_text()
-        assert "src.server.routes" not in text
-        assert "db_list_skills" not in text
-        assert "replace_skills" not in text
-    registry = (BACKEND_SRC / "skills/registry.py").read_text()
-    assert "src.storage.database" not in registry
-    assert "external_skill_overrides" not in registry

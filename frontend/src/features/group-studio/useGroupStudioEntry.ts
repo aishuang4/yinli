@@ -20,6 +20,7 @@ export function takeStudioComposerPrefill(): string {
 }
 
 interface UseGroupStudioEntryOptions {
+  activeProjectId: string;
   activeSessionId: string | null;
   agentId: string;
   modelConfigId?: string;
@@ -32,11 +33,13 @@ interface UseGroupStudioEntryOptions {
   setActiveSessionId: (sessionId: string) => void;
   uploadFilesForSession: (
     files: ChatFileAttachment[],
+    projectId: string,
     sessionId: string,
   ) => Promise<Array<{ path: string }>>;
 }
 
 export function useGroupStudioEntry({
+  activeProjectId,
   activeSessionId,
   agentId,
   modelConfigId,
@@ -111,6 +114,10 @@ export function useGroupStudioEntry({
       notifyError('请先停止或完成当前回复');
       return;
     }
+    if (!activeProjectId) {
+      notifyError('请先选择 Workspace 和 Project');
+      return;
+    }
     if (hasImages) {
       notifyError('图片不会带入工作室');
     }
@@ -140,6 +147,7 @@ export function useGroupStudioEntry({
       setEntering(false);
     }
   }, [
+    activeProjectId,
     activeSessionId,
     agentId,
     modelConfigId,

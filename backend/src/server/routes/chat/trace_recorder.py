@@ -15,7 +15,7 @@ from src.security.permissions import (
 )
 from src.storage.database import append_run_event
 
-from src.sessions.files import is_user_facing_session_artifact
+from src.project_files import is_user_facing_session_artifact
 from src.server.routes.chat.helpers import _trim_text
 from src.server.routes.chat.models import ChatModelCacheRun, ChatToolRun, TRACE_EVENT_TYPES
 from src.server.routes.chat.tool_state import _tool_result_status
@@ -172,14 +172,7 @@ def _record_permission_decision(
 ) -> None:
     """Record a platform-level permission decision for tool execution."""
 
-    authorization = event_data.get("authorization")
-    if isinstance(authorization, dict) and event_type in {"TOOL_RESULT_START", "REQUIRE_USER_CONFIRM"}:
-        _record_run_event(session_id=session_id, event_type="PERMISSION_DECISION", persist=persist,
-                          scope=scope, agent_id=agent_id, agent_name=agent_name,
-                          status=str(authorization.get("verdict") or ""), title="平台行动权限决策",
-                          payload=authorization)
-        return
-    if event_data.get("platformAuthorization") or event_type != "TOOL_CALL_START":
+    if event_type != "TOOL_CALL_START":
         return
 
     payload = _permission_decision_payload(event_data, guardrails)
@@ -412,9 +405,6 @@ def _finish_context_stats(agent: object, stats: dict[str, Any], text_bytes: int,
     window = int(getattr(model, "context_size", 0) or 0)
     if window > 0:
         stats["contextWindow"] = window
-    skill_context = getattr(agent, "_aw_skill_context", None)
-    if isinstance(skill_context, dict) and skill_context:
-        stats["skillContext"] = dict(skill_context)
     config = getattr(agent, "context_config", None)
     trigger_ratio = float(getattr(config, "trigger_ratio", 0.8) or 0.8)
     stats["triggerRatio"] = round(trigger_ratio, 3)
@@ -517,19 +507,9 @@ def record_context_compression_events(
                 f"messages {record.get('messagesBefore')} -> {record.get('messagesAfter')}, "
                 f"summary {record.get('summaryCharsAfter')} chars"
             ),
-            payload=_compression_payload(record),
+            payload=dict(record),
         )
     return records
-
-
-def _compression_payload(record: dict) -> dict:
-    """壓縮審計帶上目前 Run snapshot 摘要，不重新展開權限。"""
-
-    payload = dict(record)
-    from src.sessions.run_binding import current_snapshot_audit
-
-    payload.update(current_snapshot_audit())
-    return payload
 
 
 def _record_agent_scope_event(

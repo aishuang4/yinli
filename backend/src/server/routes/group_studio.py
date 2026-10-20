@@ -5,12 +5,10 @@ V2：进群即 open；旧 intake / 阶段推进接口 410。
 """
 
 import asyncio
-import json
 
 from fastapi import APIRouter, Depends, File, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
-from src.group_studio.access import bind_request_session, reset_request_session
 from src.group_studio.errors import (
     GROUP_STUDIO_DISABLED,
     ILLEGAL_TRANSITION,
@@ -73,27 +71,7 @@ from src.storage.database import (
     list_group_studio_events_after,
 )
 
-async def bind_group_session(request: Request):
-    """從 query 或 JSON body 讀 sessionId，供跨 Session 拒絕使用。"""
-
-    session_id = str(request.query_params.get("sessionId") or "")
-    if not session_id and request.method in {"POST", "PUT", "PATCH"}:
-        raw = await request.body()
-        if raw:
-            try:
-                payload = json.loads(raw)
-            except json.JSONDecodeError:
-                payload = {}
-            if isinstance(payload, dict):
-                session_id = str(payload.get("sessionId") or "")
-    token = bind_request_session(session_id)
-    try:
-        yield
-    finally:
-        reset_request_session(token)
-
-
-router = APIRouter(dependencies=[Depends(bind_group_session)])
+router = APIRouter()
 
 
 def require_group_studio_enabled() -> None:
@@ -113,11 +91,10 @@ def _gone() -> None:
 
 
 @router.get("", dependencies=[EnabledDep])
-async def list_studios_route(projectId: str = Query(default="", alias="projectId")) -> dict:
-    """列出目前 tenant 的工作室。projectId 已退役，不參與過濾。"""
+async def list_studios_route(projectId: str = Query(..., alias="projectId")) -> dict:
+    """列出当前 Project 工作室（含 done，不含 deleted）。"""
 
-    del projectId
-    return {"studios": list_studios("")}
+    return {"studios": list_studios(projectId)}
 
 
 @router.post("/from-chat", dependencies=[EnabledDep])
@@ -134,10 +111,7 @@ async def create_from_chat(body: GroupStudioFromChatRequest) -> GroupStudio:
 async def get_by_chat_session(session_id: str) -> GroupStudio | None:
     """按 Chat session 探活未结束房间。"""
 
-    try:
-        return get_studio_by_chat_session(session_id)
-    except GroupStudioError as exc:
-        raise group_studio_http_error(exc.status_code, exc.code) from exc
+    return get_studio_by_chat_session(session_id)
 
 
 @router.get("/{group_id}", dependencies=[EnabledDep])

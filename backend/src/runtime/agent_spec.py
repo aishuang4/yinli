@@ -22,10 +22,8 @@ from src.agents.factory import (
     RuntimeToolScope,
     get_or_create_agent,
 )
-from src.agents.runtime_types import SKILL_LOADING_INTERACTIVE, normalize_skill_loading_mode
 from src.agents.session_context import session_context_key
-from src.runtime.authorization import RunAuthorizationBinding
-from src.skills.registry import Skill
+from src.server.routes.skills import Skill
 
 
 @dataclass(frozen=True)
@@ -64,11 +62,6 @@ class MainAgentRuntimeSpec:
     write_scope_dir: str = ""
     include_default_tools: bool = True
     extra_filesystem_scopes: list[str] = field(default_factory=list)
-    authorization: RunAuthorizationBinding | None = None
-    context_scope: str = ""
-    # interactive_on_demand：模型按需调用 Skill viewer；scheduled_preloaded：只用预加载的 required Skill。
-    skill_loading_mode: str = SKILL_LOADING_INTERACTIVE
-    run_snapshot: dict[str, Any] | None = None
 
     @property
     def session_context_key(self) -> str:
@@ -76,10 +69,7 @@ class MainAgentRuntimeSpec:
 
         if not self.session_id:
             return ""
-        base = session_context_key(self.parent_agent_id, self.session_id)
-        if self.context_scope:
-            return f"{base}:{self.context_scope}"
-        return base
+        return session_context_key(self.parent_agent_id, self.session_id)
 
 
 def build_runtime_agent_cache_key(
@@ -97,17 +87,9 @@ def build_runtime_agent_cache_key(
     runtime_tool_scope: RuntimeToolScope,
     guardrail_cache_key: str,
     runtime_features_cache_key: str = "none",
-    run_snapshot_id: str = "",
-    context_scope: str = "",
-    skill_loading_mode: str = SKILL_LOADING_INTERACTIVE,
 ) -> str:
-    """生成影响 Agent 实例缓存的稳定 key。
+    """生成影响 Agent 实例缓存的稳定 key。"""
 
-    Skill 加载模式决定模型可见工具集（是否有 `Skill` viewer），必须进 key：
-    同一 Agent / Session 的交互式与 scheduled 触发不能复用同一实例。
-    """
-
-    skill_loading_mode = normalize_skill_loading_mode(skill_loading_mode)
     skill_cache_parts: list[str] = []
     for path in sorted(skill_paths or []):
         skill_md = os.path.join(path, "SKILL.md")
@@ -128,19 +110,15 @@ def build_runtime_agent_cache_key(
     # system prompt 正文刻意不进 key：它每轮都会随记忆摘要、Skill Run 等变化，
     # 进 key 会导致每轮新建实例、AgentScope 会话记忆丢失并且旧实例泄漏。
     # 工厂在复用实例时会直接刷新 `_system_prompt`。
-    del system_prompt
-    skill_cache_key = hashlib.sha256((skill_cache_key + str([(item.id, item.load_name, item.content_hash, item.catalog_version) for item in used_skills])).encode()).hexdigest()[:16]
+    del system_prompt, used_skills
     return (
         f"{agent_id}:{session_id}:{model_name}:thinking-{deep_thinking}:"
         f"fallbacks-{fallback_cache_key}:"
         f"skills-{skill_cache_key}:mcp-{mcp_cache_key}:knowledge-{knowledge_cache_key}:"
         f"tools-{runtime_tool_scope.cache_key()}:"
-        f"skill-loading-{skill_loading_mode}:"
         f"features-{runtime_features_cache_key}:"
         f"guardrails-{guardrail_cache_key}:"
         f"catalog-{catalog_fingerprint()}"
-        + (f":snapshot-{run_snapshot_id}" if run_snapshot_id else "")
-        + (f":scope-{context_scope}" if context_scope else "")
     )
 
 
@@ -168,42 +146,9 @@ def build_main_agent_runtime_spec(
     write_scope_dir: str = "",
     include_default_tools: bool = True,
     extra_filesystem_scopes: list[str] | None = None,
-    authorization: RunAuthorizationBinding | None = None,
-    run_snapshot: dict[str, Any],
-    apply_snapshot_filesystem: bool = True,
-    context_scope: str = "",
-    skill_loading_mode: str = SKILL_LOADING_INTERACTIVE,
 ) -> MainAgentRuntimeSpec:
     """构建主 Agent 工厂参数，不包含 trace 回调。"""
 
-    skill_loading_mode = normalize_skill_loading_mode(skill_loading_mode)
-    if run_snapshot is None:
-        from src.sessions.errors import SessionError
-
-        raise SessionError("snapshot_required", "Run 没有冻结快照")
-    snapshot_id = ""
-    if run_snapshot is not None:
-        from src.sessions.factory_snapshot import apply_run_snapshot_to_factory
-
-        applied = apply_run_snapshot_to_factory(
-            run_snapshot,
-            guardrails=guardrails,
-            skill_paths=skill_paths,
-            mcp_servers=mcp_servers,
-            knowledge_tools=knowledge_tools,
-            used_skills=used_skills,
-            apply_filesystem=apply_snapshot_filesystem,
-        )
-        snapshot_id = applied.snapshot_id
-        skill_paths = list(applied.skill_paths)
-        mcp_servers = list(applied.mcp_servers)
-        knowledge_tools = list(applied.knowledge_tools)
-        used_skills = list(applied.used_skills)
-        if apply_snapshot_filesystem:
-            guardrails = applied.guardrails
-            workspace_dir = applied.workspace_dir
-            write_scope_dir = applied.write_scope_dir
-            extra_filesystem_scopes = list(applied.extra_filesystem_scopes)
     runtime_agent_id = build_runtime_agent_cache_key(
         agent_id=agent_id,
         session_id=session_id,
@@ -218,9 +163,6 @@ def build_main_agent_runtime_spec(
         runtime_tool_scope=runtime_tool_scope,
         guardrail_cache_key=guardrail_cache_key,
         runtime_features_cache_key=runtime_features_cache_key,
-        run_snapshot_id=snapshot_id,
-        context_scope=context_scope,
-        skill_loading_mode=skill_loading_mode,
     )
     return MainAgentRuntimeSpec(
         runtime_agent_id=runtime_agent_id,
@@ -246,10 +188,6 @@ def build_main_agent_runtime_spec(
         write_scope_dir=write_scope_dir,
         include_default_tools=include_default_tools,
         extra_filesystem_scopes=list(extra_filesystem_scopes or []),
-        authorization=authorization,
-        context_scope=context_scope,
-        skill_loading_mode=skill_loading_mode,
-        run_snapshot=run_snapshot,
     )
 
 
@@ -287,7 +225,4 @@ def create_main_agent_from_spec(
         include_default_tools=spec.include_default_tools,
         extra_filesystem_scopes=spec.extra_filesystem_scopes,
         session_context_key=spec.session_context_key or None,
-        authorization=spec.authorization,
-        skill_loading_mode=spec.skill_loading_mode,
-        run_snapshot=spec.run_snapshot,
     )

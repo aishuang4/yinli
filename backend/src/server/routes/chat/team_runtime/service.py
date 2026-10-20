@@ -2,7 +2,6 @@
 
 import asyncio
 from collections.abc import AsyncGenerator
-from typing import Any
 
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.completion import finalize_failed_leader_run, finalize_successful_leader_run
@@ -20,8 +19,6 @@ from src.server.routes.chat.team_runtime.store import (
     TeamStoreError,
     TeamStore,
 )
-from src.server.routes.chat.hitl import _clear_pending_interaction, _hitl_payload
-from src.server.routes.chat.runtime_events import runtime_trace_source_event
 
 
 async def execute_team_runtime(
@@ -57,7 +54,6 @@ class TeamRunService:
         self.store: TeamStore | None = None
         self.publisher: TeamEventPublisher | None = None
         self._publish_lock = asyncio.Lock()
-        self._member_waiters: dict[str, asyncio.Future[object]] = {}
 
     async def run(self) -> None:
         """运行 Leader、Coordinator 和独立综合阶段。"""
@@ -71,8 +67,8 @@ class TeamRunService:
                 goal=self.run_data.message,
                 leader_agent_id=self.ctx.agent_id,
                 leader_name=self.ctx.agent_name,
-                workspace_id="",
-                project_id="",
+                workspace_id=self.ctx.runtime_context.workspace_id,
+                project_id=self.ctx.runtime_context.project_id,
             )
             self.publisher = TeamEventPublisher(self.store)
             await register_team_service(chat_run_id, self)
@@ -84,6 +80,18 @@ class TeamRunService:
                 subject="本轮目标",
                 content=self.run_data.message,
             )
+            if bool(getattr(self.ctx.guardrails, "human_approval", False)):
+                # Team 不暂停等人：需要审批的工具在成员里会被自动拒绝。提前告诉用户，而不是让成员莫名失败。
+                self.store.send_mail(
+                    sender="leader",
+                    recipient="user",
+                    kind="notice",
+                    subject="Team 模式权限提示",
+                    content=(
+                        "当前 Agent 开启了人工审批。TeamRun 不会暂停等待审批，成员调用需要审批的工具（如 Write / Edit / Bash）"
+                        "会被自动拒绝并改用只读方式继续；如需成员写文件，请改用信任工具的 Agent 或在单 Agent 模式下执行。"
+                    ),
+                )
             await self.flush_events()
 
             await run_leader_coordination(
@@ -91,14 +99,12 @@ class TeamRunService:
                 ctx=self.ctx,
                 run_data=self.run_data,
                 flush_events=self.flush_events,
-                permission_waiter=self.wait_for_member_permission,
             )
             coordinator = TeamCoordinator(
                 store=self.store,
                 ctx=self.ctx,
                 run_data=self.run_data,
                 flush_events=self.flush_events,
-                permission_waiter=self.wait_for_member_permission,
             )
             while True:
                 await coordinator.run()
@@ -169,76 +175,8 @@ class TeamRunService:
             ):
                 await self.queue.put(event)
         finally:
-            for interaction_id, future in self._member_waiters.items():
-                if not future.done():
-                    future.cancel()
-                _clear_pending_interaction(interaction_id)
-            self._member_waiters.clear()
             await unregister_team_service(chat_run_id, self)
             await self.queue.put(None)
-
-    async def wait_for_member_permission(self, interaction: Any) -> object:
-        """登记成员审批后挂起该成员协程，审批期间不结束 TeamRun。"""
-
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[object] = loop.create_future()
-        self._member_waiters[str(interaction.id)] = future
-        try:
-            self.store.record_member_event(
-                "member.permission.required",
-                member_id=str(interaction.agent_id),
-                task_id=str((interaction.chat_data or {}).get("teamTaskId") or ""),
-                status="waiting",
-                payload={"interaction": _hitl_payload(interaction)},
-            )
-            await self.flush_events()
-            await self.queue.put(self._permission_signal("RUN_WAITING", interaction, status="waiting_permission"))
-            return await future
-        finally:
-            self._member_waiters.pop(str(interaction.id), None)
-            _clear_pending_interaction(interaction.id)
-
-    async def resolve_member_permission(self, interaction_id: str, resume_event: object, *, action: str) -> None:
-        """把 Chat resume 的精确结果交回等待中的 Team Member。"""
-
-        future = self._member_waiters.get(str(interaction_id))
-        if future is None or future.done():
-            raise RuntimeError("Team 成员审批已失效或已恢复")
-        from src.server.routes.chat.models import get_pending_interaction
-
-        interaction = get_pending_interaction(interaction_id)
-        self.store.record_member_event(
-            "member.permission.resolved",
-            member_id=interaction.agent_id,
-            task_id=str((interaction.chat_data or {}).get("teamTaskId") or ""),
-            status="running",
-            payload={"interactionId": interaction_id, "action": action},
-        )
-        await self.flush_events()
-        await self.queue.put(self._permission_signal("HITL_RESOLVED", interaction,
-                                                    status="completed" if action == "approve" else "rejected",
-                                                    action=action))
-        await self.queue.put(self._permission_signal("RUN_RESUMED", interaction, status="running", action=action))
-        # 其他成员仍可能等待批准；顶层状态不能被这一次批准永久改成 running。
-        if any(key != interaction_id and not item.done() for key, item in self._member_waiters.items()):
-            await self.queue.put(self._permission_signal("RUN_WAITING", interaction, status="waiting_permission"))
-        future.set_result(resume_event)
-
-    def _permission_signal(self, event_type: str, interaction: Any, *, status: str, action: str = ""):
-        """状态和审批 Trace 与成员领域事实使用同一 Chat Run。"""
-
-        return runtime_trace_source_event(
-            event_type, session_id=interaction.session_id, run_id=interaction.run_id,
-            scope="team" if event_type == "HITL_RESOLVED" else "run",
-            agent_id=interaction.agent_id, agent_name=interaction.agent_name, status=status,
-            payload={"interactionId": interaction.id, "interactionType": interaction.type,
-                     "action": action, "waitState": status},
-        )
-
-    def has_member_waiter(self, interaction_id: str) -> bool:
-        """恢复命令先检查 live waiter，再接受持久审批。"""
-        future = self._member_waiters.get(interaction_id)
-        return future is not None and not future.done()
 
     async def flush_events(self) -> None:
         """按 seq 发布尚未发送的持久化 Team events。"""

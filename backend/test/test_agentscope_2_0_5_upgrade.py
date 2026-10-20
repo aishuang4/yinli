@@ -207,7 +207,7 @@ def test_agent_factory_uses_2_0_5_workspace_middleware_and_injection_config(monk
 
     monkeypatch.setattr(agent_factory, "create_model_chain", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(agent_factory, "_create_default_toolkit", lambda **_kwargs: object())
-    monkeypatch.setattr("src.skills.docker.FileSkillDockerWorkspace", fake_docker_workspace)
+    monkeypatch.setattr(agent_factory, "DockerWorkspace", fake_docker_workspace)
     monkeypatch.setattr(agent_factory, "Agent", fake_agent)
 
     runtime_id = "upgrade-factory-test"

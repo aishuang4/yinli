@@ -26,6 +26,8 @@ def dispatch_notification(message: NotificationMessage) -> DispatchResult:
         raise ValueError("kind 不能为空")
     if not str(message.title).strip():
         raise ValueError("title 不能为空")
+    if not str(message.workspace_id).strip():
+        raise ValueError("workspace_id 不能为空")
 
     deliveries: list[ChannelDeliveryResult] = []
     in_app_record = None

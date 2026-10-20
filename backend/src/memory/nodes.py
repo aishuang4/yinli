@@ -346,8 +346,9 @@ class MemoryNodeService:
     ):
         if not query_text.strip() or status != "active":
             return []
-        del workspace_id, project_id
         filters: dict[str, Any] = {
+            "workspace_id": workspace_id,
+            "project_id": project_id,
             "status": "active",
         }
         if agent_id:
@@ -381,7 +382,8 @@ def _node_matches_query_filters(
 ) -> bool:
     """校验向量候选仍满足 SQLite 权威过滤条件。"""
 
-    del workspace_id, project_id
+    if node.get("workspace_id") != workspace_id or node.get("project_id") != project_id:
+        return False
     if status is not None and node.get("status") != status:
         return False
     if agent_id and node.get("agent_id") != agent_id:

@@ -15,6 +15,7 @@ import type {
 } from '../types/agent';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { mapApiAgent, useAgentsStore } from '../stores/agentsStore';
+import { useAppStore } from '../stores/appStore';
 
 /** Hook 返回值 */
 interface UseAgentsReturn {
@@ -44,6 +45,7 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
   const result: Record<string, unknown> = {};
 
   if ('name' in data && data.name !== undefined) result.name = data.name;
+  if ('workspaceId' in data && data.workspaceId !== undefined) result.workspaceId = data.workspaceId;
   if ('avatar' in data && data.avatar !== undefined) result.avatar = data.avatar;
   if ('description' in data && data.description !== undefined) result.description = data.description;
   if ('systemPrompt' in data && data.systemPrompt !== undefined) result.system_prompt = data.systemPrompt;
@@ -74,7 +76,9 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
     const guardrails: Record<string, unknown> = {
       shell_blacklist: data.guardrails.shellBlacklist,
       network_enabled: data.guardrails.networkEnabled,
-      operationScope: data.guardrails.operationScope || 'normal',
+      human_approval: data.guardrails.humanApproval,
+      tool_permission_mode: data.guardrails.toolPermissionMode,
+      tool_permission_profile: data.guardrails.toolPermissionProfile,
       execution_backend: data.guardrails.executionBackend,
       docker_image: data.guardrails.dockerImage,
       persistent_sandbox: data.guardrails.persistentSandbox,
@@ -93,6 +97,7 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
  * useAgents Hook
  */
 export function useAgents(): UseAgentsReturn {
+  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
   const agents = useAgentsStore((state) => state.agents);
   const loading = useAgentsStore((state) => state.loading);
   const error = useAgentsStore((state) => state.error);
@@ -100,8 +105,8 @@ export function useAgents(): UseAgentsReturn {
   const removeAgent = useAgentsStore((state) => state.removeAgent);
 
   const refresh = useCallback(async (options?: { silent?: boolean }) => {
-    await useAgentsStore.getState().syncFromServer(options);
-  }, []);
+    await useAgentsStore.getState().syncFromServer(activeWorkspaceId, options);
+  }, [activeWorkspaceId]);
 
   /** 创建 Agent */
   const createAgent = useCallback(async (payload: AgentCreatePayload): Promise<Agent> => {
@@ -109,7 +114,7 @@ export function useAgents(): UseAgentsReturn {
       const res = await fetch('/api/agents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(mapToApiPayload(payload)),
+        body: JSON.stringify(mapToApiPayload({ ...payload, workspaceId: activeWorkspaceId })),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -123,7 +128,7 @@ export function useAgents(): UseAgentsReturn {
       notifyError(`Agent 创建失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [upsertAgent]);
+  }, [activeWorkspaceId, upsertAgent]);
 
   /** 更新 Agent */
   const updateAgent = useCallback(async (id: string, payload: AgentUpdatePayload): Promise<Agent> => {

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 from agentscope.message import UserMsg
+from agentscope.permission import PermissionMode
 
 from src.agents.runtime_types import MAX_REACT_ITERS, AgentGuardrails, AgentModelOptions, RuntimeToolScope
 from src.config.runtime_settings import get_effective_model_settings
@@ -34,10 +35,13 @@ from src.group_studio.tools_worker import (
     acquire_worker_tool_context,
     worker_tools,
 )
+from src.project_resources import resolve_project_resource_access
+from src.runtime_context import resolve_runtime_context
 from src.security.permissions import build_permission_profile
 from src.runtime.agent_resources import (
     build_runtime_knowledge_tools,
     build_runtime_mcp_servers,
+    scope_guardrails_to_project,
 )
 from src.runtime.agent_spec import (
     RuntimeModelConfig,
@@ -54,6 +58,7 @@ from src.runtime.governance import (
 )
 from src.storage.database import (
     get_group_studio_snapshot,
+    get_project,
     insert_group_studio_message,
     insert_group_studio_run,
     set_group_studio_current_run_id,
@@ -79,32 +84,24 @@ WORKER_BASE_TOOLS = {
 AgentFactory = Callable[[Any], Any]
 
 
-def build_worker_runtime_spec(
-    snapshot: dict[str, Any],
-    member: dict[str, Any],
-    grant: dict[str, Any] | None = None,
-    *,
-    run_snapshot: dict[str, Any],
-):
-    """构造 Worker spec。资源来自 Run 快照，模型仍由 wave grant 冻结。"""
-
-    from src.sessions.run_access import run_resource_access
+def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
+    """构造 Worker spec：复制 Agent 能力，群聊内工具权限全部放开。"""
 
     agent_row = _agent_row(str(member.get("agentId") or "default"))
-    session_id = str(snapshot.get("chatSessionId") or "")
-    access = run_resource_access(str(run_snapshot.get("runId") or ""))
-    from src.group_studio.wave_grant import capture_wave_grant, load_wave_grant
+    project = get_project(str(snapshot.get("projectId") or "")) or {}
+    from pathlib import Path
 
-    if grant is None:
-        grant = load_wave_grant(str(snapshot.get("currentRunId") or "")) or capture_wave_grant(
-            session_id,
-            model_config_id=str(snapshot.get("modelConfigId") or ""),
-        )
-    studio_root = ensure_studio_dirs(session_id, str(snapshot["id"]))
-    workspace = str((studio_root / "workspace").resolve())
+    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
+    context = resolve_runtime_context(
+        project_id=str(snapshot.get("projectId") or ""),
+        session_id=str(snapshot.get("chatSessionId") or ""),
+        run_id="",
+        agent_id=str(agent_row.get("id") or member.get("agentId") or "default"),
+    )
+    access = resolve_project_resource_access(context)
     raw_guardrails = dict(agent_row.get("guardrails") or {})
     guardrails = AgentGuardrails(
-        filesystem_scope=workspace,
+        filesystem_scope=str(raw_guardrails.get("filesystem_scope") or context.project_root),
         shell_blacklist=list(raw_guardrails.get("shell_blacklist") or ["rm -rf /", "sudo"]),
         network_enabled=True,
         human_approval=False,
@@ -129,19 +126,19 @@ def build_worker_runtime_spec(
         timeout_seconds=guardrails.timeout_seconds,
         permission_profile=build_permission_profile(guardrails),
     )
+    if project_root.is_dir():
+        guardrails = scope_guardrails_to_project(guardrails, project_root)
 
-    cfg = SimpleNamespace(
-        mcp_tools=sorted(access.mcp_server_ids),
-        knowledge_tools=sorted(access.http_tool_ids),
+    mcp_ids = access.filter_ids("mcp", [str(item) for item in (agent_row.get("mcpTools") or [])])
+    knowledge_ids = access.filter_ids(
+        "http_tool",
+        [str(item) for item in (agent_row.get("knowledgeTools") or [])],
     )
+    cfg = SimpleNamespace(mcp_tools=mcp_ids, knowledge_tools=knowledge_ids)
     mcp_servers = build_runtime_mcp_servers(cfg, allowed_server_ids=access.mcp_server_ids)
     knowledge_tools = build_runtime_knowledge_tools(cfg, allowed_tool_ids=access.http_tool_ids)
-    skill_paths = _skill_paths(sorted(access.skill_ids))
-    extra_scopes = [
-        str(item.get("normalizedPath") or "")
-        for item in (run_snapshot.get("allowedRoots") or [])
-        if item.get("accessMode") == "read_write" and item.get("normalizedPath")
-    ]
+    skill_ids = access.filter_ids("skill", [str(item) for item in (agent_row.get("skills") or [])])
+    skill_paths = _skill_paths(skill_ids)
 
     ctx = acquire_worker_tool_context(
         str(snapshot["id"]),
@@ -163,11 +160,12 @@ def build_worker_runtime_spec(
         allow_http=network,
         allow_web=network,
     )
+    studio_root = ensure_studio_dirs(context.project_root, str(snapshot["id"]))
+    workspace = str((studio_root / "workspace").resolve())
     runtime = get_effective_model_settings()
-    model_name, fallbacks = _frozen_model(grant, runtime)
     model_config = RuntimeModelConfig(
-        model_name=model_name,
-        fallback_names=fallbacks,
+        model_name=runtime.default_model,
+        fallback_names=list(runtime.fallback_models or []),
         model_options=AgentModelOptions(max_react_iters=WORKER_MAX_REACT_ITERS),
     )
     worker_agent_id = str(agent_row.get("id") or member.get("agentId") or "default")
@@ -203,9 +201,7 @@ def build_worker_runtime_spec(
         include_default_tools=True,
         workspace_dir=workspace,
         write_scope_dir=workspace,
-        extra_filesystem_scopes=extra_scopes,
-        run_snapshot=run_snapshot,
-        apply_snapshot_filesystem=False,
+        extra_filesystem_scopes=_catalog_scopes(str(snapshot.get("workspaceId") or "default")),
     )
     return spec, ctx, tools
 
@@ -239,62 +235,13 @@ def _merge_shell_blacklist(base: list[str]) -> list[str]:
     return merged
 
 
-def _granted_ids(grant: dict[str, Any], resource_type: str) -> set[str] | None:
-    """沒有任何 grant 列時不收緊；有列時只留該類型。"""
+def _catalog_scopes(workspace_id: str) -> list[str]:
+    from src.catalog.paths import extra_filesystem_scopes_for_workspace
 
-    resources = list(grant.get("resources") or [])
-    if not resources:
-        return None
-    return {
-        str(item.get("resourceId") or "")
-        for item in resources
-        if str(item.get("resourceType") or "") == resource_type
-    }
-
-
-def _narrow_ids(ids: list[str], allowed: set[str] | None) -> list[str]:
-    if allowed is None:
-        return ids
-    return [item for item in ids if item in allowed]
-
-
-def _grant_write_scopes(grant: dict[str, Any]) -> list[str]:
-    """可寫 allowed root 與 Worker 目錄取交集；只讀 root 不進入寫範圍。"""
-
-    from pathlib import Path
-
-    scopes: list[str] = []
-    for item in grant.get("roots") or []:
-        if str(item.get("accessMode") or "") == "read":
-            continue
-        path = str(item.get("normalizedPath") or "")
-        if path and Path(path).is_dir():
-            scopes.append(str(Path(path).resolve()))
-    return scopes
-
-
-def _frozen_model(grant: dict[str, Any], runtime: Any) -> tuple[str, list[str]]:
-    model_name = str(getattr(runtime, "default_model", "") or "")
-    fallbacks = list(getattr(runtime, "fallback_models", None) or [])
-    frozen = str(grant.get("modelConfigId") or "")
-    if not frozen:
-        return model_name, fallbacks
     try:
-        from src.config.runtime_settings import resolve_model_binding
-
-        binding = resolve_model_binding(frozen, validate=False)
-    except Exception:
-        return model_name, fallbacks
-    primary = getattr(binding, "primary", None)
-    resolved = str(getattr(primary, "default_model", "") or "")
-    if resolved:
-        model_name = resolved
-    chain = list(getattr(binding, "chain", ()) or ())
-    bound_fallbacks = [str(getattr(item, "default_model", "") or "") for item in chain[1:]]
-    bound_fallbacks = [item for item in bound_fallbacks if item]
-    if bound_fallbacks:
-        fallbacks = bound_fallbacks
-    return model_name, fallbacks
+        return extra_filesystem_scopes_for_workspace(workspace_id)
+    except ValueError:
+        return []
 
 
 def _agent_row(agent_id: str) -> dict[str, Any]:
@@ -326,7 +273,7 @@ def _skill_paths(skill_ids: list[str]) -> list[str]:
     if not skill_ids:
         return []
     try:
-        from src.skills.registry import get_installed_skill, resolve_runtime_skill_paths
+        from src.server.routes.skills import get_installed_skill, resolve_runtime_skill_paths
 
         skills = []
         for skill_id in skill_ids:
@@ -444,35 +391,8 @@ async def _run_worker_turn(
             )
             return
 
-    from src.group_studio.wave_grant import capture_wave_grant, store_wave_grant
-
-    wave_grant = capture_wave_grant(
-        str(snapshot.get("chatSessionId") or ""),
-        model_config_id=str(snapshot.get("modelConfigId") or ""),
-    )
+    spec, ctx, _tools = build_worker_runtime_spec(snapshot, member)
     run_id = f"grun_{uuid.uuid4().hex[:16]}"
-    from src.sessions.errors import SessionError
-    from src.sessions.run_binding import begin_run
-
-    try:
-        run_snapshot = begin_run(
-            str(snapshot.get("chatSessionId") or ""),
-            run_id,
-            agent_id=str(member.get("agentId") or ""),
-            permission_mode="bypass",
-            start_model=lambda item: item,
-        )
-    except SessionError as exc:
-        from src.group_studio.speaker_queue import pop_unrunnable_head
-
-        pop_unrunnable_head(group_id)
-        emit_envelope(
-            group_id=group_id,
-            event_type="GROUP_ERROR",
-            payload={"code": exc.code, "message": exc.message},
-        )
-        return
-    spec, ctx, _tools = build_worker_runtime_spec(snapshot, member, wave_grant, run_snapshot=run_snapshot)
     ctx.begin_run(run_id)
     from src.group_studio.speaker_queue import get_queue, pop_head
 
@@ -498,7 +418,6 @@ async def _run_worker_turn(
         "status": "running",
         "speakerMemberId": member_id,
     })
-    store_wave_grant(run_id, wave_grant)
     set_group_studio_current_run_id(group_id, run_id)
     emit_envelope(
         group_id=group_id,
@@ -729,3 +648,9 @@ async def _run_worker_turn(
         duty=duty,
     )
 
+
+def worker_permission_mode(snapshot: dict[str, Any], member: dict[str, Any]) -> PermissionMode:
+    """测试用：返回 Worker 生效的 AgentScope permission mode。"""
+
+    spec, _ctx, _tools = build_worker_runtime_spec(snapshot, member)
+    return spec.guardrails.permission_profile.to_agentscope_permission_mode()

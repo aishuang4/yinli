@@ -142,7 +142,7 @@ export function ChatSkillSlashMenu({
                   <span className="mb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-tertiary)]">Skill</span>
                 ) : null}
                 <span className="flex min-w-0 w-full items-center gap-2">
-                  <span className="truncate font-mono text-sm text-[var(--color-text-primary)]">/{(item.skill.loadName || item.skill.name)}</span>
+                  <span className="truncate font-mono text-sm text-[var(--color-text-primary)]">/{item.skill.name}</span>
                   {checked ? (
                     <span className="shrink-0 text-[10px] text-[var(--color-text-tertiary)]">已开启</span>
                   ) : null}
@@ -181,13 +181,13 @@ export function ChatForcedSkillChips({
           className={COMPOSER_STATUS_CHIP_CLASS}
         >
           <BookOpen size={12} className="shrink-0" />
-          <span className="truncate">/{(skill.loadName || skill.name)}</span>
+          <span className="truncate">/{skill.name}</span>
           <button
             type="button"
             className="icon-button flex h-4 w-4 items-center justify-center rounded-full text-[var(--color-text-tertiary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
             onClick={() => onRemove(skill.id)}
             disabled={disabled}
-            aria-label={`取消强制开启 ${(skill.loadName || skill.name)}`}
+            aria-label={`取消强制开启 ${skill.name}`}
           >
             <X size={10} />
           </button>

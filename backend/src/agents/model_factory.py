@@ -63,7 +63,6 @@ def create_model(
     thinking_enable: bool = False,
     model_options: AgentModelOptions | None = None,
     resolved_model: ResolvedModel | None = None,
-    max_retries: int = 3,
 ):
     """
     创建当前运行供应商的聊天模型实例。
@@ -85,11 +84,6 @@ def create_model(
         "top_p": configured.top_p,
         "max_tokens": configured.max_tokens,
     }
-    if model_options is not None:
-        for name in ("temperature", "top_p", "max_tokens"):
-            value = getattr(model_options, name)
-            if value is not None:
-                parameters[name] = value
     api_key = SecretStr(runtime.api_key)
     base_url = runtime.base_url or None
     context_size = resolve_context_size(runtime)
@@ -100,7 +94,7 @@ def create_model(
             model=model_name,
             parameters=OpenAIChatModel.Parameters(**parameters),
             stream=stream,
-            max_retries=max_retries,
+            max_retries=3,
             context_size=context_size,
             formatter=UserNameOnlyOpenAIFormatter(),
         )
@@ -110,7 +104,7 @@ def create_model(
             model=model_name,
             parameters=DeepSeekChatModel.Parameters(**parameters),
             stream=stream,
-            max_retries=max_retries,
+            max_retries=3,
             context_size=context_size,
         )
     if runtime.adapter == "moonshot":
@@ -119,7 +113,7 @@ def create_model(
             model=model_name,
             parameters=MoonshotChatModel.Parameters(**parameters),
             stream=stream,
-            max_retries=max_retries,
+            max_retries=3,
             context_size=context_size,
             formatter=UserNameOnlyMoonshotFormatter(),
         )
@@ -130,7 +124,7 @@ def create_model(
             model=model_name,
             parameters=GeminiChatModel.Parameters(**parameters),
             stream=stream,
-            max_retries=max_retries,
+            max_retries=3,
             context_size=context_size,
         )
     if runtime.adapter == "anthropic":
@@ -144,7 +138,7 @@ def create_model(
             model=model_name,
             parameters=AnthropicChatModel.Parameters(**anthropic_parameters),
             stream=stream,
-            max_retries=max_retries,
+            max_retries=3,
             context_size=context_size,
         )
     if runtime.adapter == "ollama":
@@ -153,7 +147,7 @@ def create_model(
             model=model_name,
             parameters=OllamaChatModel.Parameters(**parameters),
             stream=stream,
-            max_retries=max_retries,
+            max_retries=3,
             context_size=context_size,
         )
 
@@ -165,7 +159,7 @@ def create_model(
         model=model_name,
         parameters=DashScopeChatModel.Parameters(**parameters),
         stream=stream,
-        max_retries=max_retries,
+        max_retries=3,
         context_size=context_size,
     )
 

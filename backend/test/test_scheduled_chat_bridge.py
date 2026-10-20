@@ -8,14 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from src.scheduler.models import JobExecutionPolicy
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from test.snapshot_support import freeze_test_snapshot
 from src.agents.factory import AgentGuardrails, AgentModelOptions
 from src.agents.runtime_types import RuntimeToolScope
-from src.config.runtime_paths import session_job_firing_root
 from src.project_files import project_job_run_directory
 from src.scheduler.chat_bridge import (
     DEFAULT_FIRING_TIMEOUT_SECONDS,
@@ -81,35 +78,6 @@ def _prepare_project(tmp_path) -> dict:
     })
 
 
-def _bind_owner(project_id: str, job_id: str = "job-bridge1") -> str:
-    """建立 owner Session 與 Job 列，firing 不得再另開 sched-* Session。"""
-
-    from src.sessions.jobs import assign_job_owner
-    from src.sessions.records import create_session
-
-    owner = create_session(
-        title="Job owner",
-        kind="job-owner",
-        project_id=project_id,
-    )["id"]
-    now = "2026-08-21T00:00:00+00:00"
-    database.insert_scheduled_job({
-        "id": job_id,
-        "name": f"周报-{job_id}",
-        "status": "active",
-        "agent_id": "default",
-        "project_id": project_id,
-        "schedule_kind": "weekly",
-        "schedule_expr": {"weekdays": ["fri"], "at": "18:00"},
-        "timezone": "Asia/Shanghai",
-        "frozen_prompt": "生成本周周报",
-        "created_from_session_id": owner,
-        "created_at": now,
-        "updated_at": now,
-    })
-    return assign_job_owner(job_id, owner, title="周报")
-
-
 def _request(**overrides) -> ScheduledRunRequest:
     payload = {
         "job_id": "job-bridge1",
@@ -120,7 +88,6 @@ def _request(**overrides) -> ScheduledRunRequest:
         "frozen_prompt": "生成本周周报，写入 outputs/weekly-report.md",
         "skill_ids": [],
         "tool_scope": _frozen_scope(),
-        "execution_policy": JobExecutionPolicy(),
         "scheduled_for": "2026-08-21T10:00:00+00:00",
         "trigger": "schedule",
     }
@@ -217,12 +184,9 @@ def test_chat_message_forbids_trigger_source():
 
 
 def test_project_job_run_directory_layout(tmp_path):
-    from src.config.runtime_paths import tenant_root
-
     directory = project_job_run_directory(tmp_path, "job-abc", "firing-xyz")
-    assert directory == tenant_root() / "jobs" / "job-abc" / "runs" / "firing-xyz"
+    assert directory == tmp_path / ".agent-workstation" / "jobs" / "job-abc" / "runs" / "firing-xyz"
     assert directory.is_dir()
-    assert not (tmp_path / ".agent-workstation").exists()
     with pytest.raises(ValueError, match="Job ID"):
         project_job_run_directory(tmp_path, "../escape", "firing-xyz")
 
@@ -241,10 +205,7 @@ def test_resolve_run_workspace_dir_override_skips_session_cwd(tmp_path):
         filesystem_scope=tmp_path,
         session_id="sched-session",
     )
-    from src.config.runtime_paths import session_root
-
-    assert Path(session_dir) == session_root("sched-session")
-    assert ".agent-workstation" not in Path(session_dir).parts
+    assert Path(session_dir) == tmp_path / ".agent-workstation" / "sessions" / "sched-session"
 
 
 def test_scheduler_package_does_not_eagerly_export_chat_bridge():
@@ -298,7 +259,6 @@ def test_start_scheduled_chat_run_returns_id_and_persists_columns(isolated_db, t
 
     async def run_case():
         req = _request(project_id=project["id"])
-        owner = _bind_owner(project["id"], req.job_id)
         chat_run_id = await start_scheduled_chat_run(req)
         assert chat_run_id.startswith("run-")
         record = get_chat_run(chat_run_id)
@@ -310,9 +270,10 @@ def test_start_scheduled_chat_run_returns_id_and_persists_columns(isolated_db, t
         assert live is not None
         assert live.status == "running"
         session = get_chat_session(live.session_id)
-        assert session is not None and session["kind"] == "job-owner"
-        assert live.session_id == owner
-        workspace = session_job_firing_root(owner, req.job_id, req.firing_id)
+        assert session is not None and session["kind"] == "scheduled_job"
+        workspace = project_job_run_directory(
+            Path(project["rootPath"]), req.job_id, req.firing_id,
+        )
         assert (workspace / "spec.json").is_file()
         assert (workspace / "outputs").is_dir()
         session_root = Path(project["rootPath"]) / ".agent-workstation" / "sessions"
@@ -327,56 +288,18 @@ def test_start_scheduled_chat_run_returns_id_and_persists_columns(isolated_db, t
         assert persisted["scheduledJobId"] == req.job_id
         assert persisted["scheduledFiringId"] == req.firing_id
         session_after = get_chat_session(live.session_id)
-        assert session_after is not None and session_after["kind"] == "job-owner"
-        manifest = scan_scheduled_run_outputs(
-            workspace, session_id=owner, run_id=req.firing_id,
-        )
+        assert session_after is not None and session_after["kind"] == "scheduled_job"
+        manifest = scan_scheduled_run_outputs(workspace)
         assert [item["path"] for item in manifest["files"]] == ["outputs/weekly-report.md"]
-        from src.sessions.files import list_session_artifacts
-
-        artifacts = list_session_artifacts(owner)
-        assert any(item["runId"] == req.firing_id for item in artifacts)
-        runs = database.list_chat_runs(session_id=owner)
-        assert chat_run_id in {item["id"] for item in runs}
-        traced = get_chat_run(chat_run_id)
-        assert traced is not None and traced["sessionId"] == owner
-        from src.scheduler.models import ScheduledJobRun
-        from src.scheduler.notifications import notify_firing_terminal
-        from src.scheduler.service import ScheduledJobService
-        from src.storage.database import list_user_notifications
-
-        note = notify_firing_terminal(
-            ScheduledJobService().get_job(req.job_id),
-            ScheduledJobRun(
-                id=req.firing_id,
-                job_id=req.job_id,
-                workspace_id=req.workspace_id,
-                project_id=req.project_id,
-                trigger="schedule",
-                scheduled_for=req.scheduled_for,
-                status="succeeded",
-                chat_session_id=owner,
-                chat_run_id=chat_run_id,
-                created_at="2026-08-21T10:00:00+00:00",
-                updated_at="2026-08-21T10:00:00+00:00",
-            ),
-        )
-        assert note is not None
-        visible = [
-            item for item in list_user_notifications()
-            if item.get("owner_session_id") == owner
-        ]
-        assert visible and visible[0]["job_id"] == req.job_id
         assert passed["session_workspace_dir"] == str(workspace)
         return live.session_id
 
     session_id = asyncio.run(run_case())
-    assert not session_id.startswith("sched-")
+    assert session_id.startswith("sched-")
 
 
 def test_each_firing_creates_a_new_scheduled_session(isolated_db, tmp_path, monkeypatch):
     project = _prepare_project(tmp_path)
-    owner = _bind_owner(project["id"])
     _patch_fake_agent(monkeypatch, _empty_execute, filesystem_scope=project["rootPath"])
 
     async def run_case():
@@ -391,16 +314,20 @@ def test_each_firing_creates_a_new_scheduled_session(isolated_db, tmp_path, monk
         left = await get_chat_background_run(first)
         right = await get_chat_background_run(second)
         assert left is not None and right is not None
-        assert left.session_id == right.session_id == owner
-        assert first != second
-        assert not any(item["id"].startswith("sched-") for item in list_chat_sessions())
+        assert left.session_id != right.session_id
+        kinds = {
+            item["id"]: item["kind"]
+            for item in list_chat_sessions()
+            if item["id"] in {left.session_id, right.session_id}
+        }
+        assert kinds[left.session_id] == "scheduled_job"
+        assert kinds[right.session_id] == "scheduled_job"
 
     asyncio.run(run_case())
 
 
 def test_await_timeout_cancels_chat_background_run(isolated_db, tmp_path, monkeypatch):
     project = _prepare_project(tmp_path)
-    _bind_owner(project["id"])
 
     async def never_finish(*, ctx, run_data):
         _ = ctx, run_data
@@ -433,7 +360,6 @@ def test_await_timeout_cancels_chat_background_run(isolated_db, tmp_path, monkey
 
 def test_scheduled_run_rerun_is_forbidden(isolated_db, tmp_path, monkeypatch):
     project = _prepare_project(tmp_path)
-    _bind_owner(project["id"])
     _patch_fake_agent(monkeypatch, _empty_execute, filesystem_scope=project["rootPath"])
 
     async def run_case():
@@ -462,39 +388,24 @@ def test_scheduled_run_rerun_is_forbidden(isolated_db, tmp_path, monkeypatch):
 
 def test_start_scheduled_chat_run_uses_domain_error_not_http(isolated_db):
     ensure_db()
-    _bind_owner(DEFAULT_PROJECT_ID)
 
     async def run_case():
         with pytest.raises(ScheduledChatLaunchError, match="frozen_prompt"):
             await start_scheduled_chat_run(_request(frozen_prompt="   "))
-        started = await start_scheduled_chat_run(_request(project_id="missing-project"))
-        assert started
+        with pytest.raises(ScheduledChatLaunchError, match="Project"):
+            await start_scheduled_chat_run(_request(project_id="missing-project"))
 
     asyncio.run(run_case())
 
 
-def test_job_cwd_readonly_allowed_root_fails_launch(isolated_db, tmp_path, monkeypatch):
+def test_job_cwd_outside_agent_scope_fails_launch(isolated_db, tmp_path, monkeypatch):
     project = _prepare_project(tmp_path)
-    owner = _bind_owner(project["id"])
-    from src.config.runtime_paths import session_root
-
-    root = session_root(owner)
-    root.mkdir(parents=True, exist_ok=True)
-    database.ensure_db()
-    with database._lock, database._connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO session_allowed_roots (
-                session_id, normalized_path, access_mode, source, created_at
-            ) VALUES (?, ?, 'read', 'user', '2026-08-21T00:00:00+00:00')
-            """,
-            (owner, str(root.resolve())),
-        )
-        conn.commit()
-    _patch_fake_agent(monkeypatch, _empty_execute, filesystem_scope=str(project["rootPath"]))
+    narrow = Path(project["rootPath"]) / "src"
+    narrow.mkdir()
+    _patch_fake_agent(monkeypatch, _empty_execute, filesystem_scope=str(narrow))
 
     async def run_case():
-        with pytest.raises(ScheduledChatLaunchError, match="只讀 allowed root"):
+        with pytest.raises(ScheduledChatLaunchError, match="文件范围"):
             await start_scheduled_chat_run(
                 _request(project_id=project["id"], firing_id="firing-scope"),
             )
@@ -504,7 +415,6 @@ def test_job_cwd_readonly_allowed_root_fails_launch(isolated_db, tmp_path, monke
 
 def test_timeout_joins_cancelled_task_before_returning(isolated_db, tmp_path, monkeypatch):
     project = _prepare_project(tmp_path)
-    _bind_owner(project["id"])
     unwound = asyncio.Event()
 
     async def slow_unwind(*, ctx, run_data):
@@ -529,126 +439,3 @@ def test_timeout_joins_cancelled_task_before_returning(isolated_db, tmp_path, mo
         assert unwound.is_set()
 
     asyncio.run(run_case())
-
-
-def test_daily_fresh_firings_skip_chat_timeline_and_prior_history(isolated_db, tmp_path):
-    """同一 owner 連續兩天 firing：不寫 Chat 主訊息，也不繼承前次或對話全文。"""
-
-    from src.runtime.agent_spec import build_main_agent_runtime_spec
-    from src.server.routes.chat.completion import finalize_successful_leader_run
-    from src.server.routes.chat.initial_events import persist_user_message_and_trace
-    from src.server.routes.chat.models import ChatToolRun
-    from src.server.routes.chat.run_context import snapshot_session_history
-    from src.storage.database import list_chat_messages, list_run_events
-
-    project = _prepare_project(tmp_path)
-    owner = _bind_owner(project["id"])
-    now = "2026-08-20T00:00:00+00:00"
-    database.append_chat_message(owner, {
-        "id": "msg-user",
-        "role": "user",
-        "content": "昨天的完整对话",
-        "created_at": now,
-    })
-    database.append_chat_message(owner, {
-        "id": "msg-assistant",
-        "role": "assistant",
-        "content": "昨天的完整回答与工具历史",
-        "created_at": now,
-    })
-    assert snapshot_session_history(owner)
-
-    prompts = ("第一天只写日报", "第二天只写日报")
-    keys: list[tuple[str, str]] = []
-    for index, prompt in enumerate(prompts, start=1):
-        message = ChatMessage(
-            session_id=owner,
-            project_id=project["id"],
-            message=prompt,
-            agent_id="default",
-        )
-        ctx = _fake_context(message, SimpleNamespace(
-            workspace_id=DEFAULT_WORKSPACE_ID,
-            project_id=project["id"],
-            session_id=owner,
-            run_id=f"run-day-{index}",
-        ))
-        ctx.trigger_source = "scheduled_job"
-        ctx.scheduled_firing_id = f"firing-day-{index}"
-        ctx.persist_run = True
-        ctx.session_history = []
-        persist_user_message_and_trace(ctx, message)
-        assert ctx.session_history == []
-        spec = build_main_agent_runtime_spec(
-            agent_id="default",
-            agent_name="Assistant",
-            session_id=owner,
-            system_prompt="prompt",
-            model_config=ctx.runtime_model_config,
-            deep_thinking=False,
-            used_skills=[],
-            guardrails=AgentGuardrails(),
-            mcp_servers=[],
-            knowledge_tools=[],
-            runtime_tool_scope=_frozen_scope(),
-            guardrail_cache_key="guard",
-            context_scope=f"firing:{ctx.scheduled_firing_id}",
-            run_snapshot=freeze_test_snapshot(owner),
-            apply_snapshot_filesystem=False,
-        )
-        keys.append((spec.runtime_agent_id, spec.session_context_key))
-
-    contents = [item["content"] for item in list_chat_messages(owner)]
-    assert contents == ["昨天的完整对话", "昨天的完整回答与工具历史"]
-    assert keys[0] != keys[1]
-    assert "firing:firing-day-1" in keys[0][1]
-    assert "firing:firing-day-2" in keys[1][1]
-    chat_spec = build_main_agent_runtime_spec(
-        agent_id="default",
-        agent_name="Assistant",
-        session_id=owner,
-        system_prompt="prompt",
-        model_config=RuntimeModelConfig(
-            model_name="model",
-            fallback_names=[],
-            model_options=AgentModelOptions(max_react_iters=40),
-        ),
-        deep_thinking=False,
-        used_skills=[],
-        guardrails=AgentGuardrails(),
-        mcp_servers=[],
-        knowledge_tools=[],
-        runtime_tool_scope=_frozen_scope(),
-        guardrail_cache_key="guard",
-        run_snapshot=freeze_test_snapshot(owner, agent_id="default"),
-        apply_snapshot_filesystem=False,
-    )
-    assert chat_spec.session_context_key not in {keys[0][1], keys[1][1]}
-
-    async def finish() -> None:
-        async for _event in finalize_successful_leader_run(
-            session_id=owner,
-            persist=True,
-            agent_id="default",
-            agent_name="Assistant",
-            model_name="model",
-            user_message=prompts[1],
-            assistant_text="第二天结果",
-            assistant_thinking="",
-            assistant_tool_calls=[ChatToolRun(id="tool-1", name="Write", args="{}", result="ok", status="completed")],
-            assistant_model_caches=[],
-            runtime_events=[],
-            skill_runs=[],
-            active_skill_run=None,
-            record_chat_message=False,
-        ):
-            pass
-
-    asyncio.run(finish())
-    assert "第二天结果" not in [item["content"] for item in list_chat_messages(owner)]
-    events = list_run_events(owner)
-    assert any(item["eventType"] == "USER_MESSAGE" and "第一天只写日报" in item["content"] for item in events)
-    assert any(item["eventType"] == "USER_MESSAGE" and "第二天只写日报" in item["content"] for item in events)
-    assistant = [item for item in events if item["eventType"] == "ASSISTANT_MESSAGE"]
-    assert assistant and assistant[-1]["payload"]["toolCalls"][0]["name"] == "Write"
-    assert "昨天的完整回答" not in assistant[-1]["content"]

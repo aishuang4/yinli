@@ -4,8 +4,7 @@ import asyncio
 
 import pytest
 
-from src.catalog.paths import system_profile_path
-from src.config.runtime_paths import global_agents_root
+from src.catalog.paths import profile_path, system_profile_path
 from src.server.routes import agents as agents_routes
 
 
@@ -16,7 +15,7 @@ def test_create_update_delete_uses_files() -> None:
         system_prompt="hello-catalog",
         workspaceId="default",
     )))
-    path = global_agents_root() / f"{created.id}.md"
+    path = profile_path(created.workspace_id, created.id)
     assert path.is_file()
     assert "hello-catalog" in path.read_text(encoding="utf-8")
 

@@ -177,7 +177,6 @@ function SkillListRow({
   onToggle: (enabled: boolean) => void;
 }) {
   const installed = skill.status === 'installed';
-  const invalid = skill.status === 'error';
 
   return (
     <WorkbenchListRow
@@ -187,23 +186,24 @@ function SkillListRow({
         </WorkbenchListIcon>
       )}
       title={skill.name}
-      subtitle={[skill.loadName || skill.id, skill.reason || (skill.resolutionState === 'ambiguous' ? '同名冲突，请使用限定加载名' : skill.resolutionState === 'shadowed' ? '已被更高来源覆盖' : skill.sourceScope)].filter(Boolean).join(' · ')}
+      subtitle={skill.trigger || skill.id}
       description={skill.description || '暂无描述'}
       last={last}
       layout="columns"
       onSelect={onSelect}
       meta={(
-        <span className="grid w-full grid-cols-[5rem_5rem_8rem] items-center gap-2 overflow-hidden">
+        <span className="grid w-full grid-cols-[5rem_5rem_8rem_7rem] items-center gap-2">
           <span className="justify-self-start">
-            <Tag size="small" color={installed ? 'green' : invalid ? 'red' : 'blue'}>
-              {installed ? '已安装' : invalid ? '不可用' : '可安装'}
-            </Tag>
+            <Tag size="small" color={installed ? 'green' : 'blue'}>{installed ? '已安装' : '可安装'}</Tag>
           </span>
           <span className="min-w-0 justify-self-start">
             <Tag size="small" color="transparent">{skill.category}</Tag>
           </span>
           <span className="justify-self-start">
             {isSkillShared(skill) ? <Tag size="small" color="blue">所有 Agent 可用</Tag> : <Tag size="small" color="transparent">需绑定</Tag>}
+          </span>
+          <span className="justify-self-start">
+            {(skill.warnings?.length ?? 0) > 0 ? <Tag size="small" color="orange">平台兼容提示</Tag> : null}
           </span>
         </span>
       )}
@@ -226,7 +226,7 @@ function SkillListRow({
               <Button size="small" danger loading={busy} onClick={onUninstall}>
                 卸载
               </Button>
-            ) : invalid ? null : (
+            ) : (
               <Button size="small" type="primary" loading={busy} onClick={onInstall}>
                 安装
               </Button>
@@ -236,14 +236,13 @@ function SkillListRow({
             type="button"
             onClick={onExport}
             className="icon-button h-8 w-8 rounded-md text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]"
-            aria-label={`下载 ${skill.name}`}
+            aria-label={`导出 ${skill.name}`}
           >
             <Download size={15} />
           </button>
           <button
             type="button"
             onClick={onDelete}
-            disabled={!skill.managed}
             className="icon-button h-8 w-8 rounded-md text-[var(--color-text-tertiary)] transition hover:bg-[var(--color-error-bg)] hover:text-[var(--color-error)]"
             aria-label={`删除 ${skill.name}`}
           >

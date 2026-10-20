@@ -27,8 +27,6 @@ def serialize_notification(item: dict[str, Any]) -> dict[str, Any]:
         "projectId": item["project_id"],
         "jobId": item["job_id"],
         "firingId": item["firing_id"],
-        "ownerSessionId": str(item.get("owner_session_id") or ""),
-        "sessionStatus": notification_session_status(str(item.get("owner_session_id") or "")),
         "kind": item["kind"],
         "title": item["title"],
         "body": item["body"],
@@ -36,35 +34,6 @@ def serialize_notification(item: dict[str, Any]) -> dict[str, Any]:
         "readAt": item.get("read_at"),
         "createdAt": item["created_at"],
     }
-
-
-def notification_session_status(session_id: str) -> str:
-    """點擊前說明 owner Session 是可打開、已歸檔，還是已刪除。"""
-
-    if not session_id:
-        return ""
-    from src.sessions.records import get_session
-
-    session = get_session(session_id)
-    if session is None:
-        return "deleted"
-    if str(session.get("status") or "") == "archived":
-        return "archived"
-    return "active"
-
-
-def notification_click_target(item: dict[str, Any]) -> dict[str, str]:
-    """點擊打開 owner Session。已刪除時不給出可導航 id。"""
-
-    session_id = str(item.get("owner_session_id") or "")
-    status = notification_session_status(session_id)
-    if status == "deleted":
-        return {"action": "unavailable", "reason": "deleted", "sessionId": session_id}
-    if status == "archived":
-        return {"action": "openSession", "sessionId": session_id, "status": "archived"}
-    if status == "active":
-        return {"action": "openSession", "sessionId": session_id, "status": "active"}
-    return {"action": "legacy", "sessionId": "", "status": ""}
 
 
 def list_notification_page(

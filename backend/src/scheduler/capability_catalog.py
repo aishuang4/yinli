@@ -10,13 +10,14 @@ from pydantic import BaseModel, Field
 from src.scheduler.capability_match import tag_inventory_row
 from src.scheduler.http_runtime import enabled_http_tools, enabled_knowledge_tools
 from src.scheduler.mcp_runtime import mcp_injectable
-from src.scheduler.unattended_policy import skill_package_has_scripts
-from src.security.permissions import UnifiedPermissionProfile, build_permission_profile
+from src.scheduler.unattended_policy import agent_approval_policy, skill_package_has_scripts
+from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile, build_permission_profile
 from src.storage.database import (
     list_http_tools,
     list_json_records,
     list_mcp_servers,
     list_project_resource_bindings,
+    list_skills,
     get_workspace_resource,
 )
 
@@ -41,7 +42,6 @@ class CapabilityInventoryItem(BaseModel):
     blocked_reason: str = ""
     project_bound: bool = True
     agent_bound: bool = True
-    aliases: list[str] = Field(default_factory=list)
 
 
 def build_agent_capability_inventory(
@@ -57,14 +57,15 @@ def build_agent_capability_inventory(
     if agent_id != "default" and agent is None:
         return []
     profile = build_permission_profile(getattr(agent, "guardrails", None) if agent else None)
+    policy = agent_approval_policy(agent)
     bindings = _enabled_bindings(project_id, workspace_id)
     items: list[CapabilityInventoryItem] = []
-    items.extend(_builtin_rows(profile))
-    items.extend(_mcp_rows(agent, bindings, profile))
-    http_rows, http_ids = _http_rows(agent, bindings, profile)
+    items.extend(_builtin_rows(profile, policy))
+    items.extend(_mcp_rows(agent, bindings, profile, policy))
+    http_rows, http_ids = _http_rows(agent, bindings, profile, policy)
     items.extend(http_rows)
-    items.extend(_knowledge_rows(agent, bindings, http_ids, profile))
-    items.extend(_skill_rows(agent, bindings, profile, project_id=project_id, workspace_id=workspace_id))
+    items.extend(_knowledge_rows(agent, bindings, http_ids, profile, policy))
+    items.extend(_skill_rows(agent, bindings, profile, policy))
     return items
 
 
@@ -80,31 +81,19 @@ def _enabled_bindings(project_id: str, workspace_id: str) -> dict[str, set[str]]
         resource_id = str(binding.get("resourceId") or "")
         if not binding.get("enabled") or resource_type not in enabled or not resource_id:
             continue
-        if resource_type == "skill":
-            from src.skills.service import catalog_for
-            from src.skills import resolve_skill, SkillError
-            try:
-                candidate = resolve_skill(resource_id, catalog_for(), require_enabled=False).candidate
-                enabled["skill"].update((candidate.id, resource_id))
-            except SkillError:
-                pass
-            continue
         resource = get_workspace_resource(resource_type, resource_id)
         if resource and resource.get("workspaceId") == workspace_id:
             enabled[resource_type].add(resource_id)
-    from src.skills.access import skill_binding_ids
-    from src.skills.service import catalog_for
-    enabled["skill"] = set(skill_binding_ids(catalog_for(),
-                                            list_project_resource_bindings(project_id)))
     return enabled
 
 
 def _builtin_rows(
     profile: UnifiedPermissionProfile,
+    policy: ApprovalPolicy,
 ) -> list[CapabilityInventoryItem]:
     rows: list[CapabilityInventoryItem] = []
     for name in (*_FILE_BUILTINS, "Bash", *_NETWORK_BUILTINS):
-        ok, reason = _builtin_unattended(name, profile)
+        ok, reason = _builtin_unattended(name, profile, policy)
         tags, tag_source = tag_inventory_row(
             kind="builtin",
             tool_name=name,
@@ -128,6 +117,7 @@ def _builtin_rows(
 def _builtin_unattended(
     name: str,
     profile: UnifiedPermissionProfile,
+    policy: ApprovalPolicy,
 ) -> tuple[bool, str]:
     if name in {"Read", "Grep", "Glob"}:
         return True, ""
@@ -137,6 +127,8 @@ def _builtin_unattended(
         return True, ""
     if profile.is_read_only:
         return False, "read_only"
+    if policy != ApprovalPolicy.TRUSTED_TOOLS:
+        return False, "blocked_by_permission"
     if name in _NETWORK_BUILTINS and not profile.can_use_network:
         return False, "network_disabled"
     return True, ""
@@ -146,6 +138,7 @@ def _mcp_rows(
     agent: Any,
     bindings: dict[str, set[str]],
     profile: UnifiedPermissionProfile,
+    policy: ApprovalPolicy,
 ) -> list[CapabilityInventoryItem]:
     selected = {str(item) for item in list(getattr(agent, "mcp_tools", None) or []) if str(item).strip()}
     rows: list[CapabilityInventoryItem] = []
@@ -177,6 +170,7 @@ def _mcp_rows(
             ok, reason = _channel_unattended(
                 kind="mcp",
                 profile=profile,
+                policy=policy,
                 transport=str(server.get("transport") or ""),
                 url=str(server.get("url") or ""),
                 approval_policy="",
@@ -208,6 +202,7 @@ def _http_rows(
     agent: Any,
     bindings: dict[str, set[str]],
     profile: UnifiedPermissionProfile,
+    policy: ApprovalPolicy,
 ) -> tuple[list[CapabilityInventoryItem], set[str]]:
     selected = [str(item) for item in list(getattr(agent, "knowledge_tools", None) or [])]
     rows: list[CapabilityInventoryItem] = []
@@ -228,6 +223,7 @@ def _http_rows(
         ok, reason = _channel_unattended(
             kind="http",
             profile=profile,
+            policy=policy,
             transport="",
             url=str(item.get("url") or ""),
             approval_policy=str(item.get("approvalPolicy") or item.get("approval_policy") or "inherit"),
@@ -257,6 +253,7 @@ def _knowledge_rows(
     bindings: dict[str, set[str]],
     http_ids: set[str],
     profile: UnifiedPermissionProfile,
+    policy: ApprovalPolicy,
 ) -> list[CapabilityInventoryItem]:
     selected = [str(item) for item in list(getattr(agent, "knowledge_tools", None) or [])]
     records = enabled_knowledge_tools(
@@ -281,6 +278,7 @@ def _knowledge_rows(
         ok, reason = _channel_unattended(
             kind="knowledge",
             profile=profile,
+            policy=policy,
             transport="",
             url=str(item.get("url") or ""),
             approval_policy="inherit",
@@ -309,27 +307,17 @@ def _skill_rows(
     agent: Any,
     bindings: dict[str, set[str]],
     profile: UnifiedPermissionProfile,
-    *, project_id: str, workspace_id: str,
+    policy: ApprovalPolicy,
 ) -> list[CapabilityInventoryItem]:
     selected = {str(item) for item in list(getattr(agent, "skills", None) or [])}
     rows: list[CapabilityInventoryItem] = []
-    from src.skills.service import catalog_for, list_catalog_skills
-    from src.skills import resolve_skill, SkillError
-    catalog = catalog_for()
-    selected_ids = set()
-    for ref in selected:
-        try:
-            selected_ids.add(resolve_skill(ref, catalog).candidate.id)
-        except SkillError:
-            continue
-    for skill in list_catalog_skills(catalog):
-        item = skill.model_dump(by_alias=True)
+    for item in list_skills():
         skill_id = str(item.get("id") or "")
-        if not skill_id or skill_id not in selected_ids:
+        if not skill_id or skill_id not in selected:
             continue
         if str(item.get("status") or "") != "installed" or not bool(item.get("enabled", True)):
             continue
-        project_bound = skill_id in bindings["skill"] or any(alias in bindings["skill"] for alias in skill._resolved_skill.candidate.legacy_aliases)
+        project_bound = skill_id in bindings["skill"]
         declared = [str(tag) for tag in list(item.get("tags") or [])]
         if skill_package_has_scripts(SimpleNamespace(
             resource_path=item.get("resourcePath") or item.get("resource_path") or "",
@@ -345,12 +333,13 @@ def _skill_rows(
         )
         ok = True
         reason = ""
+        if "shell.execute" in tags and policy != ApprovalPolicy.TRUSTED_TOOLS:
+            ok, reason = False, "blocked_by_permission"
         if profile.is_read_only:
             ok, reason = False, "read_only"
         if not project_bound:
             ok, reason = False, reason or "project_unbound"
         rows.append(CapabilityInventoryItem(
-            aliases=[skill.load_name, *skill._resolved_skill.candidate.aliases],
             capability_id=f"skill:{skill_id}",
             kind="skill",
             resource_id=skill_id,
@@ -371,6 +360,7 @@ def _channel_unattended(
     *,
     kind: str,
     profile: UnifiedPermissionProfile,
+    policy: ApprovalPolicy,
     transport: str,
     url: str,
     approval_policy: str,
@@ -380,6 +370,8 @@ def _channel_unattended(
         return False, "not_installed"
     if profile.is_read_only:
         return False, "read_only"
+    if policy != ApprovalPolicy.TRUSTED_TOOLS:
+        return False, "blocked_by_permission"
     if kind in {"mcp", "http", "knowledge"} and not profile.can_use_network:
         return False, "network_disabled"
     if kind == "mcp":
@@ -391,4 +383,8 @@ def _channel_unattended(
     if kind == "http":
         if policy_name == "deny":
             return False, "http_denied"
+        if policy_name == "ask":
+            return False, "http_ask"
+        if policy_name in {"inherit", "allow"} and policy != ApprovalPolicy.TRUSTED_TOOLS:
+            return False, "blocked_by_permission"
     return True, ""

@@ -115,17 +115,7 @@ def test_worker_spec_hard_blocks_destructive_shell(client) -> None:
         "status": "active",
         "muted": False,
     }
-    from src.sessions.run_binding import begin_run
-
-    payload = studio.model_dump(by_alias=True)
-    snap = begin_run(
-        str(payload.get("chatSessionId") or ""),
-        "run-worker-spec",
-        agent_id="default",
-        permission_mode="bypass",
-        start_model=lambda item: item,
-    )
-    spec, _ctx, tools = build_worker_runtime_spec(payload, member, run_snapshot=snap)
+    spec, _ctx, tools = build_worker_runtime_spec(studio.model_dump(by_alias=True), member)
     for item in WORKER_SHELL_BLACKLIST:
         assert item in spec.guardrails.shell_blacklist
     assert len(spec.guardrails.shell_blacklist) >= len(WORKER_SHELL_BLACKLIST)

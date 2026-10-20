@@ -1,9 +1,8 @@
 """持久 Agent 的 Pydantic 模型。供 catalog 与 HTTP 路由共用，避免 catalog import routes。"""
 
 from __future__ import annotations
-from typing import Literal
 
-from pydantic import BaseModel, Field, computed_field, model_validator
+from pydantic import BaseModel, Field, computed_field
 
 from src.agents.runtime_types import MAX_REACT_ITERS
 from src.agents.system_agents import is_system_agent_id
@@ -30,19 +29,15 @@ class Guardrails(BaseModel):
     filesystem_scope: str = Field(default="", description="文件系统访问范围；空表示默认 Project 根")
     shell_blacklist: list[str] = Field(default_factory=lambda: ["rm -rf /", "sudo"], description="Shell 命令黑名单")
     network_enabled: bool = Field(default=True, description="是否允许网络访问")
-    operation_scope: Literal["normal", "read_only"] = Field(default="normal", alias="operationScope",
-                                                             description="平台能力范围，不是 Chat 审批模式")
-    human_approval: bool = Field(default=False, exclude=True, description="仅兼容旧导入，不持久化")
+    human_approval: bool = Field(default=False, description="是否启用人工审批")
     tool_permission_mode: str = Field(
         default="accept_edits",
         alias="toolPermissionMode",
-        exclude=True,
         description="工具权限模式：ask_every_time/accept_edits/bypass",
     )
     tool_permission_profile: str = Field(
         default="confirm_destructive",
         alias="toolPermissionProfile",
-        exclude=True,
         description="工具权限配置：read_only/trusted_tools/confirm_destructive/ask_every_time",
     )
     execution_backend: str = Field(
@@ -61,14 +56,6 @@ class Guardrails(BaseModel):
         description="Docker 沙盒是否持久化工作目录",
     )
     timeout_seconds: int = Field(default=300, gt=0, description="工具调用超时（秒）")
-
-    @model_validator(mode="before")
-    @classmethod
-    def preserve_legacy_read_only(cls, value):
-        """旧导入仅迁移能力；旧审批字段不能扩大 Chat 权限。"""
-        if isinstance(value, dict) and (value.get("toolPermissionProfile") or value.get("tool_permission_profile")) == "read_only":
-            return {**value, "operationScope": "read_only"}
-        return value
 
     model_config = {"populate_by_name": True}
 

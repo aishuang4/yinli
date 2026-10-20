@@ -212,7 +212,6 @@ def persist_skill_evolution_record(payload: SkillEvolutionRecordInput) -> dict[s
         "agent_name": payload.agent_name,
         "team_id": payload.team_id,
         "user_id": payload.user_id,
-        "session_id": payload.session_id,
         "source_session_id": payload.session_id,
         "source_run_id": payload.source_run_id,
         "source_message_id": payload.source_message_id,
@@ -260,7 +259,7 @@ def register_skill_evolution_record(record: dict[str, Any]) -> tuple[dict[str, A
             return updated, f"merged_similar_skill:{existing_skill_id}"
         return None, reason
 
-    from src.skills.registry import SkillRegisterRequest, register_user_skill
+    from src.server.routes.skills import SkillRegisterRequest, register_user_skill
 
     # 草稿字段由模型生成，长度不受控；按注册请求上限裁剪，避免 ValidationError 中断注册。
     skill = register_user_skill(
@@ -696,17 +695,16 @@ def _skill_record_registration_block_reason(record: dict[str, Any]) -> str:
 
 def _find_similar_installed_skill(record: dict[str, Any]) -> str:
     try:
-        from src.skills.registry import _skills
+        from src.server.routes.skills import _skills
     except Exception:
         return ""
 
     record_signature = _skill_record_signature(record)
     name_slug = _simple_slug(record_signature["name"])
-    from src.skills.registry import _hydrate_skill
     for skill in _skills.values():
         if getattr(skill, "status", "") != "installed":
             continue
-        skill_signature = _installed_skill_signature(_hydrate_skill(skill))
+        skill_signature = _installed_skill_signature(skill)
         if _simple_slug(skill_signature["name"]) == name_slug:
             return skill.id
         if _is_similar_skill_signature(record_signature, skill_signature):

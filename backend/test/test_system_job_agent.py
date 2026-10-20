@@ -128,7 +128,7 @@ def test_system_websearch_job_agent_cannot_be_deleted(monkeypatch) -> None:
 
 
 def test_system_websearch_job_agent_keeps_unattended_invariants(monkeypatch) -> None:
-    """更新不能改系统角色、网络和必注入能力，不强制任务开放。"""
+    """更新可改业务配置，但不能改角色、关闭网络或恢复人工审批。"""
 
     agent = agents_routes._build_default_websearch_job_agent()
     monkeypatch.setattr(agents_routes, "_agents", {agent.id: agent})
@@ -153,8 +153,8 @@ def test_system_websearch_job_agent_keeps_unattended_invariants(monkeypatch) -> 
     assert updated.role == "job"
     assert updated.guardrails.network_enabled is True
     assert updated.guardrails.human_approval is False
-    assert "toolPermissionProfile" not in updated.guardrails.model_dump(by_alias=True)
-    assert "human_approval" not in updated.guardrails.model_dump(by_alias=True)
+    assert updated.guardrails.tool_permission_profile == "trusted_tools"
+    assert updated.guardrails.tool_permission_mode == "bypass"
 
 
 def test_system_job_agent_does_not_require_project_binding() -> None:

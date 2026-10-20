@@ -26,7 +26,6 @@ class InAppNotificationChannel(NotificationChannel):
             "title": message.title,
             "body": message.body,
             "payload": dict(message.payload),
-            "owner_session_id": str(message.payload.get("owner_session_id") or ""),
         })
         project_id = str(record.get("project_id") or "") or None
         notification_hub.publish({

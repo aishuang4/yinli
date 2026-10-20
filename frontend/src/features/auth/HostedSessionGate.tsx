@@ -10,8 +10,6 @@ export function HostedSessionGate({ children }: { children: ReactNode }) {
   const serveMode = useAuthStore((state) => state.serveMode);
   const user = useAuthStore((state) => state.user);
   const loaded = useAuthStore((state) => state.loaded);
-  const accountLoginOpen = useAuthStore((state) => state.accountLoginOpen);
-  const closeAccountLogin = useAuthStore((state) => state.closeAccountLogin);
   const setSession = useAuthStore((state) => state.setSession);
   const [mode, setMode] = useState<AuthFormMode>('login');
   const [email, setEmail] = useState('');
@@ -76,7 +74,7 @@ export function HostedSessionGate({ children }: { children: ReactNode }) {
         setMode('login');
         return;
       }
-      if (serveMode === 'desktop') {
+      if (window.electronAPI && serviceUrl.trim()) {
         const logged = await submitAuth('/api/auth/desktop/session', {
           baseUrl: serviceUrl.trim(),
           email,
@@ -90,7 +88,6 @@ export function HostedSessionGate({ children }: { children: ReactNode }) {
             baseUrl: logged.baseUrl || serviceUrl.trim(),
           },
         });
-        closeAccountLogin();
         return;
       }
       const loggedIn = await submitAuth('/api/auth/login', { email, password, clientKind: 'web' }) as { user?: AuthUser };
@@ -104,7 +101,7 @@ export function HostedSessionGate({ children }: { children: ReactNode }) {
   };
 
   if (!loaded) return null;
-  if (workbenchGate(serveMode, user) === 'login' || (serveMode === 'desktop' && accountLoginOpen)) {
+  if (workbenchGate(serveMode, user) === 'login') {
     return (
       <AuthScreen
         mode={mode}
@@ -118,7 +115,6 @@ export function HostedSessionGate({ children }: { children: ReactNode }) {
         onCode={setCode}
         onMode={setMode}
         onSubmit={() => void onSubmit()}
-        onBack={serveMode === 'desktop' ? closeAccountLogin : undefined}
       />
     );
   }

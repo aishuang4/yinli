@@ -1,6 +1,7 @@
 """人工确认或外部执行结果后恢复 Agent / Team 运行。"""
 
 import asyncio
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import HTTPException
@@ -83,7 +84,7 @@ def _should_emit_raw_resume_event(event_type: str, scope: str) -> bool:
     return True
 
 
-def resume_interaction_events(data: ChatResumeRequest, *, prepared_event=None) -> AsyncGenerator[SourceEvent, None]:
+def resume_interaction_events(data: ChatResumeRequest) -> AsyncGenerator[SourceEvent, None]:
     """构造恢复原 AgentScope ReAct 的结构化源信号流。"""
 
     async def event_stream() -> AsyncGenerator[SourceEvent, None]:
@@ -106,26 +107,12 @@ def resume_interaction_events(data: ChatResumeRequest, *, prepared_event=None) -
             return
 
         try:
-            resume_event = prepared_event if prepared_event is not None else _build_resume_event(interaction, data)
+            resume_event = _build_resume_event(interaction, data)
         except Exception as exc:
             yield source_event("ERROR", {"message": f"恢复事件构建失败: {exc}"})
             return
 
         skill_runs = interaction.skill_runs
-        if interaction.run_id:
-            from src.sessions.run_binding import bind_run_snapshot
-
-            bind_run_snapshot(interaction.run_id)
-        from src.runtime.session_context import build_session_context
-        from src.sessions.records import create_session, get_session
-
-        if get_session(interaction.session_id) is None:
-            create_session(
-                session_id=interaction.session_id,
-                agent_id=interaction.agent_id,
-                agent_name=interaction.agent_name,
-            )
-        build_session_context(interaction.session_id, agent_id=interaction.agent_id, run_id=interaction.run_id)
 
         _record_run_event(
             session_id=interaction.session_id,
@@ -204,7 +191,12 @@ def resume_interaction_events(data: ChatResumeRequest, *, prepared_event=None) -
                 reasoning_text = interaction.assistant_text or ""
                 duration_ms = 0
                 subagent_seq = 0
-                subagent_task_store = SubagentTaskStore(session_id=interaction.session_id)
+                project_root = str(subagent_data.get("projectRoot") or "")
+                subagent_task_store = (
+                    SubagentTaskStore(project_root=Path(project_root), session_id=interaction.session_id)
+                    if project_root
+                    else None
+                )
 
                 async for event in agent.reply_stream(resume_event):
                     subagent_seq += 1
@@ -522,31 +514,6 @@ async def start_resume_interaction(data: ChatResumeRequest) -> dict:
     pending_interaction = get_pending_interaction(data.interaction_id)
     if pending_interaction is None or not pending_interaction.run_id:
         raise HTTPException(status_code=404, detail="Pending interaction not found")
-    from src.server.routes.chat.background_runs import get_chat_background_run
-    run = await get_chat_background_run(pending_interaction.run_id)
-    if run is None or run.session_id != pending_interaction.session_id or run.status in {"completed", "failed", "cancelled"}:
-        raise HTTPException(status_code=409, detail="运行已失效，不能继续批准")
-    team_service = None
-    if (pending_interaction.chat_data or {}).get("teamMemberInteraction"):
-        from src.server.routes.chat.team_runtime.registry import get_team_service
-
-        team_service = await get_team_service(pending_interaction.run_id)
-        if team_service is None or not team_service.has_member_waiter(pending_interaction.id):
-            raise HTTPException(status_code=409, detail="Team 成员审批已失效")
-    # 同一事件循环内先占位再构造持久审批；在任何 await 之前拒绝重复命令。
-    if pending_interaction.resuming:
-        raise HTTPException(status_code=409, detail="此审批已在恢复中")
-    pending_interaction.resuming = True
-    try:
-        prepared_event = _build_resume_event(pending_interaction, data)
-    except ValueError as exc:
-        pending_interaction.resuming = False
-        raise HTTPException(status_code=409, detail=str(exc)) from None
-    if team_service is not None:
-        # Team 主协程始终存活；只唤醒这一成员，绝不能替换原 Run 的取消任务。
-        await team_service.resolve_member_permission(pending_interaction.id, prepared_event, action=data.action)
-        return {"runId": pending_interaction.run_id, "sessionId": pending_interaction.session_id,
-                "interactionId": pending_interaction.id}
     await mark_chat_background_run_resuming(
         pending_interaction.run_id,
         interaction_id=pending_interaction.id,
@@ -555,7 +522,7 @@ async def start_resume_interaction(data: ChatResumeRequest) -> dict:
     )
     stream = relay_chat_background_run_events(
         pending_interaction.run_id,
-        resume_interaction_events(data, prepared_event=prepared_event),
+        resume_interaction_events(data),
     )
     resume_task = asyncio.create_task(
         _drain_resume_stream(stream),

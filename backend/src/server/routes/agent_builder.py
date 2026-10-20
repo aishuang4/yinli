@@ -20,6 +20,7 @@ from src.config.runtime_settings import get_effective_model_settings
 from src.server.routes.agents import AgentCreate, AgentResponse, Guardrails, ModelConfig, create_agent
 from src.server.routes.mcp import _mcp_servers
 from src.server.routes.skills import _skills
+from src.storage.database import get_project
 
 router = APIRouter()
 
@@ -124,6 +125,12 @@ async def _plan_agents(data: BuilderPlanRequest) -> BuilderPlanResponse:
 @router.post("/apply", response_model=BuilderApplyResponse)
 async def apply_agents(data: BuilderApplyRequest) -> BuilderApplyResponse:
     """从确认后的草案创建独立 Agent。"""
+
+    project = get_project(data.project_id) if data.project_id else None
+    if data.project_id and project is None:
+        raise HTTPException(status_code=422, detail=f"Project 不存在: {data.project_id}")
+    if project is not None and str(project.get("workspaceId") or "default") != data.workspace_id:
+        raise HTTPException(status_code=422, detail="Project 不属于当前 Workspace")
 
     created_agents: list[AgentResponse] = []
     warnings = list(data.plan.warnings)

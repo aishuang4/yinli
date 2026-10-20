@@ -10,7 +10,6 @@ from src.catalog.loader import (
 )
 from src.catalog.agent_models import AgentResponse
 from src.catalog.paths import profile_path
-from src.config.runtime_paths import global_agents_root
 from src.catalog.system_defaults import utc_now
 
 
@@ -41,9 +40,8 @@ def test_save_and_list_by_workspace(tmp_path, monkeypatch) -> None:
     save_agent(_user_agent("alpha", "ws-a"))
     save_agent(_user_agent("beta", "ws-b"))
     ids_a = [item.id for item in list_workspace_agents("ws-a")]
-    ids_b = [item.id for item in list_workspace_agents("ws-b")]
-    assert ids_a == ids_b
-    assert "alpha" in ids_a and "beta" in ids_a
+    assert "alpha" in ids_a
+    assert "beta" not in ids_a
     assert "default" in ids_a
     assert get_registered_agent("alpha").system_prompt == "p"
 
@@ -54,7 +52,7 @@ def test_id_conflict_keeps_first(tmp_path, monkeypatch) -> None:
     first = save_agent(_user_agent("dup", "ws-a", "one"))
     other = profile_path("ws-b", "dup")
     other.parent.mkdir(parents=True, exist_ok=True)
-    other.write_text((global_agents_root() / "dup.md").read_text(encoding="utf-8").replace("ws-a", "ws-b"), encoding="utf-8")
+    other.write_text(profile_path("ws-a", "dup").read_text(encoding="utf-8").replace("ws-a", "ws-b"), encoding="utf-8")
     invalidate_catalog()
     loaded = get_registered_agent("dup")
     assert loaded is not None
@@ -67,7 +65,7 @@ def test_symlink_outside_catalog_is_error(tmp_path, monkeypatch) -> None:
     save_agent(_user_agent("ok", "default"))
     outside = tmp_path / "outside.md"
     outside.write_text("leak", encoding="utf-8")
-    link = global_agents_root() / "leak.md"
+    link = profile_path("default", "leak")
     link.symlink_to(outside)
     invalidate_catalog()
     from src.catalog.loader import ensure_loaded

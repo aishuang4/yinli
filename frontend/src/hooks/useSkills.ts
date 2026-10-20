@@ -5,9 +5,10 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { GLOBAL_CATALOG_URLS } from '../features/sessions/catalogRequests';
-import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import type { Skill, SkillRegisterPayload } from '../types/skill';
+import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
+import { useAppStore } from '../stores/appStore';
+import { bindProjectResource } from '../utils/projectResources';
 
 interface UseSkillsReturn {
   skills: Skill[];
@@ -15,7 +16,6 @@ interface UseSkillsReturn {
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
-  loadSkill: (id: string) => Promise<Skill>;
   registerSkill: (payload: SkillRegisterPayload) => Promise<Skill>;
   importSkillArchive: (file: File) => Promise<Skill>;
   exportSkill: (id: string, filename?: string) => Promise<void>;
@@ -43,6 +43,8 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function useSkills(): UseSkillsReturn {
+  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,8 +55,8 @@ export function useSkills(): UseSkillsReturn {
       setLoading(true);
       setError(null);
       const [skillList, categoryList] = await Promise.all([
-        requestJson<Skill[]>(GLOBAL_CATALOG_URLS[1]),
-        requestJson<string[]>(GLOBAL_CATALOG_URLS[2]),
+        requestJson<Skill[]>(`/api/skills?workspaceId=${encodeURIComponent(activeWorkspaceId)}&projectId=${encodeURIComponent(activeProjectId)}`),
+        requestJson<string[]>('/api/skills/categories'),
       ]);
       setSkills(skillList);
       setCategories(categoryList);
@@ -63,7 +65,7 @@ export function useSkills(): UseSkillsReturn {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeProjectId, activeWorkspaceId]);
 
   const updateSkill = useCallback((skill: Skill) => {
     setSkills((prev) => {
@@ -74,17 +76,14 @@ export function useSkills(): UseSkillsReturn {
     });
   }, []);
 
-  const loadSkill = useCallback(async (id: string) => {
-    return requestJson<Skill>(`/api/skills/${encodeURIComponent(id)}`);
-  }, []);
-
   const registerSkill = useCallback(async (payload: SkillRegisterPayload) => {
     try {
       const skill = await requestJson<Skill>('/api/skills/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, workspaceId: activeWorkspaceId }),
       });
+      await bindProjectResource(activeProjectId, 'skill', skill.id);
       updateSkill(skill);
       setCategories((prev) => (
         prev.includes(skill.category) ? prev : [...prev, skill.category].sort()
@@ -95,19 +94,20 @@ export function useSkills(): UseSkillsReturn {
       notifyError(`Skill 注册失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [updateSkill]);
+  }, [activeProjectId, activeWorkspaceId, updateSkill]);
 
   const importSkillArchive = useCallback(async (file: File) => {
     try {
       const formData = new FormData();
       formData.append('file', file);
       const skill = await requestJson<Skill>(
-        '/api/skills/import',
+        `/api/skills/import?workspaceId=${encodeURIComponent(activeWorkspaceId)}`,
         {
         method: 'POST',
         body: formData,
         },
       );
+      await bindProjectResource(activeProjectId, 'skill', skill.id);
       updateSkill(skill);
       setCategories((prev) => (
         prev.includes(skill.category) ? prev : [...prev, skill.category].sort()
@@ -118,7 +118,7 @@ export function useSkills(): UseSkillsReturn {
       notifyError(`Skill 导入失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [updateSkill]);
+  }, [activeProjectId, activeWorkspaceId, updateSkill]);
 
   const exportSkill = useCallback(async (id: string, filename?: string) => {
     try {
@@ -190,7 +190,7 @@ export function useSkills(): UseSkillsReturn {
 
   const setSkillShared = useCallback(async (id: string, availableToAllAgents: boolean) => {
     try {
-      const skill = await requestJson<Skill>(`/api/skills/${id}/share`, {
+      const skill = await requestJson<Skill>(`/api/skills/${id}/share?projectId=${encodeURIComponent(activeProjectId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ availableToAllAgents }),
@@ -202,11 +202,11 @@ export function useSkills(): UseSkillsReturn {
       notifyError(`Skill 共享状态更新失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [updateSkill]);
+  }, [activeProjectId, updateSkill]);
 
   const setSkillEnabled = useCallback(async (id: string, enabled: boolean) => {
     try {
-      const skill = await requestJson<Skill>(`/api/skills/${id}/enable`, {
+      const skill = await requestJson<Skill>(`/api/skills/${id}/enable?projectId=${encodeURIComponent(activeProjectId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled }),
@@ -218,7 +218,7 @@ export function useSkills(): UseSkillsReturn {
       notifyError(`Skill 状态更新失败：${getErrorMessage(err, '未知错误')}`);
       throw err;
     }
-  }, [updateSkill]);
+  }, [activeProjectId, updateSkill]);
 
   useEffect(() => {
     refresh();
@@ -230,7 +230,6 @@ export function useSkills(): UseSkillsReturn {
     loading,
     error,
     refresh,
-    loadSkill,
     registerSkill,
     importSkillArchive,
     exportSkill,
@@ -243,6 +242,7 @@ export function useSkills(): UseSkillsReturn {
 }
 
 export function useEnabledSkills(): UseEnabledSkillsReturn {
+  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -252,14 +252,14 @@ export function useEnabledSkills(): UseEnabledSkillsReturn {
       setLoading(true);
       setError(null);
       setSkills(await requestJson<Skill[]>(
-        '/api/skills/enabled',
+        `/api/skills/enabled?workspaceId=${encodeURIComponent(activeWorkspaceId)}`,
       ));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load enabled skills');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeWorkspaceId]);
 
   useEffect(() => {
     refresh();

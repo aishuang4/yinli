@@ -14,15 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.config.runtime_paths import session_team_root, sessions_root, team_runtime_root
-
-
-def _catalog_producer_file(*, session_id: str, run_id: str, path: Path) -> None:
-    if not session_id:
-        return
-    from src.sessions.files import catalog_output
-
-    catalog_output(session_id=session_id, run_id=run_id, path=path, kind="managed")
+from src.config.runtime_paths import team_runtime_root
 
 TERMINAL_TASK_STATUSES = {"succeeded", "failed", "cancelled"}
 # 一次 TeamRun 的机械上限：Leader 拆得再细也不能无限开成员 / 开任务，超出在工具层直接拒绝。
@@ -55,21 +47,6 @@ class TeamRunRef:
     path: Path
 
 
-def _find_team_run_path(team_run_id: str) -> Path:
-    """先找 Session team 目錄，再回退歷史的扁平 team-runtime 目錄。"""
-
-    base = sessions_root()
-    if base.is_dir():
-        for session_dir in base.iterdir():
-            candidate = session_dir / "team" / team_run_id
-            if (candidate / "run.json").is_file():
-                return candidate
-    legacy = team_runtime_root() / team_run_id
-    if (legacy / "run.json").is_file():
-        return legacy
-    raise TeamStoreError(f"TeamRun 不存在: {team_run_id}")
-
-
 def utc_now() -> str:
     """生成 UTC ISO 时间。"""
 
@@ -99,7 +76,7 @@ class TeamStore:
         """创建全新的 TeamRun。"""
 
         team_run_id = f"trun_{uuid.uuid4().hex}"
-        path = Path(root) / team_run_id if root is not None else session_team_root(session_id, team_run_id)
+        path = (root or team_runtime_root()) / team_run_id
         for directory in (
             path / "members",
             path / "tasks",
@@ -160,7 +137,7 @@ class TeamStore:
 
         if not TEAM_RUN_ID_PATTERN.fullmatch(team_run_id):
             raise TeamStoreError(f"TeamRun ID 非法: {team_run_id}")
-        path = Path(root) / team_run_id if root is not None else _find_team_run_path(team_run_id)
+        path = (root or team_runtime_root()) / team_run_id
         if not (path / "run.json").exists():
             raise TeamStoreError(f"TeamRun 不存在: {team_run_id}")
         return cls(TeamRunRef(id=team_run_id, path=path))
@@ -690,11 +667,6 @@ class TeamStore:
                 raise TeamStoreError("当前任务缺少 active Attempt")
             attempt_path = self._attempt_path(task_id, attempt_id)
             (attempt_path / "result.md").write_text(normalized, encoding="utf-8")
-            _catalog_producer_file(
-                session_id=str(self.run().get("sessionId") or ""),
-                run_id=str(self.run().get("chatRunId") or self.ref.id),
-                path=attempt_path / "result.md",
-            )
             (self._task_path(task_id) / "result.md").write_text(normalized, encoding="utf-8")
             submitted = {
                 **attempt,

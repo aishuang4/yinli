@@ -24,6 +24,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"],
-  "exclude": ["src/features/sessions/directoryGrant.test.ts"]
+  "include": ["src"]
 }

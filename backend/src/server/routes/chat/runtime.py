@@ -44,10 +44,9 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
     if not guardrails:
         return AgentGuardrails()
     runtime_guardrails = AgentGuardrails(
-        filesystem_scope=getattr(guardrails, "filesystem_scope", "") or "",
+        filesystem_scope=getattr(guardrails, "filesystem_scope", "/") or "/",
         shell_blacklist=list(getattr(guardrails, "shell_blacklist", []) or []),
         network_enabled=bool(getattr(guardrails, "network_enabled", True)),
-        operation_scope=str(getattr(guardrails, "operation_scope", "normal")),
         human_approval=bool(getattr(guardrails, "human_approval", False)),
         tool_permission_mode=str(getattr(guardrails, "tool_permission_mode", "accept_edits") or "accept_edits"),
         tool_permission_profile=str(
@@ -63,7 +62,6 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
         filesystem_scope=runtime_guardrails.filesystem_scope,
         shell_blacklist=runtime_guardrails.shell_blacklist,
         network_enabled=runtime_guardrails.network_enabled,
-        operation_scope=runtime_guardrails.operation_scope,
         human_approval=runtime_guardrails.human_approval,
         tool_permission_mode=runtime_guardrails.tool_permission_mode,
         tool_permission_profile=runtime_guardrails.tool_permission_profile,
@@ -82,13 +80,7 @@ def scope_guardrails_to_project(
     """计算 Agent 文件范围与 Project root 的交集。"""
 
     project_path = project_root.expanduser().resolve()
-    raw_scope = str(guardrails.filesystem_scope or "").strip()
-    if not raw_scope or raw_scope in {".", "/"}:
-        agent_path = project_path
-    else:
-        agent_path = Path(raw_scope).expanduser().resolve()
-    if agent_path == Path.cwd().resolve():
-        agent_path = project_path
+    agent_path = Path(guardrails.filesystem_scope).expanduser().resolve()
     # 安装包升级后，历史 Agent 可能仍保存旧 userData 下的 workspace。
     # 该目录已不存在时按当前 Project root 迁移，避免旧路径导致整轮对话被拒绝。
     if not agent_path.is_dir() and _is_legacy_desktop_scope(agent_path, project_path):
@@ -105,7 +97,6 @@ def scope_guardrails_to_project(
         filesystem_scope=str(effective_scope),
         shell_blacklist=guardrails.shell_blacklist,
         network_enabled=guardrails.network_enabled,
-        operation_scope=guardrails.operation_scope,
         human_approval=guardrails.human_approval,
         tool_permission_mode=guardrails.tool_permission_mode,
         tool_permission_profile=guardrails.tool_permission_profile,
@@ -176,7 +167,6 @@ def _build_runtime_mcp_servers(
             command=str(item.get("command") or ""),
             headers=dict(item.get("headers") or {}),
             enable_tools=list(item.get("enable_tools") or []),
-            id=str(item.get("id") or ""),
         ))
     from src.tenancy.context import is_hosted_mode
 

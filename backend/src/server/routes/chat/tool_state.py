@@ -75,10 +75,7 @@ def _update_tool_calls(
     if event_type == "TOOL_CALL_DELTA":
         next_calls[index] = current.model_copy(update={"args": current.args + str(event_data.get("delta") or "")})
     elif event_type in {"TOOL_CALL_END", "TOOL_RESULT_START"}:
-        complete = event_data.get("input") if event_data.get("input") is not None else event_data.get("arguments")
-        next_calls[index] = current.model_copy(update={
-            "status": "running", "args": _stringify_tool_input(complete) if complete is not None else current.args,
-        })
+        next_calls[index] = current.model_copy(update={"status": "running"})
     elif event_type == "TOOL_RESULT_TEXT_DELTA":
         next_calls[index] = current.model_copy(update={
             "result": current.result + str(event_data.get("delta") or ""),

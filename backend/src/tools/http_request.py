@@ -1,4 +1,4 @@
-"""HTTP 请求工具；授权和执行共用最终请求解析。"""
+"""HTTP request tool for Agent runtime."""
 
 import json
 from typing import Any
@@ -9,40 +9,6 @@ import httpx
 from agentscope.message import TextBlock, ToolResultState
 from agentscope.permission import PermissionBehavior, PermissionContext, PermissionDecision
 from agentscope.tool import ToolBase, ToolChunk
-
-
-def prepare_http_request(
-    url: str, method: str = "GET", headers: dict[str, str] | None = None,
-    query: dict[str, Any] | None = None, body: Any = None, timeout_seconds: float = 30,
-) -> dict[str, Any]:
-    """解析最终参数，授权快照和真正请求必须复用同一路径。"""
-    method = method.upper()
-    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
-        raise ValueError("不支持的 HTTP 方法")
-
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("HTTP 请求需要完整的 HTTP(S) URL")
-
-    timeout = max(1.0, min(float(timeout_seconds or 30), 120.0))
-    request_headers = {
-        str(key): str(value)
-        for key, value in (headers or {}).items()
-        if str(key).strip()
-    }
-    kwargs: dict[str, Any] = {
-        "method": method,
-        "url": url,
-        "headers": request_headers or None,
-        "params": query or None,
-        "timeout": timeout,
-    }
-    if body is not None and method not in {"GET", "HEAD"}:
-        if isinstance(body, (dict, list)):
-            kwargs["json"] = body
-        else:
-            kwargs["content"] = str(body)
-    return kwargs
 
 
 class HttpRequest(ToolBase):
@@ -132,10 +98,32 @@ class HttpRequest(ToolBase):
         body: Any = None,
         timeout_seconds: float = 30,
     ) -> ToolChunk:
-        try:
-            kwargs = prepare_http_request(url, method, headers, query, body, timeout_seconds)
-        except ValueError:
-            return self._error("HTTP 请求参数无效")
+        method = method.upper()
+        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
+            return self._error(f"Unsupported HTTP method: {method}")
+
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return self._error("URL must be absolute and start with http:// or https://")
+
+        timeout = max(1.0, min(float(timeout_seconds or 30), 120.0))
+        request_headers = {
+            str(key): str(value)
+            for key, value in (headers or {}).items()
+            if str(key).strip()
+        }
+        kwargs: dict[str, Any] = {
+            "method": method,
+            "url": url,
+            "headers": request_headers or None,
+            "params": query or None,
+            "timeout": timeout,
+        }
+        if body is not None and method not in {"GET", "HEAD"}:
+            if isinstance(body, (dict, list)):
+                kwargs["json"] = body
+            else:
+                kwargs["content"] = str(body)
 
         try:
             from src.security.egress import guarded_async_client

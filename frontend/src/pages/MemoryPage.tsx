@@ -12,7 +12,6 @@ import { HabitMemoryPanel } from '../features/memory/HabitMemoryPanel';
 import { MarkdownMemoryPanel } from '../features/memory/MarkdownMemoryPanel';
 import { ProfessionalMemoryPanel } from '../features/memory/ProfessionalMemoryPanel';
 import { TimelineMemoryPanel } from '../features/memory/TimelineMemoryPanel';
-import { readSessionLocation } from '../features/sessions/sessionLocation';
 import { MemoryCandidatePanel } from '../features/memory/MemoryCandidatePanel';
 import { MemoryLandingPage } from '../features/memory/MemoryLandingPage';
 import { MemorySettingsPanel } from '../features/memory/MemorySettingsPanel';
@@ -25,6 +24,7 @@ import {
 } from '../features/memory/memoryViewConfig';
 import { useAgents } from '../hooks/useAgents';
 import { useMemory } from '../hooks/useMemory';
+import { useAppStore } from '../stores/appStore';
 import type {
   MarkdownMemoryDocument,
   MarkdownMemoryScope,
@@ -43,6 +43,7 @@ import type {
 } from '../types/memory';
 
 export function MemoryPage() {
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const { agents, loading: agentsLoading, refresh: refreshAgents } = useAgents();
   const {
     readMarkdownMemory,
@@ -122,7 +123,7 @@ export function MemoryPage() {
     void loadSkillQueue();
     void loadCandidates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeProjectId]);
 
   useEffect(() => {
     if (activeTab === 'candidates') {
@@ -326,7 +327,7 @@ export function MemoryPage() {
             saveProfessional={saveProfessional}
           />
         ) : activeTab === 'timeline' ? (
-          <TimelineMemoryPanel key={livedRefresh} agents={agents} sessionId={readSessionLocation(window.location.search).sessionId} loadTimeline={loadTimeline} />
+          <TimelineMemoryPanel key={livedRefresh} agents={agents} loadTimeline={loadTimeline} />
         ) : activeTab === 'markdown' ? (
           <MarkdownMemoryPanel
             agents={agents}

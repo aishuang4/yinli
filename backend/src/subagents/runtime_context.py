@@ -9,8 +9,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from src.server.routes.chat.runtime_governance import build_actor_memory_prompt
-from src.runtime.session_context import SessionContext as PlatformRuntimeContext
-from src.skills.registry import Skill, resolve_installed_skills, resolve_runtime_skill_paths
+from src.runtime_context import RuntimeContext as PlatformRuntimeContext
+from src.project_resources import resolve_project_resource_access
+from src.server.routes.skills import Skill, discover_external_skills, resolve_installed_skills, resolve_runtime_skill_paths
 from src.subagents.models import SubagentDefinition
 
 
@@ -48,29 +49,23 @@ class SubagentRuntimeContext:
 def build_subagent_runtime_context(
     definition: SubagentDefinition,
     platform_context: PlatformRuntimeContext | None = None,
-    *,
-    parent_snapshot: dict | None = None,
 ) -> SubagentRuntimeContext:
     """为 Subagent 构建 Skill 与记忆注入上下文。"""
 
-    if parent_snapshot is None:
-        from src.sessions.errors import SessionError
-
-        raise SessionError("snapshot_required", "Subagent 缺少父 Run 快照")
     errors: list[str] = []
     try:
-        external_skills: list = []
+        external_skills = discover_external_skills(platform_context.project_root) if platform_context else []
         loaded_skills, missing_skill_refs = resolve_installed_skills(
             definition.skills,
             external_skills=external_skills,
         )
-        if parent_snapshot is not None:
-            from src.subagents.snapshot_subset import resource_ids
-
-            allowed = resource_ids(parent_snapshot, "skill")
-            denied_refs = [skill.name for skill in loaded_skills if skill.id not in allowed and skill.name not in allowed]
+        if platform_context is not None:
+            allowed_skill_ids = resolve_project_resource_access(platform_context).skill_ids
+            denied_refs = [skill.name for skill in loaded_skills if skill.id not in allowed_skill_ids]
             loaded_skills = [
-                skill for skill in loaded_skills if skill.id in allowed or skill.name in allowed
+                skill
+                for skill in loaded_skills
+                if skill.id in allowed_skill_ids or skill.source_scope == "project"
             ]
             missing_skill_refs.extend(denied_refs)
         skill_paths = resolve_runtime_skill_paths(loaded_skills, runtime_context=platform_context)

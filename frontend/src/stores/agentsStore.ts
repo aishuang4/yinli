@@ -11,6 +11,7 @@ import type { Agent } from '../types/agent';
 interface AgentApiData {
   id: string;
   systemManaged?: boolean;
+  workspaceId?: string;
   name: string;
   avatar: string;
   description: string;
@@ -25,7 +26,6 @@ interface AgentApiData {
   tags: string[];
   planConfig?: Agent['planConfig'];
   guardrails: {
-    operationScope?: 'normal' | 'read_only';
     filesystem_scope: string;
     shell_blacklist: string[];
     network_enabled: boolean;
@@ -60,6 +60,7 @@ function profileFromLegacyToolMode(
 export function mapApiAgent(api: AgentApiData): Agent {
   return {
     id: api.id,
+    workspaceId: api.workspaceId ?? 'default',
     name: api.name,
     avatar: api.avatar,
     description: api.description,
@@ -80,8 +81,6 @@ export function mapApiAgent(api: AgentApiData): Agent {
       allowReplanning: api.planConfig?.allowReplanning ?? false,
     },
     guardrails: {
-      operationScope: api.guardrails.operationScope || (
-        (api.guardrails.tool_permission_profile ?? api.guardrails.toolPermissionProfile) === 'read_only' ? 'read_only' : 'normal'),
       filesystemScope: api.guardrails.filesystem_scope,
       shellBlacklist: api.guardrails.shell_blacklist,
       networkEnabled: api.guardrails.network_enabled,
@@ -120,7 +119,7 @@ interface AgentsStore {
   loading: boolean;
   error: string | null;
   revision: number;
-  syncFromServer: (options?: { silent?: boolean }) => Promise<void>;
+  syncFromServer: (workspaceId: string, options?: { silent?: boolean }) => Promise<void>;
   upsertAgent: (agent: Agent) => void;
   removeAgent: (id: string) => void;
 }
@@ -130,15 +129,19 @@ export const useAgentsStore = create<AgentsStore>()((set, get) => ({
   loading: false,
   error: null,
   revision: 0,
-  syncFromServer: async (options) => {
+  syncFromServer: async (workspaceId, options) => {
     const silent = Boolean(options?.silent) && get().agents.length > 0;
     try {
       if (!silent) set({ loading: true, error: null });
       else set({ error: null });
-      const res = await fetch('/api/agents', { cache: 'no-store' });
+      const res = await fetch(`/api/agents?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        cache: 'no-store',
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: AgentApiData[] = await res.json();
-      const agents = data.map(mapApiAgent);
+      const agents = data.map(mapApiAgent).filter((agent) => (
+        agent.systemManaged || agent.workspaceId === workspaceId
+      ));
       set((state) => ({
         agents,
         loading: false,

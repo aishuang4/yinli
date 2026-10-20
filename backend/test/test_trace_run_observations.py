@@ -377,16 +377,11 @@ def test_trace_api_lists_runs_and_rejects_session_id(client) -> None:
     open_run_root(persist=True, run_id="run-one", session_id="sess-shared", task="第一轮")
     close_run_root(persist=True, run_id="run-one", outcome="completed", output={"answer": "好"})
 
-    listed = client.get("/api/traces", params={"sessionId": "sess-shared"}).json()
+    listed = client.get("/api/traces?projectId=default").json()
     ids = [item["id"] for item in listed]
     assert "run-one" in ids
     assert "run-two" in ids
     assert "run-other" not in ids
-    tenant = client.get("/api/traces", params={"scope": "tenant"}).json()
-    tenant_ids = [item["id"] for item in tenant]
-    assert "run-other" in tenant_ids
-    crossed = client.get("/api/traces/run-one", params={"sessionId": "sess-1"})
-    assert crossed.status_code == 404
     assert all(item["id"] != "sess-shared" for item in listed)
     cancelled = next(item for item in listed if item["id"] == "run-two")
     assert cancelled["status"] == "cancelled"

@@ -9,7 +9,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal
@@ -17,8 +18,7 @@ from typing import Any, Literal
 from fastapi import HTTPException
 
 from src.agents.runtime_types import RuntimeToolScope
-from src.scheduler.job_workspace import resolve_job_workspace
-from src.scheduler.models import JobExecutionPolicy
+from src.project_files import project_job_run_directory
 from src.runtime.scheduled_chat import (
     TERMINAL_RUN_STATUSES,
     assert_job_workspace_in_scope,
@@ -26,6 +26,7 @@ from src.runtime.scheduled_chat import (
     get_chat_background_run,
     launch_scheduled_chat_run,
 )
+from src.runtime_context import resolve_runtime_context
 from src.server.routes.agents import get_registered_agent
 
 
@@ -51,10 +52,7 @@ class ScheduledRunRequest:
     tool_scope: RuntimeToolScope
     scheduled_for: str
     trigger: Literal["schedule", "manual", "catch_up"]
-    required_skills: list[dict[str, Any]] = field(default_factory=list)
-    context_policy: str = "fresh"
     model_config_id: str = ""
-    execution_policy: JobExecutionPolicy = field(default_factory=JobExecutionPolicy)
 
 
 def scheduled_chat_run_timeout_seconds(agent_id: str) -> float:
@@ -67,12 +65,7 @@ def scheduled_chat_run_timeout_seconds(agent_id: str) -> float:
     return float(min(max(1, timeout), DEFAULT_FIRING_TIMEOUT_SECONDS))
 
 
-def scan_scheduled_run_outputs(
-    workspace_dir: Path | str,
-    *,
-    session_id: str = "",
-    run_id: str = "",
-) -> dict[str, Any]:
+def scan_scheduled_run_outputs(workspace_dir: Path | str) -> dict[str, Any]:
     """扫描 firing cwd 的 outputs/，生成 sha256 / 字节数 / 相对路径清单。"""
 
     root = Path(workspace_dir).expanduser().resolve()
@@ -91,10 +84,6 @@ def scan_scheduled_run_outputs(
                 "sha256": digest,
                 "bytes": size,
             })
-            if session_id:
-                from src.sessions.files import catalog_output
-
-                catalog_output(session_id=session_id, run_id=run_id or session_id, path=resolved, kind="external")
     manifest = {"files": files}
     (root / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
@@ -104,7 +93,7 @@ def scan_scheduled_run_outputs(
 
 
 async def start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
-    """在 owner Session 下建立新 Run，立即返回 chat_run_id。"""
+    """创建 kind=scheduled_job 的新 session 与 Chat Run，立即返回 chat_run_id。"""
 
     try:
         return await _start_scheduled_chat_run(req)
@@ -145,47 +134,32 @@ async def await_scheduled_chat_run(
 async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
     _validate_request(req)
     from src.config.runtime_settings import resolve_model_binding
-    from src.scheduler.session_grant_check import owner_session_id
-    from src.sessions.records import get_session
-
     binding = resolve_model_binding(req.model_config_id)
-    session_id = owner_session_id(req.job_id)
-    if get_session(session_id) is None:
-        raise ScheduledChatLaunchError("Job 沒有 owner Session")
-    from dataclasses import replace
-
-    from src.runtime.session_context import build_session_context
-
-    session_ctx = build_session_context(session_id, agent_id=req.agent_id)
-    runtime_context = replace(session_ctx, working_directory=session_ctx.session_root)
-    if req.required_skills or req.skill_ids:
-        from src.scheduler.skill_manifest import SkillManifestError, validate_required_skill_manifest
-        from src.sessions.run_access import candidate_resource_access
-
-        try:
-            validate_required_skill_manifest(
-                req.required_skills,
-                canonical_ids=req.skill_ids,
-                project_resources=candidate_resource_access(
-                    session_id,
-                    agent_id=req.agent_id,
-                    permission_mode=req.execution_policy.approval_mode,
-                ),
-                project_root=runtime_context.project_root,
-                context_policy=req.context_policy,
-            )
-            from src.scheduler.service import ScheduledJobService
-            from src.scheduler.session_grant_check import assert_owner_session_resources
-
-            assert_owner_session_resources(ScheduledJobService().get_job(req.job_id))
-        except SkillManifestError as exc:
-            raise ScheduledChatLaunchError(f"{exc.code}: {exc}") from exc
+    session_id = f"sched-{uuid.uuid4().hex}"
+    runtime_context = resolve_runtime_context(
+        project_id=req.project_id,
+        session_id=session_id,
+        run_id="",
+        agent_id=req.agent_id,
+    )
+    if runtime_context.workspace_id != req.workspace_id:
+        raise ScheduledChatLaunchError(
+            f"Job Workspace {req.workspace_id} 与 Project {runtime_context.project_id} 不一致",
+        )
     agent = get_registered_agent(req.agent_id)
     if req.agent_id != "default" and agent is None:
         raise ScheduledChatLaunchError(f"Agent 配置不存在: {req.agent_id}")
     agent_name = agent.name if agent is not None else "Assistant"
 
-    workspace_dir = resolve_job_workspace(session_id, req.job_id, req.firing_id)
+    workspace_dir = project_job_run_directory(
+        runtime_context.project_root, req.job_id, req.firing_id,
+    )
+    assert_job_workspace_in_scope(
+        agent=agent,
+        project_root=runtime_context.project_root,
+        workspace_dir=workspace_dir,
+    )
+    (workspace_dir / "outputs").mkdir(parents=True, exist_ok=True)
     _write_frozen_spec(workspace_dir, req)
     return await launch_scheduled_chat_run(
         session_id=session_id,
@@ -193,10 +167,8 @@ async def _start_scheduled_chat_run(req: ScheduledRunRequest) -> str:
         agent_name=agent_name,
         frozen_prompt=req.frozen_prompt,
         skill_ids=list(req.skill_ids),
-        required_skills=list(req.required_skills),
-        context_policy=req.context_policy,
-        workspace_id="",
-        project_id="",
+        workspace_id=runtime_context.workspace_id,
+        project_id=runtime_context.project_id,
         workspace_dir=workspace_dir,
         runtime_context=runtime_context,
         job=_job_view(req),
@@ -212,18 +184,15 @@ def _job_view(req: ScheduledRunRequest) -> SimpleNamespace:
 
     try:
         job = ScheduledJobService().get_job(req.job_id)
-        return job.model_copy(update={"execution_policy": req.execution_policy})
+        return job
     except Exception:
         return SimpleNamespace(
             id=req.job_id,
             agent_id=req.agent_id,
             frozen_prompt=req.frozen_prompt,
             skill_ids=list(req.skill_ids),
-            required_skills=list(req.required_skills),
-            context_policy=req.context_policy,
             tool_scope=req.tool_scope,
             capability_contract=None,
-            execution_policy=req.execution_policy,
             workspace_id=req.workspace_id,
             project_id=req.project_id,
         )
@@ -240,6 +209,8 @@ def _validate_request(req: ScheduledRunRequest) -> None:
         raise ScheduledChatLaunchError("frozen_prompt 不能为空")
     if not str(req.agent_id).strip():
         raise ScheduledChatLaunchError("agent_id 不能为空")
+    if not str(req.project_id).strip():
+        raise ScheduledChatLaunchError("project_id 不能为空")
     if req.trigger not in {"schedule", "manual", "catch_up"}:
         raise ScheduledChatLaunchError(f"非法 firing trigger: {req.trigger}")
 
@@ -263,8 +234,6 @@ def _write_frozen_spec(workspace_dir: Path, req: ScheduledRunRequest) -> None:
         "scheduledFor": req.scheduled_for,
         "trigger": req.trigger,
         "skillIds": list(req.skill_ids),
-        "requiredSkills": list(req.required_skills),
-        "contextPolicy": req.context_policy,
         "toolScope": {
             "allowBash": req.tool_scope.allow_bash,
             "allowHttp": req.tool_scope.allow_http,
@@ -273,7 +242,6 @@ def _write_frozen_spec(workspace_dir: Path, req: ScheduledRunRequest) -> None:
             "allowKnowledge": req.tool_scope.allow_knowledge,
         },
         "frozenPrompt": req.frozen_prompt,
-        "executionPolicy": req.execution_policy.model_dump(by_alias=True),
     }
     (workspace_dir / "spec.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2),

@@ -41,7 +41,7 @@ export function SkillDetailPage({
   return (
     <WorkbenchDetailShell
       title={skill.name}
-      subtitle={[skill.description, skill.loadName, skill.reason || (skill.resolutionState === 'ambiguous' ? '名称有歧义，请使用限定加载名' : skill.resolutionState === 'shadowed' ? '同名技能已由更高来源覆盖' : '')].filter(Boolean).join(' · ')}
+      subtitle={skill.description || '暂无描述'}
       onBack={onBack}
       actions={(
         <>
@@ -77,7 +77,7 @@ export function SkillDetailPage({
               安装
             </Button>
           )}
-          <Button size="small" danger icon={<Trash2 size={13} />} onClick={onDelete} disabled={!skill.managed}>
+          <Button size="small" danger icon={<Trash2 size={13} />} onClick={onDelete}>
             删除
           </Button>
         </>
@@ -180,7 +180,7 @@ function DetailField({ label, value }: { label: string; value: string }) {
 }
 
 function formatDateTime(value: string | null | undefined): string {
-  if (!value) return '—';
+  if (!value) return '未安装';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN');
 }

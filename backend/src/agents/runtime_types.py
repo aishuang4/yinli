@@ -4,27 +4,12 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from src.config.runtime_paths import default_project_root
 from src.security.permissions import UnifiedPermissionProfile, build_permission_profile
 
 
 MAX_REACT_ITERS = 512
 FallbackEventCallback = Callable[[dict[str, Any]], None]
-
-# Skill 加载模式。交互式 Chat 由模型按需调用内置 `Skill` viewer；
-# scheduled firing 只使用确认时冻结、首轮前预加载的 required Skill，Toolkit 不注册 viewer。
-# 模式决定模型可见工具集，必须进入 Agent / runtime 缓存键。
-SKILL_LOADING_INTERACTIVE = "interactive_on_demand"
-SKILL_LOADING_SCHEDULED = "scheduled_preloaded"
-SKILL_LOADING_MODES = frozenset({SKILL_LOADING_INTERACTIVE, SKILL_LOADING_SCHEDULED})
-
-
-def normalize_skill_loading_mode(value: str | None) -> str:
-    """空值按交互式处理；未知模式直接报错，避免静默退回会暴露 viewer 的工具集。"""
-
-    mode = str(value or "").strip() or SKILL_LOADING_INTERACTIVE
-    if mode not in SKILL_LOADING_MODES:
-        raise ValueError(f"未知 Skill 加载模式: {mode}")
-    return mode
 
 
 @dataclass(frozen=True)
@@ -44,7 +29,6 @@ class AgentGuardrails:
     filesystem_scope: str = ""
     shell_blacklist: list[str] = field(default_factory=list)
     network_enabled: bool = True
-    operation_scope: str = "normal"
     human_approval: bool = False
     tool_permission_mode: str = "accept_edits"
     tool_permission_profile: str = "confirm_destructive"
@@ -55,16 +39,13 @@ class AgentGuardrails:
     permission_profile: UnifiedPermissionProfile = field(default_factory=UnifiedPermissionProfile)
 
     def __post_init__(self) -> None:
-        """空範圍與根目錄保持未授權，不回退到 default project root。"""
+        """兼容旧 guardrails 字段，自动补齐统一权限配置。"""
 
-        filesystem_scope = str(self.filesystem_scope or "").strip()
-        if filesystem_scope in {"/", os.path.abspath(os.sep)}:
-            filesystem_scope = ""
-        elif filesystem_scope:
-            filesystem_scope = os.path.abspath(os.path.expanduser(filesystem_scope))
-            if filesystem_scope == os.path.abspath(os.sep):
-                filesystem_scope = ""
-        object.__setattr__(self, "filesystem_scope", filesystem_scope)
+        filesystem_scope = self.filesystem_scope or str(default_project_root())
+        expanded_scope = os.path.abspath(os.path.expanduser(filesystem_scope))
+        if expanded_scope == os.path.abspath(os.sep):
+            expanded_scope = str(default_project_root())
+        object.__setattr__(self, "filesystem_scope", expanded_scope)
 
         profile = self.permission_profile
         if profile == UnifiedPermissionProfile():
@@ -82,7 +63,6 @@ class McpRuntimeSpec:
     command: str = ""
     headers: dict[str, str] = field(default_factory=dict)
     enable_tools: list[str] = field(default_factory=list)
-    id: str = ""
 
 
 @dataclass(frozen=True)

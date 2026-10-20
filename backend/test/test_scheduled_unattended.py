@@ -1,8 +1,6 @@
-"""无人值守 firing：冻结 ToolScope/Skill、工具裁剪与人工需求立即停止。"""
+"""无人值守 firing：冻结 ToolScope/Skill、工具裁剪与 cwd Write overlay。"""
 
 from __future__ import annotations
-from test.file_skill_fixtures import install_file_skills as replace_skills
-
 
 import asyncio
 import json
@@ -18,6 +16,10 @@ from src.scheduler.models import JobToolScope, ScheduledJobValidationError
 from src.scheduler.service import ScheduledJobService
 from src.scheduler.unattended_policy import would_fail_unattended_tools
 from src.server.routes.chat.hitl import PENDING_INTERACTIONS, build_automatic_confirm_resume
+from src.server.routes.chat.hitl_unattended import (
+    MAX_UNATTENDED_TOOL_DENIALS,
+    hitl_unattended_resolve,
+)
 from src.server.routes.chat.leader_stream import LeaderStreamState, stream_leader_agent_reply
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.react_runtime import _build_runtime_feature_parts
@@ -27,6 +29,7 @@ from src.server.routes.chat.scheduled_runtime import (
     deserialize_frozen_runtime_tool_scope,
     scheduled_job_unattended_feature_key,
 )
+from src.server.routes.chat.team_runtime.member_runtime import _build_team_tool_denial
 from src.server.routes.skills import Skill
 from src.storage import database
 from src.storage.database import (
@@ -34,6 +37,7 @@ from src.storage.database import (
     DEFAULT_WORKSPACE_ID,
     create_project,
     ensure_db,
+    replace_skills,
     upsert_agent,
     upsert_project_resource_binding,
 )
@@ -258,23 +262,53 @@ def test_same_agent_interactive_then_firing_drops_askuser_and_delegate_task(monk
     assert Path(read.scope_dir).resolve() == project_root.resolve()
 
 
-def test_permission_stop_message_explains_human_approval(monkeypatch):
-    from src.scheduler.firing import _permission_stop_message
+def test_unattended_write_is_not_team_deny_only(tmp_path):
+    """scheduled Leader 批准 cwd Write；Team Member helper 仍是否认。"""
 
-    monkeypatch.setattr(
-        "src.storage.database.get_latest_assistant_chat_message",
-        lambda session_id: {"error": "hitl_denied: 此次定时任务需要人工批准，已停止；请明确重新运行"},
+    workspace = tmp_path / "cwd"
+    workspace.mkdir()
+    data = {
+        "reply_id": "reply-1",
+        "tool_calls": [{
+            "id": "call-write",
+            "name": "Write",
+            "input": '{"file_path":"outputs/weekly-report.md"}',
+            "state": "asking",
+        }],
+    }
+    denied, resume = hitl_unattended_resolve(
+        "REQUIRE_USER_CONFIRM", data, workspace_dir=str(workspace),
     )
-    assert "需要人工批准" in _permission_stop_message("sched")
-    monkeypatch.setattr(
-        "src.storage.database.get_latest_assistant_chat_message",
-        lambda session_id: {"error": "模型失败"},
+    team = _build_team_tool_denial("REQUIRE_USER_CONFIRM", data)
+    assert denied == []
+    assert resume.confirm_results[0].confirmed is True
+    assert team.confirm_results[0].confirmed is False
+    assert resume.__class__ is team.__class__
+
+
+def test_unattended_escape_write_is_denied(tmp_path):
+    workspace = tmp_path / "cwd"
+    workspace.mkdir()
+    (tmp_path / "secret.md").write_text("no", encoding="utf-8")
+    denied, resume = hitl_unattended_resolve(
+        "REQUIRE_USER_CONFIRM",
+        {
+            "reply_id": "reply-1",
+            "tool_calls": [{
+                "id": "call-write",
+                "name": "Write",
+                "input": '{"file_path":"../secret.md"}',
+                "state": "asking",
+            }],
+        },
+        workspace_dir=str(workspace),
     )
-    assert _permission_stop_message("sched") == ""
+    assert denied == ["Write"]
+    assert resume.confirm_results[0].confirmed is False
 
 
-def test_manual_cwd_write_stops_scheduled_firing(tmp_path):
-    """manual 遇写入批准立即停止，不执行、不恢复、不进入 Chat pending。"""
+def test_ask_every_time_cwd_write_succeeds_on_scheduled_firing(tmp_path):
+    """ask_every_time 下 cwd Write 由 overlay 批准，不进入 PENDING_INTERACTIONS。"""
 
     workspace = tmp_path / "job-cwd"
     (workspace / "outputs").mkdir(parents=True)
@@ -310,8 +344,9 @@ def test_manual_cwd_write_stops_scheduled_firing(tmp_path):
     events = asyncio.run(run_case())
     try:
         assert PENDING_INTERACTIONS == {}
-        assert agent.resumes == []
-        assert not (workspace / "outputs" / "weekly-report.md").exists()
+        assert agent.resumes
+        assert agent.resumes[0].confirm_results[0].confirmed is True
+        assert (workspace / "outputs" / "weekly-report.md").read_text(encoding="utf-8") == "# 周报\n"
         serialized = json.dumps([event.event_type for event in events], ensure_ascii=False)
         assert "HITL_REQUIRED" not in serialized
         assert "waiting_permission" not in serialized
@@ -319,7 +354,7 @@ def test_manual_cwd_write_stops_scheduled_firing(tmp_path):
         PENDING_INTERACTIONS.clear()
 
 
-def test_unattended_first_human_requirement_stops_without_pending(tmp_path):
+def test_unattended_deny_limit_fails_without_pending(tmp_path):
     workspace = tmp_path / "cwd"
     workspace.mkdir()
     agent = _FakeAlwaysBashHitlAgent()
@@ -351,7 +386,7 @@ def test_unattended_first_human_requirement_stops_without_pending(tmp_path):
     asyncio.run(run_case())
     try:
         assert state.stop_reason == "hitl_denied"
-        assert agent.calls == 1
+        assert state.unattended_denials > MAX_UNATTENDED_TOOL_DENIALS
         assert PENDING_INTERACTIONS == {}
     finally:
         PENDING_INTERACTIONS.clear()
@@ -412,12 +447,7 @@ def test_build_scheduled_run_context_skips_model_readiness_and_tool_scope_resolv
         ),
     )
     workspace = project_job_run_directory(Path(project["rootPath"]), "job-ctx", "firing-ctx")
-    from src.sessions.records import create_session
-    from src.sessions.run_binding import begin_run
     from src.runtime_context import resolve_runtime_context
-
-    create_session(session_id="sched-ctx", agent_id="default", working_directory=project["rootPath"])
-    begin_run("sched-ctx", "run-ctx", agent_id="default", start_model=lambda snapshot: snapshot)
 
     runtime_context = resolve_runtime_context(
         project_id=project["id"],
@@ -449,7 +479,7 @@ def test_build_scheduled_run_context_skips_model_readiness_and_tool_scope_resolv
     assert ctx.readiness.source == "scheduled_job"
 
 
-def test_frozen_skills_without_manifest_fail_before_model(isolated_db, tmp_path, monkeypatch):
+def test_frozen_skills_must_equal_used_skills_or_skill_unbound(isolated_db, tmp_path, monkeypatch):
     project = _prepare_project(tmp_path)
     installed = {
         "skill-ok": Skill.model_validate({
@@ -490,12 +520,8 @@ def test_frozen_skills_without_manifest_fail_before_model(isolated_db, tmp_path,
             guardrails=SimpleNamespace(filesystem_scope=project["rootPath"]),
         ),
     )
-    from src.sessions.records import create_session
-    from src.sessions.run_binding import begin_run
     from src.runtime_context import resolve_runtime_context
 
-    create_session(session_id="sched-skill", agent_id="default")
-    begin_run("sched-skill", "run-skill", agent_id="default", start_model=lambda snapshot: snapshot)
     workspace = project_job_run_directory(Path(project["rootPath"]), "job-skill", "firing-skill")
     runtime_context = resolve_runtime_context(
         project_id=project["id"],
@@ -503,7 +529,7 @@ def test_frozen_skills_without_manifest_fail_before_model(isolated_db, tmp_path,
         run_id="run-skill",
         agent_id="default",
     )
-    with pytest.raises(ValueError, match="skill_metadata_missing"):
+    with pytest.raises(ValueError, match="skill_unbound"):
         asyncio.run(build_scheduled_run_context(
             _job_ns(id="job-skill", skill_ids=["skill-ok", "skill-missing"]),
             _firing_ns(id="firing-skill", job_id="job-skill"),
@@ -519,7 +545,7 @@ def test_frozen_skills_without_manifest_fail_before_model(isolated_db, tmp_path,
         ))
 
 
-def test_confirm_scripts_skill_does_not_require_agent_approval_mode(isolated_db, tmp_path, monkeypatch):
+def test_confirm_scripts_skill_requires_trusted_tools(isolated_db, tmp_path, monkeypatch):
     service = _service()
     skill_dir = tmp_path / "skill-pack"
     (skill_dir / "scripts").mkdir(parents=True)
@@ -549,9 +575,8 @@ def test_confirm_scripts_skill_does_not_require_agent_approval_mode(isolated_db,
             ),
         ),
     )
-    confirmed = service.confirm(job.id)
-    assert confirmed.status == "active"
-    assert confirmed.execution_policy.approval_mode == "manual"
+    with pytest.raises(ScheduledJobValidationError, match="would_fail_tools: Bash"):
+        service.confirm(job.id)
 
     monkeypatch.setattr(
         "src.server.routes.agents.get_registered_agent",
@@ -568,10 +593,10 @@ def test_confirm_scripts_skill_does_not_require_agent_approval_mode(isolated_db,
     assert confirmed.tool_scope.allow_bash is True
 
 
-def test_confirm_legacy_human_approval_does_not_override_task_policy(
+def test_confirm_trusted_tools_with_human_approval_cannot_activate_scripts_job(
     isolated_db, tmp_path, monkeypatch,
 ):
-    """旧 Agent 审批字段不控制任务能力，任务仍保持 manual。"""
+    """trusted_tools + human_approval 仍是 AgentScope DEFAULT，Bash 会被 overlay 拒绝。"""
 
     service = _service()
     skill_dir = tmp_path / "skill-pack-hitl"
@@ -603,9 +628,8 @@ def test_confirm_legacy_human_approval_does_not_override_task_policy(
             ),
         ),
     )
-    confirmed = service.confirm(job.id)
-    assert confirmed.status == "active"
-    assert confirmed.execution_policy.approval_mode == "manual"
+    with pytest.raises(ScheduledJobValidationError, match="would_fail_tools: Bash"):
+        service.confirm(job.id)
     assert would_fail_unattended_tools(
         tool_scope=JobToolScope(allow_bash=True),
         agent=SimpleNamespace(guardrails=SimpleNamespace(
@@ -613,7 +637,7 @@ def test_confirm_legacy_human_approval_does_not_override_task_policy(
             tool_permission_mode="bypass",
             human_approval=True,
         )),
-    ) == []
+    ) == ["Bash"]
 
 
 def test_confirm_ask_every_time_markdown_job_allows_cwd_write(isolated_db, monkeypatch):
@@ -725,11 +749,7 @@ class _FakeAskEveryTimeWriteAgent:
 
 
 class _FakeAlwaysBashHitlAgent:
-    def __init__(self):
-        self.calls = 0
-
     async def reply_stream(self, user_msg):
-        self.calls += 1
         yield _FakeAgentScopeEvent({
             "type": "REQUIRE_USER_CONFIRM",
             "reply_id": "reply-bash",

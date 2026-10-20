@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 import pytest
 
@@ -503,7 +502,8 @@ def test_reflection_with_agents_returns_skill_candidate(tmp_path, monkeypatch):
             ),
         )
     finally:
-        pass  # 租户文件夹具由 conftest 隔离，无内存登记表需要恢复。
+        skills_routes._skills.clear()
+        skills_routes._skills.update(original_skills)
 
     assert result.skill_candidate is not None
     assert result.skill_candidate.draft is not None
@@ -599,7 +599,8 @@ def test_manual_skill_request_forces_skill_evolution_agent(tmp_path, monkeypatch
             ),
         )
     finally:
-        pass  # 租户文件夹具由 conftest 隔离，无内存登记表需要恢复。
+        skills_routes._skills.clear()
+        skills_routes._skills.update(original_skills)
 
     assert result.skill_evolution_record is not None
     assert result.skill_evolution_record["status"] == "registered"

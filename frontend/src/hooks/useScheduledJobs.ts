@@ -1,10 +1,11 @@
 /**
  * useScheduledJobs — 定时任务 REST Hook。
  *
- * 按全局任务列表读取；flag 关闭时写接口 403，页面展示只读/空状态，不崩溃。
+ * 按当前 Project 过滤；flag 关闭时写接口 403，页面展示只读/空状态，不崩溃。
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { useAppStore } from '../stores/appStore';
 import {
   SCHEDULER_DISABLED_DETAIL,
   type JobToolScope,
@@ -178,10 +179,6 @@ function mapJob(raw: Record<string, unknown>): ScheduledJob {
     createdAt: String(raw.createdAt ?? ''),
     updatedAt: String(raw.updatedAt ?? ''),
     archivedAt: raw.archivedAt ? String(raw.archivedAt) : null,
-    requiredSkills: Array.isArray(raw.requiredSkills)
-      ? raw.requiredSkills as ScheduledJob['requiredSkills']
-      : [],
-    contextPolicy: 'fresh',
   };
 }
 
@@ -216,6 +213,7 @@ function readEnabledFlag(value: unknown): boolean | null {
 }
 
 export function useScheduledJobs(): UseScheduledJobsReturn {
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const [jobs, setJobs] = useState<ScheduledJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -235,6 +233,7 @@ export function useScheduledJobs(): UseScheduledJobsReturn {
       setLoading(true);
       setError(null);
       const params = new URLSearchParams();
+      if (activeProjectId) params.set('projectId', activeProjectId);
       const query = params.toString();
       const payload = await requestJson<{ jobs: Record<string, unknown>[]; enabled?: unknown }>(
         `/api/scheduled-jobs${query ? `?${query}` : ''}`,
@@ -247,7 +246,7 @@ export function useScheduledJobs(): UseScheduledJobsReturn {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeProjectId]);
 
   const runWrite = useCallback(async (
     action: () => Promise<ScheduledJob>,

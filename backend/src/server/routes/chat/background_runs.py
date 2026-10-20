@@ -10,7 +10,6 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from src.config.runtime_settings import set_model_binding, reset_model_binding
-from src.security.authorization.models import RunAuthorizationMetadata
 
 from src.server.routes.chat.lifecycle import (
     ACTIVE_RUN_STATUSES,
@@ -94,9 +93,6 @@ class ChatBackgroundRun:
     normalizer: ChatProjectionNormalizer | None = None
     model_binding: object | None = field(default=None, repr=False)
     model_metadata: dict = field(default_factory=dict)
-    authorization_metadata: RunAuthorizationMetadata | None = None
-    permission_review_binding: object | None = field(default=None, repr=False)
-    authorization_bindings: list = field(default_factory=list, repr=False)
 
     @property
     def stream_key(self) -> str:
@@ -140,7 +136,6 @@ def reconcile_interrupted_chat_runs() -> int:
         if not run_id or has_live_chat_background_task(run_id):
             continue
         update_chat_run_status(run_id, "failed", completed_at)
-        _invalidate_run_authorizations(record, interrupted=True)
         in_memory = _owned_run(run_id)
         if in_memory is not None and in_memory.status in ACTIVE_RUN_STATUSES:
             in_memory.status = "failed"
@@ -219,15 +214,13 @@ async def start_chat_background_run(
     agent_name: str = "",
     task: str = "",
     mode: str = "agent",
-    workspace_id: str = "",
-    project_id: str = "",
+    workspace_id: str = "default",
+    project_id: str = "default",
     persist: bool = True,
     trigger_source: str = "user",
     scheduled_job_id: str = "",
     scheduled_firing_id: str = "",
     model_binding=None,
-    approval_mode: str = "manual",
-    permission_review_binding=None,
 ) -> ChatBackgroundRun:
     """创建 Run、V3 stream 和根 message Block 后启动后台执行。"""
 
@@ -243,26 +236,8 @@ async def start_chat_background_run(
     except QuotaExceeded as exc:
         raise exc.as_http() from None
 
-    run_id = f"run-{uuid.uuid4().hex}"
-    from src.sessions.records import create_session, get_session
-    from src.sessions.run_binding import begin_run, bind_run_snapshot
-
-    if session_id and get_session(session_id) is None:
-        create_session(
-            session_id=session_id,
-            agent_id=agent_id or "default",
-            agent_name=agent_name or "助手",
-        )
-    begin_run(
-        session_id,
-        run_id,
-        agent_id=agent_id,
-        permission_mode=approval_mode,
-        start_model=lambda snapshot: snapshot,
-    )
-    bind_run_snapshot(run_id)
     run = ChatBackgroundRun(
-        id=run_id,
+        id=f"run-{uuid.uuid4().hex}",
         tenant_id=_current_tenant_id(),
         session_id=session_id,
         workspace_id=workspace_id,
@@ -275,11 +250,6 @@ async def start_chat_background_run(
         scheduled_job_id=scheduled_job_id or "",
         scheduled_firing_id=scheduled_firing_id or "",
         model_binding=model_binding,
-        permission_review_binding=permission_review_binding,
-        authorization_metadata=RunAuthorizationMetadata(
-            tenantId=tenant_id, approvalMode=approval_mode,
-            reviewerConfigVersion=permission_review_binding.version if permission_review_binding else "",
-        ),
         model_metadata={
             "modelConfigId": model_binding.primary.entry.id,
             "providerId": model_binding.primary.provider,
@@ -397,11 +367,6 @@ async def steer_chat_background_run(
         raise KeyError(run_id)
     if run.status in TERMINAL_RUN_STATUSES:
         raise RuntimeError("已结束的 Run 不能再补充")
-    from src.runtime.session_context import build_session_context
-
-    owner = build_session_context(run.session_id, agent_id=agent_id or run.agent_id, run_id=run_id)
-    if owner.session_id != run.session_id:
-        raise RuntimeError("补充消息不能改到另一个 Session")
     run.pending_steers.append(text)
     from src.server.routes.chat.store import _append_user_message
 
@@ -439,7 +404,6 @@ def cancel_chat_runs_for_tenant(tenant_id: str) -> None:
             if task is not None and not task.done():
                 task.cancel()
             database.update_chat_run_status(run.id, "cancelled", now)
-            _invalidate_run_authorizations(run)
 
 
 async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
@@ -450,7 +414,6 @@ async def cancel_chat_background_run(run_id: str) -> ChatBackgroundRun | None:
     if run.status in TERMINAL_RUN_STATUSES:
         return run
     run.status = "cancelled"
-    _invalidate_run_authorizations(run)
     run.completed_at = datetime.now(timezone.utc).isoformat()
     if run.normalizer is not None:
         await _project_terminal(run, "cancelled", {"completedAt": run.completed_at})
@@ -551,7 +514,6 @@ def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
         "agentName": run.agent_name,
         "task": run.task_text,
         "mode": run.mode,
-        "approvalMode": run.authorization_metadata.approval_mode if run.authorization_metadata else "manual",
         **{key: run.model_metadata.get(key, "") for key in ("modelConfigId", "providerId", "modelName")},
         "triggerSource": run.trigger_source,
         "scheduledJobId": run.scheduled_job_id,
@@ -767,7 +729,6 @@ def _finalize_run_persistence(run: ChatBackgroundRun) -> None:
         return
     run.completed_at = run.completed_at or datetime.now(timezone.utc).isoformat()
     update_chat_run_status(run.id, run.status, run.completed_at)
-    _invalidate_run_authorizations(run)
     close_run_root(
         persist=run.persisted,
         run_id=run.id,
@@ -775,33 +736,6 @@ def _finalize_run_persistence(run: ChatBackgroundRun) -> None:
         output=_run_observation_output(run, run.status, {}),
     )
     _persist_display_snapshot(run)
-
-
-def _invalidate_run_authorizations(run, *, interrupted: bool = False) -> None:
-    """终态与重启先使许可失效，清除进程内 raw 参数，保留审计事实。"""
-    from src.storage.permission_records import PermissionRecordStore
-    from src.server.routes.chat.models import PENDING_AGENTS, PENDING_INTERACTIONS
-
-    record = run if isinstance(run, dict) else {"id": run.id, "workspaceId": run.workspace_id,
-                                               "projectId": run.project_id, "sessionId": run.session_id}
-    if not isinstance(run, dict):
-        for binding in run.authorization_bindings:
-            clear = getattr(binding.action_builder, "clear", None)
-            if callable(clear):
-                clear()
-        run.authorization_bindings.clear()
-    if (isinstance(run, dict) or run.persisted) and all(record.get(key) for key in ("id", "workspaceId", "projectId", "sessionId")):
-        PermissionRecordStore().invalidate_run_record(str(record["id"]), workspace_id=record["workspaceId"],
-              project_id=record["projectId"], session_id=record["sessionId"], interrupted=interrupted)
-    for interaction_id, interaction in list(PENDING_INTERACTIONS.items()):
-        if interaction.run_id != record["id"] or interaction.tenant_id != _current_tenant_id():
-            continue
-        agent = PENDING_AGENTS.pop(interaction_id, None)
-        builder = getattr(agent, "action_builder", None)
-        clear = getattr(builder, "clear", None)
-        if callable(clear):
-            clear()
-        PENDING_INTERACTIONS.pop(interaction_id, None)
 
 
 def _frame_sse(frame: RuntimeFrame) -> str:
@@ -817,7 +751,6 @@ def _persist_run(run: ChatBackgroundRun) -> None:
     upsert_chat_run({
         "id": run.id,
         "modelConfig": run.model_metadata,
-        "authorization": run.authorization_metadata.model_dump(mode="json", by_alias=True) if run.authorization_metadata else {},
         "sessionId": run.session_id,
         "workspaceId": run.workspace_id,
         "projectId": run.project_id,
@@ -840,7 +773,6 @@ def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
         id=record["id"],
         tenant_id=_current_tenant_id(),
         model_metadata=record.get("modelConfig") or {},
-        authorization_metadata=RunAuthorizationMetadata.model_validate(record["authorization"]) if record.get("authorization") else None,
         session_id=record["sessionId"],
         workspace_id=record.get("workspaceId", "default"),
         project_id=record.get("projectId", "default"),

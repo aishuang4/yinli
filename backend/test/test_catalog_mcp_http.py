@@ -82,7 +82,7 @@ def test_mcp_http_migration_exports_sqlite(tmp_path, monkeypatch) -> None:
         is_http_catalog_migrated,
         is_mcp_catalog_migrated,
     )
-    from src.config.runtime_paths import global_mcp_root, global_tools_root
+    from src.catalog.paths import http_tools_dir, mcp_dir
     from src.storage import database
     from src.storage.database import upsert_json_record
 
@@ -122,8 +122,8 @@ def test_mcp_http_migration_exports_sqlite(tmp_path, monkeypatch) -> None:
     ensure_http_file_catalog()
     assert is_mcp_catalog_migrated()
     assert is_http_catalog_migrated()
-    mcp_text = (global_mcp_root() / "custom-remote.yaml").read_text(encoding="utf-8")
-    http_text = (global_tools_root() / "http-mig.yaml").read_text(encoding="utf-8")
+    mcp_text = (mcp_dir("default") / "custom-remote.yaml").read_text(encoding="utf-8")
+    http_text = (http_tools_dir("default") / "http-mig.yaml").read_text(encoding="utf-8")
     assert "migrate-me" not in mcp_text
     assert "http-secret" not in http_text
     assert all(row["id"] != "http-mig" for row in database.list_http_tools())

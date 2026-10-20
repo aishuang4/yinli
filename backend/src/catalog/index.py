@@ -24,10 +24,22 @@ INDEX_GITIGNORE_LINE = "INDEX.md"
 
 
 def _skill_index_rows(project_root: Path, workspace_id: str) -> list[list[str]]:
-    from src.skills.service import catalog_for, list_catalog_skills
-    return [[item.load_name, item.resource_path, "true" if item.enabled and item.status == "installed" else "false",
-             f"{item.source_scope}/{item.resolution_state}" ]
-            for item in list_catalog_skills(catalog_for())]
+    from src.catalog.skill_seed import seed_system_skills
+    from src.catalog.skills import discover_skill_packages, list_system_skill_packages
+    from src.config.runtime_paths import tenant_root, user_home_root
+
+    seed_system_skills()
+    rows: list[list[str]] = []
+    for item in list_system_skill_packages():
+        rows.append([item.name, item.resource_path, "true", item.source_scope])
+    for item in discover_skill_packages(
+        Path(project_root),
+        user_data_root=tenant_root(),
+        user_home_root=user_home_root(),
+        workspace_id=workspace_id,
+    ):
+        rows.append([item.name, item.resource_path, "true" if item.enabled else "false", item.source_scope])
+    return rows
 
 
 def _mcp_index_rows(project_root: Path, workspace_id: str) -> list[list[str]]:
@@ -51,7 +63,12 @@ def _http_index_rows(project_root: Path, workspace_id: str) -> list[list[str]]:
 
 def _job_index_rows(project_root: Path, workspace_id: str, project_id: str):
     from src.catalog.job_files import scan_job_files
+    from src.catalog.sync_jobs import sync_job_definitions
 
+    try:
+        sync_job_definitions(project_root=project_root, project_id=project_id or "default")
+    except Exception:
+        pass
     records, errors = scan_job_files(
         project_root=project_root,
         project_id=project_id or "default",
@@ -117,7 +134,7 @@ def render_index_markdown(
     how = [
         "- 了解系统：只读本文件。",
         "- 修改 Agent：编辑「持久 Agent」表中的 path。",
-        "- 修改 Skill：使用 Skills 页面；包统一保存在应用数据目录 `skills/<name>/SKILL.md`。",
+        "- 修改 Skill：编辑或新建项目 `.agents/skills/<name>/SKILL.md`。",
         "- 修改 MCP/HTTP：编辑 catalog_root 下 `mcp/<id>.yaml` 或 `tools/<id>.yaml`，不要写入 Token。",
         "- 修改定时任务：编辑或新建 `.agents/jobs/<id>.md`；desired_status=active 才会调度。",
         "- 不要修改 models.json、密钥目录、本 INDEX（下次运行会覆盖）。",
@@ -181,7 +198,22 @@ def refresh_project_index(
     project_id: str = "",
     docker: bool = False,
 ) -> Path | None:
-    """不再把 catalog INDEX 寫進外部工作目錄。"""
+    """写入 INDEX.md。不可写时返回 None，不抛到 Chat。"""
 
-    del project_root, workspace_id, project_id, docker
-    return None
+    extra_filesystem_scopes_for_workspace(workspace_id)
+    target = project_index_path(project_root)
+    try:
+        directory = project_agents_dir(project_root)
+        directory.mkdir(parents=True, exist_ok=True)
+        _ensure_gitignore(directory)
+        markdown = render_index_markdown(
+            workspace_id=workspace_id,
+            project_id=project_id or "",
+            project_root=Path(project_root),
+            docker=docker,
+        )
+        atomic_write_text(target, markdown)
+        return target
+    except OSError as exc:
+        logger.warning("无法写入 %s: %s", target, exc)
+        return None

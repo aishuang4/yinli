@@ -11,7 +11,6 @@ from ..projection_registry import ProjectionMutation
 EVENT_TYPES = {
     "tool.call.started",
     "tool.call.delta",
-    "tool.call.updated",
     "tool.result.delta",
     "tool.result.completed",
     "tool.result.failed",
@@ -33,14 +32,11 @@ _STRING_FIELDS = {
 def _safe_patch(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
-    patch = {
+    return {
         key: item
         for key, item in value.items()
         if key in _STRING_FIELDS and isinstance(item, str)
     }
-    if isinstance(value.get("authorization"), dict) and value["authorization"].get("version") == 2:
-        patch["authorization"] = value["authorization"]
-    return patch
 
 
 def project(event: DomainEvent, snapshot: DisplaySnapshot) -> Iterable[ProjectionMutation]:
@@ -63,9 +59,6 @@ def project(event: DomainEvent, snapshot: DisplaySnapshot) -> Iterable[Projectio
         if not isinstance(delta, str):
             raise ValueError("tool.call.delta 缺少字符串 delta")
         yield ProjectionMutation(op="delta", id=block_id, patch={"inputDelta": delta})
-        return
-    if event.type == "tool.call.updated":
-        yield ProjectionMutation(op="delta", id=block_id, patch=_safe_patch(data))
         return
     if event.type == "tool.result.delta":
         delta = data.get("delta")

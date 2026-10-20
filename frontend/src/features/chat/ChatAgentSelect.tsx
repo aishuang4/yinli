@@ -1,9 +1,61 @@
 /** Chat 发送框当前 Agent：订阅 agentsStore，并提供头像与工具栏 chip。 */
 
+import { useEffect, useRef, type RefObject } from 'react';
 import { Bot } from 'lucide-react';
+import { usePageActive } from '../../hooks/usePageActive';
+import { useAgentsStore } from '../../stores/agentsStore';
+import { useAppStore } from '../../stores/appStore';
 import type { Agent } from '../../types/agent';
 
 export type ComposerAgentOption = Pick<Agent, 'id' | 'name' | 'avatar' | 'description'>;
+
+export function useChatComposerAgents(): {
+  agents: ComposerAgentOption[];
+  loading: boolean;
+  hostRef: RefObject<HTMLDivElement | null>;
+} {
+  const pageActive = usePageActive();
+  const currentView = useAppStore((state) => state.currentView);
+  const workspaceId = useAppStore((state) => state.activeWorkspaceId);
+  const agents = useAgentsStore((state) => state.agents);
+  const loading = useAgentsStore((state) => state.loading);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const options = agents
+    .filter((agent) => (
+      agent.role !== 'job'
+      && (agent.id === 'default' || agent.workspaceId === workspaceId)
+    ))
+    .map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      avatar: agent.avatar,
+      description: agent.description,
+    }));
+
+  useEffect(() => {
+    if (currentView !== 'chat' || !pageActive) {
+      return;
+    }
+    void useAgentsStore.getState().syncFromServer(workspaceId, { silent: true });
+  }, [currentView, pageActive, workspaceId]);
+
+  useEffect(() => {
+    const node = hostRef.current;
+    if (!node) {
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) {
+        return;
+      }
+      void useAgentsStore.getState().syncFromServer(workspaceId, { silent: true });
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [workspaceId]);
+
+  return { agents: options, loading, hostRef };
+}
 
 export function ChatAgentAvatar({
   agent,

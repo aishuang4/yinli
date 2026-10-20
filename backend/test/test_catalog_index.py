@@ -30,8 +30,25 @@ def test_index_contains_required_headings(tmp_path, monkeypatch) -> None:
     project = tmp_path / "project"
     project.mkdir()
     path = refresh_project_index(project, workspace_id="default", project_id="p1")
-    assert path is None
-    assert not (project / ".agents").exists()
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    for heading in (
+        "# YINLI Catalog",
+        "## 如何操作系统",
+        "## 系统 Agent（身份只读）",
+        "## 持久 Agent",
+        "## Skills",
+        "## MCP",
+        "## HTTP 工具",
+        "## Jobs",
+        "## 解析错误",
+        "## 警告",
+    ):
+        assert heading in text
+    assert "writer" in text
+    assert "修改定时任务" in text
+    gitignore = (project / ".agents" / ".gitignore").read_text(encoding="utf-8")
+    assert "INDEX.md" in gitignore
 
 
 def test_index_records_warnings_and_job_parse_errors(tmp_path, monkeypatch) -> None:
@@ -46,7 +63,11 @@ def test_index_records_warnings_and_job_parse_errors(tmp_path, monkeypatch) -> N
         encoding="utf-8",
     )
     project = tmp_path / "project"
-    project.mkdir()
+    jobs = project / ".agents" / "jobs"
+    jobs.mkdir(parents=True)
+    (jobs / "bad.md").write_text("not-a-job\n", encoding="utf-8")
     out = refresh_project_index(project, workspace_id="default", project_id="p1")
-    assert out is None
-    assert not (project / ".agents" / "INDEX.md").exists()
+    assert out is not None
+    text = out.read_text(encoding="utf-8")
+    assert "unknown_keys" in text
+    assert "bad.md" in text

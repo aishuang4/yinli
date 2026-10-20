@@ -32,14 +32,6 @@ __all__ = [
 ]
 
 
-def session_owner(session_id: str, agent_id: str, run_id: str = ""):
-    """Runtime builder 只從 Session 記錄取得歸屬，不查 Workspace / Project。"""
-
-    from src.runtime.session_context import build_session_context
-
-    return build_session_context(session_id, agent_id=agent_id, run_id=run_id)
-
-
 def build_runtime_model_config(
     *,
     run_data: ChatMessage,

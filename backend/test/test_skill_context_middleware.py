@@ -121,18 +121,6 @@ def test_budget_evicts_oldest_and_clips_long_bodies(monkeypatch) -> None:
     assert list(activated_skills(agent)) == ["b", "c"]
 
 
-def test_required_skill_is_not_clipped_or_evicted(monkeypatch) -> None:
-    monkeypatch.setattr(scm, "SKILL_CONTEXT_TOTAL_CHARS", 500)
-    monkeypatch.setattr(scm, "SKILL_CONTEXT_PER_SKILL_CHARS", 100)
-    agent = _FakeAgent()
-    scm.activate_forced_skills(
-        agent,
-        [SimpleNamespace(name="required", content="R" * 450, required_skill=True)],
-    )
-    assert activated_skills(agent)["required"]["markdown"] == "R" * 450
-    assert activated_skills(agent)["required"]["required"] is True
-
-
 def test_on_compress_context_only_reinjects_when_context_changed() -> None:
     agent = _FakeAgent()
     activate_skill(agent, "word-documents", SKILL_BODY)

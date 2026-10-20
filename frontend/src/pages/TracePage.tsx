@@ -10,15 +10,15 @@ import { TraceDetailView } from '../features/traces/TraceDetailView';
 import { TraceLandingPage } from '../features/traces/TraceLandingPage';
 import { ACTIVE_TRACE_STATUSES, type TraceDetail, type TraceSummary } from '../features/traces/traceTypes';
 import { formatDuration } from '../features/traces/traceUtils';
-import { readSessionLocation, writeSessionLocation } from '../features/sessions/sessionLocation';
 import { useAppStore } from '../stores/appStore';
 
 const DETAIL_POLL_MS = 3000;
 
 export function TracePage() {
   const active = useAppStore((state) => state.currentView === 'traces');
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const [traces, setTraces] = useState<TraceSummary[]>([]);
-  const [selectedId, setSelectedId] = useState(() => readSessionLocation(window.location.search).traceId);
+  const [selectedId, setSelectedId] = useState<string>('');
   const [detail, setDetail] = useState<TraceDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -35,9 +35,7 @@ export function TracePage() {
     setLoading(true);
     setError(null);
     try {
-      const params = new URLSearchParams();
-      const sessionId = readSessionLocation(window.location.search).sessionId;
-      if (sessionId) params.set('sessionId', sessionId);
+      const params = new URLSearchParams({ projectId: activeProjectId });
       const response = await fetch(`/api/traces?${params.toString()}`, { signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data: TraceSummary[] = await response.json();
@@ -50,7 +48,7 @@ export function TracePage() {
         setLoading(false);
       }
     }
-  }, [active]);
+  }, [active, activeProjectId]);
 
   const loadDetail = useCallback(async (traceId: string, silent = false) => {
     if (!active) return;
@@ -68,9 +66,7 @@ export function TracePage() {
       setDetail(null);
     }
     try {
-      const params = new URLSearchParams();
-      const sessionId = readSessionLocation(window.location.search).sessionId;
-      if (sessionId) params.set('sessionId', sessionId);
+      const params = new URLSearchParams({ projectId: activeProjectId });
       const response = await fetch(`/api/traces/${traceId}?${params.toString()}`, { signal: controller.signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json() as TraceDetail;
@@ -83,15 +79,13 @@ export function TracePage() {
       setError(err instanceof Error ? err.message : '加载运行轨迹详情失败');
       setDetailLoading(false);
     }
-  }, [active]);
+  }, [active, activeProjectId]);
 
   useEffect(() => {
-    const next = writeSessionLocation(window.location.search, { traceId: selectedId });
-    const target = `${window.location.pathname}${next}${window.location.hash}`;
-    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== target) {
-      window.history.replaceState(null, '', target);
-    }
-  }, [selectedId]);
+    setSelectedId('');
+    setDetail(null);
+    setTraces([]);
+  }, [activeProjectId]);
 
   useEffect(() => {
     if (!active) return;

@@ -19,13 +19,13 @@ description: 通过约定目录里的文件了解和修改本系统的持久 Age
 
 ## 修改 Skill
 
-通过 Skills 页面注册、导入、查看或删除 Skill。Skill 包统一保存在应用数据目录：
+在当前项目新建或编辑：
 
 ```text
-<USER_DATA_ROOT>/skills/<name>/SKILL.md
+.agents/skills/<name>/SKILL.md
 ```
 
-不要在项目 `.agents/skills`、Workspace catalog 或 HOME 兼容目录另建 Skill；这些目录不参与加载。不要把系统包 `yinli-catalog`、`yinli-charts`、`word-documents` 覆盖成用户 Skill。
+项目目录里的 Skill 默认可运行，不必先去 Skills 页绑定。不要把系统包 `yinli-catalog`、`yinli-charts`、`word-documents` 覆盖成用户 Skill。
 
 MCP / HTTP 定义在 INDEX 的 `catalog_root` 下：
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from agentscope.message import UserMsg
@@ -19,10 +20,8 @@ from src.agents.runtime_types import (
 from src.subagents.models import SubagentDefinition
 from src.subagents.permission_policy import SubagentPermissionResolution, resolve_subagent_permission
 from src.subagents.runtime_context import SubagentRuntimeContext, build_subagent_runtime_context
-from src.runtime.session_context import SessionContext as PlatformRuntimeContext
-from src.runtime.authorization import build_run_authorization, public_authorization_event
-from src.config.runtime_paths import SessionPathError, session_subagent_root
-from src.subagents.snapshot_subset import resource_ids
+from src.runtime_context import RuntimeContext as PlatformRuntimeContext
+from src.project_files import project_session_directory
 from src.subagents.tool_policy import SubagentToolPolicy, build_subagent_tool_policy
 from src.tools.configured_http_tool import safe_http_tool_name
 
@@ -97,7 +96,6 @@ class SubagentRunner:
         parent_tool_scope: RuntimeToolScope,
         persist: bool,
         platform_context: PlatformRuntimeContext | None = None,
-        plan_mode_manager=None,
     ) -> None:
         self.session_id = session_id
         self.run_id = run_id
@@ -113,31 +111,19 @@ class SubagentRunner:
         self.parent_tool_scope = parent_tool_scope
         self.persist = persist
         self.platform_context = platform_context
-        self.plan_mode_manager = plan_mode_manager
-        self.parent_snapshot: dict[str, Any] | None = None
 
-    def prepare(
-        self,
-        definition: SubagentDefinition,
-        parent_snapshot: dict[str, Any] | None = None,
-    ) -> SubagentPreparedRun:
+    def prepare(self, definition: SubagentDefinition) -> SubagentPreparedRun:
         """解析 Subagent 运行前上下文，供调用方先写审计事件。"""
 
-        snapshot = parent_snapshot if parent_snapshot is not None else self.parent_snapshot
-        mcp_servers, knowledge_tools = _subset_resources(self.mcp_servers, self.knowledge_tools, snapshot)
-        runtime_context = build_subagent_runtime_context(
-            definition,
-            self.platform_context,
-            parent_snapshot=snapshot,
-        )
+        runtime_context = build_subagent_runtime_context(definition, self.platform_context)
         permission = resolve_subagent_permission(definition, self.guardrails)
         tool_policy = build_subagent_tool_policy(
             definition,
             parent_tool_scope=self.parent_tool_scope,
             parent_guardrails=self.guardrails,
             child_guardrails=permission.guardrails,
-            mcp_servers=mcp_servers,
-            knowledge_tools=knowledge_tools,
+            mcp_servers=self.mcp_servers,
+            knowledge_tools=self.knowledge_tools,
         )
         return SubagentPreparedRun(
             runtime_context=runtime_context,
@@ -173,39 +159,27 @@ class SubagentRunner:
         permission: SubagentPermissionResolution | None = None,
         tool_policy: SubagentToolPolicy | None = None,
         runtime_event_sink: Callable[[str, dict[str, Any]], None] | None = None,
-        parent_snapshot: dict[str, Any] | None = None,
     ) -> SubagentRunResult:
         """运行一个 Subagent invocation。"""
 
         started = time.monotonic()
-        snapshot = parent_snapshot if parent_snapshot is not None else self.parent_snapshot
-        mcp_servers, knowledge_tools = _subset_resources(self.mcp_servers, self.knowledge_tools, snapshot)
-        runtime_context = runtime_context or build_subagent_runtime_context(
-            definition,
-            self.platform_context,
-            parent_snapshot=snapshot,
-        )
+        runtime_context = runtime_context or build_subagent_runtime_context(definition, self.platform_context)
         permission = permission or resolve_subagent_permission(definition, self.guardrails)
         policy = tool_policy or build_subagent_tool_policy(
             definition,
             parent_tool_scope=self.parent_tool_scope,
             parent_guardrails=self.guardrails,
             child_guardrails=permission.guardrails,
-            mcp_servers=mcp_servers,
-            knowledge_tools=knowledge_tools,
+            mcp_servers=self.mcp_servers,
+            knowledge_tools=self.knowledge_tools,
         )
         child_agent_id = f"subagent:{definition.name}:{invocation_id}"
         child_agent_name = f"Subagent {definition.name}"
-        workspace_dir = _child_workspace(self.session_id, invocation_id, permission.guardrails.filesystem_scope)
-        authorization = None
-        if self.platform_context is not None and self.run_id:
-            authorization = await build_run_authorization(
-                runtime_context=self.platform_context, capability_actor_id=self.parent_agent_id,
-                actor_id=child_agent_id, run_id=self.run_id, session_id=self.session_id,
-                tool_scope=_child_tool_scope(self.parent_tool_scope, policy.effective_tool_names),
-                denied_tool_names=policy.denied_tool_names, restriction=permission.guardrails,
-                plan_mode_manager=self.plan_mode_manager,
-            )
+        workspace_dir = (
+            str(project_session_directory(Path(permission.guardrails.filesystem_scope), self.session_id))
+            if self.platform_context is not None
+            else None
+        )
         agent = get_or_create_agent(
             agent_id=child_agent_id,
             name=child_agent_name,
@@ -229,8 +203,8 @@ class SubagentRunner:
                 max_react_iters=definition.max_turns,
             ),
             guardrails=permission.guardrails,
-            mcp_servers=_filter_mcp_servers(mcp_servers, policy.effective_tool_names),
-            knowledge_tools=_filter_knowledge_tools(knowledge_tools, policy.effective_tool_names),
+            mcp_servers=_filter_mcp_servers(self.mcp_servers, policy.effective_tool_names),
+            knowledge_tools=_filter_knowledge_tools(self.knowledge_tools, policy.effective_tool_names),
             parent_agent_id=f"subagent:{definition.name}",
             parent_agent_name=child_agent_name,
             session_id=self.session_id,
@@ -239,7 +213,6 @@ class SubagentRunner:
             tool_name_denylist=policy.denied_tool_names,
             skill_paths=runtime_context.skill_paths,
             workspace_dir=workspace_dir,
-            authorization=authorization,
         )
 
         reply_generation = 0
@@ -263,7 +236,6 @@ class SubagentRunner:
                 async for event in agent.reply_stream(next_input):
                     event_data = event.model_dump(mode="json")
                     event_type = event_data.pop("type", "UNKNOWN")
-                    event_data = public_authorization_event(agent, event_type, event_data)
                     _record_child_agent_event(
                         session_id=self.session_id,
                         event_type=event_type,
@@ -352,12 +324,13 @@ class SubagentRunner:
 
 def _build_child_system_prompt(
     definition: SubagentDefinition,
-    runtime_context: SubagentRuntimeContext,
+    runtime_context: SubagentRuntimeContext | None = None,
     *,
     platform_context: PlatformRuntimeContext | None = None,
     filesystem_scope: str = "",
     workspace_dir: str = "",
 ) -> str:
+    runtime_context = runtime_context or build_subagent_runtime_context(definition)
     return "\n\n".join(
         part
         for part in [
@@ -498,32 +471,6 @@ def _child_tool_scope(parent_scope: RuntimeToolScope, effective_tools: set[str])
         allow_bash=parent_scope.allow_bash and "Bash" in effective_tools,
         allow_http=parent_scope.allow_http and "HttpRequest" in effective_tools,
         allow_web=parent_scope.allow_web and "WebFetch" in effective_tools,
-    )
-
-
-def _child_workspace(session_id: str, invocation_id: str, _filesystem_scope: str) -> str | None:
-    """子任務工作目錄是 Session 內的 invocation 目錄，不使用 Project root。"""
-
-    try:
-        directory = session_subagent_root(session_id, invocation_id)
-        directory.mkdir(parents=True, exist_ok=True)
-    except (OSError, SessionPathError, ValueError):
-        return None
-    return str(directory)
-
-
-def _subset_resources(
-    mcp_servers: list[McpRuntimeSpec],
-    knowledge_tools: list[KnowledgeToolRuntimeSpec],
-    snapshot: dict[str, Any] | None,
-) -> tuple[list[McpRuntimeSpec], list[KnowledgeToolRuntimeSpec]]:
-    if snapshot is None:
-        return mcp_servers, knowledge_tools
-    mcp_ids = resource_ids(snapshot, "mcp")
-    http_ids = resource_ids(snapshot, "http_tool", "knowledge")
-    return (
-        [server for server in mcp_servers if server.name in mcp_ids],
-        [tool for tool in knowledge_tools if tool.id in http_ids],
     )
 
 

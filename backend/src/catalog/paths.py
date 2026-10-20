@@ -132,12 +132,14 @@ def project_index_path(project_root: Path) -> Path:
 
 
 def extra_filesystem_scopes_for_workspace(workspace_id: str) -> list[str]:
-    """檔案工具只看 tenant 全局 Agent 目錄，不建立 Workspace `.agents`。"""
+    """当前 Workspace 允许文件工具访问的 catalog 根（必须已存在）。"""
 
-    del workspace_id
-    root = runtime_paths.global_agents_root()
-    root.mkdir(parents=True, exist_ok=True)
-    return [str(root.resolve())]
+    roots = [workspace_catalog_root(workspace_id), system_overlay_root()]
+    resolved: list[str] = []
+    for root in roots:
+        root.mkdir(parents=True, exist_ok=True)
+        resolved.append(str(root.resolve()))
+    return resolved
 
 
 def path_stays_inside(path: Path, root: Path) -> bool:

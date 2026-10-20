@@ -3,6 +3,7 @@ import { Button, Card } from '@/components/design';
 import { NotificationSettingsCard } from '../features/notifications/NotificationSettingsCard';
 import { GroupStudioSettingsCard } from '../features/settings/GroupStudioSettingsCard';
 import { ScheduledJobsSettingsCard } from '../features/settings/ScheduledJobsSettingsCard';
+import { ConversationContextSettingsCard } from '../features/settings/ConversationContextSettingsCard';
 import { UserDataSettingsCard } from '../features/settings/UserDataSettingsCard';
 import { SettingsToc } from '../features/settings/SettingsToc';
 import { visibleSettingsNavItems } from '../features/settings/settingsNav';
@@ -152,6 +153,9 @@ export function SettingsPage() {
             ) : null}
             <section id="settings-notifications" className="scroll-mt-16 lg:scroll-mt-4">
               <NotificationSettingsCard />
+            </section>
+            <section id="settings-context" className="scroll-mt-16 lg:scroll-mt-4">
+              <ConversationContextSettingsCard />
             </section>
             {window.electronAPI ? (
               <section id="settings-user-data" className="scroll-mt-16 lg:scroll-mt-4">

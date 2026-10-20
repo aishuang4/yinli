@@ -18,14 +18,6 @@ from src.scheduler.ticker import apply_scheduler_enabled
 router = APIRouter()
 
 
-@router.get("/models/permission-review/status")
-async def get_permission_review_status() -> dict:
-    """报告评测门禁状态；验收事实不由模型设置页面自行写入。"""
-    from src.security.authorization.review_gate import permission_review_status
-
-    return permission_review_status()
-
-
 @router.get("/product-features")
 async def get_product_features() -> dict:
     """读取打包期产品功能档；运行时只读，不落 SQLite。"""

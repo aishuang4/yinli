@@ -28,6 +28,7 @@ from src.mcp.registry import (
     write_mcp_file,
     ensure_mcp_file_catalog,
     is_mcp_catalog_migrated,
+    mcp_dir,
     delete_named_secret,
     resolve_headers,
     _resolve_mcp_runtime_servers,
@@ -97,20 +98,18 @@ async def list_mcp_servers(
     q: str = "",
     category: str = "",
     installed: Optional[bool] = None,
-    workspace_id: Annotated[str | None, Query(alias="workspaceId")] = None,
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
 ) -> list[McpServer]:
-    """取得全局 MCP 目錄。省略 workspace 時不按舊 Workspace 過濾。"""
+    """获取 MCP Server 列表，支持搜索、分类和安装状态筛选。"""
 
     _refresh_mcp_files()
     query = q.strip().lower()
-    result = []
-    for server in _mcp_servers.values():
-        global_record = server.workspace_id in {"", "global"} or server.id in _builtin_mcp_servers
-        if workspace_id and not global_record and server.workspace_id != workspace_id:
-            continue
-        if _hosted_hides_mcp(server):
-            continue
-        result.append(server)
+    result = [
+        server
+        for server in _mcp_servers.values()
+        if (server.id in _builtin_mcp_servers or server.workspace_id == workspace_id)
+        and not _hosted_hides_mcp(server)
+    ]
 
     if query:
         result = [
@@ -267,9 +266,7 @@ async def delete_mcp_server(server_id: str) -> None:
             delete_named_secret(ref)
         except Exception:
             pass
-    from src.config.runtime_paths import global_mcp_root
-
-    yaml_path = global_mcp_root() / f"{server.id}.yaml"
+    yaml_path = mcp_dir(server.workspace_id) / f"{server.id}.yaml"
     if yaml_path.exists():
         yaml_path.unlink()
     _job_service.pause_jobs_for_catalog_change(resource_type="mcp", resource_id=server_id)

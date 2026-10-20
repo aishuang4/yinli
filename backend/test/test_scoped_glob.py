@@ -27,17 +27,15 @@ def test_scoped_glob_skips_heavy_project_directories(tmp_path: Path):
     assert "sessions/ignored.md" not in text
 
 
-def test_scoped_glob_accepts_project_relative_base_path(tmp_path: Path):
+def test_scoped_glob_accepts_project_relative_base_path(tmp_path: Path, monkeypatch):
     """Glob 的 path 相对路径按项目根解析。"""
 
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "contract.md").write_text("# contract")
+    monkeypatch.setattr("src.tools.scoped_paths.default_project_root", lambda: tmp_path)
 
-    chunk = asyncio.run(ScopedGlob(base_dir=str(tmp_path), scope_dir=str(tmp_path))(
-        pattern="*.md",
-        path="docs",
-    ))
+    chunk = asyncio.run(ScopedGlob()(pattern="*.md", path="docs"))
 
     assert chunk.state != "error"
     assert "contract.md" in chunk.content[0].text

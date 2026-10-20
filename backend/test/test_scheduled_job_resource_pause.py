@@ -1,8 +1,6 @@
 """Project / Agent / Skill 资源变更时立即暂停 Job。"""
 
 from __future__ import annotations
-from test.file_skill_fixtures import install_file_skills as replace_skills
-
 
 import asyncio
 from datetime import datetime, timezone
@@ -33,6 +31,7 @@ from src.storage.database import (
     ensure_db,
     list_user_notifications,
     replace_mcp_servers,
+    replace_skills,
     upsert_agent,
     upsert_http_tool,
     upsert_project_resource_binding,
@@ -41,7 +40,7 @@ from src.storage.database import (
 
 @pytest.fixture()
 def isolated_db(tmp_path, monkeypatch):
-    """每个用例使用独立 SQLite。需要舊 Project 列的測試自行建立，不靠啟動引導。"""
+    """每个用例使用独立 SQLite。"""
 
     monkeypatch.setattr("src.config.runtime_paths.USER_DATA_ROOT", tmp_path / "user-data")
     yield
@@ -113,24 +112,25 @@ def _pause_notes(job_id: str) -> list[dict]:
 
 
 def test_archive_project_pauses_jobs(isolated_db):
-    """Project 歸檔 API 已停用，不會反向暫停 Job。"""
+    """归档 Project 时立即暂停该项目下 active / pending Job 并写通知。"""
 
     service = _service()
     pending = _weekly_job(service, name="待确认周报")
     active = _confirm(service, _weekly_job(service, name="已启用周报").id)
-    pending_status = service.get_job(pending.id).status
-    active_status = service.get_job(active.id).status
 
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(update_project_record(
-            DEFAULT_PROJECT_ID,
-            ProjectUpdateRequest(status="archived"),
-        ))
-    assert exc_info.value.status_code == 410
-    assert service.get_job(pending.id).status == pending_status
-    assert service.get_job(active.id).status == active_status
-    assert not _pause_notes(pending.id)
-    assert not _pause_notes(active.id)
+    asyncio.run(update_project_record(
+        DEFAULT_PROJECT_ID,
+        ProjectUpdateRequest(status="archived"),
+    ))
+
+    pending = service.get_job(pending.id)
+    active = service.get_job(active.id)
+    assert pending.status == "paused"
+    assert pending.pause_reason == "project_archived"
+    assert active.status == "paused"
+    assert active.pause_reason == "project_archived"
+    assert _pause_notes(pending.id)
+    assert _pause_notes(active.id)
 
 
 def test_disable_agent_pauses_jobs(isolated_db, monkeypatch):
@@ -172,8 +172,8 @@ def test_disable_agent_pauses_jobs(isolated_db, monkeypatch):
     assert not _pause_notes(keep.id)
 
 
-def test_skill_binding_removal_does_not_push_state_into_jobs(isolated_db):
-    """Project 解绑 Skill 不反向改 Job；firing 前置校验负责拒绝。"""
+def test_skill_binding_removal_pauses_jobs_that_required_that_skill(isolated_db):
+    """移出 Skill 绑定只暂停冻结了该 Skill 的 Job。"""
 
     service = _service()
     replace_skills({
@@ -200,41 +200,52 @@ def test_skill_binding_removal_does_not_push_state_into_jobs(isolated_db):
     )
     other = _confirm(service, _weekly_job(service, name="不依赖技能").id)
 
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(put_project_resource(
-            DEFAULT_PROJECT_ID,
-            "skill",
-            "skill-report",
-            ProjectResourceBindingRequest(enabled=False),
-        ))
-    assert exc_info.value.status_code == 410
+    asyncio.run(put_project_resource(
+        DEFAULT_PROJECT_ID,
+        "skill",
+        "skill-report",
+        ProjectResourceBindingRequest(enabled=False),
+    ))
 
     needed = service.get_job(needed.id)
     other = service.get_job(other.id)
-    assert needed.status == "active"
+    assert needed.status == "paused"
+    assert needed.pause_reason == "skill_unbound"
     assert other.status == "active"
-    assert not _pause_notes(needed.id)
+    assert _pause_notes(needed.id)
     assert not _pause_notes(other.id)
 
 
 def test_confirm_after_archive_pending_job_fails(isolated_db):
-    """Project 更新 API 回 410，pending Job 仍可確認。"""
+    """归档后 pending Job 已暂停，confirm 必须 409 且保持 pause_reason。"""
 
     service = _service()
     pending = _weekly_job(service, name="归档后不可确认")
+    asyncio.run(update_project_record(
+        DEFAULT_PROJECT_ID,
+        ProjectUpdateRequest(status="archived"),
+    ))
+    pending = service.get_job(pending.id)
+    assert pending.status == "paused"
+    assert pending.pause_reason == "project_archived"
+
+    with pytest.raises(ScheduledJobStateError, match="pending_confirmation"):
+        service.confirm(pending.id)
+    with pytest.raises(ScheduledJobStateError, match="已归档"):
+        service.resume(pending.id)
+
+    set_scheduled_jobs_enabled(True)
     with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(update_project_record(
-            DEFAULT_PROJECT_ID,
-            ProjectUpdateRequest(status="archived"),
-        ))
-    assert exc_info.value.status_code == 410
+        asyncio.run(confirm_scheduled_job(pending.id))
+    assert exc_info.value.status_code == 409
 
-    confirmed = service.confirm(pending.id)
-    assert confirmed.status == "active"
+    frozen = service.get_job(pending.id)
+    assert frozen.status == "paused"
+    assert frozen.pause_reason == "project_archived"
 
 
-def test_update_agent_removing_skill_does_not_rewrite_frozen_jobs(isolated_db, monkeypatch):
-    """Agent 后续配置变化不反向改写 Job 已冻结的 Skill 集合。"""
+def test_update_agent_removing_skill_pauses_jobs(isolated_db, monkeypatch):
+    """从 Agent 配置摘掉 Skill 时，暂停冻结了该 Skill 的 Job。"""
 
     service = _service()
     _ensure_skill("skill-report")
@@ -276,13 +287,14 @@ def test_update_agent_removing_skill_does_not_rewrite_frozen_jobs(isolated_db, m
 
     needed = service.get_job(needed.id)
     other = service.get_job(other.id)
-    assert needed.status == "active"
+    assert needed.status == "paused"
+    assert needed.pause_reason == "skill_unbound"
     assert other.status == "active"
-    assert not _pause_notes(needed.id)
+    assert _pause_notes(needed.id)
 
 
-def test_skill_uninstall_does_not_scan_or_pause_jobs(isolated_db, monkeypatch):
-    """Skill 资源变更不反向驱动 Job；Job 在自己的校验边界处理失效。"""
+def test_skill_uninstall_pauses_jobs(isolated_db, monkeypatch):
+    """卸载 Skill 时立即暂停冻结该 Skill 的 Job。"""
 
     service = _service()
     _ensure_skill("skill-report")
@@ -290,21 +302,29 @@ def test_skill_uninstall_does_not_scan_or_pause_jobs(isolated_db, monkeypatch):
         service,
         _weekly_job(service, name="依赖卸载 Skill", skill_ids=["skill-report"]).id,
     )
-    monkeypatch.setattr(
-        ScheduledJobService,
-        "list_jobs",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("卸载 Skill 不得扫描 Job")),
-    )
+    skill = skills_routes.Skill.model_validate({
+        "id": "skill-report",
+        "name": "周报技能",
+        "description": "",
+        "category": "test",
+        "status": "installed",
+        "enabled": True,
+        "updatedAt": "2026-08-20T00:00:00+00:00",
+        "workspaceId": DEFAULT_WORKSPACE_ID,
+    })
+    monkeypatch.setattr(skills_routes, "_skills", {"skill-report": skill})
+    monkeypatch.setattr(skills_routes, "_persist_if_user_skill", lambda _skill_id: None)
 
     asyncio.run(skills_routes.uninstall_skill("skill-report"))
 
     needed = service.get_job(needed.id)
-    assert needed.status == "active"
-    assert not _pause_notes(needed.id)
+    assert needed.status == "paused"
+    assert needed.pause_reason == "skill_unbound"
+    assert _pause_notes(needed.id)
 
 
-def test_mcp_catalog_delete_does_not_pause_until_resume(isolated_db, monkeypatch):
-    """刪除 MCP 不掃描 Job；下一次 resume 才自檢失敗。"""
+def test_mcp_catalog_delete_pauses_jobs_requiring_mcp(isolated_db, monkeypatch):
+    """删除 MCP 目录项时暂停 allow_mcp 的 Job。"""
 
     service = _service()
     replace_mcp_servers({
@@ -351,20 +371,17 @@ def test_mcp_catalog_delete_does_not_pause_until_resume(isolated_db, monkeypatch
     monkeypatch.setattr(mcp_routes, "_save_user_mcp_servers", lambda: None)
 
     asyncio.run(mcp_routes.delete_mcp_server("mcp-custom"))
-    replace_mcp_servers({})
 
     needed = service.get_job(needed.id)
     other = service.get_job(other.id)
-    assert needed.status == "active"
+    assert needed.status == "paused"
+    assert needed.pause_reason == "needs_job_update"
     assert other.status == "active"
-    assert not _pause_notes(needed.id)
-    service.pause(needed.id, reason="user")
-    with pytest.raises(ScheduledJobStateError, match="MCP"):
-        service.resume(needed.id)
+    assert _pause_notes(needed.id)
 
 
-def test_http_tool_delete_does_not_pause_until_resume(isolated_db):
-    """刪除 HTTP 工具不掃描 Job；resume 才自檢失敗。"""
+def test_http_tool_delete_pauses_jobs_requiring_http(isolated_db):
+    """删除 HTTP 工具时暂停 allow_http 的 Job。"""
 
     service = _service()
     upsert_http_tool({
@@ -391,15 +408,13 @@ def test_http_tool_delete_does_not_pause_until_resume(isolated_db):
     asyncio.run(tools_routes.delete_http_tool_config("http-a"))
 
     needed = service.get_job(needed.id)
-    assert needed.status == "active"
-    assert not _pause_notes(needed.id)
-    service.pause(needed.id, reason="user")
-    with pytest.raises(ScheduledJobStateError, match="HTTP"):
-        service.resume(needed.id)
+    assert needed.status == "paused"
+    assert needed.pause_reason == "needs_job_update"
+    assert _pause_notes(needed.id)
 
 
-def test_session_grant_disable_fails_resume_without_pausing(isolated_db):
-    """停用 Session grant 不改 Job 狀態；resume 自檢失敗。"""
+def test_http_binding_removal_pauses_jobs_that_required_http(isolated_db):
+    """停用 HTTP Tool Project binding 时暂停 allow_http 的 Job。"""
 
     service = _service()
     upsert_http_tool({
@@ -422,24 +437,21 @@ def test_session_grant_disable_fails_resume_without_pausing(isolated_db):
             tool_scope={"allow_http": True},
         ).id,
     )
-    owner = database.get_scheduled_job(needed.id)["owner_session_id"]
-    database.ensure_db()
-    now = "2026-08-20T00:00:00+00:00"
-    with database._lock, database._connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO session_resource_grants (
-                session_id, resource_type, resource_id, enabled, config_override,
-                grant_version, created_at, updated_at
-            ) VALUES (?, 'http_tool', 'http-bound', 0, '{}', 1, ?, ?)
-            """,
-            (owner, now, now),
-        )
-        conn.commit()
-    assert service.get_job(needed.id).status == "active"
-    service.pause(needed.id, reason="user")
-    with pytest.raises(ScheduledJobStateError, match="HTTP"):
-        service.resume(needed.id)
+    other = _confirm(service, _weekly_job(service, name="不依赖 HTTP").id)
+
+    asyncio.run(put_project_resource(
+        DEFAULT_PROJECT_ID,
+        "http_tool",
+        "http-bound",
+        ProjectResourceBindingRequest(enabled=False),
+    ))
+
+    needed = service.get_job(needed.id)
+    other = service.get_job(other.id)
+    assert needed.status == "paused"
+    assert needed.pause_reason == "needs_job_update"
+    assert other.status == "active"
+    assert _pause_notes(needed.id)
 
 
 def test_resume_after_mcp_catalog_delete_fails(isolated_db):

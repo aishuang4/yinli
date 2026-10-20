@@ -1,7 +1,7 @@
 """定时任务调用 Chat 的公开入口。
 
-只提供建立排程 Run、核对工作目录、读取终态、取消、对账，以及取走 firing 的
-运行时 Skill Context 审计。调度器不要再 import routes.chat。
+只提供建立排程 Run、核对工作目录、读取终态、取消和对账。
+调度器不要再 import routes.chat。
 """
 
 from src.server.routes.chat.background_runs import (
@@ -15,7 +15,6 @@ from src.server.routes.chat.scheduled_launch import (
     assert_job_workspace_in_scope,
     launch_scheduled_chat_run,
 )
-from src.server.routes.chat.scheduled_skill_preload import pop_scheduled_skill_audit
 
 __all__ = [
     "TERMINAL_RUN_STATUSES",
@@ -24,6 +23,5 @@ __all__ = [
     "cancel_chat_runs_for_tenant",
     "get_chat_background_run",
     "launch_scheduled_chat_run",
-    "pop_scheduled_skill_audit",
     "reconcile_interrupted_chat_runs",
 ]

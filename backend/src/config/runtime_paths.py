@@ -10,7 +10,6 @@ hosted 下与租户数据相关的路径一律通过本模块的函数解析（�
 from __future__ import annotations
 
 import os
-import re
 import shutil
 from pathlib import Path
 from threading import RLock
@@ -158,10 +157,11 @@ def ensure_tenant_directories() -> None:
         if ctx.tenant_id in _ensured_tenants:
             return
         for path in (
-            tenant_root(),
             data_root(),
+            default_project_root(),
             skill_packages_root(),
             subagent_root(),
+            workspaces_catalog_root(),
         ):
             path.mkdir(parents=True, exist_ok=True)
         _migrate_legacy_skill_packages()
@@ -191,138 +191,6 @@ def _migrate_legacy_skill_packages() -> None:
         except OSError:
             # 单个包迁移失败不阻塞服务启动，后续仍可由记录逻辑修复。
             continue
-
-
-_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$")
-_CHILD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$")
-
-
-class SessionPathError(ValueError):
-    """Session 路徑不合法、越界或跨 tenant。"""
-
-    def __init__(self, code: str) -> None:
-        super().__init__(code)
-        self.code = code
-
-
-def _validate_id(value: str, *, pattern: re.Pattern[str], code: str) -> str:
-    text = str(value or "").strip()
-    if not pattern.fullmatch(text):
-        raise SessionPathError(code)
-    return text
-
-
-def _inside(path: Path, parent: Path) -> bool:
-    try:
-        path.resolve().relative_to(parent.resolve())
-    except ValueError:
-        return False
-    return True
-
-
-def global_agents_root() -> Path:
-    """Tenant 全局 Agent 權威目錄。"""
-
-    return tenant_root() / "agents"
-
-
-def global_mcp_root() -> Path:
-    return tenant_root() / "mcp"
-
-
-def global_tools_root() -> Path:
-    return tenant_root() / "tools"
-
-
-def global_policies_root() -> Path:
-    return tenant_root() / "policies"
-
-
-def global_jobs_root() -> Path:
-    """系統 Job Agent / 模板目錄，不存放任務實例。"""
-
-    return tenant_root() / "jobs"
-
-
-def sessions_root() -> Path:
-    root = tenant_root() / "sessions"
-    if root.is_symlink() or not _inside(root, tenant_root()):
-        raise SessionPathError("cross_tenant")
-    return root
-
-
-def session_root(session_id: str) -> Path:
-    """`<tenant-root>/sessions/<session-id>`，拒絕非法 ID、符號連結與跨 tenant。"""
-
-    identifier = _validate_id(session_id, pattern=_SESSION_ID_RE, code="illegal_session_id")
-    base = sessions_root()
-    candidate = base / identifier
-    if candidate.is_symlink():
-        raise SessionPathError("symlink_session")
-    if not _inside(candidate, tenant_root()):
-        raise SessionPathError("cross_tenant")
-    return candidate
-
-
-def _session_child(session_id: str, *parts: str) -> Path:
-    parent = session_root(session_id)
-    current = parent
-    for part in parts:
-        name = _validate_id(part, pattern=_CHILD_ID_RE, code="illegal_child_id")
-        current = current / name
-        if current.is_symlink() or not _inside(current, parent):
-            raise SessionPathError("path_escape")
-    return current
-
-
-def session_uploads_root(session_id: str) -> Path:
-    return _session_child(session_id, "uploads")
-
-
-def session_artifacts_root(session_id: str) -> Path:
-    return _session_child(session_id, "artifacts")
-
-
-def session_context_root(session_id: str) -> Path:
-    return _session_child(session_id, "context")
-
-
-def session_plan_file(session_id: str, plan_id: str) -> Path:
-    """`<session-root>/plans/<plan-id>.md`。不讀外部 `.agent-workstation/plans`。"""
-
-    directory = _session_child(session_id, "plans")
-    name = _validate_id(plan_id, pattern=_CHILD_ID_RE, code="illegal_child_id")
-    return directory / f"{name}.md"
-
-
-def session_run_root(session_id: str, run_id: str) -> Path:
-    return _session_child(session_id, "runs", run_id)
-
-
-def session_team_root(session_id: str, run_id: str) -> Path:
-    return _session_child(session_id, "team", run_id)
-
-
-def session_member_root(session_id: str, run_id: str, member_id: str) -> Path:
-    return _session_child(session_id, "team", run_id, member_id)
-
-
-def session_subagent_root(session_id: str, invocation_id: str) -> Path:
-    return _session_child(session_id, "subagents", invocation_id)
-
-
-def session_group_studio_root(session_id: str, studio_id: str) -> Path:
-    return _session_child(session_id, "group-studio", studio_id)
-
-
-def session_job_root(session_id: str, job_id: str) -> Path:
-    return _session_child(session_id, "jobs", job_id)
-
-
-def session_job_firing_root(session_id: str, job_id: str, firing_id: str) -> Path:
-    """`<session-root>/jobs/<job>/firings/<firing>`。"""
-
-    return _session_child(session_id, "jobs", job_id, "firings", firing_id)
 
 
 def _migrate_legacy_subagents() -> None:

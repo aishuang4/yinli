@@ -27,7 +27,6 @@ export interface SandboxCase {
 
 interface SandboxControlPanelProps {
   modelSelector?: ReactNode;
-  approvalSelector?: ReactNode;
   loading: boolean;
   mode: 'agent' | 'team';
   setMode: (mode: 'agent' | 'team') => void;
@@ -55,7 +54,6 @@ interface SandboxControlPanelProps {
 
 export function SandboxControlPanel({
   modelSelector,
-  approvalSelector,
   loading,
   mode,
   setMode,
@@ -152,7 +150,6 @@ export function SandboxControlPanel({
             </div>
             <div className="mt-1 text-xs text-[var(--color-text-secondary)]">
               {modelSelector}
-              {approvalSelector}
             </div>
             {mode === 'team' && runtimeAgent && (
               <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">作为 Leader 动态组建临时成员</div>

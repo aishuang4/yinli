@@ -80,14 +80,12 @@ async def read_memory_timeline(
     time_to: str = Query(default="", alias="timeTo"),
     speaker: str = Query(default=""),
     query_text: str = Query(default="", alias="queryText"),
-    session_id: str = Query(default="", alias="sessionId"),
 ) -> dict[str, Any]:
     """按标签和时间查看时间线原文，不调用模型。"""
 
     return search_timeline(
         workspace_id=workspace_id,
         project_id=project_id,
-        session_id=session_id,
         agent_id=agent_id,
         surface=surface,
         time_from=time_from,

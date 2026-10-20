@@ -12,8 +12,8 @@ import type {
   GroupStudioSnapshot,
 } from './types';
 
-export async function fetchStudioList(): Promise<GroupStudioListItem[]> {
-  const response = await fetch('/api/group-studio');
+export async function fetchStudioList(projectId: string): Promise<GroupStudioListItem[]> {
+  const response = await fetch(`/api/group-studio?projectId=${encodeURIComponent(projectId)}`);
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法加载群聊列表'));
   }
@@ -61,16 +61,17 @@ export async function fetchAvailableStudioAgents(groupId: string): Promise<Group
   return await response.json() as GroupStudioAgentOption[];
 }
 
-export async function updateStudioModel(groupId: string, modelConfigId: string): Promise<GroupStudioSnapshot> {
+export async function updateStudioModel(groupId: string, projectId: string, modelConfigId: string): Promise<GroupStudioSnapshot> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/model`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ modelConfigId }),
+    body: JSON.stringify({ projectId, modelConfigId }),
   });
   if (!response.ok) throw new Error(await readDetail(response, '无法切换群聊模型'));
   return normalizeSnapshot(await response.json());
 }
 
 export async function updateStudioPin(groupId: string, input: {
+  projectId: string;
   goal?: string;
   background?: string;
 }): Promise<GroupStudioPin> {
@@ -92,6 +93,7 @@ export async function updateStudioPin(groupId: string, input: {
 }
 
 export async function muteStudioMember(groupId: string, memberId: string, input: {
+  projectId: string;
   muted: boolean;
 }): Promise<GroupStudioMember> {
   const response = await fetch(
@@ -108,13 +110,15 @@ export async function muteStudioMember(groupId: string, memberId: string, input:
   return await response.json() as GroupStudioMember;
 }
 
-export async function removeStudioMember(groupId: string, memberId: string): Promise<GroupStudioMember> {
+export async function removeStudioMember(groupId: string, memberId: string, input: {
+  projectId: string;
+}): Promise<GroupStudioMember> {
   const response = await fetch(
     `/api/group-studio/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberId)}/remove`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+      body: JSON.stringify(input),
     },
   );
   if (!response.ok) {
@@ -167,12 +171,13 @@ function getDownloadFilename(contentDisposition: string | null): string | undefi
 
 export async function uploadStudioFile(
   groupId: string,
+  projectId: string,
   file: File,
 ): Promise<GroupStudioFile> {
   const body = new FormData();
   body.append('file', file);
   const response = await fetch(
-    `/api/group-studio/${encodeURIComponent(groupId)}/files`,
+    `/api/group-studio/${encodeURIComponent(groupId)}/files?projectId=${encodeURIComponent(projectId)}`,
     { method: 'POST', body },
   );
   if (!response.ok) {
@@ -182,6 +187,7 @@ export async function uploadStudioFile(
 }
 
 export async function postStudioMessage(groupId: string, input: {
+  projectId: string;
   body: string;
   mentions?: string[];
 }): Promise<GroupStudioMessage> {
@@ -196,11 +202,11 @@ export async function postStudioMessage(groupId: string, input: {
   return await response.json() as GroupStudioMessage;
 }
 
-export async function pauseStudio(groupId: string): Promise<GroupStudioSnapshot> {
+export async function pauseStudio(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/pause`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ projectId }),
   });
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法暂停工作室'));
@@ -208,11 +214,11 @@ export async function pauseStudio(groupId: string): Promise<GroupStudioSnapshot>
   return normalizeSnapshot(await response.json());
 }
 
-export async function resumeStudio(groupId: string): Promise<GroupStudioSnapshot> {
+export async function resumeStudio(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/resume`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ projectId }),
   });
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法恢复工作室'));
@@ -220,11 +226,11 @@ export async function resumeStudio(groupId: string): Promise<GroupStudioSnapshot
   return normalizeSnapshot(await response.json());
 }
 
-export async function rerunStudio(groupId: string): Promise<GroupStudioSnapshot> {
+export async function rerunStudio(groupId: string, projectId: string): Promise<GroupStudioSnapshot> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/rerun`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ projectId }),
   });
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法再来一轮'));
@@ -232,22 +238,22 @@ export async function rerunStudio(groupId: string): Promise<GroupStudioSnapshot>
   return normalizeSnapshot(await response.json());
 }
 
-export async function interruptStudio(groupId: string): Promise<void> {
+export async function interruptStudio(groupId: string, projectId: string): Promise<void> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/interrupt`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
+    body: JSON.stringify({ projectId }),
   });
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法停止当前发言'));
   }
 }
 
-export async function closeStudio(groupId: string, confirm: boolean): Promise<GroupStudioSnapshot> {
+export async function closeStudio(groupId: string, projectId: string, confirm: boolean): Promise<GroupStudioSnapshot> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/close`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ confirm }),
+    body: JSON.stringify({ projectId, confirm }),
   });
   if (!response.ok) {
     throw new Error(await readDetail(response, '无法结束群聊'));
@@ -255,9 +261,9 @@ export async function closeStudio(groupId: string, confirm: boolean): Promise<Gr
   return normalizeSnapshot(await response.json());
 }
 
-export async function deleteStudio(groupId: string): Promise<void> {
+export async function deleteStudio(groupId: string, projectId: string): Promise<void> {
   const response = await fetch(
-    `/api/group-studio/${encodeURIComponent(groupId)}`,
+    `/api/group-studio/${encodeURIComponent(groupId)}?projectId=${encodeURIComponent(projectId)}`,
     { method: 'DELETE' },
   );
   if (!response.ok) {
@@ -266,6 +272,7 @@ export async function deleteStudio(groupId: string): Promise<void> {
 }
 
 export async function decideStudioApproval(groupId: string, input: {
+  projectId: string;
   approvalId: string;
   decision: 'approve' | 'deny';
 }): Promise<GroupStudioApproval> {
@@ -281,6 +288,7 @@ export async function decideStudioApproval(groupId: string, input: {
 }
 
 export async function addStudioMember(groupId: string, input: {
+  projectId: string;
   agentId: string;
 }): Promise<GroupStudioMember> {
   const response = await fetch(`/api/group-studio/${encodeURIComponent(groupId)}/members`, {
@@ -296,6 +304,7 @@ export async function addStudioMember(groupId: string, input: {
 
 export async function createStudioFromChat(input: {
   modelConfigId?: string;
+  projectId: string;
   chatSessionId: string;
   agentId: string;
   draftText?: string;
@@ -316,10 +325,10 @@ export async function createStudioFromChat(input: {
 const GROUP_STUDIO_ERROR_TEXT: Record<string, string> = {
   chat_run_active: '请先停止或完成当前回复',
   group_studio_disabled: '群聊工作室未开启',
-  cross_project_session: '当前会话无法升级为工作室',
+  cross_project_session: '当前会话属于其他 Project，无法升级为工作室',
   job_agent_forbidden: 'Job Agent 不能进入工作室',
   default_agent_forbidden: '系统默认助手不能入群，请用普通 Chat Agent',
-  agent_not_bound: '当前 Agent 不可用',
+  agent_not_bound: '当前 Agent 未绑定到此 Project',
   member_cap: '工作室人数已达上限',
   already_member: '这个人已经在群里',
   no_eligible_speaker: '点到的人现在不能发言（已静音、已移出或不在群里）。',

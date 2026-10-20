@@ -28,7 +28,6 @@ def local_tenant(tmp_path, monkeypatch):
     database.forget_all()
     root = tmp_path / "tenant-local"
     root.mkdir()
-    monkeypatch.setattr(runtime_paths, "USER_HOME_ROOT", tmp_path / "test-home")
     monkeypatch.setattr(runtime_paths, "USER_DATA_ROOT", root)  # local 租户 data_root 指向这里
     # 开发 .env 里的 database_url 指向固定库；测试必须改到这份临时根，否则所有用例共用一个库。
     monkeypatch.setattr(
@@ -37,9 +36,6 @@ def local_tenant(tmp_path, monkeypatch):
     )
     ctx = TenantContext.local()
     with use_tenant(ctx):
-        from src.session_migration.state import set_migration_flag
-
-        set_migration_flag(True, schema_version_value=1)
         yield ctx
     database.forget_all()
     evict_all()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass
 
+from src.config.runtime_paths import default_project_root
 from src.config.settings import settings
 from src.tenancy.context import is_hosted_mode
 
@@ -72,9 +73,7 @@ def coerce_hosted_guardrails(guardrails):
     if guardrails is None or not is_hosted_mode():
         return guardrails
     image = hosted_docker_image(str(getattr(guardrails, "docker_image", "") or ""))
-    from src.config.runtime_paths import tenant_root
-
-    scope = str(tenant_root())
+    scope = str(default_project_root())
     if hasattr(guardrails, "model_copy"):
         return guardrails.model_copy(update={
             "execution_backend": "docker",
@@ -88,7 +87,6 @@ def coerce_hosted_guardrails(guardrails):
         filesystem_scope=scope,
         shell_blacklist=list(getattr(guardrails, "shell_blacklist", []) or []),
         network_enabled=bool(getattr(guardrails, "network_enabled", True)),
-        operation_scope=str(getattr(guardrails, "operation_scope", "normal")),
         human_approval=bool(getattr(guardrails, "human_approval", False)),
         tool_permission_mode=str(getattr(guardrails, "tool_permission_mode", "accept_edits")),
         tool_permission_profile=str(getattr(guardrails, "tool_permission_profile", "confirm_destructive")),

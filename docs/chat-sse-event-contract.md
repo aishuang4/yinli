@@ -200,58 +200,6 @@ type DisplaySnapshot = {
 
 新增展示能力只能新增一个后端 per-kind projector 和一个前端 Block module。不得增加 RuntimeFrame op、顶层 SSE 事件、公共 reducer 分支或 payload 反解析。
 
-### 权限 V2 的 approval/tool 扩展（data.version=2）
-
-权限决策仍进入既有 Domain Event → ProjectionRunner → approval/tool projector，不新增顶层事件或 Frame op。
-审批模式来自 session 的下一轮选择，发送时冻结为 Run 的 `approvalMode`（`manual | model_review | full_access`）；
-更改下一轮选择不修改当前 Run 或已存在审批。AskUser 保持下文的业务回答合同，不纳入工具权限批准。
-
-`approval.data` 在工具权限批准时可增加以下版本化字段；未携带的历史数据按原 reader 展示：
-
-```ts
-type PermissionApprovalDataV2 = {
-  version: 2;
-  approvalMode: 'manual' | 'model_review' | 'full_access';
-  actorId: string;
-  decisions: Array<{
-    decisionId: string;
-    approvalId: string;
-    callId: string;
-    actionFingerprint: string;
-    toolName: string;
-    effect: 'read_only' | 'mutation' | 'outbound' | 'orchestration' | 'unknown' | 'output';
-    targets: string[];
-    summary: string;
-    diffPreview?: string;
-    outboundPreview?: string;
-    source: 'readonly' | 'manual' | 'model' | 'model_error' | 'boundary' | 'full_access';
-    reasonCode: string;
-    reason: string;
-    status: 'pending' | 'approved' | 'rejected' | 'cancelled' | 'expired' | 'interrupted';
-    expiresAt: string;
-  }>;
-};
-```
-
-`decisions` 仅列出这张卡实际覆盖的有限调用。命令只能提交这些 decision 的批准/拒绝，不能提交替换参数，
-不能生成或记住整工具规则。按钮文案为“允许这一次”“拒绝”；旧 `rememberApproval` 不扩大批准范围。
-审批归属由服务器复核 tenant/workspace/project/session/run/actor；历史或失去执行现场的记录不可继续。
-
-`tool.data.authorization` 可携带 `version:2`、`decisionId`、`actionFingerprint`、`approvalMode`、`actorId`、
-`source`、`verdict`、`reasonCode`、`reason`，及可选 `executionId`、`executionStatus`。
-执行状态为 `reserved | running | succeeded | failed | unknown`，无执行记录表示未启动；
-`allow` 和人工批准都不代表执行成功。拒绝/边界失败必须与实际执行结果分开。
-模型拒绝可提供 `reviewable:true`，人工复核必须显式创建新尝试，不能复活已终止调用。
-
-命令响应仍只表示命令接收状态；审批结果、取消和执行终态必须从后端事实经原 stream seq 回流。
-普通 Block 数据不携带 secret、Cookie、Authorization、受限原文或模型思维链。
-
-工具普通入参（路径、命令、查询、正文及数值选项）必须在 Chat 和 Trace 可查看，不得全部替换为占位符。
-权限 V2 可暂缓发送不完整的参数片段；收到 `TOOL_CALL_END` 后，必须将累计完整 JSON 逐字段隐藏凭据，
-通过 `tool.call.updated` Domain Event 更新现有 tool Block 的 `inputPreview`，不新增 SSE 或 Frame op。
-Trace 和历史回放使用同一份脱敏参数。`inputPreview` 更新是替换，不能把完整参数重复追加到流式片段后。
-Team 的 `member.tool.input` 领域事件采用同样语义；仅更新工具入参，不关闭工具或改变执行状态。
-
 `kind=context` 是 detached Block：消息树不渲染，Chat 顶栏读取当前会话最近一次模型调用的占用。同一 Run 只有一个 `context:{runId}` Block，后续 `MODEL_CALL_START/END` 浅合并更新。`data` 固定包含：
 
 ```ts
@@ -288,20 +236,6 @@ type ContextBlockData = {
 - `stubbedToolResults` / `droppedImages` / `hygieneSavedChars` 是一级无模型整理（`ContextHygieneMiddleware`）累计：早于最近 2 轮、超过 600 字的工具输出被换成一行存根，旧图片换成文字占位。
 - `overTrigger=1` 表示占用已达到 `ContextConfig.trigger_ratio`（当前窗口的 75%）阈值。
 - `contextWindow` 来自模型 `context_size`：`models.json` 的 `contextSize` 优先，否则按 adapter 默认（deepseek / openai / moonshot 128k、dashscope 131072、anthropic 200k、gemini 1M、ollama 32k）；降级链取链上最小值。
-- 可选 `session` 描述本 Run 冻结的 Session 资源，不新增顶层 SSE 事件，也不进入消息树。只允许这些字段：`sessionId`、`snapshotId`、`agentId`、`directoryGrantVersion`、`resourceGrantVersion`、`workingDirectory`、`skills`、`tools`。`skills` 与 `tools` 是资源 ID 列表。不得携带 Skill 正文、secret、token 或模型 Key。刷新后的 Snapshot 与实时 Frame 回放必须得到同一份 `session`。
-
-```ts
-session?: {
-  sessionId: string;
-  snapshotId: string;
-  agentId: string;
-  directoryGrantVersion?: number;
-  resourceGrantVersion?: number;
-  workingDirectory?: string;
-  skills: string[];
-  tools: string[];
-};
-```
 
 最终回答的 `text` Block 必须保留上游模型的增量节奏。Provider thinking 只投影到 `thinking`
 Block。思考块只表示模型思考，不能当成终态信号，也不能用 thinking 到普通文本的边界推断最终回答已经开始。
@@ -510,11 +444,6 @@ RUNTIME_EVENT
 
 ## 11. Team 投影契约
 
-成员/Leader 的权限等待先写 Team outbox `member.permission.required/resolved`，再投影为现有
-`approval` Block，附原 Chat 的 session/run、actor、task 和精确 decision；不新增顶层 SSE。
-原 Chat 的恢复命令只唤醒对应 live waiter，其他成员继续执行；未解决审批阻挡综合和完成。
-人工等待暂停单任务活动执行预算，恢复后只使用剩余预算；取消清理全部 waiter 和待处理交互。
-
 Team 是 ReAct 的 `executor.kind=team` 执行能力，不新增 SSE 事件名。TeamStore 的 `events.jsonl` 是后端领域事实与 outbox，`TEAM_DOMAIN_EVENT` 只是进程内源信号；浏览器只能收到由 projector 生成的 `RUNTIME_EVENT`。
 
 稳定 Block identity：
@@ -551,12 +480,3 @@ Chat 中的 `kind=team` renderer 必须直接从同一 DisplaySnapshot 的 Team 
 - 会话返回 `modelConfigId`；`PATCH /api/chat/sessions/{id}/model?projectId=...` 保存下一轮选择，活动运行期间返回 409。
 - 一次 Run 固定完整模型快照。审批恢复、Team、Subagent 和后台后处理沿用快照；配置修改只影响新 Run。
 - 所有公开响应、Trace 和 RuntimeFrame 禁止携带 `apiKey`。
-
-### 文件 Skill 身份（2026-10）
-
-既有 `SKILL_CONTEXT` / `SKILL_END` 经原有 Block 投影传递，禁止新增顶层事件。
-Skill 条目的 `id` 表示具体文件包稳定身份，`name` 仅供显示；新增可选 `loadName`、
-`sourcePath`、`sourceScope`、`contentHash` 表示 viewer 实际读取的限定加载名、来源与原始正文版本。
-旧历史缺省这些字段仍可回放。生命周期必须按 `loadName` 唯一匹配本轮目录，不能按同名第一项记账。
-加载失败不得产生成功激活。会话激活记录保存上述身份和 hash；下一轮撤销停用、解绑、缺失或过期正文时，
-只替换受控 Skill 工具块/HintBlock，用户消息和历史审计保持原样。

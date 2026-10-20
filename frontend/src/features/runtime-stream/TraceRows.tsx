@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { Brain, ChevronRight, Globe, Loader2 } from 'lucide-react';
 import { toolIcon } from './toolIcon';
-import { ToolInputPreview } from './ToolInputPreview';
 import {
   bashToolView,
   blockToolFamily,
@@ -77,16 +76,10 @@ export function ToolCallRow({ tool }: { tool: DisplayBlock }) {
   const name = toolCallName(tool);
   const bash = bashToolView(tool);
   const label = bash?.summary ? `${name} · ${bash.summary}` : name;
-  const summary = bash ? <BashDetails command={bash.command} note={bash.note} /> : toolCallDetails(tool);
-  const input = (tool.data as Record<string, unknown>)?.inputPreview;
-  const details = summary || input ? <>{summary}<ToolInputPreview value={input} /></> : null;
+  const details = bash ? <BashDetails command={bash.command} note={bash.note} /> : toolCallDetails(tool);
   const icon = <span className="flex h-4 w-4 items-center justify-center">{toolIcon(name)}</span>;
   if (!details) {
-    return (
-      <div className="min-w-0">
-        <LiveTraceLabel label={label} icon={icon} spinning={tool.phase === 'open'} />
-      </div>
-    );
+    return <LiveTraceLabel label={label} icon={icon} spinning={tool.phase === 'open'} />;
   }
   return (
     <CollapsibleTrace label={label} icon={icon} spinning={tool.phase === 'open'}>
@@ -142,7 +135,7 @@ export function LiveTraceLabel({
   spinning?: boolean;
 }) {
   return (
-    <div className="flex w-full min-w-0 items-center gap-1.5 px-1 py-0.5 text-[13px] text-[var(--color-text-tertiary)]">
+    <div className="inline-flex max-w-full items-center gap-1.5 px-1 py-0.5 text-[13px] text-[var(--color-text-tertiary)]">
       {icon ? <span className="flex h-4 w-4 shrink-0 items-center justify-center">{icon}</span> : null}
       {spinning ? <Loader2 size={14} className="shrink-0 animate-spin" /> : null}
       <span className="min-w-0 truncate">{label}</span>
@@ -269,7 +262,7 @@ function TraceToggle({
     <button
       type="button"
       aria-expanded={expanded}
-      className="flex w-full min-w-0 cursor-pointer items-center gap-1.5 border-0 bg-transparent px-1 py-0.5 text-left text-[13px] text-[var(--color-text-tertiary)]"
+      className="inline-flex max-w-full cursor-pointer items-center gap-1.5 border-0 bg-transparent px-1 py-0.5 text-left text-[13px] text-[var(--color-text-tertiary)]"
       onClick={onToggle}
     >
       {icon ? <span className="flex h-4 w-4 shrink-0 items-center justify-center">{icon}</span> : null}

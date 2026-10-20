@@ -36,8 +36,6 @@ class TimelineRetrieve(ToolBase):
             "timeTo": {"type": "string", "description": "可选结束时间，ISO 格式。"},
             "speaker": {"type": "string", "description": "可选说话方：user 或 assistant。"},
             "queryText": {"type": "string", "description": "可选关键词，对正文做包含匹配。"},
-            "sessionId": {"type": "string", "description": "可选 Session。给出后只检索该 Session 原文。"},
-            "runId": {"type": "string", "description": "可选 Run，写入审计，不扩大检索范围。"},
         },
         "required": [],
     }
@@ -87,15 +85,11 @@ class TimelineRetrieve(ToolBase):
         timeTo: str = "",
         speaker: str = "",
         queryText: str = "",
-        sessionId: str = "",
-        runId: str = "",
         **kwargs: Any,
     ) -> ToolChunk:
         payload = search_timeline(
             workspace_id=workspaceId or self.workspace_id,
             project_id=projectId or self.project_id,
-            session_id=sessionId or self.audit_session_id,
-            run_id=runId,
             agent_id=agentId,
             surface=surface,
             time_from=timeFrom,
@@ -124,8 +118,6 @@ class TimelineRetrieve(ToolBase):
                     "timeFrom": timeFrom,
                     "timeTo": timeTo,
                     "speaker": speaker,
-                    "sessionId": sessionId or self.audit_session_id,
-                    "runId": runId,
                 },
             },
         )

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 from src.memory.skill_evolution import (
     SkillEvolutionRecordInput,
@@ -132,9 +131,10 @@ def test_skill_evolution_record_registers_standard_skill(tmp_path, monkeypatch):
         assert skill.enabled is True
         assert skill.resource_path
         assert skill.resources == ["SKILL.md"]
-        assert (Path(skill.resource_path) / "SKILL.md").exists()
+        assert (tmp_path / "skill_packages" / skill.name / "SKILL.md").exists()
     finally:
-        pass  # 租户文件夹具由 conftest 隔离，无内存登记表需要恢复。
+        skills_routes._skills.clear()
+        skills_routes._skills.update(original_skills)
 
 
 def test_skill_evolution_record_does_not_register_duplicate_skill(tmp_path, monkeypatch):
@@ -159,7 +159,8 @@ def test_skill_evolution_record_does_not_register_duplicate_skill(tmp_path, monk
         assert second["registeredSkillId"] == updated["registeredSkillId"]
         assert len(skills_routes._skills) == before_count
     finally:
-        pass  # 租户文件夹具由 conftest 隔离，无内存登记表需要恢复。
+        skills_routes._skills.clear()
+        skills_routes._skills.update(original_skills)
 
 
 def test_skill_evolution_record_merges_semantically_similar_skill(tmp_path, monkeypatch):
@@ -189,7 +190,8 @@ def test_skill_evolution_record_merges_semantically_similar_skill(tmp_path, monk
         assert second["registeredSkillId"] == updated["registeredSkillId"]
         assert len(skills_routes._skills) == before_count
     finally:
-        pass  # 租户文件夹具由 conftest 隔离，无内存登记表需要恢复。
+        skills_routes._skills.clear()
+        skills_routes._skills.update(original_skills)
 
 
 class _Draft:

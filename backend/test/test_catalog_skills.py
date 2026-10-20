@@ -1,4 +1,4 @@
-"""Skill 文件权威与统一应用目录。"""
+"""Skill 文件权威与项目目录默认可运行。"""
 
 from pathlib import Path
 
@@ -21,13 +21,13 @@ def test_register_user_skill_does_not_persist_body(tmp_path, monkeypatch) -> Non
         content="只应出现在 SKILL.md",
     ))
     rows = [row for row in database.list_skills() if row["id"] == skill.id]
-    assert rows == []
-    assert skill.resource_path.endswith("/unique-file-skill-xyz")
+    assert rows
+    assert rows[0]["content"] == ""
     markdown = read_package_markdown(skill.resource_path)
     assert "只应出现在 SKILL.md" in markdown
 
 
-def test_project_skill_directory_does_not_create_runtime_refs(tmp_path) -> None:
+def test_project_skill_refs_allow_without_binding(tmp_path) -> None:
     skill_dir = tmp_path / ".agents" / "skills" / "local-writer"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
@@ -35,7 +35,7 @@ def test_project_skill_directory_does_not_create_runtime_refs(tmp_path) -> None:
         encoding="utf-8",
     )
     refs = project_skill_refs(tmp_path)
-    assert refs == set()
+    assert "local-writer" in refs
     access = ProjectResourceAccess(
         workspace_id="default",
         project_id="p",
@@ -45,7 +45,7 @@ def test_project_skill_directory_does_not_create_runtime_refs(tmp_path) -> None:
         http_tool_ids=frozenset(),
         project_skill_refs=frozenset(refs),
     )
-    assert access.filter_ids("skill", ["local-writer"]) == []
+    assert access.filter_ids("skill", ["local-writer"]) == ["local-writer"]
 
 
 def test_system_skill_name_cannot_be_registered() -> None:

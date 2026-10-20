@@ -8,7 +8,13 @@ from typing import Any
 
 import yaml
 
-from src.catalog.paths import ID_PATTERN, atomic_write_text
+from src.catalog.paths import (
+    ID_PATTERN,
+    atomic_write_text,
+    http_tools_dir,
+    project_http_tools_dir,
+    workspaces_root,
+)
 from src.catalog.secrets import (
     load_http_auth,
     redact_headers,
@@ -154,16 +160,24 @@ def _scan_dir(directory: Path, *, workspace_id: str, source_scope: str) -> list[
 
 
 def discover_http_files(*, project_root: Path | None = None) -> list[HttpToolFileRecord]:
-    """只讀 `<tenant-root>/tools`。外部工作目錄中的 `.agents/tools` 不進入目錄。"""
-
-    del project_root
-    from src.config.runtime_paths import global_tools_root
-
-    return _scan_dir(global_tools_root(), workspace_id="global", source_scope="global")
+    records: list[HttpToolFileRecord] = []
+    root = workspaces_root()
+    if root.is_dir():
+        for child in sorted(root.iterdir()):
+            if not child.is_dir() or child.name.startswith("_"):
+                continue
+            records.extend(_scan_dir(http_tools_dir(child.name), workspace_id=child.name, source_scope="workspace"))
+    if project_root is not None:
+        records.extend(_scan_dir(
+            project_http_tools_dir(project_root),
+            workspace_id="default",
+            source_scope="project",
+        ))
+    return records
 
 
 def project_http_ids(project_root: Path) -> set[str]:
-    """外部目錄不再提供 HTTP Tool 身份。"""
-
-    del project_root
-    return set()
+    return {
+        item.id
+        for item in _scan_dir(project_http_tools_dir(project_root), workspace_id="default", source_scope="project")
+    }

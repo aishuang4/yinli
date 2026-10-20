@@ -193,14 +193,6 @@ class JobScheduler:
         if self._service.has_non_terminal_firing(job.id):
             stats["skipped_in_flight"] += 1
             return
-        from src.scheduler.session_grant_check import owner_session_id
-        from src.sessions.records import get_session
-
-        owner = owner_session_id(job.id)
-        session = get_session(owner) if owner else None
-        if session is None or str(session.get("status") or "") == "deleted":
-            stats["skipped_in_flight"] += 1
-            return
         if self._service.count_firings_today(job, now=now) >= job.max_firings_per_day:
             if job.status == "active":
                 self._service.pause(job.id, reason="daily_cap")
@@ -327,14 +319,9 @@ def reset_job_scheduler() -> None:
 def bootstrap_tenant_scheduler(*, now: datetime | None = None) -> dict[str, int]:
     """当前租户内：默认开关、Job 文件、中断的 Chat Run 和 firing。"""
 
-    # 先终止旧进程现场，再迁移；文件同步不能抢先覆盖旧审批依据。
-    chat_n = reconcile_interrupted_chat_runs()
-    from src.security.authorization.migration import migrate_permission_configuration
-
-    migrate_permission_configuration()
     seeded = ensure_scheduled_jobs_defaults()
     try:
-        from src.catalog.sync_jobs import persist_job_definition
+        from src.catalog.sync_jobs import persist_job_definition, sync_job_definitions
         from src.storage.database import list_scheduled_jobs
         from src.scheduler.service import ScheduledJobService
 
@@ -345,8 +332,10 @@ def bootstrap_tenant_scheduler(*, now: datetime | None = None) -> dict[str, int]
             except Exception:
                 logger.exception("同步 Job 定义失败 job=%s", item.get("id"))
                 continue
+        sync_job_definitions()
     except Exception:
         logger.exception("同步 Job 定义文件失败")
+    chat_n = reconcile_interrupted_chat_runs()
     job_n = get_job_scheduler().service.reconcile_interrupted_job_runs(now=now)
     if chat_n or job_n or seeded:
         logger.info(

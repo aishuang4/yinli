@@ -7,9 +7,6 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from src.security.authorization.models import RunAuthorizationMetadata
-from src.tenancy.context import current_tenant
-
 
 class ChatRunRecordStore:
     """只封装 chat_runs 元数据，不保存原始 SSE 或 RunState。"""
@@ -47,7 +44,6 @@ class ChatRunRecordStore:
         payload = {
             "id": record["id"],
             "modelConfig": _merged(record, existing, "modelConfig", "model_config", {}),
-            "authorization": _merged(record, existing, "authorization", "authorization", {}),
             "sessionId": session_id,
             "workspaceId": _merged(
                 record, existing, "workspaceId", "workspace_id", self.default_workspace_id,
@@ -75,30 +71,14 @@ class ChatRunRecordStore:
             ),
             "updatedAt": updated_at,
         }
-        if payload["authorization"]:
-            metadata = RunAuthorizationMetadata.model_validate(payload["authorization"])
-            if metadata.tenant_id != current_tenant().tenant_id:
-                raise ValueError("Run 授权租户不匹配")
-            payload["authorization"] = metadata.model_dump(mode="json", by_alias=True)
         with self.lock, self.connect() as conn:
-            # 在同一写事务比较旧值，防并发 upsert 换掉已冻结的模式或运行归属。
-            conn.execute("BEGIN IMMEDIATE")
-            previous = conn.execute("SELECT * FROM chat_runs WHERE id=?", (payload["id"],)).fetchone()
-            if previous is not None:
-                frozen = json.loads(previous["authorization_json"] or "{}")
-                if frozen:
-                    if (payload["sessionId"], payload["workspaceId"], payload["projectId"], payload["agentId"]) != (
-                        previous["session_id"], previous["workspace_id"], previous["project_id"], previous["agent_id"],
-                    ) or (payload["authorization"] and payload["authorization"] != frozen):
-                        raise ValueError("不可覆盖 Run 授权快照或归属")
-                    payload["authorization"] = frozen
             conn.execute(
                 """
                 INSERT INTO chat_runs (
                     id, session_id, workspace_id, project_id, agent_id, agent_name,
                     task_text, mode, status, trigger_source, scheduled_job_id,
-                    scheduled_firing_id, created_at, completed_at, updated_at, model_config_json, authorization_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    scheduled_firing_id, created_at, completed_at, updated_at, model_config_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     session_id=excluded.session_id,
                     workspace_id=excluded.workspace_id,
@@ -113,8 +93,7 @@ class ChatRunRecordStore:
                     scheduled_firing_id=excluded.scheduled_firing_id,
                     completed_at=excluded.completed_at,
                     updated_at=excluded.updated_at,
-                    model_config_json=excluded.model_config_json,
-                    authorization_json=excluded.authorization_json
+                    model_config_json=excluded.model_config_json
                 """,
                 (
                     payload["id"], payload["sessionId"],
@@ -125,7 +104,6 @@ class ChatRunRecordStore:
                     payload["scheduledFiringId"], created_at,
                     payload["completedAt"], updated_at,
                     json.dumps(payload["modelConfig"], ensure_ascii=False),
-                    json.dumps(payload["authorization"], ensure_ascii=False),
                 ),
             )
             conn.commit()
@@ -145,16 +123,12 @@ class ChatRunRecordStore:
         limit: int = 50,
         *,
         project_id: str | None = None,
-        session_id: str | None = None,
         trigger_source: str | None = None,
     ) -> list[dict[str, Any]]:
         self.ensure_db()
         clauses: list[str] = []
         params: list[Any] = []
-        if session_id:
-            clauses.append("session_id = ?")
-            params.append(session_id)
-        elif project_id:
+        if project_id:
             clauses.append("project_id = ?")
             params.append(project_id)
         if trigger_source:
@@ -195,7 +169,6 @@ class ChatRunRecordStore:
         return {
             "id": row["id"],
             "modelConfig": json.loads(row["model_config_json"] or "{}"),
-            "authorization": json.loads(row["authorization_json"] or "{}"),
             "sessionId": row["session_id"],
             "workspaceId": row["workspace_id"],
             "projectId": row["project_id"],

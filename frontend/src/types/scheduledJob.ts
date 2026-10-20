@@ -27,16 +27,6 @@ export interface JobToolScope {
   allowKnowledge: boolean;
 }
 
-export interface JobRequiredSkill {
-  skillId: string;
-  sourceScope?: string;
-  sourcePath?: string;
-  contentSha256?: string;
-  contentChars?: number;
-  estimatedTokens?: number;
-  frozenAt?: string;
-}
-
 export interface WeeklyScheduleExpr {
   weekdays: string[];
   at: string;
@@ -89,8 +79,8 @@ export interface JobCapabilityContract {
 
 export interface ScheduledJob {
   id: string;
-  workspaceId?: string;
-  projectId?: string;
+  workspaceId: string;
+  projectId: string;
   name: string;
   summary: string;
   status: JobStatus;
@@ -105,8 +95,6 @@ export interface ScheduledJob {
   lastRunAt: string | null;
   frozenPrompt: string;
   skillIds: string[];
-  requiredSkills: JobRequiredSkill[];
-  contextPolicy: 'fresh';
   toolScope: JobToolScope;
   inputSpec: Record<string, unknown>;
   outputSpec: Record<string, unknown>;
@@ -141,23 +129,14 @@ export interface JobOutputFile {
 
 export interface JobOutputManifest {
   files?: JobOutputFile[];
-  skillContext?: {
-    skillIds?: string[];
-    items?: JobRequiredSkill[];
-    policy?: string;
-    validation?: string;
-    errorCode?: string;
-    errorMessage?: string;
-    totalChars?: number;
-  };
   [key: string]: unknown;
 }
 
 export interface ScheduledJobRun {
   id: string;
   jobId: string;
-  workspaceId?: string;
-  projectId?: string;
+  workspaceId: string;
+  projectId: string;
   trigger: FiringTrigger;
   scheduledFor: string;
   status: FiringStatus;

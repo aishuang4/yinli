@@ -2,19 +2,16 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.run_context import ChatRunContext
 from src.server.routes.chat.team_runtime.member_runtime import run_member_task
-from src.server.routes.chat.team_runtime.execution_budget import ActiveExecutionBudget
 from src.server.routes.chat.team_runtime.store import TERMINAL_TASK_STATUSES, TeamStore, TeamStoreError
 
 
 FlushEvents = Callable[[], Awaitable[None]]
-PermissionWaiter = Callable[[Any], Awaitable[object]]
 
-# 单个 Member 的活动执行上限；人工审批等待暂停预算。
+# 单个 Member 任务的墙钟上限：超过即判失败（可重派一次），避免一个卡死的 session 拖住整轮。
 TASK_TIMEOUT_SECONDS = 10 * 60
 
 
@@ -32,13 +29,11 @@ class TeamCoordinator:
         ctx: ChatRunContext,
         run_data: ChatMessage,
         flush_events: FlushEvents,
-        permission_waiter: PermissionWaiter | None = None,
     ) -> None:
         self.store = store
         self.ctx = ctx
         self.run_data = run_data
         self.flush_events = flush_events
-        self.permission_waiter = permission_waiter
         self.max_concurrency = max(1, min(int(store.run().get("maxConcurrency") or 3), 8))
 
     async def run(self) -> None:
@@ -191,20 +186,19 @@ class TeamCoordinator:
     async def _execute(self, task: dict, member: dict) -> None:
         task_id = str(task["id"])
         member_id = str(member["id"])
-        try:
-            async with ActiveExecutionBudget(TASK_TIMEOUT_SECONDS) as budget:
-                async def wait_for_permission(interaction):
-                    return await budget.wait_for_human(self.permission_waiter, interaction)
-
-                await run_member_task(
+        worker = asyncio.create_task(
+            run_member_task(
                 store=self.store,
                 ctx=self.ctx,
                 run_data=self.run_data,
                 member=member,
                 task=task,
                 flush_events=self.flush_events,
-                    **({"permission_waiter": wait_for_permission} if self.permission_waiter else {}),
-                )
+            ),
+            name=f"team-member-{member_id}-{task_id}",
+        )
+        try:
+            await asyncio.wait_for(worker, timeout=TASK_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             self.store.fail_task(task_id, member_id, f"任务超过 {TASK_TIMEOUT_SECONDS // 60} 分钟未完成")
             self.store.set_member_status(member_id, "idle")
@@ -228,3 +222,7 @@ class TeamCoordinator:
         else:
             self.store.set_member_status(member_id, "idle")
             await self.flush_events()
+        finally:
+            if not worker.done():
+                worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)

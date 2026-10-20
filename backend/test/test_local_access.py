@@ -91,11 +91,3 @@ def test_desktop_loopback_chat_allows_anonymous_local_use(monkeypatch):
     with TestClient(app, client=("127.0.0.1", 50000)) as client:
         response = client.get("/api/chat/send")
     assert response.status_code == 200
-
-
-def test_desktop_cloud_base_url_is_read_from_pack_file(tmp_path):
-    from src.config.settings import read_desktop_cloud_base_url
-
-    path = tmp_path / "desktop.json"
-    path.write_text('{"cloudBaseUrl":"http://cloud.example/"}', encoding="utf-8")
-    assert read_desktop_cloud_base_url(path) == "http://cloud.example"

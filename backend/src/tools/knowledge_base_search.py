@@ -1,4 +1,4 @@
-"""知识库 HTTP 搜索；授权与实际执行复用请求解析。"""
+"""Knowledge base HTTP search tool."""
 
 import json
 import re
@@ -98,9 +98,13 @@ class KnowledgeBaseSearch(ToolBase):
             decision_reason="Knowledge base HTTP search",
         )
 
-    def prepare_execution(self, query: str, filename_pattern: str | None = None,
-                          filterCategories: list[str] | None = None, searchMode: str | None = None) -> dict[str, Any]:
-        """在受限内存中构造含默认正文与凭据的最终请求。"""
+    async def __call__(
+        self,
+        query: str,
+        filename_pattern: str | None = None,
+        filterCategories: list[str] | None = None,
+        searchMode: str | None = None,
+    ) -> ToolChunk:
         payload = dict(self.default_payload)
         payload["query"] = query
         if filename_pattern is not None:
@@ -117,30 +121,16 @@ class KnowledgeBaseSearch(ToolBase):
         if self.authorization:
             request_headers["Authorization"] = self.authorization
 
-        parsed = urlparse(self.url)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError("知识库需要完整的 HTTP(S) URL")
-        return {"method": "POST", "url": self.url, "headers": request_headers, "json": payload,
-                "timeout": max(1.0, min(float(self.timeout_seconds or 30), 120.0))}
-
-    async def __call__(
-        self,
-        query: str,
-        filename_pattern: str | None = None,
-        filterCategories: list[str] | None = None,
-        searchMode: str | None = None,
-    ) -> ToolChunk:
-        try:
-            prepared = self.prepare_execution(query, filename_pattern, filterCategories, searchMode)
-        except ValueError:
-            return self._error("知识库请求参数无效")
-        payload = prepared["json"]
-
         try:
             from src.security.egress import guarded_async_client
 
             async with guarded_async_client(follow_redirects=True) as client:
-                response = await client.request(**prepared)
+                response = await client.post(
+                    self.url,
+                    headers=request_headers,
+                    json=payload,
+                    timeout=max(1.0, min(float(self.timeout_seconds or 30), 120.0)),
+                )
         except Exception as exc:
             return self._error(f"Knowledge base request failed: {exc}")
 

@@ -5,26 +5,7 @@
 支持类型安全的配置访问和自动验证。
 """
 
-import json
-from pathlib import Path
-
-from pydantic import model_validator
 from pydantic_settings import BaseSettings
-
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
-def read_desktop_cloud_base_url(path: Path | None = None) -> str:
-    """打包配置里的云端地址。环境变量优先，文件只在未配置时补上。"""
-
-    target = path or (_REPO_ROOT / "config" / "desktop.json")
-    try:
-        payload = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeError, TypeError):
-        return ""
-    if not isinstance(payload, dict):
-        return ""
-    return str(payload.get("cloudBaseUrl") or "").strip().rstrip("/")
 
 
 class Settings(BaseSettings):
@@ -82,7 +63,7 @@ class Settings(BaseSettings):
     # 引力模型平台。地址固定为已发布的 key2api；令牌只放在服务器环境变量。
     key2api_base_url: str = "http://103.236.80.228:3000"
     key2api_sync_token: str = ""
-    # 桌面端登录引力云端的地址。打包时写入 config/desktop.json，环境变量可覆盖。
+    # 桌面端登录引力云端的默认地址。登录表单可以改。
     cloud_base_url: str = ""
     sandbox_docker_host: str = ""
     sandbox_tls_ca: str = ""
@@ -111,12 +92,6 @@ class Settings(BaseSettings):
         # 不是本 Settings 字段；忽略以免复制即启动失败。
         "extra": "ignore",
     }
-
-    @model_validator(mode="after")
-    def fill_packaged_cloud_base_url(self) -> "Settings":
-        if not self.cloud_base_url.strip():
-            self.cloud_base_url = read_desktop_cloud_base_url()
-        return self
 
 
 class HostedConfigError(RuntimeError):

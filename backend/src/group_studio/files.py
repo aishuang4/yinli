@@ -1,7 +1,4 @@
-"""工作室共享文件库：上传写入 owner Session 的 `group-studio/{id}/inputs/`。
-
-不在外部工作目录建立 `.agent-workstation/group-studios`。
-"""
+"""工作室共享文件库：把上传写入 `group-studios/{id}/inputs/`。"""
 
 from __future__ import annotations
 
@@ -10,26 +7,21 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from src.config.runtime_paths import SessionPathError, session_group_studio_root, session_root
 from src.group_studio.errors import INVALID_UPLOAD, GroupStudioError
-from src.sessions.files import sanitize_upload_filename
+from src.project_files import sanitize_upload_filename
 
 MAX_STUDIO_UPLOAD_BYTES = 50 * 1024 * 1024
 
 
-def studio_workspace(session_id: str, group_id: str) -> Path:
-    """工作室根目录：`<session-root>/group-studio/<group>`。"""
+def studio_workspace(project_root: Path, group_id: str) -> Path:
+    """工作室在 Project 下的根目录。"""
 
-    try:
-        return session_group_studio_root(session_id, group_id)
-    except SessionPathError as exc:
-        raise GroupStudioError(422, INVALID_UPLOAD) from exc
+    return project_root / ".agent-workstation" / "group-studios" / group_id
 
 
-def ensure_studio_dirs(session_id: str, group_id: str) -> Path:
+def ensure_studio_dirs(project_root: Path, group_id: str) -> Path:
     """确保 inputs / workspace / outputs 存在。"""
-
-    root = studio_workspace(session_id, group_id)
+    root = studio_workspace(project_root, group_id)
     for name in ("inputs", "workspace", "outputs"):
         (root / name).mkdir(parents=True, exist_ok=True)
     return root
@@ -37,7 +29,6 @@ def ensure_studio_dirs(session_id: str, group_id: str) -> Path:
 
 def _reject_illegal_filename(filename: str | None) -> str:
     """拒绝路径穿越和被消毒改写的文件名。"""
-
     raw = str(filename or "").strip()
     if not raw or "/" in raw or "\\" in raw or ".." in raw:
         raise GroupStudioError(422, INVALID_UPLOAD)
@@ -49,15 +40,15 @@ def _reject_illegal_filename(filename: str | None) -> str:
 
 async def save_studio_upload(
     *,
-    session_id: str,
+    project_root: Path,
     group_id: str,
     upload: UploadFile,
 ) -> dict[str, object]:
-    """把 multipart 文件写入工作室 inputs，路径相对 Session root。"""
+    """把 multipart 文件写入工作室 inputs，超限或路径非法返回 422。"""
 
     original_name = _reject_illegal_filename(upload.filename)
-    root = session_root(session_id).resolve()
-    inputs = (ensure_studio_dirs(session_id, group_id) / "inputs").resolve()
+    root = project_root.expanduser().resolve()
+    inputs = (ensure_studio_dirs(root, group_id) / "inputs").resolve()
     if not inputs.is_relative_to(root):
         raise GroupStudioError(422, INVALID_UPLOAD)
     stored_name = f"{uuid.uuid4().hex[:12]}__{original_name}"
@@ -85,7 +76,7 @@ async def save_studio_upload(
 
     return {
         "title": original_name,
-        "path": destination.relative_to(root).as_posix(),
+        "path": str(destination.relative_to(root)),
         "byteSize": size,
         "mediaType": str(upload.content_type or "application/octet-stream"),
     }

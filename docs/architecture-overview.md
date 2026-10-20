@@ -12,9 +12,9 @@
 
 ## 托管账号与桌面登录
 
-`AGENT_WORKSTATION_SERVE_MODE` 默认 `desktop`。桌面本机 API 仍只接受回环访问，不登录即可使用本机 `models.json`、会话和文件。未连接云端且默认模型没有 Key 时，前端弹出本机 Key 引导。桌面顶栏可以登录引力云端：地址在打包配置 `config/desktop.json`，登录页不填写。令牌进本机密钥存储，`hosted-account.json` 只留地址和邮箱。平台模型经 `/api/platform/v1` 进入完整 Agent 运行时，平台 Key 不下发。
+`AGENT_WORKSTATION_SERVE_MODE` 默认 `desktop`。桌面本机 API 仍只接受回环访问，不登录即可使用本机 `models.json`、会话和文件。未连接云端且默认模型没有 Key 时，前端弹出本机 Key 引导。桌面顶栏可以登录引力云端：令牌进本机密钥存储，`hosted-account.json` 只留地址和邮箱。平台模型经 `/api/platform/v1` 进入完整 Agent 运行时，平台 Key 不下发。
 
-`hosted` 用邮箱注册并验证后登录。Web 会话是 HttpOnly Cookie；Secure 只在 HTTPS 或 `X-Forwarded-Proto: https` 时设置。回环来源不能代替会话。每个用户一份 tenant root `USER_DATA_ROOT/tenants/<usr_…>/`。Session 文件在 session root，外部工作目录只作为 working directory，Run 使用 Run workspace。账号、会话和平台审计在 `control/control.db`。隔离靠目录分开，不再使用 `owner_user_id`。登录不再创建默认 Workspace / Project。自定义模型写在该租户的 `models.json`，Key 用部署主密钥加密。命令只在容器沙箱执行，本机 MCP 不可用。
+`hosted` 用邮箱注册并验证后登录。Web 会话是 HttpOnly Cookie；Secure 只在 HTTPS 或 `X-Forwarded-Proto: https` 时设置。回环来源不能代替会话。每个用户一份数据根 `USER_DATA_ROOT/tenants/<usr_…>/`，账号、会话和平台审计在 `control/control.db`。隔离靠目录分开，不再使用 `owner_user_id`。验证或登录时创建该租户的默认 Workspace / Project，目录由服务端分配。自定义模型写在该租户的 `models.json`，Key 用部署主密钥加密。命令只在容器沙箱执行，本机 MCP 不可用。
 
 托管必须配置 `AGENT_WORKSTATION_KEY2API_SYNC_TOKEN`、`AGENT_WORKSTATION_SECRET_KEY` 和 `AGENT_WORKSTATION_SANDBOX_DOCKER_HOST`，缺少任一项都会拒绝启动。验证通过后按引力用户 ID 同步一把名为 `yinli` 的 `k2a_`，明文只写在控制面 `auth_provider_keys`。Chat 选择器列出 `platform:` 模型，服务端用这把 Key 打到 key2api。用户中心在 `GET /api/auth/usage` 返回 `available: true` 时显示总额度、已用和剩余。同一邮箱若已绑定另一个 `external_id`，同步得到 409，不返回旧 Key。停用账号时同步停用 Key。管理员可以删除其他用户（不能删除自己或最后一名管理员）：先停用 Key，再删该租户目录。这不删除 key2api 上的用户。Web 与桌面不互相同步会话或文件。已登录不弹本机 Key 引导。
 
@@ -124,12 +124,12 @@ middleware 数据，最后才用 `skill_runs` 兜底恢复已读 Skill。会话�
 
 ## AgentScope 原生 Skills
 
-- 应用层文件 catalog 统一负责包发现、冲突解析、策略和 Workspace / Project 授权；SQLite Skill 登记仅用于一次性迁移与历史保留。AgentScope 消费应用侧 loader 提供的唯一 loadName 和元数据，内置 `Skill` viewer 按需读取已解析的同一包。
-- Toolkit 通过 `skills_or_loaders` 接收携带不可变文件快照的应用 loader；system prompt 只包含 `name`、`description` 和 `dir`，模型实际调用 `Skill` 后才读取完整指令。用户在 Chat Composer 勾选的 Skill 走 `forced_skill_ids`，本轮预启用 SKILL.md 并要求模型按说明书执行。
+- 应用层继续负责安装、SQLite、Workspace / Project binding、Agent 配置、权限和 UI；AgentScope 负责运行时 catalog、渐进式披露和内置 `Skill` viewer。
+- Toolkit 通过 `skills_or_loaders` 接收已裁剪的绝对 Skill 包目录；system prompt 只包含 `name`、`description` 和 `dir`，模型实际调用 `Skill` 后才读取完整指令。用户在 Chat Composer 勾选的 Skill 走 `forced_skill_ids`，本轮预启用 SKILL.md 并要求模型按说明书执行。
 - Skill 正文使用 `scripts/foo.py`、`references/bar.md` 等标准相对路径。模型根据 catalog 中的 `dir` 转成绝对路径后调用普通 Read、Grep、Glob 或 Bash；不使用 `$SKILL_DIR`，也不新增每脚本工具。
 - Skill script 复用单一 `GuardedBash`；本地 execute 权限与 network 权限独立。Shell 黑名单仅是拦截明显误操作的提示级防护，不能抵抗命令混淆；真正的执行隔离依赖 DockerWorkspace 与权限审批。Skill 不突破 Agent 的 ToolScope、filesystem 或审批边界。
-- 持久 DockerWorkspace 会把允许的 Skill 包 按稳定 ID 投影到容器 `/workspace/skills/<skill-id>`，catalog 披露容器路径；非持久 Docker sandbox 暂不支持 Skills，启动时返回明确错误。
-- 单 Agent 和 Team Member 使用相同文件解析器，但 Member 只获得显式授予的子集；Team 协调、综合和恢复轮不开放业务 Skill。Subagent frontmatter `skills` 转换为裁剪后的 loader 路径，不再全文拼接。
+- 持久 DockerWorkspace 会把允许的 Skill 包 seed 到容器 `/workspace/skills`，catalog 披露容器路径；非持久 Docker sandbox 暂不支持 Skills，启动时返回明确错误。
+- 单 Agent 和 Team Member 使用相同 Skill catalog；Team 协调、综合和恢复轮不开放业务 Skill。Subagent frontmatter `skills` 转换为裁剪后的 loader 路径，不再全文拼接。
 - `SKILL_STARTED`、`SKILL_CONTEXT`、`SKILL_FAILED` 和 `SKILL_COMPLETED` 以真实 `Skill` viewer 工具调用为事实源。catalog 可见不创建 active `SkillRun`。
 - zip 安装拒绝缺少 `name` / `description` 的 `SKILL.md`、路径穿越和符号链接；命名、目录名和未知 script 类型以 warning 展示。
 
@@ -239,12 +239,12 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 - **普通技能**：成功收尾后仍走 Skill 自进化，不绑定智能体。手动触发只产生普通技能。
 - **旧数据**：`user_memory.md` / `agent_memory.md` / `global_memory.md` 和 `memory_nodes` 不再注入、不再从 Chat 收尾写入。Memory 页旧节点只读。Memory Wiki 已从页面和 API 移除。
 - **Subagent 其他上下文**：`subagents/runtime_context.py` 把 frontmatter `skills` 指定的已安装启用 Skill 转换为 AgentScope loader 路径，不注入完整 Skill 正文。`subagents/permission_policy.py` 执行 frontmatter `permissionMode` 并按父 Agent guardrails 上限收窄；`subagents/tool_policy.py` 基于父运行时真实工具池执行 `tools` / `disallowedTools` 裁剪，并同步限制传给子 Agent 的 MCP server 与知识库工具；审计通过 `SUBAGENT_CONTEXT` Runtime Event 记录 loadedSkills、missingSkillRefs、memoryAgentId、memoryInjected 和 permission requested / effective 摘要。
-- **Skill 自进化现状**：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、router gate、workflow evidence、颗粒度 gate、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和用户显式请求生成 Skill 的手动触发流；自动生成 / 手动注册 Skill 会原子写入 `<USER_DATA_ROOT>/skills/{skill_name}/SKILL.md` 并支持按 Skill 名称导出 zip。Memory 页面已能查看和操作候选队列；注册后不自动绑定 Agent。
+- **Skill 自进化现状**：已有 `SkillEvolutionAgent`、`skill_draft_propose` 草稿工具、router gate、workflow evidence、颗粒度 gate、变量流抽象、候选持久化、标准 Skill 注册、相似 Skill 合并和用户显式请求生成 Skill 的手动触发流；自动生成 / 手动注册 Skill 会写入运行时 `skills/{skill_name}/SKILL.md` 并支持按 Skill 名称导出 zip。Memory 页面已能查看和操作候选队列；注册后不自动绑定 Agent。
 - **向量存储**：全局 `VectorStoreBackend` 抽象已支持 `disabled` / `zvec`，`VECTOR_STORE_PROVIDER` 仅首次初始化生效，之后按持久化 `VectorStorePolicy` 启动。
 
 ## 文件 Catalog
 
-持久 Agent 定义的权威是 Workspace 目录 `<USER_DATA_ROOT>/workspaces/<id>/.agents/profiles/<id>.md`，不是 `agents` 表。系统 Agent 仍由代码提供，用户覆盖写在 `workspaces/_system/.agents/profiles/`。Skill 存在性、元数据及正文只来自 `<USER_DATA_ROOT>/skills/<name>/SKILL.md`；SQLite `skills` 和旧 overrides 不再实时读写，旧数据只供迁移/回滚；项目、Workspace 和 HOME 下的兼容 Skill 目录不参与加载。系统包 `yinli-catalog` / `yinli-charts` / `word-documents` seed 到同一 skills 目录。Skill 资源变更不反向扫描 Job，Job 在 confirm、resume 和 firing 前校验冻结清单。MCP / HTTP 工具定义是 Workspace/Project 下的 YAML，密钥只走 `secret_ref` / secret_store，禁止写进 YAML。Job 定义是 `.agents/jobs/<id>.md`；`scheduled_jobs` 的权威实例字段是 status / next_run_at / 连续失败 / 能力合同等，定义列只是派生缓存，读路径以文件覆盖。交互式 Chat 仍注入 `ScheduleJob` 工具组登记任务（写库并落 `.agents/jobs/<id>.md`）；Team 与 firing 不注入。禁止再发明第二套系统 CRUD。Chat 会生成项目 `.agents/INDEX.md`。规格见 `docs/file-catalog-v1.md`。
+持久 Agent 定义的权威是 Workspace 目录 `<USER_DATA_ROOT>/workspaces/<id>/.agents/profiles/<id>.md`，不是 `agents` 表。系统 Agent 仍由代码提供，用户覆盖写在 `workspaces/_system/.agents/profiles/`。Skill 正文只来自包内 `SKILL.md`（sqlite `content` 不再保存正文）；项目 `.agents/skills` 默认可运行。系统包 `yinli-catalog` / `yinli-charts` / `word-documents` seed 到运行时 skills 目录。MCP / HTTP 工具定义是 Workspace/Project 下的 YAML，密钥只走 `secret_ref` / secret_store，禁止写进 YAML。Job 定义是 `.agents/jobs/<id>.md`；`scheduled_jobs` 的权威实例字段是 status / next_run_at / 连续失败 / 能力合同等，定义列只是派生缓存，读路径以文件覆盖。交互式 Chat 仍注入 `ScheduleJob` 工具组登记任务（写库并落 `.agents/jobs/<id>.md`）；Team 与 firing 不注入。禁止再发明第二套系统 CRUD。Chat 会生成项目 `.agents/INDEX.md`。规格见 `docs/file-catalog-v1.md`。
 
 ## 存储
 
@@ -252,7 +252,7 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 
 - `agents`
 - `mcp_servers`
-- `skills`（旧登记历史，只在迁移时读取，非运行时目录）
+- `skills`
 - `http_tools`
 - `chat_sessions`
 - `chat_messages`
@@ -284,7 +284,7 @@ Windows NSIS 卸载默认保留用户数据。确认框选「是」才删除固�
 - Chat/Sandbox 使用模型配置 ID；会话记住选择。供应商与模型目录在工作台「模型」页维护，不在 Settings。Agent 仅保存 ReAct 上限。新 Run 固定完整供应商连接、模型参数和降级链；Team、Subagent、审批恢复和后处理继承该快照。定时任务按自己的 `modelConfigId` 或每次触发时的全局默认，工作室创建时固定模型配置 ID。关闭 `views.models` 只藏入口；`/api/settings/models` 仍给 Chat 选择器使用。
 - Agent 运行时由 `agents/factory.py` 统一创建和缓存。
 - 工具范围由 `RuntimeToolScope` 与 `tool_scope_resolver.py` 控制。
-- 执行审批在 Chat / Sandbox 发送区选择，并冻结到当次 Run：`manual`、`model_review`、`full_access`。新会话和没有明确选择的历史会话默认 `manual`。Agent 只保存能力边界 `operationScope`，不保存审批模式或审核模型。平台在 `agents/factory.py` 安装授权适配器；只读由平台证明后自动执行，其他动作按本轮模式决策。批准只覆盖一次精确行动。智能审核模型在「模型」页配置，配好后即可在发送区选择。定时任务把创建时的模式写入 `executionPolicy.approvalMode`；需要人工时结束本次 firing 并通知，不写 Chat pending。群聊回复仍走自己的审批兜底。说明见 `docs/permission-system-v2.md`。
+- 权限策略由 guardrails 归一化为统一权限模型，再映射到 AgentScope permission mode、工具注入和 Trace。
 - `WebFetch` 是独立的只读网页工具：只接收已知 HTTP(S) URL，逐次校验重定向目标。允许公网、本机 loopback 和 RFC1918/ULA 内网页面；拒绝链路本地 / 云元数据、保留地址、本机 API 端口、URL 凭据、超大响应和非文本内容，并把网页正文标记为不可信外部数据。它不复用 `HttpRequest` 的通用 API 语义，也不提供 WebSearch。
 
 ## 定时任务 Job Agent
@@ -297,11 +297,9 @@ Windows NSIS 卸载默认保留用户数据。确认框选「是」才删除固�
 
 系统启动时会为新旧数据库幂等补齐稳定 ID `system-websearch-job`（名称 `WebSearch`）作为默认 Job Agent。其主模型为 `deepseek-v4-flash`，必注入 `WebFetch` 与 `HttpRequest`，固定开启网络并使用 trusted tools 无人值守权限。该 Agent 跨 Workspace 可见且不依赖普通 Agent Project binding，不可删除或切换成 Chat 角色；它绑定的外部 Skill、MCP、HTTP Tool 仍必须满足当前 Project resource binding。名称不代表真正的开放式搜索能力；`WebFetch` 读取已知 HTTP(S) URL（含本机与内网），不是开放式搜索。
 
-Job 的 required Skill 在确认时冻结包内 `SKILL.md` 的完整 SHA-256 和来源；到期 firing 在 Agent 创建前重新校验安装、启用、Project binding 和 hash。校验通过的正文进入 `<activated-skill>` Context，不进入全局 system prompt；`references/` / `scripts/` 仍按现有 Read/Bash 权限按需访问。`context_policy` 当前固定为 `fresh`，每次 firing 使用独立 session。版本漂移、资源解绑和预算超限 fail-closed，并写入 `scheduled_job_runs.output_manifest.skillContext` 与通知，不因 `availableToAllAgents` 自动给 Job 添加 Skill。
-
 ## 消息通知
 
-通知是独立于 Chat Runtime 的通道抽象：调度器在 firing 终态构造 `NotificationMessage`，由 `src/notifications/dispatcher.py` 分发给已启用通道。点击打开 owner Session，不按 Workspace / Project 过滤。
+通知是独立于 Chat Runtime 的通道抽象：调度器在 firing 终态构造 `NotificationMessage`，由 `src/notifications/dispatcher.py` 分发给已启用通道。
 
 - 应用内通道写入 `user_notifications`，并通过 `/api/notifications/stream` 推送到 Chat 顶栏铃铛；不进入 Chat SSE。任务完成时 Web 弹出右上角提醒框，Electron 走系统通知。
 - 通道目录与开关存在 `json_store` / `system_settings` / `notifications`。应用内通道始终开启。

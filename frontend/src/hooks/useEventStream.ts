@@ -8,6 +8,7 @@ import {
   checkRuntimeGapTimeout,
   createRuntimeStreamState,
 } from '../features/runtime-stream/streamAdapter';
+import { useAppStore } from '../stores/appStore';
 import type {
   SendMessageOptions,
   SSEEvent,
@@ -42,6 +43,7 @@ function initialState(): StreamState {
 }
 
 export function useEventStream(): UseEventStreamReturn {
+  const activeProjectId = useAppStore((storeState) => storeState.activeProjectId);
   const [state, setReactState] = useState<StreamState>(() => initialState());
   const stateRef = useRef(state);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -116,8 +118,9 @@ export function useEventStream(): UseEventStreamReturn {
     }));
     if (runId) {
       try {
+        const params = new URLSearchParams({ projectId: activeProjectId });
         const response = await fetch(
-          `/api/chat/runs/${encodeURIComponent(runId)}/cancel`,
+          `/api/chat/runs/${encodeURIComponent(runId)}/cancel?${params.toString()}`,
           { method: 'POST' },
         );
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -135,15 +138,16 @@ export function useEventStream(): UseEventStreamReturn {
       cancelled: true,
       runCompletedAt: current.runCompletedAt || new Date().toISOString(),
     }));
-  }, [setState]);
+  }, [activeProjectId, setState]);
 
   const steer = useCallback(async (message: string, options?: { agentId?: string; agentName?: string }) => {
     const runId = stateRef.current.currentRunId;
     if (!runId || !stateRef.current.isStreaming) {
       throw new Error('当前没有进行中的对话');
     }
+    const params = new URLSearchParams({ projectId: activeProjectId });
     const response = await fetch(
-      `/api/chat/runs/${encodeURIComponent(runId)}/steer`,
+      `/api/chat/runs/${encodeURIComponent(runId)}/steer?${params.toString()}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -155,7 +159,7 @@ export function useEventStream(): UseEventStreamReturn {
       },
     );
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-  }, []);
+  }, [activeProjectId]);
 
   const subscribeRun = useCallback(async (runId: string) => {
     if (!runId) return;
@@ -175,14 +179,9 @@ export function useEventStream(): UseEventStreamReturn {
     }));
 
     try {
-      const metadataResponse = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}`, { signal: controller.signal });
-      if (metadataResponse.ok) {
-        const metadata = await metadataResponse.json();
-        setState(value => ({ ...value, currentRunApprovalMode: metadata.approvalMode || 'manual' }));
-      }
       let forceSnapshot = false;
       while (true) {
-        const params = new URLSearchParams();
+        const params = new URLSearchParams({ projectId: activeProjectId });
         if (!forceSnapshot) params.set('afterSeq', String(afterSeq));
         const response = await fetch(`/api/chat/runs/${encodeURIComponent(runId)}/stream?${params.toString()}`, {
           signal: controller.signal,
@@ -213,7 +212,7 @@ export function useEventStream(): UseEventStreamReturn {
         activeSubscriptionRunIdRef.current = '';
       }
     }
-  }, [readEventStream, setState]);
+  }, [activeProjectId, readEventStream, setState]);
 
   const sendMessage = useCallback(async (message: string, options?: SendMessageOptions) => {
     abortControllerRef.current?.abort();
@@ -228,13 +227,13 @@ export function useEventStream(): UseEventStreamReturn {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message,
+          project_id: options?.projectId,
           display_message: options?.displayMessage,
           agent_id: options?.agentId,
           agent_name: options?.agentName,
           mode: options?.mode || 'agent',
           system_prompt: options?.systemPrompt,
           modelConfigId: options?.modelConfigId,
-          approvalMode: options?.approvalMode,
           session_id: options?.sessionId,
           skill_ids: options?.skillIds,
           forced_skill_ids: options?.forcedSkillIds,

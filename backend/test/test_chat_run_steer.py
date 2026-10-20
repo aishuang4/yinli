@@ -13,9 +13,6 @@ from src.server.routes.chat import background_runs as background_runs_module
 
 
 def test_steer_queues_and_drains(monkeypatch) -> None:
-    from src.sessions.records import create_session
-
-    create_session(session_id="s1")
     run = ChatBackgroundRun(id="run-1", session_id="s1", status="running")
     monkeypatch.setattr(background_runs_module, "_runs", {"run-1": run})
     monkeypatch.setattr(

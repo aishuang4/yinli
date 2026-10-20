@@ -2,27 +2,7 @@
 
 > 状态：2026-10-09。到期执行、通知和 Job Agent 的在线事实见 `docs/architecture-overview.md`。本文只保留能力合同的决定和禁止项。实施日记和 PR 计划已从本文删除。
 
-定时任务是到点激活一个已有 Job Agent，不是让模型记住闹钟。Job 定义和 firing 文件在 owner Session 的 session root；Run workspace 是该次 firing 目录。`runtime.kind` 仍是 `react`，`executor.kind` 仍是 `single_agent`。禁止把 `ChatSession.kind=scheduled_job` 写进 IntentRoute，禁止顶层 `JOB_EVENT`。
-
-## Required Skill Context
-
-Runtime 明确区分 `interactive_on_demand` 与 `scheduled_preloaded`，模式进入 Agent 缓存键。普通 Chat 的 catalog 给出稳定 `<id>`、精确加载名称、显示名称、描述与目录，继续按需使用 `Skill` viewer；scheduled firing 使用独立 Toolkit 和说明模板，不注册内置 viewer，模型可见 schema 中不得出现 `Skill` 或 `SkillViewer`。Skill 包仍挂载，但目录和引用文件只通过本 Run 已有的受限工具访问。
-
-`ScheduleJob.skill_ids` 从 catalog 的 `<id>` 选择稳定 ID；兼容期唯一名称可由服务端解析，歧义、未知引用和文件路径均拒绝。模型工具 schema 不再提供 `required_skills`。旧 API/文件仍可读取冻结 manifest，但创建或更新时提交的 manifest 不具权威性，不能覆盖服务端快照，旧客户端原样回传也不触发重新确认。`ConfirmJob` 回显实际冻结的 `skillId`、`contentSha256`、`frozenAt`、`ownerSessionId` 与 `ownerGrantVersion`，并明确 `skillPreload=first_model_call`，即每次 firing 首次模型调用前自动预加载。
-
-首轮顺序固定为 preflight/hash 校验 → scheduled Toolkit 断言 → fresh Run snapshot/Context 检查 → `activate_forced_skills` → required `<activated-skill>` 的 ID/hash/正文完整性断言 → Job prompt → 首次模型调用。任一步失败均不得调用模型；预加载后到模型入口前文件再次变化也必须失败。旧缓存或模型异常发出的 viewer 调用在原生工具可用性检查处拒绝，直接绕过检查执行工具同样拒绝并审计，不允许第二次正文加载。
-
-运行时 Skill Context 审计同时进入 trace 和 firing 的 `output_manifest.skillContext.runtime`，记录 required ID/hash、注入顺序、正文 token 估算、预算、Toolkit schema 摘要、Run snapshot 恢复检查、压缩后的补回记录与被拒 viewer 调用，不重复保存正文。首轮审计应与实际发给模型的 Context 一致。
-
-Job 的 `skill_ids` 只表示用户明确选择的能力；确认时系统会把它与能力合同中的 `skill_ids` 按 Job 顺序合并，并冻结包内 `SKILL.md` 的来源、完整 SHA-256 和正文大小。`availableToAllAgents` 不会给 Job 自动追加 Skill。
-
-显式选择 `<USER_DATA_ROOT>/skills` 中已启用且通过当前 Project binding 的 Skill 时，确认与 firing 都从该统一目录解析。包的稳定 ID 由 owner、逻辑来源根和相对包路径生成，编辑正文仅改变原始字节 SHA-256。确认保存稳定 ID、精确 loadName、rootKey、ownerKey 和来源路径；版本变化报告为 `skill_version_changed`。项目 `.agents/skills` 不参与 Job Skill 解析。
-
-每次 firing 在 Agent 创建和模型调用前重新检查 Skill 是否仍安装、启用、可读、属于当前 Project，并比较 `SKILL.md` hash。版本变化、删除、停用、解绑或 Context 预算超限都会 fail-closed，写入 firing error/notification，要求编辑并重新确认；普通恢复只校验已有冻结 hash，不能顺手更新版本。Skill 的删除、卸载和停用不反向扫描 Job catalog，也不在资源操作中同步暂停 Job。显式 Skill 无法读取/有歧义时确认失败，禁止 active 且 required manifest 为空。旧 Job 只有唯一来源证明时才映射 ID，历史 hash 不变，缺少 manifest 时要求重新确认；禁止静默跳过 Skill。
-
-通过校验的 required Skill 正文以 `<activated-skill>` HintBlock 进入本次 AgentScope 会话，稳定规则可以出现在 system prompt，但正文不能拼入 system prompt。`references/` 和 `scripts/` 继续按需 Read/Bash，不能因为正文预加载扩大 Job 的 Bash、HTTP、MCP、知识库、filesystem、审批或 unattended denylist 权限。
-
-Job `context_policy` 当前只有 `fresh`：每次 firing 使用独立 session，不继承上一 firing 的完整消息和工具历史。firing 的 `output_manifest.skillContext` 记录 Skill ID、hash、policy、预算、校验阶段和错误码，不记录 Skill 正文。
+定时任务是到点激活一个已有 Job Agent，不是让模型记住闹钟。`runtime.kind` 仍是 `react`，`executor.kind` 仍是 `single_agent`。禁止把 `ChatSession.kind=scheduled_job` 写进 IntentRoute，禁止顶层 `JOB_EVENT`。
 
 ## 决定
 

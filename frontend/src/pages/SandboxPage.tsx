@@ -6,18 +6,15 @@ import { SandboxControlPanel, type SandboxCase } from '../features/sandbox/Sandb
 import { useAgents } from '../hooks/useAgents';
 import { useEventStream } from '../hooks/useEventStream';
 import { RuntimeBlockTree } from '../features/runtime-stream/RuntimeBlockTree';
-import { createSession } from '../features/sessions/api';
+import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
 import { useModelCatalog } from '../features/models/useModelCatalog';
 import { ModelSelector } from '../features/models/ModelSelector';
-import { ApprovalModeSelector } from '../features/chat/ApprovalModeSelector';
-import type { ApprovalMode } from '../features/chat/approvalMode';
 
 export function SandboxPage() {
   const { catalog, loading: modelsLoading, error: modelsError } = useModelCatalog();
   const [modelChoice, setModelChoice] = useState('');
-  const [approvalMode, setApprovalMode] = useState<ApprovalMode>('manual');
   const modelConfigId = modelChoice || catalog?.defaultModelId || '';
   const currentView = useAppStore((state) => state.currentView);
   const { agents, loading: agentsLoading, refresh: refreshAgents } = useAgents();
@@ -115,23 +112,12 @@ export function SandboxPage() {
   const runSandbox = async () => {
     if (!message.trim() || !runtimeAgent || state.isStreaming) return;
     reset();
-    let sessionId: string;
-    try {
-      sessionId = (await createSession({
-        agentId: runtimeAgent.id,
-        title: message.trim().slice(0, 40),
-      })).id;
-    } catch (err) {
-      notifyError(getErrorMessage(err, '建立对话失败。'));
-      return;
-    }
     await sendMessage(message.trim(), {
-      sessionId,
+      sessionId: createId('sandbox'),
       agentId: runtimeAgent.id,
       agentName: runtimeAgent.name,
       mode,
       modelConfigId,
-      approvalMode,
       skillIds: runtimeAgent.skills,
       sandbox: true,
       images: [],
@@ -143,7 +129,6 @@ export function SandboxPage() {
   return (
     <div className="grid h-full min-h-0 grid-cols-[360px_1fr] gap-4 overflow-hidden p-4">
       <SandboxControlPanel
-        approvalSelector={<ApprovalModeSelector value={approvalMode} onChange={setApprovalMode} />}
         modelSelector={<ModelSelector catalog={catalog} value={modelConfigId} onChange={setModelChoice}
           disabled={state.isStreaming} loading={modelsLoading} error={modelsError} />}
         loading={loading}

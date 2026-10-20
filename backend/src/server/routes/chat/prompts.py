@@ -86,24 +86,6 @@ def _build_skill_context_prompt() -> str:
     ])
 
 
-def _build_scheduled_skill_context_prompt() -> str:
-    """定时 Job 的稳定 Skill 规则；required Skill 正文仍只在会话 Context 中出现。
-
-    scheduled firing 是 preloaded-only：本段不得出现任何“调用 Skill 工具”一类的普通 Chat 指令。
-    """
-
-    return "\n".join([
-        "## Scheduled Skill Context",
-        (
-            "This firing is preloaded-only: every required Skill was frozen when the Job was confirmed, "
-            "and its full instructions are already attached in the conversation inside <activated-skill> blocks before your first step."
-        ),
-        "No Skill viewer is available in this runtime; follow the attached instructions directly.",
-        "The block may include a frozen SHA-256 version marker; it is audit metadata and does not grant extra permissions.",
-        "Read references/ files and run scripts only when required, using the tools and scopes already provided to this Job.",
-    ])
-
-
 def _build_clarification_system_prompt() -> str:
     """Instructions for asking the user for missing information."""
 

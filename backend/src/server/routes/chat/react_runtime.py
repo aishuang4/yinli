@@ -6,10 +6,6 @@
 3. 消费 AgentScope 流式事件并完成成功/失败收尾。
 
 第一层 architecture 路由和第二层 executor 选择均在进入本模块前完成。
-
-scheduled firing 使用 `scheduled_preloaded` Skill 加载模式：首轮顺序固定为 preflight → scheduled
-Toolkit → Run snapshot → forced Skill activation → Context 完整性断言 → Job prompt → 首次
-模型调用，任一步失败都不启动模型（见 `scheduled_skill_preload`）。
 """
 
 import logging
@@ -17,10 +13,7 @@ from typing import AsyncGenerator
 
 from agentscope.message import UserMsg
 
-from src.server.routes.chat.projection.source_events import SourceEvent
-
 from src.agents.factory import mark_agent_busy, mark_agent_idle
-from src.agents.runtime_types import SKILL_LOADING_SCHEDULED, normalize_skill_loading_mode
 from src.agents.session_context import seed_context_from_history
 from src.server.routes.chat.background_runs import current_chat_background_run_id
 from src.server.routes.chat.completion import (
@@ -37,7 +30,7 @@ from src.server.routes.chat.skill_context_middleware import (
     restore_activated_skills,
 )
 from src.server.routes.chat.steer_middleware import RunSteerMiddleware
-from src.storage.database import list_recent_skill_run_refs
+from src.storage.database import list_recent_skill_run_names
 from src.server.routes.chat.plan_mode.tools import build_plan_mode_tools
 from src.server.routes.chat.runtime import _build_user_content, _guardrail_cache_key
 from src.server.routes.chat.run_context import ChatRunContext
@@ -45,18 +38,11 @@ from src.server.routes.chat.scheduled_runtime import (
     SCHEDULED_JOB_UNATTENDED_DENYLIST,
     scheduled_job_unattended_feature_key,
 )
-from src.server.routes.chat.scheduled_skill_preload import (
-    ScheduledSkillPreloadError,
-    mark_scheduled_job_prompt,
-    prepare_scheduled_first_turn,
-    publish_scheduled_skill_audit,
-)
 from src.server.routes.chat.team_runtime import execute_team_runtime
 from src.server.routes.chat.runtime_builder import (
     build_main_agent_runtime_spec,
     create_main_agent_from_spec,
 )
-from src.sessions.run_binding import frozen_resources_for_run
 from src.server.routes.chat.runtime_governance import (
     build_context_governance_middlewares,
     persist_agent_session_state,
@@ -76,23 +62,6 @@ from src.tools.delegate_task import build_subagent_tools
 
 
 logger = logging.getLogger(__name__)
-
-
-def _skill_loading_mode(ctx: ChatRunContext) -> str:
-    """scheduled firing 一律 preloaded-only；其余入口沿用 ctx 声明（默认交互式按需加载）。"""
-
-    if getattr(ctx, "trigger_source", "user") == "scheduled_job":
-        return SKILL_LOADING_SCHEDULED
-    return normalize_skill_loading_mode(getattr(ctx, "skill_loading_mode", None))
-
-
-async def _build_interactive_authorization(ctx, plan_mode_manager):
-    """交互式单 Agent 的真实 Run 场景安装统一授权；离线契约 fixture 沿显式入口验证。"""
-    if not current_chat_background_run_id():
-        return None
-    from src.server.routes.chat.authorization import build_chat_authorization
-
-    return await build_chat_authorization(ctx, plan_mode_manager=plan_mode_manager)
 
 def _build_plan_mode_runtime_parts(
     ctx: ChatRunContext,
@@ -164,14 +133,13 @@ def _build_runtime_feature_parts(
         feature_keys.append("run-steer:skill-context:context-governance")
         if ctx.persist_run:
             job_tools = build_scheduled_job_tools(
-                workspace_id="",
-                project_id="",
+                workspace_id=ctx.runtime_context.workspace_id,
+                project_id=ctx.runtime_context.project_id,
                 agent_id=ctx.agent_id,
                 session_id=ctx.session_id,
-                approval_mode=run_data.approval_mode or "manual",
             )
             extra_tools.extend(job_tools)
-            prompt_addenda.append(scheduled_job_prompt_addendum())
+            prompt_addenda.append(scheduled_job_prompt_addendum(ctx.runtime_context.workspace_id))
             feature_keys.append(scheduled_job_tools_cache_key(job_tools))
 
     catalog = load_subagent_catalog(workspace_dir=str(ctx.runtime_context.project_root))
@@ -192,7 +160,6 @@ def _build_runtime_feature_parts(
             parent_tool_scope=ctx.runtime_tool_scope,
             persist=ctx.persist_run,
             runtime_context=ctx.runtime_context,
-            plan_mode_manager=plan_mode_manager,
         )
         extra_tools.extend(build_subagent_tools(subagent_manager))
         runtime_event_sources.append(subagent_manager)
@@ -236,7 +203,7 @@ async def execute_react_runtime(
     *,
     ctx: ChatRunContext,
     run_data: ChatMessage,
-) -> AsyncGenerator[SourceEvent | str, None]:
+) -> AsyncGenerator[str, None]:
     """执行 ReAct Runtime 并输出 SSE 事件。"""
 
     active_skill_run = ctx.active_skill_run
@@ -285,8 +252,6 @@ async def execute_react_runtime(
             return
         if runtime_prompt_addendum:
             system_prompt = f"{system_prompt}\n\n{runtime_prompt_addendum}"
-        skill_loading_mode = _skill_loading_mode(ctx)
-        run_snapshot = frozen_resources_for_run(ctx.runtime_context.run_id)
         main_agent_spec = build_main_agent_runtime_spec(
             agent_id=ctx.agent_id,
             session_id=ctx.session_id,
@@ -311,15 +276,6 @@ async def execute_react_runtime(
             workspace_dir=ctx.session_workspace_dir,
             write_scope_dir=str(getattr(ctx, "write_scope_dir", "") or ""),
             extra_filesystem_scopes=list(getattr(ctx, "extra_filesystem_scopes", None) or []),
-            authorization=await _build_interactive_authorization(ctx, plan_mode_manager),
-            run_snapshot=run_snapshot,
-            apply_snapshot_filesystem=getattr(ctx, "trigger_source", "user") != "scheduled_job",
-            context_scope=(
-                f"firing:{ctx.scheduled_firing_id}"
-                if getattr(ctx, "trigger_source", "user") == "scheduled_job"
-                else ""
-            ),
-            skill_loading_mode=skill_loading_mode,
         )
         agent = create_main_agent_from_spec(
             main_agent_spec,
@@ -348,7 +304,6 @@ async def execute_react_runtime(
             assistant_error=assistant_error,
             skill_runs=ctx.skill_runs,
             sandbox=run_data.sandbox,
-            record_chat_message=getattr(ctx, "trigger_source", "user") != "scheduled_job",
         ):
             yield failure_event
         return
@@ -361,55 +316,23 @@ async def execute_react_runtime(
         session_id=ctx.session_id,
         prompt_sections=dict(getattr(ctx, "system_prompt_sections", None) or {}),
     )
-    scheduled_firing_id = str(getattr(ctx, "scheduled_firing_id", "") or "")
-    if skill_loading_mode == SKILL_LOADING_SCHEDULED:
-        # Toolkit 已按 scheduled_preloaded 构造；接着恢复 Run snapshot、注入 required Skill 并做
-        # Context 完整性断言。任一步失败都在构造 Job prompt 之前收口，模型不会被调用。
-        try:
-            await prepare_scheduled_first_turn(agent, ctx, run_snapshot=run_snapshot)
-        except ScheduledSkillPreloadError as exc:
-            publish_scheduled_skill_audit(scheduled_firing_id, agent)
-            assistant_error = f"定时任务 Skill 预加载失败（{exc.code}）：{exc.message}"
-            if plan_mode_manager:
-                plan_mode_manager.fail_run(reason=assistant_error)
-                for runtime_event in plan_mode_manager.drain_runtime_events():
-                    yield runtime_source_event(runtime_event)
-            async for failure_event in emit_failed_startup_run(
-                session_id=ctx.session_id,
-                persist=ctx.persist_run,
-                agent_id=ctx.agent_id,
-                agent_name=ctx.agent_name,
-                model_name=ctx.model_name,
-                assistant_error=assistant_error,
-                skill_runs=ctx.skill_runs,
-                sandbox=run_data.sandbox,
-                record_chat_message=False,
-            ):
-                yield failure_event
-            return
-    else:
-        try:
-            setattr(agent, "_aw_skill_context", dict(getattr(ctx, "skill_context_audit", None) or {}))
-        except Exception:
-            pass
-        seeded = seed_context_from_history(agent, ctx.session_history)
-        isolated = getattr(ctx, "trigger_source", "user") == "scheduled_job"
-        if seeded and ctx.session_id and ctx.persist_run and not isolated:
-            # 先恢复上一轮落库的压缩摘要与 middleware 跨轮数据（已启用 Skill 正文、治理计数），
-            # 再用 skill_runs 记录兜底恢复"模型已读过哪些说明书"；正文由 SkillContextMiddleware
-            # 在本轮 on_reply 时补回 context，避免再读一遍。
-            restore_agent_session_state(agent, ctx.session_id)
-            restore_activated_skills(
-                agent,
-                recent_skill_names=list_recent_skill_run_refs(ctx.session_id, ctx.agent_id),
-                available_skills=ctx.used_skills,
-            )
-        activate_forced_skills(agent, getattr(ctx, "forced_skills", None) or [])
+    seeded = seed_context_from_history(agent, ctx.session_history)
+    if seeded and ctx.session_id and ctx.persist_run:
+        # 先恢复上一轮落库的压缩摘要与 middleware 跨轮数据（已启用 Skill 正文、治理计数），
+        # 再用 skill_runs 记录兜底恢复"模型已读过哪些说明书"；正文由 SkillContextMiddleware
+        # 在本轮 on_reply 时补回 context，避免再读一遍。
+        restore_agent_session_state(agent, ctx.session_id)
+        restore_activated_skills(
+            agent,
+            recent_skill_names=list_recent_skill_run_names(ctx.session_id, ctx.agent_id),
+            available_skills=ctx.used_skills,
+        )
+    activate_forced_skills(agent, getattr(ctx, "forced_skills", None) or [])
     if getattr(ctx, "force_compress", False):
         from src.server.routes.chat.context_middleware import force_compress_context
 
         await force_compress_context(agent)
-        if ctx.session_id and ctx.persist_run and getattr(ctx, "trigger_source", "user") != "scheduled_job":
+        if ctx.session_id and ctx.persist_run:
             persist_agent_session_state(agent, session_id=ctx.session_id, agent_id=ctx.agent_id)
     user_text = ctx.effective_user_message
     note = str(getattr(ctx, "user_message_note", "") or "")
@@ -422,8 +345,6 @@ async def execute_react_runtime(
             run_data.images,
         ),
     )
-    if skill_loading_mode == SKILL_LOADING_SCHEDULED:
-        mark_scheduled_job_prompt(agent)
 
     leader_stream_state = LeaderStreamState(
         active_skill_run=active_skill_run,
@@ -457,13 +378,9 @@ async def execute_react_runtime(
             runtime_context=ctx.runtime_context,
             deep_thinking=run_data.deep_thinking,
             sandbox=run_data.sandbox,
-            record_chat_message=getattr(ctx, "trigger_source", "user") != "scheduled_job",
         ):
             yield event
     finally:
         mark_agent_idle(agent)
-        if skill_loading_mode == SKILL_LOADING_SCHEDULED:
-            # 调度器在 Chat Run 终态后 join 后台任务，再按 firing 取走这份审计写入 firing 记录。
-            publish_scheduled_skill_audit(scheduled_firing_id, agent)
-        if ctx.persist_run and ctx.session_id and getattr(ctx, "trigger_source", "user") != "scheduled_job":
+        if ctx.persist_run and ctx.session_id:
             persist_agent_session_state(agent, session_id=ctx.session_id, agent_id=ctx.agent_id)

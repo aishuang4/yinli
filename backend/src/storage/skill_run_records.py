@@ -79,18 +79,6 @@ class SkillRunRecordStore:
             ).fetchall()
         return [str(row["skill_name"]) for row in rows]
 
-    def list_recent_skill_refs(self, session_id: str, agent_id: str, *, limit: int = 5) -> list[str]:
-        """恢复优先使用真实包 ID；旧行无 ID 时才提供名称给唯一映射。"""
-        self.ensure_db()
-        with self.lock, self.connect() as conn:
-            rows = conn.execute("""
-                SELECT CASE WHEN skill_id != '' THEN skill_id ELSE skill_name END AS ref,
-                       MAX(updated_at) AS last_used FROM skill_runs
-                WHERE session_id = ? AND agent_id = ? GROUP BY ref
-                ORDER BY last_used DESC LIMIT ?
-            """, (session_id, agent_id, int(limit))).fetchall()
-        return [str(row["ref"]) for row in rows if row["ref"]]
-
     def get_by_pending_interaction(self, interaction_id: str) -> dict[str, Any] | None:
         self.ensure_db()
         with self.lock, self.connect() as conn:

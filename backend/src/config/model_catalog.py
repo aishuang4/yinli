@@ -116,24 +116,12 @@ class ModelEntry(ConfigValue):
     capabilities: Capabilities = Field(default_factory=Capabilities)
 
 
-class PermissionReviewConfig(ConfigValue):
-    """独立权限审核用途；只引用目录连接，不另存 Key，也不隐式选默认模型。"""
-
-    model_config_id: str = Field(alias="modelConfigId", min_length=1)
-    timeout_seconds: float = Field(default=8, alias="timeoutSeconds", ge=1, le=60)
-    max_output_tokens: int = Field(default=512, alias="maxOutputTokens", ge=128, le=2048)
-    schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
-    prompt_version: Literal["permission-review-v1"] = Field(default="permission-review-v1", alias="promptVersion")
-
-
 class ModelCatalog(ConfigValue):
     schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
     revision: int = Field(default=1, ge=1)
     default_model_id: str = Field(default="", alias="defaultModelId")
     providers: tuple[ProviderConfig, ...] = ()
     models: tuple[ModelEntry, ...] = ()
-    # 引用被删除时保留配置，供界面提示不可用；解析 Run 时严格拒绝。
-    permission_review: PermissionReviewConfig | None = Field(default=None, alias="permissionReview")
 
     @model_validator(mode="after")
     def validate_references(self):
@@ -543,7 +531,6 @@ def ensure_hosted_upstream_catalog() -> None:
         defaultModelId=default_id,
         providers=tuple(providers),
         models=tuple(models),
-        permissionReview=catalog.permission_review,
     ))
 
 

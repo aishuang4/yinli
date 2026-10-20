@@ -132,11 +132,11 @@ class GroupStudioRecordStore:
                        s.chat_session_id, s.updated_at
                 FROM group_studios s
                 JOIN group_task_cards t ON t.id = s.current_task_card_id
-                WHERE (? = '' OR s.project_id = ?) AND s.status != 'deleted'
+                WHERE s.project_id = ? AND s.status != 'deleted'
                 ORDER BY CASE WHEN s.status IN ('done', 'archived', 'failed') THEN 1 ELSE 0 END,
                          s.updated_at DESC
                 """,
-                (project_id, project_id),
+                (project_id,),
             ).fetchall()
         return [
             {
@@ -1439,10 +1439,6 @@ class GroupStudioRecordStore:
                 None,
                 payload.get("modelConfigId") or "",
             ),
-        )
-        conn.execute(
-            "UPDATE group_studios SET owner_session_id = ? WHERE id = ?",
-            (payload["chatSessionId"], group_id),
         )
         conn.execute(
             """

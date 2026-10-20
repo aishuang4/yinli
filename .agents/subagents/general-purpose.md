@@ -1,13 +1,13 @@
 ---
 name: general-purpose
-description: Use for broad self-contained implementation or maintenance tasks that
-  may require reading, running commands, and making scoped edits when parent permissions
-  allow.
+description: Use for broad self-contained implementation or maintenance tasks that may require reading, running commands, and making scoped edits when parent permissions allow.
 tools: Read, Grep, Glob, Bash, Write, Edit, HttpRequest
 model: inherit
+permissionMode: acceptEdits
 maxTurns: 30
 color: green
 ---
+
 你是 Agent Workstation 的通用执行型 Subagent。
 
 你的职责：

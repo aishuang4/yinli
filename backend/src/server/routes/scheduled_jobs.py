@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 
 from src.catalog.job_files import job_definition_path, job_source_path_index
 from src.scheduler.models import (
-    JobExecutionPolicy,
     JOB_STATUSES,
     ScheduledJob,
     ScheduledJobConflictError,
@@ -36,10 +35,6 @@ class ScheduledJobCreateRequest(BaseModel):
     name: str
     agent_id: str = Field(default="", alias="agentId")
     model_config_id: str = Field(default="", alias="modelConfigId")
-    execution_policy: JobExecutionPolicy = Field(default_factory=JobExecutionPolicy, alias="executionPolicy")
-    # 兼容字段：旧客户端仍可提交，服务端忽略；required_skills 只在确认时由服务端冻结生成。
-    required_skills: list[dict[str, Any]] = Field(default_factory=list, alias="requiredSkills")
-    context_policy: Literal["fresh"] = Field(default="fresh", alias="contextPolicy")
     mode: Literal["agent", "script"] = "agent"
     schedule_kind: Literal["weekly", "daily", "once"] = Field(alias="scheduleKind")
     schedule_expr: dict[str, Any] = Field(alias="scheduleExpr")
@@ -83,9 +78,6 @@ class ScheduledJobUpdateRequest(BaseModel):
     timezone: str | None = None
     frozen_prompt: str | None = Field(default=None, alias="frozenPrompt")
     skill_ids: list[str] | None = Field(default=None, alias="skillIds")
-    # 兼容字段：原样回传或伪造的 manifest 都会被服务端忽略，不覆盖冻结快照、不触发重新确认。
-    required_skills: list[dict[str, Any]] | None = Field(default=None, alias="requiredSkills")
-    context_policy: Literal["fresh"] | None = Field(default=None, alias="contextPolicy")
     tool_scope: dict[str, Any] | None = Field(default=None, alias="toolScope")
     input_spec: dict[str, Any] | None = Field(default=None, alias="inputSpec")
     output_spec: dict[str, Any] | None = Field(default=None, alias="outputSpec")
@@ -184,9 +176,6 @@ def serialize_job(job: ScheduledJob, *, source_path: str | None = None) -> dict[
         "pauseReason": job.pause_reason,
         "agentId": job.agent_id,
         "modelConfigId": job.model_config_id,
-        "executionPolicy": job.execution_policy.model_dump(by_alias=True),
-        "requiredSkills": [item.model_dump(by_alias=True) for item in job.required_skills],
-        "contextPolicy": job.context_policy,
         "mode": job.mode,
         "scheduleKind": job.schedule_kind,
         "scheduleExpr": job.schedule_expr,
@@ -264,10 +253,15 @@ async def list_scheduled_jobs(
     jobs = _service.list_jobs(project_id=project_id, status=status)
     index: dict[str, str] = {}
     try:
+        from src.storage.database import get_project
+
+        project = get_project(project_id) if project_id else None
+        raw_root = str((project or {}).get("rootPath") or "").strip()
+        workspace_id = str((project or {}).get("workspaceId") or "default")
         index = job_source_path_index(
-            project_root=None,
-            project_id=project_id or "",
-            workspace_id="",
+            project_root=Path(raw_root) if raw_root else None,
+            project_id=project_id or "default",
+            workspace_id=workspace_id,
         )
     except Exception:
         index = {}

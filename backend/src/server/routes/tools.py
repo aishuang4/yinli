@@ -14,14 +14,16 @@ from src.generated_file_preview import build_preview_payload, guess_media_type
 
 from src.catalog.http_files import HttpToolFileRecord, discover_http_files, runtime_auth_config, write_http_file
 from src.catalog.migrate_mcp_http import ensure_http_file_catalog, is_http_catalog_migrated
+from src.catalog.paths import http_tools_dir
 from src.catalog.secrets import delete_named_secret, redact_headers, resolve_headers
 from src.scheduler.service import ScheduledJobService
 from src.server.routes.agents import remove_knowledge_tools_from_agents
-from src.sessions.files import resolve_project_session_artifact
+from src.project_files import resolve_project_session_artifact
 from src.storage.database import (
     delete_json_record,
     delete_http_tool as db_delete_http_tool,
     get_chat_session_location,
+    get_project,
     list_http_tools as db_list_http_tools,
     list_json_records,
     upsert_http_tool,
@@ -433,13 +435,19 @@ def _system_tool_records() -> list[SystemToolResponse]:
 
 
 def _resolve_downloadable_file(*, session_id: str, path: str) -> Path:
-    """解析指定會話的可下載產物，路徑只認 Session root。"""
+    """解析指定会话的可下载产物，拒绝会话目录外的路径。"""
 
     location = get_chat_session_location(session_id)
     if location is None:
         raise HTTPException(status_code=404, detail="Session not found")
+    project = get_project(str(location.get("projectId") or ""))
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
+    if not project_root.is_dir():
+        raise HTTPException(status_code=409, detail="Project root 不可用")
     return resolve_project_session_artifact(
-        project_root=Path("."),
+        project_root=project_root,
         session_id=session_id,
         relative_path=path,
     )
@@ -491,14 +499,11 @@ async def delete_knowledge_tool(tool_id: str) -> None:
 
 @router.get("/http", response_model=list[HttpToolResponse])
 async def list_http_tool_configs(
-    workspace_id: Annotated[str | None, Query(alias="workspaceId")] = None,
+    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
 ) -> list[HttpToolResponse]:
-    """列出全局 HTTP 工具。省略 workspace 時返回全部。"""
+    """列出通用 HTTP 工具。"""
 
-    tools = _http_tool_records()
-    if not workspace_id:
-        return tools
-    return [tool for tool in tools if tool.workspace_id in {"", "global", workspace_id}]
+    return [tool for tool in _http_tool_records() if tool.workspace_id == workspace_id]
 
 
 @router.post("/http", response_model=HttpToolResponse, status_code=201)
@@ -535,10 +540,8 @@ async def create_http_tool_config(data: HttpToolCreate) -> HttpToolResponse:
             created_at=now,
             updated_at=now,
         )
-        from src.config.runtime_paths import global_tools_root
-
         write_http_file(
-            global_tools_root() / f"{file_record.id}.yaml",
+            http_tools_dir(file_record.workspace_id) / f"{file_record.id}.yaml",
             file_record,
             auth_config=dict(record.get("authConfig") or {}),
         )
@@ -580,10 +583,8 @@ async def update_http_tool_config(tool_id: str, data: HttpToolUpdate) -> HttpToo
             updated_at=str(next_data.get("updatedAt") or ""),
         )
         incoming_auth = data.auth_config if data.auth_config is not None else existing.auth_config
-        from src.config.runtime_paths import global_tools_root
-
         write_http_file(
-            global_tools_root() / f"{file_record.id}.yaml",
+            http_tools_dir(file_record.workspace_id) / f"{file_record.id}.yaml",
             file_record,
             auth_config=dict(incoming_auth or {}),
         )
@@ -597,9 +598,7 @@ async def delete_http_tool_config(tool_id: str) -> None:
 
     existing = next((item for item in _http_tool_records() if item.id == tool_id), None)
     deleted = db_delete_http_tool(tool_id)
-    from src.config.runtime_paths import global_tools_root
-
-    yaml_path = global_tools_root() / f"{tool_id}.yaml"
+    yaml_path = http_tools_dir(existing.workspace_id if existing else "default") / f"{tool_id}.yaml"
     file_existed = yaml_path.exists()
     if file_existed:
         yaml_path.unlink()

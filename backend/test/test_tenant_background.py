@@ -14,7 +14,6 @@ from src.scheduler.ticker import JobScheduler, reset_job_scheduler
 from src.storage import database
 from src.tenancy.context import TenantContext, use_tenant
 from src.tenancy.lifecycle import ensure_tenant
-from test.hosted_support import seed_legacy_project
 
 pytest_plugins = ["test.hosted_support"]
 
@@ -42,7 +41,6 @@ def test_tick_writes_each_tenant_session(hosted_env, monkeypatch):
     ensure_tenant(USER_B)
     for user in (USER_A, USER_B):
         with use_tenant(TenantContext.hosted(user["id"])):
-            seed_legacy_project()
             set_scheduled_jobs_settings(enabled=True, capability_gate=False)
             _confirm(ScheduledJobService(), user["id"])
 
@@ -97,7 +95,6 @@ def test_disabled_tenant_is_not_ticked(hosted_env):
     ensure_tenant(USER_B)
     for user in (USER_A, USER_B):
         with use_tenant(TenantContext.hosted(user["id"])):
-            seed_legacy_project()
             set_scheduled_jobs_settings(enabled=True, capability_gate=False)
             _confirm(ScheduledJobService(), user["id"])
     disable_tenant(USER_B["id"])

@@ -16,8 +16,6 @@ def search_timeline(
     *,
     workspace_id: str = "",
     project_id: str = "",
-    session_id: str = "",
-    run_id: str = "",
     agent_id: str = "",
     surface: str = "",
     time_from: str = "",
@@ -31,8 +29,6 @@ def search_timeline(
     hits = search_timeline_messages(
         workspace_id=workspace_id,
         project_id=project_id,
-        session_id=session_id,
-        run_id=run_id,
         agent_id=agent_id,
         surface=surface,
         time_from=time_from,

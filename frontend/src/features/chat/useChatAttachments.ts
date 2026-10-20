@@ -72,11 +72,13 @@ export function useChatAttachments({ onError }: UseChatAttachmentsOptions) {
 
   const uploadFilesForSession = useCallback(async (
     files: ChatFileAttachment[],
+    projectId: string,
     sessionId: string,
   ): Promise<ChatFilePayload[]> => Promise.all(files.map(async (attachment) => {
     const form = new FormData();
     form.append('file', attachment.file, attachment.name);
-    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/files`, {
+    const params = new URLSearchParams({ sessionId });
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files?${params.toString()}`, {
       method: 'POST',
       body: form,
     });

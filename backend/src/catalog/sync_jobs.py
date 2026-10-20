@@ -18,8 +18,14 @@ logger = logging.getLogger(__name__)
 
 
 def _project_root_for(project_id: str) -> Path | None:
-    del project_id
-    return None
+    try:
+        from src.storage.database import get_project
+
+        project = get_project(project_id)
+    except Exception:
+        return None
+    raw = str((project or {}).get("rootPath") or "").strip()
+    return Path(raw) if raw else None
 
 
 def _existing_job_file(job_id: str, *, project_id: str, workspace_id: str) -> JobFileRecord | None:
@@ -65,10 +71,7 @@ def persist_job_definition(job: Any) -> None:
         desired_status=desired,
         summary=str(getattr(job, "summary", "") or ""),
         skill_ids=list(getattr(job, "skill_ids", []) or []),
-        required_skills=[item.model_dump(by_alias=True) for item in list(getattr(job, "required_skills", []) or [])],
-        context_policy=str(getattr(job, "context_policy", "fresh") or "fresh"),
         tool_scope=dict(getattr(job.tool_scope, "to_storage_dict", lambda: {})() or {}),
-        execution_policy=job.execution_policy.model_dump(by_alias=True),
         missed_policy=str(job.missed_policy),
         failure_policy=str(job.failure_policy),
         delivery_policy=str(job.delivery_policy),
@@ -76,12 +79,11 @@ def persist_job_definition(job: Any) -> None:
         source_scope=existing.source_scope if existing else "workspace",
         source_path=existing.source_path if existing else "",
     )
-    path = job_definition_path(
+    path = Path(existing.source_path) if existing and existing.source_path else job_definition_path(
         workspace_id=record.workspace_id,
         project_id=record.project_id,
         job_id=record.id,
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
     write_job_file(path, record)
 
 
@@ -95,10 +97,7 @@ def _definition_payload(record: JobFileRecord) -> dict[str, Any]:
         "timezone": record.timezone,
         "frozen_prompt": record.frozen_prompt,
         "skill_ids": list(record.skill_ids),
-        # required_skills 是 ConfirmJob 生成的只读冻结快照，文件里的副本只供回显，不参与同步。
-        "context_policy": record.context_policy or "fresh",
         "tool_scope": dict(record.tool_scope),
-        **({"execution_policy": dict(record.execution_policy)} if record.execution_policy else {}),
         "missed_policy": record.missed_policy,
         "failure_policy": record.failure_policy,
         "delivery_policy": record.delivery_policy,
@@ -130,9 +129,7 @@ def _same_definition(job: Any, payload: dict[str, Any]) -> bool:
         and str(job.timezone) == str(payload["timezone"])
         and str(job.frozen_prompt) == str(payload["frozen_prompt"])
         and list(job.skill_ids or []) == list(payload.get("skill_ids") or [])
-        and str(getattr(job, "context_policy", "fresh")) == str(payload.get("context_policy") or "fresh")
         and _scope_flags(job_scope) == _scope_flags(dict(payload.get("tool_scope") or {}))
-        and (not payload.get("execution_policy") or job.execution_policy.model_dump(by_alias=True) == payload["execution_policy"])
         and str(job.missed_policy) == str(payload["missed_policy"])
         and str(job.failure_policy) == str(payload["failure_policy"])
         and str(job.delivery_policy) == str(payload["delivery_policy"])
@@ -140,19 +137,32 @@ def _same_definition(job: Any, payload: dict[str, Any]) -> bool:
 
 
 def sync_job_definitions(*, project_root=None, project_id: str = "default") -> dict[str, int]:
-    """只同步 Session 內的 definition.md，不掃描 Workspace 或 Project。"""
+    """扫描 Job 文件，创建或更新 sqlite 实例，并按 desired_status 启停。"""
 
-    del project_root
     from src.scheduler.service import ScheduledJobService
-    from src.storage.database import get_scheduled_job
+    from src.storage.database import get_project, get_scheduled_job
 
     workspace_id = "default"
+    root = Path(project_root) if project_root and str(project_root).strip() else None
+    try:
+        project = get_project(project_id) if project_id else None
+        if project:
+            workspace_id = str(project.get("workspaceId") or "default")
+            if root is None:
+                root = _project_root_for(project_id)
+    except Exception:
+        pass
+
     service = ScheduledJobService()
     created = 0
     updated = 0
     activated = 0
     paused = 0
-    for record in discover_job_files(project_id=project_id, workspace_id=workspace_id):
+    for record in discover_job_files(
+        project_root=root,
+        project_id=project_id,
+        workspace_id=workspace_id,
+    ):
         existing = get_scheduled_job(record.id)
         if existing and str(existing.get("status") or "") in {"archived", "completed"}:
             continue
@@ -169,10 +179,7 @@ def sync_job_definitions(*, project_root=None, project_id: str = "default") -> d
                     frozen_prompt="" if record.mode == "script" else record.frozen_prompt,
                     summary=record.summary,
                     skill_ids=[] if record.mode == "script" else list(record.skill_ids),
-                    required_skills=[] if record.mode == "script" else list(record.required_skills),
-                    context_policy=record.context_policy,
                     tool_scope=None if record.mode == "script" else dict(record.tool_scope),
-                    execution_policy=record.execution_policy or None,
                     mode=record.mode,
                     script_filename=record.script_filename,
                     script_source=record.script_source,

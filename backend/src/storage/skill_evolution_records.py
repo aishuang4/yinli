@@ -118,11 +118,6 @@ class SkillEvolutionRecordStore:
                     data.get("registered_skill_id") or "", created_at, updated_at,
                 ),
             )
-            if data.get("session_id"):
-                conn.execute(
-                    "UPDATE skill_evolution_records SET session_id = ? WHERE id = ?",
-                    (data["session_id"], data["id"]),
-                )
             row = conn.execute(
                 "SELECT * FROM skill_evolution_records WHERE id = ?",
                 (data["id"],),

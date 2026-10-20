@@ -11,7 +11,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, screen, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
-import { grantFromDialogSelection } from './directoryGrant';
 import * as net from 'net';
 import { spawn, ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
@@ -87,7 +86,7 @@ let backendInstanceId: string | null = null;
 let backendPort: number | null = isDev ? 8765 : null;
 let appQuitting = false;
 /** 与选目录 IPC 同源的 Project root 白名单，允许打开外置盘产物。 */
-const trustedSessionRoots = new Set<string>();
+const trustedProjectRoots = new Set<string>();
 let projectRootsFetchedAt = 0;
 
 /** 返回当前运行期后端地址。开发模式仍使用固定的 Vite 代理端口。 */
@@ -369,7 +368,6 @@ async function ensurePythonBackend(): Promise<boolean> {
     backendInstanceId = randomUUID();
     appendDesktopLog('electron-main.log', `Starting backend from ${backendProcess.command}`);
     const productFeaturesPath = resolveProductFeaturesPath();
-    const cloudBaseUrl = resolveDesktopCloudBaseUrl();
     const env = {
       ...process.env,
       PYTHONUNBUFFERED: '1',
@@ -382,7 +380,6 @@ async function ensurePythonBackend(): Promise<boolean> {
       ...(productFeaturesPath
         ? { AGENT_WORKSTATION_PRODUCT_FEATURES_PATH: productFeaturesPath }
         : {}),
-      ...(cloudBaseUrl ? { AGENT_WORKSTATION_CLOUD_BASE_URL: cloudBaseUrl } : {}),
     };
 
     pythonProcess = spawn(backendProcess.command, backendProcess.args, {
@@ -458,26 +455,6 @@ interface BackendProcessConfig {
 }
 
 /** 安装包 extraResources 中的产品档；开发模式回退仓库 config。 */
-/** 打包配置里的云端地址。已有环境变量时不覆盖。 */
-function resolveDesktopCloudBaseUrl(): string {
-  const fromEnv = process.env.AGENT_WORKSTATION_CLOUD_BASE_URL?.trim();
-  if (fromEnv) return fromEnv.replace(/\/+$/, '');
-  const candidates = [
-    path.join(process.resourcesPath, 'desktop.json'),
-    path.join(__dirname, '..', '..', 'config', 'desktop.json'),
-  ];
-  for (const file of candidates) {
-    try {
-      const payload = JSON.parse(fs.readFileSync(file, 'utf8')) as { cloudBaseUrl?: string };
-      const url = String(payload.cloudBaseUrl || '').trim().replace(/\/+$/, '');
-      if (url) return url;
-    } catch {
-      // 下一处候选。
-    }
-  }
-  return '';
-}
-
 function resolveProductFeaturesPath(): string | undefined {
   const packaged = path.join(process.resourcesPath, 'product-features.json');
   if (app.isPackaged && fs.existsSync(packaged)) {
@@ -650,9 +627,9 @@ ipcMain.handle('get-app-version', () => {
 /**
  * 选择 Project 工作目录。目录名直接作为 Project 名称，路径由主进程读取。
  */
-ipcMain.handle('select-project-directory', async (_event, clientPath?: string) => {
+ipcMain.handle('select-project-directory', async () => {
   const options = {
-    title: '选择工作目录',
+    title: '选择 Project 文件夹',
     properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>,
   };
   const result = mainWindow
@@ -661,16 +638,15 @@ ipcMain.handle('select-project-directory', async (_event, clientPath?: string) =
   if (result.canceled || result.filePaths.length === 0) {
     return { canceled: true };
   }
-  const grant = grantFromDialogSelection(result.filePaths[0], clientPath);
-  if (!grant) {
+  const selectedPath = path.resolve(result.filePaths[0]);
+  if (!fs.existsSync(selectedPath) || !fs.statSync(selectedPath).isDirectory()) {
     return { canceled: true };
   }
-  rememberSessionRoot(grant.path);
+  rememberProjectRoot(selectedPath);
   return {
     canceled: false,
-    path: grant.path,
-    accessMode: grant.accessMode,
-    name: path.basename(grant.path),
+    path: selectedPath,
+    name: path.basename(selectedPath),
   };
 });
 
@@ -761,8 +737,6 @@ interface DesktopNotificationPayload {
   jobId: string;
   firingId: string;
   groupStudioId: string;
-  ownerSessionId?: string;
-  sessionStatus?: string;
 }
 
 function clipNotificationText(value: unknown, max: number): string {
@@ -784,8 +758,6 @@ function parseDesktopNotificationPayload(raw: unknown): DesktopNotificationPaylo
     jobId: clipNotificationText(input.jobId, 80),
     firingId: clipNotificationText(input.firingId, 80),
     groupStudioId: clipNotificationText(input.groupStudioId, 80),
-    ownerSessionId: clipNotificationText(input.ownerSessionId, 80),
-    sessionStatus: clipNotificationText(input.sessionStatus, 20),
   };
 }
 
@@ -822,7 +794,7 @@ ipcMain.handle('show-notification', (_event, raw: unknown) => {
   return { ok: true };
 });
 
-function rememberSessionRoot(rootPath: string | undefined | null): string | null {
+function rememberProjectRoot(rootPath: string | undefined | null): string | null {
   if (!rootPath || typeof rootPath !== 'string') {
     return null;
   }
@@ -834,7 +806,7 @@ function rememberSessionRoot(rootPath: string | undefined | null): string | null
   } catch {
     return null;
   }
-  trustedSessionRoots.add(resolved);
+  trustedProjectRoots.add(resolved);
   return resolved;
 }
 
@@ -843,22 +815,30 @@ function isPathInsideRoot(target: string, root: string): boolean {
   return target === resolvedRoot || target.startsWith(resolvedRoot + path.sep);
 }
 
-async function refreshTrustedSessionRootsFromBackend(): Promise<void> {
+async function refreshTrustedProjectRootsFromBackend(): Promise<void> {
   if (Date.now() - projectRootsFetchedAt < 15_000) {
     return;
   }
   try {
-    const response = await fetch(`${backendServerUrl()}/api/sessions/directory-roots`);
-    if (!response.ok) {
+    const workspaceResponse = await fetch(`${backendServerUrl()}/api/workspaces`);
+    if (!workspaceResponse.ok) {
       return;
     }
-    const payload = await response.json() as { roots?: string[] };
-    for (const root of payload.roots || []) {
-      rememberSessionRoot(root);
+    const workspaces = await workspaceResponse.json() as Array<{ id?: string }>;
+    for (const workspace of workspaces) {
+      if (!workspace.id) continue;
+      const projectResponse = await fetch(
+        `${backendServerUrl()}/api/workspaces/${encodeURIComponent(workspace.id)}/projects`,
+      );
+      if (!projectResponse.ok) continue;
+      const projects = await projectResponse.json() as Array<{ rootPath?: string; root_path?: string }>;
+      for (const project of projects) {
+        rememberProjectRoot(project.rootPath || project.root_path);
+      }
     }
     projectRootsFetchedAt = Date.now();
   } catch {
-    // 后端未就绪时仍允许 cwd / home / 已选择的 Session 目录。
+    // 后端未就绪时仍允许 cwd / home / 已选择的 Project root。
   }
 }
 
@@ -905,13 +885,13 @@ async function resolveSafeLocalPath(targetPath: string, projectRoot?: string): P
   // 渲染进程 projectRoot 不得写入白名单。允许的 root 只来自 cwd / userData / home、
   // select-project-directory，以及后端 Project.rootPath。
   void projectRoot;
-  await refreshTrustedSessionRootsFromBackend();
+  await refreshTrustedProjectRootsFromBackend();
   const resolved = path.resolve(targetPath);
   const allowedRoots = [
     process.cwd(),
     app.getPath('userData'),
     app.getPath('home'),
-    ...trustedSessionRoots,
+    ...trustedProjectRoots,
   ].map((item) => path.resolve(item));
 
   let current = resolved;

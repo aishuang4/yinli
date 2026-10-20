@@ -14,7 +14,7 @@ from src.server.routes.chat.models import ChatSkillRun
 from src.server.routes.chat.plan_mode.manager import PlanModeManager
 from src.server.routes.chat.runtime_events import runtime_source_event
 from src.exception_detail import format_agent_exception
-from src.runtime.session_context import SessionContext
+from src.runtime_context import RuntimeContext
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +53,7 @@ async def execute_and_finalize_leader_reply(
     deep_thinking: bool = False,
     sandbox: bool = False,
     exception_prefix: str = "Agent 执行异常",
-    runtime_context: SessionContext | None = None,
-    record_chat_message: bool = True,
+    runtime_context: RuntimeContext | None = None,
 ) -> AsyncGenerator[str, None]:
     """执行一次 Leader reply，并保证非暂停路径只经过统一 completion 收口。"""
 
@@ -80,7 +79,7 @@ async def execute_and_finalize_leader_reply(
             yield event
 
         if state.stopped and state.stop_reason == "hitl_denied":
-            assistant_error = "hitl_denied: 此次定时任务需要人工批准，已停止；请检查权限后明确重新运行"
+            assistant_error = "hitl_denied: 无人值守 HITL 拒绝次数超过上限"
             async for event in finalize_failed_leader_run(
                 session_id=session_id,
                 persist=persist,
@@ -92,7 +91,6 @@ async def execute_and_finalize_leader_reply(
                 assistant_model_caches=state.assistant_model_caches,
                 skill_runs=skill_runs,
                 sandbox=sandbox,
-                record_chat_message=record_chat_message,
             ):
                 yield event
             return
@@ -113,7 +111,6 @@ async def execute_and_finalize_leader_reply(
                 assistant_model_caches=state.assistant_model_caches,
                 skill_runs=skill_runs,
                 sandbox=sandbox,
-                record_chat_message=record_chat_message,
             ):
                 yield event
             return
@@ -134,7 +131,6 @@ async def execute_and_finalize_leader_reply(
                 assistant_model_caches=state.assistant_model_caches,
                 skill_runs=skill_runs,
                 sandbox=sandbox,
-                record_chat_message=record_chat_message,
             ):
                 yield event
             return
@@ -153,7 +149,6 @@ async def execute_and_finalize_leader_reply(
                 assistant_model_caches=state.assistant_model_caches,
                 skill_runs=skill_runs,
                 sandbox=sandbox,
-                record_chat_message=record_chat_message,
             ):
                 yield event
             return
@@ -172,7 +167,6 @@ async def execute_and_finalize_leader_reply(
                 assistant_model_caches=state.assistant_model_caches,
                 skill_runs=skill_runs,
                 sandbox=sandbox,
-                record_chat_message=record_chat_message,
             ):
                 yield event
             return
@@ -198,7 +192,6 @@ async def execute_and_finalize_leader_reply(
             session_workspace_dir=state.session_workspace_dir,
             session_artifact_paths_before=state.session_artifact_paths_before,
             sandbox=sandbox,
-            record_chat_message=record_chat_message,
         ):
             yield event
     except Exception as exc:
@@ -217,7 +210,6 @@ async def execute_and_finalize_leader_reply(
             assistant_model_caches=state.assistant_model_caches,
             skill_runs=skill_runs,
             sandbox=sandbox,
-            record_chat_message=record_chat_message,
         ):
             yield event
 

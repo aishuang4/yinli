@@ -12,13 +12,12 @@ from src.tools.scoped_grep import ScopedGrep
 from src.tools.scoped_write import ScopedWrite
 
 
-def test_scoped_write_accepts_project_relative_paths(tmp_path: Path):
+def test_scoped_write_accepts_project_relative_paths(tmp_path: Path, monkeypatch):
     """Write 支持项目相对路径并写入项目根内文件。"""
 
-    chunk = asyncio.run(ScopedWrite(base_dir=str(tmp_path), scope_dir=str(tmp_path))(
-        file_path="docs/out.txt",
-        content="hello\n",
-    ))
+    monkeypatch.setattr("src.tools.scoped_paths.default_project_root", lambda: tmp_path)
+
+    chunk = asyncio.run(ScopedWrite()(file_path="docs/out.txt", content="hello\n"))
 
     assert chunk.state != "error"
     assert (tmp_path / "docs" / "out.txt").read_text(encoding="utf-8") == "hello\n"
@@ -48,7 +47,9 @@ def test_scoped_edit_accepts_project_relative_paths(tmp_path: Path, monkeypatch)
     docs.mkdir()
     target = docs / "out.txt"
     target.write_text("hello\n", encoding="utf-8")
-    chunk = asyncio.run(ScopedEdit(base_dir=str(tmp_path), scope_dir=str(tmp_path))(
+    monkeypatch.setattr("src.tools.scoped_paths.default_project_root", lambda: tmp_path)
+
+    chunk = asyncio.run(ScopedEdit()(
         file_path="docs/out.txt",
         old_string="hello",
         new_string="hi",
@@ -80,17 +81,15 @@ def test_scoped_file_tools_reject_parent_escape(tmp_path: Path, tool_kind: str):
             asyncio.run(ScopedGrep(scope_dir=str(scope))(pattern="needle", path=".."))
 
 
-def test_scoped_grep_accepts_project_relative_paths(tmp_path: Path):
+def test_scoped_grep_accepts_project_relative_paths(tmp_path: Path, monkeypatch):
     """Grep 支持项目相对 path，不依赖进程 cwd。"""
 
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "out.txt").write_text("needle\n", encoding="utf-8")
+    monkeypatch.setattr("src.tools.scoped_paths.default_project_root", lambda: tmp_path)
 
-    chunk = asyncio.run(ScopedGrep(base_dir=str(tmp_path), scope_dir=str(tmp_path))(
-        pattern="needle",
-        path="docs",
-    ))
+    chunk = asyncio.run(ScopedGrep()(pattern="needle", path="docs"))
 
     assert chunk.state != "error"
     assert "out.txt" in chunk.content[0].text

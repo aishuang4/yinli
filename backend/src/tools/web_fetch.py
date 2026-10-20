@@ -177,11 +177,7 @@ class WebFetch(ToolBase):
                                 return self._error("WebFetch redirect response did not include Location.")
                             if redirects >= self.max_redirects:
                                 return self._error("WebFetch exceeded the redirect limit.")
-                            next_url = urljoin(str(response.url), location)
-                            from src.security.authorization.execution_context import validate_fetch_redirect
-
-                            validate_fetch_redirect(current_url, next_url)
-                            current_url = next_url
+                            current_url = urljoin(str(response.url), location)
                             redirects += 1
                             continue
 
@@ -239,11 +235,6 @@ class WebFetch(ToolBase):
             raise ValueError(error)
         parsed = urlparse(url)
         await self.resolver(str(parsed.hostname), parsed.port or (443 if parsed.scheme == "https" else 80))
-
-    async def validate_execution(self, url: str) -> None:
-        """授权与真实读取共用目标校验；实际连接仍由 pinned transport 再检查。"""
-
-        await self._validate_target(url)
 
     async def _read_limited(self, response: httpx.Response) -> tuple[bytes, bool]:
         content_length = response.headers.get("content-length")

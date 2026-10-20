@@ -13,7 +13,6 @@ import {
 } from './modelCatalogUi';
 import { catalogRequest, modelAvailable, useModelCatalog, type ModelCatalog, type ModelEntry, type ModelProvider } from './useModelCatalog';
 import { notifyError, notifySuccess } from '../../utils/feedback';
-import { PermissionReviewModelField } from './PermissionReviewModelField';
 
 export function ModelsManager() {
   const { catalog, error, loading, reload } = useModelCatalog(false);
@@ -224,7 +223,6 @@ function CatalogEditor({
         schemaVersion: draft.schemaVersion,
         revision: draft.revision,
         defaultModelId: draft.defaultModelId,
-        permissionReview: draft.permissionReview ?? null,
         etag: draft.etag,
         providers: draft.providers.map((item) => {
           const next: Partial<typeof item> = { ...item };
@@ -295,8 +293,6 @@ function CatalogEditor({
           )}
         </div>
       </div>
-
-      <PermissionReviewModelField catalog={draft} onChange={(permissionReview) => setDraft({ ...draft, permissionReview })} />
 
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm font-medium text-[var(--color-text-primary)]">我的模型</div>

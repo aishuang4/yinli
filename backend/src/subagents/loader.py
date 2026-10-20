@@ -25,7 +25,6 @@ _KNOWN_FIELDS = {
     "disallowedTools",
     "model",
     "permissionMode",
-    "operationScope",
     "maxTurns",
     "skills",
     "mcpServers",
@@ -89,9 +88,6 @@ def load_subagent_file(path: Path, *, scope: str) -> tuple[SubagentDefinition | 
             message=f"不支持的 permissionMode: {raw_permission_mode}",
         )
     permission_mode = normalize_subagent_permission_mode(raw_permission_mode)
-    operation_scope = frontmatter.get("operationScope", "normal")
-    if operation_scope not in {"normal", "read_only"}:
-        return None, SubagentLoadError(scope=scope, path=str(path), message="operationScope 无效")
 
     return (
         SubagentDefinition(
@@ -104,7 +100,6 @@ def load_subagent_file(path: Path, *, scope: str) -> tuple[SubagentDefinition | 
             disallowed_tools=_normalize_string_list(frontmatter.get("disallowedTools")),
             model=str(frontmatter.get("model") or "inherit").strip() or "inherit",
             permission_mode=permission_mode,
-            operation_scope=operation_scope,
             max_turns=_normalize_max_turns(frontmatter.get("maxTurns")),
             skills=_normalize_string_list(frontmatter.get("skills")),
             mcp_servers=_normalize_list(frontmatter.get("mcpServers")),

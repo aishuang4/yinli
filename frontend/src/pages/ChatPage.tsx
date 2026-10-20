@@ -22,10 +22,12 @@ import { useEventStream } from '../hooks/useEventStream';
 import { useAgents } from '../hooks/useAgents';
 import { useOnPageBecameActive } from '../hooks/usePageActive';
 import { useAgentsStore } from '../stores/agentsStore';
+import { useProjectResources } from '../hooks/useProjectResources';
+import { useWorkspaceProjects } from '../hooks/useWorkspaceProjects';
 import { useAppStore } from '../stores/appStore';
 import { isSurfaceEnabled } from '../stores/productFeatures';
 import { useProductFeaturesStore } from '../stores/productFeaturesStore';
-import { createSession } from '../features/sessions/api';
+import { createId } from '../utils/id';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { MessageBubble, StreamingBubble } from '../features/chat/ChatMessageList';
 import { MessageTimeline } from '../features/chat/MessageTimeline';
@@ -36,9 +38,6 @@ import { MemoryPendingHint } from '../features/chat/MemoryPendingHint';
 import { PlanReviewComposer } from '../features/chat/PlanReviewComposer';
 import { PlanFloatingPanel } from '../features/chat/PlanFloatingPanel';
 import { ChatHistoryPanel } from '../features/chat/ChatHistoryPanel';
-import { canSwitchSession } from '../features/sessions/sessionDirectory';
-import { readSessionLocation, writeSessionLocation } from '../features/sessions/sessionLocation';
-import { planSessionSwitch } from '../features/sessions/sessionSwitch';
 import { ChatContextMeter } from '../features/chat/ChatContextMeter';
 import { selectLatestContextUsage } from '../features/chat/contextUsage';
 import { NotificationBell } from '../features/notifications/NotificationBell';
@@ -59,8 +58,6 @@ import { useEnabledSkills } from '../hooks/useSkills';
 import { filterComposerSkills } from '../features/chat/forcedSkills';
 import { FilePreviewPane } from '../features/file-preview/FilePreviewPane';
 import { isDesktopFilePreviewEnabled, type FilePreviewTarget } from '../features/file-preview/filePreview';
-import { ApprovalModeSelector } from '../features/chat/ApprovalModeSelector';
-import { useApprovalMode } from '../features/chat/useApprovalMode';
 
 const HISTORY_PANEL_TRANSITION_MS = 260;
 
@@ -73,7 +70,6 @@ export function ChatPage() {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
-  const [sessionsReady, setSessionsReady] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [targetMode, setTargetMode] = useState<'agent' | 'team'>('agent');
   const [selectedAgentId, setSelectedAgentId] = useState<string>('default');
@@ -90,12 +86,8 @@ export function ChatPage() {
   const [previewTarget, setPreviewTarget] = useState<FilePreviewTarget | null>(null);
   const teamModeEnabled = useProductFeaturesStore((state) => isSurfaceEnabled(state.features, 'teamMode'));
   const planModeEnabled = useProductFeaturesStore((state) => isSurfaceEnabled(state.features, 'planMode'));
-  const pendingNotificationSessionId = useAppStore((state) => state.pendingNotificationSessionId);
-  const clearPendingNotificationSession = useAppStore((state) => state.clearPendingNotificationSession);
-  const discardStudioSurface = useAppStore((state) => state.discardStudioSurface);
-  const openGroupStudio = useAppStore((state) => state.openGroupStudio);
-  const restoredSessionRef = useRef(false);
-  const approvalSelection = useApprovalMode(activeSessionId, sessions);
+  const activeWorkspaceId = useAppStore((state) => state.activeWorkspaceId);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const historyTransitionTimerRef = useRef<number | null>(null);
   const historyExpandFrameRef = useRef<number | null>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
@@ -106,7 +98,10 @@ export function ChatPage() {
   const pendingSessionRef = useRef<ChatSession | null>(null);
   const { state, sendMessage, resumeInteraction, subscribeRun, abort, steer, reset } = useEventStream();
   const { agents, loading: agentsLoading } = useAgents();
+  const { enabledByType, loading: projectResourcesLoading } = useProjectResources(activeProjectId);
   const { skills: enabledSkills, loading: skillsLoading } = useEnabledSkills();
+  const { workspaces, allProjects } = useWorkspaceProjects();
+  const setActiveContext = useAppStore((state) => state.setActiveContext);
   const {
     fileAttachments,
     handleFile,
@@ -127,7 +122,7 @@ export function ChatPage() {
 
   // 打包桌面端 Chat keep-alive 不卸载，回到本页时静默同步 Agent 列表。
   useOnPageBecameActive(() => {
-    void useAgentsStore.getState().syncFromServer({ silent: true });
+    void useAgentsStore.getState().syncFromServer(activeWorkspaceId, { silent: true });
   });
 
   useEffect(() => {
@@ -142,7 +137,13 @@ export function ChatPage() {
     }
   }, [planModeEnabled, planMode]);
 
-  const availableAgents = useMemo(() => agents.filter((agent) => agent.role !== 'job'), [agents]);
+  const availableAgents = useMemo(() => agents.filter((agent) => (
+    agent.role !== 'job'
+    && (
+      agent.id === 'default'
+      || agent.workspaceId === activeWorkspaceId
+    )
+  )), [activeWorkspaceId, agents]);
 
   const selectedAgent = useMemo(
     () => availableAgents.find((agent) => agent.id === selectedAgentId)
@@ -154,8 +155,8 @@ export function ChatPage() {
 
   const runtimeAgent = selectedAgent;
   const composerSkills = useMemo(
-    () => filterComposerSkills(enabledSkills, new Set()),
-    [enabledSkills],
+    () => filterComposerSkills(enabledSkills, enabledByType.skill),
+    [enabledByType.skill, enabledSkills],
   );
 
   useEffect(() => {
@@ -163,13 +164,9 @@ export function ChatPage() {
     setForcedSkillIds((current) => current.filter((id) => allowed.has(id)));
   }, [composerSkills]);
 
-  const serveMode = useAuthStore((state) => state.serveMode);
-  const usingPlatformModels = providedModels.loggedIn && providedModels.models.length > 0 && (
-    (serveMode === 'hosted' && providedModels.source === 'key2api')
-    || (serveMode === 'desktop' && providedModels.source === 'cloud')
-  );
+  const hostedPlatform = useAuthStore((state) => state.serveMode) === 'hosted' && providedModels.source === 'key2api';
   const storedModelId = modelChoices[activeSessionId || 'new'] || sessions.find(s => s.id === activeSessionId)?.modelConfigId || modelCatalog?.defaultModelId || '';
-  const selectedModelId = usingPlatformModels && !storedModelId.startsWith('platform:')
+  const selectedModelId = hostedPlatform && !storedModelId.startsWith('platform:')
     ? (providedModels.models[0]?.id || storedModelId)
     : storedModelId;
   const selectedModel = modelCatalog?.models.find(m => m.id === selectedModelId);
@@ -186,7 +183,7 @@ export function ChatPage() {
     setSavingModelChoice(true);
     try {
       if (activeSessionId && sessions.some(s => s.id === activeSessionId)) {
-        const response = await fetch(`/api/chat/sessions/${encodeURIComponent(activeSessionId)}/model`, {
+        const response = await fetch(`/api/chat/sessions/${encodeURIComponent(activeSessionId)}/model?projectId=${encodeURIComponent(activeProjectId)}`, {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelConfigId: value }),
         });
         if (!response.ok) { const data = await response.json(); throw new Error(data.detail || '模型选择保存失败'); }
@@ -252,6 +249,7 @@ export function ChatPage() {
     shortcutLabel: studioShortcut,
   } = useGroupStudioEntry({
     modelConfigId: selectedModelId,
+    activeProjectId,
     activeSessionId,
     agentId: runtimeAgent?.id || 'default',
     chatRunBlocking,
@@ -326,16 +324,16 @@ export function ChatPage() {
       if (!silent) {
         setSessionsLoading(false);
       }
-      if (sessionsRequestRef.current === requestId) setSessionsReady(true);
     }
   }, []);
 
-  const loadSessionMessages = useCallback(async (sessionId: string) => {
+  const loadSessionMessages = useCallback(async (sessionId: string, projectId = activeProjectId) => {
     const requestId = messagesRequestRef.current + 1;
     messagesRequestRef.current = requestId;
     setMessagesLoading(true);
     try {
-    const response = await fetch(`/api/chat/sessions/${sessionId}/messages`);
+    const params = new URLSearchParams({ projectId });
+    const response = await fetch(`/api/chat/sessions/${sessionId}/messages?${params.toString()}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data: StoredChatMessage[] = await response.json();
     const loadedMessages = data.map((item) => ({
@@ -363,7 +361,7 @@ export function ChatPage() {
     } finally {
       if (messagesRequestRef.current === requestId) setMessagesLoading(false);
     }
-  }, []);
+  }, [activeProjectId]);
 
   const activateSession = useCallback(async (session: ChatSession) => {
     recoveredRunRef.current = '';
@@ -378,54 +376,37 @@ export function ChatPage() {
     resetAttachments();
     setChatError(null);
     resetScroll();
-    await loadSessionMessages(session.id);
+    await loadSessionMessages(session.id, session.project_id);
   }, [loadSessionMessages, reset, resetAttachments, resetScroll]);
+
+  useEffect(() => {
+    sessionsRequestRef.current += 1;
+    messagesRequestRef.current += 1;
+    setMessagesLoading(false);
+    recoveredRunRef.current = '';
+    openedPlanIdentityRef.current = '';
+    setPlanPanelOpen(false);
+    setPreviewTarget(null);
+    setActiveSessionId(null);
+    setModelChoices({});
+    setMessages([]);
+    resetAttachments();
+    setChatError(null);
+    reset();
+    const pendingSession = pendingSessionRef.current;
+    if (
+      pendingSession &&
+      pendingSession.workspace_id === activeWorkspaceId &&
+      pendingSession.project_id === activeProjectId
+    ) {
+      pendingSessionRef.current = null;
+      void activateSession(pendingSession);
+    }
+  }, [activeProjectId, activeWorkspaceId, activateSession, reset, resetAttachments]);
 
   useEffect(() => {
     void loadSessions();
   }, [loadSessions]);
-
-  useEffect(() => {
-    if (!pendingNotificationSessionId || !sessionsReady) return;
-    const session = sessions.find((item) => item.id === pendingNotificationSessionId);
-    clearPendingNotificationSession();
-    if (session) void activateSession(session);
-  }, [activateSession, clearPendingNotificationSession, pendingNotificationSessionId, sessions, sessionsReady]);
-
-  useEffect(() => {
-    if (restoredSessionRef.current || !sessionsReady) return;
-    restoredSessionRef.current = true;
-    const location = readSessionLocation(window.location.search);
-    if (!location.sessionId || pendingNotificationSessionId) return;
-    const session = sessions.find((item) => item.id === location.sessionId);
-    if (!session) return;
-    void activateSession(session);
-    if (location.previewPath) {
-      setPreviewTarget({
-        sessionId: session.id,
-        path: location.previewPath,
-        name: location.previewPath.split('/').pop() || location.previewPath,
-      });
-    }
-    if (location.studioId) openGroupStudio(location.studioId);
-  }, [
-    activateSession,
-    openGroupStudio,
-    pendingNotificationSessionId,
-    sessions,
-    sessionsReady,
-  ]);
-
-  useEffect(() => {
-    if (!activeSessionId) return;
-    const next = writeSessionLocation(window.location.search, {
-      sessionId: activeSessionId,
-      previewPath: previewTarget?.path || '',
-    });
-    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    const target = `${window.location.pathname}${next}${window.location.hash}`;
-    if (current !== target) window.history.replaceState(null, '', target);
-  }, [activeSessionId, previewTarget]);
 
   useEffect(() => {
     if (selectedAgentId !== 'default' && !availableAgents.some((agent) => agent.id === selectedAgentId)) {
@@ -439,9 +420,8 @@ export function ChatPage() {
 
     async function recoverActiveRun() {
       try {
-        const sessionId = activeSessionId;
-        if (!sessionId) return;
-        const response = await fetch(`/api/chat/runs?sessionId=${encodeURIComponent(sessionId)}`);
+        const params = new URLSearchParams({ projectId: activeProjectId });
+        const response = await fetch(`/api/chat/runs?${params.toString()}`);
         if (!response.ok) return;
         const data = await response.json();
         const runs = Array.isArray(data.runs) ? data.runs : [];
@@ -473,7 +453,7 @@ export function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, hasLiveResponse, subscribeRun]);
+  }, [activeProjectId, activeSessionId, hasLiveResponse, subscribeRun]);
 
   const handleNewSession = useCallback(() => {
     if (state.isStreaming) return;
@@ -509,27 +489,20 @@ export function ChatPage() {
   }, []);
 
   const handleSelectSession = useCallback(async (session: ChatSession) => {
-    const plan = planSessionSwitch({
-      streaming: !canSwitchSession(state.isStreaming),
-      currentId: activeSessionId,
-      nextId: session.id,
-    });
-    if (!plan.allowed) return;
-    if (plan.clear.includes('subscription')) abort();
-    if (plan.clear.includes('projection')) {
-      reset();
-      setMessages([]);
+    if (state.isStreaming) return;
+    if (session.project_id !== activeProjectId || session.workspace_id !== activeWorkspaceId) {
+      pendingSessionRef.current = session;
+      setActiveContext(session.workspace_id, session.project_id);
+      return;
     }
-    if (plan.clear.includes('attachments')) resetAttachments();
-    if (plan.clear.includes('preview')) setPreviewTarget(null);
-    if (plan.clear.includes('studio')) discardStudioSurface();
     await activateSession(session);
-  }, [abort, activateSession, activeSessionId, discardStudioSurface, reset, resetAttachments, state.isStreaming]);
+  }, [activeProjectId, activeWorkspaceId, activateSession, setActiveContext, state.isStreaming]);
 
   const handleDeleteSession = useCallback(async (session: ChatSession) => {
     if (state.isStreaming) return;
     try {
-      const response = await fetch(`/api/chat/sessions/${session.id}`, { method: 'DELETE' });
+      const params = new URLSearchParams({ projectId: session.project_id });
+      const response = await fetch(`/api/chat/sessions/${session.id}?${params.toString()}`, { method: 'DELETE' });
       if (!response.ok && response.status !== 404) throw new Error(`HTTP ${response.status}`);
       setSessions((current) => current.filter((item) => item.id !== session.id));
       if (activeSessionId === session.id) {
@@ -574,6 +547,10 @@ export function ChatPage() {
       }
       return;
     }
+    if (!activeProjectId) {
+      setChatError('请先在设置中选择 Workspace 和 Project。');
+      return;
+    }
     if (imageAttachments.length > 0 && !selectedModelSupportsImages) {
       setChatError('所选模型未启用图片能力，请切换模型。');
       return;
@@ -584,7 +561,7 @@ export function ChatPage() {
       || (fileAttachments.length > 0 ? '请处理我上传的文件。' : imageAttachments.length > 0 ? '请分析这张图片。' : forceCompress ? '请压缩当前会话上下文，然后用一两句话说明是否已整理完毕。' : '');
     if (!userText) return;
     const displayMessage = typed || (forceCompress && fileAttachments.length === 0 && imageAttachments.length === 0 ? '压缩上下文' : undefined);
-    let sessionId = activeSessionId;
+    const sessionId = activeSessionId || createId();
     const images = imageAttachments.map(({ name, media_type, data }) => ({
       name,
       media_type,
@@ -592,15 +569,7 @@ export function ChatPage() {
     }));
     let files: ChatFilePayload[];
     try {
-      if (!sessionId) {
-        const created = await createSession({
-          agentId: runtimeAgent?.id || 'default',
-          title: userText.slice(0, 40),
-        });
-        sessionId = created.id;
-        setActiveSessionId(sessionId);
-      }
-      files = await uploadFilesForSession(fileAttachments, sessionId);
+      files = await uploadFilesForSession(fileAttachments, activeProjectId, sessionId);
     } catch (err) {
       setChatError(getErrorMessage(err, '附件上传失败。'));
       return;
@@ -615,7 +584,6 @@ export function ChatPage() {
     };
 
     setModelChoices(current => ({ ...current, new: '', [sessionId]: selectedModelId }));
-    approvalSelection.sent(sessionId);
     setActiveSessionId(sessionId);
     resetScroll();
     setMessages((prev) => [...prev, userMessage]);
@@ -626,12 +594,12 @@ export function ChatPage() {
     setForceCompress(false);
 
     await sendMessage(userText, {
+      projectId: activeProjectId,
       sessionId,
       agentId: runtimeAgent?.id,
       agentName: runtimeAgent?.name,
       mode: teamModeEnabled ? targetMode : 'agent',
       modelConfigId: selectedModelId,
-      approvalMode: approvalSelection.approvalMode,
       skillIds: runtimeAgent?.skills,
       forcedSkillIds,
       deepThinking,
@@ -641,7 +609,7 @@ export function ChatPage() {
       images,
       files,
     });
-  }, [activeSessionId, approvalSelection, deepThinking, fileAttachments, forceCompress, forcedSkillIds, imageAttachments, inputValue, planMode, planModeEnabled, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, teamModeEnabled, uploadFilesForSession]);
+  }, [activeProjectId, activeSessionId, deepThinking, fileAttachments, forceCompress, forcedSkillIds, imageAttachments, inputValue, planMode, planModeEnabled, resetAttachments, resetScroll, runtimeAgent, selectedModelId, selectedModelSupportsImages, sendMessage, state.currentRunId, state.isStreaming, steer, targetMode, teamModeEnabled, uploadFilesForSession]);
 
   const handlePlanReview = useCallback(async (
     plan: PlanReviewData,
@@ -663,12 +631,12 @@ export function ChatPage() {
     resetScroll();
     setChatError(null);
     await sendMessage(userText, {
+      projectId: activeProjectId,
       sessionId: activeSessionId,
       agentId: runtimeAgent?.id,
       agentName: runtimeAgent?.name,
       mode: 'agent',
       modelConfigId: selectedModelId,
-      approvalMode: approvalSelection.approvalMode,
       skillIds: runtimeAgent?.skills,
       forcedSkillIds,
       deepThinking,
@@ -676,7 +644,7 @@ export function ChatPage() {
       planAction: action,
       planFeedback: feedback,
     });
-  }, [activeSessionId, approvalSelection.approvalMode, deepThinking, forcedSkillIds, resetScroll, runtimeAgent, selectedModelId, sendMessage, state.isStreaming]);
+  }, [activeProjectId, activeSessionId, deepThinking, forcedSkillIds, resetScroll, runtimeAgent, selectedModelId, sendMessage, state.isStreaming]);
 
   // 当流结束时，将 assistant 回复加入消息历史
   useEffect(() => {
@@ -735,11 +703,13 @@ export function ChatPage() {
       {historyPanelMounted && (
         <ChatHistoryPanel
           activeSessionId={activeSessionId}
+          allProjects={allProjects}
           collapsed={historyCollapsed}
           isMacDesktopShell={isMacDesktopShell}
           isStreaming={state.isStreaming}
           loading={sessionsLoading}
           sessions={chatOnlySessions}
+          workspaces={workspaces}
           onCollapse={handleCollapseHistory}
           onDeleteSession={(session) => { void handleDeleteSession(session); }}
           onNewSession={handleNewSession}
@@ -808,6 +778,11 @@ export function ChatPage() {
                 {topbarSubtitle}
               </div>
             </div>
+            {activeSessionId && (
+              <Tag className="chat-workbench-status-tag" size="small" color="transparent">
+                已保存
+              </Tag>
+            )}
             {selectedModelSupportsImages && (
               <Tag className="chat-workbench-status-tag chat-workbench-status-tag--blue" size="small" color="blue">
                 图片
@@ -825,6 +800,7 @@ export function ChatPage() {
             <UserMenu className="icon-button chat-workbench-top-action h-9 w-9 rounded-xl" />
           </div>
           </header>
+
           <div className="relative min-h-0 overflow-hidden">
             <div
               ref={messagesContainerRef}
@@ -924,12 +900,10 @@ export function ChatPage() {
             <>
             <MemoryPendingHint isStreaming={state.isStreaming} />
             <ChatComposer
-            modelSelector={<ModelSelector catalog={modelCatalog} platformModels={providedModels.models} platformLoggedIn={providedModels.loggedIn} platformOnly={usingPlatformModels} value={selectedModelId}
+            modelSelector={<ModelSelector catalog={modelCatalog} platformModels={providedModels.models} platformLoggedIn={providedModels.loggedIn} platformOnly={hostedPlatform} value={selectedModelId}
               onChange={value => void selectModel(value)}
               disabled={savingModelChoice || pendingAskUserInteractions.length > 0}
               loading={modelsLoading} error={modelsError} />}
-            approvalSelector={<ApprovalModeSelector value={approvalSelection.approvalMode} onChange={value => void approvalSelection.select(value)}
-              currentRunMode={state.currentRunId && !snapshot.streamDone ? state.currentRunApprovalMode : undefined} />}
               agentsLoading={agentsLoading}
               chatError={chatError}
               deepThinking={deepThinking}
@@ -940,7 +914,7 @@ export function ChatPage() {
               isStreaming={state.isStreaming}
               messageInputRef={messageInputRef}
               planMode={planMode}
-              projectResourcesLoading={false}
+              projectResourcesLoading={projectResourcesLoading}
               selectedAgentId={selectedAgentId}
               targetMode={targetMode}
               onAcceptFiles={acceptFiles}
@@ -964,7 +938,7 @@ export function ChatPage() {
               planModeEnabled={planModeEnabled}
               composerSkills={composerSkills}
               forcedSkillIds={forcedSkillIds}
-              skillsLoading={skillsLoading}
+              skillsLoading={skillsLoading || projectResourcesLoading}
               onForcedSkillIdsChange={setForcedSkillIds}
             />
             </>
