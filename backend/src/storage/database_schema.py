@@ -1,5 +1,179 @@
 """SQLite 当前基础 Schema 声明。"""
 
+from __future__ import annotations
+
+import sqlite3
+
+# 事实源：丢了就丢了。恢复时按行复制。
+FACT_SOURCE_TABLES = (
+    "json_store",
+    "workspaces",
+    "projects",
+    "project_resource_bindings",
+    "agents",
+    "mcp_servers",
+    "http_tools",
+    "chat_sessions",
+    "chat_messages",
+    "plans",
+    "plan_steps",
+    "plan_events",
+    "plan_revisions",
+    "run_events",
+    "trace_observations",
+    "subagent_invocations",
+    "subagent_transcript_items",
+    "chat_runs",
+    "chat_domain_streams",
+    "chat_domain_events",
+    "projection_streams",
+    "projection_frames",
+    "workflow_runs",
+    "workflow_nodes",
+    "workflow_edges",
+    "workflow_events",
+    "workflow_artifacts",
+    "skill_runs",
+    "memory_markdown_candidates",
+    "session_context_state",
+    "memory_nodes",
+    "memory_retrieval_feedback",
+    "skill_evolution_records",
+    "scheduled_jobs",
+    "scheduled_job_runs",
+    "project_job_recipients",
+    "user_notifications",
+    "group_studios",
+    "group_task_cards",
+    "group_memberships",
+    "group_blackboards",
+    "group_messages",
+    "group_runs",
+    "group_approvals",
+    "group_artifacts",
+    "group_work_items",
+    "group_studio_events",
+    "permission_decisions",
+    "permission_approvals",
+    "permission_executions",
+)
+
+# 派生表可随时重建。当前还没有 FTS / 聚合表。
+DERIVED_TABLES: tuple[str, ...] = ()
+
+# 运行时账本描述「此刻谁在跑」。恢复时不复制。表尚未创建，名字先登记。
+LEDGER_TABLES = (
+    "run_leases",
+    "job_firing_leases",
+    "session_admissions",
+)
+
+# 恢复时重建，不从源库复制。
+META_TABLES = (
+    "schema_version",
+    "state_meta",
+)
+
+# 现有库补列。新库的 CREATE TABLE 已带上这些列时，这里仍然幂等。
+SCHEMA_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("permission_decisions", "invalidated_at", "TEXT NOT NULL DEFAULT ''"),
+    ("permission_decisions", "expires_at", "TEXT NOT NULL DEFAULT ''"),
+    ("permission_decisions", "related_decision_id", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_runs", "authorization_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("chat_runs", "authorization_invalidated_at", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_sessions", "approval_mode", "TEXT NOT NULL DEFAULT 'manual'"),
+    ("scheduled_jobs", "execution_policy", "TEXT NOT NULL DEFAULT '{}'"),
+    ("group_messages", "thinking", "TEXT NOT NULL DEFAULT ''"),
+    ("group_studios", "pending_speaker_member_id", "TEXT NOT NULL DEFAULT ''"),
+    ("group_studios", "awaiting_intake_confirm", "INTEGER NOT NULL DEFAULT 0"),
+    ("group_studios", "speaker_queue_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("group_studios", "claim_round_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("group_studios", "last_turn_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("group_studios", "wave_spoken_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_messages", "runtime_events", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_messages", "plan_runs", "TEXT NOT NULL DEFAULT '[]'"),
+    (
+        "chat_messages",
+        "display_snapshot",
+        "TEXT NOT NULL DEFAULT '{\"version\":4,\"lastSeq\":0,\"streamDone\":false,\"order\":[],\"blocksById\":{}}'",
+    ),
+    ("chat_sessions", "mode", "TEXT NOT NULL DEFAULT 'agent'"),
+    ("chat_sessions", "model_config_id", "TEXT NOT NULL DEFAULT ''"),
+    ("agents", "workspace_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("agents", "role", "TEXT NOT NULL DEFAULT 'chat'"),
+    ("agents", "job_toolkit", "TEXT NOT NULL DEFAULT '{}'"),
+    ("agents", "plan_config", "TEXT NOT NULL DEFAULT '{}'"),
+    ("agents", "knowledge_tools", "TEXT NOT NULL DEFAULT '[]'"),
+    ("mcp_servers", "workspace_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("http_tools", "workspace_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("chat_sessions", "workspace_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("chat_sessions", "project_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("chat_runs", "workspace_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("chat_runs", "project_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("plans", "current_revision", "INTEGER NOT NULL DEFAULT 0"),
+    ("plans", "approved_revision", "INTEGER"),
+    ("plans", "review_feedback", "TEXT NOT NULL DEFAULT ''"),
+    ("plans", "execution_run_id", "TEXT NOT NULL DEFAULT ''"),
+    ("run_events", "workspace_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("run_events", "project_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("memory_nodes", "workspace_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("memory_nodes", "project_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("subagent_invocations", "workspace_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("subagent_invocations", "project_id", "TEXT NOT NULL DEFAULT 'default'"),
+    ("subagent_invocations", "execution_mode", "TEXT NOT NULL DEFAULT 'foreground'"),
+    ("subagent_invocations", "resume_capability", "TEXT NOT NULL DEFAULT 'same_process'"),
+    ("subagent_invocations", "process_instance_id", "TEXT NOT NULL DEFAULT ''"),
+    ("subagent_invocations", "result_ref", "TEXT NOT NULL DEFAULT ''"),
+    ("subagent_invocations", "delivery_status", "TEXT NOT NULL DEFAULT 'none'"),
+    ("scheduled_jobs", "capability_contract", "TEXT NOT NULL DEFAULT '{}'"),
+    ("chat_runs", "updated_at", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_runs", "model_config_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("chat_runs", "trigger_source", "TEXT NOT NULL DEFAULT 'user'"),
+    ("chat_runs", "scheduled_job_id", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_runs", "scheduled_firing_id", "TEXT NOT NULL DEFAULT ''"),
+    ("chat_sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'"),
+    ("chat_messages", "files", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_messages", "clarification_requests", "TEXT NOT NULL DEFAULT '[]'"),
+    ("chat_messages", "clarification_resolved", "INTEGER NOT NULL DEFAULT 0"),
+    ("scheduled_jobs", "model_config_id", "TEXT NOT NULL DEFAULT ''"),
+    ("group_studios", "model_config_id", "TEXT NOT NULL DEFAULT ''"),
+    ("group_work_items", "review_status", "TEXT NOT NULL DEFAULT ''"),
+    ("group_work_items", "review_note", "TEXT NOT NULL DEFAULT ''"),
+    ("group_work_items", "rework_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("trace_observations", "payload_path", "TEXT NOT NULL DEFAULT ''"),
+    ("trace_observations", "payload_sha256", "TEXT NOT NULL DEFAULT ''"),
+)
+
+META_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS state_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"""
+
+
+def reconcile_columns(conn: sqlite3.Connection) -> None:
+    """按 SCHEMA_COLUMNS 幂等补列。表还不存在时跳过。"""
+
+    for table, column, definition in SCHEMA_COLUMNS:
+        found = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        if found is None:
+            continue
+        names = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in names:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 BASE_SCHEMA_SQL = """
     CREATE TABLE IF NOT EXISTS workspaces (
         id TEXT PRIMARY KEY,
@@ -218,7 +392,9 @@ BASE_SCHEMA_SQL = """
         duration_ms INTEGER,
         input_json TEXT NOT NULL DEFAULT '{}',
         output_json TEXT NOT NULL DEFAULT '{}',
-        metadata_json TEXT NOT NULL DEFAULT '{}'
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        payload_path TEXT NOT NULL DEFAULT '',
+        payload_sha256 TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS idx_trace_observations_run_started
         ON trace_observations(run_id, started_at);

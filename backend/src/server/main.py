@@ -16,7 +16,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.server.routes import agent_builder, agents, chat, group_studio, health, mcp, memory, notifications, sandbox, settings as settings_routes, scheduled_jobs, skills, subagents, tools, traces, workflows, workspaces
+from src.server.routes import agent_builder, agents, chat, db_admin, group_studio, health, mcp, memory, notifications, sandbox, settings as settings_routes, scheduled_jobs, skills, subagents, tools, traces, workflows, workspaces
 from src.config.settings import assert_hosted_email_config, assert_hosted_platform_config, assert_hosted_sandbox, settings
 from src.server.auth.middleware import HostedSessionMiddleware
 from src.server.auth.platform_models import router as platform_model_router
@@ -152,6 +152,7 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(health.router, tags=["健康检查"])
+app.include_router(db_admin.router)
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(platform_model_router)

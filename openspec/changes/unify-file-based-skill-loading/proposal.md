@@ -1,5 +1,7 @@
 # Proposal
 
+> 已被 `docs/context-storage-refactor.md` 取代。第 8 章任务的勾选不代表代码已经存在；定时任务 Skill 冻结改由该方案阶段 3 实施。
+
 ## Why
 
 当前 Skill 管理、Chat、Job 和 AgentScope 分别依赖数据库登记、项目目录、用户目录或包路径重新解析，已出现“存在且启用却无法加载”、同名重复和诊断记录冒充 Skill 的真实故障。需要采用文件目录发现与渐进加载，同时把应用 Skill 收敛到 `<USER_DATA_ROOT>/skills` 这一唯一根，消除数据库登记和项目包作为额外事实源。

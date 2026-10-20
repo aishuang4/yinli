@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from collections.abc import Callable
 from typing import Any
+
+# 超过该大小的 input+output 落到 sessions/<id>/runs/<run>/<obs>.bin。
+SPILL_BYTES = 64 * 1024
 
 
 OBSERVATION_KINDS = (
@@ -47,14 +51,23 @@ class ObservationRecordStore:
 
         self.ensure_db()
         payload = self._normalize_insert(record)
-        with self.lock, self.connect() as conn:
+        input_json, output_json, payload_path, payload_sha = self._spill(
+            payload["sessionId"],
+            payload["runId"],
+            payload["id"],
+            payload["input"],
+            payload["output"],
+        )
+        from src.storage.database import write_tx
+
+        with write_tx(budget="transcript") as conn:
             conn.execute(
                 """
                 INSERT INTO trace_observations (
                     id, run_id, session_id, workspace_id, project_id, kind, name,
                     parent_id, status, started_at, ended_at, duration_ms,
-                    input_json, output_json, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    input_json, output_json, metadata_json, payload_path, payload_sha256
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["id"],
@@ -69,12 +82,13 @@ class ObservationRecordStore:
                     payload["startedAt"],
                     payload["endedAt"],
                     payload["durationMs"],
-                    self.dumps(payload["input"]),
-                    self.dumps(payload["output"]),
+                    input_json,
+                    output_json,
                     self.dumps(payload["metadata"]),
+                    payload_path,
+                    payload_sha,
                 ),
             )
-            conn.commit()
         return payload
 
     def close(
@@ -98,23 +112,37 @@ class ObservationRecordStore:
         duration_ms = _duration_ms(str(current.get("startedAt") or ""), closed_at)
         next_output = output if output is not None else current.get("output") or {}
         next_meta = {**(current.get("metadata") or {}), **(metadata or {})}
-        with self.lock, self.connect() as conn:
+        input_json, output_json, payload_path, payload_sha = self._spill(
+            str(current.get("sessionId") or ""),
+            str(current.get("runId") or ""),
+            observation_id,
+            current.get("input") if isinstance(current.get("input"), dict) else {},
+            next_output if isinstance(next_output, dict) else {},
+            previous_path=self._stored_payload_path(observation_id),
+        )
+        from src.storage.database import write_tx
+
+        with write_tx(budget="transcript") as conn:
             conn.execute(
                 """
                 UPDATE trace_observations
-                SET status = ?, ended_at = ?, duration_ms = ?, output_json = ?, metadata_json = ?
+                SET status = ?, ended_at = ?, duration_ms = ?,
+                    input_json = ?, output_json = ?, metadata_json = ?,
+                    payload_path = ?, payload_sha256 = ?
                 WHERE id = ?
                 """,
                 (
                     status,
                     closed_at,
                     duration_ms,
-                    self.dumps(next_output),
+                    input_json,
+                    output_json,
                     self.dumps(next_meta),
+                    payload_path,
+                    payload_sha,
                     observation_id,
                 ),
             )
-            conn.commit()
         return self.get(observation_id)
 
     def update_fields(
@@ -136,22 +164,34 @@ class ObservationRecordStore:
         next_output = output if output is not None else current.get("output") or {}
         next_meta = {**(current.get("metadata") or {}), **(metadata or {})}
         next_name = name if name is not None else current.get("name") or ""
-        with self.lock, self.connect() as conn:
+        input_json, output_json, payload_path, payload_sha = self._spill(
+            str(current.get("sessionId") or ""),
+            str(current.get("runId") or ""),
+            observation_id,
+            next_input if isinstance(next_input, dict) else {},
+            next_output if isinstance(next_output, dict) else {},
+            previous_path=self._stored_payload_path(observation_id),
+        )
+        from src.storage.database import write_tx
+
+        with write_tx(budget="transcript") as conn:
             conn.execute(
                 """
                 UPDATE trace_observations
-                SET name = ?, input_json = ?, output_json = ?, metadata_json = ?
+                SET name = ?, input_json = ?, output_json = ?, metadata_json = ?,
+                    payload_path = ?, payload_sha256 = ?
                 WHERE id = ?
                 """,
                 (
                     next_name,
-                    self.dumps(next_input),
-                    self.dumps(next_output),
+                    input_json,
+                    output_json,
                     self.dumps(next_meta),
+                    payload_path,
+                    payload_sha,
                     observation_id,
                 ),
             )
-            conn.commit()
         return self.get(observation_id)
 
     def get(self, observation_id: str) -> dict[str, Any] | None:
@@ -238,7 +278,7 @@ class ObservationRecordStore:
         }
 
     def _from_row(self, row: sqlite3.Row) -> dict[str, Any]:
-        return {
+        record = {
             "id": row["id"],
             "runId": row["run_id"],
             "sessionId": row["session_id"],
@@ -255,6 +295,98 @@ class ObservationRecordStore:
             "output": self.loads(row["output_json"], {}),
             "metadata": self.loads(row["metadata_json"], {}),
         }
+        return self._hydrate(row, record)
+
+    def _stored_payload_path(self, observation_id: str) -> str:
+        with self.lock, self.connect() as conn:
+            row = conn.execute(
+                "SELECT payload_path FROM trace_observations WHERE id = ?",
+                (observation_id,),
+            ).fetchone()
+        if row is None:
+            return ""
+        return str(row["payload_path"] or "")
+
+    def _spill(
+        self,
+        session_id: str,
+        run_id: str,
+        observation_id: str,
+        input_data: dict[str, Any],
+        output_data: dict[str, Any],
+        *,
+        previous_path: str = "",
+    ) -> tuple[str, str, str, str]:
+        packed = self.dumps({"input": input_data, "output": output_data}).encode("utf-8")
+        if len(packed) <= SPILL_BYTES:
+            _remove_spill(previous_path)
+            return self.dumps(input_data), self.dumps(output_data), "", ""
+        digest = hashlib.sha256(packed).hexdigest()
+        relative = (
+            f"sessions/{_safe_segment(session_id)}/runs/{_safe_segment(run_id)}/"
+            f"{_safe_segment(observation_id)}.bin"
+        )
+        target = _tenant_root() / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(packed)
+        if previous_path and previous_path != relative:
+            _remove_spill(previous_path)
+        stub = self.dumps({"_spilled": True})
+        return stub, stub, relative, digest
+
+    def _hydrate(self, row: sqlite3.Row, record: dict[str, Any]) -> dict[str, Any]:
+        keys = set(row.keys())
+        if "payload_path" not in keys:
+            return record
+        relative = str(row["payload_path"] or "")
+        if not relative:
+            return record
+        target = _tenant_root() / relative
+        try:
+            blob = target.read_bytes()
+        except OSError:
+            return record
+        expected = str(row["payload_sha256"] or "")
+        if expected and hashlib.sha256(blob).hexdigest() != expected:
+            return record
+        loaded = self.loads(blob.decode("utf-8"), {})
+        if isinstance(loaded, dict):
+            if isinstance(loaded.get("input"), dict):
+                record["input"] = loaded["input"]
+            if isinstance(loaded.get("output"), dict):
+                record["output"] = loaded["output"]
+        return record
+
+
+def _safe_segment(value: str) -> str:
+    text = str(value or "").strip()
+    if not text or text in {".", ".."} or "/" in text or "\\" in text:
+        return "unscoped"
+    return text
+
+
+def _tenant_root():
+    from src.config.runtime_paths import tenant_root
+
+    return tenant_root()
+
+
+def _remove_spill(relative: str) -> None:
+    text = str(relative or "")
+    if not text.startswith("sessions/") or ".." in text.split("/"):
+        return
+    target = _tenant_root() / text
+    try:
+        root = (_tenant_root() / "sessions").resolve()
+        resolved = target.resolve()
+    except OSError:
+        return
+    if not resolved.is_relative_to(root):
+        return
+    try:
+        resolved.unlink(missing_ok=True)
+    except OSError:
+        return
 
 
 def _duration_ms(started_at: str, ended_at: str | None) -> int | None:

@@ -10,6 +10,9 @@ import json
 import logging
 import sqlite3
 import threading
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
@@ -28,7 +31,19 @@ from src.config.runtime_paths import (
 from src.config.settings import settings
 from src.storage.chat_run_records import ChatRunRecordStore
 from src.storage.chat_session_records import ChatSessionRecordStore
-from src.storage.database_schema import BASE_SCHEMA_SQL
+from src.storage.database_schema import BASE_SCHEMA_SQL, META_SCHEMA_SQL, reconcile_columns
+from src.storage.sqlite_tx import (
+    CHECKPOINT_EVERY,
+    WRITE_BUDGET_SECONDS,
+    WriteBudget,
+    begin_immediate,
+    checkpoint_passive,
+    commit_write,
+    open_autocommit,
+    open_reader,
+    open_writer,
+    rollback_write,
+)
 from src.storage.permission_schema import PERMISSION_SCHEMA_SQL
 from src.storage.scheduled_job_records import ScheduledJobRecordStore
 from src.storage.agent_defaults import (
@@ -194,13 +209,67 @@ _lock = _TenantLockProxy()
 
 def _connect() -> sqlite3.Connection:
     ensure_tenant_directories()
-    path = db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=30)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return open_writer(db_path())
+
+
+_successful_writes: dict[Path, int] = {}
+
+
+@contextmanager
+def write_tx(*, budget: WriteBudget = "normal") -> Iterator[sqlite3.Connection]:
+    """立即写事务。建立在租户 RLock 上，锁内重试 BEGIN IMMEDIATE。"""
+
+    ensure_db()
+    deadline = time.monotonic() + WRITE_BUDGET_SECONDS[budget]
+    started = time.monotonic()
+    with _lock:
+        path = db_path()
+        conn = open_autocommit(path)
+        try:
+            begin_immediate(conn, deadline=deadline, started=started)
+            try:
+                yield conn
+                commit_write(conn)
+            except Exception:
+                rollback_write(conn)
+                raise
+            _note_successful_write(path, conn)
+        finally:
+            conn.close()
+
+
+@contextmanager
+def read_conn() -> Iterator[sqlite3.Connection]:
+    """只读连接。库还没建好时先走 ensure_db。"""
+
+    ensure_db()
+    conn = open_reader(db_path())
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _note_successful_write(path: Path, conn: sqlite3.Connection) -> None:
+    count = _successful_writes.get(path, 0) + 1
+    _successful_writes[path] = count
+    if count % CHECKPOINT_EVERY != 0:
+        return
+    checkpoint_passive(conn)
+    now = _utc_now()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            """
+            INSERT INTO state_meta (key, value) VALUES ('last_checkpoint_at', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (now,),
+        )
+        commit_write(conn)
+    except Exception:
+        rollback_write(conn)
+        logger.warning("记录 checkpoint 时间失败", exc_info=True)
 
 
 def forget_db(path: Path) -> None:
@@ -209,6 +278,7 @@ def forget_db(path: Path) -> None:
     with _state_lock:
         _initialized_paths.discard(path)
         _path_locks.pop(path, None)
+        _successful_writes.pop(path, None)
 
 
 def forget_all() -> None:
@@ -217,21 +287,7 @@ def forget_all() -> None:
     with _state_lock:
         _initialized_paths.clear()
         _path_locks.clear()
-
-
-def _ensure_column(
-    conn: sqlite3.Connection,
-    table: str,
-    column: str,
-    definition: str,
-) -> None:
-    """Add a SQLite column when upgrading an existing development database."""
-    columns = {
-        row["name"]
-        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-    }
-    if column not in columns:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        _successful_writes.clear()
 
 
 def _drop_column_if_exists(conn: sqlite3.Connection, table: str, column: str) -> None:
@@ -330,13 +386,7 @@ def ensure_db() -> None:
             """)
             conn.executescript(BASE_SCHEMA_SQL)
             conn.executescript(PERMISSION_SCHEMA_SQL)
-            _ensure_column(conn, "permission_decisions", "invalidated_at", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "permission_decisions", "expires_at", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "permission_decisions", "related_decision_id", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "chat_runs", "authorization_json", "TEXT NOT NULL DEFAULT '{}'")
-            _ensure_column(conn, "chat_runs", "authorization_invalidated_at", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "chat_sessions", "approval_mode", "TEXT NOT NULL DEFAULT 'manual'")
-            _ensure_column(conn, "scheduled_jobs", "execution_policy", "TEXT NOT NULL DEFAULT '{}'")
+            conn.executescript(META_SCHEMA_SQL)
             conn.execute("DROP INDEX IF EXISTS idx_group_studios_active_chat")
             conn.execute(
                 """
@@ -345,81 +395,6 @@ def ensure_db() -> None:
                     WHERE status NOT IN ('done', 'archived', 'failed', 'deleted')
                 """
             )
-            _ensure_column(conn, "group_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(
-                conn,
-                "group_studios",
-                "pending_speaker_member_id",
-                "TEXT NOT NULL DEFAULT ''",
-            )
-            _ensure_column(
-                conn,
-                "group_studios",
-                "awaiting_intake_confirm",
-                "INTEGER NOT NULL DEFAULT 0",
-            )
-            _ensure_column(
-                conn,
-                "group_studios",
-                "speaker_queue_json",
-                "TEXT NOT NULL DEFAULT '[]'",
-            )
-            _ensure_column(
-                conn,
-                "group_studios",
-                "claim_round_json",
-                "TEXT NOT NULL DEFAULT '[]'",
-            )
-            _ensure_column(
-                conn,
-                "group_studios",
-                "last_turn_json",
-                "TEXT NOT NULL DEFAULT '{}'",
-            )
-            _ensure_column(
-                conn,
-                "group_studios",
-                "wave_spoken_json",
-                "TEXT NOT NULL DEFAULT '[]'",
-            )
-            _ensure_column(conn, "chat_messages", "tool_calls", "TEXT NOT NULL DEFAULT '[]'")
-            _ensure_column(conn, "chat_messages", "thinking", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "chat_messages", "model_caches", "TEXT NOT NULL DEFAULT '[]'")
-            _ensure_column(conn, "chat_messages", "runtime_events", "TEXT NOT NULL DEFAULT '[]'")
-            _ensure_column(conn, "chat_messages", "plan_runs", "TEXT NOT NULL DEFAULT '[]'")
-            _ensure_column(
-                conn,
-                "chat_messages",
-                "display_snapshot",
-                "TEXT NOT NULL DEFAULT '{\"version\":4,\"lastSeq\":0,\"streamDone\":false,\"order\":[],\"blocksById\":{}}'",
-            )
-            _ensure_column(conn, "chat_sessions", "mode", "TEXT NOT NULL DEFAULT 'agent'")
-            _ensure_column(conn, "chat_sessions", "model_config_id", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "agents", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "agents", "role", "TEXT NOT NULL DEFAULT 'chat'")
-            _ensure_column(conn, "agents", "job_toolkit", "TEXT NOT NULL DEFAULT '{}'")
-            _ensure_column(conn, "mcp_servers", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "http_tools", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "chat_sessions", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "chat_sessions", "project_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "chat_runs", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "chat_runs", "project_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "plans", "current_revision", "INTEGER NOT NULL DEFAULT 0")
-            _ensure_column(conn, "plans", "approved_revision", "INTEGER")
-            _ensure_column(conn, "plans", "review_feedback", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "plans", "execution_run_id", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "run_events", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "run_events", "project_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "memory_nodes", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "memory_nodes", "project_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "subagent_invocations", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "subagent_invocations", "project_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "subagent_invocations", "execution_mode", "TEXT NOT NULL DEFAULT 'foreground'")
-            _ensure_column(conn, "subagent_invocations", "resume_capability", "TEXT NOT NULL DEFAULT 'same_process'")
-            _ensure_column(conn, "subagent_invocations", "process_instance_id", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "subagent_invocations", "result_ref", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "subagent_invocations", "delivery_status", "TEXT NOT NULL DEFAULT 'none'")
-            _ensure_column(conn, "scheduled_jobs", "capability_contract", "TEXT NOT NULL DEFAULT '{}'")
             _drop_column_if_exists(conn, "agents", "callable_agents")
             _drop_column_if_exists(conn, "agents", "max_depth")
             _drop_column_if_exists(conn, "chat_messages", "subagent_calls")
@@ -434,29 +409,7 @@ def ensure_db() -> None:
             conn.execute("DROP TABLE IF EXISTS skills")
             conn.execute("DELETE FROM json_store WHERE namespace = 'team_templates'")
             _reset_legacy_chat_stream_data(conn)
-            columns = {
-                row["name"]
-                for row in conn.execute("PRAGMA table_info(agents)").fetchall()
-            }
-            if "plan_config" not in columns:
-                conn.execute("ALTER TABLE agents ADD COLUMN plan_config TEXT NOT NULL DEFAULT '{}'")
-                conn.commit()
-            columns = {
-                row["name"]
-                for row in conn.execute("PRAGMA table_info(agents)").fetchall()
-            }
-            if "knowledge_tools" not in columns:
-                conn.execute("ALTER TABLE agents ADD COLUMN knowledge_tools TEXT NOT NULL DEFAULT '[]'")
-                conn.commit()
-            _ensure_column(conn, "chat_runs", "updated_at", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "chat_runs", "model_config_json", "TEXT NOT NULL DEFAULT '{}'")
-            _ensure_column(conn, "chat_runs", "trigger_source", "TEXT NOT NULL DEFAULT 'user'")
-            _ensure_column(conn, "chat_runs", "scheduled_job_id", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "chat_runs", "scheduled_firing_id", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "chat_sessions", "kind", "TEXT NOT NULL DEFAULT 'chat'")
-            _ensure_column(conn, "chat_messages", "files", "TEXT NOT NULL DEFAULT '[]'")
-            _ensure_column(conn, "chat_messages", "clarification_requests", "TEXT NOT NULL DEFAULT '[]'")
-            _ensure_column(conn, "chat_messages", "clarification_resolved", "INTEGER NOT NULL DEFAULT 0")
+            reconcile_columns(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chat_messages_session_order "
                 "ON chat_messages(session_id, sort_order)"
@@ -465,11 +418,6 @@ def ensure_db() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_chat_sessions_project_kind "
                 "ON chat_sessions(project_id, kind, updated_at DESC)"
             )
-            _ensure_column(conn, "scheduled_jobs", "model_config_id", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "group_studios", "model_config_id", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "group_work_items", "review_status", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "group_work_items", "review_note", "TEXT NOT NULL DEFAULT ''")
-            _ensure_column(conn, "group_work_items", "rework_count", "INTEGER NOT NULL DEFAULT 0")
             _drop_column_if_exists(conn, "chat_runs", "team_id")
             _drop_column_if_exists(conn, "chat_runs", "team_name")
             now = _utc_now()
@@ -550,6 +498,10 @@ def ensure_db() -> None:
                 CREATE INDEX IF NOT EXISTS idx_trace_observations_project_started
                     ON trace_observations(project_id, started_at DESC);
             """)
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (1, ?)",
+                (now,),
+            )
             conn.commit()
             _initialized_paths.add(path)
             from src.tenancy.context import current_tenant
