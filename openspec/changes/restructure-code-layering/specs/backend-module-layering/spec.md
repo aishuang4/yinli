@@ -80,3 +80,39 @@
 
 - **WHEN** W5 完成后查看 `backend layers` 契约
 - **THEN** 最底层为 `src.config : src.tenancy : src.common : src.exception_detail`，原来 4 条 `src.config.* -> src.tenancy.context` 的基线条目已删除
+
+### Requirement: Server package is a leaf after W5
+
+W5 完成后，`pyproject.toml` MUST 含名为 `server is a leaf` 的 `forbidden` 契约，`forbidden_modules = ["src.server"]`，`source_modules` 覆盖 `src/` 下除 `src.server` 外的全部顶层包，且 MUST NOT 有 `ignore_imports`。任何非 `src.server` 模块导入 `src.server.*`（含函数内延迟导入）MUST 使 `lint-imports` 失败。
+
+#### Scenario: Contract passes after W5
+
+- **WHEN** W5 提交后在 `backend/` 执行 `uv run lint-imports`
+- **THEN** 输出中 `backend layers` 与 `server is a leaf` 均为 `KEPT`
+
+#### Scenario: Any upward import into server fails immediately
+
+- **GIVEN** `src/scheduler/ticker.py` 中新增一行 `from src.server.main import app`
+- **WHEN** 执行 `uv run lint-imports`
+- **THEN** `server is a leaf` 报告 `BROKEN` 并列出该导入；该边不可通过加入基线规避
+
+### Requirement: Relocated packages declare a public surface and ship AGENTS.md
+
+每个由本变更新建或搬入代码的包（`src/agents`、`src/tools`、`src/common`、`src/models`、`src/runtime/chat`、`src/server`）MUST 在搬入的同一提交中：（1）在被搬入的模块或包 `__init__.py` 中声明 `__all__`，内容等于该包外部实际导入的名字集合（`src/runtime/chat` 豁免此项，改为在 AGENTS.md 列出被外部导入的模块）；（2）包内有 `AGENTS.md`，固定五段：职责与边界、入口、不变量（每条附一个以 `test/` 开头且存在的测试路径）、禁止、改动政策，不超过 800 词；（3）同目录有内容为 `@AGENTS.md` 的 `CLAUDE.md`。`test/test_agents_md.py` MUST 检查以上目录齐全且所有测试锚点存在。
+
+#### Scenario: Structure test passes for all relocated packages
+
+- **WHEN** W8 完成后执行 `uv run pytest test/test_agents_md.py`
+- **THEN** 测试通过，`REQUIRED_DIRS` 包含上述六个目录
+
+#### Scenario: Dangling test anchor fails
+
+- **GIVEN** `src/agents/AGENTS.md` 中某条不变量引用 `test/test_not_exist.py`
+- **WHEN** 执行 `uv run pytest test/test_agents_md.py`
+- **THEN** 测试失败并列出该路径与所在文件
+
+#### Scenario: Importing a non-public name is caught
+
+- **GIVEN** `src/scheduler/service.py` 导入 `src.agents.registry._load_agents`（不在 `__all__` 中）
+- **WHEN** 执行 `uv run ruff check src`（启用 `PLC2701` 私有名导入检查）
+- **THEN** 报告该导入
