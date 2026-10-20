@@ -50,7 +50,9 @@ def test_user_external_skill_is_visible_but_disabled(tmp_path: Path):
     assert skills[0].enabled is False
 
 
-def test_discovers_home_agents_directory(tmp_path: Path):
+def test_home_skills_stay_unloaded_until_scan_root_registered(tmp_path: Path):
+    from src.catalog.skills import clear_extra_skill_scan_roots, register_skill_scan_root
+
     home_skill = tmp_path / ".agents" / "skills" / "home-skill"
     home_skill.mkdir(parents=True)
     (home_skill / "SKILL.md").write_text(
@@ -62,6 +64,17 @@ def test_discovers_home_agents_directory(tmp_path: Path):
         user_data_root=tmp_path / "user-data",
         user_home_root=tmp_path,
     )
-    assert len(skills) == 1
-    assert skills[0].enabled is False
-    assert skills[0].resource_path == str(home_skill.resolve())
+    assert all(skill.name != "home-skill" for skill in skills)
+
+    register_skill_scan_root(home_skill.parent)
+    try:
+        skills = discover_external_skills(
+            tmp_path / "project",
+            user_data_root=tmp_path / "user-data",
+            user_home_root=tmp_path,
+        )
+        matched = [skill for skill in skills if skill.name == "home-skill"]
+        assert len(matched) == 1
+        assert matched[0].resource_path == str(home_skill.resolve())
+    finally:
+        clear_extra_skill_scan_roots()

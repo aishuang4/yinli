@@ -2,6 +2,18 @@
 
 import type { SelectableModel } from './ModelSelector';
 
+export function selectorTriggerLabel(options: {
+  error?: string;
+  loading?: boolean;
+  selectedLabel?: string;
+  choiceCount: number;
+}): string {
+  if (options.choiceCount > 0) return options.selectedLabel || '选择模型';
+  if (options.error) return '模型配置异常';
+  if (options.loading) return '加载中…';
+  return '选择模型';
+}
+
 export function mergeSelectableModels(
   localModels: SelectableModel[],
   platformModels: SelectableModel[],

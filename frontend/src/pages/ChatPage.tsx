@@ -1003,13 +1003,14 @@ function ApprovalModeControl({
   const panelRef = useRef<HTMLDivElement>(null);
   const label = APPROVAL_MODE_OPTIONS.find((item) => item.id === mode)?.label || '人工批准';
 
-  useEffect(() => {
+  const loadReview = useCallback(() => {
     let cancelled = false;
     void fetch('/api/settings/permission-review')
       .then(async (response) => {
-        const body = await response.json() as { available?: boolean; reason?: string };
+        const text = await response.text();
+        const body = text ? JSON.parse(text) as { available?: boolean; reason?: string } : {};
         if (cancelled) return;
-        setReviewReady(Boolean(body.available));
+        setReviewReady(Boolean(response.ok && body.available));
         setReviewReason(body.reason || '');
       })
       .catch(() => {
@@ -1018,7 +1019,9 @@ function ApprovalModeControl({
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, []);
+
+  useEffect(() => loadReview(), [loadReview, sessionId]);
 
   useEffect(() => {
     if (!open) return;
@@ -1064,7 +1067,10 @@ function ApprovalModeControl({
         ref={buttonRef}
         type="button"
         className="inline-flex h-8 max-w-full shrink-0 items-center gap-1 rounded-lg px-1.5 text-sm text-[var(--color-text-secondary)] transition-colors duration-200 hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          setOpen((current) => !current);
+          loadReview();
+        }}
         disabled={disabled}
         aria-label="选择审核模式"
         aria-haspopup="listbox"

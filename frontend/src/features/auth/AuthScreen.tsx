@@ -43,6 +43,7 @@ export function AuthScreen({
   onServiceUrl,
   onMode,
   onSubmit,
+  onBack,
 }: {
   mode: AuthFormMode;
   email: string;
@@ -58,6 +59,7 @@ export function AuthScreen({
   onServiceUrl?: (value: string) => void;
   onMode: (mode: AuthFormMode) => void;
   onSubmit: () => void;
+  onBack?: () => void;
 }) {
   const copy = COPY[mode];
   return (
@@ -118,6 +120,9 @@ export function AuthScreen({
             {copy.action}
           </Button>
           <div className="auth-screen__links">
+            {onBack ? (
+              <button type="button" onClick={onBack}>返回工作台</button>
+            ) : null}
             {mode === 'login' ? (
               <>
                 <button type="button" onClick={() => onMode('register')}>注册账号</button>

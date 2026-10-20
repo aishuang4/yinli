@@ -4,7 +4,9 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 ROOT = Path(globals().get("SPECPATH", Path.cwd())).resolve()
 
-datas = []
+datas = [
+    (str(ROOT / "src/security/authorization/prompts/smartguard.md"), "src/security/authorization/prompts"),
+]
 binaries = []
 hiddenimports = [
     'uvicorn', 'uvicorn.logging', 'uvicorn.loops.auto', 'uvicorn.protocols.http.auto',

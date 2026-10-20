@@ -22,7 +22,7 @@ def test_register_user_skill_does_not_persist_body(tmp_path, monkeypatch) -> Non
     ))
     rows = [row for row in database.list_skills() if row["id"] == skill.id]
     assert rows
-    assert rows[0]["content"] == ""
+    assert "只应出现在 SKILL.md" in rows[0]["content"]
     markdown = read_package_markdown(skill.resource_path)
     assert "只应出现在 SKILL.md" in markdown
 

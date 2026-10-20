@@ -13,7 +13,7 @@ from threading import RLock, local
 from typing import Literal
 from urllib.parse import parse_qsl, urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from src.config.runtime_paths import tenant_root
 
@@ -121,10 +121,21 @@ class PermissionReviewConfig(ConfigValue):
 
     model_config_id: str = Field(alias="modelConfigId", min_length=1)
     timeout_seconds: float = Field(default=8, alias="timeoutSeconds", ge=1, le=60)
-    max_output_tokens: int = Field(default=16, alias="maxOutputTokens", ge=16, le=64)
+    max_output_tokens: int = Field(default=16, alias="maxOutputTokens", ge=16, le=4096)
     schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
     prompt_version: Literal["permission-review-v1"] = Field(default="permission-review-v1", alias="promptVersion")
     probe_status: Literal["missing", "passed"] = Field(default="missing", alias="probeStatus")
+
+    @field_validator("max_output_tokens", mode="before")
+    @classmethod
+    def clamp_max_output_tokens(cls, value: object) -> int:
+        """超出范围时收进上限，避免整份 models.json 因此无法加载。"""
+
+        try:
+            number = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 16
+        return min(4096, max(16, number))
 
 
 class ModelCatalog(ConfigValue):

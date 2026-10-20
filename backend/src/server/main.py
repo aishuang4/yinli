@@ -66,6 +66,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             try:
                 ensure_tenant_directories()
                 await init_db()
+                from src.skills.registry import reload_skill_cache
+
+                reload_skill_cache()
                 interrupted_subagents = reconcile_interrupted_subagent_invocations()
                 interrupted_subagent_files = reconcile_interrupted_file_tasks([
                     Path(str(project.get("rootPath") or ""))

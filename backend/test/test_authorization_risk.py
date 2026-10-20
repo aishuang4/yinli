@@ -160,6 +160,15 @@ def test_smartguard_resource_matches_approved_appendix():
     assert prompt.user_template == fences[1]
 
 
+def test_missing_smartguard_prompt_is_reported_as_value_error(monkeypatch):
+    from pathlib import Path
+    import src.security.authorization.prompt_provider as prompt_provider
+
+    monkeypatch.setattr(prompt_provider, "_PROMPT_PATH", Path("/tmp/missing-smartguard.md"))
+    with pytest.raises(ValueError, match="审核提示词资源缺失"):
+        prompt_provider.load_smartguard_prompt()
+
+
 def test_classification_failure_is_unknown(monkeypatch):
     def broken(_action):
         raise RuntimeError("boom")

@@ -12,13 +12,14 @@ from pathlib import Path
 
 import yaml
 
-from src.catalog.paths import workspace_catalog_root
-from src.config.runtime_paths import skill_packages_root
+from src.config.runtime_paths import skill_packages_root, tenant_root
 
 SYSTEM_SKILL_IDS = ("yinli-catalog", "yinli-charts", "word-documents")
+# 只掃描這類目錄。額外位置走 register_skill_scan_root，不從資料庫補技能。
+SKILL_SCAN_DIR_NAMES = (".agents/skills", ".agent/skills", ".claude/skills")
+_extra_skill_roots: list[Path] = []
 # 合格 Chat 无条件追加的系统说明书（file-catalog-v1 §9.2）；其余包可经 availableToAllAgents 共享，或写入 Agent 配置。
 ALWAYS_INJECTED_SKILL_IDS = ("yinli-catalog",)
-_SKILL_DIR_NAMES = (".agents/skills", ".agent/skills", ".claude/skills")
 _FRONTMATTER_RE = re.compile(r"\A---\s*\n(?P<yaml>.*?)\n---\s*\n?(?P<body>.*)\Z", re.DOTALL)
 
 
@@ -118,22 +119,21 @@ def discover_skill_packages(
     user_home_root: Path | None,
     workspace_id: str = "default",
 ) -> list[DiscoveredSkill]:
-    """扫描项目 / 用户 / Workspace catalog 下的 Skill 包。user_home_root 为 None（hosted）时跳过。"""
+    """只扫描 runtime skills 与 .agents/.agent/.claude/skills。主目录和未登记位置不加载。"""
 
-    roots: list[tuple[Path, str, bool, str]] = []
+    del user_home_root, workspace_id
+    roots: list[tuple[Path, str, bool, str]] = [
+        (skill_packages_root(), "runtime", True, "runtime"),
+    ]
     bases: list[tuple[Path, str, bool, str]] = [
         (project_root, "project", True, "external_agents"),
         (user_data_root, "user", False, "external_agents"),
     ]
-    if user_home_root is not None:
-        bases.append((user_home_root, "user", False, "external_agents"))
     for base, scope, enabled, kind in bases:
-        for directory_name in _SKILL_DIR_NAMES:
+        for directory_name in SKILL_SCAN_DIR_NAMES:
             roots.append((Path(base) / directory_name, scope, enabled, kind))
-    try:
-        roots.append((workspace_catalog_root(workspace_id) / "skills", "user", False, "workspace"))
-    except ValueError:
-        pass
+    for extra in _extra_skill_roots:
+        roots.append((Path(extra), "extra", True, "extension"))
 
     discovered: list[DiscoveredSkill] = []
     seen: set[str] = set()
@@ -156,6 +156,7 @@ def discover_skill_packages(
                 enabled=enabled,
                 source_kind=source_kind,
                 source_scope=scope,
+                stable_id=package_dir.name,
             )
             if item is None or item.id in seen:
                 continue
@@ -187,16 +188,85 @@ def project_skill_refs(project_root: Path) -> set[str]:
 
     refs: set[str] = set()
     root = Path(project_root)
-    for directory_name in _SKILL_DIR_NAMES:
+    for directory_name in SKILL_SCAN_DIR_NAMES:
         for skill_md in sorted((root / directory_name).glob("*/SKILL.md")) if (root / directory_name).is_dir() else []:
             item = _discovered_from_package(
                 skill_md.parent.absolute(),
                 enabled=True,
                 source_kind="external_agents",
                 source_scope="project",
+                stable_id=skill_md.parent.name,
             )
             if item is None:
                 continue
             refs.add(item.id)
             refs.add(item.name)
     return refs
+
+
+def register_skill_scan_root(path: Path) -> None:
+    """扩展口：把额外目录纳入 Skill 扫描。调用方负责传入已经约定好的根。"""
+
+    resolved = Path(path)
+    if resolved not in _extra_skill_roots:
+        _extra_skill_roots.append(resolved)
+
+
+def clear_extra_skill_scan_roots() -> None:
+    """测试隔离用，清掉扩展扫描根。"""
+
+    _extra_skill_roots.clear()
+
+
+def skill_scan_targets(
+    project_roots: list[Path],
+    *,
+    include_runtime: bool = True,
+    runtime_root: Path | None = None,
+) -> list[tuple[Path, str, bool, str]]:
+    """返回要扫描的目录。runtime 是 agent-workstation/skills，其余是 .agent(s)/skills 这类目录。"""
+
+    targets: list[tuple[Path, str, bool, str]] = []
+    if include_runtime:
+        targets.append((Path(runtime_root) if runtime_root is not None else skill_packages_root(), "runtime", True, "runtime"))
+    bases: list[tuple[Path, str, bool, str]] = [(tenant_root(), "user", False, "external_agents")]
+    for root in project_roots:
+        bases.append((Path(root), "project", True, "external_agents"))
+    for base, scope, enabled, kind in bases:
+        for name in SKILL_SCAN_DIR_NAMES:
+            targets.append((base / name, scope, enabled, kind))
+    for extra in _extra_skill_roots:
+        targets.append((Path(extra), "extra", True, "extension"))
+    return targets
+
+
+def scan_skill_directories(
+    targets: list[tuple[Path, str, bool, str]],
+) -> list[DiscoveredSkill]:
+    """扫描给定根目录下一层的 SKILL.md。同名目录后出现的覆盖先出现的。"""
+
+    discovered: dict[str, DiscoveredSkill] = {}
+    for root, scope, enabled, source_kind in targets:
+        try:
+            resolved = Path(root).resolve()
+        except OSError:
+            continue
+        if not resolved.is_dir():
+            continue
+        for skill_md in sorted(resolved.glob("*/SKILL.md")):
+            package_dir = skill_md.parent
+            try:
+                if not package_dir.resolve().is_relative_to(resolved):
+                    continue
+            except (OSError, ValueError):
+                continue
+            item = _discovered_from_package(
+                package_dir,
+                enabled=enabled,
+                source_kind=source_kind,
+                source_scope=scope,
+                stable_id=package_dir.name,
+            )
+            if item is not None:
+                discovered[item.id] = item
+    return list(discovered.values())

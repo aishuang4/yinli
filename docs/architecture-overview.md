@@ -244,7 +244,7 @@ Chat 主界面只依赖两个稳定产品边界：`RUNTIME_EVENT: RuntimeFrame` 
 
 ## 文件 Catalog
 
-持久 Agent 定义的权威是 Workspace 目录 `<USER_DATA_ROOT>/workspaces/<id>/.agents/profiles/<id>.md`，不是 `agents` 表。系统 Agent 仍由代码提供，用户覆盖写在 `workspaces/_system/.agents/profiles/`。Skill 正文只来自包内 `SKILL.md`（sqlite `content` 不再保存正文）；项目 `.agents/skills` 默认可运行。系统包 `yinli-catalog` / `yinli-charts` / `word-documents` seed 到运行时 skills 目录。MCP / HTTP 工具定义是 Workspace/Project 下的 YAML，密钥只走 `secret_ref` / secret_store，禁止写进 YAML。Job 定义是 `.agents/jobs/<id>.md`；`scheduled_jobs` 的权威实例字段是 status / next_run_at / 连续失败 / 能力合同等，定义列只是派生缓存，读路径以文件覆盖。交互式 Chat 仍注入 `ScheduleJob` 工具组登记任务（写库并落 `.agents/jobs/<id>.md`）；Team 与 firing 不注入。禁止再发明第二套系统 CRUD。Chat 会生成项目 `.agents/INDEX.md`。规格见 `docs/file-catalog-v1.md`。
+持久 Agent 定义的权威是 Workspace 目录 `<USER_DATA_ROOT>/workspaces/<id>/.agents/profiles/<id>.md`，不是 `agents` 表。系统 Agent 仍由代码提供，用户覆盖写在 `workspaces/_system/.agents/profiles/`。Skill 正文只来自包内 `SKILL.md`。`skills` 表已删除；进程缓存只扫描 `skills/` 与 `.agents/skills`、`.agent/skills`、`.claude/skills`，扩展目录走 `register_skill_scan_root`。导入、更新、删除和启动都会重新扫描。项目 `.agents/skills` 默认可运行。系统包 `yinli-catalog` / `yinli-charts` / `word-documents` seed 到运行时 skills 目录。MCP / HTTP 工具定义是 Workspace/Project 下的 YAML，密钥只走 `secret_ref` / secret_store，禁止写进 YAML。Job 定义是 `.agents/jobs/<id>.md`；`scheduled_jobs` 的权威实例字段是 status / next_run_at / 连续失败 / 能力合同等，定义列只是派生缓存，读路径以文件覆盖。交互式 Chat 仍注入 `ScheduleJob` 工具组登记任务（写库并落 `.agents/jobs/<id>.md`）；Team 与 firing 不注入。禁止再发明第二套系统 CRUD。Chat 会生成项目 `.agents/INDEX.md`。规格见 `docs/file-catalog-v1.md`。
 
 ## 存储
 

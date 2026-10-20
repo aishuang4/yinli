@@ -84,32 +84,17 @@ def test_user_scope_skill_installs_instead_of_404(tmp_path: Path, monkeypatch) -
     assert installed.enabled is True
 
 
-def test_registered_skill_detail_rereads_package(tmp_path: Path) -> None:
-    package = tmp_path / "registered"
+def test_registered_skill_detail_rereads_package() -> None:
+    from src.config.runtime_paths import skill_packages_root
+
+    package = skill_packages_root() / "bugfix-registered"
     _write_skill(package, name="bugfix-registered", description="第一版", body="第一版正文")
-    skill = routes.Skill.model_validate({
-        "id": "bugfix-registered",
-        "name": "bugfix-registered",
-        "description": "启动时的旧说明",
-        "category": "自定义",
-        "trigger": "旧触发",
-        "content": "旧正文",
-        "status": "installed",
-        "enabled": True,
-        "updatedAt": "2026-01-01T00:00:00+00:00",
-        "workspaceId": "default",
-        "resourcePath": str(package),
-    })
-    routes._skills[skill.id] = skill
-    try:
-        listed = asyncio.run(routes.list_skills())
-        current = _by_name(listed, "bugfix-registered")
-        assert current.description == "第一版"
-        assert "第一版正文" in current.content
-        _write_skill(package, name="bugfix-registered", description="第二版", body="第二版正文")
-        again = asyncio.run(routes.list_skills())
-        current = _by_name(again, "bugfix-registered")
-        assert current.description == "第二版"
-        assert "第二版正文" in current.content
-    finally:
-        routes._skills.pop(skill.id, None)
+    listed = asyncio.run(routes.list_skills())
+    current = _by_name(listed, "bugfix-registered")
+    assert current.description == "第一版"
+    assert "第一版正文" in current.content
+    _write_skill(package, name="bugfix-registered", description="第二版", body="第二版正文")
+    again = asyncio.run(routes.list_skills())
+    current = _by_name(again, "bugfix-registered")
+    assert current.description == "第二版"
+    assert "第二版正文" in current.content

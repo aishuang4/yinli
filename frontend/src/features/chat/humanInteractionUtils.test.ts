@@ -15,6 +15,7 @@ function approvalBlock(phase: 'open' | 'closed'): DisplayBlock<Record<string, un
   return {
     id: 'approval:1',
     kind: 'approval',
+    dataVersion: 1,
     phase,
     data: {
       interactionId: 'hitl-1',

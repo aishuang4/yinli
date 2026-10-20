@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import zipfile
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 
@@ -280,12 +281,13 @@ def test_load_user_skills_backfills_missing_standard_package(tmp_path, monkeypat
         skills_routes._load_user_skills()
 
         skill = skills_routes._skills["custom-old-skill"]
-        skill_md = tmp_path / "skill_packages" / "旧 Skill" / "SKILL.md"
-        assert skill.resource_path == str(tmp_path / "skill_packages" / "旧 Skill")
+        skill_md = tmp_path / "skill_packages" / "custom-old-skill" / "SKILL.md"
+        assert Path(skill.resource_path).resolve() == skill_md.parent.resolve()
         assert skill.resources == ["SKILL.md"]
         assert skill_md.exists()
         assert "name: 旧 Skill" in skill_md.read_text(encoding="utf-8")
-        assert database.list_skills()[0]["resourcePath"] == skill.resource_path
+        stored = next(item for item in database.list_skills() if item["id"] == "custom-old-skill")
+        assert Path(stored["resourcePath"]).resolve() == Path(skill.resource_path).resolve()
     finally:
         skills_routes._skills.clear()
         skills_routes._skills.update(original_skills)

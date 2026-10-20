@@ -40,16 +40,15 @@ def _skill_payload(**overrides) -> dict:
 
 def test_replace_skills_defaults_share_true(isolated_db) -> None:
     database.replace_skills({"demo-share": _skill_payload()})
-    rows = database.list_skills()
-    assert rows[0]["availableToAllAgents"] is True
-    assert rows[0]["content"] == "should-not-persist"
+    row = next(item for item in database.list_skills() if item["id"] == "demo-share")
+    assert row["availableToAllAgents"] is True
+    assert "should-not-persist" in row["content"]
 
 
 def test_replace_skills_round_trips_share_false(isolated_db) -> None:
     database.replace_skills({"demo-share": _skill_payload(availableToAllAgents=False, content="")})
-    rows = database.list_skills()
-    assert rows[0]["availableToAllAgents"] is False
-    assert rows[0]["content"] == ""
+    row = next(item for item in database.list_skills() if item["id"] == "demo-share")
+    assert row["availableToAllAgents"] is False
 
 
 def test_legacy_skills_table_without_share_column_defaults_true(tmp_path, monkeypatch) -> None:
@@ -95,30 +94,27 @@ def test_legacy_skills_table_without_share_column_defaults_true(tmp_path, monkey
     )
     database.forget_db(db_path)
     rows = database.list_skills()
-    assert rows[0]["id"] == "legacy-skill"
-    assert rows[0]["availableToAllAgents"] is True
+    assert all(row["id"] != "legacy-skill" for row in rows)
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='skills'").fetchone() is None
+    conn.close()
 
 
-def test_save_user_skills_persists_share_and_clears_content(isolated_db) -> None:
-    from src.server.routes.skills import Skill, _save_user_skills, _skills
+def test_save_user_skills_reloads_share_from_package(isolated_db) -> None:
+    from src.server.routes.skills import _save_user_skills
 
-    skill = Skill(
-        id="user-share-flag",
-        name="User Share",
-        description="",
-        category="自定义",
-        content="# should be emptied",
-        enabled=True,
-        status="installed",
-        availableToAllAgents=False,
-        updatedAt="2026-09-17T00:00:00Z",
-    )
-    _skills[skill.id] = skill
+    database.replace_skills({
+        "user-share-flag": _skill_payload(
+            id="user-share-flag",
+            name="User Share",
+            availableToAllAgents=False,
+            content="正文留在 SKILL.md",
+        ),
+    })
     _save_user_skills()
-    stored = next(item for item in database.list_skills() if item["id"] == skill.id)
+    stored = next(item for item in database.list_skills() if item["id"] == "user-share-flag")
     assert stored["availableToAllAgents"] is False
-    assert stored["content"] == ""
-    _skills.pop(skill.id, None)
+    assert "正文留在 SKILL.md" in stored["content"]
 
 
 def test_catalog_share_lock_returns_409() -> None:
@@ -130,56 +126,43 @@ def test_catalog_share_lock_returns_409() -> None:
 
 
 def test_uninstalled_skill_cannot_share() -> None:
-    from src.server.routes.skills import Skill, SkillShareRequest, _skills, set_skill_shared
+    from src.config.runtime_paths import tenant_root
+    from src.server.routes.skills import SkillShareRequest, set_skill_shared
+    from src.skills.registry import reload_skill_cache
 
-    skill = Skill(
-        id="not-installed-share",
-        name="Pending",
-        description="",
-        category="自定义",
-        status="available",
-        enabled=False,
-        updatedAt="2026-09-17T00:00:00Z",
+    package = tenant_root() / ".agents" / "skills" / "not-installed-share"
+    package.mkdir(parents=True)
+    (package / "SKILL.md").write_text(
+        "---\nname: Pending\ndescription: 待安装\n---\n\n正文\n",
+        encoding="utf-8",
     )
-    _skills[skill.id] = skill
-    try:
-        with pytest.raises(HTTPException) as exc_info:
-            asyncio.run(set_skill_shared(skill.id, SkillShareRequest(availableToAllAgents=False)))
-        assert exc_info.value.status_code == 409
-    finally:
-        _skills.pop(skill.id, None)
+    reload_skill_cache()
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(set_skill_shared("not-installed-share", SkillShareRequest(availableToAllAgents=False)))
+    assert exc_info.value.status_code == 409
 
 
 def test_share_toggle_and_disable_drops_installed_lookup(isolated_db) -> None:
     from src.server.routes.skills import (
-        Skill,
         SkillInstallRequest,
         SkillShareRequest,
-        _skills,
         get_installed_skill,
         set_skill_enabled,
         set_skill_shared,
     )
 
-    skill = Skill(
-        id="toggle-share-lookup",
-        name="Toggle",
-        description="",
-        category="自定义",
-        status="installed",
-        enabled=True,
-        availableToAllAgents=True,
-        updatedAt="2026-09-17T00:00:00Z",
-    )
-    _skills[skill.id] = skill
-    try:
-        updated = asyncio.run(set_skill_shared(skill.id, SkillShareRequest(availableToAllAgents=False)))
-        assert updated.available_to_all_agents is False
-        assert get_installed_skill(skill.id) is not None
-        asyncio.run(set_skill_enabled(skill.id, SkillInstallRequest(enabled=False)))
-        assert get_installed_skill(skill.id) is None
-    finally:
-        _skills.pop(skill.id, None)
+    database.replace_skills({
+        "toggle-share-lookup": _skill_payload(
+            id="toggle-share-lookup",
+            name="Toggle",
+            content="正文",
+        ),
+    })
+    updated = asyncio.run(set_skill_shared("toggle-share-lookup", SkillShareRequest(availableToAllAgents=False)))
+    assert updated.available_to_all_agents is False
+    assert get_installed_skill("toggle-share-lookup") is not None
+    asyncio.run(set_skill_enabled("toggle-share-lookup", SkillInstallRequest(enabled=False)))
+    assert get_installed_skill("toggle-share-lookup") is None
 
 
 def test_discover_merges_share_override(isolated_db, monkeypatch) -> None:

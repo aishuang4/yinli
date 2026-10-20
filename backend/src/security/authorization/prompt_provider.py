@@ -22,7 +22,10 @@ class SmartGuardPrompt:
 def load_smartguard_prompt() -> SmartGuardPrompt:
     """读取资源。正文不含文件头。"""
 
-    raw = _PROMPT_PATH.read_text(encoding="utf-8")
+    try:
+        raw = _PROMPT_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError("审核提示词资源缺失，桌面端需要重新打包后端后再保存") from exc
     header, _, body = raw.partition("--- system ---")
     version = ""
     for line in header.splitlines():

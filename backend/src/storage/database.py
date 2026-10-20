@@ -58,7 +58,6 @@ DEFAULT_PROJECT_ID = "default"
 PROJECT_RESOURCE_TYPES = ("agent", "skill", "mcp", "http_tool")
 _PROJECT_RESOURCE_TABLES = {
     "agent": "agents",
-    "skill": "skills",
     "mcp": "mcp_servers",
     "http_tool": "http_tools",
 }
@@ -401,8 +400,6 @@ def ensure_db() -> None:
             _ensure_column(conn, "agents", "job_toolkit", "TEXT NOT NULL DEFAULT '{}'")
             _ensure_column(conn, "mcp_servers", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "http_tools", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "skills", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
-            _ensure_column(conn, "skills", "available_to_all_agents", "INTEGER NOT NULL DEFAULT 1")
             _ensure_column(conn, "chat_sessions", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "chat_sessions", "project_id", "TEXT NOT NULL DEFAULT 'default'")
             _ensure_column(conn, "chat_runs", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")
@@ -434,6 +431,7 @@ def ensure_db() -> None:
             _drop_column_if_exists(conn, "run_events", "team_activity_id")
             conn.execute("DROP TABLE IF EXISTS team_members")
             conn.execute("DROP TABLE IF EXISTS teams")
+            conn.execute("DROP TABLE IF EXISTS skills")
             conn.execute("DELETE FROM json_store WHERE namespace = 'team_templates'")
             _reset_legacy_chat_stream_data(conn)
             columns = {
@@ -517,7 +515,7 @@ def ensure_db() -> None:
                     now,
                 ),
             )
-            for table in ("agents", "mcp_servers", "http_tools", "skills"):
+            for table in ("agents", "mcp_servers", "http_tools"):
                 conn.execute(
                     f"UPDATE {table} SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''",
                     (DEFAULT_WORKSPACE_ID,),
@@ -675,9 +673,33 @@ def get_project(project_id: str) -> dict[str, Any] | None:
 
 
 def create_project(data: dict[str, Any]) -> dict[str, Any]:
-    """创建 Project。"""
+    """创建 Project，并把当前缓存里同一 Workspace 的 Skill 写入初始绑定。"""
 
-    return _workspace_project_record_store().create_project(data)
+    project = _workspace_project_record_store().create_project(data)
+    _bind_cached_skills(str(project.get("id") or ""), str(project.get("workspaceId") or ""))
+    return project
+
+
+def _bind_cached_skills(project_id: str, workspace_id: str) -> None:
+    if not project_id or not workspace_id:
+        return
+    from src.skills.registry import _skills
+
+    now = _utc_now()
+    with _lock, _connect() as conn:
+        for skill in _skills.values():
+            if str(getattr(skill, "workspace_id", "") or "") != workspace_id:
+                continue
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO project_resource_bindings (
+                    project_id, resource_type, resource_id, enabled,
+                    config_override, created_at, updated_at
+                ) VALUES (?, 'skill', ?, 1, '{}', ?, ?)
+                """,
+                (project_id, skill.id, now, now),
+            )
+        conn.commit()
 
 
 def update_project(project_id: str, changes: dict[str, Any]) -> dict[str, Any] | None:
@@ -698,6 +720,16 @@ def get_workspace_resource(
 ) -> dict[str, str] | None:
     """读取持久资源的 Workspace 归属。"""
 
+    if resource_type == "skill":
+        from src.skills.registry import _skills
+
+        skill = _skills.get(resource_id)
+        if skill is None:
+            return None
+        return {
+            "id": skill.id,
+            "workspaceId": str(skill.workspace_id or DEFAULT_WORKSPACE_ID),
+        }
     if resource_type == "agent":
         try:
             from src.catalog.loader import get_registered_agent
@@ -910,11 +942,46 @@ def delete_http_tool(tool_id: str) -> bool:
 
 
 def list_skills() -> list[dict[str, Any]]:
-    return _resource_catalog_record_store().list_skills()
+    """技能目录来自目录扫描缓存，不再读 skills 表。"""
+
+    from src.skills.registry import cached_skill_records
+
+    return cached_skill_records()
 
 
 def replace_skills(records: dict[str, dict[str, Any]]) -> None:
-    _resource_catalog_record_store().replace_skills(records)
+    """测试和迁移辅助：把记录写成 SKILL.md，再重新扫描。不写 skills 表。"""
+
+    import yaml
+
+    from src.skills.registry import _upsert_external_override, reload_skill_cache, skill_packages_root
+
+    root = skill_packages_root()
+    root.mkdir(parents=True, exist_ok=True)
+    for data in records.values():
+        skill_id = str(data["id"])
+        name = str(data.get("name") or skill_id)
+        description = str(data.get("description") or name)
+        body = str(data.get("content") or "")
+        package = root / skill_id
+        package.mkdir(parents=True, exist_ok=True)
+        front = yaml.safe_dump(
+            {"name": name, "description": description},
+            allow_unicode=True,
+            sort_keys=False,
+        )
+        (package / "SKILL.md").write_text(f"---\n{front}---\n\n{body}\n", encoding="utf-8")
+        _upsert_external_override(
+            skill_id,
+            installed=str(data.get("status") or "installed") == "installed",
+            enabled=bool(data.get("enabled", False)),
+            availableToAllAgents=bool(data.get(
+                "availableToAllAgents",
+                data.get("available_to_all_agents", True),
+            )),
+            workspace_id=str(data.get("workspaceId") or data.get("workspace_id") or "default"),
+        )
+    reload_skill_cache()
 
 
 def _skill_run_record_store() -> SkillRunRecordStore:
@@ -2215,7 +2282,7 @@ def append_plan_event_record(
 def normalized_table_counts() -> dict[str, int]:
     ensure_db()
     tables = [
-        "agents", "mcp_servers", "skills",
+        "agents", "mcp_servers",
         "chat_sessions", "chat_messages", "memory_nodes",
     ]
     with _lock, _connect() as conn:

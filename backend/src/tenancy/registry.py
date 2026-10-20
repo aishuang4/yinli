@@ -79,6 +79,14 @@ class TenantDictProxy:
     def clear(self) -> None:
         self._bucket(load=False).clear()
 
+    def mark_loaded(self) -> None:
+        """这次写入已经是完整快照，接下来的读取不要再跑 loader。"""
+
+        from src.tenancy.context import current_tenant
+
+        tenant_id = current_tenant().tenant_id
+        self._loaded[tenant_id] = self._scoped.get()
+
     def update(self, other: object) -> None:
         self._bucket(load=False).update(other)  # type: ignore[arg-type]
 

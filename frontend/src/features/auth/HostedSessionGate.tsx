@@ -11,11 +11,13 @@ export function HostedSessionGate({ children }: { children: ReactNode }) {
   const user = useAuthStore((state) => state.user);
   const loaded = useAuthStore((state) => state.loaded);
   const setSession = useAuthStore((state) => state.setSession);
+  const accountLoginOpen = useAuthStore((state) => state.accountLoginOpen);
+  const closeAccountLogin = useAuthStore((state) => state.closeAccountLogin);
   const [mode, setMode] = useState<AuthFormMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
-  const [serviceUrl] = useState('');
+  const [serviceUrl, setServiceUrl] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -101,7 +103,7 @@ export function HostedSessionGate({ children }: { children: ReactNode }) {
   };
 
   if (!loaded) return null;
-  if (workbenchGate(serveMode, user) === 'login') {
+  if (workbenchGate(serveMode, user) === 'login' || (serveMode === 'desktop' && accountLoginOpen)) {
     return (
       <AuthScreen
         mode={mode}
@@ -109,12 +111,16 @@ export function HostedSessionGate({ children }: { children: ReactNode }) {
         password={password}
         code={code}
         error={error}
+        serviceUrl={serviceUrl}
+        showServiceUrl={serveMode === 'desktop'}
         submitting={submitting}
         onEmail={setEmail}
         onPassword={setPassword}
         onCode={setCode}
+        onServiceUrl={setServiceUrl}
         onMode={setMode}
         onSubmit={() => void onSubmit()}
+        onBack={serveMode === 'desktop' ? closeAccountLogin : undefined}
       />
     );
   }

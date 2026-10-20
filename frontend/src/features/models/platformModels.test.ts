@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeSelectableModels } from './platformModels';
+import { mergeSelectableModels, selectorTriggerLabel } from './platformModels';
 import type { SelectableModel } from './ModelSelector';
 
 const localModel: SelectableModel = {
@@ -27,6 +27,20 @@ describe('platform model choices', () => {
     const loggedOut = mergeSelectableModels([localModel], [platformModel], false);
     expect(loggedOut).toEqual([localModel]);
     expect(localModel.label).toBe('DeepSeek');
+  });
+
+  it('keeps a visible platform choice when the local catalog fails', () => {
+    expect(selectorTriggerLabel({
+      error: 'permissionReview.maxOutputTokens',
+      loading: false,
+      selectedLabel: 'GPT-6',
+      choiceCount: 26,
+    })).toBe('GPT-6');
+    expect(selectorTriggerLabel({
+      error: 'permissionReview.maxOutputTokens',
+      loading: false,
+      choiceCount: 0,
+    })).toBe('模型配置异常');
   });
 
   it('uses only platform models when the hosted catalog comes from key2api', () => {

@@ -25,9 +25,10 @@ from src.catalog.skills import (
     DiscoveredSkill,
     discover_skill_packages,
     read_package_markdown,
+    scan_skill_directories,
+    skill_scan_targets,
 )
 from src.config.runtime_paths import (
-    data_root,
     ensure_tenant_directories,
     skill_packages_root,
     tenant_root,
@@ -48,10 +49,8 @@ from src.server.routes.skill_packages import (
 from src.storage.database import (
     get_project,
     delete_json_record,
+    get_json_record,
     list_json_records,
-    list_skills as db_list_skills,
-    migrate_json_list_file,
-    replace_skills,
     upsert_json_record,
 )
 
@@ -355,63 +354,7 @@ def _skill_from_markdown(
     )
 
 
-_builtin_skills: dict[str, Skill] = {
-    "code-review": _skill(
-        "code-review",
-        "Code Review",
-        "审查代码变更，关注正确性、可维护性、测试覆盖和潜在风险。",
-        "开发",
-        "当用户要求审查代码、PR、diff 或定位潜在缺陷时触发。",
-        "以代码审查视角输出问题清单，优先列出 bug、回归风险和缺失测试，并给出文件/行号依据。",
-        ["code", "review", "quality"],
-    ),
-    "web-research": _skill(
-        "web-research",
-        "Web Research",
-        "规划并执行网络资料检索，整理可信来源、结论和引用。",
-        "研究",
-        "当任务需要最新资料、外部事实核验或资料汇总时触发。",
-        "优先使用权威来源，区分事实和推断，输出简洁结论与来源链接。",
-        ["research", "web", "sources"],
-    ),
-    "data-analysis": _skill(
-        "data-analysis",
-        "Data Analysis",
-        "分析 CSV、表格或结构化数据，生成摘要、洞察和可视化建议。",
-        "数据",
-        "当用户提供数据文件、统计问题或分析目标时触发。",
-        "先确认字段和数据质量，再进行聚合、比较、趋势和异常分析。",
-        ["data", "analysis", "csv"],
-    ),
-    "document-writing": _skill(
-        "document-writing",
-        "Document Writing",
-        "生成或润色需求文档、设计文档、说明书和报告。",
-        "文档",
-        "当用户要求编写、整理、润色或重构文档时触发。",
-        "保持结构清晰、措辞准确，优先补齐目标、范围、约束和验收标准。",
-        ["docs", "writing", "report"],
-    ),
-    "test-planning": _skill(
-        "test-planning",
-        "Test Planning",
-        "设计测试策略、测试用例和风险覆盖矩阵。",
-        "质量",
-        "当任务涉及测试计划、验收标准或质量保障时触发。",
-        "覆盖核心路径、边界条件、错误状态和回归风险，并给出可执行测试清单。",
-        ["test", "qa", "coverage"],
-    ),
-    "release-notes": _skill(
-        "release-notes",
-        "Release Notes",
-        "根据变更内容生成面向用户或开发者的发布说明。",
-        "交付",
-        "当用户要求总结变更、写 changelog 或 release notes 时触发。",
-        "按新增、修复、变更、已知问题组织，避免夸大未完成能力。",
-        ["release", "changelog", "summary"],
-    ),
-}
-
+_builtin_skills: dict[str, Skill] = {}
 _skills: dict[str, Skill] = dict(_builtin_skills)
 
 
@@ -425,17 +368,24 @@ def _override_record(skill_id: str) -> dict[str, bool]:
     return dict(_external_skill_overrides.get(skill_id) or {})
 
 
-def _upsert_external_override(skill_id: str, **fields: bool) -> dict[str, bool]:
+def _upsert_external_override(
+    skill_id: str,
+    *,
+    workspace_id: str | None = None,
+    **fields: bool,
+) -> dict[str, bool]:
     """写入磁盘发现包与系统包的 enabled / 共享覆盖，不丢另一字段。"""
 
     current = _override_record(skill_id)
     current.update(fields)
     _external_skill_overrides[skill_id] = current
-    upsert_json_record(
-        EXTERNAL_SKILL_OVERRIDES_NAMESPACE,
-        skill_id,
-        {"id": skill_id, **current},
-    )
+    existing = get_json_record(EXTERNAL_SKILL_OVERRIDES_NAMESPACE, skill_id) or {}
+    payload: dict[str, object] = {"id": skill_id, **current}
+    if workspace_id:
+        payload["workspaceId"] = workspace_id
+    elif existing.get("workspaceId"):
+        payload["workspaceId"] = existing["workspaceId"]
+    upsert_json_record(EXTERNAL_SKILL_OVERRIDES_NAMESPACE, skill_id, payload)
     return current
 
 
@@ -541,31 +491,67 @@ def _load_system_packages() -> None:
         _skills[skill.id] = _with_share_flag(skill)
 
 
-def _load_user_skills() -> None:
+def _project_scan_roots(extra: Path | None = None) -> list[Path]:
+    roots: list[Path] = []
+    if extra is not None:
+        roots.append(Path(extra))
+    try:
+        from src.storage.database import list_projects
+
+        for project in list_projects():
+            raw = str(project.get("rootPath") or project.get("root_path") or "")
+            if raw:
+                roots.append(Path(raw))
+    except Exception:
+        logger.exception("读取 Project 根目录失败，Skill 扫描跳过项目目录")
+    return roots
+
+
+def reload_skill_cache(project_root: Path | None = None) -> None:
+    """清空进程缓存，再扫描约定目录。导入、更新、删除和启动都走这里。"""
+
     ensure_tenant_directories()
-    migrate_json_list_file(SKILLS_NAMESPACE, str(data_root() / "skills.json"))
-    records = db_list_skills()
-    if not records:
-        legacy = list_json_records(SKILLS_NAMESPACE)
-        replace_skills({str(item["id"]): item for item in legacy if item.get("id")})
-        records = db_list_skills()
-    _load_external_skill_overrides()
-    for item in records:
-        try:
-            skill = Skill.model_validate(item)
-        except Exception:
-            logger.exception("跳过无法解析的 Skill 记录: %s", item.get("id"))
-            continue
-        if skill.id not in _builtin_skills:
-            # 单个历史 Skill 补包失败不能拖垮整个后端启动，退回原始记录继续加载。
-            try:
-                skill = _ensure_skill_package(skill)
-                skill = _hydrate_skill(skill)
-            except Exception:
-                logger.exception("Skill %s 补齐标准包失败，按原始记录加载", skill.id)
-        _skills[skill.id] = _with_share_flag(skill)
+    _skills.clear()
+    _builtin_skills.clear()
     _load_system_packages()
-    _save_user_skills()
+    _load_external_skill_overrides()
+    workspaces = {
+        str(item.get("id") or ""): str(item.get("workspaceId") or "")
+        for item in list_json_records(EXTERNAL_SKILL_OVERRIDES_NAMESPACE)
+        if item.get("workspaceId")
+    }
+    for item in scan_skill_directories(skill_scan_targets(
+        _project_scan_roots(project_root),
+        runtime_root=skill_packages_root(),
+    )):
+        skill = _skill_from_discovered(item)
+        record = _override_record(skill.id)
+        installed, enabled = _external_install_state(item, record)
+        if skill.id in SYSTEM_SKILL_IDS:
+            _builtin_skills[skill.id] = skill
+            installed, enabled = True, True
+        share = True if _is_share_locked(skill.id) else (
+            bool(record["availableToAllAgents"]) if "availableToAllAgents" in record else True
+        )
+        _skills[skill.id] = _with_share_flag(skill.model_copy(update={
+            "status": "installed" if installed else "available",
+            "enabled": enabled,
+            "available_to_all_agents": share,
+            "workspace_id": workspaces.get(skill.id) or skill.workspace_id,
+        }))
+    mark = getattr(_skills, "mark_loaded", None)
+    if mark is not None:
+        mark()
+
+
+def _load_user_skills() -> None:
+    reload_skill_cache()
+
+
+def cached_skill_records() -> list[dict]:
+    """给仍从存储模块读目录的调用方。内容来自本次扫描，不是 skills 表。"""
+
+    return [skill.model_dump(by_alias=True) for skill in _skills.values()]
 
 
 def discover_external_skills(
@@ -617,12 +603,10 @@ def _external_install_state(item: DiscoveredSkill, record: dict[str, bool]) -> t
 
 
 def get_runtime_skill_catalog(project_root: Path) -> list[Skill]:
-    """返回当前 Project 的原生和外部 Skill catalog。"""
+    """返回当前缓存。缓存只来自约定目录的最近一次扫描。"""
 
-    return [
-        *[refresh_skill_package(skill) for skill in _skills.values()],
-        *discover_external_skills(project_root),
-    ]
+    reload_skill_cache(project_root)
+    return [refresh_skill_package(skill) for skill in _skills.values()]
 
 
 def find_skill(
@@ -737,19 +721,14 @@ def _load_external_skill_overrides() -> None:
 
 
 def _save_user_skills() -> None:
-    records: dict[str, dict] = {}
-    for skill_id, skill in _skills.items():
-        if skill_id in _builtin_skills:
-            continue
-        payload = skill.model_dump(by_alias=True)
-        payload["content"] = ""
-        records[skill_id] = payload
-    replace_skills(records)
+    """兼容旧调用：技能不写回数据库，重新扫描目录刷新缓存。"""
+
+    reload_skill_cache()
 
 
 def _persist_if_user_skill(skill_id: str) -> None:
-    if skill_id not in _builtin_skills:
-        _save_user_skills()
+    del skill_id
+    reload_skill_cache()
 
 
 def register_user_skill(data: SkillRegisterRequest) -> Skill:
@@ -759,31 +738,14 @@ def register_user_skill(data: SkillRegisterRequest) -> Skill:
     if name in SYSTEM_SKILL_IDS or _slugify(name) in SYSTEM_SKILL_IDS:
         raise HTTPException(status_code=409, detail=f"系统 Skill {name} 不能被用户注册")
     _ensure_skill_name_available(data.name)
-    skill_id = _unique_skill_id(data.name)
     markdown = _skill_markdown_from_registration(data)
-    resource_path, resources = _write_skill_package(data.name, markdown)
-    now = _utc_now()
-    skill = Skill.model_validate(
-        {
-            "id": skill_id,
-            "name": data.name,
-            "description": data.description or f"用户注册的 Skill: {data.name}",
-            "category": data.category or "自定义",
-            "trigger": data.trigger,
-            "content": markdown,
-            "tags": data.tags[:8],
-            "resourcePath": resource_path,
-            "resources": resources,
-            "status": "installed",
-            "enabled": True,
-            "installedAt": now,
-            "updatedAt": now,
-            "workspaceId": data.workspace_id,
-        }
-    )
-    _skills[skill.id] = skill
-    _save_user_skills()
-    return skill
+    resource_path, _resources = _write_skill_package(data.name, markdown)
+    reload_skill_cache()
+    wanted = str(Path(resource_path).resolve())
+    for skill in _skills.values():
+        if skill.resource_path and str(Path(skill.resource_path).resolve()) == wanted:
+            return skill
+    raise HTTPException(status_code=500, detail="写入后的 Skill 没有被扫描到")
 
 
 def build_skill_system_prompt(skill_ids: list[str]) -> str:

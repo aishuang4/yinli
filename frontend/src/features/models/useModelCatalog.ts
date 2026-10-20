@@ -30,9 +30,15 @@ export interface ModelCatalog {
 
 export async function catalogRequest(init?: RequestInit): Promise<ModelCatalog> {
   const response = await fetch('/api/settings/models', init);
-  const data = await response.json();
+  const text = await response.text();
+  let data: { detail?: unknown } = {};
+  try {
+    data = text ? JSON.parse(text) as { detail?: unknown } : {};
+  } catch {
+    throw new Error(response.ok ? '模型配置响应无法识别' : `模型配置操作失败（${response.status}）`);
+  }
   if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '模型配置操作失败');
-  return data;
+  return data as ModelCatalog;
 }
 
 export function modelAvailable(catalog: ModelCatalog, model: ModelEntry): boolean {

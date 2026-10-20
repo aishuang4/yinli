@@ -94,22 +94,6 @@ BASE_SCHEMA_SQL = """
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS skills (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        category TEXT NOT NULL,
-        trigger TEXT NOT NULL DEFAULT '',
-        content TEXT NOT NULL DEFAULT '',
-        tags TEXT NOT NULL,
-        resource_path TEXT NOT NULL DEFAULT '',
-        resources TEXT NOT NULL,
-        status TEXT NOT NULL,
-        enabled INTEGER NOT NULL,
-        installed_at TEXT,
-        updated_at TEXT NOT NULL,
-        available_to_all_agents INTEGER NOT NULL DEFAULT 1
-    );
     CREATE TABLE IF NOT EXISTS chat_sessions (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,

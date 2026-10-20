@@ -31,10 +31,9 @@ from src.skills.registry import (
     _split_frontmatter,
     _write_skill_package_impl,
     get_project,
+    delete_json_record,
     list_json_records,
-    db_list_skills,
-    migrate_json_list_file,
-    replace_skills,
+    reload_skill_cache,
     upsert_json_record,
     SKILLS_NAMESPACE,
     EXTERNAL_SKILL_OVERRIDES_NAMESPACE,
@@ -119,14 +118,12 @@ async def list_skills(
     """获取 Skill 列表，支持搜索、分类和安装状态筛选。"""
 
     query = q.strip().lower()
+    reload_skill_cache(_project_root(project_id, workspace_id))
     result = [
         refresh_skill_package(skill)
         for skill in _skills.values()
         if skill.id in _builtin_skills or skill.workspace_id == workspace_id
     ]
-    project_root = _project_root(project_id, workspace_id)
-    if project_root is not None:
-        result.extend(discover_external_skills(project_root, workspace_id=workspace_id))
 
     if query:
         result = [
@@ -205,12 +202,13 @@ async def import_skill_archive(
             skill_path,
             draft_skill.name,
         )
-        skill = _skill_from_markdown(skill_path, markdown, resource_path, resources).model_copy(
-            update={"workspace_id": workspace_id},
-        )
-        _skills[skill.id] = skill
-        _save_user_skills()
-        return skill
+        _skill_from_markdown(skill_path, markdown, resource_path, resources)
+        reload_skill_cache()
+        wanted = str(Path(resource_path).resolve())
+        for skill in _skills.values():
+            if skill.resource_path and str(Path(skill.resource_path).resolve()) == wanted:
+                return skill.model_copy(update={"workspace_id": workspace_id})
+        raise HTTPException(status_code=500, detail="导入后的 Skill 没有被扫描到")
     finally:
         archive.close()
 
@@ -269,18 +267,9 @@ async def install_skill(
             raise HTTPException(status_code=404, detail="Skill not found")
         return install_external_skill(current, enabled=data.enabled)
 
-    current = _skills[skill_id]
-    skill = current.model_copy(
-        update={
-            "status": "installed",
-            "enabled": data.enabled,
-            "installed_at": current.installed_at or _utc_now(),
-            "updated_at": _utc_now(),
-        }
-    )
-    _skills[skill_id] = skill
-    _persist_if_user_skill(skill_id)
-    return skill
+    _upsert_external_override(skill_id, installed=True, enabled=data.enabled)
+    reload_skill_cache(_project_root(project_id, workspace_id))
+    return _skills[skill_id]
 
 
 @router.post("/{skill_id}/uninstall", response_model=Skill)
@@ -299,18 +288,10 @@ async def uninstall_skill(
         _job_service.pause_jobs_for_catalog_change(resource_type="skill", resource_id=skill_id)
         return updated
 
-    skill = _skills[skill_id].model_copy(
-        update={
-            "status": "available",
-            "enabled": False,
-            "installed_at": None,
-            "updated_at": _utc_now(),
-        }
-    )
-    _skills[skill_id] = skill
-    _persist_if_user_skill(skill_id)
+    _upsert_external_override(skill_id, installed=False, enabled=False)
+    reload_skill_cache(_project_root(project_id, workspace_id))
     _job_service.pause_jobs_for_catalog_change(resource_type="skill", resource_id=skill_id)
-    return skill
+    return _skills[skill_id]
 
 
 @router.delete("/{skill_id}", status_code=204)
@@ -334,11 +315,13 @@ async def delete_skill(
     if skill_id in _builtin_skills:
         raise HTTPException(status_code=409, detail="Built-in Skill cannot be deleted")
 
-    skill = _skills.pop(skill_id)
+    skill = _skills[skill_id]
     _job_service.pause_jobs_for_catalog_change(resource_type="skill", resource_id=skill_id)
     remove_skills_from_agents({skill_id})
     delete_registered_skill_files(skill)
-    _save_user_skills()
+    _external_skill_overrides.pop(skill_id, None)
+    delete_json_record(EXTERNAL_SKILL_OVERRIDES_NAMESPACE, skill_id)
+    reload_skill_cache(_project_root(project_id, workspace_id))
 
 
 @router.post("/{skill_id}/enable", response_model=Skill)
@@ -370,17 +353,11 @@ async def set_skill_enabled(
     if current.status != "installed":
         raise HTTPException(status_code=409, detail="Skill is not installed")
 
-    skill = current.model_copy(
-        update={
-            "enabled": data.enabled,
-            "updated_at": _utc_now(),
-        }
-    )
-    _skills[skill_id] = skill
-    _persist_if_user_skill(skill_id)
+    _upsert_external_override(skill_id, installed=True, enabled=data.enabled)
+    reload_skill_cache(Path(str(get_project(project_id).get("rootPath") or "")) if get_project(project_id) else None)
     if not data.enabled:
         _job_service.pause_jobs_for_catalog_change(resource_type="skill", resource_id=skill_id)
-    return _with_share_flag(skill)
+    return _with_share_flag(_skills[skill_id])
 
 
 @router.post("/{skill_id}/share", response_model=Skill)
@@ -416,13 +393,7 @@ async def set_skill_shared(
     if current.status != "installed":
         raise HTTPException(status_code=409, detail="Skill is not installed")
 
-    skill = current.model_copy(
-        update={
-            "available_to_all_agents": data.available_to_all_agents,
-            "updated_at": _utc_now(),
-        }
-    )
-    _skills[skill_id] = skill
-    _persist_if_user_skill(skill_id)
     _upsert_external_override(skill_id, availableToAllAgents=data.available_to_all_agents)
-    return _with_share_flag(skill)
+    project = get_project(project_id)
+    reload_skill_cache(Path(str(project.get("rootPath") or "")) if project else None)
+    return _with_share_flag(_skills[skill_id])

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Settings } from 'lucide-react';
 import { useAppStore } from '../../stores/appStore';
-import { mergeSelectableModels } from './platformModels';
+import { mergeSelectableModels, selectorTriggerLabel } from './platformModels';
 import { modelAvailable, type ModelCatalog } from './useModelCatalog';
 
 const ADAPTER_MARK: Record<string, string> = {
@@ -74,11 +74,12 @@ export function ModelSelector({
     [catalog, platformModels, platformLoggedIn, platformOnly],
   );
   const selected = models.find((model) => model.id === value) ?? models[0];
-  const triggerLabel = error
-    ? '模型配置异常'
-    : loading
-      ? '加载中…'
-      : selected?.label || '选择模型';
+  const triggerLabel = selectorTriggerLabel({
+    error,
+    loading,
+    selectedLabel: selected?.label,
+    choiceCount: models.length,
+  });
 
   useEffect(() => {
     if (disabled && open) setOpen(false);

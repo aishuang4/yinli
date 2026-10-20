@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { KeyRound, LogOut, Settings, Users } from 'lucide-react';
+import { KeyRound, LogIn, LogOut, Settings, User, Users } from 'lucide-react';
 import { logout, submitAuth } from './authClient';
 import { EMPTY_CLOUD_ACCOUNT, showAdminEntry } from './authRules';
 import { useAuthStore } from './authStore';
@@ -67,7 +67,7 @@ export function UserMenu({ className = '' }: { className?: string }) {
   }, [open]);
 
   if (serveMode === 'desktop') {
-    return <DesktopCloudEntry className={className} />;
+    return <DesktopUserCenter className={className} />;
   }
   if (!user || serveMode !== 'hosted') {
     return (
@@ -233,80 +233,114 @@ export function UserMenu({ className = '' }: { className?: string }) {
   );
 }
 
-function DesktopCloudEntry({ className }: { className: string }) {
+/** 桌面端用户中心与 Web 同一套菜单；未登录可继续使用，登录才进入登录页。 */
+function DesktopUserCenter({ className }: { className: string }) {
   const cloudAccount = useAuthStore((state) => state.cloudAccount);
   const setSession = useAuthStore((state) => state.setSession);
+  const openAccountLogin = useAuthStore((state) => state.openAccountLogin);
   const setView = useAppStore((state) => state.setView);
   const [open, setOpen] = useState(false);
-  const [email, setEmail] = useState(cloudAccount.email);
-  const [password, setPassword] = useState('');
-  const [baseUrl, setBaseUrl] = useState(cloudAccount.baseUrl);
-  const [advanced, setAdvanced] = useState(false);
-  const [message, setMessage] = useState('');
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
+  const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const signedIn = cloudAccount.connected && Boolean(cloudAccount.email);
+  const expired = cloudAccount.status === 'expired';
+  const initial = signedIn ? cloudAccount.email.slice(0, 1).toUpperCase() : '';
 
-  const login = async () => {
-    setMessage('');
-    const logged = await submitAuth('/api/auth/desktop/session', {
-      baseUrl: baseUrl.trim(),
-      email: email.trim(),
-      password,
-    }) as { connected?: boolean; email?: string; status?: string; baseUrl?: string };
-    setSession('desktop', null, Boolean(logged.connected), {
-      cloudAccount: {
-        connected: Boolean(logged.connected),
-        email: logged.email || email.trim(),
-        status: logged.status || 'active',
-        baseUrl: logged.baseUrl || baseUrl.trim(),
-      },
-    });
-    setOpen(false);
+  useEffect(() => {
+    if (!open) return;
+    const trigger = rootRef.current?.querySelector('button');
+    if (trigger) {
+      const rect = trigger.getBoundingClientRect();
+      setPanelStyle({
+        top: rect.bottom + 8,
+        right: Math.max(12, window.innerWidth - rect.right),
+      });
+    }
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => window.removeEventListener('pointerdown', onPointerDown);
+  }, [open]);
+
+  const close = () => setOpen(false);
+  const openLogin = () => {
+    close();
+    openAccountLogin();
   };
-
-  const signOutCloud = async () => {
+  const openSettings = () => {
+    setView('settings');
+    close();
+  };
+  const signOut = async () => {
     await fetch('/api/auth/desktop/session', { method: 'DELETE', credentials: 'include' });
     setSession('desktop', null, false, { cloudAccount: EMPTY_CLOUD_ACCOUNT });
-    setOpen(false);
+    close();
   };
 
-  const label = cloudAccount.status === 'expired'
-    ? '云端登录已失效，请重新登录'
-    : (cloudAccount.connected ? cloudAccount.email : '登录引力云端（可选）');
-
   return (
-    <div className="flex items-center gap-1">
-      <button type="button" className={className} onClick={() => setOpen((value) => !value)}>
-        {label}
+    <div className="titlebar__user" ref={rootRef}>
+      <button
+        type="button"
+        className={className}
+        aria-expanded={open}
+        aria-label="用户中心"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="titlebar__user-avatar" aria-hidden="true">
+          {initial || <User size={15} strokeWidth={1.8} />}
+        </span>
       </button>
-      <button type="button" className={className} aria-label="进入工作台设置" onClick={() => setView('settings')}>
-        <Settings size={17} />
-      </button>
-      {open ? (
-        <form
-          className="absolute right-3 top-12 z-20 w-72 space-y-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-3 shadow-lg"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (cloudAccount.connected) void signOutCloud();
-            else void login().catch((error: unknown) => setMessage(error instanceof Error ? error.message : '登录失败'));
-          }}
-        >
-          <p className="text-xs text-[var(--color-text-secondary)]">登录只用于使用云端模型，本地数据不会上传</p>
-          {cloudAccount.status === 'expired' ? <p className="text-xs text-[var(--color-error)]">云端登录已失效，请重新登录</p> : null}
-          {message ? <p className="text-xs text-[var(--color-error)]">{message}</p> : null}
-          {cloudAccount.connected ? (
-            <button type="submit">退出</button>
-          ) : (
-            <>
-              <input aria-label="邮箱" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" />
-              <input aria-label="密码" type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 8 位" />
-              <button type="button" onClick={() => setAdvanced((value) => !value)}>高级</button>
-              {advanced ? (
-                <input aria-label="云端地址" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="http://127.0.0.1:8876" />
-              ) : null}
-              <button type="submit">登录</button>
-            </>
-          )}
-        </form>
-      ) : null}
+      {open ? createPortal((
+        <div ref={panelRef} className="titlebar__user-menu" style={panelStyle} role="menu">
+          <div className="titlebar__user-card">
+            <span className="titlebar__user-avatar titlebar__user-avatar--lg" aria-hidden="true">
+              {initial || <User size={18} strokeWidth={1.8} />}
+            </span>
+            <div className="min-w-0">
+              <p className="titlebar__user-email">{signedIn ? cloudAccount.email : '未登录'}</p>
+              <p className="titlebar__user-meta">
+                <span className={signedIn && !expired ? 'titlebar__user-presence' : 'titlebar__user-presence titlebar__user-presence--idle'}>
+                  {signedIn ? (expired ? '登录已失效' : '桌面端 · 在线') : '可先使用本机工作台'}
+                </span>
+              </p>
+            </div>
+          </div>
+          <div className="titlebar__user-section">
+            <p>工作台</p>
+            <button type="button" className="titlebar__user-item" onClick={openSettings}>
+              <span className="titlebar__user-item-icon" aria-hidden="true"><Settings size={15} strokeWidth={1.8} /></span>
+              <span>
+                <strong>设置</strong>
+                <small>模型、权限和工作台偏好</small>
+              </span>
+            </button>
+          </div>
+          <div className="titlebar__user-section">
+            <p>账号</p>
+            {signedIn && !expired ? (
+              <button type="button" className="titlebar__user-item titlebar__user-item--danger" onClick={() => void signOut()}>
+                <span className="titlebar__user-item-icon" aria-hidden="true"><LogOut size={15} strokeWidth={1.8} /></span>
+                <span>
+                  <strong>退出登录</strong>
+                  <small>退出后仍可继续使用本机工作台</small>
+                </span>
+              </button>
+            ) : (
+              <button type="button" className="titlebar__user-item" onClick={openLogin}>
+                <span className="titlebar__user-item-icon" aria-hidden="true"><LogIn size={15} strokeWidth={1.8} /></span>
+                <span>
+                  <strong>{expired ? '重新登录' : '登录'}</strong>
+                  <small>进入登录页，使用引力账号</small>
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+      ), document.body) : null}
     </div>
   );
 }

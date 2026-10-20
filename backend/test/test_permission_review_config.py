@@ -10,7 +10,17 @@ from src.security.authorization.probe import PROBE_BUDGET_REASON, stamp_smartgua
 from test.authorization_fakes import run_async
 
 
-def test_old_catalog_has_no_implicit_reviewer():
+def test_review_output_budget_accepts_existing_catalog_value():
+    config = PermissionReviewConfig.model_validate({
+        "modelConfigId": "primary",
+        "maxOutputTokens": 512,
+    })
+    assert config.max_output_tokens == 512
+    clamped = PermissionReviewConfig.model_validate({
+        "modelConfigId": "primary",
+        "maxOutputTokens": 128000,
+    })
+    assert clamped.max_output_tokens == 4096
     catalog, _ = read_catalog()
     assert catalog.permission_review is None
     with pytest.raises(CatalogError, match="尚未配置"):

@@ -221,6 +221,10 @@
   content: "";
 }
 
+.titlebar__user-presence--idle::before {
+  background: var(--color-text-tertiary);
+}
+
 .titlebar__user-usage {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
