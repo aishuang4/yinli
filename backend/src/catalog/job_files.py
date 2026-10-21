@@ -1,4 +1,7 @@
-"""定时任务定义 Markdown：frontmatter + frozen_prompt 正文。"""
+"""定时任务定义 Markdown：frontmatter + frozen_prompt 正文。
+
+定义只来自租户 `agents/jobs`，不扫描授权目录下的 `.agents/jobs`。
+"""
 
 from __future__ import annotations
 
@@ -16,8 +19,6 @@ from src.catalog.paths import (
     atomic_write_text,
     jobs_dir,
     path_stays_inside,
-    project_jobs_dir,
-    workspaces_root,
 )
 from src.catalog.system_defaults import utc_now
 
@@ -35,7 +36,6 @@ DEFAULT_TOOL_SCOPE = {
 class JobFileRecord:
     id: str
     name: str
-    workspace_id: str
     project_id: str
     agent_id: str
     frozen_prompt: str
@@ -56,7 +56,7 @@ class JobFileRecord:
     failure_policy: str = "notify_keep_schedule"
     delivery_policy: str = "notify"
     task_intent: str = ""
-    source_scope: str = "workspace"
+    source_scope: str = "agents"
     source_path: str = ""
 
 
@@ -64,7 +64,6 @@ def dump_job_markdown(record: JobFileRecord) -> str:
     frontmatter = {
         "id": record.id,
         "name": record.name,
-        "workspace_id": record.workspace_id,
         "project_id": record.project_id,
         "agent_id": record.agent_id,
         "mode": record.mode if record.mode in {"agent", "script"} else "agent",
@@ -96,10 +95,13 @@ def parse_job_markdown(
     text: str,
     *,
     path: Path,
-    workspace_id: str,
     project_id: str,
     source_scope: str,
+    **_extra: object,
 ) -> JobFileRecord:
+    """解析 Job Markdown。frontmatter 里的未知键忽略，不因此失败。"""
+
+    del _extra
     if len(text.encode("utf-8")) > MAX_PROFILE_BYTES:
         raise ValueError(f"Job 文件超过 {MAX_PROFILE_BYTES} 字节")
     match = _FRONTMATTER_RE.match(text)
@@ -143,7 +145,6 @@ def parse_job_markdown(
     return JobFileRecord(
         id=job_id,
         name=name,
-        workspace_id=str(payload.get("workspace_id") or payload.get("workspaceId") or workspace_id),
         project_id=str(payload.get("project_id") or payload.get("projectId") or project_id),
         agent_id=agent_id,
         frozen_prompt="" if mode == "script" else prompt,
@@ -176,7 +177,6 @@ def write_job_file(path: Path, record: JobFileRecord) -> None:
 def _scan_dir(
     directory: Path,
     *,
-    workspace_id: str,
     project_id: str,
     source_scope: str,
 ) -> tuple[list[JobFileRecord], list[CatalogError]]:
@@ -198,7 +198,6 @@ def _scan_dir(
             records.append(parse_job_markdown(
                 path.read_text(encoding="utf-8"),
                 path=path,
-                workspace_id=workspace_id,
                 project_id=project_id,
                 source_scope=source_scope,
             ))
@@ -211,62 +210,29 @@ def scan_job_files(
     *,
     project_root: Path | str | None = None,
     project_id: str = "default",
-    workspace_id: str = "default",
+    **_extra: object,
 ) -> tuple[list[JobFileRecord], list[CatalogError]]:
-    """Workspace catalog 优先；同 id 的项目文件被遮蔽。"""
+    """只扫描租户 agents/jobs。项目目录参数保留给旧调用，不再读取。"""
 
-    records: list[JobFileRecord] = []
-    errors: list[CatalogError] = []
-    seen: set[str] = set()
-
-    def _add(items: list[JobFileRecord], scan_errors: list[CatalogError]) -> None:
-        errors.extend(scan_errors)
-        for item in items:
-            if item.id in seen:
-                continue
-            seen.add(item.id)
-            records.append(item)
-
-    root = workspaces_root()
-    if root.is_dir():
-        for child in sorted(root.iterdir()):
-            if not child.is_dir() or child.name.startswith("_"):
-                continue
-            _add(*_scan_dir(
-                jobs_dir(child.name),
-                workspace_id=child.name,
-                project_id=project_id,
-                source_scope="workspace",
-            ))
-    if project_root is not None and str(project_root).strip():
-        _add(*_scan_dir(
-            project_jobs_dir(Path(project_root)),
-            workspace_id=workspace_id or "default",
-            project_id=project_id,
-            source_scope="project",
-        ))
-    return records, errors
+    del project_root, _extra
+    return _scan_dir(jobs_dir(), project_id=project_id, source_scope="agents")
 
 
 def discover_job_files(
     *,
     project_root: Path | str | None = None,
     project_id: str = "default",
-    workspace_id: str = "default",
+    **_extra: object,
 ) -> list[JobFileRecord]:
-    records, _errors = scan_job_files(
-        project_root=project_root,
-        project_id=project_id,
-        workspace_id=workspace_id,
-    )
+    records, _errors = scan_job_files(project_root=project_root, project_id=project_id, **_extra)
     return records
 
 
-def job_definition_path(*, workspace_id: str, project_id: str, job_id: str) -> Path:
-    """服务写入 Workspace catalog，避免把运行实例写进用户 git 项目。"""
+def job_definition_path(*, project_id: str = "", job_id: str, **_extra: object) -> Path:
+    """服务写入租户 agents/jobs，避免把运行实例写进用户目录。"""
 
-    del project_id
-    return jobs_dir(workspace_id) / f"{job_id}.md"
+    del project_id, _extra
+    return jobs_dir() / f"{job_id}.md"
 
 
 def overlay_instance_with_file(record: dict[str, Any], file: JobFileRecord) -> dict[str, Any]:
@@ -308,46 +274,33 @@ def overlay_instance_with_file(record: dict[str, Any], file: JobFileRecord) -> d
 def load_job_definition_file(
     *,
     job_id: str,
-    workspace_id: str,
-    project_id: str,
+    project_id: str = "",
+    **_extra: object,
 ) -> JobFileRecord | None:
-    """按 id 读取定义文件；Workspace catalog 优先。"""
+    """按 id 读取租户 agents/jobs 下的定义文件。"""
 
+    del _extra
     if not job_id:
         return None
-    candidates: list[tuple[Path, str]] = [
-        (job_definition_path(workspace_id=workspace_id, project_id=project_id, job_id=job_id), "workspace"),
-    ]
+    path = job_definition_path(project_id=project_id, job_id=job_id)
+    if not path.is_file() or not path_stays_inside(path, path.parent):
+        return None
     try:
-        from src.storage.database import get_project
-
-        project = get_project(project_id)
-        raw = str((project or {}).get("rootPath") or "").strip()
-        if raw:
-            candidates.append((project_jobs_dir(Path(raw)) / f"{job_id}.md", "project"))
-    except Exception:
-        pass
-    for path, scope in candidates:
-        if not path.is_file() or not path_stays_inside(path, path.parent):
-            continue
-        try:
-            return parse_job_markdown(
-                path.read_text(encoding="utf-8"),
-                path=path,
-                workspace_id=workspace_id,
-                project_id=project_id,
-                source_scope=scope,
-            )
-        except (OSError, ValueError, yaml.YAMLError):
-            continue
-    return None
+        return parse_job_markdown(
+            path.read_text(encoding="utf-8"),
+            path=path,
+            project_id=project_id,
+            source_scope="agents",
+        )
+    except (OSError, ValueError, yaml.YAMLError):
+        return None
 
 
 def job_source_path_index(
     *,
     project_root: Path | str | None = None,
     project_id: str = "default",
-    workspace_id: str = "default",
+    **_extra: object,
 ) -> dict[str, str]:
     """id -> 定义文件绝对路径，供 Jobs 页门面展示。"""
 
@@ -356,7 +309,7 @@ def job_source_path_index(
         for item in discover_job_files(
             project_root=project_root,
             project_id=project_id,
-            workspace_id=workspace_id,
+            **_extra,
         )
         if item.source_path
     }

@@ -42,11 +42,11 @@ class NotificationSettingsUpdate(BaseModel):
 
 @router.get("/notifications/unread-count")
 async def get_unread_count(
-    project_id: str | None = Query(default=None, alias="projectId"),
+    project_slug: str | None = Query(default=None, alias="projectSlug"),
 ) -> dict[str, int]:
     """未读通知条数。"""
 
-    return {"unreadCount": count_unread(project_id=project_id)}
+    return {"unreadCount": count_unread(project_slug=project_slug)}
 
 
 @router.get("/notifications/settings")
@@ -70,7 +70,7 @@ async def update_notification_settings(data: NotificationSettingsUpdate) -> dict
 @router.get("/notifications/stream")
 async def stream_notifications(
     request: Request,
-    project_id: str | None = Query(default=None, alias="projectId"),
+    project_slug: str | None = Query(default=None, alias="projectSlug"),
 ) -> StreamingResponse:
     """订阅应用内通知推送。独立于 Chat SSE。"""
 
@@ -78,7 +78,7 @@ async def stream_notifications(
     from src.server.auth.routes import token_from_request
 
     return StreamingResponse(
-        iter_with_presence(notification_event_stream(project_id), token_from_request(request)),
+        iter_with_presence(notification_event_stream(project_slug), token_from_request(request)),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -90,16 +90,16 @@ async def stream_notifications(
 
 @router.post("/notifications/read-all")
 async def read_all_notifications(
-    project_id: str | None = Query(default=None, alias="projectId"),
+    project_slug: str | None = Query(default=None, alias="projectSlug"),
 ) -> dict[str, int]:
     """将未读通知全部标为已读。"""
 
-    return {"updatedCount": mark_all_read(project_id=project_id)}
+    return {"updatedCount": mark_all_read(project_slug=project_slug)}
 
 
 @router.get("/notifications")
 async def list_notifications(
-    project_id: str | None = Query(default=None, alias="projectId"),
+    project_slug: str | None = Query(default=None, alias="projectSlug"),
     unread_only: bool = Query(default=False, alias="unreadOnly"),
     limit: int = Query(default=50, ge=1, le=100),
     before: str | None = Query(default=None),
@@ -107,7 +107,7 @@ async def list_notifications(
     """列出通知；limit 默认 50。"""
 
     items, unread, next_before = list_notification_page(
-        project_id=project_id,
+        project_slug=project_slug,
         unread_only=unread_only,
         limit=limit,
         before=before,

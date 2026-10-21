@@ -12,7 +12,7 @@ def test_scoped_read_accepts_project_relative_paths(tmp_path: Path, monkeypatch)
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "contract.md").write_text("hello\n", encoding="utf-8")
-    monkeypatch.setattr("src.tools.scoped_paths.default_project_root", lambda: tmp_path)
+    monkeypatch.setattr("src.tools.scoped_paths.project_default_root", lambda: tmp_path)
 
     chunk = asyncio.run(ScopedRead()(file_path="docs/contract.md"))
     text = chunk.content[0].text

@@ -133,13 +133,12 @@ def _build_runtime_feature_parts(
         feature_keys.append("run-steer:skill-context:context-governance")
         if ctx.persist_run:
             job_tools = build_scheduled_job_tools(
-                workspace_id=ctx.runtime_context.workspace_id,
-                project_id=ctx.runtime_context.project_id,
+                project_slug=ctx.runtime_context.project_slug,
                 agent_id=ctx.agent_id,
                 session_id=ctx.session_id,
             )
             extra_tools.extend(job_tools)
-            prompt_addenda.append(scheduled_job_prompt_addendum(ctx.runtime_context.workspace_id))
+            prompt_addenda.append(scheduled_job_prompt_addendum())
             feature_keys.append(scheduled_job_tools_cache_key(job_tools))
 
     catalog = load_subagent_catalog(workspace_dir=str(ctx.runtime_context.project_root))

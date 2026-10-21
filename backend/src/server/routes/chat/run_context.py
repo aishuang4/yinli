@@ -10,7 +10,7 @@ from typing import Any
 
 from src.config.runtime_settings import get_effective_model_settings
 from src.project_files import list_project_session_artifacts, project_session_directory
-from src.project_resources import ProjectResourceAccess, resolve_project_resource_access
+from src.project_resources import ProjectResourceAccess, load_project_access
 from src.runtime_context import RuntimeContext, load_project_instructions
 from src.server.routes.chat.runtime_governance import build_memory_prompt_and_recall
 from src.server.routes.agents import get_registered_agent
@@ -37,7 +37,7 @@ from src.server.routes.chat.runtime import (
     _build_runtime_guardrails,
     _build_runtime_knowledge_tools,
     _build_runtime_mcp_servers,
-    scope_guardrails_to_project,
+    directory_scope_for_run,
 )
 from src.server.routes.chat.readiness_gate import ReadinessDecision, check_message_readiness_with_model
 from src.server.routes.chat.runtime_builder import (
@@ -228,7 +228,7 @@ async def build_chat_run_context(
     session_id = run_data.session_id or ""
     agent_id = run_data.agent_id or "default"
     agent_config = get_registered_agent(agent_id)
-    project_resources = resolve_project_resource_access(runtime_context)
+    project_resources = load_project_access(runtime_context)
     project_resources.require_agent(agent_id)
     if agent_id != "default" and agent_config is None:
         raise ValueError(f"Agent 配置不存在: {agent_id}")
@@ -239,9 +239,9 @@ async def build_chat_run_context(
     external_skills = discover_external_skills(runtime_context.project_root)
     configured_skill_ids = list(agent_config.skills if agent_config else run_data.skill_ids)
     requested_skill_ids = set(run_data.skill_ids or configured_skill_ids)
-    skill_ids = project_resources.filter_ids(
-        "skill",
+    skill_ids = _enabled_scanned_skill_ids(
         [skill_id for skill_id in configured_skill_ids if skill_id in requested_skill_ids],
+        external_skills,
     )
     runtime_model_settings = get_effective_model_settings()
     runtime_model_config = build_runtime_model_config(
@@ -275,10 +275,6 @@ async def build_chat_run_context(
     if readiness.ready:
         active_skill_run = get_active_session_skill_run(session_id, agent_id)
         active_skill = get_skill_for_run(active_skill_run)
-        if active_skill and active_skill.id not in project_resources.skill_ids:
-            raise ValueError(
-                f"Skill {active_skill.id} 已从 Project {runtime_context.project_id} 移除，不能继续当前 Skill Run。",
-            )
         if active_skill_run and active_skill_run.get("status") == "waiting_user" and persist_run:
             active_skill_run = update_skill_run_status(
                 active_skill_run,
@@ -316,16 +312,15 @@ async def build_chat_run_context(
         memory_prompt, memory_recall = build_memory_prompt_and_recall(
             agent_id=agent_id,
             agent_name=agent_name,
-            workspace_id=runtime_context.workspace_id,
-            project_id=runtime_context.project_id,
+            project_slug=runtime_context.project_slug,
             query_text=run_data.message,
             freeze_session_id=session_id if persist_run else None,
             exclude_session_id=session_id or "",
         )
         del memory_recall
-    guardrails = scope_guardrails_to_project(
+    guardrails, readable_scopes = directory_scope_for_run(
         _build_runtime_guardrails(agent_config),
-        runtime_context.project_root,
+        runtime_context,
     )
     workspace_override = bool(session_workspace_dir)
     session_workspace_dir = resolve_run_workspace_dir(
@@ -372,13 +367,6 @@ async def build_chat_run_context(
         has_team=run_data.mode == "team",
         has_images=bool(run_data.images),
     )
-    extra_filesystem_scopes = _catalog_scopes(runtime_context.workspace_id)
-    _refresh_index_quietly(
-        runtime_context.project_root,
-        workspace_id=runtime_context.workspace_id,
-        project_id=runtime_context.project_id,
-        docker=guardrails.execution_backend == "docker",
-    )
     return ChatRunContext(
         session_id=session_id,
         runtime_context=runtime_context,
@@ -402,18 +390,12 @@ async def build_chat_run_context(
         system_prompt=system_prompt,
         guardrails=guardrails,
         runtime_tool_scope=runtime_tool_scope,
-        mcp_servers=_build_runtime_mcp_servers(
-            agent_config,
-            allowed_server_ids=project_resources.mcp_server_ids,
-        ),
-        knowledge_tools=_build_runtime_knowledge_tools(
-            agent_config,
-            allowed_tool_ids=project_resources.http_tool_ids,
-        ),
+        mcp_servers=_build_runtime_mcp_servers(agent_config),
+        knowledge_tools=_build_runtime_knowledge_tools(agent_config),
         session_workspace_dir=session_workspace_dir,
         session_artifact_paths_before=session_artifact_paths_before,
         approval_mode=approval_mode_for_run(session_id, getattr(run_data, "approval_mode", None)),
-        extra_filesystem_scopes=extra_filesystem_scopes,
+        extra_filesystem_scopes=readable_scopes,
         session_history=session_history,
         user_message_note="\n\n".join(
             part
@@ -447,18 +429,18 @@ async def build_scheduled_run_context(
     frozen_prompt = str(getattr(job, "frozen_prompt", "") or run_data.message or "").strip()
     if not frozen_prompt:
         raise ValueError("frozen_prompt 不能为空")
-    project = get_project(runtime_context.project_id)
+    project = get_project(runtime_context.project_slug)
     if project is None:
-        raise ValueError(f"project_archived: 找不到 Project {runtime_context.project_id}")
+        raise ValueError(f"project_archived: 找不到 Project {runtime_context.project_slug}")
     if str(project.get("status") or "") != "active":
-        raise ValueError(f"project_archived: Project {runtime_context.project_id} 已归档")
+        raise ValueError(f"project_archived: Project {runtime_context.project_slug} 已归档")
 
     session_id = run_data.session_id or ""
     agent_id = str(getattr(job, "agent_id", "") or run_data.agent_id or "default")
     agent_config = get_registered_agent(agent_id)
     if agent_id != "default" and agent_config is None:
         raise ValueError(f"agent_missing: Agent 配置不存在: {agent_id}")
-    project_resources = resolve_project_resource_access(runtime_context)
+    project_resources = load_project_access(runtime_context)
     project_resources.require_agent(agent_id)
     agent_name = run_data.agent_name or (agent_config.name if agent_config else "Assistant")
     base_system_prompt = resolve_agent_system_prompt(agent_config, run_data)
@@ -491,14 +473,13 @@ async def build_scheduled_run_context(
     memory_prompt, _job_recall = build_memory_prompt_and_recall(
         agent_id=agent_id,
         agent_name=agent_name,
-        workspace_id=runtime_context.workspace_id,
-        project_id=runtime_context.project_id,
+        project_slug=runtime_context.project_slug,
         query_text=run_data.message,
         freeze_session_id=None,
     )
-    guardrails = scope_guardrails_to_project(
+    guardrails, readable_scopes = directory_scope_for_run(
         _build_runtime_guardrails(agent_config),
-        runtime_context.project_root,
+        runtime_context,
     )
     workspace_dir = resolve_run_workspace_dir(
         filesystem_scope=guardrails.filesystem_scope,
@@ -561,13 +542,13 @@ async def build_scheduled_run_context(
         runtime_tool_scope=runtime_tool_scope,
         mcp_servers=_build_runtime_mcp_servers(
             agent_config,
-            allowed_server_ids=project_resources.mcp_server_ids,
             claimed_tool_ids=claimed_mcp,
         ),
         knowledge_tools=_build_runtime_knowledge_tools(
             agent_config,
-            allowed_tool_ids=claimed_http if claimed_http is not None else project_resources.http_tool_ids,
+            allowed_tool_ids=claimed_http,
         ),
+        extra_filesystem_scopes=readable_scopes,
         session_workspace_dir=workspace_dir,
         session_artifact_paths_before=session_artifact_paths_before,
         trigger_source="scheduled_job",
@@ -588,8 +569,9 @@ def _resolve_frozen_runtime_skills(
     agent_config: Any | None,
     project_resources: ProjectResourceAccess,
 ) -> list[Skill]:
-    """冻结 skill_ids 必须全部仍安装、仍绑定 Agent 与 Project，禁止静默丢掉。"""
+    """冻结 skill_ids 必须全部仍安装且仍绑定 Agent。不再查 Project binding。"""
 
+    del project_resources
     frozen = [str(skill_id) for skill_id in skill_ids if str(skill_id).strip()]
     if not frozen:
         return []
@@ -598,16 +580,13 @@ def _resolve_frozen_runtime_skills(
     used: list[Skill] = []
     for skill_id in frozen:
         skill = get_installed_skill(skill_id)
-        if skill is None:
+        if skill is None or not bool(getattr(skill, "enabled", True)):
             missing.append(skill_id)
             continue
         if skill_id not in agent_skill_ids:
             missing.append(skill_id)
             continue
         used.append(skill)
-    project_bound = project_resources.filter_ids("skill", frozen)
-    if project_bound != frozen:
-        missing.extend(skill_id for skill_id in frozen if skill_id not in project_bound)
     if missing or [skill.id for skill in used] != frozen:
         unique = list(dict.fromkeys(missing or frozen))
         raise ValueError(f"skill_unbound: {', '.join(unique)}")
@@ -623,7 +602,7 @@ def resolve_forced_runtime_skills(
     project_resources: ProjectResourceAccess,
     external_skills: list[Skill] | None = None,
 ) -> list[Skill]:
-    """解析发送框强制开启的 Skill：须已安装启用且过 Project binding。"""
+    """解析发送框强制开启的 Skill：须已安装且启用。"""
 
     requested = list(dict.fromkeys(str(skill_id).strip() for skill_id in skill_ids if str(skill_id).strip()))
     if not requested:
@@ -642,17 +621,7 @@ def resolve_forced_runtime_skills(
         resolved.append(skill)
     if missing:
         raise ValueError(f"强制开启的 Skill 不存在或未启用：{', '.join(missing)}")
-
-    allowed = set(project_resources.filter_ids("skill", requested))
-    blocked = [
-        skill.id
-        for skill in resolved
-        if skill.id not in allowed
-        and not _skill_is_shared(skill)
-        and str(getattr(skill, "source_scope", "") or "") != "project"
-    ]
-    if blocked:
-        raise ValueError(f"强制开启的 Skill 未授权给当前 Project：{', '.join(blocked)}")
+    del project_resources
     return resolved
 
 
@@ -678,8 +647,7 @@ def _build_project_context_prompt(runtime_context: RuntimeContext) -> str:
     instructions = load_project_instructions(runtime_context)
     parts = [
         "# Project Context",
-        f"Workspace ID: {runtime_context.workspace_id}",
-        f"Project ID: {runtime_context.project_id}",
+        f"Project slug: {runtime_context.project_slug}",
         f"Project name: {runtime_context.project_name}",
         f"Project root: {runtime_context.project_root}",
         "All file operations must remain within the effective project filesystem scope.",
@@ -689,31 +657,20 @@ def _build_project_context_prompt(runtime_context: RuntimeContext) -> str:
     return "\n".join(parts)
 
 
-def _catalog_scopes(workspace_id: str) -> list[str]:
-    """当前 Workspace 的文件工具 catalog 根。"""
+def _enabled_scanned_skill_ids(skill_ids: list[str], external_skills: list[Skill]) -> list[str]:
+    """保留已启用且扫描命中的 Skill，不查绑定表。"""
 
-    from src.catalog.paths import extra_filesystem_scopes_for_workspace
-
-    try:
-        return extra_filesystem_scopes_for_workspace(workspace_id)
-    except ValueError:
-        return []
-
-
-def _refresh_index_quietly(project_root, *, workspace_id: str, project_id: str, docker: bool) -> None:
-    """INDEX 写失败不得打断 Chat。"""
-
-    from src.catalog.index import refresh_project_index
-
-    try:
-        refresh_project_index(
-            project_root,
-            workspace_id=workspace_id,
-            project_id=project_id,
-            docker=docker,
-        )
-    except Exception:
-        return
+    scanned = {
+        str(getattr(skill, "id", "") or ""): skill
+        for skill in external_skills
+    }
+    kept: list[str] = []
+    for skill_id in skill_ids:
+        skill = scanned.get(skill_id) or get_installed_skill(skill_id)
+        if skill is None or not bool(getattr(skill, "enabled", True)):
+            continue
+        kept.append(skill_id)
+    return kept
 
 
 def _skill_is_shared(skill) -> bool:

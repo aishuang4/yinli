@@ -94,14 +94,14 @@ def test_memory_prompt_and_recall_split(monkeypatch) -> None:
     monkeypatch.setattr("src.runtime.governance.build_habit_prompt", lambda *args, **kwargs: "# Habits\n摘要")
     monkeypatch.setattr("src.runtime.governance.build_professional_prompt", lambda *args, **kwargs: "")
     prompt, recall = governance.build_memory_prompt_and_recall(
-        agent_id="a", agent_name="A", workspace_id="w", project_id="p",
+        agent_id="a", agent_name="A", project_slug="p",
         query_text="汇总销售表", freeze_session_id=None, exclude_session_id="s-1",
     )
     assert "# Habits" in prompt
     assert recall is None
 
     prompt, recall = governance.build_memory_prompt_and_recall(
-        agent_id="a", agent_name="A", workspace_id="w", project_id="p",
+        agent_id="a", agent_name="A", project_slug="p",
         query_text="汇总销售表", freeze_session_id=None, include_markdown=False,
     )
     assert prompt == ""

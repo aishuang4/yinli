@@ -98,8 +98,8 @@ def test_react_runtime_only_enables_plan_features_for_explicit_plan_request(monk
         intent_route=SimpleNamespace(executor=SimpleNamespace(kind="single_agent")),
         runtime_context=SimpleNamespace(
             project_root=Path("/tmp/project"),
-            workspace_id="default",
-            project_id="default",
+            
+            project_slug="default",
         ),
     )
 

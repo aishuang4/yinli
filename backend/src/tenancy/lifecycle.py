@@ -54,43 +54,9 @@ def ensure_tenant(user: dict[str, Any]) -> TenantContext:
         from src.scheduler.settings import ensure_scheduled_jobs_defaults
 
         ensure_scheduled_jobs_defaults()
-        now = database._utc_now()
-        with database._lock, database._connect() as conn:
-            database._bind_workspace_resources(
-                conn,
-                project_id="default",
-                workspace_id="default",
-                now=now,
-            )
-        _bind_file_catalog()
         _ensure_empty_model_catalog()
         _sync_provider_key(user)
     return ctx
-
-
-def _bind_file_catalog() -> None:
-    """Agent 和 Skill 在文件目录里，sqlite 白名单扫不到，这里按目录再绑一次。"""
-
-    from src.catalog.loader import list_workspace_agents
-    from src.catalog.skills import SYSTEM_SKILL_IDS
-    from src.config.runtime_paths import skill_packages_root
-
-    for agent in list_workspace_agents("default"):
-        database.upsert_project_resource_binding({
-            "project_id": "default",
-            "resource_type": "agent",
-            "resource_id": agent.id,
-            "enabled": True,
-        })
-    packages = skill_packages_root()
-    for skill_id in SYSTEM_SKILL_IDS:
-        if (packages / skill_id / "SKILL.md").is_file():
-            database.upsert_project_resource_binding({
-                "project_id": "default",
-                "resource_type": "skill",
-                "resource_id": skill_id,
-                "enabled": True,
-            })
 
 
 def _ensure_empty_model_catalog() -> None:

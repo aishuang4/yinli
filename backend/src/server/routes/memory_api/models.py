@@ -17,8 +17,7 @@ class MemoryNodeCreate(BaseModel):
     agent_final_outputs: list[str] = Field(default_factory=list, alias="agentFinalOutputs")
     conversation_digest: str = Field(default="", alias="conversationDigest", max_length=8000)
     tags: list[str] = Field(default_factory=list)
-    workspace_id: str = Field(default="default", alias="workspaceId")
-    project_id: str = Field(default="default", alias="projectId")
+    project_slug: str = Field(default="default", alias="projectSlug")
     user_id: str = Field(default="default", alias="userId")
     date_range_start: str | None = Field(default=None, alias="dateRangeStart")
     date_range_end: str | None = Field(default=None, alias="dateRangeEnd")
@@ -100,7 +99,7 @@ class MemoryRetrievalFeedback(BaseModel):
 
     audit_event_id: str = Field(..., alias="auditEventId", min_length=1, max_length=120)
     node_id: str = Field(..., alias="nodeId", min_length=1, max_length=120)
-    project_id: str = Field(default="default", alias="projectId")
+    project_slug: str = Field(default="default", alias="projectSlug")
     rating: str = Field(..., pattern="^(relevant|irrelevant)$")
     reason: str = Field(default="", max_length=500)
     session_id: str = Field(default="memory-page", alias="sessionId", max_length=120)

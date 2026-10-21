@@ -67,9 +67,8 @@ class McpServer(BaseModel):
     enabled: bool = False
     installed_at: Optional[str] = Field(default=None, alias="installedAt")
     updated_at: str = Field(alias="updatedAt")
-    workspace_id: str = Field(default="default", alias="workspaceId")
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "ignore"}
 
 
 class McpInstallRequest(BaseModel):
@@ -85,9 +84,8 @@ class McpRegisterRequest(BaseModel):
     url: HttpUrl
     description: str = Field(default="", max_length=300)
     headers: dict[str, str] = Field(default_factory=dict)
-    workspace_id: str = Field(default="default", alias="workspaceId")
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "ignore"}
 
 
 MCP_NAMESPACE = "mcp_servers"
@@ -461,7 +459,6 @@ def _server_from_file(record: McpFileRecord) -> McpServer:
         "status": record.status,
         "enabled": record.enabled,
         "updatedAt": record.updated_at or _utc_now(),
-        "workspaceId": record.workspace_id,
     })
     _mcp_header_refs[record.id] = dict(record.header_refs)
     return server
@@ -515,9 +512,8 @@ def _save_user_mcp_servers() -> None:
                 tools=[tool.model_dump(by_alias=True) for tool in server.tools],
                 status=server.status,
                 enabled=server.enabled,
-                workspace_id=server.workspace_id,
             )
-            write_mcp_file(mcp_dir(server.workspace_id) / f"{server.id}.yaml", record)
+            write_mcp_file(mcp_dir() / f"{server.id}.yaml", record)
             _mcp_header_refs[server.id] = record.header_refs
             _mcp_servers[server.id] = server.model_copy(update={"headers": record.headers})
         return

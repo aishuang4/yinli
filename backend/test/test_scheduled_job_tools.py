@@ -45,8 +45,8 @@ def isolated_db(tmp_path, monkeypatch):
 def _tools(**overrides):
     ensure_db()
     payload = {
-        "workspace_id": DEFAULT_WORKSPACE_ID,
-        "project_id": DEFAULT_PROJECT_ID,
+        
+        "project_slug": DEFAULT_PROJECT_ID,
         "agent_id": "default",
         "session_id": "session-1",
     }
@@ -108,8 +108,8 @@ def test_enable_askuser_options_lock_now_first():
 
 def test_tools_are_ordinary_not_external():
     tools = build_scheduled_job_tools(
-        workspace_id="ws",
-        project_id="p",
+        
+        project_slug="p",
         agent_id="a",
         session_id="s",
         service=ScheduledJobService(),
@@ -216,8 +216,8 @@ def test_team_executor_does_not_inject_scheduled_job_tools(monkeypatch):
     )
     runtime_context = SimpleNamespace(
         project_root=Path("/tmp/project"),
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
     )
     team_ctx = SimpleNamespace(
         session_id="session-1",

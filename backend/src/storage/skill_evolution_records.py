@@ -19,7 +19,7 @@ class SkillEvolutionRecordStore:
         utc_now: Callable[[], str],
         dumps: Callable[[Any], str],
         loads: Callable[[str | None, Any], Any],
-        default_project_id: str,
+        default_project_slug: str,
     ) -> None:
         self.ensure_db = ensure_db
         self.connect = connect
@@ -27,13 +27,12 @@ class SkillEvolutionRecordStore:
         self.utc_now = utc_now
         self.dumps = dumps
         self.loads = loads
-        self.default_project_id = default_project_id
+        self.default_project_slug = default_project_slug
 
     def _from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
             "id": row["id"],
-            "workspaceId": row["workspace_id"],
-            "projectId": row["project_id"],
+            "projectSlug": row["project_slug"],
             "agentId": row["agent_id"],
             "agentName": row["agent_name"],
             "teamId": row["team_id"],
@@ -72,15 +71,15 @@ class SkillEvolutionRecordStore:
             conn.execute(
                 """
                 INSERT INTO skill_evolution_records (
-                    id, workspace_id, project_id, agent_id, agent_name, team_id, user_id,
+                    id, project_slug, agent_id, agent_name, team_id, user_id,
                     source_session_id, source_run_id, source_message_id, router_gate,
                     workflow_evidence, reusable, reusable_reason, trigger_description,
                     inputs_schema, draft_skill_name, draft_skill_description, draft_skill_content,
                     draft_tags, granularity, requires_workflow, suggested_split, variable_flow,
                     risk_notes, confidence, status, registered_skill_id, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
-                    workspace_id=excluded.workspace_id, project_id=excluded.project_id,
+                    project_slug=excluded.project_slug,
                     agent_id=excluded.agent_id, agent_name=excluded.agent_name,
                     team_id=excluded.team_id, user_id=excluded.user_id,
                     source_session_id=excluded.source_session_id,
@@ -100,8 +99,9 @@ class SkillEvolutionRecordStore:
                     updated_at=excluded.updated_at
                 """,
                 (
-                    data["id"], data.get("workspace_id") or "default",
-                    data.get("project_id") or self.default_project_id, data["agent_id"],
+                    data["id"],
+                    data.get("project_slug") or data.get("projectSlug") or self.default_project_slug,
+                    data["agent_id"],
                     data.get("agent_name") or "", data.get("team_id") or "",
                     data.get("user_id") or "default", data.get("source_session_id") or "",
                     data.get("source_run_id") or "", data.get("source_message_id") or "",
@@ -139,12 +139,12 @@ class SkillEvolutionRecordStore:
         *,
         status: str | None = None,
         agent_id: str | None = None,
-        project_id: str | None = None,
+        project_slug: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         self.ensure_db()
-        query = "SELECT * FROM skill_evolution_records WHERE project_id = ?"
-        params: list[Any] = [project_id or self.default_project_id]
+        query = "SELECT * FROM skill_evolution_records WHERE project_slug = ?"
+        params: list[Any] = [project_slug or self.default_project_slug]
         if status:
             query += " AND status = ?"
             params.append(status)

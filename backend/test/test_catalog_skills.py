@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from src.catalog.skills import project_skill_refs, read_package_markdown
-from src.project_resources import ProjectResourceAccess
 from src.server.routes.skills import SkillRegisterRequest, register_user_skill
 from src.storage import database
 
@@ -36,16 +35,6 @@ def test_project_skill_refs_allow_without_binding(tmp_path) -> None:
     )
     refs = project_skill_refs(tmp_path)
     assert "local-writer" in refs
-    access = ProjectResourceAccess(
-        workspace_id="default",
-        project_id="p",
-        agent_ids=frozenset(),
-        skill_ids=frozenset(),
-        mcp_server_ids=frozenset(),
-        http_tool_ids=frozenset(),
-        project_skill_refs=frozenset(refs),
-    )
-    assert access.filter_ids("skill", ["local-writer"]) == ["local-writer"]
 
 
 def test_system_skill_name_cannot_be_registered() -> None:

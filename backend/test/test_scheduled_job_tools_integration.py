@@ -76,8 +76,8 @@ def _tools():
     ensure_db()
     set_scheduled_jobs_enabled(True)
     built = build_scheduled_job_tools(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         agent_id="default",
         session_id="session-register-1",
     )
@@ -112,7 +112,7 @@ def test_schedule_job_pending_then_rest_confirm_activates(client):
     job_id = created["jobId"]
 
     assert created["status"] == "pending_confirmation"
-    listed = client.get("/api/scheduled-jobs", params={"projectId": DEFAULT_PROJECT_ID})
+    listed = client.get("/api/scheduled-jobs", params={"projectSlug": DEFAULT_PROJECT_ID})
     assert listed.status_code == 200
     rest_job = next(item for item in listed.json()["jobs"] if item["id"] == job_id)
     assert rest_job["status"] == "pending_confirmation"

@@ -97,14 +97,14 @@ def test_reflection_writes_global_memory(tmp_path):
             agent_name="Agent",
             user_message="整个工作台以后默认不要新增 memory runtime.kind。",
             assistant_text="收到。",
-            workspace_id="workspace-1",
+            
         ),
         store=store,
     )
 
     assert result.updates[0].scope == "global_preference"
     assert result.updates[0].section == "Negative Rules"
-    content = (tmp_path / "memory" / "global" / "workspace-1" / "global_memory.md").read_text(encoding="utf-8")
+    content = (tmp_path / "memory" / "global" / "global_memory.md").read_text(encoding="utf-8")
     assert "整个工作台以后默认不要新增 memory runtime.kind。" in content
 
 
@@ -286,7 +286,7 @@ def test_reflection_with_agents_writes_model_memories(tmp_path, monkeypatch):
     monkeypatch.setattr("src.memory.reflection.run_memory_reflection_agent", fake_memory_agent)
     monkeypatch.setattr("src.memory.reflection.run_skill_evolution_agent", fake_skill_agent)
     store = MarkdownMemoryStore(root=tmp_path / "memory")
-    store.write_global_memory("default", "# Summary\n\n已有规则：不要恢复旧记忆模块。")
+    store.write_global_memory("# Summary\n\n已有规则：不要恢复旧记忆模块。")
 
     result = asyncio.run(
         reflect_completed_run_memory_with_agents(

@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 
 from src.server.routes.chat.runtime_governance import build_actor_memory_prompt
 from src.runtime_context import RuntimeContext as PlatformRuntimeContext
-from src.project_resources import resolve_project_resource_access
 from src.server.routes.skills import Skill, discover_external_skills, resolve_installed_skills, resolve_runtime_skill_paths
 from src.subagents.models import SubagentDefinition
 
@@ -59,15 +58,6 @@ def build_subagent_runtime_context(
             definition.skills,
             external_skills=external_skills,
         )
-        if platform_context is not None:
-            allowed_skill_ids = resolve_project_resource_access(platform_context).skill_ids
-            denied_refs = [skill.name for skill in loaded_skills if skill.id not in allowed_skill_ids]
-            loaded_skills = [
-                skill
-                for skill in loaded_skills
-                if skill.id in allowed_skill_ids or skill.source_scope == "project"
-            ]
-            missing_skill_refs.extend(denied_refs)
         skill_paths = resolve_runtime_skill_paths(loaded_skills, runtime_context=platform_context)
     except Exception as exc:
         loaded_skills = []

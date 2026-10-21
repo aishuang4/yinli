@@ -31,12 +31,10 @@ from src.server.routes.skills import Skill
 from src.storage import database
 from src.storage.database import (
     DEFAULT_PROJECT_ID,
-    DEFAULT_WORKSPACE_ID,
     create_project,
     ensure_db,
     replace_skills,
     upsert_agent,
-    upsert_project_resource_binding,
 )
 
 
@@ -65,7 +63,6 @@ def _ensure_agent(agent_id: str) -> None:
         "id": agent_id,
         "name": agent_id,
         "system_prompt": "prompt",
-        "workspaceId": DEFAULT_WORKSPACE_ID,
         "status": "idle",
     })
 
@@ -82,21 +79,13 @@ def _ensure_skill(skill_id: str, *, resource_path: str = "") -> None:
             "resourcePath": resource_path,
             "resources": ["scripts/"] if resource_path else [],
             "updatedAt": "2026-08-20T00:00:00+00:00",
-            "workspaceId": DEFAULT_WORKSPACE_ID,
         },
-    })
-    upsert_project_resource_binding({
-        "project_id": DEFAULT_PROJECT_ID,
-        "resource_type": "skill",
-        "resource_id": skill_id,
-        "enabled": True,
     })
 
 
 def _weekly_job(service: ScheduledJobService, **overrides):
     payload = {
-        "workspace_id": DEFAULT_WORKSPACE_ID,
-        "project_id": DEFAULT_PROJECT_ID,
+        "project_slug": DEFAULT_PROJECT_ID,
         "name": "周五周报",
         "agent_id": "agent-1",
         "schedule_kind": "weekly",
@@ -138,8 +127,7 @@ def _agent_ctx(*, trigger_source: str, project_root: Path):
         intent_route=SimpleNamespace(executor=SimpleNamespace(kind="single_agent")),
         runtime_context=SimpleNamespace(
             project_root=project_root,
-            workspace_id=DEFAULT_WORKSPACE_ID,
-            project_id=DEFAULT_PROJECT_ID,
+            project_slug=DEFAULT_PROJECT_ID,
         ),
         runtime_model_config=SimpleNamespace(
             model_name="model",
@@ -441,14 +429,14 @@ def test_build_scheduled_run_context_skips_model_readiness_and_tool_scope_resolv
             model_config_data=None,
             mcp_tools=[],
             knowledge_tools=[],
-            guardrails=SimpleNamespace(filesystem_scope=project["rootPath"]),
+            guardrails=SimpleNamespace(filesystem_scope=project["primaryPath"]),
         ),
     )
-    workspace = project_job_run_directory(Path(project["rootPath"]), "job-ctx", "firing-ctx")
+    workspace = project_job_run_directory(Path(project["primaryPath"]), "job-ctx", "firing-ctx")
     from src.runtime_context import resolve_runtime_context
 
     runtime_context = resolve_runtime_context(
-        project_id=project["id"],
+        project_slug=project["slug"],
         session_id="sched-ctx",
         run_id="run-ctx",
         agent_id="default",
@@ -458,7 +446,7 @@ def test_build_scheduled_run_context_skips_model_readiness_and_tool_scope_resolv
         _firing_ns(id="firing-ctx", job_id="job-ctx"),
         run_data=ChatMessage(
             session_id="sched-ctx",
-            project_id=project["id"],
+            project_slug=project["slug"],
             message="生成本周周报，写入 outputs/weekly-report.md",
             agent_id="default",
             skill_ids=[],
@@ -515,14 +503,14 @@ def test_frozen_skills_must_equal_used_skills_or_skill_unbound(isolated_db, tmp_
             model_config_data=None,
             mcp_tools=[],
             knowledge_tools=[],
-            guardrails=SimpleNamespace(filesystem_scope=project["rootPath"]),
+            guardrails=SimpleNamespace(filesystem_scope=project["primaryPath"]),
         ),
     )
     from src.runtime_context import resolve_runtime_context
 
-    workspace = project_job_run_directory(Path(project["rootPath"]), "job-skill", "firing-skill")
+    workspace = project_job_run_directory(Path(project["primaryPath"]), "job-skill", "firing-skill")
     runtime_context = resolve_runtime_context(
-        project_id=project["id"],
+        project_slug=project["slug"],
         session_id="sched-skill",
         run_id="run-skill",
         agent_id="default",
@@ -533,7 +521,7 @@ def test_frozen_skills_must_equal_used_skills_or_skill_unbound(isolated_db, tmp_
             _firing_ns(id="firing-skill", job_id="job-skill"),
             run_data=ChatMessage(
                 session_id="sched-skill",
-                project_id=project["id"],
+                project_slug=project["slug"],
                 message="使用技能",
                 agent_id="default",
                 skill_ids=["skill-ok", "skill-missing"],
@@ -708,10 +696,8 @@ def _prepare_project(tmp_path) -> dict:
     root = tmp_path / "job-project"
     root.mkdir()
     return create_project({
-        "id": "proj-unattended",
-        "workspace_id": DEFAULT_WORKSPACE_ID,
         "name": "无人值守项目",
-        "root_path": str(root),
+        "primaryPath": str(root),
     })
 
 

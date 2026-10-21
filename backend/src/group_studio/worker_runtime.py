@@ -35,13 +35,11 @@ from src.group_studio.tools_worker import (
     acquire_worker_tool_context,
     worker_tools,
 )
-from src.project_resources import resolve_project_resource_access
 from src.runtime_context import resolve_runtime_context
 from src.security.permissions import build_permission_profile
 from src.runtime.agent_resources import (
     build_runtime_knowledge_tools,
     build_runtime_mcp_servers,
-    scope_guardrails_to_project,
 )
 from src.runtime.agent_spec import (
     RuntimeModelConfig,
@@ -58,7 +56,6 @@ from src.runtime.governance import (
 )
 from src.storage.database import (
     get_group_studio_snapshot,
-    get_project,
     insert_group_studio_message,
     insert_group_studio_run,
     set_group_studio_current_run_id,
@@ -88,20 +85,18 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
     """构造 Worker spec：复制 Agent 能力，群聊内工具权限全部放开。"""
 
     agent_row = _agent_row(str(member.get("agentId") or "default"))
-    project = get_project(str(snapshot.get("projectId") or "")) or {}
-    from pathlib import Path
-
-    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
-    context = resolve_runtime_context(
-        project_id=str(snapshot.get("projectId") or ""),
-        session_id=str(snapshot.get("chatSessionId") or ""),
+    session_id = str(snapshot.get("chatSessionId") or "")
+    resolve_runtime_context(
+        project_slug=str(snapshot.get("projectSlug") or "") or None,
+        session_id=session_id,
         run_id="",
         agent_id=str(agent_row.get("id") or member.get("agentId") or "default"),
     )
-    access = resolve_project_resource_access(context)
+    studio_root = ensure_studio_dirs(session_id, str(snapshot["id"]))
+    workspace = str((studio_root / "workspace").resolve())
     raw_guardrails = dict(agent_row.get("guardrails") or {})
     guardrails = AgentGuardrails(
-        filesystem_scope=str(raw_guardrails.get("filesystem_scope") or context.project_root),
+        filesystem_scope=workspace,
         shell_blacklist=list(raw_guardrails.get("shell_blacklist") or ["rm -rf /", "sudo"]),
         network_enabled=True,
         human_approval=False,
@@ -126,18 +121,13 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
         timeout_seconds=guardrails.timeout_seconds,
         permission_profile=build_permission_profile(guardrails),
     )
-    if project_root.is_dir():
-        guardrails = scope_guardrails_to_project(guardrails, project_root)
-
-    mcp_ids = access.filter_ids("mcp", [str(item) for item in (agent_row.get("mcpTools") or [])])
-    knowledge_ids = access.filter_ids(
-        "http_tool",
-        [str(item) for item in (agent_row.get("knowledgeTools") or [])],
-    )
+    # 能力不再按 Project binding 过滤：Agent 声明且已启用的 Skill、租户全局 MCP/HTTP 都可用。
+    mcp_ids = [str(item) for item in (agent_row.get("mcpTools") or [])]
+    knowledge_ids = [str(item) for item in (agent_row.get("knowledgeTools") or [])]
     cfg = SimpleNamespace(mcp_tools=mcp_ids, knowledge_tools=knowledge_ids)
-    mcp_servers = build_runtime_mcp_servers(cfg, allowed_server_ids=access.mcp_server_ids)
-    knowledge_tools = build_runtime_knowledge_tools(cfg, allowed_tool_ids=access.http_tool_ids)
-    skill_ids = access.filter_ids("skill", [str(item) for item in (agent_row.get("skills") or [])])
+    mcp_servers = build_runtime_mcp_servers(cfg)
+    knowledge_tools = build_runtime_knowledge_tools(cfg)
+    skill_ids = [str(item) for item in (agent_row.get("skills") or [])]
     skill_paths = _skill_paths(skill_ids)
 
     ctx = acquire_worker_tool_context(
@@ -160,8 +150,6 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
         allow_http=network,
         allow_web=network,
     )
-    studio_root = ensure_studio_dirs(context.project_root, str(snapshot["id"]))
-    workspace = str((studio_root / "workspace").resolve())
     runtime = get_effective_model_settings()
     model_config = RuntimeModelConfig(
         model_name=runtime.default_model,
@@ -201,7 +189,7 @@ def build_worker_runtime_spec(snapshot: dict[str, Any], member: dict[str, Any]):
         include_default_tools=True,
         workspace_dir=workspace,
         write_scope_dir=workspace,
-        extra_filesystem_scopes=_catalog_scopes(str(snapshot.get("workspaceId") or "default")),
+        extra_filesystem_scopes=[],
     )
     return spec, ctx, tools
 
@@ -233,15 +221,6 @@ def _merge_shell_blacklist(base: list[str]) -> list[str]:
         if item not in merged:
             merged.append(item)
     return merged
-
-
-def _catalog_scopes(workspace_id: str) -> list[str]:
-    from src.catalog.paths import extra_filesystem_scopes_for_workspace
-
-    try:
-        return extra_filesystem_scopes_for_workspace(workspace_id)
-    except ValueError:
-        return []
 
 
 def _agent_row(agent_id: str) -> dict[str, Any]:

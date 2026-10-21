@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from src.catalog.agent_models import Guardrails
-from src.config.runtime_paths import tenant_root, workspaces_catalog_root
+from src.config.runtime_paths import agents_root, tenant_root
 from src.scheduler.service import ScheduledJobService
 from src.security.authorization.migration import (
     legacy_task_mode, migrate_permission_configuration, rollback_permission_configuration,
@@ -42,8 +42,8 @@ def test_migration_backups_idempotence_and_configuration_rollback(tmp_path):
     database.ensure_db()
     project = tmp_path / "project"
     project.mkdir()
-    database.create_project({"id": "migration-project", "workspace_id": "default", "name": "测试", "root_path": str(project)})
-    profiles = workspaces_catalog_root() / "default" / ".agents" / "profiles"
+    created = database.create_project({"name": "迁移测试", "primaryPath": str(project)})
+    profiles = agents_root() / "profiles"
     trusted = profiles / "trusted.md"
     original = _file(trusted, {"id": "trusted", "guardrails": {"tool_permission_mode": "bypass", "network_enabled": False}})
     readonly = profiles / "reader.md"
@@ -55,9 +55,17 @@ def test_migration_backups_idempotence_and_configuration_rollback(tmp_path):
     explicit = project / ".agents" / "jobs" / "new.md"
     _file(explicit, {"id": "new", "agent_id": "trusted", "executionPolicy": {"approvalMode": "manual"}})
     service = ScheduledJobService()
-    job = service.create_job(workspace_id="default", project_id="migration-project", name="任务", agent_id="system-websearch-job",
-                             schedule_kind="weekly", schedule_expr={"weekdays": ["mon"], "at": "10:00"},
-                             timezone="Asia/Shanghai", frozen_prompt="测试", persist_file=False)
+    job = service.create_job(
+        project_slug=created["slug"],
+        cwd=str(project),
+        name="任务",
+        agent_id="system-websearch-job",
+        schedule_kind="weekly",
+        schedule_expr={"weekdays": ["mon"], "at": "10:00"},
+        timezone="Asia/Shanghai",
+        frozen_prompt="测试",
+        persist_file=False,
+    )
     with database._connect() as conn:
         conn.execute("UPDATE scheduled_jobs SET agent_id='trusted',execution_policy='{}' WHERE id=?", (job.id,))
         conn.commit()

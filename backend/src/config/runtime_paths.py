@@ -105,24 +105,28 @@ def legacy_subagent_root() -> Path:
     return data_root() / "subagents"
 
 
-# 与默认 Project 根 `workspace`（单数）区分：这里是 Workspace catalog 权威树。
-def workspaces_catalog_root() -> Path:
-    return tenant_root() / "workspaces"
+def agents_root() -> Path:
+    """Agent profile 权威目录。"""
+
+    return tenant_root() / "agents"
+
+
+def project_default_root(slug: str = "default") -> Path:
+    """没有外部目录时，Project 的主目录。"""
+
+    return projects_root() / slug
+
+
+def session_root(session_id: str) -> Path:
+    """会话文件根：上传、产物和 Run 大对象。"""
+
+    return tenant_root() / "sessions" / session_id
 
 
 def projects_root() -> Path:
     """hosted 下用户 Project 的父目录；桌面 Project 可在任意路径，不使用本函数。"""
 
     return tenant_root() / "projects"
-
-
-def default_project_root() -> Path:
-    """默认 Project 根：hosted 在租户目录内；桌面保持现有逻辑。"""
-
-    if _is_hosted():
-        return projects_root() / "default"
-    # 桌面安装版的默认 Project 必须是稳定目录；开发模式继续使用仓库根目录。
-    return USER_DATA_ROOT / "workspace" if USING_CUSTOM_DATA_ROOT else INSTALL_PROJECT_ROOT
 
 
 def user_home_root() -> Path | None:
@@ -158,10 +162,17 @@ def ensure_tenant_directories() -> None:
             return
         for path in (
             data_root(),
-            default_project_root(),
+            project_default_root("default"),
             skill_packages_root(),
             subagent_root(),
-            workspaces_catalog_root(),
+            agents_root(),
+            agents_root() / "profiles",
+            agents_root() / "jobs",
+            agents_root() / "_system" / "profiles",
+            tenant_root() / "mcp",
+            tenant_root() / "tools",
+            tenant_root() / "sessions",
+            tenant_root() / "backups",
         ):
             path.mkdir(parents=True, exist_ok=True)
         _migrate_legacy_skill_packages()

@@ -72,8 +72,7 @@ async def write_professional_memory(agent_id: str, data: MarkdownMemoryUpdate) -
 
 @router.get("/timeline")
 async def read_memory_timeline(
-    workspace_id: str = Query(default="", alias="workspaceId"),
-    project_id: str = Query(default="", alias="projectId"),
+    project_slug: str = Query(default="", alias="projectSlug"),
     agent_id: str = Query(default="", alias="agentId"),
     surface: str = Query(default=""),
     time_from: str = Query(default="", alias="timeFrom"),
@@ -84,8 +83,7 @@ async def read_memory_timeline(
     """按标签和时间查看时间线原文，不调用模型。"""
 
     return search_timeline(
-        workspace_id=workspace_id,
-        project_id=project_id,
+        project_slug=project_slug,
         agent_id=agent_id,
         surface=surface,
         time_from=time_from,

@@ -39,7 +39,7 @@ print(json.dumps({
     "sandboxes": str(runtime_paths.sandbox_root()),
     "secrets": str(secret_dir()),
     "legacy_chat": str(chat_data_path()),
-    "workspace": str(runtime_paths.default_project_root()),
+    "workspace": str(runtime_paths.project_default_root()),
     "logs": str(runtime_paths.LOG_ROOT),
     "temp": str(runtime_paths.TEMP_ROOT),
 }))
@@ -87,12 +87,12 @@ def test_ephemeral_desktop_defaults_migrate_to_stable_workspace(monkeypatch) -> 
     from src.storage import database
 
     monkeypatch.setattr(runtime_paths, "USING_CUSTOM_DATA_ROOT", True)
-    workspace_root = runtime_paths.USER_DATA_ROOT / "workspace"
+    stable_root = runtime_paths.project_default_root(database.DEFAULT_PROJECT_ID)
 
     database.ensure_db()
     with database._connect() as conn:
         conn.execute(
-            "UPDATE projects SET root_path = ? WHERE id = ?",
+            "UPDATE projects SET primary_path = ? WHERE slug = ?",
             ("/private/tmp/_MEIold/runtime", database.DEFAULT_PROJECT_ID),
         )
         conn.commit()
@@ -100,15 +100,15 @@ def test_ephemeral_desktop_defaults_migrate_to_stable_workspace(monkeypatch) -> 
     database.forget_db(database.db_path())
     database.ensure_db()
 
-    assert database.get_project(database.DEFAULT_PROJECT_ID)["rootPath"] == str(workspace_root)
+    assert database.get_project(database.DEFAULT_PROJECT_ID)["primaryPath"] == str(stable_root.resolve())
     normalized = database._normalize_guardrails({
         "filesystem_scope": "/private/tmp/_MEIold/runtime",
     })
-    assert normalized["filesystem_scope"] == str(workspace_root)
+    assert normalized["filesystem_scope"] == str(stable_root)
 
     with database._connect() as conn:
         conn.execute(
-            "UPDATE projects SET root_path = ? WHERE id = ?",
+            "UPDATE projects SET primary_path = ? WHERE slug = ?",
             ("/private/var/folders/example/T/agent-workstation", database.DEFAULT_PROJECT_ID),
         )
         conn.commit()
@@ -116,7 +116,7 @@ def test_ephemeral_desktop_defaults_migrate_to_stable_workspace(monkeypatch) -> 
     database.forget_db(database.db_path())
     database.ensure_db()
 
-    assert database.get_project(database.DEFAULT_PROJECT_ID)["rootPath"] == str(workspace_root)
+    assert database.get_project(database.DEFAULT_PROJECT_ID)["primaryPath"] == str(stable_root.resolve())
     custom_root = runtime_paths.USER_DATA_ROOT / "external-project"
     normalized_custom = database._normalize_guardrails({
         "filesystem_scope": str(custom_root),

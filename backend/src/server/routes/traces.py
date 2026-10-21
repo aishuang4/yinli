@@ -26,8 +26,7 @@ class TraceObservation(BaseModel):
     id: str
     run_id: str = Field(alias="runId")
     session_id: str = Field(alias="sessionId")
-    workspace_id: str = Field(default="default", alias="workspaceId")
-    project_id: str = Field(default="default", alias="projectId")
+    project_slug: str = Field(default="default", alias="projectSlug")
     kind: str
     name: str
     parent_id: str | None = Field(default=None, alias="parentId")
@@ -47,8 +46,7 @@ class TraceSummary(BaseModel):
 
     id: str
     session_id: str = Field(alias="sessionId")
-    workspace_id: str = Field(default="default", alias="workspaceId")
-    project_id: str = Field(default="default", alias="projectId")
+    project_slug: str = Field(default="default", alias="projectSlug")
     title: str
     agent_id: str | None = Field(default=None, alias="agentId")
     agent_name: str | None = Field(default=None, alias="agentName")
@@ -105,8 +103,7 @@ def _summary_from_run(record: dict, observations: list[dict] | None = None) -> T
     return TraceSummary(
         id=str(record.get("id") or ""),
         sessionId=str(record.get("sessionId") or ""),
-        workspaceId=str(record.get("workspaceId") or "default"),
-        projectId=str(record.get("projectId") or "default"),
+        projectSlug=str(record.get("projectSlug") or "default"),
         title=_title_from_task(str(record.get("task") or "")),
         agentId=record.get("agentId") or None,
         agentName=record.get("agentName") or None,
@@ -123,22 +120,22 @@ def _summary_from_run(record: dict, observations: list[dict] | None = None) -> T
 
 @router.get("", response_model=list[TraceSummary])
 async def list_traces(
-    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+    project_slug: str = Query(default=DEFAULT_PROJECT_ID, alias="projectSlug"),
 ) -> list[TraceSummary]:
     """列出当前 Project 的 Chat Run Trace。"""
 
-    return [_summary_from_run(record) for record in list_chat_runs(MAX_TRACE_SUMMARIES, project_id=project_id)]
+    return [_summary_from_run(record) for record in list_chat_runs(MAX_TRACE_SUMMARIES, project_slug=project_slug)]
 
 
 @router.get("/{trace_id}", response_model=TraceDetail)
 async def get_trace(
     trace_id: str,
-    project_id: str = Query(default=DEFAULT_PROJECT_ID, alias="projectId"),
+    project_slug: str = Query(default=DEFAULT_PROJECT_ID, alias="projectSlug"),
 ) -> TraceDetail:
     """按 Chat Run id 返回 Observation 时间线。Session id 会 404。"""
 
     record = get_chat_run(trace_id)
-    if record is None or str(record.get("projectId") or "") != project_id:
+    if record is None or str(record.get("projectSlug") or "") != project_slug:
         raise HTTPException(status_code=404, detail="Trace not found")
     observations = list_trace_observations(trace_id)
     if not observations:
@@ -157,8 +154,7 @@ def _synthetic_root(record: dict) -> dict:
         "id": f"obs-run-{record.get('id')}",
         "runId": str(record.get("id") or ""),
         "sessionId": str(record.get("sessionId") or ""),
-        "workspaceId": str(record.get("workspaceId") or "default"),
-        "projectId": str(record.get("projectId") or "default"),
+        "projectSlug": str(record.get("projectSlug") or "default"),
         "kind": "run",
         "name": str(record.get("agentName") or "Chat"),
         "parentId": None,

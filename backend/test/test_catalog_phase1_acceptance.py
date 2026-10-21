@@ -38,7 +38,7 @@ def _create_user_agent(prompt: str = "第一期提示词") -> agents_routes.Agen
         name="验收助手",
         description="phase1",
         system_prompt=prompt,
-        workspaceId="default",
+        
     )))
 
 
@@ -59,7 +59,7 @@ def test_phase1_sqlite_empty_file_exists_and_page_save_writes_file(phase1_root) 
     assert "第一期提示词" in path.read_text(encoding="utf-8")
     assert all(row["id"] != created.id for row in database.list_agents())
 
-    listed = asyncio.run(agents_routes.list_agents(workspace_id="default"))
+    listed = asyncio.run(agents_routes.list_agents())
     assert any(item.id == created.id for item in listed)
 
     asyncio.run(agents_routes.update_agent(
@@ -76,7 +76,7 @@ def test_phase1_chat_reads_index_and_edit_changes_next_round(phase1_root) -> Non
     created = _create_user_agent("原始提示词")
     project = phase1_root / "project"
     project.mkdir()
-    index = refresh_project_index(project, workspace_id="default", project_id="default")
+    index = refresh_project_index(project, project_id="default")
     assert index is not None
     index_text = index.read_text(encoding="utf-8")
     path = profile_path("default", created.id)
@@ -196,7 +196,7 @@ def test_phase1_system_agent_protected_and_cross_workspace(phase1_root) -> None:
     with pytest.raises(Exception) as exc:
         asyncio.run(agents_routes.delete_agent("default"))
     assert getattr(exc.value, "status_code", None) == 403
-    listed = asyncio.run(agents_routes.list_agents(workspace_id="workspace-b"))
+    listed = asyncio.run(agents_routes.list_agents())
     ids = [item.id for item in listed]
     assert "default" in ids
     assert "system-websearch-job" in ids

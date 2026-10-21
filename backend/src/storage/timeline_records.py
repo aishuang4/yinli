@@ -12,8 +12,7 @@ from src.storage import database
 
 def search_timeline_messages(
     *,
-    workspace_id: str = "",
-    project_id: str = "",
+    project_slug: str = "",
     agent_id: str = "",
     surface: str = "",
     time_from: str = "",
@@ -31,8 +30,7 @@ def search_timeline_messages(
         if surface in {"", "chat", "job"}:
             rows.extend(_search_chat(
                 conn,
-                workspace_id=workspace_id,
-                project_id=project_id,
+                project_slug=project_slug,
                 agent_id=agent_id,
                 surface=surface,
                 time_from=time_from,
@@ -44,8 +42,7 @@ def search_timeline_messages(
         if surface in {"", "group"}:
             rows.extend(_search_group(
                 conn,
-                workspace_id=workspace_id,
-                project_id=project_id,
+                project_slug=project_slug,
                 agent_id=agent_id,
                 time_from=time_from,
                 time_to=time_to,
@@ -75,7 +72,7 @@ def list_timeline_neighbors(
             found = conn.execute(
                 """
                 SELECT m.id, m.session_id, m.role, m.content, m.agent_id, m.agent_name,
-                       m.created_at, m.sort_order, s.workspace_id, s.project_id, s.kind
+                       m.created_at, m.sort_order, s.project_slug, s.kind
                 FROM chat_messages m
                 JOIN chat_sessions s ON s.id = m.session_id
                 WHERE m.session_id = ? AND m.sort_order BETWEEN ? AND ?
@@ -88,7 +85,7 @@ def list_timeline_neighbors(
             found = conn.execute(
                 """
                 SELECT m.id, m.group_id, m.role, m.body, m.created_at, m.sort_order,
-                       s.workspace_id, s.project_id, COALESCE(mb.agent_id, '') AS agent_id,
+                       s.project_slug, COALESCE(mb.agent_id, '') AS agent_id,
                        COALESCE(mb.display_name, '') AS agent_name
                 FROM group_messages m
                 JOIN group_studios s ON s.id = m.group_id
@@ -105,8 +102,7 @@ def list_timeline_neighbors(
 def _search_chat(conn, **filters) -> list[dict[str, Any]]:
     clauses, params = _shared_clauses(
         filters,
-        workspace_column="s.workspace_id",
-        project_column="s.project_id",
+        project_column="s.project_slug",
         time_column="m.created_at",
         text_column="m.content",
     )
@@ -128,7 +124,7 @@ def _search_chat(conn, **filters) -> list[dict[str, Any]]:
     found = conn.execute(
         f"""
         SELECT m.id, m.session_id, m.role, m.content, m.agent_id, m.agent_name,
-               m.created_at, m.sort_order, s.workspace_id, s.project_id, s.kind
+               m.created_at, m.sort_order, s.project_slug, s.kind
         FROM chat_messages m
         JOIN chat_sessions s ON s.id = m.session_id
         WHERE {' AND '.join(clauses)}
@@ -143,8 +139,7 @@ def _search_chat(conn, **filters) -> list[dict[str, Any]]:
 def _search_group(conn, **filters) -> list[dict[str, Any]]:
     clauses, params = _shared_clauses(
         filters,
-        workspace_column="s.workspace_id",
-        project_column="s.project_id",
+        project_column="s.project_slug",
         time_column="m.created_at",
         text_column="m.body",
     )
@@ -160,7 +155,7 @@ def _search_group(conn, **filters) -> list[dict[str, Any]]:
     found = conn.execute(
         f"""
         SELECT m.id, m.group_id, m.role, m.body, m.created_at, m.sort_order,
-               s.workspace_id, s.project_id, COALESCE(mb.agent_id, '') AS agent_id,
+               s.project_slug, COALESCE(mb.agent_id, '') AS agent_id,
                COALESCE(mb.display_name, m.speaker_id, '') AS agent_name
         FROM group_messages m
         JOIN group_studios s ON s.id = m.group_id
@@ -174,15 +169,18 @@ def _search_group(conn, **filters) -> list[dict[str, Any]]:
     return [_group_message(row) for row in found]
 
 
-def _shared_clauses(filters: dict[str, Any], *, workspace_column: str, project_column: str, time_column: str, text_column: str) -> tuple[list[str], list[Any]]:
+def _shared_clauses(
+    filters: dict[str, Any],
+    *,
+    project_column: str,
+    time_column: str,
+    text_column: str,
+) -> tuple[list[str], list[Any]]:
     clauses = ["1=1"]
     params: list[Any] = []
-    if filters["workspace_id"]:
-        clauses.append(f"{workspace_column} = ?")
-        params.append(filters["workspace_id"])
-    if filters["project_id"]:
+    if filters["project_slug"]:
         clauses.append(f"{project_column} = ?")
-        params.append(filters["project_id"])
+        params.append(filters["project_slug"])
     if filters["time_from"]:
         clauses.append(f"{time_column} >= ?")
         params.append(filters["time_from"])
@@ -206,8 +204,7 @@ def _chat_message(row) -> dict[str, Any]:
         "agentName": row["agent_name"] or "",
         "createdAt": row["created_at"] or "",
         "sortOrder": int(row["sort_order"] or 0),
-        "workspaceId": row["workspace_id"] or "",
-        "projectId": row["project_id"] or "",
+        "projectSlug": row["project_slug"] or "",
         "surface": "job" if row["kind"] == "scheduled_job" else "chat",
     }
 
@@ -223,7 +220,6 @@ def _group_message(row) -> dict[str, Any]:
         "agentName": row["agent_name"] or "",
         "createdAt": row["created_at"] or "",
         "sortOrder": int(row["sort_order"] or 0),
-        "workspaceId": row["workspace_id"] or "",
-        "projectId": row["project_id"] or "",
+        "projectSlug": row["project_slug"] or "",
         "surface": "group",
     }

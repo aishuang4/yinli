@@ -29,8 +29,7 @@ class MemoryRetrievalContext:
 
     agent_id: str
     agent_name: str
-    workspace_id: str = "default"
-    project_id: str = "default"
+    project_slug: str = "default"
     user_id: str = "default"
     include_user_markdown: bool = True
     include_agent_markdown: bool = True
@@ -105,7 +104,7 @@ def build_memory_injection_text(
     store = markdown_store or MarkdownMemoryStore()
 
     if context.include_global_markdown:
-        markdown = store.read_global_memory(context.workspace_id)
+        markdown = store.read_global_memory()
         summary = _extract_markdown_injection(markdown.content)
         if summary:
             sections.append("Global preference Markdown memory:\n" + summary)
@@ -125,8 +124,7 @@ def build_memory_injection_text(
     if context.include_node_tree:
         tree = (node_service or MemoryNodeService()).tree(
             agent_id=context.agent_id,
-            workspace_id=context.workspace_id,
-            project_id=context.project_id,
+            project_slug=context.project_slug,
             user_id=context.user_id,
             limit=MEMORY_NODE_TREE_LIMIT * 3,
         )
@@ -184,8 +182,7 @@ def build_memory_recall(
             query_text=query,
             agent_id=None,
             limit=limit * 3,
-            workspace_id=context.workspace_id,
-            project_id=context.project_id,
+            project_slug=context.project_slug,
             user_id=context.user_id,
             mark_used=False,
         )

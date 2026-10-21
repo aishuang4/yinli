@@ -26,7 +26,7 @@ _JOB_JSON_FIELDS = {
     "recipient_ids",
 }
 _JOB_UPDATE_FIELDS = (
-    "workspace_id", "project_id", "name", "summary", "status", "pause_reason",
+    "project_slug", "cwd", "name", "summary", "status", "pause_reason",
     "agent_id", "mode", "schedule_kind", "schedule_expr", "timezone", "model_config_id",
     "next_run_at", "last_run_at", "frozen_prompt", "skill_ids", "tool_scope",
     "capability_contract",
@@ -38,7 +38,7 @@ _JOB_UPDATE_FIELDS = (
 )
 _FIRING_JSON_FIELDS = {"output_manifest"}
 _FIRING_UPDATE_FIELDS = (
-    "job_id", "workspace_id", "project_id", "trigger", "scheduled_for", "status",
+    "job_id", "project_slug", "trigger", "scheduled_for", "status",
     "chat_session_id", "chat_run_id", "error_code", "error_message",
     "output_manifest", "delivery_status", "started_at", "completed_at",
 )
@@ -56,8 +56,7 @@ class ScheduledJobRecordStore:
         utc_now: Callable[[], str],
         dumps: Callable[[Any], str],
         loads: Callable[[str | None, Any], Any],
-        default_workspace_id: str,
-        default_project_id: str,
+        default_project_slug: str,
     ) -> None:
         self.ensure_db = ensure_db
         self.connect = connect
@@ -65,8 +64,7 @@ class ScheduledJobRecordStore:
         self.utc_now = utc_now
         self.dumps = dumps
         self.loads = loads
-        self.default_workspace_id = default_workspace_id
-        self.default_project_id = default_project_id
+        self.default_project_slug = default_project_slug
 
     def insert_job(self, record: dict[str, Any]) -> dict[str, Any]:
         self.ensure_db()
@@ -80,7 +78,7 @@ class ScheduledJobRecordStore:
                 conn.execute(
                     """
                     INSERT INTO scheduled_jobs (
-                        id, workspace_id, project_id, name, summary, status, pause_reason,
+                        id, project_slug, cwd, name, summary, status, pause_reason,
                         agent_id, mode, schedule_kind, schedule_expr, timezone, next_run_at,
                         last_run_at, frozen_prompt, skill_ids, tool_scope, capability_contract,
                         input_spec, output_spec, missed_policy, failure_policy, delivery_policy,
@@ -128,16 +126,16 @@ class ScheduledJobRecordStore:
     def list_jobs(
         self,
         *,
-        project_id: str | None = None,
+        project_slug: str | None = None,
         agent_id: str | None = None,
         status: str | None = None,
     ) -> list[dict[str, Any]]:
         self.ensure_db()
         clauses: list[str] = []
         params: list[Any] = []
-        if project_id:
-            clauses.append("project_id = ?")
-            params.append(project_id)
+        if project_slug:
+            clauses.append("project_slug = ?")
+            params.append(project_slug)
         if agent_id:
             clauses.append("agent_id = ?")
             params.append(agent_id)
@@ -170,11 +168,11 @@ class ScheduledJobRecordStore:
                 conn.execute(
                     """
                     INSERT INTO scheduled_job_runs (
-                        id, job_id, workspace_id, project_id, trigger, scheduled_for,
+                        id, job_id, project_slug, trigger, scheduled_for,
                         status, chat_session_id, chat_run_id, error_code, error_message,
                         output_manifest, delivery_status, started_at, completed_at,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     self._firing_params(payload),
                 )
@@ -428,8 +426,7 @@ class ScheduledJobRecordStore:
         note_id = record.get("id") or f"ntf-{uuid.uuid4().hex}"
         payload = {
             "id": note_id,
-            "workspace_id": record.get("workspace_id") or self.default_workspace_id,
-            "project_id": record.get("project_id") or "",
+            "project_slug": record.get("project_slug") or record.get("projectSlug") or "",
             "job_id": record.get("job_id") or "",
             "firing_id": record.get("firing_id") or "",
             "kind": record["kind"],
@@ -443,14 +440,13 @@ class ScheduledJobRecordStore:
             conn.execute(
                 """
                 INSERT INTO user_notifications (
-                    id, workspace_id, project_id, job_id, firing_id, kind, title,
+                    id, project_slug, job_id, firing_id, kind, title,
                     body, payload, read_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["id"],
-                    payload["workspace_id"],
-                    payload["project_id"],
+                    payload["project_slug"],
                     payload["job_id"],
                     payload["firing_id"],
                     payload["kind"],
@@ -478,7 +474,7 @@ class ScheduledJobRecordStore:
     def list_notifications(
         self,
         *,
-        project_id: str | None = None,
+        project_slug: str | None = None,
         unread_only: bool = False,
         limit: int = 50,
         before: str | None = None,
@@ -486,9 +482,9 @@ class ScheduledJobRecordStore:
         self.ensure_db()
         clauses: list[str] = []
         params: list[Any] = []
-        if project_id:
-            clauses.append("project_id = ?")
-            params.append(project_id)
+        if project_slug:
+            clauses.append("project_slug = ?")
+            params.append(project_slug)
         if unread_only:
             clauses.append("read_at IS NULL")
         if before:
@@ -503,11 +499,11 @@ class ScheduledJobRecordStore:
             ).fetchall()
         return [self._notification_from_row(row) for row in rows]
 
-    def count_unread_notifications(self, *, project_id: str | None = None) -> int:
+    def count_unread_notifications(self, *, project_slug: str | None = None) -> int:
         self.ensure_db()
-        if project_id:
-            sql = "SELECT COUNT(*) AS n FROM user_notifications WHERE read_at IS NULL AND project_id = ?"
-            params: tuple[Any, ...] = (project_id,)
+        if project_slug:
+            sql = "SELECT COUNT(*) AS n FROM user_notifications WHERE read_at IS NULL AND project_slug = ?"
+            params: tuple[Any, ...] = (project_slug,)
         else:
             sql = "SELECT COUNT(*) AS n FROM user_notifications WHERE read_at IS NULL"
             params = ()
@@ -530,12 +526,12 @@ class ScheduledJobRecordStore:
             conn.commit()
         return self.get_notification(note_id)
 
-    def mark_all_notifications_read(self, *, project_id: str | None = None) -> int:
+    def mark_all_notifications_read(self, *, project_slug: str | None = None) -> int:
         self.ensure_db()
         stamped = self.utc_now()
-        if project_id:
-            sql = "UPDATE user_notifications SET read_at = ? WHERE read_at IS NULL AND project_id = ?"
-            params: tuple[Any, ...] = (stamped, project_id)
+        if project_slug:
+            sql = "UPDATE user_notifications SET read_at = ? WHERE read_at IS NULL AND project_slug = ?"
+            params: tuple[Any, ...] = (stamped, project_slug)
         else:
             sql = "UPDATE user_notifications SET read_at = ? WHERE read_at IS NULL"
             params = (stamped,)
@@ -547,8 +543,7 @@ class ScheduledJobRecordStore:
     def _notification_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
             "id": row["id"],
-            "workspace_id": row["workspace_id"],
-            "project_id": row["project_id"],
+            "project_slug": row["project_slug"],
             "job_id": row["job_id"],
             "firing_id": row["firing_id"],
             "kind": row["kind"],
@@ -567,8 +562,8 @@ class ScheduledJobRecordStore:
             tool_scope = tool_scope.to_storage_dict()
         return (
             record["id"],
-            record.get("workspace_id") or self.default_workspace_id,
-            record.get("project_id") or self.default_project_id,
+            record.get("project_slug") or record.get("projectSlug") or self.default_project_slug,
+            record.get("cwd") or "",
             record["name"],
             record.get("summary") or "",
             record["status"],
@@ -611,8 +606,8 @@ class ScheduledJobRecordStore:
             tool_scope = dict(_DEFAULT_TOOL_SCOPE)
         return {
             "id": row["id"],
-            "workspace_id": row["workspace_id"],
-            "project_id": row["project_id"],
+            "project_slug": row["project_slug"],
+            "cwd": row["cwd"] if "cwd" in row.keys() else "",
             "name": row["name"],
             "summary": row["summary"],
             "status": row["status"],
@@ -654,8 +649,7 @@ class ScheduledJobRecordStore:
         return (
             record["id"],
             record["job_id"],
-            record.get("workspace_id") or self.default_workspace_id,
-            record.get("project_id") or self.default_project_id,
+            record.get("project_slug") or record.get("projectSlug") or self.default_project_slug,
             record["trigger"],
             record["scheduled_for"],
             record["status"],
@@ -675,8 +669,7 @@ class ScheduledJobRecordStore:
         return {
             "id": row["id"],
             "job_id": row["job_id"],
-            "workspace_id": row["workspace_id"],
-            "project_id": row["project_id"],
+            "project_slug": row["project_slug"],
             "trigger": row["trigger"],
             "scheduled_for": row["scheduled_for"],
             "status": row["status"],

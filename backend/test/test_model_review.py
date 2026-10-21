@@ -22,8 +22,6 @@ from src.memory.model_review import (
 )
 from src.memory.reflection import MemoryReflectionInput, reflect_completed_run_memory_with_agents
 from src.server.routes.chat.models import ChatSkillRun, ChatToolRun
-from src.storage import database
-
 
 def test_review_request_does_not_import_admission_types():
     request = skill_review_request(ReviewContextSnapshot(messages=(ReviewContextMessage("user", "做完了"),)))
@@ -112,12 +110,9 @@ def test_unparseable_model_text_is_an_error():
 
 
 def test_model_allow_without_keywords_still_drafts(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
     import src.server.routes.skills as skills_routes
 
     original = dict(skills_routes._skills)
-    monkeypatch.setattr(skills_routes, "SKILL_PACKAGES_DIR", str(tmp_path / "skill_packages"))
 
     async def allow_review(**kwargs):
         assert "压缩摘要" in kwargs["user_prompt"] or "user:" in kwargs["user_prompt"]
@@ -173,8 +168,6 @@ def test_model_allow_without_keywords_still_drafts(tmp_path, monkeypatch):
 
 
 def test_model_deny_skips_draft_and_keeps_reason(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
 
     async def deny_review(**kwargs):
         del kwargs
@@ -207,8 +200,6 @@ def test_model_deny_skips_draft_and_keeps_reason(tmp_path, monkeypatch):
 
 
 def test_model_failure_falls_back_to_keyword_gate(tmp_path, monkeypatch):
-    monkeypatch.setattr(database, "DB_PATH", tmp_path / "agent_workstation.db")
-    monkeypatch.setattr(database, "_initialized", False)
 
     async def broken_review(**kwargs):
         del kwargs

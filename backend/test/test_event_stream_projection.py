@@ -503,7 +503,7 @@ def test_real_team_outbox_projects_incremental_block_tree(projection_db, tmp_pat
         goal="并行审计",
         leader_agent_id="agent-leader",
         leader_name="Leader",
-        project_id="project-team",
+        project_slug="project-team",
         root=tmp_path / "team-runtime",
     )
     member = team_store.spawn_member(name="Reviewer", role="review", runtime_prompt="review")
@@ -639,7 +639,7 @@ def test_real_team_outbox_projects_incremental_block_tree(projection_db, tmp_pat
     mail_blocks = [block for block in snapshot.blocks_by_id.values() if block.kind == "team-mail"]
 
     assert snapshot.stream_done is True
-    assert team_block.data["projectId"] == "project-team"
+    assert team_block.data["projectSlug"] == "project-team"
     assert team_block.data["counts"]["succeeded"] == 1
     assert team_block.outcome == "completed"
     assert member_block.data["name"] == "Reviewer"
@@ -734,7 +734,7 @@ def test_team_task_retry_reopens_projection_and_keeps_retry_output(projection_db
         goal="重派可见",
         leader_agent_id="agent-leader",
         leader_name="Leader",
-        project_id="project-team",
+        project_slug="project-team",
         root=tmp_path / "team-runtime-retry",
     )
     member = team_store.spawn_member(name="Writer", role="write", runtime_prompt="write")

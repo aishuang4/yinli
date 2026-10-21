@@ -92,13 +92,13 @@ def test_api_accept_writes_markdown_and_reject_keeps_file_untouched(client, tmp_
 
 def test_pending_count_follows_the_current_project(client) -> None:
     _candidate(note="这个项目还没处理。")
-    _candidate(note="另一个项目的候选。", projectId="other-project")
+    _candidate(note="另一个项目的候选。", projectSlug="other-project")
 
-    current = client.get("/api/memory/markdown-candidates?projectId=default").json()
+    current = client.get("/api/memory/markdown-candidates?projectSlug=default").json()
     assert current["pendingCount"] == 1
     assert [item["note"] for item in current["records"]] == ["这个项目还没处理。"]
 
-    other = client.get("/api/memory/markdown-candidates?projectId=other-project").json()
+    other = client.get("/api/memory/markdown-candidates?projectSlug=other-project").json()
     assert other["pendingCount"] == 1
 
 

@@ -179,8 +179,7 @@ class GroupStudio(CamelModel):
     """GET /{id} 与 GROUP_STUDIO_STATE 的完整快照。"""
 
     id: str
-    project_id: str = Field(alias="projectId")
-    workspace_id: str = Field(alias="workspaceId")
+    project_slug: str = Field(alias="projectSlug")
     chat_session_id: str = Field(alias="chatSessionId")
     model_config_id: str = Field(default="", alias="modelConfigId")
     title: str
@@ -215,7 +214,7 @@ class ChatSessionGroupStudioHint(CamelModel):
 class GroupStudioFromChatRequest(CamelModel):
     """从当前 Chat 会话升级或回到工作室。"""
 
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
     chat_session_id: str = Field(alias="chatSessionId", min_length=1)
     model_config_id: str = Field(default="", alias="modelConfigId")
     agent_id: str = Field(default="default", alias="agentId")
@@ -228,23 +227,23 @@ class GroupStudioFromChatRequest(CamelModel):
 class GroupStudioModelUpdateRequest(CamelModel):
     """更新尚未开始运行的工作室模型。"""
 
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
     model_config_id: str = Field(alias="modelConfigId", min_length=1)
 
 
 class GroupPauseRequest(CamelModel):
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
 
 
 class GroupResumeRequest(CamelModel):
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
     max_turns: int | None = Field(default=None, alias="maxTurns")
 
 
 class GroupMessageCreateRequest(CamelModel):
     """人类输入框唯一写入口。"""
 
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
     body: str = Field(min_length=1, max_length=20_000)
     mentions: list[str] = Field(default_factory=list)
 
@@ -252,59 +251,59 @@ class GroupMessageCreateRequest(CamelModel):
 class GroupInterruptRequest(CamelModel):
     """只停不说话（顶栏停止）。"""
 
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
 
 
 class GroupRerunRequest(CamelModel):
     """按上一波点名再来一轮，不写人类气泡。"""
 
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
 
 
 class GroupTaskCardUpdateRequest(CamelModel):
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
     goal: str | None = None
     background: str | None = None
     constraints: list[str] | None = None
 
 
 class GroupMemberCreateRequest(CamelModel):
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
     agent_id: str = Field(alias="agentId")
 
 
 class GroupMemberMuteRequest(CamelModel):
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
     muted: bool
 
 
 class GroupMemberRemoveRequest(CamelModel):
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
 
 
 class GroupCloseRequest(CamelModel):
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
     confirm: bool = False
 
 
 class GroupConfirmRestatementRequest(CamelModel):
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
 
 
 class GroupConfirmIntakeRequest(CamelModel):
     """人类确认 intake 密度，进入 discussing。"""
 
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
 
 
 class GroupApprovalDecisionRequest(CamelModel):
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
     approval_id: str = Field(alias="approvalId")
     decision: Literal["approve", "deny"]
 
 
 class GroupStartPhaseRequest(CamelModel):
-    project_id: str = Field(alias="projectId")
+    project_slug: str = Field(alias="projectSlug")
 
 
 class GroupStudioEnvelope(CamelModel):

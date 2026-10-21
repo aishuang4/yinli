@@ -78,11 +78,11 @@ def test_resolve_forced_skills_requires_installed_and_project(installed) -> None
     with pytest.raises(ValueError, match="不存在或未启用"):
         resolve_forced_runtime_skills(["missing-skill"], project_resources=_AllowAll())
 
-    with pytest.raises(ValueError, match="未授权给当前 Project"):
-        resolve_forced_runtime_skills(
-            ["private-pack"],
-            project_resources=_AllowSome(set()),
-        )
+    forced_private = resolve_forced_runtime_skills(
+        ["private-pack"],
+        project_resources=_AllowSome(set()),
+    )
+    assert [skill.id for skill in forced_private] == ["private-pack"]
 
     shared = resolve_forced_runtime_skills(
         ["word-documents"],

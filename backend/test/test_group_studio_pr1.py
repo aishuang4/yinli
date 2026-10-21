@@ -84,7 +84,7 @@ def test_settings_put_enables_and_clamps_parallel(client):
 def test_from_chat_404_when_disabled(client):
     set_group_studio_settings(enabled=False)
     response = client.post("/api/group-studio/from-chat", json={
-        "projectId": "default",
+        "projectSlug": "default",
         "chatSessionId": "sess-1",
         "agentId": "default",
     })
@@ -103,7 +103,7 @@ def test_get_by_chat_404_when_disabled(client):
 
 def test_pause_404_when_studio_missing(client):
     set_group_studio_settings(enabled=True)
-    response = client.post("/api/group-studio/gstu_x/pause", json={"projectId": "default"})
+    response = client.post("/api/group-studio/gstu_x/pause", json={"projectSlug": "default"})
 
     assert response.status_code == 404
     assert response.json()["detail"] == "not_found"
@@ -121,13 +121,13 @@ def test_main_registers_group_studio_routes():
 def test_list_studios_is_independent_of_chat_catalog(client):
     set_group_studio_settings(enabled=True)
     created = client.post("/api/group-studio/from-chat", json={
-        "projectId": "default",
+        "projectSlug": "default",
         "chatSessionId": "sess-list",
         "agentId": "default",
         "draftText": "宇树研究",
     })
     assert created.status_code == 200, created.text
-    listed = client.get("/api/group-studio", params={"projectId": "default"})
+    listed = client.get("/api/group-studio", params={"projectSlug": "default"})
     assert listed.status_code == 200
     ids = [item["id"] for item in listed.json()["studios"]]
     assert created.json()["id"] in ids
@@ -140,7 +140,7 @@ def test_host_sentinel_constant():
 def test_from_chat_snapshot_omits_v1_board_fields(client):
     set_group_studio_settings(enabled=True)
     created = client.post("/api/group-studio/from-chat", json={
-        "projectId": "default",
+        "projectSlug": "default",
         "chatSessionId": "sess-slim",
         "agentId": "default",
     })
@@ -155,13 +155,13 @@ def test_from_chat_snapshot_omits_v1_board_fields(client):
 def test_host_sentinel_cannot_join(client):
     set_group_studio_settings(enabled=True)
     created = client.post("/api/group-studio/from-chat", json={
-        "projectId": "default",
+        "projectSlug": "default",
         "chatSessionId": "sess-host",
         "agentId": "default",
     })
     assert created.status_code == 200, created.text
     response = client.post(f"/api/group-studio/{created.json()['id']}/members", json={
-        "projectId": "default",
+        "projectSlug": "default",
         "agentId": GROUP_STUDIO_HOST_AGENT_ID,
     })
     assert response.status_code == 409
@@ -170,13 +170,13 @@ def test_host_sentinel_cannot_join(client):
 
 def test_from_chat_request_accepts_camel_case():
     body = GroupStudioFromChatRequest.model_validate({
-        "projectId": "p1",
+        "projectSlug": "p1",
         "chatSessionId": "s1",
         "agentId": "default",
         "draftText": "写方案",
         "filePaths": ["a.md"],
     })
-    assert body.project_id == "p1"
+    assert body.project_slug == "p1"
     assert body.chat_session_id == "s1"
     assert body.draft_text == "写方案"
 

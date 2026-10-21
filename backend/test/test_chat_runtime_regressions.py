@@ -44,7 +44,7 @@ from src.server.routes.chat.react_runtime import execute_react_runtime
 from src.server.routes.chat.run_context import ChatRunContext
 from src.server.routes.chat.run_context import build_chat_run_context
 from src.agents.factory import _safe_workspace_dir
-from src.config.runtime_paths import default_project_root
+from src.config.runtime_paths import project_default_root
 from src.storage.database import _normalize_guardrails
 from src.server.routes.chat.runtime_builder import (
     RuntimeModelConfig,
@@ -73,8 +73,7 @@ def _test_runtime_context(session_id: str = "session-1", agent_id: str = "agent-
     """构造不依赖持久化 Project 的测试运行上下文。"""
 
     return RuntimeContext(
-        workspace_id="default",
-        project_id="default",
+        project_slug="default",
         project_root=Path(__file__).resolve().parents[2],
         session_id=session_id,
         run_id="run-test",
@@ -1672,7 +1671,7 @@ def test_resume_event_covers_every_pending_tool_call_in_same_reply():
 
 
 def test_resume_event_can_remember_tool_approval_for_current_session():
-    """用户选择记住确认时，恢复事件向 AgentScope 追加同类工具允许规则。"""
+    """记住确认时不把框架规则写进恢复事件，只记下本轮已记住。"""
 
     interaction = _create_pending_interaction(
         interaction_type="REQUIRE_USER_CONFIRM",
@@ -1706,10 +1705,8 @@ def test_resume_event_can_remember_tool_approval_for_current_session():
         )
 
         rules = resume_event.confirm_results[0].rules
-        assert rules is not None
-        assert [(rule.tool_name, rule.rule_content, rule.behavior.value, rule.source) for rule in rules] == [
-            ("Bash", None, "allow", "chat_session_approval"),
-        ]
+        assert rules is None
+        assert interaction.chat_data.get("rememberApprovalDeclined") is True
     finally:
         PENDING_INTERACTIONS.clear()
         PENDING_AGENTS.clear()
@@ -2520,7 +2517,7 @@ def test_chat_run_context_includes_memory_prompt(monkeypatch):
         lambda *args, **kwargs: "",
     )
     monkeypatch.setattr(
-        "src.server.routes.chat.run_context.resolve_project_resource_access",
+        "src.server.routes.chat.run_context.load_project_access",
         lambda context: SimpleNamespace(
             require_agent=lambda agent_id: None,
             filter_ids=lambda resource_type, resource_ids: resource_ids,
@@ -2569,7 +2566,7 @@ def test_chat_run_context_keeps_history_out_of_system_prompt(monkeypatch):
     monkeypatch.setattr("src.runtime.governance.build_habit_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr("src.runtime.governance.build_professional_prompt", lambda *args, **kwargs: "")
     monkeypatch.setattr(
-        "src.server.routes.chat.run_context.resolve_project_resource_access",
+        "src.server.routes.chat.run_context.load_project_access",
         lambda runtime_context: SimpleNamespace(
             require_agent=lambda agent_id: None,
             filter_ids=lambda resource_type, resource_ids: resource_ids,
@@ -2720,9 +2717,12 @@ def test_unified_permission_profile_maps_legacy_bypass_to_trusted_tools():
 
 
 def test_default_workspace_dir_is_project_root_not_user_home():
-    """默认 LocalWorkspace 应收窄到项目根，避免 Glob/Grep 扫用户主目录。"""
+    """默认 LocalWorkspace 应收窄到默认 Project 主目录，避免 Glob/Grep 扫用户主目录。"""
 
-    workspace = str(default_project_root())
+    from src.config.runtime_paths import ensure_tenant_directories
+
+    ensure_tenant_directories()
+    workspace = str(project_default_root())
     assert workspace != str(Path.home())
     assert Path(workspace).is_dir()
 
@@ -2732,7 +2732,7 @@ def test_legacy_root_filesystem_scope_maps_to_project_workspace():
 
     guardrails = AgentGuardrails(filesystem_scope="/")
 
-    assert _safe_workspace_dir(guardrails) == str(default_project_root())
+    assert _safe_workspace_dir(guardrails) == str(project_default_root())
 
 
 def test_storage_normalizes_legacy_root_filesystem_scope():
@@ -2740,7 +2740,7 @@ def test_storage_normalizes_legacy_root_filesystem_scope():
 
     guardrails = _normalize_guardrails({"filesystem_scope": "/"})
 
-    assert guardrails["filesystem_scope"] == str(default_project_root())
+    assert guardrails["filesystem_scope"] == str(project_default_root())
 
 
 def test_unified_permission_profile_denies_write_in_read_only():

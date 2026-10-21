@@ -18,14 +18,12 @@ from src.server.routes.memory_api.markdown import (
     read_agent_markdown_memory,
     read_default_global_markdown_memory,
     read_default_user_markdown_memory,
-    read_global_markdown_memory,
     read_user_markdown_memory,
     router as markdown_router,
     update_markdown_candidate,
     write_agent_markdown_memory,
     write_default_global_markdown_memory,
     write_default_user_markdown_memory,
-    write_global_markdown_memory,
     write_user_markdown_memory,
 )
 from src.server.routes.memory_api.models import (

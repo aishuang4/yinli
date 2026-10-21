@@ -32,7 +32,7 @@ def _skill_payload(**overrides) -> dict:
         "enabled": True,
         "installedAt": "2026-09-17T00:00:00Z",
         "updatedAt": "2026-09-17T00:00:00Z",
-        "workspaceId": "default",
+        
     }
     payload.update(overrides)
     return payload
@@ -52,7 +52,7 @@ def test_replace_skills_round_trips_share_false(isolated_db) -> None:
 
 
 def test_legacy_skills_table_without_share_column_defaults_true(tmp_path, monkeypatch) -> None:
-    db_path = tmp_path / "legacy-skills.db"
+    db_path = tmp_path / "state.db"
     conn = sqlite3.connect(db_path)
     conn.execute(
         """

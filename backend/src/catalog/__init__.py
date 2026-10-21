@@ -1,4 +1,4 @@
-"""Workspace 文件 catalog：持久定义的唯一权威。
+"""持久定义文件 catalog。
 
 禁止本包 import `src.server.routes`。
 本模块不在 import 时加载 loader，避免 factory → scoped_paths → catalog 循环。
@@ -7,7 +7,6 @@
 from src.catalog.paths import (
     extra_filesystem_scopes_for_workspace,
     system_overlay_root,
-    workspace_catalog_root,
 )
 
 __all__ = [
@@ -20,11 +19,9 @@ __all__ = [
     "invalidate_catalog",
     "is_agent_catalog_migrated",
     "list_registered_agents",
-    "list_workspace_agents",
     "refresh_project_index",
     "save_agent",
     "system_overlay_root",
-    "workspace_catalog_root",
 ]
 
 
@@ -36,7 +33,6 @@ def __getattr__(name: str):
         "get_registered_agent",
         "invalidate_catalog",
         "list_registered_agents",
-        "list_workspace_agents",
         "save_agent",
     }:
         from src.catalog import loader

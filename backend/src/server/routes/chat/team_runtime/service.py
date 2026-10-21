@@ -67,8 +67,7 @@ class TeamRunService:
                 goal=self.run_data.message,
                 leader_agent_id=self.ctx.agent_id,
                 leader_name=self.ctx.agent_name,
-                workspace_id=self.ctx.runtime_context.workspace_id,
-                project_id=self.ctx.runtime_context.project_id,
+                project_slug=self.ctx.runtime_context.project_slug,
             )
             self.publisher = TeamEventPublisher(self.store)
             await register_team_service(chat_run_id, self)

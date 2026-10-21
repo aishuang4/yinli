@@ -23,14 +23,14 @@ from test.authorization_fakes import collect, make_agent, run_async
 
 
 async def chat_runtime(tmp_path, monkeypatch, mode="manual", plan=None):
-    project_id = "authorization-project"
     database.ensure_db()
     from src.server.routes import agents
     await agents.update_agent("default", agents.AgentUpdate(guardrails=agents.Guardrails(filesystem_scope=str(tmp_path))))
-    database.create_project({"id": project_id, "workspace_id": "default", "name": "权限验证", "root_path": str(tmp_path)})
-    context = resolve_runtime_context(project_id=project_id, session_id="approval-session", run_id="approval-run", agent_id="default")
+    project = database.create_project({"name": "权限验证", "primaryPath": str(tmp_path)})
+    project_slug = project["slug"]
+    context = resolve_runtime_context(project_slug=project_slug, session_id="approval-session", run_id="approval-run", agent_id="default")
     metadata = RunAuthorizationMetadata(tenantId="local", approvalMode=mode)
-    database.upsert_chat_run({"id": context.run_id, "workspaceId": "default", "projectId": project_id,
+    database.upsert_chat_run({"id": context.run_id, "projectSlug": project_slug,
                               "sessionId": context.session_id, "agentId": "default",
                               "authorization": metadata.model_dump(mode="json", by_alias=True)})
 
@@ -85,16 +85,13 @@ async def test_full_access_cannot_override_current_capability_or_plan(tmp_path, 
     plan = SimpleNamespace(is_plan_active=lambda: True) if changed == "plan" else None
     agent, call, binding, ctx = await chat_runtime(tmp_path, monkeypatch, "full_access", plan)
     if changed == "resource":
-        database.upsert_project_resource_binding({"projectId": ctx.runtime_context.project_id,
-             "resourceType": "skill", "resourceId": "missing-resource", "enabled": True})
-        # 没有真实资源的假绑定不扩权；实际收紧通过 denylist 版本演示。
         reader = binding.service.boundary_check.capabilities
         reader.denied_tool_names = frozenset({call.name})
     elif changed == "agent_capability":
         from src.server.routes import agents
         await agents.update_agent("default", agents.AgentUpdate(guardrails=agents.Guardrails(filesystem_scope=str(tmp_path), network_enabled=False)))
     elif changed == "archived":
-        database.update_project(ctx.runtime_context.project_id, {"status": "archived"})
+        database.update_project(ctx.runtime_context.project_slug, {"status": "archived"})
     await collect(agent._execute_tool_call(call))
     assert not (tmp_path / "report.md").exists()
 
@@ -123,7 +120,7 @@ async def test_capability_version_ignores_project_metadata_and_skill_body(tmp_pa
         "---\nname: demo\ndescription: demo skill\n---\noriginal\n", encoding="utf-8",
     )
     before = (await reader()).version
-    database.update_project(ctx.runtime_context.project_id, {"name": "展示名称已变更"})
+    database.update_project(ctx.runtime_context.project_slug, {"color": "#112233"})
     (skill_dir / "SKILL.md").write_text(
         "---\nname: demo\ndescription: demo skill\n---\nupdated\n", encoding="utf-8",
     )

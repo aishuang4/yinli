@@ -16,7 +16,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.server.routes import agent_builder, agents, chat, db_admin, group_studio, health, mcp, memory, notifications, sandbox, settings as settings_routes, scheduled_jobs, skills, subagents, tools, traces, workflows, workspaces
+from src.server.routes import agent_builder, agents, chat, db_admin, group_studio, health, mcp, memory, notifications, projects, sandbox, settings as settings_routes, scheduled_jobs, skills, subagents, tools, traces, workflows
 from src.config.settings import assert_hosted_email_config, assert_hosted_platform_config, assert_hosted_sandbox, settings
 from src.server.auth.middleware import HostedSessionMiddleware
 from src.server.auth.platform_models import router as platform_model_router
@@ -157,7 +157,7 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(platform_model_router)
 app.include_router(platform_gateway_router)
-app.include_router(workspaces.router, prefix="/api", tags=["Workspace / Project"])
+app.include_router(projects.router, prefix="/api", tags=["Project"])
 app.include_router(agents.router, prefix="/api/agents", tags=["Agent 管理"])
 app.include_router(agent_builder.router, prefix="/api/agent-builder", tags=["Agent 智能编排"])
 app.include_router(chat.router, prefix="/api/chat", tags=["对话"])

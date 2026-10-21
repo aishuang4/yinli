@@ -52,7 +52,6 @@ def build_default_agent(*, now: str | None = None) -> AgentResponse:
         "status": "idle",
         "created_at": stamp,
         "updated_at": stamp,
-        "workspaceId": "default",
         "role": "chat",
         "jobToolkit": {"required": [], "optional": []},
         "sourcePath": "",
@@ -92,7 +91,6 @@ def build_default_websearch_job_agent(*, now: str | None = None) -> AgentRespons
         "status": "idle",
         "created_at": stamp,
         "updated_at": stamp,
-        "workspaceId": "default",
         "role": JOB_ROLE,
         "jobToolkit": {
             "required": [

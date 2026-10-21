@@ -1,4 +1,4 @@
-"""按 Agent ∩ Project 组装无人值守能力库存。禁止 import routes。"""
+"""按 Agent 组装无人值守能力库存。MCP 与 HTTP 是租户全局，不再按 Project 过滤。禁止 import routes。"""
 
 from __future__ import annotations
 
@@ -16,9 +16,7 @@ from src.storage.database import (
     list_http_tools,
     list_json_records,
     list_mcp_servers,
-    list_project_resource_bindings,
     list_skills,
-    get_workspace_resource,
 )
 
 KNOWLEDGE_TOOLS_NAMESPACE = "knowledge_tools"
@@ -44,12 +42,8 @@ class CapabilityInventoryItem(BaseModel):
     agent_bound: bool = True
 
 
-def build_agent_capability_inventory(
-    agent_id: str,
-    project_id: str,
-    workspace_id: str,
-) -> list[CapabilityInventoryItem]:
-    """只读组装库存。Agent 通过 lazy import 获取。"""
+def build_agent_capability_inventory(agent_id: str) -> list[CapabilityInventoryItem]:
+    """只读组装库存。Agent 通过 lazy import 获取。不读 Project 目录下的 MCP。"""
 
     from src.server.routes.agents import get_registered_agent
 
@@ -58,33 +52,14 @@ def build_agent_capability_inventory(
         return []
     profile = build_permission_profile(getattr(agent, "guardrails", None) if agent else None)
     policy = agent_approval_policy(agent)
-    bindings = _enabled_bindings(project_id, workspace_id)
     items: list[CapabilityInventoryItem] = []
     items.extend(_builtin_rows(profile, policy))
-    items.extend(_mcp_rows(agent, bindings, profile, policy))
-    http_rows, http_ids = _http_rows(agent, bindings, profile, policy)
+    items.extend(_mcp_rows(agent, profile, policy))
+    http_rows, http_ids = _http_rows(agent, profile, policy)
     items.extend(http_rows)
-    items.extend(_knowledge_rows(agent, bindings, http_ids, profile, policy))
-    items.extend(_skill_rows(agent, bindings, profile, policy))
+    items.extend(_knowledge_rows(agent, http_ids, profile, policy))
+    items.extend(_skill_rows(agent, profile, policy))
     return items
-
-
-def _enabled_bindings(project_id: str, workspace_id: str) -> dict[str, set[str]]:
-    enabled: dict[str, set[str]] = {
-        "agent": set(),
-        "skill": set(),
-        "mcp": set(),
-        "http_tool": set(),
-    }
-    for binding in list_project_resource_bindings(project_id):
-        resource_type = str(binding.get("resourceType") or "")
-        resource_id = str(binding.get("resourceId") or "")
-        if not binding.get("enabled") or resource_type not in enabled or not resource_id:
-            continue
-        resource = get_workspace_resource(resource_type, resource_id)
-        if resource and resource.get("workspaceId") == workspace_id:
-            enabled[resource_type].add(resource_id)
-    return enabled
 
 
 def _builtin_rows(
@@ -136,7 +111,6 @@ def _builtin_unattended(
 
 def _mcp_rows(
     agent: Any,
-    bindings: dict[str, set[str]],
     profile: UnifiedPermissionProfile,
     policy: ApprovalPolicy,
 ) -> list[CapabilityInventoryItem]:
@@ -146,7 +120,6 @@ def _mcp_rows(
         server_id = str(server.get("id") or "")
         if not server_id:
             continue
-        project_bound = server_id in bindings["mcp"]
         server_tags = [str(item) for item in list(server.get("tags") or [])]
         for tool in list(server.get("tools") or []):
             if not isinstance(tool, dict):
@@ -178,8 +151,6 @@ def _mcp_rows(
             )
             if not agent_bound:
                 ok, reason = False, reason or "agent_unbound"
-            if not project_bound:
-                ok, reason = False, reason or "project_unbound"
             rows.append(CapabilityInventoryItem(
                 capability_id=f"mcp:{tool_id}",
                 kind="mcp",
@@ -192,7 +163,7 @@ def _mcp_rows(
                 tag_source=tag_source,
                 unattended_ok=ok,
                 blocked_reason=reason,
-                project_bound=project_bound,
+                project_bound=True,
                 agent_bound=agent_bound,
             ))
     return rows
@@ -200,7 +171,6 @@ def _mcp_rows(
 
 def _http_rows(
     agent: Any,
-    bindings: dict[str, set[str]],
     profile: UnifiedPermissionProfile,
     policy: ApprovalPolicy,
 ) -> tuple[list[CapabilityInventoryItem], set[str]]:
@@ -212,7 +182,6 @@ def _http_rows(
         if not tool_id:
             continue
         http_ids.add(tool_id)
-        project_bound = tool_id in bindings["http_tool"]
         tags, tag_source = tag_inventory_row(
             kind="http",
             tool_name=str(item.get("name") or tool_id),
@@ -229,8 +198,6 @@ def _http_rows(
             approval_policy=str(item.get("approvalPolicy") or item.get("approval_policy") or "inherit"),
             installed=bool(item.get("enabled", True)),
         )
-        if not project_bound:
-            ok, reason = False, reason or "project_unbound"
         rows.append(CapabilityInventoryItem(
             capability_id=f"http:{tool_id}",
             kind="http",
@@ -242,7 +209,7 @@ def _http_rows(
             tag_source=tag_source,
             unattended_ok=ok,
             blocked_reason=reason,
-            project_bound=project_bound,
+            project_bound=True,
             agent_bound=True,
         ))
     return rows, http_ids
@@ -250,7 +217,6 @@ def _http_rows(
 
 def _knowledge_rows(
     agent: Any,
-    bindings: dict[str, set[str]],
     http_ids: set[str],
     profile: UnifiedPermissionProfile,
     policy: ApprovalPolicy,
@@ -267,7 +233,6 @@ def _knowledge_rows(
         tool_id = str(item.get("id") or "")
         if not tool_id:
             continue
-        project_bound = tool_id in bindings["http_tool"]
         tags, tag_source = tag_inventory_row(
             kind="knowledge",
             tool_name=str(item.get("name") or tool_id),
@@ -284,8 +249,6 @@ def _knowledge_rows(
             approval_policy="inherit",
             installed=bool(item.get("enabled", True)),
         )
-        if not project_bound:
-            ok, reason = False, reason or "project_unbound"
         rows.append(CapabilityInventoryItem(
             capability_id=f"knowledge:{tool_id}",
             kind="knowledge",
@@ -297,7 +260,7 @@ def _knowledge_rows(
             tag_source=tag_source,
             unattended_ok=ok,
             blocked_reason=reason,
-            project_bound=project_bound,
+            project_bound=True,
             agent_bound=True,
         ))
     return rows
@@ -305,7 +268,6 @@ def _knowledge_rows(
 
 def _skill_rows(
     agent: Any,
-    bindings: dict[str, set[str]],
     profile: UnifiedPermissionProfile,
     policy: ApprovalPolicy,
 ) -> list[CapabilityInventoryItem]:
@@ -317,7 +279,6 @@ def _skill_rows(
             continue
         if str(item.get("status") or "") != "installed" or not bool(item.get("enabled", True)):
             continue
-        project_bound = skill_id in bindings["skill"]
         declared = [str(tag) for tag in list(item.get("tags") or [])]
         if skill_package_has_scripts(SimpleNamespace(
             resource_path=item.get("resourcePath") or item.get("resource_path") or "",
@@ -337,8 +298,6 @@ def _skill_rows(
             ok, reason = False, "blocked_by_permission"
         if profile.is_read_only:
             ok, reason = False, "read_only"
-        if not project_bound:
-            ok, reason = False, reason or "project_unbound"
         rows.append(CapabilityInventoryItem(
             capability_id=f"skill:{skill_id}",
             kind="skill",
@@ -350,7 +309,7 @@ def _skill_rows(
             tag_source=tag_source,
             unattended_ok=ok,
             blocked_reason=reason,
-            project_bound=project_bound,
+            project_bound=True,
             agent_bound=True,
         ))
     return rows

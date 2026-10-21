@@ -24,8 +24,8 @@ USER_B = {"id": "usr_" + "b" * 32, "email": "b@example.com", "role": "user", "st
 
 def _confirm(service: ScheduledJobService, name: str):
     job = service.create_job(
-        workspace_id="default",
-        project_id="default",
+        
+        project_slug="default",
         name=name,
         agent_id="default",
         schedule_kind="weekly",
@@ -54,8 +54,8 @@ def test_tick_writes_each_tenant_session(hosted_env, monkeypatch):
             "agent_id": "default",
             "agent_name": "助手",
             "mode": "agent",
-            "workspace_id": "default",
-            "project_id": "default",
+            
+            "project_slug": "default",
             "kind": "scheduled_job",
             "created_at": "2026-08-21T10:00:00+00:00",
             "updated_at": "2026-08-21T10:00:00+00:00",

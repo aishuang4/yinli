@@ -137,7 +137,7 @@ def test_memory_injection_returns_tool_hint_when_empty():
 
 
 class FakeMarkdownStore:
-    def read_global_memory(self, workspace_id):
+    def read_global_memory(self):
         return type(
             "Doc",
             (),
@@ -207,7 +207,7 @@ class FakeMarkdownStore:
 
 
 class EmptyMarkdownStore:
-    def read_global_memory(self, workspace_id):
+    def read_global_memory(self):
         return type("Doc", (), {"content": "# Summary\n\n# Stable Preferences\n\n# Workspace Rules\n\n# Corrections\n\n# Negative Rules\n"})()
 
     def read_user_memory(self, user_id):

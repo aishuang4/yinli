@@ -34,8 +34,8 @@ class NotificationMessage:
 
     kind: str
     title: str
-    workspace_id: str
-    project_id: str = ""
+    tenant_id: str = ""
+    project_slug: str = ""
     job_id: str = ""
     firing_id: str = ""
     body: str = ""

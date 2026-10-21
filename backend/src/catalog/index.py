@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from src.agents.system_agents import is_system_agent_id
-from src.catalog.loader import catalog_fingerprint, ensure_loaded, list_workspace_agents
+from src.catalog.loader import catalog_fingerprint, ensure_loaded, list_registered_agents
 from src.catalog.paths import (
     GITIGNORE_FILENAME,
     atomic_write_text,
@@ -14,19 +14,19 @@ from src.catalog.paths import (
     project_agents_dir,
     project_index_path,
     system_profile_path,
-    workspace_catalog_root,
 )
 from src.catalog.system_defaults import utc_now
+from src.config.runtime_paths import agents_root, tenant_root
 
 logger = logging.getLogger(__name__)
 
 INDEX_GITIGNORE_LINE = "INDEX.md"
 
 
-def _skill_index_rows(project_root: Path, workspace_id: str) -> list[list[str]]:
+def _skill_index_rows(project_root: Path) -> list[list[str]]:
     from src.catalog.skill_seed import seed_system_skills
     from src.catalog.skills import discover_skill_packages, list_system_skill_packages
-    from src.config.runtime_paths import tenant_root, user_home_root
+    from src.config.runtime_paths import user_home_root
 
     seed_system_skills()
     rows: list[list[str]] = []
@@ -36,44 +36,40 @@ def _skill_index_rows(project_root: Path, workspace_id: str) -> list[list[str]]:
         Path(project_root),
         user_data_root=tenant_root(),
         user_home_root=user_home_root(),
-        workspace_id=workspace_id,
     ):
+        if item.shadowed_by:
+            continue
         rows.append([item.name, item.resource_path, "true" if item.enabled else "false", item.source_scope])
     return rows
 
 
-def _mcp_index_rows(project_root: Path, workspace_id: str) -> list[list[str]]:
+def _mcp_index_rows() -> list[list[str]]:
     from src.catalog.mcp_files import discover_mcp_files
 
-    del workspace_id
     return [
         [item.name, item.source_path, "true" if item.enabled else "false", item.source_scope]
-        for item in discover_mcp_files(project_root=project_root)
+        for item in discover_mcp_files()
     ]
 
 
-def _http_index_rows(project_root: Path, workspace_id: str) -> list[list[str]]:
+def _http_index_rows() -> list[list[str]]:
     from src.catalog.http_files import discover_http_files
 
     return [
         [item.name, item.source_path, "true" if item.enabled else "false", item.source_scope]
-        for item in discover_http_files(project_root=project_root)
+        for item in discover_http_files()
     ]
 
 
-def _job_index_rows(project_root: Path, workspace_id: str, project_id: str):
+def _job_index_rows(project_id: str):
     from src.catalog.job_files import scan_job_files
     from src.catalog.sync_jobs import sync_job_definitions
 
     try:
-        sync_job_definitions(project_root=project_root, project_id=project_id or "default")
+        sync_job_definitions(project_id=project_id or "default")
     except Exception:
         pass
-    records, errors = scan_job_files(
-        project_root=project_root,
-        project_id=project_id or "default",
-        workspace_id=workspace_id or "default",
-    )
+    records, errors = scan_job_files(project_id=project_id or "default")
     rows = [
         [item.id, item.name, item.desired_status, item.source_path]
         for item in records
@@ -102,28 +98,29 @@ def _markdown_table(headers: list[str], rows: list[list[str]]) -> str:
 
 def render_index_markdown(
     *,
-    workspace_id: str,
     project_id: str,
     project_root: Path,
     docker: bool = False,
+    **_extra: object,
 ) -> str:
     """渲染 INDEX 正文。"""
 
+    del _extra
     snapshot = ensure_loaded()
-    catalog_root = workspace_catalog_root(workspace_id).resolve()
+    catalog_root = agents_root().resolve()
     system_rows: list[list[str]] = []
     profile_rows: list[list[str]] = []
-    for agent in list_workspace_agents(workspace_id):
+    for agent in list_registered_agents():
         if is_system_agent_id(agent.id):
             overlay = system_profile_path(agent.id)
             overlay_cell = str(overlay.resolve()) if overlay.exists() else "（代码内置，创建 overlay 即生效）"
             system_rows.append([agent.id, agent.name, agent.role, overlay_cell, "身份只读"])
         else:
             profile_rows.append([agent.id, agent.name, agent.role, agent.source_path or "（无路径）"])
-    skill_rows = _skill_index_rows(project_root, workspace_id)
-    mcp_rows = _mcp_index_rows(project_root, workspace_id)
-    http_rows = _http_index_rows(project_root, workspace_id)
-    job_rows, job_errors = _job_index_rows(project_root, workspace_id, project_id)
+    skill_rows = _skill_index_rows(project_root)
+    mcp_rows = _mcp_index_rows()
+    http_rows = _http_index_rows()
+    job_rows, job_errors = _job_index_rows(project_id)
     errors = list(snapshot.errors) + list(job_errors)
     error_block = "（无）" if not errors else "\n".join(
         f"- `{item.path}`: {item.message}" for item in errors
@@ -134,9 +131,9 @@ def render_index_markdown(
     how = [
         "- 了解系统：只读本文件。",
         "- 修改 Agent：编辑「持久 Agent」表中的 path。",
-        "- 修改 Skill：编辑或新建项目 `.agents/skills/<name>/SKILL.md`。",
-        "- 修改 MCP/HTTP：编辑 catalog_root 下 `mcp/<id>.yaml` 或 `tools/<id>.yaml`，不要写入 Token。",
-        "- 修改定时任务：编辑或新建 `.agents/jobs/<id>.md`；desired_status=active 才会调度。",
+        "- 修改 Skill：编辑或新建项目授权目录下的 `.agents/skills/<name>/SKILL.md`。",
+        "- 修改 MCP/HTTP：编辑租户 `mcp/<id>.yaml` 或 `tools/<id>.yaml`，不要写入 Token。",
+        "- 修改定时任务：编辑或新建租户 `agents/jobs/<id>.md`；desired_status=active 才会调度。",
         "- 不要修改 models.json、密钥目录、本 INDEX（下次运行会覆盖）。",
         "- 不要把 Chat Agent 写到 .agents/agents/（那是 Subagent）。",
     ]
@@ -145,7 +142,6 @@ def render_index_markdown(
     return "\n".join([
         "# YINLI Catalog",
         "",
-        f"- workspace: {workspace_id}",
         f"- project: {project_id}",
         f"- project_root: {project_root.resolve()}",
         f"- catalog_root: {catalog_root}",
@@ -194,20 +190,20 @@ def render_index_markdown(
 def refresh_project_index(
     project_root: Path,
     *,
-    workspace_id: str,
     project_id: str = "",
     docker: bool = False,
+    **_extra: object,
 ) -> Path | None:
     """写入 INDEX.md。不可写时返回 None，不抛到 Chat。"""
 
-    extra_filesystem_scopes_for_workspace(workspace_id)
+    del _extra
+    extra_filesystem_scopes_for_workspace()
     target = project_index_path(project_root)
     try:
         directory = project_agents_dir(project_root)
         directory.mkdir(parents=True, exist_ok=True)
         _ensure_gitignore(directory)
         markdown = render_index_markdown(
-            workspace_id=workspace_id,
             project_id=project_id or "",
             project_root=Path(project_root),
             docker=docker,

@@ -9,7 +9,7 @@ import pytest
 from src.server.routes import agents as agents_routes
 
 
-def _agent(agent_id: str, workspace_id: str) -> agents_routes.AgentResponse:
+def _agent(agent_id: str) -> agents_routes.AgentResponse:
     """构造测试 Agent。"""
 
     return agents_routes.AgentResponse.model_validate({
@@ -27,7 +27,7 @@ def _agent(agent_id: str, workspace_id: str) -> agents_routes.AgentResponse:
         "status": "idle",
         "created_at": "2026-07-21T00:00:00+00:00",
         "updated_at": "2026-07-21T00:00:00+00:00",
-        "workspaceId": workspace_id,
+        
     })
 
 
@@ -36,20 +36,20 @@ def test_default_agent_is_visible_in_every_workspace(monkeypatch) -> None:
 
     monkeypatch.setattr(agents_routes, "_sync_agents_from_catalog", lambda: None)
     monkeypatch.setattr(agents_routes, "_agents", {
-        "default": _agent("default", "default"),
-        "workspace-agent": _agent("workspace-agent", "workspace-b"),
-        "other-agent": _agent("other-agent", "workspace-a"),
+        "default": _agent("default"),
+        "workspace-agent": _agent("workspace-agent"),
+        "other-agent": _agent("other-agent"),
     })
 
-    agents = asyncio.run(agents_routes.list_agents(workspace_id="workspace-b"))
+    agents = asyncio.run(agents_routes.list_agents())
 
-    assert [agent.id for agent in agents] == ["default", "workspace-agent"]
+    assert [agent.id for agent in agents] == ["default", "workspace-agent", "other-agent"]
 
 
 def test_default_agent_cannot_be_deleted(monkeypatch) -> None:
     """默认 Agent 可更新但不能删除回退为不可配置的虚拟对象。"""
 
-    default_agent = _agent("default", "default")
+    default_agent = _agent("default")
     monkeypatch.setattr(agents_routes, "_agents", {"default": default_agent})
 
     with pytest.raises(Exception) as exc_info:
@@ -62,7 +62,7 @@ def test_default_agent_cannot_be_deleted(monkeypatch) -> None:
 def test_existing_default_agent_gets_final_delivery_prompt_once(monkeypatch) -> None:
     """升级历史默认 Agent 时保留用户提示词，并补齐最终交付规则。"""
 
-    default_agent = _agent("default", "default")
+    default_agent = _agent("default")
     monkeypatch.setattr(agents_routes, "_agents", {"default": default_agent})
     monkeypatch.setattr(agents_routes, "upsert_agent", lambda _data: None)
     monkeypatch.setattr(agents_routes, "invalidate_agent", lambda _agent_id: None)

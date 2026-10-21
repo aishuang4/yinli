@@ -72,7 +72,7 @@ def _prepare_project(tmp_path) -> dict:
     root.mkdir()
     return create_project({
         "id": "proj-sched",
-        "workspace_id": DEFAULT_WORKSPACE_ID,
+        
         "name": "定时项目",
         "root_path": str(root),
     })
@@ -82,8 +82,8 @@ def _request(**overrides) -> ScheduledRunRequest:
     payload = {
         "job_id": "job-bridge1",
         "firing_id": "firing-bridge1",
-        "workspace_id": DEFAULT_WORKSPACE_ID,
-        "project_id": DEFAULT_PROJECT_ID,
+        
+        "project_slug": DEFAULT_PROJECT_ID,
         "agent_id": "default",
         "frozen_prompt": "生成本周周报，写入 outputs/weekly-report.md",
         "skill_ids": [],
@@ -254,11 +254,11 @@ def test_start_scheduled_chat_run_returns_id_and_persists_columns(isolated_db, t
             yield
 
     passed = _patch_fake_agent(
-        monkeypatch, hanging_execute, filesystem_scope=project["rootPath"],
+        monkeypatch, hanging_execute, filesystem_scope=project["primaryPath"],
     )
 
     async def run_case():
-        req = _request(project_id=project["id"])
+        req = _request(project_slug=project["slug"])
         chat_run_id = await start_scheduled_chat_run(req)
         assert chat_run_id.startswith("run-")
         record = get_chat_run(chat_run_id)
@@ -272,11 +272,11 @@ def test_start_scheduled_chat_run_returns_id_and_persists_columns(isolated_db, t
         session = get_chat_session(live.session_id)
         assert session is not None and session["kind"] == "scheduled_job"
         workspace = project_job_run_directory(
-            Path(project["rootPath"]), req.job_id, req.firing_id,
+            Path(project["primaryPath"]), req.job_id, req.firing_id,
         )
         assert (workspace / "spec.json").is_file()
         assert (workspace / "outputs").is_dir()
-        session_root = Path(project["rootPath"]) / ".agent-workstation" / "sessions"
+        session_root = Path(project["primaryPath"]) / ".agent-workstation" / "sessions"
         assert not session_root.exists() or not any(session_root.iterdir())
         release.set()
         status = await await_scheduled_chat_run(chat_run_id, timeout_seconds=2)
@@ -300,14 +300,14 @@ def test_start_scheduled_chat_run_returns_id_and_persists_columns(isolated_db, t
 
 def test_each_firing_creates_a_new_scheduled_session(isolated_db, tmp_path, monkeypatch):
     project = _prepare_project(tmp_path)
-    _patch_fake_agent(monkeypatch, _empty_execute, filesystem_scope=project["rootPath"])
+    _patch_fake_agent(monkeypatch, _empty_execute, filesystem_scope=project["primaryPath"])
 
     async def run_case():
         first = await start_scheduled_chat_run(
-            _request(project_id=project["id"], firing_id="firing-a"),
+            _request(project_slug=project["slug"], firing_id="firing-a"),
         )
         second = await start_scheduled_chat_run(
-            _request(project_id=project["id"], firing_id="firing-b"),
+            _request(project_slug=project["slug"], firing_id="firing-b"),
         )
         await await_scheduled_chat_run(first, timeout_seconds=2)
         await await_scheduled_chat_run(second, timeout_seconds=2)
@@ -335,11 +335,11 @@ def test_await_timeout_cancels_chat_background_run(isolated_db, tmp_path, monkey
         if False:
             yield
 
-    _patch_fake_agent(monkeypatch, never_finish, filesystem_scope=project["rootPath"])
+    _patch_fake_agent(monkeypatch, never_finish, filesystem_scope=project["primaryPath"])
 
     async def run_case():
         chat_run_id = await start_scheduled_chat_run(
-            _request(project_id=project["id"], firing_id="firing-timeout"),
+            _request(project_slug=project["slug"], firing_id="firing-timeout"),
         )
         live = await get_chat_background_run(chat_run_id)
         task = live.async_task if live is not None else None
@@ -360,22 +360,22 @@ def test_await_timeout_cancels_chat_background_run(isolated_db, tmp_path, monkey
 
 def test_scheduled_run_rerun_is_forbidden(isolated_db, tmp_path, monkeypatch):
     project = _prepare_project(tmp_path)
-    _patch_fake_agent(monkeypatch, _empty_execute, filesystem_scope=project["rootPath"])
+    _patch_fake_agent(monkeypatch, _empty_execute, filesystem_scope=project["primaryPath"])
 
     async def run_case():
         chat_run_id = await start_scheduled_chat_run(
-            _request(project_id=project["id"], firing_id="firing-rerun"),
+            _request(project_slug=project["slug"], firing_id="firing-rerun"),
         )
         status = await await_scheduled_chat_run(chat_run_id, timeout_seconds=2)
         assert status == "completed"
         with pytest.raises(HTTPException) as exc:
-            await rerun_run(chat_run_id, project_id=project["id"])
+            await rerun_run(chat_run_id, project_slug=project["slug"])
         assert exc.value.status_code == 409
         assert "run-now" in str(exc.value.detail)
 
         background_runs_module._runs.clear()
         with pytest.raises(HTTPException) as persisted_exc:
-            await rerun_run(chat_run_id, project_id=project["id"])
+            await rerun_run(chat_run_id, project_slug=project["slug"])
         assert persisted_exc.value.status_code == 409
         restored = await get_chat_background_run(chat_run_id)
         assert restored is not None
@@ -393,21 +393,21 @@ def test_start_scheduled_chat_run_uses_domain_error_not_http(isolated_db):
         with pytest.raises(ScheduledChatLaunchError, match="frozen_prompt"):
             await start_scheduled_chat_run(_request(frozen_prompt="   "))
         with pytest.raises(ScheduledChatLaunchError, match="Project"):
-            await start_scheduled_chat_run(_request(project_id="missing-project"))
+            await start_scheduled_chat_run(_request(project_slug="missing-project"))
 
     asyncio.run(run_case())
 
 
 def test_job_cwd_outside_agent_scope_fails_launch(isolated_db, tmp_path, monkeypatch):
     project = _prepare_project(tmp_path)
-    narrow = Path(project["rootPath"]) / "src"
+    narrow = Path(project["primaryPath"]) / "src"
     narrow.mkdir()
     _patch_fake_agent(monkeypatch, _empty_execute, filesystem_scope=str(narrow))
 
     async def run_case():
         with pytest.raises(ScheduledChatLaunchError, match="文件范围"):
             await start_scheduled_chat_run(
-                _request(project_id=project["id"], firing_id="firing-scope"),
+                _request(project_slug=project["slug"], firing_id="firing-scope"),
             )
 
     asyncio.run(run_case())
@@ -428,11 +428,11 @@ def test_timeout_joins_cancelled_task_before_returning(isolated_db, tmp_path, mo
         if False:
             yield
 
-    _patch_fake_agent(monkeypatch, slow_unwind, filesystem_scope=project["rootPath"])
+    _patch_fake_agent(monkeypatch, slow_unwind, filesystem_scope=project["primaryPath"])
 
     async def run_case():
         chat_run_id = await start_scheduled_chat_run(
-            _request(project_id=project["id"], firing_id="firing-join"),
+            _request(project_slug=project["slug"], firing_id="firing-join"),
         )
         status = await await_scheduled_chat_run(chat_run_id, timeout_seconds=0.2)
         assert status == "cancelled"

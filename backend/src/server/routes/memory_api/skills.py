@@ -36,7 +36,7 @@ router = APIRouter()
 async def skill_evolution_records(
     status: str | None = Query(default=None, pattern="^(draft|registered|skipped|failed)$"),
     agent_id: str | None = Query(default=None, alias="agentId"),
-    project_id: Annotated[str, Query(alias="projectId")] = "default",
+    project_slug: Annotated[str, Query(alias="projectSlug")] = "default",
     limit: int = Query(default=50, ge=1, le=200),
 ) -> SkillEvolutionRecordListResponse:
     """列出 Skill 自进化候选队列，供 Memory 页面查看中间态。"""
@@ -44,7 +44,7 @@ async def skill_evolution_records(
     records = list_skill_evolution_records(
         status=status,
         agent_id=agent_id,
-        project_id=project_id,
+        project_slug=project_slug,
         limit=limit,
     )
     return SkillEvolutionRecordListResponse(records=records)
@@ -54,12 +54,12 @@ async def skill_evolution_records(
 async def update_skill_evolution_record(
     record_id: str,
     data: SkillEvolutionRecordAction,
-    project_id: Annotated[str, Query(alias="projectId")] = "default",
+    project_slug: Annotated[str, Query(alias="projectSlug")] = "default",
 ) -> dict[str, Any]:
     """操作 Skill 自进化候选队列。"""
 
     record = get_skill_evolution_record(record_id)
-    if not record or str(record.get("projectId") or "default") != project_id:
+    if not record or str(record.get("projectSlug") or "default") != project_slug:
         raise HTTPException(status_code=404, detail="Skill evolution record not found")
 
     action = data.action

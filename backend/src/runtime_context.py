@@ -1,28 +1,31 @@
-"""Workspace / Project 运行时归属解析与上下文模型。"""
+"""Project 运行时归属解析与上下文模型。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from src.storage.database import (
-    DEFAULT_PROJECT_ID,
-    get_chat_session_location,
-    get_project,
-    get_workspace,
-)
+from src.storage.database import get_chat_session_location, get_project
+
+
+@dataclass(frozen=True)
+class FolderGrant:
+    """一条目录授权。access_mode 为 read 或 readwrite。"""
+
+    path: str
+    access_mode: str
 
 
 @dataclass(frozen=True)
 class RuntimeContext:
-    """一次 Runtime 不可变的 Workspace / Project 归属。"""
+    """一次 Runtime 不可变的 Project 归属与目录授权。"""
 
-    workspace_id: str
-    project_id: str
+    project_slug: str
     project_root: Path
     session_id: str
     run_id: str
     agent_id: str
+    folders: tuple[FolderGrant, ...] = ()
     project_name: str = ""
     instructions_file: str = ""
 
@@ -34,56 +37,70 @@ class RuntimeContext:
 
 def resolve_runtime_context(
     *,
-    project_id: str | None,
+    project_slug: str | None,
     session_id: str,
     run_id: str,
     agent_id: str,
 ) -> RuntimeContext:
-    """解析 Project，并校验现有 Session 不会跨 Project 继续运行。"""
+    """解析 Project。已有会话沿用其 slug；新建会话必须显式给出 slug。"""
 
     session_location = get_chat_session_location(session_id) if session_id else None
-    requested_project_id = str(project_id or "").strip()
+    requested = str(project_slug or "").strip()
     if session_location:
-        session_project_id = str(session_location["projectId"])
-        if requested_project_id and requested_project_id != session_project_id:
+        session_slug = str(session_location["projectSlug"])
+        if requested and requested != session_slug:
             raise ValueError(
-                f"Session {session_id} 属于 Project {session_project_id}，不能在 Project {requested_project_id} 中继续。",
+                f"Session {session_id} 属于 Project {session_slug}，不能在 Project {requested} 中继续。",
             )
-        resolved_project_id = session_project_id
+        resolved = session_slug
     else:
-        resolved_project_id = requested_project_id or DEFAULT_PROJECT_ID
+        if not requested:
+            raise ValueError("缺少 project_slug")
+        resolved = requested
 
-    project = get_project(resolved_project_id)
+    project = get_project(resolved)
     if project is None:
-        raise ValueError(f"Project 不存在: {resolved_project_id}")
+        raise ValueError(f"Project 不存在: {resolved}")
     if str(project.get("status") or "") != "active":
-        raise ValueError(f"Project 已归档，不能启动新运行: {resolved_project_id}")
+        raise ValueError(f"Project 已归档，不能启动新运行: {resolved}")
 
-    workspace_id = str(project.get("workspaceId") or "")
-    workspace = get_workspace(workspace_id)
-    if workspace is None or str(workspace.get("status") or "") != "active":
-        raise ValueError(f"Workspace 不存在或已归档: {workspace_id}")
-    if session_location and str(session_location["workspaceId"]) != workspace_id:
-        raise ValueError(f"Session {session_id} 的 Workspace 归属与 Project 不一致。")
-
-    project_root = Path(str(project.get("rootPath") or "")).expanduser().resolve()
+    project_root = Path(str(project.get("primaryPath") or "")).expanduser().resolve()
     if not project_root.exists() or not project_root.is_dir():
         raise ValueError(f"Project root 不是有效目录: {project_root}")
 
     return RuntimeContext(
-        workspace_id=workspace_id,
-        project_id=resolved_project_id,
+        project_slug=str(project.get("slug") or resolved),
         project_root=project_root,
+        folders=_folders_from_project(project, project_root),
         session_id=session_id,
         run_id=run_id,
         agent_id=agent_id,
-        project_name=str(project.get("name") or resolved_project_id),
+        project_name=str(project.get("name") or resolved),
         instructions_file=str(project.get("instructionsFile") or ""),
     )
 
 
+def _folders_from_project(project: dict, project_root: Path) -> tuple[FolderGrant, ...]:
+    """从 get_project 的 folders 取出 path 与读写模式。"""
+
+    grants: list[FolderGrant] = []
+    for item in project.get("folders") or []:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip()
+        mode = str(item.get("access_mode") or item.get("accessMode") or "read")
+        if not path:
+            continue
+        if mode not in {"read", "readwrite"}:
+            mode = "read"
+        grants.append(FolderGrant(path=path, access_mode=mode))
+    if grants:
+        return tuple(grants)
+    return (FolderGrant(path=str(project_root), access_mode="readwrite"),)
+
+
 def load_project_instructions(context: RuntimeContext, *, max_chars: int = 20_000) -> str:
-    """读取 Project instructions，且拒绝越过 Project root。"""
+    """读取 Project instructions，且拒绝越过主目录。"""
 
     if not context.instructions_file:
         return ""

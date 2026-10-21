@@ -15,7 +15,7 @@ def test_migrate_exports_then_clears_sqlite(tmp_path, monkeypatch) -> None:
         "id": "existing-agent",
         "name": "Existing",
         "system_prompt": "keep-me",
-        "workspaceId": "default",
+        
         "guardrails": {},
         "skills": [],
         "mcpTools": [],
@@ -32,8 +32,8 @@ def test_migrate_exports_then_clears_sqlite(tmp_path, monkeypatch) -> None:
     assert get_registered_agent("existing-agent").system_prompt == "keep-me"
     assert profile_path("default", "existing-agent").is_file()
     assert all(row["id"] != "existing-agent" for row in database.list_agents())
-    marker = get_json_record("catalog", "agent_migration_v1")
-    assert marker["status"] == "done"
+    marker = get_json_record("catalog", "agent_migration_v1") or {}
+    assert marker.get("status") != "done"
 
 
 def test_upsert_after_migrate_does_not_write_sqlite(tmp_path, monkeypatch) -> None:
@@ -45,7 +45,7 @@ def test_upsert_after_migrate_does_not_write_sqlite(tmp_path, monkeypatch) -> No
         "id": "after-migrate",
         "name": "After",
         "system_prompt": "from-catalog",
-        "workspaceId": "default",
+        
         "guardrails": {},
         "skills": [],
         "mcpTools": [],

@@ -1,4 +1,4 @@
-"""HTTP 工具定义 YAML 编解码与发现。"""
+"""HTTP 工具定义 YAML 编解码与发现。只扫描租户 `tools/` 目录。"""
 
 from __future__ import annotations
 
@@ -8,13 +8,7 @@ from typing import Any
 
 import yaml
 
-from src.catalog.paths import (
-    ID_PATTERN,
-    atomic_write_text,
-    http_tools_dir,
-    project_http_tools_dir,
-    workspaces_root,
-)
+from src.catalog.paths import ID_PATTERN, atomic_write_text, http_tools_dir
 from src.catalog.secrets import (
     load_http_auth,
     redact_headers,
@@ -46,8 +40,7 @@ class HttpToolFileRecord:
     readonly: bool = True
     approval_policy: str = "inherit"
     enabled: bool = True
-    workspace_id: str = "default"
-    source_scope: str = "workspace"
+    source_scope: str = "tenant"
     source_path: str = ""
     created_at: str = ""
     updated_at: str = ""
@@ -82,7 +75,14 @@ def dump_http_yaml(record: HttpToolFileRecord) -> str:
     return yaml.safe_dump(payload, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
-def parse_http_yaml(text: str, *, path: Path, workspace_id: str, source_scope: str) -> HttpToolFileRecord:
+def parse_http_yaml(
+    text: str,
+    *,
+    path: Path,
+    source_scope: str = "tenant",
+    **_extra: object,
+) -> HttpToolFileRecord:
+    del _extra
     payload = yaml.safe_load(text) or {}
     if not isinstance(payload, dict):
         raise ValueError("HTTP 工具 YAML 必须是对象")
@@ -115,7 +115,6 @@ def parse_http_yaml(text: str, *, path: Path, workspace_id: str, source_scope: s
         readonly=bool(payload.get("readonly", True)),
         approval_policy=str(payload.get("approval_policy") or payload.get("approvalPolicy") or "inherit"),
         enabled=bool(payload.get("enabled", True)),
-        workspace_id=workspace_id,
         source_scope=source_scope,
         source_path=str(path),
         created_at=str(payload.get("created_at") or payload.get("createdAt") or ""),
@@ -140,7 +139,7 @@ def runtime_auth_config(record: HttpToolFileRecord) -> dict[str, Any]:
     return load_http_auth(record.auth_ref)
 
 
-def _scan_dir(directory: Path, *, workspace_id: str, source_scope: str) -> list[HttpToolFileRecord]:
+def _scan_dir(directory: Path, *, source_scope: str) -> list[HttpToolFileRecord]:
     if not directory.is_dir():
         return []
     records: list[HttpToolFileRecord] = []
@@ -151,7 +150,6 @@ def _scan_dir(directory: Path, *, workspace_id: str, source_scope: str) -> list[
             records.append(parse_http_yaml(
                 path.read_text(encoding="utf-8"),
                 path=path,
-                workspace_id=workspace_id,
                 source_scope=source_scope,
             ))
         except (OSError, ValueError, yaml.YAMLError):
@@ -159,25 +157,8 @@ def _scan_dir(directory: Path, *, workspace_id: str, source_scope: str) -> list[
     return records
 
 
-def discover_http_files(*, project_root: Path | None = None) -> list[HttpToolFileRecord]:
-    records: list[HttpToolFileRecord] = []
-    root = workspaces_root()
-    if root.is_dir():
-        for child in sorted(root.iterdir()):
-            if not child.is_dir() or child.name.startswith("_"):
-                continue
-            records.extend(_scan_dir(http_tools_dir(child.name), workspace_id=child.name, source_scope="workspace"))
-    if project_root is not None:
-        records.extend(_scan_dir(
-            project_http_tools_dir(project_root),
-            workspace_id="default",
-            source_scope="project",
-        ))
-    return records
+def discover_http_files(**_extra: object) -> list[HttpToolFileRecord]:
+    """扫描 `<tenant>/tools/*.yaml`。多余关键字忽略，不再按项目目录发现。"""
 
-
-def project_http_ids(project_root: Path) -> set[str]:
-    return {
-        item.id
-        for item in _scan_dir(project_http_tools_dir(project_root), workspace_id="default", source_scope="project")
-    }
+    del _extra
+    return _scan_dir(http_tools_dir(), source_scope="tenant")

@@ -25,8 +25,8 @@ from src.config.runtime_paths import (
     INSTALL_BACKEND_ROOT,
     USER_DATA_ROOT,
     data_root,
-    default_project_root,
     ensure_tenant_directories,
+    project_default_root,
 )
 from src.config.settings import settings
 from src.storage.chat_run_records import ChatRunRecordStore
@@ -62,7 +62,7 @@ from src.storage.trace_records import TraceRecordStore
 from src.storage.observation_records import ObservationRecordStore
 from src.storage.group_studio_records import GroupStudioRecordStore
 from src.storage.workflow_records import WorkflowRecordStore
-from src.storage.workspace_project_records import WorkspaceProjectRecordStore
+from src.storage.project_records import ProjectRecordStore
 
 logger = logging.getLogger(__name__)
 
@@ -71,18 +71,12 @@ BACKEND_ROOT = INSTALL_BACKEND_ROOT
 DEFAULT_WORKSPACE_ID = "default"
 DEFAULT_PROJECT_ID = "default"
 PROJECT_RESOURCE_TYPES = ("agent", "skill", "mcp", "http_tool")
-_PROJECT_RESOURCE_TABLES = {
-    "agent": "agents",
-    "mcp": "mcp_servers",
-    "http_tool": "http_tools",
-}
-_RESOURCE_BINDING_MIGRATION_KEY = "project_resource_bindings_v1"
 
 def default_guardrails() -> dict[str, Any]:
     """当前租户的默认 guardrails；filesystem_scope 指向当前默认 Project 根。"""
 
     return {
-        "filesystem_scope": str(default_project_root()),
+        "filesystem_scope": str(project_default_root()),
         "shell_blacklist": ["rm -rf /", "sudo"],
         "network_enabled": True,
         "human_approval": False,
@@ -101,7 +95,7 @@ def _normalize_guardrails(data: dict[str, Any]) -> dict[str, Any]:
     return normalize_guardrails(
         data,
         defaults=default_guardrails(),
-        project_root=str(default_project_root()),
+        project_root=str(project_default_root()),
     )
 
 DEFAULT_PLAN_CONFIG = {
@@ -148,8 +142,11 @@ def db_path() -> Path:
 
     ctx = current_tenant()
     if ctx.kind == "hosted":
-        return ctx.data_root / "data" / "agent_workstation.db"
-    return _local_db_path()
+        return ctx.data_root / "data" / "state.db"
+    configured = _local_db_path()
+    if configured.name == "state.db":
+        return configured
+    return configured.with_name("state.db")
 
 
 def _local_db_path() -> Path:
@@ -159,7 +156,7 @@ def _local_db_path() -> Path:
         return _resolve_sqlite_path(url[len(prefix):])
     if url.startswith("sqlite:///"):
         return _resolve_sqlite_path(url[len("sqlite:///"):])
-    return data_root() / "agent_workstation.db"
+    return data_root() / "state.db"
 
 
 def _resolve_sqlite_path(value: str) -> Path:
@@ -288,6 +285,9 @@ def forget_all() -> None:
         _initialized_paths.clear()
         _path_locks.clear()
         _successful_writes.clear()
+    from src.storage.legacy_archive import forget_archive_checks
+
+    forget_archive_checks()
 
 
 def _drop_column_if_exists(conn: sqlite3.Connection, table: str, column: str) -> None:
@@ -301,73 +301,14 @@ def _drop_column_if_exists(conn: sqlite3.Connection, table: str, column: str) ->
         conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
 
 
-def _bind_workspace_resources(
-    conn: sqlite3.Connection,
-    *,
-    project_id: str,
-    workspace_id: str,
-    now: str,
-) -> None:
-    """把 Workspace 当前持久资源作为 Project 的初始白名单快照。"""
-
-    for resource_type, table in _PROJECT_RESOURCE_TABLES.items():
-        conn.execute(
-            f"""
-            INSERT OR IGNORE INTO project_resource_bindings (
-                project_id, resource_type, resource_id, enabled,
-                config_override, created_at, updated_at
-            )
-            SELECT ?, ?, id, 1, '{{}}', ?, ?
-            FROM {table}
-            WHERE workspace_id = ?
-            """,
-            (project_id, resource_type, now, now, workspace_id),
-        )
-    if workspace_id == DEFAULT_WORKSPACE_ID:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO project_resource_bindings (
-                project_id, resource_type, resource_id, enabled,
-                config_override, created_at, updated_at
-            )
-            SELECT ?, 'http_tool', key, 1, '{}', ?, ?
-            FROM json_store
-            WHERE namespace = 'knowledge_tools'
-            """,
-            (project_id, now, now),
-        )
-
-
-def _migrate_project_resource_bindings(conn: sqlite3.Connection, *, now: str) -> None:
-    """为升级前已有 Project 建立一次性资源白名单基线。"""
-
-    marker = conn.execute(
-        "SELECT 1 FROM json_store WHERE namespace = 'schema_migrations' AND key = ?",
-        (_RESOURCE_BINDING_MIGRATION_KEY,),
-    ).fetchone()
-    if marker is not None:
-        return
-    for project in conn.execute("SELECT id, workspace_id FROM projects").fetchall():
-        _bind_workspace_resources(
-            conn,
-            project_id=str(project["id"]),
-            workspace_id=str(project["workspace_id"]),
-            now=now,
-        )
-    conn.execute(
-        """
-        INSERT INTO json_store (namespace, key, value, created_at, updated_at)
-        VALUES ('schema_migrations', ?, '{"completed":true}', ?, ?)
-        """,
-        (_RESOURCE_BINDING_MIGRATION_KEY, now, now),
-    )
-
-
 def ensure_db() -> None:
     """Create SQLite tables once per tenant database, safe to call from import-time route loaders."""
     path = db_path()
     if path in _initialized_paths:
         return
+    from src.storage.legacy_archive import archive_legacy_layout
+
+    archive_legacy_layout(path.parent)
 
     with _lock_for(path):
         if path in _initialized_paths:
@@ -407,6 +348,9 @@ def ensure_db() -> None:
             conn.execute("DROP TABLE IF EXISTS team_members")
             conn.execute("DROP TABLE IF EXISTS teams")
             conn.execute("DROP TABLE IF EXISTS skills")
+            conn.execute("DROP TABLE IF EXISTS workspaces")
+            conn.execute("DROP TABLE IF EXISTS project_resource_bindings")
+            conn.execute("DROP TABLE IF EXISTS project_job_recipients")
             conn.execute("DELETE FROM json_store WHERE namespace = 'team_templates'")
             _reset_legacy_chat_stream_data(conn)
             reconcile_columns(conn)
@@ -416,87 +360,60 @@ def ensure_db() -> None:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_chat_sessions_project_kind "
-                "ON chat_sessions(project_id, kind, updated_at DESC)"
+                "ON chat_sessions(project_slug, kind, updated_at DESC)"
             )
             _drop_column_if_exists(conn, "chat_runs", "team_id")
             _drop_column_if_exists(conn, "chat_runs", "team_name")
             now = _utc_now()
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO workspaces (
-                    id, name, description, status, created_at, updated_at
-                ) VALUES (?, ?, ?, 'active', ?, ?)
-                """,
-                (
-                    DEFAULT_WORKSPACE_ID,
-                    "默认工作区",
-                    "历史数据和未显式指定归属的资源所在工作区。",
-                    now,
-                    now,
-                ),
-            )
-            if runtime_paths.USING_CUSTOM_DATA_ROOT:
-                default_project = conn.execute(
-                    "SELECT root_path FROM projects WHERE id = ?",
-                    (DEFAULT_PROJECT_ID,),
-                ).fetchone()
-                current_root = str(default_project["root_path"] or "") if default_project else ""
-                if _is_stale_desktop_default_project_path(current_root):
-                    conn.execute(
-                        "UPDATE projects SET root_path = ?, updated_at = ? WHERE id = ?",
-                        (str(default_project_root()), now, DEFAULT_PROJECT_ID),
-                    )
+            default_root = runtime_paths.project_default_root(DEFAULT_PROJECT_ID)
+            default_root.mkdir(parents=True, exist_ok=True)
+            primary = str(default_root.resolve())
             conn.execute(
                 """
                 INSERT OR IGNORE INTO projects (
-                    id, workspace_id, name, description, root_path,
-                    instructions_file, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, '', 'active', ?, ?)
+                    slug, name, primary_path, status, created_at, updated_at
+                ) VALUES (?, ?, ?, 'active', ?, ?)
                 """,
-                (
-                    DEFAULT_PROJECT_ID,
-                    DEFAULT_WORKSPACE_ID,
-                    "默认项目",
-                    "历史会话和未显式选择项目的运行所在项目。",
-                    str(default_project_root()),
-                    now,
-                    now,
-                ),
+                (DEFAULT_PROJECT_ID, "默认项目", primary, now, now),
             )
-            for table in ("agents", "mcp_servers", "http_tools"):
-                conn.execute(
-                    f"UPDATE {table} SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''",
-                    (DEFAULT_WORKSPACE_ID,),
-                )
-            for table in ("chat_sessions", "chat_runs", "run_events", "memory_nodes", "subagent_invocations"):
-                conn.execute(
-                    f"UPDATE {table} SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''",
-                    (DEFAULT_WORKSPACE_ID,),
-                )
-                conn.execute(
-                    f"UPDATE {table} SET project_id = ? WHERE project_id IS NULL OR project_id = ''",
-                    (DEFAULT_PROJECT_ID,),
-                )
             conn.execute(
-                "UPDATE skill_evolution_records SET project_id = ? WHERE project_id IS NULL OR project_id = ''",
-                (DEFAULT_PROJECT_ID,),
+                """
+                INSERT OR IGNORE INTO project_folders (
+                    project_slug, path, access_mode, is_primary, granted_at
+                ) VALUES (?, ?, 'readwrite', 1, ?)
+                """,
+                (DEFAULT_PROJECT_ID, primary, now),
             )
-            _migrate_project_resource_bindings(conn, now=now)
+            current = conn.execute(
+                "SELECT primary_path FROM projects WHERE slug = ?",
+                (DEFAULT_PROJECT_ID,),
+            ).fetchone()
+            if current is not None and _is_stale_desktop_default_project_path(str(current["primary_path"] or "")):
+                conn.execute(
+                    "UPDATE projects SET primary_path = ?, updated_at = ? WHERE slug = ?",
+                    (primary, now, DEFAULT_PROJECT_ID),
+                )
+                conn.execute(
+                    "UPDATE project_folders SET path = ? WHERE project_slug = ? AND is_primary = 1",
+                    (primary, DEFAULT_PROJECT_ID),
+                )
+            conn.execute("DROP INDEX IF EXISTS idx_memory_nodes_project_date")
+            conn.execute("DROP INDEX IF EXISTS idx_trace_observations_project_started")
             conn.executescript("""
                 CREATE INDEX IF NOT EXISTS idx_chat_sessions_project_updated
-                    ON chat_sessions(project_id, updated_at DESC);
+                    ON chat_sessions(project_slug, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_chat_runs_project_updated
-                    ON chat_runs(project_id, updated_at DESC);
+                    ON chat_runs(project_slug, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_run_events_project_session_order
-                    ON run_events(project_id, session_id, sort_order, created_at);
+                    ON run_events(project_slug, session_id, sort_order, created_at);
                 CREATE INDEX IF NOT EXISTS idx_memory_nodes_project_date
-                    ON memory_nodes(project_id, node_date DESC);
+                    ON memory_nodes(project_slug, node_date DESC);
                 CREATE INDEX IF NOT EXISTS idx_subagent_invocations_project_run
-                    ON subagent_invocations(project_id, run_id, started_at);
+                    ON subagent_invocations(project_slug, run_id, started_at);
                 CREATE INDEX IF NOT EXISTS idx_trace_observations_run_started
                     ON trace_observations(run_id, started_at);
                 CREATE INDEX IF NOT EXISTS idx_trace_observations_project_started
-                    ON trace_observations(project_id, started_at DESC);
+                    ON trace_observations(project_slug, started_at DESC);
             """)
             conn.execute(
                 "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (1, ?)",
@@ -570,149 +487,69 @@ def _reset_legacy_chat_stream_data(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS chat_run_states")
 
 
-def _workspace_project_record_store() -> WorkspaceProjectRecordStore:
-    """创建复用当前数据库基础设施的 Workspace / Project 领域存储。"""
+def _project_record_store() -> ProjectRecordStore:
+    """Project 以 slug 为身份。"""
 
-    return WorkspaceProjectRecordStore(
+    from src.tenancy.context import current_tenant
+
+    return ProjectRecordStore(
         ensure_db=ensure_db,
         connect=_connect,
         lock=_lock,
         utc_now=_utc_now,
-        dumps=_dumps,
-        loads=_loads,
-        bind_workspace_resources=_bind_workspace_resources,
-        resource_tables=_PROJECT_RESOURCE_TABLES,
-        default_workspace_id=DEFAULT_WORKSPACE_ID,
-        project_root=default_project_root(),
+        default_root=runtime_paths.project_default_root,
+        hosted=lambda: current_tenant().is_hosted,
     )
 
 
-def list_workspaces(*, include_archived: bool = False) -> list[dict[str, Any]]:
-    """列出 Workspace。"""
+def list_projects(*, include_archived: bool = False) -> list[dict[str, Any]]:
+    """列出 Project。"""
 
-    return _workspace_project_record_store().list_workspaces(include_archived=include_archived)
-
-
-def get_workspace(workspace_id: str) -> dict[str, Any] | None:
-    """读取一个 Workspace。"""
-
-    return _workspace_project_record_store().get_workspace(workspace_id)
-
-
-def create_workspace(data: dict[str, Any]) -> dict[str, Any]:
-    """创建 Workspace。"""
-
-    return _workspace_project_record_store().create_workspace(data)
-
-
-def list_projects(
-    workspace_id: str | None = None,
-    *,
-    include_archived: bool = False,
-) -> list[dict[str, Any]]:
-    """列出 Project，可按 Workspace 过滤。"""
-
-    return _workspace_project_record_store().list_projects(
-        workspace_id,
-        include_archived=include_archived,
-    )
+    return _project_record_store().list_projects(include_archived=include_archived)
 
 
 def get_project(project_id: str) -> dict[str, Any] | None:
-    """读取一个 Project。"""
+    """按 slug 读取 Project。"""
 
-    return _workspace_project_record_store().get_project(project_id)
+    return _project_record_store().get_project(project_id)
 
 
 def create_project(data: dict[str, Any]) -> dict[str, Any]:
-    """创建 Project，并把当前缓存里同一 Workspace 的 Skill 写入初始绑定。"""
+    """创建 Project。名称派生 slug，重名直接拒绝。"""
 
-    project = _workspace_project_record_store().create_project(data)
-    _bind_cached_skills(str(project.get("id") or ""), str(project.get("workspaceId") or ""))
-    return project
-
-
-def _bind_cached_skills(project_id: str, workspace_id: str) -> None:
-    if not project_id or not workspace_id:
-        return
-    from src.skills.registry import _skills
-
-    now = _utc_now()
-    with _lock, _connect() as conn:
-        for skill in _skills.values():
-            if str(getattr(skill, "workspace_id", "") or "") != workspace_id:
-                continue
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO project_resource_bindings (
-                    project_id, resource_type, resource_id, enabled,
-                    config_override, created_at, updated_at
-                ) VALUES (?, 'skill', ?, 1, '{}', ?, ?)
-                """,
-                (project_id, skill.id, now, now),
-            )
-        conn.commit()
+    payload = dict(data)
+    if not payload.get("primaryPath") and not payload.get("primary_path"):
+        payload["primaryPath"] = payload.get("rootPath") or payload.get("root_path")
+    return _project_record_store().create_project(payload)
 
 
 def update_project(project_id: str, changes: dict[str, Any]) -> dict[str, Any] | None:
-    """更新 Project 可编辑字段。"""
+    """归档 Project。名称创建后不可改。"""
 
-    return _workspace_project_record_store().update_project(project_id, changes)
-
-
-def list_project_resource_bindings(project_id: str) -> list[dict[str, Any]]:
-    """列出 Project 资源绑定。"""
-
-    return _workspace_project_record_store().list_resource_bindings(project_id)
-
-
-def get_workspace_resource(
-    resource_type: str,
-    resource_id: str,
-) -> dict[str, str] | None:
-    """读取持久资源的 Workspace 归属。"""
-
-    if resource_type == "skill":
-        from src.skills.registry import _skills
-
-        skill = _skills.get(resource_id)
-        if skill is None:
-            return None
-        return {
-            "id": skill.id,
-            "workspaceId": str(skill.workspace_id or DEFAULT_WORKSPACE_ID),
-        }
-    if resource_type == "agent":
-        try:
-            from src.catalog.loader import get_registered_agent
-
-            agent = get_registered_agent(resource_id)
-            if agent is not None:
-                return {"id": agent.id, "workspaceId": agent.workspace_id}
-        except Exception:
-            pass
-    found = _workspace_project_record_store().get_workspace_resource(resource_type, resource_id)
-    if found is not None:
-        return found
-    if resource_type == "mcp":
-        from src.catalog.mcp_files import discover_mcp_files
-
-        for record in discover_mcp_files():
-            if record.id == resource_id:
-                return {"id": record.id, "workspaceId": record.workspace_id}
-    if resource_type == "http_tool":
-        from src.catalog.http_files import discover_http_files
-
-        for record in discover_http_files():
-            if record.id == resource_id:
-                return {"id": record.id, "workspaceId": record.workspace_id}
-    return None
+    store = _project_record_store()
+    if str(changes.get("status") or "") == "archived":
+        return store.archive_project(project_id)
+    if "color" in changes or "icon" in changes:
+        return store.update_appearance(
+            project_id,
+            color=changes.get("color"),
+            icon=changes.get("icon"),
+            set_color="color" in changes,
+            set_icon="icon" in changes,
+        )
+    return get_project(project_id)
 
 
-def upsert_project_resource_binding(data: dict[str, Any]) -> dict[str, Any]:
-    """创建或更新一个 Project 资源绑定。"""
+def add_project_folder(slug: str, path: str, access_mode: str = "read") -> dict[str, Any] | None:
+    """追加一条目录授权。"""
 
-    return _workspace_project_record_store().upsert_resource_binding(data)
+    return _project_record_store().add_folder(slug, path, access_mode)
+
+
+def delete_project(slug: str) -> bool:
+    """删除非默认 Project。"""
+
+    return _project_record_store().delete_project(slug)
 
 
 def get_chat_session_location(session_id: str) -> dict[str, str] | None:
@@ -795,7 +632,6 @@ def _resource_catalog_record_store() -> ResourceCatalogRecordStore:
         default_model_config=DEFAULT_MODEL_CONFIG,
         default_plan_config=DEFAULT_PLAN_CONFIG,
         default_guardrails=default_guardrails(),
-        default_workspace_id=DEFAULT_WORKSPACE_ID,
     )
 
 
@@ -837,7 +673,6 @@ def upsert_agent(data: dict[str, Any]) -> None:
         "status": "idle",
         "created_at": data.get("created_at") or utc_now(),
         "updated_at": data.get("updated_at") or utc_now(),
-        "workspaceId": data.get("workspaceId") or data.get("workspace_id") or "default",
         "role": data.get("role") or "chat",
         "jobToolkit": data.get("jobToolkit") or data.get("job_toolkit") or {},
     }
@@ -931,7 +766,6 @@ def replace_skills(records: dict[str, dict[str, Any]]) -> None:
                 "availableToAllAgents",
                 data.get("available_to_all_agents", True),
             )),
-            workspace_id=str(data.get("workspaceId") or data.get("workspace_id") or "default"),
         )
     reload_skill_cache()
 
@@ -990,14 +824,16 @@ def list_memory_markdown_candidates(
     *,
     status: str | None = "pending",
     scope: str | None = None,
-    project_id: str | None = None,
+    project_slug: str | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    return _memory_markdown_candidate_store().list(status=status, scope=scope, project_id=project_id, limit=limit)
+    return _memory_markdown_candidate_store().list(
+        status=status, scope=scope, project_slug=project_slug, limit=limit,
+    )
 
 
-def count_pending_memory_markdown_candidates(*, project_id: str | None = None) -> int:
-    return _memory_markdown_candidate_store().count_pending(project_id=project_id)
+def count_pending_memory_markdown_candidates(*, project_slug: str | None = None) -> int:
+    return _memory_markdown_candidate_store().count_pending(project_slug=project_slug)
 
 
 def set_memory_markdown_candidate_status(record_id: str, *, status: str, resolution: str = "") -> dict[str, Any] | None:
@@ -1052,8 +888,7 @@ def _chat_session_record_store() -> ChatSessionRecordStore:
         dumps=_dumps,
         loads=_loads,
         empty_display_snapshot=EMPTY_DISPLAY_SNAPSHOT,
-        default_workspace_id=DEFAULT_WORKSPACE_ID,
-        default_project_id=DEFAULT_PROJECT_ID,
+        default_project_slug=DEFAULT_PROJECT_ID,
     )
 
 
@@ -1085,8 +920,8 @@ def get_chat_session(session_id: str) -> dict[str, Any] | None:
     return _chat_session_record_store().get_session(session_id)
 
 
-def list_chat_sessions(*, project_id: str | None = None, kind: str | None = None) -> list[dict[str, Any]]:
-    return _chat_session_record_store().list_sessions(project_id=project_id, kind=kind)
+def list_chat_sessions(*, project_slug: str | None = None, kind: str | None = None) -> list[dict[str, Any]]:
+    return _chat_session_record_store().list_sessions(project_slug=project_slug, kind=kind)
 
 
 def insert_chat_session_if_absent(session: dict[str, Any]) -> dict[str, Any]:
@@ -1127,7 +962,6 @@ def _trace_record_store() -> TraceRecordStore:
         utc_now=_utc_now,
         dumps=_dumps,
         loads=_loads,
-        default_workspace_id=DEFAULT_WORKSPACE_ID,
         default_project_id=DEFAULT_PROJECT_ID,
     )
 
@@ -1142,7 +976,6 @@ def _observation_record_store() -> ObservationRecordStore:
         utc_now=_utc_now,
         dumps=_dumps,
         loads=_loads,
-        default_workspace_id=DEFAULT_WORKSPACE_ID,
         default_project_id=DEFAULT_PROJECT_ID,
     )
 
@@ -1225,8 +1058,7 @@ def append_run_event(
     title: str = "",
     content: str = "",
     payload: dict[str, Any] | None = None,
-    workspace_id: str | None = None,
-    project_id: str | None = None,
+    project_slug: str | None = None,
 ) -> dict[str, Any]:
     """Append one normalized runtime event for trace inspection."""
     if session_id:
@@ -1235,8 +1067,7 @@ def append_run_event(
             "title": "未命名会话",
             "agent_id": agent_id or "",
             "agent_name": agent_name or "",
-            "workspace_id": workspace_id or DEFAULT_WORKSPACE_ID,
-            "project_id": project_id or DEFAULT_PROJECT_ID,
+            "project_slug": project_slug or DEFAULT_PROJECT_ID,
             "created_at": _utc_now(),
             "updated_at": _utc_now(),
         })
@@ -1250,8 +1081,7 @@ def append_run_event(
         title=title,
         content=content,
         payload=payload,
-        workspace_id=workspace_id,
-        project_id=project_id,
+        project_slug=project_slug,
     )
 
 
@@ -1377,7 +1207,7 @@ def list_subagent_transcript_items(
 def list_run_events_by_type(
     event_type: str,
     *,
-    project_id: str = DEFAULT_PROJECT_ID,
+    project_slug: str = DEFAULT_PROJECT_ID,
     include_payload: bool = True,
     limit: int = 50,
     offset: int = 0,
@@ -1386,7 +1216,7 @@ def list_run_events_by_type(
 
     return _trace_record_store().list_events_by_type(
         event_type,
-        project_id=project_id,
+        project_slug=project_slug,
         include_payload=include_payload,
         limit=limit,
         offset=offset,
@@ -1406,8 +1236,7 @@ def _chat_run_record_store() -> ChatRunRecordStore:
         connect=_connect,
         lock=_lock,
         utc_now=_utc_now,
-        default_workspace_id=DEFAULT_WORKSPACE_ID,
-        default_project_id=DEFAULT_PROJECT_ID,
+        default_project_slug=DEFAULT_PROJECT_ID,
     )
 
 
@@ -1426,14 +1255,14 @@ def update_chat_run_status(run_id: str, status: str, completed_at: str | None = 
 def list_chat_runs(
     limit: int = 50,
     *,
-    project_id: str | None = None,
+    project_slug: str | None = None,
     trigger_source: str | None = None,
 ) -> list[dict[str, Any]]:
     """列出持久化 Chat Run。"""
 
     return _chat_run_record_store().list(
         limit,
-        project_id=project_id,
+        project_slug=project_slug,
         trigger_source=trigger_source,
     )
 
@@ -1520,10 +1349,10 @@ def lookup_active_group_studios_by_chat_session_ids(
     return _group_studio_record_store().lookup_active_by_chat_session_ids(session_ids)
 
 
-def list_group_studios_by_project(project_id: str) -> list[dict[str, Any]]:
+def list_group_studios_by_project(project_slug: str) -> list[dict[str, Any]]:
     """列出某 Project 工作室（含已归档，不含用户删除）。"""
 
-    return _group_studio_record_store().list_active_by_project(project_id)
+    return _group_studio_record_store().list_active_by_project(project_slug)
 
 
 def find_blank_group_studio_draft_id(project_id: str) -> str | None:
@@ -1912,8 +1741,7 @@ def _memory_record_store() -> MemoryRecordStore:
         utc_now=_utc_now,
         dumps=_dumps,
         loads=_loads,
-        default_workspace_id=DEFAULT_WORKSPACE_ID,
-        default_project_id=DEFAULT_PROJECT_ID,
+        default_project_slug=DEFAULT_PROJECT_ID,
     )
 
 
@@ -1929,8 +1757,7 @@ def get_memory_node(node_id: str) -> dict[str, Any] | None:
 
 def list_memory_nodes(
     *,
-    workspace_id: str = "default",
-    project_id: str = DEFAULT_PROJECT_ID,
+    project_slug: str = DEFAULT_PROJECT_ID,
     agent_id: str | None = None,
     user_id: str | None = None,
     date_from: str | None = None,
@@ -1939,15 +1766,14 @@ def list_memory_nodes(
     limit: int = 30,
 ) -> list[dict[str, Any]]:
     return _memory_record_store().list(
-        workspace_id=workspace_id, project_id=project_id, agent_id=agent_id,
+        project_slug=project_slug, agent_id=agent_id,
         user_id=user_id, date_from=date_from, date_to=date_to, status=status, limit=limit,
     )
 
 
 def search_memory_nodes(
     *,
-    workspace_id: str = "default",
-    project_id: str = DEFAULT_PROJECT_ID,
+    project_slug: str = DEFAULT_PROJECT_ID,
     agent_id: str | None = None,
     user_id: str | None = None,
     date_from: str | None = None,
@@ -1957,7 +1783,7 @@ def search_memory_nodes(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     return _memory_record_store().search(
-        workspace_id=workspace_id, project_id=project_id, agent_id=agent_id,
+        project_slug=project_slug, agent_id=agent_id,
         user_id=user_id, date_from=date_from, date_to=date_to, query_text=query_text,
         status=status, limit=limit,
     )
@@ -1983,11 +1809,10 @@ def mark_memory_node_used(node_id: str) -> dict[str, Any] | None:
 
 
 def find_session_day_memory_node(
-    *, workspace_id: str, project_id: str, agent_id: str, node_date: str, source_session_id: str
+    *, project_slug: str, agent_id: str, node_date: str, source_session_id: str
 ) -> dict[str, Any] | None:
     return _memory_record_store().find_session_day_node(
-        workspace_id=workspace_id,
-        project_id=project_id,
+        project_slug=project_slug,
         agent_id=agent_id,
         node_date=node_date,
         source_session_id=source_session_id,
@@ -2020,7 +1845,7 @@ def _skill_evolution_record_store() -> SkillEvolutionRecordStore:
         utc_now=_utc_now,
         dumps=_dumps,
         loads=_loads,
-        default_project_id=DEFAULT_PROJECT_ID,
+        default_project_slug=DEFAULT_PROJECT_ID,
     )
 
 
@@ -2040,7 +1865,7 @@ def list_skill_evolution_records(
     *,
     status: str | None = None,
     agent_id: str | None = None,
-    project_id: str = DEFAULT_PROJECT_ID,
+    project_slug: str = DEFAULT_PROJECT_ID,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """按 Project、状态或 Agent 列出 Skill 自进化候选记录。"""
@@ -2048,7 +1873,7 @@ def list_skill_evolution_records(
     return _skill_evolution_record_store().list(
         status=status,
         agent_id=agent_id,
-        project_id=project_id,
+        project_slug=project_slug,
         limit=limit,
     )
 
@@ -2265,8 +2090,7 @@ def _scheduled_job_record_store() -> ScheduledJobRecordStore:
         utc_now=_utc_now,
         dumps=_dumps,
         loads=_loads,
-        default_workspace_id=DEFAULT_WORKSPACE_ID,
-        default_project_id=DEFAULT_PROJECT_ID,
+        default_project_slug=DEFAULT_PROJECT_ID,
     )
 
 
@@ -2290,14 +2114,14 @@ def get_scheduled_job(job_id: str) -> dict[str, Any] | None:
 
 def list_scheduled_jobs(
     *,
-    project_id: str | None = None,
+    project_slug: str | None = None,
     agent_id: str | None = None,
     status: str | None = None,
 ) -> list[dict[str, Any]]:
     """按 Project / Agent / 状态列出 ScheduledJob。"""
 
     return _scheduled_job_record_store().list_jobs(
-        project_id=project_id, agent_id=agent_id, status=status,
+        project_slug=project_slug, agent_id=agent_id, status=status,
     )
 
 
@@ -2402,7 +2226,7 @@ def get_user_notification(note_id: str) -> dict[str, Any] | None:
 
 def list_user_notifications(
     *,
-    project_id: str | None = None,
+    project_slug: str | None = None,
     unread_only: bool = False,
     limit: int = 50,
     before: str | None = None,
@@ -2410,17 +2234,17 @@ def list_user_notifications(
     """按时间倒序列出应用内通知。"""
 
     return _scheduled_job_record_store().list_notifications(
-        project_id=project_id,
+        project_slug=project_slug,
         unread_only=unread_only,
         limit=limit,
         before=before,
     )
 
 
-def count_unread_user_notifications(*, project_id: str | None = None) -> int:
+def count_unread_user_notifications(*, project_slug: str | None = None) -> int:
     """未读通知条数。"""
 
-    return _scheduled_job_record_store().count_unread_notifications(project_id=project_id)
+    return _scheduled_job_record_store().count_unread_notifications(project_slug=project_slug)
 
 
 def mark_user_notification_read(note_id: str) -> dict[str, Any] | None:
@@ -2429,7 +2253,7 @@ def mark_user_notification_read(note_id: str) -> dict[str, Any] | None:
     return _scheduled_job_record_store().mark_notification_read(note_id)
 
 
-def mark_all_user_notifications_read(*, project_id: str | None = None) -> int:
+def mark_all_user_notifications_read(*, project_slug: str | None = None) -> int:
     """将未读通知全部标为已读，返回更新行数。"""
 
-    return _scheduled_job_record_store().mark_all_notifications_read(project_id=project_id)
+    return _scheduled_job_record_store().mark_all_notifications_read(project_slug=project_slug)

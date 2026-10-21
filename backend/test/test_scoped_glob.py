@@ -33,7 +33,7 @@ def test_scoped_glob_accepts_project_relative_base_path(tmp_path: Path, monkeypa
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "contract.md").write_text("# contract")
-    monkeypatch.setattr("src.tools.scoped_paths.default_project_root", lambda: tmp_path)
+    monkeypatch.setattr("src.tools.scoped_paths.project_default_root", lambda: tmp_path)
 
     chunk = asyncio.run(ScopedGlob()(pattern="*.md", path="docs"))
 

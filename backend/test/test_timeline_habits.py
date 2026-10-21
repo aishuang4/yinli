@@ -81,8 +81,7 @@ def test_timeline_search_returns_neighbor_messages(isolated_db):
         model_name="model",
         content="帮我把销售表按地区汇总",
         images=[],
-        workspace_id="ws-1",
-        project_id="proj-1",
+        project_slug="proj-1",
     )
     _append_assistant_message(
         session_id="session-sales",
@@ -100,11 +99,10 @@ def test_timeline_search_returns_neighbor_messages(isolated_db):
         model_name="model",
         content="帮我把销售表按地区汇总",
         images=[],
-        workspace_id="ws-1",
-        project_id="proj-1",
+        project_slug="proj-1",
     )
 
-    found = search_timeline(query_text="销售表", agent_id="agent-1", workspace_id="ws-1", project_id="proj-1")
+    found = search_timeline(query_text="销售表", agent_id="agent-1", project_slug="proj-1")
     contents = [item["content"] for item in found["messages"]]
     assert "帮我把销售表按地区汇总" in contents
     assert "华东还没汇总完。" in contents
@@ -236,11 +234,11 @@ def test_timeline_marks_group_surface(isolated_db):
         conn.execute(
             """
             INSERT INTO group_studios (
-                id, workspace_id, project_id, chat_session_id, title, status,
+                id, project_slug, chat_session_id, title, status,
                 current_task_card_id, budget_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            ("gstu_tl", DEFAULT_WORKSPACE_ID, DEFAULT_PROJECT_ID, "sess-group-tl", "群", "open", "card", "{}", now, now),
+            ("gstu_tl", DEFAULT_PROJECT_ID, "sess-group-tl", "群", "open", "card", "{}", now, now),
         )
         conn.execute(
             """

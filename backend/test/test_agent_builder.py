@@ -48,7 +48,7 @@ async def test_apply_builder_binds_agents_to_current_project(monkeypatch: pytest
         "status": "idle",
         "created_at": created_at,
         "updated_at": created_at,
-        "workspaceId": "workspace-1",
+        
         "role": "chat",
         "jobToolkit": {},
     })
@@ -60,13 +60,13 @@ async def test_apply_builder_binds_agents_to_current_project(monkeypatch: pytest
 
     monkeypatch.setattr(agent_builder, "get_project", lambda project_id: {
         "id": project_id,
-        "workspaceId": "workspace-1",
+        
     })
     monkeypatch.setattr(agent_builder, "create_agent", fake_create_agent)
 
     response = await agent_builder.apply_agents(BuilderApplyRequest(
-        workspaceId="workspace-1",
-        projectId="project-1",
+        
+        projectSlug="project-1",
         plan=BuilderPlanResponse(
             requirement="测试",
             agents=[BuilderAgentDraft(name="生成 Agent")],
@@ -75,4 +75,4 @@ async def test_apply_builder_binds_agents_to_current_project(monkeypatch: pytest
 
     assert response.created_agents[0].id == "generated-agent"
     assert len(create_calls) == 1
-    assert getattr(create_calls[0], "workspace_id") == "workspace-1"
+    assert create_calls[0].name == "生成 Agent"

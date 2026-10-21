@@ -1,5 +1,6 @@
 """运行时配置构建 — guardrails、权限模式、MCP/知识库工具规格、用户消息内容。"""
 
+import os
 from typing import Any
 from pathlib import Path
 
@@ -77,14 +78,10 @@ def scope_guardrails_to_project(
     guardrails: AgentGuardrails,
     project_root: Path,
 ) -> AgentGuardrails:
-    """计算 Agent 文件范围与 Project root 的交集。"""
+    """计算 Agent 文件范围与 Project 主目录的交集。"""
 
     project_path = project_root.expanduser().resolve()
-    agent_path = Path(guardrails.filesystem_scope).expanduser().resolve()
-    # 安装包升级后，历史 Agent 可能仍保存旧 userData 下的 workspace。
-    # 该目录已不存在时按当前 Project root 迁移，避免旧路径导致整轮对话被拒绝。
-    if not agent_path.is_dir() and _is_legacy_desktop_scope(agent_path, project_path):
-        agent_path = project_path
+    agent_path = _agent_scope_path(guardrails, project_path)
     if project_path.is_relative_to(agent_path):
         effective_scope = project_path
     elif agent_path.is_relative_to(project_path):
@@ -93,8 +90,37 @@ def scope_guardrails_to_project(
         raise ValueError(
             f"Agent filesystem scope {agent_path} 与 Project root {project_path} 不相交。",
         )
+    return _copy_guardrails(guardrails, str(effective_scope))
+
+
+def directory_scope_for_run(guardrails: AgentGuardrails, context) -> tuple[AgentGuardrails, list[str]]:
+    """文件范围 = Project folders ∩ Agent scope。额外目录留给 Read，写范围另判。"""
+
+    from src.project_resources import DirectoryGrantError, grant_roots
+
+    agent_path = _agent_scope_path(guardrails, context.project_root)
+    try:
+        readable, writable = grant_roots(context, agent_path)
+    except DirectoryGrantError as exc:
+        raise ValueError(str(exc)) from exc
+    primary = writable[0] if writable else readable[0]
+    extras = [str(path) for path in readable if os.path.realpath(path) != os.path.realpath(primary)]
+    return _copy_guardrails(guardrails, str(primary)), extras
+
+
+def _agent_scope_path(guardrails: AgentGuardrails, project_root: Path) -> Path:
+    """历史桌面安装目录不存在时，改用当前 Project 主目录。"""
+
+    project_path = project_root.expanduser().resolve()
+    agent_path = Path(guardrails.filesystem_scope).expanduser().resolve()
+    if not agent_path.is_dir() and _is_legacy_desktop_scope(agent_path, project_path):
+        return project_path
+    return agent_path
+
+
+def _copy_guardrails(guardrails: AgentGuardrails, filesystem_scope: str) -> AgentGuardrails:
     return AgentGuardrails(
-        filesystem_scope=str(effective_scope),
+        filesystem_scope=filesystem_scope,
         shell_blacklist=guardrails.shell_blacklist,
         network_enabled=guardrails.network_enabled,
         human_approval=guardrails.human_approval,
@@ -106,10 +132,6 @@ def scope_guardrails_to_project(
         timeout_seconds=guardrails.timeout_seconds,
         permission_profile=guardrails.permission_profile,
     )
-    from src.tenancy.capabilities import coerce_hosted_guardrails
-
-    coerced = coerce_hosted_guardrails(runtime_guardrails)
-    return coerced if coerced is not None else runtime_guardrails
 
 
 def _is_legacy_desktop_scope(agent_path: Path, project_path: Path) -> bool:

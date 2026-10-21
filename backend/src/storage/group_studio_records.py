@@ -128,11 +128,11 @@ class GroupStudioRecordStore:
         with self.lock, self.connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT s.id, s.title, s.status, s.project_id, s.workspace_id,
+                SELECT s.id, s.title, s.status, s.project_slug,
                        s.chat_session_id, s.updated_at
                 FROM group_studios s
                 JOIN group_task_cards t ON t.id = s.current_task_card_id
-                WHERE s.project_id = ? AND s.status != 'deleted'
+                WHERE s.project_slug = ? AND s.status != 'deleted'
                 ORDER BY CASE WHEN s.status IN ('done', 'archived', 'failed') THEN 1 ELSE 0 END,
                          s.updated_at DESC
                 """,
@@ -143,8 +143,7 @@ class GroupStudioRecordStore:
                 "id": str(row["id"]),
                 "title": str(row["title"] or "未命名工作室"),
                 "status": normalize_studio_status(str(row["status"])),
-                "projectId": str(row["project_id"]),
-                "workspaceId": str(row["workspace_id"]),
+                "projectSlug": str(row["project_slug"]),
                 "chatSessionId": str(row["chat_session_id"]),
                 "updatedAt": str(row["updated_at"]),
             }
@@ -161,7 +160,7 @@ class GroupStudioRecordStore:
                 SELECT s.id
                 FROM group_studios s
                 JOIN group_task_cards t ON t.id = s.current_task_card_id
-                WHERE s.project_id = ? AND {self._BLANK_DRAFT_SQL}
+                WHERE s.project_slug = ? AND {self._BLANK_DRAFT_SQL}
                 ORDER BY s.updated_at DESC
                 LIMIT 1
                 """,
@@ -239,8 +238,7 @@ class GroupStudioRecordStore:
         ]
         snapshot = {
             "id": studio["id"],
-            "projectId": studio["project_id"],
-            "workspaceId": studio["workspace_id"],
+            "projectSlug": studio["project_slug"],
             "chatSessionId": studio["chat_session_id"],
             "title": studio["title"],
             "modelConfigId": studio["model_config_id"],
@@ -1313,7 +1311,7 @@ class GroupStudioRecordStore:
         with self.lock, self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, status, current_run_id, workspace_id, project_id,
+                SELECT id, status, current_run_id, project_slug,
                        chat_session_id, title
                 FROM group_studios
                 WHERE current_run_id != ''
@@ -1325,8 +1323,7 @@ class GroupStudioRecordStore:
                 "id": str(row["id"]),
                 "status": str(row["status"]),
                 "currentRunId": str(row["current_run_id"] or ""),
-                "workspaceId": str(row["workspace_id"]),
-                "projectId": str(row["project_id"]),
+                "projectSlug": str(row["project_slug"]),
                 "chatSessionId": str(row["chat_session_id"]),
                 "title": str(row["title"]),
             }
@@ -1409,18 +1406,17 @@ class GroupStudioRecordStore:
         conn.execute(
             """
             INSERT INTO group_studios (
-                id, workspace_id, project_id, chat_session_id, title, status,
+                id, project_slug, chat_session_id, title, status,
                 phase_before_pause, current_task_card_id, awaiting_restatement,
                 awaiting_intake_confirm,
                 orchestrator_meta, budget_json, current_run_id,
                 pending_speaker_member_id, speaker_queue_json, claim_round_json,
                 created_at, updated_at, archived_at, model_config_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 group_id,
-                payload["workspaceId"],
-                payload["projectId"],
+                str(payload.get("projectSlug") or payload.get("project_slug") or "default"),
                 payload["chatSessionId"],
                 payload["title"],
                 payload["status"],

@@ -151,8 +151,7 @@ class SkillEvolutionRecordInput(BaseModel):
     user_message: str = ""
     assistant_text: str = ""
     user_id: str = "default"
-    workspace_id: str = "default"
-    project_id: str = "default"
+    project_slug: str = "default"
     team_id: str = ""
     source_run_id: str = ""
     source_message_id: str = ""
@@ -206,8 +205,7 @@ def persist_skill_evolution_record(payload: SkillEvolutionRecordInput) -> dict[s
     )
     return upsert_skill_evolution_record({
         "id": record_id,
-        "workspace_id": payload.workspace_id,
-        "project_id": payload.project_id,
+        "project_slug": payload.project_slug,
         "agent_id": payload.agent_id,
         "agent_name": payload.agent_name,
         "team_id": payload.team_id,

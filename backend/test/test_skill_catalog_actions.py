@@ -30,34 +30,34 @@ def test_disk_skills_can_be_installed_uninstalled_and_deleted(tmp_path: Path, mo
     monkeypatch.setattr("src.skills.registry.runtime_user_home_root", lambda: None)
     monkeypatch.setattr(
         "src.server.routes.skills.get_project",
-        lambda project_id: {"id": project_id, "rootPath": str(project), "workspaceId": "default"},
+        lambda project_id: {"slug": project_id, "primaryPath": str(project)},
     )
 
-    listed = asyncio.run(routes.list_skills(project_id="project-1"))
+    listed = asyncio.run(routes.list_skills(project_slug="project-1"))
     skill = _by_name(listed, "bugfix-writer")
     assert skill.status == "installed"
     assert skill.description == "旧说明"
     assert "旧正文" in skill.content
 
     _write_skill(package, name="bugfix-writer", description="新说明", body="新正文")
-    refreshed = asyncio.run(routes.list_skills(project_id="project-1"))
+    refreshed = asyncio.run(routes.list_skills(project_slug="project-1"))
     skill = _by_name(refreshed, "bugfix-writer")
     assert skill.description == "新说明"
     assert "新正文" in skill.content
 
-    uninstalled = asyncio.run(routes.uninstall_skill(skill.id, "default", "project-1"))
+    uninstalled = asyncio.run(routes.uninstall_skill(skill.id, "project-1"))
     assert uninstalled.status == "available"
     assert uninstalled.enabled is False
 
     installed = asyncio.run(
-        routes.install_skill(uninstalled.id, SkillInstallRequest(enabled=True), "default", "project-1"),
+        routes.install_skill(uninstalled.id, SkillInstallRequest(enabled=True), "project-1"),
     )
     assert installed.status == "installed"
     assert installed.enabled is True
 
-    asyncio.run(routes.delete_skill(installed.id, "default", "project-1"))
+    asyncio.run(routes.delete_skill(installed.id, "project-1"))
     assert not package.exists()
-    remaining = asyncio.run(routes.list_skills(project_id="project-1"))
+    remaining = asyncio.run(routes.list_skills(project_slug="project-1"))
     assert all(item.name != "bugfix-writer" for item in remaining)
 
 
@@ -71,14 +71,14 @@ def test_user_scope_skill_installs_instead_of_404(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr("src.skills.registry.runtime_user_home_root", lambda: None)
     monkeypatch.setattr(
         "src.server.routes.skills.get_project",
-        lambda project_id: {"id": project_id, "rootPath": str(project), "workspaceId": "default"},
+        lambda project_id: {"slug": project_id, "primaryPath": str(project)},
     )
 
-    listed = asyncio.run(routes.list_skills(project_id="project-1"))
+    listed = asyncio.run(routes.list_skills(project_slug="project-1"))
     skill = _by_name(listed, "bugfix-notes")
     assert skill.status == "available"
     installed = asyncio.run(
-        routes.install_skill(skill.id, SkillInstallRequest(), "default", "project-1"),
+        routes.install_skill(skill.id, SkillInstallRequest(), "project-1"),
     )
     assert installed.status == "installed"
     assert installed.enabled is True

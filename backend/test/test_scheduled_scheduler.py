@@ -87,8 +87,8 @@ def _service() -> ScheduledJobService:
 
 def _weekly_job(service: ScheduledJobService, **overrides):
     payload = {
-        "workspace_id": DEFAULT_WORKSPACE_ID,
-        "project_id": DEFAULT_PROJECT_ID,
+        
+        "project_slug": DEFAULT_PROJECT_ID,
         "name": "周五周报",
         "agent_id": "default",
         "schedule_kind": "weekly",
@@ -396,13 +396,13 @@ def test_succeeded_firing_writes_job_completed_notification(isolated_db, monkeyp
             await asyncio.gather(*list(scheduler._inflight), return_exceptions=True)
         firing = service.list_firings(job.id)[0]
         assert firing.status == "succeeded"
-        notes = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+        notes = list_user_notifications(project_slug=DEFAULT_PROJECT_ID)
         completed = [item for item in notes if item["kind"] == "job_completed"]
         assert len(completed) == 1
         assert completed[0]["job_id"] == job.id
         assert completed[0]["firing_id"] == firing.id
         service.complete_firing(firing.id, "succeeded")
-        again = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+        again = list_user_notifications(project_slug=DEFAULT_PROJECT_ID)
         assert len([item for item in again if item["kind"] == "job_completed"]) == 1
         await scheduler.stop()
 
@@ -420,7 +420,7 @@ def test_missed_firing_writes_job_missed_notification(isolated_db):
         assert stats["missed"] == 1
         firing = service.list_firings(job.id)[0]
         assert firing.status == "missed"
-        notes = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+        notes = list_user_notifications(project_slug=DEFAULT_PROJECT_ID)
         missed = [item for item in notes if item["kind"] == "job_missed"]
         assert len(missed) == 1
         assert missed[0]["job_id"] == job.id
@@ -441,7 +441,7 @@ def test_skip_silent_missed_does_not_write_notification(isolated_db):
         assert stats["missed"] == 1
         firing = service.list_firings(job.id)[0]
         assert firing.status == "missed"
-        notes = list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+        notes = list_user_notifications(project_slug=DEFAULT_PROJECT_ID)
         assert notes == []
 
     asyncio.run(run_case())

@@ -14,8 +14,7 @@ TIMELINE_MAX_CHARS = 12000
 
 def search_timeline(
     *,
-    workspace_id: str = "",
-    project_id: str = "",
+    project_slug: str = "",
     agent_id: str = "",
     surface: str = "",
     time_from: str = "",
@@ -27,8 +26,7 @@ def search_timeline(
     """按标签和时间找出原文，并带上同一会话里的邻近消息。"""
 
     hits = search_timeline_messages(
-        workspace_id=workspace_id,
-        project_id=project_id,
+        project_slug=project_slug,
         agent_id=agent_id,
         surface=surface,
         time_from=time_from,

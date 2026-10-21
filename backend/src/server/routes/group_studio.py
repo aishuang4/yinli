@@ -91,10 +91,10 @@ def _gone() -> None:
 
 
 @router.get("", dependencies=[EnabledDep])
-async def list_studios_route(projectId: str = Query(..., alias="projectId")) -> dict:
+async def list_studios_route(project_slug: str = Query(..., alias="projectSlug")) -> dict:
     """列出当前 Project 工作室（含 done，不含 deleted）。"""
 
-    return {"studios": list_studios(projectId)}
+    return {"studios": list_studios(project_slug)}
 
 
 @router.post("/from-chat", dependencies=[EnabledDep])
@@ -135,11 +135,11 @@ async def list_available_agents_route(group_id: str) -> list[dict[str, str]]:
 
 
 @router.delete("/{group_id}", dependencies=[EnabledDep], status_code=204)
-async def delete_studio_route(group_id: str, projectId: str = Query(..., alias="projectId")) -> None:
+async def delete_studio_route(group_id: str, project_slug: str = Query(..., alias="projectSlug")) -> None:
     """删除群聊：标 deleted，不再出现在列表。"""
 
     try:
-        delete_studio(group_id, project_id=projectId)
+        delete_studio(group_id, project_slug=project_slug)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
 
@@ -147,7 +147,7 @@ async def delete_studio_route(group_id: str, projectId: str = Query(..., alias="
 @router.patch("/{group_id}/model", dependencies=[EnabledDep])
 async def update_model(group_id: str, body: GroupStudioModelUpdateRequest) -> GroupStudio:
     try:
-        return update_studio_model(group_id, body.project_id, body.model_config_id)
+        return update_studio_model(group_id, body.project_slug, body.model_config_id)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
     except ValueError as exc:
@@ -234,7 +234,7 @@ async def _heartbeat_wrapper(source):
 @router.post("/{group_id}/pause", dependencies=[EnabledDep])
 async def pause_studio_route(group_id: str, body: GroupPauseRequest) -> GroupStudio:
     try:
-        return pause_studio(group_id, project_id=body.project_id)
+        return pause_studio(group_id, project_slug=body.project_slug)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
 
@@ -242,7 +242,7 @@ async def pause_studio_route(group_id: str, body: GroupPauseRequest) -> GroupStu
 @router.post("/{group_id}/resume", dependencies=[EnabledDep])
 async def resume_studio_route(group_id: str, body: GroupResumeRequest) -> GroupStudio:
     try:
-        return resume_studio(group_id, project_id=body.project_id, max_turns=body.max_turns)
+        return resume_studio(group_id, project_slug=body.project_slug, max_turns=body.max_turns)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
 
@@ -260,7 +260,7 @@ async def post_message(group_id: str, body: GroupMessageCreateRequest) -> GroupM
     try:
         return post_human_message(
             group_id,
-            project_id=body.project_id,
+            project_slug=body.project_slug,
             body=body.body,
             mentions=body.mentions,
         )
@@ -271,7 +271,7 @@ async def post_message(group_id: str, body: GroupMessageCreateRequest) -> GroupM
 @router.post("/{group_id}/rerun", dependencies=[EnabledDep])
 async def rerun_studio(group_id: str, body: GroupRerunRequest) -> GroupStudio:
     try:
-        return rerun_last_turn(group_id, project_id=body.project_id)
+        return rerun_last_turn(group_id, project_slug=body.project_slug)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
 
@@ -279,7 +279,7 @@ async def rerun_studio(group_id: str, body: GroupRerunRequest) -> GroupStudio:
 @router.post("/{group_id}/interrupt", dependencies=[EnabledDep])
 async def interrupt_studio(group_id: str, body: GroupInterruptRequest) -> dict:
     try:
-        interrupt_run(group_id, project_id=body.project_id)
+        interrupt_run(group_id, project_slug=body.project_slug)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
     return {"ok": True}
@@ -311,7 +311,7 @@ async def mute_member_route(
     body: GroupMemberMuteRequest,
 ) -> Membership:
     try:
-        return mute_member(group_id, member_id, body.muted, project_id=body.project_id)
+        return mute_member(group_id, member_id, body.muted, project_slug=body.project_slug)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
 
@@ -323,7 +323,7 @@ async def remove_member_route(
     body: GroupMemberRemoveRequest,
 ) -> Membership:
     try:
-        return remove_member(group_id, member_id, project_id=body.project_id)
+        return remove_member(group_id, member_id, project_slug=body.project_slug)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
 
@@ -331,7 +331,7 @@ async def remove_member_route(
 @router.post("/{group_id}/close", dependencies=[EnabledDep])
 async def close_studio_route(group_id: str, body: GroupCloseRequest) -> GroupStudio:
     try:
-        return close_group_studio(group_id, project_id=body.project_id, confirm=body.confirm)
+        return close_group_studio(group_id, project_slug=body.project_slug, confirm=body.confirm)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
 
@@ -349,7 +349,7 @@ async def decide_approval(group_id: str, body: GroupApprovalDecisionRequest) -> 
     try:
         return decide_studio_approval(
             group_id,
-            project_id=body.project_id,
+            project_slug=body.project_slug,
             approval_id=body.approval_id,
             decision=body.decision,
         )
@@ -377,10 +377,10 @@ async def start_review(group_id: str, body: GroupStartPhaseRequest) -> GroupStud
 async def upload_file(
     group_id: str,
     file: UploadFile = File(...),
-    project_id: str = Query("", alias="projectId"),
+    project_slug: str = Query("", alias="projectSlug"),
 ) -> GroupArtifact:
     try:
-        return await upload_studio_file(group_id, file, project_id=project_id)
+        return await upload_studio_file(group_id, file, project_slug=project_slug)
     except GroupStudioError as exc:
         raise group_studio_http_error(exc.status_code, exc.code) from exc
 

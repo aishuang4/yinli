@@ -1,0 +1,70 @@
+"""启动时封存旧库和旧 workspaces 目录。新代码不读取封存内容。"""
+
+from __future__ import annotations
+
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+
+_checked: set[Path] = set()
+
+
+def archive_legacy_layout(data_dir: Path) -> Path | None:
+    """每个数据目录只检查一次。没有旧痕迹时不创建封存目录。"""
+
+    key = data_dir.resolve()
+    if key in _checked:
+        return None
+    _checked.add(key)
+    tenant = data_dir.parent
+    old_db = data_dir / "agent_workstation.db"
+    workspaces = tenant / "workspaces"
+    state_db = data_dir / "state.db"
+    move_state = state_db.is_file() and _has_workspaces_table(state_db)
+    if not old_db.is_file() and not workspaces.exists() and not move_state:
+        return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    dest = tenant / "backups" / f"legacy-{stamp}"
+    dest.mkdir(parents=True, exist_ok=True)
+    if old_db.is_file():
+        _checkpoint_and_move(old_db, dest)
+    if move_state:
+        _checkpoint_and_move(state_db, dest)
+    if workspaces.exists():
+        workspaces.rename(dest / "workspaces")
+    return dest
+
+
+def forget_archive_checks() -> None:
+    """测试 teardown 用。"""
+
+    _checked.clear()
+
+
+def _has_workspaces_table(path: Path) -> bool:
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return False
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'"
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+    return row is not None
+
+
+def _checkpoint_and_move(path: Path, dest: Path) -> None:
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        conn.close()
+    path.rename(dest / path.name)
+    for suffix in ("-wal", "-shm"):
+        side = Path(f"{path}{suffix}")
+        if side.exists():
+            side.rename(dest / side.name)

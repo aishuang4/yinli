@@ -11,9 +11,9 @@ Agent 管理路由
 """
 
 import os
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-from typing import Annotated, Optional
+from typing import Optional
 from datetime import datetime, timezone
 import uuid
 
@@ -112,7 +112,6 @@ class AgentCreate(BaseModel):
     tags: list[str] = Field(default_factory=list, description="标签")
     plan_config: PlanConfig = Field(default_factory=PlanConfig, alias="planConfig", description="历史兼容字段：旧计划模型配置")
     guardrails: Guardrails = Field(default_factory=Guardrails, description="安全边界配置")
-    workspace_id: str = Field(default="default", alias="workspaceId")
     role: str = Field(default="chat", description="chat=对话助手，job=定时任务执行者")
     job_toolkit: JobToolkit = Field(default_factory=JobToolkit, alias="jobToolkit")
 
@@ -304,16 +303,6 @@ def list_registered_agents() -> list[AgentResponse]:
     return list(_agents.values())
 
 
-def list_workspace_agents(workspace_id: str) -> list[AgentResponse]:
-    """当前 Workspace 可见的用户 Agent 与系统 Agent。"""
-
-    return [
-        agent
-        for agent in _agents.values()
-        if is_system_agent_id(agent.id) or agent.workspace_id == workspace_id
-    ]
-
-
 def remove_mcp_tools_from_agents(tool_ids: set[str]) -> int:
     """Remove deleted MCP tool ids from all persisted Agents."""
 
@@ -367,9 +356,7 @@ def remove_skills_from_agents(skill_ids: set[str]) -> int:
 
 
 @router.get("", response_model=list[AgentResponse])
-async def list_agents(
-    workspace_id: Annotated[str, Query(alias="workspaceId")] = "default",
-) -> list[AgentResponse]:
+async def list_agents() -> list[AgentResponse]:
     """
     获取所有 Agent 列表
 
@@ -377,11 +364,7 @@ async def list_agents(
         list[AgentResponse]: Agent 列表
     """
     _sync_agents_from_catalog()
-    return [
-        agent
-        for agent in _agents.values()
-        if is_system_agent_id(agent.id) or agent.workspace_id == workspace_id
-    ]
+    return list(_agents.values())
 
 
 @router.get("/{agent_id}/export", response_model=AgentExportPackage)
@@ -467,7 +450,6 @@ async def create_agent(data: AgentCreate) -> AgentResponse:
         "status": "idle",
         "created_at": now,
         "updated_at": now,
-        "workspaceId": data.workspace_id,
         "role": role,
         "jobToolkit": toolkit.model_dump(),
     })

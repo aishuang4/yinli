@@ -25,9 +25,9 @@ from src.server.routes.chat.runtime_events import runtime_trace_source_event
 from src.server.routes.chat.skill_runs import update_skill_run_status
 from src.server.routes.chat.store import _append_assistant_message
 from src.server.routes.chat.trace_recorder import _record_run_event, _trim_text
-from src.config.runtime_paths import default_project_root
-from src.storage.database import DEFAULT_PROJECT_ID, get_latest_completed_user_assistant_turn
-from src.runtime_context import RuntimeContext, resolve_runtime_context
+from src.config.runtime_paths import project_default_root
+from src.runtime_context import FolderGrant, RuntimeContext, resolve_runtime_context
+from src.storage.database import get_chat_session_location, get_latest_completed_user_assistant_turn
 
 
 def _permission_summary(run_id: str) -> dict:
@@ -157,9 +157,9 @@ async def finalize_successful_leader_run(
         )
     source_run_id = current_chat_background_run_id()
     resolved_runtime_context = runtime_context
-    if resolved_runtime_context is None and persist:
+    if resolved_runtime_context is None and persist and get_chat_session_location(session_id):
         resolved_runtime_context = resolve_runtime_context(
-            project_id=None,
+            project_slug=None,
             session_id=session_id,
             run_id=source_run_id,
             agent_id=agent_id,
@@ -418,8 +418,7 @@ def _build_memory_reflection_input(
                 runtime_events=list(previous_turn.get("runtimeEvents") or []),
                 manual_skill_request=True,
                 review_context=context,
-                workspace_id=resolved_context.workspace_id,
-                project_id=resolved_context.project_id,
+                project_slug=resolved_context.project_slug,
             )
 
     return MemoryReflectionInput(
@@ -432,18 +431,18 @@ def _build_memory_reflection_input(
         tool_calls=tool_calls,
         runtime_events=runtime_events,
         review_context=context,
-        workspace_id=resolved_context.workspace_id,
-        project_id=resolved_context.project_id,
+        project_slug=resolved_context.project_slug,
     )
 
 
 def _default_runtime_context(*, session_id: str, run_id: str, agent_id: str) -> RuntimeContext:
     """为不持久化运行和纯函数测试构造稳定的默认归属。"""
 
+    root = project_default_root("default")
     return RuntimeContext(
-        workspace_id="default",
-        project_id=DEFAULT_PROJECT_ID,
-        project_root=default_project_root(),
+        project_slug="default",
+        project_root=root,
+        folders=(FolderGrant(path=str(root), access_mode="readwrite"),),
         session_id=session_id,
         run_id=run_id,
         agent_id=agent_id,

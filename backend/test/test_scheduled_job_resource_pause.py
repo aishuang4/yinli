@@ -17,16 +17,11 @@ from src.server.routes import mcp as mcp_routes
 from src.server.routes import skills as skills_routes
 from src.server.routes import tools as tools_routes
 from src.server.routes.scheduled_jobs import confirm_scheduled_job
-from src.server.routes.workspaces import (
-    ProjectResourceBindingRequest,
-    ProjectUpdateRequest,
-    put_project_resource,
-    update_project_record,
-)
+from src.server.routes.projects import archive_project_record
 from src.storage import database
 from src.storage.database import (
     DEFAULT_PROJECT_ID,
-    DEFAULT_WORKSPACE_ID,
+    create_project,
     delete_agent,
     ensure_db,
     list_user_notifications,
@@ -34,7 +29,6 @@ from src.storage.database import (
     replace_skills,
     upsert_agent,
     upsert_http_tool,
-    upsert_project_resource_binding,
 )
 
 
@@ -57,7 +51,6 @@ def _ensure_agent(agent_id: str) -> None:
         "id": agent_id,
         "name": agent_id,
         "system_prompt": "prompt",
-        "workspaceId": DEFAULT_WORKSPACE_ID,
         "status": "idle",
     })
 
@@ -72,21 +65,13 @@ def _ensure_skill(skill_id: str) -> None:
             "status": "installed",
             "enabled": True,
             "updatedAt": "2026-08-20T00:00:00+00:00",
-            "workspaceId": DEFAULT_WORKSPACE_ID,
         },
-    })
-    upsert_project_resource_binding({
-        "project_id": DEFAULT_PROJECT_ID,
-        "resource_type": "skill",
-        "resource_id": skill_id,
-        "enabled": True,
     })
 
 
 def _weekly_job(service: ScheduledJobService, **overrides):
     payload = {
-        "workspace_id": DEFAULT_WORKSPACE_ID,
-        "project_id": DEFAULT_PROJECT_ID,
+        "project_slug": DEFAULT_PROJECT_ID,
         "name": "周五周报",
         "agent_id": "agent-1",
         "schedule_kind": "weekly",
@@ -106,31 +91,38 @@ def _confirm(service: ScheduledJobService, job_id: str):
 def _pause_notes(job_id: str) -> list[dict]:
     return [
         item
-        for item in list_user_notifications(project_id=DEFAULT_PROJECT_ID)
+        for item in list_user_notifications(project_slug=DEFAULT_PROJECT_ID)
         if item["job_id"] == job_id and item["kind"] == "job_paused"
     ]
 
 
-def test_archive_project_pauses_jobs(isolated_db):
-    """归档 Project 时立即暂停该项目下 active / pending Job 并写通知。"""
+def _named_project(tmp_path, name: str = "Reports") -> dict:
+    root = tmp_path / name
+    root.mkdir()
+    return create_project({"name": name, "primaryPath": str(root)})
+
+
+def test_archive_project_blocks_enable(isolated_db, tmp_path):
+    """归档后不能确认或恢复该项目的 Job。默认项目不能归档。"""
 
     service = _service()
-    pending = _weekly_job(service, name="待确认周报")
-    active = _confirm(service, _weekly_job(service, name="已启用周报").id)
+    project = _named_project(tmp_path)
+    pending = _weekly_job(service, name="待确认周报", project_slug=project["slug"])
+    active = _confirm(service, _weekly_job(service, name="已启用周报", project_slug=project["slug"]).id)
 
-    asyncio.run(update_project_record(
-        DEFAULT_PROJECT_ID,
-        ProjectUpdateRequest(status="archived"),
-    ))
+    with pytest.raises(HTTPException, match="默认项目不能归档") as exc_info:
+        asyncio.run(archive_project_record(DEFAULT_PROJECT_ID))
+    assert exc_info.value.status_code == 422
 
-    pending = service.get_job(pending.id)
-    active = service.get_job(active.id)
-    assert pending.status == "paused"
-    assert pending.pause_reason == "project_archived"
-    assert active.status == "paused"
-    assert active.pause_reason == "project_archived"
-    assert _pause_notes(pending.id)
-    assert _pause_notes(active.id)
+    archived = asyncio.run(archive_project_record(project["slug"]))
+    assert archived.status == "archived"
+    assert service.get_job(pending.id).status == "pending_confirmation"
+    assert service.get_job(active.id).status == "active"
+    with pytest.raises(ScheduledJobStateError, match="已归档"):
+        service.confirm(pending.id)
+    service.pause(active.id, reason="user")
+    with pytest.raises(ScheduledJobStateError, match="已归档"):
+        service.resume(active.id)
 
 
 def test_disable_agent_pauses_jobs(isolated_db, monkeypatch):
@@ -157,7 +149,6 @@ def test_disable_agent_pauses_jobs(isolated_db, monkeypatch):
         "status": "idle",
         "created_at": "2026-08-20T00:00:00+00:00",
         "updated_at": "2026-08-20T00:00:00+00:00",
-        "workspaceId": DEFAULT_WORKSPACE_ID,
     })
     monkeypatch.setattr(agents_routes, "_agents", {"agent-gone": agent})
 
@@ -172,40 +163,33 @@ def test_disable_agent_pauses_jobs(isolated_db, monkeypatch):
     assert not _pause_notes(keep.id)
 
 
-def test_skill_binding_removal_pauses_jobs_that_required_that_skill(isolated_db):
-    """移出 Skill 绑定只暂停冻结了该 Skill 的 Job。"""
+def test_skill_catalog_uninstall_pauses_only_jobs_that_froze_it(isolated_db, monkeypatch):
+    """Skill 不再靠 Project binding。未绑定也能确认；从全局目录卸载才暂停冻结了它的 Job。"""
 
     service = _service()
-    replace_skills({
-        "skill-report": {
-            "id": "skill-report",
-            "name": "周报技能",
-            "description": "",
-            "category": "test",
-            "status": "installed",
-            "enabled": True,
-            "updatedAt": "2026-08-20T00:00:00+00:00",
-            "workspaceId": DEFAULT_WORKSPACE_ID,
-        },
-    })
-    upsert_project_resource_binding({
-        "project_id": DEFAULT_PROJECT_ID,
-        "resource_type": "skill",
-        "resource_id": "skill-report",
-        "enabled": True,
-    })
+    _ensure_skill("skill-report")
     needed = _confirm(
         service,
         _weekly_job(service, name="依赖技能", skill_ids=["skill-report"]).id,
     )
     other = _confirm(service, _weekly_job(service, name="不依赖技能").id)
+    assert needed.status == "active"
+    assert other.status == "active"
 
-    asyncio.run(put_project_resource(
-        DEFAULT_PROJECT_ID,
-        "skill",
-        "skill-report",
-        ProjectResourceBindingRequest(enabled=False),
-    ))
+    skill = skills_routes.Skill.model_validate({
+        "id": "skill-report",
+        "name": "周报技能",
+        "description": "",
+        "category": "test",
+        "status": "installed",
+        "enabled": True,
+        "updatedAt": "2026-08-20T00:00:00+00:00",
+    })
+    monkeypatch.setattr(skills_routes, "_skills", {"skill-report": skill})
+    monkeypatch.setattr(skills_routes, "_upsert_external_override", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(skills_routes, "reload_skill_cache", lambda *_args, **_kwargs: None)
+
+    asyncio.run(skills_routes.uninstall_skill("skill-report"))
 
     needed = service.get_job(needed.id)
     other = service.get_job(other.id)
@@ -216,32 +200,27 @@ def test_skill_binding_removal_pauses_jobs_that_required_that_skill(isolated_db)
     assert not _pause_notes(other.id)
 
 
-def test_confirm_after_archive_pending_job_fails(isolated_db):
-    """归档后 pending Job 已暂停，confirm 必须 409 且保持 pause_reason。"""
+def test_confirm_after_archive_pending_job_fails(isolated_db, tmp_path):
+    """归档后 pending Job 不能确认，REST 返回 409。"""
 
     service = _service()
-    pending = _weekly_job(service, name="归档后不可确认")
-    asyncio.run(update_project_record(
-        DEFAULT_PROJECT_ID,
-        ProjectUpdateRequest(status="archived"),
-    ))
+    project = _named_project(tmp_path, "Archive")
+    pending = _weekly_job(service, name="归档后不可确认", project_slug=project["slug"])
+    asyncio.run(archive_project_record(project["slug"]))
     pending = service.get_job(pending.id)
-    assert pending.status == "paused"
-    assert pending.pause_reason == "project_archived"
+    assert pending.status == "pending_confirmation"
 
-    with pytest.raises(ScheduledJobStateError, match="pending_confirmation"):
-        service.confirm(pending.id)
     with pytest.raises(ScheduledJobStateError, match="已归档"):
-        service.resume(pending.id)
+        service.confirm(pending.id)
 
     set_scheduled_jobs_enabled(True)
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(confirm_scheduled_job(pending.id))
     assert exc_info.value.status_code == 409
+    assert "已归档" in str(exc_info.value.detail)
 
     frozen = service.get_job(pending.id)
-    assert frozen.status == "paused"
-    assert frozen.pause_reason == "project_archived"
+    assert frozen.status == "pending_confirmation"
 
 
 def test_update_agent_removing_skill_pauses_jobs(isolated_db, monkeypatch):
@@ -269,7 +248,6 @@ def test_update_agent_removing_skill_pauses_jobs(isolated_db, monkeypatch):
         "status": "idle",
         "created_at": "2026-08-20T00:00:00+00:00",
         "updated_at": "2026-08-20T00:00:00+00:00",
-        "workspaceId": DEFAULT_WORKSPACE_ID,
     })
     monkeypatch.setattr(agents_routes, "_agents", {"agent-1": agent})
     monkeypatch.setattr(
@@ -310,10 +288,10 @@ def test_skill_uninstall_pauses_jobs(isolated_db, monkeypatch):
         "status": "installed",
         "enabled": True,
         "updatedAt": "2026-08-20T00:00:00+00:00",
-        "workspaceId": DEFAULT_WORKSPACE_ID,
     })
     monkeypatch.setattr(skills_routes, "_skills", {"skill-report": skill})
-    monkeypatch.setattr(skills_routes, "_persist_if_user_skill", lambda _skill_id: None)
+    monkeypatch.setattr(skills_routes, "_upsert_external_override", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(skills_routes, "reload_skill_cache", lambda *_args, **_kwargs: None)
 
     asyncio.run(skills_routes.uninstall_skill("skill-report"))
 
@@ -337,14 +315,7 @@ def test_mcp_catalog_delete_pauses_jobs_requiring_mcp(isolated_db, monkeypatch):
             "status": "installed",
             "enabled": True,
             "updatedAt": "2026-08-20T00:00:00+00:00",
-            "workspaceId": DEFAULT_WORKSPACE_ID,
         },
-    })
-    upsert_project_resource_binding({
-        "project_id": DEFAULT_PROJECT_ID,
-        "resource_type": "mcp",
-        "resource_id": "mcp-custom",
-        "enabled": True,
     })
     needed = _confirm(
         service,
@@ -364,7 +335,6 @@ def test_mcp_catalog_delete_pauses_jobs_requiring_mcp(isolated_db, monkeypatch):
         "status": "installed",
         "enabled": True,
         "updatedAt": "2026-08-20T00:00:00+00:00",
-        "workspaceId": DEFAULT_WORKSPACE_ID,
     })
     monkeypatch.setattr(mcp_routes, "_mcp_servers", {"mcp-custom": server})
     monkeypatch.setattr(mcp_routes, "_builtin_mcp_servers", {})
@@ -388,13 +358,6 @@ def test_http_tool_delete_pauses_jobs_requiring_http(isolated_db):
         "id": "http-a",
         "name": "HTTP A",
         "url": "https://example.com/api",
-        "workspaceId": DEFAULT_WORKSPACE_ID,
-    })
-    upsert_project_resource_binding({
-        "project_id": DEFAULT_PROJECT_ID,
-        "resource_type": "http_tool",
-        "resource_id": "http-a",
-        "enabled": True,
     })
     needed = _confirm(
         service,
@@ -413,38 +376,28 @@ def test_http_tool_delete_pauses_jobs_requiring_http(isolated_db):
     assert _pause_notes(needed.id)
 
 
-def test_http_binding_removal_pauses_jobs_that_required_http(isolated_db):
-    """停用 HTTP Tool Project binding 时暂停 allow_http 的 Job。"""
+def test_http_without_binding_confirms_until_catalog_delete(isolated_db):
+    """HTTP 工具是租户全局目录。工具还在时 allow_http 可以确认；删除后只暂停依赖它的 Job。"""
 
     service = _service()
     upsert_http_tool({
         "id": "http-bound",
         "name": "HTTP Bound",
         "url": "https://example.com/bound",
-        "workspaceId": DEFAULT_WORKSPACE_ID,
-    })
-    upsert_project_resource_binding({
-        "project_id": DEFAULT_PROJECT_ID,
-        "resource_type": "http_tool",
-        "resource_id": "http-bound",
-        "enabled": True,
     })
     needed = _confirm(
         service,
         _weekly_job(
             service,
-            name="依赖 HTTP 绑定",
+            name="依赖 HTTP",
             tool_scope={"allow_http": True},
         ).id,
     )
     other = _confirm(service, _weekly_job(service, name="不依赖 HTTP").id)
+    assert needed.status == "active"
+    assert other.status == "active"
 
-    asyncio.run(put_project_resource(
-        DEFAULT_PROJECT_ID,
-        "http_tool",
-        "http-bound",
-        ProjectResourceBindingRequest(enabled=False),
-    ))
+    asyncio.run(tools_routes.delete_http_tool_config("http-bound"))
 
     needed = service.get_job(needed.id)
     other = service.get_job(other.id)
@@ -455,7 +408,7 @@ def test_http_binding_removal_pauses_jobs_that_required_http(isolated_db):
 
 
 def test_resume_after_mcp_catalog_delete_fails(isolated_db):
-    """MCP 从目录删除后，即使 binding 仍 enabled，resume 也必须失败。"""
+    """MCP 从全局目录删除后，resume 必须失败。"""
 
     service = _service()
     replace_mcp_servers({
@@ -468,14 +421,7 @@ def test_resume_after_mcp_catalog_delete_fails(isolated_db):
             "status": "installed",
             "enabled": True,
             "updatedAt": "2026-08-20T00:00:00+00:00",
-            "workspaceId": DEFAULT_WORKSPACE_ID,
         },
-    })
-    upsert_project_resource_binding({
-        "project_id": DEFAULT_PROJECT_ID,
-        "resource_type": "mcp",
-        "resource_id": "mcp-custom",
-        "enabled": True,
     })
     job = _confirm(
         service,

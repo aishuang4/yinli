@@ -25,13 +25,20 @@ def session_memory_prompt(
     *,
     agent_id: str,
     session_id: str | None,
+    project_slug: str = "",
     build: Callable[[], str],
 ) -> str:
-    """返回该会话冻结的旧记忆注入文本；首次（或失效后）调用 `build()` 生成。"""
+    """返回该会话冻结的旧记忆注入文本；首次（或失效后）调用 `build()` 生成。
+
+    有项目维度时，缓存键带上 project_slug，避免换项目后命中旧文本。
+    """
 
     if not session_id or not agent_id:
         return build()
-    return _cached(_cache, session_context_key(agent_id, session_id), build)
+    key = session_context_key(agent_id, session_id)
+    if project_slug:
+        key = f"{key}:project:{project_slug}"
+    return _cached(_cache, key, build)
 
 
 def session_habit_prompt(*, user_id: str, build: Callable[[], str]) -> str:
@@ -46,13 +53,17 @@ def session_professional_prompt(
     *,
     agent_id: str,
     session_id: str | None,
+    project_slug: str = "",
     build: Callable[[], str],
 ) -> str:
     """返回该智能体在这个会话里冻结的专业全文。没有会话时每次现算。"""
 
     if not agent_id or not session_id:
         return build()
-    return _cached(_professional_cache, session_context_key(agent_id, session_id), build)
+    key = session_context_key(agent_id, session_id)
+    if project_slug:
+        key = f"{key}:project:{project_slug}"
+    return _cached(_professional_cache, key, build)
 
 
 def invalidate_habit_prompts() -> int:

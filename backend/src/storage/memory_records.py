@@ -13,35 +13,38 @@ class MemoryRecordStore:
 
     def __init__(self, *, ensure_db: Callable[[], None], connect: Callable[[], sqlite3.Connection],
                  lock: Any, utc_now: Callable[[], str], dumps: Callable[[Any], str],
-                 loads: Callable[[str | None, Any], Any], default_workspace_id: str,
-                 default_project_id: str) -> None:
+                 loads: Callable[[str | None, Any], Any], default_project_slug: str) -> None:
         self.ensure_db = ensure_db
         self.connect = connect
         self.lock = lock
         self.utc_now = utc_now
         self.dumps = dumps
         self.loads = loads
-        self.default_workspace_id = default_workspace_id
-        self.default_project_id = default_project_id
+        self.default_project_slug = default_project_slug
 
     def upsert(self, data: dict[str, Any]) -> dict[str, Any]:
         self.ensure_db()
         now = self.utc_now()
         created_at = data.get("created_at") or now
         updated_at = data.get("updated_at") or now
+        project_slug = (
+            data.get("project_slug")
+            or data.get("projectSlug")
+            or self.default_project_slug
+        )
         with self.lock, self.connect() as conn:
             conn.execute(
                 """
                 INSERT INTO memory_nodes (
-                    id, workspace_id, project_id, agent_id, user_id, node_date,
+                    id, project_slug, agent_id, user_id, node_date,
                     date_range_start, date_range_end, title, summary, conversation_digest,
                     search_text, user_inputs, agent_final_outputs, tags, source,
                     source_session_id, source_run_id, source_message_id, confidence, status,
                     pinned, vector_status, vector_error, created_at, updated_at,
                     last_used_at, use_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
-                    workspace_id=excluded.workspace_id, project_id=excluded.project_id,
+                    project_slug=excluded.project_slug,
                     agent_id=excluded.agent_id, user_id=excluded.user_id,
                     node_date=excluded.node_date, date_range_start=excluded.date_range_start,
                     date_range_end=excluded.date_range_end, title=excluded.title,
@@ -55,8 +58,7 @@ class MemoryRecordStore:
                     updated_at=excluded.updated_at
                 """,
                 (
-                    data["id"], data.get("workspace_id") or self.default_workspace_id,
-                    data.get("project_id") or self.default_project_id, data["agent_id"],
+                    data["id"], project_slug, data["agent_id"],
                     data.get("user_id") or "default", data["node_date"],
                     data.get("date_range_start") or data["node_date"],
                     data.get("date_range_end") or data["node_date"],
@@ -82,35 +84,34 @@ class MemoryRecordStore:
             row = conn.execute("SELECT * FROM memory_nodes WHERE id = ?", (node_id,)).fetchone()
         return self._node_from_row(row) if row else None
 
-    def list(self, *, workspace_id: str = "default", project_id: str | None = None,
+    def list(self, *, project_slug: str | None = None,
              agent_id: str | None = None, user_id: str | None = None,
              date_from: str | None = None, date_to: str | None = None,
              status: str | None = "active", limit: int = 30) -> list[dict[str, Any]]:
         return self._query_nodes(
-            workspace_id=workspace_id, project_id=project_id, agent_id=agent_id,
+            project_slug=project_slug, agent_id=agent_id,
             user_id=user_id, date_from=date_from, date_to=date_to, status=status,
             query_text="", limit=max(1, min(limit, 500)),
         )
 
-    def search(self, *, workspace_id: str = "default", project_id: str | None = None,
+    def search(self, *, project_slug: str | None = None,
                agent_id: str | None = None, user_id: str | None = None,
                date_from: str | None = None, date_to: str | None = None,
                query_text: str = "", status: str | None = "active",
                limit: int = 10) -> list[dict[str, Any]]:
         return self._query_nodes(
-            workspace_id=workspace_id, project_id=project_id, agent_id=agent_id,
+            project_slug=project_slug, agent_id=agent_id,
             user_id=user_id, date_from=date_from, date_to=date_to, status=status,
             query_text=query_text, limit=max(1, min(limit, 100)),
         )
 
-    def _query_nodes(self, *, workspace_id: str, project_id: str | None,
+    def _query_nodes(self, *, project_slug: str | None,
                      agent_id: str | None, user_id: str | None, date_from: str | None,
                      date_to: str | None, status: str | None, query_text: str,
                      limit: int) -> list[dict[str, Any]]:
         self.ensure_db()
-        query = "SELECT * FROM memory_nodes WHERE workspace_id = ? AND project_id = ?"
-        params: list[Any] = [workspace_id or self.default_workspace_id,
-                             project_id or self.default_project_id]
+        query = "SELECT * FROM memory_nodes WHERE project_slug = ?"
+        params: list[Any] = [project_slug or self.default_project_slug]
         for clause, value in (("status", status), ("agent_id", agent_id), ("user_id", user_id)):
             if value:
                 query += f" AND {clause} = ?"
@@ -141,7 +142,7 @@ class MemoryRecordStore:
     def update_status(self, node_id: str, *, status: str) -> dict[str, Any] | None:
         return self._update_node(node_id, "status = ?, updated_at = ?", (status, self.utc_now()))
 
-    def find_session_day_node(self, *, workspace_id: str, project_id: str, agent_id: str,
+    def find_session_day_node(self, *, project_slug: str, agent_id: str,
                               node_date: str, source_session_id: str) -> dict[str, Any] | None:
         """同一会话、同一天、同一 Agent 的历史记忆聚合成一个节点。"""
 
@@ -152,11 +153,11 @@ class MemoryRecordStore:
             row = conn.execute(
                 """
                 SELECT * FROM memory_nodes
-                WHERE workspace_id = ? AND project_id = ? AND agent_id = ? AND node_date = ?
+                WHERE project_slug = ? AND agent_id = ? AND node_date = ?
                   AND source_session_id = ? AND status = 'active'
                 ORDER BY updated_at DESC LIMIT 1
                 """,
-                (workspace_id or self.default_workspace_id, project_id or self.default_project_id,
+                (project_slug or self.default_project_slug,
                  agent_id, node_date, source_session_id),
             ).fetchone()
         return self._node_from_row(row) if row else None
@@ -240,8 +241,9 @@ class MemoryRecordStore:
 
     def _node_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         return {
-            "id": row["id"], "workspace_id": row["workspace_id"],
-            "project_id": row["project_id"], "agent_id": row["agent_id"],
+            "id": row["id"],
+            "project_slug": row["project_slug"],
+            "agent_id": row["agent_id"],
             "user_id": row["user_id"], "node_date": row["node_date"],
             "date_range_start": row["date_range_start"], "date_range_end": row["date_range_end"],
             "title": row["title"], "summary": row["summary"],

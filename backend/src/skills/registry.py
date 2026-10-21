@@ -46,12 +46,12 @@ from src.server.routes.skill_packages import (
     _split_frontmatter,
     _write_skill_package as _write_skill_package_impl,
 )
-from src.storage.database import (
-    get_project,
-    delete_json_record,
-    get_json_record,
-    list_json_records,
-    upsert_json_record,
+from src.storage.database import (  # 路由仍从本模块再导出这些名字
+    get_project as get_project,
+    delete_json_record as delete_json_record,
+    get_json_record as get_json_record,
+    list_json_records as list_json_records,
+    upsert_json_record as upsert_json_record,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,13 +98,13 @@ class Skill(BaseModel):
     available_to_all_agents: bool = Field(default=True, alias="availableToAllAgents")
     installed_at: Optional[str] = Field(default=None, alias="installedAt")
     updated_at: str = Field(alias="updatedAt")
-    workspace_id: str = Field(default="default", alias="workspaceId")
     source_kind: str = Field(default="native", alias="sourceKind")
     source_scope: str = Field(default="system", alias="sourceScope")
     source_path: str = Field(default="", alias="sourcePath")
     content_hash: str = Field(default="", alias="contentHash")
+    shadowed_by: str = Field(default="", alias="shadowedBy")
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "ignore"}
 
 
 class SkillInstallRequest(BaseModel):
@@ -130,9 +130,8 @@ class SkillRegisterRequest(BaseModel):
     trigger: str = Field(default="", max_length=200)
     content: str = Field(default="", max_length=12000)
     tags: list[str] = Field(default_factory=list)
-    workspace_id: str = Field(default="default", alias="workspaceId")
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "ignore"}
 
 
 def _skill_package_dir(skill_name: str) -> str:
@@ -368,25 +367,58 @@ def _override_record(skill_id: str) -> dict[str, bool]:
     return dict(_external_skill_overrides.get(skill_id) or {})
 
 
-def _upsert_external_override(
-    skill_id: str,
-    *,
-    workspace_id: str | None = None,
-    **fields: bool,
-) -> dict[str, bool]:
-    """写入磁盘发现包与系统包的 enabled / 共享覆盖，不丢另一字段。"""
+_OVERRIDE_FIELDS = ("enabled", "installed", "availableToAllAgents")
+
+
+def _upsert_external_override(skill_id: str, **fields: object) -> dict[str, bool]:
+    """写入 skill_overrides 表。只保留 enabled / installed / availableToAllAgents，其它关键字丢弃。"""
+
+    from src.storage.database import write_tx
 
     current = _override_record(skill_id)
-    current.update(fields)
+    current.update({key: bool(value) for key, value in fields.items() if key in _OVERRIDE_FIELDS})
     _external_skill_overrides[skill_id] = current
-    existing = get_json_record(EXTERNAL_SKILL_OVERRIDES_NAMESPACE, skill_id) or {}
-    payload: dict[str, object] = {"id": skill_id, **current}
-    if workspace_id:
-        payload["workspaceId"] = workspace_id
-    elif existing.get("workspaceId"):
-        payload["workspaceId"] = existing["workspaceId"]
-    upsert_json_record(EXTERNAL_SKILL_OVERRIDES_NAMESPACE, skill_id, payload)
+    enabled = current.get("enabled")
+    share = current.get("availableToAllAgents")
+    installed = current.get("installed")
+    with write_tx() as conn:
+        row = conn.execute(
+            """
+            SELECT enabled, available_to_all_agents, installed
+            FROM skill_overrides WHERE skill_id = ?
+            """,
+            (skill_id,),
+        ).fetchone()
+        if enabled is None:
+            enabled = bool(row["enabled"]) if row else True
+        if share is None:
+            share = bool(row["available_to_all_agents"]) if row else True
+        if installed is None:
+            installed = bool(row["installed"]) if row else True
+        conn.execute(
+            """
+            INSERT INTO skill_overrides (
+                skill_id, enabled, available_to_all_agents, installed, updated_at
+            ) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(skill_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                available_to_all_agents = excluded.available_to_all_agents,
+                installed = excluded.installed,
+                updated_at = excluded.updated_at
+            """,
+            (skill_id, int(bool(enabled)), int(bool(share)), int(bool(installed)), _utc_now()),
+        )
     return current
+
+
+def delete_skill_override(skill_id: str) -> None:
+    """删掉一条策略覆盖。列表接口若只清内存，重扫会从这张表把记录读回来。"""
+
+    from src.storage.database import write_tx
+
+    _external_skill_overrides.pop(skill_id, None)
+    with write_tx() as conn:
+        conn.execute("DELETE FROM skill_overrides WHERE skill_id = ?", (skill_id,))
 
 
 def _resolved_share_flag(skill: Skill) -> bool:
@@ -450,12 +482,30 @@ def _hydrate_skill(skill: Skill) -> Skill:
     return refresh_skill_package(skill)
 
 
+def _category_from_package(item: DiscoveredSkill) -> str:
+    """系统包固定为系统。用户包保留 SKILL.md 里的 category，没有则记为外部导入。"""
+
+    if item.source_scope == "system":
+        return "系统"
+    match = re.match(r"\A---\s*\n(?P<yaml>.*?)\n---\s*\n?", item.markdown, re.DOTALL)
+    if match:
+        try:
+            loaded = yaml.safe_load(match.group("yaml")) or {}
+        except yaml.YAMLError:
+            loaded = {}
+        if isinstance(loaded, dict):
+            category = str(loaded.get("category") or "").strip()
+            if category:
+                return category[:40]
+    return "外部导入"
+
+
 def _skill_from_discovered(item: DiscoveredSkill) -> Skill:
     return Skill.model_validate({
         "id": item.id,
         "name": item.name,
         "description": item.description,
-        "category": "系统" if item.source_scope == "system" else "外部导入",
+        "category": _category_from_package(item),
         "trigger": item.trigger,
         "content": item.markdown,
         "tags": [item.source_scope, item.source_kind],
@@ -465,21 +515,22 @@ def _skill_from_discovered(item: DiscoveredSkill) -> Skill:
         "status": "installed",
         "enabled": item.enabled,
         "updatedAt": _utc_now(),
-        "workspaceId": "default",
         "sourceKind": item.source_kind,
         "sourceScope": item.source_scope,
         "sourcePath": item.source_path,
         "contentHash": item.content_hash,
+        "shadowedBy": item.shadowed_by,
     })
 
 
-def _load_system_packages() -> None:
-    """seed 系统包并登记为不可删除的内置 Skill。"""
+def _system_skill_map() -> dict[str, Skill]:
+    """seed 系统包并返回不可删除的内置 Skill。不直接改进程缓存。"""
 
     from src.catalog.skill_seed import seed_system_skills
     from src.catalog.skills import list_system_skill_packages
 
     seed_system_skills()
+    found: dict[str, Skill] = {}
     for item in list_system_skill_packages():
         skill = _skill_from_discovered(item).model_copy(update={
             "enabled": True,
@@ -487,61 +538,109 @@ def _load_system_packages() -> None:
             "category": "系统",
             "available_to_all_agents": True,
         })
-        _builtin_skills[skill.id] = skill
-        _skills[skill.id] = _with_share_flag(skill)
+        found[skill.id] = _with_share_flag(skill)
+    return found
+
+
+def _folder_paths(project: dict) -> list[Path]:
+    """授权目录优先；没有 folders 时用 primaryPath。不读旧的根路径字段。"""
+
+    paths: list[Path] = []
+    for folder in project.get("folders") or []:
+        if isinstance(folder, dict):
+            raw = str(folder.get("path") or "").strip()
+        else:
+            raw = str(folder or "").strip()
+        if raw:
+            paths.append(Path(raw))
+    if paths:
+        return paths
+    primary = str(project.get("primaryPath") or project.get("primary_path") or "").strip()
+    return [Path(primary)] if primary else []
 
 
 def _project_scan_roots(extra: Path | None = None) -> list[Path]:
+    seen: set[str] = set()
     roots: list[Path] = []
+
+    def _add(path: Path) -> None:
+        try:
+            key = str(path.expanduser().resolve())
+        except OSError:
+            key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        roots.append(path)
+
     if extra is not None:
-        roots.append(Path(extra))
+        _add(Path(extra))
     try:
         from src.storage.database import list_projects
 
         for project in list_projects():
-            raw = str(project.get("rootPath") or project.get("root_path") or "")
-            if raw:
-                roots.append(Path(raw))
+            for path in _folder_paths(project):
+                _add(path)
     except Exception:
-        logger.exception("读取 Project 根目录失败，Skill 扫描跳过项目目录")
+        logger.exception("读取 Project 授权目录失败，Skill 扫描跳过项目目录")
     return roots
 
 
+def _replace_mapping(target: dict, fresh: dict) -> None:
+    """先建好的字典整体换上，避免先清空再填充时读到空缓存。"""
+
+    scoped = getattr(target, "_scoped", None)
+    replace = getattr(scoped, "replace", None)
+    if callable(replace):
+        replace(fresh)
+        mark = getattr(target, "mark_loaded", None)
+        if callable(mark):
+            mark()
+        return
+    stale = [key for key in list(target) if key not in fresh]
+    target.update(fresh)
+    for key in stale:
+        target.pop(key, None)
+
+
 def reload_skill_cache(project_root: Path | None = None) -> None:
-    """清空进程缓存，再扫描约定目录。导入、更新、删除和启动都走这里。"""
+    """先建新缓存再整体替换。导入、更新、删除和启动都走这里。"""
 
     ensure_tenant_directories()
-    _skills.clear()
-    _builtin_skills.clear()
-    _load_system_packages()
-    _load_external_skill_overrides()
-    workspaces = {
-        str(item.get("id") or ""): str(item.get("workspaceId") or "")
-        for item in list_json_records(EXTERNAL_SKILL_OVERRIDES_NAMESPACE)
-        if item.get("workspaceId")
-    }
+    overrides = _read_skill_overrides()
+    _replace_mapping(_external_skill_overrides, overrides)
+    builtin = _system_skill_map()
+    skills: dict[str, Skill] = dict(builtin)
     for item in scan_skill_directories(skill_scan_targets(
         _project_scan_roots(project_root),
         runtime_root=skill_packages_root(),
     )):
         skill = _skill_from_discovered(item)
-        record = _override_record(skill.id)
+        record = overrides.get(skill.id, {})
         installed, enabled = _external_install_state(item, record)
         if skill.id in SYSTEM_SKILL_IDS:
-            _builtin_skills[skill.id] = skill
+            builtin[skill.id] = skill.model_copy(update={
+                "enabled": True,
+                "status": "installed",
+                "category": "系统",
+                "available_to_all_agents": True,
+            })
             installed, enabled = True, True
         share = True if _is_share_locked(skill.id) else (
             bool(record["availableToAllAgents"]) if "availableToAllAgents" in record else True
         )
-        _skills[skill.id] = _with_share_flag(skill.model_copy(update={
+        decorated = _with_share_flag(skill.model_copy(update={
             "status": "installed" if installed else "available",
             "enabled": enabled,
             "available_to_all_agents": share,
-            "workspace_id": workspaces.get(skill.id) or skill.workspace_id,
         }))
-    mark = getattr(_skills, "mark_loaded", None)
-    if mark is not None:
-        mark()
+        key = skill.id if not decorated.shadowed_by else f"{skill.id}@{skill.source_path}"
+        skills[key] = decorated
+    stale = [key for key in list(_builtin_skills) if key not in builtin]
+    _builtin_skills.update(builtin)
+    for key in stale:
+        _builtin_skills.pop(key, None)
+    _replace_mapping(_skills, skills)
 
 
 def _load_user_skills() -> None:
@@ -559,19 +658,19 @@ def discover_external_skills(
     *,
     user_data_root: Path | None = None,
     user_home_root: Path | None = None,
-    workspace_id: str = "default",
+    **_extra: object,
 ) -> list[Skill]:
     """发现标准 Agent/Claude Skill 包；项目级默认启用，用户级默认关闭。
 
     user_home_root 为 None（hosted）时跳过 HOME scope（§12.7）。
     """
 
+    del _extra
     discovered: list[Skill] = []
     for item in _discover_packages(
         Path(project_root),
         user_data_root=Path(user_data_root) if user_data_root is not None else tenant_root(),
         user_home_root=Path(user_home_root) if user_home_root is not None else runtime_user_home_root(),
-        workspace_id=workspace_id,
     ):
         skill = _skill_from_discovered(item)
         record = _override_record(skill.id)
@@ -606,25 +705,28 @@ def get_runtime_skill_catalog(project_root: Path) -> list[Skill]:
     """返回当前缓存。缓存只来自约定目录的最近一次扫描。"""
 
     reload_skill_cache(project_root)
-    return [refresh_skill_package(skill) for skill in _skills.values()]
+    return [
+        refresh_skill_package(skill)
+        for skill in _skills.values()
+        if not skill.shadowed_by
+    ]
 
 
 def find_skill(
     skill_id: str,
     project_root: Path | None,
-    *,
-    workspace_id: str = "default",
+    **_extra: object,
 ) -> Skill | None:
     """按 ID 查找已登记 Skill，或当前 Project 磁盘上的 Skill 包。"""
 
+    del _extra
     if skill_id in _skills:
         skill = _skills[skill_id]
-        if skill.id in _builtin_skills or skill.workspace_id == workspace_id:
-            return _with_share_flag(refresh_skill_package(skill))
+        return _with_share_flag(refresh_skill_package(skill))
     if project_root is None:
         return None
-    for skill in discover_external_skills(project_root, workspace_id=workspace_id):
-        if skill.id == skill_id:
+    for skill in discover_external_skills(project_root):
+        if skill.id == skill_id and not skill.shadowed_by:
             return _with_share_flag(skill)
     return None
 
@@ -661,36 +763,30 @@ def delete_registered_skill_files(skill: Skill) -> None:
         shutil.rmtree(skill.resource_path)
 
 
-def delete_external_skill(skill: Skill, *, project_root: Path, workspace_id: str) -> None:
-    """删除当前工作区扫描到的 Skill 包。系统包不能删。"""
+def delete_external_skill(skill: Skill, *, project_root: Path, **_extra: object) -> None:
+    """删除当前扫描到的 Skill 包。系统包不能删。"""
 
+    del _extra
     if skill.id in _builtin_skills or skill.id in SYSTEM_SKILL_IDS or skill.source_scope == "system":
         raise HTTPException(status_code=409, detail="Built-in Skill cannot be deleted")
     package = Path(skill.resource_path).resolve()
-    if not _package_is_deletable(package, project_root, workspace_id):
+    if not _package_is_deletable(package, project_root):
         raise HTTPException(status_code=409, detail="只能删除工作区里的 Skill 包")
     shutil.rmtree(package)
-    _external_skill_overrides.pop(skill.id, None)
-    delete_json_record(EXTERNAL_SKILL_OVERRIDES_NAMESPACE, skill.id)
+    delete_skill_override(skill.id)
 
 
-def _package_is_deletable(package: Path, project_root: Path, workspace_id: str) -> bool:
+def _package_is_deletable(package: Path, project_root: Path) -> bool:
     if not (package / "SKILL.md").is_file():
         return False
-    from src.catalog.paths import workspace_catalog_root
-
-    roots: list[Path] = []
-    bases = [project_root, tenant_root()]
+    roots: list[Path] = [skill_packages_root()]
+    bases = [project_root, tenant_root(), *_project_scan_roots()]
     home = runtime_user_home_root()
     if home is not None:
         bases.append(Path(home))
     for base in bases:
         for name in (".agents/skills", ".agent/skills", ".claude/skills"):
             roots.append(Path(base) / name)
-    try:
-        roots.append(workspace_catalog_root(workspace_id) / "skills")
-    except ValueError:
-        pass
     for root in roots:
         try:
             resolved = root.resolve()
@@ -701,23 +797,39 @@ def _package_is_deletable(package: Path, project_root: Path, workspace_id: str) 
     return False
 
 
+def _read_skill_overrides() -> dict[str, dict[str, bool]]:
+    """从 skill_overrides 表读策略覆盖，不改进程缓存。"""
+
+    from src.storage.database import read_conn
+
+    loaded: dict[str, dict[str, bool]] = {}
+    try:
+        with read_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT skill_id, enabled, available_to_all_agents, installed
+                FROM skill_overrides
+                """
+            ).fetchall()
+    except Exception:
+        logger.exception("读取 skill_overrides 失败")
+        return {}
+    for row in rows:
+        skill_id = str(row["skill_id"] or "")
+        if not skill_id:
+            continue
+        loaded[skill_id] = {
+            "enabled": bool(row["enabled"]),
+            "availableToAllAgents": bool(row["available_to_all_agents"]),
+            "installed": bool(row["installed"]),
+        }
+    return loaded
+
+
 def _load_external_skill_overrides() -> None:
     """加载 enabled 与 availableToAllAgents 覆盖。"""
 
-    _external_skill_overrides.clear()
-    for item in list_json_records(EXTERNAL_SKILL_OVERRIDES_NAMESPACE):
-        skill_id = str(item.get("id") or "")
-        if not skill_id:
-            continue
-        record: dict[str, bool] = {}
-        if "enabled" in item:
-            record["enabled"] = bool(item["enabled"])
-        if "availableToAllAgents" in item:
-            record["availableToAllAgents"] = bool(item["availableToAllAgents"])
-        if "installed" in item:
-            record["installed"] = bool(item["installed"])
-        if record:
-            _external_skill_overrides[skill_id] = record
+    _replace_mapping(_external_skill_overrides, _read_skill_overrides())
 
 
 def _save_user_skills() -> None:
@@ -874,7 +986,7 @@ def list_installed_enabled_skills() -> list[Skill]:
     return [
         _with_share_flag(refresh_skill_package(skill))
         for skill in _skills.values()
-        if skill.status == "installed" and skill.enabled
+        if skill.status == "installed" and skill.enabled and not skill.shadowed_by
     ]
 
 
@@ -891,7 +1003,7 @@ def resolve_installed_skills(
     enabled_skills = [
         skill
         for skill in _skills.values()
-        if skill.status == "installed" and skill.enabled
+        if skill.status == "installed" and skill.enabled and not skill.shadowed_by
     ]
     enabled_skills.extend(skill for skill in (external_skills or []) if skill.status == "installed" and skill.enabled)
     by_normalized_name = {

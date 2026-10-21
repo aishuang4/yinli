@@ -51,8 +51,7 @@ def _seed_run(
     upsert_chat_run({
         "id": run_id,
         "sessionId": session_id,
-        "projectId": project_id,
-        "workspaceId": "default",
+        "projectSlug": project_id,
         "agentId": "default",
         "agentName": "助手",
         "task": task,
@@ -377,7 +376,7 @@ def test_trace_api_lists_runs_and_rejects_session_id(client) -> None:
     open_run_root(persist=True, run_id="run-one", session_id="sess-shared", task="第一轮")
     close_run_root(persist=True, run_id="run-one", outcome="completed", output={"answer": "好"})
 
-    listed = client.get("/api/traces?projectId=default").json()
+    listed = client.get("/api/traces?projectSlug=default").json()
     ids = [item["id"] for item in listed]
     assert "run-one" in ids
     assert "run-two" in ids
@@ -387,17 +386,17 @@ def test_trace_api_lists_runs_and_rejects_session_id(client) -> None:
     assert cancelled["status"] == "cancelled"
     assert cancelled["durationMs"] is not None
 
-    missing = client.get("/api/traces/sess-shared?projectId=default")
+    missing = client.get("/api/traces/sess-shared?projectSlug=default")
     assert missing.status_code == 404
 
-    detail = client.get("/api/traces/run-one?projectId=default").json()
+    detail = client.get("/api/traces/run-one?projectSlug=default").json()
     assert detail["id"] == "run-one"
     assert detail["status"] == "completed"
     assert [item["kind"] for item in detail["observations"]] == ["run"]
     assert "events" not in detail
     assert "messages" not in detail
 
-    empty = client.get("/api/traces/run-two?projectId=default").json()
+    empty = client.get("/api/traces/run-two?projectSlug=default").json()
     assert empty["status"] == "cancelled"
     assert empty["observations"][0]["kind"] == "run"
     assert empty["observations"][0]["input"]["message"] == "第二轮"
@@ -598,10 +597,10 @@ def test_trace_api_waiting_matches_chat_run(client) -> None:
         data={"payload": {"interactionId": "i1", "toolCalls": [{"name": "AskUser"}]}},
     )
 
-    listed = client.get("/api/traces?projectId=default").json()
+    listed = client.get("/api/traces?projectSlug=default").json()
     row = next(item for item in listed if item["id"] == "run-w")
     assert row["status"] == "waiting_user"
-    detail = client.get("/api/traces/run-w?projectId=default").json()
+    detail = client.get("/api/traces/run-w?projectSlug=default").json()
     assert detail["status"] == "waiting_user"
     approval = next(item for item in detail["observations"] if item["kind"] == "approval")
     assert approval["status"] == "waiting"

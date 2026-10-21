@@ -24,8 +24,7 @@ def open_run_root(
     run_id: str,
     session_id: str,
     task: str,
-    workspace_id: str = "default",
-    project_id: str = "default",
+    project_slug: str = "default",
     agent_name: str = "",
     mode: str = "agent",
 ) -> str | None:
@@ -41,8 +40,7 @@ def open_run_root(
         kind="run",
         name=agent_name or "Chat",
         input_data={"message": task, "mode": mode},
-        workspace_id=workspace_id,
-        project_id=project_id,
+        project_slug=project_slug,
         observation_id=f"obs-run-{run_id}",
     )
 
@@ -75,8 +73,7 @@ def observe_source_event(
     session_id: str,
     event_type: str,
     data: dict[str, Any],
-    workspace_id: str = "default",
-    project_id: str = "default",
+    project_slug: str = "default",
 ) -> None:
     """按源信号开闭步骤。未知类型忽略。"""
 
@@ -102,8 +99,7 @@ def observe_source_event(
             name=str(input_data.get("model") or data.get("model_name") or payload.get("model") or "model"),
             parent_id=parent_id,
             input_data=input_data,
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
         )
         return
     if event_type == "MODEL_CALL_END":
@@ -154,8 +150,7 @@ def observe_source_event(
             parent_id=parent_id,
             input_data={},
             metadata={"toolCallId": call_id},
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
             observation_id=_tool_obs_id(run_id, call_id) if call_id else None,
         )
         return
@@ -173,8 +168,7 @@ def observe_source_event(
                 name=str(data.get("tool_call_name") or data.get("name") or "Tool"),
                 parent_id=parent_id,
                 metadata={"toolCallId": call_id},
-                workspace_id=workspace_id,
-                project_id=project_id,
+                project_slug=project_slug,
                 observation_id=_tool_obs_id(run_id, call_id),
             )
         input_value = parse_tool_arguments(
@@ -272,8 +266,7 @@ def observe_source_event(
             parent_id=parent_id,
             input_data={"interactionId": interaction_id, "type": event_type, "toolNames": names,
                         "authorizationFacts": facts},
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
             observation_id=_approval_obs_id(run_id, interaction_id) if interaction_id else None,
             status="waiting",
         )
@@ -306,8 +299,7 @@ def observe_source_event(
                 name=str(item.get("name") or skill_id),
                 parent_id=parent_id,
                 input_data={"skillId": skill_id},
-                workspace_id=workspace_id,
-                project_id=project_id,
+                project_slug=project_slug,
                 observation_id=_skill_obs_id(run_id, skill_id),
             )
         return
@@ -342,8 +334,7 @@ def observe_source_event(
             parent_id=parent_id,
             input_data={"task": payload.get("taskPreview") or payload.get("task") or ""},
             metadata={"invocationId": invocation_id},
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
             observation_id=_subagent_obs_id(run_id, invocation_id) if invocation_id else None,
         )
         return
@@ -374,8 +365,7 @@ def observe_source_event(
             session_id=session_id,
             data=data,
             parent_id=parent_id,
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
         )
 
 
@@ -521,8 +511,7 @@ def _observe_team_event(
     session_id: str,
     data: dict[str, Any],
     parent_id: str | None,
-    workspace_id: str,
-    project_id: str,
+    project_slug: str,
 ) -> None:
     source_type = str(data.get("type") or "")
     payload = data.get("payload") if isinstance(data.get("payload"), dict) else {}
@@ -538,8 +527,7 @@ def _observe_team_event(
             parent_id=parent_id,
             input_data={"goal": task.get("goal") or task.get("description") or ""},
             metadata={"taskId": task_id},
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
             observation_id=_team_task_obs_id(run_id, task_id),
         )
         return
@@ -571,8 +559,7 @@ def _observe_team_event(
             parent_id=_team_task_obs_id(run_id, task_id) if task_id else parent_id,
             input_data={},
             metadata={"toolCallId": tool_call_id, "taskId": task_id},
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
             observation_id=_tool_obs_id(run_id, f"team:{tool_call_id}") if tool_call_id else None,
         )
         return

@@ -72,8 +72,7 @@ class ChatBackgroundRun:
 
     id: str
     session_id: str
-    workspace_id: str = "default"
-    project_id: str = "default"
+    project_slug: str = "default"
     agent_id: str = ""
     agent_name: str = ""
     task_text: str = ""
@@ -138,11 +137,10 @@ def reconcile_interrupted_chat_runs() -> int:
         update_chat_run_status(run_id, "failed", completed_at)
         from src.storage.permission_records import PermissionRecordStore
 
-        if all(record.get(key) for key in ("id", "workspaceId", "projectId", "sessionId")):
+        if all(record.get(key) for key in ("id", "projectSlug", "sessionId")):
             PermissionRecordStore().invalidate_run_record(
                 run_id,
-                workspace_id=str(record["workspaceId"]),
-                project_id=str(record["projectId"]),
+                project_slug=str(record["projectSlug"]),
                 session_id=str(record["sessionId"]),
                 interrupted=True,
             )
@@ -194,7 +192,7 @@ async def attach_chat_background_run_task(run_id: str, task: asyncio.Task) -> bo
 
 
 async def list_chat_background_runs(
-    project_id: str | None = None,
+    project_slug: str | None = None,
     trigger_source: str | None = None,
 ) -> list[ChatBackgroundRun]:
     async with _runs_lock:
@@ -203,12 +201,12 @@ async def list_chat_background_runs(
             run.id: run
             for run in _runs.values()
             if run.tenant_id == tenant_id
-            and (not project_id or run.project_id == project_id)
+            and (not project_slug or run.project_slug == project_slug)
             and (not trigger_source or run.trigger_source == trigger_source)
         }
     for record in list_chat_runs(
         MAX_BACKGROUND_RUNS,
-        project_id=project_id,
+        project_slug=project_slug,
         trigger_source=trigger_source,
     ):
         if record["id"] not in by_id:
@@ -224,8 +222,7 @@ async def start_chat_background_run(
     agent_name: str = "",
     task: str = "",
     mode: str = "agent",
-    workspace_id: str = "default",
-    project_id: str = "default",
+    project_slug: str = "default",
     persist: bool = True,
     trigger_source: str = "user",
     scheduled_job_id: str = "",
@@ -250,8 +247,7 @@ async def start_chat_background_run(
         id=f"run-{uuid.uuid4().hex}",
         tenant_id=_current_tenant_id(),
         session_id=session_id,
-        workspace_id=workspace_id,
-        project_id=project_id,
+        project_slug=project_slug,
         agent_id=agent_id,
         agent_name=agent_name,
         task_text=task,
@@ -278,8 +274,7 @@ async def start_chat_background_run(
             run_id=run.id,
             session_id=run.session_id,
             task=task,
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
             agent_name=agent_name,
             mode=mode,
         )
@@ -388,8 +383,7 @@ async def steer_chat_background_run(
         model_name="",
         content=text,
         images=[],
-        workspace_id=run.workspace_id,
-        project_id=run.project_id,
+        project_slug=run.project_slug,
     )
     return run
 
@@ -422,12 +416,11 @@ def _release_cancelled_run(run: ChatBackgroundRun) -> None:
     from src.server.routes.chat.models import PENDING_AGENTS, PENDING_INTERACTIONS
     from src.storage.permission_records import PermissionRecordStore
 
-    if run.persisted and run.workspace_id and run.project_id and run.session_id:
+    if run.persisted and run.project_slug and run.session_id:
         try:
             PermissionRecordStore().invalidate_run_record(
                 run.id,
-                workspace_id=run.workspace_id,
-                project_id=run.project_id,
+                project_slug=run.project_slug,
                 session_id=run.session_id,
                 interrupted=False,
             )
@@ -543,8 +536,7 @@ def serialize_chat_background_run(run: ChatBackgroundRun) -> dict:
     return {
         "id": run.id,
         "sessionId": run.session_id,
-        "workspaceId": run.workspace_id,
-        "projectId": run.project_id,
+        "projectSlug": run.project_slug,
         "agentId": run.agent_id,
         "agentName": run.agent_name,
         "task": run.task_text,
@@ -696,8 +688,7 @@ def _observe_run_source(run: ChatBackgroundRun, event_type: str, data: dict) -> 
             session_id=run.session_id,
             event_type=event_type,
             data=data if isinstance(data, dict) else {},
-            workspace_id=run.workspace_id,
-            project_id=run.project_id,
+            project_slug=run.project_slug,
         )
     except Exception as exc:
         print(f"[TraceObservation] ingest failed run={run.id} type={event_type}: {exc}")
@@ -787,8 +778,8 @@ def _persist_run(run: ChatBackgroundRun) -> None:
         "id": run.id,
         "modelConfig": run.model_metadata,
         "sessionId": run.session_id,
-        "workspaceId": run.workspace_id,
-        "projectId": run.project_id,
+        "projectSlug": run.project_slug,
+        "cwd": "",
         "agentId": run.agent_id,
         "agentName": run.agent_name,
         "task": run.task_text,
@@ -809,8 +800,7 @@ def _run_from_persisted_record(record: dict) -> ChatBackgroundRun:
         tenant_id=_current_tenant_id(),
         model_metadata=record.get("modelConfig") or {},
         session_id=record["sessionId"],
-        workspace_id=record.get("workspaceId", "default"),
-        project_id=record.get("projectId", "default"),
+        project_slug=record.get("projectSlug", "default"),
         agent_id=record.get("agentId", ""),
         agent_name=record.get("agentName", ""),
         task_text=record.get("task", ""),

@@ -19,7 +19,7 @@ from src.server.routes.chat.background_runs import (
     subscribe_chat_background_run,
 )
 from src.project_files import validate_session_uploads
-from src.project_resources import resolve_project_resource_access
+from src.project_resources import load_project_access
 from src.runtime_context import resolve_runtime_context
 from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.router import router
@@ -99,7 +99,7 @@ async def start_chat_run(data: ChatMessage):
     session_id = data.session_id or uuid.uuid4().hex
     try:
         runtime_context = resolve_runtime_context(
-            project_id=data.project_id,
+            project_slug=data.project_slug,
             session_id=session_id,
             run_id="",
             agent_id=data.agent_id or "default",
@@ -119,10 +119,11 @@ async def start_chat_run(data: ChatMessage):
         if session is not None and requested_mode and requested_mode != session.approval_mode:
             update_chat_session(session_id, approval_mode=requested_mode)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        status = 400 if str(exc) == "缺少 project_slug" else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
     run_data = data.model_copy(update={
         "session_id": session_id,
-        "project_id": runtime_context.project_id,
+        "project_slug": runtime_context.project_slug,
         "model_config_id": binding.primary.entry.id,
     })
     try:
@@ -136,7 +137,7 @@ async def start_chat_run(data: ChatMessage):
     try:
         resolve_forced_runtime_skills(
             list(run_data.forced_skill_ids or []),
-            project_resources=resolve_project_resource_access(runtime_context),
+            project_resources=load_project_access(runtime_context),
             external_skills=discover_external_skills(runtime_context.project_root),
         )
     except ValueError as exc:
@@ -165,8 +166,7 @@ async def start_chat_run(data: ChatMessage):
                 memory_prompt, _recall = build_memory_prompt_and_recall(
                     agent_id=ctx.agent_id,
                     agent_name=ctx.agent_name,
-                    workspace_id=ctx.runtime_context.workspace_id,
-                    project_id=ctx.runtime_context.project_id,
+                    project_slug=ctx.runtime_context.project_slug,
                     query_text="",
                     freeze_session_id=ctx.session_id if ctx.persist_run else None,
                 )
@@ -200,7 +200,6 @@ async def start_chat_run(data: ChatMessage):
         agent_name=run_data.agent_name or "",
         task=run_data.message,
         mode=run_data.mode,
-        workspace_id=runtime_context.workspace_id,
-        project_id=runtime_context.project_id,
+        project_slug=runtime_context.project_slug,
         model_binding=binding,
     )

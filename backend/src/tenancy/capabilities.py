@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass
 
-from src.config.runtime_paths import default_project_root
+from src.config.runtime_paths import project_default_root
 from src.config.settings import settings
 from src.tenancy.context import is_hosted_mode
 
@@ -73,7 +73,7 @@ def coerce_hosted_guardrails(guardrails):
     if guardrails is None or not is_hosted_mode():
         return guardrails
     image = hosted_docker_image(str(getattr(guardrails, "docker_image", "") or ""))
-    scope = str(default_project_root())
+    scope = str(project_default_root())
     if hasattr(guardrails, "model_copy"):
         return guardrails.model_copy(update={
             "execution_backend": "docker",

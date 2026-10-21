@@ -21,7 +21,6 @@ class TraceRecordStore:
         utc_now: Callable[[], str],
         dumps: Callable[[Any], str],
         loads: Callable[[str | None, Any], Any],
-        default_workspace_id: str,
         default_project_id: str,
     ) -> None:
         self.ensure_db = ensure_db
@@ -30,15 +29,14 @@ class TraceRecordStore:
         self.utc_now = utc_now
         self.dumps = dumps
         self.loads = loads
-        self.default_workspace_id = default_workspace_id
         self.default_project_id = default_project_id
 
     def _event_from_row(self, row: sqlite3.Row, *, include_payload: bool) -> dict[str, Any]:
         return {
             "id": row["id"],
             "sessionId": row["session_id"],
-            "workspaceId": row["workspace_id"],
-            "projectId": row["project_id"],
+            "projectSlug": row["project_slug"],
+            "projectId": row["project_slug"],
             "eventType": row["event_type"],
             "scope": row["scope"],
             "agentId": row["agent_id"],
@@ -63,22 +61,18 @@ class TraceRecordStore:
         title: str = "",
         content: str = "",
         payload: dict[str, Any] | None = None,
-        workspace_id: str | None = None,
-        project_id: str | None = None,
+        project_slug: str | None = None,
     ) -> dict[str, Any]:
         self.ensure_db()
         event_id = f"evt-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
         created_at = self.utc_now()
         with self.lock, self.connect() as conn:
             located = conn.execute(
-                "SELECT workspace_id, project_id FROM chat_sessions WHERE id = ?",
+                "SELECT project_slug FROM chat_sessions WHERE id = ?",
                 (session_id,),
             ).fetchone()
-            resolved_workspace_id = workspace_id or (
-                str(located["workspace_id"]) if located else self.default_workspace_id
-            )
-            resolved_project_id = project_id or (
-                str(located["project_id"]) if located else self.default_project_id
+            resolved_project_slug = project_slug or (
+                str(located["project_slug"]) if located else self.default_project_id
             )
             row = conn.execute(
                 "SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM run_events WHERE session_id = ?",
@@ -88,12 +82,12 @@ class TraceRecordStore:
             conn.execute(
                 """
                 INSERT INTO run_events (
-                    id, session_id, workspace_id, project_id, event_type, scope, agent_id, agent_name,
+                    id, session_id, project_slug, event_type, scope, agent_id, agent_name,
                     status, title, content, payload, created_at, sort_order
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    event_id, session_id, resolved_workspace_id, resolved_project_id, event_type,
+                    event_id, session_id, resolved_project_slug, event_type,
                     scope, agent_id, agent_name, status, title, content, self.dumps(payload or {}),
                     created_at, sort_order,
                 ),
@@ -102,8 +96,7 @@ class TraceRecordStore:
         return {
             "id": event_id,
             "sessionId": session_id,
-            "workspaceId": resolved_workspace_id,
-            "projectId": resolved_project_id,
+            "projectSlug": resolved_project_slug,
             "eventType": event_type,
             "scope": scope,
             "agentId": agent_id,
@@ -169,7 +162,7 @@ class TraceRecordStore:
         self,
         event_type: str,
         *,
-        project_id: str | None = None,
+        project_slug: str | None = None,
         include_payload: bool = True,
         limit: int = 50,
         offset: int = 0,
@@ -181,11 +174,11 @@ class TraceRecordStore:
             rows = conn.execute(
                 """
                 SELECT * FROM run_events
-                WHERE event_type = ? AND project_id = ?
+                WHERE event_type = ? AND project_slug = ?
                 ORDER BY created_at DESC, sort_order DESC
                 LIMIT ? OFFSET ?
                 """,
-                (event_type, project_id or self.default_project_id, safe_limit, safe_offset),
+                (event_type, project_slug or self.default_project_id, safe_limit, safe_offset),
             ).fetchall()
         return [self._event_from_row(row, include_payload=include_payload) for row in rows]
 
@@ -201,8 +194,7 @@ class TraceRecordStore:
     def _invocation_to_api(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": row["id"], "runId": row["run_id"], "sessionId": row["session_id"],
-            "workspaceId": row.get("workspace_id", self.default_workspace_id),
-            "projectId": row.get("project_id", self.default_project_id),
+            "projectSlug": row.get("project_slug", self.default_project_id),
             "toolCallId": row["tool_call_id"], "parentScope": row["parent_scope"],
             "parentAgentId": row["parent_agent_id"], "parentAgentName": row["parent_agent_name"],
             "definitionScope": row["definition_scope"], "definitionPath": row["definition_path"],
@@ -223,8 +215,7 @@ class TraceRecordStore:
             "id": invocation_id,
             "run_id": data.get("run_id") or "",
             "session_id": data.get("session_id") or "",
-            "workspace_id": data.get("workspace_id") or self.default_workspace_id,
-            "project_id": data.get("project_id") or self.default_project_id,
+            "project_slug": data.get("project_slug") or data.get("project_id") or self.default_project_id,
             "tool_call_id": data.get("tool_call_id") or "",
             "parent_scope": data.get("parent_scope") or "single",
             "parent_agent_id": data.get("parent_agent_id") or "",
@@ -248,16 +239,16 @@ class TraceRecordStore:
             conn.execute(
                 """
                 INSERT INTO subagent_invocations (
-                    id, run_id, session_id, workspace_id, project_id, tool_call_id, parent_scope,
+                    id, run_id, session_id, project_slug, tool_call_id, parent_scope,
                     parent_agent_id, parent_agent_name, definition_scope, definition_path,
                     subagent_name, execution_mode, status, task, expected_output, result_preview,
                     result_ref, delivery_status, error,
                     started_at, completed_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record["id"], record["run_id"], record["session_id"],
-                    record["workspace_id"], record["project_id"], record["tool_call_id"],
+                    record["project_slug"], record["tool_call_id"],
                     record["parent_scope"], record["parent_agent_id"],
                     record["parent_agent_name"], record["definition_scope"],
                     record["definition_path"], record["subagent_name"], record["execution_mode"], record["status"],
@@ -347,7 +338,7 @@ class TraceRecordStore:
             clauses.append("session_id = ?")
             params.append(session_id)
         if project_id:
-            clauses.append("project_id = ?")
+            clauses.append("project_slug = ?")
             params.append(project_id)
         query = "SELECT * FROM subagent_invocations"
         if clauses:

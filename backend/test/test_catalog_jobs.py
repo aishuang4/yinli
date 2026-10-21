@@ -25,7 +25,7 @@ def _paused_record(**overrides) -> JobFileRecord:
     payload = dict(
         id="file-job",
         name="文件任务",
-        workspace_id=DEFAULT_WORKSPACE_ID,
+        
         project_id=DEFAULT_PROJECT_ID,
         agent_id="system-websearch-job",
         frozen_prompt="从文件创建。",
@@ -44,7 +44,7 @@ def test_job_markdown_round_trip(tmp_path: Path) -> None:
     record = JobFileRecord(
         id="weekly-report",
         name="周报",
-        workspace_id="default",
+        
         project_id="default",
         agent_id="system-websearch-job",
         frozen_prompt="每周生成周报。",
@@ -57,7 +57,7 @@ def test_job_markdown_round_trip(tmp_path: Path) -> None:
     parsed = parse_job_markdown(
         path.read_text(encoding="utf-8"),
         path=path,
-        workspace_id="default",
+        
         project_id="default",
         source_scope="project",
     )
@@ -69,10 +69,10 @@ def test_job_markdown_round_trip(tmp_path: Path) -> None:
 
 def test_sync_creates_sqlite_instance_from_project_file(isolated_db, tmp_path) -> None:
     set_scheduled_jobs_enabled(True)
-    jobs = tmp_path / ".agents" / "jobs"
-    jobs.mkdir(parents=True)
+    jobs = jobs_dir()
+    jobs.mkdir(parents=True, exist_ok=True)
     write_job_file(jobs / "file-job.md", _paused_record())
-    result = sync_job_definitions(project_root=tmp_path, project_id=DEFAULT_PROJECT_ID)
+    result = sync_job_definitions(project_id=DEFAULT_PROJECT_ID)
     assert result["created"] == 1
     job = ScheduledJobService().get_job("file-job")
     assert job.name == "文件任务"
@@ -84,7 +84,7 @@ def test_sync_creates_sqlite_instance_from_project_file(isolated_db, tmp_path) -
     parsed = parse_job_markdown(
         written.read_text(encoding="utf-8"),
         path=written,
-        workspace_id=DEFAULT_WORKSPACE_ID,
+        
         project_id=DEFAULT_PROJECT_ID,
         source_scope="project",
     )
@@ -94,10 +94,10 @@ def test_sync_creates_sqlite_instance_from_project_file(isolated_db, tmp_path) -
 
 def test_sync_activates_desired_status(isolated_db, tmp_path) -> None:
     set_scheduled_jobs_enabled(True)
-    jobs = tmp_path / ".agents" / "jobs"
-    jobs.mkdir(parents=True)
+    jobs = jobs_dir()
+    jobs.mkdir(parents=True, exist_ok=True)
     write_job_file(jobs / "file-job.md", _paused_record(desired_status="active"))
-    result = sync_job_definitions(project_root=tmp_path, project_id=DEFAULT_PROJECT_ID)
+    result = sync_job_definitions(project_id=DEFAULT_PROJECT_ID)
     assert result["created"] == 1
     assert result["activated"] == 1
     job = ScheduledJobService().get_job("file-job")
@@ -109,8 +109,8 @@ def test_persist_writes_workspace_catalog_for_service_jobs(isolated_db) -> None:
     set_scheduled_jobs_enabled(True)
     service = ScheduledJobService()
     job = service.create_job(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         name="服务写入",
         agent_id="system-websearch-job",
         schedule_kind="weekly",
@@ -123,7 +123,7 @@ def test_persist_writes_workspace_catalog_for_service_jobs(isolated_db) -> None:
     parsed = parse_job_markdown(
         path.read_text(encoding="utf-8"),
         path=path,
-        workspace_id=DEFAULT_WORKSPACE_ID,
+        
         project_id=DEFAULT_PROJECT_ID,
         source_scope="workspace",
     )
@@ -135,8 +135,8 @@ def test_get_job_hydrates_definition_from_file(isolated_db) -> None:
     set_scheduled_jobs_enabled(True)
     service = ScheduledJobService()
     job = service.create_job(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         name="原名",
         agent_id="system-websearch-job",
         schedule_kind="weekly",

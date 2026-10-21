@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 from src.storage.database import (
     DEFAULT_PROJECT_ID,
-    DEFAULT_WORKSPACE_ID,
     append_chat_message,
     delete_chat_messages,
     get_chat_session,
@@ -47,8 +46,8 @@ def _append_user_message(
     content: str,
     images: list[ChatImagePayload],
     files: list[ChatFilePayload] | None = None,
-    workspace_id: str = DEFAULT_WORKSPACE_ID,
-    project_id: str = DEFAULT_PROJECT_ID,
+    project_slug: str = DEFAULT_PROJECT_ID,
+    cwd: str = "",
     approval_mode: str | None = None,
 ) -> None:
     """追加用户消息，并创建或更新会话摘要"""
@@ -65,8 +64,8 @@ def _append_user_message(
             "agent_id": agent_id,
             "agent_name": agent_name,
             "mode": mode,
-            "workspace_id": workspace_id,
-            "project_id": project_id,
+            "project_slug": project_slug,
+            "cwd": cwd,
             "created_at": now,
             "updated_at": now,
             "modelConfigId": model_config_id,
@@ -78,8 +77,8 @@ def _append_user_message(
             agent_id=agent_id,
             agent_name=agent_name,
             mode=mode,
-            workspace_id=workspace_id,
-            project_id=project_id,
+            project_slug=project_slug,
+            cwd=cwd,
             model_config_id=model_config_id or existing.get("modelConfigId") or "",
             updated_at=now,
         )
@@ -114,8 +113,8 @@ def ensure_chat_session(
     session_id: str,
     agent_id: str,
     agent_name: str,
-    workspace_id: str,
-    project_id: str,
+    project_slug: str,
+    cwd: str = "",
     title: str = "",
 ) -> ChatSession:
     """经 ChatStore 确保 kind=chat 的 session 存在；禁止 group_studio_records 直接 SQL INSERT。
@@ -130,14 +129,14 @@ def ensure_chat_session(
         "agent_id": agent_id,
         "agent_name": agent_name,
         "mode": "agent",
-        "workspace_id": workspace_id,
-        "project_id": project_id,
+        "project_slug": project_slug,
+        "cwd": cwd,
         "kind": "chat",
         "created_at": now,
         "updated_at": now,
     })
-    if record["project_id"] != project_id:
-        raise ChatSessionProjectConflict(session_id, record["project_id"], project_id)
+    if record["project_slug"] != project_slug:
+        raise ChatSessionProjectConflict(session_id, record["project_slug"], project_slug)
     return session_model(record)
 
 
@@ -146,8 +145,8 @@ def ensure_scheduled_job_session(
     session_id: str,
     agent_id: str,
     agent_name: str,
-    workspace_id: str,
-    project_id: str,
+    project_slug: str,
+    cwd: str = "",
     title: str,
 ) -> ChatSession:
     """经 ChatStore 创建 kind=scheduled_job 的新 session，禁止直接 SQL INSERT。"""
@@ -159,8 +158,8 @@ def ensure_scheduled_job_session(
         "agent_id": agent_id,
         "agent_name": agent_name,
         "mode": "agent",
-        "workspace_id": workspace_id,
-        "project_id": project_id,
+        "project_slug": project_slug,
+        "cwd": cwd,
         "kind": "scheduled_job",
         "created_at": now,
         "updated_at": now,

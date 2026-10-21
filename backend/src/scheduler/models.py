@@ -95,8 +95,8 @@ class ScheduledJob(BaseModel):
     """SQLite scheduled_jobs 行的领域对象。"""
 
     id: str
-    workspace_id: str
-    project_id: str
+    project_slug: str
+    cwd: str = ""
     name: str
     summary: str = ""
     status: JobStatus
@@ -187,8 +187,7 @@ class ScheduledJobRun(BaseModel):
 
     id: str
     job_id: str
-    workspace_id: str
-    project_id: str
+    project_slug: str
     trigger: FiringTrigger
     scheduled_for: str
     status: FiringStatus

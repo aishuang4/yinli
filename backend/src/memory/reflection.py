@@ -88,8 +88,7 @@ class MemoryReflectionInput:
     user_message: str
     assistant_text: str
     user_id: str = "default"
-    workspace_id: str = "default"
-    project_id: str = "default"
+    project_slug: str = "default"
     team_id: str = ""
     source_run_id: str = ""
     source_message_id: str = ""
@@ -513,8 +512,7 @@ def _persist_skill_evolution_record(
                 user_message=item.user_message,
                 assistant_text=item.assistant_text,
                 user_id=item.user_id,
-                workspace_id=item.workspace_id,
-                project_id=item.project_id,
+                project_slug=item.project_slug,
                 team_id=item.team_id,
                 source_run_id=item.source_run_id,
                 source_message_id=item.source_message_id,
@@ -536,7 +534,7 @@ def _reflection_invocation_key(item: MemoryReflectionInput, target: str) -> str:
         item.source_message_id,
         item.agent_id,
         item.user_id,
-        item.workspace_id,
+        item.project_slug,
         target,
         item.user_message[:160],
     ])

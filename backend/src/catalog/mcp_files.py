@@ -1,4 +1,4 @@
-"""MCP 定义 YAML 编解码与发现。"""
+"""MCP 定义 YAML 编解码与发现。只扫描租户 `mcp/` 目录。"""
 
 from __future__ import annotations
 
@@ -8,13 +8,7 @@ from typing import Any
 
 import yaml
 
-from src.catalog.paths import (
-    ID_PATTERN,
-    atomic_write_text,
-    mcp_dir,
-    project_mcp_dir,
-    workspaces_root,
-)
+from src.catalog.paths import ID_PATTERN, atomic_write_text, mcp_dir
 from src.catalog.secrets import redact_headers, split_headers, yaml_has_plaintext_secrets
 from src.catalog.system_defaults import utc_now
 
@@ -35,8 +29,7 @@ class McpFileRecord:
     tools: list[dict[str, Any]] = field(default_factory=list)
     status: str = "installed"
     enabled: bool = True
-    workspace_id: str = "default"
-    source_scope: str = "workspace"
+    source_scope: str = "tenant"
     source_path: str = ""
     updated_at: str = ""
 
@@ -64,7 +57,14 @@ def dump_mcp_yaml(record: McpFileRecord) -> str:
     return yaml.safe_dump(payload, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
-def parse_mcp_yaml(text: str, *, path: Path, workspace_id: str, source_scope: str) -> McpFileRecord:
+def parse_mcp_yaml(
+    text: str,
+    *,
+    path: Path,
+    source_scope: str = "tenant",
+    **_extra: object,
+) -> McpFileRecord:
+    del _extra
     payload = yaml.safe_load(text) or {}
     if not isinstance(payload, dict):
         raise ValueError("MCP YAML 必须是对象")
@@ -92,7 +92,6 @@ def parse_mcp_yaml(text: str, *, path: Path, workspace_id: str, source_scope: st
         tools=[item for item in list(payload.get("tools") or []) if isinstance(item, dict)],
         status=str(payload.get("status") or "installed"),
         enabled=bool(payload.get("enabled", True)),
-        workspace_id=workspace_id,
         source_scope=source_scope,
         source_path=str(path),
         updated_at=str(payload.get("updated_at") or ""),
@@ -107,7 +106,7 @@ def write_mcp_file(path: Path, record: McpFileRecord) -> None:
     atomic_write_text(path, dump_mcp_yaml(record))
 
 
-def _scan_dir(directory: Path, *, workspace_id: str, source_scope: str) -> list[McpFileRecord]:
+def _scan_dir(directory: Path, *, source_scope: str) -> list[McpFileRecord]:
     if not directory.is_dir():
         return []
     records: list[McpFileRecord] = []
@@ -118,7 +117,6 @@ def _scan_dir(directory: Path, *, workspace_id: str, source_scope: str) -> list[
             records.append(parse_mcp_yaml(
                 path.read_text(encoding="utf-8"),
                 path=path,
-                workspace_id=workspace_id,
                 source_scope=source_scope,
             ))
         except (OSError, ValueError, yaml.YAMLError):
@@ -126,20 +124,11 @@ def _scan_dir(directory: Path, *, workspace_id: str, source_scope: str) -> list[
     return records
 
 
-def discover_mcp_files(*, project_root: Path | None = None) -> list[McpFileRecord]:
-    records: list[McpFileRecord] = []
-    root = workspaces_root()
-    if root.is_dir():
-        for child in sorted(root.iterdir()):
-            if not child.is_dir() or child.name.startswith("_"):
-                continue
-            records.extend(_scan_dir(mcp_dir(child.name), workspace_id=child.name, source_scope="workspace"))
-    if project_root is not None:
-        records.extend(_scan_dir(
-            project_mcp_dir(project_root),
-            workspace_id="default",
-            source_scope="project",
-        ))
+def discover_mcp_files(**_extra: object) -> list[McpFileRecord]:
+    """扫描 `<tenant>/mcp/*.yaml`。多余关键字忽略，不再按项目目录发现。"""
+
+    del _extra
+    records = _scan_dir(mcp_dir(), source_scope="tenant")
     from src.tenancy.context import TenantMissing, current_tenant, is_hosted_mode
 
     if is_hosted_mode():
@@ -150,7 +139,3 @@ def discover_mcp_files(*, project_root: Path | None = None) -> list[McpFileRecor
         if hosted:
             records = [item for item in records if item.transport != "stdio"]
     return records
-
-
-def project_mcp_ids(project_root: Path) -> set[str]:
-    return {item.id for item in _scan_dir(project_mcp_dir(project_root), workspace_id="default", source_scope="project")}

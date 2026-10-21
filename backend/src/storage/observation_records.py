@@ -34,7 +34,6 @@ class ObservationRecordStore:
         utc_now: Callable[[], str],
         dumps: Callable[[Any], str],
         loads: Callable[[str | None, Any], Any],
-        default_workspace_id: str,
         default_project_id: str,
     ) -> None:
         self.ensure_db = ensure_db
@@ -43,7 +42,6 @@ class ObservationRecordStore:
         self.utc_now = utc_now
         self.dumps = dumps
         self.loads = loads
-        self.default_workspace_id = default_workspace_id
         self.default_project_id = default_project_id
 
     def insert(self, record: dict[str, Any]) -> dict[str, Any]:
@@ -64,17 +62,16 @@ class ObservationRecordStore:
             conn.execute(
                 """
                 INSERT INTO trace_observations (
-                    id, run_id, session_id, workspace_id, project_id, kind, name,
+                    id, run_id, session_id, project_slug, kind, name,
                     parent_id, status, started_at, ended_at, duration_ms,
                     input_json, output_json, metadata_json, payload_path, payload_sha256
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["id"],
                     payload["runId"],
                     payload["sessionId"],
-                    payload["workspaceId"],
-                    payload["projectId"],
+                    payload["projectSlug"],
                     payload["kind"],
                     payload["name"],
                     payload["parentId"],
@@ -257,11 +254,12 @@ class ObservationRecordStore:
             "id": str(record["id"]),
             "runId": str(record.get("runId") or record.get("run_id") or ""),
             "sessionId": str(record.get("sessionId") or record.get("session_id") or ""),
-            "workspaceId": str(
-                record.get("workspaceId") or record.get("workspace_id") or self.default_workspace_id
-            ),
-            "projectId": str(
-                record.get("projectId") or record.get("project_id") or self.default_project_id
+            "projectSlug": str(
+                record.get("projectSlug")
+                or record.get("project_slug")
+                or record.get("projectId")
+                or record.get("project_id")
+                or self.default_project_id
             ),
             "kind": str(record.get("kind") or ""),
             "name": str(record.get("name") or ""),
@@ -282,8 +280,8 @@ class ObservationRecordStore:
             "id": row["id"],
             "runId": row["run_id"],
             "sessionId": row["session_id"],
-            "workspaceId": row["workspace_id"],
-            "projectId": row["project_id"],
+            "projectSlug": row["project_slug"],
+            "projectId": row["project_slug"],
             "kind": row["kind"],
             "name": row["name"],
             "parentId": row["parent_id"],

@@ -107,8 +107,7 @@ def build_memory_prompt_and_recall(
     *,
     agent_id: str,
     agent_name: str,
-    workspace_id: str,
-    project_id: str,
+    project_slug: str,
     query_text: str,
     freeze_session_id: str | None,
     exclude_session_id: str = "",
@@ -121,13 +120,14 @@ def build_memory_prompt_and_recall(
     习惯按用户冻结，专业全文按智能体和会话冻结。
     """
 
-    del agent_name, workspace_id, project_id, query_text, exclude_session_id
+    del agent_name, query_text, exclude_session_id
     if not include_markdown:
         return "", None
     memory_prompt = _compose_frozen_memory_prompt(
         user_id=user_id or "default",
         agent_id=agent_id,
         session_id=freeze_session_id,
+        project_slug=project_slug,
     )
     return memory_prompt, None
 
@@ -163,7 +163,13 @@ def refresh_context_memory_prompt(ctx: object, memory_prompt: str) -> None:
     setattr(ctx, "system_prompt_sections", sections)
 
 
-def _compose_frozen_memory_prompt(*, user_id: str, agent_id: str, session_id: str | None) -> str:
+def _compose_frozen_memory_prompt(
+    *,
+    user_id: str,
+    agent_id: str,
+    session_id: str | None,
+    project_slug: str = "",
+) -> str:
     habit = session_habit_prompt(
         user_id=user_id or "default",
         build=lambda: build_habit_prompt(user_id or "default"),
@@ -173,6 +179,7 @@ def _compose_frozen_memory_prompt(*, user_id: str, agent_id: str, session_id: st
         professional = session_professional_prompt(
             agent_id=agent_id,
             session_id=session_id,
+            project_slug=project_slug,
             build=lambda: build_professional_prompt(agent_id),
         )
     return "\n\n".join(part for part in (habit, professional) if part.strip())

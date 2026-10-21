@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from src.config.runtime_paths import default_project_root
+from src.config.runtime_paths import project_default_root
 from src.security.permissions import UnifiedPermissionProfile, build_permission_profile
 
 
@@ -41,10 +41,10 @@ class AgentGuardrails:
     def __post_init__(self) -> None:
         """兼容旧 guardrails 字段，自动补齐统一权限配置。"""
 
-        filesystem_scope = self.filesystem_scope or str(default_project_root())
+        filesystem_scope = self.filesystem_scope or str(project_default_root())
         expanded_scope = os.path.abspath(os.path.expanduser(filesystem_scope))
         if expanded_scope == os.path.abspath(os.sep):
-            expanded_scope = str(default_project_root())
+            expanded_scope = str(project_default_root())
         object.__setattr__(self, "filesystem_scope", expanded_scope)
 
         profile = self.permission_profile

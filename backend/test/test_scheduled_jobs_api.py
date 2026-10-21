@@ -41,7 +41,7 @@ def client(isolated_db):
         "id": "agent-1",
         "name": "agent-1",
         "system_prompt": "prompt",
-        "workspaceId": DEFAULT_WORKSPACE_ID,
+        
         "status": "idle",
     })
     app = FastAPI()
@@ -55,8 +55,8 @@ def client(isolated_db):
 
 def _create_payload(**overrides) -> dict:
     payload = {
-        "workspaceId": DEFAULT_WORKSPACE_ID,
-        "projectId": DEFAULT_PROJECT_ID,
+        
+        "projectSlug": DEFAULT_PROJECT_ID,
         "name": "周五周报",
         "agentId": "agent-1",
         "scheduleKind": "weekly",
@@ -89,8 +89,8 @@ def test_main_registers_scheduled_job_and_notification_routes():
 def test_flag_off_write_is_403_and_list_still_readable(client):
     assert is_scheduled_jobs_enabled() is False
     created = ScheduledJobService().create_job(
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         name="周五周报",
         agent_id="agent-1",
         schedule_kind="weekly",
@@ -98,7 +98,7 @@ def test_flag_off_write_is_403_and_list_still_readable(client):
         timezone="Asia/Shanghai",
         frozen_prompt="生成本周周报",
     )
-    listed = client.get("/api/scheduled-jobs", params={"projectId": DEFAULT_PROJECT_ID})
+    listed = client.get("/api/scheduled-jobs", params={"projectSlug": DEFAULT_PROJECT_ID})
     assert listed.status_code == 200
     payload = listed.json()
     assert payload["enabled"] is False
@@ -281,8 +281,8 @@ def test_session_catalog_defaults_to_chat_kind(client):
             "agent_id": "agent-1",
             "agent_name": "助手",
             "mode": "agent",
-            "workspace_id": DEFAULT_WORKSPACE_ID,
-            "project_id": DEFAULT_PROJECT_ID,
+            
+            "project_slug": DEFAULT_PROJECT_ID,
             "created_at": "2026-08-21T00:00:00+00:00",
         })
     catalog = client.get("/api/chat/sessions/catalog")
@@ -291,7 +291,7 @@ def test_session_catalog_defaults_to_chat_kind(client):
     assert "sess-chat" in catalog_ids
     assert "sess-job" not in catalog_ids
 
-    sessions = client.get("/api/chat/sessions", params={"projectId": DEFAULT_PROJECT_ID})
+    sessions = client.get("/api/chat/sessions", params={"projectSlug": DEFAULT_PROJECT_ID})
     assert sessions.status_code == 200
     session_ids = {item["id"] for item in sessions.json()}
     assert "sess-chat" in session_ids
@@ -333,12 +333,12 @@ def test_list_runs_filter_by_trigger_source(client):
             "createdAt": stamp,
             "updatedAt": stamp,
         })
-    stored = list_chat_runs(project_id=DEFAULT_PROJECT_ID, trigger_source="scheduled_job")
+    stored = list_chat_runs(project_slug=DEFAULT_PROJECT_ID, trigger_source="scheduled_job")
     assert [item["id"] for item in stored] == ["run-job"]
 
     filtered = client.get(
         "/api/chat/runs",
-        params={"projectId": DEFAULT_PROJECT_ID, "triggerSource": "scheduled_job"},
+        params={"projectSlug": DEFAULT_PROJECT_ID, "triggerSource": "scheduled_job"},
     )
     assert filtered.status_code == 200
     payload = filtered.json()["runs"]
@@ -352,7 +352,7 @@ def test_list_runs_filter_by_trigger_source(client):
     assert scheduled["progress"] == 100
     assert scheduled["currentStage"] == "已完成"
 
-    unfiltered = client.get("/api/chat/runs", params={"projectId": DEFAULT_PROJECT_ID})
+    unfiltered = client.get("/api/chat/runs", params={"projectSlug": DEFAULT_PROJECT_ID})
     assert unfiltered.status_code == 200
     all_ids = {item["id"] for item in unfiltered.json()["runs"]}
     assert "run-job" not in all_ids
@@ -363,22 +363,22 @@ def test_notifications_list_read_and_unread_count(client):
     first = create_notification(
         kind="job_succeeded",
         title="周报已生成",
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         job_id="job-1",
         body="查看产物",
     )
     second = create_notification(
         kind="job_failed",
         title="周报失败",
-        workspace_id=DEFAULT_WORKSPACE_ID,
-        project_id=DEFAULT_PROJECT_ID,
+        
+        project_slug=DEFAULT_PROJECT_ID,
         job_id="job-1",
         body="需要更新任务",
     )
     listed = client.get(
         "/api/notifications",
-        params={"projectId": DEFAULT_PROJECT_ID},
+        params={"projectSlug": DEFAULT_PROJECT_ID},
     )
     assert listed.status_code == 200
     body = listed.json()
@@ -389,7 +389,7 @@ def test_notifications_list_read_and_unread_count(client):
 
     count = client.get(
         "/api/notifications/unread-count",
-        params={"projectId": DEFAULT_PROJECT_ID},
+        params={"projectSlug": DEFAULT_PROJECT_ID},
     )
     assert count.status_code == 200
     assert count.json()["unreadCount"] == 2
@@ -399,24 +399,24 @@ def test_notifications_list_read_and_unread_count(client):
     assert read.json()["readAt"]
     assert client.get(
         "/api/notifications/unread-count",
-        params={"projectId": DEFAULT_PROJECT_ID},
+        params={"projectSlug": DEFAULT_PROJECT_ID},
     ).json()["unreadCount"] == 1
 
     unread_only = client.get(
         "/api/notifications",
-        params={"projectId": DEFAULT_PROJECT_ID, "unreadOnly": True},
+        params={"projectSlug": DEFAULT_PROJECT_ID, "unreadOnly": True},
     )
     assert [item["id"] for item in unread_only.json()["items"]] == [second["id"]]
 
     read_all = client.post(
         "/api/notifications/read-all",
-        params={"projectId": DEFAULT_PROJECT_ID},
+        params={"projectSlug": DEFAULT_PROJECT_ID},
     )
     assert read_all.status_code == 200
     assert read_all.json()["updatedCount"] == 1
     assert client.get(
         "/api/notifications/unread-count",
-        params={"projectId": DEFAULT_PROJECT_ID},
+        params={"projectSlug": DEFAULT_PROJECT_ID},
     ).json()["unreadCount"] == 0
 
 
@@ -437,7 +437,7 @@ def test_cancel_queued_run_now_is_not_a_failure(client):
     assert job["status"] == "active"
     assert job["consecutiveFailures"] == 0
     assert job["pauseReason"] == ""
-    assert list_user_notifications(project_id=DEFAULT_PROJECT_ID) == []
+    assert list_user_notifications(project_slug=DEFAULT_PROJECT_ID) == []
 
 
 def test_delete_archives_job(client):

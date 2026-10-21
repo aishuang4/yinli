@@ -100,7 +100,6 @@ class AgentResponse(BaseModel):
     status: str = "idle"
     created_at: str
     updated_at: str
-    workspace_id: str = Field(default="default", alias="workspaceId")
     role: str = Field(default="chat")
     job_toolkit: JobToolkit = Field(default_factory=JobToolkit, alias="jobToolkit")
     source_path: str = Field(default="", alias="sourcePath")
@@ -113,7 +112,7 @@ class AgentResponse(BaseModel):
 
         return is_system_agent_id(self.id)
 
-    model_config = {"populate_by_name": True}
+    model_config = {"populate_by_name": True, "extra": "ignore"}
 
 
 class AgentExportPackage(BaseModel):

@@ -38,16 +38,12 @@ def test_ensure_tenant_is_idempotent_and_seeds_default_project(hosted_env, monke
     with use_tenant(first):
         project = database.get_project("default")
         assert project is not None
-        assert str(project["rootPath"]).startswith(str(projects_root()))
+        assert str(project["primaryPath"]).startswith(str(projects_root()))
         assert skill_packages_root().is_dir()
         assert models_path().is_file()
         settings = get_scheduled_jobs_settings_public()
         assert settings["enabled"] is True
         assert get_registered_agent("default") is not None
-        bindings = database.list_project_resource_bindings("default")
-        kinds = {item["resourceType"] for item in bindings}
-        assert "agent" in kinds
-        assert "skill" in kinds
 
 
 def test_middleware_binds_active_tenant_and_rejects_disabled(hosted_env):
