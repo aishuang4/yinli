@@ -11,6 +11,7 @@ from ..projection_registry import ProjectionMutation
 EVENT_TYPES = {
     "tool.call.started",
     "tool.call.delta",
+    "tool.call.arguments",
     "tool.result.delta",
     "tool.result.completed",
     "tool.result.failed",
@@ -59,6 +60,12 @@ def project(event: DomainEvent, snapshot: DisplaySnapshot) -> Iterable[Projectio
         if not isinstance(delta, str):
             raise ValueError("tool.call.delta 缺少字符串 delta")
         yield ProjectionMutation(op="delta", id=block_id, patch={"inputDelta": delta})
+        return
+    if event.type == "tool.call.arguments":
+        preview = data.get("inputPreview")
+        if not isinstance(preview, str):
+            raise ValueError("tool.call.arguments 缺少字符串 inputPreview")
+        yield ProjectionMutation(op="delta", id=block_id, patch={"inputPreview": preview})
         return
     if event.type == "tool.result.delta":
         delta = data.get("delta")

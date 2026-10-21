@@ -20,6 +20,7 @@ from src.scheduler.models import (
     NON_TERMINAL_FIRING_STATUSES,
     SCHEDULE_KINDS,
     TERMINAL_FIRING_STATUSES,
+    JobExecutionPolicy,
     JobToolScope,
     ScheduledJob,
     ScheduledJobConflictError,
@@ -54,9 +55,7 @@ from src.storage.database import (
     insert_scheduled_job,
     insert_scheduled_job_run,
     list_due_scheduled_jobs,
-    list_http_tools,
     list_non_terminal_scheduled_job_runs,
-    list_mcp_servers,
     list_scheduled_job_runs,
     list_scheduled_job_runs_for_scheduled_for,
     list_scheduled_jobs,
@@ -83,6 +82,7 @@ _RECONFIRM_FIELDS = frozenset({
     "delivery_policy",
     "delivery_channel_ref",
     "recipient_ids",
+    "execution_policy",
 })
 _SCHEDULE_FIELDS = frozenset({"schedule_kind", "schedule_expr", "timezone"})
 _PAUSABLE_JOB_STATUSES = frozenset({"active", "pending_confirmation"})
@@ -129,6 +129,7 @@ class ScheduledJobService:
         capability_contract: dict[str, Any] | None = None,
         task_intent: str = "",
         accept_partial: bool = False,
+        execution_policy: dict[str, Any] | None = None,
         required_intents: list[str] | None = None,
         job_id: str = "",
         persist_file: bool = True,
@@ -243,6 +244,10 @@ class ScheduledJobService:
         except UniqueConstraintError as exc:
             raise ScheduledJobConflictError("同项目下任务名称已存在") from exc
         try:
+            if execution_policy is not None:
+                record = update_scheduled_job(record["id"], {
+                    "execution_policy": self._normalize_execution_policy(execution_policy),
+                }) or record
             job = self._job(record, hydrate=False)
         except ScheduledJobValidationError:
             delete_scheduled_job(record["id"])
@@ -414,8 +419,22 @@ class ScheduledJobService:
             self._validate_failure_policy(str(payload["failure_policy"]))
         if "missed_policy" in payload:
             self._validate_missed_policy(str(payload["missed_policy"]))
+        if "skill_ids" in payload:
+            cleaned_skill_ids: list[str] = []
+            seen_skill_ids: set[str] = set()
+            for item in list(payload.get("skill_ids") or []):
+                ident = str(item).strip()
+                if not ident or ident in seen_skill_ids:
+                    continue
+                seen_skill_ids.add(ident)
+                cleaned_skill_ids.append(ident)
+            payload["skill_ids"] = cleaned_skill_ids
+            if cleaned_skill_ids != list(job.skill_ids):
+                payload["required_skills"] = []
         if "tool_scope" in payload:
             payload["tool_scope"] = self._frozen_tool_scope(payload["tool_scope"]).to_storage_dict()
+        if "execution_policy" in payload:
+            payload["execution_policy"] = self._normalize_execution_policy(payload.get("execution_policy"))
         if _SCHEDULE_FIELDS & payload.keys():
             canonical, timezone_name = self._validate_schedule(
                 str(payload.get("schedule_kind") or job.schedule_kind),
@@ -954,23 +973,16 @@ class ScheduledJobService:
                 agent_id=resource_id,
             )
         if resource_type == "mcp":
-            paused = self._pause_jobs_claiming(
+            return self._pause_jobs_claiming(
                 "capability_unbound",
                 project_slug=project_slug,
                 mcp_server_id=resource_id,
             )
-            if paused:
-                return paused
-            return self.pause_for_resource_change(
-                "needs_job_update",
-                project_slug=project_slug,
-                require_tool_flags=("allow_mcp",),
-            )
         if resource_type == "http_tool":
-            return self.pause_for_resource_change(
-                "needs_job_update",
+            return self._pause_jobs_claiming(
+                "capability_unbound",
                 project_slug=project_slug,
-                require_tool_flags=("allow_http", "allow_knowledge"),
+                http_or_knowledge_id=resource_id,
             )
         return []
 
@@ -985,23 +997,11 @@ class ScheduledJobService:
         if resource_type == "skill":
             return self.pause_for_resource_change("skill_unbound", skill_id=resource_id)
         if resource_type == "mcp":
-            paused = self._pause_jobs_claiming("capability_unbound", mcp_server_id=resource_id)
-            if paused:
-                return paused
-            return self.pause_for_resource_change(
-                "needs_job_update",
-                require_tool_flags=("allow_mcp",),
-            )
+            return self._pause_jobs_claiming("capability_unbound", mcp_server_id=resource_id)
         if resource_type in {"http_tool", "knowledge"}:
-            paused = self._pause_jobs_claiming(
+            return self._pause_jobs_claiming(
                 "capability_unbound",
                 http_or_knowledge_id=resource_id,
-            )
-            if paused:
-                return paused
-            return self.pause_for_resource_change(
-                "needs_job_update",
-                require_tool_flags=("allow_http", "allow_knowledge"),
             )
         return []
 
@@ -1133,7 +1133,11 @@ class ScheduledJobService:
                     allow_mcp=False,
                     allow_knowledge=False,
                 )
-            failing = would_fail_unattended_tools(tool_scope=tool_scope, agent=agent)
+            failing = would_fail_unattended_tools(
+                tool_scope=tool_scope,
+                agent=agent,
+                approval_mode="full_access",
+            )
             if failing:
                 raise ScheduledJobValidationError("would_fail_tools: " + ", ".join(failing))
             if force_bash and not job.tool_scope.allow_bash:
@@ -1169,6 +1173,7 @@ class ScheduledJobService:
             tool_scope=derived,
             agent=agent,
             extra_tool_names=list(spec.get("enable_tools") or []),
+            approval_mode="full_access",
         )
         if failing:
             raise ScheduledJobValidationError("would_fail_tools: " + ", ".join(failing))
@@ -1240,16 +1245,6 @@ class ScheduledJobService:
             ):
                 raise ScheduledJobStateError("冻结 Skill 已不可用，不能启用任务")
 
-        if job.tool_scope.allow_mcp:
-            usable = [
-                item for item in list_mcp_servers()
-                if str(item.get("status") or "") == "installed" and item.get("enabled")
-            ]
-            if not usable:
-                raise ScheduledJobStateError("租户里没有可用的 MCP，不能启用任务")
-        if (job.tool_scope.allow_http or job.tool_scope.allow_knowledge) and not list_http_tools():
-            raise ScheduledJobStateError("租户里没有可用的 HTTP 工具，不能启用任务")
-
     def _require_project(self, project_slug: str) -> dict[str, Any]:
         """确认 Project 存在。主目录是 primaryPath，不再核对 workspace。"""
 
@@ -1286,6 +1281,17 @@ class ScheduledJobService:
             raise ScheduledJobValidationError("failure_policy 已删除 retry_once")
         if failure_policy not in FAILURE_POLICIES:
             raise ScheduledJobValidationError(f"非法 failure_policy: {failure_policy}")
+
+    def _normalize_execution_policy(self, value: Any) -> dict[str, str]:
+        """审核模式只接受 manual / model_review / full_access。"""
+
+        try:
+            parsed = JobExecutionPolicy.model_validate(value or {})
+        except ValidationError as exc:
+            raise ScheduledJobValidationError(
+                "approvalMode 必须是 manual、model_review 或 full_access",
+            ) from exc
+        return parsed.model_dump()
 
     def _validate_missed_policy(self, missed_policy: str) -> None:
         if missed_policy not in MISSED_POLICIES:

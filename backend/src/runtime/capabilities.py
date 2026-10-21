@@ -137,10 +137,11 @@ def _resolve_frozen(*, agent: Any | None, frozen: list[dict[str, Any]]) -> Capab
             raise SkillManifestError("skill_hash_changed", skill_id)
         if not _still_enabled(skill_id):
             raise SkillManifestError("skill_disabled", skill_id)
+        load_name, description = _frontmatter_identity(text, str(record.get("name") or skill_id))
         skills.append(Skill.model_validate({
             "id": skill_id,
-            "name": str(record.get("name") or skill_id),
-            "description": str(record.get("name") or skill_id),
+            "name": load_name,
+            "description": description,
             "category": "冻结",
             "content": text,
             "resourcePath": str(path.parent if path.name == "SKILL.md" else path),
@@ -176,6 +177,14 @@ def _freeze_one(skill_id: str, *, origin: str, frozen_at: str) -> dict[str, Any]
         "frozen_at": frozen_at,
         "origin": origin,
     }
+
+
+def _frontmatter_identity(text: str, fallback: str) -> tuple[str, str]:
+    """注入用的是 SKILL.md 的 name，不是目錄裡的包 id。"""
+
+    from src.catalog.skills import frontmatter_identity
+
+    return frontmatter_identity(text, fallback)
 
 
 def _agent_of(job: Any) -> Any | None:

@@ -1,7 +1,7 @@
 /**
  * MemoryLandingPage — Memory 模块第一层入口。
  *
- * 将 Markdown 记忆、历史记忆、Skill 自进化、Wiki 和设置审计收束为统一入口列表。
+ * 将 Markdown 记忆、历史记忆和设置审计收束为统一入口列表。
  */
 
 import { Brain, List, RefreshCw } from 'lucide-react';
@@ -80,6 +80,5 @@ function memoryTabDescription(tab: MemoryTab): string {
   if (tab === 'markdown') return '管理用户、Agent 和全局 Markdown 长期记忆';
   if (tab === 'candidates') return '采纳或拒绝模型提炼出的用户 / 全局记忆，采纳后才写入文件';
   if (tab === 'nodes') return '只读查看历史记忆节点';
-  if (tab === 'skills') return '查看和处理 Skill 自进化候选队列';
   return '调整记忆准入策略并查看 MEMORY_AUDIT 审计';
 }

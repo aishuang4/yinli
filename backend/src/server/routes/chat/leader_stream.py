@@ -487,6 +487,8 @@ async def stream_leader_agent_reply(
         if getattr(agent, "authorization_binding", None) is not None:
             event_data = public_authorization_event(agent, event_type, event_data)
         yield source_event(event_type, event_data)
+        if _scheduled_denial_limit_reached(state, event_type, event_data):
+            return
         for runtime_event in _drain_runtime_event_sources(runtime_event_sources or []):
             state.runtime_events.append(runtime_event)
             yield runtime_source_event(runtime_event)
@@ -819,6 +821,21 @@ async def stream_leader_agent_reply(
             yield recovery_event
 
 
+def _scheduled_denial_limit_reached(state: LeaderStreamState, event_type: str, event_data: dict) -> bool:
+    """权限拒绝交回模型。连续拒绝超过上限才结束本次定时运行。"""
+
+    if state.trigger_source != "scheduled_job" or event_type != "TOOL_RESULT_END":
+        return False
+    if str(event_data.get("state") or "").lower() != "denied":
+        return False
+    state.unattended_denials += 1
+    if state.unattended_denials <= MAX_UNATTENDED_TOOL_DENIALS:
+        return False
+    state.stopped = True
+    state.stop_reason = "hitl_denied"
+    return True
+
+
 def _should_attempt_final_answer_recovery(state: LeaderStreamState) -> bool:
     """判断是否进入受限最终答案恢复流程。"""
 
@@ -856,7 +873,7 @@ async def _resume_unattended_hitl(
     deep_thinking: bool,
     sandbox: bool,
 ) -> AsyncGenerator[str, None]:
-    """cwd Write/Edit 批准、其余拒绝，禁止落入 waiting_* / PENDING_INTERACTIONS。"""
+    """合同内工具批准，其余拒绝并交回模型。禁止落入 waiting_* / PENDING_INTERACTIONS。"""
 
     reply_ids = {str(batch["reply_id"]) for batch in pending_hitl_batches}
     types = {str(batch["type"]) for batch in pending_hitl_batches}
@@ -871,10 +888,6 @@ async def _resume_unattended_hitl(
         )
         denied_names.extend(denied)
     state.unattended_denials += len(denied_names)
-    if denied_names:
-        state.stopped = True
-        state.stop_reason = "job_needs_human"
-        return
     mixed_pause = len(reply_ids) != 1 or len(types) != 1 or resume_event is None
     if mixed_pause or state.unattended_denials > MAX_UNATTENDED_TOOL_DENIALS:
         state.stopped = True

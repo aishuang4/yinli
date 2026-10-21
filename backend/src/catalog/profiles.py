@@ -64,9 +64,9 @@ def _guardrails_from_yaml(value: Any, warnings: list[str]) -> Guardrails:
         "filesystem_scope": filesystem_scope or str(project_default_root()),
         "shell_blacklist": data.get("shell_blacklist"),
         "network_enabled": data.get("network_enabled"),
-        "human_approval": data.get("human_approval"),
-        "tool_permission_mode": data.get("tool_permission_mode"),
-        "tool_permission_profile": data.get("tool_permission_profile"),
+        "operation_scope": data.get("operation_scope") or (
+            "read_only" if data.get("tool_permission_profile") == "read_only" else None
+        ),
         "execution_backend": data.get("execution_backend"),
         "docker_image": data.get("docker_image"),
         "persistent_sandbox": data.get("persistent_sandbox"),
@@ -118,11 +118,6 @@ def apply_role_invariants(agent: AgentResponse, warnings: list[str]) -> AgentRes
         mcp_tools = list(bound["mcp"])
         knowledge_tools = list(dict.fromkeys([*bound["http"], *bound["knowledge"]]))
         skills = list(bound["skill"])
-        guardrails = guardrails.model_copy(update={
-            "human_approval": False,
-            "tool_permission_profile": "trusted_tools",
-            "tool_permission_mode": "bypass",
-        })
         if is_default_websearch_job_agent_id(agent.id):
             if not guardrails.network_enabled:
                 warnings.append("system-websearch-job 必须保持网络开启")
@@ -257,9 +252,7 @@ def dump_profile_markdown(agent: AgentResponse) -> str:
             "filesystem_scope": _dump_filesystem_scope(agent.guardrails.filesystem_scope),
             "shell_blacklist": list(agent.guardrails.shell_blacklist),
             "network_enabled": bool(agent.guardrails.network_enabled),
-            "human_approval": bool(agent.guardrails.human_approval),
-            "tool_permission_mode": agent.guardrails.tool_permission_mode,
-            "tool_permission_profile": agent.guardrails.tool_permission_profile,
+            "operation_scope": agent.guardrails.operation_scope,
             "execution_backend": agent.guardrails.execution_backend,
             "docker_image": agent.guardrails.docker_image,
             "persistent_sandbox": bool(agent.guardrails.persistent_sandbox),

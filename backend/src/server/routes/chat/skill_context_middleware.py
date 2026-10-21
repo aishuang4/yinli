@@ -49,6 +49,11 @@ REINJECT_HEADER = (
     "（上下文压缩、截断或重建后自动恢复）。直接按这些说明执行，不要再次调用 "
     "Skill 工具读取同名 Skill；references/ 与脚本仍按需 Read / 执行。"
 )
+SCHEDULED_REINJECT_HEADER = (
+    "这些 Skill 已在本轮开始前注入。按下面的 <activated-skill> 说明执行。"
+    "references/ 与脚本仍用 Read、Grep、Glob 或 Bash 按需访问。"
+)
+PRELOADED_ONLY_KEY = "aw_scheduled_preloaded_skills"
 TRUNCATED_NOTE = "\n\n[正文过长，此处已截断；需要完整内容时按 <agent-skills> 中的 <dir> 用 Read 读取 SKILL.md]"
 
 
@@ -168,7 +173,8 @@ def ensure_activated_skills_in_context(agent: Any) -> list[str]:
     if not missing:
         return []
     skills = activated_skills(agent)
-    sections = [REINJECT_HEADER]
+    header = SCHEDULED_REINJECT_HEADER if store is not None and store.get(PRELOADED_ONLY_KEY) else REINJECT_HEADER
+    sections = [header]
     for name in missing:
         markdown = str(skills[name].get("markdown") or "")
         sections.append(f'<activated-skill name="{name}">\n{markdown}\n</activated-skill>')
@@ -182,22 +188,60 @@ def ensure_activated_skills_in_context(agent: Any) -> list[str]:
     return missing
 
 
+class ScheduledSkillPreloadError(Exception):
+    """凍結 Skill 沒能在首次模型呼叫前進入上下文。"""
+
+
+def preload_scheduled_skills(agent: Any, skills: Iterable[Any]) -> list[str]:
+    """把凍結 Skill 全文寫進 `<activated-skill>`，名稱用 SKILL.md 的 name。"""
+
+    from src.skills.invocation import SkillInvocationError, load_skill_invocations
+
+    pending = list(skills or [])
+    store = _middle_context(agent)
+    if not pending:
+        return []
+    if store is None:
+        raise ScheduledSkillPreloadError("skill_preload_failed: agent 沒有 middle_context")
+    try:
+        batch = load_skill_invocations(pending, strict=True)
+    except SkillInvocationError as exc:
+        if exc.code == "skill_context_budget_exceeded":
+            raise ScheduledSkillPreloadError(str(exc)) from exc
+        if exc.code == "duplicate_skill":
+            raise ScheduledSkillPreloadError(f"skill_preload_failed: 重複的 Skill 名稱 {exc.skill_name}") from exc
+        raise ScheduledSkillPreloadError(f"skill_preload_failed: {exc.skill_name or 'missing'}") from exc
+    current: dict[str, dict[str, Any]] = {}
+    names: list[str] = []
+    now = time.time()
+    for index, item in enumerate(batch.loaded):
+        current[item.name] = {"markdown": item.markdown, "activatedAt": now + index}
+        names.append(item.name)
+    store[ACTIVATED_SKILLS_KEY] = current
+    store[PRELOADED_ONLY_KEY] = True
+    store[PENDING_CHECK_KEY] = True
+    ensure_activated_skills_in_context(agent)
+    corpus = "\n".join(_iter_context_texts(getattr(getattr(agent, "state", None), "context", []) or []))
+    for name in names:
+        marker = f'<activated-skill name="{name}">'
+        if marker not in corpus or current[name]["markdown"] not in corpus:
+            raise ScheduledSkillPreloadError(f"skill_preload_failed: {name}")
+    return names
+
+
 def activate_forced_skills(agent: Any, skills: Iterable[Any]) -> list[str]:
     """把用户本轮强制开启的 Skill 正文预写入会话，等同于已经用 Skill 工具读过。"""
 
-    from src.catalog.skills import read_package_markdown
+    from src.skills.invocation import SkillInvocationError, load_skill_invocations
 
+    try:
+        batch = load_skill_invocations(list(skills or []), strict=False)
+    except SkillInvocationError:
+        return []
     activated: list[str] = []
-    for skill in skills or []:
-        name = str(getattr(skill, "name", "") or getattr(skill, "id", "") or "").strip()
-        markdown = str(getattr(skill, "content", "") or "").strip()
-        resource_path = str(getattr(skill, "resource_path", "") or "")
-        if not markdown and resource_path:
-            markdown = read_package_markdown(resource_path).strip()
-        if not name or not markdown:
-            continue
-        if activate_skill(agent, name, markdown):
-            activated.append(name)
+    for item in batch.loaded:
+        if activate_skill(agent, item.name, item.markdown):
+            activated.append(item.name)
     if activated:
         ensure_activated_skills_in_context(agent)
     return activated

@@ -16,7 +16,6 @@ import { MemoryCandidatePanel } from '../features/memory/MemoryCandidatePanel';
 import { MemoryLandingPage } from '../features/memory/MemoryLandingPage';
 import { MemorySettingsPanel } from '../features/memory/MemorySettingsPanel';
 import { NodeMemoryPanel } from '../features/memory/NodeMemoryPanel';
-import { SkillEvolutionQueuePanel } from '../features/memory/SkillEvolutionQueuePanel';
 import {
   MARKDOWN_TARGETS,
   MEMORY_TABS,
@@ -37,9 +36,6 @@ import type {
   MemoryRetrievalFeedbackPayload,
   MemoryNodeTreeItem,
   MemorySettingsSnapshot,
-  SkillEvolutionRecordAction,
-  SkillEvolutionRecord,
-  SkillEvolutionRecordStatus,
 } from '../types/memory';
 
 export function MemoryPage() {
@@ -50,8 +46,6 @@ export function MemoryPage() {
     saveMarkdownMemory,
     loadNodeTree,
     queryNodes,
-    loadSkillEvolutionRecords,
-    updateSkillEvolutionRecord,
     loadMemoryCandidates,
     updateMemoryCandidate,
     loadMemoryAuditEvents,
@@ -84,10 +78,6 @@ export function MemoryPage() {
   const [candidates, setCandidates] = useState<MemoryMarkdownCandidate[]>([]);
   const [pendingCandidateCount, setPendingCandidateCount] = useState(0);
   const [candidatesLoading, setCandidatesLoading] = useState(false);
-  const [skillStatus, setSkillStatus] = useState<SkillEvolutionRecordStatus | 'all'>('all');
-  const [skillAgentId, setSkillAgentId] = useState('');
-  const [skillRecords, setSkillRecords] = useState<SkillEvolutionRecord[]>([]);
-  const [skillsLoading, setSkillsLoading] = useState(false);
   const [memorySettings, setMemorySettings] = useState<MemorySettingsSnapshot | null>(null);
   const [auditEvents, setAuditEvents] = useState<MemoryAuditEvent[]>([]);
   const [settingsLoading, setSettingsLoading] = useState(false);
@@ -116,11 +106,9 @@ export function MemoryPage() {
     setDraft('');
     setNodeTree([]);
     setNodeResults([]);
-    setSkillRecords([]);
     setCandidates([]);
     setAuditEvents([]);
     void loadNodes();
-    void loadSkillQueue();
     void loadCandidates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeProjectSlug]);
@@ -220,37 +208,6 @@ export function MemoryPage() {
     }
   }
 
-  async function loadSkillQueue() {
-    try {
-      setSkillsLoading(true);
-      setError('');
-      const records = await loadSkillEvolutionRecords({
-        status: skillStatus,
-        agentId: skillAgentId || undefined,
-        limit: 100,
-      });
-      setSkillRecords(records);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Skill 自进化队列加载失败');
-    } finally {
-      setSkillsLoading(false);
-    }
-  }
-
-  async function updateSkillRecord(recordId: string, action: SkillEvolutionRecordAction, reason = '') {
-    try {
-      setSkillsLoading(true);
-      setError('');
-      await updateSkillEvolutionRecord(recordId, action, reason);
-      await loadSkillQueue();
-      if (activeTab === 'settings') await loadSettingsAndAudit();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Skill 队列操作失败');
-    } finally {
-      setSkillsLoading(false);
-    }
-  }
-
   async function loadSettingsAndAudit() {
     try {
       setSettingsLoading(true);
@@ -282,7 +239,6 @@ export function MemoryPage() {
     if (activeTab === 'markdown') void loadMarkdown();
     if (activeTab === 'candidates') void loadCandidates();
     if (activeTab === 'nodes') void loadNodes();
-    if (activeTab === 'skills') void loadSkillQueue();
     if (activeTab === 'settings') void loadSettingsAndAudit();
   }
 
@@ -374,18 +330,6 @@ export function MemoryPage() {
             nodeTree={nodeTree}
             nodeResults={nodeResults}
             onSearch={loadNodes}
-          />
-        ) : activeTab === 'skills' ? (
-          <SkillEvolutionQueuePanel
-            agents={agents}
-            agentId={skillAgentId}
-            setAgentId={setSkillAgentId}
-            status={skillStatus}
-            setStatus={setSkillStatus}
-            records={skillRecords}
-            loading={skillsLoading}
-            onSearch={loadSkillQueue}
-            onAction={updateSkillRecord}
           />
         ) : (
           <MemorySettingsPanel

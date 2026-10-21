@@ -12,6 +12,8 @@ import {
   type ScheduledJob,
   type ScheduledJobRun,
   type ScheduledJobSchedulePatch,
+  type ScheduledJobFieldPatch,
+  type ScheduledJobWritePayload,
 } from '../types/scheduledJob';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 
@@ -27,6 +29,8 @@ interface UseScheduledJobsReturn {
   deleteJob: (jobId: string) => Promise<ScheduledJob>;
   updateSchedule: (jobId: string, patch: ScheduledJobSchedulePatch) => Promise<ScheduledJob>;
   updateModel: (jobId: string, modelConfigId: string) => Promise<ScheduledJob>;
+  createJob: (payload: ScheduledJobWritePayload) => Promise<ScheduledJob>;
+  updateJobFields: (jobId: string, payload: ScheduledJobFieldPatch) => Promise<ScheduledJob>;
   listRuns: (jobId: string) => Promise<ScheduledJobRun[]>;
   cancelRun: (jobId: string, firingId: string) => Promise<ScheduledJobRun>;
 }
@@ -331,6 +335,34 @@ export function useScheduledJobs(): UseScheduledJobsReturn {
     )
   ), [runWrite]);
 
+  const createJob = useCallback((payload: ScheduledJobWritePayload) => (
+    runWrite(
+      () => requestJson<Record<string, unknown>>('/api/scheduled-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...payload,
+          projectSlug: activeProjectSlug,
+          taskIntent: payload.frozenPrompt,
+        }),
+      }).then(mapJob),
+      '已创建任务，确认启用后才会运行',
+      '创建失败',
+    )
+  ), [activeProjectSlug, runWrite]);
+
+  const updateJobFields = useCallback((jobId: string, payload: ScheduledJobFieldPatch) => (
+    runWrite(
+      () => requestJson<Record<string, unknown>>(`/api/scheduled-jobs/${encodeURIComponent(jobId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).then(mapJob),
+      '已保存任务',
+      '保存失败',
+    )
+  ), [runWrite]);
+
   const updateSchedule = useCallback((jobId: string, patch: ScheduledJobSchedulePatch) => (
     runWrite(
       () => requestJson<Record<string, unknown>>(`/api/scheduled-jobs/${encodeURIComponent(jobId)}`, {
@@ -383,6 +415,8 @@ export function useScheduledJobs(): UseScheduledJobsReturn {
     deleteJob,
     updateSchedule,
     updateModel,
+    createJob,
+    updateJobFields,
     listRuns,
     cancelRun,
   };

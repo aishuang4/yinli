@@ -19,24 +19,12 @@ from src.memory.admission import (
     evaluate_memory_admission,
 )
 from src.memory.extraction_agents import (
-    SkillEvolutionAgentPayload,
     run_memory_admission_scoring_agent,
     run_memory_reflection_agent,
-    run_skill_evolution_agent,
 )
 from src.memory.markdown_store import MarkdownMemoryStore
 from src.memory.sanitizer import sanitize_memory_note_text
 from src.memory.settings import get_memory_admission_policy
-from src.memory.skill_evolution import (
-    SkillEvolutionGateDecision,
-    SkillEvolutionRecordInput,
-    build_workflow_evidence,
-    evaluate_skill_evolution_router_gate,
-    is_accepted_skill_candidate,
-    persist_skill_evolution_record,
-    register_skill_evolution_record,
-    rejected_skill_candidate_reason,
-)
 from src.tools.memory_reflection import MemoryFileToolSet
 
 MemoryScope = Literal["user", "agent", "global_preference"]
@@ -49,35 +37,6 @@ MemorySection = Literal[
     "Negative Rules",
 ]
 
-_MANUAL_SKILL_ACTIONS = (
-    "生成",
-    "创建",
-    "沉淀",
-    "提炼",
-    "保存",
-    "注册",
-    "做成",
-    "转成",
-    "整理成",
-    "generate",
-    "create",
-    "save",
-    "register",
-)
-_MANUAL_SKILL_REFERENCES = (
-    "这个",
-    "这次",
-    "刚才",
-    "上面",
-    "前面",
-    "流程",
-    "工作",
-    "任务",
-    "结果",
-    "it",
-    "this",
-    "that",
-)
 @dataclass(frozen=True)
 class MemoryReflectionInput:
     """Markdown 记忆反思输入。"""
@@ -94,8 +53,6 @@ class MemoryReflectionInput:
     source_message_id: str = ""
     tool_calls: list[object] = field(default_factory=list)
     runtime_events: list[dict] = field(default_factory=list)
-    manual_skill_request: bool = False
-    review_context: object | None = None
 
 
 @dataclass(frozen=True)
@@ -117,8 +74,6 @@ class MemoryReflectionResult:
     updates: list[MemoryMarkdownUpdate] = field(default_factory=list)
     # user / global 层进入待确认队列的候选（已落库记录）。
     candidates: list[dict] = field(default_factory=list)
-    skill_candidate: SkillEvolutionAgentPayload | None = None
-    skill_evolution_record: dict | None = None
     ignored_reason: str = ""
     admission: object | None = None
 
@@ -160,7 +115,7 @@ async def reflect_completed_run_memory_with_agents(
     rule_admission: object | None = None,
     include_markdown: bool = True,
 ) -> MemoryReflectionResult:
-    """调用专用系统 Agent 提炼记忆和 Skill 候选，失败时使用规则兜底。
+    """调用专用系统 Agent 提炼 Markdown 记忆，失败时使用规则兜底。
 
     `rule_admission` 是本轮已算好的规则准入结果（与历史节点持久化共用一份），
     这里只在其上叠加可选的模型评分，不再重新评一次。
@@ -219,168 +174,15 @@ async def reflect_completed_run_memory_with_agents(
             candidates.extend(fallback.candidates)
             memory_reason = memory_reason or fallback.ignored_reason
 
-    skill_candidate = None
-    skill_evolution_record = None
-    gate = await _skill_evolution_gate_for_item(
-        item=item,
-        user_message=user_message,
-        assistant_text=assistant_text,
-        model_name=model_name,
-        fallback_names=fallback_names or [],
-    )
-    workflow_evidence = build_workflow_evidence(
-        tool_calls=item.tool_calls,
-        runtime_events=item.runtime_events,
-    )
-    if gate.should_evaluate:
-        try:
-            skill_candidate = await run_skill_evolution_agent(
-                user_message=user_message,
-                assistant_text=assistant_text,
-                agent_id=item.agent_id,
-                agent_name=item.agent_name,
-                workflow_evidence=workflow_evidence,
-                router_gate=gate,
-                model_name=model_name,
-                fallback_names=fallback_names or [],
-                invocation_key=_reflection_invocation_key(item, "skill"),
-            )
-        except Exception as exc:
-            skill_candidate = None
-            skill_evolution_record = _persist_skill_evolution_record(
-                item=item,
-                gate=gate,
-                workflow_evidence=workflow_evidence,
-                candidate=None,
-                status="failed",
-                risk_notes=f"SkillEvolutionAgent 调用失败：{type(exc).__name__}",
-            )
-        if skill_evolution_record is None:
-            accepted = is_accepted_skill_candidate(skill_candidate)
-            skill_evolution_record = _persist_skill_evolution_record(
-                item=item,
-                gate=gate,
-                workflow_evidence=workflow_evidence,
-                candidate=skill_candidate,
-                status="draft" if accepted else "skipped",
-                risk_notes="" if accepted else rejected_skill_candidate_reason(skill_candidate),
-            )
-            if not accepted:
-                skill_candidate = None
-            elif skill_evolution_record:
-                registered_record, _reason = register_skill_evolution_record(skill_evolution_record)
-                if registered_record:
-                    skill_evolution_record = registered_record
-    else:
-        skill_evolution_record = _persist_skill_evolution_record(
-            item=item,
-            gate=gate,
-            workflow_evidence=workflow_evidence,
-            candidate=None,
-            status="skipped",
-            risk_notes=gate.reason,
-        )
-
-    if updates or candidates or skill_candidate or skill_evolution_record:
+    if updates or candidates:
         return MemoryReflectionResult(
             updates=updates,
             candidates=candidates,
-            skill_candidate=skill_candidate,
-            skill_evolution_record=skill_evolution_record,
             admission=admission,
         )
     return MemoryReflectionResult(
-        ignored_reason=memory_reason or "no_memory_or_skill_candidate",
+        ignored_reason=memory_reason or "no_memory_candidate",
         admission=admission,
-    )
-
-
-def is_manual_skill_generation_request(text: str) -> bool:
-    """判断用户是否显式要求把前序工作生成 Skill。"""
-
-    normalized = _normalize_text(text).lower()
-    if not normalized:
-        return False
-    has_skill_marker = any(marker in normalized for marker in ("skill", "skills", "技能"))
-    if not has_skill_marker:
-        return False
-    has_action = any(marker in normalized for marker in _MANUAL_SKILL_ACTIONS)
-    if not has_action:
-        return False
-    return len(normalized) <= 120 or any(marker in normalized for marker in _MANUAL_SKILL_REFERENCES)
-
-
-async def _skill_evolution_gate_for_item(
-    *,
-    item: MemoryReflectionInput,
-    user_message: str,
-    assistant_text: str,
-    model_name: str,
-    fallback_names: list[str],
-) -> SkillEvolutionGateDecision:
-    """确定性短路之后，用模型审核决定是否进入技能草稿生成。"""
-
-    from src.memory.model_review import (
-        ModelReviewError,
-        deterministic_skill_gate,
-        review,
-        skill_review_request,
-        turn_only_snapshot,
-    )
-    from src.memory.model_review import build_skill_review_prompt
-
-    short = deterministic_skill_gate(
-        user_message=user_message,
-        assistant_text=assistant_text,
-        manual_skill_request=item.manual_skill_request,
-    )
-    if short is not None:
-        return _gate_from_review(short)
-
-    snapshot = item.review_context or turn_only_snapshot(
-        user_message=user_message,
-        assistant_text=assistant_text,
-    )
-
-    async def _reviewer(request):
-        from src.memory.extraction_agents import run_model_review_agent
-        from src.memory.model_review import parse_model_review_text
-
-        del request
-        text = await run_model_review_agent(
-            user_prompt=build_skill_review_prompt(snapshot),
-            model_name=model_name,
-            fallback_names=fallback_names,
-            invocation_key=_reflection_invocation_key(item, "model-review"),
-        )
-        return parse_model_review_text(text)
-
-    try:
-        decision = await review(skill_review_request(snapshot), reviewer=_reviewer)
-    except (ModelReviewError, Exception):
-        fallback = evaluate_skill_evolution_router_gate(
-            user_message=user_message,
-            assistant_text=assistant_text,
-            tool_calls=item.tool_calls,
-            runtime_events=item.runtime_events,
-        )
-        signals = [*fallback.signals, "source:fallback"]
-        return fallback.model_copy(update={
-            "reason": f"[fallback] {fallback.reason}",
-            "signals": signals,
-        })
-    return _gate_from_review(decision)
-
-
-def _gate_from_review(decision) -> SkillEvolutionGateDecision:
-    """把审核判定映射成现有 router_gate 记录。"""
-
-    signals = [f"source:{decision.source}", *list(getattr(decision, "signals", ()) or ())]
-    return SkillEvolutionGateDecision(
-        shouldEvaluate=decision.allow,
-        reason=decision.reason,
-        risk="low" if decision.allow else "skip",
-        signals=signals,
     )
 
 
@@ -401,7 +203,6 @@ def _admission_for_item(
             assistant_text=assistant_text,
             tool_calls=item.tool_calls,
             runtime_events=item.runtime_events,
-            manual_skill_request=item.manual_skill_request,
         )
     )
 
@@ -490,41 +291,6 @@ def build_tool_trajectory(tool_calls: list[object] | tuple[object, ...], *, limi
             entry["result"] = _trim(sanitize_memory_note_text(result), TOOL_TRAJECTORY_RESULT_CHARS)
         trajectory.append(entry)
     return trajectory
-
-
-def _persist_skill_evolution_record(
-    *,
-    item: MemoryReflectionInput,
-    gate,
-    workflow_evidence,
-    candidate: SkillEvolutionAgentPayload | None,
-    status: str,
-    risk_notes: str,
-) -> dict | None:
-    """保存 Skill 自进化记录，失败时不影响主对话和记忆提炼。"""
-
-    try:
-        return persist_skill_evolution_record(
-            SkillEvolutionRecordInput(
-                session_id=item.session_id,
-                agent_id=item.agent_id,
-                agent_name=item.agent_name,
-                user_message=item.user_message,
-                assistant_text=item.assistant_text,
-                user_id=item.user_id,
-                project_slug=item.project_slug,
-                team_id=item.team_id,
-                source_run_id=item.source_run_id,
-                source_message_id=item.source_message_id,
-                router_gate=gate,
-                workflow_evidence=workflow_evidence,
-                candidate=candidate,
-                status=status,
-                risk_notes=risk_notes,
-            )
-        )
-    except Exception:
-        return None
 
 
 def _reflection_invocation_key(item: MemoryReflectionInput, target: str) -> str:

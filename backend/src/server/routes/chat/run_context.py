@@ -23,13 +23,20 @@ from src.server.routes.chat.intent_router import (
 )
 from src.server.routes.chat.models import ChatMessage, ChatSkillRun
 from src.agents.session_context import SessionHistoryMessage
+from src.skills.invocation import (
+    MAX_STACKED_SKILLS,
+    SkillInvocationError,
+    extract_inline_skill_commands,
+    load_skill_invocations,
+)
 from src.server.routes.chat.prompts import (
     _build_clarification_system_prompt,
     _build_file_attachments_user_note,
     _build_final_answer_system_prompt,
-    _build_forced_skills_user_note,
     _build_runtime_context_prompt,
+    _build_scheduled_preloaded_skill_prompt,
     _build_skill_context_prompt,
+    build_stacked_skill_user_message,
 )
 from src.server.routes.chat.store import message_model
 from src.storage.database import list_chat_messages
@@ -113,8 +120,12 @@ class ChatRunContext:
     # 单独保留是给 Team Leader / 综合阶段复用，不必再算一次。
     memory_prompt: str = ""
     memory_recall_text: str = ""
-    # 本轮用户在发送框强制开启的 Skill；已并入 used_skills，单独保留供预启用。
+    # 本轮用户在发送框强制开启的 Skill；已并入 used_skills。
     forced_skills: list[Skill] = field(default_factory=list)
+    # 选中 Skill 的总头 + 全文。非空时它就是发给模型的那条用户消息。
+    forced_skill_message: str = ""
+    # interactive_on_demand：Chat 按需讀 Skill。scheduled_preloaded：全文先進上下文，不註冊 Skill viewer。
+    skill_loading_mode: str = "interactive_on_demand"
     force_compress: bool = False
     platform_binding: object | None = None
     platform_denied: frozenset[str] = field(default_factory=frozenset)
@@ -187,34 +198,11 @@ def _session_approval_mode(session_id: str) -> str:
     return mode if mode in {"manual", "model_review", "full_access"} else "manual"
 
 
-def _job_approval_mode(job: object) -> str:
-    """Job 的审批模式只来自执行策略；没有策略时按人工处理。"""
-
-    import json
-
-    raw = getattr(job, "execution_policy", None)
-    if raw is None:
-        raw = getattr(job, "executionPolicy", None)
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw or "{}")
-        except json.JSONDecodeError:
-            raw = {}
-    mode = str((raw or {}).get("approvalMode") or "manual") if isinstance(raw, dict) else "manual"
-    return mode if mode in {"manual", "model_review", "full_access"} else "manual"
-
-
 def _require_job_approval_mode(job: object) -> str:
-    """model_review 不可用时直接失败，不把 Job 改成完全开放。"""
+    """定时任务无需确认。硬底线仍拒绝，不读任务上的人工或智能审核。"""
 
-    mode = _job_approval_mode(job)
-    if mode == "model_review":
-        from src.security.authorization.review_gate import permission_review_status
-
-        review = permission_review_status()
-        if not review["available"]:
-            raise ValueError(review["reason"] or "智能审核当前不可用，本次定时运行已结束。")
-    return mode
+    del job
+    return "full_access"
 
 
 async def build_run_context(
@@ -322,7 +310,8 @@ async def build_chat_run_context(
         inject=True,
         configured_skill_ids=configured_skill_ids,
     )
-    forced_skills = resolve_forced_runtime_skills(
+    forced_skills, skill_instruction = resolve_message_forced_skills(
+        run_data.message,
         list(run_data.forced_skill_ids or []),
         project_resources=project_resources,
         external_skills=external_skills,
@@ -433,13 +422,11 @@ async def build_chat_run_context(
         approval_mode=approval_mode_for_run(session_id, getattr(run_data, "approval_mode", None)),
         extra_filesystem_scopes=readable_scopes,
         session_history=session_history,
-        user_message_note="\n\n".join(
-            part
-            for part in [
-                _build_file_attachments_user_note(run_data.files),
-                _build_forced_skills_user_note(forced_skills),
-            ]
-            if part
+        user_message_note=_build_file_attachments_user_note(run_data.files),
+        forced_skill_message=build_stacked_skill_user_message(
+            forced_skills,
+            skill_instruction,
+            guardrails=guardrails,
         ),
         system_prompt_sections=system_prompt_sections,
         memory_prompt=memory_prompt,
@@ -543,14 +530,14 @@ async def build_scheduled_run_context(
             _build_project_context_prompt(runtime_context),
             _build_job_workspace_prompt(workspace_dir),
             _build_runtime_context_prompt(),
-            _build_skill_context_prompt() if used_skills else "",
-            _frozen_skill_prompt(used_skills),
+            _build_scheduled_preloaded_skill_prompt(used_skills, guardrails=guardrails),
             _previous_result_prompt(job),
             memory_prompt,
             _build_final_answer_system_prompt(),
         ]
         if part
     )
+    readable_scopes = _with_skill_package_scopes(readable_scopes, used_skills)
     from src.scheduler.firing_toolkit import assemble_scheduled_firing_toolkit_spec
 
     spec = assemble_scheduled_firing_toolkit_spec(
@@ -596,6 +583,7 @@ async def build_scheduled_run_context(
         session_workspace_dir=workspace_dir,
         session_artifact_paths_before=session_artifact_paths_before,
         trigger_source="scheduled_job",
+        skill_loading_mode="scheduled_preloaded",
         approval_mode=_require_job_approval_mode(job),
         tool_name_denylist=denylist,
         write_scope_dir=workspace_dir,
@@ -607,15 +595,26 @@ async def build_scheduled_run_context(
     )
 
 
-def _frozen_skill_prompt(skills: list[Any]) -> str:
-    """把凍結 Skill 的 id 寫進本輪上下文，供 firing trace 與模型看到同一份列表。"""
+def _with_skill_package_scopes(scopes: list[str], skills: list[Any]) -> list[str]:
+    """讓 Read / Bash 能按需打開凍結包裡的 references/ 與 scripts/。"""
 
-    if not skills:
-        return ""
-    lines = ["## Frozen Skills"]
+    merged = list(scopes)
+    seen = set(merged)
     for skill in skills:
-        lines.append(f"- {getattr(skill, 'id', '')}: {getattr(skill, 'name', '')}")
-    return "\n".join(lines)
+        raw = str(getattr(skill, "resource_path", "") or "").strip()
+        if not raw:
+            continue
+        path = Path(raw)
+        if path.name == "SKILL.md":
+            path = path.parent
+        if not path.is_dir():
+            continue
+        directory = str(path)
+        if directory in seen:
+            continue
+        seen.add(directory)
+        merged.append(directory)
+    return merged
 
 
 def _previous_result_prompt(job: Any) -> str:
@@ -635,7 +634,53 @@ def _previous_result_prompt(job: Any) -> str:
     return f"## Previous Result\n{text[:4000]}"
 
 
-MAX_FORCED_SKILLS = 3
+MAX_FORCED_SKILLS = MAX_STACKED_SKILLS
+
+
+def _chat_skill_catalog(external_skills: list[Skill] | None) -> list[Skill]:
+    """斜杠命令能對上的 Skill：本輪掃到的包，再加上已安裝啟用的登記。"""
+
+    from src.skills.registry import list_installed_enabled_skills
+
+    merged: list[Skill] = []
+    seen: set[str] = set()
+    for skill in [*(external_skills or []), *list_installed_enabled_skills()]:
+        skill_id = str(getattr(skill, "id", "") or "")
+        if not skill_id or skill_id in seen or not bool(getattr(skill, "enabled", True)):
+            continue
+        seen.add(skill_id)
+        merged.append(skill)
+    return merged
+
+
+def resolve_message_forced_skills(
+    message: str,
+    skill_ids: list[str],
+    *,
+    project_resources: ProjectResourceAccess,
+    external_skills: list[Skill] | None = None,
+) -> tuple[list[Skill], str]:
+    """用戶原文裡的斜杠 Skill 優先。沒有斜杠時才用請求裡的 forced_skill_ids。"""
+
+    if "/" in (message or ""):
+        inline, instruction = extract_inline_skill_commands(message, _chat_skill_catalog(external_skills))
+        if inline:
+            return (
+                resolve_forced_runtime_skills(
+                    [str(getattr(skill, "id", "") or "") for skill in inline],
+                    project_resources=project_resources,
+                    external_skills=external_skills,
+                ),
+                instruction,
+            )
+    return (
+        resolve_forced_runtime_skills(
+            skill_ids,
+            project_resources=project_resources,
+            external_skills=external_skills,
+        ),
+        message,
+    )
 
 
 def resolve_forced_runtime_skills(
@@ -664,6 +709,12 @@ def resolve_forced_runtime_skills(
     if missing:
         raise ValueError(f"强制开启的 Skill 不存在或未启用：{', '.join(missing)}")
     del project_resources
+    try:
+        load_skill_invocations(resolved, strict=False)
+    except SkillInvocationError as exc:
+        if exc.code == "skill_context_budget_exceeded":
+            raise ValueError(f"本轮 Skill 正文超出上限：{exc.skill_name}") from exc
+        raise ValueError(str(exc)) from exc
     return resolved
 
 

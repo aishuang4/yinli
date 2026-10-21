@@ -33,9 +33,7 @@ def test_default_websearch_job_agent_config_is_exact() -> None:
     ]
     assert agent.job_toolkit.optional == []
     assert agent.guardrails.network_enabled is True
-    assert agent.guardrails.human_approval is False
-    assert agent.guardrails.tool_permission_profile == "trusted_tools"
-    assert agent.guardrails.tool_permission_mode == "bypass"
+    assert agent.guardrails.operation_scope == "normal"
     assert agent.system_managed is True
     assert agent.model_dump(by_alias=True)["systemManaged"] is True
 
@@ -126,7 +124,7 @@ def test_system_websearch_job_agent_cannot_be_deleted(monkeypatch) -> None:
 
 
 def test_system_websearch_job_agent_keeps_unattended_invariants(monkeypatch) -> None:
-    """更新可改业务配置，但不能改角色、关闭网络或恢复人工审批。"""
+    """更新可改业务配置，但不能改角色或关闭网络。"""
 
     agent = agents_routes._build_default_websearch_job_agent()
     monkeypatch.setattr(agents_routes, "_agents", {agent.id: agent})
@@ -138,21 +136,14 @@ def test_system_websearch_job_agent_keeps_unattended_invariants(monkeypatch) -> 
         agents_routes.AgentUpdate(
             name="联网任务",
             role="chat",
-            guardrails=agents_routes.Guardrails(
-                network_enabled=False,
-                human_approval=True,
-                toolPermissionProfile="ask_every_time",
-                toolPermissionMode="ask_every_time",
-            ),
+            guardrails=agents_routes.Guardrails(network_enabled=False),
         ),
     ))
 
     assert updated.name == "联网任务"
     assert updated.role == "job"
     assert updated.guardrails.network_enabled is True
-    assert updated.guardrails.human_approval is False
-    assert updated.guardrails.tool_permission_profile == "trusted_tools"
-    assert updated.guardrails.tool_permission_mode == "bypass"
+    assert updated.guardrails.operation_scope == "normal"
 
 
 def test_system_job_agent_does_not_require_project_binding() -> None:

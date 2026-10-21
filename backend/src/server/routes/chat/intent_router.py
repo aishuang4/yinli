@@ -208,7 +208,7 @@ async def _run_model_intent_router(
             model_options=AgentModelOptions(max_tokens=1400, max_react_iters=2),
             guardrails=AgentGuardrails(
                 network_enabled=False,
-                tool_permission_profile="read_only",
+                operation_scope="read_only",
             ),
             tool_scope=RuntimeToolScope(
                 allow_mcp=False,

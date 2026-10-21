@@ -2,7 +2,7 @@
 
 import type { Skill } from '../../types/skill';
 
-export const MAX_FORCED_SKILLS = 3;
+export const MAX_FORCED_SKILLS = 5;
 
 export function filterComposerSkills(
   skills: Skill[],
@@ -86,6 +86,113 @@ export function matchPlusMenuAction(action: PlusMenuAction, query: string): bool
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
   return PLUS_MENU_ACTION_LABELS[action].some((label) => label.toLowerCase().includes(needle));
+}
+
+export type SkillTextSegment = {
+  text: string;
+  skill: boolean;
+};
+
+function skillKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/** 斜杠名對上 Skill 的 name 或 id。同名只留先出現的那一個。 */
+export function skillBySlashToken(skills: Skill[]): Map<string, Skill> {
+  const lookup = new Map<string, Skill>();
+  for (const skill of skills) {
+    for (const key of [skill.name, skill.id]) {
+      const normalized = skillKey(key);
+      if (normalized && !lookup.has(normalized)) lookup.set(normalized, skill);
+    }
+  }
+  return lookup;
+}
+
+const INLINE_SKILL_PATTERN = /(^|\s)(\/([^\s/]+))/g;
+
+/** 按出現順序取出最多 max 個斜杠 Skill。第 6 個起不再算選中。 */
+export function inlineSkillIds(value: string, skills: Skill[], max = MAX_FORCED_SKILLS): string[] {
+  const lookup = skillBySlashToken(skills);
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const match of value.matchAll(INLINE_SKILL_PATTERN)) {
+    const skill = lookup.get(skillKey(match[3] || ''));
+    if (!skill || seen.has(skill.id)) continue;
+    if (ids.length >= max) break;
+    seen.add(skill.id);
+    ids.push(skill.id);
+  }
+  return ids;
+}
+
+/** 把文字切成普通段和會被後端認領的斜杠 Skill。 */
+export function skillTextSegments(value: string, skills: Skill[], max = MAX_FORCED_SKILLS): SkillTextSegment[] {
+  const lookup = skillBySlashToken(skills);
+  const seen = new Set<string>();
+  let loaded = 0;
+  const parts: SkillTextSegment[] = [];
+  let cursor = 0;
+  for (const match of value.matchAll(INLINE_SKILL_PATTERN)) {
+    const lead = match[1] || '';
+    const token = match[2] || '';
+    const start = (match.index ?? 0) + lead.length;
+    const skill = lookup.get(skillKey(match[3] || ''));
+    const take = Boolean(skill) && !seen.has(skill!.id) && loaded < max;
+    if (start > cursor) parts.push({ text: value.slice(cursor, start), skill: false });
+    if (take && skill) {
+      seen.add(skill.id);
+      loaded += 1;
+      parts.push({ text: token, skill: true });
+    } else {
+      parts.push({ text: token, skill: false });
+    }
+    cursor = start + token.length;
+  }
+  if (cursor < value.length) parts.push({ text: value.slice(cursor), skill: false });
+  if (parts.length === 0) parts.push({ text: value, skill: false });
+  return parts;
+}
+
+/** 用選中的 Skill 名換掉正在輸入的斜杠片段，並在後面留一個空格。 */
+export function completeSlashSkill(value: string, slash: SlashQuery, name: string): { value: string; cursor: number } {
+  const after = value.slice(slash.end);
+  const needsSpace = !/^\s/.test(after);
+  const token = `/${name}${needsSpace ? ' ' : ''}`;
+  const skippedSpace = needsSpace ? 0 : (after.match(/^\s*/)?.[0].length ?? 0);
+  return {
+    value: value.slice(0, slash.start) + token + after,
+    cursor: slash.start + token.length + skippedSpace,
+  };
+}
+
+/** 在游標處插入 `/name`。游標正停在斜杠片段上時，改成補全該片段。 */
+export function insertSkillToken(value: string, cursor: number, name: string): { value: string; cursor: number } {
+  const slash = readSlashQuery(value, cursor);
+  if (slash) return completeSlashSkill(value, slash, name);
+  const pos = Math.max(0, Math.min(cursor, value.length));
+  const before = value.slice(0, pos);
+  const after = value.slice(pos);
+  const lead = before.length > 0 && !/\s$/.test(before) ? ' ' : '';
+  const trail = after.length === 0 || !/^\s/.test(after) ? ' ' : '';
+  const token = `${lead}/${name}${trail}`;
+  return {
+    value: before + token + after,
+    cursor: before.length + token.length,
+  };
+}
+
+/** 從原文拿掉第一次出現的 `/name` 或 `/id`。 */
+export function removeInlineSkill(value: string, skill: Pick<Skill, 'id' | 'name'>): string {
+  for (const key of [skill.name, skill.id]) {
+    const trimmed = key.trim();
+    if (!trimmed) continue;
+    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`(^|\\s)/${escaped}(?=\\s|$)`, 'i');
+    if (!pattern.test(value)) continue;
+    return value.replace(pattern, '$1').replace(/[ \t]{2,}/g, ' ').replace(/^[ \t]+/, '');
+  }
+  return value;
 }
 
 export function consumeSlashQuery(value: string, slash: SlashQuery): string {

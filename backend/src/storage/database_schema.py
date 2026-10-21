@@ -38,7 +38,6 @@ FACT_SOURCE_TABLES = (
     "session_context_state",
     "memory_nodes",
     "memory_retrieval_feedback",
-    "skill_evolution_records",
     "scheduled_jobs",
     "scheduled_job_runs",
     "user_notifications",
@@ -676,43 +675,6 @@ BASE_SCHEMA_SQL = """
         ON memory_retrieval_feedback(node_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_memory_retrieval_feedback_created
         ON memory_retrieval_feedback(created_at DESC);
-    CREATE TABLE IF NOT EXISTS skill_evolution_records (
-        id TEXT PRIMARY KEY,
-        project_slug TEXT NOT NULL DEFAULT 'default',
-        agent_id TEXT NOT NULL,
-        agent_name TEXT NOT NULL DEFAULT '',
-        team_id TEXT NOT NULL DEFAULT '',
-        user_id TEXT NOT NULL DEFAULT 'default',
-        source_session_id TEXT NOT NULL DEFAULT '',
-        source_run_id TEXT NOT NULL DEFAULT '',
-        source_message_id TEXT NOT NULL DEFAULT '',
-        router_gate TEXT NOT NULL DEFAULT '{}',
-        workflow_evidence TEXT NOT NULL DEFAULT '{}',
-        reusable INTEGER NOT NULL DEFAULT 0,
-        reusable_reason TEXT NOT NULL DEFAULT '',
-        trigger_description TEXT NOT NULL DEFAULT '',
-        inputs_schema TEXT NOT NULL DEFAULT '{}',
-        draft_skill_name TEXT NOT NULL DEFAULT '',
-        draft_skill_description TEXT NOT NULL DEFAULT '',
-        draft_skill_content TEXT NOT NULL DEFAULT '',
-        draft_tags TEXT NOT NULL DEFAULT '[]',
-        granularity TEXT NOT NULL DEFAULT '',
-        requires_workflow INTEGER NOT NULL DEFAULT 0,
-        suggested_split TEXT NOT NULL DEFAULT '[]',
-        variable_flow TEXT NOT NULL DEFAULT '[]',
-        risk_notes TEXT NOT NULL DEFAULT '',
-        confidence REAL NOT NULL DEFAULT 0,
-        status TEXT NOT NULL DEFAULT 'skipped',
-        registered_skill_id TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_skill_evolution_records_status_updated
-        ON skill_evolution_records(status, updated_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_skill_evolution_records_source
-        ON skill_evolution_records(source_session_id, source_run_id, source_message_id);
-    CREATE INDEX IF NOT EXISTS idx_skill_evolution_records_agent
-        ON skill_evolution_records(agent_id, updated_at DESC);
     CREATE TABLE IF NOT EXISTS scheduled_jobs (
         id TEXT PRIMARY KEY,
         project_slug TEXT NOT NULL,

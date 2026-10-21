@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any
 
 MEMORY_AUDIT_EVENT_TYPE = "MEMORY_AUDIT"
-MEMORY_SKILL_GENERATING_EVENT_TYPE = "MEMORY_SKILL_GENERATING"
 
 
 def record_memory_audit_event(
@@ -56,8 +55,6 @@ def memory_reflection_audit_payload(result: Any) -> dict[str, Any]:
     """把 MemoryReflectionResult 压缩成 Trace payload。"""
 
     updates = list(getattr(result, "updates", []) or [])
-    skill_record = getattr(result, "skill_evolution_record", None) or {}
-    skill_candidate = getattr(result, "skill_candidate", None)
     admission = getattr(result, "admission", None)
     scopes = sorted({str(getattr(update, "scope", "")) for update in updates if getattr(update, "scope", "")})
     operations = [
@@ -78,19 +75,6 @@ def memory_reflection_audit_payload(result: Any) -> dict[str, Any]:
         # user / global 层待用户确认的候选，采纳前不写文件。
         "markdownCandidateCount": len(candidates),
         "markdownCandidateIds": [str(item.get("id") or "") for item in candidates[:12] if isinstance(item, dict)],
-        "skillCandidateKept": skill_candidate is not None,
-        "skillEvolutionRecordId": str(skill_record.get("id") or ""),
-        "skillEvolutionStatus": str(skill_record.get("status") or ""),
-        "registeredSkillId": str(skill_record.get("registeredSkillId") or ""),
         "ignoredReason": str(getattr(result, "ignored_reason", "") or ""),
         "admission": admission.audit_payload() if hasattr(admission, "audit_payload") else {},
-    }
-
-
-def memory_skill_generating_payload() -> dict[str, Any]:
-    """生成 Chat 轻量 Skill 生成中提醒 payload，不包含 Skill 内容。"""
-
-    return {
-        "type": "memory",
-        "message": "Skills 生成中",
     }

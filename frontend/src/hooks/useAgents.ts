@@ -74,9 +74,6 @@ function mapToApiPayload(data: AgentCreatePayload | AgentUpdatePayload): Record<
     const guardrails: Record<string, unknown> = {
       shell_blacklist: data.guardrails.shellBlacklist,
       network_enabled: data.guardrails.networkEnabled,
-      human_approval: data.guardrails.humanApproval,
-      tool_permission_mode: data.guardrails.toolPermissionMode,
-      tool_permission_profile: data.guardrails.toolPermissionProfile,
       execution_backend: data.guardrails.executionBackend,
       docker_image: data.guardrails.dockerImage,
       persistent_sandbox: data.guardrails.persistentSandbox,

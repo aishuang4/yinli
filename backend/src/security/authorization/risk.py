@@ -16,7 +16,7 @@ _PLATFORM_INTERNAL = frozenset({
     "DelegateTask", "SubagentTaskWait", "SubagentResultRead", "SubagentTaskCancel", "ResetTools",
 })
 _LOW_RISK = frozenset({
-    "MemoryAdd", "MemoryUpdate", "TimelineIngest", "SkillDraftPropose",
+    "MemoryAdd", "MemoryUpdate", "TimelineIngest",
     "ScheduleJob", "PauseJob", "RecheckJobCapabilities", "KnowledgeBaseSearch",
 })
 _HUMAN_ONLY = frozenset({"ConfirmJob"})

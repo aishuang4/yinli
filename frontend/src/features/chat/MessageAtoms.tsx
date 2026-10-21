@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { FileText, Loader2 } from 'lucide-react';
 
 import { EchartsContent } from '../../components/EchartsContent';
+import { SkillHighlightText } from './ChatSkillPicker';
+import type { Skill } from '../../types/skill';
 import type { ChatFilePayload, ChatImagePayload } from './types';
 import { useSmoothStreamingText } from './useSmoothStreamingText';
 
@@ -54,6 +56,7 @@ export function MessageContentBlock({
   animateOnMount = false,
   onAnimationChange,
   surface = 'default',
+  skills = [],
 }: {
   content: string;
   role: 'user' | 'assistant';
@@ -61,6 +64,7 @@ export function MessageContentBlock({
   animateOnMount?: boolean;
   onAnimationChange?: (isAnimating: boolean) => void;
   surface?: 'default' | 'transparent';
+  skills?: Skill[];
 }) {
   const isUser = role === 'user';
   const visible = useSmoothStreamingText(content, streaming && !isUser, {
@@ -98,7 +102,7 @@ export function MessageContentBlock({
         whiteSpace: isUser ? 'pre-wrap' : undefined,
       }}
     >
-      {isUser ? content : <EchartsContent content={visible.content} streaming={visible.isAnimating} />}
+      {isUser ? <SkillHighlightText text={content} skills={skills} /> : <EchartsContent content={visible.content} streaming={visible.isAnimating} />}
     </div>
   );
 }

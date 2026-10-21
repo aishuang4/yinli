@@ -1,6 +1,6 @@
 """记忆准入门禁。
 
-集中判断一轮完成对话是否应该进入历史记忆、Markdown 长期记忆和 Skill 自进化。
+集中判断一轮完成对话是否应该进入历史记忆和 Markdown 长期记忆。
 首版使用保守规则，后续可替换为模型 gate 或配置化策略。
 """
 
@@ -128,7 +128,6 @@ class MemoryAdmissionInput:
     assistant_text: str
     tool_calls: list[object] = field(default_factory=list)
     runtime_events: list[dict] = field(default_factory=list)
-    manual_skill_request: bool = False
 
 
 def evaluate_memory_admission(item: MemoryAdmissionInput) -> MemoryAdmissionDecision:
@@ -186,8 +185,6 @@ def evaluate_memory_admission(item: MemoryAdmissionInput) -> MemoryAdmissionDeci
         signals.append("tool_calls")
     if item.runtime_events:
         signals.append("runtime_events")
-    if item.manual_skill_request:
-        signals.append("manual_skill_request")
     if _has_substantive_marker(user_message + "\n" + assistant_text):
         signals.append("substantive_marker")
 
@@ -195,7 +192,7 @@ def evaluate_memory_admission(item: MemoryAdmissionInput) -> MemoryAdmissionDeci
         return MemoryAdmissionDecision(
             should_persist_history=False,
             should_write_markdown=False,
-            should_evaluate_skill=bool(item.manual_skill_request),
+            should_evaluate_skill=False,
             reason="trivial_turn",
             signals=signals,
             policy=policy,
@@ -337,8 +334,6 @@ def _score_admission(
         markdown += 0.1
 
     skill = 0.2
-    if "manual_skill_request" in signals:
-        skill += 0.55
     if "tool_calls" in signals or "runtime_events" in signals:
         skill += 0.2
     if "substantive_marker" in signals:

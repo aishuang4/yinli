@@ -25,7 +25,7 @@ from src.server.routes.chat.models import ChatMessage
 from src.server.routes.chat.router import router
 from src.server.routes.chat.run_context import (
     build_run_context,
-    resolve_forced_runtime_skills,
+    resolve_message_forced_skills,
 )
 from src.server.routes.skills import discover_external_skills
 from src.memory.habit_update import apply_habit_update
@@ -135,7 +135,8 @@ async def start_chat_run(data: ChatMessage):
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
-        resolve_forced_runtime_skills(
+        resolve_message_forced_skills(
+            run_data.message,
             list(run_data.forced_skill_ids or []),
             project_resources=load_project_access(runtime_context),
             external_skills=discover_external_skills(runtime_context.project_root),

@@ -2,12 +2,29 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from typing import Any
 
 from .completion_barrier import ActiveDomainBlock, DomainCompletionBarrier
 from .domain_events import DomainEvent, DomainEventDraft, DomainEventRepository
 from .team_event_normalizer import TeamEventNormalizerMixin
+
+
+def _tool_input_preview(data: dict[str, Any]) -> str:
+    """取出工具結束時的完整參數。串流片段可能已被清空，這裡用整份輸入覆蓋。"""
+
+    raw = data.get("input")
+    if raw in (None, ""):
+        raw = data.get("arguments")
+    if raw in (None, ""):
+        return ""
+    if isinstance(raw, str):
+        return raw
+    try:
+        return json.dumps(raw, ensure_ascii=False)
+    except TypeError:
+        return str(raw)
 
 
 def _permission_facts(decisions: object) -> list[dict[str, str]]:
@@ -89,6 +106,7 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
             "ANSWER_READY": self._answer_ready,
             "TOOL_CALL_START": self._tool_started,
             "TOOL_CALL_DELTA": self._tool_input_delta,
+            "TOOL_CALL_END": self._tool_arguments,
             "TOOL_RESULT_TEXT_DELTA": self._tool_output_delta,
             "TOOL_RESULT_END": self._tool_completed,
             "SKILL_CONTEXT": self._skill_started,
@@ -229,6 +247,23 @@ class ChatProjectionNormalizer(TeamEventNormalizerMixin):
             aggregate_type="tool",
             aggregate_id=call_id,
             data={"blockId": f"tool:{call_id}", "delta": str(data.get("delta") or "")},
+        )]
+
+    def _tool_arguments(self, data: dict[str, Any]) -> list[DomainEvent]:
+        """呼叫結束時用完整參數覆蓋串流片段，半段 JSON 不留在展示快照裡。"""
+
+        call_id = str(data.get("tool_call_id") or "")
+        block_id = f"tool:{call_id}"
+        if not call_id or block_id not in self._active:
+            return []
+        preview = _tool_input_preview(data)
+        if not preview:
+            return []
+        return [self._append(
+            "tool.call.arguments",
+            aggregate_type="tool",
+            aggregate_id=call_id,
+            data={"blockId": block_id, "inputPreview": preview},
         )]
 
     def _tool_output_delta(self, data: dict[str, Any]) -> list[DomainEvent]:

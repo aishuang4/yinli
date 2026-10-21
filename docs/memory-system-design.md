@@ -24,11 +24,11 @@
 
 - 习惯：用户消息落库后、回复前判断。寒暄不跑模型。像偏好、语气或人设时才跑，判定后直接写，不等确认。
 - 专业区：该智能体一轮落库后判断，决定改写、删除或不改。
-- 普通技能：成功收尾后仍走 Skill 自进化，不绑定智能体。手动触发只产生普通技能。
+- 普通技能：已安装的 Skill 由目录、Chat 斜杠和定时任务冻结注入使用。对话成功收尾不再自动生成 Skill。
 
 ## 页面与旧数据
 
-Memory 页主视图是习惯、按智能体的专业区和时间线。Skill 自进化队列、注册失败原因和 `MEMORY_AUDIT` 仍在。
+Memory 页主视图是习惯、按智能体的专业区和时间线。设置区和 `MEMORY_AUDIT` 仍在。
 
 `user_memory.md` / `agent_memory.md` / `global_memory.md` 与 `memory_nodes` 不再注入，也不再从 Chat 收尾写入。旧节点只读。Memory Wiki 已从页面和 API 移除。
 
@@ -38,4 +38,4 @@ Memory 页主视图是习惯、按智能体的专业区和时间线。Skill 自�
 
 - 不新增 `memory` Runtime 分支。
 - 不恢复旧 memory runtime、自动 recalled-memory 或把节点树当每轮注入。
-- 不把 Skill 自进化写成某个智能体的专业区。
+- 不从对话收尾自动生成 Skill，也不恢复 Skill 自进化队列。

@@ -1,6 +1,6 @@
 """旧三层 Markdown 记忆的改写、候选和章节整理。
 
-Skill 自进化不在这里。编排入口仍是 reflection.reflect_completed_run_memory_with_agents。
+编排入口是 reflection.reflect_completed_run_memory_with_agents。
 """
 
 from __future__ import annotations

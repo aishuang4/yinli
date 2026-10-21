@@ -136,32 +136,25 @@ def validate_job_agent_config(
     for item in cleaned.all_items():
         if item.kind == "builtin" and item.id not in JOB_BUILTIN_IDS:
             raise JobAgentError(f"Job Agent 不支持把 {item.id} 配成注入工具")
-    profile = ""
-    human_approval = False
     network = True
+    operation_scope = "normal"
     if guardrails is not None:
         if isinstance(guardrails, dict):
-            profile = str(
-                guardrails.get("toolPermissionProfile")
-                or guardrails.get("tool_permission_profile")
-                or ""
-            )
-            human_approval = bool(
-                guardrails.get("humanApproval", guardrails.get("human_approval", False))
-            )
             network = bool(
                 guardrails.get("networkEnabled", guardrails.get("network_enabled", True))
             )
-        else:
-            profile = str(
-                getattr(guardrails, "tool_permission_profile", None)
-                or getattr(guardrails, "toolPermissionProfile", "")
-                or ""
+            operation_scope = str(
+                guardrails.get("operationScope")
+                or guardrails.get("operation_scope")
+                or ("read_only" if guardrails.get("toolPermissionProfile") == "read_only" or guardrails.get("tool_permission_profile") == "read_only" else "normal")
             )
-            human_approval = bool(getattr(guardrails, "human_approval", False) or getattr(guardrails, "humanApproval", False))
+        else:
             network = bool(getattr(guardrails, "network_enabled", True) if hasattr(guardrails, "network_enabled") else getattr(guardrails, "networkEnabled", True))
-    if human_approval or profile in {"ask_every_time", "read_only"}:
-        raise JobAgentError("Job Agent 必须使用可信工具权限，且不能每次都问人")
+            operation_scope = str(getattr(guardrails, "operation_scope", "") or getattr(guardrails, "operationScope", "") or "")
+            if not operation_scope and str(getattr(guardrails, "tool_permission_profile", "") or getattr(guardrails, "toolPermissionProfile", "")) == "read_only":
+                operation_scope = "read_only"
+    if operation_scope == "read_only":
+        raise JobAgentError("Job Agent 不能使用只读能力范围")
     needs_network = any(
         item.kind == "builtin" and item.id in {"WebFetch", "HttpRequest"}
         for item in cleaned.required

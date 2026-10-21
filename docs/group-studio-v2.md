@@ -39,7 +39,7 @@
 
 ## Worker
 
-工具只留 `group_post_message`。`human_approval=false` 加 `trusted_tools`，权限 `PermissionMode.BYPASS`，不抄 Chat Agent profile。另有 bypass 免疫的 `WORKER_SHELL_BLACKLIST`。`group_approvals` 只兜底，禁止写入 Chat `PENDING_INTERACTIONS`。
+工具只留 `group_post_message`。权限固定 `PermissionMode.BYPASS`，不抄 Chat Agent profile。另有 bypass 免疫的 `WORKER_SHELL_BLACKLIST`。`group_approvals` 只兜底，禁止写入 Chat `PENDING_INTERACTIONS`。
 
 `default` 与 `group-studio-host` 不入座。界面不提供暂停 / 结束，只留输入列「停止」。`close_studio(confirm=true)` 仍可标 `done` 并归档记忆，前端不露出该按钮。
 

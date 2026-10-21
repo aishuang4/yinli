@@ -57,7 +57,6 @@ from src.storage.resource_catalog_records import ResourceCatalogRecordStore
 from src.storage.memory_markdown_candidates import MemoryMarkdownCandidateStore
 from src.storage.session_context_state import SessionContextStateStore
 from src.storage.skill_run_records import SkillRunRecordStore
-from src.storage.skill_evolution_records import SkillEvolutionRecordStore
 from src.storage.trace_records import TraceRecordStore
 from src.storage.observation_records import ObservationRecordStore
 from src.storage.group_studio_records import GroupStudioRecordStore
@@ -79,9 +78,7 @@ def default_guardrails() -> dict[str, Any]:
         "filesystem_scope": str(project_default_root()),
         "shell_blacklist": ["rm -rf /", "sudo"],
         "network_enabled": True,
-        "human_approval": False,
-        "tool_permission_mode": "accept_edits",
-        "tool_permission_profile": "confirm_destructive",
+        "operation_scope": "normal",
         "execution_backend": "local",
         "docker_image": "python:3.11-slim",
         "persistent_sandbox": False,
@@ -1742,79 +1739,6 @@ def list_memory_retrieval_feedback(limit: int = 200) -> list[dict[str, Any]]:
 
 def list_memory_retrieval_feedback_scores(limit: int = 500) -> dict[str, float]:
     return _memory_record_store().feedback_scores(limit)
-
-
-def _skill_evolution_record_store() -> SkillEvolutionRecordStore:
-    """创建复用当前数据库基础设施的 Skill 自进化领域存储。"""
-
-    return SkillEvolutionRecordStore(
-        ensure_db=ensure_db,
-        connect=_connect,
-        lock=_lock,
-        utc_now=_utc_now,
-        dumps=_dumps,
-        loads=_loads,
-        default_project_slug=DEFAULT_PROJECT_ID,
-    )
-
-
-def upsert_skill_evolution_record(data: dict[str, Any]) -> dict[str, Any]:
-    """写入或更新 Skill 自进化候选记录。"""
-
-    return _skill_evolution_record_store().upsert(data)
-
-
-def get_skill_evolution_record(record_id: str) -> dict[str, Any] | None:
-    """读取单条 Skill 自进化候选记录。"""
-
-    return _skill_evolution_record_store().get(record_id)
-
-
-def list_skill_evolution_records(
-    *,
-    status: str | None = None,
-    agent_id: str | None = None,
-    project_slug: str = DEFAULT_PROJECT_ID,
-    limit: int = 50,
-) -> list[dict[str, Any]]:
-    """按 Project、状态或 Agent 列出 Skill 自进化候选记录。"""
-
-    return _skill_evolution_record_store().list(
-        status=status,
-        agent_id=agent_id,
-        project_slug=project_slug,
-        limit=limit,
-    )
-
-
-def mark_skill_evolution_record_registered(
-    record_id: str,
-    *,
-    registered_skill_id: str,
-) -> dict[str, Any] | None:
-    """标记 Skill 自进化候选已注册为标准 Skill。"""
-
-    return _skill_evolution_record_store().mark_registered(
-        record_id,
-        registered_skill_id=registered_skill_id,
-    )
-
-
-def update_skill_evolution_record_status(
-    record_id: str,
-    *,
-    status: str,
-    risk_notes: str | None = None,
-    clear_registered_skill: bool = False,
-) -> dict[str, Any] | None:
-    """更新 Skill 自进化候选状态。"""
-
-    return _skill_evolution_record_store().update_status(
-        record_id,
-        status=status,
-        risk_notes=risk_notes,
-        clear_registered_skill=clear_registered_skill,
-    )
 
 
 def _plan_record_store() -> PlanRecordStore:

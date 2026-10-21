@@ -67,7 +67,10 @@ async def test_chat_manual_human_approval_is_persistent_exact_and_publicly_redac
     assert payload["approvalMode"] == "manual" and len(payload["decisions"]) == 1
     assert "new report" in payload["toolCalls"][0]["input"]
     assert payload["decisions"][0]["status"] == "pending"
-    assert public_authorization_event(agent, "TOOL_CALL_DELTA", {"delta": "Bearer secret"})["delta"] == ""
+    shown = public_authorization_event(agent, "TOOL_CALL_DELTA", {"delta": "Bearer secret"})["delta"]
+    assert shown and "secret" not in shown
+    command = public_authorization_event(agent, "TOOL_CALL_DELTA", {"delta": '{"command": "python3 scripts/check_cert.py"}'})
+    assert command["delta"] == '{"command": "python3 scripts/check_cert.py"}'
     resume = _build_resume_event(interaction, ChatResumeRequest(interactionId=interaction.id, action="approve", rememberApproval=True))
     assert resume.confirm_results[0].rules is None
     with pytest.raises(ValueError):

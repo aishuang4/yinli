@@ -97,54 +97,6 @@ export interface MemoryMarkdownCandidate {
   updatedAt: string;
 }
 
-export type SkillEvolutionRecordStatus = 'draft' | 'registered' | 'skipped' | 'failed';
-export type SkillEvolutionRecordAction = 'skip' | 'restore_draft' | 'mark_failed' | 'register';
-
-export interface SkillEvolutionRecord {
-  id: string;
-  projectId: string;
-  agentId: string;
-  agentName: string;
-  teamId: string;
-  userId: string;
-  sourceSessionId: string;
-  sourceRunId: string;
-  sourceMessageId: string;
-  routerGate: {
-    shouldRun?: boolean;
-    reason?: string;
-    risk?: string;
-    signals?: string[];
-  };
-  workflowEvidence: {
-    goal?: string;
-    finalOutput?: string;
-    successfulToolCalls?: Array<Record<string, unknown>>;
-    valuableFailures?: Array<Record<string, unknown>>;
-    changedFiles?: string[];
-    validationSignals?: string[];
-    variableFlow?: Array<Record<string, unknown>>;
-  };
-  reusable: boolean;
-  reusableReason: string;
-  triggerDescription: string;
-  inputsSchema: Record<string, unknown>;
-  draftSkillName: string;
-  draftSkillDescription: string;
-  draftSkillContent: string;
-  draftTags: string[];
-  granularity: string;
-  requiresWorkflow: boolean;
-  suggestedSplit: string[];
-  variableFlow: Array<Record<string, unknown>>;
-  riskNotes: string;
-  confidence: number;
-  status: SkillEvolutionRecordStatus;
-  registeredSkillId: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
 export interface MemoryAuditEvent {
   id: string;
   sessionId: string;

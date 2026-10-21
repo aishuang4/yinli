@@ -9,8 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from agentscope.permission import PermissionMode
-
 from src.scheduler.models import JobToolScope
 from src.security.permissions import ApprovalPolicy, build_permission_profile
 
@@ -55,16 +53,9 @@ def frozen_skills_require_bash(skill_ids: list[str]) -> bool:
 
 
 def agent_approval_policy(agent: object | None) -> ApprovalPolicy:
-    """读取无人值守实际生效的审批策略。
+    """Agent 档案不再带审批档。只读能力保持收窄，其余工具按可信范围装配。"""
 
-    ``human_approval=True`` 会把 AgentScope 打成 DEFAULT，即使 profile
-    仍是 trusted_tools；overlay 只批准 cwd Write/Edit，不能当 BYPASS。
-    """
-
-    profile = build_permission_profile(getattr(agent, "guardrails", None))
-    if profile.human_approval:
-        return ApprovalPolicy.ASK_EVERY_TIME
-    return profile.tool_policy
+    return build_permission_profile(getattr(agent, "guardrails", None)).tool_policy
 
 
 def injected_unattended_tools(tool_scope: JobToolScope | Any) -> list[str]:
@@ -82,11 +73,12 @@ def would_fail_unattended_tools(
     tool_scope: JobToolScope | Any,
     agent: object | None,
     extra_tool_names: list[str] | tuple[str, ...] = (),
+    approval_mode: str = "manual",
 ) -> list[str]:
-    """Agent 策略下会 HITL 且 overlay 不会批准的注入工具。
+    """确认阶段会在到期被拒绝、且不能交给模型换方法的工具。
 
-    与 firing overlay / AgentScope permission mode 对齐：只有真正 BYPASS
-    才能无人值守跑 Bash；human_approval 强制 DEFAULT，Bash 会被 overlay 拒绝。
+    定时任务按完全开放确认：Bash 不计入。硬底线在执行时拒绝，不在这里按工具名拦截。
+    read_only 仍不能激活要写文件的任务。
     """
 
     injected = injected_unattended_tools(tool_scope)
@@ -99,14 +91,14 @@ def would_fail_unattended_tools(
     if profile.is_read_only:
         return [name for name in injected if name in _OVERLAY_APPROVED_TOOLS]
     failing: list[str] = []
-    bypass = profile.to_agentscope_permission_mode() == PermissionMode.BYPASS
+    bash_allowed = str(approval_mode or "manual") == "full_access"
     for name in injected:
-        if name == "Bash" and not bypass:
+        if name == "Bash" and not bash_allowed:
             failing.append(name)
     for name in extras:
         if name in {"Read", "Grep", "Glob", *_OVERLAY_APPROVED_TOOLS}:
             continue
-        if name == "Bash" and not bypass:
+        if name == "Bash" and not bash_allowed:
             failing.append(name)
         elif name != "Bash" and policy != ApprovalPolicy.TRUSTED_TOOLS:
             failing.append(name)

@@ -346,6 +346,32 @@ def test_stream_service_replays_contiguous_tail_or_falls_back_to_snapshot(projec
     assert service.heartbeat_comment() == ": heartbeat\n\n"
 
 
+def test_tool_call_end_replaces_blank_streamed_arguments(projection_db) -> None:
+    events, store, coordinator, runner = create_runtime()
+    normalizer = ChatProjectionNormalizer(
+        stream_key="stream-tool-args",
+        run_id="run-tool-args",
+        session_id="session-tool-args",
+        events=events,
+    )
+    normalizer.start(agent_name="Agent")
+    normalizer.ingest("TOOL_CALL_START", {"tool_call_id": "call-1", "tool_call_name": "Bash"})
+    normalizer.ingest("TOOL_CALL_DELTA", {"tool_call_id": "call-1", "delta": ""})
+    normalizer.ingest("TOOL_CALL_DELTA", {"tool_call_id": "call-1", "delta": '{"command":'})
+    normalizer.ingest("TOOL_CALL_END", {
+        "tool_call_id": "call-1",
+        "input": '{"command": "python3 scripts/check_cert.py --as-of 2026-10-21"}',
+    })
+    normalizer.ingest("TOOL_RESULT_END", {"tool_call_id": "call-1", "state": "completed"})
+    normalizer.ingest("RUN_COMPLETED", {"payload": {}})
+
+    assert runner.run_available("stream-tool-args", "run-tool-args") == len(events.list("stream-tool-args"))
+    state = store.load_materialized("stream-tool-args", coordinator)
+    assert state.snapshot.blocks_by_id["tool:call-1"].data["inputPreview"] == (
+        '{"command": "python3 scripts/check_cert.py --as-of 2026-10-21"}'
+    )
+
+
 def test_source_normalizer_closes_all_activity_before_run_completed(projection_db) -> None:
     events, store, coordinator, runner = create_runtime(checkpoint_frame_interval=8)
     normalizer = ChatProjectionNormalizer(

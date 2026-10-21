@@ -46,19 +46,6 @@ class MemoryNodeStatusUpdate(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
-class SkillEvolutionRecordListResponse(BaseModel):
-    """Skill 自进化候选队列响应。"""
-
-    records: list[dict[str, Any]]
-
-
-class SkillEvolutionRecordAction(BaseModel):
-    """Skill 自进化候选操作请求。"""
-
-    action: str = Field(..., pattern="^(skip|restore_draft|mark_failed|register)$")
-    reason: str = Field(default="", max_length=800)
-
-
 class MemoryAuditEventListResponse(BaseModel):
     """Memory 审计事件列表响应。"""
 

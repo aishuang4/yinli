@@ -219,7 +219,7 @@ def _apply_job_agent_fields(
     knowledge_tools: list[str],
     skills: list[str],
 ) -> tuple[str, JobToolkit, Guardrails, list[str], list[str], list[str]]:
-    """校验角色并同步绑定字段。Job Agent 强制可信工具。"""
+    """校验角色并同步绑定字段。"""
 
     parsed_role = parse_agent_role(role)
     toolkit = parse_job_toolkit(job_toolkit)
@@ -237,11 +237,6 @@ def _apply_job_agent_fields(
         mcp_tools = list(bound["mcp"])
         knowledge_tools = list(dict.fromkeys([*bound["http"], *bound["knowledge"]]))
         skills = list(bound["skill"])
-        guardrails = guardrails.model_copy(update={
-            "human_approval": False,
-            "tool_permission_profile": "trusted_tools",
-            "tool_permission_mode": "bypass",
-        })
     else:
         toolkit = empty_job_toolkit()
     return parsed_role, toolkit, guardrails, mcp_tools, knowledge_tools, skills
@@ -526,12 +521,7 @@ async def update_agent(agent_id: str, data: AgentUpdate) -> AgentResponse:
         if is_default_websearch_job_agent_id(agent_id):
             existing_dict["role"] = JOB_ROLE
             guardrails = Guardrails.model_validate(existing_dict.get("guardrails") or {})
-            guardrails = guardrails.model_copy(update={
-                "network_enabled": True,
-                "human_approval": False,
-                "tool_permission_profile": "trusted_tools",
-                "tool_permission_mode": "bypass",
-            })
+            guardrails = guardrails.model_copy(update={"network_enabled": True})
             existing_dict["guardrails"] = guardrails
         role, toolkit, guardrails, mcp_tools, knowledge_tools, skills = _apply_job_agent_fields(
             agent_id=agent_id,

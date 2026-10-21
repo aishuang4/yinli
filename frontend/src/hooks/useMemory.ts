@@ -20,9 +20,6 @@ import type {
   MemoryNodeTreeItem,
   TimelineQuery,
   TimelineQueryResult,
-  SkillEvolutionRecordAction,
-  SkillEvolutionRecord,
-  SkillEvolutionRecordStatus,
 } from '../types/memory';
 import { getErrorMessage, notifyError, notifySuccess } from '../utils/feedback';
 import { useAppStore } from '../stores/appStore';
@@ -36,24 +33,12 @@ interface MemoryNodeFilters {
   limit?: number;
 }
 
-interface SkillEvolutionFilters {
-  status?: SkillEvolutionRecordStatus | 'all';
-  agentId?: string;
-  limit?: number;
-}
-
 interface UseMemoryReturn {
   readMarkdownMemory: (scope: MarkdownMemoryScope, agentId?: string) => Promise<MarkdownMemoryDocument>;
   saveMarkdownMemory: (scope: MarkdownMemoryScope, content: string, agentId?: string) => Promise<MarkdownMemoryDocument>;
   loadNodeTree: (filters?: MemoryNodeFilters) => Promise<MemoryNodeTreeItem[]>;
   queryNodes: (filters?: MemoryNodeFilters) => Promise<MemoryNodeQueryResult[]>;
   updateNodeStatus: (nodeId: string, status: MemoryNodeStatus, reason?: string) => Promise<MemoryNodeQueryResult>;
-  loadSkillEvolutionRecords: (filters?: SkillEvolutionFilters) => Promise<SkillEvolutionRecord[]>;
-  updateSkillEvolutionRecord: (
-    recordId: string,
-    action: SkillEvolutionRecordAction,
-    reason?: string,
-  ) => Promise<SkillEvolutionRecord>;
   loadMemoryCandidates: (status?: MemoryCandidateStatus | 'all') => Promise<{ records: MemoryMarkdownCandidate[]; pendingCount: number }>;
   updateMemoryCandidate: (recordId: string, action: MemoryCandidateAction, reason?: string) => Promise<MemoryMarkdownCandidate>;
   loadMemoryAuditEvents: (limit?: number) => Promise<MemoryAuditEvent[]>;
@@ -99,15 +84,6 @@ function nodeQueryParams(
   if (filters.dateFrom) params.set('dateFrom', filters.dateFrom);
   if (filters.dateTo) params.set('dateTo', filters.dateTo);
   if (filters.status) params.set('status', filters.status);
-  if (filters.limit) params.set('limit', String(filters.limit));
-  return params.toString();
-}
-
-function skillEvolutionQueryParams(filters: SkillEvolutionFilters = {}, projectId?: string): string {
-  const params = new URLSearchParams();
-  if (projectId) params.set('projectSlug', projectId);
-  if (filters.status && filters.status !== 'all') params.set('status', filters.status);
-  if (filters.agentId) params.set('agentId', filters.agentId);
   if (filters.limit) params.set('limit', String(filters.limit));
   return params.toString();
 }
@@ -173,34 +149,6 @@ export function useMemory(): UseMemoryReturn {
       },
     );
     notifySuccess(status === 'active' ? '历史记忆已恢复' : '历史记忆状态已更新');
-    return result;
-  }, [activeProjectSlug]);
-
-  const loadSkillEvolutionRecords = useCallback(async (filters: SkillEvolutionFilters = {}) => {
-    const params = skillEvolutionQueryParams(
-      { ...filters, limit: filters.limit || 50 },
-      activeProjectSlug,
-    );
-    const data = await requestJson<{ records: SkillEvolutionRecord[] }>(
-      `/api/memory/skill-evolution/records${params ? `?${params}` : ''}`,
-    );
-    return data.records;
-  }, [activeProjectSlug]);
-
-  const updateSkillEvolutionRecord = useCallback(async (
-    recordId: string,
-    action: SkillEvolutionRecordAction,
-    reason = '',
-  ) => {
-    const result = await requestJson<SkillEvolutionRecord>(
-      `/api/memory/skill-evolution/records/${encodeURIComponent(recordId)}?projectSlug=${encodeURIComponent(activeProjectSlug)}`,
-      {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, reason }),
-      },
-    );
-    notifySuccess('Skill 队列已更新');
     return result;
   }, [activeProjectSlug]);
 
@@ -328,8 +276,6 @@ export function useMemory(): UseMemoryReturn {
     loadNodeTree,
     queryNodes,
     updateNodeStatus,
-    loadSkillEvolutionRecords,
-    updateSkillEvolutionRecord,
     loadMemoryCandidates,
     updateMemoryCandidate,
     loadMemoryAuditEvents,

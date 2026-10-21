@@ -37,9 +37,7 @@ export interface ModelConfig {
   maxReactIters: number;
 }
 
-/** 安全边界配置 */
-export type ToolPermissionProfile = 'read_only' | 'trusted_tools' | 'confirm_destructive' | 'ask_every_time';
-
+/** 安全边界配置。工具放行不在 Agent 档案上设置。 */
 export interface Guardrails {
   /** 文件系统访问范围 */
   filesystemScope: string;
@@ -47,12 +45,6 @@ export interface Guardrails {
   shellBlacklist: string[];
   /** 是否允许网络访问 */
   networkEnabled: boolean;
-  /** 是否启用人工审批 */
-  humanApproval: boolean;
-  /** 工具权限模式 */
-  toolPermissionMode: 'ask_every_time' | 'accept_edits' | 'bypass';
-  /** 工具权限配置 */
-  toolPermissionProfile: ToolPermissionProfile;
   /** 工具执行后端 */
   executionBackend: 'local' | 'docker';
   /** Docker 沙盒基础镜像 */
@@ -140,9 +132,6 @@ export const DEFAULT_GUARDRAILS: Guardrails = {
   filesystemScope: '',
   shellBlacklist: ['rm -rf /', 'sudo'],
   networkEnabled: true,
-  humanApproval: false,
-  toolPermissionMode: 'accept_edits',
-  toolPermissionProfile: 'confirm_destructive',
   executionBackend: 'local',
   dockerImage: 'python:3.11-slim',
   persistentSandbox: false,
@@ -175,12 +164,6 @@ export function applyJobRoleDefaults(form: AgentCreatePayload, role: AgentRole):
     ...form,
     role,
     jobToolkit: { required, optional: form.jobToolkit.optional },
-    guardrails: {
-      ...form.guardrails,
-      humanApproval: false,
-      toolPermissionProfile: 'trusted_tools',
-      toolPermissionMode: 'bypass',
-    },
   };
 }
 

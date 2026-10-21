@@ -50,6 +50,39 @@ def test_toolkit_registers_native_skill_loader_and_path_rules(tmp_path) -> None:
     assert "Skill" in tool_names
 
 
+def test_scheduled_preloaded_toolkit_does_not_register_skill_viewer(tmp_path) -> None:
+    package = _write_skill(tmp_path)
+    toolkit = _create_default_toolkit(skill_paths=[package], register_skill_catalog=False)
+
+    instructions = asyncio.run(toolkit.get_skill_instructions())
+    tool_names = asyncio.run(_tool_names(toolkit))
+
+    assert instructions is None
+    assert "Skill" not in tool_names
+
+
+def test_skill_loading_mode_changes_agent_cache_key(tmp_path) -> None:
+    package = _write_skill(tmp_path)
+    kwargs = {
+        "agent_id": "agent",
+        "session_id": "session",
+        "system_prompt": "prompt",
+        "model_name": "model",
+        "deep_thinking": False,
+        "fallback_names": [],
+        "used_skills": [],
+        "skill_paths": [package],
+        "mcp_servers": [],
+        "knowledge_tools": [],
+        "runtime_tool_scope": RuntimeToolScope(),
+        "guardrail_cache_key": "guard",
+    }
+    interactive = build_runtime_agent_cache_key(**kwargs)
+    scheduled = build_runtime_agent_cache_key(**kwargs, skill_loading_mode="scheduled_preloaded")
+
+    assert interactive != scheduled
+
+
 def test_runtime_path_loader_exposes_container_skill_directory(tmp_path) -> None:
     package = _write_skill(tmp_path)
     loader = RuntimePathSkillLoader(package, "/workspace/skills/workbook-inspector")

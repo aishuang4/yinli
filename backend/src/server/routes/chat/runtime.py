@@ -48,12 +48,7 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
         filesystem_scope=getattr(guardrails, "filesystem_scope", "/") or "/",
         shell_blacklist=list(getattr(guardrails, "shell_blacklist", []) or []),
         network_enabled=bool(getattr(guardrails, "network_enabled", True)),
-        human_approval=bool(getattr(guardrails, "human_approval", False)),
-        tool_permission_mode=str(getattr(guardrails, "tool_permission_mode", "accept_edits") or "accept_edits"),
-        tool_permission_profile=str(
-            getattr(guardrails, "tool_permission_profile", "")
-            or _profile_from_legacy_tool_mode(getattr(guardrails, "tool_permission_mode", "accept_edits"))
-        ),
+        operation_scope=str(getattr(guardrails, "operation_scope", "normal") or "normal"),
         execution_backend=str(getattr(guardrails, "execution_backend", "local") or "local"),
         docker_image=str(getattr(guardrails, "docker_image", "python:3.11-slim") or "python:3.11-slim"),
         persistent_sandbox=bool(getattr(guardrails, "persistent_sandbox", False)),
@@ -63,9 +58,7 @@ def _build_runtime_guardrails(agent_config: object | None) -> AgentGuardrails:
         filesystem_scope=runtime_guardrails.filesystem_scope,
         shell_blacklist=runtime_guardrails.shell_blacklist,
         network_enabled=runtime_guardrails.network_enabled,
-        human_approval=runtime_guardrails.human_approval,
-        tool_permission_mode=runtime_guardrails.tool_permission_mode,
-        tool_permission_profile=runtime_guardrails.tool_permission_profile,
+        operation_scope=runtime_guardrails.operation_scope,
         execution_backend=runtime_guardrails.execution_backend,
         docker_image=runtime_guardrails.docker_image,
         persistent_sandbox=runtime_guardrails.persistent_sandbox,
@@ -123,9 +116,7 @@ def _copy_guardrails(guardrails: AgentGuardrails, filesystem_scope: str) -> Agen
         filesystem_scope=filesystem_scope,
         shell_blacklist=guardrails.shell_blacklist,
         network_enabled=guardrails.network_enabled,
-        human_approval=guardrails.human_approval,
-        tool_permission_mode=guardrails.tool_permission_mode,
-        tool_permission_profile=guardrails.tool_permission_profile,
+        operation_scope=guardrails.operation_scope,
         execution_backend=guardrails.execution_backend,
         docker_image=guardrails.docker_image,
         persistent_sandbox=guardrails.persistent_sandbox,
@@ -143,15 +134,6 @@ def _is_legacy_desktop_scope(agent_path: Path, project_path: Path) -> bool:
     return any(marker in str(agent_path).lower() for marker in legacy_markers)
 
 
-def _profile_from_legacy_tool_mode(mode: object) -> str:
-    value = str(mode or "accept_edits").strip().lower()
-    if value == "ask_every_time":
-        return "ask_every_time"
-    if value == "bypass":
-        return "trusted_tools"
-    return "confirm_destructive"
-
-
 def _permission_mode_for_guardrails(guardrails: AgentGuardrails) -> PermissionMode:
     return guardrails.permission_profile.to_agentscope_permission_mode()
 
@@ -162,8 +144,7 @@ def _guardrail_cache_key(guardrails: AgentGuardrails) -> str:
     return (
         f"{guardrails.permission_profile.cache_key()}:"
         f"scope-{guardrails.filesystem_scope}:"
-        f"legacy-mode-{guardrails.tool_permission_mode}:"
-        f"legacy-profile-{guardrails.tool_permission_profile}:"
+        f"operation-{guardrails.operation_scope}:"
         f"exec-{guardrails.execution_backend}:"
         f"docker-{guardrails.docker_image}:"
         f"persist-sandbox-{guardrails.persistent_sandbox}"

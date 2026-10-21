@@ -25,6 +25,7 @@ _JOB_JSON_FIELDS = {
     "input_spec",
     "output_spec",
     "recipient_ids",
+    "execution_policy",
 }
 _JOB_UPDATE_FIELDS = (
     "project_slug", "cwd", "name", "summary", "status", "pause_reason",
@@ -37,6 +38,7 @@ _JOB_UPDATE_FIELDS = (
     "unattended_permission", "auto_send_enabled_at", "required_successes",
     "consecutive_successes", "consecutive_failures", "max_consecutive_failures",
     "max_firings_per_day", "created_from_session_id", "archived_at",
+    "execution_policy",
 )
 _FIRING_JSON_FIELDS = {"output_manifest"}
 _FIRING_UPDATE_FIELDS = (

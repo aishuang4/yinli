@@ -182,10 +182,6 @@ def test_list_jobs_then_pause_job_updates_same_job_id(client):
 def test_askuser_resume_does_not_activate_pending_job(client, monkeypatch):
     """AskUser resume 只收集字段；即使用户说确认启用，Job 仍保持 pending_confirmation。"""
 
-    monkeypatch.setattr(
-        "src.server.routes.chat.completion._schedule_skill_evolution",
-        lambda *args, **kwargs: None,
-    )
     confirm_calls: list[str] = []
     original_confirm = ScheduledJobService.confirm
 

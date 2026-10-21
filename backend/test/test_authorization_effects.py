@@ -44,7 +44,7 @@ def test_webfetch_only_known_plain_url_is_readonly():
         assert classify_effect(identity, {"url": unsafe}, known_urls=frozenset({unsafe})) == "outbound"
 
 
-@pytest.mark.parametrize("cls", ["MemoryAdd", "MemoryUpdate", "MemoryDelete", "SkillDraftPropose"])
+@pytest.mark.parametrize("cls", ["MemoryAdd", "MemoryUpdate", "MemoryDelete"])
 def test_internal_memory_mutations_are_not_framework_readonly(cls):
     assert classify_effect(ToolIdentity("src.tools.memory_reflection", cls, "read"), {}) == "mutation"
 

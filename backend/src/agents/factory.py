@@ -325,6 +325,7 @@ def _create_default_toolkit(
     tool_name_denylist: set[str] | None = None,
     skill_paths: list[str] | None = None,
     skill_runtime_root: str | None = None,
+    register_skill_catalog: bool = True,
     workspace_dir: str | None = None,
     write_scope_dir: str | None = None,
     extra_filesystem_scopes: list[str] | None = None,
@@ -430,13 +431,16 @@ def _create_default_toolkit(
     )
 
     mcp_clients = [] if read_only or not scope.allow_mcp else _create_mcp_clients(mcp_servers or [], guardrails)
-    skills_or_loaders = [
-        RuntimePathSkillLoader(
-            path,
-            os.path.join(skill_runtime_root, os.path.basename(path)),
-        )
-        for path in (skill_paths or [])
-    ] if skill_runtime_root else (skill_paths or None)
+    # 定時任務預載全文，組裝 Toolkit 時不註冊 Skill 目錄，AgentScope 才不會附帶 Skill viewer。
+    skills_or_loaders = None
+    if register_skill_catalog:
+        skills_or_loaders = [
+            RuntimePathSkillLoader(
+                path,
+                os.path.join(skill_runtime_root, os.path.basename(path)),
+            )
+            for path in (skill_paths or [])
+        ] if skill_runtime_root else (skill_paths or None)
     return Toolkit(
         tools=[
             *local_tools,
@@ -470,6 +474,7 @@ def get_or_create_agent(
     on_fallback_event: FallbackEventCallback | None = None,
     middlewares: list[MiddlewareBase] | None = None,
     skill_paths: list[str] | None = None,
+    skill_loading_mode: str = "interactive_on_demand",
     workspace_dir: str | None = None,
     write_scope_dir: str | None = None,
     extra_filesystem_scopes: list[str] | None = None,
@@ -618,6 +623,7 @@ def get_or_create_agent(
             tool_name_denylist=tool_name_denylist,
             skill_paths=skill_paths,
             skill_runtime_root=docker_skill_runtime_root,
+            register_skill_catalog=skill_loading_mode != "scheduled_preloaded",
             workspace_dir=workspace_dir,
             write_scope_dir=write_scope_dir,
             extra_filesystem_scopes=extra_filesystem_scopes,

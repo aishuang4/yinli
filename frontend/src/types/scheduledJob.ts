@@ -167,3 +167,18 @@ export interface ScheduledJobSchedulePatch {
   scheduleExpr?: JobScheduleExpr;
   timezone?: string;
 }
+
+export interface ScheduledJobWritePayload {
+  name: string;
+  summary: string;
+  agentId: string;
+  scheduleKind: ScheduleKind;
+  scheduleExpr: JobScheduleExpr;
+  timezone: string;
+  frozenPrompt: string;
+  skillIds: string[];
+  taskIntent?: string;
+}
+
+/** 只包含改过的字段。已启用任务若带上执行者、提示词或 Skill，会回到待确认。 */
+export type ScheduledJobFieldPatch = Partial<Omit<ScheduledJobWritePayload, 'taskIntent'>>;

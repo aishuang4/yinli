@@ -67,6 +67,15 @@ def _split_frontmatter(markdown: str) -> tuple[dict, str]:
     return payload, match.group("body")
 
 
+def frontmatter_identity(markdown: str, fallback: str) -> tuple[str, str]:
+    """注入用的是 SKILL.md 的 name，不是包 id。"""
+
+    metadata, _body = _split_frontmatter(markdown)
+    name = str(metadata.get("name") or fallback).strip() or fallback
+    description = str(metadata.get("description") or "").strip() or name
+    return name, description
+
+
 def _package_resources(package_dir: Path) -> list[str]:
     return sorted(
         str(path.relative_to(package_dir))

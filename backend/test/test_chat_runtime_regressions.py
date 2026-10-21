@@ -2704,16 +2704,16 @@ def test_create_main_agent_from_spec_delegates_to_factory(monkeypatch):
     assert callable(calls["on_fallback_event"])
 
 
-def test_unified_permission_profile_maps_legacy_bypass_to_trusted_tools():
-    guardrails = AgentGuardrails(
-        tool_permission_mode="bypass",
-        tool_permission_profile="",
-    )
+def test_agent_profile_does_not_select_an_approval_mode():
+    from agentscope.permission import PermissionMode
+
+    guardrails = AgentGuardrails()
 
     profile = build_permission_profile(guardrails)
 
     assert profile.tool_policy == "trusted_tools"
-    assert profile.decide(ResourceType.TOOL, PermissionAction.READ) == PermissionDecision.ALLOW
+    assert profile.decide(ResourceType.TOOL, PermissionAction.WRITE) == PermissionDecision.ALLOW
+    assert _permission_mode_for_guardrails(guardrails) == PermissionMode.BYPASS
 
 
 def test_default_workspace_dir_is_project_root_not_user_home():
@@ -2744,7 +2744,7 @@ def test_storage_normalizes_legacy_root_filesystem_scope():
 
 
 def test_unified_permission_profile_denies_write_in_read_only():
-    guardrails = AgentGuardrails(tool_permission_profile="read_only")
+    guardrails = AgentGuardrails(operation_scope="read_only")
 
     profile = build_permission_profile(guardrails)
 
@@ -2753,19 +2753,8 @@ def test_unified_permission_profile_denies_write_in_read_only():
     assert profile.decide(ResourceType.TOOL, PermissionAction.WRITE) == PermissionDecision.DENY
 
 
-def test_guardrails_human_approval_uses_agentscope_default_permission_mode():
-    from agentscope.permission import PermissionMode
-
-    guardrails = AgentGuardrails(
-        human_approval=True,
-        tool_permission_profile="trusted_tools",
-    )
-
-    assert _permission_mode_for_guardrails(guardrails) == PermissionMode.DEFAULT
-
-
 def test_permission_decision_payload_denies_write_for_read_only_profile():
-    guardrails = AgentGuardrails(tool_permission_profile="read_only")
+    guardrails = AgentGuardrails(operation_scope="read_only")
 
     payload = _permission_decision_payload(
         {"tool_call_id": "call-write", "tool_call_name": "Write"},
@@ -2779,7 +2768,7 @@ def test_permission_decision_payload_denies_write_for_read_only_profile():
 
 
 def test_permission_decision_payload_maps_unknown_tool_to_mcp_execute():
-    guardrails = AgentGuardrails(tool_permission_profile="trusted_tools")
+    guardrails = AgentGuardrails()
 
     payload = _permission_decision_payload(
         {"tool_call_id": "call-mcp", "tool_call_name": "SearchDocs"},

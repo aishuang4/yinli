@@ -141,7 +141,7 @@ async def apply_agents(data: BuilderApplyRequest) -> BuilderApplyResponse:
             mcpTools=draft.mcp_tools,
             skills=draft.skills,
             tags=draft.tags,
-            guardrails=Guardrails(human_approval=True),
+            guardrails=Guardrails(),
         ))
         created_agents.append(agent)
 

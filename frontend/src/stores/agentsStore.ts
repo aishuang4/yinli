@@ -28,11 +28,6 @@ interface AgentApiData {
     filesystem_scope: string;
     shell_blacklist: string[];
     network_enabled: boolean;
-    human_approval: boolean;
-    tool_permission_mode?: Agent['guardrails']['toolPermissionMode'];
-    toolPermissionMode?: Agent['guardrails']['toolPermissionMode'];
-    tool_permission_profile?: Agent['guardrails']['toolPermissionProfile'];
-    toolPermissionProfile?: Agent['guardrails']['toolPermissionProfile'];
     execution_backend?: Agent['guardrails']['executionBackend'];
     executionBackend?: Agent['guardrails']['executionBackend'];
     docker_image?: string;
@@ -46,14 +41,6 @@ interface AgentApiData {
   updated_at: string;
   role?: 'chat' | 'job';
   jobToolkit?: Agent['jobToolkit'];
-}
-
-function profileFromLegacyToolMode(
-  mode: string | undefined,
-): Agent['guardrails']['toolPermissionProfile'] {
-  if (mode === 'ask_every_time') return 'ask_every_time';
-  if (mode === 'bypass') return 'trusted_tools';
-  return 'confirm_destructive';
 }
 
 export function mapApiAgent(api: AgentApiData): Agent {
@@ -82,13 +69,6 @@ export function mapApiAgent(api: AgentApiData): Agent {
       filesystemScope: api.guardrails.filesystem_scope,
       shellBlacklist: api.guardrails.shell_blacklist,
       networkEnabled: api.guardrails.network_enabled,
-      humanApproval: api.guardrails.human_approval,
-      toolPermissionMode: api.guardrails.tool_permission_mode
-        ?? api.guardrails.toolPermissionMode
-        ?? 'accept_edits',
-      toolPermissionProfile: api.guardrails.tool_permission_profile
-        ?? api.guardrails.toolPermissionProfile
-        ?? profileFromLegacyToolMode(api.guardrails.tool_permission_mode ?? api.guardrails.toolPermissionMode),
       executionBackend: api.guardrails.execution_backend ?? api.guardrails.executionBackend ?? 'local',
       dockerImage: api.guardrails.docker_image ?? api.guardrails.dockerImage ?? 'python:3.11-slim',
       persistentSandbox: api.guardrails.persistent_sandbox ?? api.guardrails.persistentSandbox ?? false,

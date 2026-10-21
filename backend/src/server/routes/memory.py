@@ -1,6 +1,6 @@
 """Memory API 路由。
 
-习惯、专业区、时间线、旧 Markdown、历史节点、Skill 自进化和设置分在 memory_api。
+习惯、专业区、时间线、旧 Markdown、历史节点和设置分在 memory_api。
 """
 
 from fastapi import APIRouter
@@ -36,8 +36,6 @@ from src.server.routes.memory_api.models import (
     MemoryNodeStatusUpdate,
     MemoryRetrievalFeedback,
     MemorySettingsResponse,
-    SkillEvolutionRecordAction,
-    SkillEvolutionRecordListResponse,
 )
 from src.server.routes.memory_api.nodes import (
     get_node,
@@ -54,15 +52,8 @@ from src.server.routes.memory_api.settings import (
     router as settings_router,
     update_memory_admission_settings,
 )
-from src.server.routes.memory_api.skills import (
-    router as skills_router,
-    skill_evolution_records,
-    update_skill_evolution_record,
-)
-
 router = APIRouter()
 router.include_router(nodes_router)
-router.include_router(skills_router)
 router.include_router(markdown_router)
 router.include_router(live_router)
 router.include_router(settings_router)

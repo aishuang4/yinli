@@ -58,6 +58,7 @@ class MainAgentRuntimeSpec:
     tool_name_denylist: set[str]
     middlewares: list[MiddlewareBase]
     skill_paths: list[str]
+    skill_loading_mode: str = "interactive_on_demand"
     workspace_dir: str = ""
     write_scope_dir: str = ""
     include_default_tools: bool = True
@@ -87,6 +88,7 @@ def build_runtime_agent_cache_key(
     runtime_tool_scope: RuntimeToolScope,
     guardrail_cache_key: str,
     runtime_features_cache_key: str = "none",
+    skill_loading_mode: str = "interactive_on_demand",
 ) -> str:
     """生成影响 Agent 实例缓存的稳定 key。"""
 
@@ -117,6 +119,7 @@ def build_runtime_agent_cache_key(
         f"skills-{skill_cache_key}:mcp-{mcp_cache_key}:knowledge-{knowledge_cache_key}:"
         f"tools-{runtime_tool_scope.cache_key()}:"
         f"features-{runtime_features_cache_key}:"
+        f"skill-mode-{skill_loading_mode}:"
         f"guardrails-{guardrail_cache_key}:"
         f"catalog-{catalog_fingerprint()}"
     )
@@ -138,6 +141,7 @@ def build_main_agent_runtime_spec(
     runtime_tool_scope: RuntimeToolScope,
     guardrail_cache_key: str,
     runtime_features_cache_key: str = "none",
+    skill_loading_mode: str = "interactive_on_demand",
     extra_tools: list[ToolBase] | None = None,
     tool_name_allowlist: set[str] | None = None,
     tool_name_denylist: set[str] | None = None,
@@ -163,6 +167,7 @@ def build_main_agent_runtime_spec(
         runtime_tool_scope=runtime_tool_scope,
         guardrail_cache_key=guardrail_cache_key,
         runtime_features_cache_key=runtime_features_cache_key,
+        skill_loading_mode=skill_loading_mode,
     )
     return MainAgentRuntimeSpec(
         runtime_agent_id=runtime_agent_id,
@@ -184,6 +189,7 @@ def build_main_agent_runtime_spec(
         tool_name_denylist=tool_name_denylist or set(),
         middlewares=middlewares or [],
         skill_paths=list(skill_paths or []),
+        skill_loading_mode=skill_loading_mode,
         workspace_dir=workspace_dir,
         write_scope_dir=write_scope_dir,
         include_default_tools=include_default_tools,
@@ -221,6 +227,7 @@ def create_main_agent_from_spec(
         tool_name_denylist=spec.tool_name_denylist,
         middlewares=spec.middlewares,
         skill_paths=spec.skill_paths,
+        skill_loading_mode=spec.skill_loading_mode,
         workspace_dir=spec.workspace_dir or None,
         write_scope_dir=spec.write_scope_dir or None,
         include_default_tools=spec.include_default_tools,

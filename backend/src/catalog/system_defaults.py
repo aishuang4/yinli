@@ -82,12 +82,7 @@ def build_default_websearch_job_agent(*, now: str | None = None) -> AgentRespons
             DEFAULT_WEBSEARCH_JOB_AGENT_VERSION_TAG,
         ],
         "planConfig": PlanConfig(),
-        "guardrails": Guardrails(
-            network_enabled=True,
-            human_approval=False,
-            toolPermissionProfile="trusted_tools",
-            toolPermissionMode="bypass",
-        ),
+        "guardrails": Guardrails(network_enabled=True),
         "status": "idle",
         "created_at": stamp,
         "updated_at": stamp,

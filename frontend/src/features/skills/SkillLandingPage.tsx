@@ -187,7 +187,6 @@ function SkillListRow({
       )}
       title={skill.name}
       subtitle={skill.trigger || skill.id}
-      description={skill.description || '暂无描述'}
       last={last}
       layout="columns"
       onSelect={onSelect}

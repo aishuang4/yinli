@@ -1,6 +1,7 @@
 """定时 Leader 无人值守 HITL overlay。
 
-cwd 内 Write/Edit 自动批准，其余拒绝。不得写入 PENDING_INTERACTIONS，
+合同内工具与 cwd 内 Write/Edit 自动批准。其余拒绝并交回模型换方法，
+不弹审批卡片。连续拒绝超过上限才结束本次运行。不得写入 PENDING_INTERACTIONS，
 也不得把 Team Member 的 deny-only 决策套到 scheduled Leader。
 恢复事件形状与 Team 共享 `build_automatic_confirm_resume`。
 """
@@ -13,13 +14,17 @@ from typing import Any
 
 from agentscope.event import ExternalExecutionResultEvent, UserConfirmResultEvent
 
+from src.security.authorization.policy import JOB_UNATTENDED_DENIAL
 from src.server.routes.chat.hitl import build_automatic_confirm_resume
 from src.tools.scoped_paths import resolve_workspace_path
 
 
 MAX_UNATTENDED_TOOL_DENIALS = 8
 UNATTENDED_AUTO_ALLOW_TOOLS = frozenset({"Write", "Edit"})
-_UNATTENDED_DENIAL_MESSAGE = "定时任务无人值守，该工具已拒绝。"
+_CONTRACT_TOOLS = frozenset({
+    "HttpRequest", "WebFetch", "ConfiguredHttpTool", "KnowledgeBaseSearch", "MCPTool",
+})
+_UNATTENDED_DENIAL_MESSAGE = JOB_UNATTENDED_DENIAL
 
 
 def hitl_unattended_resolve(
@@ -31,7 +36,7 @@ def hitl_unattended_resolve(
 ) -> tuple[list[str], UserConfirmResultEvent | ExternalExecutionResultEvent]:
     """在进入 waiting_* 之前决议 HITL。
 
-    返回 (denied_tool_names, resume_event)。批准的 cwd Write/Edit 不计入 deny。
+    返回 (denied_tool_names, resume_event)。合同内工具和 cwd Write/Edit 不计入 deny。
     """
 
     tool_calls = [
@@ -54,7 +59,7 @@ def hitl_unattended_resolve(
     denied: list[str] = []
     for tool_call in tool_calls:
         tool_id = str(tool_call.get("id") or "")
-        allowed = approval_mode != "manual" and is_unattended_cwd_write_or_edit(tool_call, workspace_dir)
+        allowed = _unattended_tool_allowed(tool_call, workspace_dir, approval_mode)
         if tool_id:
             confirmed_by_id[tool_id] = allowed
         if not allowed:
@@ -68,6 +73,15 @@ def hitl_unattended_resolve(
         denial_message=_UNATTENDED_DENIAL_MESSAGE,
     )
     return denied, resume
+
+
+def _unattended_tool_allowed(tool_call: dict[str, Any], workspace_dir: str, approval_mode: str) -> bool:
+    """合同内网络工具与 cwd 写入放行。Bash 只在 full_access 下放行。"""
+
+    name = str(tool_call.get("name") or "").strip()
+    if name in _CONTRACT_TOOLS or is_unattended_cwd_write_or_edit(tool_call, workspace_dir):
+        return True
+    return approval_mode == "full_access" and name == "Bash"
 
 
 def is_unattended_cwd_write_or_edit(tool_call: dict[str, Any], workspace_dir: str) -> bool:

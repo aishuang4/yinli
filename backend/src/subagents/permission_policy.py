@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from agentscope.permission import PermissionMode
 
 from src.agents.runtime_types import AgentGuardrails
-from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile, legacy_mode_from_policy
+from src.security.permissions import ApprovalPolicy, UnifiedPermissionProfile
 from src.subagents.models import SubagentDefinition
 
 
@@ -145,9 +145,7 @@ def is_supported_subagent_permission_mode(value: str) -> bool:
 def _effective_parent_policy(profile: UnifiedPermissionProfile) -> ApprovalPolicy:
     if profile.is_read_only:
         return ApprovalPolicy.READ_ONLY
-    if profile.human_approval:
-        return ApprovalPolicy.ASK_EVERY_TIME
-    return profile.tool_policy
+    return ApprovalPolicy.TRUSTED_TOOLS
 
 
 def _requested_policy_for_mode(normalized_mode: str, parent_policy: ApprovalPolicy) -> ApprovalPolicy:
@@ -177,7 +175,7 @@ def _agentscope_mode_for_effective_policy(
     if effective_policy == ApprovalPolicy.READ_ONLY:
         return PermissionMode.EXPLORE
     if effective_policy == ApprovalPolicy.ASK_EVERY_TIME:
-        if normalized_mode == "dontAsk" and not parent_profile.human_approval:
+        if normalized_mode == "dontAsk":
             return PermissionMode.DONT_ASK
         return PermissionMode.DEFAULT
     if effective_policy == ApprovalPolicy.CONFIRM_DESTRUCTIVE:
@@ -216,7 +214,6 @@ def _child_guardrails(
     child_profile = UnifiedPermissionProfile(
         filesystem_scope=parent_profile.filesystem_scope,
         network_enabled=parent_profile.network_enabled,
-        human_approval=parent_profile.human_approval and effective_policy != ApprovalPolicy.READ_ONLY,
         tool_policy=effective_policy,
         shell_blacklist=parent_profile.shell_blacklist,
         timeout_seconds=parent_profile.timeout_seconds,
@@ -228,9 +225,7 @@ def _child_guardrails(
         filesystem_scope=parent_guardrails.filesystem_scope,
         shell_blacklist=list(parent_guardrails.shell_blacklist),
         network_enabled=parent_guardrails.network_enabled,
-        human_approval=child_profile.human_approval,
-        tool_permission_mode=legacy_mode_from_policy(effective_policy),
-        tool_permission_profile=effective_policy.value,
+        operation_scope="read_only" if effective_policy == ApprovalPolicy.READ_ONLY else "normal",
         execution_backend=parent_guardrails.execution_backend,
         docker_image=parent_guardrails.docker_image,
         persistent_sandbox=parent_guardrails.persistent_sandbox,

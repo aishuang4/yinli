@@ -835,6 +835,7 @@ export function ChatPage() {
                           sessionId={activeSessionId || undefined}
                           previewPath={previewTarget?.path}
                           onOpenPreview={filePreviewEnabled ? handleOpenPreview : undefined}
+                          skills={composerSkills}
                         />
                       </div>
                     ))}

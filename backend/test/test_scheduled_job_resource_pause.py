@@ -301,8 +301,8 @@ def test_skill_uninstall_pauses_jobs(isolated_db, monkeypatch):
     assert _pause_notes(needed.id)
 
 
-def test_mcp_catalog_delete_pauses_jobs_requiring_mcp(isolated_db, monkeypatch):
-    """删除 MCP 目录项时暂停 allow_mcp 的 Job。"""
+def test_mcp_catalog_delete_ignores_tool_scope_flag(isolated_db, monkeypatch):
+    """只开过工具范围的任务不因删除 MCP 被暂停。"""
 
     service = _service()
     replace_mcp_servers({
@@ -344,14 +344,13 @@ def test_mcp_catalog_delete_pauses_jobs_requiring_mcp(isolated_db, monkeypatch):
 
     needed = service.get_job(needed.id)
     other = service.get_job(other.id)
-    assert needed.status == "paused"
-    assert needed.pause_reason == "needs_job_update"
+    assert needed.status == "active"
     assert other.status == "active"
-    assert _pause_notes(needed.id)
+    assert _pause_notes(needed.id) == []
 
 
-def test_http_tool_delete_pauses_jobs_requiring_http(isolated_db):
-    """删除 HTTP 工具时暂停 allow_http 的 Job。"""
+def test_http_tool_delete_ignores_tool_scope_flag(isolated_db):
+    """只开过 HTTP 工具范围的任务，不因目录里删掉一个 HTTP 工具而暂停。"""
 
     service = _service()
     upsert_http_tool({
@@ -371,20 +370,14 @@ def test_http_tool_delete_pauses_jobs_requiring_http(isolated_db):
     asyncio.run(tools_routes.delete_http_tool_config("http-a"))
 
     needed = service.get_job(needed.id)
-    assert needed.status == "paused"
-    assert needed.pause_reason == "needs_job_update"
-    assert _pause_notes(needed.id)
+    assert needed.status == "active"
+    assert _pause_notes(needed.id) == []
 
 
-def test_http_without_binding_confirms_until_catalog_delete(isolated_db):
-    """HTTP 工具是租户全局目录。工具还在时 allow_http 可以确认；删除后只暂停依赖它的 Job。"""
+def test_http_tool_scope_flag_does_not_block_confirm(isolated_db):
+    """工具范围上的 HTTP 开关不再要求租户里先有可配置 HTTP 工具。"""
 
     service = _service()
-    upsert_http_tool({
-        "id": "http-bound",
-        "name": "HTTP Bound",
-        "url": "https://example.com/bound",
-    })
     needed = _confirm(
         service,
         _weekly_job(
@@ -393,22 +386,11 @@ def test_http_without_binding_confirms_until_catalog_delete(isolated_db):
             tool_scope={"allow_http": True},
         ).id,
     )
-    other = _confirm(service, _weekly_job(service, name="不依赖 HTTP").id)
     assert needed.status == "active"
-    assert other.status == "active"
-
-    asyncio.run(tools_routes.delete_http_tool_config("http-bound"))
-
-    needed = service.get_job(needed.id)
-    other = service.get_job(other.id)
-    assert needed.status == "paused"
-    assert needed.pause_reason == "needs_job_update"
-    assert other.status == "active"
-    assert _pause_notes(needed.id)
 
 
-def test_resume_after_mcp_catalog_delete_fails(isolated_db):
-    """MCP 从全局目录删除后，resume 必须失败。"""
+def test_resume_after_mcp_catalog_delete_ignores_tool_scope_flag(isolated_db):
+    """只开过 MCP 工具范围时，目录删空也不阻止恢复。"""
 
     service = _service()
     replace_mcp_servers({
@@ -430,11 +412,8 @@ def test_resume_after_mcp_catalog_delete_fails(isolated_db):
     service.pause(job.id, reason="user")
     replace_mcp_servers({})
 
-    with pytest.raises(ScheduledJobStateError, match="MCP"):
-        service.resume(job.id)
-    frozen = service.get_job(job.id)
-    assert frozen.status == "paused"
-    assert frozen.pause_reason == "user"
+    resumed = service.resume(job.id)
+    assert resumed.status == "active"
 
 
 def test_resume_after_user_pause_and_agent_delete_fails(isolated_db):

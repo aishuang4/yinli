@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.server.routes.chat.prompts import _build_forced_skills_user_note, _build_skill_context_prompt
+from src.server.routes.chat.prompts import (
+    _build_skill_context_prompt,
+    build_stacked_skill_user_message,
+    compose_turn_user_text,
+)
 from src.server.routes.chat.run_context import (
     MAX_FORCED_SKILLS,
     _merge_forced_skills,
@@ -24,14 +28,17 @@ from test.test_skill_context_middleware import SKILL_BODY, _FakeAgent
 def _skill(
     skill_id: str,
     *,
+    name: str = "",
     enabled: bool = True,
     content: str = "",
     available_to_all_agents: bool = True,
+    resource_path: str = "",
 ) -> Skill:
     return Skill(
         id=skill_id,
-        name=skill_id,
+        name=name or skill_id,
         description=f"{skill_id} desc",
+        resourcePath=resource_path,
         category="test",
         enabled=enabled,
         content=content,
@@ -105,17 +112,50 @@ def test_merge_forced_skills_appends_unbound_pack(installed) -> None:
     assert _merge_forced_skills(merged, forced) == merged
 
 
-def test_forced_skill_user_note_does_not_embed_markdown() -> None:
-    note = _build_forced_skills_user_note([_skill("word-documents", content=SKILL_BODY)])
-    assert "<pinned-skill>" in note
-    assert "word-documents" in note
-    assert SKILL_BODY not in note
-    assert "SKILL.md" not in note
+def test_stacked_skill_user_message_puts_instruction_before_bodies() -> None:
+    skills = [
+        _skill(
+            "pkg-a",
+            name="alpha",
+            content="---\nname: alpha\ndescription: A\n---\n\nBODY_ALPHA",
+        ),
+        _skill(
+            "pkg-b",
+            name="beta",
+            content="---\nname: beta\ndescription: B\n---\n\nBODY_BETA",
+        ),
+    ]
+    text = build_stacked_skill_user_message(skills, "帮我做 XYZ")
+    instruction = text.index("User instruction: 帮我做 XYZ")
+    alpha = text.index('[Loaded as part of the stacked skill invocation "alpha".]')
+    beta = text.index('[Loaded as part of the stacked skill invocation "beta".]')
+    assert instruction < alpha < text.index("BODY_ALPHA") < beta < text.index("BODY_BETA")
+    assert 'loading 2 skills together' in text
+    assert "Skills loaded: alpha, beta" in text
+    assert "/alpha /beta" in text
+    assert "pkg-a" not in text
+    assert "pkg-b" not in text
+    assert "Treat every skill below as active guidance" in text
+    sent = compose_turn_user_text(message="帮我做 XYZ", skill_message=text, note="<attached_files>\n</attached_files>")
+    assert sent.startswith("[IMPORTANT:")
+    assert sent.index("BODY_BETA") < sent.index("<attached_files>")
 
 
-def test_skill_context_prompt_mentions_pinned_block() -> None:
+def test_stacked_skill_user_message_skips_duplicate_and_missing() -> None:
+    loaded = _skill("pkg-a", name="alpha", content="---\nname: alpha\ndescription: A\n---\n\nBODY_ALPHA")
+    duplicate = _skill("pkg-a2", name="alpha", content="---\nname: alpha\ndescription: A\n---\n\nBODY_DUP")
+    missing = _skill("gone", name="gone", content="")
+    text = build_stacked_skill_user_message([loaded, duplicate, missing], "go")
+    assert text.count("BODY_ALPHA") == 1
+    assert "BODY_DUP" not in text
+    assert "Skills missing (skipped): gone" in text
+    assert "loading 1 skills together" in text
+    assert build_stacked_skill_user_message([missing], "go") == ""
+
+
+def test_skill_context_prompt_mentions_stacked_bundle() -> None:
     text = _build_skill_context_prompt()
-    assert "<pinned-skill>" in text
+    assert "stacked skill bundle" in text
     assert "<activated-skill>" in text
 
 

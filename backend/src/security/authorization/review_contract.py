@@ -1,4 +1,4 @@
-"""权限审核的来源、证据和严格三态合同；与技能自进化布尔审核隔离。"""
+"""权限审核的来源、证据和严格三态合同。"""
 
 from __future__ import annotations
 
@@ -49,9 +49,11 @@ def parse_permission_review(text: str) -> PermissionReviewResult:
 
 
 def parse_smartguard_token(text: str) -> str:
-    """去掉首尾空白后必须正好是三个小写 token 之一。"""
+    """取第一个词，去掉首尾空白、反引号和结尾标点后匹配三个结论。"""
 
-    token = text.strip()
+    cleaned = text.strip().lower().strip("`").strip()
+    word = cleaned.split(maxsplit=1)[0] if cleaned else ""
+    token = word.strip(".,;:!?\"'`")
     if token in {"allow", "deny", "needs_human"}:
         return token
     raise ValueError("审核模型只能返回 allow、deny 或 needs_human")

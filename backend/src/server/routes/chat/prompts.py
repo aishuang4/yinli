@@ -5,6 +5,8 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from src.skills.invocation import skill_runtime_directory
+
 # 上海全年固定 UTC+8、无夏令时，直接用固定偏移避免依赖系统 IANA 时区库（Windows 上常缺失）
 SHANGHAI_TZ = timezone(timedelta(hours=8), "Asia/Shanghai")
 
@@ -30,24 +32,81 @@ def _build_file_attachments_user_note(files) -> str:
     return "\n".join(lines)
 
 
-def _build_forced_skills_user_note(skills) -> str:
-    """本轮用户强制开启的 Skill，作为用户消息附注，不进 system prompt。"""
+def build_stacked_skill_user_message(
+    skills,
+    user_instruction: str,
+    *,
+    guardrails: object | None = None,
+) -> str:
+    """把本輪選中的 Skill 拼成一條用戶消息。全文不進 system prompt。
 
-    items = [skill for skill in (skills or []) if getattr(skill, "name", "") or getattr(skill, "id", "")]
-    if not items:
+    總頭在前，用戶指令寫在總頭裡；後面按選擇順序接每個 Skill 的正文塊。
+    一個都沒載入成功時返回空字串，呼叫端繼續用用戶原文。
+    """
+
+    from src.skills.invocation import load_skill_invocations
+
+    batch = load_skill_invocations(list(skills or []), guardrails=guardrails, strict=False)
+    if not batch.loaded:
         return ""
+    names = [item.name for item in batch.loaded]
+    slash = " ".join(f"/{name}" for name in names)
     lines = [
-        "<pinned-skill>",
-        "The user explicitly pinned the following Skill(s) for this turn. Follow their instructions.",
-        "If an <activated-skill> block for these names is already in the conversation, do not call the Skill tool again.",
-        "Load references/ and scripts only when the instructions require it.",
+        (
+            f'[IMPORTANT: The user has invoked the "{slash}" stacked skill bundle, '
+            f"loading {len(names)} skills together. Treat every skill below as active guidance for this turn.]"
+        ),
+        "",
+        f"Skills loaded: {', '.join(names)}",
     ]
-    for skill in items:
-        name = str(getattr(skill, "name", "") or getattr(skill, "id", "")).strip()
-        desc = str(getattr(skill, "description", "") or getattr(skill, "trigger", "") or "").strip()
-        lines.append(f"- {name}: {desc}" if desc else f"- {name}")
-    lines.append("</pinned-skill>")
-    return "\n".join(lines)
+    if batch.missing:
+        lines.append(f"Skills missing (skipped): {', '.join(batch.missing)}")
+    if batch.disabled:
+        lines.append(f"Skills disabled for this platform (skipped): {', '.join(batch.disabled)}")
+    lines.extend(["", f"User instruction: {str(user_instruction or '').strip()}"])
+    return "\n\n".join(["\n".join(lines), *(_skill_block(item) for item in batch.loaded)])
+
+
+def _skill_block(item) -> str:
+    """一個 Skill 的正文塊。附屬檔用絕對路徑，仍走現有 Read / Bash，不另寫 viewer。"""
+
+    parts = [
+        f'[Loaded as part of the stacked skill invocation "{item.name}".]',
+        "",
+        item.markdown.strip(),
+        "",
+        (
+            f'The Skill tool only returns this SKILL.md. It is already loaded above; '
+            f'do not call the Skill tool again for "{item.name}".'
+        ),
+    ]
+    directory = str(item.directory or "")
+    if directory:
+        parts.extend([
+            "",
+            f"[Skill directory: {directory}]",
+            (
+                "Resolve any relative paths in this skill (e.g. `scripts/foo.js`, "
+                "`templates/config.yaml`) against that directory, then run them "
+                "with Bash using the absolute path."
+            ),
+        ])
+    supporting = list(item.supporting_files or [])
+    if supporting and directory:
+        parts.extend(["", "[This skill has supporting files:]"])
+        for relative in supporting:
+            parts.append(f"- {relative}  ->  {directory.rstrip('/')}/{relative}")
+        parts.append("Read these with the Read tool using the absolute path, or run scripts directly by absolute path.")
+    return "\n".join(parts)
+
+
+def compose_turn_user_text(*, message: str, skill_message: str = "", note: str = "") -> str:
+    """有 Skill 總頭時，它就是這條用戶消息；附件說明仍接在後面。"""
+
+    body = skill_message or message
+    if note:
+        return f"{body}\n\n{note}" if body else note
+    return body
 
 
 def _build_runtime_context_prompt() -> str:
@@ -69,6 +128,29 @@ def _build_runtime_context_prompt() -> str:
     )
 
 
+def _build_scheduled_preloaded_skill_prompt(skills, *, guardrails: object | None = None) -> str:
+    """定時任務只聲明 Skill 已注入，正文留在 `<activated-skill>`。"""
+
+    items = list(skills or [])
+    if not items:
+        return ""
+    lines = [
+        "## Preloaded Skills",
+        "Required Skill instructions are already in this conversation inside <activated-skill> blocks.",
+        "Follow those blocks. This run does not provide a Skill viewer.",
+        "Load references/ and scripts/ on demand with Read, Grep, Glob, or Bash.",
+        "Resolve those relative paths against the Skill directory below.",
+    ]
+    for skill in items:
+        name = str(getattr(skill, "name", "") or "").strip()
+        directory = skill_runtime_directory(skill, guardrails)
+        if name and directory:
+            lines.append(f"- {name}: `{directory}`")
+        elif name:
+            lines.append(f"- {name}")
+    return "\n".join(lines)
+
+
 def _build_skill_context_prompt() -> str:
     """Stable rules for how Skill bodies live in the conversation.
 
@@ -81,7 +163,7 @@ def _build_skill_context_prompt() -> str:
         "## Skill Context",
         "Only Skill names and descriptions are listed up front. Read a Skill's full instructions with the Skill tool the first time you need it.",
         "Once read, a Skill's instructions stay in this conversation (as the tool result or a re-attached <activated-skill> block). Do not call the Skill tool again for a Skill whose instructions are already visible in the conversation.",
-        "If the user pinned a Skill in a <pinned-skill> note, follow it this turn. When an <activated-skill> block for that name is already present, do not call the Skill tool again.",
+        "If this turn's user message already contains a stacked skill bundle, follow those loaded skills and do not call the Skill tool again for those names.",
         "references/ files and scripts inside a Skill directory are still loaded on demand with Read / Bash when the instructions tell you to; do not read the whole package up front.",
     ])
 

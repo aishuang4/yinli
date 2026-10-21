@@ -3,8 +3,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Skill } from '../../types/skill';
 import {
+  completeSlashSkill,
   consumeSlashQuery,
   filterComposerSkills,
+  inlineSkillIds,
+  insertSkillToken,
+  removeInlineSkill,
+  skillTextSegments,
   filterSkillsBySlashQuery,
   insertSlashToken,
   matchPlusMenuAction,
@@ -56,8 +61,9 @@ describe('toggleForcedSkillId', () => {
   });
 
   it(`最多保留 ${MAX_FORCED_SKILLS} 个`, () => {
-    const selected = ['a', 'b', 'c'];
-    expect(toggleForcedSkillId(selected, 'd')).toEqual(selected);
+    const selected = Array.from({ length: MAX_FORCED_SKILLS }, (_, index) => `skill-${index}`);
+    expect(toggleForcedSkillId(selected, 'extra')).toEqual(selected);
+    expect(toggleForcedSkillId(selected.slice(0, -1), 'extra')).toEqual([...selected.slice(0, -1), 'extra']);
   });
 });
 
@@ -95,6 +101,32 @@ describe('matchPlusMenuAction', () => {
     expect(matchPlusMenuAction('image', '图片')).toBe(true);
     expect(matchPlusMenuAction('think', '深度')).toBe(true);
     expect(matchPlusMenuAction('file', '计划')).toBe(false);
+  });
+});
+
+describe('inline skill tokens', () => {
+  const skills = [
+    skill({ id: 'pkg-a', name: 'alpha' }),
+    skill({ id: 'pkg-b', name: 'beta' }),
+  ];
+
+  it('按出现顺序认领斜杠，第 6 个不再高亮', () => {
+    const names = ['a', 'b', 'c', 'd', 'e', 'f'].map((name) => skill({ id: name, name }));
+    const text = '/a /b /c /d /e /f 剩下';
+    expect(inlineSkillIds(text, names)).toEqual(['a', 'b', 'c', 'd', 'e']);
+    const highlighted = skillTextSegments(text, names).filter((part) => part.skill).map((part) => part.text);
+    expect(highlighted).toEqual(['/a', '/b', '/c', '/d', '/e']);
+  });
+
+  it('补全斜杠并可以再删掉', () => {
+    const next = completeSlashSkill('请用 /al 核对', { start: 3, end: 6, query: 'al' }, 'alpha');
+    expect(next).toEqual({ value: '请用 /alpha 核对', cursor: 10 });
+    expect(removeInlineSkill(next.value, skills[0])).toBe('请用 核对');
+    expect(inlineSkillIds('请用 /alpha 核对 /beta', skills)).toEqual(['pkg-a', 'pkg-b']);
+  });
+
+  it('从加号菜单插入到光标处', () => {
+    expect(insertSkillToken('请核对', 1, 'alpha')).toEqual({ value: '请 /alpha 核对', cursor: 9 });
   });
 });
 
